@@ -1,0 +1,59 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{ python }}\" \"{{ project }}/.agents/guard-runtime/hook_event_adapter.py\" codex --project \"{{ project }}\" --profile {{ guard_profile_id }} --codex-event UserPromptSubmit",
+            "statusMessage": "agent-guard: UserPromptSubmit"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{ python }}\" \"{{ project }}/.agents/guard-runtime/hook_event_adapter.py\" codex --project \"{{ project }}\" --profile {{ guard_profile_id }} --codex-event SubagentStart",
+            "statusMessage": "agent-guard: SubagentStart"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{ python }}\" \"{{ project }}/.agents/guard-runtime/hook_event_adapter.py\" codex --project \"{{ project }}\" --profile {{ guard_profile_id }} --codex-event SubagentStop",
+            "statusMessage": "agent-guard: SubagentStop"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{ python }}\" \"{{ project }}/.agents/guard-runtime/hook_event_adapter.py\" codex --project \"{{ project }}\" --profile {{ guard_profile_id }} --codex-event PreToolUse",
+            "statusMessage": "agent-guard: PreToolUse"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{ python }}\" \"{{ project }}/.agents/guard-runtime/hook_event_adapter.py\" codex --project \"{{ project }}\" --profile {{ guard_profile_id }} --codex-event PostToolUse",
+            "statusMessage": "agent-guard: PostToolUse"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+nodes:
+  - id: activate
+    type: activation
+    required_artifacts: []
+    completion_signals:
+      - guard.activation
+  - id: close
+    type: closure
+    required_artifacts:
+      - completion_note
+    completion_signals:
+      - guard.close
+states:
+  - id: open
+    allowed_next:
+      - close
+    forbidden_next: []
+    missing_artifacts:
+      - completion_note
+    brief:
+      current_state: open
+      next_step: 添加 completion_note，然后发出 guard.close。
+  - id: closed
+    allowed_next: []
+    forbidden_next: []
+    missing_artifacts: []
+    brief:
+      current_state: closed
+      next_step: 不需要更多被守卫动作。

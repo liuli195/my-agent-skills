@@ -1,0 +1,48 @@
+grill_with_docs:
+  status: confirmed
+  confirmed_decisions: []
+  terminology: []
+  boundaries: []
+  scenarios: []
+  exceptions: []
+  documentation_changes: []
+profile:
+  id: example-guard
+  name: 示例守卫
+  description: 从已确认问答记录生成的草案。
+  mode: warn
+target:
+  id: example-target
+  type: workflow
+  name: 示例流程
+  source: docs/example.md
+  boundary: 只旁路观察和校验，不修改被守卫对象。
+activation:
+  allowed_sources: [agent-guard-skill]
+  required_profile_ref: true
+  scopes: [current_context]
+  on_existing_subject: reuse
+  on_missing_subject: create
+  initial_state: open
+subject:
+  identity_fields: [context.session_id]
+  required_fields: [context.session_id]
+  context_sources: [context, event]
+  existing_match_policy: exact
+  create_policy: explicit_activation_only
+  ambiguous_policy: audit
+execution:
+  nodes: []
+  states: []
+observation:
+  signals: []
+state_machine:
+  initial_state: open
+  terminal_states: [closed]
+  states: []
+  transitions: []
+guard_points: []
+artifacts: []
+hook_bindings: []
+validation:
+  items: []

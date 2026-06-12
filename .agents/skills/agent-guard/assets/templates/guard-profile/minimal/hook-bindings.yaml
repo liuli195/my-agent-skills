@@ -1,0 +1,15 @@
+hook_bindings:
+  - id: manual-close
+    source: manual
+    trigger_event: guard.close
+    event_type: guard.close
+    target_profile: minimal-sample
+    blocking: false
+    install:
+      status: not_installed
+      target: manual
+      rollback: no installed hook
+    transitions:
+      - close_after_note
+    guard_points:
+      - completion_note_present

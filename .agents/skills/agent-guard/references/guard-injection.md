@@ -1,3 +1,61 @@
-# Guard Injection
+# Guard Injection（守卫注入）
 
-TODO: Define Guard Brief generation, latest brief storage, `brief_hash` de-duplication, session injection records, expiry checks, and short fixed-format injection content.
+Guard Injection（守卫注入）把 latest Guard Brief（最新守卫简报）提供给 agent（代理）。它提高执行效率，但不替代 Hook（钩子）或 Git hook（Git 钩子）的硬阻断。
+
+按场景读取：
+
+- 只要读取当前简报：看“读取入口”。
+- 需要实现或排查注入：看“规则”和“写入文件”。
+
+规则：
+
+- Runtime（运行时）只在状态、缺失产物或下一步要求变化后生成 latest brief（最新简报）。
+- 注入内容只能来自 Runtime（运行时）生成的 latest Guard Brief（最新守卫简报）。
+- 只有解析到唯一 Guard Instance（守卫实例）才允许注入。
+- 注入前校验 `subject-key-hash`、`state_version` 和 `expires_at`。
+- 同一 Codex session（Codex 会话）内按 `brief_hash` 去重，相同 brief（简报）不重复注入。
+- Brief（简报）保持短格式，至少包含 Guard Profile（守卫画像）、Subject（主体）、当前状态、允许下一步、禁止下一步、缺失产物、最近阻断原因、下一步建议和审计位置。
+
+Guard Profile（守卫画像）可以提供状态语义和文案模板，但 Runtime（运行时）负责统一渲染，避免简报和状态机漂移。
+
+## 写入文件
+
+Runtime（运行时）写入：
+
+- `.local/guard/latest/<guard-profile-id>/<subject-key-hash>/brief.json`
+- `.local/guard/latest/<guard-profile-id>/<subject-key-hash>/brief.md`
+- `.local/guard/runs/<guard-profile-id>/<run-id>/brief.json`
+- `.local/guard/runs/<guard-profile-id>/<run-id>/brief.md`
+
+`brief.json` 至少包含 `guard_profile_id`、`subject_key_hash`、`state`、`state_version`、`allowed_next`、`forbidden_next`、`missing_artifacts`、`recent_block_reasons`、`next_step`、`audit_path`、`brief_hash`、`brief_text` 和 `expires_at`。
+
+字段映射：
+
+| 语义 | JSON 字段 | 模板变量 |
+| --- | --- | --- |
+| Guard Profile（守卫画像） | `guard_profile_id` | `{{ guard_profile_id }}` |
+| Subject（主体） | `subject_key_hash` | `{{ subject_key_hash }}` |
+| 当前状态 | `state` | `{{ state }}` |
+| 允许下一步 | `allowed_next` | `{{ allowed_next }}` |
+| 禁止下一步 | `forbidden_next` | `{{ forbidden_next }}` |
+| 缺失产物 | `missing_artifacts` | `{{ missing_artifacts }}` |
+| 最近阻断原因 | `recent_block_reasons` | `{{ recent_block_reasons }}` |
+| 下一步建议 | `next_step` | `{{ next_step }}` |
+| 审计位置 | `audit_path` | `{{ audit_path }}` |
+| 过期时间 | `expires_at` | 无 |
+
+## 读取入口
+
+Hook（钩子）或 agent（代理）读取简报时使用：
+
+```powershell
+python .agents\guard-runtime\guard_runner.py brief --profile <id> --subject <subject-key-hash> --session <session-id> --format json
+```
+
+第一次读取当前 `brief_hash` 返回 `injectable`，并把记录写入：
+
+```text
+.local/guard/injections/<guard-profile-id>/<subject-key-hash>/<session-hash>.json
+```
+
+同一 session（会话）内再次读取相同 `brief_hash` 返回 `already_injected`。

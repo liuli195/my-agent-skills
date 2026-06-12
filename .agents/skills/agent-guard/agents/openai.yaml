@@ -1,7 +1,7 @@
 interface:
-  display_name: "Agent Guard"
-  short_description: "Generate and activate agent workflow guards"
-  default_prompt: "Use $agent-guard to guard a workflow with an explicit Guard Profile."
+  display_name: "Agent Guard（代理守卫）"
+  short_description: "生成、激活并维护解耦的代理守卫画像和运行时能力"
+  default_prompt: "使用 $agent-guard 通过明确的 Guard Profile（守卫画像）守卫一个 workflow（工作流）。"
 
 policy:
   allow_implicit_invocation: true

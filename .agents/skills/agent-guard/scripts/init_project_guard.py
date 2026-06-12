@@ -1,6 +1,393 @@
-"""Initialize a project-level Guard Runtime and Guard Profile.
+"""初始化项目级 Guard Runtime（守卫运行时）和 Guard Profile（守卫画像）。"""
 
-TODO: Implement.
+from __future__ import annotations
+
+import argparse
+import re
+import shutil
+import sys
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from validate_guard_profile import ValidationIssue, validate_profile
+
+
+SAFE_MODES = {"record", "warn"}
+ALL_MODES = {"record", "warn", "block"}
+PROFILE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+RUNTIME_VERSION = "0.1.0"
+
+
+def load_yaml_mapping(path: Path) -> dict[str, Any]:
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{path} 不是有效 YAML（YAML 配置格式）：{exc}") from exc
+
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} 顶层必须是 YAML mapping（YAML 映射）。")
+    return data
+
+
+def dump_yaml(path: Path, data: dict[str, Any]) -> None:
+    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+
+
+def print_validation_failure(profile: Path, issues: list[ValidationIssue]) -> None:
+    print("status: validation_failed")
+    print(f"profile: {profile}")
+    print("issues:")
+    for issue in issues:
+        print(f"  - category: {issue.category}")
+        print(f"    field: {issue.field}")
+        print(f"    message: {issue.message}")
+        print(f"    fix: {issue.fix}")
+
+
+def read_profile_id(profile_dir: Path) -> str:
+    manifest = load_yaml_mapping(profile_dir / "GUARD-MANIFEST.yaml")
+    profile_id = manifest.get("guard_profile_id")
+    if not isinstance(profile_id, str):
+        raise ValueError("GUARD-MANIFEST.yaml 缺少有效 `guard_profile_id`。")
+    return validate_profile_id(profile_id)
+
+
+def validate_profile_id(profile_id: str) -> str:
+    normalized = profile_id.strip()
+    if not PROFILE_ID_PATTERN.fullmatch(normalized):
+        raise ValueError("Guard Profile（守卫画像）ID 只能使用 ASCII 字母、数字、点、下划线和连字符，且不能包含路径分隔符。")
+    return normalized
+
+
+def resolve_initial_mode(profile_dir: Path, requested_mode: str | None, authorize_blocking: bool) -> str:
+    if requested_mode == "block" and authorize_blocking:
+        return "block"
+    if requested_mode in SAFE_MODES:
+        return requested_mode
+
+    manifest = load_yaml_mapping(profile_dir / "GUARD-MANIFEST.yaml")
+    mode = manifest.get("mode")
+    if mode == "block" and authorize_blocking:
+        return "block"
+    if isinstance(mode, str) and mode in SAFE_MODES:
+        return mode
+    return "warn"
+
+
+def copy_profile(
+    source_profile: Path,
+    target_profile: Path,
+    on_existing: str,
+) -> None:
+    if target_profile.exists() and on_existing == "overwrite":
+        shutil.rmtree(target_profile)
+
+    if target_profile.exists() and on_existing == "update":
+        shutil.copytree(source_profile, target_profile, dirs_exist_ok=True)
+        return
+
+    shutil.copytree(source_profile, target_profile)
+
+
+def normalize_profile_for_initialization(profile_dir: Path, profile_id: str, safe_mode: str) -> None:
+    manifest_path = profile_dir / "GUARD-MANIFEST.yaml"
+    manifest = load_yaml_mapping(manifest_path)
+    manifest["guard_profile_id"] = profile_id
+    manifest["mode"] = safe_mode
+    manifest.setdefault("project_initialization", {})
+    manifest["project_initialization"].update(
+        {
+            "hook_installation": "not_installed",
+            "blocking_mode": "not_enabled",
+            "mode": safe_mode,
+        }
+    )
+    if safe_mode == "block":
+        manifest["project_initialization"]["blocking_mode"] = "enabled"
+    dump_yaml(manifest_path, manifest)
+
+    if safe_mode != "block":
+        guard_points_path = profile_dir / "guard-points.yaml"
+        guard_points_doc = load_yaml_mapping(guard_points_path)
+        guard_points = guard_points_doc.get("guard_points")
+        if isinstance(guard_points, list):
+            for guard_point in guard_points:
+                if not isinstance(guard_point, dict):
+                    continue
+                for field in ["mode", "on_fail", "on_error"]:
+                    if guard_point.get(field) == "block":
+                        guard_point[field] = safe_mode
+        dump_yaml(guard_points_path, guard_points_doc)
+
+
+def write_runtime_skeleton(project: Path, mode: str) -> Path:
+    runtime_dir = project / ".agents" / "guard-runtime"
+    for relative_dir in ["engine", "adapters", "checks", "schemas"]:
+        directory = runtime_dir / relative_dir
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / ".gitkeep").write_text("", encoding="utf-8")
+
+    (runtime_dir / "VERSION").write_text(f"{RUNTIME_VERSION}\n", encoding="utf-8")
+    (runtime_dir / "requirements.txt").write_text("PyYAML\njsonschema\n", encoding="utf-8")
+    dump_yaml(
+        runtime_dir / "RUNTIME-MANIFEST.yaml",
+        {
+            "schema_version": "guard-runtime/v1",
+            "runtime_version": RUNTIME_VERSION,
+            "generated_by": "agent-guard",
+            "mode_default": mode,
+            "entrypoints": {
+                "activate": "guard_runner.py activate --profile <id> --scope current_context",
+                "run": "guard_runner.py run --event <event-file>",
+                "brief": "guard_runner.py brief --profile <id> --subject <subject-key-hash> --format json",
+            },
+            "runtime_paths": {
+                "profiles": ".agents/guards",
+                "state": ".local/guard/state",
+                "runs": ".local/guard/runs",
+                "overrides": ".local/guard/overrides",
+                "confirmations": ".local/guard/confirmations",
+                "latest": ".local/guard/latest",
+                "injections": ".local/guard/injections",
+            },
+            "hook_installation": "not_installed",
+            "blocking_mode": "not_enabled",
+        },
+    )
+    (runtime_dir / "README.md").write_text(runtime_readme(), encoding="utf-8")
+    (runtime_dir / "guard_runner.py").write_text(guard_runner_template(), encoding="utf-8")
+    return runtime_dir
+
+
+def guard_runner_template() -> str:
+    template = Path(__file__).resolve().parents[1] / "assets" / "templates" / "guard-runtime" / "guard_runner.py"
+    return template.read_text(encoding="utf-8")
+
+
+def runtime_readme() -> str:
+    return """# Guard Runtime（守卫运行时）
+
+此目录是项目级 Guard Runtime（守卫运行时）骨架。它只保留通用入口和目录约定，不写具体业务规则。
+
+稳定入口：
+
+```powershell
+python .agents\\guard-runtime\\guard_runner.py activate --profile <id> --scope current_context --source agent-guard-skill --context-json '{"session_id":"..."}'
+python .agents\\guard-runtime\\guard_runner.py run --event <event-file>
+python .agents\\guard-runtime\\guard_runner.py brief --profile <id> --subject <subject-key-hash> --format json
+python .agents\\guard-runtime\\guard_runner.py brief --profile <id> --subject <subject-key-hash> --session <session-id> --format json
+```
+
+目录约定：
+
+- `.agents/guards/`：Guard Profile（守卫画像）配置。
+- `.local/guard/state/`：按 `<guard-profile-id>/<subject-key-hash>/state.json` 保存状态。
+- `.local/guard/runs/`：保存每次运行审计。
+- `.local/guard/overrides/`：保存人工覆盖记录。
+- `.local/guard/confirmations/`：保存人工确认记录。
+- `.local/guard/latest/`：保存 latest Guard Brief（最新守卫简报）。
+- `.local/guard/injections/`：按 session（会话）保存 Guard Brief（守卫简报）注入去重记录。
+
+显式激活会按 Guard Profile（守卫画像）里的 Subject Resolver（主体解析器）计算 Subject Key（主体键），优先匹配已有 Guard Instance（守卫实例），没有匹配且策略允许时创建新实例。缺少必填字段会返回 `no_subject_match` 并写审计；多个候选实例会返回 `ambiguous_subject` 并写审计。
+
+标准事件运行会读取 JSON envelope（JSON 信封），按 `guard_profile_id` 或 `profile_ref` 加载 Guard Profile（守卫画像），只匹配已有 Guard Instance（守卫实例）。匹配状态转换后会按顺序执行转换上的 Guard Point（守卫点）、required artifacts（必需产物）和 checks（检查）；阻断级守卫通过、只记录失败、警告失败或存在有效人工覆盖时推进 `state_version` 并写审计和 latest Guard Brief（最新守卫简报）。`block` 失败不推进状态，并输出失败守卫点、缺失条件、修复建议和覆盖记录位置；状态变化、缺失产物变化或 `block` 失败会刷新 latest Guard Brief（最新守卫简报）。无匹配转换返回 `allow` + `ignored`；多个转换同时匹配返回 `ambiguous_transition`，不推进状态。
+
+`brief --session <session-id>` 会先校验 `subject-key-hash`、`state_version` 和 `expires_at`，再在 `.local/guard/injections/` 中记录已注入的 `brief_hash`。同一 session（会话）内相同 brief（简报）第二次返回 `already_injected`。
+
+初始化阶段只写 Runtime（运行时）和 Profile（画像）配置，不预建 `.local/guard/*` 运行态目录，不安装 Hook（钩子），不会启用 blocking mode（阻断模式），不会修改被守卫对象。
 """
 
-raise SystemExit("TODO: init_project_guard.py is not implemented yet.")
+
+def guard_runner_skeleton() -> str:
+    return guard_runner_template()
+
+
+def write_project_profile_extras(profile_dir: Path, profile_id: str, mode: str) -> None:
+    concurrency_path = profile_dir / "concurrency.yaml"
+    if not concurrency_path.exists():
+        dump_yaml(
+            concurrency_path,
+            {
+                "concurrency": {
+                    "lock_scope": "guard-profile-and-subject",
+                    "lock_root": ".local/guard/locks",
+                    "lock_key_fields": ["guard_profile_id", "subject_key_hash"],
+                    "timeout_seconds": 30,
+                    "on_timeout": "audit_error",
+                }
+            },
+        )
+
+    migration_plan_path = profile_dir / "migration-plan.md"
+    if not migration_plan_path.exists():
+        migration_plan_path.write_text(
+            f"""# Migration Plan（迁移计划）
+
+Guard Profile（守卫画像）：{profile_id}
+
+- 初始化只写项目级 Guard Runtime（守卫运行时）和 Guard Profile（守卫画像）骨架。
+- 不修改被守卫对象。
+- 不安装 Hook（钩子）。
+- 不启用 blocking mode（阻断模式）。
+- 初始模式：`{mode}`。
+- 后续按单个 Guard Point（守卫点）独立启用、验证和回滚。
+""",
+            encoding="utf-8",
+        )
+
+    (profile_dir / "hook-install-plan.md").write_text(build_hook_install_plan(profile_dir, profile_id), encoding="utf-8")
+
+
+def build_hook_install_plan(profile_dir: Path, profile_id: str) -> str:
+    bindings_doc = load_yaml_mapping(profile_dir / "hook-bindings.yaml")
+    bindings = bindings_doc.get("hook_bindings")
+
+    lines = [
+        "# Hook Install Plan（钩子安装计划）",
+        "",
+        f"Guard Profile（守卫画像）：{profile_id}",
+        "",
+        "- 当前状态：未安装 Codex Hook（Codex 钩子）。",
+        "- 当前状态：未安装 Git Hook（Git 钩子）。",
+        "- 安装 Hook（钩子）前必须获得用户明确授权。",
+        "- Hook（钩子）只负责捕获和标准化事件，不写业务规则。",
+        "",
+        "## Hook Bindings（钩子绑定）",
+        "",
+    ]
+
+    if isinstance(bindings, list) and bindings:
+        for binding in bindings:
+            if not isinstance(binding, dict):
+                continue
+            lines.append(
+                f"- `{binding.get('id', '<unknown>')}`：source=`{binding.get('source', '<unknown>')}`，"
+                f"event_type=`{binding.get('event_type', '<unknown>')}`。"
+            )
+    else:
+        lines.append("- 暂无 Hook Binding（钩子绑定）。")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def append_project_validation(profile_dir: Path) -> None:
+    validation_plan = profile_dir / "validation-plan.md"
+    existing = validation_plan.read_text(encoding="utf-8") if validation_plan.exists() else ""
+    addition = """\n## 项目级初始化验证\n\n- 校验项目级 Guard Runtime（守卫运行时）骨架存在。\n- 校验项目级 Guard Profile（守卫画像）能通过最小契约校验。\n- 校验初始化未安装 Codex Hook（Codex 钩子）或 Git Hook（Git 钩子）。\n- 校验初始化未启用 blocking mode（阻断模式）。\n- 校验初始化未修改被守卫对象。\n"""
+    if "## 项目级初始化验证" not in existing:
+        validation_plan.write_text(existing.rstrip() + addition, encoding="utf-8")
+
+
+def validate_source_profile(profile: Path) -> bool:
+    _checked, issues = validate_profile(profile)
+    if issues:
+        print_validation_failure(profile, issues)
+        return False
+    return True
+
+
+def print_init_plan(
+    project: Path,
+    source_profile: Path,
+    target_profile: Path,
+    profile_id: str,
+    mode: str,
+    scope: str,
+    on_existing: str,
+) -> None:
+    print("status: dry_run")
+    print("authorization: missing")
+    print(f"project: {project}")
+    print(f"source_profile: {source_profile}")
+    print(f"profile: {target_profile}")
+    print(f"guard_profile_id: {profile_id}")
+    print(f"scope: {scope}")
+    print(f"mode: {mode}")
+    print(f"on_existing: {on_existing}")
+    print("changes:")
+    for target in [
+        project / ".agents" / "guard-runtime",
+        target_profile,
+    ]:
+        print(f"  - target: {target}")
+        print("    action: would_write")
+    print("hook_installation: not_installed")
+    print(f"blocking_mode: {'enabled' if mode == 'block' else 'not_enabled'}")
+    print("next: 加 --authorize-init 才会写入项目级 Guard Runtime（守卫运行时）和 Guard Profile（守卫画像）。")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="初始化项目级 Guard Runtime（守卫运行时）和 Guard Profile（守卫画像）。")
+    parser.add_argument("--profile", type=Path, required=True, help="已校验 Guard Profile（守卫画像）草案目录")
+    parser.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目目录，默认当前目录")
+    parser.add_argument("--guard-profile-id", help="覆盖输出 Guard Profile（守卫画像）ID")
+    parser.add_argument("--scope", default="project", help="初始化范围，默认 project（项目）")
+    parser.add_argument("--mode", choices=sorted(ALL_MODES), help="初始化模式；block（阻断）必须同时加 --authorize-blocking")
+    parser.add_argument("--authorize-init", action="store_true", help="明确授权写入项目级 Guard Runtime（守卫运行时）和 Guard Profile（守卫画像）")
+    parser.add_argument("--authorize-blocking", action="store_true", help="明确授权初始化为 blocking mode（阻断模式）")
+    parser.add_argument(
+        "--on-existing",
+        choices=["abort", "overwrite", "update"],
+        default="abort",
+        help="同名画像已存在时的处理方式，默认 abort（中止）",
+    )
+    args = parser.parse_args(argv)
+
+    source_profile = args.profile.resolve()
+    project = args.project.resolve()
+
+    if not validate_source_profile(source_profile):
+        return 1
+
+    try:
+        source_profile_id = read_profile_id(source_profile)
+        profile_id = validate_profile_id(args.guard_profile_id) if args.guard_profile_id else source_profile_id
+        mode = resolve_initial_mode(source_profile, args.mode, args.authorize_blocking)
+    except ValueError as exc:
+        print("status: error")
+        print(f"message: {exc}")
+        return 2
+
+    target_profile = project / ".agents" / "guards" / profile_id
+    if target_profile.resolve() == source_profile:
+        print("status: error")
+        print("message: 输出 Guard Profile（守卫画像）不能和输入草案目录相同。")
+        return 2
+
+    if not args.authorize_init:
+        print_init_plan(project, source_profile, target_profile, profile_id, mode, args.scope, args.on_existing)
+        return 0
+
+    if target_profile.exists() and args.on_existing == "abort":
+        print("status: exists")
+        print(f"profile: {target_profile}")
+        print("action: abort")
+        print("next: 使用 --on-existing update 或 --on-existing overwrite 明确处理已有配置。")
+        return 1
+
+    project.mkdir(parents=True, exist_ok=True)
+    runtime_dir = write_runtime_skeleton(project, mode)
+    copy_profile(source_profile, target_profile, args.on_existing)
+    normalize_profile_for_initialization(target_profile, profile_id, mode)
+    write_project_profile_extras(target_profile, profile_id, mode)
+    append_project_validation(target_profile)
+
+    _checked, output_issues = validate_profile(target_profile)
+    if output_issues:
+        print_validation_failure(target_profile, output_issues)
+        return 1
+
+    print("status: initialized")
+    print(f"project: {project}")
+    print(f"scope: {args.scope}")
+    print(f"runtime: {runtime_dir}")
+    print(f"profile: {target_profile}")
+    print(f"mode: {mode}")
+    print("hook_installation: not_installed")
+    print(f"blocking_mode: {'enabled' if mode == 'block' else 'not_enabled'}")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
