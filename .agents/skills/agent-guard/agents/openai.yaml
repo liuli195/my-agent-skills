@@ -1,0 +1,7 @@
+interface:
+  display_name: "Agent Guard"
+  short_description: "Generate and activate agent workflow guards"
+  default_prompt: "Use $agent-guard to guard a workflow with an explicit Guard Profile."
+
+policy:
+  allow_implicit_invocation: true
