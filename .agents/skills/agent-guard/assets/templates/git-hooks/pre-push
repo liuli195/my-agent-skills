@@ -1,0 +1,5 @@
+#!/bin/sh
+# agent-guard managed hook. Business rules live in Guard Profile, not here.
+PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+PYTHON_CMD="${AGENT_GUARD_PYTHON:-python}"
+exec "$PYTHON_CMD" "$PROJECT_ROOT/.agents/guard-runtime/hook_event_adapter.py" git-pre-push --project "$PROJECT_ROOT" --profile "{{ guard_profile_id }}" --remote-name "${1:-}" --remote-url "${2:-}" {{ blocking_flag }}
