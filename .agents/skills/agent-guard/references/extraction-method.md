@@ -37,31 +37,14 @@
 python .agents\skills\agent-guard\scripts\extract_guard_model.py <confirmed-notes.yaml> --output <guard-profile-dir>
 ```
 
-输入必须包含：
+输入必须符合 `assets/templates/guard-profile/confirmed-notes.yaml`。关键分组不得为空：
 
-- `grill_with_docs.status: confirmed`
-- `grill_with_docs.confirmed_decisions`
-- `grill_with_docs.terminology`
-- `grill_with_docs.boundaries`
-- `grill_with_docs.scenarios`
-- `grill_with_docs.exceptions`
-- `grill_with_docs.documentation_changes`
-- `initialization.requested_profile_ref`
-- `initialization.guard_injection.enabled`
-- `initialization.hook_installation.enabled`
-- `profile`：`id`、`name`、`description`
-- `target`：`id`、`type`、`name`、`source`、`boundary`
-- `activation`
-- `subject`
-- `execution`
-- `observation`
-- `state_machine`
-- `guard_points`
-- `artifacts`
-- `hook_bindings`
-- `validation.items`
+- `grill_with_docs`：`status: confirmed`、已确认决策、术语、边界、场景、例外和文档变更。
+- `initialization`：请求的画像引用、Guard Injection（守卫注入）开关和 Hook（钩子）安装意向。
+- `profile`、`target`、`activation`、`subject`、`execution`、`observation`、`state_machine`、`guard_points`、`artifacts`、`hook_bindings`。
+- `validation.items`。
 
-输入模板见 `assets/templates/guard-profile/confirmed-notes.yaml`。实际输入不能把必填列表留空，空列表会触发 `needs_confirmation`。
+空列表或缺少关键字段会触发 `needs_confirmation`。
 
 如果缺少关键字段、`grill_with_docs.status` 不是 `confirmed`，或边界要求修改被守卫对象，提取器必须输出 `needs_confirmation`，并把字段交回 `$grill-with-docs`（带文档拷问方法）继续追问。不要生成看似完整但不可验证的配置。
 

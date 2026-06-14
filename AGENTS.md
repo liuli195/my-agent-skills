@@ -5,13 +5,16 @@
 简洁直白，不要过度使用专业词汇。
 默认使用简体中文输出。英文技术名词后面跟中文简体释义，例如 `Guard Profile（守卫画像）`、`Runtime（运行时）`。
 
-## 仓库边界
+## Agent skills
 
-本仓库维护用户级 agent skills 源码。当前范围包含 `agent-guard` 的 Skill（技能）说明、参考文档、Guard Profile（守卫画像）模板、Guard Runtime（守卫运行时）模板、安装/初始化脚本和最小自测。
+### Issue tracker
 
-不要在没有用户明确授权时：
+本仓库的 issues 和 PRD 使用 GitHub Issues 管理。详见 `docs/agents/issue-tracker.md`。
 
-- 安装用户级 Skill。
-- 创建或修改目标项目的 hook。
-- 配置会拒绝操作的 `deny` 状态权限。
-- 初始化任何目标项目守卫。
+### Triage labels
+
+使用默认的五类 triage 标签。详见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+本仓库是 single-context 布局。详见 `docs/agents/domain.md`。

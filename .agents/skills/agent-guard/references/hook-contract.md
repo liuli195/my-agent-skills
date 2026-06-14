@@ -47,11 +47,11 @@ Hook（钩子）的职责是捕获事件、标准化事件、调用 Guard Runtim
 - `hook`
 - `raw_event_summary`
 
-adapter（适配器）只做格式转换和 Runtime（运行时）调用。具体业务判断必须由 Guard Profile（守卫画像）的 state machine（状态机）和 guard points（守卫点）完成。工具调用类事件必须保留工具名、工具输入、命令、路径和原始摘要，让 Runtime（运行时）可以按当前状态的 `permissions` 字段判断。
+adapter（适配器）只做格式转换和 Runtime（运行时）调用。具体业务判断放在 Guard Profile（守卫画像）的 state machine（状态机）和 guard points（守卫点）。工具调用类事件必须保留工具名、工具输入、命令、路径和原始摘要，供 Runtime（运行时）按当前状态 `permissions` 判断。
 
-Hook（钩子）事件只用于权限评估、审计和提示，不推进状态。Hook（钩子）不得把“权限允许”解释成“状态已完成”，也不得在 Hook 内推进状态。状态推进只能由主 agent（主代理）主动调用 Runtime（运行时）提交标准事件完成。
+Hook（钩子）事件只用于权限评估、审计和提示，不推进状态。状态推进规则见 `runtime-contract.md`。
 
-Hook（钩子）无法解析到唯一 Guard Instance（守卫实例）时，必须忽略该事件：不拒绝、不提示、不写审计。Hook（钩子）不得自行猜 Subject（主体）、创建实例或负责检查实例是否存在。Guard Instance（守卫实例）只能由主 agent（主代理）显式 activate（激活）创建。
+Hook（钩子）无法解析到唯一 Guard Instance（守卫实例）时，必须忽略该事件：不拒绝、不提示、不写审计。Hook（钩子）不得自行猜 Subject（主体）或创建实例。
 
 adapter（适配器）会保留 payload（载荷）里的 `context` 扩展字段，例如 PR 编号、任务 ID 或外部对象 ID，供 Subject Resolver（主体解析器）读取。
 
@@ -83,7 +83,7 @@ python .agents\skills\agent-guard\scripts\install_hooks.py --project <target-pro
 - Git 仓库的 `core.hooksPath=.githooks`
 - `.agents/guards/<guard-profile-id>/hook-install-plan.md`
 
-`--authorize-install` 授权安装 Hook（钩子）入口，也授权已安装 Hook（钩子）按 Runtime（运行时）返回的 `deny` 拒绝外部动作。安装后，Hook（钩子）会把可见工具调用交给 Runtime（运行时）评估；Runtime（运行时）返回 `deny` 时，支持拒绝的 Hook（钩子）应返回拒绝码。
+`--authorize-install` 授权安装 Hook（钩子）入口，也授权已安装 Hook（钩子）按 Runtime（运行时）返回的 `deny` 拒绝外部动作。
 
 验证入口：
 

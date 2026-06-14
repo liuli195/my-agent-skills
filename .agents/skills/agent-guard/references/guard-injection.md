@@ -27,13 +27,13 @@ Runtime（运行时）写入：
 - `.local/guard/runs/<guard-profile-id>/<run-id>/brief.json`
 - `.local/guard/runs/<guard-profile-id>/<run-id>/brief.md`
 
-`brief.json` 至少包含 `guard_profile_id`、`subject_key_hash`、`state`、`state_version`、`allowed_next`、`forbidden_next`、`missing_artifacts`、`recent_denial_reasons`、`next_step`、`audit_path`、`brief_hash`、`brief_text` 和 `expires_at`。如果当前状态声明了 `permissions`、`transition_conditions`，或存在从当前状态出发的转换，Runtime（运行时）应把它们渲染进 `brief_text`，并可在 JSON 中保留同名结构化字段。Brief（简报）可以暴露 `completable_state_id`，但不得要求主 agent（主代理）选择下一状态或转换 ID。
+`brief.json` 至少包含 `guard_profile_id`、`subject_key_hash`、`state`、`state_version`、`allowed_next`、`forbidden_next`、`missing_artifacts`、`recent_denial_reasons`、`next_step`、`audit_path`、`brief_hash`、`brief_text` 和 `expires_at`。如果当前状态声明了 `permissions`、`transition_conditions`，或存在从当前状态出发的转换，Runtime（运行时）应把它们渲染进 `brief_text`，并可在 JSON 中保留同名结构化字段。Brief（简报）可以暴露 `completable_state_id`。
 
-Guard Brief（守卫简报）给出的状态推进指令必须提示主 agent（主代理）使用 `event_type: state_completed` 和当前 `completable_state_id` 调用 Runtime（运行时）。主 agent（主代理）不得提交目标状态、转换 ID 或产物列表。Runtime（运行时）负责读取证据并判断下一状态。
+Guard Brief（守卫简报）的状态推进指令只提示 `event_type: state_completed` 和当前 `completable_state_id`；状态推进规则见 `runtime-contract.md`。
 
 终止状态下的 Guard Brief（守卫简报）不得暴露 `completable_state_id`，只提示流程已完成和审计位置。
 
-Guard Brief（守卫简报）是导航信息，不是状态推进锁。主 agent（主代理）在需要了解当前允许动作、禁止动作和下一步时读取 Brief；提交 `state_completed` 前不要求重新读取 Brief，也不需要提交 `brief_hash`。Runtime（运行时）始终以 Guard Instance（守卫实例）的当前状态为准。
+Guard Brief（守卫简报）是导航信息，不是状态推进锁。提交 `state_completed` 前不要求重新读取 Brief，也不需要提交 `brief_hash`。
 
 字段映射：
 
