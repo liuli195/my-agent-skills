@@ -4,4 +4,8 @@ artifacts:
     owner: guard
     required_for:
       - close_after_note
+    path: .local/guard/artifacts/{guard_profile_id}/{subject_key_hash}/{state_version}/completion-note.json
+    freshness:
+      scope: current_state_entry
+    reuse_policy: deny
     description: 一条短 note（说明记录），证明样例 flow（流程）已准备关闭。

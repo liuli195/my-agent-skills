@@ -14,6 +14,21 @@ SOURCE_SKILL = REPO_ROOT / ".agents" / "skills" / "agent-guard"
 POWERSHELL = "powershell"
 
 
+def skill_description(skill_path: Path) -> str:
+    text = (skill_path / "SKILL.md").read_text(encoding="utf-8")
+    lines = text.splitlines()
+    in_frontmatter = False
+    for line in lines:
+        if line.strip() == "---":
+            if not in_frontmatter:
+                in_frontmatter = True
+                continue
+            break
+        if in_frontmatter and line.startswith("description:"):
+            return line.removeprefix("description:").strip()
+    raise AssertionError("SKILL.md missing frontmatter description")
+
+
 def run_verify(args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(VERIFY_INSTALL), *args],
@@ -38,6 +53,26 @@ def run_powershell(script: Path, args: list[str]) -> subprocess.CompletedProcess
     )
 
 
+def test_agent_guard_skill_description_covers_guarded_target_types() -> None:
+    description = skill_description(SOURCE_SKILL)
+
+    for term in [
+        "Skill（技能）",
+        "workflow（工作流）",
+        "node（节点）",
+        "command（命令）",
+        "artifact lifecycle（产物生命周期）",
+        "Codex lifecycle behavior（Codex 生命周期行为）",
+        "PR review order（PR 审查顺序）",
+        "Hook enforcement（钩子强制执行）",
+        "Guard Injection（守卫注入）",
+        "Guard Brief（守卫简报）",
+        "Guard Runtime（守卫运行时）",
+        "Guard Profile（守卫画像）",
+    ]:
+        assert term in description
+
+
 def test_verify_install_reports_complete_source_skeleton(tmp_path: Path) -> None:
     user_skill = tmp_path / "user" / ".agents" / "skills" / "agent-guard"
     claude_skill = tmp_path / "user" / ".claude" / "skills" / "agent-guard"
@@ -59,7 +94,6 @@ def test_verify_install_reports_complete_source_skeleton(tmp_path: Path) -> None
     assert "claude_junction: missing" in result.stdout
     assert "project_guard_initialization: not_performed" in result.stdout
     assert "project_hooks: not_installed" in result.stdout
-    assert "blocking_mode: not_enabled" in result.stdout
 
 
 def test_install_user_skill_defaults_to_dry_run_without_writing_user_skill(tmp_path: Path) -> None:
@@ -80,7 +114,6 @@ def test_install_user_skill_defaults_to_dry_run_without_writing_user_skill(tmp_p
     assert "expected_result: user_skill_synced" in result.stdout
     assert "project_guard_initialization: not_performed" in result.stdout
     assert "project_hooks: not_installed" in result.stdout
-    assert "blocking_mode: not_enabled" in result.stdout
     assert not user_skill.exists()
 
 
@@ -129,7 +162,6 @@ def test_sync_claude_junction_defaults_to_dry_run_without_creating_junction(tmp_
     assert "action: would_create" in result.stdout
     assert "project_guard_initialization: not_performed" in result.stdout
     assert "project_hooks: not_installed" in result.stdout
-    assert "blocking_mode: not_enabled" in result.stdout
     assert not claude_skill.exists()
 
 

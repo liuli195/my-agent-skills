@@ -93,7 +93,6 @@ def codex_command(
     profile_id: str,
     event_name: str,
     python_command: str,
-    blocking_enabled: bool,
 ) -> str:
     parts = [
         quote(python_command),
@@ -106,8 +105,6 @@ def codex_command(
         "--codex-event",
         event_name,
     ]
-    if blocking_enabled and event_name in {"PreToolUse", "SubagentStart"}:
-        parts.append("--blocking")
     return " ".join(parts)
 
 
@@ -151,7 +148,7 @@ def remove_managed_codex_entries(entries: list[Any], profile_id: str) -> list[An
     return kept
 
 
-def build_codex_hooks(project: Path, profile_id: str, python_command: str, blocking_enabled: bool) -> dict[str, Any]:
+def build_codex_hooks(project: Path, profile_id: str, python_command: str) -> dict[str, Any]:
     path = project / ".codex" / "hooks.json"
     data = read_codex_hooks(path)
     hooks = data.setdefault("hooks", {})
@@ -166,7 +163,7 @@ def build_codex_hooks(project: Path, profile_id: str, python_command: str, block
                 "hooks": [
                     {
                         "type": "command",
-                        "command": codex_command(project, profile_id, event_name, python_command, blocking_enabled),
+                        "command": codex_command(project, profile_id, event_name, python_command),
                         "statusMessage": f"agent-guard: {event_name}",
                     }
                 ]
@@ -176,26 +173,23 @@ def build_codex_hooks(project: Path, profile_id: str, python_command: str, block
     return data
 
 
-def write_codex_hooks(project: Path, profile_id: str, python_command: str, blocking_enabled: bool) -> Path:
+def write_codex_hooks(project: Path, profile_id: str, python_command: str) -> Path:
     path = project / ".codex" / "hooks.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = build_codex_hooks(project, profile_id, python_command, blocking_enabled)
+    data = build_codex_hooks(project, profile_id, python_command)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path
 
 
-def git_pre_push_script(profile_id: str, blocking_enabled: bool) -> str:
+def git_pre_push_script(profile_id: str) -> str:
     template = template_path("git-hooks", "pre-push").read_text(encoding="utf-8")
-    return (
-        template.replace("{{ guard_profile_id }}", profile_id)
-        .replace("{{ blocking_flag }}", "--blocking" if blocking_enabled else "")
-    )
+    return template.replace("{{ guard_profile_id }}", profile_id)
 
 
-def write_git_pre_push(project: Path, profile_id: str, blocking_enabled: bool) -> Path:
+def write_git_pre_push(project: Path, profile_id: str) -> Path:
     path = project / ".githooks" / "pre-push"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(git_pre_push_script(profile_id, blocking_enabled), encoding="utf-8")
+    path.write_text(git_pre_push_script(profile_id), encoding="utf-8")
     path.chmod(0o755)
     return path
 
@@ -329,10 +323,9 @@ def print_plan(project: Path, profile_id: str, bindings: list[dict[str, Any]], p
     print("  - remove .githooks/pre-push")
     print("  - remove .agents/guard-runtime/hook_event_adapter.py")
     print("  - restore or remove git config core.hooksPath when it was changed")
-    print("blocking_mode: not_enabled")
     print("risk:")
-    print("  - Hook（钩子）入口可能阻断命令；必须确认 Guard Profile（守卫画像）规则正确。")
-    print("next: 加 --authorize-install 才会写入 Hook（钩子）入口。")
+    print("  - Hook（钩子）入口可能拒绝命令；必须确认 Guard Profile（守卫画像）规则正确。")
+    print("next: 加 --authorize-install 才会写入 Hook（钩子）入口，并授权已安装 Hook（钩子）执行 Runtime（运行时）返回的 `deny`。")
 
 
 def command_contains_managed_profile(command: str, profile_id: str) -> bool:
@@ -392,11 +385,11 @@ def verify(project: Path, profile_id: str) -> int:
     return 0 if status == "verified" else 1
 
 
-def install(project: Path, profile_id: str, python_command: str, blocking_enabled: bool) -> int:
+def install(project: Path, profile_id: str, python_command: str) -> int:
     bindings = load_hook_bindings(project, profile_id)
     adapter = write_adapter(project)
-    codex_hooks = write_codex_hooks(project, profile_id, python_command, blocking_enabled)
-    git_hook = write_git_pre_push(project, profile_id, blocking_enabled)
+    codex_hooks = write_codex_hooks(project, profile_id, python_command)
+    git_hook = write_git_pre_push(project, profile_id)
     hooks_path_status = configure_git_hooks_path(project)
     install_record = write_install_record(project, profile_id, bindings)
 
@@ -408,7 +401,6 @@ def install(project: Path, profile_id: str, python_command: str, blocking_enable
     print(f"git_pre_push: {git_hook}")
     print(f"git_hooks_path: {hooks_path_status}")
     print(f"install_record: {install_record}")
-    print(f"blocking_mode: {'enabled' if blocking_enabled else 'not_enabled'}")
     print("business_rules: profile_only")
     return 0
 
@@ -417,8 +409,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="安装或验证 Guard Hook（守卫钩子）入口。")
     parser.add_argument("--profile", required=True, help="Guard Profile（守卫画像）ID")
     parser.add_argument("--project", type=Path, default=Path.cwd(), help="项目路径")
-    parser.add_argument("--authorize-install", action="store_true", help="明确授权写入 Hook（钩子）入口")
-    parser.add_argument("--authorize-blocking", action="store_true", help="明确授权 Hook（钩子）入口返回阻断码")
+    parser.add_argument(
+        "--authorize-install",
+        action="store_true",
+        help="明确授权写入 Hook（钩子）入口，并授权已安装 Hook（钩子）执行 Runtime（运行时）返回的 deny",
+    )
     parser.add_argument("--verify", action="store_true", help="验证 Hook（钩子）入口是否存在")
     parser.add_argument("--python", default=sys.executable, help="Codex Hook（Codex 钩子）使用的 Python 命令")
     args = parser.parse_args(argv)
@@ -451,7 +446,7 @@ def main(argv: list[str] | None = None) -> int:
         print_plan(project, profile_id, bindings, args.python)
         return 0
 
-    return install(project, profile_id, args.python, args.authorize_blocking)
+    return install(project, profile_id, args.python)
 
 
 if __name__ == "__main__":

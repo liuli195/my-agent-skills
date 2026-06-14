@@ -10,7 +10,7 @@ transitions:
   - id: close_after_note
     from: open
     to: closed
-    on_event: guard.close
+    on_event: state_completed
     guard_points:
       - completion_note_present
     required_artifacts:

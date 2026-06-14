@@ -8,6 +8,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INIT_PROJECT_GUARD = REPO_ROOT / ".agents" / "skills" / "agent-guard" / "scripts" / "init_project_guard.py"
 INSTALL_HOOKS = REPO_ROOT / ".agents" / "skills" / "agent-guard" / "scripts" / "install_hooks.py"
+PRD = REPO_ROOT / "docs" / "prd" / "agent-guard-prd.md"
+HOOK_CONTRACT = REPO_ROOT / ".agents" / "skills" / "agent-guard" / "references" / "hook-contract.md"
 MINIMAL_PROFILE = (
     REPO_ROOT
     / ".agents"
@@ -69,8 +71,29 @@ def runtime(project: Path) -> Path:
     return project / ".agents" / "guard-runtime" / "guard_runner.py"
 
 
-def test_codex_hook_template_does_not_enable_blocking_by_default() -> None:
+def test_codex_hook_template_has_no_blocking_flag() -> None:
     assert "--blocking" not in CODEX_HOOKS_TEMPLATE.read_text(encoding="utf-8")
+
+
+def test_docs_distinguish_first_version_hook_scope_from_future_extensions() -> None:
+    prd = PRD.read_text(encoding="utf-8")
+    hook_contract = HOOK_CONTRACT.read_text(encoding="utf-8")
+
+    assert "MVP 第一版必须支持的 Codex 生命周期事件" in prd
+    for event_name in ["UserPromptSubmit", "PreToolUse", "PostToolUse", "SubagentStart", "SubagentStop"]:
+        assert f"- `{event_name}`" in prd
+    assert "MVP 后续扩展的 Codex 生命周期事件" in prd
+    for event_name in ["SessionStart", "PreCompact", "Stop"]:
+        assert f"- `{event_name}`" in prd
+    assert "MVP 第一版必须支持的 Git hook" in prd
+    assert "- `pre-push`" in prd
+    assert "MVP 后续扩展的 Git hook" in prd
+    assert "- `pre-commit`" in prd
+
+    assert "第一版 adapter（适配器）支持" in hook_contract
+    assert "后续扩展" in hook_contract
+    assert "SessionStart" in hook_contract
+    assert "pre-commit" in hook_contract
 
 
 def test_install_hooks_defaults_to_dry_run_without_writing_hooks(tmp_path: Path) -> None:
@@ -142,9 +165,22 @@ def test_codex_hook_adapter_prints_standard_event_envelope(tmp_path: Path) -> No
         json.dumps(
             {
                 "session_id": "session-1",
-                "context": {"pr_number": "17", "task_id": "task-a"},
+                "context": {
+                    "pr_number": "17",
+                    "repo": "repo-a",
+                    "repository": "https://user:password@example.test/other.git",
+                    "task_id": "task-a",
+                    "secret": "不要透传",
+                },
+                "subject": {"issue": "17", "secret": "不要透传"},
                 "prompt": "请执行当前任务",
-                "tool_name": "Write",
+                "tool": {"name": "Write", "secret": "不要透传"},
+                "command": "write-file",
+                "args": {"path": "docs/args.md", "secret": "不要透传"},
+                "arguments": [{"query": "ok", "secret": "不要透传"}],
+                "tool_input": {"path": "docs/plan.md", "pattern": "TODO", "value": "不要透传", "secret": "不要透传"},
+                "parameters": {"query": "status", "secret": "不要透传"},
+                "secret": "不要透传",
             },
             ensure_ascii=False,
         ),
@@ -180,10 +216,78 @@ def test_codex_hook_adapter_prints_standard_event_envelope(tmp_path: Path) -> No
     assert envelope["event_type"] == "codex.user_prompt_submit"
     assert envelope["context"]["session_id"] == "session-1"
     assert envelope["context"]["pr_number"] == "17"
+    assert envelope["context"]["repo"] == "repo-a"
+    assert envelope["context"]["repo_url_hash"]
+    assert envelope["context"]["repository"] == "example.test/other.git"
+    assert envelope["context"]["repository_host"] == "example.test"
+    assert envelope["context"]["repository_path"] == "/other.git"
+    assert envelope["context"]["repository_url_hash"]
     assert envelope["context"]["task_id"] == "task-a"
     assert envelope["context"]["worktree"] == str(project.resolve())
-    assert envelope["payload"]["prompt"] == "请执行当前任务"
+    assert "token" not in json.dumps(envelope["context"], ensure_ascii=False)
+    assert "secret" not in json.dumps(envelope["context"], ensure_ascii=False)
+    assert "secret" not in envelope["context"]
+    assert envelope["subject"] == {"issue": "17"}
+    assert envelope["payload"] == {
+        "args": {"path": "docs/args.md"},
+        "arguments": [{"query": "ok"}],
+        "command": "write-file",
+        "parameters": {"query": "status"},
+        "tool_input": {"path": "docs/plan.md", "pattern": "TODO"},
+    }
+    assert envelope["tool"] == {"name": "Write"}
+    assert "secret" not in envelope["payload"]
+    assert "secret" not in envelope["payload"]["args"]
+    assert "secret" not in envelope["payload"]["arguments"][0]
+    assert "secret" not in envelope["payload"]["tool_input"]
+    assert "value" not in envelope["payload"]["tool_input"]
+    assert "secret" not in envelope["payload"]["parameters"]
     assert envelope["hook"]["trigger_event"] == "UserPromptSubmit"
+
+
+def test_codex_hook_adapter_never_maps_hook_to_state_completed(tmp_path: Path) -> None:
+    project = initialized_project(tmp_path)
+    install = run_install(["--project", str(project), "--profile", "minimal-sample", "--authorize-install"])
+    assert install.returncode == 0, install.stdout + install.stderr
+    (project / ".agents" / "guards" / "minimal-sample" / "hook-bindings.yaml").write_text(
+        """
+hook_bindings:
+  - id: bad-codex-complete
+    source: codex
+    trigger_event: PostToolUse
+    event_type: state_completed
+""".lstrip(),
+        encoding="utf-8",
+    )
+    payload = tmp_path / "codex-payload.json"
+    payload.write_text(json.dumps({"session_id": "session-1", "tool_name": "Write"}, ensure_ascii=False), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(adapter(project)),
+            "codex",
+            "--project",
+            str(project),
+            "--profile",
+            "minimal-sample",
+            "--codex-event",
+            "PostToolUse",
+            "--payload-file",
+            str(payload),
+            "--print-envelope",
+        ],
+        cwd=project,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    envelope = json.loads(result.stdout)
+    assert envelope["event_type"] == "codex.post_tool_use"
+    assert envelope["hook"]["binding_id"] == "bad-codex-complete"
 
 
 def test_codex_hook_adapter_does_not_persist_auto_event_file(tmp_path: Path) -> None:
@@ -240,7 +344,7 @@ def test_codex_hook_adapter_does_not_persist_auto_event_file(tmp_path: Path) -> 
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "decision: ignored" in result.stdout
-    assert "reason: no_matching_transition" in result.stdout
+    assert "reason: non_state_completed_event" in result.stdout
     assert not events_root.exists()
     assert not list(events_root.glob("*.json"))
 
@@ -301,7 +405,7 @@ def test_git_pre_push_adapter_prints_standard_event_envelope(tmp_path: Path) -> 
             "--remote-name",
             "origin",
             "--remote-url",
-            "https://example.test/repo.git",
+            "https://token:secret@example.test/repo.git",
             "--print-envelope",
         ],
         cwd=project,
@@ -318,13 +422,58 @@ def test_git_pre_push_adapter_prints_standard_event_envelope(tmp_path: Path) -> 
     assert envelope["source"] == "git"
     assert envelope["event_type"] == "git.pre_push"
     assert envelope["context"]["worktree"] == str(project.resolve())
+    assert envelope["subject"] == {}
     assert envelope["tool"] == {"name": "git"}
-    assert envelope["action"] == {"name": "pre_push", "blocking": False}
+    assert envelope["action"] == {"name": "pre_push"}
     assert envelope["payload"]["git"]["remote_name"] == "origin"
+    assert envelope["payload"]["git"]["remote"] == {
+        "host": "example.test",
+        "path": "/repo.git",
+        "scheme": "https",
+        "url_hash": envelope["payload"]["git"]["remote"]["url_hash"],
+    }
+    assert "token" not in json.dumps(envelope["payload"]["git"]["remote"], ensure_ascii=False)
+    assert "secret" not in json.dumps(envelope["payload"]["git"]["remote"], ensure_ascii=False)
+    assert "remote_url" not in envelope["payload"]["git"]
     assert envelope["payload"]["git"]["refs"][0]["local_ref"] == "refs/heads/main"
 
 
-def test_authorized_blocking_install_marks_blocking_hook_entries(tmp_path: Path) -> None:
+def test_git_pre_push_adapter_hashes_unparseable_remote_url(tmp_path: Path) -> None:
+    project = initialized_project(tmp_path)
+    install = run_install(["--project", str(project), "--profile", "minimal-sample", "--authorize-install"])
+    assert install.returncode == 0, install.stdout + install.stderr
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(adapter(project)),
+            "git-pre-push",
+            "--project",
+            str(project),
+            "--profile",
+            "minimal-sample",
+            "--remote-name",
+            "origin",
+            "--remote-url",
+            "token-secret-raw-remote",
+            "--print-envelope",
+        ],
+        cwd=project,
+        input="refs/heads/main abc123 refs/heads/main def456\n",
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    envelope = json.loads(result.stdout)
+    remote = envelope["payload"]["git"]["remote"]
+    assert list(remote.keys()) == ["url_hash"]
+    assert "token-secret-raw-remote" not in json.dumps(envelope, ensure_ascii=False)
+
+
+def test_authorize_blocking_install_argument_is_removed(tmp_path: Path) -> None:
     project = initialized_project(tmp_path)
 
     install = run_install(
@@ -338,10 +487,6 @@ def test_authorized_blocking_install_marks_blocking_hook_entries(tmp_path: Path)
         ]
     )
 
-    assert install.returncode == 0, install.stdout + install.stderr
-    assert "blocking_mode: enabled" in install.stdout
-    hooks = json.loads((project / ".codex" / "hooks.json").read_text(encoding="utf-8"))
-    assert "--blocking" in hooks["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-    assert "--blocking" in hooks["hooks"]["SubagentStart"][0]["hooks"][0]["command"]
-    assert "--blocking" not in hooks["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
-    assert "--blocking" in (project / ".githooks" / "pre-push").read_text(encoding="utf-8")
+    assert install.returncode == 2
+    assert "unrecognized arguments: --authorize-blocking" in install.stderr
+    assert not (project / ".codex" / "hooks.json").exists()

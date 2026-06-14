@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -12,6 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -23,6 +25,60 @@ CODEX_EVENT_TYPES = {
     "PreToolUse": "codex.pre_tool_use",
     "PostToolUse": "codex.post_tool_use",
 }
+
+PAYLOAD_TOOL_FIELDS = {
+    "command",
+    "cmd",
+    "path",
+    "paths",
+    "file",
+    "files",
+    "file_path",
+    "file_paths",
+    "args",
+    "arguments",
+    "cwd",
+}
+
+TOOL_INPUT_CONTAINERS = {"tool_input", "input", "parameters", "params"}
+PARAMETER_FIELDS = PAYLOAD_TOOL_FIELDS | {
+    "pattern",
+    "query",
+    "regex",
+    "glob",
+    "selector",
+    "target",
+    "name",
+    "key",
+    "mode",
+    "operation",
+}
+CONTEXT_FIELDS = {
+    "scope",
+    "repo",
+    "repository",
+    "repository_id",
+    "worktree",
+    "branch",
+    "pr_number",
+    "pull_request",
+    "pull_request_number",
+    "agent_id",
+    "session_id",
+    "task_id",
+    "object_type",
+    "object_id",
+    "target_id",
+    "target_object_id",
+    "execution_context_id",
+    "external_system_id",
+    "issue",
+    "issue_number",
+    "project_id",
+    "workflow_id",
+    "run_id",
+}
+MAX_STRING_VALUE_LENGTH = 500
 
 
 def now_iso() -> str:
@@ -45,6 +101,129 @@ def load_payload(path: Path | None) -> dict[str, Any]:
     if path is not None:
         return load_json_text(path.read_text(encoding="utf-8"), str(path))
     return load_json_text(sys.stdin.read(), "stdin")
+
+
+def filtered_tool_mapping(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {key: safe_parameter_value(value[key]) for key in PAYLOAD_TOOL_FIELDS if key in value}
+
+
+def safe_parameter_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return value[:MAX_STRING_VALUE_LENGTH]
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, list):
+        return [safe_parameter_value(item) for item in value[:20]]
+    if isinstance(value, dict):
+        return {
+            key: safe_parameter_value(item)
+            for key, item in value.items()
+            if isinstance(key, str) and key in PARAMETER_FIELDS
+        }
+    return str(value)[:MAX_STRING_VALUE_LENGTH]
+
+
+def filtered_parameter_mapping(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: safe_parameter_value(item)
+        for key, item in value.items()
+        if isinstance(key, str) and key in PARAMETER_FIELDS
+    }
+
+
+def filtered_context_mapping(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: safe_parameter_value(item)
+        for key, item in value.items()
+        if isinstance(key, str) and key in CONTEXT_FIELDS
+    }
+
+
+def add_repo_context_summary(context: dict[str, Any], raw_value: Any, prefix: str) -> None:
+    summary = remote_url_summary(str(raw_value or ""), preserve_plain_name=True)
+    context.pop(prefix, None)
+    if summary.get("url_hash"):
+        context[f"{prefix}_url_hash"] = summary["url_hash"]
+    if summary.get("host"):
+        context[f"{prefix}_host"] = summary["host"]
+    if summary.get("path"):
+        context[f"{prefix}_path"] = summary["path"]
+    if summary.get("name"):
+        context[prefix] = summary["name"]
+    if summary.get("host") or summary.get("path"):
+        context[prefix] = f"{summary.get('host', '')}{summary.get('path', '')}"[:MAX_STRING_VALUE_LENGTH]
+
+
+def list_value(data: dict[str, Any], dotted_path: str) -> list[str]:
+    current: Any = data
+    for part in dotted_path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return []
+        current = current[part]
+    return [item for item in current if isinstance(item, str)] if isinstance(current, list) else []
+
+
+def profile_subject_fields(project: Path, profile_id: str) -> set[str]:
+    path = profile_dir(project, profile_id) / "subject-resolver.yaml"
+    if not path.exists():
+        return set(CONTEXT_FIELDS)
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError:
+        return set(CONTEXT_FIELDS)
+    if not isinstance(data, dict):
+        return set(CONTEXT_FIELDS)
+    fields: set[str] = set(CONTEXT_FIELDS)
+    for field in (
+        list_value(data, "subject.identity_fields")
+        + list_value(data, "subject.required_fields")
+        + list_value(data, "subject.optional_fields")
+    ):
+        if field.startswith("subject."):
+            fields.add(field.split(".", 1)[1])
+    return fields
+
+
+def filtered_subject_mapping(project: Path, profile_id: str, value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    allowed = profile_subject_fields(project, profile_id)
+    return {
+        key: safe_parameter_value(item)
+        for key, item in value.items()
+        if isinstance(key, str) and key in allowed
+    }
+
+
+def codex_runtime_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    runtime_payload = filtered_tool_mapping(payload)
+    for nested_key in TOOL_INPUT_CONTAINERS:
+        nested = filtered_parameter_mapping(payload.get(nested_key))
+        if nested:
+            runtime_payload[nested_key] = nested
+    return runtime_payload
+
+
+def subject_from_payload(project: Path, profile_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return filtered_subject_mapping(project, profile_id, payload.get("subject"))
+
+
+def tool_name_from_payload(payload: dict[str, Any]) -> str:
+    tool_name = payload.get("tool_name")
+    if isinstance(tool_name, str):
+        return tool_name[:MAX_STRING_VALUE_LENGTH]
+    tool = payload.get("tool")
+    if isinstance(tool, str):
+        return tool[:MAX_STRING_VALUE_LENGTH]
+    if isinstance(tool, dict) and isinstance(tool.get("name"), str):
+        return tool["name"][:MAX_STRING_VALUE_LENGTH]
+    return ""
 
 
 def profile_dir(project: Path, profile_id: str) -> Path:
@@ -108,6 +287,8 @@ def mapped_event_type(
     if binding is None:
         return default_event_type, None
     event_type = binding.get("event_type")
+    if source in {"codex", "git"} and event_type == "state_completed":
+        return default_event_type, binding.get("id")
     return event_type if isinstance(event_type, str) and event_type else default_event_type, binding.get("id")
 
 
@@ -123,7 +304,7 @@ def git_value(project: Path, args: list[str]) -> str:
 
 
 def context_from_payload(project: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    payload_context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    payload_context = filtered_context_mapping(payload.get("context"))
     session_id = (
         payload.get("session_id")
         or payload_context.get("session_id")
@@ -133,10 +314,12 @@ def context_from_payload(project: Path, payload: dict[str, Any]) -> dict[str, An
         or ""
     )
     context = dict(payload_context)
-    context["session_id"] = context.get("session_id") or session_id
-    context["repo"] = context.get("repo") or git_value(project, ["config", "--get", "remote.origin.url"])
-    context["worktree"] = context.get("worktree") or str(project.resolve())
-    context["branch"] = context.get("branch") or git_value(project, ["branch", "--show-current"])
+    context["session_id"] = safe_parameter_value(context.get("session_id") or session_id)
+    add_repo_context_summary(context, context.get("repo") or git_value(project, ["config", "--get", "remote.origin.url"]), "repo")
+    if context.get("repository"):
+        add_repo_context_summary(context, context.get("repository"), "repository")
+    context["worktree"] = safe_parameter_value(context.get("worktree") or str(project.resolve()))
+    context["branch"] = safe_parameter_value(context.get("branch") or git_value(project, ["branch", "--show-current"]))
     return context
 
 
@@ -187,7 +370,7 @@ def maybe_print_or_run(args: argparse.Namespace, envelope: dict[str, Any]) -> in
     return_code, runtime_stdout = run_runtime(args.project, event_path)
     if args.out is None:
         cleanup_event_file(event_path)
-    return return_code if bool(getattr(args, "blocking", False)) else 0
+    return return_code
 
 
 def build_codex_envelope(args: argparse.Namespace) -> dict[str, Any]:
@@ -208,15 +391,15 @@ def build_codex_envelope(args: argparse.Namespace) -> dict[str, Any]:
         "timestamp": payload.get("timestamp") or now_iso(),
         "guard_profile_id": args.profile,
         "context": context,
-        "payload": payload,
-        "tool": {"name": payload.get("tool_name") or payload.get("tool") or ""},
-        "action": {"name": args.codex_event, "blocking": bool(args.blocking)},
+        "subject": subject_from_payload(args.project, args.profile, payload),
+        "payload": codex_runtime_payload(payload),
+        "tool": {"name": tool_name_from_payload(payload)},
+        "action": {"name": args.codex_event},
         "raw_event_summary": f"Codex lifecycle hook（生命周期钩子）：{args.codex_event}",
         "hook": {
             "source": "codex",
             "trigger_event": args.codex_event,
             "binding_id": binding_id,
-            "blocking": bool(args.blocking),
         },
     }
 
@@ -238,6 +421,27 @@ def parse_pre_push_refs(stdin_text: str) -> list[dict[str, str]]:
     return refs
 
 
+def remote_url_summary(remote_url: str, preserve_plain_name: bool = False) -> dict[str, Any]:
+    if not remote_url:
+        return {}
+    summary = {"url_hash": hashlib.sha256(remote_url.encode("utf-8")).hexdigest()}
+    parsed = urlsplit(remote_url)
+    if parsed.scheme and parsed.hostname:
+        summary["scheme"] = parsed.scheme
+        summary["host"] = parsed.hostname
+        summary["path"] = parsed.path[:MAX_STRING_VALUE_LENGTH]
+        return summary
+    if "@" in remote_url and ":" in remote_url.rsplit("@", 1)[-1]:
+        host_path = remote_url.rsplit("@", 1)[-1]
+        host, path = host_path.split(":", 1)
+        summary["host"] = host[:MAX_STRING_VALUE_LENGTH]
+        summary["path"] = path[:MAX_STRING_VALUE_LENGTH]
+        return summary
+    if preserve_plain_name and "@" not in remote_url and "://" not in remote_url:
+        summary["name"] = remote_url[:MAX_STRING_VALUE_LENGTH]
+    return summary
+
+
 def build_git_pre_push_envelope(args: argparse.Namespace) -> dict[str, Any]:
     refs = parse_pre_push_refs(sys.stdin.read())
     event_type, binding_id = mapped_event_type(args.project, args.profile, "git", "pre-push", "git.pre_push")
@@ -245,7 +449,7 @@ def build_git_pre_push_envelope(args: argparse.Namespace) -> dict[str, Any]:
         "git": {
             "hook": "pre-push",
             "remote_name": args.remote_name,
-            "remote_url": args.remote_url,
+            "remote": remote_url_summary(args.remote_url),
             "refs": refs,
         }
     }
@@ -256,15 +460,15 @@ def build_git_pre_push_envelope(args: argparse.Namespace) -> dict[str, Any]:
         "timestamp": now_iso(),
         "guard_profile_id": args.profile,
         "context": context_from_payload(args.project, {}),
+        "subject": {},
         "payload": payload,
         "tool": {"name": "git"},
-        "action": {"name": "pre_push", "blocking": bool(args.blocking)},
+        "action": {"name": "pre_push"},
         "raw_event_summary": "Git pre-push hook（Git 推送前钩子）。",
         "hook": {
             "source": "git",
             "trigger_event": "pre-push",
             "binding_id": binding_id,
-            "blocking": bool(args.blocking),
         },
     }
 
@@ -280,7 +484,6 @@ def main(argv: list[str] | None = None) -> int:
     codex.add_argument("--payload-file", type=Path, help="Codex hook payload（载荷）JSON 文件")
     codex.add_argument("--out", type=Path, help="写入 envelope（信封）的路径")
     codex.add_argument("--print-envelope", action="store_true", help="只输出 envelope（信封），不调用 Runtime（运行时）")
-    codex.add_argument("--blocking", action="store_true", help="该 hook（钩子）入口可阻断")
 
     git_pre_push = subparsers.add_parser("git-pre-push", help="适配 Git pre-push hook（推送前钩子）。")
     git_pre_push.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目目录")
@@ -289,7 +492,6 @@ def main(argv: list[str] | None = None) -> int:
     git_pre_push.add_argument("--remote-url", default="", help="Git remote（远端）URL")
     git_pre_push.add_argument("--out", type=Path, help="写入 envelope（信封）的路径")
     git_pre_push.add_argument("--print-envelope", action="store_true", help="只输出 envelope（信封），不调用 Runtime（运行时）")
-    git_pre_push.add_argument("--blocking", action="store_true", help="该 hook（钩子）入口可阻断")
 
     args = parser.parse_args(argv)
     args.project = args.project.resolve()

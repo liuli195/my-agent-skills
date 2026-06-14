@@ -6,11 +6,17 @@ grill_with_docs:
   scenarios: []
   exceptions: []
   documentation_changes: []
+initialization:
+  requested_profile_ref: example-guard
+  guard_injection:
+    enabled: true
+  hook_installation:
+    enabled: false
+    reason: 等用户明确授权后再安装 Hook（钩子）。
 profile:
   id: example-guard
   name: 示例守卫
   description: 从已确认问答记录生成的草案。
-  mode: warn
 target:
   id: example-target
   type: workflow

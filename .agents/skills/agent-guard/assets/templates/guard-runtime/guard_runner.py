@@ -12,6 +12,7 @@ import sys
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
@@ -138,10 +139,91 @@ def write_audit(
     return audit_path
 
 
+CORE_OUTPUT_KEYS = {"status", "decision", "reason", "details"}
+
+
+def json_safe(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [json_safe(item) for item in value]
+    return value
+
+
+def default_decision(status: str) -> str:
+    return {
+        "allow": "guard_passed",
+        "ask": "confirmation_required",
+        "deny": "denied",
+        "error": "failed",
+        "lock_timeout": "failed",
+        "not_found": "failed",
+        "stale_brief": "failed",
+        "expired_brief": "failed",
+        "ambiguous_subject": "unresolved",
+        "no_subject_match": "unresolved",
+        "activated": "guard_passed",
+        "injectable": "guard_passed",
+        "already_injected": "ignored",
+        "ok": "guard_passed",
+    }.get(status, "failed")
+
+
+def default_reason(status: str, decision: str) -> str:
+    if decision == "guard_passed":
+        return "ok"
+    if decision == "confirmation_required":
+        return "confirmation_required"
+    if status:
+        return status
+    return "unknown"
+
+
+def output_envelope(output: dict[str, Any]) -> dict[str, Any]:
+    if "status" not in output:
+        return output
+    normalized = dict(output)
+    status = str(normalized["status"])
+    decision = str(normalized.get("decision") or default_decision(status))
+    reason = str(normalized.get("reason") or default_reason(status, decision))
+    details = normalized.get("details")
+    details = dict(details) if isinstance(details, dict) else {}
+    for key, value in normalized.items():
+        if key not in CORE_OUTPUT_KEYS and key not in details:
+            details[key] = value
+
+    ordered: dict[str, Any] = {
+        "status": status,
+        "decision": decision,
+        "reason": reason,
+        "details": json_safe(details),
+    }
+    for key, value in normalized.items():
+        if key not in ordered:
+            ordered[key] = json_safe(value)
+    return ordered
+
+
+def subject_resolution_fix_suggestions(reason: str | None, missing_fields: list[str] | None = None) -> list[str]:
+    if reason == "missing_required_fields":
+        fields = ", ".join(missing_fields or [])
+        return [f"补齐 Subject Resolver（主体解析器）必填字段：{fields}。"]
+    if reason == "instance_not_found":
+        return ["先显式 activate（激活）该 Guard Profile（守卫画像）和 Subject（主体），再提交事件。"]
+    if reason == "ambiguous_subject":
+        return ["收窄 Subject Resolver（主体解析器）的 identity_fields（身份字段）或 optional_fields（可选字段），确保只匹配一个 Guard Instance（守卫实例）。"]
+    return ["检查事件 context（上下文）、subject（主体）和 Guard Profile（守卫画像）的 Subject Resolver（主体解析器）配置。"]
+
+
 def print_lines(lines: dict[str, Any]) -> None:
+    lines = output_envelope(lines)
     for key, value in lines.items():
         if isinstance(value, (list, dict)):
-            rendered = json.dumps(value, ensure_ascii=False, sort_keys=True)
+            rendered = json.dumps(json_safe(value), ensure_ascii=False, sort_keys=True)
         elif isinstance(value, bool):
             rendered = "true" if value else "false"
         else:
@@ -151,8 +233,11 @@ def print_lines(lines: dict[str, Any]) -> None:
 
 def load_profile_documents(profile: Path) -> dict[str, dict[str, Any]]:
     concurrency = profile / "concurrency.yaml"
+    manifest = load_yaml_mapping(profile / "GUARD-MANIFEST.yaml")
+    if "mode" in manifest:
+        raise ValueError("GUARD-MANIFEST.yaml 中的 `mode` 已废弃；删除它，并改用 state-machine.yaml 的 states[].permissions。")
     return {
-        "manifest": load_yaml_mapping(profile / "GUARD-MANIFEST.yaml"),
+        "manifest": manifest,
         "activation": load_yaml_mapping(profile / "activation-model.yaml"),
         "subject": load_yaml_mapping(profile / "subject-resolver.yaml"),
         "state_machine": load_yaml_mapping(profile / "state-machine.yaml"),
@@ -368,6 +453,53 @@ def execution_state_summary(docs: dict[str, dict[str, Any]], state_id: str) -> d
     return {"allowed_next": [], "forbidden_next": [], "missing_artifacts": [], "next_step": ""}
 
 
+def state_machine_state(docs: dict[str, dict[str, Any]], state_id: str) -> dict[str, Any]:
+    states = docs["state_machine"].get("states")
+    for state in states if isinstance(states, list) else []:
+        if isinstance(state, dict) and state.get("id") == state_id:
+            return state
+    return {}
+
+
+def outgoing_transition_summaries(docs: dict[str, dict[str, Any]], state_id: str) -> list[dict[str, Any]]:
+    transitions = docs["state_machine"].get("transitions")
+    summaries: list[dict[str, Any]] = []
+    for transition in transitions if isinstance(transitions, list) else []:
+        if not isinstance(transition, dict):
+            continue
+        if transition.get("from") != state_id or transition.get("on_event") != "state_completed":
+            continue
+        summaries.append(
+            {
+                "transition_id": transition.get("id"),
+                "to": transition.get("to"),
+                "conditions": transition.get("conditions", []),
+                "required_artifacts": transition.get("required_artifacts", []),
+                "guard_points": transition.get("guard_points", []),
+            }
+        )
+    return summaries
+
+
+def state_machine_brief_summary(docs: dict[str, dict[str, Any]], state_id: str) -> dict[str, Any]:
+    state = state_machine_state(docs, state_id)
+    terminal_states = docs["state_machine"].get("terminal_states")
+    is_terminal = isinstance(terminal_states, list) and state_id in terminal_states
+    transitions = outgoing_transition_summaries(docs, state_id)
+    summary = {
+        "permissions": state.get("permissions", {}) if isinstance(state.get("permissions"), dict) else {},
+        "transition_conditions": transitions,
+    }
+    if is_terminal:
+        summary["state_completion_instruction"] = "流程已完成；只需查看 Audit（审计）位置。"
+    elif transitions:
+        summary["completable_state_id"] = state_id
+        summary["state_completion_instruction"] = f"提交 event_type=state_completed，completed_state_id={state_id}。"
+    else:
+        summary["state_completion_instruction"] = "当前状态没有可完成转换；查看 Audit（审计）位置。"
+    return summary
+
+
 def format_brief_value(value: Any) -> str:
     if isinstance(value, list):
         return ", ".join(str(item) for item in value) if value else "[]"
@@ -390,8 +522,11 @@ Subject（主体）：{{ subject_key }}
 允许下一步：{{ allowed_next }}
 禁止下一步：{{ forbidden_next }}
 缺失 Artifacts（产物）：{{ missing_artifacts }}
-最近阻断原因：{{ recent_block_reasons }}
+最近拒绝原因：{{ recent_denial_reasons }}
+状态权限：{{ permissions }}
+完成条件：{{ transition_conditions }}
 下一步：{{ next_step }}
+状态推进：{{ state_completion_instruction }}
 Audit（审计）：{{ audit_path }}
 """
 
@@ -413,7 +548,11 @@ def brief_hash_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "allowed_next": payload["allowed_next"],
         "forbidden_next": payload["forbidden_next"],
         "missing_artifacts": payload["missing_artifacts"],
-        "recent_block_reasons": payload["recent_block_reasons"],
+        "recent_denial_reasons": payload["recent_denial_reasons"],
+        "permissions": payload["permissions"],
+        "transition_conditions": payload["transition_conditions"],
+        "completable_state_id": payload.get("completable_state_id", ""),
+        "state_completion_instruction": payload["state_completion_instruction"],
         "next_step": payload["next_step"],
     }
 
@@ -474,13 +613,14 @@ def write_latest_brief(
     state: dict[str, Any],
     docs: dict[str, dict[str, Any]],
     audit_path: Path,
-    recent_block_reasons: list[str] | None = None,
+    recent_denial_reasons: list[str] | None = None,
     missing_artifacts: list[str] | None = None,
 ) -> dict[str, Any]:
     current_state = str(state.get("current_state", ""))
     summary = execution_state_summary(docs, current_state)
     if missing_artifacts is not None:
         summary["missing_artifacts"] = missing_artifacts
+    runtime_summary = state_machine_brief_summary(docs, current_state)
 
     payload = {
         "guard_profile_id": profile_id,
@@ -492,9 +632,10 @@ def write_latest_brief(
         "generated_at": now_iso(),
         "generated_from_run_id": run_id,
         "source": "guard-runtime",
-        "recent_block_reasons": recent_block_reasons or [],
+        "recent_denial_reasons": recent_denial_reasons or [],
         "expires_at": future_iso(BRIEF_TTL_SECONDS),
         **summary,
+        **runtime_summary,
     }
     template = load_brief_template(profile_dir(project, profile_id))
     payload["brief_text"] = render_brief_text(template, payload)
@@ -538,6 +679,7 @@ def create_instance_state(
         initial_state = scalar_value(docs["state_machine"], "initial_state") or "unknown"
 
     path = state_root(project, profile_id) / subject["subject_key_hash"] / "state.json"
+    entered_at = now_iso()
     state = {
         "guard_profile_id": profile_id,
         "profile_ref": profile_id,
@@ -551,7 +693,8 @@ def create_instance_state(
         },
         "current_state": initial_state,
         "state_version": 1,
-        "created_at": now_iso(),
+        "created_at": entered_at,
+        "current_state_entered_at": entered_at,
         "created_by": envelope.get("source"),
         "last_run_id": run_id,
     }
@@ -604,13 +747,14 @@ def activate_guard(args: argparse.Namespace) -> int:
 
     subject, missing, failure_reason = resolve_subject(docs, envelope)
     if subject is None:
+        fix_suggestions = subject_resolution_fix_suggestions(failure_reason, missing)
         audit_path = write_audit(
             project,
             profile_id,
             run_id,
             "no_subject_match",
             envelope,
-            {"reason": failure_reason, "missing_fields": missing},
+            {"reason": failure_reason, "missing_fields": missing, "fix_suggestions": fix_suggestions},
         )
         print_lines(
             {
@@ -618,6 +762,7 @@ def activate_guard(args: argparse.Namespace) -> int:
                 "guard_profile_id": profile_id,
                 "reason": failure_reason,
                 "missing_fields": missing,
+                "fix_suggestions": fix_suggestions,
                 "audit_path": audit_path,
             }
         )
@@ -641,6 +786,7 @@ def activate_guard(args: argparse.Namespace) -> int:
     try:
         matches = find_matching_instances(project, profile_id, subject)
         if len(matches) > 1:
+            fix_suggestions = subject_resolution_fix_suggestions("ambiguous_subject")
             audit_path = write_audit(
                 project,
                 profile_id,
@@ -651,6 +797,7 @@ def activate_guard(args: argparse.Namespace) -> int:
                     "subject_key": subject["subject_key"],
                     "subject_key_hash": subject["subject_key_hash"],
                     "candidate_state_paths": [str(path) for path, _state in matches],
+                    "fix_suggestions": fix_suggestions,
                 },
             )
             print_lines(
@@ -659,6 +806,7 @@ def activate_guard(args: argparse.Namespace) -> int:
                     "guard_profile_id": profile_id,
                     "subject_key_hash": subject["subject_key_hash"],
                     "candidate_count": len(matches),
+                    "fix_suggestions": fix_suggestions,
                     "audit_path": audit_path,
                 }
             )
@@ -671,6 +819,7 @@ def activate_guard(args: argparse.Namespace) -> int:
             create_policy = scalar_value(docs["subject"], "subject.create_policy")
             on_missing = scalar_value(docs["activation"], "activation.on_missing_subject")
             if create_policy != "explicit_activation_only" or on_missing != "create":
+                fix_suggestions = subject_resolution_fix_suggestions("instance_not_found")
                 audit_path = write_audit(
                     project,
                     profile_id,
@@ -683,6 +832,7 @@ def activate_guard(args: argparse.Namespace) -> int:
                         "on_missing_subject": on_missing,
                         "subject_key": subject["subject_key"],
                         "subject_key_hash": subject["subject_key_hash"],
+                        "fix_suggestions": fix_suggestions,
                     },
                 )
                 print_lines(
@@ -691,6 +841,7 @@ def activate_guard(args: argparse.Namespace) -> int:
                         "guard_profile_id": profile_id,
                         "reason": "creation_not_allowed",
                         "subject_key_hash": subject["subject_key_hash"],
+                        "fix_suggestions": fix_suggestions,
                         "audit_path": audit_path,
                     }
                 )
@@ -751,6 +902,7 @@ def normalize_event(raw: dict[str, Any], event_path: Path) -> dict[str, Any]:
     source = raw.get("source") or event_obj.get("source") or "unknown"
     event_id = raw.get("event_id") or event_obj.get("id") or uuid.uuid4().hex
     timestamp = raw.get("timestamp") or event_obj.get("timestamp") or now_iso()
+    completed_state_id = raw.get("completed_state_id") or event_obj.get("completed_state_id")
 
     if not isinstance(profile_id, str) or not profile_id.strip():
         raise ValueError("标准事件缺少 `guard_profile_id` 或 `profile_ref`。")
@@ -768,6 +920,7 @@ def normalize_event(raw: dict[str, Any], event_path: Path) -> dict[str, Any]:
     return {
         "event_id": str(event_id),
         "event_type": event_type.strip(),
+        "completed_state_id": completed_state_id,
         "source": str(source),
         "timestamp": str(timestamp),
         "guard_profile_id": profile_id,
@@ -778,6 +931,7 @@ def normalize_event(raw: dict[str, Any], event_path: Path) -> dict[str, Any]:
         "payload": mapping_or_empty(raw.get("payload")),
         "tool": mapping_or_empty(raw.get("tool")),
         "action": mapping_or_empty(raw.get("action")),
+        "hook": mapping_or_empty(raw.get("hook")),
         "raw_event_summary": raw.get("raw_event_summary", ""),
         "raw_event_path": str(event_path),
     }
@@ -802,9 +956,444 @@ def transitions_for_state(docs: dict[str, dict[str, Any]], current_state: str, e
     return matches
 
 
+def is_hook_state_completed_event(envelope: dict[str, Any]) -> bool:
+    if envelope.get("event_type") != "state_completed":
+        return False
+    return bool(mapping_or_empty(envelope.get("hook")))
+
+
+def is_hook_event(envelope: dict[str, Any]) -> bool:
+    return bool(mapping_or_empty(envelope.get("hook")))
+
+
+def state_by_id(docs: dict[str, dict[str, Any]], state_id: str) -> dict[str, Any] | None:
+    states = docs["state_machine"].get("states")
+    if not isinstance(states, list):
+        return None
+    for state in states:
+        if isinstance(state, dict) and state.get("id") == state_id:
+            return state
+    return None
+
+
+def command_from_envelope(envelope: dict[str, Any]) -> str:
+    payload = mapping_or_empty(envelope.get("payload"))
+    action = mapping_or_empty(envelope.get("action"))
+    for value in [
+        payload.get("command"),
+        payload.get("cmd"),
+        value_at(payload, "tool_input.command"),
+        value_at(payload, "input.command"),
+        action.get("command"),
+    ]:
+        if isinstance(value, str):
+            return value
+    return ""
+
+
+def command_prefix_matches(command: str, expected_prefix: Any) -> bool:
+    if isinstance(expected_prefix, str):
+        return command.strip().startswith(expected_prefix.strip())
+    if isinstance(expected_prefix, list):
+        prefix = " ".join(str(item).strip() for item in expected_prefix if str(item).strip())
+        return command.strip().startswith(prefix)
+    return False
+
+
+def string_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        values: list[str] = []
+        for item in value:
+            values.extend(string_values(item))
+        return values
+    return []
+
+
+def normalized_path(value: str) -> str:
+    return value.replace("\\", "/")
+
+
+def path_matches(value: str, expected: Any) -> bool:
+    path = normalized_path(value)
+    for pattern in string_values(expected):
+        normalized = normalized_path(pattern)
+        if any(char in normalized for char in "*?[]"):
+            if fnmatchcase(path, normalized):
+                return True
+        elif path == normalized:
+            return True
+    return False
+
+
+def path_prefix_matches(value: str, expected_prefix: Any) -> bool:
+    path = normalized_path(value)
+    for prefix in string_values(expected_prefix):
+        if path.startswith(normalized_path(prefix)):
+            return True
+    return False
+
+
+def path_values_from_envelope(envelope: dict[str, Any]) -> list[str]:
+    fields = [
+        "payload.path",
+        "payload.paths",
+        "payload.file",
+        "payload.files",
+        "payload.file_path",
+        "payload.file_paths",
+        "payload.tool_input.path",
+        "payload.tool_input.paths",
+        "payload.tool_input.file",
+        "payload.tool_input.files",
+        "payload.tool_input.file_path",
+        "payload.tool_input.file_paths",
+        "payload.input.path",
+        "payload.input.paths",
+        "payload.input.file",
+        "payload.input.files",
+        "payload.input.file_path",
+        "payload.input.file_paths",
+        "action.path",
+        "action.paths",
+    ]
+    values: list[str] = []
+    for field in fields:
+        values.extend(string_values(value_at(envelope, field)))
+    return unique_fields(values)
+
+
+def value_condition_matches(actual: Any, expected: Any) -> bool:
+    if not isinstance(expected, dict):
+        return actual == expected
+    known = {"equals", "in", "contains", "exists", "prefix", "glob"}
+    if not known.intersection(expected.keys()) or any(key not in known for key in expected):
+        return False
+    if "equals" in expected and actual != expected.get("equals"):
+        return False
+    if "in" in expected:
+        if not isinstance(expected.get("in"), list) or actual not in expected["in"]:
+            return False
+    if "contains" in expected:
+        contains = expected.get("contains")
+        if isinstance(actual, (list, str)):
+            if contains not in actual:
+                return False
+        elif isinstance(actual, dict):
+            if contains not in actual and contains not in actual.values():
+                return False
+        else:
+            return False
+    if "exists" in expected and is_present(actual) is not bool(expected.get("exists")):
+        return False
+    if "prefix" in expected:
+        prefixes = string_values(expected.get("prefix"))
+        if not isinstance(actual, str) or not prefixes or not any(actual.startswith(prefix) for prefix in prefixes):
+            return False
+    if "glob" in expected:
+        if not isinstance(actual, str) or not string_values(expected.get("glob")) or not path_matches(actual, expected.get("glob")):
+            return False
+    return True
+
+
+def fields_match(envelope: dict[str, Any], fields: Any) -> bool:
+    if not isinstance(fields, dict):
+        return False
+    for field, expected in fields.items():
+        if not isinstance(field, str) or not field.strip():
+            return False
+        if not value_condition_matches(value_at(envelope, field), expected):
+            return False
+    return True
+
+
+def parameter_matches(envelope: dict[str, Any], parameters: Any) -> bool:
+    if not isinstance(parameters, dict):
+        return False
+    for name, expected in parameters.items():
+        if not isinstance(name, str) or not name.strip():
+            return False
+        candidates = [
+            value_at(envelope, f"payload.tool_input.{name}"),
+            value_at(envelope, f"payload.input.{name}"),
+            value_at(envelope, f"payload.parameters.{name}"),
+            value_at(envelope, f"payload.params.{name}"),
+            value_at(envelope, f"payload.args.{name}"),
+            value_at(envelope, f"payload.arguments.{name}"),
+            value_at(envelope, f"payload.{name}"),
+            value_at(envelope, f"action.{name}"),
+        ]
+        if not any(value_condition_matches(candidate, expected) for candidate in candidates):
+            return False
+    return True
+
+
+def permission_rule_matches(envelope: dict[str, Any], rule: dict[str, Any]) -> bool:
+    tool_name = value_at(envelope, "tool.name")
+    rule_tool = rule.get("tool")
+    if isinstance(rule_tool, str) and rule_tool and rule_tool != tool_name:
+        return False
+
+    match = rule.get("match")
+    if not isinstance(match, dict) or not match:
+        return True
+
+    supported_keys = {
+        "command_prefix",
+        "path",
+        "paths",
+        "path_glob",
+        "path_prefix",
+        "fields",
+        "event_fields",
+        "parameters",
+        "field",
+        "equals",
+        "in",
+        "contains",
+        "exists",
+        "prefix",
+        "glob",
+    }
+    if any(key not in supported_keys for key in match):
+        return False
+
+    if "command_prefix" in match:
+        if not command_prefix_matches(command_from_envelope(envelope), match.get("command_prefix")):
+            return False
+
+    paths = path_values_from_envelope(envelope)
+    if "path" in match and not any(path_matches(path, match.get("path")) for path in paths):
+        return False
+    if "paths" in match and not any(path_matches(path, match.get("paths")) for path in paths):
+        return False
+    if "path_glob" in match and not any(path_matches(path, match.get("path_glob")) for path in paths):
+        return False
+    if "path_prefix" in match and not any(path_prefix_matches(path, match.get("path_prefix")) for path in paths):
+        return False
+
+    if "fields" in match and not fields_match(envelope, match.get("fields")):
+        return False
+    if "event_fields" in match and not fields_match(envelope, match.get("event_fields")):
+        return False
+    if "parameters" in match and not parameter_matches(envelope, match.get("parameters")):
+        return False
+    if "field" in match:
+        field = match.get("field")
+        if not isinstance(field, str) or not field.strip():
+            return False
+        condition = {key: match[key] for key in ["equals", "in", "contains", "exists", "prefix", "glob"] if key in match}
+        if not condition or not value_condition_matches(value_at(envelope, field), condition):
+            return False
+
+    return True
+
+
+def strictest_permission(effects: list[str], default_effect: str) -> str:
+    for effect in ["deny", "ask", "allow"]:
+        if effect in effects:
+            return effect
+    return default_effect
+
+
+def shorthand_permission_rule(effect: str, value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, str) or "(" not in value or not value.endswith(")"):
+        return None
+    tool, remainder = value.split("(", 1)
+    command_pattern = remainder[:-1].strip()
+    if not tool.strip() or not command_pattern:
+        return None
+    tool_name = tool.strip()
+    if tool_name.lower() in {"read", "write", "edit", "multi_edit"}:
+        return {
+            "effect": effect,
+            "tool": tool_name,
+            "match": {"path": command_pattern},
+        }
+    command_prefix = command_pattern[:-1].strip() if command_pattern.endswith("*") else command_pattern
+    return {
+        "effect": effect,
+        "tool": tool_name,
+        "match": {"command_prefix": command_prefix},
+    }
+
+
+def normalized_permission_rules(permissions: dict[str, Any]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    rules = permissions.get("rules")
+    if isinstance(rules, list):
+        normalized.extend(rule for rule in rules if isinstance(rule, dict))
+    for effect in ["allow", "ask", "deny"]:
+        shorthand = permissions.get(effect)
+        if not isinstance(shorthand, list):
+            continue
+        for value in shorthand:
+            rule = shorthand_permission_rule(effect, value)
+            if rule is not None:
+                normalized.append(rule)
+    return normalized
+
+
+def tool_input_summary(envelope: dict[str, Any]) -> dict[str, Any]:
+    payload = mapping_or_empty(envelope.get("payload"))
+    summary: dict[str, Any] = {
+        "tool": value_at(envelope, "tool.name"),
+        "action": value_at(envelope, "action.name"),
+        "command": command_from_envelope(envelope),
+        "paths": path_values_from_envelope(envelope),
+    }
+    for field in ["tool_input", "input", "parameters", "params", "args", "arguments"]:
+        value = payload.get(field)
+        if is_present(value):
+            summary[field] = json_safe(value)
+    for key in ["tool", "action", "command", "paths"]:
+        if not is_present(summary.get(key)):
+            summary.pop(key, None)
+    return summary
+
+
+def evaluate_state_permission(
+    docs: dict[str, dict[str, Any]],
+    current_state: str,
+    envelope: dict[str, Any],
+) -> dict[str, Any] | None:
+    state = state_by_id(docs, current_state)
+    permissions = state.get("permissions") if isinstance(state, dict) else None
+    if not isinstance(permissions, dict):
+        return None
+
+    default_effect = permissions.get("default")
+    if default_effect not in {"allow", "ask", "deny"}:
+        return {
+            "error": True,
+            "reason": "invalid_state_permissions",
+            "field": f"states.{current_state}.permissions.default",
+            "message": "`permissions.default` 必须显式声明为 `allow`、`ask` 或 `deny`。",
+            "suggestion": "修正 Guard Profile（守卫画像）的 state-machine.yaml 后重试。",
+        }
+
+    matched_rules: list[dict[str, Any]] = []
+    for rule in normalized_permission_rules(permissions):
+        if (
+            isinstance(rule, dict)
+            and rule.get("effect") in {"allow", "ask", "deny"}
+            and permission_rule_matches(envelope, rule)
+        ):
+            matched_rules.append(rule)
+    effect = strictest_permission([str(rule["effect"]) for rule in matched_rules], str(default_effect))
+    selected_rule = next((rule for rule in matched_rules if rule.get("effect") == effect), {})
+    reason = selected_rule.get("reason") if isinstance(selected_rule.get("reason"), str) else f"状态 `{current_state}` 权限结果为 `{effect}`。"
+    suggestion = selected_rule.get("suggestion") if isinstance(selected_rule.get("suggestion"), str) else ""
+    return {
+        "effect": effect,
+        "reason": reason,
+        "suggestion": suggestion,
+        "matched_rules": matched_rules,
+        "default": default_effect,
+        "tool": value_at(envelope, "tool.name"),
+        "command": command_from_envelope(envelope),
+        "input_summary": tool_input_summary(envelope),
+    }
+
+
+def permission_output_details(permission: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "permission": {
+            "effect": permission.get("effect"),
+            "default": permission.get("default"),
+            "tool": permission.get("tool"),
+            "command": permission.get("command"),
+            "input_summary": permission.get("input_summary", {}),
+            "matched_rules": permission.get("matched_rules", []),
+        }
+    }
+
+
+def tool_input_hash(envelope: dict[str, Any]) -> str:
+    payload = {
+        "tool": mapping_or_empty(envelope.get("tool")),
+        "action": mapping_or_empty(envelope.get("action")),
+        "payload": mapping_or_empty(envelope.get("payload")),
+    }
+    return stable_hash(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+
+
+def confirmation_request(
+    project: Path,
+    profile_id: str,
+    subject: dict[str, Any],
+    current_state: str,
+    envelope: dict[str, Any],
+) -> dict[str, Any]:
+    input_hash = tool_input_hash(envelope)
+    confirmation_id = stable_hash(
+        json.dumps(
+            {
+                "guard_profile_id": profile_id,
+                "subject_key_hash": subject["subject_key_hash"],
+                "state": current_state,
+                "tool": value_at(envelope, "tool.name"),
+                "tool_input_hash": input_hash,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+    path = project / ".local" / "guard" / "confirmations" / profile_id / subject["subject_key_hash"] / f"{confirmation_id}.json"
+    return {
+        "confirmation_id": confirmation_id,
+        "confirmation_path": str(path),
+        "tool_input_hash": input_hash,
+    }
+
+
+def validate_permission_confirmation(
+    project: Path,
+    profile_id: str,
+    subject: dict[str, Any],
+    current_state: str,
+    envelope: dict[str, Any],
+) -> dict[str, Any]:
+    request = confirmation_request(project, profile_id, subject, current_state, envelope)
+    path = Path(request["confirmation_path"])
+    result = {**request, "valid": False, "reason": "confirmation_not_found"}
+    if not path.exists():
+        return result
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {**result, "reason": "confirmation_invalid_json"}
+    if not isinstance(record, dict):
+        return {**result, "reason": "confirmation_not_object"}
+    expected = {
+        "guard_profile_id": profile_id,
+        "subject_key_hash": subject["subject_key_hash"],
+        "confirmation_id": request["confirmation_id"],
+        "state": current_state,
+        "tool": value_at(envelope, "tool.name"),
+        "tool_input_hash": request["tool_input_hash"],
+    }
+    for field, expected_value in expected.items():
+        if record.get(field) != expected_value:
+            return {**result, "reason": f"confirmation_{field}_mismatch", "record": record}
+    expires_at = parse_time(record.get("expires_at"))
+    if expires_at is None:
+        return {**result, "reason": "confirmation_expiry_missing", "record": record}
+    if expires_at <= datetime.now(timezone.utc):
+        return {**result, "reason": "confirmation_expired", "record": record}
+    for field in ["approved_by", "approved_at", "reason"]:
+        if not is_present(record.get(field)):
+            return {**result, "reason": f"confirmation_{field}_missing", "record": record}
+    return {**result, "valid": True, "reason": "confirmation_valid", "record": record}
+
+
 def condition_matches(envelope: dict[str, Any], condition: dict[str, Any]) -> bool:
     field = condition.get("field")
     if not isinstance(field, str) or not field.strip():
+        return False
+    if envelope.get("event_type") == "state_completed" and (field == "payload" or field.startswith("payload.")):
         return False
     actual = value_at(envelope, field)
     if "equals" in condition:
@@ -870,45 +1459,110 @@ def artifacts_by_id(docs: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]
     return {item["id"]: item for item in artifacts if isinstance(item, dict) and isinstance(item.get("id"), str)}
 
 
+def render_artifact_path(
+    project: Path,
+    template: str,
+    envelope: dict[str, Any],
+    subject: dict[str, Any] | None,
+    state: dict[str, Any] | None,
+) -> Path:
+    values = {
+        "guard_profile_id": str(envelope.get("guard_profile_id") or envelope.get("profile_ref") or ""),
+        "subject_key_hash": str((subject or {}).get("subject_key_hash") or ""),
+        "current_state": str((state or {}).get("current_state") or ""),
+        "state_version": str((state or {}).get("state_version") or ""),
+        "event_id": str(envelope.get("event_id") or ""),
+    }
+    rendered = template
+    for key, value in values.items():
+        rendered = rendered.replace("{" + key + "}", value)
+    path = Path(rendered)
+    return path if path.is_absolute() else project / path
+
+
 def artifact_evidence(
     envelope: dict[str, Any],
     docs: dict[str, dict[str, Any]],
     project: Path,
     artifact_id: str,
+    subject: dict[str, Any] | None = None,
+    state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = mapping_or_empty(envelope.get("payload"))
-    artifacts = payload.get("artifacts")
-    if isinstance(artifacts, dict) and is_present(artifacts.get(artifact_id)):
-        return {
-            "present": True,
-            "source": "payload.artifacts",
-            "value": artifacts.get(artifact_id),
-        }
-    if isinstance(artifacts, list):
-        for item in artifacts:
-            if item == artifact_id:
-                return {"present": True, "source": "payload.artifacts", "value": item}
-            if isinstance(item, dict) and item.get("id") == artifact_id and is_present(item.get("value", True)):
-                return {"present": True, "source": "payload.artifacts", "value": item}
-    artifact_ids = payload.get("artifact_ids")
-    if isinstance(artifact_ids, list) and artifact_id in artifact_ids:
-        return {"present": True, "source": "payload.artifact_ids", "value": artifact_id}
-    if is_present(payload.get(artifact_id)):
-        return {"present": True, "source": f"payload.{artifact_id}", "value": payload.get(artifact_id)}
+    if envelope.get("event_type") != "state_completed":
+        artifacts = payload.get("artifacts")
+        if isinstance(artifacts, dict) and is_present(artifacts.get(artifact_id)):
+            return {
+                "present": True,
+                "source": "payload.artifacts",
+                "value": artifacts.get(artifact_id),
+            }
+        if isinstance(artifacts, list):
+            for item in artifacts:
+                if item == artifact_id:
+                    return {"present": True, "source": "payload.artifacts", "value": item}
+                if isinstance(item, dict) and item.get("id") == artifact_id and is_present(item.get("value", True)):
+                    return {"present": True, "source": "payload.artifacts", "value": item}
+        artifact_ids = payload.get("artifact_ids")
+        if isinstance(artifact_ids, list) and artifact_id in artifact_ids:
+            return {"present": True, "source": "payload.artifact_ids", "value": artifact_id}
+        if is_present(payload.get(artifact_id)):
+            return {"present": True, "source": f"payload.{artifact_id}", "value": payload.get(artifact_id)}
 
     artifact_def = artifacts_by_id(docs).get(artifact_id, {})
     artifact_path = artifact_def.get("path")
     if isinstance(artifact_path, str) and artifact_path.strip():
-        path = project / artifact_path
+        path = render_artifact_path(project, artifact_path, envelope, subject, state)
         if path.exists():
-            return {
+            evidence = {
                 "present": True,
                 "source": "artifact.path",
+                "value": artifact_id,
                 "path": str(path),
                 "mtime": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat().replace("+00:00", "Z"),
             }
+            if not artifact_belongs_to_current_state(artifact_def, evidence, state):
+                return {
+                    **evidence,
+                    "present": False,
+                    "reason": "artifact_reuse_denied",
+                }
+            return evidence
 
-    return {"present": False, "source": "not_found", "value": None}
+    return {"present": False, "source": "not_found", "value": artifact_id}
+
+
+def state_entry_time(state: dict[str, Any] | None) -> datetime | None:
+    if not isinstance(state, dict):
+        return None
+    for field in ["current_state_entered_at", "updated_at", "created_at"]:
+        parsed = parse_time(state.get(field))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def artifact_belongs_to_current_state(
+    artifact_def: dict[str, Any],
+    evidence: dict[str, Any],
+    state: dict[str, Any] | None,
+) -> bool:
+    reuse_policy = artifact_def.get("reuse_policy", "deny")
+    if reuse_policy == "allow":
+        return True
+    if reuse_policy != "deny":
+        return False
+    artifact_path = artifact_def.get("path")
+    if isinstance(artifact_path, str) and "{state_version}" in artifact_path and is_present((state or {}).get("state_version")):
+        return True
+    freshness = mapping_or_empty(artifact_def.get("freshness"))
+    if freshness.get("scope") != "current_state_entry":
+        return False
+    artifact_time = parse_time(evidence.get("mtime"))
+    entry_time = state_entry_time(state)
+    if artifact_time is None or entry_time is None:
+        return False
+    return artifact_time >= entry_time
 
 
 def parse_time(value: Any) -> datetime | None:
@@ -928,19 +1582,6 @@ def parse_time(value: Any) -> datetime | None:
 
 def json_value(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
-
-
-def valid_mode(value: Any) -> str | None:
-    return value if value in {"record", "warn", "block"} else None
-
-
-def guard_point_mode(docs: dict[str, dict[str, Any]], guard_point: dict[str, Any]) -> str:
-    return (
-        valid_mode(guard_point.get("mode"))
-        or valid_mode(guard_point.get("on_fail"))
-        or valid_mode(docs["manifest"].get("mode"))
-        or "warn"
-    )
 
 
 def list_string_value(data: dict[str, Any], field: str) -> list[str]:
@@ -1003,6 +1644,13 @@ def evaluate_event_field_check(envelope: dict[str, Any], check: dict[str, Any]) 
     field = check.get("field")
     if not isinstance(field, str) or not field.strip():
         return failed_check(check, "event_field", "缺少要检查的事件字段。", "在 check.field 中写入事件字段路径。")
+    if envelope.get("event_type") == "state_completed" and (field == "payload" or field.startswith("payload.")):
+        return failed_check(
+            check,
+            "event_field",
+            "`state_completed` 事件不能用 payload（载荷）作为完成证据。",
+            "把完成证据写入 artifacts.yaml 声明的产物路径，再重试 state_completed。",
+        )
     actual = value_at(envelope, field)
     evidence = {"field": field, "value": actual}
     if "equals" in check:
@@ -1044,12 +1692,14 @@ def evaluate_artifact_exists_check(
     envelope: dict[str, Any],
     docs: dict[str, dict[str, Any]],
     project: Path,
+    subject: dict[str, Any],
+    state: dict[str, Any],
     check: dict[str, Any],
 ) -> dict[str, Any]:
     artifact_id = check.get("artifact") or check.get("artifact_id")
     if not isinstance(artifact_id, str) or not artifact_id.strip():
         return failed_check(check, "artifact_exists", "缺少要检查的产物 ID。", "在 check.artifact 中写入产物 ID。")
-    evidence = artifact_evidence(envelope, docs, project, artifact_id)
+    evidence = artifact_evidence(envelope, docs, project, artifact_id, subject, state)
     condition = f"artifact `{artifact_id}` exists"
     return checked_result(check, "artifact_exists", evidence["present"], condition, evidence)
 
@@ -1074,12 +1724,14 @@ def evaluate_artifact_freshness_check(
     envelope: dict[str, Any],
     docs: dict[str, dict[str, Any]],
     project: Path,
+    subject: dict[str, Any],
+    state: dict[str, Any],
     check: dict[str, Any],
 ) -> dict[str, Any]:
     artifact_id = check.get("artifact") or check.get("artifact_id")
     if not isinstance(artifact_id, str) or not artifact_id.strip():
         return failed_check(check, "artifact_freshness", "缺少要检查的产物 ID。", "在 check.artifact 中写入产物 ID。")
-    evidence = artifact_evidence(envelope, docs, project, artifact_id)
+    evidence = artifact_evidence(envelope, docs, project, artifact_id, subject, state)
     max_age_seconds = check.get("max_age_seconds")
     if not isinstance(max_age_seconds, int) or max_age_seconds < 0:
         return failed_check(
@@ -1099,6 +1751,8 @@ def evaluate_artifact_freshness_check(
 
 
 def confirmation_from_payload(envelope: dict[str, Any], confirmation_id: str) -> dict[str, Any] | None:
+    if envelope.get("event_type") == "state_completed":
+        return None
     confirmations = mapping_or_empty(envelope.get("payload")).get("confirmations")
     if isinstance(confirmations, dict):
         value = confirmations.get(confirmation_id)
@@ -1189,6 +1843,7 @@ def evaluate_check(
     docs: dict[str, dict[str, Any]],
     subject: dict[str, Any],
     current_state: str,
+    state: dict[str, Any],
     guard_point_id: str,
     envelope: dict[str, Any],
     check: dict[str, Any],
@@ -1199,9 +1854,9 @@ def evaluate_check(
     if check_type == "state":
         return evaluate_state_check(current_state, check)
     if check_type == "artifact_exists":
-        return evaluate_artifact_exists_check(envelope, docs, project, check)
+        return evaluate_artifact_exists_check(envelope, docs, project, subject, state, check)
     if check_type == "artifact_freshness":
-        return evaluate_artifact_freshness_check(envelope, docs, project, check)
+        return evaluate_artifact_freshness_check(envelope, docs, project, subject, state, check)
     if check_type == "human_confirmation":
         return evaluate_human_confirmation_check(project, profile_id, subject, guard_point_id, envelope, check)
     return failed_check(
@@ -1271,16 +1926,16 @@ def execute_guard_point(
     docs: dict[str, dict[str, Any]],
     subject: dict[str, Any],
     current_state: str,
+    state: dict[str, Any],
     envelope: dict[str, Any],
     guard_point: dict[str, Any],
 ) -> dict[str, Any]:
-    mode = guard_point_mode(docs, guard_point)
     if not guard_point_trigger_matches(guard_point, envelope, current_state):
-        return {"id": guard_point["id"], "mode": mode, "result": "skipped", "checks": [], "override": validate_override_record(project, profile_id, subject, guard_point)}
+        return {"id": guard_point["id"], "result": "skipped", "checks": [], "override": validate_override_record(project, profile_id, subject, guard_point)}
 
     checks = guard_point_checks(guard_point)
     check_results = [
-        evaluate_check(project, profile_id, docs, subject, current_state, guard_point["id"], envelope, check)
+        evaluate_check(project, profile_id, docs, subject, current_state, state, guard_point["id"], envelope, check)
         for check in checks
     ]
     failed = [check for check in check_results if not check["passed"]]
@@ -1293,7 +1948,6 @@ def execute_guard_point(
         result = "passed"
     return {
         "id": guard_point["id"],
-        "mode": mode,
         "description": guard_point.get("description", ""),
         "result": result,
         "checks": check_results,
@@ -1320,7 +1974,6 @@ def synthetic_transition_guard_point(
     return {
         "id": f"{transition.get('id', 'transition')}.required_artifacts",
         "description": "状态转换必需产物检查。",
-        "mode": valid_mode(docs["manifest"].get("mode")) or "warn",
         "required_artifacts": missing_from_guard_points,
     }
 
@@ -1331,6 +1984,7 @@ def execute_guard_points(
     docs: dict[str, dict[str, Any]],
     subject: dict[str, Any],
     current_state: str,
+    state: dict[str, Any],
     envelope: dict[str, Any],
     transition: dict[str, Any],
 ) -> dict[str, Any]:
@@ -1352,26 +2006,12 @@ def execute_guard_points(
         guard_point_items.append(synthetic)
 
     results = [
-        execute_guard_point(project, profile_id, docs, subject, current_state, envelope, guard_point)
+        execute_guard_point(project, profile_id, docs, subject, current_state, state, envelope, guard_point)
         for guard_point in guard_point_items
     ]
     failed = [result for result in results if result["result"] == "failed"]
     if not failed:
         return {"passed": True, "status": "allow", "return_code": 0, "decision": "guard_passed", "guard_results": results}
-
-    modes = [result["mode"] for result in failed]
-    if "block" in modes:
-        status = "block"
-        return_code = 1
-        decision = "guard_failed"
-    elif "warn" in modes:
-        status = "warn"
-        return_code = 0
-        decision = "guard_failed"
-    else:
-        status = "allow"
-        return_code = 0
-        decision = "guard_recorded"
 
     missing_conditions: list[str] = []
     fix_suggestions: list[str] = []
@@ -1400,9 +2040,9 @@ def execute_guard_points(
 
     return {
         "passed": False,
-        "status": status,
-        "return_code": return_code,
-        "decision": decision,
+        "status": "error",
+        "return_code": 1,
+        "decision": "guard_failed",
         "guard_results": results,
         "failed_guard_points": [result["id"] for result in failed],
         "failure_reasons": unique_fields(failure_reasons),
@@ -1425,10 +2065,6 @@ def subject_from_state(state: dict[str, Any]) -> dict[str, Any]:
         "subject_key": state.get("subject_key"),
         "subject_key_hash": state.get("subject_key_hash"),
     }
-
-
-def advance_on_warn_failure(transition: dict[str, Any]) -> bool:
-    return transition.get("advance_on_warn_failure") is not False
 
 
 def validate_latest_brief(
@@ -1454,6 +2090,14 @@ def validate_latest_brief(
         return {"valid": False, "status": "stale_brief", "reason": "state_not_found", "state_path": str(state_path)}
     if state.get("subject_key_hash") != subject_hash:
         return {"valid": False, "status": "stale_brief", "reason": "state_subject_mismatch"}
+    matches = find_matching_instances(project, profile_id, subject_from_state(state))
+    if len(matches) != 1 or matches[0][0] != state_path:
+        return {
+            "valid": False,
+            "status": "ambiguous_subject",
+            "reason": "guard_instance_not_unique",
+            "candidate_count": len(matches),
+        }
     if payload.get("state_version") != state.get("state_version"):
         return {
             "valid": False,
@@ -1463,6 +2107,26 @@ def validate_latest_brief(
             "current_state_version": state.get("state_version"),
         }
     return {"valid": True}
+
+
+def brief_injection_envelope(profile_id: str, subject_hash: str, session_id: str | None) -> dict[str, Any]:
+    return {
+        "event_id": uuid.uuid4().hex,
+        "event_type": "guard_brief_injection",
+        "completed_state_id": None,
+        "source": "guard-runtime",
+        "timestamp": now_iso(),
+        "guard_profile_id": profile_id,
+        "profile_ref": profile_id,
+        "context": {"session_id": session_id} if session_id else {},
+        "subject": {"subject_key_hash": subject_hash},
+        "payload": {},
+        "tool": {},
+        "action": {},
+        "hook": {},
+        "raw_event_summary": "brief injection validation",
+        "raw_event_path": "",
+    }
 
 
 def advance_state(
@@ -1475,9 +2139,11 @@ def advance_state(
 ) -> dict[str, Any]:
     previous = state.get("current_state")
     version = int(state.get("state_version", 0)) + 1
+    entered_at = now_iso()
     state["current_state"] = transition["to"]
     state["state_version"] = version
-    state["updated_at"] = now_iso()
+    state["updated_at"] = entered_at
+    state["current_state_entered_at"] = entered_at
     state["last_run_id"] = run_id
     state["last_event_id"] = event_id
     state["last_transition_id"] = transition.get("id")
@@ -1513,13 +2179,24 @@ def run_event(args: argparse.Namespace) -> int:
 
     subject, missing, failure_reason = resolve_subject(docs, envelope)
     if subject is None:
+        if is_hook_event(envelope):
+            print_lines(
+                {
+                    "status": "allow",
+                    "decision": "ignored",
+                    "reason": "no_guard_instance",
+                    "guard_profile_id": profile_id,
+                }
+            )
+            return 0
+        fix_suggestions = subject_resolution_fix_suggestions(failure_reason, missing)
         audit_path = write_audit(
             project,
             profile_id,
             run_id,
             "no_subject_match",
             envelope,
-            {"reason": failure_reason, "missing_fields": missing},
+            {"reason": failure_reason, "missing_fields": missing, "fix_suggestions": fix_suggestions},
         )
         print_lines(
             {
@@ -1527,10 +2204,25 @@ def run_event(args: argparse.Namespace) -> int:
                 "guard_profile_id": profile_id,
                 "reason": failure_reason,
                 "missing_fields": missing,
+                "fix_suggestions": fix_suggestions,
                 "audit_path": audit_path,
             }
         )
         return 0
+
+    if is_hook_event(envelope):
+        hook_matches = find_matching_instances(project, profile_id, subject)
+        if len(hook_matches) != 1:
+            print_lines(
+                {
+                    "status": "allow",
+                    "decision": "ignored",
+                    "reason": "no_guard_instance",
+                    "guard_profile_id": profile_id,
+                    "subject_key_hash": subject["subject_key_hash"],
+                }
+            )
+            return 0
 
     lock = acquire_subject_lock(project, profile_id, subject["subject_key_hash"], lock_timeout_seconds(docs))
     if not lock["acquired"]:
@@ -1549,6 +2241,7 @@ def run_event(args: argparse.Namespace) -> int:
 
     matches = find_matching_instances(project, profile_id, subject)
     if not matches:
+        fix_suggestions = subject_resolution_fix_suggestions("instance_not_found")
         audit_path = write_audit(
             project,
             profile_id,
@@ -1559,6 +2252,7 @@ def run_event(args: argparse.Namespace) -> int:
                 "reason": "instance_not_found",
                 "subject_key": subject["subject_key"],
                 "subject_key_hash": subject["subject_key_hash"],
+                "fix_suggestions": fix_suggestions,
             },
         )
         print_lines(
@@ -1567,6 +2261,7 @@ def run_event(args: argparse.Namespace) -> int:
                 "guard_profile_id": profile_id,
                 "reason": "instance_not_found",
                 "subject_key_hash": subject["subject_key_hash"],
+                "fix_suggestions": fix_suggestions,
                 "audit_path": audit_path,
             }
         )
@@ -1574,6 +2269,7 @@ def run_event(args: argparse.Namespace) -> int:
         return 0
 
     if len(matches) > 1:
+        fix_suggestions = subject_resolution_fix_suggestions("ambiguous_subject")
         audit_path = write_audit(
             project,
             profile_id,
@@ -1584,6 +2280,7 @@ def run_event(args: argparse.Namespace) -> int:
                 "subject_key": subject["subject_key"],
                 "subject_key_hash": subject["subject_key_hash"],
                 "candidate_state_paths": [str(path) for path, _state in matches],
+                "fix_suggestions": fix_suggestions,
             },
         )
         print_lines(
@@ -1592,6 +2289,7 @@ def run_event(args: argparse.Namespace) -> int:
                 "guard_profile_id": profile_id,
                 "subject_key_hash": subject["subject_key_hash"],
                 "candidate_count": len(matches),
+                "fix_suggestions": fix_suggestions,
                 "audit_path": audit_path,
             }
         )
@@ -1600,14 +2298,120 @@ def run_event(args: argparse.Namespace) -> int:
 
     state_path, state = matches[0]
     current_state = str(state.get("current_state", ""))
-    matched_transitions = transitions_for_state(docs, current_state, envelope)
 
-    if not matched_transitions:
+    if envelope["event_type"] != "state_completed" and is_present(value_at(envelope, "tool.name")):
+        permission = evaluate_state_permission(docs, current_state, envelope)
+        if permission is not None:
+            if permission.get("error") is True:
+                audit_path = write_audit(
+                    project,
+                    profile_id,
+                    run_id,
+                    "error",
+                    envelope,
+                    {
+                        "decision": "failed",
+                        "reason": permission["reason"],
+                        "current_state": current_state,
+                        "state_version": state.get("state_version"),
+                        "permission": permission,
+                    },
+                )
+                print_lines(
+                    {
+                        "status": "error",
+                        "decision": "failed",
+                        "guard_profile_id": profile_id,
+                        "state": current_state,
+                        "state_version": state.get("state_version"),
+                        "reason": permission["reason"],
+                        "field": permission.get("field", ""),
+                        "suggestion": permission.get("suggestion", ""),
+                        "audit_path": audit_path,
+                    }
+                )
+                release_subject_lock(lock)
+                return 1
+            effect = permission["effect"]
+            confirmation_validation: dict[str, Any] = {}
+            if effect == "ask":
+                confirmation_validation = validate_permission_confirmation(project, profile_id, subject, current_state, envelope)
+                if confirmation_validation["valid"]:
+                    effect = "allow"
+                    permission = {
+                        **permission,
+                        "effect": "allow",
+                        "original_effect": "ask",
+                        "reason": "confirmation_valid",
+                        "confirmation": confirmation_validation,
+                    }
+            decision = {
+                "deny": "denied",
+                "ask": "confirmation_required",
+                "allow": "guard_passed",
+            }[effect]
+            confirmation = (
+                confirmation_validation or confirmation_request(project, profile_id, subject, current_state, envelope)
+                if effect == "ask"
+                else {}
+            )
+            confirmation_output = {
+                key: confirmation[key]
+                for key in ["confirmation_id", "confirmation_path", "tool_input_hash"]
+                if key in confirmation
+            }
+            audit_path = write_audit(
+                project,
+                profile_id,
+                run_id,
+                effect,
+                envelope,
+                {
+                    "decision": decision,
+                    "current_state": current_state,
+                    "state_version": state.get("state_version"),
+                    "permission": permission,
+                    "confirmation": confirmation_validation,
+                    **confirmation,
+                },
+            )
+            brief_paths: dict[str, Any] = {}
+            if effect == "deny":
+                brief_paths = write_latest_brief(
+                    project,
+                    profile_id,
+                    run_id,
+                    subject_from_state(state),
+                    state,
+                    docs,
+                    audit_path,
+                    recent_denial_reasons=[str(permission["reason"])],
+                )
+            output = {
+                "status": effect,
+                "decision": decision,
+                "guard_profile_id": profile_id,
+                "state": current_state,
+                "state_version": state.get("state_version"),
+                "reason": permission["reason"],
+                "suggestion": permission["suggestion"],
+                "audit_path": audit_path,
+                "details": permission_output_details(permission),
+                **confirmation_output,
+            }
+            if brief_paths:
+                output["brief_path"] = brief_paths["brief_path"]
+                output["brief_hash"] = brief_paths["brief_hash"]
+            print_lines(output)
+            release_subject_lock(lock)
+            return 0 if effect == "allow" else 1
+
+    if envelope["event_type"] != "state_completed":
         print_lines(
             {
                 "status": "allow",
                 "decision": "ignored",
-                "reason": "no_matching_transition",
+                "reason": "non_state_completed_event",
                 "guard_profile_id": profile_id,
                 "state": current_state,
                 "state_version": state.get("state_version"),
@@ -1616,106 +2420,187 @@ def run_event(args: argparse.Namespace) -> int:
         release_subject_lock(lock)
         return 0
 
-    if len(matched_transitions) > 1:
+    if is_hook_state_completed_event(envelope):
         audit_path = write_audit(
             project,
             profile_id,
             run_id,
-            "ambiguous_transition",
+            "error",
             envelope,
             {
+                "decision": "failed",
+                "reason": "hook_state_completed_forbidden",
                 "current_state": current_state,
                 "state_version": state.get("state_version"),
-                "event_type": envelope["event_type"],
-                "matching_transitions": [transition.get("id") for transition in matched_transitions],
+                "hook": mapping_or_empty(envelope.get("hook")),
+                "source": envelope.get("source"),
             },
         )
         print_lines(
             {
-                "status": "ambiguous_transition",
+                "status": "error",
+                "decision": "failed",
+                "reason": "hook_state_completed_forbidden",
                 "guard_profile_id": profile_id,
                 "state": current_state,
                 "state_version": state.get("state_version"),
-                "transition_count": len(matched_transitions),
                 "audit_path": audit_path,
             }
         )
         release_subject_lock(lock)
         return 1
 
-    transition = matched_transitions[0]
-    guard_outcome = execute_guard_points(project, profile_id, docs, subject, current_state, envelope, transition)
-    if not guard_outcome["passed"]:
-        should_advance = guard_outcome["status"] != "block" and (
-            guard_outcome["status"] != "warn" or advance_on_warn_failure(transition)
+    terminal_states = docs["state_machine"].get("terminal_states")
+    if isinstance(terminal_states, list) and current_state in terminal_states:
+        audit_path = write_audit(
+            project,
+            profile_id,
+            run_id,
+            "error",
+            envelope,
+            {
+                "decision": "failed",
+                "reason": "terminal_state_completed",
+                "current_state": current_state,
+                "state_version": state.get("state_version"),
+            },
         )
-        if should_advance:
-            audit_path = run_dir(project, profile_id, run_id) / "audit.json"
-            previous_state = current_state
-            state = advance_state(state_path, state, transition, run_id, envelope["event_id"], audit_path)
+        print_lines(
+            {
+                "status": "error",
+                "decision": "failed",
+                "reason": "terminal_state_completed",
+                "guard_profile_id": profile_id,
+                "state": current_state,
+                "state_version": state.get("state_version"),
+                "audit_path": audit_path,
+            }
+        )
+        release_subject_lock(lock)
+        return 1
+
+    completed_state_id = envelope.get("completed_state_id")
+    if completed_state_id != current_state:
+        reason = "completed_state_missing" if not isinstance(completed_state_id, str) or not completed_state_id else "completed_state_mismatch"
+        audit_path = write_audit(
+            project,
+            profile_id,
+            run_id,
+            "error",
+            envelope,
+            {
+                "decision": "failed",
+                "reason": reason,
+                "completed_state_id": completed_state_id,
+                "current_state": current_state,
+                "state_version": state.get("state_version"),
+            },
+        )
+        print_lines(
+            {
+                "status": "error",
+                "decision": "failed",
+                "reason": reason,
+                "guard_profile_id": profile_id,
+                "state": current_state,
+                "state_version": state.get("state_version"),
+                "audit_path": audit_path,
+            }
+        )
+        release_subject_lock(lock)
+        return 1
+
+    matched_transitions = transitions_for_state(docs, current_state, envelope)
+
+    if not matched_transitions:
+        audit_path = write_audit(
+            project,
+            profile_id,
+            run_id,
+            "error",
+            envelope,
+            {
+                "decision": "failed",
+                "reason": "invalid_state_machine_transition",
+                "current_state": current_state,
+                "state_version": state.get("state_version"),
+                "event_type": envelope["event_type"],
+                "matching_transitions": [],
+            },
+        )
+        print_lines(
+            {
+                "status": "error",
+                "decision": "failed",
+                "reason": "invalid_state_machine_transition",
+                "guard_profile_id": profile_id,
+                "state": current_state,
+                "state_version": state.get("state_version"),
+                "audit_path": audit_path,
+            }
+        )
+        release_subject_lock(lock)
+        return 1
+
+    guard_outcome: dict[str, Any] | None = None
+    if len(matched_transitions) > 1:
+        transition_outcomes: list[dict[str, Any]] = []
+        passing_transitions: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for candidate in matched_transitions:
+            candidate_outcome = execute_guard_points(project, profile_id, docs, subject, current_state, state, envelope, candidate)
+            transition_outcomes.append(
+                {
+                    "transition_id": candidate.get("id"),
+                    "passed": candidate_outcome["passed"],
+                    "decision": candidate_outcome["decision"],
+                    "failed_guard_points": candidate_outcome.get("failed_guard_points", []),
+                    "missing_artifacts": candidate_outcome.get("missing_artifacts", []),
+                }
+            )
+            if candidate_outcome["passed"]:
+                passing_transitions.append((candidate, candidate_outcome))
+        if len(passing_transitions) == 1:
+            transition, guard_outcome = passing_transitions[0]
+        else:
+            reason = "ambiguous_transition" if len(passing_transitions) > 1 else "invalid_state_machine_transition"
+            matched_ids = [transition.get("id") for transition, _outcome in passing_transitions]
             audit_path = write_audit(
                 project,
                 profile_id,
                 run_id,
-                guard_outcome["status"],
+                "error",
                 envelope,
                 {
-                    "decision": guard_outcome["decision"],
-                    "transition": transition,
-                    "state_path": str(state_path),
-                    "subject_key": subject["subject_key"],
-                    "subject_key_hash": subject["subject_key_hash"],
-                    "failed_guard_points": guard_outcome["failed_guard_points"],
-                    "failure_reasons": guard_outcome["failure_reasons"],
-                    "missing_conditions": guard_outcome["missing_conditions"],
-                    "missing_artifacts": guard_outcome["missing_artifacts"],
-                    "fix_suggestions": guard_outcome["fix_suggestions"],
-                    "override_allowed": guard_outcome["override_allowed"],
-                    "override_record_paths": guard_outcome["override_record_paths"],
-                    "state_change": {
-                        "from": previous_state,
-                        "to": state["current_state"],
-                        "version": state["state_version"],
-                    },
-                    "guard_results": guard_outcome["guard_results"],
+                    "decision": "failed",
+                    "reason": reason,
+                    "current_state": current_state,
+                    "state_version": state.get("state_version"),
+                    "event_type": envelope["event_type"],
+                    "matching_transitions": matched_ids,
+                    "candidate_results": transition_outcomes,
                 },
             )
-            brief_paths = write_latest_brief(
-                project,
-                profile_id,
-                run_id,
-                subject_from_state(state),
-                state,
-                docs,
-                audit_path,
+            print_lines(
+                {
+                    "status": "error",
+                    "decision": "failed",
+                    "reason": reason,
+                    "guard_profile_id": profile_id,
+                    "state": current_state,
+                    "state_version": state.get("state_version"),
+                    "transition_count": len(matched_ids),
+                    "audit_path": audit_path,
+                }
             )
-            output = {
-                "status": guard_outcome["status"],
-                "decision": guard_outcome["decision"],
-                "guard_profile_id": profile_id,
-                "subject_key_hash": subject["subject_key_hash"],
-                "transition_id": transition.get("id"),
-                "from_state": previous_state,
-                "to_state": state["current_state"],
-                "state_version": state["state_version"],
-                "state_path": state_path,
-                "failed_guard_points": guard_outcome["failed_guard_points"],
-                "failure_reasons": guard_outcome["failure_reasons"],
-                "missing_conditions": guard_outcome["missing_conditions"],
-                "fix_suggestions": guard_outcome["fix_suggestions"],
-                "override_allowed": guard_outcome["override_allowed"],
-                "override_record_path": guard_outcome["override_record_path"],
-                "audit_path": audit_path,
-                "brief_input_path": brief_paths["brief_input_path"],
-                "brief_path": brief_paths["brief_path"],
-                "brief_hash": brief_paths["brief_hash"],
-            }
-            if guard_outcome["missing_artifacts"]:
-                output["missing_artifacts"] = guard_outcome["missing_artifacts"]
-            print_lines(output)
             release_subject_lock(lock)
-            return guard_outcome["return_code"]
+            return 1
+    else:
+        transition = matched_transitions[0]
 
+    if guard_outcome is None:
+        guard_outcome = execute_guard_points(project, profile_id, docs, subject, current_state, state, envelope, transition)
+
+    if not guard_outcome["passed"]:
         audit_path = write_audit(
             project,
             profile_id,
@@ -1745,7 +2630,7 @@ def run_event(args: argparse.Namespace) -> int:
             state,
             docs,
             audit_path,
-            recent_block_reasons=guard_outcome["failure_reasons"] if guard_outcome["status"] == "block" else None,
+            recent_denial_reasons=guard_outcome["failure_reasons"],
             missing_artifacts=guard_outcome["missing_artifacts"],
         )
         output = {
@@ -1781,7 +2666,7 @@ def run_event(args: argparse.Namespace) -> int:
         "allow",
         envelope,
         {
-            "decision": "advanced",
+            "decision": "guard_passed",
             "transition": transition,
             "state_path": str(state_path),
             "subject_key": subject["subject_key"],
@@ -1806,7 +2691,7 @@ def run_event(args: argparse.Namespace) -> int:
     print_lines(
         {
             "status": "allow",
-            "decision": "advanced",
+            "decision": "guard_passed",
             "guard_profile_id": profile_id,
             "subject_key_hash": subject["subject_key_hash"],
             "transition_id": transition.get("id"),
@@ -1842,7 +2727,23 @@ def read_brief(args: argparse.Namespace) -> int:
         return 2
     validation = validate_latest_brief(project, profile_id, args.subject, payload)
     if not validation["valid"]:
-        print(json.dumps(validation, ensure_ascii=False, indent=2))
+        output = dict(validation)
+        if args.session:
+            audit_path = write_audit(
+                project,
+                profile_id,
+                uuid.uuid4().hex,
+                str(validation["status"]),
+                brief_injection_envelope(profile_id, args.subject, args.session),
+                {
+                    "decision": default_decision(str(validation["status"])),
+                    "reason": validation.get("reason", ""),
+                    "subject_key_hash": args.subject,
+                    "validation": validation,
+                },
+            )
+            output["audit_path"] = audit_path
+        print(json.dumps(output_envelope(output), ensure_ascii=False, indent=2))
         return 1
     injection: dict[str, Any] | None = None
     if args.session:
@@ -1860,7 +2761,7 @@ def read_brief(args: argparse.Namespace) -> int:
     status = "ok"
     if injection:
         status = "already_injected" if injection["already_injected"] else "injectable"
-    print(json.dumps({"status": status, **(injection or {}), **payload}, ensure_ascii=False, indent=2))
+    print(json.dumps(output_envelope({"status": status, **(injection or {}), **payload}), ensure_ascii=False, indent=2))
     return 0
 
 

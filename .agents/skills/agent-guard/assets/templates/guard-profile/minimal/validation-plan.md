@@ -1,7 +1,7 @@
 # Validation Plan（验证计划）
 
 - 校验所有必需 Guard Profile（守卫画像）文件存在。
-- 校验 manifest（清单）包含画像 ID、模式和文件索引。
+- 校验 manifest（清单）包含 schema version（架构版本）、画像 ID 和文件索引。
 - 校验 target model（目标模型）声明被守卫对象边界。
 - 校验 activation（激活）规则包含来源、范围和初始状态。
 - 校验 Subject Resolver（主体解析器）包含身份字段、必填字段和歧义策略。

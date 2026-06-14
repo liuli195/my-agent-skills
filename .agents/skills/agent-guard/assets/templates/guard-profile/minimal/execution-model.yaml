@@ -9,7 +9,7 @@ nodes:
     required_artifacts:
       - completion_note
     completion_signals:
-      - guard.close
+      - state_completed
 states:
   - id: open
     allowed_next:
@@ -19,7 +19,7 @@ states:
       - completion_note
     brief:
       current_state: open
-      next_step: 添加 completion_note，然后发出 guard.close。
+      next_step: 添加 completion_note，然后提交 event_type=state_completed、completed_state_id=open。
   - id: closed
     allowed_next: []
     forbidden_next: []

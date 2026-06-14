@@ -36,7 +36,6 @@ function Write-Safety {
     Write-Output "safety:"
     Write-Output "  project_guard_initialization: not_performed"
     Write-Output "  project_hooks: not_installed"
-    Write-Output "  blocking_mode: not_enabled"
 }
 
 function Get-LinkTarget {
