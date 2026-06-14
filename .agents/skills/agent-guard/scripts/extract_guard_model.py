@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-from validate_guard_profile import ValidationIssue, validate_profile
+from validate_guard_profile import ValidationIssue, state_machine_has_deny_permissions, validate_profile
 
 
 PROFILE_FILES = {
@@ -36,10 +36,12 @@ REQUIRED_INPUT_FIELDS = [
     "grill_with_docs.scenarios",
     "grill_with_docs.exceptions",
     "grill_with_docs.documentation_changes",
+    "initialization.requested_profile_ref",
+    "initialization.guard_injection.enabled",
+    "initialization.hook_installation.enabled",
     "profile.id",
     "profile.name",
     "profile.description",
-    "profile.mode",
     "target.id",
     "target.type",
     "target.name",
@@ -131,6 +133,47 @@ def collect_needs_confirmation(data: dict[str, Any]) -> list[ConfirmationNeed]:
             )
         )
 
+    profile_id = value_at(data, "profile.id")
+    requested_profile_ref = value_at(data, "initialization.requested_profile_ref")
+    if is_present(profile_id) and is_present(requested_profile_ref) and profile_id != requested_profile_ref:
+        needs.append(
+            ConfirmationNeed(
+                field="initialization.requested_profile_ref",
+                reason="初始化调研必须根据本次调用确认画像，调用里的画像 ID 要和 `profile.id` 一致。",
+                ask="请确认本次调用要初始化的 Guard Profile（守卫画像）ID，并让它和 `profile.id` 对齐。",
+            )
+        )
+
+    guard_injection_enabled = value_at(data, "initialization.guard_injection.enabled")
+    if is_present(guard_injection_enabled) and guard_injection_enabled is not True:
+        needs.append(
+            ConfirmationNeed(
+                field="initialization.guard_injection.enabled",
+                reason="初始化调研默认启用 Guard Injection（守卫注入），让 agent 能读取 latest Guard Brief（最新守卫简报）。",
+                ask="请确认是否按默认启用 Guard Injection（守卫注入）。",
+            )
+        )
+
+    hook_installation_enabled = value_at(data, "initialization.hook_installation.enabled")
+    if is_present(hook_installation_enabled) and not isinstance(hook_installation_enabled, bool):
+        needs.append(
+            ConfirmationNeed(
+                field="initialization.hook_installation.enabled",
+                reason="初始化调研必须明确是否启用 Hook（钩子）。",
+                ask="请把 `initialization.hook_installation.enabled` 明确为 `true` 或 `false`。",
+            )
+        )
+
+    hook_bindings = value_at(data, "hook_bindings")
+    if hook_installation_enabled is True and isinstance(hook_bindings, list) and not hook_bindings:
+        needs.append(
+            ConfirmationNeed(
+                field="hook_bindings",
+                reason="已确认启用 Hook（钩子），但没有可安装的 Hook Binding（钩子绑定）。",
+                ask="请确认至少一个 Hook Binding（钩子绑定），或把 `initialization.hook_installation.enabled` 改为 `false`。",
+            )
+        )
+
     target_boundary = value_at(data, "target.boundary")
     if isinstance(target_boundary, str) and "修改" in target_boundary and "不修改" not in target_boundary:
         needs.append(
@@ -159,7 +202,6 @@ def build_manifest(data: dict[str, Any]) -> dict[str, Any]:
         "guard_profile_id": profile["id"],
         "name": profile["name"],
         "description": profile["description"],
-        "mode": profile["mode"],
         "source": {
             "kind": "grill-with-docs-confirmed-notes",
             "status": value_at(data, "grill_with_docs.status"),
@@ -203,12 +245,14 @@ def build_validation_plan(data: dict[str, Any]) -> str:
 
 def build_implementation_plan(data: dict[str, Any]) -> str:
     profile = value_at(data, "profile")
+    initialization = value_at(data, "initialization")
     activation = value_at(data, "activation")
     subject = value_at(data, "subject")
     guard_points = value_at(data, "guard_points")
     artifacts = value_at(data, "artifacts")
     hook_bindings = value_at(data, "hook_bindings")
     assert isinstance(profile, dict)
+    assert isinstance(initialization, dict)
     assert isinstance(activation, dict)
     assert isinstance(subject, dict)
     assert isinstance(guard_points, list)
@@ -222,10 +266,38 @@ def build_implementation_plan(data: dict[str, Any]) -> str:
         "",
         "## 初始化",
         "",
+        f"- 根据本次调用确认画像：`{initialization['requested_profile_ref']}`。",
         "- 在目标范围显式初始化 Guard Runtime（守卫运行时）和 Guard Profile（守卫画像）目录。",
         "- 初始化阶段只生成配置和验证计划，不预建 `.local/guard/*` 运行态目录，不修改被守卫对象。",
-        "- 安装 Hook（钩子）前必须获得用户明确授权。",
-        "- 启用 blocking mode（阻断模式）前必须获得用户明确授权。",
+        "- 初始化输入必须是本轮调研生成并校验通过的 Guard Profile（守卫画像）草案目录。",
+        "",
+        "## 守卫注入",
+        "",
+        "- Guard Injection（守卫注入）默认启用。",
+        "- 初始化后 agent（代理）通过 latest Guard Brief（最新守卫简报）读取当前状态和下一步要求。",
+        "- 使用 `brief --session <session-id>` 时按 session（会话）记录 `brief_hash`，避免重复注入。",
+        "",
+        "## Hook（钩子）",
+        "",
+    ]
+
+    hook_installation = initialization.get("hook_installation")
+    hook_installation = hook_installation if isinstance(hook_installation, dict) else {}
+    if hook_installation.get("enabled") is True:
+        lines.extend(
+            [
+                "- 调研已确认启用 Hook（钩子）。",
+                "- 初始化完成并校验画像后，使用 `install_hooks.py --authorize-install` 安装 Hook（钩子）。",
+                "- 安装 Hook（钩子）前仍必须获得用户明确授权。",
+            ]
+        )
+    else:
+        reason = hook_installation.get("reason")
+        suffix = f"原因：{reason}" if isinstance(reason, str) and reason else "后续需要用户明确授权后再安装。"
+        lines.append(f"- 调研已确认暂不启用 Hook（钩子）。{suffix}")
+
+    lines.extend(
+        [
         "",
         "## 配置",
         "",
@@ -238,15 +310,15 @@ def build_implementation_plan(data: dict[str, Any]) -> str:
         "",
         "## 守卫点划分",
         "",
-    ]
+        ]
+    )
 
     for guard_point in guard_points:
         if not isinstance(guard_point, dict):
             continue
         guard_point_id = guard_point.get("id", "<unknown>")
-        mode = guard_point.get("mode", profile.get("mode", "warn"))
         artifact_ids = guard_point.get("inputs", {}).get("artifacts", [])
-        lines.append(f"- `{guard_point_id}`：mode（模式）=`{mode}`，依赖产物={format_inline_list(artifact_ids)}。")
+        lines.append(f"- `{guard_point_id}`：依赖产物={format_inline_list(artifact_ids)}。")
 
     lines.extend(
         [
@@ -267,9 +339,8 @@ def build_implementation_plan(data: dict[str, Any]) -> str:
                 "1. 确认该守卫点的目标、触发事件、依赖产物和失败行为。",
                 "2. 只启用该守卫点关联的状态转换、产物引用和 Hook Binding（钩子绑定）。",
                 "3. 运行 `validate_guard_profile.py <guard-profile-dir>` 校验文件和引用。",
-                "4. 先以 warn（警告）或 record（记录）模式验证，不直接阻断。",
-                "5. 稳定后由用户显式授权，再把该守卫点切到 block（阻断）模式。",
-                "6. 如果误报或阻断错误，只回滚该守卫点，不回滚整个 Guard Profile（守卫画像）。",
+                "4. 验证该守卫点失败时不会推进状态，并能输出清晰修复建议。",
+                "5. 如果误报或检查错误，只回滚该守卫点，不回滚整个 Guard Profile（守卫画像）。",
                 "",
             ]
         )
@@ -309,7 +380,6 @@ def normalize_hook_bindings(data: dict[str, Any]) -> None:
         if isinstance(event_type, str) and not hook_binding_has_trigger(binding):
             binding["trigger_event"] = event_type
         binding.setdefault("target_profile", profile.get("id"))
-        binding.setdefault("blocking", False)
         install = binding.get("install")
         if not isinstance(install, dict):
             install = {}
@@ -346,13 +416,16 @@ def default_brief_template() -> str:
     return """# Guard Brief（守卫简报）
 
 Guard Profile（守卫画像）：{{ guard_profile_id }}
-Subject（主体）：{{ subject_key }}
+Subject（主体）：{{ subject_key_hash }}
 当前状态：{{ state }}
 允许下一步：{{ allowed_next }}
 禁止下一步：{{ forbidden_next }}
 缺失 Artifacts（产物）：{{ missing_artifacts }}
-最近阻断原因：{{ recent_block_reasons }}
+最近拒绝原因：{{ recent_denial_reasons }}
+状态权限：{{ permissions }}
+完成条件：{{ transition_conditions }}
 下一步：{{ next_step }}
+状态推进：{{ state_completion_instruction }}
 Audit（审计）：{{ audit_path }}
 """
 
@@ -377,10 +450,28 @@ def print_validation_failure(output: Path, issues: list[ValidationIssue]) -> Non
         print(f"    fix: {issue.fix}")
 
 
+def print_deny_authorization_required(output: Path) -> None:
+    payload = {
+        "status": "authorization_required",
+        "authorization": "deny_permissions_missing",
+        "message": "调研记录包含会返回 `deny` 的状态权限，生成 Guard Profile（守卫画像）草案前必须额外授权。",
+        "next": "如果确认要生成这些拒绝规则，请重试并加 --authorize-deny-permissions。",
+    }
+    text = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
+    print(text, end="")
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "deny-authorization-required.yaml").write_text(text, encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="从已确认问答记录生成 Guard Profile（守卫画像）草案。")
     parser.add_argument("notes", type=Path, help="已确认问答记录 YAML（YAML 配置格式）路径")
     parser.add_argument("--output", type=Path, required=True, help="Guard Profile（守卫画像）草案输出目录")
+    parser.add_argument(
+        "--authorize-deny-permissions",
+        action="store_true",
+        help="明确授权生成含 `deny` 状态权限的 Guard Profile（守卫画像）草案",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -393,6 +484,11 @@ def main(argv: list[str] | None = None) -> int:
     needs = collect_needs_confirmation(data)
     if needs:
         print_needs_confirmation(needs, args.output)
+        return 1
+
+    state_machine = value_at(data, "state_machine")
+    if isinstance(state_machine, dict) and state_machine_has_deny_permissions(state_machine) and not args.authorize_deny_permissions:
+        print_deny_authorization_required(args.output)
         return 1
 
     normalize_hook_bindings(data)

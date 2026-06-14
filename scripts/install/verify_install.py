@@ -134,7 +134,6 @@ def print_safety() -> None:
     print("safety:")
     print("  project_guard_initialization: not_performed")
     print("  project_hooks: not_installed")
-    print("  blocking_mode: not_enabled")
 
 
 def main(argv: list[str] | None = None) -> int:

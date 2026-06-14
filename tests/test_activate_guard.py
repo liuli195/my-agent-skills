@@ -157,11 +157,13 @@ def test_missing_required_field_returns_no_subject_match_and_writes_audit(tmp_pa
     assert "status: no_subject_match" in result.stdout
     assert "reason: missing_required_fields" in result.stdout
     assert "context.session_id" in result.stdout
+    assert "fix_suggestions:" in result.stdout
     audit_path = Path(output_value(result.stdout, "audit_path"))
     assert audit_path.exists()
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
     assert audit["status"] == "no_subject_match"
     assert audit["detail"]["missing_fields"] == ["context.session_id"]
+    assert audit["detail"]["fix_suggestions"]
     state_root = project / ".local" / "guard" / "state" / "minimal-sample"
     assert not list(state_root.glob("*/state.json"))
 
@@ -182,11 +184,13 @@ def test_multiple_matching_instances_return_ambiguous_subject_and_write_audit(tm
     assert "status: ambiguous_subject" in second.stdout
     assert f"subject_key_hash: {subject_hash}" in second.stdout
     assert "candidate_count: 2" in second.stdout
+    assert "fix_suggestions:" in second.stdout
     audit_path = Path(output_value(second.stdout, "audit_path"))
     assert audit_path.exists()
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
     assert audit["status"] == "ambiguous_subject"
     assert len(audit["detail"]["candidate_state_paths"]) == 2
+    assert audit["detail"]["fix_suggestions"]
 
 
 def test_subject_key_fields_come_from_guard_profile_not_runtime_defaults(tmp_path: Path) -> None:

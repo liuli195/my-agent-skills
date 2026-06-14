@@ -1,10 +1,9 @@
 hook_bindings:
   - id: manual-close
     source: manual
-    trigger_event: guard.close
-    event_type: guard.close
+    trigger_event: state_completed
+    event_type: state_completed
     target_profile: minimal-sample
-    blocking: false
     install:
       status: not_installed
       target: manual

@@ -20,7 +20,7 @@ python scripts\install\verify_install.py
 - `source_skill`：源码仓库里的 Skill（技能）骨架是否完整。
 - `user_skill`：用户级 `.agents\skills\agent-guard` 是否存在且完整。
 - `claude_junction`：Claude Junction（目录联接）是 `missing`、`wrong_target` 还是 `correct_target`。
-- 安全声明：未初始化目标项目、未安装 Hook（钩子）、未启用 blocking mode（阻断模式）。
+- 安全声明：未初始化目标项目、未安装 Hook（钩子）。
 
 用户级 Skill（技能）安装使用：
 

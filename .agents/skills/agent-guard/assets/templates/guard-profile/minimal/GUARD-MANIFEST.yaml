@@ -2,7 +2,9 @@ schema_version: guard-profile/v1
 guard_profile_id: minimal-sample
 name: 最小样例 Guard Profile（守卫画像）
 description: 校验最小 Guard Profile（守卫画像）契约，不包含具体业务规则。
-mode: warn
+source:
+  kind: built-in-minimal-sample
+  status: template
 files:
   target_model: target-model.yaml
   activation_model: activation-model.yaml

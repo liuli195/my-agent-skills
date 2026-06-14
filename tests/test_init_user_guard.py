@@ -53,7 +53,6 @@ def test_user_guard_initialization_defaults_to_dry_run(tmp_path: Path) -> None:
     assert "authorization: missing" in result.stdout
     assert "project_guard_initialization: not_performed" in result.stdout
     assert "project_hooks: not_installed" in result.stdout
-    assert "blocking_mode: not_enabled" in result.stdout
     assert not user_root.exists()
 
 
@@ -84,23 +83,63 @@ def test_authorized_user_guard_initialization_writes_valid_profile(tmp_path: Pat
     assert validation.returncode == 0, validation.stdout + validation.stderr
 
 
-def test_user_guard_initialization_requires_blocking_authorization(tmp_path: Path) -> None:
+def test_user_guard_initialization_rejects_deprecated_manifest_mode(tmp_path: Path) -> None:
     draft = tmp_path / "draft-profile"
     user_root = tmp_path / "user" / ".agents" / "guards"
     shutil.copytree(MINIMAL_PROFILE, draft)
     manifest = draft / "GUARD-MANIFEST.yaml"
-    guard_points = draft / "guard-points.yaml"
-    manifest.write_text(manifest.read_text(encoding="utf-8").replace("mode: warn", "mode: block"), encoding="utf-8")
-    guard_points.write_text(
-        guard_points.read_text(encoding="utf-8").replace("mode: warn", "mode: block"),
-        encoding="utf-8",
-    )
+    manifest.write_text(manifest.read_text(encoding="utf-8") + "mode: warn\n", encoding="utf-8")
 
     result = run_init(["--profile", str(draft), "--user-guard-root", str(user_root), "--authorize-init"])
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    output_manifest = (user_root / "minimal-sample" / "GUARD-MANIFEST.yaml").read_text(encoding="utf-8")
-    output_guard_points = (user_root / "minimal-sample" / "guard-points.yaml").read_text(encoding="utf-8")
-    assert "mode: warn" in output_manifest
-    assert "mode: block" not in output_manifest
-    assert "mode: block" not in output_guard_points
+    assert result.returncode == 1
+    assert "status: validation_failed" in result.stdout
+    assert "category: manifest" in result.stdout
+    assert "field: mode" in result.stdout
+    assert not user_root.exists()
+
+
+def test_user_guard_initialization_requires_extra_authorization_for_deny_permissions(tmp_path: Path) -> None:
+    draft = tmp_path / "draft-profile"
+    user_root = tmp_path / "user" / ".agents" / "guards"
+    shutil.copytree(MINIMAL_PROFILE, draft)
+    state_machine = draft / "state-machine.yaml"
+    state_machine.write_text(
+        state_machine.read_text(encoding="utf-8").replace(
+            "  - id: open\n    description: Guard Profile（守卫画像）已激活，正在等待必需 note（说明记录）。",
+            """  - id: open
+    description: Guard Profile（守卫画像）已激活，正在等待必需 note（说明记录）。
+    permissions:
+      default: deny""",
+        ),
+        encoding="utf-8",
+    )
+
+    blocked = run_init(
+        [
+            "--profile",
+            str(draft),
+            "--user-guard-root",
+            str(user_root),
+            "--authorize-init",
+        ]
+    )
+
+    assert blocked.returncode == 1
+    assert "status: authorization_required" in blocked.stdout
+    assert "authorization: deny_permissions_missing" in blocked.stdout
+    assert not user_root.exists()
+
+    allowed = run_init(
+        [
+            "--profile",
+            str(draft),
+            "--user-guard-root",
+            str(user_root),
+            "--authorize-init",
+            "--authorize-deny-permissions",
+        ]
+    )
+
+    assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+    assert "status: initialized" in allowed.stdout

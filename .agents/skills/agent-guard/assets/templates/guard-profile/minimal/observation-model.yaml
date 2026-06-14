@@ -9,3 +9,8 @@ signals:
     event_type: guard.close
     strength: medium
     maps_to_node: close
+  - id: state_completed
+    source: agent
+    event_type: state_completed
+    strength: high
+    maps_to_node: close

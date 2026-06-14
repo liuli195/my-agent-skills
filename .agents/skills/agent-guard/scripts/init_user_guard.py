@@ -11,11 +11,9 @@ from typing import Any
 
 import yaml
 
-from validate_guard_profile import ValidationIssue, validate_profile
+from validate_guard_profile import ValidationIssue, profile_has_deny_permissions, validate_profile
 
 
-SAFE_MODES = {"record", "warn"}
-ALL_MODES = {"record", "warn", "block"}
 PROFILE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
@@ -48,21 +46,6 @@ def read_profile_id(profile_dir: Path) -> str:
     return validate_profile_id(profile_id)
 
 
-def resolve_initial_mode(profile_dir: Path, requested_mode: str | None, authorize_blocking: bool) -> str:
-    if requested_mode == "block" and authorize_blocking:
-        return "block"
-    if requested_mode in SAFE_MODES:
-        return requested_mode
-
-    manifest = load_yaml_mapping(profile_dir / "GUARD-MANIFEST.yaml")
-    mode = manifest.get("mode")
-    if mode == "block" and authorize_blocking:
-        return "block"
-    if isinstance(mode, str) and mode in SAFE_MODES:
-        return mode
-    return "warn"
-
-
 def print_validation_failure(profile: Path, issues: list[ValidationIssue]) -> None:
     print("status: validation_failed")
     print(f"profile: {profile}")
@@ -91,39 +74,21 @@ def copy_profile(source_profile: Path, target_profile: Path, on_existing: str) -
     shutil.copytree(source_profile, target_profile)
 
 
-def normalize_user_profile(profile_dir: Path, profile_id: str, mode: str) -> None:
+def normalize_user_profile(profile_dir: Path, profile_id: str) -> None:
     manifest_path = profile_dir / "GUARD-MANIFEST.yaml"
     manifest = load_yaml_mapping(manifest_path)
     manifest["guard_profile_id"] = profile_id
-    manifest["mode"] = mode
     manifest.setdefault("user_initialization", {})
     manifest["user_initialization"].update(
         {
             "scope": "user",
             "hook_installation": "not_installed",
-            "blocking_mode": "enabled" if mode == "block" else "not_enabled",
-            "mode": mode,
         }
     )
     dump_yaml(manifest_path, manifest)
 
-    if mode == "block":
-        return
 
-    guard_points_path = profile_dir / "guard-points.yaml"
-    guard_points_doc = load_yaml_mapping(guard_points_path)
-    guard_points = guard_points_doc.get("guard_points")
-    if isinstance(guard_points, list):
-        for guard_point in guard_points:
-            if not isinstance(guard_point, dict):
-                continue
-            for field in ["mode", "on_fail", "on_error"]:
-                if guard_point.get(field) == "block":
-                    guard_point[field] = mode
-    dump_yaml(guard_points_path, guard_points_doc)
-
-
-def write_user_notes(profile_dir: Path, profile_id: str, mode: str) -> None:
+def write_user_notes(profile_dir: Path, profile_id: str) -> None:
     path = profile_dir / "user-scope.md"
     path.write_text(
         f"""# User Guard Profile（用户级守卫画像）
@@ -131,30 +96,36 @@ def write_user_notes(profile_dir: Path, profile_id: str, mode: str) -> None:
 Guard Profile（守卫画像）：{profile_id}
 
 - 存放范围：用户级。
-- 初始模式：`{mode}`。
 - Hook（钩子）未安装。
-- blocking mode（阻断模式）：{'enabled' if mode == 'block' else 'not_enabled'}。
 - 用户级初始化只写 Guard Profile（守卫画像）配置，不初始化目标项目，也不修改目标项目 hook。
 """,
         encoding="utf-8",
     )
 
 
-def print_plan(user_guard_root: Path, source_profile: Path, target_profile: Path, profile_id: str, mode: str) -> None:
+def print_plan(
+    user_guard_root: Path,
+    source_profile: Path,
+    target_profile: Path,
+    profile_id: str,
+    has_deny_permissions: bool,
+) -> None:
     print("status: dry_run")
     print("authorization: missing")
     print(f"user_guard_root: {user_guard_root}")
     print(f"source_profile: {source_profile}")
     print(f"profile: {target_profile}")
     print(f"guard_profile_id: {profile_id}")
-    print(f"mode: {mode}")
+    print(f"deny_permissions: {'present' if has_deny_permissions else 'absent'}")
     print("changes:")
     print(f"  - target: {target_profile}")
     print("    action: would_write")
     print("project_guard_initialization: not_performed")
     print("project_hooks: not_installed")
-    print(f"blocking_mode: {'enabled' if mode == 'block' else 'not_enabled'}")
-    print("next: 加 --authorize-init 才会写入用户级 Guard Profile（守卫画像）。")
+    if has_deny_permissions:
+        print("next: 加 --authorize-init 和 --authorize-deny-permissions 才会写入含 `deny` 状态权限的用户级 Guard Profile（守卫画像）。")
+    else:
+        print("next: 加 --authorize-init 才会写入用户级 Guard Profile（守卫画像）。")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -167,9 +138,12 @@ def main(argv: list[str] | None = None) -> int:
         help="用户级 Guard Profile（守卫画像）根目录",
     )
     parser.add_argument("--guard-profile-id", help="覆盖输出 Guard Profile（守卫画像）ID")
-    parser.add_argument("--mode", choices=sorted(ALL_MODES), help="初始化模式；block（阻断）必须同时加 --authorize-blocking")
     parser.add_argument("--authorize-init", action="store_true", help="明确授权写入用户级 Guard Profile（守卫画像）")
-    parser.add_argument("--authorize-blocking", action="store_true", help="明确授权初始化为 blocking mode（阻断模式）")
+    parser.add_argument(
+        "--authorize-deny-permissions",
+        action="store_true",
+        help="明确授权初始化含 `deny` 状态权限的 Guard Profile（守卫画像）",
+    )
     parser.add_argument(
         "--on-existing",
         choices=["abort", "overwrite", "update"],
@@ -187,7 +161,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         source_profile_id = read_profile_id(source_profile)
         profile_id = validate_profile_id(args.guard_profile_id) if args.guard_profile_id else source_profile_id
-        mode = resolve_initial_mode(source_profile, args.mode, args.authorize_blocking)
     except ValueError as exc:
         print("status: error")
         print(f"message: {exc}")
@@ -199,9 +172,18 @@ def main(argv: list[str] | None = None) -> int:
         print("message: 输出 Guard Profile（守卫画像）不能和输入草案目录相同。")
         return 2
 
+    has_deny_permissions = profile_has_deny_permissions(source_profile)
     if not args.authorize_init:
-        print_plan(user_guard_root, source_profile, target_profile, profile_id, mode)
+        print_plan(user_guard_root, source_profile, target_profile, profile_id, has_deny_permissions)
         return 0
+
+    if has_deny_permissions and not args.authorize_deny_permissions:
+        print("status: authorization_required")
+        print("authorization: deny_permissions_missing")
+        print(f"profile: {source_profile}")
+        print("message: 该 Guard Profile（守卫画像）包含会返回 `deny` 的状态权限，初始化前必须额外授权。")
+        print("next: 如果确认要初始化这些拒绝规则，请重试并加 --authorize-deny-permissions。")
+        return 1
 
     if target_profile.exists() and args.on_existing == "abort":
         print("status: exists")
@@ -212,8 +194,8 @@ def main(argv: list[str] | None = None) -> int:
 
     user_guard_root.mkdir(parents=True, exist_ok=True)
     copy_profile(source_profile, target_profile, args.on_existing)
-    normalize_user_profile(target_profile, profile_id, mode)
-    write_user_notes(target_profile, profile_id, mode)
+    normalize_user_profile(target_profile, profile_id)
+    write_user_notes(target_profile, profile_id)
 
     _checked, output_issues = validate_profile(target_profile)
     if output_issues:
@@ -223,10 +205,8 @@ def main(argv: list[str] | None = None) -> int:
     print("status: initialized")
     print(f"user_guard_root: {user_guard_root}")
     print(f"profile: {target_profile}")
-    print(f"mode: {mode}")
     print("project_guard_initialization: not_performed")
     print("project_hooks: not_installed")
-    print(f"blocking_mode: {'enabled' if mode == 'block' else 'not_enabled'}")
     return 0
 
 

@@ -99,54 +99,26 @@ def test_existing_guard_profile_aborts_without_overwriting(tmp_path: Path) -> No
     assert profile_manifest.read_text(encoding="utf-8") == "manual edit\n"
 
 
-def test_initialization_does_not_enable_blocking_mode_by_default(tmp_path: Path) -> None:
+def test_initialization_rejects_deprecated_manifest_mode(tmp_path: Path) -> None:
     project = tmp_path / "target-project"
     draft = tmp_path / "draft-profile"
     shutil.copytree(MINIMAL_PROFILE, draft)
     manifest = draft / "GUARD-MANIFEST.yaml"
-    guard_points = draft / "guard-points.yaml"
-    manifest.write_text(
-        manifest.read_text(encoding="utf-8").replace("mode: warn", "mode: block"),
-        encoding="utf-8",
-    )
-    guard_points.write_text(
-        guard_points.read_text(encoding="utf-8")
-        .replace("mode: warn", "mode: block")
-        .replace("on_fail: warn", "on_fail: block"),
-        encoding="utf-8",
-    )
+    manifest.write_text(manifest.read_text(encoding="utf-8") + "mode: warn\n", encoding="utf-8")
 
     result = run_init(["--profile", str(draft), "--project", str(project), "--authorize-init"])
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "blocking_mode: not_enabled" in result.stdout
-    output_manifest = (project / ".agents" / "guards" / "minimal-sample" / "GUARD-MANIFEST.yaml").read_text(
-        encoding="utf-8"
-    )
-    output_guard_points = (project / ".agents" / "guards" / "minimal-sample" / "guard-points.yaml").read_text(
-        encoding="utf-8"
-    )
-    assert "mode: warn" in output_manifest
-    assert "mode: block" not in output_manifest
-    assert "mode: block" not in output_guard_points
-    assert "on_fail: block" not in output_guard_points
-    assert "on_error: block" not in output_guard_points
+    assert result.returncode == 1
+    assert "status: validation_failed" in result.stdout
+    assert "category: manifest" in result.stdout
+    assert "field: mode" in result.stdout
+    assert not (project / ".agents").exists()
 
 
-def test_initialization_can_enable_blocking_mode_with_explicit_authorization(tmp_path: Path) -> None:
+def test_initialization_rejects_removed_authorize_blocking_argument(tmp_path: Path) -> None:
     project = tmp_path / "target-project"
     draft = tmp_path / "draft-profile"
     shutil.copytree(MINIMAL_PROFILE, draft)
-    manifest = draft / "GUARD-MANIFEST.yaml"
-    guard_points = draft / "guard-points.yaml"
-    manifest.write_text(
-        manifest.read_text(encoding="utf-8").replace("mode: warn", "mode: block"),
-        encoding="utf-8",
-    )
-    guard_points.write_text(
-        guard_points.read_text(encoding="utf-8").replace("mode: warn", "mode: block"),
-        encoding="utf-8",
-    )
 
     result = run_init(
         [
@@ -159,16 +131,46 @@ def test_initialization_can_enable_blocking_mode_with_explicit_authorization(tmp
         ]
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "blocking_mode: enabled" in result.stdout
-    output_manifest = (project / ".agents" / "guards" / "minimal-sample" / "GUARD-MANIFEST.yaml").read_text(
-        encoding="utf-8"
+    assert result.returncode == 2
+    assert "unrecognized arguments: --authorize-blocking" in result.stderr
+
+
+def test_initialization_requires_extra_authorization_for_deny_permissions(tmp_path: Path) -> None:
+    project = tmp_path / "target-project"
+    draft = tmp_path / "draft-profile"
+    shutil.copytree(MINIMAL_PROFILE, draft)
+    state_machine = draft / "state-machine.yaml"
+    state_machine.write_text(
+        state_machine.read_text(encoding="utf-8").replace(
+            "  - id: open\n    description: Guard Profile（守卫画像）已激活，正在等待必需 note（说明记录）。",
+            """  - id: open
+    description: Guard Profile（守卫画像）已激活，正在等待必需 note（说明记录）。
+    permissions:
+      default: deny""",
+        ),
+        encoding="utf-8",
     )
-    output_guard_points = (project / ".agents" / "guards" / "minimal-sample" / "guard-points.yaml").read_text(
-        encoding="utf-8"
+
+    blocked = run_init(["--profile", str(draft), "--project", str(project), "--authorize-init"])
+
+    assert blocked.returncode == 1
+    assert "status: authorization_required" in blocked.stdout
+    assert "authorization: deny_permissions_missing" in blocked.stdout
+    assert not (project / ".agents").exists()
+
+    allowed = run_init(
+        [
+            "--profile",
+            str(draft),
+            "--project",
+            str(project),
+            "--authorize-init",
+            "--authorize-deny-permissions",
+        ]
     )
-    assert "mode: block" in output_manifest
-    assert "mode: block" in output_guard_points
+
+    assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+    assert "status: initialized" in allowed.stdout
 
 
 def test_initialization_defaults_to_dry_run_without_writing_project(tmp_path: Path) -> None:
@@ -182,6 +184,5 @@ def test_initialization_defaults_to_dry_run_without_writing_project(tmp_path: Pa
     assert "status: dry_run" in result.stdout
     assert "authorization: missing" in result.stdout
     assert "hook_installation: not_installed" in result.stdout
-    assert "blocking_mode: not_enabled" in result.stdout
     assert not (project / ".agents").exists()
     assert not (project / ".local").exists()

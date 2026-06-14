@@ -26,13 +26,15 @@ REQUIRED_FILES = {
     "validation_plan": "validation-plan.md",
 }
 
+ALLOWED_PROFILE_SOURCE_KINDS = {"grill-with-docs-confirmed-notes", "built-in-minimal-sample"}
+
 REQUIRED_FIELDS = {
     "manifest": [
         "schema_version",
         "guard_profile_id",
         "name",
         "description",
-        "mode",
+        "source.kind",
     ],
     "target_model": [
         "target.id",
@@ -117,6 +119,10 @@ def is_present(value: Any) -> bool:
     return True
 
 
+def is_payload_field(value: Any) -> bool:
+    return isinstance(value, str) and (value == "payload" or value.startswith("payload."))
+
+
 def require_fields(category: str, data: dict[str, Any]) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     for field in REQUIRED_FIELDS.get(category, []):
@@ -127,6 +133,81 @@ def require_fields(category: str, data: dict[str, Any]) -> list[ValidationIssue]
                     field,
                     "是最小 Guard Profile（守卫画像）契约的必填字段。",
                     f"在 {REQUIRED_FILES[category]} 中添加 `{field}`。",
+                )
+            )
+    return issues
+
+
+def validate_manifest_contract(data: dict[str, Any]) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    if "mode" in data:
+        issues.append(
+            ValidationIssue(
+                "manifest",
+                "mode",
+                "已废弃，不能出现在 GUARD-MANIFEST.yaml 中。",
+                "删除 `mode`；状态权限请写入 state-machine.yaml 的 `states[].permissions`。",
+            )
+        )
+
+    source_kind = value_at(data, "source.kind")
+    if source_kind not in ALLOWED_PROFILE_SOURCE_KINDS:
+        issues.append(
+            ValidationIssue(
+                "manifest",
+                "source.kind",
+                "必须说明 Guard Profile（守卫画像）来自本轮调研提取，或是内置最小样例。",
+                "用 extract_guard_model.py 从已确认调研记录生成画像，或使用内置 minimal-sample 模板。",
+            )
+        )
+    return issues
+
+
+def deprecated_field_issue(category: str, field: str) -> ValidationIssue:
+    return ValidationIssue(
+        category,
+        field,
+        "已废弃，不能出现在 Guard Profile（守卫画像）中。",
+        f"删除 `{field.split('.')[-1]}`；状态权限请写入 state-machine.yaml 的 `states[].permissions`。",
+    )
+
+
+def validate_deprecated_fields(configs: dict[str, dict[str, Any]]) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    for transition in configs["state_machine"].get("transitions", []):
+        if not isinstance(transition, dict):
+            continue
+        transition_id = transition.get("id", "<unknown>")
+        if "advance_on_warn_failure" in transition:
+            issues.append(
+                deprecated_field_issue(
+                    "state_machine",
+                    f"transitions.{transition_id}.advance_on_warn_failure",
+                )
+            )
+
+    for guard_point in configs["guard_points"].get("guard_points", []):
+        if not isinstance(guard_point, dict):
+            continue
+        guard_point_id = guard_point.get("id", "<unknown>")
+        for field in ["mode", "on_fail", "on_error"]:
+            if field in guard_point:
+                issues.append(
+                    deprecated_field_issue(
+                        "guard_points",
+                        f"guard_points.{guard_point_id}.{field}",
+                    )
+                )
+
+    for binding in configs["hook_bindings"].get("hook_bindings", []):
+        if not isinstance(binding, dict):
+            continue
+        binding_id = binding.get("id", "<unknown>")
+        if "blocking" in binding:
+            issues.append(
+                deprecated_field_issue(
+                    "hook_bindings",
+                    f"hook_bindings.{binding_id}.blocking",
                 )
             )
     return issues
@@ -178,6 +259,16 @@ def validate_hook_binding_contract(configs: dict[str, dict[str, Any]]) -> list[V
                 )
             )
         event_type = binding.get("event_type")
+        source = binding.get("source")
+        if isinstance(source, str) and source in {"codex", "git"} and event_type == "state_completed":
+            issues.append(
+                ValidationIssue(
+                    "hook_bindings",
+                    f"hook_bindings.{binding_id}.event_type",
+                    "Hook（钩子）事件不能映射为 `state_completed`。",
+                    "把 Hook Binding（钩子绑定）的 `event_type` 改成观察或权限检查事件；状态推进只能由主 agent（主代理）主动提交 `state_completed`。",
+                )
+            )
         if isinstance(event_type, str) and event_type not in signal_ids:
             issues.append(
                 missing_reference(
@@ -191,16 +282,274 @@ def validate_hook_binding_contract(configs: dict[str, dict[str, Any]]) -> list[V
     return issues
 
 
+def validate_state_permissions(configs: dict[str, dict[str, Any]]) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    valid_effects = {"allow", "ask", "deny"}
+    states = configs["state_machine"].get("states", [])
+    for state in states if isinstance(states, list) else []:
+        if not isinstance(state, dict):
+            continue
+        state_id = state.get("id", "<unknown>")
+        permissions = state.get("permissions")
+        if not isinstance(permissions, dict):
+            continue
+        default = permissions.get("default")
+        if default not in valid_effects:
+            issues.append(
+                ValidationIssue(
+                    "state_machine",
+                    f"states.{state_id}.permissions.default",
+                    "必须是 `allow`、`ask` 或 `deny`。",
+                    "把 `permissions.default` 改成 `allow`、`ask` 或 `deny`。",
+                )
+            )
+        rules = permissions.get("rules")
+        if rules is not None and not isinstance(rules, list):
+            issues.append(
+                ValidationIssue(
+                    "state_machine",
+                    f"states.{state_id}.permissions.rules",
+                    "必须是权限规则清单。",
+                    "把 `permissions.rules` 改成 YAML list（YAML 清单），每项使用结构化权限规则。",
+                )
+            )
+            rules = []
+        for index, rule in enumerate(rules if isinstance(rules, list) else []):
+            if not isinstance(rule, dict):
+                issues.append(
+                    ValidationIssue(
+                        "state_machine",
+                        f"states.{state_id}.permissions.rules.{index}",
+                        "必须是 YAML mapping（YAML 映射）的结构化权限规则。",
+                        "把该规则改成包含 `effect`、`tool` 和 `match` 的 mapping（映射），或使用 allow/ask/deny 简写清单。",
+                    )
+                )
+                continue
+            if rule.get("effect") not in valid_effects:
+                issues.append(
+                    ValidationIssue(
+                        "state_machine",
+                        f"states.{state_id}.permissions.rules.{index}.effect",
+                        "必须是 `allow`、`ask` 或 `deny`。",
+                        "把权限规则的 `effect` 改成 `allow`、`ask` 或 `deny`。",
+                    )
+                )
+        for effect in ["allow", "ask", "deny"]:
+            shorthand = permissions.get(effect)
+            if shorthand is None:
+                continue
+            if not isinstance(shorthand, list):
+                issues.append(
+                    ValidationIssue(
+                        "state_machine",
+                        f"states.{state_id}.permissions.{effect}",
+                        "必须是可以规范化为 `permissions.rules` 的清单。",
+                        f"把 `{effect}` 改成字符串清单，例如 `Bash(git status*)`，或改写为 `permissions.rules`。",
+                    )
+                )
+                continue
+            for index, value in enumerate(shorthand):
+                if shorthand_permission_rule(effect, value) is None:
+                    issues.append(
+                        ValidationIssue(
+                            "state_machine",
+                            f"states.{state_id}.permissions.{effect}.{index}",
+                            "不能规范化为 `permissions.rules`。",
+                            f"把 `{value}` 改成 `<tool>(<command-prefix>*)` 格式，或改写为结构化 `permissions.rules`。",
+                        )
+                    )
+    return issues
+
+
+def permissions_include_deny(permissions: Any) -> bool:
+    if not isinstance(permissions, dict):
+        return False
+    if permissions.get("default") == "deny":
+        return True
+    rules = permissions.get("rules")
+    if isinstance(rules, list):
+        for rule in rules:
+            if isinstance(rule, dict) and rule.get("effect") == "deny":
+                return True
+    deny = permissions.get("deny")
+    return isinstance(deny, list) and bool(deny)
+
+
+def state_machine_has_deny_permissions(state_machine: dict[str, Any]) -> bool:
+    states = state_machine.get("states")
+    for state in states if isinstance(states, list) else []:
+        if isinstance(state, dict) and permissions_include_deny(state.get("permissions")):
+            return True
+    return False
+
+
+def profile_has_deny_permissions(profile_dir: Path) -> bool:
+    path = profile_dir / "state-machine.yaml"
+    data, issue = load_yaml(path, "state_machine")
+    if issue or data is None:
+        return False
+    return state_machine_has_deny_permissions(data)
+
+
+def validate_artifact_contract(configs: dict[str, dict[str, Any]]) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    artifacts = configs["artifacts"].get("artifacts", [])
+    for index, artifact in enumerate(artifacts if isinstance(artifacts, list) else []):
+        if not isinstance(artifact, dict):
+            continue
+        artifact_id = artifact.get("id") if isinstance(artifact.get("id"), str) else f"#{index}"
+        reuse_policy = artifact.get("reuse_policy", "deny")
+        if reuse_policy not in {"deny", "allow"}:
+            issues.append(
+                ValidationIssue(
+                    "artifacts",
+                    f"artifacts.{artifact_id}.reuse_policy",
+                    "必须是 `deny` 或 `allow`。",
+                    "把 `reuse_policy` 改成 `deny` 或 `allow`；未写时默认按 `deny` 处理。",
+                )
+            )
+    return issues
+
+
+def has_items(value: Any) -> bool:
+    return isinstance(value, list) and bool(value)
+
+
+def is_unconditional_state_completed_transition(transition: dict[str, Any]) -> bool:
+    return (
+        transition.get("on_event") == "state_completed"
+        and not has_items(transition.get("conditions"))
+        and not has_items(transition.get("guard_points"))
+        and not has_items(transition.get("required_artifacts"))
+    )
+
+
+def validate_state_transition_shape(configs: dict[str, dict[str, Any]]) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    state_ids = list_ids(configs["state_machine"], "states")
+    terminal_states = {
+        state
+        for state in configs["state_machine"].get("terminal_states", [])
+        if isinstance(state, str)
+    }
+    transitions = configs["state_machine"].get("transitions", [])
+    transitions_by_from: dict[str, list[dict[str, Any]]] = {state_id: [] for state_id in state_ids}
+    unconditional_by_from: dict[str, list[str]] = {}
+    missing_transition_id_fields: list[str] = []
+    seen_transition_ids: set[str] = set()
+    duplicate_transition_ids: set[str] = set()
+
+    for index, transition in enumerate(transitions if isinstance(transitions, list) else []):
+        if not isinstance(transition, dict):
+            continue
+        transition_id = transition.get("id")
+        if not is_present(transition_id) or not isinstance(transition_id, str):
+            missing_transition_id_fields.append(f"transitions.{index}.id")
+        else:
+            if transition_id in seen_transition_ids:
+                duplicate_transition_ids.add(transition_id)
+            seen_transition_ids.add(transition_id)
+        from_state = transition.get("from")
+        if isinstance(from_state, str):
+            transitions_by_from.setdefault(from_state, []).append(transition)
+            if is_unconditional_state_completed_transition(transition):
+                transition_id = transition.get("id")
+                unconditional_by_from.setdefault(from_state, []).append(
+                    transition_id if isinstance(transition_id, str) else "<unknown>"
+                )
+
+    for field in missing_transition_id_fields:
+        issues.append(
+            ValidationIssue(
+                "state_machine",
+                field,
+                "是必填字段，且必须唯一，用于审计和错误输出。",
+                "为每条状态转换设置唯一 `id`；主 agent（主代理）不得通过转换 ID 选择下一状态。",
+            )
+        )
+
+    for transition_id in sorted(duplicate_transition_ids):
+        issues.append(
+            ValidationIssue(
+                "state_machine",
+                f"transitions.{transition_id}.id",
+                "必须唯一，不能被多条状态转换重复使用。",
+                "为每条状态转换设置唯一 `id`，用于审计和错误输出。",
+            )
+        )
+
+    for state_id in sorted(state_ids - terminal_states):
+        outgoing = transitions_by_from.get(state_id, [])
+        if not any(transition.get("on_event") == "state_completed" for transition in outgoing):
+            issues.append(
+                ValidationIssue(
+                    "state_machine",
+                    f"states.{state_id}.transitions",
+                    "非终止状态完成后没有 `state_completed` 出口转换。",
+                    "为该状态添加唯一的 `state_completed` 转换，或把该状态加入 `terminal_states`。",
+                )
+            )
+
+    for state_id, transition_ids in sorted(unconditional_by_from.items()):
+        if len(transition_ids) <= 1:
+            continue
+        issues.append(
+            ValidationIssue(
+                "state_machine",
+                f"states.{state_id}.transitions",
+                f"存在重复无条件 `state_completed` 转换：{', '.join(transition_ids)}。",
+                "为这些转换添加互斥条件、Guard Point（守卫点）或 required_artifacts（必需产物），确保完成后只能唯一匹配一条转换。",
+            )
+        )
+
+    return issues
+
+
+def shorthand_permission_rule(effect: str, value: Any) -> dict[str, Any] | None:
+    if effect not in {"allow", "ask", "deny"}:
+        return None
+    if not isinstance(value, str) or "(" not in value or not value.endswith(")"):
+        return None
+    tool, remainder = value.split("(", 1)
+    command_pattern = remainder[:-1].strip()
+    if not tool.strip() or not command_pattern:
+        return None
+    tool_name = tool.strip()
+    if tool_name.lower() in {"read", "write", "edit", "multi_edit"}:
+        return {
+            "effect": effect,
+            "tool": tool_name,
+            "match": {"path": command_pattern},
+        }
+    command_prefix = command_pattern[:-1].strip() if command_pattern.endswith("*") else command_pattern
+    if not command_prefix:
+        return None
+    return {
+        "effect": effect,
+        "tool": tool_name,
+        "match": {"command_prefix": command_prefix},
+    }
+
+
 def validate_references(configs: dict[str, dict[str, Any]]) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     state_ids = list_ids(configs["state_machine"], "states")
     transition_ids = list_ids(configs["state_machine"], "transitions")
     guard_point_ids = list_ids(configs["guard_points"], "guard_points")
+    guard_points_by_id = {
+        item["id"]: item
+        for item in configs["guard_points"].get("guard_points", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
     artifact_ids = list_ids(configs["artifacts"], "artifacts")
     signal_ids = list_ids(configs["observation_model"], "signals")
     node_ids = list_ids(configs["execution_model"], "nodes")
 
+    issues.extend(validate_deprecated_fields(configs))
     issues.extend(validate_hook_binding_contract(configs))
+    issues.extend(validate_state_permissions(configs))
+    issues.extend(validate_artifact_contract(configs))
+    issues.extend(validate_state_transition_shape(configs))
 
     activation_initial_state = value_at(configs["activation_model"], "activation.initial_state")
     if isinstance(activation_initial_state, str) and activation_initial_state not in state_ids:
@@ -277,6 +626,15 @@ def validate_references(configs: dict[str, dict[str, Any]]) -> list[ValidationIs
                     )
                 )
         event_type = transition.get("on_event")
+        if isinstance(event_type, str) and event_type != "state_completed":
+            issues.append(
+                ValidationIssue(
+                    "state_machine",
+                    f"transitions.{transition_id}.on_event",
+                    f"必须是 `state_completed`，当前是 `{event_type}`。",
+                    "把状态推进转换的 `on_event` 改为 `state_completed`；普通 Hook（钩子）事件只能做权限检查。",
+                )
+            )
         if isinstance(event_type, str) and event_type not in signal_ids:
             issues.append(
                 missing_reference(
@@ -287,6 +645,38 @@ def validate_references(configs: dict[str, dict[str, Any]]) -> list[ValidationIs
                     "定义该信号，或更新 `on_event`。",
                 )
             )
+        if event_type == "state_completed":
+            conditions = transition.get("conditions")
+            for index, condition in enumerate(conditions if isinstance(conditions, list) else []):
+                if not isinstance(condition, dict):
+                    continue
+                if is_payload_field(condition.get("field")):
+                    issues.append(
+                        ValidationIssue(
+                            "state_machine",
+                            f"transitions.{transition_id}.conditions.{index}.field",
+                            "`state_completed` 不能用 `payload.*` 选择完成证据。",
+                            "把完成证据写入 artifacts.yaml 声明的产物路径，或改用非 payload 的上下文字段。",
+                        )
+                    )
+            for guard_point_id in transition.get("guard_points", []):
+                guard_point = guard_points_by_id.get(guard_point_id)
+                if not isinstance(guard_point, dict):
+                    continue
+                checks = guard_point.get("checks")
+                for check in checks if isinstance(checks, list) else []:
+                    if not isinstance(check, dict) or check.get("type") != "event_field":
+                        continue
+                    if is_payload_field(check.get("field")):
+                        check_id = check.get("id", "<unknown>")
+                        issues.append(
+                            ValidationIssue(
+                                "guard_points",
+                                f"guard_points.{guard_point_id}.checks.{check_id}.field",
+                                "`state_completed` 不能用 `payload.*` 作为完成证据。",
+                                "把完成证据写入 artifacts.yaml 声明的产物路径，再用 artifact_exists 或 artifact_freshness 检查。",
+                            )
+                        )
 
     for guard_point in configs["guard_points"].get("guard_points", []):
         if not isinstance(guard_point, dict):
@@ -479,6 +869,8 @@ def validate_profile(profile_dir: Path) -> tuple[list[str], list[ValidationIssue
                 continue
             assert data is not None
             issues.extend(require_fields(category, data))
+            if category == "manifest":
+                issues.extend(validate_manifest_contract(data))
             configs[category] = data
 
         checked.append(category)
