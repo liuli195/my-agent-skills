@@ -160,6 +160,17 @@ def validate_manifest_contract(data: dict[str, Any]) -> list[ValidationIssue]:
                 "用 extract_guard_model.py 从已确认调研记录生成画像，或使用内置 minimal-sample 模板。",
             )
         )
+    if source_kind == "grill-with-docs-confirmed-notes":
+        source_status = value_at(data, "source.status")
+        if source_status != "confirmed":
+            issues.append(
+                ValidationIssue(
+                    "manifest",
+                    "source.status",
+                    "必须是 `confirmed`，表示已完成 `$grill-with-docs`（带文档拷问方法）调研确认。",
+                    "先用 `$grill-with-docs`（带文档拷问方法）确认术语、决策、边界、场景、例外和文档变更，再重新提取 Guard Profile（守卫画像）。",
+                )
+            )
     return issues
 
 

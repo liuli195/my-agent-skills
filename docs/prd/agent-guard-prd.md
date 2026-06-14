@@ -51,10 +51,10 @@ scope: current_context
 
 `agent-guard` 的核心能力：
 
-- 使用问答式调研方法提炼被守卫对象。
+- 强制先使用 `$grill-with-docs`（带文档拷问方法）调研被守卫对象，把结果整理成已确认的 `confirmed-notes.yaml`。
 - 支持守卫技能、流程、节点、命令、产物生命周期、会话行为和一次性用户任务。
 - 生成项目级通用 Guard Runtime。
-- 生成 Guard Profile。
+- 从已确认的 `confirmed-notes.yaml` 生成 Guard Profile。
 - 生成状态机、守卫点、产物类别、hook 绑定和验证计划。
 - 安装或更新 hook。
 - 支持显式激活守卫实例。
@@ -80,7 +80,7 @@ Codex 当前没有稳定的 Skill 启动或 Skill 选择生命周期事件，因
 - 支持生成项目级 Guard Runtime。
 - 支持生成通用 Guard Profile。
 - 支持守卫任意 agent 执行对象，而不仅是 Skill。
-- 支持通过问答式调研提炼模型。
+- 支持通过 `$grill-with-docs`（带文档拷问方法）提炼模型，并要求生成和初始化前已有确认状态。
 - 支持状态机、守卫点、产物、hook、快照、交接包。
 - 支持多工作树、多 agent、多任务并发隔离。
 - 支持生成后的守卫系统独立运行。
@@ -99,6 +99,7 @@ MVP 必须包含：
 - Git hook 适配。
 - 标准事件 envelope。
 - Subject Resolver。
+- `confirmed-notes.yaml` 调研门禁。
 - 状态机执行。
 - 守卫点执行。
 - 状态权限 `allow/ask/deny`。
@@ -903,7 +904,7 @@ MVP 只对关键路径写审计：
 
 - 什么时候使用 `agent-guard`。
 - 总体工作方式。
-- 必须先调研再生成。
+- 必须先用 `$grill-with-docs`（带文档拷问方法）调研，生成、更新或初始化 Guard Profile（守卫画像）前必须已有 `grill_with_docs.status: confirmed` 的 `confirmed-notes.yaml`。
 - 不修改被守卫对象。
 - hook 安装必须显式授权；`deny` 权限只能由 Guard Profile（守卫画像）的 `states[].permissions` 显式声明。
 - 详细内容的引用路径。
@@ -935,13 +936,13 @@ MVP 只对关键路径写审计：
 
 建议 `agent-guard` 脚本提供以下能力：
 
-- `extract_guard_model.py`：根据问答结果生成目标模型草案。
+- `extract_guard_model.py`：只接收已通过 `$grill-with-docs`（带文档拷问方法）确认的 `confirmed-notes.yaml`，再生成目标模型草案。
 - `activate_guard.py`：根据显式激活请求匹配或创建守卫实例。
-- `init_project_guard.py`：在项目中初始化 Guard Runtime 和 Guard Profile。
-- `init_user_guard.py`：初始化用户级 Guard Profile。
+- `init_project_guard.py`：只接收已校验、来源为本轮确认调研的 Guard Profile（守卫画像）草案，在项目中初始化 Guard Runtime 和 Guard Profile。
+- `init_user_guard.py`：只接收已校验、来源为本轮确认调研的 Guard Profile（守卫画像）草案，初始化用户级 Guard Profile。
 - `run_guard_event.py`：从标准事件执行一次守卫运行。
 - `render_guard_brief.py`：根据当前状态生成最新 Guard Brief。
-- `validate_guard_profile.py`：校验 Guard Profile 完整性。
+- `validate_guard_profile.py`：校验 Guard Profile 完整性，并拒绝未确认 `$grill-with-docs`（带文档拷问方法）来源的画像。
 - `install_hooks.py`：按授权安装 hook。
 - `upgrade_guard_runtime.py`：升级项目内 Guard Runtime。
 
@@ -967,9 +968,13 @@ MVP 只对关键路径写审计：
 - hook 绑定目录。
 - 守卫简报目录。
 - schema version。
+- `source.kind`：画像来源类型，业务画像必须是 `grill-with-docs-confirmed-notes`。
+- `source.status`：当 `source.kind` 为 `grill-with-docs-confirmed-notes` 时必须是 `confirmed`。
 - 文件索引。
 - 是否允许人工覆盖。
 - 并发配置路径。
+
+`confirmed-notes.yaml` 模板默认状态必须是 `needs_confirmation`，不能默认伪装成已确认结果。只有完成 `$grill-with-docs`（带文档拷问方法）调研后，才允许把 `grill_with_docs.status` 改为 `confirmed` 并交给提取器生成画像。
 
 ### Target Model
 
@@ -1347,6 +1352,7 @@ cross_review_required
 项目级初始化必须遵守：
 
 - 不修改被守卫对象。
+- 初始化输入必须来自本轮 `$grill-with-docs`（带文档拷问方法）确认结果，并通过 `validate_guard_profile.py` 校验。
 - 不安装 hook，除非用户明确授权。
 - 不隐式创建、修改或授权 `deny` 权限规则；`deny` 只由 Guard Profile（守卫画像）的 `states[].permissions` 显式声明。
 - 初始状态只生成配置和验证计划。
@@ -1385,9 +1391,11 @@ C:\Users\liuli\.agents\guards\<guard-profile-id>\
 
 第二类验证：画像生成验证。
 
+- 缺少 `grill_with_docs.status: confirmed` 的调研记录会返回 `needs_confirmation`。
 - 能生成项目级 Guard Profile。
 - 能生成用户级 Guard Profile。
 - `GUARD-MANIFEST.yaml` 存在。
+- `source.kind: grill-with-docs-confirmed-notes` 时，`source.status` 必须是 `confirmed`。
 - `target-model.yaml` 存在。
 - `activation-model.yaml` 存在。
 - `subject-resolver.yaml` 存在。

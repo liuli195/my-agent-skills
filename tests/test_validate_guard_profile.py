@@ -141,6 +141,25 @@ def test_manifest_mode_is_rejected(tmp_path: Path) -> None:
     assert "states[].permissions" in result.stdout
 
 
+def test_grill_with_docs_source_requires_confirmed_status(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    manifest = profile / "GUARD-MANIFEST.yaml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8")
+        .replace("kind: built-in-minimal-sample", "kind: grill-with-docs-confirmed-notes")
+        .replace("status: template", "status: needs_confirmation"),
+        encoding="utf-8",
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=manifest field=source.status" in result.stdout
+    assert "必须是 `confirmed`" in result.stdout
+    assert "$grill-with-docs" in result.stdout
+
+
 def test_guard_point_and_hook_blocking_fields_are_rejected(tmp_path: Path) -> None:
     profile = tmp_path / "profile"
     shutil.copytree(MINIMAL_PROFILE, profile)

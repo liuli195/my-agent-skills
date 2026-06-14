@@ -52,6 +52,8 @@ python .agents\skills\agent-guard\scripts\validate_guard_profile.py <guard-profi
 - `grill-with-docs-confirmed-notes`：由本轮已确认调研记录提取生成。
 - `built-in-minimal-sample`：仓库内置最小样例。
 
+当 `source.kind` 是 `grill-with-docs-confirmed-notes` 时，`source.status` 必须是 `confirmed`。这表示本轮已先用 `$grill-with-docs`（带文档拷问方法）完成术语、决策、边界、场景、例外和文档变更确认；否则画像不得通过校验，也不得初始化。
+
 新 Guard Profile（守卫画像）不得在 `GUARD-MANIFEST.yaml` 中声明 `mode`。旧画像如包含 `mode`，校验器必须提示迁移到 `states[].permissions`，不得继续按 `record`、`warn` 或 `block` 解释。
 
 `target-model.yaml`：
