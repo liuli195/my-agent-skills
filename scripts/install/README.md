@@ -4,7 +4,7 @@
 
 当前以 Codex（Codex 代理）为主：
 
-- 用户级源码维护在 `my-agent-skills/skills/`。
+- 用户级 Skill（技能）源码来自插件包内的 `plugins/agent-guard/skills/`，根目录不再保留旧 `skills/agent-guard*` 副本。
 - `agent-guard` 是共享核心和薄路由入口。
 - `agent-guard-install`、`agent-guard-init`、`agent-guard-update`、`agent-guard-run` 和 `agent-guard-hooks` 是按场景触发的入口。
 - 当前仓库初始化不安装用户级 Skill（技能），不创建 Claude Junction（Claude 目录联接），也不初始化目标项目守卫。

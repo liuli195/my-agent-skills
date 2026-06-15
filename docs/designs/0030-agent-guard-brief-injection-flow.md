@@ -161,7 +161,7 @@ python <plugin>/scripts/guard_runtime/cli.py brief --source codex --session-id <
 命令：
 
 ```powershell
-python skills/agent-guard/scripts/render_guard_brief.py --source codex --session-id <session-id>
+python plugins/agent-guard/skills/agent-guard/scripts/render_guard_brief.py --source codex --session-id <session-id>
 ```
 
 职责：
@@ -175,7 +175,7 @@ python skills/agent-guard/scripts/render_guard_brief.py --source codex --session
 命令：
 
 ```powershell
-python skills/agent-guard/scripts/run_guard_event.py --event <event.json>
+python plugins/agent-guard/skills/agent-guard/scripts/run_guard_event.py --event <event.json>
 ```
 
 当事件为 `state_completed` 时：

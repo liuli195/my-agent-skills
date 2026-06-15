@@ -914,7 +914,7 @@ MVP 只对关键路径写审计：
 - hook 安装必须显式授权；`deny` 权限只能由 Guard Profile（守卫画像）的 `states[].permissions` 显式声明。
 - 详细内容的引用路径。
 
-通用文档放入 `skills/agent-guard/references/`：
+通用文档放入插件包内的 `plugins/agent-guard/skills/agent-guard/references/`：
 
 - `architecture.md`：整体架构和 5 个入口边界。
 - `terminology.md`：术语表。
@@ -1322,7 +1322,7 @@ cross_review_required
 
 1. 新建 GitHub 仓库 `my-agent-skills`。
 2. clone 到本地。
-3. 创建 `skills/agent-guard/`。
+3. 创建 `plugins/agent-guard/skills/agent-guard/`。
 4. 创建 `AGENTS.md` 和 `CLAUDE.md`。
 5. 创建最小文档：
    - `docs/rules/index.md`
@@ -1338,7 +1338,7 @@ cross_review_required
 
 安装脚本职责：
 
-1. 从 `my-agent-skills/skills/agent-guard` 读取源码。
+1. 从 `my-agent-skills/plugins/agent-guard/skills/agent-guard` 读取源码。
 2. 安装到 `C:\Users\liuli\.agents\skills\agent-guard`。
 3. 确认 `SKILL.md` 存在。
 4. 确认 `references/`、`assets/`、`scripts/` 存在。

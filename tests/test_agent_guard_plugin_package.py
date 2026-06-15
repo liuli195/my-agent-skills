@@ -112,6 +112,15 @@ def test_plugin_package_contains_runtime_skills_and_templates() -> None:
         assert not (skill_dir / "assets").exists()
 
 
+def test_legacy_root_agent_guard_skills_are_removed() -> None:
+    legacy_root = REPO_ROOT / "skills"
+    if not legacy_root.exists():
+        return
+
+    legacy_agent_guard_skills = sorted(path.name for path in legacy_root.glob("agent-guard*"))
+    assert legacy_agent_guard_skills == []
+
+
 def test_plugin_skills_are_not_placeholder_text() -> None:
     text = (PLUGIN_ROOT / "skills" / "agent-guard" / "SKILL.md").read_text(encoding="utf-8")
     runtime_readme = (PLUGIN_ROOT / "scripts" / "guard_runtime" / "README.md").read_text(encoding="utf-8")

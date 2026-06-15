@@ -60,6 +60,7 @@ ENTRYPOINT_REQUIRED_ITEMS = {
         "references/activate.md",
         "references/brief.md",
         "references/events.md",
+        "references/close.md",
     ],
     "agent-guard-hooks": [
         "SKILL.md",
@@ -90,7 +91,7 @@ def repo_root() -> Path:
 
 
 def default_source_skill() -> Path:
-    return repo_root() / "skills" / "agent-guard"
+    return repo_root() / "plugins" / "agent-guard" / "skills" / "agent-guard"
 
 
 def user_home() -> Path:

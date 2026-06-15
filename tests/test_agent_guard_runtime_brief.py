@@ -7,11 +7,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "agent-guard"
+PLUGIN_SKILL = PLUGIN_ROOT / "skills" / "agent-guard"
 HOOK_ROUTER = PLUGIN_ROOT / "scripts" / "hook_router.py"
 RUNTIME_CLI = PLUGIN_ROOT / "scripts" / "guard_runtime" / "cli.py"
-RENDER_GUARD_BRIEF = REPO_ROOT / "skills" / "agent-guard" / "scripts" / "render_guard_brief.py"
-RUN_GUARD_EVENT = REPO_ROOT / "skills" / "agent-guard" / "scripts" / "run_guard_event.py"
-MINIMAL_PROFILE = REPO_ROOT / "skills" / "agent-guard" / "assets" / "templates" / "guard-profile" / "minimal"
+RENDER_GUARD_BRIEF = PLUGIN_SKILL / "scripts" / "render_guard_brief.py"
+RUN_GUARD_EVENT = PLUGIN_SKILL / "scripts" / "run_guard_event.py"
+MINIMAL_PROFILE = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "minimal"
 
 
 def run(args: list[str]) -> subprocess.CompletedProcess[str]:

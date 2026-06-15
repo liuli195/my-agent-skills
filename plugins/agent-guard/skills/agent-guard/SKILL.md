@@ -22,5 +22,5 @@ description: 路由到具体 Agent Guard（代理守卫）场景入口。Use whe
 - 用户意图明确时，立即加载对应入口，不在本入口继续执行。
 - 用户意图不明确时，先问一个简短问题确认要使用哪个入口。
 - 中枢 `references/` 只保留通用概念和模板索引；场景流程在各入口自己的 `references/` 中。
-- 共享 `scripts/` 和 `assets/` 仍在 `skills/agent-guard/` 下维护。
+- 共享 `scripts/` 和 `assets/` 在插件包内的 `skills/agent-guard/` 下维护。
 - 具体命令参数和输出契约以对应场景入口、共享模板和共享脚本为准。

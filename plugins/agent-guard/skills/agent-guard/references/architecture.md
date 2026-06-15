@@ -17,8 +17,8 @@
 
 共享资源：
 
-- 通用概念只保留在 `skills/agent-guard/references/`。
-- Guard Profile（守卫画像）文件骨架和默认字段以 `skills/agent-guard/assets/templates/` 为权威。
-- 可重复执行的确定性操作以 `skills/agent-guard/scripts/` 为权威。
+- 通用概念只保留在插件包内的 `skills/agent-guard/references/`。
+- Guard Profile（守卫画像）文件骨架和默认字段以插件包内的 `skills/agent-guard/assets/templates/` 为权威。
+- 可重复执行的确定性操作以插件包内的 `skills/agent-guard/scripts/` 为权威。
 
 项目级生成物只保存 Guard Profile（守卫画像）和运行态数据；通用 Runtime code（运行时代码）随 Plugin（插件）安装。

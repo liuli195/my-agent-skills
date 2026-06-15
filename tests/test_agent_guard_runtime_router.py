@@ -7,17 +7,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "agent-guard"
+PLUGIN_SKILL = PLUGIN_ROOT / "skills" / "agent-guard"
 HOOK_ROUTER = PLUGIN_ROOT / "scripts" / "hook_router.py"
 RUNTIME_CLI = PLUGIN_ROOT / "scripts" / "guard_runtime" / "cli.py"
-MINIMAL_PROFILE = (
-    REPO_ROOT
-    / "skills"
-    / "agent-guard"
-    / "assets"
-    / "templates"
-    / "guard-profile"
-    / "minimal"
-)
+MINIMAL_PROFILE = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "minimal"
 
 
 def run_hook(args: list[str], payload: dict) -> subprocess.CompletedProcess[str]:

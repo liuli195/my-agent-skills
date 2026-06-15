@@ -19,7 +19,7 @@ GitHub Issue: https://github.com/liuli195/my-agent-skills/issues/18
 ## 目录结构
 
 ```text
-skills/
+plugins/agent-guard/skills/
   agent-guard/
   agent-guard-install/
   agent-guard-init/
@@ -28,13 +28,13 @@ skills/
   agent-guard-hooks/
 ```
 
-`agent-guard` 保留共享 `scripts/`、`assets/` 和通用 `references/`。5 个新入口包含 `SKILL.md` 和自己的场景化 `references/`，通过相对路径引用共享脚本和模板，不复制共享脚本或模板目录。
+插件包内的 `agent-guard` 保留共享 `scripts/`、`assets/` 和通用 `references/`。5 个新入口包含 `SKILL.md` 和自己的场景化 `references/`，通过相对路径引用共享脚本和模板，不复制共享脚本或模板目录。
 
 ## 验收口径
 
 - [ ] 新增 5 个场景入口，且每个入口的 `description` 只触发自己的场景。
 - [ ] 旧 `$agent-guard` 改为薄路由入口，列出路由表和模糊意图处理规则。
-- [ ] 共享 `scripts/`、`assets/` 只保留在 `skills/agent-guard/`，场景文档放在对应入口的 `references/` 中。
+- [ ] 共享 `scripts/`、`assets/` 只保留在 `plugins/agent-guard/skills/agent-guard/`，场景文档放在对应入口的 `references/` 中。
 - [ ] 用户级安装脚本同步 6 个 Skill 目录：共享核心入口加 5 个场景入口。
 - [ ] 安装验证确认共享核心资源完整、5 个入口存在、入口文档存在，且入口不复制共享脚本和模板。
 - [ ] AGENTS/CLAUDE 或相关文档说明 5 个入口名称、适用场景和旧入口兼容策略。

@@ -5,16 +5,9 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-VALIDATOR = REPO_ROOT / "skills" / "agent-guard" / "scripts" / "validate_guard_profile.py"
-MINIMAL_PROFILE = (
-    REPO_ROOT
-    / "skills"
-    / "agent-guard"
-    / "assets"
-    / "templates"
-    / "guard-profile"
-    / "minimal"
-)
+PLUGIN_SKILL = REPO_ROOT / "plugins" / "agent-guard" / "skills" / "agent-guard"
+VALIDATOR = PLUGIN_SKILL / "scripts" / "validate_guard_profile.py"
+MINIMAL_PROFILE = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "minimal"
 
 
 def run_validator(profile_path: Path) -> subprocess.CompletedProcess[str]:

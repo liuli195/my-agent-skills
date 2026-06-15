@@ -5,17 +5,10 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-INIT_USER_GUARD = REPO_ROOT / "skills" / "agent-guard" / "scripts" / "init_user_guard.py"
-VALIDATOR = REPO_ROOT / "skills" / "agent-guard" / "scripts" / "validate_guard_profile.py"
-MINIMAL_PROFILE = (
-    REPO_ROOT
-    / "skills"
-    / "agent-guard"
-    / "assets"
-    / "templates"
-    / "guard-profile"
-    / "minimal"
-)
+PLUGIN_SKILL = REPO_ROOT / "plugins" / "agent-guard" / "skills" / "agent-guard"
+INIT_USER_GUARD = PLUGIN_SKILL / "scripts" / "init_user_guard.py"
+VALIDATOR = PLUGIN_SKILL / "scripts" / "validate_guard_profile.py"
+MINIMAL_PROFILE = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "minimal"
 
 
 def run_init(args: list[str]) -> subprocess.CompletedProcess[str]:

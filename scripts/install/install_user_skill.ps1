@@ -47,7 +47,8 @@ $EntrypointRequiredItems = @{
         "SKILL.md",
         "references\activate.md",
         "references\brief.md",
-        "references\events.md"
+        "references\events.md",
+        "references\close.md"
     )
     "agent-guard-hooks" = @(
         "SKILL.md",
@@ -64,7 +65,7 @@ $EntrypointDisallowedResourceDirs = @(
 
 function Resolve-DefaultSourceSkill {
     $repoRoot = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")
-    return Join-Path $repoRoot "skills\agent-guard"
+    return Join-Path $repoRoot "plugins\agent-guard\skills\agent-guard"
 }
 
 function Resolve-DefaultUserSkill {
