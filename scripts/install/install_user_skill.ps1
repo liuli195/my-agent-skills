@@ -22,7 +22,7 @@ $RequiredItems = @(
 
 function Resolve-DefaultSourceSkill {
     $repoRoot = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")
-    return Join-Path $repoRoot ".agents\skills\agent-guard"
+    return Join-Path $repoRoot "skills\agent-guard"
 }
 
 function Resolve-DefaultUserSkill {

@@ -10,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 VERIFY_INSTALL = REPO_ROOT / "scripts" / "install" / "verify_install.py"
 INSTALL_USER_SKILL = REPO_ROOT / "scripts" / "install" / "install_user_skill.ps1"
 SYNC_CLAUDE_JUNCTION = REPO_ROOT / "scripts" / "install" / "sync_claude_junction.ps1"
-SOURCE_SKILL = REPO_ROOT / ".agents" / "skills" / "agent-guard"
+SOURCE_SKILL = REPO_ROOT / "skills" / "agent-guard"
 POWERSHELL = "powershell"
 
 

@@ -6,13 +6,12 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-INIT_PROJECT_GUARD = REPO_ROOT / ".agents" / "skills" / "agent-guard" / "scripts" / "init_project_guard.py"
-INSTALL_HOOKS = REPO_ROOT / ".agents" / "skills" / "agent-guard" / "scripts" / "install_hooks.py"
+INIT_PROJECT_GUARD = REPO_ROOT / "skills" / "agent-guard" / "scripts" / "init_project_guard.py"
+INSTALL_HOOKS = REPO_ROOT / "skills" / "agent-guard" / "scripts" / "install_hooks.py"
 PRD = REPO_ROOT / "docs" / "prd" / "agent-guard-prd.md"
-HOOK_CONTRACT = REPO_ROOT / ".agents" / "skills" / "agent-guard" / "references" / "hook-contract.md"
+HOOK_CONTRACT = REPO_ROOT / "skills" / "agent-guard" / "references" / "hook-contract.md"
 MINIMAL_PROFILE = (
     REPO_ROOT
-    / ".agents"
     / "skills"
     / "agent-guard"
     / "assets"
@@ -22,7 +21,6 @@ MINIMAL_PROFILE = (
 )
 CODEX_HOOKS_TEMPLATE = (
     REPO_ROOT
-    / ".agents"
     / "skills"
     / "agent-guard"
     / "assets"

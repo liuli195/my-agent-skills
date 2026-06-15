@@ -60,7 +60,7 @@ def repo_root() -> Path:
 
 
 def default_source_skill() -> Path:
-    return repo_root() / ".agents" / "skills" / "agent-guard"
+    return repo_root() / "skills" / "agent-guard"
 
 
 def user_home() -> Path:

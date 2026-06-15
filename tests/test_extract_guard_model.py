@@ -4,8 +4,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-EXTRACTOR = REPO_ROOT / ".agents" / "skills" / "agent-guard" / "scripts" / "extract_guard_model.py"
-VALIDATOR = REPO_ROOT / ".agents" / "skills" / "agent-guard" / "scripts" / "validate_guard_profile.py"
+EXTRACTOR = REPO_ROOT / "skills" / "agent-guard" / "scripts" / "extract_guard_model.py"
+VALIDATOR = REPO_ROOT / "skills" / "agent-guard" / "scripts" / "validate_guard_profile.py"
 
 
 def run_extractor(input_path: Path, output_path: Path, extra_args: list[str] | None = None) -> subprocess.CompletedProcess[str]:

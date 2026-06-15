@@ -2,12 +2,12 @@
 
 当前以 Codex（Codex 代理）为主：
 
-- 用户级源码维护在 `my-agent-skills/.agents/skills/agent-guard`。
+- 用户级源码维护在 `my-agent-skills/skills/agent-guard`。
 - Codex（Codex 代理）通过显式 `$agent-guard`、`/skills` 或明确自然语言触发。
 - Codex Lifecycle Hook（Codex 生命周期钩子）只作为可选接入点，安装前必须由用户授权。
 - 当前仓库初始化不安装用户级 Skill（技能），不创建 Claude Junction（Claude 目录联接），也不初始化目标项目守卫。
 
-以下命令都从 `my-agent-skills` 源码仓库根目录运行，不是从 `.agents/skills/agent-guard/` 目录运行。
+以下命令都从 `my-agent-skills` 源码仓库根目录运行，不是从 `skills/agent-guard/` 目录运行。
 
 用户级安装验证使用：
 

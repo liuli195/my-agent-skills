@@ -7,11 +7,10 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-INIT_PROJECT_GUARD = REPO_ROOT / ".agents" / "skills" / "agent-guard" / "scripts" / "init_project_guard.py"
-RUN_GUARD_EVENT = REPO_ROOT / ".agents" / "skills" / "agent-guard" / "scripts" / "run_guard_event.py"
+INIT_PROJECT_GUARD = REPO_ROOT / "skills" / "agent-guard" / "scripts" / "init_project_guard.py"
+RUN_GUARD_EVENT = REPO_ROOT / "skills" / "agent-guard" / "scripts" / "run_guard_event.py"
 MINIMAL_PROFILE = (
     REPO_ROOT
-    / ".agents"
     / "skills"
     / "agent-guard"
     / "assets"

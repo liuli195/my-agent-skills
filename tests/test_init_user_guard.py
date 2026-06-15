@@ -5,11 +5,10 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-INIT_USER_GUARD = REPO_ROOT / ".agents" / "skills" / "agent-guard" / "scripts" / "init_user_guard.py"
-VALIDATOR = REPO_ROOT / ".agents" / "skills" / "agent-guard" / "scripts" / "validate_guard_profile.py"
+INIT_USER_GUARD = REPO_ROOT / "skills" / "agent-guard" / "scripts" / "init_user_guard.py"
+VALIDATOR = REPO_ROOT / "skills" / "agent-guard" / "scripts" / "validate_guard_profile.py"
 MINIMAL_PROFILE = (
     REPO_ROOT
-    / ".agents"
     / "skills"
     / "agent-guard"
     / "assets"

@@ -34,7 +34,7 @@
 命令：
 
 ```powershell
-python .agents\skills\agent-guard\scripts\extract_guard_model.py <confirmed-notes.yaml> --output <guard-profile-dir>
+python skills\agent-guard\scripts\extract_guard_model.py <confirmed-notes.yaml> --output <guard-profile-dir>
 ```
 
 输入必须符合 `assets/templates/guard-profile/confirmed-notes.yaml`。关键分组不得为空：
@@ -55,13 +55,13 @@ python .agents\skills\agent-guard\scripts\extract_guard_model.py <confirmed-note
 项目级初始化：
 
 ```powershell
-python .agents\skills\agent-guard\scripts\init_project_guard.py --profile <guard-profile-draft-dir> --project <target-project>
+python skills\agent-guard\scripts\init_project_guard.py --profile <guard-profile-draft-dir> --project <target-project>
 ```
 
 用户级初始化：
 
 ```powershell
-python .agents\skills\agent-guard\scripts\init_user_guard.py --profile <guard-profile-draft-dir> --user-guard-root <user-guard-root>
+python skills\agent-guard\scripts\init_user_guard.py --profile <guard-profile-draft-dir> --user-guard-root <user-guard-root>
 ```
 
 初始化阶段的职责边界：
