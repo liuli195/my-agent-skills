@@ -753,10 +753,10 @@ def profile_override_allowed(project: Path, profile_id: str, user_home: Path | N
 
 
 def guard_point_override_allowed(guard_point: dict[str, Any] | None, profile_allow_override: bool = False) -> bool:
-    if profile_allow_override:
-        return True
     if guard_point is None:
         return False
+    if profile_allow_override:
+        return True
     policy = guard_point.get("override_policy")
     if isinstance(policy, dict):
         return policy.get("allowed") is True
