@@ -45,6 +45,7 @@
 ### Review 与验证
 
 - **完成验证**：逐项复核要求，说明已验证与无法验证的部分。
+- **完整集成测试**：所有改动都必须运行覆盖对应 PRD 主流程的端到端回归；端到端回归必须从用户入口或发布形态跑完整业务流程，不能用几个单元测试拼接替代。当前 Agent Guard（代理守卫）完整回归为 `python -m pytest tests/test_agent_guard_prd_full_e2e.py -q`。发布或提交前还必须跑 `python -m pytest -q`。
 
 ### 输出与引用
 

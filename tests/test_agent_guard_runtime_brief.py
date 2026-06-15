@@ -136,6 +136,7 @@ def test_activation_writes_latest_guard_brief_for_session_focus_instance(tmp_pat
     assert payload["brief_path"] == str(brief_path)
     assert payload["brief_text_path"] == str(text_path)
     assert "subject_key_hash" not in payload
+    assert "completed_state_id" not in payload["brief_text"]
     assert "当前状态：open" in payload["brief_text"]
     assert "状态推进：" in payload["brief_text"]
 
