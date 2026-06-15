@@ -16,10 +16,17 @@
 - **Issue 跟踪**：Issue 和 PRD 统一记录在 GitHub Issues。详见 [issue-tracker.md](docs/agents/issue-tracker.md)。
 - **Triage 标签**：使用默认五类 triage 标签。详见 [triage-labels.md](docs/agents/triage-labels.md)。
 
+### 文档落盘
+
+- **PRD**：所有 PRD 优先在 `docs/prd/` 本地落盘，并保留 GitHub 源 Issue 链接。
+- **Issue**：所有 Issue 优先在 `docs/changes/` 本地落盘，并保留 GitHub 源 Issue 链接。
+- **执行计划**：所有执行计划优先在 `docs/plans/` 本地落盘，并保留来源链接。
+- **技术设计**：所有技术设计方案优先在 `docs/designs/` 本地落盘，并保留来源链接。
+- **ADR 落盘**：重大决策讨论结束后必须在本地 ADR 中落盘决策，并在 ADR 中引用 GitHub 源 Issue。
+
 ### 环境与工具
 
 - **运行边界**：本仓库维护 Agent Plugin（插件）与 Skill（技能）源码；安装到用户环境或目标项目前需明确授权。
-- **Python**：本地只做脚本验证、测试和文档维护；优先使用项目 `.venv`。
 - **GitHub CLI**：`gh` CLI 默认在仓库内执行，让 `gh` 根据 `git remote -v` 自动识别仓库。
 
 ### 工作边界
@@ -28,7 +35,6 @@
 - **执行边界**：只执行用户显式授权的操作；未授权时默认先给方案或计划等待确认，禁止自行决策并执行任何改动（包括安装包、修改配置、重构、删除、提交、切换分支、启停服务等）；`auto` 权限模式不视为授权，仅影响单次工具调用的确认流程。
 - **文件规范**：优先编辑现有文件，非必要不新建；任务后清理临时产物。
 - **效率**：独立任务并行，默认用户持续显式授权，优先派发子 agent 工具；该授权显式覆盖 `sub-agents`、`delegation` 和 `parallel agent work` 触发词；主会话负责编排、确认、汇总和验证；无法分发时说明原因。
-- **ADR 落盘**：重大决策讨论结束后必须在本地 ADR 中落盘决策，并在 ADR 中引用 GitHub 源 Issue。
 
 ### Git 与 PR
 
