@@ -217,6 +217,10 @@ def latest_brief_dir(project: Path, profile_id: str, instance_id: str, user_home
     return runtime_root(project, user_home, scope) / "latest" / profile_id / instance_id
 
 
+def override_record_path(project: Path, profile_id: str, instance_id: str, guard_point_id: str, user_home: Path | None = None, scope: str = "project") -> Path:
+    return runtime_root(project, user_home, scope) / "overrides" / profile_id / instance_id / f"{guard_point_id}.json"
+
+
 def injection_record_path(project: Path, source: str, session_id: str, profile_id: str, instance_id: str, user_home: Path | None = None, scope: str = "project") -> Path:
     return runtime_root(project, user_home, scope) / "injections" / source / stable_hash(session_id) / profile_id / f"{instance_id}.json"
 
@@ -744,6 +748,42 @@ def guard_point_by_id(guard_points: dict[str, Any], guard_point_id: str) -> dict
     return None
 
 
+def guard_point_override_allowed(guard_point: dict[str, Any] | None) -> bool:
+    if guard_point is None:
+        return False
+    policy = guard_point.get("override_policy")
+    if isinstance(policy, dict):
+        return policy.get("allowed") is True
+    return guard_point.get("allow_override") is True
+
+
+def guard_point_failure(
+    project: Path,
+    profile_id: str,
+    instance_id: str,
+    guard_point_id: str,
+    guard_point: dict[str, Any] | None,
+    failure_reason: str,
+    fix_hint: Any = None,
+    user_home: Path | None = None,
+    scope: str = "project",
+    check_id: str | None = None,
+    missing_artifacts: list[str] | None = None,
+    required_conditions: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "reason": "guard_failed",
+        "guard_point_id": guard_point_id,
+        **({"check_id": check_id} if check_id else {}),
+        "failure_reason": failure_reason,
+        "fix_hint": fix_hint,
+        "missing_artifacts": missing_artifacts or [],
+        "required_conditions": required_conditions or [],
+        "override_allowed": guard_point_override_allowed(guard_point),
+        "override_record_path": str(override_record_path(project, profile_id, instance_id, guard_point_id, user_home, scope)),
+    }
+
+
 def evaluate_guard_point(
     project: Path,
     profile_id: str,
@@ -756,25 +796,37 @@ def evaluate_guard_point(
 ) -> dict[str, Any] | None:
     guard_point = guard_point_by_id(guard_points, guard_point_id)
     if guard_point is None:
-        return {
-            "reason": "guard_point_failed",
-            "guard_point_id": guard_point_id,
-            "failure_reason": "missing_guard_point",
-            "fix_hint": "在 guard-points.yaml 中定义该 Guard Point（守卫点）。",
-        }
+        return guard_point_failure(
+            project,
+            profile_id,
+            instance_id,
+            guard_point_id,
+            None,
+            "missing_guard_point",
+            "在 guard-points.yaml 中定义该 Guard Point（守卫点）。",
+            user_home,
+            scope,
+            required_conditions=[f"guard_point_defined:{guard_point_id}"],
+        )
 
     required_artifacts = guard_point.get("required_artifacts")
     for artifact_id in required_artifacts if isinstance(required_artifacts, list) else []:
         if not isinstance(artifact_id, str):
             continue
         if not artifact_exists(project, profile_id, instance_id, state_version, artifact_id, user_home, scope):
-            return {
-                "reason": "guard_point_failed",
-                "guard_point_id": guard_point_id,
-                "failure_reason": guard_point.get("failure_reason") or "missing_required_artifacts",
-                "fix_hint": guard_point.get("fix_hint"),
-                "missing_artifacts": [artifact_id],
-            }
+            return guard_point_failure(
+                project,
+                profile_id,
+                instance_id,
+                guard_point_id,
+                guard_point,
+                str(guard_point.get("failure_reason") or "missing_required_artifacts"),
+                guard_point.get("fix_hint"),
+                user_home,
+                scope,
+                missing_artifacts=[artifact_id],
+                required_conditions=[f"artifact_exists:{artifact_id}"],
+            )
 
     checks = guard_point.get("checks")
     for check in checks if isinstance(checks, list) else []:
@@ -783,24 +835,54 @@ def evaluate_guard_point(
         check_type = check.get("type")
         check_id = str(check.get("id") or "")
         if check_type != "artifact_exists":
-            return {
-                "reason": "guard_point_failed",
-                "guard_point_id": guard_point_id,
-                "check_id": check_id,
-                "failure_reason": "unsupported_guard_point_check",
-                "fix_hint": "Runtime（运行时）当前只支持 artifact_exists 检查。",
-            }
-        artifact_id = check.get("artifact")
+            return guard_point_failure(
+                project,
+                profile_id,
+                instance_id,
+                guard_point_id,
+                guard_point,
+                "unsupported_guard_point_check",
+                "Runtime（运行时）当前只支持 artifact_exists 检查。",
+                user_home,
+                scope,
+                check_id=check_id,
+                required_conditions=["supported_check:artifact_exists"],
+            )
+        artifact_id = check.get("artifact") or check.get("artifact_id")
         if not isinstance(artifact_id, str) or not artifact_exists(project, profile_id, instance_id, state_version, artifact_id, user_home, scope):
-            return {
-                "reason": "guard_point_failed",
-                "guard_point_id": guard_point_id,
-                "check_id": check_id,
-                "failure_reason": check.get("failure_reason") or "missing_required_artifacts",
-                "fix_hint": check.get("fix_hint"),
-                "missing_artifacts": [artifact_id] if isinstance(artifact_id, str) else [],
-            }
+            missing_artifacts = [artifact_id] if isinstance(artifact_id, str) else []
+            return guard_point_failure(
+                project,
+                profile_id,
+                instance_id,
+                guard_point_id,
+                guard_point,
+                str(check.get("failure_reason") or "missing_required_artifacts"),
+                check.get("fix_hint"),
+                user_home,
+                scope,
+                check_id=check_id,
+                missing_artifacts=missing_artifacts,
+                required_conditions=[f"artifact_exists:{artifact_id}"] if isinstance(artifact_id, str) else ["artifact_exists:<missing>"],
+            )
     return None
+
+
+def guard_failure_details(profile_id: str, instance_id: str, current_state: Any, failure: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "profile_id": profile_id,
+        "instance_id": instance_id,
+        "transition_id": failure.get("transition_id"),
+        "guard_point_id": failure.get("guard_point_id"),
+        "check_id": failure.get("check_id"),
+        "failure_reason": failure.get("failure_reason"),
+        "current_state": current_state,
+        "required_conditions": failure.get("required_conditions", []),
+        "missing_artifacts": failure.get("missing_artifacts", []),
+        "fix_hint": failure.get("fix_hint"),
+        "override_allowed": failure.get("override_allowed", False),
+        "override_record_path": failure.get("override_record_path"),
+    }
 
 
 def evaluate_transition(
@@ -887,6 +969,28 @@ def run_state_completed(project: Path, user_home: Path, source: str, session_id:
         transitions = state_machine.get("transitions", [])
         current_state = state.get("current_state")
         state_version = int(state.get("state_version") or 1)
+        terminal_states = state_machine.get("terminal_states")
+        if isinstance(terminal_states, list) and current_state in terminal_states:
+            audit_path = write_audit(
+                project,
+                "error",
+                "terminal_state_completed",
+                {"profile_id": profile_id, "instance_id": instance_id, "current_state": current_state},
+                user_home,
+                scope,
+            )
+            brief = write_latest_brief(project, profile_id, state, ["terminal_state_completed"], audit_path, user_home)
+            return {
+                "status": "error",
+                "reason": "terminal_state_completed",
+                "profile_id": profile_id,
+                "instance_id": instance_id,
+                "current_state": current_state,
+                "audit_path": str(audit_path),
+                "brief_path": brief["brief_path"],
+                "brief_hash": brief["brief_hash"],
+            }, 1
+
         candidates: list[dict[str, Any]] = []
         failures: list[dict[str, Any]] = []
         for transition in transitions if isinstance(transitions, list) else []:
@@ -944,16 +1048,24 @@ def run_state_completed(project: Path, user_home: Path, source: str, session_id:
         failure = failures[0] if failures else {"reason": "no_state_transition", "failure_reason": "no_state_transition"}
         reason = str(failure.get("reason") or "state_transition_failed")
         failure_reason = str(failure.get("failure_reason") or reason)
-        audit_path = write_audit(project, "error", reason, {"profile_id": profile_id, "instance_id": instance_id, **failure}, user_home, scope)
+        details = guard_failure_details(profile_id, instance_id, current_state, failure) if reason == "guard_failed" else None
+        audit_detail = {"profile_id": profile_id, "instance_id": instance_id, **failure}
+        if details is not None:
+            audit_detail["details"] = details
+        audit_path = write_audit(project, "error", reason, audit_detail, user_home, scope)
         brief = write_latest_brief(project, profile_id, state, [failure_reason], audit_path, user_home)
-        return {
+        body = {
             "status": "error",
             **failure,
             "reason": reason,
+            "current_state": current_state,
             "audit_path": str(audit_path),
             "brief_path": brief["brief_path"],
             "brief_hash": brief["brief_hash"],
-        }, 1
+        }
+        if details is not None:
+            body["details"] = details
+        return body, 1
     finally:
         release_instance_lock(lock_path)
 

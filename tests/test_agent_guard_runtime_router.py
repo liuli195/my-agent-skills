@@ -354,6 +354,14 @@ def test_state_completed_advances_current_focus_and_lock_timeout_audits(tmp_path
     assert state["current_state"] == "closed"
     assert state["state_version"] == 2
 
+    read_brief(project, user_home)
+    terminal = run_cli(["state-completed", "--project", str(project), "--user-home", str(user_home), "--source", "codex", "--session-id", "session-1"])
+    assert terminal.returncode == 1, terminal.stdout + terminal.stderr
+    terminal_body = body(terminal)
+    assert terminal_body["status"] == "error"
+    assert terminal_body["reason"] == "terminal_state_completed"
+    assert terminal_body["current_state"] == "closed"
+
     second = activate(project, user_home)
     second_id = second["instance_id"]
     write_completion_note(project, second_id)
@@ -401,6 +409,8 @@ guard_points:
         artifact: missing_artifact
         failure_reason: 缺少 impossible artifact。
         fix_hint: 提供 impossible artifact。
+    override_policy:
+      allowed: false
 """.lstrip(),
         encoding="utf-8",
     )
@@ -415,9 +425,18 @@ guard_points:
     assert result.returncode == 1, result.stdout + result.stderr
     payload = body(result)
     assert payload["status"] == "error"
-    assert payload["reason"] == "guard_point_failed"
+    assert payload["reason"] == "guard_failed"
     assert payload["guard_point_id"] == "completion_note_present"
     assert payload["check_id"] == "impossible_artifact"
+    assert payload["current_state"] == "open"
+    details = payload["details"]
+    assert details["guard_point_id"] == "completion_note_present"
+    assert details["failure_reason"] == "缺少 impossible artifact。"
+    assert details["current_state"] == "open"
+    assert details["required_conditions"] == ["artifact_exists:missing_artifact"]
+    assert details["fix_hint"] == "提供 impossible artifact。"
+    assert details["override_allowed"] is False
+    assert Path(details["override_record_path"]).parts[-4:] == ("overrides", "minimal-sample", instance_id, "completion_note_present.json")
     state = json.loads((project / ".local" / "guard" / "state" / "minimal-sample" / instance_id / "state.json").read_text(encoding="utf-8"))
     assert state["current_state"] == "open"
 
