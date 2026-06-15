@@ -2,6 +2,8 @@
 
 状态：草案
 
+替代说明：ADR [0002 Agent Guard Plugin Runtime 与会话焦点](0002-agent-guard-plugin-runtime-session-focus.md) 已替代本文中“项目级 Runtime code（运行时代码）独立复制并运行”、“Git Hook（Git 钩子）第一版兜底”和“通过 Subject Resolver（主体解析器）匹配 Guard Instance（守卫实例）”的旧决策。本文中“业务规则写入 Guard Profile（守卫画像）”、“Runtime（运行时）只执行通用机制”、“Hook（钩子）不推进状态”和“权限拒绝必须来自明确 Guard Instance（守卫实例）”继续有效。
+
 ## 决策
 
 `agent-guard` 作为用户级 Skill 维护生成和升级能力。生成后的项目级 Guard Runtime 和 Guard Profile 必须可以独立运行，并且不得修改被守卫对象。
