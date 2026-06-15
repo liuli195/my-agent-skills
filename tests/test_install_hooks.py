@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 INIT_PROJECT_GUARD = REPO_ROOT / "skills" / "agent-guard" / "scripts" / "init_project_guard.py"
 INSTALL_HOOKS = REPO_ROOT / "skills" / "agent-guard" / "scripts" / "install_hooks.py"
 PRD = REPO_ROOT / "docs" / "prd" / "agent-guard-prd.md"
-HOOK_CONTRACT = REPO_ROOT / "skills" / "agent-guard" / "references" / "hook-contract.md"
+HOOK_ADAPTER_DOC = REPO_ROOT / "skills" / "agent-guard-hooks" / "references" / "hook-adapter.md"
 MINIMAL_PROFILE = (
     REPO_ROOT
     / "skills"
@@ -75,7 +75,7 @@ def test_codex_hook_template_has_no_blocking_flag() -> None:
 
 def test_docs_distinguish_first_version_hook_scope_from_future_extensions() -> None:
     prd = PRD.read_text(encoding="utf-8")
-    hook_contract = HOOK_CONTRACT.read_text(encoding="utf-8")
+    hook_adapter_doc = HOOK_ADAPTER_DOC.read_text(encoding="utf-8")
 
     assert "MVP 第一版必须支持的 Codex 生命周期事件" in prd
     for event_name in ["UserPromptSubmit", "PreToolUse", "PostToolUse", "SubagentStart", "SubagentStop"]:
@@ -88,10 +88,10 @@ def test_docs_distinguish_first_version_hook_scope_from_future_extensions() -> N
     assert "MVP 后续扩展的 Git hook" in prd
     assert "- `pre-commit`" in prd
 
-    assert "第一版 adapter（适配器）支持" in hook_contract
-    assert "后续扩展" in hook_contract
-    assert "SessionStart" in hook_contract
-    assert "pre-commit" in hook_contract
+    assert "第一版 adapter（适配器）支持" in hook_adapter_doc
+    assert "后续扩展" in hook_adapter_doc
+    assert "SessionStart" in hook_adapter_doc
+    assert "pre-commit" in hook_adapter_doc
 
 
 def test_install_hooks_defaults_to_dry_run_without_writing_hooks(tmp_path: Path) -> None:

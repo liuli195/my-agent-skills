@@ -14,13 +14,8 @@ REQUIRED_SKILL_ITEMS = [
     "agents/openai.yaml",
     "references/architecture.md",
     "references/terminology.md",
-    "references/extraction-method.md",
-    "references/guard-profile.md",
-    "references/runtime-contract.md",
-    "references/hook-contract.md",
     "references/subject-resolution.md",
-    "references/guard-injection.md",
-    "references/codex-claude-compat.md",
+    "references/template-index.md",
     "assets/templates/guard-runtime/guard_runner.py",
     "assets/templates/guard-runtime/hook_event_adapter.py",
     "assets/templates/guard-profile/minimal/GUARD-MANIFEST.yaml",
@@ -48,11 +43,58 @@ REQUIRED_SKILL_ITEMS = [
     "scripts/upgrade_guard_runtime.py",
 ]
 
+ENTRYPOINT_SKILL_NAMES = [
+    "agent-guard-install",
+    "agent-guard-init",
+    "agent-guard-update",
+    "agent-guard-run",
+    "agent-guard-hooks",
+]
+
+ENTRYPOINT_REQUIRED_ITEMS = {
+    "agent-guard-install": [
+        "SKILL.md",
+        "references/research-and-extract.md",
+        "references/profile-draft.md",
+    ],
+    "agent-guard-init": [
+        "SKILL.md",
+        "references/init-flow.md",
+        "references/init-boundaries.md",
+    ],
+    "agent-guard-update": [
+        "SKILL.md",
+        "references/runtime-update.md",
+        "references/profile-sync.md",
+    ],
+    "agent-guard-run": [
+        "SKILL.md",
+        "references/activate.md",
+        "references/brief.md",
+        "references/events.md",
+    ],
+    "agent-guard-hooks": [
+        "SKILL.md",
+        "references/hook-install.md",
+        "references/hook-adapter.md",
+        "references/hook-results.md",
+    ],
+}
+
+ENTRYPOINT_DISALLOWED_RESOURCE_DIRS = ["scripts", "assets"]
+
 
 @dataclass(frozen=True)
 class LayoutCheck:
     status: str
     missing: list[str]
+
+
+@dataclass(frozen=True)
+class EntryPointCheck:
+    status: str
+    missing: list[str]
+    unexpected_shared_dirs: list[str]
 
 
 def repo_root() -> Path:
@@ -93,6 +135,26 @@ def check_skill_layout(skill_path: Path) -> LayoutCheck:
     return LayoutCheck(status, missing)
 
 
+def check_entrypoint_layout(core_skill_path: Path) -> EntryPointCheck:
+    skills_root = core_skill_path.parent
+    missing: list[str] = []
+    unexpected_shared_dirs: list[str] = []
+    for skill_name in ENTRYPOINT_SKILL_NAMES:
+        skill_dir = skills_root / skill_name
+        for required_item in ENTRYPOINT_REQUIRED_ITEMS[skill_name]:
+            if not (skill_dir / required_item).exists():
+                missing.append(f"{skill_name}/{required_item}")
+        for shared_dir in ENTRYPOINT_DISALLOWED_RESOURCE_DIRS:
+            if (skill_dir / shared_dir).exists():
+                unexpected_shared_dirs.append(f"{skill_name}/{shared_dir}")
+
+    if not missing and not unexpected_shared_dirs:
+        return EntryPointCheck("complete", missing, unexpected_shared_dirs)
+    if all(not (skills_root / skill_name / "SKILL.md").exists() for skill_name in ENTRYPOINT_SKILL_NAMES):
+        return EntryPointCheck("missing", missing, unexpected_shared_dirs)
+    return EntryPointCheck("incomplete", missing, unexpected_shared_dirs)
+
+
 def path_same(left: Path, right: Path) -> bool:
     try:
         return left.resolve(strict=False) == right.resolve(strict=False)
@@ -130,6 +192,19 @@ def print_layout(prefix: str, path: Path, check: LayoutCheck) -> None:
             print(f"  - {item}")
 
 
+def print_entrypoints(prefix: str, core_skill_path: Path, check: EntryPointCheck) -> None:
+    print(f"{prefix}: {check.status}")
+    print(f"{prefix}_root: {core_skill_path.parent}")
+    if check.missing:
+        print(f"{prefix}_missing:")
+        for item in check.missing:
+            print(f"  - {item}")
+    if check.unexpected_shared_dirs:
+        print(f"{prefix}_unexpected_shared_dirs:")
+        for item in check.unexpected_shared_dirs:
+            print(f"  - {item}")
+
+
 def print_safety() -> None:
     print("safety:")
     print("  project_guard_initialization: not_performed")
@@ -149,12 +224,22 @@ def main(argv: list[str] | None = None) -> int:
 
     source_check = check_skill_layout(source_skill)
     user_check = check_skill_layout(user_skill)
+    source_entrypoints = check_entrypoint_layout(source_skill)
+    user_entrypoints = check_entrypoint_layout(user_skill)
     claude_status, claude_target = junction_status(claude_skill, user_skill)
 
-    ok = source_check.status == "complete" and user_check.status == "complete" and claude_status == "correct_target"
+    ok = (
+        source_check.status == "complete"
+        and source_entrypoints.status == "complete"
+        and user_check.status == "complete"
+        and user_entrypoints.status == "complete"
+        and claude_status == "correct_target"
+    )
     print(f"status: {'verified' if ok else 'issues'}")
     print_layout("source_skill", source_skill, source_check)
+    print_entrypoints("source_entrypoints", source_skill, source_entrypoints)
     print_layout("user_skill", user_skill, user_check)
+    print_entrypoints("user_entrypoints", user_skill, user_entrypoints)
     print(f"claude_junction: {claude_status}")
     print(f"claude_junction_path: {claude_skill}")
     print(f"expected_claude_target: {user_skill}")

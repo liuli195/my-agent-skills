@@ -12,6 +12,20 @@ INSTALL_USER_SKILL = REPO_ROOT / "scripts" / "install" / "install_user_skill.ps1
 SYNC_CLAUDE_JUNCTION = REPO_ROOT / "scripts" / "install" / "sync_claude_junction.ps1"
 SOURCE_SKILL = REPO_ROOT / "skills" / "agent-guard"
 POWERSHELL = "powershell"
+ENTRYPOINT_SKILLS = [
+    "agent-guard-install",
+    "agent-guard-init",
+    "agent-guard-update",
+    "agent-guard-run",
+    "agent-guard-hooks",
+]
+ENTRYPOINT_REFERENCES = {
+    "agent-guard-install": ["research-and-extract.md", "profile-draft.md"],
+    "agent-guard-init": ["init-flow.md", "init-boundaries.md"],
+    "agent-guard-update": ["runtime-update.md", "profile-sync.md"],
+    "agent-guard-run": ["activate.md", "brief.md", "events.md"],
+    "agent-guard-hooks": ["hook-install.md", "hook-adapter.md", "hook-results.md"],
+}
 
 
 def skill_description(skill_path: Path) -> str:
@@ -53,24 +67,110 @@ def run_powershell(script: Path, args: list[str]) -> subprocess.CompletedProcess
     )
 
 
-def test_agent_guard_skill_description_covers_guarded_target_types() -> None:
+def test_agent_guard_router_description_covers_routing_triggers() -> None:
     description = skill_description(SOURCE_SKILL)
 
     for term in [
-        "Skill（技能）",
-        "workflow（工作流）",
-        "node（节点）",
-        "command（命令）",
-        "artifact lifecycle（产物生命周期）",
-        "Codex lifecycle behavior（Codex 生命周期行为）",
-        "PR review order（PR 审查顺序）",
-        "Hook enforcement（钩子强制执行）",
-        "Guard Injection（守卫注入）",
-        "Guard Brief（守卫简报）",
-        "Guard Runtime（守卫运行时）",
-        "Guard Profile（守卫画像）",
+        "路由",
+        "Use when",
+        "agent-guard",
+        "install/init/update/run/hooks",
     ]:
         assert term in description
+    for term in ["Guard Profile（守卫画像）", "Guard Runtime（守卫运行时）", "Hook（钩子）"]:
+        assert term not in description
+
+
+def test_agent_guard_router_points_to_scenario_entrypoints() -> None:
+    skill_text = (SOURCE_SKILL / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "薄路由" in skill_text
+    for entrypoint in ENTRYPOINT_SKILLS:
+        assert f"${entrypoint}" in skill_text
+
+
+def test_scenario_entrypoints_have_strong_required_steps() -> None:
+    required_phrases = {
+        "agent-guard-install": [
+            "安装守卫",
+            "立即执行：在调研、生成或更新任何 Guard Profile（守卫画像）前，使用 Skill 工具加载 `$grill-with-docs`。禁止跳过此步骤。",
+            "references/research-and-extract.md",
+            "references/profile-draft.md",
+        ],
+        "agent-guard-init": [
+            "初始化守卫",
+            "立即执行：在初始化任何项目级或用户级 Guard Profile（守卫画像）前，运行 `validate_guard_profile.py <guard-profile-dir>`。禁止跳过此步骤。",
+            "references/init-flow.md",
+            "references/init-boundaries.md",
+        ],
+        "agent-guard-update": [
+            "更新守卫",
+            "立即执行：在把更新后的 Guard Profile（守卫画像）同步到已初始化守卫前，运行 `validate_guard_profile.py <guard-profile-dir>`。禁止跳过此步骤。",
+            "references/runtime-update.md",
+            "references/profile-sync.md",
+        ],
+        "agent-guard-run": [
+            "运行守卫",
+            "立即执行：提交任何 `state_completed` 事件前，读取最新 Guard Brief（守卫简报）。禁止跳过此步骤。",
+            "references/activate.md",
+            "references/brief.md",
+            "references/events.md",
+        ],
+        "agent-guard-hooks": [
+            "接入 Hook",
+            "立即执行：安装或验证 Hook（钩子）前，读取 `references/hook-install.md`。禁止跳过此步骤。",
+            "references/hook-install.md",
+            "references/hook-adapter.md",
+            "references/hook-results.md",
+        ],
+    }
+
+    for entrypoint, phrases in required_phrases.items():
+        skill_dir = SOURCE_SKILL.parent / entrypoint
+        skill_text = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+        description = skill_description(skill_dir)
+        assert "Use when" in description
+        for phrase in phrases:
+            assert phrase in skill_text
+        for reference_name in ENTRYPOINT_REFERENCES[entrypoint]:
+            assert (skill_dir / "references" / reference_name).exists()
+        for shared_dir in ["scripts", "assets"]:
+            assert not (skill_dir / shared_dir).exists()
+
+
+def test_core_references_are_common_and_scenario_docs_live_with_entrypoints() -> None:
+    core_references = SOURCE_SKILL / "references"
+
+    for reference_name in [
+        "architecture.md",
+        "terminology.md",
+        "subject-resolution.md",
+        "template-index.md",
+    ]:
+        assert (core_references / reference_name).exists()
+
+    for obsolete_name in [
+        "extraction-method.md",
+        "guard-profile.md",
+        "runtime-contract.md",
+        "hook-contract.md",
+        "guard-injection.md",
+        "codex-claude-compat.md",
+    ]:
+        assert not (core_references / obsolete_name).exists()
+
+    for entrypoint, reference_names in ENTRYPOINT_REFERENCES.items():
+        entrypoint_references = SOURCE_SKILL.parent / entrypoint / "references"
+        assert entrypoint_references.is_dir()
+        for reference_name in reference_names:
+            assert (entrypoint_references / reference_name).exists()
+
+
+def test_templates_do_not_include_python_cache_artifacts() -> None:
+    templates_root = SOURCE_SKILL / "assets" / "templates"
+
+    assert not list(templates_root.rglob("__pycache__"))
+    assert not list(templates_root.rglob("*.pyc"))
 
 
 def test_verify_install_reports_complete_source_skeleton(tmp_path: Path) -> None:
@@ -90,7 +190,9 @@ def test_verify_install_reports_complete_source_skeleton(tmp_path: Path) -> None
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert "source_skill: complete" in result.stdout
+    assert "source_entrypoints: complete" in result.stdout
     assert "user_skill: missing" in result.stdout
+    assert "user_entrypoints: missing" in result.stdout
     assert "claude_junction: missing" in result.stdout
     assert "project_guard_initialization: not_performed" in result.stdout
     assert "project_hooks: not_installed" in result.stdout
@@ -108,6 +210,7 @@ def test_install_user_skill_defaults_to_dry_run_without_writing_user_skill(tmp_p
     assert "status: dry_run" in result.stdout
     assert "authorization: missing" in result.stdout
     assert "source_status: complete" in result.stdout
+    assert "entrypoints_status: complete" in result.stdout
     assert "action: would_sync" in result.stdout
     assert "missing: none" in result.stdout
     assert "conflicts: none" in result.stdout
@@ -130,9 +233,20 @@ def test_authorized_user_skill_install_is_repeatable_without_deleting_existing_f
     assert (user_skill / "references").is_dir()
     assert (user_skill / "assets").is_dir()
     assert (user_skill / "scripts").is_dir()
+    user_skills_root = user_skill.parent
+    for entrypoint in ENTRYPOINT_SKILLS:
+        entrypoint_dir = user_skills_root / entrypoint
+        assert (entrypoint_dir / "SKILL.md").exists()
+        assert (entrypoint_dir / "references").is_dir()
+        for reference_name in ENTRYPOINT_REFERENCES[entrypoint]:
+            assert (entrypoint_dir / "references" / reference_name).exists()
+        assert not (entrypoint_dir / "assets").exists()
+        assert not (entrypoint_dir / "scripts").exists()
 
     marker = user_skill / "manual-note.txt"
     marker.write_text("keep me\n", encoding="utf-8")
+    entrypoint_marker = user_skills_root / "agent-guard-run" / "manual-note.txt"
+    entrypoint_marker.write_text("keep me too\n", encoding="utf-8")
 
     second = run_powershell(
         INSTALL_USER_SKILL,
@@ -142,6 +256,7 @@ def test_authorized_user_skill_install_is_repeatable_without_deleting_existing_f
     assert second.returncode == 0, second.stdout + second.stderr
     assert "status: installed" in second.stdout
     assert marker.read_text(encoding="utf-8") == "keep me\n"
+    assert entrypoint_marker.read_text(encoding="utf-8") == "keep me too\n"
     assert (user_skill / "SKILL.md").exists()
 
 

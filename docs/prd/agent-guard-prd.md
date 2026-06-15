@@ -388,40 +388,46 @@ my-agent-skills/
 ├── .gitignore
 ├── .gitattributes
 ├── skills/
-│   └── agent-guard/
+│   ├── agent-guard/
+│   │   ├── SKILL.md
+│   │   ├── agents/
+│   │   │   └── openai.yaml
+│   │   ├── references/
+│   │   │   ├── architecture.md
+│   │   │   ├── terminology.md
+│   │   │   ├── subject-resolution.md
+│   │   │   └── template-index.md
+│   │   ├── assets/
+│   │   │   └── templates/
+│   │   │       ├── guard-runtime/
+│   │   │       ├── guard-profile/
+│   │   │       ├── codex-hooks/
+│   │   │       └── git-hooks/
+│   │   └── scripts/
+│   │       ├── init_project_guard.py
+│   │       ├── init_user_guard.py
+│   │       ├── extract_guard_model.py
+│   │       ├── activate_guard.py
+│   │       ├── run_guard_event.py
+│   │       ├── render_guard_brief.py
+│   │       ├── validate_guard_profile.py
+│   │       ├── install_hooks.py
+│   │       └── upgrade_guard_runtime.py
+│   ├── agent-guard-install/
+│   │   ├── SKILL.md
+│   │   └── references/
+│   ├── agent-guard-init/
+│   │   ├── SKILL.md
+│   │   └── references/
+│   ├── agent-guard-update/
+│   │   ├── SKILL.md
+│   │   └── references/
+│   ├── agent-guard-run/
+│   │   ├── SKILL.md
+│   │   └── references/
+│   └── agent-guard-hooks/
 │       ├── SKILL.md
-│       ├── agents/
-│       │   └── openai.yaml
-│       ├── references/
-│       │   ├── architecture.md
-│       │   ├── terminology.md
-│       │   ├── extraction-method.md
-│       │   ├── guard-profile.md
-│       │   ├── runtime-contract.md
-│       │   ├── hook-contract.md
-│       │   ├── subject-resolution.md
-│       │   ├── guard-injection.md
-│       │   └── codex-claude-compat.md
-│       ├── assets/
-│       │   └── templates/
-│       │       ├── guard-runtime/
-│       │       ├── guard-profile/
-│       │       ├── user-guard-profile/
-│       │       ├── hook-bindings/
-│       │       ├── codex-hooks/
-│       │       ├── git-hooks/
-│       │       ├── guard-brief/
-│       │       └── validation-plan/
-│       └── scripts/
-│           ├── init_project_guard.py
-│           ├── init_user_guard.py
-│           ├── extract_guard_model.py
-│           ├── activate_guard.py
-│           ├── run_guard_event.py
-│           ├── render_guard_brief.py
-│           ├── validate_guard_profile.py
-│           ├── install_hooks.py
-│           └── upgrade_guard_runtime.py
+│       └── references/
 ├── docs/
 │   ├── rules/
 │   │   └── index.md
@@ -908,17 +914,20 @@ MVP 只对关键路径写审计：
 - hook 安装必须显式授权；`deny` 权限只能由 Guard Profile（守卫画像）的 `states[].permissions` 显式声明。
 - 详细内容的引用路径。
 
-详细文档放入 `references/`：
+通用文档放入 `skills/agent-guard/references/`：
 
-- `architecture.md`：整体架构。
+- `architecture.md`：整体架构和 5 个入口边界。
 - `terminology.md`：术语表。
-- `extraction-method.md`：问答式提炼方法。
-- `guard-profile.md`：Guard Profile 格式。
-- `runtime-contract.md`：Guard Runtime 契约。
-- `hook-contract.md`：hook 绑定契约。
 - `subject-resolution.md`：守卫实例解析规则。
-- `guard-injection.md`：动态注入和 Guard Brief 规则。
-- `codex-claude-compat.md`：Codex 与 Claude 兼容安装。
+- `template-index.md`：共享模板索引。
+
+场景文档放入对应入口的 `references/`：
+
+- `agent-guard-install/references/`：调研、提取、画像草案。
+- `agent-guard-init/references/`：第一次初始化和初始化边界。
+- `agent-guard-update/references/`：Runtime 更新和画像同步。
+- `agent-guard-run/references/`：激活、Brief（简报）和标准事件。
+- `agent-guard-hooks/references/`：Hook（钩子）安装、adapter（适配器）和结果处理。
 
 模板放入 `assets/templates/`：
 
