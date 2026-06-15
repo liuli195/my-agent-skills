@@ -757,6 +757,54 @@ def guard_point_override_allowed(guard_point: dict[str, Any] | None) -> bool:
     return guard_point.get("allow_override") is True
 
 
+def parse_utc_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def valid_override_record(failure: dict[str, Any]) -> dict[str, Any] | None:
+    if failure.get("override_allowed") is not True:
+        return None
+    path_value = failure.get("override_record_path")
+    if not isinstance(path_value, str):
+        return None
+    path = Path(path_value)
+    if not path.exists():
+        return None
+    try:
+        record = read_json(path)
+    except (json.JSONDecodeError, OSError, ValueError):
+        return None
+
+    required = ["decision", "reason", "approved_by", "approved_at", "expires_at"]
+    if any(not record.get(field) for field in required):
+        return None
+    if record.get("decision") != "allow":
+        return None
+    approved_at = parse_utc_datetime(record.get("approved_at"))
+    expires_at = parse_utc_datetime(record.get("expires_at"))
+    if approved_at is None or expires_at is None or expires_at <= datetime.now(timezone.utc):
+        return None
+
+    return {
+        "guard_point_id": failure.get("guard_point_id"),
+        "check_id": failure.get("check_id"),
+        "override_record_path": str(path),
+        "decision": record["decision"],
+        "reason": record["reason"],
+        "approved_by": record["approved_by"],
+        "approved_at": record["approved_at"],
+        "expires_at": record["expires_at"],
+    }
+
+
 def guard_point_failure(
     project: Path,
     profile_id: str,
@@ -894,6 +942,7 @@ def evaluate_transition(
     guard_points: dict[str, Any],
     user_home: Path | None,
     scope: str,
+    overrides_used: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     required = [item for item in transition.get("required_artifacts", []) if isinstance(item, str)]
     missing = [artifact for artifact in required if not artifact_exists(project, profile_id, instance_id, state_version, artifact, user_home, scope)]
@@ -909,6 +958,11 @@ def evaluate_transition(
     for guard_point_id in guard_point_ids:
         failure = evaluate_guard_point(project, profile_id, instance_id, state_version, guard_point_id, guard_points, user_home, scope)
         if failure is not None:
+            override = valid_override_record(failure)
+            if override is not None:
+                if overrides_used is not None:
+                    overrides_used.append(override)
+                continue
             failure["transition_id"] = transition.get("id")
             return failure
     return None
@@ -998,14 +1052,15 @@ def run_state_completed(project: Path, user_home: Path, source: str, session_id:
                 continue
             if transition.get("from") != current_state or transition.get("on_event") != "state_completed":
                 continue
-            failure = evaluate_transition(project, profile_id, instance_id, state_version, transition, guard_points, user_home, scope)
+            overrides_used: list[dict[str, Any]] = []
+            failure = evaluate_transition(project, profile_id, instance_id, state_version, transition, guard_points, user_home, scope, overrides_used)
             if failure is not None:
                 failures.append(failure)
                 continue
-            candidates.append(transition)
+            candidates.append({"transition": transition, "overrides": overrides_used})
 
         if len(candidates) > 1:
-            candidate_ids = [str(transition.get("id") or "") for transition in candidates]
+            candidate_ids = [str(candidate["transition"].get("id") or "") for candidate in candidates]
             audit_path = write_audit(
                 project,
                 "error",
@@ -1025,13 +1080,18 @@ def run_state_completed(project: Path, user_home: Path, source: str, session_id:
             }, 1
 
         if len(candidates) == 1:
-            transition = candidates[0]
+            candidate = candidates[0]
+            transition = candidate["transition"]
+            overrides_used = candidate["overrides"]
             state["current_state"] = transition.get("to")
             state["state_version"] = state_version + 1
             state["last_transition_id"] = transition.get("id")
             state["last_seen_at"] = now_iso()
             save_instance(project, state, user_home)
-            audit_path = write_audit(project, "allow", "state_completed", {"profile_id": profile_id, "instance_id": instance_id, "transition": transition}, user_home, scope)
+            audit_detail = {"profile_id": profile_id, "instance_id": instance_id, "transition": transition}
+            if overrides_used:
+                audit_detail["overrides"] = overrides_used
+            audit_path = write_audit(project, "allow", "state_completed", audit_detail, user_home, scope)
             brief = write_latest_brief(project, profile_id, state, audit_path=audit_path, user_home=user_home)
             return {
                 "status": "allow",
