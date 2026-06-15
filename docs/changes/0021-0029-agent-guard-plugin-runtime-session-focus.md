@@ -27,6 +27,8 @@ GitHub Issues:
 - `state_completed` 只能推进当前 Session Focus Instance（会话焦点实例），并使用 `profile_id + instance_id` 粒度锁。
 - Guard Brief（守卫简报）和 Guard Injection（守卫注入）保留为状态推进核心机制，路径从 `subject_key_hash` 迁移为 `profile_id + instance_id`。
 - Runtime（运行时）会在 `state_completed` 前检查当前 `brief_hash` 是否已通过 brief（简报）入口读取；未读取时返回 `brief_required`，不推进状态。
+- `state_completed` 会评估 Guard Point（守卫点），并要求通过的 transition（转换）唯一；Guard Point 失败或多 transition 匹配时不推进状态。
+- Session Focus Binding（会话焦点绑定）损坏或冲突时返回错误状态并审计，不使用权限 `deny`。
 - Guard Profile（守卫画像）契约要求 `runtime_api_version`，不再要求 Subject Resolver（主体解析器）或 Hook Binding（钩子绑定）。
 - 项目初始化只写 Guard Profile（守卫画像），不再复制 Runtime code（运行时代码）。
 
@@ -40,6 +42,6 @@ GitHub Issues:
 ## 验证
 
 - 全量测试：`python -m pytest`
-- 结果：`70 passed`
+- 结果：`72 passed`
 
 旧 contract token（契约标记）只保留在 validator（校验器）的拒绝列表和负向测试中。

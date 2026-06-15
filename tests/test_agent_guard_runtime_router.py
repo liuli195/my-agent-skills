@@ -195,7 +195,7 @@ def test_pre_tool_use_missing_session_id_returns_error_without_focus_audit(tmp_p
     assert not (project / ".local" / "guard" / "audit").exists()
 
 
-def test_invalid_and_multiple_focus_bindings_deny_and_audit(tmp_path: Path) -> None:
+def test_invalid_and_multiple_focus_bindings_error_without_permission_deny(tmp_path: Path) -> None:
     project = tmp_path / "project"
     user_home = tmp_path / "user-home"
     project.mkdir()
@@ -208,8 +208,10 @@ def test_invalid_and_multiple_focus_bindings_deny_and_audit(tmp_path: Path) -> N
 
     assert invalid.returncode == 1, invalid.stdout + invalid.stderr
     invalid_body = body(invalid)
-    assert invalid_body["status"] == "deny"
+    assert invalid_body["status"] == "invalid_session_focus_binding"
     assert invalid_body["reason"] == "invalid_session_focus_binding"
+    invalid_audit = json.loads(Path(invalid_body["audit_path"]).read_text(encoding="utf-8"))
+    assert invalid_audit["status"] == "error"
 
     binding_path.write_text(
         json.dumps(
@@ -232,8 +234,10 @@ def test_invalid_and_multiple_focus_bindings_deny_and_audit(tmp_path: Path) -> N
 
     assert multiple.returncode == 1, multiple.stdout + multiple.stderr
     multiple_body = body(multiple)
-    assert multiple_body["status"] == "deny"
+    assert multiple_body["status"] == "multiple_session_focus_bindings"
     assert multiple_body["reason"] == "multiple_session_focus_bindings"
+    multiple_audit = json.loads(Path(multiple_body["audit_path"]).read_text(encoding="utf-8"))
+    assert multiple_audit["status"] == "error"
 
 
 def test_missing_or_closed_instance_is_treated_as_no_focus(tmp_path: Path) -> None:
@@ -379,3 +383,77 @@ def test_state_completed_advances_current_focus_and_lock_timeout_audits(tmp_path
     assert locked_body["status"] == "lock_timeout"
     audit = json.loads(Path(locked_body["audit_path"]).read_text(encoding="utf-8"))
     assert audit["status"] == "lock_timeout"
+
+
+def test_state_completed_evaluates_guard_points_before_advancing(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = write_profile(project)
+    profile.joinpath("guard-points.yaml").write_text(
+        """
+guard_points:
+  - id: completion_note_present
+    description: 必须失败的守卫点。
+    checks:
+      - id: impossible_artifact
+        type: artifact_exists
+        artifact: missing_artifact
+        failure_reason: 缺少 impossible artifact。
+        fix_hint: 提供 impossible artifact。
+""".lstrip(),
+        encoding="utf-8",
+    )
+    session_start(project, user_home)
+    activated = activate(project, user_home)
+    instance_id = activated["instance_id"]
+    write_completion_note(project, instance_id)
+    read_brief(project, user_home)
+
+    result = run_cli(["state-completed", "--project", str(project), "--user-home", str(user_home), "--source", "codex", "--session-id", "session-1"])
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "error"
+    assert payload["reason"] == "guard_point_failed"
+    assert payload["guard_point_id"] == "completion_note_present"
+    assert payload["check_id"] == "impossible_artifact"
+    state = json.loads((project / ".local" / "guard" / "state" / "minimal-sample" / instance_id / "state.json").read_text(encoding="utf-8"))
+    assert state["current_state"] == "open"
+
+
+def test_state_completed_rejects_ambiguous_transition_matches(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = write_profile(project)
+    state_machine = profile.joinpath("state-machine.yaml")
+    state_machine.write_text(
+        state_machine.read_text(encoding="utf-8")
+        + """
+  - id: also_close_after_note
+    from: open
+    to: closed
+    on_event: state_completed
+    guard_points:
+      - completion_note_present
+    required_artifacts:
+      - completion_note
+""",
+        encoding="utf-8",
+    )
+    session_start(project, user_home)
+    activated = activate(project, user_home)
+    instance_id = activated["instance_id"]
+    write_completion_note(project, instance_id)
+    read_brief(project, user_home)
+
+    result = run_cli(["state-completed", "--project", str(project), "--user-home", str(user_home), "--source", "codex", "--session-id", "session-1"])
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "error"
+    assert payload["reason"] == "ambiguous_state_transition"
+    assert payload["candidate_transition_ids"] == ["close_after_note", "also_close_after_note"]
+    state = json.loads((project / ".local" / "guard" / "state" / "minimal-sample" / instance_id / "state.json").read_text(encoding="utf-8"))
+    assert state["current_state"] == "open"

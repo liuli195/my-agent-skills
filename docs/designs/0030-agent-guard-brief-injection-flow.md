@@ -255,7 +255,7 @@ latest brief JSON（最新简报 JSON）至少包含：
 
 如果 project（项目级）和 user（用户级）同时存在焦点绑定：
 
-- 返回 `deny` 或对应错误状态。
+- 返回错误状态，不使用权限 `deny`。
 - 审计 `multiple_session_focus_bindings`。
 - 不写注入记录。
 
@@ -263,7 +263,7 @@ latest brief JSON（最新简报 JSON）至少包含：
 
 如果焦点 JSON（JSON 数据）损坏或缺字段：
 
-- 返回 `deny` 或对应错误状态。
+- 返回错误状态，不使用权限 `deny`。
 - 审计 `invalid_session_focus_binding`。
 - 不写注入记录。
 

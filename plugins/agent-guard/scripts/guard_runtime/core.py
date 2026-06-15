@@ -209,6 +209,10 @@ def profile_execution_model(project: Path, profile_id: str, user_home: Path | No
     return read_yaml_if_exists(profile_dir(project, profile_id, user_home, scope) / "execution-model.yaml")
 
 
+def profile_guard_points(project: Path, profile_id: str, user_home: Path | None = None, scope: str = "project") -> dict[str, Any]:
+    return read_yaml_if_exists(profile_dir(project, profile_id, user_home, scope) / "guard-points.yaml")
+
+
 def latest_brief_dir(project: Path, profile_id: str, instance_id: str, user_home: Path | None = None, scope: str = "project") -> Path:
     return runtime_root(project, user_home, scope) / "latest" / profile_id / instance_id
 
@@ -321,7 +325,7 @@ def target_table(project: Path, profile_id: str, user_home: Path | None = None, 
     lines = [
         "| 序号 | 作用域 | 守卫目标 | 类型 | 来源 | 边界 | 画像 ID |",
         "| --- | --- | --- | --- | --- | --- | --- |",
-        f"| 1 | project | {target.get('name', '')} | {target.get('type', '')} | {target.get('source', '')} | {target.get('boundary', '')} | {profile_id} |",
+        f"| 1 | {scope} | {target.get('name', '')} | {target.get('type', '')} | {target.get('source', '')} | {target.get('boundary', '')} | {profile_id} |",
     ]
     return "\n".join(lines)
 
@@ -645,11 +649,11 @@ def focus_boundary_result(
             "next": "先 activate（激活）当前 Session Focus Instance（会话焦点实例）。",
         }, 1 if deny_on_no_focus else 0
     if focus["status"] == "invalid":
-        audit_path = write_audit(project, "deny", "invalid_session_focus_binding", focus)
-        return None, {"status": "deny", "reason": "invalid_session_focus_binding", "audit_path": str(audit_path)}, 1
+        audit_path = write_audit(project, "error", "invalid_session_focus_binding", focus)
+        return None, {"status": "invalid_session_focus_binding", "reason": "invalid_session_focus_binding", "audit_path": str(audit_path)}, 1
     if focus["status"] == "multiple":
-        audit_path = write_audit(project, "deny", "multiple_session_focus_bindings", focus)
-        return None, {"status": "deny", "reason": "multiple_session_focus_bindings", "audit_path": str(audit_path)}, 1
+        audit_path = write_audit(project, "error", "multiple_session_focus_bindings", focus)
+        return None, {"status": "multiple_session_focus_bindings", "reason": "multiple_session_focus_bindings", "audit_path": str(audit_path)}, 1
 
     binding = focus["binding"]
     profile_id = str(binding["profile_id"])
@@ -732,6 +736,102 @@ def artifact_exists(project: Path, profile_id: str, instance_id: str, state_vers
     return False
 
 
+def guard_point_by_id(guard_points: dict[str, Any], guard_point_id: str) -> dict[str, Any] | None:
+    items = guard_points.get("guard_points")
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, dict) and item.get("id") == guard_point_id:
+            return item
+    return None
+
+
+def evaluate_guard_point(
+    project: Path,
+    profile_id: str,
+    instance_id: str,
+    state_version: int,
+    guard_point_id: str,
+    guard_points: dict[str, Any],
+    user_home: Path | None,
+    scope: str,
+) -> dict[str, Any] | None:
+    guard_point = guard_point_by_id(guard_points, guard_point_id)
+    if guard_point is None:
+        return {
+            "reason": "guard_point_failed",
+            "guard_point_id": guard_point_id,
+            "failure_reason": "missing_guard_point",
+            "fix_hint": "在 guard-points.yaml 中定义该 Guard Point（守卫点）。",
+        }
+
+    required_artifacts = guard_point.get("required_artifacts")
+    for artifact_id in required_artifacts if isinstance(required_artifacts, list) else []:
+        if not isinstance(artifact_id, str):
+            continue
+        if not artifact_exists(project, profile_id, instance_id, state_version, artifact_id, user_home, scope):
+            return {
+                "reason": "guard_point_failed",
+                "guard_point_id": guard_point_id,
+                "failure_reason": guard_point.get("failure_reason") or "missing_required_artifacts",
+                "fix_hint": guard_point.get("fix_hint"),
+                "missing_artifacts": [artifact_id],
+            }
+
+    checks = guard_point.get("checks")
+    for check in checks if isinstance(checks, list) else []:
+        if not isinstance(check, dict):
+            continue
+        check_type = check.get("type")
+        check_id = str(check.get("id") or "")
+        if check_type != "artifact_exists":
+            return {
+                "reason": "guard_point_failed",
+                "guard_point_id": guard_point_id,
+                "check_id": check_id,
+                "failure_reason": "unsupported_guard_point_check",
+                "fix_hint": "Runtime（运行时）当前只支持 artifact_exists 检查。",
+            }
+        artifact_id = check.get("artifact")
+        if not isinstance(artifact_id, str) or not artifact_exists(project, profile_id, instance_id, state_version, artifact_id, user_home, scope):
+            return {
+                "reason": "guard_point_failed",
+                "guard_point_id": guard_point_id,
+                "check_id": check_id,
+                "failure_reason": check.get("failure_reason") or "missing_required_artifacts",
+                "fix_hint": check.get("fix_hint"),
+                "missing_artifacts": [artifact_id] if isinstance(artifact_id, str) else [],
+            }
+    return None
+
+
+def evaluate_transition(
+    project: Path,
+    profile_id: str,
+    instance_id: str,
+    state_version: int,
+    transition: dict[str, Any],
+    guard_points: dict[str, Any],
+    user_home: Path | None,
+    scope: str,
+) -> dict[str, Any] | None:
+    required = [item for item in transition.get("required_artifacts", []) if isinstance(item, str)]
+    missing = [artifact for artifact in required if not artifact_exists(project, profile_id, instance_id, state_version, artifact, user_home, scope)]
+    if missing:
+        return {
+            "reason": "missing_required_artifacts",
+            "transition_id": transition.get("id"),
+            "missing_artifacts": missing,
+            "failure_reason": "missing_required_artifacts",
+        }
+
+    guard_point_ids = [item for item in transition.get("guard_points", []) if isinstance(item, str)]
+    for guard_point_id in guard_point_ids:
+        failure = evaluate_guard_point(project, profile_id, instance_id, state_version, guard_point_id, guard_points, user_home, scope)
+        if failure is not None:
+            failure["transition_id"] = transition.get("id")
+            return failure
+    return None
+
+
 def acquire_instance_lock(project: Path, profile_id: str, instance_id: str, timeout_seconds: float, user_home: Path | None = None, scope: str = "project") -> tuple[bool, Path]:
     lock_path = runtime_root(project, user_home, scope) / "locks" / profile_id / f"{instance_id}.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -783,17 +883,45 @@ def run_state_completed(project: Path, user_home: Path, source: str, session_id:
 
     try:
         state_machine = profile_state_machine(project, profile_id, user_home, scope)
+        guard_points = profile_guard_points(project, profile_id, user_home, scope)
         transitions = state_machine.get("transitions", [])
         current_state = state.get("current_state")
         state_version = int(state.get("state_version") or 1)
+        candidates: list[dict[str, Any]] = []
+        failures: list[dict[str, Any]] = []
         for transition in transitions if isinstance(transitions, list) else []:
             if not isinstance(transition, dict):
                 continue
             if transition.get("from") != current_state or transition.get("on_event") != "state_completed":
                 continue
-            required = [item for item in transition.get("required_artifacts", []) if isinstance(item, str)]
-            if any(not artifact_exists(project, profile_id, instance_id, state_version, artifact, user_home, scope) for artifact in required):
+            failure = evaluate_transition(project, profile_id, instance_id, state_version, transition, guard_points, user_home, scope)
+            if failure is not None:
+                failures.append(failure)
                 continue
+            candidates.append(transition)
+
+        if len(candidates) > 1:
+            candidate_ids = [str(transition.get("id") or "") for transition in candidates]
+            audit_path = write_audit(
+                project,
+                "error",
+                "ambiguous_state_transition",
+                {"profile_id": profile_id, "instance_id": instance_id, "candidate_transition_ids": candidate_ids},
+                user_home,
+                scope,
+            )
+            brief = write_latest_brief(project, profile_id, state, ["ambiguous_state_transition"], audit_path, user_home)
+            return {
+                "status": "error",
+                "reason": "ambiguous_state_transition",
+                "candidate_transition_ids": candidate_ids,
+                "audit_path": str(audit_path),
+                "brief_path": brief["brief_path"],
+                "brief_hash": brief["brief_hash"],
+            }, 1
+
+        if len(candidates) == 1:
+            transition = candidates[0]
             state["current_state"] = transition.get("to")
             state["state_version"] = state_version + 1
             state["last_transition_id"] = transition.get("id")
@@ -812,9 +940,20 @@ def run_state_completed(project: Path, user_home: Path, source: str, session_id:
                 "brief_path": brief["brief_path"],
                 "brief_hash": brief["brief_hash"],
             }, 0
-        audit_path = write_audit(project, "error", "missing_required_artifacts", {"profile_id": profile_id, "instance_id": instance_id}, user_home, scope)
-        brief = write_latest_brief(project, profile_id, state, ["missing_required_artifacts"], audit_path, user_home)
-        return {"status": "error", "reason": "missing_required_artifacts", "audit_path": str(audit_path), "brief_path": brief["brief_path"], "brief_hash": brief["brief_hash"]}, 1
+
+        failure = failures[0] if failures else {"reason": "no_state_transition", "failure_reason": "no_state_transition"}
+        reason = str(failure.get("reason") or "state_transition_failed")
+        failure_reason = str(failure.get("failure_reason") or reason)
+        audit_path = write_audit(project, "error", reason, {"profile_id": profile_id, "instance_id": instance_id, **failure}, user_home, scope)
+        brief = write_latest_brief(project, profile_id, state, [failure_reason], audit_path, user_home)
+        return {
+            "status": "error",
+            **failure,
+            "reason": reason,
+            "audit_path": str(audit_path),
+            "brief_path": brief["brief_path"],
+            "brief_hash": brief["brief_hash"],
+        }, 1
     finally:
         release_instance_lock(lock_path)
 

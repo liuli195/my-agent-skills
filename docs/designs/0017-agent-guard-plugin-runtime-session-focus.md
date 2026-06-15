@@ -288,9 +288,9 @@ Hook Adapter（钩子适配器）只输出以下生命周期事件：
 
 - 0 个绑定记录：`allow + audit no_session_focus_instance`
 - 1 个绑定记录：读取绑定指向的实例
-- project（项目级）和 user（用户级）同时存在绑定记录：`deny + audit multiple_session_focus_bindings`
-- 唯一绑定 JSON（JSON 数据）损坏：`deny + audit invalid_session_focus_binding`
-- 唯一绑定缺必填字段：`deny + audit invalid_session_focus_binding`
+- project（项目级）和 user（用户级）同时存在绑定记录：`error + audit multiple_session_focus_bindings`
+- 唯一绑定 JSON（JSON 数据）损坏：`error + audit invalid_session_focus_binding`
+- 唯一绑定缺必填字段：`error + audit invalid_session_focus_binding`
 - 绑定指向的实例不存在：`allow + audit no_session_focus_instance`
 - 绑定指向的实例不是 active（活跃）：`allow + audit no_session_focus_instance`
 
@@ -475,6 +475,7 @@ Guarded Target（被守卫目标）选择：
 - Hook（钩子）事件不得推进状态。
 - 同一 `profile_id + instance_id` 的状态推进必须加锁。
 - 状态推进时按当前状态评估 Guard Point（守卫点），不读取 Hook Binding（钩子绑定）。
+- 状态推进必须先收集所有通过 required artifacts（必需产物）和 Guard Point（守卫点）的候选 transition（转换）；候选数量必须刚好为 1，0 个或多个都是错误，不得推进状态。
 
 ## 模块十三：Guard Brief 与 Guard Injection（守卫简报与守卫注入）
 
@@ -553,8 +554,8 @@ Guarded Target（被守卫目标）选择：
 - Session Focus Store（会话焦点存储）：无绑定、单绑定、多绑定、坏 JSON（JSON 数据）、缺字段、实例不存在、实例 closed（关闭）。
 - Instance Store（实例存储）：创建、列 active（活跃）、关闭、closed（关闭）不参与 Hook（钩子）判断。
 - Activation Service（激活服务）：表格输出、选择已有实例、创建新实例、切换焦点绑定。
-- Runtime Router（运行时路由器）：无焦点放行、绑定损坏拒绝、多绑定拒绝、有效焦点按状态判断。
-- State Transition Service（状态推进服务）：无焦点中止、禁止指定 `profile_id` 或 `instance_id`、有效焦点推进、并发锁。
+- Runtime Router（运行时路由器）：无焦点放行、绑定损坏返回错误、多绑定返回错误、有效焦点按状态判断。
+- State Transition Service（状态推进服务）：无焦点中止、禁止指定 `profile_id` 或 `instance_id`、Guard Point（守卫点）失败不推进、多 transition（转换）匹配不推进、有效焦点推进、并发锁。
 - Guard Brief（守卫简报）：激活生成 latest brief（最新简报）、状态推进刷新简报、同一 session（会话）按 `brief_hash` 去重注入。
 - Guard Brief（守卫简报）：未读取当前 `brief_hash` 时，`state_completed` 返回 `brief_required` 且不推进状态。
 - Profile Validator（画像校验器）：不再要求 `subject-resolver.yaml` 和 `hook-bindings.yaml`。

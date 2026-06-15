@@ -261,6 +261,7 @@ def test_activate_can_write_user_scope_focus_binding(tmp_path: Path) -> None:
     binding = json.loads(binding_path.read_text(encoding="utf-8"))
     assert binding["scope"] == "user"
     assert binding["instance_id"] == body["instance_id"]
+    assert "| 1 | user |" in body["target_table"]
     assert not (project / ".local" / "guard" / "session-focus" / "codex" / "session-1.json").exists()
     state_path = user_home / ".agents" / "guard" / "state" / "minimal-sample" / body["instance_id"] / "state.json"
     brief_path = user_home / ".agents" / "guard" / "latest" / "minimal-sample" / body["instance_id"] / "brief.json"
