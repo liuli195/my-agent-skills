@@ -1,6 +1,6 @@
 ---
 name: agent-guard-init
-description: 初始化守卫：第一次创建项目级或用户级 Guard Runtime（守卫运行时）和 Guard Profile（守卫画像）运行位置。Use when 用户要初始化、启用、落地或创建一个尚未初始化的守卫。
+description: 初始化守卫：第一次创建项目级或用户级 Guard Profile（守卫画像）和运行态约定。Use when 用户要初始化、启用、落地或创建一个尚未初始化的守卫。
 ---
 
 # agent-guard-init

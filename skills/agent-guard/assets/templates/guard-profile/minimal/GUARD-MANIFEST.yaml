@@ -1,4 +1,5 @@
 schema_version: guard-profile/v1
+runtime_api_version: agent-guard-runtime/v1
 guard_profile_id: minimal-sample
 name: 最小样例 Guard Profile（守卫画像）
 description: 校验最小 Guard Profile（守卫画像）契约，不包含具体业务规则。
@@ -7,13 +8,8 @@ source:
   status: template
 files:
   target_model: target-model.yaml
-  activation_model: activation-model.yaml
-  subject_resolver: subject-resolver.yaml
-  execution_model: execution-model.yaml
-  observation_model: observation-model.yaml
   state_machine: state-machine.yaml
   guard_points: guard-points.yaml
   artifacts: artifacts.yaml
-  hook_bindings: hook-bindings.yaml
   brief_template: brief-template.md
   validation_plan: validation-plan.md

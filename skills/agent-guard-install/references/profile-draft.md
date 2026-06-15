@@ -23,8 +23,8 @@ python ../agent-guard/scripts/validate_guard_profile.py <guard-profile-dir>
 ## 边界
 
 - 可以生成或更新画像草案。
-- 可以生成 Implementation Plan（实施计划），说明后续初始化、注入和 Hook（钩子）接入步骤。
-- 不初始化 `.agents/guard-runtime/` 或 `.agents/guards/<id>/`。
+- 可以生成 Implementation Plan（实施计划），说明后续初始化、Session Focus（会话焦点）和 Plugin Hook（插件钩子）接入步骤。
+- 不初始化 `.agents/guards/<id>/`。
 - 不安装 Hook（钩子）。
 - 不修改被守卫对象。
 - 不把任意既有目录当作合法草案；草案应来自本轮确认记录或已明确授权的更新输入。

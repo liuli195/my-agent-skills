@@ -27,15 +27,15 @@ python ../agent-guard/scripts/extract_guard_model.py <confirmed-notes.yaml> --ou
 ## 提取顺序
 
 1. Target Model（目标模型）：守卫什么、边界是什么、目标来源是什么。
-2. Initialization（初始化意图）：本次要生成哪个画像，是否默认启用 Guard Injection（守卫注入），是否计划后续接入 Hook（钩子）。
+2. Initialization（初始化意图）：本次要生成哪个画像，是否计划后续安装或验证 Plugin Hook（插件钩子）。
 3. Activation Model（激活模型）：什么时候显式激活、是否允许创建新实例、初始状态是什么。
-4. Subject Resolver（主体解析器）：用哪些字段识别同一个 Subject（主体），缺字段或多匹配时怎么处理。
+4. Session Focus Model（会话焦点模型）：用户如何选择 Guarded Target（被守卫目标）和 active Guard Instance（活跃守卫实例）。
 5. Execution Model（执行模型）：agent（代理）应按哪些节点推进，哪些下一步允许或禁止。
 6. Observation Model（观察模型）：从哪些事件、文件、命令输出或人工确认判断进展。
 7. State Machine（状态机）：把执行模型收敛成可运行状态和转换。
 8. Guard Point（守卫点）：每个转换上检查什么，失败时如何阻止状态推进。
 9. Artifact（产物）：哪些产物是外部引用，哪些由守卫生成，哪些是迁移候选。
-10. Hook Binding（钩子绑定）：哪些 Hook（钩子）事件用于权限评估，哪些主 agent（主代理）事件用于状态推进。
+10. Plugin Hook（插件钩子）：是否需要 `SessionStart` 和 `PreToolUse`，以及权限评估需要哪些工具输入字段。
 11. Validation Plan（验证计划）：先验证文件和引用，再验证运行时行为。
 
 不要一次性迁移所有守卫点。优先选择一个低风险守卫点，先验证状态推进和产物读取，再扩展到更多状态。

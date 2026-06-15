@@ -6,22 +6,18 @@ Hook Adapter（钩子适配器）只做格式转换和 Runtime（运行时）调
 
 第一版 adapter（适配器）支持：
 
-- `codex`：读取 Codex lifecycle hook（Codex 生命周期钩子）payload（载荷），覆盖 `UserPromptSubmit`、`SubagentStart`、`SubagentStop`、`PreToolUse` 和 `PostToolUse`。
-- `git-pre-push`：读取 Git pre-push（Git 推送前）标准输入，把 remote（远端）和 ref（引用）信息写入标准事件 envelope（信封）。
+- `codex`：读取 Codex lifecycle hook（Codex 生命周期钩子）payload（载荷），只覆盖 `SessionStart` 和 `PreToolUse`。
+- `claude`：读取 Claude lifecycle hook（Claude 生命周期钩子）payload（载荷），只覆盖 `SessionStart` 和 `PreToolUse`。
 
-后续扩展保留 `SessionStart`、`PreCompact`、`Stop` 和 Git `pre-commit`。这些事件不属于第一版安装入口，避免过早扩大 Hook（钩子）行为面。
+其他 Hook（钩子）不属于第一版安装入口，避免过早扩大 Hook（钩子）行为面。
 
 ## 标准事件
 
 标准事件必填字段：
 
-- `guard_profile_id`
-- `event_id`
-- `event_type`
 - `source`
-- `timestamp`
+- `event_type`
 - `context`
-- `subject`
 - `payload`
 
 标准事件可选字段：
@@ -33,4 +29,4 @@ Hook Adapter（钩子适配器）只做格式转换和 Runtime（运行时）调
 
 工具调用类事件必须保留工具名、工具输入、命令、路径和原始摘要，供 Runtime（运行时）按当前状态 `permissions` 判断。
 
-Hook（钩子）事件只用于权限评估、审计和提示，不推进状态。adapter（适配器）不得把 Codex 或 Git Hook（钩子）直接映射成 `state_completed`。
+Hook（钩子）事件只用于会话观察、权限评估、审计和提示，不推进状态。adapter（适配器）不得把 Codex 或 Claude Hook（钩子）直接映射成 `state_completed`。

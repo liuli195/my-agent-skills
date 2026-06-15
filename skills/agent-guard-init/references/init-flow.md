@@ -1,6 +1,6 @@
 # Init Flow（初始化流程）
 
-初始化只发布已校验 Guard Profile（守卫画像）草案，并创建项目级或用户级运行位置。
+初始化只发布已校验 Guard Profile（守卫画像）草案，并记录项目级或用户级运行态约定。
 
 ## 前置校验
 
@@ -20,10 +20,9 @@ python ../agent-guard/scripts/init_project_guard.py --profile <guard-profile-dir
 
 授权后写入：
 
-- `.agents/guard-runtime/`：项目级 Runtime（运行时）骨架。
 - `.agents/guards/<guard-profile-id>/`：已校验 Guard Profile（守卫画像）。
 
-Runtime（运行时）骨架来自 `../agent-guard/assets/templates/guard-runtime/`。
+Runtime code（运行时代码）由 Agent Guard Plugin（代理守卫插件）提供，不复制到目标项目。
 
 ## 用户级初始化
 

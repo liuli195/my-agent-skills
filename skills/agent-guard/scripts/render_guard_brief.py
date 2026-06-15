@@ -1,49 +1,60 @@
-"""读取项目级 Guard Runtime（守卫运行时）生成的 latest Guard Brief（最新守卫简报）。"""
+"""读取当前 Session Focus Instance（会话焦点实例）的 Guard Brief（守卫简报）。"""
 
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
 
 
+def runtime_cli() -> Path:
+    return Path(__file__).resolve().parents[3] / "plugins" / "agent-guard" / "scripts" / "guard_runtime" / "cli.py"
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="为 Guard Instance（守卫实例）渲染 latest Guard Brief（最新守卫简报）。")
+    parser = argparse.ArgumentParser(description="读取并注入当前 Guard Brief（守卫简报）。")
     parser.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目目录，默认当前目录")
-    parser.add_argument("--profile", required=True, help="Guard Profile（守卫画像）ID")
-    parser.add_argument("--subject", required=True, help="Subject Key Hash（主体键哈希）")
-    parser.add_argument("--format", choices=["json", "text"], default="json", help="输出格式")
-    parser.add_argument("--session", help="Codex session（Codex 会话）或调用上下文 ID，用于 brief_hash 去重")
-    parser.add_argument("--context-json", help="可选调用上下文字段 JSON（JSON 格式），写入注入记录")
+    parser.add_argument("--user-home", type=Path, default=Path.home(), help="用户级运行态根目录")
+    parser.add_argument("--source", default="codex", choices=["codex", "claude"], help="当前会话来源")
+    parser.add_argument("--session-id", help="当前 session_id")
+    parser.add_argument("--context-json", help="可从其中读取 session_id")
     args = parser.parse_args(argv)
 
-    project = args.project.resolve()
-    runner = project / ".agents" / "guard-runtime" / "guard_runner.py"
-    if not runner.exists():
-        print("status: runtime_missing")
-        print(f"project: {project}")
-        print(f"expected_runner: {runner}")
-        print("next: 先用 init_project_guard.py 初始化项目级 Guard Runtime（守卫运行时）。")
+    session_id = args.session_id
+    if not session_id and args.context_json:
+        try:
+            context = json.loads(args.context_json)
+        except json.JSONDecodeError as exc:
+            print("status: error")
+            print(f"reason: invalid_context_json: {exc}")
+            return 2
+        if isinstance(context, dict) and isinstance(context.get("session_id"), str):
+            session_id = context["session_id"]
+    if not session_id:
+        print("status: error")
+        print("reason: session_id_required")
         return 2
 
-    command = [
-        sys.executable,
-        str(runner),
-        "brief",
-        "--profile",
-        args.profile,
-        "--subject",
-        args.subject,
-        "--format",
-        args.format,
-    ]
-    if args.session:
-        command.extend(["--session", args.session])
-    if args.context_json:
-        command.extend(["--context-json", args.context_json])
-
-    completed = subprocess.run(command, cwd=project, text=True, check=False)
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(runtime_cli()),
+            "brief",
+            "--project",
+            str(args.project.resolve()),
+            "--user-home",
+            str(args.user_home.resolve()),
+            "--source",
+            args.source,
+            "--session-id",
+            session_id,
+        ],
+        cwd=args.project.resolve(),
+        text=True,
+        check=False,
+    )
     return completed.returncode
 
 

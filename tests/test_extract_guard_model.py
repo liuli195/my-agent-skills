@@ -50,8 +50,6 @@ grill_with_docs:
     - docs/adr/0001-agent-guard-architecture.md 已确认 Runtime（运行时）不写业务规则。
 initialization:
   requested_profile_ref: release-review-order
-  guard_injection:
-    enabled: true
   hook_installation:
     enabled: true
     reason: 调研确认需要安装 Hook（钩子）观察发布流程。
@@ -78,25 +76,14 @@ activation:
     - manual
   required_profile_ref: true
   scopes:
-    - current_context
-  on_existing_subject: reuse
-  on_missing_subject: create
+    - project
+  on_existing_instance: select
+  on_missing_instance: create
   initial_state: review_required
-subject:
-  identity_fields:
-    - context.repo
-    - context.branch
-  required_fields:
-    - context.repo
-    - context.branch
-  optional_fields:
-    - context.session_id
-  context_sources:
-    - context
-    - event
-  existing_match_policy: exact
-  create_policy: explicit_activation_only
-  ambiguous_policy: audit
+session_focus:
+  binding_scope: project
+  requires_session_observation: true
+  instance_selection: explicit
 execution:
   nodes:
     - id: complete_review
@@ -196,21 +183,6 @@ artifacts:
       - mark_review_complete
       - close_after_review
     description: 发布复核记录，由原流程拥有，守卫只读取。
-hook_bindings:
-  - id: manual-review-complete
-    source: manual
-    event_type: review.completed
-    transitions:
-      - mark_review_complete
-    guard_points:
-      - review_note_present
-  - id: manual-close
-    source: manual
-    event_type: state_completed
-    transitions:
-      - close_after_review
-    guard_points:
-      - review_note_present
 validation:
   items:
     - 校验生成文件符合最小 Guard Profile（守卫画像）契约。
@@ -237,8 +209,11 @@ def test_confirmed_notes_generate_valid_guard_profile(tmp_path: Path) -> None:
     assert (output_path / "GUARD-MANIFEST.yaml").exists()
     assert (output_path / "target-model.yaml").exists()
     assert (output_path / "validation-plan.md").exists()
+    assert not (output_path / "subject-resolver.yaml").exists()
+    assert not (output_path / "hook-bindings.yaml").exists()
     brief_template = (output_path / "brief-template.md").read_text(encoding="utf-8")
-    assert "{{ subject_key_hash }}" in brief_template
+    assert "{{ instance_id }}" in brief_template
+    assert "{{ subject_key_hash }}" not in brief_template
     assert "{{ permissions }}" in brief_template
     assert "{{ transition_conditions }}" in brief_template
     assert "{{ state_completion_instruction }}" in brief_template
@@ -255,7 +230,7 @@ def test_generation_includes_guard_point_implementation_plan(tmp_path: Path) -> 
     implementation_plan = (output_path / "implementation-plan.md").read_text(encoding="utf-8")
     assert "# Implementation Plan（实施计划）" in implementation_plan
     assert "## 初始化" in implementation_plan
-    assert "## 守卫注入" in implementation_plan
+    assert "## Session Focus（会话焦点）" in implementation_plan
     assert "## Hook（钩子）" in implementation_plan
     assert "## 配置" in implementation_plan
     assert "## 守卫点划分" in implementation_plan
@@ -263,9 +238,9 @@ def test_generation_includes_guard_point_implementation_plan(tmp_path: Path) -> 
     assert "review_note_present" in implementation_plan
     assert "初始化阶段只生成配置和验证计划" in implementation_plan
     assert "根据本次调用确认画像：`release-review-order`" in implementation_plan
-    assert "Guard Injection（守卫注入）默认启用" in implementation_plan
+    assert "Session Focus Binding（会话焦点绑定）" in implementation_plan
     assert "调研已确认启用 Hook（钩子）" in implementation_plan
-    assert "install_hooks.py --authorize-install" in implementation_plan
+    assert "只声明 SessionStart 和 PreToolUse" in implementation_plan
     assert "审计目录" not in implementation_plan
     assert "验证该守卫点失败时不会推进状态" in implementation_plan
     assert "warn" not in implementation_plan
@@ -338,24 +313,6 @@ def test_deny_permissions_require_extra_authorization_before_generation(tmp_path
 
     assert allowed.returncode == 0, allowed.stdout + allowed.stderr
     assert "status: generated" in allowed.stdout
-
-
-def test_disabled_guard_injection_reports_needs_confirmation(tmp_path: Path) -> None:
-    input_path = tmp_path / "injection-disabled.yaml"
-    output_path = tmp_path / "release-review-order"
-    write_complete_extraction_input(input_path)
-    input_path.write_text(
-        input_path.read_text(encoding="utf-8").replace(
-            "  guard_injection:\n    enabled: true\n",
-            "  guard_injection:\n    enabled: false\n",
-        ),
-        encoding="utf-8",
-    )
-
-    result = run_extractor(input_path, output_path)
-
-    assert result.returncode == 1
-    assert "initialization.guard_injection.enabled" in result.stdout
 
 
 def test_generation_does_not_modify_guarded_target_file(tmp_path: Path) -> None:

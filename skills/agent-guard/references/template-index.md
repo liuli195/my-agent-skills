@@ -16,23 +16,16 @@
 - 画像字段结构以 `minimal/` 中的 YAML（YAML 配置格式）为基准。
 - 校验以 `scripts/validate_guard_profile.py` 为准。
 
-## Guard Runtime（守卫运行时）
+## Plugin Runtime（插件运行时）
 
-- `assets/templates/guard-runtime/guard_runner.py`：项目级 Runtime（运行时）统一 CLI（命令行接口）。
-- `assets/templates/guard-runtime/hook_event_adapter.py`：Hook（钩子）事件到标准事件 envelope（信封）的适配器。
+- `scripts/install_agent_guard_plugin.py`：安装或验证 Agent Guard Plugin（代理守卫插件）的入口。
+- `../../plugins/agent-guard/hooks/hooks.json`：Plugin（插件）发布的 `SessionStart` / `PreToolUse` lifecycle Hook（生命周期钩子）配置。
+- `../../plugins/agent-guard/scripts/hook_router.py`：Hook Router（钩子路由器）。
+- `../../plugins/agent-guard/scripts/guard_runtime/`：通用 Runtime code（运行时代码）。
 
 使用规则：
 
 - Runtime（运行时）只执行通用机制，不写具体业务规则。
-- Runtime（运行时）骨架由初始化或更新脚本复制，入口文档只引用模板，不复写实现。
-
-## Hook（钩子）
-
-- `assets/templates/codex-hooks/hooks.json`：Codex Hook（Codex 钩子）安装模板。
-- `assets/templates/git-hooks/pre-push`：Git `pre-push` hook（推送前钩子）模板。
-
-使用规则：
-
-- Hook（钩子）只捕获和标准化事件。
-- Hook（钩子）拒绝外部动作只能来自 Runtime（运行时）返回的 `deny`。
-- Hook（钩子）不创建 Guard Instance（守卫实例），不推进状态。
+- Runtime code（运行时代码）随 Plugin（插件）安装，不复制到目标项目。
+- Hook（钩子）只捕获和标准化 `SessionStart` / `PreToolUse`。
+- Hook（钩子）不创建 Guard Instance（守卫实例），不推进状态，不绑定 Guard Profile（守卫画像）。

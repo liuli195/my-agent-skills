@@ -40,7 +40,7 @@ def run_validator(profile_path: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_verified_guard_profile_initializes_project_runtime_and_profile(tmp_path: Path) -> None:
+def test_verified_guard_profile_initializes_project_profile_without_runtime_copy(tmp_path: Path) -> None:
     project = tmp_path / "target-project"
     project.mkdir()
     draft = tmp_path / "draft-profile"
@@ -63,17 +63,14 @@ def test_verified_guard_profile_initializes_project_runtime_and_profile(tmp_path
 
     runtime_dir = project / ".agents" / "guard-runtime"
     profile_dir = project / ".agents" / "guards" / "minimal-sample"
-    assert (runtime_dir / "VERSION").exists()
-    assert (runtime_dir / "RUNTIME-MANIFEST.yaml").exists()
-    assert (runtime_dir / "requirements.txt").exists()
-    assert (runtime_dir / "guard_runner.py").exists()
-    assert (runtime_dir / "README.md").exists()
+    assert not runtime_dir.exists()
     assert (profile_dir / "GUARD-MANIFEST.yaml").exists()
     assert (profile_dir / "validation-plan.md").exists()
-    assert (profile_dir / "hook-install-plan.md").exists()
+    assert not (profile_dir / "hook-install-plan.md").exists()
 
     validation = run_validator(profile_dir)
     assert validation.returncode == 0, validation.stdout + validation.stderr
+    assert "plugin_runtime: external_plugin" in result.stdout
     assert not (project / ".codex" / "hooks.json").exists()
     assert not (project / ".githooks").exists()
     assert not (project / ".local").exists()
@@ -182,6 +179,6 @@ def test_initialization_defaults_to_dry_run_without_writing_project(tmp_path: Pa
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: dry_run" in result.stdout
     assert "authorization: missing" in result.stdout
-    assert "hook_installation: not_installed" in result.stdout
+    assert "plugin_runtime: external_plugin" in result.stdout
     assert not (project / ".agents").exists()
     assert not (project / ".local").exists()

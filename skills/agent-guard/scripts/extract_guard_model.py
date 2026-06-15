@@ -15,14 +15,9 @@ from validate_guard_profile import ValidationIssue, state_machine_has_deny_permi
 
 PROFILE_FILES = {
     "target_model": "target-model.yaml",
-    "activation_model": "activation-model.yaml",
-    "subject_resolver": "subject-resolver.yaml",
-    "execution_model": "execution-model.yaml",
-    "observation_model": "observation-model.yaml",
     "state_machine": "state-machine.yaml",
     "guard_points": "guard-points.yaml",
     "artifacts": "artifacts.yaml",
-    "hook_bindings": "hook-bindings.yaml",
     "brief_template": "brief-template.md",
     "validation_plan": "validation-plan.md",
     "implementation_plan": "implementation-plan.md",
@@ -37,7 +32,6 @@ REQUIRED_INPUT_FIELDS = [
     "grill_with_docs.exceptions",
     "grill_with_docs.documentation_changes",
     "initialization.requested_profile_ref",
-    "initialization.guard_injection.enabled",
     "initialization.hook_installation.enabled",
     "profile.id",
     "profile.name",
@@ -47,28 +41,12 @@ REQUIRED_INPUT_FIELDS = [
     "target.name",
     "target.source",
     "target.boundary",
-    "activation.allowed_sources",
-    "activation.required_profile_ref",
-    "activation.scopes",
-    "activation.on_existing_subject",
-    "activation.on_missing_subject",
-    "activation.initial_state",
-    "subject.identity_fields",
-    "subject.required_fields",
-    "subject.context_sources",
-    "subject.existing_match_policy",
-    "subject.create_policy",
-    "subject.ambiguous_policy",
-    "execution.nodes",
-    "execution.states",
-    "observation.signals",
     "state_machine.initial_state",
     "state_machine.terminal_states",
     "state_machine.states",
     "state_machine.transitions",
     "guard_points",
     "artifacts",
-    "hook_bindings",
     "validation.items",
 ]
 
@@ -144,16 +122,6 @@ def collect_needs_confirmation(data: dict[str, Any]) -> list[ConfirmationNeed]:
             )
         )
 
-    guard_injection_enabled = value_at(data, "initialization.guard_injection.enabled")
-    if is_present(guard_injection_enabled) and guard_injection_enabled is not True:
-        needs.append(
-            ConfirmationNeed(
-                field="initialization.guard_injection.enabled",
-                reason="初始化调研默认启用 Guard Injection（守卫注入），让 agent 能读取 latest Guard Brief（最新守卫简报）。",
-                ask="请确认是否按默认启用 Guard Injection（守卫注入）。",
-            )
-        )
-
     hook_installation_enabled = value_at(data, "initialization.hook_installation.enabled")
     if is_present(hook_installation_enabled) and not isinstance(hook_installation_enabled, bool):
         needs.append(
@@ -161,16 +129,6 @@ def collect_needs_confirmation(data: dict[str, Any]) -> list[ConfirmationNeed]:
                 field="initialization.hook_installation.enabled",
                 reason="初始化调研必须明确是否启用 Hook（钩子）。",
                 ask="请把 `initialization.hook_installation.enabled` 明确为 `true` 或 `false`。",
-            )
-        )
-
-    hook_bindings = value_at(data, "hook_bindings")
-    if hook_installation_enabled is True and isinstance(hook_bindings, list) and not hook_bindings:
-        needs.append(
-            ConfirmationNeed(
-                field="hook_bindings",
-                reason="已确认启用 Hook（钩子），但没有可安装的 Hook Binding（钩子绑定）。",
-                ask="请确认至少一个 Hook Binding（钩子绑定），或把 `initialization.hook_installation.enabled` 改为 `false`。",
             )
         )
 
@@ -199,6 +157,7 @@ def build_manifest(data: dict[str, Any]) -> dict[str, Any]:
     assert isinstance(profile, dict)
     return {
         "schema_version": "guard-profile/v1",
+        "runtime_api_version": "agent-guard-runtime/v1",
         "guard_profile_id": profile["id"],
         "name": profile["name"],
         "description": profile["description"],
@@ -236,7 +195,7 @@ def build_validation_plan(data: dict[str, Any]) -> str:
     lines.extend(
         [
             "- 校验所有必需 Guard Profile（守卫画像）文件存在。",
-            "- 校验状态机、守卫点、产物、观察信号和 Hook Binding（钩子绑定）引用完整。",
+            "- 校验状态机、守卫点和产物引用完整。",
             "- 确认生成过程只写入 Guard Profile（守卫画像）草案目录，不修改被守卫对象。",
         ]
     )
@@ -246,18 +205,12 @@ def build_validation_plan(data: dict[str, Any]) -> str:
 def build_implementation_plan(data: dict[str, Any]) -> str:
     profile = value_at(data, "profile")
     initialization = value_at(data, "initialization")
-    activation = value_at(data, "activation")
-    subject = value_at(data, "subject")
     guard_points = value_at(data, "guard_points")
     artifacts = value_at(data, "artifacts")
-    hook_bindings = value_at(data, "hook_bindings")
     assert isinstance(profile, dict)
     assert isinstance(initialization, dict)
-    assert isinstance(activation, dict)
-    assert isinstance(subject, dict)
     assert isinstance(guard_points, list)
     assert isinstance(artifacts, list)
-    assert isinstance(hook_bindings, list)
 
     lines = [
         "# Implementation Plan（实施计划）",
@@ -267,15 +220,16 @@ def build_implementation_plan(data: dict[str, Any]) -> str:
         "## 初始化",
         "",
         f"- 根据本次调用确认画像：`{initialization['requested_profile_ref']}`。",
-        "- 在目标范围显式初始化 Guard Runtime（守卫运行时）和 Guard Profile（守卫画像）目录。",
+        "- 在目标范围显式初始化 Guard Profile（守卫画像）目录。",
+        "- Runtime code（运行时代码）由 Agent Guard Plugin（代理守卫插件）发布，不复制到目标项目。",
         "- 初始化阶段只生成配置和验证计划，不预建 `.local/guard/*` 运行态目录，不修改被守卫对象。",
         "- 初始化输入必须是本轮调研生成并校验通过的 Guard Profile（守卫画像）草案目录。",
         "",
-        "## 守卫注入",
+        "## Session Focus（会话焦点）",
         "",
-        "- Guard Injection（守卫注入）默认启用。",
-        "- 初始化后 agent（代理）通过 latest Guard Brief（最新守卫简报）读取当前状态和下一步要求。",
-        "- 使用 `brief --session <session-id>` 时按 session（会话）记录 `brief_hash`，避免重复注入。",
+        "- 激活时通过 Session Observation（会话观察记录）识别当前会话。",
+        "- 用户显式选择或创建 Guard Instance（守卫实例），再写 Session Focus Binding（会话焦点绑定）。",
+        "- Guard Instance（守卫实例）使用 opaque instance_id（不透明实例 ID），只区分 active（活跃）和 closed（关闭）。",
         "",
         "## Hook（钩子）",
         "",
@@ -287,8 +241,8 @@ def build_implementation_plan(data: dict[str, Any]) -> str:
         lines.extend(
             [
                 "- 调研已确认启用 Hook（钩子）。",
-                "- 初始化完成并校验画像后，使用 `install_hooks.py --authorize-install` 安装 Hook（钩子）。",
-                "- 安装 Hook（钩子）前仍必须获得用户明确授权。",
+                "- Hook（钩子）由 Agent Guard Plugin（代理守卫插件）安装，只声明 SessionStart 和 PreToolUse。",
+                "- Hook Router（钩子路由器）不接收画像参数，不绑定 Guard Profile（守卫画像）。",
             ]
         )
     else:
@@ -301,11 +255,8 @@ def build_implementation_plan(data: dict[str, Any]) -> str:
         "",
         "## 配置",
         "",
-        f"- activation.initial_state：`{activation['initial_state']}`。",
-        f"- activation.on_existing_subject：`{activation['on_existing_subject']}`。",
-        f"- activation.on_missing_subject：`{activation['on_missing_subject']}`。",
-        f"- subject.identity_fields：{format_inline_list(subject['identity_fields'])}。",
-        f"- subject.required_fields：{format_inline_list(subject['required_fields'])}。",
+        "- Guarded Target（被守卫目标）写在 target-model.yaml。",
+        "- 状态推进只允许 `state_completed`，且只能推进当前 Session Focus Instance（会话焦点实例）。",
         "- 业务规则只放在 Guard Profile（守卫画像）配置中，Runtime（运行时）和 Hook（钩子）只做通用执行。",
         "",
         "## 守卫点划分",
@@ -336,8 +287,8 @@ def build_implementation_plan(data: dict[str, Any]) -> str:
             [
                 f"### `{guard_point_id}`",
                 "",
-                "1. 确认该守卫点的目标、触发事件、依赖产物和失败行为。",
-                "2. 只启用该守卫点关联的状态转换、产物引用和 Hook Binding（钩子绑定）。",
+                "1. 确认该守卫点的目标、依赖产物和失败行为。",
+                "2. 只启用该守卫点关联的状态转换和产物引用。",
                 "3. 运行 `validate_guard_profile.py <guard-profile-dir>` 校验文件和引用。",
                 "4. 验证该守卫点失败时不会推进状态，并能输出清晰修复建议。",
                 "5. 如果误报或检查错误，只回滚该守卫点，不回滚整个 Guard Profile（守卫画像）。",
@@ -345,48 +296,14 @@ def build_implementation_plan(data: dict[str, Any]) -> str:
             ]
         )
 
-    lines.extend(["## 产物和 Hook（钩子）接入", ""])
+    lines.extend(["## 产物", ""])
     for artifact in artifacts:
         if isinstance(artifact, dict):
             lines.append(
                 f"- Artifact（产物）`{artifact.get('id', '<unknown>')}`：owner（所有者）=`{artifact.get('owner', '<unknown>')}`。"
             )
-    for binding in hook_bindings:
-        if isinstance(binding, dict):
-            lines.append(
-                f"- Hook Binding（钩子绑定）`{binding.get('id', '<unknown>')}`：event_type=`{binding.get('event_type', '<unknown>')}`。"
-            )
 
     return "\n".join(lines).rstrip() + "\n"
-
-
-def hook_binding_has_trigger(binding: dict[str, Any]) -> bool:
-    if is_present(binding.get("trigger_event")):
-        return True
-    trigger = binding.get("trigger")
-    return isinstance(trigger, dict) and is_present(trigger.get("event"))
-
-
-def normalize_hook_bindings(data: dict[str, Any]) -> None:
-    profile = value_at(data, "profile")
-    hook_bindings = value_at(data, "hook_bindings")
-    if not isinstance(profile, dict) or not isinstance(hook_bindings, list):
-        return
-
-    for binding in hook_bindings:
-        if not isinstance(binding, dict):
-            continue
-        event_type = binding.get("event_type")
-        if isinstance(event_type, str) and not hook_binding_has_trigger(binding):
-            binding["trigger_event"] = event_type
-        binding.setdefault("target_profile", profile.get("id"))
-        install = binding.get("install")
-        if not isinstance(install, dict):
-            install = {}
-            binding["install"] = install
-        install.setdefault("status", "not_installed")
-        install.setdefault("target", binding.get("source", "manual"))
-        install.setdefault("rollback", "remove installed hook entry")
 
 
 def format_inline_list(value: Any) -> str:
@@ -399,14 +316,9 @@ def write_profile(data: dict[str, Any], output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
     dump_yaml_file(output / "GUARD-MANIFEST.yaml", build_manifest(data))
     dump_yaml_file(output / "target-model.yaml", {"target": data["target"]})
-    dump_yaml_file(output / "activation-model.yaml", {"activation": data["activation"]})
-    dump_yaml_file(output / "subject-resolver.yaml", {"subject": data["subject"]})
-    dump_yaml_file(output / "execution-model.yaml", data["execution"])
-    dump_yaml_file(output / "observation-model.yaml", data["observation"])
     dump_yaml_file(output / "state-machine.yaml", data["state_machine"])
     dump_yaml_file(output / "guard-points.yaml", {"guard_points": data["guard_points"]})
     dump_yaml_file(output / "artifacts.yaml", {"artifacts": data["artifacts"]})
-    dump_yaml_file(output / "hook-bindings.yaml", {"hook_bindings": data["hook_bindings"]})
     (output / "brief-template.md").write_text(default_brief_template(), encoding="utf-8")
     (output / "validation-plan.md").write_text(build_validation_plan(data), encoding="utf-8")
     (output / "implementation-plan.md").write_text(build_implementation_plan(data), encoding="utf-8")
@@ -416,7 +328,7 @@ def default_brief_template() -> str:
     return """# Guard Brief（守卫简报）
 
 Guard Profile（守卫画像）：{{ guard_profile_id }}
-Subject（主体）：{{ subject_key_hash }}
+Guard Instance（守卫实例）：{{ instance_id }}
 当前状态：{{ state }}
 允许下一步：{{ allowed_next }}
 禁止下一步：{{ forbidden_next }}
@@ -491,7 +403,6 @@ def main(argv: list[str] | None = None) -> int:
         print_deny_authorization_required(args.output)
         return 1
 
-    normalize_hook_bindings(data)
     write_profile(data, args.output)
     _checked, issues = validate_profile(args.output)
     if issues:

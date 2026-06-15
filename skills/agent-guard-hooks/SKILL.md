@@ -1,6 +1,6 @@
 ---
 name: agent-guard-hooks
-description: 接入 Hook（钩子）：dry-run、安装或验证 Codex Hook（Codex 钩子）和 Git Hook（Git 钩子）。Use when 用户要安装、验证、检查、接入或排查 Agent Guard Hook。
+description: 接入 Hook（钩子）：dry-run、安装或验证 Agent Guard Plugin（代理守卫插件）提供的 lifecycle Hook（生命周期钩子）。Use when 用户要安装、验证、检查、接入或排查 Agent Guard Hook。
 ---
 
 # agent-guard-hooks
@@ -22,7 +22,7 @@ description: 接入 Hook（钩子）：dry-run、安装或验证 Codex Hook（Co
 1. 读取 `references/hook-install.md`。
 2. 需要理解事件适配时，读取 `references/hook-adapter.md`。
 3. 需要理解 Runtime（运行时）返回结果时，读取 `references/hook-results.md`。
-4. 运行 `../agent-guard/scripts/install_hooks.py --project <target-project> --profile <guard-profile-id>` 查看 dry-run。
-5. 用户明确授权后才加 `--authorize-install`。
-6. 验证时使用 `--verify`。
-7. 输出 Hook Binding（钩子绑定）、写入位置、回滚方式和风险提示。
+4. 运行 `../agent-guard/scripts/install_agent_guard_plugin.py dry-run --target <codex|claude|all>` 查看 dry-run。
+5. 用户明确授权后才运行 `install --target <codex|claude|all> --authorize-install`。
+6. 验证时使用 `verify --target <codex|claude|all>`。
+7. 输出 Plugin（插件）安装位置、marketplace（市场）入口、Hook（钩子）能力和风险提示。

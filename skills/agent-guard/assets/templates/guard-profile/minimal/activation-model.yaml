@@ -4,7 +4,7 @@ activation:
     - manual
   required_profile_ref: true
   scopes:
-    - current_context
-  on_existing_subject: reuse
-  on_missing_subject: create
+    - project
+  on_existing_instance: select
+  on_missing_instance: create
   initial_state: open

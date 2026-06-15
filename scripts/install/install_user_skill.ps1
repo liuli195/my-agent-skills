@@ -12,15 +12,11 @@ $RequiredItems = @(
     "agents\openai.yaml",
     "references\architecture.md",
     "references\terminology.md",
-    "references\subject-resolution.md",
     "references\template-index.md",
     "assets",
     "scripts",
-    "assets\templates\guard-runtime\guard_runner.py",
-    "assets\templates\guard-runtime\hook_event_adapter.py",
     "assets\templates\guard-profile\minimal\GUARD-MANIFEST.yaml",
-    "assets\templates\codex-hooks\hooks.json",
-    "assets\templates\git-hooks\pre-push"
+    "scripts\install_agent_guard_plugin.py"
 )
 
 $EntrypointSkills = @(

@@ -1,13 +1,13 @@
 # Activate（激活）
 
-激活用于创建或匹配一个 Guard Instance（守卫实例）。
+激活用于把当前 `source + session_id` 显式绑定到一个 Session Focus Instance（会话焦点实例）。
 
 ## 入口
 
-项目级 Runtime（运行时）稳定入口：
+Plugin Runtime（插件运行时）稳定入口：
 
 ```text
-guard_runner.py activate --profile <id> --scope current_context --source agent-guard-skill --context-json '{"session_id":"..."}'
+python <plugin>/scripts/guard_runtime/cli.py activate --source codex --session-id <session-id> --profile <id>
 ```
 
 源码仓库辅助脚本：
@@ -18,13 +18,11 @@ python ../agent-guard/scripts/activate_guard.py
 
 ## 规则
 
-- 先校验 Guard Profile（守卫画像）存在。
-- 校验 `activation.allowed_sources`、`activation.scopes` 和 `activation.required_profile_ref`。
-- 按 `subject-resolver.yaml` 读取身份字段；Runtime（运行时）不得自行猜 Subject Key（主体键）。
-- 优先匹配已有 Guard Instance（守卫实例）。
-- 只有显式 `activate` 可以创建新实例。
+- 先确认 `SessionStart` Hook（会话启动钩子）已经写入 Session Observation（会话观察记录）。
+- 先展示 Guarded Target（被守卫目标）表格和 active Guard Instance（活跃守卫实例）表格。
+- 选择已有实例时使用 `--select-instance <instance-id>`。
+- 创建新实例时必须显式传入 `--create`，并确认 `--title` 和 `--description`。
+- 新实例 `instance_id` 必须是 opaque ID（不透明 ID），不带业务语义。
+- 切换焦点只替换 Session Focus Binding（会话焦点绑定），旧实例不自动关闭。
+- 成功绑定必须写 `session_focus_changed` 审计。
 - Hook（钩子）事件和 `state_completed` 事件不得创建新实例。
-- 缺少必填字段时返回 `no_subject_match` 并写审计。
-- 多个候选实例匹配时返回 `ambiguous_subject` 并写审计。
-
-Subject Resolver（主体解析器）通用规则见 `../agent-guard/references/subject-resolution.md`。

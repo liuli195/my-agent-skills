@@ -1,9 +1,6 @@
 guard_points:
   - id: completion_note_present
     description: 关闭前要求样例 completion_note（完成说明）存在。
-    trigger:
-      events:
-        - state_completed
     required_artifacts:
       - completion_note
     checks:

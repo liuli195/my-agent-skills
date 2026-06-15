@@ -1,7 +1,7 @@
 # Guard Brief（守卫简报）
 
 Guard Profile（守卫画像）：{{ guard_profile_id }}
-Subject（主体）：{{ subject_key_hash }}
+Guard Instance（守卫实例）：{{ instance_id }}
 当前状态：{{ state }}
 允许下一步：{{ allowed_next }}
 禁止下一步：{{ forbidden_next }}

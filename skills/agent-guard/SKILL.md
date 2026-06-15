@@ -13,9 +13,9 @@ description: 路由到具体 Agent Guard（代理守卫）场景入口。Use whe
 | --- | --- |
 | 调研被守卫对象，生成或更新 Guard Profile（守卫画像）草案 | `$agent-guard-install` |
 | 第一次初始化项目级或用户级守卫 | `$agent-guard-init` |
-| 升级 Guard Runtime（守卫运行时），或同步已校验画像到已初始化守卫 | `$agent-guard-update` |
-| 激活 Guard Instance（守卫实例）、读取 Guard Brief（守卫简报）、提交事件 | `$agent-guard-run` |
-| dry-run、安装或验证 Codex Hook（Codex 钩子）和 Git Hook（Git 钩子） | `$agent-guard-hooks` |
+| 更新 Agent Guard Plugin（代理守卫插件），或同步已校验画像到已初始化守卫 | `$agent-guard-update` |
+| 激活 Session Focus Instance（会话焦点实例）、切换焦点、关闭实例、提交事件 | `$agent-guard-run` |
+| dry-run、安装或验证 Agent Guard Plugin（代理守卫插件）的 lifecycle Hook（生命周期钩子） | `$agent-guard-hooks` |
 
 ## 规则
 

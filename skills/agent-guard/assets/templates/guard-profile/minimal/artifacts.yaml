@@ -4,7 +4,7 @@ artifacts:
     owner: guard
     required_for:
       - close_after_note
-    path: .local/guard/artifacts/{guard_profile_id}/{subject_key_hash}/{state_version}/completion-note.json
+    path: .local/guard/artifacts/{profile_id}/{instance_id}/{state_version}/completion-note.json
     freshness:
       scope: current_state_entry
     reuse_policy: deny

@@ -476,7 +476,32 @@ Guarded Target（被守卫目标）选择：
 - 同一 `profile_id + instance_id` 的状态推进必须加锁。
 - 状态推进时按当前状态评估 Guard Point（守卫点），不读取 Hook Binding（钩子绑定）。
 
-## 模块十三：Audit Log 与 Lock Manager（审计与锁）
+## 模块十三：Guard Brief 与 Guard Injection（守卫简报与守卫注入）
+
+### 责任
+
+- 为当前 Session Focus Instance（会话焦点实例）生成 latest Guard Brief（最新守卫简报）。
+- 在状态推进、权限拒绝、守卫点失败和状态变化后刷新简报。
+- 在主 agent（主代理）推进 `state_completed` 前提供权威状态读取面。
+- 使用 `brief_hash` 对同一 `source + session_id + profile_id + instance_id` 去重注入。
+
+### 路径
+
+- latest JSON（最新 JSON）：`.local/guard/latest/<profile_id>/<instance_id>/brief.json`
+- latest Markdown（最新 Markdown）：`.local/guard/latest/<profile_id>/<instance_id>/brief.md`
+- 注入记录：`.local/guard/injections/<source>/<session_id-hash>/<profile_id>/<instance_id>.json`
+
+### 规则
+
+- Guard Brief（守卫简报）必须保留；删除的是基于 `subject_key_hash` 的旧路径，不是删除简报机制。
+- 简报必须通过 Session Focus Binding（会话焦点绑定）解析当前 `profile_id + instance_id`。
+- 简报内容至少包含当前状态、允许下一步、禁止下一步、缺失产物、最近拒绝原因、权限摘要、完成条件、状态推进提示和审计位置。
+- 终止状态不得提示继续推进，只提示流程已完成和审计位置。
+- 注入内容只能来自 Runtime（运行时）生成的 latest Guard Brief（最新守卫简报）。
+- 相同 `brief_hash` 在同一 `source + session_id + profile_id + instance_id` 内不得重复注入。
+- `state_completed` 前 Runtime（运行时）必须确认当前 `brief_hash` 已经通过 brief（简报）入口读取并记录；未读取时返回 `brief_required`，不得推进状态。
+
+## 模块十四：Audit Log 与 Lock Manager（审计与锁）
 
 ### Audit Log
 
@@ -504,7 +529,7 @@ Guarded Target（被守卫目标）选择：
 - Hook Binding（钩子绑定）作为画像字段。
 - Git Hook（Git 钩子）写入逻辑。
 - 目标项目内复制 Runtime code（运行时代码）的初始化和升级逻辑。
-- Guard Brief（守卫简报）、confirmations（确认记录）、overrides（覆盖记录）、latest brief（最新简报）中基于 `subject_key_hash` 的路径。
+- Guard Brief（守卫简报）、confirmations（确认记录）、overrides（覆盖记录）、latest brief（最新简报）中基于 `subject_key_hash` 的旧路径；Guard Brief（守卫简报）机制本身必须迁移到 `instance_id`，不得删除。
 - 旧运行态兼容读取。
 - 旧脚本输出兼容。
 
@@ -530,6 +555,8 @@ Guarded Target（被守卫目标）选择：
 - Activation Service（激活服务）：表格输出、选择已有实例、创建新实例、切换焦点绑定。
 - Runtime Router（运行时路由器）：无焦点放行、绑定损坏拒绝、多绑定拒绝、有效焦点按状态判断。
 - State Transition Service（状态推进服务）：无焦点中止、禁止指定 `profile_id` 或 `instance_id`、有效焦点推进、并发锁。
+- Guard Brief（守卫简报）：激活生成 latest brief（最新简报）、状态推进刷新简报、同一 session（会话）按 `brief_hash` 去重注入。
+- Guard Brief（守卫简报）：未读取当前 `brief_hash` 时，`state_completed` 返回 `brief_required` 且不推进状态。
 - Profile Validator（画像校验器）：不再要求 `subject-resolver.yaml` 和 `hook-bindings.yaml`。
 - 安装流程：不写 Git Hook（Git 钩子），不复制 Runtime code（运行时代码）到目标项目。
 
@@ -547,6 +574,7 @@ Guarded Target（被守卫目标）选择：
 10. 实现 Activation Service（激活服务）。
 11. 实现 Runtime Router（运行时路由器）。
 12. 实现 State Transition Service（状态推进服务）。
-13. 实现 Audit Log 与 Lock Manager（审计与锁）。
-14. 删除或重写旧契约相关模板、脚本和测试。
-15. 跑完整测试并清理旧术语残留。
+13. 实现 Guard Brief 与 Guard Injection（守卫简报与守卫注入）。
+14. 实现 Audit Log 与 Lock Manager（审计与锁）。
+15. 删除或重写旧契约相关模板、脚本和测试。
+16. 跑完整测试并清理旧术语残留。

@@ -8,8 +8,6 @@ grill_with_docs:
   documentation_changes: []
 initialization:
   requested_profile_ref: example-guard
-  guard_injection:
-    enabled: true
   hook_installation:
     enabled: false
     reason: 等用户明确授权后再安装 Hook（钩子）。
@@ -26,17 +24,14 @@ target:
 activation:
   allowed_sources: [agent-guard-skill]
   required_profile_ref: true
-  scopes: [current_context]
-  on_existing_subject: reuse
-  on_missing_subject: create
+  scopes: [project]
+  on_existing_instance: select
+  on_missing_instance: create
   initial_state: open
-subject:
-  identity_fields: [context.session_id]
-  required_fields: [context.session_id]
-  context_sources: [context, event]
-  existing_match_policy: exact
-  create_policy: explicit_activation_only
-  ambiguous_policy: audit
+session_focus:
+  binding_scope: project
+  requires_session_observation: true
+  instance_selection: explicit
 execution:
   nodes: []
   states: []
@@ -49,6 +44,5 @@ state_machine:
   transitions: []
 guard_points: []
 artifacts: []
-hook_bindings: []
 validation:
   items: []

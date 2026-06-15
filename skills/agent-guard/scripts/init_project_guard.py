@@ -1,4 +1,4 @@
-"""初始化项目级 Guard Runtime（守卫运行时）和 Guard Profile（守卫画像）。"""
+"""初始化项目级 Guard Profile（守卫画像）。"""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from validate_guard_profile import ValidationIssue, profile_has_deny_permissions
 
 
 PROFILE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-RUNTIME_VERSION = "0.1.0"
 
 
 def load_yaml_mapping(path: Path) -> dict[str, Any]:
@@ -81,90 +80,10 @@ def normalize_profile_for_initialization(profile_dir: Path, profile_id: str) -> 
     manifest.setdefault("project_initialization", {})
     manifest["project_initialization"].update(
         {
-            "hook_installation": "not_installed",
+            "plugin_runtime": "external_plugin",
         }
     )
     dump_yaml(manifest_path, manifest)
-
-
-def write_runtime_skeleton(project: Path) -> Path:
-    runtime_dir = project / ".agents" / "guard-runtime"
-    for relative_dir in ["engine", "adapters", "checks", "schemas"]:
-        directory = runtime_dir / relative_dir
-        directory.mkdir(parents=True, exist_ok=True)
-        (directory / ".gitkeep").write_text("", encoding="utf-8")
-
-    (runtime_dir / "VERSION").write_text(f"{RUNTIME_VERSION}\n", encoding="utf-8")
-    (runtime_dir / "requirements.txt").write_text("PyYAML\njsonschema\n", encoding="utf-8")
-    dump_yaml(
-        runtime_dir / "RUNTIME-MANIFEST.yaml",
-        {
-            "schema_version": "guard-runtime/v1",
-            "runtime_version": RUNTIME_VERSION,
-            "generated_by": "agent-guard",
-            "entrypoints": {
-                "activate": "guard_runner.py activate --profile <id> --scope current_context",
-                "run": "guard_runner.py run --event <event-file>",
-                "brief": "guard_runner.py brief --profile <id> --subject <subject-key-hash> --format json",
-            },
-            "runtime_paths": {
-                "profiles": ".agents/guards",
-                "state": ".local/guard/state",
-                "runs": ".local/guard/runs",
-                "overrides": ".local/guard/overrides",
-                "confirmations": ".local/guard/confirmations",
-                "latest": ".local/guard/latest",
-                "injections": ".local/guard/injections",
-            },
-            "hook_installation": "not_installed",
-        },
-    )
-    (runtime_dir / "README.md").write_text(runtime_readme(), encoding="utf-8")
-    (runtime_dir / "guard_runner.py").write_text(guard_runner_template(), encoding="utf-8")
-    return runtime_dir
-
-
-def guard_runner_template() -> str:
-    template = Path(__file__).resolve().parents[1] / "assets" / "templates" / "guard-runtime" / "guard_runner.py"
-    return template.read_text(encoding="utf-8")
-
-
-def runtime_readme() -> str:
-    return """# Guard Runtime（守卫运行时）
-
-此目录是项目级 Guard Runtime（守卫运行时）骨架。它只保留通用入口和目录约定，不写具体业务规则。
-
-稳定入口：
-
-```powershell
-python .agents\\guard-runtime\\guard_runner.py activate --profile <id> --scope current_context --source agent-guard-skill --context-json '{"session_id":"..."}'
-python .agents\\guard-runtime\\guard_runner.py run --event <event-file>
-python .agents\\guard-runtime\\guard_runner.py brief --profile <id> --subject <subject-key-hash> --format json
-python .agents\\guard-runtime\\guard_runner.py brief --profile <id> --subject <subject-key-hash> --session <session-id> --format json
-```
-
-目录约定：
-
-- `.agents/guards/`：Guard Profile（守卫画像）配置。
-- `.local/guard/state/`：按 `<guard-profile-id>/<subject-key-hash>/state.json` 保存状态。
-- `.local/guard/runs/`：保存每次运行审计。
-- `.local/guard/overrides/`：保存人工覆盖记录。
-- `.local/guard/confirmations/`：保存人工确认记录。
-- `.local/guard/latest/`：保存 latest Guard Brief（最新守卫简报）。
-- `.local/guard/injections/`：按 session（会话）保存 Guard Brief（守卫简报）注入去重记录。
-
-显式激活会按 Guard Profile（守卫画像）里的 Subject Resolver（主体解析器）计算 Subject Key（主体键），优先匹配已有 Guard Instance（守卫实例），没有匹配且策略允许时创建新实例。缺少必填字段会返回 `no_subject_match` 并写审计；多个候选实例会返回 `ambiguous_subject` 并写审计。
-
-标准事件运行会读取 JSON envelope（JSON 信封），按 `guard_profile_id` 或 `profile_ref` 加载 Guard Profile（守卫画像），只匹配已有 Guard Instance（守卫实例）。主 agent（主代理）提交 `state_completed` 后，Runtime（运行时）会按当前状态、转换条件、required artifacts（必需产物）和 Guard Point（守卫点）决定是否推进状态。守卫点失败不推进状态，并输出失败守卫点、修复建议和覆盖记录位置。
-
-`brief --session <session-id>` 会先校验 `subject-key-hash`、`state_version` 和 `expires_at`，再在 `.local/guard/injections/` 中记录已注入的 `brief_hash`。同一 session（会话）内相同 brief（简报）第二次返回 `already_injected`。
-
-初始化阶段只写 Runtime（运行时）和 Profile（画像）配置，不预建 `.local/guard/*` 运行态目录，不安装 Hook（钩子），不会修改被守卫对象。
-"""
-
-
-def guard_runner_skeleton() -> str:
-    return guard_runner_template()
 
 
 def write_project_profile_extras(profile_dir: Path, profile_id: str) -> None:
@@ -174,9 +93,9 @@ def write_project_profile_extras(profile_dir: Path, profile_id: str) -> None:
             concurrency_path,
             {
                 "concurrency": {
-                    "lock_scope": "guard-profile-and-subject",
+                    "lock_scope": "guard-profile-and-instance",
                     "lock_root": ".local/guard/locks",
-                    "lock_key_fields": ["guard_profile_id", "subject_key_hash"],
+                    "lock_key_fields": ["profile_id", "instance_id"],
                     "timeout_seconds": 30,
                     "on_timeout": "audit_error",
                 }
@@ -190,53 +109,19 @@ def write_project_profile_extras(profile_dir: Path, profile_id: str) -> None:
 
 Guard Profile（守卫画像）：{profile_id}
 
-- 初始化只写项目级 Guard Runtime（守卫运行时）和 Guard Profile（守卫画像）骨架。
+- 初始化只写项目级 Guard Profile（守卫画像）。
+- 通用 Runtime code（运行时代码）由 Agent Guard Plugin（代理守卫插件）发布。
 - 不修改被守卫对象。
-- 不安装 Hook（钩子）。
-- 后续按单个 Guard Point（守卫点）独立启用、验证和回滚。
+- 不安装项目级 Hook（钩子）或 Git Hook（Git 钩子）。
 """,
             encoding="utf-8",
         )
-
-    (profile_dir / "hook-install-plan.md").write_text(build_hook_install_plan(profile_dir, profile_id), encoding="utf-8")
-
-
-def build_hook_install_plan(profile_dir: Path, profile_id: str) -> str:
-    bindings_doc = load_yaml_mapping(profile_dir / "hook-bindings.yaml")
-    bindings = bindings_doc.get("hook_bindings")
-
-    lines = [
-        "# Hook Install Plan（钩子安装计划）",
-        "",
-        f"Guard Profile（守卫画像）：{profile_id}",
-        "",
-        "- 当前状态：未安装 Codex Hook（Codex 钩子）。",
-        "- 当前状态：未安装 Git Hook（Git 钩子）。",
-        "- 安装 Hook（钩子）前必须获得用户明确授权。",
-        "- Hook（钩子）只负责捕获和标准化事件，不写业务规则。",
-        "",
-        "## Hook Bindings（钩子绑定）",
-        "",
-    ]
-
-    if isinstance(bindings, list) and bindings:
-        for binding in bindings:
-            if not isinstance(binding, dict):
-                continue
-            lines.append(
-                f"- `{binding.get('id', '<unknown>')}`：source=`{binding.get('source', '<unknown>')}`，"
-                f"event_type=`{binding.get('event_type', '<unknown>')}`。"
-            )
-    else:
-        lines.append("- 暂无 Hook Binding（钩子绑定）。")
-
-    return "\n".join(lines).rstrip() + "\n"
 
 
 def append_project_validation(profile_dir: Path) -> None:
     validation_plan = profile_dir / "validation-plan.md"
     existing = validation_plan.read_text(encoding="utf-8") if validation_plan.exists() else ""
-    addition = """\n## 项目级初始化验证\n\n- 校验项目级 Guard Runtime（守卫运行时）骨架存在。\n- 校验项目级 Guard Profile（守卫画像）能通过最小契约校验。\n- 校验初始化未安装 Codex Hook（Codex 钩子）或 Git Hook（Git 钩子）。\n- 校验初始化未修改被守卫对象。\n"""
+    addition = """\n## 项目级初始化验证\n\n- 校验项目级 Guard Profile（守卫画像）能通过最小契约校验。\n- 校验初始化未复制 Runtime code（运行时代码）。\n- 校验初始化未安装项目级 Hook（钩子）或 Git Hook（Git 钩子）。\n- 校验初始化未修改被守卫对象。\n"""
     if "## 项目级初始化验证" not in existing:
         validation_plan.write_text(existing.rstrip() + addition, encoding="utf-8")
 
@@ -268,26 +153,22 @@ def print_init_plan(
     print(f"on_existing: {on_existing}")
     print(f"deny_permissions: {'present' if has_deny_permissions else 'absent'}")
     print("changes:")
-    for target in [
-        project / ".agents" / "guard-runtime",
-        target_profile,
-    ]:
-        print(f"  - target: {target}")
-        print("    action: would_write")
-    print("hook_installation: not_installed")
+    print(f"  - target: {target_profile}")
+    print("    action: would_write")
+    print("plugin_runtime: external_plugin")
     if has_deny_permissions:
         print("next: 加 --authorize-init 和 --authorize-deny-permissions 才会写入含 `deny` 状态权限的项目级 Guard Profile（守卫画像）。")
     else:
-        print("next: 加 --authorize-init 才会写入项目级 Guard Runtime（守卫运行时）和 Guard Profile（守卫画像）。")
+        print("next: 加 --authorize-init 才会写入项目级 Guard Profile（守卫画像）。")
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="初始化项目级 Guard Runtime（守卫运行时）和 Guard Profile（守卫画像）。")
+    parser = argparse.ArgumentParser(description="初始化项目级 Guard Profile（守卫画像）。")
     parser.add_argument("--profile", type=Path, required=True, help="已校验 Guard Profile（守卫画像）草案目录")
     parser.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目目录，默认当前目录")
     parser.add_argument("--guard-profile-id", help="覆盖输出 Guard Profile（守卫画像）ID")
     parser.add_argument("--scope", default="project", help="初始化范围，默认 project（项目）")
-    parser.add_argument("--authorize-init", action="store_true", help="明确授权写入项目级 Guard Runtime（守卫运行时）和 Guard Profile（守卫画像）")
+    parser.add_argument("--authorize-init", action="store_true", help="明确授权写入项目级 Guard Profile（守卫画像）")
     parser.add_argument(
         "--authorize-deny-permissions",
         action="store_true",
@@ -342,7 +223,6 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     project.mkdir(parents=True, exist_ok=True)
-    runtime_dir = write_runtime_skeleton(project)
     copy_profile(source_profile, target_profile, args.on_existing)
     normalize_profile_for_initialization(target_profile, profile_id)
     write_project_profile_extras(target_profile, profile_id)
@@ -356,9 +236,8 @@ def main(argv: list[str] | None = None) -> int:
     print("status: initialized")
     print(f"project: {project}")
     print(f"scope: {args.scope}")
-    print(f"runtime: {runtime_dir}")
     print(f"profile: {target_profile}")
-    print("hook_installation: not_installed")
+    print("plugin_runtime: external_plugin")
     return 0
 
 if __name__ == "__main__":

@@ -111,7 +111,7 @@ def test_scenario_entrypoints_have_strong_required_steps() -> None:
         ],
         "agent-guard-run": [
             "运行守卫",
-            "立即执行：提交任何 `state_completed` 事件前，读取最新 Guard Brief（守卫简报）。禁止跳过此步骤。",
+            "立即执行：提交任何 `state_completed` 事件前，读取当前 Session Focus Instance（会话焦点实例）的最新 Guard Brief（守卫简报）。禁止跳过此步骤。",
             "references/activate.md",
             "references/brief.md",
             "references/events.md",
@@ -144,12 +144,12 @@ def test_core_references_are_common_and_scenario_docs_live_with_entrypoints() ->
     for reference_name in [
         "architecture.md",
         "terminology.md",
-        "subject-resolution.md",
         "template-index.md",
     ]:
         assert (core_references / reference_name).exists()
 
     for obsolete_name in [
+        "subject-resolution.md",
         "extraction-method.md",
         "guard-profile.md",
         "runtime-contract.md",

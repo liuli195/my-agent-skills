@@ -14,16 +14,23 @@ import yaml
 REQUIRED_FILES = {
     "manifest": "GUARD-MANIFEST.yaml",
     "target_model": "target-model.yaml",
-    "activation_model": "activation-model.yaml",
-    "subject_resolver": "subject-resolver.yaml",
-    "execution_model": "execution-model.yaml",
-    "observation_model": "observation-model.yaml",
     "state_machine": "state-machine.yaml",
     "guard_points": "guard-points.yaml",
     "artifacts": "artifacts.yaml",
-    "hook_bindings": "hook-bindings.yaml",
     "brief_template": "brief-template.md",
     "validation_plan": "validation-plan.md",
+}
+
+LEGACY_FILES = {
+    "subject-resolver.yaml",
+    "hook-bindings.yaml",
+}
+
+LEGACY_TOKENS = {
+    "subject_key_hash",
+    "no_subject_match",
+    "ambiguous_subject",
+    "target_hint",
 }
 
 ALLOWED_PROFILE_SOURCE_KINDS = {"grill-with-docs-confirmed-notes", "built-in-minimal-sample"}
@@ -31,6 +38,7 @@ ALLOWED_PROFILE_SOURCE_KINDS = {"grill-with-docs-confirmed-notes", "built-in-min
 REQUIRED_FIELDS = {
     "manifest": [
         "schema_version",
+        "runtime_api_version",
         "guard_profile_id",
         "name",
         "description",
@@ -43,28 +51,9 @@ REQUIRED_FIELDS = {
         "target.source",
         "target.boundary",
     ],
-    "activation_model": [
-        "activation.allowed_sources",
-        "activation.required_profile_ref",
-        "activation.scopes",
-        "activation.on_existing_subject",
-        "activation.on_missing_subject",
-        "activation.initial_state",
-    ],
-    "subject_resolver": [
-        "subject.identity_fields",
-        "subject.required_fields",
-        "subject.context_sources",
-        "subject.existing_match_policy",
-        "subject.create_policy",
-        "subject.ambiguous_policy",
-    ],
-    "execution_model": ["nodes", "states"],
-    "observation_model": ["signals"],
     "state_machine": ["initial_state", "terminal_states", "states", "transitions"],
     "guard_points": ["guard_points"],
     "artifacts": ["artifacts"],
-    "hook_bindings": ["hook_bindings"],
 }
 
 
@@ -127,14 +116,50 @@ def require_fields(category: str, data: dict[str, Any]) -> list[ValidationIssue]
     issues: list[ValidationIssue] = []
     for field in REQUIRED_FIELDS.get(category, []):
         if not is_present(value_at(data, field)):
+            message = "是最小 Guard Profile（守卫画像）契约的必填字段。"
+            fix = f"在 {REQUIRED_FILES[category]} 中添加 `{field}`。"
+            if category == "manifest" and field == "runtime_api_version":
+                message = "必须声明 Runtime API version（运行时接口版本）。"
+                fix = "在 GUARD-MANIFEST.yaml 中添加 `runtime_api_version: agent-guard-runtime/v1`。"
             issues.append(
                 ValidationIssue(
                     category,
                     field,
-                    "是最小 Guard Profile（守卫画像）契约的必填字段。",
-                    f"在 {REQUIRED_FILES[category]} 中添加 `{field}`。",
+                    message,
+                    fix,
                 )
             )
+    return issues
+
+
+def validate_legacy_contract(profile_dir: Path) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    for relative_path in sorted(LEGACY_FILES):
+        path = profile_dir / relative_path
+        if path.exists():
+            issues.append(
+                ValidationIssue(
+                    "legacy_contract",
+                    relative_path,
+                    "已从 Session Focus Binding（会话焦点绑定）契约删除。",
+                    f"删除 `{relative_path}`；实例选择只能通过 Session Focus Binding（会话焦点绑定）显式完成。",
+                )
+            )
+
+    for path in sorted(profile_dir.iterdir()) if profile_dir.exists() else []:
+        if not path.is_file() or path.suffix not in {".yaml", ".yml", ".md", ".json"}:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for token in sorted(LEGACY_TOKENS):
+            if token in text:
+                issues.append(
+                    ValidationIssue(
+                        "legacy_contract",
+                        f"{path.name}:{token}",
+                        "是旧 Subject Resolver（主体解析器）契约残留，不能出现在新 Guard Profile（守卫画像）中。",
+                        "改用 opaque instance_id（不透明实例 ID）和 Session Focus Binding（会话焦点绑定）。",
+                    )
+                )
     return issues
 
 
@@ -201,6 +226,15 @@ def validate_deprecated_fields(configs: dict[str, dict[str, Any]]) -> list[Valid
         if not isinstance(guard_point, dict):
             continue
         guard_point_id = guard_point.get("id", "<unknown>")
+        if "trigger" in guard_point:
+            issues.append(
+                ValidationIssue(
+                    "guard_points",
+                    f"guard_points.{guard_point_id}.trigger",
+                    "Guard Point（守卫点）不再绑定 Hook（钩子）或事件。",
+                    "删除 `trigger`；Hook（钩子）只把标准事件交给 Runtime Router（运行时路由器）。",
+                )
+            )
         for field in ["mode", "on_fail", "on_error"]:
             if field in guard_point:
                 issues.append(
@@ -210,17 +244,6 @@ def validate_deprecated_fields(configs: dict[str, dict[str, Any]]) -> list[Valid
                     )
                 )
 
-    for binding in configs["hook_bindings"].get("hook_bindings", []):
-        if not isinstance(binding, dict):
-            continue
-        binding_id = binding.get("id", "<unknown>")
-        if "blocking" in binding:
-            issues.append(
-                deprecated_field_issue(
-                    "hook_bindings",
-                    f"hook_bindings.{binding_id}.blocking",
-                )
-            )
     return issues
 
 
@@ -233,64 +256,6 @@ def list_ids(data: dict[str, Any], field: str) -> set[str]:
         if isinstance(item, dict) and isinstance(item.get("id"), str):
             ids.add(item["id"])
     return ids
-
-
-def hook_binding_has_trigger(binding: dict[str, Any]) -> bool:
-    if is_present(binding.get("trigger_event")):
-        return True
-    trigger = binding.get("trigger")
-    return isinstance(trigger, dict) and is_present(trigger.get("event"))
-
-
-def validate_hook_binding_contract(configs: dict[str, dict[str, Any]]) -> list[ValidationIssue]:
-    issues: list[ValidationIssue] = []
-    signal_ids = list_ids(configs["observation_model"], "signals")
-    bindings = configs["hook_bindings"].get("hook_bindings", [])
-    for index, binding in enumerate(bindings if isinstance(bindings, list) else []):
-        if not isinstance(binding, dict):
-            continue
-        binding_id = binding.get("id") if isinstance(binding.get("id"), str) else f"#{index}"
-        for field in ["source", "event_type"]:
-            if not is_present(binding.get(field)):
-                issues.append(
-                    ValidationIssue(
-                        "hook_bindings",
-                        f"hook_bindings.{binding_id}.{field}",
-                        "是 Hook Binding（钩子绑定）契约的必填字段。",
-                        f"在 hook-bindings.yaml 的 `{binding_id}` 绑定中添加 `{field}`。",
-                    )
-                )
-        if not hook_binding_has_trigger(binding):
-            issues.append(
-                ValidationIssue(
-                    "hook_bindings",
-                    f"hook_bindings.{binding_id}.trigger_event",
-                    "是 Hook Binding（钩子绑定）契约的必填字段。",
-                    "添加 `trigger_event`，或添加 `trigger.event`。",
-                )
-            )
-        event_type = binding.get("event_type")
-        source = binding.get("source")
-        if isinstance(source, str) and source in {"codex", "git"} and event_type == "state_completed":
-            issues.append(
-                ValidationIssue(
-                    "hook_bindings",
-                    f"hook_bindings.{binding_id}.event_type",
-                    "Hook（钩子）事件不能映射为 `state_completed`。",
-                    "把 Hook Binding（钩子绑定）的 `event_type` 改成观察或权限检查事件；状态推进只能由主 agent（主代理）主动提交 `state_completed`。",
-                )
-            )
-        if isinstance(event_type, str) and event_type not in signal_ids:
-            issues.append(
-                missing_reference(
-                    "hook_bindings",
-                    f"hook_bindings.{binding_id}.event_type",
-                    event_type,
-                    "observation_model.signals",
-                    "定义该 signal（信号），或更新 Hook Binding（钩子绑定）的 `event_type`。",
-                )
-            )
-    return issues
 
 
 def validate_state_permissions(configs: dict[str, dict[str, Any]]) -> list[ValidationIssue]:
@@ -545,7 +510,6 @@ def shorthand_permission_rule(effect: str, value: Any) -> dict[str, Any] | None:
 def validate_references(configs: dict[str, dict[str, Any]]) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     state_ids = list_ids(configs["state_machine"], "states")
-    transition_ids = list_ids(configs["state_machine"], "transitions")
     guard_point_ids = list_ids(configs["guard_points"], "guard_points")
     guard_points_by_id = {
         item["id"]: item
@@ -553,26 +517,11 @@ def validate_references(configs: dict[str, dict[str, Any]]) -> list[ValidationIs
         if isinstance(item, dict) and isinstance(item.get("id"), str)
     }
     artifact_ids = list_ids(configs["artifacts"], "artifacts")
-    signal_ids = list_ids(configs["observation_model"], "signals")
-    node_ids = list_ids(configs["execution_model"], "nodes")
 
     issues.extend(validate_deprecated_fields(configs))
-    issues.extend(validate_hook_binding_contract(configs))
     issues.extend(validate_state_permissions(configs))
     issues.extend(validate_artifact_contract(configs))
     issues.extend(validate_state_transition_shape(configs))
-
-    activation_initial_state = value_at(configs["activation_model"], "activation.initial_state")
-    if isinstance(activation_initial_state, str) and activation_initial_state not in state_ids:
-        issues.append(
-            missing_reference(
-                "activation_model",
-                "activation.initial_state",
-                activation_initial_state,
-                "state_machine.states",
-                "定义该状态，或更新 `activation.initial_state`。",
-            )
-        )
 
     initial_state = configs["state_machine"].get("initial_state")
     if isinstance(initial_state, str) and initial_state not in state_ids:
@@ -634,8 +583,8 @@ def validate_references(configs: dict[str, dict[str, Any]]) -> list[ValidationIs
                         artifact,
                         "artifacts",
                         "定义该产物，或移除状态转换里的引用。",
-                    )
                 )
+            )
         event_type = transition.get("on_event")
         if isinstance(event_type, str) and event_type != "state_completed":
             issues.append(
@@ -644,16 +593,6 @@ def validate_references(configs: dict[str, dict[str, Any]]) -> list[ValidationIs
                     f"transitions.{transition_id}.on_event",
                     f"必须是 `state_completed`，当前是 `{event_type}`。",
                     "把状态推进转换的 `on_event` 改为 `state_completed`；普通 Hook（钩子）事件只能做权限检查。",
-                )
-            )
-        if isinstance(event_type, str) and event_type not in signal_ids:
-            issues.append(
-                missing_reference(
-                    "state_machine",
-                    f"transitions.{transition_id}.on_event",
-                    event_type,
-                    "observation_model.signals",
-                    "定义该信号，或更新 `on_event`。",
                 )
             )
         if event_type == "state_completed":
@@ -733,99 +672,8 @@ def validate_references(configs: dict[str, dict[str, Any]]) -> list[ValidationIs
                         artifact,
                         "artifacts",
                         "定义该产物，或更新 Guard Point（守卫点）检查里的 artifact。",
+                        )
                     )
-                )
-
-    for binding in configs["hook_bindings"].get("hook_bindings", []):
-        if not isinstance(binding, dict):
-            continue
-        binding_id = binding.get("id", "<unknown>")
-        for transition in binding.get("transitions", []):
-            if transition not in transition_ids:
-                issues.append(
-                    missing_reference(
-                        "hook_bindings",
-                        f"hook_bindings.{binding_id}.transitions",
-                        transition,
-                        "state_machine.transitions",
-                        "定义该状态转换，或移除 Hook Binding（钩子绑定）里的引用。",
-                    )
-                )
-        for guard_point in binding.get("guard_points", []):
-            if guard_point not in guard_point_ids:
-                issues.append(
-                    missing_reference(
-                        "hook_bindings",
-                        f"hook_bindings.{binding_id}.guard_points",
-                        guard_point,
-                        "guard_points",
-                        "定义该守卫点，或移除 Hook Binding（钩子绑定）里的引用。",
-                    )
-                )
-
-    for node in configs["execution_model"].get("nodes", []):
-        if not isinstance(node, dict):
-            continue
-        node_id = node.get("id", "<unknown>")
-        for signal in node.get("completion_signals", []):
-            if signal not in signal_ids:
-                issues.append(
-                    missing_reference(
-                        "execution_model",
-                        f"nodes.{node_id}.completion_signals",
-                        signal,
-                        "observation_model.signals",
-                        "定义该信号，或更新节点完成信号。",
-                    )
-                )
-        for artifact in node.get("required_artifacts", []):
-            if artifact not in artifact_ids:
-                issues.append(
-                    missing_reference(
-                        "execution_model",
-                        f"nodes.{node_id}.required_artifacts",
-                        artifact,
-                        "artifacts",
-                        "定义该产物，或更新节点必需产物。",
-                    )
-                )
-
-    for state in configs["execution_model"].get("states", []):
-        if not isinstance(state, dict):
-            continue
-        state_id = state.get("id", "<unknown>")
-        if isinstance(state_id, str) and state_id not in state_ids:
-            issues.append(
-                missing_reference(
-                    "execution_model",
-                    f"states.{state_id}.id",
-                    state_id,
-                    "state_machine.states",
-                    "在 state-machine.yaml 中定义该状态，或更新 execution-model.yaml。",
-                )
-            )
-        for next_node in state.get("allowed_next", []):
-            if next_node not in node_ids:
-                issues.append(
-                    missing_reference(
-                        "execution_model",
-                        f"states.{state_id}.allowed_next",
-                        next_node,
-                        "execution_model.nodes",
-                        "定义该节点，或从 `allowed_next` 中移除它。",
-                    )
-                )
-        for artifact in state.get("missing_artifacts", []):
-            if artifact not in artifact_ids:
-                issues.append(
-                    missing_reference(
-                        "execution_model",
-                        f"states.{state_id}.missing_artifacts",
-                        artifact,
-                        "artifacts",
-                        "定义该产物，或从 `missing_artifacts` 中移除它。",
-                    )
-                )
 
     return issues
 
@@ -860,6 +708,8 @@ def validate_profile(profile_dir: Path) -> tuple[list[str], list[ValidationIssue
             )
         ]
 
+    issues.extend(validate_legacy_contract(profile_dir))
+
     for category, relative_path in REQUIRED_FILES.items():
         path = profile_dir / relative_path
         if not path.exists():
@@ -886,15 +736,7 @@ def validate_profile(profile_dir: Path) -> tuple[list[str], list[ValidationIssue
 
         checked.append(category)
 
-    reference_categories = {
-        "activation_model",
-        "state_machine",
-        "guard_points",
-        "artifacts",
-        "hook_bindings",
-        "observation_model",
-        "execution_model",
-    }
+    reference_categories = {"state_machine", "guard_points", "artifacts"}
     if not issues and reference_categories.issubset(configs):
         issues.extend(validate_references(configs))
 

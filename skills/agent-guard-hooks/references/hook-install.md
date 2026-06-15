@@ -1,39 +1,32 @@
 # Hook Install（钩子安装）
 
-Hook（钩子）安装默认只做 dry-run（试运行）。只有用户明确授权才写入。
+Hook（钩子）由 Agent Guard Plugin（代理守卫插件）发布。安装默认只做 dry-run（试运行），只有用户明确授权才写入用户级插件位置。
 
 ## 安装入口
 
 ```powershell
-python ../agent-guard/scripts/install_hooks.py --project <target-project> --profile <guard-profile-id>
+python ../agent-guard/scripts/install_agent_guard_plugin.py dry-run --target <codex|claude|all>
 ```
 
 默认输出：
 
-- 将创建或修改的文件。
-- Runtime（运行时）调用命令。
-- Hook Binding（钩子绑定）摘要。
-- 回滚说明。
-- 风险提示。
+- Codex / Claude Plugin（插件）目标位置。
+- marketplace（市场）入口位置。
+- 将安装的 `SessionStart` / `PreToolUse` lifecycle Hook（生命周期钩子）。
+- 不会写目标项目 Hook（钩子）或 Git 配置的安全说明。
 
-只有显式传入 `--authorize-install` 时才会写入：
-
-- `.agents/guard-runtime/hook_event_adapter.py`
-- `.codex/hooks.json`
-- `.githooks/pre-push`
-- Git 仓库的 `core.hooksPath=.githooks`
-- `.agents/guards/<guard-profile-id>/hook-install-plan.md`
-
-Hook（钩子）文件以这些模板为准：
-
-- `../agent-guard/assets/templates/codex-hooks/hooks.json`
-- `../agent-guard/assets/templates/git-hooks/pre-push`
-- `../agent-guard/assets/templates/guard-runtime/hook_event_adapter.py`
+只有显式传入 `install --target <codex|claude|all> --authorize-install` 时才会写入用户级插件位置。
 
 ## 验证入口
 
 ```powershell
-python ../agent-guard/scripts/install_hooks.py --project <target-project> --profile <guard-profile-id> --verify
+python ../agent-guard/scripts/install_agent_guard_plugin.py verify --target <codex|claude|all>
 ```
 
-`--authorize-install` 授权安装 Hook（钩子），也授权已安装 Hook（钩子）按 Runtime（运行时）返回的 `deny` 拒绝外部动作。
+验证必须确认：
+
+- Plugin manifest（插件清单）存在且可解析。
+- Hook（钩子）只声明 `SessionStart` 和 `PreToolUse`。
+- Hook Router（钩子路由器）不接收 `--profile`。
+- 不写目标项目 Hook（钩子）。
+- 不写 Git Hook（Git 钩子）或 Git 配置。

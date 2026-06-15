@@ -1,7 +1,7 @@
 target:
   id: minimal-sample-target
-  type: temporary_task
-  name: 最小样例任务
+  type: workflow
+  name: 最小样例工作流
   source: bundled-template
   boundary: 只演示 Guard Profile（守卫画像）连接，不编码真实 workflow（工作流）。
   goals:
