@@ -496,6 +496,60 @@ guard_points:
     assert audit["detail"]["overrides"][0]["override_record_path"] == str(override_path)
 
 
+def test_state_completed_allows_profile_level_override(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = write_profile(project)
+    manifest = profile.joinpath("GUARD-MANIFEST.yaml")
+    manifest.write_text(manifest.read_text(encoding="utf-8") + "allow_override: true\n", encoding="utf-8")
+    profile.joinpath("guard-points.yaml").write_text(
+        """
+guard_points:
+  - id: completion_note_present
+    description: 由画像级配置允许覆盖。
+    checks:
+      - id: impossible_artifact
+        type: artifact_exists
+        artifact: missing_artifact
+        failure_reason: 缺少 impossible artifact。
+        fix_hint: 提供 impossible artifact。
+""".lstrip(),
+        encoding="utf-8",
+    )
+    session_start(project, user_home)
+    activated = activate(project, user_home)
+    instance_id = activated["instance_id"]
+    write_completion_note(project, instance_id)
+    override_path = project / ".local" / "guard" / "overrides" / "minimal-sample" / instance_id / "completion_note_present.json"
+    override_path.parent.mkdir(parents=True, exist_ok=True)
+    override_path.write_text(
+        json.dumps(
+            {
+                "decision": "allow",
+                "reason": "画像级配置允许跳过该守卫点。",
+                "approved_by": "test-user",
+                "approved_at": "2026-06-16T00:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    read_brief(project, user_home)
+
+    result = run_cli(["state-completed", "--project", str(project), "--user-home", str(user_home), "--source", "codex", "--session-id", "session-1"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "allow"
+    assert payload["reason"] == "state_completed"
+    state = json.loads((project / ".local" / "guard" / "state" / "minimal-sample" / instance_id / "state.json").read_text(encoding="utf-8"))
+    assert state["current_state"] == "closed"
+    audit = json.loads(Path(payload["audit_path"]).read_text(encoding="utf-8"))
+    assert audit["detail"]["overrides"][0]["override_record_path"] == str(override_path)
+
+
 def test_state_completed_rejects_ambiguous_transition_matches(tmp_path: Path) -> None:
     project = tmp_path / "project"
     user_home = tmp_path / "user-home"

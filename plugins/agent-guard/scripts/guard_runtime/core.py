@@ -748,7 +748,13 @@ def guard_point_by_id(guard_points: dict[str, Any], guard_point_id: str) -> dict
     return None
 
 
-def guard_point_override_allowed(guard_point: dict[str, Any] | None) -> bool:
+def profile_override_allowed(project: Path, profile_id: str, user_home: Path | None = None, scope: str = "project") -> bool:
+    return profile_manifest(project, profile_id, user_home, scope).get("allow_override") is True
+
+
+def guard_point_override_allowed(guard_point: dict[str, Any] | None, profile_allow_override: bool = False) -> bool:
+    if profile_allow_override:
+        return True
     if guard_point is None:
         return False
     policy = guard_point.get("override_policy")
@@ -818,6 +824,7 @@ def guard_point_failure(
     check_id: str | None = None,
     missing_artifacts: list[str] | None = None,
     required_conditions: list[str] | None = None,
+    profile_allow_override: bool = False,
 ) -> dict[str, Any]:
     return {
         "reason": "guard_failed",
@@ -827,7 +834,7 @@ def guard_point_failure(
         "fix_hint": fix_hint,
         "missing_artifacts": missing_artifacts or [],
         "required_conditions": required_conditions or [],
-        "override_allowed": guard_point_override_allowed(guard_point),
+        "override_allowed": guard_point_override_allowed(guard_point, profile_allow_override),
         "override_record_path": str(override_record_path(project, profile_id, instance_id, guard_point_id, user_home, scope)),
     }
 
@@ -841,6 +848,7 @@ def evaluate_guard_point(
     guard_points: dict[str, Any],
     user_home: Path | None,
     scope: str,
+    profile_allow_override: bool = False,
 ) -> dict[str, Any] | None:
     guard_point = guard_point_by_id(guard_points, guard_point_id)
     if guard_point is None:
@@ -855,6 +863,7 @@ def evaluate_guard_point(
             user_home,
             scope,
             required_conditions=[f"guard_point_defined:{guard_point_id}"],
+            profile_allow_override=profile_allow_override,
         )
 
     required_artifacts = guard_point.get("required_artifacts")
@@ -874,6 +883,7 @@ def evaluate_guard_point(
                 scope,
                 missing_artifacts=[artifact_id],
                 required_conditions=[f"artifact_exists:{artifact_id}"],
+                profile_allow_override=profile_allow_override,
             )
 
     checks = guard_point.get("checks")
@@ -895,6 +905,7 @@ def evaluate_guard_point(
                 scope,
                 check_id=check_id,
                 required_conditions=["supported_check:artifact_exists"],
+                profile_allow_override=profile_allow_override,
             )
         artifact_id = check.get("artifact") or check.get("artifact_id")
         if not isinstance(artifact_id, str) or not artifact_exists(project, profile_id, instance_id, state_version, artifact_id, user_home, scope):
@@ -912,6 +923,7 @@ def evaluate_guard_point(
                 check_id=check_id,
                 missing_artifacts=missing_artifacts,
                 required_conditions=[f"artifact_exists:{artifact_id}"] if isinstance(artifact_id, str) else ["artifact_exists:<missing>"],
+                profile_allow_override=profile_allow_override,
             )
     return None
 
@@ -942,6 +954,7 @@ def evaluate_transition(
     guard_points: dict[str, Any],
     user_home: Path | None,
     scope: str,
+    profile_allow_override: bool = False,
     overrides_used: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     required = [item for item in transition.get("required_artifacts", []) if isinstance(item, str)]
@@ -956,7 +969,7 @@ def evaluate_transition(
 
     guard_point_ids = [item for item in transition.get("guard_points", []) if isinstance(item, str)]
     for guard_point_id in guard_point_ids:
-        failure = evaluate_guard_point(project, profile_id, instance_id, state_version, guard_point_id, guard_points, user_home, scope)
+        failure = evaluate_guard_point(project, profile_id, instance_id, state_version, guard_point_id, guard_points, user_home, scope, profile_allow_override)
         if failure is not None:
             override = valid_override_record(failure)
             if override is not None:
@@ -1020,6 +1033,7 @@ def run_state_completed(project: Path, user_home: Path, source: str, session_id:
     try:
         state_machine = profile_state_machine(project, profile_id, user_home, scope)
         guard_points = profile_guard_points(project, profile_id, user_home, scope)
+        allow_override = profile_override_allowed(project, profile_id, user_home, scope)
         transitions = state_machine.get("transitions", [])
         current_state = state.get("current_state")
         state_version = int(state.get("state_version") or 1)
@@ -1053,7 +1067,7 @@ def run_state_completed(project: Path, user_home: Path, source: str, session_id:
             if transition.get("from") != current_state or transition.get("on_event") != "state_completed":
                 continue
             overrides_used: list[dict[str, Any]] = []
-            failure = evaluate_transition(project, profile_id, instance_id, state_version, transition, guard_points, user_home, scope, overrides_used)
+            failure = evaluate_transition(project, profile_id, instance_id, state_version, transition, guard_points, user_home, scope, allow_override, overrides_used)
             if failure is not None:
                 failures.append(failure)
                 continue
