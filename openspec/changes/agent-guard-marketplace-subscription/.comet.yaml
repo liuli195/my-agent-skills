@@ -1,5 +1,5 @@
 workflow: full
-phase: build
+phase: verify
 context_compression: off
 build_mode: subagent-driven-development
 build_pause: null
@@ -19,3 +19,5 @@ verified_at: null
 archived: false
 handoff_context: openspec/changes/agent-guard-marketplace-subscription/.comet/handoff/design-context.json
 handoff_hash: 2c8d7c07fcb15918708d33e7c2deb73a711224966f1344cd4c60c673190576d1
+build_command: 'C:/Users/liuli/AppData/Local/Programs/Python/Python312/python.exe -m pytest "D:/My Project/my-agent-skills/tests/test_agent_guard_plugin_installer.py" "D:/My Project/my-agent-skills/tests/test_agent_guard_plugin_package.py" "D:/My Project/my-agent-skills/tests/test_agent_guard_skill_entrypoints.py" "D:/My Project/my-agent-skills/tests/test_agent_guard_plugin_runtime_e2e.py" -q'
+verify_command: 'C:/Users/liuli/AppData/Local/Programs/Python/Python312/python.exe -m pytest "D:/My Project/my-agent-skills/tests/test_agent_guard_plugin_installer.py" "D:/My Project/my-agent-skills/tests/test_agent_guard_plugin_package.py" "D:/My Project/my-agent-skills/tests/test_agent_guard_skill_entrypoints.py" "D:/My Project/my-agent-skills/tests/test_agent_guard_plugin_runtime_e2e.py" -q'
