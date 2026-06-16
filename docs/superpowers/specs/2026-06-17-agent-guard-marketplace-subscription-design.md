@@ -2,6 +2,8 @@
 comet_change: agent-guard-marketplace-subscription
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-16-agent-guard-marketplace-subscription
+status: final
 ---
 
 # Agent Guard Marketplace Subscription 技术设计
