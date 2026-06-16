@@ -7,17 +7,21 @@
 
 ## Current Task
 
-- Plan task: Task 6: Final Contract Verification
-- OpenSpec task: 1.1 更新 `agent-guard-plugin-runtime` 和 `agent-guard-skill-entrypoints` specs，确认 marketplace subscription（市场订阅）是唯一发布入口；4.1/4.2/4.3 final verification tasks.
+- Plan task: Final implementation review
+- OpenSpec task: all tasks checked.
 - Stage: done
-- Implementer: 019ed1ae-491d-74d2-806c-312c2ff216c4
-- Commit: none
-- Changed files: none
-- RED: not applicable; verification-only task.
-- GREEN: `openspec validate --all --strict --json` passed with 6 valid, failed 0; `PYTEST_ADDOPTS=-p no:cacheprovider PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/test_agent_guard_plugin_installer.py tests/test_agent_guard_plugin_package.py tests/test_agent_guard_skill_entrypoints.py tests/test_agent_guard_plugin_runtime_e2e.py -q` passed with 22 passed; targeted legacy scan found no active old publishing contract.
-- Spec review: APPROVED by 019ed1b0-28be-7203-9488-969f7707c0e0.
-- Quality review: APPROVED by 019ed1b2-426a-7331-b2eb-cc4d0850b8f4.
-- Review round: 0
+- Reviewer: 019ed1b5-afbe-7462-8870-1d47859c9a67.
+- Commit range: b368f7a0852424acb7a17720895459dfe7930fac..HEAD
+- Fix agent: 019ed1ba-0eaf-7201-9af8-e5be0e559b2f.
+- Fix commit: f91ef24.
+- Changed files: plugins/agent-guard/skills/agent-guard/scripts/install_agent_guard_plugin.py, tests/test_agent_guard_plugin_installer.py.
+- Verification: `openspec validate --all --strict --json` passed with 6 valid, failed 0; `PYTEST_ADDOPTS=-p no:cacheprovider PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/test_agent_guard_plugin_installer.py tests/test_agent_guard_plugin_package.py tests/test_agent_guard_skill_entrypoints.py tests/test_agent_guard_plugin_runtime_e2e.py -q` passed with 24 passed; targeted legacy scan found no active old publishing contract.
+- Final review: CHANGES_REQUESTED. Important: `--target` does not limit manifest validation, and `install` silently overwrites malformed marketplace catalogs. Minor: verify `git diff --check` and final coordination status.
+- Fix evidence: RED `python -m pytest tests/test_agent_guard_plugin_installer.py -q` failed with 2 failed, 8 passed; GREEN installer tests passed with 10 passed; focused verification passed with 24 passed; OpenSpec strict validation passed with 6 valid, failed 0.
+- Fix spec review: APPROVED by 019ed1bd-3957-7d71-bcbe-e52f5ea8f49a.
+- Fix quality review: APPROVED by 019ed1bf-678c-7901-a6ca-4c2a91296878. Accepted minor: install is not separately tested for missing non-target manifest because install and verify share `check_package(args.plugin_source, args.target)`.
+- Final review: APPROVED after f91ef24.
+- Review round: 1
 
 ## Completed Tasks
 
@@ -39,5 +43,9 @@
   - Quality review: APPROVED
 - Task 5: Update Runtime E2E And Documentation References
   - Commit: b9ddac366aa0bfe63b270ff1dca002f59ce46777
+  - Spec review: APPROVED
+  - Quality review: APPROVED
+- Task 6: Final Contract Verification
+  - Commit: 221e277
   - Spec review: APPROVED
   - Quality review: APPROVED
