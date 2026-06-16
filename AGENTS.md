@@ -4,7 +4,7 @@
 
 ## 通用入口
 
-本仓库按 single-context 处理：[规则文档](docs/rules/index.md) 和 [ADR 索引](docs/adr/index.md) 共同作为领域上下文。详见 [domain.md](docs/agents/domain.md)。
+本仓库按 single-context 处理：[规则文档](docs/rules/index.md) 和 [OpenSpec 规格](openspec/specs/) 共同作为领域上下文。详见 [domain.md](docs/agents/domain.md)。
 
 ## 核心规则
 - **规则优先**：仓库规则最优先是元规则。任何与规则冲突的改动、对规则本身的改动都必须显式获得授权，否则不得执行。
@@ -15,14 +15,6 @@
 
 - **Issue 跟踪**：Issue 和 PRD 统一记录在 GitHub Issues。详见 [issue-tracker.md](docs/agents/issue-tracker.md)。
 - **Triage 标签**：使用默认五类 triage 标签。详见 [triage-labels.md](docs/agents/triage-labels.md)。
-
-### 文档落盘
-
-- **PRD**：所有 PRD 优先在 `docs/prd/` 本地落盘，并保留 GitHub 源 Issue 链接。
-- **Issue**：所有 Issue 优先在 `docs/changes/` 本地落盘，并保留 GitHub 源 Issue 链接。
-- **执行计划**：所有执行计划优先在 `docs/plans/` 本地落盘，并保留来源链接。
-- **技术设计**：所有技术设计方案优先在 `docs/designs/` 本地落盘，并保留来源链接。
-- **ADR 落盘**：重大决策讨论结束后必须在本地 ADR 中落盘决策，并在 ADR 中引用 GitHub 源 Issue。
 
 ### 环境与工具
 
