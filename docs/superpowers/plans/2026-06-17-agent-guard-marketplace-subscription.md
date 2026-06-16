@@ -2,6 +2,7 @@
 change: agent-guard-marketplace-subscription
 design-doc: docs/superpowers/specs/2026-06-17-agent-guard-marketplace-subscription-design.md
 base-ref: b368f7a0852424acb7a17720895459dfe7930fac
+archived-with: 2026-06-16-agent-guard-marketplace-subscription
 ---
 
 # Agent Guard Marketplace Subscription Implementation Plan
@@ -14,6 +15,7 @@ base-ref: b368f7a0852424acb7a17720895459dfe7930fac
 
 **Tech Stack:** Python 3 stdlib、pytest、PowerShell 脚本删除、OpenSpec delta specs。
 
+archived-with: 2026-06-16-agent-guard-marketplace-subscription
 ---
 
 ## File Structure
