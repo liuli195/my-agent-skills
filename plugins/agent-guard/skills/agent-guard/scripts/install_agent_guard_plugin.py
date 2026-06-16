@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,13 +12,12 @@ from typing import Iterable
 
 
 PLUGIN_NAME = "agent-guard"
+RELEASE_REF = "marketplace"
 HOOK_NAMES = {"SessionStart", "PreToolUse"}
-ENTRYPOINT_SKILLS = [
-    "agent-guard-install",
-    "agent-guard-init",
-    "agent-guard-update",
-    "agent-guard-run",
-]
+MANIFEST_ITEMS = {
+    "codex": ".codex-plugin/plugin.json",
+    "claude": ".claude-plugin/plugin.json",
+}
 ENTRYPOINT_REFERENCES = {
     "agent-guard-install": ["research-and-extract.md", "profile-draft.md"],
     "agent-guard-init": ["init-flow.md", "init-boundaries.md"],
@@ -27,8 +25,7 @@ ENTRYPOINT_REFERENCES = {
     "agent-guard-run": ["activate.md", "brief.md", "events.md", "close.md"],
 }
 PACKAGE_ITEMS = [
-    ".codex-plugin/plugin.json",
-    ".claude-plugin/plugin.json",
+    *MANIFEST_ITEMS.values(),
     "hooks/hooks.json",
     "scripts/hook_router.py",
     "scripts/guard_runtime/cli.py",
@@ -58,7 +55,11 @@ class PackageCheck:
 
 
 def repo_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    return Path(__file__).resolve().parents[5]
+
+
+CODEX_REPO_MARKETPLACE = repo_root() / ".agents" / "plugins" / "marketplace.json"
+CLAUDE_REPO_MARKETPLACE = repo_root() / ".claude-plugin" / "marketplace.json"
 
 
 def normalize(path: Path) -> Path:
@@ -72,24 +73,12 @@ def default_plugin_source() -> Path:
     return repo_root() / "plugins" / PLUGIN_NAME
 
 
-def default_codex_home() -> Path:
-    return Path.home() / ".codex"
+def default_codex_personal_marketplace() -> Path:
+    return Path.home() / ".agents" / "plugins" / "marketplace.json"
 
 
-def default_claude_home() -> Path:
-    return Path.home() / ".claude"
-
-
-def default_codex_marketplace() -> Path:
-    return default_codex_home() / "marketplace.json"
-
-
-def default_claude_marketplace() -> Path:
-    return default_claude_home() / "marketplace.json"
-
-
-def plugin_target(home: Path) -> Path:
-    return home / "plugins" / PLUGIN_NAME
+def default_claude_personal_marketplace() -> Path:
+    return Path.home() / ".claude-plugin" / "marketplace.json"
 
 
 def read_json(path: Path) -> tuple[dict | None, str | None]:
@@ -120,11 +109,14 @@ def collect_hook_commands(hooks: dict) -> list[str]:
     return commands
 
 
-def check_package(plugin_root: Path) -> PackageCheck:
-    missing = [item for item in PACKAGE_ITEMS if not (plugin_root / item).exists()]
+def check_package(plugin_root: Path, target: str | None = None) -> PackageCheck:
+    selected_manifests = [MANIFEST_ITEMS[item] for item in targets_for(target)]
+    shared_items = [item for item in PACKAGE_ITEMS if item not in MANIFEST_ITEMS.values()]
+    required_items = [*selected_manifests, *shared_items]
+    missing = [item for item in required_items if not (plugin_root / item).exists()]
     errors: list[str] = []
 
-    for manifest in [".codex-plugin/plugin.json", ".claude-plugin/plugin.json"]:
+    for manifest in selected_manifests:
         data, error = read_json(plugin_root / manifest)
         if error is not None:
             errors.append(error)
@@ -159,51 +151,104 @@ def targets_for(target: str | None) -> list[str]:
     return [target]
 
 
-def copy_plugin(source: Path, target: Path) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(
-        source,
-        target,
-        dirs_exist_ok=True,
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-    )
+def scopes_for(scope: str | None) -> list[str]:
+    if scope is None or scope == "all":
+        return ["personal", "repo"]
+    return [scope]
 
 
-def read_marketplace(path: Path) -> dict:
+def codex_catalog_root() -> dict:
+    return {"name": "agent-guard-marketplace", "interface": {"displayName": "Agent Guard"}, "plugins": []}
+
+
+def claude_catalog_root() -> dict:
+    return {"name": "agent-guard-marketplace", "owner": {"name": "Agent Guard"}, "plugins": []}
+
+
+def catalog_root(target: str) -> dict:
+    return codex_catalog_root() if target == "codex" else claude_catalog_root()
+
+
+def codex_marketplace_entry() -> dict:
+    return {
+        "name": PLUGIN_NAME,
+        "source": {"source": "local", "path": "./plugins/agent-guard"},
+        "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+        "category": "Productivity",
+    }
+
+
+def claude_marketplace_entry() -> dict:
+    return {
+        "name": PLUGIN_NAME,
+        "source": "./plugins/agent-guard",
+        "description": "Guard workflow plugin for Codex and Claude agents",
+    }
+
+
+def expected_marketplace_entry(target: str) -> dict:
+    return codex_marketplace_entry() if target == "codex" else claude_marketplace_entry()
+
+
+def read_marketplace(path: Path, target: str) -> dict:
     if not path.exists():
-        return {"plugins": []}
+        return catalog_root(target)
     data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"invalid_marketplace_catalog: {path}")
     plugins = data.get("plugins")
-    if not isinstance(plugins, list):
-        data["plugins"] = []
+    if not isinstance(plugins, list) or not all(isinstance(entry, dict) for entry in plugins):
+        raise ValueError(f"invalid_marketplace_plugins: {path}")
     return data
 
 
-def write_marketplace(path: Path, kind: str, source: Path, install_path: Path) -> None:
-    data = read_marketplace(path)
+def write_marketplace(path: Path, target: str) -> None:
+    data = read_marketplace(path, target)
     plugins = [entry for entry in data["plugins"] if entry.get("name") != PLUGIN_NAME]
-    plugins.append(
-        {
-            "name": PLUGIN_NAME,
-            "kind": kind,
-            "source": str(source),
-            "install_path": str(install_path),
-        }
-    )
+    plugins.append(expected_marketplace_entry(target))
     data["plugins"] = plugins
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def marketplace_has_entry(path: Path, install_path: Path) -> bool:
+def marketplace_write_errors(path: Path) -> list[str]:
     if not path.exists():
-        return False
+        return []
     try:
-        data = read_marketplace(path)
-    except json.JSONDecodeError:
-        return False
-    expected = str(install_path)
-    return any(entry.get("name") == PLUGIN_NAME and entry.get("install_path") == expected for entry in data["plugins"])
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return [f"invalid_json: {path}: {exc}"]
+    if not isinstance(data, dict):
+        return [f"invalid_marketplace_catalog: {path}"]
+    plugins = data.get("plugins")
+    if not isinstance(plugins, list) or not all(isinstance(entry, dict) for entry in plugins):
+        return [f"invalid_marketplace_plugins: {path}"]
+    entries = [entry for entry in plugins if entry.get("name") == PLUGIN_NAME]
+    if any("kind" in entry or "install_path" in entry for entry in entries):
+        return [f"legacy_marketplace_entry: {path}"]
+    return []
+
+
+def marketplace_entry_status(path: Path, target: str) -> tuple[str, list[str]]:
+    if not path.exists():
+        return "missing", [f"missing_marketplace: {path}"]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return "invalid", [f"invalid_json: {path}: {exc}"]
+    if not isinstance(data, dict):
+        return "invalid", [f"invalid_marketplace_catalog: {path}"]
+    plugins = data.get("plugins")
+    if not isinstance(plugins, list) or not all(isinstance(entry, dict) for entry in plugins):
+        return "invalid", [f"invalid_marketplace_plugins: {path}"]
+    entries = [entry for entry in plugins if entry.get("name") == PLUGIN_NAME]
+    if not entries:
+        return "missing", [f"missing_marketplace_entry: {path}"]
+    if any("kind" in entry or "install_path" in entry for entry in entries):
+        return "legacy", [f"legacy_marketplace_entry: {path}"]
+    if len(entries) == 1 and entries[0] == expected_marketplace_entry(target):
+        return "present", []
+    return "invalid", [f"invalid_marketplace_entry: {path}"]
 
 
 def print_package_check(prefix: str, check: PackageCheck) -> None:
@@ -219,23 +264,33 @@ def print_package_check(prefix: str, check: PackageCheck) -> None:
 
 
 def print_safety() -> None:
+    print("safety: marketplace_catalog_only")
     print("safety:")
     print("  guard_profile: not_modified")
     print("  project_hooks: not_installed")
     print("  git_config: not_modified")
 
 
+def catalog_paths(args: argparse.Namespace) -> dict[tuple[str, str], Path]:
+    return {
+        ("codex", "repo"): args.codex_repo_marketplace,
+        ("claude", "repo"): args.claude_repo_marketplace,
+        ("codex", "personal"): args.codex_personal_marketplace,
+        ("claude", "personal"): args.claude_personal_marketplace,
+    }
+
+
 def run_dry_run(args: argparse.Namespace) -> int:
-    target_names = targets_for(args.target)
     print("status: dry_run")
+    print(f"target: {args.target or 'all'}")
+    print(f"scope: {args.scope or 'all'}")
+    print(f"release_ref: {args.release_ref}")
     print(f"plugin_source: {args.plugin_source}")
-    if "codex" in target_names:
-        print(f"codex_plugin_target: {plugin_target(args.codex_home)}")
-        print(f"codex_marketplace: {args.codex_marketplace}")
-    if "claude" in target_names:
-        print(f"claude_plugin_target: {plugin_target(args.claude_home)}")
-        print(f"claude_marketplace: {args.claude_marketplace}")
-    print("action: would_install_plugin_and_update_marketplace")
+    print(f"codex_repo_marketplace: {args.codex_repo_marketplace}")
+    print(f"claude_repo_marketplace: {args.claude_repo_marketplace}")
+    print(f"codex_personal_marketplace: {args.codex_personal_marketplace}")
+    print(f"claude_personal_marketplace: {args.claude_personal_marketplace}")
+    print("action: would_update_marketplace_catalogs")
     print_safety()
     return 0
 
@@ -244,56 +299,71 @@ def run_install(args: argparse.Namespace) -> int:
     if args.target is None:
         print("install requires --target", file=sys.stderr)
         return 2
+    if args.scope is None:
+        print("install requires --scope", file=sys.stderr)
+        return 2
     if not args.authorize_install:
         print("install requires --authorize-install", file=sys.stderr)
         return 2
 
-    source_check = check_package(args.plugin_source)
+    source_check = check_package(args.plugin_source, args.target)
     if source_check.status != "complete":
         print("status: issues")
         print_package_check("source_package", source_check)
         print_safety()
         return 1
 
-    target_names = targets_for(args.target)
-    if "codex" in target_names:
-        codex_target = plugin_target(args.codex_home)
-        copy_plugin(args.plugin_source, codex_target)
-        write_marketplace(args.codex_marketplace, "codex", args.plugin_source, codex_target)
-    if "claude" in target_names:
-        claude_target = plugin_target(args.claude_home)
-        copy_plugin(args.plugin_source, claude_target)
-        write_marketplace(args.claude_marketplace, "claude", args.plugin_source, claude_target)
+    paths = catalog_paths(args)
+    install_errors: list[tuple[str, list[str]]] = []
+    for target in targets_for(args.target):
+        for scope in scopes_for(args.scope):
+            label = f"{target}_{scope}_marketplace"
+            errors = marketplace_write_errors(paths[(target, scope)])
+            if errors:
+                install_errors.append((label, errors))
+
+    if install_errors:
+        print("status: issues")
+        for label, errors in install_errors:
+            print(f"{label}: invalid")
+            print(f"{label}_errors:")
+            for error in errors:
+                print(f"  - {error}")
+        print_safety()
+        return 1
+
+    for target in targets_for(args.target):
+        for scope in scopes_for(args.scope):
+            write_marketplace(paths[(target, scope)], target)
 
     print("status: installed")
-    if "codex" in target_names:
-        print(f"codex_plugin_target: {plugin_target(args.codex_home)}")
-        print(f"codex_marketplace: {args.codex_marketplace}")
-    if "claude" in target_names:
-        print(f"claude_plugin_target: {plugin_target(args.claude_home)}")
-        print(f"claude_marketplace: {args.claude_marketplace}")
+    print(f"target: {args.target}")
+    print(f"scope: {args.scope}")
+    print(f"release_ref: {args.release_ref}")
     print_safety()
     return 0
 
 
-def verify_target(name: str, install_path: Path, marketplace: Path) -> bool:
-    check = check_package(install_path)
-    print_package_check(f"{name}_install", check)
-    entry_status = "present" if marketplace_has_entry(marketplace, install_path) else "missing"
-    print(f"{name}_marketplace_entry: {entry_status}")
-    return check.status == "complete" and entry_status == "present"
+def verify_marketplace_entry(label: str, target: str, marketplace: Path) -> bool:
+    status, errors = marketplace_entry_status(marketplace, target)
+    print(f"{label}: {status}")
+    if errors:
+        print(f"{label}_errors:")
+        for error in errors:
+            print(f"  - {error}")
+    return status == "present"
 
 
 def run_verify(args: argparse.Namespace) -> int:
-    target_names = targets_for(args.target)
-    source_check = check_package(args.plugin_source)
+    source_check = check_package(args.plugin_source, args.target)
     results: list[bool] = [source_check.status == "complete"]
 
     print_package_check("source_package", source_check)
-    if "codex" in target_names:
-        results.append(verify_target("codex", plugin_target(args.codex_home), args.codex_marketplace))
-    if "claude" in target_names:
-        results.append(verify_target("claude", plugin_target(args.claude_home), args.claude_marketplace))
+    paths = catalog_paths(args)
+    for target in targets_for(args.target):
+        for scope in scopes_for(args.scope):
+            label = f"{target}_{scope}_marketplace_entry"
+            results.append(verify_marketplace_entry(label, target, paths[(target, scope)]))
     print_safety()
     ok = all(results)
     print(f"status: {'verified' if ok else 'issues'}")
@@ -305,16 +375,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("mode", choices=["dry-run", "install", "verify"], help="操作模式。")
     parser.add_argument("--plugin-source", type=Path, default=default_plugin_source(), help="插件源码目录。")
     parser.add_argument("--target", choices=["codex", "claude", "all"], help="安装或验证目标。")
-    parser.add_argument("--codex-home", type=Path, default=default_codex_home(), help="Codex home（主目录）。")
-    parser.add_argument("--claude-home", type=Path, default=default_claude_home(), help="Claude home（主目录）。")
-    parser.add_argument("--codex-marketplace", type=Path, default=default_codex_marketplace(), help="Codex marketplace（市场）文件。")
-    parser.add_argument("--claude-marketplace", type=Path, default=default_claude_marketplace(), help="Claude marketplace（市场）文件。")
-    parser.add_argument("--authorize-install", action="store_true", help="明确授权写入插件安装位置。")
+    parser.add_argument("--scope", choices=["personal", "repo", "all"], help="写入或验证范围。")
+    parser.add_argument("--codex-repo-marketplace", type=Path, default=CODEX_REPO_MARKETPLACE, help="仓库级 Codex marketplace（市场）文件。")
+    parser.add_argument("--claude-repo-marketplace", type=Path, default=CLAUDE_REPO_MARKETPLACE, help="仓库级 Claude marketplace（市场）文件。")
+    parser.add_argument("--codex-personal-marketplace", type=Path, default=default_codex_personal_marketplace(), help="个人级 Codex marketplace（市场）文件。")
+    parser.add_argument("--claude-personal-marketplace", type=Path, default=default_claude_personal_marketplace(), help="个人级 Claude marketplace（市场）文件。")
+    parser.add_argument("--release-ref", default=RELEASE_REF, choices=[RELEASE_REF], help="发布引用。")
+    parser.add_argument("--authorize-install", action="store_true", help="明确授权写入 marketplace catalog（市场目录）。")
     return parser
 
 
 def normalize_args(args: argparse.Namespace) -> argparse.Namespace:
-    for name in ["plugin_source", "codex_home", "claude_home", "codex_marketplace", "claude_marketplace"]:
+    for name in [
+        "plugin_source",
+        "codex_repo_marketplace",
+        "claude_repo_marketplace",
+        "codex_personal_marketplace",
+        "claude_personal_marketplace",
+    ]:
         setattr(args, name, normalize(getattr(args, name)))
     return args
 

@@ -1,0 +1,13 @@
+{
+  "name": "agent-guard-marketplace",
+  "owner": {
+    "name": "Agent Guard"
+  },
+  "plugins": [
+    {
+      "name": "agent-guard",
+      "source": "./plugins/agent-guard",
+      "description": "Guard workflow plugin for Codex and Claude agents"
+    }
+  ]
+}

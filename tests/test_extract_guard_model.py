@@ -48,7 +48,7 @@ grill_with_docs:
   exceptions:
     - 人工覆盖必须单独记录。
   documentation_changes:
-    - docs/adr/0001-agent-guard-architecture.md 已确认 Runtime（运行时）不写业务规则。
+    - openspec/specs/agent-guard-core/spec.md 已确认 Runtime（运行时）不写业务规则。
 initialization:
   requested_profile_ref: release-review-order
   hook_installation:

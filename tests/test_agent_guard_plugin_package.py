@@ -7,6 +7,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "agent-guard"
+CODEX_REPO_MARKETPLACE = REPO_ROOT / ".agents" / "plugins" / "marketplace.json"
+CLAUDE_REPO_MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 ENTRYPOINT_SKILLS = [
     "agent-guard-install",
     "agent-guard-init",
@@ -59,6 +61,52 @@ def test_plugin_manifests_are_valid_json() -> None:
     assert claude_manifest["name"] == "agent-guard"
     assert codex_manifest["hooks"] == "hooks/hooks.json"
     assert claude_manifest["hooks"] == "hooks/hooks.json"
+
+
+def test_repo_marketplace_catalogs_point_to_agent_guard_plugin() -> None:
+    codex_catalog = read_json(CODEX_REPO_MARKETPLACE)
+    claude_catalog = read_json(CLAUDE_REPO_MARKETPLACE)
+
+    assert codex_catalog["name"] == "agent-guard-marketplace"
+    assert codex_catalog["interface"]["displayName"] == "Agent Guard"
+    codex_entries = [
+        plugin
+        for plugin in codex_catalog["plugins"]
+        if plugin.get("name") == "agent-guard"
+    ]
+    assert len(codex_entries) == 1, codex_entries
+    codex_entry = codex_entries[0]
+    assert codex_entry["source"] == {
+        "source": "local",
+        "path": "./plugins/agent-guard",
+    }
+    assert codex_entry["policy"] == {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL",
+    }
+    assert codex_entry["category"] == "Productivity"
+
+    assert claude_catalog["name"] == "agent-guard-marketplace"
+    assert claude_catalog["owner"]["name"] == "Agent Guard"
+    claude_entries = [
+        plugin
+        for plugin in claude_catalog["plugins"]
+        if plugin.get("name") == "agent-guard"
+    ]
+    assert len(claude_entries) == 1, claude_entries
+    claude_entry = claude_entries[0]
+    assert claude_entry["source"] == "./plugins/agent-guard"
+    assert claude_entry["description"]
+
+
+def test_plugin_package_does_not_depend_on_legacy_install_scripts() -> None:
+    legacy_scripts = [
+        REPO_ROOT / "scripts" / "install" / "install_user_skill.ps1",
+        REPO_ROOT / "scripts" / "install" / "sync_claude_junction.ps1",
+        REPO_ROOT / "scripts" / "install" / "verify_install.py",
+    ]
+
+    assert [path for path in legacy_scripts if path.exists()] == []
 
 
 def test_plugin_hooks_only_use_session_start_and_pre_tool_use() -> None:
