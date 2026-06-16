@@ -123,23 +123,27 @@ def check_package(plugin_root: Path, target: str | None = None) -> PackageCheck:
         elif data.get("name") != PLUGIN_NAME:
             errors.append(f"invalid_manifest_name: {manifest}")
 
-    hooks, error = read_json(plugin_root / "hooks" / "hooks.json")
+    hooks_config, error = read_json(plugin_root / "hooks" / "hooks.json")
     if error is not None:
         errors.append(error)
-    elif set(hooks) != HOOK_NAMES:
-        errors.append("invalid_hooks: expected SessionStart and PreToolUse only")
+    elif not isinstance(hooks_config, dict) or set(hooks_config) != {"hooks"} or not isinstance(hooks_config.get("hooks"), dict):
+        errors.append("invalid_hooks: expected top-level hooks object")
     else:
-        commands = collect_hook_commands(hooks)
-        if not commands:
-            errors.append("invalid_hooks: missing hook commands")
-        if not all("hook_router.py" in command.replace("\\", "/") for command in commands):
-            errors.append("invalid_hooks: command must reference scripts/hook_router.py")
-        if not any("PLUGIN_ROOT" in command for command in commands):
-            errors.append("invalid_hooks: missing PLUGIN_ROOT command")
-        if not any("CLAUDE_PLUGIN_ROOT" in command for command in commands):
-            errors.append("invalid_hooks: missing CLAUDE_PLUGIN_ROOT command")
-        if any("--profile" in command for command in commands):
-            errors.append("invalid_hooks: command must not include --profile")
+        hooks = hooks_config["hooks"]
+        if set(hooks) != HOOK_NAMES:
+            errors.append("invalid_hooks: expected SessionStart and PreToolUse only")
+        else:
+            commands = collect_hook_commands(hooks)
+            if not commands:
+                errors.append("invalid_hooks: missing hook commands")
+            if not all("hook_router.py" in command.replace("\\", "/") for command in commands):
+                errors.append("invalid_hooks: command must reference scripts/hook_router.py")
+            if not any("PLUGIN_ROOT" in command for command in commands):
+                errors.append("invalid_hooks: missing PLUGIN_ROOT command")
+            if not any("CLAUDE_PLUGIN_ROOT" in command for command in commands):
+                errors.append("invalid_hooks: missing CLAUDE_PLUGIN_ROOT command")
+            if any("--profile" in command for command in commands):
+                errors.append("invalid_hooks: command must not include --profile")
 
     status = "complete" if not missing and not errors else "incomplete"
     return PackageCheck(status, missing, errors)

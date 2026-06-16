@@ -110,7 +110,9 @@ def test_plugin_package_does_not_depend_on_legacy_install_scripts() -> None:
 
 
 def test_plugin_hooks_only_use_session_start_and_pre_tool_use() -> None:
-    hooks = read_json(PLUGIN_ROOT / "hooks" / "hooks.json")
+    config = read_json(PLUGIN_ROOT / "hooks" / "hooks.json")
+    assert set(config) == {"hooks"}
+    hooks = config["hooks"]
 
     assert set(hooks) == {"SessionStart", "PreToolUse"}
     for event, entries in hooks.items():

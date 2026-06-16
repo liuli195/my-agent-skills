@@ -1,22 +1,24 @@
 {
-  "SessionStart": [
-    {
-      "hooks": [
-        {
-          "type": "command",
-          "command": "python -c \"import os,runpy,sys; root=os.environ.get('PLUGIN_ROOT') or os.environ.get('CLAUDE_PLUGIN_ROOT'); source='codex' if os.environ.get('PLUGIN_ROOT') else 'claude'; script=os.path.join(root,'scripts','hook_router.py'); sys.path.insert(0,os.path.dirname(script)); sys.argv=[script,'--source',source,'--event','SessionStart']; runpy.run_path(script,run_name='__main__')\""
-        }
-      ]
-    }
-  ],
-  "PreToolUse": [
-    {
-      "hooks": [
-        {
-          "type": "command",
-          "command": "python -c \"import os,runpy,sys; root=os.environ.get('PLUGIN_ROOT') or os.environ.get('CLAUDE_PLUGIN_ROOT'); source='codex' if os.environ.get('PLUGIN_ROOT') else 'claude'; script=os.path.join(root,'scripts','hook_router.py'); sys.path.insert(0,os.path.dirname(script)); sys.argv=[script,'--source',source,'--event','PreToolUse']; runpy.run_path(script,run_name='__main__')\""
-        }
-      ]
-    }
-  ]
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -c \"import os,runpy,sys; root=os.environ.get('PLUGIN_ROOT') or os.environ.get('CLAUDE_PLUGIN_ROOT'); source='codex' if os.environ.get('PLUGIN_ROOT') else 'claude'; script=os.path.join(root,'scripts','hook_router.py'); sys.path.insert(0,os.path.dirname(script)); sys.argv=[script,'--source',source,'--event','SessionStart']; runpy.run_path(script,run_name='__main__')\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -c \"import os,runpy,sys; root=os.environ.get('PLUGIN_ROOT') or os.environ.get('CLAUDE_PLUGIN_ROOT'); source='codex' if os.environ.get('PLUGIN_ROOT') else 'claude'; script=os.path.join(root,'scripts','hook_router.py'); sys.path.insert(0,os.path.dirname(script)); sys.argv=[script,'--source',source,'--event','PreToolUse']; runpy.run_path(script,run_name='__main__')\""
+          }
+        ]
+      }
+    ]
+  }
 }

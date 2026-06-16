@@ -160,6 +160,44 @@ def test_verify_target_codex_only_requires_codex_manifest(tmp_path: Path) -> Non
     assert ".claude-plugin/plugin.json" in all_verify.stdout
 
 
+def test_verify_rejects_legacy_hook_config_shape(tmp_path: Path) -> None:
+    install = run_installer(["install", *common_args(tmp_path), "--target", "all", "--scope", "all", "--authorize-install"])
+    assert install.returncode == 0, install.stdout + install.stderr
+    plugin_source = tmp_path / "agent-guard-source"
+    shutil.copytree(PLUGIN_ROOT, plugin_source)
+    legacy_hooks = {
+        "SessionStart": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python -c \"import os; print(os.environ.get('PLUGIN_ROOT') or os.environ.get('CLAUDE_PLUGIN_ROOT')); print('hook_router.py')\" --event SessionStart",
+                    }
+                ]
+            }
+        ],
+        "PreToolUse": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python -c \"import os; print(os.environ.get('PLUGIN_ROOT') or os.environ.get('CLAUDE_PLUGIN_ROOT')); print('hook_router.py')\" --event PreToolUse",
+                    }
+                ]
+            }
+        ],
+    }
+    (plugin_source / "hooks" / "hooks.json").write_text(
+        json.dumps(legacy_hooks, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    verify = run_installer(["verify", *common_args(tmp_path, plugin_source), "--target", "all", "--scope", "all"])
+
+    assert verify.returncode == 1
+    assert "invalid_hooks: expected top-level hooks object" in verify.stdout
+
+
 def test_verify_rejects_legacy_marketplace_entry(tmp_path: Path) -> None:
     path = marketplace_paths(tmp_path)["codex_repo"]
     path.parent.mkdir(parents=True)
