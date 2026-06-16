@@ -78,6 +78,11 @@ def test_dry_run_lists_codex_and_claude_targets_without_writing(tmp_path: Path) 
     assert "claude_repo_marketplace:" in result.stdout
     assert "codex_personal_marketplace:" in result.stdout
     assert "claude_personal_marketplace:" in result.stdout
+    paths = marketplace_paths(tmp_path)
+    assert str(paths["codex_repo"]) in result.stdout
+    assert str(paths["claude_repo"]) in result.stdout
+    assert str(paths["codex_personal"]) in result.stdout
+    assert str(paths["claude_personal"]) in result.stdout
     assert "safety: marketplace_catalog_only" in result.stdout
     assert not (tmp_path / "repo-marketplace").exists()
     assert not (tmp_path / "codex-personal").exists()
