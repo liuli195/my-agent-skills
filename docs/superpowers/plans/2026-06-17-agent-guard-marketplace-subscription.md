@@ -455,7 +455,7 @@ Expected: all installer tests pass.
 - Delete: `scripts/install/verify_install.py`
 - Modify or delete: `scripts/install/README.md`
 
-- [ ] **Step 1: Move non-install entrypoint tests**
+- [x] **Step 1: Move non-install entrypoint tests**
 
 Create `tests/test_agent_guard_skill_entrypoints.py` with the non-install tests from the old file:
 
@@ -489,7 +489,7 @@ Copy these existing test bodies into the new file unchanged unless path constant
 - `test_core_references_are_common_and_scenario_docs_live_with_entrypoints`
 - `test_templates_do_not_include_python_cache_artifacts`
 
-- [ ] **Step 2: Delete legacy install tests and scripts**
+- [x] **Step 2: Delete legacy install tests and scripts**
 
 Delete:
 
@@ -502,7 +502,7 @@ scripts/install/verify_install.py
 
 If `scripts/install/README.md` only documents deleted scripts, delete it. If it also documents marketplace subscription, rewrite it to point to `plugins/agent-guard/skills/agent-guard/scripts/install_agent_guard_plugin.py`.
 
-- [ ] **Step 3: Run moved entrypoint tests**
+- [x] **Step 3: Run moved entrypoint tests**
 
 Run:
 
