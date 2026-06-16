@@ -1,6 +1,6 @@
 ## 1. Contract And Test Baseline
 
-- [ ] 1.1 更新 `agent-guard-plugin-runtime` 和 `agent-guard-skill-entrypoints` specs，确认 marketplace subscription（市场订阅）是唯一发布入口。
+- [x] 1.1 更新 `agent-guard-plugin-runtime` 和 `agent-guard-skill-entrypoints` specs，确认 marketplace subscription（市场订阅）是唯一发布入口。
 - [x] 1.2 调整 installer tests（安装器测试），覆盖 `target` 与 `scope` 分离、personal marketplace（个人市场）、repo marketplace（仓库市场）和 GitHub `marketplace` 发布分支。
 - [x] 1.3 调整 package tests（插件包测试），校验 `.codex-plugin`、`.claude-plugin`、hooks、runtime 和 Skill 入口，不再校验 user-level Skill installation（用户级技能安装）。
 - [x] 1.4 删除或替换旧 `test_user_skill_install.py`，确保测试不再引用 Claude Junction（Claude 目录联接）或 `.agents/skills/agent-guard` 安装兼容层。
@@ -21,6 +21,6 @@
 
 ## 4. Verification
 
-- [ ] 4.1 运行 `openspec validate --all --strict --json`。
-- [ ] 4.2 运行相关 pytest（测试）：plugin package、plugin installer、plugin runtime e2e 和被修改的 extraction tests。
-- [ ] 4.3 定向扫描确认没有活跃文档或测试继续引用旧 user-level Skill installation（用户级技能安装）兼容层。
+- [x] 4.1 运行 `openspec validate --all --strict --json`。
+- [x] 4.2 运行相关 pytest（测试）：plugin package、plugin installer、plugin runtime e2e 和被修改的 extraction tests。
+- [x] 4.3 定向扫描确认没有活跃文档或测试继续引用旧 user-level Skill installation（用户级技能安装）兼容层。

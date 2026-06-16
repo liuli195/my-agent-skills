@@ -589,7 +589,7 @@ Expected: all selected tests pass.
 **Files:**
 - Modify: `openspec/changes/agent-guard-marketplace-subscription/tasks.md`
 
-- [ ] **Step 1: Run OpenSpec strict validation**
+- [x] **Step 1: Run OpenSpec strict validation**
 
 Run:
 
@@ -599,7 +599,7 @@ openspec validate --all --strict --json
 
 Expected: all specs pass.
 
-- [ ] **Step 2: Run targeted legacy scan**
+- [x] **Step 2: Run targeted legacy scan**
 
 Run:
 
@@ -609,11 +609,11 @@ rg -n "install_user_skill|sync_claude_junction|verify_install|\\.agents/skills/a
 
 Expected: no active docs/tests/scripts describe the old user-level Skill installation or Claude Junction as a current Agent Guard publishing contract. If archived OpenSpec context appears, leave it only when the path is clearly archived.
 
-- [ ] **Step 3: Mark OpenSpec tasks complete**
+- [x] **Step 3: Mark OpenSpec tasks complete**
 
 When all focused tests and scans pass, update every applicable checkbox in `openspec/changes/agent-guard-marketplace-subscription/tasks.md` to `[x]`.
 
-- [ ] **Step 4: Commit implementation**
+- [x] **Step 4: Commit implementation**
 
 Run:
 
