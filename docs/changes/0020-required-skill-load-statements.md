@@ -2,6 +2,8 @@
 
 GitHub Issue: https://github.com/liuli195/my-agent-skills/issues/20
 
+后续调整：Issue [#31](https://github.com/liuli195/my-agent-skills/issues/31) 已决定 MVP 删除独立 `$agent-guard-hooks` 入口。
+
 ## 已确认方案
 
 第一阶段只在拆分后的入口正文中加入强制流程句，不修改 Guard Runtime（守卫运行时）和 Guard Profile（守卫画像）契约。
@@ -14,15 +16,13 @@ GitHub Issue: https://github.com/liuli195/my-agent-skills/issues/20
 - `$agent-guard-init`：立即执行：在初始化任何项目级或用户级 Guard Profile（守卫画像）前，运行 `validate_guard_profile.py <guard-profile-dir>`。禁止跳过此步骤。
 - `$agent-guard-update`：立即执行：在把更新后的 Guard Profile（守卫画像）同步到已初始化守卫前，运行 `validate_guard_profile.py <guard-profile-dir>`。禁止跳过此步骤。
 - `$agent-guard-run`：立即执行：提交任何 `state_completed` 事件前，读取最新 Guard Brief（守卫简报）。禁止跳过此步骤。
-- `$agent-guard-hooks`：立即执行：安装或验证 Hook（钩子）前，读取 `references/hook-install.md`。禁止跳过此步骤。
 
 ## 验收口径
 
-- [ ] 5 个新入口都包含对应强制流程句。
+- [ ] 4 个入口都包含对应强制流程句。
 - [ ] `$agent-guard-install` 明确要求先加载 `$grill-with-docs`。
 - [ ] `$agent-guard-init` 和 `$agent-guard-update` 明确要求先校验画像。
 - [ ] `$agent-guard-run` 明确要求提交 `state_completed` 前读取最新 Guard Brief（守卫简报）。
-- [ ] `$agent-guard-hooks` 明确要求先读取 Hook 安装文档。
 - [ ] 文档说明本阶段不做 Runtime 机器验证；后续可用 Agent Guard 自身守卫该流程。
 
 ## 不进入本 issue

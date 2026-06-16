@@ -1,12 +1,12 @@
 # Agent Guard User Skill Install（用户级技能安装）
 
-本文件说明源码仓库到用户级 Skill（技能）的同步，不属于 Agent Guard（代理守卫）5 个运行场景。
+本文件说明源码仓库到用户级 Skill（技能）的同步，不属于 Agent Guard（代理守卫）4 个运行场景。
 
 当前以 Codex（Codex 代理）为主：
 
 - 用户级 Skill（技能）源码来自插件包内的 `plugins/agent-guard/skills/`，根目录不再保留旧 `skills/agent-guard*` 副本。
 - `agent-guard` 是共享核心和薄路由入口。
-- `agent-guard-install`、`agent-guard-init`、`agent-guard-update`、`agent-guard-run` 和 `agent-guard-hooks` 是按场景触发的入口。
+- `agent-guard-install`、`agent-guard-init`、`agent-guard-update` 和 `agent-guard-run` 是按场景触发的入口。
 - 当前仓库初始化不安装用户级 Skill（技能），不创建 Claude Junction（Claude 目录联接），也不初始化目标项目守卫。
 
 安装验证：
@@ -29,10 +29,9 @@ scripts\install\install_user_skill.ps1
 .agents\skills\agent-guard-init
 .agents\skills\agent-guard-update
 .agents\skills\agent-guard-run
-.agents\skills\agent-guard-hooks
 ```
 
-共享 `scripts` 和 `assets` 只保留在 `agent-guard`。5 个场景入口可以包含自己的 `references`，但不复制共享脚本和模板。
+共享 `scripts` 和 `assets` 只保留在 `agent-guard`。4 个场景入口可以包含自己的 `references`，但不复制共享脚本和模板。
 
 Claude（Claude 代理）兼容通过 Junction（目录联接）复用同一份用户级 Skill（技能）：
 

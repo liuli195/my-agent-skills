@@ -23,8 +23,7 @@ $EntrypointSkills = @(
     "agent-guard-install",
     "agent-guard-init",
     "agent-guard-update",
-    "agent-guard-run",
-    "agent-guard-hooks"
+    "agent-guard-run"
 )
 
 $EntrypointRequiredItems = @{
@@ -49,12 +48,6 @@ $EntrypointRequiredItems = @{
         "references\brief.md",
         "references\events.md",
         "references\close.md"
-    )
-    "agent-guard-hooks" = @(
-        "SKILL.md",
-        "references\hook-install.md",
-        "references\hook-adapter.md",
-        "references\hook-results.md"
     )
 }
 

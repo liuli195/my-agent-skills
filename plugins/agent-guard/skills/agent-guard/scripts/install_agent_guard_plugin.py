@@ -19,14 +19,12 @@ ENTRYPOINT_SKILLS = [
     "agent-guard-init",
     "agent-guard-update",
     "agent-guard-run",
-    "agent-guard-hooks",
 ]
 ENTRYPOINT_REFERENCES = {
     "agent-guard-install": ["research-and-extract.md", "profile-draft.md"],
     "agent-guard-init": ["init-flow.md", "init-boundaries.md"],
     "agent-guard-update": ["runtime-update.md", "profile-sync.md"],
     "agent-guard-run": ["activate.md", "brief.md", "events.md", "close.md"],
-    "agent-guard-hooks": ["hook-install.md", "hook-adapter.md", "hook-results.md"],
 }
 PACKAGE_ITEMS = [
     ".codex-plugin/plugin.json",

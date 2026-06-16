@@ -12,14 +12,12 @@ ENTRYPOINT_SKILLS = [
     "agent-guard-init",
     "agent-guard-update",
     "agent-guard-run",
-    "agent-guard-hooks",
 ]
 ENTRYPOINT_REFERENCES = {
     "agent-guard-install": ["research-and-extract.md", "profile-draft.md"],
     "agent-guard-init": ["init-flow.md", "init-boundaries.md"],
     "agent-guard-update": ["runtime-update.md", "profile-sync.md"],
     "agent-guard-run": ["activate.md", "brief.md", "events.md", "close.md"],
-    "agent-guard-hooks": ["hook-install.md", "hook-adapter.md", "hook-results.md"],
 }
 
 
@@ -110,6 +108,8 @@ def test_plugin_package_contains_runtime_skills_and_templates() -> None:
             assert (skill_dir / "references" / reference).exists()
         assert not (skill_dir / "scripts").exists()
         assert not (skill_dir / "assets").exists()
+
+    assert not (PLUGIN_ROOT / "skills" / "agent-guard-hooks").exists()
 
 
 def test_legacy_root_agent_guard_skills_are_removed() -> None:

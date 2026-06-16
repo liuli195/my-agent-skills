@@ -1,6 +1,6 @@
 # Architecture（架构）
 
-本文件只用于快速定向。执行流程放在 5 个场景入口自己的 `references/` 中。
+本文件只用于快速定向。执行流程放在 4 个场景入口自己的 `references/` 中。
 
 职责边界：
 
@@ -9,10 +9,9 @@
 - `agent-guard-init`：第一次创建项目级或用户级运行位置。
 - `agent-guard-update`：维护已初始化守卫，更新 Agent Guard Plugin（代理守卫插件）或同步已校验画像。
 - `agent-guard-run`：激活 Session Focus Instance（会话焦点实例）、切换焦点、关闭实例、提交标准事件。
-- `agent-guard-hooks`：dry-run、安装或验证 Plugin（插件）提供的 `SessionStart` / `PreToolUse` lifecycle Hook（生命周期钩子）。
 - Guard Profile（守卫画像）：存放具体守卫规则。
 - Guard Runtime（守卫运行时）：由 Plugin（插件）发布，执行通用机制，不写业务规则。
-- Hook（钩子）：捕获事件、标准化事件并调用 Runtime（运行时）；不创建实例，不推进状态。
+- Hook（钩子）：由 Plugin（插件）发布，捕获事件、标准化事件并调用 Runtime（运行时）；不创建实例，不推进状态。Hook（钩子）安装和验证通过 Plugin Installer（插件安装器）或 `agent-guard-update` 执行，不保留独立场景入口。
 - 被守卫对象：保持原样，不成为守卫配置的一部分。
 
 共享资源：

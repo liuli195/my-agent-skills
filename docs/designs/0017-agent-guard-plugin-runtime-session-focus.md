@@ -412,7 +412,7 @@ Guarded Target（被守卫目标）选择：
 
 | 序号 | 作用域 | 守卫目标 | 类型 | 来源 | 边界 | 画像 ID |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | project | Hook 接入流程 | workflow | skills/agent-guard-hooks | 守卫 Hook 接入步骤 | agent-guard-hooks |
+| 1 | project | Plugin 更新流程 | workflow | skills/agent-guard-update | 守卫 Plugin 更新与验证步骤 | agent-guard-update |
 | 2 | user | PR 流程技能 | skill | skills/pr-flow | 守卫 PR 提交与合并顺序 | pr-flow |
 
 实例选择：
