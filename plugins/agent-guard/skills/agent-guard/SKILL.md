@@ -1,6 +1,6 @@
 ---
 name: agent-guard
-description: 路由到具体 Agent Guard（代理守卫）场景入口。Use when 用户只说 agent-guard 或守卫，且没有明确 install/init/update/run/hooks 场景。
+description: 路由到具体 Agent Guard（代理守卫）场景入口。Use when 用户只说 agent-guard 或守卫，且没有明确 install/init/update/run 场景。
 ---
 
 # agent-guard
@@ -15,7 +15,6 @@ description: 路由到具体 Agent Guard（代理守卫）场景入口。Use whe
 | 第一次初始化项目级或用户级守卫 | `$agent-guard-init` |
 | 更新 Agent Guard Plugin（代理守卫插件），或同步已校验画像到已初始化守卫 | `$agent-guard-update` |
 | 激活 Session Focus Instance（会话焦点实例）、切换焦点、关闭实例、提交事件 | `$agent-guard-run` |
-| dry-run、安装或验证 Agent Guard Plugin（代理守卫插件）的 lifecycle Hook（生命周期钩子） | `$agent-guard-hooks` |
 
 ## 规则
 

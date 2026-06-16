@@ -425,9 +425,6 @@ my-agent-skills/
 │   ├── agent-guard-run/
 │   │   ├── SKILL.md
 │   │   └── references/
-│   └── agent-guard-hooks/
-│       ├── SKILL.md
-│       └── references/
 ├── docs/
 │   ├── rules/
 │   │   └── index.md
@@ -916,7 +913,7 @@ MVP 只对关键路径写审计：
 
 通用文档放入插件包内的 `plugins/agent-guard/skills/agent-guard/references/`：
 
-- `architecture.md`：整体架构和 5 个入口边界。
+- `architecture.md`：整体架构和 4 个入口边界。
 - `terminology.md`：术语表。
 - `subject-resolution.md`：守卫实例解析规则。
 - `template-index.md`：共享模板索引。
@@ -927,7 +924,6 @@ MVP 只对关键路径写审计：
 - `agent-guard-init/references/`：第一次初始化和初始化边界。
 - `agent-guard-update/references/`：Runtime 更新和画像同步。
 - `agent-guard-run/references/`：激活、Brief（简报）和标准事件。
-- `agent-guard-hooks/references/`：Hook（钩子）安装、adapter（适配器）和结果处理。
 
 模板放入 `assets/templates/`：
 

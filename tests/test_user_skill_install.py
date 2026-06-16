@@ -18,14 +18,12 @@ ENTRYPOINT_SKILLS = [
     "agent-guard-init",
     "agent-guard-update",
     "agent-guard-run",
-    "agent-guard-hooks",
 ]
 ENTRYPOINT_REFERENCES = {
     "agent-guard-install": ["research-and-extract.md", "profile-draft.md"],
     "agent-guard-init": ["init-flow.md", "init-boundaries.md"],
     "agent-guard-update": ["runtime-update.md", "profile-sync.md"],
     "agent-guard-run": ["activate.md", "brief.md", "events.md", "close.md"],
-    "agent-guard-hooks": ["hook-install.md", "hook-adapter.md", "hook-results.md"],
 }
 
 
@@ -75,7 +73,7 @@ def test_agent_guard_router_description_covers_routing_triggers() -> None:
         "路由",
         "Use when",
         "agent-guard",
-        "install/init/update/run/hooks",
+        "install/init/update/run",
     ]:
         assert term in description
     for term in ["Guard Profile（守卫画像）", "Guard Runtime（守卫运行时）", "Hook（钩子）"]:
@@ -88,6 +86,7 @@ def test_agent_guard_router_points_to_scenario_entrypoints() -> None:
     assert "薄路由" in skill_text
     for entrypoint in ENTRYPOINT_SKILLS:
         assert f"${entrypoint}" in skill_text
+    assert "$agent-guard-hooks" not in skill_text
 
 
 def test_scenario_entrypoints_have_strong_required_steps() -> None:
@@ -117,13 +116,6 @@ def test_scenario_entrypoints_have_strong_required_steps() -> None:
             "references/brief.md",
             "references/events.md",
             "references/close.md",
-        ],
-        "agent-guard-hooks": [
-            "接入 Hook",
-            "立即执行：安装或验证 Hook（钩子）前，读取 `references/hook-install.md`。禁止跳过此步骤。",
-            "references/hook-install.md",
-            "references/hook-adapter.md",
-            "references/hook-results.md",
         ],
     }
 

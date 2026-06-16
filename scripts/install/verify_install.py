@@ -36,7 +36,6 @@ ENTRYPOINT_SKILL_NAMES = [
     "agent-guard-init",
     "agent-guard-update",
     "agent-guard-run",
-    "agent-guard-hooks",
 ]
 
 ENTRYPOINT_REQUIRED_ITEMS = {
@@ -61,12 +60,6 @@ ENTRYPOINT_REQUIRED_ITEMS = {
         "references/brief.md",
         "references/events.md",
         "references/close.md",
-    ],
-    "agent-guard-hooks": [
-        "SKILL.md",
-        "references/hook-install.md",
-        "references/hook-adapter.md",
-        "references/hook-results.md",
     ],
 }
 
