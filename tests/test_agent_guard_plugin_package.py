@@ -69,9 +69,13 @@ def test_repo_marketplace_catalogs_point_to_agent_guard_plugin() -> None:
 
     assert codex_catalog["name"] == "agent-guard-marketplace"
     assert codex_catalog["interface"]["displayName"] == "Agent Guard"
-    codex_entry = next(
-        plugin for plugin in codex_catalog["plugins"] if plugin["name"] == "agent-guard"
-    )
+    codex_entries = [
+        plugin
+        for plugin in codex_catalog["plugins"]
+        if plugin.get("name") == "agent-guard"
+    ]
+    assert len(codex_entries) == 1, codex_entries
+    codex_entry = codex_entries[0]
     assert codex_entry["source"] == {
         "source": "local",
         "path": "./plugins/agent-guard",
@@ -84,9 +88,13 @@ def test_repo_marketplace_catalogs_point_to_agent_guard_plugin() -> None:
 
     assert claude_catalog["name"] == "agent-guard-marketplace"
     assert claude_catalog["owner"]["name"] == "Agent Guard"
-    claude_entry = next(
-        plugin for plugin in claude_catalog["plugins"] if plugin["name"] == "agent-guard"
-    )
+    claude_entries = [
+        plugin
+        for plugin in claude_catalog["plugins"]
+        if plugin.get("name") == "agent-guard"
+    ]
+    assert len(claude_entries) == 1, claude_entries
+    claude_entry = claude_entries[0]
     assert claude_entry["source"] == "./plugins/agent-guard"
     assert claude_entry["description"]
 
