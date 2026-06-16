@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -20,11 +21,11 @@ def run_installer(args: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def common_args(tmp_path: Path) -> list[str]:
+def common_args(tmp_path: Path, plugin_source: Path = PLUGIN_ROOT) -> list[str]:
     repo_root = tmp_path / "repo-marketplace"
     return [
         "--plugin-source",
-        str(PLUGIN_ROOT),
+        str(plugin_source),
         "--codex-repo-marketplace",
         str(repo_root / ".agents" / "plugins" / "marketplace.json"),
         "--claude-repo-marketplace",
@@ -141,6 +142,24 @@ def test_verify_checks_package_and_marketplace_entries(tmp_path: Path) -> None:
     assert "claude_personal_marketplace_entry: present" in verify.stdout
 
 
+def test_verify_target_codex_only_requires_codex_manifest(tmp_path: Path) -> None:
+    install = run_installer(
+        ["install", *common_args(tmp_path), "--target", "codex", "--scope", "repo", "--authorize-install"]
+    )
+    assert install.returncode == 0, install.stdout + install.stderr
+    plugin_source = tmp_path / "agent-guard-source"
+    shutil.copytree(PLUGIN_ROOT, plugin_source)
+    (plugin_source / ".claude-plugin" / "plugin.json").unlink()
+
+    codex_verify = run_installer(["verify", *common_args(tmp_path, plugin_source), "--target", "codex", "--scope", "repo"])
+    all_verify = run_installer(["verify", *common_args(tmp_path, plugin_source), "--target", "all", "--scope", "repo"])
+
+    assert codex_verify.returncode == 0, codex_verify.stdout + codex_verify.stderr
+    assert "status: verified" in codex_verify.stdout
+    assert all_verify.returncode == 1
+    assert ".claude-plugin/plugin.json" in all_verify.stdout
+
+
 def test_verify_rejects_legacy_marketplace_entry(tmp_path: Path) -> None:
     path = marketplace_paths(tmp_path)["codex_repo"]
     path.parent.mkdir(parents=True)
@@ -187,6 +206,19 @@ def test_verify_reports_invalid_marketplace_plugin_entry(tmp_path: Path) -> None
 
     assert verify.returncode == 1
     assert "invalid_marketplace_plugins" in verify.stdout
+
+
+def test_install_rejects_invalid_marketplace_plugins_without_overwriting(tmp_path: Path) -> None:
+    path = marketplace_paths(tmp_path)["codex_repo"]
+    path.parent.mkdir(parents=True)
+    original = json.dumps({"plugins": "bad"}, ensure_ascii=False, indent=2)
+    path.write_text(original, encoding="utf-8")
+
+    install = run_installer(["install", *common_args(tmp_path), "--target", "codex", "--scope", "repo", "--authorize-install"])
+
+    assert install.returncode == 1
+    assert "invalid_marketplace_plugins" in install.stdout
+    assert path.read_text(encoding="utf-8") == original
 
 
 def test_installer_rejects_profile_argument(tmp_path: Path) -> None:

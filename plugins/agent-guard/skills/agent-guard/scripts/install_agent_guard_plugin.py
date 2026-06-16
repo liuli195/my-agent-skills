@@ -14,6 +14,10 @@ from typing import Iterable
 PLUGIN_NAME = "agent-guard"
 RELEASE_REF = "marketplace"
 HOOK_NAMES = {"SessionStart", "PreToolUse"}
+MANIFEST_ITEMS = {
+    "codex": ".codex-plugin/plugin.json",
+    "claude": ".claude-plugin/plugin.json",
+}
 ENTRYPOINT_REFERENCES = {
     "agent-guard-install": ["research-and-extract.md", "profile-draft.md"],
     "agent-guard-init": ["init-flow.md", "init-boundaries.md"],
@@ -21,8 +25,7 @@ ENTRYPOINT_REFERENCES = {
     "agent-guard-run": ["activate.md", "brief.md", "events.md", "close.md"],
 }
 PACKAGE_ITEMS = [
-    ".codex-plugin/plugin.json",
-    ".claude-plugin/plugin.json",
+    *MANIFEST_ITEMS.values(),
     "hooks/hooks.json",
     "scripts/hook_router.py",
     "scripts/guard_runtime/cli.py",
@@ -106,11 +109,14 @@ def collect_hook_commands(hooks: dict) -> list[str]:
     return commands
 
 
-def check_package(plugin_root: Path) -> PackageCheck:
-    missing = [item for item in PACKAGE_ITEMS if not (plugin_root / item).exists()]
+def check_package(plugin_root: Path, target: str | None = None) -> PackageCheck:
+    selected_manifests = [MANIFEST_ITEMS[item] for item in targets_for(target)]
+    shared_items = [item for item in PACKAGE_ITEMS if item not in MANIFEST_ITEMS.values()]
+    required_items = [*selected_manifests, *shared_items]
+    missing = [item for item in required_items if not (plugin_root / item).exists()]
     errors: list[str] = []
 
-    for manifest in [".codex-plugin/plugin.json", ".claude-plugin/plugin.json"]:
+    for manifest in selected_manifests:
         data, error = read_json(plugin_root / manifest)
         if error is not None:
             errors.append(error)
@@ -189,12 +195,10 @@ def read_marketplace(path: Path, target: str) -> dict:
         return catalog_root(target)
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
-        return catalog_root(target)
+        raise ValueError(f"invalid_marketplace_catalog: {path}")
     plugins = data.get("plugins")
-    if not isinstance(plugins, list):
-        data["plugins"] = []
-    else:
-        data["plugins"] = [entry for entry in plugins if isinstance(entry, dict)]
+    if not isinstance(plugins, list) or not all(isinstance(entry, dict) for entry in plugins):
+        raise ValueError(f"invalid_marketplace_plugins: {path}")
     return data
 
 
@@ -205,6 +209,24 @@ def write_marketplace(path: Path, target: str) -> None:
     data["plugins"] = plugins
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def marketplace_write_errors(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return [f"invalid_json: {path}: {exc}"]
+    if not isinstance(data, dict):
+        return [f"invalid_marketplace_catalog: {path}"]
+    plugins = data.get("plugins")
+    if not isinstance(plugins, list) or not all(isinstance(entry, dict) for entry in plugins):
+        return [f"invalid_marketplace_plugins: {path}"]
+    entries = [entry for entry in plugins if entry.get("name") == PLUGIN_NAME]
+    if any("kind" in entry or "install_path" in entry for entry in entries):
+        return [f"legacy_marketplace_entry: {path}"]
+    return []
 
 
 def marketplace_entry_status(path: Path, target: str) -> tuple[str, list[str]]:
@@ -284,7 +306,7 @@ def run_install(args: argparse.Namespace) -> int:
         print("install requires --authorize-install", file=sys.stderr)
         return 2
 
-    source_check = check_package(args.plugin_source)
+    source_check = check_package(args.plugin_source, args.target)
     if source_check.status != "complete":
         print("status: issues")
         print_package_check("source_package", source_check)
@@ -292,6 +314,24 @@ def run_install(args: argparse.Namespace) -> int:
         return 1
 
     paths = catalog_paths(args)
+    install_errors: list[tuple[str, list[str]]] = []
+    for target in targets_for(args.target):
+        for scope in scopes_for(args.scope):
+            label = f"{target}_{scope}_marketplace"
+            errors = marketplace_write_errors(paths[(target, scope)])
+            if errors:
+                install_errors.append((label, errors))
+
+    if install_errors:
+        print("status: issues")
+        for label, errors in install_errors:
+            print(f"{label}: invalid")
+            print(f"{label}_errors:")
+            for error in errors:
+                print(f"  - {error}")
+        print_safety()
+        return 1
+
     for target in targets_for(args.target):
         for scope in scopes_for(args.scope):
             write_marketplace(paths[(target, scope)], target)
@@ -315,7 +355,7 @@ def verify_marketplace_entry(label: str, target: str, marketplace: Path) -> bool
 
 
 def run_verify(args: argparse.Namespace) -> int:
-    source_check = check_package(args.plugin_source)
+    source_check = check_package(args.plugin_source, args.target)
     results: list[bool] = [source_check.status == "complete"]
 
     print_package_check("source_package", source_check)
