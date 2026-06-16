@@ -17,7 +17,7 @@
 
 - [x] 3.1 删除 `scripts/install/install_user_skill.ps1`、`scripts/install/sync_claude_junction.ps1` 和 `scripts/install/verify_install.py`。
 - [x] 3.2 更新 `scripts/install/README.md` 或删除旧 README，避免继续指向 user-level Skill installation（用户级技能安装）。
-- [ ] 3.3 更新 Agent Guard Skill references（参考文档），把 Plugin update（插件更新）说明改为 marketplace subscription（市场订阅）流程。
+- [x] 3.3 更新 Agent Guard Skill references（参考文档），把 Plugin update（插件更新）说明改为 marketplace subscription（市场订阅）流程。
 
 ## 4. Verification
 

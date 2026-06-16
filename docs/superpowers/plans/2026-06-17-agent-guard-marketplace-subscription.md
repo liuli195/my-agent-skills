@@ -520,7 +520,7 @@ Expected: tests pass after legacy scripts are deleted and catalog files exist.
 - Modify: `plugins/agent-guard/skills/agent-guard*/references/*.md`
 - Modify: `openspec/changes/agent-guard-marketplace-subscription/tasks.md`
 
-- [ ] **Step 1: Update runtime e2e installer invocation**
+- [x] **Step 1: Update runtime e2e installer invocation**
 
 Replace old installer args in `tests/test_agent_guard_plugin_runtime_e2e.py` with:
 
@@ -553,7 +553,7 @@ install = run(
 
 Apply the same marketplace arguments to the verify call.
 
-- [ ] **Step 2: Replace active documentation references to old install paths**
+- [x] **Step 2: Replace active documentation references to old install paths**
 
 Scan:
 
@@ -570,11 +570,11 @@ Claude: claude plugin marketplace add <owner>/<repo>@marketplace
 
 Keep historical OpenSpec archive text unchanged if it is clearly archived context.
 
-- [ ] **Step 3: Check off completed OpenSpec tasks**
+- [x] **Step 3: Check off completed OpenSpec tasks**
 
 As each implementation task passes its focused tests, update `openspec/changes/agent-guard-marketplace-subscription/tasks.md` by changing the matching checkbox from `[ ]` to `[x]`.
 
-- [ ] **Step 4: Run focused verification**
+- [x] **Step 4: Run focused verification**
 
 Run:
 

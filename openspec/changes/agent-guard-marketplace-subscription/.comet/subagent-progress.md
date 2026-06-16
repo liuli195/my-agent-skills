@@ -7,17 +7,17 @@
 
 ## Current Task
 
-- Plan task: Task 4: Remove Legacy User-Level Install Path
-- OpenSpec task: 1.4 删除或替换旧 `test_user_skill_install.py`，确保测试不再引用 Claude Junction（Claude 目录联接）或 `.agents/skills/agent-guard` 安装兼容层。
+- Plan task: Task 5: Update Runtime E2E And Documentation References
+- OpenSpec task: 3.3 更新 Agent Guard Skill references（参考文档），把 Plugin update（插件更新）说明改为 marketplace subscription（市场订阅）流程。
 - Stage: done
-- Implementer: 019ed198-726a-7c20-9b9b-c1c7a3d71645
-- Commit: d87637c
-- Changed files: tests/test_agent_guard_skill_entrypoints.py, tests/test_user_skill_install.py, scripts/install/README.md, scripts/install/install_user_skill.ps1, scripts/install/sync_claude_junction.ps1, scripts/install/verify_install.py
-- RED: `python -m pytest tests/test_agent_guard_plugin_package.py -q` failed with 1 failed, 7 passed because legacy scripts still existed.
-- GREEN: `python -m pytest tests/test_agent_guard_skill_entrypoints.py tests/test_agent_guard_plugin_package.py -q` passed with 13 passed.
-- Spec review: APPROVED by 019ed19a-a36d-7930-9f5f-da4b9893891a.
-- Quality review: APPROVED by 019ed19d-f5a9-7301-9f29-47881b7996ac.
-- Review round: 0
+- Implementer: 019ed1a0-d754-70b0-939d-3e560fcdaadc
+- Commit: b9ddac366aa0bfe63b270ff1dca002f59ce46777
+- Changed files: tests/test_agent_guard_plugin_runtime_e2e.py, plugins/agent-guard/skills/agent-guard-update/SKILL.md, plugins/agent-guard/skills/agent-guard-update/references/runtime-update.md, openspec/specs/agent-guard-skill-entrypoints/spec.md
+- RED: `python -m pytest tests/test_agent_guard_plugin_runtime_e2e.py -q` failed because e2e used old installer args.
+- GREEN: `python -m pytest tests/test_agent_guard_plugin_installer.py tests/test_agent_guard_plugin_package.py tests/test_agent_guard_skill_entrypoints.py tests/test_agent_guard_plugin_runtime_e2e.py -q` passed with 22 passed.
+- Spec review: APPROVED by 019ed1a3-8bb7-7c61-b543-972b8f56dd6f.
+- Quality review: APPROVED by 019ed1aa-d868-77c2-b743-ca62977c0cc5 after doc fix commit b9ddac366aa0bfe63b270ff1dca002f59ce46777.
+- Review round: 2
 
 ## Completed Tasks
 
