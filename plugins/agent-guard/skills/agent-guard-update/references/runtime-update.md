@@ -21,10 +21,11 @@ codex plugin marketplace add <owner>/<repo> --ref marketplace
 claude plugin marketplace add <owner>/<repo>@marketplace
 ```
 
+其中 `<owner>/<repo>` 是 GitHub 仓库占位符，例如 `your-org/agent-guard`。
+
 ## 边界
 
-- 只更新用户级 Plugin（插件）文件和 marketplace（市场）入口。
-- 不复制 Runtime code（运行时代码）到目标项目。
+- 只更新指定 scope（personal/repo/all）的 marketplace（市场）入口；不复制 Runtime code（运行时代码）到目标项目。
 - 不写目标项目 Hook（钩子）或 Git 配置。
 - 保留 Guard Profile（守卫画像）。
 - 保留 `.local/guard/*` 运行态、Session Focus Binding（会话焦点绑定）、确认记录和人工覆盖记录。
