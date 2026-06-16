@@ -43,6 +43,15 @@ def marketplace_entries(path: Path) -> list[dict]:
     return data["plugins"]
 
 
+def plugin_entries(data: dict) -> list[dict]:
+    return [entry for entry in data["plugins"] if entry["name"] == "agent-guard"]
+
+
+def agent_guard_entries(path: Path) -> list[dict]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return plugin_entries(data)
+
+
 def marketplace_paths(tmp_path: Path) -> dict[str, Path]:
     repo_root = tmp_path / "repo-marketplace"
     return {
@@ -54,7 +63,7 @@ def marketplace_paths(tmp_path: Path) -> dict[str, Path]:
 
 
 def agent_guard_entry(path: Path) -> dict:
-    return next(entry for entry in marketplace_entries(path) if entry["name"] == "agent-guard")
+    return agent_guard_entries(path)[0]
 
 
 def test_dry_run_lists_codex_and_claude_targets_without_writing(tmp_path: Path) -> None:
@@ -98,12 +107,17 @@ def test_authorized_install_is_repeatable_and_updates_marketplaces(tmp_path: Pat
     assert second.returncode == 0, second.stdout + second.stderr
     assert "status: installed" in second.stdout
     paths = marketplace_paths(tmp_path)
+    entries = {key: agent_guard_entries(path) for key, path in paths.items()}
+    for key in ("codex_repo", "claude_repo", "codex_personal", "claude_personal"):
+        assert len(entries[key]) == 1
     for key in ("codex_repo", "codex_personal"):
-        entry = agent_guard_entry(paths[key])
+        entry = entries[key][0]
         assert entry["source"] == {"source": "local", "path": "./plugins/agent-guard"}
-        assert "policy" in entry
+        assert entry["policy"]["installation"] == "AVAILABLE"
+        assert entry["policy"]["authentication"] == "ON_INSTALL"
+        assert entry["category"] == "Productivity"
     for key in ("claude_repo", "claude_personal"):
-        entry = agent_guard_entry(paths[key])
+        entry = entries[key][0]
         assert entry["source"] == "./plugins/agent-guard"
 
 
