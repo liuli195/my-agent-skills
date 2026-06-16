@@ -1,7 +1,7 @@
 {
-  "name": "agent-guard-marketplace",
+  "name": "agent-guard-local-dev",
   "owner": {
-    "name": "Agent Guard"
+    "name": "Agent Guard Local Dev"
   },
   "plugins": [
     {

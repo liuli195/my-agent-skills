@@ -231,6 +231,10 @@ validation:
 
 
 def install_plugin(tmp_path: Path) -> Path:
+    codex_repo_marketplace = tmp_path / "repo-marketplace" / ".agents" / "plugins" / "marketplace.json"
+    claude_repo_marketplace = tmp_path / "repo-marketplace" / ".claude-plugin" / "marketplace.json"
+    codex_personal_marketplace = tmp_path / "codex-personal" / ".agents" / "plugins" / "marketplace.json"
+    claude_personal_marketplace = tmp_path / "claude-personal" / ".claude-plugin" / "marketplace.json"
     args = [
         str(INSTALLER),
         "install",
@@ -238,15 +242,17 @@ def install_plugin(tmp_path: Path) -> Path:
         str(PLUGIN_ROOT),
         "--target",
         "all",
+        "--scope",
+        "all",
         "--authorize-install",
-        "--codex-home",
-        str(tmp_path / "codex-home"),
-        "--claude-home",
-        str(tmp_path / "claude-home"),
-        "--codex-marketplace",
-        str(tmp_path / "codex-marketplace.json"),
-        "--claude-marketplace",
-        str(tmp_path / "claude-marketplace.json"),
+        "--codex-repo-marketplace",
+        str(codex_repo_marketplace),
+        "--claude-repo-marketplace",
+        str(claude_repo_marketplace),
+        "--codex-personal-marketplace",
+        str(codex_personal_marketplace),
+        "--claude-personal-marketplace",
+        str(claude_personal_marketplace),
     ]
     installed = run(args)
     assert installed.returncode == 0, installed.stdout + installed.stderr
@@ -259,19 +265,21 @@ def install_plugin(tmp_path: Path) -> Path:
             str(PLUGIN_ROOT),
             "--target",
             "all",
-            "--codex-home",
-            str(tmp_path / "codex-home"),
-            "--claude-home",
-            str(tmp_path / "claude-home"),
-            "--codex-marketplace",
-            str(tmp_path / "codex-marketplace.json"),
-            "--claude-marketplace",
-            str(tmp_path / "claude-marketplace.json"),
+            "--scope",
+            "all",
+            "--codex-repo-marketplace",
+            str(codex_repo_marketplace),
+            "--claude-repo-marketplace",
+            str(claude_repo_marketplace),
+            "--codex-personal-marketplace",
+            str(codex_personal_marketplace),
+            "--claude-personal-marketplace",
+            str(claude_personal_marketplace),
         ]
     )
     assert verified.returncode == 0, verified.stdout + verified.stderr
     assert "status: verified" in verified.stdout
-    return tmp_path / "codex-home" / "plugins" / "agent-guard"
+    return PLUGIN_ROOT
 
 
 def prepare_project_from_research(tmp_path: Path, plugin_root: Path) -> tuple[Path, Path]:

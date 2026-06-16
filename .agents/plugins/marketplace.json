@@ -1,7 +1,7 @@
 {
-  "name": "agent-guard-marketplace",
+  "name": "agent-guard-local-dev",
   "interface": {
-    "displayName": "Agent Guard"
+    "displayName": "Agent Guard Local Dev"
   },
   "plugins": [
     {
