@@ -195,7 +195,7 @@ Expected: tests fail because `--scope`, new catalog paths, and new entry validat
 - Create: `.agents/plugins/marketplace.json`
 - Create: `.claude-plugin/marketplace.json`
 
-- [ ] **Step 1: Add catalog path constants**
+- [x] **Step 1: Add catalog path constants**
 
 Add near the existing constants:
 
@@ -204,7 +204,7 @@ CODEX_REPO_MARKETPLACE = REPO_ROOT / ".agents" / "plugins" / "marketplace.json"
 CLAUDE_REPO_MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 ```
 
-- [ ] **Step 2: Add package tests for Codex and Claude catalogs**
+- [x] **Step 2: Add package tests for Codex and Claude catalogs**
 
 Add:
 
@@ -228,7 +228,7 @@ def test_repo_marketplace_catalogs_point_to_agent_guard_plugin() -> None:
     assert claude_entry["description"]
 ```
 
-- [ ] **Step 3: Add self-contained package boundary test**
+- [x] **Step 3: Add self-contained package boundary test**
 
 Add:
 
@@ -242,7 +242,7 @@ def test_plugin_package_does_not_depend_on_legacy_install_scripts() -> None:
         assert not legacy_script.exists()
 ```
 
-- [ ] **Step 4: Create repo catalog files**
+- [x] **Step 4: Create repo catalog files**
 
 Create `.agents/plugins/marketplace.json`:
 
@@ -287,7 +287,7 @@ Create `.claude-plugin/marketplace.json`:
 }
 ```
 
-- [ ] **Step 5: Run red package test**
+- [x] **Step 5: Run red package test**
 
 Run:
 
