@@ -7,16 +7,16 @@
 
 ## Current Task
 
-- Plan task: Task 2: Add Repo Marketplace Catalog Package Tests
-- OpenSpec task: 1.3 调整 package tests（插件包测试），校验 `.codex-plugin`、`.claude-plugin`、hooks、runtime 和 Skill 入口，不再校验 user-level Skill installation（用户级技能安装）。
+- Plan task: Task 3: Refactor Installer To Generate And Verify Catalogs
+- OpenSpec task: 2.1 重构 `install_agent_guard_plugin.py`，把 `--target codex|claude|all` 和 `--scope personal|repo|all` 分开处理。
 - Stage: done
-- Implementer: 019ed17d-b941-74d3-92bb-51fba2a77bec
-- Commit: 4b0fdce
-- Changed files: tests/test_agent_guard_plugin_package.py, .agents/plugins/marketplace.json, .claude-plugin/marketplace.json
-- RED: `python -m pytest tests/test_agent_guard_plugin_package.py -q` failed with 2 failed, 6 passed before catalog files; after catalog files it failed with 1 failed, 7 passed due to legacy install scripts still existing.
-- GREEN: deferred until Task 4 removes legacy install scripts.
-- Spec review: APPROVED by 019ed181-2b5d-7f62-9cae-21cf9e6038d0.
-- Quality review: APPROVED by 019ed185-3f12-7860-a3ce-3f946ec7f56d.
+- Implementer: 019ed187-a8e4-7a31-a5b9-adbd10190628
+- Commit: a7b199a
+- Changed files: plugins/agent-guard/skills/agent-guard/scripts/install_agent_guard_plugin.py, tests/test_agent_guard_plugin_installer.py
+- RED: `python -m pytest tests/test_agent_guard_plugin_installer.py -q` failed with 2 failed, 6 passed for malformed catalog cases before quality fix.
+- GREEN: `python -m pytest tests/test_agent_guard_plugin_installer.py -q` passed with 8 passed.
+- Spec review: APPROVED by 019ed193-deeb-7a73-9c17-0e5ad9fc8c96.
+- Quality review: APPROVED by 019ed195-94a5-7431-8b04-fe3ddb492022.
 - Review round: 1
 
 ## Completed Tasks
@@ -27,5 +27,9 @@
   - Quality review: APPROVED
 - Task 2: Add Repo Marketplace Catalog Package Tests
   - Commit: 4b0fdce
+  - Spec review: APPROVED
+  - Quality review: APPROVED
+- Task 3: Refactor Installer To Generate And Verify Catalogs
+  - Commit: a7b199a
   - Spec review: APPROVED
   - Quality review: APPROVED

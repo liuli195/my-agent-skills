@@ -7,11 +7,11 @@
 
 ## 2. Marketplace Installer
 
-- [ ] 2.1 重构 `install_agent_guard_plugin.py`，把 `--target codex|claude|all` 和 `--scope personal|repo|all` 分开处理。
-- [ ] 2.2 实现 personal marketplace（个人市场）和 repo marketplace（仓库市场）的 dry-run 输出、授权写入和验证。
-- [ ] 2.3 生成并校验 Codex `.agents/plugins/marketplace.json` 与 Claude `.claude-plugin/marketplace.json`，两者共享 `plugins/agent-guard` 插件包。
-- [ ] 2.4 生成并校验 Codex entry（条目）包含 `source`、`policy.installation`、`policy.authentication` 和 `category`。
-- [ ] 2.5 保持安全声明：不初始化 Guard Profile（守卫画像）、不安装 project hooks（项目钩子）、不修改 git config（Git 配置）。
+- [x] 2.1 重构 `install_agent_guard_plugin.py`，把 `--target codex|claude|all` 和 `--scope personal|repo|all` 分开处理。
+- [x] 2.2 实现 personal marketplace（个人市场）和 repo marketplace（仓库市场）的 dry-run 输出、授权写入和验证。
+- [x] 2.3 生成并校验 Codex `.agents/plugins/marketplace.json` 与 Claude `.claude-plugin/marketplace.json`，两者共享 `plugins/agent-guard` 插件包。
+- [x] 2.4 生成并校验 Codex entry（条目）包含 `source`、`policy.installation`、`policy.authentication` 和 `category`。
+- [x] 2.5 保持安全声明：不初始化 Guard Profile（守卫画像）、不安装 project hooks（项目钩子）、不修改 git config（Git 配置）。
 
 ## 3. Remove Legacy Install Path
 

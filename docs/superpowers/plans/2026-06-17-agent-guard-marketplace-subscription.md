@@ -302,7 +302,7 @@ Expected: the new legacy-script absence test fails until Task 4 deletes old scri
 **Files:**
 - Modify: `plugins/agent-guard/skills/agent-guard/scripts/install_agent_guard_plugin.py`
 
-- [ ] **Step 1: Add constants and target/scope helpers**
+- [x] **Step 1: Add constants and target/scope helpers**
 
 Add:
 
@@ -318,7 +318,7 @@ def scopes_for(scope: str | None) -> list[str]:
     return [scope]
 ```
 
-- [ ] **Step 2: Replace old marketplace writer with product-specific catalog builders**
+- [x] **Step 2: Replace old marketplace writer with product-specific catalog builders**
 
 Replace `write_marketplace` and `marketplace_has_entry` with:
 
@@ -358,7 +358,7 @@ def write_claude_marketplace(path: Path) -> None:
 
 Also add `write_catalog_entry(path, root, entry)` to read an existing JSON object, replace the `agent-guard` plugin entry, preserve unrelated entries, create parent directories, and write UTF-8 JSON with a trailing newline.
 
-- [ ] **Step 3: Add catalog validation helpers**
+- [x] **Step 3: Add catalog validation helpers**
 
 Add:
 
@@ -391,7 +391,7 @@ def claude_entry_status(path: Path) -> tuple[str, list[str]]:
     return ("present", []) if not errors else ("invalid", errors)
 ```
 
-- [ ] **Step 4: Update CLI parser**
+- [x] **Step 4: Update CLI parser**
 
 Replace old home/marketplace options with:
 
@@ -408,7 +408,7 @@ parser.add_argument("--authorize-install", action="store_true", help="明确授�
 
 Keep unknown `--profile` rejected by argparse.
 
-- [ ] **Step 5: Update dry-run/install/verify orchestration**
+- [x] **Step 5: Update dry-run/install/verify orchestration**
 
 Implement these output labels:
 
@@ -435,7 +435,7 @@ codex_personal_marketplace_entry: present
 claude_personal_marketplace_entry: present
 ```
 
-- [ ] **Step 6: Run installer tests**
+- [x] **Step 6: Run installer tests**
 
 Run:
 
