@@ -73,6 +73,6 @@
 - **WHEN** 场景化入口需要共享 script（脚本）或 template（模板）
 - **THEN** 它通过相对路径引用共享核心资源，而不是复制资源目录
 
-#### Scenario: 安装验证
-- **WHEN** user-level Skill installation verification（用户级技能安装验证）运行
-- **THEN** 它检查核心共享资源和四个场景化入口
+#### Scenario: 插件包与市场验证
+- **WHEN** Agent Guard Plugin（代理守卫插件）package / marketplace verification（插件包 / 市场验证）运行
+- **THEN** 它检查核心共享资源、四个场景化入口、插件 manifest（清单）和 marketplace subscription（市场订阅）入口

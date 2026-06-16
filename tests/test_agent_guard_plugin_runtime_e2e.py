@@ -35,27 +35,31 @@ def output_json(result: subprocess.CompletedProcess[str]) -> dict:
 
 
 def test_plugin_runtime_e2e_from_verify_to_state_completed(tmp_path: Path) -> None:
-    codex_home = tmp_path / "codex-home"
-    claude_home = tmp_path / "claude-home"
-    codex_marketplace = tmp_path / "codex-marketplace.json"
-    claude_marketplace = tmp_path / "claude-marketplace.json"
+    repo_root = tmp_path / "repo-marketplace"
+    codex_personal = tmp_path / "codex-personal" / ".agents" / "plugins" / "marketplace.json"
+    claude_personal = tmp_path / "claude-personal" / ".claude-plugin" / "marketplace.json"
+    marketplace_args = [
+        "--target",
+        "all",
+        "--scope",
+        "all",
+        "--codex-repo-marketplace",
+        str(repo_root / ".agents" / "plugins" / "marketplace.json"),
+        "--claude-repo-marketplace",
+        str(repo_root / ".claude-plugin" / "marketplace.json"),
+        "--codex-personal-marketplace",
+        str(codex_personal),
+        "--claude-personal-marketplace",
+        str(claude_personal),
+    ]
     install = run(
         [
             str(INSTALLER),
             "install",
             "--plugin-source",
             str(PLUGIN_ROOT),
-            "--target",
-            "all",
+            *marketplace_args,
             "--authorize-install",
-            "--codex-home",
-            str(codex_home),
-            "--claude-home",
-            str(claude_home),
-            "--codex-marketplace",
-            str(codex_marketplace),
-            "--claude-marketplace",
-            str(claude_marketplace),
         ]
     )
     assert install.returncode == 0, install.stdout + install.stderr
@@ -66,16 +70,7 @@ def test_plugin_runtime_e2e_from_verify_to_state_completed(tmp_path: Path) -> No
             "verify",
             "--plugin-source",
             str(PLUGIN_ROOT),
-            "--target",
-            "all",
-            "--codex-home",
-            str(codex_home),
-            "--claude-home",
-            str(claude_home),
-            "--codex-marketplace",
-            str(codex_marketplace),
-            "--claude-marketplace",
-            str(claude_marketplace),
+            *marketplace_args,
         ]
     )
     assert verify.returncode == 0, verify.stdout + verify.stderr

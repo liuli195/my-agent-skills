@@ -19,6 +19,6 @@ description: 更新守卫：维护已经初始化的守卫，更新 Agent Guard 
 ## 流程
 
 1. 判断用户要更新 Plugin（插件）还是同步画像。
-2. Plugin update（插件更新）：读取 `references/runtime-update.md`，运行 `../agent-guard/scripts/install_agent_guard_plugin.py dry-run --target <codex|claude|all>`；用户明确授权后才运行 `install --target <codex|claude|all> --authorize-install`。
+2. Plugin update（插件更新）：读取 `references/runtime-update.md`，先用 marketplace subscription（市场订阅）参数运行 `../agent-guard/scripts/install_agent_guard_plugin.py dry-run --target <codex|claude|all> --scope <personal|repo|all>`；用户明确授权后才运行 `install --target <codex|claude|all> --scope <personal|repo|all> --authorize-install`。
 3. Profile sync（画像同步）：读取 `references/profile-sync.md`，先运行 `../agent-guard/scripts/validate_guard_profile.py <guard-profile-dir>`，再按 `../agent-guard/scripts/init_project_guard.py` 或 `../agent-guard/scripts/init_user_guard.py` 的 `--on-existing update` 模式同步。
 4. 输出保留项、写入项和验证结果。
