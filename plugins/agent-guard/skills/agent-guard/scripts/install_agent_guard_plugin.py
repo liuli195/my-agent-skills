@@ -14,12 +14,6 @@ from typing import Iterable
 PLUGIN_NAME = "agent-guard"
 RELEASE_REF = "marketplace"
 HOOK_NAMES = {"SessionStart", "PreToolUse"}
-ENTRYPOINT_SKILLS = [
-    "agent-guard-install",
-    "agent-guard-init",
-    "agent-guard-update",
-    "agent-guard-run",
-]
 ENTRYPOINT_REFERENCES = {
     "agent-guard-install": ["research-and-extract.md", "profile-draft.md"],
     "agent-guard-init": ["init-flow.md", "init-boundaries.md"],
@@ -194,9 +188,13 @@ def read_marketplace(path: Path, target: str) -> dict:
     if not path.exists():
         return catalog_root(target)
     data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        return catalog_root(target)
     plugins = data.get("plugins")
     if not isinstance(plugins, list):
         data["plugins"] = []
+    else:
+        data["plugins"] = [entry for entry in plugins if isinstance(entry, dict)]
     return data
 
 
@@ -213,10 +211,15 @@ def marketplace_entry_status(path: Path, target: str) -> tuple[str, list[str]]:
     if not path.exists():
         return "missing", [f"missing_marketplace: {path}"]
     try:
-        data = read_marketplace(path, target)
+        data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         return "invalid", [f"invalid_json: {path}: {exc}"]
-    entries = [entry for entry in data["plugins"] if entry.get("name") == PLUGIN_NAME]
+    if not isinstance(data, dict):
+        return "invalid", [f"invalid_marketplace_catalog: {path}"]
+    plugins = data.get("plugins")
+    if not isinstance(plugins, list) or not all(isinstance(entry, dict) for entry in plugins):
+        return "invalid", [f"invalid_marketplace_plugins: {path}"]
+    entries = [entry for entry in plugins if entry.get("name") == PLUGIN_NAME]
     if not entries:
         return "missing", [f"missing_marketplace_entry: {path}"]
     if any("kind" in entry or "install_path" in entry for entry in entries):

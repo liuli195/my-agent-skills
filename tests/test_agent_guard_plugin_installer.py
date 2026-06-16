@@ -167,6 +167,28 @@ def test_verify_rejects_legacy_marketplace_entry(tmp_path: Path) -> None:
     assert "legacy_marketplace_entry" in verify.stdout
 
 
+def test_verify_reports_invalid_marketplace_plugins_shape(tmp_path: Path) -> None:
+    path = marketplace_paths(tmp_path)["codex_repo"]
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"plugins": "bad"}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    verify = run_installer(["verify", *common_args(tmp_path), "--target", "codex", "--scope", "repo"])
+
+    assert verify.returncode == 1
+    assert "invalid_marketplace_plugins" in verify.stdout
+
+
+def test_verify_reports_invalid_marketplace_plugin_entry(tmp_path: Path) -> None:
+    path = marketplace_paths(tmp_path)["codex_repo"]
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"plugins": [None]}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    verify = run_installer(["verify", *common_args(tmp_path), "--target", "codex", "--scope", "repo"])
+
+    assert verify.returncode == 1
+    assert "invalid_marketplace_plugins" in verify.stdout
+
+
 def test_installer_rejects_profile_argument(tmp_path: Path) -> None:
     result = run_installer(["dry-run", *common_args(tmp_path), "--profile", "pr-flow"])
 
