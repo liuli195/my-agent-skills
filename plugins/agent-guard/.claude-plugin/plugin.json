@@ -1,6 +1,6 @@
 {
   "name": "agent-guard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Agent Guard Plugin（代理守卫插件）",
   "hooks": "./hooks/hooks.json",
   "skills": "./skills",
