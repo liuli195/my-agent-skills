@@ -59,8 +59,8 @@ def test_plugin_manifests_are_valid_json() -> None:
 
     assert codex_manifest["name"] == "agent-guard"
     assert claude_manifest["name"] == "agent-guard"
-    assert codex_manifest["hooks"] == "hooks/hooks.json"
-    assert claude_manifest["hooks"] == "hooks/hooks.json"
+    assert codex_manifest["hooks"] == "./hooks/hooks.json"
+    assert claude_manifest["hooks"] == "./hooks/hooks.json"
 
 
 def test_repo_marketplace_catalogs_point_to_agent_guard_plugin() -> None:
