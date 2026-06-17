@@ -1,5 +1,5 @@
 workflow: hotfix
-phase: build
+phase: verify
 context_compression: off
 build_mode: direct
 build_pause: null
@@ -12,8 +12,9 @@ base_ref: b62cad631b5c0475c17565d21a297322e633a695
 design_doc: null
 plan: null
 verify_result: pending
-verification_report: null
+verification_report: docs/superpowers/reports/2026-06-17-fix-agent-guard-plugin-manifest-paths-verify.md
 branch_status: pending
 created_at: 2026-06-17
 verified_at: null
 archived: false
+build_command: python -m pytest tests/ -q
