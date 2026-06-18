@@ -1,0 +1,39 @@
+version: 1
+
+variables:
+  CODEX_MARKETPLACE_CATALOG_NAME:
+    source: github-actions-variable
+    required: true
+    sensitive: false
+    description: Codex marketplace catalog name for the latest channel
+    example: my-agent-skills-marketplace
+  CODEX_MARKETPLACE_DISPLAY_NAME:
+    source: github-actions-variable
+    required: true
+    sensitive: false
+    description: Codex marketplace display name for the latest channel
+    example: My Agent Skills Marketplace
+  CLAUDE_MARKETPLACE_CATALOG_NAME:
+    source: github-actions-variable
+    required: true
+    sensitive: false
+    description: Claude marketplace catalog name for the latest channel
+    example: my-agent-skills-marketplace
+  CLAUDE_MARKETPLACE_OWNER_NAME:
+    source: github-actions-variable
+    required: true
+    sensitive: false
+    description: Claude marketplace owner name for the latest channel
+    example: My Agent Skills Marketplace
+
+transforms:
+  - path: .agents/plugins/marketplace.json
+    type: json-env
+    set:
+      /name: CODEX_MARKETPLACE_CATALOG_NAME
+      /interface/displayName: CODEX_MARKETPLACE_DISPLAY_NAME
+  - path: .claude-plugin/marketplace.json
+    type: json-env
+    set:
+      /name: CLAUDE_MARKETPLACE_CATALOG_NAME
+      /owner/name: CLAUDE_MARKETPLACE_OWNER_NAME
