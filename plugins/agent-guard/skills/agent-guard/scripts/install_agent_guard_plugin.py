@@ -162,11 +162,19 @@ def scopes_for(scope: str | None) -> list[str]:
 
 
 def codex_catalog_root() -> dict:
-    return {"name": "agent-guard-marketplace", "interface": {"displayName": "Agent Guard"}, "plugins": []}
+    return {
+        "name": "my-agent-skills-marketplace",
+        "interface": {"displayName": "My Agent Skills Marketplace"},
+        "plugins": [],
+    }
 
 
 def claude_catalog_root() -> dict:
-    return {"name": "agent-guard-marketplace", "owner": {"name": "Agent Guard"}, "plugins": []}
+    return {
+        "name": "my-agent-skills-marketplace",
+        "owner": {"name": "My Agent Skills Marketplace"},
+        "plugins": [],
+    }
 
 
 def catalog_root(target: str) -> dict:
