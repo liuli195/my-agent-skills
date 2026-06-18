@@ -1,7 +1,7 @@
 {
-  "name": "agent-guard-local-dev",
+  "name": "my-agent-skills-marketplace",
   "interface": {
-    "displayName": "Agent Guard Local Dev"
+    "displayName": "My Agent Skills Marketplace"
   },
   "plugins": [
     {
