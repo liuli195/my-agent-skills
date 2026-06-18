@@ -61,7 +61,8 @@ def test_plugin_manifests_are_valid_json() -> None:
     assert codex_manifest["name"] == "agent-guard"
     assert claude_manifest["name"] == "agent-guard"
     assert codex_manifest["hooks"] == "./hooks/hooks.json"
-    assert claude_manifest["hooks"] == "./hooks/hooks.json"
+    assert "hooks" not in claude_manifest
+    assert (PLUGIN_ROOT / "hooks" / "hooks.json").exists()
 
 
 def test_codex_repo_marketplace_is_generated_by_release_projection() -> None:
