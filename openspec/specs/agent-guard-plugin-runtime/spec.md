@@ -43,6 +43,12 @@
 - **WHEN** lifecycle hook command（生命周期钩子命令）运行
 - **THEN** 它不接收 profile（画像）参数，也不在 hook（钩子）层选择 Guard Profile（守卫画像）
 
+#### Scenario: 平台 manifest 避免重复加载
+- **WHEN** package verification（包验证）检查 Agent Guard manifest（清单）和标准 `hooks/hooks.json`
+- **THEN** Codex manifest MUST 声明 `hooks: ./hooks/hooks.json`
+- **THEN** Claude manifest MUST NOT 声明标准 `hooks/hooks.json`
+- **THEN** 标准 `hooks/hooks.json` MUST 继续位于插件包内并只包含 `SessionStart` 和 `PreToolUse`
+
 ### Requirement: 标准生命周期事件信封
 系统 MUST 把 Codex 和 Claude lifecycle payloads（生命周期载荷）转换成包含 source（来源）、event type（事件类型）、context（上下文）和 payload（载荷）的标准 envelope（信封），且不包含 profile（画像）或 instance（实例）标识。
 
