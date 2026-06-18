@@ -8,6 +8,11 @@
       "name": "agent-guard",
       "source": "./plugins/agent-guard",
       "description": "Guard workflow plugin for Codex and Claude agents"
+    },
+    {
+      "name": "release-flow",
+      "source": "./plugins/release-flow",
+      "description": "Release flow plugin for Codex and Claude agents"
     }
   ]
 }

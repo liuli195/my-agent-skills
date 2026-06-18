@@ -1,20 +1,114 @@
+# ========================
 # Python
+# ========================
 __pycache__/
 *.py[cod]
-.venv/
-venv/
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
 
-# Local runtime state
-.local/
+# ========================
+# Virtual environments
+# ========================
+venv/
+.venv/
+env/
+.env/
+*.venv
+
+# ========================
+# Tests and coverage
+# ========================
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+*.cover
+
+# ========================
+# Temporary and cache files
+# ========================
+*.tmp
+*.temp
+*.cache
+*.bak
+*.swp
+*.swo
+*~
+\#*\#
+.#*
 .tmp/
 tmp/
+
+# ========================
+# Local runtime state
+# ========================
+.local/
+/.release-flow/releases/
+
+# ========================
+# Code intelligence indexes
+# ========================
+/codegraph/
 /.codegraph/
 
-# OS/editor
+# ========================
+# OS / editor
+# ========================
 .DS_Store
+.DS_Store?
+._*
 Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
 .idea/
-.vscode/
+.vscode/settings.json
+.vscode/tasks.json
+.vscode/launch.json
+.vscode/extensions.json
+*.code-workspace
+*.sublime-project
+*.sublime-workspace
 
+# ========================
+# Codex / Claude local-only state
+# ========================
+.codex/environments/*
+!.codex/environments/environment.toml
+.claude/worktrees/
+
+# ========================
 # Logs
+# ========================
 *.log
+logs/
+
+# ========================
+# Environment variables and secrets
+# ========================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+
+# ========================
+# Local data artifacts
+# ========================
+/data/
+research_datasets/**/raw/
+**/inputs/raw/
+**/curves/
+
+# ========================
+# Jupyter
+# ========================
+.ipynb_checkpoints/
+*.ipynb_checkpoints
