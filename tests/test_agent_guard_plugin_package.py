@@ -67,8 +67,8 @@ def test_repo_marketplace_catalogs_point_to_agent_guard_plugin() -> None:
     codex_catalog = read_json(CODEX_REPO_MARKETPLACE)
     claude_catalog = read_json(CLAUDE_REPO_MARKETPLACE)
 
-    assert codex_catalog["name"] == "agent-guard-local-dev"
-    assert codex_catalog["interface"]["displayName"] == "Agent Guard Local Dev"
+    assert codex_catalog["name"] == "my-agent-skills-marketplace"
+    assert codex_catalog["interface"]["displayName"] == "My Agent Skills Marketplace"
     codex_entries = [
         plugin
         for plugin in codex_catalog["plugins"]
@@ -86,8 +86,8 @@ def test_repo_marketplace_catalogs_point_to_agent_guard_plugin() -> None:
     }
     assert codex_entry["category"] == "Productivity"
 
-    assert claude_catalog["name"] == "agent-guard-local-dev"
-    assert claude_catalog["owner"]["name"] == "Agent Guard Local Dev"
+    assert claude_catalog["name"] == "my-agent-skills-marketplace"
+    assert claude_catalog["owner"]["name"] == "My Agent Skills Marketplace"
     claude_entries = [
         plugin
         for plugin in claude_catalog["plugins"]
