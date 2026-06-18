@@ -91,6 +91,82 @@ transforms: []
     )
 
 
+def marketplace_identity_projection(extra_variables: str = "", transforms: str = "") -> str:
+    return f"""version: 1
+
+identity:
+  codex:
+    marketplaceName: my-agent-skills-marketplace
+    displayName: My Agent Skills Marketplace
+  claude:
+    marketplaceName: my-agent-skills-marketplace
+    ownerName: My Agent Skills Marketplace
+  releaseFlowPlugin:
+    repositoryVariable: RELEASE_FLOW_PLUGIN_REPOSITORY
+    refVariable: RELEASE_FLOW_PLUGIN_REF
+
+variables:
+  CODEX_MARKETPLACE_CATALOG_NAME:
+    source: github-actions-variable
+    required: true
+    sensitive: false
+    description: Codex marketplace catalog name for the latest channel
+    expected: identity.codex.marketplaceName
+  CODEX_MARKETPLACE_DISPLAY_NAME:
+    source: github-actions-variable
+    required: true
+    sensitive: false
+    description: Codex marketplace display name for the latest channel
+    expected: identity.codex.displayName
+  CLAUDE_MARKETPLACE_CATALOG_NAME:
+    source: github-actions-variable
+    required: true
+    sensitive: false
+    description: Claude marketplace catalog name for the latest channel
+    expected: identity.claude.marketplaceName
+  CLAUDE_MARKETPLACE_OWNER_NAME:
+    source: github-actions-variable
+    required: true
+    sensitive: false
+    description: Claude marketplace owner name for the latest channel
+    expected: identity.claude.ownerName
+  RELEASE_FLOW_PLUGIN_REPOSITORY:
+    source: github-actions-variable
+    required: true
+    sensitive: false
+    description: GitHub repository used by workflow checkout for release-flow plugin
+  RELEASE_FLOW_PLUGIN_REF:
+    source: github-actions-variable
+    required: true
+    sensitive: false
+    description: Git ref used by workflow checkout for release-flow plugin
+{extra_variables}
+generators:
+  - path: .agents/plugins/marketplace.json
+    type: codex-marketplace
+    identity: codex
+    plugins:
+      - agent-guard
+      - release-flow
+
+transforms:
+{transforms or "  []"}
+"""
+
+
+def marketplace_identity_vars(**overrides: str) -> dict[str, str]:
+    values = {
+        "CODEX_MARKETPLACE_CATALOG_NAME": "my-agent-skills-marketplace",
+        "CODEX_MARKETPLACE_DISPLAY_NAME": "My Agent Skills Marketplace",
+        "CLAUDE_MARKETPLACE_CATALOG_NAME": "my-agent-skills-marketplace",
+        "CLAUDE_MARKETPLACE_OWNER_NAME": "My Agent Skills Marketplace",
+        "RELEASE_FLOW_PLUGIN_REPOSITORY": "liuli/my-agent-skills",
+        "RELEASE_FLOW_PLUGIN_REF": "main",
+    }
+    values.update(overrides)
+    return values
+
+
 def test_setup_dry_run_does_not_write_project_files(tmp_path: Path) -> None:
     project = tmp_path / "project"
 
@@ -136,6 +212,20 @@ def test_github_plan_outputs_expected_settings(tmp_path: Path) -> None:
     assert "CODEX_MARKETPLACE_CATALOG_NAME" in result.stdout
 
 
+def test_github_plan_prints_required_projection_variable_details(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    write_release_flow_files(project, marketplace_identity_projection())
+
+    result = run("github-plan", "--project", str(project))
+
+    assert result.returncode == 0
+    assert "RELEASE_FLOW_PLUGIN_REPOSITORY" in result.stdout
+    assert "RELEASE_FLOW_PLUGIN_REF" in result.stdout
+    assert "required: true" in result.stdout
+    assert "GitHub repository used by workflow checkout for release-flow plugin" in result.stdout
+    assert "expected: identity.codex.marketplaceName" in result.stdout
+
+
 def test_current_repo_release_flow_files_are_valid() -> None:
     result = run("validate", "--project", str(REPO_ROOT))
 
@@ -154,8 +244,39 @@ def test_current_repo_projection_registers_agent_guard_marketplace_variables() -
         "CODEX_MARKETPLACE_DISPLAY_NAME",
         "CLAUDE_MARKETPLACE_CATALOG_NAME",
         "CLAUDE_MARKETPLACE_OWNER_NAME",
+        "RELEASE_FLOW_PLUGIN_REPOSITORY",
+        "RELEASE_FLOW_PLUGIN_REF",
     ]:
         assert variable in result.stdout
+
+
+def test_validate_rejects_projection_identity_without_required_release_flow_variables(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    write_release_flow_files(
+        project,
+        """version: 1
+
+identity:
+  codex:
+    marketplaceName: my-agent-skills-marketplace
+    displayName: My Agent Skills Marketplace
+  claude:
+    marketplaceName: my-agent-skills-marketplace
+    ownerName: My Agent Skills Marketplace
+  releaseFlowPlugin:
+    repositoryVariable: RELEASE_FLOW_PLUGIN_REPOSITORY
+    refVariable: RELEASE_FLOW_PLUGIN_REF
+
+variables: {}
+transforms: []
+""",
+    )
+
+    result = run("validate", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "projection_identity_variable_missing: RELEASE_FLOW_PLUGIN_REPOSITORY" in result.stdout
+    assert "projection_identity_variable_missing: RELEASE_FLOW_PLUGIN_REF" in result.stdout
 
 
 def test_configure_github_requires_authorization(tmp_path: Path) -> None:
@@ -179,6 +300,18 @@ def test_configure_github_dry_run_prints_manual_steps(tmp_path: Path) -> None:
     assert "Set Actions workflow permissions to read-and-write" in result.stdout
     assert "Create Rulesets for main, marketplace, and tags" in result.stdout
     assert "Create GitHub Actions Variables" in result.stdout
+
+
+def test_configure_github_dry_run_prints_projection_variable_details(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    write_release_flow_files(project, marketplace_identity_projection())
+
+    result = run("configure-github", "--project", str(project), "--dry-run")
+
+    assert result.returncode == 0
+    assert "Set GitHub Actions Variable RELEASE_FLOW_PLUGIN_REPOSITORY" in result.stdout
+    assert "Set GitHub Actions Variable RELEASE_FLOW_PLUGIN_REF" in result.stdout
+    assert "Git ref used by workflow checkout for release-flow plugin" in result.stdout
 
 
 def test_release_init_creates_release_plan_only_for_tag(tmp_path: Path) -> None:
@@ -320,6 +453,28 @@ transforms:
         (project / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8")
     )
     assert target["name"] == "agent-guard-marketplace"
+
+
+def test_project_generates_codex_marketplace_from_projection_identity(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    vars_file = tmp_path / "vars.json"
+    write_release_flow_files(project, marketplace_identity_projection())
+    write_json(vars_file, marketplace_identity_vars())
+
+    result = run("project", "--project", str(project), "--vars-file", str(vars_file))
+
+    assert result.returncode == 0
+    assert "status: projected" in result.stdout
+    target = json.loads(
+        (project / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8")
+    )
+    assert target["name"] == "my-agent-skills-marketplace"
+    assert target["interface"]["displayName"] == "My Agent Skills Marketplace"
+    assert [entry["name"] for entry in target["plugins"]] == ["agent-guard", "release-flow"]
+    assert target["plugins"][0]["source"] == {
+        "source": "local",
+        "path": "./plugins/agent-guard",
+    }
 
 
 def test_validate_rejects_invalid_branch_mode(tmp_path: Path) -> None:
@@ -468,6 +623,56 @@ def test_preflight_rejects_missing_required_github_variable(tmp_path: Path) -> N
     assert "missing_required_variable: CODEX_MARKETPLACE_CATALOG_NAME" in result.stdout
 
 
+def test_preflight_reports_manual_steps_for_missing_projection_variables(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    vars_file = tmp_path / "vars.json"
+    write_release_flow_files(project, marketplace_identity_projection())
+    write_manifest(project / "plugins" / "agent-guard" / ".codex-plugin" / "plugin.json", "0.1.1")
+    write_json(vars_file, {})
+    run("release-init", "--project", str(project), "--tag", "v0.1.1", "--version", "0.1.1")
+
+    result = run(
+        "preflight",
+        "--project",
+        str(project),
+        "--tag",
+        "v0.1.1",
+        "--github-vars-file",
+        str(vars_file),
+    )
+
+    assert result.returncode == 1
+    assert "missing_required_variable: RELEASE_FLOW_PLUGIN_REPOSITORY" in result.stdout
+    assert "manual_step: Set GitHub Actions Variable RELEASE_FLOW_PLUGIN_REPOSITORY" in result.stdout
+    assert "GitHub repository used by workflow checkout for release-flow plugin" in result.stdout
+
+
+def test_preflight_rejects_projection_variable_identity_mismatch(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    vars_file = tmp_path / "vars.json"
+    write_release_flow_files(project, marketplace_identity_projection())
+    write_manifest(project / "plugins" / "agent-guard" / ".codex-plugin" / "plugin.json", "0.1.1")
+    write_json(
+        vars_file,
+        marketplace_identity_vars(CODEX_MARKETPLACE_CATALOG_NAME="old-agent-guard-marketplace"),
+    )
+    run("release-init", "--project", str(project), "--tag", "v0.1.1", "--version", "0.1.1")
+
+    result = run(
+        "preflight",
+        "--project",
+        str(project),
+        "--tag",
+        "v0.1.1",
+        "--github-vars-file",
+        str(vars_file),
+    )
+
+    assert result.returncode == 1
+    assert "identity_variable_mismatch: CODEX_MARKETPLACE_CATALOG_NAME" in result.stdout
+    assert "expected: my-agent-skills-marketplace" in result.stdout
+
+
 def test_preflight_rejects_tag_manifest_version_mismatch(tmp_path: Path) -> None:
     project = tmp_path / "project"
     vars_file = tmp_path / "vars.json"
@@ -586,6 +791,51 @@ transforms:
 
     assert result.returncode == 1
     assert "unmanaged_channel_diff: .agents/plugins/marketplace.json" in result.stdout
+
+
+def test_preflight_rejects_channel_marketplace_identity_drift(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    channel_tree = tmp_path / "channel"
+    vars_file = tmp_path / "vars.json"
+    write_release_flow_files(project, marketplace_identity_projection())
+    write_manifest(project / "plugins" / "agent-guard" / ".codex-plugin" / "plugin.json", "0.1.1")
+    write_json(vars_file, marketplace_identity_vars())
+    run("release-init", "--project", str(project), "--tag", "v0.1.1", "--version", "0.1.1")
+    write_json(
+        channel_tree / ".agents" / "plugins" / "marketplace.json",
+        {
+            "name": "old-agent-guard-marketplace",
+            "interface": {"displayName": "Old Agent Guard Marketplace"},
+            "plugins": [],
+        },
+    )
+    write_json(
+        channel_tree / ".claude-plugin" / "marketplace.json",
+        {
+            "name": "my-agent-skills-marketplace",
+            "owner": {"name": "My Agent Skills Marketplace"},
+            "plugins": [],
+        },
+    )
+
+    result = run(
+        "preflight",
+        "--project",
+        str(project),
+        "--tag",
+        "v0.1.1",
+        "--github-vars-file",
+        str(vars_file),
+        "--channel-tree",
+        str(channel_tree),
+    )
+
+    assert result.returncode == 1
+    assert (
+        "marketplace_identity_mismatch: .agents/plugins/marketplace.json /name"
+        in result.stdout
+    )
+    assert "old-agent-guard-marketplace" in result.stdout
 
 
 def test_preflight_skips_drift_detection_when_required_variable_missing(tmp_path: Path) -> None:
@@ -860,24 +1110,8 @@ def test_workflow_template_is_thin_entrypoint() -> None:
 def test_ci_publish_dry_run_applies_projection_without_remote_writes(tmp_path: Path) -> None:
     project = tmp_path / "project"
     vars_file = tmp_path / "vars.json"
-    write_release_flow_files(
-        project,
-        """version: 1
-
-variables:
-  CODEX_MARKETPLACE_CATALOG_NAME:
-    source: github-actions-variable
-    required: true
-
-transforms:
-  - path: .agents/plugins/marketplace.json
-    type: json-env
-    set:
-      /name: CODEX_MARKETPLACE_CATALOG_NAME
-""",
-    )
-    write_json(project / ".agents" / "plugins" / "marketplace.json", {"name": "local-dev"})
-    write_json(vars_file, {"CODEX_MARKETPLACE_CATALOG_NAME": "agent-guard-marketplace"})
+    write_release_flow_files(project, marketplace_identity_projection())
+    write_json(vars_file, marketplace_identity_vars())
     run("release-init", "--project", str(project), "--tag", "v0.1.1", "--version", "0.1.1")
 
     result = run(
@@ -898,6 +1132,10 @@ transforms:
     assert "channel_branch: marketplace" in result.stdout
     assert "tag: v0.1.1" in result.stdout
     assert "remote_write: not_run" in result.stdout
+    projected_marketplace = tmp_path / "project-projected" / ".agents" / "plugins" / "marketplace.json"
+    assert projected_marketplace.is_file()
+    catalog = json.loads(projected_marketplace.read_text(encoding="utf-8"))
+    assert catalog["name"] == "my-agent-skills-marketplace"
 
 
 def test_ci_publish_rejects_untrusted_release_plan_path(tmp_path: Path) -> None:
@@ -1073,22 +1311,10 @@ def test_release_flow_local_e2e(tmp_path: Path) -> None:
     write_json(project / "plugins" / "agent-guard" / ".codex-plugin" / "plugin.json", {"version": "0.1.1"})
     write_json(project / "plugins" / "agent-guard" / ".claude-plugin" / "plugin.json", {"version": "0.1.1"})
     write_json(
-        project / ".agents" / "plugins" / "marketplace.json",
-        {"name": "local-dev", "interface": {"displayName": "Local Dev"}},
-    )
-    write_json(
         project / ".claude-plugin" / "marketplace.json",
         {"name": "local-dev", "owner": {"name": "Local Dev"}},
     )
-    write_json(
-        vars_file,
-        {
-            "CODEX_MARKETPLACE_CATALOG_NAME": "agent-guard-marketplace",
-            "CODEX_MARKETPLACE_DISPLAY_NAME": "Agent Guard",
-            "CLAUDE_MARKETPLACE_CATALOG_NAME": "agent-guard-marketplace",
-            "CLAUDE_MARKETPLACE_OWNER_NAME": "Agent Guard",
-        },
-    )
+    write_json(vars_file, marketplace_identity_vars())
 
     release_init = run("release-init", "--project", str(project), "--tag", "v0.1.1", "--version", "0.1.1")
     assert release_init.returncode == 0, release_init.stdout + release_init.stderr

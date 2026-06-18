@@ -26,6 +26,8 @@ claude plugin marketplace add <owner>/<repo>@marketplace
 ## 边界
 
 - 只更新指定 scope（personal/repo/all）的 marketplace（市场）入口；不复制 Runtime code（运行时代码）到目标项目。
+- 默认 `verify` 未显式传 `--scope` 时只验证 personal marketplace（个人市场）；repo marketplace（仓库市场）验证必须显式传 `--scope repo` 或 `--scope all`。
+- marketplace catalog root identity（市场目录身份）从仓库 `.release-flow/projection.yaml` 读取；本仓库 source branch 不需要持久保存 Codex `.agents/plugins/marketplace.json`。
 - 不写目标项目 Hook（钩子）或 Git 配置。
 - 保留 Guard Profile（守卫画像）。
 - 保留 `.local/guard/*` 运行态、Session Focus Binding（会话焦点绑定）、确认记录和人工覆盖记录。

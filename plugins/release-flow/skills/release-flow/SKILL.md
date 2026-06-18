@@ -18,6 +18,8 @@ Use this skill when the user wants to:
 ## Boundaries
 
 - Project setup writes only `.release-flow/config.yaml`, `.release-flow/projection.yaml`, `.release-flow/.gitignore`, and a thin GitHub Workflow entry after explicit authorization.
+- `.release-flow/config.yaml` is release-flow generic config; `.release-flow/projection.yaml` owns project marketplace identity, required GitHub Actions Variables, generators, and transforms.
+- Codex `.agents/plugins/marketplace.json` is a generated release projection artifact and is not required on the source branch.
 - Project setup does not create `.release-flow/releases/<tag>/release-plan.json`.
 - Plugin scripts and templates stay inside this plugin package.
 - Local publish commands do not create branches, create tags, or push commits.
