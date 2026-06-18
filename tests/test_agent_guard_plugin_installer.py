@@ -135,11 +135,33 @@ def test_verify_checks_package_and_marketplace_entries(tmp_path: Path) -> None:
 
     assert verify.returncode == 0, verify.stdout + verify.stderr
     assert "status: verified" in verify.stdout
+    assert "shared_identity: loaded" in verify.stdout
     assert "source_package: complete" in verify.stdout
     assert "codex_repo_marketplace_entry: present" in verify.stdout
     assert "claude_repo_marketplace_entry: present" in verify.stdout
     assert "codex_personal_marketplace_entry: present" in verify.stdout
     assert "claude_personal_marketplace_entry: present" in verify.stdout
+
+
+def test_verify_default_scope_does_not_require_repo_marketplace(tmp_path: Path) -> None:
+    install = run_installer(
+        [
+            "install",
+            *common_args(tmp_path),
+            "--target",
+            "codex",
+            "--scope",
+            "personal",
+            "--authorize-install",
+        ]
+    )
+    assert install.returncode == 0, install.stdout + install.stderr
+
+    verify = run_installer(["verify", *common_args(tmp_path), "--target", "codex"])
+
+    assert verify.returncode == 0, verify.stdout + verify.stderr
+    assert "codex_personal_marketplace_entry: present" in verify.stdout
+    assert "codex_repo_marketplace_entry" not in verify.stdout
 
 
 def test_verify_target_codex_only_requires_codex_manifest(tmp_path: Path) -> None:
@@ -222,6 +244,31 @@ def test_verify_rejects_legacy_marketplace_entry(tmp_path: Path) -> None:
 
     assert verify.returncode == 1
     assert "legacy_marketplace_entry" in verify.stdout
+
+
+def test_verify_rejects_marketplace_catalog_identity_mismatch(tmp_path: Path) -> None:
+    install = run_installer(
+        [
+            "install",
+            *common_args(tmp_path),
+            "--target",
+            "codex",
+            "--scope",
+            "repo",
+            "--authorize-install",
+        ]
+    )
+    assert install.returncode == 0, install.stdout + install.stderr
+    path = marketplace_paths(tmp_path)["codex_repo"]
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["name"] = "old-agent-guard-marketplace"
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    verify = run_installer(["verify", *common_args(tmp_path), "--target", "codex", "--scope", "repo"])
+
+    assert verify.returncode == 1
+    assert "invalid_marketplace_identity" in verify.stdout
+    assert "old-agent-guard-marketplace" in verify.stdout
 
 
 def test_verify_reports_invalid_marketplace_plugins_shape(tmp_path: Path) -> None:

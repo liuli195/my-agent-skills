@@ -6,6 +6,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "release-flow"
 CODEX_REPO_MARKETPLACE = REPO_ROOT / ".agents" / "plugins" / "marketplace.json"
 CLAUDE_REPO_MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
+RELEASE_FLOW_PROJECTION = REPO_ROOT / ".release-flow" / "projection.yaml"
 
 
 def read_json(path: Path) -> dict:
@@ -64,25 +65,22 @@ def test_release_flow_workflow_template_installs_pyyaml() -> None:
     assert "python -m pip install PyYAML" in workflow
 
 
-def test_repo_marketplace_catalogs_include_release_flow_local_entry() -> None:
-    codex_catalog = read_json(CODEX_REPO_MARKETPLACE)
+def test_codex_release_flow_entry_is_generated_by_release_projection() -> None:
+    projection = RELEASE_FLOW_PROJECTION.read_text(encoding="utf-8")
+
+    assert not CODEX_REPO_MARKETPLACE.exists()
+    assert "path: .agents/plugins/marketplace.json" in projection
+    assert "type: codex-marketplace" in projection
+    assert "release-flow" in projection
+
+
+def test_claude_repo_marketplace_catalog_includes_release_flow_local_entry() -> None:
     claude_catalog = read_json(CLAUDE_REPO_MARKETPLACE)
 
-    codex_entries = [
-        plugin for plugin in codex_catalog["plugins"] if plugin.get("name") == "release-flow"
-    ]
     claude_entries = [
         plugin for plugin in claude_catalog["plugins"] if plugin.get("name") == "release-flow"
     ]
 
-    assert codex_entries == [
-        {
-            "name": "release-flow",
-            "source": {"source": "local", "path": "./plugins/release-flow"},
-            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
-            "category": "Developer Tools",
-        }
-    ]
     assert claude_entries == [
         {
             "name": "release-flow",

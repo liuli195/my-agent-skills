@@ -9,6 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "agent-guard"
 CODEX_REPO_MARKETPLACE = REPO_ROOT / ".agents" / "plugins" / "marketplace.json"
 CLAUDE_REPO_MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
+RELEASE_FLOW_PROJECTION = REPO_ROOT / ".release-flow" / "projection.yaml"
 ENTRYPOINT_SKILLS = [
     "agent-guard-install",
     "agent-guard-init",
@@ -63,28 +64,20 @@ def test_plugin_manifests_are_valid_json() -> None:
     assert claude_manifest["hooks"] == "./hooks/hooks.json"
 
 
-def test_repo_marketplace_catalogs_point_to_agent_guard_plugin() -> None:
-    codex_catalog = read_json(CODEX_REPO_MARKETPLACE)
-    claude_catalog = read_json(CLAUDE_REPO_MARKETPLACE)
+def test_codex_repo_marketplace_is_generated_by_release_projection() -> None:
+    projection = RELEASE_FLOW_PROJECTION.read_text(encoding="utf-8")
 
-    assert codex_catalog["name"] == "my-agent-skills-marketplace"
-    assert codex_catalog["interface"]["displayName"] == "My Agent Skills Marketplace"
-    codex_entries = [
-        plugin
-        for plugin in codex_catalog["plugins"]
-        if plugin.get("name") == "agent-guard"
-    ]
-    assert len(codex_entries) == 1, codex_entries
-    codex_entry = codex_entries[0]
-    assert codex_entry["source"] == {
-        "source": "local",
-        "path": "./plugins/agent-guard",
-    }
-    assert codex_entry["policy"] == {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL",
-    }
-    assert codex_entry["category"] == "Productivity"
+    assert not CODEX_REPO_MARKETPLACE.exists()
+    assert "identity:" in projection
+    assert "marketplaceName: my-agent-skills-marketplace" in projection
+    assert "path: .agents/plugins/marketplace.json" in projection
+    assert "type: codex-marketplace" in projection
+    assert "agent-guard" in projection
+    assert "release-flow" in projection
+
+
+def test_claude_repo_marketplace_catalog_points_to_agent_guard_plugin() -> None:
+    claude_catalog = read_json(CLAUDE_REPO_MARKETPLACE)
 
     assert claude_catalog["name"] == "my-agent-skills-marketplace"
     assert claude_catalog["owner"]["name"] == "My Agent Skills Marketplace"

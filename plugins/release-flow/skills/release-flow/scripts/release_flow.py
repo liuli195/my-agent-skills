@@ -22,6 +22,9 @@ TEMPLATE_ROOT = SKILL_ROOT / "assets" / "templates"
 FORBIDDEN_VARIABLE_VALUE_KEYS = {"value", "secret", "defaultValue", "default_value"}
 SUPPORTED_VARIABLE_SOURCE = "github-actions-variable"
 SUPPORTED_TRANSFORM_TYPE = "json-env"
+SUPPORTED_GENERATOR_TYPE = "codex-marketplace"
+SUPPORTED_GENERATOR_IDENTITY = "codex"
+SUPPORTED_CODEX_MARKETPLACE_PLUGINS = {"agent-guard", "release-flow"}
 SETUP_TARGETS = [
     ("release-flow/config.yaml", ".release-flow/config.yaml"),
     ("release-flow/projection.yaml", ".release-flow/projection.yaml"),
@@ -53,6 +56,31 @@ class ProjectionVariable:
 
 
 @dataclass(frozen=True)
+class ProjectionCodexIdentity:
+    marketplace_name: str
+    display_name: str
+
+
+@dataclass(frozen=True)
+class ProjectionClaudeIdentity:
+    marketplace_name: str
+    owner_name: str
+
+
+@dataclass(frozen=True)
+class ProjectionReleaseFlowPluginIdentity:
+    repository_variable: str
+    ref_variable: str
+
+
+@dataclass(frozen=True)
+class ProjectionIdentity:
+    codex: ProjectionCodexIdentity
+    claude: ProjectionClaudeIdentity
+    release_flow_plugin: ProjectionReleaseFlowPluginIdentity
+
+
+@dataclass(frozen=True)
 class ProjectionTransform:
     path: Path
     type: str
@@ -60,10 +88,20 @@ class ProjectionTransform:
 
 
 @dataclass(frozen=True)
+class ProjectionGenerator:
+    path: Path
+    type: str
+    identity: str
+    plugins: list[str]
+
+
+@dataclass(frozen=True)
 class Projection:
     path: Path
     version: int
+    identity: ProjectionIdentity | None
     variables: dict[str, ProjectionVariable]
+    generators: list[ProjectionGenerator]
     transforms: list[ProjectionTransform]
     raw: dict[str, Any]
 
@@ -182,12 +220,77 @@ def read_config(project: Path) -> FlowConfig:
     )
 
 
+def require_string(data: dict[str, Any], key: str, error: str) -> str:
+    value = data.get(key)
+    if not isinstance(value, str):
+        raise ValueError(error)
+    return value
+
+
+def read_projection_identity(data: dict[str, Any]) -> ProjectionIdentity | None:
+    identity_data = data.get("identity")
+    if identity_data is None:
+        return None
+    if not isinstance(identity_data, dict):
+        raise ValueError("projection_identity_invalid")
+
+    codex_data = identity_data.get("codex")
+    if not isinstance(codex_data, dict):
+        raise ValueError("projection_identity_codex_invalid")
+    claude_data = identity_data.get("claude")
+    if not isinstance(claude_data, dict):
+        raise ValueError("projection_identity_claude_invalid")
+    release_flow_plugin_data = identity_data.get("releaseFlowPlugin")
+    if not isinstance(release_flow_plugin_data, dict):
+        raise ValueError("projection_identity_release_flow_plugin_invalid")
+
+    return ProjectionIdentity(
+        codex=ProjectionCodexIdentity(
+            marketplace_name=require_string(
+                codex_data,
+                "marketplaceName",
+                "projection_identity_missing: identity.codex.marketplaceName",
+            ),
+            display_name=require_string(
+                codex_data,
+                "displayName",
+                "projection_identity_missing: identity.codex.displayName",
+            ),
+        ),
+        claude=ProjectionClaudeIdentity(
+            marketplace_name=require_string(
+                claude_data,
+                "marketplaceName",
+                "projection_identity_missing: identity.claude.marketplaceName",
+            ),
+            owner_name=require_string(
+                claude_data,
+                "ownerName",
+                "projection_identity_missing: identity.claude.ownerName",
+            ),
+        ),
+        release_flow_plugin=ProjectionReleaseFlowPluginIdentity(
+            repository_variable=require_string(
+                release_flow_plugin_data,
+                "repositoryVariable",
+                "projection_identity_missing: identity.releaseFlowPlugin.repositoryVariable",
+            ),
+            ref_variable=require_string(
+                release_flow_plugin_data,
+                "refVariable",
+                "projection_identity_missing: identity.releaseFlowPlugin.refVariable",
+            ),
+        ),
+    )
+
+
 def read_projection(project: Path) -> Projection:
     path = project / ".release-flow" / "projection.yaml"
     data = load_yaml_mapping(path)
     version = data.get("version")
     if not isinstance(version, int):
         raise ValueError("projection_version_invalid")
+    identity = read_projection_identity(data)
 
     variables_data = data.get("variables", {})
     if not isinstance(variables_data, dict):
@@ -207,6 +310,38 @@ def read_projection(project: Path) -> Projection:
             source=source,
             required=required,
             raw=variable_data,
+        )
+
+    generators_data = data.get("generators", [])
+    if not isinstance(generators_data, list):
+        raise ValueError("projection_generators_invalid")
+    generators: list[ProjectionGenerator] = []
+    for generator_data in generators_data:
+        if not isinstance(generator_data, dict):
+            raise ValueError("projection_generator_invalid")
+        generator_path = generator_data.get("path")
+        generator_type = generator_data.get("type")
+        generator_identity = generator_data.get("identity")
+        plugins_data = generator_data.get("plugins", [])
+        if not isinstance(generator_path, str):
+            raise ValueError("projection_generator_path_invalid")
+        generator_relative_path = Path(generator_path)
+        resolve_project_path(project, generator_relative_path, "invalid_projection_generator_path")
+        if not isinstance(generator_type, str):
+            raise ValueError(f"projection_generator_type_missing: {generator_path}")
+        if not isinstance(generator_identity, str):
+            raise ValueError(f"projection_generator_identity_missing: {generator_path}")
+        if not isinstance(plugins_data, list) or not all(
+            isinstance(plugin_name, str) for plugin_name in plugins_data
+        ):
+            raise ValueError(f"projection_generator_plugins_invalid: {generator_path}")
+        generators.append(
+            ProjectionGenerator(
+                path=generator_relative_path,
+                type=generator_type,
+                identity=generator_identity,
+                plugins=list(plugins_data),
+            )
         )
 
     transforms_data = data.get("transforms", [])
@@ -241,10 +376,62 @@ def read_projection(project: Path) -> Projection:
     return Projection(
         path=path,
         version=version,
+        identity=identity,
         variables=variables,
+        generators=generators,
         transforms=transforms,
         raw=data,
     )
+
+
+def projection_identity_value(projection: Projection, reference: str) -> str:
+    if projection.identity is None:
+        raise ValueError(f"projection_identity_reference_unknown: {reference}")
+    values = {
+        "identity.codex.marketplaceName": projection.identity.codex.marketplace_name,
+        "identity.codex.displayName": projection.identity.codex.display_name,
+        "identity.claude.marketplaceName": projection.identity.claude.marketplace_name,
+        "identity.claude.ownerName": projection.identity.claude.owner_name,
+        "identity.releaseFlowPlugin.repositoryVariable": (
+            projection.identity.release_flow_plugin.repository_variable
+        ),
+        "identity.releaseFlowPlugin.refVariable": projection.identity.release_flow_plugin.ref_variable,
+    }
+    try:
+        return values[reference]
+    except KeyError as exc:
+        raise ValueError(f"projection_identity_reference_unknown: {reference}") from exc
+
+
+def expected_variable_value(projection: Projection, variable: ProjectionVariable) -> str | None:
+    expected = variable.raw.get("expected")
+    if expected is None:
+        return None
+    if not isinstance(expected, str):
+        raise ValueError(f"projection_variable_expected_invalid: {variable.name}")
+    return projection_identity_value(projection, expected)
+
+
+def required_github_variable_details(projection: Projection) -> list[ProjectionVariable]:
+    return [
+        variable
+        for variable in projection.variables.values()
+        if variable.source == SUPPORTED_VARIABLE_SOURCE and variable.required
+    ]
+
+
+def projection_identity_variable_errors(
+    projection: Projection, variable_name: str
+) -> list[str]:
+    variable = projection.variables.get(variable_name)
+    if variable is None:
+        return [f"projection_identity_variable_missing: {variable_name}"]
+    errors: list[str] = []
+    if variable.source != SUPPORTED_VARIABLE_SOURCE:
+        errors.append(f"projection_identity_variable_source_unsupported: {variable_name}")
+    if not variable.required:
+        errors.append(f"projection_identity_variable_not_required: {variable_name}")
+    return errors
 
 
 def projection_errors(projection: Projection) -> list[str]:
@@ -254,6 +441,34 @@ def projection_errors(projection: Projection) -> list[str]:
             errors.append(f"projection_variable_source_unsupported: {variable.name}")
         if FORBIDDEN_VARIABLE_VALUE_KEYS.intersection(variable.raw):
             errors.append(f"projection_variable_value_forbidden: {variable.name}")
+        if "expected" in variable.raw:
+            try:
+                expected_variable_value(projection, variable)
+            except ValueError as exc:
+                errors.append(str(exc))
+    if projection.identity is not None:
+        errors.extend(
+            projection_identity_variable_errors(
+                projection,
+                projection.identity.release_flow_plugin.repository_variable,
+            )
+        )
+        errors.extend(
+            projection_identity_variable_errors(
+                projection,
+                projection.identity.release_flow_plugin.ref_variable,
+            )
+        )
+    for generator in projection.generators:
+        if generator.type != SUPPORTED_GENERATOR_TYPE:
+            errors.append(f"projection_generator_type_unsupported: {generator.path}")
+        if generator.identity != SUPPORTED_GENERATOR_IDENTITY:
+            errors.append(f"projection_generator_identity_unsupported: {generator.path}")
+        if projection.identity is None:
+            errors.append(f"projection_generator_identity_missing: {generator.path}")
+        for plugin_name in generator.plugins:
+            if plugin_name not in SUPPORTED_CODEX_MARKETPLACE_PLUGINS:
+                errors.append(f"projection_generator_plugin_unknown: {plugin_name}")
     for transform in projection.transforms:
         if transform.type != SUPPORTED_TRANSFORM_TYPE:
             errors.append(f"projection_transform_type_unsupported: {transform.path}")
@@ -347,6 +562,52 @@ def set_json_pointer(data: dict[str, Any], pointer: str, value: Any) -> None:
     set_json_pointer_value(target, parts[-1], pointer, value)
 
 
+def codex_marketplace_entry(plugin_name: str) -> dict[str, Any]:
+    entries = {
+        "agent-guard": {
+            "name": "agent-guard",
+            "source": {"source": "local", "path": "./plugins/agent-guard"},
+            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+            "category": "Productivity",
+        },
+        "release-flow": {
+            "name": "release-flow",
+            "source": {"source": "local", "path": "./plugins/release-flow"},
+            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+            "category": "Developer Tools",
+        },
+    }
+    try:
+        return entries[plugin_name]
+    except KeyError as exc:
+        raise ValueError(f"projection_generator_plugin_unknown: {plugin_name}") from exc
+
+
+def generate_codex_marketplace(
+    projection: Projection, generator: ProjectionGenerator
+) -> dict[str, Any]:
+    if projection.identity is None:
+        raise ValueError(f"projection_generator_identity_missing: {generator.path}")
+    if generator.type != SUPPORTED_GENERATOR_TYPE:
+        raise ValueError(f"projection_generator_type_unsupported: {generator.path}")
+    if generator.identity != SUPPORTED_GENERATOR_IDENTITY:
+        raise ValueError(f"projection_generator_identity_unsupported: {generator.path}")
+    return {
+        "name": projection.identity.codex.marketplace_name,
+        "interface": {"displayName": projection.identity.codex.display_name},
+        "plugins": [codex_marketplace_entry(plugin_name) for plugin_name in generator.plugins],
+    }
+
+
+def apply_projection_generator(
+    project: Path, projection: Projection, generator: ProjectionGenerator
+) -> None:
+    target_path = resolve_project_path(project, generator.path, "invalid_projection_generator_path")
+    target = generate_codex_marketplace(projection, generator)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(json.dumps(target, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def apply_json_env_transform(project: Path, transform: ProjectionTransform, vars_data: dict[str, Any]) -> None:
     target_path = resolve_project_path(project, transform.path, "invalid_projection_transform_path")
     target = read_json_mapping(target_path)
@@ -367,8 +628,7 @@ def run_project(args: argparse.Namespace) -> int:
     try:
         projection = read_projection(args.project)
         vars_data = read_json_mapping(args.vars_file)
-        for transform in projection.transforms:
-            apply_json_env_transform(args.project, transform, vars_data)
+        apply_projection(args.project, projection, vars_data)
     except ValueError as exc:
         print("status: issues")
         print(f"error: {exc}")
@@ -414,6 +674,13 @@ def run_github_plan(args: argparse.Namespace) -> int:
     for variable in projection.variables.values():
         if variable.source == SUPPORTED_VARIABLE_SOURCE:
             print(f"  - {variable.name}")
+            print(f"    required: {str(variable.required).lower()}")
+            description = variable.raw.get("description")
+            if isinstance(description, str):
+                print(f"    description: {description}")
+            expected = variable.raw.get("expected")
+            if isinstance(expected, str):
+                print(f"    expected: {expected}")
     return 0
 
 
@@ -439,7 +706,7 @@ def run_configure_github(args: argparse.Namespace) -> int:
     )
     rulesets_enabled = github_config_value(config, ["rulesets", "enabled"], True)
     variables = [
-        variable.name
+        variable
         for variable in projection.variables.values()
         if variable.source == SUPPORTED_VARIABLE_SOURCE
     ]
@@ -453,8 +720,17 @@ def run_configure_github(args: argparse.Namespace) -> int:
         else:
             print("Rulesets are disabled in release-flow config")
         print("Create GitHub Actions Variables")
-        for variable_name in variables:
-            print(f"  - {variable_name}")
+        for variable in variables:
+            print(f"  - {variable.name}")
+            print(f"    required: {str(variable.required).lower()}")
+            description = variable.raw.get("description")
+            if isinstance(description, str):
+                print(f"    description: {description}")
+            expected = variable.raw.get("expected")
+            if isinstance(expected, str):
+                print(f"    expected: {expected}")
+            if variable.required:
+                print(f"Set GitHub Actions Variable {variable.name}")
         return 0
 
     print("status: issues")
@@ -539,16 +815,94 @@ def run_release_init(args: argparse.Namespace) -> int:
 
 
 def required_github_variables(projection: Projection) -> list[str]:
-    return [
-        variable.name
-        for variable in projection.variables.values()
-        if variable.source == SUPPORTED_VARIABLE_SOURCE and variable.required
-    ]
+    return [variable.name for variable in required_github_variable_details(projection)]
 
 
 def apply_projection(project: Path, projection: Projection, vars_data: dict[str, Any]) -> None:
+    for generator in projection.generators:
+        apply_projection_generator(project, projection, generator)
     for transform in projection.transforms:
         apply_json_env_transform(project, transform, vars_data)
+
+
+def required_variable_report(
+    projection: Projection, vars_data: dict[str, Any]
+) -> list[dict[str, Any]]:
+    report: list[dict[str, Any]] = []
+    for variable in required_github_variable_details(projection):
+        expected_reference = variable.raw.get("expected")
+        expected_value = expected_variable_value(projection, variable)
+        item: dict[str, Any] = {
+            "name": variable.name,
+            "description": variable.raw.get("description", ""),
+            "expected": expected_reference if isinstance(expected_reference, str) else None,
+            "expectedValue": expected_value,
+            "manualStep": f"Set GitHub Actions Variable {variable.name}",
+            "present": variable.name in vars_data,
+        }
+        report.append(item)
+    return report
+
+
+def identity_variable_errors(projection: Projection, vars_data: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    for variable in projection.variables.values():
+        if variable.name not in vars_data:
+            continue
+        expected_value = expected_variable_value(projection, variable)
+        if expected_value is None:
+            continue
+        actual_value = str(vars_data[variable.name])
+        if actual_value != expected_value:
+            errors.append(f"identity_variable_mismatch: {variable.name}")
+            errors.append(f"expected: {expected_value}")
+            errors.append(f"actual: {actual_value}")
+    return errors
+
+
+def marketplace_identity_value(data: dict[str, Any], pointer: str) -> Any:
+    target: Any = data
+    for part in json_pointer_parts(pointer):
+        if not isinstance(target, dict) or part not in target:
+            return None
+        target = target[part]
+    return target
+
+
+def marketplace_identity_errors(root: Path, projection: Projection) -> list[str]:
+    if projection.identity is None:
+        return []
+    checks = [
+        (
+            Path(".agents/plugins/marketplace.json"),
+            {
+                "/name": projection.identity.codex.marketplace_name,
+                "/interface/displayName": projection.identity.codex.display_name,
+            },
+        ),
+        (
+            Path(".claude-plugin/marketplace.json"),
+            {
+                "/name": projection.identity.claude.marketplace_name,
+                "/owner/name": projection.identity.claude.owner_name,
+            },
+        ),
+    ]
+    errors: list[str] = []
+    for relative_path, expected_values in checks:
+        path = root / relative_path
+        if not path.exists():
+            continue
+        data = read_json_mapping(path)
+        for pointer, expected_value in expected_values.items():
+            actual_value = marketplace_identity_value(data, pointer)
+            if actual_value != expected_value:
+                errors.append(
+                    "marketplace_identity_mismatch: "
+                    f"{relative_path.as_posix()} {pointer} "
+                    f"expected={expected_value} actual={actual_value}"
+                )
+    return errors
 
 
 def ignored_expected_path(relative_path: Path) -> bool:
@@ -670,8 +1024,20 @@ def preflight_errors(
         for variable_name in required_github_variables(projection)
         if variable_name not in vars_data
     ]
+    required_variables = required_variable_report(projection, vars_data)
+    required_variables_by_name = {item["name"]: item for item in required_variables}
     for variable_name in missing_variables:
         errors.append(f"missing_required_variable: {variable_name}")
+        variable_report = required_variables_by_name.get(variable_name, {})
+        description = variable_report.get("description")
+        if description:
+            errors.append(f"variable_description: {description}")
+        manual_step = variable_report.get("manualStep")
+        if manual_step:
+            errors.append(f"manual_step: {manual_step}")
+
+    if not missing_variables:
+        errors.extend(identity_variable_errors(projection, vars_data))
 
     plan_version = plan.get("version")
     if plan.get("tag") != tag:
@@ -702,13 +1068,20 @@ def preflight_errors(
             copy_project_for_expected(project, expected_tree)
             expected_projection = read_projection(expected_tree)
             apply_projection(expected_tree, expected_projection, vars_data)
-            channel_diffs = unmanaged_channel_diffs(expected_tree, channel_tree)
+            identity_errors = [
+                *marketplace_identity_errors(expected_tree, expected_projection),
+                *marketplace_identity_errors(channel_tree, expected_projection),
+            ]
+            if identity_errors:
+                errors.extend(identity_errors)
+            else:
+                channel_diffs = unmanaged_channel_diffs(expected_tree, channel_tree)
         for diff in channel_diffs:
             errors.append(f"unmanaged_channel_diff: {diff}")
 
     report = {
         "tag": tag,
-        "variables": {"missing": missing_variables},
+        "variables": {"missing": missing_variables, "required": required_variables},
         "version": {
             "expected": expected_version,
             "releasePlan": plan_version,

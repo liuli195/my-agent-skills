@@ -8,7 +8,12 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - exercised by install environments without PyYAML.
+    yaml = None
 
 
 PLUGIN_NAME = "agent-guard"
@@ -54,6 +59,22 @@ class PackageCheck:
     errors: list[str]
 
 
+@dataclass(frozen=True)
+class MarketplaceIdentity:
+    codex_marketplace_name: str
+    codex_display_name: str
+    claude_marketplace_name: str
+    claude_owner_name: str
+
+
+DEFAULT_MARKETPLACE_IDENTITY = MarketplaceIdentity(
+    codex_marketplace_name="my-agent-skills-marketplace",
+    codex_display_name="My Agent Skills Marketplace",
+    claude_marketplace_name="my-agent-skills-marketplace",
+    claude_owner_name="My Agent Skills Marketplace",
+)
+
+
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[5]
 
@@ -88,6 +109,52 @@ def read_json(path: Path) -> tuple[dict | None, str | None]:
         return None, f"missing_json: {path}"
     except json.JSONDecodeError as exc:
         return None, f"invalid_json: {path}: {exc}"
+
+
+def nested_string(data: dict[str, Any], path: list[str]) -> str | None:
+    value: Any = data
+    for part in path:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value if isinstance(value, str) else None
+
+
+def read_shared_marketplace_identity(root: Path) -> tuple[MarketplaceIdentity, list[str]]:
+    projection_path = root / ".release-flow" / "projection.yaml"
+    if yaml is None:
+        return DEFAULT_MARKETPLACE_IDENTITY, ["shared_identity_defaulted: PyYAML unavailable"]
+    try:
+        data = yaml.safe_load(projection_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return DEFAULT_MARKETPLACE_IDENTITY, [f"shared_identity_defaulted: missing_file: {projection_path}"]
+    except yaml.YAMLError as exc:
+        return DEFAULT_MARKETPLACE_IDENTITY, [f"shared_identity_defaulted: invalid_yaml: {exc}"]
+    if not isinstance(data, dict):
+        return DEFAULT_MARKETPLACE_IDENTITY, [f"shared_identity_defaulted: invalid_yaml_mapping: {projection_path}"]
+    identity = data.get("identity")
+    if not isinstance(identity, dict):
+        return DEFAULT_MARKETPLACE_IDENTITY, ["shared_identity_defaulted: projection_identity_missing"]
+    values = {
+        "codex_marketplace_name": nested_string(identity, ["codex", "marketplaceName"]),
+        "codex_display_name": nested_string(identity, ["codex", "displayName"]),
+        "claude_marketplace_name": nested_string(identity, ["claude", "marketplaceName"]),
+        "claude_owner_name": nested_string(identity, ["claude", "ownerName"]),
+    }
+    missing = [name for name, value in values.items() if value is None]
+    if missing:
+        return DEFAULT_MARKETPLACE_IDENTITY, [
+            f"shared_identity_defaulted: projection_identity_field_missing: {', '.join(missing)}"
+        ]
+    return (
+        MarketplaceIdentity(
+            codex_marketplace_name=values["codex_marketplace_name"] or "",
+            codex_display_name=values["codex_display_name"] or "",
+            claude_marketplace_name=values["claude_marketplace_name"] or "",
+            claude_owner_name=values["claude_owner_name"] or "",
+        ),
+        [],
+    )
 
 
 def collect_hook_commands(hooks: dict) -> list[str]:
@@ -161,24 +228,30 @@ def scopes_for(scope: str | None) -> list[str]:
     return [scope]
 
 
-def codex_catalog_root() -> dict:
+def verify_scopes_for(scope: str | None) -> list[str]:
+    if scope is None:
+        return ["personal"]
+    return scopes_for(scope)
+
+
+def codex_catalog_root(identity: MarketplaceIdentity = DEFAULT_MARKETPLACE_IDENTITY) -> dict:
     return {
-        "name": "my-agent-skills-marketplace",
-        "interface": {"displayName": "My Agent Skills Marketplace"},
+        "name": identity.codex_marketplace_name,
+        "interface": {"displayName": identity.codex_display_name},
         "plugins": [],
     }
 
 
-def claude_catalog_root() -> dict:
+def claude_catalog_root(identity: MarketplaceIdentity = DEFAULT_MARKETPLACE_IDENTITY) -> dict:
     return {
-        "name": "my-agent-skills-marketplace",
-        "owner": {"name": "My Agent Skills Marketplace"},
+        "name": identity.claude_marketplace_name,
+        "owner": {"name": identity.claude_owner_name},
         "plugins": [],
     }
 
 
-def catalog_root(target: str) -> dict:
-    return codex_catalog_root() if target == "codex" else claude_catalog_root()
+def catalog_root(target: str, identity: MarketplaceIdentity = DEFAULT_MARKETPLACE_IDENTITY) -> dict:
+    return codex_catalog_root(identity) if target == "codex" else claude_catalog_root(identity)
 
 
 def codex_marketplace_entry() -> dict:
@@ -202,9 +275,26 @@ def expected_marketplace_entry(target: str) -> dict:
     return codex_marketplace_entry() if target == "codex" else claude_marketplace_entry()
 
 
-def read_marketplace(path: Path, target: str) -> dict:
+def set_catalog_identity(data: dict, target: str, identity: MarketplaceIdentity) -> None:
+    if target == "codex":
+        data["name"] = identity.codex_marketplace_name
+        interface = data.get("interface")
+        if not isinstance(interface, dict):
+            interface = {}
+        interface["displayName"] = identity.codex_display_name
+        data["interface"] = interface
+        return
+    data["name"] = identity.claude_marketplace_name
+    owner = data.get("owner")
+    if not isinstance(owner, dict):
+        owner = {}
+    owner["name"] = identity.claude_owner_name
+    data["owner"] = owner
+
+
+def read_marketplace(path: Path, target: str, identity: MarketplaceIdentity) -> dict:
     if not path.exists():
-        return catalog_root(target)
+        return catalog_root(target, identity)
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"invalid_marketplace_catalog: {path}")
@@ -214,8 +304,9 @@ def read_marketplace(path: Path, target: str) -> dict:
     return data
 
 
-def write_marketplace(path: Path, target: str) -> None:
-    data = read_marketplace(path, target)
+def write_marketplace(path: Path, target: str, identity: MarketplaceIdentity) -> None:
+    data = read_marketplace(path, target, identity)
+    set_catalog_identity(data, target, identity)
     plugins = [entry for entry in data["plugins"] if entry.get("name") != PLUGIN_NAME]
     plugins.append(expected_marketplace_entry(target))
     data["plugins"] = plugins
@@ -241,7 +332,40 @@ def marketplace_write_errors(path: Path) -> list[str]:
     return []
 
 
-def marketplace_entry_status(path: Path, target: str) -> tuple[str, list[str]]:
+def marketplace_identity_errors(data: dict, path: Path, target: str, identity: MarketplaceIdentity) -> list[str]:
+    checks = (
+        [
+            ("/name", data.get("name"), identity.codex_marketplace_name),
+            (
+                "/interface/displayName",
+                data.get("interface", {}).get("displayName")
+                if isinstance(data.get("interface"), dict)
+                else None,
+                identity.codex_display_name,
+            ),
+        ]
+        if target == "codex"
+        else [
+            ("/name", data.get("name"), identity.claude_marketplace_name),
+            (
+                "/owner/name",
+                data.get("owner", {}).get("name") if isinstance(data.get("owner"), dict) else None,
+                identity.claude_owner_name,
+            ),
+        ]
+    )
+    errors: list[str] = []
+    for field, actual, expected in checks:
+        if actual != expected:
+            errors.append(
+                f"invalid_marketplace_identity: {path} {field} expected={expected} actual={actual}"
+            )
+    return errors
+
+
+def marketplace_entry_status(
+    path: Path, target: str, identity: MarketplaceIdentity
+) -> tuple[str, list[str]]:
     if not path.exists():
         return "missing", [f"missing_marketplace: {path}"]
     try:
@@ -254,10 +378,13 @@ def marketplace_entry_status(path: Path, target: str) -> tuple[str, list[str]]:
     if not isinstance(plugins, list) or not all(isinstance(entry, dict) for entry in plugins):
         return "invalid", [f"invalid_marketplace_plugins: {path}"]
     entries = [entry for entry in plugins if entry.get("name") == PLUGIN_NAME]
-    if not entries:
-        return "missing", [f"missing_marketplace_entry: {path}"]
     if any("kind" in entry or "install_path" in entry for entry in entries):
         return "legacy", [f"legacy_marketplace_entry: {path}"]
+    identity_errors = marketplace_identity_errors(data, path, target, identity)
+    if identity_errors:
+        return "invalid", identity_errors
+    if not entries:
+        return "missing", [f"missing_marketplace_entry: {path}"]
     if len(entries) == 1 and entries[0] == expected_marketplace_entry(target):
         return "present", []
     return "invalid", [f"invalid_marketplace_entry: {path}"]
@@ -325,6 +452,7 @@ def run_install(args: argparse.Namespace) -> int:
         print_safety()
         return 1
 
+    identity, _identity_warnings = read_shared_marketplace_identity(repo_root())
     paths = catalog_paths(args)
     install_errors: list[tuple[str, list[str]]] = []
     for target in targets_for(args.target):
@@ -346,7 +474,7 @@ def run_install(args: argparse.Namespace) -> int:
 
     for target in targets_for(args.target):
         for scope in scopes_for(args.scope):
-            write_marketplace(paths[(target, scope)], target)
+            write_marketplace(paths[(target, scope)], target, identity)
 
     print("status: installed")
     print(f"target: {args.target}")
@@ -356,8 +484,10 @@ def run_install(args: argparse.Namespace) -> int:
     return 0
 
 
-def verify_marketplace_entry(label: str, target: str, marketplace: Path) -> bool:
-    status, errors = marketplace_entry_status(marketplace, target)
+def verify_marketplace_entry(
+    label: str, target: str, marketplace: Path, identity: MarketplaceIdentity
+) -> bool:
+    status, errors = marketplace_entry_status(marketplace, target, identity)
     print(f"{label}: {status}")
     if errors:
         print(f"{label}_errors:")
@@ -369,13 +499,17 @@ def verify_marketplace_entry(label: str, target: str, marketplace: Path) -> bool
 def run_verify(args: argparse.Namespace) -> int:
     source_check = check_package(args.plugin_source, args.target)
     results: list[bool] = [source_check.status == "complete"]
+    identity, identity_warnings = read_shared_marketplace_identity(repo_root())
 
+    print(f"shared_identity: {'defaulted' if identity_warnings else 'loaded'}")
+    for warning in identity_warnings:
+        print(f"shared_identity_warning: {warning}")
     print_package_check("source_package", source_check)
     paths = catalog_paths(args)
     for target in targets_for(args.target):
-        for scope in scopes_for(args.scope):
+        for scope in verify_scopes_for(args.scope):
             label = f"{target}_{scope}_marketplace_entry"
-            results.append(verify_marketplace_entry(label, target, paths[(target, scope)]))
+            results.append(verify_marketplace_entry(label, target, paths[(target, scope)], identity))
     print_safety()
     ok = all(results)
     print(f"status: {'verified' if ok else 'issues'}")

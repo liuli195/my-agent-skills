@@ -2,6 +2,8 @@
 comet_change: standardize-agent-guard-release-flow
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-18-standardize-agent-guard-release-flow
+status: final
 ---
 
 # Release Flow Plugin 统一发布流程技术设计
