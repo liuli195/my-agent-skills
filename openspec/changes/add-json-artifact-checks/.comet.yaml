@@ -2,7 +2,7 @@ workflow: full
 phase: build
 context_compression: beta
 build_mode: executing-plans
-build_pause: switched from subagent-driven-development after user selected executing-plans because subagent dispatch hit usage limit
+build_pause: null
 subagent_dispatch: confirmed
 tdd_mode: tdd
 isolation: branch
