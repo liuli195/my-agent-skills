@@ -18,10 +18,10 @@ JSON_PREDICATES = {
 VALUE_PREDICATES = {"equals", "not_equals", "number_lte", "number_gte"}
 ARRAY_PREDICATES = {"array_none", "array_all"}
 
-_MISSING = object()
+MISSING_JSON_VALUE = object()
 
 
-def json_field(data: Any, field: str, default: Any = None) -> Any:
+def json_field(data: Any, field: str, default: Any = MISSING_JSON_VALUE) -> Any:
     current = data
     for part in field.split("."):
         if isinstance(current, dict) and part in current:
@@ -37,7 +37,7 @@ def _is_number(value: Any) -> bool:
 
 def evaluate_json_predicate(actual: Any, predicate: str, expected: Any = None, where: dict[str, Any] | None = None) -> bool:
     if predicate == "exists":
-        return actual is not _MISSING
+        return actual is not MISSING_JSON_VALUE
     if predicate == "equals":
         return actual == expected
     if predicate == "not_equals":
@@ -55,7 +55,7 @@ def evaluate_json_predicate(actual: Any, predicate: str, expected: Any = None, w
             return False
         results = [
             evaluate_json_predicate(
-                json_field(item, child_field, _MISSING),
+                json_field(item, child_field),
                 child_predicate,
                 where.get("value"),
                 where.get("where"),

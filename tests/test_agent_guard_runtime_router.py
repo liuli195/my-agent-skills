@@ -62,7 +62,9 @@ def test_json_checks_module_exposes_shared_predicates_and_helpers() -> None:
     assert module.VALUE_PREDICATES == {"equals", "not_equals", "number_lte", "number_gte"}
     assert module.ARRAY_PREDICATES == {"array_none", "array_all"}
     assert module.json_field({"review": {"status": "pass"}}, "review.status") == "pass"
-    assert module.json_field({"review": {"status": "pass"}}, "review.missing") is None
+    assert module.json_field({"review": {"status": "pass"}}, "review.missing") is module.MISSING_JSON_VALUE
+    assert not module.evaluate_json_predicate(module.json_field({"review": {}}, "review.status"), "exists")
+    assert module.evaluate_json_predicate(module.json_field({"review": {"status": None}}, "review.status"), "exists")
     assert module.evaluate_json_predicate("pass", "equals", "pass")
     assert module.evaluate_json_predicate("pass", "not_equals", "fail")
     assert module.evaluate_json_predicate(2, "number_lte", 3)

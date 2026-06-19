@@ -17,6 +17,7 @@ try:
     from .json_checks import (
         ARRAY_PREDICATES as JSON_ARTIFACT_ARRAY_PREDICATES,
         JSON_PREDICATES as JSON_ARTIFACT_PREDICATES,
+        MISSING_JSON_VALUE,
         VALUE_PREDICATES as JSON_ARTIFACT_VALUE_PREDICATES,
         evaluate_json_predicate as evaluate_shared_json_predicate,
         json_field,
@@ -25,6 +26,7 @@ except ImportError:
     from json_checks import (
         ARRAY_PREDICATES as JSON_ARTIFACT_ARRAY_PREDICATES,
         JSON_PREDICATES as JSON_ARTIFACT_PREDICATES,
+        MISSING_JSON_VALUE,
         VALUE_PREDICATES as JSON_ARTIFACT_VALUE_PREDICATES,
         evaluate_json_predicate as evaluate_shared_json_predicate,
         json_field,
@@ -760,9 +762,6 @@ def resolved_artifact_path(project: Path, profile_id: str, instance_id: str, sta
 def artifact_exists(project: Path, profile_id: str, instance_id: str, state_version: int, artifact_id: str, user_home: Path | None = None, scope: str = "project") -> bool:
     path = resolved_artifact_path(project, profile_id, instance_id, state_version, artifact_id, user_home, scope)
     return path is not None and path.exists()
-
-
-MISSING_JSON_VALUE = object()
 
 
 def load_json_artifact(path: Path) -> tuple[bool, Any]:
