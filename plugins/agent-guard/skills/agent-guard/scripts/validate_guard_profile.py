@@ -34,6 +34,17 @@ LEGACY_TOKENS = {
 }
 
 ALLOWED_PROFILE_SOURCE_KINDS = {"grill-with-docs-confirmed-notes", "built-in-minimal-sample"}
+JSON_ARTIFACT_PREDICATES = {
+    "exists",
+    "equals",
+    "not_equals",
+    "number_lte",
+    "number_gte",
+    "array_none",
+    "array_all",
+}
+JSON_ARTIFACT_VALUE_PREDICATES = {"equals", "not_equals", "number_lte", "number_gte"}
+JSON_ARTIFACT_ARRAY_PREDICATES = {"array_none", "array_all"}
 
 REQUIRED_FIELDS = {
     "manifest": [
@@ -481,6 +492,64 @@ def validate_state_transition_shape(configs: dict[str, dict[str, Any]]) -> list[
     return issues
 
 
+def required_json_artifact_field(field: str, path: str) -> ValidationIssue:
+    return ValidationIssue(
+        "guard_points",
+        path,
+        f"是 json_artifact 检查的必填字段 `{field}`。",
+        f"为 json_artifact 检查添加 `{field}`。",
+    )
+
+
+def validate_json_artifact_check(
+    guard_point_id: str,
+    check_id: str,
+    check: dict[str, Any],
+    artifact_ids: set[str],
+) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    base_field = f"guard_points.{guard_point_id}.checks.{check_id}"
+
+    artifact = check.get("artifact") or check.get("artifact_id")
+    if not isinstance(artifact, str) or not artifact:
+        issues.append(required_json_artifact_field("artifact", f"{base_field}.artifact"))
+    elif artifact not in artifact_ids:
+        issues.append(
+            missing_reference(
+                "guard_points",
+                f"{base_field}.artifact",
+                artifact,
+                "artifacts",
+                "定义该产物，或更新 Guard Point（守卫点）检查里的 artifact。",
+            )
+        )
+
+    if not is_present(check.get("field")):
+        issues.append(required_json_artifact_field("field", f"{base_field}.field"))
+
+    predicate = check.get("predicate")
+    if not isinstance(predicate, str) or not predicate:
+        issues.append(required_json_artifact_field("predicate", f"{base_field}.predicate"))
+        return issues
+    if predicate not in JSON_ARTIFACT_PREDICATES:
+        issues.append(
+            ValidationIssue(
+                "guard_points",
+                f"{base_field}.predicate",
+                f"未知 json_artifact predicate `{predicate}`。",
+                "改用 exists、equals、not_equals、number_lte、number_gte、array_none 或 array_all。",
+            )
+        )
+        return issues
+
+    if predicate in JSON_ARTIFACT_VALUE_PREDICATES and "value" not in check:
+        issues.append(required_json_artifact_field("value", f"{base_field}.value"))
+    if predicate in JSON_ARTIFACT_ARRAY_PREDICATES and not isinstance(check.get("where"), dict):
+        issues.append(required_json_artifact_field("where", f"{base_field}.where"))
+
+    return issues
+
+
 def shorthand_permission_rule(effect: str, value: Any) -> dict[str, Any] | None:
     if effect not in {"allow", "ask", "deny"}:
         return None
@@ -661,6 +730,9 @@ def validate_references(configs: dict[str, dict[str, Any]]) -> list[ValidationIs
             if not isinstance(check, dict):
                 continue
             check_id = check.get("id", "<unknown>")
+            if check.get("type") == "json_artifact":
+                issues.extend(validate_json_artifact_check(guard_point_id, check_id, check, artifact_ids))
+                continue
             if check.get("type") not in {"artifact_exists", "artifact_freshness"}:
                 continue
             artifact = check.get("artifact") or check.get("artifact_id")
