@@ -133,14 +133,17 @@ def candidate_sdk_pythons(explicit: Path | None) -> list[Path]:
 
 
 def python_can_import_sdk(path: Path) -> bool:
-    if not path.exists():
+    if not path.is_file():
         return False
-    result = subprocess.run(
-        [str(path), "-c", "import claude_agent_sdk"],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
+    try:
+        result = subprocess.run(
+            [str(path), "-c", "import claude_agent_sdk"],
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except OSError:
+        return False
     return result.returncode == 0
 
 
@@ -173,7 +176,11 @@ def load_fake_reviewer_results(raw: str | None) -> list[dict]:
     data = json.loads(raw)
     if not isinstance(data, list):
         raise ValueError("invalid_fake_reviewer_results")
-    return [item for item in data if isinstance(item, dict)]
+    required_fields = {"role", "status", "findings"}
+    for item in data:
+        if not isinstance(item, dict) or not required_fields <= item.keys():
+            raise ValueError("invalid_fake_reviewer_results")
+    return data
 
 
 def dispatch_reviewers(review_args: ReviewArgs, sdk_python: str) -> list[dict]:

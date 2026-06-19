@@ -184,12 +184,73 @@ def test_sdk_missing_reports_clear_error(tmp_path: Path) -> None:
     assert "sdk_unavailable" in result.stdout
 
 
+def test_sdk_python_directory_reports_clear_error_without_traceback(tmp_path: Path) -> None:
+    head = init_repo(tmp_path / "repo")
+    sdk_dir = tmp_path / "not-python"
+    sdk_dir.mkdir()
+
+    result = run(
+        *review_args(tmp_path / "repo", head, tmp_path / "out"),
+        "--sdk-python",
+        str(sdk_dir),
+        cwd=tmp_path / "repo",
+    )
+
+    assert result.returncode == 1
+    assert "sdk_unavailable" in result.stdout
+    assert "Traceback" not in result.stderr
+
+
+def test_sdk_python_invalid_file_reports_clear_error_without_traceback(tmp_path: Path) -> None:
+    head = init_repo(tmp_path / "repo")
+    invalid_python = write_file(tmp_path / "not-python.exe", "not a real executable\n")
+
+    result = run(
+        *review_args(tmp_path / "repo", head, tmp_path / "out"),
+        "--sdk-python",
+        str(invalid_python),
+        cwd=tmp_path / "repo",
+    )
+
+    assert result.returncode == 1
+    assert "sdk_unavailable" in result.stdout
+    assert "Traceback" not in result.stderr
+
+
 def test_fake_reviewer_results_bypass_real_sdk_for_tests(tmp_path: Path) -> None:
     head = init_repo(tmp_path / "repo")
 
     result = run(*review_args(tmp_path / "repo", head, tmp_path / "out"), cwd=tmp_path / "repo")
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_fake_reviewer_results_reject_non_dict_items(tmp_path: Path) -> None:
+    head = init_repo(tmp_path / "repo")
+
+    result = run(
+        *review_args(tmp_path / "repo", head, tmp_path / "out"),
+        "--fake-reviewer-results",
+        json.dumps(["not a reviewer"]),
+        cwd=tmp_path / "repo",
+    )
+
+    assert result.returncode == 1
+    assert "invalid_fake_reviewer_results" in result.stdout
+
+
+def test_fake_reviewer_results_reject_missing_required_fields(tmp_path: Path) -> None:
+    head = init_repo(tmp_path / "repo")
+
+    result = run(
+        *review_args(tmp_path / "repo", head, tmp_path / "out"),
+        "--fake-reviewer-results",
+        json.dumps([{"role": "spec-alignment", "status": "completed"}]),
+        cwd=tmp_path / "repo",
+    )
+
+    assert result.returncode == 1
+    assert "invalid_fake_reviewer_results" in result.stdout
 
 
 def test_reviewer_roles_are_recorded_in_results(tmp_path: Path) -> None:
