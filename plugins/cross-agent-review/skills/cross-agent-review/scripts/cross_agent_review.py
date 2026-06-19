@@ -57,6 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--sdk-python", type=Path)
     run_parser.add_argument("--fake-reviewer-results")
     run_parser.add_argument("--disable-risk-review", nargs="?", const=PLACEHOLDER_COMPAT_DISABLE_RISK_REVIEW)
+    subparsers.add_parser("_sdk-dispatch")
     return parser
 
 
@@ -187,11 +188,96 @@ def load_fake_reviewer_results(raw: str | None) -> list[dict]:
     return data
 
 
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
+    return "\n\n".join(
+        [
+            f"Role: {role}",
+            "Return only JSON with role, status, and findings.",
+            f"Change: {review_args.change}",
+            f"Base ref: {review_args.base_ref}",
+            f"Head ref: {review_args.head_ref}",
+            "Diff:\n" + read_text(review_args.diff_file),
+            "Spec:\n" + read_text(review_args.spec_file),
+            "Design:\n" + read_text(review_args.design_file),
+            "Tasks:\n" + read_text(review_args.tasks_file),
+            "Tests:\n" + read_text(review_args.tests_file),
+        ]
+    )
+
+
 def dispatch_reviewers(review_args: ReviewArgs, sdk_python: str) -> list[dict]:
     fake_results = load_fake_reviewer_results(review_args.fake_reviewer_results)
     if review_args.fake_reviewer_results is not None:
         return fake_results
-    raise ValueError("real_sdk_dispatch_not_implemented")
+    return run_sdk_dispatch_subprocess(review_args, sdk_python)
+
+
+def run_sdk_dispatch_subprocess(review_args: ReviewArgs, sdk_python: str) -> list[dict]:
+    payload = {
+        "cwd": str(Path.cwd()),
+        "roles": REVIEWER_ROLES,
+        "readonly_tools": READONLY_TOOLS,
+        "prompts": {role: reviewer_prompt(review_args, role) for role in REVIEWER_ROLES},
+    }
+    result = subprocess.run(
+        [sdk_python, str(Path(__file__).resolve()), "_sdk-dispatch"],
+        input=json.dumps(payload, ensure_ascii=False),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise ValueError(f"sdk_dispatch_failed: {result.stderr.strip() or result.stdout.strip()}")
+    data = json.loads(result.stdout)
+    if not isinstance(data, list):
+        raise ValueError("sdk_dispatch_invalid_output")
+    return [item for item in data if isinstance(item, dict)]
+
+
+def run_sdk_dispatch() -> int:
+    import asyncio
+    from claude_agent_sdk import ClaudeAgentOptions, query
+
+    async def collect() -> list[dict]:
+        payload = json.loads(sys.stdin.read())
+
+        async def run_one(role: str) -> dict:
+            options = ClaudeAgentOptions(
+                cwd=payload["cwd"],
+                allowed_tools=payload["readonly_tools"],
+            )
+            result_text = ""
+            async for message in query(prompt=payload["prompts"][role], options=options):
+                if hasattr(message, "result"):
+                    result_text = message.result
+            try:
+                parsed = json.loads(result_text)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+            return {
+                "role": role,
+                "status": "failed",
+                "findings": [
+                    {
+                        "severity": "CRITICAL",
+                        "location": role,
+                        "summary": "Reviewer returned invalid JSON",
+                        "evidence": result_text,
+                        "recommendation": "Rerun review after checking reviewer prompt",
+                    }
+                ],
+            }
+
+        return await asyncio.gather(*(run_one(role) for role in payload["roles"]))
+
+    print(json.dumps(asyncio.run(collect()), ensure_ascii=False))
+    return 0
 
 
 def short_ref(ref: str) -> str:
@@ -366,6 +452,8 @@ def run_review(args: argparse.Namespace) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parsed = build_parser().parse_args(argv)
+    if parsed.command == "_sdk-dispatch":
+        return run_sdk_dispatch()
     if parsed.command == "run":
         return run_review(parsed)
     return 2

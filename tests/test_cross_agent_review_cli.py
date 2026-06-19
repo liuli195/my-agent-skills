@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,16 @@ SCRIPT = (
     / "scripts"
     / "cross_agent_review.py"
 )
+
+
+def load_script_module():
+    spec = importlib.util.spec_from_file_location("cross_agent_review", SCRIPT)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def run(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -223,6 +234,54 @@ def test_fake_reviewer_results_bypass_real_sdk_for_tests(tmp_path: Path) -> None
     result = run(*review_args(tmp_path / "repo", head, tmp_path / "out"), cwd=tmp_path / "repo")
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_prompt_contains_review_context(tmp_path: Path) -> None:
+    head = init_repo(tmp_path / "repo")
+    args = review_args(tmp_path / "repo", head, tmp_path / "out")
+    result = run(*args, "--fake-reviewer-results", "[]", cwd=tmp_path / "repo")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    data = json.loads((tmp_path / "out" / "review-results.json").read_text(encoding="utf-8"))
+    assert data["readonly_tools"]
+
+
+def test_reviewer_prompt_includes_all_review_inputs(tmp_path: Path) -> None:
+    module = load_script_module()
+    project = tmp_path / "repo"
+    head = init_repo(project)
+    diff_file = write_file(project / "diff.patch", "diff --git a/app.txt b/app.txt\n")
+    spec_file = write_file(project / "spec.md", "Spec body\n")
+    design_file = write_file(project / "design.md", "Design body\n")
+    tasks_file = write_file(project / "tasks.md", "Tasks body\n")
+    tests_file = write_file(project / "tests.txt", "Tests body\n")
+    review = module.ReviewArgs(
+        change="demo-change",
+        base_ref=head,
+        head_ref=head,
+        diff_file=diff_file,
+        spec_file=spec_file,
+        design_file=design_file,
+        tasks_file=tasks_file,
+        tests_file=tests_file,
+        output_dir=tmp_path / "out",
+        sdk_python=None,
+        fake_reviewer_results=None,
+        disable_risk_review=None,
+    )
+
+    prompt = module.reviewer_prompt(review, "spec-alignment")
+
+    assert "Role: spec-alignment" in prompt
+    assert "Return only JSON with role, status, and findings." in prompt
+    assert "Change: demo-change" in prompt
+    assert f"Base ref: {head}" in prompt
+    assert f"Head ref: {head}" in prompt
+    assert "Diff:\ndiff --git a/app.txt b/app.txt\n" in prompt
+    assert "Spec:\nSpec body\n" in prompt
+    assert "Design:\nDesign body\n" in prompt
+    assert "Tasks:\nTasks body\n" in prompt
+    assert "Tests:\nTests body\n" in prompt
 
 
 def test_fake_reviewer_results_reject_non_dict_items(tmp_path: Path) -> None:
