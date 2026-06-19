@@ -728,16 +728,123 @@ def artifact_path(project: Path, user_home: Path | None, scope: str, template: s
     return project / path
 
 
-def artifact_exists(project: Path, profile_id: str, instance_id: str, state_version: int, artifact_id: str, user_home: Path | None = None, scope: str = "project") -> bool:
+def resolved_artifact_path(project: Path, profile_id: str, instance_id: str, state_version: int, artifact_id: str, user_home: Path | None = None, scope: str = "project") -> Path | None:
     artifacts = read_yaml(profile_dir(project, profile_id, user_home, scope) / "artifacts.yaml").get("artifacts", [])
     for artifact in artifacts if isinstance(artifacts, list) else []:
         if not isinstance(artifact, dict) or artifact.get("id") != artifact_id:
             continue
         template = artifact.get("path")
         if not isinstance(template, str):
-            return False
-        return artifact_path(project, user_home, scope, template, profile_id, instance_id, state_version).exists()
-    return False
+            return None
+        return artifact_path(project, user_home, scope, template, profile_id, instance_id, state_version)
+    return None
+
+
+def artifact_exists(project: Path, profile_id: str, instance_id: str, state_version: int, artifact_id: str, user_home: Path | None = None, scope: str = "project") -> bool:
+    path = resolved_artifact_path(project, profile_id, instance_id, state_version, artifact_id, user_home, scope)
+    return path is not None and path.exists()
+
+
+MISSING_JSON_VALUE = object()
+JSON_ARTIFACT_PREDICATES = {"exists", "equals", "not_equals", "number_lte", "number_gte", "array_none", "array_all"}
+JSON_ARTIFACT_VALUE_PREDICATES = {"equals", "not_equals", "number_lte", "number_gte"}
+JSON_ARTIFACT_ARRAY_PREDICATES = {"array_none", "array_all"}
+
+
+def load_json_artifact(path: Path) -> tuple[bool, Any]:
+    try:
+        return True, json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False, None
+
+
+def value_at_point_path(data: Any, field: str) -> tuple[bool, Any]:
+    current = data
+    for part in field.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return False, MISSING_JSON_VALUE
+        current = current[part]
+    return True, current
+
+
+def json_expected_value(check: dict[str, Any]) -> Any:
+    if "value" in check:
+        return check["value"]
+    return MISSING_JSON_VALUE
+
+
+def valid_json_predicate_config(check: dict[str, Any]) -> bool:
+    if "expected" in check:
+        return False
+    predicate = check.get("predicate")
+    return predicate not in JSON_ARTIFACT_VALUE_PREDICATES or "value" in check
+
+
+def json_check_detail(artifact_id: Any, field: Any, predicate: Any, expected: Any = MISSING_JSON_VALUE, actual: Any = MISSING_JSON_VALUE) -> dict[str, Any]:
+    detail = {"artifact": artifact_id}
+    if isinstance(field, str):
+        detail["field"] = field
+    if isinstance(predicate, str):
+        detail["predicate"] = predicate
+    if expected is not MISSING_JSON_VALUE:
+        detail["expected"] = expected
+    if actual is not MISSING_JSON_VALUE:
+        detail["actual"] = actual
+    return detail
+
+
+def json_predicate_failure(
+    check: dict[str, Any],
+    artifact_id: Any,
+    field: Any,
+    predicate: Any,
+    expected: Any = MISSING_JSON_VALUE,
+    actual: Any = MISSING_JSON_VALUE,
+    failure_reason: str = "json_artifact_check_failed",
+) -> dict[str, Any]:
+    return {
+        "failure_reason": failure_reason,
+        "json_check": json_check_detail(artifact_id, field, predicate, expected, actual),
+    }
+
+
+def evaluate_json_predicate(data: Any, check: dict[str, Any], artifact_id: Any) -> dict[str, Any] | None:
+    field = check.get("field")
+    predicate = check.get("predicate")
+    expected = json_expected_value(check)
+    exists, actual = value_at_point_path(data, field) if isinstance(field, str) else (False, MISSING_JSON_VALUE)
+
+    if predicate not in JSON_ARTIFACT_PREDICATES:
+        return json_predicate_failure(check, artifact_id, field, predicate, expected, actual, "unsupported_json_artifact_predicate")
+    if not valid_json_predicate_config(check):
+        return json_predicate_failure(check, artifact_id, field, predicate, expected, actual, "invalid_json_artifact_check")
+    if predicate == "exists":
+        return None if exists else json_predicate_failure(check, artifact_id, field, predicate)
+    if not exists:
+        return json_predicate_failure(check, artifact_id, field, predicate, expected)
+    if predicate == "equals":
+        return None if actual == expected else json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
+    if predicate == "not_equals":
+        return None if actual != expected else json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
+    if predicate in {"number_lte", "number_gte"}:
+        if isinstance(actual, bool) or isinstance(expected, bool) or not isinstance(actual, (int, float)) or not isinstance(expected, (int, float)):
+            return json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
+        if predicate == "number_lte":
+            return None if actual <= expected else json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
+        return None if actual >= expected else json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
+    if predicate in JSON_ARTIFACT_ARRAY_PREDICATES:
+        where = check.get("where")
+        if not isinstance(actual, list) or not isinstance(where, dict):
+            return json_predicate_failure(check, artifact_id, field, predicate, actual=actual)
+        if where.get("predicate") not in JSON_ARTIFACT_PREDICATES:
+            return json_predicate_failure(check, artifact_id, field, where.get("predicate"), json_expected_value(where), actual, "unsupported_json_artifact_predicate")
+        if not valid_json_predicate_config(where):
+            return json_predicate_failure(check, artifact_id, field, where.get("predicate"), json_expected_value(where), actual, "invalid_json_artifact_check")
+        matches = [evaluate_json_predicate(item, {**where, "artifact": artifact_id}, artifact_id) is None for item in actual]
+        if predicate == "array_none":
+            return None if not any(matches) else json_predicate_failure(check, artifact_id, field, predicate, "no matching elements", actual)
+        return None if all(matches) else json_predicate_failure(check, artifact_id, field, predicate, "all elements match", actual)
+    return json_predicate_failure(check, artifact_id, field, predicate, expected, actual, "unsupported_json_artifact_predicate")
 
 
 def guard_point_by_id(guard_points: dict[str, Any], guard_point_id: str) -> dict[str, Any] | None:
@@ -825,6 +932,7 @@ def guard_point_failure(
     missing_artifacts: list[str] | None = None,
     required_conditions: list[str] | None = None,
     profile_allow_override: bool = False,
+    json_check: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "reason": "guard_failed",
@@ -834,6 +942,7 @@ def guard_point_failure(
         "fix_hint": fix_hint,
         "missing_artifacts": missing_artifacts or [],
         "required_conditions": required_conditions or [],
+        **({"json_check": json_check} if json_check is not None else {}),
         "override_allowed": guard_point_override_allowed(guard_point, profile_allow_override),
         "override_record_path": str(override_record_path(project, profile_id, instance_id, guard_point_id, user_home, scope)),
     }
@@ -892,6 +1001,99 @@ def evaluate_guard_point(
             continue
         check_type = check.get("type")
         check_id = str(check.get("id") or "")
+        if check_type == "json_artifact":
+            artifact_id = check.get("artifact") or check.get("artifact_id")
+            field = check.get("field")
+            predicate = check.get("predicate")
+            expected = json_expected_value(check)
+            json_check = json_check_detail(artifact_id, field, predicate, expected)
+            path = resolved_artifact_path(project, profile_id, instance_id, state_version, artifact_id, user_home, scope) if isinstance(artifact_id, str) else None
+            if path is None:
+                missing_artifacts = [artifact_id] if isinstance(artifact_id, str) else []
+                return guard_point_failure(
+                    project,
+                    profile_id,
+                    instance_id,
+                    guard_point_id,
+                    guard_point,
+                    str(check.get("failure_reason") or "missing_required_artifacts"),
+                    check.get("fix_hint"),
+                    user_home,
+                    scope,
+                    check_id=check_id,
+                    missing_artifacts=missing_artifacts,
+                    required_conditions=[f"artifact_exists:{artifact_id}"] if isinstance(artifact_id, str) else ["artifact_exists:<missing>"],
+                    profile_allow_override=profile_allow_override,
+                    json_check=json_check,
+                )
+            if not path.resolve().is_relative_to((runtime_root(project, user_home, scope) / "artifacts").resolve()):
+                return guard_point_failure(
+                    project,
+                    profile_id,
+                    instance_id,
+                    guard_point_id,
+                    guard_point,
+                    "json_artifact_path_outside_runtime_artifacts",
+                    check.get("fix_hint"),
+                    user_home,
+                    scope,
+                    check_id=check_id,
+                    required_conditions=[f"json_artifact_under_runtime_artifacts:{artifact_id}"],
+                    profile_allow_override=profile_allow_override,
+                    json_check=json_check,
+                )
+            if not path.exists():
+                return guard_point_failure(
+                    project,
+                    profile_id,
+                    instance_id,
+                    guard_point_id,
+                    guard_point,
+                    str(check.get("failure_reason") or "missing_required_artifacts"),
+                    check.get("fix_hint"),
+                    user_home,
+                    scope,
+                    check_id=check_id,
+                    missing_artifacts=[artifact_id],
+                    required_conditions=[f"artifact_exists:{artifact_id}"],
+                    profile_allow_override=profile_allow_override,
+                    json_check=json_check,
+                )
+            loaded, artifact_data = load_json_artifact(path)
+            if not loaded:
+                return guard_point_failure(
+                    project,
+                    profile_id,
+                    instance_id,
+                    guard_point_id,
+                    guard_point,
+                    "invalid_json_artifact",
+                    check.get("fix_hint"),
+                    user_home,
+                    scope,
+                    check_id=check_id,
+                    required_conditions=[f"json_artifact:{artifact_id}"],
+                    profile_allow_override=profile_allow_override,
+                    json_check=json_check,
+                )
+            failure_extra = evaluate_json_predicate(artifact_data, check, artifact_id)
+            if failure_extra is None:
+                continue
+            return guard_point_failure(
+                project,
+                profile_id,
+                instance_id,
+                guard_point_id,
+                guard_point,
+                str(check.get("failure_reason") or failure_extra["failure_reason"]),
+                check.get("fix_hint"),
+                user_home,
+                scope,
+                check_id=check_id,
+                required_conditions=[f"json_artifact:{artifact_id}:{field}:{predicate}"],
+                profile_allow_override=profile_allow_override,
+                json_check=failure_extra["json_check"],
+            )
         if check_type != "artifact_exists":
             return guard_point_failure(
                 project,
@@ -900,11 +1102,11 @@ def evaluate_guard_point(
                 guard_point_id,
                 guard_point,
                 "unsupported_guard_point_check",
-                "Runtime（运行时）当前只支持 artifact_exists 检查。",
+                "Runtime（运行时）当前支持 artifact_exists 和 json_artifact 检查。",
                 user_home,
                 scope,
                 check_id=check_id,
-                required_conditions=["supported_check:artifact_exists"],
+                required_conditions=["supported_check:artifact_exists", "supported_check:json_artifact"],
                 profile_allow_override=profile_allow_override,
             )
         artifact_id = check.get("artifact") or check.get("artifact_id")
@@ -939,6 +1141,7 @@ def guard_failure_details(profile_id: str, instance_id: str, current_state: Any,
         "current_state": current_state,
         "required_conditions": failure.get("required_conditions", []),
         "missing_artifacts": failure.get("missing_artifacts", []),
+        **({"json_check": failure["json_check"]} if "json_check" in failure else {}),
         "fix_hint": failure.get("fix_hint"),
         "override_allowed": failure.get("override_allowed", False),
         "override_record_path": failure.get("override_record_path"),

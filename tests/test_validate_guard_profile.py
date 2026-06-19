@@ -176,6 +176,258 @@ guard_points:
     assert "artifacts" in result.stdout
 
 
+def test_json_artifact_guard_point_check_accepts_defined_artifact_and_predicate(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    (profile / "guard-points.yaml").write_text(
+        """
+guard_points:
+  - id: completion_note_present
+    description: 保留状态机引用的既有守卫点。
+    checks:
+      - id: completion_note_exists
+        type: artifact_exists
+        artifact: completion_note
+  - id: review_pass_valid
+    description: 校验 JSON 产物里的 review 状态。
+    checks:
+      - id: status_pass
+        type: json_artifact
+        artifact: completion_note
+        field: status
+        predicate: equals
+        value: pass
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "通过：Guard Profile（守卫画像）校验" in result.stdout
+
+
+def test_json_artifact_guard_point_check_requires_artifact(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    (profile / "guard-points.yaml").write_text(
+        """
+guard_points:
+  - id: completion_note_present
+    description: 保留状态机引用的既有守卫点。
+    checks:
+      - id: completion_note_exists
+        type: artifact_exists
+        artifact: completion_note
+  - id: review_pass_valid
+    description: 缺少 JSON 产物引用。
+    checks:
+      - id: status_pass
+        type: json_artifact
+        field: status
+        predicate: exists
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=guard_points" in result.stdout
+    assert "field=guard_points.review_pass_valid.checks.status_pass.artifact" in result.stdout
+
+
+def test_json_artifact_guard_point_check_artifact_must_reference_defined_artifact(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    (profile / "guard-points.yaml").write_text(
+        """
+guard_points:
+  - id: completion_note_present
+    description: 保留状态机引用的既有守卫点。
+    checks:
+      - id: completion_note_exists
+        type: artifact_exists
+        artifact: completion_note
+  - id: review_pass_valid
+    description: 引用缺失 JSON 产物。
+    checks:
+      - id: status_pass
+        type: json_artifact
+        artifact: missing_artifact
+        field: status
+        predicate: exists
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=guard_points" in result.stdout
+    assert "field=guard_points.review_pass_valid.checks.status_pass.artifact" in result.stdout
+    assert "引用了 `missing_artifact`" in result.stdout
+    assert "artifacts" in result.stdout
+
+
+def test_json_artifact_guard_point_check_requires_string_field(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    (profile / "guard-points.yaml").write_text(
+        """
+guard_points:
+  - id: completion_note_present
+    description: 保留状态机引用的既有守卫点。
+    checks:
+      - id: completion_note_exists
+        type: artifact_exists
+        artifact: completion_note
+  - id: review_pass_valid
+    description: JSON field 必须是字符串。
+    checks:
+      - id: status_pass
+        type: json_artifact
+        artifact: completion_note
+        field:
+          - not
+          - a
+          - path
+        predicate: exists
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=guard_points" in result.stdout
+    assert "field=guard_points.review_pass_valid.checks.status_pass.field" in result.stdout
+
+
+def test_json_artifact_guard_point_check_requires_predicate(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    (profile / "guard-points.yaml").write_text(
+        """
+guard_points:
+  - id: completion_note_present
+    description: 保留状态机引用的既有守卫点。
+    checks:
+      - id: completion_note_exists
+        type: artifact_exists
+        artifact: completion_note
+  - id: review_pass_valid
+    description: 缺少 JSON predicate。
+    checks:
+      - id: status_pass
+        type: json_artifact
+        artifact: completion_note
+        field: status
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=guard_points" in result.stdout
+    assert "field=guard_points.review_pass_valid.checks.status_pass.predicate" in result.stdout
+
+
+def test_json_artifact_guard_point_check_rejects_unknown_predicate(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    (profile / "guard-points.yaml").write_text(
+        """
+guard_points:
+  - id: completion_note_present
+    description: 保留状态机引用的既有守卫点。
+    checks:
+      - id: completion_note_exists
+        type: artifact_exists
+        artifact: completion_note
+  - id: review_pass_valid
+    description: 使用未知 JSON predicate。
+    checks:
+      - id: status_pass
+        type: json_artifact
+        artifact: completion_note
+        field: status
+        predicate: contains
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=guard_points" in result.stdout
+    assert "field=guard_points.review_pass_valid.checks.status_pass.predicate" in result.stdout
+    assert "contains" in result.stdout
+
+
+def test_json_artifact_guard_point_check_requires_value_for_comparison_predicate(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    (profile / "guard-points.yaml").write_text(
+        """
+guard_points:
+  - id: completion_note_present
+    description: 保留状态机引用的既有守卫点。
+    checks:
+      - id: completion_note_exists
+        type: artifact_exists
+        artifact: completion_note
+  - id: review_pass_valid
+    description: 比较 predicate 缺少 value。
+    checks:
+      - id: status_pass
+        type: json_artifact
+        artifact: completion_note
+        field: score
+        predicate: number_gte
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=guard_points" in result.stdout
+    assert "field=guard_points.review_pass_valid.checks.status_pass.value" in result.stdout
+
+
+def test_json_artifact_guard_point_check_requires_where_for_array_predicate(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    (profile / "guard-points.yaml").write_text(
+        """
+guard_points:
+  - id: completion_note_present
+    description: 保留状态机引用的既有守卫点。
+    checks:
+      - id: completion_note_exists
+        type: artifact_exists
+        artifact: completion_note
+  - id: review_pass_valid
+    description: array predicate 缺少 where。
+    checks:
+      - id: status_pass
+        type: json_artifact
+        artifact: completion_note
+        field: comments
+        predicate: array_none
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=guard_points" in result.stdout
+    assert "field=guard_points.review_pass_valid.checks.status_pass.where" in result.stdout
+
+
 def test_artifact_reuse_policy_must_be_allow_or_deny(tmp_path: Path) -> None:
     profile = tmp_path / "profile"
     shutil.copytree(MINIMAL_PROFILE, profile)
