@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import subprocess
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +12,13 @@ from pathlib import Path
 
 REQUIRED_FILE_ARGS = ["diff_file", "spec_file", "design_file", "tasks_file", "tests_file"]
 PLACEHOLDER_COMPAT_DISABLE_RISK_REVIEW = "__placeholder_compat__"
+REVIEWER_ROLES = [
+    "spec-alignment",
+    "implementation-correctness",
+    "tests-and-edge-cases",
+    "risk-review",
+]
+READONLY_TOOLS = ["Read", "Glob", "Grep", "Bash(git diff *)", "Bash(git show *)", "Bash(git status *)"]
 
 
 @dataclass(frozen=True)
@@ -110,6 +120,92 @@ def parse_review_args(args: argparse.Namespace) -> ReviewArgs:
     return review_args
 
 
+def candidate_sdk_pythons(explicit: Path | None) -> list[Path]:
+    candidates: list[Path] = []
+    env_value = os.environ.get("CROSS_AGENT_REVIEW_SDK_PYTHON")
+    if explicit is not None:
+        candidates.append(explicit)
+    if env_value:
+        candidates.append(Path(env_value))
+    candidates.append(Path.home() / ".claude" / "security" / "agent-sdk-venv" / "Scripts" / "python.exe")
+    candidates.append(Path.home() / ".claude" / "security" / "agent-sdk-venv" / "bin" / "python")
+    return candidates
+
+
+def python_can_import_sdk(path: Path) -> bool:
+    if not path.exists():
+        return False
+    result = subprocess.run(
+        [str(path), "-c", "import claude_agent_sdk"],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def current_python_can_import_sdk() -> bool:
+    try:
+        import claude_agent_sdk  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def resolve_sdk_python(explicit: Path | None, require_real_sdk: bool) -> str:
+    if not require_real_sdk:
+        return "fake"
+    if explicit is not None:
+        if python_can_import_sdk(explicit):
+            return str(explicit)
+        raise ValueError("sdk_unavailable: install claude-agent-sdk or pass --sdk-python")
+    if current_python_can_import_sdk():
+        return sys.executable
+    for candidate in candidate_sdk_pythons(explicit):
+        if python_can_import_sdk(candidate):
+            return str(candidate)
+    raise ValueError("sdk_unavailable: install claude-agent-sdk or pass --sdk-python")
+
+
+def load_fake_reviewer_results(raw: str | None) -> list[dict]:
+    if raw is None:
+        return []
+    data = json.loads(raw)
+    if not isinstance(data, list):
+        raise ValueError("invalid_fake_reviewer_results")
+    return [item for item in data if isinstance(item, dict)]
+
+
+def dispatch_reviewers(review_args: ReviewArgs, sdk_python: str) -> list[dict]:
+    fake_results = load_fake_reviewer_results(review_args.fake_reviewer_results)
+    if review_args.fake_reviewer_results is not None:
+        return fake_results
+    raise ValueError("real_sdk_dispatch_not_implemented")
+
+
+def short_ref(ref: str) -> str:
+    return ref[:12] if len(ref) >= 12 else ref
+
+
+def output_dir_for(review_args: ReviewArgs) -> Path:
+    if review_args.output_dir is not None:
+        return review_args.output_dir
+    return Path(".local") / "cross-agent-review" / review_args.change / short_ref(review_args.head_ref)
+
+
+def write_review_results(review_args: ReviewArgs, reviewers: list[dict]) -> None:
+    out_dir = output_dir_for(review_args)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "reviewers": reviewers,
+        "readonly_tools": READONLY_TOOLS,
+    }
+    (out_dir / "review-results.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def run_review(args: argparse.Namespace) -> int:
     if args.disable_risk_review == PLACEHOLDER_COMPAT_DISABLE_RISK_REVIEW:
         print("status: not_implemented")
@@ -127,7 +223,13 @@ def run_review(args: argparse.Namespace) -> int:
                 review_args.tests_file,
             ],
         )
-    except ValueError as exc:
+        sdk_python = resolve_sdk_python(
+            review_args.sdk_python,
+            require_real_sdk=review_args.fake_reviewer_results is None or review_args.sdk_python is not None,
+        )
+        reviewers = dispatch_reviewers(review_args, sdk_python)
+        write_review_results(review_args, reviewers)
+    except (ValueError, json.JSONDecodeError) as exc:
         print("status: failed")
         print(f"error: {exc}")
         return 1

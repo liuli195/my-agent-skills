@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -166,3 +167,56 @@ def test_head_mismatch_rejects_before_dispatch(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert "head_ref_mismatch" in result.stdout
     assert head != "0" * 40
+
+
+def test_sdk_missing_reports_clear_error(tmp_path: Path) -> None:
+    head = init_repo(tmp_path / "repo")
+    missing_python = tmp_path / "missing-python.exe"
+
+    result = run(
+        *review_args(tmp_path / "repo", head, tmp_path / "out"),
+        "--sdk-python",
+        str(missing_python),
+        cwd=tmp_path / "repo",
+    )
+
+    assert result.returncode == 1
+    assert "sdk_unavailable" in result.stdout
+
+
+def test_fake_reviewer_results_bypass_real_sdk_for_tests(tmp_path: Path) -> None:
+    head = init_repo(tmp_path / "repo")
+
+    result = run(*review_args(tmp_path / "repo", head, tmp_path / "out"), cwd=tmp_path / "repo")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_reviewer_roles_are_recorded_in_results(tmp_path: Path) -> None:
+    head = init_repo(tmp_path / "repo")
+    fake = json.dumps(
+        [
+            {"role": "spec-alignment", "status": "completed", "findings": []},
+            {"role": "implementation-correctness", "status": "completed", "findings": []},
+            {"role": "tests-and-edge-cases", "status": "completed", "findings": []},
+            {"role": "risk-review", "status": "completed", "findings": []},
+        ]
+    )
+
+    result = run(
+        *review_args(tmp_path / "repo", head, tmp_path / "out"),
+        "--fake-reviewer-results",
+        fake,
+        cwd=tmp_path / "repo",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    data = json.loads((tmp_path / "out" / "review-results.json").read_text(encoding="utf-8"))
+    assert [item["role"] for item in data["reviewers"]] == [
+        "spec-alignment",
+        "implementation-correctness",
+        "tests-and-edge-cases",
+        "risk-review",
+    ]
+    assert "Edit" not in data["readonly_tools"]
+    assert "Write" not in data["readonly_tools"]
