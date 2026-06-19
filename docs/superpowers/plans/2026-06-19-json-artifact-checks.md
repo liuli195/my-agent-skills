@@ -209,7 +209,7 @@ Expected: all tests pass.
 - Modify: `tests/test_agent_guard_runtime_router.py`
 - Modify: `plugins/agent-guard/scripts/guard_runtime/core.py`
 
-- [ ] **Step 1: Add failing runtime tests**
+- [x] **Step 1: Add failing runtime tests**
 
 Add tests after `test_state_completed_evaluates_guard_points_before_advancing` in `tests/test_agent_guard_runtime_router.py`:
 
@@ -288,7 +288,7 @@ guard_points:
     assert payload["details"]["json_check"]["actual"] == "fail"
 ```
 
-- [ ] **Step 2: Run runtime tests and confirm failure**
+- [x] **Step 2: Run runtime tests and confirm failure**
 
 Run:
 
@@ -298,7 +298,7 @@ python -m pytest tests/test_agent_guard_runtime_router.py::test_state_completed_
 
 Expected: fail with `unsupported_guard_point_check`.
 
-- [ ] **Step 3: Add JSON artifact helpers**
+- [x] **Step 3: Add JSON artifact helpers**
 
 In `plugins/agent-guard/scripts/guard_runtime/core.py`, add helpers near `artifact_exists`:
 
@@ -342,7 +342,7 @@ def artifact_exists(...):
     return path.exists() if path is not None else False
 ```
 
-- [ ] **Step 4: Add predicate evaluation**
+- [x] **Step 4: Add predicate evaluation**
 
 Add:
 
@@ -395,7 +395,7 @@ Then add array predicate support before the unsupported return:
         return None if all(matches) else json_check_failure(check, artifact_id, field, predicate, expected="all elements match", actual=value)
 ```
 
-- [ ] **Step 5: Dispatch `json_artifact` checks**
+- [x] **Step 5: Dispatch `json_artifact` checks**
 
 In `evaluate_guard_point`, branch before unsupported check handling:
 
@@ -420,7 +420,7 @@ In `evaluate_guard_point`, branch before unsupported check handling:
 
 Use the existing `missing_artifacts`, `required_conditions`, `fix_hint`, and `profile_allow_override` patterns from the `artifact_exists` branch.
 
-- [ ] **Step 6: Run focused runtime tests and confirm pass**
+- [x] **Step 6: Run focused runtime tests and confirm pass**
 
 Run:
 

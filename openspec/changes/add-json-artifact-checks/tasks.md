@@ -6,10 +6,10 @@
 
 ## 2. Runtime Evaluation
 
-- [ ] 2.1 Add runtime tests for `exists`, `equals`, `number_lte`, `number_gte`, `array_none`, and `array_all`.
-- [ ] 2.2 Add runtime tests for missing field, invalid JSON, missing artifact, and unsupported check cases.
-- [ ] 2.3 Add JSON artifact path resolution and safe JSON loading helpers in `guard_runtime/core.py`.
-- [ ] 2.4 Extend Guard Point evaluation to handle `json_artifact` without changing `artifact_exists`.
+- [x] 2.1 Add runtime tests for `exists`, `equals`, `number_lte`, `number_gte`, `array_none`, and `array_all`.
+- [x] 2.2 Add runtime tests for missing field, invalid JSON, missing artifact, and unsupported check cases.
+- [x] 2.3 Add JSON artifact path resolution and safe JSON loading helpers in `guard_runtime/core.py`.
+- [x] 2.4 Extend Guard Point evaluation to handle `json_artifact` without changing `artifact_exists`.
 
 ## 3. Audit and Regression
 
