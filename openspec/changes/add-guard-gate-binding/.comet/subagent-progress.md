@@ -2,23 +2,22 @@
 
 - change: add-guard-gate-binding
 - phase: checkoff
-- current_plan_task: Task 2: 抽象 JSON 检查能力
+- current_plan_task: Task 3: 命令上下文与命令模式匹配
 - current_openspec_tasks:
-  - 2.3 从 `json_artifact` 检查中抽象 JSON 字段读取和 predicate（谓词）评估能力。
-  - 2.4 在 `json_artifact` 检查和全局命令守卫点之间共享 predicate 校验常量。
-  - 2.5 抽象后保持现有 Session Focus permission 行为不变。
-- implementer_agent: 019ee0f3-6ffa-7732-a73e-49b3897d6728
-- implementation_commit: d8f08bb
-- fix_commit: 1644786, 4b0c5f8
+  - 3.1 为通用命令模式匹配和 named capture（命名捕获）提取添加测试。
+  - 3.2 添加 Comet 风格验证边界命令的配置 fixture（夹具），证明能力不是硬编码 Comet。
+  - 3.3 添加 Windows PowerShell 包装 Git Bash 命令的测试。
+  - 3.4 实现命令文本标准化、命令模式匹配和命名捕获提取。
+- implementer_agent: 019ee106-c04e-7e41-8a9b-ca835072aeee
+- implementation_commit: 62ec5e6
 - fix_commit: pending
 - changed_files:
-  - plugins/agent-guard/scripts/guard_runtime/json_checks.py
-  - plugins/agent-guard/scripts/guard_runtime/core.py
+  - plugins/agent-guard/scripts/guard_runtime/global_command_guards.py
   - tests/test_agent_guard_runtime_router.py
-- red_evidence: new shared module test failed before json_checks.py existed; existing json_artifact/guard_point protection passed before refactor
-- green_evidence: python -m pytest tests/test_agent_guard_runtime_router.py -q passed, 36 passed in 11.12s
-- spec_review: approved by 019ee0fd-0e97-7ac2-adc2-0760536ccab6
-- quality_review: approved by 019ee103-eb2f-7f10-b370-07a237d8345a
+- red_evidence: named capture and PowerShell wrapper tests failed before implementation
+- green_evidence: python -m pytest tests/test_agent_guard_runtime_router.py -q passed, 38 passed in 10.87s
+- spec_review: approved by 019ee109-e92f-76f3-b273-14f247c6b3e4
+- quality_review: approved by 019ee10b-7227-7cb1-8cf2-df48cd905a47
 - unresolved_feedback:
   - none
-- review_fix_round: 2
+- review_fix_round: 0

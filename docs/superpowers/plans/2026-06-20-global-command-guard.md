@@ -417,7 +417,7 @@ git commit -m "refactor: 抽象 JSON 守卫检查"
 - Create: `plugins/agent-guard/scripts/guard_runtime/global_command_guards.py`
 - Modify: `tests/test_agent_guard_runtime_router.py`
 
-- [ ] **Step 1: 写失败测试：命令模式提取命名捕获**
+- [x] **Step 1: 写失败测试：命令模式提取命名捕获**
 
 在 `tests/test_agent_guard_runtime_router.py` 添加：
 
@@ -447,7 +447,7 @@ python -m pytest tests/test_agent_guard_runtime_router.py::test_global_command_p
 
 Expected: FAIL because module/function does not exist.
 
-- [ ] **Step 2: 创建命令匹配基础能力**
+- [x] **Step 2: 创建命令匹配基础能力**
 
 在 `plugins/agent-guard/scripts/guard_runtime/global_command_guards.py` 添加：
 
@@ -485,7 +485,7 @@ def match_command_pattern(command: str, pattern: str) -> dict[str, str] | None:
     return {key: value for key, value in matched.groupdict().items() if value is not None}
 ```
 
-- [ ] **Step 3: 写失败测试：PowerShell 包装 Git Bash 能匹配内层命令**
+- [x] **Step 3: 写失败测试：PowerShell 包装 Git Bash 能匹配内层命令**
 
 在 `tests/test_agent_guard_runtime_router.py` 添加：
 
@@ -506,7 +506,7 @@ def test_global_command_pattern_matches_powershell_wrapped_git_bash(tmp_path: Pa
     assert "comet-guard.sh add-guard-gate-binding verify --apply" in normalized
 ```
 
-- [ ] **Step 4: 实现命令文本标准化**
+- [x] **Step 4: 实现命令文本标准化**
 
 在 `global_command_guards.py` 添加：
 
@@ -523,7 +523,7 @@ def normalized_command_texts(command: str) -> list[str]:
     return list(dict.fromkeys(texts))
 ```
 
-- [ ] **Step 5: 运行命令匹配测试**
+- [x] **Step 5: 运行命令匹配测试**
 
 Run:
 
@@ -533,7 +533,7 @@ python -m pytest tests/test_agent_guard_runtime_router.py::test_global_command_p
 
 Expected: PASS.
 
-- [ ] **Step 6: 提交 Task 3**
+- [x] **Step 6: 提交 Task 3**
 
 ```powershell
 git add plugins/agent-guard/scripts/guard_runtime/global_command_guards.py `

@@ -18,10 +18,10 @@
 
 ## 3. 命令解析与上下文
 
-- [ ] 3.1 为通用命令模式匹配和 named capture（命名捕获）提取添加测试。
-- [ ] 3.2 添加 Comet 风格验证边界命令的配置 fixture（夹具），证明能力不是硬编码 Comet。
-- [ ] 3.3 添加 Windows PowerShell 包装 Git Bash 命令的测试。
-- [ ] 3.4 实现命令文本标准化、命令模式匹配和命名捕获提取。
+- [x] 3.1 为通用命令模式匹配和 named capture（命名捕获）提取添加测试。
+- [x] 3.2 添加 Comet 风格验证边界命令的配置 fixture（夹具），证明能力不是硬编码 Comet。
+- [x] 3.3 添加 Windows PowerShell 包装 Git Bash 命令的测试。
+- [x] 3.4 实现命令文本标准化、命令模式匹配和命名捕获提取。
 - [ ] 3.5 提供上下文值来源，例如捕获变量和当前 `git_head`。
 - [ ] 3.6 提供内置上下文值：`source_scope`、`profile_id`、`guard_id`、`effective_guard_id`、`runtime_scope`。
 
