@@ -333,6 +333,7 @@ def write_outputs(review_args: ReviewArgs, summary: dict) -> int:
             },
         )
         return 0
+    pass_path.unlink(missing_ok=True)
     return 1
 
 

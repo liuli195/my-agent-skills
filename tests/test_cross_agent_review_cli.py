@@ -349,6 +349,45 @@ def test_blocking_findings_do_not_generate_pass_marker(tmp_path: Path) -> None:
     assert not (tmp_path / "out" / "review-pass.json").exists()
 
 
+def test_blocking_findings_remove_stale_pass_marker_from_reused_output_dir(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    output_dir = tmp_path / "out"
+    head = init_repo(project)
+
+    clean_result = run(*review_args(project, head, output_dir), cwd=project)
+
+    assert clean_result.returncode == 0, clean_result.stdout + clean_result.stderr
+    assert (output_dir / "review-pass.json").is_file()
+
+    blocking_fake = json.dumps(
+        [
+            {
+                "role": "implementation-correctness",
+                "status": "completed",
+                "findings": [
+                    {
+                        "severity": "IMPORTANT",
+                        "location": "app.txt:1",
+                        "summary": "Wrong behavior",
+                        "evidence": "Evidence",
+                        "recommendation": "Fix behavior",
+                    }
+                ],
+            }
+        ]
+    )
+
+    blocking_result = run(
+        *review_args(project, head, output_dir),
+        "--fake-reviewer-results",
+        blocking_fake,
+        cwd=project,
+    )
+
+    assert blocking_result.returncode == 1
+    assert not (output_dir / "review-pass.json").exists()
+
+
 def test_report_hash_matches_report(tmp_path: Path) -> None:
     head = init_repo(tmp_path / "repo")
     result = run(*review_args(tmp_path / "repo", head, tmp_path / "out"), cwd=tmp_path / "repo")
