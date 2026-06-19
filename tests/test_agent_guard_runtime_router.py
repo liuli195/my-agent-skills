@@ -502,7 +502,7 @@ guard_points:
         artifact: completion_note
         field: status
         predicate: equals
-        expected: done
+        value: done
         failure_reason: completion note 状态不正确。
         fix_hint: 更新 completion note。
 """.lstrip(),
@@ -542,7 +542,7 @@ guard_points:
         artifact: completion_note
         field: security_review.tool
         predicate: equals
-        expected: codex-security
+        value: codex-security
         failure_reason: security review 工具不正确。
         fix_hint: 更新 security review artifact。
 """.lstrip(),
@@ -608,6 +608,106 @@ def test_state_completed_supports_json_exists_and_value_predicates(tmp_path: Pat
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert body(result)["status"] == "allow"
+
+
+def test_state_completed_does_not_accept_expected_config_key_for_json_value(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = write_profile(project)
+    write_json_guard_point(
+        profile,
+        """
+      - id: review_status_passes
+        type: json_artifact
+        artifact: completion_note
+        field: review.status
+        predicate: equals
+        expected: pass
+""",
+    )
+    session_start(project, user_home)
+    activated = activate(project, user_home)
+    instance_id = activated["instance_id"]
+    write_completion_note_json(project, instance_id, {"review": {"status": "pass"}})
+    read_brief(project, user_home)
+
+    result = run_cli(["state-completed", "--project", str(project), "--user-home", str(user_home), "--source", "codex", "--session-id", "session-1"])
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["reason"] == "guard_failed"
+    assert payload["details"]["failure_reason"] == "json_artifact_check_failed"
+    assert payload["details"]["json_check"] == {
+        "artifact": "completion_note",
+        "field": "review.status",
+        "predicate": "equals",
+        "actual": "pass",
+    }
+
+
+def test_state_completed_supports_json_not_equals_predicate(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = write_profile(project)
+    write_json_guard_point(
+        profile,
+        """
+      - id: review_status_not_blocked
+        type: json_artifact
+        artifact: completion_note
+        field: review.status
+        predicate: not_equals
+        value: blocked
+""",
+    )
+    session_start(project, user_home)
+    activated = activate(project, user_home)
+    instance_id = activated["instance_id"]
+    write_completion_note_json(project, instance_id, {"review": {"status": "pass"}})
+    read_brief(project, user_home)
+
+    result = run_cli(["state-completed", "--project", str(project), "--user-home", str(user_home), "--source", "codex", "--session-id", "session-1"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert body(result)["status"] == "allow"
+
+
+def test_state_completed_blocks_json_not_equals_predicate_failure(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = write_profile(project)
+    write_json_guard_point(
+        profile,
+        """
+      - id: review_status_not_blocked
+        type: json_artifact
+        artifact: completion_note
+        field: review.status
+        predicate: not_equals
+        value: blocked
+""",
+    )
+    session_start(project, user_home)
+    activated = activate(project, user_home)
+    instance_id = activated["instance_id"]
+    write_completion_note_json(project, instance_id, {"review": {"status": "blocked"}})
+    read_brief(project, user_home)
+
+    result = run_cli(["state-completed", "--project", str(project), "--user-home", str(user_home), "--source", "codex", "--session-id", "session-1"])
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["reason"] == "guard_failed"
+    assert payload["details"]["json_check"] == {
+        "artifact": "completion_note",
+        "field": "review.status",
+        "predicate": "not_equals",
+        "expected": "blocked",
+        "actual": "blocked",
+    }
 
 
 def test_state_completed_blocks_json_missing_field(tmp_path: Path) -> None:
@@ -891,6 +991,55 @@ def test_state_completed_blocks_invalid_json_artifact(tmp_path: Path) -> None:
     assert audit["detail"]["details"]["json_check"] == payload["details"]["json_check"]
 
 
+def test_state_completed_blocks_json_artifact_absolute_path_outside_runtime_artifacts_without_leak(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = write_profile(project)
+    outside = tmp_path / "outside-secret.json"
+    secret = "outside-json-secret-should-not-leak"
+    outside.write_text(json.dumps({"secret": secret}, ensure_ascii=False), encoding="utf-8")
+    profile.joinpath("artifacts.yaml").write_text(
+        f"""
+artifacts:
+  - id: completion_note
+    type: note
+    path: '{outside.as_posix()}'
+""".lstrip(),
+        encoding="utf-8",
+    )
+    write_json_guard_point(
+        profile,
+        """
+      - id: secret_matches
+        type: json_artifact
+        artifact: completion_note
+        field: secret
+        predicate: equals
+        value: allowed
+""",
+    )
+    session_start(project, user_home)
+    activate(project, user_home)
+    read_brief(project, user_home)
+
+    result = run_cli(["state-completed", "--project", str(project), "--user-home", str(user_home), "--source", "codex", "--session-id", "session-1"])
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert secret not in result.stdout
+    payload = body(result)
+    assert payload["reason"] == "guard_failed"
+    assert payload["details"]["failure_reason"] == "json_artifact_path_outside_runtime_artifacts"
+    assert payload["details"]["json_check"] == {
+        "artifact": "completion_note",
+        "field": "secret",
+        "predicate": "equals",
+        "expected": "allowed",
+    }
+    audit_text = Path(payload["audit_path"]).read_text(encoding="utf-8")
+    assert secret not in audit_text
+
+
 def test_state_completed_blocks_missing_json_artifact(tmp_path: Path) -> None:
     project = tmp_path / "project"
     user_home = tmp_path / "user-home"
@@ -962,6 +1111,39 @@ def test_state_completed_blocks_unsupported_json_artifact_predicate(tmp_path: Pa
         "expected": "pass",
         "actual": "pass",
     }
+
+
+def test_state_completed_reports_supported_guard_point_check_types(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = write_profile(project)
+    profile.joinpath("guard-points.yaml").write_text(
+        """
+guard_points:
+  - id: completion_note_present
+    description: 守卫点包含不支持的检查类型。
+    checks:
+      - id: unsupported
+        type: shell_command
+        artifact: completion_note
+""".lstrip(),
+        encoding="utf-8",
+    )
+    session_start(project, user_home)
+    activated = activate(project, user_home)
+    instance_id = activated["instance_id"]
+    write_completion_note(project, instance_id)
+    read_brief(project, user_home)
+
+    result = run_cli(["state-completed", "--project", str(project), "--user-home", str(user_home), "--source", "codex", "--session-id", "session-1"])
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["reason"] == "guard_failed"
+    assert payload["details"]["failure_reason"] == "unsupported_guard_point_check"
+    assert payload["details"]["fix_hint"] == "Runtime（运行时）当前支持 artifact_exists 和 json_artifact 检查。"
+    assert payload["details"]["required_conditions"] == ["supported_check:artifact_exists", "supported_check:json_artifact"]
 
 
 def test_state_completed_allows_guard_point_failure_with_valid_override(tmp_path: Path) -> None:

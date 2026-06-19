@@ -768,8 +768,6 @@ def value_at_point_path(data: Any, field: str) -> tuple[bool, Any]:
 def json_expected_value(check: dict[str, Any]) -> Any:
     if "value" in check:
         return check["value"]
-    if "expected" in check:
-        return check["expected"]
     return MISSING_JSON_VALUE
 
 
@@ -997,7 +995,7 @@ def evaluate_guard_point(
             expected = json_expected_value(check)
             json_check = json_check_detail(artifact_id, field, predicate, expected)
             path = resolved_artifact_path(project, profile_id, instance_id, state_version, artifact_id, user_home, scope) if isinstance(artifact_id, str) else None
-            if path is None or not path.exists():
+            if path is None:
                 missing_artifacts = [artifact_id] if isinstance(artifact_id, str) else []
                 return guard_point_failure(
                     project,
@@ -1012,6 +1010,39 @@ def evaluate_guard_point(
                     check_id=check_id,
                     missing_artifacts=missing_artifacts,
                     required_conditions=[f"artifact_exists:{artifact_id}"] if isinstance(artifact_id, str) else ["artifact_exists:<missing>"],
+                    profile_allow_override=profile_allow_override,
+                    json_check=json_check,
+                )
+            if not path.resolve().is_relative_to((runtime_root(project, user_home, scope) / "artifacts").resolve()):
+                return guard_point_failure(
+                    project,
+                    profile_id,
+                    instance_id,
+                    guard_point_id,
+                    guard_point,
+                    "json_artifact_path_outside_runtime_artifacts",
+                    check.get("fix_hint"),
+                    user_home,
+                    scope,
+                    check_id=check_id,
+                    required_conditions=[f"json_artifact_under_runtime_artifacts:{artifact_id}"],
+                    profile_allow_override=profile_allow_override,
+                    json_check=json_check,
+                )
+            if not path.exists():
+                return guard_point_failure(
+                    project,
+                    profile_id,
+                    instance_id,
+                    guard_point_id,
+                    guard_point,
+                    str(check.get("failure_reason") or "missing_required_artifacts"),
+                    check.get("fix_hint"),
+                    user_home,
+                    scope,
+                    check_id=check_id,
+                    missing_artifacts=[artifact_id],
+                    required_conditions=[f"artifact_exists:{artifact_id}"],
                     profile_allow_override=profile_allow_override,
                     json_check=json_check,
                 )
@@ -1058,11 +1089,11 @@ def evaluate_guard_point(
                 guard_point_id,
                 guard_point,
                 "unsupported_guard_point_check",
-                "Runtime（运行时）当前只支持 artifact_exists 检查。",
+                "Runtime（运行时）当前支持 artifact_exists 和 json_artifact 检查。",
                 user_home,
                 scope,
                 check_id=check_id,
-                required_conditions=["supported_check:artifact_exists"],
+                required_conditions=["supported_check:artifact_exists", "supported_check:json_artifact"],
                 profile_allow_override=profile_allow_override,
             )
         artifact_id = check.get("artifact") or check.get("artifact_id")
