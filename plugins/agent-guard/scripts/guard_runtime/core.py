@@ -745,31 +745,95 @@ def artifact_exists(project: Path, profile_id: str, instance_id: str, state_vers
     return path is not None and path.exists()
 
 
+MISSING_JSON_VALUE = object()
+JSON_ARTIFACT_PREDICATES = {"exists", "equals", "not_equals", "number_lte", "number_gte", "array_none", "array_all"}
+
+
+def load_json_artifact(path: Path) -> tuple[bool, Any]:
+    try:
+        return True, json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False, None
+
+
 def value_at_point_path(data: Any, field: str) -> tuple[bool, Any]:
     current = data
     for part in field.split("."):
         if not isinstance(current, dict) or part not in current:
-            return False, None
+            return False, MISSING_JSON_VALUE
         current = current[part]
     return True, current
 
 
-def evaluate_json_predicate(exists: bool, actual: Any, predicate: str, expected: Any) -> bool:
+def json_expected_value(check: dict[str, Any]) -> Any:
+    if "value" in check:
+        return check["value"]
+    if "expected" in check:
+        return check["expected"]
+    return MISSING_JSON_VALUE
+
+
+def json_check_detail(artifact_id: Any, field: Any, predicate: Any, expected: Any = MISSING_JSON_VALUE, actual: Any = MISSING_JSON_VALUE) -> dict[str, Any]:
+    detail = {"artifact": artifact_id}
+    if isinstance(field, str):
+        detail["field"] = field
+    if isinstance(predicate, str):
+        detail["predicate"] = predicate
+    if expected is not MISSING_JSON_VALUE:
+        detail["expected"] = expected
+    if actual is not MISSING_JSON_VALUE:
+        detail["actual"] = actual
+    return detail
+
+
+def json_predicate_failure(
+    check: dict[str, Any],
+    artifact_id: Any,
+    field: Any,
+    predicate: Any,
+    expected: Any = MISSING_JSON_VALUE,
+    actual: Any = MISSING_JSON_VALUE,
+    failure_reason: str = "json_artifact_check_failed",
+) -> dict[str, Any]:
+    return {
+        "failure_reason": failure_reason,
+        "json_check": json_check_detail(artifact_id, field, predicate, expected, actual),
+    }
+
+
+def evaluate_json_predicate(data: Any, check: dict[str, Any], artifact_id: Any) -> dict[str, Any] | None:
+    field = check.get("field")
+    predicate = check.get("predicate")
+    expected = json_expected_value(check)
+    exists, actual = value_at_point_path(data, field) if isinstance(field, str) else (False, MISSING_JSON_VALUE)
+
+    if predicate not in JSON_ARTIFACT_PREDICATES:
+        return json_predicate_failure(check, artifact_id, field, predicate, expected, actual, "unsupported_json_artifact_predicate")
     if predicate == "exists":
-        return exists
+        return None if exists else json_predicate_failure(check, artifact_id, field, predicate)
     if not exists:
-        return False
+        return json_predicate_failure(check, artifact_id, field, predicate, expected)
     if predicate == "equals":
-        return actual == expected
+        return None if actual == expected else json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
     if predicate == "not_equals":
-        return actual != expected
+        return None if actual != expected else json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
     if predicate in {"number_lte", "number_gte"}:
         if isinstance(actual, bool) or isinstance(expected, bool) or not isinstance(actual, (int, float)) or not isinstance(expected, (int, float)):
-            return False
+            return json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
         if predicate == "number_lte":
-            return actual <= expected
-        return actual >= expected
-    return False
+            return None if actual <= expected else json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
+        return None if actual >= expected else json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
+    if predicate in {"array_none", "array_all"}:
+        where = check.get("where")
+        if not isinstance(actual, list) or not isinstance(where, dict):
+            return json_predicate_failure(check, artifact_id, field, predicate, actual=actual)
+        if where.get("predicate") not in JSON_ARTIFACT_PREDICATES:
+            return json_predicate_failure(check, artifact_id, field, where.get("predicate"), json_expected_value(where), actual, "unsupported_json_artifact_predicate")
+        matches = [evaluate_json_predicate(item, {**where, "artifact": artifact_id}, artifact_id) is None for item in actual]
+        if predicate == "array_none":
+            return None if not any(matches) else json_predicate_failure(check, artifact_id, field, predicate, "no matching elements", actual)
+        return None if all(matches) else json_predicate_failure(check, artifact_id, field, predicate, "all elements match", actual)
+    return json_predicate_failure(check, artifact_id, field, predicate, expected, actual, "unsupported_json_artifact_predicate")
 
 
 def guard_point_by_id(guard_points: dict[str, Any], guard_point_id: str) -> dict[str, Any] | None:
@@ -929,15 +993,9 @@ def evaluate_guard_point(
         if check_type == "json_artifact":
             artifact_id = check.get("artifact") or check.get("artifact_id")
             field = check.get("field")
-            predicate = str(check.get("predicate") or "exists")
-            expected = check.get("expected")
-            json_check = {
-                "artifact": artifact_id,
-                "field": field,
-                "predicate": predicate,
-                "expected": expected,
-                "actual": None,
-            }
+            predicate = check.get("predicate")
+            expected = json_expected_value(check)
+            json_check = json_check_detail(artifact_id, field, predicate, expected)
             path = resolved_artifact_path(project, profile_id, instance_id, state_version, artifact_id, user_home, scope) if isinstance(artifact_id, str) else None
             if path is None or not path.exists():
                 missing_artifacts = [artifact_id] if isinstance(artifact_id, str) else []
@@ -957,9 +1015,8 @@ def evaluate_guard_point(
                     profile_allow_override=profile_allow_override,
                     json_check=json_check,
                 )
-            try:
-                artifact_data = read_json(path)
-            except (json.JSONDecodeError, OSError, ValueError):
+            loaded, artifact_data = load_json_artifact(path)
+            if not loaded:
                 return guard_point_failure(
                     project,
                     profile_id,
@@ -975,9 +1032,8 @@ def evaluate_guard_point(
                     profile_allow_override=profile_allow_override,
                     json_check=json_check,
                 )
-            exists, actual = value_at_point_path(artifact_data, field) if isinstance(field, str) else (False, None)
-            json_check["actual"] = actual
-            if evaluate_json_predicate(exists, actual, predicate, expected):
+            failure_extra = evaluate_json_predicate(artifact_data, check, artifact_id)
+            if failure_extra is None:
                 continue
             return guard_point_failure(
                 project,
@@ -985,14 +1041,14 @@ def evaluate_guard_point(
                 instance_id,
                 guard_point_id,
                 guard_point,
-                str(check.get("failure_reason") or "json_artifact_check_failed"),
+                str(check.get("failure_reason") or failure_extra["failure_reason"]),
                 check.get("fix_hint"),
                 user_home,
                 scope,
                 check_id=check_id,
                 required_conditions=[f"json_artifact:{artifact_id}:{field}:{predicate}"],
                 profile_allow_override=profile_allow_override,
-                json_check=json_check,
+                json_check=failure_extra["json_check"],
             )
         if check_type != "artifact_exists":
             return guard_point_failure(
