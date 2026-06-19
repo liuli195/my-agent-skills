@@ -20,6 +20,8 @@ REVIEWER_ROLES = [
     "risk-review",
 ]
 READONLY_TOOLS = ["Read", "Glob", "Grep", "Bash(git diff *)", "Bash(git show *)", "Bash(git status *)"]
+DISALLOWED_TOOLS = ["Edit", "Write", "NotebookEdit", "TodoWrite", "MultiEdit", "Bash"]
+SDK_DISPATCH_TIMEOUT_SECONDS = 300
 BLOCKING_SEVERITIES = {"CRITICAL", "IMPORTANT"}
 NON_BLOCKING_SEVERITIES = {"WARNING", "SUGGESTION"}
 ALL_SEVERITIES = BLOCKING_SEVERITIES | NON_BLOCKING_SEVERITIES
@@ -223,18 +225,25 @@ def run_sdk_dispatch_subprocess(review_args: ReviewArgs, sdk_python: str) -> lis
         "readonly_tools": READONLY_TOOLS,
         "prompts": {role: reviewer_prompt(review_args, role) for role in REVIEWER_ROLES},
     }
-    result = subprocess.run(
-        [sdk_python, str(Path(__file__).resolve()), "_sdk-dispatch"],
-        input=json.dumps(payload, ensure_ascii=False),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [sdk_python, str(Path(__file__).resolve()), "_sdk-dispatch"],
+            input=json.dumps(payload, ensure_ascii=False),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=SDK_DISPATCH_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(f"sdk_dispatch_timeout: exceeded {SDK_DISPATCH_TIMEOUT_SECONDS}s") from exc
     if result.returncode != 0:
         raise ValueError(f"sdk_dispatch_failed: {result.stderr.strip() or result.stdout.strip()}")
-    data = json.loads(result.stdout)
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError("sdk_dispatch_invalid_output: stdout was not valid JSON") from exc
     if not isinstance(data, list):
-        raise ValueError("sdk_dispatch_invalid_output")
+        raise ValueError("sdk_dispatch_invalid_output: stdout JSON was not a list")
     return [item for item in data if isinstance(item, dict)]
 
 
@@ -249,6 +258,7 @@ def run_sdk_dispatch() -> int:
             options = ClaudeAgentOptions(
                 cwd=payload["cwd"],
                 allowed_tools=payload["readonly_tools"],
+                disallowed_tools=DISALLOWED_TOOLS,
             )
             result_text = ""
             async for message in query(prompt=payload["prompts"][role], options=options):

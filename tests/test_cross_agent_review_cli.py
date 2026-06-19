@@ -1,7 +1,9 @@
 import json
+import io
 import importlib.util
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 
@@ -123,6 +125,23 @@ def review_args(project: Path, head: str, output_dir: Path) -> list[str]:
         "--fake-reviewer-results",
         "[]",
     ]
+
+
+def make_review_args_for_module(module, tmp_path: Path):
+    return module.ReviewArgs(
+        change="demo",
+        base_ref="base",
+        head_ref="head",
+        diff_file=write_file(tmp_path / "diff.patch"),
+        spec_file=write_file(tmp_path / "spec.md"),
+        design_file=write_file(tmp_path / "design.md"),
+        tasks_file=write_file(tmp_path / "tasks.md"),
+        tests_file=write_file(tmp_path / "tests.txt"),
+        output_dir=tmp_path / "out",
+        sdk_python=None,
+        fake_reviewer_results=None,
+        disable_risk_review=None,
+    )
 
 
 def test_dirty_worktree_rejects_before_dispatch(tmp_path: Path) -> None:
@@ -340,6 +359,80 @@ def test_reviewer_roles_are_recorded_in_results(tmp_path: Path) -> None:
     ]
     assert "Edit" not in data["readonly_tools"]
     assert "Write" not in data["readonly_tools"]
+
+
+def test_sdk_dispatch_disallows_write_and_execution_tools(monkeypatch, capsys) -> None:
+    module = load_script_module()
+    captured_options = []
+
+    class FakeClaudeAgentOptions:
+        def __init__(self, **kwargs):
+            captured_options.append(kwargs)
+
+    async def fake_query(*, prompt, options):
+        class Message:
+            result = json.dumps({"role": "spec-alignment", "status": "completed", "findings": []})
+
+        yield Message()
+
+    fake_sdk = types.SimpleNamespace(ClaudeAgentOptions=FakeClaudeAgentOptions, query=fake_query)
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake_sdk)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(
+            json.dumps(
+                {
+                    "cwd": str(REPO_ROOT),
+                    "roles": ["spec-alignment"],
+                    "readonly_tools": ["Read", "Grep"],
+                    "prompts": {"spec-alignment": "prompt"},
+                }
+            )
+        ),
+    )
+
+    assert module.run_sdk_dispatch() == 0
+
+    capsys.readouterr()
+    assert captured_options
+    disallowed = set(captured_options[0]["disallowed_tools"])
+    assert {"Edit", "Write", "NotebookEdit", "TodoWrite", "Bash"} <= disallowed
+
+
+def test_sdk_dispatch_subprocess_timeout_reports_clear_error(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
+    review = make_review_args_for_module(module, tmp_path)
+
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    try:
+        module.run_sdk_dispatch_subprocess(review, sys.executable)
+    except ValueError as exc:
+        assert "sdk_dispatch_timeout" in str(exc)
+    else:
+        raise AssertionError("expected sdk_dispatch_timeout")
+
+
+def test_sdk_dispatch_subprocess_invalid_stdout_reports_clear_error(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
+    review = make_review_args_for_module(module, tmp_path)
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="not json", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    try:
+        module.run_sdk_dispatch_subprocess(review, sys.executable)
+    except ValueError as exc:
+        assert "sdk_dispatch_invalid_output" in str(exc)
+        assert "stdout was not valid JSON" in str(exc)
+    else:
+        raise AssertionError("expected sdk_dispatch_invalid_output")
 
 
 def test_non_blocking_findings_generate_pass_marker(tmp_path: Path) -> None:
