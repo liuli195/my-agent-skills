@@ -637,11 +637,82 @@ def test_state_completed_does_not_accept_expected_config_key_for_json_value(tmp_
     assert result.returncode == 1, result.stdout + result.stderr
     payload = body(result)
     assert payload["reason"] == "guard_failed"
-    assert payload["details"]["failure_reason"] == "json_artifact_check_failed"
+    assert payload["details"]["failure_reason"] == "invalid_json_artifact_check"
     assert payload["details"]["json_check"] == {
         "artifact": "completion_note",
         "field": "review.status",
         "predicate": "equals",
+        "actual": "pass",
+    }
+
+
+def test_state_completed_blocks_json_not_equals_with_legacy_expected_config_key(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = write_profile(project)
+    write_json_guard_point(
+        profile,
+        """
+      - id: review_status_not_blocked
+        type: json_artifact
+        artifact: completion_note
+        field: review.status
+        predicate: not_equals
+        expected: blocked
+""",
+    )
+    session_start(project, user_home)
+    activated = activate(project, user_home)
+    instance_id = activated["instance_id"]
+    write_completion_note_json(project, instance_id, {"review": {"status": "pass"}})
+    read_brief(project, user_home)
+
+    result = run_cli(["state-completed", "--project", str(project), "--user-home", str(user_home), "--source", "codex", "--session-id", "session-1"])
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["reason"] == "guard_failed"
+    assert payload["details"]["failure_reason"] == "invalid_json_artifact_check"
+    assert payload["details"]["json_check"] == {
+        "artifact": "completion_note",
+        "field": "review.status",
+        "predicate": "not_equals",
+        "actual": "pass",
+    }
+
+
+def test_state_completed_blocks_json_not_equals_without_value(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = write_profile(project)
+    write_json_guard_point(
+        profile,
+        """
+      - id: review_status_not_blocked
+        type: json_artifact
+        artifact: completion_note
+        field: review.status
+        predicate: not_equals
+""",
+    )
+    session_start(project, user_home)
+    activated = activate(project, user_home)
+    instance_id = activated["instance_id"]
+    write_completion_note_json(project, instance_id, {"review": {"status": "pass"}})
+    read_brief(project, user_home)
+
+    result = run_cli(["state-completed", "--project", str(project), "--user-home", str(user_home), "--source", "codex", "--session-id", "session-1"])
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["reason"] == "guard_failed"
+    assert payload["details"]["failure_reason"] == "invalid_json_artifact_check"
+    assert payload["details"]["json_check"] == {
+        "artifact": "completion_note",
+        "field": "review.status",
+        "predicate": "not_equals",
         "actual": "pass",
     }
 
@@ -883,6 +954,46 @@ def test_state_completed_blocks_json_array_none_predicate_failure(tmp_path: Path
     }
 
 
+def test_state_completed_blocks_json_array_none_where_with_legacy_expected_config_key(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = write_profile(project)
+    write_json_guard_point(
+        profile,
+        """
+      - id: no_blocking_findings
+        type: json_artifact
+        artifact: completion_note
+        field: findings
+        predicate: array_none
+        where:
+          field: severity
+          predicate: equals
+          expected: P0
+""",
+    )
+    session_start(project, user_home)
+    activated = activate(project, user_home)
+    instance_id = activated["instance_id"]
+    findings = [{"severity": "P0"}, {"severity": "P2"}]
+    write_completion_note_json(project, instance_id, {"findings": findings})
+    read_brief(project, user_home)
+
+    result = run_cli(["state-completed", "--project", str(project), "--user-home", str(user_home), "--source", "codex", "--session-id", "session-1"])
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["reason"] == "guard_failed"
+    assert payload["details"]["failure_reason"] == "invalid_json_artifact_check"
+    assert payload["details"]["json_check"] == {
+        "artifact": "completion_note",
+        "field": "findings",
+        "predicate": "equals",
+        "actual": findings,
+    }
+
+
 def test_state_completed_supports_json_array_all_predicate(tmp_path: Path) -> None:
     project = tmp_path / "project"
     user_home = tmp_path / "user-home"
@@ -949,6 +1060,45 @@ def test_state_completed_blocks_json_array_all_predicate_failure(tmp_path: Path)
         "field": "findings",
         "predicate": "array_all",
         "expected": "all elements match",
+        "actual": findings,
+    }
+
+
+def test_state_completed_blocks_json_array_all_where_without_value(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = write_profile(project)
+    write_json_guard_point(
+        profile,
+        """
+      - id: all_findings_triaged
+        type: json_artifact
+        artifact: completion_note
+        field: findings
+        predicate: array_all
+        where:
+          field: triaged
+          predicate: equals
+""",
+    )
+    session_start(project, user_home)
+    activated = activate(project, user_home)
+    instance_id = activated["instance_id"]
+    findings = [{"triaged": True}, {"triaged": True}]
+    write_completion_note_json(project, instance_id, {"findings": findings})
+    read_brief(project, user_home)
+
+    result = run_cli(["state-completed", "--project", str(project), "--user-home", str(user_home), "--source", "codex", "--session-id", "session-1"])
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["reason"] == "guard_failed"
+    assert payload["details"]["failure_reason"] == "invalid_json_artifact_check"
+    assert payload["details"]["json_check"] == {
+        "artifact": "completion_note",
+        "field": "findings",
+        "predicate": "equals",
         "actual": findings,
     }
 
