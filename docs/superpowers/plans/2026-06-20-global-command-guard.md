@@ -300,7 +300,7 @@ git commit -m "feat: 校验全局命令守卫配置"
 - Modify: `plugins/agent-guard/scripts/guard_runtime/core.py`
 - Modify: `tests/test_agent_guard_runtime_router.py`
 
-- [ ] **Step 1: 写失败测试：现有 json_artifact 行为保持不变**
+- [x] **Step 1: 写失败测试：现有 json_artifact 行为保持不变**
 
 先运行现有 JSON artifact 测试，作为重构保护：
 
@@ -310,7 +310,7 @@ python -m pytest tests/test_agent_guard_runtime_router.py -k "json_artifact or g
 
 Expected: PASS before refactor.
 
-- [ ] **Step 2: 创建 JSON 检查模块**
+- [x] **Step 2: 创建 JSON 检查模块**
 
 创建 `plugins/agent-guard/scripts/guard_runtime/json_checks.py`：
 
@@ -373,7 +373,7 @@ def evaluate_json_predicate(actual: Any, predicate: str, expected: Any = None, w
     return False
 ```
 
-- [ ] **Step 3: 迁移 core.py 使用共享模块**
+- [x] **Step 3: 迁移 core.py 使用共享模块**
 
 在 `plugins/agent-guard/scripts/guard_runtime/core.py` 顶部添加：
 
@@ -390,7 +390,7 @@ def read_json_field(data: Any, field: str) -> Any:
 
 如果现有函数名为 `json_field`，直接用 import 替换调用。
 
-- [ ] **Step 4: 运行回归测试**
+- [x] **Step 4: 运行回归测试**
 
 Run:
 
@@ -400,7 +400,7 @@ python -m pytest tests/test_agent_guard_runtime_router.py -q
 
 Expected: PASS.
 
-- [ ] **Step 5: 提交 Task 2**
+- [x] **Step 5: 提交 Task 2**
 
 ```powershell
 git add plugins/agent-guard/scripts/guard_runtime/json_checks.py `
