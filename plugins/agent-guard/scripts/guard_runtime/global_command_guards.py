@@ -11,9 +11,13 @@ from typing import Any
 import yaml
 
 try:
+    from .command_context import command_from_envelope, tool_name_from_envelope
+    from .command_matcher import match_any_command_pattern, match_command_pattern, normalized_command_texts
     from .json_checks import MISSING_JSON_VALUE, evaluate_json_predicate, json_field
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from command_context import command_from_envelope, tool_name_from_envelope
+    from command_matcher import match_any_command_pattern, match_command_pattern, normalized_command_texts
     from json_checks import MISSING_JSON_VALUE, evaluate_json_predicate, json_field
 
 
@@ -35,24 +39,6 @@ class EffectiveGlobalCommandGuard:
 
 class UnsafeEvidencePath(ValueError):
     pass
-
-
-def match_command_pattern(command: str, pattern: str) -> dict[str, str] | None:
-    matched = re.search(pattern, command)
-    if matched is None:
-        return None
-    return {key: value for key, value in matched.groupdict().items() if value is not None}
-
-
-def normalized_command_texts(command: str) -> list[str]:
-    texts = [command]
-    marker = " -lc "
-    if marker in command:
-        inner = command.split(marker, 1)[1].strip()
-        if (inner.startswith("'") and inner.endswith("'")) or (inner.startswith('"') and inner.endswith('"')):
-            inner = inner[1:-1]
-        texts.extend(part.strip() for part in inner.split("&&") if part.strip())
-    return list(dict.fromkeys(texts))
 
 
 def _guard_sources(project: Path, user_home: Path) -> list[GuardSource]:
@@ -118,37 +104,12 @@ def render_template(template: str, values: dict[str, str]) -> tuple[str, list[st
     return rendered, missing
 
 
-def command_from_envelope(envelope: dict[str, Any]) -> str:
-    payload = envelope.get("payload", {})
-    tool_input = payload.get("tool_input") if isinstance(payload, dict) else {}
-    if isinstance(tool_input, dict):
-        command = tool_input.get("command")
-        if isinstance(command, str):
-            return command
-    command = payload.get("command") if isinstance(payload, dict) else None
-    return command if isinstance(command, str) else ""
-
-
-def tool_name_from_envelope(envelope: dict[str, Any]) -> str:
-    payload = envelope.get("payload", {})
-    tool = payload.get("tool") if isinstance(payload, dict) else {}
-    name = tool.get("name") if isinstance(tool, dict) else None
-    return name if isinstance(name, str) else ""
-
-
 def _matched_captures(config: dict[str, Any], command: str) -> dict[str, str] | None:
     match = config.get("match")
     patterns = match.get("command_patterns") if isinstance(match, dict) else []
     if not isinstance(patterns, list):
         return None
-    for text in normalized_command_texts(command):
-        for pattern in patterns:
-            if not isinstance(pattern, str):
-                continue
-            captures = match_command_pattern(text, pattern)
-            if captures is not None:
-                return captures
-    return None
+    return match_any_command_pattern(command, patterns)
 
 
 def _required_captures(config: dict[str, Any]) -> list[str]:

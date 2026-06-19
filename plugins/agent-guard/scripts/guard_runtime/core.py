@@ -14,6 +14,8 @@ from typing import Any
 import yaml
 
 try:
+    from .command_context import command_from_envelope, tool_name_from_envelope
+    from .command_matcher import command_prefix_matches, normalize_command_prefix
     from .global_command_guards import evaluate_global_command_guards
     from .json_checks import (
         ARRAY_PREDICATES as JSON_ARTIFACT_ARRAY_PREDICATES,
@@ -24,6 +26,8 @@ try:
         json_field,
     )
 except ImportError:
+    from command_context import command_from_envelope, tool_name_from_envelope
+    from command_matcher import command_prefix_matches, normalize_command_prefix
     from global_command_guards import evaluate_global_command_guards
     from json_checks import (
         ARRAY_PREDICATES as JSON_ARTIFACT_ARRAY_PREDICATES,
@@ -593,32 +597,6 @@ def state_by_id(state_machine: dict[str, Any], state_id: str) -> dict[str, Any]:
     return {}
 
 
-def normalize_command_prefix(value: Any) -> str | None:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list) and all(isinstance(item, str) for item in value):
-        return " ".join(value)
-    return None
-
-
-def command_from_envelope(envelope: dict[str, Any]) -> str:
-    payload = envelope.get("payload", {})
-    tool_input = payload.get("tool_input") if isinstance(payload, dict) else {}
-    if isinstance(tool_input, dict):
-        command = tool_input.get("command")
-        if isinstance(command, str):
-            return command
-    command = payload.get("command") if isinstance(payload, dict) else None
-    return command if isinstance(command, str) else ""
-
-
-def tool_name_from_envelope(envelope: dict[str, Any]) -> str:
-    payload = envelope.get("payload", {})
-    tool = payload.get("tool") if isinstance(payload, dict) else {}
-    name = tool.get("name") if isinstance(tool, dict) else None
-    return name if isinstance(name, str) else ""
-
-
 def shorthand_rules(permissions: dict[str, Any]) -> list[dict[str, Any]]:
     rules: list[dict[str, Any]] = []
     for effect in ["allow", "ask", "deny"]:
@@ -642,7 +620,7 @@ def rule_matches(rule: dict[str, Any], tool_name: str, command: str) -> bool:
         return True
     command_prefix = normalize_command_prefix(match.get("command_prefix"))
     if command_prefix is not None:
-        return command.startswith(command_prefix)
+        return command_prefix_matches(command, command_prefix)
     return True
 
 

@@ -82,6 +82,44 @@ def test_json_checks_module_exposes_shared_predicates_and_helpers() -> None:
     )
 
 
+def test_command_context_module_exposes_shared_envelope_helpers() -> None:
+    from importlib import util
+
+    module_path = PLUGIN_ROOT / "scripts" / "guard_runtime" / "command_context.py"
+    spec = util.spec_from_file_location("command_context", module_path)
+    assert spec and spec.loader
+    module = util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    envelope = {"payload": {"tool": {"name": "Bash"}, "tool_input": {"command": "git status"}}}
+
+    assert module.tool_name_from_envelope(envelope) == "Bash"
+    assert module.command_from_envelope(envelope) == "git status"
+    assert module.command_from_envelope({"payload": {"command": "git status --short"}}) == "git status --short"
+    assert module.command_from_envelope({"payload": {"tool_input": {"command": ["git", "status"]}}}) == ""
+
+
+def test_command_matcher_module_exposes_shared_pattern_and_prefix_matching() -> None:
+    from importlib import util
+
+    module_path = PLUGIN_ROOT / "scripts" / "guard_runtime" / "command_matcher.py"
+    spec = util.spec_from_file_location("command_matcher", module_path)
+    assert spec and spec.loader
+    module = util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    command = "& 'C:\\Program Files\\Git\\bin\\bash.exe' -lc 'cd \"/d/My Project/my-agent-skills\" && comet-guard.sh add-guard-gate-binding verify --apply'"
+
+    assert "comet-guard.sh add-guard-gate-binding verify --apply" in module.normalized_command_texts(command)
+    assert module.match_command_pattern(
+        "comet-guard.sh add-guard-gate-binding verify --apply",
+        "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) verify --apply",
+    ) == {"change": "add-guard-gate-binding"}
+    assert module.command_prefix_matches("git push origin main", "git push")
+    assert not module.command_prefix_matches(command, "comet-guard.sh")
+    assert module.command_prefix_matches(command, "comet-guard.sh", normalize_texts=True)
+
+
 def test_global_command_pattern_extracts_named_captures(tmp_path: Path) -> None:
     from importlib import util
 
