@@ -67,6 +67,14 @@ def scope_from_state(state: dict[str, Any]) -> str:
     return value if value in {"project", "user"} else "project"
 
 
+def runtime_scope_from_envelope(envelope: dict[str, Any]) -> str:
+    context = envelope.get("context", {})
+    if not isinstance(context, dict):
+        return "project"
+    value = context.get("runtime_scope") or context.get("scope")
+    return value if value in {"project", "user"} else "project"
+
+
 def write_audit(project: Path, status: str, reason: str, detail: dict[str, Any], user_home: Path | None = None, scope: str = "project") -> Path:
     audit_path = runtime_root(project, user_home, scope) / "audit" / f"{uuid.uuid4().hex}.json"
     write_json(
@@ -105,6 +113,8 @@ def adapt_lifecycle_event(source: str, event: str, payload: dict[str, Any], proj
     }[event]
     session_id = payload.get("session_id") or payload.get("sessionId") or payload.get("conversation_id")
     cwd = payload.get("cwd") or payload.get("workspace_dir") or payload.get("project_dir") or str(project)
+    context_payload = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    runtime_scope = payload.get("runtime_scope") or payload.get("scope") or context_payload.get("runtime_scope") or context_payload.get("scope")
     envelope: dict[str, Any] = {
         "source": source,
         "event_type": event_type,
@@ -114,6 +124,8 @@ def adapt_lifecycle_event(source: str, event: str, payload: dict[str, Any], proj
         },
         "payload": {},
     }
+    if runtime_scope in {"project", "user"}:
+        envelope["context"]["runtime_scope"] = runtime_scope
     if event == "SessionStart":
         envelope["payload"] = {
             key: value
@@ -662,10 +674,11 @@ def focus_boundary_result(
     source: str,
     session_id: str,
     deny_on_no_focus: bool,
+    runtime_scope: str = "project",
 ) -> tuple[dict[str, Any] | None, dict[str, Any], int]:
     focus = resolve_focus(project, user_home, source, session_id)
     if focus["status"] == "none":
-        audit_path = write_audit(project, "allow", "no_session_focus_instance", {"kind": "session_focus_boundary", "source": source, "session_id": session_id})
+        audit_path = write_audit(project, "allow", "no_session_focus_instance", {"kind": "session_focus_boundary", "source": source, "session_id": session_id}, user_home, runtime_scope)
         status = "no_session_focus_instance" if deny_on_no_focus else "allow"
         return None, {
             "status": status,
@@ -674,10 +687,10 @@ def focus_boundary_result(
             "next": "先 activate（激活）当前 Session Focus Instance（会话焦点实例）。",
         }, 1 if deny_on_no_focus else 0
     if focus["status"] == "invalid":
-        audit_path = write_audit(project, "error", "invalid_session_focus_binding", {"kind": "session_focus_boundary", **focus})
+        audit_path = write_audit(project, "error", "invalid_session_focus_binding", {"kind": "session_focus_boundary", **focus}, user_home, runtime_scope)
         return None, {"status": "invalid_session_focus_binding", "reason": "invalid_session_focus_binding", "audit_path": str(audit_path)}, 1
     if focus["status"] == "multiple":
-        audit_path = write_audit(project, "error", "multiple_session_focus_bindings", {"kind": "session_focus_boundary", **focus})
+        audit_path = write_audit(project, "error", "multiple_session_focus_bindings", {"kind": "session_focus_boundary", **focus}, user_home, runtime_scope)
         return None, {"status": "multiple_session_focus_bindings", "reason": "multiple_session_focus_bindings", "audit_path": str(audit_path)}, 1
 
     binding = focus["binding"]
@@ -737,7 +750,7 @@ def route_pre_tool_use(project: Path, user_home: Path, envelope: dict[str, Any])
             str(global_guard.get("runtime_scope") or "project"),
         )
 
-    focus, boundary_body, code = focus_boundary_result(project, user_home, source, session_id, False)
+    focus, boundary_body, code = focus_boundary_result(project, user_home, source, session_id, False, runtime_scope_from_envelope(envelope))
     if focus is None:
         return boundary_body, code
 

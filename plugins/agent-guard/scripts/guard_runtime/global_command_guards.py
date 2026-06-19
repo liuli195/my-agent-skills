@@ -93,11 +93,10 @@ def git_head(project: Path) -> str:
 
 def runtime_scope_for_command(project: Path, user_home: Path, envelope: dict[str, Any]) -> str:
     context = envelope.get("context", {})
-    cwd = Path(str(context.get("cwd") or project))
-    try:
-        return "project" if cwd.resolve().is_relative_to(project.resolve()) else "user"
-    except OSError:
-        return "project"
+    explicit_scope = context.get("runtime_scope") or context.get("scope")
+    if explicit_scope in {"project", "user"}:
+        return str(explicit_scope)
+    return "project"
 
 
 def runtime_root(project: Path, user_home: Path, scope: str) -> Path:
