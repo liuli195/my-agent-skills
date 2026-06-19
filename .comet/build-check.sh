@@ -2,6 +2,9 @@
 set -euo pipefail
 
 export PATH="/c/Program Files/Git/cmd:$PATH"
+if [ -z "${USERPROFILE:-}" ]; then
+  export USERPROFILE="$(cygpath -w "${HOME:-/c/Users/liuli}")"
+fi
 
 PYTHON_EXE="/c/Users/liuli/AppData/Local/Programs/Python/Python312/python.exe"
 if [ ! -x "$PYTHON_EXE" ]; then
