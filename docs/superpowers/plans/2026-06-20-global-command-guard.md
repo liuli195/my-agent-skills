@@ -2,6 +2,7 @@
 change: add-guard-gate-binding
 design-doc: docs/superpowers/specs/2026-06-20-global-command-guard-design.md
 base-ref: 9c8ce9016907bbd75a29ad9e4dfb6b38eff28f84
+archived-with: 2026-06-19-add-guard-gate-binding
 ---
 
 # 全局命令守卫点 Implementation Plan
@@ -59,7 +60,7 @@ base-ref: 9c8ce9016907bbd75a29ad9e4dfb6b38eff28f84
 - Create: `plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/minimal/global-command-guards.yaml`
 - Create: `plugins/agent-guard/assets/templates/guard-profile/minimal/global-command-guards.yaml`
 
-- [ ] **Step 1: 写失败测试：最小模板允许空全局命令守卫配置**
+- [x] **Step 1: 写失败测试：最小模板允许空全局命令守卫配置**
 
 在 `tests/test_validate_guard_profile.py` 添加：
 
@@ -79,7 +80,7 @@ python -m pytest tests/test_validate_guard_profile.py::test_global_command_guard
 
 Expected: FAIL，因为模板文件还不存在或 validator（校验器）还不会检查该配置。
 
-- [ ] **Step 2: 添加空模板文件**
+- [x] **Step 2: 添加空模板文件**
 
 创建两个模板文件，内容完全一致：
 
@@ -94,7 +95,7 @@ plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/minimal/gl
 plugins/agent-guard/assets/templates/guard-profile/minimal/global-command-guards.yaml
 ```
 
-- [ ] **Step 3: 写失败测试：有效全局命令守卫配置通过**
+- [x] **Step 3: 写失败测试：有效全局命令守卫配置通过**
 
 在 `tests/test_validate_guard_profile.py` 添加：
 
@@ -140,7 +141,7 @@ python -m pytest tests/test_validate_guard_profile.py::test_global_command_guard
 
 Expected: FAIL，因为 validator 还没有 `global-command-guards.yaml` 规则。
 
-- [ ] **Step 4: 实现 validator 支持**
+- [x] **Step 4: 实现 validator 支持**
 
 在 `plugins/agent-guard/skills/agent-guard/scripts/validate_guard_profile.py` 中添加：
 
@@ -221,7 +222,7 @@ def validate_global_command_guards(profile_dir: Path) -> list[ValidationIssue]:
 
 再把 `validate_global_command_guards(profile_dir)` 接入 validator 的主校验结果列表。
 
-- [ ] **Step 5: 写失败测试：单文件内重复 id 报错**
+- [x] **Step 5: 写失败测试：单文件内重复 id 报错**
 
 在 `tests/test_validate_guard_profile.py` 添加：
 
@@ -271,7 +272,7 @@ python -m pytest tests/test_validate_guard_profile.py::test_global_command_guard
 
 Expected: PASS after Step 4.
 
-- [ ] **Step 6: 运行 validator 聚焦测试**
+- [x] **Step 6: 运行 validator 聚焦测试**
 
 Run:
 
@@ -281,7 +282,7 @@ python -m pytest tests/test_validate_guard_profile.py -q
 
 Expected: PASS.
 
-- [ ] **Step 7: 提交 Task 1**
+- [x] **Step 7: 提交 Task 1**
 
 ```powershell
 git add plugins/agent-guard/skills/agent-guard/scripts/validate_guard_profile.py `
@@ -300,7 +301,7 @@ git commit -m "feat: 校验全局命令守卫配置"
 - Modify: `plugins/agent-guard/scripts/guard_runtime/core.py`
 - Modify: `tests/test_agent_guard_runtime_router.py`
 
-- [ ] **Step 1: 写失败测试：现有 json_artifact 行为保持不变**
+- [x] **Step 1: 写失败测试：现有 json_artifact 行为保持不变**
 
 先运行现有 JSON artifact 测试，作为重构保护：
 
@@ -310,7 +311,7 @@ python -m pytest tests/test_agent_guard_runtime_router.py -k "json_artifact or g
 
 Expected: PASS before refactor.
 
-- [ ] **Step 2: 创建 JSON 检查模块**
+- [x] **Step 2: 创建 JSON 检查模块**
 
 创建 `plugins/agent-guard/scripts/guard_runtime/json_checks.py`：
 
@@ -373,7 +374,7 @@ def evaluate_json_predicate(actual: Any, predicate: str, expected: Any = None, w
     return False
 ```
 
-- [ ] **Step 3: 迁移 core.py 使用共享模块**
+- [x] **Step 3: 迁移 core.py 使用共享模块**
 
 在 `plugins/agent-guard/scripts/guard_runtime/core.py` 顶部添加：
 
@@ -390,7 +391,7 @@ def read_json_field(data: Any, field: str) -> Any:
 
 如果现有函数名为 `json_field`，直接用 import 替换调用。
 
-- [ ] **Step 4: 运行回归测试**
+- [x] **Step 4: 运行回归测试**
 
 Run:
 
@@ -400,7 +401,7 @@ python -m pytest tests/test_agent_guard_runtime_router.py -q
 
 Expected: PASS.
 
-- [ ] **Step 5: 提交 Task 2**
+- [x] **Step 5: 提交 Task 2**
 
 ```powershell
 git add plugins/agent-guard/scripts/guard_runtime/json_checks.py `
@@ -417,7 +418,7 @@ git commit -m "refactor: 抽象 JSON 守卫检查"
 - Create: `plugins/agent-guard/scripts/guard_runtime/global_command_guards.py`
 - Modify: `tests/test_agent_guard_runtime_router.py`
 
-- [ ] **Step 1: 写失败测试：命令模式提取命名捕获**
+- [x] **Step 1: 写失败测试：命令模式提取命名捕获**
 
 在 `tests/test_agent_guard_runtime_router.py` 添加：
 
@@ -447,7 +448,7 @@ python -m pytest tests/test_agent_guard_runtime_router.py::test_global_command_p
 
 Expected: FAIL because module/function does not exist.
 
-- [ ] **Step 2: 创建命令匹配基础能力**
+- [x] **Step 2: 创建命令匹配基础能力**
 
 在 `plugins/agent-guard/scripts/guard_runtime/global_command_guards.py` 添加：
 
@@ -485,7 +486,7 @@ def match_command_pattern(command: str, pattern: str) -> dict[str, str] | None:
     return {key: value for key, value in matched.groupdict().items() if value is not None}
 ```
 
-- [ ] **Step 3: 写失败测试：PowerShell 包装 Git Bash 能匹配内层命令**
+- [x] **Step 3: 写失败测试：PowerShell 包装 Git Bash 能匹配内层命令**
 
 在 `tests/test_agent_guard_runtime_router.py` 添加：
 
@@ -506,7 +507,7 @@ def test_global_command_pattern_matches_powershell_wrapped_git_bash(tmp_path: Pa
     assert "comet-guard.sh add-guard-gate-binding verify --apply" in normalized
 ```
 
-- [ ] **Step 4: 实现命令文本标准化**
+- [x] **Step 4: 实现命令文本标准化**
 
 在 `global_command_guards.py` 添加：
 
@@ -523,7 +524,7 @@ def normalized_command_texts(command: str) -> list[str]:
     return list(dict.fromkeys(texts))
 ```
 
-- [ ] **Step 5: 运行命令匹配测试**
+- [x] **Step 5: 运行命令匹配测试**
 
 Run:
 
@@ -533,7 +534,7 @@ python -m pytest tests/test_agent_guard_runtime_router.py::test_global_command_p
 
 Expected: PASS.
 
-- [ ] **Step 6: 提交 Task 3**
+- [x] **Step 6: 提交 Task 3**
 
 ```powershell
 git add plugins/agent-guard/scripts/guard_runtime/global_command_guards.py `
@@ -549,7 +550,7 @@ git commit -m "feat: 添加全局命令匹配基础能力"
 - Modify: `plugins/agent-guard/scripts/guard_runtime/global_command_guards.py`
 - Modify: `tests/test_agent_guard_runtime_router.py`
 
-- [ ] **Step 1: 写失败测试：项目级和用户级来源都会被收集**
+- [x] **Step 1: 写失败测试：项目级和用户级来源都会被收集**
 
 在 `tests/test_agent_guard_runtime_router.py` 添加：
 
@@ -606,7 +607,7 @@ def test_collects_project_and_user_global_command_guards(tmp_path: Path) -> None
     ]
 ```
 
-- [ ] **Step 2: 实现收集器**
+- [x] **Step 2: 实现收集器**
 
 在 `global_command_guards.py` 添加：
 
@@ -647,7 +648,7 @@ def collect_global_command_guards(project: Path, user_home: Path) -> list[Effect
     return guards
 ```
 
-- [ ] **Step 3: 运行收集器测试**
+- [x] **Step 3: 运行收集器测试**
 
 Run:
 
@@ -657,7 +658,7 @@ python -m pytest tests/test_agent_guard_runtime_router.py::test_collects_project
 
 Expected: PASS.
 
-- [ ] **Step 4: 提交 Task 4**
+- [x] **Step 4: 提交 Task 4**
 
 ```powershell
 git add plugins/agent-guard/scripts/guard_runtime/global_command_guards.py `
@@ -675,7 +676,7 @@ git commit -m "feat: 收集多来源全局命令守卫"
 - Modify: `tests/test_agent_guard_runtime_router.py`
 - Modify: `tests/test_agent_guard_runtime_session_focus.py`
 
-- [ ] **Step 1: 写失败测试：无 Session Focus 时全局守卫仍拒绝命令**
+- [x] **Step 1: 写失败测试：无 Session Focus 时全局守卫仍拒绝命令**
 
 在 `tests/test_agent_guard_runtime_router.py` 添加：
 
@@ -699,7 +700,7 @@ def test_global_command_guard_denies_without_session_focus(tmp_path: Path) -> No
     assert ".local" in payload["failing_guards"][0]["evidence_path"]
 ```
 
-- [ ] **Step 2: 实现 evidence 评估**
+- [x] **Step 2: 实现 evidence 评估**
 
 在 `global_command_guards.py` 添加：
 
@@ -748,7 +749,7 @@ def render_template(template: str, values: dict[str, str]) -> str:
 - 任意失败：返回 `effect=deny`。
 - `value_from` 先查 captures，再查内置上下文字段。
 
-- [ ] **Step 3: 在 core.py 接入 PreToolUse**
+- [x] **Step 3: 在 core.py 接入 PreToolUse**
 
 在 `plugins/agent-guard/scripts/guard_runtime/core.py` 顶部添加：
 
@@ -775,7 +776,7 @@ from global_command_guards import evaluate_global_command_guards
 
 如果 `effect=allow` 且 `matched_guard_ids` 非空，也写 allow 审计后继续进入原有 Session Focus 流程。
 
-- [ ] **Step 4: 写失败测试：evidence 通过后允许继续**
+- [x] **Step 4: 写失败测试：evidence 通过后允许继续**
 
 在 `tests/test_agent_guard_runtime_router.py` 添加：
 
@@ -798,7 +799,7 @@ def test_global_command_guard_passes_with_valid_evidence(tmp_path: Path) -> None
     assert payload["status"] == "allow"
 ```
 
-- [ ] **Step 5: 写失败测试：多规则任一失败则 deny**
+- [x] **Step 5: 写失败测试：多规则任一失败则 deny**
 
 在 `tests/test_agent_guard_runtime_router.py` 添加：
 
@@ -830,7 +831,7 @@ def test_global_command_guard_denies_when_any_matching_guard_fails(tmp_path: Pat
     assert ".local" in payload["failing_guards"][0]["evidence_path"]
 ```
 
-- [ ] **Step 6: 写回归测试：全局守卫 allow 后 Session Focus 仍可 deny**
+- [x] **Step 6: 写回归测试：全局守卫 allow 后 Session Focus 仍可 deny**
 
 在 `tests/test_agent_guard_runtime_session_focus.py` 或 `tests/test_agent_guard_runtime_router.py` 添加：
 
@@ -856,7 +857,7 @@ def test_global_command_guard_allow_does_not_bypass_session_focus_deny(tmp_path:
     assert payload["reason"] == "当前状态要求 deny。"
 ```
 
-- [ ] **Step 7: 运行 runtime 聚焦测试**
+- [x] **Step 7: 运行 runtime 聚焦测试**
 
 Run:
 
@@ -866,7 +867,7 @@ python -m pytest tests/test_agent_guard_runtime_router.py tests/test_agent_guard
 
 Expected: PASS.
 
-- [ ] **Step 8: 提交 Task 5**
+- [x] **Step 8: 提交 Task 5**
 
 ```powershell
 git add plugins/agent-guard/scripts/guard_runtime/global_command_guards.py `
@@ -884,7 +885,7 @@ git commit -m "feat: 在 PreToolUse 执行全局命令守卫"
 - Modify: `plugins/agent-guard/scripts/guard_runtime/README.md`
 - Modify: `openspec/changes/add-guard-gate-binding/tasks.md`
 
-- [ ] **Step 1: 更新 runtime README**
+- [x] **Step 1: 更新 runtime README**
 
 在 `plugins/agent-guard/scripts/guard_runtime/README.md` 添加一节：
 
@@ -908,7 +909,7 @@ Runtime（运行时）在 PreToolUse（工具使用前）阶段收集：
 ```
 ```
 
-- [ ] **Step 2: 运行模板/包测试**
+- [x] **Step 2: 运行模板/包测试**
 
 Run:
 
@@ -918,7 +919,7 @@ python -m pytest tests/test_agent_guard_plugin_package.py tests/test_agent_guard
 
 Expected: PASS.
 
-- [ ] **Step 3: 运行 Agent Guard 相关测试**
+- [x] **Step 3: 运行 Agent Guard 相关测试**
 
 Run:
 
@@ -928,7 +929,7 @@ python -m pytest tests/test_agent_guard_runtime_router.py tests/test_agent_guard
 
 Expected: PASS.
 
-- [ ] **Step 4: 运行 OpenSpec 校验**
+- [x] **Step 4: 运行 OpenSpec 校验**
 
 Run:
 
@@ -942,7 +943,7 @@ Expected:
 Change 'add-guard-gate-binding' is valid
 ```
 
-- [ ] **Step 5: 勾选 OpenSpec tasks**
+- [x] **Step 5: 勾选 OpenSpec tasks**
 
 在 `openspec/changes/add-guard-gate-binding/tasks.md` 中勾选已完成条目。至少应勾选：
 
@@ -983,7 +984,7 @@ Change 'add-guard-gate-binding' is valid
 
 只勾选实际完成且测试通过的任务；如果完整仓库测试未运行，不勾选 `5.6`。
 
-- [ ] **Step 6: 提交 Task 6**
+- [x] **Step 6: 提交 Task 6**
 
 ```powershell
 git add plugins/agent-guard/scripts/guard_runtime/README.md `
@@ -1017,4 +1018,3 @@ python -m pytest -q
 - deny 输出包含 `matched_guard_ids` 和 `failing_guards`。
 - 项目命令的 evidence 和 audit 默认写入 `.local/guard`。
 - 现有 Session Focus permission 语义保持不变。
-

@@ -13,6 +13,31 @@ from typing import Any
 
 import yaml
 
+try:
+    from .command_context import command_from_envelope, tool_name_from_envelope
+    from .command_matcher import command_prefix_matches, normalize_command_prefix
+    from .global_command_guards import evaluate_global_command_guards
+    from .json_checks import (
+        ARRAY_PREDICATES as JSON_ARTIFACT_ARRAY_PREDICATES,
+        JSON_PREDICATES as JSON_ARTIFACT_PREDICATES,
+        MISSING_JSON_VALUE,
+        VALUE_PREDICATES as JSON_ARTIFACT_VALUE_PREDICATES,
+        evaluate_json_predicate as evaluate_shared_json_predicate,
+        json_field,
+    )
+except ImportError:
+    from command_context import command_from_envelope, tool_name_from_envelope
+    from command_matcher import command_prefix_matches, normalize_command_prefix
+    from global_command_guards import evaluate_global_command_guards
+    from json_checks import (
+        ARRAY_PREDICATES as JSON_ARTIFACT_ARRAY_PREDICATES,
+        JSON_PREDICATES as JSON_ARTIFACT_PREDICATES,
+        MISSING_JSON_VALUE,
+        VALUE_PREDICATES as JSON_ARTIFACT_VALUE_PREDICATES,
+        evaluate_json_predicate as evaluate_shared_json_predicate,
+        json_field,
+    )
+
 
 RUNTIME_API_VERSION = "agent-guard-runtime/v1"
 
@@ -43,6 +68,14 @@ def runtime_root(project: Path, user_home: Path | None = None, scope: str = "pro
 
 def scope_from_state(state: dict[str, Any]) -> str:
     value = state.get("scope")
+    return value if value in {"project", "user"} else "project"
+
+
+def runtime_scope_from_envelope(envelope: dict[str, Any]) -> str:
+    context = envelope.get("context", {})
+    if not isinstance(context, dict):
+        return "project"
+    value = context.get("runtime_scope") or context.get("scope")
     return value if value in {"project", "user"} else "project"
 
 
@@ -84,6 +117,8 @@ def adapt_lifecycle_event(source: str, event: str, payload: dict[str, Any], proj
     }[event]
     session_id = payload.get("session_id") or payload.get("sessionId") or payload.get("conversation_id")
     cwd = payload.get("cwd") or payload.get("workspace_dir") or payload.get("project_dir") or str(project)
+    context_payload = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    runtime_scope = payload.get("runtime_scope") or payload.get("scope") or context_payload.get("runtime_scope") or context_payload.get("scope")
     envelope: dict[str, Any] = {
         "source": source,
         "event_type": event_type,
@@ -93,6 +128,8 @@ def adapt_lifecycle_event(source: str, event: str, payload: dict[str, Any], proj
         },
         "payload": {},
     }
+    if runtime_scope in {"project", "user"}:
+        envelope["context"]["runtime_scope"] = runtime_scope
     if event == "SessionStart":
         envelope["payload"] = {
             key: value
@@ -560,32 +597,6 @@ def state_by_id(state_machine: dict[str, Any], state_id: str) -> dict[str, Any]:
     return {}
 
 
-def normalize_command_prefix(value: Any) -> str | None:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list) and all(isinstance(item, str) for item in value):
-        return " ".join(value)
-    return None
-
-
-def command_from_envelope(envelope: dict[str, Any]) -> str:
-    payload = envelope.get("payload", {})
-    tool_input = payload.get("tool_input") if isinstance(payload, dict) else {}
-    if isinstance(tool_input, dict):
-        command = tool_input.get("command")
-        if isinstance(command, str):
-            return command
-    command = payload.get("command") if isinstance(payload, dict) else None
-    return command if isinstance(command, str) else ""
-
-
-def tool_name_from_envelope(envelope: dict[str, Any]) -> str:
-    payload = envelope.get("payload", {})
-    tool = payload.get("tool") if isinstance(payload, dict) else {}
-    name = tool.get("name") if isinstance(tool, dict) else None
-    return name if isinstance(name, str) else ""
-
-
 def shorthand_rules(permissions: dict[str, Any]) -> list[dict[str, Any]]:
     rules: list[dict[str, Any]] = []
     for effect in ["allow", "ask", "deny"]:
@@ -609,7 +620,7 @@ def rule_matches(rule: dict[str, Any], tool_name: str, command: str) -> bool:
         return True
     command_prefix = normalize_command_prefix(match.get("command_prefix"))
     if command_prefix is not None:
-        return command.startswith(command_prefix)
+        return command_prefix_matches(command, command_prefix)
     return True
 
 
@@ -641,10 +652,11 @@ def focus_boundary_result(
     source: str,
     session_id: str,
     deny_on_no_focus: bool,
+    runtime_scope: str = "project",
 ) -> tuple[dict[str, Any] | None, dict[str, Any], int]:
     focus = resolve_focus(project, user_home, source, session_id)
     if focus["status"] == "none":
-        audit_path = write_audit(project, "allow", "no_session_focus_instance", {"source": source, "session_id": session_id})
+        audit_path = write_audit(project, "allow", "no_session_focus_instance", {"kind": "session_focus_boundary", "source": source, "session_id": session_id}, user_home, runtime_scope)
         status = "no_session_focus_instance" if deny_on_no_focus else "allow"
         return None, {
             "status": status,
@@ -653,10 +665,10 @@ def focus_boundary_result(
             "next": "先 activate（激活）当前 Session Focus Instance（会话焦点实例）。",
         }, 1 if deny_on_no_focus else 0
     if focus["status"] == "invalid":
-        audit_path = write_audit(project, "error", "invalid_session_focus_binding", focus)
+        audit_path = write_audit(project, "error", "invalid_session_focus_binding", {"kind": "session_focus_boundary", **focus}, user_home, runtime_scope)
         return None, {"status": "invalid_session_focus_binding", "reason": "invalid_session_focus_binding", "audit_path": str(audit_path)}, 1
     if focus["status"] == "multiple":
-        audit_path = write_audit(project, "error", "multiple_session_focus_bindings", focus)
+        audit_path = write_audit(project, "error", "multiple_session_focus_bindings", {"kind": "session_focus_boundary", **focus}, user_home, runtime_scope)
         return None, {"status": "multiple_session_focus_bindings", "reason": "multiple_session_focus_bindings", "audit_path": str(audit_path)}, 1
 
     binding = focus["binding"]
@@ -669,7 +681,7 @@ def focus_boundary_result(
             project,
             "allow",
             "no_session_focus_instance",
-            {"source": source, "session_id": session_id, "profile_id": profile_id, "instance_id": instance_id},
+            {"kind": "session_focus_boundary", "source": source, "session_id": session_id, "profile_id": profile_id, "instance_id": instance_id},
             user_home,
             scope,
         )
@@ -684,7 +696,39 @@ def route_pre_tool_use(project: Path, user_home: Path, envelope: dict[str, Any])
     session_id = str(context.get("session_id") or "")
     if not session_id:
         return {"status": "error", "reason": "missing_session_id"}, 1
-    focus, boundary_body, code = focus_boundary_result(project, user_home, source, session_id, False)
+
+    global_guard = evaluate_global_command_guards(project, user_home, envelope)
+    if global_guard["effect"] == "deny":
+        audit_path = write_audit(
+            project,
+            "deny",
+            str(global_guard["reason"]),
+            {"kind": "global_command_guard", "global_command_guard": global_guard},
+            user_home,
+            str(global_guard.get("runtime_scope") or "project"),
+        )
+        return {
+            "status": "deny",
+            "reason": global_guard["reason"],
+            "next": global_guard.get("next"),
+            "suggestion": global_guard.get("suggestion"),
+            "matched_guard_ids": global_guard.get("matched_guard_ids", []),
+            "failing_guards": global_guard.get("failing_guards", []),
+            "captures": global_guard.get("captures", {}),
+            "captures_by_guard": global_guard.get("captures_by_guard", {}),
+            "audit_path": str(audit_path),
+        }, 1
+    if global_guard.get("matched_guard_ids"):
+        write_audit(
+            project,
+            "allow",
+            str(global_guard["reason"]),
+            {"kind": "global_command_guard", "global_command_guard": global_guard},
+            user_home,
+            str(global_guard.get("runtime_scope") or "project"),
+        )
+
+    focus, boundary_body, code = focus_boundary_result(project, user_home, source, session_id, False, runtime_scope_from_envelope(envelope))
     if focus is None:
         return boundary_body, code
 
@@ -693,20 +737,20 @@ def route_pre_tool_use(project: Path, user_home: Path, envelope: dict[str, Any])
     profile_id = str(binding["profile_id"])
     scope = scope_from_state(state)
     if profile_runtime_api_version(project, profile_id, user_home, scope) != RUNTIME_API_VERSION:
-        audit_path = write_audit(project, "allow", "incompatible_runtime_api_version", {"profile_id": profile_id}, user_home, scope)
+        audit_path = write_audit(project, "allow", "incompatible_runtime_api_version", {"kind": "session_focus_permission", "profile_id": profile_id}, user_home, scope)
         return {"status": "allow", "reason": "incompatible_runtime_api_version", "audit_path": str(audit_path)}, 0
 
     permission = evaluate_permissions(project, profile_id, state, envelope, user_home)
     effect = permission["effect"]
     if effect == "deny":
-        audit_path = write_audit(project, "deny", str(permission["reason"]), {"permission": permission}, user_home, scope)
+        audit_path = write_audit(project, "deny", str(permission["reason"]), {"kind": "session_focus_permission", "permission": permission}, user_home, scope)
         brief = write_latest_brief(project, profile_id, state, [str(permission["reason"])], audit_path, user_home)
         return {"status": "deny", "reason": permission["reason"], "suggestion": permission.get("suggestion"), "audit_path": str(audit_path)}, 1
     if effect == "ask":
-        audit_path = write_audit(project, "ask", str(permission["reason"]), {"permission": permission}, user_home, scope)
+        audit_path = write_audit(project, "ask", str(permission["reason"]), {"kind": "session_focus_permission", "permission": permission}, user_home, scope)
         brief = write_latest_brief(project, profile_id, state, [str(permission["reason"])], audit_path, user_home)
         return {"status": "ask", "reason": permission["reason"], "suggestion": permission.get("suggestion"), "audit_path": str(audit_path)}, 1
-    audit_path = write_audit(project, "allow", str(permission["reason"]), {"permission": permission}, user_home, scope)
+    audit_path = write_audit(project, "allow", str(permission["reason"]), {"kind": "session_focus_permission", "permission": permission}, user_home, scope)
     return {"status": "allow", "reason": permission["reason"], "audit_path": str(audit_path)}, 0
 
 
@@ -745,12 +789,6 @@ def artifact_exists(project: Path, profile_id: str, instance_id: str, state_vers
     return path is not None and path.exists()
 
 
-MISSING_JSON_VALUE = object()
-JSON_ARTIFACT_PREDICATES = {"exists", "equals", "not_equals", "number_lte", "number_gte", "array_none", "array_all"}
-JSON_ARTIFACT_VALUE_PREDICATES = {"equals", "not_equals", "number_lte", "number_gte"}
-JSON_ARTIFACT_ARRAY_PREDICATES = {"array_none", "array_all"}
-
-
 def load_json_artifact(path: Path) -> tuple[bool, Any]:
     try:
         return True, json.loads(path.read_text(encoding="utf-8"))
@@ -759,12 +797,8 @@ def load_json_artifact(path: Path) -> tuple[bool, Any]:
 
 
 def value_at_point_path(data: Any, field: str) -> tuple[bool, Any]:
-    current = data
-    for part in field.split("."):
-        if not isinstance(current, dict) or part not in current:
-            return False, MISSING_JSON_VALUE
-        current = current[part]
-    return True, current
+    value = json_field(data, field, MISSING_JSON_VALUE)
+    return value is not MISSING_JSON_VALUE, value
 
 
 def json_expected_value(check: dict[str, Any]) -> Any:
@@ -822,16 +856,8 @@ def evaluate_json_predicate(data: Any, check: dict[str, Any], artifact_id: Any) 
         return None if exists else json_predicate_failure(check, artifact_id, field, predicate)
     if not exists:
         return json_predicate_failure(check, artifact_id, field, predicate, expected)
-    if predicate == "equals":
-        return None if actual == expected else json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
-    if predicate == "not_equals":
-        return None if actual != expected else json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
-    if predicate in {"number_lte", "number_gte"}:
-        if isinstance(actual, bool) or isinstance(expected, bool) or not isinstance(actual, (int, float)) or not isinstance(expected, (int, float)):
-            return json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
-        if predicate == "number_lte":
-            return None if actual <= expected else json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
-        return None if actual >= expected else json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
+    if predicate in JSON_ARTIFACT_VALUE_PREDICATES:
+        return None if evaluate_shared_json_predicate(actual, predicate, expected) else json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
     if predicate in JSON_ARTIFACT_ARRAY_PREDICATES:
         where = check.get("where")
         if not isinstance(actual, list) or not isinstance(where, dict):
@@ -840,10 +866,8 @@ def evaluate_json_predicate(data: Any, check: dict[str, Any], artifact_id: Any) 
             return json_predicate_failure(check, artifact_id, field, where.get("predicate"), json_expected_value(where), actual, "unsupported_json_artifact_predicate")
         if not valid_json_predicate_config(where):
             return json_predicate_failure(check, artifact_id, field, where.get("predicate"), json_expected_value(where), actual, "invalid_json_artifact_check")
-        matches = [evaluate_json_predicate(item, {**where, "artifact": artifact_id}, artifact_id) is None for item in actual]
-        if predicate == "array_none":
-            return None if not any(matches) else json_predicate_failure(check, artifact_id, field, predicate, "no matching elements", actual)
-        return None if all(matches) else json_predicate_failure(check, artifact_id, field, predicate, "all elements match", actual)
+        expected_detail = "no matching elements" if predicate == "array_none" else "all elements match"
+        return None if evaluate_shared_json_predicate(actual, predicate, where=where) else json_predicate_failure(check, artifact_id, field, predicate, expected_detail, actual)
     return json_predicate_failure(check, artifact_id, field, predicate, expected, actual, "unsupported_json_artifact_predicate")
 
 

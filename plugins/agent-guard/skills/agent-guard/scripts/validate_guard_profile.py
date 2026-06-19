@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +46,16 @@ JSON_ARTIFACT_PREDICATES = {
 }
 JSON_ARTIFACT_VALUE_PREDICATES = {"equals", "not_equals", "number_lte", "number_gte"}
 JSON_ARTIFACT_ARRAY_PREDICATES = {"array_none", "array_all"}
+GLOBAL_COMMAND_GUARD_VALUE_FROM_FIELDS = {
+    "source_scope",
+    "profile_id",
+    "guard_id",
+    "effective_guard_id",
+    "runtime_scope",
+    "git_head",
+}
+GLOBAL_COMMAND_GUARDS_FILE = "global-command-guards.yaml"
+SESSION_FOCUS_CATEGORIES = {"state_machine", "guard_points", "artifacts"}
 
 REQUIRED_FIELDS = {
     "manifest": [
@@ -396,6 +407,262 @@ def validate_artifact_contract(configs: dict[str, dict[str, Any]]) -> list[Valid
                 )
             )
     return issues
+
+
+def named_captures_from_pattern(pattern: str) -> tuple[set[str], ValidationIssue | None]:
+    try:
+        compiled = re.compile(pattern)
+    except re.error as exc:
+        return set(), ValidationIssue(
+            "global_command_guards",
+            "match.command_patterns",
+            f"命令模式不是有效正则表达式：{exc}。",
+            "修正 command_patterns 中的正则表达式。",
+        )
+    return set(compiled.groupindex), None
+
+
+def template_fields(template: str) -> set[str]:
+    return set(re.findall(r"{([A-Za-z_][A-Za-z0-9_]*)}", template))
+
+
+def validate_global_command_guard_check(
+    base: str,
+    check_index: int,
+    check: Any,
+    capture_names: set[str],
+) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    if not isinstance(check, dict):
+        return [
+            ValidationIssue(
+                "global_command_guards",
+                f"{base}.checks.{check_index}",
+                "必须是 mapping（映射）。",
+                "把该 JSON 检查改成包含 field、predicate 的映射。",
+            )
+        ]
+
+    field = check.get("field")
+    if not isinstance(field, str) or not field:
+        issues.append(
+            ValidationIssue(
+                "global_command_guards",
+                f"{base}.checks.{check_index}.field",
+                "必须声明 JSON field（JSON 字段）。",
+                "为该检查添加非空 field。",
+            )
+        )
+
+    predicate = check.get("predicate")
+    if not isinstance(predicate, str) or predicate not in JSON_ARTIFACT_PREDICATES:
+        issues.append(
+            ValidationIssue(
+                "global_command_guards",
+                f"{base}.checks.{check_index}.predicate",
+                "未知或缺失 JSON predicate（JSON 谓词）。",
+                "使用 json_artifact 支持的 predicate。",
+            )
+        )
+    elif predicate in JSON_ARTIFACT_VALUE_PREDICATES and "value" not in check and "value_from" not in check:
+        issues.append(
+            ValidationIssue(
+                "global_command_guards",
+                f"{base}.checks.{check_index}.value",
+                "比较类 JSON predicate（JSON 谓词）必须声明 value 或 value_from。",
+                "添加 value，或用 value_from 引用命名捕获或内置上下文字段。",
+            )
+        )
+    elif predicate in JSON_ARTIFACT_ARRAY_PREDICATES and not isinstance(check.get("where"), dict):
+        issues.append(
+            ValidationIssue(
+                "global_command_guards",
+                f"{base}.checks.{check_index}.where",
+                "数组类 JSON predicate（JSON 谓词）必须声明 where。",
+                "添加 where 映射描述数组元素检查。",
+            )
+        )
+
+    value_from = check.get("value_from")
+    if value_from is not None:
+        if not isinstance(value_from, str) or not value_from:
+            issues.append(
+                ValidationIssue(
+                    "global_command_guards",
+                    f"{base}.checks.{check_index}.value_from",
+                    "必须是非空字符串。",
+                    "引用命名捕获或内置上下文字段。",
+                )
+            )
+        elif value_from not in capture_names and value_from not in GLOBAL_COMMAND_GUARD_VALUE_FROM_FIELDS:
+            issues.append(
+                ValidationIssue(
+                    "global_command_guards",
+                    f"{base}.checks.{check_index}.value_from",
+                    "必须引用命名捕获或内置上下文字段。",
+                    "把 value_from 改成 command_patterns 的命名捕获，或 source_scope、profile_id、guard_id、effective_guard_id、runtime_scope、git_head。",
+                )
+            )
+
+    return issues
+
+
+def validate_global_command_guards(profile_dir: Path) -> tuple[bool, list[ValidationIssue]]:
+    path = profile_dir / GLOBAL_COMMAND_GUARDS_FILE
+    if not path.exists():
+        return False, []
+
+    data, issue = load_yaml(path, "global_command_guards")
+    if issue or data is None:
+        return False, [issue] if issue else []
+
+    guards = data.get("global_command_guards")
+    if guards is None:
+        return False, []
+    if not isinstance(guards, list):
+        return False, [
+            ValidationIssue(
+                "global_command_guards",
+                "global_command_guards",
+                "必须是 list（列表）。",
+                "把 global_command_guards 改成列表；没有规则时写 `global_command_guards: []`。",
+            )
+        ]
+
+    issues: list[ValidationIssue] = []
+    seen: set[str] = set()
+    for index, guard in enumerate(guards):
+        if not isinstance(guard, dict):
+            issues.append(
+                ValidationIssue(
+                    "global_command_guards",
+                    f"global_command_guards.{index}",
+                    "必须是 mapping（映射）。",
+                    "把该条规则改成包含 id、tool、match、evidence、checks 的映射。",
+                )
+            )
+            continue
+
+        guard_id = guard.get("id")
+        base = f"global_command_guards.{guard_id if isinstance(guard_id, str) and guard_id else index}"
+        if not isinstance(guard_id, str) or not guard_id:
+            issues.append(
+                ValidationIssue(
+                    "global_command_guards",
+                    f"{base}.id",
+                    "必须声明非空 id。",
+                    "为该全局命令守卫点添加唯一 id。",
+                )
+            )
+        elif guard_id in seen:
+            issues.append(
+                ValidationIssue(
+                    "global_command_guards",
+                    f"{base}.id",
+                    f"重复 id `{guard_id}`。",
+                    "同一个 global-command-guards.yaml 内 guard id 必须唯一。",
+                )
+            )
+        else:
+            seen.add(guard_id)
+
+        if not isinstance(guard.get("tool"), str) or not guard.get("tool"):
+            issues.append(
+                ValidationIssue(
+                    "global_command_guards",
+                    f"{base}.tool",
+                    "必须声明工具名。",
+                    "例如写 `tool: Bash`。",
+                )
+            )
+
+        match = guard.get("match")
+        patterns = match.get("command_patterns") if isinstance(match, dict) else None
+        capture_names: set[str] = set()
+        if not isinstance(patterns, list) or not patterns or not all(isinstance(item, str) and item for item in patterns):
+            issues.append(
+                ValidationIssue(
+                    "global_command_guards",
+                    f"{base}.match.command_patterns",
+                    "必须声明至少一个命令模式。",
+                    "添加 command_patterns 列表。",
+                )
+            )
+        else:
+            for pattern_index, pattern in enumerate(patterns):
+                captures, pattern_issue = named_captures_from_pattern(pattern)
+                if pattern_issue:
+                    issues.append(
+                        ValidationIssue(
+                            "global_command_guards",
+                            f"{base}.match.command_patterns.{pattern_index}",
+                            pattern_issue.message,
+                            pattern_issue.fix,
+                        )
+                    )
+                capture_names.update(captures)
+
+        required_captures = match.get("required_captures") if isinstance(match, dict) else []
+        if required_captures is None:
+            required_captures = []
+        if not isinstance(required_captures, list) or not all(isinstance(item, str) and item for item in required_captures):
+            issues.append(
+                ValidationIssue(
+                    "global_command_guards",
+                    f"{base}.match.required_captures",
+                    "必须是字符串列表。",
+                    "把 required_captures 改成命名捕获字段列表。",
+                )
+            )
+            required_captures = []
+        for capture in required_captures:
+            if capture not in capture_names:
+                issues.append(
+                    ValidationIssue(
+                        "global_command_guards",
+                        f"{base}.match.required_captures.{capture}",
+                        f"缺少必需捕获值 `{capture}`。",
+                        "在 command_patterns 中添加同名命名捕获，例如 `(?P<change>...)`。",
+                    )
+                )
+
+        evidence = guard.get("evidence")
+        evidence_path = evidence.get("path") if isinstance(evidence, dict) else None
+        if not isinstance(evidence_path, str) or not evidence_path:
+            issues.append(
+                ValidationIssue(
+                    "global_command_guards",
+                    f"{base}.evidence.path",
+                    "必须声明 evidence path template（证据路径模板）。",
+                    "添加 evidence.path。",
+                )
+            )
+        else:
+            for field in sorted(template_fields(evidence_path) - capture_names - GLOBAL_COMMAND_GUARD_VALUE_FROM_FIELDS):
+                issues.append(
+                    ValidationIssue(
+                        "global_command_guards",
+                        f"{base}.evidence.path.{field}",
+                        f"缺少必需捕获值 `{field}`。",
+                        "在 command_patterns 中添加同名命名捕获，或改用内置上下文字段。",
+                    )
+                )
+
+        checks = guard.get("checks")
+        if not isinstance(checks, list) or not checks:
+            issues.append(
+                ValidationIssue(
+                    "global_command_guards",
+                    f"{base}.checks",
+                    "必须声明至少一个 JSON 检查。",
+                    "添加 checks 列表。",
+                )
+            )
+            checks = []
+        for check_index, check in enumerate(checks):
+            issues.extend(validate_global_command_guard_check(base, check_index, check, capture_names))
+
+    return bool(guards) and not issues, issues
 
 
 def has_items(value: Any) -> bool:
@@ -782,10 +1049,15 @@ def validate_profile(profile_dir: Path) -> tuple[list[str], list[ValidationIssue
         ]
 
     issues.extend(validate_legacy_contract(profile_dir))
+    has_global_command_guards_file = (profile_dir / GLOBAL_COMMAND_GUARDS_FILE).exists()
+    has_active_global_command_guards, global_command_guard_issues = validate_global_command_guards(profile_dir)
+    issues.extend(global_command_guard_issues)
 
     for category, relative_path in REQUIRED_FILES.items():
         path = profile_dir / relative_path
         if not path.exists():
+            if has_active_global_command_guards and category in SESSION_FOCUS_CATEGORIES:
+                continue
             issues.append(
                 ValidationIssue(
                     category,
@@ -808,6 +1080,9 @@ def validate_profile(profile_dir: Path) -> tuple[list[str], list[ValidationIssue
             configs[category] = data
 
         checked.append(category)
+
+    if has_global_command_guards_file:
+        checked.append("global_command_guards")
 
     reference_categories = {"state_machine", "guard_points", "artifacts"}
     if not issues and reference_categories.issubset(configs):

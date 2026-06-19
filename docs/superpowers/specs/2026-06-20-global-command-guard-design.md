@@ -2,6 +2,8 @@
 comet_change: add-guard-gate-binding
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-19-add-guard-gate-binding
+status: final
 ---
 
 # 全局命令守卫点设计

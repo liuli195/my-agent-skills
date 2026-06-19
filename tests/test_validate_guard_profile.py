@@ -8,6 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_SKILL = REPO_ROOT / "plugins" / "agent-guard" / "skills" / "agent-guard"
 VALIDATOR = PLUGIN_SKILL / "scripts" / "validate_guard_profile.py"
 MINIMAL_PROFILE = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "minimal"
+MIRRORED_MINIMAL_PROFILE = REPO_ROOT / "plugins" / "agent-guard" / "assets" / "templates" / "guard-profile" / "minimal"
 
 
 def run_validator(profile_path: Path) -> subprocess.CompletedProcess[str]:
@@ -19,6 +20,57 @@ def run_validator(profile_path: Path) -> subprocess.CompletedProcess[str]:
         stderr=subprocess.PIPE,
         check=False,
     )
+
+
+def write_global_command_guards(profile: Path, body: str) -> None:
+    (profile / "global-command-guards.yaml").write_text(body.lstrip(), encoding="utf-8")
+
+
+def valid_global_command_guard_yaml() -> str:
+    return """
+global_command_guards:
+  - id: verify_requires_review
+    description: Comet verify 前必须有 review 证据。
+    tool: Bash
+    match:
+      command_patterns:
+        - 'comet-guard.sh (?P<change>[A-Za-z0-9._-]+) verify --apply'
+      required_captures:
+        - change
+    evidence:
+      path: '.local/guard/evidence/{source_scope}/{profile_id}/{guard_id}/{change}/evidence.json'
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+      - field: change
+        predicate: equals
+        value_from: change
+      - field: head_ref
+        predicate: equals
+        value_from: git_head
+    deny:
+      reason: global_command_guard_required
+      next: produce_required_evidence
+      suggestion: 先完成 reviewed flow（已审查流程）。
+"""
+
+
+def test_global_command_guards_template_file_is_allowed() -> None:
+    skill_template = MINIMAL_PROFILE / "global-command-guards.yaml"
+    plugin_template = MIRRORED_MINIMAL_PROFILE / "global-command-guards.yaml"
+
+    assert skill_template.exists()
+    assert plugin_template.exists()
+    assert skill_template.read_text(encoding="utf-8") == "global_command_guards: []\n"
+    assert plugin_template.read_text(encoding="utf-8") == "global_command_guards: []\n"
+    assert plugin_template.read_text(encoding="utf-8") == skill_template.read_text(encoding="utf-8")
+
+    result = run_validator(MINIMAL_PROFILE)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "通过：Guard Profile（守卫画像）校验" in result.stdout
+    assert "已检查：global_command_guards" in result.stdout
 
 
 def test_minimal_guard_profile_passes_new_session_focus_contract() -> None:
@@ -38,6 +90,209 @@ def test_minimal_guard_profile_passes_new_session_focus_contract() -> None:
         assert f"已检查：{category}" in result.stdout
     assert "subject_resolver" not in result.stdout
     assert "hook_bindings" not in result.stdout
+
+
+def test_global_command_guard_valid_config_passes(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    write_global_command_guards(profile, valid_global_command_guard_yaml())
+
+    result = run_validator(profile)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "已检查：global_command_guards" in result.stdout
+
+
+def test_global_command_guard_allows_profile_without_session_focus_config(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    for relative_path in ["state-machine.yaml", "guard-points.yaml", "artifacts.yaml"]:
+        (profile / relative_path).unlink()
+    write_global_command_guards(profile, valid_global_command_guard_yaml())
+
+    result = run_validator(profile)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "已检查：global_command_guards" in result.stdout
+    assert "category=state_machine" not in result.stdout
+    assert "category=guard_points" not in result.stdout
+    assert "category=artifacts" not in result.stdout
+
+
+def test_empty_global_command_guards_list_does_not_skip_session_focus_required_files(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    for relative_path in ["state-machine.yaml", "guard-points.yaml", "artifacts.yaml"]:
+        (profile / relative_path).unlink()
+    write_global_command_guards(profile, "global_command_guards: []\n")
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=state_machine field=state-machine.yaml" in result.stdout
+    assert "category=guard_points field=guard-points.yaml" in result.stdout
+    assert "category=artifacts field=artifacts.yaml" in result.stdout
+
+
+def test_empty_global_command_guards_mapping_does_not_skip_session_focus_required_files(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    for relative_path in ["state-machine.yaml", "guard-points.yaml", "artifacts.yaml"]:
+        (profile / relative_path).unlink()
+    write_global_command_guards(profile, "{}\n")
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=state_machine field=state-machine.yaml" in result.stdout
+    assert "category=guard_points field=guard-points.yaml" in result.stdout
+    assert "category=artifacts field=artifacts.yaml" in result.stdout
+
+
+def test_global_command_guard_missing_command_patterns_fails(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    write_global_command_guards(
+        profile,
+        """
+global_command_guards:
+  - id: verify_requires_review
+    tool: Bash
+    match:
+      required_captures:
+        - change
+    evidence:
+      path: '.local/guard/evidence/{source_scope}/{profile_id}/{guard_id}/{change}/evidence.json'
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+""",
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=global_command_guards" in result.stdout
+    assert "field=global_command_guards.verify_requires_review.match.command_patterns" in result.stdout
+    assert "必须声明至少一个命令模式" in result.stdout
+
+
+def test_global_command_guard_missing_evidence_path_fails(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    write_global_command_guards(
+        profile,
+        """
+global_command_guards:
+  - id: verify_requires_review
+    tool: Bash
+    match:
+      command_patterns:
+        - 'comet-guard.sh (?P<change>[A-Za-z0-9._-]+) verify --apply'
+      required_captures:
+        - change
+    evidence: {}
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+""",
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=global_command_guards" in result.stdout
+    assert "field=global_command_guards.verify_requires_review.evidence.path" in result.stdout
+    assert "必须声明 evidence path template" in result.stdout
+
+
+def test_global_command_guard_rejects_unsupported_json_predicate(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    write_global_command_guards(
+        profile,
+        valid_global_command_guard_yaml().replace("predicate: equals", "predicate: contains", 1),
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=global_command_guards" in result.stdout
+    assert "field=global_command_guards.verify_requires_review.checks.0.predicate" in result.stdout
+    assert "未知或缺失 JSON predicate" in result.stdout
+
+
+def test_global_command_guard_missing_required_capture_value_fails(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    write_global_command_guards(
+        profile,
+        valid_global_command_guard_yaml().replace("(?P<change>[A-Za-z0-9._-]+)", "[A-Za-z0-9._-]+"),
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=global_command_guards" in result.stdout
+    assert "field=global_command_guards.verify_requires_review.match.required_captures.change" in result.stdout
+    assert "缺少必需捕获值 `change`" in result.stdout
+
+
+def test_global_command_guard_rejects_illegal_value_from(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    write_global_command_guards(
+        profile,
+        valid_global_command_guard_yaml().replace("value_from: change", "value_from: missing_capture"),
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=global_command_guards" in result.stdout
+    assert "field=global_command_guards.verify_requires_review.checks.1.value_from" in result.stdout
+    assert "必须引用命名捕获或内置上下文字段" in result.stdout
+
+
+def test_global_command_guard_duplicate_id_in_same_file_fails(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    write_global_command_guards(
+        profile,
+        """
+global_command_guards:
+  - id: duplicate
+    tool: Bash
+    match:
+      command_patterns: ['tool (?P<name>[A-Za-z0-9._-]+)']
+      required_captures: [name]
+    evidence:
+      path: '.local/guard/evidence/{source_scope}/{profile_id}/{guard_id}/{name}/evidence.json'
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+  - id: duplicate
+    tool: Bash
+    match:
+      command_patterns: ['other (?P<name>[A-Za-z0-9._-]+)']
+      required_captures: [name]
+    evidence:
+      path: '.local/guard/evidence/{source_scope}/{profile_id}/{guard_id}/{name}/evidence.json'
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+""",
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=global_command_guards" in result.stdout
+    assert "重复 id `duplicate`" in result.stdout
 
 
 def test_manifest_requires_runtime_api_version(tmp_path: Path) -> None:
