@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 try:
+    from .global_command_guards import evaluate_global_command_guards
     from .json_checks import (
         ARRAY_PREDICATES as JSON_ARTIFACT_ARRAY_PREDICATES,
         JSON_PREDICATES as JSON_ARTIFACT_PREDICATES,
@@ -23,6 +24,7 @@ try:
         json_field,
     )
 except ImportError:
+    from global_command_guards import evaluate_global_command_guards
     from json_checks import (
         ARRAY_PREDICATES as JSON_ARTIFACT_ARRAY_PREDICATES,
         JSON_PREDICATES as JSON_ARTIFACT_PREDICATES,
@@ -663,7 +665,7 @@ def focus_boundary_result(
 ) -> tuple[dict[str, Any] | None, dict[str, Any], int]:
     focus = resolve_focus(project, user_home, source, session_id)
     if focus["status"] == "none":
-        audit_path = write_audit(project, "allow", "no_session_focus_instance", {"source": source, "session_id": session_id})
+        audit_path = write_audit(project, "allow", "no_session_focus_instance", {"kind": "session_focus_boundary", "source": source, "session_id": session_id})
         status = "no_session_focus_instance" if deny_on_no_focus else "allow"
         return None, {
             "status": status,
@@ -672,10 +674,10 @@ def focus_boundary_result(
             "next": "先 activate（激活）当前 Session Focus Instance（会话焦点实例）。",
         }, 1 if deny_on_no_focus else 0
     if focus["status"] == "invalid":
-        audit_path = write_audit(project, "error", "invalid_session_focus_binding", focus)
+        audit_path = write_audit(project, "error", "invalid_session_focus_binding", {"kind": "session_focus_boundary", **focus})
         return None, {"status": "invalid_session_focus_binding", "reason": "invalid_session_focus_binding", "audit_path": str(audit_path)}, 1
     if focus["status"] == "multiple":
-        audit_path = write_audit(project, "error", "multiple_session_focus_bindings", focus)
+        audit_path = write_audit(project, "error", "multiple_session_focus_bindings", {"kind": "session_focus_boundary", **focus})
         return None, {"status": "multiple_session_focus_bindings", "reason": "multiple_session_focus_bindings", "audit_path": str(audit_path)}, 1
 
     binding = focus["binding"]
@@ -688,7 +690,7 @@ def focus_boundary_result(
             project,
             "allow",
             "no_session_focus_instance",
-            {"source": source, "session_id": session_id, "profile_id": profile_id, "instance_id": instance_id},
+            {"kind": "session_focus_boundary", "source": source, "session_id": session_id, "profile_id": profile_id, "instance_id": instance_id},
             user_home,
             scope,
         )
@@ -703,6 +705,38 @@ def route_pre_tool_use(project: Path, user_home: Path, envelope: dict[str, Any])
     session_id = str(context.get("session_id") or "")
     if not session_id:
         return {"status": "error", "reason": "missing_session_id"}, 1
+
+    global_guard = evaluate_global_command_guards(project, user_home, envelope)
+    if global_guard["effect"] == "deny":
+        audit_path = write_audit(
+            project,
+            "deny",
+            str(global_guard["reason"]),
+            {"kind": "global_command_guard", "global_command_guard": global_guard},
+            user_home,
+            str(global_guard.get("runtime_scope") or "project"),
+        )
+        return {
+            "status": "deny",
+            "reason": global_guard["reason"],
+            "next": global_guard.get("next"),
+            "suggestion": global_guard.get("suggestion"),
+            "matched_guard_ids": global_guard.get("matched_guard_ids", []),
+            "failing_guards": global_guard.get("failing_guards", []),
+            "captures": global_guard.get("captures", {}),
+            "captures_by_guard": global_guard.get("captures_by_guard", {}),
+            "audit_path": str(audit_path),
+        }, 1
+    if global_guard.get("matched_guard_ids"):
+        write_audit(
+            project,
+            "allow",
+            str(global_guard["reason"]),
+            {"kind": "global_command_guard", "global_command_guard": global_guard},
+            user_home,
+            str(global_guard.get("runtime_scope") or "project"),
+        )
+
     focus, boundary_body, code = focus_boundary_result(project, user_home, source, session_id, False)
     if focus is None:
         return boundary_body, code
@@ -712,20 +746,20 @@ def route_pre_tool_use(project: Path, user_home: Path, envelope: dict[str, Any])
     profile_id = str(binding["profile_id"])
     scope = scope_from_state(state)
     if profile_runtime_api_version(project, profile_id, user_home, scope) != RUNTIME_API_VERSION:
-        audit_path = write_audit(project, "allow", "incompatible_runtime_api_version", {"profile_id": profile_id}, user_home, scope)
+        audit_path = write_audit(project, "allow", "incompatible_runtime_api_version", {"kind": "session_focus_permission", "profile_id": profile_id}, user_home, scope)
         return {"status": "allow", "reason": "incompatible_runtime_api_version", "audit_path": str(audit_path)}, 0
 
     permission = evaluate_permissions(project, profile_id, state, envelope, user_home)
     effect = permission["effect"]
     if effect == "deny":
-        audit_path = write_audit(project, "deny", str(permission["reason"]), {"permission": permission}, user_home, scope)
+        audit_path = write_audit(project, "deny", str(permission["reason"]), {"kind": "session_focus_permission", "permission": permission}, user_home, scope)
         brief = write_latest_brief(project, profile_id, state, [str(permission["reason"])], audit_path, user_home)
         return {"status": "deny", "reason": permission["reason"], "suggestion": permission.get("suggestion"), "audit_path": str(audit_path)}, 1
     if effect == "ask":
-        audit_path = write_audit(project, "ask", str(permission["reason"]), {"permission": permission}, user_home, scope)
+        audit_path = write_audit(project, "ask", str(permission["reason"]), {"kind": "session_focus_permission", "permission": permission}, user_home, scope)
         brief = write_latest_brief(project, profile_id, state, [str(permission["reason"])], audit_path, user_home)
         return {"status": "ask", "reason": permission["reason"], "suggestion": permission.get("suggestion"), "audit_path": str(audit_path)}, 1
-    audit_path = write_audit(project, "allow", str(permission["reason"]), {"permission": permission}, user_home, scope)
+    audit_path = write_audit(project, "allow", str(permission["reason"]), {"kind": "session_focus_permission", "permission": permission}, user_home, scope)
     return {"status": "allow", "reason": permission["reason"], "audit_path": str(audit_path)}, 0
 
 

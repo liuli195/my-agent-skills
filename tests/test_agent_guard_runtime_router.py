@@ -140,6 +140,17 @@ global_command_guards:
     )
 
 
+def write_global_command_guard_yaml(profile: Path, body: str) -> None:
+    profile.joinpath("global-command-guards.yaml").write_text(body.lstrip(), encoding="utf-8")
+
+
+def write_guard_evidence(project: Path, *parts: str, data: dict) -> Path:
+    path = project / ".local" / "guard" / "evidence" / Path(*parts) / "evidence.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
 def test_collects_project_and_user_global_command_guards(tmp_path: Path) -> None:
     from importlib import util
 
@@ -166,6 +177,229 @@ def test_collects_project_and_user_global_command_guards(tmp_path: Path) -> None
         "project:repo-policy:verify_requires_review",
         "user:personal-policy:verify_requires_review",
     ]
+
+
+def test_global_command_guard_denies_without_session_focus(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    write_global_command_guard(profile, "verify_requires_review", "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) verify --apply")
+
+    result = pre_tool(project, user_home, "comet-guard.sh add-guard-gate-binding verify --apply")
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "deny"
+    assert payload["reason"] == "global_command_guard_required"
+    assert payload["next"] == "produce_required_evidence"
+    assert payload["suggestion"] == "先生成证据。"
+    assert payload["matched_guard_ids"] == ["project:repo-policy:verify_requires_review"]
+    assert payload["captures"] == {"change": "add-guard-gate-binding"}
+    assert payload["failing_guards"][0]["effective_guard_id"] == "project:repo-policy:verify_requires_review"
+    assert ".local" in payload["failing_guards"][0]["evidence_path"]
+    audit = json.loads(Path(payload["audit_path"]).read_text(encoding="utf-8"))
+    assert audit["detail"]["kind"] == "global_command_guard"
+
+
+def test_global_command_guard_passes_with_valid_evidence(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    write_global_command_guard(profile, "verify_requires_review", "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) verify --apply")
+    write_guard_evidence(
+        project,
+        "project",
+        "repo-policy",
+        "verify_requires_review",
+        "add-guard-gate-binding",
+        data={"status": "pass"},
+    )
+
+    result = pre_tool(project, user_home, "comet-guard.sh add-guard-gate-binding verify --apply")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "allow"
+    audit = json.loads(Path(payload["audit_path"]).read_text(encoding="utf-8"))
+    assert audit["detail"]["kind"] == "session_focus_boundary"
+    global_audits = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in (project / ".local" / "guard" / "audit").glob("*.json")
+        if json.loads(path.read_text(encoding="utf-8"))["reason"] == "global_command_guard_passed"
+    ]
+    assert global_audits[0]["detail"]["kind"] == "global_command_guard"
+
+
+def test_global_command_guard_denies_when_any_matching_guard_fails(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    project_profile = project / ".agents" / "guards" / "repo-policy"
+    user_profile = user_home / ".agents" / "guards" / "personal-policy"
+    project_profile.mkdir(parents=True)
+    user_profile.mkdir(parents=True)
+    pattern = "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) verify --apply"
+    write_global_command_guard(project_profile, "verify_requires_review", pattern)
+    write_global_command_guard(user_profile, "verify_requires_review", pattern)
+    write_guard_evidence(
+        project,
+        "project",
+        "repo-policy",
+        "verify_requires_review",
+        "add-guard-gate-binding",
+        data={"status": "pass"},
+    )
+
+    result = pre_tool(project, user_home, "comet-guard.sh add-guard-gate-binding verify --apply")
+
+    assert result.returncode == 1
+    payload = body(result)
+    assert sorted(payload["matched_guard_ids"]) == [
+        "project:repo-policy:verify_requires_review",
+        "user:personal-policy:verify_requires_review",
+    ]
+    assert [item["effective_guard_id"] for item in payload["failing_guards"]] == ["user:personal-policy:verify_requires_review"]
+    assert ".local" in payload["failing_guards"][0]["evidence_path"]
+
+
+def test_global_command_guard_denies_stale_head_ref_from_git_head(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    subprocess.run(["git", "init"], cwd=project, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    (project / "README.md").write_text("test\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=project, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"],
+        cwd=project,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    write_global_command_guard_yaml(
+        profile,
+        """
+global_command_guards:
+  - id: verify_requires_review
+    tool: Bash
+    match:
+      command_patterns:
+        - 'comet-guard.sh (?P<change>[A-Za-z0-9._-]+) verify --apply'
+      required_captures:
+        - change
+    evidence:
+      path: '.local/guard/evidence/{source_scope}/{profile_id}/{guard_id}/{change}/evidence.json'
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+      - field: head_ref
+        predicate: equals
+        value_from: git_head
+    deny:
+      reason: global_command_guard_required
+""",
+    )
+    write_guard_evidence(
+        project,
+        "project",
+        "repo-policy",
+        "verify_requires_review",
+        "add-guard-gate-binding",
+        data={"status": "pass", "head_ref": "stale-head"},
+    )
+
+    result = pre_tool(project, user_home, "comet-guard.sh add-guard-gate-binding verify --apply")
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "deny"
+    assert payload["failing_guards"][0]["failed_checks"][0]["field"] == "head_ref"
+
+
+def test_global_command_guard_denies_missing_required_capture(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    write_global_command_guard_yaml(
+        profile,
+        """
+global_command_guards:
+  - id: verify_requires_review
+    tool: Bash
+    match:
+      command_patterns:
+        - 'comet-guard.sh [A-Za-z0-9._-]+ verify --apply'
+      required_captures:
+        - change
+    evidence:
+      path: '.local/guard/evidence/{source_scope}/{profile_id}/{guard_id}/{change}/evidence.json'
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+    deny:
+      reason: global_command_guard_required
+""",
+    )
+
+    result = pre_tool(project, user_home, "comet-guard.sh add-guard-gate-binding verify --apply")
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["reason"] == "global_command_guard_required"
+    assert payload["failing_guards"][0]["failure_reason"] == "required_capture_missing"
+    assert payload["failing_guards"][0]["missing_captures"] == ["change"]
+
+
+def test_user_global_command_guard_uses_project_runtime_for_project_command(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = user_home / ".agents" / "guards" / "personal-policy"
+    profile.mkdir(parents=True)
+    write_global_command_guard(profile, "verify_requires_review", "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) verify --apply")
+    write_guard_evidence(
+        project,
+        "user",
+        "personal-policy",
+        "verify_requires_review",
+        "add-guard-gate-binding",
+        data={"status": "pass"},
+    )
+
+    result = pre_tool(project, user_home, "comet-guard.sh add-guard-gate-binding verify --apply")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = body(result)
+    assert str(payload["audit_path"]).startswith(str(project / ".local" / "guard" / "audit"))
+    assert not (user_home / ".agents" / "guard" / "evidence").exists()
+
+
+def test_pre_tool_use_without_global_command_guard_match_keeps_existing_session_focus_behavior(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    write_global_command_guard(profile, "verify_requires_review", "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) verify --apply")
+
+    result = pre_tool(project, user_home, "git status")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "allow"
+    assert payload["reason"] == "no_session_focus_instance"
+    assert len(list((project / ".local" / "guard" / "audit").glob("*.json"))) == 1
 
 
 def write_profile(project: Path) -> Path:
@@ -270,6 +504,47 @@ transitions:
 """.lstrip(),
         encoding="utf-8",
     )
+
+
+def test_global_command_guard_allow_does_not_bypass_session_focus_deny(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = write_profile(project)
+    write_state_machine(profile, "deny")
+    write_global_command_guard_yaml(
+        profile,
+        """
+global_command_guards:
+  - id: push_requires_evidence
+    tool: Bash
+    match:
+      command_patterns:
+        - 'git push (?P<branch>[A-Za-z0-9._/-]+)'
+      required_captures:
+        - branch
+    evidence:
+      path: '.local/guard/evidence/{source_scope}/{profile_id}/{guard_id}/{branch}/evidence.json'
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+    deny:
+      reason: global_command_guard_required
+""",
+    )
+    write_guard_evidence(project, "project", "minimal-sample", "push_requires_evidence", "main", data={"status": "pass"})
+    session_start(project, user_home)
+    activate(project, user_home)
+
+    result = pre_tool(project, user_home, "git push main")
+
+    assert result.returncode == 1
+    payload = body(result)
+    assert payload["status"] == "deny"
+    assert payload["reason"] == "当前状态要求 deny。"
+    audit = json.loads(Path(payload["audit_path"]).read_text(encoding="utf-8"))
+    assert audit["detail"]["kind"] == "session_focus_permission"
 
 
 def write_state_machine_with_guard_point_only(profile: Path) -> None:
