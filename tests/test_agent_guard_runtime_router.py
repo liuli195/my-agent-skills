@@ -82,6 +82,39 @@ def test_json_checks_module_exposes_shared_predicates_and_helpers() -> None:
     )
 
 
+def test_global_command_pattern_extracts_named_captures(tmp_path: Path) -> None:
+    from importlib import util
+
+    module_path = PLUGIN_ROOT / "scripts" / "guard_runtime" / "global_command_guards.py"
+    spec = util.spec_from_file_location("global_command_guards", module_path)
+    assert spec and spec.loader
+    module = util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    match = module.match_command_pattern(
+        "comet-guard.sh add-guard-gate-binding verify --apply",
+        "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) verify --apply",
+    )
+
+    assert match == {"change": "add-guard-gate-binding"}
+
+
+def test_global_command_pattern_matches_powershell_wrapped_git_bash(tmp_path: Path) -> None:
+    from importlib import util
+
+    module_path = PLUGIN_ROOT / "scripts" / "guard_runtime" / "global_command_guards.py"
+    spec = util.spec_from_file_location("global_command_guards", module_path)
+    assert spec and spec.loader
+    module = util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    command = "& 'C:\\Program Files\\Git\\bin\\bash.exe' -lc 'cd \"/d/My Project/my-agent-skills\" && comet-guard.sh add-guard-gate-binding verify --apply'"
+
+    normalized = module.normalized_command_texts(command)
+
+    assert "comet-guard.sh add-guard-gate-binding verify --apply" in normalized
+
+
 def write_profile(project: Path) -> Path:
     profile_dir = project / ".agents" / "guards" / "minimal-sample"
     shutil.copytree(MINIMAL_PROFILE, profile_dir)
