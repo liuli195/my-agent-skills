@@ -2,6 +2,8 @@
 comet_change: add-json-artifact-checks
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-19-add-json-artifact-checks
+status: final
 ---
 
 # JSON Artifact Checks Design

@@ -2,6 +2,7 @@
 change: add-json-artifact-checks
 design-doc: docs/superpowers/specs/2026-06-19-json-artifact-checks-design.md
 base-ref: 73ade80fc55b6d6b03b346af124f9d481450406c
+archived-with: 2026-06-19-add-json-artifact-checks
 ---
 
 # JSON Artifact Checks Implementation Plan
@@ -14,6 +15,7 @@ base-ref: 73ade80fc55b6d6b03b346af124f9d481450406c
 
 **Tech Stack:** Python stdlib, pytest, existing Agent Guard Runtime and Guard Profile validator.
 
+archived-with: 2026-06-19-add-json-artifact-checks
 ---
 
 ## File Structure
