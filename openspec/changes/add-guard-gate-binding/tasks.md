@@ -8,8 +8,8 @@
 
 ## 2. 共享 Agent Guard（代理守卫）抽象
 
-- [ ] 2.1 从现有 PreToolUse（工具使用前）命令提取逻辑中抽象可复用的 command context（命令上下文）能力。
-- [ ] 2.2 从 Session Focus permission（会话焦点权限）规则匹配中抽象可复用的命令匹配能力。
+- [x] 2.1 从现有 PreToolUse（工具使用前）命令提取逻辑中抽象可复用的 command context（命令上下文）能力。
+- [x] 2.2 从 Session Focus permission（会话焦点权限）规则匹配中抽象可复用的命令匹配能力。
 - [x] 2.3 从 `json_artifact` 检查中抽象 JSON 字段读取和 predicate（谓词）评估能力。
 - [x] 2.4 在 `json_artifact` 检查和全局命令守卫点之间共享 predicate 校验常量。
 - [x] 2.5 抽象后保持现有 Session Focus permission 行为不变。

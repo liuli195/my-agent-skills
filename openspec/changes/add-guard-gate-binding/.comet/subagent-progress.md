@@ -1,22 +1,24 @@
 # Subagent Progress
 
 - change: add-guard-gate-binding
-- phase: done
-- current_plan_task: Task 6: 文档、端到端验证和 OpenSpec 任务勾选
+- phase: checkoff
+- current_plan_task: Supplemental Task: command context and permission command matcher abstraction
 - current_openspec_tasks:
-  - 5.3 更新 Agent Guard 运行文档，解释“会话焦点守卫”和“全局命令守卫点”的差异。
-  - 5.4 更新目录和运行时文件约定文档，说明插件安装范围、静态画像范围、运行态数据范围的差异。
-  - 5.5 运行聚焦的 Agent Guard runtime 和 validator 测试。
-  - 5.6 运行仓库完整测试套件。
-- implementer_agent: 019ee132-b1fc-7ae3-a4a9-bbae8fcf6932
-- implementation_commit: aa6e408
+  - 2.1 从现有 PreToolUse（工具使用前）命令提取逻辑中抽象可复用的 command context（命令上下文）能力。
+  - 2.2 从 Session Focus permission（会话焦点权限）规则匹配中抽象可复用的命令匹配能力。
+- implementer_agent: 019ee13e-f732-77c3-83e5-ca571ce386ca
+- implementation_commit: b7eb9fd
 - fix_commit: pending
 - changed_files:
-  - plugins/agent-guard/scripts/guard_runtime/README.md
-- red_evidence: documentation task; no RED required
-- green_evidence: package/e2e 10 passed; focused suite 103 passed; openspec valid; full pytest 194 passed
-- spec_review: approved by 019ee13a-16b1-7e60-aa54-f6c832b93cd4
-- quality_review: approved by 019ee13b-9905-7622-94c1-d207f1a10c3b
+  - plugins/agent-guard/scripts/guard_runtime/command_context.py
+  - plugins/agent-guard/scripts/guard_runtime/command_matcher.py
+  - plugins/agent-guard/scripts/guard_runtime/core.py
+  - plugins/agent-guard/scripts/guard_runtime/global_command_guards.py
+  - tests/test_agent_guard_runtime_router.py
+- red_evidence: command_context/command_matcher shared module tests failed before modules existed
+- green_evidence: python -m pytest tests/test_agent_guard_runtime_router.py tests/test_agent_guard_runtime_session_focus.py -q passed, 61 passed in 17.07s
+- spec_review: approved by 019ee142-8971-70c1-b49a-a8b4f3e1379b
+- quality_review: approved by 019ee144-e94f-70d3-bdcc-76c7ef6308a0
 - unresolved_feedback:
   - none
-- review_fix_round: 1
+- review_fix_round: 0
