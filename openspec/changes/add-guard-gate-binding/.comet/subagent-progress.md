@@ -2,22 +2,30 @@
 
 - change: add-guard-gate-binding
 - phase: checkoff
-- current_plan_task: Task 4: 多来源收集和有效守卫 ID
+- current_plan_task: Task 5: Runtime 评估、deny 输出和审计
 - current_openspec_tasks:
-  - 2.6 新增 Global Command Guard Collector（全局命令守卫收集器），收集项目级和用户级所有 `global-command-guards.yaml`。
-  - 2.7 为每条规则生成 effective guard id（有效守卫 ID）：`<source_scope>:<profile_id>:<guard_id>`。
-  - 4.8 添加多来源测试：多个项目级 profile、用户级 + 项目级 profile 同时贡献规则时，所有匹配规则必须全部通过。
-  - 4.9 添加同名规则测试：不同 source scope 或 profile 下同名 guard id 不冲突，evidence 路径和审计使用有效守卫 ID。
-- implementer_agent: 019ee10e-f370-7903-b472-8cd43b7232e3
-- implementation_commit: 1360a77
-- fix_commit: pending
+  - 3.5 提供上下文值来源，例如捕获变量和当前 `git_head`。
+  - 3.6 提供内置上下文值：`source_scope`、`profile_id`、`guard_id`、`effective_guard_id`、`runtime_scope`。
+  - 4.1 添加 PreToolUse 测试，证明没有 Session Focus 时仍会执行全局命令守卫点。
+  - 4.2 添加缺少 evidence（证据）、`head_ref` 过期、evidence 通过、缺少必需捕获值的测试。
+  - 4.3 在 `route_pre_tool_use` 中先评估有效全局命令守卫集，再进入 Session Focus permission。
+  - 4.4 复用共享 JSON 检查能力校验配置的 evidence。
+  - 4.5 返回机器可读的拒绝输出，包含 `reason`、`next`、`suggestion`、匹配的有效守卫 ID 列表、失败守卫列表、捕获值和审计路径。
+  - 4.6 审计记录必须区分全局命令守卫点和会话焦点权限检查。
+  - 4.7 添加作用域测试：用户级安装或用户级静态规则在项目命令中默认使用 `.local/guard`；显式用户作用域使用 `~/.agents/guard`；Comet change review 不从用户级运行目录读取证据。
+  - 5.1 验证没有全局命令守卫点匹配时，现有 Session Focus PreToolUse 行为不变。
+  - 5.2 验证全局命令守卫点允许后，后续 Session Focus permission 仍可拒绝命令。
+- implementer_agent: 019ee115-e493-76a3-88ff-860e8c005812
+- implementation_commit: 11ca0a5
+- fix_commit: 3b7d93a, 87af11e
 - changed_files:
+  - plugins/agent-guard/scripts/guard_runtime/core.py
   - plugins/agent-guard/scripts/guard_runtime/global_command_guards.py
   - tests/test_agent_guard_runtime_router.py
-- red_evidence: collect_global_command_guards test failed before implementation
-- green_evidence: python -m pytest tests/test_agent_guard_runtime_router.py -q passed, 39 passed in 10.95s
-- spec_review: approved by 019ee111-49fb-7c02-8d02-220814d26468
-- quality_review: approved by 019ee112-6e5b-72b3-bbf8-9ae73b841e5b
+- red_evidence:新增全局守卫用例先失败，6 failed / 2 passed
+- green_evidence: python -m pytest tests/test_agent_guard_runtime_router.py tests/test_agent_guard_runtime_session_focus.py -q passed, 59 passed
+- spec_review: approved by 019ee124-d55b-7c22-9741-62c93db2424f
+- quality_review: approved by 019ee12f-9715-7891-a536-c60bbbd10126
 - unresolved_feedback:
   - none
-- review_fix_round: 0
+- review_fix_round: 2

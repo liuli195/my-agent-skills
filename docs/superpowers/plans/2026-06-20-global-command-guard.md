@@ -675,7 +675,7 @@ git commit -m "feat: 收集多来源全局命令守卫"
 - Modify: `tests/test_agent_guard_runtime_router.py`
 - Modify: `tests/test_agent_guard_runtime_session_focus.py`
 
-- [ ] **Step 1: 写失败测试：无 Session Focus 时全局守卫仍拒绝命令**
+- [x] **Step 1: 写失败测试：无 Session Focus 时全局守卫仍拒绝命令**
 
 在 `tests/test_agent_guard_runtime_router.py` 添加：
 
@@ -699,7 +699,7 @@ def test_global_command_guard_denies_without_session_focus(tmp_path: Path) -> No
     assert ".local" in payload["failing_guards"][0]["evidence_path"]
 ```
 
-- [ ] **Step 2: 实现 evidence 评估**
+- [x] **Step 2: 实现 evidence 评估**
 
 在 `global_command_guards.py` 添加：
 
@@ -748,7 +748,7 @@ def render_template(template: str, values: dict[str, str]) -> str:
 - 任意失败：返回 `effect=deny`。
 - `value_from` 先查 captures，再查内置上下文字段。
 
-- [ ] **Step 3: 在 core.py 接入 PreToolUse**
+- [x] **Step 3: 在 core.py 接入 PreToolUse**
 
 在 `plugins/agent-guard/scripts/guard_runtime/core.py` 顶部添加：
 
@@ -775,7 +775,7 @@ from global_command_guards import evaluate_global_command_guards
 
 如果 `effect=allow` 且 `matched_guard_ids` 非空，也写 allow 审计后继续进入原有 Session Focus 流程。
 
-- [ ] **Step 4: 写失败测试：evidence 通过后允许继续**
+- [x] **Step 4: 写失败测试：evidence 通过后允许继续**
 
 在 `tests/test_agent_guard_runtime_router.py` 添加：
 
@@ -798,7 +798,7 @@ def test_global_command_guard_passes_with_valid_evidence(tmp_path: Path) -> None
     assert payload["status"] == "allow"
 ```
 
-- [ ] **Step 5: 写失败测试：多规则任一失败则 deny**
+- [x] **Step 5: 写失败测试：多规则任一失败则 deny**
 
 在 `tests/test_agent_guard_runtime_router.py` 添加：
 
@@ -830,7 +830,7 @@ def test_global_command_guard_denies_when_any_matching_guard_fails(tmp_path: Pat
     assert ".local" in payload["failing_guards"][0]["evidence_path"]
 ```
 
-- [ ] **Step 6: 写回归测试：全局守卫 allow 后 Session Focus 仍可 deny**
+- [x] **Step 6: 写回归测试：全局守卫 allow 后 Session Focus 仍可 deny**
 
 在 `tests/test_agent_guard_runtime_session_focus.py` 或 `tests/test_agent_guard_runtime_router.py` 添加：
 
@@ -856,7 +856,7 @@ def test_global_command_guard_allow_does_not_bypass_session_focus_deny(tmp_path:
     assert payload["reason"] == "当前状态要求 deny。"
 ```
 
-- [ ] **Step 7: 运行 runtime 聚焦测试**
+- [x] **Step 7: 运行 runtime 聚焦测试**
 
 Run:
 
@@ -866,7 +866,7 @@ python -m pytest tests/test_agent_guard_runtime_router.py tests/test_agent_guard
 
 Expected: PASS.
 
-- [ ] **Step 8: 提交 Task 5**
+- [x] **Step 8: 提交 Task 5**
 
 ```powershell
 git add plugins/agent-guard/scripts/guard_runtime/global_command_guards.py `
