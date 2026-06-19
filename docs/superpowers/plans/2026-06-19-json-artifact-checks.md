@@ -436,7 +436,7 @@ Expected: both pass.
 - Modify: `tests/test_agent_guard_runtime_router.py`
 - Modify: `plugins/agent-guard/scripts/guard_runtime/core.py`
 
-- [ ] **Step 1: Add full predicate tests**
+- [x] **Step 1: Add full predicate tests**
 
 Add tests for:
 
@@ -456,7 +456,7 @@ def test_state_completed_blocks_invalid_json_artifact(tmp_path: Path) -> None:
 
 Use the same setup pattern as Task 2. Assert `payload["details"]["json_check"]` contains the failing predicate data and invalid JSON reports `failure_reason == "invalid_json_artifact"`.
 
-- [ ] **Step 2: Run new tests and confirm failures**
+- [x] **Step 2: Run new tests and confirm failures**
 
 Run:
 
@@ -466,7 +466,7 @@ python -m pytest tests/test_agent_guard_runtime_router.py -q
 
 Expected: newly added tests fail until all predicates and audit details are complete.
 
-- [ ] **Step 3: Finish predicate behavior and audit details**
+- [x] **Step 3: Finish predicate behavior and audit details**
 
 Update `evaluate_json_predicate` and the `json_artifact` dispatch until all predicates pass. Ensure the final failure dict from `guard_failure_details` includes `json_check`; if needed, update `guard_failure_details`:
 
@@ -474,7 +474,7 @@ Update `evaluate_json_predicate` and the `json_artifact` dispatch until all pred
         **({"json_check": failure.get("json_check")} if failure.get("json_check") else {}),
 ```
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run:
 
@@ -489,11 +489,11 @@ Expected: pass.
 **Files:**
 - Modify: `openspec/changes/add-json-artifact-checks/tasks.md`
 
-- [ ] **Step 1: Mark completed OpenSpec tasks**
+- [x] **Step 1: Mark completed OpenSpec tasks**
 
 After implementation and focused tests pass, update `openspec/changes/add-json-artifact-checks/tasks.md` by changing completed items from `- [ ]` to `- [x]`.
 
-- [ ] **Step 2: Validate OpenSpec change**
+- [x] **Step 2: Validate OpenSpec change**
 
 Run:
 
@@ -503,7 +503,7 @@ openspec validate add-json-artifact-checks --strict
 
 Expected: `Change 'add-json-artifact-checks' is valid`.
 
-- [ ] **Step 3: Run full repository tests**
+- [x] **Step 3: Run full repository tests**
 
 Run:
 
@@ -513,7 +513,7 @@ python -m pytest -q
 
 Expected: all tests pass.
 
-- [ ] **Step 4: Commit the completed change**
+- [x] **Step 4: Commit the completed change**
 
 Run:
 

@@ -13,6 +13,6 @@
 
 ## 3. Audit and Regression
 
-- [ ] 3.1 Include JSON check failure details in runtime audit output.
-- [ ] 3.2 Run focused Agent Guard runtime and validator tests.
-- [ ] 3.3 Run full repository test suite before marking the change complete.
+- [x] 3.1 Include JSON check failure details in runtime audit output.
+- [x] 3.2 Run focused Agent Guard runtime and validator tests.
+- [x] 3.3 Run full repository test suite before marking the change complete.

@@ -1,0 +1,21 @@
+workflow: full
+phase: build
+context_compression: beta
+build_mode: executing-plans
+build_pause: switched from subagent-driven-development after user selected executing-plans because subagent dispatch hit usage limit
+subagent_dispatch: confirmed
+tdd_mode: tdd
+isolation: branch
+verify_mode: null
+auto_transition: true
+base_ref: 73ade80fc55b6d6b03b346af124f9d481450406c
+design_doc: docs/superpowers/specs/2026-06-19-json-artifact-checks-design.md
+plan: docs/superpowers/plans/2026-06-19-json-artifact-checks.md
+verify_result: pending
+verification_report: null
+branch_status: pending
+created_at: 2026-06-18
+verified_at: null
+archived: false
+handoff_context: openspec/changes/add-json-artifact-checks/.comet/handoff/spec-context.json
+handoff_hash: f9d24ba1a404310e8d31e4b4f32f37d89f9de67d82ec176497e951895391d031
