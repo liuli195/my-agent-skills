@@ -524,7 +524,8 @@ def validate_json_artifact_check(
             )
         )
 
-    if not is_present(check.get("field")):
+    field = check.get("field")
+    if not isinstance(field, str) or not field:
         issues.append(required_json_artifact_field("field", f"{base_field}.field"))
 
     predicate = check.get("predicate")

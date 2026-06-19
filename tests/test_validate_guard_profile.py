@@ -270,6 +270,40 @@ guard_points:
     assert "artifacts" in result.stdout
 
 
+def test_json_artifact_guard_point_check_requires_string_field(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    (profile / "guard-points.yaml").write_text(
+        """
+guard_points:
+  - id: completion_note_present
+    description: 保留状态机引用的既有守卫点。
+    checks:
+      - id: completion_note_exists
+        type: artifact_exists
+        artifact: completion_note
+  - id: review_pass_valid
+    description: JSON field 必须是字符串。
+    checks:
+      - id: status_pass
+        type: json_artifact
+        artifact: completion_note
+        field:
+          - not
+          - a
+          - path
+        predicate: exists
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=guard_points" in result.stdout
+    assert "field=guard_points.review_pass_valid.checks.status_pass.field" in result.stdout
+
+
 def test_json_artifact_guard_point_check_requires_predicate(tmp_path: Path) -> None:
     profile = tmp_path / "profile"
     shutil.copytree(MINIMAL_PROFILE, profile)
