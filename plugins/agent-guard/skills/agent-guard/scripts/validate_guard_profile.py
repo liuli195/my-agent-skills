@@ -514,13 +514,13 @@ def validate_global_command_guards(profile_dir: Path) -> tuple[bool, list[Valida
 
     data, issue = load_yaml(path, "global_command_guards")
     if issue or data is None:
-        return True, [issue] if issue else []
+        return False, [issue] if issue else []
 
     guards = data.get("global_command_guards")
     if guards is None:
-        return True, []
+        return False, []
     if not isinstance(guards, list):
-        return True, [
+        return False, [
             ValidationIssue(
                 "global_command_guards",
                 "global_command_guards",
@@ -662,7 +662,7 @@ def validate_global_command_guards(profile_dir: Path) -> tuple[bool, list[Valida
         for check_index, check in enumerate(checks):
             issues.extend(validate_global_command_guard_check(base, check_index, check, capture_names))
 
-    return True, issues
+    return bool(guards) and not issues, issues
 
 
 def has_items(value: Any) -> bool:
@@ -1049,13 +1049,14 @@ def validate_profile(profile_dir: Path) -> tuple[list[str], list[ValidationIssue
         ]
 
     issues.extend(validate_legacy_contract(profile_dir))
-    has_global_command_guards, global_command_guard_issues = validate_global_command_guards(profile_dir)
+    has_global_command_guards_file = (profile_dir / GLOBAL_COMMAND_GUARDS_FILE).exists()
+    has_active_global_command_guards, global_command_guard_issues = validate_global_command_guards(profile_dir)
     issues.extend(global_command_guard_issues)
 
     for category, relative_path in REQUIRED_FILES.items():
         path = profile_dir / relative_path
         if not path.exists():
-            if has_global_command_guards and category in SESSION_FOCUS_CATEGORIES:
+            if has_active_global_command_guards and category in SESSION_FOCUS_CATEGORIES:
                 continue
             issues.append(
                 ValidationIssue(
@@ -1080,7 +1081,7 @@ def validate_profile(profile_dir: Path) -> tuple[list[str], list[ValidationIssue
 
         checked.append(category)
 
-    if has_global_command_guards:
+    if has_global_command_guards_file:
         checked.append("global_command_guards")
 
     reference_categories = {"state_machine", "guard_points", "artifacts"}

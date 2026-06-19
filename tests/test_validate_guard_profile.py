@@ -119,6 +119,36 @@ def test_global_command_guard_allows_profile_without_session_focus_config(tmp_pa
     assert "category=artifacts" not in result.stdout
 
 
+def test_empty_global_command_guards_list_does_not_skip_session_focus_required_files(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    for relative_path in ["state-machine.yaml", "guard-points.yaml", "artifacts.yaml"]:
+        (profile / relative_path).unlink()
+    write_global_command_guards(profile, "global_command_guards: []\n")
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=state_machine field=state-machine.yaml" in result.stdout
+    assert "category=guard_points field=guard-points.yaml" in result.stdout
+    assert "category=artifacts field=artifacts.yaml" in result.stdout
+
+
+def test_empty_global_command_guards_mapping_does_not_skip_session_focus_required_files(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    for relative_path in ["state-machine.yaml", "guard-points.yaml", "artifacts.yaml"]:
+        (profile / relative_path).unlink()
+    write_global_command_guards(profile, "{}\n")
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=state_machine field=state-machine.yaml" in result.stdout
+    assert "category=guard_points field=guard-points.yaml" in result.stdout
+    assert "category=artifacts field=artifacts.yaml" in result.stdout
+
+
 def test_global_command_guard_missing_command_patterns_fails(tmp_path: Path) -> None:
     profile = tmp_path / "profile"
     shutil.copytree(MINIMAL_PROFILE, profile)
