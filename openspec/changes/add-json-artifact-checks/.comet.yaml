@@ -7,6 +7,8 @@ subagent_dispatch: confirmed
 tdd_mode: tdd
 isolation: branch
 verify_mode: null
+build_command: python -m pytest -q
+verify_command: python -m pytest -q
 auto_transition: true
 base_ref: 73ade80fc55b6d6b03b346af124f9d481450406c
 design_doc: docs/superpowers/specs/2026-06-19-json-artifact-checks-design.md
