@@ -734,7 +734,7 @@ git commit -m "feat: 添加 SDK 解析和 reviewer 派发接口"
 - Modify: `plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py`
 - Modify: `tests/test_cross_agent_review_cli.py`
 
-- [ ] **Step 1: Write failing aggregation and output tests**
+- [x] **Step 1: Write failing aggregation and output tests**
 
 Append:
 
@@ -805,7 +805,7 @@ def test_blocking_findings_do_not_generate_pass_marker(tmp_path: Path) -> None:
     assert not (tmp_path / "out" / "review-pass.json").exists()
 ```
 
-- [ ] **Step 2: Add hash, deduplication, invalid result, and risk skip tests**
+- [x] **Step 2: Add hash, deduplication, invalid result, and risk skip tests**
 
 Append:
 
@@ -865,7 +865,7 @@ def test_risk_review_skip_is_recorded(tmp_path: Path) -> None:
     assert data["skipped_reviewers"] == [{"role": "risk-review", "reason": "low-risk-doc-only"}]
 ```
 
-- [ ] **Step 3: Run output tests and verify they fail**
+- [x] **Step 3: Run output tests and verify they fail**
 
 Run:
 
@@ -875,7 +875,7 @@ python -m pytest tests/test_cross_agent_review_cli.py::test_non_blocking_finding
 
 Expected: FAIL because aggregation and outputs are not implemented.
 
-- [ ] **Step 4: Implement aggregation and output writing**
+- [x] **Step 4: Implement aggregation and output writing**
 
 Add:
 
@@ -1025,7 +1025,7 @@ def run_review(args: argparse.Namespace) -> int:
     return status
 ```
 
-- [ ] **Step 5: Run output tests and verify they pass**
+- [x] **Step 5: Run output tests and verify they pass**
 
 Run:
 
@@ -1035,7 +1035,7 @@ python -m pytest tests/test_cross_agent_review_cli.py -q
 
 Expected: PASS for current test file.
 
-- [ ] **Step 6: Commit aggregation and outputs**
+- [x] **Step 6: Commit aggregation and outputs**
 
 ```bash
 git add plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py tests/test_cross_agent_review_cli.py
