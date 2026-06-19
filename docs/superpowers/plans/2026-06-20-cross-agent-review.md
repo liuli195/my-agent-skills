@@ -537,7 +537,7 @@ git commit -m "feat: 添加 review 输入校验和提交绑定"
 - Modify: `plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py`
 - Modify: `tests/test_cross_agent_review_cli.py`
 
-- [ ] **Step 1: Write failing SDK resolution tests**
+- [x] **Step 1: Write failing SDK resolution tests**
 
 Append to `tests/test_cross_agent_review_cli.py`:
 
@@ -565,7 +565,7 @@ def test_fake_reviewer_results_bypass_real_sdk_for_tests(tmp_path: Path) -> None
     assert result.returncode == 0, result.stdout + result.stderr
 ```
 
-- [ ] **Step 2: Write failing readonly role coverage test**
+- [x] **Step 2: Write failing readonly role coverage test**
 
 Append:
 
@@ -600,7 +600,7 @@ def test_reviewer_roles_are_recorded_in_results(tmp_path: Path) -> None:
     assert "Write" not in data["readonly_tools"]
 ```
 
-- [ ] **Step 3: Run new dispatch tests and verify they fail**
+- [x] **Step 3: Run new dispatch tests and verify they fail**
 
 Run:
 
@@ -610,7 +610,7 @@ python -m pytest tests/test_cross_agent_review_cli.py::test_sdk_missing_reports_
 
 Expected: FAIL because SDK resolution, fake dispatch, and output writing are not implemented.
 
-- [ ] **Step 4: Implement SDK resolution helpers and readonly tool constants**
+- [x] **Step 4: Implement SDK resolution helpers and readonly tool constants**
 
 Add to `cross_agent_review.py`:
 
@@ -673,7 +673,7 @@ def resolve_sdk_python(explicit: Path | None, require_real_sdk: bool) -> str:
 
 Add `import sys` at the top.
 
-- [ ] **Step 5: Implement fake reviewer dispatch and real SDK seam**
+- [x] **Step 5: Implement fake reviewer dispatch and real SDK seam**
 
 Add:
 
@@ -696,7 +696,7 @@ def dispatch_reviewers(review_args: ReviewArgs, sdk_python: str) -> list[dict]:
 
 The real SDK dispatch is implemented in Task 5 after outputs and aggregation are stable.
 
-- [ ] **Step 6: Add output directory helper**
+- [x] **Step 6: Add output directory helper**
 
 Add:
 
@@ -711,7 +711,7 @@ def output_dir_for(review_args: ReviewArgs) -> Path:
     return Path(".local") / "cross-agent-review" / review_args.change / short_ref(review_args.head_ref)
 ```
 
-- [ ] **Step 7: Run focused SDK/dispatch tests**
+- [x] **Step 7: Run focused SDK/dispatch tests**
 
 Run:
 
@@ -721,7 +721,7 @@ python -m pytest tests/test_cross_agent_review_cli.py::test_sdk_missing_reports_
 
 Expected: PASS after output writing is added in Task 4. If Task 4 is not complete yet, run this command after Task 4 Step 4.
 
-- [ ] **Step 8: Commit SDK resolution seam**
+- [x] **Step 8: Commit SDK resolution seam**
 
 ```bash
 git add plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py tests/test_cross_agent_review_cli.py
