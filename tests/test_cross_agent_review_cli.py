@@ -156,7 +156,7 @@ def test_untracked_input_files_in_space_directory_are_allowed(tmp_path: Path) ->
     )
 
     assert result.returncode == 0
-    assert "status: ready" in result.stdout
+    assert "status: pass" in result.stdout
 
 
 def test_head_mismatch_rejects_before_dispatch(tmp_path: Path) -> None:
@@ -281,3 +281,124 @@ def test_reviewer_roles_are_recorded_in_results(tmp_path: Path) -> None:
     ]
     assert "Edit" not in data["readonly_tools"]
     assert "Write" not in data["readonly_tools"]
+
+
+def test_non_blocking_findings_generate_pass_marker(tmp_path: Path) -> None:
+    head = init_repo(tmp_path / "repo")
+    fake = json.dumps(
+        [
+            {
+                "role": "spec-alignment",
+                "status": "completed",
+                "findings": [
+                    {
+                        "severity": "WARNING",
+                        "location": "app.txt:1",
+                        "summary": "Minor issue",
+                        "evidence": "Evidence",
+                        "recommendation": "Recommendation",
+                    }
+                ],
+            }
+        ]
+    )
+
+    result = run(
+        *review_args(tmp_path / "repo", head, tmp_path / "out"),
+        "--fake-reviewer-results",
+        fake,
+        cwd=tmp_path / "repo",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "out" / "review-report.md").is_file()
+    assert (tmp_path / "out" / "review-results.json").is_file()
+    assert (tmp_path / "out" / "review-pass.json").is_file()
+
+
+def test_blocking_findings_do_not_generate_pass_marker(tmp_path: Path) -> None:
+    head = init_repo(tmp_path / "repo")
+    fake = json.dumps(
+        [
+            {
+                "role": "implementation-correctness",
+                "status": "completed",
+                "findings": [
+                    {
+                        "severity": "IMPORTANT",
+                        "location": "app.txt:1",
+                        "summary": "Wrong behavior",
+                        "evidence": "Evidence",
+                        "recommendation": "Fix behavior",
+                    }
+                ],
+            }
+        ]
+    )
+
+    result = run(
+        *review_args(tmp_path / "repo", head, tmp_path / "out"),
+        "--fake-reviewer-results",
+        fake,
+        cwd=tmp_path / "repo",
+    )
+
+    assert result.returncode == 1
+    assert (tmp_path / "out" / "review-report.md").is_file()
+    assert (tmp_path / "out" / "review-results.json").is_file()
+    assert not (tmp_path / "out" / "review-pass.json").exists()
+
+
+def test_report_hash_matches_report(tmp_path: Path) -> None:
+    head = init_repo(tmp_path / "repo")
+    result = run(*review_args(tmp_path / "repo", head, tmp_path / "out"), cwd=tmp_path / "repo")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = (tmp_path / "out" / "review-report.md").read_bytes()
+    marker = json.loads((tmp_path / "out" / "review-pass.json").read_text(encoding="utf-8"))
+    import hashlib
+
+    assert marker["report_hash"] == hashlib.sha256(report).hexdigest()
+    assert marker["head_ref"] == head
+
+
+def test_duplicate_findings_are_counted_once(tmp_path: Path) -> None:
+    head = init_repo(tmp_path / "repo")
+    finding = {
+        "severity": "IMPORTANT",
+        "location": "app.txt:1",
+        "summary": "Duplicate",
+        "evidence": "Evidence",
+        "recommendation": "Fix",
+    }
+    fake = json.dumps(
+        [
+            {"role": "spec-alignment", "status": "completed", "findings": [finding]},
+            {"role": "implementation-correctness", "status": "completed", "findings": [finding]},
+        ]
+    )
+
+    result = run(
+        *review_args(tmp_path / "repo", head, tmp_path / "out"),
+        "--fake-reviewer-results",
+        fake,
+        cwd=tmp_path / "repo",
+    )
+
+    assert result.returncode == 1
+    data = json.loads((tmp_path / "out" / "review-results.json").read_text(encoding="utf-8"))
+    assert data["blocking_findings"] == 1
+
+
+def test_risk_review_skip_is_recorded(tmp_path: Path) -> None:
+    head = init_repo(tmp_path / "repo")
+    result = run(
+        *review_args(tmp_path / "repo", head, tmp_path / "out"),
+        "--disable-risk-review",
+        "low-risk-doc-only",
+        cwd=tmp_path / "repo",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    data = json.loads((tmp_path / "out" / "review-results.json").read_text(encoding="utf-8"))
+    assert data["skipped_reviewers"] == [{"role": "risk-review", "reason": "low-risk-doc-only"}]

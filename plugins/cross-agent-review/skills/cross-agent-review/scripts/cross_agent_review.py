@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -19,6 +20,9 @@ REVIEWER_ROLES = [
     "risk-review",
 ]
 READONLY_TOOLS = ["Read", "Glob", "Grep", "Bash(git diff *)", "Bash(git show *)", "Bash(git status *)"]
+BLOCKING_SEVERITIES = {"CRITICAL", "IMPORTANT"}
+NON_BLOCKING_SEVERITIES = {"WARNING", "SUGGESTION"}
+ALL_SEVERITIES = BLOCKING_SEVERITIES | NON_BLOCKING_SEVERITIES
 
 
 @dataclass(frozen=True)
@@ -200,17 +204,136 @@ def output_dir_for(review_args: ReviewArgs) -> Path:
     return Path(".local") / "cross-agent-review" / review_args.change / short_ref(review_args.head_ref)
 
 
-def write_review_results(review_args: ReviewArgs, reviewers: list[dict]) -> None:
-    out_dir = output_dir_for(review_args)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    payload = {
+def normalize_finding(raw: dict) -> dict:
+    severity = str(raw.get("severity", "")).upper()
+    if severity not in ALL_SEVERITIES:
+        severity = "CRITICAL"
+    return {
+        "severity": severity,
+        "location": str(raw.get("location", "")),
+        "summary": str(raw.get("summary", "")),
+        "evidence": str(raw.get("evidence", "")),
+        "recommendation": str(raw.get("recommendation", "")),
+    }
+
+
+def aggregate(reviewers: list[dict], skipped: list[dict]) -> dict:
+    findings: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+    for reviewer in reviewers:
+        role = str(reviewer.get("role", "unknown"))
+        raw_findings = reviewer.get("findings", [])
+        if not isinstance(raw_findings, list):
+            raw_findings = [
+                {
+                    "severity": "CRITICAL",
+                    "location": role,
+                    "summary": "Reviewer returned invalid findings",
+                    "evidence": json.dumps(reviewer, ensure_ascii=False),
+                    "recommendation": "Rerun review or fix reviewer prompt",
+                }
+            ]
+        for raw in raw_findings:
+            if not isinstance(raw, dict):
+                raw = {
+                    "severity": "CRITICAL",
+                    "location": role,
+                    "summary": "Reviewer returned invalid finding",
+                    "evidence": repr(raw),
+                    "recommendation": "Rerun review or fix reviewer prompt",
+                }
+            finding = normalize_finding(raw)
+            key = (finding["severity"], finding["location"], finding["summary"])
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(finding)
+    blocking = sum(1 for finding in findings if finding["severity"] in BLOCKING_SEVERITIES)
+    return {
         "reviewers": reviewers,
+        "skipped_reviewers": skipped,
+        "findings": findings,
+        "blocking_findings": blocking,
         "readonly_tools": READONLY_TOOLS,
     }
-    (out_dir / "review-results.json").write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+
+
+def write_json(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def render_report(review_args: ReviewArgs, summary: dict) -> str:
+    lines = [
+        f"# Cross-Agent Review: {review_args.change}",
+        "",
+        f"- Base ref: `{review_args.base_ref}`",
+        f"- Head ref: `{review_args.head_ref}`",
+        f"- Blocking findings: `{summary['blocking_findings']}`",
+        "",
+        "## Findings",
+        "",
+    ]
+    if not summary["findings"]:
+        lines.append("No findings.")
+    for finding in summary["findings"]:
+        lines.extend(
+            [
+                f"### {finding['severity']}: {finding['summary']}",
+                "",
+                f"- Location: `{finding['location']}`",
+                f"- Evidence: {finding['evidence']}",
+                f"- Recommendation: {finding['recommendation']}",
+                "",
+            ]
+        )
+    if summary["skipped_reviewers"]:
+        lines.extend(["## Skipped Reviewers", ""])
+        for skipped in summary["skipped_reviewers"]:
+            lines.append(f"- `{skipped['role']}`: {skipped['reason']}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def allowed_input_paths(review_args: ReviewArgs) -> list[Path]:
+    return [
+        review_args.diff_file,
+        review_args.spec_file,
+        review_args.design_file,
+        review_args.tasks_file,
+        review_args.tests_file,
+    ]
+
+
+def write_outputs(review_args: ReviewArgs, summary: dict) -> int:
+    out_dir = output_dir_for(review_args)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    report_text = render_report(review_args, summary)
+    report_path = out_dir / "review-report.md"
+    results_path = out_dir / "review-results.json"
+    pass_path = out_dir / "review-pass.json"
+    report_path.write_text(report_text, encoding="utf-8")
+    write_json(results_path, summary)
+    if summary["blocking_findings"] == 0:
+        ensure_clean_subject(
+            Path.cwd(),
+            review_args.head_ref,
+            [*allowed_input_paths(review_args), report_path, results_path, pass_path],
+        )
+        report_hash = hashlib.sha256(report_path.read_bytes()).hexdigest()
+        write_json(
+            pass_path,
+            {
+                "status": "pass",
+                "change": review_args.change,
+                "base_ref": review_args.base_ref,
+                "head_ref": review_args.head_ref,
+                "blocking_findings": 0,
+                "report": "review-report.md",
+                "report_hash": report_hash,
+            },
+        )
+        return 0
+    return 1
 
 
 def run_review(args: argparse.Namespace) -> int:
@@ -219,29 +342,25 @@ def run_review(args: argparse.Namespace) -> int:
         return 2
     try:
         review_args = parse_review_args(args)
-        ensure_clean_subject(
-            Path.cwd(),
-            review_args.head_ref,
-            [
-                review_args.diff_file,
-                review_args.spec_file,
-                review_args.design_file,
-                review_args.tasks_file,
-                review_args.tests_file,
-            ],
-        )
+        ensure_clean_subject(Path.cwd(), review_args.head_ref, allowed_input_paths(review_args))
         sdk_python = resolve_sdk_python(
             review_args.sdk_python,
             require_real_sdk=review_args.fake_reviewer_results is None or review_args.sdk_python is not None,
         )
+        ensure_clean_subject(Path.cwd(), review_args.head_ref, allowed_input_paths(review_args))
         reviewers = dispatch_reviewers(review_args, sdk_python)
-        write_review_results(review_args, reviewers)
+        skipped = []
+        if review_args.disable_risk_review:
+            skipped.append({"role": "risk-review", "reason": review_args.disable_risk_review})
+            reviewers = [item for item in reviewers if item.get("role") != "risk-review"]
+        summary = aggregate(reviewers, skipped)
+        status = write_outputs(review_args, summary)
     except (ValueError, json.JSONDecodeError) as exc:
         print("status: failed")
         print(f"error: {exc}")
         return 1
-    print("status: ready")
-    return 0
+    print("status: pass" if status == 0 else "status: findings")
+    return status
 
 
 def main(argv: Sequence[str] | None = None) -> int:
