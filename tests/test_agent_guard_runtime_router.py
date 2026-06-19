@@ -41,6 +41,45 @@ def body(result: subprocess.CompletedProcess[str]) -> dict:
     return json.loads(result.stdout)
 
 
+def test_json_checks_module_exposes_shared_predicates_and_helpers() -> None:
+    from importlib import util
+
+    module_path = PLUGIN_ROOT / "scripts" / "guard_runtime" / "json_checks.py"
+    spec = util.spec_from_file_location("json_checks", module_path)
+    assert spec and spec.loader
+    module = util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.JSON_PREDICATES == {
+        "exists",
+        "equals",
+        "not_equals",
+        "number_lte",
+        "number_gte",
+        "array_none",
+        "array_all",
+    }
+    assert module.VALUE_PREDICATES == {"equals", "not_equals", "number_lte", "number_gte"}
+    assert module.ARRAY_PREDICATES == {"array_none", "array_all"}
+    assert module.json_field({"review": {"status": "pass"}}, "review.status") == "pass"
+    assert module.json_field({"review": {"status": "pass"}}, "review.missing") is None
+    assert module.evaluate_json_predicate("pass", "equals", "pass")
+    assert module.evaluate_json_predicate("pass", "not_equals", "fail")
+    assert module.evaluate_json_predicate(2, "number_lte", 3)
+    assert module.evaluate_json_predicate(4, "number_gte", 3)
+    assert not module.evaluate_json_predicate(True, "number_lte", 1)
+    assert module.evaluate_json_predicate(
+        [{"severity": "P2"}, {"severity": "P3"}],
+        "array_none",
+        where={"field": "severity", "predicate": "equals", "value": "P0"},
+    )
+    assert module.evaluate_json_predicate(
+        [{"triaged": True}, {"triaged": True}],
+        "array_all",
+        where={"field": "triaged", "predicate": "equals", "value": True},
+    )
+
+
 def write_profile(project: Path) -> Path:
     profile_dir = project / ".agents" / "guards" / "minimal-sample"
     shutil.copytree(MINIMAL_PROFILE, profile_dir)

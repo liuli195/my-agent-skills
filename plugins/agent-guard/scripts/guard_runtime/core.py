@@ -13,6 +13,23 @@ from typing import Any
 
 import yaml
 
+try:
+    from .json_checks import (
+        ARRAY_PREDICATES as JSON_ARTIFACT_ARRAY_PREDICATES,
+        JSON_PREDICATES as JSON_ARTIFACT_PREDICATES,
+        VALUE_PREDICATES as JSON_ARTIFACT_VALUE_PREDICATES,
+        evaluate_json_predicate as evaluate_shared_json_predicate,
+        json_field,
+    )
+except ImportError:
+    from json_checks import (
+        ARRAY_PREDICATES as JSON_ARTIFACT_ARRAY_PREDICATES,
+        JSON_PREDICATES as JSON_ARTIFACT_PREDICATES,
+        VALUE_PREDICATES as JSON_ARTIFACT_VALUE_PREDICATES,
+        evaluate_json_predicate as evaluate_shared_json_predicate,
+        json_field,
+    )
+
 
 RUNTIME_API_VERSION = "agent-guard-runtime/v1"
 
@@ -746,9 +763,6 @@ def artifact_exists(project: Path, profile_id: str, instance_id: str, state_vers
 
 
 MISSING_JSON_VALUE = object()
-JSON_ARTIFACT_PREDICATES = {"exists", "equals", "not_equals", "number_lte", "number_gte", "array_none", "array_all"}
-JSON_ARTIFACT_VALUE_PREDICATES = {"equals", "not_equals", "number_lte", "number_gte"}
-JSON_ARTIFACT_ARRAY_PREDICATES = {"array_none", "array_all"}
 
 
 def load_json_artifact(path: Path) -> tuple[bool, Any]:
@@ -759,12 +773,8 @@ def load_json_artifact(path: Path) -> tuple[bool, Any]:
 
 
 def value_at_point_path(data: Any, field: str) -> tuple[bool, Any]:
-    current = data
-    for part in field.split("."):
-        if not isinstance(current, dict) or part not in current:
-            return False, MISSING_JSON_VALUE
-        current = current[part]
-    return True, current
+    value = json_field(data, field, MISSING_JSON_VALUE)
+    return value is not MISSING_JSON_VALUE, value
 
 
 def json_expected_value(check: dict[str, Any]) -> Any:
@@ -822,16 +832,8 @@ def evaluate_json_predicate(data: Any, check: dict[str, Any], artifact_id: Any) 
         return None if exists else json_predicate_failure(check, artifact_id, field, predicate)
     if not exists:
         return json_predicate_failure(check, artifact_id, field, predicate, expected)
-    if predicate == "equals":
-        return None if actual == expected else json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
-    if predicate == "not_equals":
-        return None if actual != expected else json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
-    if predicate in {"number_lte", "number_gte"}:
-        if isinstance(actual, bool) or isinstance(expected, bool) or not isinstance(actual, (int, float)) or not isinstance(expected, (int, float)):
-            return json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
-        if predicate == "number_lte":
-            return None if actual <= expected else json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
-        return None if actual >= expected else json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
+    if predicate in JSON_ARTIFACT_VALUE_PREDICATES:
+        return None if evaluate_shared_json_predicate(actual, predicate, expected) else json_predicate_failure(check, artifact_id, field, predicate, expected, actual)
     if predicate in JSON_ARTIFACT_ARRAY_PREDICATES:
         where = check.get("where")
         if not isinstance(actual, list) or not isinstance(where, dict):
@@ -840,10 +842,8 @@ def evaluate_json_predicate(data: Any, check: dict[str, Any], artifact_id: Any) 
             return json_predicate_failure(check, artifact_id, field, where.get("predicate"), json_expected_value(where), actual, "unsupported_json_artifact_predicate")
         if not valid_json_predicate_config(where):
             return json_predicate_failure(check, artifact_id, field, where.get("predicate"), json_expected_value(where), actual, "invalid_json_artifact_check")
-        matches = [evaluate_json_predicate(item, {**where, "artifact": artifact_id}, artifact_id) is None for item in actual]
-        if predicate == "array_none":
-            return None if not any(matches) else json_predicate_failure(check, artifact_id, field, predicate, "no matching elements", actual)
-        return None if all(matches) else json_predicate_failure(check, artifact_id, field, predicate, "all elements match", actual)
+        expected_detail = "no matching elements" if predicate == "array_none" else "all elements match"
+        return None if evaluate_shared_json_predicate(actual, predicate, where=where) else json_predicate_failure(check, artifact_id, field, predicate, expected_detail, actual)
     return json_predicate_failure(check, artifact_id, field, predicate, expected, actual, "unsupported_json_artifact_predicate")
 
 
