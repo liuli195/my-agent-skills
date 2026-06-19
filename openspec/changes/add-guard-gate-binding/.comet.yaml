@@ -1,5 +1,5 @@
 workflow: full
-phase: verify
+phase: archive
 context_compression: beta
 build_mode: subagent-driven-development
 build_pause: null
@@ -12,11 +12,11 @@ auto_transition: true
 base_ref: 73ade80fc55b6d6b03b346af124f9d481450406c
 design_doc: docs/superpowers/specs/2026-06-20-global-command-guard-design.md
 plan: docs/superpowers/plans/2026-06-20-global-command-guard.md
-verify_result: pending
+verify_result: pass
 verification_report: docs/superpowers/reports/2026-06-20-add-guard-gate-binding-verify.md
 branch_status: handled
 created_at: 2026-06-18
-verified_at: null
+verified_at: 2026-06-19
 archived: false
 handoff_context: openspec/changes/add-guard-gate-binding/.comet/handoff/spec-context.json
 handoff_hash: d56aa0f8f8c87f32a633b7c7c044a617bd64e8af840fe2afa0b1fdb03ff96d27
