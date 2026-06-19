@@ -1048,7 +1048,7 @@ git commit -m "feat: 生成 review 报告和 pass marker"
 - Modify: `plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py`
 - Modify: `tests/test_cross_agent_review_cli.py`
 
-- [ ] **Step 1: Add prompt building tests**
+- [x] **Step 1: Add prompt building tests**
 
 Append:
 
@@ -1065,7 +1065,7 @@ def test_prompt_contains_review_context(tmp_path: Path) -> None:
 
 This test ensures fake execution still records readonly configuration. Real SDK calls are kept out of unit tests.
 
-- [ ] **Step 2: Implement reviewer prompt builder**
+- [x] **Step 2: Implement reviewer prompt builder**
 
 Add:
 
@@ -1091,7 +1091,7 @@ def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
     )
 ```
 
-- [ ] **Step 3: Implement async SDK dispatch**
+- [x] **Step 3: Implement async SDK dispatch**
 
 Add:
 
@@ -1138,7 +1138,7 @@ if parsed.command == "_sdk-dispatch":
     return run_sdk_dispatch()
 ```
 
-- [ ] **Step 4: Implement SDK subprocess entrypoint**
+- [x] **Step 4: Implement SDK subprocess entrypoint**
 
 Add:
 
@@ -1183,7 +1183,7 @@ def run_sdk_dispatch() -> int:
     return 0
 ```
 
-- [ ] **Step 5: Run fake-dispatch unit tests**
+- [x] **Step 5: Run fake-dispatch unit tests**
 
 Run:
 
@@ -1193,7 +1193,7 @@ python -m pytest tests/test_cross_agent_review_cli.py -q
 
 Expected: PASS. This command does not call the real SDK because tests use `--fake-reviewer-results`.
 
-- [ ] **Step 6: Run one manual SDK smoke test on a clean temporary repo**
+- [x] **Step 6: Run one manual SDK smoke test on a clean temporary repo**
 
 Use the known SDK Python path if current Python lacks the SDK:
 
@@ -1206,7 +1206,7 @@ python plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_
 
 Expected: exits 0 or 1 depending on reviewer findings, always writes `review-report.md` and `review-results.json`. If findings block, `review-pass.json` is absent.
 
-- [ ] **Step 7: Commit SDK dispatch**
+- [x] **Step 7: Commit SDK dispatch**
 
 ```bash
 git add plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py tests/test_cross_agent_review_cli.py

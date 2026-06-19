@@ -3,33 +3,36 @@
 - Change: add-cross-agent-review-mechanism
 - Plan: docs/superpowers/plans/2026-06-20-cross-agent-review.md
 - Stage: done
-- Current plan task: Task 4: Aggregation and Outputs
-- OpenSpec mapping: 1.2, 1.3, 2.4, 2.5, 3.1, 3.2, 3.3, 3.4
-- Implementer: DONE by 019ee22d-2193-7f22-821d-8b07934235bd
-- Spec review: APPROVED by 019ee230-6cab-70e3-bcb4-f32cb06fc1f3
-- Quality review: APPROVED by 019ee235-bd64-75d2-a99f-0ec2965387d6
+- Current plan task: Task 5: Real Claude Agent SDK Dispatch
+- OpenSpec mapping: 2.3, 2.6
+- Implementer: DONE_WITH_CONCERNS by 019ee237-e6eb-77d2-a3fe-5f8ec2b6a4ef
+- Spec review: APPROVED by 019ee23c-7b49-7393-84e4-fcca5e8e69ff
+- Quality review: APPROVED by 019ee243-6339-79d0-8991-63fd33b04d38
 - Review/fix rounds: 1
 
 ## Open Feedback
 
-- IMPORTANT: blocking review run leaves stale `review-pass.json` in reused output directory. Delete old pass marker before writing current outputs or in blocking branch; add regression test.
+- IMPORTANT: `allowed_tools` is auto-approval only, not a read-only restriction. Add explicit write-tool denial or whitelist callback.
+- WARNING: real SDK subprocess has no timeout; convert timeout to `sdk_dispatch_timeout`.
+- WARNING: non-JSON SDK stdout should become clear `sdk_dispatch_invalid_output`.
 
 ## Fix Round 1
 
-- Fix agent: DONE by 019ee233-9cb6-7002-a3b8-73a143c2b04a
-- RED: CLI suite failed on new regression where reused output dir retained stale `review-pass.json` after blocking review
-- GREEN: CLI suite passed, 18 passed; package+CLI suite passed, 23 passed
-- Commit: e0c1cd05a43ed04a95c91befa7599cede19b84d1
+- Fix agent: DONE by 019ee240-a4c0-7682-965e-2a3183a84871
+- RED: CLI suite failed on 3 new tests proving missing SDK write-tool denial, missing subprocess timeout, and JSONDecodeError leakage
+- GREEN: CLI suite passed, 23 passed; package+CLI suite passed, 28 passed
+- Commit: e016fddf39a3c266ff727f987dcab06774446daf
 - Changed files: plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py; tests/test_cross_agent_review_cli.py
 
 ## Evidence
 
-- RED: focused Task 4 tests failed with 5 expected failures for missing report/pass marker/blocking/skipped reviewer outputs
-- GREEN: CLI suite passed, 17 passed; package+CLI suite passed, 22 passed
-- Commit: 4dd1fc4c218dfd46c29a0b683a4c3df176e83220
+- RED: `test_reviewer_prompt_includes_all_review_inputs` failed with missing `reviewer_prompt`
+- GREEN: CLI suite passed, 20 passed; package+CLI suite passed, 25 passed
+- Manual SDK smoke: SDK Python existed and imported `claude_agent_sdk`; real smoke in clean temp repo exited 1 with `status: findings`, wrote report/results, no pass marker
+- Commit: e0802474bfe38f09d50748c3873899338dd9b25b
 - Changed files: plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py; tests/test_cross_agent_review_cli.py
 
 ## Prior Task Summary
 
-- Tasks 1-3 passed spec and quality review.
-- Latest prior task commit: 1f14f0b
+- Tasks 1-4 passed spec and quality review.
+- Latest prior task commit: e4f17f4
