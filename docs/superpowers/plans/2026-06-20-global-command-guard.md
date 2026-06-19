@@ -2,6 +2,7 @@
 change: add-guard-gate-binding
 design-doc: docs/superpowers/specs/2026-06-20-global-command-guard-design.md
 base-ref: 9c8ce9016907bbd75a29ad9e4dfb6b38eff28f84
+archived-with: 2026-06-19-add-guard-gate-binding
 ---
 
 # 全局命令守卫点 Implementation Plan

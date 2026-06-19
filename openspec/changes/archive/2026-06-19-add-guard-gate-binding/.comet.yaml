@@ -17,6 +17,6 @@ verification_report: docs/superpowers/reports/2026-06-20-add-guard-gate-binding-
 branch_status: handled
 created_at: 2026-06-18
 verified_at: 2026-06-19
-archived: false
+archived: true
 handoff_context: openspec/changes/add-guard-gate-binding/.comet/handoff/spec-context.json
 handoff_hash: d56aa0f8f8c87f32a633b7c7c044a617bd64e8af840fe2afa0b1fdb03ff96d27

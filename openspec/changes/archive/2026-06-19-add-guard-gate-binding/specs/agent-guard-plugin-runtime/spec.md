@@ -147,7 +147,7 @@
 
 ## MODIFIED Requirements
 
-### Requirement: PreToolUse 使用当前焦点
+### Requirement: Runtime Router 焦点处理
 系统 MUST 保持现有 Session Focus permission（会话焦点权限）语义不变；Global Command Guard（全局命令守卫点）只在 PreToolUse 入口增加独立的前置检查。
 
 #### Scenario: 全局命令守卫点先于会话焦点权限执行
