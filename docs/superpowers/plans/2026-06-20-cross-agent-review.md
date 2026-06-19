@@ -244,7 +244,7 @@ git commit -m "feat: 新增 cross-agent-review 插件骨架"
 - Modify: `plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py`
 - Create/Modify: `tests/test_cross_agent_review_cli.py`
 
-- [ ] **Step 1: Write failing CLI validation tests**
+- [x] **Step 1: Write failing CLI validation tests**
 
 Create `tests/test_cross_agent_review_cli.py`:
 
@@ -317,7 +317,7 @@ def test_missing_input_file_fails(tmp_path: Path) -> None:
     assert "missing_file" in result.stdout
 ```
 
-- [ ] **Step 2: Add Git fixture tests for subject binding**
+- [x] **Step 2: Add Git fixture tests for subject binding**
 
 Append to `tests/test_cross_agent_review_cli.py`:
 
@@ -391,7 +391,7 @@ def test_head_mismatch_rejects_before_dispatch(tmp_path: Path) -> None:
     assert head != "0" * 40
 ```
 
-- [ ] **Step 3: Run CLI tests and verify they fail**
+- [x] **Step 3: Run CLI tests and verify they fail**
 
 Run:
 
@@ -401,7 +401,7 @@ python -m pytest tests/test_cross_agent_review_cli.py -q
 
 Expected: FAIL because CLI arguments and subject checks are not implemented.
 
-- [ ] **Step 4: Implement CLI arguments and file validation**
+- [x] **Step 4: Implement CLI arguments and file validation**
 
 Update `cross_agent_review.py` with:
 
@@ -514,7 +514,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 5: Run CLI validation tests and verify they pass**
+- [x] **Step 5: Run CLI validation tests and verify they pass**
 
 Run:
 
@@ -524,7 +524,7 @@ python -m pytest tests/test_cross_agent_review_cli.py::test_missing_required_arg
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit CLI validation and subject binding**
+- [x] **Step 6: Commit CLI validation and subject binding**
 
 ```bash
 git add plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py tests/test_cross_agent_review_cli.py
