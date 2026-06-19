@@ -1,7 +1,7 @@
 # Subagent Progress
 
 - change: add-guard-gate-binding
-- phase: checkoff
+- phase: done
 - current_plan_task: Task 6: 文档、端到端验证和 OpenSpec 任务勾选
 - current_openspec_tasks:
   - 5.3 更新 Agent Guard 运行文档，解释“会话焦点守卫”和“全局命令守卫点”的差异。
@@ -15,8 +15,8 @@
   - plugins/agent-guard/scripts/guard_runtime/README.md
 - red_evidence: documentation task; no RED required
 - green_evidence: package/e2e 10 passed; focused suite 103 passed; openspec valid; full pytest 194 passed
-- spec_review: changes required by 019ee135-c7aa-7e72-b147-c8d56a8386a4; README approved, coordinator completed checkoff and verification evidence
-- quality_review: pending
+- spec_review: approved by 019ee13a-16b1-7e60-aa54-f6c832b93cd4
+- quality_review: approved by 019ee13b-9905-7622-94c1-d207f1a10c3b
 - unresolved_feedback:
   - none
 - review_fix_round: 1
