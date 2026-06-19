@@ -1,0 +1,14 @@
+{
+  "change": "add-comet-agent-review-gate",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "b492795bb6b7963385bbf09b78ac5f9197bb70a667568f00bc9893548add4082",
+  "files": [
+    { "path": "openspec/changes/add-comet-agent-review-gate/proposal.md", "sha256": "c4d189dd8697382c4dd6449b4f97686e6169eb7d4ddea6e1f662c81025184a42", "role": "supporting" },
+    { "path": "openspec/changes/add-comet-agent-review-gate/design.md", "sha256": "7eb85b0ed278a125852d3ef5c3e9c35ef566cffe7f8138ad8c6d7b1df39888fe", "role": "supporting" },
+    { "path": "openspec/changes/add-comet-agent-review-gate/tasks.md", "sha256": "25ddd46dc9a2115f4a147c49b63c96d5875ca584dd5a04b59ef28bea06537d9d", "role": "supporting" },
+    { "path": "openspec/changes/add-comet-agent-review-gate/specs/comet-agent-review-gate/spec.md", "sha256": "7e21bc25d55a263d73ffb2546cd4bd77699648101bd66c9a52dbc1944f03fe08", "role": "spec" }
+  ]
+}
