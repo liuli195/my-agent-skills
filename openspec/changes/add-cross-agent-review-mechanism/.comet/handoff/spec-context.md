@@ -1,3 +1,34 @@
+# Comet Spec Context
+
+- Change: add-cross-agent-review-mechanism
+- Phase: design
+- Mode: beta
+- Context hash: 0789cc37fff3b6905a1b3c6c11886a6e0b5b961f222dfcb494d0f8fe2edb0a2f
+
+Generated-by: comet-handoff.sh
+
+OpenSpec remains the canonical capability spec. This beta context pack verbatim-projects spec files and references supporting artifacts by hash, not an agent-authored summary.
+
+## Source References
+
+- Source: openspec/changes/add-cross-agent-review-mechanism/proposal.md
+- SHA256: 3d25a7e3f9e2d1d81d7c881e6cb91fd2ba32c130fa0a204d9550c3296fa78d57
+- Source: openspec/changes/add-cross-agent-review-mechanism/design.md
+- SHA256: f4341c5c7b6437142c97d85d975b491a1e3e576cd90be522d3be5dba5c723a99
+- Source: openspec/changes/add-cross-agent-review-mechanism/tasks.md
+- SHA256: 079556faa12f52547008d5c76e4fd3f4e0905e0d983ccf90c14e94a07860014d
+- Source: openspec/changes/add-cross-agent-review-mechanism/specs/cross-agent-review/spec.md
+- SHA256: 2177d206d0b3c39709865e7d839d8bedc62f818f8c37627783b6d2a8f581ae65
+
+## Acceptance Projection
+
+## openspec/changes/add-cross-agent-review-mechanism/specs/cross-agent-review/spec.md
+
+- Source: openspec/changes/add-cross-agent-review-mechanism/specs/cross-agent-review/spec.md
+- Lines: 1-111
+- SHA256: 2177d206d0b3c39709865e7d839d8bedc62f818f8c37627783b6d2a8f581ae65
+
+```md
 ## ADDED Requirements
 
 ### Requirement: 跨 agent review 输入契约
@@ -109,3 +140,6 @@
 #### Scenario: 不推进 Comet phase
 - **WHEN** review mechanism（审查机制）完成 review
 - **THEN** 它不得修改 `.comet.yaml` 或推进 Comet phase（阶段）
+```
+
+Full source files remain canonical. If a required heading or scenario is missing here, regenerate the handoff or read the source spec directly. Supporting files (proposal, design, tasks) are referenced by hash only.
