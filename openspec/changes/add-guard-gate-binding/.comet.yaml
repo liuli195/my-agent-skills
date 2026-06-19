@@ -6,15 +6,15 @@ build_pause: null
 subagent_dispatch: confirmed
 tdd_mode: tdd
 isolation: branch
-verify_mode: null
+verify_mode: full
 build_command: bash .comet/build-check.sh
 auto_transition: true
 base_ref: 73ade80fc55b6d6b03b346af124f9d481450406c
 design_doc: docs/superpowers/specs/2026-06-20-global-command-guard-design.md
 plan: docs/superpowers/plans/2026-06-20-global-command-guard.md
 verify_result: pending
-verification_report: null
-branch_status: pending
+verification_report: docs/superpowers/reports/2026-06-20-add-guard-gate-binding-verify.md
+branch_status: handled
 created_at: 2026-06-18
 verified_at: null
 archived: false
