@@ -505,6 +505,112 @@ def test_explicit_user_runtime_scope_uses_user_guard_runtime(tmp_path: Path) -> 
     assert str(payload["audit_path"]).startswith(str(user_home / ".agents" / "guard" / "audit"))
 
 
+def test_global_command_guard_rejects_capture_path_traversal_outside_evidence_root(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    write_global_command_guard_yaml(
+        profile,
+        """
+global_command_guards:
+  - id: verify_requires_review
+    tool: Bash
+    match:
+      command_patterns:
+        - 'comet-guard.sh (?P<change>[A-Za-z0-9._/-]+) verify --apply'
+      required_captures:
+        - change
+    evidence:
+      path: '.local/guard/evidence/{change}/evidence.json'
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+    deny:
+      reason: global_command_guard_required
+""",
+    )
+    outside_evidence = project / ".local" / "guard" / "outside" / "evidence.json"
+    outside_evidence.parent.mkdir(parents=True)
+    outside_evidence.write_text(json.dumps({"status": "pass"}, ensure_ascii=False), encoding="utf-8")
+
+    result = pre_tool(project, user_home, "comet-guard.sh ../outside verify --apply")
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "deny"
+    assert payload["failing_guards"][0]["failure_reason"] == "unsafe_evidence_path"
+    assert payload["failing_guards"][0]["evidence_path"].startswith(str(project / ".local" / "guard" / "evidence"))
+
+
+def test_global_command_guard_rejects_absolute_evidence_path(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    outside_evidence = tmp_path / "outside-evidence.json"
+    outside_evidence.write_text(json.dumps({"status": "pass"}, ensure_ascii=False), encoding="utf-8")
+    write_global_command_guard_yaml(
+        profile,
+        f"""
+global_command_guards:
+  - id: verify_requires_review
+    tool: Bash
+    match:
+      command_patterns:
+        - 'comet-guard.sh (?P<change>[A-Za-z0-9._-]+) verify --apply'
+    evidence:
+      path: '{outside_evidence.as_posix()}'
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+    deny:
+      reason: global_command_guard_required
+""",
+    )
+
+    result = pre_tool(project, user_home, "comet-guard.sh add-guard-gate-binding verify --apply")
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "deny"
+    assert payload["failing_guards"][0]["failure_reason"] == "unsafe_evidence_path"
+
+
+def test_global_command_guard_reports_unreadable_evidence_separately_from_invalid_json(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    write_global_command_guard(profile, "verify_requires_review", "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) verify --apply")
+    evidence_directory = (
+        project
+        / ".local"
+        / "guard"
+        / "evidence"
+        / "project"
+        / "repo-policy"
+        / "verify_requires_review"
+        / "add-guard-gate-binding"
+        / "evidence.json"
+    )
+    evidence_directory.mkdir(parents=True)
+
+    result = pre_tool(project, user_home, "comet-guard.sh add-guard-gate-binding verify --apply")
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    failure = payload["failing_guards"][0]
+    assert failure["failure_reason"] == "evidence_unreadable"
+    assert failure["error_type"] in {"IsADirectoryError", "PermissionError", "OSError"}
+    assert "error" not in failure
+
+
 def test_pre_tool_use_without_global_command_guard_match_keeps_existing_session_focus_behavior(tmp_path: Path) -> None:
     project = tmp_path / "project"
     user_home = tmp_path / "user-home"

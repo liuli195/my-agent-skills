@@ -5,7 +5,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 import yaml
@@ -31,6 +31,10 @@ class EffectiveGlobalCommandGuard:
     guard_id: str
     effective_guard_id: str
     config: dict[str, Any]
+
+
+class UnsafeEvidencePath(ValueError):
+    pass
 
 
 def match_command_pattern(command: str, pattern: str) -> dict[str, str] | None:
@@ -179,19 +183,31 @@ def _value_from(name: str, captures: dict[str, str], builtins: dict[str, str]) -
 
 def _resolve_evidence_path(project: Path, user_home: Path, runtime_scope: str, rendered: str) -> Path:
     path = Path(rendered)
-    if path.is_absolute():
-        return path
+    windows_path = PureWindowsPath(rendered)
+    if path.is_absolute() or windows_path.is_absolute() or windows_path.drive or windows_path.root:
+        raise UnsafeEvidencePath("unsafe_evidence_path")
     normalized = path.as_posix()
-    root = runtime_root(project, user_home, runtime_scope)
-    if normalized == ".local/guard":
-        return root
-    if normalized.startswith(".local/guard/"):
-        return root / normalized.removeprefix(".local/guard/")
-    if normalized == ".agents/guard":
-        return root
-    if normalized.startswith(".agents/guard/"):
-        return root / normalized.removeprefix(".agents/guard/")
-    return root / normalized
+    root = (runtime_root(project, user_home, runtime_scope) / "evidence").resolve()
+    if normalized == ".local/guard/evidence":
+        candidate = root
+    elif normalized.startswith(".local/guard/evidence/"):
+        candidate = root / normalized.removeprefix(".local/guard/evidence/")
+    elif normalized == ".agents/guard/evidence":
+        candidate = root
+    elif normalized.startswith(".agents/guard/evidence/"):
+        candidate = root / normalized.removeprefix(".agents/guard/evidence/")
+    elif normalized == ".local/guard" or normalized.startswith(".local/guard/"):
+        raise UnsafeEvidencePath("unsafe_evidence_path")
+    elif normalized == ".agents/guard" or normalized.startswith(".agents/guard/"):
+        raise UnsafeEvidencePath("unsafe_evidence_path")
+    else:
+        candidate = root / normalized
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise UnsafeEvidencePath("unsafe_evidence_path") from exc
+    return resolved
 
 
 def _json_check_detail(check: dict[str, Any], actual: Any, expected: Any, include_expected: bool) -> dict[str, Any]:
@@ -266,7 +282,23 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
         evidence = config.get("evidence")
         template = evidence.get("path") if isinstance(evidence, dict) else ""
         rendered, missing_template_values = render_template(template if isinstance(template, str) else "", values)
-        evidence_path = _resolve_evidence_path(project, user_home, runtime_scope, rendered)
+        try:
+            evidence_path = _resolve_evidence_path(project, user_home, runtime_scope, rendered)
+        except UnsafeEvidencePath:
+            evidence_path = (runtime_root(project, user_home, runtime_scope) / "evidence").resolve()
+            failure = {
+                "effective_guard_id": guard.effective_guard_id,
+                "source_scope": guard.source_scope,
+                "profile_id": guard.profile_id,
+                "guard_id": guard.guard_id,
+                "captures": guard_captures,
+                "evidence_path": str(evidence_path),
+                "failure_reason": "unsafe_evidence_path",
+            }
+            if not first_deny:
+                first_deny = deny
+            failing_guards.append(failure)
+            continue
         failure: dict[str, Any] = {
             "effective_guard_id": guard.effective_guard_id,
             "source_scope": guard.source_scope,
@@ -294,8 +326,16 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
             failing_guards.append(failure)
             continue
         try:
-            data = json.loads(evidence_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            evidence_text = evidence_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            failure.update({"failure_reason": "evidence_unreadable", "error_type": type(exc).__name__})
+            if not first_deny:
+                first_deny = deny
+            failing_guards.append(failure)
+            continue
+        try:
+            data = json.loads(evidence_text)
+        except json.JSONDecodeError:
             failure["failure_reason"] = "invalid_evidence_json"
             if not first_deny:
                 first_deny = deny
