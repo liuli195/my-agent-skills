@@ -13,4 +13,6 @@ fi
   tests/test_release_flow_cli.py \
   tests/test_agent_guard_plugin_package.py \
   tests/test_agent_guard_plugin_installer.py \
+  tests/test_cross_agent_review_plugin_package.py \
+  tests/test_cross_agent_review_cli.py \
   -q

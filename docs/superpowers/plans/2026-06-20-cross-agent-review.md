@@ -1219,7 +1219,7 @@ git commit -m "feat: 接入 Claude Agent SDK reviewer 派发"
 - Modify: `.comet/build-check.sh`
 - Modify: `openspec/changes/add-cross-agent-review-mechanism/tasks.md`
 
-- [ ] **Step 1: Update quick regression entrypoint**
+- [x] **Step 1: Update quick regression entrypoint**
 
 Modify `.comet/build-check.sh` pytest command to include:
 
@@ -1230,7 +1230,7 @@ Modify `.comet/build-check.sh` pytest command to include:
 
 The final command should still end with `-q`.
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
 Run:
 
@@ -1240,7 +1240,7 @@ python -m pytest tests/test_cross_agent_review_plugin_package.py tests/test_cros
 
 Expected: PASS.
 
-- [ ] **Step 3: Run repository quick regression**
+- [x] **Step 3: Run repository quick regression**
 
 Run from Git Bash or MSYS Bash:
 
@@ -1250,7 +1250,7 @@ bash .comet/build-check.sh
 
 Expected: PASS.
 
-- [ ] **Step 4: Run OpenSpec validation**
+- [x] **Step 4: Run OpenSpec validation**
 
 Run:
 
@@ -1260,11 +1260,11 @@ openspec validate add-cross-agent-review-mechanism --strict
 
 Expected: `Change 'add-cross-agent-review-mechanism' is valid`.
 
-- [ ] **Step 5: Check off OpenSpec tasks**
+- [x] **Step 5: Check off OpenSpec tasks**
 
 Update `openspec/changes/add-cross-agent-review-mechanism/tasks.md` by replacing each completed `- [ ]` with `- [x]` after the focused tests, quick regression, and OpenSpec validation pass.
 
-- [ ] **Step 6: Commit verification closure**
+- [x] **Step 6: Commit verification closure**
 
 ```bash
 git add .comet/build-check.sh openspec/changes/add-cross-agent-review-mechanism/tasks.md
