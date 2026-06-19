@@ -434,6 +434,97 @@ guard_points:
     assert state["current_state"] == "open"
 
 
+def test_state_completed_allows_json_artifact_equals_check(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = write_profile(project)
+    profile.joinpath("guard-points.yaml").write_text(
+        """
+guard_points:
+  - id: completion_note_present
+    description: JSON artifact 必须满足字段断言。
+    checks:
+      - id: completion_status_done
+        type: json_artifact
+        artifact: completion_note
+        field: status
+        predicate: equals
+        expected: done
+        failure_reason: completion note 状态不正确。
+        fix_hint: 更新 completion note。
+""".lstrip(),
+        encoding="utf-8",
+    )
+    session_start(project, user_home)
+    activated = activate(project, user_home)
+    instance_id = activated["instance_id"]
+    path = project / ".local" / "guard" / "artifacts" / "minimal-sample" / instance_id / "1" / "completion-note.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"status": "done"}, ensure_ascii=False), encoding="utf-8")
+    read_brief(project, user_home)
+
+    result = run_cli(["state-completed", "--project", str(project), "--user-home", str(user_home), "--source", "codex", "--session-id", "session-1"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "allow"
+    assert payload["reason"] == "state_completed"
+    state = json.loads((project / ".local" / "guard" / "state" / "minimal-sample" / instance_id / "state.json").read_text(encoding="utf-8"))
+    assert state["current_state"] == "closed"
+
+
+def test_state_completed_blocks_json_artifact_equals_check_failure(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = write_profile(project)
+    profile.joinpath("guard-points.yaml").write_text(
+        """
+guard_points:
+  - id: completion_note_present
+    description: JSON artifact 必须满足字段断言。
+    checks:
+      - id: completion_status_done
+        type: json_artifact
+        artifact: completion_note
+        field: security_review.tool
+        predicate: equals
+        expected: codex-security
+        failure_reason: security review 工具不正确。
+        fix_hint: 更新 security review artifact。
+""".lstrip(),
+        encoding="utf-8",
+    )
+    session_start(project, user_home)
+    activated = activate(project, user_home)
+    instance_id = activated["instance_id"]
+    path = project / ".local" / "guard" / "artifacts" / "minimal-sample" / instance_id / "1" / "completion-note.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"security_review": {"tool": "manual"}}, ensure_ascii=False), encoding="utf-8")
+    read_brief(project, user_home)
+
+    result = run_cli(["state-completed", "--project", str(project), "--user-home", str(user_home), "--source", "codex", "--session-id", "session-1"])
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "error"
+    assert payload["reason"] == "guard_failed"
+    assert payload["guard_point_id"] == "completion_note_present"
+    assert payload["check_id"] == "completion_status_done"
+    details = payload["details"]
+    assert details["failure_reason"] == "security review 工具不正确。"
+    assert details["json_check"] == {
+        "artifact": "completion_note",
+        "field": "security_review.tool",
+        "predicate": "equals",
+        "expected": "codex-security",
+        "actual": "manual",
+    }
+    state = json.loads((project / ".local" / "guard" / "state" / "minimal-sample" / instance_id / "state.json").read_text(encoding="utf-8"))
+    assert state["current_state"] == "open"
+
+
 def test_state_completed_allows_guard_point_failure_with_valid_override(tmp_path: Path) -> None:
     project = tmp_path / "project"
     user_home = tmp_path / "user-home"
