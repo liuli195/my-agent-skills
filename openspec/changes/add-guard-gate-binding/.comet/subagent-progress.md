@@ -1,0 +1,27 @@
+# Subagent Progress
+
+- change: add-guard-gate-binding
+- phase: checkoff
+- current_plan_task: Task 1: Guard Profile 校验器和模板
+- current_openspec_tasks:
+  - 1.1 为有效的通用 `global-command-guards.yaml` 配置添加校验器测试。
+  - 1.2 为缺少命令模式、缺少证据路径、不支持的 JSON 谓词、缺少必需捕获值、非法 `value_from` 添加校验器测试。
+  - 1.3 扩展 Guard Profile（守卫画像）校验，允许在没有 Session Focus（会话焦点）配置的情况下声明全局命令守卫点。
+  - 1.4 更新 Guard Profile 模板，新增可选的 `global-command-guards.yaml`。
+  - 1.5 校验同一个 `global-command-guards.yaml` 内的 guard id 必须唯一；不同 profile 或不同 source scope 中允许同名 guard id。
+- implementer_agent: 019ee0e4-372a-7991-9a20-3825e3fac335
+- implementation_commit: fd96733
+- fix_commit: 1bac6ac
+- changed_files:
+  - plugins/agent-guard/skills/agent-guard/scripts/validate_guard_profile.py
+  - tests/test_validate_guard_profile.py
+  - plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/minimal/global-command-guards.yaml
+  - plugins/agent-guard/assets/templates/guard-profile/minimal/global-command-guards.yaml
+- red_evidence: python -m pytest tests/test_validate_guard_profile.py -k "global_command_guard" -q failed before implementation
+- green_evidence: python -m pytest tests/test_validate_guard_profile.py -q passed, 34 passed in 3.09s
+- spec_review: approved by 019ee0e9-6d6a-7492-b341-8d813d189e2b
+- quality_review: pending
+- quality_review: approved by 019ee0ef-faa1-7123-97d7-7927a1f44428
+- unresolved_feedback:
+  - none
+- review_fix_round: 1

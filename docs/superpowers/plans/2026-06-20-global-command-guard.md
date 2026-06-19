@@ -59,7 +59,7 @@ base-ref: 9c8ce9016907bbd75a29ad9e4dfb6b38eff28f84
 - Create: `plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/minimal/global-command-guards.yaml`
 - Create: `plugins/agent-guard/assets/templates/guard-profile/minimal/global-command-guards.yaml`
 
-- [ ] **Step 1: 写失败测试：最小模板允许空全局命令守卫配置**
+- [x] **Step 1: 写失败测试：最小模板允许空全局命令守卫配置**
 
 在 `tests/test_validate_guard_profile.py` 添加：
 
@@ -79,7 +79,7 @@ python -m pytest tests/test_validate_guard_profile.py::test_global_command_guard
 
 Expected: FAIL，因为模板文件还不存在或 validator（校验器）还不会检查该配置。
 
-- [ ] **Step 2: 添加空模板文件**
+- [x] **Step 2: 添加空模板文件**
 
 创建两个模板文件，内容完全一致：
 
@@ -94,7 +94,7 @@ plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/minimal/gl
 plugins/agent-guard/assets/templates/guard-profile/minimal/global-command-guards.yaml
 ```
 
-- [ ] **Step 3: 写失败测试：有效全局命令守卫配置通过**
+- [x] **Step 3: 写失败测试：有效全局命令守卫配置通过**
 
 在 `tests/test_validate_guard_profile.py` 添加：
 
@@ -140,7 +140,7 @@ python -m pytest tests/test_validate_guard_profile.py::test_global_command_guard
 
 Expected: FAIL，因为 validator 还没有 `global-command-guards.yaml` 规则。
 
-- [ ] **Step 4: 实现 validator 支持**
+- [x] **Step 4: 实现 validator 支持**
 
 在 `plugins/agent-guard/skills/agent-guard/scripts/validate_guard_profile.py` 中添加：
 
@@ -221,7 +221,7 @@ def validate_global_command_guards(profile_dir: Path) -> list[ValidationIssue]:
 
 再把 `validate_global_command_guards(profile_dir)` 接入 validator 的主校验结果列表。
 
-- [ ] **Step 5: 写失败测试：单文件内重复 id 报错**
+- [x] **Step 5: 写失败测试：单文件内重复 id 报错**
 
 在 `tests/test_validate_guard_profile.py` 添加：
 
@@ -271,7 +271,7 @@ python -m pytest tests/test_validate_guard_profile.py::test_global_command_guard
 
 Expected: PASS after Step 4.
 
-- [ ] **Step 6: 运行 validator 聚焦测试**
+- [x] **Step 6: 运行 validator 聚焦测试**
 
 Run:
 
@@ -281,7 +281,7 @@ python -m pytest tests/test_validate_guard_profile.py -q
 
 Expected: PASS.
 
-- [ ] **Step 7: 提交 Task 1**
+- [x] **Step 7: 提交 Task 1**
 
 ```powershell
 git add plugins/agent-guard/skills/agent-guard/scripts/validate_guard_profile.py `
@@ -1017,4 +1017,3 @@ python -m pytest -q
 - deny 输出包含 `matched_guard_ids` 和 `failing_guards`。
 - 项目命令的 evidence 和 audit 默认写入 `.local/guard`。
 - 现有 Session Focus permission 语义保持不变。
-

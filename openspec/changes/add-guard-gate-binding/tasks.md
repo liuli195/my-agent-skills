@@ -1,10 +1,10 @@
 ## 1. 全局命令守卫点契约
 
-- [ ] 1.1 为有效的通用 `global-command-guards.yaml` 配置添加校验器测试。
-- [ ] 1.2 为缺少命令模式、缺少证据路径、不支持的 JSON 谓词、缺少必需捕获值、非法 `value_from` 添加校验器测试。
-- [ ] 1.3 扩展 Guard Profile（守卫画像）校验，允许在没有 Session Focus（会话焦点）配置的情况下声明全局命令守卫点。
-- [ ] 1.4 更新 Guard Profile 模板，新增可选的 `global-command-guards.yaml`。
-- [ ] 1.5 校验同一个 `global-command-guards.yaml` 内的 guard id 必须唯一；不同 profile 或不同 source scope 中允许同名 guard id。
+- [x] 1.1 为有效的通用 `global-command-guards.yaml` 配置添加校验器测试。
+- [x] 1.2 为缺少命令模式、缺少证据路径、不支持的 JSON 谓词、缺少必需捕获值、非法 `value_from` 添加校验器测试。
+- [x] 1.3 扩展 Guard Profile（守卫画像）校验，允许在没有 Session Focus（会话焦点）配置的情况下声明全局命令守卫点。
+- [x] 1.4 更新 Guard Profile 模板，新增可选的 `global-command-guards.yaml`。
+- [x] 1.5 校验同一个 `global-command-guards.yaml` 内的 guard id 必须唯一；不同 profile 或不同 source scope 中允许同名 guard id。
 
 ## 2. 共享 Agent Guard（代理守卫）抽象
 
