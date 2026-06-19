@@ -2,22 +2,22 @@
 
 - change: add-guard-gate-binding
 - phase: checkoff
-- current_plan_task: Task 3: 命令上下文与命令模式匹配
+- current_plan_task: Task 4: 多来源收集和有效守卫 ID
 - current_openspec_tasks:
-  - 3.1 为通用命令模式匹配和 named capture（命名捕获）提取添加测试。
-  - 3.2 添加 Comet 风格验证边界命令的配置 fixture（夹具），证明能力不是硬编码 Comet。
-  - 3.3 添加 Windows PowerShell 包装 Git Bash 命令的测试。
-  - 3.4 实现命令文本标准化、命令模式匹配和命名捕获提取。
-- implementer_agent: 019ee106-c04e-7e41-8a9b-ca835072aeee
-- implementation_commit: 62ec5e6
+  - 2.6 新增 Global Command Guard Collector（全局命令守卫收集器），收集项目级和用户级所有 `global-command-guards.yaml`。
+  - 2.7 为每条规则生成 effective guard id（有效守卫 ID）：`<source_scope>:<profile_id>:<guard_id>`。
+  - 4.8 添加多来源测试：多个项目级 profile、用户级 + 项目级 profile 同时贡献规则时，所有匹配规则必须全部通过。
+  - 4.9 添加同名规则测试：不同 source scope 或 profile 下同名 guard id 不冲突，evidence 路径和审计使用有效守卫 ID。
+- implementer_agent: 019ee10e-f370-7903-b472-8cd43b7232e3
+- implementation_commit: 1360a77
 - fix_commit: pending
 - changed_files:
   - plugins/agent-guard/scripts/guard_runtime/global_command_guards.py
   - tests/test_agent_guard_runtime_router.py
-- red_evidence: named capture and PowerShell wrapper tests failed before implementation
-- green_evidence: python -m pytest tests/test_agent_guard_runtime_router.py -q passed, 38 passed in 10.87s
-- spec_review: approved by 019ee109-e92f-76f3-b273-14f247c6b3e4
-- quality_review: approved by 019ee10b-7227-7cb1-8cf2-df48cd905a47
+- red_evidence: collect_global_command_guards test failed before implementation
+- green_evidence: python -m pytest tests/test_agent_guard_runtime_router.py -q passed, 39 passed in 10.95s
+- spec_review: approved by 019ee111-49fb-7c02-8d02-220814d26468
+- quality_review: approved by 019ee112-6e5b-72b3-bbf8-9ae73b841e5b
 - unresolved_feedback:
   - none
 - review_fix_round: 0

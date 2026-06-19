@@ -549,7 +549,7 @@ git commit -m "feat: 添加全局命令匹配基础能力"
 - Modify: `plugins/agent-guard/scripts/guard_runtime/global_command_guards.py`
 - Modify: `tests/test_agent_guard_runtime_router.py`
 
-- [ ] **Step 1: 写失败测试：项目级和用户级来源都会被收集**
+- [x] **Step 1: 写失败测试：项目级和用户级来源都会被收集**
 
 在 `tests/test_agent_guard_runtime_router.py` 添加：
 
@@ -606,7 +606,7 @@ def test_collects_project_and_user_global_command_guards(tmp_path: Path) -> None
     ]
 ```
 
-- [ ] **Step 2: 实现收集器**
+- [x] **Step 2: 实现收集器**
 
 在 `global_command_guards.py` 添加：
 
@@ -647,7 +647,7 @@ def collect_global_command_guards(project: Path, user_home: Path) -> list[Effect
     return guards
 ```
 
-- [ ] **Step 3: 运行收集器测试**
+- [x] **Step 3: 运行收集器测试**
 
 Run:
 
@@ -657,7 +657,7 @@ python -m pytest tests/test_agent_guard_runtime_router.py::test_collects_project
 
 Expected: PASS.
 
-- [ ] **Step 4: 提交 Task 4**
+- [x] **Step 4: 提交 Task 4**
 
 ```powershell
 git add plugins/agent-guard/scripts/guard_runtime/global_command_guards.py `

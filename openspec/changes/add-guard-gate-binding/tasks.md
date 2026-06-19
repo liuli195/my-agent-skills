@@ -13,8 +13,8 @@
 - [x] 2.3 从 `json_artifact` 检查中抽象 JSON 字段读取和 predicate（谓词）评估能力。
 - [x] 2.4 在 `json_artifact` 检查和全局命令守卫点之间共享 predicate 校验常量。
 - [x] 2.5 抽象后保持现有 Session Focus permission 行为不变。
-- [ ] 2.6 新增 Global Command Guard Collector（全局命令守卫收集器），收集项目级和用户级所有 `global-command-guards.yaml`。
-- [ ] 2.7 为每条规则生成 effective guard id（有效守卫 ID）：`<source_scope>:<profile_id>:<guard_id>`。
+- [x] 2.6 新增 Global Command Guard Collector（全局命令守卫收集器），收集项目级和用户级所有 `global-command-guards.yaml`。
+- [x] 2.7 为每条规则生成 effective guard id（有效守卫 ID）：`<source_scope>:<profile_id>:<guard_id>`。
 
 ## 3. 命令解析与上下文
 
@@ -34,8 +34,8 @@
 - [ ] 4.5 返回机器可读的拒绝输出，包含 `reason`、`next`、`suggestion`、匹配的有效守卫 ID 列表、失败守卫列表、捕获值和审计路径。
 - [ ] 4.6 审计记录必须区分全局命令守卫点和会话焦点权限检查。
 - [ ] 4.7 添加作用域测试：用户级安装或用户级静态规则在项目命令中默认使用 `.local/guard`；显式用户作用域使用 `~/.agents/guard`；Comet change review 不从用户级运行目录读取证据。
-- [ ] 4.8 添加多来源测试：多个项目级 profile、用户级 + 项目级 profile 同时贡献规则时，所有匹配规则必须全部通过。
-- [ ] 4.9 添加同名规则测试：不同 source scope 或 profile 下同名 guard id 不冲突，evidence 路径和审计使用有效守卫 ID。
+- [x] 4.8 添加多来源测试：多个项目级 profile、用户级 + 项目级 profile 同时贡献规则时，所有匹配规则必须全部通过。
+- [x] 4.9 添加同名规则测试：不同 source scope 或 profile 下同名 guard id 不冲突，evidence 路径和审计使用有效守卫 ID。
 
 ## 5. 回归与文档
 
