@@ -115,6 +115,59 @@ def test_global_command_pattern_matches_powershell_wrapped_git_bash(tmp_path: Pa
     assert "comet-guard.sh add-guard-gate-binding verify --apply" in normalized
 
 
+def write_global_command_guard(profile: Path, guard_id: str, command_pattern: str) -> None:
+    profile.joinpath("global-command-guards.yaml").write_text(
+        f"""
+global_command_guards:
+  - id: {guard_id}
+    description: 测试全局命令守卫点。
+    tool: Bash
+    match:
+      command_patterns:
+        - '{command_pattern}'
+    evidence:
+      path: '.local/guard/evidence/{{source_scope}}/{{profile_id}}/{{guard_id}}/{{change}}/evidence.json'
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+    deny:
+      reason: global_command_guard_required
+      next: produce_required_evidence
+      suggestion: 先生成证据。
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+
+def test_collects_project_and_user_global_command_guards(tmp_path: Path) -> None:
+    from importlib import util
+
+    module_path = PLUGIN_ROOT / "scripts" / "guard_runtime" / "global_command_guards.py"
+    spec = util.spec_from_file_location("global_command_guards", module_path)
+    assert spec and spec.loader
+    module = util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project_profile = project / ".agents" / "guards" / "repo-policy"
+    user_profile = user_home / ".agents" / "guards" / "personal-policy"
+    project_profile.mkdir(parents=True)
+    user_profile.mkdir(parents=True)
+    command_pattern = "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) verify --apply"
+    write_global_command_guard(project_profile, "verify_requires_review", command_pattern)
+    write_global_command_guard(user_profile, "verify_requires_review", command_pattern)
+
+    guards = module.collect_global_command_guards(project, user_home)
+    ids = sorted(guard.effective_guard_id for guard in guards)
+
+    assert ids == [
+        "project:repo-policy:verify_requires_review",
+        "user:personal-policy:verify_requires_review",
+    ]
+
+
 def write_profile(project: Path) -> Path:
     profile_dir = project / ".agents" / "guards" / "minimal-sample"
     shutil.copytree(MINIMAL_PROFILE, profile_dir)
