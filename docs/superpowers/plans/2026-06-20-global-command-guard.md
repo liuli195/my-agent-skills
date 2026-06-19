@@ -884,7 +884,7 @@ git commit -m "feat: 在 PreToolUse 执行全局命令守卫"
 - Modify: `plugins/agent-guard/scripts/guard_runtime/README.md`
 - Modify: `openspec/changes/add-guard-gate-binding/tasks.md`
 
-- [ ] **Step 1: 更新 runtime README**
+- [x] **Step 1: 更新 runtime README**
 
 在 `plugins/agent-guard/scripts/guard_runtime/README.md` 添加一节：
 
@@ -908,7 +908,7 @@ Runtime（运行时）在 PreToolUse（工具使用前）阶段收集：
 ```
 ```
 
-- [ ] **Step 2: 运行模板/包测试**
+- [x] **Step 2: 运行模板/包测试**
 
 Run:
 
@@ -918,7 +918,7 @@ python -m pytest tests/test_agent_guard_plugin_package.py tests/test_agent_guard
 
 Expected: PASS.
 
-- [ ] **Step 3: 运行 Agent Guard 相关测试**
+- [x] **Step 3: 运行 Agent Guard 相关测试**
 
 Run:
 
@@ -928,7 +928,7 @@ python -m pytest tests/test_agent_guard_runtime_router.py tests/test_agent_guard
 
 Expected: PASS.
 
-- [ ] **Step 4: 运行 OpenSpec 校验**
+- [x] **Step 4: 运行 OpenSpec 校验**
 
 Run:
 
@@ -942,7 +942,7 @@ Expected:
 Change 'add-guard-gate-binding' is valid
 ```
 
-- [ ] **Step 5: 勾选 OpenSpec tasks**
+- [x] **Step 5: 勾选 OpenSpec tasks**
 
 在 `openspec/changes/add-guard-gate-binding/tasks.md` 中勾选已完成条目。至少应勾选：
 
@@ -983,7 +983,7 @@ Change 'add-guard-gate-binding' is valid
 
 只勾选实际完成且测试通过的任务；如果完整仓库测试未运行，不勾选 `5.6`。
 
-- [ ] **Step 6: 提交 Task 6**
+- [x] **Step 6: 提交 Task 6**
 
 ```powershell
 git add plugins/agent-guard/scripts/guard_runtime/README.md `

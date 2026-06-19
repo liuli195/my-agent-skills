@@ -2,30 +2,21 @@
 
 - change: add-guard-gate-binding
 - phase: checkoff
-- current_plan_task: Task 5: Runtime 评估、deny 输出和审计
+- current_plan_task: Task 6: 文档、端到端验证和 OpenSpec 任务勾选
 - current_openspec_tasks:
-  - 3.5 提供上下文值来源，例如捕获变量和当前 `git_head`。
-  - 3.6 提供内置上下文值：`source_scope`、`profile_id`、`guard_id`、`effective_guard_id`、`runtime_scope`。
-  - 4.1 添加 PreToolUse 测试，证明没有 Session Focus 时仍会执行全局命令守卫点。
-  - 4.2 添加缺少 evidence（证据）、`head_ref` 过期、evidence 通过、缺少必需捕获值的测试。
-  - 4.3 在 `route_pre_tool_use` 中先评估有效全局命令守卫集，再进入 Session Focus permission。
-  - 4.4 复用共享 JSON 检查能力校验配置的 evidence。
-  - 4.5 返回机器可读的拒绝输出，包含 `reason`、`next`、`suggestion`、匹配的有效守卫 ID 列表、失败守卫列表、捕获值和审计路径。
-  - 4.6 审计记录必须区分全局命令守卫点和会话焦点权限检查。
-  - 4.7 添加作用域测试：用户级安装或用户级静态规则在项目命令中默认使用 `.local/guard`；显式用户作用域使用 `~/.agents/guard`；Comet change review 不从用户级运行目录读取证据。
-  - 5.1 验证没有全局命令守卫点匹配时，现有 Session Focus PreToolUse 行为不变。
-  - 5.2 验证全局命令守卫点允许后，后续 Session Focus permission 仍可拒绝命令。
-- implementer_agent: 019ee115-e493-76a3-88ff-860e8c005812
-- implementation_commit: 11ca0a5
-- fix_commit: 3b7d93a, 87af11e
+  - 5.3 更新 Agent Guard 运行文档，解释“会话焦点守卫”和“全局命令守卫点”的差异。
+  - 5.4 更新目录和运行时文件约定文档，说明插件安装范围、静态画像范围、运行态数据范围的差异。
+  - 5.5 运行聚焦的 Agent Guard runtime 和 validator 测试。
+  - 5.6 运行仓库完整测试套件。
+- implementer_agent: 019ee132-b1fc-7ae3-a4a9-bbae8fcf6932
+- implementation_commit: aa6e408
+- fix_commit: pending
 - changed_files:
-  - plugins/agent-guard/scripts/guard_runtime/core.py
-  - plugins/agent-guard/scripts/guard_runtime/global_command_guards.py
-  - tests/test_agent_guard_runtime_router.py
-- red_evidence:新增全局守卫用例先失败，6 failed / 2 passed
-- green_evidence: python -m pytest tests/test_agent_guard_runtime_router.py tests/test_agent_guard_runtime_session_focus.py -q passed, 59 passed
-- spec_review: approved by 019ee124-d55b-7c22-9741-62c93db2424f
-- quality_review: approved by 019ee12f-9715-7891-a536-c60bbbd10126
+  - plugins/agent-guard/scripts/guard_runtime/README.md
+- red_evidence: documentation task; no RED required
+- green_evidence: package/e2e 10 passed; focused suite 103 passed; openspec valid; full pytest 194 passed
+- spec_review: changes required by 019ee135-c7aa-7e72-b147-c8d56a8386a4; README approved, coordinator completed checkoff and verification evidence
+- quality_review: pending
 - unresolved_feedback:
   - none
-- review_fix_round: 2
+- review_fix_round: 1
