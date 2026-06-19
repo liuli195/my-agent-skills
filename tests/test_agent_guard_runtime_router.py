@@ -1064,6 +1064,36 @@ def test_state_completed_supports_json_array_all_predicate(tmp_path: Path) -> No
     assert body(result)["status"] == "allow"
 
 
+def test_state_completed_supports_json_array_where_exists_when_value_is_null(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = write_profile(project)
+    write_json_guard_point(
+        profile,
+        """
+      - id: all_findings_have_resolution
+        type: json_artifact
+        artifact: completion_note
+        field: findings
+        predicate: array_all
+        where:
+          field: resolution
+          predicate: exists
+""",
+    )
+    session_start(project, user_home)
+    activated = activate(project, user_home)
+    instance_id = activated["instance_id"]
+    write_completion_note_json(project, instance_id, {"findings": [{"resolution": None}, {"resolution": "accepted"}]})
+    read_brief(project, user_home)
+
+    result = run_cli(["state-completed", "--project", str(project), "--user-home", str(user_home), "--source", "codex", "--session-id", "session-1"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert body(result)["status"] == "allow"
+
+
 def test_state_completed_blocks_json_array_all_predicate_failure(tmp_path: Path) -> None:
     project = tmp_path / "project"
     user_home = tmp_path / "user-home"

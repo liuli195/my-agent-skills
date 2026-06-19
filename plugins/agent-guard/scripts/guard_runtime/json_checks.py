@@ -37,7 +37,7 @@ def _is_number(value: Any) -> bool:
 
 def evaluate_json_predicate(actual: Any, predicate: str, expected: Any = None, where: dict[str, Any] | None = None) -> bool:
     if predicate == "exists":
-        return actual is not None and actual is not _MISSING
+        return actual is not _MISSING
     if predicate == "equals":
         return actual == expected
     if predicate == "not_equals":
