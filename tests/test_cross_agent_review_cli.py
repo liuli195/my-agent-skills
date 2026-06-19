@@ -124,6 +124,40 @@ def test_dirty_worktree_rejects_before_dispatch(tmp_path: Path) -> None:
     assert not (tmp_path / "out" / "review-pass.json").exists()
 
 
+def test_untracked_input_files_in_space_directory_are_allowed(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    head = init_repo(project)
+    input_dir = project / "review inputs"
+
+    result = run(
+        "run",
+        "--change",
+        "demo",
+        "--base-ref",
+        head,
+        "--head-ref",
+        head,
+        "--diff-file",
+        str(write_file(input_dir / "change diff.patch")),
+        "--spec-file",
+        str(write_file(input_dir / "spec file.md")),
+        "--design-file",
+        str(write_file(input_dir / "design file.md")),
+        "--tasks-file",
+        str(write_file(input_dir / "tasks file.md")),
+        "--tests-file",
+        str(write_file(input_dir / "tests file.txt")),
+        "--output-dir",
+        str(tmp_path / "out"),
+        "--fake-reviewer-results",
+        "[]",
+        cwd=project,
+    )
+
+    assert result.returncode == 0
+    assert "status: ready" in result.stdout
+
+
 def test_head_mismatch_rejects_before_dispatch(tmp_path: Path) -> None:
     head = init_repo(tmp_path / "repo")
 

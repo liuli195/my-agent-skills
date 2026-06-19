@@ -53,13 +53,28 @@ def git_output(args: list[str], cwd: Path) -> str:
     return result.stdout.strip()
 
 
+def git_output_bytes(args: list[str], cwd: Path) -> bytes:
+    result = subprocess.run(["git", *args], cwd=cwd, check=False, capture_output=True)
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        raise ValueError(f"git_failed: {' '.join(args)}: {stderr}")
+    return result.stdout
+
+
 def status_paths(cwd: Path) -> set[Path]:
     paths: set[Path] = set()
-    for line in git_output(["status", "--short"], cwd).splitlines():
-        path_text = line[3:]
-        if " -> " in path_text:
-            path_text = path_text.rsplit(" -> ", 1)[1]
+    output = git_output_bytes(["status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd)
+    entries = output.split(b"\0")
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if not entry:
+            continue
+        path_text = entry[3:].decode("utf-8", errors="surrogateescape")
         paths.add((cwd / path_text).resolve())
+        if entry[:1] in {b"R", b"C"} or entry[1:2] in {b"R", b"C"}:
+            index += 1
     return paths
 
 
