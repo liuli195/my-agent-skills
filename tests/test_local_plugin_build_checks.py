@@ -402,3 +402,12 @@ def test_comet_config_points_to_check_commands() -> None:
 
     assert data["build_command"] == "python scripts/check.py build"
     assert data["verify_command"] == "python scripts/check.py verify"
+
+
+def test_root_comet_yaml_points_to_check_commands_for_guard() -> None:
+    import yaml
+
+    data = yaml.safe_load((REPO_ROOT / ".comet.yaml").read_text(encoding="utf-8"))
+
+    assert data["build_command"] == "python scripts/check.py build"
+    assert data["verify_command"] == "python scripts/check.py verify"
