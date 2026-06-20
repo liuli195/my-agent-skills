@@ -28,7 +28,8 @@ This keeps the path compatible with cross-agent-review while still rejecting pas
 
 ## Boundaries
 
-- Do not change cross-agent-review.
+- Do not change the cross-agent-review output contract, default directory shape, or `review-pass.json` schema.
+- cross-agent-review runner hardening may stay limited to generic SDK output parsing and reviewer result normalization when needed to execute the review gate itself.
 - Do not change Comet phase transitions.
 - Do not edit installed plugin cache or installed Hook state.
 - Do not add fallback path guessing to Runtime.
@@ -39,3 +40,4 @@ This keeps the path compatible with cross-agent-review while still rejecting pas
 - Runtime tests then show the short directory is accepted while full `head_ref` validation is preserved.
 - Validator tests show `git_head_short` is accepted in template paths and `value_from`.
 - Guard Profile template validation still passes.
+- cross-agent-review tests show Markdown-wrapped SDK JSON and common reviewer severity aliases do not create false blocking findings.
