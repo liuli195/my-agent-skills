@@ -9,6 +9,7 @@ PLUGIN_SKILL = REPO_ROOT / "plugins" / "agent-guard" / "skills" / "agent-guard"
 VALIDATOR = PLUGIN_SKILL / "scripts" / "validate_guard_profile.py"
 MINIMAL_PROFILE = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "minimal"
 MIRRORED_MINIMAL_PROFILE = REPO_ROOT / "plugins" / "agent-guard" / "assets" / "templates" / "guard-profile" / "minimal"
+COMET_REVIEW_GATE_PROFILE = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "comet-review-gate"
 
 
 def run_validator(profile_path: Path) -> subprocess.CompletedProcess[str]:
@@ -116,6 +117,13 @@ def test_minimal_guard_profile_passes_new_session_focus_contract() -> None:
     assert "hook_bindings" not in result.stdout
 
 
+def test_comet_review_gate_guard_profile_passes_validation() -> None:
+    result = run_validator(COMET_REVIEW_GATE_PROFILE)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "已检查：global_command_guards" in result.stdout
+
+
 def test_global_command_guard_valid_config_passes(tmp_path: Path) -> None:
     profile = tmp_path / "profile"
     shutil.copytree(MINIMAL_PROFILE, profile)
@@ -125,6 +133,37 @@ def test_global_command_guard_valid_config_passes(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "已检查：global_command_guards" in result.stdout
+
+
+def test_global_command_guard_accepts_git_head_short_context_value(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    write_global_command_guards(
+        profile,
+        """
+global_command_guards:
+  - id: verify_requires_review
+    description: Comet verify 前必须有 review 证据。
+    tool: Bash
+    match:
+      command_patterns:
+        - 'comet-guard.sh (?P<change>[A-Za-z0-9._-]+) verify --apply'
+      required_captures:
+        - change
+    evidence:
+      path: '.local/guard/evidence/{git_head_short}/{change}/evidence.json'
+    checks:
+      - field: head_ref_short
+        predicate: equals
+        value_from: git_head_short
+    deny:
+      reason: global_command_guard_required
+""",
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_global_command_guard_allows_profile_without_session_focus_config(tmp_path: Path) -> None:

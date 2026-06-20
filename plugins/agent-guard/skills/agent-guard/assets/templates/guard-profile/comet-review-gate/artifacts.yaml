@@ -14,6 +14,6 @@ artifacts:
     owner: external
     required_for:
       - produce_cross_agent_review_pass_marker
-    path: .local/cross-agent-review/{change}/{git_head}/review-pass.json
+    path: .local/cross-agent-review/{change}/{git_head_short}/review-pass.json
     reuse_policy: deny
     description: cross-agent-review 通过时生成的 pass marker。
