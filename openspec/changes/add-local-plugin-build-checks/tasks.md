@@ -6,11 +6,11 @@
 
 ## 2. Build And Verify Commands
 
-- [ ] 2.1 Add `scripts/check.py` with `build` and `verify` subcommands.
-- [ ] 2.2 Implement Claude（Claude 编码工具）plugin validation for the repository marketplace and every local plugin source.
-- [ ] 2.3 Implement local marketplace and plugin manifest consistency checks for Claude and Codex（OpenAI 编码代理）surfaces.
-- [ ] 2.4 Implement release-flow projection（发布流程投影）plugin registration consistency checks.
-- [ ] 2.5 Implement Guard Profile template mirror consistency checks.
+- [x] 2.1 Add `scripts/check.py` with `build` and `verify` subcommands.
+- [x] 2.2 Implement Claude（Claude 编码工具）plugin validation for the repository marketplace and every local plugin source.
+- [x] 2.3 Implement local marketplace and plugin manifest consistency checks for Claude and Codex（OpenAI 编码代理）surfaces.
+- [x] 2.4 Implement release-flow projection（发布流程投影）plugin registration consistency checks.
+- [x] 2.5 Implement Guard Profile template mirror consistency checks.
 - [ ] 2.6 Add standard pytest configuration in `pyproject.toml`.
 
 ## 3. Comet Integration

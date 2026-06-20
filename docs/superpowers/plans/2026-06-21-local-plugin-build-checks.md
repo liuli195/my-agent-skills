@@ -326,7 +326,7 @@ Expected: FAIL for missing projection and mirror check functions.
 - Create: `scripts/check.py`
 - Modify: `tests/test_local_plugin_build_checks.py` only if assertions need to match clearer error strings
 
-- [ ] **Step 1: Create script skeleton with CLI and error collection**
+- [x] **Step 1: Create script skeleton with CLI and error collection**
 
 Create `scripts/check.py`:
 
@@ -381,7 +381,7 @@ def resolve_repo_relative(root: Path, value: str, label: str) -> tuple[Path | No
     return resolved, None
 ```
 
-- [ ] **Step 2: Implement marketplace discovery**
+- [x] **Step 2: Implement marketplace discovery**
 
 Add:
 
@@ -423,7 +423,7 @@ def marketplace_plugins(root: Path) -> tuple[list[MarketplacePlugin], list[str]]
     return result, errors
 ```
 
-- [ ] **Step 3: Implement Claude validation dispatch**
+- [x] **Step 3: Implement Claude validation dispatch**
 
 Add:
 
@@ -451,7 +451,7 @@ def check_claude_validation(root: Path, plugins: Iterable[MarketplacePlugin], ru
     return errors
 ```
 
-- [ ] **Step 4: Implement manifest checks**
+- [x] **Step 4: Implement manifest checks**
 
 Add:
 
@@ -503,7 +503,7 @@ def check_plugin_manifests(root: Path, plugins: Iterable[MarketplacePlugin]) -> 
     return errors
 ```
 
-- [ ] **Step 5: Implement projection checks**
+- [x] **Step 5: Implement projection checks**
 
 Add:
 
@@ -558,7 +558,7 @@ def check_projection(root: Path, plugins: Iterable[MarketplacePlugin]) -> list[s
     return errors
 ```
 
-- [ ] **Step 6: Implement Guard Profile mirror checks and command handlers**
+- [x] **Step 6: Implement Guard Profile mirror checks and command handlers**
 
 Add:
 
@@ -642,7 +642,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 7: Run focused tests until they pass**
+- [x] **Step 7: Run focused tests until they pass**
 
 Run:
 
@@ -652,7 +652,7 @@ python -m pytest tests/test_local_plugin_build_checks.py -q
 
 Expected: all tests in `tests/test_local_plugin_build_checks.py` pass.
 
-- [ ] **Step 8: Commit the script and focused tests**
+- [x] **Step 8: Commit the script and focused tests**
 
 Run:
 
