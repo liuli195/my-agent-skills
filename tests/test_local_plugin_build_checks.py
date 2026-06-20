@@ -204,7 +204,7 @@ def test_build_reports_duplicate_projection_plugin(tmp_path: Path) -> None:
 
 
 def guard_profile_template_dirs(root: Path) -> tuple[Path, Path]:
-    left = root / "plugins" / "agent-guard" / "assets" / "templates" / "guard-profile" / "minimal"
+    left = root / "plugins" / "agent-guard" / "assets" / "templates" / "guard-profile"
     right = (
         root
         / "plugins"
@@ -214,17 +214,44 @@ def guard_profile_template_dirs(root: Path) -> tuple[Path, Path]:
         / "assets"
         / "templates"
         / "guard-profile"
-        / "minimal"
     )
     return left, right
 
 
 def make_guard_profile_mirrors(root: Path, content: str = "schema_version: guard-profile/v1\n") -> None:
     left, right = guard_profile_template_dirs(root)
-    left.mkdir(parents=True)
-    right.mkdir(parents=True)
-    (left / "GUARD-MANIFEST.yaml").write_text(content, encoding="utf-8")
-    (right / "GUARD-MANIFEST.yaml").write_text(content, encoding="utf-8")
+    template_files = [
+        ".gitkeep",
+        "confirmed-notes.yaml",
+        "minimal/GUARD-MANIFEST.yaml",
+        "minimal/activation-model.yaml",
+        "minimal/artifacts.yaml",
+        "minimal/brief-template.md",
+        "minimal/execution-model.yaml",
+        "minimal/global-command-guards.yaml",
+        "minimal/guard-points.yaml",
+        "minimal/observation-model.yaml",
+        "minimal/state-machine.yaml",
+        "minimal/target-model.yaml",
+        "minimal/validation-plan.md",
+        "comet-review-gate/GUARD-MANIFEST.yaml",
+        "comet-review-gate/activation-model.yaml",
+        "comet-review-gate/artifacts.yaml",
+        "comet-review-gate/brief-template.md",
+        "comet-review-gate/execution-model.yaml",
+        "comet-review-gate/global-command-guards.yaml",
+        "comet-review-gate/guard-points.yaml",
+        "comet-review-gate/observation-model.yaml",
+        "comet-review-gate/state-machine.yaml",
+        "comet-review-gate/target-model.yaml",
+        "comet-review-gate/validation-plan.md",
+    ]
+    for template_file in template_files:
+        file_content = "" if template_file == ".gitkeep" else f"# {template_file}\n{content}"
+        for base in (left, right):
+            path = base / template_file
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(file_content, encoding="utf-8")
 
 
 def test_build_accepts_matching_guard_profile_mirrors(tmp_path: Path) -> None:
@@ -240,7 +267,7 @@ def test_build_reports_guard_profile_mirror_mismatch(tmp_path: Path) -> None:
     module = load_check_module()
     make_guard_profile_mirrors(tmp_path)
     _left, right = guard_profile_template_dirs(tmp_path)
-    right_file = right / "GUARD-MANIFEST.yaml"
+    right_file = right / "comet-review-gate" / "GUARD-MANIFEST.yaml"
     right_file.write_text("schema_version: changed\n", encoding="utf-8")
 
     errors = module.check_guard_profile_template_mirrors(tmp_path)
@@ -266,7 +293,7 @@ def test_run_build_reports_guard_profile_mirror_mismatch(tmp_path: Path) -> None
     make_projection(tmp_path, ["agent-guard"])
     make_guard_profile_mirrors(tmp_path)
     _left, right = guard_profile_template_dirs(tmp_path)
-    (right / "GUARD-MANIFEST.yaml").write_text("schema_version: changed\n", encoding="utf-8")
+    (right / "comet-review-gate" / "GUARD-MANIFEST.yaml").write_text("schema_version: changed\n", encoding="utf-8")
 
     errors = module.run_build(
         tmp_path,
@@ -274,3 +301,20 @@ def test_run_build_reports_guard_profile_mirror_mismatch(tmp_path: Path) -> None
     )
 
     assert any("guard_profile_template_mismatch" in error for error in errors)
+
+
+def test_run_build_reports_guard_profile_mirror_file_set_mismatch(tmp_path: Path) -> None:
+    module = load_check_module()
+    make_plugin(tmp_path, "agent-guard")
+    make_marketplace(tmp_path, ["agent-guard"])
+    make_projection(tmp_path, ["agent-guard"])
+    make_guard_profile_mirrors(tmp_path)
+    _left, right = guard_profile_template_dirs(tmp_path)
+    (right / "EXTRA.yaml").write_text("extra: true\n", encoding="utf-8")
+
+    errors = module.run_build(
+        tmp_path,
+        runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+
+    assert any("guard_profile_template_files_mismatch" in error for error in errors)
