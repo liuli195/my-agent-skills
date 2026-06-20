@@ -83,6 +83,10 @@ def git_head(project: Path) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def git_head_short(head: str) -> str:
+    return head[:12] if len(head) >= 12 else head
+
+
 def runtime_scope_for_command(project: Path, user_home: Path, envelope: dict[str, Any]) -> str:
     context = envelope.get("context", {})
     explicit_scope = context.get("runtime_scope") or context.get("scope")
@@ -133,6 +137,7 @@ def _context_values(guard: EffectiveGlobalCommandGuard, captures: dict[str, str]
         "effective_guard_id": guard.effective_guard_id,
         "runtime_scope": runtime_scope,
         "git_head": head,
+        "git_head_short": git_head_short(head),
     }
     values.update(captures)
     return values
@@ -252,6 +257,7 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
     command = command_from_envelope(envelope)
     runtime_scope = runtime_scope_for_command(project, user_home, envelope)
     head = git_head(project)
+    head_short = git_head_short(head)
     matched_guard_ids: list[str] = []
     failing_guards: list[dict[str, Any]] = []
     captures: dict[str, str] = {}
@@ -281,6 +287,7 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
             "effective_guard_id": guard.effective_guard_id,
             "runtime_scope": runtime_scope,
             "git_head": head,
+            "git_head_short": head_short,
         }
         values = _context_values(guard, guard_captures, runtime_scope, head)
         evidence = config.get("evidence")

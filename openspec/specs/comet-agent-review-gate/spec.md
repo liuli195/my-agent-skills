@@ -38,26 +38,32 @@ TBD - created by archiving change add-comet-agent-review-gate. Update Purpose af
 - **AND** 系统不得把该项目命令的运行态材料写入 `~/.agents/guard`
 
 ### Requirement: Comet review gate 通过产物注册层校验 pass marker
+
 系统 MUST 通过 Agent Guard artifacts.yaml 产物注册层引用 cross-agent-review（跨代理审查）默认输出的 `review-pass.json`，并使用 Global Command Guard（全局命令守卫点）的 JSON predicate（JSON 谓词）校验该 pass marker（通过标记）。系统 MUST NOT 要求 cross-agent-review 修改默认输出目录、复制 pass marker 到另一套 evidence 目录，或改变 cross-agent-review 的边界行为。
 
 #### Scenario: 注册 cross-agent-review pass marker
+
 - **WHEN** 用户级 Guard Profile（守卫画像）配置 Comet review gate
 - **THEN** `artifacts.yaml` 注册 `cross_agent_review_pass` 产物
-- **AND** 该产物路径指向项目内 `.local/cross-agent-review/<change>/<head_ref>/review-pass.json`
+- **AND** 该产物路径指向项目内 `.local/cross-agent-review/<change>/<head_ref_short>/review-pass.json`
 - **AND** `<change>` 来自 Global Command Guard（全局命令守卫点）的命令捕获值
-- **AND** `<head_ref>` 来自当前 Git HEAD
+- **AND** `<head_ref_short>` 来自当前 Git HEAD 的 12 位短值
 - **AND** Global Command Guard 通过 `artifact` 或 `artifact_id` 引用该注册产物，而不是直接声明独立 `evidence.path`
 
 #### Scenario: pass marker 合法
-- **WHEN** `review-pass.json` 存在，且 `status` 为 `pass`、`change` 匹配当前 change、`head_ref` 匹配当前 HEAD、`blocking_findings` 为 0、`report` 存在且 `report_hash` 存在
+
+- **WHEN** `review-pass.json` 存在于当前 change 和当前短 HEAD 对应目录
+- **AND** `status` 为 `pass`、`change` 匹配当前 change、`head_ref` 匹配当前完整 HEAD、`blocking_findings` 为 0、`report` 存在且 `report_hash` 存在
 - **THEN** Global Command Guard（全局命令守卫点）允许 Comet build 阶段守卫收尾命令继续执行
 
 #### Scenario: pass marker 缺失
+
 - **WHEN** review report（审查报告）存在但 `review-pass.json` 不存在
 - **THEN** Global Command Guard（全局命令守卫点）拒绝 Comet build 阶段守卫收尾命令
 - **AND** deny（拒绝）输出包含失败原因、缺失产物、当前 change、当前 head ref 和来自 Guard Profile（守卫画像）配置的下一步提示
 
 #### Scenario: deny 输出由画像配置承载
+
 - **WHEN** Global Command Guard（全局命令守卫点）拒绝 `comet-guard.sh <change> build --apply`
 - **THEN** deny（拒绝）输出 MUST 包含结构化 `reason`、`next`、`suggestion`、命令 captures（捕获值）和 failing guard（失败守卫）详情
 - **AND** `reason`、`next` 和 `suggestion` MAY 使用 Guard Profile 中声明的场景化配置
@@ -65,7 +71,8 @@ TBD - created by archiving change add-comet-agent-review-gate. Update Purpose af
 - **AND** 本系统 MUST NOT 在 Agent Guard 或 Comet 中实现 cross-agent-review 内部编排逻辑
 
 #### Scenario: pass marker 过期
-- **WHEN** `review-pass.json` 的 `head_ref` 不匹配当前 HEAD
+
+- **WHEN** `review-pass.json` 的 `head_ref` 不匹配当前完整 HEAD
 - **THEN** Global Command Guard（全局命令守卫点）拒绝 Comet build 阶段守卫收尾命令，并提示重新运行跨 agent review
 
 ### Requirement: review fail 表现为无有效 pass marker
@@ -81,4 +88,3 @@ TBD - created by archiving change add-comet-agent-review-gate. Update Purpose af
 - **WHEN** 用户修复 blocking findings（阻塞发现）并更新 HEAD
 - **THEN** cross-agent-review 或调用方负责重新审查并使用新 head ref 生成新的 `review-pass.json`
 - **AND** Agent Guard 只校验新 pass marker 是否匹配当前命令和当前 HEAD
-

@@ -25,6 +25,19 @@ SDK_DISPATCH_TIMEOUT_SECONDS = 300
 BLOCKING_SEVERITIES = {"CRITICAL", "IMPORTANT"}
 NON_BLOCKING_SEVERITIES = {"WARNING", "SUGGESTION"}
 ALL_SEVERITIES = BLOCKING_SEVERITIES | NON_BLOCKING_SEVERITIES
+SEVERITY_ALIASES = {
+    "BLOCKER": "CRITICAL",
+    "BLOCKING": "CRITICAL",
+    "CRITICAL": "CRITICAL",
+    "HIGH": "IMPORTANT",
+    "IMPORTANT": "IMPORTANT",
+    "MEDIUM": "WARNING",
+    "WARNING": "WARNING",
+    "LOW": "SUGGESTION",
+    "INFO": "SUGGESTION",
+    "INFORMATIONAL": "SUGGESTION",
+    "SUGGESTION": "SUGGESTION",
+}
 
 
 @dataclass(frozen=True)
@@ -247,6 +260,72 @@ def run_sdk_dispatch_subprocess(review_args: ReviewArgs, sdk_python: str) -> lis
     return [item for item in data if isinstance(item, dict)]
 
 
+def balanced_json_object_candidates(text: str) -> list[str]:
+    candidates: list[str] = []
+    start = text.find("{")
+    while start != -1:
+        depth = 0
+        in_string = False
+        escaped = False
+        for index in range(start, len(text)):
+            char = text[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    candidates.append(text[start : index + 1])
+                    break
+        start = text.find("{", start + 1)
+    return candidates
+
+
+def markdown_fence_bodies(text: str) -> list[str]:
+    bodies: list[str] = []
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        fence = lines[index].strip()
+        if not fence.startswith("```"):
+            index += 1
+            continue
+        language = fence[3:].strip().lower()
+        end = index + 1
+        while end < len(lines) and lines[end].strip() != "```":
+            end += 1
+        if end < len(lines) and language in {"", "json"}:
+            bodies.append("\n".join(lines[index + 1 : end]))
+            index = end
+        index += 1
+    return bodies
+
+
+def parse_reviewer_result(result_text: str) -> dict | None:
+    candidates = [result_text.strip()]
+    candidates.extend(markdown_fence_bodies(result_text))
+    candidates.extend(balanced_json_object_candidates(result_text))
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
 def run_sdk_dispatch() -> int:
     import asyncio
     from claude_agent_sdk import ClaudeAgentOptions, query
@@ -264,12 +343,9 @@ def run_sdk_dispatch() -> int:
             async for message in query(prompt=payload["prompts"][role], options=options):
                 if hasattr(message, "result"):
                     result_text = message.result
-            try:
-                parsed = json.loads(result_text)
-                if isinstance(parsed, dict):
-                    return parsed
-            except json.JSONDecodeError:
-                pass
+            parsed = parse_reviewer_result(result_text)
+            if parsed is not None:
+                return parsed
             return {
                 "role": role,
                 "status": "failed",
@@ -300,16 +376,42 @@ def output_dir_for(review_args: ReviewArgs) -> Path:
     return Path(".local") / "cross-agent-review" / review_args.change / short_ref(review_args.head_ref)
 
 
-def normalize_finding(raw: dict) -> dict:
+def first_text(raw: dict, names: Sequence[str]) -> str:
+    for name in names:
+        value = raw.get(name)
+        if value is not None and value != "":
+            return str(value)
+    return ""
+
+
+def finding_location(raw: dict) -> str:
+    location = first_text(raw, ["location", "area"])
+    if location:
+        return location
+    file = raw.get("file")
+    line = raw.get("line")
+    if file is not None and line is not None:
+        return f"{file}:{line}"
+    return str(file) if file is not None else ""
+
+
+def normalize_severity(raw: dict) -> str:
     severity = str(raw.get("severity", "")).upper()
-    if severity not in ALL_SEVERITIES:
-        severity = "CRITICAL"
+    return SEVERITY_ALIASES.get(severity, "CRITICAL")
+
+
+def is_explicit_non_issue_observation(raw: dict) -> bool:
+    return "severity" not in raw and "issue" in raw and raw.get("issue") in {None, False, ""}
+
+
+def normalize_finding(raw: dict) -> dict:
+    severity = normalize_severity(raw)
     return {
         "severity": severity,
-        "location": str(raw.get("location", "")),
-        "summary": str(raw.get("summary", "")),
-        "evidence": str(raw.get("evidence", "")),
-        "recommendation": str(raw.get("recommendation", "")),
+        "location": finding_location(raw),
+        "summary": first_text(raw, ["summary", "description", "message", "issue", "detail"]),
+        "evidence": first_text(raw, ["evidence", "detail", "spec_scenario"]),
+        "recommendation": first_text(raw, ["recommendation", "suggestion"]),
     }
 
 
@@ -338,6 +440,8 @@ def aggregate(reviewers: list[dict], skipped: list[dict]) -> dict:
                     "evidence": repr(raw),
                     "recommendation": "Rerun review or fix reviewer prompt",
                 }
+            elif is_explicit_non_issue_observation(raw):
+                continue
             finding = normalize_finding(raw)
             key = (finding["severity"], finding["location"], finding["summary"])
             if key in seen:
