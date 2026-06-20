@@ -20,7 +20,7 @@
 
 ## 4. Verification
 
-- [ ] 4.1 Run focused tests for the new command behavior.
-- [ ] 4.2 Run `python scripts/check.py build`.
-- [ ] 4.3 Run `python scripts/check.py verify`.
-- [ ] 4.4 Confirm no Comet（双星流程）source files or installed Comet scripts were modified.
+- [x] 4.1 Run focused tests for the new command behavior.
+- [x] 4.2 Run `python scripts/check.py build`.
+- [x] 4.3 Run `python scripts/check.py verify`.
+- [x] 4.4 Confirm no Comet（双星流程）source files or installed Comet scripts were modified.

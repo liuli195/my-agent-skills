@@ -806,7 +806,7 @@ git commit -m "chore: configure comet build and verify commands"
 **Files:**
 - Modify: `openspec/changes/add-local-plugin-build-checks/tasks.md`
 
-- [ ] **Step 1: Run build command**
+- [x] **Step 1: Run build command**
 
 Run:
 
@@ -816,7 +816,7 @@ python scripts/check.py build
 
 Expected: exit code 0 and `status: build checks passed`.
 
-- [ ] **Step 2: Run verify command**
+- [x] **Step 2: Run verify command**
 
 Run:
 
@@ -826,7 +826,7 @@ python scripts/check.py verify
 
 Expected: exit code 0 and full pytest suite passes.
 
-- [ ] **Step 3: Confirm Comet source files were not modified**
+- [x] **Step 3: Confirm Comet source files were not modified**
 
 Run:
 
@@ -837,11 +837,11 @@ git diff --name-only
 
 Expected: changed files are limited to this repository's OpenSpec artifacts, design/plan docs, local check script, tests, pytest config, `.comet/config.yaml`, and removal of `.comet/build-check.sh`. No files under `C:\Users\liuli\.codex\skills\comet` are modified.
 
-- [ ] **Step 4: Mark OpenSpec tasks complete**
+- [x] **Step 4: Mark OpenSpec tasks complete**
 
 Update `openspec/changes/add-local-plugin-build-checks/tasks.md` by changing completed `- [ ]` entries to `- [x]` only after the corresponding evidence exists.
 
-- [ ] **Step 5: Commit task updates**
+- [x] **Step 5: Commit task updates**
 
 Run:
 
