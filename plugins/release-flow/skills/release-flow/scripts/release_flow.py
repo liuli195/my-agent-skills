@@ -24,7 +24,7 @@ SUPPORTED_VARIABLE_SOURCE = "github-actions-variable"
 SUPPORTED_TRANSFORM_TYPE = "json-env"
 SUPPORTED_GENERATOR_TYPE = "codex-marketplace"
 SUPPORTED_GENERATOR_IDENTITY = "codex"
-SUPPORTED_CODEX_MARKETPLACE_PLUGINS = {"agent-guard", "release-flow"}
+SUPPORTED_CODEX_MARKETPLACE_PLUGINS = {"agent-guard", "release-flow", "cross-agent-review"}
 SETUP_TARGETS = [
     ("release-flow/config.yaml", ".release-flow/config.yaml"),
     ("release-flow/projection.yaml", ".release-flow/projection.yaml"),
@@ -573,6 +573,12 @@ def codex_marketplace_entry(plugin_name: str) -> dict[str, Any]:
         "release-flow": {
             "name": "release-flow",
             "source": {"source": "local", "path": "./plugins/release-flow"},
+            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+            "category": "Developer Tools",
+        },
+        "cross-agent-review": {
+            "name": "cross-agent-review",
+            "source": {"source": "local", "path": "./plugins/cross-agent-review"},
             "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
             "category": "Developer Tools",
         },
