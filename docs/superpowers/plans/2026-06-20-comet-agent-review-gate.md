@@ -2,6 +2,7 @@
 change: add-comet-agent-review-gate
 design-doc: docs/superpowers/specs/2026-06-20-comet-agent-review-gate-design.md
 base-ref: db0459da3e5a7f63c5de64c2779a23a3ea1a926a
+archived-with: 2026-06-20-add-comet-agent-review-gate
 ---
 
 # Comet Agent Review Gate Implementation Plan
@@ -14,6 +15,7 @@ base-ref: db0459da3e5a7f63c5de64c2779a23a3ea1a926a
 
 **Tech Stack:** Python runtime and pytest tests, YAML guard profiles, Markdown skills/references, OpenSpec/Comet workflow files.
 
+archived-with: 2026-06-20-add-comet-agent-review-gate
 ---
 
 ## Pre-Execution Gate
@@ -55,6 +57,7 @@ Do not edit runtime code until the user confirms this non-configuration change.
   - `tests/test_agent_guard_plugin_package.py`
 - Modify `openspec/changes/add-comet-agent-review-gate/tasks.md` as tasks complete.
 
+archived-with: 2026-06-20-add-comet-agent-review-gate
 ---
 
 ### Task 1: Add Comet Review Gate Profile Template
@@ -223,6 +226,7 @@ git add plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/co
 git commit -m "feat: add comet review gate guard template"
 ```
 
+archived-with: 2026-06-20-add-comet-agent-review-gate
 ---
 
 ### Task 2: Add Artifact Reference Support To Global Command Guard
@@ -514,6 +518,7 @@ git add plugins/agent-guard/skills/agent-guard/scripts/validate_guard_profile.py
 git commit -m "feat: let global command guards use artifacts"
 ```
 
+archived-with: 2026-06-20-add-comet-agent-review-gate
 ---
 
 ### Task 3: Update Agent Guard Skill Entry Docs
@@ -630,6 +635,7 @@ git add plugins/agent-guard/skills/agent-guard/SKILL.md plugins/agent-guard/skil
 git commit -m "docs: expose global command guard skill flows"
 ```
 
+archived-with: 2026-06-20-add-comet-agent-review-gate
 ---
 
 ### Task 4: Document The Guard Boundary
@@ -711,6 +717,7 @@ git add plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/co
 git commit -m "docs: document comet review gate boundary"
 ```
 
+archived-with: 2026-06-20-add-comet-agent-review-gate
 ---
 
 ### Task 5: End-to-End Regression And Comet Task Sync
@@ -776,6 +783,7 @@ git add openspec/changes/add-comet-agent-review-gate/tasks.md
 git commit -m "chore: sync comet review gate tasks"
 ```
 
+archived-with: 2026-06-20-add-comet-agent-review-gate
 ---
 
 ## Plan Self-Review

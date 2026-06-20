@@ -2,6 +2,8 @@
 comet_change: add-comet-agent-review-gate
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-20-add-comet-agent-review-gate
+status: final
 ---
 
 # Comet Agent Review Gate Design
