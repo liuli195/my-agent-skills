@@ -1,0 +1,23 @@
+workflow: full
+phase: archive
+context_compression: beta
+build_mode: executing-plans
+build_command: bash .comet/build-check.sh
+verify_command: bash .comet/build-check.sh
+build_pause: null
+subagent_dispatch: null
+tdd_mode: tdd
+isolation: branch
+verify_mode: full
+auto_transition: true
+base_ref: b428c918259fcf9ac25abbe99dad8b79c5eca4cd
+design_doc: docs/superpowers/specs/2026-06-18-fix-release-flow-marketplace-identity-design.md
+plan: docs/superpowers/plans/2026-06-18-fix-release-flow-marketplace-identity.md
+verify_result: pass
+verification_report: docs/superpowers/reports/2026-06-18-fix-release-flow-marketplace-identity-verify.md
+branch_status: handled
+created_at: 2026-06-18
+verified_at: 2026-06-18
+archived: true
+handoff_context: openspec/changes/fix-release-flow-marketplace-identity/.comet/handoff/spec-context.json
+handoff_hash: 7ec9a922ecaa4184f6db400a8bf980558a9b0976ce45bb73dd157d05869ebc52

@@ -1,0 +1,7 @@
+{
+  "name": "agent-guard",
+  "version": "0.1.5",
+  "description": "Agent Guard Plugin（代理守卫插件）",
+  "skills": "./skills",
+  "assets": "assets"
+}
