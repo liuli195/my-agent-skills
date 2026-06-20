@@ -1,7 +1,7 @@
 ## 1. Test Coverage
 
 - [x] 1.1 Add tests for `scripts/check.py build` covering Claude validation command discovery, marketplace source validation, manifest name matching, Codex manifest path checks, projection registration consistency, and Guard Profile（守卫画像）template mirror checks.
-- [ ] 1.2 Add tests for `scripts/check.py verify` proving it delegates to `python -m pytest` and uses repository pytest（Python 测试框架）configuration.
+- [x] 1.2 Add tests for `scripts/check.py verify` proving it delegates to `python -m pytest` and uses repository pytest（Python 测试框架）configuration.
 - [ ] 1.3 Add tests for `.comet/config.yaml` requiring `build_command: python scripts/check.py build` and `verify_command: python scripts/check.py verify`.
 
 ## 2. Build And Verify Commands
@@ -11,7 +11,7 @@
 - [x] 2.3 Implement local marketplace and plugin manifest consistency checks for Claude and Codex（OpenAI 编码代理）surfaces.
 - [x] 2.4 Implement release-flow projection（发布流程投影）plugin registration consistency checks.
 - [x] 2.5 Implement Guard Profile template mirror consistency checks.
-- [ ] 2.6 Add standard pytest configuration in `pyproject.toml`.
+- [x] 2.6 Add standard pytest configuration in `pyproject.toml`.
 
 ## 3. Comet Integration
 

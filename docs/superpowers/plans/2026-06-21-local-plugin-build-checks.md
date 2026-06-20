@@ -667,7 +667,7 @@ git commit -m "feat: add local plugin build checks"
 - Modify: `tests/test_local_plugin_build_checks.py`
 - Create: `pyproject.toml`
 
-- [ ] **Step 1: Add failing verify delegation test**
+- [x] **Step 1: Add failing verify delegation test**
 
 Append:
 
@@ -686,7 +686,7 @@ def test_verify_delegates_to_pytest(tmp_path: Path) -> None:
     assert calls == [[sys.executable, "-m", "pytest"]]
 ```
 
-- [ ] **Step 2: Run the verify test and confirm it passes with existing implementation**
+- [x] **Step 2: Run the verify test and confirm it passes with existing implementation**
 
 Run:
 
@@ -696,7 +696,7 @@ python -m pytest tests/test_local_plugin_build_checks.py::test_verify_delegates_
 
 Expected: PASS.
 
-- [ ] **Step 3: Add pytest configuration**
+- [x] **Step 3: Add pytest configuration**
 
 Create `pyproject.toml`:
 
@@ -707,7 +707,7 @@ python_files = ["test_*.py"]
 addopts = "-q"
 ```
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run:
 
@@ -717,7 +717,7 @@ python -m pytest tests/test_local_plugin_build_checks.py -q
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit verify test and pytest configuration**
+- [x] **Step 5: Commit verify test and pytest configuration**
 
 Run:
 
