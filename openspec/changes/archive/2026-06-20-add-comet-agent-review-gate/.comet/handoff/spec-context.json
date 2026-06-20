@@ -1,0 +1,16 @@
+{
+  "change": "add-comet-agent-review-gate",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "ca828f2b0e2198214d1cbf557404082da90f87100394416c35e102894897d115",
+  "files": [
+    { "path": "openspec/changes/add-comet-agent-review-gate/proposal.md", "sha256": "e29e23072aaa48d1de5f952002132bdc2014a0aa8637d13d3d6fd009fb3d7bd2", "role": "supporting" },
+    { "path": "openspec/changes/add-comet-agent-review-gate/design.md", "sha256": "1d5e43eb1a6830742b9b424ae1dfb031b4d0acb8b757d7a6d24b7a37406a4eb7", "role": "supporting" },
+    { "path": "openspec/changes/add-comet-agent-review-gate/tasks.md", "sha256": "60f5e3ecd724605b4f1d2d2bbc2c1b41604ceea530cb5e91f4b90ea93f3ee509", "role": "supporting" },
+    { "path": "openspec/changes/add-comet-agent-review-gate/specs/agent-guard-plugin-runtime/spec.md", "sha256": "9b00943ce18057ac1262357d9b867c849119fa318fcf79a9784bd329140ea6d2", "role": "spec" },
+    { "path": "openspec/changes/add-comet-agent-review-gate/specs/agent-guard-skill-entrypoints/spec.md", "sha256": "32f6b96482662a1b3d891556862a013a2eb3b91fb49c15eeb1f495ea3d734c2d", "role": "spec" },
+    { "path": "openspec/changes/add-comet-agent-review-gate/specs/comet-agent-review-gate/spec.md", "sha256": "941d97bf2859b159e016ed247a05de3e2480bf183ca8d7145aec3de708d1c4bd", "role": "spec" }
+  ]
+}
