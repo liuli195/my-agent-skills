@@ -95,21 +95,22 @@ def test_build_runs_claude_validation_for_marketplace_and_each_plugin(tmp_path: 
     make_marketplace(tmp_path, ["alpha", "beta"])
     make_projection(tmp_path, ["alpha", "beta"])
 
-    calls: list[list[str]] = []
+    calls: list[tuple[list[str], Path]] = []
 
     def fake_run(command, cwd, text, capture_output, check):
-        calls.append(command)
+        calls.append((command, cwd))
         return subprocess.CompletedProcess(command, 0, "ok", "")
 
     errors = module.run_build(tmp_path, runner=fake_run)
 
     assert errors == []
     assert calls == [
-        ["claude", "plugin", "validate", "."],
-        ["claude", "plugin", "validate", str(tmp_path / "plugins" / "alpha")],
-        ["claude", "plugin", "validate", str(tmp_path / "plugins" / "beta")],
+        (["claude", "plugin", "validate", "."], tmp_path),
+        (["claude", "plugin", "validate", str(tmp_path / "plugins" / "alpha")], tmp_path),
+        (["claude", "plugin", "validate", str(tmp_path / "plugins" / "beta")], tmp_path),
     ]
-    assert all("--strict" not in command for command in calls)
+    assert all(cwd == tmp_path for _command, cwd in calls)
+    assert all("--strict" not in command for command, _cwd in calls)
 
 
 def test_build_rejects_marketplace_source_outside_repo(tmp_path: Path) -> None:
@@ -119,7 +120,10 @@ def test_build_rejects_marketplace_source_outside_repo(tmp_path: Path) -> None:
     data["plugins"][0]["source"] = "../outside"
     write_json(tmp_path / ".claude-plugin" / "marketplace.json", data)
 
-    errors = module.run_build(tmp_path, runner=lambda *args, **kwargs: None)
+    errors = module.run_build(
+        tmp_path,
+        runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
 
     assert any("source_outside_repo" in error for error in errors)
 
@@ -152,7 +156,10 @@ def test_build_reports_missing_codex_manifest_path(tmp_path: Path) -> None:
     make_plugin(tmp_path, "alpha")
     make_marketplace(tmp_path, ["alpha"])
     make_projection(tmp_path, ["alpha"])
-    (tmp_path / "plugins" / "alpha" / "skills").rename(tmp_path / "plugins" / "alpha" / "missing-skills")
+    codex_manifest = tmp_path / "plugins" / "alpha" / ".codex-plugin" / "plugin.json"
+    data = json.loads(codex_manifest.read_text(encoding="utf-8"))
+    data["hooks"] = "./missing-hooks"
+    write_json(codex_manifest, data)
 
     errors = module.run_build(
         tmp_path,
