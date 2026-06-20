@@ -2,6 +2,8 @@
 comet_change: add-cross-agent-review-mechanism
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-20-add-cross-agent-review-mechanism
+status: final
 ---
 
 # Cross-Agent Review Design

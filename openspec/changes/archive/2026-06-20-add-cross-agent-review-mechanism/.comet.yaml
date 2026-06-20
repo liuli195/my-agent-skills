@@ -18,6 +18,6 @@ build_command: C:/msys64/usr/bin/bash.exe .comet/build-check.sh
 verify_command: C:/msys64/usr/bin/bash.exe .comet/build-check.sh
 created_at: 2026-06-18
 verified_at: 2026-06-20
-archived: false
+archived: true
 handoff_context: openspec/changes/add-cross-agent-review-mechanism/.comet/handoff/spec-context.json
 handoff_hash: 0789cc37fff3b6905a1b3c6c11886a6e0b5b961f222dfcb494d0f8fe2edb0a2f

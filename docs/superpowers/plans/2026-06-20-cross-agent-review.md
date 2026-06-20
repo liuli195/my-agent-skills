@@ -2,6 +2,7 @@
 change: add-cross-agent-review-mechanism
 design-doc: docs/superpowers/specs/2026-06-20-cross-agent-review-design.md
 base-ref: 33e83be22cb5d14293feadd5c4cc2f67db210ddc
+archived-with: 2026-06-20-add-cross-agent-review-mechanism
 ---
 
 # Cross-Agent Review Implementation Plan
@@ -14,6 +15,7 @@ base-ref: 33e83be22cb5d14293feadd5c4cc2f67db210ddc
 
 **Tech Stack:** Python standard library, pytest, Claude Agent SDK imported dynamically only by the runtime path, Codex/Claude plugin manifests.
 
+archived-with: 2026-06-20-add-cross-agent-review-mechanism
 ---
 
 ## File Structure
@@ -138,9 +140,11 @@ Create `plugins/cross-agent-review/.claude-plugin/plugin.json`:
 Create `plugins/cross-agent-review/skills/cross-agent-review/SKILL.md`:
 
 ```markdown
+archived-with: 2026-06-20-add-cross-agent-review-mechanism
 ---
 name: cross-agent-review
 description: "运行跨代理审查。Use when 需要在提交后的 clean commit 上运行 Claude Agent SDK reviewer，并生成 review report 和 review-pass.json。"
+archived-with: 2026-06-20-add-cross-agent-review-mechanism
 ---
 
 # Cross-Agent Review
