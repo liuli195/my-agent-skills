@@ -25,6 +25,19 @@ SDK_DISPATCH_TIMEOUT_SECONDS = 300
 BLOCKING_SEVERITIES = {"CRITICAL", "IMPORTANT"}
 NON_BLOCKING_SEVERITIES = {"WARNING", "SUGGESTION"}
 ALL_SEVERITIES = BLOCKING_SEVERITIES | NON_BLOCKING_SEVERITIES
+SEVERITY_ALIASES = {
+    "BLOCKER": "CRITICAL",
+    "BLOCKING": "CRITICAL",
+    "CRITICAL": "CRITICAL",
+    "HIGH": "IMPORTANT",
+    "IMPORTANT": "IMPORTANT",
+    "MEDIUM": "WARNING",
+    "WARNING": "WARNING",
+    "LOW": "SUGGESTION",
+    "INFO": "SUGGESTION",
+    "INFORMATIONAL": "SUGGESTION",
+    "SUGGESTION": "SUGGESTION",
+}
 
 
 @dataclass(frozen=True)
@@ -363,16 +376,42 @@ def output_dir_for(review_args: ReviewArgs) -> Path:
     return Path(".local") / "cross-agent-review" / review_args.change / short_ref(review_args.head_ref)
 
 
-def normalize_finding(raw: dict) -> dict:
+def first_text(raw: dict, names: Sequence[str]) -> str:
+    for name in names:
+        value = raw.get(name)
+        if value is not None and value != "":
+            return str(value)
+    return ""
+
+
+def finding_location(raw: dict) -> str:
+    location = first_text(raw, ["location", "area"])
+    if location:
+        return location
+    file = raw.get("file")
+    line = raw.get("line")
+    if file is not None and line is not None:
+        return f"{file}:{line}"
+    return str(file) if file is not None else ""
+
+
+def normalize_severity(raw: dict) -> str:
     severity = str(raw.get("severity", "")).upper()
-    if severity not in ALL_SEVERITIES:
-        severity = "CRITICAL"
+    return SEVERITY_ALIASES.get(severity, "CRITICAL")
+
+
+def is_explicit_non_issue_observation(raw: dict) -> bool:
+    return "severity" not in raw and "issue" in raw and raw.get("issue") in {None, False, ""}
+
+
+def normalize_finding(raw: dict) -> dict:
+    severity = normalize_severity(raw)
     return {
         "severity": severity,
-        "location": str(raw.get("location", "")),
-        "summary": str(raw.get("summary", "")),
-        "evidence": str(raw.get("evidence", "")),
-        "recommendation": str(raw.get("recommendation", "")),
+        "location": finding_location(raw),
+        "summary": first_text(raw, ["summary", "description", "message", "issue", "detail"]),
+        "evidence": first_text(raw, ["evidence", "detail", "spec_scenario"]),
+        "recommendation": first_text(raw, ["recommendation", "suggestion"]),
     }
 
 
@@ -401,6 +440,8 @@ def aggregate(reviewers: list[dict], skipped: list[dict]) -> dict:
                     "evidence": repr(raw),
                     "recommendation": "Rerun review or fix reviewer prompt",
                 }
+            elif is_explicit_non_issue_observation(raw):
+                continue
             finding = normalize_finding(raw)
             key = (finding["severity"], finding["location"], finding["summary"])
             if key in seen:

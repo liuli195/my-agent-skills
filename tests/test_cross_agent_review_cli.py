@@ -621,6 +621,56 @@ def test_duplicate_findings_are_counted_once(tmp_path: Path) -> None:
     assert data["blocking_findings"] == 1
 
 
+def test_aggregate_ignores_explicit_non_issue_observations() -> None:
+    module = load_script_module()
+
+    summary = module.aggregate(
+        [
+            {
+                "role": "implementation-correctness",
+                "status": "pass",
+                "findings": [
+                    {
+                        "location": "app.txt:1",
+                        "issue": None,
+                        "detail": "Reviewed behavior matches the spec.",
+                    }
+                ],
+            }
+        ],
+        [],
+    )
+
+    assert summary["blocking_findings"] == 0
+    assert summary["findings"] == []
+
+
+def test_aggregate_maps_common_reviewer_severities_to_non_blocking_findings() -> None:
+    module = load_script_module()
+
+    summary = module.aggregate(
+        [
+            {
+                "role": "tests-and-edge-cases",
+                "status": "pass-with-findings",
+                "findings": [
+                    {"severity": "medium", "area": "tests", "description": "Add an edge test.", "suggestion": "Cover the boundary."},
+                    {"severity": "low", "area": "docs", "description": "Clarify wording.", "suggestion": "Tighten the text."},
+                    {"severity": "info", "file": "app.py", "line": 3, "message": "No risk."},
+                ],
+            }
+        ],
+        [],
+    )
+
+    assert summary["blocking_findings"] == 0
+    assert [finding["severity"] for finding in summary["findings"]] == ["WARNING", "SUGGESTION", "SUGGESTION"]
+    assert summary["findings"][0]["summary"] == "Add an edge test."
+    assert summary["findings"][0]["location"] == "tests"
+    assert summary["findings"][0]["recommendation"] == "Cover the boundary."
+    assert summary["findings"][2]["location"] == "app.py:3"
+
+
 def test_risk_review_skip_is_recorded(tmp_path: Path) -> None:
     head = init_repo(tmp_path / "repo")
     result = run(
