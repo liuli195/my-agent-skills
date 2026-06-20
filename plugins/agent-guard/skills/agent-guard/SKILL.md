@@ -15,6 +15,7 @@ description: 路由到具体 Agent Guard（代理守卫）场景入口。Use whe
 | 第一次初始化项目级或用户级守卫 | `$agent-guard-init` |
 | 更新 Agent Guard Plugin（代理守卫插件），或同步已校验画像到已初始化守卫 | `$agent-guard-update` |
 | 激活 Session Focus Instance（会话焦点实例）、切换焦点、关闭实例、提交事件 | `$agent-guard-run` |
+| 配置 Global Command Guard（全局命令守卫）场景，含外部证据类拦截 | 先按 install/init/update/run 所在阶段转到对应入口；排障看对应 reference 的 troubleshoot |
 
 ## 规则
 

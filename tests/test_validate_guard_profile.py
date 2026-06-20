@@ -56,6 +56,30 @@ global_command_guards:
 """
 
 
+def valid_global_command_guard_with_artifact_yaml(artifact_id: str = "completion_note") -> str:
+    return f"""
+global_command_guards:
+  - id: verify_requires_review
+    description: Comet build 前必须有 review 证据。
+    tool: Bash
+    match:
+      command_patterns:
+        - 'comet-guard\\.sh (?P<change>[A-Za-z0-9._-]+) build --apply'
+      required_captures:
+        - change
+    evidence:
+      artifact: {artifact_id}
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+    deny:
+      reason: global_command_guard_required
+      next: produce_required_evidence
+      suggestion: 先完成 reviewed flow（已审查流程）。
+"""
+
+
 def test_global_command_guards_template_file_is_allowed() -> None:
     skill_template = MINIMAL_PROFILE / "global-command-guards.yaml"
     plugin_template = MIRRORED_MINIMAL_PROFILE / "global-command-guards.yaml"
@@ -117,6 +141,30 @@ def test_global_command_guard_allows_profile_without_session_focus_config(tmp_pa
     assert "category=state_machine" not in result.stdout
     assert "category=guard_points" not in result.stdout
     assert "category=artifacts" not in result.stdout
+
+
+def test_global_command_guard_with_artifact_reference_passes(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    write_global_command_guards(profile, valid_global_command_guard_with_artifact_yaml())
+
+    result = run_validator(profile)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "已检查：global_command_guards" in result.stdout
+
+
+def test_global_command_guard_unknown_artifact_reference_fails(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    write_global_command_guards(profile, valid_global_command_guard_with_artifact_yaml("missing_artifact"))
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "category=global_command_guards" in result.stdout
+    assert "field=global_command_guards.verify_requires_review.evidence.artifact" in result.stdout
+    assert "未定义它" in result.stdout
 
 
 def test_empty_global_command_guards_list_does_not_skip_session_focus_required_files(tmp_path: Path) -> None:
@@ -205,7 +253,7 @@ global_command_guards:
     assert result.returncode == 1
     assert "category=global_command_guards" in result.stdout
     assert "field=global_command_guards.verify_requires_review.evidence.path" in result.stdout
-    assert "必须声明 evidence path template" in result.stdout
+    assert "evidence artifact（产物）或 evidence.path（证据路径模板）" in result.stdout
 
 
 def test_global_command_guard_rejects_unsupported_json_predicate(tmp_path: Path) -> None:

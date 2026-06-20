@@ -39,6 +39,18 @@ Runtime（运行时）必须按 Guard Profile（守卫画像）中的 `artifacts
 
 状态权限评估和状态转换是两条独立逻辑。权限检查不得推进状态。
 
+## Global Command Guard（全局命令守卫）
+
+run 阶段只处理 Runtime（运行时）对 `global-command-guards.yaml` 的评估结果。
+
+- Runtime（运行时）按 `artifacts.yaml` 解析 artifact（产物）路径，再读取已注册 evidence（证据）。
+- 缺少 artifact、证据不存在、JSON 失配或路径不安全时，返回拒绝结果和失败原因。
+- `reason`、`next` 和 `suggestion` 可来自 Guard Profile（守卫画像）的 deny 配置；Runtime（运行时）只透传或渲染这些字段，不内置被守卫业务流程。
+- 主 agent（主代理）不得通过复制 pass marker 到 `.local/guard/evidence` 绕过拦截。
+- 主 agent（主代理）不得把 `verify --apply` 作为主拦截点；应让 Global Command Guard（全局命令守卫）检查上游真实证据。
+
+troubleshoot（排障）：先看返回 envelope（信封）中的 `failure_reason`、`artifact_id`、`evidence_path` 和 `failed_checks`，再补真实证据或修正画像。
+
 ## 状态推进
 
 - 普通事件只使用当前 Session Focus Instance（会话焦点实例），不会创建新实例。

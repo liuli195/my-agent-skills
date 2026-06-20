@@ -45,6 +45,8 @@ PACKAGE_ITEMS = [
     "skills/agent-guard/scripts/validate_guard_profile.py",
     "skills/agent-guard/assets/templates/guard-profile/minimal/GUARD-MANIFEST.yaml",
     "assets/templates/guard-profile/minimal/GUARD-MANIFEST.yaml",
+    "skills/agent-guard/assets/templates/guard-profile/comet-review-gate",
+    "assets/templates/guard-profile/comet-review-gate",
 ]
 for entrypoint, references in ENTRYPOINT_REFERENCES.items():
     PACKAGE_ITEMS.append(f"skills/{entrypoint}/SKILL.md")

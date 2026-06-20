@@ -4,11 +4,13 @@
   "mode": "beta",
   "canonical_spec": "openspec",
   "generated_by": "comet-handoff.sh",
-  "context_hash": "b492795bb6b7963385bbf09b78ac5f9197bb70a667568f00bc9893548add4082",
+  "context_hash": "ca828f2b0e2198214d1cbf557404082da90f87100394416c35e102894897d115",
   "files": [
-    { "path": "openspec/changes/add-comet-agent-review-gate/proposal.md", "sha256": "c4d189dd8697382c4dd6449b4f97686e6169eb7d4ddea6e1f662c81025184a42", "role": "supporting" },
-    { "path": "openspec/changes/add-comet-agent-review-gate/design.md", "sha256": "7eb85b0ed278a125852d3ef5c3e9c35ef566cffe7f8138ad8c6d7b1df39888fe", "role": "supporting" },
-    { "path": "openspec/changes/add-comet-agent-review-gate/tasks.md", "sha256": "25ddd46dc9a2115f4a147c49b63c96d5875ca584dd5a04b59ef28bea06537d9d", "role": "supporting" },
-    { "path": "openspec/changes/add-comet-agent-review-gate/specs/comet-agent-review-gate/spec.md", "sha256": "7e21bc25d55a263d73ffb2546cd4bd77699648101bd66c9a52dbc1944f03fe08", "role": "spec" }
+    { "path": "openspec/changes/add-comet-agent-review-gate/proposal.md", "sha256": "e29e23072aaa48d1de5f952002132bdc2014a0aa8637d13d3d6fd009fb3d7bd2", "role": "supporting" },
+    { "path": "openspec/changes/add-comet-agent-review-gate/design.md", "sha256": "1d5e43eb1a6830742b9b424ae1dfb031b4d0acb8b757d7a6d24b7a37406a4eb7", "role": "supporting" },
+    { "path": "openspec/changes/add-comet-agent-review-gate/tasks.md", "sha256": "60f5e3ecd724605b4f1d2d2bbc2c1b41604ceea530cb5e91f4b90ea93f3ee509", "role": "supporting" },
+    { "path": "openspec/changes/add-comet-agent-review-gate/specs/agent-guard-plugin-runtime/spec.md", "sha256": "9b00943ce18057ac1262357d9b867c849119fa318fcf79a9784bd329140ea6d2", "role": "spec" },
+    { "path": "openspec/changes/add-comet-agent-review-gate/specs/agent-guard-skill-entrypoints/spec.md", "sha256": "32f6b96482662a1b3d891556862a013a2eb3b91fb49c15eeb1f495ea3d734c2d", "role": "spec" },
+    { "path": "openspec/changes/add-comet-agent-review-gate/specs/comet-agent-review-gate/spec.md", "sha256": "941d97bf2859b159e016ed247a05de3e2480bf183ca8d7145aec3de708d1c4bd", "role": "spec" }
   ]
 }

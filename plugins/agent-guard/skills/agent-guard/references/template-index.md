@@ -16,6 +16,22 @@
 - 画像字段结构以 `minimal/` 中的 YAML（YAML 配置格式）为基准。
 - 校验以 `scripts/validate_guard_profile.py` 为准。
 
+## Global Command Guard（全局命令守卫）
+
+- `assets/templates/guard-profile/minimal/global-command-guards.yaml`：命令级拦截配置示例。
+- `assets/templates/guard-profile/minimal/artifacts.yaml`：artifact（产物）路径声明，用于把证据路径从守卫配置中抽离。
+
+使用规则：
+
+- install 阶段生成场景化配置，init 阶段发布配置，update 阶段同步已校验配置，run 阶段只按 Runtime（运行时）结果处理拦截；troubleshoot（排障）先看对应场景 reference。
+- 外部证据类拦截应引用 `artifacts.yaml` 中的 artifact，不直接复制临时 pass marker（通过标记）。
+- `deny.reason`、`deny.next` 和 `deny.suggestion` 可以在 Guard Profile（守卫画像）中场景化配置；Runtime（运行时）只透传或渲染，不内置业务流程。
+- 禁止新增 reviewed wrapper。
+- 禁止修改 cross-agent-review 默认输出目录。
+- 禁止复制 pass marker 到 `.local/guard/evidence`。
+- 禁止把 `verify --apply` 作为主拦截点。
+- 禁止在 Agent Guard 中实现 cross-agent-review 内部流程。
+
 ## Plugin Runtime（插件运行时）
 
 - `scripts/install_agent_guard_plugin.py`：安装或验证 Agent Guard Plugin（代理守卫插件）的入口。
