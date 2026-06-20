@@ -6,7 +6,7 @@ build_pause: null
 subagent_dispatch: confirmed
 tdd_mode: tdd
 isolation: branch
-verify_mode: null
+verify_mode: full
 auto_transition: true
 base_ref: 73ade80fc55b6d6b03b346af124f9d481450406c
 design_doc: docs/superpowers/specs/2026-06-20-cross-agent-review-design.md
