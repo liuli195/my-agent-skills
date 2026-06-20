@@ -14,13 +14,22 @@
 - **THEN** 系统可以从这些记录生成 Guard Profile（守卫画像）草案，并继续进入校验
 
 ### Requirement: 守卫画像来源元数据
-系统 MUST 在每个业务 Guard Profile（守卫画像）manifest（清单）中记录来源元数据，并要求 `grill-with-docs-confirmed-notes` 来源具备 confirmed（已确认）状态。
+
+系统 MUST 在每个业务 Guard Profile（守卫画像）manifest（清单）中记录来源元数据，并要求 `grill-with-docs-confirmed-notes` 来源具备 confirmed（已确认）状态。系统 MAY 接受明确列入白名单的内置 Guard Profile（守卫画像）模板来源。
 
 #### Scenario: 已确认来源清单
+
 - **WHEN** Guard Profile（守卫画像）manifest（清单）使用 `source.kind: grill-with-docs-confirmed-notes`
 - **THEN** 该 manifest（清单）同时包含 `source.status: confirmed`
 
+#### Scenario: 内置 Comet review gate 模板来源
+
+- **WHEN** Guard Profile（守卫画像）manifest（清单）使用 `source.kind: built-in-comet-review-gate`
+- **THEN** Validator（校验器）接受该来源类型
+- **AND** Validator（校验器）继续校验该 Guard Profile（守卫画像）的其他文件和引用
+
 #### Scenario: 模板记录保持未确认
+
 - **WHEN** 系统创建 `confirmed-notes.yaml` 模板
 - **THEN** 模板状态保持为 `needs_confirmation`，直到调研流程明确确认它
 
@@ -150,4 +159,3 @@
 #### Scenario: 引用不存在的 artifact
 - **WHEN** Guard Profile（守卫画像）包含 `json_artifact` check 且引用的 artifact id 不存在于 `artifacts.yaml`
 - **THEN** validator（校验器）报告该引用无效
-
