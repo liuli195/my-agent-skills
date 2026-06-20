@@ -280,6 +280,16 @@ def list_ids(data: dict[str, Any], field: str) -> set[str]:
     return ids
 
 
+def artifact_ids_in_profile(profile_dir: Path) -> set[str]:
+    path = profile_dir / REQUIRED_FILES["artifacts"]
+    if not path.exists():
+        return set()
+    data, issue = load_yaml(path, "artifacts")
+    if issue or data is None:
+        return set()
+    return list_ids(data, "artifacts")
+
+
 def validate_state_permissions(configs: dict[str, dict[str, Any]]) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     valid_effects = {"allow", "ask", "deny"}
@@ -530,6 +540,7 @@ def validate_global_command_guards(profile_dir: Path) -> tuple[bool, list[Valida
         ]
 
     issues: list[ValidationIssue] = []
+    artifact_ids = artifact_ids_in_profile(profile_dir)
     seen: set[str] = set()
     for index, guard in enumerate(guards):
         if not isinstance(guard, dict):
@@ -628,25 +639,66 @@ def validate_global_command_guards(profile_dir: Path) -> tuple[bool, list[Valida
 
         evidence = guard.get("evidence")
         evidence_path = evidence.get("path") if isinstance(evidence, dict) else None
-        if not isinstance(evidence_path, str) or not evidence_path:
+        if not isinstance(evidence, dict):
             issues.append(
                 ValidationIssue(
                     "global_command_guards",
                     f"{base}.evidence.path",
-                    "必须声明 evidence path template（证据路径模板）。",
-                    "添加 evidence.path。",
+                    "必须声明 evidence artifact（产物）或 evidence.path（证据路径模板）。",
+                    "添加 evidence.artifact 或 evidence.path。",
                 )
             )
-        else:
-            for field in sorted(template_fields(evidence_path) - capture_names - GLOBAL_COMMAND_GUARD_VALUE_FROM_FIELDS):
+        elif isinstance(evidence, dict):
+            evidence_artifact = evidence.get("artifact")
+            evidence_artifact_id = evidence.get("artifact_id")
+            if isinstance(evidence_artifact, str) and evidence_artifact:
+                artifact_id = evidence_artifact
+            elif isinstance(evidence_artifact_id, str) and evidence_artifact_id:
+                artifact_id = evidence_artifact_id
+            elif isinstance(evidence_artifact, str) or isinstance(evidence_artifact_id, str):
+                artifact_id = None
+            else:
+                artifact_id = None
+
+            if artifact_id is not None:
+                if not isinstance(artifact_id, str) or not artifact_id:
+                    issues.append(
+                        ValidationIssue(
+                            "global_command_guards",
+                            f"{base}.evidence.artifact",
+                            "artifact 或 artifact_id 必须是非空字符串。",
+                            "填写有效的 evidence.artifact 或 evidence.artifact_id。",
+                        )
+                    )
+                elif artifact_id not in artifact_ids:
+                    issues.append(
+                        missing_reference(
+                            "global_command_guards",
+                            f"{base}.evidence.artifact",
+                            artifact_id,
+                            "artifacts",
+                            "定义该产物，或改用 evidence.path。",
+                        )
+                    )
+            elif not isinstance(evidence_path, str) or not evidence_path:
                 issues.append(
                     ValidationIssue(
                         "global_command_guards",
-                        f"{base}.evidence.path.{field}",
-                        f"缺少必需捕获值 `{field}`。",
-                        "在 command_patterns 中添加同名命名捕获，或改用内置上下文字段。",
+                        f"{base}.evidence.path",
+                        "必须声明 evidence artifact（产物）或 evidence.path（证据路径模板）。",
+                        "添加 evidence.artifact 或 evidence.path。",
                     )
                 )
+            else:
+                for field in sorted(template_fields(evidence_path) - capture_names - GLOBAL_COMMAND_GUARD_VALUE_FROM_FIELDS):
+                    issues.append(
+                        ValidationIssue(
+                            "global_command_guards",
+                            f"{base}.evidence.path.{field}",
+                            f"缺少必需捕获值 `{field}`。",
+                            "在 command_patterns 中添加同名命名捕获，或改用内置上下文字段。",
+                        )
+                    )
 
         checks = guard.get("checks")
         if not isinstance(checks, list) or not checks:

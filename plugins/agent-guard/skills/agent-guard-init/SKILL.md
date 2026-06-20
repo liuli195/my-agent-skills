@@ -24,4 +24,5 @@ description: 初始化守卫：第一次创建项目级或用户级 Guard Profil
 3. 默认 dry-run（试运行）初始化命令。
 4. 只有用户明确授权时才加 `--authorize-init`。
 5. 如果画像包含 `deny` 状态权限，必须额外取得用户明确授权后才加 `--authorize-deny-permissions`。
-6. 输出写入位置、授权状态和安全声明。
+6. 如果画像包含 Global Command Guard（全局命令守卫），按 `references/init-flow.md` 确认 `global-command-guards.yaml` 和 `artifacts.yaml` 一起发布。
+7. 输出写入位置、授权状态和安全声明。

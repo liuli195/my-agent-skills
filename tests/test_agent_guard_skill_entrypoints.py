@@ -127,6 +127,42 @@ def test_core_references_are_common_and_scenario_docs_live_with_entrypoints() ->
             assert (entrypoint_references / reference_name).exists()
 
 
+def test_global_command_guard_docs_are_scenario_oriented() -> None:
+    paths = [
+        SOURCE_SKILL / "SKILL.md",
+        SOURCE_SKILL / "references" / "template-index.md",
+        SOURCE_SKILL.parent / "agent-guard-install" / "SKILL.md",
+        SOURCE_SKILL.parent / "agent-guard-install" / "references" / "profile-draft.md",
+        SOURCE_SKILL.parent / "agent-guard-init" / "SKILL.md",
+        SOURCE_SKILL.parent / "agent-guard-init" / "references" / "init-flow.md",
+        SOURCE_SKILL.parent / "agent-guard-update" / "SKILL.md",
+        SOURCE_SKILL.parent / "agent-guard-update" / "references" / "profile-sync.md",
+        SOURCE_SKILL.parent / "agent-guard-run" / "SKILL.md",
+        SOURCE_SKILL.parent / "agent-guard-run" / "references" / "events.md",
+    ]
+    combined_text = "\n".join(path.read_text(encoding="utf-8") for path in paths)
+
+    for phrase in [
+        "Global Command Guard",
+        "global-command-guards.yaml",
+        "artifacts.yaml",
+        "artifact",
+        "禁止新增 reviewed wrapper",
+        "禁止修改 cross-agent-review 默认输出目录",
+        "禁止复制 pass marker 到 `.local/guard/evidence`",
+        "禁止把 `verify --apply` 作为主拦截点",
+        "禁止在 Agent Guard 中实现 cross-agent-review 内部流程",
+        "`deny.reason`、`deny.next` 和 `deny.suggestion` 可以在 Guard Profile",
+        "Runtime（运行时）只透传或渲染，不内置业务流程",
+        "install",
+        "init",
+        "update",
+        "run",
+        "troubleshoot",
+    ]:
+        assert phrase in combined_text
+
+
 def test_templates_do_not_include_python_cache_artifacts() -> None:
     templates_root = SOURCE_SKILL / "assets" / "templates"
 

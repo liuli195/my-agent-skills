@@ -36,3 +36,15 @@ python ../agent-guard/scripts/init_user_guard.py --profile <guard-profile-dir> -
 - 不删除确认记录或人工覆盖记录。
 
 如果目标尚未初始化，默认中止，并提示先使用 `$agent-guard-init`。
+
+## Global Command Guard（全局命令守卫）
+
+update 阶段同步已校验的 `global-command-guards.yaml` 和 `artifacts.yaml`，不清理运行态证据。
+
+- 可以更新 artifact（产物）声明和外部证据检查条件。
+- 禁止新增 reviewed wrapper。
+- 禁止修改 cross-agent-review 默认输出目录。
+- 禁止复制 pass marker 到 `.local/guard/evidence`。
+- 禁止把 `verify --apply` 作为主拦截点。
+
+troubleshoot（排障）：同步后仍被拒绝时，先查看 Runtime（运行时）返回的 artifact 缺失或 JSON 检查失败原因，再决定是否重新生成上游证据。

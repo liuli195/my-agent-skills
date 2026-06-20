@@ -28,3 +28,16 @@ python ../agent-guard/scripts/validate_guard_profile.py <guard-profile-dir>
 - 不安装 Hook（钩子）。
 - 不修改被守卫对象。
 - 不把任意既有目录当作合法草案；草案应来自本轮确认记录或已明确授权的更新输入。
+
+## Global Command Guard（全局命令守卫）
+
+install 阶段只产出场景化草案，不把拦截接入运行态。
+
+- `global-command-guards.yaml` 描述命令匹配、证据要求和拒绝提示。
+- `artifacts.yaml` 声明 artifact（产物）路径；外部完成证据应通过 artifact 引用。
+- 禁止新增 reviewed wrapper。
+- 禁止修改 cross-agent-review 默认输出目录。
+- 禁止复制 pass marker 到 `.local/guard/evidence`。
+- 禁止把 `verify --apply` 作为主拦截点。
+
+troubleshoot（排障）：如果草案校验失败，先检查 artifact ID 是否在 `artifacts.yaml` 中存在，再检查证据路径是否仍属于被守卫对象的发布形态。
