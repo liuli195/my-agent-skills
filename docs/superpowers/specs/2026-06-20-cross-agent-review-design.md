@@ -66,9 +66,10 @@ The runner uses Claude Agent SDK as a hard dependency. It must not install packa
 
 Resolution order:
 
-1. `--sdk-python` or an environment variable points to a Python interpreter that can import `claude_agent_sdk`.
-2. A known Claude SDK venv path exists, such as `~/.claude/security/agent-sdk-venv/Scripts/python.exe`.
-3. Current Python can import `claude_agent_sdk`.
+1. If `--sdk-python` is provided, it must point to a Python interpreter that can import `claude_agent_sdk`; otherwise resolution fails.
+2. Current Python can import `claude_agent_sdk`.
+3. An environment variable points to a Python interpreter that can import `claude_agent_sdk`.
+4. A known Claude SDK venv path exists, such as `~/.claude/security/agent-sdk-venv/Scripts/python.exe`.
 
 If no valid SDK Python is found, the runner reports a clear error and does not dispatch reviewers.
 
