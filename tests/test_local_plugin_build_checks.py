@@ -379,3 +379,17 @@ def test_run_build_reports_guard_profile_mirror_file_set_mismatch(tmp_path: Path
     )
 
     assert any("guard_profile_template_files_mismatch" in error for error in errors)
+
+
+def test_verify_delegates_to_pytest(tmp_path: Path) -> None:
+    module = load_check_module()
+    calls: list[list[str]] = []
+
+    def fake_run(command, cwd, text, capture_output, check):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    result = module.run_verify(tmp_path, runner=fake_run)
+
+    assert result == 0
+    assert calls == [[sys.executable, "-m", "pytest"]]
