@@ -153,7 +153,7 @@ global_command_guards:
     evidence:
       path: '.local/guard/evidence/{git_head_short}/{change}/evidence.json'
     checks:
-      - field: head_ref_short
+      - field: head_ref
         predicate: equals
         value_from: git_head_short
     deny:

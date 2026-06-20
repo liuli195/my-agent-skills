@@ -448,6 +448,36 @@ def test_global_command_guard_passes_with_short_head_artifact_path(tmp_path: Pat
     assert payload["status"] == "allow"
 
 
+def test_global_command_guard_denies_stale_review_pass_with_short_head_artifact_path(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    head_ref = init_git_repo(project)
+    profile = user_home / ".agents" / "guards" / "personal-policy"
+    profile.mkdir(parents=True)
+    write_short_head_cross_agent_review_artifacts(profile)
+    write_global_command_guard_with_artifact(profile, "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) build --apply", "cross_agent_review_pass")
+    write_cross_agent_review_marker(
+        project,
+        "add-guard-gate-binding",
+        head_ref[:12],
+        data={"status": "pass", "change": "add-guard-gate-binding", "head_ref": "stale-head", "blocking_findings": 0, "report": "ok", "report_hash": "abc123"},
+    )
+
+    result = pre_tool_payload(
+        project,
+        user_home,
+        {"session_id": "session-1", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": "comet-guard.sh add-guard-gate-binding build --apply"}},
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "deny"
+    assert payload["reason"] == "comet_cross_agent_review_required"
+    assert payload["failing_guards"][0]["failure_reason"] == "json_check_failed"
+    assert payload["failing_guards"][0]["failed_checks"][0]["field"] == "head_ref"
+
+
 def test_global_command_guard_pass_does_not_change_comet_phase(tmp_path: Path) -> None:
     project = tmp_path / "project"
     user_home = tmp_path / "user-home"

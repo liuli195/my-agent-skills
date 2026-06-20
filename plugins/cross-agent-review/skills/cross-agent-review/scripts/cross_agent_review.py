@@ -247,6 +247,72 @@ def run_sdk_dispatch_subprocess(review_args: ReviewArgs, sdk_python: str) -> lis
     return [item for item in data if isinstance(item, dict)]
 
 
+def balanced_json_object_candidates(text: str) -> list[str]:
+    candidates: list[str] = []
+    start = text.find("{")
+    while start != -1:
+        depth = 0
+        in_string = False
+        escaped = False
+        for index in range(start, len(text)):
+            char = text[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    candidates.append(text[start : index + 1])
+                    break
+        start = text.find("{", start + 1)
+    return candidates
+
+
+def markdown_fence_bodies(text: str) -> list[str]:
+    bodies: list[str] = []
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        fence = lines[index].strip()
+        if not fence.startswith("```"):
+            index += 1
+            continue
+        language = fence[3:].strip().lower()
+        end = index + 1
+        while end < len(lines) and lines[end].strip() != "```":
+            end += 1
+        if end < len(lines) and language in {"", "json"}:
+            bodies.append("\n".join(lines[index + 1 : end]))
+            index = end
+        index += 1
+    return bodies
+
+
+def parse_reviewer_result(result_text: str) -> dict | None:
+    candidates = [result_text.strip()]
+    candidates.extend(markdown_fence_bodies(result_text))
+    candidates.extend(balanced_json_object_candidates(result_text))
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
 def run_sdk_dispatch() -> int:
     import asyncio
     from claude_agent_sdk import ClaudeAgentOptions, query
@@ -264,12 +330,9 @@ def run_sdk_dispatch() -> int:
             async for message in query(prompt=payload["prompts"][role], options=options):
                 if hasattr(message, "result"):
                     result_text = message.result
-            try:
-                parsed = json.loads(result_text)
-                if isinstance(parsed, dict):
-                    return parsed
-            except json.JSONDecodeError:
-                pass
+            parsed = parse_reviewer_result(result_text)
+            if parsed is not None:
+                return parsed
             return {
                 "role": role,
                 "status": "failed",

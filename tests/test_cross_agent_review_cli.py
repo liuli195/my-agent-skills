@@ -400,6 +400,46 @@ def test_sdk_dispatch_disallows_write_and_execution_tools(monkeypatch, capsys) -
     assert {"Edit", "Write", "NotebookEdit", "TodoWrite", "Bash"} <= disallowed
 
 
+def test_sdk_dispatch_accepts_json_wrapped_in_markdown_fence(monkeypatch, capsys) -> None:
+    module = load_script_module()
+
+    class FakeClaudeAgentOptions:
+        def __init__(self, **kwargs):
+            pass
+
+    async def fake_query(*, prompt, options):
+        class Message:
+            result = (
+                "```json\n"
+                + json.dumps({"role": "spec-alignment", "status": "completed", "findings": []})
+                + "\n```"
+            )
+
+        yield Message()
+
+    fake_sdk = types.SimpleNamespace(ClaudeAgentOptions=FakeClaudeAgentOptions, query=fake_query)
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake_sdk)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(
+            json.dumps(
+                {
+                    "cwd": str(REPO_ROOT),
+                    "roles": ["spec-alignment"],
+                    "readonly_tools": ["Read", "Grep"],
+                    "prompts": {"spec-alignment": "prompt"},
+                }
+            )
+        ),
+    )
+
+    assert module.run_sdk_dispatch() == 0
+
+    data = json.loads(capsys.readouterr().out)
+    assert data == [{"role": "spec-alignment", "status": "completed", "findings": []}]
+
+
 def test_sdk_dispatch_subprocess_timeout_reports_clear_error(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     review = make_review_args_for_module(module, tmp_path)
