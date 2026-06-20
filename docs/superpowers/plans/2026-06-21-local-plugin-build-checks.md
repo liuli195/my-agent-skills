@@ -225,7 +225,7 @@ Expected: FAIL because `run_build` and related checks are not implemented.
 **Files:**
 - Modify: `tests/test_local_plugin_build_checks.py`
 
-- [ ] **Step 1: Add failing tests for projection registration consistency**
+- [x] **Step 1: Add failing tests for projection registration consistency**
 
 Append:
 
@@ -252,7 +252,7 @@ def test_build_reports_duplicate_projection_plugin(tmp_path: Path) -> None:
     assert any("duplicate_projection_plugin" in error for error in errors)
 ```
 
-- [ ] **Step 2: Add failing tests for Guard Profile template mirror consistency**
+- [x] **Step 2: Add failing tests for Guard Profile template mirror consistency**
 
 Append:
 
@@ -310,7 +310,7 @@ def test_build_reports_guard_profile_mirror_mismatch(tmp_path: Path) -> None:
     assert any("guard_profile_template_mismatch" in error for error in errors)
 ```
 
-- [ ] **Step 3: Run projection and mirror tests and confirm they fail for missing implementation**
+- [x] **Step 3: Run projection and mirror tests and confirm they fail for missing implementation**
 
 Run:
 
