@@ -733,7 +733,7 @@ git commit -m "test: cover verify command delegation"
 - Delete: `.comet/build-check.sh`
 - Modify: `tests/test_local_plugin_build_checks.py`
 
-- [ ] **Step 1: Add failing Comet config test**
+- [x] **Step 1: Add failing Comet config test**
 
 Append:
 
@@ -747,7 +747,7 @@ def test_comet_config_points_to_check_commands() -> None:
     assert data["verify_command"] == "python scripts/check.py verify"
 ```
 
-- [ ] **Step 2: Run config test and confirm it fails**
+- [x] **Step 2: Run config test and confirm it fails**
 
 Run:
 
@@ -757,7 +757,7 @@ python -m pytest tests/test_local_plugin_build_checks.py::test_comet_config_poin
 
 Expected: FAIL because `.comet/config.yaml` does not yet declare the commands.
 
-- [ ] **Step 3: Update `.comet/config.yaml`**
+- [x] **Step 3: Update `.comet/config.yaml`**
 
 Add:
 
@@ -768,7 +768,7 @@ build_command: python scripts/check.py build
 verify_command: python scripts/check.py verify
 ```
 
-- [ ] **Step 4: Confirm `.comet/build-check.sh` is unreferenced**
+- [x] **Step 4: Confirm `.comet/build-check.sh` is unreferenced**
 
 Run:
 
@@ -778,11 +778,11 @@ rg "\\.comet/build-check\\.sh|build-check\\.sh"
 
 Expected: only the file path itself appears, or no references outside historical artifacts. If active config or docs still reference it, replace those references with `python scripts/check.py build` before deleting.
 
-- [ ] **Step 5: Delete `.comet/build-check.sh`**
+- [x] **Step 5: Delete `.comet/build-check.sh`**
 
 Delete the file after Step 4 confirms no active references remain.
 
-- [ ] **Step 6: Run config test and focused tests**
+- [x] **Step 6: Run config test and focused tests**
 
 Run:
 
@@ -792,7 +792,7 @@ python -m pytest tests/test_local_plugin_build_checks.py -q
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit Comet config and old script removal**
+- [x] **Step 7: Commit Comet config and old script removal**
 
 Run:
 
