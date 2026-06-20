@@ -7,7 +7,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import yaml
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -87,11 +90,20 @@ def _marketplace_plugins(root: Path) -> tuple[list[dict[str, Any]], list[str]]:
     plugins = data.get("plugins")
     if not isinstance(plugins, list):
         return [], [f"invalid_marketplace_plugins: {marketplace_path}"]
-    return [plugin for plugin in plugins if isinstance(plugin, dict)], []
+    valid_plugins: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for index, plugin in enumerate(plugins):
+        if isinstance(plugin, dict):
+            valid_plugins.append(plugin)
+        else:
+            errors.append(f"invalid_marketplace_entry: {marketplace_path}: index={index}")
+    return valid_plugins, errors
 
 
 def _projection_plugins(root: Path) -> tuple[list[str], list[str]]:
     projection_path = root / ".release-flow" / "projection.yaml"
+    if yaml is None:
+        return [], ["missing_dependency: PyYAML"]
     try:
         data = yaml.safe_load(projection_path.read_text(encoding="utf-8")) or {}
     except FileNotFoundError:
@@ -157,6 +169,7 @@ def run_build(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> list[s
 
     validate_commands: list[list[str]] = [["claude", "plugin", "validate", "."]]
     marketplace_names: list[str] = []
+    seen_marketplace_names: set[str] = set()
 
     for index, plugin in enumerate(plugins):
         name = plugin.get("name")
@@ -164,6 +177,9 @@ def run_build(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> list[s
         if not isinstance(name, str) or not name.strip():
             errors.append(f"invalid_marketplace_plugin: index={index}: name")
             continue
+        if name in seen_marketplace_names:
+            errors.append(f"duplicate_marketplace_plugin: {name}")
+        seen_marketplace_names.add(name)
         if not isinstance(source, str) or not source.strip():
             errors.append(f"invalid_marketplace_plugin: {name}: source")
             continue
@@ -195,8 +211,16 @@ def run_build(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> list[s
             )
         )
 
+    missing_commands: set[str] = set()
     for command in validate_commands:
-        result = runner(command, cwd=root, text=True, capture_output=True, check=False)
+        try:
+            result = runner(command, cwd=root, text=True, capture_output=True, check=False)
+        except FileNotFoundError:
+            command_name = command[0]
+            if command_name not in missing_commands:
+                errors.append(f"missing_command: {command_name}")
+                missing_commands.add(command_name)
+            continue
         if getattr(result, "returncode", 0) != 0:
             errors.append(f"claude_validate_failed: {' '.join(command)}")
 

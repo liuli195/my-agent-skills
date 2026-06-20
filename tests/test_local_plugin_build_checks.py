@@ -128,6 +128,67 @@ def test_build_rejects_marketplace_source_outside_repo(tmp_path: Path) -> None:
     assert any("source_outside_repo" in error for error in errors)
 
 
+def test_build_reports_missing_claude_command(tmp_path: Path) -> None:
+    module = load_check_module()
+    make_projection(tmp_path, [])
+    make_marketplace(tmp_path, [])
+
+    def missing_claude(*args, **kwargs):
+        raise FileNotFoundError("claude")
+
+    errors = module.run_build(tmp_path, runner=missing_claude)
+
+    assert any("missing_command: claude" in error for error in errors)
+
+
+def test_build_reports_invalid_marketplace_entry(tmp_path: Path) -> None:
+    module = load_check_module()
+    make_projection(tmp_path, [])
+    write_json(
+        tmp_path / ".claude-plugin" / "marketplace.json",
+        {
+            "name": "test-marketplace",
+            "owner": {"name": "Test"},
+            "plugins": ["not-a-plugin"],
+        },
+    )
+
+    errors = module.run_build(
+        tmp_path,
+        runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+
+    assert any("invalid_marketplace_entry" in error for error in errors)
+
+
+def test_build_reports_duplicate_marketplace_plugin_name(tmp_path: Path) -> None:
+    module = load_check_module()
+    make_plugin(tmp_path, "alpha")
+    make_marketplace(tmp_path, ["alpha", "alpha"])
+    make_projection(tmp_path, ["alpha"])
+
+    errors = module.run_build(
+        tmp_path,
+        runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+
+    assert any("duplicate_marketplace_plugin: alpha" in error for error in errors)
+
+
+def test_build_reports_missing_pyyaml_dependency(tmp_path: Path) -> None:
+    module = load_check_module()
+    make_marketplace(tmp_path, [])
+    make_projection(tmp_path, [])
+    module.yaml = None
+
+    errors = module.run_build(
+        tmp_path,
+        runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+
+    assert any("missing_dependency: PyYAML" in error for error in errors)
+
+
 def test_build_reports_manifest_name_mismatch(tmp_path: Path) -> None:
     module = load_check_module()
     make_plugin(tmp_path, "alpha")
