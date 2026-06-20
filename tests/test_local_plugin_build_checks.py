@@ -393,3 +393,12 @@ def test_verify_delegates_to_pytest(tmp_path: Path) -> None:
 
     assert result == 0
     assert calls == [[sys.executable, "-m", "pytest"]]
+
+
+def test_comet_config_points_to_check_commands() -> None:
+    import yaml
+
+    data = yaml.safe_load((REPO_ROOT / ".comet" / "config.yaml").read_text(encoding="utf-8"))
+
+    assert data["build_command"] == "python scripts/check.py build"
+    assert data["verify_command"] == "python scripts/check.py verify"
