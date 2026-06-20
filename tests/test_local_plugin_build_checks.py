@@ -180,6 +180,18 @@ def test_build_reports_projection_plugin_mismatch(tmp_path: Path) -> None:
     assert any("projection_plugins_mismatch" in error for error in errors)
 
 
+def test_build_reports_projection_missing_marketplace_plugin(tmp_path: Path) -> None:
+    module = load_check_module()
+    make_plugin(tmp_path, "alpha")
+    make_plugin(tmp_path, "beta")
+    make_marketplace(tmp_path, ["alpha", "beta"])
+    make_projection(tmp_path, ["alpha"])
+
+    errors = module.run_build(tmp_path, runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""))
+
+    assert any("projection_plugins_mismatch" in error for error in errors)
+
+
 def test_build_reports_duplicate_projection_plugin(tmp_path: Path) -> None:
     module = load_check_module()
     make_plugin(tmp_path, "alpha")
@@ -191,7 +203,7 @@ def test_build_reports_duplicate_projection_plugin(tmp_path: Path) -> None:
     assert any("duplicate_projection_plugin" in error for error in errors)
 
 
-def make_guard_profile_mirrors(root: Path, content: str = "schema_version: guard-profile/v1\n") -> None:
+def guard_profile_template_dirs(root: Path) -> tuple[Path, Path]:
     left = root / "plugins" / "agent-guard" / "assets" / "templates" / "guard-profile" / "minimal"
     right = (
         root
@@ -204,6 +216,11 @@ def make_guard_profile_mirrors(root: Path, content: str = "schema_version: guard
         / "guard-profile"
         / "minimal"
     )
+    return left, right
+
+
+def make_guard_profile_mirrors(root: Path, content: str = "schema_version: guard-profile/v1\n") -> None:
+    left, right = guard_profile_template_dirs(root)
     left.mkdir(parents=True)
     right.mkdir(parents=True)
     (left / "GUARD-MANIFEST.yaml").write_text(content, encoding="utf-8")
@@ -212,9 +229,6 @@ def make_guard_profile_mirrors(root: Path, content: str = "schema_version: guard
 
 def test_build_accepts_matching_guard_profile_mirrors(tmp_path: Path) -> None:
     module = load_check_module()
-    make_plugin(tmp_path, "alpha")
-    make_marketplace(tmp_path, ["alpha"])
-    make_projection(tmp_path, ["alpha"])
     make_guard_profile_mirrors(tmp_path)
 
     errors = module.check_guard_profile_template_mirrors(tmp_path)
@@ -225,20 +239,38 @@ def test_build_accepts_matching_guard_profile_mirrors(tmp_path: Path) -> None:
 def test_build_reports_guard_profile_mirror_mismatch(tmp_path: Path) -> None:
     module = load_check_module()
     make_guard_profile_mirrors(tmp_path)
-    right_file = (
-        tmp_path
-        / "plugins"
-        / "agent-guard"
-        / "skills"
-        / "agent-guard"
-        / "assets"
-        / "templates"
-        / "guard-profile"
-        / "minimal"
-        / "GUARD-MANIFEST.yaml"
-    )
+    _left, right = guard_profile_template_dirs(tmp_path)
+    right_file = right / "GUARD-MANIFEST.yaml"
     right_file.write_text("schema_version: changed\n", encoding="utf-8")
 
     errors = module.check_guard_profile_template_mirrors(tmp_path)
+
+    assert any("guard_profile_template_mismatch" in error for error in errors)
+
+
+def test_build_reports_guard_profile_mirror_file_set_mismatch(tmp_path: Path) -> None:
+    module = load_check_module()
+    make_guard_profile_mirrors(tmp_path)
+    _left, right = guard_profile_template_dirs(tmp_path)
+    (right / "EXTRA.yaml").write_text("extra: true\n", encoding="utf-8")
+
+    errors = module.check_guard_profile_template_mirrors(tmp_path)
+
+    assert any("guard_profile_template_files_mismatch" in error for error in errors)
+
+
+def test_run_build_reports_guard_profile_mirror_mismatch(tmp_path: Path) -> None:
+    module = load_check_module()
+    make_plugin(tmp_path, "agent-guard")
+    make_marketplace(tmp_path, ["agent-guard"])
+    make_projection(tmp_path, ["agent-guard"])
+    make_guard_profile_mirrors(tmp_path)
+    _left, right = guard_profile_template_dirs(tmp_path)
+    (right / "GUARD-MANIFEST.yaml").write_text("schema_version: changed\n", encoding="utf-8")
+
+    errors = module.run_build(
+        tmp_path,
+        runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
 
     assert any("guard_profile_template_mismatch" in error for error in errors)
