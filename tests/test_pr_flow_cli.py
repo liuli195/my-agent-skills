@@ -176,6 +176,98 @@ def pr_view_json(*, checks: list[dict], review_decision: str = "REVIEW_REQUIRED"
     )
 
 
+def cleanup_pr_view_json(
+    *,
+    state: str = "MERGED",
+    head_ref: str = "feature/example",
+    base_ref: str = "main",
+) -> str:
+    return (
+        json.dumps(
+            {
+                "number": 12,
+                "state": state,
+                "headRefName": head_ref,
+                "baseRefName": base_ref,
+                "headRepositoryOwner": {"login": "test-owner"},
+            }
+        )
+        + "\n"
+    )
+
+
+def git_bare(remote: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "--git-dir", str(remote), *args],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return result.stdout.strip()
+
+
+def git_bare_result(remote: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "--git-dir", str(remote), *args],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
+def init_cleanup_project(tmp_path: Path) -> tuple[Path, Path]:
+    remote = tmp_path / "remote.git"
+    remote_init = subprocess.run(
+        ["git", "init", "--bare", str(remote)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert remote_init.returncode == 0, remote_init.stdout + remote_init.stderr
+
+    project = tmp_path / "project"
+    assert init_repo(project) == "main"
+    init_result = run("init", "--project", str(project))
+    assert init_result.returncode == 0, init_result.stdout + init_result.stderr
+    git(project, "add", ".pr-flow")
+    git(project, "commit", "-m", "configure pr flow")
+    git(project, "remote", "add", "origin", str(remote))
+    git(project, "push", "-u", "origin", "main")
+
+    git(project, "checkout", "-b", "feature/example")
+    (project / "README.md").write_text("# Test Project\n\nFeature change\n", encoding="utf-8")
+    git(project, "add", "README.md")
+    git(project, "commit", "-m", "feature")
+    git(project, "push", "-u", "origin", "feature/example")
+
+    integrator = tmp_path / "integrator"
+    clone_result = subprocess.run(
+        ["git", "clone", str(remote), str(integrator)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
+    git(integrator, "config", "user.email", "test@example.com")
+    git(integrator, "config", "user.name", "Test User")
+    git(integrator, "checkout", "-B", "main", "origin/main")
+    git(integrator, "merge", "--ff-only", "origin/feature/example")
+    git(integrator, "push", "origin", "main")
+
+    git(project, "checkout", "feature/example")
+    return project, remote
+
+
+def assert_cleanup_exception(project: Path, result: subprocess.CompletedProcess[str], reason: str) -> None:
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "EXCEPTION_REQUIRED"
+    assert status["command"] == "cleanup"
+    assert status["details"]["reason"] == reason
+
+
 def configure_complete(
     project: Path,
     *,
@@ -540,3 +632,69 @@ def test_complete_dual_review_gate_requires_github_and_local_evidence(tmp_path: 
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: ready_to_merge" in result.stdout
+
+
+def test_cleanup_merged_pr_checks_out_base_pulls_and_deletes_branches(tmp_path: Path) -> None:
+    project, remote = init_cleanup_project(tmp_path)
+    fake_bin, calls_path = write_fake_gh_sequence(tmp_path / "bin", [{"stdout": cleanup_pr_view_json()}])
+    stale_local_base = git(project, "rev-parse", "main")
+    remote_base_after_merge = git_bare(remote, "rev-parse", "refs/heads/main")
+    assert stale_local_base != remote_base_after_merge
+    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode == 0
+
+    result = run_with_path(fake_bin, "cleanup", "--project", str(project), "--pr", "12")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
+    assert "branch: main" in result.stdout
+    assert git(project, "branch", "--show-current") == "main"
+    assert git(project, "rev-parse", "main") == remote_base_after_merge
+    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode != 0
+    local_branches = git(project, "branch", "--format", "%(refname:short)").splitlines()
+    assert "feature/example" not in local_branches
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "cleanup_complete"
+    assert status["command"] == "cleanup"
+    assert status["details"]["pr"] == 12
+    assert status["details"]["remote"] == "origin"
+    calls = json.loads(calls_path.read_text(encoding="utf-8"))
+    assert calls == [["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"]]
+
+
+def test_cleanup_rejects_pr_state_that_is_not_merged(tmp_path: Path) -> None:
+    project, _remote = init_cleanup_project(tmp_path)
+    fake_bin = write_fake_gh(tmp_path / "bin", stdout=cleanup_pr_view_json(state="OPEN"))
+
+    result = run_with_path(fake_bin, "cleanup", "--project", str(project), "--pr", "12")
+
+    assert_cleanup_exception(project, result, "pr_not_merged")
+
+
+def test_cleanup_rejects_dirty_worktree(tmp_path: Path) -> None:
+    project, _remote = init_cleanup_project(tmp_path)
+    fake_bin = write_fake_gh(tmp_path / "bin", stdout=cleanup_pr_view_json())
+    (project / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+
+    result = run_with_path(fake_bin, "cleanup", "--project", str(project), "--pr", "12")
+
+    assert_cleanup_exception(project, result, "dirty_worktree")
+
+
+def test_cleanup_rejects_head_branch_equal_to_base_branch(tmp_path: Path) -> None:
+    project, _remote = init_cleanup_project(tmp_path)
+    fake_bin = write_fake_gh(tmp_path / "bin", stdout=cleanup_pr_view_json(head_ref="main", base_ref="main"))
+    git(project, "checkout", "main")
+
+    result = run_with_path(fake_bin, "cleanup", "--project", str(project), "--pr", "12")
+
+    assert_cleanup_exception(project, result, "protected_base_branch")
+
+
+def test_cleanup_rejects_current_branch_mismatch(tmp_path: Path) -> None:
+    project, _remote = init_cleanup_project(tmp_path)
+    fake_bin = write_fake_gh(tmp_path / "bin", stdout=cleanup_pr_view_json())
+    git(project, "checkout", "main")
+
+    result = run_with_path(fake_bin, "cleanup", "--project", str(project), "--pr", "12")
+
+    assert_cleanup_exception(project, result, "current_branch_mismatch")

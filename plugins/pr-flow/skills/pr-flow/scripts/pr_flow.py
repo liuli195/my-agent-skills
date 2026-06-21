@@ -139,6 +139,17 @@ def base_branch_from_config(config: dict[str, Any]) -> str:
     return base_branch if isinstance(base_branch, str) and base_branch else "main"
 
 
+def remote_for_base_branch(config: dict[str, Any], base_branch: str) -> str:
+    branches = config.get("branches")
+    if not isinstance(branches, dict):
+        return "origin"
+    branch_config = branches.get(base_branch)
+    if not isinstance(branch_config, dict):
+        return "origin"
+    remote = branch_config.get("remote")
+    return remote if isinstance(remote, str) and remote else "origin"
+
+
 def defaults_from_config(config: dict[str, Any]) -> dict[str, Any]:
     defaults = config.get("defaults")
     return defaults if isinstance(defaults, dict) else {}
@@ -226,6 +237,41 @@ def create_pr(project: Path, config: dict[str, Any]) -> dict[str, Any]:
         details = command_failure_details("gh_pr_create_missing_pr", result)
         raise PrFlowError("gh_pr_create_missing_pr", details)
     return pr
+
+
+def view_pr_for_cleanup(project: Path, pr_number: str) -> dict[str, Any]:
+    fields = "number,state,headRefName,baseRefName,headRepositoryOwner"
+    result = gh(project, "pr", "view", pr_number, "--json", fields)
+    if result.returncode != 0:
+        details = command_failure_details("gh_pr_view_failed", result)
+        details["pr"] = pr_number
+        raise PrFlowError("gh_pr_view_failed", details)
+    return parse_pr_result(result)
+
+
+def require_git_success(project: Path, reason: str, *args: str) -> subprocess.CompletedProcess[str]:
+    result = git(project, *args)
+    if result.returncode != 0:
+        details = command_failure_details(reason, result)
+        details["gitArgs"] = list(args)
+        raise PrFlowError(reason, details)
+    return result
+
+
+def require_cleanup_pr_fields(pr: dict[str, Any]) -> tuple[str, str]:
+    head_ref = pr.get("headRefName")
+    base_ref = pr.get("baseRefName")
+    if not isinstance(head_ref, str) or not head_ref or not isinstance(base_ref, str) or not base_ref:
+        raise PrFlowError(
+            "invalid_pr_branch",
+            {
+                "reason": "invalid_pr_branch",
+                "pr": pr.get("number"),
+                "headRefName": head_ref,
+                "baseRefName": base_ref,
+            },
+        )
+    return head_ref, base_ref
 
 
 def sync_pr(project: Path, pr: dict[str, Any]) -> dict[str, Any]:
@@ -498,6 +544,65 @@ def run_complete(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_cleanup(args: argparse.Namespace) -> int:
+    project = resolve_project(args.project)
+    try:
+        config = load_config(project)
+        pr = view_pr_for_cleanup(project, str(args.pr))
+        head_ref, base_ref = require_cleanup_pr_fields(pr)
+
+        details = {
+            "reason": "cleanup",
+            "pr": pr.get("number"),
+            "state": pr.get("state"),
+            "headRefName": head_ref,
+            "baseRefName": base_ref,
+            "headRepositoryOwner": pr.get("headRepositoryOwner"),
+        }
+        if pr.get("state") != "MERGED":
+            details["reason"] = "pr_not_merged"
+            return stop(project, args.command, "EXCEPTION_REQUIRED", "pr_not_merged", details)
+
+        status_result = require_git_success(project, "git_status_failed", "status", "--short")
+        dirty = status_result.stdout.strip()
+        if dirty:
+            details["reason"] = "dirty_worktree"
+            details["dirty"] = dirty
+            return stop(project, args.command, "EXCEPTION_REQUIRED", "dirty_worktree", details)
+
+        branch_result = require_git_success(project, "git_current_branch_failed", "branch", "--show-current")
+        current_branch = branch_result.stdout.strip()
+        if current_branch != head_ref:
+            details["reason"] = "current_branch_mismatch"
+            details["currentBranch"] = current_branch
+            return stop(project, args.command, "EXCEPTION_REQUIRED", "current_branch_mismatch", details)
+        if head_ref == base_ref:
+            details["reason"] = "protected_base_branch"
+            details["currentBranch"] = current_branch
+            return stop(project, args.command, "EXCEPTION_REQUIRED", "protected_base_branch", details)
+
+        remote = remote_for_base_branch(config, base_ref)
+        details["remote"] = remote
+        require_git_success(project, "git_push_delete_failed", "push", remote, "--delete", head_ref)
+        require_git_success(project, "git_checkout_base_failed", "checkout", base_ref)
+        require_git_success(project, "git_pull_ff_only_failed", "pull", "--ff-only", remote, base_ref)
+        require_git_success(project, "git_branch_delete_failed", "branch", "-d", head_ref)
+
+        final_branch = require_git_success(project, "git_current_branch_failed", "branch", "--show-current").stdout.strip()
+        details["reason"] = "cleanup_complete"
+        details["currentBranch"] = final_branch
+        write_status(project, args.command, "cleanup_complete", details)
+        print("status: cleanup_complete")
+        print(f"branch: {final_branch}")
+        print(f"deleted: {head_ref}")
+        return 0
+    except FileNotFoundError:
+        details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
+        return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
+    except PrFlowError as exc:
+        return stop(project, args.command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pr_flow.py",
@@ -512,6 +617,9 @@ def build_parser() -> argparse.ArgumentParser:
         )
         if command in {"diagnose", "init", "complete"}:
             subparser.add_argument("--project", type=Path)
+        if command == "cleanup":
+            subparser.add_argument("--project", type=Path)
+            subparser.add_argument("--pr")
         if command == "init":
             subparser.add_argument("--base-branch", default="main")
         subparser.set_defaults(command=command)
@@ -527,6 +635,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_diagnose(args)
     if args.command == "complete" and args.project is not None:
         return run_complete(args)
+    if args.command == "cleanup" and args.project is not None and args.pr is not None:
+        return run_cleanup(args)
     print("status: not_implemented")
     return 2
 
