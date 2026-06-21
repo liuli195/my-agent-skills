@@ -244,7 +244,7 @@ def run_diagnose(args: argparse.Namespace) -> int:
     if has_pending_check(checks):
         gh_details["reason"] = "checks_pending"
         return stop(project, args.command, "DISPATCH_REQUIRED", "checks_pending", gh_details)
-    if has_failing_check(checks) or pr.get("reviewDecision") == "CHANGES_REQUESTED":
+    if has_failing_check(checks) or pr.get("reviewDecision") in {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}:
         gh_details["reason"] = "checks_or_review_blocking"
         return stop(project, args.command, "REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking", gh_details)
 

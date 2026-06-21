@@ -265,3 +265,26 @@ def test_diagnose_outputs_reply_or_fix_required_for_changes_requested(tmp_path: 
     assert status["status"] == "REPLY_OR_FIX_REQUIRED"
     assert status["command"] == "diagnose"
     assert status["details"]["reason"] == "checks_or_review_blocking"
+
+
+def test_diagnose_outputs_reply_or_fix_required_for_review_required(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    fake_bin = write_fake_gh(
+        tmp_path / "bin",
+        stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision="REVIEW_REQUIRED",
+        ),
+    )
+    assert init_repo(project) == "main"
+    assert run("init", "--project", str(project)).returncode == 0
+
+    result = run_with_path(fake_bin, "diagnose", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "REPLY_OR_FIX_REQUIRED"
+    assert status["command"] == "diagnose"
+    assert status["details"]["reason"] == "checks_or_review_blocking"
+    assert status["details"]["reviewDecision"] == "REVIEW_REQUIRED"
