@@ -101,6 +101,25 @@ def test_pr_flow_cli_command_help_includes_command_name() -> None:
         assert command in result.stdout
 
 
+def test_pr_flow_normal_commands_report_not_implemented_contract() -> None:
+    script = PLUGIN_ROOT / "skills" / "pr-flow" / "scripts" / "pr_flow.py"
+
+    for skill_name, command in ENTRYPOINT_COMMANDS.items():
+        result = subprocess.run(
+            [sys.executable, str(script), command],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+        )
+        skill_text = (PLUGIN_ROOT / "skills" / skill_name / "SKILL.md").read_text(encoding="utf-8")
+
+        assert result.returncode == 2
+        assert result.stdout == "status: not_implemented\n"
+        assert "unrecognized arguments" not in result.stderr
+        assert "骨架入口" in skill_text
+        assert "status: not_implemented" in skill_text
+
+
 def test_claude_marketplace_appends_pr_flow_after_cross_agent_review() -> None:
     catalog = read_json(CLAUDE_REPO_MARKETPLACE)
     names = plugin_names(catalog)

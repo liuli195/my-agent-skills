@@ -1,11 +1,13 @@
 ---
 name: pr-flow
-description: "诊断 PR Flow（拉取请求流程）状态。Use when 需要查看 PR Flow 当前状态或阻塞原因。"
+description: "PR Flow（拉取请求流程）诊断骨架入口；当前命令返回 status: not_implemented。"
 ---
 
 # PR Flow
 
 ## 边界
+
+当前为骨架入口；命令只会输出 `status: not_implemented`，并以返回码 2 结束。
 
 只诊断 PR Flow 状态，不提交、不推送、不合并，也不修改 OpenSpec（开放规格）任务。
 
