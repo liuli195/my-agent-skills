@@ -45,3 +45,11 @@
 - [x] 7.2 Align stdin hook（标准输入钩子） deny/ask results with the host block exit code `2`.
 - [x] 7.3 Keep `--payload-file` debug semantics unchanged for runtime tests and standard event bridge（标准事件桥接） calls.
 - [x] 7.4 Add regression coverage for stdin hook blocking and re-run Agent Guard runtime（运行时） tests.
+
+## 8. Agent Guard Codex Hook Protocol Hotfix
+
+- [x] 8.1 Reproduce that Codex Plugin Hook（插件钩子） records `PreToolUse Failed` but still executes when Agent Guard only returns legacy `{status: "deny"}` plus exit `2`.
+- [x] 8.2 Emit Codex-native `hookSpecificOutput.permissionDecision: "deny"` with `permissionDecisionReason` for Codex stdin hooks（标准输入钩子）.
+- [x] 8.3 Preserve Claude stdin hook（标准输入钩子） blocking as exit `2` with stderr reason.
+- [x] 8.4 Add and validate a repo-local DEV Codex marketplace（开发市场） under `.agents/plugins/marketplace.json`.
+- [x] 8.5 Re-run focused hook protocol tests, package tests, build checks, and full verify（验证）.

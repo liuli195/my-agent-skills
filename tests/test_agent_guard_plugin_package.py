@@ -67,14 +67,28 @@ def test_plugin_manifests_are_valid_json() -> None:
 
 def test_codex_repo_marketplace_is_generated_by_release_projection() -> None:
     projection = RELEASE_FLOW_PROJECTION.read_text(encoding="utf-8")
+    codex_catalog = read_json(CODEX_REPO_MARKETPLACE)
 
-    assert not CODEX_REPO_MARKETPLACE.exists()
+    assert codex_catalog["name"] == "my-agent-skills-marketplace-dev"
+    assert codex_catalog["interface"]["displayName"] == "My Agent Skills Marketplace DEV"
     assert "identity:" in projection
     assert "marketplaceName: my-agent-skills-marketplace" in projection
     assert "path: .agents/plugins/marketplace.json" in projection
     assert "type: codex-marketplace" in projection
-    assert "agent-guard" in projection
-    assert "release-flow" in projection
+    assert [plugin["name"] for plugin in codex_catalog["plugins"]] == [
+        "agent-guard",
+        "release-flow",
+        "cross-agent-review",
+    ]
+    agent_guard_entries = [plugin for plugin in codex_catalog["plugins"] if plugin.get("name") == "agent-guard"]
+    assert agent_guard_entries == [
+        {
+            "name": "agent-guard",
+            "source": {"source": "local", "path": "./plugins/agent-guard"},
+            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+            "category": "Productivity",
+        }
+    ]
 
 
 def test_claude_repo_marketplace_catalog_points_to_agent_guard_plugin() -> None:

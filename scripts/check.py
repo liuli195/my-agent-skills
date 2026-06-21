@@ -100,6 +100,52 @@ def _marketplace_plugins(root: Path) -> tuple[list[dict[str, Any]], list[str]]:
     return valid_plugins, errors
 
 
+def _codex_dev_marketplace_plugins(root: Path) -> tuple[list[dict[str, str]], list[str]]:
+    marketplace_path = root / ".agents" / "plugins" / "marketplace.json"
+    data, load_error = _load_json(marketplace_path)
+    if load_error is not None:
+        return [], [load_error]
+    assert data is not None
+
+    errors: list[str] = []
+    name = data.get("name")
+    if not isinstance(name, str) or "dev" not in name.lower():
+        errors.append(f"codex_dev_marketplace_name_missing_dev: {marketplace_path}")
+
+    interface = data.get("interface")
+    display_name = interface.get("displayName") if isinstance(interface, dict) else None
+    if not isinstance(display_name, str) or "DEV" not in display_name:
+        errors.append(f"codex_dev_marketplace_display_name_missing_DEV: {marketplace_path}")
+
+    plugins = data.get("plugins")
+    if not isinstance(plugins, list):
+        return [], [*errors, f"invalid_codex_dev_marketplace_plugins: {marketplace_path}"]
+
+    valid_plugins: list[dict[str, str]] = []
+    for index, plugin in enumerate(plugins):
+        if not isinstance(plugin, dict):
+            errors.append(f"invalid_codex_dev_marketplace_entry: {marketplace_path}: index={index}")
+            continue
+        plugin_name = plugin.get("name")
+        if not isinstance(plugin_name, str) or not plugin_name.strip():
+            errors.append(f"invalid_codex_dev_marketplace_plugin: index={index}: name")
+            continue
+        source = plugin.get("source")
+        if not isinstance(source, dict):
+            errors.append(f"invalid_codex_dev_marketplace_plugin: {plugin_name}: source")
+            continue
+        source_type = source.get("source")
+        source_path = source.get("path")
+        if source_type != "local":
+            errors.append(f"invalid_codex_dev_marketplace_plugin: {plugin_name}: source.source")
+            continue
+        if not isinstance(source_path, str) or not source_path.strip():
+            errors.append(f"invalid_codex_dev_marketplace_plugin: {plugin_name}: source.path")
+            continue
+        valid_plugins.append({"name": plugin_name, "source": source_path})
+    return valid_plugins, errors
+
+
 def _projection_plugins(root: Path) -> tuple[list[str], list[str]]:
     projection_path = root / ".release-flow" / "projection.yaml"
     if yaml is None:
@@ -166,6 +212,8 @@ def run_build(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> list[s
     errors: list[str] = []
     plugins, marketplace_errors = _marketplace_plugins(root)
     errors.extend(marketplace_errors)
+    codex_dev_plugins, codex_dev_marketplace_errors = _codex_dev_marketplace_plugins(root)
+    errors.extend(codex_dev_marketplace_errors)
 
     validate_commands: list[list[str]] = [["claude", "plugin", "validate", "."]]
     marketplace_names: list[str] = []
@@ -211,6 +259,31 @@ def run_build(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> list[s
             )
         )
 
+    codex_dev_marketplace_names: list[str] = []
+    seen_codex_dev_marketplace_names: set[str] = set()
+    for plugin in codex_dev_plugins:
+        name = plugin["name"]
+        source = plugin["source"]
+        if name in seen_codex_dev_marketplace_names:
+            errors.append(f"duplicate_codex_dev_marketplace_plugin: {name}")
+        seen_codex_dev_marketplace_names.add(name)
+        codex_dev_marketplace_names.append(name)
+
+        source_path = Path(source)
+        plugin_dir = root / source_path
+        if source_path.is_absolute() or not _inside(plugin_dir, root):
+            errors.append(f"codex_dev_source_outside_repo: {name}: {source}")
+            continue
+        errors.extend(
+            _check_manifest(
+                plugin_dir / ".codex-plugin" / "plugin.json",
+                name,
+                plugin_dir,
+                "codex_dev_manifest_name_mismatch",
+                ("skills", "hooks", "assets"),
+            )
+        )
+
     missing_commands: set[str] = set()
     for command in validate_commands:
         try:
@@ -236,6 +309,12 @@ def run_build(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> list[s
         errors.append(
             "projection_plugins_mismatch: "
             f"marketplace={sorted(marketplace_names)} projection={sorted(set(projection_plugins))}"
+        )
+
+    if set(projection_plugins) != set(codex_dev_marketplace_names):
+        errors.append(
+            "codex_dev_projection_plugins_mismatch: "
+            f"marketplace={sorted(codex_dev_marketplace_names)} projection={sorted(set(projection_plugins))}"
         )
 
     errors.extend(check_guard_profile_template_mirrors(root))

@@ -68,6 +68,32 @@ def make_marketplace(root: Path, names: list[str]) -> None:
             ],
         },
     )
+    make_codex_dev_marketplace(root, names)
+
+
+def make_codex_dev_marketplace(
+    root: Path,
+    names: list[str],
+    *,
+    marketplace_name: str = "test-marketplace-dev",
+    display_name: str = "Test Marketplace DEV",
+) -> None:
+    write_json(
+        root / ".agents" / "plugins" / "marketplace.json",
+        {
+            "name": marketplace_name,
+            "interface": {"displayName": display_name},
+            "plugins": [
+                {
+                    "name": name,
+                    "source": {"source": "local", "path": f"./plugins/{name}"},
+                    "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+                    "category": "Developer Tools",
+                }
+                for name in names
+            ],
+        },
+    )
 
 
 def make_projection(root: Path, names: list[str]) -> None:
@@ -126,6 +152,39 @@ def test_build_rejects_marketplace_source_outside_repo(tmp_path: Path) -> None:
     )
 
     assert any("source_outside_repo" in error for error in errors)
+
+
+def test_build_rejects_codex_dev_marketplace_without_dev_name(tmp_path: Path) -> None:
+    module = load_check_module()
+    make_plugin(tmp_path, "alpha")
+    make_marketplace(tmp_path, ["alpha"])
+    make_projection(tmp_path, ["alpha"])
+    make_codex_dev_marketplace(tmp_path, ["alpha"], marketplace_name="test-marketplace", display_name="Test Marketplace")
+
+    errors = module.run_build(
+        tmp_path,
+        runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+
+    assert any("codex_dev_marketplace_name_missing_dev" in error for error in errors)
+    assert any("codex_dev_marketplace_display_name_missing_DEV" in error for error in errors)
+
+
+def test_build_rejects_codex_dev_marketplace_source_outside_repo(tmp_path: Path) -> None:
+    module = load_check_module()
+    make_plugin(tmp_path, "alpha")
+    make_marketplace(tmp_path, ["alpha"])
+    make_projection(tmp_path, ["alpha"])
+    data = json.loads((tmp_path / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8"))
+    data["plugins"][0]["source"]["path"] = "../outside"
+    write_json(tmp_path / ".agents" / "plugins" / "marketplace.json", data)
+
+    errors = module.run_build(
+        tmp_path,
+        runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+
+    assert any("codex_dev_source_outside_repo" in error for error in errors)
 
 
 def test_build_reports_missing_claude_command(tmp_path: Path) -> None:
