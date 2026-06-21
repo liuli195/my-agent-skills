@@ -1,0 +1,37 @@
+version: 1
+
+release:
+  sourceRef: main
+  channelBranch: marketplace
+  branchMode: remote-only
+
+workflow:
+  file: .github/workflows/release.yml
+  trigger: workflow_dispatch
+
+records:
+  directory: .release-flow/releases
+
+github:
+  actions:
+    workflowPermissions: read-and-write
+  rulesets:
+    enabled: true
+    branchProtectionFallback: false
+    main:
+      requirePullRequest: true
+    channel:
+      branch: marketplace
+      writers:
+        - github-actions
+    tags:
+      immutable: true
+
+manifests:
+  versionFiles:
+    - plugins/agent-guard/.codex-plugin/plugin.json
+    - plugins/agent-guard/.claude-plugin/plugin.json
+    - plugins/release-flow/.codex-plugin/plugin.json
+    - plugins/release-flow/.claude-plugin/plugin.json
+    - plugins/cross-agent-review/.codex-plugin/plugin.json
+    - plugins/cross-agent-review/.claude-plugin/plugin.json

@@ -1,0 +1,33 @@
+global_command_guards:
+  - id: comet_build_requires_cross_agent_review
+    description: Comet build 完成进入 verify 前必须有 cross-agent-review pass marker。
+    tool: Bash
+    match:
+      command_patterns:
+        - '(^|[\s''"])(?:[^\s''"]*/)?comet-guard\.sh[''"]?\s+(?P<change>[A-Za-z0-9._-]+)\s+build\s+--apply(?:\s|$)'
+        - '\$COMET_GUARD[''"]?\s+(?P<change>[A-Za-z0-9._-]+)\s+build\s+--apply(?:\s|$)'
+      required_captures:
+        - change
+    evidence:
+      artifact: cross_agent_review_pass
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+      - field: change
+        predicate: equals
+        value_from: change
+      - field: head_ref
+        predicate: equals
+        value_from: git_head
+      - field: blocking_findings
+        predicate: number_lte
+        value: 0
+      - field: report
+        predicate: exists
+      - field: report_hash
+        predicate: exists
+    deny:
+      reason: comet_cross_agent_review_required
+      next: produce_cross_agent_review_pass_marker
+      suggestion: 生成当前 change 和当前 HEAD 对应的 cross-agent-review pass marker 后重试 build completion。
