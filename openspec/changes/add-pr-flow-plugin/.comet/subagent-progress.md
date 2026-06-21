@@ -88,34 +88,38 @@
 - Spec review: APPROVED by 019eebc8-348a-7020-8fc8-c11a303e60f8
 - Quality review: APPROVED by 019eebd9-8252-73b1-a550-bd487cecb345
 
+### Task 9: Tweak Path
+
+- OpenSpec task: `6.3`
+- Implementation commit: cb55f98
+- Fix commit: 618d55e
+- Fix commit 2: acf4448
+- Checkoff commit: feffeb8
+- RED evidence: CLI tests failed because `tweak` parser did not support `--project` / `--reason`; later bare `tweak` still lacked stdout stop-state coverage.
+- GREEN evidence: combined CLI/package tests passed with 51 tests after stdout `tweak_requires_reason` contract, PR body marker, review-gate skip, checks, merge, and cleanup coverage.
+- Spec review: APPROVED by 019eec0f-8f78-78d0-b321-3f31515dad9d
+- Quality review: APPROVED by 019eec14-d476-7302-9f7b-0e9077e1a1b5
+
 ## Current Task
 
-- Plan task: `Task 9: Tweak Path`
-- OpenSpec task: `6.3 Implement tweak PR path with required reason and PR body marker.`
-- Stage: spec-review
-- Rounds: 2
+- Plan task: `Task 10: Package Validation And Release Projection`
+- OpenSpec tasks: `7.1`, `7.2`, `7.3`
+- Stage: ready-for-implementation
+- Rounds: 0
 
 ## Implementer
 
-- Agent: 019eebdf-c456-73e0-b8bc-aae5f9d229cb
-- Commit: cb55f98
-- Changed files: `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py`, `tests/test_pr_flow_cli.py`
-- RED evidence: CLI tests failed because `tweak` parser did not support `--project` / `--reason`.
-- GREEN evidence: combined CLI/package tests passed with 50 tests.
-- Concerns: none reported.
+- Agent: pending
+- Commit: pending
+- Changed files: pending
+- RED evidence: pending
+- GREEN evidence: pending
+- Concerns: pending
 
 ## Spec Review
 
-- Status: CHANGES_REQUIRED by 019eebee-caaf-7cd2-9ae5-a10f78068ae8
-- Feedback: Bare `tweak` without `--reason` must return `tweak_requires_reason` instead of `status: not_implemented`; add coverage.
-- Fix commit: 618d55e
-- Fix evidence: combined CLI/package tests passed with 51 tests after bare `tweak` required-reason coverage.
-- Re-review status: CHANGES_REQUIRED by 019eebfb-e407-7e51-80d9-387419dc4019
-- Re-review feedback: Missing `--reason` still fails through argparse stderr instead of printing `status: tweak_requires_reason`; `pr-flow-tweak` Skill still describes a skeleton/not-implemented entrypoint.
-- Fix commit 2: acf4448
-- Fix evidence 2: combined CLI/package tests passed with 51 tests after stdout stop-state contract and tweak Skill documentation update.
-- Re-review 2 status: CHANGES_REQUIRED by 019eec09-4a43-7443-9117-e00d7bea879d
-- Re-review 2 feedback: Behavior approved, but OpenSpec task `6.3` was still unchecked.
+- Status: pending
+- Feedback: pending
 
 ## Quality Review
 
