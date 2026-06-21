@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -89,13 +91,71 @@ def git(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def gh(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    executable = shutil.which("gh") or "gh"
     return subprocess.run(
-        ["gh", *args],
+        [executable, *args],
         cwd=project,
         check=False,
         text=True,
         capture_output=True,
     )
+
+
+def stop(project: Path, command: str, status: str, message: str, details: dict[str, Any]) -> int:
+    write_status(project, command, status, details)
+    print_stop(status, message)
+    return 1
+
+
+def command_failure_details(reason: str, result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    return {
+        "reason": reason,
+        "returncode": result.returncode,
+        "stdout": result.stdout.strip(),
+        "stderr": result.stderr.strip(),
+    }
+
+
+def base_branch_from_config(config: dict[str, Any]) -> str:
+    defaults = config.get("defaults")
+    if not isinstance(defaults, dict):
+        return "main"
+    base_branch = defaults.get("baseBranch")
+    return base_branch if isinstance(base_branch, str) and base_branch else "main"
+
+
+def check_value(check: dict[str, Any], key: str) -> str:
+    value = check.get(key)
+    return value.upper() if isinstance(value, str) else ""
+
+
+def pr_checks(pr: dict[str, Any]) -> list[Any]:
+    checks = pr.get("statusCheckRollup")
+    return checks if isinstance(checks, list) else []
+
+
+def has_pending_check(checks: list[Any]) -> bool:
+    pending_values = {"PENDING", "IN_PROGRESS", "QUEUED", "REQUESTED", "WAITING", "EXPECTED"}
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        if check_value(check, "status") in pending_values or check_value(check, "state") in pending_values:
+            return True
+    return False
+
+
+def has_failing_check(checks: list[Any]) -> bool:
+    failing_values = {"FAILURE", "FAILED", "ERROR", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE"}
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        if (
+            check_value(check, "conclusion") in failing_values
+            or check_value(check, "status") in failing_values
+            or check_value(check, "state") in failing_values
+        ):
+            return True
+    return False
 
 
 def run_init(args: argparse.Namespace) -> int:
@@ -115,16 +175,81 @@ def run_init(args: argparse.Namespace) -> int:
 def run_diagnose(args: argparse.Namespace) -> int:
     project = resolve_project(args.project)
     try:
-        load_config(project)
+        config = load_config(project)
     except FileNotFoundError:
         details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
-        write_status(project, args.command, "EXCEPTION_REQUIRED", details)
-        print_stop("EXCEPTION_REQUIRED", "missing_config")
-        return 1
-    details = {"reason": "diagnose_not_implemented"}
-    write_status(project, args.command, "EXCEPTION_REQUIRED", details)
-    print_stop("EXCEPTION_REQUIRED", "diagnose_not_implemented")
-    return 1
+        return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
+
+    base_branch = base_branch_from_config(config)
+    branch_result = git(project, "branch", "--show-current")
+    if branch_result.returncode != 0 or not branch_result.stdout.strip():
+        details = command_failure_details("git_current_branch_failed", branch_result)
+        return stop(project, args.command, "EXCEPTION_REQUIRED", details["reason"], details)
+    branch = branch_result.stdout.strip()
+
+    upstream_result = git(project, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    upstream = upstream_result.stdout.strip() if upstream_result.returncode == 0 else ""
+    if upstream_result.returncode != 0 and branch != base_branch:
+        details = command_failure_details("missing_upstream", upstream_result)
+        details["branch"] = branch
+        details["baseBranch"] = base_branch
+        return stop(project, args.command, "PUSH_REQUIRED", "missing_upstream", details)
+
+    status_result = git(project, "status", "--short")
+    if status_result.returncode != 0:
+        details = command_failure_details("git_status_failed", status_result)
+        details["branch"] = branch
+        details["baseBranch"] = base_branch
+        details["upstream"] = upstream
+        return stop(project, args.command, "EXCEPTION_REQUIRED", details["reason"], details)
+    dirty = status_result.stdout.strip()
+
+    pr_result = gh(
+        project,
+        "pr",
+        "view",
+        "--json",
+        "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup",
+    )
+    gh_details: dict[str, Any] = {
+        "branch": branch,
+        "baseBranch": base_branch,
+        "upstream": upstream,
+        "dirty": dirty,
+    }
+    if pr_result.returncode != 0:
+        gh_details.update(command_failure_details("gh_pr_view_failed", pr_result))
+        return stop(project, args.command, "EXCEPTION_REQUIRED", "gh_pr_view_failed", gh_details)
+
+    try:
+        pr = json.loads(pr_result.stdout)
+    except json.JSONDecodeError as exc:
+        gh_details.update({"reason": "gh_pr_view_parse_failed", "error": str(exc), "stdout": pr_result.stdout.strip()})
+        return stop(project, args.command, "EXCEPTION_REQUIRED", "gh_pr_view_parse_failed", gh_details)
+    if not isinstance(pr, dict):
+        gh_details.update({"reason": "gh_pr_view_parse_failed", "stdout": pr_result.stdout.strip()})
+        return stop(project, args.command, "EXCEPTION_REQUIRED", "gh_pr_view_parse_failed", gh_details)
+
+    gh_details.update(
+        {
+            "reason": "pr_state",
+            "pr": pr.get("number"),
+            "reviewDecision": pr.get("reviewDecision"),
+            "mergeStateStatus": pr.get("mergeStateStatus"),
+            "headRefName": pr.get("headRefName"),
+            "baseRefName": pr.get("baseRefName"),
+        }
+    )
+    checks = pr_checks(pr)
+    if has_pending_check(checks):
+        gh_details["reason"] = "checks_pending"
+        return stop(project, args.command, "DISPATCH_REQUIRED", "checks_pending", gh_details)
+    if has_failing_check(checks) or pr.get("reviewDecision") == "CHANGES_REQUESTED":
+        gh_details["reason"] = "checks_or_review_blocking"
+        return stop(project, args.command, "REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking", gh_details)
+
+    gh_details["reason"] = "no_stop_state_detected"
+    return stop(project, args.command, "EXCEPTION_REQUIRED", "no_stop_state_detected", gh_details)
 
 
 def build_parser() -> argparse.ArgumentParser:
