@@ -1024,7 +1024,7 @@ def test_tweak_requires_reason(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "status: not_implemented" not in result.stdout
-    assert "tweak_requires_reason" in result.stderr
+    assert "status: tweak_requires_reason" in result.stdout
 
 
 def test_bare_tweak_requires_reason() -> None:
@@ -1032,7 +1032,7 @@ def test_bare_tweak_requires_reason() -> None:
 
     assert result.returncode == 2
     assert "status: not_implemented" not in result.stdout
-    assert "tweak_requires_reason" in result.stderr
+    assert "status: tweak_requires_reason" in result.stdout
 
 
 def test_tweak_creates_pr_when_none_exists_and_writes_body(tmp_path: Path) -> None:
