@@ -968,6 +968,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         and args.authorization_phrase is not None
     ):
         return run_hotfix(args)
+    if args.command == "hotfix" and args.target is None:
+        print("error: hotfix_target_required: --target", file=sys.stderr)
+        return 2
     if args.command == "hotfix" and (
         args.project is not None or args.target is not None or args.authorization_phrase is not None
     ):

@@ -101,7 +101,7 @@ def test_pr_flow_cli_command_help_includes_command_name() -> None:
         assert command in result.stdout
 
 
-def test_pr_flow_normal_commands_report_not_implemented_contract() -> None:
+def test_pr_flow_bare_commands_report_stable_contract() -> None:
     script = PLUGIN_ROOT / "skills" / "pr-flow" / "scripts" / "pr_flow.py"
 
     for skill_name, command in ENTRYPOINT_COMMANDS.items():
@@ -114,6 +114,10 @@ def test_pr_flow_normal_commands_report_not_implemented_contract() -> None:
         skill_text = (PLUGIN_ROOT / "skills" / skill_name / "SKILL.md").read_text(encoding="utf-8")
 
         assert result.returncode == 2
+        if command == "hotfix":
+            assert result.stdout == ""
+            assert "hotfix_target_required" in result.stderr
+            continue
         assert result.stdout == "status: not_implemented\n"
         assert "unrecognized arguments" not in result.stderr
         assert "骨架入口" in skill_text

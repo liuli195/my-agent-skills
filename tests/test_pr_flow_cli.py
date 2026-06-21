@@ -1047,6 +1047,14 @@ def test_hotfix_runs_verify_command_before_authorization_phrase_check(tmp_path: 
     assert status["details"]["reason"] == "hotfix_verify_failed"
 
 
+def test_hotfix_requires_target_for_bare_command() -> None:
+    result = run("hotfix")
+
+    assert result.returncode == 2
+    assert "status: not_implemented" not in result.stdout
+    assert "hotfix_target_required" in result.stderr or "--target" in result.stderr
+
+
 def test_hotfix_requires_target_when_project_and_authorization_are_supplied(tmp_path: Path) -> None:
     project, _remote, _before_commit = init_hotfix_project(tmp_path)
 
