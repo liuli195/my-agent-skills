@@ -29,7 +29,7 @@
 
 ### Task 3: Config Loading, Command Runner, And Status Files
 
-- OpenSpec tasks: foundation for `3.3`; `3.1`, `3.2`, and `3.3` remain open until Task 4 completes full diagnose stop states.
+- OpenSpec tasks: foundation for `3.3`
 - Implementation commit: a2482c6fddd516850dfb6ce0281217735bbb84a5
 - Fix commit: 0e29b5d116ac23ef810d051e90f8be57c8ac08b6
 - RED evidence: focused config/status tests failed because `diagnose` returned `status: not_implemented` with exit code 2.
@@ -37,10 +37,20 @@
 - Spec review: APPROVED by 019eeb3a-c13f-7b12-ab7e-051d5cc683ad
 - Quality review: APPROVED by 019eeb3c-e49c-7d60-8f56-3c42fe91ae81
 
+### Task 4: Diagnose Stop States
+
+- OpenSpec tasks: `3.1`, `3.2`, `3.3`
+- Implementation commit: 4e611bfe76cfaad3c071dd701b9521b02ebe1ae5
+- Fix commit: e13f6c35bf77204d7438f430cf51db295688f218
+- RED evidence: diagnose stop-state tests and fake gh status tests failed before implementation.
+- GREEN evidence: CLI tests passed with 10 tests; combined CLI/package tests passed with 17 tests after review-required fix.
+- Spec review: APPROVED by 019eeb47-a15b-7783-b25b-4dc0c273c16f
+- Quality review: APPROVED by 019eeb50-b967-7fd0-9f19-ff210654f5f1
+
 ## Current Task
 
-- Plan task: `Task 4: Diagnose Stop States`
-- OpenSpec task: `3.1 Implement repository and PR state discovery using local git and gh.`
+- Plan task: `Task 5: PR Sync, Checks, And Review Gate`
+- OpenSpec task: `4.1 Implement complete flow to create or reuse a PR from the current branch.`
 - Stage: ready-for-implementation
 - Rounds: 0
 

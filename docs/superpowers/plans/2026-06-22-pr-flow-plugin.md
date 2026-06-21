@@ -453,7 +453,7 @@ git commit -m "feat: 添加 pr-flow 配置读取和状态记录"
 - Modify: `tests/test_pr_flow_cli.py`
 - Modify: `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py`
 
-- [ ] **Step 1: Add Git fixture helpers**
+- [x] **Step 1: Add Git fixture helpers**
 
 Append these helpers to `tests/test_pr_flow_cli.py`:
 
@@ -479,7 +479,7 @@ def init_repo(project: Path) -> str:
     return git(project, "rev-parse", "HEAD")
 ```
 
-- [ ] **Step 2: Add failing diagnose tests**
+- [x] **Step 2: Add failing diagnose tests**
 
 Append:
 
@@ -508,7 +508,7 @@ def test_diagnose_outputs_exception_for_unknown_gh_failure(tmp_path: Path) -> No
     assert "status: EXCEPTION_REQUIRED" in result.stdout
 ```
 
-- [ ] **Step 3: Run diagnose tests and verify they fail**
+- [x] **Step 3: Run diagnose tests and verify they fail**
 
 Run:
 
@@ -518,7 +518,7 @@ python -m pytest tests/test_pr_flow_cli.py::test_diagnose_outputs_push_required_
 
 Expected: FAIL because diagnose logic is incomplete.
 
-- [ ] **Step 4: Implement diagnose state discovery**
+- [x] **Step 4: Implement diagnose state discovery**
 
 Implement:
 - current branch discovery with `git branch --show-current`
@@ -532,7 +532,7 @@ Stop state mapping:
 - failing checks or blocking review -> `REPLY_OR_FIX_REQUIRED`
 - unknown command or parse failure -> `EXCEPTION_REQUIRED`
 
-- [ ] **Step 5: Add fake `gh` tests for `DISPATCH_REQUIRED` and `REPLY_OR_FIX_REQUIRED`**
+- [x] **Step 5: Add fake `gh` tests for `DISPATCH_REQUIRED` and `REPLY_OR_FIX_REQUIRED`**
 
 Use a temporary `gh.cmd`/`gh.bat` in `PATH` that prints fixed JSON:
 
@@ -548,7 +548,7 @@ def fake_gh_bin(tmp_path: Path, stdout: str, exit_code: int = 0) -> Path:
 
 Add tests where fake JSON has pending checks and failing checks.
 
-- [ ] **Step 6: Run diagnose tests**
+- [x] **Step 6: Run diagnose tests**
 
 Run:
 
@@ -558,7 +558,7 @@ python -m pytest tests/test_pr_flow_cli.py -q
 
 Expected: current init/config/diagnose tests pass.
 
-- [ ] **Step 7: Commit diagnose**
+- [x] **Step 7: Commit diagnose**
 
 ```bash
 git add plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py tests/test_pr_flow_cli.py

@@ -13,9 +13,9 @@
 
 ## 3. Diagnose And Stop States
 
-- [ ] 3.1 Implement repository and PR state discovery using local git and `gh`.
-- [ ] 3.2 Implement `PUSH_REQUIRED`, `DISPATCH_REQUIRED`, `REPLY_OR_FIX_REQUIRED`, and `EXCEPTION_REQUIRED` status rendering.
-- [ ] 3.3 Persist `.pr-flow/last-status.json` for the latest diagnose or command stop state.
+- [x] 3.1 Implement repository and PR state discovery using local git and `gh`.
+- [x] 3.2 Implement `PUSH_REQUIRED`, `DISPATCH_REQUIRED`, `REPLY_OR_FIX_REQUIRED`, and `EXCEPTION_REQUIRED` status rendering.
+- [x] 3.3 Persist `.pr-flow/last-status.json` for the latest diagnose or command stop state.
 
 ## 4. PR Lifecycle
 
