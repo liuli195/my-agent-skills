@@ -121,8 +121,10 @@ def run_diagnose(args: argparse.Namespace) -> int:
         write_status(project, args.command, "EXCEPTION_REQUIRED", details)
         print_stop("EXCEPTION_REQUIRED", "missing_config")
         return 1
-    print("status: not_implemented")
-    return 2
+    details = {"reason": "diagnose_not_implemented"}
+    write_status(project, args.command, "EXCEPTION_REQUIRED", details)
+    print_stop("EXCEPTION_REQUIRED", "diagnose_not_implemented")
+    return 1
 
 
 def build_parser() -> argparse.ArgumentParser:

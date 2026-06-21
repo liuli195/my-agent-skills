@@ -79,11 +79,13 @@ def test_missing_config_reports_exception_required(tmp_path: Path) -> None:
 def test_status_file_is_written_for_stop_state(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
+    init_result = run("init", "--project", str(project))
 
+    assert init_result.returncode == 0, init_result.stdout + init_result.stderr
     result = run("diagnose", "--project", str(project))
 
     assert result.returncode == 1
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["status"] == "EXCEPTION_REQUIRED"
     assert status["command"] == "diagnose"
-    assert status["details"]["reason"] == "missing_config"
+    assert status["details"]["reason"] == "diagnose_not_implemented"
