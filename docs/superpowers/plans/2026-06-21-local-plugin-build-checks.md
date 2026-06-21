@@ -2,6 +2,7 @@
 change: add-local-plugin-build-checks
 design-doc: docs/superpowers/specs/2026-06-21-local-plugin-build-checks-design.md
 base-ref: c6efd0f55f0dfabe5857ba66a96c48cdb64cd554
+archived-with: 2026-06-21-add-local-plugin-build-checks
 ---
 
 # Local Plugin Build Checks Implementation Plan
@@ -14,6 +15,7 @@ base-ref: c6efd0f55f0dfabe5857ba66a96c48cdb64cd554
 
 **Tech Stack:** Python standard library, PyYAML（YAML 解析库）for `.release-flow/projection.yaml`, pytest（Python 测试框架）, Claude CLI（Claude 命令行工具）for `claude plugin validate`.
 
+archived-with: 2026-06-21-add-local-plugin-build-checks
 ---
 
 ## File Structure

@@ -2,6 +2,8 @@
 comet_change: add-local-plugin-build-checks
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-21-add-local-plugin-build-checks
+status: final
 ---
 
 # Local Plugin Build Checks Design
