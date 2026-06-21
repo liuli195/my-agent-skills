@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -53,6 +55,49 @@ def default_config(base_branch: str) -> dict:
     }
 
 
+def load_config(project: Path) -> dict:
+    config_path = project / ".pr-flow" / "config.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(config_path)
+    return yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+
+
+def write_status(project: Path, command: str, status: str, details: dict) -> None:
+    status_path = project / ".pr-flow" / "last-status.json"
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "status": status,
+        "command": command,
+        "details": details,
+    }
+    status_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def print_stop(status: str, message: str) -> None:
+    print(f"status: {status}")
+    print(message)
+
+
+def git(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=project,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
+def gh(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["gh", *args],
+        cwd=project,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
 def run_init(args: argparse.Namespace) -> int:
     project = resolve_project(args.project)
     pr_flow_dir = project / ".pr-flow"
@@ -67,6 +112,19 @@ def run_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_diagnose(args: argparse.Namespace) -> int:
+    project = resolve_project(args.project)
+    try:
+        load_config(project)
+    except FileNotFoundError:
+        details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
+        write_status(project, args.command, "EXCEPTION_REQUIRED", details)
+        print_stop("EXCEPTION_REQUIRED", "missing_config")
+        return 1
+    print("status: not_implemented")
+    return 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pr_flow.py",
@@ -79,8 +137,9 @@ def build_parser() -> argparse.ArgumentParser:
             help=f"{command} command",
             description=f"{command} command",
         )
-        if command == "init":
+        if command in {"diagnose", "init"}:
             subparser.add_argument("--project", type=Path)
+        if command == "init":
             subparser.add_argument("--base-branch", default="main")
         subparser.set_defaults(command=command)
     return parser
@@ -91,6 +150,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "init" and args.project is not None:
         return run_init(args)
+    if args.command == "diagnose" and args.project is not None:
+        return run_diagnose(args)
     print("status: not_implemented")
     return 2
 

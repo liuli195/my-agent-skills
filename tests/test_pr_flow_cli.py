@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -62,3 +63,27 @@ def test_init_does_not_call_gh_api(tmp_path: Path) -> None:
     assert result.returncode == 0
     assert "gh api" not in result.stdout
     assert "Rulesets written" not in result.stdout
+
+
+def test_missing_config_reports_exception_required(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = run("diagnose", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    assert "missing_config" in result.stdout
+
+
+def test_status_file_is_written_for_stop_state(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = run("diagnose", "--project", str(project))
+
+    assert result.returncode == 1
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "EXCEPTION_REQUIRED"
+    assert status["command"] == "diagnose"
+    assert status["details"]["reason"] == "missing_config"
