@@ -353,6 +353,60 @@ def configure_complete(
     config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
+HOTFIX_PHRASE = "ship-hotfix"
+
+
+def configure_hotfix(
+    project: Path,
+    *,
+    target: str = "main",
+    allow_hotfix: bool = True,
+    verify_command: str = "git rev-parse HEAD",
+) -> None:
+    assert run("init", "--project", str(project)).returncode == 0
+    config_path = project / ".pr-flow" / "config.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config.setdefault("authorization", {})
+    config["authorization"]["phraseHashAlgorithm"] = "md5"
+    config["authorization"]["phraseHash"] = hashlib.md5(HOTFIX_PHRASE.encode("utf-8")).hexdigest()
+    config["defaults"]["remote"] = "origin"
+    config["defaults"]["hotfix"] = {"verifyCommand": verify_command}
+    config.setdefault("branches", {}).setdefault(target, {})
+    config["branches"][target]["allowHotfixPush"] = allow_hotfix
+    config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def init_hotfix_project(
+    tmp_path: Path,
+    *,
+    allow_hotfix: bool = True,
+    verify_command: str = "git rev-parse HEAD",
+) -> tuple[Path, Path, str]:
+    remote = tmp_path / "remote.git"
+    remote_init = subprocess.run(
+        ["git", "init", "--bare", str(remote)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert remote_init.returncode == 0, remote_init.stdout + remote_init.stderr
+
+    project = tmp_path / "project"
+    assert init_repo(project) == "main"
+    configure_hotfix(project, allow_hotfix=allow_hotfix, verify_command=verify_command)
+    git(project, "add", ".pr-flow")
+    git(project, "commit", "-m", "configure pr flow")
+    git(project, "remote", "add", "origin", str(remote))
+    git(project, "push", "-u", "origin", "main")
+    before_commit = git_bare(remote, "rev-parse", "refs/heads/main")
+
+    git(project, "checkout", "-b", "hotfix/example", "origin/main")
+    (project / "README.md").write_text("# Test Project\n\nHotfix change\n", encoding="utf-8")
+    git(project, "add", "README.md")
+    git(project, "commit", "-m", "hotfix")
+    return project, remote, before_commit
+
+
 def write_review_pass(
     project: Path,
     relative_path: str = ".pr-flow/review-pass.json",
@@ -937,6 +991,149 @@ def test_complete_dual_review_gate_requires_github_and_local_evidence(tmp_path: 
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: cleanup_complete" in result.stdout
+
+
+def test_hotfix_rejects_authorization_phrase_mismatch_without_leaking_phrase(tmp_path: Path) -> None:
+    project, _remote, _before_commit = init_hotfix_project(tmp_path)
+    wrong_phrase = "wrong-secret"
+
+    result = run(
+        "hotfix",
+        "--project",
+        str(project),
+        "--target",
+        "main",
+        "--authorization-phrase",
+        wrong_phrase,
+    )
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    assert "authorization_phrase_mismatch" in result.stdout
+    assert wrong_phrase not in result.stdout
+    assert wrong_phrase not in result.stderr
+    status_text = (project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8")
+    assert wrong_phrase not in status_text
+    status = json.loads(status_text)
+    assert status["command"] == "hotfix"
+    assert status["details"]["reason"] == "authorization_phrase_mismatch"
+
+
+def test_hotfix_rejects_target_branch_without_allow_hotfix_push(tmp_path: Path) -> None:
+    project, _remote, _before_commit = init_hotfix_project(tmp_path, allow_hotfix=False)
+
+    result = run(
+        "hotfix",
+        "--project",
+        str(project),
+        "--target",
+        "main",
+        "--authorization-phrase",
+        HOTFIX_PHRASE,
+    )
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["command"] == "hotfix"
+    assert status["details"]["reason"] == "hotfix_push_not_allowed"
+
+
+def test_hotfix_rejects_when_head_is_not_based_on_latest_remote_target(tmp_path: Path) -> None:
+    project, remote, _before_commit = init_hotfix_project(tmp_path)
+    integrator = tmp_path / "integrator"
+    clone_result = subprocess.run(
+        ["git", "clone", str(remote), str(integrator)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
+    git(integrator, "config", "user.email", "test@example.com")
+    git(integrator, "config", "user.name", "Test User")
+    git(integrator, "checkout", "-B", "main", "origin/main")
+    (integrator / "remote.txt").write_text("remote advance\n", encoding="utf-8")
+    git(integrator, "add", "remote.txt")
+    git(integrator, "commit", "-m", "advance target")
+    git(integrator, "push", "origin", "main")
+    remote_head = git_bare(remote, "rev-parse", "refs/heads/main")
+
+    result = run(
+        "hotfix",
+        "--project",
+        str(project),
+        "--target",
+        "main",
+        "--authorization-phrase",
+        HOTFIX_PHRASE,
+    )
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    assert git_bare(remote, "rev-parse", "refs/heads/main") == remote_head
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["command"] == "hotfix"
+    assert status["details"]["reason"] == "hotfix_base_mismatch"
+    assert status["details"]["remoteHead"] == remote_head
+
+
+def test_hotfix_rejects_when_verify_command_fails(tmp_path: Path) -> None:
+    project, remote, before_commit = init_hotfix_project(
+        tmp_path,
+        verify_command="git rev-parse refs/heads/does-not-exist",
+    )
+
+    result = run(
+        "hotfix",
+        "--project",
+        str(project),
+        "--target",
+        "main",
+        "--authorization-phrase",
+        HOTFIX_PHRASE,
+    )
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    assert git_bare(remote, "rev-parse", "refs/heads/main") == before_commit
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["command"] == "hotfix"
+    assert status["details"]["reason"] == "hotfix_verify_failed"
+    assert status["details"]["returncode"] != 0
+
+
+def test_hotfix_pushes_head_to_target_and_writes_audit_record(tmp_path: Path) -> None:
+    project, _remote, before_commit = init_hotfix_project(tmp_path)
+    head_commit = git(project, "rev-parse", "HEAD")
+
+    result = run(
+        "hotfix",
+        "--project",
+        str(project),
+        "--target",
+        "main",
+        "--authorization-phrase",
+        HOTFIX_PHRASE,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: hotfix_complete" in result.stdout
+    git(project, "fetch", "origin", "main")
+    assert git(project, "rev-parse", "origin/main") == head_commit
+
+    run_files = sorted((project / ".pr-flow" / "runs").glob("hotfix-*.json"))
+    assert len(run_files) == 1
+    audit = json.loads(run_files[0].read_text(encoding="utf-8"))
+    assert audit["command"] == "hotfix"
+    assert audit["targetBranch"] == "main"
+    assert audit["beforeCommit"] == before_commit
+    assert audit["afterCommit"] == head_commit
+    assert audit["actor"]["name"] == "Test User"
+    assert audit["actor"]["email"] == "test@example.com"
+    assert audit["timestamp"]
+    assert audit["verification"]["command"] == "git rev-parse HEAD"
+    assert audit["verification"]["returncode"] == 0
+    assert audit["verification"]["status"] == "passed"
 
 
 def test_cleanup_merged_pr_checks_out_base_pulls_and_deletes_branches(tmp_path: Path) -> None:

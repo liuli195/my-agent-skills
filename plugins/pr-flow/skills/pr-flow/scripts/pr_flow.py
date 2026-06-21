@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
+import shlex
 import shutil
 import subprocess
 import time
@@ -150,9 +152,66 @@ def remote_for_base_branch(config: dict[str, Any], base_branch: str) -> str:
     return remote if isinstance(remote, str) and remote else "origin"
 
 
+def verify_authorization_phrase(config: dict[str, Any], phrase: str) -> None:
+    authorization = config.get("authorization")
+    if not isinstance(authorization, dict):
+        raise PrFlowError("authorization_phrase_missing", {"reason": "authorization_phrase_missing"})
+
+    algorithm = authorization.get("phraseHashAlgorithm")
+    expected_hash = authorization.get("phraseHash")
+    if algorithm != "md5":
+        raise PrFlowError(
+            "authorization_phrase_unsupported",
+            {
+                "reason": "authorization_phrase_unsupported",
+                "phraseHashAlgorithm": algorithm,
+            },
+        )
+    if not isinstance(expected_hash, str) or not expected_hash:
+        raise PrFlowError("authorization_phrase_missing", {"reason": "authorization_phrase_missing"})
+
+    actual_hash = hashlib.md5(phrase.encode("utf-8")).hexdigest()
+    if not hmac.compare_digest(actual_hash, expected_hash):
+        raise PrFlowError("authorization_phrase_mismatch", {"reason": "authorization_phrase_mismatch"})
+
+
 def defaults_from_config(config: dict[str, Any]) -> dict[str, Any]:
     defaults = config.get("defaults")
     return defaults if isinstance(defaults, dict) else {}
+
+
+def branch_config_for_target(config: dict[str, Any], target: str) -> dict[str, Any]:
+    defaults = defaults_from_config(config)
+    branches = config.get("branches")
+    branch_config = branches.get(target) if isinstance(branches, dict) else None
+    branch_config = branch_config if isinstance(branch_config, dict) else {}
+
+    merged = dict(defaults)
+    merged.update(branch_config)
+
+    default_hotfix = defaults.get("hotfix")
+    branch_hotfix = branch_config.get("hotfix")
+    hotfix_config: dict[str, Any] = {}
+    if isinstance(default_hotfix, dict):
+        hotfix_config.update(default_hotfix)
+    if isinstance(branch_hotfix, dict):
+        hotfix_config.update(branch_hotfix)
+    if hotfix_config:
+        merged["hotfix"] = hotfix_config
+    return merged
+
+
+def hotfix_remote(branch_config: dict[str, Any]) -> str:
+    remote = branch_config.get("remote")
+    return remote if isinstance(remote, str) and remote else "origin"
+
+
+def hotfix_verify_command(branch_config: dict[str, Any]) -> str:
+    hotfix_config = branch_config.get("hotfix")
+    verify_command = hotfix_config.get("verifyCommand") if isinstance(hotfix_config, dict) else None
+    if not isinstance(verify_command, str) or not verify_command:
+        raise PrFlowError("hotfix_verify_command_missing", {"reason": "hotfix_verify_command_missing"})
+    return verify_command
 
 
 def wait_config_from_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -613,6 +672,161 @@ def run_complete(args: argparse.Namespace) -> int:
     return run_cleanup(cleanup_args)
 
 
+def run_hotfix_verify_command(project: Path, command: str) -> subprocess.CompletedProcess[str]:
+    try:
+        command_args = shlex.split(command)
+    except ValueError as exc:
+        raise PrFlowError(
+            "hotfix_verify_command_parse_failed",
+            {
+                "reason": "hotfix_verify_command_parse_failed",
+                "command": command,
+                "error": str(exc),
+            },
+        ) from exc
+    if not command_args:
+        raise PrFlowError("hotfix_verify_command_missing", {"reason": "hotfix_verify_command_missing"})
+
+    try:
+        result = subprocess.run(
+            command_args,
+            cwd=project,
+            check=False,
+            text=True,
+            capture_output=True,
+            shell=False,
+        )
+    except FileNotFoundError as exc:
+        raise PrFlowError(
+            "hotfix_verify_failed",
+            {
+                "reason": "hotfix_verify_failed",
+                "command": command,
+                "returncode": 127,
+                "stdout": "",
+                "stderr": str(exc),
+            },
+        ) from exc
+
+    if result.returncode != 0:
+        details = command_failure_details("hotfix_verify_failed", result)
+        details["command"] = command
+        raise PrFlowError("hotfix_verify_failed", details)
+    return result
+
+
+def git_config_value(project: Path, key: str) -> str:
+    result = git(project, "config", "--get", key)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def hotfix_actor(project: Path) -> dict[str, str]:
+    return {
+        "name": git_config_value(project, "user.name"),
+        "email": git_config_value(project, "user.email"),
+    }
+
+
+def write_hotfix_audit(
+    project: Path,
+    *,
+    target: str,
+    remote: str,
+    before_commit: str,
+    after_commit: str,
+    verification: subprocess.CompletedProcess[str],
+    verify_command: str,
+) -> Path:
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    filename_timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    runs_dir = project / ".pr-flow" / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    audit_path = runs_dir / f"hotfix-{filename_timestamp}-{after_commit[:12]}.json"
+    payload = {
+        "command": "hotfix",
+        "targetBranch": target,
+        "remote": remote,
+        "beforeCommit": before_commit,
+        "afterCommit": after_commit,
+        "actor": hotfix_actor(project),
+        "timestamp": timestamp,
+        "verification": {
+            "command": verify_command,
+            "returncode": verification.returncode,
+            "stdout": verification.stdout.strip(),
+            "stderr": verification.stderr.strip(),
+            "status": "passed",
+        },
+    }
+    audit_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return audit_path
+
+
+def run_hotfix(args: argparse.Namespace) -> int:
+    project = resolve_project(args.project)
+    target = args.target
+    try:
+        config = load_config(project)
+        verify_authorization_phrase(config, args.authorization_phrase)
+        branch_config = branch_config_for_target(config, target)
+        remote = hotfix_remote(branch_config)
+        details: dict[str, Any] = {
+            "targetBranch": target,
+            "remote": remote,
+        }
+
+        if branch_config.get("allowHotfixPush") is not True:
+            details["reason"] = "hotfix_push_not_allowed"
+            return stop(project, args.command, "EXCEPTION_REQUIRED", "hotfix_push_not_allowed", details)
+
+        require_git_success(project, "git_fetch_target_failed", "fetch", remote, target)
+        remote_ref = f"{remote}/{target}"
+        remote_head = require_git_success(project, "git_remote_target_head_failed", "rev-parse", remote_ref).stdout.strip()
+        current_head = head_oid(project)
+        merge_base = require_git_success(project, "git_merge_base_failed", "merge-base", "HEAD", remote_ref).stdout.strip()
+        details.update(
+            {
+                "remoteHead": remote_head,
+                "currentHead": current_head,
+                "mergeBase": merge_base,
+            }
+        )
+        if merge_base != remote_head:
+            details["reason"] = "hotfix_base_mismatch"
+            return stop(project, args.command, "EXCEPTION_REQUIRED", "hotfix_base_mismatch", details)
+
+        verify_command = hotfix_verify_command(branch_config)
+        verification = run_hotfix_verify_command(project, verify_command)
+
+        require_git_success(project, "git_hotfix_push_failed", "push", remote, f"HEAD:refs/heads/{target}")
+        audit_path = write_hotfix_audit(
+            project,
+            target=target,
+            remote=remote,
+            before_commit=remote_head,
+            after_commit=current_head,
+            verification=verification,
+            verify_command=verify_command,
+        )
+
+        details.update(
+            {
+                "reason": "hotfix_complete",
+                "auditPath": str(audit_path.relative_to(project)),
+            }
+        )
+        write_status(project, args.command, "hotfix_complete", details)
+        print("status: hotfix_complete")
+        print(f"target: {target}")
+        print(f"after: {current_head}")
+        return 0
+    except FileNotFoundError:
+        details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
+        return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
+    except PrFlowError as exc:
+        return stop(project, args.command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
+
+
 def run_cleanup(args: argparse.Namespace) -> int:
     project = resolve_project(args.project)
     try:
@@ -689,6 +903,10 @@ def build_parser() -> argparse.ArgumentParser:
         if command == "cleanup":
             subparser.add_argument("--project", type=Path)
             subparser.add_argument("--pr")
+        if command == "hotfix":
+            subparser.add_argument("--project", type=Path)
+            subparser.add_argument("--target")
+            subparser.add_argument("--authorization-phrase")
         if command == "init":
             subparser.add_argument("--base-branch", default="main")
         subparser.set_defaults(command=command)
@@ -706,6 +924,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_complete(args)
     if args.command == "cleanup" and args.project is not None and args.pr is not None:
         return run_cleanup(args)
+    if (
+        args.command == "hotfix"
+        and args.project is not None
+        and args.target is not None
+        and args.authorization_phrase is not None
+    ):
+        return run_hotfix(args)
     print("status: not_implemented")
     return 2
 
