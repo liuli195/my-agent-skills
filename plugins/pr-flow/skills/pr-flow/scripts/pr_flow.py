@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import subprocess
@@ -293,11 +294,41 @@ def load_local_review_evidence(project: Path, config: dict[str, Any]) -> dict[st
     return evidence
 
 
-def local_review_evidence_passes(evidence: dict[str, Any], pr: dict[str, Any]) -> bool:
+def current_diff_fingerprint(project: Path, pr: dict[str, Any]) -> str:
+    base_ref = pr.get("baseRefName")
+    head_ref = pr.get("headRefName")
+    details = {
+        "reason": "local_review_diff_failed",
+        "baseRefName": base_ref,
+        "headRefName": head_ref,
+    }
+    if not isinstance(base_ref, str) or not base_ref or not isinstance(head_ref, str) or not head_ref:
+        raise PrFlowError("local_review_diff_failed", details)
+
+    command = ["git", "diff", "--binary", f"{base_ref}...{head_ref}"]
+    try:
+        result = subprocess.run(command, cwd=project, check=False, capture_output=True)
+    except FileNotFoundError as exc:
+        details["stderr"] = str(exc)
+        raise PrFlowError("local_review_diff_failed", details) from exc
+    if result.returncode != 0:
+        details.update(
+            {
+                "returncode": result.returncode,
+                "stdout": result.stdout.decode(errors="replace").strip(),
+                "stderr": result.stderr.decode(errors="replace").strip(),
+            }
+        )
+        raise PrFlowError("local_review_diff_failed", details)
+    return f"sha256:{hashlib.sha256(result.stdout).hexdigest()}"
+
+
+def local_review_evidence_passes(evidence: dict[str, Any], pr: dict[str, Any], diff_fingerprint: str) -> bool:
     return (
         evidence.get("status") == "pass"
         and evidence.get("base_ref") == pr.get("baseRefName")
         and evidence.get("head_ref") == pr.get("headRefName")
+        and evidence.get("diff_fingerprint") == diff_fingerprint
         and evidence.get("blocking_findings") == 0
     )
 
@@ -324,11 +355,12 @@ def check_review_gate(project: Path, config: dict[str, Any], pr: dict[str, Any])
     if mode in {"local", "dual"}:
         try:
             evidence = load_local_review_evidence(project, config)
+            diff_fingerprint = current_diff_fingerprint(project, pr)
         except PrFlowError as exc:
             details.update(exc.details)
             details["reason"] = exc.reason
             return stop_state("REPLY_OR_FIX_REQUIRED", exc.reason, details)
-        if not local_review_evidence_passes(evidence, pr):
+        if not local_review_evidence_passes(evidence, pr, diff_fingerprint):
             details["reason"] = "local_review_evidence_failed"
             return stop_state("REPLY_OR_FIX_REQUIRED", "local_review_evidence_failed", details)
 

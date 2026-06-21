@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import subprocess
@@ -48,6 +49,17 @@ def git(project: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def diff_fingerprint(project: Path, base_ref: str = "main", head_ref: str = "feature/example") -> str:
+    result = subprocess.run(
+        ["git", "diff", "--binary", f"{base_ref}...{head_ref}"],
+        cwd=project,
+        check=False,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stdout.decode(errors="replace") + result.stderr.decode(errors="replace")
+    return f"sha256:{hashlib.sha256(result.stdout).hexdigest()}"
+
+
 def init_repo(project: Path) -> str:
     project.mkdir()
     git(project, "init")
@@ -58,6 +70,14 @@ def init_repo(project: Path) -> str:
     git(project, "add", "README.md")
     git(project, "commit", "-m", "init")
     return git(project, "branch", "--show-current")
+
+
+def init_feature_branch(project: Path) -> None:
+    assert init_repo(project) == "main"
+    git(project, "checkout", "-b", "feature/example")
+    (project / "README.md").write_text("# Test Project\n\nFeature change\n", encoding="utf-8")
+    git(project, "add", "README.md")
+    git(project, "commit", "-m", "feature")
 
 
 def write_fake_gh(bin_dir: Path, *, stdout: str = "", stderr: str = "", exit_code: int = 0) -> Path:
@@ -172,7 +192,12 @@ def configure_complete(
     config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
-def write_review_pass(project: Path, relative_path: str = ".pr-flow/review-pass.json") -> None:
+def write_review_pass(
+    project: Path,
+    relative_path: str = ".pr-flow/review-pass.json",
+    *,
+    fingerprint: str | None = None,
+) -> None:
     evidence_path = project / relative_path
     evidence_path.parent.mkdir(parents=True, exist_ok=True)
     evidence_path.write_text(
@@ -181,6 +206,7 @@ def write_review_pass(project: Path, relative_path: str = ".pr-flow/review-pass.
                 "status": "pass",
                 "base_ref": "main",
                 "head_ref": "feature/example",
+                "diff_fingerprint": fingerprint or diff_fingerprint(project),
                 "blocking_findings": 0,
             }
         ),
@@ -457,7 +483,7 @@ def test_complete_wait_timeout_zero_reports_pending_checks_without_sleep(tmp_pat
 
 def test_complete_local_review_gate_accepts_review_pass_evidence(tmp_path: Path) -> None:
     project = tmp_path / "project"
-    project.mkdir()
+    init_feature_branch(project)
     configure_complete(project, review_mode="local", evidence_path=".pr-flow/review-pass.json")
     write_review_pass(project)
     fake_bin, _calls_path = write_fake_gh_sequence(
@@ -474,9 +500,32 @@ def test_complete_local_review_gate_accepts_review_pass_evidence(tmp_path: Path)
     assert "status: ready_to_merge" in result.stdout
 
 
+def test_complete_local_review_gate_blocks_stale_diff_evidence(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    init_feature_branch(project)
+    configure_complete(project, review_mode="local", evidence_path=".pr-flow/review-pass.json")
+    write_review_pass(project, fingerprint="sha256:" + "0" * 64)
+    fake_bin, _calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="CHANGES_REQUESTED")},
+            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="CHANGES_REQUESTED")},
+        ],
+    )
+
+    result = run_with_path(fake_bin, "complete", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "REPLY_OR_FIX_REQUIRED"
+    assert status["command"] == "complete"
+    assert status["details"]["reason"] == "local_review_evidence_failed"
+
+
 def test_complete_dual_review_gate_requires_github_and_local_evidence(tmp_path: Path) -> None:
     project = tmp_path / "project"
-    project.mkdir()
+    init_feature_branch(project)
     configure_complete(project, review_mode="dual", evidence_path=".pr-flow/review-pass.json")
     write_review_pass(project)
     fake_bin, _calls_path = write_fake_gh_sequence(
