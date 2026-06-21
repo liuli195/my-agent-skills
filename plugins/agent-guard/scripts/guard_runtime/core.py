@@ -139,6 +139,10 @@ def adapt_lifecycle_event(source: str, event: str, payload: dict[str, Any], proj
     else:
         tool_name = payload.get("tool_name") or payload.get("tool", {}).get("name")
         tool_input = payload.get("tool_input") or payload.get("input") or payload.get("parameters") or {}
+        if not isinstance(tool_input, dict):
+            tool_input = {}
+        if "command" not in tool_input and isinstance(payload.get("command"), str):
+            tool_input = {**tool_input, "command": payload["command"]}
         envelope["payload"] = {
             "tool": {"name": tool_name},
             "tool_input": tool_input,

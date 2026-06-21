@@ -255,6 +255,51 @@ def test_fake_reviewer_results_bypass_real_sdk_for_tests(tmp_path: Path) -> None
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_run_archives_review_input_snapshots_under_output_dir(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    head = init_repo(project)
+    input_dir = project / "review inputs"
+    output_dir = tmp_path / "out"
+    diff_file = write_file(input_dir / "change diff.patch", "diff body\n")
+    spec_file = write_file(input_dir / "spec file.md", "spec body\n")
+    design_file = write_file(input_dir / "design file.md", "design body\n")
+    tasks_file = write_file(input_dir / "tasks file.md", "tasks body\n")
+    tests_file = write_file(input_dir / "tests file.txt", "tests body\n")
+
+    result = run(
+        "run",
+        "--change",
+        "demo",
+        "--base-ref",
+        head,
+        "--head-ref",
+        head,
+        "--diff-file",
+        str(diff_file),
+        "--spec-file",
+        str(spec_file),
+        "--design-file",
+        str(design_file),
+        "--tasks-file",
+        str(tasks_file),
+        "--tests-file",
+        str(tests_file),
+        "--output-dir",
+        str(output_dir),
+        "--fake-reviewer-results",
+        "[]",
+        cwd=project,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    inputs_dir = output_dir / "inputs"
+    assert (inputs_dir / "diff.patch").read_text(encoding="utf-8") == "diff body\n"
+    assert (inputs_dir / "spec.md").read_text(encoding="utf-8") == "spec body\n"
+    assert (inputs_dir / "design.md").read_text(encoding="utf-8") == "design body\n"
+    assert (inputs_dir / "tasks.md").read_text(encoding="utf-8") == "tasks body\n"
+    assert (inputs_dir / "tests.txt").read_text(encoding="utf-8") == "tests body\n"
+
+
 def test_prompt_contains_review_context(tmp_path: Path) -> None:
     head = init_repo(tmp_path / "repo")
     args = review_args(tmp_path / "repo", head, tmp_path / "out")
@@ -669,6 +714,63 @@ def test_aggregate_maps_common_reviewer_severities_to_non_blocking_findings() ->
     assert summary["findings"][0]["location"] == "tests"
     assert summary["findings"][0]["recommendation"] == "Cover the boundary."
     assert summary["findings"][2]["location"] == "app.py:3"
+
+
+def test_aggregate_treats_pass_dict_findings_with_no_issues_as_non_blocking() -> None:
+    module = load_script_module()
+
+    summary = module.aggregate(
+        [
+            {
+                "role": "implementation-correctness",
+                "status": "pass",
+                "findings": {
+                    "spec_compliance": {"verdict": "pass", "details": "Matches spec."},
+                    "issues": [],
+                },
+            }
+        ],
+        [],
+    )
+
+    assert summary["blocking_findings"] == 0
+    assert summary["findings"] == []
+
+
+def test_aggregate_converts_dict_gaps_to_non_blocking_findings() -> None:
+    module = load_script_module()
+
+    summary = module.aggregate(
+        [
+            {
+                "role": "tests-and-edge-cases",
+                "status": "pass_with_gaps",
+                "findings": {
+                    "summary": "Coverage is acceptable with gaps.",
+                    "gaps": [
+                        {
+                            "severity": "medium",
+                            "area": "manifest",
+                            "detail": "Missing required-field tests.",
+                            "recommendation": "Add one regression test.",
+                        },
+                        {
+                            "severity": "low",
+                            "area": "cli",
+                            "detail": "Unknown command path is not covered.",
+                        },
+                    ],
+                },
+            }
+        ],
+        [],
+    )
+
+    assert summary["blocking_findings"] == 0
+    assert [finding["severity"] for finding in summary["findings"]] == ["WARNING", "SUGGESTION"]
+    assert summary["findings"][0]["location"] == "manifest"
+    assert summary["findings"][0]["summary"] == "Missing required-field tests."
+    assert summary["findings"][0]["recommendation"] == "Add one regression test."
 
 
 def test_risk_review_skip_is_recorded(tmp_path: Path) -> None:

@@ -7,11 +7,18 @@ import os
 import subprocess
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 
 REQUIRED_FILE_ARGS = ["diff_file", "spec_file", "design_file", "tasks_file", "tests_file"]
+INPUT_SNAPSHOT_NAMES = {
+    "diff_file": "diff.patch",
+    "spec_file": "spec.md",
+    "design_file": "design.md",
+    "tasks_file": "tasks.md",
+    "tests_file": "tests.txt",
+}
 PLACEHOLDER_COMPAT_DISABLE_RISK_REVIEW = "__placeholder_compat__"
 REVIEWER_ROLES = [
     "spec-alignment",
@@ -376,6 +383,18 @@ def output_dir_for(review_args: ReviewArgs) -> Path:
     return Path(".local") / "cross-agent-review" / review_args.change / short_ref(review_args.head_ref)
 
 
+def archive_input_snapshots(review_args: ReviewArgs) -> ReviewArgs:
+    inputs_dir = output_dir_for(review_args) / "inputs"
+    inputs_dir.mkdir(parents=True, exist_ok=True)
+    replacements: dict[str, Path] = {}
+    for field, filename in INPUT_SNAPSHOT_NAMES.items():
+        source = getattr(review_args, field)
+        target = inputs_dir / filename
+        target.write_bytes(source.read_bytes())
+        replacements[field] = target
+    return replace(review_args, **replacements)
+
+
 def first_text(raw: dict, names: Sequence[str]) -> str:
     for name in names:
         value = raw.get(name)
@@ -404,6 +423,28 @@ def is_explicit_non_issue_observation(raw: dict) -> bool:
     return "severity" not in raw and "issue" in raw and raw.get("issue") in {None, False, ""}
 
 
+def normalize_reviewer_findings(role: str, reviewer: dict) -> list[dict]:
+    raw_findings = reviewer.get("findings", [])
+    if isinstance(raw_findings, list):
+        return raw_findings
+    if isinstance(raw_findings, dict):
+        issues = raw_findings.get("issues")
+        if isinstance(issues, list):
+            return [issue for issue in issues if isinstance(issue, dict)]
+        gaps = raw_findings.get("gaps")
+        if isinstance(gaps, list):
+            return [gap for gap in gaps if isinstance(gap, dict)]
+    return [
+        {
+            "severity": "CRITICAL",
+            "location": role,
+            "summary": "Reviewer returned invalid findings",
+            "evidence": json.dumps(reviewer, ensure_ascii=False),
+            "recommendation": "Rerun review or fix reviewer prompt",
+        }
+    ]
+
+
 def normalize_finding(raw: dict) -> dict:
     severity = normalize_severity(raw)
     return {
@@ -420,17 +461,7 @@ def aggregate(reviewers: list[dict], skipped: list[dict]) -> dict:
     seen: set[tuple[str, str, str]] = set()
     for reviewer in reviewers:
         role = str(reviewer.get("role", "unknown"))
-        raw_findings = reviewer.get("findings", [])
-        if not isinstance(raw_findings, list):
-            raw_findings = [
-                {
-                    "severity": "CRITICAL",
-                    "location": role,
-                    "summary": "Reviewer returned invalid findings",
-                    "evidence": json.dumps(reviewer, ensure_ascii=False),
-                    "recommendation": "Rerun review or fix reviewer prompt",
-                }
-            ]
+        raw_findings = normalize_reviewer_findings(role, reviewer)
         for raw in raw_findings:
             if not isinstance(raw, dict):
                 raw = {
@@ -504,7 +535,7 @@ def allowed_input_paths(review_args: ReviewArgs) -> list[Path]:
     ]
 
 
-def write_outputs(review_args: ReviewArgs, summary: dict) -> int:
+def write_outputs(review_args: ReviewArgs, summary: dict, extra_allowed_paths: Sequence[Path] = ()) -> int:
     out_dir = output_dir_for(review_args)
     out_dir.mkdir(parents=True, exist_ok=True)
     report_text = render_report(review_args, summary)
@@ -517,7 +548,7 @@ def write_outputs(review_args: ReviewArgs, summary: dict) -> int:
         ensure_clean_subject(
             Path.cwd(),
             review_args.head_ref,
-            [*allowed_input_paths(review_args), report_path, results_path, pass_path],
+            [*extra_allowed_paths, *allowed_input_paths(review_args), report_path, results_path, pass_path],
         )
         report_hash = hashlib.sha256(report_path.read_bytes()).hexdigest()
         write_json(
@@ -543,19 +574,21 @@ def run_review(args: argparse.Namespace) -> int:
         return 2
     try:
         review_args = parse_review_args(args)
-        ensure_clean_subject(Path.cwd(), review_args.head_ref, allowed_input_paths(review_args))
+        original_input_paths = allowed_input_paths(review_args)
+        ensure_clean_subject(Path.cwd(), review_args.head_ref, original_input_paths)
+        review_args = archive_input_snapshots(review_args)
         sdk_python = resolve_sdk_python(
             review_args.sdk_python,
             require_real_sdk=review_args.fake_reviewer_results is None or review_args.sdk_python is not None,
         )
-        ensure_clean_subject(Path.cwd(), review_args.head_ref, allowed_input_paths(review_args))
+        ensure_clean_subject(Path.cwd(), review_args.head_ref, [*original_input_paths, *allowed_input_paths(review_args)])
         reviewers = dispatch_reviewers(review_args, sdk_python)
         skipped = []
         if review_args.disable_risk_review:
             skipped.append({"role": "risk-review", "reason": review_args.disable_risk_review})
             reviewers = [item for item in reviewers if item.get("role") != "risk-review"]
         summary = aggregate(reviewers, skipped)
-        status = write_outputs(review_args, summary)
+        status = write_outputs(review_args, summary, original_input_paths)
     except (ValueError, json.JSONDecodeError) as exc:
         print("status: failed")
         print(f"error: {exc}")

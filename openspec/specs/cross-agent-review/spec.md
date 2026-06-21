@@ -2,7 +2,6 @@
 
 ## Purpose
 Define the independent cross-agent review workflow, reviewer roles, report contract, and pass marker used as reusable review evidence.
-
 ## Requirements
 ### Requirement: 跨 agent review 输入契约
 系统 MUST 接收明确的 review input（审查输入），并以该输入作为所有 reviewer agent（审查代理）的共同上下文。首版实现 MAY 通过 CLI 文件参数表达输入，不要求创建独立 input package 文件。
@@ -113,3 +112,15 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 #### Scenario: 不推进 Comet phase
 - **WHEN** review mechanism（审查机制）完成 review
 - **THEN** 它不得修改 `.comet.yaml` 或推进 Comet phase（阶段）
+
+### Requirement: review input snapshots
+系统 MUST 在 review output（审查输出）目录中保存本次 review（审查）使用的输入文件快照，方便复现和排障。
+
+#### Scenario: 输入快照写入输出目录
+- **WHEN** cross-agent-review（跨代理审查）运行并接收 diff、spec、design、tasks 和 tests 输入文件
+- **THEN** 系统 MUST 在输出目录的 `inputs/` 子目录写入 `diff.patch`、`spec.md`、`design.md`、`tasks.md` 和 `tests.txt`
+
+#### Scenario: reviewer 使用输入快照
+- **WHEN** reviewer agent（审查代理）收到审查提示
+- **THEN** 提示中的 diff、spec、design、tasks 和 tests 内容 MUST 来自输出目录中的输入快照
+

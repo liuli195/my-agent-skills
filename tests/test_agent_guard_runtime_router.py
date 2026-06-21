@@ -9,6 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "agent-guard"
 PLUGIN_SKILL = PLUGIN_ROOT / "skills" / "agent-guard"
 HOOK_ROUTER = PLUGIN_ROOT / "scripts" / "hook_router.py"
+RUN_GUARD_EVENT = PLUGIN_SKILL / "scripts" / "run_guard_event.py"
 RUNTIME_CLI = PLUGIN_ROOT / "scripts" / "guard_runtime" / "cli.py"
 MINIMAL_PROFILE = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "minimal"
 
@@ -26,9 +27,42 @@ def run_hook(args: list[str], payload: dict) -> subprocess.CompletedProcess[str]
     )
 
 
+def run_hook_stdin(args: list[str], payload: dict) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(HOOK_ROUTER), *args],
+        cwd=REPO_ROOT,
+        input=json.dumps(payload, ensure_ascii=False),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
 def run_cli(args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(RUNTIME_CLI), *args],
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
+def run_guard_event(project: Path, user_home: Path, event_file: Path, event: dict) -> subprocess.CompletedProcess[str]:
+    event_file.write_text(json.dumps(event, ensure_ascii=False), encoding="utf-8")
+    return subprocess.run(
+        [
+            sys.executable,
+            str(RUN_GUARD_EVENT),
+            "--project",
+            str(project),
+            "--user-home",
+            str(user_home),
+            "--event",
+            str(event_file),
+        ],
         cwd=REPO_ROOT,
         text=True,
         stdout=subprocess.PIPE,
@@ -359,6 +393,137 @@ def test_global_command_guard_denies_without_session_focus(tmp_path: Path) -> No
     assert ".local" in payload["failing_guards"][0]["evidence_path"]
     audit = json.loads(Path(payload["audit_path"]).read_text(encoding="utf-8"))
     assert audit["detail"]["kind"] == "global_command_guard"
+
+
+def test_hook_router_preserves_top_level_command_for_global_command_guard(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    write_global_command_guard(profile, "verify_requires_review", "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) build --apply")
+
+    result = pre_tool_payload(
+        project,
+        user_home,
+        {
+            "session_id": "session-1",
+            "cwd": str(project),
+            "tool_name": "Bash",
+            "command": "comet-guard.sh demo build --apply",
+        },
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "deny"
+    assert payload["reason"] == "global_command_guard_required"
+    assert payload["captures"] == {"change": "demo"}
+
+
+def test_hook_router_blocks_codex_stdin_hook_with_native_deny_output(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    write_global_command_guard(profile, "verify_requires_review", "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) build --apply")
+
+    result = run_hook_stdin(
+        [
+            "--source",
+            "codex",
+            "--event",
+            "PreToolUse",
+            "--project",
+            str(project),
+            "--user-home",
+            str(user_home),
+        ],
+        {
+            "session_id": "session-1",
+            "cwd": str(project),
+            "tool_name": "Bash",
+            "tool_input": {"command": "comet-guard.sh demo build --apply"},
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = body(result)
+    assert payload == {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "global_command_guard_required\n先生成证据。",
+        }
+    }
+    assert result.stderr == ""
+
+
+def test_hook_router_blocks_claude_stdin_hook_with_exit_code_2(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    write_global_command_guard(profile, "verify_requires_review", "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) build --apply")
+
+    result = run_hook_stdin(
+        [
+            "--source",
+            "claude",
+            "--event",
+            "PreToolUse",
+            "--project",
+            str(project),
+            "--user-home",
+            str(user_home),
+        ],
+        {
+            "session_id": "session-1",
+            "cwd": str(project),
+            "tool_name": "Bash",
+            "tool_input": {"command": "comet-guard.sh demo build --apply"},
+        },
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "deny"
+    assert payload["reason"] == "global_command_guard_required"
+    assert "global_command_guard_required" in result.stderr
+
+
+def test_run_guard_event_preserves_standard_payload_command_for_global_command_guard(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    profile = user_home / ".agents" / "guards" / "personal-policy"
+    profile.mkdir(parents=True)
+    init_git_repo(project)
+    write_global_command_guard(profile, "verify_requires_review", "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) build --apply")
+
+    result = run_guard_event(
+        project,
+        user_home,
+        tmp_path / "event.json",
+        {
+            "source": "codex",
+            "event_type": "codex.pre_tool_use",
+            "context": {
+                "session_id": "s1",
+                "cwd": str(project),
+                "runtime_scope": "project",
+            },
+            "tool": {"name": "Bash"},
+            "payload": {"command": "comet-guard.sh demo build --apply"},
+        },
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "deny"
+    assert payload["reason"] == "global_command_guard_required"
+    assert payload["captures"] == {"change": "demo"}
 
 
 def test_global_command_guard_passes_with_valid_evidence(tmp_path: Path) -> None:
