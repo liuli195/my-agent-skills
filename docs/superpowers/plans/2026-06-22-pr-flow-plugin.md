@@ -571,7 +571,7 @@ git commit -m "feat: 实现 pr-flow 诊断状态"
 - Modify: `tests/test_pr_flow_cli.py`
 - Modify: `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py`
 
-- [ ] **Step 1: Write failing tests for PR creation and sync commands**
+- [x] **Step 1: Write failing tests for PR creation and sync commands**
 
 Add tests with fake `gh` command logs:
 
@@ -603,7 +603,7 @@ def test_complete_creates_pr_when_no_pr_exists(tmp_path: Path) -> None:
 
 Define `fake_gh_sequence` and `run_with_path` in the test file. The fake `gh` should log arguments and return outputs in order.
 
-- [ ] **Step 2: Write failing review gate tests**
+- [x] **Step 2: Write failing review gate tests**
 
 Add focused tests for modes:
 - `reviewGate.mode: skip` does not call review status.
@@ -634,7 +634,7 @@ def write_review_pass(path: Path, base_ref: str, head_ref: str) -> None:
     )
 ```
 
-- [ ] **Step 3: Run tests and verify they fail**
+- [x] **Step 3: Run tests and verify they fail**
 
 Run:
 
@@ -644,7 +644,7 @@ python -m pytest tests/test_pr_flow_cli.py -q
 
 Expected: FAIL in PR sync and review gate tests.
 
-- [ ] **Step 4: Implement PR sync and check parsing helpers**
+- [x] **Step 4: Implement PR sync and check parsing helpers**
 
 Implement:
 - `find_pr(project) -> dict | None`
@@ -656,7 +656,7 @@ Implement:
 
 Keep wait tests fast by allowing `wait.timeoutSeconds: 0` in test config.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 Run:
 
@@ -666,7 +666,7 @@ python -m pytest tests/test_pr_flow_cli.py -q
 
 Expected: tests for init, diagnose, PR sync, checks, and review gate pass.
 
-- [ ] **Step 6: Commit PR sync and review gate**
+- [x] **Step 6: Commit PR sync and review gate**
 
 ```bash
 git add plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py tests/test_pr_flow_cli.py
