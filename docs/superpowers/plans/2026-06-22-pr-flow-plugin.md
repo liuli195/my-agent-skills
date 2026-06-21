@@ -855,7 +855,7 @@ git commit -m "feat: 实现 PR 完整流程"
 - Modify: `tests/test_pr_flow_cli.py`
 - Modify: `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py`
 
-- [ ] **Step 1: Write failing authorization phrase tests**
+- [x] **Step 1: Write failing authorization phrase tests**
 
 Append:
 
@@ -881,7 +881,7 @@ def test_authorization_phrase_matches_md5_hash(tmp_path: Path) -> None:
     assert "authorization_phrase_mismatch" in result.stdout
 ```
 
-- [ ] **Step 2: Write failing hotfix tests**
+- [x] **Step 2: Write failing hotfix tests**
 
 Cover:
 - target branch missing `allowHotfixPush: true` -> refuse.
@@ -890,7 +890,7 @@ Cover:
 - valid hotfix pushes `HEAD:refs/heads/main` and reads back remote.
 - audit record contains target branch, before/after commit, actor, timestamp, verification result.
 
-- [ ] **Step 3: Run hotfix tests and verify they fail**
+- [x] **Step 3: Run hotfix tests and verify they fail**
 
 Run:
 
@@ -900,7 +900,7 @@ python -m pytest tests/test_pr_flow_cli.py -q
 
 Expected: FAIL in authorization and hotfix tests.
 
-- [ ] **Step 4: Implement authorization phrase helpers**
+- [x] **Step 4: Implement authorization phrase helpers**
 
 Implement:
 - `verify_authorization_phrase(config: dict, phrase: str) -> None`
@@ -908,7 +908,7 @@ Implement:
 - never print or persist the phrase
 - current command only; no state file for authorization
 
-- [ ] **Step 5: Implement hotfix**
+- [x] **Step 5: Implement hotfix**
 
 Implement:
 - Require `--target`.
@@ -922,7 +922,7 @@ Implement:
 - Fetch/read back remote target and compare to `HEAD`.
 - Write minimal audit JSON under `.pr-flow/runs/`.
 
-- [ ] **Step 6: Run hotfix tests**
+- [x] **Step 6: Run hotfix tests**
 
 Run:
 
@@ -932,7 +932,7 @@ python -m pytest tests/test_pr_flow_cli.py -q
 
 Expected: hotfix tests pass.
 
-- [ ] **Step 7: Commit hotfix**
+- [x] **Step 7: Commit hotfix**
 
 ```bash
 git add plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py tests/test_pr_flow_cli.py

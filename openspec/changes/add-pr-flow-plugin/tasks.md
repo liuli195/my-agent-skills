@@ -33,8 +33,8 @@
 
 ## 6. Hotfix And Tweak
 
-- [ ] 6.1 Implement authorization phrase hash verification for steps that already require explicit confirmation.
-- [ ] 6.2 Implement hotfix target branch allow-list, base check, verify command, protected push, remote readback, and minimal audit record.
+- [x] 6.1 Implement authorization phrase hash verification for steps that already require explicit confirmation.
+- [x] 6.2 Implement hotfix target branch allow-list, base check, verify command, protected push, remote readback, and minimal audit record.
 - [ ] 6.3 Implement tweak PR path with required reason and PR body marker.
 
 ## 7. Packaging And Release Projection

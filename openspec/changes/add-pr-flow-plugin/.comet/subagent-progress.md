@@ -76,10 +76,22 @@
 - Spec review: APPROVED by main session after two subagent transport failures
 - Quality review: APPROVED by 019eeb93-1f71-74d1-8e48-de6cd8bfd7a4
 
+### Task 8: Authorization Phrase And Hotfix
+
+- OpenSpec tasks: `6.1`, `6.2`
+- Implementation commit: 84929263e26c8b65eb871836070f41e6199da2de
+- Fix commit: 9835b88fca703e64c1cc24dc3eeab8ae2e12a8c4
+- Fix commit 2: 4e22b45
+- Fix commit 3: f8dac7e7f5d180c666ad8e9a783bfcd40e8be869
+- RED evidence: CLI tests failed with 5 new hotfix failures because hotfix arguments were not wired.
+- GREEN evidence: CLI tests passed with 39 tests; combined CLI/package tests passed with 46 tests after Windows verify-command parsing fix.
+- Spec review: APPROVED by 019eebc8-348a-7020-8fc8-c11a303e60f8
+- Quality review: APPROVED by 019eebd9-8252-73b1-a550-bd487cecb345
+
 ## Current Task
 
-- Plan task: `Task 8: Authorization Phrase And Hotfix`
-- OpenSpec task: `6.1 Implement authorization phrase hash verification for steps that already require explicit confirmation.`
+- Plan task: `Task 9: Tweak Path`
+- OpenSpec task: `6.3 Implement tweak PR path with required reason and PR body marker.`
 - Stage: ready-for-implementation
 - Rounds: 0
 
