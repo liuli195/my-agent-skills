@@ -109,28 +109,27 @@
 - Spec review: APPROVED by 019eec1a-f20b-7193-86f7-fdbe3f6d91e2
 - Quality review: APPROVED by 019eec1d-fe80-7832-a5af-1f3819d9d0e7
 
+### Task 11: End-To-End Regression And OpenSpec Closure
+
+- OpenSpec tasks: `8.1`, `8.2`, `8.3`, `8.4`
+- Verification evidence: focused pytest passed with 52 tests; `python scripts/check.py build` passed; `openspec validate add-pr-flow-plugin --type change --strict` passed; final `python scripts/check.py verify` passed with 322 tests.
+- Fix commit: cf25cba
+- Fix evidence: full verify initially failed because release-flow projection validation did not recognize `pr-flow`; after whitelist and test sync, targeted tests and full verify passed.
+- Report: `docs/superpowers/reports/2026-06-22-add-pr-flow-plugin-verify.md`
+
 ## Current Task
 
-- Plan task: `Task 11: End-To-End Regression And OpenSpec Closure`
-- OpenSpec tasks: `8.1`, `8.2`, `8.3`, `8.4`
-- Stage: ready-for-verification
+- Plan task: complete
+- OpenSpec tasks: complete
+- Stage: complete
 - Rounds: 0
-
-## Implementer
-
-- Agent: pending
-- Commit: pending
-- Changed files: pending
-- RED evidence: pending
-- GREEN evidence: pending
-- Concerns: pending
 
 ## Spec Review
 
-- Status: pending
-- Feedback: pending
+- Status: pending final archive
+- Feedback: local verification complete
 
 ## Quality Review
 
-- Status: pending
-- Feedback: pending
+- Status: local verification passed
+- Feedback: no remaining local test failures

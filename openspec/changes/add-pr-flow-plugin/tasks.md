@@ -45,7 +45,7 @@
 
 ## 8. Verification
 
-- [ ] 8.1 Run focused script tests for config, diagnose, lifecycle, cleanup, hotfix, and tweak.
-- [ ] 8.2 Run plugin package validation.
-- [ ] 8.3 Run the repository's required end-to-end regression for plugin changes.
-- [ ] 8.4 Write verification report covering implemented requirements and skipped non-goals.
+- [x] 8.1 Run focused script tests for config, diagnose, lifecycle, cleanup, hotfix, and tweak.
+- [x] 8.2 Run plugin package validation.
+- [x] 8.3 Run the repository's required end-to-end regression for plugin changes.
+- [x] 8.4 Write verification report covering implemented requirements and skipped non-goals.

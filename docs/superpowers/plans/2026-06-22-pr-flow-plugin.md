@@ -1073,7 +1073,7 @@ git commit -m "test: 覆盖 pr-flow 插件包校验"
 **Files:**
 - Modify: `openspec/changes/add-pr-flow-plugin/tasks.md`
 
-- [ ] **Step 1: Run focused test suite**
+- [x] **Step 1: Run focused test suite**
 
 Run:
 
@@ -1083,7 +1083,7 @@ python -m pytest tests/test_pr_flow_plugin_package.py tests/test_pr_flow_cli.py 
 
 Expected: PASS.
 
-- [ ] **Step 2: Run plugin build checks**
+- [x] **Step 2: Run plugin build checks**
 
 Run:
 
@@ -1093,7 +1093,7 @@ python scripts/check.py build
 
 Expected: exit code 0 and `status: build checks passed`.
 
-- [ ] **Step 3: Run full repository verification**
+- [x] **Step 3: Run full repository verification**
 
 Run:
 
@@ -1103,7 +1103,7 @@ python scripts/check.py verify
 
 Expected: exit code 0 and full pytest suite passes.
 
-- [ ] **Step 4: Run OpenSpec validation**
+- [x] **Step 4: Run OpenSpec validation**
 
 Run:
 
@@ -1113,11 +1113,11 @@ openspec validate add-pr-flow-plugin --type change --strict
 
 Expected: change is valid.
 
-- [ ] **Step 5: Mark OpenSpec tasks complete**
+- [x] **Step 5: Mark OpenSpec tasks complete**
 
 Update `openspec/changes/add-pr-flow-plugin/tasks.md` only after the matching tests and validations pass. Do not check off tasks before evidence exists.
 
-- [ ] **Step 6: Write verification report**
+- [x] **Step 6: Write verification report**
 
 Create a report under `docs/superpowers/reports/` only if the project workflow requires it at implementation time. The report must list:
 - focused pytest command and result,
@@ -1126,7 +1126,7 @@ Create a report under `docs/superpowers/reports/` only if the project workflow r
 - OpenSpec validation result,
 - any intentionally skipped non-goals.
 
-- [ ] **Step 7: Commit closure**
+- [x] **Step 7: Commit closure**
 
 ```bash
 git add openspec/changes/add-pr-flow-plugin/tasks.md docs/superpowers/reports
