@@ -38,3 +38,10 @@
 - [x] 6.2 Normalize dict-shaped reviewer `findings` with `issues` or `gaps` without creating false CRITICAL（严重）findings.
 - [x] 6.3 Add regression tests for pass dict findings and gap dict findings.
 - [x] 6.4 Re-run cross-agent-review（跨代理审查）tests and full repository verify（验证）.
+
+## 7. Agent Guard Hook Blocking Hotfix
+
+- [x] 7.1 Reproduce that Global Command Guard（全局命令守卫）writes deny audit（拒绝审计） but the host still executes the Comet build transition.
+- [x] 7.2 Align stdin hook（标准输入钩子） deny/ask results with the host block exit code `2`.
+- [x] 7.3 Keep `--payload-file` debug semantics unchanged for runtime tests and standard event bridge（标准事件桥接） calls.
+- [x] 7.4 Add regression coverage for stdin hook blocking and re-run Agent Guard runtime（运行时） tests.

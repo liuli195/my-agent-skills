@@ -10,6 +10,21 @@ from pathlib import Path
 from guard_runtime.core import adapt_lifecycle_event, route_pre_tool_use, write_session_observation
 
 
+def hook_block_reason(body: dict) -> str:
+    parts = [str(body.get("reason") or "agent_guard_blocked")]
+    suggestion = body.get("suggestion")
+    if suggestion:
+        parts.append(str(suggestion))
+    return "\n".join(parts)
+
+
+def exit_code_for_pre_tool_use(body: dict, code: int, stdin_hook: bool) -> int:
+    if stdin_hook and body.get("status") in {"deny", "ask"}:
+        print(hook_block_reason(body), file=sys.stderr)
+        return 2
+    return code
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Agent Guard Hook Router（钩子路由器）。")
     parser.add_argument("--source", choices=["codex", "claude"], required=True, help="Hook（钩子）来源。")
@@ -60,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
     body, code = route_pre_tool_use(project, user_home, envelope)
     json.dump(body, sys.stdout, ensure_ascii=False)
     sys.stdout.write("\n")
-    return code
+    return exit_code_for_pre_tool_use(body, code, args.payload_file is None)
 
 
 if __name__ == "__main__":

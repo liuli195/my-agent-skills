@@ -27,6 +27,18 @@ def run_hook(args: list[str], payload: dict) -> subprocess.CompletedProcess[str]
     )
 
 
+def run_hook_stdin(args: list[str], payload: dict) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(HOOK_ROUTER), *args],
+        cwd=REPO_ROOT,
+        input=json.dumps(payload, ensure_ascii=False),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
 def run_cli(args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(RUNTIME_CLI), *args],
@@ -407,6 +419,40 @@ def test_hook_router_preserves_top_level_command_for_global_command_guard(tmp_pa
     assert payload["status"] == "deny"
     assert payload["reason"] == "global_command_guard_required"
     assert payload["captures"] == {"change": "demo"}
+
+
+def test_hook_router_blocks_stdin_hook_denies_with_exit_code_2(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    write_global_command_guard(profile, "verify_requires_review", "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) build --apply")
+
+    result = run_hook_stdin(
+        [
+            "--source",
+            "codex",
+            "--event",
+            "PreToolUse",
+            "--project",
+            str(project),
+            "--user-home",
+            str(user_home),
+        ],
+        {
+            "session_id": "session-1",
+            "cwd": str(project),
+            "tool_name": "Bash",
+            "tool_input": {"command": "comet-guard.sh demo build --apply"},
+        },
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "deny"
+    assert payload["reason"] == "global_command_guard_required"
+    assert "global_command_guard_required" in result.stderr
 
 
 def test_run_guard_event_preserves_standard_payload_command_for_global_command_guard(tmp_path: Path) -> None:
