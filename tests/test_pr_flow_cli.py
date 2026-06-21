@@ -624,6 +624,33 @@ def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path) 
     assert status["command"] == "cleanup"
 
 
+def test_complete_returns_cleanup_stop_when_cleanup_fails_after_merge(tmp_path: Path) -> None:
+    project, _remote = init_complete_project(tmp_path)
+    head_oid = git(project, "rev-parse", "HEAD")
+    fake_bin, calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {"stdout": passing_pr_view_json(project)},
+            {"stdout": passing_pr_view_json(project)},
+            {"stdout": ""},
+            {"stdout": cleanup_pr_view_json(state="OPEN")},
+        ],
+    )
+
+    result = run_with_path(fake_bin, "complete", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    assert "pr_not_merged" in result.stdout
+    calls = json.loads(calls_path.read_text(encoding="utf-8"))
+    assert calls[2] == ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid]
+    assert calls[3] == ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"]
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "EXCEPTION_REQUIRED"
+    assert status["command"] == "cleanup"
+    assert status["details"]["reason"] == "pr_not_merged"
+
+
 def test_complete_uses_configured_merge_strategy_flag(tmp_path: Path) -> None:
     for strategy, expected_flag in [("merge", "--merge"), ("squash", "--squash"), ("rebase", "--rebase")]:
         case_tmp = tmp_path / strategy
@@ -693,6 +720,78 @@ def test_complete_rejects_when_head_moved_before_merge(tmp_path: Path) -> None:
     assert status["status"] == "EXCEPTION_REQUIRED"
     assert status["command"] == "complete"
     assert status["details"]["reason"] == "head_moved"
+
+
+def test_complete_rejects_missing_head_ref_oid_without_merge(tmp_path: Path) -> None:
+    project, _remote = init_complete_project(tmp_path)
+    fake_bin, calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {
+                "stdout": pr_view_json(
+                    checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                    review_decision="APPROVED",
+                )
+            },
+            {
+                "stdout": pr_view_json(
+                    checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                    review_decision="APPROVED",
+                )
+            },
+        ],
+    )
+
+    result = run_with_path(fake_bin, "complete", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    calls = json.loads(calls_path.read_text(encoding="utf-8"))
+    assert calls == [
+        [
+            "pr",
+            "view",
+            "--json",
+            "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid",
+        ],
+        [
+            "pr",
+            "view",
+            "--json",
+            "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid",
+        ],
+    ]
+    assert all(call[:3] != ["pr", "merge", "12"] for call in calls)
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "EXCEPTION_REQUIRED"
+    assert status["command"] == "complete"
+    assert status["details"]["reason"] == "missing_head_ref_oid"
+
+
+def test_complete_reports_exception_when_gh_pr_merge_fails(tmp_path: Path) -> None:
+    project, _remote = init_complete_project(tmp_path)
+    head_oid = git(project, "rev-parse", "HEAD")
+    fake_bin, calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {"stdout": passing_pr_view_json(project)},
+            {"stdout": passing_pr_view_json(project)},
+            {"stderr": "merge failed\n", "exit_code": 1},
+        ],
+    )
+
+    result = run_with_path(fake_bin, "complete", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    assert "gh_pr_merge_failed" in result.stdout
+    calls = json.loads(calls_path.read_text(encoding="utf-8"))
+    assert calls[2] == ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid]
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "EXCEPTION_REQUIRED"
+    assert status["command"] == "complete"
+    assert status["details"]["reason"] == "gh_pr_merge_failed"
+    assert status["details"]["stderr"] == "merge failed"
 
 
 def test_complete_rejects_unknown_merge_strategy(tmp_path: Path) -> None:
