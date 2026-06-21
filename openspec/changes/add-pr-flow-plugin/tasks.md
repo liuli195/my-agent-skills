@@ -22,8 +22,8 @@
 - [x] 4.1 Implement PR create/sync from the current branch.
 - [x] 4.2 Implement checks polling using configured wait settings.
 - [x] 4.3 Implement review gate modes: `skip`, `github`, `local`, and `dual`.
-- [ ] 4.4 Implement head-locked merge for `merge`, `squash`, and `rebase`.
-- [ ] 4.5 Implement `complete` orchestration from PR sync through cleanup.
+- [x] 4.4 Implement head-locked merge for `merge`, `squash`, and `rebase`.
+- [x] 4.5 Implement `complete` orchestration from PR sync through cleanup.
 
 ## 5. Cleanup
 

@@ -779,7 +779,7 @@ git commit -m "feat: 实现已合并 PR 清理"
 - Modify: `tests/test_pr_flow_cli.py`
 - Modify: `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py`
 
-- [ ] **Step 1: Write failing merge strategy tests**
+- [x] **Step 1: Write failing merge strategy tests**
 
 Add fake `gh` log tests for:
 - `mergeStrategy: merge` calls `gh pr merge --merge --match-head-commit <sha>`.
@@ -787,7 +787,7 @@ Add fake `gh` log tests for:
 - `mergeStrategy: rebase` calls `--rebase`.
 - Moved head rejects before merge and outputs `EXCEPTION_REQUIRED`.
 
-- [ ] **Step 2: Write complete happy path orchestration test**
+- [x] **Step 2: Write complete happy path orchestration test**
 
 Use fake `gh` outputs to assert ordering:
 
@@ -811,7 +811,7 @@ def test_complete_runs_sync_checks_review_merge_and_cleanup_in_order(tmp_path: P
     assert "--match-head-commit " + head in log
 ```
 
-- [ ] **Step 3: Run tests and verify they fail**
+- [x] **Step 3: Run tests and verify they fail**
 
 Run:
 
@@ -821,7 +821,7 @@ python -m pytest tests/test_pr_flow_cli.py -q
 
 Expected: FAIL in merge and complete orchestration tests.
 
-- [ ] **Step 4: Implement merge and complete orchestration**
+- [x] **Step 4: Implement merge and complete orchestration**
 
 Implement:
 - `merge_pr(project, config, pr) -> None`
@@ -832,7 +832,7 @@ Implement:
 
 Do not require authorization phrase for `merge` or `complete`.
 
-- [ ] **Step 5: Run lifecycle tests**
+- [x] **Step 5: Run lifecycle tests**
 
 Run:
 
@@ -842,7 +842,7 @@ python -m pytest tests/test_pr_flow_cli.py -q
 
 Expected: all current CLI tests pass.
 
-- [ ] **Step 6: Commit complete lifecycle**
+- [x] **Step 6: Commit complete lifecycle**
 
 ```bash
 git add plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py tests/test_pr_flow_cli.py
