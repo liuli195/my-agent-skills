@@ -39,9 +39,9 @@
 
 ## 7. Packaging And Release Projection
 
-- [ ] 7.1 Add `pr-flow` to release projection plugin list.
-- [ ] 7.2 Add or update package validation coverage for the new plugin.
-- [ ] 7.3 Ensure source branch release projection still does not require repo-local marketplace output.
+- [x] 7.1 Add `pr-flow` to release projection plugin list.
+- [x] 7.2 Add or update package validation coverage for the new plugin.
+- [x] 7.3 Ensure source branch release projection still does not require repo-local marketplace output.
 
 ## 8. Verification
 

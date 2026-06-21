@@ -1022,7 +1022,7 @@ git commit -m "feat: 添加 tweak PR 路径"
 - Modify: `.claude-plugin/marketplace.json`
 - Modify: `.agents/plugins/marketplace.json`
 
-- [ ] **Step 1: Add current-repo validation test**
+- [x] **Step 1: Add current-repo validation test**
 
 Add to `tests/test_pr_flow_plugin_package.py`:
 
@@ -1039,7 +1039,7 @@ def test_repo_build_checks_include_pr_flow() -> None:
     assert "status: build checks passed" in result.stdout
 ```
 
-- [ ] **Step 2: Run build validation and fix registration drift**
+- [x] **Step 2: Run build validation and fix registration drift**
 
 Run:
 
@@ -1051,7 +1051,7 @@ Expected: exit code 0 and `status: build checks passed`.
 
 If this fails with projection or marketplace mismatch, update only the three registration files listed in this task.
 
-- [ ] **Step 3: Run package tests**
+- [x] **Step 3: Run package tests**
 
 Run:
 
@@ -1061,7 +1061,7 @@ python -m pytest tests/test_pr_flow_plugin_package.py -q
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit packaging validation**
+- [x] **Step 4: Commit packaging validation**
 
 ```bash
 git add tests/test_pr_flow_plugin_package.py tests/test_local_plugin_build_checks.py .release-flow/projection.yaml .claude-plugin/marketplace.json .agents/plugins/marketplace.json
