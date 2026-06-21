@@ -71,6 +71,24 @@ Claude 校验只覆盖 Claude 插件视角，本仓库还需要补充：
 
 `.comet/build-check.sh` 不再被正式配置引用。是否删除该脚本由任务执行阶段按引用检查结果处理；如果没有引用，应删除，避免误导。
 
+### 6. 跨代理审查输入快照
+
+cross-agent-review（跨代理审查）仍通过 CLI（命令行接口）接收 diff、spec、design、tasks 和 tests 输入文件。运行时先把这些文件复制到输出目录的 `inputs/` 子目录，并让 reviewer（审查代理）从快照读取内容。
+
+默认结构：
+
+```text
+.local/cross-agent-review/<change>/<short-head>/
+  inputs/
+    diff.patch
+    spec.md
+    design.md
+    tasks.md
+    tests.txt
+```
+
+这保留了显式输入契约，同时避免依赖系统临时目录来复现审查。
+
 ## Risks / Trade-offs
 
 - Claude CLI（Claude 命令行工具）缺失会导致 build 失败。缓解：错误信息明确提示需要安装或启用 Claude CLI。

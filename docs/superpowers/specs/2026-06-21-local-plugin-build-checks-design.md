@@ -61,6 +61,27 @@ python -m pytest
 
 `.comet/build-check.sh` 不再作为正式入口。执行阶段先确认没有引用；无引用时删除，避免继续误导。
 
+## Cross-Agent Review 输入快照
+
+cross-agent-review（跨代理审查）仍通过 CLI（命令行接口）接收 diff、spec、design、tasks 和 tests 输入文件。运行时先把这些输入复制到 review output（审查输出）目录的 `inputs/` 子目录，再让 reviewer（审查代理）读取快照内容。
+
+默认结构：
+
+```text
+.local/cross-agent-review/<change>/<short-head>/
+  inputs/
+    diff.patch
+    spec.md
+    design.md
+    tasks.md
+    tests.txt
+  review-report.md
+  review-results.json
+  review-pass.json
+```
+
+这样输入快照与本次 review 输出、`review-pass.json` 共享同一个 change/head 目录，后续排障不依赖系统临时目录。
+
 ## 测试策略
 
 先写测试再实现：

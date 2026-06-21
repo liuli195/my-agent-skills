@@ -28,6 +28,12 @@ python scripts/cross_agent_review.py run \
   --tests-file <path>
 ```
 
-输出默认写入 `.local/cross-agent-review/<change>/<head_ref>/`。
+输出默认写入 `.local/cross-agent-review/<change>/<head_ref>/`。运行时会先把输入文件快照复制到输出目录下的 `inputs/`：
+
+- `inputs/diff.patch`
+- `inputs/spec.md`
+- `inputs/design.md`
+- `inputs/tasks.md`
+- `inputs/tests.txt`
 
 只有没有 CRITICAL/IMPORTANT findings（发现项），且 worktree 仍干净时才生成 `review-pass.json`。

@@ -255,6 +255,51 @@ def test_fake_reviewer_results_bypass_real_sdk_for_tests(tmp_path: Path) -> None
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_run_archives_review_input_snapshots_under_output_dir(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    head = init_repo(project)
+    input_dir = project / "review inputs"
+    output_dir = tmp_path / "out"
+    diff_file = write_file(input_dir / "change diff.patch", "diff body\n")
+    spec_file = write_file(input_dir / "spec file.md", "spec body\n")
+    design_file = write_file(input_dir / "design file.md", "design body\n")
+    tasks_file = write_file(input_dir / "tasks file.md", "tasks body\n")
+    tests_file = write_file(input_dir / "tests file.txt", "tests body\n")
+
+    result = run(
+        "run",
+        "--change",
+        "demo",
+        "--base-ref",
+        head,
+        "--head-ref",
+        head,
+        "--diff-file",
+        str(diff_file),
+        "--spec-file",
+        str(spec_file),
+        "--design-file",
+        str(design_file),
+        "--tasks-file",
+        str(tasks_file),
+        "--tests-file",
+        str(tests_file),
+        "--output-dir",
+        str(output_dir),
+        "--fake-reviewer-results",
+        "[]",
+        cwd=project,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    inputs_dir = output_dir / "inputs"
+    assert (inputs_dir / "diff.patch").read_text(encoding="utf-8") == "diff body\n"
+    assert (inputs_dir / "spec.md").read_text(encoding="utf-8") == "spec body\n"
+    assert (inputs_dir / "design.md").read_text(encoding="utf-8") == "design body\n"
+    assert (inputs_dir / "tasks.md").read_text(encoding="utf-8") == "tasks body\n"
+    assert (inputs_dir / "tests.txt").read_text(encoding="utf-8") == "tests body\n"
+
+
 def test_prompt_contains_review_context(tmp_path: Path) -> None:
     head = init_repo(tmp_path / "repo")
     args = review_args(tmp_path / "repo", head, tmp_path / "out")

@@ -53,3 +53,9 @@
 - [x] 8.3 Preserve Claude stdin hook（标准输入钩子） blocking as exit `2` with stderr reason.
 - [x] 8.4 Add and validate a repo-local DEV Codex marketplace（开发市场） under `.agents/plugins/marketplace.json`.
 - [x] 8.5 Re-run focused hook protocol tests, package tests, build checks, and full verify（验证）.
+
+## 9. Cross-Agent Review Input Snapshot Optimization
+
+- [x] 9.1 Add a regression test proving cross-agent-review（跨代理审查） archives input files under the review output directory.
+- [x] 9.2 Copy review inputs into `inputs/` before reviewer dispatch and read reviewer prompts from those snapshots.
+- [x] 9.3 Update cross-agent-review skill instructions and delta spec（增量规格） for the input snapshot path.
