@@ -261,7 +261,7 @@ git commit -m "feat: 新增 pr-flow 插件骨架"
 - Create: `tests/test_pr_flow_cli.py`
 - Modify: `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py`
 
-- [ ] **Step 1: Write failing init tests**
+- [x] **Step 1: Write failing init tests**
 
 Create `tests/test_pr_flow_cli.py`:
 
@@ -333,7 +333,7 @@ def test_init_does_not_call_gh_api(tmp_path: Path) -> None:
     assert "Rulesets written" not in result.stdout
 ```
 
-- [ ] **Step 2: Run init tests and verify they fail**
+- [x] **Step 2: Run init tests and verify they fail**
 
 Run:
 
@@ -343,7 +343,7 @@ python -m pytest tests/test_pr_flow_cli.py::test_init_creates_config_template_an
 
 Expected: FAIL because init is not implemented.
 
-- [ ] **Step 3: Implement init with small helpers**
+- [x] **Step 3: Implement init with small helpers**
 
 Add helpers in `pr_flow.py`:
 - `resolve_project(path: Path) -> Path`
@@ -357,7 +357,7 @@ Implementation constraints:
 - Do not add dry-run behavior.
 - Print `status: initialized`.
 
-- [ ] **Step 4: Run init tests**
+- [x] **Step 4: Run init tests**
 
 Run:
 
@@ -367,7 +367,7 @@ python -m pytest tests/test_pr_flow_cli.py::test_init_creates_config_template_an
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit init**
+- [x] **Step 5: Commit init**
 
 ```bash
 git add plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py tests/test_pr_flow_cli.py

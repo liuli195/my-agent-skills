@@ -6,10 +6,10 @@
 
 ## 2. Configuration And Init
 
-- [ ] 2.1 Implement `.pr-flow/config.yaml` generation with defaults and branch overrides.
-- [ ] 2.2 Implement PR body template generation and required section checks.
-- [ ] 2.3 Implement `.pr-flow/.gitignore` generation for runs and last status.
-- [ ] 2.4 Implement GitHub Rulesets recommendation output without remote writes.
+- [x] 2.1 Implement `.pr-flow/config.yaml` generation with defaults and branch overrides.
+- [x] 2.2 Implement PR body template generation and required section checks.
+- [x] 2.3 Implement `.pr-flow/.gitignore` generation for runs and last status.
+- [x] 2.4 Implement GitHub Rulesets recommendation output without remote writes.
 
 ## 3. Diagnose And Stop States
 
