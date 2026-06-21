@@ -92,6 +92,8 @@ def run_pre_tool_use(project: Path, user_home: Path, event: dict) -> int:
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     tool = event.get("tool") if isinstance(event.get("tool"), dict) else {}
     hook_payload = dict(payload)
+    if "tool_input" not in hook_payload and isinstance(payload.get("command"), str):
+        hook_payload["tool_input"] = {"command": payload["command"]}
     hook_payload["session_id"] = context.get("session_id")
     hook_payload["cwd"] = context.get("cwd") or str(project)
     if isinstance(tool.get("name"), str):

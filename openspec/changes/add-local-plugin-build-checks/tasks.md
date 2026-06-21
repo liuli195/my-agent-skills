@@ -24,3 +24,10 @@
 - [x] 4.2 Run `python scripts/check.py build`.
 - [x] 4.3 Run `python scripts/check.py verify`.
 - [x] 4.4 Confirm no Comet（双星流程）source files or installed Comet scripts were modified.
+
+## 5. Agent Guard Hotfix
+
+- [x] 5.1 Reproduce the Global Command Guard（全局命令守卫）miss through direct hook（直接钩子）and standard event bridge（标准事件桥接）inputs.
+- [x] 5.2 Preserve top-level `command` fields when adapting PreToolUse（工具使用前）payloads.
+- [x] 5.3 Add regression tests for both `hook_router.py` and `run_guard_event.py` command-field paths.
+- [x] 5.4 Re-run Agent Guard runtime（运行时）tests and full repository verify（验证）.
