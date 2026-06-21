@@ -10,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -32,6 +33,12 @@ PR_TEMPLATE = """## Summary
 ## Rollback
 """
 PR_FLOW_GITIGNORE = "/runs/\n/last-status.json\n"
+TWEAK_BODY_TEMPLATE = """## Tweak Path
+
+Review gate skipped for non-bug small change.
+
+Reason: {reason}
+"""
 
 
 def resolve_project(path: Path) -> Path:
@@ -346,6 +353,36 @@ def create_pr(project: Path, config: dict[str, Any]) -> dict[str, Any]:
         details = command_failure_details("gh_pr_create_missing_pr", result)
         raise PrFlowError("gh_pr_create_missing_pr", details)
     return pr
+
+
+def pr_number_for_command(pr: dict[str, Any]) -> str:
+    pr_number = pr.get("number")
+    if isinstance(pr_number, bool) or not isinstance(pr_number, (int, str)) or str(pr_number) == "":
+        raise PrFlowError(
+            "invalid_pr_number",
+            {
+                "reason": "invalid_pr_number",
+                "pr": pr_number,
+            },
+        )
+    return str(pr_number)
+
+
+def update_pr_body(project: Path, pr: dict[str, Any], body: str) -> None:
+    pr_number = pr_number_for_command(pr)
+    body_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as body_file:
+            body_file.write(body)
+            body_path = Path(body_file.name)
+        result = gh(project, "pr", "edit", pr_number, "--body-file", str(body_path))
+    finally:
+        if body_path is not None:
+            body_path.unlink(missing_ok=True)
+    if result.returncode != 0:
+        details = command_failure_details("gh_pr_edit_failed", result)
+        details["pr"] = pr_number
+        raise PrFlowError("gh_pr_edit_failed", details)
 
 
 def view_pr_for_cleanup(project: Path, pr_number: str) -> dict[str, Any]:
@@ -671,6 +708,42 @@ def run_diagnose(args: argparse.Namespace) -> int:
     return stop(project, args.command, "EXCEPTION_REQUIRED", "no_stop_state_detected", gh_details)
 
 
+def run_lifecycle(
+    project: Path,
+    config: dict[str, Any],
+    command: str,
+    *,
+    skip_review_gate: bool = False,
+    before_checks: Any | None = None,
+) -> int:
+    try:
+        pr = find_pr(project)
+        if pr is None:
+            pr = create_pr(project, config)
+        pr = sync_pr(project, pr)
+        if before_checks is not None:
+            before_checks(pr)
+    except PrFlowError as exc:
+        return stop(project, command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
+
+    check_stop = wait_for_checks(project, pr, wait_config_from_config(config))
+    if check_stop is not None:
+        return stop_from_state(project, command, check_stop)
+
+    if not skip_review_gate:
+        review_stop = check_review_gate(project, config, pr)
+        if review_stop is not None:
+            return stop_from_state(project, command, review_stop)
+
+    try:
+        merge_pr(project, config, pr)
+    except PrFlowError as exc:
+        return stop(project, command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
+
+    cleanup_args = argparse.Namespace(command="cleanup", project=project, pr=str(pr.get("number")))
+    return run_cleanup(cleanup_args)
+
+
 def run_complete(args: argparse.Namespace) -> int:
     project = resolve_project(args.project)
     try:
@@ -678,30 +751,25 @@ def run_complete(args: argparse.Namespace) -> int:
     except FileNotFoundError:
         details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
         return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
+    return run_lifecycle(project, config, args.command)
 
+
+def run_tweak(args: argparse.Namespace) -> int:
+    project = resolve_project(args.project)
     try:
-        pr = find_pr(project)
-        if pr is None:
-            pr = create_pr(project, config)
-        pr = sync_pr(project, pr)
-    except PrFlowError as exc:
-        return stop(project, args.command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
+        config = load_config(project)
+    except FileNotFoundError:
+        details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
+        return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
 
-    check_stop = wait_for_checks(project, pr, wait_config_from_config(config))
-    if check_stop is not None:
-        return stop_from_state(project, args.command, check_stop)
-
-    review_stop = check_review_gate(project, config, pr)
-    if review_stop is not None:
-        return stop_from_state(project, args.command, review_stop)
-
-    try:
-        merge_pr(project, config, pr)
-    except PrFlowError as exc:
-        return stop(project, args.command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
-
-    cleanup_args = argparse.Namespace(command="cleanup", project=project, pr=str(pr.get("number")))
-    return run_cleanup(cleanup_args)
+    body = TWEAK_BODY_TEMPLATE.format(reason=args.reason)
+    return run_lifecycle(
+        project,
+        config,
+        args.command,
+        skip_review_gate=True,
+        before_checks=lambda pr: update_pr_body(project, pr, body),
+    )
 
 
 def run_hotfix_verify_command(project: Path, command: str) -> subprocess.CompletedProcess[str]:
@@ -958,7 +1026,7 @@ def build_parser() -> argparse.ArgumentParser:
             help=f"{command} command",
             description=f"{command} command",
         )
-        if command in {"diagnose", "init", "complete"}:
+        if command in {"diagnose", "init", "complete", "tweak"}:
             subparser.add_argument("--project", type=Path)
         if command == "cleanup":
             subparser.add_argument("--project", type=Path)
@@ -967,6 +1035,8 @@ def build_parser() -> argparse.ArgumentParser:
             subparser.add_argument("--project", type=Path)
             subparser.add_argument("--target")
             subparser.add_argument("--authorization-phrase")
+        if command == "tweak":
+            subparser.add_argument("--reason")
         if command == "init":
             subparser.add_argument("--base-branch", default="main")
         subparser.set_defaults(command=command)
@@ -982,6 +1052,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_diagnose(args)
     if args.command == "complete" and args.project is not None:
         return run_complete(args)
+    if args.command == "tweak" and args.project is not None and args.reason is not None and args.reason.strip():
+        return run_tweak(args)
     if args.command == "cleanup" and args.project is not None and args.pr is not None:
         return run_cleanup(args)
     if (
@@ -1005,6 +1077,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.authorization_phrase is None:
             missing.append("--authorization-phrase")
         print(f"error: hotfix requires {', '.join(missing)}", file=sys.stderr)
+        return 2
+    if args.command == "tweak" and args.project is None and args.reason is None:
+        print("status: not_implemented")
+        return 2
+    if args.command == "tweak" and (args.reason is None or not args.reason.strip()):
+        print("error: tweak_requires_reason: --reason", file=sys.stderr)
+        return 2
+    if args.command == "tweak" and args.project is None:
+        print("error: tweak requires --project", file=sys.stderr)
         return 2
     print("status: not_implemented")
     return 2

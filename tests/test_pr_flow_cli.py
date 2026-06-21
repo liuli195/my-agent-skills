@@ -125,8 +125,10 @@ def write_fake_gh_sequence(bin_dir: Path, responses: list[dict[str, object]]) ->
     bin_dir.mkdir()
     responses_path = bin_dir / "responses.json"
     calls_path = bin_dir / "calls.json"
+    body_files_path = bin_dir / "body_files.json"
     responses_path.write_text(json.dumps(responses), encoding="utf-8")
     calls_path.write_text("[]", encoding="utf-8")
+    body_files_path.write_text("[]", encoding="utf-8")
     fake_script = bin_dir / "gh_fake_sequence.py"
     fake_script.write_text(
         "\n".join(
@@ -136,11 +138,18 @@ def write_fake_gh_sequence(bin_dir: Path, responses: list[dict[str, object]]) ->
                 "from pathlib import Path",
                 f"responses_path = Path({str(responses_path)!r})",
                 f"calls_path = Path({str(calls_path)!r})",
+                f"body_files_path = Path({str(body_files_path)!r})",
                 "responses = json.loads(responses_path.read_text(encoding='utf-8'))",
                 "calls = json.loads(calls_path.read_text(encoding='utf-8'))",
+                "body_files = json.loads(body_files_path.read_text(encoding='utf-8'))",
                 "index = len(calls)",
                 "calls.append(sys.argv[1:])",
                 "calls_path.write_text(json.dumps(calls, indent=2), encoding='utf-8')",
+                "if '--body-file' in sys.argv[1:]:",
+                "    body_index = sys.argv.index('--body-file') + 1",
+                "    body_path = Path(sys.argv[body_index])",
+                "    body_files.append({'args': sys.argv[1:], 'body': body_path.read_text(encoding='utf-8')})",
+                "    body_files_path.write_text(json.dumps(body_files, indent=2), encoding='utf-8')",
                 "if index >= len(responses):",
                 "    sys.stderr.write('unexpected gh call: ' + ' '.join(sys.argv[1:]) + '\\n')",
                 "    raise SystemExit(99)",
@@ -334,6 +343,10 @@ def passing_pr_view_json(project: Path, *, review_decision: str = "APPROVED") ->
         review_decision=review_decision,
         head_oid=git(project, "rev-parse", "HEAD"),
     )
+
+
+def captured_body_files(fake_bin: Path) -> list[dict[str, str]]:
+    return json.loads((fake_bin / "body_files.json").read_text(encoding="utf-8"))
 
 
 def assert_cleanup_exception(project: Path, result: subprocess.CompletedProcess[str], reason: str) -> None:
@@ -1001,6 +1014,135 @@ def test_complete_dual_review_gate_requires_github_and_local_evidence(tmp_path: 
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: cleanup_complete" in result.stdout
+
+
+def test_tweak_requires_reason(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = run("tweak", "--project", str(project))
+
+    assert result.returncode == 2
+    assert "status: not_implemented" not in result.stdout
+    assert "tweak_requires_reason" in result.stderr
+
+
+def test_tweak_creates_pr_when_none_exists_and_writes_body(tmp_path: Path) -> None:
+    project, _remote = init_complete_project(tmp_path)
+    head_oid = git(project, "rev-parse", "HEAD")
+    reason = "small docs polish"
+    fake_bin, calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {"stderr": "no pull requests found\n", "exit_code": 1},
+            {"stdout": "https://github.example/test/repo/pull/12\n"},
+            {"stdout": passing_pr_view_json(project)},
+            {"stdout": passing_pr_view_json(project)},
+            {"stdout": ""},
+            {"stdout": ""},
+            {"stdout": cleanup_pr_view_json()},
+        ],
+    )
+
+    result = run_with_path(fake_bin, "tweak", "--project", str(project), "--reason", reason)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
+    calls = json.loads(calls_path.read_text(encoding="utf-8"))
+    assert calls[0][:2] == ["pr", "view"]
+    assert calls[1][:2] == ["pr", "create"]
+    assert calls[3][:2] == ["pr", "view"]
+    assert calls[4][:3] == ["pr", "edit", "12"]
+    assert "--body-file" in calls[4]
+    assert calls[5] == ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid]
+    assert calls[6] == ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"]
+    body_records = captured_body_files(fake_bin)
+    assert len(body_records) == 1
+    assert (
+        "## Tweak Path\n\n"
+        "Review gate skipped for non-bug small change.\n\n"
+        f"Reason: {reason}\n"
+    ) in body_records[0]["body"]
+
+
+def test_tweak_skips_review_gate_for_changes_requested_then_merges_and_cleans_up(tmp_path: Path) -> None:
+    project, _remote = init_complete_project(tmp_path, review_mode="github")
+    head_oid = git(project, "rev-parse", "HEAD")
+    reason = "rename helper only"
+    fake_bin, calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {"stdout": passing_pr_view_json(project, review_decision="CHANGES_REQUESTED")},
+            {"stdout": passing_pr_view_json(project, review_decision="CHANGES_REQUESTED")},
+            {"stdout": ""},
+            {"stdout": ""},
+            {"stdout": cleanup_pr_view_json()},
+        ],
+    )
+
+    result = run_with_path(fake_bin, "tweak", "--project", str(project), "--reason", reason)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
+    assert "REPLY_OR_FIX_REQUIRED" not in result.stdout
+    calls = json.loads(calls_path.read_text(encoding="utf-8"))
+    assert calls == [
+        [
+            "pr",
+            "view",
+            "--json",
+            "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid",
+        ],
+        [
+            "pr",
+            "view",
+            "--json",
+            "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid",
+        ],
+        ["pr", "edit", "12", "--body-file", calls[2][4]],
+        ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid],
+        ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
+    ]
+
+
+def test_tweak_pending_checks_report_dispatch_required(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    configure_complete(project, review_mode="github")
+    reason = "format-only cleanup"
+    fake_bin, calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {
+                "stdout": pr_view_json(
+                    checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
+                    review_decision="CHANGES_REQUESTED",
+                )
+            },
+            {
+                "stdout": pr_view_json(
+                    checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
+                    review_decision="CHANGES_REQUESTED",
+                )
+            },
+            {"stdout": ""},
+        ],
+    )
+
+    result = run_with_path(fake_bin, "tweak", "--project", str(project), "--reason", reason)
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    calls = json.loads(calls_path.read_text(encoding="utf-8"))
+    assert calls[2][:3] == ["pr", "edit", "12"]
+    assert all(call[:2] != ["pr", "merge"] for call in calls)
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "DISPATCH_REQUIRED"
+    assert status["command"] == "tweak"
+    assert status["details"]["reason"] == "checks_pending"
+    body_records = captured_body_files(fake_bin)
+    assert len(body_records) == 1
+    assert f"Reason: {reason}\n" in body_records[0]["body"]
 
 
 def test_hotfix_rejects_authorization_phrase_mismatch_without_leaking_phrase(tmp_path: Path) -> None:
