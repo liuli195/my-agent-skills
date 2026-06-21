@@ -1,4 +1,5 @@
 import hashlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -18,6 +19,15 @@ SCRIPT = (
     / "scripts"
     / "pr_flow.py"
 )
+
+
+def load_pr_flow_module():
+    spec = importlib.util.spec_from_file_location("pr_flow_under_test", SCRIPT)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -1045,6 +1055,33 @@ def test_hotfix_runs_verify_command_before_authorization_phrase_check(tmp_path: 
     status = json.loads(status_text)
     assert status["command"] == "hotfix"
     assert status["details"]["reason"] == "hotfix_verify_failed"
+
+
+def test_hotfix_verify_command_preserves_windows_backslash_executable_path(tmp_path: Path, monkeypatch) -> None:
+    pr_flow = load_pr_flow_module()
+    calls = []
+
+    def fake_run(command_args, **kwargs):
+        calls.append((command_args, kwargs))
+        return subprocess.CompletedProcess(command_args, 0, "", "")
+
+    monkeypatch.setattr(pr_flow.subprocess, "run", fake_run)
+
+    result = pr_flow.run_hotfix_verify_command(tmp_path, r".venv\Scripts\python.exe -m pytest")
+
+    assert result.returncode == 0
+    assert calls == [
+        (
+            [r".venv\Scripts\python.exe", "-m", "pytest"],
+            {
+                "cwd": tmp_path,
+                "check": False,
+                "text": True,
+                "capture_output": True,
+                "shell": False,
+            },
+        )
+    ]
 
 
 def test_hotfix_requires_target_for_bare_command() -> None:

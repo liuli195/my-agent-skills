@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import hmac
 import json
+import os
 import shlex
 import shutil
 import subprocess
@@ -221,6 +223,27 @@ def hotfix_verify_command(branch_config: dict[str, Any]) -> str:
     if not isinstance(verify_command, str) or not verify_command:
         raise PrFlowError("hotfix_verify_command_missing", {"reason": "hotfix_verify_command_missing"})
     return verify_command
+
+
+def split_hotfix_verify_command(command: str) -> list[str]:
+    if os.name != "nt":
+        return shlex.split(command)
+
+    argc = ctypes.c_int()
+    shell32 = ctypes.windll.shell32
+    kernel32 = ctypes.windll.kernel32
+    shell32.CommandLineToArgvW.argtypes = (ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_int))
+    shell32.CommandLineToArgvW.restype = ctypes.POINTER(ctypes.c_wchar_p)
+    kernel32.LocalFree.argtypes = (ctypes.c_void_p,)
+    kernel32.LocalFree.restype = ctypes.c_void_p
+
+    argv = shell32.CommandLineToArgvW(command, ctypes.byref(argc))
+    if not argv:
+        raise ValueError("windows_command_line_parse_failed")
+    try:
+        return [argv[index] for index in range(argc.value)]
+    finally:
+        kernel32.LocalFree(ctypes.cast(argv, ctypes.c_void_p))
 
 
 def wait_config_from_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -683,7 +706,7 @@ def run_complete(args: argparse.Namespace) -> int:
 
 def run_hotfix_verify_command(project: Path, command: str) -> subprocess.CompletedProcess[str]:
     try:
-        command_args = shlex.split(command)
+        command_args = split_hotfix_verify_command(command)
     except ValueError as exc:
         raise PrFlowError(
             "hotfix_verify_command_parse_failed",
