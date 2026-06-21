@@ -404,6 +404,28 @@ def is_explicit_non_issue_observation(raw: dict) -> bool:
     return "severity" not in raw and "issue" in raw and raw.get("issue") in {None, False, ""}
 
 
+def normalize_reviewer_findings(role: str, reviewer: dict) -> list[dict]:
+    raw_findings = reviewer.get("findings", [])
+    if isinstance(raw_findings, list):
+        return raw_findings
+    if isinstance(raw_findings, dict):
+        issues = raw_findings.get("issues")
+        if isinstance(issues, list):
+            return [issue for issue in issues if isinstance(issue, dict)]
+        gaps = raw_findings.get("gaps")
+        if isinstance(gaps, list):
+            return [gap for gap in gaps if isinstance(gap, dict)]
+    return [
+        {
+            "severity": "CRITICAL",
+            "location": role,
+            "summary": "Reviewer returned invalid findings",
+            "evidence": json.dumps(reviewer, ensure_ascii=False),
+            "recommendation": "Rerun review or fix reviewer prompt",
+        }
+    ]
+
+
 def normalize_finding(raw: dict) -> dict:
     severity = normalize_severity(raw)
     return {
@@ -420,17 +442,7 @@ def aggregate(reviewers: list[dict], skipped: list[dict]) -> dict:
     seen: set[tuple[str, str, str]] = set()
     for reviewer in reviewers:
         role = str(reviewer.get("role", "unknown"))
-        raw_findings = reviewer.get("findings", [])
-        if not isinstance(raw_findings, list):
-            raw_findings = [
-                {
-                    "severity": "CRITICAL",
-                    "location": role,
-                    "summary": "Reviewer returned invalid findings",
-                    "evidence": json.dumps(reviewer, ensure_ascii=False),
-                    "recommendation": "Rerun review or fix reviewer prompt",
-                }
-            ]
+        raw_findings = normalize_reviewer_findings(role, reviewer)
         for raw in raw_findings:
             if not isinstance(raw, dict):
                 raw = {

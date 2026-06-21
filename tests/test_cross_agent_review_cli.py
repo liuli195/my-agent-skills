@@ -671,6 +671,63 @@ def test_aggregate_maps_common_reviewer_severities_to_non_blocking_findings() ->
     assert summary["findings"][2]["location"] == "app.py:3"
 
 
+def test_aggregate_treats_pass_dict_findings_with_no_issues_as_non_blocking() -> None:
+    module = load_script_module()
+
+    summary = module.aggregate(
+        [
+            {
+                "role": "implementation-correctness",
+                "status": "pass",
+                "findings": {
+                    "spec_compliance": {"verdict": "pass", "details": "Matches spec."},
+                    "issues": [],
+                },
+            }
+        ],
+        [],
+    )
+
+    assert summary["blocking_findings"] == 0
+    assert summary["findings"] == []
+
+
+def test_aggregate_converts_dict_gaps_to_non_blocking_findings() -> None:
+    module = load_script_module()
+
+    summary = module.aggregate(
+        [
+            {
+                "role": "tests-and-edge-cases",
+                "status": "pass_with_gaps",
+                "findings": {
+                    "summary": "Coverage is acceptable with gaps.",
+                    "gaps": [
+                        {
+                            "severity": "medium",
+                            "area": "manifest",
+                            "detail": "Missing required-field tests.",
+                            "recommendation": "Add one regression test.",
+                        },
+                        {
+                            "severity": "low",
+                            "area": "cli",
+                            "detail": "Unknown command path is not covered.",
+                        },
+                    ],
+                },
+            }
+        ],
+        [],
+    )
+
+    assert summary["blocking_findings"] == 0
+    assert [finding["severity"] for finding in summary["findings"]] == ["WARNING", "SUGGESTION"]
+    assert summary["findings"][0]["location"] == "manifest"
+    assert summary["findings"][0]["summary"] == "Missing required-field tests."
+    assert summary["findings"][0]["recommendation"] == "Add one regression test."
+
+
 def test_risk_review_skip_is_recorded(tmp_path: Path) -> None:
     head = init_repo(tmp_path / "repo")
     result = run(

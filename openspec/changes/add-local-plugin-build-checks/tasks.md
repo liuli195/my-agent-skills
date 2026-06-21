@@ -31,3 +31,10 @@
 - [x] 5.2 Preserve top-level `command` fields when adapting PreToolUse（工具使用前）payloads.
 - [x] 5.3 Add regression tests for both `hook_router.py` and `run_guard_event.py` command-field paths.
 - [x] 5.4 Re-run Agent Guard runtime（运行时）tests and full repository verify（验证）.
+
+## 6. Cross-Agent Review Hotfix
+
+- [x] 6.1 Reproduce `Reviewer returned invalid findings` from structured reviewer output.
+- [x] 6.2 Normalize dict-shaped reviewer `findings` with `issues` or `gaps` without creating false CRITICAL（严重）findings.
+- [x] 6.3 Add regression tests for pass dict findings and gap dict findings.
+- [x] 6.4 Re-run cross-agent-review（跨代理审查）tests and full repository verify（验证）.
