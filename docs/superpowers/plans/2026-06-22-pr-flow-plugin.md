@@ -51,7 +51,7 @@ base-ref: 23fba70e52e53a93c103a4d91fbe671eaa105890
 - Modify: `.agents/plugins/marketplace.json`
 - Modify: `.release-flow/projection.yaml`
 
-- [ ] **Step 1: Write failing package tests**
+- [x] **Step 1: Write failing package tests**
 
 Create `tests/test_pr_flow_plugin_package.py`:
 
@@ -148,7 +148,7 @@ def test_release_projection_includes_pr_flow() -> None:
     assert "      - pr-flow" in text
 ```
 
-- [ ] **Step 2: Run package tests and verify they fail**
+- [x] **Step 2: Run package tests and verify they fail**
 
 Run:
 
@@ -158,7 +158,7 @@ python -m pytest tests/test_pr_flow_plugin_package.py -q
 
 Expected: FAIL because `plugins/pr-flow/` and marketplace entries do not exist yet.
 
-- [ ] **Step 3: Add plugin manifests**
+- [x] **Step 3: Add plugin manifests**
 
 Create both manifests with the same version used by current plugins:
 
@@ -171,7 +171,7 @@ Create both manifests with the same version used by current plugins:
 }
 ```
 
-- [ ] **Step 4: Add Skill entrypoints**
+- [x] **Step 4: Add Skill entrypoints**
 
 Each `SKILL.md` must include front matter, a short boundary section, and a command example that calls the shared script. Use this pattern and adjust the command name per Skill:
 
@@ -200,7 +200,7 @@ Required command words:
 - `pr-flow-hotfix`: `hotfix`
 - `pr-flow-tweak`: `tweak`
 
-- [ ] **Step 5: Add initial CLI parser**
+- [x] **Step 5: Add initial CLI parser**
 
 Create `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py` with command parser behavior:
 
@@ -229,7 +229,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 6: Register plugin in marketplace and release projection**
+- [x] **Step 6: Register plugin in marketplace and release projection**
 
 Append `pr-flow` to:
 - `.claude-plugin/marketplace.json`
@@ -238,7 +238,7 @@ Append `pr-flow` to:
 
 Keep the existing order stable by adding `pr-flow` after `cross-agent-review`.
 
-- [ ] **Step 7: Run package tests**
+- [x] **Step 7: Run package tests**
 
 Run:
 
@@ -248,7 +248,7 @@ python -m pytest tests/test_pr_flow_plugin_package.py -q
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit package skeleton**
+- [x] **Step 8: Commit package skeleton**
 
 ```bash
 git add plugins/pr-flow tests/test_pr_flow_plugin_package.py .claude-plugin/marketplace.json .agents/plugins/marketplace.json .release-flow/projection.yaml

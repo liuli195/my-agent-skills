@@ -1,8 +1,8 @@
 ## 1. Plugin Skeleton
 
-- [ ] 1.1 Create `plugins/pr-flow/` with Codex and Claude plugin manifests.
-- [ ] 1.2 Add `pr-flow`, `pr-flow-init`, `pr-flow-complete`, `pr-flow-cleanup`, `pr-flow-hotfix`, and `pr-flow-tweak` Skill entrypoints.
-- [ ] 1.3 Add shared `scripts/pr_flow.py` command parser and command dispatch.
+- [x] 1.1 Create `plugins/pr-flow/` with Codex and Claude plugin manifests.
+- [x] 1.2 Add `pr-flow`, `pr-flow-init`, `pr-flow-complete`, `pr-flow-cleanup`, `pr-flow-hotfix`, and `pr-flow-tweak` Skill entrypoints.
+- [x] 1.3 Add shared `scripts/pr_flow.py` command parser and command dispatch.
 
 ## 2. Configuration And Init
 
