@@ -380,7 +380,7 @@ git commit -m "feat: 实现 pr-flow 初始化配置"
 - Modify: `tests/test_pr_flow_cli.py`
 - Modify: `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py`
 
-- [ ] **Step 1: Add failing tests for config validation and status persistence**
+- [x] **Step 1: Add failing tests for config validation and status persistence**
 
 Append:
 
@@ -409,7 +409,7 @@ def test_status_file_is_written_for_stop_state(tmp_path: Path) -> None:
     assert status["command"] == "diagnose"
 ```
 
-- [ ] **Step 2: Run tests and verify they fail**
+- [x] **Step 2: Run tests and verify they fail**
 
 Run:
 
@@ -419,7 +419,7 @@ python -m pytest tests/test_pr_flow_cli.py::test_missing_config_reports_exceptio
 
 Expected: FAIL because status writing and config loading do not exist.
 
-- [ ] **Step 3: Implement config and status helpers**
+- [x] **Step 3: Implement config and status helpers**
 
 Add helpers:
 - `load_config(project: Path) -> dict`
@@ -430,7 +430,7 @@ Add helpers:
 
 All command helpers must return captured stdout/stderr and avoid shell string composition.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run:
 
@@ -440,7 +440,7 @@ python -m pytest tests/test_pr_flow_cli.py::test_missing_config_reports_exceptio
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit config/status foundation**
+- [x] **Step 5: Commit config/status foundation**
 
 ```bash
 git add plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py tests/test_pr_flow_cli.py

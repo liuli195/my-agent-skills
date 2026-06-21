@@ -27,10 +27,20 @@
 - Spec review: APPROVED by 019eeb29-ac99-7821-b849-29595ed06e10
 - Quality review: APPROVED by 019eeb2e-0e90-7163-bdf8-fd5769a34c32
 
+### Task 3: Config Loading, Command Runner, And Status Files
+
+- OpenSpec tasks: foundation for `3.3`; `3.1`, `3.2`, and `3.3` remain open until Task 4 completes full diagnose stop states.
+- Implementation commit: a2482c6fddd516850dfb6ce0281217735bbb84a5
+- Fix commit: 0e29b5d116ac23ef810d051e90f8be57c8ac08b6
+- RED evidence: focused config/status tests failed because `diagnose` returned `status: not_implemented` with exit code 2.
+- GREEN evidence: focused config/status tests passed after fix; combined CLI/package tests passed with 11 tests.
+- Spec review: APPROVED by 019eeb3a-c13f-7b12-ab7e-051d5cc683ad
+- Quality review: APPROVED by 019eeb3c-e49c-7d60-8f56-3c42fe91ae81
+
 ## Current Task
 
-- Plan task: `Task 3: Config Loading, Command Runner, And Status Files`
-- OpenSpec task: `3.1 Implement config loading with explicit branch selection from configured branches.`
+- Plan task: `Task 4: Diagnose Stop States`
+- OpenSpec task: `3.1 Implement repository and PR state discovery using local git and gh.`
 - Stage: ready-for-implementation
 - Rounds: 0
 
