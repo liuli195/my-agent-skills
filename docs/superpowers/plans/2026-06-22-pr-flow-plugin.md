@@ -945,7 +945,7 @@ git commit -m "feat: 添加 hotfix 直推路径"
 - Modify: `tests/test_pr_flow_cli.py`
 - Modify: `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py`
 
-- [ ] **Step 1: Write failing tweak tests**
+- [x] **Step 1: Write failing tweak tests**
 
 Append tests for:
 - missing `--reason` returns error.
@@ -968,7 +968,7 @@ def test_tweak_requires_reason(tmp_path: Path) -> None:
     assert "tweak_requires_reason" in result.stdout
 ```
 
-- [ ] **Step 2: Run tweak tests and verify they fail**
+- [x] **Step 2: Run tweak tests and verify they fail**
 
 Run:
 
@@ -978,7 +978,7 @@ python -m pytest tests/test_pr_flow_cli.py -q
 
 Expected: FAIL in tweak tests.
 
-- [ ] **Step 3: Implement tweak orchestration**
+- [x] **Step 3: Implement tweak orchestration**
 
 Implement `run_tweak(args)`:
 - Require `--reason`.
@@ -996,7 +996,7 @@ Reason: <reason>
 
 Do not restrict file paths.
 
-- [ ] **Step 4: Run tweak tests**
+- [x] **Step 4: Run tweak tests**
 
 Run:
 
@@ -1006,7 +1006,7 @@ python -m pytest tests/test_pr_flow_cli.py -q
 
 Expected: tweak tests pass.
 
-- [ ] **Step 5: Commit tweak**
+- [x] **Step 5: Commit tweak**
 
 ```bash
 git add plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py tests/test_pr_flow_cli.py
