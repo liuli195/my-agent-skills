@@ -91,6 +91,54 @@ def write_fake_gh(bin_dir: Path, *, stdout: str = "", stderr: str = "", exit_cod
     return bin_dir
 
 
+def write_fake_gh_sequence(bin_dir: Path, responses: list[dict[str, object]]) -> tuple[Path, Path]:
+    bin_dir.mkdir()
+    responses_path = bin_dir / "responses.json"
+    calls_path = bin_dir / "calls.json"
+    responses_path.write_text(json.dumps(responses), encoding="utf-8")
+    calls_path.write_text("[]", encoding="utf-8")
+    fake_script = bin_dir / "gh_fake_sequence.py"
+    fake_script.write_text(
+        "\n".join(
+            [
+                "import json",
+                "import sys",
+                "from pathlib import Path",
+                f"responses_path = Path({str(responses_path)!r})",
+                f"calls_path = Path({str(calls_path)!r})",
+                "responses = json.loads(responses_path.read_text(encoding='utf-8'))",
+                "calls = json.loads(calls_path.read_text(encoding='utf-8'))",
+                "index = len(calls)",
+                "calls.append(sys.argv[1:])",
+                "calls_path.write_text(json.dumps(calls, indent=2), encoding='utf-8')",
+                "if index >= len(responses):",
+                "    sys.stderr.write('unexpected gh call: ' + ' '.join(sys.argv[1:]) + '\\n')",
+                "    raise SystemExit(99)",
+                "response = responses[index]",
+                "sys.stdout.write(str(response.get('stdout', '')))",
+                "sys.stderr.write(str(response.get('stderr', '')))",
+                "raise SystemExit(int(response.get('exit_code', 0)))",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    if os.name == "nt":
+        launcher = bin_dir / "gh.cmd"
+        launcher.write_text(
+            f'@echo off\n"{sys.executable}" "%~dp0gh_fake_sequence.py" %*\nexit /b %ERRORLEVEL%\n',
+            encoding="utf-8",
+        )
+    else:
+        launcher = bin_dir / "gh"
+        launcher.write_text(
+            f'#!/bin/sh\nexec "{sys.executable}" "$(dirname "$0")/gh_fake_sequence.py" "$@"\n',
+            encoding="utf-8",
+        )
+        launcher.chmod(0o755)
+    return bin_dir, calls_path
+
+
 def pr_view_json(*, checks: list[dict], review_decision: str = "REVIEW_REQUIRED") -> str:
     return (
         json.dumps(
@@ -105,6 +153,38 @@ def pr_view_json(*, checks: list[dict], review_decision: str = "REVIEW_REQUIRED"
             }
         )
         + "\n"
+    )
+
+
+def configure_complete(
+    project: Path,
+    *,
+    review_mode: str,
+    evidence_path: str | None = None,
+) -> None:
+    assert run("init", "--project", str(project)).returncode == 0
+    config_path = project / ".pr-flow" / "config.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["defaults"]["wait"] = {"timeoutSeconds": 0, "pollSeconds": 0}
+    config["defaults"]["reviewGate"] = {"mode": review_mode}
+    if evidence_path is not None:
+        config["defaults"]["reviewGate"]["evidencePath"] = evidence_path
+    config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def write_review_pass(project: Path, relative_path: str = ".pr-flow/review-pass.json") -> None:
+    evidence_path = project / relative_path
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "base_ref": "main",
+                "head_ref": "feature/example",
+                "blocking_findings": 0,
+            }
+        ),
+        encoding="utf-8",
     )
 
 
@@ -288,3 +368,126 @@ def test_diagnose_outputs_reply_or_fix_required_for_review_required(tmp_path: Pa
     assert status["command"] == "diagnose"
     assert status["details"]["reason"] == "checks_or_review_blocking"
     assert status["details"]["reviewDecision"] == "REVIEW_REQUIRED"
+
+
+def test_complete_creates_pr_when_none_exists(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    configure_complete(project, review_mode="github")
+    fake_bin, calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {"stderr": "no pull requests found\n", "exit_code": 1},
+            {"stdout": "https://github.example/test/repo/pull/12\n"},
+            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED")},
+            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED")},
+        ],
+    )
+
+    result = run_with_path(fake_bin, "complete", "--project", str(project))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: ready_to_merge" in result.stdout
+    calls = json.loads(calls_path.read_text(encoding="utf-8"))
+    assert calls[0][:2] == ["pr", "view"]
+    assert calls[1][:2] == ["pr", "create"]
+
+
+def test_complete_skip_review_gate_ignores_github_changes_requested(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    configure_complete(project, review_mode="skip")
+    fake_bin, _calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="CHANGES_REQUESTED")},
+            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="CHANGES_REQUESTED")},
+        ],
+    )
+
+    result = run_with_path(fake_bin, "complete", "--project", str(project))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: ready_to_merge" in result.stdout
+
+
+def test_complete_github_review_gate_blocks_changes_requested(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    configure_complete(project, review_mode="github")
+    fake_bin, _calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="CHANGES_REQUESTED")},
+            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="CHANGES_REQUESTED")},
+        ],
+    )
+
+    result = run_with_path(fake_bin, "complete", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "REPLY_OR_FIX_REQUIRED"
+    assert status["command"] == "complete"
+    assert status["details"]["reason"] == "review_gate_blocking"
+
+
+def test_complete_wait_timeout_zero_reports_pending_checks_without_sleep(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    configure_complete(project, review_mode="skip")
+    fake_bin, _calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}], review_decision="APPROVED")},
+            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}], review_decision="APPROVED")},
+        ],
+    )
+
+    result = run_with_path(fake_bin, "complete", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "DISPATCH_REQUIRED"
+    assert status["command"] == "complete"
+    assert status["details"]["reason"] == "checks_pending"
+
+
+def test_complete_local_review_gate_accepts_review_pass_evidence(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    configure_complete(project, review_mode="local", evidence_path=".pr-flow/review-pass.json")
+    write_review_pass(project)
+    fake_bin, _calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="CHANGES_REQUESTED")},
+            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="CHANGES_REQUESTED")},
+        ],
+    )
+
+    result = run_with_path(fake_bin, "complete", "--project", str(project))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: ready_to_merge" in result.stdout
+
+
+def test_complete_dual_review_gate_requires_github_and_local_evidence(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    configure_complete(project, review_mode="dual", evidence_path=".pr-flow/review-pass.json")
+    write_review_pass(project)
+    fake_bin, _calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED")},
+            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED")},
+        ],
+    )
+
+    result = run_with_path(fake_bin, "complete", "--project", str(project))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: ready_to_merge" in result.stdout

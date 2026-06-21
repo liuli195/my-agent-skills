@@ -4,6 +4,7 @@ import argparse
 import json
 import shutil
 import subprocess
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,8 @@ import yaml
 
 
 COMMANDS = ("diagnose", "init", "complete", "cleanup", "hotfix", "tweak")
+PR_VIEW_FIELDS = "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup"
+BLOCKING_REVIEW_DECISIONS = {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}
 PR_TEMPLATE = """## Summary
 
 ## Scope
@@ -41,7 +44,7 @@ def default_config(base_branch: str) -> dict:
         "defaults": {
             "baseBranch": base_branch,
             "mergeStrategy": "merge",
-            "reviewGate": {"mode": "github"},
+            "reviewGate": {"mode": "github", "evidencePath": ".pr-flow/review-pass.json"},
             "wait": {"timeoutSeconds": 600, "pollSeconds": 15},
             "pr": {
                 "bodyTemplatePath": ".pr-flow/pr-template.md",
@@ -92,13 +95,24 @@ def git(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 def gh(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
     executable = shutil.which("gh") or "gh"
-    return subprocess.run(
-        [executable, *args],
-        cwd=project,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
+    command = [executable, *args]
+    try:
+        return subprocess.run(
+            command,
+            cwd=project,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except FileNotFoundError as exc:
+        return subprocess.CompletedProcess(command, 127, "", str(exc))
+
+
+class PrFlowError(RuntimeError):
+    def __init__(self, reason: str, details: dict[str, Any]) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.details = details
 
 
 def stop(project: Path, command: str, status: str, message: str, details: dict[str, Any]) -> int:
@@ -122,6 +136,29 @@ def base_branch_from_config(config: dict[str, Any]) -> str:
         return "main"
     base_branch = defaults.get("baseBranch")
     return base_branch if isinstance(base_branch, str) and base_branch else "main"
+
+
+def defaults_from_config(config: dict[str, Any]) -> dict[str, Any]:
+    defaults = config.get("defaults")
+    return defaults if isinstance(defaults, dict) else {}
+
+
+def wait_config_from_config(config: dict[str, Any]) -> dict[str, Any]:
+    wait_config = defaults_from_config(config).get("wait")
+    return wait_config if isinstance(wait_config, dict) else {}
+
+
+def review_gate_config(config: dict[str, Any]) -> dict[str, Any]:
+    review_gate = defaults_from_config(config).get("reviewGate")
+    return review_gate if isinstance(review_gate, dict) else {"mode": "github"}
+
+
+def stop_state(status: str, message: str, details: dict[str, Any]) -> dict[str, Any]:
+    return {"status": status, "message": message, "details": details}
+
+
+def stop_from_state(project: Path, command: str, state: dict[str, Any]) -> int:
+    return stop(project, command, state["status"], state["message"], state["details"])
 
 
 def check_value(check: dict[str, Any], key: str) -> str:
@@ -156,6 +193,146 @@ def has_failing_check(checks: list[Any]) -> bool:
         ):
             return True
     return False
+
+
+def parse_pr_result(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    try:
+        pr = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        details = command_failure_details("gh_pr_view_parse_failed", result)
+        details["error"] = str(exc)
+        raise PrFlowError("gh_pr_view_parse_failed", details) from exc
+    if not isinstance(pr, dict):
+        details = command_failure_details("gh_pr_view_parse_failed", result)
+        raise PrFlowError("gh_pr_view_parse_failed", details)
+    return pr
+
+
+def find_pr(project: Path) -> dict[str, Any] | None:
+    result = gh(project, "pr", "view", "--json", PR_VIEW_FIELDS)
+    if result.returncode != 0:
+        return None
+    return parse_pr_result(result)
+
+
+def create_pr(project: Path, config: dict[str, Any]) -> dict[str, Any]:
+    result = gh(project, "pr", "create", "--base", base_branch_from_config(config), "--fill")
+    if result.returncode != 0:
+        details = command_failure_details("gh_pr_create_failed", result)
+        raise PrFlowError("gh_pr_create_failed", details)
+    pr = find_pr(project)
+    if pr is None:
+        details = command_failure_details("gh_pr_create_missing_pr", result)
+        raise PrFlowError("gh_pr_create_missing_pr", details)
+    return pr
+
+
+def sync_pr(project: Path, pr: dict[str, Any]) -> dict[str, Any]:
+    current = find_pr(project)
+    return current if current is not None else pr
+
+
+def wait_for_checks(
+    project: Path,
+    pr: dict[str, Any],
+    wait_config: dict[str, Any],
+) -> dict[str, Any] | None:
+    timeout_seconds = int(wait_config.get("timeoutSeconds", 600))
+    poll_seconds = int(wait_config.get("pollSeconds", 15))
+    started_at = time.monotonic()
+    current = pr
+
+    while True:
+        checks = pr_checks(current)
+        details = {
+            "reason": "checks_pending",
+            "pr": current.get("number"),
+            "headRefName": current.get("headRefName"),
+            "baseRefName": current.get("baseRefName"),
+        }
+        if has_failing_check(checks):
+            details["reason"] = "checks_or_review_blocking"
+            return stop_state("REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking", details)
+        if not has_pending_check(checks):
+            return None
+        if timeout_seconds <= 0:
+            return stop_state("DISPATCH_REQUIRED", "checks_pending", details)
+
+        remaining = timeout_seconds - (time.monotonic() - started_at)
+        if remaining <= 0:
+            return stop_state("DISPATCH_REQUIRED", "checks_pending", details)
+        time.sleep(min(max(poll_seconds, 1), remaining))
+        current = sync_pr(project, current)
+
+
+def review_gate_mode(config: dict[str, Any]) -> str:
+    mode = review_gate_config(config).get("mode", "github")
+    return mode if isinstance(mode, str) and mode else "github"
+
+
+def github_review_is_blocking(pr: dict[str, Any]) -> bool:
+    return pr.get("reviewDecision") in BLOCKING_REVIEW_DECISIONS
+
+
+def load_local_review_evidence(project: Path, config: dict[str, Any]) -> dict[str, Any]:
+    evidence_path_value = review_gate_config(config).get("evidencePath", ".pr-flow/review-pass.json")
+    evidence_path = Path(evidence_path_value) if isinstance(evidence_path_value, str) else Path(".pr-flow/review-pass.json")
+    if not evidence_path.is_absolute():
+        evidence_path = project / evidence_path
+    try:
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise PrFlowError("local_review_evidence_missing", {"reason": "local_review_evidence_missing", "path": str(evidence_path)}) from exc
+    except json.JSONDecodeError as exc:
+        raise PrFlowError(
+            "local_review_evidence_parse_failed",
+            {"reason": "local_review_evidence_parse_failed", "path": str(evidence_path), "error": str(exc)},
+        ) from exc
+    if not isinstance(evidence, dict):
+        raise PrFlowError("local_review_evidence_parse_failed", {"reason": "local_review_evidence_parse_failed", "path": str(evidence_path)})
+    return evidence
+
+
+def local_review_evidence_passes(evidence: dict[str, Any], pr: dict[str, Any]) -> bool:
+    return (
+        evidence.get("status") == "pass"
+        and evidence.get("base_ref") == pr.get("baseRefName")
+        and evidence.get("head_ref") == pr.get("headRefName")
+        and evidence.get("blocking_findings") == 0
+    )
+
+
+def check_review_gate(project: Path, config: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any] | None:
+    mode = review_gate_mode(config)
+    details = {
+        "reason": "review_gate_blocking",
+        "reviewGateMode": mode,
+        "reviewDecision": pr.get("reviewDecision"),
+        "pr": pr.get("number"),
+        "headRefName": pr.get("headRefName"),
+        "baseRefName": pr.get("baseRefName"),
+    }
+    if mode == "skip":
+        return None
+    if mode not in {"github", "local", "dual"}:
+        details["reason"] = "unknown_review_gate_mode"
+        return stop_state("EXCEPTION_REQUIRED", "unknown_review_gate_mode", details)
+
+    if mode in {"github", "dual"} and github_review_is_blocking(pr):
+        return stop_state("REPLY_OR_FIX_REQUIRED", "review_gate_blocking", details)
+
+    if mode in {"local", "dual"}:
+        try:
+            evidence = load_local_review_evidence(project, config)
+        except PrFlowError as exc:
+            details.update(exc.details)
+            details["reason"] = exc.reason
+            return stop_state("REPLY_OR_FIX_REQUIRED", exc.reason, details)
+        if not local_review_evidence_passes(evidence, pr):
+            details["reason"] = "local_review_evidence_failed"
+            return stop_state("REPLY_OR_FIX_REQUIRED", "local_review_evidence_failed", details)
+
+    return None
 
 
 def run_init(args: argparse.Namespace) -> int:
@@ -252,6 +429,43 @@ def run_diagnose(args: argparse.Namespace) -> int:
     return stop(project, args.command, "EXCEPTION_REQUIRED", "no_stop_state_detected", gh_details)
 
 
+def run_complete(args: argparse.Namespace) -> int:
+    project = resolve_project(args.project)
+    try:
+        config = load_config(project)
+    except FileNotFoundError:
+        details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
+        return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
+
+    try:
+        pr = find_pr(project)
+        if pr is None:
+            pr = create_pr(project, config)
+        pr = sync_pr(project, pr)
+    except PrFlowError as exc:
+        return stop(project, args.command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
+
+    check_stop = wait_for_checks(project, pr, wait_config_from_config(config))
+    if check_stop is not None:
+        return stop_from_state(project, args.command, check_stop)
+
+    review_stop = check_review_gate(project, config, pr)
+    if review_stop is not None:
+        return stop_from_state(project, args.command, review_stop)
+
+    details = {
+        "reason": "ready_to_merge",
+        "pr": pr.get("number"),
+        "headRefName": pr.get("headRefName"),
+        "baseRefName": pr.get("baseRefName"),
+        "reviewGateMode": review_gate_mode(config),
+    }
+    write_status(project, args.command, "ready_to_merge", details)
+    print("status: ready_to_merge")
+    print("ready_to_merge")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pr_flow.py",
@@ -264,7 +478,7 @@ def build_parser() -> argparse.ArgumentParser:
             help=f"{command} command",
             description=f"{command} command",
         )
-        if command in {"diagnose", "init"}:
+        if command in {"diagnose", "init", "complete"}:
             subparser.add_argument("--project", type=Path)
         if command == "init":
             subparser.add_argument("--base-branch", default="main")
@@ -279,6 +493,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_init(args)
     if args.command == "diagnose" and args.project is not None:
         return run_diagnose(args)
+    if args.command == "complete" and args.project is not None:
+        return run_complete(args)
     print("status: not_implemented")
     return 2
 
