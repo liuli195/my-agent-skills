@@ -1,6 +1,6 @@
 {
   "name": "cross-agent-review",
-  "version": "0.1.1",
+  "version": "0.1.7",
   "description": "Cross-agent review plugin for Codex and Claude agents",
   "skills": "./skills"
 }
