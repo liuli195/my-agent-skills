@@ -1078,9 +1078,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             missing.append("--authorization-phrase")
         print(f"error: hotfix requires {', '.join(missing)}", file=sys.stderr)
         return 2
-    if args.command == "tweak" and args.project is None and args.reason is None:
-        print("status: not_implemented")
-        return 2
     if args.command == "tweak" and (args.reason is None or not args.reason.strip()):
         print("error: tweak_requires_reason: --reason", file=sys.stderr)
         return 2

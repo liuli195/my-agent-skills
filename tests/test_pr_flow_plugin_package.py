@@ -118,6 +118,10 @@ def test_pr_flow_bare_commands_report_stable_contract() -> None:
             assert result.stdout == ""
             assert "hotfix_target_required" in result.stderr
             continue
+        if command == "tweak":
+            assert result.stdout == ""
+            assert "tweak_requires_reason" in result.stderr
+            continue
         assert result.stdout == "status: not_implemented\n"
         assert "unrecognized arguments" not in result.stderr
         assert "骨架入口" in skill_text
