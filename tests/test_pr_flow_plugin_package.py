@@ -130,6 +130,18 @@ def test_pr_flow_bare_commands_report_stable_contract() -> None:
         assert "status: not_implemented" in skill_text
 
 
+def test_pr_flow_package_passes_repo_build_checks() -> None:
+    result = subprocess.run(
+        [sys.executable, "scripts/check.py", "build"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "status: build checks passed" in result.stdout
+
+
 def test_claude_marketplace_appends_pr_flow_after_cross_agent_review() -> None:
     catalog = read_json(CLAUDE_REPO_MARKETPLACE)
     names = plugin_names(catalog)
