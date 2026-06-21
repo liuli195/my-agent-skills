@@ -27,9 +27,9 @@
 
 ## 5. Cleanup
 
-- [ ] 5.1 Implement merged PR cleanup precondition checks.
-- [ ] 5.2 Implement remote head branch deletion, base branch sync, local branch deletion, and final status summary.
-- [ ] 5.3 Add tests for #51 cleanup success and refusal cases.
+- [x] 5.1 Implement merged PR cleanup precondition checks.
+- [x] 5.2 Implement remote head branch deletion, base branch sync, local branch deletion, and final status summary.
+- [x] 5.3 Add tests for #51 cleanup success and refusal cases.
 
 ## 6. Hotfix And Tweak
 

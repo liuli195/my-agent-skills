@@ -679,7 +679,7 @@ git commit -m "feat: 添加 PR 同步和审查门禁"
 - Modify: `tests/test_pr_flow_cli.py`
 - Modify: `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py`
 
-- [ ] **Step 1: Write failing cleanup success test**
+- [x] **Step 1: Write failing cleanup success test**
 
 Use a bare remote to test real branch deletion:
 
@@ -722,7 +722,7 @@ def test_cleanup_merged_pr_deletes_remote_and_local_head_then_syncs_base(tmp_pat
     assert subprocess.run(["git", "-C", str(remote), "show-ref", "--verify", "refs/heads/feature/demo"], text=True, capture_output=True).returncode == 1
 ```
 
-- [ ] **Step 2: Write failing cleanup refusal tests**
+- [x] **Step 2: Write failing cleanup refusal tests**
 
 Cover:
 - PR state is not `MERGED`.
@@ -732,7 +732,7 @@ Cover:
 
 Expected output includes `EXCEPTION_REQUIRED`.
 
-- [ ] **Step 3: Run cleanup tests and verify they fail**
+- [x] **Step 3: Run cleanup tests and verify they fail**
 
 Run:
 
@@ -742,7 +742,7 @@ python -m pytest tests/test_pr_flow_cli.py::test_cleanup_merged_pr_deletes_remot
 
 Expected: FAIL because cleanup is not implemented.
 
-- [ ] **Step 4: Implement cleanup**
+- [x] **Step 4: Implement cleanup**
 
 Implement sequence:
 - Load PR through `gh pr view`.
@@ -756,7 +756,7 @@ Implement sequence:
 - Delete local head with `git branch -d <headRefName>`.
 - Print final branch state.
 
-- [ ] **Step 5: Run cleanup tests**
+- [x] **Step 5: Run cleanup tests**
 
 Run:
 
@@ -766,7 +766,7 @@ python -m pytest tests/test_pr_flow_cli.py -q
 
 Expected: cleanup success and refusal cases pass.
 
-- [ ] **Step 6: Commit cleanup**
+- [x] **Step 6: Commit cleanup**
 
 ```bash
 git add plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py tests/test_pr_flow_cli.py
