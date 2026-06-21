@@ -7,6 +7,7 @@ import json
 import shlex
 import shutil
 import subprocess
+import sys
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -199,6 +200,14 @@ def branch_config_for_target(config: dict[str, Any], target: str) -> dict[str, A
     if hotfix_config:
         merged["hotfix"] = hotfix_config
     return merged
+
+
+def target_explicitly_allows_hotfix_push(config: dict[str, Any], target: str) -> bool:
+    branches = config.get("branches")
+    branch_config = branches.get(target) if isinstance(branches, dict) else None
+    if not isinstance(branch_config, dict):
+        return False
+    return branch_config.get("allowHotfixPush") is True
 
 
 def hotfix_remote(branch_config: dict[str, Any]) -> str:
@@ -734,6 +743,7 @@ def write_hotfix_audit(
     remote: str,
     before_commit: str,
     after_commit: str,
+    remote_after: str,
     verification: subprocess.CompletedProcess[str],
     verify_command: str,
 ) -> Path:
@@ -748,6 +758,12 @@ def write_hotfix_audit(
         "remote": remote,
         "beforeCommit": before_commit,
         "afterCommit": after_commit,
+        "readback": {
+            "remote": remote,
+            "targetBranch": target,
+            "remoteAfter": remote_after,
+            "matchedHead": remote_after == after_commit,
+        },
         "actor": hotfix_actor(project),
         "timestamp": timestamp,
         "verification": {
@@ -762,12 +778,29 @@ def write_hotfix_audit(
     return audit_path
 
 
+def confirm_hotfix_remote_readback(project: Path, remote: str, target: str, expected_head: str) -> str:
+    require_git_success(project, "git_fetch_target_readback_failed", "fetch", remote, target)
+    remote_ref = f"{remote}/{target}"
+    remote_after = require_git_success(project, "git_remote_target_readback_failed", "rev-parse", remote_ref).stdout.strip()
+    if remote_after != expected_head:
+        raise PrFlowError(
+            "hotfix_readback_mismatch",
+            {
+                "reason": "hotfix_readback_mismatch",
+                "targetBranch": target,
+                "remote": remote,
+                "currentHead": expected_head,
+                "remoteAfter": remote_after,
+            },
+        )
+    return remote_after
+
+
 def run_hotfix(args: argparse.Namespace) -> int:
     project = resolve_project(args.project)
     target = args.target
     try:
         config = load_config(project)
-        verify_authorization_phrase(config, args.authorization_phrase)
         branch_config = branch_config_for_target(config, target)
         remote = hotfix_remote(branch_config)
         details: dict[str, Any] = {
@@ -775,7 +808,7 @@ def run_hotfix(args: argparse.Namespace) -> int:
             "remote": remote,
         }
 
-        if branch_config.get("allowHotfixPush") is not True:
+        if not target_explicitly_allows_hotfix_push(config, target):
             details["reason"] = "hotfix_push_not_allowed"
             return stop(project, args.command, "EXCEPTION_REQUIRED", "hotfix_push_not_allowed", details)
 
@@ -797,14 +830,17 @@ def run_hotfix(args: argparse.Namespace) -> int:
 
         verify_command = hotfix_verify_command(branch_config)
         verification = run_hotfix_verify_command(project, verify_command)
+        verify_authorization_phrase(config, args.authorization_phrase)
 
         require_git_success(project, "git_hotfix_push_failed", "push", remote, f"HEAD:refs/heads/{target}")
+        remote_after = confirm_hotfix_remote_readback(project, remote, target, current_head)
         audit_path = write_hotfix_audit(
             project,
             target=target,
             remote=remote,
             before_commit=remote_head,
             after_commit=current_head,
+            remote_after=remote_after,
             verification=verification,
             verify_command=verify_command,
         )
@@ -813,6 +849,7 @@ def run_hotfix(args: argparse.Namespace) -> int:
             {
                 "reason": "hotfix_complete",
                 "auditPath": str(audit_path.relative_to(project)),
+                "remoteAfter": remote_after,
             }
         )
         write_status(project, args.command, "hotfix_complete", details)
@@ -931,6 +968,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         and args.authorization_phrase is not None
     ):
         return run_hotfix(args)
+    if args.command == "hotfix" and (
+        args.project is not None or args.target is not None or args.authorization_phrase is not None
+    ):
+        missing = []
+        if args.project is None:
+            missing.append("--project")
+        if args.target is None:
+            missing.append("--target")
+        if args.authorization_phrase is None:
+            missing.append("--authorization-phrase")
+        print(f"error: hotfix requires {', '.join(missing)}", file=sys.stderr)
+        return 2
     print("status: not_implemented")
     return 2
 
