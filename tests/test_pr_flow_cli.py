@@ -159,19 +159,25 @@ def write_fake_gh_sequence(bin_dir: Path, responses: list[dict[str, object]]) ->
     return bin_dir, calls_path
 
 
-def pr_view_json(*, checks: list[dict], review_decision: str = "REVIEW_REQUIRED") -> str:
+def pr_view_json(
+    *,
+    checks: list[dict],
+    review_decision: str = "REVIEW_REQUIRED",
+    head_oid: str | None = None,
+) -> str:
+    payload = {
+        "number": 12,
+        "state": "OPEN",
+        "mergeStateStatus": "BLOCKED",
+        "reviewDecision": review_decision,
+        "headRefName": "feature/example",
+        "baseRefName": "main",
+        "statusCheckRollup": checks,
+    }
+    if head_oid is not None:
+        payload["headRefOid"] = head_oid
     return (
-        json.dumps(
-            {
-                "number": 12,
-                "state": "OPEN",
-                "mergeStateStatus": "BLOCKED",
-                "reviewDecision": review_decision,
-                "headRefName": "feature/example",
-                "baseRefName": "main",
-                "statusCheckRollup": checks,
-            }
-        )
+        json.dumps(payload)
         + "\n"
     )
 
@@ -259,6 +265,67 @@ def init_cleanup_project(tmp_path: Path) -> tuple[Path, Path]:
     return project, remote
 
 
+def init_complete_project(
+    tmp_path: Path,
+    *,
+    review_mode: str = "github",
+    merge_strategy: str = "merge",
+    evidence_path: str | None = None,
+) -> tuple[Path, Path]:
+    remote = tmp_path / "remote.git"
+    remote_init = subprocess.run(
+        ["git", "init", "--bare", str(remote)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert remote_init.returncode == 0, remote_init.stdout + remote_init.stderr
+
+    project = tmp_path / "project"
+    assert init_repo(project) == "main"
+    configure_complete(
+        project,
+        review_mode=review_mode,
+        merge_strategy=merge_strategy,
+        evidence_path=evidence_path,
+    )
+    git(project, "add", ".pr-flow")
+    git(project, "commit", "-m", "configure pr flow")
+    git(project, "remote", "add", "origin", str(remote))
+    git(project, "push", "-u", "origin", "main")
+
+    git(project, "checkout", "-b", "feature/example")
+    (project / "README.md").write_text("# Test Project\n\nFeature change\n", encoding="utf-8")
+    git(project, "add", "README.md")
+    git(project, "commit", "-m", "feature")
+    git(project, "push", "-u", "origin", "feature/example")
+
+    integrator = tmp_path / "integrator"
+    clone_result = subprocess.run(
+        ["git", "clone", str(remote), str(integrator)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
+    git(integrator, "config", "user.email", "test@example.com")
+    git(integrator, "config", "user.name", "Test User")
+    git(integrator, "checkout", "-B", "main", "origin/main")
+    git(integrator, "merge", "--ff-only", "origin/feature/example")
+    git(integrator, "push", "origin", "main")
+
+    git(project, "checkout", "feature/example")
+    return project, remote
+
+
+def passing_pr_view_json(project: Path, *, review_decision: str = "APPROVED") -> str:
+    return pr_view_json(
+        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        review_decision=review_decision,
+        head_oid=git(project, "rev-parse", "HEAD"),
+    )
+
+
 def assert_cleanup_exception(project: Path, result: subprocess.CompletedProcess[str], reason: str) -> None:
     assert result.returncode == 1
     assert "status: EXCEPTION_REQUIRED" in result.stdout
@@ -272,12 +339,14 @@ def configure_complete(
     project: Path,
     *,
     review_mode: str,
+    merge_strategy: str = "merge",
     evidence_path: str | None = None,
 ) -> None:
     assert run("init", "--project", str(project)).returncode == 0
     config_path = project / ".pr-flow" / "config.yaml"
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     config["defaults"]["wait"] = {"timeoutSeconds": 0, "pollSeconds": 0}
+    config["defaults"]["mergeStrategy"] = merge_strategy
     config["defaults"]["reviewGate"] = {"mode": review_mode}
     if evidence_path is not None:
         config["defaults"]["reviewGate"]["evidencePath"] = evidence_path
@@ -488,45 +557,180 @@ def test_diagnose_outputs_reply_or_fix_required_for_review_required(tmp_path: Pa
     assert status["details"]["reviewDecision"] == "REVIEW_REQUIRED"
 
 
-def test_complete_creates_pr_when_none_exists(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    configure_complete(project, review_mode="github")
+def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path: Path) -> None:
+    project, _remote = init_complete_project(tmp_path)
+    head_oid = git(project, "rev-parse", "HEAD")
     fake_bin, calls_path = write_fake_gh_sequence(
         tmp_path / "bin",
         [
             {"stderr": "no pull requests found\n", "exit_code": 1},
             {"stdout": "https://github.example/test/repo/pull/12\n"},
-            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED")},
-            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED")},
+            {"stdout": passing_pr_view_json(project)},
+            {"stdout": passing_pr_view_json(project)},
+            {"stdout": ""},
+            {"stdout": cleanup_pr_view_json()},
         ],
     )
 
     result = run_with_path(fake_bin, "complete", "--project", str(project))
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: ready_to_merge" in result.stdout
+    assert "status: cleanup_complete" in result.stdout
     calls = json.loads(calls_path.read_text(encoding="utf-8"))
     assert calls[0][:2] == ["pr", "view"]
     assert calls[1][:2] == ["pr", "create"]
+    assert calls[4] == ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid]
+    assert calls[5] == ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"]
 
 
-def test_complete_skip_review_gate_ignores_github_changes_requested(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    configure_complete(project, review_mode="skip")
-    fake_bin, _calls_path = write_fake_gh_sequence(
+def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path) -> None:
+    project, remote = init_complete_project(tmp_path)
+    head_oid = git(project, "rev-parse", "HEAD")
+    fake_bin, calls_path = write_fake_gh_sequence(
         tmp_path / "bin",
         [
-            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="CHANGES_REQUESTED")},
-            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="CHANGES_REQUESTED")},
+            {"stdout": passing_pr_view_json(project)},
+            {"stdout": passing_pr_view_json(project)},
+            {"stdout": ""},
+            {"stdout": cleanup_pr_view_json()},
         ],
     )
 
     result = run_with_path(fake_bin, "complete", "--project", str(project))
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: ready_to_merge" in result.stdout
+    assert "status: cleanup_complete" in result.stdout
+    assert git(project, "branch", "--show-current") == "main"
+    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode != 0
+    calls = json.loads(calls_path.read_text(encoding="utf-8"))
+    assert calls == [
+        [
+            "pr",
+            "view",
+            "--json",
+            "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid",
+        ],
+        [
+            "pr",
+            "view",
+            "--json",
+            "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid",
+        ],
+        ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid],
+        ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
+    ]
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "cleanup_complete"
+    assert status["command"] == "cleanup"
+
+
+def test_complete_uses_configured_merge_strategy_flag(tmp_path: Path) -> None:
+    for strategy, expected_flag in [("merge", "--merge"), ("squash", "--squash"), ("rebase", "--rebase")]:
+        case_tmp = tmp_path / strategy
+        case_tmp.mkdir()
+        project, _remote = init_complete_project(case_tmp, merge_strategy=strategy)
+        head_oid = git(project, "rev-parse", "HEAD")
+        fake_bin, calls_path = write_fake_gh_sequence(
+            case_tmp / "bin",
+            [
+                {"stdout": passing_pr_view_json(project)},
+                {"stdout": passing_pr_view_json(project)},
+                {"stdout": ""},
+                {"stdout": cleanup_pr_view_json()},
+            ],
+        )
+
+        result = run_with_path(fake_bin, "complete", "--project", str(project))
+
+        assert result.returncode == 0, strategy + result.stdout + result.stderr
+        calls = json.loads(calls_path.read_text(encoding="utf-8"))
+        assert calls[2] == ["pr", "merge", "12", expected_flag, "--match-head-commit", head_oid]
+
+
+def test_complete_rejects_when_head_moved_before_merge(tmp_path: Path) -> None:
+    project, _remote = init_complete_project(tmp_path)
+    moved_head_oid = "0" * 40
+    fake_bin, calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {
+                "stdout": pr_view_json(
+                    checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                    review_decision="APPROVED",
+                    head_oid=moved_head_oid,
+                )
+            },
+            {
+                "stdout": pr_view_json(
+                    checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                    review_decision="APPROVED",
+                    head_oid=moved_head_oid,
+                )
+            },
+        ],
+    )
+
+    result = run_with_path(fake_bin, "complete", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    calls = json.loads(calls_path.read_text(encoding="utf-8"))
+    assert calls == [
+        [
+            "pr",
+            "view",
+            "--json",
+            "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid",
+        ],
+        [
+            "pr",
+            "view",
+            "--json",
+            "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid",
+        ],
+    ]
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "EXCEPTION_REQUIRED"
+    assert status["command"] == "complete"
+    assert status["details"]["reason"] == "head_moved"
+
+
+def test_complete_rejects_unknown_merge_strategy(tmp_path: Path) -> None:
+    project, _remote = init_complete_project(tmp_path, merge_strategy="octopus")
+    fake_bin, calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {"stdout": passing_pr_view_json(project)},
+            {"stdout": passing_pr_view_json(project)},
+        ],
+    )
+
+    result = run_with_path(fake_bin, "complete", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    calls = json.loads(calls_path.read_text(encoding="utf-8"))
+    assert len(calls) == 2
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "unknown_merge_strategy"
+
+
+def test_complete_skip_review_gate_ignores_github_changes_requested(tmp_path: Path) -> None:
+    project, _remote = init_complete_project(tmp_path, review_mode="skip")
+    fake_bin, _calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {"stdout": passing_pr_view_json(project, review_decision="CHANGES_REQUESTED")},
+            {"stdout": passing_pr_view_json(project, review_decision="CHANGES_REQUESTED")},
+            {"stdout": ""},
+            {"stdout": cleanup_pr_view_json()},
+        ],
+    )
+
+    result = run_with_path(fake_bin, "complete", "--project", str(project))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
 
 
 def test_complete_github_review_gate_blocks_changes_requested(tmp_path: Path) -> None:
@@ -574,22 +778,23 @@ def test_complete_wait_timeout_zero_reports_pending_checks_without_sleep(tmp_pat
 
 
 def test_complete_local_review_gate_accepts_review_pass_evidence(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    init_feature_branch(project)
-    configure_complete(project, review_mode="local", evidence_path=".pr-flow/review-pass.json")
-    write_review_pass(project)
+    evidence_path = tmp_path / "review-pass.json"
+    project, _remote = init_complete_project(tmp_path, review_mode="local", evidence_path=str(evidence_path))
+    write_review_pass(project, str(evidence_path))
     fake_bin, _calls_path = write_fake_gh_sequence(
         tmp_path / "bin",
         [
-            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="CHANGES_REQUESTED")},
-            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="CHANGES_REQUESTED")},
+            {"stdout": passing_pr_view_json(project, review_decision="CHANGES_REQUESTED")},
+            {"stdout": passing_pr_view_json(project, review_decision="CHANGES_REQUESTED")},
+            {"stdout": ""},
+            {"stdout": cleanup_pr_view_json()},
         ],
     )
 
     result = run_with_path(fake_bin, "complete", "--project", str(project))
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: ready_to_merge" in result.stdout
+    assert "status: cleanup_complete" in result.stdout
 
 
 def test_complete_local_review_gate_blocks_stale_diff_evidence(tmp_path: Path) -> None:
@@ -616,22 +821,23 @@ def test_complete_local_review_gate_blocks_stale_diff_evidence(tmp_path: Path) -
 
 
 def test_complete_dual_review_gate_requires_github_and_local_evidence(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    init_feature_branch(project)
-    configure_complete(project, review_mode="dual", evidence_path=".pr-flow/review-pass.json")
-    write_review_pass(project)
+    evidence_path = tmp_path / "review-pass.json"
+    project, _remote = init_complete_project(tmp_path, review_mode="dual", evidence_path=str(evidence_path))
+    write_review_pass(project, str(evidence_path))
     fake_bin, _calls_path = write_fake_gh_sequence(
         tmp_path / "bin",
         [
-            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED")},
-            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED")},
+            {"stdout": passing_pr_view_json(project)},
+            {"stdout": passing_pr_view_json(project)},
+            {"stdout": ""},
+            {"stdout": cleanup_pr_view_json()},
         ],
     )
 
     result = run_with_path(fake_bin, "complete", "--project", str(project))
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: ready_to_merge" in result.stdout
+    assert "status: cleanup_complete" in result.stdout
 
 
 def test_cleanup_merged_pr_checks_out_base_pulls_and_deletes_branches(tmp_path: Path) -> None:

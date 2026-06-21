@@ -14,7 +14,7 @@ import yaml
 
 
 COMMANDS = ("diagnose", "init", "complete", "cleanup", "hotfix", "tweak")
-PR_VIEW_FIELDS = "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup"
+PR_VIEW_FIELDS = "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid"
 BLOCKING_REVIEW_DECISIONS = {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}
 PR_TEMPLATE = """## Summary
 
@@ -165,6 +165,24 @@ def review_gate_config(config: dict[str, Any]) -> dict[str, Any]:
     return review_gate if isinstance(review_gate, dict) else {"mode": "github"}
 
 
+def merge_strategy_flag(config: dict[str, Any]) -> str:
+    strategy = defaults_from_config(config).get("mergeStrategy", "merge")
+    flags = {
+        "merge": "--merge",
+        "squash": "--squash",
+        "rebase": "--rebase",
+    }
+    if not isinstance(strategy, str) or strategy not in flags:
+        raise PrFlowError(
+            "unknown_merge_strategy",
+            {
+                "reason": "unknown_merge_strategy",
+                "mergeStrategy": strategy,
+            },
+        )
+    return flags[strategy]
+
+
 def stop_state(status: str, message: str, details: dict[str, Any]) -> dict[str, Any]:
     return {"status": status, "message": message, "details": details}
 
@@ -256,6 +274,61 @@ def require_git_success(project: Path, reason: str, *args: str) -> subprocess.Co
         details["gitArgs"] = list(args)
         raise PrFlowError(reason, details)
     return result
+
+
+def head_oid(project: Path) -> str:
+    return require_git_success(project, "git_head_oid_failed", "rev-parse", "HEAD").stdout.strip()
+
+
+def merge_pr(project: Path, config: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any] | None:
+    pr_number = pr.get("number")
+    if isinstance(pr_number, bool) or not isinstance(pr_number, (int, str)) or str(pr_number) == "":
+        raise PrFlowError(
+            "invalid_pr_number",
+            {
+                "reason": "invalid_pr_number",
+                "pr": pr_number,
+            },
+        )
+
+    expected_head_oid = pr.get("headRefOid")
+    if not isinstance(expected_head_oid, str) or not expected_head_oid:
+        raise PrFlowError(
+            "missing_head_ref_oid",
+            {
+                "reason": "missing_head_ref_oid",
+                "pr": pr_number,
+                "headRefName": pr.get("headRefName"),
+            },
+        )
+
+    strategy_flag = merge_strategy_flag(config)
+    current_head_oid = head_oid(project)
+    if current_head_oid != expected_head_oid:
+        raise PrFlowError(
+            "head_moved",
+            {
+                "reason": "head_moved",
+                "pr": pr_number,
+                "headRefName": pr.get("headRefName"),
+                "headRefOid": expected_head_oid,
+                "currentHeadOid": current_head_oid,
+            },
+        )
+
+    result = gh(project, "pr", "merge", str(pr_number), strategy_flag, "--match-head-commit", current_head_oid)
+    if result.returncode != 0:
+        details = command_failure_details("gh_pr_merge_failed", result)
+        details.update(
+            {
+                "pr": pr_number,
+                "headRefName": pr.get("headRefName"),
+                "headRefOid": expected_head_oid,
+                "mergeStrategy": defaults_from_config(config).get("mergeStrategy", "merge"),
+            }
+        )
+        raise PrFlowError("gh_pr_merge_failed", details)
+    return None
 
 
 def require_cleanup_pr_fields(pr: dict[str, Any]) -> tuple[str, str]:
@@ -531,17 +604,13 @@ def run_complete(args: argparse.Namespace) -> int:
     if review_stop is not None:
         return stop_from_state(project, args.command, review_stop)
 
-    details = {
-        "reason": "ready_to_merge",
-        "pr": pr.get("number"),
-        "headRefName": pr.get("headRefName"),
-        "baseRefName": pr.get("baseRefName"),
-        "reviewGateMode": review_gate_mode(config),
-    }
-    write_status(project, args.command, "ready_to_merge", details)
-    print("status: ready_to_merge")
-    print("ready_to_merge")
-    return 0
+    try:
+        merge_pr(project, config, pr)
+    except PrFlowError as exc:
+        return stop(project, args.command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
+
+    cleanup_args = argparse.Namespace(command="cleanup", project=project, pr=str(pr.get("number")))
+    return run_cleanup(cleanup_args)
 
 
 def run_cleanup(args: argparse.Namespace) -> int:
