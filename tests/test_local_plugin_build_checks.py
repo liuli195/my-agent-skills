@@ -454,13 +454,13 @@ def test_verify_delegates_to_pytest(tmp_path: Path) -> None:
     assert calls == [[sys.executable, "-m", "pytest"]]
 
 
-def test_comet_config_points_to_check_commands() -> None:
+def test_comet_config_does_not_duplicate_guard_commands() -> None:
     import yaml
 
     data = yaml.safe_load((REPO_ROOT / ".comet" / "config.yaml").read_text(encoding="utf-8"))
 
-    assert data["build_command"] == "python scripts/check.py build"
-    assert data["verify_command"] == "python scripts/check.py verify"
+    assert "build_command" not in data
+    assert "verify_command" not in data
 
 
 def test_root_comet_yaml_points_to_check_commands_for_guard() -> None:

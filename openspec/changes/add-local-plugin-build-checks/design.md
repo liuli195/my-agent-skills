@@ -2,16 +2,17 @@
 
 本仓库维护 Agent Plugin（代理插件）和 Skill（技能）源码，没有传统编译产物。当前 `.comet/config.yaml` 没有 `build_command`（构建命令）和 `verify_command`（验证命令），而 `.comet/build-check.sh` 只是历史上为跑通流程留下的项目脚本，且只跑部分 pytest（Python 测试框架）文件。
 
-Comet（双星流程）的 build guard（构建守卫）需要 build 或测试命令通过后才能推进。为了不修改 Comet 本身，仓库应提供一个本地、可重复、无外部副作用的构建命令。
+Comet（双星流程）的 build guard（构建守卫）需要 build 或测试命令通过后才能推进。为了不修改 Comet 本身，仓库应提供一个本地、可重复、无外部副作用的构建命令；但 `.comet/config.yaml` 不再重复保存这两个命令。
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- 定义 `build_command` 为“本地插件包成型检查”，不是传统编译。
-- 让 `build_command` 同时覆盖第一批和第二批检查：Claude（Claude 编码工具）本地校验、Claude marketplace（插件市场目录）结构、Codex（OpenAI 编码代理）插件清单、release-flow projection（发布流程投影）一致性、Guard Profile（守卫画像）模板镜像一致性。
-- 定义 `verify_command` 为完整 Python（Python 语言）测试入口。
+- 定义本地构建入口为“本地插件包成型检查”，不是传统编译。
+- 让构建入口同时覆盖第一批和第二批检查：Claude（Claude 编码工具）本地校验、Claude marketplace（插件市场目录）结构、Codex（OpenAI 编码代理）插件清单、release-flow projection（发布流程投影）一致性、Guard Profile（守卫画像）模板镜像一致性。
+- 定义完整 Python（Python 语言）测试入口。
 - 用标准 Python 项目结构承载验证配置。
+- 不在 `.comet/config.yaml` 重复保存 `build_command` 或 `verify_command`。
 
 **Non-Goals:**
 
@@ -64,14 +65,9 @@ Claude 校验只覆盖 Claude 插件视角，本仓库还需要补充：
 
 `python scripts/check.py verify` 运行 `python -m pytest`，由 pytest 配置决定默认范围。这样 `.comet/build-check.sh` 中硬编码的部分测试列表不再作为正式验证入口。
 
-### 5. Comet 配置只指向仓库入口
+### 5. Comet 配置不重复保存命令
 
-`.comet/config.yaml` 增加：
-
-```yaml
-build_command: python scripts/check.py build
-verify_command: python scripts/check.py verify
-```
+`.comet/config.yaml` 只保存项目级流程配置，不再保存 `build_command` 或 `verify_command`。当前 Comet build guard（构建守卫）仍按其兼容入口读取根目录 `.comet.yaml`。
 
 `.comet/build-check.sh` 不再被正式配置引用。是否删除该脚本由任务执行阶段按引用检查结果处理；如果没有引用，应删除，避免误导。
 

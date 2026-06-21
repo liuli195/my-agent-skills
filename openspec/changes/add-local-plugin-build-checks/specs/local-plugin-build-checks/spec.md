@@ -66,6 +66,6 @@ The repository SHALL（必须）provide a verify command that runs the full Pyth
 - **WHEN** a developer runs `python scripts/check.py verify`
 - **THEN** the command runs `python -m pytest` and uses repository pytest configuration for default test discovery
 
-#### Scenario: Comet uses repository command entrypoints
+#### Scenario: Comet config avoids duplicate command wiring
 - **WHEN** Comet（双星流程）reads `.comet/config.yaml`
-- **THEN** `build_command` points to `python scripts/check.py build` and `verify_command` points to `python scripts/check.py verify`
+- **THEN** it does not define `build_command` or `verify_command`

@@ -2,7 +2,7 @@
 
 - [x] 1.1 Add tests for `scripts/check.py build` covering Claude validation command discovery, marketplace source validation, manifest name matching, Codex manifest path checks, projection registration consistency, and Guard Profile（守卫画像）template mirror checks.
 - [x] 1.2 Add tests for `scripts/check.py verify` proving it delegates to `python -m pytest` and uses repository pytest（Python 测试框架）configuration.
-- [x] 1.3 Add tests for `.comet/config.yaml` requiring `build_command: python scripts/check.py build` and `verify_command: python scripts/check.py verify`.
+- [x] 1.3 Add tests proving `.comet/config.yaml` does not duplicate `build_command` or `verify_command` wiring.
 
 ## 2. Build And Verify Commands
 
@@ -15,7 +15,7 @@
 
 ## 3. Comet Integration
 
-- [x] 3.1 Update `.comet/config.yaml` to use the new build and verify commands.
+- [x] 3.1 Keep `.comet/config.yaml` free of duplicate build and verify command wiring.
 - [x] 3.2 Remove or retire `.comet/build-check.sh` after confirming it is no longer referenced.
 
 ## 4. Verification

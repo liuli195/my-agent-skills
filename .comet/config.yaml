@@ -10,8 +10,3 @@ context_compression: beta
 # - true: 阶段守卫推进 phase 后自动调用下一个 skill（默认）
 # - false: 阶段守卫推进 phase 后暂停，由用户手动运行下一 skill
 auto_transition: true
-
-# 构建与验证命令
-# build: 本地插件包成型检查；verify: 完整 Python 测试
-build_command: python scripts/check.py build
-verify_command: python scripts/check.py verify

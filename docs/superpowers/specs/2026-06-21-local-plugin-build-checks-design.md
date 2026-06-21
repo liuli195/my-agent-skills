@@ -8,9 +8,9 @@ canonical_spec: openspec
 
 ## 背景
 
-本仓库维护 Agent Plugin（代理插件）和 Skill（技能）源码，没有传统编译产物。Comet（双星流程）build guard（构建守卫）需要明确的构建或测试命令才能推进，因此本仓库需要一个符合自身形态的 `build_command`（构建命令）。
+本仓库维护 Agent Plugin（代理插件）和 Skill（技能）源码，没有传统编译产物。Comet（双星流程）build guard（构建守卫）需要明确的构建或测试入口才能推进，因此本仓库需要符合自身形态的本地入口。
 
-构建命令不表示“编译”，而表示“本地插件包是否成型”。完整行为回归仍由 `verify_command`（验证命令）承担。
+构建入口不表示“编译”，而表示“本地插件包是否成型”。完整行为回归仍由验证入口承担。
 
 ## 技术方案
 
@@ -57,12 +57,7 @@ python -m pytest
 
 ## 配置
 
-`.comet/config.yaml` 增加：
-
-```yaml
-build_command: python scripts/check.py build
-verify_command: python scripts/check.py verify
-```
+`.comet/config.yaml` 只保存项目级流程配置，不重复保存 `build_command` 或 `verify_command`。当前 Comet build guard（构建守卫）仍按其兼容入口读取根目录 `.comet.yaml`。
 
 `.comet/build-check.sh` 不再作为正式入口。执行阶段先确认没有引用；无引用时删除，避免继续误导。
 
@@ -77,7 +72,7 @@ verify_command: python scripts/check.py verify
 - 测试 release-flow projection（发布流程投影）插件集合不一致或重复会失败。
 - 测试 Guard Profile 模板镜像不一致会失败。
 - 测试 `verify` 会调用 `python -m pytest`。
-- 测试 `.comet/config.yaml` 指向新入口。
+- 测试 `.comet/config.yaml` 不重复保存构建/验证命令。
 
 最终验证命令：
 

@@ -21,7 +21,7 @@ base-ref: c6efd0f55f0dfabe5857ba66a96c48cdb64cd554
 - Create `scripts/check.py`: command entrypoint and all local check helpers.
 - Create `tests/test_local_plugin_build_checks.py`: focused tests for `scripts/check.py`.
 - Create `pyproject.toml`: pytest discovery defaults.
-- Modify `.comet/config.yaml`: add `build_command` and `verify_command`.
+- Modify `.comet/config.yaml`: keep project-level Comet settings without duplicate command wiring.
 - Delete `.comet/build-check.sh`: only after checking no references remain.
 - Modify `openspec/changes/add-local-plugin-build-checks/tasks.md`: mark tasks complete as implementation progresses.
 
@@ -733,40 +733,35 @@ git commit -m "test: cover verify command delegation"
 - Delete: `.comet/build-check.sh`
 - Modify: `tests/test_local_plugin_build_checks.py`
 
-- [x] **Step 1: Add failing Comet config test**
+Update after compatibility check: `.comet/config.yaml` no longer stores `build_command` or `verify_command`; current Comet guard reads the root `.comet.yaml` compatibility file for those command values.
+
+- [x] **Step 1: Add Comet config duplication test**
 
 Append:
 
 ```python
-def test_comet_config_points_to_check_commands() -> None:
+def test_comet_config_does_not_duplicate_guard_commands() -> None:
     import yaml
 
     data = yaml.safe_load((REPO_ROOT / ".comet" / "config.yaml").read_text(encoding="utf-8"))
 
-    assert data["build_command"] == "python scripts/check.py build"
-    assert data["verify_command"] == "python scripts/check.py verify"
+    assert "build_command" not in data
+    assert "verify_command" not in data
 ```
 
-- [x] **Step 2: Run config test and confirm it fails**
+- [x] **Step 2: Run config test**
 
 Run:
 
 ```bash
-python -m pytest tests/test_local_plugin_build_checks.py::test_comet_config_points_to_check_commands -q
+python -m pytest tests/test_local_plugin_build_checks.py::test_comet_config_does_not_duplicate_guard_commands -q
 ```
 
-Expected: FAIL because `.comet/config.yaml` does not yet declare the commands.
+Expected: PASS when `.comet/config.yaml` does not duplicate guard-readable command wiring.
 
-- [x] **Step 3: Update `.comet/config.yaml`**
+- [x] **Step 3: Keep `.comet/config.yaml` command-free**
 
-Add:
-
-```yaml
-# 构建与验证命令
-# build: 本地插件包成型检查；verify: 完整 Python 测试
-build_command: python scripts/check.py build
-verify_command: python scripts/check.py verify
-```
+Remove any `build_command` or `verify_command` entries from `.comet/config.yaml`. The current Comet guard reads the root `.comet.yaml` compatibility file for those values.
 
 - [x] **Step 4: Confirm `.comet/build-check.sh` is unreferenced**
 
