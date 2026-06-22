@@ -280,7 +280,7 @@ def test_test_framework_init_writes_runner_config_gitignore_and_cache(tmp_path: 
         "build": {"checks": []},
         "verify": {"checks": []},
     }
-    assert (project / ".test-framework" / ".gitignore").read_text(encoding="utf-8") == "/cache/\n"
+    assert (project / ".test-framework" / ".gitignore").read_text(encoding="utf-8") == "/cache/\n/runs/\n"
     assert "def run_verify" in (project / "scripts" / "check.py").read_text(encoding="utf-8")
 
 
@@ -365,8 +365,11 @@ def test_test_framework_runner_build_verify_and_full_verify(tmp_path: Path) -> N
     assert full_verify.returncode == 0, full_verify.stdout + full_verify.stderr
     assert "checked: verify-src, verify-docs" in full_verify.stdout
     assert "full-not-run: false" in full_verify.stdout
+    assert "cache-hit" not in full_verify.stdout
     assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
         "build-main",
+        "verify-src",
+        "verify-docs",
         "verify-src",
         "verify-docs",
     ]
