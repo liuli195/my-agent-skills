@@ -2,6 +2,7 @@
 change: add-pr-flow-plugin
 design-doc: docs/superpowers/specs/2026-06-22-pr-flow-plugin-design.md
 base-ref: 23fba70e52e53a93c103a4d91fbe671eaa105890
+archived-with: 2026-06-22-add-pr-flow-plugin
 ---
 
 # PR Flow Plugin Implementation Plan
@@ -13,8 +14,6 @@ base-ref: 23fba70e52e53a93c103a4d91fbe671eaa105890
 **Architecture:** 新增独立 `plugins/pr-flow/` 包，采用多入口 Skill（技能）+ 单个共享 Python（Python 语言）脚本内核。各 Skill 只说明入口和边界，所有确定性流程放在 `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py`，测试通过临时 Git（版本管理）仓库、fake `gh` CLI（GitHub 命令行工具）和 fake 命令输出覆盖主流程。
 
 **Tech Stack:** Python 标准库、PyYAML（YAML 解析库）、pytest（Python 测试框架）、Git CLI（版本管理命令行工具）、gh CLI（GitHub 命令行工具）、Codex/Claude plugin manifest（插件清单）。
-
----
 
 ## 文件结构
 

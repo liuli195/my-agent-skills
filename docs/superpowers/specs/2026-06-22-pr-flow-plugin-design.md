@@ -2,6 +2,8 @@
 comet_change: add-pr-flow-plugin
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-22-add-pr-flow-plugin
+status: final
 ---
 
 # PR Flow Plugin 技术设计

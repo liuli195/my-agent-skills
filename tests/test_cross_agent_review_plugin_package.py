@@ -55,6 +55,25 @@ def test_cross_agent_review_skill_documents_strict_finding_schema() -> None:
     assert "missing severity" in text
 
 
+def test_cross_agent_review_skill_documents_mandatory_invocation_boundary() -> None:
+    skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+
+    boundary = text.index("## 调用边界（强制）")
+    prerequisites = text.index("## 前置条件")
+    assert boundary < prerequisites
+
+    boundary_text = text[boundary:prerequisites]
+    assert "ONLY ALLOWED:" in boundary_text
+    assert "STRICTLY FORBIDDEN:" in boundary_text
+    assert "Comet build completion" in boundary_text
+    assert "PR Flow" in boundary_text
+    assert "local review" in boundary_text
+    assert "用户显式调用" in boundary_text
+    assert "Comet verify" in boundary_text
+    assert "通用 code review" in boundary_text
+
+
 def test_cross_agent_review_placeholder_run_accepts_documented_and_planned_options(tmp_path: Path) -> None:
     result = subprocess.run(
         [

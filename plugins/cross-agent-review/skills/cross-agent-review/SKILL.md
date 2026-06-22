@@ -1,11 +1,22 @@
 ---
 name: cross-agent-review
-description: "运行跨代理审查。Use when 需要在提交后的 clean commit 上运行 Claude Agent SDK reviewer，并生成 review report 和 review-pass.json。"
+description: "运行跨代理审查。仅用于 Comet build completion（构建完成）、PR Flow local review（本地审查）或用户显式调用。"
 ---
 
 # Cross-Agent Review
 
 本 skill 运行独立 cross-agent review（跨代理审查），不推进 Comet phase（阶段），不运行构建或测试，不自动安装 Claude Agent SDK。
+
+## 调用边界（强制）
+
+ONLY ALLOWED:
+- Comet build completion（构建完成）阶段：进入 verify（验证）前，生成供 Agent Guard（代理守卫）build gate（构建门禁）使用的 `review-pass.json`。
+- PR Flow（拉取请求流程）阶段已启用 local review（本地审查）。
+- 用户显式调用 `cross-agent-review`（跨代理审查）。
+
+STRICTLY FORBIDDEN:
+- Comet verify（验证）阶段自动调用。
+- 通用 code review（代码审查）阶段自动调用。
 
 ## 前置条件
 
