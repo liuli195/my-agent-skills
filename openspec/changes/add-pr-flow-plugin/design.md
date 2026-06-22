@@ -100,8 +100,10 @@ cleanup 的硬性拒绝条件：
 - PR 未合并。
 - worktree（工作区）不干净。
 - head branch 不匹配当前 PR。
-- 目标分支是受保护分支或配置禁止清理。
+- head branch 等于 base branch，存在删除目标分支风险。
 - 无法确认远端和本地分支最终状态。
+
+cleanup 不查询 GitHub Branch Protection（分支保护）或 Rulesets（规则集）。首版只保证不删除 base branch（目标分支），并只删除 PR 的 head branch。
 
 ### 7. Hotfix 是显式紧急路径
 
@@ -111,11 +113,12 @@ cleanup 的硬性拒绝条件：
 
 1. fetch 目标分支。
 2. 验证当前提交基于目标分支最新 head。
-3. 运行 `hotfix.verifyCommand`。
-4. 校验 authorization phrase。
-5. push 到目标分支。
-6. 回读远端目标分支，确认等于预期提交。
-7. 写入最小本地审计记录。
+3. 确认 authorization phrase 配置存在且算法受支持。
+4. 运行 `hotfix.verifyCommand`。
+5. 校验 authorization phrase。
+6. push 到目标分支。
+7. 回读远端目标分支，确认等于预期提交。
+8. 写入最小本地审计记录。
 
 authorization phrase 只是确认短语，不是安全机制。真正的远端写入权限仍由 GitHub Rulesets bypass（规则集绕过权限）和凭证决定。
 
