@@ -7,7 +7,7 @@
 **Goals:**
 - 提供同时支持 Claude（Claude 版本）和 Codex（Codex 版本）的轻量 `test-framework` Plugin（插件）。
 - 初始化目标仓库的最小标准结构：`scripts/check.py`、`.test-framework/config.json`、`.test-framework/.gitignore` 和 `.test-framework/cache/`。
-- 目标仓库只定义一套 canonical checks（标准检查项）；默认 `verify` 在这套检查上应用 changed-files（变更文件）筛选和 passed-result cache（通过结果缓存），`verify --full` 运行完整检查集。
+- 目标仓库只定义一套 canonical checks（标准检查项）；默认 `verify` 在这套检查上应用 changed-files（变更文件）筛选和 passed-result cache（通过结果缓存），`verify --full` 运行完整检查集且通过项刷新 passed-result cache（通过结果缓存）。
 - 保留一个统一配置文件和一个统一命令入口。
 
 **Non-Goals:**
@@ -33,10 +33,10 @@
 
 3. fast（快速验证）是框架执行模式，不是目标仓库配置能力。
    - 目标仓库只声明 `build.checks` 和 `verify.checks`。
-   - `python scripts/check.py verify --full` 运行全部 `verify.checks`。
+   - `python scripts/check.py verify --full` 运行全部 `verify.checks`，不得读取 cache（缓存）来跳过 check（检查项）。
    - `python scripts/check.py verify` 默认从 worktree（工作区）收集 changed files（变更文件），包含 staged tracked changes（已暂存已跟踪变更）、unstaged tracked changes（未暂存已跟踪变更）和 untracked non-ignored files（未跟踪且未忽略文件）。
    - 框架选择受影响的 `verify.checks`，并对这些检查应用 passed-result cache（通过结果缓存）。
-   - cache miss（缓存未命中）时只运行该检查本身；failed（失败）结果不写入缓存；没有受影响检查时输出 checked（已检查）为空和 full-not-run（全量未运行）提示。
+   - cache miss（缓存未命中）时只运行该检查本身；default verify（默认验证）和 `verify --full` 都只在 check（检查项）通过后写入或刷新 passed-result cache（通过结果缓存）；failed（失败）结果不写入缓存；没有受影响检查时输出 checked（已检查）为空和 full-not-run（全量未运行）提示。
 
 4. 统一命令面保持小。
    - 必须支持 `python scripts/check.py build`、`python scripts/check.py verify`、`python scripts/check.py verify --full`。

@@ -312,15 +312,18 @@ def run_verify(project: Path, *, full: bool = False) -> int:
     selected = checks if full else _selected_checks(checks, changed_files)
     failures = 0
     for check in selected:
-        if full:
-            if _run_check(project, check) != 0:
-                failures += 1
-            continue
         try:
             key = _cache_key(project, config, check, changed_files)
         except ValueError as error:
             print(str(error), file=sys.stderr)
             failures += 1
+            continue
+        if full:
+            result = _run_check(project, check)
+            if result == 0:
+                _cache_store(project, key, check)
+            else:
+                failures += 1
             continue
         if _cache_load(project, key):
             print(f"cache-hit: {check.get('id')}")

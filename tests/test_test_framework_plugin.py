@@ -410,6 +410,44 @@ def test_test_framework_runner_uses_passed_result_cache(tmp_path: Path) -> None:
     ]
 
 
+def test_test_framework_runner_full_verify_refreshes_cache_for_default_verify(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    (project / "src").mkdir()
+    (project / "src" / "cached.py").write_text("changed\n", encoding="utf-8")
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "full-primes-cache",
+                        "command": command_that_logs("full-primes-cache"),
+                        "paths": ["src/cached.py"],
+                        "inputs": ["src/cached.py"],
+                    }
+                ]
+            },
+        },
+    )
+
+    full = run_check(project, "verify", "--full")
+    default = run_check(project, "verify")
+
+    assert full.returncode == 0, full.stdout + full.stderr
+    assert default.returncode == 0, default.stdout + default.stderr
+    assert "cache-hit:" not in full.stdout
+    assert "cache-hit: full-primes-cache" in default.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "full-primes-cache"
+    ]
+
+
 def test_test_framework_runner_default_cache_key_tracks_glob_path_contents(
     tmp_path: Path,
 ) -> None:
@@ -564,6 +602,39 @@ def test_test_framework_runner_rejects_inputs_outside_project(
 
     assert result.returncode != 0
     assert "invalid_input_path" in result.stderr
+    assert not (project / "run.log").exists()
+
+
+def test_test_framework_runner_full_verify_rejects_inputs_outside_project(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    (project / "src").mkdir()
+    (project / "src" / "app.txt").write_text("changed\n", encoding="utf-8")
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "invalid-input",
+                        "command": command_that_logs("invalid-input"),
+                        "paths": ["src/**"],
+                        "inputs": ["../outside.txt"],
+                    }
+                ]
+            },
+        },
+    )
+
+    result = run_check(project, "verify", "--full")
+
+    assert result.returncode != 0
+    assert "invalid_input_path: ../outside.txt" in result.stderr
     assert not (project / "run.log").exists()
 
 

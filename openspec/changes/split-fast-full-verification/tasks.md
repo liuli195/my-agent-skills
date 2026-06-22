@@ -14,7 +14,7 @@
 
 - [x] 3.1 Implement changed-files（变更文件） collection and check selection from configured `paths`.
 - [x] 3.2 Implement passed-result cache（通过结果缓存） keyed by check id（检查项标识）, command（命令）, inputs（输入）, config（配置）, Python（运行器） version, framework version, and cache version.
-- [x] 3.3 Ensure default `verify` runs selected checks with cache, while `verify --full` runs all configured verify checks.
+- [x] 3.3 Ensure default `verify` runs selected checks with cache, while `verify --full` runs all configured verify checks without cache skip and refreshes passed-result cache（通过结果缓存） for passed checks.
 - [x] 3.4 Ensure failed（失败） results are not cached and no-check（无检查） runs do not automatically execute full（全量验证）.
 
 ## 4. Scope Guard
@@ -24,7 +24,7 @@
 
 ## 5. Validation
 
-- [ ] 5.1 Run focused tests for the framework contract, local build checks, cache behavior, and init E2E（端到端） behavior.
+- [ ] 5.1 Run focused tests for the framework contract, local build checks, cache behavior including `verify --full` cache refresh, and init E2E（端到端） behavior.
 - [ ] 5.2 Run `python scripts/check.py build`.
 - [ ] 5.3 Run `python scripts/check.py verify` and confirm it completes through default fast（快速验证） mode.
 - [ ] 5.4 Run `python scripts/check.py verify --full` once and record full-suite timing as baseline evidence.

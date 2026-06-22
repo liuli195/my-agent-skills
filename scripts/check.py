@@ -320,15 +320,18 @@ def run_verify(
     selected = checks if full else _selected_checks(checks, changed_files)
     failures = 0
     for check in selected:
-        if full:
-            if _run_check(root, check, runner) != 0:
-                failures += 1
-            continue
         try:
             key = _cache_key(root, config, check, changed_files)
         except ValueError as error:
             print(str(error), file=sys.stderr)
             failures += 1
+            continue
+        if full:
+            result = _run_check(root, check, runner)
+            if result == 0:
+                _cache_store(root, key, check)
+            else:
+                failures += 1
             continue
         if _cache_load(root, key):
             print(f"cache-hit: {check.get('id')}")

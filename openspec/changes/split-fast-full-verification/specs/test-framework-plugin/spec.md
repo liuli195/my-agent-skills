@@ -59,6 +59,12 @@
 - **THEN** `python scripts/check.py verify --full` MUST 运行完整 `verify.checks`
 - **THEN** 上述命令 MUST 由初始化写入的 `scripts/check.py` 模板直接支持，而不是只由本仓库专用 runner（运行器）支持
 
+#### Scenario: Full verify refreshes passed cache
+- **WHEN** 用户运行 `python scripts/check.py verify --full`
+- **THEN** 系统 MUST NOT 通过读取 cache（缓存）跳过 configured `verify.checks`
+- **THEN** 成功通过的 check（检查项） MUST 使用同一套 cache key（缓存键）写入或刷新 passed-result cache（通过结果缓存）
+- **THEN** failed（失败）结果 MUST NOT 写入 passed-result cache（通过结果缓存）
+
 ### Requirement: Test framework provides fast cache verification
 系统 MUST 将 fast（快速验证）实现为 full（全量验证）标准检查项上的 changed-files（变更文件）筛选和 passed-result cache（通过结果缓存）。
 

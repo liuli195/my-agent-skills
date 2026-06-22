@@ -196,7 +196,9 @@ def test_runner_default_verify_selects_changed_checks_and_uses_cache(
             },
         ],
     )
-    monkeypatch.setattr(module, "_changed_files", lambda _root: ["src/app.py"], raising=False)
+    monkeypatch.setattr(
+        module, "_changed_files", lambda _root: ["src/app.py"], raising=False
+    )
     calls: list[str] = []
 
     def fake_run(command, cwd, check, text, capture_output, shell=False):
@@ -241,7 +243,9 @@ def test_runner_full_verify_runs_all_checks_without_cache(
             },
         ],
     )
-    monkeypatch.setattr(module, "_changed_files", lambda _root: ["src/app.py"], raising=False)
+    monkeypatch.setattr(
+        module, "_changed_files", lambda _root: ["src/app.py"], raising=False
+    )
     calls: list[str] = []
 
     def fake_run(command, cwd, check, text, capture_output, shell=False):
@@ -260,6 +264,42 @@ def test_runner_full_verify_runs_all_checks_without_cache(
     assert "checked: verify.src, verify.docs" in output
     assert "full-not-run: false" in output
     assert "cache-hit:" not in output
+
+
+def test_runner_full_verify_refreshes_cache_for_default_verify(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = load_check_module()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("changed\n", encoding="utf-8")
+    write_runner_config(
+        tmp_path,
+        verify_checks=[
+            {
+                "id": "verify.src",
+                "command": "run-verify-src",
+                "paths": ["src/app.py"],
+                "inputs": ["src/app.py"],
+            }
+        ],
+    )
+    monkeypatch.setattr(module, "_changed_files", lambda _root: ["src/app.py"], raising=False)
+    calls: list[str] = []
+
+    def fake_run(command, cwd, check, text, capture_output, shell=False):
+        calls.append(command)
+        return make_completed(command)
+
+    full = module.run_verify(tmp_path, runner=fake_run, full=True)
+    full_output = capsys.readouterr().out
+    default = module.run_verify(tmp_path, runner=fake_run)
+    default_output = capsys.readouterr().out
+
+    assert full == 0
+    assert default == 0
+    assert calls == ["run-verify-src"]
+    assert "cache-hit:" not in full_output
+    assert "cache-hit: verify.src" in default_output
 
 
 def test_runner_does_not_cache_failed_verify_results(
@@ -353,6 +393,34 @@ def test_runner_rejects_inputs_outside_project(
         raise AssertionError("invalid input should stop before running checks")
 
     result = module.run_verify(tmp_path, runner=fake_run)
+
+    assert result == 1
+    assert "invalid_input_path: ../outside.txt" in capsys.readouterr().err
+
+
+def test_runner_full_verify_rejects_inputs_outside_project(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = load_check_module()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("changed\n", encoding="utf-8")
+    write_runner_config(
+        tmp_path,
+        verify_checks=[
+            {
+                "id": "invalid-input",
+                "command": "run-invalid",
+                "paths": ["src/**"],
+                "inputs": ["../outside.txt"],
+            }
+        ],
+    )
+    monkeypatch.setattr(module, "_changed_files", lambda _root: ["src/app.py"], raising=False)
+
+    def fake_run(*_args, **_kwargs):
+        raise AssertionError("invalid input should stop before running checks")
+
+    result = module.run_verify(tmp_path, runner=fake_run, full=True)
 
     assert result == 1
     assert "invalid_input_path: ../outside.txt" in capsys.readouterr().err

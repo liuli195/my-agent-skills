@@ -13,6 +13,9 @@
 - **WHEN** 开发者运行 `python scripts/check.py verify --full`
 - **THEN** 系统 MUST 运行所有 configured `verify.checks`
 - **THEN** 系统 MUST NOT 使用 changed-files（变更文件）筛选跳过 checks（检查项）
+- **THEN** 系统 MUST NOT 读取 cache（缓存）来跳过 checks（检查项）
+- **THEN** 成功通过的 checks（检查项） MUST 写入或刷新 passed-result cache（通过结果缓存）
+- **THEN** failed（失败）checks（检查项） MUST NOT 写入 passed-result cache（通过结果缓存）
 
 #### Scenario: Target repository does not define separate fast checks
 - **WHEN** 目标仓库声明 `.test-framework/config.json`

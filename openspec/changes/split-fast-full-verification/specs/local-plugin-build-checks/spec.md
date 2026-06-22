@@ -12,6 +12,9 @@ The repository SHALL（必须）provide a verify command initialized by the test
 #### Scenario: Verify full mode runs all configured checks
 - **WHEN** a developer runs `python scripts/check.py verify --full`
 - **THEN** the command runs all `.test-framework/config.json` `verify.checks`
+- **THEN** the command does not use cache（缓存） hits to skip checks（检查项）
+- **THEN** passed checks（已通过检查项） refresh passed-result cache（通过结果缓存）
+- **THEN** failed checks（失败检查项） are not stored as passed-result cache（通过结果缓存）
 - **THEN** the command does not rely on the default verify mode being full（全量验证）
 
 #### Scenario: Comet config avoids duplicate command wiring
