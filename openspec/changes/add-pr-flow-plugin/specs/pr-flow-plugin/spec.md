@@ -50,10 +50,23 @@
 #### Scenario: Required checks need external progress
 - **WHEN** GitHub checks（检查）未完成或需要外部系统启动
 - **THEN** diagnose MUST 输出 `DISPATCH_REQUIRED`
+- **THEN** diagnose MUST 保留可继续执行的下一步提示
 
 #### Scenario: Review or checks block merge
 - **WHEN** review gate（审查门禁）或 required checks（必需检查）阻塞 PR
 - **THEN** diagnose MUST 输出 `REPLY_OR_FIX_REQUIRED`
+
+#### Scenario: Draft PR needs ready transition
+- **WHEN** PR 是 draft（草稿）且 checks（检查）已通过
+- **THEN** diagnose MUST 输出 `DISPATCH_REQUIRED`
+- **THEN** diagnose MUST 使用 `pr_is_draft` 作为 reason（原因）
+- **THEN** diagnose MUST 提供将 PR 转为 ready（可审查）的下一步提示
+
+#### Scenario: No stop state remains
+- **WHEN** 当前 PR 没有 push、checks、review、draft 或异常阻塞
+- **THEN** diagnose MUST 输出 `ready`
+- **THEN** diagnose MUST 以成功退出码返回
+- **THEN** diagnose MUST 提供 `complete` 作为下一步提示
 
 #### Scenario: Unexpected state
 - **WHEN** 系统无法安全判断下一步

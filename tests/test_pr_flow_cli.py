@@ -183,10 +183,12 @@ def pr_view_json(
     checks: list[dict],
     review_decision: str = "REVIEW_REQUIRED",
     head_oid: str | None = None,
+    is_draft: bool = False,
 ) -> str:
     payload = {
         "number": 12,
         "state": "OPEN",
+        "isDraft": is_draft,
         "mergeStateStatus": "BLOCKED",
         "reviewDecision": review_decision,
         "headRefName": "feature/example",
@@ -655,6 +657,54 @@ def test_diagnose_outputs_reply_or_fix_required_for_review_required(tmp_path: Pa
     assert status["command"] == "diagnose"
     assert status["details"]["reason"] == "checks_or_review_blocking"
     assert status["details"]["reviewDecision"] == "REVIEW_REQUIRED"
+
+
+def test_diagnose_outputs_ready_when_no_stop_state_remains(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    fake_bin = write_fake_gh(
+        tmp_path / "bin",
+        stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision="",
+        ),
+    )
+    assert init_repo(project) == "main"
+    assert run("init", "--project", str(project)).returncode == 0
+
+    result = run_with_path(fake_bin, "diagnose", "--project", str(project))
+
+    assert result.returncode == 0
+    assert "status: ready" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "ready"
+    assert status["command"] == "diagnose"
+    assert status["details"]["reason"] == "ready_to_complete"
+    assert status["details"]["nextCommand"] == "complete"
+
+
+def test_diagnose_outputs_dispatch_required_for_draft_pr(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    fake_bin = write_fake_gh(
+        tmp_path / "bin",
+        stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision="",
+            is_draft=True,
+        ),
+    )
+    assert init_repo(project) == "main"
+    assert run("init", "--project", str(project)).returncode == 0
+
+    result = run_with_path(fake_bin, "diagnose", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    assert "pr_is_draft" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "DISPATCH_REQUIRED"
+    assert status["command"] == "diagnose"
+    assert status["details"]["reason"] == "pr_is_draft"
+    assert status["details"]["nextCommand"] == "gh pr ready"
 
 
 def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path: Path) -> None:

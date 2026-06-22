@@ -711,7 +711,7 @@ def run_diagnose(args: argparse.Namespace) -> int:
         "pr",
         "view",
         "--json",
-        "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup",
+        "number,state,isDraft,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup",
     )
     gh_details: dict[str, Any] = {
         "branch": branch,
@@ -738,6 +738,7 @@ def run_diagnose(args: argparse.Namespace) -> int:
             "pr": pr.get("number"),
             "reviewDecision": pr.get("reviewDecision"),
             "mergeStateStatus": pr.get("mergeStateStatus"),
+            "isDraft": pr.get("isDraft"),
             "headRefName": pr.get("headRefName"),
             "baseRefName": pr.get("baseRefName"),
         }
@@ -749,9 +750,17 @@ def run_diagnose(args: argparse.Namespace) -> int:
     if has_failing_check(checks) or pr.get("reviewDecision") in {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}:
         gh_details["reason"] = "checks_or_review_blocking"
         return stop(project, args.command, "REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking", gh_details)
+    if pr.get("isDraft") is True:
+        gh_details["reason"] = "pr_is_draft"
+        gh_details["nextCommand"] = "gh pr ready"
+        return stop(project, args.command, "DISPATCH_REQUIRED", "pr_is_draft", gh_details)
 
-    gh_details["reason"] = "no_stop_state_detected"
-    return stop(project, args.command, "EXCEPTION_REQUIRED", "no_stop_state_detected", gh_details)
+    gh_details["reason"] = "ready_to_complete"
+    gh_details["nextCommand"] = "complete"
+    write_status(project, args.command, "ready", gh_details)
+    print("status: ready")
+    print("ready_to_complete")
+    return 0
 
 
 def run_lifecycle(
