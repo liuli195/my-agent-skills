@@ -1110,7 +1110,13 @@ def test_workflow_template_is_thin_entrypoint() -> None:
 def test_ci_publish_dry_run_applies_projection_without_remote_writes(tmp_path: Path) -> None:
     project = tmp_path / "project"
     vars_file = tmp_path / "vars.json"
-    write_release_flow_files(project, marketplace_identity_projection())
+    write_release_flow_files(
+        project,
+        marketplace_identity_projection().replace(
+            "      - release-flow\n",
+            "      - release-flow\n      - cross-agent-review\n      - pr-flow\n",
+        ),
+    )
     write_json(vars_file, marketplace_identity_vars())
     run("release-init", "--project", str(project), "--tag", "v0.1.1", "--version", "0.1.1")
 
@@ -1136,6 +1142,12 @@ def test_ci_publish_dry_run_applies_projection_without_remote_writes(tmp_path: P
     assert projected_marketplace.is_file()
     catalog = json.loads(projected_marketplace.read_text(encoding="utf-8"))
     assert catalog["name"] == "my-agent-skills-marketplace"
+    assert [plugin["name"] for plugin in catalog["plugins"]] == [
+        "agent-guard",
+        "release-flow",
+        "cross-agent-review",
+        "pr-flow",
+    ]
 
 
 def test_ci_publish_rejects_untrusted_release_plan_path(tmp_path: Path) -> None:

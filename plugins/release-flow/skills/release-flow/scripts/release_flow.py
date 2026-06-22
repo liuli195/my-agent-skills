@@ -582,6 +582,12 @@ def codex_marketplace_entry(plugin_name: str) -> dict[str, Any]:
             "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
             "category": "Developer Tools",
         },
+        "pr-flow": {
+            "name": "pr-flow",
+            "source": {"source": "local", "path": "./plugins/pr-flow"},
+            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+            "category": "Developer Tools",
+        },
     }
     try:
         return entries[plugin_name]
