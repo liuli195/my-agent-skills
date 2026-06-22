@@ -41,6 +41,7 @@ SEVERITY_ALIASES = {
     "MEDIUM": "WARNING",
     "WARNING": "WARNING",
     "LOW": "SUGGESTION",
+    "MINOR": "SUGGESTION",
     "INFO": "SUGGESTION",
     "INFORMATIONAL": "SUGGESTION",
     "SUGGESTION": "SUGGESTION",
@@ -420,7 +421,11 @@ def normalize_severity(raw: dict) -> str:
 
 
 def is_explicit_non_issue_observation(raw: dict) -> bool:
-    return "severity" not in raw and "issue" in raw and raw.get("issue") in {None, False, ""}
+    if "severity" in raw:
+        return False
+    if "issue" in raw and raw.get("issue") in {None, False, ""}:
+        return True
+    return str(raw.get("status", "")).lower() in {"aligned", "pass", "passed", "ok"}
 
 
 def normalize_reviewer_findings(role: str, reviewer: dict) -> list[dict]:

@@ -690,6 +690,30 @@ def test_aggregate_ignores_explicit_non_issue_observations() -> None:
     assert summary["findings"] == []
 
 
+def test_aggregate_ignores_aligned_records_without_severity() -> None:
+    module = load_script_module()
+
+    summary = module.aggregate(
+        [
+            {
+                "role": "spec-alignment",
+                "status": "aligned",
+                "findings": [
+                    {
+                        "requirement": "Plugin package",
+                        "status": "aligned",
+                        "evidence": "Manifest and skill entrypoints match the spec.",
+                    }
+                ],
+            }
+        ],
+        [],
+    )
+
+    assert summary["blocking_findings"] == 0
+    assert summary["findings"] == []
+
+
 def test_aggregate_maps_common_reviewer_severities_to_non_blocking_findings() -> None:
     module = load_script_module()
 
@@ -699,6 +723,7 @@ def test_aggregate_maps_common_reviewer_severities_to_non_blocking_findings() ->
                 "role": "tests-and-edge-cases",
                 "status": "pass-with-findings",
                 "findings": [
+                    {"severity": "minor", "area": "docs", "description": "Tiny wording note."},
                     {"severity": "medium", "area": "tests", "description": "Add an edge test.", "suggestion": "Cover the boundary."},
                     {"severity": "low", "area": "docs", "description": "Clarify wording.", "suggestion": "Tighten the text."},
                     {"severity": "info", "file": "app.py", "line": 3, "message": "No risk."},
@@ -709,11 +734,11 @@ def test_aggregate_maps_common_reviewer_severities_to_non_blocking_findings() ->
     )
 
     assert summary["blocking_findings"] == 0
-    assert [finding["severity"] for finding in summary["findings"]] == ["WARNING", "SUGGESTION", "SUGGESTION"]
-    assert summary["findings"][0]["summary"] == "Add an edge test."
-    assert summary["findings"][0]["location"] == "tests"
-    assert summary["findings"][0]["recommendation"] == "Cover the boundary."
-    assert summary["findings"][2]["location"] == "app.py:3"
+    assert [finding["severity"] for finding in summary["findings"]] == ["SUGGESTION", "WARNING", "SUGGESTION", "SUGGESTION"]
+    assert summary["findings"][1]["summary"] == "Add an edge test."
+    assert summary["findings"][1]["location"] == "tests"
+    assert summary["findings"][1]["recommendation"] == "Cover the boundary."
+    assert summary["findings"][3]["location"] == "app.py:3"
 
 
 def test_aggregate_treats_pass_dict_findings_with_no_issues_as_non_blocking() -> None:
