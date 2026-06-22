@@ -79,7 +79,7 @@ def test_test_framework_plugin_has_single_skill_entrypoint() -> None:
     assert "不写用户级配置" in skill_text
     assert "不配置 CI（持续集成）" in skill_text
     assert "不内置仓库业务逻辑" in skill_text
-    assert "test_framework.py init" in skill_text
+    assert "scripts/test_framework.py init" in skill_text
 
 
 def test_test_framework_registered_in_marketplaces_and_projection() -> None:

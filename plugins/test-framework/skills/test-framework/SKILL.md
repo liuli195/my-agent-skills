@@ -18,5 +18,5 @@ Use this skill when a project needs the local Test Framework（测试框架）ar
 ## 命令示例
 
 ```bash
-python test_framework.py init
+python scripts/test_framework.py init --project .
 ```
