@@ -23,6 +23,11 @@
       "name": "pr-flow",
       "source": "./plugins/pr-flow",
       "description": "PR Flow Plugin（拉取请求流程插件）"
+    },
+    {
+      "name": "test-framework",
+      "source": "./plugins/test-framework",
+      "description": "Test Framework Plugin（测试框架插件）"
     }
   ]
 }
