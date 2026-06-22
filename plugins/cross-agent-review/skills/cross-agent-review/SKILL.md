@@ -28,6 +28,16 @@ python scripts/cross_agent_review.py run \
   --tests-file <path>
 ```
 
+## 输入文件准备
+
+`--diff-file` 和 `--tests-file` 等运行前生成的输入文件，必须放在同一次 review 的 run 目录下：
+
+```text
+.local/cross-agent-review/<change>/<head_ref>/prepared-inputs/
+```
+
+随后把这些文件路径显式传给命令参数。不要在 `.local/` 下创建独立的输入根目录；review 运行后会把最终输入快照复制到同一 run 目录的 `inputs/`。
+
 输出默认写入 `.local/cross-agent-review/<change>/<head_ref>/`。运行时会先把输入文件快照复制到输出目录下的 `inputs/`：
 
 - `inputs/diff.patch`
