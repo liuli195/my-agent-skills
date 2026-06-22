@@ -1,0 +1,23 @@
+defaults:
+  baseBranch: main
+  mergeStrategy: merge
+  reviewGate:
+    mode: github
+    evidencePath: .pr-flow/review-pass.json
+  hotfix:
+    verifyCommand: .\.venv\Scripts\python.exe -m pytest
+  wait:
+    timeoutSeconds: 600
+    pollSeconds: 15
+  pr:
+    bodyTemplatePath: .pr-flow/pr-template.md
+    requiredSections:
+    - Summary
+    - Scope
+    - Verification
+    - Risk
+    - Rollback
+branches:
+  main:
+    remote: origin
+    allowHotfixPush: false
