@@ -743,3 +743,13 @@ def test_root_comet_yaml_points_to_check_commands_for_guard() -> None:
 
     assert data["build_command"] == "python scripts/check.py build"
     assert data["verify_command"] == "python scripts/check.py verify"
+
+
+def test_root_verify_full_covers_comet_config() -> None:
+    data = json.loads((REPO_ROOT / ".test-framework" / "config.json").read_text(encoding="utf-8"))
+    pytest_full = next(
+        check for check in data["verify"]["checks"] if check["id"] == "pytest.full"
+    )
+
+    assert ".comet/config.yaml" in pytest_full["paths"]
+    assert ".comet/config.yaml" in pytest_full["inputs"]
