@@ -410,6 +410,192 @@ def test_test_framework_runner_uses_passed_result_cache(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.parametrize("mutation", ["check_id", "command", "inputs", "config"])
+def test_test_framework_runner_cache_key_changes_with_check_contract(
+    tmp_path: Path, mutation: str
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    (project / "src").mkdir()
+    (project / "inputs").mkdir()
+    (project / "src" / "sample.py").write_text("changed\n", encoding="utf-8")
+    (project / "inputs" / "v1.txt").write_text("v1\n", encoding="utf-8")
+    (project / "inputs" / "v2.txt").write_text("v2\n", encoding="utf-8")
+
+    def config(
+        *,
+        version: int = 1,
+        check_id: str = "cache-contract",
+        command: list[str] | None = None,
+        inputs: list[str] | None = None,
+    ) -> dict:
+        return {
+            "version": version,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": check_id,
+                        "command": command or command_that_logs("base"),
+                        "paths": ["src/**"],
+                        "inputs": inputs or ["inputs/v1.txt"],
+                    }
+                ]
+            },
+        }
+
+    write_json(project / ".test-framework" / "config.json", config())
+    first = run_check(project, "verify")
+    cached = run_check(project, "verify")
+
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert cached.returncode == 0, cached.stdout + cached.stderr
+    assert "cache-hit: cache-contract" in cached.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == ["base"]
+
+    changed_config = config()
+    expected_checked = "cache-contract"
+    expected_log = "base"
+    if mutation == "check_id":
+        changed_config = config(check_id="cache-contract-renamed")
+        expected_checked = "cache-contract-renamed"
+    elif mutation == "command":
+        changed_config = config(command=command_that_logs("changed-command"))
+        expected_log = "changed-command"
+    elif mutation == "inputs":
+        changed_config = config(inputs=["inputs/v2.txt"])
+    elif mutation == "config":
+        changed_config = config(version=2)
+    else:
+        raise AssertionError(f"unsupported mutation: {mutation}")
+
+    write_json(project / ".test-framework" / "config.json", changed_config)
+    changed = run_check(project, "verify")
+
+    assert changed.returncode == 0, changed.stdout + changed.stderr
+    assert "cache-hit:" not in changed.stdout
+    assert f"checked: {expected_checked}" in changed.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "base",
+        expected_log,
+    ]
+
+
+def test_test_framework_runner_cache_miss_does_not_fall_back_to_full(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    (project / "src").mkdir()
+    (project / "src" / "sample.txt").write_text("changed\n", encoding="utf-8")
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "verify.sample",
+                        "command": command_that_logs(
+                            "verify.sample", "sample-count.txt"
+                        ),
+                        "paths": ["src/**"],
+                        "inputs": ["src/sample.txt"],
+                    },
+                    {
+                        "id": "verify.full-only",
+                        "command": command_that_logs(
+                            "verify.full-only", "full-ran.txt"
+                        ),
+                        "paths": ["other/**"],
+                        "inputs": ["other"],
+                    },
+                ]
+            },
+        },
+    )
+
+    result = run_check(project, "verify")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "cache-hit:" not in result.stdout
+    assert "checked: verify.sample" in result.stdout
+    assert "full-not-run: true" in result.stdout
+    assert (project / "sample-count.txt").read_text(encoding="utf-8").splitlines() == [
+        "verify.sample"
+    ]
+    assert not (project / "full-ran.txt").exists()
+
+
+@pytest.mark.parametrize(
+    "excluded_relative",
+    [
+        Path(".test-framework/cache/noise.txt"),
+        Path(".git/noise.txt"),
+        Path("src/__pycache__/noise.pyc"),
+    ],
+)
+def test_test_framework_runner_directory_hash_ignores_generated_paths(
+    tmp_path: Path, excluded_relative: Path
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    (project / "src").mkdir()
+    (project / "src" / "sample.txt").write_text("changed\n", encoding="utf-8")
+    run_log = project / ".test-framework" / "cache" / "directory-hash-runs.txt"
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "directory-hash",
+                        "command": command_that_logs(
+                            "directory-hash",
+                            ".test-framework/cache/directory-hash-runs.txt",
+                        ),
+                        "paths": ["src/**"],
+                        "inputs": ["."],
+                    }
+                ]
+            },
+        },
+    )
+
+    first = run_check(project, "verify")
+    noise_path = project / excluded_relative
+    noise_path.parent.mkdir(parents=True, exist_ok=True)
+    noise_path.write_text("ignored\n", encoding="utf-8")
+    second = run_check(project, "verify")
+
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "cache-hit: directory-hash" in second.stdout
+    assert run_log.read_text(encoding="utf-8").splitlines() == ["directory-hash"]
+
+
+def test_test_framework_cache_key_covers_runtime_and_cache_versions() -> None:
+    template = (
+        PLUGIN_ROOT
+        / "skills"
+        / "test-framework"
+        / "assets"
+        / "templates"
+        / "scripts"
+        / "check.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"cache_version": CACHE_VERSION' in template
+    assert '"framework_version": FRAMEWORK_VERSION' in template
+    assert '"python_version": platform.python_version()' in template
+
+
 def test_test_framework_runner_does_not_cache_failed_results(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
