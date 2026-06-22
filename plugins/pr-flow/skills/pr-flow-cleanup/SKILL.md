@@ -11,6 +11,8 @@ description: "清理已合并 PR 的 head branch（源分支），同步 base br
 
 命令会删除远端 head branch（源分支）、切回并同步 base branch（目标分支）、删除本地 head branch（源分支）。不合并 PR，不创建提交，也不修改 OpenSpec（开放规格）任务。
 
+cleanup 不查询 GitHub Branch Protection（GitHub 分支保护）或 Rulesets（规则集），也不自动配置远端保护规则；它只保证不删除 base branch。
+
 ## 命令
 
 ```bash

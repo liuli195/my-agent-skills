@@ -1250,6 +1250,40 @@ def test_hotfix_rejects_authorization_phrase_mismatch_without_leaking_phrase(tmp
     assert status["details"]["reason"] == "authorization_phrase_mismatch"
 
 
+def test_hotfix_missing_authorization_config_does_not_run_verify_command(tmp_path: Path, monkeypatch) -> None:
+    pr_flow = load_pr_flow_module()
+    project, remote, before_commit = init_hotfix_project(tmp_path)
+    config_path = project / ".pr-flow" / "config.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config.pop("authorization")
+    config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    git(project, "add", ".pr-flow/config.yaml")
+    git(project, "commit", "-m", "remove authorization config")
+    verify_calls = []
+
+    def fake_verify(project_arg: Path, command: str) -> subprocess.CompletedProcess[str]:
+        verify_calls.append((project_arg, command))
+        return subprocess.CompletedProcess(command, 0, "verified", "")
+
+    monkeypatch.setattr(pr_flow, "run_hotfix_verify_command", fake_verify)
+
+    result = pr_flow.run_hotfix(
+        pr_flow.argparse.Namespace(
+            project=project,
+            target="main",
+            authorization_phrase=HOTFIX_PHRASE,
+            command="hotfix",
+        )
+    )
+
+    assert result == 1
+    assert verify_calls == []
+    assert git_bare(remote, "rev-parse", "refs/heads/main") == before_commit
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["command"] == "hotfix"
+    assert status["details"]["reason"] == "authorization_phrase_missing"
+
+
 def test_hotfix_runs_verify_command_before_authorization_phrase_check(tmp_path: Path) -> None:
     project, remote, before_commit = init_hotfix_project(
         tmp_path,
@@ -1636,6 +1670,46 @@ def test_cleanup_partial_remote_delete_failure_reports_recovery_state(tmp_path: 
     assert status["details"]["completedCleanupSteps"] == ["remote_head_deleted", "remote_delete_confirmed"]
     assert "Remote head branch was already deleted" in status["details"]["recovery"]
     assert "do not rerun full `pr-flow-cleanup --project . --pr 12`" in status["details"]["recovery"]
+
+
+def test_cleanup_pull_failure_after_base_checkout_reports_recovery_state(tmp_path: Path, monkeypatch) -> None:
+    pr_flow = load_pr_flow_module()
+    project, remote = init_cleanup_project(tmp_path)
+    original_require_git_success = pr_flow.require_git_success
+
+    monkeypatch.setattr(pr_flow, "view_pr_for_cleanup", lambda project_arg, pr_number: json.loads(cleanup_pr_view_json()))
+
+    def fail_pull(project_arg: Path, reason: str, *args: str) -> subprocess.CompletedProcess[str]:
+        if args == ("pull", "--ff-only", "origin", "main"):
+            raise pr_flow.PrFlowError(
+                reason,
+                {
+                    "reason": reason,
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": "synthetic pull failure",
+                },
+            )
+        return original_require_git_success(project_arg, reason, *args)
+
+    monkeypatch.setattr(pr_flow, "require_git_success", fail_pull)
+
+    result = pr_flow.run_cleanup(pr_flow.argparse.Namespace(project=project, pr="12", command="cleanup"))
+
+    assert result == 1
+    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode != 0
+    assert git(project, "branch", "--show-current") == "main"
+    local_branches = git(project, "branch", "--format", "%(refname:short)").splitlines()
+    assert "feature/example" in local_branches
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["command"] == "cleanup"
+    assert status["details"]["reason"] == "git_pull_ff_only_failed"
+    assert status["details"]["completedCleanupSteps"] == [
+        "remote_head_deleted",
+        "remote_delete_confirmed",
+        "base_checked_out",
+    ]
+    assert "Remote head branch was already deleted" in status["details"]["recovery"]
 
 
 def test_cleanup_rejects_pr_state_that_is_not_merged(tmp_path: Path) -> None:

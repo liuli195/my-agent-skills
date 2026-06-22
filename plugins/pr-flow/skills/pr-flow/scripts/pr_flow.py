@@ -167,7 +167,7 @@ def remote_for_base_branch(config: dict[str, Any], base_branch: str) -> str:
     return remote if isinstance(remote, str) and remote else "origin"
 
 
-def verify_authorization_phrase(config: dict[str, Any], phrase: str) -> None:
+def require_authorization_phrase_configured(config: dict[str, Any]) -> None:
     authorization = config.get("authorization")
     if not isinstance(authorization, dict):
         raise PrFlowError("authorization_phrase_missing", {"reason": "authorization_phrase_missing"})
@@ -184,6 +184,11 @@ def verify_authorization_phrase(config: dict[str, Any], phrase: str) -> None:
         )
     if not isinstance(expected_hash, str) or not expected_hash:
         raise PrFlowError("authorization_phrase_missing", {"reason": "authorization_phrase_missing"})
+
+
+def verify_authorization_phrase(config: dict[str, Any], phrase: str) -> None:
+    require_authorization_phrase_configured(config)
+    expected_hash = config["authorization"]["phraseHash"]
 
     actual_hash = hashlib.md5(phrase.encode("utf-8")).hexdigest()
     if not hmac.compare_digest(actual_hash, expected_hash):
@@ -989,6 +994,7 @@ def run_hotfix(args: argparse.Namespace) -> int:
             details["dirty"] = dirty
             return stop(project, args.command, "EXCEPTION_REQUIRED", "dirty_worktree", details)
 
+        require_authorization_phrase_configured(config)
         verify_command = hotfix_verify_command(branch_config)
         verification = run_hotfix_verify_command(project, verify_command)
         verify_authorization_phrase(config, args.authorization_phrase)

@@ -132,9 +132,14 @@
 - **THEN** 系统 MUST 输出最终分支状态
 
 #### Scenario: Cleanup refuses unsafe state
-- **WHEN** PR 未合并、工作区不干净、目标分支是保护分支或 head branch 不匹配当前 PR
+- **WHEN** PR 未合并、工作区不干净、head branch 等于 base branch 或 head branch 不匹配当前 PR
 - **THEN** cleanup MUST 拒绝执行
 - **THEN** cleanup MUST 输出 `EXCEPTION_REQUIRED` 或更具体的 stop state
+
+#### Scenario: Cleanup branch protection scope
+- **WHEN** cleanup 处理已合并 PR
+- **THEN** 系统 MUST NOT 删除 base branch（目标分支）
+- **THEN** 首版 MUST NOT 查询或自动配置 GitHub Branch Protection（GitHub 分支保护）或 Rulesets（规则集）
 
 #### Scenario: Cleanup does not invent authorization
 - **WHEN** cleanup 按配置和当前状态可安全执行
@@ -156,8 +161,9 @@
 
 #### Scenario: Hotfix verification and confirmation
 - **WHEN** 用户运行 hotfix
+- **THEN** 系统 MUST 先确认 authorization phrase 配置存在且算法受支持
 - **THEN** 系统 MUST 运行 `hotfix.verifyCommand`
-- **THEN** 验证通过后系统 MUST 要求 authorization phrase 确认
+- **THEN** 验证通过后系统 MUST 校验 authorization phrase
 - **THEN** 确认通过后系统 MAY push 到受保护分支
 
 #### Scenario: Hotfix remote verification

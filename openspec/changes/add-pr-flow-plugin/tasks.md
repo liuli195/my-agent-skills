@@ -30,12 +30,14 @@
 - [x] 5.1 Implement merged PR cleanup precondition checks.
 - [x] 5.2 Implement remote head branch deletion, base branch sync, local branch deletion, and final status summary.
 - [x] 5.3 Add tests for #51 cleanup success and refusal cases.
+- [x] 5.4 Add tests for cleanup partial failures after remote deletion and after base checkout.
 
 ## 6. Hotfix And Tweak
 
 - [x] 6.1 Implement authorization phrase hash verification for steps that already require explicit confirmation.
 - [x] 6.2 Implement hotfix target branch allow-list, base check, verify command, protected push, remote readback, and minimal audit record.
 - [x] 6.3 Implement tweak PR path with required reason and PR body marker.
+- [x] 6.4 Validate hotfix authorization phrase configuration before running the verify command.
 
 ## 7. Packaging And Release Projection
 
@@ -56,3 +58,4 @@
 - [x] 9.2 Require strict reviewer JSON output with fixed severity values.
 - [x] 9.3 Add per-reviewer and dispatch timeouts so local evidence generation cannot hang indefinitely.
 - [x] 9.4 Add tests for strict output parsing, invalid reviewer findings, and timeout constants.
+- [x] 9.5 Document the migration requirement for removed severity aliases.
