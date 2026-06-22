@@ -28,7 +28,7 @@ REVIEWER_ROLES = [
 ]
 READONLY_TOOLS = ["Read", "Glob", "Grep", "Bash(git diff *)", "Bash(git show *)", "Bash(git status *)"]
 DISALLOWED_TOOLS = ["Edit", "Write", "NotebookEdit", "TodoWrite", "MultiEdit", "Bash"]
-SDK_DISPATCH_TIMEOUT_SECONDS = 480
+SDK_DISPATCH_TIMEOUT_SECONDS = 600
 SDK_REVIEWER_TIMEOUT_SECONDS = 480
 BLOCKING_SEVERITIES = {"CRITICAL", "IMPORTANT"}
 NON_BLOCKING_SEVERITIES = {"WARNING", "SUGGESTION"}

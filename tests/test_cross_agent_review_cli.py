@@ -574,7 +574,7 @@ def test_sdk_dispatch_subprocess_timeout_reports_clear_error(tmp_path: Path, mon
         assert "sdk_dispatch_timeout" in str(exc)
     else:
         raise AssertionError("expected sdk_dispatch_timeout")
-    assert captured_timeout == 480
+    assert captured_timeout == 600
 
 
 def test_sdk_dispatch_subprocess_invalid_stdout_reports_clear_error(tmp_path: Path, monkeypatch) -> None:
