@@ -606,6 +606,23 @@ def test_test_framework_runner_reports_missing_list_command_without_traceback(
     assert "Traceback" not in output
 
 
+def test_test_framework_runner_verify_reports_missing_config_without_traceback(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    (project / ".test-framework" / "config.json").unlink()
+
+    result = run_check(project, "verify")
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert "missing_config: .test-framework/config.json" in output
+    assert "status: failed" in result.stdout
+    assert "Traceback" not in output
+
+
 @pytest.mark.parametrize(
     "invalid_input",
     [

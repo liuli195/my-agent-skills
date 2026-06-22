@@ -1,4 +1,6 @@
+import ast
 import importlib.util
+import inspect
 import json
 import subprocess
 import sys
@@ -385,7 +387,87 @@ def test_runner_default_check_cache_key_tracks_dirty_file_contents(
     assert "cache-hit: verify.default" not in output
 
 
-def test_repo_runner_cache_key_stays_in_sync_with_template_runner(tmp_path: Path) -> None:
+class _RunnerSyncNormalizer(ast.NodeTransformer):
+    def visit_arg(self, node: ast.arg) -> ast.arg:
+        if node.arg == "root":
+            node.arg = "project"
+        node.annotation = None
+        return node
+
+    def visit_Name(self, node: ast.Name) -> ast.Name:
+        if node.id == "root":
+            node.id = "project"
+        return node
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
+        self.generic_visit(node)
+        node.args.args = [arg for arg in node.args.args if arg.arg != "runner"]
+        node.args.defaults = []
+        node.args.kw_defaults = [None for _arg in node.args.kwonlyargs]
+        node.returns = None
+        return node
+
+    def visit_Call(self, node: ast.Call) -> ast.Call:
+        self.generic_visit(node)
+        if isinstance(node.func, ast.Name) and node.func.id == "runner":
+            node.func = ast.Name(id="__RUNNER__", ctx=ast.Load())
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "run"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "subprocess"
+        ):
+            node.func = ast.Name(id="__RUNNER__", ctx=ast.Load())
+        if isinstance(node.func, ast.Name) and node.func.id == "_run_check":
+            node.args = [
+                arg
+                for arg in node.args
+                if not (isinstance(arg, ast.Name) and arg.id == "runner")
+            ]
+        return node
+
+    def visit_Return(self, node: ast.Return) -> ast.Return:
+        self.generic_visit(node)
+        if (
+            isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "int"
+            and len(node.value.args) == 1
+        ):
+            node.value = node.value.args[0]
+        return node
+
+
+def normalized_runner_function(function) -> str:
+    tree = ast.parse(inspect.getsource(function))
+    tree = _RunnerSyncNormalizer().visit(tree)
+    ast.fix_missing_locations(tree)
+    return ast.dump(tree, include_attributes=False)
+
+
+def test_repo_runner_core_logic_stays_in_sync_with_template_runner() -> None:
+    repo_module = load_check_module()
+    template_module = load_template_check_module()
+    function_names = [
+        "_load_config",
+        "_changed_files",
+        "_selected_checks",
+        "_cache_key",
+        "_cache_load",
+        "_cache_store",
+        "_run_check",
+        "_checks",
+        "run_build",
+        "run_verify",
+    ]
+
+    for function_name in function_names:
+        assert normalized_runner_function(getattr(repo_module, function_name)) == (
+            normalized_runner_function(getattr(template_module, function_name))
+        ), function_name
+
+
+def test_repo_runner_cache_key_matches_template_runner(tmp_path: Path) -> None:
     repo_module = load_check_module()
     template_module = load_template_check_module()
     changed_file = tmp_path / "src" / "app.py"
@@ -409,6 +491,34 @@ def test_repo_runner_cache_key_stays_in_sync_with_template_runner(tmp_path: Path
     assert repo_module._cache_key(tmp_path, config, check, changed_files) == (
         template_module._cache_key(tmp_path, config, check, changed_files)
     )
+
+
+def test_runner_build_reports_missing_config_without_traceback(
+    tmp_path: Path, capsys
+) -> None:
+    module = load_check_module()
+
+    result = module.run_build(tmp_path)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert "missing_config: .test-framework/config.json" in captured.err
+    assert "status: failed" in captured.out
+    assert "Traceback" not in captured.out + captured.err
+
+
+def test_runner_verify_reports_missing_config_without_traceback(
+    tmp_path: Path, capsys
+) -> None:
+    module = load_check_module()
+
+    result = module.run_verify(tmp_path)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert "missing_config: .test-framework/config.json" in captured.err
+    assert "status: failed" in captured.out
+    assert "Traceback" not in captured.out + captured.err
 
 
 def test_runner_no_check_returns_success_without_full_fallback(
@@ -528,6 +638,23 @@ def test_runner_reports_missing_list_command_without_traceback(
     assert result == 1
     assert "command_not_found: missing-command: missing-test-framework-executable" in captured.err
     assert "Traceback" not in captured.out + captured.err
+
+
+def test_runner_changed_files_falls_back_to_project_scan_when_git_unavailable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_check_module()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("app\n", encoding="utf-8")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "noise").write_text("ignore\n", encoding="utf-8")
+    (tmp_path / ".test-framework" / "cache").mkdir(parents=True)
+    (tmp_path / ".test-framework" / "cache" / "hit.json").write_text(
+        "ignore\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(module, "_git_names", lambda _root, *_args: None)
+
+    assert module._changed_files(tmp_path) == ["src/app.py"]
 
 
 def test_build_runs_claude_validation_for_marketplace_and_each_plugin(tmp_path: Path) -> None:
@@ -895,3 +1022,5 @@ def test_root_verify_full_covers_comet_config() -> None:
 
     assert ".comet/config.yaml" in pytest_full["paths"]
     assert ".comet/config.yaml" in pytest_full["inputs"]
+    assert ".comet.yaml" in pytest_full["paths"]
+    assert ".comet.yaml" in pytest_full["inputs"]

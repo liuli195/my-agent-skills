@@ -19,9 +19,20 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 Runner = Callable[..., subprocess.CompletedProcess[Any]]
 
 
+class ConfigError(Exception):
+    pass
+
+
 def _load_config(root: Path) -> dict[str, Any]:
     config_path = root / ".test-framework" / "config.json"
-    return json.loads(config_path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(config_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise ConfigError("missing_config: .test-framework/config.json") from None
+    except json.JSONDecodeError as error:
+        raise ConfigError(
+            f"invalid_config: .test-framework/config.json: {error.msg}"
+        ) from None
 
 
 def _normalize_path(path: str | Path) -> str:
@@ -293,8 +304,17 @@ def _check_ids(checks: list[dict[str, Any]]) -> str:
     return ", ".join(str(check.get("id")) for check in checks)
 
 
+def _config_error(error: ConfigError) -> int:
+    print(str(error), file=sys.stderr)
+    print("status: failed")
+    return 1
+
+
 def run_build(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> int:
-    config = _load_config(root)
+    try:
+        config = _load_config(root)
+    except ConfigError as error:
+        return _config_error(error)
     checks = _checks(config, "build")
     failures = 0
     for check in checks:
@@ -314,7 +334,10 @@ def run_verify(
     *,
     full: bool = False,
 ) -> int:
-    config = _load_config(root)
+    try:
+        config = _load_config(root)
+    except ConfigError as error:
+        return _config_error(error)
     checks = _checks(config, "verify")
     changed_files = _changed_files(root)
     selected = checks if full else _selected_checks(checks, changed_files)
