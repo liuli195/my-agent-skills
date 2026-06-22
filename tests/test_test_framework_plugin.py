@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 
@@ -7,6 +8,7 @@ PLUGIN_ROOT = REPO_ROOT / "plugins" / "test-framework"
 CODEX_REPO_MARKETPLACE = REPO_ROOT / ".agents" / "plugins" / "marketplace.json"
 CLAUDE_REPO_MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 RELEASE_FLOW_PROJECTION = REPO_ROOT / ".release-flow" / "projection.yaml"
+RELEASE_FLOW_SCRIPT = Path("plugins/release-flow/skills/release-flow/scripts/release_flow.py")
 
 PLUGIN_NAME = "test-framework"
 PLUGIN_VERSION = "0.1.8"
@@ -101,3 +103,15 @@ def test_test_framework_registered_in_marketplaces_and_projection() -> None:
         "category": "Developer Tools",
     }
     assert plugin_after(projection_plugins, "pr-flow") == PLUGIN_NAME
+
+
+def test_test_framework_release_projection_passes_real_validate() -> None:
+    result = subprocess.run(
+        ["python", str(RELEASE_FLOW_SCRIPT), "validate", "--project", "."],
+        cwd=REPO_ROOT,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr

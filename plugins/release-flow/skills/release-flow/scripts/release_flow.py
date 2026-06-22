@@ -24,7 +24,13 @@ SUPPORTED_VARIABLE_SOURCE = "github-actions-variable"
 SUPPORTED_TRANSFORM_TYPE = "json-env"
 SUPPORTED_GENERATOR_TYPE = "codex-marketplace"
 SUPPORTED_GENERATOR_IDENTITY = "codex"
-SUPPORTED_CODEX_MARKETPLACE_PLUGINS = {"agent-guard", "release-flow", "cross-agent-review", "pr-flow"}
+SUPPORTED_CODEX_MARKETPLACE_PLUGINS = {
+    "agent-guard",
+    "release-flow",
+    "cross-agent-review",
+    "pr-flow",
+    "test-framework",
+}
 SETUP_TARGETS = [
     ("release-flow/config.yaml", ".release-flow/config.yaml"),
     ("release-flow/projection.yaml", ".release-flow/projection.yaml"),
