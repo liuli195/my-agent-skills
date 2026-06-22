@@ -28,7 +28,8 @@ REVIEWER_ROLES = [
 ]
 READONLY_TOOLS = ["Read", "Glob", "Grep", "Bash(git diff *)", "Bash(git show *)", "Bash(git status *)"]
 DISALLOWED_TOOLS = ["Edit", "Write", "NotebookEdit", "TodoWrite", "MultiEdit", "Bash"]
-SDK_DISPATCH_TIMEOUT_SECONDS = 300
+SDK_DISPATCH_TIMEOUT_SECONDS = 480
+SDK_REVIEWER_TIMEOUT_SECONDS = 480
 BLOCKING_SEVERITIES = {"CRITICAL", "IMPORTANT"}
 NON_BLOCKING_SEVERITIES = {"WARNING", "SUGGESTION"}
 ALL_SEVERITIES = BLOCKING_SEVERITIES | NON_BLOCKING_SEVERITIES
@@ -355,7 +356,7 @@ def run_sdk_dispatch() -> int:
     async def collect() -> list[dict]:
         payload = json.loads(sys.stdin.read())
 
-        async def run_one(role: str) -> dict:
+        async def query_one(role: str) -> dict:
             options = ClaudeAgentOptions(
                 cwd=payload["cwd"],
                 allowed_tools=payload["readonly_tools"],
@@ -381,6 +382,24 @@ def run_sdk_dispatch() -> int:
                     }
                 ],
             }
+
+        async def run_one(role: str) -> dict:
+            try:
+                return await asyncio.wait_for(query_one(role), timeout=SDK_REVIEWER_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                return {
+                    "role": role,
+                    "status": "failed",
+                    "findings": [
+                        {
+                            "severity": "CRITICAL",
+                            "location": role,
+                            "summary": "Reviewer timed out",
+                            "evidence": f"Exceeded {SDK_REVIEWER_TIMEOUT_SECONDS} seconds.",
+                            "recommendation": "Rerun review after checking Claude Agent SDK availability.",
+                        }
+                    ],
+                }
 
         return await asyncio.gather(*(run_one(role) for role in payload["roles"]))
 
