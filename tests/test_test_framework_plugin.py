@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "test-framework"
@@ -11,6 +13,9 @@ CLAUDE_REPO_MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 RELEASE_FLOW_PROJECTION = REPO_ROOT / ".release-flow" / "projection.yaml"
 RELEASE_FLOW_CONFIG = REPO_ROOT / ".release-flow" / "config.yaml"
 RELEASE_FLOW_SCRIPT = REPO_ROOT / "plugins" / "release-flow" / "skills" / "release-flow" / "scripts" / "release_flow.py"
+TEST_FRAMEWORK_SCRIPT = (
+    PLUGIN_ROOT / "skills" / "test-framework" / "scripts" / "test_framework.py"
+)
 
 PLUGIN_NAME = "test-framework"
 PLUGIN_VERSION = "0.1.8"
@@ -19,6 +24,61 @@ PLUGIN_DESCRIPTION = "Test Framework Plugin（测试框架插件）"
 
 def read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def write_json(path: Path, data: dict) -> None:
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def run_test_framework(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(TEST_FRAMEWORK_SCRIPT), *args],
+        cwd=REPO_ROOT,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
+def run_check(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(project / "scripts" / "check.py"), *args],
+        cwd=project,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
+def git(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=project,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
+def command_that_logs(label: str, log_name: str = "run.log") -> list[str]:
+    code = (
+        "from pathlib import Path\n"
+        f"Path({log_name!r}).open('a', encoding='utf-8').write({label!r} + '\\n')\n"
+    )
+    return [sys.executable, "-c", code]
+
+
+def command_that_fails_once(label: str) -> list[str]:
+    code = (
+        "from pathlib import Path\n"
+        "marker = Path('fail-once.marker')\n"
+        "Path('run.log').open('a', encoding='utf-8').write(" + repr(label) + " + '\\n')\n"
+        "if marker.exists():\n"
+        "    raise SystemExit(0)\n"
+        "marker.write_text('failed', encoding='utf-8')\n"
+        "raise SystemExit(7)\n"
+    )
+    return [sys.executable, "-c", code]
 
 
 def plugin_names(catalog: dict) -> list[str]:
@@ -201,3 +261,271 @@ def test_test_framework_release_projection_projects_real_catalogs(tmp_path: Path
         "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
         "category": "Developer Tools",
     }
+
+
+def test_test_framework_init_writes_runner_config_gitignore_and_cache(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = run_test_framework("init", "--project", str(project))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: initialized" in result.stdout
+    assert (project / "scripts" / "check.py").is_file()
+    assert (project / ".test-framework" / "config.json").is_file()
+    assert (project / ".test-framework" / ".gitignore").is_file()
+    assert (project / ".test-framework" / "cache").is_dir()
+    assert read_json(project / ".test-framework" / "config.json") == {
+        "version": 1,
+        "build": {"checks": []},
+        "verify": {"checks": []},
+    }
+    assert (project / ".test-framework" / ".gitignore").read_text(encoding="utf-8") == "/cache/\n"
+    assert "def run_verify" in (project / "scripts" / "check.py").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "existing",
+    [
+        Path("scripts/check.py"),
+        Path(".test-framework/config.json"),
+        Path(".test-framework/.gitignore"),
+    ],
+)
+def test_test_framework_init_refuses_existing_files_before_writes(
+    tmp_path: Path, existing: Path
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    existing_path = project / existing
+    existing_path.parent.mkdir(parents=True, exist_ok=True)
+    existing_path.write_text("keep me\n", encoding="utf-8")
+
+    result = run_test_framework("init", "--project", str(project))
+
+    assert result.returncode != 0
+    assert f"existing_file: {existing_path}" in result.stderr
+    assert existing_path.read_text(encoding="utf-8") == "keep me\n"
+    generated_files = [
+        Path("scripts/check.py"),
+        Path(".test-framework/config.json"),
+        Path(".test-framework/.gitignore"),
+    ]
+    for relative in generated_files:
+        path = project / relative
+        if path != existing_path:
+            assert not path.exists()
+
+
+def test_test_framework_runner_build_verify_and_full_verify(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    (project / "src").mkdir()
+    (project / "docs").mkdir()
+    (project / "src" / "app.py").write_text("print('changed')\n", encoding="utf-8")
+    (project / "docs" / "guide.md").write_text("changed\n", encoding="utf-8")
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {
+                "checks": [
+                    {"id": "build-main", "command": command_that_logs("build-main")}
+                ]
+            },
+            "verify": {
+                "checks": [
+                    {
+                        "id": "verify-src",
+                        "command": command_that_logs("verify-src"),
+                        "paths": ["src/**"],
+                        "inputs": ["src"],
+                    },
+                    {
+                        "id": "verify-docs",
+                        "command": command_that_logs("verify-docs"),
+                        "paths": ["docs/**"],
+                        "inputs": ["docs"],
+                    },
+                ]
+            },
+        },
+    )
+
+    build = run_check(project, "build")
+    verify = run_check(project, "verify")
+    full_verify = run_check(project, "verify", "--full")
+
+    assert build.returncode == 0, build.stdout + build.stderr
+    assert "checked: build-main" in build.stdout
+    assert verify.returncode == 0, verify.stdout + verify.stderr
+    assert "checked: verify-src, verify-docs" in verify.stdout
+    assert "full-not-run: true" in verify.stdout
+    assert full_verify.returncode == 0, full_verify.stdout + full_verify.stderr
+    assert "checked: verify-src, verify-docs" in full_verify.stdout
+    assert "full-not-run: false" in full_verify.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "build-main",
+        "verify-src",
+        "verify-docs",
+    ]
+
+
+def test_test_framework_runner_uses_passed_result_cache(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    (project / "src").mkdir()
+    (project / "src" / "cached.py").write_text("changed\n", encoding="utf-8")
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "cache-check",
+                        "command": command_that_logs("cache-check"),
+                        "paths": ["src/cached.py"],
+                        "inputs": ["src/cached.py"],
+                    }
+                ]
+            },
+        },
+    )
+
+    first = run_check(project, "verify")
+    second = run_check(project, "verify")
+
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "cache-hit: cache-check" in second.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "cache-check"
+    ]
+
+
+def test_test_framework_runner_does_not_cache_failed_results(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    (project / "src").mkdir()
+    (project / "src" / "fails.py").write_text("changed\n", encoding="utf-8")
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "fail-once",
+                        "command": command_that_fails_once("fail-once"),
+                        "paths": ["src/fails.py"],
+                        "inputs": ["src/fails.py"],
+                    }
+                ]
+            },
+        },
+    )
+
+    first = run_check(project, "verify")
+    second = run_check(project, "verify")
+
+    assert first.returncode != 0
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "cache-hit: fail-once" not in second.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "fail-once",
+        "fail-once",
+    ]
+
+
+def test_test_framework_runner_no_check_does_not_fall_back_to_full(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    (project / "docs").mkdir()
+    (project / "docs" / "guide.md").write_text("changed\n", encoding="utf-8")
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "src-only",
+                        "command": command_that_logs("src-only"),
+                        "paths": ["src/**"],
+                        "inputs": ["src"],
+                    }
+                ]
+            },
+        },
+    )
+
+    result = run_check(project, "verify")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "checked:" in result.stdout
+    assert "full-not-run: true" in result.stdout
+    assert not (project / "run.log").exists()
+
+
+def test_test_framework_runner_reads_worktree_changed_files(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "staged-check",
+                        "command": command_that_logs("staged-check"),
+                        "paths": ["staged.txt"],
+                        "inputs": ["staged.txt"],
+                    },
+                    {
+                        "id": "unstaged-check",
+                        "command": command_that_logs("unstaged-check"),
+                        "paths": ["unstaged.txt"],
+                        "inputs": ["unstaged.txt"],
+                    },
+                    {
+                        "id": "untracked-check",
+                        "command": command_that_logs("untracked-check"),
+                        "paths": ["untracked.txt"],
+                        "inputs": ["untracked.txt"],
+                    },
+                ]
+            },
+        },
+    )
+    (project / "staged.txt").write_text("base\n", encoding="utf-8")
+    (project / "unstaged.txt").write_text("base\n", encoding="utf-8")
+    assert git(project, "init").returncode == 0
+    assert git(project, "config", "user.email", "test@example.com").returncode == 0
+    assert git(project, "config", "user.name", "Test User").returncode == 0
+    assert git(project, "add", ".").returncode == 0
+    assert git(project, "commit", "-m", "initial").returncode == 0
+    (project / "staged.txt").write_text("staged\n", encoding="utf-8")
+    assert git(project, "add", "staged.txt").returncode == 0
+    (project / "unstaged.txt").write_text("unstaged\n", encoding="utf-8")
+    (project / "untracked.txt").write_text("untracked\n", encoding="utf-8")
+
+    result = run_check(project, "verify")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "checked: staged-check, unstaged-check, untracked-check" in result.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "staged-check",
+        "unstaged-check",
+        "untracked-check",
+    ]
