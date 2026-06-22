@@ -740,6 +740,7 @@ def test_complete_returns_cleanup_stop_when_cleanup_fails_after_merge(tmp_path: 
     result = run_with_path(fake_bin, "complete", "--project", str(project))
 
     assert result.returncode == 1
+    assert "status: merge_complete" in result.stdout
     assert "status: EXCEPTION_REQUIRED" in result.stdout
     assert "pr_not_merged" in result.stdout
     calls = json.loads(calls_path.read_text(encoding="utf-8"))

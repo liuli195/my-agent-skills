@@ -789,6 +789,8 @@ def run_lifecycle(
     except PrFlowError as exc:
         return stop(project, command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
 
+    print("status: merge_complete")
+    print(f"pr: {pr_number_for_command(pr)}")
     cleanup_args = argparse.Namespace(command="cleanup", project=project, pr=str(pr.get("number")))
     return run_cleanup(cleanup_args)
 
