@@ -500,7 +500,7 @@ Expected: PASS.
 - Create: `scripts/local_plugin_build.py`
 - Modify: `tests/test_local_plugin_build_checks.py`
 
-- [ ] **Step 1: Write local runner tests**
+- [x] **Step 1: Write local runner tests**
 
 Update `tests/test_local_plugin_build_checks.py` so build and verify tests use JSON（数据格式） config and assert:
 
@@ -513,13 +513,13 @@ Update `tests/test_local_plugin_build_checks.py` so build and verify tests use J
 
 Move existing package-shape tests to import `scripts/local_plugin_build.py` for the repository-specific checks. Keep `scripts/check.py` tests focused on the generic framework runner（运行器） contract.
 
-- [ ] **Step 2: Run local tests and see failures**
+- [x] **Step 2: Run local tests and see failures**
 
 Run: `python -m pytest tests/test_local_plugin_build_checks.py -q`
 
 Expected: FAIL until `scripts/check.py` follows the framework contract.
 
-- [ ] **Step 3: Migrate root runner**
+- [x] **Step 3: Migrate root runner**
 
 Modify `scripts/check.py` to use the same framework runner behavior as the plugin template:
 
@@ -529,7 +529,7 @@ Modify `scripts/check.py` to use the same framework runner behavior as the plugi
 
 Create `scripts/local_plugin_build.py` by moving the current repository-specific package-shape checks out of `scripts/check.py`. It should expose `main()` for subprocess execution, return `0` when package-shape checks pass, and print the same error strings when they fail. This helper is a configured check command, not a human-facing framework entrypoint.
 
-- [ ] **Step 4: Add this repository config**
+- [x] **Step 4: Add this repository config**
 
 Create `.test-framework/config.json`:
 
@@ -601,7 +601,7 @@ Create `.test-framework/.gitignore`:
 /runs/
 ```
 
-- [ ] **Step 5: Run local runner tests**
+- [x] **Step 5: Run local runner tests**
 
 Run: `python -m pytest tests/test_local_plugin_build_checks.py tests/test_test_framework_plugin.py -q`
 

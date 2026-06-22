@@ -67,13 +67,36 @@
 
 - Plan task: Task 3: Connect This Repository to the Framework
 - OpenSpec task mapping: 2.1, 2.2, 2.3, 3.1, 3.2, 3.3, 3.4
-- Stage: pending
+- Stage: done
 - Agent: pending
 - Review rounds: 0
 
 ## Evidence
 
 - RED: pending
+- GREEN: pending
+- Commit: pending
+- Changed files: pending
+
+## Reviewer Feedback
+
+- Spec review: PASS.
+- Quality review: FAIL. Root `.test-framework/config.json` verify paths/inputs omit `.comet/config.yaml`, while local tests read that file; default verify would miss changes to it.
+- Fix commit: 4ac3365.
+- Final spec review: PASS.
+- Final quality review: PASS.
+
+## Current Task
+
+- Plan task: Task 4: Scope Guard and Validation
+- OpenSpec task mapping: 4.1, 4.2, 5.1, 5.2, 5.3, 5.4
+- Stage: pending
+- Agent: pending
+- Review rounds: 0
+
+## Evidence
+
+- RED: not applicable
 - GREEN: pending
 - Commit: pending
 - Changed files: pending

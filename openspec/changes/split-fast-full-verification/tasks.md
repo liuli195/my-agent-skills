@@ -6,16 +6,16 @@
 
 ## 2. Target Repository Framework
 
-- [ ] 2.1 Initialize this repository with `scripts/check.py`, `.test-framework/config.json`, and `.test-framework/.gitignore`.
-- [ ] 2.2 Migrate existing build（构建检查） behavior into configured `build.checks` without coupling it to the plugin template.
-- [ ] 2.3 Define this repository's canonical `verify.checks` once; do not add a separate fast（快速验证） configuration.
+- [x] 2.1 Initialize this repository with `scripts/check.py`, `.test-framework/config.json`, and `.test-framework/.gitignore`.
+- [x] 2.2 Migrate existing build（构建检查） behavior into configured `build.checks` without coupling it to the plugin template.
+- [x] 2.3 Define this repository's canonical `verify.checks` once; do not add a separate fast（快速验证） configuration.
 
 ## 3. Fast Cache Verification
 
-- [ ] 3.1 Implement changed-files（变更文件） collection and check selection from configured `paths`.
-- [ ] 3.2 Implement passed-result cache（通过结果缓存） keyed by check id（检查项标识）, command（命令）, inputs（输入）, config（配置）, Python（运行器） version, framework version, and cache version.
-- [ ] 3.3 Ensure default `verify` runs selected checks with cache, while `verify --full` runs all configured verify checks.
-- [ ] 3.4 Ensure failed（失败） results are not cached and no-check（无检查） runs do not automatically execute full（全量验证）.
+- [x] 3.1 Implement changed-files（变更文件） collection and check selection from configured `paths`.
+- [x] 3.2 Implement passed-result cache（通过结果缓存） keyed by check id（检查项标识）, command（命令）, inputs（输入）, config（配置）, Python（运行器） version, framework version, and cache version.
+- [x] 3.3 Ensure default `verify` runs selected checks with cache, while `verify --full` runs all configured verify checks.
+- [x] 3.4 Ensure failed（失败） results are not cached and no-check（无检查） runs do not automatically execute full（全量验证）.
 
 ## 4. Scope Guard
 
