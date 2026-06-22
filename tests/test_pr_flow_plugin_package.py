@@ -128,6 +128,12 @@ def test_pr_flow_bare_commands_report_stable_contract() -> None:
             assert "骨架入口" not in skill_text
             assert "status: not_implemented" not in skill_text
             continue
+        if command == "cleanup":
+            assert result.stdout == ""
+            assert "--pr" in result.stderr
+            assert "骨架入口" not in skill_text
+            assert "status: not_implemented" not in skill_text
+            continue
         assert result.stdout == "status: not_implemented\n"
         assert "unrecognized arguments" not in result.stderr
         assert "骨架入口" not in skill_text

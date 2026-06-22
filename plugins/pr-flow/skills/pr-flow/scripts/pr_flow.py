@@ -745,6 +745,17 @@ def run_lifecycle(
     return run_cleanup(cleanup_args)
 
 
+def add_cleanup_recovery(details: dict[str, Any], pr_number: str | None = None) -> dict[str, Any]:
+    recovery_pr = str(details.get("pr") or pr_number or "<number>")
+    details.setdefault(
+        "recovery",
+        "Resolve the reported condition, then run "
+        f"`pr-flow-cleanup --project . --pr {recovery_pr}`. "
+        "If the remote head branch was already deleted, sync the base branch and delete the local head branch manually.",
+    )
+    return details
+
+
 def run_complete(args: argparse.Namespace) -> int:
     project = resolve_project(args.project)
     try:
@@ -973,25 +984,25 @@ def run_cleanup(args: argparse.Namespace) -> int:
         }
         if pr.get("state") != "MERGED":
             details["reason"] = "pr_not_merged"
-            return stop(project, args.command, "EXCEPTION_REQUIRED", "pr_not_merged", details)
+            return stop(project, args.command, "EXCEPTION_REQUIRED", "pr_not_merged", add_cleanup_recovery(details, str(args.pr)))
 
         status_result = require_git_success(project, "git_status_failed", "status", "--short")
         dirty = status_result.stdout.strip()
         if dirty:
             details["reason"] = "dirty_worktree"
             details["dirty"] = dirty
-            return stop(project, args.command, "EXCEPTION_REQUIRED", "dirty_worktree", details)
+            return stop(project, args.command, "EXCEPTION_REQUIRED", "dirty_worktree", add_cleanup_recovery(details, str(args.pr)))
 
         branch_result = require_git_success(project, "git_current_branch_failed", "branch", "--show-current")
         current_branch = branch_result.stdout.strip()
         if current_branch != head_ref:
             details["reason"] = "current_branch_mismatch"
             details["currentBranch"] = current_branch
-            return stop(project, args.command, "EXCEPTION_REQUIRED", "current_branch_mismatch", details)
+            return stop(project, args.command, "EXCEPTION_REQUIRED", "current_branch_mismatch", add_cleanup_recovery(details, str(args.pr)))
         if head_ref == base_ref:
             details["reason"] = "protected_base_branch"
             details["currentBranch"] = current_branch
-            return stop(project, args.command, "EXCEPTION_REQUIRED", "protected_base_branch", details)
+            return stop(project, args.command, "EXCEPTION_REQUIRED", "protected_base_branch", add_cleanup_recovery(details, str(args.pr)))
 
         remote = remote_for_base_branch(config, base_ref)
         details["remote"] = remote
@@ -1012,7 +1023,7 @@ def run_cleanup(args: argparse.Namespace) -> int:
         details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
         return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
     except PrFlowError as exc:
-        return stop(project, args.command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
+        return stop(project, args.command, "EXCEPTION_REQUIRED", exc.reason, add_cleanup_recovery(exc.details, str(args.pr)))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1031,7 +1042,7 @@ def build_parser() -> argparse.ArgumentParser:
             subparser.add_argument("--project", type=Path)
         if command == "cleanup":
             subparser.add_argument("--project", type=Path)
-            subparser.add_argument("--pr")
+            subparser.add_argument("--pr", required=True)
         if command == "hotfix":
             subparser.add_argument("--project", type=Path)
             subparser.add_argument("--target")

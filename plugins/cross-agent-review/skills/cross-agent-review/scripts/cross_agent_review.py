@@ -28,6 +28,8 @@ REVIEWER_ROLES = [
 ]
 READONLY_TOOLS = ["Read", "Glob", "Grep", "Bash(git diff *)", "Bash(git show *)", "Bash(git status *)"]
 DISALLOWED_TOOLS = ["Edit", "Write", "NotebookEdit", "TodoWrite", "MultiEdit", "Bash"]
+# Individual reviewers time out first; the subprocess gets a wider window to
+# aggregate structured timeout findings and write normal outputs.
 SDK_DISPATCH_TIMEOUT_SECONDS = 600
 SDK_REVIEWER_TIMEOUT_SECONDS = 480
 BLOCKING_SEVERITIES = {"CRITICAL", "IMPORTANT"}

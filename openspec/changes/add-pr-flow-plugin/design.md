@@ -119,6 +119,8 @@ cleanup 的硬性拒绝条件：
 
 authorization phrase 只是确认短语，不是安全机制。真正的远端写入权限仍由 GitHub Rulesets bypass（规则集绕过权限）和凭证决定。
 
+authorization phrase 使用 `phraseHashAlgorithm: md5` 是有意的兼容选择：它只替代用户输入“我确认”，不是权限边界，也不承诺防离线破解。真正的安全边界仍是 GitHub 凭证、Rulesets bypass（规则集绕过权限）、目标分支 allow-list（允许列表）、基线一致校验和验证命令。
+
 ### 8. Tweak 只跳过 review gate
 
 `tweak` 必须走 PR。它跳过 review gate，但仍执行 checks、merge 和 cleanup。用户必须提供 reason，系统把 reason 写进 PR body。

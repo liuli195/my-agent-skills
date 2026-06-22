@@ -748,6 +748,7 @@ def test_complete_returns_cleanup_stop_when_cleanup_fails_after_merge(tmp_path: 
     assert status["status"] == "EXCEPTION_REQUIRED"
     assert status["command"] == "cleanup"
     assert status["details"]["reason"] == "pr_not_merged"
+    assert "pr-flow-cleanup" in status["details"]["recovery"]
 
 
 def test_complete_uses_configured_merge_strategy_flag(tmp_path: Path) -> None:
@@ -1038,6 +1039,30 @@ def test_complete_dual_review_gate_requires_github_and_local_evidence(tmp_path: 
     assert "status: cleanup_complete" in result.stdout
 
 
+def test_complete_dual_review_gate_blocks_github_changes_requested_even_with_local_evidence(tmp_path: Path) -> None:
+    evidence_path = tmp_path / "review-pass.json"
+    project, _remote = init_complete_project(tmp_path, review_mode="dual", evidence_path=str(evidence_path))
+    write_review_pass(project, str(evidence_path))
+    fake_bin, _calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {"stdout": passing_pr_view_json(project, review_decision="CHANGES_REQUESTED")},
+            {"stdout": passing_pr_view_json(project, review_decision="CHANGES_REQUESTED")},
+        ],
+    )
+
+    result = run_with_path(fake_bin, "complete", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "REPLY_OR_FIX_REQUIRED"
+    assert status["command"] == "complete"
+    assert status["details"]["reason"] == "review_gate_blocking"
+    assert status["details"]["reviewGateMode"] == "dual"
+    assert status["details"]["reviewDecision"] == "CHANGES_REQUESTED"
+
+
 def test_tweak_requires_reason(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -1254,6 +1279,24 @@ def test_hotfix_verify_command_preserves_windows_backslash_executable_path(tmp_p
             },
         )
     ]
+
+
+def test_hotfix_verify_command_uses_shlex_on_non_windows(tmp_path: Path, monkeypatch) -> None:
+    pr_flow = load_pr_flow_module()
+    calls = []
+
+    def fake_run(command_args, **kwargs):
+        calls.append((command_args, kwargs))
+        return subprocess.CompletedProcess(command_args, 0, "", "")
+
+    monkeypatch.setattr(pr_flow.os, "name", "posix")
+    monkeypatch.setattr(pr_flow.subprocess, "run", fake_run)
+
+    result = pr_flow.run_hotfix_verify_command(tmp_path, "python -m pytest")
+
+    assert result.returncode == 0
+    assert calls[0][0] == ["python", "-m", "pytest"]
+    assert calls[0][1]["shell"] is False
 
 
 def test_hotfix_requires_target_for_bare_command() -> None:
