@@ -1,46 +1,49 @@
-# Verify Report: add-pr-flow-plugin
+# add-pr-flow-plugin 验证报告
 
-## Summary
+## 概览
 
-| Dimension | Status |
+| 维度 | 结论 |
 | --- | --- |
-| Completeness | PASS, PR Flow plugin package, init, diagnose, complete, cleanup, hotfix, tweak, package validation, and verification tasks covered |
-| Correctness | PASS, focused tests, build checks, full verify, and OpenSpec strict validation passed |
-| Coherence | PASS, implementation matches the OpenSpec change and Task 11 closure requirements |
+| Completeness（完整性） | PASS，OpenSpec（规格流程）36/36 tasks（任务）已完成 |
+| Correctness（正确性） | PASS，完整本地回归通过 |
+| Coherence（一致性） | PASS，实现与 proposal/design/spec（提案/设计/规格）一致 |
 
-## Evidence
+## 验证证据
 
-| Check | Result |
+| 检查 | 结果 |
 | --- | --- |
-| `python -m pytest tests/test_pr_flow_plugin_package.py tests/test_pr_flow_cli.py -q` | PASS, 52 tests passed |
-| `python scripts/check.py build` | PASS, `status: build checks passed` |
-| `python scripts/check.py verify` | PASS, 322 tests passed |
-| `openspec validate add-pr-flow-plugin --type change --strict` | PASS, change is valid |
+| `openspec status --change "add-pr-flow-plugin" --json` | PASS，repo-local（仓库本地）change（变更）产物齐全 |
+| `openspec instructions apply --change "add-pr-flow-plugin" --json` | PASS，36/36 tasks（任务）完成 |
+| `bash -lc '... comet-state check add-pr-flow-plugin verify'` | PASS，当前 phase（阶段）为 verify（验证） |
+| `bash -lc '... comet-state scale add-pr-flow-plugin'` | PASS，verify_mode（验证模式）为 full（完整） |
+| `python scripts\check.py verify` | PASS，338 passed in 190.02s |
 
-## Regression Found And Fixed
+说明：仓库当前没有 `.venv\Scripts\python.exe`，因此完整回归使用本机可用的 `python` 入口执行。
 
-- Initial `python scripts/check.py verify` failed with 319 passed and 3 failed.
-- Root cause: release-flow projection validation did not include `pr-flow` in `SUPPORTED_CODEX_MARKETPLACE_PLUGINS`, and one existing marketplace test still expected only the previous three plugins.
-- Fix commit: `cf25cba` (`fix: 同步 pr-flow 发布投影校验`).
-- Post-fix targeted tests passed, then full `python scripts/check.py verify` passed with 322 tests.
+## 覆盖范围
 
-## OpenSpec Coverage
+- `pr-flow` Plugin（插件）包结构、Codex/Claude manifest（清单）和 Skill（技能）入口已覆盖。
+- `pr-flow-init`（仓库初始化）生成本地配置、PR body template（拉取请求正文模板）、`.gitignore`，并只输出 GitHub Rulesets（GitHub 规则集）建议，不写远端设置。
+- diagnose（诊断）固定 stop state（停机状态）覆盖 `PUSH_REQUIRED`、`DISPATCH_REQUIRED`、`REPLY_OR_FIX_REQUIRED`、`EXCEPTION_REQUIRED`。
+- complete（完整流程）覆盖 PR 创建/同步、checks（检查）、review gate（审查门禁）、head-locked merge（头提交锁定合并）和 cleanup（清理）。
+- cleanup（清理）覆盖 #51：已合并 PR 的远端 head branch（功能分支）删除、base branch（目标分支）同步、本地分支删除，以及拒绝不安全状态。
+- hotfix（热修复）覆盖目标分支 allow-list（允许列表）、目标基线一致校验、验证命令、authorization phrase（授权短语）校验、直推后远端回读和最小审计记录。
+- tweak（非 bug 小改动）覆盖走 PR、跳过 review gate（审查门禁）、保留 checks/merge/cleanup（检查/合并/清理）并写入 reason（原因）。
+- cross-agent-review（跨代理审查）输出契约已收紧为固定 severity（严重级别）：`CRITICAL`、`IMPORTANT`、`WARNING`、`SUGGESTION`。旧 severity aliases（严重级别别名）不兼容，外部自定义 reviewer（审查代理）必须迁移。
 
-- `pr-flow`: package skeleton, local init config, diagnose stop states, PR lifecycle, cleanup, hotfix, tweak, package validation, and repository verification are covered.
-- Cleanup #51: merged PR cleanup deletes remote and local head branches and syncs base branch with refusal cases covered.
+## 本次跳过项
 
-## Non-Goals
+- cross-agent-review（跨代理审查）运行已按用户明确指示跳过，不作为本次 Comet（开发流程）推进门禁。
+- 没有执行远端 push（推送）、PR 创建或 merge（合并）。
+- 没有自动配置 GitHub Rulesets（GitHub 规则集），符合首版设计。
+- 没有引入 dry-run（试运行）机制，符合最新需求。
 
-- GitHub Rulesets configuration remains a generated/local recommendation only; no remote GitHub configuration automation was added.
-- No dry-run mechanism was added.
-- No branch push or PR creation was performed during this verification.
+## 问题列表
 
-## Issues
+- CRITICAL（严重）：无。
+- WARNING（警告）：无。
+- SUGGESTION（建议）：无。
 
-- CRITICAL: none
-- WARNING: none
-- SUGGESTION: none
+## 结论
 
-## Final Assessment
-
-Full local verification passed. Ready for branch handling decision.
+本地完整验证通过。下一步进入 finishing-branch（分支收尾）决策点。
