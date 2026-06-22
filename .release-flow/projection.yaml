@@ -61,6 +61,7 @@ generators:
       - agent-guard
       - release-flow
       - cross-agent-review
+      - pr-flow
 
 transforms:
   - path: .agents/plugins/marketplace.json

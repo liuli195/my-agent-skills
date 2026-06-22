@@ -79,6 +79,7 @@ def test_codex_repo_marketplace_is_generated_by_release_projection() -> None:
         "agent-guard",
         "release-flow",
         "cross-agent-review",
+        "pr-flow",
     ]
     agent_guard_entries = [plugin for plugin in codex_catalog["plugins"] if plugin.get("name") == "agent-guard"]
     assert agent_guard_entries == [

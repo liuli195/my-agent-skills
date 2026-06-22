@@ -37,6 +37,24 @@ def test_cross_agent_review_skill_and_script_are_packaged() -> None:
     assert "不自动安装" in text
 
 
+def test_cross_agent_review_skill_documents_input_staging_under_run_dir() -> None:
+    skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+
+    assert ".local/cross-agent-review/<change>/<head_ref>/prepared-inputs/" in text
+    assert ".local/cross-agent-review-inputs" not in text
+
+
+def test_cross_agent_review_skill_documents_strict_finding_schema() -> None:
+    skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+
+    for severity in ["CRITICAL", "IMPORTANT", "WARNING", "SUGGESTION"]:
+        assert severity in text
+    assert "severity aliases" in text
+    assert "missing severity" in text
+
+
 def test_cross_agent_review_placeholder_run_accepts_documented_and_planned_options(tmp_path: Path) -> None:
     result = subprocess.run(
         [

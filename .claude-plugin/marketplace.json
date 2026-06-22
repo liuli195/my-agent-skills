@@ -18,6 +18,11 @@
       "name": "cross-agent-review",
       "source": "./plugins/cross-agent-review",
       "description": "Cross-agent review plugin for Codex and Claude agents"
+    },
+    {
+      "name": "pr-flow",
+      "source": "./plugins/pr-flow",
+      "description": "PR Flow Plugin（拉取请求流程插件）"
     }
   ]
 }
