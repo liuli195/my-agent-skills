@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "build": {
+    "checks": [
+      {
+        "id": "build.local-plugin-package",
+        "command": "python scripts/local_plugin_build.py",
+        "inputs": [
+          ".claude-plugin/marketplace.json",
+          ".agents/plugins/marketplace.json",
+          ".release-flow/projection.yaml",
+          "plugins",
+          "scripts/local_plugin_build.py"
+        ]
+      }
+    ]
+  },
+  "verify": {
+    "checks": [
+      {
+        "id": "pytest.full",
+        "paths": [
+          ".agents/**",
+          ".claude-plugin/**",
+          ".comet.yaml",
+          ".release-flow/**",
+          "pyproject.toml",
+          "scripts/check.py",
+          "scripts/local_plugin_build.py",
+          ".test-framework/**",
+          ".github/**",
+          "plugins/**",
+          "tests/**",
+          "openspec/**",
+          "docs/superpowers/**"
+        ],
+        "command": "python -m pytest",
+        "inputs": [
+          ".agents",
+          ".claude-plugin",
+          ".comet.yaml",
+          ".release-flow",
+          "pyproject.toml",
+          "scripts/check.py",
+          "scripts/local_plugin_build.py",
+          ".test-framework/config.json",
+          ".github",
+          "plugins",
+          "openspec",
+          "docs/superpowers",
+          "tests"
+        ]
+      }
+    ]
+  }
+}

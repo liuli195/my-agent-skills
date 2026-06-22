@@ -1,353 +1,369 @@
 from __future__ import annotations
 
+import argparse
+import fnmatch
+import hashlib
 import json
+import os
+import platform
 import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-try:
-    import yaml
-except ImportError:
-    yaml = None
 
-
+FRAMEWORK_VERSION = "0.1.0"
+CACHE_VERSION = "1"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 Runner = Callable[..., subprocess.CompletedProcess[Any]]
 
 
-def _load_json(path: Path) -> tuple[dict[str, Any] | None, str | None]:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None, f"missing_file: {path}"
-    except json.JSONDecodeError as exc:
-        return None, f"invalid_json: {path}: {exc}"
-    if not isinstance(data, dict):
-        return None, f"invalid_json_object: {path}"
-    return data, None
+def _load_config(root: Path) -> dict[str, Any]:
+    config_path = root / ".test-framework" / "config.json"
+    return json.loads(config_path.read_text(encoding="utf-8"))
 
 
-def _inside(child: Path, parent: Path) -> bool:
+def _normalize_path(path: str | Path) -> str:
+    return Path(path).as_posix().strip("/")
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for item in items:
+        normalized = _normalize_path(item)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            deduped.append(normalized)
+    return deduped
+
+
+def _git_names(root: Path, *args: str) -> list[str] | None:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=root,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.splitlines()
+
+
+def _is_excluded_relative(relative: str) -> bool:
+    parts = relative.split("/")
+    return (
+        ".git" in parts
+        or "__pycache__" in parts
+        or relative == ".test-framework/cache"
+        or relative.startswith(".test-framework/cache/")
+    )
+
+
+def _all_project_files(root: Path) -> list[str]:
+    files: list[str] = []
+    for current_root, dirs, names in os.walk(root):
+        current_path = Path(current_root)
+        kept_dirs: list[str] = []
+        for name in dirs:
+            relative = (current_path / name).relative_to(root).as_posix()
+            if not _is_excluded_relative(relative):
+                kept_dirs.append(name)
+        dirs[:] = kept_dirs
+        for name in names:
+            path = current_path / name
+            relative = path.relative_to(root).as_posix()
+            if not _is_excluded_relative(relative):
+                files.append(relative)
+    return sorted(files)
+
+
+def _changed_files(root: Path) -> list[str]:
+    commands = [
+        ("diff", "--name-only", "--cached"),
+        ("diff", "--name-only"),
+        ("ls-files", "--others", "--exclude-standard"),
+    ]
+    names: list[str] = []
+    any_git_command_succeeded = False
+    for command in commands:
+        result = _git_names(root, *command)
+        if result is None:
+            continue
+        any_git_command_succeeded = True
+        names.extend(result)
+    if not any_git_command_succeeded:
+        names = _all_project_files(root)
+    return _dedupe(names)
+
+
+def _path_matches(pattern: str, changed_file: str) -> bool:
+    pattern = _normalize_path(pattern)
+    changed_file = _normalize_path(changed_file)
+    if not pattern:
+        return False
+    if pattern.endswith("/**"):
+        prefix = pattern[:-3].rstrip("/")
+        return changed_file == prefix or changed_file.startswith(prefix + "/")
+    if pattern.endswith("/"):
+        prefix = pattern.rstrip("/")
+        return changed_file == prefix or changed_file.startswith(prefix + "/")
+    if any(char in pattern for char in "*?["):
+        return fnmatch.fnmatch(changed_file, pattern)
+    if "/" in pattern:
+        return changed_file == pattern or changed_file.startswith(pattern.rstrip("/") + "/")
+    return changed_file == pattern
+
+
+def _selected_checks(
+    checks: list[dict[str, Any]], changed_files: list[str]
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    for check in checks:
+        paths = check.get("paths") or []
+        if not paths:
+            if changed_files:
+                selected.append(check)
+            continue
+        if any(_path_matches(pattern, changed) for pattern in paths for changed in changed_files):
+            selected.append(check)
+    return selected
+
+
+def _stable_json(data: Any) -> str:
+    return json.dumps(data, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
+def _hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _is_relative_to_project(root: Path, path: Path) -> bool:
     try:
-        child.resolve(strict=False).relative_to(parent.resolve(strict=False))
+        path.resolve().relative_to(root.resolve())
     except ValueError:
         return False
     return True
 
 
-def _manifest_paths(value: Any) -> list[str]:
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, list) and all(isinstance(item, str) for item in value):
-        return value
-    return []
+def _validate_project_relative_input(root: Path, input_path: str) -> tuple[str, Path]:
+    raw_path = Path(input_path)
+    relative = _normalize_path(input_path)
+    if raw_path.anchor or ".." in Path(relative).parts:
+        raise ValueError(f"invalid_input_path: {input_path}")
+    path = root / relative
+    if not _is_relative_to_project(root, path):
+        raise ValueError(f"invalid_input_path: {input_path}")
+    return relative, path
 
 
-def _check_manifest(
-    manifest_path: Path,
-    plugin_name: str,
-    plugin_dir: Path,
-    name_error_code: str,
-    path_fields: tuple[str, ...],
-) -> list[str]:
-    errors: list[str] = []
-    manifest, load_error = _load_json(manifest_path)
-    if load_error is not None:
-        return [load_error]
-    assert manifest is not None
-
-    for field in ("name", "version", "description", "skills"):
-        if not isinstance(manifest.get(field), str) or not manifest[field].strip():
-            errors.append(f"invalid_manifest_field: {manifest_path}: {field}")
-
-    if manifest.get("name") != plugin_name:
-        errors.append(f"{name_error_code}: {manifest_path}: expected {plugin_name!r}")
-
-    for field in path_fields:
-        if field not in manifest:
-            continue
-        paths = _manifest_paths(manifest[field])
-        if not paths:
-            errors.append(f"invalid_manifest_path_field: {manifest_path}: {field}")
-            continue
-        for raw_path in paths:
-            candidate = plugin_dir / raw_path
-            if not _inside(candidate, plugin_dir) or not candidate.exists():
-                errors.append(f"missing_manifest_path: {manifest_path}: {field}: {raw_path}")
-
-    return errors
+def _hash_input(root: Path, input_path: str) -> dict[str, Any]:
+    relative, path = _validate_project_relative_input(root, input_path)
+    if not path.exists():
+        return {"path": relative, "missing": True}
+    if path.is_file():
+        return {"path": relative, "type": "file", "sha256": _hash_file(path)}
+    if path.is_dir():
+        files: list[dict[str, str]] = []
+        for current_root, dirs, names in os.walk(path):
+            current_path = Path(current_root)
+            kept_dirs: list[str] = []
+            for name in dirs:
+                child_relative = (current_path / name).relative_to(root).as_posix()
+                if not _is_excluded_relative(child_relative):
+                    kept_dirs.append(name)
+            dirs[:] = kept_dirs
+            for name in sorted(names):
+                file_path = current_path / name
+                child_relative = file_path.relative_to(root).as_posix()
+                if _is_excluded_relative(child_relative):
+                    continue
+                if not _is_relative_to_project(root, file_path):
+                    raise ValueError(f"invalid_input_path: {child_relative}")
+                files.append({"path": child_relative, "sha256": _hash_file(file_path)})
+        return {
+            "path": relative,
+            "type": "directory",
+            "files": sorted(files, key=lambda item: item["path"]),
+        }
+    return {"path": relative, "type": "other"}
 
 
-def _marketplace_plugins(root: Path) -> tuple[list[dict[str, Any]], list[str]]:
-    marketplace_path = root / ".claude-plugin" / "marketplace.json"
-    data, load_error = _load_json(marketplace_path)
-    if load_error is not None:
-        return [], [load_error]
-    assert data is not None
+def _default_cache_inputs(root: Path, paths: list[str]) -> list[str]:
+    matched: list[str] = []
+    for pattern in paths:
+        normalized = _normalize_path(pattern)
+        if Path(pattern).anchor or ".." in Path(normalized).parts:
+            raise ValueError(f"invalid_input_path: {pattern}")
+        matched.extend(
+            relative
+            for relative in _all_project_files(root)
+            if _path_matches(normalized, relative)
+        )
+    return _dedupe(matched)
 
-    plugins = data.get("plugins")
-    if not isinstance(plugins, list):
-        return [], [f"invalid_marketplace_plugins: {marketplace_path}"]
-    valid_plugins: list[dict[str, Any]] = []
-    errors: list[str] = []
-    for index, plugin in enumerate(plugins):
-        if isinstance(plugin, dict):
-            valid_plugins.append(plugin)
+
+def _cache_key(
+    root: Path,
+    config: dict[str, Any],
+    check: dict[str, Any],
+    changed_files: list[str] | None = None,
+) -> str:
+    if "inputs" in check and check.get("inputs") is not None:
+        inputs = check.get("inputs") or []
+    else:
+        paths = check.get("paths") or []
+        if paths:
+            inputs = _default_cache_inputs(root, paths)
         else:
-            errors.append(f"invalid_marketplace_entry: {marketplace_path}: index={index}")
-    return valid_plugins, errors
+            inputs = changed_files if changed_files is not None else _changed_files(root)
+    payload = {
+        "cache_version": CACHE_VERSION,
+        "framework_version": FRAMEWORK_VERSION,
+        "python_version": platform.python_version(),
+        "check_id": check.get("id"),
+        "command": check.get("command"),
+        "inputs": [_hash_input(root, item) for item in inputs],
+        "config": hashlib.sha256(_stable_json(config).encode("utf-8")).hexdigest(),
+    }
+    return hashlib.sha256(_stable_json(payload).encode("utf-8")).hexdigest()
 
 
-def _codex_dev_marketplace_plugins(root: Path) -> tuple[list[dict[str, str]], list[str]]:
-    marketplace_path = root / ".agents" / "plugins" / "marketplace.json"
-    data, load_error = _load_json(marketplace_path)
-    if load_error is not None:
-        return [], [load_error]
-    assert data is not None
-
-    errors: list[str] = []
-    name = data.get("name")
-    if not isinstance(name, str) or "dev" not in name.lower():
-        errors.append(f"codex_dev_marketplace_name_missing_dev: {marketplace_path}")
-
-    interface = data.get("interface")
-    display_name = interface.get("displayName") if isinstance(interface, dict) else None
-    if not isinstance(display_name, str) or "DEV" not in display_name:
-        errors.append(f"codex_dev_marketplace_display_name_missing_DEV: {marketplace_path}")
-
-    plugins = data.get("plugins")
-    if not isinstance(plugins, list):
-        return [], [*errors, f"invalid_codex_dev_marketplace_plugins: {marketplace_path}"]
-
-    valid_plugins: list[dict[str, str]] = []
-    for index, plugin in enumerate(plugins):
-        if not isinstance(plugin, dict):
-            errors.append(f"invalid_codex_dev_marketplace_entry: {marketplace_path}: index={index}")
-            continue
-        plugin_name = plugin.get("name")
-        if not isinstance(plugin_name, str) or not plugin_name.strip():
-            errors.append(f"invalid_codex_dev_marketplace_plugin: index={index}: name")
-            continue
-        source = plugin.get("source")
-        if not isinstance(source, dict):
-            errors.append(f"invalid_codex_dev_marketplace_plugin: {plugin_name}: source")
-            continue
-        source_type = source.get("source")
-        source_path = source.get("path")
-        if source_type != "local":
-            errors.append(f"invalid_codex_dev_marketplace_plugin: {plugin_name}: source.source")
-            continue
-        if not isinstance(source_path, str) or not source_path.strip():
-            errors.append(f"invalid_codex_dev_marketplace_plugin: {plugin_name}: source.path")
-            continue
-        valid_plugins.append({"name": plugin_name, "source": source_path})
-    return valid_plugins, errors
+def _cache_path(root: Path, key: str) -> Path:
+    return root / ".test-framework" / "cache" / f"{key}.json"
 
 
-def _projection_plugins(root: Path) -> tuple[list[str], list[str]]:
-    projection_path = root / ".release-flow" / "projection.yaml"
-    if yaml is None:
-        return [], ["missing_dependency: PyYAML"]
+def _cache_load(root: Path, key: str) -> bool:
+    path = _cache_path(root, key)
+    if not path.is_file():
+        return False
     try:
-        data = yaml.safe_load(projection_path.read_text(encoding="utf-8")) or {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    return data.get("status") == "passed"
+
+
+def _cache_store(root: Path, key: str, check: dict[str, Any]) -> None:
+    path = _cache_path(root, key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        _stable_json({"status": "passed", "id": check.get("id")}) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _run_check(root: Path, check: dict[str, Any], runner: Runner) -> int:
+    command = check.get("command")
+    if not command:
+        print(f"missing_command: {check.get('id')}", file=sys.stderr)
+        return 1
+    use_shell = isinstance(command, str)
+    try:
+        result = runner(
+            command,
+            cwd=root,
+            check=False,
+            text=True,
+            capture_output=True,
+            shell=use_shell,
+        )
     except FileNotFoundError:
-        return [], [f"missing_file: {projection_path}"]
-    except yaml.YAMLError as exc:
-        return [], [f"invalid_yaml: {projection_path}: {exc}"]
-
-    plugins: list[str] = []
-    generators = data.get("generators") if isinstance(data, dict) else None
-    if not isinstance(generators, list):
-        return plugins, [f"invalid_projection_generators: {projection_path}"]
-
-    for generator in generators:
-        if not isinstance(generator, dict) or generator.get("type") != "codex-marketplace":
-            continue
-        raw_plugins = generator.get("plugins", [])
-        if not isinstance(raw_plugins, list):
-            return plugins, [f"invalid_projection_plugins: {projection_path}"]
-        plugins.extend(plugin for plugin in raw_plugins if isinstance(plugin, str))
-    return plugins, []
-
-
-def _relative_file_set(root: Path) -> set[Path]:
-    if not root.exists():
-        return set()
-    return {path.relative_to(root) for path in root.rglob("*") if path.is_file()}
-
-
-def check_guard_profile_template_mirrors(root: Path) -> list[str]:
-    left = root / "plugins" / "agent-guard" / "assets" / "templates" / "guard-profile"
-    right = (
-        root
-        / "plugins"
-        / "agent-guard"
-        / "skills"
-        / "agent-guard"
-        / "assets"
-        / "templates"
-        / "guard-profile"
-    )
-
-    errors: list[str] = []
-    left_files = _relative_file_set(left)
-    right_files = _relative_file_set(right)
-    if left_files != right_files:
-        errors.append(
-            "guard_profile_template_files_mismatch: "
-            f"left_only={sorted(str(path) for path in left_files - right_files)} "
-            f"right_only={sorted(str(path) for path in right_files - left_files)}"
-        )
-
-    for relative_path in sorted(left_files & right_files):
-        if (left / relative_path).read_bytes() != (right / relative_path).read_bytes():
-            errors.append(f"guard_profile_template_mismatch: {relative_path}")
-
-    return errors
-
-
-def run_build(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> list[str]:
-    errors: list[str] = []
-    plugins, marketplace_errors = _marketplace_plugins(root)
-    errors.extend(marketplace_errors)
-    codex_dev_plugins, codex_dev_marketplace_errors = _codex_dev_marketplace_plugins(root)
-    errors.extend(codex_dev_marketplace_errors)
-
-    validate_commands: list[list[str]] = [["claude", "plugin", "validate", "."]]
-    marketplace_names: list[str] = []
-    seen_marketplace_names: set[str] = set()
-
-    for index, plugin in enumerate(plugins):
-        name = plugin.get("name")
-        source = plugin.get("source")
-        if not isinstance(name, str) or not name.strip():
-            errors.append(f"invalid_marketplace_plugin: index={index}: name")
-            continue
-        if name in seen_marketplace_names:
-            errors.append(f"duplicate_marketplace_plugin: {name}")
-        seen_marketplace_names.add(name)
-        if not isinstance(source, str) or not source.strip():
-            errors.append(f"invalid_marketplace_plugin: {name}: source")
-            continue
-        marketplace_names.append(name)
-
-        source_path = Path(source)
-        plugin_dir = root / source_path
-        if source_path.is_absolute() or not _inside(plugin_dir, root):
-            errors.append(f"source_outside_repo: {name}: {source}")
-            continue
-
-        validate_commands.append(["claude", "plugin", "validate", str(plugin_dir)])
-        errors.extend(
-            _check_manifest(
-                plugin_dir / ".claude-plugin" / "plugin.json",
-                name,
-                plugin_dir,
-                "claude_manifest_name_mismatch",
-                ("skills",),
-            )
-        )
-        errors.extend(
-            _check_manifest(
-                plugin_dir / ".codex-plugin" / "plugin.json",
-                name,
-                plugin_dir,
-                "codex_manifest_name_mismatch",
-                ("skills", "hooks", "assets"),
-            )
-        )
-
-    codex_dev_marketplace_names: list[str] = []
-    seen_codex_dev_marketplace_names: set[str] = set()
-    for plugin in codex_dev_plugins:
-        name = plugin["name"]
-        source = plugin["source"]
-        if name in seen_codex_dev_marketplace_names:
-            errors.append(f"duplicate_codex_dev_marketplace_plugin: {name}")
-        seen_codex_dev_marketplace_names.add(name)
-        codex_dev_marketplace_names.append(name)
-
-        source_path = Path(source)
-        plugin_dir = root / source_path
-        if source_path.is_absolute() or not _inside(plugin_dir, root):
-            errors.append(f"codex_dev_source_outside_repo: {name}: {source}")
-            continue
-        errors.extend(
-            _check_manifest(
-                plugin_dir / ".codex-plugin" / "plugin.json",
-                name,
-                plugin_dir,
-                "codex_dev_manifest_name_mismatch",
-                ("skills", "hooks", "assets"),
-            )
-        )
-
-    missing_commands: set[str] = set()
-    for command in validate_commands:
-        try:
-            result = runner(command, cwd=root, text=True, capture_output=True, check=False)
-        except FileNotFoundError:
-            command_name = command[0]
-            if command_name not in missing_commands:
-                errors.append(f"missing_command: {command_name}")
-                missing_commands.add(command_name)
-            continue
-        if getattr(result, "returncode", 0) != 0:
-            errors.append(f"claude_validate_failed: {' '.join(command)}")
-
-    projection_plugins, projection_errors = _projection_plugins(root)
-    errors.extend(projection_errors)
-    duplicate_projection_plugins = sorted(
-        {plugin for plugin in projection_plugins if projection_plugins.count(plugin) > 1}
-    )
-    for plugin in duplicate_projection_plugins:
-        errors.append(f"duplicate_projection_plugin: {plugin}")
-
-    if set(projection_plugins) != set(marketplace_names):
-        errors.append(
-            "projection_plugins_mismatch: "
-            f"marketplace={sorted(marketplace_names)} projection={sorted(set(projection_plugins))}"
-        )
-
-    if set(projection_plugins) != set(codex_dev_marketplace_names):
-        errors.append(
-            "codex_dev_projection_plugins_mismatch: "
-            f"marketplace={sorted(codex_dev_marketplace_names)} projection={sorted(set(projection_plugins))}"
-        )
-
-    errors.extend(check_guard_profile_template_mirrors(root))
-    return errors
-
-
-def run_verify(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> int:
-    result = runner(
-        [sys.executable, "-m", "pytest"],
-        cwd=root,
-        text=True,
-        capture_output=False,
-        check=False,
-    )
+        executable = command[0] if isinstance(command, list) else str(command)
+        print(f"command_not_found: {check.get('id')}: {executable}", file=sys.stderr)
+        return 1
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
     return int(result.returncode)
 
 
+def _checks(config: dict[str, Any], section: str) -> list[dict[str, Any]]:
+    return list(config.get(section, {}).get("checks", []))
+
+
+def _check_ids(checks: list[dict[str, Any]]) -> str:
+    return ", ".join(str(check.get("id")) for check in checks)
+
+
+def run_build(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> int:
+    config = _load_config(root)
+    checks = _checks(config, "build")
+    failures = 0
+    for check in checks:
+        if _run_check(root, check, runner) != 0:
+            failures += 1
+    print(f"checked: {_check_ids(checks)}")
+    if failures:
+        print("status: failed")
+        return 1
+    print("status: passed")
+    return 0
+
+
+def run_verify(
+    root: Path = REPO_ROOT,
+    runner: Runner = subprocess.run,
+    *,
+    full: bool = False,
+) -> int:
+    config = _load_config(root)
+    checks = _checks(config, "verify")
+    changed_files = _changed_files(root)
+    selected = checks if full else _selected_checks(checks, changed_files)
+    failures = 0
+    for check in selected:
+        if full:
+            if _run_check(root, check, runner) != 0:
+                failures += 1
+            continue
+        try:
+            key = _cache_key(root, config, check, changed_files)
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            failures += 1
+            continue
+        if _cache_load(root, key):
+            print(f"cache-hit: {check.get('id')}")
+            continue
+        result = _run_check(root, check, runner)
+        if result == 0:
+            _cache_store(root, key, check)
+        else:
+            failures += 1
+    print(f"checked: {_check_ids(selected)}")
+    print(f"full-not-run: {str(not full).lower()}")
+    if failures:
+        print("status: failed")
+        return 1
+    print("status: passed")
+    return 0
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="check.py")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("build")
+    verify_parser = subparsers.add_parser("verify")
+    verify_parser.add_argument("--full", action="store_true")
+    return parser
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = sys.argv[1:] if argv is None else argv
-    command = args[0] if args else "build"
-
-    if command == "build":
-        errors = run_build()
-        if errors:
-            for error in errors:
-                print(error, file=sys.stderr)
-            return 1
-        print("status: build checks passed")
-        return 0
-    if command == "verify":
-        return run_verify()
-
-    print(f"unknown command: {command}", file=sys.stderr)
+    parser = _build_parser()
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    if args.command == "build":
+        return run_build(REPO_ROOT)
+    if args.command == "verify":
+        return run_verify(REPO_ROOT, full=args.full)
+    parser.error(f"unsupported command: {args.command}")
     return 2
 
 

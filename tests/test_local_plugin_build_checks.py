@@ -3,14 +3,16 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = REPO_ROOT / "scripts" / "check.py"
+CHECK_SCRIPT = REPO_ROOT / "scripts" / "check.py"
+LOCAL_BUILD_SCRIPT = REPO_ROOT / "scripts" / "local_plugin_build.py"
 
 
-def load_check_module():
-    spec = importlib.util.spec_from_file_location("repo_check", SCRIPT)
+def load_module(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -19,9 +21,37 @@ def load_check_module():
     return module
 
 
-def write_json(path: Path, data: dict) -> None:
+def load_check_module():
+    return load_module(CHECK_SCRIPT, "repo_check")
+
+
+def load_local_build_module():
+    return load_module(LOCAL_BUILD_SCRIPT, "repo_local_plugin_build")
+
+
+def write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def write_runner_config(
+    root: Path,
+    *,
+    build_checks: list[dict[str, Any]] | None = None,
+    verify_checks: list[dict[str, Any]] | None = None,
+) -> None:
+    write_json(
+        root / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": build_checks or []},
+            "verify": {"checks": verify_checks or []},
+        },
+    )
+
+
+def make_completed(command, returncode: int = 0) -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(command, returncode, "", "")
 
 
 def make_plugin(root: Path, name: str) -> Path:
@@ -114,8 +144,252 @@ def make_projection(root: Path, names: list[str]) -> None:
     (root / ".release-flow" / "projection.yaml").write_text(projection, encoding="utf-8")
 
 
-def test_build_runs_claude_validation_for_marketplace_and_each_plugin(tmp_path: Path) -> None:
+def test_runner_build_runs_configured_checks(tmp_path: Path, capsys) -> None:
     module = load_check_module()
+    write_runner_config(
+        tmp_path,
+        build_checks=[
+            {"id": "build.one", "command": "run-build-one"},
+            {"id": "build.two", "command": "run-build-two"},
+        ],
+    )
+    calls: list[tuple[str, Path, bool]] = []
+
+    def fake_run(command, cwd, check, text, capture_output, shell=False):
+        calls.append((command, cwd, shell))
+        return make_completed(command)
+
+    result = module.run_build(tmp_path, runner=fake_run)
+
+    assert result == 0
+    assert calls == [
+        ("run-build-one", tmp_path, True),
+        ("run-build-two", tmp_path, True),
+    ]
+    output = capsys.readouterr().out
+    assert "checked: build.one, build.two" in output
+    assert "status: passed" in output
+
+
+def test_runner_default_verify_selects_changed_checks_and_uses_cache(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = load_check_module()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("changed\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "guide.md").write_text("unchanged\n", encoding="utf-8")
+    write_runner_config(
+        tmp_path,
+        verify_checks=[
+            {
+                "id": "verify.src",
+                "command": "run-verify-src",
+                "paths": ["src/**"],
+                "inputs": ["src/app.py"],
+            },
+            {
+                "id": "verify.docs",
+                "command": "run-verify-docs",
+                "paths": ["docs/**"],
+                "inputs": ["docs/guide.md"],
+            },
+        ],
+    )
+    monkeypatch.setattr(module, "_changed_files", lambda _root: ["src/app.py"], raising=False)
+    calls: list[str] = []
+
+    def fake_run(command, cwd, check, text, capture_output, shell=False):
+        calls.append(command)
+        return make_completed(command)
+
+    first = module.run_verify(tmp_path, runner=fake_run)
+    second = module.run_verify(tmp_path, runner=fake_run)
+
+    assert first == 0
+    assert second == 0
+    assert calls == ["run-verify-src"]
+    output = capsys.readouterr().out
+    assert "checked: verify.src" in output
+    assert "full-not-run: true" in output
+    assert "cache-hit: verify.src" in output
+    assert "verify.docs" not in output
+
+
+def test_runner_full_verify_runs_all_checks_without_cache(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = load_check_module()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("changed\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "guide.md").write_text("unchanged\n", encoding="utf-8")
+    write_runner_config(
+        tmp_path,
+        verify_checks=[
+            {
+                "id": "verify.src",
+                "command": "run-verify-src",
+                "paths": ["src/**"],
+                "inputs": ["src/app.py"],
+            },
+            {
+                "id": "verify.docs",
+                "command": "run-verify-docs",
+                "paths": ["docs/**"],
+                "inputs": ["docs/guide.md"],
+            },
+        ],
+    )
+    monkeypatch.setattr(module, "_changed_files", lambda _root: ["src/app.py"], raising=False)
+    calls: list[str] = []
+
+    def fake_run(command, cwd, check, text, capture_output, shell=False):
+        calls.append(command)
+        return make_completed(command)
+
+    assert module.run_verify(tmp_path, runner=fake_run) == 0
+    capsys.readouterr()
+    calls.clear()
+
+    result = module.run_verify(tmp_path, runner=fake_run, full=True)
+
+    assert result == 0
+    assert calls == ["run-verify-src", "run-verify-docs"]
+    output = capsys.readouterr().out
+    assert "checked: verify.src, verify.docs" in output
+    assert "full-not-run: false" in output
+    assert "cache-hit:" not in output
+
+
+def test_runner_does_not_cache_failed_verify_results(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = load_check_module()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "fails.py").write_text("changed\n", encoding="utf-8")
+    write_runner_config(
+        tmp_path,
+        verify_checks=[
+            {
+                "id": "verify.fail-once",
+                "command": "run-fail-once",
+                "paths": ["src/fails.py"],
+                "inputs": ["src/fails.py"],
+            }
+        ],
+    )
+    monkeypatch.setattr(module, "_changed_files", lambda _root: ["src/fails.py"], raising=False)
+    returncodes = [7, 0]
+    calls: list[str] = []
+
+    def fake_run(command, cwd, check, text, capture_output, shell=False):
+        calls.append(command)
+        return make_completed(command, returncodes.pop(0))
+
+    first = module.run_verify(tmp_path, runner=fake_run)
+    second = module.run_verify(tmp_path, runner=fake_run)
+
+    assert first == 1
+    assert second == 0
+    assert calls == ["run-fail-once", "run-fail-once"]
+    output = capsys.readouterr().out
+    assert "cache-hit: verify.fail-once" not in output
+
+
+def test_runner_no_check_returns_success_without_full_fallback(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = load_check_module()
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "guide.md").write_text("changed\n", encoding="utf-8")
+    write_runner_config(
+        tmp_path,
+        verify_checks=[
+            {
+                "id": "src-only",
+                "command": "run-src-only",
+                "paths": ["src/**"],
+                "inputs": ["src"],
+            }
+        ],
+    )
+    monkeypatch.setattr(module, "_changed_files", lambda _root: ["docs/guide.md"], raising=False)
+    calls: list[str] = []
+
+    def fake_run(command, cwd, check, text, capture_output, shell=False):
+        calls.append(command)
+        return make_completed(command)
+
+    result = module.run_verify(tmp_path, runner=fake_run)
+
+    assert result == 0
+    assert calls == []
+    output = capsys.readouterr().out
+    assert "checked:" in output
+    assert "full-not-run: true" in output
+
+
+def test_runner_rejects_inputs_outside_project(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = load_check_module()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("changed\n", encoding="utf-8")
+    write_runner_config(
+        tmp_path,
+        verify_checks=[
+            {
+                "id": "invalid-input",
+                "command": "run-invalid",
+                "paths": ["src/**"],
+                "inputs": ["../outside.txt"],
+            }
+        ],
+    )
+    monkeypatch.setattr(module, "_changed_files", lambda _root: ["src/app.py"], raising=False)
+
+    def fake_run(*_args, **_kwargs):
+        raise AssertionError("invalid input should stop before running checks")
+
+    result = module.run_verify(tmp_path, runner=fake_run)
+
+    assert result == 1
+    assert "invalid_input_path: ../outside.txt" in capsys.readouterr().err
+
+
+def test_runner_reports_missing_list_command_without_traceback(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = load_check_module()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("changed\n", encoding="utf-8")
+    write_runner_config(
+        tmp_path,
+        verify_checks=[
+            {
+                "id": "missing-command",
+                "command": ["missing-test-framework-executable"],
+                "paths": ["src/**"],
+                "inputs": ["src/app.py"],
+            }
+        ],
+    )
+    monkeypatch.setattr(module, "_changed_files", lambda _root: ["src/app.py"], raising=False)
+
+    def fake_run(*_args, **_kwargs):
+        raise FileNotFoundError("missing-test-framework-executable")
+
+    result = module.run_verify(tmp_path, runner=fake_run)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert "command_not_found: missing-command: missing-test-framework-executable" in captured.err
+    assert "Traceback" not in captured.out + captured.err
+
+
+def test_build_runs_claude_validation_for_marketplace_and_each_plugin(tmp_path: Path) -> None:
+    module = load_local_build_module()
     make_plugin(tmp_path, "alpha")
     make_plugin(tmp_path, "beta")
     make_marketplace(tmp_path, ["alpha", "beta"])
@@ -139,8 +413,21 @@ def test_build_runs_claude_validation_for_marketplace_and_each_plugin(tmp_path: 
     assert all("--strict" not in command for command, _cwd in calls)
 
 
+def test_local_plugin_build_main_outputs_stable_status(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = load_local_build_module()
+    monkeypatch.setattr(module, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(module, "run_build", lambda root=tmp_path: [])
+
+    result = module.main([])
+
+    assert result == 0
+    assert "status: build checks passed" in capsys.readouterr().out
+
+
 def test_build_rejects_marketplace_source_outside_repo(tmp_path: Path) -> None:
-    module = load_check_module()
+    module = load_local_build_module()
     make_marketplace(tmp_path, ["escape"])
     data = json.loads((tmp_path / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
     data["plugins"][0]["source"] = "../outside"
@@ -155,7 +442,7 @@ def test_build_rejects_marketplace_source_outside_repo(tmp_path: Path) -> None:
 
 
 def test_build_rejects_codex_dev_marketplace_without_dev_name(tmp_path: Path) -> None:
-    module = load_check_module()
+    module = load_local_build_module()
     make_plugin(tmp_path, "alpha")
     make_marketplace(tmp_path, ["alpha"])
     make_projection(tmp_path, ["alpha"])
@@ -171,7 +458,7 @@ def test_build_rejects_codex_dev_marketplace_without_dev_name(tmp_path: Path) ->
 
 
 def test_build_rejects_codex_dev_marketplace_source_outside_repo(tmp_path: Path) -> None:
-    module = load_check_module()
+    module = load_local_build_module()
     make_plugin(tmp_path, "alpha")
     make_marketplace(tmp_path, ["alpha"])
     make_projection(tmp_path, ["alpha"])
@@ -188,7 +475,7 @@ def test_build_rejects_codex_dev_marketplace_source_outside_repo(tmp_path: Path)
 
 
 def test_build_reports_missing_claude_command(tmp_path: Path) -> None:
-    module = load_check_module()
+    module = load_local_build_module()
     make_projection(tmp_path, [])
     make_marketplace(tmp_path, [])
 
@@ -201,7 +488,7 @@ def test_build_reports_missing_claude_command(tmp_path: Path) -> None:
 
 
 def test_build_reports_invalid_marketplace_entry(tmp_path: Path) -> None:
-    module = load_check_module()
+    module = load_local_build_module()
     make_projection(tmp_path, [])
     write_json(
         tmp_path / ".claude-plugin" / "marketplace.json",
@@ -221,7 +508,7 @@ def test_build_reports_invalid_marketplace_entry(tmp_path: Path) -> None:
 
 
 def test_build_reports_duplicate_marketplace_plugin_name(tmp_path: Path) -> None:
-    module = load_check_module()
+    module = load_local_build_module()
     make_plugin(tmp_path, "alpha")
     make_marketplace(tmp_path, ["alpha", "alpha"])
     make_projection(tmp_path, ["alpha"])
@@ -235,7 +522,7 @@ def test_build_reports_duplicate_marketplace_plugin_name(tmp_path: Path) -> None
 
 
 def test_build_reports_missing_pyyaml_dependency(tmp_path: Path) -> None:
-    module = load_check_module()
+    module = load_local_build_module()
     make_marketplace(tmp_path, [])
     make_projection(tmp_path, [])
     module.yaml = None
@@ -249,7 +536,7 @@ def test_build_reports_missing_pyyaml_dependency(tmp_path: Path) -> None:
 
 
 def test_build_reports_manifest_name_mismatch(tmp_path: Path) -> None:
-    module = load_check_module()
+    module = load_local_build_module()
     make_plugin(tmp_path, "alpha")
     make_marketplace(tmp_path, ["alpha"])
     make_projection(tmp_path, ["alpha"])
@@ -272,7 +559,7 @@ def test_build_reports_manifest_name_mismatch(tmp_path: Path) -> None:
 
 
 def test_build_reports_missing_codex_manifest_path(tmp_path: Path) -> None:
-    module = load_check_module()
+    module = load_local_build_module()
     make_plugin(tmp_path, "alpha")
     make_marketplace(tmp_path, ["alpha"])
     make_projection(tmp_path, ["alpha"])
@@ -290,7 +577,7 @@ def test_build_reports_missing_codex_manifest_path(tmp_path: Path) -> None:
 
 
 def test_build_reports_projection_plugin_mismatch(tmp_path: Path) -> None:
-    module = load_check_module()
+    module = load_local_build_module()
     make_plugin(tmp_path, "alpha")
     make_marketplace(tmp_path, ["alpha"])
     make_projection(tmp_path, ["alpha", "missing"])
@@ -301,7 +588,7 @@ def test_build_reports_projection_plugin_mismatch(tmp_path: Path) -> None:
 
 
 def test_build_reports_projection_missing_marketplace_plugin(tmp_path: Path) -> None:
-    module = load_check_module()
+    module = load_local_build_module()
     make_plugin(tmp_path, "alpha")
     make_plugin(tmp_path, "beta")
     make_marketplace(tmp_path, ["alpha", "beta"])
@@ -313,7 +600,7 @@ def test_build_reports_projection_missing_marketplace_plugin(tmp_path: Path) -> 
 
 
 def test_build_reports_duplicate_projection_plugin(tmp_path: Path) -> None:
-    module = load_check_module()
+    module = load_local_build_module()
     make_plugin(tmp_path, "alpha")
     make_marketplace(tmp_path, ["alpha"])
     make_projection(tmp_path, ["alpha", "alpha"])
@@ -375,7 +662,7 @@ def make_guard_profile_mirrors(root: Path, content: str = "schema_version: guard
 
 
 def test_build_accepts_matching_guard_profile_mirrors(tmp_path: Path) -> None:
-    module = load_check_module()
+    module = load_local_build_module()
     make_guard_profile_mirrors(tmp_path)
 
     errors = module.check_guard_profile_template_mirrors(tmp_path)
@@ -384,7 +671,7 @@ def test_build_accepts_matching_guard_profile_mirrors(tmp_path: Path) -> None:
 
 
 def test_build_reports_guard_profile_mirror_mismatch(tmp_path: Path) -> None:
-    module = load_check_module()
+    module = load_local_build_module()
     make_guard_profile_mirrors(tmp_path)
     _left, right = guard_profile_template_dirs(tmp_path)
     right_file = right / "comet-review-gate" / "GUARD-MANIFEST.yaml"
@@ -396,7 +683,7 @@ def test_build_reports_guard_profile_mirror_mismatch(tmp_path: Path) -> None:
 
 
 def test_build_reports_guard_profile_mirror_file_set_mismatch(tmp_path: Path) -> None:
-    module = load_check_module()
+    module = load_local_build_module()
     make_guard_profile_mirrors(tmp_path)
     _left, right = guard_profile_template_dirs(tmp_path)
     (right / "EXTRA.yaml").write_text("extra: true\n", encoding="utf-8")
@@ -407,7 +694,7 @@ def test_build_reports_guard_profile_mirror_file_set_mismatch(tmp_path: Path) ->
 
 
 def test_run_build_reports_guard_profile_mirror_mismatch(tmp_path: Path) -> None:
-    module = load_check_module()
+    module = load_local_build_module()
     make_plugin(tmp_path, "agent-guard")
     make_marketplace(tmp_path, ["agent-guard"])
     make_projection(tmp_path, ["agent-guard"])
@@ -424,7 +711,7 @@ def test_run_build_reports_guard_profile_mirror_mismatch(tmp_path: Path) -> None
 
 
 def test_run_build_reports_guard_profile_mirror_file_set_mismatch(tmp_path: Path) -> None:
-    module = load_check_module()
+    module = load_local_build_module()
     make_plugin(tmp_path, "agent-guard")
     make_marketplace(tmp_path, ["agent-guard"])
     make_projection(tmp_path, ["agent-guard"])
@@ -438,20 +725,6 @@ def test_run_build_reports_guard_profile_mirror_file_set_mismatch(tmp_path: Path
     )
 
     assert any("guard_profile_template_files_mismatch" in error for error in errors)
-
-
-def test_verify_delegates_to_pytest(tmp_path: Path) -> None:
-    module = load_check_module()
-    calls: list[list[str]] = []
-
-    def fake_run(command, cwd, text, capture_output, check):
-        calls.append(command)
-        return subprocess.CompletedProcess(command, 0)
-
-    result = module.run_verify(tmp_path, runner=fake_run)
-
-    assert result == 0
-    assert calls == [[sys.executable, "-m", "pytest"]]
 
 
 def test_comet_config_does_not_duplicate_guard_commands() -> None:
