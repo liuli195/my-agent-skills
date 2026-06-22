@@ -594,6 +594,12 @@ def codex_marketplace_entry(plugin_name: str) -> dict[str, Any]:
             "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
             "category": "Developer Tools",
         },
+        "test-framework": {
+            "name": "test-framework",
+            "source": {"source": "local", "path": "./plugins/test-framework"},
+            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+            "category": "Developer Tools",
+        },
     }
     try:
         return entries[plugin_name]
