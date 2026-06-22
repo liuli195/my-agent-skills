@@ -63,7 +63,7 @@
 - Final spec review: PASS.
 - Final quality review: PASS.
 
-## Current Task
+## Completed Task
 
 - Plan task: Task 3: Connect This Repository to the Framework
 - OpenSpec task mapping: 2.1, 2.2, 2.3, 3.1, 3.2, 3.3, 3.4
@@ -90,13 +90,17 @@
 
 - Plan task: Task 4: Scope Guard and Validation
 - OpenSpec task mapping: 4.1, 4.2, 5.1, 5.2, 5.3, 5.4
-- Stage: pending
-- Agent: pending
+- Stage: done
+- Agent: main orchestration plus workers 019ef19b-b8b7-7a30-8c1e-a1187fc046c3, 019ef19c-1891-7fe2-83cb-58bd2c19796e, 019ef19c-4f21-76c1-8605-6803f6b47084
 - Review rounds: 0
 
 ## Evidence
 
-- RED: not applicable
-- GREEN: pending
-- Commit: pending
-- Changed files: pending
+- RED: user clarified `verify --full` must not read cache（缓存） to skip, but must write passed-result cache（通过结果缓存） after successful checks.
+- GREEN: `python -m pytest tests/test_test_framework_plugin.py tests/test_local_plugin_build_checks.py -q` passed with 61 focused tests; `openspec validate split-fast-full-verification --strict` passed.
+- Build: `python scripts/check.py build` passed.
+- Full verify: `python scripts/check.py verify --full` passed with 381 tests in 240.99s (0:04:00), `full-not-run: false`.
+- Default verify after full: `python scripts/check.py verify` passed in 1.2s with `cache-hit: pytest.full`, `full-not-run: true`.
+- Scope guard: root `.comet.yaml` still points `verify_command` at `python scripts/check.py verify`; diff confirms no PR Flow（拉取请求流程） or CI（持续集成） workflow changes.
+- Commit: 50b2c03
+- Changed files: runner template, root runner, cache tests, OpenSpec（规格） design/spec/tasks updates.

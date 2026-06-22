@@ -19,12 +19,12 @@
 
 ## 4. Scope Guard
 
-- [ ] 4.1 Confirm Comet（双星流程） root command wiring still points at the default `python scripts/check.py verify`.
-- [ ] 4.2 Confirm no PR Flow（拉取请求流程）、Release Flow（发布流程） behavior wiring or CI（持续集成） workflow is changed by this A change; Release Flow（发布流程） projection（发布投影） may only add `test-framework` package metadata.
+- [x] 4.1 Confirm Comet（双星流程） root command wiring still points at the default `python scripts/check.py verify`.
+- [x] 4.2 Confirm no PR Flow（拉取请求流程）、Release Flow（发布流程） behavior wiring or CI（持续集成） workflow is changed by this A change; Release Flow（发布流程） projection（发布投影） may only add `test-framework` package metadata.
 
 ## 5. Validation
 
-- [ ] 5.1 Run focused tests for the framework contract, local build checks, cache behavior including `verify --full` cache refresh, and init E2E（端到端） behavior.
-- [ ] 5.2 Run `python scripts/check.py build`.
-- [ ] 5.3 Run `python scripts/check.py verify` and confirm it completes through default fast（快速验证） mode.
-- [ ] 5.4 Run `python scripts/check.py verify --full` once and record full-suite timing as baseline evidence.
+- [x] 5.1 Run focused tests for the framework contract, local build checks, cache behavior including `verify --full` cache refresh, and init E2E（端到端） behavior.
+- [x] 5.2 Run `python scripts/check.py build`.
+- [x] 5.3 Run `python scripts/check.py verify` and confirm it completes through default fast（快速验证） mode.
+- [x] 5.4 Run `python scripts/check.py verify --full` once and record full-suite timing as baseline evidence.
