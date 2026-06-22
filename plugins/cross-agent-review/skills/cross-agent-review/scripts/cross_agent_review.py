@@ -33,17 +33,9 @@ BLOCKING_SEVERITIES = {"CRITICAL", "IMPORTANT"}
 NON_BLOCKING_SEVERITIES = {"WARNING", "SUGGESTION"}
 ALL_SEVERITIES = BLOCKING_SEVERITIES | NON_BLOCKING_SEVERITIES
 SEVERITY_ALIASES = {
-    "BLOCKER": "CRITICAL",
-    "BLOCKING": "CRITICAL",
     "CRITICAL": "CRITICAL",
-    "HIGH": "IMPORTANT",
     "IMPORTANT": "IMPORTANT",
-    "MEDIUM": "WARNING",
     "WARNING": "WARNING",
-    "LOW": "SUGGESTION",
-    "MINOR": "SUGGESTION",
-    "INFO": "SUGGESTION",
-    "INFORMATIONAL": "SUGGESTION",
     "SUGGESTION": "SUGGESTION",
 }
 
@@ -219,7 +211,29 @@ def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
     return "\n\n".join(
         [
             f"Role: {role}",
-            "Return only JSON with role, status, and findings.",
+            "Return only a single JSON object. Do not use Markdown.",
+            "Schema:",
+            json.dumps(
+                {
+                    "role": role,
+                    "status": "completed",
+                    "findings": [
+                        {
+                            "severity": "CRITICAL",
+                            "location": "path-or-component",
+                            "summary": "one-line issue summary",
+                            "evidence": "specific evidence from the supplied inputs",
+                            "recommendation": "concrete next action",
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            "Use only these severity values: CRITICAL, IMPORTANT, WARNING, SUGGESTION.",
+            'If there are no issues, return "findings": [].',
+            "Do not put pass, aligned, ok, or informational observations in findings.",
+            "Do not use severity aliases such as high, medium, low, minor, or info.",
             f"Change: {review_args.change}",
             f"Base ref: {review_args.base_ref}",
             f"Head ref: {review_args.head_ref}",
@@ -417,15 +431,18 @@ def finding_location(raw: dict) -> str:
 
 def normalize_severity(raw: dict) -> str:
     severity = str(raw.get("severity", "")).upper()
-    return SEVERITY_ALIASES.get(severity, "CRITICAL")
+    return SEVERITY_ALIASES.get(severity, "")
 
 
-def is_explicit_non_issue_observation(raw: dict) -> bool:
-    if "severity" in raw:
-        return False
-    if "issue" in raw and raw.get("issue") in {None, False, ""}:
-        return True
-    return str(raw.get("status", "")).lower() in {"aligned", "pass", "passed", "ok"}
+def invalid_reviewer_finding(role: str, summary: str, raw: object) -> dict:
+    location = finding_location(raw) if isinstance(raw, dict) else ""
+    return {
+        "severity": "CRITICAL",
+        "location": location or role,
+        "summary": summary,
+        "evidence": json.dumps(raw, ensure_ascii=False) if isinstance(raw, dict) else repr(raw),
+        "recommendation": "Fix reviewer prompt or rerun review with strict JSON output.",
+    }
 
 
 def normalize_reviewer_findings(role: str, reviewer: dict) -> list[dict]:
@@ -469,15 +486,11 @@ def aggregate(reviewers: list[dict], skipped: list[dict]) -> dict:
         raw_findings = normalize_reviewer_findings(role, reviewer)
         for raw in raw_findings:
             if not isinstance(raw, dict):
-                raw = {
-                    "severity": "CRITICAL",
-                    "location": role,
-                    "summary": "Reviewer returned invalid finding",
-                    "evidence": repr(raw),
-                    "recommendation": "Rerun review or fix reviewer prompt",
-                }
-            elif is_explicit_non_issue_observation(raw):
-                continue
+                raw = invalid_reviewer_finding(role, "Reviewer returned invalid finding", raw)
+            elif "severity" not in raw:
+                raw = invalid_reviewer_finding(role, "Reviewer output missing severity", raw)
+            elif not normalize_severity(raw):
+                raw = invalid_reviewer_finding(role, f"Reviewer output used invalid severity: {raw.get('severity')}", raw)
             finding = normalize_finding(raw)
             key = (finding["severity"], finding["location"], finding["summary"])
             if key in seen:
