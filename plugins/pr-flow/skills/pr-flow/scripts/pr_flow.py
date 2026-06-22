@@ -98,13 +98,17 @@ def print_stop(status: str, message: str) -> None:
 
 
 def git(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", *args],
-        cwd=project,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
+    command = ["git", *args]
+    try:
+        return subprocess.run(
+            command,
+            cwd=project,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except FileNotFoundError as exc:
+        return subprocess.CompletedProcess(command, 127, "", str(exc))
 
 
 def gh(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -337,11 +341,52 @@ def parse_pr_result(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
     return pr
 
 
+def gh_pr_not_found(result: subprocess.CompletedProcess[str]) -> bool:
+    text = f"{result.stdout}\n{result.stderr}".lower()
+    return "no pull request" in text or "no pull requests" in text
+
+
 def find_pr(project: Path) -> dict[str, Any] | None:
     result = gh(project, "pr", "view", "--json", PR_VIEW_FIELDS)
     if result.returncode != 0:
-        return None
+        if gh_pr_not_found(result):
+            return None
+        details = command_failure_details("gh_pr_view_failed", result)
+        raise PrFlowError("gh_pr_view_failed", details)
     return parse_pr_result(result)
+
+
+def sync_pr(project: Path, pr: dict[str, Any]) -> dict[str, Any]:
+    current = find_pr(project)
+    if current is None:
+        raise PrFlowError(
+            "gh_pr_view_failed",
+            {
+                "reason": "gh_pr_view_failed",
+                "pr": pr.get("number"),
+                "headRefName": pr.get("headRefName"),
+                "stderr": "PR disappeared during sync.",
+            },
+        )
+    return current
+
+
+def confirm_remote_branch_deleted(project: Path, remote: str, branch: str) -> None:
+    result = git(project, "ls-remote", "--heads", remote, branch)
+    if result.returncode != 0:
+        details = command_failure_details("git_remote_delete_readback_failed", result)
+        details.update({"remote": remote, "headRefName": branch})
+        raise PrFlowError("git_remote_delete_readback_failed", details)
+    if result.stdout.strip():
+        raise PrFlowError(
+            "git_remote_delete_readback_failed",
+            {
+                "reason": "git_remote_delete_readback_failed",
+                "remote": remote,
+                "headRefName": branch,
+                "stdout": result.stdout.strip(),
+            },
+        )
 
 
 def create_pr(project: Path, config: dict[str, Any]) -> dict[str, Any]:
@@ -474,11 +519,6 @@ def require_cleanup_pr_fields(pr: dict[str, Any]) -> tuple[str, str]:
             },
         )
     return head_ref, base_ref
-
-
-def sync_pr(project: Path, pr: dict[str, Any]) -> dict[str, Any]:
-    current = find_pr(project)
-    return current if current is not None else pr
 
 
 def wait_for_checks(
@@ -727,7 +767,10 @@ def run_lifecycle(
     except PrFlowError as exc:
         return stop(project, command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
 
-    check_stop = wait_for_checks(project, pr, wait_config_from_config(config))
+    try:
+        check_stop = wait_for_checks(project, pr, wait_config_from_config(config))
+    except PrFlowError as exc:
+        return stop(project, command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
     if check_stop is not None:
         return stop_from_state(project, command, check_stop)
 
@@ -747,6 +790,14 @@ def run_lifecycle(
 
 def add_cleanup_recovery(details: dict[str, Any], pr_number: str | None = None) -> dict[str, Any]:
     recovery_pr = str(details.get("pr") or pr_number or "<number>")
+    completed_steps = details.get("completedCleanupSteps")
+    if isinstance(completed_steps, list) and "remote_head_deleted" in completed_steps:
+        details.setdefault(
+            "recovery",
+            "Remote head branch was already deleted. Sync the base branch, then delete the local head branch manually; "
+            f"do not rerun full `pr-flow-cleanup --project . --pr {recovery_pr}` until local state is reconciled.",
+        )
+        return details
     details.setdefault(
         "recovery",
         "Resolve the reported condition, then run "
@@ -931,6 +982,13 @@ def run_hotfix(args: argparse.Namespace) -> int:
             details["reason"] = "hotfix_base_mismatch"
             return stop(project, args.command, "EXCEPTION_REQUIRED", "hotfix_base_mismatch", details)
 
+        status_result = require_git_success(project, "git_status_failed", "status", "--short")
+        dirty = status_result.stdout.strip()
+        if dirty:
+            details["reason"] = "dirty_worktree"
+            details["dirty"] = dirty
+            return stop(project, args.command, "EXCEPTION_REQUIRED", "dirty_worktree", details)
+
         verify_command = hotfix_verify_command(branch_config)
         verification = run_hotfix_verify_command(project, verify_command)
         verify_authorization_phrase(config, args.authorization_phrase)
@@ -969,6 +1027,7 @@ def run_hotfix(args: argparse.Namespace) -> int:
 
 def run_cleanup(args: argparse.Namespace) -> int:
     project = resolve_project(args.project)
+    completed_cleanup_steps: list[str] = []
     try:
         config = load_config(project)
         pr = view_pr_for_cleanup(project, str(args.pr))
@@ -1007,9 +1066,15 @@ def run_cleanup(args: argparse.Namespace) -> int:
         remote = remote_for_base_branch(config, base_ref)
         details["remote"] = remote
         require_git_success(project, "git_push_delete_failed", "push", remote, "--delete", head_ref)
+        completed_cleanup_steps.append("remote_head_deleted")
+        confirm_remote_branch_deleted(project, remote, head_ref)
+        completed_cleanup_steps.append("remote_delete_confirmed")
         require_git_success(project, "git_checkout_base_failed", "checkout", base_ref)
+        completed_cleanup_steps.append("base_checked_out")
         require_git_success(project, "git_pull_ff_only_failed", "pull", "--ff-only", remote, base_ref)
+        completed_cleanup_steps.append("base_synced")
         require_git_success(project, "git_branch_delete_failed", "branch", "-d", head_ref)
+        completed_cleanup_steps.append("local_head_deleted")
 
         final_branch = require_git_success(project, "git_current_branch_failed", "branch", "--show-current").stdout.strip()
         details["reason"] = "cleanup_complete"
@@ -1023,6 +1088,8 @@ def run_cleanup(args: argparse.Namespace) -> int:
         details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
         return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
     except PrFlowError as exc:
+        if completed_cleanup_steps:
+            exc.details["completedCleanupSteps"] = completed_cleanup_steps
         return stop(project, args.command, "EXCEPTION_REQUIRED", exc.reason, add_cleanup_recovery(exc.details, str(args.pr)))
 
 
@@ -1039,14 +1106,14 @@ def build_parser() -> argparse.ArgumentParser:
             description=f"{command} command",
         )
         if command in {"diagnose", "init", "complete", "tweak"}:
-            subparser.add_argument("--project", type=Path)
+            subparser.add_argument("--project", type=Path, required=True)
         if command == "cleanup":
-            subparser.add_argument("--project", type=Path)
+            subparser.add_argument("--project", type=Path, required=True)
             subparser.add_argument("--pr", required=True)
         if command == "hotfix":
-            subparser.add_argument("--project", type=Path)
-            subparser.add_argument("--target")
-            subparser.add_argument("--authorization-phrase")
+            subparser.add_argument("--project", type=Path, required=True)
+            subparser.add_argument("--target", required=True)
+            subparser.add_argument("--authorization-phrase", required=True)
         if command == "tweak":
             subparser.add_argument("--reason")
         if command == "init":
@@ -1058,45 +1125,21 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command == "init" and args.project is not None:
+    if args.command == "init":
         return run_init(args)
-    if args.command == "diagnose" and args.project is not None:
+    if args.command == "diagnose":
         return run_diagnose(args)
-    if args.command == "complete" and args.project is not None:
+    if args.command == "complete":
         return run_complete(args)
-    if args.command == "tweak" and args.project is not None and args.reason is not None and args.reason.strip():
-        return run_tweak(args)
-    if args.command == "cleanup" and args.project is not None and args.pr is not None:
+    if args.command == "cleanup":
         return run_cleanup(args)
-    if (
-        args.command == "hotfix"
-        and args.project is not None
-        and args.target is not None
-        and args.authorization_phrase is not None
-    ):
+    if args.command == "hotfix":
         return run_hotfix(args)
-    if args.command == "hotfix" and args.target is None:
-        print("error: hotfix_target_required: --target", file=sys.stderr)
-        return 2
-    if args.command == "hotfix" and (
-        args.project is not None or args.target is not None or args.authorization_phrase is not None
-    ):
-        missing = []
-        if args.project is None:
-            missing.append("--project")
-        if args.target is None:
-            missing.append("--target")
-        if args.authorization_phrase is None:
-            missing.append("--authorization-phrase")
-        print(f"error: hotfix requires {', '.join(missing)}", file=sys.stderr)
-        return 2
     if args.command == "tweak" and (args.reason is None or not args.reason.strip()):
         print_stop("tweak_requires_reason", "tweak_requires_reason: --reason")
         return 2
-    if args.command == "tweak" and args.project is None:
-        print("error: tweak requires --project", file=sys.stderr)
-        return 2
-    print("status: not_implemented")
+    if args.command == "tweak":
+        return run_tweak(args)
     return 2
 
 

@@ -116,26 +116,8 @@ def test_pr_flow_bare_commands_report_stable_contract() -> None:
         skill_text = (PLUGIN_ROOT / "skills" / skill_name / "SKILL.md").read_text(encoding="utf-8")
 
         assert result.returncode == 2
-        if command == "hotfix":
-            assert result.stdout == ""
-            assert "hotfix_target_required" in result.stderr
-            assert "骨架入口" not in skill_text
-            assert "status: not_implemented" not in skill_text
-            continue
-        if command == "tweak":
-            assert result.stdout == "status: tweak_requires_reason\ntweak_requires_reason: --reason\n"
-            assert result.stderr == ""
-            assert "骨架入口" not in skill_text
-            assert "status: not_implemented" not in skill_text
-            continue
-        if command == "cleanup":
-            assert result.stdout == ""
-            assert "--pr" in result.stderr
-            assert "骨架入口" not in skill_text
-            assert "status: not_implemented" not in skill_text
-            continue
-        assert result.stdout == "status: not_implemented\n"
-        assert "unrecognized arguments" not in result.stderr
+        assert result.stdout == ""
+        assert "required:" in result.stderr
         assert "骨架入口" not in skill_text
         assert "status: not_implemented" not in skill_text
 

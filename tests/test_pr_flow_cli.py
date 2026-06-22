@@ -751,6 +751,28 @@ def test_complete_returns_cleanup_stop_when_cleanup_fails_after_merge(tmp_path: 
     assert "pr-flow-cleanup" in status["details"]["recovery"]
 
 
+def test_complete_stops_when_pr_sync_fails_instead_of_using_stale_pr(tmp_path: Path) -> None:
+    project, _remote = init_complete_project(tmp_path)
+    fake_bin, _calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {"stdout": passing_pr_view_json(project)},
+            {"stderr": "rate limited\n", "exit_code": 1},
+        ],
+    )
+
+    result = run_with_path(fake_bin, "complete", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    assert "gh_pr_view_failed" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "EXCEPTION_REQUIRED"
+    assert status["command"] == "complete"
+    assert status["details"]["reason"] == "gh_pr_view_failed"
+    assert "rate limited" in status["details"]["stderr"]
+
+
 def test_complete_uses_configured_merge_strategy_flag(tmp_path: Path) -> None:
     for strategy, expected_flag in [("merge", "--merge"), ("squash", "--squash"), ("rebase", "--rebase")]:
         case_tmp = tmp_path / strategy
@@ -1074,12 +1096,13 @@ def test_tweak_requires_reason(tmp_path: Path) -> None:
     assert "status: tweak_requires_reason" in result.stdout
 
 
-def test_bare_tweak_requires_reason() -> None:
+def test_bare_tweak_requires_project() -> None:
     result = run("tweak")
 
     assert result.returncode == 2
-    assert "status: not_implemented" not in result.stdout
-    assert "status: tweak_requires_reason" in result.stdout
+    assert result.stdout == ""
+    assert "required:" in result.stderr
+    assert "--project" in result.stderr
 
 
 def test_tweak_creates_pr_when_none_exists_and_writes_body(tmp_path: Path) -> None:
@@ -1303,8 +1326,9 @@ def test_hotfix_requires_target_for_bare_command() -> None:
     result = run("hotfix")
 
     assert result.returncode == 2
-    assert "status: not_implemented" not in result.stdout
-    assert "hotfix_target_required" in result.stderr or "--target" in result.stderr
+    assert result.stdout == ""
+    assert "required:" in result.stderr
+    assert "--target" in result.stderr
 
 
 def test_hotfix_requires_target_when_project_and_authorization_are_supplied(tmp_path: Path) -> None:
@@ -1319,7 +1343,8 @@ def test_hotfix_requires_target_when_project_and_authorization_are_supplied(tmp_
     )
 
     assert result.returncode == 2
-    assert "status: not_implemented" not in result.stdout
+    assert result.stdout == ""
+    assert "required:" in result.stderr
     assert "--target" in result.stderr
 
 
@@ -1367,6 +1392,55 @@ def test_hotfix_requires_explicit_target_branch_allow_hotfix_push(tmp_path: Path
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["command"] == "hotfix"
     assert status["details"]["reason"] == "hotfix_push_not_allowed"
+
+
+def test_hotfix_rejects_dirty_worktree_before_push(tmp_path: Path) -> None:
+    project, remote, before_commit = init_hotfix_project(tmp_path)
+    (project / "dirty.txt").write_text("uncommitted\n", encoding="utf-8")
+
+    result = run(
+        "hotfix",
+        "--project",
+        str(project),
+        "--target",
+        "main",
+        "--authorization-phrase",
+        HOTFIX_PHRASE,
+    )
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    assert "dirty_worktree" in result.stdout
+    assert git_bare(remote, "rev-parse", "refs/heads/main") == before_commit
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["command"] == "hotfix"
+    assert status["details"]["reason"] == "dirty_worktree"
+    assert "dirty.txt" in status["details"]["dirty"]
+
+
+def test_hotfix_missing_git_is_not_reported_as_missing_config(tmp_path: Path) -> None:
+    project, _remote, _before_commit = init_hotfix_project(tmp_path)
+    env = os.environ.copy()
+    env["PATH"] = ""
+
+    result = run(
+        "hotfix",
+        "--project",
+        str(project),
+        "--target",
+        "main",
+        "--authorization-phrase",
+        HOTFIX_PHRASE,
+        env=env,
+    )
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    assert "missing_config" not in result.stdout
+    assert "git_fetch_target_failed" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["command"] == "hotfix"
+    assert status["details"]["reason"] == "git_fetch_target_failed"
 
 
 def test_hotfix_rejects_when_head_is_not_based_on_latest_remote_target(tmp_path: Path) -> None:
