@@ -17,6 +17,8 @@ The repository SHALL（必须）provide a verify command initialized by the test
 - **THEN** failed checks（失败检查项） are not stored as passed-result cache（通过结果缓存）
 - **THEN** the command does not rely on the default verify mode being full（全量验证）
 
-#### Scenario: Comet config avoids duplicate command wiring
-- **WHEN** Comet（双星流程）reads `.comet.yaml`
-- **THEN** it does not define `build_command` or `verify_command`
+#### Scenario: Comet config keeps guard-compatible command shim
+- **WHEN** Comet（双星流程）reads root `.comet.yaml`
+- **THEN** it defines `build_command: python scripts/check.py build`
+- **THEN** it defines `verify_command: python scripts/check.py verify`
+- **THEN** those commands act as the guard（守卫） compatibility shim（兼容层） for the test-framework runner（测试框架运行器）

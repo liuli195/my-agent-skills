@@ -529,6 +529,49 @@ def test_test_framework_runner_default_check_cache_key_tracks_changed_files(
     ]
 
 
+def test_test_framework_runner_default_check_cache_key_tracks_dirty_file_contents(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert git(project, "init").returncode == 0
+    assert git(project, "config", "user.email", "test@example.invalid").returncode == 0
+    assert git(project, "config", "user.name", "Test User").returncode == 0
+    dirty_file = project / "dirty.txt"
+    dirty_file.write_text("base\n", encoding="utf-8")
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "default-dirty-check",
+                        "command": command_that_logs("default-dirty-check"),
+                    }
+                ]
+            },
+        },
+    )
+    assert git(project, "add", ".").returncode == 0
+    assert git(project, "commit", "-m", "initial").returncode == 0
+
+    dirty_file.write_text("first\n", encoding="utf-8")
+    first = run_check(project, "verify")
+    dirty_file.write_text("second\n", encoding="utf-8")
+    second = run_check(project, "verify")
+
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "cache-hit: default-dirty-check" not in second.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "default-dirty-check",
+        "default-dirty-check",
+    ]
+
+
 def test_test_framework_runner_reports_missing_list_command_without_traceback(
     tmp_path: Path,
 ) -> None:

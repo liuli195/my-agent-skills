@@ -9,6 +9,17 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CHECK_SCRIPT = REPO_ROOT / "scripts" / "check.py"
 LOCAL_BUILD_SCRIPT = REPO_ROOT / "scripts" / "local_plugin_build.py"
+TEMPLATE_CHECK_SCRIPT = (
+    REPO_ROOT
+    / "plugins"
+    / "test-framework"
+    / "skills"
+    / "test-framework"
+    / "assets"
+    / "templates"
+    / "scripts"
+    / "check.py"
+)
 
 
 def load_module(path: Path, name: str):
@@ -23,6 +34,10 @@ def load_module(path: Path, name: str):
 
 def load_check_module():
     return load_module(CHECK_SCRIPT, "repo_check")
+
+
+def load_template_check_module():
+    return load_module(TEMPLATE_CHECK_SCRIPT, "template_check")
 
 
 def load_local_build_module():
@@ -335,6 +350,65 @@ def test_runner_does_not_cache_failed_verify_results(
     assert calls == ["run-fail-once", "run-fail-once"]
     output = capsys.readouterr().out
     assert "cache-hit: verify.fail-once" not in output
+
+
+def test_runner_default_check_cache_key_tracks_dirty_file_contents(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = load_check_module()
+    dirty_file = tmp_path / "dirty.txt"
+    dirty_file.write_text("first\n", encoding="utf-8")
+    write_runner_config(
+        tmp_path,
+        verify_checks=[
+            {
+                "id": "verify.default",
+                "command": "run-default",
+            }
+        ],
+    )
+    monkeypatch.setattr(module, "_changed_files", lambda _root: ["dirty.txt"], raising=False)
+    calls: list[str] = []
+
+    def fake_run(command, cwd, check, text, capture_output, shell=False):
+        calls.append(command)
+        return make_completed(command)
+
+    first = module.run_verify(tmp_path, runner=fake_run)
+    dirty_file.write_text("second\n", encoding="utf-8")
+    second = module.run_verify(tmp_path, runner=fake_run)
+
+    assert first == 0
+    assert second == 0
+    assert calls == ["run-default", "run-default"]
+    output = capsys.readouterr().out
+    assert "cache-hit: verify.default" not in output
+
+
+def test_repo_runner_cache_key_stays_in_sync_with_template_runner(tmp_path: Path) -> None:
+    repo_module = load_check_module()
+    template_module = load_template_check_module()
+    changed_file = tmp_path / "src" / "app.py"
+    changed_file.parent.mkdir()
+    changed_file.write_text("changed\n", encoding="utf-8")
+    config = {
+        "version": 1,
+        "build": {"checks": []},
+        "verify": {
+            "checks": [
+                {
+                    "id": "verify.default",
+                    "command": "python -m pytest",
+                }
+            ]
+        },
+    }
+    check = config["verify"]["checks"][0]
+    changed_files = ["src/app.py"]
+
+    assert repo_module._cache_key(tmp_path, config, check, changed_files) == (
+        template_module._cache_key(tmp_path, config, check, changed_files)
+    )
 
 
 def test_runner_no_check_returns_success_without_full_fallback(

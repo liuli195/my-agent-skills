@@ -18,7 +18,7 @@ OpenSpec remains the canonical capability spec. This beta context pack verbatim-
 - Source: openspec/changes/split-fast-full-verification/tasks.md
 - SHA256: af922cabcbddcfb355bc208d2c1b5432af534c1308d1e03d3a973cb638b9dc23
 - Source: openspec/changes/split-fast-full-verification/specs/local-plugin-build-checks/spec.md
-- SHA256: 8101e5454fda0a1dd0735e89069aa2be0b715cb8cfe3d375838aa959ba4f32d8
+- SHA256: 967ff4ecd268fdb6de96a0dffd024edff027df8c113c62a67b7b5d72488b93a4
 - Source: openspec/changes/split-fast-full-verification/specs/local-verification-modes/spec.md
 - SHA256: 305b2343e85f369bc10bf1cb58ef5acd1f4eac171de6808063277c0ba3b15edb
 - Source: openspec/changes/split-fast-full-verification/specs/pr-flow-plugin/spec.md
@@ -31,8 +31,8 @@ OpenSpec remains the canonical capability spec. This beta context pack verbatim-
 ## openspec/changes/split-fast-full-verification/specs/local-plugin-build-checks/spec.md
 
 - Source: openspec/changes/split-fast-full-verification/specs/local-plugin-build-checks/spec.md
-- Lines: 1-19
-- SHA256: 8101e5454fda0a1dd0735e89069aa2be0b715cb8cfe3d375838aa959ba4f32d8
+- Lines: 1-24
+- SHA256: 967ff4ecd268fdb6de96a0dffd024edff027df8c113c62a67b7b5d72488b93a4
 
 ```md
 ## MODIFIED Requirements
@@ -42,18 +42,20 @@ The repository SHALL（必须）provide a verify command generated or maintained
 
 #### Scenario: Verify command defaults to framework fast mode
 - **WHEN** a developer runs `python scripts/check.py verify`
-- **THEN** the command uses `.test-framework/config.yaml` `verify.checks`
+- **THEN** the command uses `.test-framework/config.json` `verify.checks`
 - **THEN** the command applies changed-files（变更文件） selection and passed-result cache（通过结果缓存）
 - **THEN** the command does not run every configured verify check by default
 
 #### Scenario: Verify full mode runs all configured checks
 - **WHEN** a developer runs `python scripts/check.py verify --full`
-- **THEN** the command runs all `.test-framework/config.yaml` `verify.checks`
+- **THEN** the command runs all `.test-framework/config.json` `verify.checks`
 - **THEN** the command does not rely on the default verify mode being full（全量验证）
 
-#### Scenario: Comet config avoids duplicate command wiring
-- **WHEN** Comet（双星流程）reads `.comet/config.yaml`
-- **THEN** it does not define `build_command` or `verify_command`
+#### Scenario: Comet config keeps guard-compatible command shim
+- **WHEN** Comet（双星流程）reads root `.comet.yaml`
+- **THEN** it defines `build_command: python scripts/check.py build`
+- **THEN** it defines `verify_command: python scripts/check.py verify`
+- **THEN** those commands act as the guard（守卫） compatibility shim（兼容层） for the test-framework runner（测试框架运行器）
 ```
 
 ## openspec/changes/split-fast-full-verification/specs/local-verification-modes/spec.md
@@ -80,7 +82,7 @@ The repository SHALL（必须）provide a verify command generated or maintained
 - **THEN** 系统 MUST NOT 使用 changed-files（变更文件）筛选跳过 checks（检查项）
 
 #### Scenario: Target repository does not define separate fast checks
-- **WHEN** 目标仓库声明 `.test-framework/config.yaml`
+- **WHEN** 目标仓库声明 `.test-framework/config.json`
 - **THEN** 配置 MUST 使用一套 `verify.checks`
 - **THEN** 配置 MUST NOT 要求仓库维护独立的 `verify.fast.checks`
 - **THEN** fast（快速验证） MUST 是框架执行模式，而不是仓库测试清单
@@ -195,7 +197,7 @@ The repository SHALL（必须）provide a verify command generated or maintained
 #### Scenario: Init creates standard files
 - **WHEN** 用户对目标仓库运行 test-framework init（测试框架初始化）
 - **THEN** 系统 MUST 创建或维护 `scripts/check.py`
-- **THEN** 系统 MUST 创建或维护 `.test-framework/config.yaml`
+- **THEN** 系统 MUST 创建或维护 `.test-framework/config.json`
 - **THEN** 系统 MUST 创建或维护 `.test-framework/.gitignore`
 
 #### Scenario: Init defines local cache location
@@ -206,16 +208,16 @@ The repository SHALL（必须）provide a verify command generated or maintained
 #### Scenario: Init stays uncoupled from repository business logic
 - **WHEN** 插件初始化目标仓库
 - **THEN** 模板 MUST NOT 内置 PR Flow（拉取请求流程）、Release Flow（发布流程）、Comet（双星流程）或任一具体仓库业务检查
-- **THEN** 仓库业务检查 MUST 只通过 `.test-framework/config.yaml` 声明
+- **THEN** 仓库业务检查 MUST 只通过 `.test-framework/config.json` 声明
 
 ### Requirement: Test framework provides unified configuration and commands
 系统 MUST 通过一个配置文件和一个命令入口表达 build（构建检查）与 verify（验证）行为。
 
 #### Scenario: Config declares canonical checks
 - **WHEN** 目标仓库配置测试框架
-- **THEN** `.test-framework/config.yaml` MUST 支持 `build.checks`
-- **THEN** `.test-framework/config.yaml` MUST 支持 `verify.checks`
-- **THEN** `.test-framework/config.yaml` MUST NOT 要求独立的 `verify.fast.checks`
+- **THEN** `.test-framework/config.json` MUST 支持 `build.checks`
+- **THEN** `.test-framework/config.json` MUST 支持 `verify.checks`
+- **THEN** `.test-framework/config.json` MUST NOT 要求独立的 `verify.fast.checks`
 
 #### Scenario: Command entrypoint exposes minimum commands
 - **WHEN** 目标仓库完成初始化
