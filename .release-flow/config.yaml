@@ -35,3 +35,5 @@ manifests:
     - plugins/release-flow/.claude-plugin/plugin.json
     - plugins/cross-agent-review/.codex-plugin/plugin.json
     - plugins/cross-agent-review/.claude-plugin/plugin.json
+    - plugins/pr-flow/.codex-plugin/plugin.json
+    - plugins/pr-flow/.claude-plugin/plugin.json
