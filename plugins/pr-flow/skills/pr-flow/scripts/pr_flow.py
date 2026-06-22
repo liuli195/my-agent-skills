@@ -690,7 +690,7 @@ def run_diagnose(args: argparse.Namespace) -> int:
         details = command_failure_details("missing_upstream", upstream_result)
         details["branch"] = branch
         details["baseBranch"] = base_branch
-        return stop(project, args.command, "PUSH_REQUIRED", "missing_upstream", details)
+        return stop(project, args.command, "PUSH_REQUIRED", "push current branch before continuing", details)
 
     status_result = git(project, "status", "--short")
     if status_result.returncode != 0:
@@ -994,7 +994,24 @@ def run_hotfix(args: argparse.Namespace) -> int:
         verify_authorization_phrase(config, args.authorization_phrase)
 
         require_git_success(project, "git_hotfix_push_failed", "push", remote, f"HEAD:refs/heads/{target}")
-        remote_after = confirm_hotfix_remote_readback(project, remote, target, current_head)
+        try:
+            remote_after = confirm_hotfix_remote_readback(project, remote, target, current_head)
+        except PrFlowError as exc:
+            if exc.reason != "hotfix_readback_mismatch":
+                raise
+            remote_after = str(exc.details.get("remoteAfter") or "")
+            audit_path = write_hotfix_audit(
+                project,
+                target=target,
+                remote=remote,
+                before_commit=remote_head,
+                after_commit=current_head,
+                remote_after=remote_after,
+                verification=verification,
+                verify_command=verify_command,
+            )
+            exc.details["auditPath"] = str(audit_path.relative_to(project))
+            raise
         audit_path = write_hotfix_audit(
             project,
             target=target,

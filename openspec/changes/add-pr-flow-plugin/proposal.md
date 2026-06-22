@@ -17,6 +17,7 @@
 - 新增仓库配置 `.pr-flow/config.yaml`，纳入 Git（版本管理）。
 - 新增本地状态目录约定 `.pr-flow/runs/` 和 `.pr-flow/last-status.json`，由 `.pr-flow/.gitignore` 忽略。
 - 保留固定 stop state（停机状态）：`PUSH_REQUIRED`、`DISPATCH_REQUIRED`、`REPLY_OR_FIX_REQUIRED`、`EXCEPTION_REQUIRED`。
+- 更新 `cross-agent-review` Plugin（跨代理审查插件）的输入和输出契约，使 PR Flow 的 local/dual review gate（本地/双门禁审查门禁）能稳定消费 `review-pass.json`。
 - 明确移除首版过度设计：
   - 不提供 dry-run（试运行）机制。
   - 不自动写 GitHub Rulesets。
@@ -33,7 +34,7 @@
 
 ### Modified Capabilities
 
-- 无。
+- `cross-agent-review`: 收紧 reviewer（审查代理）输出格式、severity（严重级别）契约和超时边界，避免本地 review evidence（审查证据）因为自由格式输出或长时间挂起而不可用。
 
 ## Impact
 

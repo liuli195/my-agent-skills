@@ -103,6 +103,24 @@
 - **THEN** 首版 MUST 支持 `cross-agent-review` 的 `review-pass.json`
 - **THEN** 本地 evidence MUST 匹配当前 base、head 和 diff（差异）
 
+### Requirement: Cross-agent-review evidence generation
+系统 MUST 保持 `cross-agent-review`（跨代理审查）输出可被 PR Flow 的 local/dual review gate（本地/双门禁审查门禁）稳定消费。
+
+#### Scenario: Prepared input paths
+- **WHEN** 系统运行 `cross-agent-review`
+- **THEN** 输入快照 MUST 写入 `.local/cross-agent-review/<change>/<head>/prepared-inputs/`
+- **THEN** 输出 MUST 写入同一 `<change>/<head>` 运行目录
+
+#### Scenario: Strict reviewer output
+- **WHEN** reviewer（审查代理）返回 findings（发现项）
+- **THEN** 每个 finding MUST 使用 `CRITICAL`、`IMPORTANT`、`WARNING` 或 `SUGGESTION` severity（严重级别）
+- **THEN** 缺失 severity 或使用别名的 finding MUST 被视为阻塞性的 invalid reviewer finding（无效审查发现）
+
+#### Scenario: Reviewer timeout
+- **WHEN** reviewer 或 dispatch（分发）进程超过配置超时
+- **THEN** 系统 MUST 停止等待并输出阻塞性结果
+- **THEN** 外层 dispatch timeout（分发超时）MUST 大于单个 reviewer timeout（审查代理超时）
+
 ### Requirement: Cleanup merged PR
 系统 MUST 提供 cleanup（清理）入口，安全清理已合并 PR 的本地和远端分支。
 

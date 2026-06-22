@@ -49,3 +49,10 @@
 - [x] 8.2 Run plugin package validation.
 - [x] 8.3 Run the repository's required end-to-end regression for plugin changes.
 - [x] 8.4 Write verification report covering implemented requirements and skipped non-goals.
+
+## 9. Cross-Agent Review Support
+
+- [x] 9.1 Document the default cross-agent-review input/output paths used by PR Flow local evidence.
+- [x] 9.2 Require strict reviewer JSON output with fixed severity values.
+- [x] 9.3 Add per-reviewer and dispatch timeouts so local evidence generation cannot hang indefinitely.
+- [x] 9.4 Add tests for strict output parsing, invalid reviewer findings, and timeout constants.

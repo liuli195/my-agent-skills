@@ -532,6 +532,7 @@ def test_diagnose_outputs_push_required_without_upstream(tmp_path: Path) -> None
     assert status["command"] == "diagnose"
     assert status["details"]["branch"] == "feature/no-upstream"
     assert status["details"]["reason"] == "missing_upstream"
+    assert "push current branch before continuing" in result.stdout
 
 
 def test_diagnose_outputs_exception_for_unknown_gh_failure(tmp_path: Path) -> None:
@@ -1418,6 +1419,53 @@ def test_hotfix_rejects_dirty_worktree_before_push(tmp_path: Path) -> None:
     assert "dirty.txt" in status["details"]["dirty"]
 
 
+def test_hotfix_writes_audit_record_when_post_push_readback_mismatches(tmp_path: Path, monkeypatch) -> None:
+    pr_flow = load_pr_flow_module()
+    project, remote, before_commit = init_hotfix_project(tmp_path)
+    head_commit = git(project, "rev-parse", "HEAD")
+    remote_after = "0" * 40
+
+    def fake_confirm(project_arg: Path, remote_arg: str, target_arg: str, expected_head: str) -> str:
+        raise pr_flow.PrFlowError(
+            "hotfix_readback_mismatch",
+            {
+                "reason": "hotfix_readback_mismatch",
+                "targetBranch": target_arg,
+                "remote": remote_arg,
+                "currentHead": expected_head,
+                "remoteAfter": remote_after,
+            },
+        )
+
+    monkeypatch.setattr(pr_flow, "confirm_hotfix_remote_readback", fake_confirm)
+
+    result = pr_flow.run_hotfix(
+        pr_flow.argparse.Namespace(
+            project=project,
+            target="main",
+            authorization_phrase=HOTFIX_PHRASE,
+            command="hotfix",
+        )
+    )
+
+    assert result == 1
+    assert git_bare(remote, "rev-parse", "refs/heads/main") == head_commit
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["command"] == "hotfix"
+    assert status["details"]["reason"] == "hotfix_readback_mismatch"
+    audit_path = project / status["details"]["auditPath"]
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert audit["targetBranch"] == "main"
+    assert audit["beforeCommit"] == before_commit
+    assert audit["afterCommit"] == head_commit
+    assert audit["readback"] == {
+        "remote": "origin",
+        "targetBranch": "main",
+        "remoteAfter": remote_after,
+        "matchedHead": False,
+    }
+
+
 def test_hotfix_missing_git_is_not_reported_as_missing_config(tmp_path: Path) -> None:
     project, _remote, _before_commit = init_hotfix_project(tmp_path)
     env = os.environ.copy()
@@ -1573,6 +1621,21 @@ def test_cleanup_merged_pr_checks_out_base_pulls_and_deletes_branches(tmp_path: 
     assert status["details"]["remote"] == "origin"
     calls = json.loads(calls_path.read_text(encoding="utf-8"))
     assert calls == [["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"]]
+
+
+def test_cleanup_partial_remote_delete_failure_reports_recovery_state(tmp_path: Path) -> None:
+    project, remote = init_cleanup_project(tmp_path)
+    fake_bin = write_fake_gh(tmp_path / "bin", stdout=cleanup_pr_view_json(base_ref="missing-base"))
+
+    result = run_with_path(fake_bin, "cleanup", "--project", str(project), "--pr", "12")
+
+    assert_cleanup_exception(project, result, "git_checkout_base_failed")
+    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode != 0
+    assert git(project, "branch", "--show-current") == "feature/example"
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["completedCleanupSteps"] == ["remote_head_deleted", "remote_delete_confirmed"]
+    assert "Remote head branch was already deleted" in status["details"]["recovery"]
+    assert "do not rerun full `pr-flow-cleanup --project . --pr 12`" in status["details"]["recovery"]
 
 
 def test_cleanup_rejects_pr_state_that_is_not_merged(tmp_path: Path) -> None:
