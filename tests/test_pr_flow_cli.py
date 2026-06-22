@@ -892,6 +892,31 @@ def test_complete_rejects_missing_head_ref_oid_without_merge(tmp_path: Path) -> 
     assert status["details"]["reason"] == "missing_head_ref_oid"
 
 
+def test_complete_rejects_current_branch_that_does_not_match_pr_head(tmp_path: Path) -> None:
+    project, _remote = init_complete_project(tmp_path)
+    git(project, "checkout", "-b", "feature/other")
+    fake_bin, calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            { "stdout": passing_pr_view_json(project) },
+            { "stdout": passing_pr_view_json(project) },
+        ],
+    )
+
+    result = run_with_path(fake_bin, "complete", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    assert "current_branch_mismatch" in result.stdout
+    calls = json.loads(calls_path.read_text(encoding="utf-8"))
+    assert all(call[:2] != ["pr", "merge"] for call in calls)
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["command"] == "complete"
+    assert status["details"]["reason"] == "current_branch_mismatch"
+    assert status["details"]["currentBranch"] == "feature/other"
+    assert status["details"]["headRefName"] == "feature/example"
+
+
 def test_complete_reports_exception_when_gh_pr_merge_fails(tmp_path: Path) -> None:
     project, _remote = init_complete_project(tmp_path)
     head_oid = git(project, "rev-parse", "HEAD")

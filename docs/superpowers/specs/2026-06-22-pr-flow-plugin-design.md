@@ -147,6 +147,8 @@ PR Flow 的 local/dual review gate（本地/双门禁审查门禁）依赖 `cros
 - 缺失 severity 或使用别名的 finding（发现项）视为 invalid reviewer finding（无效审查发现），按阻塞处理。
 - 单个 reviewer timeout（审查代理超时）为 8 分钟；外层 dispatch timeout（分发超时）为 10 分钟。
 
+兼容边界：本仓库内置 reviewer prompt（审查代理提示词）已迁移到 canonical severity（规范严重级别），本 change（变更）不继续兼容旧别名。外部自定义 reviewer 如果仍输出 `HIGH`、`MEDIUM`、`LOW`、`INFO`、`BLOCKER` 或 `BLOCKING`，必须先迁移再使用本版本；否则会被按 invalid reviewer finding 阻塞处理。
+
 ## Cleanup
 
 `cleanup` 是独立核心入口，覆盖 #51。

@@ -784,6 +784,17 @@ def run_lifecycle(
         if review_stop is not None:
             return stop_from_state(project, command, review_stop)
 
+    current_branch = require_git_success(project, "git_current_branch_failed", "branch", "--show-current").stdout.strip()
+    head_ref = pr.get("headRefName")
+    if current_branch != head_ref:
+        details = {
+            "reason": "current_branch_mismatch",
+            "currentBranch": current_branch,
+            "headRefName": head_ref,
+            "pr": pr.get("number"),
+        }
+        return stop(project, command, "EXCEPTION_REQUIRED", "current_branch_mismatch", details)
+
     try:
         merge_pr(project, config, pr)
     except PrFlowError as exc:

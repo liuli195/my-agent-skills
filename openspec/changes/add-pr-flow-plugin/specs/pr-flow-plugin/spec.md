@@ -115,6 +115,7 @@
 - **WHEN** reviewer（审查代理）返回 findings（发现项）
 - **THEN** 每个 finding MUST 使用 `CRITICAL`、`IMPORTANT`、`WARNING` 或 `SUGGESTION` severity（严重级别）
 - **THEN** 缺失 severity 或使用别名的 finding MUST 被视为阻塞性的 invalid reviewer finding（无效审查发现）
+- **THEN** 外部自定义 reviewer MUST 在使用本版本前迁移旧 severity aliases（严重级别别名）
 
 #### Scenario: Reviewer timeout
 - **WHEN** reviewer 或 dispatch（分发）进程超过配置超时

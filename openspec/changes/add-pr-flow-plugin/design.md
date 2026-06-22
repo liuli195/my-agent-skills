@@ -91,6 +91,8 @@ branches:
 
 这样保留扩展点，但不在首版提前建设证据平台。
 
+`cross-agent-review` 的 reviewer prompt（审查代理提示词）必须输出 canonical severity（规范严重级别）：`CRITICAL`、`IMPORTANT`、`WARNING`、`SUGGESTION`。本仓库内置 prompt 已按该契约更新；外部自定义 reviewer 如果仍输出旧别名，需要先迁移，否则会被 invalid reviewer finding（无效审查发现）阻塞。
+
 ### 6. Cleanup 是独立核心入口
 
 `pr-flow-cleanup` 不依赖 complete。它只处理已合并 PR 的 head branch 清理和 base branch 同步，并输出最终状态。

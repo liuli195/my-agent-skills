@@ -59,3 +59,4 @@
 - [x] 9.3 Add per-reviewer and dispatch timeouts so local evidence generation cannot hang indefinitely.
 - [x] 9.4 Add tests for strict output parsing, invalid reviewer findings, and timeout constants.
 - [x] 9.5 Document the migration requirement for removed severity aliases.
+- [x] 9.6 Document that external custom reviewers must migrate old severity aliases before using this version.
