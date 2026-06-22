@@ -410,6 +410,88 @@ def test_test_framework_runner_uses_passed_result_cache(tmp_path: Path) -> None:
     ]
 
 
+def test_test_framework_runner_default_cache_key_tracks_glob_path_contents(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert git(project, "init").returncode == 0
+    (project / "src").mkdir()
+    app_path = project / "src" / "app.txt"
+    app_path.write_text("first\n", encoding="utf-8")
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "glob-default-inputs",
+                        "command": command_that_logs("glob-default-inputs"),
+                        "paths": ["src/**"],
+                    }
+                ]
+            },
+        },
+    )
+
+    first = run_check(project, "verify")
+    app_path.write_text("second\n", encoding="utf-8")
+    second = run_check(project, "verify")
+
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "cache-hit: glob-default-inputs" not in second.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "glob-default-inputs",
+        "glob-default-inputs",
+    ]
+
+
+@pytest.mark.parametrize(
+    "invalid_input",
+    [
+        "../outside.txt",
+        "{outside}",
+    ],
+)
+def test_test_framework_runner_rejects_inputs_outside_project(
+    tmp_path: Path, invalid_input: str
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside\n", encoding="utf-8")
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    (project / "src").mkdir()
+    (project / "src" / "app.txt").write_text("changed\n", encoding="utf-8")
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "invalid-input",
+                        "command": command_that_logs("invalid-input"),
+                        "paths": ["src/**"],
+                        "inputs": [invalid_input.format(outside=outside)],
+                    }
+                ]
+            },
+        },
+    )
+
+    result = run_check(project, "verify")
+
+    assert result.returncode != 0
+    assert "invalid_input_path" in result.stderr
+    assert not (project / "run.log").exists()
+
+
 @pytest.mark.parametrize("mutation", ["check_id", "command", "inputs", "config"])
 def test_test_framework_runner_cache_key_changes_with_check_contract(
     tmp_path: Path, mutation: str

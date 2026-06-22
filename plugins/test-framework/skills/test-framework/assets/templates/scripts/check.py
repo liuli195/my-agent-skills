@@ -145,9 +145,27 @@ def _hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _hash_input(project: Path, input_path: str) -> dict[str, Any]:
+def _is_relative_to_project(project: Path, path: Path) -> bool:
+    try:
+        path.resolve().relative_to(project.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _validate_project_relative_input(project: Path, input_path: str) -> tuple[str, Path]:
+    raw_path = Path(input_path)
     relative = _normalize_path(input_path)
+    if raw_path.anchor or ".." in Path(relative).parts:
+        raise ValueError(f"invalid_input_path: {input_path}")
     path = project / relative
+    if not _is_relative_to_project(project, path):
+        raise ValueError(f"invalid_input_path: {input_path}")
+    return relative, path
+
+
+def _hash_input(project: Path, input_path: str) -> dict[str, Any]:
+    relative, path = _validate_project_relative_input(project, input_path)
     if not path.exists():
         return {"path": relative, "missing": True}
     if path.is_file():
@@ -167,13 +185,32 @@ def _hash_input(project: Path, input_path: str) -> dict[str, Any]:
                 child_relative = file_path.relative_to(project).as_posix()
                 if _is_excluded_relative(child_relative):
                     continue
+                if not _is_relative_to_project(project, file_path):
+                    raise ValueError(f"invalid_input_path: {child_relative}")
                 files.append({"path": child_relative, "sha256": _hash_file(file_path)})
         return {"path": relative, "type": "directory", "files": sorted(files, key=lambda item: item["path"])}
     return {"path": relative, "type": "other"}
 
 
+def _default_cache_inputs(project: Path, paths: list[str]) -> list[str]:
+    matched: list[str] = []
+    for pattern in paths:
+        normalized = _normalize_path(pattern)
+        if Path(pattern).anchor or ".." in Path(normalized).parts:
+            raise ValueError(f"invalid_input_path: {pattern}")
+        matched.extend(
+            relative
+            for relative in _all_project_files(project)
+            if _path_matches(normalized, relative)
+        )
+    return _dedupe(matched)
+
+
 def _cache_key(project: Path, config: dict[str, Any], check: dict[str, Any]) -> str:
-    inputs = check.get("inputs") or check.get("paths") or []
+    if "inputs" in check and check.get("inputs") is not None:
+        inputs = check.get("inputs") or []
+    else:
+        inputs = _default_cache_inputs(project, check.get("paths") or [])
     payload = {
         "cache_version": CACHE_VERSION,
         "framework_version": FRAMEWORK_VERSION,
@@ -264,7 +301,12 @@ def run_verify(project: Path, *, full: bool = False) -> int:
             if _run_check(project, check) != 0:
                 failures += 1
             continue
-        key = _cache_key(project, config, check)
+        try:
+            key = _cache_key(project, config, check)
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            failures += 1
+            continue
         if _cache_load(project, key):
             print(f"cache-hit: {check.get('id')}")
             continue
