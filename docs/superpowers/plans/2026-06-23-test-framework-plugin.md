@@ -162,7 +162,7 @@ Expected: PASS for package tests that do not need init yet.
 - Create: `plugins/test-framework/skills/test-framework/assets/templates/test-framework/gitignore`
 - Modify: `tests/test_test_framework_plugin.py`
 
-- [ ] **Step 1: Add init and conflict tests**
+- [x] **Step 1: Add init and conflict tests**
 
 Append to `tests/test_test_framework_plugin.py`:
 
@@ -211,7 +211,7 @@ def test_init_conflict_does_not_leave_partial_files(tmp_path: Path) -> None:
     assert not (tmp_path / "scripts" / "check.py").exists()
 ```
 
-- [ ] **Step 2: Add E2E test for initialized target repository**
+- [x] **Step 2: Add E2E test for initialized target repository**
 
 Append:
 
@@ -370,13 +370,13 @@ def test_initialized_repository_default_verify_collects_all_worktree_change_kind
     assert int((tmp_path / "count.txt").read_text(encoding="utf-8")) >= 3
 ```
 
-- [ ] **Step 3: Run init tests and see them fail**
+- [x] **Step 3: Run init tests and see them fail**
 
 Run: `python -m pytest tests/test_test_framework_plugin.py -q`
 
 Expected: FAIL because init script and templates are not implemented.
 
-- [ ] **Step 4: Implement init script**
+- [x] **Step 4: Implement init script**
 
 Create `plugins/test-framework/skills/test-framework/scripts/test_framework.py`:
 
@@ -446,7 +446,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 5: Add minimal config and gitignore templates**
+- [x] **Step 5: Add minimal config and gitignore templates**
 
 Create `assets/templates/test-framework/config.json`:
 
@@ -469,7 +469,7 @@ Create `assets/templates/test-framework/gitignore`:
 /runs/
 ```
 
-- [ ] **Step 6: Add complete runner template**
+- [x] **Step 6: Add complete runner template**
 
 Create `assets/templates/scripts/check.py` as the canonical runner（运行器）. It must implement:
 
@@ -485,7 +485,7 @@ The implementation should use the same helper names planned for repository `scri
 
 Default `_changed_files` behavior must use worktree（工作区） changes: `git diff --name-only --cached` for staged tracked changes（已暂存已跟踪变更）, `git diff --name-only` for unstaged tracked changes（未暂存已跟踪变更）, and `git ls-files --others --exclude-standard` for untracked non-ignored files（未跟踪且未忽略文件）. The only supported verify flag in A is `--full`.
 
-- [ ] **Step 7: Run init and E2E tests**
+- [x] **Step 7: Run init and E2E tests**
 
 Run: `python -m pytest tests/test_test_framework_plugin.py -q`
 
