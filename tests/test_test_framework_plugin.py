@@ -450,6 +450,81 @@ def test_test_framework_runner_default_cache_key_tracks_glob_path_contents(
     ]
 
 
+def test_test_framework_runner_default_check_cache_key_tracks_changed_files(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert git(project, "init").returncode == 0
+    assert git(project, "config", "user.email", "test@example.invalid").returncode == 0
+    assert git(project, "config", "user.name", "Test User").returncode == 0
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "default-check",
+                        "command": command_that_logs("default-check"),
+                    }
+                ]
+            },
+        },
+    )
+    assert git(project, "add", ".").returncode == 0
+    assert git(project, "commit", "-m", "initial").returncode == 0
+
+    (project / "a.txt").write_text("a\n", encoding="utf-8")
+    first = run_check(project, "verify")
+    (project / "b.txt").write_text("b\n", encoding="utf-8")
+    second = run_check(project, "verify")
+
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "cache-hit: default-check" not in second.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "default-check",
+        "default-check",
+    ]
+
+
+def test_test_framework_runner_reports_missing_list_command_without_traceback(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    (project / "src").mkdir()
+    (project / "src" / "app.txt").write_text("changed\n", encoding="utf-8")
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "missing-command",
+                        "command": ["missing-test-framework-executable"],
+                        "paths": ["src/app.txt"],
+                        "inputs": ["src/app.txt"],
+                    }
+                ]
+            },
+        },
+    )
+
+    result = run_check(project, "verify")
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert "command_not_found: missing-command" in output
+    assert "Traceback" not in output
+
+
 @pytest.mark.parametrize(
     "invalid_input",
     [

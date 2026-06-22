@@ -206,11 +206,20 @@ def _default_cache_inputs(project: Path, paths: list[str]) -> list[str]:
     return _dedupe(matched)
 
 
-def _cache_key(project: Path, config: dict[str, Any], check: dict[str, Any]) -> str:
+def _cache_key(
+    project: Path,
+    config: dict[str, Any],
+    check: dict[str, Any],
+    changed_files: list[str] | None = None,
+) -> str:
     if "inputs" in check and check.get("inputs") is not None:
         inputs = check.get("inputs") or []
     else:
-        inputs = _default_cache_inputs(project, check.get("paths") or [])
+        paths = check.get("paths") or []
+        if paths:
+            inputs = _default_cache_inputs(project, paths)
+        else:
+            inputs = changed_files if changed_files is not None else _changed_files(project)
     payload = {
         "cache_version": CACHE_VERSION,
         "framework_version": FRAMEWORK_VERSION,
@@ -253,14 +262,19 @@ def _run_check(project: Path, check: dict[str, Any]) -> int:
         print(f"missing_command: {check.get('id')}", file=sys.stderr)
         return 1
     use_shell = isinstance(command, str)
-    result = subprocess.run(
-        command,
-        cwd=project,
-        check=False,
-        text=True,
-        capture_output=True,
-        shell=use_shell,
-    )
+    try:
+        result = subprocess.run(
+            command,
+            cwd=project,
+            check=False,
+            text=True,
+            capture_output=True,
+            shell=use_shell,
+        )
+    except FileNotFoundError:
+        executable = command[0] if isinstance(command, list) else str(command)
+        print(f"command_not_found: {check.get('id')}: {executable}", file=sys.stderr)
+        return 1
     if result.stdout:
         print(result.stdout, end="")
     if result.stderr:
@@ -294,7 +308,8 @@ def run_build(project: Path) -> int:
 def run_verify(project: Path, *, full: bool = False) -> int:
     config = _load_config(project)
     checks = _checks(config, "verify")
-    selected = checks if full else _selected_checks(checks, _changed_files(project))
+    changed_files = _changed_files(project)
+    selected = checks if full else _selected_checks(checks, changed_files)
     failures = 0
     for check in selected:
         if full:
@@ -302,7 +317,7 @@ def run_verify(project: Path, *, full: bool = False) -> int:
                 failures += 1
             continue
         try:
-            key = _cache_key(project, config, check)
+            key = _cache_key(project, config, check, changed_files)
         except ValueError as error:
             print(str(error), file=sys.stderr)
             failures += 1
