@@ -84,6 +84,8 @@ def test_pr_flow_skill_entrypoints_call_shared_script() -> None:
         assert "## 边界" in skill_text
         assert "pr_flow.py" in skill_text
         assert f" {command}" in skill_text
+        if skill_name == "pr-flow-cleanup":
+            assert "--pr" in skill_text
 
 
 def test_pr_flow_cli_command_help_includes_command_name() -> None:
@@ -117,6 +119,8 @@ def test_pr_flow_bare_commands_report_stable_contract() -> None:
         if command == "hotfix":
             assert result.stdout == ""
             assert "hotfix_target_required" in result.stderr
+            assert "骨架入口" not in skill_text
+            assert "status: not_implemented" not in skill_text
             continue
         if command == "tweak":
             assert result.stdout == "status: tweak_requires_reason\ntweak_requires_reason: --reason\n"
@@ -126,8 +130,8 @@ def test_pr_flow_bare_commands_report_stable_contract() -> None:
             continue
         assert result.stdout == "status: not_implemented\n"
         assert "unrecognized arguments" not in result.stderr
-        assert "骨架入口" in skill_text
-        assert "status: not_implemented" in skill_text
+        assert "骨架入口" not in skill_text
+        assert "status: not_implemented" not in skill_text
 
 
 def test_pr_flow_package_passes_repo_build_checks() -> None:

@@ -1,18 +1,18 @@
 ---
 name: pr-flow
-description: "PR Flow（拉取请求流程）诊断骨架入口；当前命令返回 status: not_implemented。"
+description: "诊断 PR Flow（拉取请求流程）当前状态，并输出下一步 stop state（停止状态）。"
 ---
 
 # PR Flow
 
 ## 边界
 
-当前为骨架入口；命令只会输出 `status: not_implemented`，并以返回码 2 结束。
-
 只诊断 PR Flow 状态，不提交、不推送、不合并，也不修改 OpenSpec（开放规格）任务。
+
+会读取 `.pr-flow/config.yaml`，检查当前 git branch（分支）、upstream（上游分支）、工作区状态和 GitHub PR 状态，并输出 `PUSH_REQUIRED`、`DISPATCH_REQUIRED`、`REPLY_OR_FIX_REQUIRED` 或 `EXCEPTION_REQUIRED`。
 
 ## 命令
 
 ```bash
-python scripts/pr_flow.py diagnose
+python scripts/pr_flow.py diagnose --project .
 ```

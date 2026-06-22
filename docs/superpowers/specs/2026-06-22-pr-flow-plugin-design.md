@@ -76,8 +76,10 @@ defaults:
 branches:
   main:
     remote: origin
-    allowHotfixPush: true
+    allowHotfixPush: false
 ```
+
+`allowHotfixPush` 默认必须是 `false`。需要启用 hotfix（热修复）直接推送时，用户必须在目标分支配置中显式改为 `true`。
 
 本地状态：
 

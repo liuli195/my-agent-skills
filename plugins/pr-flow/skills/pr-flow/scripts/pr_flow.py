@@ -58,6 +58,7 @@ def default_config(base_branch: str) -> dict:
             "baseBranch": base_branch,
             "mergeStrategy": "merge",
             "reviewGate": {"mode": "github", "evidencePath": ".pr-flow/review-pass.json"},
+            "hotfix": {"verifyCommand": ".\\.venv\\Scripts\\python.exe -m pytest"},
             "wait": {"timeoutSeconds": 600, "pollSeconds": 15},
             "pr": {
                 "bodyTemplatePath": ".pr-flow/pr-template.md",

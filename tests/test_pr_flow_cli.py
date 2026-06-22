@@ -466,6 +466,8 @@ def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
     assert config["defaults"]["baseBranch"] == "main"
     assert config["defaults"]["mergeStrategy"] == "merge"
     assert config["defaults"]["reviewGate"]["mode"] == "github"
+    assert config["defaults"]["reviewGate"]["evidencePath"] == ".pr-flow/review-pass.json"
+    assert config["defaults"]["hotfix"]["verifyCommand"] == ".\\.venv\\Scripts\\python.exe -m pytest"
     assert config["defaults"]["wait"] == {"timeoutSeconds": 600, "pollSeconds": 15}
     assert config["defaults"]["pr"]["bodyTemplatePath"] == ".pr-flow/pr-template.md"
     assert config["branches"]["main"]["remote"] == "origin"
@@ -549,6 +551,26 @@ def test_diagnose_outputs_exception_for_unknown_gh_failure(tmp_path: Path) -> No
     assert status["command"] == "diagnose"
     assert status["details"]["branch"] == "main"
     assert status["details"]["reason"] == "gh_pr_view_failed"
+
+
+def test_diagnose_on_base_branch_without_pr_reports_gh_pr_view_failed(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    fake_bin = write_fake_gh(tmp_path / "bin", stderr="no pull requests found for branch\n", exit_code=1)
+    assert init_repo(project) == "main"
+    assert run("init", "--project", str(project)).returncode == 0
+
+    result = run_with_path(fake_bin, "diagnose", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    assert "gh_pr_view_failed" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "EXCEPTION_REQUIRED"
+    assert status["command"] == "diagnose"
+    assert status["details"]["branch"] == "main"
+    assert status["details"]["baseBranch"] == "main"
+    assert status["details"]["reason"] == "gh_pr_view_failed"
+    assert "no pull requests found" in status["details"]["stderr"]
 
 
 def test_diagnose_outputs_dispatch_required_for_pending_checks(tmp_path: Path) -> None:

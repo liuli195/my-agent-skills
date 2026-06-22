@@ -46,4 +46,23 @@ python scripts/cross_agent_review.py run \
 - `inputs/tasks.md`
 - `inputs/tests.txt`
 
+## Reviewer 输出契约
+
+Reviewer（审查代理）必须只返回一个 JSON object（JSON 对象），不要返回 Markdown（标记文本）或解释性正文。
+
+每个 finding（发现项）必须包含 `severity`。只允许以下 severity（严重级别）值：
+
+- `CRITICAL`
+- `IMPORTANT`
+- `WARNING`
+- `SUGGESTION`
+
+不要使用 severity aliases（严重级别别名），例如 `high`、`medium`、`low`、`minor` 或 `info`。missing severity（缺少严重级别）和别名都会被视为无效 reviewer 输出，并转成 blocking finding（阻断发现项）。
+
+如果没有问题，返回空 findings（发现项）列表：
+
+```json
+{"role":"<role>","status":"completed","findings":[]}
+```
+
 只有没有 CRITICAL/IMPORTANT findings（发现项），且 worktree 仍干净时才生成 `review-pass.json`。
