@@ -9,6 +9,7 @@ import os
 import platform
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from collections.abc import Callable
 
 FRAMEWORK_VERSION = "0.1.0"
 CACHE_VERSION = "1"
+DEFAULT_CHECK_TIMEOUT_SECONDS = 300
 Runner = Callable[..., subprocess.CompletedProcess[Any]]
 
 
@@ -378,10 +380,31 @@ def _cache_load(project: Path, key: str) -> bool:
 def _cache_store(project: Path, key: str, check: dict[str, Any]) -> None:
     path = _cache_path(project, key)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        _stable_json({"status": "passed", "id": check.get("id")}) + "\n",
-        encoding="utf-8",
-    )
+    temp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        temp.write_text(
+            _stable_json({"status": "passed", "id": check.get("id")}) + "\n",
+            encoding="utf-8",
+        )
+        temp.replace(path)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def _format_seconds(value: float) -> str:
+    return str(int(value)) if value == int(value) else str(value)
+
+
+def _check_timeout_seconds(config: dict[str, Any], check: dict[str, Any]) -> float | None:
+    timeout = check.get("timeoutSeconds")
+    verify_config = config.get("verify")
+    if timeout is None and isinstance(verify_config, dict):
+        timeout = verify_config.get("timeoutSeconds")
+    if timeout is None:
+        return float(DEFAULT_CHECK_TIMEOUT_SECONDS)
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+        raise ValueError(f"invalid_timeoutSeconds: {check.get('id')}")
+    return float(timeout)
 
 
 def _run_check(project: Path, check: dict[str, Any], runner: Runner) -> int:
@@ -421,6 +444,7 @@ def _run_check_result(
     started_at = time.monotonic()
     try:
         key = _cache_key(project, config, check, changed_files)
+        timeout_seconds = _check_timeout_seconds(config, check)
     except ValueError as error:
         return CheckResult(
             index,
@@ -441,15 +465,17 @@ def _run_check_result(
             cache_key=key,
         )
     use_shell = isinstance(command, str)
+    run_kwargs = {
+        "cwd": project,
+        "check": False,
+        "text": True,
+        "capture_output": True,
+        "shell": use_shell,
+    }
+    if timeout_seconds is not None:
+        run_kwargs["timeout"] = timeout_seconds
     try:
-        result = runner(
-            command,
-            cwd=project,
-            check=False,
-            text=True,
-            capture_output=True,
-            shell=use_shell,
-        )
+        result = runner(command, **run_kwargs)
     except FileNotFoundError:
         executable = command[0] if isinstance(command, list) else str(command)
         return CheckResult(
@@ -457,6 +483,27 @@ def _run_check_result(
             check,
             1,
             stderr=f"command_not_found: {check.get('id')}: {executable}\n",
+            duration_seconds=time.monotonic() - started_at,
+            cache_key=key,
+        )
+    except subprocess.TimeoutExpired:
+        return CheckResult(
+            index,
+            check,
+            1,
+            stderr=f"check_timeout: {check.get('id')} exceeded {_format_seconds(timeout_seconds or 0)}s\n",
+            duration_seconds=time.monotonic() - started_at,
+            cache_key=key,
+        )
+    except BaseException as error:
+        return CheckResult(
+            index,
+            check,
+            1,
+            stderr=(
+                f"parallel_check_exception: {check.get('id')}: "
+                f"{type(error).__name__}: {error}\n"
+            ),
             duration_seconds=time.monotonic() - started_at,
             cache_key=key,
         )

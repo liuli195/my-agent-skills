@@ -1217,6 +1217,29 @@ def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path
     assert calls[5] == ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"]
 
 
+def test_complete_full_flow_uses_configured_squash_strategy(tmp_path: Path) -> None:
+    project, _remote = init_complete_project(tmp_path, merge_strategy="squash")
+    head_oid = git(project, "rev-parse", "HEAD")
+    fake_bin, calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {"stderr": "no pull requests found\n", "exit_code": 1},
+            {"stdout": "https://github.example/test/repo/pull/12\n"},
+            {"stdout": passing_pr_view_json(project)},
+            {"stdout": passing_pr_view_json(project)},
+            {"stdout": ""},
+            {"stdout": cleanup_pr_view_json()},
+        ],
+    )
+
+    result = run_with_path(fake_bin, "complete", "--project", str(project))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
+    calls = json.loads(calls_path.read_text(encoding="utf-8"))
+    assert calls[4] == ["pr", "merge", "12", "--squash", "--match-head-commit", head_oid]
+
+
 def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow

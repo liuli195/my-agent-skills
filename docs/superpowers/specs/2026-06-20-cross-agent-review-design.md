@@ -59,6 +59,8 @@ cross_agent_review.py run \
 
 `--output-dir` may override the default output directory. `--sdk-python` or an environment variable may point to a Python interpreter that has `claude_agent_sdk` installed.
 
+Migration note: this CLI no longer accepts the legacy test-results file argument. Downstream callers must pass only diff, spec, design, and tasks input files before upgrading to this contract.
+
 Required inputs are validated before reviewer dispatch. Missing required parameters or missing files fail fast.
 
 ## SDK Resolution

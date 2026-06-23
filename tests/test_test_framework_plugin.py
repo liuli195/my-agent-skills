@@ -561,6 +561,92 @@ def test_test_framework_runner_full_verify_zero_max_parallel_means_unlimited(
     assert max_active == 3
 
 
+def test_test_framework_runner_full_verify_reports_parallel_check_timeout(
+    tmp_path: Path, capsys
+) -> None:
+    module = load_test_framework_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "timeoutSeconds": 1,
+                "checks": [
+                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                ],
+            },
+        },
+    )
+
+    def fake_runner(command, **kwargs):
+        raise subprocess.TimeoutExpired(command, kwargs.get("timeout"))
+
+    result = module._runner().run_verify(project, runner=fake_runner, full=True)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert "check_timeout: parallel-a exceeded 1s" in captured.err
+    assert "failed: parallel-a" in captured.out
+    assert "status: failed" in captured.out
+
+
+def test_test_framework_runner_full_verify_reports_base_exception_from_parallel_check(
+    tmp_path: Path, capsys
+) -> None:
+    module = load_test_framework_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                ],
+            },
+        },
+    )
+
+    def fake_runner(_command, **_kwargs):
+        raise KeyboardInterrupt("worker interrupted")
+
+    result = module._runner().run_verify(project, runner=fake_runner, full=True)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert "parallel_check_exception: parallel-a: KeyboardInterrupt: worker interrupted" in captured.err
+    assert "failed: parallel-a" in captured.out
+
+
+def test_test_framework_cache_store_writes_temp_file_before_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_test_framework_module()
+    runner = module._runner()
+    project = tmp_path / "project"
+    project.mkdir()
+    cache_dir = project / ".test-framework" / "cache"
+    path_type = type(project)
+    original_write_text = path_type.write_text
+
+    def tracking_write_text(self, *args, **kwargs):
+        assert self.name != "cache-key.json"
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(path_type, "write_text", tracking_write_text)
+
+    runner._cache_store(project, "cache-key", {"id": "cache-check"})
+
+    assert read_json(cache_dir / "cache-key.json") == {"status": "passed", "id": "cache-check"}
+
+
 def test_test_framework_runner_reads_changed_files_with_single_git_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
