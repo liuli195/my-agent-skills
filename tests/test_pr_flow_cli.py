@@ -25,7 +25,19 @@ SCRIPT = (
     / "scripts"
     / "pr_flow.py"
 )
-TEMPLATE_CACHE_KEY = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:12]
+
+
+def template_cache_key(*paths: Path) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(str(path.relative_to(REPO_ROOT)).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()[:12]
+
+
+TEMPLATE_CACHE_KEY = template_cache_key(Path(__file__), SCRIPT)
 TEMPLATE_ROOT = Path(tempfile.gettempdir()) / f"pr-flow-test-templates-{TEMPLATE_CACHE_KEY}"
 
 
@@ -66,6 +78,45 @@ def test_command_stub_records_gh_calls() -> None:
     assert result.returncode == 0
     assert result.stdout == '{"number":1}\n'
     assert stub.calls == [("gh", "pr", "view")]
+
+
+def test_command_stub_closes_body_file(monkeypatch, tmp_path: Path) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    body_file = tmp_path / "body.json"
+    body_file.write_text('{"ok":true}\n', encoding="utf-8")
+
+    class TrackingFile:
+        closed = False
+
+        def read(self) -> str:
+            return body_file.read_text(encoding="utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            self.closed = True
+
+    tracker = TrackingFile()
+
+    def fake_open(path, *_, **__):
+        assert Path(path) == body_file
+        return tracker
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    stub = CommandStub()
+    stub.add(["api", "graphql", "--body-file", str(body_file)], stdout="ok\n")
+
+    result = stub("gh", "api", "graphql", "--body-file", str(body_file))
+
+    assert result.returncode == 0
+    assert stub.body_files == [{"args": ("gh", "api", "graphql", "--body-file", str(body_file)), "body": '{"ok":true}\n'}]
+    assert tracker.closed
+
+
+def test_pr_flow_template_cache_key_includes_script_contents() -> None:
+    assert TEMPLATE_CACHE_KEY == template_cache_key(Path(__file__), SCRIPT)
 
 
 def test_command_stub_accepts_project_argument_for_pr_flow_helpers(tmp_path: Path) -> None:

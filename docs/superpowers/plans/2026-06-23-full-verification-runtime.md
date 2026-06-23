@@ -1029,7 +1029,7 @@ Initial classification（初始分类）:
 - `verify.release-flow`: 只有 pytest（Python 测试框架）命令已加 `-p no:cacheprovider` 或证明具备等价 cache isolation（缓存隔离）时，才设为 `parallel: true`。
 - `verify.pr-flow`: 只有 pytest（Python 测试框架）命令已加 `-p no:cacheprovider` 或证明具备等价 cache isolation（缓存隔离）时，才设为 `parallel: true`。
 - `verify.cross-agent-review`: 只有 pytest（Python 测试框架）命令已加 `-p no:cacheprovider` 或证明具备等价 cache isolation（缓存隔离）时，才设为 `parallel: true`。
-- `verify.test-framework`: `parallel: false`，因为它会读写 `.test-framework/cache` 并验证 runner（运行器）自身。
+- `verify.test-framework`: 初始风险假设为 `parallel: false`，因为它会读写 `.test-framework/cache` 并验证 runner（运行器）自身；后续 xdist（并行测试插件）评估已证明 `-n 8 -p no:cacheprovider` 不破坏该检查项，最终配置采用 `parallel: true`。
 - `verify.openspec`: `parallel: true`
 
 如果任何 pytest（Python 测试框架）check（检查项）仍写入共享 `.pytest_cache` 或其它 shared mutable cache（共享可变缓存），在证明隔离前保持 `parallel: false`。

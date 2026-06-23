@@ -24,7 +24,19 @@ SCRIPT = (
     / "scripts"
     / "cross_agent_review.py"
 )
-TEMPLATE_CACHE_KEY = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:12]
+
+
+def template_cache_key(*paths: Path) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(str(path.relative_to(REPO_ROOT)).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()[:12]
+
+
+TEMPLATE_CACHE_KEY = template_cache_key(Path(__file__), SCRIPT)
 TEMPLATE_ROOT = Path(tempfile.gettempdir()) / f"cross-agent-review-test-templates-{TEMPLATE_CACHE_KEY}"
 
 
@@ -52,6 +64,10 @@ def write_file(path: Path, text: str = "content\n") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
+
+
+def test_cross_agent_review_template_cache_key_includes_script_contents() -> None:
+    assert TEMPLATE_CACHE_KEY == template_cache_key(Path(__file__), SCRIPT)
 
 
 def test_missing_required_args_fail() -> None:

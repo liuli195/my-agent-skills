@@ -47,7 +47,8 @@ class CommandStub:
         if "--body-file" in call:
             body_index = call.index("--body-file") + 1
             body_path = call[body_index]
-            self.body_files.append({"args": call, "body": open(body_path, encoding="utf-8").read()})
+            with open(body_path, encoding="utf-8") as body:
+                self.body_files.append({"args": call, "body": body.read()})
         normalized = call[1:] if call and call[0] == "gh" else call
         for index, (expected, response) in enumerate(self.responses):
             if expected == normalized or expected == call:
