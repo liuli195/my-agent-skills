@@ -1,3 +1,6 @@
+import contextlib
+import importlib.util
+import io
 import json
 import shutil
 import subprocess
@@ -12,6 +15,21 @@ HOOK_ROUTER = PLUGIN_ROOT / "scripts" / "hook_router.py"
 RUN_GUARD_EVENT = PLUGIN_SKILL / "scripts" / "run_guard_event.py"
 RUNTIME_CLI = PLUGIN_ROOT / "scripts" / "guard_runtime" / "cli.py"
 MINIMAL_PROFILE = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "minimal"
+_RUNTIME_CLI_MODULE = None
+
+
+def load_runtime_cli_module():
+    global _RUNTIME_CLI_MODULE
+    if _RUNTIME_CLI_MODULE is not None:
+        return _RUNTIME_CLI_MODULE
+    sys.path.insert(0, str(RUNTIME_CLI.parent))
+    spec = importlib.util.spec_from_file_location("agent_guard_runtime_cli_for_tests", RUNTIME_CLI)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    _RUNTIME_CLI_MODULE = module
+    return module
 
 
 def run_hook(args: list[str], payload: dict) -> subprocess.CompletedProcess[str]:
@@ -40,13 +58,19 @@ def run_hook_stdin(args: list[str], payload: dict) -> subprocess.CompletedProces
 
 
 def run_cli(args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    module = load_runtime_cli_module()
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        try:
+            returncode = int(module.main(args))
+        except SystemExit as error:
+            returncode = error.code if isinstance(error.code, int) else 1
+    return subprocess.CompletedProcess(
         [sys.executable, str(RUNTIME_CLI), *args],
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
+        returncode,
+        stdout.getvalue(),
+        stderr.getvalue(),
     )
 
 

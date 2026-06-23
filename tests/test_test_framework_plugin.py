@@ -1,4 +1,6 @@
+import contextlib
 import importlib.util
+import io
 import json
 import shutil
 import subprocess
@@ -55,12 +57,17 @@ def load_test_framework_module():
 
 
 def run_check(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(TEST_FRAMEWORK_SCRIPT), *args, "--project", str(project)],
-        cwd=project,
-        check=False,
-        text=True,
-        capture_output=True,
+    module = load_test_framework_module()
+    argv = [*args, "--project", str(project)]
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        returncode = int(module.main(argv))
+    return subprocess.CompletedProcess(
+        args=[str(TEST_FRAMEWORK_SCRIPT), *argv],
+        returncode=returncode,
+        stdout=stdout.getvalue(),
+        stderr=stderr.getvalue(),
     )
 
 
@@ -220,6 +227,8 @@ def test_test_framework_plugin_has_single_skill_entrypoint() -> None:
     assert "scripts/test_framework.py init" in skill_text
     assert "scripts/test_framework.py build" in skill_text
     assert "scripts/test_framework.py verify" in skill_text
+    assert "timeoutSeconds" in skill_text
+    assert "pytest-xdist" in skill_text
 
 
 def test_test_framework_registered_in_marketplaces_and_projection() -> None:
@@ -412,6 +421,548 @@ def test_test_framework_runner_full_verify_allows_empty_checks(tmp_path: Path) -
     assert "checked:" in result.stdout
     assert "full-not-run: false" in result.stdout
     assert "status: passed" in result.stdout
+
+
+def test_test_framework_runner_full_verify_runs_parallel_checks_concurrently(tmp_path: Path, capsys) -> None:
+    import threading
+    import time
+
+    module = load_test_framework_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                    {"id": "parallel-b", "command": ["parallel-b"], "parallel": True, "inputs": []},
+                    {"id": "serial-c", "command": ["serial-c"], "parallel": False, "inputs": []},
+                ]
+            },
+        },
+    )
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def fake_runner(command, **_kwargs):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.2)
+        with lock:
+            active -= 1
+        return subprocess.CompletedProcess(command, 0, stdout=f"{command[0]}\n", stderr="")
+
+    result = module._runner().run_verify(project, runner=fake_runner, full=True)
+    captured = capsys.readouterr()
+
+    assert result == 0
+    assert max_active > 1
+    assert "serial-c" in captured.out
+    assert "duration: parallel-a seconds=" in captured.out
+    assert "duration: parallel-b seconds=" in captured.out
+    assert "duration: serial-c seconds=" in captured.out
+    assert "full-not-run: false" in captured.out
+
+
+def test_test_framework_runner_full_verify_honors_max_parallel_checks(tmp_path: Path) -> None:
+    import threading
+    import time
+
+    module = load_test_framework_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "maxParallel": 2,
+                "checks": [
+                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                    {"id": "parallel-b", "command": ["parallel-b"], "parallel": True, "inputs": []},
+                    {"id": "parallel-c", "command": ["parallel-c"], "parallel": True, "inputs": []},
+                ],
+            },
+        },
+    )
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def fake_runner(command, **_kwargs):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.1)
+        with lock:
+            active -= 1
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    result = module._runner().run_verify(project, runner=fake_runner, full=True)
+
+    assert result == 0
+    assert max_active == 2
+
+
+def test_test_framework_runner_full_verify_zero_max_parallel_means_unlimited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+    import time
+
+    module = load_test_framework_module()
+    monkeypatch.setattr(module._runner().os, "cpu_count", lambda: 2)
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "maxParallel": 0,
+                "checks": [
+                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                    {"id": "parallel-b", "command": ["parallel-b"], "parallel": True, "inputs": []},
+                    {"id": "parallel-c", "command": ["parallel-c"], "parallel": True, "inputs": []},
+                ],
+            },
+        },
+    )
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+    barrier = threading.Barrier(3)
+
+    def fake_runner(command, **_kwargs):
+        nonlocal active, max_active
+        try:
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            barrier.wait(timeout=2)
+        finally:
+            with lock:
+                active -= 1
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    result = module._runner().run_verify(project, runner=fake_runner, full=True)
+
+    assert result == 0
+    assert max_active == 3
+
+
+def test_test_framework_runner_rejects_negative_max_parallel(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "maxParallel": -1,
+                "checks": [
+                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                ],
+            },
+        },
+    )
+
+    result = run_check(project, "verify", "--full")
+
+    assert result.returncode == 1
+    assert "verify.maxParallel must be non-negative integer" in result.stderr
+    assert "status: failed" in result.stdout
+
+
+def test_test_framework_runner_reports_missing_xdist_before_running_pytest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    module = load_test_framework_module()
+    runner = module._runner()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "pytest-parallel",
+                        "command": "python -m pytest -n 8 tests",
+                        "parallel": False,
+                        "inputs": [],
+                    },
+                ],
+            },
+        },
+    )
+    calls = []
+
+    def fake_runner(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(runner.importlib.util, "find_spec", lambda _name: None)
+
+    result = runner.run_verify(project, runner=fake_runner, full=True)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert calls == []
+    assert "missing_dependency: pytest-parallel: pytest-xdist is required" in captured.err
+    assert "status: failed" in captured.out
+
+
+def test_test_framework_runner_full_verify_aggregates_missing_xdist_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    module = load_test_framework_module()
+    runner = module._runner()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "pytest-a",
+                        "command": "python -m pytest -n 8 tests/a",
+                        "parallel": True,
+                        "inputs": [],
+                    },
+                    {
+                        "id": "pytest-b",
+                        "command": [sys.executable, "-m", "pytest", "-n", "8", "tests/b"],
+                        "parallel": True,
+                        "inputs": [],
+                    },
+                ],
+            },
+        },
+    )
+    calls = []
+
+    def fake_runner(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(runner.importlib.util, "find_spec", lambda _name: None)
+
+    result = runner.run_verify(project, runner=fake_runner, full=True)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert calls == []
+    assert "missing_dependency: pytest-a: pytest-xdist is required" in captured.err
+    assert "missing_dependency: pytest-b: pytest-xdist is required" in captured.err
+    assert "failed: pytest-a, pytest-b" in captured.out
+    assert "status: failed" in captured.out
+
+
+@pytest.mark.parametrize("timeout_seconds", [0, -1, True])
+def test_test_framework_runner_rejects_invalid_check_timeout_seconds(
+    tmp_path: Path, timeout_seconds: object
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "invalid-timeout",
+                        "command": command_that_logs("invalid-timeout"),
+                        "timeoutSeconds": timeout_seconds,
+                        "parallel": False,
+                        "inputs": [],
+                    },
+                ],
+            },
+        },
+    )
+
+    result = run_check(project, "verify", "--full")
+
+    assert result.returncode == 1
+    assert "invalid_timeoutSeconds: invalid-timeout" in result.stderr
+    assert "status: failed" in result.stdout
+
+
+def test_test_framework_runner_full_verify_reports_parallel_check_timeout(
+    tmp_path: Path, capsys
+) -> None:
+    module = load_test_framework_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "timeoutSeconds": 1,
+                "checks": [
+                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                ],
+            },
+        },
+    )
+
+    def fake_runner(command, **kwargs):
+        raise subprocess.TimeoutExpired(command, kwargs.get("timeout"))
+
+    result = module._runner().run_verify(project, runner=fake_runner, full=True)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert "check_timeout: parallel-a exceeded 1s" in captured.err
+    assert "failed: parallel-a" in captured.out
+    assert "status: failed" in captured.out
+
+
+def test_test_framework_runner_full_verify_reports_parallel_check_exception(
+    tmp_path: Path, capsys
+) -> None:
+    module = load_test_framework_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                ],
+            },
+        },
+    )
+
+    def fake_runner(_command, **_kwargs):
+        raise RuntimeError("boom")
+
+    result = module._runner().run_verify(project, runner=fake_runner, full=True)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert "parallel_check_exception: parallel-a: RuntimeError: boom" in captured.err
+    assert "failed: parallel-a" in captured.out
+    assert "status: failed" in captured.out
+
+
+def test_test_framework_runner_full_verify_reports_keyboard_interrupt_from_parallel_check(
+    tmp_path: Path, capsys
+) -> None:
+    module = load_test_framework_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                ],
+            },
+        },
+    )
+
+    def fake_runner(_command, **_kwargs):
+        raise KeyboardInterrupt("worker interrupted")
+
+    result = module._runner().run_verify(project, runner=fake_runner, full=True)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert "parallel_check_interrupted: parallel-a: KeyboardInterrupt: worker interrupted" in captured.err
+    assert "failed: parallel-a" in captured.out
+    assert "status: failed" in captured.out
+
+
+def test_test_framework_runner_full_verify_skips_serial_checks_after_parallel_interrupt(
+    tmp_path: Path, capsys
+) -> None:
+    module = load_test_framework_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                    {"id": "serial-after-interrupt", "command": ["serial-after-interrupt"], "parallel": False, "inputs": []},
+                ],
+            },
+        },
+    )
+    calls = []
+
+    def fake_runner(command, **_kwargs):
+        calls.append(command)
+        if command == ["parallel-a"]:
+            raise KeyboardInterrupt("worker interrupted")
+        return subprocess.CompletedProcess(command, 0, stdout="serial ran\n", stderr="")
+
+    result = module._runner().run_verify(project, runner=fake_runner, full=True)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert calls == [["parallel-a"]]
+    assert "serial ran" not in captured.out
+    assert "failed: parallel-a" in captured.out
+    assert "checked: parallel-a, serial-after-interrupt" in captured.out
+    assert "status: failed" in captured.out
+
+
+def test_test_framework_runner_full_verify_reports_serial_failure_after_parallel_pass(
+    tmp_path: Path, capsys
+) -> None:
+    module = load_test_framework_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    cache_dir = project / ".test-framework" / "cache"
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {"id": "parallel-pass", "command": ["parallel-pass"], "parallel": True, "inputs": []},
+                    {"id": "serial-fail", "command": ["serial-fail"], "parallel": False, "inputs": []},
+                ],
+            },
+        },
+    )
+
+    def fake_runner(command, **_kwargs):
+        if command == ["serial-fail"]:
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="serial failed\n")
+        return subprocess.CompletedProcess(command, 0, stdout="parallel passed\n", stderr="")
+
+    result = module._runner().run_verify(project, runner=fake_runner, full=True)
+    captured = capsys.readouterr()
+    cache_files = list(cache_dir.glob("*.json"))
+
+    assert result == 1
+    assert "parallel passed" in captured.out
+    assert "serial failed" in captured.err
+    assert "failed: serial-fail" in captured.out
+    assert "checked: parallel-pass, serial-fail" in captured.out
+    assert "status: failed" in captured.out
+    assert len(cache_files) == 1
+    assert read_json(cache_files[0]) == {"status": "passed", "id": "parallel-pass"}
+
+
+def test_test_framework_cache_store_writes_temp_file_before_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_test_framework_module()
+    runner = module._runner()
+    project = tmp_path / "project"
+    project.mkdir()
+    cache_dir = project / ".test-framework" / "cache"
+    path_type = type(project)
+    original_write_text = path_type.write_text
+
+    def tracking_write_text(self, *args, **kwargs):
+        assert self.name != "cache-key.json"
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(path_type, "write_text", tracking_write_text)
+
+    runner._cache_store(project, "cache-key", {"id": "cache-check"})
+
+    assert read_json(cache_dir / "cache-key.json") == {"status": "passed", "id": "cache-check"}
+
+
+def test_test_framework_runner_reads_changed_files_with_single_git_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_test_framework_module()
+    runner = module._runner()
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        if command == ["git", "diff", "--name-only", "--cached"]:
+            return subprocess.CompletedProcess(command, 0, stdout="staged.txt\n", stderr="")
+        if command == ["git", "diff", "--name-only"]:
+            return subprocess.CompletedProcess(command, 0, stdout="unstaged.txt\n", stderr="")
+        if command == ["git", "ls-files", "--others", "--exclude-standard"]:
+            return subprocess.CompletedProcess(command, 0, stdout="untracked.txt\n", stderr="")
+        if command == ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="M  staged.txt\0 M unstaged.txt\0?? untracked.txt\0",
+                stderr="",
+            )
+        raise AssertionError(command)
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    changed = runner._changed_files(tmp_path)
+
+    assert changed == ["staged.txt", "unstaged.txt", "untracked.txt"]
+    assert calls == [["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"]]
+
+
+def test_test_framework_runner_reads_git_status_rename_and_copy_destinations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_test_framework_module()
+    runner = module._runner()
+
+    def fake_run(command, **_kwargs):
+        if command == ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="R  renamed.txt\0old-name.txt\0C  copied.txt\0source.txt\0",
+                stderr="",
+            )
+        raise AssertionError(command)
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    assert runner._git_status_names(tmp_path) == ["renamed.txt", "copied.txt"]
 
 
 def test_test_framework_user_level_skill_path_runs_verify_without_git(
@@ -997,6 +1548,9 @@ def test_test_framework_runner_cache_key_changes_with_check_contract(
     cached = run_check(project, "verify")
 
     assert first.returncode == 0, first.stdout + first.stderr
+    cache_files = list((project / ".test-framework" / "cache").glob("*.json"))
+    assert len(cache_files) == 1
+    assert read_json(cache_files[0])["status"] == "passed"
     assert cached.returncode == 0, cached.stdout + cached.stderr
     assert "cache-hit: cache-contract" in cached.stdout
     assert (project / "run.log").read_text(encoding="utf-8").splitlines() == ["base"]

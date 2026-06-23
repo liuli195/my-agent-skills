@@ -2,11 +2,17 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 import yaml
+import pytest
+
+from tests.support.git_templates import copy_template
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +25,24 @@ SCRIPT = (
     / "scripts"
     / "pr_flow.py"
 )
+
+
+def template_cache_key(*paths: Path) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(str(path.relative_to(REPO_ROOT)).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()[:12]
+
+
+TEMPLATE_CACHE_KEY = template_cache_key(Path(__file__), SCRIPT)
+# The cache is content-keyed and intentionally left under the OS temp directory
+# between runs; stale locks and incomplete templates are recovered in-place.
+TEMPLATE_ROOT = Path(tempfile.gettempdir()) / f"pr-flow-test-templates-{TEMPLATE_CACHE_KEY}"
+TEMPLATE_LOCK_TIMEOUT_SECONDS = 30
+TEMPLATE_LOCK_STALE_SECONDS = 30
 
 
 def load_pr_flow_module():
@@ -45,6 +69,136 @@ def run_with_path(path: Path, *args: str, cwd: Path | None = None) -> subprocess
     env = os.environ.copy()
     env["PATH"] = str(path) + os.pathsep + env.get("PATH", "")
     return run(*args, cwd=cwd, env=env)
+
+
+def test_command_stub_records_gh_calls() -> None:
+    from tests.support.command_stubs import CommandStub
+
+    stub = CommandStub()
+    stub.add(["pr", "view"], stdout='{"number":1}\n', returncode=0)
+
+    result = stub("gh", "pr", "view")
+
+    assert result.returncode == 0
+    assert result.stdout == '{"number":1}\n'
+    assert stub.calls == [("gh", "pr", "view")]
+
+
+def test_command_stub_closes_body_file(monkeypatch, tmp_path: Path) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    body_file = tmp_path / "body.json"
+    body_file.write_text('{"ok":true}\n', encoding="utf-8")
+
+    class TrackingFile:
+        closed = False
+
+        def read(self) -> str:
+            return body_file.read_text(encoding="utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            self.closed = True
+
+    tracker = TrackingFile()
+
+    def fake_open(path, *_, **__):
+        assert Path(path) == body_file
+        return tracker
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    stub = CommandStub()
+    stub.add(["api", "graphql", "--body-file", str(body_file)], stdout="ok\n")
+
+    result = stub("gh", "api", "graphql", "--body-file", str(body_file))
+
+    assert result.returncode == 0
+    assert stub.body_files == [{"args": ("gh", "api", "graphql", "--body-file", str(body_file)), "body": '{"ok":true}\n'}]
+    assert tracker.closed
+
+
+def test_pr_flow_template_cache_key_includes_script_contents() -> None:
+    assert TEMPLATE_CACHE_KEY == template_cache_key(Path(__file__), SCRIPT)
+
+
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        (["cleanup", "--project", "."], "--pr"),
+        (["hotfix", "--project", "."], "--target"),
+        (["complete", "--project", ".", "--not-a-real-option"], "--not-a-real-option"),
+    ],
+)
+def test_pr_flow_cli_argparse_errors_cover_core_commands(args: list[str], expected: str) -> None:
+    result = run(*args)
+
+    assert result.returncode == 2
+    assert expected in result.stderr
+
+
+def test_command_stub_accepts_project_argument_for_pr_flow_helpers(tmp_path: Path) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    stub = CommandStub()
+    stub.add(["pr", "view"], stdout='{"number":1}\n', returncode=0)
+
+    result = stub(tmp_path, "pr", "view")
+
+    assert result.returncode == 0
+    assert result.stdout == '{"number":1}\n'
+    assert result.args == ["pr", "view"]
+    assert stub.calls == [("pr", "view")]
+
+
+def test_command_stub_can_consume_sequence_and_capture_body_file(tmp_path: Path) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    body_path = tmp_path / "body.md"
+    body_path.write_text("hello body\n", encoding="utf-8")
+    stub = CommandStub(consume=True)
+    stub.add(["pr", "view"], stderr="not found\n", returncode=1)
+    stub.add(["pr", "view"], stdout='{"number":1}\n')
+    stub.add(["pr", "edit", "1", "--body-file", str(body_path)])
+
+    first = stub("gh", "pr", "view")
+    second = stub("gh", "pr", "view")
+    edit = stub("gh", "pr", "edit", "1", "--body-file", str(body_path))
+
+    assert first.returncode == 1
+    assert second.stdout == '{"number":1}\n'
+    assert edit.returncode == 0
+    assert stub.body_files == [
+        {"args": ("gh", "pr", "edit", "1", "--body-file", str(body_path)), "body": "hello body\n"}
+    ]
+
+
+def test_command_stub_placeholder_matches_body_file_path(tmp_path: Path) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    body_path = tmp_path / "body.md"
+    body_path.write_text("hello body\n", encoding="utf-8")
+    stub = CommandStub(consume=True)
+    stub.add(["pr", "edit", "1", "--body-file", "__placeholder__"])
+
+    result = stub("gh", "pr", "edit", "1", "--body-file", str(body_path))
+
+    assert result.returncode == 0
+    assert stub.responses == []
+    assert stub.body_files == [
+        {"args": ("gh", "pr", "edit", "1", "--body-file", str(body_path)), "body": "hello body\n"}
+    ]
+
+
+def test_pr_flow_in_process_invocation_captures_output(tmp_path: Path) -> None:
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    result = invoke_pr_flow(["init", "--project", str(tmp_path)])
+
+    assert result.returncode == 0
+    assert "status: initialized" in result.stdout
+    assert result.stderr == ""
 
 
 def git(project: Path, *args: str) -> str:
@@ -243,7 +397,106 @@ def git_bare_result(remote: Path, *args: str) -> subprocess.CompletedProcess[str
     )
 
 
+def copy_project_remote_template(template_dir: Path, tmp_path: Path) -> tuple[Path, Path]:
+    remote = copy_template(template_dir / "remote.git", tmp_path / "remote.git")
+    project = copy_template(template_dir / "project", tmp_path / "project")
+    git(project, "remote", "set-url", "origin", str(remote))
+    return project, remote
+
+
+def remove_template_lock(lock_dir: Path) -> None:
+    for _ in range(5):
+        shutil.rmtree(lock_dir, ignore_errors=True)
+        if not lock_dir.exists():
+            return
+        time.sleep(0.05)
+
+
+def ensure_project_remote_template(template_name: str, tmp_path: Path, creator) -> tuple[Path, Path]:
+    template_dir = TEMPLATE_ROOT / template_name
+    ready = template_dir / ".ready"
+    lock_dir = TEMPLATE_ROOT / f"{template_name}.lock"
+    if ready.exists():
+        if lock_dir.exists():
+            remove_template_lock(lock_dir)
+        return copy_project_remote_template(template_dir, tmp_path)
+
+    deadline = time.monotonic() + TEMPLATE_LOCK_TIMEOUT_SECONDS
+    while True:
+        try:
+            lock_dir.mkdir(parents=True)
+            break
+        except FileExistsError:
+            try:
+                lock_age = time.time() - lock_dir.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            if lock_age > TEMPLATE_LOCK_STALE_SECONDS:
+                remove_template_lock(lock_dir)
+                continue
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"template_lock_timeout: {lock_dir}")
+            time.sleep(0.05)
+
+    try:
+        if not ready.exists():
+            if template_dir.exists():
+                shutil.rmtree(template_dir)
+            template_dir.mkdir(parents=True, exist_ok=True)
+            creator(template_dir)
+            ready.write_text("ok\n", encoding="utf-8")
+    finally:
+        remove_template_lock(lock_dir)
+
+    return copy_project_remote_template(template_dir, tmp_path)
+
+
+def test_project_template_recovers_stale_lock(tmp_path: Path) -> None:
+    template_name = f"stale-lock-{tmp_path.name}"
+    lock_dir = TEMPLATE_ROOT / f"{template_name}.lock"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    stale_time = time.time() - TEMPLATE_LOCK_STALE_SECONDS - 1
+    os.utime(lock_dir, (stale_time, stale_time))
+
+    project, remote = ensure_project_remote_template(
+        template_name,
+        tmp_path,
+        lambda template_dir: _create_cleanup_project(template_dir),
+    )
+
+    assert project.is_dir()
+    assert remote.is_dir()
+    assert not lock_dir.exists()
+
+
+def test_project_template_recreates_incomplete_template_after_stale_lock(tmp_path: Path) -> None:
+    template_name = f"incomplete-template-{os.getpid()}-{time.monotonic_ns()}"
+    template_dir = TEMPLATE_ROOT / template_name
+    lock_dir = TEMPLATE_ROOT / f"{template_name}.lock"
+    template_dir.mkdir(parents=True)
+    (template_dir / "partial.txt").write_text("partial\n", encoding="utf-8")
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    stale_time = time.time() - TEMPLATE_LOCK_STALE_SECONDS - 1
+    os.utime(lock_dir, (stale_time, stale_time))
+
+    project, remote = ensure_project_remote_template(
+        template_name,
+        tmp_path,
+        lambda template_dir: _create_cleanup_project(template_dir),
+    )
+
+    assert project.is_dir()
+    assert remote.is_dir()
+    assert (template_dir / ".ready").is_file()
+    assert not (template_dir / "partial.txt").exists()
+    assert not lock_dir.exists()
+
+
 def init_cleanup_project(tmp_path: Path) -> tuple[Path, Path]:
+    return ensure_project_remote_template("cleanup", tmp_path, _create_cleanup_project)
+
+
+def _create_cleanup_project(tmp_path: Path) -> tuple[Path, Path]:
     remote = tmp_path / "remote.git"
     remote_init = subprocess.run(
         ["git", "init", "--bare", str(remote)],
@@ -287,6 +540,26 @@ def init_cleanup_project(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def init_complete_project(
+    tmp_path: Path,
+    *,
+    review_mode: str = "github",
+    merge_strategy: str = "merge",
+    evidence_path: str | None = None,
+) -> tuple[Path, Path]:
+    key = f"complete-{review_mode}-{merge_strategy}-{evidence_path or 'default'}".replace(os.sep, "_").replace(":", "_")
+    return ensure_project_remote_template(
+        key,
+        tmp_path,
+        lambda template_dir: _create_complete_project(
+            template_dir,
+            review_mode=review_mode,
+            merge_strategy=merge_strategy,
+            evidence_path=evidence_path,
+        ),
+    )
+
+
+def _create_complete_project(
     tmp_path: Path,
     *,
     review_mode: str = "github",
@@ -360,6 +633,313 @@ def assert_cleanup_exception(project: Path, result: subprocess.CompletedProcess[
     assert status["details"]["reason"] == reason
 
 
+def write_minimal_pr_flow_config(project: Path) -> None:
+    config_dir = project / ".pr-flow"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config = {
+        "defaults": {"baseBranch": "main"},
+        "branches": {"main": {"remote": "origin"}},
+    }
+    (config_dir / "config.yaml").write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def run_cleanup_in_process(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    pr_stdout: str,
+    git_responses: list[tuple[list[str], str, int]] | None = None,
+) -> tuple[Path, subprocess.CompletedProcess[str]]:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_minimal_pr_flow_config(project)
+    gh_stub = CommandStub()
+    gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=pr_stdout)
+    git_stub = CommandStub()
+    for args, stdout, returncode in git_responses or []:
+        git_stub.add(args, stdout=stdout, returncode=returncode)
+    monkeypatch.setattr(module, "gh", gh_stub)
+    monkeypatch.setattr(module, "git", git_stub)
+    result = invoke_pr_flow(["cleanup", "--project", str(project), "--pr", "12"], module=module)
+    return project, result
+
+
+def write_hotfix_pr_flow_config(
+    project: Path,
+    *,
+    allow_hotfix: bool = True,
+    include_authorization: bool = True,
+    include_branch: bool = True,
+    verify_command: str = "git rev-parse HEAD",
+) -> None:
+    config_dir = project / ".pr-flow"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config = {
+        "defaults": {
+            "baseBranch": "main",
+            "remote": "origin",
+            "hotfix": {"verifyCommand": verify_command},
+        },
+        "branches": {},
+    }
+    if include_authorization:
+        config["authorization"] = {
+            "phraseHashAlgorithm": "md5",
+            "phraseHash": hashlib.md5(HOTFIX_PHRASE.encode("utf-8")).hexdigest(),
+        }
+    if include_branch:
+        config["branches"]["main"] = {
+            "remote": "origin",
+            "allowHotfixPush": allow_hotfix,
+        }
+    (config_dir / "config.yaml").write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def run_hotfix_in_process(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    authorization_phrase: str = "ship-hotfix",
+    allow_hotfix: bool = True,
+    include_authorization: bool = True,
+    include_branch: bool = True,
+    git_responses: list[tuple[list[str], str, int]] | None = None,
+    verify_returncode: int = 0,
+) -> tuple[Path, subprocess.CompletedProcess[str]]:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_hotfix_pr_flow_config(
+        project,
+        allow_hotfix=allow_hotfix,
+        include_authorization=include_authorization,
+        include_branch=include_branch,
+    )
+    git_stub = CommandStub()
+    default_responses = [
+        (["fetch", "origin", "main"], "", 0),
+        (["rev-parse", "origin/main"], "a" * 40 + "\n", 0),
+        (["rev-parse", "HEAD"], "b" * 40 + "\n", 0),
+        (["merge-base", "HEAD", "origin/main"], "a" * 40 + "\n", 0),
+        (["status", "--short"], "", 0),
+    ]
+    for args, stdout, returncode in git_responses or default_responses:
+        git_stub.add(args, stdout=stdout, returncode=returncode)
+
+    def fake_verify(project_arg: Path, command: str) -> subprocess.CompletedProcess[str]:
+        result = subprocess.CompletedProcess([command], verify_returncode, "verified\n", "verify failed\n" if verify_returncode else "")
+        if verify_returncode:
+            details = module.command_failure_details("hotfix_verify_failed", result)
+            details["command"] = command
+            raise module.PrFlowError("hotfix_verify_failed", details)
+        return result
+
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "run_hotfix_verify_command", fake_verify)
+    result = invoke_pr_flow(
+        [
+            "hotfix",
+            "--project",
+            str(project),
+            "--target",
+            "main",
+            "--authorization-phrase",
+            authorization_phrase,
+        ],
+        module=module,
+    )
+    return project, result
+
+
+def write_complete_pr_flow_config(
+    project: Path,
+    *,
+    review_mode: str = "github",
+    merge_strategy: str = "merge",
+    evidence_path: str = ".pr-flow/review-pass.json",
+) -> None:
+    config_dir = project / ".pr-flow"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config = {
+        "defaults": {
+            "baseBranch": "main",
+            "mergeStrategy": merge_strategy,
+            "reviewGate": {"mode": review_mode, "evidencePath": evidence_path},
+            "wait": {"timeoutSeconds": 0, "pollSeconds": 0},
+        },
+        "branches": {"main": {"remote": "origin"}},
+    }
+    (config_dir / "config.yaml").write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def run_complete_in_process(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    pr_stdout: str | None = None,
+    pr_responses: list[tuple[str, str, int]] | None = None,
+    cleanup_stdout: str | None = None,
+    merge_strategy: str = "merge",
+    git_responses: list[tuple[list[str], str, int]] | None = None,
+    merge_returncode: int = 0,
+    merge_stderr: str = "",
+) -> tuple[Path, subprocess.CompletedProcess[str]]:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project, merge_strategy=merge_strategy)
+    gh_stub = CommandStub(consume=pr_responses is not None)
+    if pr_responses is None:
+        assert pr_stdout is not None
+        gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
+    else:
+        for stdout, stderr, returncode in pr_responses:
+            gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=stdout, stderr=stderr, returncode=returncode)
+    gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", "b" * 40], stderr=merge_stderr, returncode=merge_returncode)
+    if cleanup_stdout is not None:
+        gh_stub.add(
+            ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
+            stdout=cleanup_stdout,
+        )
+    git_stub = CommandStub()
+    for args, stdout, returncode in git_responses or []:
+        git_stub.add(args, stdout=stdout, returncode=returncode)
+    monkeypatch.setattr(module, "gh", gh_stub)
+    monkeypatch.setattr(module, "git", git_stub)
+    result = invoke_pr_flow(["complete", "--project", str(project)], module=module)
+    return project, result
+
+
+def run_tweak_in_process(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    reason: str,
+    first_pr_returncode: int = 0,
+    first_pr_stderr: str = "",
+    review_decision: str = "APPROVED",
+    checks: list[dict[str, object]] | None = None,
+) -> tuple[Path, subprocess.CompletedProcess[str], object]:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    head_oid = "b" * 40
+    pr_stdout = pr_view_json(
+        checks=checks or [{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        review_decision=review_decision,
+        head_oid=head_oid,
+    )
+    gh_stub = CommandStub(consume=True)
+    if first_pr_returncode:
+        gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr=first_pr_stderr, returncode=first_pr_returncode)
+        gh_stub.add(["pr", "create", "--base", "main", "--fill"], stdout="https://github.example/test/repo/pull/12\n")
+        gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
+    else:
+        gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
+    gh_stub.add(["pr", "edit", "12", "--body-file", "__placeholder__"])
+    gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
+    gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
+
+    git_stub = CommandStub(consume=True)
+    for git_args, stdout in [
+        (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "HEAD"], head_oid + "\n"),
+        (["status", "--short"], ""),
+        (["branch", "--show-current"], "feature/example\n"),
+        (["push", "origin", "--delete", "feature/example"], ""),
+        (["ls-remote", "--heads", "origin", "feature/example"], ""),
+        (["checkout", "main"], ""),
+        (["pull", "--ff-only", "origin", "main"], ""),
+        (["branch", "-d", "feature/example"], ""),
+        (["branch", "--show-current"], "main\n"),
+    ]:
+        git_stub.add(git_args, stdout=stdout)
+    monkeypatch.setattr(module, "gh", gh_stub)
+    monkeypatch.setattr(module, "git", git_stub)
+    result = invoke_pr_flow(["tweak", "--project", str(project), "--reason", reason], module=module)
+    return project, result, gh_stub
+
+
+def run_diagnose_in_process(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    pr_stdout: str,
+    pr_stderr: str = "",
+    pr_returncode: int = 0,
+) -> tuple[Path, subprocess.CompletedProcess[str]]:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_minimal_pr_flow_config(project)
+    git_stub = CommandStub()
+    git_stub.add(["branch", "--show-current"], stdout="main\n")
+    git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/main\n")
+    git_stub.add(["status", "--short"], stdout="")
+    gh_stub = CommandStub()
+    gh_stub.add(
+        ["pr", "view", "--json", "number,state,isDraft,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup"],
+        stdout=pr_stdout,
+        stderr=pr_stderr,
+        returncode=pr_returncode,
+    )
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "gh", gh_stub)
+    result = invoke_pr_flow(["diagnose", "--project", str(project)], module=module)
+    return project, result
+
+
+def review_gate_config_for_test(mode: str, evidence_path: str = ".pr-flow/review-pass.json") -> dict:
+    return {"defaults": {"reviewGate": {"mode": mode, "evidencePath": evidence_path}}}
+
+
+def passing_review_pr(review_decision: str = "APPROVED") -> dict:
+    return json.loads(
+        pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision=review_decision,
+            head_oid="b" * 40,
+        )
+    )
+
+
+def write_review_pass_file(project: Path, relative_path: str = ".pr-flow/review-pass.json") -> str:
+    fingerprint = "sha256:" + "1" * 64
+    evidence_path = project / relative_path
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "base_ref": "main",
+                "head_ref": "feature/example",
+                "diff_fingerprint": fingerprint,
+                "blocking_findings": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return fingerprint
+
+
 def configure_complete(
     project: Path,
     *,
@@ -402,6 +982,26 @@ def configure_hotfix(
 
 
 def init_hotfix_project(
+    tmp_path: Path,
+    *,
+    allow_hotfix: bool = True,
+    verify_command: str = "git rev-parse HEAD",
+) -> tuple[Path, Path, str]:
+    key = f"hotfix-{allow_hotfix}-{verify_command}".replace(os.sep, "_").replace(":", "_").replace(" ", "_")
+    project, remote = ensure_project_remote_template(
+        key,
+        tmp_path,
+        lambda template_dir: _create_hotfix_project(
+            template_dir,
+            allow_hotfix=allow_hotfix,
+            verify_command=verify_command,
+        ),
+    )
+    before_commit = git_bare(remote, "rev-parse", "refs/heads/main")
+    return project, remote, before_commit
+
+
+def _create_hotfix_project(
     tmp_path: Path,
     *,
     allow_hotfix: bool = True,
@@ -517,12 +1117,15 @@ def test_missing_config_reports_exception_required(tmp_path: Path) -> None:
 
 
 def test_status_file_is_written_for_stop_state(tmp_path: Path) -> None:
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
     project = tmp_path / "project"
     project.mkdir()
-    init_result = run("init", "--project", str(project))
+    init_result = invoke_pr_flow(["init", "--project", str(project)], module=module)
 
     assert init_result.returncode == 0, init_result.stdout + init_result.stderr
-    result = run("diagnose", "--project", str(project))
+    result = invoke_pr_flow(["diagnose", "--project", str(project)], module=module)
 
     assert result.returncode == 1
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
@@ -532,12 +1135,15 @@ def test_status_file_is_written_for_stop_state(tmp_path: Path) -> None:
 
 
 def test_diagnose_outputs_push_required_without_upstream(tmp_path: Path) -> None:
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
     project = tmp_path / "project"
     assert init_repo(project) == "main"
-    assert run("init", "--project", str(project)).returncode == 0
+    assert invoke_pr_flow(["init", "--project", str(project)], module=module).returncode == 0
     git(project, "switch", "-c", "feature/no-upstream")
 
-    result = run("diagnose", "--project", str(project))
+    result = invoke_pr_flow(["diagnose", "--project", str(project)], module=module)
 
     assert result.returncode == 1
     assert "status: PUSH_REQUIRED" in result.stdout
@@ -549,13 +1155,14 @@ def test_diagnose_outputs_push_required_without_upstream(tmp_path: Path) -> None
     assert "push current branch before continuing" in result.stdout
 
 
-def test_diagnose_outputs_exception_for_unknown_gh_failure(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    fake_bin = write_fake_gh(tmp_path / "bin", stderr="synthetic gh failure\n", exit_code=42)
-    assert init_repo(project) == "main"
-    assert run("init", "--project", str(project)).returncode == 0
-
-    result = run_with_path(fake_bin, "diagnose", "--project", str(project))
+def test_diagnose_outputs_exception_for_unknown_gh_failure(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_diagnose_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout="",
+        pr_stderr="synthetic gh failure\n",
+        pr_returncode=42,
+    )
 
     assert result.returncode == 1
     assert "status: EXCEPTION_REQUIRED" in result.stdout
@@ -568,13 +1175,14 @@ def test_diagnose_outputs_exception_for_unknown_gh_failure(tmp_path: Path) -> No
     assert status["details"]["reason"] == "gh_pr_view_failed"
 
 
-def test_diagnose_on_base_branch_without_pr_reports_gh_pr_view_failed(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    fake_bin = write_fake_gh(tmp_path / "bin", stderr="no pull requests found for branch\n", exit_code=1)
-    assert init_repo(project) == "main"
-    assert run("init", "--project", str(project)).returncode == 0
-
-    result = run_with_path(fake_bin, "diagnose", "--project", str(project))
+def test_diagnose_on_base_branch_without_pr_reports_gh_pr_view_failed(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_diagnose_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout="",
+        pr_stderr="no pull requests found for branch\n",
+        pr_returncode=1,
+    )
 
     assert result.returncode == 1
     assert "status: EXCEPTION_REQUIRED" in result.stdout
@@ -588,135 +1196,85 @@ def test_diagnose_on_base_branch_without_pr_reports_gh_pr_view_failed(tmp_path: 
     assert "no pull requests found" in status["details"]["stderr"]
 
 
-def test_diagnose_outputs_dispatch_required_for_pending_checks(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    fake_bin = write_fake_gh(
-        tmp_path / "bin",
-        stdout=pr_view_json(checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}]),
-    )
-    assert init_repo(project) == "main"
-    assert run("init", "--project", str(project)).returncode == 0
-
-    result = run_with_path(fake_bin, "diagnose", "--project", str(project))
-
-    assert result.returncode == 1
-    assert "status: DISPATCH_REQUIRED" in result.stdout
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "DISPATCH_REQUIRED"
-    assert status["command"] == "diagnose"
-    assert status["details"]["reason"] == "checks_pending"
-
-
-def test_diagnose_outputs_reply_or_fix_required_for_failing_checks(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    fake_bin = write_fake_gh(
-        tmp_path / "bin",
-        stdout=pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}]),
-    )
-    assert init_repo(project) == "main"
-    assert run("init", "--project", str(project)).returncode == 0
-
-    result = run_with_path(fake_bin, "diagnose", "--project", str(project))
-
-    assert result.returncode == 1
-    assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "REPLY_OR_FIX_REQUIRED"
-    assert status["command"] == "diagnose"
-    assert status["details"]["reason"] == "checks_or_review_blocking"
-
-
-def test_diagnose_outputs_reply_or_fix_required_for_changes_requested(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    fake_bin = write_fake_gh(
-        tmp_path / "bin",
-        stdout=pr_view_json(
-            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
-            review_decision="CHANGES_REQUESTED",
+@pytest.mark.parametrize(
+    ("pr_stdout", "returncode", "expected_status", "expected_reason", "extra_detail"),
+    [
+        (
+            pr_view_json(checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}]),
+            1,
+            "DISPATCH_REQUIRED",
+            "checks_pending",
+            {},
         ),
-    )
-    assert init_repo(project) == "main"
-    assert run("init", "--project", str(project)).returncode == 0
-
-    result = run_with_path(fake_bin, "diagnose", "--project", str(project))
-
-    assert result.returncode == 1
-    assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "REPLY_OR_FIX_REQUIRED"
-    assert status["command"] == "diagnose"
-    assert status["details"]["reason"] == "checks_or_review_blocking"
-
-
-def test_diagnose_outputs_reply_or_fix_required_for_review_required(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    fake_bin = write_fake_gh(
-        tmp_path / "bin",
-        stdout=pr_view_json(
-            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
-            review_decision="REVIEW_REQUIRED",
+        (
+            pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}]),
+            1,
+            "REPLY_OR_FIX_REQUIRED",
+            "checks_or_review_blocking",
+            {},
         ),
-    )
-    assert init_repo(project) == "main"
-    assert run("init", "--project", str(project)).returncode == 0
-
-    result = run_with_path(fake_bin, "diagnose", "--project", str(project))
-
-    assert result.returncode == 1
-    assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "REPLY_OR_FIX_REQUIRED"
-    assert status["command"] == "diagnose"
-    assert status["details"]["reason"] == "checks_or_review_blocking"
-    assert status["details"]["reviewDecision"] == "REVIEW_REQUIRED"
-
-
-def test_diagnose_outputs_ready_when_no_stop_state_remains(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    fake_bin = write_fake_gh(
-        tmp_path / "bin",
-        stdout=pr_view_json(
-            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
-            review_decision="",
+        (
+            pr_view_json(
+                checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                review_decision="CHANGES_REQUESTED",
+            ),
+            1,
+            "REPLY_OR_FIX_REQUIRED",
+            "checks_or_review_blocking",
+            {},
         ),
-    )
-    assert init_repo(project) == "main"
-    assert run("init", "--project", str(project)).returncode == 0
-
-    result = run_with_path(fake_bin, "diagnose", "--project", str(project))
-
-    assert result.returncode == 0
-    assert "status: ready" in result.stdout
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "ready"
-    assert status["command"] == "diagnose"
-    assert status["details"]["reason"] == "ready_to_complete"
-    assert status["details"]["nextCommand"] == "complete"
-
-
-def test_diagnose_outputs_dispatch_required_for_draft_pr(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    fake_bin = write_fake_gh(
-        tmp_path / "bin",
-        stdout=pr_view_json(
-            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
-            review_decision="",
-            is_draft=True,
+        (
+            pr_view_json(
+                checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                review_decision="REVIEW_REQUIRED",
+            ),
+            1,
+            "REPLY_OR_FIX_REQUIRED",
+            "checks_or_review_blocking",
+            {"reviewDecision": "REVIEW_REQUIRED"},
         ),
-    )
-    assert init_repo(project) == "main"
-    assert run("init", "--project", str(project)).returncode == 0
+        (
+            pr_view_json(
+                checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                review_decision="",
+            ),
+            0,
+            "ready",
+            "ready_to_complete",
+            {"nextCommand": "complete"},
+        ),
+        (
+            pr_view_json(
+                checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                review_decision="",
+                is_draft=True,
+            ),
+            1,
+            "DISPATCH_REQUIRED",
+            "pr_is_draft",
+            {"nextCommand": "gh pr ready"},
+        ),
+    ],
+)
+def test_diagnose_outputs_stop_state_matrix(
+    tmp_path: Path,
+    monkeypatch,
+    pr_stdout: str,
+    returncode: int,
+    expected_status: str,
+    expected_reason: str,
+    extra_detail: dict[str, str],
+) -> None:
+    project, result = run_diagnose_in_process(tmp_path, monkeypatch, pr_stdout=pr_stdout)
 
-    result = run_with_path(fake_bin, "diagnose", "--project", str(project))
-
-    assert result.returncode == 1
-    assert "status: DISPATCH_REQUIRED" in result.stdout
-    assert "pr_is_draft" in result.stdout
+    assert result.returncode == returncode
+    assert f"status: {expected_status}" in result.stdout
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "DISPATCH_REQUIRED"
+    assert status["status"] == expected_status
     assert status["command"] == "diagnose"
-    assert status["details"]["reason"] == "pr_is_draft"
-    assert status["details"]["nextCommand"] == "gh pr ready"
+    assert status["details"]["reason"] == expected_reason
+    for key, value in extra_detail.items():
+        assert status["details"][key] == value
 
 
 def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path: Path) -> None:
@@ -745,12 +1303,14 @@ def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path
     assert calls[5] == ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"]
 
 
-def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path) -> None:
-    project, remote = init_complete_project(tmp_path)
+def test_complete_full_flow_uses_configured_squash_strategy(tmp_path: Path) -> None:
+    project, _remote = init_complete_project(tmp_path, merge_strategy="squash")
     head_oid = git(project, "rev-parse", "HEAD")
     fake_bin, calls_path = write_fake_gh_sequence(
         tmp_path / "bin",
         [
+            {"stderr": "no pull requests found\n", "exit_code": 1},
+            {"stdout": "https://github.example/test/repo/pull/12\n"},
             {"stdout": passing_pr_view_json(project)},
             {"stdout": passing_pr_view_json(project)},
             {"stdout": ""},
@@ -762,9 +1322,46 @@ def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path) 
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: cleanup_complete" in result.stdout
-    assert git(project, "branch", "--show-current") == "main"
-    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode != 0
     calls = json.loads(calls_path.read_text(encoding="utf-8"))
+    assert calls[4] == ["pr", "merge", "12", "--squash", "--match-head-commit", head_oid]
+
+
+def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    head_oid = "b" * 40
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED", head_oid=head_oid))
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED", head_oid=head_oid))
+    gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
+    gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
+    git_stub = CommandStub(consume=True)
+    for git_args, stdout in [
+        (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "HEAD"], head_oid + "\n"),
+        (["status", "--short"], ""),
+        (["branch", "--show-current"], "feature/example\n"),
+        (["push", "origin", "--delete", "feature/example"], ""),
+        (["ls-remote", "--heads", "origin", "feature/example"], ""),
+        (["checkout", "main"], ""),
+        (["pull", "--ff-only", "origin", "main"], ""),
+        (["branch", "-d", "feature/example"], ""),
+        (["branch", "--show-current"], "main\n"),
+    ]:
+        git_stub.add(git_args, stdout=stdout)
+    monkeypatch.setattr(module, "gh", gh_stub)
+    monkeypatch.setattr(module, "git", git_stub)
+
+    result = invoke_pr_flow(["complete", "--project", str(project)], module=module)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
+    calls = [list(call) for call in gh_stub.calls]
     assert calls == [
         [
             "pr",
@@ -778,7 +1375,7 @@ def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path) 
             "--json",
             "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid",
         ],
-        ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid],
+        ["pr", "merge", "12", "--merge", "--match-head-commit", "b" * 40],
         ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
     ]
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
@@ -786,28 +1383,26 @@ def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path) 
     assert status["command"] == "cleanup"
 
 
-def test_complete_returns_cleanup_stop_when_cleanup_fails_after_merge(tmp_path: Path) -> None:
-    project, _remote = init_complete_project(tmp_path)
-    head_oid = git(project, "rev-parse", "HEAD")
-    fake_bin, calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {"stdout": passing_pr_view_json(project)},
-            {"stdout": passing_pr_view_json(project)},
-            {"stdout": ""},
-            {"stdout": cleanup_pr_view_json(state="OPEN")},
+def test_complete_returns_cleanup_stop_when_cleanup_fails_after_merge(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision="APPROVED",
+            head_oid="b" * 40,
+        ),
+        cleanup_stdout=cleanup_pr_view_json(state="OPEN"),
+        git_responses=[
+            (["branch", "--show-current"], "feature/example\n", 0),
+            (["rev-parse", "HEAD"], "b" * 40 + "\n", 0),
         ],
     )
-
-    result = run_with_path(fake_bin, "complete", "--project", str(project))
 
     assert result.returncode == 1
     assert "status: merge_complete" in result.stdout
     assert "status: EXCEPTION_REQUIRED" in result.stdout
     assert "pr_not_merged" in result.stdout
-    calls = json.loads(calls_path.read_text(encoding="utf-8"))
-    assert calls[2] == ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid]
-    assert calls[3] == ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"]
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["status"] == "EXCEPTION_REQUIRED"
     assert status["command"] == "cleanup"
@@ -815,17 +1410,23 @@ def test_complete_returns_cleanup_stop_when_cleanup_fails_after_merge(tmp_path: 
     assert "pr-flow-cleanup" in status["details"]["recovery"]
 
 
-def test_complete_stops_when_pr_sync_fails_instead_of_using_stale_pr(tmp_path: Path) -> None:
-    project, _remote = init_complete_project(tmp_path)
-    fake_bin, _calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {"stdout": passing_pr_view_json(project)},
-            {"stderr": "rate limited\n", "exit_code": 1},
+def test_complete_stops_when_pr_sync_fails_instead_of_using_stale_pr(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_responses=[
+            (
+                pr_view_json(
+                    checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                    review_decision="APPROVED",
+                    head_oid="b" * 40,
+                ),
+                "",
+                0,
+            ),
+            ("", "rate limited\n", 1),
         ],
     )
-
-    result = run_with_path(fake_bin, "complete", "--project", str(project))
 
     assert result.returncode == 1
     assert "status: EXCEPTION_REQUIRED" in result.stdout
@@ -837,141 +1438,89 @@ def test_complete_stops_when_pr_sync_fails_instead_of_using_stale_pr(tmp_path: P
     assert "rate limited" in status["details"]["stderr"]
 
 
-def test_complete_uses_configured_merge_strategy_flag(tmp_path: Path) -> None:
+def test_complete_uses_configured_merge_strategy_flag(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    module = load_pr_flow_module()
     for strategy, expected_flag in [("merge", "--merge"), ("squash", "--squash"), ("rebase", "--rebase")]:
-        case_tmp = tmp_path / strategy
-        case_tmp.mkdir()
-        project, _remote = init_complete_project(case_tmp, merge_strategy=strategy)
-        head_oid = git(project, "rev-parse", "HEAD")
-        fake_bin, calls_path = write_fake_gh_sequence(
-            case_tmp / "bin",
-            [
-                {"stdout": passing_pr_view_json(project)},
-                {"stdout": passing_pr_view_json(project)},
-                {"stdout": ""},
-                {"stdout": cleanup_pr_view_json()},
-            ],
+        project = tmp_path / strategy
+        project.mkdir()
+        head_oid = f"{strategy:0<40}"[:40]
+        git_stub = CommandStub()
+        git_stub.add(["rev-parse", "HEAD"], stdout=f"{head_oid}\n")
+        gh_stub = CommandStub()
+        gh_stub.add(["pr", "merge", "12", expected_flag, "--match-head-commit", head_oid])
+        monkeypatch.setattr(module, "git", git_stub)
+        monkeypatch.setattr(module, "gh", gh_stub)
+
+        result = module.merge_pr(
+            project,
+            {"defaults": {"mergeStrategy": strategy}},
+            {"number": 12, "headRefOid": head_oid, "headRefName": "feature/example"},
         )
 
-        result = run_with_path(fake_bin, "complete", "--project", str(project))
-
-        assert result.returncode == 0, strategy + result.stdout + result.stderr
-        calls = json.loads(calls_path.read_text(encoding="utf-8"))
-        assert calls[2] == ["pr", "merge", "12", expected_flag, "--match-head-commit", head_oid]
+        assert result is None
+        assert gh_stub.calls == [("pr", "merge", "12", expected_flag, "--match-head-commit", head_oid)]
 
 
-def test_complete_rejects_when_head_moved_before_merge(tmp_path: Path) -> None:
-    project, _remote = init_complete_project(tmp_path)
+def test_complete_rejects_when_head_moved_before_merge(tmp_path: Path, monkeypatch) -> None:
     moved_head_oid = "0" * 40
-    fake_bin, calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {
-                "stdout": pr_view_json(
-                    checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
-                    review_decision="APPROVED",
-                    head_oid=moved_head_oid,
-                )
-            },
-            {
-                "stdout": pr_view_json(
-                    checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
-                    review_decision="APPROVED",
-                    head_oid=moved_head_oid,
-                )
-            },
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision="APPROVED",
+            head_oid=moved_head_oid,
+        ),
+        git_responses=[
+            (["branch", "--show-current"], "feature/example\n", 0),
+            (["rev-parse", "HEAD"], "b" * 40 + "\n", 0),
         ],
     )
 
-    result = run_with_path(fake_bin, "complete", "--project", str(project))
-
     assert result.returncode == 1
     assert "status: EXCEPTION_REQUIRED" in result.stdout
-    calls = json.loads(calls_path.read_text(encoding="utf-8"))
-    assert calls == [
-        [
-            "pr",
-            "view",
-            "--json",
-            "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid",
-        ],
-        [
-            "pr",
-            "view",
-            "--json",
-            "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid",
-        ],
-    ]
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["status"] == "EXCEPTION_REQUIRED"
     assert status["command"] == "complete"
     assert status["details"]["reason"] == "head_moved"
 
 
-def test_complete_rejects_missing_head_ref_oid_without_merge(tmp_path: Path) -> None:
-    project, _remote = init_complete_project(tmp_path)
-    fake_bin, calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {
-                "stdout": pr_view_json(
-                    checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
-                    review_decision="APPROVED",
-                )
-            },
-            {
-                "stdout": pr_view_json(
-                    checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
-                    review_decision="APPROVED",
-                )
-            },
-        ],
+def test_complete_rejects_missing_head_ref_oid_without_merge(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision="APPROVED",
+        ),
+        git_responses=[(["branch", "--show-current"], "feature/example\n", 0)],
     )
-
-    result = run_with_path(fake_bin, "complete", "--project", str(project))
 
     assert result.returncode == 1
     assert "status: EXCEPTION_REQUIRED" in result.stdout
-    calls = json.loads(calls_path.read_text(encoding="utf-8"))
-    assert calls == [
-        [
-            "pr",
-            "view",
-            "--json",
-            "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid",
-        ],
-        [
-            "pr",
-            "view",
-            "--json",
-            "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid",
-        ],
-    ]
-    assert all(call[:3] != ["pr", "merge", "12"] for call in calls)
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["status"] == "EXCEPTION_REQUIRED"
     assert status["command"] == "complete"
     assert status["details"]["reason"] == "missing_head_ref_oid"
 
 
-def test_complete_rejects_current_branch_that_does_not_match_pr_head(tmp_path: Path) -> None:
-    project, _remote = init_complete_project(tmp_path)
-    git(project, "checkout", "-b", "feature/other")
-    fake_bin, calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            { "stdout": passing_pr_view_json(project) },
-            { "stdout": passing_pr_view_json(project) },
-        ],
+def test_complete_rejects_current_branch_that_does_not_match_pr_head(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision="APPROVED",
+            head_oid="b" * 40,
+        ),
+        git_responses=[(["branch", "--show-current"], "feature/other\n", 0)],
     )
-
-    result = run_with_path(fake_bin, "complete", "--project", str(project))
 
     assert result.returncode == 1
     assert "status: EXCEPTION_REQUIRED" in result.stdout
     assert "current_branch_mismatch" in result.stdout
-    calls = json.loads(calls_path.read_text(encoding="utf-8"))
-    assert all(call[:2] != ["pr", "merge"] for call in calls)
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["command"] == "complete"
     assert status["details"]["reason"] == "current_branch_mismatch"
@@ -979,25 +1528,26 @@ def test_complete_rejects_current_branch_that_does_not_match_pr_head(tmp_path: P
     assert status["details"]["headRefName"] == "feature/example"
 
 
-def test_complete_reports_exception_when_gh_pr_merge_fails(tmp_path: Path) -> None:
-    project, _remote = init_complete_project(tmp_path)
-    head_oid = git(project, "rev-parse", "HEAD")
-    fake_bin, calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {"stdout": passing_pr_view_json(project)},
-            {"stdout": passing_pr_view_json(project)},
-            {"stderr": "merge failed\n", "exit_code": 1},
+def test_complete_reports_exception_when_gh_pr_merge_fails(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision="APPROVED",
+            head_oid="b" * 40,
+        ),
+        git_responses=[
+            (["branch", "--show-current"], "feature/example\n", 0),
+            (["rev-parse", "HEAD"], "b" * 40 + "\n", 0),
         ],
+        merge_returncode=1,
+        merge_stderr="merge failed\n",
     )
-
-    result = run_with_path(fake_bin, "complete", "--project", str(project))
 
     assert result.returncode == 1
     assert "status: EXCEPTION_REQUIRED" in result.stdout
     assert "gh_pr_merge_failed" in result.stdout
-    calls = json.loads(calls_path.read_text(encoding="utf-8"))
-    assert calls[2] == ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid]
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["status"] == "EXCEPTION_REQUIRED"
     assert status["command"] == "complete"
@@ -1005,57 +1555,47 @@ def test_complete_reports_exception_when_gh_pr_merge_fails(tmp_path: Path) -> No
     assert status["details"]["stderr"] == "merge failed"
 
 
-def test_complete_rejects_unknown_merge_strategy(tmp_path: Path) -> None:
-    project, _remote = init_complete_project(tmp_path, merge_strategy="octopus")
-    fake_bin, calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {"stdout": passing_pr_view_json(project)},
-            {"stdout": passing_pr_view_json(project)},
-        ],
+def test_complete_rejects_unknown_merge_strategy(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision="APPROVED",
+            head_oid="b" * 40,
+        ),
+        merge_strategy="octopus",
+        git_responses=[(["branch", "--show-current"], "feature/example\n", 0)],
     )
-
-    result = run_with_path(fake_bin, "complete", "--project", str(project))
 
     assert result.returncode == 1
     assert "status: EXCEPTION_REQUIRED" in result.stdout
-    calls = json.loads(calls_path.read_text(encoding="utf-8"))
-    assert len(calls) == 2
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["details"]["reason"] == "unknown_merge_strategy"
 
 
 def test_complete_skip_review_gate_ignores_github_changes_requested(tmp_path: Path) -> None:
-    project, _remote = init_complete_project(tmp_path, review_mode="skip")
-    fake_bin, _calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {"stdout": passing_pr_view_json(project, review_decision="CHANGES_REQUESTED")},
-            {"stdout": passing_pr_view_json(project, review_decision="CHANGES_REQUESTED")},
-            {"stdout": ""},
-            {"stdout": cleanup_pr_view_json()},
-        ],
+    module = load_pr_flow_module()
+
+    result = module.check_review_gate(
+        tmp_path,
+        review_gate_config_for_test("skip"),
+        passing_review_pr(review_decision="CHANGES_REQUESTED"),
     )
 
-    result = run_with_path(fake_bin, "complete", "--project", str(project))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
+    assert result is None
 
 
-def test_complete_github_review_gate_blocks_changes_requested(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    configure_complete(project, review_mode="github")
-    fake_bin, _calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="CHANGES_REQUESTED")},
-            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="CHANGES_REQUESTED")},
-        ],
+def test_complete_github_review_gate_blocks_changes_requested(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision="CHANGES_REQUESTED",
+            head_oid="b" * 40,
+        ),
     )
-
-    result = run_with_path(fake_bin, "complete", "--project", str(project))
 
     assert result.returncode == 1
     assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
@@ -1065,19 +1605,16 @@ def test_complete_github_review_gate_blocks_changes_requested(tmp_path: Path) ->
     assert status["details"]["reason"] == "review_gate_blocking"
 
 
-def test_complete_wait_timeout_zero_reports_pending_checks_without_sleep(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    configure_complete(project, review_mode="skip")
-    fake_bin, _calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}], review_decision="APPROVED")},
-            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}], review_decision="APPROVED")},
-        ],
+def test_complete_wait_timeout_zero_reports_pending_checks_without_sleep(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
+            review_decision="APPROVED",
+            head_oid="b" * 40,
+        ),
     )
-
-    result = run_with_path(fake_bin, "complete", "--project", str(project))
 
     assert result.returncode == 1
     assert "status: DISPATCH_REQUIRED" in result.stdout
@@ -1087,91 +1624,56 @@ def test_complete_wait_timeout_zero_reports_pending_checks_without_sleep(tmp_pat
     assert status["details"]["reason"] == "checks_pending"
 
 
-def test_complete_local_review_gate_accepts_review_pass_evidence(tmp_path: Path) -> None:
-    evidence_path = tmp_path / "review-pass.json"
-    project, _remote = init_complete_project(tmp_path, review_mode="local", evidence_path=str(evidence_path))
-    write_review_pass(project, str(evidence_path))
-    fake_bin, _calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {"stdout": passing_pr_view_json(project, review_decision="CHANGES_REQUESTED")},
-            {"stdout": passing_pr_view_json(project, review_decision="CHANGES_REQUESTED")},
-            {"stdout": ""},
-            {"stdout": cleanup_pr_view_json()},
-        ],
-    )
-
-    result = run_with_path(fake_bin, "complete", "--project", str(project))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-
-
-def test_complete_local_review_gate_blocks_stale_diff_evidence(tmp_path: Path) -> None:
+def test_complete_local_review_gate_accepts_review_pass_evidence(tmp_path: Path, monkeypatch) -> None:
+    module = load_pr_flow_module()
     project = tmp_path / "project"
-    init_feature_branch(project)
-    configure_complete(project, review_mode="local", evidence_path=".pr-flow/review-pass.json")
-    write_review_pass(project, fingerprint="sha256:" + "0" * 64)
-    fake_bin, _calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="CHANGES_REQUESTED")},
-            {"stdout": pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="CHANGES_REQUESTED")},
-        ],
-    )
+    fingerprint = write_review_pass_file(project)
+    monkeypatch.setattr(module, "current_diff_fingerprint", lambda project_arg, pr: fingerprint)
 
-    result = run_with_path(fake_bin, "complete", "--project", str(project))
+    result = module.check_review_gate(project, review_gate_config_for_test("local"), passing_review_pr("CHANGES_REQUESTED"))
 
-    assert result.returncode == 1
-    assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "REPLY_OR_FIX_REQUIRED"
-    assert status["command"] == "complete"
-    assert status["details"]["reason"] == "local_review_evidence_failed"
+    assert result is None
 
 
-def test_complete_dual_review_gate_requires_github_and_local_evidence(tmp_path: Path) -> None:
-    evidence_path = tmp_path / "review-pass.json"
-    project, _remote = init_complete_project(tmp_path, review_mode="dual", evidence_path=str(evidence_path))
-    write_review_pass(project, str(evidence_path))
-    fake_bin, _calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {"stdout": passing_pr_view_json(project)},
-            {"stdout": passing_pr_view_json(project)},
-            {"stdout": ""},
-            {"stdout": cleanup_pr_view_json()},
-        ],
-    )
+def test_complete_local_review_gate_blocks_stale_diff_evidence(tmp_path: Path, monkeypatch) -> None:
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    write_review_pass_file(project)
+    monkeypatch.setattr(module, "current_diff_fingerprint", lambda project_arg, pr: "sha256:" + "0" * 64)
 
-    result = run_with_path(fake_bin, "complete", "--project", str(project))
+    result = module.check_review_gate(project, review_gate_config_for_test("local"), passing_review_pr("CHANGES_REQUESTED"))
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
+    assert result is not None
+    assert result["status"] == "REPLY_OR_FIX_REQUIRED"
+    assert result["details"]["reason"] == "local_review_evidence_failed"
+
+
+def test_complete_dual_review_gate_requires_github_and_local_evidence(tmp_path: Path, monkeypatch) -> None:
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    fingerprint = write_review_pass_file(project)
+    monkeypatch.setattr(module, "current_diff_fingerprint", lambda project_arg, pr: fingerprint)
+
+    result = module.check_review_gate(project, review_gate_config_for_test("dual"), passing_review_pr())
+
+    assert result is None
 
 
 def test_complete_dual_review_gate_blocks_github_changes_requested_even_with_local_evidence(tmp_path: Path) -> None:
-    evidence_path = tmp_path / "review-pass.json"
-    project, _remote = init_complete_project(tmp_path, review_mode="dual", evidence_path=str(evidence_path))
-    write_review_pass(project, str(evidence_path))
-    fake_bin, _calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {"stdout": passing_pr_view_json(project, review_decision="CHANGES_REQUESTED")},
-            {"stdout": passing_pr_view_json(project, review_decision="CHANGES_REQUESTED")},
-        ],
+    module = load_pr_flow_module()
+    write_review_pass_file(tmp_path)
+
+    result = module.check_review_gate(
+        tmp_path,
+        review_gate_config_for_test("dual"),
+        passing_review_pr(review_decision="CHANGES_REQUESTED"),
     )
 
-    result = run_with_path(fake_bin, "complete", "--project", str(project))
-
-    assert result.returncode == 1
-    assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "REPLY_OR_FIX_REQUIRED"
-    assert status["command"] == "complete"
-    assert status["details"]["reason"] == "review_gate_blocking"
-    assert status["details"]["reviewGateMode"] == "dual"
-    assert status["details"]["reviewDecision"] == "CHANGES_REQUESTED"
+    assert result is not None
+    assert result["status"] == "REPLY_OR_FIX_REQUIRED"
+    assert result["details"]["reason"] == "review_gate_blocking"
+    assert result["details"]["reviewGateMode"] == "dual"
+    assert result["details"]["reviewDecision"] == "CHANGES_REQUESTED"
 
 
 def test_tweak_requires_reason(tmp_path: Path) -> None:
@@ -1194,36 +1696,27 @@ def test_bare_tweak_requires_project() -> None:
     assert "--project" in result.stderr
 
 
-def test_tweak_creates_pr_when_none_exists_and_writes_body(tmp_path: Path) -> None:
-    project, _remote = init_complete_project(tmp_path)
-    head_oid = git(project, "rev-parse", "HEAD")
+def test_tweak_creates_pr_when_none_exists_and_writes_body(tmp_path: Path, monkeypatch) -> None:
     reason = "small docs polish"
-    fake_bin, calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {"stderr": "no pull requests found\n", "exit_code": 1},
-            {"stdout": "https://github.example/test/repo/pull/12\n"},
-            {"stdout": passing_pr_view_json(project)},
-            {"stdout": passing_pr_view_json(project)},
-            {"stdout": ""},
-            {"stdout": ""},
-            {"stdout": cleanup_pr_view_json()},
-        ],
+    _project, result, gh_stub = run_tweak_in_process(
+        tmp_path,
+        monkeypatch,
+        reason=reason,
+        first_pr_returncode=1,
+        first_pr_stderr="no pull requests found\n",
     )
-
-    result = run_with_path(fake_bin, "tweak", "--project", str(project), "--reason", reason)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: cleanup_complete" in result.stdout
-    calls = json.loads(calls_path.read_text(encoding="utf-8"))
+    calls = [list(call) for call in gh_stub.calls]
     assert calls[0][:2] == ["pr", "view"]
     assert calls[1][:2] == ["pr", "create"]
     assert calls[3][:2] == ["pr", "view"]
     assert calls[4][:3] == ["pr", "edit", "12"]
     assert "--body-file" in calls[4]
-    assert calls[5] == ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid]
+    assert calls[5] == ["pr", "merge", "12", "--merge", "--match-head-commit", "b" * 40]
     assert calls[6] == ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"]
-    body_records = captured_body_files(fake_bin)
+    body_records = gh_stub.body_files
     assert len(body_records) == 1
     assert (
         "## Tweak Path\n\n"
@@ -1232,27 +1725,19 @@ def test_tweak_creates_pr_when_none_exists_and_writes_body(tmp_path: Path) -> No
     ) in body_records[0]["body"]
 
 
-def test_tweak_skips_review_gate_for_changes_requested_then_merges_and_cleans_up(tmp_path: Path) -> None:
-    project, _remote = init_complete_project(tmp_path, review_mode="github")
-    head_oid = git(project, "rev-parse", "HEAD")
+def test_tweak_skips_review_gate_for_changes_requested_then_merges_and_cleans_up(tmp_path: Path, monkeypatch) -> None:
     reason = "rename helper only"
-    fake_bin, calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {"stdout": passing_pr_view_json(project, review_decision="CHANGES_REQUESTED")},
-            {"stdout": passing_pr_view_json(project, review_decision="CHANGES_REQUESTED")},
-            {"stdout": ""},
-            {"stdout": ""},
-            {"stdout": cleanup_pr_view_json()},
-        ],
+    _project, result, gh_stub = run_tweak_in_process(
+        tmp_path,
+        monkeypatch,
+        reason=reason,
+        review_decision="CHANGES_REQUESTED",
     )
-
-    result = run_with_path(fake_bin, "tweak", "--project", str(project), "--reason", reason)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: cleanup_complete" in result.stdout
     assert "REPLY_OR_FIX_REQUIRED" not in result.stdout
-    calls = json.loads(calls_path.read_text(encoding="utf-8"))
+    calls = [list(call) for call in gh_stub.calls]
     assert calls == [
         [
             "pr",
@@ -1267,63 +1752,42 @@ def test_tweak_skips_review_gate_for_changes_requested_then_merges_and_cleans_up
             "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid",
         ],
         ["pr", "edit", "12", "--body-file", calls[2][4]],
-        ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid],
+        ["pr", "merge", "12", "--merge", "--match-head-commit", "b" * 40],
         ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
     ]
 
 
-def test_tweak_pending_checks_report_dispatch_required(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    configure_complete(project, review_mode="github")
+def test_tweak_pending_checks_report_dispatch_required(tmp_path: Path, monkeypatch) -> None:
     reason = "format-only cleanup"
-    fake_bin, calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {
-                "stdout": pr_view_json(
-                    checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
-                    review_decision="CHANGES_REQUESTED",
-                )
-            },
-            {
-                "stdout": pr_view_json(
-                    checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
-                    review_decision="CHANGES_REQUESTED",
-                )
-            },
-            {"stdout": ""},
-        ],
+    project, result, gh_stub = run_tweak_in_process(
+        tmp_path,
+        monkeypatch,
+        reason=reason,
+        review_decision="CHANGES_REQUESTED",
+        checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
     )
-
-    result = run_with_path(fake_bin, "tweak", "--project", str(project), "--reason", reason)
 
     assert result.returncode == 1
     assert "status: DISPATCH_REQUIRED" in result.stdout
-    calls = json.loads(calls_path.read_text(encoding="utf-8"))
+    calls = [list(call) for call in gh_stub.calls]
     assert calls[2][:3] == ["pr", "edit", "12"]
     assert all(call[:2] != ["pr", "merge"] for call in calls)
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["status"] == "DISPATCH_REQUIRED"
     assert status["command"] == "tweak"
     assert status["details"]["reason"] == "checks_pending"
-    body_records = captured_body_files(fake_bin)
+    body_records = gh_stub.body_files
     assert len(body_records) == 1
     assert f"Reason: {reason}\n" in body_records[0]["body"]
 
 
-def test_hotfix_rejects_authorization_phrase_mismatch_without_leaking_phrase(tmp_path: Path) -> None:
-    project, _remote, _before_commit = init_hotfix_project(tmp_path)
+def test_hotfix_rejects_authorization_phrase_mismatch_without_leaking_phrase(tmp_path: Path, monkeypatch) -> None:
     wrong_phrase = "wrong-secret"
 
-    result = run(
-        "hotfix",
-        "--project",
-        str(project),
-        "--target",
-        "main",
-        "--authorization-phrase",
-        wrong_phrase,
+    project, result = run_hotfix_in_process(
+        tmp_path,
+        monkeypatch,
+        authorization_phrase=wrong_phrase,
     )
 
     assert result.returncode == 1
@@ -1339,62 +1803,31 @@ def test_hotfix_rejects_authorization_phrase_mismatch_without_leaking_phrase(tmp
 
 
 def test_hotfix_missing_authorization_config_does_not_run_verify_command(tmp_path: Path, monkeypatch) -> None:
-    pr_flow = load_pr_flow_module()
-    project, remote, before_commit = init_hotfix_project(tmp_path)
-    config_path = project / ".pr-flow" / "config.yaml"
-    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    config.pop("authorization")
-    config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    git(project, "add", ".pr-flow/config.yaml")
-    git(project, "commit", "-m", "remove authorization config")
-    verify_calls = []
-
-    def fake_verify(project_arg: Path, command: str) -> subprocess.CompletedProcess[str]:
-        verify_calls.append((project_arg, command))
-        return subprocess.CompletedProcess(command, 0, "verified", "")
-
-    monkeypatch.setattr(pr_flow, "run_hotfix_verify_command", fake_verify)
-
-    result = pr_flow.run_hotfix(
-        pr_flow.argparse.Namespace(
-            project=project,
-            target="main",
-            authorization_phrase=HOTFIX_PHRASE,
-            command="hotfix",
-        )
+    project, result = run_hotfix_in_process(
+        tmp_path,
+        monkeypatch,
+        include_authorization=False,
     )
 
-    assert result == 1
-    assert verify_calls == []
-    assert git_bare(remote, "rev-parse", "refs/heads/main") == before_commit
+    assert result.returncode == 1
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["command"] == "hotfix"
     assert status["details"]["reason"] == "authorization_phrase_missing"
 
 
-def test_hotfix_runs_verify_command_before_authorization_phrase_check(tmp_path: Path) -> None:
-    project, remote, before_commit = init_hotfix_project(
+def test_hotfix_runs_verify_command_before_authorization_phrase_check(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_hotfix_in_process(
         tmp_path,
-        verify_command="git rev-parse refs/heads/does-not-exist",
-    )
-    wrong_phrase = "wrong-secret"
-
-    result = run(
-        "hotfix",
-        "--project",
-        str(project),
-        "--target",
-        "main",
-        "--authorization-phrase",
-        wrong_phrase,
+        monkeypatch,
+        authorization_phrase="wrong-secret",
+        verify_returncode=1,
     )
 
     assert result.returncode == 1
     assert "status: EXCEPTION_REQUIRED" in result.stdout
     assert "authorization_phrase_mismatch" not in result.stdout
-    assert git_bare(remote, "rev-parse", "refs/heads/main") == before_commit
     status_text = (project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8")
-    assert wrong_phrase not in status_text
+    assert "wrong-secret" not in status_text
     status = json.loads(status_text)
     assert status["command"] == "hotfix"
     assert status["details"]["reason"] == "hotfix_verify_failed"
@@ -1455,7 +1888,8 @@ def test_hotfix_requires_target_for_bare_command() -> None:
 
 
 def test_hotfix_requires_target_when_project_and_authorization_are_supplied(tmp_path: Path) -> None:
-    project, _remote, _before_commit = init_hotfix_project(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
 
     result = run(
         "hotfix",
@@ -1471,17 +1905,11 @@ def test_hotfix_requires_target_when_project_and_authorization_are_supplied(tmp_
     assert "--target" in result.stderr
 
 
-def test_hotfix_rejects_target_branch_without_allow_hotfix_push(tmp_path: Path) -> None:
-    project, _remote, _before_commit = init_hotfix_project(tmp_path, allow_hotfix=False)
-
-    result = run(
-        "hotfix",
-        "--project",
-        str(project),
-        "--target",
-        "main",
-        "--authorization-phrase",
-        HOTFIX_PHRASE,
+def test_hotfix_rejects_target_branch_without_allow_hotfix_push(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_hotfix_in_process(
+        tmp_path,
+        monkeypatch,
+        allow_hotfix=False,
     )
 
     assert result.returncode == 1
@@ -1491,50 +1919,36 @@ def test_hotfix_rejects_target_branch_without_allow_hotfix_push(tmp_path: Path) 
     assert status["details"]["reason"] == "hotfix_push_not_allowed"
 
 
-def test_hotfix_requires_explicit_target_branch_allow_hotfix_push(tmp_path: Path) -> None:
-    project, remote, before_commit = init_hotfix_project(tmp_path)
-    config_path = project / ".pr-flow" / "config.yaml"
-    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    config["defaults"]["allowHotfixPush"] = True
-    config["branches"].pop("main")
-    config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
-
-    result = run(
-        "hotfix",
-        "--project",
-        str(project),
-        "--target",
-        "main",
-        "--authorization-phrase",
-        HOTFIX_PHRASE,
+def test_hotfix_requires_explicit_target_branch_allow_hotfix_push(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_hotfix_in_process(
+        tmp_path,
+        monkeypatch,
+        include_branch=False,
     )
 
     assert result.returncode == 1
     assert "status: EXCEPTION_REQUIRED" in result.stdout
-    assert git_bare(remote, "rev-parse", "refs/heads/main") == before_commit
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["command"] == "hotfix"
     assert status["details"]["reason"] == "hotfix_push_not_allowed"
 
 
-def test_hotfix_rejects_dirty_worktree_before_push(tmp_path: Path) -> None:
-    project, remote, before_commit = init_hotfix_project(tmp_path)
-    (project / "dirty.txt").write_text("uncommitted\n", encoding="utf-8")
-
-    result = run(
-        "hotfix",
-        "--project",
-        str(project),
-        "--target",
-        "main",
-        "--authorization-phrase",
-        HOTFIX_PHRASE,
+def test_hotfix_rejects_dirty_worktree_before_push(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_hotfix_in_process(
+        tmp_path,
+        monkeypatch,
+        git_responses=[
+            (["fetch", "origin", "main"], "", 0),
+            (["rev-parse", "origin/main"], "a" * 40 + "\n", 0),
+            (["rev-parse", "HEAD"], "b" * 40 + "\n", 0),
+            (["merge-base", "HEAD", "origin/main"], "a" * 40 + "\n", 0),
+            (["status", "--short"], "dirty.txt\n", 0),
+        ],
     )
 
     assert result.returncode == 1
     assert "status: EXCEPTION_REQUIRED" in result.stdout
     assert "dirty_worktree" in result.stdout
-    assert git_bare(remote, "rev-parse", "refs/heads/main") == before_commit
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["command"] == "hotfix"
     assert status["details"]["reason"] == "dirty_worktree"
@@ -1542,10 +1956,28 @@ def test_hotfix_rejects_dirty_worktree_before_push(tmp_path: Path) -> None:
 
 
 def test_hotfix_writes_audit_record_when_post_push_readback_mismatches(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
     pr_flow = load_pr_flow_module()
-    project, remote, before_commit = init_hotfix_project(tmp_path)
-    head_commit = git(project, "rev-parse", "HEAD")
+    project = tmp_path / "project"
+    project.mkdir()
+    write_hotfix_pr_flow_config(project)
+    before_commit = "a" * 40
+    head_commit = "b" * 40
     remote_after = "0" * 40
+    git_stub = CommandStub(consume=True)
+    for git_args, stdout in [
+        (["fetch", "origin", "main"], ""),
+        (["rev-parse", "origin/main"], before_commit + "\n"),
+        (["rev-parse", "HEAD"], head_commit + "\n"),
+        (["merge-base", "HEAD", "origin/main"], before_commit + "\n"),
+        (["status", "--short"], ""),
+        (["push", "origin", "HEAD:refs/heads/main"], ""),
+        (["config", "--get", "user.name"], "Test User\n"),
+        (["config", "--get", "user.email"], "test@example.com\n"),
+    ]:
+        git_stub.add(git_args, stdout=stdout)
 
     def fake_confirm(project_arg: Path, remote_arg: str, target_arg: str, expected_head: str) -> str:
         raise pr_flow.PrFlowError(
@@ -1559,19 +1991,19 @@ def test_hotfix_writes_audit_record_when_post_push_readback_mismatches(tmp_path:
             },
         )
 
-    monkeypatch.setattr(pr_flow, "confirm_hotfix_remote_readback", fake_confirm)
+    def fake_verify(project_arg: Path, command: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([command], 0, head_commit + "\n", "")
 
-    result = pr_flow.run_hotfix(
-        pr_flow.argparse.Namespace(
-            project=project,
-            target="main",
-            authorization_phrase=HOTFIX_PHRASE,
-            command="hotfix",
-        )
+    monkeypatch.setattr(pr_flow, "git", git_stub)
+    monkeypatch.setattr(pr_flow, "confirm_hotfix_remote_readback", fake_confirm)
+    monkeypatch.setattr(pr_flow, "run_hotfix_verify_command", fake_verify)
+
+    result = invoke_pr_flow(
+        ["hotfix", "--project", str(project), "--target", "main", "--authorization-phrase", HOTFIX_PHRASE],
+        module=pr_flow,
     )
 
-    assert result == 1
-    assert git_bare(remote, "rev-parse", "refs/heads/main") == head_commit
+    assert result.returncode == 1
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["command"] == "hotfix"
     assert status["details"]["reason"] == "hotfix_readback_mismatch"
@@ -1589,7 +2021,9 @@ def test_hotfix_writes_audit_record_when_post_push_readback_mismatches(tmp_path:
 
 
 def test_hotfix_missing_git_is_not_reported_as_missing_config(tmp_path: Path) -> None:
-    project, _remote, _before_commit = init_hotfix_project(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    write_hotfix_pr_flow_config(project)
     env = os.environ.copy()
     env["PATH"] = ""
 
@@ -1613,63 +2047,36 @@ def test_hotfix_missing_git_is_not_reported_as_missing_config(tmp_path: Path) ->
     assert status["details"]["reason"] == "git_fetch_target_failed"
 
 
-def test_hotfix_rejects_when_head_is_not_based_on_latest_remote_target(tmp_path: Path) -> None:
-    project, remote, _before_commit = init_hotfix_project(tmp_path)
-    integrator = tmp_path / "integrator"
-    clone_result = subprocess.run(
-        ["git", "clone", str(remote), str(integrator)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
-    git(integrator, "config", "user.email", "test@example.com")
-    git(integrator, "config", "user.name", "Test User")
-    git(integrator, "checkout", "-B", "main", "origin/main")
-    (integrator / "remote.txt").write_text("remote advance\n", encoding="utf-8")
-    git(integrator, "add", "remote.txt")
-    git(integrator, "commit", "-m", "advance target")
-    git(integrator, "push", "origin", "main")
-    remote_head = git_bare(remote, "rev-parse", "refs/heads/main")
-
-    result = run(
-        "hotfix",
-        "--project",
-        str(project),
-        "--target",
-        "main",
-        "--authorization-phrase",
-        HOTFIX_PHRASE,
+def test_hotfix_rejects_when_head_is_not_based_on_latest_remote_target(tmp_path: Path, monkeypatch) -> None:
+    remote_head = "a" * 40
+    project, result = run_hotfix_in_process(
+        tmp_path,
+        monkeypatch,
+        git_responses=[
+            (["fetch", "origin", "main"], "", 0),
+            (["rev-parse", "origin/main"], remote_head + "\n", 0),
+            (["rev-parse", "HEAD"], "b" * 40 + "\n", 0),
+            (["merge-base", "HEAD", "origin/main"], "c" * 40 + "\n", 0),
+        ],
     )
 
     assert result.returncode == 1
     assert "status: EXCEPTION_REQUIRED" in result.stdout
-    assert git_bare(remote, "rev-parse", "refs/heads/main") == remote_head
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["command"] == "hotfix"
     assert status["details"]["reason"] == "hotfix_base_mismatch"
     assert status["details"]["remoteHead"] == remote_head
 
 
-def test_hotfix_rejects_when_verify_command_fails(tmp_path: Path) -> None:
-    project, remote, before_commit = init_hotfix_project(
+def test_hotfix_rejects_when_verify_command_fails(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_hotfix_in_process(
         tmp_path,
-        verify_command="git rev-parse refs/heads/does-not-exist",
-    )
-
-    result = run(
-        "hotfix",
-        "--project",
-        str(project),
-        "--target",
-        "main",
-        "--authorization-phrase",
-        HOTFIX_PHRASE,
+        monkeypatch,
+        verify_returncode=1,
     )
 
     assert result.returncode == 1
     assert "status: EXCEPTION_REQUIRED" in result.stdout
-    assert git_bare(remote, "rev-parse", "refs/heads/main") == before_commit
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["command"] == "hotfix"
     assert status["details"]["reason"] == "hotfix_verify_failed"
@@ -1720,7 +2127,12 @@ def test_hotfix_pushes_head_to_target_and_writes_audit_record(tmp_path: Path) ->
 
 def test_cleanup_merged_pr_checks_out_base_pulls_and_deletes_branches(tmp_path: Path) -> None:
     project, remote = init_cleanup_project(tmp_path)
-    fake_bin, calls_path = write_fake_gh_sequence(tmp_path / "bin", [{"stdout": cleanup_pr_view_json()}])
+    fake_bin, calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {"stdout": cleanup_pr_view_json()},
+        ],
+    )
     stale_local_base = git(project, "rev-parse", "main")
     remote_base_after_merge = git_bare(remote, "rev-parse", "refs/heads/main")
     assert stale_local_base != remote_base_after_merge
@@ -1745,15 +2157,21 @@ def test_cleanup_merged_pr_checks_out_base_pulls_and_deletes_branches(tmp_path: 
     assert calls == [["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"]]
 
 
-def test_cleanup_partial_remote_delete_failure_reports_recovery_state(tmp_path: Path) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    fake_bin = write_fake_gh(tmp_path / "bin", stdout=cleanup_pr_view_json(base_ref="missing-base"))
-
-    result = run_with_path(fake_bin, "cleanup", "--project", str(project), "--pr", "12")
+def test_cleanup_partial_remote_delete_failure_reports_recovery_state(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_cleanup_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=cleanup_pr_view_json(base_ref="missing-base"),
+        git_responses=[
+            (["status", "--short"], "", 0),
+            (["branch", "--show-current"], "feature/example\n", 0),
+            (["push", "origin", "--delete", "feature/example"], "", 0),
+            (["ls-remote", "--heads", "origin", "feature/example"], "", 0),
+            (["checkout", "missing-base"], "", 1),
+        ],
+    )
 
     assert_cleanup_exception(project, result, "git_checkout_base_failed")
-    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode != 0
-    assert git(project, "branch", "--show-current") == "feature/example"
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["details"]["completedCleanupSteps"] == ["remote_head_deleted", "remote_delete_confirmed"]
     assert "Remote head branch was already deleted" in status["details"]["recovery"]
@@ -1761,34 +2179,21 @@ def test_cleanup_partial_remote_delete_failure_reports_recovery_state(tmp_path: 
 
 
 def test_cleanup_pull_failure_after_base_checkout_reports_recovery_state(tmp_path: Path, monkeypatch) -> None:
-    pr_flow = load_pr_flow_module()
-    project, remote = init_cleanup_project(tmp_path)
-    original_require_git_success = pr_flow.require_git_success
+    project, result = run_cleanup_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=cleanup_pr_view_json(),
+        git_responses=[
+            (["status", "--short"], "", 0),
+            (["branch", "--show-current"], "feature/example\n", 0),
+            (["push", "origin", "--delete", "feature/example"], "", 0),
+            (["ls-remote", "--heads", "origin", "feature/example"], "", 0),
+            (["checkout", "main"], "", 0),
+            (["pull", "--ff-only", "origin", "main"], "synthetic pull failure", 1),
+        ],
+    )
 
-    monkeypatch.setattr(pr_flow, "view_pr_for_cleanup", lambda project_arg, pr_number: json.loads(cleanup_pr_view_json()))
-
-    def fail_pull(project_arg: Path, reason: str, *args: str) -> subprocess.CompletedProcess[str]:
-        if args == ("pull", "--ff-only", "origin", "main"):
-            raise pr_flow.PrFlowError(
-                reason,
-                {
-                    "reason": reason,
-                    "returncode": 1,
-                    "stdout": "",
-                    "stderr": "synthetic pull failure",
-                },
-            )
-        return original_require_git_success(project_arg, reason, *args)
-
-    monkeypatch.setattr(pr_flow, "require_git_success", fail_pull)
-
-    result = pr_flow.run_cleanup(pr_flow.argparse.Namespace(project=project, pr="12", command="cleanup"))
-
-    assert result == 1
-    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode != 0
-    assert git(project, "branch", "--show-current") == "main"
-    local_branches = git(project, "branch", "--format", "%(refname:short)").splitlines()
-    assert "feature/example" in local_branches
+    assert result.returncode == 1
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["command"] == "cleanup"
     assert status["details"]["reason"] == "git_pull_ff_only_failed"
@@ -1800,40 +2205,51 @@ def test_cleanup_pull_failure_after_base_checkout_reports_recovery_state(tmp_pat
     assert "Remote head branch was already deleted" in status["details"]["recovery"]
 
 
-def test_cleanup_rejects_pr_state_that_is_not_merged(tmp_path: Path) -> None:
-    project, _remote = init_cleanup_project(tmp_path)
-    fake_bin = write_fake_gh(tmp_path / "bin", stdout=cleanup_pr_view_json(state="OPEN"))
+def test_cleanup_rejects_pr_state_that_is_not_merged(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_cleanup_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=cleanup_pr_view_json(state="OPEN"),
+    )
 
-    result = run_with_path(fake_bin, "cleanup", "--project", str(project), "--pr", "12")
 
     assert_cleanup_exception(project, result, "pr_not_merged")
 
 
-def test_cleanup_rejects_dirty_worktree(tmp_path: Path) -> None:
-    project, _remote = init_cleanup_project(tmp_path)
-    fake_bin = write_fake_gh(tmp_path / "bin", stdout=cleanup_pr_view_json())
-    (project / "dirty.txt").write_text("dirty\n", encoding="utf-8")
-
-    result = run_with_path(fake_bin, "cleanup", "--project", str(project), "--pr", "12")
+def test_cleanup_rejects_dirty_worktree(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_cleanup_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=cleanup_pr_view_json(),
+        git_responses=[(["status", "--short"], "dirty.txt\n", 0)],
+    )
 
     assert_cleanup_exception(project, result, "dirty_worktree")
 
 
-def test_cleanup_rejects_head_branch_equal_to_base_branch(tmp_path: Path) -> None:
-    project, _remote = init_cleanup_project(tmp_path)
-    fake_bin = write_fake_gh(tmp_path / "bin", stdout=cleanup_pr_view_json(head_ref="main", base_ref="main"))
-    git(project, "checkout", "main")
-
-    result = run_with_path(fake_bin, "cleanup", "--project", str(project), "--pr", "12")
+def test_cleanup_rejects_head_branch_equal_to_base_branch(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_cleanup_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=cleanup_pr_view_json(head_ref="main", base_ref="main"),
+        git_responses=[
+            (["status", "--short"], "", 0),
+            (["branch", "--show-current"], "main\n", 0),
+        ],
+    )
 
     assert_cleanup_exception(project, result, "protected_base_branch")
 
 
-def test_cleanup_rejects_current_branch_mismatch(tmp_path: Path) -> None:
-    project, _remote = init_cleanup_project(tmp_path)
-    fake_bin = write_fake_gh(tmp_path / "bin", stdout=cleanup_pr_view_json())
-    git(project, "checkout", "main")
-
-    result = run_with_path(fake_bin, "cleanup", "--project", str(project), "--pr", "12")
+def test_cleanup_rejects_current_branch_mismatch(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_cleanup_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=cleanup_pr_view_json(),
+        git_responses=[
+            (["status", "--short"], "", 0),
+            (["branch", "--show-current"], "main\n", 0),
+        ],
+    )
 
     assert_cleanup_exception(project, result, "current_branch_mismatch")

@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import concurrent.futures
+import dataclasses
 import fnmatch
 import hashlib
+import importlib.util
 import json
 import os
 import platform
+import shlex
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any
 from collections.abc import Callable
@@ -14,11 +20,23 @@ from collections.abc import Callable
 
 FRAMEWORK_VERSION = "0.1.0"
 CACHE_VERSION = "1"
+DEFAULT_CHECK_TIMEOUT_SECONDS = 300
 Runner = Callable[..., subprocess.CompletedProcess[Any]]
 
 
 class ConfigError(Exception):
     pass
+
+
+@dataclasses.dataclass
+class CheckResult:
+    index: int
+    check: dict[str, Any]
+    returncode: int
+    stdout: str = ""
+    stderr: str = ""
+    duration_seconds: float = 0.0
+    cache_key: str | None = None
 
 
 def _is_non_empty_string(value: Any) -> bool:
@@ -29,6 +47,43 @@ def _is_non_empty_string_list(value: Any) -> bool:
     return isinstance(value, list) and all(
         _is_non_empty_string(item) for item in value
     )
+
+
+def _command_tokens(command: Any) -> list[str]:
+    if isinstance(command, str):
+        try:
+            return shlex.split(command)
+        except ValueError:
+            return command.split()
+    if isinstance(command, list):
+        return [str(item) for item in command]
+    return []
+
+
+def _uses_pytest_xdist(command: Any) -> bool:
+    tokens = _command_tokens(command)
+    has_xdist_flag = any(
+        token == "-n"
+        or (token.startswith("-n") and len(token) > 2)
+        or token == "--numprocesses"
+        or token.startswith("--numprocesses=")
+        for token in tokens
+    )
+    has_pytest = any(token == "pytest" or token.endswith("/pytest") or token.endswith("\\pytest") for token in tokens)
+    has_pytest_module = any(
+        token == "-m" and index + 1 < len(tokens) and tokens[index + 1] == "pytest"
+        for index, token in enumerate(tokens)
+    )
+    return has_xdist_flag and (has_pytest or has_pytest_module)
+
+
+def _dependency_error(check: dict[str, Any]) -> str | None:
+    if _uses_pytest_xdist(check.get("command")) and importlib.util.find_spec("xdist") is None:
+        return (
+            f"missing_dependency: {check.get('id')}: pytest-xdist is required "
+            "for pytest -n; install requirements-dev.txt\n"
+        )
+    return None
 
 
 def _load_config(project: Path) -> dict[str, Any]:
@@ -51,6 +106,17 @@ def _load_config(project: Path) -> dict[str, Any]:
             raise ConfigError(
                 f"invalid_config: .test-framework/config.json: {section} must be object"
             )
+        if section == "verify":
+            max_parallel = section_config.get("maxParallel")
+            if max_parallel is not None and (
+                isinstance(max_parallel, bool)
+                or not isinstance(max_parallel, int)
+                or max_parallel < 0
+            ):
+                raise ConfigError(
+                    "invalid_config: .test-framework/config.json: "
+                    "verify.maxParallel must be non-negative integer"
+                )
         checks = section_config.get("checks", [])
         if not isinstance(checks, list):
             raise ConfigError(
@@ -121,6 +187,37 @@ def _git_names(project: Path, *args: str) -> list[str] | None:
     return result.stdout.splitlines()
 
 
+def _git_status_names(project: Path) -> list[str] | None:
+    result = subprocess.run(
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        cwd=project,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        return None
+    entries = result.stdout.split("\0")
+    names: list[str] = []
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if not entry:
+            continue
+        status = entry[:2]
+        path = entry[3:]
+        if status[0] in {"R", "C"}:
+            # In porcelain v1 -z mode, rename/copy entries are destination then source.
+            if path:
+                names.append(path)
+            index += 1
+            continue
+        if path:
+            names.append(path)
+    return names
+
+
 def _is_excluded_relative(relative: str) -> bool:
     parts = relative.split("/")
     return (
@@ -150,6 +247,9 @@ def _all_project_files(project: Path) -> list[str]:
 
 
 def _changed_files(project: Path) -> list[str]:
+    status_names = _git_status_names(project)
+    if status_names is not None:
+        return _dedupe(status_names)
     commands = [
         ("diff", "--name-only", "--cached"),
         ("diff", "--name-only"),
@@ -331,16 +431,42 @@ def _cache_load(project: Path, key: str) -> bool:
 def _cache_store(project: Path, key: str, check: dict[str, Any]) -> None:
     path = _cache_path(project, key)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        _stable_json({"status": "passed", "id": check.get("id")}) + "\n",
-        encoding="utf-8",
-    )
+    temp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        temp.write_text(
+            _stable_json({"status": "passed", "id": check.get("id")}) + "\n",
+            encoding="utf-8",
+        )
+        temp.replace(path)
+    except Exception:
+        temp.unlink(missing_ok=True)
+        raise
+
+
+def _format_seconds(value: float) -> str:
+    return str(int(value)) if value == int(value) else str(value)
+
+
+def _check_timeout_seconds(config: dict[str, Any], check: dict[str, Any]) -> float | None:
+    timeout = check.get("timeoutSeconds")
+    verify_config = config.get("verify")
+    if timeout is None and isinstance(verify_config, dict):
+        timeout = verify_config.get("timeoutSeconds")
+    if timeout is None:
+        return float(DEFAULT_CHECK_TIMEOUT_SECONDS)
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+        raise ValueError(f"invalid_timeoutSeconds: {check.get('id')}")
+    return float(timeout)
 
 
 def _run_check(project: Path, check: dict[str, Any], runner: Runner) -> int:
     command = check.get("command")
     if not command:
         print(f"missing_command: {check.get('id')}", file=sys.stderr)
+        return 1
+    dependency_error = _dependency_error(check)
+    if dependency_error is not None:
+        print(dependency_error, end="", file=sys.stderr)
         return 1
     use_shell = isinstance(command, str)
     try:
@@ -363,8 +489,115 @@ def _run_check(project: Path, check: dict[str, Any], runner: Runner) -> int:
     return int(result.returncode)
 
 
+def _run_check_result(
+    index: int,
+    project: Path,
+    check: dict[str, Any],
+    config: dict[str, Any],
+    changed_files: list[str],
+    runner: Runner,
+) -> CheckResult:
+    started_at = time.monotonic()
+    try:
+        key = _cache_key(project, config, check, changed_files)
+        timeout_seconds = _check_timeout_seconds(config, check)
+    except ValueError as error:
+        return CheckResult(
+            index,
+            check,
+            1,
+            stderr=f"{error}\n",
+            duration_seconds=time.monotonic() - started_at,
+        )
+
+    command = check.get("command")
+    if not command:
+        return CheckResult(
+            index,
+            check,
+            1,
+            stderr=f"missing_command: {check.get('id')}\n",
+            duration_seconds=time.monotonic() - started_at,
+            cache_key=key,
+        )
+    dependency_error = _dependency_error(check)
+    if dependency_error is not None:
+        return CheckResult(
+            index,
+            check,
+            1,
+            stderr=dependency_error,
+            duration_seconds=time.monotonic() - started_at,
+            cache_key=key,
+        )
+    use_shell = isinstance(command, str)
+    run_kwargs = {
+        "cwd": project,
+        "check": False,
+        "text": True,
+        "capture_output": True,
+        "shell": use_shell,
+    }
+    if timeout_seconds is not None:
+        run_kwargs["timeout"] = timeout_seconds
+    try:
+        result = runner(command, **run_kwargs)
+    except FileNotFoundError:
+        executable = command[0] if isinstance(command, list) else str(command)
+        return CheckResult(
+            index,
+            check,
+            1,
+            stderr=f"command_not_found: {check.get('id')}: {executable}\n",
+            duration_seconds=time.monotonic() - started_at,
+            cache_key=key,
+        )
+    except subprocess.TimeoutExpired:
+        return CheckResult(
+            index,
+            check,
+            1,
+            stderr=f"check_timeout: {check.get('id')} exceeded {_format_seconds(timeout_seconds or 0)}s\n",
+            duration_seconds=time.monotonic() - started_at,
+            cache_key=key,
+        )
+    except Exception as error:
+        return CheckResult(
+            index,
+            check,
+            1,
+            stderr=(
+                f"parallel_check_exception: {check.get('id')}: "
+                f"{type(error).__name__}: {error}\n"
+            ),
+            duration_seconds=time.monotonic() - started_at,
+            cache_key=key,
+        )
+    return CheckResult(
+        index,
+        check,
+        int(result.returncode),
+        stdout=result.stdout or "",
+        stderr=result.stderr or "",
+        duration_seconds=time.monotonic() - started_at,
+        cache_key=key,
+    )
+
+
 def _checks(config: dict[str, Any], section: str) -> list[dict[str, Any]]:
     return list(config.get(section, {}).get("checks", []))
+
+
+def _max_parallel_checks(config: dict[str, Any], parallel_count: int) -> int:
+    verify_config = config.get("verify")
+    configured = verify_config.get("maxParallel") if isinstance(verify_config, dict) else None
+    if isinstance(configured, bool):
+        return parallel_count
+    if configured == 0:
+        return parallel_count
+    if isinstance(configured, int) and configured > 0:
+        return min(parallel_count, configured)
+    return min(parallel_count, os.cpu_count() or 1)
 
 
 def _check_ids(checks: list[dict[str, Any]]) -> str:
@@ -415,19 +648,81 @@ def run_verify(
     changed_files = _changed_files(project)
     selected = checks if full else _selected_checks(checks, changed_files)
     failures = 0
+    if full:
+        indexed_selected = list(enumerate(selected))
+        parallel_checks = [(index, check) for index, check in indexed_selected if check.get("parallel") is True]
+        serial_checks = [(index, check) for index, check in indexed_selected if check.get("parallel") is not True]
+        results: list[CheckResult] = []
+        if parallel_checks:
+            max_workers = _max_parallel_checks(config, len(parallel_checks))
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+            interrupted = False
+            try:
+                futures = {
+                    executor.submit(_run_check_result, index, project, check, config, changed_files, runner): (
+                        index,
+                        check,
+                    )
+                    for index, check in parallel_checks
+                }
+                for future in futures:
+                    index, check = futures[future]
+                    try:
+                        results.append(future.result())
+                    except KeyboardInterrupt as error:
+                        interrupted = True
+                        results.append(
+                            CheckResult(
+                                index,
+                                check,
+                                1,
+                                stderr=(
+                                    f"parallel_check_interrupted: {check.get('id')}: "
+                                    f"KeyboardInterrupt: {error}\n"
+                                ),
+                            )
+                        )
+                        break
+            finally:
+                executor.shutdown(wait=not interrupted, cancel_futures=interrupted)
+            if not interrupted:
+                results.extend(
+                    _run_check_result(index, project, check, config, changed_files, runner)
+                    for index, check in serial_checks
+                )
+        else:
+            results.extend(
+                _run_check_result(index, project, check, config, changed_files, runner)
+                for index, check in serial_checks
+            )
+        failed_ids: list[str] = []
+        for result in sorted(results, key=lambda item: item.index):
+            if result.stdout:
+                print(result.stdout, end="")
+            if result.stderr:
+                print(result.stderr, end="", file=sys.stderr)
+            print(f"duration: {result.check.get('id')} seconds={result.duration_seconds:.2f}")
+            if result.returncode == 0:
+                if result.cache_key is not None:
+                    _cache_store(project, result.cache_key, result.check)
+            else:
+                failures += 1
+                failed_ids.append(str(result.check.get("id")))
+        if failed_ids:
+            print(f"failed: {', '.join(failed_ids)}")
+        print(f"checked: {_check_ids(selected)}")
+        print(f"full-not-run: {str(not full).lower()}")
+        if failures:
+            print("status: failed")
+            return 1
+        print("status: passed")
+        return 0
     for check in selected:
         try:
             key = _cache_key(project, config, check, changed_files)
         except ValueError as error:
             print(str(error), file=sys.stderr)
             failures += 1
-            continue
-        if full:
-            result = _run_check(project, check, runner)
-            if result == 0:
-                _cache_store(project, key, check)
-            else:
-                failures += 1
             continue
         if _cache_load(project, key):
             print(f"cache-hit: {check.get('id')}")

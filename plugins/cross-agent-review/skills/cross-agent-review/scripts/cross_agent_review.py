@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -11,13 +12,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 
-REQUIRED_FILE_ARGS = ["diff_file", "spec_file", "design_file", "tasks_file", "tests_file"]
+REQUIRED_FILE_ARGS = ["diff_file", "spec_file", "design_file", "tasks_file"]
 INPUT_SNAPSHOT_NAMES = {
     "diff_file": "diff.patch",
     "spec_file": "spec.md",
     "design_file": "design.md",
     "tasks_file": "tasks.md",
-    "tests_file": "tests.txt",
 }
 PLACEHOLDER_COMPAT_DISABLE_RISK_REVIEW = "__placeholder_compat__"
 REVIEWER_ROLES = [
@@ -26,12 +26,58 @@ REVIEWER_ROLES = [
     "tests-and-edge-cases",
     "risk-review",
 ]
+ROLE_FOCUS = {
+    "spec-alignment": "\n".join(
+        [
+            "Focus for spec-alignment:",
+            "- Compare the supplied spec, design, tasks, and changed files for requirement drift.",
+            "- Report missing required behavior, scope creep, or contradictions between artifacts.",
+            "- Do not review implementation style unless it changes the promised behavior.",
+        ]
+    ),
+    "implementation-correctness": "\n".join(
+        [
+            "Focus for implementation-correctness:",
+            "- Review changed implementation paths for concrete correctness bugs.",
+            "- Use path-scoped diffs and source reads; do not read large input files wholesale.",
+            "- Report only issues with executable behavior, data flow, state handling, or compatibility.",
+        ]
+    ),
+    "tests-and-edge-cases": "\n".join(
+        [
+            "Focus for tests-and-edge-cases:",
+            "- Review test coverage gaps for changed behavior and required scenarios.",
+            "- Review regression protection for previously supported behavior and integration contracts.",
+            "- Review edge cases, error paths, boundary inputs, and state transitions implied by the supplied inputs.",
+            "- Do not claim tests passed, failed, or were run; no test results are supplied.",
+            "- Only create findings for concrete missing coverage, weak regression protection, or unhandled edge cases.",
+        ]
+    ),
+    "risk-review": "\n".join(
+        [
+            "Focus for risk-review:",
+            "- Review operational, security, reliability, and maintainability risks introduced by the change.",
+            "- Separate concrete risks from preferences; downgrade speculative concerns to WARNING or SUGGESTION.",
+            "- Do not duplicate findings already covered by implementation-correctness unless impact is broader.",
+        ]
+    ),
+}
+SEVERITY_RUBRIC = "\n".join(
+    [
+        "Severity rubric:",
+        "- CRITICAL: likely data loss, security exposure, broken required workflow, or reviewer/tool failure.",
+        "- IMPORTANT: concrete regression, missing required scenario, or edge case likely to break normal use.",
+        "- WARNING: plausible risk or coverage gap with limited/uncertain impact.",
+        "- SUGGESTION: maintainability or clarity improvement that should not block.",
+    ]
+)
 READONLY_TOOLS = ["Read", "Glob", "Grep", "Bash(git diff *)", "Bash(git show *)", "Bash(git status *)"]
 DISALLOWED_TOOLS = ["Edit", "Write", "NotebookEdit", "TodoWrite", "MultiEdit", "Bash"]
 # Individual reviewers time out first; the subprocess gets a wider window to
 # aggregate structured timeout findings and write normal outputs.
-SDK_DISPATCH_TIMEOUT_SECONDS = 600
+SDK_DISPATCH_TIMEOUT_SECONDS = 540
 SDK_REVIEWER_TIMEOUT_SECONDS = 480
+SDK_REVIEWER_ATTEMPTS = 2
 BLOCKING_SEVERITIES = {"CRITICAL", "IMPORTANT"}
 NON_BLOCKING_SEVERITIES = {"WARNING", "SUGGESTION"}
 ALL_SEVERITIES = BLOCKING_SEVERITIES | NON_BLOCKING_SEVERITIES
@@ -52,7 +98,6 @@ class ReviewArgs:
     spec_file: Path
     design_file: Path
     tasks_file: Path
-    tests_file: Path
     output_dir: Path | None
     sdk_python: Path | None
     fake_reviewer_results: str | None
@@ -70,7 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--spec-file", type=Path, required=True)
     run_parser.add_argument("--design-file", type=Path, required=True)
     run_parser.add_argument("--tasks-file", type=Path, required=True)
-    run_parser.add_argument("--tests-file", type=Path, required=True)
+    run_parser.add_argument("--tests-file", type=Path, help=argparse.SUPPRESS)
     run_parser.add_argument("--output-dir", type=Path)
     run_parser.add_argument("--sdk-python", type=Path)
     run_parser.add_argument("--fake-reviewer-results")
@@ -130,7 +175,6 @@ def parse_review_args(args: argparse.Namespace) -> ReviewArgs:
         spec_file=args.spec_file,
         design_file=args.design_file,
         tasks_file=args.tasks_file,
-        tests_file=args.tests_file,
         output_dir=args.output_dir,
         sdk_python=args.sdk_python,
         fake_reviewer_results=args.fake_reviewer_results,
@@ -210,43 +254,193 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
-    return "\n\n".join(
+def input_reference(label: str, path: Path) -> str:
+    content = path.read_bytes()
+    return "\n".join(
         [
-            f"Role: {role}",
-            "Return only a single JSON object. Do not use Markdown.",
-            "Schema:",
-            json.dumps(
-                {
-                    "role": role,
-                    "status": "completed",
-                    "findings": [
-                        {
-                            "severity": "CRITICAL",
-                            "location": "path-or-component",
-                            "summary": "one-line issue summary",
-                            "evidence": "specific evidence from the supplied inputs",
-                            "recommendation": "concrete next action",
-                        }
-                    ],
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            "Use only these severity values: CRITICAL, IMPORTANT, WARNING, SUGGESTION.",
-            'If there are no issues, return "findings": [].',
-            "Do not put pass, aligned, ok, or informational observations in findings.",
-            "Do not use severity aliases such as high, medium, low, minor, or info.",
+            f"{label} file: {path}",
+            f"{label} bytes: {len(content)}",
+            f"{label} sha256: {hashlib.sha256(content).hexdigest()}",
+        ]
+    )
+
+
+def diff_path(value: str, prefix: str) -> str:
+    return value[len(prefix) :] if value.startswith(prefix) else value
+
+
+def parse_diff_git_paths(line: str) -> tuple[str, str] | None:
+    rest = line.removeprefix("diff --git ")
+    if rest.startswith('"'):
+        parts = shlex.split(rest)
+        if len(parts) >= 2:
+            return diff_path(parts[0], "a/"), diff_path(parts[1], "b/")
+    separator = rest.rfind(" b/")
+    if separator != -1:
+        return diff_path(rest[:separator], "a/"), diff_path(rest[separator + 1 :], "b/")
+    parts = rest.split(maxsplit=1)
+    if len(parts) >= 2:
+        return diff_path(parts[0], "a/"), diff_path(parts[1], "b/")
+    return None
+
+
+def changed_file_entries_from_diff(path: Path) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+
+    def append_current() -> None:
+        if current is None:
+            return
+        changed_path = current.get("path") or current.get("new_path") or current.get("old_path")
+        if not changed_path:
+            return
+        entry = {"path": changed_path, "status": current.get("status", "modified")}
+        previous_path = current.get("old_path")
+        if entry["status"] in {"renamed", "copied"} and previous_path and previous_path != changed_path:
+            entry["previous_path"] = previous_path
+        if entry not in entries:
+            entries.append(entry)
+
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("diff --git "):
+            append_current()
+            current = None
+            parsed_paths = parse_diff_git_paths(line)
+            if parsed_paths is None:
+                continue
+            old_path, new_path = parsed_paths
+            current = {
+                "old_path": old_path,
+                "new_path": new_path,
+                "path": new_path,
+                "status": "modified",
+            }
+            continue
+        if current is None:
+            continue
+        if line.startswith("new file mode "):
+            current["status"] = "added"
+            current["path"] = current["new_path"]
+        elif line.startswith("deleted file mode "):
+            current["status"] = "deleted"
+            current["path"] = current["old_path"]
+        elif line.startswith("rename from "):
+            current["status"] = "renamed"
+            current["old_path"] = line.removeprefix("rename from ")
+        elif line.startswith("rename to "):
+            current["status"] = "renamed"
+            current["new_path"] = line.removeprefix("rename to ")
+            current["path"] = current["new_path"]
+        elif line.startswith("copy from "):
+            current["status"] = "copied"
+            current["old_path"] = line.removeprefix("copy from ")
+        elif line.startswith("copy to "):
+            current["status"] = "copied"
+            current["new_path"] = line.removeprefix("copy to ")
+            current["path"] = current["new_path"]
+    append_current()
+    return entries
+
+
+def changed_files_from_diff(path: Path, limit: int = 160) -> str:
+    files = [entry["path"] for entry in changed_file_entries_from_diff(path)]
+    shown = files[:limit]
+    lines = ["Changed files:"]
+    lines.extend(f"- {item}" for item in shown)
+    if len(files) > limit:
+        lines.append(f"- ... {len(files) - limit} more")
+    return "\n".join(lines)
+
+
+def input_manifest_path(review_args: ReviewArgs) -> Path:
+    return output_dir_for(review_args) / "inputs" / "manifest.json"
+
+
+def relative_to_output(review_args: ReviewArgs, path: Path) -> str:
+    try:
+        return path.relative_to(output_dir_for(review_args)).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def input_file_metadata(review_args: ReviewArgs, path: Path) -> dict:
+    content = path.read_bytes()
+    return {
+        "path": relative_to_output(review_args, path),
+        "bytes": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+def build_input_manifest(review_args: ReviewArgs) -> dict:
+    return {
+        "change": review_args.change,
+        "base_ref": review_args.base_ref,
+        "head_ref": review_args.head_ref,
+        "inputs": {
+            "diff": input_file_metadata(review_args, review_args.diff_file),
+            "spec": input_file_metadata(review_args, review_args.spec_file),
+            "design": input_file_metadata(review_args, review_args.design_file),
+            "tasks": input_file_metadata(review_args, review_args.tasks_file),
+        },
+        "changed_files": changed_file_entries_from_diff(review_args.diff_file),
+    }
+
+
+def write_input_manifest(review_args: ReviewArgs) -> Path:
+    path = input_manifest_path(review_args)
+    write_json(path, build_input_manifest(review_args))
+    return path
+
+
+def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
+    parts = [
+        f"Role: {role}",
+        "Return only a single JSON object. Do not use Markdown.",
+        "Schema:",
+        json.dumps(
+            {
+                "role": role,
+                "status": "completed",
+                "findings": [
+                    {
+                        "severity": "CRITICAL",
+                        "location": "path-or-component",
+                        "summary": "one-line issue summary",
+                        "evidence": "specific evidence from the supplied inputs",
+                        "recommendation": "concrete next action",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        "Use only these severity values: CRITICAL, IMPORTANT, WARNING, SUGGESTION.",
+        'If there are no issues, return "findings": [].',
+        "Do not put pass, aligned, ok, or informational observations in findings.",
+        "Do not use severity aliases such as high, medium, low, minor, or info.",
+        SEVERITY_RUBRIC,
+    ]
+    focus = ROLE_FOCUS.get(role)
+    if focus:
+        parts.append(focus)
+    parts.extend(
+        [
             f"Change: {review_args.change}",
             f"Base ref: {review_args.base_ref}",
             f"Head ref: {review_args.head_ref}",
-            "Diff:\n" + read_text(review_args.diff_file),
-            "Spec:\n" + read_text(review_args.spec_file),
-            "Design:\n" + read_text(review_args.design_file),
-            "Tasks:\n" + read_text(review_args.tasks_file),
-            "Tests:\n" + read_text(review_args.tests_file),
+            f"Manifest file: {input_manifest_path(review_args)}",
+            "Use the referenced input files as the source of truth. Read only the sections needed for this review.",
+            "Use git diff/show/status read-only commands if the file references are insufficient.",
+            "Do not read diff.patch wholesale. Use the changed-file list and path-scoped git diff commands.",
+            changed_files_from_diff(review_args.diff_file),
+            input_reference("Diff", review_args.diff_file),
+            input_reference("Spec", review_args.spec_file),
+            input_reference("Design", review_args.design_file),
+            input_reference("Tasks", review_args.tasks_file),
         ]
     )
+    return "\n\n".join(parts)
 
 
 def dispatch_reviewers(review_args: ReviewArgs, sdk_python: str) -> list[dict]:
@@ -256,12 +450,61 @@ def dispatch_reviewers(review_args: ReviewArgs, sdk_python: str) -> list[dict]:
     return run_sdk_dispatch_subprocess(review_args, sdk_python)
 
 
+def reviewer_failure(role: str, summary: str, evidence: str, recommendation: str) -> dict:
+    return {
+        "role": role,
+        "status": "failed",
+        "findings": [
+            {
+                "severity": "CRITICAL",
+                "location": role,
+                "summary": summary,
+                "evidence": evidence,
+                "recommendation": recommendation,
+            }
+        ],
+    }
+
+
+def timeout_reviewer_results(raw_dir: Path, evidence: str) -> list[dict]:
+    reviewers: list[dict] = []
+    for role in REVIEWER_ROLES:
+        raw_path = raw_dir / f"{role}.txt"
+        if raw_path.exists():
+            raw_text = raw_path.read_text(encoding="utf-8", errors="replace")
+            parsed = parse_reviewer_result(raw_text)
+            if parsed is not None:
+                reviewers.append(parsed)
+                continue
+            role_evidence = raw_text or evidence
+        else:
+            role_evidence = evidence
+        reviewers.append(
+            reviewer_failure(
+                role,
+                "Reviewer dispatch timed out",
+                role_evidence,
+                "Rerun review after checking Claude Agent SDK availability.",
+            )
+        )
+    return reviewers
+
+
 def run_sdk_dispatch_subprocess(review_args: ReviewArgs, sdk_python: str) -> list[dict]:
+    prompts = {role: reviewer_prompt(review_args, role) for role in REVIEWER_ROLES}
+    prompts_dir = output_dir_for(review_args) / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    for role, prompt in prompts.items():
+        (prompts_dir / f"{role}.txt").write_text(prompt, encoding="utf-8")
+    raw_dir = output_dir_for(review_args) / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "cwd": str(Path.cwd()),
         "roles": REVIEWER_ROLES,
         "readonly_tools": READONLY_TOOLS,
-        "prompts": {role: reviewer_prompt(review_args, role) for role in REVIEWER_ROLES},
+        "prompts": prompts,
+        "raw_dir": str(raw_dir),
+        "force_exit": True,
     }
     try:
         result = subprocess.run(
@@ -273,7 +516,10 @@ def run_sdk_dispatch_subprocess(review_args: ReviewArgs, sdk_python: str) -> lis
             timeout=SDK_DISPATCH_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as exc:
-        raise ValueError(f"sdk_dispatch_timeout: exceeded {SDK_DISPATCH_TIMEOUT_SECONDS}s") from exc
+        return timeout_reviewer_results(
+            raw_dir,
+            f"sdk_dispatch_timeout: exceeded {SDK_DISPATCH_TIMEOUT_SECONDS}s",
+        )
     if result.returncode != 0:
         raise ValueError(f"sdk_dispatch_failed: {result.stderr.strip() or result.stdout.strip()}")
     try:
@@ -355,8 +601,16 @@ def run_sdk_dispatch() -> int:
     import asyncio
     from claude_agent_sdk import ClaudeAgentOptions, query
 
+    payload = json.loads(sys.stdin.read())
+
     async def collect() -> list[dict]:
-        payload = json.loads(sys.stdin.read())
+        raw_dir = Path(payload["raw_dir"]) if payload.get("raw_dir") else None
+
+        def write_raw(role: str, text: str) -> None:
+            if raw_dir is None:
+                return
+            raw_dir.mkdir(parents=True, exist_ok=True)
+            (raw_dir / f"{role}.txt").write_text(text, encoding="utf-8")
 
         async def query_one(role: str) -> dict:
             options = ClaudeAgentOptions(
@@ -368,6 +622,7 @@ def run_sdk_dispatch() -> int:
             async for message in query(prompt=payload["prompts"][role], options=options):
                 if hasattr(message, "result"):
                     result_text = message.result
+            write_raw(role, result_text)
             parsed = parse_reviewer_result(result_text)
             if parsed is not None:
                 return parsed
@@ -379,33 +634,58 @@ def run_sdk_dispatch() -> int:
                         "severity": "CRITICAL",
                         "location": role,
                         "summary": "Reviewer returned invalid JSON",
-                        "evidence": result_text,
+                        "evidence": result_text or "<empty reviewer result>",
                         "recommendation": "Rerun review after checking reviewer prompt",
                     }
                 ],
             }
 
         async def run_one(role: str) -> dict:
-            try:
-                return await asyncio.wait_for(query_one(role), timeout=SDK_REVIEWER_TIMEOUT_SECONDS)
-            except asyncio.TimeoutError:
-                return {
-                    "role": role,
-                    "status": "failed",
-                    "findings": [
-                        {
-                            "severity": "CRITICAL",
-                            "location": role,
-                            "summary": "Reviewer timed out",
-                            "evidence": f"Exceeded {SDK_REVIEWER_TIMEOUT_SECONDS} seconds.",
-                            "recommendation": "Rerun review after checking Claude Agent SDK availability.",
-                        }
-                    ],
-                }
+            last_error: Exception | None = None
+            for attempt in range(1, SDK_REVIEWER_ATTEMPTS + 1):
+                try:
+                    return await asyncio.wait_for(query_one(role), timeout=SDK_REVIEWER_TIMEOUT_SECONDS)
+                except asyncio.TimeoutError:
+                    return {
+                        "role": role,
+                        "status": "failed",
+                        "findings": [
+                            {
+                                "severity": "CRITICAL",
+                                "location": role,
+                                "summary": "Reviewer timed out",
+                                "evidence": f"Exceeded {SDK_REVIEWER_TIMEOUT_SECONDS} seconds.",
+                                "recommendation": "Rerun review after checking Claude Agent SDK availability.",
+                            }
+                        ],
+                    }
+                except Exception as error:
+                    last_error = error
+                    write_raw(role, f"{type(error).__name__}: {error}")
+                    if attempt < SDK_REVIEWER_ATTEMPTS:
+                        await asyncio.sleep(1)
+                        continue
+            return {
+                "role": role,
+                "status": "failed",
+                "findings": [
+                    {
+                        "severity": "CRITICAL",
+                        "location": role,
+                        "summary": "Reviewer SDK dispatch failed",
+                        "evidence": f"{type(last_error).__name__}: {last_error}",
+                        "recommendation": "Rerun review after checking Claude Agent SDK availability.",
+                    }
+                ],
+            }
 
         return await asyncio.gather(*(run_one(role) for role in payload["roles"]))
 
     print(json.dumps(asyncio.run(collect()), ensure_ascii=False))
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if payload.get("force_exit"):
+        os._exit(0)
     return 0
 
 
@@ -428,7 +708,9 @@ def archive_input_snapshots(review_args: ReviewArgs) -> ReviewArgs:
         target = inputs_dir / filename
         target.write_bytes(source.read_bytes())
         replacements[field] = target
-    return replace(review_args, **replacements)
+    archived = replace(review_args, **replacements)
+    write_input_manifest(archived)
+    return archived
 
 
 def first_text(raw: dict, names: Sequence[str]) -> str:
@@ -570,8 +852,16 @@ def allowed_input_paths(review_args: ReviewArgs) -> list[Path]:
         review_args.spec_file,
         review_args.design_file,
         review_args.tasks_file,
-        review_args.tests_file,
     ]
+
+
+def output_artifact_paths(review_args: ReviewArgs) -> list[Path]:
+    out_dir = output_dir_for(review_args)
+    paths = [input_manifest_path(review_args)]
+    for directory in (out_dir / "prompts", out_dir / "raw"):
+        if directory.is_dir():
+            paths.extend(path for path in directory.glob("*.txt") if path.is_file())
+    return paths
 
 
 def write_outputs(review_args: ReviewArgs, summary: dict, extra_allowed_paths: Sequence[Path] = ()) -> int:
@@ -587,7 +877,14 @@ def write_outputs(review_args: ReviewArgs, summary: dict, extra_allowed_paths: S
         ensure_clean_subject(
             Path.cwd(),
             review_args.head_ref,
-            [*extra_allowed_paths, *allowed_input_paths(review_args), report_path, results_path, pass_path],
+            [
+                *extra_allowed_paths,
+                *allowed_input_paths(review_args),
+                *output_artifact_paths(review_args),
+                report_path,
+                results_path,
+                pass_path,
+            ],
         )
         report_hash = hashlib.sha256(report_path.read_bytes()).hexdigest()
         write_json(
@@ -613,21 +910,31 @@ def run_review(args: argparse.Namespace) -> int:
         return 2
     try:
         review_args = parse_review_args(args)
+        legacy_input_paths = [args.tests_file] if args.tests_file is not None else []
         original_input_paths = allowed_input_paths(review_args)
-        ensure_clean_subject(Path.cwd(), review_args.head_ref, original_input_paths)
+        ensure_clean_subject(Path.cwd(), review_args.head_ref, [*original_input_paths, *legacy_input_paths])
         review_args = archive_input_snapshots(review_args)
         sdk_python = resolve_sdk_python(
             review_args.sdk_python,
             require_real_sdk=review_args.fake_reviewer_results is None or review_args.sdk_python is not None,
         )
-        ensure_clean_subject(Path.cwd(), review_args.head_ref, [*original_input_paths, *allowed_input_paths(review_args)])
+        ensure_clean_subject(
+            Path.cwd(),
+            review_args.head_ref,
+            [
+                *original_input_paths,
+                *legacy_input_paths,
+                *allowed_input_paths(review_args),
+                *output_artifact_paths(review_args),
+            ],
+        )
         reviewers = dispatch_reviewers(review_args, sdk_python)
         skipped = []
         if review_args.disable_risk_review:
             skipped.append({"role": "risk-review", "reason": review_args.disable_risk_review})
             reviewers = [item for item in reviewers if item.get("role") != "risk-review"]
         summary = aggregate(reviewers, skipped)
-        status = write_outputs(review_args, summary, original_input_paths)
+        status = write_outputs(review_args, summary, [*original_input_paths, *legacy_input_paths])
     except (ValueError, json.JSONDecodeError) as exc:
         print("status: failed")
         print(f"error: {exc}")

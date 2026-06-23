@@ -2,6 +2,8 @@
 comet_change: split-fast-full-verification
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-23-split-fast-full-verification
+status: final
 ---
 
 # Test Framework Plugin Design

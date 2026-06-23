@@ -13,6 +13,12 @@ The repository SHALL（必须）provide a local build command through the initia
 - **WHEN** repository active automation and guard（守卫） command files are inspected
 - **THEN** `.github/workflows/`, `.comet.yaml`, `.comet/config.yaml`, and `.test-framework/config.json` MUST NOT reference `scripts/check.py`
 
+## REMOVED Requirements
+
+### Requirement: Verify command runs the full Python test suite
+
+## ADDED Requirements
+
 ### Requirement: Verify command follows initialized test framework contract
 The repository SHALL（必须）provide a verify command initialized by the test-framework Plugin（测试框架插件） contract.
 

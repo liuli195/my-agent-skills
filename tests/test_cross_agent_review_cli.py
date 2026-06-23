@@ -1,11 +1,17 @@
 import asyncio
+import hashlib
 import json
 import io
 import importlib.util
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 import types
 from pathlib import Path
+
+from tests.support.git_templates import copy_template
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +24,20 @@ SCRIPT = (
     / "scripts"
     / "cross_agent_review.py"
 )
+
+
+def template_cache_key(*paths: Path) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(str(path.relative_to(REPO_ROOT)).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()[:12]
+
+
+TEMPLATE_CACHE_KEY = template_cache_key(Path(__file__), SCRIPT)
+TEMPLATE_ROOT = Path(tempfile.gettempdir()) / f"cross-agent-review-test-templates-{TEMPLATE_CACHE_KEY}"
 
 
 def load_script_module():
@@ -46,6 +66,10 @@ def write_file(path: Path, text: str = "content\n") -> Path:
     return path
 
 
+def test_cross_agent_review_template_cache_key_includes_script_contents() -> None:
+    assert TEMPLATE_CACHE_KEY == template_cache_key(Path(__file__), SCRIPT)
+
+
 def test_missing_required_args_fail() -> None:
     result = run("run", "--change", "demo")
 
@@ -70,8 +94,6 @@ def test_missing_input_file_fails(tmp_path: Path) -> None:
         str(write_file(tmp_path / "design.md")),
         "--tasks-file",
         str(write_file(tmp_path / "tasks.md")),
-        "--tests-file",
-        str(write_file(tmp_path / "tests.txt")),
         "--fake-reviewer-results",
         "[]",
     )
@@ -91,14 +113,50 @@ def git(project: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def init_repo(project: Path) -> str:
-    project.mkdir()
+def ensure_repo_template(project: Path) -> None:
+    template = TEMPLATE_ROOT / "basic-repo"
+    ready = TEMPLATE_ROOT / "basic-repo.ready"
+    if ready.exists():
+        copy_template(template, project)
+        return
+
+    lock_dir = TEMPLATE_ROOT / "basic-repo.lock"
+    deadline = time.monotonic() + 120
+    while True:
+        try:
+            lock_dir.mkdir(parents=True)
+            break
+        except FileExistsError:
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"template_lock_timeout: {lock_dir}")
+            time.sleep(0.05)
+
+    try:
+        if not ready.exists():
+            if template.exists():
+                shutil.rmtree(template)
+            template.mkdir(parents=True, exist_ok=True)
+            create_repo(template)
+            ready.write_text("ok\n", encoding="utf-8")
+    finally:
+        shutil.rmtree(lock_dir, ignore_errors=True)
+
+    copy_template(template, project)
+
+
+def create_repo(project: Path) -> str:
+    project.mkdir(exist_ok=True)
     git(project, "init")
     git(project, "config", "user.email", "test@example.invalid")
     git(project, "config", "user.name", "Test User")
     write_file(project / "app.txt", "one\n")
     git(project, "add", "app.txt")
     git(project, "commit", "-m", "initial")
+    return git(project, "rev-parse", "HEAD")
+
+
+def init_repo(project: Path) -> str:
+    ensure_repo_template(project)
     return git(project, "rev-parse", "HEAD")
 
 
@@ -119,8 +177,6 @@ def review_args(project: Path, head: str, output_dir: Path) -> list[str]:
         str(write_file(project / "design.md")),
         "--tasks-file",
         str(write_file(project / "tasks.md")),
-        "--tests-file",
-        str(write_file(project / "tests.txt")),
         "--output-dir",
         str(output_dir),
         "--fake-reviewer-results",
@@ -137,7 +193,6 @@ def make_review_args_for_module(module, tmp_path: Path):
         spec_file=write_file(tmp_path / "spec.md"),
         design_file=write_file(tmp_path / "design.md"),
         tasks_file=write_file(tmp_path / "tasks.md"),
-        tests_file=write_file(tmp_path / "tests.txt"),
         output_dir=tmp_path / "out",
         sdk_python=None,
         fake_reviewer_results=None,
@@ -177,8 +232,6 @@ def test_untracked_input_files_in_space_directory_are_allowed(tmp_path: Path) ->
         str(write_file(input_dir / "design file.md")),
         "--tasks-file",
         str(write_file(input_dir / "tasks file.md")),
-        "--tests-file",
-        str(write_file(input_dir / "tests file.txt")),
         "--output-dir",
         str(tmp_path / "out"),
         "--fake-reviewer-results",
@@ -261,11 +314,10 @@ def test_run_archives_review_input_snapshots_under_output_dir(tmp_path: Path) ->
     head = init_repo(project)
     input_dir = project / "review inputs"
     output_dir = tmp_path / "out"
-    diff_file = write_file(input_dir / "change diff.patch", "diff body\n")
+    diff_file = write_file(input_dir / "change diff.patch", "diff --git a/app.txt b/app.txt\n")
     spec_file = write_file(input_dir / "spec file.md", "spec body\n")
     design_file = write_file(input_dir / "design file.md", "design body\n")
     tasks_file = write_file(input_dir / "tasks file.md", "tasks body\n")
-    tests_file = write_file(input_dir / "tests file.txt", "tests body\n")
 
     result = run(
         "run",
@@ -283,8 +335,6 @@ def test_run_archives_review_input_snapshots_under_output_dir(tmp_path: Path) ->
         str(design_file),
         "--tasks-file",
         str(tasks_file),
-        "--tests-file",
-        str(tests_file),
         "--output-dir",
         str(output_dir),
         "--fake-reviewer-results",
@@ -294,11 +344,105 @@ def test_run_archives_review_input_snapshots_under_output_dir(tmp_path: Path) ->
 
     assert result.returncode == 0, result.stdout + result.stderr
     inputs_dir = output_dir / "inputs"
-    assert (inputs_dir / "diff.patch").read_text(encoding="utf-8") == "diff body\n"
+    assert {path.name for path in inputs_dir.iterdir()} == {
+        "diff.patch",
+        "manifest.json",
+        "spec.md",
+        "design.md",
+        "tasks.md",
+    }
+    assert (inputs_dir / "diff.patch").read_text(encoding="utf-8") == "diff --git a/app.txt b/app.txt\n"
     assert (inputs_dir / "spec.md").read_text(encoding="utf-8") == "spec body\n"
     assert (inputs_dir / "design.md").read_text(encoding="utf-8") == "design body\n"
     assert (inputs_dir / "tasks.md").read_text(encoding="utf-8") == "tasks body\n"
-    assert (inputs_dir / "tests.txt").read_text(encoding="utf-8") == "tests body\n"
+    manifest = json.loads((output_dir / "inputs" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["change"] == "demo"
+    assert manifest["base_ref"] == head
+    assert manifest["head_ref"] == head
+    assert manifest["inputs"]["diff"]["path"] == "inputs/diff.patch"
+    assert manifest["inputs"]["diff"]["sha256"] == hashlib.sha256((inputs_dir / "diff.patch").read_bytes()).hexdigest()
+    assert manifest["changed_files"] == [{"path": "app.txt", "status": "modified"}]
+    assert not (inputs_dir / "tests.txt").exists()
+
+
+def test_changed_file_entries_from_diff_reports_file_statuses(tmp_path: Path) -> None:
+    module = load_script_module()
+    diff_file = write_file(
+        tmp_path / "diff.patch",
+        "\n".join(
+            [
+                "diff --git a/app.txt b/app.txt",
+                "index 1111111..2222222 100644",
+                "diff --git a/path with space.txt b/path with space.txt",
+                "index 3333333..4444444 100644",
+                "diff --git a/old.txt b/new.txt",
+                "similarity index 100%",
+                "rename from old.txt",
+                "rename to new.txt",
+                "diff --git a/removed.txt b/removed.txt",
+                "deleted file mode 100644",
+                "diff --git a/created.txt b/created.txt",
+                "new file mode 100644",
+                "",
+            ]
+        ),
+    )
+
+    assert module.changed_file_entries_from_diff(diff_file) == [
+        {"path": "app.txt", "status": "modified"},
+        {"path": "path with space.txt", "status": "modified"},
+        {"path": "new.txt", "status": "renamed", "previous_path": "old.txt"},
+        {"path": "removed.txt", "status": "deleted"},
+        {"path": "created.txt", "status": "added"},
+    ]
+
+
+def test_run_accepts_legacy_tests_file_argument_without_snapshotting_it(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    head = init_repo(project)
+    legacy_tests_file = write_file(project / "legacy-tests.txt", "legacy tests\n")
+    output_dir = tmp_path / "out"
+
+    result = run(
+        *review_args(project, head, output_dir),
+        "--tests-file",
+        str(legacy_tests_file),
+        cwd=project,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (output_dir / "inputs" / "tests.txt").exists()
+    module = load_script_module()
+    review = module.ReviewArgs(
+        change="demo",
+        base_ref=head,
+        head_ref=head,
+        diff_file=output_dir / "inputs" / "diff.patch",
+        spec_file=output_dir / "inputs" / "spec.md",
+        design_file=output_dir / "inputs" / "design.md",
+        tasks_file=output_dir / "inputs" / "tasks.md",
+        output_dir=output_dir,
+        sdk_python=None,
+        fake_reviewer_results=None,
+        disable_risk_review=None,
+    )
+    assert "legacy tests" not in module.reviewer_prompt(review, "tests-and-edge-cases")
+
+
+def test_run_accepts_missing_legacy_tests_file_argument_without_snapshotting_it(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    head = init_repo(project)
+    output_dir = tmp_path / "out"
+
+    result = run(
+        *review_args(project, head, output_dir),
+        "--tests-file",
+        str(project / "missing-legacy-tests.txt"),
+        cwd=project,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (output_dir / "inputs" / "tests.txt").exists()
 
 
 def test_prompt_contains_review_context(tmp_path: Path) -> None:
@@ -319,7 +463,6 @@ def test_reviewer_prompt_includes_all_review_inputs(tmp_path: Path) -> None:
     spec_file = write_file(project / "spec.md", "Spec body\n")
     design_file = write_file(project / "design.md", "Design body\n")
     tasks_file = write_file(project / "tasks.md", "Tasks body\n")
-    tests_file = write_file(project / "tests.txt", "Tests body\n")
     review = module.ReviewArgs(
         change="demo-change",
         base_ref=head,
@@ -328,7 +471,6 @@ def test_reviewer_prompt_includes_all_review_inputs(tmp_path: Path) -> None:
         spec_file=spec_file,
         design_file=design_file,
         tasks_file=tasks_file,
-        tests_file=tests_file,
         output_dir=tmp_path / "out",
         sdk_python=None,
         fake_reviewer_results=None,
@@ -342,11 +484,171 @@ def test_reviewer_prompt_includes_all_review_inputs(tmp_path: Path) -> None:
     assert "Change: demo-change" in prompt
     assert f"Base ref: {head}" in prompt
     assert f"Head ref: {head}" in prompt
-    assert "Diff:\ndiff --git a/app.txt b/app.txt\n" in prompt
-    assert "Spec:\nSpec body\n" in prompt
-    assert "Design:\nDesign body\n" in prompt
-    assert "Tasks:\nTasks body\n" in prompt
-    assert "Tests:\nTests body\n" in prompt
+    assert f"Diff file: {diff_file}" in prompt
+    assert f"Spec file: {spec_file}" in prompt
+    assert f"Design file: {design_file}" in prompt
+    assert f"Tasks file: {tasks_file}" in prompt
+    assert f"Diff sha256: {hashlib.sha256(diff_file.read_bytes()).hexdigest()}" in prompt
+    assert "Do not read diff.patch wholesale" in prompt
+    assert "- app.txt" in prompt
+    assert "diff --git a/app.txt b/app.txt" not in prompt
+    assert "Spec body" not in prompt
+    assert "Tests:" not in prompt
+
+
+def test_reviewer_prompt_references_manifest_and_role_rubrics(tmp_path: Path) -> None:
+    module = load_script_module()
+    review = make_review_args_for_module(module, tmp_path)
+    manifest_path = review.output_dir / "inputs" / "manifest.json"
+
+    for role in module.REVIEWER_ROLES:
+        prompt = module.reviewer_prompt(review, role)
+        assert f"Focus for {role}:" in prompt
+        assert "Severity rubric:" in prompt
+        assert f"Manifest file: {manifest_path}" in prompt
+        assert "Return only a single JSON object" in prompt
+
+
+def test_reviewer_prompt_does_not_inline_large_inputs(tmp_path: Path) -> None:
+    module = load_script_module()
+    project = tmp_path / "repo"
+    head = init_repo(project)
+    large_diff = "diff --git a/app.txt b/app.txt\n" + ("+changed\n" * 2000)
+    diff_file = write_file(project / "diff.patch", large_diff)
+    review = module.ReviewArgs(
+        change="demo-change",
+        base_ref=head,
+        head_ref=head,
+        diff_file=diff_file,
+        spec_file=write_file(project / "spec.md", "Spec body\n"),
+        design_file=write_file(project / "design.md", "Design body\n"),
+        tasks_file=write_file(project / "tasks.md", "Tasks body\n"),
+        output_dir=tmp_path / "out",
+        sdk_python=None,
+        fake_reviewer_results=None,
+        disable_risk_review=None,
+    )
+
+    prompt = module.reviewer_prompt(review, "implementation-correctness")
+
+    assert f"Diff file: {diff_file}" in prompt
+    assert f"Diff bytes: {len(diff_file.read_bytes())}" in prompt
+    assert "Do not read diff.patch wholesale" in prompt
+    assert "+changed" not in prompt
+    assert len(prompt) < 4000
+
+
+def test_sdk_dispatch_subprocess_writes_prompt_artifacts(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
+    review = make_review_args_for_module(module, tmp_path)
+    captured_payload = None
+
+    def fake_run(*args, **kwargs):
+        nonlocal captured_payload
+        captured_payload = json.loads(kwargs["input"])
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=json.dumps([{"role": "spec-alignment", "status": "completed", "findings": []}]),
+            stderr="",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.run_sdk_dispatch_subprocess(review, sys.executable) == [
+        {"role": "spec-alignment", "status": "completed", "findings": []}
+    ]
+
+    prompts_dir = review.output_dir / "prompts"
+    assert {path.name for path in prompts_dir.iterdir()} == {
+        "spec-alignment.txt",
+        "implementation-correctness.txt",
+        "tests-and-edge-cases.txt",
+        "risk-review.txt",
+    }
+    assert captured_payload["raw_dir"] == str(review.output_dir / "raw")
+    assert captured_payload["force_exit"] is True
+    assert "Manifest file:" in (prompts_dir / "spec-alignment.txt").read_text(encoding="utf-8")
+
+
+def test_sdk_dispatch_subprocess_returns_role_failures_on_timeout(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
+    review = make_review_args_for_module(module, tmp_path)
+
+    def fake_run(*args, **kwargs):
+        payload = json.loads(kwargs["input"])
+        raw_dir = Path(payload["raw_dir"])
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        (raw_dir / "risk-review.txt").write_text(
+            json.dumps({"role": "risk-review", "status": "completed", "findings": []}),
+            encoding="utf-8",
+        )
+        raise subprocess.TimeoutExpired(args[0], timeout=module.SDK_DISPATCH_TIMEOUT_SECONDS)
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    results = module.run_sdk_dispatch_subprocess(review, sys.executable)
+
+    by_role = {result["role"]: result for result in results}
+    assert module.SDK_DISPATCH_TIMEOUT_SECONDS < 600
+    assert by_role["risk-review"]["status"] == "completed"
+    assert by_role["spec-alignment"]["status"] == "failed"
+    assert by_role["spec-alignment"]["findings"][0]["summary"] == "Reviewer dispatch timed out"
+    assert by_role["spec-alignment"]["findings"][0]["severity"] == "CRITICAL"
+
+
+def test_sdk_dispatch_writes_raw_reviewer_output(monkeypatch, tmp_path: Path) -> None:
+    module = load_script_module()
+    raw_dir = tmp_path / "raw"
+
+    class FakeClaudeAgentOptions:
+        def __init__(self, **kwargs):
+            pass
+
+    async def fake_query(*, prompt, options):
+        class Message:
+            result = json.dumps({"role": "spec-alignment", "status": "completed", "findings": []})
+
+        yield Message()
+
+    fake_sdk = types.SimpleNamespace(ClaudeAgentOptions=FakeClaudeAgentOptions, query=fake_query)
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake_sdk)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(
+            json.dumps(
+                {
+                    "cwd": str(REPO_ROOT),
+                    "roles": ["spec-alignment"],
+                    "readonly_tools": ["Read", "Grep"],
+                    "prompts": {"spec-alignment": "prompt"},
+                    "raw_dir": str(raw_dir),
+                }
+            )
+        ),
+    )
+
+    assert module.run_sdk_dispatch() == 0
+
+    assert json.loads((raw_dir / "spec-alignment.txt").read_text(encoding="utf-8")) == {
+        "role": "spec-alignment",
+        "status": "completed",
+        "findings": [],
+    }
+
+
+def test_tests_and_edge_cases_prompt_focuses_review_scope(tmp_path: Path) -> None:
+    module = load_script_module()
+    review = make_review_args_for_module(module, tmp_path)
+
+    prompt = module.reviewer_prompt(review, "tests-and-edge-cases")
+
+    assert "Focus for tests-and-edge-cases:" in prompt
+    assert "test coverage" in prompt
+    assert "regression protection" in prompt
+    assert "edge cases" in prompt
+    assert "Do not claim tests passed" in prompt
 
 
 def test_reviewer_prompt_requires_strict_json_contract(tmp_path: Path) -> None:
@@ -556,6 +858,55 @@ def test_sdk_dispatch_reports_reviewer_timeout(monkeypatch, capsys) -> None:
     ]
 
 
+def test_sdk_dispatch_retries_transient_reviewer_exception(monkeypatch, capsys) -> None:
+    module = load_script_module()
+    calls = 0
+    sleeps = []
+
+    class FakeClaudeAgentOptions:
+        def __init__(self, **kwargs):
+            pass
+
+    async def fake_query(*, prompt, options):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("transient sdk failure")
+
+        class Message:
+            result = json.dumps({"role": "spec-alignment", "status": "completed", "findings": []})
+
+        yield Message()
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    fake_sdk = types.SimpleNamespace(ClaudeAgentOptions=FakeClaudeAgentOptions, query=fake_query)
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake_sdk)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(
+            json.dumps(
+                {
+                    "cwd": str(REPO_ROOT),
+                    "roles": ["spec-alignment"],
+                    "readonly_tools": ["Read", "Grep"],
+                    "prompts": {"spec-alignment": "prompt"},
+                }
+            )
+        ),
+    )
+
+    assert module.run_sdk_dispatch() == 0
+
+    data = json.loads(capsys.readouterr().out)
+    assert data == [{"role": "spec-alignment", "status": "completed", "findings": []}]
+    assert calls == 2
+    assert sleeps == [1]
+
+
 def test_sdk_dispatch_subprocess_timeout_reports_clear_error(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     review = make_review_args_for_module(module, tmp_path)
@@ -568,13 +919,13 @@ def test_sdk_dispatch_subprocess_timeout_reports_clear_error(tmp_path: Path, mon
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
 
-    try:
-        module.run_sdk_dispatch_subprocess(review, sys.executable)
-    except ValueError as exc:
-        assert "sdk_dispatch_timeout" in str(exc)
-    else:
-        raise AssertionError("expected sdk_dispatch_timeout")
-    assert captured_timeout == 600
+    results = module.run_sdk_dispatch_subprocess(review, sys.executable)
+
+    assert captured_timeout == module.SDK_DISPATCH_TIMEOUT_SECONDS
+    assert module.SDK_DISPATCH_TIMEOUT_SECONDS == 540
+    assert {result["role"] for result in results} == set(module.REVIEWER_ROLES)
+    assert all(result["status"] == "failed" for result in results)
+    assert all(result["findings"][0]["summary"] == "Reviewer dispatch timed out" for result in results)
 
 
 def test_sdk_dispatch_subprocess_invalid_stdout_reports_clear_error(tmp_path: Path, monkeypatch) -> None:
