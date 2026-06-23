@@ -2,6 +2,7 @@
 change: optimize-full-verification-runtime
 design-doc: docs/superpowers/specs/2026-06-23-full-verification-runtime-design.md
 base-ref: e15b4dbea94b773f100343b0654f60f4a5f12489
+archived-with: 2026-06-23-optimize-full-verification-runtime
 ---
 
 # Full Verification Runtime（完整验证耗时）Implementation Plan（实施计划）
@@ -16,6 +17,7 @@ base-ref: e15b4dbea94b773f100343b0654f60f4a5f12489
 
 **Tech Stack（技术栈）:** Python（Python 语言）standard library（标准库）、pytest（Python 测试框架）、Git（版本管理）、OpenSpec（规格流程）、Test Framework（测试框架）；pytest-xdist（并行测试插件）为条件接入项。
 
+archived-with: 2026-06-23-optimize-full-verification-runtime
 ---
 
 ## Scope Guard（范围护栏）

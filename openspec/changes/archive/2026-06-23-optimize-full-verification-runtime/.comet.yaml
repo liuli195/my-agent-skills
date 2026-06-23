@@ -16,6 +16,6 @@ verification_report: docs/superpowers/reports/2026-06-24-optimize-full-verificat
 branch_status: handled
 created_at: 2026-06-22
 verified_at: 2026-06-23
-archived: false
+archived: true
 handoff_context: openspec/changes/optimize-full-verification-runtime/.comet/handoff/spec-context.json
 handoff_hash: fdd6d2abe0fc30a1d5477fa0297581c42f54e18cc129e49d6635f87cd6077542

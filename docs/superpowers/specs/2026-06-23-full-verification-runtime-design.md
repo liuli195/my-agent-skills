@@ -2,6 +2,8 @@
 comet_change: optimize-full-verification-runtime
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-23-optimize-full-verification-runtime
+status: final
 ---
 
 # Full Verification Runtime Design
