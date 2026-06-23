@@ -74,6 +74,13 @@
 - **THEN** 默认 worktree（工作区）来源 MUST 包含 staged tracked changes（已暂存已跟踪变更）、unstaged tracked changes（未暂存已跟踪变更）和 untracked non-ignored files（未跟踪且未忽略文件）
 - **THEN** 系统 MUST 根据 configured check（配置检查项）的 `paths` 选择受影响 checks（检查项）
 
+#### Scenario: Fast verify treats pathless checks as global checks
+- **WHEN** configured verify check（配置验证检查项）没有 `paths`
+- **THEN** 系统 MUST 将该 check（检查项）视为 global check（全局检查项）
+- **THEN** 默认 fast verify（快速验证） MUST 在存在任意 changed file（变更文件）时选择该 check（检查项）
+- **THEN** 默认 fast verify（快速验证） MUST 在没有 changed files（变更文件）时不选择该 check（检查项）
+- **THEN** 没有 `inputs` 的 global check（全局检查项） MUST 使用当前 changed files（变更文件）作为 cache key（缓存键）的输入来源
+
 #### Scenario: Cache uses passed results only
 - **WHEN** 选中的 check（检查项）存在匹配 cache key（缓存键）
 - **THEN** 系统 MUST 只复用 passed（已通过）的缓存结果

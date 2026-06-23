@@ -477,6 +477,47 @@ def test_test_framework_runner_uses_passed_result_cache(tmp_path: Path) -> None:
     ]
 
 
+def test_test_framework_runner_full_verify_ignores_existing_default_cache(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    (project / "src").mkdir()
+    (project / "src" / "cached.py").write_text("changed\n", encoding="utf-8")
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "full-ignores-fast-cache",
+                        "command": command_that_logs("full-ignores-fast-cache"),
+                        "paths": ["src/cached.py"],
+                        "inputs": ["src/cached.py"],
+                    }
+                ]
+            },
+        },
+    )
+
+    default = run_check(project, "verify")
+    cached_default = run_check(project, "verify")
+    full = run_check(project, "verify", "--full")
+
+    assert default.returncode == 0, default.stdout + default.stderr
+    assert cached_default.returncode == 0, cached_default.stdout + cached_default.stderr
+    assert full.returncode == 0, full.stdout + full.stderr
+    assert "cache-hit: full-ignores-fast-cache" in cached_default.stdout
+    assert "cache-hit:" not in full.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "full-ignores-fast-cache",
+        "full-ignores-fast-cache",
+    ]
+
+
 def test_test_framework_runner_full_verify_refreshes_cache_for_default_verify(
     tmp_path: Path,
 ) -> None:

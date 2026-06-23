@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import fnmatch
 import hashlib
 import json
@@ -22,20 +21,38 @@ class ConfigError(Exception):
     pass
 
 
-def _project_root() -> Path:
-    return Path(__file__).resolve().parents[1]
-
-
 def _load_config(project: Path) -> dict[str, Any]:
     config_path = project / ".test-framework" / "config.json"
     try:
-        return json.loads(config_path.read_text(encoding="utf-8"))
+        config = json.loads(config_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         raise ConfigError("missing_config: .test-framework/config.json") from None
     except json.JSONDecodeError as error:
         raise ConfigError(
             f"invalid_config: .test-framework/config.json: {error.msg}"
         ) from None
+    if not isinstance(config, dict):
+        raise ConfigError(
+            "invalid_config: .test-framework/config.json: root must be object"
+        )
+    for section in ("build", "verify"):
+        section_config = config.get(section, {})
+        if not isinstance(section_config, dict):
+            raise ConfigError(
+                f"invalid_config: .test-framework/config.json: {section} must be object"
+            )
+        checks = section_config.get("checks", [])
+        if not isinstance(checks, list):
+            raise ConfigError(
+                f"invalid_config: .test-framework/config.json: {section}.checks must be list"
+            )
+        for index, check in enumerate(checks):
+            if not isinstance(check, dict):
+                raise ConfigError(
+                    "invalid_config: .test-framework/config.json: "
+                    f"{section}.checks[{index}] must be object"
+                )
+    return config
 
 
 def _normalize_path(path: str | Path) -> str:
@@ -114,14 +131,16 @@ def _changed_files(project: Path) -> list[str]:
 
 
 def _path_matches(pattern: str, changed_file: str) -> bool:
-    pattern = _normalize_path(pattern)
+    raw_pattern = str(pattern).replace("\\", "/").strip()
+    directory_pattern = raw_pattern.endswith("/")
+    pattern = raw_pattern.strip("/")
     changed_file = _normalize_path(changed_file)
     if not pattern:
         return False
     if pattern.endswith("/**"):
         prefix = pattern[:-3].rstrip("/")
         return changed_file == prefix or changed_file.startswith(prefix + "/")
-    if pattern.endswith("/"):
+    if directory_pattern:
         prefix = pattern.rstrip("/")
         return changed_file == prefix or changed_file.startswith(prefix + "/")
     if any(char in pattern for char in "*?["):
@@ -138,6 +157,7 @@ def _selected_checks(
     for check in checks:
         paths = check.get("paths") or []
         if not paths:
+            # Pathless checks are global checks in default verify mode.
             if changed_files:
                 selected.append(check)
             continue
@@ -370,28 +390,3 @@ def run_verify(
         return 1
     print("status: passed")
     return 0
-
-
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="test_framework_runner.py")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("build")
-    verify_parser = subparsers.add_parser("verify")
-    verify_parser.add_argument("--full", action="store_true")
-    return parser
-
-
-def main(argv: list[str] | None = None, project: Path | None = None) -> int:
-    parser = _build_parser()
-    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
-    project = _project_root() if project is None else project
-    if args.command == "build":
-        return run_build(project)
-    if args.command == "verify":
-        return run_verify(project, full=args.full)
-    parser.error(f"unsupported command: {args.command}")
-    return 2
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

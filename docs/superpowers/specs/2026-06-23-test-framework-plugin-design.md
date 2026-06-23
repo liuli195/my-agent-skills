@@ -92,6 +92,7 @@ python <test-framework-script> verify --project <repo> --full
 - `build` 运行 configured `build.checks`（配置构建检查项）。
 - `verify` 默认从 worktree（工作区）收集 changed files（变更文件），包含 staged tracked changes（已暂存已跟踪变更）、unstaged tracked changes（未暂存已跟踪变更）和 untracked non-ignored files（未跟踪且未忽略文件），选中受影响的 `verify.checks`，再应用 cache（缓存）。
 - `verify --full` 运行全部 configured `verify.checks`，不做 changed-files（变更文件）筛选。
+- 没有 `paths` 的 verify check（验证检查项）视为 global check（全局检查项）：默认 verify（快速验证）在存在任意 changed file（变更文件）时选择它，干净工作区不选择它。
 
 首版不提供其他命令参数，避免扩大能力边界。
 
@@ -112,6 +113,8 @@ cache key（缓存键）包含：
 计算 inputs（输入文件或目录内容）时，目录 hash（哈希）必须排除 `.test-framework/cache/`、`.git/` 和 `__pycache__/` 等运行态目录，避免缓存产物反过来改变自己的 cache key（缓存键）。
 
 只缓存 passed（已通过）结果。failed（失败）结果不写入通过缓存。cache miss（缓存未命中）只运行被选中的 check（检查项）本身，不自动升级到 full（全量验证）。没有受影响 check（检查项）时输出 checked（已检查）为空和 full-not-run（全量未运行）证据。
+
+`verify --full` 不读取 cache（缓存）来跳过检查；它运行成功后使用同一 cache key（缓存键）刷新 passed-result cache（通过结果缓存），让后续默认 verify（快速验证）可复用。没有 `inputs` 的 global check（全局检查项）使用当前 changed files（变更文件）作为 cache input（缓存输入）；需要稳定缓存命中的目标仓库应显式配置 `inputs`。
 
 ## 去耦合边界
 

@@ -37,7 +37,9 @@
    - `python <test-framework-script> verify --project <repo> --full` 运行全部 `verify.checks`，不得读取 cache（缓存）来跳过 check（检查项）。
    - `python <test-framework-script> verify --project <repo>` 默认从 worktree（工作区）收集 changed files（变更文件），包含 staged tracked changes（已暂存已跟踪变更）、unstaged tracked changes（未暂存已跟踪变更）和 untracked non-ignored files（未跟踪且未忽略文件）。
    - 框架选择受影响的 `verify.checks`，并对这些检查应用 passed-result cache（通过结果缓存）。
+   - 没有 `paths` 的 check（检查项）是 global check（全局检查项）：默认 `verify` 在存在任意 changed file（变更文件）时选择它，干净工作区不选择它。
    - cache miss（缓存未命中）时只运行该检查本身；default verify（默认验证）和 `verify --full` 都只在 check（检查项）通过后写入或刷新 passed-result cache（通过结果缓存）；failed（失败）结果不写入缓存；没有受影响检查时输出 checked（已检查）为空和 full-not-run（全量未运行）提示。
+   - 没有 `inputs` 的 global check（全局检查项）使用当前 changed files（变更文件）作为 cache input（缓存输入）；需要稳定缓存命中的目标仓库应显式配置 `inputs`。
 
 4. 统一命令面保持小。
    - 必须支持 `python <test-framework-script> build --project <repo>`、`python <test-framework-script> verify --project <repo>`、`python <test-framework-script> verify --project <repo> --full`。

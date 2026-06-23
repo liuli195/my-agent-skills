@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_BUILD_SCRIPT = REPO_ROOT / "scripts" / "local_plugin_build.py"
@@ -402,6 +404,39 @@ def test_runner_default_check_cache_key_tracks_dirty_file_contents(
     assert "cache-hit: verify.default" not in output
 
 
+def test_runner_cache_key_changes_with_runtime_versions(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_check_module()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("changed\n", encoding="utf-8")
+    write_runner_config(
+        tmp_path,
+        verify_checks=[
+            {
+                "id": "versioned-cache",
+                "command": "run-versioned-cache",
+                "paths": ["src/**"],
+                "inputs": ["src/app.py"],
+            }
+        ],
+    )
+    config = module._load_config(tmp_path)
+    check = config["verify"]["checks"][0]
+    base_key = module._cache_key(tmp_path, config, check, ["src/app.py"])
+
+    monkeypatch.setattr(
+        module, "FRAMEWORK_VERSION", "changed-framework", raising=False
+    )
+    framework_key = module._cache_key(tmp_path, config, check, ["src/app.py"])
+    monkeypatch.setattr(module, "FRAMEWORK_VERSION", "0.1.0", raising=False)
+    monkeypatch.setattr(module, "CACHE_VERSION", "changed-cache", raising=False)
+    cache_key = module._cache_key(tmp_path, config, check, ["src/app.py"])
+
+    assert framework_key != base_key
+    assert cache_key != base_key
+
+
 def test_runner_build_reports_missing_config_without_traceback(
     tmp_path: Path, capsys
 ) -> None:
@@ -464,6 +499,37 @@ def test_runner_verify_reports_invalid_config_without_traceback(
     assert "Traceback" not in captured.out + captured.err
 
 
+@pytest.mark.parametrize(
+    ("config_data", "expected_error"),
+    [
+        ([], "root must be object"),
+        ({"build": "bad", "verify": {"checks": []}}, "build must be object"),
+        (
+            {"build": {"checks": "bad"}, "verify": {"checks": []}},
+            "build.checks must be list",
+        ),
+        (
+            {"build": {"checks": ["bad"]}, "verify": {"checks": []}},
+            "build.checks[0] must be object",
+        ),
+    ],
+)
+def test_runner_reports_invalid_config_structure_without_traceback(
+    tmp_path: Path, capsys, config_data: Any, expected_error: str
+) -> None:
+    module = load_check_module()
+    write_json(tmp_path / ".test-framework" / "config.json", config_data)
+
+    result = module.run_build(tmp_path)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert "invalid_config: .test-framework/config.json" in captured.err
+    assert expected_error in captured.err
+    assert "status: failed" in captured.out
+    assert "Traceback" not in captured.out + captured.err
+
+
 def test_runner_selects_check_without_paths_for_any_change() -> None:
     module = load_check_module()
     default_check = {"id": "verify.default", "command": "run-default"}
@@ -473,6 +539,24 @@ def test_runner_selects_check_without_paths_for_any_change() -> None:
         default_check
     ]
     assert module._selected_checks([default_check], []) == []
+
+
+@pytest.mark.parametrize(
+    ("pattern", "changed_file", "expected"),
+    [
+        ("src/[ab].py", "src/a.py", True),
+        ("src/[ab].py", "src/c.py", False),
+        ("docs/", "docs", True),
+        ("docs/", "docs/guide.md", True),
+        ("/", "docs/guide.md", False),
+    ],
+)
+def test_runner_path_matches_globs_and_trailing_slashes(
+    pattern: str, changed_file: str, expected: bool
+) -> None:
+    module = load_check_module()
+
+    assert module._path_matches(pattern, changed_file) is expected
 
 
 def test_runner_no_check_returns_success_without_full_fallback(
@@ -506,6 +590,22 @@ def test_runner_no_check_returns_success_without_full_fallback(
     output = capsys.readouterr().out
     assert "checked:" in output
     assert "full-not-run: true" in output
+
+
+def test_runner_default_verify_empty_checks_returns_success(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = load_check_module()
+    write_runner_config(tmp_path, verify_checks=[])
+    monkeypatch.setattr(module, "_changed_files", lambda _root: [], raising=False)
+
+    result = module.run_verify(tmp_path)
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "checked:" in output
+    assert "full-not-run: true" in output
+    assert "status: passed" in output
 
 
 def test_runner_rejects_inputs_outside_project(
@@ -674,6 +774,16 @@ def test_local_plugin_build_main_uses_explicit_build_argv(
     assert result == 0
     assert calls == [tmp_path]
     assert "status: build checks passed" in capsys.readouterr().out
+
+
+def test_local_plugin_build_main_rejects_verify_command(capsys) -> None:
+    module = load_local_build_module()
+
+    result = module.main(["verify"])
+    captured = capsys.readouterr()
+
+    assert result == 2
+    assert "unknown command: verify" in captured.err
 
 
 def test_build_rejects_marketplace_source_outside_repo(tmp_path: Path) -> None:
