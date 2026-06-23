@@ -179,6 +179,30 @@ def test_runner_build_runs_configured_checks(tmp_path: Path, capsys) -> None:
     assert "status: passed" in output
 
 
+def test_runner_build_reports_failed_check(tmp_path: Path, capsys) -> None:
+    module = load_check_module()
+    write_runner_config(
+        tmp_path,
+        build_checks=[
+            {"id": "build.one", "command": "run-build-one"},
+            {"id": "build.two", "command": "run-build-two"},
+        ],
+    )
+
+    def fake_run(command, cwd, check, text, capture_output, shell=False):
+        if command == "run-build-two":
+            return subprocess.CompletedProcess(command, 9, "", "build.two failed\n")
+        return make_completed(command)
+
+    result = module.run_build(tmp_path, runner=fake_run)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert "checked: build.one, build.two" in captured.out
+    assert "status: failed" in captured.out
+    assert "build.two failed" in captured.err
+
+
 def test_runner_default_verify_selects_changed_checks_and_uses_cache(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
@@ -392,6 +416,23 @@ def test_runner_build_reports_missing_config_without_traceback(
     assert "Traceback" not in captured.out + captured.err
 
 
+def test_runner_build_reports_invalid_config_without_traceback(
+    tmp_path: Path, capsys
+) -> None:
+    module = load_check_module()
+    config = tmp_path / ".test-framework" / "config.json"
+    config.parent.mkdir()
+    config.write_text("{not json\n", encoding="utf-8")
+
+    result = module.run_build(tmp_path)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert "invalid_config: .test-framework/config.json" in captured.err
+    assert "status: failed" in captured.out
+    assert "Traceback" not in captured.out + captured.err
+
+
 def test_runner_verify_reports_missing_config_without_traceback(
     tmp_path: Path, capsys
 ) -> None:
@@ -404,6 +445,33 @@ def test_runner_verify_reports_missing_config_without_traceback(
     assert "missing_config: .test-framework/config.json" in captured.err
     assert "status: failed" in captured.out
     assert "Traceback" not in captured.out + captured.err
+
+
+def test_runner_verify_reports_invalid_config_without_traceback(
+    tmp_path: Path, capsys
+) -> None:
+    module = load_check_module()
+    config = tmp_path / ".test-framework" / "config.json"
+    config.parent.mkdir()
+    config.write_text("{not json\n", encoding="utf-8")
+
+    result = module.run_verify(tmp_path)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert "invalid_config: .test-framework/config.json" in captured.err
+    assert "status: failed" in captured.out
+    assert "Traceback" not in captured.out + captured.err
+
+
+def test_runner_selects_check_without_paths_for_any_change() -> None:
+    module = load_check_module()
+    default_check = {"id": "verify.default", "command": "run-default"}
+    src_check = {"id": "verify.src", "command": "run-src", "paths": ["src/**"]}
+
+    assert module._selected_checks([default_check, src_check], ["docs/guide.md"]) == [
+        default_check
+    ]
 
 
 def test_runner_no_check_returns_success_without_full_fallback(

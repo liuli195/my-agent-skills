@@ -313,6 +313,7 @@ def test_test_framework_init_refuses_existing_files_before_writes(
         path = project / relative
         if path != existing_path:
             assert not path.exists()
+    assert not (project / ".test-framework" / "cache").exists()
 
 
 def test_test_framework_runner_build_verify_and_full_verify(tmp_path: Path) -> None:
@@ -371,6 +372,19 @@ def test_test_framework_runner_build_verify_and_full_verify(tmp_path: Path) -> N
         "verify-src",
         "verify-docs",
     ]
+
+
+def test_test_framework_runner_full_verify_allows_empty_checks(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+
+    result = run_check(project, "verify", "--full")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "checked:" in result.stdout
+    assert "full-not-run: false" in result.stdout
+    assert "status: passed" in result.stdout
 
 
 def test_test_framework_runner_uses_passed_result_cache(tmp_path: Path) -> None:
