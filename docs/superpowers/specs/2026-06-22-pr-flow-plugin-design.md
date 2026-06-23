@@ -74,7 +74,7 @@ defaults:
       - Risk
       - Rollback
   hotfix:
-    verifyCommand: ".\\.venv\\Scripts\\python.exe -m pytest"
+    verifyCommand: "python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project . --full"
 
 branches:
   main:

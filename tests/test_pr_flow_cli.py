@@ -469,7 +469,10 @@ def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
     assert config["defaults"]["mergeStrategy"] == "merge"
     assert config["defaults"]["reviewGate"]["mode"] == "github"
     assert config["defaults"]["reviewGate"]["evidencePath"] == ".pr-flow/review-pass.json"
-    assert config["defaults"]["hotfix"]["verifyCommand"] == ".\\.venv\\Scripts\\python.exe -m pytest"
+    assert (
+        config["defaults"]["hotfix"]["verifyCommand"]
+        == "python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project . --full"
+    )
     assert config["defaults"]["wait"] == {"timeoutSeconds": 600, "pollSeconds": 15}
     assert config["defaults"]["pr"]["bodyTemplatePath"] == ".pr-flow/pr-template.md"
     assert config["branches"]["main"]["remote"] == "origin"
