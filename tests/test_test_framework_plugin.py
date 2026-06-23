@@ -466,6 +466,50 @@ def test_test_framework_user_level_skill_path_runs_verify_without_git(
     ]
 
 
+def test_test_framework_non_git_project_uses_filesystem_scan(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    (project / "src").mkdir()
+    (project / "docs").mkdir()
+    (project / "src" / "app.py").write_text("changed\n", encoding="utf-8")
+    (project / "docs" / "guide.md").write_text("changed\n", encoding="utf-8")
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "verify-src",
+                        "command": command_that_logs("verify-src"),
+                        "paths": ["src/**"],
+                        "inputs": ["src"],
+                    },
+                    {
+                        "id": "verify-docs",
+                        "command": command_that_logs("verify-docs"),
+                        "paths": ["docs/**"],
+                        "inputs": ["docs"],
+                    },
+                ]
+            },
+        },
+    )
+
+    verify = run_check(project, "verify")
+
+    assert verify.returncode == 0, verify.stdout + verify.stderr
+    assert "checked: verify-src, verify-docs" in verify.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "verify-src",
+        "verify-docs",
+    ]
+
+
 def test_test_framework_runner_uses_passed_result_cache(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -583,6 +627,51 @@ def test_test_framework_runner_full_verify_refreshes_cache_for_default_verify(
     ]
 
 
+def test_test_framework_runner_cache_misses_when_input_is_deleted(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert git(project, "init").returncode == 0
+    assert git(project, "config", "user.email", "test@example.invalid").returncode == 0
+    assert git(project, "config", "user.name", "Test User").returncode == 0
+    (project / "src").mkdir()
+    input_file = project / "src" / "input.txt"
+    input_file.write_text("base\n", encoding="utf-8")
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "deleted-input",
+                        "command": command_that_logs("deleted-input"),
+                        "inputs": ["src/input.txt"],
+                    }
+                ]
+            },
+        },
+    )
+    assert git(project, "add", ".").returncode == 0
+    assert git(project, "commit", "-m", "initial").returncode == 0
+
+    input_file.write_text("changed\n", encoding="utf-8")
+    first = run_check(project, "verify")
+    input_file.unlink()
+    second = run_check(project, "verify")
+
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "cache-hit:" not in second.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "deleted-input",
+        "deleted-input",
+    ]
+
+
 def test_test_framework_runner_default_cache_key_tracks_glob_path_contents(
     tmp_path: Path,
 ) -> None:
@@ -662,6 +751,41 @@ def test_test_framework_runner_default_check_cache_key_tracks_changed_files(
         "default-check",
         "default-check",
     ]
+
+
+def test_test_framework_pathless_check_skips_clean_git_worktree(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert git(project, "init").returncode == 0
+    assert git(project, "config", "user.email", "test@example.invalid").returncode == 0
+    assert git(project, "config", "user.name", "Test User").returncode == 0
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "pathless",
+                        "command": command_that_logs("pathless"),
+                    }
+                ]
+            },
+        },
+    )
+    assert git(project, "add", ".").returncode == 0
+    assert git(project, "commit", "-m", "initial").returncode == 0
+
+    verify = run_check(project, "verify")
+
+    assert verify.returncode == 0, verify.stdout + verify.stderr
+    assert "checked:" in verify.stdout
+    assert "checked: pathless" not in verify.stdout
+    assert not (project / "run.log").exists()
 
 
 def test_test_framework_runner_default_check_cache_key_tracks_dirty_file_contents(

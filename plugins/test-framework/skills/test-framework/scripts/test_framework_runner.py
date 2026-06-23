@@ -76,7 +76,7 @@ def _load_config(project: Path) -> dict[str, Any]:
                 )
             seen_ids.add(check_id)
             command = check.get("command")
-            if command is not None and not (
+            if not (
                 _is_non_empty_string(command) or _is_non_empty_string_list(command)
             ):
                 raise ConfigError(

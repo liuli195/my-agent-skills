@@ -233,10 +233,10 @@ def test_runner_default_verify_selects_changed_checks_and_uses_cache(
     monkeypatch.setattr(
         module, "_changed_files", lambda _root: ["src/app.py"], raising=False
     )
-    calls: list[str] = []
+    calls: list[tuple[str, bool]] = []
 
     def fake_run(command, cwd, check, text, capture_output, shell=False):
-        calls.append(command)
+        calls.append((command, shell))
         return make_completed(command)
 
     first = module.run_verify(tmp_path, runner=fake_run)
@@ -244,7 +244,7 @@ def test_runner_default_verify_selects_changed_checks_and_uses_cache(
 
     assert first == 0
     assert second == 0
-    assert calls == ["run-verify-src"]
+    assert calls == [("run-verify-src", True)]
     output = capsys.readouterr().out
     assert "checked: verify.src" in output
     assert "full-not-run: true" in output
@@ -527,6 +527,13 @@ def test_runner_verify_reports_invalid_config_without_traceback(
         (
             {
                 "build": {"checks": [{"id": "bad", "command": 123}]},
+                "verify": {"checks": []},
+            },
+            "build.checks[0].command must be non-empty string or list of non-empty strings",
+        ),
+        (
+            {
+                "build": {"checks": [{"id": "no-command"}]},
                 "verify": {"checks": []},
             },
             "build.checks[0].command must be non-empty string or list of non-empty strings",
