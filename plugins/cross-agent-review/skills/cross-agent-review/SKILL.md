@@ -22,18 +22,7 @@ STRICTLY FORBIDDEN:
 
 - 当前 worktree 必须干净。
 - 当前 `HEAD` 必须等于传入的 `--head-ref`。
-- 调用方已运行测试，并提供测试结果文件。
 - 当前 Python、默认 Claude SDK venv，或 `--sdk-python` 指定的 Python 必须能导入 `claude_agent_sdk`。
-
-## 测试结果文件默认生成
-
-调用方没有显式要求 full（全量验证）时，默认用 test-framework（测试框架）fast（快速验证）生成 `--tests-file`：
-
-```bash
-python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project . > .local/cross-agent-review/<change>/<head_ref>/prepared-inputs/tests.txt
-```
-
-如果调用方需要 full（全量验证）证据，必须显式使用带 `--full` 的命令生成 `tests.txt`。
 
 ## 命令
 
@@ -45,13 +34,12 @@ python scripts/cross_agent_review.py run \
   --diff-file <path> \
   --spec-file <path> \
   --design-file <path> \
-  --tasks-file <path> \
-  --tests-file <path>
+  --tasks-file <path>
 ```
 
 ## 输入文件准备
 
-`--diff-file` 和 `--tests-file` 等运行前生成的输入文件，必须放在同一次 review 的 run 目录下：
+`--diff-file`、`--spec-file`、`--design-file` 和 `--tasks-file` 等运行前生成的输入文件，必须放在同一次 review 的 run 目录下：
 
 ```text
 .local/cross-agent-review/<change>/<head_ref>/prepared-inputs/
@@ -65,7 +53,6 @@ python scripts/cross_agent_review.py run \
 - `inputs/spec.md`
 - `inputs/design.md`
 - `inputs/tasks.md`
-- `inputs/tests.txt`
 
 ## Reviewer 输出契约
 

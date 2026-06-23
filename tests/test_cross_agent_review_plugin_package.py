@@ -74,18 +74,14 @@ def test_cross_agent_review_skill_documents_mandatory_invocation_boundary() -> N
     assert "通用 code review" in boundary_text
 
 
-def test_cross_agent_review_skill_defaults_test_evidence_to_fast_verify() -> None:
+def test_cross_agent_review_skill_does_not_require_test_evidence() -> None:
     skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
     text = skill.read_text(encoding="utf-8")
 
-    section = text[
-        text.index("## 测试结果文件默认生成") : text.index("## 命令")
-    ]
-    assert (
-        "python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project ."
-        in section
-    )
-    assert "verify --project . --full" not in section
+    assert "测试结果文件默认生成" not in text
+    assert "--tests-file" not in text
+    assert "tests.txt" not in text
+    assert "调用方已运行测试" not in text
 
 
 def test_cross_agent_review_placeholder_run_accepts_documented_and_planned_options(tmp_path: Path) -> None:
@@ -108,8 +104,6 @@ def test_cross_agent_review_placeholder_run_accepts_documented_and_planned_optio
             str(tmp_path / "design.md"),
             "--tasks-file",
             str(tmp_path / "tasks.md"),
-            "--tests-file",
-            str(tmp_path / "tests.txt"),
             "--output-dir",
             str(tmp_path / "out"),
             "--sdk-python",

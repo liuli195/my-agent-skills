@@ -11,13 +11,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 
-REQUIRED_FILE_ARGS = ["diff_file", "spec_file", "design_file", "tasks_file", "tests_file"]
+REQUIRED_FILE_ARGS = ["diff_file", "spec_file", "design_file", "tasks_file"]
 INPUT_SNAPSHOT_NAMES = {
     "diff_file": "diff.patch",
     "spec_file": "spec.md",
     "design_file": "design.md",
     "tasks_file": "tasks.md",
-    "tests_file": "tests.txt",
 }
 PLACEHOLDER_COMPAT_DISABLE_RISK_REVIEW = "__placeholder_compat__"
 REVIEWER_ROLES = [
@@ -26,6 +25,18 @@ REVIEWER_ROLES = [
     "tests-and-edge-cases",
     "risk-review",
 ]
+ROLE_FOCUS = {
+    "tests-and-edge-cases": "\n".join(
+        [
+            "Focus for tests-and-edge-cases:",
+            "- Review test coverage gaps for changed behavior and required scenarios.",
+            "- Review regression protection for previously supported behavior and integration contracts.",
+            "- Review edge cases, error paths, boundary inputs, and state transitions implied by the supplied inputs.",
+            "- Do not claim tests passed, failed, or were run; no test results are supplied.",
+            "- Only create findings for concrete missing coverage, weak regression protection, or unhandled edge cases.",
+        ]
+    )
+}
 READONLY_TOOLS = ["Read", "Glob", "Grep", "Bash(git diff *)", "Bash(git show *)", "Bash(git status *)"]
 DISALLOWED_TOOLS = ["Edit", "Write", "NotebookEdit", "TodoWrite", "MultiEdit", "Bash"]
 # Individual reviewers time out first; the subprocess gets a wider window to
@@ -52,7 +63,6 @@ class ReviewArgs:
     spec_file: Path
     design_file: Path
     tasks_file: Path
-    tests_file: Path
     output_dir: Path | None
     sdk_python: Path | None
     fake_reviewer_results: str | None
@@ -70,7 +80,6 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--spec-file", type=Path, required=True)
     run_parser.add_argument("--design-file", type=Path, required=True)
     run_parser.add_argument("--tasks-file", type=Path, required=True)
-    run_parser.add_argument("--tests-file", type=Path, required=True)
     run_parser.add_argument("--output-dir", type=Path)
     run_parser.add_argument("--sdk-python", type=Path)
     run_parser.add_argument("--fake-reviewer-results")
@@ -130,7 +139,6 @@ def parse_review_args(args: argparse.Namespace) -> ReviewArgs:
         spec_file=args.spec_file,
         design_file=args.design_file,
         tasks_file=args.tasks_file,
-        tests_file=args.tests_file,
         output_dir=args.output_dir,
         sdk_python=args.sdk_python,
         fake_reviewer_results=args.fake_reviewer_results,
@@ -211,32 +219,37 @@ def read_text(path: Path) -> str:
 
 
 def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
-    return "\n\n".join(
+    parts = [
+        f"Role: {role}",
+        "Return only a single JSON object. Do not use Markdown.",
+        "Schema:",
+        json.dumps(
+            {
+                "role": role,
+                "status": "completed",
+                "findings": [
+                    {
+                        "severity": "CRITICAL",
+                        "location": "path-or-component",
+                        "summary": "one-line issue summary",
+                        "evidence": "specific evidence from the supplied inputs",
+                        "recommendation": "concrete next action",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        "Use only these severity values: CRITICAL, IMPORTANT, WARNING, SUGGESTION.",
+        'If there are no issues, return "findings": [].',
+        "Do not put pass, aligned, ok, or informational observations in findings.",
+        "Do not use severity aliases such as high, medium, low, minor, or info.",
+    ]
+    focus = ROLE_FOCUS.get(role)
+    if focus:
+        parts.append(focus)
+    parts.extend(
         [
-            f"Role: {role}",
-            "Return only a single JSON object. Do not use Markdown.",
-            "Schema:",
-            json.dumps(
-                {
-                    "role": role,
-                    "status": "completed",
-                    "findings": [
-                        {
-                            "severity": "CRITICAL",
-                            "location": "path-or-component",
-                            "summary": "one-line issue summary",
-                            "evidence": "specific evidence from the supplied inputs",
-                            "recommendation": "concrete next action",
-                        }
-                    ],
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            "Use only these severity values: CRITICAL, IMPORTANT, WARNING, SUGGESTION.",
-            'If there are no issues, return "findings": [].',
-            "Do not put pass, aligned, ok, or informational observations in findings.",
-            "Do not use severity aliases such as high, medium, low, minor, or info.",
             f"Change: {review_args.change}",
             f"Base ref: {review_args.base_ref}",
             f"Head ref: {review_args.head_ref}",
@@ -244,9 +257,9 @@ def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
             "Spec:\n" + read_text(review_args.spec_file),
             "Design:\n" + read_text(review_args.design_file),
             "Tasks:\n" + read_text(review_args.tasks_file),
-            "Tests:\n" + read_text(review_args.tests_file),
         ]
     )
+    return "\n\n".join(parts)
 
 
 def dispatch_reviewers(review_args: ReviewArgs, sdk_python: str) -> list[dict]:
@@ -570,7 +583,6 @@ def allowed_input_paths(review_args: ReviewArgs) -> list[Path]:
         review_args.spec_file,
         review_args.design_file,
         review_args.tasks_file,
-        review_args.tests_file,
     ]
 
 

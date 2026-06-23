@@ -56,7 +56,7 @@ base-ref: e15b4dbea94b773f100343b0654f60f4a5f12489
 - Read（读取）: `.test-framework/config.json`
 - Read（读取）: `tests/test_pr_flow_cli.py`
 
-- [ ] **Step 1: 记录当前工作区状态**
+- [x] **Step 1: 记录当前工作区状态**
 
 Run（运行）:
 
@@ -69,7 +69,7 @@ Expected（期望）:
 - `git rev-parse HEAD` 输出 `e15b4dbea94b773f100343b0654f60f4a5f12489`，除非用户已经明确切换 base（基准）。
 - `git status --short` 可以有旧归档改动；只记录，不回滚、不清理。
 
-- [ ] **Step 2: 重跑 full verification（完整验证）计时**
+- [x] **Step 2: 重跑 full verification（完整验证）计时**
 
 Run（运行）:
 
@@ -86,7 +86,7 @@ Expected（期望）:
 - 这是当前仓库的 canonical full verification command（规范完整验证命令）；当前工作区不存在 `scripts/check.py`，不得把不可运行入口写入验收步骤。
 - 记录总秒数，作为 before（优化前）证据。
 
-- [ ] **Step 3: 重跑 pytest durations（耗时报告）**
+- [x] **Step 3: 重跑 pytest durations（耗时报告）**
 
 Run（运行）:
 
@@ -100,7 +100,7 @@ Expected（期望）:
 - 每条命令结束后都有 slowest durations（最慢耗时）列表。
 - 如果某条失败，先记录失败测试名和失败原因，不直接修代码。
 
-- [ ] **Step 4: 按 verify check（验证检查项）分组计时**
+- [x] **Step 4: 按 verify check（验证检查项）分组计时**
 
 Run（运行）:
 
@@ -125,7 +125,7 @@ Expected（期望）:
 - 看到 `verify.pr-flow`、`verify.agent-guard`、`verify.release-flow`、`verify.cross-agent-review`、`verify.test-framework`、`verify.openspec` 等分组耗时。
 - 最大耗时组会指导后续优化优先级；预期 PR Flow（拉取请求流程）仍是第一目标。
 
-- [ ] **Step 5: 写入 Design Doc（设计文档）证据块**
+- [x] **Step 5: 写入 Design Doc（设计文档）证据块**
 
 在 `docs/superpowers/specs/2026-06-23-full-verification-runtime-design.md` 末尾追加：
 
@@ -152,7 +152,7 @@ Expected（期望）:
 - Create（新建）: `tests/support/pr_flow_invocation.py`
 - Modify（修改）: `openspec/changes/optimize-full-verification-runtime/specs/full-verification-runtime/spec.md`
 
-- [ ] **Step 1: 写共享 helper（辅助函数）的失败测试**
+- [x] **Step 1: 写共享 helper（辅助函数）的失败测试**
 
 Create（新建）或追加到 `tests/test_pr_flow_cli.py` 的顶部辅助测试附近：
 
@@ -189,7 +189,7 @@ python -m pytest tests/test_pr_flow_cli.py::test_command_stub_records_gh_calls t
 Expected（期望）:
 - FAIL（失败），因为 `tests/support` helper（辅助函数）还不存在。
 
-- [ ] **Step 2: 新建 command stub（命令替身）helper（辅助函数）**
+- [x] **Step 2: 新建 command stub（命令替身）helper（辅助函数）**
 
 Create（新建）`tests/support/command_stubs.py`:
 
@@ -245,7 +245,7 @@ class CommandStub:
         return completed(call, stderr=f"unexpected_command: {' '.join(call)}\n", returncode=1)
 ```
 
-- [ ] **Step 3: 新建 PR Flow（拉取请求流程）进程内调用 helper（辅助函数）**
+- [x] **Step 3: 新建 PR Flow（拉取请求流程）进程内调用 helper（辅助函数）**
 
 Create（新建）`tests/support/pr_flow_invocation.py`:
 
@@ -289,7 +289,7 @@ def invoke_pr_flow(argv: list[str], *, module=None) -> subprocess.CompletedProce
     )
 ```
 
-- [ ] **Step 4: 新建 Git（版本管理）模板 helper（辅助函数）**
+- [x] **Step 4: 新建 Git（版本管理）模板 helper（辅助函数）**
 
 Create（新建）`tests/support/git_templates.py`:
 
@@ -325,7 +325,7 @@ def copy_template(source: Path, target: Path) -> Path:
     return target
 ```
 
-- [ ] **Step 5: 暴露全仓库 fixture（测试夹具）入口**
+- [x] **Step 5: 暴露全仓库 fixture（测试夹具）入口**
 
 Create（新建）`tests/conftest.py`:
 
@@ -380,7 +380,7 @@ def git_project(tmp_path: Path) -> Path:
     return project
 ```
 
-- [ ] **Step 6: 运行 helper（辅助函数）测试**
+- [x] **Step 6: 运行 helper（辅助函数）测试**
 
 Run（运行）:
 
@@ -391,7 +391,7 @@ python -m pytest tests/test_pr_flow_cli.py::test_command_stub_records_gh_calls t
 Expected（期望）:
 - PASS（通过）。
 
-- [ ] **Step 7: 在 OpenSpec（规格流程）中沉淀测试写法规则**
+- [x] **Step 7: 在 OpenSpec（规格流程）中沉淀测试写法规则**
 
 如果 `openspec/changes/optimize-full-verification-runtime/specs/full-verification-runtime/spec.md` 还没有明确以下规则，追加或收紧对应 requirement（要求）：
 
@@ -422,7 +422,7 @@ Expected（期望）:
 - Use（使用）: `tests/support/command_stubs.py`
 - Use（使用）: `tests/support/pr_flow_invocation.py`
 
-- [ ] **Step 1: 标记必须保留的真实 end-to-end（端到端）路径**
+- [x] **Step 1: 标记必须保留的真实 end-to-end（端到端）路径**
 
 在 `tests/test_pr_flow_cli.py` 中保留这些真实路径继续使用 subprocess（子进程）和真实 Git（版本管理）状态：
 
@@ -440,7 +440,7 @@ def test_hotfix_pushes_head_to_target_and_writes_audit_record(tmp_path: Path) ->
 Expected（期望）:
 - 这三类路径仍覆盖 complete（完成）、cleanup（清理）和 hotfix（热修复）的真实 CLI（命令行界面）+ Git（版本管理）行为。
 
-- [ ] **Step 2: 把 diagnose（诊断）stop state（停机状态）矩阵改为 in-process（进程内）调用**
+- [x] **Step 2: 把 diagnose（诊断）stop state（停机状态）矩阵改为 in-process（进程内）调用**
 
 将 `test_diagnose_outputs_dispatch_required_for_pending_checks`、`test_diagnose_outputs_reply_or_fix_required_for_failing_checks`、`test_diagnose_outputs_reply_or_fix_required_for_changes_requested`、`test_diagnose_outputs_reply_or_fix_required_for_review_required`、`test_diagnose_outputs_ready_when_no_stop_state_remains`、`test_diagnose_outputs_dispatch_required_for_draft_pr` 合并为参数化测试：
 
@@ -487,7 +487,7 @@ Expected（期望）:
 - PASS（通过）。
 - 原重复 fake gh（模拟 GitHub 命令行工具）脚本调用可以删除或改为共享 stub（替身）。
 
-- [ ] **Step 3: 把 fake gh（模拟 GitHub 命令行工具）脚本矩阵改为 stub（替身）**
+- [x] **Step 3: 把 fake gh（模拟 GitHub 命令行工具）脚本矩阵改为 stub（替身）**
 
 对 complete（完成）和 tweak（小改）分支测试优先 monkeypatch（运行时替换）`pr_flow.gh`：
 
@@ -519,7 +519,7 @@ Expected（期望）:
 - PASS（通过）。
 - 不再为这些分支写临时 `gh` 可执行脚本。
 
-- [ ] **Step 4: 降低 repeated Git（重复版本管理）setup（初始化）**
+- [x] **Step 4: 降低 repeated Git（重复版本管理）setup（初始化）**
 
 把只需要配置差异、不会 push（推送）或 mutate remote（修改远端）的 complete（完成）矩阵改成复用 immutable template（不可变模板）。仍会 push（推送）、clone（克隆）、delete remote branch（删除远端分支）或验证真实 remote（远端）状态的测试继续走 `init_complete_project()`：
 
@@ -555,7 +555,7 @@ Expected（期望）:
 - complete/tweak（完成/小改）分组耗时接近或低于 25 秒。
 - 必须保留的真实 complete（完成）生命周期仍通过。
 
-- [ ] **Step 5: 优化 cleanup（清理）和 hotfix（热修复）错误分支**
+- [x] **Step 5: 优化 cleanup（清理）和 hotfix（热修复）错误分支**
 
 对以下错误分支使用 monkeypatch（运行时替换）或更小 Git（版本管理）状态：
 
@@ -610,7 +610,7 @@ Expected（期望）:
 - cleanup+hotfix（清理+热修复）分组耗时接近或低于 20 秒。
 - `test_cleanup_merged_pr_checks_out_base_pulls_and_deletes_branches` 和 `test_hotfix_pushes_head_to_target_and_writes_audit_record` 仍为真实 end-to-end（端到端）路径。
 
-- [ ] **Step 6: 重跑 PR Flow（拉取请求流程）目标测试**
+- [x] **Step 6: 重跑 PR Flow（拉取请求流程）目标测试**
 
 Run（运行）:
 
@@ -631,7 +631,7 @@ Expected（期望）:
 - Modify（修改）: `tests/test_test_framework_plugin.py`
 - Modify（修改）: `.test-framework/config.json`
 
-- [ ] **Step 1: 增加 runner（运行器）模块加载 helper（辅助函数）**
+- [x] **Step 1: 增加 runner（运行器）模块加载 helper（辅助函数）**
 
 在 `tests/test_test_framework_plugin.py` 现有 `load_test_framework_module()` 附近新增：
 
@@ -650,7 +650,7 @@ Expected（期望）:
 - 后续 Task 4（任务 4）测试调用 runner（运行器）里的 `run_verify()`，不是入口脚本 `test_framework.py`。
 - 如果 helper（辅助函数）需要复用已有 import（导入），只补缺失的 `importlib.util` 或 `sys`，不重复导入。
 
-- [ ] **Step 2: 写并行调度失败测试**
+- [x] **Step 2: 写并行调度失败测试**
 
 Append（追加）到 `tests/test_test_framework_plugin.py`:
 
@@ -704,7 +704,7 @@ Expected（期望）:
 - 先 FAIL（失败），因为 runner（运行器）还没有并行分组语义。
 - 该测试通过 `threading.Barrier`（线程屏障）和 elapsed（耗时）断言证明两个 parallel-safe（可并行）check（检查项）有重叠执行；串行实现会在 barrier（屏障）处失败。
 
-- [ ] **Step 3: 写 serial fallback（串行兜底）失败测试**
+- [x] **Step 3: 写 serial fallback（串行兜底）失败测试**
 
 Append（追加）:
 
@@ -742,7 +742,7 @@ def test_test_framework_runner_full_verify_preserves_serial_checks(tmp_path: Pat
 Expected（期望）:
 - FAIL（失败），直到 runner（运行器）识别 `parallel: false`。
 
-- [ ] **Step 4: 写缺省串行策略失败测试**
+- [x] **Step 4: 写缺省串行策略失败测试**
 
 Append（追加）:
 
@@ -781,7 +781,7 @@ Expected（期望）:
 - FAIL（失败），直到缺失 `parallel`（并行）元数据的 check（检查项）按 serial（串行）处理。
 - 后续 `.test-framework/config.json` 仍必须给仓库内所有 verify check（验证检查项）显式声明 `parallel`，这个缺省规则只是保守兜底。
 
-- [ ] **Step 5: 写稳定汇总顺序失败测试**
+- [x] **Step 5: 写稳定汇总顺序失败测试**
 
 Append（追加）:
 
@@ -829,7 +829,7 @@ def test_test_framework_runner_full_verify_reports_results_in_config_order(
 Expected（期望）:
 - FAIL（失败），直到两个 parallel（并行）check（检查项）即使反序完成，也按 `.test-framework/config.json` 原始顺序输出 stdout（标准输出）、stderr（标准错误）、duration（耗时）和 failed（失败）汇总。
 
-- [ ] **Step 6: 实现 check（检查项）分组函数**
+- [x] **Step 6: 实现 check（检查项）分组函数**
 
 在 `test_framework_runner.py` 增加：
 
@@ -851,7 +851,7 @@ def _split_parallel_checks(
     return parallel, serial
 ```
 
-- [ ] **Step 7: 实现 full（完整）模式并行运行和稳定结果汇总**
+- [x] **Step 7: 实现 full（完整）模式并行运行和稳定结果汇总**
 
 在 `test_framework_runner.py` 增加标准库 ThreadPoolExecutor（线程池执行器）实现：
 
@@ -994,7 +994,7 @@ Expected（期望）:
 - 并行 check（检查项）执行完成后，按原始 `.test-framework/config.json` 配置顺序打印 stdout/stderr（标准输出/标准错误）、duration（耗时）和 failed（失败）汇总，避免并发输出交错或遗漏失败原因。
 - `_cache_key()` 的 invalid input（无效输入）错误被转换成 `CheckResult`（检查结果）失败项，不得中断整轮汇总。
 
-- [ ] **Step 8: 增加耗时输出和失败汇总验收**
+- [x] **Step 8: 增加耗时输出和失败汇总验收**
 
 在 `_run_check()` 或 wrapper（包装器）中记录每个 check（检查项）耗时，并在 full verify（完整验证）结束前输出：
 
@@ -1009,7 +1009,7 @@ Expected（期望）:
 - 任一并行 check（检查项）失败时，最终退出码仍为失败，并且 stdout/stderr（标准输出/标准错误）与 failed（失败）汇总都可用于定位。
 - invalid input path（无效输入路径）这类配置错误也进入 failed（失败）汇总，最终输出 `status: failed`。
 
-- [ ] **Step 9: 更新 `.test-framework/config.json` 并声明所有 check（检查项）策略**
+- [x] **Step 9: 更新 `.test-framework/config.json` 并声明所有 check（检查项）策略**
 
 给每个 verify check（验证检查项）增加明确 `parallel`：
 
@@ -1054,7 +1054,7 @@ Expected（期望）:
 - Create（新建）: `requirements-dev.txt`，仅当最终决定采用 pytest-xdist（并行测试插件）、用户已授权依赖记录、且没有其它依赖声明位置时创建。
 - Modify（修改）: `docs/superpowers/specs/2026-06-23-full-verification-runtime-design.md`
 
-- [ ] **Step 1: 检查 pytest-xdist（并行测试插件）是否已可用**
+- [x] **Step 1: 检查 pytest-xdist（并行测试插件）是否已可用**
 
 Run（运行）:
 
@@ -1067,7 +1067,7 @@ Expected（期望）:
 - 如果输出 `xdist_available` 且 help（帮助）中存在 `-n`，可以进入 Step 3 接入。
 - 如果失败，继续 Step 2 记录依赖，并且不得在未安装前把 verify check（验证检查项）命令改成需要 `-n auto`。
 
-- [ ] **Step 2: 明确依赖记录位置，但未采用时不新增依赖文件**
+- [x] **Step 2: 明确依赖记录位置，但未采用时不新增依赖文件**
 
 如果 pytest-xdist（并行测试插件）已可用，或用户明确授权采用并记录依赖，再检查依赖记录位置。如果仓库仍只有 `pyproject.toml` 且没有 dev dependency（开发依赖）区域，Create（新建）`requirements-dev.txt`：
 
@@ -1080,7 +1080,7 @@ Expected（期望）:
 - 依赖记录清楚，但实施者不得自动全局安装；如需安装，先获得用户授权或使用项目既有环境。
 - 如果 pytest-xdist（并行测试插件）不可用且用户未授权采用，不创建 `requirements-dev.txt`，跳过 Step 3 和 Step 4 的 `-n auto` 命令修改，直接在 Step 5 记录 `not adopted: dependency unavailable`（未接入：依赖不可用）。
 
-- [ ] **Step 3: 给 pytest（Python 测试框架）命令接入 xdist（并行测试插件）**
+- [x] **Step 3: 给 pytest（Python 测试框架）命令接入 xdist（并行测试插件）**
 
 仅当 pytest-xdist（并行测试插件）已可用或用户已授权安装并完成安装时，将 `.test-framework/config.json` 中 pytest（Python 测试框架）命令改为分组内部并行：
 
@@ -1105,7 +1105,7 @@ Do not（不要）:
 - 不使用 `-m "not slow"` 这类 marker-filtered（测试标记过滤）。
 - 不把 full verification（完整验证）改成测试子集。
 
-- [ ] **Step 4: 验证 xdist（并行测试插件）没有隐藏共享状态问题**
+- [x] **Step 4: 验证 xdist（并行测试插件）没有隐藏共享状态问题**
 
 Run（运行）:
 
@@ -1123,7 +1123,7 @@ Expected（期望）:
 - 如果某组失败，先把该 verify check（验证检查项）标为 `parallel: false` 或移除 `-n auto`，记录失败原因，再继续保证 full（完整）仍全量运行。
 - 如果当前仓库的 `verify.local-build-contract` 或 `verify.test-framework` 映射到的测试文件名不同，先从 `.test-framework/config.json` 读取实际 command（命令）后运行等价 `-p no:cacheprovider -n auto` 验证；不要凭上面的示例文件名硬编码。
 
-- [ ] **Step 5: 写评估结论到 Design Doc（设计文档）**
+- [x] **Step 5: 写评估结论到 Design Doc（设计文档）**
 
 在 Design Doc（设计文档）追加：
 
@@ -1149,7 +1149,7 @@ Expected（期望）:
 - Use（使用）: `tests/support/command_stubs.py`
 - Use（使用）: `tests/support/git_templates.py`
 
-- [ ] **Step 1: 根据最新 durations（耗时报告）选择下一个最大组**
+- [x] **Step 1: 根据最新 durations（耗时报告）选择下一个最大组**
 
 Run（运行）:
 
@@ -1162,7 +1162,7 @@ python -m pytest tests/test_cross_agent_review_cli.py --durations=15 -q
 Expected（期望）:
 - 只优化当前最大耗时来源，不做无关重构。
 
-- [ ] **Step 2: Release Flow（发布流程）保留一个 local E2E（本地端到端）并轻量化矩阵**
+- [x] **Step 2: Release Flow（发布流程）保留一个 local E2E（本地端到端）并轻量化矩阵**
 
 保留 `test_release_flow_local_e2e` 作为真实路径。对只验证参数、状态和 JSON artifact（数据产物）的测试，优先使用 in-process（进程内）module（模块）调用或共享 `write_json()` fixture（测试夹具）。
 
@@ -1176,7 +1176,7 @@ Expected（期望）:
 - PASS（通过）。
 - Release Flow（发布流程）仍保留真实 `setup -> release-init -> preflight -> publish -> summarize` 路径。
 
-- [ ] **Step 3: Agent Guard（代理守卫）保留 plugin runtime E2E（插件运行时端到端）并共享大文本 fixture（测试夹具）**
+- [x] **Step 3: Agent Guard（代理守卫）保留 plugin runtime E2E（插件运行时端到端）并共享大文本 fixture（测试夹具）**
 
 把 `write_confirmed_research_notes()` 这类长输入模板移动到共享 fixture（测试夹具），多个测试复用不可变文本，只在测试目录复制输出。
 
@@ -1190,7 +1190,7 @@ Expected（期望）:
 - PASS（通过）。
 - Agent Guard（代理守卫）仍覆盖 install（安装）、verify（验证）、runtime（运行时）和 PRD full E2E（需求文档完整端到端）。
 
-- [ ] **Step 4: cross-agent-review（跨代理审查）减少重复 subprocess（子进程）启动**
+- [x] **Step 4: cross-agent-review（跨代理审查）减少重复 subprocess（子进程）启动**
 
 对纯文本生成、参数校验和错误分支，使用 module（模块）函数或 in-process（进程内）调用；保留一个真实 CLI（命令行界面）路径覆盖入口。
 
@@ -1210,7 +1210,7 @@ Expected（期望）:
 - Modify（修改）: `docs/superpowers/specs/2026-06-23-full-verification-runtime-design.md`
 - Modify（修改）: `openspec/changes/optimize-full-verification-runtime/tasks.md`
 
-- [ ] **Step 1: 运行 OpenSpec（规格流程）严格校验**
+- [x] **Step 1: 运行 OpenSpec（规格流程）严格校验**
 
 Run（运行）:
 
@@ -1222,7 +1222,7 @@ openspec validate --all --strict --no-interactive
 Expected（期望）:
 - 两条命令都 PASS（通过）。
 
-- [ ] **Step 2: 运行目标测试**
+- [x] **Step 2: 运行目标测试**
 
 Run（运行）:
 
@@ -1235,7 +1235,7 @@ Expected（期望）:
 - 两条命令都 PASS（通过）。
 - PR Flow（拉取请求流程）和 Test Framework（测试框架）不再出现单个明显不可接受慢点。
 
-- [ ] **Step 3: 运行 full verification（完整验证）并计时**
+- [x] **Step 3: 运行 full verification（完整验证）并计时**
 
 Run（运行）:
 
@@ -1254,7 +1254,7 @@ Expected（期望）:
 - 使用当前仓库 canonical full verification command（规范完整验证命令）：`python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project . --full`。
 - `full_verify_seconds` 小于 60.00。
 
-- [ ] **Step 4: 如果仍超过 60 秒，按最大剩余耗时继续一轮**
+- [x] **Step 4: 如果仍超过 60 秒，按最大剩余耗时继续一轮**
 
 Run（运行）:
 
@@ -1267,7 +1267,7 @@ Expected（期望）:
 - 根据 runner（运行器）duration（耗时）输出和 pytest durations（耗时报告）选择最大剩余项。
 - 继续使用 Task 2 的 repo-native（仓库内自带）规则，不添加一次性特殊逻辑。
 
-- [ ] **Step 5: 写 after（优化后）证据**
+- [x] **Step 5: 写 after（优化后）证据**
 
 在 Design Doc（设计文档）追加：
 
@@ -1291,7 +1291,7 @@ Expected（期望）:
 - remaining largest contributors（剩余最大耗时来源）: 如果 after（优化后）超过 50 秒，列出 runner（运行器）duration（耗时）输出最高的 3 项；低于 50 秒则写 `none above risk threshold`
 ```
 
-- [ ] **Step 6: 勾选 OpenSpec tasks（规格任务）**
+- [x] **Step 6: 勾选 OpenSpec tasks（规格任务）**
 
 只有当对应证据存在后，更新 `openspec/changes/optimize-full-verification-runtime/tasks.md`。必须按当前 tasks（任务）文件逐项勾选，不得只勾选 baseline（基线）三项。最低完成面应覆盖：
 

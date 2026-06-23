@@ -78,8 +78,6 @@ def test_missing_input_file_fails(tmp_path: Path) -> None:
         str(write_file(tmp_path / "design.md")),
         "--tasks-file",
         str(write_file(tmp_path / "tasks.md")),
-        "--tests-file",
-        str(write_file(tmp_path / "tests.txt")),
         "--fake-reviewer-results",
         "[]",
     )
@@ -163,8 +161,6 @@ def review_args(project: Path, head: str, output_dir: Path) -> list[str]:
         str(write_file(project / "design.md")),
         "--tasks-file",
         str(write_file(project / "tasks.md")),
-        "--tests-file",
-        str(write_file(project / "tests.txt")),
         "--output-dir",
         str(output_dir),
         "--fake-reviewer-results",
@@ -181,7 +177,6 @@ def make_review_args_for_module(module, tmp_path: Path):
         spec_file=write_file(tmp_path / "spec.md"),
         design_file=write_file(tmp_path / "design.md"),
         tasks_file=write_file(tmp_path / "tasks.md"),
-        tests_file=write_file(tmp_path / "tests.txt"),
         output_dir=tmp_path / "out",
         sdk_python=None,
         fake_reviewer_results=None,
@@ -221,8 +216,6 @@ def test_untracked_input_files_in_space_directory_are_allowed(tmp_path: Path) ->
         str(write_file(input_dir / "design file.md")),
         "--tasks-file",
         str(write_file(input_dir / "tasks file.md")),
-        "--tests-file",
-        str(write_file(input_dir / "tests file.txt")),
         "--output-dir",
         str(tmp_path / "out"),
         "--fake-reviewer-results",
@@ -309,7 +302,6 @@ def test_run_archives_review_input_snapshots_under_output_dir(tmp_path: Path) ->
     spec_file = write_file(input_dir / "spec file.md", "spec body\n")
     design_file = write_file(input_dir / "design file.md", "design body\n")
     tasks_file = write_file(input_dir / "tasks file.md", "tasks body\n")
-    tests_file = write_file(input_dir / "tests file.txt", "tests body\n")
 
     result = run(
         "run",
@@ -327,8 +319,6 @@ def test_run_archives_review_input_snapshots_under_output_dir(tmp_path: Path) ->
         str(design_file),
         "--tasks-file",
         str(tasks_file),
-        "--tests-file",
-        str(tests_file),
         "--output-dir",
         str(output_dir),
         "--fake-reviewer-results",
@@ -342,7 +332,7 @@ def test_run_archives_review_input_snapshots_under_output_dir(tmp_path: Path) ->
     assert (inputs_dir / "spec.md").read_text(encoding="utf-8") == "spec body\n"
     assert (inputs_dir / "design.md").read_text(encoding="utf-8") == "design body\n"
     assert (inputs_dir / "tasks.md").read_text(encoding="utf-8") == "tasks body\n"
-    assert (inputs_dir / "tests.txt").read_text(encoding="utf-8") == "tests body\n"
+    assert not (inputs_dir / "tests.txt").exists()
 
 
 def test_prompt_contains_review_context(tmp_path: Path) -> None:
@@ -363,7 +353,6 @@ def test_reviewer_prompt_includes_all_review_inputs(tmp_path: Path) -> None:
     spec_file = write_file(project / "spec.md", "Spec body\n")
     design_file = write_file(project / "design.md", "Design body\n")
     tasks_file = write_file(project / "tasks.md", "Tasks body\n")
-    tests_file = write_file(project / "tests.txt", "Tests body\n")
     review = module.ReviewArgs(
         change="demo-change",
         base_ref=head,
@@ -372,7 +361,6 @@ def test_reviewer_prompt_includes_all_review_inputs(tmp_path: Path) -> None:
         spec_file=spec_file,
         design_file=design_file,
         tasks_file=tasks_file,
-        tests_file=tests_file,
         output_dir=tmp_path / "out",
         sdk_python=None,
         fake_reviewer_results=None,
@@ -390,7 +378,20 @@ def test_reviewer_prompt_includes_all_review_inputs(tmp_path: Path) -> None:
     assert "Spec:\nSpec body\n" in prompt
     assert "Design:\nDesign body\n" in prompt
     assert "Tasks:\nTasks body\n" in prompt
-    assert "Tests:\nTests body\n" in prompt
+    assert "Tests:" not in prompt
+
+
+def test_tests_and_edge_cases_prompt_focuses_review_scope(tmp_path: Path) -> None:
+    module = load_script_module()
+    review = make_review_args_for_module(module, tmp_path)
+
+    prompt = module.reviewer_prompt(review, "tests-and-edge-cases")
+
+    assert "Focus for tests-and-edge-cases:" in prompt
+    assert "test coverage" in prompt
+    assert "regression protection" in prompt
+    assert "edge cases" in prompt
+    assert "Do not claim tests passed" in prompt
 
 
 def test_reviewer_prompt_requires_strict_json_contract(tmp_path: Path) -> None:

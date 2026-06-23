@@ -54,8 +54,7 @@ cross_agent_review.py run \
   --diff-file <path> \
   --spec-file <path> \
   --design-file <path> \
-  --tasks-file <path> \
-  --tests-file <path>
+  --tasks-file <path>
 ```
 
 `--output-dir` may override the default output directory. `--sdk-python` or an environment variable may point to a Python interpreter that has `claude_agent_sdk` installed.
@@ -81,7 +80,7 @@ The runner dispatches fixed reviewer roles:
 
 - `spec-alignment`: checks whether the implementation matches OpenSpec, the design context, and tasks.
 - `implementation-correctness`: checks logic, integration behavior, and regression risks.
-- `tests-and-edge-cases`: checks whether the supplied test results and coverage are enough for the change.
+- `tests-and-edge-cases`: checks test coverage gaps, regression protection, and edge cases from the supplied diff, spec, design, and tasks context.
 - `risk-review`: checks security, destructive behavior, release risk, and operational risk.
 
 `risk-review` may be explicitly disabled. When disabled, the report records the role as skipped and includes the reason.

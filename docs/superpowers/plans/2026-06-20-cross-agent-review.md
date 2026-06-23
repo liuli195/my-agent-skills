@@ -155,7 +155,6 @@ archived-with: 2026-06-20-add-cross-agent-review-mechanism
 
 - 当前 worktree 必须干净。
 - 当前 `HEAD` 必须等于传入的 `--head-ref`。
-- 调用方已运行测试，并提供测试结果文件。
 - 当前 Python、默认 Claude SDK venv，或 `--sdk-python` 指定的 Python 必须能导入 `claude_agent_sdk`。
 
 ## 命令
@@ -168,8 +167,7 @@ python scripts/cross_agent_review.py run \
   --diff-file <path> \
   --spec-file <path> \
   --design-file <path> \
-  --tasks-file <path> \
-  --tests-file <path>
+  --tasks-file <path>
 ```
 
 输出默认写入 `.local/cross-agent-review/<change>/<head_ref>/`。
@@ -311,8 +309,6 @@ def test_missing_input_file_fails(tmp_path: Path) -> None:
         str(write_file(tmp_path / "design.md")),
         "--tasks-file",
         str(write_file(tmp_path / "tasks.md")),
-        "--tests-file",
-        str(write_file(tmp_path / "tests.txt")),
         "--fake-reviewer-results",
         "[]",
     )
@@ -365,8 +361,6 @@ def review_args(project: Path, head: str, output_dir: Path) -> list[str]:
         str(write_file(project / "design.md")),
         "--tasks-file",
         str(write_file(project / "tasks.md")),
-        "--tests-file",
-        str(write_file(project / "tests.txt")),
         "--output-dir",
         str(output_dir),
         "--fake-reviewer-results",
@@ -420,7 +414,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-REQUIRED_FILE_ARGS = ["diff_file", "spec_file", "design_file", "tasks_file", "tests_file"]
+REQUIRED_FILE_ARGS = ["diff_file", "spec_file", "design_file", "tasks_file"]
 
 
 @dataclass(frozen=True)
@@ -432,7 +426,6 @@ class ReviewArgs:
     spec_file: Path
     design_file: Path
     tasks_file: Path
-    tests_file: Path
     output_dir: Path | None
     sdk_python: Path | None
     fake_reviewer_results: str | None
@@ -450,7 +443,6 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--spec-file", type=Path, required=True)
     run_parser.add_argument("--design-file", type=Path, required=True)
     run_parser.add_argument("--tasks-file", type=Path, required=True)
-    run_parser.add_argument("--tests-file", type=Path, required=True)
     run_parser.add_argument("--output-dir", type=Path)
     run_parser.add_argument("--sdk-python", type=Path)
     run_parser.add_argument("--fake-reviewer-results")
@@ -482,7 +474,6 @@ def parse_review_args(args: argparse.Namespace) -> ReviewArgs:
         spec_file=args.spec_file,
         design_file=args.design_file,
         tasks_file=args.tasks_file,
-        tests_file=args.tests_file,
         output_dir=args.output_dir,
         sdk_python=args.sdk_python,
         fake_reviewer_results=args.fake_reviewer_results,
@@ -1090,7 +1081,6 @@ def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
             "Spec:\n" + read_text(review_args.spec_file),
             "Design:\n" + read_text(review_args.design_file),
             "Tasks:\n" + read_text(review_args.tasks_file),
-            "Tests:\n" + read_text(review_args.tests_file),
         ]
     )
 ```
@@ -1205,7 +1195,7 @@ Use the known SDK Python path if current Python lacks the SDK:
 $sdk="C:\Users\liuli\.claude\security\agent-sdk-venv\Scripts\python.exe"
 $head=(git rev-parse HEAD).Trim()
 $out=".local/cross-agent-review/smoke/$head"
-python plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py run --change smoke --base-ref $head --head-ref $head --diff-file diff.patch --spec-file spec.md --design-file design.md --tasks-file tasks.md --tests-file tests.txt --sdk-python $sdk --output-dir $out
+python plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py run --change smoke --base-ref $head --head-ref $head --diff-file diff.patch --spec-file spec.md --design-file design.md --tasks-file tasks.md --sdk-python $sdk --output-dir $out
 ```
 
 Expected: exits 0 or 1 depending on reviewer findings, always writes `review-report.md` and `review-results.json`. If findings block, `review-pass.json` is absent.

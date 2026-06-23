@@ -65,7 +65,7 @@ python -m pytest
 
 ## Cross-Agent Review 输入快照
 
-cross-agent-review（跨代理审查）仍通过 CLI（命令行接口）接收 diff、spec、design、tasks 和 tests 输入文件。运行时先把这些输入复制到 review output（审查输出）目录的 `inputs/` 子目录，再让 reviewer（审查代理）读取快照内容。
+cross-agent-review（跨代理审查）通过 CLI（命令行接口）接收 diff、spec、design 和 tasks 输入文件，不要求测试结果文件。运行时先把这些输入复制到 review output（审查输出）目录的 `inputs/` 子目录，再让 reviewer（审查代理）读取快照内容。
 
 默认结构：
 
@@ -76,7 +76,6 @@ cross-agent-review（跨代理审查）仍通过 CLI（命令行接口）接收 
     spec.md
     design.md
     tasks.md
-    tests.txt
   review-report.md
   review-results.json
   review-pass.json
