@@ -1,6 +1,6 @@
 {
   "name": "pr-flow",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "PR Flow Plugin（拉取请求流程插件）",
   "skills": "./skills"
 }

@@ -1,6 +1,6 @@
 {
   "name": "test-framework",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Test Framework Plugin（测试框架插件）",
   "skills": "./skills"
 }
