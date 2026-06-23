@@ -22,7 +22,7 @@ TEST_FRAMEWORK_SCRIPT = (
 )
 
 PLUGIN_NAME = "test-framework"
-PLUGIN_VERSION = "0.1.9"
+PLUGIN_VERSION = "0.1.10"
 PLUGIN_DESCRIPTION = "Test Framework Plugin（测试框架插件）"
 
 
