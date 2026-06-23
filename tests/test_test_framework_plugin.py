@@ -630,6 +630,56 @@ def test_test_framework_runner_reports_missing_xdist_before_running_pytest(
     assert "status: failed" in captured.out
 
 
+def test_test_framework_runner_full_verify_aggregates_missing_xdist_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    module = load_test_framework_module()
+    runner = module._runner()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "pytest-a",
+                        "command": "python -m pytest -n 8 tests/a",
+                        "parallel": True,
+                        "inputs": [],
+                    },
+                    {
+                        "id": "pytest-b",
+                        "command": [sys.executable, "-m", "pytest", "-n", "8", "tests/b"],
+                        "parallel": True,
+                        "inputs": [],
+                    },
+                ],
+            },
+        },
+    )
+    calls = []
+
+    def fake_runner(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(runner.importlib.util, "find_spec", lambda _name: None)
+
+    result = runner.run_verify(project, runner=fake_runner, full=True)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert calls == []
+    assert "missing_dependency: pytest-a: pytest-xdist is required" in captured.err
+    assert "missing_dependency: pytest-b: pytest-xdist is required" in captured.err
+    assert "failed: pytest-a, pytest-b" in captured.out
+    assert "status: failed" in captured.out
+
+
 @pytest.mark.parametrize("timeout_seconds", [0, -1, True])
 def test_test_framework_runner_rejects_invalid_check_timeout_seconds(
     tmp_path: Path, timeout_seconds: object
@@ -892,6 +942,27 @@ def test_test_framework_runner_reads_changed_files_with_single_git_status(
 
     assert changed == ["staged.txt", "unstaged.txt", "untracked.txt"]
     assert calls == [["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"]]
+
+
+def test_test_framework_runner_reads_git_status_rename_and_copy_destinations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_test_framework_module()
+    runner = module._runner()
+
+    def fake_run(command, **_kwargs):
+        if command == ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="R  renamed.txt\0old-name.txt\0C  copied.txt\0source.txt\0",
+                stderr="",
+            )
+        raise AssertionError(command)
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    assert runner._git_status_names(tmp_path) == ["renamed.txt", "copied.txt"]
 
 
 def test_test_framework_user_level_skill_path_runs_verify_without_git(

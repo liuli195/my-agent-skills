@@ -48,3 +48,16 @@
 - [x] 7.2 If full verification remains over 60 seconds, profile and optimize the next largest contributor without adding one-off special paths; final retained config uses `maxParallel=0` uncapped（无限制）scheduling and passed at 45.31 seconds.
 - [x] 7.3 Write verification report with before/after timings, xdist decision, serial fallback, and remaining risks.
 - [x] 7.4 Run `openspec validate optimize-full-verification-runtime --strict --no-interactive` and `openspec validate --all --strict --no-interactive`.
+
+## Verification Report
+
+- target（目标）: full verification（完整验证）under 60 seconds with the canonical command（规范命令） `python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project . --full`.
+- before（优化前）: baseline evidence（基线证据） recorded `full_verify_seconds=337.57 code=0`; the earlier design estimate was about 214 seconds before the final baseline rerun.
+- after（优化后）: final retained full verification（最终保留完整验证） passed with `full_verify_seconds=45.31 code=0`, `maxParallel=0` uncapped（无限制）scheduling, and all configured verify checks（验证检查项） included.
+- repeat evidence（重复证据）: three uncapped（无限制）runs reached `43.56s`, `43.28s`, and `44.09s`, average（平均）`43.64s`; three `maxParallel=6` runs averaged `42.28s`.
+- final concurrency decision（最终并发决策）: keep `maxParallel=0` even though `maxParallel=6` was about 1.36 seconds faster on this machine, because uncapped（无限制）mode is more compatible across different CPU（处理器）counts and avoids a local-only limit.
+- pytest-xdist（并行测试插件）decision（决策）: adopted after user authorization and installation into `C:\Users\liuli\AppData\Local\Programs\Python\Python312\python.exe`; `requirements-dev.txt` records `pytest` and `pytest-xdist` for development setup.
+- serial fallback（串行兜底）: Test Framework（测试框架） still supports `parallel: false` checks（检查项）; after xdist（并行测试插件）evaluation, no current pytest（Python 测试框架） verify check（验证检查项） needed serial fallback.
+- no subset shortcut（无子集捷径）: final timing used the full configured verify set, not marker-filtered（测试标记过滤） subsets.
+- largest remaining contributors（剩余最大耗时来源） from final runner duration（运行器耗时） output: `verify.test-framework seconds=44.70`, `verify.agent-guard seconds=43.38`, and `verify.release-flow seconds=41.78`. These run concurrently, so they identify the highest remaining check-level work but do not add up to wall-clock（墙钟） time.
+- retained risk（保留风险）: `maxParallel=0` plus pytest-xdist（并行测试插件） can create high process concurrency on smaller machines; use a local `maxParallel` override if a target environment is resource constrained.

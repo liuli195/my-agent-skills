@@ -208,6 +208,7 @@ def _git_status_names(project: Path) -> list[str] | None:
         status = entry[:2]
         path = entry[3:]
         if status[0] in {"R", "C"}:
+            # In porcelain v1 -z mode, rename/copy entries are destination then source.
             if path:
                 names.append(path)
             index += 1
