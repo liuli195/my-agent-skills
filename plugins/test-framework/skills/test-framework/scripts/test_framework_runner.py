@@ -495,7 +495,7 @@ def _run_check_result(
             duration_seconds=time.monotonic() - started_at,
             cache_key=key,
         )
-    except BaseException as error:
+    except Exception as error:
         return CheckResult(
             index,
             check,

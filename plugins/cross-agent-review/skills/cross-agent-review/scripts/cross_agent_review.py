@@ -80,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--spec-file", type=Path, required=True)
     run_parser.add_argument("--design-file", type=Path, required=True)
     run_parser.add_argument("--tasks-file", type=Path, required=True)
+    run_parser.add_argument("--tests-file", type=Path, help=argparse.SUPPRESS)
     run_parser.add_argument("--output-dir", type=Path)
     run_parser.add_argument("--sdk-python", type=Path)
     run_parser.add_argument("--fake-reviewer-results")
@@ -625,21 +626,26 @@ def run_review(args: argparse.Namespace) -> int:
         return 2
     try:
         review_args = parse_review_args(args)
+        legacy_input_paths = [args.tests_file] if args.tests_file is not None else []
         original_input_paths = allowed_input_paths(review_args)
-        ensure_clean_subject(Path.cwd(), review_args.head_ref, original_input_paths)
+        ensure_clean_subject(Path.cwd(), review_args.head_ref, [*original_input_paths, *legacy_input_paths])
         review_args = archive_input_snapshots(review_args)
         sdk_python = resolve_sdk_python(
             review_args.sdk_python,
             require_real_sdk=review_args.fake_reviewer_results is None or review_args.sdk_python is not None,
         )
-        ensure_clean_subject(Path.cwd(), review_args.head_ref, [*original_input_paths, *allowed_input_paths(review_args)])
+        ensure_clean_subject(
+            Path.cwd(),
+            review_args.head_ref,
+            [*original_input_paths, *legacy_input_paths, *allowed_input_paths(review_args)],
+        )
         reviewers = dispatch_reviewers(review_args, sdk_python)
         skipped = []
         if review_args.disable_risk_review:
             skipped.append({"role": "risk-review", "reason": review_args.disable_risk_review})
             reviewers = [item for item in reviewers if item.get("role") != "risk-review"]
         summary = aggregate(reviewers, skipped)
-        status = write_outputs(review_args, summary, original_input_paths)
+        status = write_outputs(review_args, summary, [*original_input_paths, *legacy_input_paths])
     except (ValueError, json.JSONDecodeError) as exc:
         print("status: failed")
         print(f"error: {exc}")

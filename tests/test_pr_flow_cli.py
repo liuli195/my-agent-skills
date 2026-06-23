@@ -119,6 +119,21 @@ def test_pr_flow_template_cache_key_includes_script_contents() -> None:
     assert TEMPLATE_CACHE_KEY == template_cache_key(Path(__file__), SCRIPT)
 
 
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        (["cleanup", "--project", "."], "--pr"),
+        (["hotfix", "--project", "."], "--target"),
+        (["complete", "--project", ".", "--not-a-real-option"], "--not-a-real-option"),
+    ],
+)
+def test_pr_flow_cli_argparse_errors_cover_core_commands(args: list[str], expected: str) -> None:
+    result = run(*args)
+
+    assert result.returncode == 2
+    assert expected in result.stderr
+
+
 def test_command_stub_accepts_project_argument_for_pr_flow_helpers(tmp_path: Path) -> None:
     from tests.support.command_stubs import CommandStub
 

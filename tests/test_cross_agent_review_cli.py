@@ -344,11 +344,34 @@ def test_run_archives_review_input_snapshots_under_output_dir(tmp_path: Path) ->
 
     assert result.returncode == 0, result.stdout + result.stderr
     inputs_dir = output_dir / "inputs"
+    assert {path.name for path in inputs_dir.iterdir()} == {
+        "diff.patch",
+        "spec.md",
+        "design.md",
+        "tasks.md",
+    }
     assert (inputs_dir / "diff.patch").read_text(encoding="utf-8") == "diff body\n"
     assert (inputs_dir / "spec.md").read_text(encoding="utf-8") == "spec body\n"
     assert (inputs_dir / "design.md").read_text(encoding="utf-8") == "design body\n"
     assert (inputs_dir / "tasks.md").read_text(encoding="utf-8") == "tasks body\n"
     assert not (inputs_dir / "tests.txt").exists()
+
+
+def test_run_accepts_legacy_tests_file_argument_without_snapshotting_it(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    head = init_repo(project)
+    legacy_tests_file = write_file(project / "legacy-tests.txt", "legacy tests\n")
+    output_dir = tmp_path / "out"
+
+    result = run(
+        *review_args(project, head, output_dir),
+        "--tests-file",
+        str(legacy_tests_file),
+        cwd=project,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (output_dir / "inputs" / "tests.txt").exists()
 
 
 def test_prompt_contains_review_context(tmp_path: Path) -> None:
