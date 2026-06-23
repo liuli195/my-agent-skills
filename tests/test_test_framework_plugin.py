@@ -630,6 +630,39 @@ def test_test_framework_runner_reports_missing_xdist_before_running_pytest(
     assert "status: failed" in captured.out
 
 
+@pytest.mark.parametrize("timeout_seconds", [0, -1, True])
+def test_test_framework_runner_rejects_invalid_check_timeout_seconds(
+    tmp_path: Path, timeout_seconds: object
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "invalid-timeout",
+                        "command": command_that_logs("invalid-timeout"),
+                        "timeoutSeconds": timeout_seconds,
+                        "parallel": False,
+                        "inputs": [],
+                    },
+                ],
+            },
+        },
+    )
+
+    result = run_check(project, "verify", "--full")
+
+    assert result.returncode == 1
+    assert "invalid_timeoutSeconds: invalid-timeout" in result.stderr
+    assert "status: failed" in result.stdout
+
+
 def test_test_framework_runner_full_verify_reports_parallel_check_timeout(
     tmp_path: Path, capsys
 ) -> None:

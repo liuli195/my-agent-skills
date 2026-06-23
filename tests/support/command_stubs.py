@@ -22,6 +22,13 @@ def completed(
     )
 
 
+def matches(expected: tuple[str, ...], actual: tuple[str, ...]) -> bool:
+    return len(expected) == len(actual) and all(
+        expected_item == actual_item or expected_item == "__placeholder__"
+        for expected_item, actual_item in zip(expected, actual)
+    )
+
+
 @dataclass
 class CommandStub:
     responses: list[tuple[tuple[str, ...], subprocess.CompletedProcess[str]]] = field(default_factory=list)
@@ -54,7 +61,7 @@ class CommandStub:
             (
                 index
                 for index, (expected, _) in enumerate(self.responses)
-                if expected == normalized or expected == call
+                if matches(expected, normalized) or matches(expected, call)
             ),
             None,
         )

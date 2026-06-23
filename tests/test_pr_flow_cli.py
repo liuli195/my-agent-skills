@@ -38,6 +38,8 @@ def template_cache_key(*paths: Path) -> str:
 
 
 TEMPLATE_CACHE_KEY = template_cache_key(Path(__file__), SCRIPT)
+# The cache is content-keyed and intentionally left under the OS temp directory
+# between runs; stale locks and incomplete templates are recovered in-place.
 TEMPLATE_ROOT = Path(tempfile.gettempdir()) / f"pr-flow-test-templates-{TEMPLATE_CACHE_KEY}"
 TEMPLATE_LOCK_TIMEOUT_SECONDS = 30
 TEMPLATE_LOCK_STALE_SECONDS = 30
@@ -167,6 +169,23 @@ def test_command_stub_can_consume_sequence_and_capture_body_file(tmp_path: Path)
     assert first.returncode == 1
     assert second.stdout == '{"number":1}\n'
     assert edit.returncode == 0
+    assert stub.body_files == [
+        {"args": ("gh", "pr", "edit", "1", "--body-file", str(body_path)), "body": "hello body\n"}
+    ]
+
+
+def test_command_stub_placeholder_matches_body_file_path(tmp_path: Path) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    body_path = tmp_path / "body.md"
+    body_path.write_text("hello body\n", encoding="utf-8")
+    stub = CommandStub(consume=True)
+    stub.add(["pr", "edit", "1", "--body-file", "__placeholder__"])
+
+    result = stub("gh", "pr", "edit", "1", "--body-file", str(body_path))
+
+    assert result.returncode == 0
+    assert stub.responses == []
     assert stub.body_files == [
         {"args": ("gh", "pr", "edit", "1", "--body-file", str(body_path)), "body": "hello body\n"}
     ]
@@ -836,14 +855,6 @@ def run_tweak_in_process(
     gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
 
-    original_call = gh_stub.__call__
-
-    def gh_call(*args, **kwargs):
-        normalized = tuple(str(arg) for arg in args[1:]) if args and isinstance(args[0], os.PathLike) else tuple(str(arg) for arg in args)
-        if normalized[:4] == ("pr", "edit", "12", "--body-file"):
-            gh_stub.responses.insert(0, (normalized, subprocess.CompletedProcess(list(normalized), 0, "", "")))
-        return original_call(*args, **kwargs)
-
     git_stub = CommandStub(consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
@@ -858,7 +869,7 @@ def run_tweak_in_process(
         (["branch", "--show-current"], "main\n"),
     ]:
         git_stub.add(git_args, stdout=stdout)
-    monkeypatch.setattr(module, "gh", gh_call)
+    monkeypatch.setattr(module, "gh", gh_stub)
     monkeypatch.setattr(module, "git", git_stub)
     result = invoke_pr_flow(["tweak", "--project", str(project), "--reason", reason], module=module)
     return project, result, gh_stub
