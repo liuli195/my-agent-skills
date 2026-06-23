@@ -1,6 +1,6 @@
 ## Context
 
-当前 `python scripts/check.py verify` 默认运行完整 pytest（Python 测试框架）套件。本机实测 341 个测试约 214 秒，其中 `test_pr_flow_cli.py` 单文件约 135 秒。用户确认 A 的目标不是做本仓库专用 fast（快速验证），而是升级为可复用的 test-framework Plugin（测试框架插件）：定义标准产物结构、提供快速缓存验证能力、提供统一配置和统一命令入口。
+变更前旧入口 `python scripts/check.py verify` 默认运行完整 pytest（Python 测试框架）套件。本机实测 341 个测试约 214 秒，其中 `test_pr_flow_cli.py` 单文件约 135 秒。用户确认 A 的目标不是做本仓库专用 fast（快速验证），而是升级为可复用的 test-framework Plugin（测试框架插件）：定义标准产物结构、提供快速缓存验证能力、提供统一配置和统一命令入口。
 
 ## Goals / Non-Goals
 

@@ -8,7 +8,7 @@ canonical_spec: openspec
 
 ## 背景
 
-本仓库当前 `python scripts/check.py verify` 默认运行完整 pytest（Python 测试框架）套件，本机耗时约 214 秒。A 变更不再只做本仓库专用优化，而是提炼为可复用 `test-framework` Plugin（测试框架插件）：任意仓库可初始化同一套 build（构建检查）、默认 verify（快速验证）和显式 full（全量验证）框架。
+本仓库变更前旧入口 `python scripts/check.py verify` 默认运行完整 pytest（Python 测试框架）套件，本机耗时约 214 秒。A 变更不再只做本仓库专用优化，而是提炼为可复用 `test-framework` Plugin（测试框架插件）：任意仓库可初始化同一套 build（构建检查）、默认 verify（快速验证）和显式 full（全量验证）框架。
 
 ## 核心能力
 

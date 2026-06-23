@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -387,6 +388,58 @@ def test_test_framework_runner_full_verify_allows_empty_checks(tmp_path: Path) -
     assert "checked:" in result.stdout
     assert "full-not-run: false" in result.stdout
     assert "status: passed" in result.stdout
+
+
+def test_test_framework_user_level_skill_path_runs_verify_without_git(
+    tmp_path: Path,
+) -> None:
+    user_skill = tmp_path / "user-skills" / "test-framework"
+    shutil.copytree(PLUGIN_ROOT / "skills" / "test-framework", user_skill)
+    script = user_skill / "scripts" / "test_framework.py"
+    project = tmp_path / "project"
+    project.mkdir()
+
+    init = subprocess.run(
+        [sys.executable, str(script), "init", "--project", str(project)],
+        cwd=tmp_path,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert init.returncode == 0, init.stdout + init.stderr
+    (project / "src").mkdir()
+    (project / "src" / "app.py").write_text("changed\n", encoding="utf-8")
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "verify-src",
+                        "command": command_that_logs("verify-src"),
+                        "paths": ["src/**"],
+                        "inputs": ["src"],
+                    }
+                ]
+            },
+        },
+    )
+
+    verify = subprocess.run(
+        [sys.executable, str(script), "verify", "--project", str(project)],
+        cwd=project,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert verify.returncode == 0, verify.stdout + verify.stderr
+    assert "checked: verify-src" in verify.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "verify-src"
+    ]
 
 
 def test_test_framework_runner_uses_passed_result_cache(tmp_path: Path) -> None:
