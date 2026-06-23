@@ -1,11 +1,17 @@
 import asyncio
+import hashlib
 import json
 import io
 import importlib.util
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 import types
 from pathlib import Path
+
+from tests.support.git_templates import copy_template
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +24,8 @@ SCRIPT = (
     / "scripts"
     / "cross_agent_review.py"
 )
+TEMPLATE_CACHE_KEY = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:12]
+TEMPLATE_ROOT = Path(tempfile.gettempdir()) / f"cross-agent-review-test-templates-{TEMPLATE_CACHE_KEY}"
 
 
 def load_script_module():
@@ -91,14 +99,50 @@ def git(project: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def init_repo(project: Path) -> str:
-    project.mkdir()
+def ensure_repo_template(project: Path) -> None:
+    template = TEMPLATE_ROOT / "basic-repo"
+    ready = TEMPLATE_ROOT / "basic-repo.ready"
+    if ready.exists():
+        copy_template(template, project)
+        return
+
+    lock_dir = TEMPLATE_ROOT / "basic-repo.lock"
+    deadline = time.monotonic() + 120
+    while True:
+        try:
+            lock_dir.mkdir(parents=True)
+            break
+        except FileExistsError:
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"template_lock_timeout: {lock_dir}")
+            time.sleep(0.05)
+
+    try:
+        if not ready.exists():
+            if template.exists():
+                shutil.rmtree(template)
+            template.mkdir(parents=True, exist_ok=True)
+            create_repo(template)
+            ready.write_text("ok\n", encoding="utf-8")
+    finally:
+        shutil.rmtree(lock_dir, ignore_errors=True)
+
+    copy_template(template, project)
+
+
+def create_repo(project: Path) -> str:
+    project.mkdir(exist_ok=True)
     git(project, "init")
     git(project, "config", "user.email", "test@example.invalid")
     git(project, "config", "user.name", "Test User")
     write_file(project / "app.txt", "one\n")
     git(project, "add", "app.txt")
     git(project, "commit", "-m", "initial")
+    return git(project, "rev-parse", "HEAD")
+
+
+def init_repo(project: Path) -> str:
+    ensure_repo_template(project)
     return git(project, "rev-parse", "HEAD")
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import concurrent.futures
+import dataclasses
 import fnmatch
 import hashlib
 import json
@@ -7,6 +9,7 @@ import os
 import platform
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 from collections.abc import Callable
@@ -19,6 +22,17 @@ Runner = Callable[..., subprocess.CompletedProcess[Any]]
 
 class ConfigError(Exception):
     pass
+
+
+@dataclasses.dataclass
+class CheckResult:
+    index: int
+    check: dict[str, Any]
+    returncode: int
+    stdout: str = ""
+    stderr: str = ""
+    duration_seconds: float = 0.0
+    cache_key: str | None = None
 
 
 def _is_non_empty_string(value: Any) -> bool:
@@ -121,6 +135,36 @@ def _git_names(project: Path, *args: str) -> list[str] | None:
     return result.stdout.splitlines()
 
 
+def _git_status_names(project: Path) -> list[str] | None:
+    result = subprocess.run(
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        cwd=project,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        return None
+    entries = result.stdout.split("\0")
+    names: list[str] = []
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if not entry:
+            continue
+        status = entry[:2]
+        path = entry[3:]
+        if status[0] in {"R", "C"}:
+            if path:
+                names.append(path)
+            index += 1
+            continue
+        if path:
+            names.append(path)
+    return names
+
+
 def _is_excluded_relative(relative: str) -> bool:
     parts = relative.split("/")
     return (
@@ -150,6 +194,9 @@ def _all_project_files(project: Path) -> list[str]:
 
 
 def _changed_files(project: Path) -> list[str]:
+    status_names = _git_status_names(project)
+    if status_names is not None:
+        return _dedupe(status_names)
     commands = [
         ("diff", "--name-only", "--cached"),
         ("diff", "--name-only"),
@@ -363,8 +410,81 @@ def _run_check(project: Path, check: dict[str, Any], runner: Runner) -> int:
     return int(result.returncode)
 
 
+def _run_check_result(
+    index: int,
+    project: Path,
+    check: dict[str, Any],
+    config: dict[str, Any],
+    changed_files: list[str],
+    runner: Runner,
+) -> CheckResult:
+    started_at = time.monotonic()
+    try:
+        key = _cache_key(project, config, check, changed_files)
+    except ValueError as error:
+        return CheckResult(
+            index,
+            check,
+            1,
+            stderr=f"{error}\n",
+            duration_seconds=time.monotonic() - started_at,
+        )
+
+    command = check.get("command")
+    if not command:
+        return CheckResult(
+            index,
+            check,
+            1,
+            stderr=f"missing_command: {check.get('id')}\n",
+            duration_seconds=time.monotonic() - started_at,
+            cache_key=key,
+        )
+    use_shell = isinstance(command, str)
+    try:
+        result = runner(
+            command,
+            cwd=project,
+            check=False,
+            text=True,
+            capture_output=True,
+            shell=use_shell,
+        )
+    except FileNotFoundError:
+        executable = command[0] if isinstance(command, list) else str(command)
+        return CheckResult(
+            index,
+            check,
+            1,
+            stderr=f"command_not_found: {check.get('id')}: {executable}\n",
+            duration_seconds=time.monotonic() - started_at,
+            cache_key=key,
+        )
+    return CheckResult(
+        index,
+        check,
+        int(result.returncode),
+        stdout=result.stdout or "",
+        stderr=result.stderr or "",
+        duration_seconds=time.monotonic() - started_at,
+        cache_key=key,
+    )
+
+
 def _checks(config: dict[str, Any], section: str) -> list[dict[str, Any]]:
     return list(config.get(section, {}).get("checks", []))
+
+
+def _max_parallel_checks(config: dict[str, Any], parallel_count: int) -> int:
+    verify_config = config.get("verify")
+    configured = verify_config.get("maxParallel") if isinstance(verify_config, dict) else None
+    if isinstance(configured, bool):
+        return parallel_count
+    if configured == 0:
+        return parallel_count
+    if isinstance(configured, int) and configured > 0:
+        return min(parallel_count, configured)
+    return min(parallel_count, os.cpu_count() or 1)
 
 
 def _check_ids(checks: list[dict[str, Any]]) -> str:
@@ -415,19 +535,51 @@ def run_verify(
     changed_files = _changed_files(project)
     selected = checks if full else _selected_checks(checks, changed_files)
     failures = 0
+    if full:
+        indexed_selected = list(enumerate(selected))
+        parallel_checks = [(index, check) for index, check in indexed_selected if check.get("parallel") is True]
+        serial_checks = [(index, check) for index, check in indexed_selected if check.get("parallel") is not True]
+        results: list[CheckResult] = []
+        if parallel_checks:
+            max_workers = _max_parallel_checks(config, len(parallel_checks))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [
+                    executor.submit(_run_check_result, index, project, check, config, changed_files, runner)
+                    for index, check in parallel_checks
+                ]
+                results.extend(future.result() for future in futures)
+        results.extend(
+            _run_check_result(index, project, check, config, changed_files, runner)
+            for index, check in serial_checks
+        )
+        failed_ids: list[str] = []
+        for result in sorted(results, key=lambda item: item.index):
+            if result.stdout:
+                print(result.stdout, end="")
+            if result.stderr:
+                print(result.stderr, end="", file=sys.stderr)
+            print(f"duration: {result.check.get('id')} seconds={result.duration_seconds:.2f}")
+            if result.returncode == 0:
+                if result.cache_key is not None:
+                    _cache_store(project, result.cache_key, result.check)
+            else:
+                failures += 1
+                failed_ids.append(str(result.check.get("id")))
+        if failed_ids:
+            print(f"failed: {', '.join(failed_ids)}")
+        print(f"checked: {_check_ids(selected)}")
+        print(f"full-not-run: {str(not full).lower()}")
+        if failures:
+            print("status: failed")
+            return 1
+        print("status: passed")
+        return 0
     for check in selected:
         try:
             key = _cache_key(project, config, check, changed_files)
         except ValueError as error:
             print(str(error), file=sys.stderr)
             failures += 1
-            continue
-        if full:
-            result = _run_check(project, check, runner)
-            if result == 0:
-                _cache_store(project, key, check)
-            else:
-                failures += 1
             continue
         if _cache_load(project, key):
             print(f"cache-hit: {check.get('id')}")

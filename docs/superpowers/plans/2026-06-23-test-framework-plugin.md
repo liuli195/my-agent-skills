@@ -2,6 +2,7 @@
 change: split-fast-full-verification
 design-doc: docs/superpowers/specs/2026-06-23-test-framework-plugin-design.md
 base-ref: b58fde2cf4ddcc91316737670271c938bc83714f
+archived-with: 2026-06-23-split-fast-full-verification
 ---
 
 # Test Framework Plugin Implementation Plan
@@ -16,6 +17,7 @@ base-ref: b58fde2cf4ddcc91316737670271c938bc83714f
 
 **Tech Stack:** Python（Python 语言） standard library only for initialized target repositories: `argparse`, `fnmatch`, `hashlib`, `json`, `pathlib`, `shlex`, `subprocess`, and `sys`. Tests use pytest（Python 测试框架） in this repository.
 
+archived-with: 2026-06-23-split-fast-full-verification
 ---
 
 ## File Structure
@@ -124,9 +126,11 @@ Create both manifests with:
 Create `plugins/test-framework/skills/test-framework/SKILL.md`:
 
 ```markdown
+archived-with: 2026-06-23-split-fast-full-verification
 ---
 name: test-framework
 description: "初始化轻量测试框架：标准产物结构、快速缓存验证、统一配置和统一命令入口。Use when 需要给仓库启用 build/verify/verify --full 测试框架。"
+archived-with: 2026-06-23-split-fast-full-verification
 ---
 
 # Test Framework

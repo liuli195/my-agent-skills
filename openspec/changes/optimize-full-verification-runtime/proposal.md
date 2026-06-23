@@ -5,9 +5,12 @@ Full verification currently takes about 214 seconds on this machine, with PR Flo
 ## What Changes
 
 - Add a performance target for full repository verification: complete in under 60 seconds on the local development machine.
-- Refactor the slowest test areas, starting with PR Flow tests, to reduce repeated real Git repository setup, clone/push cycles, fake `gh` process launches, and full Python process restarts.
-- Keep a small number of true end-to-end tests for PR Flow lifecycle coverage while moving most branch-state and stop-state checks to faster in-process or shared-fixture tests.
-- Preserve existing behavior coverage for complete, cleanup, hotfix, tweak, diagnose, review gate, and audit flows.
+- Apply repo-native test optimization across the full configured verification suite, starting with PR Flow tests because they are the measured largest contributor.
+- Reduce repeated real Git repository setup, clone/push cycles, fake CLI process launches, and full Python process restarts by using shared fixtures, reusable stubs, in-process calls, and narrow test seams when they preserve the behavior under test.
+- Keep representative true end-to-end tests for user-facing workflows while moving high-cost branch-state and stop-state matrices to faster tests.
+- Add Test Framework coordinated parallel execution for all configured verify checks where safe, with serial fallback for checks that cannot run in parallel.
+- Evaluate pytest-xdist before adoption; enable it only after it is available in the project environment or the user explicitly authorizes dependency installation. In this change, the user authorized installing it into the current system `python` environment before xdist worker settings were wired into verify checks.
+- Preserve existing behavior coverage for local build contract, PR Flow, Release Flow, Agent Guard, cross-agent-review, and Test Framework flows, and keep `verify.openspec` validation covered and timed.
 
 ## Capabilities
 
@@ -18,6 +21,6 @@ Full verification currently takes about 214 seconds on this machine, with PR Flo
 
 ## Impact
 
-- Affects test structure and possibly small testability seams in PR Flow script code.
-- May later touch release-flow and agent-guard tests if PR Flow optimization alone is not enough.
-- Does not change production PR Flow behavior, release behavior, plugin manifests, or user configuration.
+- Affects test structure across slow verification checks and may add small testability seams where needed.
+- Affects Test Framework runner behavior for full verification scheduling and timing reports.
+- Does not change production PR Flow behavior, release behavior, plugin manifests, user configuration, or files under `docs/rules/`.

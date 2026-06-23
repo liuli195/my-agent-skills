@@ -1,4 +1,6 @@
+import contextlib
 import importlib.util
+import io
 import json
 import shutil
 import subprocess
@@ -55,12 +57,17 @@ def load_test_framework_module():
 
 
 def run_check(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(TEST_FRAMEWORK_SCRIPT), *args, "--project", str(project)],
-        cwd=project,
-        check=False,
-        text=True,
-        capture_output=True,
+    module = load_test_framework_module()
+    argv = [*args, "--project", str(project)]
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        returncode = int(module.main(argv))
+    return subprocess.CompletedProcess(
+        args=[str(TEST_FRAMEWORK_SCRIPT), *argv],
+        returncode=returncode,
+        stdout=stdout.getvalue(),
+        stderr=stderr.getvalue(),
     )
 
 
@@ -412,6 +419,178 @@ def test_test_framework_runner_full_verify_allows_empty_checks(tmp_path: Path) -
     assert "checked:" in result.stdout
     assert "full-not-run: false" in result.stdout
     assert "status: passed" in result.stdout
+
+
+def test_test_framework_runner_full_verify_runs_parallel_checks_concurrently(tmp_path: Path, capsys) -> None:
+    import threading
+    import time
+
+    module = load_test_framework_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                    {"id": "parallel-b", "command": ["parallel-b"], "parallel": True, "inputs": []},
+                    {"id": "serial-c", "command": ["serial-c"], "parallel": False, "inputs": []},
+                ]
+            },
+        },
+    )
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def fake_runner(command, **_kwargs):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.2)
+        with lock:
+            active -= 1
+        return subprocess.CompletedProcess(command, 0, stdout=f"{command[0]}\n", stderr="")
+
+    result = module._runner().run_verify(project, runner=fake_runner, full=True)
+    captured = capsys.readouterr()
+
+    assert result == 0
+    assert max_active > 1
+    assert "serial-c" in captured.out
+    assert "duration: parallel-a seconds=" in captured.out
+    assert "duration: parallel-b seconds=" in captured.out
+    assert "duration: serial-c seconds=" in captured.out
+    assert "full-not-run: false" in captured.out
+
+
+def test_test_framework_runner_full_verify_honors_max_parallel_checks(tmp_path: Path) -> None:
+    import threading
+    import time
+
+    module = load_test_framework_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "maxParallel": 2,
+                "checks": [
+                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                    {"id": "parallel-b", "command": ["parallel-b"], "parallel": True, "inputs": []},
+                    {"id": "parallel-c", "command": ["parallel-c"], "parallel": True, "inputs": []},
+                ],
+            },
+        },
+    )
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def fake_runner(command, **_kwargs):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.1)
+        with lock:
+            active -= 1
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    result = module._runner().run_verify(project, runner=fake_runner, full=True)
+
+    assert result == 0
+    assert max_active == 2
+
+
+def test_test_framework_runner_full_verify_zero_max_parallel_means_unlimited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+    import time
+
+    module = load_test_framework_module()
+    monkeypatch.setattr(module._runner().os, "cpu_count", lambda: 2)
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "maxParallel": 0,
+                "checks": [
+                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                    {"id": "parallel-b", "command": ["parallel-b"], "parallel": True, "inputs": []},
+                    {"id": "parallel-c", "command": ["parallel-c"], "parallel": True, "inputs": []},
+                ],
+            },
+        },
+    )
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+    barrier = threading.Barrier(3)
+
+    def fake_runner(command, **_kwargs):
+        nonlocal active, max_active
+        try:
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            barrier.wait(timeout=2)
+        finally:
+            with lock:
+                active -= 1
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    result = module._runner().run_verify(project, runner=fake_runner, full=True)
+
+    assert result == 0
+    assert max_active == 3
+
+
+def test_test_framework_runner_reads_changed_files_with_single_git_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_test_framework_module()
+    runner = module._runner()
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        if command == ["git", "diff", "--name-only", "--cached"]:
+            return subprocess.CompletedProcess(command, 0, stdout="staged.txt\n", stderr="")
+        if command == ["git", "diff", "--name-only"]:
+            return subprocess.CompletedProcess(command, 0, stdout="unstaged.txt\n", stderr="")
+        if command == ["git", "ls-files", "--others", "--exclude-standard"]:
+            return subprocess.CompletedProcess(command, 0, stdout="untracked.txt\n", stderr="")
+        if command == ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="M  staged.txt\0 M unstaged.txt\0?? untracked.txt\0",
+                stderr="",
+            )
+        raise AssertionError(command)
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    changed = runner._changed_files(tmp_path)
+
+    assert changed == ["staged.txt", "unstaged.txt", "untracked.txt"]
+    assert calls == [["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"]]
 
 
 def test_test_framework_user_level_skill_path_runs_verify_without_git(

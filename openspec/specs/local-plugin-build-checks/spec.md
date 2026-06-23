@@ -4,15 +4,17 @@
 TBD - created by archiving change add-local-plugin-build-checks. Update Purpose after archive.
 ## Requirements
 ### Requirement: Build command validates local plugin package shape
-The repository SHALL（必须）provide a local build command that validates plugin package shape without publishing, installing, writing user configuration, or contacting GitHub（代码托管平台）remote state.
+The repository SHALL（必须）provide a local build command through the initialized test-framework Plugin（测试框架插件） contract. Repository-specific package-shape checks remain repository-owned configured checks, not plugin-owned framework logic.
 
-#### Scenario: Build command runs local package checks
-- **WHEN** a developer runs `python scripts/check.py build`
-- **THEN** the command completes only after local plugin package checks have passed
+#### Scenario: Build command runs repository-owned package checks
+- **WHEN** a developer runs `python plugins/test-framework/skills/test-framework/scripts/test_framework.py build --project .`
+- **THEN** the command uses `.test-framework/config.json` `build.checks`
+- **THEN** the configured build check runs `python scripts/local_plugin_build.py`
+- **THEN** `scripts/local_plugin_build.py` remains a repository-owned check command, not the test-framework Plugin（测试框架插件） entrypoint
 
-#### Scenario: Build command avoids external side effects
-- **WHEN** the build command runs
-- **THEN** it does not install plugins, publish releases, write user-level configuration, or query GitHub remote state
+#### Scenario: Removed check entrypoint is not active automation
+- **WHEN** repository active automation and guard（守卫） command files are inspected
+- **THEN** `.github/workflows/`, `.comet.yaml`, `.comet/config.yaml`, and `.test-framework/config.json` MUST NOT reference `scripts/check.py`
 
 ### Requirement: Build command runs Claude plugin validation
 The build command SHALL（必须）run Claude（Claude 编码工具）plugin validation for the repository marketplace and every local plugin listed in `.claude-plugin/marketplace.json`.
@@ -62,14 +64,26 @@ The build command SHALL（必须）validate that mirrored Guard Profile（守卫
 - **WHEN** the build command compares `plugins/agent-guard/assets/templates/guard-profile/` with `plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/`
 - **THEN** every mirrored file exists on both sides and has identical content
 
-### Requirement: Verify command runs the full Python test suite
-The repository SHALL（必须）provide a verify command that runs the full Python（Python 语言）test suite through the standard pytest（Python 测试框架）entrypoint.
+### Requirement: Verify command follows initialized test framework contract
+The repository SHALL（必须）provide a verify command initialized by the test-framework Plugin（测试框架插件） contract.
 
-#### Scenario: Verify command uses pytest defaults
-- **WHEN** a developer runs `python scripts/check.py verify`
-- **THEN** the command runs `python -m pytest` and uses repository pytest configuration for default test discovery
+#### Scenario: Verify command defaults to framework fast mode
+- **WHEN** a developer runs `python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project .`
+- **THEN** the command uses `.test-framework/config.json` `verify.checks`
+- **THEN** the command applies changed-files（变更文件） selection and passed-result cache（通过结果缓存）
+- **THEN** the command does not bypass changed-files（变更文件） selection and passed-result cache（通过结果缓存） by unconditionally running every configured verify check
 
-#### Scenario: Comet config avoids duplicate command wiring
-- **WHEN** Comet（双星流程）reads `.comet/config.yaml`
-- **THEN** it does not define `build_command` or `verify_command`
+#### Scenario: Verify full mode runs all configured checks
+- **WHEN** a developer runs `python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project . --full`
+- **THEN** the command runs all `.test-framework/config.json` `verify.checks`
+- **THEN** the command does not use cache（缓存） hits to skip checks（检查项）
+- **THEN** passed checks（已通过检查项） refresh passed-result cache（通过结果缓存）
+- **THEN** failed checks（失败检查项） are not stored as passed-result cache（通过结果缓存）
+- **THEN** the command does not rely on the default verify mode being full（全量验证）
+
+#### Scenario: Comet config keeps guard-compatible command shim
+- **WHEN** Comet（双星流程）reads root `.comet.yaml`
+- **THEN** it defines `build_command: python plugins/test-framework/skills/test-framework/scripts/test_framework.py build --project .`
+- **THEN** it defines `verify_command: python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project .`
+- **THEN** those commands act as the project-level（项目级） guard（守卫） compatibility shim（兼容层） for the committed test-framework runner（测试框架运行器） under `plugins/test-framework/`
 

@@ -1,3 +1,34 @@
+# Comet Spec Context
+
+- Change: optimize-full-verification-runtime
+- Phase: design
+- Mode: beta
+- Context hash: fdd6d2abe0fc30a1d5477fa0297581c42f54e18cc129e49d6635f87cd6077542
+
+Generated-by: comet-handoff.sh
+
+OpenSpec remains the canonical capability spec. This beta context pack verbatim-projects spec files and references supporting artifacts by hash, not an agent-authored summary.
+
+## Source References
+
+- Source: openspec/changes/optimize-full-verification-runtime/proposal.md
+- SHA256: 73973b970a008e006644fb2ecaf45023bc62ac60a2a448a6a3b2b9e46dee315a
+- Source: openspec/changes/optimize-full-verification-runtime/design.md
+- SHA256: bf99e75aaf019e5049a5705eb98ab49dc012d9f4e7264501d427e5e9baacdeef
+- Source: openspec/changes/optimize-full-verification-runtime/tasks.md
+- SHA256: d2a68a5ee5a545614cb283b08055051612c96d9afa7b84e8acfc7f691898ee32
+- Source: openspec/changes/optimize-full-verification-runtime/specs/full-verification-runtime/spec.md
+- SHA256: 0b6c7b69acc190735629cb1b1505e1e4fb8ec92e13ac40685a1c454d3122d3cc
+
+## Acceptance Projection
+
+## openspec/changes/optimize-full-verification-runtime/specs/full-verification-runtime/spec.md
+
+- Source: openspec/changes/optimize-full-verification-runtime/specs/full-verification-runtime/spec.md
+- Lines: 1-59
+- SHA256: 0b6c7b69acc190735629cb1b1505e1e4fb8ec92e13ac40685a1c454d3122d3cc
+
+```md
 ## ADDED Requirements
 
 ### Requirement: Full verification has a local runtime target
@@ -43,12 +74,6 @@ The repository SHALL（必须）apply both the repo-native test optimization lay
 - **THEN** the tests SHOULD use shared fixtures（测试夹具）, reusable stubs（替身）, in-process calls, or narrow test seams（测试接缝）when those choices preserve the behavior under test
 - **THEN** required end-to-end（端到端）coverage MUST remain for user-facing workflow paths
 
-#### Scenario: Shared test helpers are repository-wide
-- **WHEN** tests need repeated Git（版本管理）state, fake CLI（命令行界面）responses, or in-process（进程内）command execution
-- **THEN** they SHOULD use shared helpers under `tests/support/`
-- **THEN** they MUST keep required end-to-end（端到端）paths for user-facing workflows
-- **THEN** they MUST NOT document the rule under `docs/rules/`
-
 #### Scenario: Parallel execution is coordinated by the Test Framework
 - **WHEN** full verification uses pytest-xdist（并行测试插件）or another parallel execution mechanism
 - **THEN** the Test Framework（测试框架）runner MUST coordinate parallel execution for all configured verify checks（验证检查项）where safe
@@ -63,3 +88,6 @@ Repository test-writing rules for this change SHALL（必须）be expressed thro
 - **WHEN** test-writing rules are documented for this change
 - **THEN** files under `docs/rules/` MUST NOT be created or modified
 - **THEN** the rules MUST be represented in the OpenSpec（规格流程）change spec, design notes, tasks, or another explicitly confirmed location outside `docs/rules/`
+```
+
+Full source files remain canonical. If a required heading or scenario is missing here, regenerate the handoff or read the source spec directly. Supporting files (proposal, design, tasks) are referenced by hash only.
