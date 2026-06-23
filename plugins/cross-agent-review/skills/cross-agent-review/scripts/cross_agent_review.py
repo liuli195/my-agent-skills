@@ -231,6 +231,27 @@ def input_reference(label: str, path: Path) -> str:
     )
 
 
+def changed_files_from_diff(path: Path, limit: int = 160) -> str:
+    files: list[str] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.startswith("diff --git "):
+            continue
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        changed = parts[3]
+        if changed.startswith("b/"):
+            changed = changed[2:]
+        if changed not in files:
+            files.append(changed)
+    shown = files[:limit]
+    lines = ["Changed files:"]
+    lines.extend(f"- {item}" for item in shown)
+    if len(files) > limit:
+        lines.append(f"- ... {len(files) - limit} more")
+    return "\n".join(lines)
+
+
 def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
     parts = [
         f"Role: {role}",
@@ -268,6 +289,8 @@ def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
             f"Head ref: {review_args.head_ref}",
             "Use the referenced input files as the source of truth. Read only the sections needed for this review.",
             "Use git diff/show/status read-only commands if the file references are insufficient.",
+            "Do not read diff.patch wholesale. Use the changed-file list and path-scoped git diff commands.",
+            changed_files_from_diff(review_args.diff_file),
             input_reference("Diff", review_args.diff_file),
             input_reference("Spec", review_args.spec_file),
             input_reference("Design", review_args.design_file),

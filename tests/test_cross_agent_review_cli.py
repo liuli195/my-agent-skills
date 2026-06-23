@@ -449,6 +449,8 @@ def test_reviewer_prompt_includes_all_review_inputs(tmp_path: Path) -> None:
     assert f"Design file: {design_file}" in prompt
     assert f"Tasks file: {tasks_file}" in prompt
     assert f"Diff sha256: {hashlib.sha256(diff_file.read_bytes()).hexdigest()}" in prompt
+    assert "Do not read diff.patch wholesale" in prompt
+    assert "- app.txt" in prompt
     assert "diff --git a/app.txt b/app.txt" not in prompt
     assert "Spec body" not in prompt
     assert "Tests:" not in prompt
@@ -478,6 +480,7 @@ def test_reviewer_prompt_does_not_inline_large_inputs(tmp_path: Path) -> None:
 
     assert f"Diff file: {diff_file}" in prompt
     assert f"Diff bytes: {len(diff_file.read_bytes())}" in prompt
+    assert "Do not read diff.patch wholesale" in prompt
     assert "+changed" not in prompt
     assert len(prompt) < 4000
 
