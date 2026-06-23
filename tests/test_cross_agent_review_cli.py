@@ -314,7 +314,7 @@ def test_run_archives_review_input_snapshots_under_output_dir(tmp_path: Path) ->
     head = init_repo(project)
     input_dir = project / "review inputs"
     output_dir = tmp_path / "out"
-    diff_file = write_file(input_dir / "change diff.patch", "diff body\n")
+    diff_file = write_file(input_dir / "change diff.patch", "diff --git a/app.txt b/app.txt\n")
     spec_file = write_file(input_dir / "spec file.md", "spec body\n")
     design_file = write_file(input_dir / "design file.md", "design body\n")
     tasks_file = write_file(input_dir / "tasks file.md", "tasks body\n")
@@ -346,15 +346,55 @@ def test_run_archives_review_input_snapshots_under_output_dir(tmp_path: Path) ->
     inputs_dir = output_dir / "inputs"
     assert {path.name for path in inputs_dir.iterdir()} == {
         "diff.patch",
+        "manifest.json",
         "spec.md",
         "design.md",
         "tasks.md",
     }
-    assert (inputs_dir / "diff.patch").read_text(encoding="utf-8") == "diff body\n"
+    assert (inputs_dir / "diff.patch").read_text(encoding="utf-8") == "diff --git a/app.txt b/app.txt\n"
     assert (inputs_dir / "spec.md").read_text(encoding="utf-8") == "spec body\n"
     assert (inputs_dir / "design.md").read_text(encoding="utf-8") == "design body\n"
     assert (inputs_dir / "tasks.md").read_text(encoding="utf-8") == "tasks body\n"
+    manifest = json.loads((output_dir / "inputs" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["change"] == "demo"
+    assert manifest["base_ref"] == head
+    assert manifest["head_ref"] == head
+    assert manifest["inputs"]["diff"]["path"] == "inputs/diff.patch"
+    assert manifest["inputs"]["diff"]["sha256"] == hashlib.sha256((inputs_dir / "diff.patch").read_bytes()).hexdigest()
+    assert manifest["changed_files"] == [{"path": "app.txt", "status": "modified"}]
     assert not (inputs_dir / "tests.txt").exists()
+
+
+def test_changed_file_entries_from_diff_reports_file_statuses(tmp_path: Path) -> None:
+    module = load_script_module()
+    diff_file = write_file(
+        tmp_path / "diff.patch",
+        "\n".join(
+            [
+                "diff --git a/app.txt b/app.txt",
+                "index 1111111..2222222 100644",
+                "diff --git a/path with space.txt b/path with space.txt",
+                "index 3333333..4444444 100644",
+                "diff --git a/old.txt b/new.txt",
+                "similarity index 100%",
+                "rename from old.txt",
+                "rename to new.txt",
+                "diff --git a/removed.txt b/removed.txt",
+                "deleted file mode 100644",
+                "diff --git a/created.txt b/created.txt",
+                "new file mode 100644",
+                "",
+            ]
+        ),
+    )
+
+    assert module.changed_file_entries_from_diff(diff_file) == [
+        {"path": "app.txt", "status": "modified"},
+        {"path": "path with space.txt", "status": "modified"},
+        {"path": "new.txt", "status": "renamed", "previous_path": "old.txt"},
+        {"path": "removed.txt", "status": "deleted"},
+        {"path": "created.txt", "status": "added"},
+    ]
 
 
 def test_run_accepts_legacy_tests_file_argument_without_snapshotting_it(tmp_path: Path) -> None:
@@ -456,6 +496,19 @@ def test_reviewer_prompt_includes_all_review_inputs(tmp_path: Path) -> None:
     assert "Tests:" not in prompt
 
 
+def test_reviewer_prompt_references_manifest_and_role_rubrics(tmp_path: Path) -> None:
+    module = load_script_module()
+    review = make_review_args_for_module(module, tmp_path)
+    manifest_path = review.output_dir / "inputs" / "manifest.json"
+
+    for role in module.REVIEWER_ROLES:
+        prompt = module.reviewer_prompt(review, role)
+        assert f"Focus for {role}:" in prompt
+        assert "Severity rubric:" in prompt
+        assert f"Manifest file: {manifest_path}" in prompt
+        assert "Return only a single JSON object" in prompt
+
+
 def test_reviewer_prompt_does_not_inline_large_inputs(tmp_path: Path) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
@@ -483,6 +536,79 @@ def test_reviewer_prompt_does_not_inline_large_inputs(tmp_path: Path) -> None:
     assert "Do not read diff.patch wholesale" in prompt
     assert "+changed" not in prompt
     assert len(prompt) < 4000
+
+
+def test_sdk_dispatch_subprocess_writes_prompt_artifacts(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
+    review = make_review_args_for_module(module, tmp_path)
+    captured_payload = None
+
+    def fake_run(*args, **kwargs):
+        nonlocal captured_payload
+        captured_payload = json.loads(kwargs["input"])
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=json.dumps([{"role": "spec-alignment", "status": "completed", "findings": []}]),
+            stderr="",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.run_sdk_dispatch_subprocess(review, sys.executable) == [
+        {"role": "spec-alignment", "status": "completed", "findings": []}
+    ]
+
+    prompts_dir = review.output_dir / "prompts"
+    assert {path.name for path in prompts_dir.iterdir()} == {
+        "spec-alignment.txt",
+        "implementation-correctness.txt",
+        "tests-and-edge-cases.txt",
+        "risk-review.txt",
+    }
+    assert captured_payload["raw_dir"] == str(review.output_dir / "raw")
+    assert "Manifest file:" in (prompts_dir / "spec-alignment.txt").read_text(encoding="utf-8")
+
+
+def test_sdk_dispatch_writes_raw_reviewer_output(monkeypatch, tmp_path: Path) -> None:
+    module = load_script_module()
+    raw_dir = tmp_path / "raw"
+
+    class FakeClaudeAgentOptions:
+        def __init__(self, **kwargs):
+            pass
+
+    async def fake_query(*, prompt, options):
+        class Message:
+            result = json.dumps({"role": "spec-alignment", "status": "completed", "findings": []})
+
+        yield Message()
+
+    fake_sdk = types.SimpleNamespace(ClaudeAgentOptions=FakeClaudeAgentOptions, query=fake_query)
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake_sdk)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(
+            json.dumps(
+                {
+                    "cwd": str(REPO_ROOT),
+                    "roles": ["spec-alignment"],
+                    "readonly_tools": ["Read", "Grep"],
+                    "prompts": {"spec-alignment": "prompt"},
+                    "raw_dir": str(raw_dir),
+                }
+            )
+        ),
+    )
+
+    assert module.run_sdk_dispatch() == 0
+
+    assert json.loads((raw_dir / "spec-alignment.txt").read_text(encoding="utf-8")) == {
+        "role": "spec-alignment",
+        "status": "completed",
+        "findings": [],
+    }
 
 
 def test_tests_and_edge_cases_prompt_focuses_review_scope(tmp_path: Path) -> None:

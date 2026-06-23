@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -26,6 +27,22 @@ REVIEWER_ROLES = [
     "risk-review",
 ]
 ROLE_FOCUS = {
+    "spec-alignment": "\n".join(
+        [
+            "Focus for spec-alignment:",
+            "- Compare the supplied spec, design, tasks, and changed files for requirement drift.",
+            "- Report missing required behavior, scope creep, or contradictions between artifacts.",
+            "- Do not review implementation style unless it changes the promised behavior.",
+        ]
+    ),
+    "implementation-correctness": "\n".join(
+        [
+            "Focus for implementation-correctness:",
+            "- Review changed implementation paths for concrete correctness bugs.",
+            "- Use path-scoped diffs and source reads; do not read large input files wholesale.",
+            "- Report only issues with executable behavior, data flow, state handling, or compatibility.",
+        ]
+    ),
     "tests-and-edge-cases": "\n".join(
         [
             "Focus for tests-and-edge-cases:",
@@ -35,8 +52,25 @@ ROLE_FOCUS = {
             "- Do not claim tests passed, failed, or were run; no test results are supplied.",
             "- Only create findings for concrete missing coverage, weak regression protection, or unhandled edge cases.",
         ]
-    )
+    ),
+    "risk-review": "\n".join(
+        [
+            "Focus for risk-review:",
+            "- Review operational, security, reliability, and maintainability risks introduced by the change.",
+            "- Separate concrete risks from preferences; downgrade speculative concerns to WARNING or SUGGESTION.",
+            "- Do not duplicate findings already covered by implementation-correctness unless impact is broader.",
+        ]
+    ),
 }
+SEVERITY_RUBRIC = "\n".join(
+    [
+        "Severity rubric:",
+        "- CRITICAL: likely data loss, security exposure, broken required workflow, or reviewer/tool failure.",
+        "- IMPORTANT: concrete regression, missing required scenario, or edge case likely to break normal use.",
+        "- WARNING: plausible risk or coverage gap with limited/uncertain impact.",
+        "- SUGGESTION: maintainability or clarity improvement that should not block.",
+    ]
+)
 READONLY_TOOLS = ["Read", "Glob", "Grep", "Bash(git diff *)", "Bash(git show *)", "Bash(git status *)"]
 DISALLOWED_TOOLS = ["Edit", "Write", "NotebookEdit", "TodoWrite", "MultiEdit", "Bash"]
 # Individual reviewers time out first; the subprocess gets a wider window to
@@ -231,25 +265,132 @@ def input_reference(label: str, path: Path) -> str:
     )
 
 
-def changed_files_from_diff(path: Path, limit: int = 160) -> str:
-    files: list[str] = []
+def diff_path(value: str, prefix: str) -> str:
+    return value[len(prefix) :] if value.startswith(prefix) else value
+
+
+def parse_diff_git_paths(line: str) -> tuple[str, str] | None:
+    rest = line.removeprefix("diff --git ")
+    if rest.startswith('"'):
+        parts = shlex.split(rest)
+        if len(parts) >= 2:
+            return diff_path(parts[0], "a/"), diff_path(parts[1], "b/")
+    separator = rest.rfind(" b/")
+    if separator != -1:
+        return diff_path(rest[:separator], "a/"), diff_path(rest[separator + 1 :], "b/")
+    parts = rest.split(maxsplit=1)
+    if len(parts) >= 2:
+        return diff_path(parts[0], "a/"), diff_path(parts[1], "b/")
+    return None
+
+
+def changed_file_entries_from_diff(path: Path) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+
+    def append_current() -> None:
+        if current is None:
+            return
+        changed_path = current.get("path") or current.get("new_path") or current.get("old_path")
+        if not changed_path:
+            return
+        entry = {"path": changed_path, "status": current.get("status", "modified")}
+        previous_path = current.get("old_path")
+        if entry["status"] in {"renamed", "copied"} and previous_path and previous_path != changed_path:
+            entry["previous_path"] = previous_path
+        if entry not in entries:
+            entries.append(entry)
+
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if not line.startswith("diff --git "):
+        if line.startswith("diff --git "):
+            append_current()
+            current = None
+            parsed_paths = parse_diff_git_paths(line)
+            if parsed_paths is None:
+                continue
+            old_path, new_path = parsed_paths
+            current = {
+                "old_path": old_path,
+                "new_path": new_path,
+                "path": new_path,
+                "status": "modified",
+            }
             continue
-        parts = line.split()
-        if len(parts) < 4:
+        if current is None:
             continue
-        changed = parts[3]
-        if changed.startswith("b/"):
-            changed = changed[2:]
-        if changed not in files:
-            files.append(changed)
+        if line.startswith("new file mode "):
+            current["status"] = "added"
+            current["path"] = current["new_path"]
+        elif line.startswith("deleted file mode "):
+            current["status"] = "deleted"
+            current["path"] = current["old_path"]
+        elif line.startswith("rename from "):
+            current["status"] = "renamed"
+            current["old_path"] = line.removeprefix("rename from ")
+        elif line.startswith("rename to "):
+            current["status"] = "renamed"
+            current["new_path"] = line.removeprefix("rename to ")
+            current["path"] = current["new_path"]
+        elif line.startswith("copy from "):
+            current["status"] = "copied"
+            current["old_path"] = line.removeprefix("copy from ")
+        elif line.startswith("copy to "):
+            current["status"] = "copied"
+            current["new_path"] = line.removeprefix("copy to ")
+            current["path"] = current["new_path"]
+    append_current()
+    return entries
+
+
+def changed_files_from_diff(path: Path, limit: int = 160) -> str:
+    files = [entry["path"] for entry in changed_file_entries_from_diff(path)]
     shown = files[:limit]
     lines = ["Changed files:"]
     lines.extend(f"- {item}" for item in shown)
     if len(files) > limit:
         lines.append(f"- ... {len(files) - limit} more")
     return "\n".join(lines)
+
+
+def input_manifest_path(review_args: ReviewArgs) -> Path:
+    return output_dir_for(review_args) / "inputs" / "manifest.json"
+
+
+def relative_to_output(review_args: ReviewArgs, path: Path) -> str:
+    try:
+        return path.relative_to(output_dir_for(review_args)).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def input_file_metadata(review_args: ReviewArgs, path: Path) -> dict:
+    content = path.read_bytes()
+    return {
+        "path": relative_to_output(review_args, path),
+        "bytes": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+def build_input_manifest(review_args: ReviewArgs) -> dict:
+    return {
+        "change": review_args.change,
+        "base_ref": review_args.base_ref,
+        "head_ref": review_args.head_ref,
+        "inputs": {
+            "diff": input_file_metadata(review_args, review_args.diff_file),
+            "spec": input_file_metadata(review_args, review_args.spec_file),
+            "design": input_file_metadata(review_args, review_args.design_file),
+            "tasks": input_file_metadata(review_args, review_args.tasks_file),
+        },
+        "changed_files": changed_file_entries_from_diff(review_args.diff_file),
+    }
+
+
+def write_input_manifest(review_args: ReviewArgs) -> Path:
+    path = input_manifest_path(review_args)
+    write_json(path, build_input_manifest(review_args))
+    return path
 
 
 def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
@@ -278,6 +419,7 @@ def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
         'If there are no issues, return "findings": [].',
         "Do not put pass, aligned, ok, or informational observations in findings.",
         "Do not use severity aliases such as high, medium, low, minor, or info.",
+        SEVERITY_RUBRIC,
     ]
     focus = ROLE_FOCUS.get(role)
     if focus:
@@ -287,6 +429,7 @@ def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
             f"Change: {review_args.change}",
             f"Base ref: {review_args.base_ref}",
             f"Head ref: {review_args.head_ref}",
+            f"Manifest file: {input_manifest_path(review_args)}",
             "Use the referenced input files as the source of truth. Read only the sections needed for this review.",
             "Use git diff/show/status read-only commands if the file references are insufficient.",
             "Do not read diff.patch wholesale. Use the changed-file list and path-scoped git diff commands.",
@@ -308,11 +451,19 @@ def dispatch_reviewers(review_args: ReviewArgs, sdk_python: str) -> list[dict]:
 
 
 def run_sdk_dispatch_subprocess(review_args: ReviewArgs, sdk_python: str) -> list[dict]:
+    prompts = {role: reviewer_prompt(review_args, role) for role in REVIEWER_ROLES}
+    prompts_dir = output_dir_for(review_args) / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    for role, prompt in prompts.items():
+        (prompts_dir / f"{role}.txt").write_text(prompt, encoding="utf-8")
+    raw_dir = output_dir_for(review_args) / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "cwd": str(Path.cwd()),
         "roles": REVIEWER_ROLES,
         "readonly_tools": READONLY_TOOLS,
-        "prompts": {role: reviewer_prompt(review_args, role) for role in REVIEWER_ROLES},
+        "prompts": prompts,
+        "raw_dir": str(raw_dir),
     }
     try:
         result = subprocess.run(
@@ -408,6 +559,13 @@ def run_sdk_dispatch() -> int:
 
     async def collect() -> list[dict]:
         payload = json.loads(sys.stdin.read())
+        raw_dir = Path(payload["raw_dir"]) if payload.get("raw_dir") else None
+
+        def write_raw(role: str, text: str) -> None:
+            if raw_dir is None:
+                return
+            raw_dir.mkdir(parents=True, exist_ok=True)
+            (raw_dir / f"{role}.txt").write_text(text, encoding="utf-8")
 
         async def query_one(role: str) -> dict:
             options = ClaudeAgentOptions(
@@ -419,6 +577,7 @@ def run_sdk_dispatch() -> int:
             async for message in query(prompt=payload["prompts"][role], options=options):
                 if hasattr(message, "result"):
                     result_text = message.result
+            write_raw(role, result_text)
             parsed = parse_reviewer_result(result_text)
             if parsed is not None:
                 return parsed
@@ -430,7 +589,7 @@ def run_sdk_dispatch() -> int:
                         "severity": "CRITICAL",
                         "location": role,
                         "summary": "Reviewer returned invalid JSON",
-                        "evidence": result_text,
+                        "evidence": result_text or "<empty reviewer result>",
                         "recommendation": "Rerun review after checking reviewer prompt",
                     }
                 ],
@@ -457,6 +616,7 @@ def run_sdk_dispatch() -> int:
                     }
                 except Exception as error:
                     last_error = error
+                    write_raw(role, f"{type(error).__name__}: {error}")
                     if attempt < SDK_REVIEWER_ATTEMPTS:
                         await asyncio.sleep(1)
                         continue
@@ -499,7 +659,9 @@ def archive_input_snapshots(review_args: ReviewArgs) -> ReviewArgs:
         target = inputs_dir / filename
         target.write_bytes(source.read_bytes())
         replacements[field] = target
-    return replace(review_args, **replacements)
+    archived = replace(review_args, **replacements)
+    write_input_manifest(archived)
+    return archived
 
 
 def first_text(raw: dict, names: Sequence[str]) -> str:
@@ -644,6 +806,15 @@ def allowed_input_paths(review_args: ReviewArgs) -> list[Path]:
     ]
 
 
+def output_artifact_paths(review_args: ReviewArgs) -> list[Path]:
+    out_dir = output_dir_for(review_args)
+    paths = [input_manifest_path(review_args)]
+    for directory in (out_dir / "prompts", out_dir / "raw"):
+        if directory.is_dir():
+            paths.extend(path for path in directory.glob("*.txt") if path.is_file())
+    return paths
+
+
 def write_outputs(review_args: ReviewArgs, summary: dict, extra_allowed_paths: Sequence[Path] = ()) -> int:
     out_dir = output_dir_for(review_args)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -657,7 +828,14 @@ def write_outputs(review_args: ReviewArgs, summary: dict, extra_allowed_paths: S
         ensure_clean_subject(
             Path.cwd(),
             review_args.head_ref,
-            [*extra_allowed_paths, *allowed_input_paths(review_args), report_path, results_path, pass_path],
+            [
+                *extra_allowed_paths,
+                *allowed_input_paths(review_args),
+                *output_artifact_paths(review_args),
+                report_path,
+                results_path,
+                pass_path,
+            ],
         )
         report_hash = hashlib.sha256(report_path.read_bytes()).hexdigest()
         write_json(
@@ -694,7 +872,12 @@ def run_review(args: argparse.Namespace) -> int:
         ensure_clean_subject(
             Path.cwd(),
             review_args.head_ref,
-            [*original_input_paths, *legacy_input_paths, *allowed_input_paths(review_args)],
+            [
+                *original_input_paths,
+                *legacy_input_paths,
+                *allowed_input_paths(review_args),
+                *output_artifact_paths(review_args),
+            ],
         )
         reviewers = dispatch_reviewers(review_args, sdk_python)
         skipped = []

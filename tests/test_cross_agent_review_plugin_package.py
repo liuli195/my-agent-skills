@@ -43,6 +43,9 @@ def test_cross_agent_review_skill_documents_input_staging_under_run_dir() -> Non
 
     assert ".local/cross-agent-review/<change>/<head_ref>/prepared-inputs/" in text
     assert ".local/cross-agent-review-inputs" not in text
+    assert "inputs/manifest.json" in text
+    assert "prompts/" in text
+    assert "raw/" in text
 
 
 def test_cross_agent_review_skill_documents_strict_finding_schema() -> None:
@@ -82,6 +85,15 @@ def test_cross_agent_review_skill_does_not_require_test_evidence() -> None:
     assert "--tests-file" not in text
     assert "tests.txt" not in text
     assert "调用方已运行测试" not in text
+
+
+def test_cross_agent_review_spec_documents_manifest_based_prompt_contract() -> None:
+    spec = REPO_ROOT / "openspec" / "specs" / "cross-agent-review" / "spec.md"
+    text = spec.read_text(encoding="utf-8")
+
+    assert "manifest.json" in text
+    assert "按需读取" in text
+    assert "提示中的 diff、spec、design 和 tasks 内容 MUST" not in text
 
 
 def test_cross_agent_review_placeholder_run_accepts_documented_and_planned_options(tmp_path: Path) -> None:

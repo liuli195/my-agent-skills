@@ -53,6 +53,16 @@ python scripts/cross_agent_review.py run \
 - `inputs/spec.md`
 - `inputs/design.md`
 - `inputs/tasks.md`
+- `inputs/manifest.json`
+
+`inputs/manifest.json` 记录 change（变更）、base/head ref（基准/当前提交）、输入文件 path（路径）/bytes（字节数）/sha256（哈希）和 changed files（变更文件）清单。changed files（变更文件）条目包含 path（路径）和 status（状态），重命名/复制时可包含 previous_path（原路径）。Reviewer prompt（审查代理提示词）引用 `manifest.json` 和输入快照路径，不内联大 diff（差异）内容；reviewer（审查代理）按需读取相关片段。
+
+为便于排障，每次真实 SDK（开发包）派发还会写入：
+
+- `prompts/<role>.txt`
+- `raw/<role>.txt`
+
+Comet build completion（构建完成）调用时，`--base-ref` 应优先使用 implementation baseline（实施基准，例如 plan 文件头的 `base-ref`），避免把已完成的历史 change（变更）卷入本次 review（审查）diff（差异）。只有在没有实施基准时，才回退到 change init baseline（变更初始化基准）。
 
 ## Reviewer 输出契约
 
