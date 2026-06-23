@@ -37,3 +37,5 @@ manifests:
     - plugins/cross-agent-review/.claude-plugin/plugin.json
     - plugins/pr-flow/.codex-plugin/plugin.json
     - plugins/pr-flow/.claude-plugin/plugin.json
+    - plugins/test-framework/.codex-plugin/plugin.json
+    - plugins/test-framework/.claude-plugin/plugin.json

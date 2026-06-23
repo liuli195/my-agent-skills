@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (
@@ -233,6 +235,21 @@ def test_current_repo_release_flow_files_are_valid() -> None:
     assert "status: verified" in result.stdout
     assert (REPO_ROOT / ".release-flow" / ".gitignore").read_text(encoding="utf-8") == "/releases/\n"
     assert (REPO_ROOT / ".github" / "workflows" / "release.yml").is_file()
+
+
+def test_current_repo_release_flow_version_files_cover_marketplace_plugins() -> None:
+    config = yaml.safe_load((REPO_ROOT / ".release-flow" / "config.yaml").read_text(encoding="utf-8"))
+    projection = yaml.safe_load((REPO_ROOT / ".release-flow" / "projection.yaml").read_text(encoding="utf-8"))
+    version_files = set(config["manifests"]["versionFiles"])
+    plugin_names = next(
+        generator["plugins"]
+        for generator in projection["generators"]
+        if generator["path"] == ".agents/plugins/marketplace.json"
+    )
+
+    for plugin_name in plugin_names:
+        assert f"plugins/{plugin_name}/.codex-plugin/plugin.json" in version_files
+        assert f"plugins/{plugin_name}/.claude-plugin/plugin.json" in version_files
 
 
 def test_current_repo_projection_registers_agent_guard_marketplace_variables() -> None:
