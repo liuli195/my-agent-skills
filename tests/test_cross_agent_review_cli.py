@@ -570,6 +570,32 @@ def test_sdk_dispatch_subprocess_writes_prompt_artifacts(tmp_path: Path, monkeyp
     assert "Manifest file:" in (prompts_dir / "spec-alignment.txt").read_text(encoding="utf-8")
 
 
+def test_sdk_dispatch_subprocess_returns_role_failures_on_timeout(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
+    review = make_review_args_for_module(module, tmp_path)
+
+    def fake_run(*args, **kwargs):
+        payload = json.loads(kwargs["input"])
+        raw_dir = Path(payload["raw_dir"])
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        (raw_dir / "risk-review.txt").write_text(
+            json.dumps({"role": "risk-review", "status": "completed", "findings": []}),
+            encoding="utf-8",
+        )
+        raise subprocess.TimeoutExpired(args[0], timeout=module.SDK_DISPATCH_TIMEOUT_SECONDS)
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    results = module.run_sdk_dispatch_subprocess(review, sys.executable)
+
+    by_role = {result["role"]: result for result in results}
+    assert module.SDK_DISPATCH_TIMEOUT_SECONDS < 600
+    assert by_role["risk-review"]["status"] == "completed"
+    assert by_role["spec-alignment"]["status"] == "failed"
+    assert by_role["spec-alignment"]["findings"][0]["summary"] == "Reviewer dispatch timed out"
+    assert by_role["spec-alignment"]["findings"][0]["severity"] == "CRITICAL"
+
+
 def test_sdk_dispatch_writes_raw_reviewer_output(monkeypatch, tmp_path: Path) -> None:
     module = load_script_module()
     raw_dir = tmp_path / "raw"
@@ -892,13 +918,13 @@ def test_sdk_dispatch_subprocess_timeout_reports_clear_error(tmp_path: Path, mon
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
 
-    try:
-        module.run_sdk_dispatch_subprocess(review, sys.executable)
-    except ValueError as exc:
-        assert "sdk_dispatch_timeout" in str(exc)
-    else:
-        raise AssertionError("expected sdk_dispatch_timeout")
-    assert captured_timeout == 600
+    results = module.run_sdk_dispatch_subprocess(review, sys.executable)
+
+    assert captured_timeout == module.SDK_DISPATCH_TIMEOUT_SECONDS
+    assert module.SDK_DISPATCH_TIMEOUT_SECONDS == 540
+    assert {result["role"] for result in results} == set(module.REVIEWER_ROLES)
+    assert all(result["status"] == "failed" for result in results)
+    assert all(result["findings"][0]["summary"] == "Reviewer dispatch timed out" for result in results)
 
 
 def test_sdk_dispatch_subprocess_invalid_stdout_reports_clear_error(tmp_path: Path, monkeypatch) -> None:

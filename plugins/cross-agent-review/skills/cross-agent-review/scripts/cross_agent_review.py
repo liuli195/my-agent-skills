@@ -75,7 +75,7 @@ READONLY_TOOLS = ["Read", "Glob", "Grep", "Bash(git diff *)", "Bash(git show *)"
 DISALLOWED_TOOLS = ["Edit", "Write", "NotebookEdit", "TodoWrite", "MultiEdit", "Bash"]
 # Individual reviewers time out first; the subprocess gets a wider window to
 # aggregate structured timeout findings and write normal outputs.
-SDK_DISPATCH_TIMEOUT_SECONDS = 600
+SDK_DISPATCH_TIMEOUT_SECONDS = 540
 SDK_REVIEWER_TIMEOUT_SECONDS = 480
 SDK_REVIEWER_ATTEMPTS = 2
 BLOCKING_SEVERITIES = {"CRITICAL", "IMPORTANT"}
@@ -450,6 +450,46 @@ def dispatch_reviewers(review_args: ReviewArgs, sdk_python: str) -> list[dict]:
     return run_sdk_dispatch_subprocess(review_args, sdk_python)
 
 
+def reviewer_failure(role: str, summary: str, evidence: str, recommendation: str) -> dict:
+    return {
+        "role": role,
+        "status": "failed",
+        "findings": [
+            {
+                "severity": "CRITICAL",
+                "location": role,
+                "summary": summary,
+                "evidence": evidence,
+                "recommendation": recommendation,
+            }
+        ],
+    }
+
+
+def timeout_reviewer_results(raw_dir: Path, evidence: str) -> list[dict]:
+    reviewers: list[dict] = []
+    for role in REVIEWER_ROLES:
+        raw_path = raw_dir / f"{role}.txt"
+        if raw_path.exists():
+            raw_text = raw_path.read_text(encoding="utf-8", errors="replace")
+            parsed = parse_reviewer_result(raw_text)
+            if parsed is not None:
+                reviewers.append(parsed)
+                continue
+            role_evidence = raw_text or evidence
+        else:
+            role_evidence = evidence
+        reviewers.append(
+            reviewer_failure(
+                role,
+                "Reviewer dispatch timed out",
+                role_evidence,
+                "Rerun review after checking Claude Agent SDK availability.",
+            )
+        )
+    return reviewers
+
+
 def run_sdk_dispatch_subprocess(review_args: ReviewArgs, sdk_python: str) -> list[dict]:
     prompts = {role: reviewer_prompt(review_args, role) for role in REVIEWER_ROLES}
     prompts_dir = output_dir_for(review_args) / "prompts"
@@ -475,7 +515,10 @@ def run_sdk_dispatch_subprocess(review_args: ReviewArgs, sdk_python: str) -> lis
             timeout=SDK_DISPATCH_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as exc:
-        raise ValueError(f"sdk_dispatch_timeout: exceeded {SDK_DISPATCH_TIMEOUT_SECONDS}s") from exc
+        return timeout_reviewer_results(
+            raw_dir,
+            f"sdk_dispatch_timeout: exceeded {SDK_DISPATCH_TIMEOUT_SECONDS}s",
+        )
     if result.returncode != 0:
         raise ValueError(f"sdk_dispatch_failed: {result.stderr.strip() or result.stdout.strip()}")
     try:
