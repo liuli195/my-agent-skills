@@ -472,6 +472,7 @@ def test_runner_selects_check_without_paths_for_any_change() -> None:
     assert module._selected_checks([default_check, src_check], ["docs/guide.md"]) == [
         default_check
     ]
+    assert module._selected_checks([default_check], []) == []
 
 
 def test_runner_no_check_returns_success_without_full_fallback(
@@ -1010,3 +1011,4 @@ def test_root_verify_full_covers_comet_config() -> None:
     assert ".comet/config.yaml" in pytest_full["inputs"]
     assert ".comet.yaml" in pytest_full["paths"]
     assert ".comet.yaml" in pytest_full["inputs"]
+    assert "." not in pytest_full["inputs"]

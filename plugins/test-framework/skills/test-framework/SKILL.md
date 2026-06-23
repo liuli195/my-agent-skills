@@ -20,6 +20,9 @@ Use this skill when a project needs the local Test Framework（测试框架）ar
 
 ```bash
 python scripts/test_framework.py init --project .
+python scripts/test_framework.py build --project .
+python scripts/test_framework.py verify --project .
+python scripts/test_framework.py verify --project . --full
 ```
 
 项目级安装时，可从仓库内插件路径调用：

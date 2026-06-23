@@ -193,6 +193,8 @@ def test_test_framework_plugin_has_single_skill_entrypoint() -> None:
     assert "不内置仓库业务逻辑" in skill_text
     assert "不向目标仓库复制 runner（运行器）" in skill_text
     assert "scripts/test_framework.py init" in skill_text
+    assert "scripts/test_framework.py build" in skill_text
+    assert "scripts/test_framework.py verify" in skill_text
 
 
 def test_test_framework_registered_in_marketplaces_and_projection() -> None:

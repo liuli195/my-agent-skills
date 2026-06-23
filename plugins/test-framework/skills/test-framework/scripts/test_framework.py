@@ -46,6 +46,7 @@ def _init_project(project: Path) -> int:
         / "gitignore",
     }
 
+    # Preflight before mkdir/copy so a failed init does not create framework artifacts.
     for target in target_files:
         if target.exists():
             print(f"existing_file: {target.relative_to(project).as_posix()}", file=sys.stderr)
