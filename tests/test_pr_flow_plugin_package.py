@@ -124,7 +124,13 @@ def test_pr_flow_bare_commands_report_stable_contract() -> None:
 
 def test_pr_flow_package_passes_repo_build_checks() -> None:
     result = subprocess.run(
-        [sys.executable, "scripts/check.py", "build"],
+        [
+            sys.executable,
+            "plugins/test-framework/skills/test-framework/scripts/test_framework.py",
+            "build",
+            "--project",
+            ".",
+        ],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,

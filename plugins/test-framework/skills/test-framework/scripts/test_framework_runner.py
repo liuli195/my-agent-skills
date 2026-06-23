@@ -8,14 +8,13 @@ import os
 import platform
 import subprocess
 import sys
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from collections.abc import Callable
 
 
 FRAMEWORK_VERSION = "0.1.0"
 CACHE_VERSION = "1"
-REPO_ROOT = Path(__file__).resolve().parents[1]
 Runner = Callable[..., subprocess.CompletedProcess[Any]]
 
 
@@ -23,8 +22,12 @@ class ConfigError(Exception):
     pass
 
 
-def _load_config(root: Path) -> dict[str, Any]:
-    config_path = root / ".test-framework" / "config.json"
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _load_config(project: Path) -> dict[str, Any]:
+    config_path = project / ".test-framework" / "config.json"
     try:
         return json.loads(config_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -50,10 +53,10 @@ def _dedupe(items: list[str]) -> list[str]:
     return deduped
 
 
-def _git_names(root: Path, *args: str) -> list[str] | None:
+def _git_names(project: Path, *args: str) -> list[str] | None:
     result = subprocess.run(
         ["git", *args],
-        cwd=root,
+        cwd=project,
         check=False,
         text=True,
         capture_output=True,
@@ -73,25 +76,25 @@ def _is_excluded_relative(relative: str) -> bool:
     )
 
 
-def _all_project_files(root: Path) -> list[str]:
+def _all_project_files(project: Path) -> list[str]:
     files: list[str] = []
-    for current_root, dirs, names in os.walk(root):
-        current_path = Path(current_root)
+    for root, dirs, names in os.walk(project):
+        root_path = Path(root)
         kept_dirs: list[str] = []
         for name in dirs:
-            relative = (current_path / name).relative_to(root).as_posix()
+            relative = (root_path / name).relative_to(project).as_posix()
             if not _is_excluded_relative(relative):
                 kept_dirs.append(name)
         dirs[:] = kept_dirs
         for name in names:
-            path = current_path / name
-            relative = path.relative_to(root).as_posix()
+            path = root_path / name
+            relative = path.relative_to(project).as_posix()
             if not _is_excluded_relative(relative):
                 files.append(relative)
     return sorted(files)
 
 
-def _changed_files(root: Path) -> list[str]:
+def _changed_files(project: Path) -> list[str]:
     commands = [
         ("diff", "--name-only", "--cached"),
         ("diff", "--name-only"),
@@ -100,13 +103,13 @@ def _changed_files(root: Path) -> list[str]:
     names: list[str] = []
     any_git_command_succeeded = False
     for command in commands:
-        result = _git_names(root, *command)
+        result = _git_names(project, *command)
         if result is None:
             continue
         any_git_command_succeeded = True
         names.extend(result)
     if not any_git_command_succeeded:
-        names = _all_project_files(root)
+        names = _all_project_files(project)
     return _dedupe(names)
 
 
@@ -155,58 +158,54 @@ def _hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _is_relative_to_project(root: Path, path: Path) -> bool:
+def _is_relative_to_project(project: Path, path: Path) -> bool:
     try:
-        path.resolve().relative_to(root.resolve())
+        path.resolve().relative_to(project.resolve())
     except ValueError:
         return False
     return True
 
 
-def _validate_project_relative_input(root: Path, input_path: str) -> tuple[str, Path]:
+def _validate_project_relative_input(project: Path, input_path: str) -> tuple[str, Path]:
     raw_path = Path(input_path)
     relative = _normalize_path(input_path)
     if raw_path.anchor or ".." in Path(relative).parts:
         raise ValueError(f"invalid_input_path: {input_path}")
-    path = root / relative
-    if not _is_relative_to_project(root, path):
+    path = project / relative
+    if not _is_relative_to_project(project, path):
         raise ValueError(f"invalid_input_path: {input_path}")
     return relative, path
 
 
-def _hash_input(root: Path, input_path: str) -> dict[str, Any]:
-    relative, path = _validate_project_relative_input(root, input_path)
+def _hash_input(project: Path, input_path: str) -> dict[str, Any]:
+    relative, path = _validate_project_relative_input(project, input_path)
     if not path.exists():
         return {"path": relative, "missing": True}
     if path.is_file():
         return {"path": relative, "type": "file", "sha256": _hash_file(path)}
     if path.is_dir():
         files: list[dict[str, str]] = []
-        for current_root, dirs, names in os.walk(path):
-            current_path = Path(current_root)
+        for root, dirs, names in os.walk(path):
+            root_path = Path(root)
             kept_dirs: list[str] = []
             for name in dirs:
-                child_relative = (current_path / name).relative_to(root).as_posix()
+                child_relative = (root_path / name).relative_to(project).as_posix()
                 if not _is_excluded_relative(child_relative):
                     kept_dirs.append(name)
             dirs[:] = kept_dirs
             for name in sorted(names):
-                file_path = current_path / name
-                child_relative = file_path.relative_to(root).as_posix()
+                file_path = root_path / name
+                child_relative = file_path.relative_to(project).as_posix()
                 if _is_excluded_relative(child_relative):
                     continue
-                if not _is_relative_to_project(root, file_path):
+                if not _is_relative_to_project(project, file_path):
                     raise ValueError(f"invalid_input_path: {child_relative}")
                 files.append({"path": child_relative, "sha256": _hash_file(file_path)})
-        return {
-            "path": relative,
-            "type": "directory",
-            "files": sorted(files, key=lambda item: item["path"]),
-        }
+        return {"path": relative, "type": "directory", "files": sorted(files, key=lambda item: item["path"])}
     return {"path": relative, "type": "other"}
 
 
-def _default_cache_inputs(root: Path, paths: list[str]) -> list[str]:
+def _default_cache_inputs(project: Path, paths: list[str]) -> list[str]:
     matched: list[str] = []
     for pattern in paths:
         normalized = _normalize_path(pattern)
@@ -214,14 +213,14 @@ def _default_cache_inputs(root: Path, paths: list[str]) -> list[str]:
             raise ValueError(f"invalid_input_path: {pattern}")
         matched.extend(
             relative
-            for relative in _all_project_files(root)
+            for relative in _all_project_files(project)
             if _path_matches(normalized, relative)
         )
     return _dedupe(matched)
 
 
 def _cache_key(
-    root: Path,
+    project: Path,
     config: dict[str, Any],
     check: dict[str, Any],
     changed_files: list[str] | None = None,
@@ -231,27 +230,27 @@ def _cache_key(
     else:
         paths = check.get("paths") or []
         if paths:
-            inputs = _default_cache_inputs(root, paths)
+            inputs = _default_cache_inputs(project, paths)
         else:
-            inputs = changed_files if changed_files is not None else _changed_files(root)
+            inputs = changed_files if changed_files is not None else _changed_files(project)
     payload = {
         "cache_version": CACHE_VERSION,
         "framework_version": FRAMEWORK_VERSION,
         "python_version": platform.python_version(),
         "check_id": check.get("id"),
         "command": check.get("command"),
-        "inputs": [_hash_input(root, item) for item in inputs],
+        "inputs": [_hash_input(project, item) for item in inputs],
         "config": hashlib.sha256(_stable_json(config).encode("utf-8")).hexdigest(),
     }
     return hashlib.sha256(_stable_json(payload).encode("utf-8")).hexdigest()
 
 
-def _cache_path(root: Path, key: str) -> Path:
-    return root / ".test-framework" / "cache" / f"{key}.json"
+def _cache_path(project: Path, key: str) -> Path:
+    return project / ".test-framework" / "cache" / f"{key}.json"
 
 
-def _cache_load(root: Path, key: str) -> bool:
-    path = _cache_path(root, key)
+def _cache_load(project: Path, key: str) -> bool:
+    path = _cache_path(project, key)
     if not path.is_file():
         return False
     try:
@@ -261,8 +260,8 @@ def _cache_load(root: Path, key: str) -> bool:
     return data.get("status") == "passed"
 
 
-def _cache_store(root: Path, key: str, check: dict[str, Any]) -> None:
-    path = _cache_path(root, key)
+def _cache_store(project: Path, key: str, check: dict[str, Any]) -> None:
+    path = _cache_path(project, key)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         _stable_json({"status": "passed", "id": check.get("id")}) + "\n",
@@ -270,7 +269,7 @@ def _cache_store(root: Path, key: str, check: dict[str, Any]) -> None:
     )
 
 
-def _run_check(root: Path, check: dict[str, Any], runner: Runner) -> int:
+def _run_check(project: Path, check: dict[str, Any], runner: Runner) -> int:
     command = check.get("command")
     if not command:
         print(f"missing_command: {check.get('id')}", file=sys.stderr)
@@ -279,7 +278,7 @@ def _run_check(root: Path, check: dict[str, Any], runner: Runner) -> int:
     try:
         result = runner(
             command,
-            cwd=root,
+            cwd=project,
             check=False,
             text=True,
             capture_output=True,
@@ -310,15 +309,15 @@ def _config_error(error: ConfigError) -> int:
     return 1
 
 
-def run_build(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> int:
+def run_build(project: Path, runner: Runner = subprocess.run) -> int:
     try:
-        config = _load_config(root)
+        config = _load_config(project)
     except ConfigError as error:
         return _config_error(error)
     checks = _checks(config, "build")
     failures = 0
     for check in checks:
-        if _run_check(root, check, runner) != 0:
+        if _run_check(project, check, runner) != 0:
             failures += 1
     print(f"checked: {_check_ids(checks)}")
     if failures:
@@ -329,39 +328,39 @@ def run_build(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> int:
 
 
 def run_verify(
-    root: Path = REPO_ROOT,
+    project: Path,
     runner: Runner = subprocess.run,
     *,
     full: bool = False,
 ) -> int:
     try:
-        config = _load_config(root)
+        config = _load_config(project)
     except ConfigError as error:
         return _config_error(error)
     checks = _checks(config, "verify")
-    changed_files = _changed_files(root)
+    changed_files = _changed_files(project)
     selected = checks if full else _selected_checks(checks, changed_files)
     failures = 0
     for check in selected:
         try:
-            key = _cache_key(root, config, check, changed_files)
+            key = _cache_key(project, config, check, changed_files)
         except ValueError as error:
             print(str(error), file=sys.stderr)
             failures += 1
             continue
         if full:
-            result = _run_check(root, check, runner)
+            result = _run_check(project, check, runner)
             if result == 0:
-                _cache_store(root, key, check)
+                _cache_store(project, key, check)
             else:
                 failures += 1
             continue
-        if _cache_load(root, key):
+        if _cache_load(project, key):
             print(f"cache-hit: {check.get('id')}")
             continue
-        result = _run_check(root, check, runner)
+        result = _run_check(project, check, runner)
         if result == 0:
-            _cache_store(root, key, check)
+            _cache_store(project, key, check)
         else:
             failures += 1
     print(f"checked: {_check_ids(selected)}")
@@ -374,7 +373,7 @@ def run_verify(
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="check.py")
+    parser = argparse.ArgumentParser(prog="test_framework_runner.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("build")
     verify_parser = subparsers.add_parser("verify")
@@ -382,13 +381,14 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, project: Path | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    project = _project_root() if project is None else project
     if args.command == "build":
-        return run_build(REPO_ROOT)
+        return run_build(project)
     if args.command == "verify":
-        return run_verify(REPO_ROOT, full=args.full)
+        return run_verify(project, full=args.full)
     parser.error(f"unsupported command: {args.command}")
     return 2
 

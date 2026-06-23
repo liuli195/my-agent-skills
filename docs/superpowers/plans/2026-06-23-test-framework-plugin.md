@@ -8,9 +8,11 @@ base-ref: b58fde2cf4ddcc91316737670271c938bc83714f
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **2026-06-23 update:** Latest decision supersedes earlier steps that mention copying or maintaining target-repository `scripts/check.py`. The generic runner（运行器） now lives only inside the `test-framework` Plugin（测试框架插件） as `scripts/test_framework_runner.py`, and the unified command entrypoint is `scripts/test_framework.py build|verify --project <repo>`. Target repositories still own repository-specific check commands such as `scripts/local_plugin_build.py`, referenced from `.test-framework/config.json`.
+
 **Goal:** Build a lightweight `test-framework` Plugin（测试框架插件） that initializes one reusable build（构建检查） / default cached verify（快速验证） / explicit full verify（全量验证） framework.
 
-**Architecture:** The plugin ships the real framework runner（运行器） as a template. Target repositories define checks in `.test-framework/config.json`; `scripts/check.py` executes configured checks, selects affected checks for default verify（验证）, and caches only passed（已通过） results in `.test-framework/cache/`.
+**Architecture:** The plugin ships the real framework runner（运行器） and command entrypoint. Target repositories define checks in `.test-framework/config.json`; the plugin entrypoint executes configured checks, selects affected checks for default verify（验证）, and caches only passed（已通过） results in `.test-framework/cache/`.
 
 **Tech Stack:** Python（Python 语言） standard library only for initialized target repositories: `argparse`, `fnmatch`, `hashlib`, `json`, `pathlib`, `shlex`, `subprocess`, and `sys`. Tests use pytest（Python 测试框架） in this repository.
 
@@ -21,15 +23,14 @@ base-ref: b58fde2cf4ddcc91316737670271c938bc83714f
 - Create `plugins/test-framework/.codex-plugin/plugin.json`: Codex（Codex 版本） manifest（清单）.
 - Create `plugins/test-framework/.claude-plugin/plugin.json`: Claude（Claude 版本） manifest（清单）.
 - Create `plugins/test-framework/skills/test-framework/SKILL.md`: single Skill（技能） entrypoint.
-- Create `plugins/test-framework/skills/test-framework/scripts/test_framework.py`: deterministic init（初始化） script.
-- Create `plugins/test-framework/skills/test-framework/assets/templates/scripts/check.py`: complete reusable runner（运行器） template.
+- Create `plugins/test-framework/skills/test-framework/scripts/test_framework.py`: deterministic init（初始化） and command entrypoint script.
+- Create `plugins/test-framework/skills/test-framework/scripts/test_framework_runner.py`: complete reusable runner（运行器） implementation.
 - Create `plugins/test-framework/skills/test-framework/assets/templates/test-framework/config.json`: minimal JSON（数据格式） config template.
 - Create `plugins/test-framework/skills/test-framework/assets/templates/test-framework/gitignore`: ignores `/cache/` and `/runs/`.
 - Modify `.claude-plugin/marketplace.json`: register `test-framework`.
 - Modify `.agents/plugins/marketplace.json`: register `test-framework`.
 - Modify `.release-flow/projection.yaml`: register `test-framework`.
 - Modify `plugins/release-flow/skills/release-flow/scripts/release_flow.py`: register `test-framework` in release projection（发布投影） metadata validation/generation only.
-- Modify `scripts/check.py`: align this repository with the same runner contract.
 - Create `scripts/local_plugin_build.py`: repository-owned package-shape check command referenced by `build.checks`.
 - Create `.test-framework/config.json`: this repository's configured checks.
 - Create `.test-framework/.gitignore`: ignores framework local state.

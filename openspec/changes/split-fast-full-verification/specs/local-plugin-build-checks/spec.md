@@ -4,13 +4,13 @@
 The repository SHALL（必须）provide a verify command initialized by the test-framework Plugin（测试框架插件） contract.
 
 #### Scenario: Verify command defaults to framework fast mode
-- **WHEN** a developer runs `python scripts/check.py verify`
+- **WHEN** a developer runs `python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project .`
 - **THEN** the command uses `.test-framework/config.json` `verify.checks`
 - **THEN** the command applies changed-files（变更文件） selection and passed-result cache（通过结果缓存）
 - **THEN** the command does not bypass changed-files（变更文件） selection and passed-result cache（通过结果缓存） by unconditionally running every configured verify check
 
 #### Scenario: Verify full mode runs all configured checks
-- **WHEN** a developer runs `python scripts/check.py verify --full`
+- **WHEN** a developer runs `python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project . --full`
 - **THEN** the command runs all `.test-framework/config.json` `verify.checks`
 - **THEN** the command does not use cache（缓存） hits to skip checks（检查项）
 - **THEN** passed checks（已通过检查项） refresh passed-result cache（通过结果缓存）
@@ -19,6 +19,6 @@ The repository SHALL（必须）provide a verify command initialized by the test
 
 #### Scenario: Comet config keeps guard-compatible command shim
 - **WHEN** Comet（双星流程）reads root `.comet.yaml`
-- **THEN** it defines `build_command: python scripts/check.py build`
-- **THEN** it defines `verify_command: python scripts/check.py verify`
+- **THEN** it defines `build_command: python plugins/test-framework/skills/test-framework/scripts/test_framework.py build --project .`
+- **THEN** it defines `verify_command: python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project .`
 - **THEN** those commands act as the guard（守卫） compatibility shim（兼容层） for the test-framework runner（测试框架运行器）

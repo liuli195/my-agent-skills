@@ -4,13 +4,13 @@
 由 test-framework Plugin（测试框架插件）初始化的仓库 MUST 通过同一套 configured checks（配置检查项）提供默认 fast（快速验证）和显式 full（全量验证）。
 
 #### Scenario: Default verify applies fast cache execution
-- **WHEN** 开发者运行 `python scripts/check.py verify`
+- **WHEN** 开发者运行 `python <test-framework-script> verify --project <repo>`
 - **THEN** 系统 MUST 从 configured `verify.checks`（配置验证检查项）选择受 changed files（变更文件）影响的 checks（检查项）
 - **THEN** 系统 MUST 对选中的 checks（检查项）应用 passed-result cache（通过结果缓存）
 - **THEN** 系统 MUST NOT 跳过 changed-files（变更文件）筛选和 passed-result cache（通过结果缓存）而无条件运行所有 configured `verify.checks`
 
 #### Scenario: Full verify requires explicit flag
-- **WHEN** 开发者运行 `python scripts/check.py verify --full`
+- **WHEN** 开发者运行 `python <test-framework-script> verify --project <repo> --full`
 - **THEN** 系统 MUST 运行所有 configured `verify.checks`
 - **THEN** 系统 MUST NOT 使用 changed-files（变更文件）筛选跳过 checks（检查项）
 - **THEN** 系统 MUST NOT 读取 cache（缓存）来跳过 checks（检查项）

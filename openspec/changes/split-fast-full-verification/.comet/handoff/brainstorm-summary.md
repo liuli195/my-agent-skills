@@ -7,7 +7,7 @@
 
 构建一个轻量 `test-framework` Plugin（测试框架插件），同时提供 Claude（Claude 版本）和 Codex（Codex 版本）包装。插件只保留三项核心能力：初始化标准产物结构、提供快速缓存验证、提供统一配置和统一命令入口。
 
-目标仓库只维护 `.test-framework/config.json`，并且只定义一套 `build.checks` 和 `verify.checks`。默认 `python scripts/check.py verify` 在 `verify.checks` 上应用 changed-files（变更文件）筛选和 passed-result cache（通过结果缓存）；`python scripts/check.py verify --full` 运行完整 `verify.checks`。目标仓库不定义独立 fast（快速验证）测试清单。配置使用 JSON（数据格式），避免任意目标仓库额外依赖 YAML（配置格式）解析库。
+目标仓库只维护 `.test-framework/config.json`，并且只定义一套 `build.checks` 和 `verify.checks`。默认 `python <test-framework-script> verify --project <repo>` 在 `verify.checks` 上应用 changed-files（变更文件）筛选和 passed-result cache（通过结果缓存）；`python <test-framework-script> verify --project <repo> --full` 运行完整 `verify.checks`。目标仓库不定义独立 fast（快速验证）测试清单。配置使用 JSON（数据格式），避免任意目标仓库额外依赖 YAML（配置格式）解析库。
 
 默认 changed-files（变更文件）来源是 worktree（工作区），包含 staged tracked changes（已暂存已跟踪变更）、unstaged tracked changes（未暂存已跟踪变更）和 untracked non-ignored files（未跟踪且未忽略文件）。首版不提供其他命令参数。
 
@@ -22,7 +22,7 @@
 ## 测试策略
 
 - 覆盖插件双 manifest（清单）和 marketplace（市场目录）/projection（发布投影）登记。
-- 覆盖初始化产物：`scripts/check.py`、`.test-framework/config.json`、`.test-framework/.gitignore`。
+- 覆盖初始化产物：`.test-framework/config.json`、`.test-framework/.gitignore` 和 `.test-framework/cache/`，并确认不复制 runner（运行器）到目标仓库。
 - 覆盖统一入口：`build`、默认 `verify`、`verify --full`。
 - 覆盖 changed-files（变更文件）选择、cache hit（缓存命中）、cache miss（缓存未命中）、failed（失败）不缓存、no-check（无检查）不回退 full（全量验证）。
 - 覆盖临时目标仓库端到端初始化后可运行 `build`、`verify`、`verify --full`。

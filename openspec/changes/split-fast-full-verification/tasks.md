@@ -6,7 +6,7 @@
 
 ## 2. Target Repository Framework
 
-- [x] 2.1 Initialize this repository with `scripts/check.py`, `.test-framework/config.json`, and `.test-framework/.gitignore`.
+- [x] 2.1 Initialize this repository with `.test-framework/config.json` and `.test-framework/.gitignore`, while using the plugin-provided runner（运行器） entrypoint.
 - [x] 2.2 Migrate existing build（构建检查） behavior into configured `build.checks` without coupling it to the plugin template.
 - [x] 2.3 Define this repository's canonical `verify.checks` once; do not add a separate fast（快速验证） configuration.
 
@@ -19,12 +19,12 @@
 
 ## 4. Scope Guard
 
-- [x] 4.1 Confirm Comet（双星流程） root command wiring still points at the default `python scripts/check.py verify`.
+- [x] 4.1 Confirm Comet（双星流程） root command wiring points at the default plugin `verify --project .` fast（快速验证） command.
 - [x] 4.2 Confirm no PR Flow（拉取请求流程）、Release Flow（发布流程） behavior wiring or CI（持续集成） workflow is changed by this A change; Release Flow（发布流程） projection（发布投影） may only add `test-framework` package metadata.
 
 ## 5. Validation
 
 - [x] 5.1 Run focused tests for the framework contract, local build checks, cache behavior including `verify --full` cache refresh, and init E2E（端到端） behavior.
-- [x] 5.2 Run `python scripts/check.py build`.
-- [x] 5.3 Run `python scripts/check.py verify` and confirm it completes through default fast（快速验证） mode.
-- [x] 5.4 Run `python scripts/check.py verify --full` once and record full-suite timing as baseline evidence.
+- [x] 5.2 Run `python plugins/test-framework/skills/test-framework/scripts/test_framework.py build --project .`.
+- [x] 5.3 Run `python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project .` and confirm it completes through default fast（快速验证） mode.
+- [x] 5.4 Run `python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project . --full` once and record full-suite timing as baseline evidence.

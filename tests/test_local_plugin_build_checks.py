@@ -1,6 +1,4 @@
-import ast
 import importlib.util
-import inspect
 import json
 import subprocess
 import sys
@@ -9,18 +7,15 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CHECK_SCRIPT = REPO_ROOT / "scripts" / "check.py"
 LOCAL_BUILD_SCRIPT = REPO_ROOT / "scripts" / "local_plugin_build.py"
-TEMPLATE_CHECK_SCRIPT = (
+TEST_FRAMEWORK_RUNNER = (
     REPO_ROOT
     / "plugins"
     / "test-framework"
     / "skills"
     / "test-framework"
-    / "assets"
-    / "templates"
     / "scripts"
-    / "check.py"
+    / "test_framework_runner.py"
 )
 
 
@@ -35,11 +30,7 @@ def load_module(path: Path, name: str):
 
 
 def load_check_module():
-    return load_module(CHECK_SCRIPT, "repo_check")
-
-
-def load_template_check_module():
-    return load_module(TEMPLATE_CHECK_SCRIPT, "template_check")
+    return load_module(TEST_FRAMEWORK_RUNNER, "test_framework_runner")
 
 
 def load_local_build_module():
@@ -387,112 +378,6 @@ def test_runner_default_check_cache_key_tracks_dirty_file_contents(
     assert "cache-hit: verify.default" not in output
 
 
-class _RunnerSyncNormalizer(ast.NodeTransformer):
-    def visit_arg(self, node: ast.arg) -> ast.arg:
-        if node.arg == "root":
-            node.arg = "project"
-        node.annotation = None
-        return node
-
-    def visit_Name(self, node: ast.Name) -> ast.Name:
-        if node.id == "root":
-            node.id = "project"
-        return node
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
-        self.generic_visit(node)
-        node.args.args = [arg for arg in node.args.args if arg.arg != "runner"]
-        node.args.defaults = []
-        node.args.kw_defaults = [None for _arg in node.args.kwonlyargs]
-        node.returns = None
-        return node
-
-    def visit_Call(self, node: ast.Call) -> ast.Call:
-        self.generic_visit(node)
-        if isinstance(node.func, ast.Name) and node.func.id == "runner":
-            node.func = ast.Name(id="__RUNNER__", ctx=ast.Load())
-        if (
-            isinstance(node.func, ast.Attribute)
-            and node.func.attr == "run"
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "subprocess"
-        ):
-            node.func = ast.Name(id="__RUNNER__", ctx=ast.Load())
-        if isinstance(node.func, ast.Name) and node.func.id == "_run_check":
-            node.args = [
-                arg
-                for arg in node.args
-                if not (isinstance(arg, ast.Name) and arg.id == "runner")
-            ]
-        return node
-
-    def visit_Return(self, node: ast.Return) -> ast.Return:
-        self.generic_visit(node)
-        if (
-            isinstance(node.value, ast.Call)
-            and isinstance(node.value.func, ast.Name)
-            and node.value.func.id == "int"
-            and len(node.value.args) == 1
-        ):
-            node.value = node.value.args[0]
-        return node
-
-
-def normalized_runner_function(function) -> str:
-    tree = ast.parse(inspect.getsource(function))
-    tree = _RunnerSyncNormalizer().visit(tree)
-    ast.fix_missing_locations(tree)
-    return ast.dump(tree, include_attributes=False)
-
-
-def test_repo_runner_core_logic_stays_in_sync_with_template_runner() -> None:
-    repo_module = load_check_module()
-    template_module = load_template_check_module()
-    function_names = [
-        "_load_config",
-        "_changed_files",
-        "_selected_checks",
-        "_cache_key",
-        "_cache_load",
-        "_cache_store",
-        "_run_check",
-        "_checks",
-        "run_build",
-        "run_verify",
-    ]
-
-    for function_name in function_names:
-        assert normalized_runner_function(getattr(repo_module, function_name)) == (
-            normalized_runner_function(getattr(template_module, function_name))
-        ), function_name
-
-
-def test_repo_runner_cache_key_matches_template_runner(tmp_path: Path) -> None:
-    repo_module = load_check_module()
-    template_module = load_template_check_module()
-    changed_file = tmp_path / "src" / "app.py"
-    changed_file.parent.mkdir()
-    changed_file.write_text("changed\n", encoding="utf-8")
-    config = {
-        "version": 1,
-        "build": {"checks": []},
-        "verify": {
-            "checks": [
-                {
-                    "id": "verify.default",
-                    "command": "python -m pytest",
-                }
-            ]
-        },
-    }
-    check = config["verify"]["checks"][0]
-    changed_files = ["src/app.py"]
-
-    assert repo_module._cache_key(tmp_path, config, check, changed_files) == (
-        template_module._cache_key(tmp_path, config, check, changed_files)
-    )
-
-
 def test_runner_build_reports_missing_config_without_traceback(
     tmp_path: Path, capsys
 ) -> None:
@@ -686,12 +571,39 @@ def test_local_plugin_build_main_outputs_stable_status(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
     module = load_local_build_module()
+    calls: list[Path] = []
     monkeypatch.setattr(module, "REPO_ROOT", tmp_path)
-    monkeypatch.setattr(module, "run_build", lambda root=tmp_path: [])
+
+    def fake_run_build(root=tmp_path):
+        calls.append(root)
+        return []
+
+    monkeypatch.setattr(module, "run_build", fake_run_build)
 
     result = module.main([])
 
     assert result == 0
+    assert calls == [tmp_path]
+    assert "status: build checks passed" in capsys.readouterr().out
+
+
+def test_local_plugin_build_main_uses_explicit_build_argv(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = load_local_build_module()
+    calls: list[Path] = []
+    monkeypatch.setattr(module, "REPO_ROOT", tmp_path)
+
+    def fake_run_build(root=tmp_path):
+        calls.append(root)
+        return []
+
+    monkeypatch.setattr(module, "run_build", fake_run_build)
+
+    result = module.main(["build"])
+
+    assert result == 0
+    assert calls == [tmp_path]
     assert "status: build checks passed" in capsys.readouterr().out
 
 
@@ -1010,8 +922,14 @@ def test_root_comet_yaml_points_to_check_commands_for_guard() -> None:
 
     data = yaml.safe_load((REPO_ROOT / ".comet.yaml").read_text(encoding="utf-8"))
 
-    assert data["build_command"] == "python scripts/check.py build"
-    assert data["verify_command"] == "python scripts/check.py verify"
+    assert (
+        data["build_command"]
+        == "python plugins/test-framework/skills/test-framework/scripts/test_framework.py build --project ."
+    )
+    assert (
+        data["verify_command"]
+        == "python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project ."
+    )
 
 
 def test_root_verify_full_covers_comet_config() -> None:

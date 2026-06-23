@@ -42,7 +42,7 @@ def run_test_framework(*args: str) -> subprocess.CompletedProcess[str]:
 
 def run_check(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(project / "scripts" / "check.py"), *args],
+        [sys.executable, str(TEST_FRAMEWORK_SCRIPT), *args, "--project", str(project)],
         cwd=project,
         check=False,
         text=True,
@@ -186,11 +186,12 @@ def test_test_framework_plugin_has_single_skill_entrypoint() -> None:
     assert script_path.is_file()
     assert skill_text.startswith("---\n")
     assert f"name: {PLUGIN_NAME}" in front_matter
-    assert "只初始化测试框架产物" in skill_text
+    assert "只初始化测试框架配置产物" in skill_text
     assert "不安装依赖" in skill_text
     assert "不写用户级配置" in skill_text
     assert "不配置 CI（持续集成）" in skill_text
     assert "不内置仓库业务逻辑" in skill_text
+    assert "不向目标仓库复制 runner（运行器）" in skill_text
     assert "scripts/test_framework.py init" in skill_text
 
 
@@ -263,7 +264,7 @@ def test_test_framework_release_projection_projects_real_catalogs(tmp_path: Path
     }
 
 
-def test_test_framework_init_writes_runner_config_gitignore_and_cache(tmp_path: Path) -> None:
+def test_test_framework_init_writes_config_gitignore_and_cache(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
 
@@ -271,23 +272,21 @@ def test_test_framework_init_writes_runner_config_gitignore_and_cache(tmp_path: 
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: initialized" in result.stdout
-    assert (project / "scripts" / "check.py").is_file()
     assert (project / ".test-framework" / "config.json").is_file()
     assert (project / ".test-framework" / ".gitignore").is_file()
     assert (project / ".test-framework" / "cache").is_dir()
+    assert not (project / "scripts" / "check.py").exists()
     assert read_json(project / ".test-framework" / "config.json") == {
         "version": 1,
         "build": {"checks": []},
         "verify": {"checks": []},
     }
     assert (project / ".test-framework" / ".gitignore").read_text(encoding="utf-8") == "/cache/\n/runs/\n"
-    assert "def run_verify" in (project / "scripts" / "check.py").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(
     "existing",
     [
-        Path("scripts/check.py"),
         Path(".test-framework/config.json"),
         Path(".test-framework/.gitignore"),
     ],
@@ -304,10 +303,9 @@ def test_test_framework_init_refuses_existing_files_before_writes(
     result = run_test_framework("init", "--project", str(project))
 
     assert result.returncode != 0
-    assert f"existing_file: {existing_path}" in result.stderr
+    assert f"existing_file: {existing.as_posix()}" in result.stderr
     assert existing_path.read_text(encoding="utf-8") == "keep me\n"
     generated_files = [
-        Path("scripts/check.py"),
         Path(".test-framework/config.json"),
         Path(".test-framework/.gitignore"),
     ]
@@ -870,13 +868,7 @@ def test_test_framework_runner_directory_hash_ignores_generated_paths(
 
 def test_test_framework_cache_key_covers_runtime_and_cache_versions() -> None:
     template = (
-        PLUGIN_ROOT
-        / "skills"
-        / "test-framework"
-        / "assets"
-        / "templates"
-        / "scripts"
-        / "check.py"
+        PLUGIN_ROOT / "skills" / "test-framework" / "scripts" / "test_framework_runner.py"
     ).read_text(encoding="utf-8")
 
     assert '"cache_version": CACHE_VERSION' in template

@@ -18,21 +18,21 @@ OpenSpec remains the canonical capability spec. This beta context pack verbatim-
 - Source: openspec/changes/split-fast-full-verification/tasks.md
 - SHA256: af922cabcbddcfb355bc208d2c1b5432af534c1308d1e03d3a973cb638b9dc23
 - Source: openspec/changes/split-fast-full-verification/specs/local-plugin-build-checks/spec.md
-- SHA256: 967ff4ecd268fdb6de96a0dffd024edff027df8c113c62a67b7b5d72488b93a4
+- SHA256: a976c36076ee8aa2fd9302442385a9368f895b72854dfe96212002cc15fedb65
 - Source: openspec/changes/split-fast-full-verification/specs/local-verification-modes/spec.md
-- SHA256: 305b2343e85f369bc10bf1cb58ef5acd1f4eac171de6808063277c0ba3b15edb
+- SHA256: de474281f9a3b43243f0e6df159ff79f4ad71c983f59f35815cf177a25894e84
 - Source: openspec/changes/split-fast-full-verification/specs/pr-flow-plugin/spec.md
 - SHA256: 2499822caa636472c00b335c7cbb520e24429b8d9b599d310666915ae803f62d
 - Source: openspec/changes/split-fast-full-verification/specs/test-framework-plugin/spec.md
-- SHA256: 95144ca8ce41c000a05fe7c007caae25151b7d9c90e1dd6ebe7ea0f445ec26e7
+- SHA256: ecbfdb8e5b56b60e9208b86e49baf77cc6a817a4331081f33798f978a7a52895
 
 ## Acceptance Projection
 
 ## openspec/changes/split-fast-full-verification/specs/local-plugin-build-checks/spec.md
 
 - Source: openspec/changes/split-fast-full-verification/specs/local-plugin-build-checks/spec.md
-- Lines: 1-24
-- SHA256: 967ff4ecd268fdb6de96a0dffd024edff027df8c113c62a67b7b5d72488b93a4
+- Lines: 1-20
+- SHA256: a976c36076ee8aa2fd9302442385a9368f895b72854dfe96212002cc15fedb65
 
 ```md
 ## MODIFIED Requirements
@@ -41,28 +41,31 @@ OpenSpec remains the canonical capability spec. This beta context pack verbatim-
 The repository SHALL（必须）provide a verify command generated or maintained by the test-framework Plugin（测试框架插件） contract.
 
 #### Scenario: Verify command defaults to framework fast mode
-- **WHEN** a developer runs `python scripts/check.py verify`
+- **WHEN** a developer runs `python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project .`
 - **THEN** the command uses `.test-framework/config.json` `verify.checks`
 - **THEN** the command applies changed-files（变更文件） selection and passed-result cache（通过结果缓存）
-- **THEN** the command does not run every configured verify check by default
+- **THEN** the command does not bypass changed-files（变更文件） selection and passed-result cache（通过结果缓存） by unconditionally running every configured verify check
 
 #### Scenario: Verify full mode runs all configured checks
-- **WHEN** a developer runs `python scripts/check.py verify --full`
+- **WHEN** a developer runs `python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project . --full`
 - **THEN** the command runs all `.test-framework/config.json` `verify.checks`
+- **THEN** the command does not use cache（缓存） hits to skip checks（检查项）
+- **THEN** passed checks（已通过检查项） refresh passed-result cache（通过结果缓存）
+- **THEN** failed checks（失败检查项） are not stored as passed-result cache（通过结果缓存）
 - **THEN** the command does not rely on the default verify mode being full（全量验证）
 
 #### Scenario: Comet config keeps guard-compatible command shim
 - **WHEN** Comet（双星流程）reads root `.comet.yaml`
-- **THEN** it defines `build_command: python scripts/check.py build`
-- **THEN** it defines `verify_command: python scripts/check.py verify`
+- **THEN** it defines `build_command: python plugins/test-framework/skills/test-framework/scripts/test_framework.py build --project .`
+- **THEN** it defines `verify_command: python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project .`
 - **THEN** those commands act as the guard（守卫） compatibility shim（兼容层） for the test-framework runner（测试框架运行器）
 ```
 
 ## openspec/changes/split-fast-full-verification/specs/local-verification-modes/spec.md
 
 - Source: openspec/changes/split-fast-full-verification/specs/local-verification-modes/spec.md
-- Lines: 1-32
-- SHA256: 305b2343e85f369bc10bf1cb58ef5acd1f4eac171de6808063277c0ba3b15edb
+- Lines: 1-29
+- SHA256: de474281f9a3b43243f0e6df159ff79f4ad71c983f59f35815cf177a25894e84
 
 ```md
 ## ADDED Requirements
@@ -71,15 +74,18 @@ The repository SHALL（必须）provide a verify command generated or maintained
 由 test-framework Plugin（测试框架插件）初始化的仓库 MUST 通过同一套 configured checks（配置检查项）提供默认 fast（快速验证）和显式 full（全量验证）。
 
 #### Scenario: Default verify applies fast cache execution
-- **WHEN** 开发者运行 `python scripts/check.py verify`
+- **WHEN** 开发者运行 `python <test-framework-script> verify --project <repo>`
 - **THEN** 系统 MUST 从 configured `verify.checks`（配置验证检查项）选择受 changed files（变更文件）影响的 checks（检查项）
 - **THEN** 系统 MUST 对选中的 checks（检查项）应用 passed-result cache（通过结果缓存）
-- **THEN** 系统 MUST NOT 运行所有 configured `verify.checks`
+- **THEN** 系统 MUST NOT 跳过 changed-files（变更文件）筛选和 passed-result cache（通过结果缓存）而无条件运行所有 configured `verify.checks`
 
 #### Scenario: Full verify requires explicit flag
-- **WHEN** 开发者运行 `python scripts/check.py verify --full`
+- **WHEN** 开发者运行 `python <test-framework-script> verify --project <repo> --full`
 - **THEN** 系统 MUST 运行所有 configured `verify.checks`
 - **THEN** 系统 MUST NOT 使用 changed-files（变更文件）筛选跳过 checks（检查项）
+- **THEN** 系统 MUST NOT 读取 cache（缓存）来跳过 checks（检查项）
+- **THEN** 成功通过的 checks（检查项） MUST 写入或刷新 passed-result cache（通过结果缓存）
+- **THEN** failed（失败）checks（检查项） MUST NOT 写入 passed-result cache（通过结果缓存）
 
 #### Scenario: Target repository does not define separate fast checks
 - **WHEN** 目标仓库声明 `.test-framework/config.json`
@@ -167,8 +173,8 @@ The repository SHALL（必须）provide a verify command generated or maintained
 ## openspec/changes/split-fast-full-verification/specs/test-framework-plugin/spec.md
 
 - Source: openspec/changes/split-fast-full-verification/specs/test-framework-plugin/spec.md
-- Lines: 1-72
-- SHA256: 95144ca8ce41c000a05fe7c007caae25151b7d9c90e1dd6ebe7ea0f445ec26e7
+- Lines: 1-70
+- SHA256: ecbfdb8e5b56b60e9208b86e49baf77cc6a817a4331081f33798f978a7a52895
 
 ```md
 ## ADDED Requirements
@@ -196,14 +202,20 @@ The repository SHALL（必须）provide a verify command generated or maintained
 
 #### Scenario: Init creates standard files
 - **WHEN** 用户对目标仓库运行 test-framework init（测试框架初始化）
-- **THEN** 系统 MUST 创建或维护 `scripts/check.py`
-- **THEN** 系统 MUST 创建或维护 `.test-framework/config.json`
-- **THEN** 系统 MUST 创建或维护 `.test-framework/.gitignore`
+- **THEN** 系统 MUST 创建 `.test-framework/config.json`
+- **THEN** 系统 MUST 创建 `.test-framework/.gitignore`
+- **THEN** 系统 MUST NOT 向目标仓库复制 runner（运行器）脚本
 
 #### Scenario: Init defines local cache location
 - **WHEN** 初始化产物写入目标仓库
-- **THEN** 系统 MUST 使用 `.local/test-framework-cache/` 作为本地 cache（缓存）目录
+- **THEN** 系统 MUST 使用 `.test-framework/cache/` 作为本地 cache（缓存）目录
+- **THEN** 系统 MUST 创建 `.test-framework/cache/` 目录
 - **THEN** 系统 MUST NOT 要求将 cache（缓存）内容纳入 Git（版本管理）
+
+#### Scenario: Init refuses conflicting files
+- **WHEN** 目标仓库已经存在 `.test-framework/config.json` 或 `.test-framework/.gitignore`
+- **THEN** 系统 MUST 在写入任何初始化产物前拒绝静默覆盖
+- **THEN** 系统 MUST 返回 non-zero（非零）退出码并报告 target-repository-relative（目标仓库相对）冲突路径
 
 #### Scenario: Init stays uncoupled from repository business logic
 - **WHEN** 插件初始化目标仓库
@@ -221,22 +233,31 @@ The repository SHALL（必须）provide a verify command generated or maintained
 
 #### Scenario: Command entrypoint exposes minimum commands
 - **WHEN** 目标仓库完成初始化
-- **THEN** `python scripts/check.py build` MUST 运行 configured `build.checks`
-- **THEN** `python scripts/check.py verify` MUST 运行默认 fast（快速验证）执行模式
-- **THEN** `python scripts/check.py verify --full` MUST 运行完整 `verify.checks`
+- **THEN** `python <test-framework-script> build --project <repo>` MUST 运行 configured `build.checks`
+- **THEN** `python <test-framework-script> verify --project <repo>` MUST 运行默认 fast（快速验证）执行模式
+- **THEN** `python <test-framework-script> verify --project <repo> --full` MUST 运行完整 `verify.checks`
+- **THEN** `<test-framework-script>` MUST 是当前安装的 test-framework Skill（技能）脚本路径，支持 project-level（项目级）安装路径和 user-level（用户级）安装路径
+
+#### Scenario: Full verify refreshes passed cache
+- **WHEN** 用户运行 `python <test-framework-script> verify --project <repo> --full`
+- **THEN** 系统 MUST NOT 通过读取 cache（缓存）跳过 configured `verify.checks`
+- **THEN** 成功通过的 check（检查项） MUST 使用同一套 cache key（缓存键）写入或刷新 passed-result cache（通过结果缓存）
+- **THEN** failed（失败）结果 MUST NOT 写入 passed-result cache（通过结果缓存）
 
 ### Requirement: Test framework provides fast cache verification
 系统 MUST 将 fast（快速验证）实现为 full（全量验证）标准检查项上的 changed-files（变更文件）筛选和 passed-result cache（通过结果缓存）。
 
 #### Scenario: Fast verify selects configured checks by changed files
-- **WHEN** 用户运行 `python scripts/check.py verify`
-- **THEN** 系统 MUST 收集 changed files（变更文件）
+- **WHEN** 用户运行 `python <test-framework-script> verify --project <repo>`
+- **THEN** 系统 MUST 默认从 worktree（工作区）收集 changed files（变更文件）
+- **THEN** 默认 worktree（工作区）来源 MUST 包含 staged tracked changes（已暂存已跟踪变更）、unstaged tracked changes（未暂存已跟踪变更）和 untracked non-ignored files（未跟踪且未忽略文件）
 - **THEN** 系统 MUST 根据 configured check（配置检查项）的 `paths` 选择受影响 checks（检查项）
 
 #### Scenario: Cache uses passed results only
 - **WHEN** 选中的 check（检查项）存在匹配 cache key（缓存键）
 - **THEN** 系统 MUST 只复用 passed（已通过）的缓存结果
 - **THEN** cache key（缓存键） MUST 覆盖 check id（检查项标识）、command（命令）、inputs（输入）、config（配置）、Python（运行器）版本、framework（框架）版本和 cache（缓存）版本
+- **THEN** directory hashing（目录哈希） MUST 排除 `.test-framework/cache/`、`.git/` 和运行态缓存目录
 - **THEN** 系统 MUST NOT 缓存 failed（失败）结果作为通过结果
 
 #### Scenario: Cache miss runs selected check only

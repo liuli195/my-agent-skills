@@ -5,9 +5,9 @@ Current repository verification defaults to the full pytest suite, which takes a
 ## What Changes
 
 - Add a dual-surface `test-framework` Plugin（测试框架插件） for Claude（Claude 版本） and Codex（Codex 版本）.
-- Initialize a minimal standard structure in target repositories: `scripts/check.py`, `.test-framework/config.json`, `.test-framework/.gitignore`, and `.test-framework/cache/`.
+- Initialize a minimal standard structure in target repositories: `.test-framework/config.json`, `.test-framework/.gitignore`, and `.test-framework/cache/`.
 - Provide one canonical configured check set. Default `verify` applies changed-files（变更文件） selection and passed-result cache（通过结果缓存） to that set; `verify --full` runs the whole set.
-- Provide one configuration surface and one command entrypoint: `.test-framework/config.json` and `python scripts/check.py`.
+- Provide one configuration surface and one command entrypoint: `.test-framework/config.json` and the installed test-framework Skill（技能） script `test_framework.py`.
 - Keep full-suite runtime optimization out of this change; it is handled by `optimize-full-verification-runtime`.
 
 ## Capabilities
@@ -21,5 +21,5 @@ Current repository verification defaults to the full pytest suite, which takes a
 
 ## Impact
 
-- Affects plugin packaging, marketplace/projection registration, `scripts/check.py`, `.test-framework/config.json`, local check tests, `.comet.yaml`, and related OpenSpec specs.
+- Affects plugin packaging, marketplace/projection registration, `.test-framework/config.json`, local check tests, `.comet.yaml`, and related OpenSpec specs.
 - Does not install packages, change user-level configuration, contact remotes, manage CI（持续集成）, or optimize slow tests.

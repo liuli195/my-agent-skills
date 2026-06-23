@@ -97,10 +97,10 @@
 ## Evidence
 
 - RED: user clarified `verify --full` must not read cache（缓存） to skip, but must write passed-result cache（通过结果缓存） after successful checks.
-- GREEN: `python -m pytest tests/test_test_framework_plugin.py tests/test_local_plugin_build_checks.py -q` passed with 61 focused tests; `openspec validate split-fast-full-verification --strict` passed.
-- Build: `python scripts/check.py build` passed.
-- Full verify: `python scripts/check.py verify --full` passed with 381 tests in 240.99s (0:04:00), `full-not-run: false`.
-- Default verify after full: `python scripts/check.py verify` passed in 1.2s with `cache-hit: pytest.full`, `full-not-run: true`.
-- Scope guard: root `.comet.yaml` still points `verify_command` at `python scripts/check.py verify`; diff confirms no PR Flow（拉取请求流程） or CI（持续集成） workflow changes.
-- Commit: 50b2c03
-- Changed files: runner template, root runner, cache tests, OpenSpec（规格） design/spec/tasks updates.
+- GREEN: `python -m pytest tests/test_test_framework_plugin.py tests/test_local_plugin_build_checks.py tests/test_pr_flow_plugin_package.py::test_pr_flow_package_passes_repo_build_checks -q` passed with focused tests; `openspec validate split-fast-full-verification --strict` passed.
+- Build: `python plugins/test-framework/skills/test-framework/scripts/test_framework.py build --project .` passed.
+- Full verify: `python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project . --full` passed with 387 tests in 476.37s (0:07:56), `full-not-run: false`.
+- Default verify after full: `python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project .` passed in 1.6s with `cache-hit: pytest.full`, `full-not-run: true`.
+- Scope guard: root `.comet.yaml` points `verify_command` at the project-level plugin runner（运行器） path; diff confirms no PR Flow（拉取请求流程） or CI（持续集成） workflow changes.
+- Commit: pending current structure correction commit
+- Changed files: plugin runner（运行器） entrypoint, root command wiring, cache tests, OpenSpec（规格） design/spec/tasks updates.
