@@ -5,7 +5,7 @@ defaults:
     mode: github
     evidencePath: .pr-flow/review-pass.json
   hotfix:
-    verifyCommand: .\.venv\Scripts\python.exe -m pytest
+    verifyCommand: python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project . --full
   wait:
     timeoutSeconds: 600
     pollSeconds: 15
