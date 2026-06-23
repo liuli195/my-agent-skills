@@ -77,6 +77,8 @@ plugins/test-framework/
 
 仓库不定义 `verify.fast.checks`。fast（快速验证）是框架执行模式：在 `verify.checks` 上应用 changed-files（变更文件）筛选和 passed-result cache（通过结果缓存）。
 
+本仓库实际接入时，`.test-framework/config.json` 将 `verify.checks` 拆成 7 个目标仓库检查项：`verify.local-build-contract`、`verify.agent-guard`、`verify.release-flow`、`verify.pr-flow`、`verify.cross-agent-review`、`verify.test-framework` 和 `verify.openspec`。默认 `verify` 根据 changed files（变更文件）只选择受影响检查项；`verify --full` 才运行这 7 个检查项的完整并集。
+
 ## 命令模型
 
 目标仓库统一入口由当前安装的 test-framework Skill（测试框架技能）提供。项目级安装时可使用仓库内插件路径；用户级安装时由 agent（代理）使用当前 Skill（技能）目录调用同一个脚本：

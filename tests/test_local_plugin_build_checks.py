@@ -1276,16 +1276,32 @@ def test_active_automation_does_not_reference_removed_check_entrypoint() -> None
         assert "scripts/check.py" not in text
 
 
-def test_root_verify_full_covers_comet_config() -> None:
+def test_root_verify_checks_are_split_by_repo_domains() -> None:
     data = json.loads((REPO_ROOT / ".test-framework" / "config.json").read_text(encoding="utf-8"))
-    pytest_full = next(
-        check for check in data["verify"]["checks"] if check["id"] == "pytest.full"
-    )
+    checks = data["verify"]["checks"]
+    check_by_id = {check["id"]: check for check in checks}
 
-    assert ".comet/config.yaml" in pytest_full["paths"]
-    assert ".comet/config.yaml" in pytest_full["inputs"]
-    assert ".comet.yaml" in pytest_full["paths"]
-    assert ".comet.yaml" in pytest_full["inputs"]
-    assert "docs/agent-guard/**" in pytest_full["paths"]
-    assert "docs/agent-guard" in pytest_full["inputs"]
-    assert "." not in pytest_full["inputs"]
+    assert [check["id"] for check in checks] == [
+        "verify.local-build-contract",
+        "verify.agent-guard",
+        "verify.release-flow",
+        "verify.pr-flow",
+        "verify.cross-agent-review",
+        "verify.test-framework",
+        "verify.openspec",
+    ]
+    assert "pytest.full" not in check_by_id
+
+    local_build_contract = check_by_id["verify.local-build-contract"]
+    assert ".comet/config.yaml" in local_build_contract["paths"]
+    assert ".comet/config.yaml" in local_build_contract["inputs"]
+    assert ".comet.yaml" in local_build_contract["paths"]
+    assert ".comet.yaml" in local_build_contract["inputs"]
+    assert "docs/agent-guard/**" in local_build_contract["paths"]
+    assert "docs/agent-guard" in local_build_contract["inputs"]
+    assert "." not in local_build_contract["inputs"]
+
+    openspec = check_by_id["verify.openspec"]
+    assert openspec["command"] == "openspec validate --all --strict --no-interactive"
+    assert openspec["paths"] == ["openspec/**", "docs/superpowers/**"]
+    assert openspec["inputs"] == ["openspec", "docs/superpowers"]

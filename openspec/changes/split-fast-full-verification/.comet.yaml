@@ -1,12 +1,12 @@
 workflow: full
-phase: build
+phase: verify
 context_compression: beta
 build_mode: subagent-driven-development
 build_pause: null
 subagent_dispatch: confirmed
 tdd_mode: tdd
 isolation: branch
-verify_mode: null
+verify_mode: fast
 auto_transition: true
 base_ref: b58fde2cf4ddcc91316737670271c938bc83714f
 design_doc: docs/superpowers/specs/2026-06-23-test-framework-plugin-design.md

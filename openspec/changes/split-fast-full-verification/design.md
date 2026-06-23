@@ -34,6 +34,7 @@
 
 3. fast（快速验证）是框架执行模式，不是目标仓库配置能力。
    - 目标仓库只声明 `build.checks` 和 `verify.checks`。
+   - 本仓库实际配置把 `verify.checks` 拆成 `verify.local-build-contract`、`verify.agent-guard`、`verify.release-flow`、`verify.pr-flow`、`verify.cross-agent-review`、`verify.test-framework` 和 `verify.openspec`；`verify --full` 的语义是运行这 7 个检查项的并集，默认 `verify` 只按 changed files（变更文件）命中相关检查项。
    - 每个 check（检查项）必须有非空且同一分组内唯一的 `id`。
    - `paths` 支持精确文件、目录前缀（如 `docs/`）、尾部递归前缀（如 `src/**`）和 Python fnmatch（通配匹配）模式。
    - `python <test-framework-script> verify --project <repo> --full` 运行全部 `verify.checks`，不得读取 cache（缓存）来跳过 check（检查项）。

@@ -18,39 +18,169 @@
   "verify": {
     "checks": [
       {
-        "id": "pytest.full",
+        "id": "verify.local-build-contract",
         "paths": [
           ".agents/**",
           ".claude-plugin/**",
+          ".release-flow/**",
+          ".test-framework/**",
           ".comet.yaml",
           ".comet/config.yaml",
-          ".release-flow/**",
           "pyproject.toml",
-          "scripts/local_plugin_build.py",
-          ".test-framework/**",
-          ".github/**",
           "plugins/**",
-          "tests/**",
+          "scripts/local_plugin_build.py",
           "docs/agent-guard/**",
-          "openspec/**",
-          "docs/superpowers/**"
+          "tests/test_local_plugin_build_checks.py"
         ],
-        "command": "python -m pytest",
+        "command": "python -m pytest tests/test_local_plugin_build_checks.py",
         "inputs": [
           ".agents",
           ".claude-plugin",
+          ".release-flow",
+          ".test-framework/config.json",
           ".comet.yaml",
           ".comet/config.yaml",
+          "pyproject.toml",
+          "plugins",
+          "scripts/local_plugin_build.py",
+          "docs/agent-guard",
+          "tests/test_local_plugin_build_checks.py"
+        ]
+      },
+      {
+        "id": "verify.agent-guard",
+        "paths": [
+          ".agents/**",
+          ".claude-plugin/**",
+          ".release-flow/**",
+          "pyproject.toml",
+          "plugins/agent-guard/**",
+          "docs/agent-guard/**",
+          "tests/test_agent_guard*.py",
+          "tests/test_extract_guard_model.py",
+          "tests/test_validate_guard_profile.py",
+          "tests/test_init_user_guard.py",
+          "tests/test_init_project_guard.py"
+        ],
+        "command": "python -m pytest tests/test_agent_guard_runtime_session_focus.py tests/test_agent_guard_runtime_brief.py tests/test_agent_guard_skill_entrypoints.py tests/test_agent_guard_runtime_router.py tests/test_agent_guard_plugin_installer.py tests/test_agent_guard_plugin_runtime_e2e.py tests/test_agent_guard_plugin_package.py tests/test_agent_guard_prd_full_e2e.py tests/test_extract_guard_model.py tests/test_validate_guard_profile.py tests/test_init_user_guard.py tests/test_init_project_guard.py",
+        "inputs": [
+          ".agents",
+          ".claude-plugin",
           ".release-flow",
           "pyproject.toml",
-          "scripts/local_plugin_build.py",
-          ".test-framework/config.json",
-          ".github",
-          "plugins",
+          "plugins/agent-guard",
           "docs/agent-guard",
+          "tests/test_agent_guard_runtime_session_focus.py",
+          "tests/test_agent_guard_runtime_brief.py",
+          "tests/test_agent_guard_skill_entrypoints.py",
+          "tests/test_agent_guard_runtime_router.py",
+          "tests/test_agent_guard_plugin_installer.py",
+          "tests/test_agent_guard_plugin_runtime_e2e.py",
+          "tests/test_agent_guard_plugin_package.py",
+          "tests/test_agent_guard_prd_full_e2e.py",
+          "tests/test_extract_guard_model.py",
+          "tests/test_validate_guard_profile.py",
+          "tests/test_init_user_guard.py",
+          "tests/test_init_project_guard.py"
+        ]
+      },
+      {
+        "id": "verify.release-flow",
+        "paths": [
+          ".agents/**",
+          ".claude-plugin/**",
+          ".release-flow/**",
+          ".github/workflows/release.yml",
+          "pyproject.toml",
+          "plugins/release-flow/**",
+          "tests/test_release_flow*.py"
+        ],
+        "command": "python -m pytest tests/test_release_flow_cli.py tests/test_release_flow_plugin_package.py",
+        "inputs": [
+          ".agents",
+          ".claude-plugin",
+          ".release-flow",
+          ".github/workflows/release.yml",
+          "pyproject.toml",
+          "plugins/release-flow",
+          "tests/test_release_flow_cli.py",
+          "tests/test_release_flow_plugin_package.py"
+        ]
+      },
+      {
+        "id": "verify.pr-flow",
+        "paths": [
+          ".agents/**",
+          ".claude-plugin/**",
+          ".release-flow/**",
+          "pyproject.toml",
+          "plugins/pr-flow/**",
+          "tests/test_pr_flow*.py"
+        ],
+        "command": "python -m pytest tests/test_pr_flow_cli.py tests/test_pr_flow_plugin_package.py",
+        "inputs": [
+          ".agents",
+          ".claude-plugin",
+          ".release-flow",
+          "pyproject.toml",
+          "plugins/pr-flow",
+          "tests/test_pr_flow_cli.py",
+          "tests/test_pr_flow_plugin_package.py"
+        ]
+      },
+      {
+        "id": "verify.cross-agent-review",
+        "paths": [
+          ".agents/**",
+          ".claude-plugin/**",
+          ".release-flow/**",
+          "pyproject.toml",
+          "plugins/cross-agent-review/**",
+          "tests/test_cross_agent_review*.py"
+        ],
+        "command": "python -m pytest tests/test_cross_agent_review_cli.py tests/test_cross_agent_review_plugin_package.py",
+        "inputs": [
+          ".agents",
+          ".claude-plugin",
+          ".release-flow",
+          "pyproject.toml",
+          "plugins/cross-agent-review",
+          "tests/test_cross_agent_review_cli.py",
+          "tests/test_cross_agent_review_plugin_package.py"
+        ]
+      },
+      {
+        "id": "verify.test-framework",
+        "paths": [
+          ".agents/**",
+          ".claude-plugin/**",
+          ".release-flow/**",
+          ".test-framework/**",
+          "pyproject.toml",
+          "plugins/test-framework/**",
+          "tests/test_test_framework_plugin.py"
+        ],
+        "command": "python -m pytest tests/test_test_framework_plugin.py",
+        "inputs": [
+          ".agents",
+          ".claude-plugin",
+          ".release-flow",
+          ".test-framework/config.json",
+          "pyproject.toml",
+          "plugins/test-framework",
+          "tests/test_test_framework_plugin.py"
+        ]
+      },
+      {
+        "id": "verify.openspec",
+        "paths": [
+          "openspec/**",
+          "docs/superpowers/**"
+        ],
+        "command": "openspec validate --all --strict --no-interactive",
+        "inputs": [
           "openspec",
-          "docs/superpowers",
-          "tests"
+          "docs/superpowers"
         ]
       }
     ]
