@@ -671,6 +671,55 @@ def test_sdk_dispatch_reports_reviewer_timeout(monkeypatch, capsys) -> None:
     ]
 
 
+def test_sdk_dispatch_retries_transient_reviewer_exception(monkeypatch, capsys) -> None:
+    module = load_script_module()
+    calls = 0
+    sleeps = []
+
+    class FakeClaudeAgentOptions:
+        def __init__(self, **kwargs):
+            pass
+
+    async def fake_query(*, prompt, options):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("transient sdk failure")
+
+        class Message:
+            result = json.dumps({"role": "spec-alignment", "status": "completed", "findings": []})
+
+        yield Message()
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    fake_sdk = types.SimpleNamespace(ClaudeAgentOptions=FakeClaudeAgentOptions, query=fake_query)
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake_sdk)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(
+            json.dumps(
+                {
+                    "cwd": str(REPO_ROOT),
+                    "roles": ["spec-alignment"],
+                    "readonly_tools": ["Read", "Grep"],
+                    "prompts": {"spec-alignment": "prompt"},
+                }
+            )
+        ),
+    )
+
+    assert module.run_sdk_dispatch() == 0
+
+    data = json.loads(capsys.readouterr().out)
+    assert data == [{"role": "spec-alignment", "status": "completed", "findings": []}]
+    assert calls == 2
+    assert sleeps == [1]
+
+
 def test_sdk_dispatch_subprocess_timeout_reports_clear_error(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     review = make_review_args_for_module(module, tmp_path)

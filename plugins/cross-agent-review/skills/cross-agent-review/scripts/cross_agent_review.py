@@ -43,6 +43,7 @@ DISALLOWED_TOOLS = ["Edit", "Write", "NotebookEdit", "TodoWrite", "MultiEdit", "
 # aggregate structured timeout findings and write normal outputs.
 SDK_DISPATCH_TIMEOUT_SECONDS = 600
 SDK_REVIEWER_TIMEOUT_SECONDS = 480
+SDK_REVIEWER_ATTEMPTS = 2
 BLOCKING_SEVERITIES = {"CRITICAL", "IMPORTANT"}
 NON_BLOCKING_SEVERITIES = {"WARNING", "SUGGESTION"}
 ALL_SEVERITIES = BLOCKING_SEVERITIES | NON_BLOCKING_SEVERITIES
@@ -400,22 +401,42 @@ def run_sdk_dispatch() -> int:
             }
 
         async def run_one(role: str) -> dict:
-            try:
-                return await asyncio.wait_for(query_one(role), timeout=SDK_REVIEWER_TIMEOUT_SECONDS)
-            except asyncio.TimeoutError:
-                return {
-                    "role": role,
-                    "status": "failed",
-                    "findings": [
-                        {
-                            "severity": "CRITICAL",
-                            "location": role,
-                            "summary": "Reviewer timed out",
-                            "evidence": f"Exceeded {SDK_REVIEWER_TIMEOUT_SECONDS} seconds.",
-                            "recommendation": "Rerun review after checking Claude Agent SDK availability.",
-                        }
-                    ],
-                }
+            last_error: Exception | None = None
+            for attempt in range(1, SDK_REVIEWER_ATTEMPTS + 1):
+                try:
+                    return await asyncio.wait_for(query_one(role), timeout=SDK_REVIEWER_TIMEOUT_SECONDS)
+                except asyncio.TimeoutError:
+                    return {
+                        "role": role,
+                        "status": "failed",
+                        "findings": [
+                            {
+                                "severity": "CRITICAL",
+                                "location": role,
+                                "summary": "Reviewer timed out",
+                                "evidence": f"Exceeded {SDK_REVIEWER_TIMEOUT_SECONDS} seconds.",
+                                "recommendation": "Rerun review after checking Claude Agent SDK availability.",
+                            }
+                        ],
+                    }
+                except Exception as error:
+                    last_error = error
+                    if attempt < SDK_REVIEWER_ATTEMPTS:
+                        await asyncio.sleep(1)
+                        continue
+            return {
+                "role": role,
+                "status": "failed",
+                "findings": [
+                    {
+                        "severity": "CRITICAL",
+                        "location": role,
+                        "summary": "Reviewer SDK dispatch failed",
+                        "evidence": f"{type(last_error).__name__}: {last_error}",
+                        "recommendation": "Rerun review after checking Claude Agent SDK availability.",
+                    }
+                ],
+            }
 
         return await asyncio.gather(*(run_one(role) for role in payload["roles"]))
 
