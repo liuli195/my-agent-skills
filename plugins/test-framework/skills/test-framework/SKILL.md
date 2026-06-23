@@ -42,3 +42,4 @@ python plugins/test-framework/skills/test-framework/scripts/test_framework.py ve
 - 有 `paths` 但没有 `inputs` 的 verify check（验证检查项）会扫描目标仓库文件来计算 cache key（缓存键）；大型仓库应显式配置 `inputs` 降低默认 verify（快速验证）开销。
 - `verify --full`（全量验证）运行全部 `verify.checks`，不读取 cache（缓存）跳过检查；成功通过后会写入或刷新 passed-result cache（通过结果缓存）。
 - `command` 来自目标仓库配置，按 checked-out repository（已检出仓库）可信输入执行；不要在不信任的仓库内容上运行 build（构建检查）或 verify（验证）。
+- 首版不提供 timeout（超时）配置；可能长时间运行的 `command` 应由目标仓库脚本自行实现超时控制。

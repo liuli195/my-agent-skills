@@ -118,6 +118,8 @@ cache key（缓存键）包含：
 
 `command` 来自目标仓库配置，按 checked-out repository（已检出仓库）可信输入执行；不要在不信任的仓库内容上运行 build（构建检查）或 verify（验证）。
 
+首版不提供 timeout（超时）配置；可能长时间运行的 `command` 应由目标仓库脚本自行实现超时控制。
+
 ## 去耦合边界
 
 插件模板不内置 PR Flow（拉取请求流程）、Release Flow（发布流程）、Comet（双星流程）、Agent Guard（代理守卫）或本仓库业务逻辑。

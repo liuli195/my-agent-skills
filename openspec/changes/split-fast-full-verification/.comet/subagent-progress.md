@@ -5,7 +5,7 @@
 - Mode: subagent-driven-development
 - TDD: tdd
 
-## Completed Task
+## Completed Task 1: Package the Dual-Surface Plugin
 
 - Plan task: Task 1: Package the Dual-Surface Plugin
 - OpenSpec task mapping: 1.1, 1.2, 1.3
@@ -33,7 +33,7 @@
 - Final spec review: PASS.
 - Final quality review: PASS.
 
-## Completed Task
+## Completed Task 2: Implement Init Script and Complete Runner Template
 
 - Plan task: Task 2: Implement Init Script and Complete Runner Template
 - OpenSpec task mapping: template evidence for 3.1-3.4; no OpenSpec task checked yet because root repository connection remains Task 3
@@ -63,7 +63,7 @@
 - Final spec review: PASS.
 - Final quality review: PASS.
 
-## Completed Task
+## Completed Task 3: Connect This Repository to the Framework
 
 - Plan task: Task 3: Connect This Repository to the Framework
 - OpenSpec task mapping: 2.1, 2.2, 2.3, 3.1, 3.2, 3.3, 3.4
@@ -86,7 +86,7 @@
 - Final spec review: PASS.
 - Final quality review: PASS.
 
-## Current Task
+## Current Task 4: Scope Guard and Validation
 
 - Plan task: Task 4: Scope Guard and Validation
 - OpenSpec task mapping: 4.1, 4.2, 5.1, 5.2, 5.3, 5.4

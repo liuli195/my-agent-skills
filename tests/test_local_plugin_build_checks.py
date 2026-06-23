@@ -636,8 +636,9 @@ def test_runner_default_verify_empty_checks_returns_success(
     assert "status: passed" in output
 
 
+@pytest.mark.parametrize("invalid_input", ["../outside.txt", "/outside.txt"])
 def test_runner_rejects_inputs_outside_project(
-    tmp_path: Path, monkeypatch, capsys
+    tmp_path: Path, monkeypatch, capsys, invalid_input: str
 ) -> None:
     module = load_check_module()
     (tmp_path / "src").mkdir()
@@ -649,7 +650,7 @@ def test_runner_rejects_inputs_outside_project(
                 "id": "invalid-input",
                 "command": "run-invalid",
                 "paths": ["src/**"],
-                "inputs": ["../outside.txt"],
+                "inputs": [invalid_input],
             }
         ],
     )
@@ -661,11 +662,12 @@ def test_runner_rejects_inputs_outside_project(
     result = module.run_verify(tmp_path, runner=fake_run)
 
     assert result == 1
-    assert "invalid_input_path: ../outside.txt" in capsys.readouterr().err
+    assert f"invalid_input_path: {invalid_input}" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("invalid_input", ["../outside.txt", "/outside.txt"])
 def test_runner_full_verify_rejects_inputs_outside_project(
-    tmp_path: Path, monkeypatch, capsys
+    tmp_path: Path, monkeypatch, capsys, invalid_input: str
 ) -> None:
     module = load_check_module()
     (tmp_path / "src").mkdir()
@@ -677,7 +679,7 @@ def test_runner_full_verify_rejects_inputs_outside_project(
                 "id": "invalid-input",
                 "command": "run-invalid",
                 "paths": ["src/**"],
-                "inputs": ["../outside.txt"],
+                "inputs": [invalid_input],
             }
         ],
     )
@@ -689,7 +691,31 @@ def test_runner_full_verify_rejects_inputs_outside_project(
     result = module.run_verify(tmp_path, runner=fake_run, full=True)
 
     assert result == 1
-    assert "invalid_input_path: ../outside.txt" in capsys.readouterr().err
+    assert f"invalid_input_path: {invalid_input}" in capsys.readouterr().err
+
+
+def test_runner_build_rejects_inputs_outside_project(
+    tmp_path: Path, capsys
+) -> None:
+    module = load_check_module()
+    write_runner_config(
+        tmp_path,
+        build_checks=[
+            {
+                "id": "invalid-build-input",
+                "command": "run-invalid-build",
+                "inputs": ["/outside.txt"],
+            }
+        ],
+    )
+
+    def fake_run(*_args, **_kwargs):
+        raise AssertionError("invalid input should stop before running checks")
+
+    result = module.run_build(tmp_path, runner=fake_run)
+
+    assert result == 1
+    assert "invalid_input_path: /outside.txt" in capsys.readouterr().err
 
 
 def test_runner_reports_missing_list_command_without_traceback(
@@ -1150,6 +1176,7 @@ def test_root_comet_yaml_points_to_check_commands_for_guard() -> None:
     import yaml
 
     data = yaml.safe_load((REPO_ROOT / ".comet.yaml").read_text(encoding="utf-8"))
+    script = REPO_ROOT / "plugins" / "test-framework" / "skills" / "test-framework" / "scripts" / "test_framework.py"
 
     assert (
         data["build_command"]
@@ -1159,6 +1186,20 @@ def test_root_comet_yaml_points_to_check_commands_for_guard() -> None:
         data["verify_command"]
         == "python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project ."
     )
+    assert script.is_file()
+
+
+def test_active_automation_does_not_reference_removed_check_entrypoint() -> None:
+    active_files = [
+        REPO_ROOT / ".github" / "workflows" / "release.yml",
+        REPO_ROOT / ".comet.yaml",
+        REPO_ROOT / ".comet" / "config.yaml",
+        REPO_ROOT / ".test-framework" / "config.json",
+    ]
+
+    for path in active_files:
+        text = path.read_text(encoding="utf-8").replace("\\", "/")
+        assert "scripts/check.py" not in text
 
 
 def test_root_verify_full_covers_comet_config() -> None:

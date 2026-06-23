@@ -208,12 +208,22 @@ def _is_relative_to_project(project: Path, path: Path) -> bool:
 def _validate_project_relative_input(project: Path, input_path: str) -> tuple[str, Path]:
     raw_path = Path(input_path)
     relative = _normalize_path(input_path)
-    if raw_path.anchor or ".." in Path(relative).parts:
+    if (
+        raw_path.is_absolute()
+        or str(input_path).replace("\\", "/").startswith("/")
+        or raw_path.anchor
+        or ".." in Path(relative).parts
+    ):
         raise ValueError(f"invalid_input_path: {input_path}")
     path = project / relative
     if not _is_relative_to_project(project, path):
         raise ValueError(f"invalid_input_path: {input_path}")
     return relative, path
+
+
+def _validate_check_inputs(project: Path, check: dict[str, Any]) -> None:
+    for input_path in check.get("inputs") or []:
+        _validate_project_relative_input(project, input_path)
 
 
 def _hash_input(project: Path, input_path: str) -> dict[str, Any]:
@@ -356,6 +366,12 @@ def run_build(project: Path, runner: Runner = subprocess.run) -> int:
     checks = _checks(config, "build")
     failures = 0
     for check in checks:
+        try:
+            _validate_check_inputs(project, check)
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            failures += 1
+            continue
         if _run_check(project, check, runner) != 0:
             failures += 1
     print(f"checked: {_check_ids(checks)}")

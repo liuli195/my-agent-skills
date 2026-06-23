@@ -1,5 +1,18 @@
 ## MODIFIED Requirements
 
+### Requirement: Build command validates local plugin package shape
+The repository SHALL（必须）provide a local build command through the initialized test-framework Plugin（测试框架插件） contract. Repository-specific package-shape checks remain repository-owned configured checks, not plugin-owned framework logic.
+
+#### Scenario: Build command runs repository-owned package checks
+- **WHEN** a developer runs `python plugins/test-framework/skills/test-framework/scripts/test_framework.py build --project .`
+- **THEN** the command uses `.test-framework/config.json` `build.checks`
+- **THEN** the configured build check runs `python scripts/local_plugin_build.py`
+- **THEN** `scripts/local_plugin_build.py` remains a repository-owned check command, not the test-framework Plugin（测试框架插件） entrypoint
+
+#### Scenario: Removed check entrypoint is not active automation
+- **WHEN** repository active automation and guard（守卫） command files are inspected
+- **THEN** `.github/workflows/`, `.comet.yaml`, `.comet/config.yaml`, and `.test-framework/config.json` MUST NOT reference `scripts/check.py`
+
 ### Requirement: Verify command follows initialized test framework contract
 The repository SHALL（必须）provide a verify command initialized by the test-framework Plugin（测试框架插件） contract.
 
@@ -21,4 +34,4 @@ The repository SHALL（必须）provide a verify command initialized by the test
 - **WHEN** Comet（双星流程）reads root `.comet.yaml`
 - **THEN** it defines `build_command: python plugins/test-framework/skills/test-framework/scripts/test_framework.py build --project .`
 - **THEN** it defines `verify_command: python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project .`
-- **THEN** those commands act as the guard（守卫） compatibility shim（兼容层） for the test-framework runner（测试框架运行器）
+- **THEN** those commands act as the project-level（项目级） guard（守卫） compatibility shim（兼容层） for the committed test-framework runner（测试框架运行器） under `plugins/test-framework/`

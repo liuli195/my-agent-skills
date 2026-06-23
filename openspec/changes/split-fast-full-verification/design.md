@@ -42,6 +42,7 @@
    - 没有 `inputs` 的 global check（全局检查项）使用当前 changed files（变更文件）作为 cache input（缓存输入）；需要稳定缓存命中的目标仓库应显式配置 `inputs`。
    - 有 `paths` 但没有 `inputs` 的 check（检查项）会扫描目标仓库文件来计算 cache key（缓存键）；大型仓库应显式配置 `inputs` 降低默认 `verify` 开销。
    - `command` 来自目标仓库配置，按 checked-out repository（已检出仓库）可信输入执行；不要在不信任的仓库内容上运行 build（构建检查）或 verify（验证）。
+   - 首版不提供 timeout（超时）配置；可能长时间运行的 `command` 应由目标仓库脚本自行实现超时控制。
 
 4. 统一命令面保持小。
    - 必须支持 `python <test-framework-script> build --project <repo>`、`python <test-framework-script> verify --project <repo>`、`python <test-framework-script> verify --project <repo> --full`。
