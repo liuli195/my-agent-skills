@@ -696,6 +696,38 @@ def test_test_framework_runner_full_verify_reports_parallel_check_timeout(
     assert "status: failed" in captured.out
 
 
+def test_test_framework_runner_full_verify_reports_parallel_check_exception(
+    tmp_path: Path, capsys
+) -> None:
+    module = load_test_framework_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                ],
+            },
+        },
+    )
+
+    def fake_runner(_command, **_kwargs):
+        raise RuntimeError("boom")
+
+    result = module._runner().run_verify(project, runner=fake_runner, full=True)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert "parallel_check_exception: parallel-a: RuntimeError: boom" in captured.err
+    assert "failed: parallel-a" in captured.out
+    assert "status: failed" in captured.out
+
+
 def test_test_framework_runner_full_verify_reports_keyboard_interrupt_from_parallel_check(
     tmp_path: Path, capsys
 ) -> None:
@@ -726,6 +758,47 @@ def test_test_framework_runner_full_verify_reports_keyboard_interrupt_from_paral
     assert "parallel_check_interrupted: parallel-a: KeyboardInterrupt: worker interrupted" in captured.err
     assert "failed: parallel-a" in captured.out
     assert "status: failed" in captured.out
+
+
+def test_test_framework_runner_full_verify_reports_serial_failure_after_parallel_pass(
+    tmp_path: Path, capsys
+) -> None:
+    module = load_test_framework_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    cache_dir = project / ".test-framework" / "cache"
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {"id": "parallel-pass", "command": ["parallel-pass"], "parallel": True, "inputs": []},
+                    {"id": "serial-fail", "command": ["serial-fail"], "parallel": False, "inputs": []},
+                ],
+            },
+        },
+    )
+
+    def fake_runner(command, **_kwargs):
+        if command == ["serial-fail"]:
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="serial failed\n")
+        return subprocess.CompletedProcess(command, 0, stdout="parallel passed\n", stderr="")
+
+    result = module._runner().run_verify(project, runner=fake_runner, full=True)
+    captured = capsys.readouterr()
+    cache_files = list(cache_dir.glob("*.json"))
+
+    assert result == 1
+    assert "parallel passed" in captured.out
+    assert "serial failed" in captured.err
+    assert "failed: serial-fail" in captured.out
+    assert "checked: parallel-pass, serial-fail" in captured.out
+    assert "status: failed" in captured.out
+    assert len(cache_files) == 1
+    assert read_json(cache_files[0]) == {"status": "passed", "id": "parallel-pass"}
 
 
 def test_test_framework_cache_store_writes_temp_file_before_replace(
