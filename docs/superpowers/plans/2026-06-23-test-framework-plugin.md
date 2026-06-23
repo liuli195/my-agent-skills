@@ -613,7 +613,7 @@ Expected: PASS.
 **Files:**
 - Modify: `openspec/changes/split-fast-full-verification/tasks.md`
 
-- [ ] **Step 1: Confirm no out-of-scope files are changed**
+- [x] **Step 1: Confirm no out-of-scope files are changed**
 
 Run:
 
@@ -623,7 +623,7 @@ git status --short
 
 Expected: no changes to `.pr-flow/config.yaml`, `plugins/pr-flow/**`, Release Flow（发布流程） behavior, or CI（持续集成） workflow files for this A change.
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
 Run:
 
@@ -633,19 +633,19 @@ python -m pytest tests/test_test_framework_plugin.py tests/test_local_plugin_bui
 
 Expected: PASS.
 
-- [ ] **Step 3: Run initialized repository commands**
+- [x] **Step 3: Run initialized repository commands**
 
 Run:
 
 ```bash
-python scripts/check.py build
-python scripts/check.py verify
-python scripts/check.py verify --full
+python plugins/test-framework/skills/test-framework/scripts/test_framework.py build --project .
+python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project .
+python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project . --full
 ```
 
 Expected: all PASS. Default `verify` prints `full-not-run: true`; `verify --full` prints `full-not-run: false`.
 
-- [ ] **Step 4: Validate OpenSpec（开放规格）**
+- [x] **Step 4: Validate OpenSpec（开放规格）**
 
 Run:
 
@@ -655,7 +655,7 @@ openspec validate split-fast-full-verification --strict
 
 Expected: PASS.
 
-- [ ] **Step 5: Mark tasks complete after evidence exists**
+- [x] **Step 5: Mark tasks complete after evidence exists**
 
 Only after the commands above pass, check the corresponding boxes in `openspec/changes/split-fast-full-verification/tasks.md`.
 
