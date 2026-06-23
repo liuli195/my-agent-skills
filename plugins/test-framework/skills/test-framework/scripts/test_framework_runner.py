@@ -21,6 +21,10 @@ class ConfigError(Exception):
     pass
 
 
+def _is_string_list(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
 def _load_config(project: Path) -> dict[str, Any]:
     config_path = project / ".test-framework" / "config.json"
     try:
@@ -52,6 +56,21 @@ def _load_config(project: Path) -> dict[str, Any]:
                     "invalid_config: .test-framework/config.json: "
                     f"{section}.checks[{index}] must be object"
                 )
+            command = check.get("command")
+            if command is not None and not (
+                isinstance(command, str) or _is_string_list(command)
+            ):
+                raise ConfigError(
+                    "invalid_config: .test-framework/config.json: "
+                    f"{section}.checks[{index}].command must be string or list of strings"
+                )
+            for field in ("paths", "inputs"):
+                value = check.get(field)
+                if value is not None and not _is_string_list(value):
+                    raise ConfigError(
+                        "invalid_config: .test-framework/config.json: "
+                        f"{section}.checks[{index}].{field} must be list of strings"
+                    )
     return config
 
 

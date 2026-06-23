@@ -114,7 +114,9 @@ cache key（缓存键）包含：
 
 只缓存 passed（已通过）结果。failed（失败）结果不写入通过缓存。cache miss（缓存未命中）只运行被选中的 check（检查项）本身，不自动升级到 full（全量验证）。没有受影响 check（检查项）时输出 checked（已检查）为空和 full-not-run（全量未运行）证据。
 
-`verify --full` 不读取 cache（缓存）来跳过检查；它运行成功后使用同一 cache key（缓存键）刷新 passed-result cache（通过结果缓存），让后续默认 verify（快速验证）可复用。没有 `inputs` 的 global check（全局检查项）使用当前 changed files（变更文件）作为 cache input（缓存输入）；需要稳定缓存命中的目标仓库应显式配置 `inputs`。
+`verify --full` 不读取 cache（缓存）来跳过检查；它运行成功后使用同一 cache key（缓存键）刷新 passed-result cache（通过结果缓存），让后续默认 verify（快速验证）可复用。没有 `inputs` 的 global check（全局检查项）使用当前 changed files（变更文件）作为 cache input（缓存输入）；需要稳定缓存命中的目标仓库应显式配置 `inputs`。有 `paths` 但没有 `inputs` 的 verify check（验证检查项）会扫描目标仓库文件来计算 cache key（缓存键）；大型仓库应显式配置 `inputs` 降低默认 verify（快速验证）开销。
+
+`command` 来自目标仓库配置，按 checked-out repository（已检出仓库）可信输入执行；不要在不信任的仓库内容上运行 build（构建检查）或 verify（验证）。
 
 ## 去耦合边界
 

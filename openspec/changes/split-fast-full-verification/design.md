@@ -40,6 +40,8 @@
    - 没有 `paths` 的 check（检查项）是 global check（全局检查项）：默认 `verify` 在存在任意 changed file（变更文件）时选择它，干净工作区不选择它。
    - cache miss（缓存未命中）时只运行该检查本身；default verify（默认验证）和 `verify --full` 都只在 check（检查项）通过后写入或刷新 passed-result cache（通过结果缓存）；failed（失败）结果不写入缓存；没有受影响检查时输出 checked（已检查）为空和 full-not-run（全量未运行）提示。
    - 没有 `inputs` 的 global check（全局检查项）使用当前 changed files（变更文件）作为 cache input（缓存输入）；需要稳定缓存命中的目标仓库应显式配置 `inputs`。
+   - 有 `paths` 但没有 `inputs` 的 check（检查项）会扫描目标仓库文件来计算 cache key（缓存键）；大型仓库应显式配置 `inputs` 降低默认 `verify` 开销。
+   - `command` 来自目标仓库配置，按 checked-out repository（已检出仓库）可信输入执行；不要在不信任的仓库内容上运行 build（构建检查）或 verify（验证）。
 
 4. 统一命令面保持小。
    - 必须支持 `python <test-framework-script> build --project <repo>`、`python <test-framework-script> verify --project <repo>`、`python <test-framework-script> verify --project <repo> --full`。

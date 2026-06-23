@@ -512,6 +512,34 @@ def test_runner_verify_reports_invalid_config_without_traceback(
             {"build": {"checks": ["bad"]}, "verify": {"checks": []}},
             "build.checks[0] must be object",
         ),
+        (
+            {
+                "build": {"checks": [{"id": "bad", "command": 123}]},
+                "verify": {"checks": []},
+            },
+            "build.checks[0].command must be string or list of strings",
+        ),
+        (
+            {
+                "build": {"checks": [{"id": "bad", "command": ["ok", 123]}]},
+                "verify": {"checks": []},
+            },
+            "build.checks[0].command must be string or list of strings",
+        ),
+        (
+            {
+                "build": {"checks": []},
+                "verify": {"checks": [{"id": "bad", "command": "ok", "paths": "src/**"}]},
+            },
+            "verify.checks[0].paths must be list of strings",
+        ),
+        (
+            {
+                "build": {"checks": []},
+                "verify": {"checks": [{"id": "bad", "command": "ok", "inputs": ["src", 123]}]},
+            },
+            "verify.checks[0].inputs must be list of strings",
+        ),
     ],
 )
 def test_runner_reports_invalid_config_structure_without_traceback(
@@ -692,6 +720,28 @@ def test_runner_reports_missing_list_command_without_traceback(
     assert result == 1
     assert "command_not_found: missing-command: missing-test-framework-executable" in captured.err
     assert "Traceback" not in captured.out + captured.err
+
+
+def test_runner_changed_files_combines_all_git_sources(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_check_module()
+    responses = {
+        ("diff", "--name-only", "--cached"): ["staged.py"],
+        ("diff", "--name-only"): ["unstaged.py"],
+        ("ls-files", "--others", "--exclude-standard"): ["untracked.py"],
+    }
+
+    def fake_git_names(_root: Path, *args: str) -> list[str]:
+        return responses[args]
+
+    monkeypatch.setattr(module, "_git_names", fake_git_names)
+
+    assert module._changed_files(tmp_path) == [
+        "staged.py",
+        "unstaged.py",
+        "untracked.py",
+    ]
 
 
 def test_runner_changed_files_falls_back_to_project_scan_when_git_unavailable(
@@ -1121,4 +1171,6 @@ def test_root_verify_full_covers_comet_config() -> None:
     assert ".comet/config.yaml" in pytest_full["inputs"]
     assert ".comet.yaml" in pytest_full["paths"]
     assert ".comet.yaml" in pytest_full["inputs"]
+    assert "docs/agent-guard/**" in pytest_full["paths"]
+    assert "docs/agent-guard" in pytest_full["inputs"]
     assert "." not in pytest_full["inputs"]

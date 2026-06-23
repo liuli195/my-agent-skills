@@ -64,7 +64,8 @@ def git(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
 def command_that_logs(label: str, log_name: str = "run.log") -> list[str]:
     code = (
         "from pathlib import Path\n"
-        f"Path({log_name!r}).open('a', encoding='utf-8').write({label!r} + '\\n')\n"
+        f"with Path({log_name!r}).open('a', encoding='utf-8') as file:\n"
+        f"    file.write({label!r} + '\\n')\n"
     )
     return [sys.executable, "-c", code]
 

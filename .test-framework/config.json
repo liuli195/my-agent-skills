@@ -31,6 +31,7 @@
           ".github/**",
           "plugins/**",
           "tests/**",
+          "docs/agent-guard/**",
           "openspec/**",
           "docs/superpowers/**"
         ],
@@ -46,6 +47,7 @@
           ".test-framework/config.json",
           ".github",
           "plugins",
+          "docs/agent-guard",
           "openspec",
           "docs/superpowers",
           "tests"
