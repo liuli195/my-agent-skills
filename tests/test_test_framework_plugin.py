@@ -760,6 +760,45 @@ def test_test_framework_runner_full_verify_reports_keyboard_interrupt_from_paral
     assert "status: failed" in captured.out
 
 
+def test_test_framework_runner_full_verify_skips_serial_checks_after_parallel_interrupt(
+    tmp_path: Path, capsys
+) -> None:
+    module = load_test_framework_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                    {"id": "serial-after-interrupt", "command": ["serial-after-interrupt"], "parallel": False, "inputs": []},
+                ],
+            },
+        },
+    )
+    calls = []
+
+    def fake_runner(command, **_kwargs):
+        calls.append(command)
+        if command == ["parallel-a"]:
+            raise KeyboardInterrupt("worker interrupted")
+        return subprocess.CompletedProcess(command, 0, stdout="serial ran\n", stderr="")
+
+    result = module._runner().run_verify(project, runner=fake_runner, full=True)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert calls == [["parallel-a"]]
+    assert "serial ran" not in captured.out
+    assert "failed: parallel-a" in captured.out
+    assert "checked: parallel-a, serial-after-interrupt" in captured.out
+    assert "status: failed" in captured.out
+
+
 def test_test_framework_runner_full_verify_reports_serial_failure_after_parallel_pass(
     tmp_path: Path, capsys
 ) -> None:
