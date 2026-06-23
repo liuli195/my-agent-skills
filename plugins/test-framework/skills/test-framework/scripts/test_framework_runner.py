@@ -21,8 +21,14 @@ class ConfigError(Exception):
     pass
 
 
-def _is_string_list(value: Any) -> bool:
-    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+def _is_non_empty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _is_non_empty_string_list(value: Any) -> bool:
+    return isinstance(value, list) and all(
+        _is_non_empty_string(item) for item in value
+    )
 
 
 def _load_config(project: Path) -> dict[str, Any]:
@@ -50,26 +56,39 @@ def _load_config(project: Path) -> dict[str, Any]:
             raise ConfigError(
                 f"invalid_config: .test-framework/config.json: {section}.checks must be list"
             )
+        seen_ids: set[str] = set()
         for index, check in enumerate(checks):
             if not isinstance(check, dict):
                 raise ConfigError(
                     "invalid_config: .test-framework/config.json: "
                     f"{section}.checks[{index}] must be object"
                 )
+            check_id = check.get("id")
+            if not _is_non_empty_string(check_id):
+                raise ConfigError(
+                    "invalid_config: .test-framework/config.json: "
+                    f"{section}.checks[{index}].id must be non-empty string"
+                )
+            if check_id in seen_ids:
+                raise ConfigError(
+                    "invalid_config: .test-framework/config.json: "
+                    f"{section}.checks[{index}].id must be unique"
+                )
+            seen_ids.add(check_id)
             command = check.get("command")
             if command is not None and not (
-                isinstance(command, str) or _is_string_list(command)
+                _is_non_empty_string(command) or _is_non_empty_string_list(command)
             ):
                 raise ConfigError(
                     "invalid_config: .test-framework/config.json: "
-                    f"{section}.checks[{index}].command must be string or list of strings"
+                    f"{section}.checks[{index}].command must be non-empty string or list of non-empty strings"
                 )
             for field in ("paths", "inputs"):
                 value = check.get(field)
-                if value is not None and not _is_string_list(value):
+                if value is not None and not _is_non_empty_string_list(value):
                     raise ConfigError(
                         "invalid_config: .test-framework/config.json: "
-                        f"{section}.checks[{index}].{field} must be list of strings"
+                        f"{section}.checks[{index}].{field} must be list of non-empty strings"
                     )
     return config
 

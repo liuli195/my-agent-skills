@@ -437,6 +437,18 @@ def test_runner_cache_key_changes_with_runtime_versions(
     assert cache_key != base_key
 
 
+def test_runner_cache_store_writes_passed_status(tmp_path: Path) -> None:
+    module = load_check_module()
+    check = {"id": "cache-status", "command": "run-cache-status"}
+
+    module._cache_store(tmp_path, "abc123", check)
+
+    cache_files = list((tmp_path / ".test-framework" / "cache").glob("*.json"))
+    assert len(cache_files) == 1
+    data = json.loads(cache_files[0].read_text(encoding="utf-8"))
+    assert data == {"status": "passed", "id": "cache-status"}
+
+
 def test_runner_build_reports_missing_config_without_traceback(
     tmp_path: Path, capsys
 ) -> None:
@@ -517,28 +529,61 @@ def test_runner_verify_reports_invalid_config_without_traceback(
                 "build": {"checks": [{"id": "bad", "command": 123}]},
                 "verify": {"checks": []},
             },
-            "build.checks[0].command must be string or list of strings",
+            "build.checks[0].command must be non-empty string or list of non-empty strings",
         ),
         (
             {
                 "build": {"checks": [{"id": "bad", "command": ["ok", 123]}]},
                 "verify": {"checks": []},
             },
-            "build.checks[0].command must be string or list of strings",
+            "build.checks[0].command must be non-empty string or list of non-empty strings",
         ),
         (
             {
                 "build": {"checks": []},
                 "verify": {"checks": [{"id": "bad", "command": "ok", "paths": "src/**"}]},
             },
-            "verify.checks[0].paths must be list of strings",
+            "verify.checks[0].paths must be list of non-empty strings",
         ),
         (
             {
                 "build": {"checks": []},
                 "verify": {"checks": [{"id": "bad", "command": "ok", "inputs": ["src", 123]}]},
             },
-            "verify.checks[0].inputs must be list of strings",
+            "verify.checks[0].inputs must be list of non-empty strings",
+        ),
+        (
+            {
+                "build": {"checks": [{"id": "", "command": "ok"}]},
+                "verify": {"checks": []},
+            },
+            "build.checks[0].id must be non-empty string",
+        ),
+        (
+            {
+                "build": {
+                    "checks": [
+                        {"id": "duplicate", "command": "ok"},
+                        {"id": "duplicate", "command": "ok"},
+                    ]
+                },
+                "verify": {"checks": []},
+            },
+            "build.checks[1].id must be unique",
+        ),
+        (
+            {
+                "build": {"checks": [{"id": "bad", "command": ""}]},
+                "verify": {"checks": []},
+            },
+            "build.checks[0].command must be non-empty string or list of non-empty strings",
+        ),
+        (
+            {
+                "build": {"checks": []},
+                "verify": {"checks": [{"id": "bad", "command": "ok", "paths": [""]}]},
+            },
+            "verify.checks[0].paths must be list of non-empty strings",
         ),
     ],
 )
@@ -574,6 +619,7 @@ def test_runner_selects_check_without_paths_for_any_change() -> None:
     [
         ("src/[ab].py", "src/a.py", True),
         ("src/[ab].py", "src/c.py", False),
+        ("src/**/*.py", "src/sub/deep.py", True),
         ("docs/", "docs", True),
         ("docs/", "docs/guide.md", True),
         ("/", "docs/guide.md", False),
@@ -837,6 +883,27 @@ def test_local_plugin_build_main_uses_explicit_build_argv(
 ) -> None:
     module = load_local_build_module()
     calls: list[Path] = []
+    monkeypatch.setattr(module, "REPO_ROOT", tmp_path)
+
+    def fake_run_build(root=tmp_path):
+        calls.append(root)
+        return []
+
+    monkeypatch.setattr(module, "run_build", fake_run_build)
+
+    result = module.main(["build"])
+
+    assert result == 0
+    assert calls == [tmp_path]
+    assert "status: build checks passed" in capsys.readouterr().out
+
+
+def test_local_plugin_build_main_prefers_explicit_argv_over_sys_argv(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = load_local_build_module()
+    calls: list[Path] = []
+    monkeypatch.setattr(sys, "argv", ["local_plugin_build.py", "verify"])
     monkeypatch.setattr(module, "REPO_ROOT", tmp_path)
 
     def fake_run_build(root=tmp_path):

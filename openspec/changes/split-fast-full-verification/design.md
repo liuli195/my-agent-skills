@@ -34,6 +34,8 @@
 
 3. fast（快速验证）是框架执行模式，不是目标仓库配置能力。
    - 目标仓库只声明 `build.checks` 和 `verify.checks`。
+   - 每个 check（检查项）必须有非空且同一分组内唯一的 `id`。
+   - `paths` 支持精确文件、目录前缀（如 `docs/`）、尾部递归前缀（如 `src/**`）和 Python fnmatch（通配匹配）模式。
    - `python <test-framework-script> verify --project <repo> --full` 运行全部 `verify.checks`，不得读取 cache（缓存）来跳过 check（检查项）。
    - `python <test-framework-script> verify --project <repo>` 默认从 worktree（工作区）收集 changed files（变更文件），包含 staged tracked changes（已暂存已跟踪变更）、unstaged tracked changes（未暂存已跟踪变更）和 untracked non-ignored files（未跟踪且未忽略文件）。
    - 框架选择受影响的 `verify.checks`，并对这些检查应用 passed-result cache（通过结果缓存）。

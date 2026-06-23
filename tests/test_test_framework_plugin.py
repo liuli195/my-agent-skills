@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -41,6 +42,18 @@ def run_test_framework(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def load_test_framework_module():
+    spec = importlib.util.spec_from_file_location(
+        "test_framework_entrypoint", TEST_FRAMEWORK_SCRIPT
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def run_check(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(TEST_FRAMEWORK_SCRIPT), *args, "--project", str(project)],
@@ -68,6 +81,16 @@ def command_that_logs(label: str, log_name: str = "run.log") -> list[str]:
         f"    file.write({label!r} + '\\n')\n"
     )
     return [sys.executable, "-c", code]
+
+
+def test_test_framework_main_returns_error_without_command(capsys) -> None:
+    module = load_test_framework_module()
+
+    result = module.main([])
+    captured = capsys.readouterr()
+
+    assert result == 2
+    assert "usage:" in captured.err
 
 
 def command_that_fails_once(label: str) -> list[str]:
@@ -468,9 +491,12 @@ def test_test_framework_runner_uses_passed_result_cache(tmp_path: Path) -> None:
     )
 
     first = run_check(project, "verify")
+    cache_files = list((project / ".test-framework" / "cache").glob("*.json"))
     second = run_check(project, "verify")
 
     assert first.returncode == 0, first.stdout + first.stderr
+    assert len(cache_files) == 1
+    assert read_json(cache_files[0]) == {"status": "passed", "id": "cache-check"}
     assert second.returncode == 0, second.stdout + second.stderr
     assert "cache-hit: cache-check" in second.stdout
     assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [

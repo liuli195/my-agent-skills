@@ -77,7 +77,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
-    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    except SystemExit as error:
+        return int(error.code) if isinstance(error.code, int) else 2
     if args.command == "init":
         return _init_project(Path(args.project).resolve())
     if args.command == "build":
