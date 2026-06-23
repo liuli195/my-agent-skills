@@ -116,6 +116,8 @@ The smallest retained true end-to-end（端到端） paths are:
 - cross-agent-review（跨代理审查）: workflow-level run/output tests such as `test_run_archives_review_input_snapshots_under_output_dir`, plus pass-marker tests for blocking and non-blocking findings.
 - Test Framework（测试框架）: `test_test_framework_runner_build_verify_and_full_verify`, plus full-mode cache and fallback tests.
 
+Guard branch（防护分支）matrix coverage（矩阵覆盖） remains in targeted stop-state（停止状态） tests. Dirty worktree（脏工作区）, protected base branch（受保护基础分支）, current branch mismatch（当前分支不匹配）, head-not-based-on-target（当前提交未基于目标分支）, and partial cleanup recovery（部分清理恢复） use in-process（进程内） command stubs（命令替身） because those tests verify decision state and recovery payloads, not subprocess（子进程） boundaries. The retained E2E（端到端） tests above keep subprocess（子进程） entrypoint and real Git（版本管理） state coverage for representative success paths.
+
 ## Data Flow
 
 1. Developer runs full verification（完整验证）.

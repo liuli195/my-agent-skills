@@ -4,9 +4,11 @@ import concurrent.futures
 import dataclasses
 import fnmatch
 import hashlib
+import importlib.util
 import json
 import os
 import platform
+import shlex
 import subprocess
 import sys
 import threading
@@ -47,6 +49,43 @@ def _is_non_empty_string_list(value: Any) -> bool:
     )
 
 
+def _command_tokens(command: Any) -> list[str]:
+    if isinstance(command, str):
+        try:
+            return shlex.split(command)
+        except ValueError:
+            return command.split()
+    if isinstance(command, list):
+        return [str(item) for item in command]
+    return []
+
+
+def _uses_pytest_xdist(command: Any) -> bool:
+    tokens = _command_tokens(command)
+    has_xdist_flag = any(
+        token == "-n"
+        or (token.startswith("-n") and len(token) > 2)
+        or token == "--numprocesses"
+        or token.startswith("--numprocesses=")
+        for token in tokens
+    )
+    has_pytest = any(token == "pytest" or token.endswith("/pytest") or token.endswith("\\pytest") for token in tokens)
+    has_pytest_module = any(
+        token == "-m" and index + 1 < len(tokens) and tokens[index + 1] == "pytest"
+        for index, token in enumerate(tokens)
+    )
+    return has_xdist_flag and (has_pytest or has_pytest_module)
+
+
+def _dependency_error(check: dict[str, Any]) -> str | None:
+    if _uses_pytest_xdist(check.get("command")) and importlib.util.find_spec("xdist") is None:
+        return (
+            f"missing_dependency: {check.get('id')}: pytest-xdist is required "
+            "for pytest -n; install requirements-dev.txt\n"
+        )
+    return None
+
+
 def _load_config(project: Path) -> dict[str, Any]:
     config_path = project / ".test-framework" / "config.json"
     try:
@@ -67,6 +106,17 @@ def _load_config(project: Path) -> dict[str, Any]:
             raise ConfigError(
                 f"invalid_config: .test-framework/config.json: {section} must be object"
             )
+        if section == "verify":
+            max_parallel = section_config.get("maxParallel")
+            if max_parallel is not None and (
+                isinstance(max_parallel, bool)
+                or not isinstance(max_parallel, int)
+                or max_parallel < 0
+            ):
+                raise ConfigError(
+                    "invalid_config: .test-framework/config.json: "
+                    "verify.maxParallel must be non-negative integer"
+                )
         checks = section_config.get("checks", [])
         if not isinstance(checks, list):
             raise ConfigError(
@@ -413,6 +463,10 @@ def _run_check(project: Path, check: dict[str, Any], runner: Runner) -> int:
     if not command:
         print(f"missing_command: {check.get('id')}", file=sys.stderr)
         return 1
+    dependency_error = _dependency_error(check)
+    if dependency_error is not None:
+        print(dependency_error, end="", file=sys.stderr)
+        return 1
     use_shell = isinstance(command, str)
     try:
         result = runner(
@@ -462,6 +516,16 @@ def _run_check_result(
             check,
             1,
             stderr=f"missing_command: {check.get('id')}\n",
+            duration_seconds=time.monotonic() - started_at,
+            cache_key=key,
+        )
+    dependency_error = _dependency_error(check)
+    if dependency_error is not None:
+        return CheckResult(
+            index,
+            check,
+            1,
+            stderr=dependency_error,
             duration_seconds=time.monotonic() - started_at,
             cache_key=key,
         )

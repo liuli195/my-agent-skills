@@ -563,6 +563,73 @@ def test_test_framework_runner_full_verify_zero_max_parallel_means_unlimited(
     assert max_active == 3
 
 
+def test_test_framework_runner_rejects_negative_max_parallel(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "maxParallel": -1,
+                "checks": [
+                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                ],
+            },
+        },
+    )
+
+    result = run_check(project, "verify", "--full")
+
+    assert result.returncode == 1
+    assert "verify.maxParallel must be non-negative integer" in result.stderr
+    assert "status: failed" in result.stdout
+
+
+def test_test_framework_runner_reports_missing_xdist_before_running_pytest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    module = load_test_framework_module()
+    runner = module._runner()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".test-framework").mkdir()
+    write_json(
+        project / ".test-framework" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "pytest-parallel",
+                        "command": "python -m pytest -n 8 tests",
+                        "parallel": False,
+                        "inputs": [],
+                    },
+                ],
+            },
+        },
+    )
+    calls = []
+
+    def fake_runner(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(runner.importlib.util, "find_spec", lambda _name: None)
+
+    result = runner.run_verify(project, runner=fake_runner, full=True)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert calls == []
+    assert "missing_dependency: pytest-parallel: pytest-xdist is required" in captured.err
+    assert "status: failed" in captured.out
+
+
 def test_test_framework_runner_full_verify_reports_parallel_check_timeout(
     tmp_path: Path, capsys
 ) -> None:

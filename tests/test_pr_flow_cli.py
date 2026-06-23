@@ -2114,24 +2114,20 @@ def test_hotfix_pushes_head_to_target_and_writes_audit_record(tmp_path: Path) ->
     }
 
 
-def test_cleanup_merged_pr_checks_out_base_pulls_and_deletes_branches(tmp_path: Path, monkeypatch) -> None:
-    from tests.support.command_stubs import CommandStub
-    from tests.support.pr_flow_invocation import invoke_pr_flow
-
-    module = load_pr_flow_module()
+def test_cleanup_merged_pr_checks_out_base_pulls_and_deletes_branches(tmp_path: Path) -> None:
     project, remote = init_cleanup_project(tmp_path)
-    gh_stub = CommandStub()
-    gh_stub.add(
-        ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
-        stdout=cleanup_pr_view_json(),
+    fake_bin, calls_path = write_fake_gh_sequence(
+        tmp_path / "bin",
+        [
+            {"stdout": cleanup_pr_view_json()},
+        ],
     )
-    monkeypatch.setattr(module, "gh", gh_stub)
     stale_local_base = git(project, "rev-parse", "main")
     remote_base_after_merge = git_bare(remote, "rev-parse", "refs/heads/main")
     assert stale_local_base != remote_base_after_merge
     assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode == 0
 
-    result = invoke_pr_flow(["cleanup", "--project", str(project), "--pr", "12"], module=module)
+    result = run_with_path(fake_bin, "cleanup", "--project", str(project), "--pr", "12")
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: cleanup_complete" in result.stdout
@@ -2146,7 +2142,7 @@ def test_cleanup_merged_pr_checks_out_base_pulls_and_deletes_branches(tmp_path: 
     assert status["command"] == "cleanup"
     assert status["details"]["pr"] == 12
     assert status["details"]["remote"] == "origin"
-    calls = [list(call) for call in gh_stub.calls]
+    calls = json.loads(calls_path.read_text(encoding="utf-8"))
     assert calls == [["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"]]
 
 
