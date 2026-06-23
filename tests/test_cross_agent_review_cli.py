@@ -567,6 +567,7 @@ def test_sdk_dispatch_subprocess_writes_prompt_artifacts(tmp_path: Path, monkeyp
         "risk-review.txt",
     }
     assert captured_payload["raw_dir"] == str(review.output_dir / "raw")
+    assert captured_payload["force_exit"] is True
     assert "Manifest file:" in (prompts_dir / "spec-alignment.txt").read_text(encoding="utf-8")
 
 

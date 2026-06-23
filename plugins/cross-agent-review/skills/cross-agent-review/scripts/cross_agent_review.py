@@ -504,6 +504,7 @@ def run_sdk_dispatch_subprocess(review_args: ReviewArgs, sdk_python: str) -> lis
         "readonly_tools": READONLY_TOOLS,
         "prompts": prompts,
         "raw_dir": str(raw_dir),
+        "force_exit": True,
     }
     try:
         result = subprocess.run(
@@ -600,8 +601,9 @@ def run_sdk_dispatch() -> int:
     import asyncio
     from claude_agent_sdk import ClaudeAgentOptions, query
 
+    payload = json.loads(sys.stdin.read())
+
     async def collect() -> list[dict]:
-        payload = json.loads(sys.stdin.read())
         raw_dir = Path(payload["raw_dir"]) if payload.get("raw_dir") else None
 
         def write_raw(role: str, text: str) -> None:
@@ -680,6 +682,10 @@ def run_sdk_dispatch() -> int:
         return await asyncio.gather(*(run_one(role) for role in payload["roles"]))
 
     print(json.dumps(asyncio.run(collect()), ensure_ascii=False))
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if payload.get("force_exit"):
+        os._exit(0)
     return 0
 
 
