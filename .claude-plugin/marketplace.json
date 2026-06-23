@@ -1,0 +1,33 @@
+{
+  "name": "my-agent-skills-marketplace",
+  "owner": {
+    "name": "My Agent Skills Marketplace"
+  },
+  "plugins": [
+    {
+      "name": "agent-guard",
+      "source": "./plugins/agent-guard",
+      "description": "Guard workflow plugin for Codex and Claude agents"
+    },
+    {
+      "name": "release-flow",
+      "source": "./plugins/release-flow",
+      "description": "Release flow plugin for Codex and Claude agents"
+    },
+    {
+      "name": "cross-agent-review",
+      "source": "./plugins/cross-agent-review",
+      "description": "Cross-agent review plugin for Codex and Claude agents"
+    },
+    {
+      "name": "pr-flow",
+      "source": "./plugins/pr-flow",
+      "description": "PR Flow Plugin（拉取请求流程插件）"
+    },
+    {
+      "name": "test-framework",
+      "source": "./plugins/test-framework",
+      "description": "Test Framework Plugin（测试框架插件）"
+    }
+  ]
+}
