@@ -220,6 +220,17 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def input_reference(label: str, path: Path) -> str:
+    content = path.read_bytes()
+    return "\n".join(
+        [
+            f"{label} file: {path}",
+            f"{label} bytes: {len(content)}",
+            f"{label} sha256: {hashlib.sha256(content).hexdigest()}",
+        ]
+    )
+
+
 def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
     parts = [
         f"Role: {role}",
@@ -255,10 +266,12 @@ def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
             f"Change: {review_args.change}",
             f"Base ref: {review_args.base_ref}",
             f"Head ref: {review_args.head_ref}",
-            "Diff:\n" + read_text(review_args.diff_file),
-            "Spec:\n" + read_text(review_args.spec_file),
-            "Design:\n" + read_text(review_args.design_file),
-            "Tasks:\n" + read_text(review_args.tasks_file),
+            "Use the referenced input files as the source of truth. Read only the sections needed for this review.",
+            "Use git diff/show/status read-only commands if the file references are insufficient.",
+            input_reference("Diff", review_args.diff_file),
+            input_reference("Spec", review_args.spec_file),
+            input_reference("Design", review_args.design_file),
+            input_reference("Tasks", review_args.tasks_file),
         ]
     )
     return "\n\n".join(parts)

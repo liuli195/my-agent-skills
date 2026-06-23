@@ -444,11 +444,42 @@ def test_reviewer_prompt_includes_all_review_inputs(tmp_path: Path) -> None:
     assert "Change: demo-change" in prompt
     assert f"Base ref: {head}" in prompt
     assert f"Head ref: {head}" in prompt
-    assert "Diff:\ndiff --git a/app.txt b/app.txt\n" in prompt
-    assert "Spec:\nSpec body\n" in prompt
-    assert "Design:\nDesign body\n" in prompt
-    assert "Tasks:\nTasks body\n" in prompt
+    assert f"Diff file: {diff_file}" in prompt
+    assert f"Spec file: {spec_file}" in prompt
+    assert f"Design file: {design_file}" in prompt
+    assert f"Tasks file: {tasks_file}" in prompt
+    assert f"Diff sha256: {hashlib.sha256(diff_file.read_bytes()).hexdigest()}" in prompt
+    assert "diff --git a/app.txt b/app.txt" not in prompt
+    assert "Spec body" not in prompt
     assert "Tests:" not in prompt
+
+
+def test_reviewer_prompt_does_not_inline_large_inputs(tmp_path: Path) -> None:
+    module = load_script_module()
+    project = tmp_path / "repo"
+    head = init_repo(project)
+    large_diff = "diff --git a/app.txt b/app.txt\n" + ("+changed\n" * 2000)
+    diff_file = write_file(project / "diff.patch", large_diff)
+    review = module.ReviewArgs(
+        change="demo-change",
+        base_ref=head,
+        head_ref=head,
+        diff_file=diff_file,
+        spec_file=write_file(project / "spec.md", "Spec body\n"),
+        design_file=write_file(project / "design.md", "Design body\n"),
+        tasks_file=write_file(project / "tasks.md", "Tasks body\n"),
+        output_dir=tmp_path / "out",
+        sdk_python=None,
+        fake_reviewer_results=None,
+        disable_risk_review=None,
+    )
+
+    prompt = module.reviewer_prompt(review, "implementation-correctness")
+
+    assert f"Diff file: {diff_file}" in prompt
+    assert f"Diff bytes: {len(diff_file.read_bytes())}" in prompt
+    assert "+changed" not in prompt
+    assert len(prompt) < 4000
 
 
 def test_tests_and_edge_cases_prompt_focuses_review_scope(tmp_path: Path) -> None:
