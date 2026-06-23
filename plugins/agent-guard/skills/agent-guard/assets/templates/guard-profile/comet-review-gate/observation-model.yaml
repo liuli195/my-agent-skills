@@ -1,0 +1,16 @@
+signals:
+  - id: guard.activation
+    source: agent-guard-skill
+    event_type: guard.activation
+    strength: medium
+    maps_to_node: activate
+  - id: guard.close
+    source: manual
+    event_type: guard.close
+    strength: medium
+    maps_to_node: close
+  - id: state_completed
+    source: agent
+    event_type: state_completed
+    strength: high
+    maps_to_node: close
