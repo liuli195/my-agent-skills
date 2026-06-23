@@ -589,16 +589,48 @@ def run_verify(
         results: list[CheckResult] = []
         if parallel_checks:
             max_workers = _max_parallel_checks(config, len(parallel_checks))
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = [
-                    executor.submit(_run_check_result, index, project, check, config, changed_files, runner)
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+            interrupted = False
+            try:
+                futures = {
+                    executor.submit(_run_check_result, index, project, check, config, changed_files, runner): (
+                        index,
+                        check,
+                    )
                     for index, check in parallel_checks
-                ]
-                results.extend(future.result() for future in futures)
-        results.extend(
-            _run_check_result(index, project, check, config, changed_files, runner)
-            for index, check in serial_checks
-        )
+                }
+                for future in futures:
+                    index, check = futures[future]
+                    try:
+                        results.append(future.result())
+                    except KeyboardInterrupt as error:
+                        interrupted = True
+                        results.append(
+                            CheckResult(
+                                index,
+                                check,
+                                1,
+                                stderr=(
+                                    f"parallel_check_interrupted: {check.get('id')}: "
+                                    f"KeyboardInterrupt: {error}\n"
+                                ),
+                            )
+                        )
+                        for pending in futures:
+                            pending.cancel()
+                        break
+            finally:
+                executor.shutdown(wait=not interrupted, cancel_futures=interrupted)
+            if not interrupted:
+                results.extend(
+                    _run_check_result(index, project, check, config, changed_files, runner)
+                    for index, check in serial_checks
+                )
+        else:
+            results.extend(
+                _run_check_result(index, project, check, config, changed_files, runner)
+                for index, check in serial_checks
+            )
         failed_ids: list[str] = []
         for result in sorted(results, key=lambda item: item.index):
             if result.stdout:

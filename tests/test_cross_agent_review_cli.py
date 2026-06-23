@@ -372,6 +372,21 @@ def test_run_accepts_legacy_tests_file_argument_without_snapshotting_it(tmp_path
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert not (output_dir / "inputs" / "tests.txt").exists()
+    module = load_script_module()
+    review = module.ReviewArgs(
+        change="demo",
+        base_ref=head,
+        head_ref=head,
+        diff_file=output_dir / "inputs" / "diff.patch",
+        spec_file=output_dir / "inputs" / "spec.md",
+        design_file=output_dir / "inputs" / "design.md",
+        tasks_file=output_dir / "inputs" / "tasks.md",
+        output_dir=output_dir,
+        sdk_python=None,
+        fake_reviewer_results=None,
+        disable_risk_review=None,
+    )
+    assert "legacy tests" not in module.reviewer_prompt(review, "tests-and-edge-cases")
 
 
 def test_prompt_contains_review_context(tmp_path: Path) -> None:

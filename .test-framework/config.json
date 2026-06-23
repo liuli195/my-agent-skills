@@ -17,6 +17,7 @@
   },
   "verify": {
     "maxParallel": 0,
+    "timeoutSeconds": 180,
     "checks": [
       {
         "id": "verify.local-build-contract",

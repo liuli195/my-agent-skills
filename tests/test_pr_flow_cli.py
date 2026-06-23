@@ -39,6 +39,8 @@ def template_cache_key(*paths: Path) -> str:
 
 TEMPLATE_CACHE_KEY = template_cache_key(Path(__file__), SCRIPT)
 TEMPLATE_ROOT = Path(tempfile.gettempdir()) / f"pr-flow-test-templates-{TEMPLATE_CACHE_KEY}"
+TEMPLATE_LOCK_TIMEOUT_SECONDS = 30
+TEMPLATE_LOCK_STALE_SECONDS = 30
 
 
 def load_pr_flow_module():
@@ -383,19 +385,36 @@ def copy_project_remote_template(template_dir: Path, tmp_path: Path) -> tuple[Pa
     return project, remote
 
 
+def remove_template_lock(lock_dir: Path) -> None:
+    for _ in range(5):
+        shutil.rmtree(lock_dir, ignore_errors=True)
+        if not lock_dir.exists():
+            return
+        time.sleep(0.05)
+
+
 def ensure_project_remote_template(template_name: str, tmp_path: Path, creator) -> tuple[Path, Path]:
     template_dir = TEMPLATE_ROOT / template_name
     ready = template_dir / ".ready"
+    lock_dir = TEMPLATE_ROOT / f"{template_name}.lock"
     if ready.exists():
+        if lock_dir.exists():
+            remove_template_lock(lock_dir)
         return copy_project_remote_template(template_dir, tmp_path)
 
-    lock_dir = TEMPLATE_ROOT / f"{template_name}.lock"
-    deadline = time.monotonic() + 120
+    deadline = time.monotonic() + TEMPLATE_LOCK_TIMEOUT_SECONDS
     while True:
         try:
             lock_dir.mkdir(parents=True)
             break
         except FileExistsError:
+            try:
+                lock_age = time.time() - lock_dir.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            if lock_age > TEMPLATE_LOCK_STALE_SECONDS:
+                remove_template_lock(lock_dir)
+                continue
             if time.monotonic() > deadline:
                 raise TimeoutError(f"template_lock_timeout: {lock_dir}")
             time.sleep(0.05)
@@ -408,9 +427,27 @@ def ensure_project_remote_template(template_name: str, tmp_path: Path, creator) 
             creator(template_dir)
             ready.write_text("ok\n", encoding="utf-8")
     finally:
-        shutil.rmtree(lock_dir, ignore_errors=True)
+        remove_template_lock(lock_dir)
 
     return copy_project_remote_template(template_dir, tmp_path)
+
+
+def test_project_template_recovers_stale_lock(tmp_path: Path) -> None:
+    template_name = f"stale-lock-{tmp_path.name}"
+    lock_dir = TEMPLATE_ROOT / f"{template_name}.lock"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    stale_time = time.time() - TEMPLATE_LOCK_STALE_SECONDS - 1
+    os.utime(lock_dir, (stale_time, stale_time))
+
+    project, remote = ensure_project_remote_template(
+        template_name,
+        tmp_path,
+        lambda template_dir: _create_cleanup_project(template_dir),
+    )
+
+    assert project.is_dir()
+    assert remote.is_dir()
+    assert not lock_dir.exists()
 
 
 def init_cleanup_project(tmp_path: Path) -> tuple[Path, Path]:

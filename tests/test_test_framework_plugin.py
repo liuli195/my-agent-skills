@@ -594,8 +594,8 @@ def test_test_framework_runner_full_verify_reports_parallel_check_timeout(
     assert "status: failed" in captured.out
 
 
-def test_test_framework_runner_full_verify_propagates_keyboard_interrupt_from_parallel_check(
-    tmp_path: Path,
+def test_test_framework_runner_full_verify_reports_keyboard_interrupt_from_parallel_check(
+    tmp_path: Path, capsys
 ) -> None:
     module = load_test_framework_module()
     project = tmp_path / "project"
@@ -617,8 +617,13 @@ def test_test_framework_runner_full_verify_propagates_keyboard_interrupt_from_pa
     def fake_runner(_command, **_kwargs):
         raise KeyboardInterrupt("worker interrupted")
 
-    with pytest.raises(KeyboardInterrupt, match="worker interrupted"):
-        module._runner().run_verify(project, runner=fake_runner, full=True)
+    result = module._runner().run_verify(project, runner=fake_runner, full=True)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert "parallel_check_interrupted: parallel-a: KeyboardInterrupt: worker interrupted" in captured.err
+    assert "failed: parallel-a" in captured.out
+    assert "status: failed" in captured.out
 
 
 def test_test_framework_cache_store_writes_temp_file_before_replace(
