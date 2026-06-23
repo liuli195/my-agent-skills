@@ -469,7 +469,10 @@ def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
     assert config["defaults"]["mergeStrategy"] == "merge"
     assert config["defaults"]["reviewGate"]["mode"] == "github"
     assert config["defaults"]["reviewGate"]["evidencePath"] == ".pr-flow/review-pass.json"
-    assert config["defaults"]["hotfix"]["verifyCommand"] == ".\\.venv\\Scripts\\python.exe -m pytest"
+    assert (
+        config["defaults"]["hotfix"]["verifyCommand"]
+        == "python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project . --full"
+    )
     assert config["defaults"]["wait"] == {"timeoutSeconds": 600, "pollSeconds": 15}
     assert config["defaults"]["pr"]["bodyTemplatePath"] == ".pr-flow/pr-template.md"
     assert config["branches"]["main"]["remote"] == "origin"
@@ -480,6 +483,15 @@ def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
         assert f"## {section}" in template
 
     assert (project / ".pr-flow" / ".gitignore").read_text(encoding="utf-8") == "/runs/\n/last-status.json\n"
+
+
+def test_current_repo_hotfix_verify_command_uses_test_framework_full() -> None:
+    config = yaml.safe_load((REPO_ROOT / ".pr-flow" / "config.yaml").read_text(encoding="utf-8"))
+
+    assert (
+        config["defaults"]["hotfix"]["verifyCommand"]
+        == "python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project . --full"
+    )
 
 
 def test_init_does_not_call_gh_api(tmp_path: Path) -> None:

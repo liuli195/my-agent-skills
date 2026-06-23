@@ -314,41 +314,28 @@ def run_build(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> list[s
     if set(projection_plugins) != set(codex_dev_marketplace_names):
         errors.append(
             "codex_dev_projection_plugins_mismatch: "
-            f"marketplace={sorted(codex_dev_marketplace_names)} projection={sorted(set(projection_plugins))}"
+            f"marketplace={sorted(codex_dev_marketplace_names)} "
+            f"projection={sorted(set(projection_plugins))}"
         )
 
     errors.extend(check_guard_profile_template_mirrors(root))
     return errors
 
 
-def run_verify(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> int:
-    result = runner(
-        [sys.executable, "-m", "pytest"],
-        cwd=root,
-        text=True,
-        capture_output=False,
-        check=False,
-    )
-    return int(result.returncode)
-
-
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     command = args[0] if args else "build"
+    if command != "build":
+        print(f"unknown command: {command}", file=sys.stderr)
+        return 2
 
-    if command == "build":
-        errors = run_build()
-        if errors:
-            for error in errors:
-                print(error, file=sys.stderr)
-            return 1
-        print("status: build checks passed")
-        return 0
-    if command == "verify":
-        return run_verify()
-
-    print(f"unknown command: {command}", file=sys.stderr)
-    return 2
+    errors = run_build()
+    if errors:
+        for error in errors:
+            print(error, file=sys.stderr)
+        return 1
+    print("status: build checks passed")
+    return 0
 
 
 if __name__ == "__main__":
