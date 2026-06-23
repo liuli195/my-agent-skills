@@ -387,8 +387,9 @@ def _cache_store(project: Path, key: str, check: dict[str, Any]) -> None:
             encoding="utf-8",
         )
         temp.replace(path)
-    finally:
+    except Exception:
         temp.unlink(missing_ok=True)
+        raise
 
 
 def _format_seconds(value: float) -> str:
@@ -616,8 +617,6 @@ def run_verify(
                                 ),
                             )
                         )
-                        for pending in futures:
-                            pending.cancel()
                         break
             finally:
                 executor.shutdown(wait=not interrupted, cancel_futures=interrupted)

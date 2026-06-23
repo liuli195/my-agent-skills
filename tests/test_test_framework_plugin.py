@@ -227,6 +227,8 @@ def test_test_framework_plugin_has_single_skill_entrypoint() -> None:
     assert "scripts/test_framework.py init" in skill_text
     assert "scripts/test_framework.py build" in skill_text
     assert "scripts/test_framework.py verify" in skill_text
+    assert "timeoutSeconds" in skill_text
+    assert "pytest-xdist" in skill_text
 
 
 def test_test_framework_registered_in_marketplaces_and_projection() -> None:
@@ -1263,6 +1265,9 @@ def test_test_framework_runner_cache_key_changes_with_check_contract(
     cached = run_check(project, "verify")
 
     assert first.returncode == 0, first.stdout + first.stderr
+    cache_files = list((project / ".test-framework" / "cache").glob("*.json"))
+    assert len(cache_files) == 1
+    assert read_json(cache_files[0])["status"] == "passed"
     assert cached.returncode == 0, cached.stdout + cached.stderr
     assert "cache-hit: cache-contract" in cached.stdout
     assert (project / "run.log").read_text(encoding="utf-8").splitlines() == ["base"]

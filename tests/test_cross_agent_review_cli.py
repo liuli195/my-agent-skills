@@ -389,6 +389,22 @@ def test_run_accepts_legacy_tests_file_argument_without_snapshotting_it(tmp_path
     assert "legacy tests" not in module.reviewer_prompt(review, "tests-and-edge-cases")
 
 
+def test_run_accepts_missing_legacy_tests_file_argument_without_snapshotting_it(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    head = init_repo(project)
+    output_dir = tmp_path / "out"
+
+    result = run(
+        *review_args(project, head, output_dir),
+        "--tests-file",
+        str(project / "missing-legacy-tests.txt"),
+        cwd=project,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (output_dir / "inputs" / "tests.txt").exists()
+
+
 def test_prompt_contains_review_context(tmp_path: Path) -> None:
     head = init_repo(tmp_path / "repo")
     args = review_args(tmp_path / "repo", head, tmp_path / "out")

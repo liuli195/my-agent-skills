@@ -450,6 +450,29 @@ def test_project_template_recovers_stale_lock(tmp_path: Path) -> None:
     assert not lock_dir.exists()
 
 
+def test_project_template_recreates_incomplete_template_after_stale_lock(tmp_path: Path) -> None:
+    template_name = f"incomplete-template-{os.getpid()}-{time.monotonic_ns()}"
+    template_dir = TEMPLATE_ROOT / template_name
+    lock_dir = TEMPLATE_ROOT / f"{template_name}.lock"
+    template_dir.mkdir(parents=True)
+    (template_dir / "partial.txt").write_text("partial\n", encoding="utf-8")
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    stale_time = time.time() - TEMPLATE_LOCK_STALE_SECONDS - 1
+    os.utime(lock_dir, (stale_time, stale_time))
+
+    project, remote = ensure_project_remote_template(
+        template_name,
+        tmp_path,
+        lambda template_dir: _create_cleanup_project(template_dir),
+    )
+
+    assert project.is_dir()
+    assert remote.is_dir()
+    assert (template_dir / ".ready").is_file()
+    assert not (template_dir / "partial.txt").exists()
+    assert not lock_dir.exists()
+
+
 def init_cleanup_project(tmp_path: Path) -> tuple[Path, Path]:
     return ensure_project_remote_template("cleanup", tmp_path, _create_cleanup_project)
 

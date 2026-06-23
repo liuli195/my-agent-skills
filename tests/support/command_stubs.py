@@ -50,14 +50,22 @@ class CommandStub:
             with open(body_path, encoding="utf-8") as body:
                 self.body_files.append({"args": call, "body": body.read()})
         normalized = call[1:] if call and call[0] == "gh" else call
-        for index, (expected, response) in enumerate(self.responses):
-            if expected == normalized or expected == call:
-                if self.consume:
-                    self.responses.pop(index)
-                return completed(
-                    call,
-                    stdout=response.stdout,
-                    stderr=response.stderr,
-                    returncode=response.returncode,
-                )
+        match_index = next(
+            (
+                index
+                for index, (expected, _) in enumerate(self.responses)
+                if expected == normalized or expected == call
+            ),
+            None,
+        )
+        if match_index is not None:
+            _, response = self.responses[match_index]
+            if self.consume:
+                self.responses.pop(match_index)
+            return completed(
+                call,
+                stdout=response.stdout,
+                stderr=response.stderr,
+                returncode=response.returncode,
+            )
         return completed(call, stderr=f"unexpected_command: {' '.join(call)}\n", returncode=1)
