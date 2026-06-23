@@ -165,7 +165,7 @@ def test_runner_build_runs_configured_checks(tmp_path: Path, capsys) -> None:
     )
     calls: list[tuple[str, Path, bool]] = []
 
-    def fake_run(command, cwd, check, text, capture_output, shell=False):
+    def fake_run(command, cwd, check, text, capture_output, shell=False, timeout=None):
         calls.append((command, cwd, shell))
         return make_completed(command)
 
@@ -191,7 +191,7 @@ def test_runner_build_reports_failed_check(tmp_path: Path, capsys) -> None:
         ],
     )
 
-    def fake_run(command, cwd, check, text, capture_output, shell=False):
+    def fake_run(command, cwd, check, text, capture_output, shell=False, timeout=None):
         if command == "run-build-two":
             return subprocess.CompletedProcess(command, 9, "", "build.two failed\n")
         return make_completed(command)
@@ -235,7 +235,7 @@ def test_runner_default_verify_selects_changed_checks_and_uses_cache(
     )
     calls: list[tuple[str, bool]] = []
 
-    def fake_run(command, cwd, check, text, capture_output, shell=False):
+    def fake_run(command, cwd, check, text, capture_output, shell=False, timeout=None):
         calls.append((command, shell))
         return make_completed(command)
 
@@ -282,7 +282,7 @@ def test_runner_full_verify_runs_all_checks_without_cache(
     )
     calls: list[str] = []
 
-    def fake_run(command, cwd, check, text, capture_output, shell=False):
+    def fake_run(command, cwd, check, text, capture_output, shell=False, timeout=None):
         calls.append(command)
         return make_completed(command)
 
@@ -320,7 +320,7 @@ def test_runner_full_verify_refreshes_cache_for_default_verify(
     monkeypatch.setattr(module, "_changed_files", lambda _root: ["src/app.py"], raising=False)
     calls: list[str] = []
 
-    def fake_run(command, cwd, check, text, capture_output, shell=False):
+    def fake_run(command, cwd, check, text, capture_output, shell=False, timeout=None):
         calls.append(command)
         return make_completed(command)
 
@@ -357,7 +357,7 @@ def test_runner_does_not_cache_failed_verify_results(
     returncodes = [7, 0]
     calls: list[str] = []
 
-    def fake_run(command, cwd, check, text, capture_output, shell=False):
+    def fake_run(command, cwd, check, text, capture_output, shell=False, timeout=None):
         calls.append(command)
         return make_completed(command, returncodes.pop(0))
 
@@ -389,7 +389,7 @@ def test_runner_default_check_cache_key_tracks_dirty_file_contents(
     monkeypatch.setattr(module, "_changed_files", lambda _root: ["dirty.txt"], raising=False)
     calls: list[str] = []
 
-    def fake_run(command, cwd, check, text, capture_output, shell=False):
+    def fake_run(command, cwd, check, text, capture_output, shell=False, timeout=None):
         calls.append(command)
         return make_completed(command)
 
@@ -660,7 +660,7 @@ def test_runner_no_check_returns_success_without_full_fallback(
     monkeypatch.setattr(module, "_changed_files", lambda _root: ["docs/guide.md"], raising=False)
     calls: list[str] = []
 
-    def fake_run(command, cwd, check, text, capture_output, shell=False):
+    def fake_run(command, cwd, check, text, capture_output, shell=False, timeout=None):
         calls.append(command)
         return make_completed(command)
 
