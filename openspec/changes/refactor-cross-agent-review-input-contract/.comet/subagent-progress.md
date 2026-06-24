@@ -188,3 +188,21 @@
 
 - Task 5 plan steps checked off.
 - OpenSpec tasks 1.4 and 2.3 checked off.
+
+---
+
+# Task 7: Full Regression and OpenSpec Task Closure
+
+## Verification
+
+- `python -m pytest tests/test_cross_agent_review_plugin_package.py::test_cross_agent_review_skill_and_script_are_packaged -q` passed.
+- `python -m pytest tests/test_cross_agent_review_cli.py -q` passed: `45 passed`.
+- `python -m pytest tests/test_cross_agent_review_plugin_package.py tests/test_cross_agent_review_cli.py -q` passed: `56 passed`.
+- `openspec validate refactor-cross-agent-review-input-contract --strict` passed.
+- `git diff --check` passed.
+- `.comet/build-check.sh` does not exist, so the build-check step is not applicable.
+
+## Completion
+
+- Task 7 plan steps checked off.
+- OpenSpec task 2.6 checked off.

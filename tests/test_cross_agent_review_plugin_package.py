@@ -28,9 +28,11 @@ def test_cross_agent_review_manifests_are_valid() -> None:
 
 def test_cross_agent_review_skill_and_script_are_packaged() -> None:
     skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
+    prompt_template = PLUGIN_ROOT / "skills" / "cross-agent-review" / "assets" / "templates" / "reviewer-prompt.md"
 
     assert skill.is_file()
     assert SCRIPT.is_file()
+    assert prompt_template.is_file()
     text = skill.read_text(encoding="utf-8")
     assert "Claude Agent SDK" in text
     assert "review-pass.json" in text

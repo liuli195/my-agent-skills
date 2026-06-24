@@ -718,7 +718,7 @@ Expected after docs update: PASS.
 **Files:**
 - Modify: `openspec/changes/refactor-cross-agent-review-input-contract/tasks.md`
 
-- [ ] **Step 1: Run focused cross-agent-review tests**
+- [x] **Step 1: Run focused cross-agent-review tests**
 
 Run:
 
@@ -728,7 +728,7 @@ python -m pytest tests/test_cross_agent_review_cli.py -q
 
 Expected: PASS.
 
-- [ ] **Step 2: Run package test for included template asset**
+- [x] **Step 2: Run package test for included template asset**
 
 Run:
 
@@ -738,7 +738,7 @@ python -m pytest tests/test_cross_agent_review_plugin_package.py tests/test_cros
 
 Expected: PASS. If package tests do not yet assert template packaging, add a focused assertion that `assets/templates/reviewer-prompt.md` exists.
 
-- [ ] **Step 3: Run OpenSpec validation**
+- [x] **Step 3: Run OpenSpec validation**
 
 Run:
 
@@ -748,11 +748,11 @@ openspec validate refactor-cross-agent-review-input-contract --strict
 
 Expected: `Change 'refactor-cross-agent-review-input-contract' is valid`.
 
-- [ ] **Step 4: Check off OpenSpec tasks**
+- [x] **Step 4: Check off OpenSpec tasks**
 
 After the tests and validation above pass, update `openspec/changes/refactor-cross-agent-review-input-contract/tasks.md` so each completed `- [ ]` becomes `- [x]`.
 
-- [ ] **Step 5: Run build check if available**
+- [x] **Step 5: Run build check if available**
 
 Run:
 
