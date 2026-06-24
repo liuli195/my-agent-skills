@@ -273,6 +273,7 @@ def test_build_and_verify_active_surfaces_do_not_keep_old_entrypoints() -> None:
     assert not (REPO_ROOT / "pyproject.toml").exists()
     active_paths = [
         REPO_ROOT / ".build-and-verify" / "config.json",
+        REPO_ROOT / ".github" / "workflows" / "release.yml",
         REPO_ROOT / ".comet.yaml",
         REPO_ROOT / ".comet" / "config.yaml",
         REPO_ROOT / ".pr-flow" / "config.yaml",
