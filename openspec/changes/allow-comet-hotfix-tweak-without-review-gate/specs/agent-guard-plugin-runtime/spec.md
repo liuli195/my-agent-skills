@@ -8,7 +8,7 @@
 
 - **WHEN** 命令匹配一个 Global Command Guard（全局命令守卫点）
 - **AND** 该守卫声明 `skip_when`（跳过条件）读取相对 YAML（配置文件）路径、字段和允许值
-- **AND** 该 YAML（配置文件）字段值是 scalar（标量）并命中允许值
+- **AND** 该 YAML（配置文件）字段值是 string scalar（字符串标量）并命中允许值
 - **THEN** Runtime（运行时）跳过该守卫的 evidence（证据）检查
 - **AND** 该守卫不应造成 deny（拒绝）
 - **AND** Runtime（运行时）在 audit（审计）中记录被跳过的守卫编号和跳过原因

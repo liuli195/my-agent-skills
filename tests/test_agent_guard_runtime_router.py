@@ -765,6 +765,7 @@ global_command_guards:
         "empty-yaml": "",
         "missing-workflow": "phase: build\n",
         "field-list": "workflow: [hotfix, tweak]\n",
+        "boolean-workflow": "workflow: true\n",
         "yaml-list": "- workflow\n- tweak\n",
         "malformed-yaml": "workflow: [\n",
         "nonmatching-workflow": "workflow: full\nphase: build\n",
@@ -909,6 +910,79 @@ global_command_guards:
         assert payload["reason"] == "comet_cross_agent_review_required"
         assert payload["matched_guard_ids"] == ["user:personal-policy:verify_requires_review"]
         assert payload["skipped_guard_ids"] == []
+
+
+def test_global_command_guard_reports_skipped_and_failing_guards_together(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    init_git_repo(project)
+    write_comet_state(project, "mixed-change", "tweak")
+    profile = user_home / ".agents" / "guards" / "personal-policy"
+    profile.mkdir(parents=True)
+    write_cross_agent_review_artifacts(profile)
+    write_global_command_guard_yaml(
+        profile,
+        """
+global_command_guards:
+  - id: skipped_review
+    description: 测试被跳过的守卫。
+    tool: Bash
+    match:
+      command_patterns:
+        - 'comet-guard.sh (?P<change>[A-Za-z0-9._-]+) build --apply'
+      required_captures:
+        - change
+    skip_when:
+      - yaml:
+          path: openspec/changes/{change}/.comet.yaml
+          field: workflow
+          in:
+            - tweak
+    evidence:
+      artifact: cross_agent_review_pass
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+    deny:
+      reason: comet_cross_agent_review_required
+  - id: blocking_review
+    description: 测试仍需证据的守卫。
+    tool: Bash
+    match:
+      command_patterns:
+        - 'comet-guard.sh (?P<change>[A-Za-z0-9._-]+) build --apply'
+      required_captures:
+        - change
+    evidence:
+      artifact: cross_agent_review_pass
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+    deny:
+      reason: comet_cross_agent_review_required
+""",
+    )
+
+    result = pre_tool_payload(
+        project,
+        user_home,
+        {"session_id": "session-1", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": "comet-guard.sh mixed-change build --apply"}},
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "deny"
+    assert payload["reason"] == "comet_cross_agent_review_required"
+    assert payload["skipped_guard_ids"] == ["user:personal-policy:skipped_review"]
+    assert payload["matched_guard_ids"] == ["user:personal-policy:blocking_review"]
+    assert payload["failing_guards"][0]["effective_guard_id"] == "user:personal-policy:blocking_review"
+    audit = json.loads(Path(payload["audit_path"]).read_text(encoding="utf-8"))
+    global_guard = audit["detail"]["global_command_guard"]
+    assert global_guard["skipped_guard_ids"] == ["user:personal-policy:skipped_review"]
+    assert global_guard["failing_guards"][0]["effective_guard_id"] == "user:personal-policy:blocking_review"
 
 
 def test_global_command_guard_denies_stale_review_pass_with_short_head_artifact_path(tmp_path: Path) -> None:
@@ -1140,6 +1214,16 @@ def test_comet_review_gate_template_skips_hotfix_and_tweak_workflows(tmp_path: P
             assert result.returncode == 0, result.stdout + result.stderr
             payload = body(result)
             assert payload["status"] == "allow"
+            global_audits = [
+                audit
+                for audit in read_project_audits(project)
+                if audit["reason"] == "global_command_guard_skipped"
+                and audit["detail"]["global_command_guard"]["command"] == command
+            ]
+            assert len(global_audits) == 1
+            global_guard = global_audits[0]["detail"]["global_command_guard"]
+            assert global_guard["skipped_guard_ids"] == ["user:comet-review-gate:comet_build_requires_cross_agent_review"]
+            assert global_guard["skipped_guards"][0]["skip_reason"] == "skip_when_matched"
 
 
 def test_global_command_guard_denies_unknown_artifact_reference(tmp_path: Path) -> None:

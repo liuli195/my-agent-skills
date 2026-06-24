@@ -134,13 +134,15 @@ def test_comet_review_gate_global_command_guard_templates_stay_in_sync() -> None
     assert mirrored_template.read_text(encoding="utf-8") == skill_template.read_text(encoding="utf-8")
 
 
-def test_user_comet_review_gate_global_command_guard_template_matches_when_installed() -> None:
+def test_comet_review_gate_installed_copy_passes_validation(tmp_path: Path) -> None:
     skill_template = COMET_REVIEW_GATE_PROFILE / "global-command-guards.yaml"
-    user_template = Path.home() / ".agents" / "guards" / "comet-review-gate" / "global-command-guards.yaml"
-    if not user_template.exists():
-        pytest.skip("用户级 comet-review-gate Guard Profile（守卫画像）未安装。")
+    user_profile = tmp_path / "user-home" / ".agents" / "guards" / "comet-review-gate"
+    shutil.copytree(COMET_REVIEW_GATE_PROFILE, user_profile)
+    user_template = user_profile / "global-command-guards.yaml"
 
     assert user_template.read_text(encoding="utf-8") == skill_template.read_text(encoding="utf-8")
+    result = run_validator(user_profile)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_global_command_guard_valid_config_passes(tmp_path: Path) -> None:
