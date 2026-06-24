@@ -23,7 +23,7 @@ BUILD_AND_VERIFY_SCRIPT = (
 
 PLUGIN_NAME = "build-and-verify"
 PLUGIN_VERSION = "0.1.12"
-PLUGIN_DESCRIPTION = "Build and Verify Plugin（构建与验证插件）"
+PLUGIN_DESCRIPTION = "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）"
 
 
 def read_json(path: Path) -> dict:
@@ -261,6 +261,7 @@ def test_build_and_verify_active_surfaces_do_not_keep_old_entrypoints() -> None:
     active_paths = [
         REPO_ROOT / ".build-and-verify" / "config.json",
         REPO_ROOT / ".comet.yaml",
+        REPO_ROOT / ".comet" / "config.yaml",
         REPO_ROOT / ".pr-flow" / "config.yaml",
         REPO_ROOT / ".release-flow" / "config.yaml",
         REPO_ROOT / ".release-flow" / "projection.yaml",
@@ -268,10 +269,6 @@ def test_build_and_verify_active_surfaces_do_not_keep_old_entrypoints() -> None:
         CLAUDE_REPO_MARKETPLACE,
         RELEASE_FLOW_SCRIPT,
         REPO_ROOT / "plugins" / "pr-flow" / "skills" / "pr-flow" / "scripts" / "pr_flow.py",
-        REPO_ROOT / "openspec" / "specs" / "test-framework-plugin" / "spec.md",
-        REPO_ROOT / "openspec" / "specs" / "local-verification-modes" / "spec.md",
-        REPO_ROOT / "openspec" / "specs" / "local-plugin-build-checks" / "spec.md",
-        REPO_ROOT / "openspec" / "specs" / "full-verification-runtime" / "spec.md",
     ]
     plugin_paths = [
         path

@@ -1,7 +1,7 @@
-# build-and-verify Specification
+# test-framework-plugin Specification
 
 ## Purpose
-TBD - created by archiving change split-fast-full-verification. Update Purpose after archive.
+This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` to model the rename（改名） of an existing capability. Its shipped Plugin（插件） and Skill（技能） name is `build-and-verify`, which is the repository build（构建检查） and verify（验证） entry point.
 ## Requirements
 ### Requirement: Build and Verify plugin package supports Claude and Codex
 系统 MUST 提供轻量 `build-and-verify` Plugin（构建与验证插件），同一套能力 MUST 同时面向 Claude（Claude 版本）和 Codex（Codex 版本）。

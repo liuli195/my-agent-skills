@@ -14,7 +14,8 @@ The repository SHALL（必须）provide a local build command through the initia
 
 #### Scenario: Removed check entrypoint is not active automation
 - **WHEN** repository active automation and guard（守卫） command files are inspected
-- **THEN** `.github/workflows/`, `.comet.yaml`, `.comet/config.yaml`, and `.build-and-verify/config.json` MUST NOT reference `scripts/check.py`
+- **THEN** `.github/workflows/`, `.comet.yaml`, `.comet/config.yaml`, `.pr-flow/config.yaml`, and `.build-and-verify/config.json` MUST NOT reference `scripts/check.py`
+- **THEN** they MUST NOT reference legacy `plugins/test-framework/` or `.test-framework/` paths
 
 ### Requirement: Build command runs Claude plugin validation
 The build command SHALL（必须）run Claude（Claude 编码工具）plugin validation for the repository marketplace and every local plugin listed in `.claude-plugin/marketplace.json`.
@@ -64,7 +65,7 @@ The build command SHALL（必须）validate that mirrored Guard Profile（守卫
 - **WHEN** the build command compares `plugins/agent-guard/assets/templates/guard-profile/` with `plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/`
 - **THEN** every mirrored file exists on both sides and has identical content
 
-### Requirement: Verify command follows initialized test framework contract
+### Requirement: Verify command follows initialized build-and-verify contract
 The repository SHALL（必须）provide a verify command initialized by the build-and-verify Plugin（构建与验证插件） contract.
 
 #### Scenario: Verify command defaults to framework fast mode

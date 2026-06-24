@@ -19,7 +19,7 @@ The repository SHALL（必须）provide a local build command through the initia
 - **THEN** root `pyproject.toml` MUST NOT exist
 - **THEN** pytest（Python 测试运行器） commands in `.build-and-verify/config.json` MUST explicitly provide required paths and command options
 
-### Requirement: Verify command follows initialized test framework contract
+### Requirement: Verify command follows initialized build-and-verify contract
 The repository SHALL（必须）provide a verify command initialized by the build-and-verify（构建与验证）Plugin（插件） contract.
 
 #### Scenario: Verify command defaults to framework fast mode

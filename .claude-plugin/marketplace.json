@@ -27,7 +27,7 @@
     {
       "name": "build-and-verify",
       "source": "./plugins/build-and-verify",
-      "description": "Build and Verify Plugin（构建与验证插件）"
+      "description": "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）"
     }
   ]
 }
