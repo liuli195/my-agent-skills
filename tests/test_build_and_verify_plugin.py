@@ -24,7 +24,7 @@ BUILD_AND_VERIFY_SCRIPT = (
 CHANGE_BASE_REF = "4030d1ceb81fa6e450ef517e09d2ff391f5260b2"
 
 PLUGIN_NAME = "build-and-verify"
-PLUGIN_VERSION = "0.1.12"
+PLUGIN_VERSION = "0.1.13"
 PLUGIN_DESCRIPTION = "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）"
 
 
