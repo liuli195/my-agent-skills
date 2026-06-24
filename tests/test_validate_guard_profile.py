@@ -135,6 +135,45 @@ def test_global_command_guard_valid_config_passes(tmp_path: Path) -> None:
     assert "已检查：global_command_guards" in result.stdout
 
 
+def test_global_command_guard_valid_skip_when_yaml_config_passes(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    write_global_command_guards(
+        profile,
+        """
+global_command_guards:
+  - id: verify_requires_review
+    description: Comet build 前必须有 review 证据。
+    tool: Bash
+    match:
+      command_patterns:
+        - 'comet-guard\\.sh (?P<change>[A-Za-z0-9._-]+) build --apply'
+      required_captures:
+        - change
+    skip_when:
+      - yaml:
+          path: openspec/changes/{change}/.comet.yaml
+          field: workflow
+          in:
+            - hotfix
+            - tweak
+    evidence:
+      artifact: completion_note
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+    deny:
+      reason: global_command_guard_required
+""",
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "已检查：global_command_guards" in result.stdout
+
+
 def test_global_command_guard_accepts_git_head_short_context_value(tmp_path: Path) -> None:
     profile = tmp_path / "profile"
     shutil.copytree(MINIMAL_PROFILE, profile)

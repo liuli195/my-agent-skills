@@ -367,6 +367,13 @@ def init_git_repo(project: Path) -> str:
     return project_git_head(project)
 
 
+def write_comet_state(project: Path, change: str, workflow: str) -> Path:
+    state = project / "openspec" / "changes" / change / ".comet.yaml"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(f"workflow: {workflow}\nphase: build\n", encoding="utf-8")
+    return state
+
+
 def test_collects_project_and_user_global_command_guards(tmp_path: Path) -> None:
     from importlib import util
 
@@ -637,6 +644,56 @@ def test_global_command_guard_passes_with_short_head_artifact_path(tmp_path: Pat
     assert payload["status"] == "allow"
 
 
+def test_global_command_guard_skips_when_yaml_condition_matches(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    init_git_repo(project)
+    write_comet_state(project, "quick-change", "tweak")
+    profile = user_home / ".agents" / "guards" / "personal-policy"
+    profile.mkdir(parents=True)
+    write_cross_agent_review_artifacts(profile)
+    write_global_command_guard_yaml(
+        profile,
+        """
+global_command_guards:
+  - id: verify_requires_review
+    description: 测试跳过条件。
+    tool: Bash
+    match:
+      command_patterns:
+        - 'comet-guard.sh (?P<change>[A-Za-z0-9._-]+) build --apply'
+      required_captures:
+        - change
+    skip_when:
+      - yaml:
+          path: openspec/changes/{change}/.comet.yaml
+          field: workflow
+          in:
+            - hotfix
+            - tweak
+    evidence:
+      artifact: cross_agent_review_pass
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+    deny:
+      reason: comet_cross_agent_review_required
+""",
+    )
+
+    result = pre_tool_payload(
+        project,
+        user_home,
+        {"session_id": "session-1", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": "comet-guard.sh quick-change build --apply"}},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "allow"
+
+
 def test_global_command_guard_denies_stale_review_pass_with_short_head_artifact_path(tmp_path: Path) -> None:
     project = tmp_path / "project"
     user_home = tmp_path / "user-home"
@@ -812,6 +869,55 @@ def test_comet_review_gate_template_matches_direct_path_and_env_commands(tmp_pat
         assert payload["status"] == "deny"
         assert payload["reason"] == "comet_cross_agent_review_required"
         assert payload["matched_guard_ids"] == ["user:comet-review-gate:comet_build_requires_cross_agent_review"]
+
+
+def test_comet_review_gate_template_blocks_full_workflow_without_marker(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    init_git_repo(project)
+    write_comet_state(project, "full-change", "full")
+    profile = user_home / ".agents" / "guards" / "comet-review-gate"
+    profile.mkdir(parents=True)
+    template = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "comet-review-gate"
+    shutil.copyfile(template / "global-command-guards.yaml", profile / "global-command-guards.yaml")
+    shutil.copyfile(template / "artifacts.yaml", profile / "artifacts.yaml")
+
+    result = pre_tool_payload(
+        project,
+        user_home,
+        {"session_id": "session-1", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": "comet-guard.sh full-change build --apply"}},
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "deny"
+    assert payload["reason"] == "comet_cross_agent_review_required"
+
+
+def test_comet_review_gate_template_skips_hotfix_and_tweak_workflows(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    init_git_repo(project)
+    profile = user_home / ".agents" / "guards" / "comet-review-gate"
+    profile.mkdir(parents=True)
+    template = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "comet-review-gate"
+    shutil.copyfile(template / "global-command-guards.yaml", profile / "global-command-guards.yaml")
+    shutil.copyfile(template / "artifacts.yaml", profile / "artifacts.yaml")
+
+    for workflow in ["hotfix", "tweak"]:
+        change = f"{workflow}-change"
+        write_comet_state(project, change, workflow)
+        result = pre_tool_payload(
+            project,
+            user_home,
+            {"session_id": "session-1", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": f"comet-guard.sh {change} build --apply"}},
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        payload = body(result)
+        assert payload["status"] == "allow"
 
 
 def test_global_command_guard_denies_unknown_artifact_reference(tmp_path: Path) -> None:

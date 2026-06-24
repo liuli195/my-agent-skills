@@ -522,6 +522,85 @@ def validate_global_command_guard_check(
     return issues
 
 
+def validate_global_command_guard_skip_when(
+    base: str,
+    guard: dict[str, Any],
+    capture_names: set[str],
+) -> list[ValidationIssue]:
+    skip_when = guard.get("skip_when")
+    if skip_when is None:
+        return []
+    if not isinstance(skip_when, list):
+        return [
+            ValidationIssue(
+                "global_command_guards",
+                f"{base}.skip_when",
+                "必须是 list（列表）。",
+                "把 skip_when 改成跳过条件列表；每项可声明 yaml 条件。",
+            )
+        ]
+
+    issues: list[ValidationIssue] = []
+    for index, condition in enumerate(skip_when):
+        yaml_condition = condition.get("yaml") if isinstance(condition, dict) else None
+        condition_base = f"{base}.skip_when.{index}.yaml"
+        if not isinstance(yaml_condition, dict):
+            issues.append(
+                ValidationIssue(
+                    "global_command_guards",
+                    f"{base}.skip_when.{index}",
+                    "必须声明 yaml mapping（YAML 映射）条件。",
+                    "使用 `yaml: {path, field, in}` 结构声明跳过条件。",
+                )
+            )
+            continue
+
+        path = yaml_condition.get("path")
+        if not isinstance(path, str) or not path:
+            issues.append(
+                ValidationIssue(
+                    "global_command_guards",
+                    f"{condition_base}.path",
+                    "必须声明非空相对路径模板。",
+                    "添加相对路径，例如 `openspec/changes/{change}/.comet.yaml`。",
+                )
+            )
+        else:
+            for field in sorted(template_fields(path) - capture_names - GLOBAL_COMMAND_GUARD_VALUE_FROM_FIELDS):
+                issues.append(
+                    ValidationIssue(
+                        "global_command_guards",
+                        f"{condition_base}.path.{field}",
+                        f"缺少必需捕获值 `{field}`。",
+                        "在 command_patterns 中添加同名命名捕获，或改用内置上下文字段。",
+                    )
+                )
+
+        field = yaml_condition.get("field")
+        if not isinstance(field, str) or not field:
+            issues.append(
+                ValidationIssue(
+                    "global_command_guards",
+                    f"{condition_base}.field",
+                    "必须声明非空 YAML field（YAML 字段）。",
+                    "添加要读取的字段，例如 `workflow`。",
+                )
+            )
+
+        allowed = yaml_condition.get("in")
+        if not isinstance(allowed, list) or not allowed:
+            issues.append(
+                ValidationIssue(
+                    "global_command_guards",
+                    f"{condition_base}.in",
+                    "必须声明至少一个允许值。",
+                    "添加 in 列表，例如 `hotfix` 和 `tweak`。",
+                )
+            )
+
+    return issues
+
+
 def validate_global_command_guards(profile_dir: Path) -> tuple[bool, list[ValidationIssue]]:
     path = profile_dir / GLOBAL_COMMAND_GUARDS_FILE
     if not path.exists():
@@ -641,6 +720,8 @@ def validate_global_command_guards(profile_dir: Path) -> tuple[bool, list[Valida
                         "在 command_patterns 中添加同名命名捕获，例如 `(?P<change>...)`。",
                     )
                 )
+
+        issues.extend(validate_global_command_guard_skip_when(base, guard, capture_names))
 
         evidence = guard.get("evidence")
         evidence_path = evidence.get("path") if isinstance(evidence, dict) else None
