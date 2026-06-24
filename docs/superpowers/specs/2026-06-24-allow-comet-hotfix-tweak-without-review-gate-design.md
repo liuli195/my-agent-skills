@@ -2,6 +2,8 @@
 comet_change: allow-comet-hotfix-tweak-without-review-gate
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-24-allow-comet-hotfix-tweak-without-review-gate
+status: final
 ---
 
 # Comet Hotfix/Tweak Review Gate Bypass Design

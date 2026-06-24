@@ -2,6 +2,7 @@
 change: allow-comet-hotfix-tweak-without-review-gate
 design-doc: docs/superpowers/specs/2026-06-24-allow-comet-hotfix-tweak-without-review-gate-design.md
 base-ref: e6b93beacaa990463ec267c3aa96f27b9ee940ad
+archived-with: 2026-06-24-allow-comet-hotfix-tweak-without-review-gate
 ---
 
 # Allow Comet Hotfix/Tweak Without Review Gate Implementation Plan
@@ -14,6 +15,7 @@ base-ref: e6b93beacaa990463ec267c3aa96f27b9ee940ad
 
 **Tech Stack:** Python 3、PyYAML、pytest（测试）、OpenSpec（开放规格）、Agent Guard Runtime（代理守卫运行时）。
 
+archived-with: 2026-06-24-allow-comet-hotfix-tweak-without-review-gate
 ---
 
 ## File Structure

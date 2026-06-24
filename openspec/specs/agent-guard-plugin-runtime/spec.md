@@ -238,43 +238,23 @@ Agent Guard installer（安装器）MUST 使用 release-flow 共享 marketplace 
 - **THEN** 该行为 MUST NOT 重新要求本仓库 main 分支保存 Codex repo-local marketplace 文件
 
 ### Requirement: Global command guard points
-系统 MUST 支持 Global Command Guard（全局命令守卫点），用于在 PreToolUse（工具使用前）阶段拦截匹配的 shell command（命令），即使当前没有 Session Focus Binding（会话焦点绑定）。
 
-#### Scenario: 无会话焦点时仍执行全局命令守卫点
-- **WHEN** 主 agent 尝试执行一个匹配 Global Command Guard（全局命令守卫点）的命令
-- **AND** 当前会话没有 Session Focus Instance（会话焦点实例）
-- **THEN** Runtime（运行时）仍必须评估该 Global Command Guard
+系统 MUST 支持 Global Command Guard（全局命令守卫点）在命令匹配后按声明式 skip condition（跳过条件）放行特定上下文，并且不得把具体业务 workflow（工作流）判断硬编码进 Runtime（运行时）。
 
-#### Scenario: 守卫任意配置命令点
-- **WHEN** Guard Profile（守卫画像）声明一个 Global Command Guard，并配置 command pattern（命令模式）
-- **THEN** Runtime（运行时）按该配置匹配命令，而不是只识别某个内置 workflow（工作流）
+#### Scenario: 声明式 YAML 条件命中时跳过守卫
 
-#### Scenario: 多个守卫画像同时贡献全局命令守卫点
-- **WHEN** 多个 Guard Profile 都包含 `global-command-guards.yaml`
-- **THEN** Runtime（运行时）MUST 收集所有这些配置
-- **AND** Runtime MUST 形成 Effective Global Command Guard Set（有效全局命令守卫集）
-- **AND** Runtime 不得只读取当前 Session Focus（会话焦点）对应的 Guard Profile
+- **WHEN** 命令匹配一个 Global Command Guard（全局命令守卫点）
+- **AND** 该守卫声明 `skip_when`（跳过条件）读取相对 YAML（配置文件）路径、字段和允许值
+- **AND** 该 YAML（配置文件）字段值是 string scalar（字符串标量）并命中允许值
+- **THEN** Runtime（运行时）跳过该守卫的 evidence（证据）检查
+- **AND** 该守卫不应造成 deny（拒绝）
+- **AND** Runtime（运行时）在 audit（审计）中记录被跳过的守卫编号和跳过原因
 
-#### Scenario: 用户级和项目级全局命令守卫点同时存在
-- **WHEN** 项目级 `.agents/guards/*/global-command-guards.yaml` 和用户级 `~/.agents/guards/*/global-command-guards.yaml` 同时存在
-- **THEN** Runtime（运行时）MUST 同时收集两类来源
-- **AND** Runtime MUST 对当前命令统一评估所有匹配的 Global Command Guard
+#### Scenario: 跳过条件未命中时继续原有检查
 
-#### Scenario: 未匹配全局命令守卫点时保持现有行为
-- **WHEN** 主 agent 执行的命令不匹配任何 Global Command Guard
-- **THEN** Runtime（运行时）继续使用现有 Session Focus permission（会话焦点权限）逻辑
-
-#### Scenario: 全局命令守卫点拒绝命令
-- **WHEN** 主 agent 执行的命令匹配 Global Command Guard
-- **AND** 该守卫声明的 evidence（证据）检查不通过
-- **THEN** Runtime（运行时）返回 `deny`
-- **AND** 响应包含机器可读的 `reason`、`next`、`suggestion`、matched guard ids（匹配的有效守卫 ID 列表）、failing guards（失败守卫列表）、captures（捕获值）和 audit path（审计路径）
-
-#### Scenario: 多个匹配守卫点必须全部通过
-- **WHEN** 一个命令同时匹配多个 Global Command Guard
-- **THEN** Runtime（运行时）MUST 评估所有匹配规则
-- **AND** 只有所有匹配规则都通过时，命令才允许继续
-- **AND** 任意一个匹配规则返回 deny 时，最终结果 MUST 为 deny
+- **WHEN** 命令匹配一个 Global Command Guard（全局命令守卫点）
+- **AND** `skip_when`（跳过条件）缺失、目标文件缺失、字段缺失、字段值未命中、YAML（配置文件）不可读或路径模板不安全
+- **THEN** Runtime（运行时）继续执行该守卫原有 evidence（证据）检查
 
 ### Requirement: Global command guard configuration layout
 系统 MUST 支持在 Guard Profile（守卫画像）目录中声明 `global-command-guards.yaml`，用于存放静态的 Global Command Guard（全局命令守卫点）配置。系统 MUST 区分静态配置作用域、运行态数据作用域和外部产物所在位置。
