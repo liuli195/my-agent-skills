@@ -26,12 +26,24 @@ Head ref: {{ head_ref }}
 
 Manifest file: {{ manifest_path }}
 
-Use the referenced input files as the source of truth. Read only the sections needed for this review.
+Review subject commands:
 
-Use git diff/show/status read-only commands if the file references are insufficient.
+{{ review_subject_commands }}
 
-{{ spec_reference }}
+Changed files:
 
-{{ design_reference }}
+{{ changed_files }}
 
-{{ tasks_reference }}
+Context files:
+
+{{ context_files }}
+
+Use the manifest and referenced context files as the source of truth.
+
+Read only the context file sections needed for this review.
+
+Do not read a complete diff output.
+
+Use path-scoped diffs for changed paths:
+
+{{ path_diff_command_template }}

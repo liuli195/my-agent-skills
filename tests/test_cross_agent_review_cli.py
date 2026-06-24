@@ -472,16 +472,20 @@ def test_prompt_contains_review_context(tmp_path: Path) -> None:
     assert data["readonly_tools"]
 
 
-def test_reviewer_prompt_includes_all_review_inputs(tmp_path: Path) -> None:
+def test_reviewer_prompt_includes_review_subject_commands_not_diff_file(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
-    head = init_repo(project)
+    base = init_repo(project)
+    write_file(project / "app.txt", "two\n")
+    git(project, "add", "app.txt")
+    git(project, "commit", "-m", "feature")
+    head = git(project, "rev-parse", "HEAD")
     spec_file = write_file(project / "spec.md", "Spec body\n")
     design_file = write_file(project / "design.md", "Design body\n")
     tasks_file = write_file(project / "tasks.md", "Tasks body\n")
     review = module.ReviewArgs(
         change="demo-change",
-        base_ref=head,
+        base_ref=base,
         head_ref=head,
         spec_file=spec_file,
         design_file=design_file,
@@ -491,19 +495,28 @@ def test_reviewer_prompt_includes_all_review_inputs(tmp_path: Path) -> None:
         fake_reviewer_results=None,
         disable_risk_review=None,
     )
+    monkeypatch.chdir(project)
 
     prompt = module.reviewer_prompt(review, "spec-alignment")
 
     assert "Role: spec-alignment" in prompt
     assert "Return only a single JSON object. Do not use Markdown." in prompt
     assert "Change: demo-change" in prompt
-    assert f"Base ref: {head}" in prompt
+    assert f"Base ref: {base}" in prompt
     assert f"Head ref: {head}" in prompt
+    assert f"git diff {base}...{head}" in prompt
+    assert f"git log {base}..{head} --oneline" in prompt
+    assert f"git diff --name-status --find-renames --find-copies-harder {base}...{head}" in prompt
+    assert f"git diff {base}...{head} -- <path>" in prompt
+    assert "Changed files:" in prompt
+    assert "- modified: app.txt" in prompt
     assert f"Spec file: {spec_file}" in prompt
     assert f"Design file: {design_file}" in prompt
     assert f"Tasks file: {tasks_file}" in prompt
+    assert "Diff file:" not in prompt
+    assert "diff.patch" not in prompt
     assert "Spec body" not in prompt
-    assert "Tests:" not in prompt
+    assert "Tasks:" not in prompt
 
 
 def test_reviewer_prompt_references_manifest_and_role_rubrics(tmp_path: Path) -> None:
@@ -534,31 +547,50 @@ def test_reviewer_prompt_template_is_loaded_from_file(tmp_path: Path, monkeypatc
     assert f"Template marker: spec-alignment / {manifest_path}" in prompt
 
 
-def test_reviewer_prompt_does_not_inline_large_inputs(tmp_path: Path) -> None:
+def test_reviewer_prompt_does_not_inline_large_diff_or_context(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
-    head = init_repo(project)
+    base = init_repo(project)
+    repeated_diff_body = "large diff body marker\n"
+    write_file(project / "app.txt", repeated_diff_body * 1000)
+    git(project, "add", "app.txt")
+    git(project, "commit", "-m", "large feature")
+    head = git(project, "rev-parse", "HEAD")
     large_spec = "Spec body\n" + ("requirement\n" * 2000)
+    large_design = "Design body\n" + ("design detail\n" * 2000)
+    large_tasks = "Tasks body\n" + ("task detail\n" * 2000)
     spec_file = write_file(project / "spec.md", large_spec)
+    design_file = write_file(project / "design.md", large_design)
+    tasks_file = write_file(project / "tasks.md", large_tasks)
     review = module.ReviewArgs(
         change="demo-change",
-        base_ref=head,
+        base_ref=base,
         head_ref=head,
         spec_file=spec_file,
-        design_file=write_file(project / "design.md", "Design body\n"),
-        tasks_file=write_file(project / "tasks.md", "Tasks body\n"),
+        design_file=design_file,
+        tasks_file=tasks_file,
         output_dir=tmp_path / "out",
         sdk_python=None,
         fake_reviewer_results=None,
         disable_risk_review=None,
     )
+    monkeypatch.chdir(project)
 
     prompt = module.reviewer_prompt(review, "implementation-correctness")
 
     assert f"Spec file: {spec_file}" in prompt
     assert f"Spec bytes: {len(spec_file.read_bytes())}" in prompt
+    assert "Changed files:" in prompt
+    assert "- modified: app.txt" in prompt
+    assert repeated_diff_body * 5 not in prompt
+    assert "Spec body" not in prompt
+    assert "Design body" not in prompt
+    assert "Tasks body" not in prompt
     assert "requirement" not in prompt
-    assert len(prompt) < 4000
+    assert "design detail" not in prompt
+    assert "task detail" not in prompt
+    assert "diff.patch" not in prompt
+    assert len(prompt) < 5000
 
 
 def test_sdk_dispatch_subprocess_writes_prompt_artifacts(tmp_path: Path, monkeypatch) -> None:

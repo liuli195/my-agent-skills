@@ -298,6 +298,50 @@ def review_subject_commands(review_args: ReviewArgs) -> dict[str, str]:
     }
 
 
+def review_subject_commands_prompt(review_args: ReviewArgs) -> str:
+    commands = review_subject_commands(review_args)
+    return "\n".join(
+        [
+            f"- {commands['diff_command']}",
+            f"- {commands['commit_list_command']}",
+            f"- {commands['changed_files_command']}",
+            f"- {commands['path_diff_command_template']}",
+        ]
+    )
+
+
+def changed_files_prompt(cwd: Path, review_args: ReviewArgs, limit: int = 160) -> str:
+    try:
+        entries = changed_file_entries_from_git(cwd, review_args.base_ref, review_args.head_ref)
+    except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError):
+        return "- <unavailable>"
+    if not entries:
+        return "- <none>"
+
+    lines: list[str] = []
+    for entry in entries[:limit]:
+        line = f"- {entry['status']}: {entry['path']}"
+        previous_path = entry.get("previous_path")
+        if previous_path:
+            line = f"{line} (from {previous_path})"
+        lines.append(line)
+
+    remaining = len(entries) - limit
+    if remaining > 0:
+        lines.append(f"- <{remaining} more>")
+    return "\n".join(lines)
+
+
+def context_file_references(review_args: ReviewArgs) -> str:
+    return "\n\n".join(
+        [
+            input_reference("Spec", review_args.spec_file),
+            input_reference("Design", review_args.design_file),
+            input_reference("Tasks", review_args.tasks_file),
+        ]
+    )
+
+
 def merge_base(cwd: Path, base_ref: str, head_ref: str) -> str:
     return git_output(["merge-base", base_ref, head_ref], cwd)
 
@@ -394,6 +438,7 @@ def write_input_manifest(review_args: ReviewArgs) -> Path:
 
 
 def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
+    review_subject = review_subject_commands(review_args)
     schema_json = json.dumps(
         {
             "role": role,
@@ -422,9 +467,10 @@ def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
             "base_ref": review_args.base_ref,
             "head_ref": review_args.head_ref,
             "manifest_path": str(input_manifest_path(review_args)),
-            "spec_reference": input_reference("Spec", review_args.spec_file),
-            "design_reference": input_reference("Design", review_args.design_file),
-            "tasks_reference": input_reference("Tasks", review_args.tasks_file),
+            "review_subject_commands": review_subject_commands_prompt(review_args),
+            "changed_files": changed_files_prompt(Path.cwd(), review_args),
+            "context_files": context_file_references(review_args),
+            "path_diff_command_template": review_subject["path_diff_command_template"],
         },
     )
 
