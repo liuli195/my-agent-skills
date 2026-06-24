@@ -4,7 +4,6 @@ import argparse
 import hashlib
 import json
 import os
-import shlex
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -272,93 +271,6 @@ def input_reference(label: str, path: Path) -> str:
     )
 
 
-def diff_path(value: str, prefix: str) -> str:
-    return value[len(prefix) :] if value.startswith(prefix) else value
-
-
-def parse_diff_git_paths(line: str) -> tuple[str, str] | None:
-    rest = line.removeprefix("diff --git ")
-    if rest.startswith('"'):
-        parts = shlex.split(rest)
-        if len(parts) >= 2:
-            return diff_path(parts[0], "a/"), diff_path(parts[1], "b/")
-    separator = rest.rfind(" b/")
-    if separator != -1:
-        return diff_path(rest[:separator], "a/"), diff_path(rest[separator + 1 :], "b/")
-    parts = rest.split(maxsplit=1)
-    if len(parts) >= 2:
-        return diff_path(parts[0], "a/"), diff_path(parts[1], "b/")
-    return None
-
-
-def changed_file_entries_from_diff(path: Path) -> list[dict[str, str]]:
-    entries: list[dict[str, str]] = []
-    current: dict[str, str] | None = None
-
-    def append_current() -> None:
-        if current is None:
-            return
-        changed_path = current.get("path") or current.get("new_path") or current.get("old_path")
-        if not changed_path:
-            return
-        entry = {"path": changed_path, "status": current.get("status", "modified")}
-        previous_path = current.get("old_path")
-        if entry["status"] in {"renamed", "copied"} and previous_path and previous_path != changed_path:
-            entry["previous_path"] = previous_path
-        if entry not in entries:
-            entries.append(entry)
-
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if line.startswith("diff --git "):
-            append_current()
-            current = None
-            parsed_paths = parse_diff_git_paths(line)
-            if parsed_paths is None:
-                continue
-            old_path, new_path = parsed_paths
-            current = {
-                "old_path": old_path,
-                "new_path": new_path,
-                "path": new_path,
-                "status": "modified",
-            }
-            continue
-        if current is None:
-            continue
-        if line.startswith("new file mode "):
-            current["status"] = "added"
-            current["path"] = current["new_path"]
-        elif line.startswith("deleted file mode "):
-            current["status"] = "deleted"
-            current["path"] = current["old_path"]
-        elif line.startswith("rename from "):
-            current["status"] = "renamed"
-            current["old_path"] = line.removeprefix("rename from ")
-        elif line.startswith("rename to "):
-            current["status"] = "renamed"
-            current["new_path"] = line.removeprefix("rename to ")
-            current["path"] = current["new_path"]
-        elif line.startswith("copy from "):
-            current["status"] = "copied"
-            current["old_path"] = line.removeprefix("copy from ")
-        elif line.startswith("copy to "):
-            current["status"] = "copied"
-            current["new_path"] = line.removeprefix("copy to ")
-            current["path"] = current["new_path"]
-    append_current()
-    return entries
-
-
-def changed_files_from_diff(path: Path, limit: int = 160) -> str:
-    files = [entry["path"] for entry in changed_file_entries_from_diff(path)]
-    shown = files[:limit]
-    lines = ["Changed files:"]
-    lines.extend(f"- {item}" for item in shown)
-    if len(files) > limit:
-        lines.append(f"- ... {len(files) - limit} more")
-    return "\n".join(lines)
-
-
 def git_command_text(args: Sequence[str]) -> str:
     return "git " + " ".join(args)
 
@@ -369,7 +281,9 @@ def review_subject_commands(review_args: ReviewArgs) -> dict[str, str]:
     return {
         "diff_command": git_command_text(["diff", diff_range]),
         "commit_list_command": git_command_text(["log", commit_range, "--oneline"]),
-        "changed_files_command": git_command_text(["diff", "--name-status", diff_range]),
+        "changed_files_command": git_command_text(
+            ["diff", "--name-status", "--find-renames", "--find-copies-harder", diff_range]
+        ),
         "path_diff_command_template": git_command_text(["diff", diff_range, "--", "<path>"]),
     }
 
@@ -379,17 +293,37 @@ def merge_base(cwd: Path, base_ref: str, head_ref: str) -> str:
 
 
 def changed_file_entries_from_git(cwd: Path, base_ref: str, head_ref: str) -> list[dict[str, str]]:
-    output = git_output(["diff", "--name-status", f"{base_ref}...{head_ref}"], cwd)
+    output = git_output_bytes(
+        [
+            "diff",
+            "--name-status",
+            "--find-renames",
+            "--find-copies-harder",
+            "-z",
+            f"{base_ref}...{head_ref}",
+        ],
+        cwd,
+    )
     entries: list[dict[str, str]] = []
-    for line in output.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 2:
+    parts = [part for part in output.split(b"\0") if part]
+    index = 0
+    while index < len(parts):
+        status_token = parts[index].decode("utf-8", errors="surrogateescape")
+        index += 1
+        status = STATUS_MAP.get(status_token[:1], "modified")
+        if status in {"renamed", "copied"}:
+            if index + 1 >= len(parts):
+                break
+            previous_path = parts[index].decode("utf-8", errors="surrogateescape")
+            path = parts[index + 1].decode("utf-8", errors="surrogateescape")
+            index += 2
+            entries.append({"path": path, "status": status, "previous_path": previous_path})
             continue
-        status = STATUS_MAP.get(parts[0][:1], "modified")
-        if status in {"renamed", "copied"} and len(parts) >= 3:
-            entries.append({"path": parts[2], "status": status, "previous_path": parts[1]})
-        else:
-            entries.append({"path": parts[1], "status": status})
+        if index >= len(parts):
+            break
+        path = parts[index].decode("utf-8", errors="surrogateescape")
+        index += 1
+        entries.append({"path": path, "status": status})
     return entries
 
 

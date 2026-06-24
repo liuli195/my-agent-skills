@@ -312,10 +312,15 @@ def test_fake_reviewer_results_bypass_real_sdk_for_tests(tmp_path: Path) -> None
 
 def test_run_archives_context_snapshots_and_git_manifest_under_output_dir(tmp_path: Path) -> None:
     project = tmp_path / "repo"
-    base = init_repo(project)
+    init_repo(project)
+    write_file(project / "source.txt", "source body\n")
+    git(project, "add", "source.txt")
+    git(project, "commit", "-m", "add source")
+    base = git(project, "rev-parse", "HEAD")
     write_file(project / "app.txt", "two\n")
     write_file(project / "new file.txt", "new\n")
-    git(project, "add", "app.txt", "new file.txt")
+    shutil.copyfile(project / "source.txt", project / "copy.txt")
+    git(project, "add", "app.txt", "copy.txt", "new file.txt")
     git(project, "commit", "-m", "change app")
     head = git(project, "rev-parse", "HEAD")
     input_dir = project / "review inputs"
@@ -364,13 +369,16 @@ def test_run_archives_context_snapshots_and_git_manifest_under_output_dir(tmp_pa
     assert manifest["review_subject"] == {
         "diff_command": f"git diff {base}...{head}",
         "commit_list_command": f"git log {base}..{head} --oneline",
-        "changed_files_command": f"git diff --name-status {base}...{head}",
+        "changed_files_command": (
+            f"git diff --name-status --find-renames --find-copies-harder {base}...{head}"
+        ),
         "path_diff_command_template": f"git diff {base}...{head} -- <path>",
         "merge_base": base,
     }
     assert manifest["commits"] == [{"sha": head[:7], "summary": "change app"}]
     assert manifest["changed_files"] == [
         {"path": "app.txt", "status": "modified"},
+        {"path": "copy.txt", "status": "copied", "previous_path": "source.txt"},
         {"path": "new file.txt", "status": "added"},
     ]
     assert set(manifest["inputs"]) == {"spec", "design", "tasks"}
@@ -380,35 +388,30 @@ def test_run_archives_context_snapshots_and_git_manifest_under_output_dir(tmp_pa
     assert not (inputs_dir / "tests.txt").exists()
 
 
-def test_changed_file_entries_from_diff_reports_file_statuses(tmp_path: Path) -> None:
+def test_changed_file_entries_from_git_reports_file_statuses(tmp_path: Path) -> None:
     module = load_script_module()
-    diff_file = write_file(
-        tmp_path / "diff.patch",
-        "\n".join(
-            [
-                "diff --git a/app.txt b/app.txt",
-                "index 1111111..2222222 100644",
-                "diff --git a/path with space.txt b/path with space.txt",
-                "index 3333333..4444444 100644",
-                "diff --git a/old.txt b/new.txt",
-                "similarity index 100%",
-                "rename from old.txt",
-                "rename to new.txt",
-                "diff --git a/removed.txt b/removed.txt",
-                "deleted file mode 100644",
-                "diff --git a/created.txt b/created.txt",
-                "new file mode 100644",
-                "",
-            ]
-        ),
-    )
+    project = tmp_path / "repo"
+    init_repo(project)
+    write_file(project / "source.txt", "copy body\n")
+    write_file(project / "old.txt", "rename body\n")
+    write_file(project / "path with space.txt", "before\n")
+    write_file(project / "removed.txt", "delete me\n")
+    git(project, "add", "source.txt", "old.txt", "path with space.txt", "removed.txt")
+    git(project, "commit", "-m", "base files")
+    base = git(project, "rev-parse", "HEAD")
+    shutil.copyfile(project / "source.txt", project / "copy.txt")
+    git(project, "mv", "old.txt", "new.txt")
+    git(project, "rm", "removed.txt")
+    write_file(project / "path with space.txt", "after\n")
+    git(project, "add", "copy.txt", "path with space.txt")
+    git(project, "commit", "-m", "change files")
+    head = git(project, "rev-parse", "HEAD")
 
-    assert module.changed_file_entries_from_diff(diff_file) == [
-        {"path": "app.txt", "status": "modified"},
-        {"path": "path with space.txt", "status": "modified"},
+    assert module.changed_file_entries_from_git(project, base, head) == [
+        {"path": "copy.txt", "status": "copied", "previous_path": "source.txt"},
         {"path": "new.txt", "status": "renamed", "previous_path": "old.txt"},
+        {"path": "path with space.txt", "status": "modified"},
         {"path": "removed.txt", "status": "deleted"},
-        {"path": "created.txt", "status": "added"},
     ]
 
 
