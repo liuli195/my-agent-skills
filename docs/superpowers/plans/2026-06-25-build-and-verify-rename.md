@@ -6,7 +6,7 @@ base-ref: 4030d1ceb81fa6e450ef517e09d2ff391f5260b2
 
 # Build and Verify Rename Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 将现有 `test-framework`（测试框架）按 rename（改名）迁移为 `build-and-verify`（构建与验证），并保留原有 build（构建检查）和 verify（验证）逻辑。
 
@@ -53,7 +53,7 @@ base-ref: 4030d1ceb81fa6e450ef517e09d2ff391f5260b2
 - Modify: `tests/test_release_flow_cli.py`
 - Modify: `tests/test_release_flow_plugin_package.py`
 
-- [ ] **Step 1: Rename the plugin test file and constants**
+- [x] **Step 1: Rename the plugin test file and constants**
 
 Rename `tests/test_test_framework_plugin.py` to `tests/test_build_and_verify_plugin.py`. Change its top-level constants only:
 
@@ -67,7 +67,7 @@ PLUGIN_NAME = "build-and-verify"
 
 Do not change runner（运行器） behavior assertions yet beyond names and paths.
 
-- [ ] **Step 2: Update manifest and Skill expectations**
+- [x] **Step 2: Update manifest and Skill expectations**
 
 In the renamed test file, update assertions so they expect:
 
@@ -80,7 +80,7 @@ assert "scripts/build_and_verify.py build" in skill_text
 assert "scripts/build_and_verify.py verify" in skill_text
 ```
 
-- [ ] **Step 3: Update marketplace and projection expectations**
+- [x] **Step 3: Update marketplace and projection expectations**
 
 Update test expectations from:
 
@@ -98,7 +98,7 @@ to:
 
 Keep all other marketplace（市场目录） and release projection（发布投影） behavior unchanged.
 
-- [ ] **Step 4: Run the public surface tests and confirm failure**
+- [x] **Step 4: Run the public surface tests and confirm failure**
 
 Run:
 
@@ -115,7 +115,7 @@ Expected before implementation: FAIL because plugin files and registry entries s
 - Modify: new files under `plugins/build-and-verify/`
 - Rename: `.test-framework/`
 
-- [ ] **Step 1: Move plugin and Skill directories**
+- [x] **Step 1: Move plugin and Skill directories**
 
 Use `git mv`:
 
@@ -124,7 +124,7 @@ git mv plugins/test-framework plugins/build-and-verify
 git mv plugins/build-and-verify/skills/test-framework plugins/build-and-verify/skills/build-and-verify
 ```
 
-- [ ] **Step 2: Move script files**
+- [x] **Step 2: Move script files**
 
 Use `git mv`:
 
@@ -133,7 +133,7 @@ git mv plugins/build-and-verify/skills/build-and-verify/scripts/test_framework.p
 git mv plugins/build-and-verify/skills/build-and-verify/scripts/test_framework_runner.py plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify_runner.py
 ```
 
-- [ ] **Step 3: Move template and repository config directories**
+- [x] **Step 3: Move template and repository config directories**
 
 Use `git mv`:
 
@@ -142,7 +142,7 @@ git mv plugins/build-and-verify/skills/build-and-verify/assets/templates/test-fr
 git mv .test-framework .build-and-verify
 ```
 
-- [ ] **Step 4: Update the entrypoint names without changing logic**
+- [x] **Step 4: Update the entrypoint names without changing logic**
 
 In `plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py`, only update names and paths:
 
@@ -160,7 +160,7 @@ argparse.ArgumentParser(prog="build_and_verify.py")
 
 Do not change `init`（初始化）、`build`（构建检查） or `verify`（验证） control flow.
 
-- [ ] **Step 5: Update runner config and cache paths**
+- [x] **Step 5: Update runner config and cache paths**
 
 In `plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify_runner.py`, replace only path/error strings:
 
@@ -175,7 +175,7 @@ project / ".build-and-verify" / "cache" / f"{key}.json"
 
 Do not change selection, cache, timeout, parallel, or subprocess execution logic.
 
-- [ ] **Step 6: Update Skill text and manifests**
+- [x] **Step 6: Update Skill text and manifests**
 
 Update:
 
@@ -203,7 +203,7 @@ description: 本仓库 build（构建检查）和 verify（验证）统一入口
 ---
 ```
 
-- [ ] **Step 7: Run public surface tests again**
+- [x] **Step 7: Run public surface tests again**
 
 Run:
 
@@ -226,7 +226,7 @@ Expected: PASS or only fail on repository integration references that Task 3 wil
 - Modify: `.build-and-verify/config.json`
 - Delete: `pyproject.toml`
 
-- [ ] **Step 1: Update Comet commands**
+- [x] **Step 1: Update Comet commands**
 
 Update `.comet.yaml`:
 
@@ -237,7 +237,7 @@ verify_command: python plugins/build-and-verify/skills/build-and-verify/scripts/
 
 The `verify_command` MUST NOT include `--full`.
 
-- [ ] **Step 2: Update PR Flow hotfix command**
+- [x] **Step 2: Update PR Flow hotfix command**
 
 Update `.pr-flow/config.yaml`:
 
@@ -248,7 +248,7 @@ hotfix:
 
 Do not add `--full` to complete（收尾） or tweak（小改） paths.
 
-- [ ] **Step 3: Update marketplace entries**
+- [x] **Step 3: Update marketplace entries**
 
 Replace active entries:
 
@@ -262,7 +262,7 @@ Replace active entries:
 
 For Codex（Codex 版本） marketplace, keep existing policy and category values.
 
-- [ ] **Step 4: Update release projection**
+- [x] **Step 4: Update release projection**
 
 Update `.release-flow/projection.yaml` generator plugin list:
 
@@ -277,7 +277,7 @@ plugins:
 
 Update `plugins/release-flow/skills/release-flow/scripts/release_flow.py` built-in projection defaults from `test-framework`（测试框架） to `build-and-verify`（构建与验证）.
 
-- [ ] **Step 5: Update PR Flow script defaults**
+- [x] **Step 5: Update PR Flow script defaults**
 
 Update `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py` default hotfix verify command to:
 
@@ -285,7 +285,7 @@ Update `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py` default hotfix verify
 "verifyCommand": "python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full"
 ```
 
-- [ ] **Step 6: Delete root Python test config**
+- [x] **Step 6: Delete root Python test config**
 
 Delete:
 
@@ -301,7 +301,7 @@ Then update `.build-and-verify/config.json` pytest（Python 测试运行器） c
 
 Apply the same `-q`（安静输出） addition to every pytest（Python 测试运行器） command that relied on root `pyproject.toml`.
 
-- [ ] **Step 7: Run repository integration tests**
+- [x] **Step 7: Run repository integration tests**
 
 Run:
 
@@ -321,7 +321,7 @@ Expected: FAIL only where tests still expect old names; Task 4 updates those.
 - Modify: `tests/test_release_flow_cli.py`
 - Modify: `tests/test_release_flow_plugin_package.py`
 
-- [ ] **Step 1: Update config path assertions**
+- [x] **Step 1: Update config path assertions**
 
 Replace active test expectations:
 
@@ -343,7 +343,7 @@ Path(".build-and-verify/.gitignore")
 "invalid_config: .build-and-verify/config.json"
 ```
 
-- [ ] **Step 2: Update command assertions**
+- [x] **Step 2: Update command assertions**
 
 Replace active command assertions with:
 
@@ -353,7 +353,7 @@ Replace active command assertions with:
 "python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full"
 ```
 
-- [ ] **Step 3: Add old-entrypoint rejection assertions**
+- [x] **Step 3: Add old-entrypoint rejection assertions**
 
 In `tests/test_local_plugin_build_checks.py`, keep or add assertions that active command/config files do not contain:
 
@@ -370,7 +370,7 @@ for forbidden in [
 
 Scope this assertion to active files only, not `openspec/changes/archive/` history.
 
-- [ ] **Step 4: Preserve full-mode boundary tests**
+- [x] **Step 4: Preserve full-mode boundary tests**
 
 In `tests/test_pr_flow_cli.py`, assert:
 
@@ -381,7 +381,7 @@ assert "--full" not in comet_verify_command
 
 Also keep tests that complete（收尾） and tweak（小改） paths do not infer or run full verify（完整验证）.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 Run:
 
@@ -400,11 +400,11 @@ Expected: PASS.
 - Modify: `openspec/specs/full-verification-runtime/spec.md`
 - Modify: `openspec/specs/pr-flow-plugin/spec.md`
 
-- [ ] **Step 1: Sync main specs with delta wording**
+- [x] **Step 1: Sync main specs with delta wording**
 
 Update main OpenSpec（开放规格） specs so active requirements use `build-and-verify`（构建与验证） wording and paths. Keep the capability folder `test-framework-plugin` until archive（归档） applies the rename semantics.
 
-- [ ] **Step 2: Do not edit archive history**
+- [x] **Step 2: Do not edit archive history**
 
 Do not rewrite files under:
 
@@ -416,7 +416,7 @@ docs/superpowers/plans/2026-06-23-test-framework-plugin.md
 
 Archive（归档） history may keep old names.
 
-- [ ] **Step 3: Validate OpenSpec**
+- [x] **Step 3: Validate OpenSpec**
 
 Run:
 
@@ -432,7 +432,7 @@ Expected: PASS.
 **Files:**
 - Modify: `openspec/changes/rename-test-framework-to-build-and-verify/tasks.md`
 
-- [ ] **Step 1: Run build command**
+- [x] **Step 1: Run build command**
 
 Run:
 
@@ -442,7 +442,7 @@ python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify
 
 Expected: build checks passed（构建检查通过）.
 
-- [ ] **Step 2: Run default fast verify**
+- [x] **Step 2: Run default fast verify**
 
 Run:
 
@@ -452,13 +452,13 @@ python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify
 
 Expected: default fast verify（快速验证） runs selected checks and does not run all checks unconditionally.
 
-- [ ] **Step 3: Confirm full verify is out of scope here**
+- [x] **Step 3: Confirm full verify is out of scope here**
 
 Confirm this ordinary rename（改名） flow is neither PR Flow hotfix（拉取请求流程热修复） direct push nor PR CI（拉取请求持续集成）, so it MUST NOT run any local verify（验证） command that adds `--full`（完整）.
 
 Expected: full verify（完整验证） remains documented and tested as an allowed exception only for hotfix（热修复） direct push and PR CI（拉取请求持续集成）.
 
-- [ ] **Step 4: Search for active old references**
+- [x] **Step 4: Search for active old references**
 
 Run:
 
@@ -468,7 +468,7 @@ rg -n "plugins/test-framework|\\.test-framework|test_framework\\.py|test-framewo
 
 Expected: only current change discussion or intentionally retained capability folder names where OpenSpec（开放规格） rename semantics require them.
 
-- [ ] **Step 5: Mark OpenSpec tasks complete**
+- [x] **Step 5: Mark OpenSpec tasks complete**
 
 After implementation and verification pass, update:
 
@@ -478,7 +478,7 @@ openspec/changes/rename-test-framework-to-build-and-verify/tasks.md
 
 Check off completed tasks without changing their meaning.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run:
 
