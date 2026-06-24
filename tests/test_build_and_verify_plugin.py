@@ -5,6 +5,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ RELEASE_FLOW_SCRIPT = REPO_ROOT / "plugins" / "release-flow" / "skills" / "relea
 BUILD_AND_VERIFY_SCRIPT = (
     PLUGIN_ROOT / "skills" / "build-and-verify" / "scripts" / "build_and_verify.py"
 )
+CHANGE_BASE_REF = "4030d1ceb81fa6e450ef517e09d2ff391f5260b2"
 
 PLUGIN_NAME = "build-and-verify"
 PLUGIN_VERSION = "0.1.12"
@@ -271,6 +273,8 @@ def test_build_and_verify_registered_in_release_flow_sources() -> None:
 
 def test_build_and_verify_active_surfaces_do_not_keep_old_entrypoints() -> None:
     assert not (REPO_ROOT / "pyproject.toml").exists()
+    assert not (REPO_ROOT / ".test-framework").exists()
+    assert not (REPO_ROOT / "plugins" / "test-framework").exists()
     active_paths = [
         REPO_ROOT / ".build-and-verify" / "config.json",
         REPO_ROOT / ".comet.yaml",
@@ -330,6 +334,35 @@ def test_build_and_verify_pytest_options_live_in_explicit_commands() -> None:
             assert "no:cacheprovider" in tokens
             assert " tests/" in f" {command} "
             assert any(token.startswith("tests/") and token.endswith(".py") for token in tokens)
+
+
+def test_build_and_verify_explicit_pytest_paths_cover_removed_pyproject_testpaths() -> None:
+    config = read_json(REPO_ROOT / ".build-and-verify" / "config.json")
+    verify_checks = config["verify"]["checks"]
+    explicit_test_files = {
+        token
+        for check in verify_checks
+        if "pytest" in check["command"]
+        for token in check["command"].split()
+        if token.startswith("tests/") and token.endswith(".py")
+    }
+    result = subprocess.run(
+        ["git", "show", f"{CHANGE_BASE_REF}:pyproject.toml"],
+        cwd=REPO_ROOT,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    pytest_options = tomllib.loads(result.stdout)["tool"]["pytest"]["ini_options"]
+    expected_test_files = {
+        path.relative_to(REPO_ROOT).as_posix()
+        for testpath in pytest_options["testpaths"]
+        for pattern in pytest_options.get("python_files", ["test_*.py"])
+        for path in (REPO_ROOT / testpath).glob(pattern)
+    }
+
+    assert explicit_test_files == expected_test_files
 
 
 def test_build_and_verify_release_projection_passes_real_validate() -> None:
