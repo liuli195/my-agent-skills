@@ -597,6 +597,15 @@ def validate_global_command_guard_skip_when(
                     "添加 in 列表，例如 `hotfix` 和 `tweak`。",
                 )
             )
+        elif not all(isinstance(item, str) and item for item in allowed):
+            issues.append(
+                ValidationIssue(
+                    "global_command_guards",
+                    f"{condition_base}.in",
+                    "必须是非空字符串列表。",
+                    "把每个 in 值改成非空字符串，例如 `hotfix` 和 `tweak`。",
+                )
+            )
 
     return issues
 

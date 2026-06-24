@@ -694,6 +694,70 @@ global_command_guards:
     assert payload["status"] == "allow"
 
 
+def test_global_command_guard_skip_when_falls_back_when_yaml_condition_does_not_match(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    init_git_repo(project)
+    profile = user_home / ".agents" / "guards" / "personal-policy"
+    profile.mkdir(parents=True)
+    write_cross_agent_review_artifacts(profile)
+    write_global_command_guard_yaml(
+        profile,
+        """
+global_command_guards:
+  - id: verify_requires_review
+    description: 测试跳过条件回退。
+    tool: Bash
+    match:
+      command_patterns:
+        - 'comet-guard.sh (?P<change>[A-Za-z0-9._-]+) build --apply'
+      required_captures:
+        - change
+    skip_when:
+      - yaml:
+          path: openspec/changes/{change}/.comet.yaml
+          field: workflow
+          in:
+            - hotfix
+            - tweak
+    evidence:
+      artifact: cross_agent_review_pass
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+    deny:
+      reason: comet_cross_agent_review_required
+""",
+    )
+
+    cases = {
+        "missing-state": None,
+        "missing-workflow": "phase: build\n",
+        "yaml-list": "- workflow\n- tweak\n",
+        "nonmatching-workflow": "workflow: full\nphase: build\n",
+    }
+
+    for change, state_text in cases.items():
+        if state_text is not None:
+            state = project / "openspec" / "changes" / change / ".comet.yaml"
+            state.parent.mkdir(parents=True, exist_ok=True)
+            state.write_text(state_text, encoding="utf-8")
+
+        result = pre_tool_payload(
+            project,
+            user_home,
+            {"session_id": "session-1", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": f"comet-guard.sh {change} build --apply"}},
+        )
+
+        assert result.returncode == 1, result.stdout + result.stderr
+        payload = body(result)
+        assert payload["status"] == "deny"
+        assert payload["reason"] == "comet_cross_agent_review_required"
+        assert payload["matched_guard_ids"] == ["user:personal-policy:verify_requires_review"]
+
+
 def test_global_command_guard_denies_stale_review_pass_with_short_head_artifact_path(tmp_path: Path) -> None:
     project = tmp_path / "project"
     user_home = tmp_path / "user-home"

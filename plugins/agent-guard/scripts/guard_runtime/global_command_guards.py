@@ -164,7 +164,7 @@ def _skip_when_matches(
             continue
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except (OSError, yaml.YAMLError):
+        except (OSError, UnicodeDecodeError, yaml.YAMLError):
             continue
         if not isinstance(data, dict):
             continue
