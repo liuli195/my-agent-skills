@@ -323,8 +323,13 @@ def test_build_and_verify_pytest_options_live_in_explicit_commands() -> None:
     for check in verify_checks:
         command = check["command"]
         if "pytest" in command:
+            tokens = command.split()
             assert " -q " in f" {command} "
+            assert "-n" in tokens
+            assert "-p" in tokens
+            assert "no:cacheprovider" in tokens
             assert " tests/" in f" {command} "
+            assert any(token.startswith("tests/") and token.endswith(".py") for token in tokens)
 
 
 def test_build_and_verify_release_projection_passes_real_validate() -> None:

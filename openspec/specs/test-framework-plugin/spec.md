@@ -95,3 +95,16 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **WHEN** 选中的 check（检查项）没有可用 passed-result cache（通过结果缓存）
 - **THEN** 系统 MUST 运行该 check（检查项）自身
 - **THEN** 系统 MUST NOT 因 cache miss（缓存未命中）自动运行 full（全量验证）
+
+### Requirement: Build and Verify has no root-level Python test configuration dependency
+系统 MUST 不依赖根目录 Python（Python 语言）测试配置来定义本仓库 build（构建检查）或 verify（验证）行为。
+
+#### Scenario: Root pyproject test config is absent
+- **WHEN** 本仓库 build-and-verify（构建与验证）配置完成迁移
+- **THEN** 根目录 `pyproject.toml` MUST NOT 存在
+- **THEN** `.build-and-verify/config.json` 中的 pytest（Python 测试运行器）命令 MUST 显式声明测试路径和所需命令参数
+
+#### Scenario: No root wrapper entrypoint
+- **WHEN** 本仓库活跃自动化和 guard（守卫）命令文件被检查
+- **THEN** 它们 MUST NOT 引用根目录测试 wrapper（包装入口）
+- **THEN** 它们 MUST 引用 `plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py` 或当前安装的 build-and-verify（构建与验证）Skill（技能）脚本

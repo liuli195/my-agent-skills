@@ -17,6 +17,11 @@ The repository SHALL（必须）provide a local build command through the initia
 - **THEN** `.github/workflows/`, `.comet.yaml`, `.comet/config.yaml`, `.pr-flow/config.yaml`, and `.build-and-verify/config.json` MUST NOT reference `scripts/check.py`
 - **THEN** they MUST NOT reference legacy `plugins/test-framework/` or `.test-framework/` paths
 
+#### Scenario: Root Python test configuration is not active automation
+- **WHEN** repository active automation and build-and-verify（构建与验证） configuration are inspected
+- **THEN** root `pyproject.toml` MUST NOT exist
+- **THEN** pytest（Python 测试运行器） commands in `.build-and-verify/config.json` MUST explicitly provide required paths and command options
+
 ### Requirement: Build command runs Claude plugin validation
 The build command SHALL（必须）run Claude（Claude 编码工具）plugin validation for the repository marketplace and every local plugin listed in `.claude-plugin/marketplace.json`.
 
