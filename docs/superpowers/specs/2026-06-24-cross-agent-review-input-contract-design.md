@@ -86,3 +86,19 @@ plugins/cross-agent-review/skills/cross-agent-review/assets/templates/reviewer-p
 - changed files（变更文件）解析覆盖 added（新增）、modified（修改）、deleted（删除）、renamed（重命名）和带空格路径。
 - `reviewer prompt`（审查提示词）来自独立模板文件，且不内联 diff output（差异输出）或上下文正文。
 - 内部 timeout（超时）常量和调用说明保持一致。
+
+## Implementation Divergence
+
+实施过程中，`changed files command`（变更文件命令）从设计阶段的基础命令：
+
+```bash
+git diff --name-status <base_ref>...<head_ref>
+```
+
+收紧为：
+
+```bash
+git diff --name-status --find-renames --find-copies-harder <base_ref>...<head_ref>
+```
+
+原因是质量审查发现 Git（版本控制）默认不会稳定识别普通 copy（复制）场景，复制文件可能被记录为 added（新增）。加入 rename/copy（重命名/复制）检测后，`manifest.json`（清单）中的 `changed_files`（变更文件）可以稳定表达 `renamed`（已重命名）和 `copied`（已复制），并保留 `previous_path`（原路径）。该收紧已同步到 delta spec（增量规格）、实现、技能说明和测试。
