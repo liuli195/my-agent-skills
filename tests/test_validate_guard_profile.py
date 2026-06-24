@@ -12,6 +12,7 @@ VALIDATOR = PLUGIN_SKILL / "scripts" / "validate_guard_profile.py"
 MINIMAL_PROFILE = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "minimal"
 MIRRORED_MINIMAL_PROFILE = REPO_ROOT / "plugins" / "agent-guard" / "assets" / "templates" / "guard-profile" / "minimal"
 COMET_REVIEW_GATE_PROFILE = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "comet-review-gate"
+MIRRORED_COMET_REVIEW_GATE_PROFILE = REPO_ROOT / "plugins" / "agent-guard" / "assets" / "templates" / "guard-profile" / "comet-review-gate"
 
 
 def run_validator(profile_path: Path) -> subprocess.CompletedProcess[str]:
@@ -126,6 +127,13 @@ def test_comet_review_gate_guard_profile_passes_validation() -> None:
     assert "已检查：global_command_guards" in result.stdout
 
 
+def test_comet_review_gate_global_command_guard_templates_stay_in_sync() -> None:
+    skill_template = COMET_REVIEW_GATE_PROFILE / "global-command-guards.yaml"
+    mirrored_template = MIRRORED_COMET_REVIEW_GATE_PROFILE / "global-command-guards.yaml"
+
+    assert mirrored_template.read_text(encoding="utf-8") == skill_template.read_text(encoding="utf-8")
+
+
 def test_global_command_guard_valid_config_passes(tmp_path: Path) -> None:
     profile = tmp_path / "profile"
     shutil.copytree(MINIMAL_PROFILE, profile)
@@ -218,6 +226,22 @@ global_command_guards:
             "          field: workflow\n"
             "          in: [1]\n",
             "global_command_guards.verify_requires_review.skip_when.0.yaml.in",
+        ),
+        (
+            "skip_when:\n"
+            "      - yaml:\n"
+            "          path: openspec/changes/{change}/.comet.yaml\n"
+            "          field: workflow\n"
+            "          in: ['']\n",
+            "global_command_guards.verify_requires_review.skip_when.0.yaml.in",
+        ),
+        (
+            "skip_when:\n"
+            "      - yaml:\n"
+            "          path: ../openspec/changes/{change}/.comet.yaml\n"
+            "          field: workflow\n"
+            "          in: [hotfix]\n",
+            "global_command_guards.verify_requires_review.skip_when.0.yaml.path",
         ),
     ],
 )

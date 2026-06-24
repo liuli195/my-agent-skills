@@ -374,6 +374,13 @@ def write_comet_state(project: Path, change: str, workflow: str) -> Path:
     return state
 
 
+def read_project_audits(project: Path) -> list[dict]:
+    return [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in (project / ".local" / "guard" / "audit").glob("*.json")
+    ]
+
+
 def test_collects_project_and_user_global_command_guards(tmp_path: Path) -> None:
     from importlib import util
 
@@ -692,6 +699,17 @@ global_command_guards:
     assert result.returncode == 0, result.stdout + result.stderr
     payload = body(result)
     assert payload["status"] == "allow"
+    global_audits = [
+        audit
+        for audit in read_project_audits(project)
+        if audit["reason"] == "global_command_guard_skipped"
+    ]
+    assert len(global_audits) == 1
+    global_guard = global_audits[0]["detail"]["global_command_guard"]
+    assert global_guard["matched_guard_ids"] == []
+    assert global_guard["skipped_guard_ids"] == ["user:personal-policy:verify_requires_review"]
+    assert global_guard["skipped_guards"][0]["skip_reason"] == "skip_when_matched"
+    assert global_guard["captures_by_guard"]["user:personal-policy:verify_requires_review"] == {"change": "quick-change"}
 
 
 def test_global_command_guard_skip_when_falls_back_when_yaml_condition_does_not_match(tmp_path: Path) -> None:
@@ -736,6 +754,7 @@ global_command_guards:
         "missing-state": None,
         "missing-workflow": "phase: build\n",
         "yaml-list": "- workflow\n- tweak\n",
+        "malformed-yaml": "workflow: [\n",
         "nonmatching-workflow": "workflow: full\nphase: build\n",
     }
 
@@ -973,15 +992,20 @@ def test_comet_review_gate_template_skips_hotfix_and_tweak_workflows(tmp_path: P
     for workflow in ["hotfix", "tweak"]:
         change = f"{workflow}-change"
         write_comet_state(project, change, workflow)
-        result = pre_tool_payload(
-            project,
-            user_home,
-            {"session_id": "session-1", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": f"comet-guard.sh {change} build --apply"}},
-        )
+        commands = [
+            f"comet-guard.sh {change} build --apply",
+            f'"$COMET_BASH" "$COMET_GUARD" {change} build --apply',
+        ]
+        for command in commands:
+            result = pre_tool_payload(
+                project,
+                user_home,
+                {"session_id": "session-1", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": command}},
+            )
 
-        assert result.returncode == 0, result.stdout + result.stderr
-        payload = body(result)
-        assert payload["status"] == "allow"
+            assert result.returncode == 0, result.stdout + result.stderr
+            payload = body(result)
+            assert payload["status"] == "allow"
 
 
 def test_global_command_guard_denies_unknown_artifact_reference(tmp_path: Path) -> None:

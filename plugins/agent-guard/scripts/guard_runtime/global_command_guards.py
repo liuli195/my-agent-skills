@@ -304,6 +304,8 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
     head = git_head(project)
     head_short = git_head_short(head)
     matched_guard_ids: list[str] = []
+    skipped_guard_ids: list[str] = []
+    skipped_guards: list[dict[str, Any]] = []
     failing_guards: list[dict[str, Any]] = []
     captures: dict[str, str] = {}
     captures_by_guard: dict[str, dict[str, str]] = {}
@@ -334,6 +336,19 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
         values = _context_values(guard, guard_captures, runtime_scope, head)
 
         if not missing_captures and _skip_when_matches(project, user_home, runtime_scope, config, values):
+            skipped_guard_ids.append(guard.effective_guard_id)
+            captures.update(guard_captures)
+            captures_by_guard[guard.effective_guard_id] = guard_captures
+            skipped_guards.append(
+                {
+                    "effective_guard_id": guard.effective_guard_id,
+                    "source_scope": guard.source_scope,
+                    "profile_id": guard.profile_id,
+                    "guard_id": guard.guard_id,
+                    "captures": guard_captures,
+                    "skip_reason": "skip_when_matched",
+                }
+            )
             continue
 
         matched_guard_ids.append(guard.effective_guard_id)
@@ -451,12 +466,31 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
             failing_guards.append(failure)
 
     if not matched_guard_ids:
-        return {"effect": "allow", "reason": "global_command_guard_not_matched", "matched_guard_ids": [], "runtime_scope": runtime_scope}
+        result = {
+            "effect": "allow",
+            "reason": "global_command_guard_skipped" if skipped_guard_ids else "global_command_guard_not_matched",
+            "matched_guard_ids": [],
+            "runtime_scope": runtime_scope,
+        }
+        if skipped_guard_ids:
+            result.update(
+                {
+                    "skipped_guard_ids": skipped_guard_ids,
+                    "skipped_guards": skipped_guards,
+                    "captures": captures,
+                    "captures_by_guard": captures_by_guard,
+                    "tool": tool_name,
+                    "command": command,
+                }
+            )
+        return result
 
     result: dict[str, Any] = {
         "effect": "deny" if failing_guards else "allow",
         "reason": "global_command_guard_required" if failing_guards else "global_command_guard_passed",
         "matched_guard_ids": matched_guard_ids,
+        "skipped_guard_ids": skipped_guard_ids,
+        "skipped_guards": skipped_guards,
         "failing_guards": failing_guards,
         "captures": captures,
         "captures_by_guard": captures_by_guard,

@@ -11,9 +11,10 @@
 - **AND** 该 YAML（配置文件）字段值命中允许值
 - **THEN** Runtime（运行时）跳过该守卫的 evidence（证据）检查
 - **AND** 该守卫不应造成 deny（拒绝）
+- **AND** Runtime（运行时）在 audit（审计）中记录被跳过的守卫编号和跳过原因
 
 #### Scenario: 跳过条件未命中时继续原有检查
 
 - **WHEN** 命令匹配一个 Global Command Guard（全局命令守卫点）
-- **AND** `skip_when`（跳过条件）缺失、目标文件缺失、字段缺失或字段值未命中
+- **AND** `skip_when`（跳过条件）缺失、目标文件缺失、字段缺失、字段值未命中、YAML（配置文件）不可读或路径模板不安全
 - **THEN** Runtime（运行时）继续执行该守卫原有 evidence（证据）检查

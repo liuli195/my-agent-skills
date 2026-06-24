@@ -6,7 +6,7 @@ import argparse
 import re
 import sys
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 import yaml
@@ -566,6 +566,17 @@ def validate_global_command_guard_skip_when(
                 )
             )
         else:
+            windows_path = PureWindowsPath(path)
+            path_parts = path.replace("\\", "/").split("/")
+            if Path(path).is_absolute() or windows_path.is_absolute() or windows_path.drive or windows_path.root or ".." in path_parts:
+                issues.append(
+                    ValidationIssue(
+                        "global_command_guards",
+                        f"{condition_base}.path",
+                        "必须声明安全的相对路径模板。",
+                        "使用不含绝对路径或 `..` 的相对路径，例如 `openspec/changes/{change}/.comet.yaml`。",
+                    )
+                )
             for field in sorted(template_fields(path) - capture_names - GLOBAL_COMMAND_GUARD_VALUE_FROM_FIELDS):
                 issues.append(
                     ValidationIssue(
