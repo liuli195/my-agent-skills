@@ -15,6 +15,11 @@ global_command_guards:
           in:
             - hotfix
             - tweak
+      - yaml:
+          path: openspec/changes/{change}/.comet.yaml
+          field: build_mode
+          in:
+            - subagent-driven-development
     evidence:
       artifact: cross_agent_review_pass
     checks:

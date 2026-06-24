@@ -1186,7 +1186,7 @@ def test_comet_review_gate_template_blocks_full_workflow_without_marker(tmp_path
     assert payload["reason"] == "comet_cross_agent_review_required"
 
 
-def test_comet_review_gate_template_skips_hotfix_and_tweak_workflows(tmp_path: Path) -> None:
+def test_comet_review_gate_template_skips_hotfix_tweak_and_subagent_build_mode(tmp_path: Path) -> None:
     project = tmp_path / "project"
     user_home = tmp_path / "user-home"
     project.mkdir()
@@ -1224,6 +1224,29 @@ def test_comet_review_gate_template_skips_hotfix_and_tweak_workflows(tmp_path: P
             global_guard = global_audits[0]["detail"]["global_command_guard"]
             assert global_guard["skipped_guard_ids"] == ["user:comet-review-gate:comet_build_requires_cross_agent_review"]
             assert global_guard["skipped_guards"][0]["skip_reason"] == "skip_when_matched"
+
+    change = "subagent-build-mode-change"
+    state = write_comet_state(project, change, "full")
+    state.write_text("workflow: full\nphase: build\nbuild_mode: subagent-driven-development\n", encoding="utf-8")
+    result = pre_tool_payload(
+        project,
+        user_home,
+        {"session_id": "session-1", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": f"comet-guard.sh {change} build --apply"}},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "allow"
+    global_audits = [
+        audit
+        for audit in read_project_audits(project)
+        if audit["reason"] == "global_command_guard_skipped"
+        and audit["detail"]["global_command_guard"]["command"] == f"comet-guard.sh {change} build --apply"
+    ]
+    assert len(global_audits) == 1
+    global_guard = global_audits[0]["detail"]["global_command_guard"]
+    assert global_guard["skipped_guard_ids"] == ["user:comet-review-gate:comet_build_requires_cross_agent_review"]
+    assert global_guard["skipped_guards"][0]["skip_reason"] == "skip_when_matched"
 
 
 def test_global_command_guard_denies_unknown_artifact_reference(tmp_path: Path) -> None:
