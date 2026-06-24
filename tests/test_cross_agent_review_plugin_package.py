@@ -48,6 +48,18 @@ def test_cross_agent_review_skill_documents_input_staging_under_run_dir() -> Non
     assert "raw/" in text
 
 
+def test_cross_agent_review_skill_documents_manifest_diff_commands_and_timeout_boundary() -> None:
+    skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+
+    assert "--diff-file" not in text
+    assert "inputs/diff.patch" not in text
+    assert "git diff --name-status --find-renames --find-copies-harder <base-ref>...<head-ref>" in text
+    assert "git diff <base-ref>...<head-ref> -- <path>" in text
+    assert "外层" in text
+    assert "540 秒" in text
+
+
 def test_cross_agent_review_skill_documents_strict_finding_schema() -> None:
     skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
     text = skill.read_text(encoding="utf-8")
@@ -108,8 +120,6 @@ def test_cross_agent_review_placeholder_run_accepts_documented_and_planned_optio
             "main",
             "--head-ref",
             "HEAD",
-            "--diff-file",
-            str(tmp_path / "change.diff"),
             "--spec-file",
             str(tmp_path / "spec.md"),
             "--design-file",

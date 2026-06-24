@@ -31,7 +31,6 @@ python scripts/cross_agent_review.py run \
   --change <change-id> \
   --base-ref <base-ref> \
   --head-ref <head-ref> \
-  --diff-file <path> \
   --spec-file <path> \
   --design-file <path> \
   --tasks-file <path>
@@ -39,23 +38,31 @@ python scripts/cross_agent_review.py run \
 
 ## 输入文件准备
 
-`--diff-file`、`--spec-file`、`--design-file` 和 `--tasks-file` 等运行前生成的输入文件，必须放在同一次 review 的 run 目录下：
+`--spec-file`、`--design-file` 和 `--tasks-file` 等运行前生成的输入文件，必须放在同一次 review（审查）的 run（运行）目录下：
 
 ```text
 .local/cross-agent-review/<change>/<head_ref>/prepared-inputs/
 ```
 
-随后把这些文件路径显式传给命令参数。不要在 `.local/` 下创建独立的输入根目录；review 运行后会把最终输入快照复制到同一 run 目录的 `inputs/`。
+随后把这些文件路径显式传给命令参数。不要在 `.local/` 下创建独立的输入根目录；review（审查）运行后会把最终输入快照复制到同一 run（运行）目录的 `inputs/`。
 
 输出默认写入 `.local/cross-agent-review/<change>/<head_ref>/`。运行时会先把输入文件快照复制到输出目录下的 `inputs/`：
 
-- `inputs/diff.patch`
 - `inputs/spec.md`
 - `inputs/design.md`
 - `inputs/tasks.md`
 - `inputs/manifest.json`
 
-`inputs/manifest.json` 记录 change（变更）、base/head ref（基准/当前提交）、输入文件 path（路径）/bytes（字节数）/sha256（哈希）和 changed files（变更文件）清单。changed files（变更文件）条目包含 path（路径）和 status（状态），重命名/复制时可包含 previous_path（原路径）。Reviewer prompt（审查代理提示词）引用 `manifest.json` 和输入快照路径，不内联大 diff（差异）内容；reviewer（审查代理）按需读取相关片段。
+`inputs/manifest.json` 记录 change（变更）、base/head ref（基准/当前提交）、输入文件 path（路径）/bytes（字节数）/sha256（哈希）、changed files（变更文件）清单和 review subject（审查对象）命令。changed files（变更文件）条目包含 path（路径）和 status（状态），重命名/复制时可包含 previous_path（原路径）。review subject（审查对象）命令包括：
+
+```bash
+git diff <base-ref>...<head-ref>
+git log <base-ref>..<head-ref> --oneline
+git diff --name-status --find-renames --find-copies-harder <base-ref>...<head-ref>
+git diff <base-ref>...<head-ref> -- <path>
+```
+
+Reviewer prompt（审查代理提示词）引用 `manifest.json` 和输入快照路径，不内联大 diff（差异）内容；reviewer（审查代理）按需读取相关片段，不能整读大 diff（差异）。
 
 为便于排障，每次真实 SDK（开发包）派发还会写入：
 
@@ -63,6 +70,10 @@ python scripts/cross_agent_review.py run \
 - `raw/<role>.txt`
 
 Comet build completion（构建完成）调用时，`--base-ref` 应优先使用 implementation baseline（实施基准，例如 plan 文件头的 `base-ref`），避免把已完成的历史 change（变更）卷入本次 review（审查）diff（差异）。只有在没有实施基准时，才回退到 change init baseline（变更初始化基准）。
+
+## Timeout（超时）
+
+插件内部管理 480 秒单 reviewer（审查代理）和 540 秒 SDK dispatch（开发包派发）timeout（超时）。主 agent（主代理）调用时不要在外层包装短于 540 秒的 timeout/watchdog（超时/看门等待）。
 
 ## Reviewer 输出契约
 
