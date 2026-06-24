@@ -717,12 +717,14 @@ def route_pre_tool_use(project: Path, user_home: Path, envelope: dict[str, Any])
             "next": global_guard.get("next"),
             "suggestion": global_guard.get("suggestion"),
             "matched_guard_ids": global_guard.get("matched_guard_ids", []),
+            "skipped_guard_ids": global_guard.get("skipped_guard_ids", []),
+            "skipped_guards": global_guard.get("skipped_guards", []),
             "failing_guards": global_guard.get("failing_guards", []),
             "captures": global_guard.get("captures", {}),
             "captures_by_guard": global_guard.get("captures_by_guard", {}),
             "audit_path": str(audit_path),
         }, 1
-    if global_guard.get("matched_guard_ids"):
+    if global_guard.get("matched_guard_ids") or global_guard.get("skipped_guard_ids"):
         write_audit(
             project,
             "allow",

@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_SKILL = REPO_ROOT / "plugins" / "agent-guard" / "skills" / "agent-guard"
@@ -10,6 +12,7 @@ VALIDATOR = PLUGIN_SKILL / "scripts" / "validate_guard_profile.py"
 MINIMAL_PROFILE = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "minimal"
 MIRRORED_MINIMAL_PROFILE = REPO_ROOT / "plugins" / "agent-guard" / "assets" / "templates" / "guard-profile" / "minimal"
 COMET_REVIEW_GATE_PROFILE = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "comet-review-gate"
+MIRRORED_COMET_REVIEW_GATE_PROFILE = REPO_ROOT / "plugins" / "agent-guard" / "assets" / "templates" / "guard-profile" / "comet-review-gate"
 
 
 def run_validator(profile_path: Path) -> subprocess.CompletedProcess[str]:
@@ -124,6 +127,24 @@ def test_comet_review_gate_guard_profile_passes_validation() -> None:
     assert "已检查：global_command_guards" in result.stdout
 
 
+def test_comet_review_gate_global_command_guard_templates_stay_in_sync() -> None:
+    skill_template = COMET_REVIEW_GATE_PROFILE / "global-command-guards.yaml"
+    mirrored_template = MIRRORED_COMET_REVIEW_GATE_PROFILE / "global-command-guards.yaml"
+
+    assert mirrored_template.read_text(encoding="utf-8") == skill_template.read_text(encoding="utf-8")
+
+
+def test_comet_review_gate_installed_copy_passes_validation(tmp_path: Path) -> None:
+    skill_template = COMET_REVIEW_GATE_PROFILE / "global-command-guards.yaml"
+    user_profile = tmp_path / "user-home" / ".agents" / "guards" / "comet-review-gate"
+    shutil.copytree(COMET_REVIEW_GATE_PROFILE, user_profile)
+    user_template = user_profile / "global-command-guards.yaml"
+
+    assert user_template.read_text(encoding="utf-8") == skill_template.read_text(encoding="utf-8")
+    result = run_validator(user_profile)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_global_command_guard_valid_config_passes(tmp_path: Path) -> None:
     profile = tmp_path / "profile"
     shutil.copytree(MINIMAL_PROFILE, profile)
@@ -133,6 +154,145 @@ def test_global_command_guard_valid_config_passes(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "已检查：global_command_guards" in result.stdout
+
+
+def test_global_command_guard_valid_skip_when_yaml_config_passes(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    write_global_command_guards(
+        profile,
+        """
+global_command_guards:
+  - id: verify_requires_review
+    description: Comet build 前必须有 review 证据。
+    tool: Bash
+    match:
+      command_patterns:
+        - 'comet-guard\\.sh (?P<change>[A-Za-z0-9._-]+) build --apply'
+      required_captures:
+        - change
+    skip_when:
+      - yaml:
+          path: openspec/changes/{change}/.comet.yaml
+          field: workflow
+          in:
+            - hotfix
+            - tweak
+    evidence:
+      artifact: completion_note
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+    deny:
+      reason: global_command_guard_required
+""",
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "已检查：global_command_guards" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("skip_when_yaml", "expected_field"),
+    [
+        ("skip_when:\n      yaml: {}\n", "global_command_guards.verify_requires_review.skip_when"),
+        ("skip_when: []\n", "global_command_guards.verify_requires_review.skip_when"),
+        ("skip_when:\n      - note: missing yaml\n", "global_command_guards.verify_requires_review.skip_when.0"),
+        (
+            "skip_when:\n"
+            "      - yaml:\n"
+            "          field: workflow\n"
+            "          in: [hotfix]\n",
+            "global_command_guards.verify_requires_review.skip_when.0.yaml.path",
+        ),
+        (
+            "skip_when:\n"
+            "      - yaml:\n"
+            "          path: openspec/changes/{change}/.comet.yaml\n"
+            "          in: [hotfix]\n",
+            "global_command_guards.verify_requires_review.skip_when.0.yaml.field",
+        ),
+        (
+            "skip_when:\n"
+            "      - yaml:\n"
+            "          path: openspec/changes/{change}/.comet.yaml\n"
+            "          field: workflow\n"
+            "          in: []\n",
+            "global_command_guards.verify_requires_review.skip_when.0.yaml.in",
+        ),
+        (
+            "skip_when:\n"
+            "      - yaml:\n"
+            "          path: openspec/changes/{missing}/.comet.yaml\n"
+            "          field: workflow\n"
+            "          in: [hotfix]\n",
+            "global_command_guards.verify_requires_review.skip_when.0.yaml.path.missing",
+        ),
+        (
+            "skip_when:\n"
+            "      - yaml:\n"
+            "          path: openspec/changes/{change}/.comet.yaml\n"
+            "          field: workflow\n"
+            "          in: [1]\n",
+            "global_command_guards.verify_requires_review.skip_when.0.yaml.in",
+        ),
+        (
+            "skip_when:\n"
+            "      - yaml:\n"
+            "          path: openspec/changes/{change}/.comet.yaml\n"
+            "          field: workflow\n"
+            "          in: ['']\n",
+            "global_command_guards.verify_requires_review.skip_when.0.yaml.in",
+        ),
+        (
+            "skip_when:\n"
+            "      - yaml:\n"
+            "          path: ../openspec/changes/{change}/.comet.yaml\n"
+            "          field: workflow\n"
+            "          in: [hotfix]\n",
+            "global_command_guards.verify_requires_review.skip_when.0.yaml.path",
+        ),
+    ],
+)
+def test_global_command_guard_invalid_skip_when_yaml_config_fails(tmp_path: Path, skip_when_yaml: str, expected_field: str) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    write_global_command_guards(
+        profile,
+        f"""
+global_command_guards:
+  - id: verify_requires_review
+    description: Comet build 前必须有 review 证据。
+    tool: Bash
+    match:
+      command_patterns:
+        - 'comet-guard\\.sh (?P<change>[A-Za-z0-9._-]+) build --apply'
+      required_captures:
+        - change
+    {skip_when_yaml.rstrip()}
+    evidence:
+      artifact: completion_note
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+    deny:
+      reason: global_command_guard_required
+""",
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    fields = {
+        line.split("field=", 1)[1].split(" ", 1)[0]
+        for line in result.stdout.splitlines()
+        if "field=" in line
+    }
+    assert expected_field in fields
 
 
 def test_global_command_guard_accepts_git_head_short_context_value(tmp_path: Path) -> None:

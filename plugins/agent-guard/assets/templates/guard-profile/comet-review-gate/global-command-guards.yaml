@@ -8,6 +8,13 @@ global_command_guards:
         - '\$COMET_GUARD[''"]?\s+(?P<change>[A-Za-z0-9._-]+)\s+build\s+--apply(?:\s|$)'
       required_captures:
         - change
+    skip_when:
+      - yaml:
+          path: openspec/changes/{change}/.comet.yaml
+          field: workflow
+          in:
+            - hotfix
+            - tweak
     evidence:
       artifact: cross_agent_review_pass
     checks:

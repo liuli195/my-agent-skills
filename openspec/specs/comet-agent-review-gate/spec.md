@@ -25,17 +25,24 @@ TBD - created by archiving change add-comet-agent-review-gate. Update Purpose af
 - **AND** command patterns MUST NOT 以 `comet-guard.sh <change> verify --apply` 作为主要匹配边界
 
 ### Requirement: Comet review gate 使用用户级 Global Command Guard
-系统 MUST 使用用户级 Global Command Guard（全局命令守卫点）表达 Comet verify 前的 review gate（审查门禁），不得新增 Comet phase（阶段）、不得新增 reviewed wrapper（带审查包装入口），也不得使用 Session Focus Binding（会话焦点绑定）表达该命令边界。
 
-#### Scenario: 用户级全局守卫拦截 build 完成
-- **WHEN** 主 agent 尝试执行 Comet build 阶段守卫收尾命令
-- **THEN** Agent Guard 从用户级 Guard Profile（守卫画像）的 `global-command-guards.yaml` 匹配该命令
-- **AND** 该匹配不依赖当前 Session Focus Instance（会话焦点实例）
+系统 MUST 使用用户级 Global Command Guard（全局命令守卫点）表达 Comet verify（验证）前的 review gate（审查门禁），但 hotfix（热修复）和 tweak（小改）workflow（工作流）不需要 cross-agent-review（跨代理审查）通过标记。
 
-#### Scenario: 项目命令使用项目运行态
-- **WHEN** 用户级 Global Command Guard（全局命令守卫点）拦截项目内 Comet build 阶段守卫收尾命令
-- **THEN** audit（审计）和 evidence resolution（证据解析）按项目运行态执行
-- **AND** 系统不得把该项目命令的运行态材料写入 `~/.agents/guard`
+#### Scenario: full workflow 继续要求 cross-agent-review
+
+- **WHEN** Comet full（完整）workflow（工作流）完成 build（构建）阶段并准备执行 `comet-guard.sh <change> build --apply`
+- **AND** 当前 change（变更）和当前 HEAD（提交头）没有有效 cross-agent-review（跨代理审查）pass marker（通过标记）
+- **THEN** Global Command Guard（全局命令守卫点）拒绝该命令
+
+#### Scenario: hotfix workflow 不触发 cross-agent-review 门禁
+
+- **WHEN** Comet hotfix（热修复）workflow（工作流）完成 build（构建）阶段并准备执行 `comet-guard.sh <change> build --apply`
+- **THEN** Global Command Guard（全局命令守卫点）不得因为缺少 cross-agent-review（跨代理审查）pass marker（通过标记）拒绝该命令
+
+#### Scenario: tweak workflow 不触发 cross-agent-review 门禁
+
+- **WHEN** Comet tweak（小改）workflow（工作流）完成 build（构建）阶段并准备执行 `comet-guard.sh <change> build --apply`
+- **THEN** Global Command Guard（全局命令守卫点）不得因为缺少 cross-agent-review（跨代理审查）pass marker（通过标记）拒绝该命令
 
 ### Requirement: Comet review gate 通过产物注册层校验 pass marker
 

@@ -129,6 +129,51 @@ def _deny_config(config: dict[str, Any]) -> dict[str, Any]:
     return deny if isinstance(deny, dict) else {}
 
 
+def _skip_when_matches(
+    project: Path,
+    user_home: Path,
+    runtime_scope: str,
+    config: dict[str, Any],
+    values: dict[str, str],
+) -> bool:
+    conditions = config.get("skip_when")
+    if not isinstance(conditions, list):
+        return False
+
+    for condition in conditions:
+        yaml_condition = condition.get("yaml") if isinstance(condition, dict) else None
+        if not isinstance(yaml_condition, dict):
+            continue
+        template = yaml_condition.get("path")
+        field = yaml_condition.get("field")
+        allowed = yaml_condition.get("in")
+        if not isinstance(template, str) or not template:
+            continue
+        if not isinstance(field, str) or not field:
+            continue
+        if not isinstance(allowed, list):
+            continue
+        rendered, missing_template_values = render_template(template, values)
+        if missing_template_values:
+            continue
+        try:
+            path = _resolve_artifact_path(project, user_home, runtime_scope, rendered)
+        except UnsafeEvidencePath:
+            continue
+        if not path.exists():
+            continue
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except (OSError, UnicodeDecodeError, yaml.YAMLError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        actual = json_field(data, field)
+        if actual is not MISSING_JSON_VALUE and actual in allowed:
+            return True
+    return False
+
+
 def _context_values(guard: EffectiveGlobalCommandGuard, captures: dict[str, str], runtime_scope: str, head: str) -> dict[str, str]:
     values = {
         "source_scope": guard.source_scope,
@@ -259,6 +304,8 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
     head = git_head(project)
     head_short = git_head_short(head)
     matched_guard_ids: list[str] = []
+    skipped_guard_ids: list[str] = []
+    skipped_guards: list[dict[str, Any]] = []
     failing_guards: list[dict[str, Any]] = []
     captures: dict[str, str] = {}
     captures_by_guard: dict[str, dict[str, str]] = {}
@@ -274,9 +321,6 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
         if guard_captures is None:
             continue
 
-        matched_guard_ids.append(guard.effective_guard_id)
-        captures.update(guard_captures)
-        captures_by_guard[guard.effective_guard_id] = guard_captures
         deny = _deny_config(config)
 
         missing_captures = [item for item in _required_captures(config) if item not in guard_captures]
@@ -290,6 +334,27 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
             "git_head_short": head_short,
         }
         values = _context_values(guard, guard_captures, runtime_scope, head)
+
+        if not missing_captures and _skip_when_matches(project, user_home, runtime_scope, config, values):
+            skipped_guard_ids.append(guard.effective_guard_id)
+            captures.update(guard_captures)
+            captures_by_guard[guard.effective_guard_id] = guard_captures
+            skipped_guards.append(
+                {
+                    "effective_guard_id": guard.effective_guard_id,
+                    "source_scope": guard.source_scope,
+                    "profile_id": guard.profile_id,
+                    "guard_id": guard.guard_id,
+                    "captures": guard_captures,
+                    "skip_reason": "skip_when_matched",
+                }
+            )
+            continue
+
+        matched_guard_ids.append(guard.effective_guard_id)
+        captures.update(guard_captures)
+        captures_by_guard[guard.effective_guard_id] = guard_captures
+
         evidence = config.get("evidence")
         evidence_path: Path
         artifact_id = None
@@ -401,12 +466,31 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
             failing_guards.append(failure)
 
     if not matched_guard_ids:
-        return {"effect": "allow", "reason": "global_command_guard_not_matched", "matched_guard_ids": [], "runtime_scope": runtime_scope}
+        result = {
+            "effect": "allow",
+            "reason": "global_command_guard_skipped" if skipped_guard_ids else "global_command_guard_not_matched",
+            "matched_guard_ids": [],
+            "runtime_scope": runtime_scope,
+        }
+        if skipped_guard_ids:
+            result.update(
+                {
+                    "skipped_guard_ids": skipped_guard_ids,
+                    "skipped_guards": skipped_guards,
+                    "captures": captures,
+                    "captures_by_guard": captures_by_guard,
+                    "tool": tool_name,
+                    "command": command,
+                }
+            )
+        return result
 
     result: dict[str, Any] = {
         "effect": "deny" if failing_guards else "allow",
         "reason": "global_command_guard_required" if failing_guards else "global_command_guard_passed",
         "matched_guard_ids": matched_guard_ids,
+        "skipped_guard_ids": skipped_guard_ids,
+        "skipped_guards": skipped_guards,
         "failing_guards": failing_guards,
         "captures": captures,
         "captures_by_guard": captures_by_guard,
