@@ -134,6 +134,15 @@ def test_comet_review_gate_global_command_guard_templates_stay_in_sync() -> None
     assert mirrored_template.read_text(encoding="utf-8") == skill_template.read_text(encoding="utf-8")
 
 
+def test_user_comet_review_gate_global_command_guard_template_matches_when_installed() -> None:
+    skill_template = COMET_REVIEW_GATE_PROFILE / "global-command-guards.yaml"
+    user_template = Path.home() / ".agents" / "guards" / "comet-review-gate" / "global-command-guards.yaml"
+    if not user_template.exists():
+        pytest.skip("用户级 comet-review-gate Guard Profile（守卫画像）未安装。")
+
+    assert user_template.read_text(encoding="utf-8") == skill_template.read_text(encoding="utf-8")
+
+
 def test_global_command_guard_valid_config_passes(tmp_path: Path) -> None:
     profile = tmp_path / "profile"
     shutil.copytree(MINIMAL_PROFILE, profile)
@@ -188,6 +197,7 @@ global_command_guards:
     ("skip_when_yaml", "expected_field"),
     [
         ("skip_when:\n      yaml: {}\n", "global_command_guards.verify_requires_review.skip_when"),
+        ("skip_when: []\n", "global_command_guards.verify_requires_review.skip_when"),
         ("skip_when:\n      - note: missing yaml\n", "global_command_guards.verify_requires_review.skip_when.0"),
         (
             "skip_when:\n"

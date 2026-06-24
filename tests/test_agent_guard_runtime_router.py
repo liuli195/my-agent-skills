@@ -656,7 +656,6 @@ def test_global_command_guard_skips_when_yaml_condition_matches(tmp_path: Path) 
     user_home = tmp_path / "user-home"
     project.mkdir()
     init_git_repo(project)
-    write_comet_state(project, "quick-change", "tweak")
     profile = user_home / ".agents" / "guards" / "personal-policy"
     profile.mkdir(parents=True)
     write_cross_agent_review_artifacts(profile)
@@ -690,26 +689,37 @@ global_command_guards:
 """,
     )
 
-    result = pre_tool_payload(
-        project,
-        user_home,
-        {"session_id": "session-1", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": "comet-guard.sh quick-change build --apply"}},
-    )
+    for workflow in ["hotfix", "tweak"]:
+        change = f"quick-{workflow}"
+        write_comet_state(project, change, workflow)
+        result = pre_tool_payload(
+            project,
+            user_home,
+            {"session_id": "session-1", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": f"comet-guard.sh {change} build --apply"}},
+        )
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    payload = body(result)
-    assert payload["status"] == "allow"
-    global_audits = [
-        audit
-        for audit in read_project_audits(project)
-        if audit["reason"] == "global_command_guard_skipped"
-    ]
-    assert len(global_audits) == 1
-    global_guard = global_audits[0]["detail"]["global_command_guard"]
-    assert global_guard["matched_guard_ids"] == []
-    assert global_guard["skipped_guard_ids"] == ["user:personal-policy:verify_requires_review"]
-    assert global_guard["skipped_guards"][0]["skip_reason"] == "skip_when_matched"
-    assert global_guard["captures_by_guard"]["user:personal-policy:verify_requires_review"] == {"change": "quick-change"}
+        assert result.returncode == 0, result.stdout + result.stderr
+        payload = body(result)
+        assert payload["status"] == "allow"
+        global_audits = [
+            audit
+            for audit in read_project_audits(project)
+            if audit["reason"] == "global_command_guard_skipped"
+            and audit["detail"]["global_command_guard"]["captures"] == {"change": change}
+        ]
+        assert len(global_audits) == 1
+        global_guard = global_audits[0]["detail"]["global_command_guard"]
+        assert global_guard["matched_guard_ids"] == []
+        assert global_guard["skipped_guard_ids"] == ["user:personal-policy:verify_requires_review"]
+        assert global_guard["skipped_guards"][0] == {
+            "effective_guard_id": "user:personal-policy:verify_requires_review",
+            "source_scope": "user",
+            "profile_id": "personal-policy",
+            "guard_id": "verify_requires_review",
+            "captures": {"change": change},
+            "skip_reason": "skip_when_matched",
+        }
+        assert global_guard["captures_by_guard"]["user:personal-policy:verify_requires_review"] == {"change": change}
 
 
 def test_global_command_guard_skip_when_falls_back_when_yaml_condition_does_not_match(tmp_path: Path) -> None:
@@ -754,6 +764,7 @@ global_command_guards:
         "missing-state": None,
         "empty-yaml": "",
         "missing-workflow": "phase: build\n",
+        "field-list": "workflow: [hotfix, tweak]\n",
         "yaml-list": "- workflow\n- tweak\n",
         "malformed-yaml": "workflow: [\n",
         "nonmatching-workflow": "workflow: full\nphase: build\n",
@@ -846,13 +857,20 @@ def test_global_command_guard_skip_when_unsafe_path_falls_back_to_evidence(tmp_p
     user_home = tmp_path / "user-home"
     project.mkdir()
     init_git_repo(project)
-    write_comet_state(project, "unsafe-change", "tweak")
     profile = user_home / ".agents" / "guards" / "personal-policy"
     profile.mkdir(parents=True)
     write_cross_agent_review_artifacts(profile)
-    write_global_command_guard_yaml(
-        profile,
-        """
+
+    unsafe_paths = {
+        "parent-segment": "../openspec/changes/{change}/.comet.yaml",
+        "absolute": "C:/Windows/win.ini",
+    }
+    for case, skip_path in unsafe_paths.items():
+        change = f"unsafe-{case}"
+        write_comet_state(project, change, "tweak")
+        write_global_command_guard_yaml(
+            profile,
+            f"""
 global_command_guards:
   - id: verify_requires_review
     description: 测试不安全跳过路径回退。
@@ -864,7 +882,7 @@ global_command_guards:
         - change
     skip_when:
       - yaml:
-          path: ../openspec/changes/{change}/.comet.yaml
+          path: {skip_path}
           field: workflow
           in:
             - tweak
@@ -877,20 +895,20 @@ global_command_guards:
     deny:
       reason: comet_cross_agent_review_required
 """,
-    )
+        )
 
-    result = pre_tool_payload(
-        project,
-        user_home,
-        {"session_id": "session-1", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": "comet-guard.sh unsafe-change build --apply"}},
-    )
+        result = pre_tool_payload(
+            project,
+            user_home,
+            {"session_id": "session-1", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": f"comet-guard.sh {change} build --apply"}},
+        )
 
-    assert result.returncode == 1, result.stdout + result.stderr
-    payload = body(result)
-    assert payload["status"] == "deny"
-    assert payload["reason"] == "comet_cross_agent_review_required"
-    assert payload["matched_guard_ids"] == ["user:personal-policy:verify_requires_review"]
-    assert payload["skipped_guard_ids"] == []
+        assert result.returncode == 1, result.stdout + result.stderr
+        payload = body(result)
+        assert payload["status"] == "deny"
+        assert payload["reason"] == "comet_cross_agent_review_required"
+        assert payload["matched_guard_ids"] == ["user:personal-policy:verify_requires_review"]
+        assert payload["skipped_guard_ids"] == []
 
 
 def test_global_command_guard_denies_stale_review_pass_with_short_head_artifact_path(tmp_path: Path) -> None:

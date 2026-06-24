@@ -539,6 +539,15 @@ def validate_global_command_guard_skip_when(
                 "把 skip_when 改成跳过条件列表；每项可声明 yaml 条件。",
             )
         ]
+    if not skip_when:
+        return [
+            ValidationIssue(
+                "global_command_guards",
+                f"{base}.skip_when",
+                "必须至少声明一个跳过条件。",
+                "添加一个 yaml 条件，或删除 skip_when 让守卫始终执行 evidence 检查。",
+            )
+        ]
 
     issues: list[ValidationIssue] = []
     for index, condition in enumerate(skip_when):
