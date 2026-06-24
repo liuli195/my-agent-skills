@@ -57,7 +57,9 @@ def test_cross_agent_review_skill_documents_manifest_diff_commands_and_timeout_b
     assert "git diff --name-status --find-renames --find-copies-harder <base-ref>...<head-ref>" in text
     assert "git diff <base-ref>...<head-ref> -- <path>" in text
     assert "外层" in text
+    assert "480 秒" in text
     assert "540 秒" in text
+    assert "timeout/watchdog" in text
 
 
 def test_cross_agent_review_skill_documents_strict_finding_schema() -> None:
