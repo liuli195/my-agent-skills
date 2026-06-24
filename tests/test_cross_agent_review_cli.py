@@ -310,9 +310,14 @@ def test_fake_reviewer_results_bypass_real_sdk_for_tests(tmp_path: Path) -> None
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_run_archives_review_input_snapshots_under_output_dir(tmp_path: Path) -> None:
+def test_run_archives_context_snapshots_and_git_manifest_under_output_dir(tmp_path: Path) -> None:
     project = tmp_path / "repo"
-    head = init_repo(project)
+    base = init_repo(project)
+    write_file(project / "app.txt", "two\n")
+    write_file(project / "new file.txt", "new\n")
+    git(project, "add", "app.txt", "new file.txt")
+    git(project, "commit", "-m", "change app")
+    head = git(project, "rev-parse", "HEAD")
     input_dir = project / "review inputs"
     output_dir = tmp_path / "out"
     spec_file = write_file(input_dir / "spec file.md", "spec body\n")
@@ -324,7 +329,7 @@ def test_run_archives_review_input_snapshots_under_output_dir(tmp_path: Path) ->
         "--change",
         "demo",
         "--base-ref",
-        head,
+        base,
         "--head-ref",
         head,
         "--spec-file",
@@ -348,15 +353,30 @@ def test_run_archives_review_input_snapshots_under_output_dir(tmp_path: Path) ->
         "design.md",
         "tasks.md",
     }
+    assert not (inputs_dir / "diff.patch").exists()
     assert (inputs_dir / "spec.md").read_text(encoding="utf-8") == "spec body\n"
     assert (inputs_dir / "design.md").read_text(encoding="utf-8") == "design body\n"
     assert (inputs_dir / "tasks.md").read_text(encoding="utf-8") == "tasks body\n"
     manifest = json.loads((output_dir / "inputs" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["change"] == "demo"
-    assert manifest["base_ref"] == head
+    assert manifest["base_ref"] == base
     assert manifest["head_ref"] == head
+    assert manifest["review_subject"] == {
+        "diff_command": f"git diff {base}...{head}",
+        "commit_list_command": f"git log {base}..{head} --oneline",
+        "changed_files_command": f"git diff --name-status {base}...{head}",
+        "path_diff_command_template": f"git diff {base}...{head} -- <path>",
+        "merge_base": base,
+    }
+    assert manifest["commits"] == [{"sha": head[:7], "summary": "change app"}]
+    assert manifest["changed_files"] == [
+        {"path": "app.txt", "status": "modified"},
+        {"path": "new file.txt", "status": "added"},
+    ]
     assert set(manifest["inputs"]) == {"spec", "design", "tasks"}
-    assert manifest["changed_files"] == []
+    assert set(manifest["inputs"]["spec"]) == {"path", "bytes", "sha256"}
+    assert set(manifest["inputs"]["design"]) == {"path", "bytes", "sha256"}
+    assert set(manifest["inputs"]["tasks"]) == {"path", "bytes", "sha256"}
     assert not (inputs_dir / "tests.txt").exists()
 
 

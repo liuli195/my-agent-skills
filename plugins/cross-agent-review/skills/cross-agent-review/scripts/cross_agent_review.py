@@ -86,6 +86,17 @@ SEVERITY_ALIASES = {
     "WARNING": "WARNING",
     "SUGGESTION": "SUGGESTION",
 }
+STATUS_MAP = {
+    "A": "added",
+    "C": "copied",
+    "D": "deleted",
+    "M": "modified",
+    "R": "renamed",
+    "T": "modified",
+    "U": "modified",
+    "X": "modified",
+    "B": "modified",
+}
 
 
 @dataclass(frozen=True)
@@ -348,6 +359,51 @@ def changed_files_from_diff(path: Path, limit: int = 160) -> str:
     return "\n".join(lines)
 
 
+def git_command_text(args: Sequence[str]) -> str:
+    return "git " + " ".join(args)
+
+
+def review_subject_commands(review_args: ReviewArgs) -> dict[str, str]:
+    diff_range = f"{review_args.base_ref}...{review_args.head_ref}"
+    commit_range = f"{review_args.base_ref}..{review_args.head_ref}"
+    return {
+        "diff_command": git_command_text(["diff", diff_range]),
+        "commit_list_command": git_command_text(["log", commit_range, "--oneline"]),
+        "changed_files_command": git_command_text(["diff", "--name-status", diff_range]),
+        "path_diff_command_template": git_command_text(["diff", diff_range, "--", "<path>"]),
+    }
+
+
+def merge_base(cwd: Path, base_ref: str, head_ref: str) -> str:
+    return git_output(["merge-base", base_ref, head_ref], cwd)
+
+
+def changed_file_entries_from_git(cwd: Path, base_ref: str, head_ref: str) -> list[dict[str, str]]:
+    output = git_output(["diff", "--name-status", f"{base_ref}...{head_ref}"], cwd)
+    entries: list[dict[str, str]] = []
+    for line in output.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        status = STATUS_MAP.get(parts[0][:1], "modified")
+        if status in {"renamed", "copied"} and len(parts) >= 3:
+            entries.append({"path": parts[2], "status": status, "previous_path": parts[1]})
+        else:
+            entries.append({"path": parts[1], "status": status})
+    return entries
+
+
+def commit_entries(cwd: Path, base_ref: str, head_ref: str) -> list[dict[str, str]]:
+    output = git_output(["log", f"{base_ref}..{head_ref}", "--oneline"], cwd)
+    entries: list[dict[str, str]] = []
+    for line in output.splitlines():
+        if not line:
+            continue
+        sha, _, summary = line.partition(" ")
+        entries.append({"sha": sha, "summary": summary})
+    return entries
+
+
 def input_manifest_path(review_args: ReviewArgs) -> Path:
     return output_dir_for(review_args) / "inputs" / "manifest.json"
 
@@ -369,16 +425,21 @@ def input_file_metadata(review_args: ReviewArgs, path: Path) -> dict:
 
 
 def build_input_manifest(review_args: ReviewArgs) -> dict:
+    cwd = Path.cwd()
+    review_subject = review_subject_commands(review_args)
+    review_subject["merge_base"] = merge_base(cwd, review_args.base_ref, review_args.head_ref)
     return {
         "change": review_args.change,
         "base_ref": review_args.base_ref,
         "head_ref": review_args.head_ref,
+        "review_subject": review_subject,
+        "commits": commit_entries(cwd, review_args.base_ref, review_args.head_ref),
         "inputs": {
             "spec": input_file_metadata(review_args, review_args.spec_file),
             "design": input_file_metadata(review_args, review_args.design_file),
             "tasks": input_file_metadata(review_args, review_args.tasks_file),
         },
-        "changed_files": [],
+        "changed_files": changed_file_entries_from_git(cwd, review_args.base_ref, review_args.head_ref),
     }
 
 
