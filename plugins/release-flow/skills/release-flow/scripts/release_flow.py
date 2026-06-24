@@ -29,7 +29,7 @@ SUPPORTED_CODEX_MARKETPLACE_PLUGINS = {
     "release-flow",
     "cross-agent-review",
     "pr-flow",
-    "test-framework",
+    "build-and-verify",
 }
 SETUP_TARGETS = [
     ("release-flow/config.yaml", ".release-flow/config.yaml"),
@@ -594,9 +594,9 @@ def codex_marketplace_entry(plugin_name: str) -> dict[str, Any]:
             "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
             "category": "Developer Tools",
         },
-        "test-framework": {
-            "name": "test-framework",
-            "source": {"source": "local", "path": "./plugins/test-framework"},
+        "build-and-verify": {
+            "name": "build-and-verify",
+            "source": {"source": "local", "path": "./plugins/build-and-verify"},
             "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
             "category": "Developer Tools",
         },

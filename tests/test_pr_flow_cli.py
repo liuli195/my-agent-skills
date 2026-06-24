@@ -829,6 +829,7 @@ def run_tweak_in_process(
     first_pr_stderr: str = "",
     review_decision: str = "APPROVED",
     checks: list[dict[str, object]] | None = None,
+    forbid_full_verify: bool = False,
 ) -> tuple[Path, subprocess.CompletedProcess[str], object]:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
@@ -837,6 +838,11 @@ def run_tweak_in_process(
     project = tmp_path / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
+    if forbid_full_verify:
+        def fail_full_verify(*_args, **_kwargs):
+            raise AssertionError("tweak must not run build-and-verify verify --full")
+
+        monkeypatch.setattr(module, "run_hotfix_verify_command", fail_full_verify)
     head_oid = "b" * 40
     pr_stdout = pr_view_json(
         checks=checks or [{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -1071,7 +1077,7 @@ def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
     assert config["defaults"]["reviewGate"]["evidencePath"] == ".pr-flow/review-pass.json"
     assert (
         config["defaults"]["hotfix"]["verifyCommand"]
-        == "python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project . --full"
+        == "python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full"
     )
     assert config["defaults"]["wait"] == {"timeoutSeconds": 600, "pollSeconds": 15}
     assert config["defaults"]["pr"]["bodyTemplatePath"] == ".pr-flow/pr-template.md"
@@ -1085,12 +1091,12 @@ def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
     assert (project / ".pr-flow" / ".gitignore").read_text(encoding="utf-8") == "/runs/\n/last-status.json\n"
 
 
-def test_current_repo_hotfix_verify_command_uses_test_framework_full() -> None:
+def test_current_repo_hotfix_verify_command_uses_BUILD_AND_VERIFY_full() -> None:
     config = yaml.safe_load((REPO_ROOT / ".pr-flow" / "config.yaml").read_text(encoding="utf-8"))
 
     assert (
         config["defaults"]["hotfix"]["verifyCommand"]
-        == "python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project . --full"
+        == "python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full"
     )
 
 
@@ -1381,6 +1387,61 @@ def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path, 
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["status"] == "cleanup_complete"
     assert status["command"] == "cleanup"
+
+
+def test_complete_does_not_run_build_and_verify_full_verify(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    head_oid = "b" * 40
+    gh_stub = CommandStub(consume=True)
+    for command in [
+        ["pr", "view", "--json", module.PR_VIEW_FIELDS],
+        ["pr", "view", "--json", module.PR_VIEW_FIELDS],
+    ]:
+        gh_stub.add(
+            command,
+            stdout=pr_view_json(
+                checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                review_decision="APPROVED",
+                head_oid=head_oid,
+            ),
+        )
+    gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
+    gh_stub.add(
+        ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
+        stdout=cleanup_pr_view_json(),
+    )
+    git_stub = CommandStub(consume=True)
+    for git_args, stdout in [
+        (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "HEAD"], head_oid + "\n"),
+        (["status", "--short"], ""),
+        (["branch", "--show-current"], "feature/example\n"),
+        (["push", "origin", "--delete", "feature/example"], ""),
+        (["ls-remote", "--heads", "origin", "feature/example"], ""),
+        (["checkout", "main"], ""),
+        (["pull", "--ff-only", "origin", "main"], ""),
+        (["branch", "-d", "feature/example"], ""),
+        (["branch", "--show-current"], "main\n"),
+    ]:
+        git_stub.add(git_args, stdout=stdout)
+
+    def fail_full_verify(*_args, **_kwargs):
+        raise AssertionError("complete must not run build-and-verify verify --full")
+
+    monkeypatch.setattr(module, "gh", gh_stub)
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "run_hotfix_verify_command", fail_full_verify)
+
+    result = invoke_pr_flow(["complete", "--project", str(project)], module=module)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
 
 
 def test_complete_returns_cleanup_stop_when_cleanup_fails_after_merge(tmp_path: Path, monkeypatch) -> None:
@@ -1755,6 +1816,18 @@ def test_tweak_skips_review_gate_for_changes_requested_then_merges_and_cleans_up
         ["pr", "merge", "12", "--merge", "--match-head-commit", "b" * 40],
         ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
     ]
+
+
+def test_tweak_does_not_run_build_and_verify_full_verify(tmp_path: Path, monkeypatch) -> None:
+    _project, result, _gh_stub = run_tweak_in_process(
+        tmp_path,
+        monkeypatch,
+        reason="wording only",
+        forbid_full_verify=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
 
 
 def test_tweak_pending_checks_report_dispatch_required(tmp_path: Path, monkeypatch) -> None:

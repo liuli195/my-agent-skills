@@ -10,14 +10,14 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_BUILD_SCRIPT = REPO_ROOT / "scripts" / "local_plugin_build.py"
-TEST_FRAMEWORK_RUNNER = (
+BUILD_AND_VERIFY_RUNNER = (
     REPO_ROOT
     / "plugins"
-    / "test-framework"
+    / "build-and-verify"
     / "skills"
-    / "test-framework"
+    / "build-and-verify"
     / "scripts"
-    / "test_framework_runner.py"
+    / "build_and_verify_runner.py"
 )
 
 
@@ -32,7 +32,7 @@ def load_module(path: Path, name: str):
 
 
 def load_check_module():
-    return load_module(TEST_FRAMEWORK_RUNNER, "test_framework_runner")
+    return load_module(BUILD_AND_VERIFY_RUNNER, "build_and_verify_runner")
 
 
 def load_local_build_module():
@@ -51,7 +51,7 @@ def write_runner_config(
     verify_checks: list[dict[str, Any]] | None = None,
 ) -> None:
     write_json(
-        root / ".test-framework" / "config.json",
+        root / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": build_checks or []},
@@ -423,18 +423,28 @@ def test_runner_cache_key_changes_with_runtime_versions(
     )
     config = module._load_config(tmp_path)
     check = config["verify"]["checks"][0]
+    base_framework_version = module.FRAMEWORK_VERSION
+    base_cache_version = module.CACHE_VERSION
     base_key = module._cache_key(tmp_path, config, check, ["src/app.py"])
 
     monkeypatch.setattr(
         module, "FRAMEWORK_VERSION", "changed-framework", raising=False
     )
     framework_key = module._cache_key(tmp_path, config, check, ["src/app.py"])
-    monkeypatch.setattr(module, "FRAMEWORK_VERSION", "0.1.0", raising=False)
+    monkeypatch.setattr(
+        module, "FRAMEWORK_VERSION", base_framework_version, raising=False
+    )
     monkeypatch.setattr(module, "CACHE_VERSION", "changed-cache", raising=False)
     cache_key = module._cache_key(tmp_path, config, check, ["src/app.py"])
+    monkeypatch.setattr(module, "CACHE_VERSION", base_cache_version, raising=False)
+    monkeypatch.setattr(
+        module.platform, "python_version", lambda: "changed-python", raising=False
+    )
+    python_key = module._cache_key(tmp_path, config, check, ["src/app.py"])
 
     assert framework_key != base_key
     assert cache_key != base_key
+    assert python_key != base_key
 
 
 def test_runner_cache_store_writes_passed_status(tmp_path: Path) -> None:
@@ -443,7 +453,7 @@ def test_runner_cache_store_writes_passed_status(tmp_path: Path) -> None:
 
     module._cache_store(tmp_path, "abc123", check)
 
-    cache_files = list((tmp_path / ".test-framework" / "cache").glob("*.json"))
+    cache_files = list((tmp_path / ".build-and-verify" / "cache").glob("*.json"))
     assert len(cache_files) == 1
     data = json.loads(cache_files[0].read_text(encoding="utf-8"))
     assert data == {"status": "passed", "id": "cache-status"}
@@ -458,7 +468,7 @@ def test_runner_build_reports_missing_config_without_traceback(
     captured = capsys.readouterr()
 
     assert result == 1
-    assert "missing_config: .test-framework/config.json" in captured.err
+    assert "missing_config: .build-and-verify/config.json" in captured.err
     assert "status: failed" in captured.out
     assert "Traceback" not in captured.out + captured.err
 
@@ -467,7 +477,7 @@ def test_runner_build_reports_invalid_config_without_traceback(
     tmp_path: Path, capsys
 ) -> None:
     module = load_check_module()
-    config = tmp_path / ".test-framework" / "config.json"
+    config = tmp_path / ".build-and-verify" / "config.json"
     config.parent.mkdir()
     config.write_text("{not json\n", encoding="utf-8")
 
@@ -475,7 +485,7 @@ def test_runner_build_reports_invalid_config_without_traceback(
     captured = capsys.readouterr()
 
     assert result == 1
-    assert "invalid_config: .test-framework/config.json" in captured.err
+    assert "invalid_config: .build-and-verify/config.json" in captured.err
     assert "status: failed" in captured.out
     assert "Traceback" not in captured.out + captured.err
 
@@ -489,7 +499,7 @@ def test_runner_verify_reports_missing_config_without_traceback(
     captured = capsys.readouterr()
 
     assert result == 1
-    assert "missing_config: .test-framework/config.json" in captured.err
+    assert "missing_config: .build-and-verify/config.json" in captured.err
     assert "status: failed" in captured.out
     assert "Traceback" not in captured.out + captured.err
 
@@ -498,7 +508,7 @@ def test_runner_verify_reports_invalid_config_without_traceback(
     tmp_path: Path, capsys
 ) -> None:
     module = load_check_module()
-    config = tmp_path / ".test-framework" / "config.json"
+    config = tmp_path / ".build-and-verify" / "config.json"
     config.parent.mkdir()
     config.write_text("{not json\n", encoding="utf-8")
 
@@ -506,7 +516,7 @@ def test_runner_verify_reports_invalid_config_without_traceback(
     captured = capsys.readouterr()
 
     assert result == 1
-    assert "invalid_config: .test-framework/config.json" in captured.err
+    assert "invalid_config: .build-and-verify/config.json" in captured.err
     assert "status: failed" in captured.out
     assert "Traceback" not in captured.out + captured.err
 
@@ -598,13 +608,13 @@ def test_runner_reports_invalid_config_structure_without_traceback(
     tmp_path: Path, capsys, config_data: Any, expected_error: str
 ) -> None:
     module = load_check_module()
-    write_json(tmp_path / ".test-framework" / "config.json", config_data)
+    write_json(tmp_path / ".build-and-verify" / "config.json", config_data)
 
     result = module.run_build(tmp_path)
     captured = capsys.readouterr()
 
     assert result == 1
-    assert "invalid_config: .test-framework/config.json" in captured.err
+    assert "invalid_config: .build-and-verify/config.json" in captured.err
     assert expected_error in captured.err
     assert "status: failed" in captured.out
     assert "Traceback" not in captured.out + captured.err
@@ -782,7 +792,7 @@ def test_runner_reports_missing_list_command_without_traceback(
         verify_checks=[
             {
                 "id": "missing-command",
-                "command": ["missing-test-framework-executable"],
+                "command": ["missing-build-and-verify-executable"],
                 "paths": ["src/**"],
                 "inputs": ["src/app.py"],
             }
@@ -791,13 +801,13 @@ def test_runner_reports_missing_list_command_without_traceback(
     monkeypatch.setattr(module, "_changed_files", lambda _root: ["src/app.py"], raising=False)
 
     def fake_run(*_args, **_kwargs):
-        raise FileNotFoundError("missing-test-framework-executable")
+        raise FileNotFoundError("missing-build-and-verify-executable")
 
     result = module.run_verify(tmp_path, runner=fake_run)
     captured = capsys.readouterr()
 
     assert result == 1
-    assert "command_not_found: missing-command: missing-test-framework-executable" in captured.err
+    assert "command_not_found: missing-command: missing-build-and-verify-executable" in captured.err
     assert "Traceback" not in captured.out + captured.err
 
 
@@ -831,8 +841,8 @@ def test_runner_changed_files_falls_back_to_project_scan_when_git_unavailable(
     (tmp_path / "src" / "app.py").write_text("app\n", encoding="utf-8")
     (tmp_path / ".git").mkdir()
     (tmp_path / ".git" / "noise").write_text("ignore\n", encoding="utf-8")
-    (tmp_path / ".test-framework" / "cache").mkdir(parents=True)
-    (tmp_path / ".test-framework" / "cache" / "hit.json").write_text(
+    (tmp_path / ".build-and-verify" / "cache").mkdir(parents=True)
+    (tmp_path / ".build-and-verify" / "cache" / "hit.json").write_text(
         "ignore\n", encoding="utf-8"
     )
     monkeypatch.setattr(module, "_git_names", lambda _root, *_args: None)
@@ -1250,15 +1260,15 @@ def test_root_comet_yaml_points_to_check_commands_for_guard() -> None:
     import yaml
 
     data = yaml.safe_load((REPO_ROOT / ".comet.yaml").read_text(encoding="utf-8"))
-    script = REPO_ROOT / "plugins" / "test-framework" / "skills" / "test-framework" / "scripts" / "test_framework.py"
+    script = REPO_ROOT / "plugins" / "build-and-verify" / "skills" / "build-and-verify" / "scripts" / "build_and_verify.py"
 
     assert (
         data["build_command"]
-        == "python plugins/test-framework/skills/test-framework/scripts/test_framework.py build --project ."
+        == "python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py build --project ."
     )
     assert (
         data["verify_command"]
-        == "python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project ."
+        == "python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project ."
     )
     assert script.is_file()
 
@@ -1268,7 +1278,7 @@ def test_active_automation_does_not_reference_removed_check_entrypoint() -> None
         REPO_ROOT / ".github" / "workflows" / "release.yml",
         REPO_ROOT / ".comet.yaml",
         REPO_ROOT / ".comet" / "config.yaml",
-        REPO_ROOT / ".test-framework" / "config.json",
+        REPO_ROOT / ".build-and-verify" / "config.json",
     ]
 
     for path in active_files:
@@ -1277,7 +1287,7 @@ def test_active_automation_does_not_reference_removed_check_entrypoint() -> None
 
 
 def test_root_verify_checks_are_split_by_repo_domains() -> None:
-    data = json.loads((REPO_ROOT / ".test-framework" / "config.json").read_text(encoding="utf-8"))
+    data = json.loads((REPO_ROOT / ".build-and-verify" / "config.json").read_text(encoding="utf-8"))
     checks = data["verify"]["checks"]
     check_by_id = {check["id"]: check for check in checks}
 
@@ -1287,7 +1297,7 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
         "verify.release-flow",
         "verify.pr-flow",
         "verify.cross-agent-review",
-        "verify.test-framework",
+        "verify.build-and-verify",
         "verify.openspec",
     ]
     assert "pytest.full" not in check_by_id

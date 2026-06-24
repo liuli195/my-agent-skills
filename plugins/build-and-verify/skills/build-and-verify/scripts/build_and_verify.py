@@ -1,4 +1,4 @@
-"""Test Framework Plugin（测试框架插件）命令入口。"""
+"""Build and Verify Plugin（构建与验证插件）命令入口。"""
 
 from __future__ import annotations
 
@@ -25,8 +25,8 @@ def _runner() -> ModuleType:
     global _RUNNER_MODULE
     if _RUNNER_MODULE is not None:
         return _RUNNER_MODULE
-    runner_path = Path(__file__).resolve().with_name("test_framework_runner.py")
-    spec = importlib.util.spec_from_file_location("test_framework_runner", runner_path)
+    runner_path = Path(__file__).resolve().with_name("build_and_verify_runner.py")
+    spec = importlib.util.spec_from_file_location("build_and_verify_runner", runner_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"missing_runner: {runner_path}")
     module = importlib.util.module_from_spec(spec)
@@ -38,11 +38,11 @@ def _runner() -> ModuleType:
 
 def _init_project(project: Path) -> int:
     target_files = {
-        project / ".test-framework" / "config.json": _templates_root()
-        / "test-framework"
+        project / ".build-and-verify" / "config.json": _templates_root()
+        / "build-and-verify"
         / "config.json",
-        project / ".test-framework" / ".gitignore": _templates_root()
-        / "test-framework"
+        project / ".build-and-verify" / ".gitignore": _templates_root()
+        / "build-and-verify"
         / "gitignore",
     }
 
@@ -56,14 +56,14 @@ def _init_project(project: Path) -> int:
     for target, source in target_files.items():
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
-    (project / ".test-framework" / "cache").mkdir(parents=True, exist_ok=True)
+    (project / ".build-and-verify" / "cache").mkdir(parents=True, exist_ok=True)
 
     print("status: initialized")
     return 0
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="test_framework.py")
+    parser = argparse.ArgumentParser(prog="build_and_verify.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
     init_parser = subparsers.add_parser("init")
     init_parser.add_argument("--project", required=True)

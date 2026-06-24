@@ -59,7 +59,7 @@ def default_config(base_branch: str) -> dict:
             "mergeStrategy": "merge",
             "reviewGate": {"mode": "github", "evidencePath": ".pr-flow/review-pass.json"},
             "hotfix": {
-                "verifyCommand": "python plugins/test-framework/skills/test-framework/scripts/test_framework.py verify --project . --full"
+                "verifyCommand": "python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full"
             },
             "wait": {"timeoutSeconds": 600, "pollSeconds": 15},
             "pr": {

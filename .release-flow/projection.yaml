@@ -62,7 +62,7 @@ generators:
       - release-flow
       - cross-agent-review
       - pr-flow
-      - test-framework
+      - build-and-verify
 
 transforms:
   - path: .agents/plugins/marketplace.json

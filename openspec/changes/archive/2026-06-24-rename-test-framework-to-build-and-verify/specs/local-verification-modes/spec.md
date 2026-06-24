@@ -1,8 +1,5 @@
-# local-verification-modes Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change split-fast-full-verification. Update Purpose after archive.
-## Requirements
 ### Requirement: Initialized repositories expose standard verification modes
 由 build-and-verify（构建与验证）Plugin（插件）初始化的仓库 MUST 通过同一套 configured checks（配置检查项）提供默认 fast（快速验证）和显式 full（完整验证）。
 
@@ -36,6 +33,8 @@ TBD - created by archiving change split-fast-full-verification. Update Purpose a
 - **THEN** 系统 MUST 输出 checked（已检查）为空或等价信息
 - **THEN** 系统 MUST 输出 full-not-run（全量未运行）为 true 或等价信息
 - **THEN** 系统 MUST NOT 自动运行 full（完整验证）路径
+
+## ADDED Requirements
 
 ### Requirement: Full verification is restricted to explicit high-cost contexts
 本仓库自动流程 MUST 默认使用 fast verify（快速验证），并将 full verify（完整验证）限制在明确允许的高成本上下文。
