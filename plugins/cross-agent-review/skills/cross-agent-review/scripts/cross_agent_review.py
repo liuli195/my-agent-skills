@@ -4,7 +4,6 @@ import argparse
 import hashlib
 import json
 import os
-import shlex
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -12,9 +11,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 
-REQUIRED_FILE_ARGS = ["diff_file", "spec_file", "design_file", "tasks_file"]
+SCRIPT_PATH = Path(__file__).resolve()
+SKILL_ROOT = SCRIPT_PATH.parents[1]
+REVIEWER_PROMPT_TEMPLATE = SKILL_ROOT / "assets" / "templates" / "reviewer-prompt.md"
+REQUIRED_FILE_ARGS = ["spec_file", "design_file", "tasks_file"]
 INPUT_SNAPSHOT_NAMES = {
-    "diff_file": "diff.patch",
     "spec_file": "spec.md",
     "design_file": "design.md",
     "tasks_file": "tasks.md",
@@ -87,6 +88,17 @@ SEVERITY_ALIASES = {
     "WARNING": "WARNING",
     "SUGGESTION": "SUGGESTION",
 }
+STATUS_MAP = {
+    "A": "added",
+    "C": "copied",
+    "D": "deleted",
+    "M": "modified",
+    "R": "renamed",
+    "T": "modified",
+    "U": "modified",
+    "X": "modified",
+    "B": "modified",
+}
 
 
 @dataclass(frozen=True)
@@ -94,7 +106,6 @@ class ReviewArgs:
     change: str
     base_ref: str
     head_ref: str
-    diff_file: Path
     spec_file: Path
     design_file: Path
     tasks_file: Path
@@ -111,7 +122,6 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--change", required=True)
     run_parser.add_argument("--base-ref", required=True)
     run_parser.add_argument("--head-ref", required=True)
-    run_parser.add_argument("--diff-file", type=Path, required=True)
     run_parser.add_argument("--spec-file", type=Path, required=True)
     run_parser.add_argument("--design-file", type=Path, required=True)
     run_parser.add_argument("--tasks-file", type=Path, required=True)
@@ -171,7 +181,6 @@ def parse_review_args(args: argparse.Namespace) -> ReviewArgs:
         change=args.change,
         base_ref=args.base_ref,
         head_ref=args.head_ref,
-        diff_file=args.diff_file,
         spec_file=args.spec_file,
         design_file=args.design_file,
         tasks_file=args.tasks_file,
@@ -265,91 +274,122 @@ def input_reference(label: str, path: Path) -> str:
     )
 
 
-def diff_path(value: str, prefix: str) -> str:
-    return value[len(prefix) :] if value.startswith(prefix) else value
+def render_template(path: Path, values: dict[str, str]) -> str:
+    rendered = path.read_text(encoding="utf-8")
+    for key, value in values.items():
+        rendered = rendered.replace(f"{{{{ {key} }}}}", value)
+    return rendered
 
 
-def parse_diff_git_paths(line: str) -> tuple[str, str] | None:
-    rest = line.removeprefix("diff --git ")
-    if rest.startswith('"'):
-        parts = shlex.split(rest)
-        if len(parts) >= 2:
-            return diff_path(parts[0], "a/"), diff_path(parts[1], "b/")
-    separator = rest.rfind(" b/")
-    if separator != -1:
-        return diff_path(rest[:separator], "a/"), diff_path(rest[separator + 1 :], "b/")
-    parts = rest.split(maxsplit=1)
-    if len(parts) >= 2:
-        return diff_path(parts[0], "a/"), diff_path(parts[1], "b/")
-    return None
+def git_command_text(args: Sequence[str]) -> str:
+    return "git " + " ".join(args)
 
 
-def changed_file_entries_from_diff(path: Path) -> list[dict[str, str]]:
+def review_subject_commands(review_args: ReviewArgs) -> dict[str, str]:
+    diff_range = f"{review_args.base_ref}...{review_args.head_ref}"
+    commit_range = f"{review_args.base_ref}..{review_args.head_ref}"
+    return {
+        "diff_command": git_command_text(["diff", diff_range]),
+        "commit_list_command": git_command_text(["log", commit_range, "--oneline"]),
+        "changed_files_command": git_command_text(
+            ["diff", "--name-status", "--find-renames", "--find-copies-harder", diff_range]
+        ),
+        "path_diff_command_template": git_command_text(["diff", diff_range, "--", "<path>"]),
+    }
+
+
+def review_subject_commands_prompt(review_args: ReviewArgs) -> str:
+    commands = review_subject_commands(review_args)
+    return "\n".join(
+        [
+            f"- {commands['diff_command']}",
+            f"- {commands['commit_list_command']}",
+            f"- {commands['changed_files_command']}",
+            f"- {commands['path_diff_command_template']}",
+        ]
+    )
+
+
+def changed_files_prompt(cwd: Path, review_args: ReviewArgs, limit: int = 160) -> str:
+    try:
+        entries = changed_file_entries_from_git(cwd, review_args.base_ref, review_args.head_ref)
+    except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError):
+        return "- <unavailable>"
+    if not entries:
+        return "- <none>"
+
+    lines: list[str] = []
+    for entry in entries[:limit]:
+        line = f"- {entry['status']}: {entry['path']}"
+        previous_path = entry.get("previous_path")
+        if previous_path:
+            line = f"{line} (from {previous_path})"
+        lines.append(line)
+
+    remaining = len(entries) - limit
+    if remaining > 0:
+        lines.append(f"- <{remaining} more>")
+    return "\n".join(lines)
+
+
+def context_file_references(review_args: ReviewArgs) -> str:
+    return "\n\n".join(
+        [
+            input_reference("Spec", review_args.spec_file),
+            input_reference("Design", review_args.design_file),
+            input_reference("Tasks", review_args.tasks_file),
+        ]
+    )
+
+
+def merge_base(cwd: Path, base_ref: str, head_ref: str) -> str:
+    return git_output(["merge-base", base_ref, head_ref], cwd)
+
+
+def changed_file_entries_from_git(cwd: Path, base_ref: str, head_ref: str) -> list[dict[str, str]]:
+    output = git_output_bytes(
+        [
+            "diff",
+            "--name-status",
+            "--find-renames",
+            "--find-copies-harder",
+            "-z",
+            f"{base_ref}...{head_ref}",
+        ],
+        cwd,
+    )
     entries: list[dict[str, str]] = []
-    current: dict[str, str] | None = None
-
-    def append_current() -> None:
-        if current is None:
-            return
-        changed_path = current.get("path") or current.get("new_path") or current.get("old_path")
-        if not changed_path:
-            return
-        entry = {"path": changed_path, "status": current.get("status", "modified")}
-        previous_path = current.get("old_path")
-        if entry["status"] in {"renamed", "copied"} and previous_path and previous_path != changed_path:
-            entry["previous_path"] = previous_path
-        if entry not in entries:
-            entries.append(entry)
-
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if line.startswith("diff --git "):
-            append_current()
-            current = None
-            parsed_paths = parse_diff_git_paths(line)
-            if parsed_paths is None:
-                continue
-            old_path, new_path = parsed_paths
-            current = {
-                "old_path": old_path,
-                "new_path": new_path,
-                "path": new_path,
-                "status": "modified",
-            }
+    parts = [part for part in output.split(b"\0") if part]
+    index = 0
+    while index < len(parts):
+        status_token = parts[index].decode("utf-8", errors="surrogateescape")
+        index += 1
+        status = STATUS_MAP.get(status_token[:1], "modified")
+        if status in {"renamed", "copied"}:
+            if index + 1 >= len(parts):
+                break
+            previous_path = parts[index].decode("utf-8", errors="surrogateescape")
+            path = parts[index + 1].decode("utf-8", errors="surrogateescape")
+            index += 2
+            entries.append({"path": path, "status": status, "previous_path": previous_path})
             continue
-        if current is None:
-            continue
-        if line.startswith("new file mode "):
-            current["status"] = "added"
-            current["path"] = current["new_path"]
-        elif line.startswith("deleted file mode "):
-            current["status"] = "deleted"
-            current["path"] = current["old_path"]
-        elif line.startswith("rename from "):
-            current["status"] = "renamed"
-            current["old_path"] = line.removeprefix("rename from ")
-        elif line.startswith("rename to "):
-            current["status"] = "renamed"
-            current["new_path"] = line.removeprefix("rename to ")
-            current["path"] = current["new_path"]
-        elif line.startswith("copy from "):
-            current["status"] = "copied"
-            current["old_path"] = line.removeprefix("copy from ")
-        elif line.startswith("copy to "):
-            current["status"] = "copied"
-            current["new_path"] = line.removeprefix("copy to ")
-            current["path"] = current["new_path"]
-    append_current()
+        if index >= len(parts):
+            break
+        path = parts[index].decode("utf-8", errors="surrogateescape")
+        index += 1
+        entries.append({"path": path, "status": status})
     return entries
 
 
-def changed_files_from_diff(path: Path, limit: int = 160) -> str:
-    files = [entry["path"] for entry in changed_file_entries_from_diff(path)]
-    shown = files[:limit]
-    lines = ["Changed files:"]
-    lines.extend(f"- {item}" for item in shown)
-    if len(files) > limit:
-        lines.append(f"- ... {len(files) - limit} more")
-    return "\n".join(lines)
+def commit_entries(cwd: Path, base_ref: str, head_ref: str) -> list[dict[str, str]]:
+    output = git_output(["log", f"{base_ref}..{head_ref}", "--oneline"], cwd)
+    entries: list[dict[str, str]] = []
+    for line in output.splitlines():
+        if not line:
+            continue
+        sha, _, summary = line.partition(" ")
+        entries.append({"sha": sha, "summary": summary})
+    return entries
 
 
 def input_manifest_path(review_args: ReviewArgs) -> Path:
@@ -373,17 +413,21 @@ def input_file_metadata(review_args: ReviewArgs, path: Path) -> dict:
 
 
 def build_input_manifest(review_args: ReviewArgs) -> dict:
+    cwd = Path.cwd()
+    review_subject = review_subject_commands(review_args)
+    review_subject["merge_base"] = merge_base(cwd, review_args.base_ref, review_args.head_ref)
     return {
         "change": review_args.change,
         "base_ref": review_args.base_ref,
         "head_ref": review_args.head_ref,
+        "review_subject": review_subject,
+        "commits": commit_entries(cwd, review_args.base_ref, review_args.head_ref),
         "inputs": {
-            "diff": input_file_metadata(review_args, review_args.diff_file),
             "spec": input_file_metadata(review_args, review_args.spec_file),
             "design": input_file_metadata(review_args, review_args.design_file),
             "tasks": input_file_metadata(review_args, review_args.tasks_file),
         },
-        "changed_files": changed_file_entries_from_diff(review_args.diff_file),
+        "changed_files": changed_file_entries_from_git(cwd, review_args.base_ref, review_args.head_ref),
     }
 
 
@@ -394,53 +438,41 @@ def write_input_manifest(review_args: ReviewArgs) -> Path:
 
 
 def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
-    parts = [
-        f"Role: {role}",
-        "Return only a single JSON object. Do not use Markdown.",
-        "Schema:",
-        json.dumps(
-            {
-                "role": role,
-                "status": "completed",
-                "findings": [
-                    {
-                        "severity": "CRITICAL",
-                        "location": "path-or-component",
-                        "summary": "one-line issue summary",
-                        "evidence": "specific evidence from the supplied inputs",
-                        "recommendation": "concrete next action",
-                    }
-                ],
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        "Use only these severity values: CRITICAL, IMPORTANT, WARNING, SUGGESTION.",
-        'If there are no issues, return "findings": [].',
-        "Do not put pass, aligned, ok, or informational observations in findings.",
-        "Do not use severity aliases such as high, medium, low, minor, or info.",
-        SEVERITY_RUBRIC,
-    ]
-    focus = ROLE_FOCUS.get(role)
-    if focus:
-        parts.append(focus)
-    parts.extend(
-        [
-            f"Change: {review_args.change}",
-            f"Base ref: {review_args.base_ref}",
-            f"Head ref: {review_args.head_ref}",
-            f"Manifest file: {input_manifest_path(review_args)}",
-            "Use the referenced input files as the source of truth. Read only the sections needed for this review.",
-            "Use git diff/show/status read-only commands if the file references are insufficient.",
-            "Do not read diff.patch wholesale. Use the changed-file list and path-scoped git diff commands.",
-            changed_files_from_diff(review_args.diff_file),
-            input_reference("Diff", review_args.diff_file),
-            input_reference("Spec", review_args.spec_file),
-            input_reference("Design", review_args.design_file),
-            input_reference("Tasks", review_args.tasks_file),
-        ]
+    review_subject = review_subject_commands(review_args)
+    schema_json = json.dumps(
+        {
+            "role": role,
+            "status": "completed",
+            "findings": [
+                {
+                    "severity": "CRITICAL",
+                    "location": "path-or-component",
+                    "summary": "one-line issue summary",
+                    "evidence": "specific evidence from the supplied inputs",
+                    "recommendation": "concrete next action",
+                }
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
     )
-    return "\n\n".join(parts)
+    return render_template(
+        REVIEWER_PROMPT_TEMPLATE,
+        {
+            "role": role,
+            "schema_json": schema_json,
+            "severity_rubric": SEVERITY_RUBRIC,
+            "role_focus": ROLE_FOCUS.get(role, ""),
+            "change": review_args.change,
+            "base_ref": review_args.base_ref,
+            "head_ref": review_args.head_ref,
+            "manifest_path": str(input_manifest_path(review_args)),
+            "review_subject_commands": review_subject_commands_prompt(review_args),
+            "changed_files": changed_files_prompt(Path.cwd(), review_args),
+            "context_files": context_file_references(review_args),
+            "path_diff_command_template": review_subject["path_diff_command_template"],
+        },
+    )
 
 
 def dispatch_reviewers(review_args: ReviewArgs, sdk_python: str) -> list[dict]:
@@ -848,7 +880,6 @@ def render_report(review_args: ReviewArgs, summary: dict) -> str:
 
 def allowed_input_paths(review_args: ReviewArgs) -> list[Path]:
     return [
-        review_args.diff_file,
         review_args.spec_file,
         review_args.design_file,
         review_args.tasks_file,
