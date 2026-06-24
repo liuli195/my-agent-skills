@@ -60,4 +60,4 @@
 3. 移动 `.test-framework/` 到 `.build-and-verify/`，更新缓存目录排除和配置读取路径。
 4. 删除 `pyproject.toml`（Python 测试配置），把 pytest（Python 测试运行器）参数写入 `.build-and-verify/config.json`。
 5. 更新 Comet（双星流程）、PR Flow（拉取请求流程）、marketplace（市场目录）、release projection（发布投影）、OpenSpec（开放规格）和测试引用。
-6. 运行 fast verify（快速验证）、full verify（完整验证）和 OpenSpec（开放规格）严格校验。
+6. 运行默认 fast verify（快速验证）和 OpenSpec（开放规格）严格校验；本非 hotfix（非热修复）、非 PR CI（非拉取请求持续集成）流程不运行 full verify（完整验证）。
