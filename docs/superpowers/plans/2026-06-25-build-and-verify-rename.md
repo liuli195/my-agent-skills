@@ -452,15 +452,11 @@ python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify
 
 Expected: default fast verify（快速验证） runs selected checks and does not run all checks unconditionally.
 
-- [ ] **Step 3: Run full verify**
+- [ ] **Step 3: Confirm full verify is out of scope here**
 
-Run:
+Confirm this ordinary rename（改名） flow is neither PR Flow hotfix（拉取请求流程热修复） direct push nor PR CI（拉取请求持续集成）, so it MUST NOT run any local verify（验证） command that adds `--full`（完整）.
 
-```powershell
-python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full
-```
-
-Expected: full verify（完整验证） runs all configured checks and remains under the full-verification runtime target.
+Expected: full verify（完整验证） remains documented and tested as an allowed exception only for hotfix（热修复） direct push and PR CI（拉取请求持续集成）.
 
 - [ ] **Step 4: Search for active old references**
 

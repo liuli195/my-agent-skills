@@ -423,18 +423,28 @@ def test_runner_cache_key_changes_with_runtime_versions(
     )
     config = module._load_config(tmp_path)
     check = config["verify"]["checks"][0]
+    base_framework_version = module.FRAMEWORK_VERSION
+    base_cache_version = module.CACHE_VERSION
     base_key = module._cache_key(tmp_path, config, check, ["src/app.py"])
 
     monkeypatch.setattr(
         module, "FRAMEWORK_VERSION", "changed-framework", raising=False
     )
     framework_key = module._cache_key(tmp_path, config, check, ["src/app.py"])
-    monkeypatch.setattr(module, "FRAMEWORK_VERSION", "0.1.0", raising=False)
+    monkeypatch.setattr(
+        module, "FRAMEWORK_VERSION", base_framework_version, raising=False
+    )
     monkeypatch.setattr(module, "CACHE_VERSION", "changed-cache", raising=False)
     cache_key = module._cache_key(tmp_path, config, check, ["src/app.py"])
+    monkeypatch.setattr(module, "CACHE_VERSION", base_cache_version, raising=False)
+    monkeypatch.setattr(
+        module.platform, "python_version", lambda: "changed-python", raising=False
+    )
+    python_key = module._cache_key(tmp_path, config, check, ["src/app.py"])
 
     assert framework_key != base_key
     assert cache_key != base_key
+    assert python_key != base_key
 
 
 def test_runner_cache_store_writes_passed_status(tmp_path: Path) -> None:

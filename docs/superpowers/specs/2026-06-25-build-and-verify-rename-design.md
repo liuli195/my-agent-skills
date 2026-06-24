@@ -84,4 +84,4 @@ Comet（双星流程）的默认 `verify_command`（验证命令）必须使用 
 - 运行 local build contract（本地构建契约）测试，确认活跃命令只指向新入口。
 - 运行 PR Flow（拉取请求流程）测试，确认 hotfix（热修复）使用显式 `--full`，complete/tweak（收尾/小改）不隐式升级。
 - 运行 OpenSpec（开放规格）严格校验。
-- 最后运行 `build-and-verify`（构建与验证）的 fast verify（快速验证）和 full verify（完整验证）。
+- 最后运行 `build-and-verify`（构建与验证）的默认 fast verify（快速验证）；本非 hotfix（非热修复）、非 PR CI（非拉取请求持续集成）流程不运行 full verify（完整验证）。

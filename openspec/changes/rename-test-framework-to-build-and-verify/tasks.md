@@ -31,5 +31,5 @@
 - [x] 5.1 Run focused build-and-verify（构建与验证） plugin tests.
 - [x] 5.2 Run local build command through `build-and-verify`（构建与验证）.
 - [x] 5.3 Run default fast verify（快速验证） through `build-and-verify`（构建与验证）.
-- [x] 5.4 Run full verify（完整验证） through `build-and-verify`（构建与验证） and confirm the runtime target still holds.
+- [x] 5.4 Confirm this non-hotfix（非热修复） and non-PR-CI（非拉取请求持续集成） flow does not require `--full`（完整）; full verify（完整验证） remains limited to hotfix（热修复） direct push and PR CI（拉取请求持续集成）.
 - [x] 5.5 Run `openspec validate rename-test-framework-to-build-and-verify --strict`.
