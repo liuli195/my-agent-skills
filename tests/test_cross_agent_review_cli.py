@@ -86,10 +86,8 @@ def test_missing_input_file_fails(tmp_path: Path) -> None:
         "base",
         "--head-ref",
         "head",
-        "--diff-file",
-        str(tmp_path / "missing.diff"),
         "--spec-file",
-        str(write_file(tmp_path / "spec.md")),
+        str(tmp_path / "missing-spec.md"),
         "--design-file",
         str(write_file(tmp_path / "design.md")),
         "--tasks-file",
@@ -169,8 +167,6 @@ def review_args(project: Path, head: str, output_dir: Path) -> list[str]:
         head,
         "--head-ref",
         head,
-        "--diff-file",
-        str(write_file(project / "diff.patch")),
         "--spec-file",
         str(write_file(project / "spec.md")),
         "--design-file",
@@ -184,12 +180,19 @@ def review_args(project: Path, head: str, output_dir: Path) -> list[str]:
     ]
 
 
+def test_diff_file_argument_is_not_required(tmp_path: Path) -> None:
+    head = init_repo(tmp_path / "repo")
+
+    result = run(*review_args(tmp_path / "repo", head, tmp_path / "out"), cwd=tmp_path / "repo")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def make_review_args_for_module(module, tmp_path: Path):
     return module.ReviewArgs(
         change="demo",
         base_ref="base",
         head_ref="head",
-        diff_file=write_file(tmp_path / "diff.patch"),
         spec_file=write_file(tmp_path / "spec.md"),
         design_file=write_file(tmp_path / "design.md"),
         tasks_file=write_file(tmp_path / "tasks.md"),
@@ -224,8 +227,6 @@ def test_untracked_input_files_in_space_directory_are_allowed(tmp_path: Path) ->
         head,
         "--head-ref",
         head,
-        "--diff-file",
-        str(write_file(input_dir / "change diff.patch")),
         "--spec-file",
         str(write_file(input_dir / "spec file.md")),
         "--design-file",
@@ -314,7 +315,6 @@ def test_run_archives_review_input_snapshots_under_output_dir(tmp_path: Path) ->
     head = init_repo(project)
     input_dir = project / "review inputs"
     output_dir = tmp_path / "out"
-    diff_file = write_file(input_dir / "change diff.patch", "diff --git a/app.txt b/app.txt\n")
     spec_file = write_file(input_dir / "spec file.md", "spec body\n")
     design_file = write_file(input_dir / "design file.md", "design body\n")
     tasks_file = write_file(input_dir / "tasks file.md", "tasks body\n")
@@ -327,8 +327,6 @@ def test_run_archives_review_input_snapshots_under_output_dir(tmp_path: Path) ->
         head,
         "--head-ref",
         head,
-        "--diff-file",
-        str(diff_file),
         "--spec-file",
         str(spec_file),
         "--design-file",
@@ -345,13 +343,11 @@ def test_run_archives_review_input_snapshots_under_output_dir(tmp_path: Path) ->
     assert result.returncode == 0, result.stdout + result.stderr
     inputs_dir = output_dir / "inputs"
     assert {path.name for path in inputs_dir.iterdir()} == {
-        "diff.patch",
         "manifest.json",
         "spec.md",
         "design.md",
         "tasks.md",
     }
-    assert (inputs_dir / "diff.patch").read_text(encoding="utf-8") == "diff --git a/app.txt b/app.txt\n"
     assert (inputs_dir / "spec.md").read_text(encoding="utf-8") == "spec body\n"
     assert (inputs_dir / "design.md").read_text(encoding="utf-8") == "design body\n"
     assert (inputs_dir / "tasks.md").read_text(encoding="utf-8") == "tasks body\n"
@@ -359,9 +355,8 @@ def test_run_archives_review_input_snapshots_under_output_dir(tmp_path: Path) ->
     assert manifest["change"] == "demo"
     assert manifest["base_ref"] == head
     assert manifest["head_ref"] == head
-    assert manifest["inputs"]["diff"]["path"] == "inputs/diff.patch"
-    assert manifest["inputs"]["diff"]["sha256"] == hashlib.sha256((inputs_dir / "diff.patch").read_bytes()).hexdigest()
-    assert manifest["changed_files"] == [{"path": "app.txt", "status": "modified"}]
+    assert set(manifest["inputs"]) == {"spec", "design", "tasks"}
+    assert manifest["changed_files"] == []
     assert not (inputs_dir / "tests.txt").exists()
 
 
@@ -417,7 +412,6 @@ def test_run_accepts_legacy_tests_file_argument_without_snapshotting_it(tmp_path
         change="demo",
         base_ref=head,
         head_ref=head,
-        diff_file=output_dir / "inputs" / "diff.patch",
         spec_file=output_dir / "inputs" / "spec.md",
         design_file=output_dir / "inputs" / "design.md",
         tasks_file=output_dir / "inputs" / "tasks.md",
@@ -459,7 +453,6 @@ def test_reviewer_prompt_includes_all_review_inputs(tmp_path: Path) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
     head = init_repo(project)
-    diff_file = write_file(project / "diff.patch", "diff --git a/app.txt b/app.txt\n")
     spec_file = write_file(project / "spec.md", "Spec body\n")
     design_file = write_file(project / "design.md", "Design body\n")
     tasks_file = write_file(project / "tasks.md", "Tasks body\n")
@@ -467,7 +460,6 @@ def test_reviewer_prompt_includes_all_review_inputs(tmp_path: Path) -> None:
         change="demo-change",
         base_ref=head,
         head_ref=head,
-        diff_file=diff_file,
         spec_file=spec_file,
         design_file=design_file,
         tasks_file=tasks_file,
@@ -484,14 +476,9 @@ def test_reviewer_prompt_includes_all_review_inputs(tmp_path: Path) -> None:
     assert "Change: demo-change" in prompt
     assert f"Base ref: {head}" in prompt
     assert f"Head ref: {head}" in prompt
-    assert f"Diff file: {diff_file}" in prompt
     assert f"Spec file: {spec_file}" in prompt
     assert f"Design file: {design_file}" in prompt
     assert f"Tasks file: {tasks_file}" in prompt
-    assert f"Diff sha256: {hashlib.sha256(diff_file.read_bytes()).hexdigest()}" in prompt
-    assert "Do not read diff.patch wholesale" in prompt
-    assert "- app.txt" in prompt
-    assert "diff --git a/app.txt b/app.txt" not in prompt
     assert "Spec body" not in prompt
     assert "Tests:" not in prompt
 
@@ -513,14 +500,13 @@ def test_reviewer_prompt_does_not_inline_large_inputs(tmp_path: Path) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
     head = init_repo(project)
-    large_diff = "diff --git a/app.txt b/app.txt\n" + ("+changed\n" * 2000)
-    diff_file = write_file(project / "diff.patch", large_diff)
+    large_spec = "Spec body\n" + ("requirement\n" * 2000)
+    spec_file = write_file(project / "spec.md", large_spec)
     review = module.ReviewArgs(
         change="demo-change",
         base_ref=head,
         head_ref=head,
-        diff_file=diff_file,
-        spec_file=write_file(project / "spec.md", "Spec body\n"),
+        spec_file=spec_file,
         design_file=write_file(project / "design.md", "Design body\n"),
         tasks_file=write_file(project / "tasks.md", "Tasks body\n"),
         output_dir=tmp_path / "out",
@@ -531,10 +517,9 @@ def test_reviewer_prompt_does_not_inline_large_inputs(tmp_path: Path) -> None:
 
     prompt = module.reviewer_prompt(review, "implementation-correctness")
 
-    assert f"Diff file: {diff_file}" in prompt
-    assert f"Diff bytes: {len(diff_file.read_bytes())}" in prompt
-    assert "Do not read diff.patch wholesale" in prompt
-    assert "+changed" not in prompt
+    assert f"Spec file: {spec_file}" in prompt
+    assert f"Spec bytes: {len(spec_file.read_bytes())}" in prompt
+    assert "requirement" not in prompt
     assert len(prompt) < 4000
 
 

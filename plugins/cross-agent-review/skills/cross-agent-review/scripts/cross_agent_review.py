@@ -12,9 +12,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 
-REQUIRED_FILE_ARGS = ["diff_file", "spec_file", "design_file", "tasks_file"]
+REQUIRED_FILE_ARGS = ["spec_file", "design_file", "tasks_file"]
 INPUT_SNAPSHOT_NAMES = {
-    "diff_file": "diff.patch",
     "spec_file": "spec.md",
     "design_file": "design.md",
     "tasks_file": "tasks.md",
@@ -94,7 +93,6 @@ class ReviewArgs:
     change: str
     base_ref: str
     head_ref: str
-    diff_file: Path
     spec_file: Path
     design_file: Path
     tasks_file: Path
@@ -111,7 +109,6 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--change", required=True)
     run_parser.add_argument("--base-ref", required=True)
     run_parser.add_argument("--head-ref", required=True)
-    run_parser.add_argument("--diff-file", type=Path, required=True)
     run_parser.add_argument("--spec-file", type=Path, required=True)
     run_parser.add_argument("--design-file", type=Path, required=True)
     run_parser.add_argument("--tasks-file", type=Path, required=True)
@@ -171,7 +168,6 @@ def parse_review_args(args: argparse.Namespace) -> ReviewArgs:
         change=args.change,
         base_ref=args.base_ref,
         head_ref=args.head_ref,
-        diff_file=args.diff_file,
         spec_file=args.spec_file,
         design_file=args.design_file,
         tasks_file=args.tasks_file,
@@ -378,12 +374,11 @@ def build_input_manifest(review_args: ReviewArgs) -> dict:
         "base_ref": review_args.base_ref,
         "head_ref": review_args.head_ref,
         "inputs": {
-            "diff": input_file_metadata(review_args, review_args.diff_file),
             "spec": input_file_metadata(review_args, review_args.spec_file),
             "design": input_file_metadata(review_args, review_args.design_file),
             "tasks": input_file_metadata(review_args, review_args.tasks_file),
         },
-        "changed_files": changed_file_entries_from_diff(review_args.diff_file),
+        "changed_files": [],
     }
 
 
@@ -432,9 +427,6 @@ def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
             f"Manifest file: {input_manifest_path(review_args)}",
             "Use the referenced input files as the source of truth. Read only the sections needed for this review.",
             "Use git diff/show/status read-only commands if the file references are insufficient.",
-            "Do not read diff.patch wholesale. Use the changed-file list and path-scoped git diff commands.",
-            changed_files_from_diff(review_args.diff_file),
-            input_reference("Diff", review_args.diff_file),
             input_reference("Spec", review_args.spec_file),
             input_reference("Design", review_args.design_file),
             input_reference("Tasks", review_args.tasks_file),
@@ -848,7 +840,6 @@ def render_report(review_args: ReviewArgs, summary: dict) -> str:
 
 def allowed_input_paths(review_args: ReviewArgs) -> list[Path]:
     return [
-        review_args.diff_file,
         review_args.spec_file,
         review_args.design_file,
         review_args.tasks_file,
