@@ -11,7 +11,7 @@ CLAUDE_REPO_MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 RELEASE_FLOW_PROJECTION = REPO_ROOT / ".release-flow" / "projection.yaml"
 
 PLUGIN_NAME = "pr-flow"
-PLUGIN_VERSION = "0.1.10"
+PLUGIN_VERSION = "0.1.11"
 PLUGIN_DESCRIPTION = "PR Flow Plugin（拉取请求流程插件）"
 ENTRYPOINT_COMMANDS = {
     "pr-flow": "diagnose",
