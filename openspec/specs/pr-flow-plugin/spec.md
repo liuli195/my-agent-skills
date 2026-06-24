@@ -2,7 +2,6 @@
 
 ## Purpose
 Define the reusable PR Flow（拉取请求流程）Plugin（插件） for personal repositories, including repository configuration, diagnose stop states, complete lifecycle handling, cleanup, hotfix, tweak, and configurable review gate behavior.
-
 ## Requirements
 ### Requirement: PR Flow Plugin package
 系统 MUST 提供 `pr-flow` Plugin（插件），用于个人仓库复用 PR Flow（拉取请求流程）。

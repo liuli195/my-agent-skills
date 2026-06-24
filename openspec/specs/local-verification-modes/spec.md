@@ -4,7 +4,7 @@
 TBD - created by archiving change split-fast-full-verification. Update Purpose after archive.
 ## Requirements
 ### Requirement: Initialized repositories expose standard verification modes
-由 build-and-verify Plugin（构建与验证插件）初始化的仓库 MUST 通过同一套 configured checks（配置检查项）提供默认 fast（快速验证）和显式 full（完整验证）。
+由 build-and-verify（构建与验证）Plugin（插件）初始化的仓库 MUST 通过同一套 configured checks（配置检查项）提供默认 fast（快速验证）和显式 full（完整验证）。
 
 #### Scenario: Default verify applies fast cache execution
 - **WHEN** 开发者运行 `python <build-and-verify-script> verify --project <repo>`
@@ -35,9 +35,27 @@ TBD - created by archiving change split-fast-full-verification. Update Purpose a
 - **WHEN** 默认 verify（验证）没有选中可运行 checks（检查项）
 - **THEN** 系统 MUST 输出 checked（已检查）为空或等价信息
 - **THEN** 系统 MUST 输出 full-not-run（全量未运行）为 true 或等价信息
-- **THEN** 系统 MUST NOT 自动运行 full（全量验证）路径
+- **THEN** 系统 MUST NOT 自动运行 full（完整验证）路径
 
-#### Scenario: Full verify is reserved for approved flows
-- **WHEN** agent（代理）需要运行 verify（验证）
-- **THEN** agent（代理） MUST 默认运行 fast（快速）模式
-- **THEN** agent（代理） MUST NOT 使用 `--full`（完整），除非当前流程是 PR Flow hotfix（拉取请求流程热修复）直推或 PR CI（拉取请求持续集成）
+### Requirement: Full verification is restricted to explicit high-cost contexts
+本仓库自动流程 MUST 默认使用 fast verify（快速验证），并将 full verify（完整验证）限制在明确允许的高成本上下文。
+
+#### Scenario: Comet uses fast verification by default
+- **WHEN** Comet（双星流程）读取本仓库默认 verify command（验证命令）
+- **THEN** 该命令 MUST 调用 `build-and-verify`（构建与验证）入口
+- **THEN** 该命令 MUST NOT 包含 `--full`
+
+#### Scenario: Hotfix direct push may use full verification
+- **WHEN** PR Flow（拉取请求流程）hotfix（热修复）直推路径读取 `hotfix.verifyCommand`
+- **THEN** 该命令 MAY 调用 `build-and-verify verify --full`（构建与验证完整验证）
+- **THEN** 该命令 MUST 作为配置中的显式命令存在
+
+#### Scenario: PR CI may use full verification
+- **WHEN** 本仓库未来新增 PR CI（拉取请求持续集成）工作流
+- **THEN** 该工作流 MAY 调用 `build-and-verify verify --full`（构建与验证完整验证）
+- **THEN** 该工作流 MUST 是面向 PR（拉取请求）的持续集成入口，而不是本地默认验证入口
+
+#### Scenario: Other full verification requires confirmation
+- **WHEN** agent（代理）在其他上下文准备运行 `build-and-verify verify --full`（构建与验证完整验证）
+- **THEN** agent（代理） MUST 输出升级到 full verify（完整验证）的具体原因
+- **THEN** agent（代理） MUST 等待用户确认后才能运行

@@ -1,20 +1,20 @@
 ## RENAMED Requirements
 
 FROM: Test framework plugin package supports Claude and Codex
-TO: Build and verify plugin package supports Claude and Codex
+TO: Build and Verify plugin package supports Claude and Codex
 
 FROM: Test framework initializes standard artifacts
-TO: Build and verify initializes standard artifacts
+TO: Build and Verify initializes standard artifacts
 
 FROM: Test framework provides unified configuration and commands
-TO: Build and verify provides unified configuration and commands
+TO: Build and Verify provides unified configuration and commands
 
 FROM: Test framework provides fast cache verification
-TO: Build and verify provides fast cache verification
+TO: Build and Verify provides fast cache verification
 
 ## MODIFIED Requirements
 
-### Requirement: Build and verify plugin package supports Claude and Codex
+### Requirement: Build and Verify plugin package supports Claude and Codex
 系统 MUST 提供轻量 `build-and-verify`（构建与验证）Plugin（插件），同一套能力 MUST 同时面向 Claude（Claude 版本）和 Codex（Codex 版本）。
 
 #### Scenario: Codex plugin structure
@@ -34,7 +34,7 @@ TO: Build and verify provides fast cache verification
 - **THEN** 插件包 MUST 提供一个 `build-and-verify`（构建与验证）Skill（技能）
 - **THEN** Skill（技能） MUST 调用共享确定性脚本，而不是复制多套流程逻辑
 
-### Requirement: Build and verify initializes standard artifacts
+### Requirement: Build and Verify initializes standard artifacts
 系统 MUST 为目标仓库初始化最小构建与验证产物结构。
 
 #### Scenario: Init creates standard files
@@ -59,7 +59,7 @@ TO: Build and verify provides fast cache verification
 - **THEN** 模板 MUST NOT 内置 PR Flow（拉取请求流程）、Release Flow（发布流程）、Comet（双星流程）或任一具体仓库业务检查
 - **THEN** 仓库业务检查 MUST 只通过 `.build-and-verify/config.json` 声明
 
-### Requirement: Build and verify provides unified configuration and commands
+### Requirement: Build and Verify provides unified configuration and commands
 系统 MUST 通过一个配置文件和一个命令入口表达 build（构建检查）与 verify（验证）行为。
 
 #### Scenario: Config declares canonical checks
@@ -86,7 +86,7 @@ TO: Build and verify provides fast cache verification
 - **THEN** 成功通过的 check（检查项） MUST 使用同一套 cache key（缓存键）写入或刷新 passed-result cache（通过结果缓存）
 - **THEN** failed（失败）结果 MUST NOT 写入 passed-result cache（通过结果缓存）
 
-### Requirement: Build and verify provides fast cache verification
+### Requirement: Build and Verify provides fast cache verification
 系统 MUST 将 fast（快速验证）实现为 full（完整验证）标准检查项上的 changed-files（变更文件）筛选和 passed-result cache（通过结果缓存）。
 
 #### Scenario: Fast verify selects configured checks by changed files
@@ -114,9 +114,9 @@ TO: Build and verify provides fast cache verification
 - **THEN** 系统 MUST 运行该 check（检查项）自身
 - **THEN** 系统 MUST NOT 因 cache miss（缓存未命中）自动运行 full（完整验证）
 
-## ADDED Requirements
+## MODIFIED Requirements
 
-### Requirement: Build and verify has no root-level Python test configuration dependency
+### Requirement: Build and Verify has no root-level Python test configuration dependency
 系统 MUST 不依赖根目录 Python（Python 语言）测试配置来定义本仓库 build（构建检查）或 verify（验证）行为。
 
 #### Scenario: Root pyproject test config is absent

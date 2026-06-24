@@ -2,6 +2,8 @@
 comet_change: rename-test-framework-to-build-and-verify
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-24-rename-test-framework-to-build-and-verify
+status: final
 ---
 
 # Build and Verify Rename Design

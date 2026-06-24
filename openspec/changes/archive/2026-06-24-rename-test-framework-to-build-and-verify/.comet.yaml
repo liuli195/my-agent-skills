@@ -16,6 +16,6 @@ verification_report: docs/superpowers/reports/2026-06-25-rename-test-framework-t
 branch_status: handled
 created_at: 2026-06-24
 verified_at: 2026-06-24
-archived: false
+archived: true
 handoff_context: openspec/changes/rename-test-framework-to-build-and-verify/.comet/handoff/spec-context.json
 handoff_hash: 99b68391065785bf9db0679945b14f659ea47bf512d0dc921ae53290df59a37e

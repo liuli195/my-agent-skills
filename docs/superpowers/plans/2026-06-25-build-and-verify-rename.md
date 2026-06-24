@@ -2,6 +2,7 @@
 change: rename-test-framework-to-build-and-verify
 design-doc: docs/superpowers/specs/2026-06-25-build-and-verify-rename-design.md
 base-ref: 4030d1ceb81fa6e450ef517e09d2ff391f5260b2
+archived-with: 2026-06-24-rename-test-framework-to-build-and-verify
 ---
 
 # Build and Verify Rename Implementation Plan
@@ -14,6 +15,7 @@ base-ref: 4030d1ceb81fa6e450ef517e09d2ff391f5260b2
 
 **Tech Stack:** Python（Python 语言）、pytest（Python 测试运行器）、OpenSpec（开放规格）、Comet（双星流程）、PR Flow（拉取请求流程）、Release Flow（发布流程）。
 
+archived-with: 2026-06-24-rename-test-framework-to-build-and-verify
 ---
 
 ## File Structure
@@ -197,9 +199,11 @@ Expected manifest values:
 Skill（技能） frontmatter:
 
 ```yaml
+archived-with: 2026-06-24-rename-test-framework-to-build-and-verify
 ---
 name: build-and-verify
 description: 本仓库 build（构建检查）和 verify（验证）统一入口；verify（验证）默认 fast（快速），--full（完整）只允许 hotfix（热修复）直推和 PR CI（拉取请求持续集成）
+archived-with: 2026-06-24-rename-test-framework-to-build-and-verify
 ---
 ```
 
