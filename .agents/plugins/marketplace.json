@@ -53,10 +53,10 @@
       "category": "Developer Tools"
     },
     {
-      "name": "test-framework",
+      "name": "build-and-verify",
       "source": {
         "source": "local",
-        "path": "./plugins/test-framework"
+        "path": "./plugins/build-and-verify"
       },
       "policy": {
         "installation": "AVAILABLE",

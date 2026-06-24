@@ -181,6 +181,7 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 - **WHEN** 用户运行 hotfix
 - **THEN** 系统 MUST 先确认 authorization phrase 配置存在且算法受支持
 - **THEN** 系统 MUST 运行 `hotfix.verifyCommand`
+- **THEN** `hotfix.verifyCommand` MAY 使用 build-and-verify（构建与验证）`--full`（完整）模式
 - **THEN** 验证通过后系统 MUST 校验 authorization phrase
 - **THEN** 确认通过后系统 MAY push 到受保护分支
 

@@ -1,0 +1,6 @@
+{
+  "name": "build-and-verify",
+  "version": "0.1.12",
+  "description": "Build and Verify Plugin（构建与验证插件）",
+  "skills": "./skills"
+}

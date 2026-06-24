@@ -87,24 +87,24 @@ def _dependency_error(check: dict[str, Any]) -> str | None:
 
 
 def _load_config(project: Path) -> dict[str, Any]:
-    config_path = project / ".test-framework" / "config.json"
+    config_path = project / ".build-and-verify" / "config.json"
     try:
         config = json.loads(config_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        raise ConfigError("missing_config: .test-framework/config.json") from None
+        raise ConfigError("missing_config: .build-and-verify/config.json") from None
     except json.JSONDecodeError as error:
         raise ConfigError(
-            f"invalid_config: .test-framework/config.json: {error.msg}"
+            f"invalid_config: .build-and-verify/config.json: {error.msg}"
         ) from None
     if not isinstance(config, dict):
         raise ConfigError(
-            "invalid_config: .test-framework/config.json: root must be object"
+            "invalid_config: .build-and-verify/config.json: root must be object"
         )
     for section in ("build", "verify"):
         section_config = config.get(section, {})
         if not isinstance(section_config, dict):
             raise ConfigError(
-                f"invalid_config: .test-framework/config.json: {section} must be object"
+                f"invalid_config: .build-and-verify/config.json: {section} must be object"
             )
         if section == "verify":
             max_parallel = section_config.get("maxParallel")
@@ -114,30 +114,30 @@ def _load_config(project: Path) -> dict[str, Any]:
                 or max_parallel < 0
             ):
                 raise ConfigError(
-                    "invalid_config: .test-framework/config.json: "
+                    "invalid_config: .build-and-verify/config.json: "
                     "verify.maxParallel must be non-negative integer"
                 )
         checks = section_config.get("checks", [])
         if not isinstance(checks, list):
             raise ConfigError(
-                f"invalid_config: .test-framework/config.json: {section}.checks must be list"
+                f"invalid_config: .build-and-verify/config.json: {section}.checks must be list"
             )
         seen_ids: set[str] = set()
         for index, check in enumerate(checks):
             if not isinstance(check, dict):
                 raise ConfigError(
-                    "invalid_config: .test-framework/config.json: "
+                    "invalid_config: .build-and-verify/config.json: "
                     f"{section}.checks[{index}] must be object"
                 )
             check_id = check.get("id")
             if not _is_non_empty_string(check_id):
                 raise ConfigError(
-                    "invalid_config: .test-framework/config.json: "
+                    "invalid_config: .build-and-verify/config.json: "
                     f"{section}.checks[{index}].id must be non-empty string"
                 )
             if check_id in seen_ids:
                 raise ConfigError(
-                    "invalid_config: .test-framework/config.json: "
+                    "invalid_config: .build-and-verify/config.json: "
                     f"{section}.checks[{index}].id must be unique"
                 )
             seen_ids.add(check_id)
@@ -146,14 +146,14 @@ def _load_config(project: Path) -> dict[str, Any]:
                 _is_non_empty_string(command) or _is_non_empty_string_list(command)
             ):
                 raise ConfigError(
-                    "invalid_config: .test-framework/config.json: "
+                    "invalid_config: .build-and-verify/config.json: "
                     f"{section}.checks[{index}].command must be non-empty string or list of non-empty strings"
                 )
             for field in ("paths", "inputs"):
                 value = check.get(field)
                 if value is not None and not _is_non_empty_string_list(value):
                     raise ConfigError(
-                        "invalid_config: .test-framework/config.json: "
+                        "invalid_config: .build-and-verify/config.json: "
                         f"{section}.checks[{index}].{field} must be list of non-empty strings"
                     )
     return config
@@ -223,8 +223,8 @@ def _is_excluded_relative(relative: str) -> bool:
     return (
         ".git" in parts
         or "__pycache__" in parts
-        or relative == ".test-framework/cache"
-        or relative.startswith(".test-framework/cache/")
+        or relative == ".build-and-verify/cache"
+        or relative.startswith(".build-and-verify/cache/")
     )
 
 
@@ -414,7 +414,7 @@ def _cache_key(
 
 
 def _cache_path(project: Path, key: str) -> Path:
-    return project / ".test-framework" / "cache" / f"{key}.json"
+    return project / ".build-and-verify" / "cache" / f"{key}.json"
 
 
 def _cache_load(project: Path, key: str) -> bool:

@@ -1,28 +1,41 @@
-# build-and-verify Specification
+## RENAMED Requirements
 
-## Purpose
-TBD - created by archiving change split-fast-full-verification. Update Purpose after archive.
-## Requirements
-### Requirement: Build and Verify plugin package supports Claude and Codex
-系统 MUST 提供轻量 `build-and-verify` Plugin（构建与验证插件），同一套能力 MUST 同时面向 Claude（Claude 版本）和 Codex（Codex 版本）。
+FROM: Test framework plugin package supports Claude and Codex
+TO: Build and verify plugin package supports Claude and Codex
+
+FROM: Test framework initializes standard artifacts
+TO: Build and verify initializes standard artifacts
+
+FROM: Test framework provides unified configuration and commands
+TO: Build and verify provides unified configuration and commands
+
+FROM: Test framework provides fast cache verification
+TO: Build and verify provides fast cache verification
+
+## MODIFIED Requirements
+
+### Requirement: Build and verify plugin package supports Claude and Codex
+系统 MUST 提供轻量 `build-and-verify`（构建与验证）Plugin（插件），同一套能力 MUST 同时面向 Claude（Claude 版本）和 Codex（Codex 版本）。
 
 #### Scenario: Codex plugin structure
-- **WHEN** 发布 `build-and-verify` Plugin（插件）
+- **WHEN** 发布 `build-and-verify`（构建与验证）Plugin（插件）
 - **THEN** 插件包 MUST 包含 `.codex-plugin/plugin.json`
-- **THEN** Codex manifest（清单） MUST 声明插件 `name`、`version`、`description` 和 `skills`
+- **THEN** Codex manifest（清单） MUST 声明插件 `name` 为 `build-and-verify`
+- **THEN** Codex manifest（清单） MUST 声明 `version`、`description` 和 `skills`
 
 #### Scenario: Claude plugin structure
-- **WHEN** 发布 `build-and-verify` Plugin（插件）
+- **WHEN** 发布 `build-and-verify`（构建与验证）Plugin（插件）
 - **THEN** 插件包 MUST 包含 `.claude-plugin/plugin.json`
-- **THEN** Claude manifest（清单） MUST 声明插件 `name`、`version`、`description` 和 `skills`
+- **THEN** Claude manifest（清单） MUST 声明插件 `name` 为 `build-and-verify`
+- **THEN** Claude manifest（清单） MUST 声明 `version`、`description` 和 `skills`
 
 #### Scenario: Single skill surface
-- **WHEN** 安装 `build-and-verify` Plugin（插件）
-- **THEN** 插件包 MUST 提供一个 `build-and-verify` Skill（技能）
+- **WHEN** 安装 `build-and-verify`（构建与验证）Plugin（插件）
+- **THEN** 插件包 MUST 提供一个 `build-and-verify`（构建与验证）Skill（技能）
 - **THEN** Skill（技能） MUST 调用共享确定性脚本，而不是复制多套流程逻辑
 
-### Requirement: Build and Verify initializes standard artifacts
-系统 MUST 为目标仓库初始化最小构建检查和验证产物结构。
+### Requirement: Build and verify initializes standard artifacts
+系统 MUST 为目标仓库初始化最小构建与验证产物结构。
 
 #### Scenario: Init creates standard files
 - **WHEN** 用户对目标仓库运行 build-and-verify init（构建与验证初始化）
@@ -46,11 +59,11 @@ TBD - created by archiving change split-fast-full-verification. Update Purpose a
 - **THEN** 模板 MUST NOT 内置 PR Flow（拉取请求流程）、Release Flow（发布流程）、Comet（双星流程）或任一具体仓库业务检查
 - **THEN** 仓库业务检查 MUST 只通过 `.build-and-verify/config.json` 声明
 
-### Requirement: Build and Verify provides unified configuration and commands
+### Requirement: Build and verify provides unified configuration and commands
 系统 MUST 通过一个配置文件和一个命令入口表达 build（构建检查）与 verify（验证）行为。
 
 #### Scenario: Config declares canonical checks
-- **WHEN** 目标仓库配置 build-and-verify（构建与验证）
+- **WHEN** 目标仓库配置构建与验证
 - **THEN** `.build-and-verify/config.json` MUST 支持 `build.checks`
 - **THEN** `.build-and-verify/config.json` MUST 支持 `verify.checks`
 - **THEN** `.build-and-verify/config.json` MUST NOT 要求独立的 `verify.fast.checks`
@@ -60,7 +73,12 @@ TBD - created by archiving change split-fast-full-verification. Update Purpose a
 - **THEN** `python <build-and-verify-script> build --project <repo>` MUST 运行 configured `build.checks`
 - **THEN** `python <build-and-verify-script> verify --project <repo>` MUST 运行默认 fast（快速验证）执行模式
 - **THEN** `python <build-and-verify-script> verify --project <repo> --full` MUST 运行完整 `verify.checks`
-- **THEN** `<build-and-verify-script>` MUST 是当前安装的 build-and-verify Skill（技能）脚本路径，支持 project-level（项目级）安装路径和 user-level（用户级）安装路径
+- **THEN** `<build-and-verify-script>` MUST 是当前安装的 build-and-verify（构建与验证）Skill（技能）脚本路径，支持 project-level（项目级）安装路径和 user-level（用户级）安装路径
+
+#### Scenario: Skill description owns command routing
+- **WHEN** agent（代理）需要运行 build（构建检查）或 verify（验证）命令
+- **THEN** agent（代理） MUST 使用 `build-and-verify`（构建与验证）Skill（技能）入口
+- **THEN** agent（代理） MUST NOT 通过根目录 wrapper（包装入口）或旧 `test-framework`（测试框架）入口运行同等命令
 
 #### Scenario: Full verify refreshes passed cache
 - **WHEN** 用户运行 `python <build-and-verify-script> verify --project <repo> --full`
@@ -68,8 +86,8 @@ TBD - created by archiving change split-fast-full-verification. Update Purpose a
 - **THEN** 成功通过的 check（检查项） MUST 使用同一套 cache key（缓存键）写入或刷新 passed-result cache（通过结果缓存）
 - **THEN** failed（失败）结果 MUST NOT 写入 passed-result cache（通过结果缓存）
 
-### Requirement: Build and Verify provides fast cache verification
-系统 MUST 将 fast（快速验证）实现为 full（全量验证）标准检查项上的 changed-files（变更文件）筛选和 passed-result cache（通过结果缓存）。
+### Requirement: Build and verify provides fast cache verification
+系统 MUST 将 fast（快速验证）实现为 full（完整验证）标准检查项上的 changed-files（变更文件）筛选和 passed-result cache（通过结果缓存）。
 
 #### Scenario: Fast verify selects configured checks by changed files
 - **WHEN** 用户运行 `python <build-and-verify-script> verify --project <repo>`
@@ -94,4 +112,19 @@ TBD - created by archiving change split-fast-full-verification. Update Purpose a
 #### Scenario: Cache miss runs selected check only
 - **WHEN** 选中的 check（检查项）没有可用 passed-result cache（通过结果缓存）
 - **THEN** 系统 MUST 运行该 check（检查项）自身
-- **THEN** 系统 MUST NOT 因 cache miss（缓存未命中）自动运行 full（全量验证）
+- **THEN** 系统 MUST NOT 因 cache miss（缓存未命中）自动运行 full（完整验证）
+
+## ADDED Requirements
+
+### Requirement: Build and verify has no root-level Python test configuration dependency
+系统 MUST 不依赖根目录 Python（Python 语言）测试配置来定义本仓库 build（构建检查）或 verify（验证）行为。
+
+#### Scenario: Root pyproject test config is absent
+- **WHEN** 本仓库 build-and-verify（构建与验证）配置完成迁移
+- **THEN** 根目录 `pyproject.toml` MUST NOT 存在
+- **THEN** `.build-and-verify/config.json` 中的 pytest（Python 测试运行器）命令 MUST 显式声明测试路径和所需命令参数
+
+#### Scenario: No root wrapper entrypoint
+- **WHEN** 本仓库活跃自动化和 guard（守卫）命令文件被检查
+- **THEN** 它们 MUST NOT 引用根目录测试 wrapper（包装入口）
+- **THEN** 它们 MUST 引用 `plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py` 或当前安装的 build-and-verify（构建与验证）Skill（技能）脚本

@@ -25,9 +25,9 @@
       "description": "PR Flow Plugin（拉取请求流程插件）"
     },
     {
-      "name": "test-framework",
-      "source": "./plugins/test-framework",
-      "description": "Test Framework Plugin（测试框架插件）"
+      "name": "build-and-verify",
+      "source": "./plugins/build-and-verify",
+      "description": "Build and Verify Plugin（构建与验证插件）"
     }
   ]
 }

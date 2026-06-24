@@ -11,19 +11,19 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PLUGIN_ROOT = REPO_ROOT / "plugins" / "test-framework"
+PLUGIN_ROOT = REPO_ROOT / "plugins" / "build-and-verify"
 CODEX_REPO_MARKETPLACE = REPO_ROOT / ".agents" / "plugins" / "marketplace.json"
 CLAUDE_REPO_MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 RELEASE_FLOW_PROJECTION = REPO_ROOT / ".release-flow" / "projection.yaml"
 RELEASE_FLOW_CONFIG = REPO_ROOT / ".release-flow" / "config.yaml"
 RELEASE_FLOW_SCRIPT = REPO_ROOT / "plugins" / "release-flow" / "skills" / "release-flow" / "scripts" / "release_flow.py"
-TEST_FRAMEWORK_SCRIPT = (
-    PLUGIN_ROOT / "skills" / "test-framework" / "scripts" / "test_framework.py"
+BUILD_AND_VERIFY_SCRIPT = (
+    PLUGIN_ROOT / "skills" / "build-and-verify" / "scripts" / "build_and_verify.py"
 )
 
-PLUGIN_NAME = "test-framework"
+PLUGIN_NAME = "build-and-verify"
 PLUGIN_VERSION = "0.1.12"
-PLUGIN_DESCRIPTION = "Test Framework Plugin（测试框架插件）"
+PLUGIN_DESCRIPTION = "Build and Verify Plugin（构建与验证插件）"
 
 
 def read_json(path: Path) -> dict:
@@ -34,9 +34,9 @@ def write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def run_test_framework(*args: str) -> subprocess.CompletedProcess[str]:
+def run_build_and_verify(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(TEST_FRAMEWORK_SCRIPT), *args],
+        [sys.executable, str(BUILD_AND_VERIFY_SCRIPT), *args],
         cwd=REPO_ROOT,
         check=False,
         text=True,
@@ -44,9 +44,9 @@ def run_test_framework(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def load_test_framework_module():
+def load_build_and_verify_module():
     spec = importlib.util.spec_from_file_location(
-        "test_framework_entrypoint", TEST_FRAMEWORK_SCRIPT
+        "build_and_verify_entrypoint", BUILD_AND_VERIFY_SCRIPT
     )
     assert spec is not None
     assert spec.loader is not None
@@ -57,14 +57,14 @@ def load_test_framework_module():
 
 
 def run_check(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    module = load_test_framework_module()
+    module = load_build_and_verify_module()
     argv = [*args, "--project", str(project)]
     stdout = io.StringIO()
     stderr = io.StringIO()
     with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
         returncode = int(module.main(argv))
     return subprocess.CompletedProcess(
-        args=[str(TEST_FRAMEWORK_SCRIPT), *argv],
+        args=[str(BUILD_AND_VERIFY_SCRIPT), *argv],
         returncode=returncode,
         stdout=stdout.getvalue(),
         stderr=stderr.getvalue(),
@@ -90,8 +90,8 @@ def command_that_logs(label: str, log_name: str = "run.log") -> list[str]:
     return [sys.executable, "-c", code]
 
 
-def test_test_framework_main_returns_error_without_command(capsys) -> None:
-    module = load_test_framework_module()
+def test_build_and_verify_main_returns_error_without_command(capsys) -> None:
+    module = load_build_and_verify_module()
 
     result = module.main([])
     captured = capsys.readouterr()
@@ -195,7 +195,7 @@ def write_release_projection_project(project: Path) -> Path:
     return vars_file
 
 
-def test_test_framework_plugin_has_dual_manifests() -> None:
+def test_build_and_verify_plugin_has_dual_manifests() -> None:
     expected_manifest = {
         "name": PLUGIN_NAME,
         "version": PLUGIN_VERSION,
@@ -207,9 +207,9 @@ def test_test_framework_plugin_has_dual_manifests() -> None:
     assert read_json(PLUGIN_ROOT / ".claude-plugin" / "plugin.json") == expected_manifest
 
 
-def test_test_framework_plugin_has_single_skill_entrypoint() -> None:
+def test_build_and_verify_plugin_has_single_skill_entrypoint() -> None:
     skill_root = PLUGIN_ROOT / "skills"
-    script_path = skill_root / PLUGIN_NAME / "scripts" / "test_framework.py"
+    script_path = skill_root / PLUGIN_NAME / "scripts" / "build_and_verify.py"
     skill_dirs = [path.name for path in skill_root.iterdir() if path.is_dir()]
     skill_text = (skill_root / PLUGIN_NAME / "SKILL.md").read_text(encoding="utf-8")
     front_matter = skill_text.split("---", 2)[1]
@@ -218,20 +218,22 @@ def test_test_framework_plugin_has_single_skill_entrypoint() -> None:
     assert script_path.is_file()
     assert skill_text.startswith("---\n")
     assert f"name: {PLUGIN_NAME}" in front_matter
-    assert "只初始化测试框架配置产物" in skill_text
+    assert "本仓库 build（构建检查）和 verify（验证）的统一入口" in skill_text
+    assert "默认 verify（验证）使用 fast（快速）模式" in skill_text
+    assert "`--full`（完整）只允许 PR Flow hotfix（拉取请求流程热修复）直推流程和 PR CI（拉取请求持续集成）使用" in skill_text
     assert "不安装依赖" in skill_text
     assert "不写用户级配置" in skill_text
     assert "不配置 CI（持续集成）" in skill_text
     assert "不内置仓库业务逻辑" in skill_text
     assert "不向目标仓库复制 runner（运行器）" in skill_text
-    assert "scripts/test_framework.py init" in skill_text
-    assert "scripts/test_framework.py build" in skill_text
-    assert "scripts/test_framework.py verify" in skill_text
+    assert "scripts/build_and_verify.py init" in skill_text
+    assert "scripts/build_and_verify.py build" in skill_text
+    assert "scripts/build_and_verify.py verify" in skill_text
     assert "timeoutSeconds" in skill_text
     assert "pytest-xdist" in skill_text
 
 
-def test_test_framework_registered_in_marketplaces_and_projection() -> None:
+def test_build_and_verify_registered_in_marketplaces_and_projection() -> None:
     claude_catalog = read_json(CLAUDE_REPO_MARKETPLACE)
     codex_catalog = read_json(CODEX_REPO_MARKETPLACE)
     claude_names = plugin_names(claude_catalog)
@@ -241,20 +243,68 @@ def test_test_framework_registered_in_marketplaces_and_projection() -> None:
     assert plugin_after(claude_names, "pr-flow") == PLUGIN_NAME
     assert claude_catalog["plugins"][claude_names.index(PLUGIN_NAME)] == {
         "name": PLUGIN_NAME,
-        "source": "./plugins/test-framework",
+        "source": "./plugins/build-and-verify",
         "description": PLUGIN_DESCRIPTION,
     }
     assert plugin_after(codex_names, "pr-flow") == PLUGIN_NAME
     assert codex_catalog["plugins"][codex_names.index(PLUGIN_NAME)] == {
         "name": PLUGIN_NAME,
-        "source": {"source": "local", "path": "./plugins/test-framework"},
+        "source": {"source": "local", "path": "./plugins/build-and-verify"},
         "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
         "category": "Developer Tools",
     }
     assert plugin_after(projection_plugins, "pr-flow") == PLUGIN_NAME
 
 
-def test_test_framework_release_projection_passes_real_validate() -> None:
+def test_build_and_verify_active_surfaces_do_not_keep_old_entrypoints() -> None:
+    assert not (REPO_ROOT / "pyproject.toml").exists()
+    active_paths = [
+        REPO_ROOT / ".build-and-verify" / "config.json",
+        REPO_ROOT / ".comet.yaml",
+        REPO_ROOT / ".pr-flow" / "config.yaml",
+        REPO_ROOT / ".release-flow" / "config.yaml",
+        REPO_ROOT / ".release-flow" / "projection.yaml",
+        CODEX_REPO_MARKETPLACE,
+        CLAUDE_REPO_MARKETPLACE,
+        RELEASE_FLOW_SCRIPT,
+        REPO_ROOT / "plugins" / "pr-flow" / "skills" / "pr-flow" / "scripts" / "pr_flow.py",
+        REPO_ROOT / "openspec" / "specs" / "test-framework-plugin" / "spec.md",
+        REPO_ROOT / "openspec" / "specs" / "local-verification-modes" / "spec.md",
+        REPO_ROOT / "openspec" / "specs" / "local-plugin-build-checks" / "spec.md",
+        REPO_ROOT / "openspec" / "specs" / "full-verification-runtime" / "spec.md",
+    ]
+    plugin_paths = [
+        path
+        for path in PLUGIN_ROOT.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    ]
+    forbidden = [
+        "plugins/test-framework",
+        ".test-framework",
+        "test_framework.py",
+        "test_framework_runner.py",
+        "verify.test-framework",
+        "pyproject.toml",
+    ]
+
+    for path in [*active_paths, *plugin_paths]:
+        text = path.read_text(encoding="utf-8")
+        for old_entrypoint in forbidden:
+            assert old_entrypoint not in text, f"{path} still references {old_entrypoint}"
+
+
+def test_build_and_verify_pytest_options_live_in_explicit_commands() -> None:
+    config = read_json(REPO_ROOT / ".build-and-verify" / "config.json")
+    verify_checks = config["verify"]["checks"]
+
+    assert "pyproject.toml" not in json.dumps(config, ensure_ascii=False)
+    for check in verify_checks:
+        command = check["command"]
+        if "pytest" in command:
+            assert " -q " in f" {command} "
+
+
+def test_build_and_verify_release_projection_passes_real_validate() -> None:
     result = subprocess.run(
         [sys.executable, str(RELEASE_FLOW_SCRIPT), "validate", "--project", "."],
         cwd=REPO_ROOT,
@@ -266,7 +316,7 @@ def test_test_framework_release_projection_passes_real_validate() -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_test_framework_release_projection_projects_real_catalogs(tmp_path: Path) -> None:
+def test_build_and_verify_release_projection_projects_real_catalogs(tmp_path: Path) -> None:
     project = tmp_path / "project"
     vars_file = write_release_projection_project(project)
 
@@ -294,40 +344,40 @@ def test_test_framework_release_projection_projects_real_catalogs(tmp_path: Path
     assert plugin_after(codex_names, "pr-flow") == PLUGIN_NAME
     assert codex_catalog["plugins"][codex_names.index(PLUGIN_NAME)] == {
         "name": PLUGIN_NAME,
-        "source": {"source": "local", "path": "./plugins/test-framework"},
+        "source": {"source": "local", "path": "./plugins/build-and-verify"},
         "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
         "category": "Developer Tools",
     }
 
 
-def test_test_framework_init_writes_config_gitignore_and_cache(tmp_path: Path) -> None:
+def test_build_and_verify_init_writes_config_gitignore_and_cache(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
 
-    result = run_test_framework("init", "--project", str(project))
+    result = run_build_and_verify("init", "--project", str(project))
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: initialized" in result.stdout
-    assert (project / ".test-framework" / "config.json").is_file()
-    assert (project / ".test-framework" / ".gitignore").is_file()
-    assert (project / ".test-framework" / "cache").is_dir()
+    assert (project / ".build-and-verify" / "config.json").is_file()
+    assert (project / ".build-and-verify" / ".gitignore").is_file()
+    assert (project / ".build-and-verify" / "cache").is_dir()
     assert not (project / "scripts" / "check.py").exists()
-    assert read_json(project / ".test-framework" / "config.json") == {
+    assert read_json(project / ".build-and-verify" / "config.json") == {
         "version": 1,
         "build": {"checks": []},
         "verify": {"checks": []},
     }
-    assert (project / ".test-framework" / ".gitignore").read_text(encoding="utf-8") == "/cache/\n/runs/\n"
+    assert (project / ".build-and-verify" / ".gitignore").read_text(encoding="utf-8") == "/cache/\n/runs/\n"
 
 
 @pytest.mark.parametrize(
     "existing",
     [
-        Path(".test-framework/config.json"),
-        Path(".test-framework/.gitignore"),
+        Path(".build-and-verify/config.json"),
+        Path(".build-and-verify/.gitignore"),
     ],
 )
-def test_test_framework_init_refuses_existing_files_before_writes(
+def test_build_and_verify_init_refuses_existing_files_before_writes(
     tmp_path: Path, existing: Path
 ) -> None:
     project = tmp_path / "project"
@@ -336,32 +386,32 @@ def test_test_framework_init_refuses_existing_files_before_writes(
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_path.write_text("keep me\n", encoding="utf-8")
 
-    result = run_test_framework("init", "--project", str(project))
+    result = run_build_and_verify("init", "--project", str(project))
 
     assert result.returncode != 0
     assert f"existing_file: {existing.as_posix()}" in result.stderr
     assert existing_path.read_text(encoding="utf-8") == "keep me\n"
     generated_files = [
-        Path(".test-framework/config.json"),
-        Path(".test-framework/.gitignore"),
+        Path(".build-and-verify/config.json"),
+        Path(".build-and-verify/.gitignore"),
     ]
     for relative in generated_files:
         path = project / relative
         if path != existing_path:
             assert not path.exists()
-    assert not (project / ".test-framework" / "cache").exists()
+    assert not (project / ".build-and-verify" / "cache").exists()
 
 
-def test_test_framework_runner_build_verify_and_full_verify(tmp_path: Path) -> None:
+def test_build_and_verify_runner_build_verify_and_full_verify(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     (project / "src").mkdir()
     (project / "docs").mkdir()
     (project / "src" / "app.py").write_text("print('changed')\n", encoding="utf-8")
     (project / "docs" / "guide.md").write_text("changed\n", encoding="utf-8")
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {
@@ -410,10 +460,10 @@ def test_test_framework_runner_build_verify_and_full_verify(tmp_path: Path) -> N
     ]
 
 
-def test_test_framework_runner_full_verify_allows_empty_checks(tmp_path: Path) -> None:
+def test_build_and_verify_runner_full_verify_allows_empty_checks(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
 
     result = run_check(project, "verify", "--full")
 
@@ -423,16 +473,16 @@ def test_test_framework_runner_full_verify_allows_empty_checks(tmp_path: Path) -
     assert "status: passed" in result.stdout
 
 
-def test_test_framework_runner_full_verify_runs_parallel_checks_concurrently(tmp_path: Path, capsys) -> None:
+def test_build_and_verify_runner_full_verify_runs_parallel_checks_concurrently(tmp_path: Path, capsys) -> None:
     import threading
     import time
 
-    module = load_test_framework_module()
+    module = load_build_and_verify_module()
     project = tmp_path / "project"
     project.mkdir()
-    (project / ".test-framework").mkdir()
+    (project / ".build-and-verify").mkdir()
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -471,16 +521,16 @@ def test_test_framework_runner_full_verify_runs_parallel_checks_concurrently(tmp
     assert "full-not-run: false" in captured.out
 
 
-def test_test_framework_runner_full_verify_honors_max_parallel_checks(tmp_path: Path) -> None:
+def test_build_and_verify_runner_full_verify_honors_max_parallel_checks(tmp_path: Path) -> None:
     import threading
     import time
 
-    module = load_test_framework_module()
+    module = load_build_and_verify_module()
     project = tmp_path / "project"
     project.mkdir()
-    (project / ".test-framework").mkdir()
+    (project / ".build-and-verify").mkdir()
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -514,19 +564,19 @@ def test_test_framework_runner_full_verify_honors_max_parallel_checks(tmp_path: 
     assert max_active == 2
 
 
-def test_test_framework_runner_full_verify_zero_max_parallel_means_unlimited(
+def test_build_and_verify_runner_full_verify_zero_max_parallel_means_unlimited(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import threading
     import time
 
-    module = load_test_framework_module()
+    module = load_build_and_verify_module()
     monkeypatch.setattr(module._runner().os, "cpu_count", lambda: 2)
     project = tmp_path / "project"
     project.mkdir()
-    (project / ".test-framework").mkdir()
+    (project / ".build-and-verify").mkdir()
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -563,12 +613,12 @@ def test_test_framework_runner_full_verify_zero_max_parallel_means_unlimited(
     assert max_active == 3
 
 
-def test_test_framework_runner_rejects_negative_max_parallel(tmp_path: Path) -> None:
+def test_build_and_verify_runner_rejects_negative_max_parallel(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    (project / ".test-framework").mkdir()
+    (project / ".build-and-verify").mkdir()
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -588,16 +638,16 @@ def test_test_framework_runner_rejects_negative_max_parallel(tmp_path: Path) -> 
     assert "status: failed" in result.stdout
 
 
-def test_test_framework_runner_reports_missing_xdist_before_running_pytest(
+def test_build_and_verify_runner_reports_missing_xdist_before_running_pytest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
-    module = load_test_framework_module()
+    module = load_build_and_verify_module()
     runner = module._runner()
     project = tmp_path / "project"
     project.mkdir()
-    (project / ".test-framework").mkdir()
+    (project / ".build-and-verify").mkdir()
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -630,16 +680,16 @@ def test_test_framework_runner_reports_missing_xdist_before_running_pytest(
     assert "status: failed" in captured.out
 
 
-def test_test_framework_runner_full_verify_aggregates_missing_xdist_failures(
+def test_build_and_verify_runner_full_verify_aggregates_missing_xdist_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
-    module = load_test_framework_module()
+    module = load_build_and_verify_module()
     runner = module._runner()
     project = tmp_path / "project"
     project.mkdir()
-    (project / ".test-framework").mkdir()
+    (project / ".build-and-verify").mkdir()
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -681,14 +731,14 @@ def test_test_framework_runner_full_verify_aggregates_missing_xdist_failures(
 
 
 @pytest.mark.parametrize("timeout_seconds", [0, -1, True])
-def test_test_framework_runner_rejects_invalid_check_timeout_seconds(
+def test_build_and_verify_runner_rejects_invalid_check_timeout_seconds(
     tmp_path: Path, timeout_seconds: object
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    (project / ".test-framework").mkdir()
+    (project / ".build-and-verify").mkdir()
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -713,15 +763,15 @@ def test_test_framework_runner_rejects_invalid_check_timeout_seconds(
     assert "status: failed" in result.stdout
 
 
-def test_test_framework_runner_full_verify_reports_parallel_check_timeout(
+def test_build_and_verify_runner_full_verify_reports_parallel_check_timeout(
     tmp_path: Path, capsys
 ) -> None:
-    module = load_test_framework_module()
+    module = load_build_and_verify_module()
     project = tmp_path / "project"
     project.mkdir()
-    (project / ".test-framework").mkdir()
+    (project / ".build-and-verify").mkdir()
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -746,15 +796,15 @@ def test_test_framework_runner_full_verify_reports_parallel_check_timeout(
     assert "status: failed" in captured.out
 
 
-def test_test_framework_runner_full_verify_reports_parallel_check_exception(
+def test_build_and_verify_runner_full_verify_reports_parallel_check_exception(
     tmp_path: Path, capsys
 ) -> None:
-    module = load_test_framework_module()
+    module = load_build_and_verify_module()
     project = tmp_path / "project"
     project.mkdir()
-    (project / ".test-framework").mkdir()
+    (project / ".build-and-verify").mkdir()
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -778,15 +828,15 @@ def test_test_framework_runner_full_verify_reports_parallel_check_exception(
     assert "status: failed" in captured.out
 
 
-def test_test_framework_runner_full_verify_reports_keyboard_interrupt_from_parallel_check(
+def test_build_and_verify_runner_full_verify_reports_keyboard_interrupt_from_parallel_check(
     tmp_path: Path, capsys
 ) -> None:
-    module = load_test_framework_module()
+    module = load_build_and_verify_module()
     project = tmp_path / "project"
     project.mkdir()
-    (project / ".test-framework").mkdir()
+    (project / ".build-and-verify").mkdir()
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -810,15 +860,15 @@ def test_test_framework_runner_full_verify_reports_keyboard_interrupt_from_paral
     assert "status: failed" in captured.out
 
 
-def test_test_framework_runner_full_verify_skips_serial_checks_after_parallel_interrupt(
+def test_build_and_verify_runner_full_verify_skips_serial_checks_after_parallel_interrupt(
     tmp_path: Path, capsys
 ) -> None:
-    module = load_test_framework_module()
+    module = load_build_and_verify_module()
     project = tmp_path / "project"
     project.mkdir()
-    (project / ".test-framework").mkdir()
+    (project / ".build-and-verify").mkdir()
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -849,16 +899,16 @@ def test_test_framework_runner_full_verify_skips_serial_checks_after_parallel_in
     assert "status: failed" in captured.out
 
 
-def test_test_framework_runner_full_verify_reports_serial_failure_after_parallel_pass(
+def test_build_and_verify_runner_full_verify_reports_serial_failure_after_parallel_pass(
     tmp_path: Path, capsys
 ) -> None:
-    module = load_test_framework_module()
+    module = load_build_and_verify_module()
     project = tmp_path / "project"
     project.mkdir()
-    cache_dir = project / ".test-framework" / "cache"
-    (project / ".test-framework").mkdir()
+    cache_dir = project / ".build-and-verify" / "cache"
+    (project / ".build-and-verify").mkdir()
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -890,14 +940,14 @@ def test_test_framework_runner_full_verify_reports_serial_failure_after_parallel
     assert read_json(cache_files[0]) == {"status": "passed", "id": "parallel-pass"}
 
 
-def test_test_framework_cache_store_writes_temp_file_before_replace(
+def test_build_and_verify_cache_store_writes_temp_file_before_replace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    module = load_test_framework_module()
+    module = load_build_and_verify_module()
     runner = module._runner()
     project = tmp_path / "project"
     project.mkdir()
-    cache_dir = project / ".test-framework" / "cache"
+    cache_dir = project / ".build-and-verify" / "cache"
     path_type = type(project)
     original_write_text = path_type.write_text
 
@@ -912,10 +962,10 @@ def test_test_framework_cache_store_writes_temp_file_before_replace(
     assert read_json(cache_dir / "cache-key.json") == {"status": "passed", "id": "cache-check"}
 
 
-def test_test_framework_runner_reads_changed_files_with_single_git_status(
+def test_build_and_verify_runner_reads_changed_files_with_single_git_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    module = load_test_framework_module()
+    module = load_build_and_verify_module()
     runner = module._runner()
     calls = []
 
@@ -944,10 +994,10 @@ def test_test_framework_runner_reads_changed_files_with_single_git_status(
     assert calls == [["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"]]
 
 
-def test_test_framework_runner_reads_git_status_rename_and_copy_destinations(
+def test_build_and_verify_runner_reads_git_status_rename_and_copy_destinations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    module = load_test_framework_module()
+    module = load_build_and_verify_module()
     runner = module._runner()
 
     def fake_run(command, **_kwargs):
@@ -965,12 +1015,12 @@ def test_test_framework_runner_reads_git_status_rename_and_copy_destinations(
     assert runner._git_status_names(tmp_path) == ["renamed.txt", "copied.txt"]
 
 
-def test_test_framework_user_level_skill_path_runs_verify_without_git(
+def test_build_and_verify_user_level_skill_path_runs_verify_without_git(
     tmp_path: Path,
 ) -> None:
-    user_skill = tmp_path / "user-skills" / "test-framework"
-    shutil.copytree(PLUGIN_ROOT / "skills" / "test-framework", user_skill)
-    script = user_skill / "scripts" / "test_framework.py"
+    user_skill = tmp_path / "user-skills" / "build-and-verify"
+    shutil.copytree(PLUGIN_ROOT / "skills" / "build-and-verify", user_skill)
+    script = user_skill / "scripts" / "build_and_verify.py"
     project = tmp_path / "project"
     project.mkdir()
 
@@ -985,7 +1035,7 @@ def test_test_framework_user_level_skill_path_runs_verify_without_git(
     (project / "src").mkdir()
     (project / "src" / "app.py").write_text("changed\n", encoding="utf-8")
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -1017,18 +1067,18 @@ def test_test_framework_user_level_skill_path_runs_verify_without_git(
     ]
 
 
-def test_test_framework_non_git_project_uses_filesystem_scan(
+def test_build_and_verify_non_git_project_uses_filesystem_scan(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     (project / "src").mkdir()
     (project / "docs").mkdir()
     (project / "src" / "app.py").write_text("changed\n", encoding="utf-8")
     (project / "docs" / "guide.md").write_text("changed\n", encoding="utf-8")
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -1061,14 +1111,14 @@ def test_test_framework_non_git_project_uses_filesystem_scan(
     ]
 
 
-def test_test_framework_runner_uses_passed_result_cache(tmp_path: Path) -> None:
+def test_build_and_verify_runner_uses_passed_result_cache(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     (project / "src").mkdir()
     (project / "src" / "cached.py").write_text("changed\n", encoding="utf-8")
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -1086,7 +1136,7 @@ def test_test_framework_runner_uses_passed_result_cache(tmp_path: Path) -> None:
     )
 
     first = run_check(project, "verify")
-    cache_files = list((project / ".test-framework" / "cache").glob("*.json"))
+    cache_files = list((project / ".build-and-verify" / "cache").glob("*.json"))
     second = run_check(project, "verify")
 
     assert first.returncode == 0, first.stdout + first.stderr
@@ -1099,16 +1149,16 @@ def test_test_framework_runner_uses_passed_result_cache(tmp_path: Path) -> None:
     ]
 
 
-def test_test_framework_runner_full_verify_ignores_existing_default_cache(
+def test_build_and_verify_runner_full_verify_ignores_existing_default_cache(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     (project / "src").mkdir()
     (project / "src" / "cached.py").write_text("changed\n", encoding="utf-8")
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -1140,16 +1190,16 @@ def test_test_framework_runner_full_verify_ignores_existing_default_cache(
     ]
 
 
-def test_test_framework_runner_full_verify_refreshes_cache_for_default_verify(
+def test_build_and_verify_runner_full_verify_refreshes_cache_for_default_verify(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     (project / "src").mkdir()
     (project / "src" / "cached.py").write_text("changed\n", encoding="utf-8")
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -1178,12 +1228,12 @@ def test_test_framework_runner_full_verify_refreshes_cache_for_default_verify(
     ]
 
 
-def test_test_framework_runner_cache_misses_when_input_is_deleted(
+def test_build_and_verify_runner_cache_misses_when_input_is_deleted(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     assert git(project, "init").returncode == 0
     assert git(project, "config", "user.email", "test@example.invalid").returncode == 0
     assert git(project, "config", "user.name", "Test User").returncode == 0
@@ -1191,7 +1241,7 @@ def test_test_framework_runner_cache_misses_when_input_is_deleted(
     input_file = project / "src" / "input.txt"
     input_file.write_text("base\n", encoding="utf-8")
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -1223,18 +1273,18 @@ def test_test_framework_runner_cache_misses_when_input_is_deleted(
     ]
 
 
-def test_test_framework_runner_default_cache_key_tracks_glob_path_contents(
+def test_build_and_verify_runner_default_cache_key_tracks_glob_path_contents(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     assert git(project, "init").returncode == 0
     (project / "src").mkdir()
     app_path = project / "src" / "app.txt"
     app_path.write_text("first\n", encoding="utf-8")
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -1263,17 +1313,17 @@ def test_test_framework_runner_default_cache_key_tracks_glob_path_contents(
     ]
 
 
-def test_test_framework_runner_default_check_cache_key_tracks_changed_files(
+def test_build_and_verify_runner_default_check_cache_key_tracks_changed_files(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     assert git(project, "init").returncode == 0
     assert git(project, "config", "user.email", "test@example.invalid").returncode == 0
     assert git(project, "config", "user.name", "Test User").returncode == 0
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -1304,17 +1354,17 @@ def test_test_framework_runner_default_check_cache_key_tracks_changed_files(
     ]
 
 
-def test_test_framework_pathless_check_skips_clean_git_worktree(
+def test_build_and_verify_pathless_check_skips_clean_git_worktree(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     assert git(project, "init").returncode == 0
     assert git(project, "config", "user.email", "test@example.invalid").returncode == 0
     assert git(project, "config", "user.name", "Test User").returncode == 0
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -1339,19 +1389,19 @@ def test_test_framework_pathless_check_skips_clean_git_worktree(
     assert not (project / "run.log").exists()
 
 
-def test_test_framework_runner_default_check_cache_key_tracks_dirty_file_contents(
+def test_build_and_verify_runner_default_check_cache_key_tracks_dirty_file_contents(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     assert git(project, "init").returncode == 0
     assert git(project, "config", "user.email", "test@example.invalid").returncode == 0
     assert git(project, "config", "user.name", "Test User").returncode == 0
     dirty_file = project / "dirty.txt"
     dirty_file.write_text("base\n", encoding="utf-8")
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -1382,16 +1432,16 @@ def test_test_framework_runner_default_check_cache_key_tracks_dirty_file_content
     ]
 
 
-def test_test_framework_runner_reports_missing_list_command_without_traceback(
+def test_build_and_verify_runner_reports_missing_list_command_without_traceback(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     (project / "src").mkdir()
     (project / "src" / "app.txt").write_text("changed\n", encoding="utf-8")
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -1399,7 +1449,7 @@ def test_test_framework_runner_reports_missing_list_command_without_traceback(
                 "checks": [
                     {
                         "id": "missing-command",
-                        "command": ["missing-test-framework-executable"],
+                        "command": ["missing-build-and-verify-executable"],
                         "paths": ["src/app.txt"],
                         "inputs": ["src/app.txt"],
                     }
@@ -1416,19 +1466,19 @@ def test_test_framework_runner_reports_missing_list_command_without_traceback(
     assert "Traceback" not in output
 
 
-def test_test_framework_runner_verify_reports_missing_config_without_traceback(
+def test_build_and_verify_runner_verify_reports_missing_config_without_traceback(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
-    (project / ".test-framework" / "config.json").unlink()
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
+    (project / ".build-and-verify" / "config.json").unlink()
 
     result = run_check(project, "verify")
     output = result.stdout + result.stderr
 
     assert result.returncode != 0
-    assert "missing_config: .test-framework/config.json" in output
+    assert "missing_config: .build-and-verify/config.json" in output
     assert "status: failed" in result.stdout
     assert "Traceback" not in output
 
@@ -1440,18 +1490,18 @@ def test_test_framework_runner_verify_reports_missing_config_without_traceback(
         "{outside}",
     ],
 )
-def test_test_framework_runner_rejects_inputs_outside_project(
+def test_build_and_verify_runner_rejects_inputs_outside_project(
     tmp_path: Path, invalid_input: str
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
     outside = tmp_path / "outside.txt"
     outside.write_text("outside\n", encoding="utf-8")
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     (project / "src").mkdir()
     (project / "src" / "app.txt").write_text("changed\n", encoding="utf-8")
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -1475,16 +1525,16 @@ def test_test_framework_runner_rejects_inputs_outside_project(
     assert not (project / "run.log").exists()
 
 
-def test_test_framework_runner_full_verify_rejects_inputs_outside_project(
+def test_build_and_verify_runner_full_verify_rejects_inputs_outside_project(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     (project / "src").mkdir()
     (project / "src" / "app.txt").write_text("changed\n", encoding="utf-8")
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -1509,12 +1559,12 @@ def test_test_framework_runner_full_verify_rejects_inputs_outside_project(
 
 
 @pytest.mark.parametrize("mutation", ["check_id", "command", "inputs", "config"])
-def test_test_framework_runner_cache_key_changes_with_check_contract(
+def test_build_and_verify_runner_cache_key_changes_with_check_contract(
     tmp_path: Path, mutation: str
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     (project / "src").mkdir()
     (project / "inputs").mkdir()
     (project / "src" / "sample.py").write_text("changed\n", encoding="utf-8")
@@ -1543,12 +1593,12 @@ def test_test_framework_runner_cache_key_changes_with_check_contract(
             },
         }
 
-    write_json(project / ".test-framework" / "config.json", config())
+    write_json(project / ".build-and-verify" / "config.json", config())
     first = run_check(project, "verify")
     cached = run_check(project, "verify")
 
     assert first.returncode == 0, first.stdout + first.stderr
-    cache_files = list((project / ".test-framework" / "cache").glob("*.json"))
+    cache_files = list((project / ".build-and-verify" / "cache").glob("*.json"))
     assert len(cache_files) == 1
     assert read_json(cache_files[0])["status"] == "passed"
     assert cached.returncode == 0, cached.stdout + cached.stderr
@@ -1571,7 +1621,7 @@ def test_test_framework_runner_cache_key_changes_with_check_contract(
     else:
         raise AssertionError(f"unsupported mutation: {mutation}")
 
-    write_json(project / ".test-framework" / "config.json", changed_config)
+    write_json(project / ".build-and-verify" / "config.json", changed_config)
     changed = run_check(project, "verify")
 
     assert changed.returncode == 0, changed.stdout + changed.stderr
@@ -1583,16 +1633,16 @@ def test_test_framework_runner_cache_key_changes_with_check_contract(
     ]
 
 
-def test_test_framework_runner_cache_miss_does_not_fall_back_to_full(
+def test_build_and_verify_runner_cache_miss_does_not_fall_back_to_full(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     (project / "src").mkdir()
     (project / "src" / "sample.txt").write_text("changed\n", encoding="utf-8")
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -1634,22 +1684,22 @@ def test_test_framework_runner_cache_miss_does_not_fall_back_to_full(
 @pytest.mark.parametrize(
     "excluded_relative",
     [
-        Path(".test-framework/cache/noise.txt"),
+        Path(".build-and-verify/cache/noise.txt"),
         Path(".git/noise.txt"),
         Path("src/__pycache__/noise.pyc"),
     ],
 )
-def test_test_framework_runner_directory_hash_ignores_generated_paths(
+def test_build_and_verify_runner_directory_hash_ignores_generated_paths(
     tmp_path: Path, excluded_relative: Path
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     (project / "src").mkdir()
     (project / "src" / "sample.txt").write_text("changed\n", encoding="utf-8")
-    run_log = project / ".test-framework" / "cache" / "directory-hash-runs.txt"
+    run_log = project / ".build-and-verify" / "cache" / "directory-hash-runs.txt"
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -1659,7 +1709,7 @@ def test_test_framework_runner_directory_hash_ignores_generated_paths(
                         "id": "directory-hash",
                         "command": command_that_logs(
                             "directory-hash",
-                            ".test-framework/cache/directory-hash-runs.txt",
+                            ".build-and-verify/cache/directory-hash-runs.txt",
                         ),
                         "paths": ["src/**"],
                         "inputs": ["."],
@@ -1681,9 +1731,9 @@ def test_test_framework_runner_directory_hash_ignores_generated_paths(
     assert run_log.read_text(encoding="utf-8").splitlines() == ["directory-hash"]
 
 
-def test_test_framework_cache_key_covers_runtime_and_cache_versions() -> None:
+def test_build_and_verify_cache_key_covers_runtime_and_cache_versions() -> None:
     template = (
-        PLUGIN_ROOT / "skills" / "test-framework" / "scripts" / "test_framework_runner.py"
+        PLUGIN_ROOT / "skills" / "build-and-verify" / "scripts" / "build_and_verify_runner.py"
     ).read_text(encoding="utf-8")
 
     assert '"cache_version": CACHE_VERSION' in template
@@ -1691,14 +1741,14 @@ def test_test_framework_cache_key_covers_runtime_and_cache_versions() -> None:
     assert '"python_version": platform.python_version()' in template
 
 
-def test_test_framework_runner_does_not_cache_failed_results(tmp_path: Path) -> None:
+def test_build_and_verify_runner_does_not_cache_failed_results(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     (project / "src").mkdir()
     (project / "src" / "fails.py").write_text("changed\n", encoding="utf-8")
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -1727,14 +1777,14 @@ def test_test_framework_runner_does_not_cache_failed_results(tmp_path: Path) -> 
     ]
 
 
-def test_test_framework_runner_no_check_does_not_fall_back_to_full(tmp_path: Path) -> None:
+def test_build_and_verify_runner_no_check_does_not_fall_back_to_full(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     (project / "docs").mkdir()
     (project / "docs" / "guide.md").write_text("changed\n", encoding="utf-8")
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},
@@ -1759,12 +1809,12 @@ def test_test_framework_runner_no_check_does_not_fall_back_to_full(tmp_path: Pat
     assert not (project / "run.log").exists()
 
 
-def test_test_framework_runner_reads_worktree_changed_files(tmp_path: Path) -> None:
+def test_build_and_verify_runner_reads_worktree_changed_files(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_test_framework("init", "--project", str(project)).returncode == 0
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
     write_json(
-        project / ".test-framework" / "config.json",
+        project / ".build-and-verify" / "config.json",
         {
             "version": 1,
             "build": {"checks": []},

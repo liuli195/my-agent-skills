@@ -126,7 +126,7 @@ def test_pr_flow_package_passes_repo_build_checks() -> None:
     result = subprocess.run(
         [
             sys.executable,
-            "plugins/test-framework/skills/test-framework/scripts/test_framework.py",
+            "plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py",
             "build",
             "--project",
             ".",
