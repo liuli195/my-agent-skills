@@ -127,7 +127,7 @@ Expected after implementation: PASS.
 - Modify: `tests/test_cross_agent_review_cli.py`
 - Modify: `plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py`
 
-- [ ] **Step 1: Write failing manifest test**
+- [x] **Step 1: Write failing manifest test**
 
 Replace `test_run_archives_review_input_snapshots_under_output_dir` with:
 
@@ -182,7 +182,7 @@ def test_run_archives_context_snapshots_and_git_manifest_under_output_dir(tmp_pa
     assert manifest["head_ref"] == head
     assert manifest["review_subject"]["diff_command"] == f"git diff {base}...{head}"
     assert manifest["review_subject"]["commit_list_command"] == f"git log {base}..{head} --oneline"
-    assert manifest["review_subject"]["changed_files_command"] == f"git diff --name-status {base}...{head}"
+    assert manifest["review_subject"]["changed_files_command"] == f"git diff --name-status --find-renames --find-copies-harder {base}...{head}"
     assert manifest["review_subject"]["path_diff_command_template"] == f"git diff {base}...{head} -- <path>"
     assert manifest["review_subject"]["merge_base"] == base
     assert manifest["commits"] == [{"sha": head[:7], "summary": "change app"}]
@@ -191,7 +191,7 @@ def test_run_archives_context_snapshots_and_git_manifest_under_output_dir(tmp_pa
     assert manifest["inputs"]["spec"]["path"] == "inputs/spec.md"
 ```
 
-- [ ] **Step 2: Run the manifest test to verify it fails**
+- [x] **Step 2: Run the manifest test to verify it fails**
 
 Run:
 
@@ -201,7 +201,7 @@ python -m pytest tests/test_cross_agent_review_cli.py::test_run_archives_context
 
 Expected before implementation: FAIL because the old manifest still expects `diff.patch`（差异补丁）。
 
-- [ ] **Step 3: Implement git-based review subject helpers**
+- [x] **Step 3: Implement git-based review subject helpers**
 
 In `cross_agent_review.py`, add:
 
@@ -225,7 +225,7 @@ def review_subject_commands(review_args: ReviewArgs) -> dict[str, str]:
     return {
         "diff_command": git_command_text(["diff", f"{base}...{head}"]),
         "commit_list_command": git_command_text(["log", f"{base}..{head}", "--oneline"]),
-        "changed_files_command": git_command_text(["diff", "--name-status", f"{base}...{head}"]),
+        "changed_files_command": git_command_text(["diff", "--name-status", "--find-renames", "--find-copies-harder", f"{base}...{head}"]),
         "path_diff_command_template": git_command_text(["diff", f"{base}...{head}", "--", "<path>"]),
     }
 
@@ -234,11 +234,11 @@ def merge_base(review_args: ReviewArgs, cwd: Path) -> str:
     return git_output(["merge-base", review_args.base_ref, review_args.head_ref], cwd)
 ```
 
-Add changed file parsing from `git diff --name-status -z`:
+Add changed file parsing from `git diff --name-status --find-renames --find-copies-harder -z`:
 
 ```python
 def changed_file_entries_from_git(review_args: ReviewArgs, cwd: Path) -> list[dict[str, str]]:
-    output = git_output_bytes(["diff", "--name-status", "-z", f"{review_args.base_ref}...{review_args.head_ref}"], cwd)
+    output = git_output_bytes(["diff", "--name-status", "--find-renames", "--find-copies-harder", "-z", f"{review_args.base_ref}...{review_args.head_ref}"], cwd)
     parts = [part.decode("utf-8", errors="surrogateescape") for part in output.split(b"\0") if part]
     entries: list[dict[str, str]] = []
     index = 0
@@ -272,7 +272,7 @@ def commit_entries(review_args: ReviewArgs, cwd: Path) -> list[dict[str, str]]:
     return entries
 ```
 
-- [ ] **Step 4: Update `build_input_manifest`**
+- [x] **Step 4: Update `build_input_manifest`**
 
 Change `build_input_manifest(review_args)` to:
 
@@ -298,7 +298,7 @@ def build_input_manifest(review_args: ReviewArgs) -> dict:
     }
 ```
 
-- [ ] **Step 5: Run the manifest test to verify it passes**
+- [x] **Step 5: Run the manifest test to verify it passes**
 
 Run:
 
@@ -308,13 +308,13 @@ python -m pytest tests/test_cross_agent_review_cli.py::test_run_archives_context
 
 Expected after implementation: PASS.
 
-## Task 3: Changed Files Cover Rename/Delete/Spaces
+## Task 3: Changed Files Cover Rename/Delete/Copy/Spaces
 
 **Files:**
 - Modify: `tests/test_cross_agent_review_cli.py`
 - Modify: `plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py`
 
-- [ ] **Step 1: Replace diff parser test with git parser test**
+- [x] **Step 1: Replace diff parser test with git parser test**
 
 Replace `test_changed_file_entries_from_diff_reports_file_statuses` with:
 
@@ -385,7 +385,7 @@ def test_changed_file_entries_from_git_reports_renames_and_spaces(tmp_path: Path
     ]
 ```
 
-- [ ] **Step 2: Run changed-file tests**
+- [x] **Step 2: Run changed-file tests**
 
 Run:
 
@@ -544,7 +544,7 @@ def test_reviewer_prompt_includes_review_subject_commands_not_diff_file(tmp_path
     assert f"Head ref: {head}" in prompt
     assert f"git diff {base}...{head}" in prompt
     assert f"git log {base}..{head} --oneline" in prompt
-    assert f"git diff --name-status {base}...{head}" in prompt
+    assert f"git diff --name-status --find-renames --find-copies-harder {base}...{head}" in prompt
     assert f"git diff {base}...{head} -- <path>" in prompt
     assert "Diff file:" not in prompt
     assert "diff.patch" not in prompt
@@ -635,7 +635,7 @@ Use these helpers in `reviewer_prompt`.
 - Modify: `plugins/cross-agent-review/skills/cross-agent-review/SKILL.md`
 - Modify: `tests/test_cross_agent_review_cli.py`
 
-- [ ] **Step 1: Write failing documentation contract test**
+- [x] **Step 1: Write failing documentation contract test**
 
 Add:
 
@@ -659,7 +659,7 @@ def test_skill_docs_describe_review_subject_and_no_outer_timeout() -> None:
     assert "540 秒" in text
 ```
 
-- [ ] **Step 2: Run documentation test**
+- [x] **Step 2: Run documentation test**
 
 Run:
 
@@ -669,7 +669,7 @@ python -m pytest tests/test_cross_agent_review_cli.py::test_skill_docs_describe_
 
 Expected before docs update: FAIL because docs still show `--diff-file`（差异文件）.
 
-- [ ] **Step 3: Update `SKILL.md`**
+- [x] **Step 3: Update `SKILL.md`**
 
 Update command example to remove `--diff-file` and add:
 
@@ -683,7 +683,7 @@ Update command example to remove `--diff-file` and add:
 ```bash
 git diff <base-ref>...<head-ref>
 git log <base-ref>..<head-ref> --oneline
-git diff --name-status <base-ref>...<head-ref>
+git diff --name-status --find-renames --find-copies-harder <base-ref>...<head-ref>
 git diff <base-ref>...<head-ref> -- <path>
 ```
 
@@ -703,7 +703,7 @@ Add timeout section:
 主 agent（代理）调用本插件时必须直接等待 Python（脚本）返回，不得再包装外部短 `timeout`（超时）、watchdog（看门等待）或等价提前终止逻辑。
 ```
 
-- [ ] **Step 4: Run documentation test**
+- [x] **Step 4: Run documentation test**
 
 Run:
 

@@ -15,7 +15,7 @@
 #### Scenario: review subject 使用三点 diff
 - **WHEN** 系统生成 review subject（审查对象）
 - **THEN** diff command（差异命令）MUST 使用 `git diff <base_ref>...<head_ref>`
-- **AND** changed files command（变更文件命令）MUST 使用 `git diff --name-status <base_ref>...<head_ref>`
+- **AND** changed files command（变更文件命令）MUST 使用 `git diff --name-status --find-renames --find-copies-harder <base_ref>...<head_ref>`
 - **AND** commit list command（提交列表命令）MUST 使用 `git log <base_ref>..<head_ref> --oneline`
 
 #### Scenario: reviewer 使用轻量输入契约
