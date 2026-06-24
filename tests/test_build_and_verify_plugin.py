@@ -273,9 +273,7 @@ def test_build_and_verify_active_surfaces_do_not_keep_old_entrypoints() -> None:
     assert not (REPO_ROOT / "pyproject.toml").exists()
     active_paths = [
         REPO_ROOT / ".build-and-verify" / "config.json",
-        REPO_ROOT / ".github" / "workflows" / "release.yml",
         REPO_ROOT / ".comet.yaml",
-        REPO_ROOT / ".comet" / "config.yaml",
         REPO_ROOT / ".pr-flow" / "config.yaml",
         REPO_ROOT / ".release-flow" / "config.yaml",
         REPO_ROOT / ".release-flow" / "projection.yaml",
@@ -284,6 +282,9 @@ def test_build_and_verify_active_surfaces_do_not_keep_old_entrypoints() -> None:
         RELEASE_FLOW_SCRIPT,
         REPO_ROOT / "plugins" / "pr-flow" / "skills" / "pr-flow" / "scripts" / "pr_flow.py",
     ]
+    active_paths.extend(sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")))
+    active_paths.extend(sorted((REPO_ROOT / ".github" / "workflows").glob("*.yaml")))
+    active_paths.extend(sorted((REPO_ROOT / ".comet").glob("*.yaml")))
     plugin_paths = [
         path
         for path in PLUGIN_ROOT.rglob("*")
@@ -304,6 +305,16 @@ def test_build_and_verify_active_surfaces_do_not_keep_old_entrypoints() -> None:
             assert old_entrypoint not in text, f"{path} still references {old_entrypoint}"
 
 
+def test_build_and_verify_root_build_check_uses_local_plugin_build() -> None:
+    config = read_json(REPO_ROOT / ".build-and-verify" / "config.json")
+    build_checks = config["build"]["checks"]
+
+    assert len(build_checks) == 1
+    assert build_checks[0]["id"] == "build.local-plugin-package"
+    assert build_checks[0]["command"] == "python scripts/local_plugin_build.py"
+    assert "scripts/local_plugin_build.py" in build_checks[0]["inputs"]
+
+
 def test_build_and_verify_pytest_options_live_in_explicit_commands() -> None:
     config = read_json(REPO_ROOT / ".build-and-verify" / "config.json")
     verify_checks = config["verify"]["checks"]
@@ -313,6 +324,7 @@ def test_build_and_verify_pytest_options_live_in_explicit_commands() -> None:
         command = check["command"]
         if "pytest" in command:
             assert " -q " in f" {command} "
+            assert " tests/" in f" {command} "
 
 
 def test_build_and_verify_release_projection_passes_real_validate() -> None:
