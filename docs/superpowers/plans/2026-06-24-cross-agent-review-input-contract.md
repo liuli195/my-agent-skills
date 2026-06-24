@@ -402,7 +402,7 @@ Expected: FAIL until `changed_file_entries_from_git` exists and correctly parses
 - Modify: `plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py`
 - Modify: `tests/test_cross_agent_review_cli.py`
 
-- [ ] **Step 1: Write failing template source test**
+- [x] **Step 1: Write failing template source test**
 
 Add:
 
@@ -419,7 +419,7 @@ def test_reviewer_prompt_template_is_loaded_from_file(tmp_path: Path, monkeypatc
     assert f"Template marker: spec-alignment / {review.output_dir / 'inputs' / 'manifest.json'}" in prompt
 ```
 
-- [ ] **Step 2: Run template source test**
+- [x] **Step 2: Run template source test**
 
 Run:
 
@@ -429,7 +429,7 @@ python -m pytest tests/test_cross_agent_review_cli.py::test_reviewer_prompt_temp
 
 Expected before implementation: FAIL because `reviewer_prompt`（审查提示词） is hardcoded.
 
-- [ ] **Step 3: Add template file**
+- [x] **Step 3: Add template file**
 
 Create `plugins/cross-agent-review/skills/cross-agent-review/assets/templates/reviewer-prompt.md`:
 
@@ -471,7 +471,7 @@ Do not read a complete diff output. For implementation review, use changed files
 Use git diff/show/status read-only commands if the file references are insufficient.
 ```
 
-- [ ] **Step 4: Implement simple template rendering**
+- [x] **Step 4: Implement simple template rendering**
 
 In `cross_agent_review.py`, add constants:
 
@@ -493,7 +493,7 @@ def render_template(path: Path, values: dict[str, str]) -> str:
 
 Refactor `reviewer_prompt` to build values and call `render_template(...)`.
 
-- [ ] **Step 5: Run template source test**
+- [x] **Step 5: Run template source test**
 
 Run:
 

@@ -2,10 +2,10 @@
 
 - Change: refactor-cross-agent-review-input-contract
 - Plan: docs/superpowers/plans/2026-06-24-cross-agent-review-input-contract.md
-- Current phase: done
-- Current plan task: Task 2: Manifest Uses Git Commands Instead of Diff Patch
-- Current OpenSpec task: 1.2 调整 CLI（命令行接口）和 manifest（清单）生成逻辑，用 git commands（命令）记录 diff（差异）、commit list（提交列表）和 changed files（变更文件）。
-- Review/fix rounds: 1
+- Current phase: implementing
+- Current plan task: Task 4: Extract Reviewer Prompt Template
+- Current OpenSpec task: 1.3 将 `reviewer prompt`（审查提示词）模板从 Python 脚本中抽出到独立模板文件，方便修改和复用；Python 脚本仍负责读取和渲染模板。
+- Review/fix rounds: 0
 
 ## Carry-Forward Notes
 
@@ -108,3 +108,43 @@
 - Task 3 plan steps checked off because git-based changed file parsing was completed during Task 2 review fixes.
 - Task 6 plan steps checked off because documentation and timeout contract fixes were completed during Task 2 review fixes.
 - OpenSpec tasks 1.1, 1.2, 1.5, 2.1, 2.2, and 2.5 checked off.
+
+---
+
+# Task 4: Extract Reviewer Prompt Template
+
+## Implementer
+
+- Status: DONE
+- Commit: e1b2a9f
+- Changed files:
+  - tests/test_cross_agent_review_cli.py
+  - plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py
+  - plugins/cross-agent-review/skills/cross-agent-review/assets/templates/reviewer-prompt.md
+- RED evidence: `test_reviewer_prompt_template_is_loaded_from_file` failed because the hardcoded prompt did not include the template marker.
+- GREEN evidence:
+  - Template loading test passed.
+  - Existing manifest/role rubric/large input prompt tests passed.
+  - Full `tests/test_cross_agent_review_cli.py` passed.
+
+## Spec Review
+
+- Status: APPROVED
+- Verification:
+  - `python -m pytest tests/test_cross_agent_review_cli.py::test_reviewer_prompt_template_is_loaded_from_file -q` passed.
+  - Related prompt tests passed.
+  - `SKILL.md` was not changed by Task 4.
+
+## Code Quality Review
+
+- Status: APPROVED
+- Verification:
+  - `python -m pytest tests/test_cross_agent_review_plugin_package.py tests/test_cross_agent_review_cli.py -q` passed: `56 passed`.
+  - `openspec validate refactor-cross-agent-review-input-contract --strict` passed.
+- Note:
+  - Task 7 should add a package assertion for `assets/templates/reviewer-prompt.md`.
+
+## Completion
+
+- Task 4 plan steps checked off.
+- OpenSpec tasks 1.3 and 2.4 checked off.
