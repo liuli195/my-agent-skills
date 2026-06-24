@@ -519,6 +519,21 @@ def test_reviewer_prompt_references_manifest_and_role_rubrics(tmp_path: Path) ->
         assert "Return only a single JSON object" in prompt
 
 
+def test_reviewer_prompt_template_is_loaded_from_file(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
+    review = make_review_args_for_module(module, tmp_path)
+    manifest_path = review.output_dir / "inputs" / "manifest.json"
+    template = write_file(
+        tmp_path / "reviewer-prompt.md",
+        "Template marker: {{ role }} / {{ manifest_path }}\n",
+    )
+    monkeypatch.setattr(module, "REVIEWER_PROMPT_TEMPLATE", template, raising=False)
+
+    prompt = module.reviewer_prompt(review, "spec-alignment")
+
+    assert f"Template marker: spec-alignment / {manifest_path}" in prompt
+
+
 def test_reviewer_prompt_does_not_inline_large_inputs(tmp_path: Path) -> None:
     module = load_script_module()
     project = tmp_path / "repo"

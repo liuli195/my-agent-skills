@@ -11,6 +11,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 
+SCRIPT_PATH = Path(__file__).resolve()
+SKILL_ROOT = SCRIPT_PATH.parents[1]
+REVIEWER_PROMPT_TEMPLATE = SKILL_ROOT / "assets" / "templates" / "reviewer-prompt.md"
 REQUIRED_FILE_ARGS = ["spec_file", "design_file", "tasks_file"]
 INPUT_SNAPSHOT_NAMES = {
     "spec_file": "spec.md",
@@ -271,6 +274,13 @@ def input_reference(label: str, path: Path) -> str:
     )
 
 
+def render_template(path: Path, values: dict[str, str]) -> str:
+    rendered = path.read_text(encoding="utf-8")
+    for key, value in values.items():
+        rendered = rendered.replace(f"{{{{ {key} }}}}", value)
+    return rendered
+
+
 def git_command_text(args: Sequence[str]) -> str:
     return "git " + " ".join(args)
 
@@ -384,50 +394,39 @@ def write_input_manifest(review_args: ReviewArgs) -> Path:
 
 
 def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
-    parts = [
-        f"Role: {role}",
-        "Return only a single JSON object. Do not use Markdown.",
-        "Schema:",
-        json.dumps(
-            {
-                "role": role,
-                "status": "completed",
-                "findings": [
-                    {
-                        "severity": "CRITICAL",
-                        "location": "path-or-component",
-                        "summary": "one-line issue summary",
-                        "evidence": "specific evidence from the supplied inputs",
-                        "recommendation": "concrete next action",
-                    }
-                ],
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        "Use only these severity values: CRITICAL, IMPORTANT, WARNING, SUGGESTION.",
-        'If there are no issues, return "findings": [].',
-        "Do not put pass, aligned, ok, or informational observations in findings.",
-        "Do not use severity aliases such as high, medium, low, minor, or info.",
-        SEVERITY_RUBRIC,
-    ]
-    focus = ROLE_FOCUS.get(role)
-    if focus:
-        parts.append(focus)
-    parts.extend(
-        [
-            f"Change: {review_args.change}",
-            f"Base ref: {review_args.base_ref}",
-            f"Head ref: {review_args.head_ref}",
-            f"Manifest file: {input_manifest_path(review_args)}",
-            "Use the referenced input files as the source of truth. Read only the sections needed for this review.",
-            "Use git diff/show/status read-only commands if the file references are insufficient.",
-            input_reference("Spec", review_args.spec_file),
-            input_reference("Design", review_args.design_file),
-            input_reference("Tasks", review_args.tasks_file),
-        ]
+    schema_json = json.dumps(
+        {
+            "role": role,
+            "status": "completed",
+            "findings": [
+                {
+                    "severity": "CRITICAL",
+                    "location": "path-or-component",
+                    "summary": "one-line issue summary",
+                    "evidence": "specific evidence from the supplied inputs",
+                    "recommendation": "concrete next action",
+                }
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
     )
-    return "\n\n".join(parts)
+    return render_template(
+        REVIEWER_PROMPT_TEMPLATE,
+        {
+            "role": role,
+            "schema_json": schema_json,
+            "severity_rubric": SEVERITY_RUBRIC,
+            "role_focus": ROLE_FOCUS.get(role, ""),
+            "change": review_args.change,
+            "base_ref": review_args.base_ref,
+            "head_ref": review_args.head_ref,
+            "manifest_path": str(input_manifest_path(review_args)),
+            "spec_reference": input_reference("Spec", review_args.spec_file),
+            "design_reference": input_reference("Design", review_args.design_file),
+            "tasks_reference": input_reference("Tasks", review_args.tasks_file),
+        },
+    )
 
 
 def dispatch_reviewers(review_args: ReviewArgs, sdk_python: str) -> list[dict]:
