@@ -509,7 +509,7 @@ Expected after implementation: PASS.
 - Modify: `tests/test_cross_agent_review_cli.py`
 - Modify: `plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py`
 
-- [ ] **Step 1: Update prompt tests**
+- [x] **Step 1: Update prompt tests**
 
 Replace `test_reviewer_prompt_includes_all_review_inputs` with:
 
@@ -586,7 +586,7 @@ def test_reviewer_prompt_does_not_inline_large_diff_or_context(tmp_path: Path) -
     assert len(prompt) < 5000
 ```
 
-- [ ] **Step 2: Run prompt tests**
+- [x] **Step 2: Run prompt tests**
 
 Run:
 
@@ -596,7 +596,7 @@ python -m pytest tests/test_cross_agent_review_cli.py::test_reviewer_prompt_incl
 
 Expected before prompt refactor completion: FAIL. Expected after Task 4 and values update: PASS.
 
-- [ ] **Step 3: Update prompt value helpers**
+- [x] **Step 3: Update prompt value helpers**
 
 Add:
 

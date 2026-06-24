@@ -3,8 +3,8 @@
 - Change: refactor-cross-agent-review-input-contract
 - Plan: docs/superpowers/plans/2026-06-24-cross-agent-review-input-contract.md
 - Current phase: implementing
-- Current plan task: Task 4: Extract Reviewer Prompt Template
-- Current OpenSpec task: 1.3 将 `reviewer prompt`（审查提示词）模板从 Python 脚本中抽出到独立模板文件，方便修改和复用；Python 脚本仍负责读取和渲染模板。
+- Current plan task: Task 5: Prompt Uses Manifest Commands and Does Not Inline Diff Output
+- Current OpenSpec task: 1.4 调整 `reviewer prompt`（审查提示词）渲染，让输入契约更明确：只给命令、路径、清单、哈希、变更文件摘要和按需读取规则。
 - Review/fix rounds: 0
 
 ## Carry-Forward Notes
@@ -148,3 +148,43 @@
 
 - Task 4 plan steps checked off.
 - OpenSpec tasks 1.3 and 2.4 checked off.
+
+---
+
+# Task 5: Prompt Uses Manifest Commands and Does Not Inline Diff Output
+
+## Implementer
+
+- Status: DONE
+- Commit: 2f8fc8dd55098013c2b60173e82b9ec2436c6602
+- Changed files:
+  - tests/test_cross_agent_review_cli.py
+  - plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py
+  - plugins/cross-agent-review/skills/cross-agent-review/assets/templates/reviewer-prompt.md
+- RED evidence: prompt tests failed because the prompt lacked `git diff <base>...<head>` and `Changed files:`.
+- GREEN evidence:
+  - `test_reviewer_prompt_includes_review_subject_commands_not_diff_file` passed.
+  - `test_reviewer_prompt_does_not_inline_large_diff_or_context` passed.
+  - Template and role rubric prompt tests passed.
+  - Full `tests/test_cross_agent_review_cli.py` passed.
+
+## Spec Review
+
+- Status: APPROVED
+- Verification:
+  - Prompt focused tests passed.
+  - Full `tests/test_cross_agent_review_cli.py` passed.
+  - `openspec validate refactor-cross-agent-review-input-contract --strict` passed.
+
+## Code Quality Review
+
+- Status: APPROVED
+- Verification:
+  - `tests/test_cross_agent_review_cli.py` passed: `45 passed`.
+  - `tests/test_cross_agent_review_plugin_package.py` passed: `11 passed`.
+  - Manual checks found no unresolved `{{ ... }}` placeholders in rendered prompts.
+
+## Completion
+
+- Task 5 plan steps checked off.
+- OpenSpec tasks 1.4 and 2.3 checked off.
