@@ -275,7 +275,12 @@ global_command_guards:
     result = run_validator(profile)
 
     assert result.returncode == 1, result.stdout + result.stderr
-    assert f"field={expected_field}" in result.stdout
+    fields = {
+        line.split("field=", 1)[1].split(" ", 1)[0]
+        for line in result.stdout.splitlines()
+        if "field=" in line
+    }
+    assert expected_field in fields
 
 
 def test_global_command_guard_accepts_git_head_short_context_value(tmp_path: Path) -> None:
