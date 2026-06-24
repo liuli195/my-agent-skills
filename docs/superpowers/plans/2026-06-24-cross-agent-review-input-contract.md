@@ -2,6 +2,7 @@
 change: refactor-cross-agent-review-input-contract
 design-doc: docs/superpowers/specs/2026-06-24-cross-agent-review-input-contract-design.md
 base-ref: a8fdccea5ddfdc70d55dadb7028815401d1953ad
+archived-with: 2026-06-24-refactor-cross-agent-review-input-contract
 ---
 
 # Cross-Agent Review Input Contract Implementation Plan

@@ -2,6 +2,8 @@
 comet_change: refactor-cross-agent-review-input-contract
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-24-refactor-cross-agent-review-input-contract
+status: final
 ---
 
 # Cross-Agent Review Input Contract Design
