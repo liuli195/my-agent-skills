@@ -12,6 +12,11 @@
 - 明确 full verify（完整验证）只允许用于 PR Flow（拉取请求流程）hotfix（热修复）直推验证命令和 PR CI（拉取请求持续集成）集成；其他场景不得自动使用 full verify（完整验证），必须说明原因并获得用户确认。
 - 更新本仓库 Comet（双星流程）、PR Flow（拉取请求流程）、marketplace（市场目录）、release projection（发布投影）、OpenSpec（开放规格）和测试引用到新入口。
 
+## Release Notes
+
+- **Breaking change（破坏性变更）**: 根目录不再提供 `pyproject.toml`（Python 项目配置）作为 pytest（Python 测试运行器）入口。不要用裸 `pytest` 作为本仓库验证入口；请使用 `build-and-verify`（构建与验证）提供的 `build`（构建检查）和 `verify`（验证）命令。
+- 本仓库不以 `pip install -e .`（可编辑安装）作为 Plugin（插件）/Skill（技能）开发入口；删除的 `pyproject.toml`（Python 项目配置）只承载 pytest（Python 测试运行器）参数，必要参数已迁移到 `.build-and-verify/config.json` 的显式命令。
+
 ## Capabilities
 
 ### New Capabilities

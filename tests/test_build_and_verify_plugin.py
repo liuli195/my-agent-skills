@@ -256,6 +256,19 @@ def test_build_and_verify_registered_in_marketplaces_and_projection() -> None:
     assert plugin_after(projection_plugins, "pr-flow") == PLUGIN_NAME
 
 
+def test_build_and_verify_registered_in_release_flow_sources() -> None:
+    release_files = [
+        RELEASE_FLOW_CONFIG,
+        RELEASE_FLOW_PROJECTION,
+        RELEASE_FLOW_SCRIPT,
+    ]
+
+    for path in release_files:
+        text = path.read_text(encoding="utf-8")
+        assert "build-and-verify" in text, f"{path} does not reference build-and-verify"
+        assert "test-framework" not in text, f"{path} still references test-framework"
+
+
 def test_build_and_verify_active_surfaces_do_not_keep_old_entrypoints() -> None:
     assert not (REPO_ROOT / "pyproject.toml").exists()
     active_paths = [

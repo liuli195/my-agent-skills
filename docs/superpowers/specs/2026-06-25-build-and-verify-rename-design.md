@@ -23,6 +23,8 @@ canonical_spec: openspec
 
 根目录 `pyproject.toml`（Python 测试配置）在本次范围内删除。pytest（Python 测试运行器）需要的路径和参数必须在 `.build-and-verify/config.json` 的命令中显式声明。
 
+发布说明：本仓库不再把裸 `pytest`（Python 测试运行器）或 `pip install -e .`（可编辑安装）作为 Plugin（插件）/Skill（技能）开发入口；开发与验证入口统一为 `build-and-verify`（构建与验证）。
+
 ## 非目标
 
 - 不重构或重写现有 test-framework（测试框架）实现。
