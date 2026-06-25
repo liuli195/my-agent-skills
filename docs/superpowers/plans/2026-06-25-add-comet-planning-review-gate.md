@@ -2,6 +2,7 @@
 change: add-comet-planning-review-gate
 design-doc: docs/superpowers/specs/2026-06-25-add-comet-planning-review-gate-design.md
 base-ref: 4b2b2889b1efaac7a8097bf26b94ed329a16e591
+archived-with: 2026-06-25-add-comet-planning-review-gate
 ---
 
 # Add Comet Planning Review Gate Implementation Plan
@@ -14,6 +15,7 @@ base-ref: 4b2b2889b1efaac7a8097bf26b94ed329a16e591
 
 **Tech Stack:** Python, pytest, YAML Guard Profile（守卫画像）files, Agent Guard runtime scripts, OpenSpec（规格流程）docs.
 
+archived-with: 2026-06-25-add-comet-planning-review-gate
 ---
 
 ## File Map

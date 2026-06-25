@@ -16,6 +16,6 @@ verification_report: docs/superpowers/reports/2026-06-25-add-comet-planning-revi
 branch_status: handled
 created_at: 2026-06-25
 verified_at: 2026-06-25
-archived: false
+archived: true
 handoff_context: openspec/changes/add-comet-planning-review-gate/.comet/handoff/spec-context.json
 handoff_hash: 8053c3f63c1e6c00a3c7131572ee3e5e7a9c0aea23135d31abe4048dc310f453

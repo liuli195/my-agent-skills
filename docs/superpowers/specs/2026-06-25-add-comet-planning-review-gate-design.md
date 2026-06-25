@@ -2,6 +2,8 @@
 comet_change: add-comet-planning-review-gate
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-25-add-comet-planning-review-gate
+status: final
 ---
 
 # Comet Planning Review Gate Design
