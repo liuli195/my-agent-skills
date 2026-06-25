@@ -18,6 +18,14 @@ STRICTLY FORBIDDEN:
 - Comet verify（验证）阶段自动调用。
 - 通用 code review（代码审查）阶段自动调用。
 
+## 模式选择
+
+本 Skill（技能）默认使用收敛模式。模式是主 agent（代理）准备输入和复审范围的策略，不新增 CLI（命令行接口）参数，不改变脚本调用方式。
+
+- Comet build completion（构建完成）或 PR Flow local review（本地审查）：使用收敛模式。首轮覆盖完整 review subject（审查对象）；修复 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）findings（发现项）后重跑时，优先复核上一轮阻断问题、对应修复、变更路径和直接受影响上下文；只有证据显示风险外溢时再扩大范围。
+- 用户显式调用 cross-agent-review（跨代理审查）且没有说明模式：使用收敛模式，按上面的首轮/复审规则处理。
+- 用户明确要求“无尽模式”“每轮完整复查”“不要收窄范围”或等价表达：使用无尽模式。每轮都覆盖完整 review subject（审查对象）和必要上下文，不按上一轮结果收窄；仍以没有 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）findings（发现项）作为通过条件。
+
 ## 前置条件
 
 - 当前 worktree 必须干净。

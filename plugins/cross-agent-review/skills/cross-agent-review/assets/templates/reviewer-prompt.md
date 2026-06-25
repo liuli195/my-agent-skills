@@ -38,6 +38,13 @@ Context files:
 
 {{ context_files }}
 
+Review mode（审查模式）:
+
+- Default to convergence mode（收敛模式）.
+- First run or no prior CRITICAL（严重阻断）/IMPORTANT（重要阻断） findings（发现项） in context: review the full review subject（审查对象）.
+- Rerun with prior CRITICAL（严重阻断）/IMPORTANT（重要阻断） findings（发现项） in context: focus on those blockers, their fixes, changed paths, and directly affected context. Expand only when the evidence shows related risk outside that scope.
+- Explicit endless mode（无尽模式） in the caller context: review the full review subject（审查对象） every run and do not narrow by prior results.
+
 Use the manifest and referenced context files as the source of truth.
 
 Read only the context file sections needed for this review.
