@@ -77,7 +77,7 @@ plugins/cross-agent-review/skills/cross-agent-review/assets/templates/reviewer-p
 
 - 首轮覆盖完整 review subject（审查对象）。
 - 修复 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）findings（发现项）后，下一轮优先复核上一轮阻断问题、对应修复、变更路径和直接受影响上下文。
-- 如果影响范围不能安全收窄，继续覆盖完整 review subject（审查对象）并说明原因。
+- 只有证据显示相关风险超出当前范围时，扩大到完整 review subject（审查对象）。
 
 用户明确要求时切换为无尽模式：
 

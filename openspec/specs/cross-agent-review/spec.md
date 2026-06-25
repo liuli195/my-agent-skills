@@ -65,7 +65,7 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 - **THEN** cross-agent-review（跨代理审查）MUST 使用收敛模式
 - **AND** 首轮 review（审查）MUST 覆盖完整 review subject（审查对象）
 - **AND** 修复 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）findings（发现项）后重新 review（审查）时，调用方 MAY 将范围收窄到上一轮阻断问题、对应修复、变更路径和直接受影响上下文
-- **AND** 如果无法安全判断影响范围，调用方 MUST 扩大到完整 review subject（审查对象）
+- **AND** 只有证据显示相关风险超出当前范围时，调用方 MUST 扩大到完整 review subject（审查对象）
 
 #### Scenario: 显式无尽模式
 - **WHEN** 用户或调用方明确要求无尽模式、每轮完整复查、不要收窄范围或等价表达
