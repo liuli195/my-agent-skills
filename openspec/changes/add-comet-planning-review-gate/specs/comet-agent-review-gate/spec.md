@@ -14,7 +14,8 @@
 
 - **WHEN** 用户级 Global Command Guard（全局命令守卫点）配置 Comet planning-review gate（comet 规划审查门禁）
 - **THEN** command patterns（命令模式）MUST 覆盖直接调用 `comet-guard.sh <change> design --apply`
-- **AND** command patterns（命令模式）MUST 覆盖路径调用，例如 `<path>/comet-guard.sh <change> design --apply`
+- **AND** command patterns（命令模式）MUST 覆盖 POSIX path（POSIX 路径）调用，例如 `<path>/comet-guard.sh <change> design --apply`
+- **AND** command patterns（命令模式）MUST 覆盖 Windows path（Windows 路径）调用，例如 `<path>\comet-guard.sh <change> design --apply`
 - **AND** command patterns（命令模式）MUST 覆盖环境变量脚本调用，例如 `"$COMET_BASH" "$COMET_GUARD" <change> design --apply`
 - **AND** command patterns（命令模式）MUST 捕获 `subject_id`
 - **AND** `subject_id` 的值 MUST 是当前 Comet change（变更）编号

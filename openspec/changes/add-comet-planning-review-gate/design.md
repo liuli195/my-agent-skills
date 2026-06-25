@@ -23,6 +23,7 @@
 - 不改 planning-review（规划审查）Skill（技能）的只读审查规则。
 - 不把 planning-review（规划审查）流程硬编码进 Agent Guard Runtime（代理守卫运行时）。
 - 不在 Agent Guard Plugin（代理守卫插件）中继续保留 Comet（流程）业务 Guard Profile（守卫画像）模板。
+- 只有在用户明确确认时，才更新真实用户级 Guard Profile（守卫画像）配置。
 
 ## Decisions
 
@@ -101,6 +102,7 @@ cross-agent-review（跨代理审查）已经生成稳定产物：
 2. 移除插件包验证、模板镜像测试和 validator（校验器）中对 `built-in-comet-review-gate`（内置 comet 审查门禁）来源的依赖。
 3. 增加 runtime（运行时）测试，用临时用户级 Guard Profile（守卫画像）覆盖 guard-defined `planning_review_pass`（规划审查通过标记）的缺失、过期和通过。
 4. 更新 Agent Guard（代理守卫）文档，说明双轨 evidence（证据）模型和业务 Guard Profile（守卫画像）配置属于用户级或目标环境，不随插件发布。
+5. 用户明确确认后，更新用户级 `comet-review-gate` Guard Profile（守卫画像）配置，使用 `source.kind: target-environment-config` 并启用 design（设计）出口 planning-review（规划审查）门禁。
 
 ## Open Questions
 

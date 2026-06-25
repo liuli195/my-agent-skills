@@ -15,6 +15,12 @@
 - **THEN** Validator（校验器）MAY 接受该来源类型
 - **AND** Validator（校验器）继续校验该 Guard Profile（守卫画像）的其他文件和引用
 
+#### Scenario: 目标环境配置来源
+
+- **WHEN** Guard Profile（守卫画像）manifest（清单）使用 `source.kind: target-environment-config`
+- **THEN** Validator（校验器）MAY 接受该来源类型
+- **AND** Validator（校验器）继续校验该 Guard Profile（守卫画像）的其他文件和引用
+
 #### Scenario: 业务专用内置来源不再被接受
 
 - **WHEN** Guard Profile（守卫画像）manifest（清单）使用业务 workflow（工作流）专用来源，例如 `source.kind: built-in-comet-review-gate`

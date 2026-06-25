@@ -37,6 +37,7 @@ LEGACY_TOKENS = {
 ALLOWED_PROFILE_SOURCE_KINDS = {
     "grill-with-docs-confirmed-notes",
     "built-in-minimal-sample",
+    "target-environment-config",
 }
 JSON_ARTIFACT_PREDICATES = {
     "exists",

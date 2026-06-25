@@ -366,7 +366,7 @@ global_command_guards:
     tool: Bash
     match:
       command_patterns:
-        - 'comet-guard\\.sh (?P<subject_id>[A-Za-z0-9._-]+) design --apply'
+        - '(^|[\\s''"])(?:[^\\s''"]*[\\\\/])?comet-guard\\.sh[''"]?\\s+(?P<subject_id>[A-Za-z0-9._-]+)\\s+design\\s+--apply(?:\\s|$)'
         - '\\$COMET_GUARD"? (?P<subject_id>[A-Za-z0-9._-]+) design --apply'
         - '%COMET_GUARD% (?P<subject_id>[A-Za-z0-9._-]+) design --apply'
       required_captures:
@@ -1289,6 +1289,7 @@ def test_planning_review_guard_matches_direct_path_env_and_wrapped_commands(tmp_
     commands = [
         "comet-guard.sh add-comet-agent-review-gate design --apply",
         "/opt/comet/scripts/comet-guard.sh add-comet-agent-review-gate design --apply",
+        "C:\\Users\\liuli\\.codex\\skills\\comet\\scripts\\comet-guard.sh add-comet-agent-review-gate design --apply",
         '"$COMET_BASH" "$COMET_GUARD" add-comet-agent-review-gate design --apply',
         "bash -lc '\"$COMET_GUARD\" add-comet-agent-review-gate design --apply'",
     ]

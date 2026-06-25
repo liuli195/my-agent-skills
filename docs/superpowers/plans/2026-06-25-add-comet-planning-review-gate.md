@@ -422,4 +422,4 @@ git commit -m "feat: 添加 Comet planning-review 门禁"
 - No plugin-bundled Comet config remains in the target design.
 - planning-review（规划审查）marker writer is explicitly the calling主 agent（代理）, not Agent Guard（代理守卫） or planning-review（规划审查）Skill（技能）.
 - guard-defined evidence（守卫定义证据） and external artifact（外部产物） are tested separately.
-- The plan keeps real user-level `~/.agents/guards/comet-review-gate` untouched.
+- Real user-level `~/.agents/guards/comet-review-gate` is updated only after explicit user confirmation.

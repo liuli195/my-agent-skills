@@ -6,7 +6,7 @@ build_pause: null
 subagent_dispatch: null
 tdd_mode: tdd
 isolation: branch
-verify_mode: null
+verify_mode: full
 auto_transition: true
 base_ref: 4b2b2889b1efaac7a8097bf26b94ed329a16e591
 design_doc: docs/superpowers/specs/2026-06-25-add-comet-planning-review-gate-design.md

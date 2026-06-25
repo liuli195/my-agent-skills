@@ -142,6 +142,19 @@ def test_business_specific_builtin_comet_source_is_rejected(tmp_path: Path) -> N
     assert "built-in-comet-review-gate" in result.stdout
 
 
+def test_target_environment_guard_profile_source_is_allowed(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    manifest = profile / "GUARD-MANIFEST.yaml"
+    text = manifest.read_text(encoding="utf-8")
+    text = text.replace("kind: built-in-minimal-sample", "kind: target-environment-config")
+    manifest.write_text(text, encoding="utf-8")
+
+    result = run_validator(profile)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_global_command_guard_valid_config_passes(tmp_path: Path) -> None:
     profile = tmp_path / "profile"
     shutil.copytree(MINIMAL_PROFILE, profile)

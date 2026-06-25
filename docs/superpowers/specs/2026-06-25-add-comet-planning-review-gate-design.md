@@ -25,7 +25,7 @@ canonical_spec: openspec
 
 ## Non-Goals
 
-- 不修改真实用户目录 `~/.agents/guards/comet-review-gate`。
+- 只有在用户明确确认时，才更新真实用户目录 `~/.agents/guards/comet-review-gate`。
 - 不新增 Comet phase（流程阶段）。
 - 不新增 wrapper（包装命令）。
 - 不让 Agent Guard（代理守卫）执行 planning-review（规划审查）。
@@ -111,3 +111,4 @@ JSON（数据对象）字段契约：
 - runtime（运行时）测试：临时用户级 Guard Profile（守卫画像）覆盖 `design --apply` 的缺失、过期、通过三种 marker（标记）。
 - invalid marker（无效标记）测试：错误 `status`、错误 `producer`、错误 `artifact_id`、错误 `subject_id`、`blocking_findings` 大于 0、缺少 `scope`、缺少 `report_hash` 时必须拒绝。
 - evidence（证据）路径测试：`planning_review_pass` 使用 `.local/guard/evidence`，`cross_agent_review_pass` 保持 `.local/cross-agent-review` 原路径。
+- user config（用户配置）验证：用户确认后校验真实用户级 `comet-review-gate` Guard Profile（守卫画像），并通过真实 Hook（钩子）路径确认 design（设计）出口命令会被拦截。
