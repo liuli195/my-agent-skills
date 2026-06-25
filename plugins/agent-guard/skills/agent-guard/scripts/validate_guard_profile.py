@@ -37,7 +37,7 @@ LEGACY_TOKENS = {
 ALLOWED_PROFILE_SOURCE_KINDS = {
     "grill-with-docs-confirmed-notes",
     "built-in-minimal-sample",
-    "built-in-comet-review-gate",
+    "target-environment-config",
 }
 JSON_ARTIFACT_PREDICATES = {
     "exists",
@@ -55,6 +55,7 @@ GLOBAL_COMMAND_GUARD_VALUE_FROM_FIELDS = {
     "profile_id",
     "guard_id",
     "effective_guard_id",
+    "artifact_id",
     "runtime_scope",
     "git_head",
     "git_head_short",
@@ -208,7 +209,7 @@ def validate_manifest_contract(data: dict[str, Any]) -> list[ValidationIssue]:
             ValidationIssue(
                 "manifest",
                 "source.kind",
-                "必须说明 Guard Profile（守卫画像）来自本轮调研提取，或是已知内置模板。",
+                f"必须说明 Guard Profile（守卫画像）来自本轮调研提取，或是已知内置模板；当前值为 `{source_kind}`。",
                 "用 extract_guard_model.py 从已确认调研记录生成画像，或使用已知内置模板。",
             )
         )
@@ -515,7 +516,7 @@ def validate_global_command_guard_check(
                     "global_command_guards",
                     f"{base}.checks.{check_index}.value_from",
                     "必须引用命名捕获或内置上下文字段。",
-                    "把 value_from 改成 command_patterns 的命名捕获，或 source_scope、profile_id、guard_id、effective_guard_id、runtime_scope、git_head、git_head_short。",
+                    "把 value_from 改成 command_patterns 的命名捕获，或 source_scope、profile_id、guard_id、effective_guard_id、artifact_id、runtime_scope、git_head、git_head_short。",
                 )
             )
 

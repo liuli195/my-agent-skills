@@ -69,6 +69,22 @@ plugins/cross-agent-review/skills/cross-agent-review/assets/templates/reviewer-p
 6. Reviewer（审查者）按需运行 path-scoped diff（按路径限定差异）命令和读取上下文文件。
 7. 脚本汇总 findings（发现项），生成 report（报告）和可选 pass marker（通过标记）。
 
+## Review Mode Strategy（审查模式策略）
+
+模式不进入 Python（脚本）参数；它只约束主 agent（代理）如何准备上下文，以及 reviewer prompt（审查提示词）如何安排复审范围。
+
+默认使用收敛模式：
+
+- 首轮覆盖完整 review subject（审查对象）。
+- 修复 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）findings（发现项）后，下一轮优先复核上一轮阻断问题、对应修复、变更路径和直接受影响上下文。
+- 只有证据显示相关风险超出当前范围时，扩大到完整 review subject（审查对象）。
+
+用户明确要求时切换为无尽模式：
+
+- 每一轮都覆盖完整 review subject（审查对象）和必要上下文。
+- 不按上一轮 findings（发现项）收窄范围。
+- 仍以没有 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）findings（发现项）作为通过条件。
+
 ## Timeout
 
 超时仍由插件内部脚本管理：

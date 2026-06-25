@@ -77,6 +77,9 @@ global_command_guards:
       - field: status
         predicate: equals
         value: pass
+      - field: artifact_id
+        predicate: equals
+        value_from: artifact_id
     deny:
       reason: global_command_guard_required
       next: produce_required_evidence
@@ -121,27 +124,34 @@ def test_minimal_guard_profile_passes_new_session_focus_contract() -> None:
 
 
 def test_comet_review_gate_guard_profile_passes_validation() -> None:
-    result = run_validator(COMET_REVIEW_GATE_PROFILE)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "已检查：global_command_guards" in result.stdout
+    assert not COMET_REVIEW_GATE_PROFILE.exists()
+    assert not MIRRORED_COMET_REVIEW_GATE_PROFILE.exists()
 
 
-def test_comet_review_gate_global_command_guard_templates_stay_in_sync() -> None:
-    skill_template = COMET_REVIEW_GATE_PROFILE / "global-command-guards.yaml"
-    mirrored_template = MIRRORED_COMET_REVIEW_GATE_PROFILE / "global-command-guards.yaml"
+def test_business_specific_builtin_comet_source_is_rejected(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    manifest = profile / "GUARD-MANIFEST.yaml"
+    text = manifest.read_text(encoding="utf-8")
+    text = text.replace("kind: built-in-minimal-sample", "kind: built-in-comet-review-gate")
+    manifest.write_text(text, encoding="utf-8")
 
-    assert mirrored_template.read_text(encoding="utf-8") == skill_template.read_text(encoding="utf-8")
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "built-in-comet-review-gate" in result.stdout
 
 
-def test_comet_review_gate_installed_copy_passes_validation(tmp_path: Path) -> None:
-    skill_template = COMET_REVIEW_GATE_PROFILE / "global-command-guards.yaml"
-    user_profile = tmp_path / "user-home" / ".agents" / "guards" / "comet-review-gate"
-    shutil.copytree(COMET_REVIEW_GATE_PROFILE, user_profile)
-    user_template = user_profile / "global-command-guards.yaml"
+def test_target_environment_guard_profile_source_is_allowed(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    manifest = profile / "GUARD-MANIFEST.yaml"
+    text = manifest.read_text(encoding="utf-8")
+    text = text.replace("kind: built-in-minimal-sample", "kind: target-environment-config")
+    manifest.write_text(text, encoding="utf-8")
 
-    assert user_template.read_text(encoding="utf-8") == skill_template.read_text(encoding="utf-8")
-    result = run_validator(user_profile)
+    result = run_validator(profile)
+
     assert result.returncode == 0, result.stdout + result.stderr
 
 

@@ -158,10 +158,11 @@ def test_plugin_package_contains_runtime_skills_and_templates() -> None:
         "scripts/run_guard_event.py",
         "scripts/validate_guard_profile.py",
         "assets/templates/guard-profile/minimal/GUARD-MANIFEST.yaml",
-        "assets/templates/guard-profile/comet-review-gate",
-        "assets/templates/guard-profile/comet-review-gate/GUARD-MANIFEST.yaml",
     ]:
         assert (core_skill / required).exists()
+
+    assert not (core_skill / "assets" / "templates" / "guard-profile" / "comet-review-gate").exists()
+    assert not (PLUGIN_ROOT / "assets" / "templates" / "guard-profile" / "comet-review-gate").exists()
 
     for entrypoint in ENTRYPOINT_SKILLS:
         skill_dir = PLUGIN_ROOT / "skills" / entrypoint
