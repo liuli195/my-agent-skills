@@ -340,6 +340,118 @@ artifacts:
     )
 
 
+def write_planning_review_artifacts(profile: Path) -> None:
+    profile.joinpath("artifacts.yaml").write_text(
+        """
+artifacts:
+  - id: planning_review_pass
+    type: json
+    owner: agent-guard
+    required_for:
+      - produce_planning_review_pass_marker
+    path: .local/guard/evidence/{profile_id}/{artifact_id}/{subject_id}/{git_head_short}/pass.json
+    reuse_policy: deny
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+
+def write_planning_review_guard(profile: Path) -> None:
+    write_global_command_guard_yaml(
+        profile,
+        """
+global_command_guards:
+  - id: comet_design_requires_planning_review
+    description: Comet build 前必须完成 planning-review。
+    tool: Bash
+    match:
+      command_patterns:
+        - 'comet-guard\\.sh (?P<subject_id>[A-Za-z0-9._-]+) design --apply'
+        - '\\$COMET_GUARD"? (?P<subject_id>[A-Za-z0-9._-]+) design --apply'
+        - '%COMET_GUARD% (?P<subject_id>[A-Za-z0-9._-]+) design --apply'
+      required_captures:
+        - subject_id
+    evidence:
+      artifact: planning_review_pass
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+      - field: schema_version
+        predicate: equals
+        value: guard-evidence/v1
+      - field: producer
+        predicate: equals
+        value: planning-review
+      - field: profile_id
+        predicate: equals
+        value_from: profile_id
+      - field: artifact_id
+        predicate: equals
+        value_from: artifact_id
+      - field: subject_type
+        predicate: equals
+        value: comet-change
+      - field: subject_id
+        predicate: equals
+        value_from: subject_id
+      - field: head_ref
+        predicate: equals
+        value_from: git_head
+      - field: head_ref_short
+        predicate: equals
+        value_from: git_head_short
+      - field: blocking_findings
+        predicate: number_lte
+        value: 0
+      - field: scope
+        predicate: exists
+      - field: report_hash
+        predicate: exists
+      - field: created_at
+        predicate: exists
+    deny:
+      reason: comet_planning_review_required
+      next: produce_planning_review_pass_marker
+      suggestion: 先完成 planning-review，并写入当前 change 和当前 HEAD 对应的 pass marker。
+""",
+    )
+
+
+def write_planning_review_profile(user_home: Path) -> Path:
+    profile = user_home / ".agents" / "guards" / "comet-review-gate"
+    profile.mkdir(parents=True)
+    write_planning_review_artifacts(profile)
+    write_planning_review_guard(profile)
+    return profile
+
+
+def planning_review_pass_data(change: str, head_ref: str) -> dict:
+    return {
+        "schema_version": "guard-evidence/v1",
+        "status": "pass",
+        "producer": "planning-review",
+        "profile_id": "comet-review-gate",
+        "artifact_id": "planning_review_pass",
+        "subject_type": "comet-change",
+        "subject_id": change,
+        "head_ref": head_ref,
+        "head_ref_short": head_ref[:12],
+        "blocking_findings": 0,
+        "scope": {"change": change},
+        "report": "ok",
+        "report_hash": "sha256:abc123",
+        "created_at": "2026-06-25T00:00:00Z",
+    }
+
+
+def write_planning_review_pass(project: Path, change: str, head_ref: str, data: dict | None = None) -> Path:
+    path = project / ".local" / "guard" / "evidence" / "comet-review-gate" / "planning_review_pass" / change / head_ref[:12] / "pass.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data or planning_review_pass_data(change, head_ref), ensure_ascii=False), encoding="utf-8")
+    return path
+
+
 def project_git_head(project: Path) -> str:
     return subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -649,6 +761,7 @@ def test_global_command_guard_passes_with_short_head_artifact_path(tmp_path: Pat
     assert result.returncode == 0, result.stdout + result.stderr
     payload = body(result)
     assert payload["status"] == "allow"
+    assert not (project / ".local" / "guard" / "evidence").exists()
 
 
 def test_global_command_guard_skips_when_yaml_condition_matches(tmp_path: Path) -> None:
@@ -1131,122 +1244,127 @@ def test_global_command_guard_denies_stale_review_pass_for_build_gate(tmp_path: 
     assert payload["failing_guards"][0]["failed_checks"][0]["field"] == "head_ref"
 
 
-def test_comet_review_gate_template_matches_direct_path_and_env_commands(tmp_path: Path) -> None:
+def test_planning_review_guard_denies_without_pass_marker(tmp_path: Path) -> None:
     project = tmp_path / "project"
     user_home = tmp_path / "user-home"
     project.mkdir()
-    init_git_repo(project)
-    profile = user_home / ".agents" / "guards" / "comet-review-gate"
-    profile.mkdir(parents=True)
-    template = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "comet-review-gate"
-    shutil.copyfile(template / "global-command-guards.yaml", profile / "global-command-guards.yaml")
-    shutil.copyfile(template / "artifacts.yaml", profile / "artifacts.yaml")
+    head_ref = init_git_repo(project)
+    write_planning_review_profile(user_home)
 
-    commands = [
-        "comet-guard.sh add-comet-agent-review-gate build --apply",
-        "/opt/comet/scripts/comet-guard.sh add-comet-agent-review-gate build --apply",
-        '"$COMET_BASH" "$COMET_GUARD" add-comet-agent-review-gate build --apply',
-    ]
-
-    for command in commands:
-        result = pre_tool_payload(
-            project,
-            user_home,
-            {"session_id": "session-1", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": command}},
-        )
-
-        assert result.returncode == 1, result.stdout + result.stderr
-        payload = body(result)
-        assert payload["status"] == "deny"
-        assert payload["reason"] == "comet_cross_agent_review_required"
-        assert payload["matched_guard_ids"] == ["user:comet-review-gate:comet_build_requires_cross_agent_review"]
-
-
-def test_comet_review_gate_template_blocks_full_workflow_without_marker(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    user_home = tmp_path / "user-home"
-    project.mkdir()
-    init_git_repo(project)
-    write_comet_state(project, "full-change", "full")
-    profile = user_home / ".agents" / "guards" / "comet-review-gate"
-    profile.mkdir(parents=True)
-    template = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "comet-review-gate"
-    shutil.copyfile(template / "global-command-guards.yaml", profile / "global-command-guards.yaml")
-    shutil.copyfile(template / "artifacts.yaml", profile / "artifacts.yaml")
-
-    result = pre_tool_payload(
-        project,
-        user_home,
-        {"session_id": "session-1", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": "comet-guard.sh full-change build --apply"}},
-    )
+    result = pre_tool(project, user_home, "comet-guard.sh add-comet-agent-review-gate design --apply")
 
     assert result.returncode == 1, result.stdout + result.stderr
     payload = body(result)
     assert payload["status"] == "deny"
-    assert payload["reason"] == "comet_cross_agent_review_required"
+    assert payload["reason"] == "comet_planning_review_required"
+    failure = payload["failing_guards"][0]
+    assert failure["failure_reason"] == "evidence_missing"
+    assert failure["artifact_id"] == "planning_review_pass"
+    assert str(project / ".local" / "guard" / "evidence" / "comet-review-gate" / "planning_review_pass" / "add-comet-agent-review-gate" / head_ref[:12] / "pass.json") in failure["evidence_path"]
 
 
-def test_comet_review_gate_template_skips_hotfix_tweak_and_subagent_build_mode(tmp_path: Path) -> None:
+def test_planning_review_guard_allows_with_valid_pass_marker(tmp_path: Path) -> None:
     project = tmp_path / "project"
     user_home = tmp_path / "user-home"
     project.mkdir()
-    init_git_repo(project)
-    profile = user_home / ".agents" / "guards" / "comet-review-gate"
-    profile.mkdir(parents=True)
-    template = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "comet-review-gate"
-    shutil.copyfile(template / "global-command-guards.yaml", profile / "global-command-guards.yaml")
-    shutil.copyfile(template / "artifacts.yaml", profile / "artifacts.yaml")
+    head_ref = init_git_repo(project)
+    write_planning_review_profile(user_home)
+    write_planning_review_pass(project, "add-comet-agent-review-gate", head_ref)
 
-    for workflow in ["hotfix", "tweak"]:
-        change = f"{workflow}-change"
-        write_comet_state(project, change, workflow)
-        commands = [
-            f"comet-guard.sh {change} build --apply",
-            f'"$COMET_BASH" "$COMET_GUARD" {change} build --apply',
-        ]
-        for command in commands:
-            result = pre_tool_payload(
-                project,
-                user_home,
-                {"session_id": "session-1", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": command}},
-            )
-
-            assert result.returncode == 0, result.stdout + result.stderr
-            payload = body(result)
-            assert payload["status"] == "allow"
-            global_audits = [
-                audit
-                for audit in read_project_audits(project)
-                if audit["reason"] == "global_command_guard_skipped"
-                and audit["detail"]["global_command_guard"]["command"] == command
-            ]
-            assert len(global_audits) == 1
-            global_guard = global_audits[0]["detail"]["global_command_guard"]
-            assert global_guard["skipped_guard_ids"] == ["user:comet-review-gate:comet_build_requires_cross_agent_review"]
-            assert global_guard["skipped_guards"][0]["skip_reason"] == "skip_when_matched"
-
-    change = "subagent-build-mode-change"
-    state = write_comet_state(project, change, "full")
-    state.write_text("workflow: full\nphase: build\nbuild_mode: subagent-driven-development\n", encoding="utf-8")
-    result = pre_tool_payload(
-        project,
-        user_home,
-        {"session_id": "session-1", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": f"comet-guard.sh {change} build --apply"}},
-    )
+    result = pre_tool(project, user_home, "comet-guard.sh add-comet-agent-review-gate design --apply")
 
     assert result.returncode == 0, result.stdout + result.stderr
     payload = body(result)
     assert payload["status"] == "allow"
-    global_audits = [
-        audit
-        for audit in read_project_audits(project)
-        if audit["reason"] == "global_command_guard_skipped"
-        and audit["detail"]["global_command_guard"]["command"] == f"comet-guard.sh {change} build --apply"
+
+
+def test_planning_review_guard_matches_direct_path_env_and_wrapped_commands(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    head_ref = init_git_repo(project)
+    write_planning_review_profile(user_home)
+    write_planning_review_pass(project, "add-comet-agent-review-gate", head_ref)
+
+    commands = [
+        "comet-guard.sh add-comet-agent-review-gate design --apply",
+        "/opt/comet/scripts/comet-guard.sh add-comet-agent-review-gate design --apply",
+        '"$COMET_BASH" "$COMET_GUARD" add-comet-agent-review-gate design --apply',
+        "bash -lc '\"$COMET_GUARD\" add-comet-agent-review-gate design --apply'",
     ]
-    assert len(global_audits) == 1
-    global_guard = global_audits[0]["detail"]["global_command_guard"]
-    assert global_guard["skipped_guard_ids"] == ["user:comet-review-gate:comet_build_requires_cross_agent_review"]
-    assert global_guard["skipped_guards"][0]["skip_reason"] == "skip_when_matched"
+
+    for command in commands:
+        result = pre_tool(project, user_home, command)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        payload = body(result)
+        assert payload["status"] == "allow"
+        global_audits = [
+            audit
+            for audit in read_project_audits(project)
+            if audit["reason"] == "global_command_guard_passed"
+            and audit["detail"]["global_command_guard"]["command"] == command
+        ]
+        assert len(global_audits) == 1
+        assert global_audits[0]["detail"]["global_command_guard"]["matched_guard_ids"] == [
+            "user:comet-review-gate:comet_design_requires_planning_review"
+        ]
+
+
+def test_planning_review_guard_denies_stale_pass_marker(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    head_ref = init_git_repo(project)
+    write_planning_review_profile(user_home)
+    stale_data = planning_review_pass_data("add-comet-agent-review-gate", "stale-head")
+    write_planning_review_pass(project, "add-comet-agent-review-gate", head_ref, stale_data)
+
+    result = pre_tool(project, user_home, "comet-guard.sh add-comet-agent-review-gate design --apply")
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "deny"
+    assert payload["reason"] == "comet_planning_review_required"
+    failure = payload["failing_guards"][0]
+    assert failure["failure_reason"] == "json_check_failed"
+    assert failure["failed_checks"][0]["field"] == "head_ref"
+
+
+def test_planning_review_guard_denies_invalid_pass_marker_fields(tmp_path: Path) -> None:
+    cases = [
+        ("bad-status", {"status": "fail"}, "status"),
+        ("bad-producer", {"producer": "other-review"}, "producer"),
+        ("bad-artifact", {"artifact_id": "cross_agent_review_pass"}, "artifact_id"),
+        ("bad-subject", {"subject_id": "other-change"}, "subject_id"),
+        ("blocking-findings", {"blocking_findings": 1}, "blocking_findings"),
+        ("missing-scope", {"scope": None}, "scope"),
+        ("missing-report-hash", {"report_hash": None}, "report_hash"),
+    ]
+
+    for change, overrides, failed_field in cases:
+        project = tmp_path / change / "project"
+        user_home = tmp_path / change / "user-home"
+        project.mkdir(parents=True)
+        head_ref = init_git_repo(project)
+        write_planning_review_profile(user_home)
+        data = planning_review_pass_data(change, head_ref)
+        for key, value in overrides.items():
+            if value is None:
+                data.pop(key)
+            else:
+                data[key] = value
+        write_planning_review_pass(project, change, head_ref, data)
+
+        result = pre_tool(project, user_home, f"comet-guard.sh {change} design --apply")
+
+        assert result.returncode == 1, result.stdout + result.stderr
+        payload = body(result)
+        assert payload["status"] == "deny"
+        assert payload["reason"] == "comet_planning_review_required"
+        failure = payload["failing_guards"][0]
+        assert failure["failure_reason"] == "json_check_failed"
+        assert failure["failed_checks"][0]["field"] == failed_field
 
 
 def test_global_command_guard_denies_unknown_artifact_reference(tmp_path: Path) -> None:

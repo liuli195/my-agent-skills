@@ -24,11 +24,12 @@
 使用规则：
 
 - install 阶段生成场景化配置，init 阶段发布配置，update 阶段同步已校验配置，run 阶段只按 Runtime（运行时）结果处理拦截；troubleshoot（排障）先看对应场景 reference。
-- 外部证据类拦截应引用 `artifacts.yaml` 中的 artifact，不直接复制临时 pass marker（通过标记）。
+- 如果上游流程已有稳定产物，拦截应引用 `artifacts.yaml` 中的原始 artifact（产物）路径，不复制或搬运临时 pass marker（通过标记）。
+- 如果上游流程没有稳定产物，Agent Guard（代理守卫）可以在 `artifacts.yaml` 中定义 guard-defined evidence（守卫定义证据）默认路径：`.local/guard/evidence/{profile_id}/{artifact_id}/{subject_id}/{git_head_short}/pass.json`。该文件由主 agent（主代理）在上游检查通过后写入，Runtime（运行时）只负责读取和校验。
 - `deny.reason`、`deny.next` 和 `deny.suggestion` 可以在 Guard Profile（守卫画像）中场景化配置；Runtime（运行时）只透传或渲染，不内置业务流程。
 - 禁止新增 reviewed wrapper。
 - 禁止修改 cross-agent-review 默认输出目录。
-- 禁止复制 pass marker 到 `.local/guard/evidence`。
+- 对已有外部产物，禁止复制 pass marker 到 `.local/guard/evidence`。
 - 禁止把 `verify --apply` 作为主拦截点。
 - 禁止在 Agent Guard 中实现 cross-agent-review 内部流程。
 

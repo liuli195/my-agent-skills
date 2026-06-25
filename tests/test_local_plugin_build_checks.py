@@ -1161,17 +1161,6 @@ def make_guard_profile_mirrors(root: Path, content: str = "schema_version: guard
         "minimal/state-machine.yaml",
         "minimal/target-model.yaml",
         "minimal/validation-plan.md",
-        "comet-review-gate/GUARD-MANIFEST.yaml",
-        "comet-review-gate/activation-model.yaml",
-        "comet-review-gate/artifacts.yaml",
-        "comet-review-gate/brief-template.md",
-        "comet-review-gate/execution-model.yaml",
-        "comet-review-gate/global-command-guards.yaml",
-        "comet-review-gate/guard-points.yaml",
-        "comet-review-gate/observation-model.yaml",
-        "comet-review-gate/state-machine.yaml",
-        "comet-review-gate/target-model.yaml",
-        "comet-review-gate/validation-plan.md",
     ]
     for template_file in template_files:
         file_content = "" if template_file == ".gitkeep" else f"# {template_file}\n{content}"
@@ -1194,7 +1183,7 @@ def test_build_reports_guard_profile_mirror_mismatch(tmp_path: Path) -> None:
     module = load_local_build_module()
     make_guard_profile_mirrors(tmp_path)
     _left, right = guard_profile_template_dirs(tmp_path)
-    right_file = right / "comet-review-gate" / "GUARD-MANIFEST.yaml"
+    right_file = right / "minimal" / "GUARD-MANIFEST.yaml"
     right_file.write_text("schema_version: changed\n", encoding="utf-8")
 
     errors = module.check_guard_profile_template_mirrors(tmp_path)
@@ -1220,7 +1209,7 @@ def test_run_build_reports_guard_profile_mirror_mismatch(tmp_path: Path) -> None
     make_projection(tmp_path, ["agent-guard"])
     make_guard_profile_mirrors(tmp_path)
     _left, right = guard_profile_template_dirs(tmp_path)
-    (right / "comet-review-gate" / "GUARD-MANIFEST.yaml").write_text("schema_version: changed\n", encoding="utf-8")
+    (right / "minimal" / "GUARD-MANIFEST.yaml").write_text("schema_version: changed\n", encoding="utf-8")
 
     errors = module.run_build(
         tmp_path,

@@ -389,8 +389,13 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
             template = artifact_template
         else:
             template = evidence.get("path") if isinstance(evidence, dict) else ""
+        render_values = dict(values)
+        check_builtins = dict(builtins)
+        if artifact_id is not None:
+            render_values["artifact_id"] = artifact_id
+            check_builtins["artifact_id"] = artifact_id
         try:
-            rendered, missing_template_values = render_template(template if isinstance(template, str) else "", values)
+            rendered, missing_template_values = render_template(template if isinstance(template, str) else "", render_values)
             if artifact_id is not None:
                 evidence_path = _resolve_artifact_path(project, user_home, runtime_scope, rendered)
             else:
@@ -406,6 +411,8 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
                 "evidence_path": str(evidence_path),
                 "failure_reason": "unsafe_evidence_path",
             }
+            if artifact_id is not None:
+                failure["artifact_id"] = artifact_id
             if not first_deny:
                 first_deny = deny
             failing_guards.append(failure)
@@ -418,6 +425,8 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
             "captures": guard_captures,
             "evidence_path": str(evidence_path),
         }
+        if artifact_id is not None:
+            failure["artifact_id"] = artifact_id
         if missing_captures:
             failure.update({"failure_reason": "required_capture_missing", "missing_captures": missing_captures})
             if not first_deny:
@@ -458,7 +467,7 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
                 first_deny = deny
             failing_guards.append(failure)
             continue
-        failed_checks = _evaluate_checks(data, config.get("checks"), guard_captures, builtins)
+        failed_checks = _evaluate_checks(data, config.get("checks"), guard_captures, check_builtins)
         if failed_checks:
             failure.update({"failure_reason": "json_check_failed", "failed_checks": failed_checks})
             if not first_deny:
