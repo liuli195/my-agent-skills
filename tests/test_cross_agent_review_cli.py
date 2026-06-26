@@ -473,19 +473,42 @@ def test_reviewer_prompt_references_review_input_file_only(tmp_path: Path, monke
 def test_reviewer_prompt_template_uses_limited_variables(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     review_input = make_review_input_for_module(module, tmp_path)
-    template = write_file(
-        tmp_path / "reviewer-prompt.md",
-        "Role={{ role }} Input={{ input_file_path }} Focus={{ role_focus }} Rubric={{ severity_rubric }} Schema={{ schema_json }}\n",
-    )
-    monkeypatch.setattr(module, "REVIEWER_PROMPT_TEMPLATE", template, raising=False)
+    captured_values = {}
+
+    def capture_render_template(path: Path, values: dict[str, str]) -> str:
+        captured_values.update(values)
+        return "rendered prompt"
+
+    monkeypatch.setattr(module, "render_template", capture_render_template)
 
     prompt = module.reviewer_prompt(review_input, "implementation-correctness")
 
-    assert "Role=implementation-correctness" in prompt
-    assert f"Input={review_input.input_file}" in prompt
-    assert "{{ change }}" not in prompt
-    assert "{{ manifest_path }}" not in prompt
-    assert "{{ changed_files }}" not in prompt
+    assert prompt == "rendered prompt"
+    assert set(captured_values) == {
+        "role",
+        "input_file_path",
+        "schema_json",
+        "severity_rubric",
+        "role_focus",
+    }
+    assert captured_values["role"] == "implementation-correctness"
+    assert captured_values["input_file_path"] == str(review_input.input_file)
+    for legacy_key in ["change", "manifest_path", "changed_files", "context_files", "tasks_file"]:
+        assert legacy_key not in captured_values
+
+
+def test_spec_alignment_role_focus_uses_plan_contract_not_tasks(tmp_path: Path) -> None:
+    module = load_script_module()
+    review_input = make_review_input_for_module(module, tmp_path)
+
+    prompt = module.reviewer_prompt(review_input, "spec-alignment")
+    role_focus = module.ROLE_FOCUS["spec-alignment"]
+
+    assert "plan" in role_focus
+    assert "tasks_file" not in role_focus
+    assert "tasks" not in role_focus.lower()
+    assert "tasks_file" not in prompt
+    assert "tasks" not in prompt.lower()
 
 
 def test_dirty_worktree_rejects_before_dispatch(tmp_path: Path) -> None:

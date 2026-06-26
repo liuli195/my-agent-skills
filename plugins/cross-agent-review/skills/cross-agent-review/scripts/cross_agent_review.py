@@ -31,7 +31,7 @@ ROLE_FOCUS = {
     "spec-alignment": "\n".join(
         [
             "Focus for spec-alignment:",
-            "- Compare the supplied spec, design, tasks, and changed files for requirement drift.",
+            "- Compare the supplied spec, design, plan, and changed files for requirement drift.",
             "- Report missing required behavior, scope creep, or contradictions between artifacts.",
             "- Do not review implementation style unless it changes the promised behavior.",
         ]
