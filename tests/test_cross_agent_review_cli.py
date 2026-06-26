@@ -441,6 +441,13 @@ def make_review_args_for_module(module, tmp_path: Path):
     return make_review_input_for_module(module, tmp_path)
 
 
+def test_reviewer_roles_are_two_default_roles(tmp_path: Path) -> None:
+    module = load_script_module()
+
+    assert module.REVIEWER_ROLES == ["spec-alignment", "implementation-correctness"]
+    assert set(module.ROLE_FOCUS) == {"spec-alignment", "implementation-correctness"}
+
+
 def test_reviewer_prompt_references_review_input_file_only(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
@@ -739,19 +746,21 @@ def test_run_accepts_legacy_tests_file_argument_without_snapshotting_it(tmp_path
     assert result.returncode == 0, result.stdout + result.stderr
     assert not (output_dir / "inputs" / "tests.txt").exists()
     module = load_script_module()
-    review = module.ReviewArgs(
+    review = module.ReviewInput(
         change="demo",
+        mode="convergence",
         base_ref=head,
         head_ref=head,
         spec_file=output_dir / "inputs" / "spec.md",
         design_file=output_dir / "inputs" / "design.md",
-        tasks_file=output_dir / "inputs" / "tasks.md",
+        plan_file=output_dir / "inputs" / "plan.md",
+        input_file=output_dir / "prepared-inputs" / "review-input.json",
         output_dir=output_dir,
+        debug=False,
         sdk_python=None,
         fake_reviewer_results=None,
-        disable_risk_review=None,
     )
-    assert "legacy tests" not in module.reviewer_prompt(review, "tests-and-edge-cases")
+    assert "legacy tests" not in module.reviewer_prompt(review, "spec-alignment")
 
 
 def test_run_accepts_missing_legacy_tests_file_argument_without_snapshotting_it(tmp_path: Path) -> None:
@@ -791,17 +800,19 @@ def test_reviewer_prompt_includes_review_subject_commands_not_diff_file(tmp_path
     spec_file = write_file(project / "spec.md", "Spec body\n")
     design_file = write_file(project / "design.md", "Design body\n")
     tasks_file = write_file(project / "tasks.md", "Tasks body\n")
-    review = module.ReviewArgs(
+    review = module.ReviewInput(
         change="demo-change",
+        mode="convergence",
         base_ref=base,
         head_ref=head,
         spec_file=spec_file,
         design_file=design_file,
-        tasks_file=tasks_file,
+        plan_file=tasks_file,
+        input_file=tmp_path / "review-input.json",
         output_dir=tmp_path / "out",
+        debug=False,
         sdk_python=None,
         fake_reviewer_results=None,
-        disable_risk_review=None,
     )
     monkeypatch.chdir(project)
 
@@ -870,17 +881,19 @@ def test_reviewer_prompt_does_not_inline_large_diff_or_context(tmp_path: Path, m
     spec_file = write_file(project / "spec.md", large_spec)
     design_file = write_file(project / "design.md", large_design)
     tasks_file = write_file(project / "tasks.md", large_tasks)
-    review = module.ReviewArgs(
+    review = module.ReviewInput(
         change="demo-change",
+        mode="convergence",
         base_ref=base,
         head_ref=head,
         spec_file=spec_file,
         design_file=design_file,
-        tasks_file=tasks_file,
+        plan_file=tasks_file,
+        input_file=tmp_path / "review-input.json",
         output_dir=tmp_path / "out",
+        debug=False,
         sdk_python=None,
         fake_reviewer_results=None,
-        disable_risk_review=None,
     )
     monkeypatch.chdir(project)
 
@@ -926,12 +939,38 @@ def test_sdk_dispatch_subprocess_writes_prompt_artifacts(tmp_path: Path, monkeyp
     assert {path.name for path in prompts_dir.iterdir()} == {
         "spec-alignment.txt",
         "implementation-correctness.txt",
-        "tests-and-edge-cases.txt",
-        "risk-review.txt",
     }
     assert captured_payload["raw_dir"] == str(review.output_dir / "raw")
     assert captured_payload["force_exit"] is True
     assert "Manifest file:" in (prompts_dir / "spec-alignment.txt").read_text(encoding="utf-8")
+
+
+def test_sdk_dispatch_subprocess_uses_only_two_roles(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
+    review_input = make_review_input_for_module(module, tmp_path)
+    captured_payload = None
+
+    def fake_run(*args, **kwargs):
+        nonlocal captured_payload
+        captured_payload = json.loads(kwargs["input"])
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=json.dumps(
+                [
+                    {"role": "spec-alignment", "status": "completed", "findings": []},
+                    {"role": "implementation-correctness", "status": "completed", "findings": []},
+                ]
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    results = module.run_sdk_dispatch_subprocess(review_input, sys.executable)
+
+    assert [item["role"] for item in results] == ["spec-alignment", "implementation-correctness"]
+    assert captured_payload["roles"] == ["spec-alignment", "implementation-correctness"]
 
 
 def test_sdk_dispatch_subprocess_returns_role_failures_on_timeout(tmp_path: Path, monkeypatch) -> None:
@@ -942,8 +981,8 @@ def test_sdk_dispatch_subprocess_returns_role_failures_on_timeout(tmp_path: Path
         payload = json.loads(kwargs["input"])
         raw_dir = Path(payload["raw_dir"])
         raw_dir.mkdir(parents=True, exist_ok=True)
-        (raw_dir / "risk-review.txt").write_text(
-            json.dumps({"role": "risk-review", "status": "completed", "findings": []}),
+        (raw_dir / "implementation-correctness.txt").write_text(
+            json.dumps({"role": "implementation-correctness", "status": "completed", "findings": []}),
             encoding="utf-8",
         )
         raise subprocess.TimeoutExpired(args[0], timeout=module.SDK_DISPATCH_TIMEOUT_SECONDS)
@@ -954,7 +993,7 @@ def test_sdk_dispatch_subprocess_returns_role_failures_on_timeout(tmp_path: Path
 
     by_role = {result["role"]: result for result in results}
     assert module.SDK_DISPATCH_TIMEOUT_SECONDS < 600
-    assert by_role["risk-review"]["status"] == "completed"
+    assert by_role["implementation-correctness"]["status"] == "completed"
     assert by_role["spec-alignment"]["status"] == "failed"
     assert by_role["spec-alignment"]["findings"][0]["summary"] == "Reviewer dispatch timed out"
     assert by_role["spec-alignment"]["findings"][0]["severity"] == "CRITICAL"
@@ -999,19 +1038,6 @@ def test_sdk_dispatch_writes_raw_reviewer_output(monkeypatch, tmp_path: Path) ->
         "status": "completed",
         "findings": [],
     }
-
-
-def test_tests_and_edge_cases_prompt_focuses_review_scope(tmp_path: Path) -> None:
-    module = load_script_module()
-    review = make_review_args_for_module(module, tmp_path)
-
-    prompt = module.reviewer_prompt(review, "tests-and-edge-cases")
-
-    assert "Focus for tests-and-edge-cases:" in prompt
-    assert "test coverage" in prompt
-    assert "regression protection" in prompt
-    assert "edge cases" in prompt
-    assert "Do not claim tests passed" in prompt
 
 
 def test_reviewer_prompt_requires_strict_json_contract(tmp_path: Path) -> None:
@@ -1061,8 +1087,6 @@ def test_reviewer_roles_are_recorded_in_results(tmp_path: Path) -> None:
         [
             {"role": "spec-alignment", "status": "completed", "findings": []},
             {"role": "implementation-correctness", "status": "completed", "findings": []},
-            {"role": "tests-and-edge-cases", "status": "completed", "findings": []},
-            {"role": "risk-review", "status": "completed", "findings": []},
         ]
     )
 
@@ -1078,8 +1102,6 @@ def test_reviewer_roles_are_recorded_in_results(tmp_path: Path) -> None:
     assert [item["role"] for item in data["reviewers"]] == [
         "spec-alignment",
         "implementation-correctness",
-        "tests-and-edge-cases",
-        "risk-review",
     ]
     assert "Edit" not in data["readonly_tools"]
     assert "Write" not in data["readonly_tools"]
@@ -1511,7 +1533,7 @@ def test_aggregate_blocks_severity_aliases() -> None:
     summary = module.aggregate(
         [
             {
-                "role": "tests-and-edge-cases",
+                "role": "spec-alignment",
                 "status": "pass-with-findings",
                 "findings": [
                     {"severity": "minor", "area": "docs", "description": "Tiny wording note."},
@@ -1561,7 +1583,7 @@ def test_aggregate_blocks_dict_gaps_with_severity_aliases() -> None:
     summary = module.aggregate(
         [
             {
-                "role": "tests-and-edge-cases",
+                "role": "spec-alignment",
                 "status": "pass_with_gaps",
                 "findings": {
                     "summary": "Coverage is acceptable with gaps.",
@@ -1590,17 +1612,3 @@ def test_aggregate_blocks_dict_gaps_with_severity_aliases() -> None:
         "Reviewer output used invalid severity: medium",
         "Reviewer output used invalid severity: low",
     }
-
-
-def test_risk_review_skip_is_recorded(tmp_path: Path) -> None:
-    head = init_repo(tmp_path / "repo")
-    result = run(
-        *review_args(tmp_path / "repo", head, tmp_path / "out"),
-        "--disable-risk-review",
-        "low-risk-doc-only",
-        cwd=tmp_path / "repo",
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    data = json.loads((tmp_path / "out" / "review-results.json").read_text(encoding="utf-8"))
-    assert data["skipped_reviewers"] == [{"role": "risk-review", "reason": "low-risk-doc-only"}]

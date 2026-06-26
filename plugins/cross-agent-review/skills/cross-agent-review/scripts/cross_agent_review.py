@@ -24,8 +24,6 @@ INPUT_SNAPSHOT_NAMES = {
 REVIEWER_ROLES = [
     "spec-alignment",
     "implementation-correctness",
-    "tests-and-edge-cases",
-    "risk-review",
 ]
 ROLE_FOCUS = {
     "spec-alignment": "\n".join(
@@ -42,24 +40,6 @@ ROLE_FOCUS = {
             "- Review changed implementation paths for concrete correctness bugs.",
             "- Use path-scoped diffs and source reads; do not read large input files wholesale.",
             "- Report only issues with executable behavior, data flow, state handling, or compatibility.",
-        ]
-    ),
-    "tests-and-edge-cases": "\n".join(
-        [
-            "Focus for tests-and-edge-cases:",
-            "- Review test coverage gaps for changed behavior and required scenarios.",
-            "- Review regression protection for previously supported behavior and integration contracts.",
-            "- Review edge cases, error paths, boundary inputs, and state transitions implied by the supplied inputs.",
-            "- Do not claim tests passed, failed, or were run; no test results are supplied.",
-            "- Only create findings for concrete missing coverage, weak regression protection, or unhandled edge cases.",
-        ]
-    ),
-    "risk-review": "\n".join(
-        [
-            "Focus for risk-review:",
-            "- Review operational, security, reliability, and maintainability risks introduced by the change.",
-            "- Separate concrete risks from preferences; downgrade speculative concerns to WARNING or SUGGESTION.",
-            "- Do not duplicate findings already covered by implementation-correctness unless impact is broader.",
         ]
     ),
 }

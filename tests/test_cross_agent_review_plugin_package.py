@@ -112,30 +112,14 @@ def test_cross_agent_review_spec_documents_manifest_based_prompt_contract() -> N
     assert "提示中的 diff、spec、design 和 tasks 内容 MUST" not in text
 
 
-def test_cross_agent_review_placeholder_run_accepts_documented_and_planned_options(tmp_path: Path) -> None:
+def test_removed_disable_risk_review_option_is_rejected(tmp_path: Path) -> None:
     result = subprocess.run(
         [
             sys.executable,
             str(SCRIPT),
             "run",
-            "--change",
-            "add-cross-agent-review-mechanism",
-            "--base-ref",
-            "main",
-            "--head-ref",
-            "HEAD",
-            "--spec-file",
-            str(tmp_path / "spec.md"),
-            "--design-file",
-            str(tmp_path / "design.md"),
-            "--tasks-file",
-            str(tmp_path / "tasks.md"),
-            "--output-dir",
-            str(tmp_path / "out"),
-            "--sdk-python",
-            str(tmp_path / "venv" / "Scripts" / "python.exe"),
-            "--fake-reviewer-results",
-            str(tmp_path / "fake-review.json"),
+            "--input-file",
+            str(tmp_path / "review-input.json"),
             "--disable-risk-review",
         ],
         cwd=PLUGIN_ROOT / "skills" / "cross-agent-review",
@@ -145,8 +129,7 @@ def test_cross_agent_review_placeholder_run_accepts_documented_and_planned_optio
     )
 
     assert result.returncode == 2
-    assert result.stdout.strip() == "status: not_implemented"
-    assert "unrecognized arguments" not in result.stderr
+    assert "--disable-risk-review" in result.stderr
 
 
 def test_claude_repo_marketplace_includes_cross_agent_review() -> None:
