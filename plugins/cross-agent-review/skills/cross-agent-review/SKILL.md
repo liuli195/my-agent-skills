@@ -22,46 +22,58 @@ STRICTLY FORBIDDEN:
 
 本 Skill（技能）默认使用收敛模式。模式是主 agent（代理）准备输入和复审范围的策略，不新增 CLI（命令行接口）参数，不改变脚本调用方式。
 
-- Comet build completion（构建完成）或 PR Flow local review（本地审查）：使用收敛模式。首轮覆盖完整 review subject（审查对象）；修复 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）findings（发现项）后重跑时，优先复核上一轮阻断问题、对应修复、变更路径和直接受影响上下文；只有证据显示风险外溢时再扩大范围。
-- 用户显式调用 cross-agent-review（跨代理审查）且没有说明模式：使用收敛模式，按上面的首轮/复审规则处理。
-- 用户明确要求“无尽模式”“每轮完整复查”“不要收窄范围”或等价表达：使用无尽模式。每轮都覆盖完整 review subject（审查对象）和必要上下文，不按上一轮结果收窄；仍以没有 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）findings（发现项）作为通过条件。
+`mode`（模式）只能是 `convergence`（收敛）或 `endless`（无尽）。
+
+- Comet build completion（构建完成）或 PR Flow local review（本地审查）：使用 `convergence`（收敛）模式。首轮覆盖完整 review subject（审查对象）；修复 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）findings（发现项）后重跑时，优先复核上一轮阻断问题、对应修复、变更路径和直接受影响上下文；只有证据显示风险外溢时再扩大范围。
+- 用户显式调用 cross-agent-review（跨代理审查）且没有说明模式：使用 `convergence`（收敛）模式，按上面的首轮/复审规则处理。
+- 用户明确要求“无尽模式”“每轮完整复查”“不要收窄范围”或等价表达：使用 `endless`（无尽）模式。每轮都覆盖完整 review subject（审查对象）和必要上下文，不按上一轮结果收窄；仍以没有 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）findings（发现项）作为通过条件。
 
 ## 前置条件
 
 - 当前 worktree 必须干净。
-- 当前 `HEAD` 必须等于传入的 `--head-ref`。
+- 当前 `HEAD` 必须等于 `review-input.json`（审查输入文件）里的 `head_ref`。
 - 当前 Python、默认 Claude SDK venv，或 `--sdk-python` 指定的 Python 必须能导入 `claude_agent_sdk`。
 
 ## 命令
 
 ```bash
 python scripts/cross_agent_review.py run \
-  --change <change-id> \
-  --base-ref <base-ref> \
-  --head-ref <head-ref> \
-  --spec-file <path> \
-  --design-file <path> \
-  --tasks-file <path>
+  --input-file .local/cross-agent-review/<change>/<head_ref_short>/prepared-inputs/review-input.json
+```
+
+排障时显式开启 `--debug`（排障开关）：
+
+```bash
+python scripts/cross_agent_review.py run \
+  --input-file .local/cross-agent-review/<change>/<head_ref_short>/prepared-inputs/review-input.json \
+  --debug
 ```
 
 ## 输入文件准备
 
-`--spec-file`、`--design-file` 和 `--tasks-file` 等运行前生成的输入文件，必须放在同一次 review（审查）的 run（运行）目录下：
+`prepared-inputs`（预备输入目录）只包含一个 regular file（常规文件）：`review-input.json`（审查输入文件）。
+
+路径固定为：
 
 ```text
-.local/cross-agent-review/<change>/<head_ref>/prepared-inputs/
+.local/cross-agent-review/<change>/<head_ref_short>/prepared-inputs/review-input.json
 ```
 
-随后把这些文件路径显式传给命令参数。不要在 `.local/` 下创建独立的输入根目录；review（审查）运行后会把最终输入快照复制到同一 run（运行）目录的 `inputs/`。
+不要在 `.local/` 下创建独立的输入根目录。
 
-输出默认写入 `.local/cross-agent-review/<change>/<head_ref>/`。运行时会先把输入文件快照复制到输出目录下的 `inputs/`：
+`review-input.json`（审查输入文件）字段固定为：
 
-- `inputs/spec.md`
-- `inputs/design.md`
-- `inputs/tasks.md`
-- `inputs/manifest.json`
+- `change`
+- `mode`
+- `base_ref`
+- `head_ref`
+- `spec_file`
+- `design_file`
+- `plan_file`
 
-`inputs/manifest.json` 记录 change（变更）、base/head ref（基准/当前提交）、输入文件 path（路径）/bytes（字节数）/sha256（哈希）、changed files（变更文件）清单和 review subject（审查对象）命令。changed files（变更文件）条目包含 path（路径）和 status（状态），重命名/复制时可包含 previous_path（原路径）。review subject（审查对象）命令包括：
+review（审查）范围由 `base_ref`（基准引用）和 `head_ref`（当前提交引用）控制；以下命令中的 `<base-ref>` 和 `<head-ref>` 必须分别来自这两个字段。
+
+review subject（审查对象）命令包括：
 
 ```bash
 git diff <base-ref>...<head-ref>
@@ -70,14 +82,29 @@ git diff --name-status --find-renames --find-copies-harder <base-ref>...<head-re
 git diff <base-ref>...<head-ref> -- <path>
 ```
 
-Reviewer prompt（审查代理提示词）引用 `manifest.json` 和输入快照路径，不内联大 diff（差异）内容；reviewer（审查代理）按需读取相关片段，不能整读大 diff（差异）。
+Reviewer prompt（审查代理提示词）引用 `review-input.json`（审查输入文件），不内联大 diff（差异）内容；reviewer（审查代理）按需读取相关片段，不能整读大 diff（差异）。
 
-为便于排障，每次真实 SDK（开发包）派发还会写入：
+Comet build completion（构建完成）调用时，`base_ref` 应优先使用 implementation baseline（实施基准，例如 plan 文件头的 `base-ref`），避免把已完成的历史 change（变更）卷入本次 review（审查）diff（差异）。只有在没有实施基准时，才回退到 change init baseline（变更初始化基准）。
 
-- `prompts/<role>.txt`
-- `raw/<role>.txt`
+## Reviewer（审查代理）角色
 
-Comet build completion（构建完成）调用时，`--base-ref` 应优先使用 implementation baseline（实施基准，例如 plan 文件头的 `base-ref`），避免把已完成的历史 change（变更）卷入本次 review（审查）diff（差异）。只有在没有实施基准时，才回退到 change init baseline（变更初始化基准）。
+默认 reviewer（审查代理）角色只有：
+
+- `spec-alignment`
+- `implementation-correctness`
+
+## 输出文件
+
+默认输出只有：
+
+- `review-report.md`（审查报告）
+- `review-pass.json`（通过标记），仅在通过时生成
+
+只有使用 `--debug`（排障开关）时才写入 debug（排障）输出：
+
+- `debug/review-input.json`
+- `debug/prompts/<role>.txt`
+- `debug/raw/<role>.txt`
 
 ## Timeout（超时）
 

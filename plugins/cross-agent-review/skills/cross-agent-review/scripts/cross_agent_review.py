@@ -14,24 +14,22 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__).resolve()
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 REVIEWER_PROMPT_TEMPLATE = SKILL_ROOT / "assets" / "templates" / "reviewer-prompt.md"
-REQUIRED_FILE_ARGS = ["spec_file", "design_file", "tasks_file"]
+REQUIRED_INPUT_FIELDS = ["change", "mode", "base_ref", "head_ref", "spec_file", "design_file", "plan_file"]
+VALID_MODES = {"convergence", "endless"}
 INPUT_SNAPSHOT_NAMES = {
     "spec_file": "spec.md",
     "design_file": "design.md",
-    "tasks_file": "tasks.md",
+    "plan_file": "plan.md",
 }
-PLACEHOLDER_COMPAT_DISABLE_RISK_REVIEW = "__placeholder_compat__"
 REVIEWER_ROLES = [
     "spec-alignment",
     "implementation-correctness",
-    "tests-and-edge-cases",
-    "risk-review",
 ]
 ROLE_FOCUS = {
     "spec-alignment": "\n".join(
         [
             "Focus for spec-alignment:",
-            "- Compare the supplied spec, design, tasks, and changed files for requirement drift.",
+            "- Compare the supplied spec, design, plan, and changed files for requirement drift.",
             "- Report missing required behavior, scope creep, or contradictions between artifacts.",
             "- Do not review implementation style unless it changes the promised behavior.",
         ]
@@ -42,24 +40,6 @@ ROLE_FOCUS = {
             "- Review changed implementation paths for concrete correctness bugs.",
             "- Use path-scoped diffs and source reads; do not read large input files wholesale.",
             "- Report only issues with executable behavior, data flow, state handling, or compatibility.",
-        ]
-    ),
-    "tests-and-edge-cases": "\n".join(
-        [
-            "Focus for tests-and-edge-cases:",
-            "- Review test coverage gaps for changed behavior and required scenarios.",
-            "- Review regression protection for previously supported behavior and integration contracts.",
-            "- Review edge cases, error paths, boundary inputs, and state transitions implied by the supplied inputs.",
-            "- Do not claim tests passed, failed, or were run; no test results are supplied.",
-            "- Only create findings for concrete missing coverage, weak regression protection, or unhandled edge cases.",
-        ]
-    ),
-    "risk-review": "\n".join(
-        [
-            "Focus for risk-review:",
-            "- Review operational, security, reliability, and maintainability risks introduced by the change.",
-            "- Separate concrete risks from preferences; downgrade speculative concerns to WARNING or SUGGESTION.",
-            "- Do not duplicate findings already covered by implementation-correctness unless impact is broader.",
         ]
     ),
 }
@@ -102,34 +82,36 @@ STATUS_MAP = {
 
 
 @dataclass(frozen=True)
-class ReviewArgs:
+class ReviewInput:
     change: str
+    mode: str
     base_ref: str
     head_ref: str
     spec_file: Path
     design_file: Path
-    tasks_file: Path
-    output_dir: Path | None
+    plan_file: Path
+    input_file: Path
+    output_dir: Path
+    debug: bool
     sdk_python: Path | None
     fake_reviewer_results: str | None
-    disable_risk_review: str | None
+
+
+@dataclass(frozen=True)
+class StatusEntry:
+    xy: str
+    path: Path
+    old_path: Path | None = None
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cross_agent_review.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
     run_parser = subparsers.add_parser("run")
-    run_parser.add_argument("--change", required=True)
-    run_parser.add_argument("--base-ref", required=True)
-    run_parser.add_argument("--head-ref", required=True)
-    run_parser.add_argument("--spec-file", type=Path, required=True)
-    run_parser.add_argument("--design-file", type=Path, required=True)
-    run_parser.add_argument("--tasks-file", type=Path, required=True)
-    run_parser.add_argument("--tests-file", type=Path, help=argparse.SUPPRESS)
-    run_parser.add_argument("--output-dir", type=Path)
+    run_parser.add_argument("--input-file", type=Path, required=True)
+    run_parser.add_argument("--debug", action="store_true")
     run_parser.add_argument("--sdk-python", type=Path)
     run_parser.add_argument("--fake-reviewer-results")
-    run_parser.add_argument("--disable-risk-review", nargs="?", const=PLACEHOLDER_COMPAT_DISABLE_RISK_REVIEW)
     subparsers.add_parser("_sdk-dispatch")
     return parser
 
@@ -149,8 +131,8 @@ def git_output_bytes(args: list[str], cwd: Path) -> bytes:
     return result.stdout
 
 
-def status_paths(cwd: Path) -> set[Path]:
-    paths: set[Path] = set()
+def status_entries(cwd: Path) -> list[StatusEntry]:
+    entries_by_status: list[StatusEntry] = []
     output = git_output_bytes(["status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd)
     entries = output.split(b"\0")
     index = 0
@@ -159,41 +141,133 @@ def status_paths(cwd: Path) -> set[Path]:
         index += 1
         if not entry:
             continue
+        xy = entry[:2].decode("ascii", errors="replace")
         path_text = entry[3:].decode("utf-8", errors="surrogateescape")
-        paths.add((cwd / path_text).resolve())
+        path = (cwd / path_text).resolve()
+        old_path = None
         if entry[:1] in {b"R", b"C"} or entry[1:2] in {b"R", b"C"}:
+            if index < len(entries) and entries[index]:
+                old_path_text = entries[index].decode("utf-8", errors="surrogateescape")
+                old_path = (cwd / old_path_text).resolve()
             index += 1
+        entries_by_status.append(StatusEntry(xy=xy, path=path, old_path=old_path))
+    return entries_by_status
+
+
+def status_entry_paths(entry: StatusEntry) -> list[Path]:
+    paths = [entry.path]
+    if entry.old_path is not None:
+        paths.append(entry.old_path)
     return paths
+
+
+def status_entry_is_allowed(entry: StatusEntry, allowed: set[Path]) -> bool:
+    if entry.xy != "??":
+        return False
+    return all(path_is_allowed(path, allowed) for path in status_entry_paths(entry))
+
+
+def path_is_allowed(path: Path, allowed: set[Path]) -> bool:
+    return path.resolve() in allowed
 
 
 def ensure_clean_subject(cwd: Path, head_ref: str, allowed_dirty_paths: Sequence[Path] = ()) -> None:
     allowed = {path.resolve() for path in allowed_dirty_paths}
-    dirty_paths = status_paths(cwd) - allowed
-    if dirty_paths:
+    dirty_entries = [
+        entry for entry in status_entries(cwd) if not status_entry_is_allowed(entry, allowed)
+    ]
+    if dirty_entries:
         raise ValueError("dirty_worktree")
     current_head = git_output(["rev-parse", "HEAD"], cwd)
     if current_head != head_ref:
         raise ValueError(f"head_ref_mismatch: expected={head_ref} actual={current_head}")
 
 
-def parse_review_args(args: argparse.Namespace) -> ReviewArgs:
-    review_args = ReviewArgs(
-        change=args.change,
-        base_ref=args.base_ref,
-        head_ref=args.head_ref,
-        spec_file=args.spec_file,
-        design_file=args.design_file,
-        tasks_file=args.tasks_file,
-        output_dir=args.output_dir,
-        sdk_python=args.sdk_python,
-        fake_reviewer_results=args.fake_reviewer_results,
-        disable_risk_review=args.disable_risk_review,
+def resolve_context_path(raw_path: str) -> Path:
+    path = Path(raw_path)
+    if path.is_absolute():
+        return path
+    return Path.cwd() / path
+
+
+def validate_path_segment(segment: str, input_file: Path) -> str:
+    if (
+        not segment
+        or segment in {".", ".."}
+        or "/" in segment
+        or "\\" in segment
+        or Path(segment).is_absolute()
+    ):
+        raise ValueError(f"invalid_input_file_location: {input_file}")
+    return segment
+
+
+def validate_input_file_location(input_file: Path, change: str, head_ref: str) -> None:
+    change = validate_path_segment(change, input_file)
+    head_ref_short = validate_path_segment(head_ref[:12], input_file)
+    expected = (
+        Path(".local")
+        / "cross-agent-review"
+        / change
+        / head_ref_short
+        / "prepared-inputs"
+        / "review-input.json"
     )
-    for name in REQUIRED_FILE_ARGS:
-        path = getattr(review_args, name)
+    try:
+        actual = input_file.resolve().relative_to(Path.cwd().resolve())
+    except ValueError as exc:
+        raise ValueError(f"invalid_input_file_location: {input_file}") from exc
+    if actual != expected:
+        raise ValueError(f"invalid_input_file_location: {input_file}")
+
+
+def validate_prepared_inputs_dir(input_file: Path) -> None:
+    expected = input_file.resolve()
+    for path in sorted(input_file.parent.iterdir()):
+        if path.resolve() != expected or path.is_symlink() or not path.is_file():
+            raise ValueError(f"unexpected_prepared_input: {path}")
+
+
+def validate_base_ref(cwd: Path, base_ref: str) -> None:
+    try:
+        git_output(["rev-parse", "--verify", f"{base_ref}^{{commit}}"], cwd)
+    except ValueError as exc:
+        raise ValueError(f"base_ref_mismatch: {base_ref}") from exc
+
+
+def load_review_input(args: argparse.Namespace) -> ReviewInput:
+    input_file = args.input_file if args.input_file.is_absolute() else Path.cwd() / args.input_file
+    if not input_file.is_file():
+        raise ValueError(f"missing_file: {input_file}")
+    payload = json.loads(input_file.read_text(encoding="utf-8"))
+    for field in REQUIRED_INPUT_FIELDS:
+        if payload.get(field) is None:
+            raise ValueError(f"missing_field: {field}")
+    validate_input_file_location(input_file, str(payload["change"]), str(payload["head_ref"]))
+    validate_prepared_inputs_dir(input_file)
+    mode = str(payload["mode"])
+    if mode not in VALID_MODES:
+        raise ValueError(f"invalid_mode: {mode}")
+    spec_file = resolve_context_path(str(payload["spec_file"]))
+    design_file = resolve_context_path(str(payload["design_file"]))
+    plan_file = resolve_context_path(str(payload["plan_file"]))
+    for path in [spec_file, design_file, plan_file]:
         if not path.is_file():
             raise ValueError(f"missing_file: {path}")
-    return review_args
+    return ReviewInput(
+        change=str(payload["change"]),
+        mode=mode,
+        base_ref=str(payload["base_ref"]),
+        head_ref=str(payload["head_ref"]),
+        spec_file=spec_file,
+        design_file=design_file,
+        plan_file=plan_file,
+        input_file=input_file,
+        output_dir=input_file.parent.parent,
+        debug=args.debug,
+        sdk_python=args.sdk_python,
+        fake_reviewer_results=args.fake_reviewer_results,
+    )
 
 
 def candidate_sdk_pythons(explicit: Path | None) -> list[Path]:
@@ -256,22 +330,13 @@ def load_fake_reviewer_results(raw: str | None) -> list[dict]:
     for item in data:
         if not isinstance(item, dict) or not required_fields <= item.keys():
             raise ValueError("invalid_fake_reviewer_results")
+        if item["role"] not in REVIEWER_ROLES:
+            raise ValueError(f"invalid_fake_reviewer_role: {item['role']}")
     return data
 
 
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
-
-
-def input_reference(label: str, path: Path) -> str:
-    content = path.read_bytes()
-    return "\n".join(
-        [
-            f"{label} file: {path}",
-            f"{label} bytes: {len(content)}",
-            f"{label} sha256: {hashlib.sha256(content).hexdigest()}",
-        ]
-    )
 
 
 def render_template(path: Path, values: dict[str, str]) -> str:
@@ -285,7 +350,7 @@ def git_command_text(args: Sequence[str]) -> str:
     return "git " + " ".join(args)
 
 
-def review_subject_commands(review_args: ReviewArgs) -> dict[str, str]:
+def review_subject_commands(review_args: ReviewInput) -> dict[str, str]:
     diff_range = f"{review_args.base_ref}...{review_args.head_ref}"
     commit_range = f"{review_args.base_ref}..{review_args.head_ref}"
     return {
@@ -298,7 +363,7 @@ def review_subject_commands(review_args: ReviewArgs) -> dict[str, str]:
     }
 
 
-def review_subject_commands_prompt(review_args: ReviewArgs) -> str:
+def review_subject_commands_prompt(review_args: ReviewInput) -> str:
     commands = review_subject_commands(review_args)
     return "\n".join(
         [
@@ -310,7 +375,7 @@ def review_subject_commands_prompt(review_args: ReviewArgs) -> str:
     )
 
 
-def changed_files_prompt(cwd: Path, review_args: ReviewArgs, limit: int = 160) -> str:
+def changed_files_prompt(cwd: Path, review_args: ReviewInput, limit: int = 160) -> str:
     try:
         entries = changed_file_entries_from_git(cwd, review_args.base_ref, review_args.head_ref)
     except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError):
@@ -330,16 +395,6 @@ def changed_files_prompt(cwd: Path, review_args: ReviewArgs, limit: int = 160) -
     if remaining > 0:
         lines.append(f"- <{remaining} more>")
     return "\n".join(lines)
-
-
-def context_file_references(review_args: ReviewArgs) -> str:
-    return "\n\n".join(
-        [
-            input_reference("Spec", review_args.spec_file),
-            input_reference("Design", review_args.design_file),
-            input_reference("Tasks", review_args.tasks_file),
-        ]
-    )
 
 
 def merge_base(cwd: Path, base_ref: str, head_ref: str) -> str:
@@ -392,18 +447,14 @@ def commit_entries(cwd: Path, base_ref: str, head_ref: str) -> list[dict[str, st
     return entries
 
 
-def input_manifest_path(review_args: ReviewArgs) -> Path:
-    return output_dir_for(review_args) / "inputs" / "manifest.json"
-
-
-def relative_to_output(review_args: ReviewArgs, path: Path) -> str:
+def relative_to_output(review_args: ReviewInput, path: Path) -> str:
     try:
         return path.relative_to(output_dir_for(review_args)).as_posix()
     except ValueError:
         return path.as_posix()
 
 
-def input_file_metadata(review_args: ReviewArgs, path: Path) -> dict:
+def input_file_metadata(review_args: ReviewInput, path: Path) -> dict:
     content = path.read_bytes()
     return {
         "path": relative_to_output(review_args, path),
@@ -412,33 +463,7 @@ def input_file_metadata(review_args: ReviewArgs, path: Path) -> dict:
     }
 
 
-def build_input_manifest(review_args: ReviewArgs) -> dict:
-    cwd = Path.cwd()
-    review_subject = review_subject_commands(review_args)
-    review_subject["merge_base"] = merge_base(cwd, review_args.base_ref, review_args.head_ref)
-    return {
-        "change": review_args.change,
-        "base_ref": review_args.base_ref,
-        "head_ref": review_args.head_ref,
-        "review_subject": review_subject,
-        "commits": commit_entries(cwd, review_args.base_ref, review_args.head_ref),
-        "inputs": {
-            "spec": input_file_metadata(review_args, review_args.spec_file),
-            "design": input_file_metadata(review_args, review_args.design_file),
-            "tasks": input_file_metadata(review_args, review_args.tasks_file),
-        },
-        "changed_files": changed_file_entries_from_git(cwd, review_args.base_ref, review_args.head_ref),
-    }
-
-
-def write_input_manifest(review_args: ReviewArgs) -> Path:
-    path = input_manifest_path(review_args)
-    write_json(path, build_input_manifest(review_args))
-    return path
-
-
-def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
-    review_subject = review_subject_commands(review_args)
+def reviewer_prompt(review_args: ReviewInput, role: str) -> str:
     schema_json = json.dumps(
         {
             "role": role,
@@ -460,22 +485,15 @@ def reviewer_prompt(review_args: ReviewArgs, role: str) -> str:
         REVIEWER_PROMPT_TEMPLATE,
         {
             "role": role,
+            "input_file_path": str(review_args.input_file),
             "schema_json": schema_json,
             "severity_rubric": SEVERITY_RUBRIC,
             "role_focus": ROLE_FOCUS.get(role, ""),
-            "change": review_args.change,
-            "base_ref": review_args.base_ref,
-            "head_ref": review_args.head_ref,
-            "manifest_path": str(input_manifest_path(review_args)),
-            "review_subject_commands": review_subject_commands_prompt(review_args),
-            "changed_files": changed_files_prompt(Path.cwd(), review_args),
-            "context_files": context_file_references(review_args),
-            "path_diff_command_template": review_subject["path_diff_command_template"],
         },
     )
 
 
-def dispatch_reviewers(review_args: ReviewArgs, sdk_python: str) -> list[dict]:
+def dispatch_reviewers(review_args: ReviewInput, sdk_python: str) -> list[dict]:
     fake_results = load_fake_reviewer_results(review_args.fake_reviewer_results)
     if review_args.fake_reviewer_results is not None:
         return fake_results
@@ -498,11 +516,11 @@ def reviewer_failure(role: str, summary: str, evidence: str, recommendation: str
     }
 
 
-def timeout_reviewer_results(raw_dir: Path, evidence: str) -> list[dict]:
+def timeout_reviewer_results(raw_dir: Path | None, evidence: str) -> list[dict]:
     reviewers: list[dict] = []
     for role in REVIEWER_ROLES:
-        raw_path = raw_dir / f"{role}.txt"
-        if raw_path.exists():
+        raw_path = raw_dir / f"{role}.txt" if raw_dir is not None else None
+        if raw_path is not None and raw_path.exists():
             raw_text = raw_path.read_text(encoding="utf-8", errors="replace")
             parsed = parse_reviewer_result(raw_text)
             if parsed is not None:
@@ -511,6 +529,9 @@ def timeout_reviewer_results(raw_dir: Path, evidence: str) -> list[dict]:
             role_evidence = raw_text or evidence
         else:
             role_evidence = evidence
+            if raw_path is not None:
+                raw_path.parent.mkdir(parents=True, exist_ok=True)
+                raw_path.write_text(role_evidence + "\n", encoding="utf-8")
         reviewers.append(
             reviewer_failure(
                 role,
@@ -522,22 +543,31 @@ def timeout_reviewer_results(raw_dir: Path, evidence: str) -> list[dict]:
     return reviewers
 
 
-def run_sdk_dispatch_subprocess(review_args: ReviewArgs, sdk_python: str) -> list[dict]:
-    prompts = {role: reviewer_prompt(review_args, role) for role in REVIEWER_ROLES}
-    prompts_dir = output_dir_for(review_args) / "prompts"
+def write_debug_dispatch_artifacts(review_args: ReviewInput, prompts: dict[str, str]) -> Path:
+    debug_dir = debug_dir_for(review_args)
+    prompts_dir = debug_dir / "prompts"
+    raw_dir = debug_dir / "raw"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    (debug_dir / "review-input.json").write_bytes(review_args.input_file.read_bytes())
     prompts_dir.mkdir(parents=True, exist_ok=True)
     for role, prompt in prompts.items():
         (prompts_dir / f"{role}.txt").write_text(prompt, encoding="utf-8")
-    raw_dir = output_dir_for(review_args) / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
+    return raw_dir
+
+
+def run_sdk_dispatch_subprocess(review_args: ReviewInput, sdk_python: str) -> list[dict]:
+    prompts = {role: reviewer_prompt(review_args, role) for role in REVIEWER_ROLES}
+    raw_dir = write_debug_dispatch_artifacts(review_args, prompts) if review_args.debug else None
     payload = {
         "cwd": str(Path.cwd()),
         "roles": REVIEWER_ROLES,
         "readonly_tools": READONLY_TOOLS,
         "prompts": prompts,
-        "raw_dir": str(raw_dir),
         "force_exit": True,
     }
+    if raw_dir is not None:
+        payload["raw_dir"] = str(raw_dir)
     try:
         result = subprocess.run(
             [sdk_python, str(Path(__file__).resolve()), "_sdk-dispatch"],
@@ -547,7 +577,7 @@ def run_sdk_dispatch_subprocess(review_args: ReviewArgs, sdk_python: str) -> lis
             check=False,
             timeout=SDK_DISPATCH_TIMEOUT_SECONDS,
         )
-    except subprocess.TimeoutExpired as exc:
+    except subprocess.TimeoutExpired:
         return timeout_reviewer_results(
             raw_dir,
             f"sdk_dispatch_timeout: exceeded {SDK_DISPATCH_TIMEOUT_SECONDS}s",
@@ -678,6 +708,8 @@ def run_sdk_dispatch() -> int:
                 try:
                     return await asyncio.wait_for(query_one(role), timeout=SDK_REVIEWER_TIMEOUT_SECONDS)
                 except asyncio.TimeoutError:
+                    evidence = f"Exceeded {SDK_REVIEWER_TIMEOUT_SECONDS} seconds."
+                    write_raw(role, f"Reviewer timed out\n{evidence}")
                     return {
                         "role": role,
                         "status": "failed",
@@ -686,7 +718,7 @@ def run_sdk_dispatch() -> int:
                                 "severity": "CRITICAL",
                                 "location": role,
                                 "summary": "Reviewer timed out",
-                                "evidence": f"Exceeded {SDK_REVIEWER_TIMEOUT_SECONDS} seconds.",
+                                "evidence": evidence,
                                 "recommendation": "Rerun review after checking Claude Agent SDK availability.",
                             }
                         ],
@@ -725,13 +757,15 @@ def short_ref(ref: str) -> str:
     return ref[:12] if len(ref) >= 12 else ref
 
 
-def output_dir_for(review_args: ReviewArgs) -> Path:
-    if review_args.output_dir is not None:
-        return review_args.output_dir
-    return Path(".local") / "cross-agent-review" / review_args.change / short_ref(review_args.head_ref)
+def output_dir_for(review_args: ReviewInput) -> Path:
+    return review_args.output_dir
 
 
-def archive_input_snapshots(review_args: ReviewArgs) -> ReviewArgs:
+def debug_dir_for(review_input: ReviewInput) -> Path:
+    return review_input.output_dir / "debug"
+
+
+def archive_input_snapshots(review_args: ReviewInput) -> ReviewInput:
     inputs_dir = output_dir_for(review_args) / "inputs"
     inputs_dir.mkdir(parents=True, exist_ok=True)
     replacements: dict[str, Path] = {}
@@ -740,9 +774,7 @@ def archive_input_snapshots(review_args: ReviewArgs) -> ReviewArgs:
         target = inputs_dir / filename
         target.write_bytes(source.read_bytes())
         replacements[field] = target
-    archived = replace(review_args, **replacements)
-    write_input_manifest(archived)
-    return archived
+    return replace(review_args, **replacements)
 
 
 def first_text(raw: dict, names: Sequence[str]) -> str:
@@ -847,7 +879,7 @@ def write_json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def render_report(review_args: ReviewArgs, summary: dict) -> str:
+def render_report(review_args: ReviewInput, summary: dict) -> str:
     lines = [
         f"# Cross-Agent Review: {review_args.change}",
         "",
@@ -878,51 +910,44 @@ def render_report(review_args: ReviewArgs, summary: dict) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def allowed_input_paths(review_args: ReviewArgs) -> list[Path]:
+def allowed_input_paths(review_args: ReviewInput) -> list[Path]:
     return [
+        review_args.input_file,
         review_args.spec_file,
         review_args.design_file,
-        review_args.tasks_file,
+        review_args.plan_file,
     ]
 
 
-def output_artifact_paths(review_args: ReviewArgs) -> list[Path]:
-    out_dir = output_dir_for(review_args)
-    paths = [input_manifest_path(review_args)]
-    for directory in (out_dir / "prompts", out_dir / "raw"):
-        if directory.is_dir():
-            paths.extend(path for path in directory.glob("*.txt") if path.is_file())
-    return paths
+def runtime_allowed_paths(review_input: ReviewInput) -> list[Path]:
+    output_dir = output_dir_for(review_input)
+    debug_dir = debug_dir_for(review_input)
+    return [
+        review_input.input_file,
+        output_dir / "review-report.md",
+        output_dir / "review-pass.json",
+        debug_dir / "review-input.json",
+        *(debug_dir / "prompts" / f"{role}.txt" for role in REVIEWER_ROLES),
+        *(debug_dir / "raw" / f"{role}.txt" for role in REVIEWER_ROLES),
+    ]
 
 
-def write_outputs(review_args: ReviewArgs, summary: dict, extra_allowed_paths: Sequence[Path] = ()) -> int:
+def write_outputs(review_args: ReviewInput, summary: dict, extra_allowed_paths: Sequence[Path] = ()) -> int:
     out_dir = output_dir_for(review_args)
     out_dir.mkdir(parents=True, exist_ok=True)
     report_text = render_report(review_args, summary)
     report_path = out_dir / "review-report.md"
-    results_path = out_dir / "review-results.json"
     pass_path = out_dir / "review-pass.json"
     report_path.write_text(report_text, encoding="utf-8")
-    write_json(results_path, summary)
     if summary["blocking_findings"] == 0:
-        ensure_clean_subject(
-            Path.cwd(),
-            review_args.head_ref,
-            [
-                *extra_allowed_paths,
-                *allowed_input_paths(review_args),
-                *output_artifact_paths(review_args),
-                report_path,
-                results_path,
-                pass_path,
-            ],
-        )
+        ensure_clean_subject(Path.cwd(), review_args.head_ref, runtime_allowed_paths(review_args))
         report_hash = hashlib.sha256(report_path.read_bytes()).hexdigest()
         write_json(
             pass_path,
             {
                 "status": "pass",
                 "change": review_args.change,
+                "mode": review_args.mode,
                 "base_ref": review_args.base_ref,
                 "head_ref": review_args.head_ref,
                 "blocking_findings": 0,
@@ -936,36 +961,20 @@ def write_outputs(review_args: ReviewArgs, summary: dict, extra_allowed_paths: S
 
 
 def run_review(args: argparse.Namespace) -> int:
-    if args.disable_risk_review == PLACEHOLDER_COMPAT_DISABLE_RISK_REVIEW:
-        print("status: not_implemented")
-        return 2
     try:
-        review_args = parse_review_args(args)
-        legacy_input_paths = [args.tests_file] if args.tests_file is not None else []
-        original_input_paths = allowed_input_paths(review_args)
-        ensure_clean_subject(Path.cwd(), review_args.head_ref, [*original_input_paths, *legacy_input_paths])
-        review_args = archive_input_snapshots(review_args)
+        review_args = load_review_input(args)
+        validate_base_ref(Path.cwd(), review_args.base_ref)
+        allowed_paths = runtime_allowed_paths(review_args)
+        ensure_clean_subject(Path.cwd(), review_args.head_ref, allowed_paths)
         sdk_python = resolve_sdk_python(
             review_args.sdk_python,
             require_real_sdk=review_args.fake_reviewer_results is None or review_args.sdk_python is not None,
         )
-        ensure_clean_subject(
-            Path.cwd(),
-            review_args.head_ref,
-            [
-                *original_input_paths,
-                *legacy_input_paths,
-                *allowed_input_paths(review_args),
-                *output_artifact_paths(review_args),
-            ],
-        )
+        ensure_clean_subject(Path.cwd(), review_args.head_ref, allowed_paths)
         reviewers = dispatch_reviewers(review_args, sdk_python)
         skipped = []
-        if review_args.disable_risk_review:
-            skipped.append({"role": "risk-review", "reason": review_args.disable_risk_review})
-            reviewers = [item for item in reviewers if item.get("role") != "risk-review"]
         summary = aggregate(reviewers, skipped)
-        status = write_outputs(review_args, summary, [*original_input_paths, *legacy_input_paths])
+        status = write_outputs(review_args, summary)
     except (ValueError, json.JSONDecodeError) as exc:
         print("status: failed")
         print(f"error: {exc}")

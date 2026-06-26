@@ -1,8 +1,38 @@
-# cross-agent-review Specification
+# Comet Spec Context
 
-## Purpose
-Define the independent cross-agent review workflow, reviewer roles, report contract, and pass marker used as reusable review evidence.
-## Requirements
+- Change: simplify-cross-agent-review-contract
+- Phase: design
+- Mode: beta
+- Context hash: 28a8f49177aec958040705e687545efb4252796cbd05d33cffbb795317e689c9
+
+Generated-by: comet-handoff.sh
+
+OpenSpec remains the canonical capability spec. This beta context pack verbatim-projects spec files and references supporting artifacts by hash, not an agent-authored summary.
+
+## Source References
+
+- Source: openspec/changes/simplify-cross-agent-review-contract/proposal.md
+- SHA256: b09cdfa4743ef27b735b24c457638f42106fdab24fba8cac9276bc7955f0dcbb
+- Source: openspec/changes/simplify-cross-agent-review-contract/design.md
+- SHA256: 54348b6e3351c5bd6458f1c2acb4fd621d4c4bce4be9867825382020cdcef8a8
+- Source: openspec/changes/simplify-cross-agent-review-contract/tasks.md
+- SHA256: 35a9912ca3a31768ed9ec3a44ac3cb35018d3e81f451a833f5022617c3094d36
+- Source: openspec/changes/simplify-cross-agent-review-contract/specs/cross-agent-review/spec.md
+- SHA256: a88c4d26ced60a794dd3418e7f6fd6795c3faefbb3be90644fd6228a58f4ed2a
+
+## Acceptance Projection
+
+## openspec/changes/simplify-cross-agent-review-contract/specs/cross-agent-review/spec.md
+
+- Source: openspec/changes/simplify-cross-agent-review-contract/specs/cross-agent-review/spec.md
+- Lines: 1-177
+- SHA256: a88c4d26ced60a794dd3418e7f6fd6795c3faefbb3be90644fd6228a58f4ed2a
+
+```md
+# cross-agent-review Specification Delta
+
+## MODIFIED Requirements
+
 ### Requirement: 跨 agent review 输入契约
 系统 MUST 只接收一个 caller-prepared `review-input.json`（审查输入文件）作为 cross-agent-review（跨代理审查）的启动输入。该文件 MUST 位于同一次 review（审查）的 `prepared-inputs`（预备输入目录）下，并包含 review subject（审查对象）、模式和上下文文件引用。
 
@@ -113,25 +143,6 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 - **THEN** review output（审查输出）契约 MUST 保持一致
 - **AND** `review-pass.json` MUST 记录本次使用的 `mode`
 
-### Requirement: review 报告和严重级别
-系统 MUST 为每次 review（审查）生成人类可读报告，并使用统一严重级别汇总 findings（发现项）。
-
-#### Scenario: 阻塞发现
-- **WHEN** 任一 reviewer 返回 CRITICAL 或 IMPORTANT finding（发现项）
-- **THEN** 汇总报告把该 finding 计入 `blocking_findings`
-
-#### Scenario: 非阻塞发现
-- **WHEN** reviewer 只返回 WARNING 或 SUGGESTION finding（发现项）
-- **THEN** 汇总报告记录这些 finding，但不计入 `blocking_findings`
-
-#### Scenario: reviewer 返回非法结果
-- **WHEN** reviewer 超时或返回无法解析的结构化结果
-- **THEN** 汇总报告把该 reviewer 计为 CRITICAL finding（发现项）
-
-#### Scenario: findings 去重
-- **WHEN** 多个 reviewer 返回相同 severity、location 和 summary 的 finding
-- **THEN** review mechanism（审查机制）只计入一条去重后的 finding
-
 ### Requirement: review pass marker
 系统 MUST 只在 blocking findings（阻塞发现）为 0 时生成机器可读 pass marker（通过标记）。默认输出 MUST 只包含人类可读报告和可选 pass marker（通过标记）。
 
@@ -155,18 +166,6 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 - **THEN** 系统 MUST 把 `review-report.md` 写入 `.local/cross-agent-review/<change>/<head_ref_short>/`
 - **AND** blocking findings（阻塞发现）为 0 时，系统 MUST 把 `review-pass.json` 写入同一目录
 - **AND** 系统 MUST NOT 默认写入 `review-results.json`、`inputs/manifest.json`、`prompts/<role>.txt` 或 `raw/<role>.txt`
-
-### Requirement: Comet 边界
-系统 MUST 让 cross-agent review（跨代理审查）保持为独立审查证据，不替代 Comet verify（Comet 验证）。
-
-#### Scenario: 不运行构建或测试
-- **WHEN** review mechanism（审查机制）执行 review
-- **THEN** 它不得要求调用方预先运行测试或提供测试结果文件
-- **AND** 它不得负责运行构建命令或测试命令
-
-#### Scenario: 不推进 Comet phase
-- **WHEN** review mechanism（审查机制）完成 review
-- **THEN** 它不得修改 `.comet.yaml` 或推进 Comet phase（阶段）
 
 ### Requirement: review input snapshots
 系统 MUST 使用 `review-input.json`（审查输入文件）中的文件引用和 `base_ref` / `head_ref` 定义 review subject（审查对象）。系统 MUST NOT 默认复制上下文文件快照，也不得默认写入 manifest（清单）或 reviewer debug（审查代理排障）产物。
@@ -207,37 +206,6 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 - **THEN** 系统 MUST NOT 写入 `diff.patch`（差异补丁）快照
 - **AND** 系统 MUST NOT 把 `diff.patch`（差异补丁）传给 reviewer agent（审查代理）
 - **AND** review subject（审查对象）MUST 由 `review-input.json` 中的 `base_ref` 和 `head_ref` 定义
+```
 
-### Requirement: Skill invocation boundary
-
-系统 MUST 限制 `cross-agent-review`（跨代理审查）Skill（技能）的自动调用场景，避免在验证或通用审查阶段重复运行。
-
-#### Scenario: 允许的调用场景
-
-- **WHEN** 当前流程处于 Comet build completion（构建完成）阶段、PR Flow local review（本地审查）阶段，或用户显式调用 `cross-agent-review`
-- **THEN** agent（代理）MAY 调用 `cross-agent-review` Skill
-
-#### Scenario: 禁止的自动调用场景
-
-- **WHEN** 当前流程处于 Comet verify（验证）阶段或通用 code review（代码审查）阶段
-- **THEN** agent（代理）MUST NOT 自动调用 `cross-agent-review` Skill
-
-### Requirement: review timeout ownership
-系统 MUST 由 cross-agent-review（跨代理审查）插件脚本管理 reviewer dispatch（审查代理派发）超时。调用方 MUST NOT 在插件命令外层包装短于插件内部上限的 timeout（超时）等待。
-
-#### Scenario: 插件内部管理超时
-- **WHEN** cross-agent-review（跨代理审查）真实派发 reviewer agent（审查代理）
-- **THEN** 单个 reviewer agent（审查代理）的内部 timeout（超时）MUST 为 480 秒
-- **AND** 整体 SDK dispatch（开发包派发）的内部 timeout（超时）MUST 为 540 秒
-- **AND** 超时结果 MUST 由插件脚本转换为结构化 CRITICAL finding（严重发现项）
-
-#### Scenario: 主 agent 调用插件
-- **WHEN** 主 agent（代理）调用 cross-agent-review（跨代理审查）插件命令
-- **THEN** 主 agent（代理）MUST 直接等待插件脚本返回
-- **AND** 主 agent（代理）MUST NOT 在外层添加小于 540 秒的 timeout（超时）、watchdog（看门等待）或等价提前终止包装
-
-#### Scenario: 外层短超时会造成错误失败
-- **WHEN** 调用方在外层设置的等待时间短于插件内部 480 秒或 540 秒上限
-- **THEN** 该调用契约 MUST 被视为无效
-- **AND** 调用说明 MUST 指示移除外层短 timeout（超时），而不是调低插件内部超时
-
+Full source files remain canonical. If a required heading or scenario is missing here, regenerate the handoff or read the source spec directly. Supporting files (proposal, design, tasks) are referenced by hash only.

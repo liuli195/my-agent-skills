@@ -39,15 +39,67 @@ def test_cross_agent_review_skill_and_script_are_packaged() -> None:
     assert "不自动安装" in text
 
 
+def test_cross_agent_review_skill_documents_single_review_input_contract() -> None:
+    skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+
+    assert ".local/cross-agent-review/<change>/<head_ref_short>/prepared-inputs/review-input.json" in text
+    assert "--input-file" in text
+    assert "plan_file" in text
+    assert "tasks_file" not in text
+    assert "--spec-file" not in text
+    assert "--design-file" not in text
+    assert "--tasks-file" not in text
+
+
+def test_cross_agent_review_skill_documents_allowed_mode_values() -> None:
+    skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+
+    assert "`mode`（模式）只能是 `convergence`（收敛）或 `endless`（无尽）" in text
+
+
+def test_cross_agent_review_skill_documents_review_range_refs() -> None:
+    skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+
+    assert "review（审查）范围由 `base_ref`（基准引用）和 `head_ref`（当前提交引用）控制" in text
+
+
+def test_cross_agent_review_skill_documents_default_and_debug_outputs() -> None:
+    skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+
+    assert "review-report.md" in text
+    assert "review-pass.json" in text
+    assert "review-results.json" not in text
+    assert "inputs/manifest.json" not in text
+    assert "inputs/spec.md" not in text
+    assert "inputs/design.md" not in text
+    assert "inputs/tasks.md" not in text
+    assert "debug/review-input.json" in text
+    assert "debug/prompts/<role>.txt" in text
+    assert "debug/raw/<role>.txt" in text
+
+
+def test_cross_agent_review_skill_documents_two_reviewers_only() -> None:
+    skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+
+    assert "spec-alignment" in text
+    assert "implementation-correctness" in text
+    assert "tests-and-edge-cases" not in text
+    assert "risk-review" not in text
+
+
 def test_cross_agent_review_skill_documents_input_staging_under_run_dir() -> None:
     skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
     text = skill.read_text(encoding="utf-8")
 
-    assert ".local/cross-agent-review/<change>/<head_ref>/prepared-inputs/" in text
+    assert ".local/cross-agent-review/<change>/<head_ref_short>/prepared-inputs/" in text
     assert ".local/cross-agent-review-inputs" not in text
-    assert "inputs/manifest.json" in text
-    assert "prompts/" in text
-    assert "raw/" in text
+    assert "debug/prompts/" in text
+    assert "debug/raw/" in text
 
 
 def test_cross_agent_review_skill_documents_manifest_diff_commands_and_timeout_boundary() -> None:
@@ -112,30 +164,20 @@ def test_cross_agent_review_spec_documents_manifest_based_prompt_contract() -> N
     assert "提示中的 diff、spec、design 和 tasks 内容 MUST" not in text
 
 
-def test_cross_agent_review_placeholder_run_accepts_documented_and_planned_options(tmp_path: Path) -> None:
+def test_cross_agent_review_rejects_removed_cli_options(tmp_path: Path) -> None:
     result = subprocess.run(
         [
             sys.executable,
             str(SCRIPT),
             "run",
-            "--change",
-            "add-cross-agent-review-mechanism",
-            "--base-ref",
-            "main",
-            "--head-ref",
-            "HEAD",
+            "--input-file",
+            str(tmp_path / "review-input.json"),
             "--spec-file",
             str(tmp_path / "spec.md"),
             "--design-file",
             str(tmp_path / "design.md"),
             "--tasks-file",
             str(tmp_path / "tasks.md"),
-            "--output-dir",
-            str(tmp_path / "out"),
-            "--sdk-python",
-            str(tmp_path / "venv" / "Scripts" / "python.exe"),
-            "--fake-reviewer-results",
-            str(tmp_path / "fake-review.json"),
             "--disable-risk-review",
         ],
         cwd=PLUGIN_ROOT / "skills" / "cross-agent-review",
@@ -145,8 +187,7 @@ def test_cross_agent_review_placeholder_run_accepts_documented_and_planned_optio
     )
 
     assert result.returncode == 2
-    assert result.stdout.strip() == "status: not_implemented"
-    assert "unrecognized arguments" not in result.stderr
+    assert "unrecognized arguments" in result.stderr
 
 
 def test_claude_repo_marketplace_includes_cross_agent_review() -> None:
