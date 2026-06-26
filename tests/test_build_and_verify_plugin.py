@@ -251,6 +251,9 @@ def test_build_and_verify_plugin_has_runtime_and_init_skill_entrypoints() -> Non
     assert "ecosystem-detection.md" in init_skill_text
     assert "config-draft.md" in init_skill_text
     assert "validation.md" in init_skill_text
+    assert init_skill_text.index("questionnaire.md") < init_skill_text.index("ecosystem-detection.md")
+    assert init_skill_text.index("ecosystem-detection.md") < init_skill_text.index("config-draft.md")
+    assert init_skill_text.index("config-draft.md") < init_skill_text.index("validation.md")
     assert "用户沉默不能视为确认" in init_skill_text
     assert "不新增命令行初始化脚本" in init_skill_text
     assert "不安装依赖" in init_skill_text
@@ -311,6 +314,16 @@ def test_build_and_verify_init_questionnaire_contains_fixed_flow() -> None:
 
     for question in required_questions:
         assert question in text
+        section_start = text.index(f"## {question}")
+        next_question_index = required_questions.index(question) + 1
+        if next_question_index < len(required_questions):
+            section_end = text.index(f"## {required_questions[next_question_index]}")
+            section = text[section_start:section_end]
+        else:
+            section = text[section_start:]
+        assert "固定选项" in section
+        assert "选择后果" in section
+        assert "跳转规则" in section
     for option in required_options:
         assert option in text
     assert "固定选项" in text
@@ -412,6 +425,10 @@ def test_build_and_verify_init_references_have_cross_file_flow_invariants() -> N
         assert dry_run_choice in validation
         assert dry_run_choice in questionnaire
 
+    assert "候选 Node（节点运行时）和 Python（Python 语言）checks（检查项）" in questionnaire
+    assert "展示脚本名、原始 script（脚本）内容、建议 check id（检查项标识）和建议 command（命令）" in ecosystem
+    assert "展示检测到的配置文件、建议 check id（检查项标识）和建议 command（命令）" in ecosystem
+
     assert "短横线风格" in config_draft
     for check_id in [
         "build.node",
@@ -448,6 +465,15 @@ def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_dry_
         assert token in text
     assert "不运行 dry run（试运行）" not in text
     assert "只做 config（配置）结构校验" not in text
+    ordered_steps = [
+        "写入前执行 targeted dependency checks（定向依赖检查）",
+        "用户最终确认后，必要时备份已有配置",
+        "写入 `.build-and-verify/config.json`（配置文件）",
+        "写入后执行 config（配置）结构校验",
+        "写入后执行用户选择范围的 dry run（试运行）",
+    ]
+    positions = [text.index(step) for step in ordered_steps]
+    assert positions == sorted(positions)
 
 
 def test_build_and_verify_init_delta_spec_targets_test_framework_plugin_capability() -> None:
@@ -465,6 +491,8 @@ def test_build_and_verify_init_delta_spec_targets_test_framework_plugin_capabili
     assert "Runtime and initialization skill surfaces" in text
     assert "build-and-verify-init" in text
     assert "template-driven guided initialization" in text
+    assert "Guided initialization drafts generic repository checks" in text
+    assert "Guided initialization protects existing configuration" in text
     assert "Guided initialization validates config and environment before completion" in text
 
 
