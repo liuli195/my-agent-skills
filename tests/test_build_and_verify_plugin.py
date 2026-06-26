@@ -74,6 +74,10 @@ def load_build_and_verify_module():
     return module
 
 
+def load_build_and_verify_runner_module():
+    return load_build_and_verify_module()._runner()
+
+
 def run_check(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
     module = load_build_and_verify_module()
     argv = [*args, "--project", str(project)]
@@ -109,10 +113,13 @@ def command_that_logs(label: str, log_name: str = "run.log") -> list[str]:
 
 
 def init_wizard_command_tokens(command: Any) -> list[str]:
+    if isinstance(command, str):
+        try:
+            return shlex.split(command)
+        except ValueError:
+            return command.split()
     if isinstance(command, list):
         return [str(token) for token in command]
-    if isinstance(command, str):
-        return shlex.split(command)
     return []
 
 
@@ -124,14 +131,23 @@ def init_wizard_command_name(command: Any) -> str:
 
 
 def init_wizard_uses_pytest_parallel(command: Any) -> bool:
-    tokens = [token.strip('"').lower() for token in init_wizard_command_tokens(command)]
-    uses_pytest = "pytest" in tokens
-    uses_parallel = (
-        "-n" in tokens
-        or "--numprocesses" in tokens
-        or any(token.startswith("--numprocesses=") for token in tokens)
+    tokens = init_wizard_command_tokens(command)
+    has_xdist_flag = any(
+        token == "-n"
+        or (token.startswith("-n") and len(token) > 2)
+        or token == "--numprocesses"
+        or token.startswith("--numprocesses=")
+        for token in tokens
     )
-    return uses_pytest and uses_parallel
+    has_pytest = any(
+        token == "pytest" or token.endswith("/pytest") or token.endswith("\\pytest")
+        for token in tokens
+    )
+    has_pytest_module = any(
+        token == "-m" and index + 1 < len(tokens) and tokens[index + 1] == "pytest"
+        for index, token in enumerate(tokens)
+    )
+    return has_xdist_flag and (has_pytest or has_pytest_module)
 
 
 def init_wizard_path_exists(project: Path, pattern: str) -> bool:
@@ -224,6 +240,14 @@ def assert_init_wizard_config_structure(config: dict[str, Any]) -> None:
                     isinstance(value, list)
                     and all(isinstance(item, str) and item for item in value)
                 )
+            parallel = check.get("parallel")
+            assert parallel is None or parallel is True
+            check_timeout_seconds = check.get("timeoutSeconds")
+            assert check_timeout_seconds is None or (
+                not isinstance(check_timeout_seconds, bool)
+                and isinstance(check_timeout_seconds, (int, float))
+                and check_timeout_seconds > 0
+            )
 
     verify_config = config.get("verify", {})
     max_parallel = verify_config.get("maxParallel")
@@ -248,16 +272,30 @@ def ensure_init_wizard_gitignore_includes_backups(build_dir: Path) -> None:
     gitignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def init_wizard_backup_path(project: Path, backup_path: Path | None, timestamp: str) -> Path:
+    if backup_path is None:
+        return project / ".build-and-verify" / "backups" / f"config-{timestamp}.json"
+    candidate = backup_path if backup_path.is_absolute() else project / backup_path
+    try:
+        candidate.resolve().relative_to(project.resolve())
+    except ValueError as error:
+        raise AssertionError("backup_path must stay inside target repository") from error
+    assert not candidate.exists(), "backup_path must not overwrite existing file"
+    return candidate
+
+
 def simulate_init_wizard_write(
     project: Path,
     config: dict[str, Any],
     *,
     overwrite: bool,
+    backup_path: Path | None = None,
     timestamp: str = "20260626-120000",
     dry_run_scope: str = INIT_DRY_RUN_BUILD,
     executable_resolver: Callable[[str], str | None] = shutil.which,
     xdist_available: bool = True,
 ) -> dict[str, Any]:
+    requested_backup_path = backup_path
     dependency_issues = init_wizard_targeted_dependency_issues(
         project,
         config,
@@ -266,15 +304,18 @@ def simulate_init_wizard_write(
     )
     build_dir = project / ".build-and-verify"
     config_path = build_dir / "config.json"
-    backup_path = None
+    reported_backup_path = None
     build_dir.mkdir(parents=True, exist_ok=True)
 
     if config_path.exists():
         assert overwrite
-        backups_dir = build_dir / "backups"
-        backups_dir.mkdir(parents=True, exist_ok=True)
-        backup_path = backups_dir / f"config-{timestamp}.json"
-        shutil.copy2(config_path, backup_path)
+        reported_backup_path = init_wizard_backup_path(
+            project,
+            requested_backup_path,
+            timestamp,
+        )
+        reported_backup_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(config_path, reported_backup_path)
         ensure_init_wizard_gitignore_includes_backups(build_dir)
 
     write_json(config_path, config)
@@ -288,7 +329,7 @@ def simulate_init_wizard_write(
     }[dry_run_scope]
     dry_run_results = [run_check(project, *args) for args in dry_run_args]
     return {
-        "backup_path": backup_path,
+        "backup_path": reported_backup_path,
         "dependency_issues": dependency_issues,
         "dry_run_scope": dry_run_scope,
         "dry_run_results": dry_run_results,
@@ -528,6 +569,7 @@ def test_build_and_verify_init_questionnaire_contains_fixed_flow() -> None:
     assert "不得跳过 Q11 最终写入确认" in text
     assert "用户沉默不能视为确认" in text
     assert "如果配置已存在，必须停止并说明原因" in text
+    assert "修改备份路径：必须仍在目标仓库内，且不得覆盖已有文件" in text
     assert "不运行 dry run（试运行）" not in text
     assert "只做 config（配置）结构校验" not in text
 
@@ -576,6 +618,9 @@ def test_build_and_verify_init_ecosystem_detection_covers_node_python_and_fallba
         "同一分组内 check id（检查项标识）冲突",
         "改成唯一 id（标识）",
         "向用户说明改名原因",
+        "只使用第一个匹配的 lockfile（锁文件）选择包管理器",
+        "如果多个 lockfile（锁文件）同时存在，必须展示冲突并让用户选择一个包管理器",
+        "不得同时生成多个互相冲突的 command（命令）",
         "Mixed Repository（混合仓库）",
         "同时展示两类候选 checks（检查项）",
         "不根据文件数量、语言比例或 agent（代理）偏好自动删减候选项",
@@ -964,6 +1009,8 @@ def test_build_and_verify_init_template_simulation_writes_backup_and_valid_confi
                     "command": [sys.executable, "-m", "pytest", "--version"],
                     "paths": ["src/**", "tests/**"],
                     "inputs": ["pyproject.toml", "pytest.ini", "src", "tests"],
+                    "parallel": True,
+                    "timeoutSeconds": 30,
                 }
             ],
         },
@@ -985,6 +1032,157 @@ def test_build_and_verify_init_template_simulation_writes_backup_and_valid_confi
     assert report["dry_run_scope"] == INIT_DRY_RUN_BUILD
     assert report["dry_run_results"][0].returncode == 0
     assert (project / "run.log").read_text(encoding="utf-8") == "build-ok\n"
+
+
+@pytest.mark.parametrize(
+    ("dry_run_scope", "expected_checked", "expected_log"),
+    [
+        (INIT_DRY_RUN_VERIFY, ["checked: verify.scope"], ["verify-ok"]),
+        (
+            INIT_DRY_RUN_BUILD_AND_VERIFY,
+            ["checked: build.scope", "checked: verify.scope"],
+            ["build-ok", "verify-ok"],
+        ),
+        (INIT_DRY_RUN_FULL_VERIFY, ["checked: verify.scope"], ["verify-ok"]),
+    ],
+)
+def test_build_and_verify_init_template_simulation_runs_selected_dry_run_scopes(
+    tmp_path: Path,
+    dry_run_scope: str,
+    expected_checked: list[str],
+    expected_log: list[str],
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    config = {
+        "version": 1,
+        "build": {
+            "checks": [
+                {"id": "build.scope", "command": command_that_logs("build-ok")}
+            ]
+        },
+        "verify": {
+            "checks": [
+                {"id": "verify.scope", "command": command_that_logs("verify-ok")}
+            ]
+        },
+    }
+
+    report = simulate_init_wizard_write(
+        project,
+        config,
+        overwrite=False,
+        dry_run_scope=dry_run_scope,
+    )
+    validation_text = (INIT_REFERENCE_ROOT / "validation.md").read_text(encoding="utf-8")
+
+    assert [result.returncode for result in report["dry_run_results"]] == [0] * len(
+        expected_checked
+    )
+    for result, checked in zip(report["dry_run_results"], expected_checked, strict=True):
+        assert checked in result.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == expected_log
+    if dry_run_scope == INIT_DRY_RUN_FULL_VERIFY:
+        assert "默认不运行 `verify --full`（完整验证）" in validation_text
+        assert "必须先说明成本和原因" in validation_text
+
+
+def test_build_and_verify_init_template_simulation_validates_custom_backup_path(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    build_dir = project / ".build-and-verify"
+    build_dir.mkdir()
+    old_config = {"version": 1, "build": {"checks": []}, "verify": {"checks": []}}
+    new_config = {
+        "version": 1,
+        "build": {"checks": []},
+        "verify": {"checks": []},
+    }
+    write_json(build_dir / "config.json", old_config)
+
+    report = simulate_init_wizard_write(
+        project,
+        new_config,
+        overwrite=True,
+        backup_path=Path(".build-and-verify/custom/config-custom.json"),
+        dry_run_scope=INIT_DRY_RUN_VERIFY,
+    )
+
+    assert report["backup_path"] == project / ".build-and-verify/custom/config-custom.json"
+    assert read_json(report["backup_path"]) == old_config
+
+    write_json(build_dir / "config.json", old_config)
+    existing_backup = project / ".build-and-verify/custom/existing.json"
+    existing_backup.parent.mkdir(parents=True, exist_ok=True)
+    existing_backup.write_text("existing\n", encoding="utf-8")
+    with pytest.raises(AssertionError, match="must not overwrite existing file"):
+        simulate_init_wizard_write(
+            project,
+            new_config,
+            overwrite=True,
+            backup_path=existing_backup,
+            dry_run_scope=INIT_DRY_RUN_VERIFY,
+        )
+
+    with pytest.raises(AssertionError, match="inside target repository"):
+        simulate_init_wizard_write(
+            project,
+            new_config,
+            overwrite=True,
+            backup_path=tmp_path / "outside.json",
+            dry_run_scope=INIT_DRY_RUN_VERIFY,
+        )
+
+
+def test_build_and_verify_init_template_simulation_accepts_mixed_candidates(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "package.json").write_text(
+        json.dumps({"scripts": {"build": "vite build", "test": "vitest"}}, indent=2),
+        encoding="utf-8",
+    )
+    (project / "pyproject.toml").write_text("[tool.pytest.ini_options]\n", encoding="utf-8")
+    config = {
+        "version": 1,
+        "build": {
+            "checks": [
+                {"id": "build.node", "command": command_that_logs("node-build")}
+            ]
+        },
+        "verify": {
+            "checks": [
+                {"id": "verify.node-tests", "command": command_that_logs("node-tests")},
+                {
+                    "id": "verify.python-tests",
+                    "command": command_that_logs("python-tests"),
+                },
+            ]
+        },
+    }
+
+    report = simulate_init_wizard_write(
+        project,
+        config,
+        overwrite=False,
+        dry_run_scope=INIT_DRY_RUN_BUILD_AND_VERIFY,
+    )
+
+    written = read_json(project / ".build-and-verify" / "config.json")
+    assert [check["id"] for check in written["build"]["checks"]] == ["build.node"]
+    assert [check["id"] for check in written["verify"]["checks"]] == [
+        "verify.node-tests",
+        "verify.python-tests",
+    ]
+    assert [result.returncode for result in report["dry_run_results"]] == [0, 0]
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "node-build",
+        "node-tests",
+        "python-tests",
+    ]
 
 
 def test_build_and_verify_init_template_detects_pytest_xdist_dependency(
@@ -1015,6 +1213,26 @@ def test_build_and_verify_init_template_detects_pytest_xdist_dependency(
 
     assert len([issue for issue in issues if "pytest-xdist" in issue["问题"]]) == 1
     assert all(issue["是否阻止写入"] == "不阻止" for issue in issues)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest -n auto",
+        "python -m pytest -n auto",
+        "python -m pytest --numprocesses=auto",
+        [sys.executable, "-m", "pytest", "-n", "auto"],
+        "tools/pytest -n auto",
+        r"tools\pytest -n auto",
+        "python -m unittest -n auto",
+    ],
+)
+def test_build_and_verify_init_template_pytest_xdist_detection_matches_runner(
+    command: Any,
+) -> None:
+    runner = load_build_and_verify_runner_module()
+
+    assert init_wizard_uses_pytest_parallel(command) is runner._uses_pytest_xdist(command)
 
 
 def test_build_and_verify_init_template_detects_missing_executable(
@@ -1102,8 +1320,85 @@ def test_build_and_verify_init_template_dependency_issues_do_not_block_write(
 
     assert (project / ".build-and-verify" / "config.json").is_file()
     assert report["dependency_issues"]
+    assert any("可执行入口 `missing-verify-tool` 不可找到" in issue["问题"] for issue in report["dependency_issues"])
+    assert any("future-src/**" in issue["问题"] for issue in report["dependency_issues"])
     assert all(issue["是否阻止写入"] == "不阻止" for issue in report["dependency_issues"])
     assert report["dry_run_results"][0].returncode == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "valid"),
+    [
+        ("maxParallel", 0, True),
+        ("maxParallel", 1, True),
+        ("maxParallel", 128, True),
+        ("maxParallel", True, False),
+        ("maxParallel", -1, False),
+        ("maxParallel", "1", False),
+        ("timeoutSeconds", 0.5, True),
+        ("timeoutSeconds", 1, True),
+        ("timeoutSeconds", 3600, True),
+        ("timeoutSeconds", 0, False),
+        ("timeoutSeconds", -1, False),
+        ("timeoutSeconds", True, False),
+        ("timeoutSeconds", "60", False),
+    ],
+)
+def test_build_and_verify_init_template_validates_runtime_tuning_boundaries(
+    field: str,
+    value: Any,
+    valid: bool,
+) -> None:
+    config = {
+        "version": 1,
+        "build": {"checks": []},
+        "verify": {"checks": []},
+    }
+    config["verify"][field] = value
+
+    if valid:
+        assert_init_wizard_config_structure(config)
+    else:
+        with pytest.raises(AssertionError):
+            assert_init_wizard_config_structure(config)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "valid"),
+    [
+        ("parallel", True, True),
+        ("parallel", None, True),
+        ("parallel", False, False),
+        ("parallel", "true", False),
+        ("parallel", 1, False),
+        ("timeoutSeconds", 0.5, True),
+        ("timeoutSeconds", 1, True),
+        ("timeoutSeconds", None, True),
+        ("timeoutSeconds", 0, False),
+        ("timeoutSeconds", -1, False),
+        ("timeoutSeconds", True, False),
+        ("timeoutSeconds", "60", False),
+    ],
+)
+def test_build_and_verify_init_template_validates_per_check_runtime_tuning(
+    field: str,
+    value: Any,
+    valid: bool,
+) -> None:
+    check = {"id": "verify.runtime", "command": command_that_logs("runtime")}
+    if value is not None:
+        check[field] = value
+    config = {
+        "version": 1,
+        "build": {"checks": []},
+        "verify": {"checks": [check]},
+    }
+
+    if valid:
+        assert_init_wizard_config_structure(config)
+    else:
+        with pytest.raises(AssertionError):
+            assert_init_wizard_config_structure(config)
 
 
 def test_build_and_verify_runner_build_verify_and_full_verify(tmp_path: Path) -> None:

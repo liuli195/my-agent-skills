@@ -23,6 +23,7 @@
   - `yarn.lock` -> `yarn <script>`
   - `package-lock.json` -> `npm run <script>`
   - 无 lockfile（锁文件） -> `npm run <script>`
+- 只使用第一个匹配的 lockfile（锁文件）选择包管理器；如果多个 lockfile（锁文件）同时存在，必须展示冲突并让用户选择一个包管理器，不得同时生成多个互相冲突的 command（命令）。
 
 候选映射：
 

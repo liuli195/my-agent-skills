@@ -24,7 +24,7 @@
 - [x] 3.6 Add tests that backup behavior requires `.build-and-verify/backups/config-YYYYMMDD-HHMMSS.json`（备份配置文件） and `/backups/` in `.build-and-verify/.gitignore`（忽略规则）.
 - [x] 3.7 Add tests that no recognized ecosystem（未识别生态） fallback still collects user-provided commands through the fixed questionnaire（问答模板）.
 - [x] 3.8 Add tests that dry run（试运行） choices are limited to existing build/verify（构建/验证） command scopes and do not claim single-check（单检查项） runner（运行器） support.
-- [x] 3.9 Add template execution simulation tests for backup-before-overwrite, config structure validation, targeted dependency issue reporting, and user-selected dry run（试运行）.
+- [x] 3.9 Add template execution simulation tests for backup-before-overwrite, config structure validation, targeted dependency issue reporting, all user-selected dry run（试运行） scopes, backup-path constraints, and runtime tuning boundaries.
 
 ## 4. Verification
 
