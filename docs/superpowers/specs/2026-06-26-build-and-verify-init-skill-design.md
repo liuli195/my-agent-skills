@@ -2,6 +2,8 @@
 comet_change: add-build-and-verify-init-skill
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-26-add-build-and-verify-init-skill
+status: final
 ---
 
 # Build and Verify Init Skill Design

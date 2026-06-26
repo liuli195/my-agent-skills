@@ -2,6 +2,7 @@
 change: add-build-and-verify-init-skill
 design-doc: docs/superpowers/specs/2026-06-26-build-and-verify-init-skill-design.md
 base-ref: d6a1ca3c11e7648678a68186fe76f4ada92a1342
+archived-with: 2026-06-26-add-build-and-verify-init-skill
 ---
 
 # Build and Verify Init Skill（构建与验证初始化技能）实施计划
@@ -14,6 +15,7 @@ base-ref: d6a1ca3c11e7648678a68186fe76f4ada92a1342
 
 **Tech Stack（技术栈）:** Markdown（标记文档）、Python（Python 语言）、pytest（Python 测试运行器）、OpenSpec（开放规格）、build-and-verify runner（构建与验证运行器）。
 
+archived-with: 2026-06-26-add-build-and-verify-init-skill
 ---
 
 ## File Map（文件清单）
@@ -294,9 +296,11 @@ Expected（预期）: FAIL（失败），原因是新 Skill（技能）和 refer
 写入完整内容：
 
 ```markdown
+archived-with: 2026-06-26-add-build-and-verify-init-skill
 ---
 name: build-and-verify-init
 description: Build and Verify（构建与验证）对话式初始化向导；为目标仓库生成 .build-and-verify/config.json（配置文件）草案
+archived-with: 2026-06-26-add-build-and-verify-init-skill
 ---
 
 # Build and Verify Init（构建与验证初始化）
