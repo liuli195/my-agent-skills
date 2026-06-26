@@ -199,6 +199,95 @@ def test_run_accepts_single_review_input_file(tmp_path: Path) -> None:
     assert (project / ".local" / "cross-agent-review" / "demo" / head[:12] / "review-report.md").is_file()
 
 
+def test_default_outputs_are_report_and_pass_marker_only(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
+    input_file = write_review_input(project, head, head)
+    output_dir = input_file.parent.parent
+
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (output_dir / "review-report.md").is_file()
+    assert (output_dir / "review-pass.json").is_file()
+    assert not (output_dir / "review-results.json").exists()
+    assert not (output_dir / "inputs").exists()
+    assert not (output_dir / "prompts").exists()
+    assert not (output_dir / "raw").exists()
+    assert not (output_dir / "debug").exists()
+
+
+def test_blocking_findings_write_report_without_results_or_pass_marker(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
+    input_file = write_review_input(project, head, head)
+    output_dir = input_file.parent.parent
+    fake = json.dumps(
+        [
+            {
+                "role": "implementation-correctness",
+                "status": "completed",
+                "findings": [
+                    {
+                        "severity": "IMPORTANT",
+                        "location": "app.txt:1",
+                        "summary": "Wrong behavior",
+                        "evidence": "Evidence",
+                        "recommendation": "Fix behavior",
+                    }
+                ],
+            }
+        ]
+    )
+
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", fake, cwd=project)
+
+    assert result.returncode == 1
+    assert (output_dir / "review-report.md").is_file()
+    assert not (output_dir / "review-pass.json").exists()
+    assert not (output_dir / "review-results.json").exists()
+    assert not (output_dir / "inputs").exists()
+
+
+def test_debug_writes_input_prompts_and_raw_under_debug(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
+    input_file = write_review_input(project, head, head)
+    monkeypatch.chdir(project)
+    review_input = module.load_review_input(
+        types.SimpleNamespace(input_file=input_file, debug=True, sdk_python=None, fake_reviewer_results=None)
+    )
+
+    def fake_run(*args, **kwargs):
+        payload = json.loads(kwargs["input"])
+        raw_dir = Path(payload["raw_dir"])
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        for role in payload["roles"]:
+            (raw_dir / f"{role}.txt").write_text(
+                json.dumps({"role": role, "status": "completed", "findings": []}),
+                encoding="utf-8",
+            )
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout=json.dumps([]), stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    module.run_sdk_dispatch_subprocess(review_input, sys.executable)
+
+    debug_dir = input_file.parent.parent / "debug"
+    assert json.loads((debug_dir / "review-input.json").read_text(encoding="utf-8"))["mode"] == "convergence"
+    assert {path.name for path in (debug_dir / "prompts").iterdir()} == {
+        "spec-alignment.txt",
+        "implementation-correctness.txt",
+    }
+    assert {path.name for path in (debug_dir / "raw").iterdir()} == {
+        "spec-alignment.txt",
+        "implementation-correctness.txt",
+    }
+
+
 @pytest.mark.parametrize("removed_role", ["risk-review", "tests-and-edge-cases"])
 def test_fake_reviewer_results_reject_removed_roles(tmp_path: Path, removed_role: str) -> None:
     project = tmp_path / "repo"
@@ -439,7 +528,7 @@ def test_diff_file_argument_is_not_required(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def make_review_input_for_module(module, tmp_path: Path):
+def make_review_input_for_module(module, tmp_path: Path, *, debug: bool = False):
     input_file = write_review_input(tmp_path, "base", "head")
     cwd = Path.cwd()
     try:
@@ -447,7 +536,7 @@ def make_review_input_for_module(module, tmp_path: Path):
         return module.load_review_input(
             types.SimpleNamespace(
                 input_file=input_file,
-                debug=False,
+                debug=debug,
                 sdk_python=None,
                 fake_reviewer_results=None,
             )
@@ -456,8 +545,8 @@ def make_review_input_for_module(module, tmp_path: Path):
         os.chdir(cwd)
 
 
-def make_review_args_for_module(module, tmp_path: Path):
-    return make_review_input_for_module(module, tmp_path)
+def make_review_args_for_module(module, tmp_path: Path, *, debug: bool = False):
+    return make_review_input_for_module(module, tmp_path, debug=debug)
 
 
 def test_reviewer_roles_are_two_default_roles(tmp_path: Path) -> None:
@@ -933,9 +1022,9 @@ def test_reviewer_prompt_does_not_inline_large_diff_or_context(tmp_path: Path, m
     assert len(prompt) < 5000
 
 
-def test_sdk_dispatch_subprocess_writes_prompt_artifacts(tmp_path: Path, monkeypatch) -> None:
+def test_sdk_dispatch_subprocess_writes_debug_prompt_artifacts(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
-    review = make_review_args_for_module(module, tmp_path)
+    review = make_review_args_for_module(module, tmp_path, debug=True)
     captured_payload = None
 
     def fake_run(*args, **kwargs):
@@ -954,14 +1043,14 @@ def test_sdk_dispatch_subprocess_writes_prompt_artifacts(tmp_path: Path, monkeyp
         {"role": "spec-alignment", "status": "completed", "findings": []}
     ]
 
-    prompts_dir = review.output_dir / "prompts"
+    prompts_dir = review.output_dir / "debug" / "prompts"
     assert {path.name for path in prompts_dir.iterdir()} == {
         "spec-alignment.txt",
         "implementation-correctness.txt",
     }
-    assert captured_payload["raw_dir"] == str(review.output_dir / "raw")
+    assert captured_payload["raw_dir"] == str(review.output_dir / "debug" / "raw")
     assert captured_payload["force_exit"] is True
-    assert "Manifest file:" in (prompts_dir / "spec-alignment.txt").read_text(encoding="utf-8")
+    assert "Role: spec-alignment" in (prompts_dir / "spec-alignment.txt").read_text(encoding="utf-8")
 
 
 def test_sdk_dispatch_subprocess_uses_only_two_roles(tmp_path: Path, monkeypatch) -> None:
@@ -990,11 +1079,12 @@ def test_sdk_dispatch_subprocess_uses_only_two_roles(tmp_path: Path, monkeypatch
 
     assert [item["role"] for item in results] == ["spec-alignment", "implementation-correctness"]
     assert captured_payload["roles"] == ["spec-alignment", "implementation-correctness"]
+    assert "raw_dir" not in captured_payload
 
 
 def test_sdk_dispatch_subprocess_returns_role_failures_on_timeout(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
-    review = make_review_args_for_module(module, tmp_path)
+    review = make_review_args_for_module(module, tmp_path, debug=True)
 
     def fake_run(*args, **kwargs):
         payload = json.loads(kwargs["input"])

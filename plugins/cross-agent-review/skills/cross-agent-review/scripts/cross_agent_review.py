@@ -526,11 +526,11 @@ def reviewer_failure(role: str, summary: str, evidence: str, recommendation: str
     }
 
 
-def timeout_reviewer_results(raw_dir: Path, evidence: str) -> list[dict]:
+def timeout_reviewer_results(raw_dir: Path | None, evidence: str) -> list[dict]:
     reviewers: list[dict] = []
     for role in REVIEWER_ROLES:
-        raw_path = raw_dir / f"{role}.txt"
-        if raw_path.exists():
+        raw_path = raw_dir / f"{role}.txt" if raw_dir is not None else None
+        if raw_path is not None and raw_path.exists():
             raw_text = raw_path.read_text(encoding="utf-8", errors="replace")
             parsed = parse_reviewer_result(raw_text)
             if parsed is not None:
@@ -550,22 +550,31 @@ def timeout_reviewer_results(raw_dir: Path, evidence: str) -> list[dict]:
     return reviewers
 
 
-def run_sdk_dispatch_subprocess(review_args: ReviewInput, sdk_python: str) -> list[dict]:
-    prompts = {role: reviewer_prompt(review_args, role) for role in REVIEWER_ROLES}
-    prompts_dir = output_dir_for(review_args) / "prompts"
+def write_debug_dispatch_artifacts(review_args: ReviewInput, prompts: dict[str, str]) -> Path:
+    debug_dir = debug_dir_for(review_args)
+    prompts_dir = debug_dir / "prompts"
+    raw_dir = debug_dir / "raw"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    (debug_dir / "review-input.json").write_bytes(review_args.input_file.read_bytes())
     prompts_dir.mkdir(parents=True, exist_ok=True)
     for role, prompt in prompts.items():
         (prompts_dir / f"{role}.txt").write_text(prompt, encoding="utf-8")
-    raw_dir = output_dir_for(review_args) / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
+    return raw_dir
+
+
+def run_sdk_dispatch_subprocess(review_args: ReviewInput, sdk_python: str) -> list[dict]:
+    prompts = {role: reviewer_prompt(review_args, role) for role in REVIEWER_ROLES}
+    raw_dir = write_debug_dispatch_artifacts(review_args, prompts) if review_args.debug else None
     payload = {
         "cwd": str(Path.cwd()),
         "roles": REVIEWER_ROLES,
         "readonly_tools": READONLY_TOOLS,
         "prompts": prompts,
-        "raw_dir": str(raw_dir),
         "force_exit": True,
     }
+    if raw_dir is not None:
+        payload["raw_dir"] = str(raw_dir)
     try:
         result = subprocess.run(
             [sdk_python, str(Path(__file__).resolve()), "_sdk-dispatch"],
@@ -575,7 +584,7 @@ def run_sdk_dispatch_subprocess(review_args: ReviewInput, sdk_python: str) -> li
             check=False,
             timeout=SDK_DISPATCH_TIMEOUT_SECONDS,
         )
-    except subprocess.TimeoutExpired as exc:
+    except subprocess.TimeoutExpired:
         return timeout_reviewer_results(
             raw_dir,
             f"sdk_dispatch_timeout: exceeded {SDK_DISPATCH_TIMEOUT_SECONDS}s",
@@ -757,6 +766,10 @@ def output_dir_for(review_args: ReviewInput) -> Path:
     return review_args.output_dir
 
 
+def debug_dir_for(review_input: ReviewInput) -> Path:
+    return review_input.output_dir / "debug"
+
+
 def archive_input_snapshots(review_args: ReviewInput) -> ReviewInput:
     inputs_dir = output_dir_for(review_args) / "inputs"
     inputs_dir.mkdir(parents=True, exist_ok=True)
@@ -920,10 +933,8 @@ def write_outputs(review_args: ReviewInput, summary: dict, extra_allowed_paths: 
     out_dir.mkdir(parents=True, exist_ok=True)
     report_text = render_report(review_args, summary)
     report_path = out_dir / "review-report.md"
-    results_path = out_dir / "review-results.json"
     pass_path = out_dir / "review-pass.json"
     report_path.write_text(report_text, encoding="utf-8")
-    write_json(results_path, summary)
     if summary["blocking_findings"] == 0:
         ensure_clean_subject(Path.cwd(), review_args.head_ref, runtime_allowed_paths(review_args))
         report_hash = hashlib.sha256(report_path.read_bytes()).hexdigest()
@@ -950,7 +961,6 @@ def run_review(args: argparse.Namespace) -> int:
         validate_base_ref(Path.cwd(), review_args.base_ref)
         allowed_paths = runtime_allowed_paths(review_args)
         ensure_clean_subject(Path.cwd(), review_args.head_ref, allowed_paths)
-        review_args = archive_input_snapshots(review_args)
         sdk_python = resolve_sdk_python(
             review_args.sdk_python,
             require_real_sdk=review_args.fake_reviewer_results is None or review_args.sdk_python is not None,
