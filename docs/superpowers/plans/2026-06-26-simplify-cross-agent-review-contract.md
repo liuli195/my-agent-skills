@@ -894,7 +894,7 @@ Expected（预期）: PASS（通过）.
 - Verify（验证）: `plugins/release-flow/skills/release-flow/scripts/release_flow.py`
 - Verify（验证）: `plugins/agent-guard/**`
 
-- [ ] **Step 1: Write failing tests（先写失败测试）**
+- [x] **Step 1: Write failing tests（先写失败测试）**
 
 Update package tests:
 
@@ -967,7 +967,7 @@ def test_cross_agent_review_rejects_removed_cli_options(tmp_path: Path) -> None:
     assert "unrecognized arguments" in result.stderr
 ```
 
-- [ ] **Step 2: Run failing docs tests（确认失败）**
+- [x] **Step 2: Run failing docs tests（确认失败）**
 
 Run:
 
@@ -977,7 +977,7 @@ python -m pytest -q tests/test_cross_agent_review_plugin_package.py::test_cross_
 
 Expected（预期）: FAIL（失败） because Skill（技能） docs still describe old arguments and old artifacts.
 
-- [ ] **Step 3: Update docs and caller references（更新文档与调用引用）**
+- [x] **Step 3: Update docs and caller references（更新文档与调用引用）**
 
 In `plugins/cross-agent-review/skills/cross-agent-review/SKILL.md`:
 
@@ -1024,7 +1024,7 @@ Do not update historical files under:
 
 They are historical records, not active callers.
 
-- [ ] **Step 4: Search for active old callers（搜索活跃旧调用方）**
+- [x] **Step 4: Search for active old callers（搜索活跃旧调用方）**
 
 Run:
 
@@ -1045,7 +1045,7 @@ Expected（预期）:
 - no matches in `plugins/cross-agent-review/skills/cross-agent-review/SKILL.md`
 - remaining matches in tests are negative assertions or renamed debug path assertions
 
-- [ ] **Step 5: Run passing docs tests（确认通过）**
+- [x] **Step 5: Run passing docs tests（确认通过）**
 
 Run:
 
