@@ -189,6 +189,10 @@ def init_wizard_ensure_unique_check_ids(
     return {"candidates": unique_candidates, "rename_reasons": rename_reasons}
 
 
+def init_wizard_non_empty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
 def init_wizard_path_exists(project: Path, pattern: str) -> bool:
     if re.search(r"[*?\[]", pattern):
         return any(project.glob(pattern))
@@ -265,19 +269,20 @@ def assert_init_wizard_config_structure(config: dict[str, Any]) -> None:
         for check in checks:
             assert isinstance(check, dict)
             check_id = check.get("id")
-            assert isinstance(check_id, str) and check_id
+            assert init_wizard_non_empty_string(check_id)
             assert check_id not in seen_ids
             seen_ids.add(check_id)
             command = check.get("command")
-            assert isinstance(command, str) and command or (
+            assert init_wizard_non_empty_string(command) or (
                 isinstance(command, list)
-                and all(isinstance(token, str) and token for token in command)
+                and bool(command)
+                and all(init_wizard_non_empty_string(token) for token in command)
             )
             for field in ("paths", "inputs"):
                 value = check.get(field)
                 assert value is None or (
                     isinstance(value, list)
-                    and all(isinstance(item, str) and item for item in value)
+                    and all(init_wizard_non_empty_string(item) for item in value)
                 )
             parallel = check.get("parallel")
             assert parallel is None or isinstance(parallel, bool)
@@ -905,6 +910,26 @@ def test_build_and_verify_init_references_have_cross_file_flow_invariants() -> N
         assert check_id in ecosystem
 
 
+def test_build_and_verify_init_skill_closes_interactive_validation_loop_inside_plugin() -> None:
+    text = (INIT_SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+    for token in [
+        "Closed Loop（闭环）",
+        "必须在插件内完成",
+        "不得把交互式配置、config validation（配置校验）、targeted dependency checks（定向依赖检查）或 environment checks（环境检查）外包给 OpenSpec（开放规格）、测试文件或仓库外说明",
+        "references/questionnaire.md",
+        "references/ecosystem-detection.md",
+        "references/config-draft.md",
+        "references/validation.md",
+        "targeted dependency checks（定向依赖检查）结果",
+        "environment checks（环境检查）结果",
+        "config（配置）结构校验结果",
+    ]:
+        assert token in text
+    assert "dry run" not in text
+    assert "试运行）" not in text
+
+
 def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_config_validation() -> None:
     text = (INIT_REFERENCE_ROOT / "validation.md").read_text(encoding="utf-8")
 
@@ -922,6 +947,11 @@ def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_conf
         "verify.timeoutSeconds",
         "大于 0 的 number（数字）",
         "允许为空 string list（字符串清单）",
+        "Closed Loop（闭环）",
+        "写入前摘要必须同时列出 targeted dependency checks（定向依赖检查）结果和 environment checks（环境检查）结果",
+        "尝试创建再删除临时探针文件",
+        "纯空白字符串必须视为无效",
+        "不得把校验结果留到插件外部流程补做",
     ]:
         assert token in text
     assert "dry run" not in text
@@ -1586,6 +1616,7 @@ def test_build_and_verify_init_template_environment_issues_report_unwritable_con
     [
         ("project_is_file", "目标仓库路径不是目录"),
         ("build_dir_is_file", "配置目录路径不是目录"),
+        ("backup_outside_repo", "备份目录不在目标仓库内"),
         ("backup_dir_is_file", "备份目录路径不是目录"),
         ("backup_dir_unwritable", "备份目录不可写入"),
         ("backup_dir_cannot_create", "备份目录不可创建"),
@@ -1643,6 +1674,9 @@ def test_build_and_verify_init_template_environment_issues_cover_edge_branches(
                     "init_wizard_can_create_directory",
                     fake_can_create,
                 )
+        elif scenario == "backup_outside_repo":
+            overwrite = True
+            backup_path = tmp_path / "outside.json"
 
     issues = init_wizard_environment_issues(
         project,
@@ -1652,6 +1686,45 @@ def test_build_and_verify_init_template_environment_issues_cover_edge_branches(
 
     assert any(expected in issue["问题"] for issue in issues)
     assert all(issue["是否阻止写入"] == "不阻止" for issue in issues)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "valid"),
+    [
+        ("id", "verify.runtime", True),
+        ("id", "  ", False),
+        ("command", command_that_logs("runtime"), True),
+        ("command", "  ", False),
+        ("command", [sys.executable, "-c", "print('ok')"], True),
+        ("command", [sys.executable, "  "], False),
+        ("paths", ["src"], True),
+        ("paths", [], True),
+        ("paths", [""], False),
+        ("paths", ["  "], False),
+        ("inputs", ["README.md"], True),
+        ("inputs", [], True),
+        ("inputs", [""], False),
+        ("inputs", ["  "], False),
+    ],
+)
+def test_build_and_verify_init_template_validates_check_string_fields(
+    field: str,
+    value: Any,
+    valid: bool,
+) -> None:
+    check = {"id": "verify.runtime", "command": command_that_logs("runtime")}
+    check[field] = value
+    config = {
+        "version": 1,
+        "build": {"checks": []},
+        "verify": {"checks": [check]},
+    }
+
+    if valid:
+        assert_init_wizard_config_structure(config)
+    else:
+        with pytest.raises(AssertionError):
+            assert_init_wizard_config_structure(config)
 
 
 @pytest.mark.parametrize(
