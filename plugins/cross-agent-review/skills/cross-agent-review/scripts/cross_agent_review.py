@@ -168,17 +168,7 @@ def status_entry_is_allowed(entry: StatusEntry, allowed: set[Path]) -> bool:
 
 
 def path_is_allowed(path: Path, allowed: set[Path]) -> bool:
-    resolved = path.resolve()
-    for item in allowed:
-        if resolved == item:
-            return True
-        if item.is_dir():
-            try:
-                resolved.relative_to(item)
-                return True
-            except ValueError:
-                pass
-    return False
+    return path.resolve() in allowed
 
 
 def ensure_clean_subject(cwd: Path, head_ref: str, allowed_dirty_paths: Sequence[Path] = ()) -> None:

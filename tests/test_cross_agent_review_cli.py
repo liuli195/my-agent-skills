@@ -531,6 +531,30 @@ def test_debug_extra_file_rejects_before_dispatch(tmp_path: Path, debug_child: s
     assert not (output_dir / "review-pass.json").exists()
 
 
+@pytest.mark.parametrize(
+    "artifact_child",
+    [
+        Path("review-report.md") / "extra.txt",
+        Path("debug") / "raw" / "spec-alignment.txt" / "extra.txt",
+    ],
+)
+def test_runtime_artifact_file_path_directory_children_reject_before_dispatch(
+    tmp_path: Path, artifact_child: Path
+) -> None:
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
+    input_file = write_review_input(project, head, head)
+    output_dir = input_file.parent.parent
+    write_file(output_dir / artifact_child, "not a runtime artifact\n")
+
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+
+    assert result.returncode == 1
+    assert "dirty_worktree" in result.stdout
+    assert not (output_dir / "review-pass.json").exists()
+
+
 def test_renamed_tracked_file_into_runtime_artifacts_rejects_before_dispatch(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     init_repo(project)
