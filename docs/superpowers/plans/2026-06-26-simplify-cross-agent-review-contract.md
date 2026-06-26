@@ -401,7 +401,7 @@ Expected（预期）: PASS（通过）.
 - Modify（修改）: `plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py`
 - Modify（修改）: `plugins/cross-agent-review/skills/cross-agent-review/assets/templates/reviewer-prompt.md`
 
-- [ ] **Step 1: Write failing tests（先写失败测试）**
+- [x] **Step 1: Write failing tests（先写失败测试）**
 
 Update `make_review_args_for_module()` to return a loaded `ReviewInput`（审查输入） object, not the old `ReviewArgs`（审查参数）:
 
@@ -468,7 +468,7 @@ def test_reviewer_prompt_template_uses_limited_variables(tmp_path: Path, monkeyp
     assert "{{ changed_files }}" not in prompt
 ```
 
-- [ ] **Step 2: Run failing tests（确认失败）**
+- [x] **Step 2: Run failing tests（确认失败）**
 
 Run:
 
@@ -478,7 +478,7 @@ python -m pytest -q tests/test_cross_agent_review_cli.py::test_reviewer_prompt_r
 
 Expected（预期）: FAIL（失败） because prompt（提示词） still references manifest（清单）、changed files（变更文件） and tasks（任务）.
 
-- [ ] **Step 3: Implement prompt simplification（实现提示词简化）**
+- [x] **Step 3: Implement prompt simplification（实现提示词简化）**
 
 In `cross_agent_review.py`:
 
@@ -524,7 +524,7 @@ Do not put pass, aligned, ok, or informational observations in findings.
 Do not use severity aliases such as high, medium, low, minor, or info.
 ```
 
-- [ ] **Step 4: Run passing tests（确认通过）**
+- [x] **Step 4: Run passing tests（确认通过）**
 
 Run the same command from Step 2.
 
