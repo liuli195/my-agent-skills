@@ -48,8 +48,8 @@ None.
 
 ## Branch Handling
 
-Verification passed. Branch handling is still pending user choice.
+User selected option 3: keep the current branch as-is for later handling.
 
 ## Final Assessment
 
-All checks passed. Ready for branch handling, then archive.
+All checks passed. Branch is kept as-is and ready for archive handoff.
