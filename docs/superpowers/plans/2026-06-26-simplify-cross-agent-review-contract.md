@@ -542,7 +542,7 @@ Expected（预期）: PASS（通过）.
 - Modify（修改）: `tests/test_cross_agent_review_plugin_package.py`
 - Modify（修改）: `plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py`
 
-- [ ] **Step 1: Write failing tests（先写失败测试）**
+- [x] **Step 1: Write failing tests（先写失败测试）**
 
 Update or add tests:
 
@@ -606,7 +606,7 @@ Update old tests that use removed roles:
 - Replace `risk-review`（风险审查） timeout fixture with `implementation-correctness`（实现正确性）.
 - Delete the positive skip test for `--disable-risk-review`（关闭风险审查） and keep only the rejection test above.
 
-- [ ] **Step 2: Run failing tests（确认失败）**
+- [x] **Step 2: Run failing tests（确认失败）**
 
 Run:
 
@@ -616,7 +616,7 @@ python -m pytest -q tests/test_cross_agent_review_cli.py::test_reviewer_roles_ar
 
 Expected（预期）: FAIL（失败） because four roles and `--disable-risk-review`（关闭风险审查） still exist.
 
-- [ ] **Step 3: Implement role reduction（实现角色缩减）**
+- [x] **Step 3: Implement role reduction（实现角色缩减）**
 
 In `cross_agent_review.py`:
 
@@ -633,7 +633,7 @@ REVIEWER_ROLES = ["spec-alignment", "implementation-correctness"]
 - Remove skipped reviewer（跳过审查代理） handling from `run_review()`（运行审查）.
 - Keep `aggregate(reviewers, skipped)`（汇总结果） unchanged only if existing report rendering still needs an empty skipped list. Pass `[]` from `run_review()`（运行审查）.
 
-- [ ] **Step 4: Run passing tests（确认通过）**
+- [x] **Step 4: Run passing tests（确认通过）**
 
 Run the same command from Step 2.
 
