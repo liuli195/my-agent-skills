@@ -161,9 +161,23 @@ def status_paths(cwd: Path) -> set[Path]:
     return paths
 
 
+def path_is_allowed(path: Path, allowed: set[Path]) -> bool:
+    resolved = path.resolve()
+    for item in allowed:
+        if resolved == item:
+            return True
+        if item.is_dir():
+            try:
+                resolved.relative_to(item)
+                return True
+            except ValueError:
+                pass
+    return False
+
+
 def ensure_clean_subject(cwd: Path, head_ref: str, allowed_dirty_paths: Sequence[Path] = ()) -> None:
     allowed = {path.resolve() for path in allowed_dirty_paths}
-    dirty_paths = status_paths(cwd) - allowed
+    dirty_paths = {path for path in status_paths(cwd) if not path_is_allowed(path, allowed)}
     if dirty_paths:
         raise ValueError("dirty_worktree")
     current_head = git_output(["rev-parse", "HEAD"], cwd)
@@ -178,10 +192,32 @@ def resolve_context_path(raw_path: str) -> Path:
     return Path.cwd() / path
 
 
+def validate_input_file_location(input_file: Path) -> None:
+    if input_file.name != "review-input.json" or input_file.parent.name != "prepared-inputs":
+        raise ValueError(f"invalid_input_file_location: {input_file}")
+
+
+def validate_prepared_inputs_dir(input_file: Path) -> None:
+    expected = input_file.resolve()
+    regular_files = sorted(path.resolve() for path in input_file.parent.iterdir() if path.is_file())
+    if regular_files != [expected]:
+        unexpected = next((path for path in regular_files if path != expected), input_file.parent)
+        raise ValueError(f"unexpected_prepared_input: {unexpected}")
+
+
+def validate_base_ref(cwd: Path, base_ref: str) -> None:
+    try:
+        git_output(["rev-parse", "--verify", f"{base_ref}^{{commit}}"], cwd)
+    except ValueError as exc:
+        raise ValueError(f"base_ref_mismatch: {base_ref}") from exc
+
+
 def load_review_input(args: argparse.Namespace) -> ReviewInput:
     input_file = args.input_file if args.input_file.is_absolute() else Path.cwd() / args.input_file
     if not input_file.is_file():
         raise ValueError(f"missing_file: {input_file}")
+    validate_input_file_location(input_file)
+    validate_prepared_inputs_dir(input_file)
     payload = json.loads(input_file.read_text(encoding="utf-8"))
     for field in REQUIRED_INPUT_FIELDS:
         if payload.get(field) is None:
@@ -900,6 +936,10 @@ def allowed_input_paths(review_args: ReviewInput) -> list[Path]:
     ]
 
 
+def runtime_allowed_paths(review_input: ReviewInput) -> list[Path]:
+    return [review_input.input_file, review_input.output_dir]
+
+
 def output_artifact_paths(review_args: ReviewInput) -> list[Path]:
     out_dir = output_dir_for(review_args)
     paths = [input_manifest_path(review_args)]
@@ -919,18 +959,7 @@ def write_outputs(review_args: ReviewInput, summary: dict, extra_allowed_paths: 
     report_path.write_text(report_text, encoding="utf-8")
     write_json(results_path, summary)
     if summary["blocking_findings"] == 0:
-        ensure_clean_subject(
-            Path.cwd(),
-            review_args.head_ref,
-            [
-                *extra_allowed_paths,
-                *allowed_input_paths(review_args),
-                *output_artifact_paths(review_args),
-                report_path,
-                results_path,
-                pass_path,
-            ],
-        )
+        ensure_clean_subject(Path.cwd(), review_args.head_ref, runtime_allowed_paths(review_args))
         report_hash = hashlib.sha256(report_path.read_bytes()).hexdigest()
         write_json(
             pass_path,
@@ -952,26 +981,19 @@ def write_outputs(review_args: ReviewInput, summary: dict, extra_allowed_paths: 
 def run_review(args: argparse.Namespace) -> int:
     try:
         review_args = load_review_input(args)
-        original_input_paths = allowed_input_paths(review_args)
-        ensure_clean_subject(Path.cwd(), review_args.head_ref, original_input_paths)
+        validate_base_ref(Path.cwd(), review_args.base_ref)
+        allowed_paths = runtime_allowed_paths(review_args)
+        ensure_clean_subject(Path.cwd(), review_args.head_ref, allowed_paths)
         review_args = archive_input_snapshots(review_args)
         sdk_python = resolve_sdk_python(
             review_args.sdk_python,
             require_real_sdk=review_args.fake_reviewer_results is None or review_args.sdk_python is not None,
         )
-        ensure_clean_subject(
-            Path.cwd(),
-            review_args.head_ref,
-            [
-                *original_input_paths,
-                *allowed_input_paths(review_args),
-                *output_artifact_paths(review_args),
-            ],
-        )
+        ensure_clean_subject(Path.cwd(), review_args.head_ref, allowed_paths)
         reviewers = dispatch_reviewers(review_args, sdk_python)
         skipped = []
         summary = aggregate(reviewers, skipped)
-        status = write_outputs(review_args, summary, original_input_paths)
+        status = write_outputs(review_args, summary)
     except (ValueError, json.JSONDecodeError) as exc:
         print("status: failed")
         print(f"error: {exc}")

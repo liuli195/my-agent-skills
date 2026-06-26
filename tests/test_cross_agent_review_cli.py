@@ -238,6 +238,87 @@ def test_invalid_mode_fails(tmp_path: Path) -> None:
     assert "invalid_mode: wide" in result.stdout
 
 
+def test_prepared_inputs_rejects_extra_regular_file(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    head = init_repo(project)
+    input_file = write_review_input(project, head, head)
+    write_file(input_file.parent / "plan.md", "old snapshot\n")
+
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+
+    assert result.returncode == 1
+    assert "unexpected_prepared_input" in result.stdout
+    assert "plan.md" in result.stdout
+
+
+def test_input_file_must_be_named_review_input_json_under_prepared_inputs(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    head = init_repo(project)
+    input_file = write_review_input(project, head, head)
+    wrong_file = input_file.parent / "input.json"
+    wrong_file.write_text(input_file.read_text(encoding="utf-8"), encoding="utf-8")
+    input_file.unlink()
+
+    result = run("run", "--input-file", str(wrong_file), "--fake-reviewer-results", "[]", cwd=project)
+
+    assert result.returncode == 1
+    assert "invalid_input_file_location" in result.stdout
+
+
+def test_invalid_base_ref_fails_before_dispatch(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    head = init_repo(project)
+    input_file = write_review_input(project, "0" * 40, head)
+
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+
+    assert result.returncode == 1
+    assert "base_ref_mismatch" in result.stdout
+
+
+def test_dirty_worktree_outside_runtime_artifacts_rejects_before_dispatch(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    head = init_repo(project)
+    input_file = write_review_input(project, head, head)
+    write_file(project / "dirty.txt", "dirty\n")
+
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+
+    assert result.returncode == 1
+    assert "dirty_worktree" in result.stdout
+    assert not (input_file.parent.parent / "review-pass.json").exists()
+
+
+def test_clean_worktree_checks_reuse_runtime_allowlist(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
+    project = tmp_path / "repo"
+    head = init_repo(project)
+    input_file = write_review_input(project, head, head)
+    parsed = module.build_parser().parse_args(
+        [
+            "run",
+            "--input-file",
+            str(input_file),
+            "--fake-reviewer-results",
+            "[]",
+        ]
+    )
+    calls = []
+
+    def fake_ensure_clean_subject(cwd, head_ref, allowed_dirty_paths=()):
+        calls.append([Path(path).resolve() for path in allowed_dirty_paths])
+
+    monkeypatch.setattr(module, "ensure_clean_subject", fake_ensure_clean_subject)
+    monkeypatch.chdir(project)
+
+    assert module.run_review(parsed) == 0
+
+    assert len(calls) == 3
+    assert calls[0] == calls[1] == calls[2]
+    assert input_file.resolve() in calls[0]
+    assert input_file.parent.parent.resolve() in calls[0]
+
+
 def test_diff_file_argument_is_not_required(tmp_path: Path) -> None:
     head = init_repo(tmp_path / "repo")
 
