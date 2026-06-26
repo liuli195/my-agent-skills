@@ -157,6 +157,9 @@ def status_paths(cwd: Path) -> set[Path]:
         path_text = entry[3:].decode("utf-8", errors="surrogateescape")
         paths.add((cwd / path_text).resolve())
         if entry[:1] in {b"R", b"C"} or entry[1:2] in {b"R", b"C"}:
+            if index < len(entries) and entries[index]:
+                old_path_text = entries[index].decode("utf-8", errors="surrogateescape")
+                paths.add((cwd / old_path_text).resolve())
             index += 1
     return paths
 
