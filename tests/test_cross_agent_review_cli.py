@@ -77,29 +77,6 @@ def test_missing_required_args_fail() -> None:
     assert "error:" in result.stderr
 
 
-def test_missing_input_file_fails(tmp_path: Path) -> None:
-    result = run(
-        "run",
-        "--change",
-        "demo",
-        "--base-ref",
-        "base",
-        "--head-ref",
-        "head",
-        "--spec-file",
-        str(tmp_path / "missing-spec.md"),
-        "--design-file",
-        str(write_file(tmp_path / "design.md")),
-        "--tasks-file",
-        str(write_file(tmp_path / "tasks.md")),
-        "--fake-reviewer-results",
-        "[]",
-    )
-
-    assert result.returncode == 1
-    assert "missing_file" in result.stdout
-
-
 def git(project: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args],
@@ -158,26 +135,107 @@ def init_repo(project: Path) -> str:
     return git(project, "rev-parse", "HEAD")
 
 
-def review_args(project: Path, head: str, output_dir: Path) -> list[str]:
+def write_review_input(
+    project: Path,
+    base: str,
+    head: str,
+    *,
+    mode: str = "convergence",
+    change: str = "demo",
+    payload_overrides: dict | None = None,
+) -> Path:
+    output_dir = project / ".local" / "cross-agent-review" / change / head[:12]
+    prepared_dir = output_dir / "prepared-inputs"
+    spec_file = write_file(project / "spec.md", "spec body\n")
+    design_file = write_file(project / "design.md", "design body\n")
+    plan_file = write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
+    payload = {
+        "change": change,
+        "mode": mode,
+        "base_ref": base,
+        "head_ref": head,
+        "spec_file": str(spec_file.relative_to(project)),
+        "design_file": str(design_file.relative_to(project)),
+        "plan_file": str(plan_file.relative_to(project)),
+    }
+    if payload_overrides:
+        payload.update(payload_overrides)
+    input_file = prepared_dir / "review-input.json"
+    write_file(input_file, json.dumps(payload, ensure_ascii=False) + "\n")
+    return input_file
+
+
+def review_args(project: Path, head: str, *, mode: str = "convergence") -> list[str]:
     return [
         "run",
-        "--change",
-        "demo",
-        "--base-ref",
-        head,
-        "--head-ref",
-        head,
-        "--spec-file",
-        str(write_file(project / "spec.md")),
-        "--design-file",
-        str(write_file(project / "design.md")),
-        "--tasks-file",
-        str(write_file(project / "tasks.md")),
-        "--output-dir",
-        str(output_dir),
+        "--input-file",
+        str(write_review_input(project, head, head, mode=mode)),
         "--fake-reviewer-results",
         "[]",
     ]
+
+
+def test_run_accepts_single_review_input_file(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    head = init_repo(project)
+
+    result = run(*review_args(project, head), cwd=project)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: pass" in result.stdout
+    assert (project / ".local" / "cross-agent-review" / "demo" / head[:12] / "review-report.md").is_file()
+
+
+def test_missing_input_file_fails(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    init_repo(project)
+
+    result = run("run", "--input-file", str(project / ".local" / "missing" / "review-input.json"), cwd=project)
+
+    assert result.returncode == 1
+    assert "missing_file" in result.stdout
+
+
+def test_missing_required_review_input_field_fails(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    head = init_repo(project)
+    input_file = write_review_input(project, head, head, payload_overrides={"plan_file": None})
+    payload = json.loads(input_file.read_text(encoding="utf-8"))
+    del payload["plan_file"]
+    input_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+
+    assert result.returncode == 1
+    assert "missing_field: plan_file" in result.stdout
+
+
+def test_missing_referenced_plan_file_fails(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    head = init_repo(project)
+    input_file = write_review_input(
+        project,
+        head,
+        head,
+        payload_overrides={"plan_file": "docs/superpowers/plans/missing.md"},
+    )
+
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+
+    assert result.returncode == 1
+    assert "missing_file" in result.stdout
+    assert "missing.md" in result.stdout
+
+
+def test_invalid_mode_fails(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    head = init_repo(project)
+    input_file = write_review_input(project, head, head, mode="wide")
+
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+
+    assert result.returncode == 1
+    assert "invalid_mode: wide" in result.stdout
 
 
 def test_diff_file_argument_is_not_required(tmp_path: Path) -> None:
