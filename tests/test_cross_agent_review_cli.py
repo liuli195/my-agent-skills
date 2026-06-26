@@ -12,6 +12,8 @@ import time
 import types
 from pathlib import Path
 
+import pytest
+
 from tests.support.git_templates import copy_template
 
 
@@ -195,6 +197,23 @@ def test_run_accepts_single_review_input_file(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: pass" in result.stdout
     assert (project / ".local" / "cross-agent-review" / "demo" / head[:12] / "review-report.md").is_file()
+
+
+@pytest.mark.parametrize("removed_role", ["risk-review", "tests-and-edge-cases"])
+def test_fake_reviewer_results_reject_removed_roles(tmp_path: Path, removed_role: str) -> None:
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
+    input_file = write_review_input(project, head, head)
+    output_dir = input_file.parent.parent
+    fake = json.dumps([{"role": removed_role, "status": "completed", "findings": []}])
+
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", fake, cwd=project)
+
+    assert result.returncode == 1
+    assert "invalid_fake_reviewer_role" in result.stdout
+    assert removed_role in result.stdout
+    assert not (output_dir / "review-pass.json").exists()
 
 
 def test_missing_input_file_fails(tmp_path: Path) -> None:

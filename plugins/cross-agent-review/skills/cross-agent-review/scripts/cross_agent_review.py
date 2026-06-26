@@ -340,6 +340,8 @@ def load_fake_reviewer_results(raw: str | None) -> list[dict]:
     for item in data:
         if not isinstance(item, dict) or not required_fields <= item.keys():
             raise ValueError("invalid_fake_reviewer_results")
+        if item["role"] not in REVIEWER_ROLES:
+            raise ValueError(f"invalid_fake_reviewer_role: {item['role']}")
     return data
 
 
