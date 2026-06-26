@@ -793,7 +793,7 @@ Expected（预期）: PASS（通过）.
 - Modify（修改）: `tests/test_cross_agent_review_cli.py`
 - Modify（修改）: `plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py`
 
-- [ ] **Step 1: Write failing tests（先写失败测试）**
+- [x] **Step 1: Write failing tests（先写失败测试）**
 
 Add mode-focused tests:
 
@@ -854,7 +854,7 @@ def test_review_subject_commands_use_input_base_and_head_refs(tmp_path: Path) ->
     assert commands["changed_files_command"] == f"git diff --name-status --find-renames --find-copies-harder {base}...{head}"
 ```
 
-- [ ] **Step 2: Run failing tests（确认失败）**
+- [x] **Step 2: Run failing tests（确认失败）**
 
 Run:
 
@@ -864,7 +864,7 @@ python -m pytest -q tests/test_cross_agent_review_cli.py::test_convergence_pass_
 
 Expected（预期）: FAIL（失败） because `review-pass.json`（通过标记） does not include `mode`（模式） and old helper fields still use `tasks_file`（任务文件）.
 
-- [ ] **Step 3: Implement mode recording（实现模式记录）**
+- [x] **Step 3: Implement mode recording（实现模式记录）**
 
 In `cross_agent_review.py`:
 
@@ -875,7 +875,7 @@ In `cross_agent_review.py`:
   - script does not change range by mode
   - reviewer prompt（审查提示词） tells reviewer（审查代理） to use `base_ref...head_ref` from input
 
-- [ ] **Step 4: Run passing tests（确认通过）**
+- [x] **Step 4: Run passing tests（确认通过）**
 
 Run the same command from Step 2.
 
