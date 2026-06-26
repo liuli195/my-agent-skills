@@ -649,7 +649,7 @@ Expected（预期）: PASS（通过）.
 - Modify（修改）: `tests/test_cross_agent_review_cli.py`
 - Modify（修改）: `plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py`
 
-- [ ] **Step 1: Write failing tests（先写失败测试）**
+- [x] **Step 1: Write failing tests（先写失败测试）**
 
 Add tests:
 
@@ -739,7 +739,7 @@ def test_debug_writes_input_prompts_and_raw_under_debug(tmp_path: Path, monkeypa
     }
 ```
 
-- [ ] **Step 2: Run failing tests（确认失败）**
+- [x] **Step 2: Run failing tests（确认失败）**
 
 Run:
 
@@ -749,7 +749,7 @@ python -m pytest -q tests/test_cross_agent_review_cli.py::test_default_outputs_a
 
 Expected（预期）: FAIL（失败） because default output still writes `review-results.json`（结构化结果）、`inputs/manifest.json`（输入清单）、`prompts/`（提示词目录） and `raw/`（原始输出目录）.
 
-- [ ] **Step 3: Implement output split（实现输出拆分）**
+- [x] **Step 3: Implement output split（实现输出拆分）**
 
 In `cross_agent_review.py`:
 
@@ -777,7 +777,7 @@ return review_input.output_dir / "debug"
   - when debug（排障） is enabled, read partial raw（原始输出） from `debug/raw/`
   - when debug（排障） is disabled, synthesize failures for both roles without reading files
 
-- [ ] **Step 4: Run passing tests（确认通过）**
+- [x] **Step 4: Run passing tests（确认通过）**
 
 Run the same command from Step 2.
 
