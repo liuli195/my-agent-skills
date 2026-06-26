@@ -241,7 +241,7 @@ Expected（预期）: PASS（通过） for the five new tests.
 - Modify（修改）: `tests/test_cross_agent_review_cli.py`
 - Modify（修改）: `plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py`
 
-- [ ] **Step 1: Write failing tests（先写失败测试）**
+- [x] **Step 1: Write failing tests（先写失败测试）**
 
 Add tests:
 
@@ -325,7 +325,7 @@ def test_clean_worktree_checks_reuse_runtime_allowlist(tmp_path: Path, monkeypat
     assert input_file.parent.parent.resolve() in calls[0]
 ```
 
-- [ ] **Step 2: Run failing tests（确认失败）**
+- [x] **Step 2: Run failing tests（确认失败）**
 
 Run:
 
@@ -335,7 +335,7 @@ python -m pytest -q tests/test_cross_agent_review_cli.py::test_prepared_inputs_r
 
 Expected（预期）: FAIL（失败） because prepared input（预备输入） and shared allowlist（允许清单） checks are not implemented.
 
-- [ ] **Step 3: Implement validation（实现校验）**
+- [x] **Step 3: Implement validation（实现校验）**
 
 In `cross_agent_review.py`:
 
@@ -383,7 +383,7 @@ Raise `ValueError(f"base_ref_mismatch: {base_ref}")` when Git（版本控制） 
   - immediately before reviewer（审查代理） dispatch
   - immediately before writing `review-pass.json`（通过标记）
 
-- [ ] **Step 4: Run passing tests（确认通过）**
+- [x] **Step 4: Run passing tests（确认通过）**
 
 Run the same command from Step 2.
 
