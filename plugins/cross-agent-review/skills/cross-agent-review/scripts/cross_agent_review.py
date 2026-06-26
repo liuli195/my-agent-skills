@@ -947,6 +947,7 @@ def write_outputs(review_args: ReviewInput, summary: dict, extra_allowed_paths: 
             {
                 "status": "pass",
                 "change": review_args.change,
+                "mode": review_args.mode,
                 "base_ref": review_args.base_ref,
                 "head_ref": review_args.head_ref,
                 "blocking_findings": 0,

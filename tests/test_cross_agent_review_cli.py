@@ -226,6 +226,76 @@ def test_default_outputs_are_report_and_pass_marker_only(tmp_path: Path) -> None
     assert not (output_dir / "debug").exists()
 
 
+def test_convergence_pass_marker_records_mode_and_refs(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    base = init_repo(project)
+    write_file(project / "app.txt", "two\n")
+    write_file(project / "spec.md", "spec body\n")
+    write_file(project / "design.md", "design body\n")
+    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
+    git(project, "add", "app.txt", "spec.md", "design.md", "docs/superpowers/plans/demo.md")
+    git(project, "commit", "-m", "feature")
+    head = git(project, "rev-parse", "HEAD")
+    input_file = write_review_input(project, base, head, mode="convergence")
+
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    marker = json.loads((input_file.parent.parent / "review-pass.json").read_text(encoding="utf-8"))
+    assert marker["mode"] == "convergence"
+    assert marker["base_ref"] == base
+    assert marker["head_ref"] == head
+
+
+def test_endless_pass_marker_records_mode_and_refs(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    base = init_repo(project)
+    write_file(project / "app.txt", "two\n")
+    write_file(project / "spec.md", "spec body\n")
+    write_file(project / "design.md", "design body\n")
+    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
+    git(project, "add", "app.txt", "spec.md", "design.md", "docs/superpowers/plans/demo.md")
+    git(project, "commit", "-m", "feature")
+    head = git(project, "rev-parse", "HEAD")
+    input_file = write_review_input(project, base, head, mode="endless")
+
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    marker = json.loads((input_file.parent.parent / "review-pass.json").read_text(encoding="utf-8"))
+    assert marker["mode"] == "endless"
+    assert marker["base_ref"] == base
+    assert marker["head_ref"] == head
+
+
+def test_review_subject_commands_use_input_base_and_head_refs(tmp_path: Path) -> None:
+    module = load_script_module()
+    project = tmp_path / "repo"
+    base = init_repo(project)
+    write_file(project / "app.txt", "two\n")
+    write_file(project / "spec.md", "spec body\n")
+    write_file(project / "design.md", "design body\n")
+    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
+    git(project, "add", "app.txt", "spec.md", "design.md", "docs/superpowers/plans/demo.md")
+    git(project, "commit", "-m", "feature")
+    head = git(project, "rev-parse", "HEAD")
+    input_file = write_review_input(project, base, head, mode="endless")
+    cwd = Path.cwd()
+    try:
+        os.chdir(project)
+        review_input = module.load_review_input(
+            types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None, fake_reviewer_results=None)
+        )
+    finally:
+        os.chdir(cwd)
+
+    commands = module.review_subject_commands(review_input)
+
+    assert commands["diff_command"] == f"git diff {base}...{head}"
+    assert commands["commit_list_command"] == f"git log {base}..{head} --oneline"
+    assert commands["changed_files_command"] == f"git diff --name-status --find-renames --find-copies-harder {base}...{head}"
+
+
 def test_blocking_findings_write_report_without_results_or_pass_marker(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     init_repo(project)
