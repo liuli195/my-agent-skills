@@ -789,6 +789,35 @@ def test_build_and_verify_init_ecosystem_detection_covers_node_python_and_fallba
     assert "试运行）" not in text
 
 
+def test_build_and_verify_init_references_limit_pyproject_to_detection_signal() -> None:
+    references = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in INIT_REFERENCE_ROOT.glob("*.md")
+    }
+    ecosystem_lines = [
+        line
+        for line in references["ecosystem-detection.md"].splitlines()
+        if "pyproject.toml" in line
+    ]
+    config_draft_lines = [
+        line
+        for line in references["config-draft.md"].splitlines()
+        if "pyproject.toml" in line
+    ]
+
+    assert "- `pyproject.toml`（项目配置）" in ecosystem_lines
+    assert ecosystem_lines
+    assert all("command（命令）" not in line for line in ecosystem_lines)
+    assert config_draft_lines
+    assert all("command（命令）" not in line for line in config_draft_lines)
+    assert all(
+        "paths（受影响路径）" in line or "inputs（缓存输入）" in line
+        for line in config_draft_lines
+    )
+    assert "pyproject.toml" not in references["questionnaire.md"]
+    assert "pyproject.toml" not in references["validation.md"]
+
+
 def test_build_and_verify_init_template_node_lockfile_conflict_requires_user_choice(
     tmp_path: Path,
 ) -> None:
@@ -1549,6 +1578,79 @@ def test_build_and_verify_init_template_environment_issues_report_unwritable_con
     )
 
     assert any("配置目录不可写入" in issue["问题"] for issue in issues)
+    assert all(issue["是否阻止写入"] == "不阻止" for issue in issues)
+
+
+@pytest.mark.parametrize(
+    ("scenario", "expected"),
+    [
+        ("project_is_file", "目标仓库路径不是目录"),
+        ("build_dir_is_file", "配置目录路径不是目录"),
+        ("backup_dir_is_file", "备份目录路径不是目录"),
+        ("backup_dir_unwritable", "备份目录不可写入"),
+        ("backup_dir_cannot_create", "备份目录不可创建"),
+    ],
+)
+def test_build_and_verify_init_template_environment_issues_cover_edge_branches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: str,
+    expected: str,
+) -> None:
+    project = tmp_path / "project"
+    overwrite = False
+    backup_path = None
+
+    if scenario == "project_is_file":
+        project.write_text("not a directory\n", encoding="utf-8")
+    else:
+        project.mkdir()
+        build_dir = project / ".build-and-verify"
+        if scenario == "build_dir_is_file":
+            build_dir.write_text("not a directory\n", encoding="utf-8")
+        else:
+            build_dir.mkdir()
+        if scenario.startswith("backup_dir_"):
+            overwrite = True
+            backup_path = Path(".build-and-verify/backups/config.json")
+            backup_dir = project / ".build-and-verify" / "backups"
+            if scenario == "backup_dir_is_file":
+                backup_dir.write_text("not a directory\n", encoding="utf-8")
+            elif scenario == "backup_dir_unwritable":
+                backup_dir.mkdir()
+                original_can_write = init_wizard_can_write_directory
+
+                def fake_can_write(directory: Path) -> bool:
+                    if directory == backup_dir:
+                        return False
+                    return original_can_write(directory)
+
+                monkeypatch.setattr(
+                    sys.modules[__name__],
+                    "init_wizard_can_write_directory",
+                    fake_can_write,
+                )
+            elif scenario == "backup_dir_cannot_create":
+                original_can_create = init_wizard_can_create_directory
+
+                def fake_can_create(directory: Path, boundary: Path) -> bool:
+                    if directory == backup_dir:
+                        return False
+                    return original_can_create(directory, boundary)
+
+                monkeypatch.setattr(
+                    sys.modules[__name__],
+                    "init_wizard_can_create_directory",
+                    fake_can_create,
+                )
+
+    issues = init_wizard_environment_issues(
+        project,
+        overwrite=overwrite,
+        backup_path=backup_path,
+    )
+
+    assert any(expected in issue["问题"] for issue in issues)
     assert all(issue["是否阻止写入"] == "不阻止" for issue in issues)
 
 
