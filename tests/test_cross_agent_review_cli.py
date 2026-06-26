@@ -74,7 +74,7 @@ def test_cross_agent_review_template_cache_key_includes_script_contents() -> Non
 
 
 def test_missing_required_args_fail() -> None:
-    result = run("run", "--change", "demo")
+    result = run("run")
 
     assert result.returncode == 2
     assert "error:" in result.stderr
@@ -177,14 +177,22 @@ def commit_review_context(project: Path) -> str:
     return git(project, "rev-parse", "HEAD")
 
 
-def review_args(project: Path, head: str, *, mode: str = "convergence") -> list[str]:
-    return [
+def review_args(
+    project: Path,
+    head: str,
+    *,
+    base: str | None = None,
+    mode: str = "convergence",
+    fake_reviewer_results: str | None = "[]",
+) -> list[str]:
+    args = [
         "run",
         "--input-file",
-        str(write_review_input(project, head, head, mode=mode)),
-        "--fake-reviewer-results",
-        "[]",
+        str(write_review_input(project, base or head, head, mode=mode)),
     ]
+    if fake_reviewer_results is not None:
+        args.extend(["--fake-reviewer-results", fake_reviewer_results])
+    return args
 
 
 def test_run_accepts_single_review_input_file(tmp_path: Path) -> None:
@@ -521,9 +529,11 @@ def test_clean_worktree_checks_reuse_runtime_allowlist(tmp_path: Path, monkeypat
 
 
 def test_diff_file_argument_is_not_required(tmp_path: Path) -> None:
-    head = init_repo(tmp_path / "repo")
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
 
-    result = run(*review_args(tmp_path / "repo", head, tmp_path / "out"), cwd=tmp_path / "repo")
+    result = run(*review_args(project, head), cwd=project)
 
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -627,37 +637,44 @@ def test_spec_alignment_role_focus_uses_plan_contract_not_tasks(tmp_path: Path) 
 
 
 def test_dirty_worktree_rejects_before_dispatch(tmp_path: Path) -> None:
-    head = init_repo(tmp_path / "repo")
-    write_file(tmp_path / "repo" / "dirty.txt", "dirty\n")
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
+    write_file(project / "dirty.txt", "dirty\n")
 
-    result = run(*review_args(tmp_path / "repo", head, tmp_path / "out"), cwd=tmp_path / "repo")
+    result = run(*review_args(project, head), cwd=project)
 
     assert result.returncode == 1
     assert "dirty_worktree" in result.stdout
-    assert not (tmp_path / "out" / "review-pass.json").exists()
+    assert not (project / ".local" / "cross-agent-review" / "demo" / head[:12] / "review-pass.json").exists()
 
 
-def test_untracked_input_files_in_space_directory_are_allowed(tmp_path: Path) -> None:
+def test_input_files_in_space_directory_are_allowed(tmp_path: Path) -> None:
     project = tmp_path / "repo"
-    head = init_repo(project)
+    init_repo(project)
+    commit_review_context(project)
     input_dir = project / "review inputs"
+    spec_file = write_file(input_dir / "spec file.md")
+    design_file = write_file(input_dir / "design file.md")
+    plan_file = write_file(input_dir / "plan file.md")
+    git(project, "add", "review inputs")
+    git(project, "commit", "-m", "add review inputs")
+    head = git(project, "rev-parse", "HEAD")
+    input_file = write_review_input(
+        project,
+        head,
+        head,
+        payload_overrides={
+            "spec_file": str(spec_file.relative_to(project)),
+            "design_file": str(design_file.relative_to(project)),
+            "plan_file": str(plan_file.relative_to(project)),
+        },
+    )
 
     result = run(
         "run",
-        "--change",
-        "demo",
-        "--base-ref",
-        head,
-        "--head-ref",
-        head,
-        "--spec-file",
-        str(write_file(input_dir / "spec file.md")),
-        "--design-file",
-        str(write_file(input_dir / "design file.md")),
-        "--tasks-file",
-        str(write_file(input_dir / "tasks file.md")),
-        "--output-dir",
-        str(tmp_path / "out"),
+        "--input-file",
+        str(input_file),
         "--fake-reviewer-results",
         "[]",
         cwd=project,
@@ -668,9 +685,11 @@ def test_untracked_input_files_in_space_directory_are_allowed(tmp_path: Path) ->
 
 
 def test_head_mismatch_rejects_before_dispatch(tmp_path: Path) -> None:
-    head = init_repo(tmp_path / "repo")
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
 
-    result = run(*review_args(tmp_path / "repo", "0" * 40, tmp_path / "out"), cwd=tmp_path / "repo")
+    result = run(*review_args(project, "0" * 40, base=head), cwd=project)
 
     assert result.returncode == 1
     assert "head_ref_mismatch" in result.stdout
@@ -678,14 +697,16 @@ def test_head_mismatch_rejects_before_dispatch(tmp_path: Path) -> None:
 
 
 def test_sdk_missing_reports_clear_error(tmp_path: Path) -> None:
-    head = init_repo(tmp_path / "repo")
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
     missing_python = tmp_path / "missing-python.exe"
 
     result = run(
-        *review_args(tmp_path / "repo", head, tmp_path / "out"),
+        *review_args(project, head),
         "--sdk-python",
         str(missing_python),
-        cwd=tmp_path / "repo",
+        cwd=project,
     )
 
     assert result.returncode == 1
@@ -693,15 +714,17 @@ def test_sdk_missing_reports_clear_error(tmp_path: Path) -> None:
 
 
 def test_sdk_python_directory_reports_clear_error_without_traceback(tmp_path: Path) -> None:
-    head = init_repo(tmp_path / "repo")
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
     sdk_dir = tmp_path / "not-python"
     sdk_dir.mkdir()
 
     result = run(
-        *review_args(tmp_path / "repo", head, tmp_path / "out"),
+        *review_args(project, head),
         "--sdk-python",
         str(sdk_dir),
-        cwd=tmp_path / "repo",
+        cwd=project,
     )
 
     assert result.returncode == 1
@@ -710,14 +733,16 @@ def test_sdk_python_directory_reports_clear_error_without_traceback(tmp_path: Pa
 
 
 def test_sdk_python_invalid_file_reports_clear_error_without_traceback(tmp_path: Path) -> None:
-    head = init_repo(tmp_path / "repo")
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
     invalid_python = write_file(tmp_path / "not-python.exe", "not a real executable\n")
 
     result = run(
-        *review_args(tmp_path / "repo", head, tmp_path / "out"),
+        *review_args(project, head),
         "--sdk-python",
         str(invalid_python),
-        cwd=tmp_path / "repo",
+        cwd=project,
     )
 
     assert result.returncode == 1
@@ -726,89 +751,31 @@ def test_sdk_python_invalid_file_reports_clear_error_without_traceback(tmp_path:
 
 
 def test_fake_reviewer_results_bypass_real_sdk_for_tests(tmp_path: Path) -> None:
-    head = init_repo(tmp_path / "repo")
-
-    result = run(*review_args(tmp_path / "repo", head, tmp_path / "out"), cwd=tmp_path / "repo")
-
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_run_archives_context_snapshots_and_git_manifest_under_output_dir(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     init_repo(project)
-    write_file(project / "source.txt", "source body\n")
-    git(project, "add", "source.txt")
-    git(project, "commit", "-m", "add source")
-    base = git(project, "rev-parse", "HEAD")
-    write_file(project / "app.txt", "two\n")
-    write_file(project / "new file.txt", "new\n")
-    shutil.copyfile(project / "source.txt", project / "copy.txt")
-    git(project, "add", "app.txt", "copy.txt", "new file.txt")
-    git(project, "commit", "-m", "change app")
-    head = git(project, "rev-parse", "HEAD")
-    input_dir = project / "review inputs"
-    output_dir = tmp_path / "out"
-    spec_file = write_file(input_dir / "spec file.md", "spec body\n")
-    design_file = write_file(input_dir / "design file.md", "design body\n")
-    tasks_file = write_file(input_dir / "tasks file.md", "tasks body\n")
+    head = commit_review_context(project)
 
-    result = run(
-        "run",
-        "--change",
-        "demo",
-        "--base-ref",
-        base,
-        "--head-ref",
-        head,
-        "--spec-file",
-        str(spec_file),
-        "--design-file",
-        str(design_file),
-        "--tasks-file",
-        str(tasks_file),
-        "--output-dir",
-        str(output_dir),
-        "--fake-reviewer-results",
-        "[]",
-        cwd=project,
-    )
+    result = run(*review_args(project, head), cwd=project)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    inputs_dir = output_dir / "inputs"
-    assert {path.name for path in inputs_dir.iterdir()} == {
-        "manifest.json",
-        "spec.md",
-        "design.md",
-        "tasks.md",
-    }
-    assert not (inputs_dir / "diff.patch").exists()
-    assert (inputs_dir / "spec.md").read_text(encoding="utf-8") == "spec body\n"
-    assert (inputs_dir / "design.md").read_text(encoding="utf-8") == "design body\n"
-    assert (inputs_dir / "tasks.md").read_text(encoding="utf-8") == "tasks body\n"
-    manifest = json.loads((output_dir / "inputs" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["change"] == "demo"
-    assert manifest["base_ref"] == base
-    assert manifest["head_ref"] == head
-    assert manifest["review_subject"] == {
-        "diff_command": f"git diff {base}...{head}",
-        "commit_list_command": f"git log {base}..{head} --oneline",
-        "changed_files_command": (
-            f"git diff --name-status --find-renames --find-copies-harder {base}...{head}"
-        ),
-        "path_diff_command_template": f"git diff {base}...{head} -- <path>",
-        "merge_base": base,
-    }
-    assert manifest["commits"] == [{"sha": head[:7], "summary": "change app"}]
-    assert manifest["changed_files"] == [
-        {"path": "app.txt", "status": "modified"},
-        {"path": "copy.txt", "status": "copied", "previous_path": "source.txt"},
-        {"path": "new file.txt", "status": "added"},
-    ]
-    assert set(manifest["inputs"]) == {"spec", "design", "tasks"}
-    assert set(manifest["inputs"]["spec"]) == {"path", "bytes", "sha256"}
-    assert set(manifest["inputs"]["design"]) == {"path", "bytes", "sha256"}
-    assert set(manifest["inputs"]["tasks"]) == {"path", "bytes", "sha256"}
-    assert not (inputs_dir / "tests.txt").exists()
+
+
+def test_default_run_does_not_archive_context_snapshots_or_git_manifest(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
+    input_file = write_review_input(project, head, head)
+    output_dir = input_file.parent.parent
+
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (output_dir / "review-report.md").is_file()
+    assert (output_dir / "review-pass.json").is_file()
+    assert not (output_dir / "review-results.json").exists()
+    assert not (output_dir / "inputs").exists()
+    assert not (output_dir / "prompts").exists()
+    assert not (output_dir / "raw").exists()
 
 
 def test_changed_file_entries_from_git_reports_file_statuses(tmp_path: Path) -> None:
@@ -838,146 +805,114 @@ def test_changed_file_entries_from_git_reports_file_statuses(tmp_path: Path) -> 
     ]
 
 
-def test_run_accepts_legacy_tests_file_argument_without_snapshotting_it(tmp_path: Path) -> None:
+def test_run_rejects_legacy_tests_file_argument(tmp_path: Path) -> None:
     project = tmp_path / "repo"
-    head = init_repo(project)
+    init_repo(project)
+    head = commit_review_context(project)
     legacy_tests_file = write_file(project / "legacy-tests.txt", "legacy tests\n")
-    output_dir = tmp_path / "out"
+    output_dir = project / ".local" / "cross-agent-review" / "demo" / head[:12]
 
     result = run(
-        *review_args(project, head, output_dir),
+        *review_args(project, head),
         "--tests-file",
         str(legacy_tests_file),
         cwd=project,
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert not (output_dir / "inputs" / "tests.txt").exists()
+    assert result.returncode == 2
+    assert "unrecognized arguments: --tests-file" in result.stderr
+    assert not (output_dir / "review-report.md").exists()
+
+
+def test_reviewer_prompt_does_not_reference_legacy_tests_file(tmp_path: Path) -> None:
     module = load_script_module()
-    review = module.ReviewInput(
-        change="demo",
-        mode="convergence",
-        base_ref=head,
-        head_ref=head,
-        spec_file=output_dir / "inputs" / "spec.md",
-        design_file=output_dir / "inputs" / "design.md",
-        plan_file=output_dir / "inputs" / "plan.md",
-        input_file=output_dir / "prepared-inputs" / "review-input.json",
-        output_dir=output_dir,
-        debug=False,
-        sdk_python=None,
-        fake_reviewer_results=None,
-    )
-    assert "legacy tests" not in module.reviewer_prompt(review, "spec-alignment")
+    review = make_review_args_for_module(module, tmp_path)
 
+    prompt = module.reviewer_prompt(review, "spec-alignment")
 
-def test_run_accepts_missing_legacy_tests_file_argument_without_snapshotting_it(tmp_path: Path) -> None:
-    project = tmp_path / "repo"
-    head = init_repo(project)
-    output_dir = tmp_path / "out"
-
-    result = run(
-        *review_args(project, head, output_dir),
-        "--tests-file",
-        str(project / "missing-legacy-tests.txt"),
-        cwd=project,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert not (output_dir / "inputs" / "tests.txt").exists()
+    assert "tests_file" not in prompt
+    assert "Tests file:" not in prompt
 
 
 def test_prompt_contains_review_context(tmp_path: Path) -> None:
-    head = init_repo(tmp_path / "repo")
-    args = review_args(tmp_path / "repo", head, tmp_path / "out")
-    result = run(*args, "--fake-reviewer-results", "[]", cwd=tmp_path / "repo")
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
+    input_file = write_review_input(project, head, head)
+    output_dir = input_file.parent.parent
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    data = json.loads((tmp_path / "out" / "review-results.json").read_text(encoding="utf-8"))
-    assert data["readonly_tools"]
+    assert (output_dir / "review-report.md").is_file()
+    assert (output_dir / "review-pass.json").is_file()
+    assert not (output_dir / "review-results.json").exists()
 
 
-def test_reviewer_prompt_includes_review_subject_commands_not_diff_file(tmp_path: Path, monkeypatch) -> None:
+def test_reviewer_prompt_references_review_input_not_diff_file(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
-    base = init_repo(project)
+    init_repo(project)
+    base = commit_review_context(project)
     write_file(project / "app.txt", "two\n")
     git(project, "add", "app.txt")
     git(project, "commit", "-m", "feature")
     head = git(project, "rev-parse", "HEAD")
-    spec_file = write_file(project / "spec.md", "Spec body\n")
-    design_file = write_file(project / "design.md", "Design body\n")
-    tasks_file = write_file(project / "tasks.md", "Tasks body\n")
-    review = module.ReviewInput(
-        change="demo-change",
-        mode="convergence",
-        base_ref=base,
-        head_ref=head,
-        spec_file=spec_file,
-        design_file=design_file,
-        plan_file=tasks_file,
-        input_file=tmp_path / "review-input.json",
-        output_dir=tmp_path / "out",
-        debug=False,
-        sdk_python=None,
-        fake_reviewer_results=None,
-    )
+    input_file = write_review_input(project, base, head)
     monkeypatch.chdir(project)
+    review = module.load_review_input(
+        types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None, fake_reviewer_results=None)
+    )
 
     prompt = module.reviewer_prompt(review, "spec-alignment")
 
     assert "Role: spec-alignment" in prompt
     assert "Return only a single JSON object. Do not use Markdown." in prompt
-    assert "Change: demo-change" in prompt
-    assert f"Base ref: {base}" in prompt
-    assert f"Head ref: {head}" in prompt
-    assert f"git diff {base}...{head}" in prompt
-    assert f"git log {base}..{head} --oneline" in prompt
-    assert f"git diff --name-status --find-renames --find-copies-harder {base}...{head}" in prompt
-    assert f"git diff {base}...{head} -- <path>" in prompt
-    assert "Changed files:" in prompt
-    assert "- modified: app.txt" in prompt
-    assert f"Spec file: {spec_file}" in prompt
-    assert f"Design file: {design_file}" in prompt
-    assert f"Tasks file: {tasks_file}" in prompt
+    assert f"Read: {input_file}" in prompt
+    assert "Review only base_ref...head_ref from the input file." in prompt
+    assert "Use spec_file, design_file, and plan_file as requirements context." in prompt
+    assert "Change: demo-change" not in prompt
+    assert f"Base ref: {base}" not in prompt
+    assert f"Head ref: {head}" not in prompt
+    assert f"git diff {base}...{head}" not in prompt
+    assert "Changed files:" not in prompt
     assert "Diff file:" not in prompt
     assert "diff.patch" not in prompt
-    assert "Spec body" not in prompt
-    assert "Tasks:" not in prompt
+    assert "spec body" not in prompt
+    assert "plan body" not in prompt
 
 
-def test_reviewer_prompt_references_manifest_and_role_rubrics(tmp_path: Path) -> None:
+def test_reviewer_prompt_references_input_file_and_role_rubrics(tmp_path: Path) -> None:
     module = load_script_module()
     review = make_review_args_for_module(module, tmp_path)
-    manifest_path = review.output_dir / "inputs" / "manifest.json"
 
     for role in module.REVIEWER_ROLES:
         prompt = module.reviewer_prompt(review, role)
         assert f"Focus for {role}:" in prompt
         assert "Severity rubric:" in prompt
-        assert f"Manifest file: {manifest_path}" in prompt
+        assert f"Read: {review.input_file}" in prompt
+        assert "Manifest file:" not in prompt
         assert "Return only a single JSON object" in prompt
 
 
 def test_reviewer_prompt_template_is_loaded_from_file(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     review = make_review_args_for_module(module, tmp_path)
-    manifest_path = review.output_dir / "inputs" / "manifest.json"
     template = write_file(
         tmp_path / "reviewer-prompt.md",
-        "Template marker: {{ role }} / {{ manifest_path }}\n",
+        "Template marker: {{ role }} / {{ input_file_path }}\n",
     )
     monkeypatch.setattr(module, "REVIEWER_PROMPT_TEMPLATE", template, raising=False)
 
     prompt = module.reviewer_prompt(review, "spec-alignment")
 
-    assert f"Template marker: spec-alignment / {manifest_path}" in prompt
+    assert f"Template marker: spec-alignment / {review.input_file}" in prompt
 
 
 def test_reviewer_prompt_does_not_inline_large_diff_or_context(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
-    base = init_repo(project)
+    init_repo(project)
+    base = commit_review_context(project)
     repeated_diff_body = "large diff body marker\n"
     write_file(project / "app.txt", repeated_diff_body * 1000)
     git(project, "add", "app.txt")
@@ -988,34 +923,43 @@ def test_reviewer_prompt_does_not_inline_large_diff_or_context(tmp_path: Path, m
     large_tasks = "Tasks body\n" + ("task detail\n" * 2000)
     spec_file = write_file(project / "spec.md", large_spec)
     design_file = write_file(project / "design.md", large_design)
-    tasks_file = write_file(project / "tasks.md", large_tasks)
-    review = module.ReviewInput(
-        change="demo-change",
-        mode="convergence",
-        base_ref=base,
-        head_ref=head,
-        spec_file=spec_file,
-        design_file=design_file,
-        plan_file=tasks_file,
-        input_file=tmp_path / "review-input.json",
-        output_dir=tmp_path / "out",
-        debug=False,
-        sdk_python=None,
-        fake_reviewer_results=None,
+    plan_file = write_file(project / "docs" / "superpowers" / "plans" / "demo.md", large_tasks)
+    git(project, "add", "spec.md", "design.md", "docs/superpowers/plans/demo.md")
+    git(project, "commit", "-m", "large context")
+    head = git(project, "rev-parse", "HEAD")
+    input_file = project / ".local" / "cross-agent-review" / "demo" / head[:12] / "prepared-inputs" / "review-input.json"
+    write_file(
+        input_file,
+        json.dumps(
+            {
+                "change": "demo",
+                "mode": "convergence",
+                "base_ref": base,
+                "head_ref": head,
+                "spec_file": str(spec_file.relative_to(project)),
+                "design_file": str(design_file.relative_to(project)),
+                "plan_file": str(plan_file.relative_to(project)),
+            }
+        )
+        + "\n",
     )
     monkeypatch.chdir(project)
+    review = module.load_review_input(
+        types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None, fake_reviewer_results=None)
+    )
 
     prompt = module.reviewer_prompt(review, "implementation-correctness")
 
-    assert f"Spec file: {spec_file}" in prompt
-    assert f"Spec bytes: {len(spec_file.read_bytes())}" in prompt
-    assert "Changed files:" in prompt
-    assert "- modified: app.txt" in prompt
+    assert f"Read: {input_file}" in prompt
+    assert f"Spec file: {spec_file}" not in prompt
+    assert f"Design file: {design_file}" not in prompt
+    assert f"Plan file: {plan_file}" not in prompt
+    assert "Changed files:" not in prompt
     assert repeated_diff_body * 5 not in prompt
     assert "Spec body" not in prompt
     assert "Design body" not in prompt
     assert "Tasks body" not in prompt
-    assert "requirement" not in prompt
+    assert "requirement\n" * 5 not in prompt
     assert "design detail" not in prompt
     assert "task detail" not in prompt
     assert "diff.patch" not in prompt
@@ -1163,13 +1107,13 @@ def test_reviewer_prompt_requires_strict_json_contract(tmp_path: Path) -> None:
 
 
 def test_fake_reviewer_results_reject_non_dict_items(tmp_path: Path) -> None:
-    head = init_repo(tmp_path / "repo")
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
 
     result = run(
-        *review_args(tmp_path / "repo", head, tmp_path / "out"),
-        "--fake-reviewer-results",
-        json.dumps(["not a reviewer"]),
-        cwd=tmp_path / "repo",
+        *review_args(project, head, fake_reviewer_results=json.dumps(["not a reviewer"])),
+        cwd=project,
     )
 
     assert result.returncode == 1
@@ -1177,21 +1121,28 @@ def test_fake_reviewer_results_reject_non_dict_items(tmp_path: Path) -> None:
 
 
 def test_fake_reviewer_results_reject_missing_required_fields(tmp_path: Path) -> None:
-    head = init_repo(tmp_path / "repo")
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
 
     result = run(
-        *review_args(tmp_path / "repo", head, tmp_path / "out"),
-        "--fake-reviewer-results",
-        json.dumps([{"role": "spec-alignment", "status": "completed"}]),
-        cwd=tmp_path / "repo",
+        *review_args(
+            project,
+            head,
+            fake_reviewer_results=json.dumps([{"role": "spec-alignment", "status": "completed"}]),
+        ),
+        cwd=project,
     )
 
     assert result.returncode == 1
     assert "invalid_fake_reviewer_results" in result.stdout
 
 
-def test_reviewer_roles_are_recorded_in_results(tmp_path: Path) -> None:
-    head = init_repo(tmp_path / "repo")
+def test_fake_reviewer_results_generate_report_and_pass_marker_without_results_file(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
+    output_dir = project / ".local" / "cross-agent-review" / "demo" / head[:12]
     fake = json.dumps(
         [
             {"role": "spec-alignment", "status": "completed", "findings": []},
@@ -1200,20 +1151,14 @@ def test_reviewer_roles_are_recorded_in_results(tmp_path: Path) -> None:
     )
 
     result = run(
-        *review_args(tmp_path / "repo", head, tmp_path / "out"),
-        "--fake-reviewer-results",
-        fake,
-        cwd=tmp_path / "repo",
+        *review_args(project, head, fake_reviewer_results=fake),
+        cwd=project,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    data = json.loads((tmp_path / "out" / "review-results.json").read_text(encoding="utf-8"))
-    assert [item["role"] for item in data["reviewers"]] == [
-        "spec-alignment",
-        "implementation-correctness",
-    ]
-    assert "Edit" not in data["readonly_tools"]
-    assert "Write" not in data["readonly_tools"]
+    assert (output_dir / "review-report.md").is_file()
+    assert (output_dir / "review-pass.json").is_file()
+    assert not (output_dir / "review-results.json").exists()
 
 
 def test_sdk_dispatch_disallows_write_and_execution_tools(monkeypatch, capsys) -> None:
@@ -1441,7 +1386,10 @@ def test_sdk_dispatch_subprocess_invalid_stdout_reports_clear_error(tmp_path: Pa
 
 
 def test_non_blocking_findings_generate_pass_marker(tmp_path: Path) -> None:
-    head = init_repo(tmp_path / "repo")
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
+    output_dir = project / ".local" / "cross-agent-review" / "demo" / head[:12]
     fake = json.dumps(
         [
             {
@@ -1461,20 +1409,21 @@ def test_non_blocking_findings_generate_pass_marker(tmp_path: Path) -> None:
     )
 
     result = run(
-        *review_args(tmp_path / "repo", head, tmp_path / "out"),
-        "--fake-reviewer-results",
-        fake,
-        cwd=tmp_path / "repo",
+        *review_args(project, head, fake_reviewer_results=fake),
+        cwd=project,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert (tmp_path / "out" / "review-report.md").is_file()
-    assert (tmp_path / "out" / "review-results.json").is_file()
-    assert (tmp_path / "out" / "review-pass.json").is_file()
+    assert (output_dir / "review-report.md").is_file()
+    assert (output_dir / "review-pass.json").is_file()
+    assert not (output_dir / "review-results.json").exists()
 
 
 def test_blocking_findings_do_not_generate_pass_marker(tmp_path: Path) -> None:
-    head = init_repo(tmp_path / "repo")
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
+    output_dir = project / ".local" / "cross-agent-review" / "demo" / head[:12]
     fake = json.dumps(
         [
             {
@@ -1494,24 +1443,24 @@ def test_blocking_findings_do_not_generate_pass_marker(tmp_path: Path) -> None:
     )
 
     result = run(
-        *review_args(tmp_path / "repo", head, tmp_path / "out"),
-        "--fake-reviewer-results",
-        fake,
-        cwd=tmp_path / "repo",
+        *review_args(project, head, fake_reviewer_results=fake),
+        cwd=project,
     )
 
     assert result.returncode == 1
-    assert (tmp_path / "out" / "review-report.md").is_file()
-    assert (tmp_path / "out" / "review-results.json").is_file()
-    assert not (tmp_path / "out" / "review-pass.json").exists()
+    assert (output_dir / "review-report.md").is_file()
+    assert not (output_dir / "review-pass.json").exists()
+    assert not (output_dir / "review-results.json").exists()
 
 
 def test_blocking_findings_remove_stale_pass_marker_from_reused_output_dir(tmp_path: Path) -> None:
     project = tmp_path / "repo"
-    output_dir = tmp_path / "out"
-    head = init_repo(project)
+    init_repo(project)
+    head = commit_review_context(project)
+    input_file = write_review_input(project, head, head)
+    output_dir = input_file.parent.parent
 
-    clean_result = run(*review_args(project, head, output_dir), cwd=project)
+    clean_result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
 
     assert clean_result.returncode == 0, clean_result.stdout + clean_result.stderr
     assert (output_dir / "review-pass.json").is_file()
@@ -1535,7 +1484,9 @@ def test_blocking_findings_remove_stale_pass_marker_from_reused_output_dir(tmp_p
     )
 
     blocking_result = run(
-        *review_args(project, head, output_dir),
+        "run",
+        "--input-file",
+        str(input_file),
         "--fake-reviewer-results",
         blocking_fake,
         cwd=project,
@@ -1546,12 +1497,16 @@ def test_blocking_findings_remove_stale_pass_marker_from_reused_output_dir(tmp_p
 
 
 def test_report_hash_matches_report(tmp_path: Path) -> None:
-    head = init_repo(tmp_path / "repo")
-    result = run(*review_args(tmp_path / "repo", head, tmp_path / "out"), cwd=tmp_path / "repo")
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
+    input_file = write_review_input(project, head, head)
+    output_dir = input_file.parent.parent
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    report = (tmp_path / "out" / "review-report.md").read_bytes()
-    marker = json.loads((tmp_path / "out" / "review-pass.json").read_text(encoding="utf-8"))
+    report = (output_dir / "review-report.md").read_bytes()
+    marker = json.loads((output_dir / "review-pass.json").read_text(encoding="utf-8"))
     import hashlib
 
     assert marker["report_hash"] == hashlib.sha256(report).hexdigest()
@@ -1559,7 +1514,7 @@ def test_report_hash_matches_report(tmp_path: Path) -> None:
 
 
 def test_duplicate_findings_are_counted_once(tmp_path: Path) -> None:
-    head = init_repo(tmp_path / "repo")
+    module = load_script_module()
     finding = {
         "severity": "IMPORTANT",
         "location": "app.txt:1",
@@ -1567,23 +1522,16 @@ def test_duplicate_findings_are_counted_once(tmp_path: Path) -> None:
         "evidence": "Evidence",
         "recommendation": "Fix",
     }
-    fake = json.dumps(
+    summary = module.aggregate(
         [
             {"role": "spec-alignment", "status": "completed", "findings": [finding]},
             {"role": "implementation-correctness", "status": "completed", "findings": [finding]},
-        ]
+        ],
+        [],
     )
 
-    result = run(
-        *review_args(tmp_path / "repo", head, tmp_path / "out"),
-        "--fake-reviewer-results",
-        fake,
-        cwd=tmp_path / "repo",
-    )
-
-    assert result.returncode == 1
-    data = json.loads((tmp_path / "out" / "review-results.json").read_text(encoding="utf-8"))
-    assert data["blocking_findings"] == 1
+    assert summary["blocking_findings"] == 1
+    assert summary["findings"] == [finding]
 
 
 def test_aggregate_blocks_findings_without_severity() -> None:
