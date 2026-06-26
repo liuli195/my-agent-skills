@@ -60,7 +60,7 @@ def _command_tokens(command: Any) -> list[str]:
     return []
 
 
-def _uses_pytest_xdist(command: Any) -> bool:
+def uses_pytest_xdist(command: Any) -> bool:
     tokens = _command_tokens(command)
     has_xdist_flag = any(
         token == "-n"
@@ -78,7 +78,7 @@ def _uses_pytest_xdist(command: Any) -> bool:
 
 
 def _dependency_error(check: dict[str, Any]) -> str | None:
-    if _uses_pytest_xdist(check.get("command")) and importlib.util.find_spec("xdist") is None:
+    if uses_pytest_xdist(check.get("command")) and importlib.util.find_spec("xdist") is None:
         return (
             f"missing_dependency: {check.get('id')}: pytest-xdist is required "
             "for pytest -n; install requirements-dev.txt\n"
