@@ -718,6 +718,8 @@ def run_sdk_dispatch() -> int:
                 try:
                     return await asyncio.wait_for(query_one(role), timeout=SDK_REVIEWER_TIMEOUT_SECONDS)
                 except asyncio.TimeoutError:
+                    evidence = f"Exceeded {SDK_REVIEWER_TIMEOUT_SECONDS} seconds."
+                    write_raw(role, f"Reviewer timed out\n{evidence}")
                     return {
                         "role": role,
                         "status": "failed",
@@ -726,7 +728,7 @@ def run_sdk_dispatch() -> int:
                                 "severity": "CRITICAL",
                                 "location": role,
                                 "summary": "Reviewer timed out",
-                                "evidence": f"Exceeded {SDK_REVIEWER_TIMEOUT_SECONDS} seconds.",
+                                "evidence": evidence,
                                 "recommendation": "Rerun review after checking Claude Agent SDK availability.",
                             }
                         ],
@@ -935,8 +937,8 @@ def runtime_allowed_paths(review_input: ReviewInput) -> list[Path]:
         output_dir / "review-report.md",
         output_dir / "review-pass.json",
         debug_dir / "review-input.json",
-        debug_dir / "prompts",
-        debug_dir / "raw",
+        *(debug_dir / "prompts" / f"{role}.txt" for role in REVIEWER_ROLES),
+        *(debug_dir / "raw" / f"{role}.txt" for role in REVIEWER_ROLES),
     ]
 
 

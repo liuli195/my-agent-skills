@@ -515,6 +515,22 @@ def test_output_dir_root_extra_file_rejects_before_dispatch(tmp_path: Path) -> N
     assert not (output_dir / "review-pass.json").exists()
 
 
+@pytest.mark.parametrize("debug_child", ["prompts", "raw"])
+def test_debug_extra_file_rejects_before_dispatch(tmp_path: Path, debug_child: str) -> None:
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
+    input_file = write_review_input(project, head, head)
+    output_dir = input_file.parent.parent
+    write_file(output_dir / "debug" / debug_child / "extra.txt", "not a runtime artifact\n")
+
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+
+    assert result.returncode == 1
+    assert "dirty_worktree" in result.stdout
+    assert not (output_dir / "review-pass.json").exists()
+
+
 def test_renamed_tracked_file_into_runtime_artifacts_rejects_before_dispatch(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     init_repo(project)
@@ -580,8 +596,10 @@ def test_clean_worktree_checks_reuse_runtime_allowlist(tmp_path: Path, monkeypat
         (output_dir / "review-report.md").resolve(),
         (output_dir / "review-pass.json").resolve(),
         (debug_dir / "review-input.json").resolve(),
-        (debug_dir / "prompts").resolve(),
-        (debug_dir / "raw").resolve(),
+        (debug_dir / "prompts" / "spec-alignment.txt").resolve(),
+        (debug_dir / "prompts" / "implementation-correctness.txt").resolve(),
+        (debug_dir / "raw" / "spec-alignment.txt").resolve(),
+        (debug_dir / "raw" / "implementation-correctness.txt").resolve(),
     }
     assert output_dir.resolve() not in calls[0]
 
@@ -1298,8 +1316,9 @@ def test_sdk_dispatch_accepts_json_wrapped_in_markdown_fence(monkeypatch, capsys
     assert data == [{"role": "spec-alignment", "status": "completed", "findings": []}]
 
 
-def test_sdk_dispatch_reports_reviewer_timeout(monkeypatch, capsys) -> None:
+def test_sdk_dispatch_reports_reviewer_timeout(monkeypatch, capsys, tmp_path: Path) -> None:
     module = load_script_module()
+    raw_dir = tmp_path / "raw"
 
     class FakeClaudeAgentOptions:
         def __init__(self, **kwargs):
@@ -1330,6 +1349,7 @@ def test_sdk_dispatch_reports_reviewer_timeout(monkeypatch, capsys) -> None:
                     "roles": ["spec-alignment"],
                     "readonly_tools": ["Read", "Grep"],
                     "prompts": {"spec-alignment": "prompt"},
+                    "raw_dir": str(raw_dir),
                 }
             )
         ),
@@ -1353,6 +1373,9 @@ def test_sdk_dispatch_reports_reviewer_timeout(monkeypatch, capsys) -> None:
             ],
         }
     ]
+    raw_text = (raw_dir / "spec-alignment.txt").read_text(encoding="utf-8")
+    assert "Reviewer timed out" in raw_text
+    assert "Exceeded 480 seconds." in raw_text
 
 
 def test_sdk_dispatch_retries_transient_reviewer_exception(monkeypatch, capsys) -> None:
