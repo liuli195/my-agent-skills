@@ -9,7 +9,7 @@
 - 将 `build-and-verify`（构建与验证）插件从单一 `Skill`（技能）入口改为两个入口：运行入口 `build-and-verify`（构建与验证）和初始化向导入口 `build-and-verify-init`（构建与验证初始化）。
 - 初始化向导必须采用固定问答模板和渐进式披露参考文件，禁止 `agent`（代理）自由编造问题。
 - 首版只识别 Node（节点运行时）和 Python（Python 语言）仓库迹象，并让用户选择纳入哪些 `check`（检查项）。
-- 向导生成配置草案时必须在最终写入确认前展示摘要、覆盖风险、备份路径、定向依赖检查结果和用户可选的 `dry run`（试运行）范围。
+- 向导生成配置草案时必须在最终写入确认前展示摘要、覆盖风险、备份路径、定向依赖检查结果和环境检查结果；写入后执行配置结构校验。
 - 覆盖已有 `.build-and-verify/config.json`（配置文件）前必须备份到 `.build-and-verify/backups/config-YYYYMMDD-HHMMSS.json`（备份配置文件），并确保 `/backups/` 被 `.build-and-verify/.gitignore`（忽略规则）忽略。
 - 定向依赖检查发现问题时仍允许写入配置，但必须列明问题、影响和建议；只有用户授权后才处理依赖或环境问题。
 

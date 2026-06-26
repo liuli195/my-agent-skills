@@ -36,10 +36,6 @@ REQUIRED_INIT_REFERENCES = {
     "config-draft.md",
     "validation.md",
 }
-INIT_DRY_RUN_BUILD = "只运行 `build`（构建检查）"
-INIT_DRY_RUN_VERIFY = "只运行默认 `verify`（快速验证）"
-INIT_DRY_RUN_BUILD_AND_VERIFY = "运行 `build`（构建检查）和默认 `verify`（快速验证）"
-INIT_DRY_RUN_FULL_VERIFY = "明确运行 `verify --full`（完整验证）"
 PLUGIN_VERSION = "0.1.14"
 PLUGIN_DESCRIPTION = "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）"
 
@@ -187,7 +183,7 @@ def init_wizard_targeted_dependency_issues(
             issues.append(
                 init_wizard_issue(
                     f"{check_id} 使用 pytest-xdist（Pytest 并行插件）参数，但当前环境不可用",
-                    "该 check（检查项）的 dry run（试运行）或后续 verify（验证）可能失败。",
+                    "该 check（检查项）后续 verify（验证）可能失败。",
                     "请安装 pytest-xdist（Pytest 并行插件），或移除 `-n` / `--numprocesses` 参数后再运行。",
                 )
             )
@@ -291,7 +287,6 @@ def simulate_init_wizard_write(
     overwrite: bool,
     backup_path: Path | None = None,
     timestamp: str = "20260626-120000",
-    dry_run_scope: str = INIT_DRY_RUN_BUILD,
     executable_resolver: Callable[[str], str | None] = shutil.which,
     xdist_available: bool = True,
 ) -> dict[str, Any]:
@@ -321,18 +316,9 @@ def simulate_init_wizard_write(
     write_json(config_path, config)
     assert_init_wizard_config_structure(read_json(config_path))
 
-    dry_run_args = {
-        INIT_DRY_RUN_BUILD: [("build",)],
-        INIT_DRY_RUN_VERIFY: [("verify",)],
-        INIT_DRY_RUN_BUILD_AND_VERIFY: [("build",), ("verify",)],
-        INIT_DRY_RUN_FULL_VERIFY: [("verify", "--full")],
-    }[dry_run_scope]
-    dry_run_results = [run_check(project, *args) for args in dry_run_args]
     return {
         "backup_path": reported_backup_path,
         "dependency_issues": dependency_issues,
-        "dry_run_scope": dry_run_scope,
-        "dry_run_results": dry_run_results,
         "structure_valid": True,
     }
 
@@ -495,6 +481,8 @@ def test_build_and_verify_plugin_has_runtime_and_init_skill_entrypoints() -> Non
     assert "不安装依赖" in init_skill_text
     assert "不写用户级配置" in init_skill_text
     assert "不配置 CI（持续集成）" in init_skill_text
+    assert "dry run" not in init_skill_text
+    assert "试运行）" not in init_skill_text
 
 
 def test_build_and_verify_init_references_all_required_files() -> None:
@@ -527,10 +515,6 @@ def test_build_and_verify_init_questionnaire_contains_fixed_flow() -> None:
         "新建配置，不覆盖已有配置。",
         "覆盖已有 `.build-and-verify/config.json`（配置文件）。",
         "接受 `.build-and-verify/backups/config-YYYYMMDD-HHMMSS.json`（备份配置文件）。",
-        "只运行 `build`（构建检查）。",
-        "只运行默认 `verify`（快速验证）。",
-        "运行 `build`（构建检查）和默认 `verify`（快速验证）。",
-        "明确运行 `verify --full`（完整验证）。",
         "确认写入。",
         "返回前面问题修改草案。",
     ]
@@ -544,8 +528,7 @@ def test_build_and_verify_init_questionnaire_contains_fixed_flow() -> None:
         "Q7 并行和超时确认",
         "Q8 覆盖确认",
         "Q9 备份路径确认",
-        "Q10 dry run（试运行）范围",
-        "Q11 最终写入确认",
+        "Q10 最终写入确认",
     ]
 
     for question in required_questions:
@@ -566,12 +549,12 @@ def test_build_and_verify_init_questionnaire_contains_fixed_flow() -> None:
     assert "选择后果" in text
     assert "跳转规则" in text
     assert "不得自由编造初始化问题" in text
-    assert "不得跳过 Q11 最终写入确认" in text
+    assert "不得跳过 Q10 最终写入确认" in text
     assert "用户沉默不能视为确认" in text
     assert "如果配置已存在，必须停止并说明原因" in text
     assert "修改备份路径：必须仍在目标仓库内，且不得覆盖已有文件" in text
-    assert "不运行 dry run（试运行）" not in text
-    assert "只做 config（配置）结构校验" not in text
+    assert "dry run" not in text
+    assert "试运行）" not in text
 
 
 def test_build_and_verify_init_ecosystem_detection_covers_node_python_and_fallback() -> None:
@@ -627,6 +610,8 @@ def test_build_and_verify_init_ecosystem_detection_covers_node_python_and_fallba
         "由用户选择纳入哪些 checks（检查项）",
     ]:
         assert token in text
+    assert "dry run" not in text
+    assert "试运行）" not in text
 
 
 def test_build_and_verify_init_config_draft_rules_cover_commands_paths_inputs_and_runtime_tuning() -> None:
@@ -656,18 +641,12 @@ def test_build_and_verify_init_references_have_cross_file_flow_invariants() -> N
     config_draft = (INIT_REFERENCE_ROOT / "config-draft.md").read_text(encoding="utf-8")
     validation = (INIT_REFERENCE_ROOT / "validation.md").read_text(encoding="utf-8")
 
-    for dry_run_choice in [
-        "只运行 `build`（构建检查）",
-        "只运行默认 `verify`（快速验证）",
-        "运行 `build`（构建检查）和默认 `verify`（快速验证）",
-        "明确运行 `verify --full`（完整验证）",
-    ]:
-        assert dry_run_choice in validation
-        assert dry_run_choice in questionnaire
-
     assert "候选 Node（节点运行时）和 Python（Python 语言）checks（检查项）" in questionnaire
     assert "展示脚本名、原始 script（脚本）内容、建议 check id（检查项标识）和建议 command（命令）" in ecosystem
     assert "展示检测到的配置文件、建议 check id（检查项标识）和建议 command（命令）" in ecosystem
+    assert "写入后执行 config（配置）结构校验" in validation
+    assert "dry run" not in questionnaire + validation
+    assert "试运行）" not in questionnaire + validation
 
     assert "短横线风格" in config_draft
     for check_id in [
@@ -681,11 +660,12 @@ def test_build_and_verify_init_references_have_cross_file_flow_invariants() -> N
         assert check_id in ecosystem
 
 
-def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_dry_run() -> None:
+def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_config_validation() -> None:
     text = (INIT_REFERENCE_ROOT / "validation.md").read_text(encoding="utf-8")
 
     for token in [
         "targeted dependency checks（定向依赖检查）",
+        "environment checks（环境检查）",
         "pytest-xdist",
         "可执行入口",
         "缺失文件或目录",
@@ -694,23 +674,19 @@ def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_dry_
         "如果 backups（备份）目录不存在，必须先创建该目录",
         "/backups/",
         "config（配置）结构校验",
-        "build（构建检查）",
-        "默认 verify（快速验证）",
-        "verify --full（完整验证）",
-        "不支持单独运行某个 check（检查项）",
         "verify.timeoutSeconds",
         "大于 0 的 number（数字）",
         "允许为空 string list（字符串清单）",
     ]:
         assert token in text
-    assert "不运行 dry run（试运行）" not in text
-    assert "只做 config（配置）结构校验" not in text
+    assert "dry run" not in text
+    assert "试运行）" not in text
     ordered_steps = [
         "写入前执行 targeted dependency checks（定向依赖检查）",
+        "写入前执行 environment checks（环境检查）",
         "用户最终确认后，必要时备份已有配置",
         "写入 `.build-and-verify/config.json`（配置文件）",
         "写入后执行 config（配置）结构校验",
-        "写入后执行用户选择范围的 dry run（试运行）",
     ]
     positions = [text.index(step) for step in ordered_steps]
     assert positions == sorted(positions)
@@ -734,6 +710,10 @@ def test_build_and_verify_init_delta_spec_targets_test_framework_plugin_capabili
     assert "Guided initialization drafts generic repository checks" in text
     assert "Guided initialization protects existing configuration" in text
     assert "Guided initialization validates config and environment before completion" in text
+    assert "Targeted dependency checks report issues before write without blocking write" in text
+    assert "Config structure is validated after write" in text
+    assert "dry run" not in text
+    assert "试运行）" not in text
 
 
 def test_build_and_verify_registered_in_marketplaces_and_projection() -> None:
@@ -1020,7 +1000,6 @@ def test_build_and_verify_init_template_simulation_writes_backup_and_valid_confi
         project,
         draft_config,
         overwrite=True,
-        dry_run_scope=INIT_DRY_RUN_BUILD,
     )
 
     backup_path = build_dir / "backups" / "config-20260626-120000.json"
@@ -1029,62 +1008,7 @@ def test_build_and_verify_init_template_simulation_writes_backup_and_valid_confi
     assert "/backups/" in (build_dir / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert read_json(build_dir / "config.json") == draft_config
     assert report["structure_valid"] is True
-    assert report["dry_run_scope"] == INIT_DRY_RUN_BUILD
-    assert report["dry_run_results"][0].returncode == 0
-    assert (project / "run.log").read_text(encoding="utf-8") == "build-ok\n"
-
-
-@pytest.mark.parametrize(
-    ("dry_run_scope", "expected_checked", "expected_log"),
-    [
-        (INIT_DRY_RUN_VERIFY, ["checked: verify.scope"], ["verify-ok"]),
-        (
-            INIT_DRY_RUN_BUILD_AND_VERIFY,
-            ["checked: build.scope", "checked: verify.scope"],
-            ["build-ok", "verify-ok"],
-        ),
-        (INIT_DRY_RUN_FULL_VERIFY, ["checked: verify.scope"], ["verify-ok"]),
-    ],
-)
-def test_build_and_verify_init_template_simulation_runs_selected_dry_run_scopes(
-    tmp_path: Path,
-    dry_run_scope: str,
-    expected_checked: list[str],
-    expected_log: list[str],
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    config = {
-        "version": 1,
-        "build": {
-            "checks": [
-                {"id": "build.scope", "command": command_that_logs("build-ok")}
-            ]
-        },
-        "verify": {
-            "checks": [
-                {"id": "verify.scope", "command": command_that_logs("verify-ok")}
-            ]
-        },
-    }
-
-    report = simulate_init_wizard_write(
-        project,
-        config,
-        overwrite=False,
-        dry_run_scope=dry_run_scope,
-    )
-    validation_text = (INIT_REFERENCE_ROOT / "validation.md").read_text(encoding="utf-8")
-
-    assert [result.returncode for result in report["dry_run_results"]] == [0] * len(
-        expected_checked
-    )
-    for result, checked in zip(report["dry_run_results"], expected_checked, strict=True):
-        assert checked in result.stdout
-    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == expected_log
-    if dry_run_scope == INIT_DRY_RUN_FULL_VERIFY:
-        assert "默认不运行 `verify --full`（完整验证）" in validation_text
-        assert "必须先说明成本和原因" in validation_text
+    assert not (project / "run.log").exists()
 
 
 def test_build_and_verify_init_template_simulation_validates_custom_backup_path(
@@ -1107,7 +1031,6 @@ def test_build_and_verify_init_template_simulation_validates_custom_backup_path(
         new_config,
         overwrite=True,
         backup_path=Path(".build-and-verify/custom/config-custom.json"),
-        dry_run_scope=INIT_DRY_RUN_VERIFY,
     )
 
     assert report["backup_path"] == project / ".build-and-verify/custom/config-custom.json"
@@ -1123,7 +1046,6 @@ def test_build_and_verify_init_template_simulation_validates_custom_backup_path(
             new_config,
             overwrite=True,
             backup_path=existing_backup,
-            dry_run_scope=INIT_DRY_RUN_VERIFY,
         )
 
     with pytest.raises(AssertionError, match="inside target repository"):
@@ -1132,7 +1054,6 @@ def test_build_and_verify_init_template_simulation_validates_custom_backup_path(
             new_config,
             overwrite=True,
             backup_path=tmp_path / "outside.json",
-            dry_run_scope=INIT_DRY_RUN_VERIFY,
         )
 
 
@@ -1168,7 +1089,6 @@ def test_build_and_verify_init_template_simulation_accepts_mixed_candidates(
         project,
         config,
         overwrite=False,
-        dry_run_scope=INIT_DRY_RUN_BUILD_AND_VERIFY,
     )
 
     written = read_json(project / ".build-and-verify" / "config.json")
@@ -1177,12 +1097,8 @@ def test_build_and_verify_init_template_simulation_accepts_mixed_candidates(
         "verify.node-tests",
         "verify.python-tests",
     ]
-    assert [result.returncode for result in report["dry_run_results"]] == [0, 0]
-    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
-        "node-build",
-        "node-tests",
-        "python-tests",
-    ]
+    assert report["structure_valid"] is True
+    assert not (project / "run.log").exists()
 
 
 def test_build_and_verify_init_template_detects_pytest_xdist_dependency(
@@ -1314,7 +1230,6 @@ def test_build_and_verify_init_template_dependency_issues_do_not_block_write(
         project,
         config,
         overwrite=False,
-        dry_run_scope=INIT_DRY_RUN_BUILD,
         executable_resolver=lambda _command: None,
     )
 
@@ -1323,7 +1238,7 @@ def test_build_and_verify_init_template_dependency_issues_do_not_block_write(
     assert any("可执行入口 `missing-verify-tool` 不可找到" in issue["问题"] for issue in report["dependency_issues"])
     assert any("future-src/**" in issue["问题"] for issue in report["dependency_issues"])
     assert all(issue["是否阻止写入"] == "不阻止" for issue in report["dependency_issues"])
-    assert report["dry_run_results"][0].returncode == 0
+    assert report["structure_valid"] is True
 
 
 @pytest.mark.parametrize(

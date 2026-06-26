@@ -29,7 +29,7 @@
 - **WHEN** agent（代理）使用 `build-and-verify-init` Skill（构建与验证初始化技能）
 - **THEN** Skill（技能） MUST 指示 agent（代理）读取固定 questionnaire（问答模板）
 - **THEN** questionnaire（问答模板） MUST 定义固定问题、固定选项、后果说明和跳转规则
-- **THEN** questionnaire（问答模板） MUST 覆盖目标仓库路径确认、扫描授权、检测结果确认、check（检查项）选择、`paths`（受影响路径）确认、`inputs`（缓存输入）确认、并行与超时确认、覆盖确认、备份路径确认、dry run（试运行）范围选择和最终写入确认
+- **THEN** questionnaire（问答模板） MUST 覆盖目标仓库路径确认、扫描授权、检测结果确认、check（检查项）选择、`paths`（受影响路径）确认、`inputs`（缓存输入）确认、并行与超时确认、覆盖确认、备份路径确认和最终写入确认
 - **THEN** agent（代理） MUST NOT 自由编造初始化问题或跳过最终写入确认
 
 #### Scenario: Guided initialization uses progressive disclosure references
@@ -37,7 +37,7 @@
 - **THEN** Skill（技能） MUST 将固定问答模板放在独立 reference（参考文件）
 - **THEN** Skill（技能） MUST 将 Node（节点运行时）和 Python（Python 语言）识别规则放在独立 reference（参考文件）
 - **THEN** Skill（技能） MUST 将配置草案规则放在独立 reference（参考文件）
-- **THEN** Skill（技能） MUST 将校验和试运行规则放在独立 reference（参考文件）
+- **THEN** Skill（技能） MUST 将依赖检查、环境检查和配置校验规则放在独立 reference（参考文件）
 
 #### Scenario: Guided initialization keeps command-line init unchanged
 - **WHEN** 用户运行 `python <build-and-verify-script> init --project <repo>`
@@ -70,7 +70,7 @@
 - **WHEN** 目标仓库没有可识别的 Node（节点运行时）或 Python（Python 语言）迹象
 - **THEN** agent（代理） MUST 继续使用固定 questionnaire（问答模板）
 - **THEN** agent（代理） MUST 让用户手动提供 build（构建检查）和 verify（验证）候选命令
-- **THEN** agent（代理） MUST 继续确认 `paths`（受影响路径）、`inputs`（缓存输入）、覆盖备份和 dry run（试运行）范围
+- **THEN** agent（代理） MUST 继续确认 `paths`（受影响路径）、`inputs`（缓存输入）、覆盖备份和配置校验
 
 #### Scenario: Draft config includes paths and inputs
 - **WHEN** agent（代理）生成配置草案
@@ -105,7 +105,7 @@
 - **THEN** agent（代理） MUST 在写入结果中报告备份路径
 
 ### Requirement: Guided initialization validates config and environment before completion
-`build-and-verify-init` Skill（构建与验证初始化技能） MUST 在最终写入确认前执行定向依赖检查，并在写入后执行配置校验和用户选择范围的 dry run（试运行）。
+`build-and-verify-init` Skill（构建与验证初始化技能） MUST 在最终写入确认前执行定向依赖检查和环境检查，并在写入后执行配置校验。
 
 #### Scenario: Config structure is validated after write
 - **WHEN** agent（代理）写入 `.build-and-verify/config.json`（配置文件）
@@ -122,12 +122,11 @@
 - **THEN** agent（代理） MUST 明确列出问题、影响和建议
 - **THEN** agent（代理） MUST NOT 未经用户授权就安装依赖或修改外部环境
 
-#### Scenario: Dry run scope is selected by user
-- **WHEN** agent（代理）准备执行 dry run（试运行）
-- **THEN** agent（代理） MUST 展示可选试运行范围
-- **THEN** dry run（试运行） MUST 只使用现有 `build`（构建检查）、默认 `verify`（快速验证）和显式 `verify --full`（完整验证）命令范围
-- **THEN** 用户 MUST 明确选择要试运行的命令范围
-- **THEN** agent（代理） MUST NOT 把只做 config（配置）结构校验当作完成初始化的 dry run（试运行）选择
-- **THEN** agent（代理） MUST NOT 声称可以单独运行某个 check（检查项），除非 build-and-verify（构建与验证）runner（运行器）未来提供该能力
-- **THEN** agent（代理） MUST NOT 默认运行 `verify --full`（完整验证）
-- **THEN** 用户选择完整验证时，agent（代理） MUST 先说明成本和原因
+#### Scenario: Environment checks report issues before write without blocking write
+- **WHEN** agent（代理）准备写入 `.build-and-verify/config.json`（配置文件）
+- **THEN** agent（代理） MUST 在最终写入确认前执行 environment checks（环境检查）
+- **THEN** agent（代理） MUST 检查目标仓库路径存在且是目录
+- **THEN** agent（代理） MUST 检查配置目录可创建或可写入
+- **THEN** 覆盖已有配置时，agent（代理） MUST 检查备份目录可创建且备份路径仍在目标仓库内
+- **THEN** agent（代理） MUST 允许用户在存在依赖或环境问题时仍写入配置
+- **THEN** agent（代理） MUST 明确说明用户可以让 agent（代理）协助处理环境和外部依赖问题

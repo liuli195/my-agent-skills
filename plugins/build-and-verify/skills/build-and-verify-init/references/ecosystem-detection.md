@@ -80,4 +80,4 @@
 
 - 继续使用 questionnaire（问答模板）。
 - 让用户手动提供 build（构建检查）和 verify（验证）命令。
-- 继续确认 paths（受影响路径）、inputs（缓存输入）、覆盖备份和 dry run（试运行）范围。
+- 继续确认 paths（受影响路径）、inputs（缓存输入）、覆盖备份和 config validation（配置校验）。
