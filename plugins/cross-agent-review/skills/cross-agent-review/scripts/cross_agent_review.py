@@ -117,6 +117,13 @@ class ReviewInput:
     fake_reviewer_results: str | None
 
 
+@dataclass(frozen=True)
+class StatusEntry:
+    xy: str
+    path: Path
+    old_path: Path | None = None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cross_agent_review.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -144,8 +151,8 @@ def git_output_bytes(args: list[str], cwd: Path) -> bytes:
     return result.stdout
 
 
-def status_paths(cwd: Path) -> set[Path]:
-    paths: set[Path] = set()
+def status_entries(cwd: Path) -> list[StatusEntry]:
+    entries_by_status: list[StatusEntry] = []
     output = git_output_bytes(["status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd)
     entries = output.split(b"\0")
     index = 0
@@ -154,14 +161,30 @@ def status_paths(cwd: Path) -> set[Path]:
         index += 1
         if not entry:
             continue
+        xy = entry[:2].decode("ascii", errors="replace")
         path_text = entry[3:].decode("utf-8", errors="surrogateescape")
-        paths.add((cwd / path_text).resolve())
+        path = (cwd / path_text).resolve()
+        old_path = None
         if entry[:1] in {b"R", b"C"} or entry[1:2] in {b"R", b"C"}:
             if index < len(entries) and entries[index]:
                 old_path_text = entries[index].decode("utf-8", errors="surrogateescape")
-                paths.add((cwd / old_path_text).resolve())
+                old_path = (cwd / old_path_text).resolve()
             index += 1
+        entries_by_status.append(StatusEntry(xy=xy, path=path, old_path=old_path))
+    return entries_by_status
+
+
+def status_entry_paths(entry: StatusEntry) -> list[Path]:
+    paths = [entry.path]
+    if entry.old_path is not None:
+        paths.append(entry.old_path)
     return paths
+
+
+def status_entry_is_allowed(entry: StatusEntry, allowed: set[Path]) -> bool:
+    if entry.xy != "??":
+        return False
+    return all(path_is_allowed(path, allowed) for path in status_entry_paths(entry))
 
 
 def path_is_allowed(path: Path, allowed: set[Path]) -> bool:
@@ -180,8 +203,10 @@ def path_is_allowed(path: Path, allowed: set[Path]) -> bool:
 
 def ensure_clean_subject(cwd: Path, head_ref: str, allowed_dirty_paths: Sequence[Path] = ()) -> None:
     allowed = {path.resolve() for path in allowed_dirty_paths}
-    dirty_paths = {path for path in status_paths(cwd) if not path_is_allowed(path, allowed)}
-    if dirty_paths:
+    dirty_entries = [
+        entry for entry in status_entries(cwd) if not status_entry_is_allowed(entry, allowed)
+    ]
+    if dirty_entries:
         raise ValueError("dirty_worktree")
     current_head = git_output(["rev-parse", "HEAD"], cwd)
     if current_head != head_ref:

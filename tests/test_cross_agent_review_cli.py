@@ -309,6 +309,27 @@ def test_renamed_tracked_file_into_runtime_artifacts_rejects_before_dispatch(tmp
     assert not (output_dir / "review-pass.json").exists()
 
 
+def test_copied_tracked_file_into_runtime_artifacts_rejects_before_dispatch(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    init_repo(project)
+    write_file(project / "spec.md", "spec body\n")
+    write_file(project / "design.md", "design body\n")
+    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
+    git(project, "add", "spec.md", "design.md", "docs/superpowers/plans/demo.md")
+    git(project, "commit", "-m", "add review context")
+    head = git(project, "rev-parse", "HEAD")
+    input_file = write_review_input(project, head, head)
+    output_dir = input_file.parent.parent
+    shutil.copyfile(project / "app.txt", output_dir / "app.txt")
+    git(project, "add", str(output_dir / "app.txt"))
+
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+
+    assert result.returncode == 1
+    assert "dirty_worktree" in result.stdout
+    assert not (output_dir / "review-pass.json").exists()
+
+
 def test_clean_worktree_checks_reuse_runtime_allowlist(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
