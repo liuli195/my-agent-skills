@@ -52,6 +52,20 @@ def test_cross_agent_review_skill_documents_single_review_input_contract() -> No
     assert "--tasks-file" not in text
 
 
+def test_cross_agent_review_skill_documents_allowed_mode_values() -> None:
+    skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+
+    assert "`mode`（模式）只能是 `convergence`（收敛）或 `endless`（无尽）" in text
+
+
+def test_cross_agent_review_skill_documents_review_range_refs() -> None:
+    skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+
+    assert "review（审查）范围由 `base_ref`（基准引用）和 `head_ref`（当前提交引用）控制" in text
+
+
 def test_cross_agent_review_skill_documents_default_and_debug_outputs() -> None:
     skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
     text = skill.read_text(encoding="utf-8")
