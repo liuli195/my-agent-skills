@@ -2,6 +2,7 @@
 change: simplify-cross-agent-review-contract
 design-doc: docs/superpowers/specs/2026-06-26-simplify-cross-agent-review-contract-design.md
 base-ref: 204be94d39500d38fe3193657876fcc23258d65e
+archived-with: 2026-06-26-simplify-cross-agent-review-contract
 ---
 
 # Simplify Cross-Agent Review Contract Implementation Plan
@@ -13,8 +14,6 @@ base-ref: 204be94d39500d38fe3193657876fcc23258d65e
 **Architecture（架构）:** 以 `prepared-inputs/review-input.json`（预备输入目录中的审查输入文件）作为唯一入口，脚本从该文件派生 review subject（审查对象）、上下文文件、输出目录、模式和 reviewer（审查代理）派发信息。默认路径不复制输入快照、不写 manifest（清单）、不写 prompt/raw（提示词/原始输出），只在 `--debug`（排障开关）显式启用时写入 `debug/`（排障目录）。
 
 **Tech Stack（技术栈）:** Python（Python 语言）标准库、argparse（命令行参数解析）、pytest（Python 测试运行器）、Git（版本控制）、Claude Agent SDK（Claude 代理开发包）、OpenSpec（开放规格）。
-
----
 
 ## Context Read（已读上下文）
 

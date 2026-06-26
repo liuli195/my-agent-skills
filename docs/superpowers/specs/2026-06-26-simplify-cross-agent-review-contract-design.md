@@ -2,6 +2,8 @@
 comet_change: simplify-cross-agent-review-contract
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-26-simplify-cross-agent-review-contract
+status: final
 ---
 
 # Simplify Cross-Agent Review Contract Design
