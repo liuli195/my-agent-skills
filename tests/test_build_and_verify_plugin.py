@@ -268,6 +268,35 @@ def ensure_init_wizard_gitignore_includes_backups(build_dir: Path) -> None:
     gitignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def init_wizard_can_create_directory(directory: Path, boundary: Path) -> bool:
+    created: list[Path] = []
+    current = directory
+    while not current.exists() and current != boundary and current != current.parent:
+        created.append(current)
+        current = current.parent
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    finally:
+        for path in created:
+            with contextlib.suppress(OSError):
+                path.rmdir()
+    return True
+
+
+def init_wizard_can_write_directory(directory: Path) -> bool:
+    probe = directory / ".init-write-check"
+    try:
+        probe.write_text("ok\n", encoding="utf-8")
+    except OSError:
+        return False
+    finally:
+        with contextlib.suppress(OSError):
+            probe.unlink()
+    return True
+
+
 def init_wizard_environment_issues(
     project: Path,
     *,
@@ -301,6 +330,22 @@ def init_wizard_environment_issues(
                 "移动或删除同名文件；如果需要处理本地文件，可以让 agent（代理）在授权后协助处理。",
             )
         )
+    elif build_dir.exists() and not init_wizard_can_write_directory(build_dir):
+        issues.append(
+            init_wizard_issue(
+                f"配置目录不可写入：`{build_dir}`",
+                "无法可靠写入 .build-and-verify/config.json（配置文件）。",
+                "修复目录权限；如果需要准备环境，可以让 agent（代理）在授权后协助处理。",
+            )
+        )
+    elif not build_dir.exists() and not init_wizard_can_create_directory(build_dir, project):
+        issues.append(
+            init_wizard_issue(
+                f"配置目录不可创建：`{build_dir}`",
+                "无法创建 .build-and-verify（配置目录）。",
+                "修复目标仓库目录权限；如果需要准备环境，可以让 agent（代理）在授权后协助处理。",
+            )
+        )
 
     if overwrite:
         candidate = (
@@ -308,9 +353,11 @@ def init_wizard_environment_issues(
             if backup_path is None
             else (backup_path if backup_path.is_absolute() else project / backup_path).parent
         )
+        backup_inside_project = True
         try:
             candidate.resolve().relative_to(project.resolve())
         except ValueError:
+            backup_inside_project = False
             issues.append(
                 init_wizard_issue(
                     f"备份目录不在目标仓库内：`{candidate}`",
@@ -318,7 +365,7 @@ def init_wizard_environment_issues(
                     "选择目标仓库内的备份目录，或使用默认 backups（备份）目录。",
                 )
             )
-        if candidate.exists() and not candidate.is_dir():
+        if backup_inside_project and candidate.exists() and not candidate.is_dir():
             issues.append(
                 init_wizard_issue(
                     f"备份目录路径不是目录：`{candidate}`",
@@ -326,6 +373,23 @@ def init_wizard_environment_issues(
                     "移动或删除同名文件；如果需要处理本地文件，可以让 agent（代理）在授权后协助处理。",
                 )
             )
+        elif backup_inside_project and project.exists() and project.is_dir():
+            if candidate.exists() and not init_wizard_can_write_directory(candidate):
+                issues.append(
+                    init_wizard_issue(
+                        f"备份目录不可写入：`{candidate}`",
+                        "覆盖已有配置时无法可靠创建备份文件。",
+                        "修复备份目录权限，或选择其他仓库内备份目录。",
+                    )
+                )
+            elif not candidate.exists() and not init_wizard_can_create_directory(candidate, project):
+                issues.append(
+                    init_wizard_issue(
+                        f"备份目录不可创建：`{candidate}`",
+                        "覆盖已有配置时无法创建备份目录。",
+                        "修复目标仓库目录权限，或使用其他仓库内备份目录。",
+                    )
+                )
 
     return issues
 
@@ -1169,6 +1233,48 @@ def test_build_and_verify_init_template_simulation_accepts_mixed_candidates(
     assert not (project / "run.log").exists()
 
 
+def test_build_and_verify_init_template_simulation_accepts_manual_fallback_config(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "README.md").write_text("# Manual Project\n", encoding="utf-8")
+    config = {
+        "version": 1,
+        "build": {
+            "checks": [
+                {
+                    "id": "build.manual",
+                    "command": [sys.executable, "-c", "print('manual build')"],
+                    "inputs": ["README.md"],
+                }
+            ]
+        },
+        "verify": {
+            "checks": [
+                {
+                    "id": "verify.manual",
+                    "command": [sys.executable, "-c", "print('manual verify')"],
+                    "inputs": ["README.md"],
+                }
+            ]
+        },
+    }
+
+    report = simulate_init_wizard_write(
+        project,
+        config,
+        overwrite=False,
+    )
+
+    assert not (project / "package.json").exists()
+    assert not (project / "pyproject.toml").exists()
+    assert read_json(project / ".build-and-verify" / "config.json") == config
+    assert report["dependency_issues"] == []
+    assert report["environment_issues"] == []
+    assert report["structure_valid"] is True
+
+
 def test_build_and_verify_init_template_detects_pytest_xdist_dependency(
     tmp_path: Path,
 ) -> None:
@@ -1330,6 +1436,32 @@ def test_build_and_verify_init_template_environment_issues_do_not_block_write(
     assert any("目标仓库路径不存在" in issue["问题"] for issue in report["environment_issues"])
     assert all(issue["是否阻止写入"] == "不阻止" for issue in report["environment_issues"])
     assert report["structure_valid"] is True
+
+
+def test_build_and_verify_init_template_environment_issues_report_unwritable_config_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".build-and-verify").mkdir()
+    original_write_text = Path.write_text
+
+    def deny_write_probe(path: Path, *args: Any, **kwargs: Any) -> int:
+        if path.name == ".init-write-check":
+            raise PermissionError("denied")
+        return original_write_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", deny_write_probe)
+
+    issues = init_wizard_environment_issues(
+        project,
+        overwrite=False,
+        backup_path=None,
+    )
+
+    assert any("配置目录不可写入" in issue["问题"] for issue in issues)
+    assert all(issue["是否阻止写入"] == "不阻止" for issue in issues)
 
 
 @pytest.mark.parametrize(
