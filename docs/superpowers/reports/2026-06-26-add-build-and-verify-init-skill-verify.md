@@ -45,4 +45,4 @@ No CRITICAL（严重阻断） or IMPORTANT（重要阻断） issues remain.
 
 ## Branch Handling（分支处理）
 
-Pending user decision（等待用户选择）.
+Kept branch as-is（保持当前分支不处理）: `feature/20260626/add-build-and-verify-init-skill`.
