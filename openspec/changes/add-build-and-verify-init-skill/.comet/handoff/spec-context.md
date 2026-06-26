@@ -3,7 +3,7 @@
 - Change: add-build-and-verify-init-skill
 - Phase: design
 - Mode: beta
-- Context hash: 20432dd3b844469882436c891cdd950fd7e31cf523461efefa3c4cf61d9781d7
+- Context hash: bd26785172fbee8d027e3b6a2e3190c957b9f5fb1c4a615620ae5b7eb89177e8
 
 Generated-by: comet-handoff.sh
 
@@ -14,11 +14,11 @@ OpenSpec remains the canonical capability spec. This beta context pack verbatim-
 - Source: openspec/changes/add-build-and-verify-init-skill/proposal.md
 - SHA256: f66f78dce76e8ae77683d0763eec340123c1484cb3d613a32d7f58b4c4b11c5a
 - Source: openspec/changes/add-build-and-verify-init-skill/design.md
-- SHA256: ae046b015aa62e4f417bea7f8a602a8151b1cafc7bb53c309c256edb11eef592
+- SHA256: b6d2dca145010a868f442c276c62b2dba13a7124ff08906e28bdb28bc80d26ea
 - Source: openspec/changes/add-build-and-verify-init-skill/tasks.md
 - SHA256: e33dc91308b2cc304d353071db3fa1fa77eaa18640dbd70526e816616bf6558d
 - Source: openspec/changes/add-build-and-verify-init-skill/specs/test-framework-plugin/spec.md
-- SHA256: 5de8ef7d18267ea2c85ee1c828da77419d98a637385d2d41aec5fae1f741e04f
+- SHA256: b32f260f67d18a9298e174ce86dbb33298acdd669e617ca5d48c185b9201375c
 
 ## Acceptance Projection
 
@@ -26,7 +26,7 @@ OpenSpec remains the canonical capability spec. This beta context pack verbatim-
 
 - Source: openspec/changes/add-build-and-verify-init-skill/specs/test-framework-plugin/spec.md
 - Lines: 1-130
-- SHA256: 5de8ef7d18267ea2c85ee1c828da77419d98a637385d2d41aec5fae1f741e04f
+- SHA256: b32f260f67d18a9298e174ce86dbb33298acdd669e617ca5d48c185b9201375c
 
 ```md
 ## MODIFIED Requirements
@@ -130,6 +130,7 @@ OpenSpec remains the canonical capability spec. This beta context pack verbatim-
 
 #### Scenario: Existing config is backed up before overwrite
 - **WHEN** 用户确认覆盖已有 `.build-and-verify/config.json`（配置文件）
+- **THEN** agent（代理） MUST 在 backups（备份）目录不存在时先创建该目录
 - **THEN** agent（代理） MUST 先复制旧配置到 `.build-and-verify/backups/config-YYYYMMDD-HHMMSS.json`（备份配置文件）
 - **THEN** agent（代理） MUST 确保 `.build-and-verify/.gitignore`（忽略规则）包含 `/backups/`
 - **THEN** agent（代理） MUST 在写入结果中报告备份路径

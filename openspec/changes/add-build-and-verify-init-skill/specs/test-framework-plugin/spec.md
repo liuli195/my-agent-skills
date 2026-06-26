@@ -99,6 +99,7 @@
 
 #### Scenario: Existing config is backed up before overwrite
 - **WHEN** 用户确认覆盖已有 `.build-and-verify/config.json`（配置文件）
+- **THEN** agent（代理） MUST 在 backups（备份）目录不存在时先创建该目录
 - **THEN** agent（代理） MUST 先复制旧配置到 `.build-and-verify/backups/config-YYYYMMDD-HHMMSS.json`（备份配置文件）
 - **THEN** agent（代理） MUST 确保 `.build-and-verify/.gitignore`（忽略规则）包含 `/backups/`
 - **THEN** agent（代理） MUST 在写入结果中报告备份路径

@@ -316,6 +316,8 @@ def test_build_and_verify_init_questionnaire_contains_fixed_flow() -> None:
     assert "固定选项" in text
     assert "选择后果" in text
     assert "跳转规则" in text
+    assert "不得自由编造初始化问题" in text
+    assert "不得跳过 Q11 最终写入确认" in text
     assert "用户沉默不能视为确认" in text
     assert "如果配置已存在，必须停止并说明原因" in text
     assert "不运行 dry run（试运行）" not in text
@@ -336,6 +338,11 @@ def test_build_and_verify_init_ecosystem_detection_covers_node_python_and_fallba
         "`check` -> `verify.node-check`",
         "`verify` -> `verify.node-verify`",
     ]
+    exact_python_rules = [
+        "pytest（Python 测试运行器） -> `verify.python-tests`",
+        "tox（测试环境工具） -> `verify.python-tox`",
+        "nox（自动化任务工具） -> `verify.python-nox`",
+    ]
 
     for token in [
         "package.json",
@@ -355,6 +362,18 @@ def test_build_and_verify_init_ecosystem_detection_covers_node_python_and_fallba
         assert token in text
     for rule in exact_node_rules:
         assert rule in text
+    for rule in exact_python_rules:
+        assert rule in text
+    for token in [
+        "同一分组内 check id（检查项标识）冲突",
+        "改成唯一 id（标识）",
+        "向用户说明改名原因",
+        "Mixed Repository（混合仓库）",
+        "同时展示两类候选 checks（检查项）",
+        "不根据文件数量、语言比例或 agent（代理）偏好自动删减候选项",
+        "由用户选择纳入哪些 checks（检查项）",
+    ]:
+        assert token in text
 
 
 def test_build_and_verify_init_config_draft_rules_cover_commands_paths_inputs_and_runtime_tuning() -> None:
@@ -388,12 +407,12 @@ def test_build_and_verify_init_references_have_cross_file_flow_invariants() -> N
         "只运行 `build`（构建检查）",
         "只运行默认 `verify`（快速验证）",
         "运行 `build`（构建检查）和默认 `verify`（快速验证）",
-        "明确选择后运行 `verify --full`（完整验证）",
+        "明确运行 `verify --full`（完整验证）",
     ]:
-        normalized_choice = dry_run_choice.replace("明确选择后运行", "明确运行")
         assert dry_run_choice in validation
-        assert normalized_choice in questionnaire
+        assert dry_run_choice in questionnaire
 
+    assert "短横线风格" in config_draft
     for check_id in [
         "build.node",
         "verify.node-tests",
@@ -403,7 +422,6 @@ def test_build_and_verify_init_references_have_cross_file_flow_invariants() -> N
         "verify.node-verify",
     ]:
         assert check_id in ecosystem
-        assert "短横线风格" in config_draft
 
 
 def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_dry_run() -> None:
@@ -416,6 +434,7 @@ def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_dry_
         "缺失文件或目录",
         "不安装依赖",
         ".build-and-verify/backups/config-YYYYMMDD-HHMMSS.json",
+        "如果 backups（备份）目录不存在，必须先创建该目录",
         "/backups/",
         "config（配置）结构校验",
         "build（构建检查）",
