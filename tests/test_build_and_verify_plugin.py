@@ -237,7 +237,7 @@ def assert_init_wizard_config_structure(config: dict[str, Any]) -> None:
                     and all(isinstance(item, str) and item for item in value)
                 )
             parallel = check.get("parallel")
-            assert parallel is None or parallel is True
+            assert parallel is None or isinstance(parallel, bool)
             check_timeout_seconds = check.get("timeoutSeconds")
             assert check_timeout_seconds is None or (
                 not isinstance(check_timeout_seconds, bool)
@@ -266,6 +266,68 @@ def ensure_init_wizard_gitignore_includes_backups(build_dir: Path) -> None:
     if "/backups/" not in lines:
         lines.append("/backups/")
     gitignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def init_wizard_environment_issues(
+    project: Path,
+    *,
+    overwrite: bool,
+    backup_path: Path | None,
+) -> list[dict[str, str]]:
+    issues: list[dict[str, str]] = []
+    build_dir = project / ".build-and-verify"
+
+    if not project.exists():
+        issues.append(
+            init_wizard_issue(
+                f"目标仓库路径不存在：`{project}`",
+                "初始化写入会创建缺失目录；请确认目标路径是否正确。",
+                "确认目标仓库路径；如果需要准备环境，可以让 agent（代理）在授权后协助处理。",
+            )
+        )
+    elif not project.is_dir():
+        issues.append(
+            init_wizard_issue(
+                f"目标仓库路径不是目录：`{project}`",
+                "无法在该路径下写入 .build-and-verify（配置目录）。",
+                "选择一个目录作为目标仓库路径，或在授权后让 agent（代理）协助处理。",
+            )
+        )
+    elif build_dir.exists() and not build_dir.is_dir():
+        issues.append(
+            init_wizard_issue(
+                f"配置目录路径不是目录：`{build_dir}`",
+                "无法写入 .build-and-verify/config.json（配置文件）。",
+                "移动或删除同名文件；如果需要处理本地文件，可以让 agent（代理）在授权后协助处理。",
+            )
+        )
+
+    if overwrite:
+        candidate = (
+            project / ".build-and-verify" / "backups"
+            if backup_path is None
+            else (backup_path if backup_path.is_absolute() else project / backup_path).parent
+        )
+        try:
+            candidate.resolve().relative_to(project.resolve())
+        except ValueError:
+            issues.append(
+                init_wizard_issue(
+                    f"备份目录不在目标仓库内：`{candidate}`",
+                    "覆盖已有配置时可能把备份写到仓库外部。",
+                    "选择目标仓库内的备份目录，或使用默认 backups（备份）目录。",
+                )
+            )
+        if candidate.exists() and not candidate.is_dir():
+            issues.append(
+                init_wizard_issue(
+                    f"备份目录路径不是目录：`{candidate}`",
+                    "覆盖已有配置时无法创建备份文件。",
+                    "移动或删除同名文件；如果需要处理本地文件，可以让 agent（代理）在授权后协助处理。",
+                )
+            )
+
+    return issues
 
 
 def init_wizard_backup_path(project: Path, backup_path: Path | None, timestamp: str) -> Path:
@@ -297,6 +359,11 @@ def simulate_init_wizard_write(
         executable_resolver=executable_resolver,
         xdist_available=xdist_available,
     )
+    environment_issues = init_wizard_environment_issues(
+        project,
+        overwrite=overwrite,
+        backup_path=requested_backup_path,
+    )
     build_dir = project / ".build-and-verify"
     config_path = build_dir / "config.json"
     reported_backup_path = None
@@ -319,6 +386,7 @@ def simulate_init_wizard_write(
     return {
         "backup_path": reported_backup_path,
         "dependency_issues": dependency_issues,
+        "environment_issues": environment_issues,
         "structure_valid": True,
     }
 
@@ -1241,6 +1309,29 @@ def test_build_and_verify_init_template_dependency_issues_do_not_block_write(
     assert report["structure_valid"] is True
 
 
+def test_build_and_verify_init_template_environment_issues_do_not_block_write(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "missing-project"
+    config = {
+        "version": 1,
+        "build": {"checks": []},
+        "verify": {"checks": []},
+    }
+
+    report = simulate_init_wizard_write(
+        project,
+        config,
+        overwrite=False,
+    )
+
+    assert (project / ".build-and-verify" / "config.json").is_file()
+    assert report["environment_issues"]
+    assert any("目标仓库路径不存在" in issue["问题"] for issue in report["environment_issues"])
+    assert all(issue["是否阻止写入"] == "不阻止" for issue in report["environment_issues"])
+    assert report["structure_valid"] is True
+
+
 @pytest.mark.parametrize(
     ("field", "value", "valid"),
     [
@@ -1283,7 +1374,7 @@ def test_build_and_verify_init_template_validates_runtime_tuning_boundaries(
     [
         ("parallel", True, True),
         ("parallel", None, True),
-        ("parallel", False, False),
+        ("parallel", False, True),
         ("parallel", "true", False),
         ("parallel", 1, False),
         ("timeoutSeconds", 0.5, True),

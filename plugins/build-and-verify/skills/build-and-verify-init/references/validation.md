@@ -49,5 +49,7 @@
 - 每个 check（检查项）有非空且同分组唯一的 `id`（标识）。
 - 每个 check（检查项）有非空 string（字符串）或 string list（字符串清单）形式的 command（命令）。
 - `paths`（受影响路径）和 `inputs`（缓存输入）如果存在，必须是 string list（字符串清单），允许为空 string list（字符串清单）。
+- check（检查项）的 `parallel`（并行检查）如果存在，必须是 boolean（布尔值）；`false`（否）等价于不声明 parallel（并行检查）。
+- check（检查项）的 `timeoutSeconds`（超时秒数）如果存在，必须是大于 0 的 number（数字），不得是 boolean（布尔值）。
 - `verify.maxParallel`（最大并行检查数）如果存在，必须是非负整数。
 - `verify.timeoutSeconds`（超时秒数）如果存在，必须是大于 0 的 number（数字）。
