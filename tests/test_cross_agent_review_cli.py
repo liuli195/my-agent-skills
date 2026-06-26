@@ -262,6 +262,22 @@ def test_prepared_inputs_rejects_extra_regular_file(tmp_path: Path) -> None:
     assert "plan.md" in result.stdout
 
 
+def test_prepared_inputs_rejects_extra_directory(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
+    input_file = write_review_input(project, head, head)
+    write_file(input_file.parent / "extra" / "junk.txt", "junk\n")
+    output_dir = input_file.parent.parent
+
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+
+    assert result.returncode == 1
+    assert "unexpected_prepared_input" in result.stdout
+    assert "extra" in result.stdout
+    assert not (output_dir / "review-pass.json").exists()
+
+
 def test_input_file_must_be_named_review_input_json_under_prepared_inputs(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     init_repo(project)

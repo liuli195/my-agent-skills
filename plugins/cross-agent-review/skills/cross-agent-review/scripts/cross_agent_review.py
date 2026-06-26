@@ -253,10 +253,9 @@ def validate_input_file_location(input_file: Path, change: str, head_ref: str) -
 
 def validate_prepared_inputs_dir(input_file: Path) -> None:
     expected = input_file.resolve()
-    regular_files = sorted(path.resolve() for path in input_file.parent.iterdir() if path.is_file())
-    if regular_files != [expected]:
-        unexpected = next((path for path in regular_files if path != expected), input_file.parent)
-        raise ValueError(f"unexpected_prepared_input: {unexpected}")
+    for path in sorted(input_file.parent.iterdir()):
+        if path.resolve() != expected or path.is_symlink() or not path.is_file():
+            raise ValueError(f"unexpected_prepared_input: {path}")
 
 
 def validate_base_ref(cwd: Path, base_ref: str) -> None:
