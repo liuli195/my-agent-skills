@@ -2,11 +2,14 @@ import contextlib
 import importlib.util
 import io
 import json
+import re
 import shutil
+import shlex
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from typing import Any, Callable
 
 import pytest
 
@@ -33,6 +36,10 @@ REQUIRED_INIT_REFERENCES = {
     "config-draft.md",
     "validation.md",
 }
+INIT_DRY_RUN_BUILD = "只运行 `build`（构建检查）"
+INIT_DRY_RUN_VERIFY = "只运行默认 `verify`（快速验证）"
+INIT_DRY_RUN_BUILD_AND_VERIFY = "运行 `build`（构建检查）和默认 `verify`（快速验证）"
+INIT_DRY_RUN_FULL_VERIFY = "明确运行 `verify --full`（完整验证）"
 PLUGIN_VERSION = "0.1.14"
 PLUGIN_DESCRIPTION = "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）"
 
@@ -99,6 +106,194 @@ def command_that_logs(label: str, log_name: str = "run.log") -> list[str]:
         f"    file.write({label!r} + '\\n')\n"
     )
     return [sys.executable, "-c", code]
+
+
+def init_wizard_command_tokens(command: Any) -> list[str]:
+    if isinstance(command, list):
+        return [str(token) for token in command]
+    if isinstance(command, str):
+        return shlex.split(command)
+    return []
+
+
+def init_wizard_command_name(command: Any) -> str:
+    tokens = init_wizard_command_tokens(command)
+    if not tokens:
+        return ""
+    return tokens[0].strip('"')
+
+
+def init_wizard_uses_pytest_parallel(command: Any) -> bool:
+    tokens = [token.strip('"').lower() for token in init_wizard_command_tokens(command)]
+    uses_pytest = "pytest" in tokens
+    uses_parallel = (
+        "-n" in tokens
+        or "--numprocesses" in tokens
+        or any(token.startswith("--numprocesses=") for token in tokens)
+    )
+    return uses_pytest and uses_parallel
+
+
+def init_wizard_path_exists(project: Path, pattern: str) -> bool:
+    if re.search(r"[*?\[]", pattern):
+        return any(project.glob(pattern))
+    return (project / pattern).exists()
+
+
+def init_wizard_issue(problem: str, impact: str, suggestion: str) -> dict[str, str]:
+    return {
+        "问题": problem,
+        "影响": impact,
+        "建议": suggestion,
+        "是否阻止写入": "不阻止",
+    }
+
+
+def init_wizard_iter_checks(config: dict[str, Any]):
+    for section in ("build", "verify"):
+        checks = config.get(section, {}).get("checks", [])
+        for check in checks:
+            yield section, check
+
+
+def init_wizard_targeted_dependency_issues(
+    project: Path,
+    config: dict[str, Any],
+    *,
+    executable_resolver: Callable[[str], str | None] = shutil.which,
+    xdist_available: bool = True,
+) -> list[dict[str, str]]:
+    issues: list[dict[str, str]] = []
+    for section, check in init_wizard_iter_checks(config):
+        check_id = check.get("id", "<missing-id>")
+        command = check.get("command")
+        if init_wizard_uses_pytest_parallel(command) and not xdist_available:
+            issues.append(
+                init_wizard_issue(
+                    f"{check_id} 使用 pytest-xdist（Pytest 并行插件）参数，但当前环境不可用",
+                    "该 check（检查项）的 dry run（试运行）或后续 verify（验证）可能失败。",
+                    "请安装 pytest-xdist（Pytest 并行插件），或移除 `-n` / `--numprocesses` 参数后再运行。",
+                )
+            )
+
+        command_name = init_wizard_command_name(command)
+        if command_name and executable_resolver(command_name) is None:
+            issues.append(
+                init_wizard_issue(
+                    f"{check_id} 调用的可执行入口 `{command_name}` 不可找到",
+                    f"{section}（检查分组）运行到该命令时会失败。",
+                    "确认该工具已安装并在 PATH（命令搜索路径）中，或修改 command（命令）。",
+                )
+            )
+
+        for field in ("paths", "inputs"):
+            for pattern in check.get(field, []) or []:
+                if not init_wizard_path_exists(project, pattern):
+                    issues.append(
+                        init_wizard_issue(
+                            f"{check_id} 的 {field}（路径清单）指向缺失文件或目录：`{pattern}`",
+                            "快速验证选择或 cache key（缓存键）可能不符合预期。",
+                            "确认路径是否应保留；如果是未来才会出现的路径，可继续写入配置。",
+                        )
+                    )
+    return issues
+
+
+def assert_init_wizard_config_structure(config: dict[str, Any]) -> None:
+    assert isinstance(config, dict)
+    for section in ("build", "verify"):
+        section_config = config.get(section)
+        assert isinstance(section_config, dict)
+        checks = section_config.get("checks")
+        assert isinstance(checks, list)
+        seen_ids: set[str] = set()
+        for check in checks:
+            assert isinstance(check, dict)
+            check_id = check.get("id")
+            assert isinstance(check_id, str) and check_id
+            assert check_id not in seen_ids
+            seen_ids.add(check_id)
+            command = check.get("command")
+            assert isinstance(command, str) and command or (
+                isinstance(command, list)
+                and all(isinstance(token, str) and token for token in command)
+            )
+            for field in ("paths", "inputs"):
+                value = check.get(field)
+                assert value is None or (
+                    isinstance(value, list)
+                    and all(isinstance(item, str) and item for item in value)
+                )
+
+    verify_config = config.get("verify", {})
+    max_parallel = verify_config.get("maxParallel")
+    assert max_parallel is None or (
+        not isinstance(max_parallel, bool)
+        and isinstance(max_parallel, int)
+        and max_parallel >= 0
+    )
+    timeout_seconds = verify_config.get("timeoutSeconds")
+    assert timeout_seconds is None or (
+        not isinstance(timeout_seconds, bool)
+        and isinstance(timeout_seconds, (int, float))
+        and timeout_seconds > 0
+    )
+
+
+def ensure_init_wizard_gitignore_includes_backups(build_dir: Path) -> None:
+    gitignore = build_dir / ".gitignore"
+    lines = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
+    if "/backups/" not in lines:
+        lines.append("/backups/")
+    gitignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def simulate_init_wizard_write(
+    project: Path,
+    config: dict[str, Any],
+    *,
+    overwrite: bool,
+    timestamp: str = "20260626-120000",
+    dry_run_scope: str = INIT_DRY_RUN_BUILD,
+    executable_resolver: Callable[[str], str | None] = shutil.which,
+    xdist_available: bool = True,
+) -> dict[str, Any]:
+    dependency_issues = init_wizard_targeted_dependency_issues(
+        project,
+        config,
+        executable_resolver=executable_resolver,
+        xdist_available=xdist_available,
+    )
+    build_dir = project / ".build-and-verify"
+    config_path = build_dir / "config.json"
+    backup_path = None
+    build_dir.mkdir(parents=True, exist_ok=True)
+
+    if config_path.exists():
+        assert overwrite
+        backups_dir = build_dir / "backups"
+        backups_dir.mkdir(parents=True, exist_ok=True)
+        backup_path = backups_dir / f"config-{timestamp}.json"
+        shutil.copy2(config_path, backup_path)
+        ensure_init_wizard_gitignore_includes_backups(build_dir)
+
+    write_json(config_path, config)
+    assert_init_wizard_config_structure(read_json(config_path))
+
+    dry_run_args = {
+        INIT_DRY_RUN_BUILD: [("build",)],
+        INIT_DRY_RUN_VERIFY: [("verify",)],
+        INIT_DRY_RUN_BUILD_AND_VERIFY: [("build",), ("verify",)],
+        INIT_DRY_RUN_FULL_VERIFY: [("verify", "--full")],
+    }[dry_run_scope]
+    dry_run_results = [run_check(project, *args) for args in dry_run_args]
+    return {
+        "backup_path": backup_path,
+        "dependency_issues": dependency_issues,
+        "dry_run_scope": dry_run_scope,
+        "dry_run_results": dry_run_results,
+        "structure_valid": True,
+    }
 
 
 def test_build_and_verify_main_returns_error_without_command(capsys) -> None:
@@ -562,6 +757,8 @@ def test_build_and_verify_active_surfaces_do_not_keep_old_entrypoints() -> None:
         "test_framework_runner.py",
         "verify.test-framework",
     ]
+    # `pyproject.toml` is allowed in init references as a Python ecosystem signal;
+    # test_build_and_verify_pytest_options_live_in_explicit_commands keeps it out of active config commands.
 
     for path in [*active_paths, *plugin_paths]:
         text = path.read_text(encoding="utf-8")
@@ -727,6 +924,186 @@ def test_build_and_verify_init_refuses_existing_files_before_writes(
         if path != existing_path:
             assert not path.exists()
     assert not (project / ".build-and-verify" / "cache").exists()
+
+
+def test_build_and_verify_init_template_simulation_writes_backup_and_valid_config(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "src").mkdir()
+    (project / "tests").mkdir()
+    (project / "pyproject.toml").write_text("[tool.pytest.ini_options]\n", encoding="utf-8")
+    (project / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    build_dir = project / ".build-and-verify"
+    build_dir.mkdir()
+    old_config = {
+        "version": 1,
+        "build": {"checks": [{"id": "build.old", "command": command_that_logs("old")}]},
+        "verify": {"checks": []},
+    }
+    write_json(build_dir / "config.json", old_config)
+    (build_dir / ".gitignore").write_text("/cache/\n/runs/\n", encoding="utf-8")
+    draft_config = {
+        "version": 1,
+        "build": {
+            "checks": [
+                {
+                    "id": "build.local",
+                    "command": command_that_logs("build-ok"),
+                    "inputs": ["src"],
+                }
+            ]
+        },
+        "verify": {
+            "maxParallel": 2,
+            "timeoutSeconds": 60,
+            "checks": [
+                {
+                    "id": "verify.python-tests",
+                    "command": [sys.executable, "-m", "pytest", "--version"],
+                    "paths": ["src/**", "tests/**"],
+                    "inputs": ["pyproject.toml", "pytest.ini", "src", "tests"],
+                }
+            ],
+        },
+    }
+
+    report = simulate_init_wizard_write(
+        project,
+        draft_config,
+        overwrite=True,
+        dry_run_scope=INIT_DRY_RUN_BUILD,
+    )
+
+    backup_path = build_dir / "backups" / "config-20260626-120000.json"
+    assert report["backup_path"] == backup_path
+    assert read_json(backup_path) == old_config
+    assert "/backups/" in (build_dir / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert read_json(build_dir / "config.json") == draft_config
+    assert report["structure_valid"] is True
+    assert report["dry_run_scope"] == INIT_DRY_RUN_BUILD
+    assert report["dry_run_results"][0].returncode == 0
+    assert (project / "run.log").read_text(encoding="utf-8") == "build-ok\n"
+
+
+def test_build_and_verify_init_template_detects_pytest_xdist_dependency(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    config = {
+        "version": 1,
+        "build": {"checks": []},
+        "verify": {
+            "checks": [
+                {
+                    "id": "verify.pytest-parallel",
+                    "command": "python -m pytest -n auto",
+                },
+                {"id": "verify.pytest-serial", "command": "python -m pytest"},
+            ]
+        },
+    }
+
+    issues = init_wizard_targeted_dependency_issues(
+        project,
+        config,
+        executable_resolver=lambda command: command if command in {"python", "pytest"} else None,
+        xdist_available=False,
+    )
+
+    assert len([issue for issue in issues if "pytest-xdist" in issue["问题"]]) == 1
+    assert all(issue["是否阻止写入"] == "不阻止" for issue in issues)
+
+
+def test_build_and_verify_init_template_detects_missing_executable(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    config = {
+        "version": 1,
+        "build": {
+            "checks": [
+                {"id": "build.missing-tool", "command": "missing-build-tool --version"}
+            ]
+        },
+        "verify": {"checks": []},
+    }
+
+    issues = init_wizard_targeted_dependency_issues(
+        project,
+        config,
+        executable_resolver=lambda _command: None,
+    )
+
+    assert any(
+        "可执行入口 `missing-build-tool` 不可找到" in issue["问题"]
+        for issue in issues
+    )
+    assert all(issue["是否阻止写入"] == "不阻止" for issue in issues)
+
+
+def test_build_and_verify_init_template_detects_missing_paths_and_inputs(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    config = {
+        "version": 1,
+        "build": {"checks": []},
+        "verify": {
+            "checks": [
+                {
+                    "id": "verify.missing-paths",
+                    "command": command_that_logs("unused"),
+                    "paths": ["missing-src/**"],
+                    "inputs": ["missing-config.toml"],
+                }
+            ]
+        },
+    }
+
+    issues = init_wizard_targeted_dependency_issues(project, config)
+
+    assert any("missing-src/**" in issue["问题"] for issue in issues)
+    assert any("missing-config.toml" in issue["问题"] for issue in issues)
+    assert all(issue["是否阻止写入"] == "不阻止" for issue in issues)
+
+
+def test_build_and_verify_init_template_dependency_issues_do_not_block_write(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    config = {
+        "version": 1,
+        "build": {"checks": []},
+        "verify": {
+            "checks": [
+                {
+                    "id": "verify.missing-tool",
+                    "command": "missing-verify-tool --version",
+                    "paths": ["future-src/**"],
+                    "inputs": [],
+                }
+            ]
+        },
+    }
+
+    report = simulate_init_wizard_write(
+        project,
+        config,
+        overwrite=False,
+        dry_run_scope=INIT_DRY_RUN_BUILD,
+        executable_resolver=lambda _command: None,
+    )
+
+    assert (project / ".build-and-verify" / "config.json").is_file()
+    assert report["dependency_issues"]
+    assert all(issue["是否阻止写入"] == "不阻止" for issue in report["dependency_issues"])
+    assert report["dry_run_results"][0].returncode == 0
 
 
 def test_build_and_verify_runner_build_verify_and_full_verify(tmp_path: Path) -> None:
