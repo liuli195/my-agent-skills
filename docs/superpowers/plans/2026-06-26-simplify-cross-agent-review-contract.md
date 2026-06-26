@@ -1067,7 +1067,7 @@ Expected（预期）: PASS（通过）.
 - Verify（验证）: `.build-and-verify/config.json`
 - Verify（验证）: `openspec/changes/simplify-cross-agent-review-contract/specs/cross-agent-review/spec.md`
 
-- [ ] **Step 1: Run focused cross-agent review tests（运行重点测试）**
+- [x] **Step 1: Run focused cross-agent review tests（运行重点测试）**
 
 Run:
 
@@ -1077,7 +1077,7 @@ python -m pytest -q -n 8 -p no:cacheprovider tests/test_cross_agent_review_cli.p
 
 Expected（预期）: PASS（通过）.
 
-- [ ] **Step 2: Run caller-adjacent regression（运行相邻调用方回归）**
+- [x] **Step 2: Run caller-adjacent regression（运行相邻调用方回归）**
 
 Run:
 
@@ -1103,7 +1103,7 @@ python -m pytest -q -n 8 -p no:cacheprovider tests/test_agent_guard_runtime_rout
 
 Expected（预期）: PASS（通过）; verifies Agent Guard（代理守卫） still reads `review-pass.json`（通过标记） from the same default output directory.
 
-- [ ] **Step 3: Run repository configured checks（运行仓库配置检查）**
+- [x] **Step 3: Run repository configured checks（运行仓库配置检查）**
 
 Run:
 
@@ -1121,7 +1121,7 @@ openspec validate --all --strict --no-interactive
 
 Expected（预期）: PASS（通过）.
 
-- [ ] **Step 4: Final search checks（最终搜索检查）**
+- [x] **Step 4: Final search checks（最终搜索检查）**
 
 Run:
 
