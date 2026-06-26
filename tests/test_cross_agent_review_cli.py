@@ -293,6 +293,20 @@ def test_input_file_must_be_under_change_and_head_runtime_dir(tmp_path: Path) ->
     assert not (project / "review-pass.json").exists()
 
 
+def test_change_path_traversal_rejects_input_location(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
+    input_file = write_review_input(project, head, head, change="../../escape")
+    output_dir = input_file.parent.parent
+
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+
+    assert result.returncode == 1
+    assert "invalid_input_file_location" in result.stdout
+    assert not (output_dir / "review-pass.json").exists()
+
+
 def test_invalid_base_ref_fails_before_dispatch(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     init_repo(project)

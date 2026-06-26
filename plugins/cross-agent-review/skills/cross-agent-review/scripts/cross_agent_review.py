@@ -220,17 +220,34 @@ def resolve_context_path(raw_path: str) -> Path:
     return Path.cwd() / path
 
 
+def validate_path_segment(segment: str, input_file: Path) -> str:
+    if (
+        not segment
+        or segment in {".", ".."}
+        or "/" in segment
+        or "\\" in segment
+        or Path(segment).is_absolute()
+    ):
+        raise ValueError(f"invalid_input_file_location: {input_file}")
+    return segment
+
+
 def validate_input_file_location(input_file: Path, change: str, head_ref: str) -> None:
+    change = validate_path_segment(change, input_file)
+    head_ref_short = validate_path_segment(head_ref[:12], input_file)
     expected = (
-        Path.cwd()
-        / ".local"
+        Path(".local")
         / "cross-agent-review"
         / change
-        / head_ref[:12]
+        / head_ref_short
         / "prepared-inputs"
         / "review-input.json"
     )
-    if input_file.resolve() != expected.resolve():
+    try:
+        actual = input_file.resolve().relative_to(Path.cwd().resolve())
+    except ValueError as exc:
+        raise ValueError(f"invalid_input_file_location: {input_file}") from exc
+    if actual != expected:
         raise ValueError(f"invalid_input_file_location: {input_file}")
 
 
