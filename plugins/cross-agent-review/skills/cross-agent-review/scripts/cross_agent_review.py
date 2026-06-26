@@ -539,6 +539,9 @@ def timeout_reviewer_results(raw_dir: Path | None, evidence: str) -> list[dict]:
             role_evidence = raw_text or evidence
         else:
             role_evidence = evidence
+            if raw_path is not None:
+                raw_path.parent.mkdir(parents=True, exist_ok=True)
+                raw_path.write_text(role_evidence + "\n", encoding="utf-8")
         reviewers.append(
             reviewer_failure(
                 role,
@@ -925,7 +928,16 @@ def allowed_input_paths(review_args: ReviewInput) -> list[Path]:
 
 
 def runtime_allowed_paths(review_input: ReviewInput) -> list[Path]:
-    return [review_input.input_file, review_input.output_dir]
+    output_dir = output_dir_for(review_input)
+    debug_dir = debug_dir_for(review_input)
+    return [
+        review_input.input_file,
+        output_dir / "review-report.md",
+        output_dir / "review-pass.json",
+        debug_dir / "review-input.json",
+        debug_dir / "prompts",
+        debug_dir / "raw",
+    ]
 
 
 def write_outputs(review_args: ReviewInput, summary: dict, extra_allowed_paths: Sequence[Path] = ()) -> int:

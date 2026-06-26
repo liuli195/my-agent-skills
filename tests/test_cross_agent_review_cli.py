@@ -296,6 +296,40 @@ def test_debug_writes_input_prompts_and_raw_under_debug(tmp_path: Path, monkeypa
     }
 
 
+def test_debug_timeout_writes_missing_raw_timeout_evidence(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
+    input_file = write_review_input(project, head, head)
+    monkeypatch.chdir(project)
+    review_input = module.load_review_input(
+        types.SimpleNamespace(input_file=input_file, debug=True, sdk_python=None, fake_reviewer_results=None)
+    )
+
+    def fake_run(*args, **kwargs):
+        payload = json.loads(kwargs["input"])
+        raw_dir = Path(payload["raw_dir"])
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        raw_path = raw_dir / f"{payload['roles'][0]}.txt"
+        raw_path.write_text(
+            json.dumps({"role": payload["roles"][0], "status": "completed", "findings": []}),
+            encoding="utf-8",
+        )
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    reviewers = module.run_sdk_dispatch_subprocess(review_input, sys.executable)
+
+    raw_dir = input_file.parent.parent / "debug" / "raw"
+    missing_raw = raw_dir / "implementation-correctness.txt"
+    assert (raw_dir / "spec-alignment.txt").is_file()
+    assert missing_raw.is_file()
+    assert "sdk_dispatch_timeout" in missing_raw.read_text(encoding="utf-8")
+    assert [reviewer["status"] for reviewer in reviewers] == ["completed", "failed"]
+
+
 @pytest.mark.parametrize("removed_role", ["risk-review", "tests-and-edge-cases"])
 def test_fake_reviewer_results_reject_removed_roles(tmp_path: Path, removed_role: str) -> None:
     project = tmp_path / "repo"
@@ -466,6 +500,21 @@ def test_dirty_worktree_outside_runtime_artifacts_rejects_before_dispatch(tmp_pa
     assert not (input_file.parent.parent / "review-pass.json").exists()
 
 
+def test_output_dir_root_extra_file_rejects_before_dispatch(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
+    input_file = write_review_input(project, head, head)
+    output_dir = input_file.parent.parent
+    write_file(output_dir / "notes.txt", "not a review runtime artifact\n")
+
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+
+    assert result.returncode == 1
+    assert "dirty_worktree" in result.stdout
+    assert not (output_dir / "review-pass.json").exists()
+
+
 def test_renamed_tracked_file_into_runtime_artifacts_rejects_before_dispatch(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     init_repo(project)
@@ -524,8 +573,17 @@ def test_clean_worktree_checks_reuse_runtime_allowlist(tmp_path: Path, monkeypat
 
     assert len(calls) == 3
     assert calls[0] == calls[1] == calls[2]
-    assert input_file.resolve() in calls[0]
-    assert input_file.parent.parent.resolve() in calls[0]
+    output_dir = input_file.parent.parent
+    debug_dir = output_dir / "debug"
+    assert set(calls[0]) == {
+        input_file.resolve(),
+        (output_dir / "review-report.md").resolve(),
+        (output_dir / "review-pass.json").resolve(),
+        (debug_dir / "review-input.json").resolve(),
+        (debug_dir / "prompts").resolve(),
+        (debug_dir / "raw").resolve(),
+    }
+    assert output_dir.resolve() not in calls[0]
 
 
 def test_diff_file_argument_is_not_required(tmp_path: Path) -> None:
