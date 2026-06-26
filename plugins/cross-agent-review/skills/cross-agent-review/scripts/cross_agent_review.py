@@ -220,8 +220,17 @@ def resolve_context_path(raw_path: str) -> Path:
     return Path.cwd() / path
 
 
-def validate_input_file_location(input_file: Path) -> None:
-    if input_file.name != "review-input.json" or input_file.parent.name != "prepared-inputs":
+def validate_input_file_location(input_file: Path, change: str, head_ref: str) -> None:
+    expected = (
+        Path.cwd()
+        / ".local"
+        / "cross-agent-review"
+        / change
+        / head_ref[:12]
+        / "prepared-inputs"
+        / "review-input.json"
+    )
+    if input_file.resolve() != expected.resolve():
         raise ValueError(f"invalid_input_file_location: {input_file}")
 
 
@@ -244,12 +253,12 @@ def load_review_input(args: argparse.Namespace) -> ReviewInput:
     input_file = args.input_file if args.input_file.is_absolute() else Path.cwd() / args.input_file
     if not input_file.is_file():
         raise ValueError(f"missing_file: {input_file}")
-    validate_input_file_location(input_file)
-    validate_prepared_inputs_dir(input_file)
     payload = json.loads(input_file.read_text(encoding="utf-8"))
     for field in REQUIRED_INPUT_FIELDS:
         if payload.get(field) is None:
             raise ValueError(f"missing_field: {field}")
+    validate_input_file_location(input_file, str(payload["change"]), str(payload["head_ref"]))
+    validate_prepared_inputs_dir(input_file)
     mode = str(payload["mode"])
     if mode not in VALID_MODES:
         raise ValueError(f"invalid_mode: {mode}")
