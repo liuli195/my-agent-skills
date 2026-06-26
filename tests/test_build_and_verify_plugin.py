@@ -127,23 +127,66 @@ def init_wizard_command_name(command: Any) -> str:
 
 
 def init_wizard_uses_pytest_parallel(command: Any) -> bool:
-    tokens = init_wizard_command_tokens(command)
-    has_xdist_flag = any(
-        token == "-n"
-        or (token.startswith("-n") and len(token) > 2)
-        or token == "--numprocesses"
-        or token.startswith("--numprocesses=")
-        for token in tokens
-    )
-    has_pytest = any(
-        token == "pytest" or token.endswith("/pytest") or token.endswith("\\pytest")
-        for token in tokens
-    )
-    has_pytest_module = any(
-        token == "-m" and index + 1 < len(tokens) and tokens[index + 1] == "pytest"
-        for index, token in enumerate(tokens)
-    )
-    return has_xdist_flag and (has_pytest or has_pytest_module)
+    return load_build_and_verify_runner_module().uses_pytest_xdist(command)
+
+
+def init_wizard_node_package_manager_resolution(
+    project: Path,
+    *,
+    selected: str | None = None,
+) -> dict[str, Any]:
+    lockfiles = [
+        ("pnpm-lock.yaml", "pnpm"),
+        ("yarn.lock", "yarn"),
+        ("package-lock.json", "npm"),
+    ]
+    found = [manager for lockfile, manager in lockfiles if (project / lockfile).exists()]
+    if len(found) > 1 and selected is None:
+        return {
+            "requires_user_choice": True,
+            "lockfiles": found,
+            "package_manager": None,
+            "commands": [],
+        }
+    package_manager = selected or (found[0] if found else "npm")
+    package_json = read_json(project / "package.json")
+    scripts = package_json.get("scripts", {})
+    commands = []
+    for script in scripts:
+        if package_manager == "npm":
+            commands.append(f"npm run {script}")
+        else:
+            commands.append(f"{package_manager} {script}")
+    return {
+        "requires_user_choice": False,
+        "lockfiles": found,
+        "package_manager": package_manager,
+        "commands": commands,
+    }
+
+
+def init_wizard_ensure_unique_check_ids(
+    candidates: list[dict[str, str]],
+) -> dict[str, Any]:
+    seen_by_section: dict[str, set[str]] = {}
+    rename_reasons: list[str] = []
+    unique_candidates: list[dict[str, str]] = []
+    for candidate in candidates:
+        section = candidate["section"]
+        original_id = candidate["id"]
+        seen = seen_by_section.setdefault(section, set())
+        check_id = original_id
+        suffix = 2
+        while check_id in seen:
+            check_id = f"{original_id}-{suffix}"
+            suffix += 1
+        if check_id != original_id:
+            rename_reasons.append(
+                f"{original_id} -> {check_id}: 同一分组内 check id（检查项标识）冲突"
+            )
+        seen.add(check_id)
+        unique_candidates.append({**candidate, "id": check_id})
+    return {"candidates": unique_candidates, "rename_reasons": rename_reasons}
 
 
 def init_wizard_path_exists(project: Path, pattern: str) -> bool:
@@ -746,6 +789,47 @@ def test_build_and_verify_init_ecosystem_detection_covers_node_python_and_fallba
     assert "试运行）" not in text
 
 
+def test_build_and_verify_init_template_node_lockfile_conflict_requires_user_choice(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "package.json").write_text(
+        json.dumps({"scripts": {"build": "vite build", "test": "vitest"}}, indent=2),
+        encoding="utf-8",
+    )
+    (project / "package-lock.json").write_text("{}", encoding="utf-8")
+    (project / "yarn.lock").write_text("", encoding="utf-8")
+
+    unresolved = init_wizard_node_package_manager_resolution(project)
+    resolved = init_wizard_node_package_manager_resolution(project, selected="yarn")
+
+    assert unresolved["requires_user_choice"] is True
+    assert unresolved["commands"] == []
+    assert resolved["requires_user_choice"] is False
+    assert resolved["package_manager"] == "yarn"
+    assert all(command.startswith("yarn ") for command in resolved["commands"])
+    assert all("npm run" not in command for command in resolved["commands"])
+
+
+def test_build_and_verify_init_template_deduplicates_conflicting_check_ids() -> None:
+    candidates = [
+        {"section": "verify", "id": "verify.node-tests", "script": "test"},
+        {"section": "verify", "id": "verify.node-tests", "script": "test:unit"},
+        {"section": "build", "id": "build.node", "script": "build"},
+    ]
+
+    result = init_wizard_ensure_unique_check_ids(candidates)
+
+    verify_ids = [
+        candidate["id"] for candidate in result["candidates"] if candidate["section"] == "verify"
+    ]
+    assert verify_ids == ["verify.node-tests", "verify.node-tests-2"]
+    assert result["rename_reasons"] == [
+        "verify.node-tests -> verify.node-tests-2: 同一分组内 check id（检查项标识）冲突"
+    ]
+
+
 def test_build_and_verify_init_config_draft_rules_cover_commands_paths_inputs_and_runtime_tuning() -> None:
     text = (INIT_REFERENCE_ROOT / "config-draft.md").read_text(encoding="utf-8")
 
@@ -907,19 +991,23 @@ def test_build_and_verify_active_surfaces_do_not_keep_old_entrypoints() -> None:
         for path in PLUGIN_ROOT.rglob("*")
         if path.is_file() and "__pycache__" not in path.parts
     ]
-    forbidden = [
+    plugin_forbidden = [
         "plugins/test-framework",
         ".test-framework",
         "test_framework.py",
         "test_framework_runner.py",
         "verify.test-framework",
     ]
-    # `pyproject.toml` is allowed in init references as a Python ecosystem signal;
-    # test_build_and_verify_pytest_options_live_in_explicit_commands keeps it out of active config commands.
+    active_forbidden = [*plugin_forbidden, "pyproject.toml"]
 
-    for path in [*active_paths, *plugin_paths]:
+    for path in active_paths:
         text = path.read_text(encoding="utf-8")
-        for old_entrypoint in forbidden:
+        for old_entrypoint in active_forbidden:
+            assert old_entrypoint not in text, f"{path} still references {old_entrypoint}"
+
+    for path in plugin_paths:
+        text = path.read_text(encoding="utf-8")
+        for old_entrypoint in plugin_forbidden:
             assert old_entrypoint not in text, f"{path} still references {old_entrypoint}"
 
 
@@ -1322,7 +1410,7 @@ def test_build_and_verify_init_template_pytest_xdist_detection_matches_runner(
 ) -> None:
     runner = load_build_and_verify_runner_module()
 
-    assert init_wizard_uses_pytest_parallel(command) is runner._uses_pytest_xdist(command)
+    assert init_wizard_uses_pytest_parallel(command) is runner.uses_pytest_xdist(command)
 
 
 def test_build_and_verify_init_template_detects_missing_executable(
