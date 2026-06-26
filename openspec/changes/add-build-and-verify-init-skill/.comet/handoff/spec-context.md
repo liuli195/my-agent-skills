@@ -3,7 +3,7 @@
 - Change: add-build-and-verify-init-skill
 - Phase: design
 - Mode: beta
-- Context hash: 0ef1e689d6f8e704780ef9cea8faf8014ae81fb9b63fbe1be7c5a08ec24887ff
+- Context hash: 20432dd3b844469882436c891cdd950fd7e31cf523461efefa3c4cf61d9781d7
 
 Generated-by: comet-handoff.sh
 
@@ -14,11 +14,11 @@ OpenSpec remains the canonical capability spec. This beta context pack verbatim-
 - Source: openspec/changes/add-build-and-verify-init-skill/proposal.md
 - SHA256: f66f78dce76e8ae77683d0763eec340123c1484cb3d613a32d7f58b4c4b11c5a
 - Source: openspec/changes/add-build-and-verify-init-skill/design.md
-- SHA256: a5441f3d4bc8fcf45f3b06b12dd6ade15c924447d04bdf374de8013cbfc30b9a
+- SHA256: ae046b015aa62e4f417bea7f8a602a8151b1cafc7bb53c309c256edb11eef592
 - Source: openspec/changes/add-build-and-verify-init-skill/tasks.md
-- SHA256: d8883e822c8c365a34883620ee5b7c06cc5faa3ac8feeace7feccb6e7954e3ae
+- SHA256: e33dc91308b2cc304d353071db3fa1fa77eaa18640dbd70526e816616bf6558d
 - Source: openspec/changes/add-build-and-verify-init-skill/specs/test-framework-plugin/spec.md
-- SHA256: 9126e576d497f450549d57241c30a1ba1b531d0b627df289df4876185b8bb021
+- SHA256: 5de8ef7d18267ea2c85ee1c828da77419d98a637385d2d41aec5fae1f741e04f
 
 ## Acceptance Projection
 
@@ -26,7 +26,7 @@ OpenSpec remains the canonical capability spec. This beta context pack verbatim-
 
 - Source: openspec/changes/add-build-and-verify-init-skill/specs/test-framework-plugin/spec.md
 - Lines: 1-130
-- SHA256: 9126e576d497f450549d57241c30a1ba1b531d0b627df289df4876185b8bb021
+- SHA256: 5de8ef7d18267ea2c85ee1c828da77419d98a637385d2d41aec5fae1f741e04f
 
 ```md
 ## MODIFIED Requirements
@@ -84,6 +84,7 @@ OpenSpec remains the canonical capability spec. This beta context pack verbatim-
 - **WHEN** 目标仓库包含 `package.json`（包配置）
 - **THEN** agent（代理） MUST 读取 `scripts`（脚本）并识别 build、test、lint 和 typecheck 等候选命令
 - **THEN** agent（代理） MUST 展示候选 Node（节点运行时）checks（检查项）并等待用户选择
+- **THEN** `check`（检查脚本）和 `verify`（验证脚本）候选 MUST 使用不同 check id（检查项标识）
 
 #### Scenario: Python repository detection
 - **WHEN** 目标仓库包含 Python（Python 语言）配置迹象
@@ -156,6 +157,7 @@ OpenSpec remains the canonical capability spec. This beta context pack verbatim-
 - **THEN** agent（代理） MUST 展示可选试运行范围
 - **THEN** dry run（试运行） MUST 只使用现有 `build`（构建检查）、默认 `verify`（快速验证）和显式 `verify --full`（完整验证）命令范围
 - **THEN** 用户 MUST 明确选择要试运行的命令范围
+- **THEN** agent（代理） MUST NOT 把只做 config（配置）结构校验当作完成初始化的 dry run（试运行）选择
 - **THEN** agent（代理） MUST NOT 声称可以单独运行某个 check（检查项），除非 build-and-verify（构建与验证）runner（运行器）未来提供该能力
 - **THEN** agent（代理） MUST NOT 默认运行 `verify --full`（完整验证）
 - **THEN** 用户选择完整验证时，agent（代理） MUST 先说明成本和原因

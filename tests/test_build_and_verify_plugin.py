@@ -268,6 +268,33 @@ def test_build_and_verify_init_references_all_required_files() -> None:
 
 def test_build_and_verify_init_questionnaire_contains_fixed_flow() -> None:
     text = (INIT_REFERENCE_ROOT / "questionnaire.md").read_text(encoding="utf-8")
+    required_options = [
+        "使用当前目录。",
+        "使用用户提供的绝对路径。",
+        "允许扫描仓库文件。",
+        "不允许扫描，改为手动提供命令。",
+        "接受检测结果。",
+        "修改检测结果。",
+        "纳入全部候选 checks（检查项）。",
+        "只纳入用户选择的 checks（检查项）。",
+        "手动新增 checks（检查项）。",
+        "接受建议 paths（受影响路径）。",
+        "修改 paths（受影响路径）。",
+        "接受建议 inputs（缓存输入）。",
+        "修改 inputs（缓存输入）。",
+        "接受建议运行参数。",
+        "修改 `verify.maxParallel`（最大并行检查数）。",
+        "修改 `verify.timeoutSeconds`（超时秒数）。",
+        "新建配置，不覆盖已有配置。",
+        "覆盖已有 `.build-and-verify/config.json`（配置文件）。",
+        "接受 `.build-and-verify/backups/config-YYYYMMDD-HHMMSS.json`（备份配置文件）。",
+        "只运行 `build`（构建检查）。",
+        "只运行默认 `verify`（快速验证）。",
+        "运行 `build`（构建检查）和默认 `verify`（快速验证）。",
+        "明确运行 `verify --full`（完整验证）。",
+        "确认写入。",
+        "返回前面问题修改草案。",
+    ]
     required_questions = [
         "Q1 目标仓库路径确认",
         "Q2 扫描授权",
@@ -284,16 +311,31 @@ def test_build_and_verify_init_questionnaire_contains_fixed_flow() -> None:
 
     for question in required_questions:
         assert question in text
+    for option in required_options:
+        assert option in text
     assert "固定选项" in text
     assert "选择后果" in text
     assert "跳转规则" in text
     assert "用户沉默不能视为确认" in text
+    assert "如果配置已存在，必须停止并说明原因" in text
     assert "不运行 dry run（试运行）" not in text
     assert "只做 config（配置）结构校验" not in text
 
 
 def test_build_and_verify_init_ecosystem_detection_covers_node_python_and_fallback() -> None:
     text = (INIT_REFERENCE_ROOT / "ecosystem-detection.md").read_text(encoding="utf-8")
+    exact_node_rules = [
+        "`pnpm-lock.yaml` -> `pnpm <script>`",
+        "`yarn.lock` -> `yarn <script>`",
+        "`package-lock.json` -> `npm run <script>`",
+        "无 lockfile（锁文件） -> `npm run <script>`",
+        "`build` -> `build.node`",
+        "`test` -> `verify.node-tests`",
+        "`lint` -> `verify.node-lint`",
+        "`typecheck` -> `verify.node-typecheck`",
+        "`check` -> `verify.node-check`",
+        "`verify` -> `verify.node-verify`",
+    ]
 
     for token in [
         "package.json",
@@ -311,8 +353,8 @@ def test_build_and_verify_init_ecosystem_detection_covers_node_python_and_fallba
         "手动提供 build（构建检查）和 verify（验证）命令",
     ]:
         assert token in text
-    assert "`check` -> `verify.node-check`" in text
-    assert "`verify` -> `verify.node-verify`" in text
+    for rule in exact_node_rules:
+        assert rule in text
 
 
 def test_build_and_verify_init_config_draft_rules_cover_commands_paths_inputs_and_runtime_tuning() -> None:
@@ -331,8 +373,37 @@ def test_build_and_verify_init_config_draft_rules_cover_commands_paths_inputs_an
         "verify.timeoutSeconds",
         "parallel: true",
         "auto（自动）语义",
+        "只能在解释含义并获得用户确认后写入",
     ]:
         assert token in text
+
+
+def test_build_and_verify_init_references_have_cross_file_flow_invariants() -> None:
+    questionnaire = (INIT_REFERENCE_ROOT / "questionnaire.md").read_text(encoding="utf-8")
+    ecosystem = (INIT_REFERENCE_ROOT / "ecosystem-detection.md").read_text(encoding="utf-8")
+    config_draft = (INIT_REFERENCE_ROOT / "config-draft.md").read_text(encoding="utf-8")
+    validation = (INIT_REFERENCE_ROOT / "validation.md").read_text(encoding="utf-8")
+
+    for dry_run_choice in [
+        "只运行 `build`（构建检查）",
+        "只运行默认 `verify`（快速验证）",
+        "运行 `build`（构建检查）和默认 `verify`（快速验证）",
+        "明确选择后运行 `verify --full`（完整验证）",
+    ]:
+        normalized_choice = dry_run_choice.replace("明确选择后运行", "明确运行")
+        assert dry_run_choice in validation
+        assert normalized_choice in questionnaire
+
+    for check_id in [
+        "build.node",
+        "verify.node-tests",
+        "verify.node-lint",
+        "verify.node-typecheck",
+        "verify.node-check",
+        "verify.node-verify",
+    ]:
+        assert check_id in ecosystem
+        assert "短横线风格" in config_draft
 
 
 def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_dry_run() -> None:
