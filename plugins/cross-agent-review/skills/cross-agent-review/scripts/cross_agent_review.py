@@ -367,17 +367,6 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def input_reference(label: str, path: Path) -> str:
-    content = path.read_bytes()
-    return "\n".join(
-        [
-            f"{label} file: {path}",
-            f"{label} bytes: {len(content)}",
-            f"{label} sha256: {hashlib.sha256(content).hexdigest()}",
-        ]
-    )
-
-
 def render_template(path: Path, values: dict[str, str]) -> str:
     rendered = path.read_text(encoding="utf-8")
     for key, value in values.items():
@@ -436,16 +425,6 @@ def changed_files_prompt(cwd: Path, review_args: ReviewInput, limit: int = 160) 
     return "\n".join(lines)
 
 
-def context_file_references(review_args: ReviewInput) -> str:
-    return "\n\n".join(
-        [
-            input_reference("Spec", review_args.spec_file),
-            input_reference("Design", review_args.design_file),
-            input_reference("Plan", review_args.plan_file),
-        ]
-    )
-
-
 def merge_base(cwd: Path, base_ref: str, head_ref: str) -> str:
     return git_output(["merge-base", base_ref, head_ref], cwd)
 
@@ -496,10 +475,6 @@ def commit_entries(cwd: Path, base_ref: str, head_ref: str) -> list[dict[str, st
     return entries
 
 
-def input_manifest_path(review_args: ReviewInput) -> Path:
-    return output_dir_for(review_args) / "inputs" / "manifest.json"
-
-
 def relative_to_output(review_args: ReviewInput, path: Path) -> str:
     try:
         return path.relative_to(output_dir_for(review_args)).as_posix()
@@ -516,33 +491,7 @@ def input_file_metadata(review_args: ReviewInput, path: Path) -> dict:
     }
 
 
-def build_input_manifest(review_args: ReviewInput) -> dict:
-    cwd = Path.cwd()
-    review_subject = review_subject_commands(review_args)
-    review_subject["merge_base"] = merge_base(cwd, review_args.base_ref, review_args.head_ref)
-    return {
-        "change": review_args.change,
-        "base_ref": review_args.base_ref,
-        "head_ref": review_args.head_ref,
-        "review_subject": review_subject,
-        "commits": commit_entries(cwd, review_args.base_ref, review_args.head_ref),
-        "inputs": {
-            "spec": input_file_metadata(review_args, review_args.spec_file),
-            "design": input_file_metadata(review_args, review_args.design_file),
-            "plan": input_file_metadata(review_args, review_args.plan_file),
-        },
-        "changed_files": changed_file_entries_from_git(cwd, review_args.base_ref, review_args.head_ref),
-    }
-
-
-def write_input_manifest(review_args: ReviewInput) -> Path:
-    path = input_manifest_path(review_args)
-    write_json(path, build_input_manifest(review_args))
-    return path
-
-
 def reviewer_prompt(review_args: ReviewInput, role: str) -> str:
-    review_subject = review_subject_commands(review_args)
     schema_json = json.dumps(
         {
             "role": role,
@@ -564,17 +513,10 @@ def reviewer_prompt(review_args: ReviewInput, role: str) -> str:
         REVIEWER_PROMPT_TEMPLATE,
         {
             "role": role,
+            "input_file_path": str(review_args.input_file),
             "schema_json": schema_json,
             "severity_rubric": SEVERITY_RUBRIC,
             "role_focus": ROLE_FOCUS.get(role, ""),
-            "change": review_args.change,
-            "base_ref": review_args.base_ref,
-            "head_ref": review_args.head_ref,
-            "manifest_path": str(input_manifest_path(review_args)),
-            "review_subject_commands": review_subject_commands_prompt(review_args),
-            "changed_files": changed_files_prompt(Path.cwd(), review_args),
-            "context_files": context_file_references(review_args),
-            "path_diff_command_template": review_subject["path_diff_command_template"],
         },
     )
 
@@ -842,9 +784,7 @@ def archive_input_snapshots(review_args: ReviewInput) -> ReviewInput:
         target = inputs_dir / filename
         target.write_bytes(source.read_bytes())
         replacements[field] = target
-    archived = replace(review_args, **replacements)
-    write_input_manifest(archived)
-    return archived
+    return replace(review_args, **replacements)
 
 
 def first_text(raw: dict, names: Sequence[str]) -> str:

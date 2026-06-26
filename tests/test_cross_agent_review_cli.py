@@ -3,6 +3,7 @@ import hashlib
 import json
 import io
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
@@ -419,19 +420,72 @@ def test_diff_file_argument_is_not_required(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def make_review_input_for_module(module, tmp_path: Path):
+    input_file = write_review_input(tmp_path, "base", "head")
+    cwd = Path.cwd()
+    try:
+        os.chdir(tmp_path)
+        return module.load_review_input(
+            types.SimpleNamespace(
+                input_file=input_file,
+                debug=False,
+                sdk_python=None,
+                fake_reviewer_results=None,
+            )
+        )
+    finally:
+        os.chdir(cwd)
+
+
 def make_review_args_for_module(module, tmp_path: Path):
-    return module.ReviewArgs(
-        change="demo",
-        base_ref="base",
-        head_ref="head",
-        spec_file=write_file(tmp_path / "spec.md"),
-        design_file=write_file(tmp_path / "design.md"),
-        tasks_file=write_file(tmp_path / "tasks.md"),
-        output_dir=tmp_path / "out",
-        sdk_python=None,
-        fake_reviewer_results=None,
-        disable_risk_review=None,
+    return make_review_input_for_module(module, tmp_path)
+
+
+def test_reviewer_prompt_references_review_input_file_only(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
+    project = tmp_path / "repo"
+    base = init_repo(project)
+    write_file(project / "app.txt", "two\n")
+    git(project, "add", "app.txt")
+    git(project, "commit", "-m", "feature")
+    head = git(project, "rev-parse", "HEAD")
+    input_file = write_review_input(project, base, head)
+    monkeypatch.chdir(project)
+    review_input = module.load_review_input(
+        types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None, fake_reviewer_results=None)
     )
+
+    prompt = module.reviewer_prompt(review_input, "spec-alignment")
+
+    assert f"Read: {input_file}" in prompt
+    assert "Review only base_ref...head_ref from the input file." in prompt
+    assert "Use spec_file, design_file, and plan_file as requirements context." in prompt
+    assert "Manifest file:" not in prompt
+    assert "Changed files:" not in prompt
+    assert "Spec bytes:" not in prompt
+    assert "Design file:" not in prompt
+    assert "Tasks file:" not in prompt
+    assert "git diff" not in prompt
+    assert "spec body" not in prompt
+    assert "plan body" not in prompt
+
+
+def test_reviewer_prompt_template_uses_limited_variables(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
+    review_input = make_review_input_for_module(module, tmp_path)
+    template = write_file(
+        tmp_path / "reviewer-prompt.md",
+        "Role={{ role }} Input={{ input_file_path }} Focus={{ role_focus }} Rubric={{ severity_rubric }} Schema={{ schema_json }}\n",
+    )
+    monkeypatch.setattr(module, "REVIEWER_PROMPT_TEMPLATE", template, raising=False)
+
+    prompt = module.reviewer_prompt(review_input, "implementation-correctness")
+
+    assert "Role=implementation-correctness" in prompt
+    assert f"Input={review_input.input_file}" in prompt
+    assert "{{ change }}" not in prompt
+    assert "{{ manifest_path }}" not in prompt
+    assert "{{ changed_files }}" not in prompt
 
 
 def test_dirty_worktree_rejects_before_dispatch(tmp_path: Path) -> None:
