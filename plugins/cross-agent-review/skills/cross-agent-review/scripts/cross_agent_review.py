@@ -933,15 +933,6 @@ def runtime_allowed_paths(review_input: ReviewInput) -> list[Path]:
     return [review_input.input_file, review_input.output_dir]
 
 
-def output_artifact_paths(review_args: ReviewInput) -> list[Path]:
-    out_dir = output_dir_for(review_args)
-    paths = [input_manifest_path(review_args)]
-    for directory in (out_dir / "prompts", out_dir / "raw"):
-        if directory.is_dir():
-            paths.extend(path for path in directory.glob("*.txt") if path.is_file())
-    return paths
-
-
 def write_outputs(review_args: ReviewInput, summary: dict, extra_allowed_paths: Sequence[Path] = ()) -> int:
     out_dir = output_dir_for(review_args)
     out_dir.mkdir(parents=True, exist_ok=True)
