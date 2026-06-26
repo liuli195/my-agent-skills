@@ -24,6 +24,15 @@ BUILD_AND_VERIFY_SCRIPT = (
 CHANGE_BASE_REF = "4030d1ceb81fa6e450ef517e09d2ff391f5260b2"
 
 PLUGIN_NAME = "build-and-verify"
+INIT_SKILL_NAME = "build-and-verify-init"
+INIT_SKILL_ROOT = PLUGIN_ROOT / "skills" / INIT_SKILL_NAME
+INIT_REFERENCE_ROOT = INIT_SKILL_ROOT / "references"
+REQUIRED_INIT_REFERENCES = {
+    "questionnaire.md",
+    "ecosystem-detection.md",
+    "config-draft.md",
+    "validation.md",
+}
 PLUGIN_VERSION = "0.1.14"
 PLUGIN_DESCRIPTION = "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）"
 
@@ -209,30 +218,164 @@ def test_build_and_verify_plugin_has_dual_manifests() -> None:
     assert read_json(PLUGIN_ROOT / ".claude-plugin" / "plugin.json") == expected_manifest
 
 
-def test_build_and_verify_plugin_has_single_skill_entrypoint() -> None:
+def test_build_and_verify_plugin_has_runtime_and_init_skill_entrypoints() -> None:
     skill_root = PLUGIN_ROOT / "skills"
-    script_path = skill_root / PLUGIN_NAME / "scripts" / "build_and_verify.py"
-    skill_dirs = [path.name for path in skill_root.iterdir() if path.is_dir()]
-    skill_text = (skill_root / PLUGIN_NAME / "SKILL.md").read_text(encoding="utf-8")
-    front_matter = skill_text.split("---", 2)[1]
+    runtime_script_path = skill_root / PLUGIN_NAME / "scripts" / "build_and_verify.py"
+    skill_dirs = sorted(path.name for path in skill_root.iterdir() if path.is_dir())
+    runtime_skill_text = (skill_root / PLUGIN_NAME / "SKILL.md").read_text(encoding="utf-8")
+    runtime_front_matter = runtime_skill_text.split("---", 2)[1]
+    init_skill_text = (INIT_SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    init_front_matter = init_skill_text.split("---", 2)[1]
 
-    assert skill_dirs == [PLUGIN_NAME]
-    assert script_path.is_file()
-    assert skill_text.startswith("---\n")
-    assert f"name: {PLUGIN_NAME}" in front_matter
-    assert "本仓库 build（构建检查）和 verify（验证）的统一入口" in skill_text
-    assert "默认 verify（验证）使用 fast（快速）模式" in skill_text
-    assert "`--full`（完整）只允许 PR Flow hotfix（拉取请求流程热修复）直推流程和 PR CI（拉取请求持续集成）使用" in skill_text
-    assert "不安装依赖" in skill_text
-    assert "不写用户级配置" in skill_text
-    assert "不配置 CI（持续集成）" in skill_text
-    assert "不内置仓库业务逻辑" in skill_text
-    assert "不向目标仓库复制 runner（运行器）" in skill_text
-    assert "scripts/build_and_verify.py init" in skill_text
-    assert "scripts/build_and_verify.py build" in skill_text
-    assert "scripts/build_and_verify.py verify" in skill_text
-    assert "timeoutSeconds" in skill_text
-    assert "pytest-xdist" in skill_text
+    assert skill_dirs == [PLUGIN_NAME, INIT_SKILL_NAME]
+    assert runtime_script_path.is_file()
+    assert runtime_skill_text.startswith("---\n")
+    assert f"name: {PLUGIN_NAME}" in runtime_front_matter
+    assert "本仓库 build（构建检查）和 verify（验证）的统一入口" in runtime_skill_text
+    assert "默认 verify（验证）使用 fast（快速）模式" in runtime_skill_text
+    assert "`--full`（完整）只允许 PR Flow hotfix（拉取请求流程热修复）直推流程和 PR CI（拉取请求持续集成）使用" in runtime_skill_text
+    assert "不安装依赖" in runtime_skill_text
+    assert "不写用户级配置" in runtime_skill_text
+    assert "不配置 CI（持续集成）" in runtime_skill_text
+    assert "不内置仓库业务逻辑" in runtime_skill_text
+    assert "不向目标仓库复制 runner（运行器）" in runtime_skill_text
+    assert "scripts/build_and_verify.py init" in runtime_skill_text
+    assert "scripts/build_and_verify.py build" in runtime_skill_text
+    assert "scripts/build_and_verify.py verify" in runtime_skill_text
+    assert "timeoutSeconds" in runtime_skill_text
+    assert "pytest-xdist" in runtime_skill_text
+
+    assert init_skill_text.startswith("---\n")
+    assert f"name: {INIT_SKILL_NAME}" in init_front_matter
+    assert "questionnaire.md" in init_skill_text
+    assert "ecosystem-detection.md" in init_skill_text
+    assert "config-draft.md" in init_skill_text
+    assert "validation.md" in init_skill_text
+    assert "用户沉默不能视为确认" in init_skill_text
+    assert "不新增命令行初始化脚本" in init_skill_text
+    assert "不安装依赖" in init_skill_text
+    assert "不写用户级配置" in init_skill_text
+    assert "不配置 CI（持续集成）" in init_skill_text
+
+
+def test_build_and_verify_init_references_all_required_files() -> None:
+    assert INIT_SKILL_ROOT.is_dir()
+    assert INIT_REFERENCE_ROOT.is_dir()
+    assert {
+        path.name for path in INIT_REFERENCE_ROOT.iterdir() if path.is_file()
+    } == REQUIRED_INIT_REFERENCES
+
+
+def test_build_and_verify_init_questionnaire_contains_fixed_flow() -> None:
+    text = (INIT_REFERENCE_ROOT / "questionnaire.md").read_text(encoding="utf-8")
+    required_questions = [
+        "Q1 目标仓库路径确认",
+        "Q2 扫描授权",
+        "Q3 检测结果确认",
+        "Q4 check（检查项）选择",
+        "Q5 paths（受影响路径）确认",
+        "Q6 inputs（缓存输入）确认",
+        "Q7 并行和超时确认",
+        "Q8 覆盖确认",
+        "Q9 备份路径确认",
+        "Q10 dry run（试运行）范围",
+        "Q11 最终写入确认",
+    ]
+
+    for question in required_questions:
+        assert question in text
+    assert "固定选项" in text
+    assert "选择后果" in text
+    assert "跳转规则" in text
+    assert "用户沉默不能视为确认" in text
+    assert "不运行 dry run（试运行）" not in text
+    assert "只做 config（配置）结构校验" not in text
+
+
+def test_build_and_verify_init_ecosystem_detection_covers_node_python_and_fallback() -> None:
+    text = (INIT_REFERENCE_ROOT / "ecosystem-detection.md").read_text(encoding="utf-8")
+
+    for token in [
+        "package.json",
+        "scripts",
+        "build",
+        "test",
+        "lint",
+        "typecheck",
+        "pyproject.toml",
+        "pytest.ini",
+        "tox.ini",
+        "noxfile.py",
+        "requirements*.txt",
+        "未识别生态",
+        "手动提供 build（构建检查）和 verify（验证）命令",
+    ]:
+        assert token in text
+    assert "`check` -> `verify.node-check`" in text
+    assert "`verify` -> `verify.node-verify`" in text
+
+
+def test_build_and_verify_init_config_draft_rules_cover_commands_paths_inputs_and_runtime_tuning() -> None:
+    text = (INIT_REFERENCE_ROOT / "config-draft.md").read_text(encoding="utf-8")
+
+    for token in [
+        "build.checks",
+        "verify.checks",
+        "check id（检查项标识）",
+        "短横线",
+        "command（命令）默认使用字符串形式",
+        "列表形式 command（命令）只在用户明确要求",
+        "paths（受影响路径）",
+        "inputs（缓存输入）",
+        "verify.maxParallel",
+        "verify.timeoutSeconds",
+        "parallel: true",
+        "auto（自动）语义",
+    ]:
+        assert token in text
+
+
+def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_dry_run() -> None:
+    text = (INIT_REFERENCE_ROOT / "validation.md").read_text(encoding="utf-8")
+
+    for token in [
+        "targeted dependency checks（定向依赖检查）",
+        "pytest-xdist",
+        "可执行入口",
+        "缺失文件或目录",
+        "不安装依赖",
+        ".build-and-verify/backups/config-YYYYMMDD-HHMMSS.json",
+        "/backups/",
+        "config（配置）结构校验",
+        "build（构建检查）",
+        "默认 verify（快速验证）",
+        "verify --full（完整验证）",
+        "不支持单独运行某个 check（检查项）",
+        "verify.timeoutSeconds",
+        "大于 0 的 number（数字）",
+        "允许为空 string list（字符串清单）",
+    ]:
+        assert token in text
+    assert "不运行 dry run（试运行）" not in text
+    assert "只做 config（配置）结构校验" not in text
+
+
+def test_build_and_verify_init_delta_spec_targets_test_framework_plugin_capability() -> None:
+    spec_path = (
+        REPO_ROOT
+        / "openspec"
+        / "changes"
+        / "add-build-and-verify-init-skill"
+        / "specs"
+        / "test-framework-plugin"
+        / "spec.md"
+    )
+    text = spec_path.read_text(encoding="utf-8")
+
+    assert "Runtime and initialization skill surfaces" in text
+    assert "build-and-verify-init" in text
+    assert "template-driven guided initialization" in text
+    assert "Guided initialization validates config and environment before completion" in text
 
 
 def test_build_and_verify_registered_in_marketplaces_and_projection() -> None:
@@ -300,7 +443,6 @@ def test_build_and_verify_active_surfaces_do_not_keep_old_entrypoints() -> None:
         "test_framework.py",
         "test_framework_runner.py",
         "verify.test-framework",
-        "pyproject.toml",
     ]
 
     for path in [*active_paths, *plugin_paths]:
@@ -429,6 +571,12 @@ def test_build_and_verify_init_writes_config_gitignore_and_cache(tmp_path: Path)
         "verify": {"checks": []},
     }
     assert (project / ".build-and-verify" / ".gitignore").read_text(encoding="utf-8") == "/cache/\n/runs/\n"
+    assert "build-and-verify-init" not in result.stdout
+    assert "questionnaire" not in result.stdout.lower()
+    assert "questionnaire" not in result.stderr.lower()
+    assert not (project / ".build-and-verify" / "backups").exists()
+    assert read_json(project / ".build-and-verify" / "config.json")["build"]["checks"] == []
+    assert read_json(project / ".build-and-verify" / "config.json")["verify"]["checks"] == []
 
 
 @pytest.mark.parametrize(

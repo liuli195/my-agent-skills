@@ -1,0 +1,14 @@
+{
+  "change": "add-build-and-verify-init-skill",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "0ef1e689d6f8e704780ef9cea8faf8014ae81fb9b63fbe1be7c5a08ec24887ff",
+  "files": [
+    { "path": "openspec/changes/add-build-and-verify-init-skill/proposal.md", "sha256": "f66f78dce76e8ae77683d0763eec340123c1484cb3d613a32d7f58b4c4b11c5a", "role": "supporting" },
+    { "path": "openspec/changes/add-build-and-verify-init-skill/design.md", "sha256": "a5441f3d4bc8fcf45f3b06b12dd6ade15c924447d04bdf374de8013cbfc30b9a", "role": "supporting" },
+    { "path": "openspec/changes/add-build-and-verify-init-skill/tasks.md", "sha256": "d8883e822c8c365a34883620ee5b7c06cc5faa3ac8feeace7feccb6e7954e3ae", "role": "supporting" },
+    { "path": "openspec/changes/add-build-and-verify-init-skill/specs/test-framework-plugin/spec.md", "sha256": "9126e576d497f450549d57241c30a1ba1b531d0b627df289df4876185b8bb021", "role": "spec" }
+  ]
+}
