@@ -58,7 +58,7 @@ Active old caller search（现有旧调用方搜索）结果：
 - Modify（修改）: `tests/test_cross_agent_review_cli.py`
 - Modify（修改）: `plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py`
 
-- [ ] **Step 1: Write failing tests（先写失败测试）**
+- [x] **Step 1: Write failing tests（先写失败测试）**
 
 Add helper functions near the existing `review_args` helper in `tests/test_cross_agent_review_cli.py`:
 
@@ -164,7 +164,7 @@ def test_invalid_mode_fails(tmp_path: Path) -> None:
     assert "invalid_mode: wide" in result.stdout
 ```
 
-- [ ] **Step 2: Run failing tests（确认失败）**
+- [x] **Step 2: Run failing tests（确认失败）**
 
 Run:
 
@@ -174,7 +174,7 @@ python -m pytest -q tests/test_cross_agent_review_cli.py::test_run_accepts_singl
 
 Expected（预期）: FAIL（失败） because `--input-file`（输入文件参数） and `plan_file`（计划文件） are not implemented.
 
-- [ ] **Step 3: Implement minimal loader（实现最小加载器）**
+- [x] **Step 3: Implement minimal loader（实现最小加载器）**
 
 In `plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py`:
 
@@ -224,7 +224,7 @@ run_parser.add_argument("--fake-reviewer-results")
 
 - Rename call sites from `ReviewArgs`（审查参数） to `ReviewInput`（审查输入） only where touched in this task.
 
-- [ ] **Step 4: Run passing tests（确认通过）**
+- [x] **Step 4: Run passing tests（确认通过）**
 
 Run the same command from Step 2.
 
