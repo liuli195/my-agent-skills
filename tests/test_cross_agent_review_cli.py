@@ -165,6 +165,15 @@ def write_review_input(
     return input_file
 
 
+def commit_review_context(project: Path) -> str:
+    write_file(project / "spec.md", "spec body\n")
+    write_file(project / "design.md", "design body\n")
+    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
+    git(project, "add", "spec.md", "design.md", "docs/superpowers/plans/demo.md")
+    git(project, "commit", "-m", "add review context")
+    return git(project, "rev-parse", "HEAD")
+
+
 def review_args(project: Path, head: str, *, mode: str = "convergence") -> list[str]:
     return [
         "run",
@@ -177,7 +186,8 @@ def review_args(project: Path, head: str, *, mode: str = "convergence") -> list[
 
 def test_run_accepts_single_review_input_file(tmp_path: Path) -> None:
     project = tmp_path / "repo"
-    head = init_repo(project)
+    init_repo(project)
+    head = commit_review_context(project)
 
     result = run(*review_args(project, head), cwd=project)
 
@@ -240,7 +250,8 @@ def test_invalid_mode_fails(tmp_path: Path) -> None:
 
 def test_prepared_inputs_rejects_extra_regular_file(tmp_path: Path) -> None:
     project = tmp_path / "repo"
-    head = init_repo(project)
+    init_repo(project)
+    head = commit_review_context(project)
     input_file = write_review_input(project, head, head)
     write_file(input_file.parent / "plan.md", "old snapshot\n")
 
@@ -253,7 +264,8 @@ def test_prepared_inputs_rejects_extra_regular_file(tmp_path: Path) -> None:
 
 def test_input_file_must_be_named_review_input_json_under_prepared_inputs(tmp_path: Path) -> None:
     project = tmp_path / "repo"
-    head = init_repo(project)
+    init_repo(project)
+    head = commit_review_context(project)
     input_file = write_review_input(project, head, head)
     wrong_file = input_file.parent / "input.json"
     wrong_file.write_text(input_file.read_text(encoding="utf-8"), encoding="utf-8")
@@ -267,7 +279,8 @@ def test_input_file_must_be_named_review_input_json_under_prepared_inputs(tmp_pa
 
 def test_invalid_base_ref_fails_before_dispatch(tmp_path: Path) -> None:
     project = tmp_path / "repo"
-    head = init_repo(project)
+    init_repo(project)
+    head = commit_review_context(project)
     input_file = write_review_input(project, "0" * 40, head)
 
     result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
@@ -278,7 +291,8 @@ def test_invalid_base_ref_fails_before_dispatch(tmp_path: Path) -> None:
 
 def test_dirty_worktree_outside_runtime_artifacts_rejects_before_dispatch(tmp_path: Path) -> None:
     project = tmp_path / "repo"
-    head = init_repo(project)
+    init_repo(project)
+    head = commit_review_context(project)
     input_file = write_review_input(project, head, head)
     write_file(project / "dirty.txt", "dirty\n")
 
@@ -292,12 +306,7 @@ def test_dirty_worktree_outside_runtime_artifacts_rejects_before_dispatch(tmp_pa
 def test_renamed_tracked_file_into_runtime_artifacts_rejects_before_dispatch(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     init_repo(project)
-    write_file(project / "spec.md", "spec body\n")
-    write_file(project / "design.md", "design body\n")
-    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
-    git(project, "add", "spec.md", "design.md", "docs/superpowers/plans/demo.md")
-    git(project, "commit", "-m", "add review context")
-    head = git(project, "rev-parse", "HEAD")
+    head = commit_review_context(project)
     input_file = write_review_input(project, head, head)
     output_dir = input_file.parent.parent
     git(project, "mv", "app.txt", str(output_dir / "app.txt"))
@@ -312,12 +321,7 @@ def test_renamed_tracked_file_into_runtime_artifacts_rejects_before_dispatch(tmp
 def test_copied_tracked_file_into_runtime_artifacts_rejects_before_dispatch(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     init_repo(project)
-    write_file(project / "spec.md", "spec body\n")
-    write_file(project / "design.md", "design body\n")
-    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
-    git(project, "add", "spec.md", "design.md", "docs/superpowers/plans/demo.md")
-    git(project, "commit", "-m", "add review context")
-    head = git(project, "rev-parse", "HEAD")
+    head = commit_review_context(project)
     input_file = write_review_input(project, head, head)
     output_dir = input_file.parent.parent
     shutil.copyfile(project / "app.txt", output_dir / "app.txt")
@@ -333,7 +337,8 @@ def test_copied_tracked_file_into_runtime_artifacts_rejects_before_dispatch(tmp_
 def test_clean_worktree_checks_reuse_runtime_allowlist(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
-    head = init_repo(project)
+    init_repo(project)
+    head = commit_review_context(project)
     input_file = write_review_input(project, head, head)
     parsed = module.build_parser().parse_args(
         [
