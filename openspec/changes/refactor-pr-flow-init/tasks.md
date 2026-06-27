@@ -34,4 +34,4 @@
 - [x] 4.5 Add tests that require `pr-flow-init/references/questionnaire.md`, `config-draft.md` and `validation.md`（问答模板、配置草案规则、校验规则） to exist and be referenced by the Skill（技能） entrypoint.
 - [x] 4.6 Add tests that Plugin（插件）/Skill（技能） content is organized by user scenario, and questionnaire（问答模板） contains fixed questions, fixed options, consequences and jump rules.
 - [x] 4.7 Add an end-to-end regression from `pr-flow-init` Skill（初始化技能） entrypoint: load references（参考文件）, simulate fixed questionnaire（问答模板） answers and final confirmation, generate draft, run read-only validate（校验）, write via confirmed config input, and perform post-write structure check without running diagnose、complete、cleanup、hotfix or tweak（诊断、收尾、清理、热修复、小改）.
-- [ ] 4.8 Run focused PR Flow（拉取请求流程） tests and OpenSpec（开放规格） strict validation.
+- [x] 4.8 Run focused PR Flow（拉取请求流程） tests and OpenSpec（开放规格） strict validation.
