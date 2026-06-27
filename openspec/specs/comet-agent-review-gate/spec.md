@@ -45,11 +45,9 @@ TBD - created by archiving change add-comet-agent-review-gate. Update Purpose af
 - **THEN** Global Command Guard（全局命令守卫点）不得因为缺少 cross-agent-review（跨代理审查）pass marker（通过标记）拒绝该命令
 
 ### Requirement: Comet review gate 通过产物注册层校验 pass marker
-
 系统 MUST 通过 Agent Guard artifacts.yaml（产物注册文件）注册 `cross_agent_review_pass`（跨代理审查通过标记），并使用 Global Command Guard（全局命令守卫点）的 JSON predicate（JSON 谓词）校验该 marker（标记）。`cross_agent_review_pass` 属于 guard-defined evidence（守卫定义证据），因为通过结论由主 agent（主代理）读取 review report（审查报告）后生成。系统 MUST NOT 在 Agent Guard（代理守卫）中实现 cross-agent-review（跨代理审查）内部流程。
 
 #### Scenario: 注册 cross-agent-review pass marker
-
 - **WHEN** 用户级 Guard Profile（守卫画像）配置 Comet review gate
 - **THEN** `artifacts.yaml` 注册 `cross_agent_review_pass` 产物
 - **AND** 该产物路径指向 Agent Guard（代理守卫）默认 evidence（证据）目录 `.local/guard/evidence/<profile_id>/cross_agent_review_pass/<subject_id>/<head_ref_short>/pass.json`
@@ -58,27 +56,16 @@ TBD - created by archiving change add-comet-agent-review-gate. Update Purpose af
 - **AND** Global Command Guard 通过 `artifact` 或 `artifact_id` 引用该注册产物，而不是直接声明独立 `evidence.path`
 
 #### Scenario: pass marker 合法
-
 - **WHEN** `pass.json` 存在于当前 change（变更）和当前短 HEAD（代码版本）对应目录
 - **AND** `status` 为 `pass`、`schema_version` 为 `guard-evidence/v1`、`producer` 为 `cross-agent-review`、`artifact_id` 为 `cross_agent_review_pass`、`subject_id` 匹配当前 change、`head_ref` 匹配当前完整 HEAD、`head_ref_short` 匹配当前短 HEAD、`blocking_findings` 为 0、`report` 存在且 `report_hash` 存在
 - **THEN** Global Command Guard（全局命令守卫点）允许 Comet build 阶段守卫收尾命令继续执行
 
 #### Scenario: pass marker 缺失
-
 - **WHEN** review report（审查报告）存在但 `cross_agent_review_pass` 的 `pass.json` 不存在
 - **THEN** Global Command Guard（全局命令守卫点）拒绝 Comet build 阶段守卫收尾命令
 - **AND** deny（拒绝）输出包含失败原因、缺失产物、当前 change、当前 head ref 和来自 Guard Profile（守卫画像）配置的下一步提示
 
-#### Scenario: deny 输出由画像配置承载
-
-- **WHEN** Global Command Guard（全局命令守卫点）拒绝 `comet-guard.sh <change> build --apply`
-- **THEN** deny（拒绝）输出 MUST 包含结构化 `reason`、`next`、`suggestion`、命令 captures（捕获值）和 failing guard（失败守卫）详情
-- **AND** `reason`、`next` 和 `suggestion` MAY 使用 Guard Profile 中声明的场景化配置
-- **AND** Runtime（运行时）只负责透传或渲染这些配置字段，调用方 MAY 根据这些字段选择后续动作
-- **AND** 本系统 MUST NOT 在 Agent Guard 或 Comet 中实现 cross-agent-review 内部编排逻辑
-
 #### Scenario: pass marker 过期
-
 - **WHEN** `pass.json` 的 `head_ref` 不匹配当前完整 HEAD
 - **THEN** Global Command Guard（全局命令守卫点）拒绝 Comet build 阶段守卫收尾命令，并提示重新运行跨 agent review
 
@@ -134,69 +121,9 @@ TBD - created by archiving change add-comet-agent-review-gate. Update Purpose af
 - **AND** Runtime（运行时）不得要求该配置来自 Agent Guard Plugin（代理守卫插件）内置模板
 
 ### Requirement: Comet planning-review gate validates registered pass marker
-
 系统 MUST 通过 Agent Guard artifacts.yaml（产物注册文件）注册 `planning_review_pass`（规划审查通过标记），并使用 Global Command Guard（全局命令守卫点）的 JSON predicate（JSON 谓词）校验该 marker（标记）。`planning_review_pass` 属于 guard-defined evidence（守卫定义证据），因为 planning-review（规划审查）原流程没有稳定可检查产物。系统 MUST NOT 要求 planning-review（规划审查）Skill（技能）修改自身只读审查边界。
 
 #### Scenario: 注册 planning-review pass marker
-
-- **WHEN** 用户级 Guard Profile（守卫画像）配置 Comet planning-review gate（comet 规划审查门禁）
-- **THEN** `artifacts.yaml` MUST 注册 `planning_review_pass` 产物
-- **AND** 该产物路径 MUST 指向 Agent Guard（代理守卫）默认 evidence（证据）目录 `.local/guard/evidence/<profile_id>/<artifact_id>/<subject_id>/<head_ref_short>/pass.json`
-- **AND** `<artifact_id>` MUST 为 `planning_review_pass`
-- **AND** `<subject_id>` MUST 来自 Global Command Guard（全局命令守卫点）捕获的 `subject_id`
-- **AND** `<head_ref_short>` MUST 来自当前 Git HEAD（代码版本）的 12 位短值
-- **AND** Global Command Guard（全局命令守卫点）MUST 通过 `artifact` 或 `artifact_id` 引用该注册产物，而不是直接声明独立 `evidence.path`
-- **AND** `cross_agent_review_pass` MUST register the same guard-defined evidence（守卫定义证据）默认路径 shape（形状） as `planning_review_pass`（规划审查通过标记），with `artifact_id`（产物编号） set to `cross_agent_review_pass`
-
-#### Scenario: planning-review pass marker 合法
-
-- **WHEN** `pass.json` 存在于当前 change（变更）和当前短 HEAD（代码版本）对应目录
-- **AND** `status` 为 `pass`
-- **AND** `schema_version` 为 `guard-evidence/v1`
-- **AND** `producer` 为 `planning-review`
-- **AND** `profile_id` 匹配当前 Guard Profile（守卫画像）
-- **AND** `artifact_id` 为 `planning_review_pass`
-- **AND** `subject_type` 为 `comet-change`
-- **AND** `subject_id` 匹配当前 change（变更）
-- **AND** `head_ref` 匹配当前完整 HEAD（代码版本）
-- **AND** `head_ref_short` 匹配当前 12 位短 HEAD（代码版本）
-- **AND** `blocking_findings` 为 0
-- **AND** `scope` 存在
-- **AND** `report_hash` 存在
-- **AND** `created_at` 存在
-- **THEN** Global Command Guard（全局命令守卫点）允许 Comet design 阶段守卫收尾命令继续执行
-
-#### Scenario: 主 agent 写入 planning-review pass marker
-
-- **WHEN** 主 agent（代理）完成 planning-review（规划审查）
-- **AND** 审查结论没有 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）findings（发现项）
-- **THEN** 主 agent（代理）MUST 写入 `planning_review_pass` 通过标记
-- **AND** 该写入 MUST 使用 Agent Guard（代理守卫）定义的 guard-defined evidence（守卫定义证据）路径和 `guard-evidence/v1` 字段契约
-- **AND** planning-review（规划审查）Skill（技能）本身不得写入该 marker（标记）
-- **AND** Agent Guard Runtime（代理守卫运行时）不得生成该 marker（标记）
-
-#### Scenario: planning-review pass marker 字段无效
-
-- **WHEN** `pass.json` 存在
-- **AND** 其中 `schema_version`、`status`、`producer`、`profile_id`、`artifact_id`、`subject_type`、`subject_id`、`head_ref`、`head_ref_short`、`blocking_findings`、`scope`、`report_hash` 或 `created_at` 任一字段缺失或不匹配当前上下文
-- **THEN** Global Command Guard（全局命令守卫点）拒绝 Comet design 阶段守卫收尾命令
-- **AND** deny（拒绝）输出 MUST 包含失败字段详情
-
-#### Scenario: planning-review pass marker 缺失
-
-- **WHEN** 当前 change（变更）和当前 HEAD（代码版本）没有有效 `planning_review_pass` 产物
-- **THEN** Global Command Guard（全局命令守卫点）拒绝 Comet design 阶段守卫收尾命令
-- **AND** deny（拒绝）输出 MUST 包含失败原因、缺失产物、当前 change（变更）、当前 head ref（代码版本）和来自 Guard Profile（守卫画像）配置的下一步提示
-
-#### Scenario: planning-review pass marker 过期
-
-- **WHEN** `pass.json` 的 `head_ref` 不匹配当前完整 HEAD（代码版本）
-- **THEN** Global Command Guard（全局命令守卫点）拒绝 Comet design 阶段守卫收尾命令，并提示重新运行 planning-review（规划审查）
-
-#### Scenario: planning-review 有阻断发现
-
-- **WHEN** planning-review（规划审查）报告包含 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）findings（发现项）
-- **THEN** 调用方不得生成 `planning_review_pass` 通过标记
-- **AND** 调用方不得复用旧的 `planning_review_pass` 通过标记
-- **AND** Global Command Guard（全局命令守卫点）继续拒绝 Comet design 阶段守卫收尾命令
-- **AND** Agent Guard（代理守卫）不解析 planning-review（规划审查）报告或决定修复流程
+- **WHEN** 用户级 Guard Profile（守卫画像）配置 Comet planning-review gate
+- **THEN** `planning_review_pass` 和 `cross_agent_review_pass` MUST use the same guard-defined evidence（守卫定义证据）默认路径 shape（形状）
+- **AND** `cross_agent_review_pass` MUST use `artifact_id`（产物编号）值 `cross_agent_review_pass`

@@ -2,6 +2,8 @@
 comet_change: refactor-pr-flow-init
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-27-refactor-pr-flow-init
+status: final
 ---
 
 # PR Flow Init Refactor Design

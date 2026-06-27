@@ -2,6 +2,7 @@
 change: refactor-pr-flow-init
 design-doc: docs/superpowers/specs/2026-06-27-pr-flow-init-refactor-design.md
 base-ref: 098ee7c1ef9b2347808b864749fbb0df28d6c5ef
+archived-with: 2026-06-27-refactor-pr-flow-init
 ---
 
 # PR Flow Init Refactor Implementation Plan
@@ -14,6 +15,7 @@ base-ref: 098ee7c1ef9b2347808b864749fbb0df28d6c5ef
 
 **Tech Stack:** Python（编程语言）, argparse（命令行参数解析）, PyYAML（YAML 配置读取）, pytest（测试框架）, Markdown（文档格式）, OpenSpec（开放规格）。
 
+archived-with: 2026-06-27-refactor-pr-flow-init
 ---
 
 ## 文件结构
@@ -85,9 +87,11 @@ Expected: FAIL（失败），因为 references（参考文件）不存在且入�
 Replace `plugins/pr-flow/skills/pr-flow-init/SKILL.md` body with:
 
 ```markdown
+archived-with: 2026-06-27-refactor-pr-flow-init
 ---
 name: pr-flow-init
 description: "初始化 PR Flow（拉取请求流程）本地配置、PR 模板和运行态忽略文件。Use when 需要为仓库启用 PR Flow 配置。"
+archived-with: 2026-06-27-refactor-pr-flow-init
 ---
 
 # PR Flow Init
