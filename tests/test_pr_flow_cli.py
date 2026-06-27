@@ -1311,6 +1311,43 @@ def test_validate_reports_errors_for_missing_core_shape(tmp_path: Path) -> None:
     assert "error: defaults.reviewGate.evidencePath missing" in result.stdout
 
 
+def test_validate_reports_errors_for_invalid_wait_shape(tmp_path: Path) -> None:
+    config = default_pr_flow_config_for_test()
+    config["defaults"]["wait"] = "nope"
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    result = run("validate", "--config", str(draft))
+
+    assert result.returncode == 1
+    assert "error: defaults.wait must be a mapping" in result.stdout
+
+
+def test_validate_reports_errors_for_invalid_wait_values(tmp_path: Path) -> None:
+    config = default_pr_flow_config_for_test()
+    config["defaults"]["wait"] = {"timeoutSeconds": "slow", "pollSeconds": 0}
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    result = run("validate", "--config", str(draft))
+
+    assert result.returncode == 1
+    assert "error: defaults.wait.timeoutSeconds must be a positive integer" in result.stdout
+    assert "error: defaults.wait.pollSeconds must be a positive integer" in result.stdout
+
+
+def test_validate_reports_bad_yaml_as_structured_error(tmp_path: Path) -> None:
+    draft = tmp_path / "draft.yaml"
+    draft.write_text("defaults: [\n", encoding="utf-8")
+
+    result = run("validate", "--config", str(draft))
+
+    assert result.returncode == 1
+    assert "status: validation_failed" in result.stdout
+    assert "error: config YAML parse failed" in result.stdout
+    assert "Traceback" not in result.stderr
+
+
 @pytest.mark.parametrize(
     ("mutate", "expected"),
     [
@@ -1329,7 +1366,7 @@ def test_validate_reports_errors_for_missing_core_shape(tmp_path: Path) -> None:
             "warning: GitHub auto-delete head branch overlaps PR Flow cleanup",
         ),
         (
-            lambda config: config["setup"]["github"].update({"requiredReview": True}),
+            lambda config: config["setup"]["github"].update({"requiredReviews": True}),
             "setup suggestion: tweak cannot bypass GitHub required review",
         ),
     ],

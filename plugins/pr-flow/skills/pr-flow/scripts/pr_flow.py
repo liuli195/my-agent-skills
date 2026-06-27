@@ -87,6 +87,16 @@ def load_config_path(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
+def load_config_path_for_validation(path: Path) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    try:
+        config = load_config_path(path)
+    except yaml.YAMLError as exc:
+        return {}, [{"level": "error", "message": f"config YAML parse failed: {exc.problem or exc.__class__.__name__}"}]
+    if not isinstance(config, dict):
+        return {}, [{"level": "error", "message": "config must be a mapping"}]
+    return config, []
+
+
 def add_issue(issues: list[dict[str, str]], level: str, message: str) -> None:
     issues.append({"level": level, "message": message})
 
@@ -99,6 +109,10 @@ def setup_github_from_config(config: dict[str, Any]) -> dict[str, Any]:
     setup = config.get("setup")
     github = setup.get("github") if isinstance(setup, dict) else None
     return github if isinstance(github, dict) else {}
+
+
+def positive_int(value: Any) -> bool:
+    return isinstance(value, int) and value > 0
 
 
 def validate_config(config: dict[str, Any]) -> list[dict[str, str]]:
@@ -133,10 +147,18 @@ def validate_config(config: dict[str, Any]) -> list[dict[str, str]]:
     if review_mode in {"local", "dual"}:
         add_issue(issues, "setup suggestion", "document review-pass.json evidence contract")
 
+    wait = defaults.get("wait")
+    if wait is not None and not isinstance(wait, dict):
+        add_issue(issues, "error", "defaults.wait must be a mapping")
+    elif isinstance(wait, dict):
+        for key in ("timeoutSeconds", "pollSeconds"):
+            if key in wait and not positive_int(wait[key]):
+                add_issue(issues, "error", f"defaults.wait.{key} must be a positive integer")
+
     github = setup_github_from_config(config)
     if github.get("requiredChecks"):
         add_issue(issues, "setup suggestion", "configure GitHub Rulesets required checks")
-    if github.get("requiredReview") is True:
+    if github.get("requiredReview") is True or github.get("requiredReviews") is True:
         add_issue(issues, "setup suggestion", "tweak cannot bypass GitHub required review")
     if github.get("autoDeleteHeadBranch") is True:
         add_issue(issues, "warning", "GitHub auto-delete head branch overlaps PR Flow cleanup")
@@ -751,8 +773,9 @@ def run_init(args: argparse.Namespace) -> int:
         print("confirmed config required: use pr-flow-init Skill and pass --config <path>")
         return 2
 
-    config = load_config_path(args.config)
-    issues = validate_config(config)
+    config, issues = load_config_path_for_validation(args.config)
+    if not issues:
+        issues = validate_config(config)
     if validation_has_errors(issues):
         print("status: validation_failed")
         for issue in issues:
@@ -773,8 +796,9 @@ def run_init(args: argparse.Namespace) -> int:
 
 
 def run_validate(args: argparse.Namespace) -> int:
-    config = load_config_path(args.config)
-    issues = validate_config(config)
+    config, issues = load_config_path_for_validation(args.config)
+    if not issues:
+        issues = validate_config(config)
     if validation_has_errors(issues):
         print("status: validation_failed")
     else:
