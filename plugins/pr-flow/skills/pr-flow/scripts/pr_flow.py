@@ -19,7 +19,7 @@ from typing import Any
 import yaml
 
 
-COMMANDS = ("diagnose", "init", "complete", "cleanup", "hotfix", "tweak")
+COMMANDS = ("diagnose", "init", "validate", "complete", "cleanup", "hotfix", "tweak")
 PR_VIEW_FIELDS = "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid"
 BLOCKING_REVIEW_DECISIONS = {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}
 PR_TEMPLATE = """## Summary
@@ -81,6 +81,86 @@ def load_config(project: Path) -> dict:
     if not config_path.exists():
         raise FileNotFoundError(config_path)
     return yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+
+
+def load_config_path(path: Path) -> dict:
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def add_issue(issues: list[dict[str, str]], level: str, message: str) -> None:
+    issues.append({"level": level, "message": message})
+
+
+def validation_has_errors(issues: list[dict[str, str]]) -> bool:
+    return any(issue["level"] == "error" for issue in issues)
+
+
+def setup_github_from_config(config: dict[str, Any]) -> dict[str, Any]:
+    setup = config.get("setup")
+    github = setup.get("github") if isinstance(setup, dict) else None
+    return github if isinstance(github, dict) else {}
+
+
+def validate_config(config: dict[str, Any]) -> list[dict[str, str]]:
+    issues: list[dict[str, str]] = []
+    if not isinstance(config, dict):
+        add_issue(issues, "error", "config must be a mapping")
+        return issues
+
+    defaults = defaults_from_config(config)
+    if not defaults.get("baseBranch"):
+        add_issue(issues, "error", "defaults.baseBranch missing")
+
+    branches = config.get("branches")
+    if not isinstance(branches, dict) or not branches:
+        add_issue(issues, "error", "branches must contain at least one branch")
+
+    merge_strategy = defaults.get("mergeStrategy")
+    if merge_strategy and merge_strategy not in {"merge", "squash", "rebase"}:
+        add_issue(issues, "error", f"defaults.mergeStrategy unsupported: {merge_strategy}")
+    elif isinstance(merge_strategy, str) and merge_strategy:
+        add_issue(issues, "setup suggestion", f"configure GitHub merge method {merge_strategy}")
+
+    review_gate = defaults.get("reviewGate")
+    review_gate = review_gate if isinstance(review_gate, dict) else {}
+    review_mode = review_gate.get("mode", "github")
+    if review_mode not in {"skip", "github", "local", "dual"}:
+        add_issue(issues, "error", f"defaults.reviewGate.mode unsupported: {review_mode}")
+    if review_mode in {"local", "dual"} and not review_gate.get("evidencePath"):
+        add_issue(issues, "error", "defaults.reviewGate.evidencePath missing")
+    if review_mode in {"github", "dual"}:
+        add_issue(issues, "setup suggestion", "configure GitHub required review")
+    if review_mode in {"local", "dual"}:
+        add_issue(issues, "setup suggestion", "document review-pass.json evidence contract")
+
+    github = setup_github_from_config(config)
+    if github.get("requiredChecks"):
+        add_issue(issues, "setup suggestion", "configure GitHub Rulesets required checks")
+    if github.get("requiredReview") is True:
+        add_issue(issues, "setup suggestion", "tweak cannot bypass GitHub required review")
+    if github.get("autoDeleteHeadBranch") is True:
+        add_issue(issues, "warning", "GitHub auto-delete head branch overlaps PR Flow cleanup")
+
+    authorization = config.get("authorization")
+    authorization = authorization if isinstance(authorization, dict) else {}
+    for branch_name, branch in branches.items() if isinstance(branches, dict) else []:
+        branch = branch if isinstance(branch, dict) else {}
+        if branch.get("allowHotfixPush") is not True:
+            continue
+        merged_branch = branch_config_for_target(config, str(branch_name))
+        if authorization.get("phraseHashAlgorithm") != "md5":
+            add_issue(issues, "error", "authorization.phraseHashAlgorithm must be md5")
+        if not authorization.get("phraseHash"):
+            add_issue(issues, "error", "authorization.phraseHash missing")
+        hotfix = merged_branch.get("hotfix")
+        verify_command = hotfix.get("verifyCommand") if isinstance(hotfix, dict) else None
+        if not verify_command:
+            add_issue(issues, "error", f"branches.{branch_name}.hotfix.verifyCommand missing")
+        if not branch.get("remote"):
+            add_issue(issues, "error", f"branches.{branch_name}.remote missing")
+        add_issue(issues, "setup suggestion", f"configure GitHub Rulesets bypass for {branch_name}")
+
+    return issues
 
 
 def write_status(project: Path, command: str, status: str, details: dict) -> None:
@@ -676,6 +756,18 @@ def run_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_validate(args: argparse.Namespace) -> int:
+    config = load_config_path(args.config)
+    issues = validate_config(config)
+    if validation_has_errors(issues):
+        print("status: validation_failed")
+    else:
+        print("status: validation_passed")
+    for issue in issues:
+        print(f"{issue['level']}: {issue['message']}")
+    return 1 if validation_has_errors(issues) else 0
+
+
 def run_diagnose(args: argparse.Namespace) -> int:
     project = resolve_project(args.project)
     try:
@@ -1154,6 +1246,9 @@ def build_parser() -> argparse.ArgumentParser:
         )
         if command in {"diagnose", "init", "complete", "tweak"}:
             subparser.add_argument("--project", type=Path, required=True)
+        if command == "validate":
+            subparser.add_argument("--project", type=Path, default=Path("."))
+            subparser.add_argument("--config", type=Path, required=True)
         if command == "cleanup":
             subparser.add_argument("--project", type=Path, required=True)
             subparser.add_argument("--pr", required=True)
@@ -1174,6 +1269,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "init":
         return run_init(args)
+    if args.command == "validate":
+        return run_validate(args)
     if args.command == "diagnose":
         return run_diagnose(args)
     if args.command == "complete":

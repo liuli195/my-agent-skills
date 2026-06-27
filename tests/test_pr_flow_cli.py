@@ -1128,6 +1128,99 @@ def test_pr_flow_init_skill_uses_progressive_disclosure_references() -> None:
     assert "完整问答" not in skill_text
 
 
+def test_validate_reads_only_provided_config_and_reports_suggestions(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(
+        yaml.safe_dump(
+            {
+                "defaults": {
+                    "baseBranch": "main",
+                    "mergeStrategy": "merge",
+                    "reviewGate": {"mode": "github", "evidencePath": ".pr-flow/review-pass.json"},
+                    "hotfix": {"verifyCommand": "python -m pytest"},
+                    "wait": {"timeoutSeconds": 600, "pollSeconds": 15},
+                },
+                "branches": {"main": {"remote": "origin", "allowHotfixPush": False}},
+                "setup": {"github": {"requiredChecks": ["ci"]}},
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = run("validate", "--project", str(project), "--config", str(draft))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: validation_passed" in result.stdout
+    assert "setup suggestion: configure GitHub required review" in result.stdout
+    assert "setup suggestion: configure GitHub Rulesets required checks" in result.stdout
+    assert not (project / ".pr-flow" / "config.yaml").exists()
+
+
+def test_validate_reports_errors_for_missing_core_shape(tmp_path: Path) -> None:
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(
+        yaml.safe_dump({"defaults": {"reviewGate": {"mode": "local"}}}, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    result = run("validate", "--config", str(draft))
+
+    assert result.returncode == 1
+    assert "status: validation_failed" in result.stdout
+    assert "error: defaults.baseBranch missing" in result.stdout
+    assert "error: branches must contain at least one branch" in result.stdout
+    assert "error: defaults.reviewGate.evidencePath missing" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        (
+            lambda config: config["branches"]["main"].update(
+                {"allowHotfixPush": True, "remote": ""}
+            ),
+            "error: branches.main.remote missing",
+        ),
+        (
+            lambda config: config["defaults"].update({"reviewGate": {"mode": "local"}}),
+            "error: defaults.reviewGate.evidencePath missing",
+        ),
+        (
+            lambda config: config["setup"]["github"].update({"autoDeleteHeadBranch": True}),
+            "warning: GitHub auto-delete head branch overlaps PR Flow cleanup",
+        ),
+        (
+            lambda config: config["setup"]["github"].update({"requiredReview": True}),
+            "setup suggestion: tweak cannot bypass GitHub required review",
+        ),
+    ],
+)
+def test_validate_dependency_matrix(tmp_path: Path, mutate, expected: str) -> None:
+    config = {
+        "defaults": {
+            "baseBranch": "main",
+            "mergeStrategy": "merge",
+            "reviewGate": {"mode": "github", "evidencePath": ".pr-flow/review-pass.json"},
+            "hotfix": {"verifyCommand": "python -m pytest"},
+            "wait": {"timeoutSeconds": 600, "pollSeconds": 15},
+        },
+        "branches": {"main": {"remote": "origin", "allowHotfixPush": False}},
+        "authorization": {"phraseHashAlgorithm": "md5", "phraseHash": "abc"},
+        "setup": {"github": {"requiredChecks": ["ci"]}},
+    }
+    mutate(config)
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    result = run("validate", "--config", str(draft))
+
+    assert expected in result.stdout
+
+
 def test_missing_config_reports_exception_required(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()

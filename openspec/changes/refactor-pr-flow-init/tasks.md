@@ -10,12 +10,12 @@
 
 ## 2. Config Validation
 
-- [ ] 2.1 Add `validate`（校验） command parsing with `--config <path>`（配置文件路径）.
-- [ ] 2.2 Implement read-only YAML（配置格式） loading and structured output for error（错误）, warning（警告）, and setup suggestion（配置建议）.
-- [ ] 2.3 Validate core shape and allowed values for `defaults`（默认配置）, `branches`（分支配置）, `reviewGate`（审查门禁）, `wait`（等待设置）, `hotfix`（热修复）, `authorization`（授权短语） and `setup.github`（GitHub 配置建议）.
-- [ ] 2.4 Validate hotfix（热修复） dependencies: allow-list（允许列表）, authorization phrase（授权短语）, verify command（验证命令）, remote（远端名） and Rulesets bypass（规则集绕过权限） suggestion.
-- [ ] 2.5 Validate review gate（审查门禁）, checks（检查）, merge strategy（合并方式）, cleanup（清理） and tweak（小改） dependency warnings.
-- [ ] 2.6 Preserve fast/full verify（快速/完整验证） boundary checks in validation output.
+- [x] 2.1 Add `validate`（校验） command parsing with `--config <path>`（配置文件路径）.
+- [x] 2.2 Implement read-only YAML（配置格式） loading and structured output for error（错误）, warning（警告）, and setup suggestion（配置建议）.
+- [x] 2.3 Validate core shape and allowed values for `defaults`（默认配置）, `branches`（分支配置）, `reviewGate`（审查门禁）, `wait`（等待设置）, `hotfix`（热修复）, `authorization`（授权短语） and `setup.github`（GitHub 配置建议）.
+- [x] 2.4 Validate hotfix（热修复） dependencies: allow-list（允许列表）, authorization phrase（授权短语）, verify command（验证命令）, remote（远端名） and Rulesets bypass（规则集绕过权限） suggestion.
+- [x] 2.5 Validate review gate（审查门禁）, checks（检查）, merge strategy（合并方式）, cleanup（清理） and tweak（小改） dependency warnings.
+- [x] 2.6 Preserve fast/full verify（快速/完整验证） boundary checks in validation output.
 - [ ] 2.7 Ensure validate（校验） errors block init（初始化） writes; warnings（警告） and setup suggestions（配置建议） only require display before confirmation.
 
 ## 3. Init Write Path
@@ -27,8 +27,8 @@
 
 ## 4. Tests And Verification
 
-- [ ] 4.1 Update PR Flow CLI（命令行接口） tests for validate（校验） success and failure output.
-- [ ] 4.2 Add dependency matrix tests for hotfix（热修复）, review gate（审查门禁）, checks（检查）, merge strategy（合并方式）, cleanup（清理） and tweak（小改）.
+- [x] 4.1 Update PR Flow CLI（命令行接口） tests for validate（校验） success and failure output.
+- [x] 4.2 Add dependency matrix tests for hotfix（热修复）, review gate（审查门禁）, checks（检查）, merge strategy（合并方式）, cleanup（清理） and tweak（小改）.
 - [ ] 4.3 Update init（初始化） tests to cover confirmed config write path and old default write rejection.
 - [x] 4.4 Update package or Skill（技能） tests to ensure `pr-flow-init` documents agent（代理）问答 rather than script（脚本） terminal interaction.
 - [x] 4.5 Add tests that require `pr-flow-init/references/questionnaire.md`, `config-draft.md` and `validation.md`（问答模板、配置草案规则、校验规则） to exist and be referenced by the Skill（技能） entrypoint.
