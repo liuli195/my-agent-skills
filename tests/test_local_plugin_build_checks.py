@@ -1296,9 +1296,10 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
     assert ".comet/config.yaml" in local_build_contract["inputs"]
     assert ".comet.yaml" in local_build_contract["paths"]
     assert ".comet.yaml" in local_build_contract["inputs"]
-    assert "docs/agent-guard/**" in local_build_contract["paths"]
-    assert "docs/agent-guard" in local_build_contract["inputs"]
     assert "." not in local_build_contract["inputs"]
+    for check in checks:
+        assert "docs/agent-guard/**" not in check.get("paths", [])
+        assert "docs/agent-guard" not in check.get("inputs", [])
 
     openspec = check_by_id["verify.openspec"]
     assert openspec["command"] == "openspec validate --all --strict --no-interactive"

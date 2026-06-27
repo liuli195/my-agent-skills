@@ -1,10 +1,10 @@
 # Config Draft（配置草案）
 
-本文件定义 `.build-and-verify/config.json`（配置文件）草案生成规则。草案必须可审查，写入前必须展示给用户确认。
+定义 `.build-and-verify/config.json`（配置文件）草案规则。草案必须可审查，写入前必须展示给用户确认。
 
 ## Shape（结构）
 
-草案默认使用：
+默认结构：
 
 ```json
 {
@@ -23,8 +23,28 @@
 - 必须同时支持 `build.checks`（构建检查项）和 `verify.checks`（验证检查项）。
 - check id（检查项标识）使用短横线风格，例如 `build.node`、`verify.node-tests`、`verify.python-tests`。
 - 同一分组内 check id（检查项标识）必须唯一。
-- command（命令）默认使用字符串形式，便于用户阅读和维护。
+- command（命令）默认使用字符串形式，便于阅读和维护。
 - 列表形式 command（命令）只在用户明确要求更稳定参数边界时使用。
+- 高置信度候选可以默认建议纳入，但仍必须展示给用户确认。
+- 中低置信度候选只能展示给用户选择，用户未明确选择时不得写入配置草案。
+- 风险候选不得默认纳入；如果用户明确选择，草案摘要必须保留 risk（风险提示）和建议。
+
+## Existing Configuration（已有配置）
+
+- 已有 `.build-and-verify/config.json`（配置文件）候选尽量原样保留。
+- 保留 check id（检查项标识）、command（命令）、paths（受影响路径）、inputs（缓存输入）、parallel（并行检查）和 timeoutSeconds（超时秒数）。
+- 覆盖前展示覆盖摘要、自动生成的备份路径和最终写入确认。
+
+## Generic Candidates（通用候选）
+
+- `build.<name>`
+  - command（命令）: 来自明确 build（构建）或 package（打包）入口。
+  - inputs（缓存输入）: 来源脚本、配置文件和主要源码目录。
+- `verify.<name>`
+  - command（命令）: 来自明确 test（测试）、check（检查）、verify（验证）、lint（代码检查）、typecheck（类型检查）或 validate（校验）入口。
+  - paths（受影响路径）: 与来源脚本、测试目录、配置文件和主要源码目录相关的路径。
+  - inputs（缓存输入）: 来源脚本、配置文件、依赖清单和测试目录。
+- 中低置信度通用候选必须先由用户确认是否纳入，再根据来源补齐 paths（受影响路径）和 inputs（缓存输入）。
 
 ## Node（节点运行时）建议
 
@@ -63,12 +83,13 @@
 
 - verify checks（验证检查项）应建议 paths（受影响路径）。
 - 写入前必须逐项展示 paths（受影响路径）并等待用户确认。
-- 用户可以移除 paths（受影响路径），使该 verify check（验证检查项）成为 global check（全局检查项）。
+- 用户可移除 paths（受影响路径），使该 verify check（验证检查项）成为 global check（全局检查项）。
 
 ## inputs（缓存输入）
 
-- 每个 check（检查项）都应建议 inputs（缓存输入），以降低 cache key（缓存键）不稳定风险。
-- 写入前必须逐项展示 inputs（缓存输入）并等待用户确认。
+- inputs（缓存输入）默认从 paths（受影响路径）和 command（命令）来源推导，降低 cache key（缓存键）不稳定风险。
+- 写入前在 Q6 摘要中展示 inputs（缓存输入），但不单独提问。
+- 用户选择返回前面问题修改草案时，才修改 inputs（缓存输入）。
 - 指向不存在文件或目录时，在 validation（校验）阶段提示用户确认。
 
 ## Runtime Tuning（运行参数）

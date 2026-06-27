@@ -118,13 +118,15 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **WHEN** agent（代理）使用 `build-and-verify-init` Skill（构建与验证初始化技能）
 - **THEN** Skill（技能） MUST 指示 agent（代理）读取固定 questionnaire（问答模板）
 - **THEN** questionnaire（问答模板） MUST 定义固定问题、固定选项、后果说明和跳转规则
-- **THEN** questionnaire（问答模板） MUST 覆盖目标仓库路径确认、扫描授权、检测结果确认、check（检查项）选择、`paths`（受影响路径）确认、`inputs`（缓存输入）确认、并行与超时确认、覆盖确认、备份路径确认和最终写入确认
+- **THEN** questionnaire（问答模板） MUST 覆盖目标仓库路径确认、扫描授权、候选 check（检查项）确认、`paths`（受影响路径）确认、并行与超时确认、覆盖与最终写入确认
+- **THEN** agent（代理） MUST 默认从 `paths`（受影响路径）和 command（命令）来源推导 `inputs`（缓存输入），并在最终写入确认摘要中展示
+- **THEN** 覆盖已有配置时，agent（代理） MUST 使用默认备份路径，不得单独要求用户选择备份路径
 - **THEN** agent（代理） MUST NOT 自由编造初始化问题或跳过最终写入确认
 
 #### Scenario: Guided initialization uses progressive disclosure references
 - **WHEN** 发布 `build-and-verify-init` Skill（构建与验证初始化技能）
 - **THEN** Skill（技能） MUST 将固定问答模板放在独立 reference（参考文件）
-- **THEN** Skill（技能） MUST 将 Node（节点运行时）和 Python（Python 语言）识别规则放在独立 reference（参考文件）
+- **THEN** Skill（技能） MUST 将已有配置、Node（节点运行时）、Python（Python 语言）和通用候选识别规则放在独立 reference（参考文件）
 - **THEN** Skill（技能） MUST 将配置草案规则放在独立 reference（参考文件）
 - **THEN** Skill（技能） MUST 将依赖检查、环境检查和配置校验规则放在独立 reference（参考文件）
 
@@ -150,16 +152,22 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **THEN** agent（代理） MUST 优先建议 pytest（Python 测试运行器）和现有脚本作为候选 checks（检查项）
 - **THEN** agent（代理） MUST 展示候选 Python（Python 语言）checks（检查项）并等待用户选择
 
-#### Scenario: Mixed Node and Python repository
-- **WHEN** 目标仓库同时包含 Node（节点运行时）和 Python（Python 语言）迹象
-- **THEN** agent（代理） MUST 同时展示两类候选 checks（检查项）
+#### Scenario: Generic candidate discovery
+- **WHEN** 目标仓库包含 `Makefile`（任务文件）、`scripts/`（脚本目录）、`tests/`（测试目录）或 `openspec/`（开放规格目录）等通用信号
+- **THEN** agent（代理） MUST 分类候选 checks（检查项），并展示 source（来源）、confidence（置信度）、reason（纳入理由）和 risk（风险提示）
+- **THEN** agent（代理） MUST NOT 运行候选 command（命令）
+- **THEN** 风险候选 MUST NOT 默认纳入配置草案
+
+#### Scenario: Mixed repository
+- **WHEN** 目标仓库同时包含 Node（节点运行时）、Python（Python 语言）或通用候选信号
+- **THEN** agent（代理） MUST 同时展示多类候选 checks（检查项）
 - **THEN** agent（代理） MUST 让用户选择纳入哪些 checks（检查项）
 
 #### Scenario: No recognized ecosystem fallback
-- **WHEN** 目标仓库没有可识别的 Node（节点运行时）或 Python（Python 语言）迹象
+- **WHEN** 目标仓库没有可识别的已有配置、Node（节点运行时）、Python（Python 语言）或通用候选信号
 - **THEN** agent（代理） MUST 继续使用固定 questionnaire（问答模板）
 - **THEN** agent（代理） MUST 让用户手动提供 build（构建检查）和 verify（验证）候选命令
-- **THEN** agent（代理） MUST 继续确认 `paths`（受影响路径）、`inputs`（缓存输入）、覆盖备份和配置校验
+- **THEN** agent（代理） MUST 继续确认 `paths`（受影响路径）和运行参数，自动推导 `inputs`（缓存输入），并使用默认备份路径完成覆盖备份和配置校验
 
 #### Scenario: Draft config includes paths and inputs
 - **WHEN** agent（代理）生成配置草案
@@ -168,8 +176,8 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **THEN** command（命令）默认 MUST 使用字符串形式
 - **THEN** agent（代理） MUST 只在用户明确要求更稳定参数边界时使用列表形式 command（命令）
 - **THEN** agent（代理） MUST 为 verify checks（验证检查项）建议 `paths`（受影响路径）
-- **THEN** agent（代理） MUST 为 checks（检查项）建议 `inputs`（缓存输入）
-- **THEN** agent（代理） MUST 在写入前展示 `paths`（受影响路径）和 `inputs`（缓存输入）并等待用户确认
+- **THEN** agent（代理） MUST 从 `paths`（受影响路径）和 command（命令）来源推导 `inputs`（缓存输入）
+- **THEN** agent（代理） MUST 在写入前等待用户确认 `paths`（受影响路径），并在最终写入摘要中展示自动推导的 `inputs`（缓存输入）
 
 #### Scenario: Draft config explains runtime tuning
 - **WHEN** 配置草案包含 `verify.maxParallel`（最大并行检查数）、`verify.timeoutSeconds`（超时秒数）或 `parallel: true`（并行检查）
@@ -191,6 +199,7 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **THEN** agent（代理） MUST 在 backups（备份）目录不存在时先创建该目录
 - **THEN** agent（代理） MUST 先复制旧配置到 `.build-and-verify/backups/config-YYYYMMDD-HHMMSS.json`（备份配置文件）
 - **THEN** agent（代理） MUST 确保 `.build-and-verify/.gitignore`（忽略规则）包含 `/backups/`
+- **THEN** agent（代理） MUST NOT 要求用户单独选择备份路径
 - **THEN** agent（代理） MUST 在写入结果中报告备份路径
 
 ### Requirement: Guided initialization validates config and environment before completion
