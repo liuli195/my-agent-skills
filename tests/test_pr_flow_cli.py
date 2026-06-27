@@ -1111,6 +1111,23 @@ def test_init_does_not_call_gh_api(tmp_path: Path) -> None:
     assert "Rulesets written" not in result.stdout
 
 
+def test_pr_flow_init_skill_uses_progressive_disclosure_references() -> None:
+    skill_path = REPO_ROOT / "plugins" / "pr-flow" / "skills" / "pr-flow-init" / "SKILL.md"
+    skill_text = skill_path.read_text(encoding="utf-8")
+
+    for heading in ["## Hard Boundaries", "## Closed Loop", "## Required Flow", "## Output", "## References"]:
+        assert heading in skill_text
+    for reference in [
+        "references/questionnaire.md",
+        "references/config-draft.md",
+        "references/validation.md",
+    ]:
+        assert reference in skill_text
+        assert (skill_path.parent / reference).is_file()
+    assert "用户沉默 MUST NOT 被视为确认" in skill_text
+    assert "完整问答" not in skill_text
+
+
 def test_missing_config_reports_exception_required(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
