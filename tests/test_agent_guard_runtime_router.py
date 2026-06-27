@@ -254,15 +254,44 @@ def write_user_guard_evidence(user_home: Path, *parts: str, data: dict) -> Path:
     return path
 
 
-def write_cross_agent_review_marker(project: Path, change: str, head_ref: str, data: dict) -> Path:
-    path = project / ".local" / "cross-agent-review" / change / head_ref / "review-pass.json"
+def write_cross_agent_review_marker(
+    project: Path,
+    change: str,
+    head_ref: str,
+    data: dict,
+    *,
+    profile_id: str = "personal-policy",
+) -> Path:
+    path = (
+        project
+        / ".local"
+        / "guard"
+        / "evidence"
+        / profile_id
+        / "cross_agent_review_pass"
+        / change
+        / head_ref[:12]
+        / "pass.json"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     return path
 
 
 def write_user_scope_cross_agent_review_marker(user_home: Path, change: str, head_ref: str, data: dict) -> Path:
-    path = user_home / ".agents" / "guard" / ".local" / "cross-agent-review" / change / head_ref / "review-pass.json"
+    path = (
+        user_home
+        / ".agents"
+        / "guard"
+        / ".local"
+        / "guard"
+        / "evidence"
+        / "personal-policy"
+        / "cross_agent_review_pass"
+        / change
+        / head_ref[:12]
+        / "pass.json"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     return path
@@ -314,10 +343,10 @@ def write_cross_agent_review_artifacts(profile: Path) -> None:
 artifacts:
   - id: cross_agent_review_pass
     type: json
-    owner: external
+    owner: agent-guard
     required_for:
       - produce_cross_agent_review_pass_marker
-    path: .local/cross-agent-review/{change}/{git_head}/review-pass.json
+    path: .local/guard/evidence/{profile_id}/{artifact_id}/{subject_id}/{git_head_short}/pass.json
     reuse_policy: deny
 """.lstrip(),
         encoding="utf-8",
@@ -330,10 +359,10 @@ def write_short_head_cross_agent_review_artifacts(profile: Path) -> None:
 artifacts:
   - id: cross_agent_review_pass
     type: json
-    owner: external
+    owner: agent-guard
     required_for:
       - produce_cross_agent_review_pass_marker
-    path: .local/cross-agent-review/{change}/{git_head_short}/review-pass.json
+    path: .local/guard/evidence/{profile_id}/{artifact_id}/{subject_id}/{git_head_short}/pass.json
     reuse_policy: deny
 """.lstrip(),
         encoding="utf-8",
@@ -761,7 +790,7 @@ def test_global_command_guard_passes_with_short_head_artifact_path(tmp_path: Pat
     assert result.returncode == 0, result.stdout + result.stderr
     payload = body(result)
     assert payload["status"] == "allow"
-    assert not (project / ".local" / "guard" / "evidence").exists()
+    assert (project / ".local" / "guard" / "evidence").exists()
 
 
 def test_global_command_guard_skips_when_yaml_condition_matches(tmp_path: Path) -> None:
@@ -1181,7 +1210,17 @@ def test_global_command_guard_denies_when_artifact_missing(tmp_path: Path) -> No
     assert payload["status"] == "deny"
     assert payload["reason"] == "comet_cross_agent_review_required"
     assert payload["failing_guards"][0]["failure_reason"] == "evidence_missing"
-    assert str(project / ".local" / "cross-agent-review" / "add-guard-gate-binding" / head_ref / "review-pass.json") in payload["failing_guards"][0]["evidence_path"]
+    assert str(
+        project
+        / ".local"
+        / "guard"
+        / "evidence"
+        / "personal-policy"
+        / "cross_agent_review_pass"
+        / "add-guard-gate-binding"
+        / head_ref[:12]
+        / "pass.json"
+    ) in payload["failing_guards"][0]["evidence_path"]
 
 
 def test_global_command_guard_denies_blocking_review_findings(tmp_path: Path) -> None:

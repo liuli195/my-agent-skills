@@ -84,7 +84,7 @@
 
 #### Scenario: Comet review gate 不侵入 cross-agent-review
 - **WHEN** Global Command Guard（全局命令守卫点）用于守卫 Comet build completion（构建完成）命令
-- **THEN** Agent Guard 可以匹配命令、读取 `cross_agent_review_pass` artifact（产物）并校验 `review-pass.json`
+- **THEN** Agent Guard 可以匹配命令、读取 `cross_agent_review_pass` artifact（产物）并校验 guard-defined evidence（守卫定义证据）`pass.json`
 - **AND** Comet review gate 的 Guard Profile MAY 配置指向生成 pass marker（通过标记）的 deny 提示
 - **AND** Agent Guard 不得准备 cross-agent-review 输入、检查 cross-agent-review 的工作区前置条件、派发 reviewer agent（审查代理）或推进 Comet phase（阶段）
 
@@ -171,4 +171,3 @@
 #### Scenario: 引用不存在的 artifact
 - **WHEN** Guard Profile（守卫画像）包含 `json_artifact` check 且引用的 artifact id 不存在于 `artifacts.yaml`
 - **THEN** validator（校验器）报告该引用无效
-

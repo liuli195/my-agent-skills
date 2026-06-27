@@ -116,11 +116,11 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 #### Scenario: Local review evidence
 - **WHEN** `reviewGate.mode` 为 `local` 或 `dual`
 - **THEN** 系统 MUST 校验本地 review evidence（审查证据）
-- **THEN** 首版 MUST 支持 `cross-agent-review` 的 `review-pass.json`
+- **THEN** 首版 MUST 支持配置的 JSON review pass evidence（审查通过证据），默认路径为 `.pr-flow/review-pass.json`
 - **THEN** 本地 evidence MUST 匹配当前 base、head 和 diff（差异）
 
 ### Requirement: Cross-agent-review evidence generation
-系统 MUST 保持 `cross-agent-review`（跨代理审查）输出可被 PR Flow 的 local/dual review gate（本地/双门禁审查门禁）稳定消费。
+系统 MUST 保持 `cross-agent-review`（跨代理审查）输出可被调用方读取，并由主 agent（主代理）在通过后生成 PR Flow local/dual review gate（本地/双门禁审查门禁）所需 evidence（证据）。
 
 #### Scenario: Prepared input paths
 - **WHEN** 系统运行 `cross-agent-review`
@@ -130,7 +130,7 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 #### Scenario: Strict reviewer output
 - **WHEN** reviewer（审查代理）返回 findings（发现项）
 - **THEN** 每个 finding MUST 使用 `CRITICAL`、`IMPORTANT`、`WARNING` 或 `SUGGESTION` severity（严重级别）
-- **THEN** 缺失 severity 或使用别名的 finding MUST 被视为阻塞性的 invalid reviewer finding（无效审查发现）
+- **THEN** 主 agent（主代理）MUST 把缺失 severity 或使用别名的 finding 视为 invalid reviewer finding（无效审查发现）
 - **THEN** 外部自定义 reviewer MUST 在使用本版本前迁移旧 severity aliases（严重级别别名）
 
 #### Scenario: Reviewer timeout

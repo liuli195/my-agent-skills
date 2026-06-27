@@ -35,7 +35,7 @@ def test_cross_agent_review_skill_and_script_are_packaged() -> None:
     assert prompt_template.is_file()
     text = skill.read_text(encoding="utf-8")
     assert "Claude Agent SDK" in text
-    assert "review-pass.json" in text
+    assert "mark-pass" in text
     assert "不自动安装" in text
 
 
@@ -71,7 +71,8 @@ def test_cross_agent_review_skill_documents_default_and_debug_outputs() -> None:
     text = skill.read_text(encoding="utf-8")
 
     assert "review-report.md" in text
-    assert "review-pass.json" in text
+    assert "pass.json" in text
+    assert "cross_agent_review_pass" in text
     assert "review-results.json" not in text
     assert "inputs/manifest.json" not in text
     assert "inputs/spec.md" not in text
@@ -123,7 +124,7 @@ def test_cross_agent_review_skill_documents_strict_finding_schema() -> None:
     for severity in ["CRITICAL", "IMPORTANT", "WARNING", "SUGGESTION"]:
         assert severity in text
     assert "severity aliases" in text
-    assert "missing severity" in text
+    assert "缺少 `Severity:`" in text
 
 
 def test_cross_agent_review_skill_documents_mandatory_invocation_boundary() -> None:

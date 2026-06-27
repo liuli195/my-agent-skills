@@ -126,10 +126,9 @@
 
 #### Scenario: 文档明确禁止项
 - **WHEN** 文档说明 Comet review gate（审查门禁）或 Global Command Guard
-- **THEN** 文档 MUST 明确禁止新增 reviewed wrapper（审查包装入口）、修改 cross-agent-review 默认输出目录、复制 pass marker 到 `.local/guard/evidence`、把 `verify --apply` 作为主拦截点、以及在 Agent Guard 中实现 cross-agent-review 内部流程
+- **THEN** 文档 MUST 明确禁止新增 reviewed wrapper（审查包装入口）、在 Agent Guard（代理守卫）中实现 cross-agent-review（跨代理审查）内部流程、把 `verify --apply` 作为主拦截点、以及复制真正的 external artifact（外部产物）来绕过原始产物路径
 
 #### Scenario: 文档语言简洁高效
 - **WHEN** 更新 Skill 入口说明、共享参考文档或模板索引
 - **THEN** 文档 MUST 使用短句和可执行步骤
 - **AND** 文档 MUST 避免重复解释、营销式描述、长篇背景和只服务实现细节的术语堆叠
-

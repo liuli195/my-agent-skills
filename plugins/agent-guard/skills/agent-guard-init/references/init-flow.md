@@ -44,7 +44,7 @@ python ../agent-guard/scripts/init_user_guard.py --profile <guard-profile-dir> -
 init 阶段只发布已校验配置，不现场改写场景规则。
 
 - `global-command-guards.yaml` 和 `artifacts.yaml` 必须随同 Guard Profile（守卫画像）一起发布。
-- artifact（产物）路径保持画像内声明，不复制 pass marker 到 `.local/guard/evidence`。
+- artifact（产物）路径保持画像内声明；真正已有的 external artifact（外部产物）不复制到 `.local/guard/evidence`。
 - 外部证据类拦截只在 Runtime（运行时）读取到对应 artifact 证据后放行。
 
 troubleshoot（排障）：初始化后命令没有被拦截时，先确认发布位置中存在 `global-command-guards.yaml`，再确认 `artifacts.yaml` 中的 artifact ID 与守卫配置引用一致。

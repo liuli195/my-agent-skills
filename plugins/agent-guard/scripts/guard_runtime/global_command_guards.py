@@ -185,6 +185,8 @@ def _context_values(guard: EffectiveGlobalCommandGuard, captures: dict[str, str]
         "git_head_short": git_head_short(head),
     }
     values.update(captures)
+    if "subject_id" not in values and "change" in captures:
+        values["subject_id"] = captures["change"]
     return values
 
 

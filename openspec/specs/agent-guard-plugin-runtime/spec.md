@@ -298,9 +298,8 @@ Agent Guard installer（安装器）MUST 使用 release-flow 共享 marketplace 
 #### Scenario: Comet change review 通过产物注册读取项目产物
 - **WHEN** Global Command Guard 用于守卫 Comet change build 完成命令
 - **AND** 该守卫通过 `artifact` 或 `artifact_id` 引用 `artifacts.yaml` 中的 cross-agent-review pass marker（跨代理审查通过标记）
-- **THEN** Runtime（运行时）MUST 按 `artifacts.yaml` 注册路径读取该外部产物
-- **AND** 该产物 MAY 位于项目内 `.local/cross-agent-review/<change>/<head_ref>/review-pass.json`
-- **AND** Runtime 不得要求 cross-agent-review 把该产物复制到 `.local/guard/evidence`
+- **THEN** Runtime（运行时）MUST 按 `artifacts.yaml` 注册路径读取该 guard-defined evidence（守卫定义证据）
+- **AND** 该产物 MUST 位于项目内 `.local/guard/evidence/{profile_id}/{artifact_id}/{subject_id}/{git_head_short}/pass.json`
 - **AND** Runtime 不得从 `~/.agents/guard` 读取该 Comet change 的通过证据
 
 #### Scenario: 用户级安装不等于用户级运行态
@@ -407,7 +406,7 @@ Global Command Guard MUST expose generic built-in context values for template re
 
 ### Requirement: Global Command Guard evidence uses dual path model
 
-系统 MUST 为 Global Command Guard（全局命令守卫点）区分 guard-defined evidence（守卫定义证据）和 external artifact（外部产物）。当被守卫流程没有稳定可检查产物时，Agent Guard（代理守卫）MUST 定义默认 evidence（证据）目录；当被守卫流程已经生成稳定产物时，Agent Guard（代理守卫）MUST 只登记并校验原始路径，不复制、不搬运、不接管目录。
+系统 MUST 为 Global Command Guard（全局命令守卫点）区分 guard-defined evidence（守卫定义证据）和 external artifact（外部产物）。当通过结论由主 agent（主代理）根据上游报告生成时，Agent Guard（代理守卫）MUST 定义默认 evidence（证据）目录；当被守卫流程本身已经生成稳定可检查产物时，Agent Guard（代理守卫）MUST 只登记并校验原始路径，不复制、不搬运、不接管目录。
 
 #### Scenario: guard-defined evidence 使用默认目录
 
@@ -451,10 +450,10 @@ Global Command Guard MUST expose generic built-in context values for template re
 - **AND** Runtime（运行时）MUST NOT 要求把该产物复制到 `.local/guard/evidence`
 - **AND** Runtime（运行时）MUST NOT 修改该外部流程的输出目录
 
-#### Scenario: cross-agent-review pass marker 是 external artifact
+#### Scenario: cross-agent-review pass marker 使用 guard-defined evidence
 
-- **WHEN** Global Command Guard（全局命令守卫点）校验 cross-agent-review（跨代理审查）的 `review-pass.json`
-- **THEN** 该 artifact（产物）MUST 注册为 external artifact（外部产物）
-- **AND** 注册路径 MUST 保持 `.local/cross-agent-review/{change}/{git_head_short}/review-pass.json`
-- **AND** Agent Guard（代理守卫）不得搬运或复制该 marker（标记）
-
+- **WHEN** Global Command Guard（全局命令守卫点）校验 cross-agent-review（跨代理审查）的 pass marker（通过标记）
+- **THEN** 该 artifact（产物）MUST 注册为 guard-defined evidence（守卫定义证据）
+- **AND** 注册路径 MUST 使用 `.local/guard/evidence/{profile_id}/{artifact_id}/{subject_id}/{git_head_short}/pass.json`
+- **AND** `{artifact_id}` MUST 为 `cross_agent_review_pass`
+- **AND** `{subject_id}` MUST 来自命令捕获值，Comet change（变更）场景下等于 `change`

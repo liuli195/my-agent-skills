@@ -1,7 +1,7 @@
 # cross-agent-review Specification
 
 ## Purpose
-Define the independent cross-agent review workflow, reviewer roles, report contract, and pass marker used as reusable review evidence.
+Define the independent cross-agent review workflow, reviewer roles, report contract, and guard pass marker handoff.
 ## Requirements
 ### Requirement: 跨 agent review 输入契约
 系统 MUST 只接收一个 caller-prepared `review-input.json`（审查输入文件）作为 cross-agent-review（跨代理审查）的启动输入。该文件 MUST 位于同一次 review（审查）的 `prepared-inputs`（预备输入目录）下，并包含 review subject（审查对象）、模式和上下文文件引用。
@@ -39,13 +39,13 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 
 #### Scenario: 启动时工作区不干净
 - **WHEN** review mechanism（审查机制）启动时 `git status --short` 非空，且变化不属于本次 `review-input.json` 或本次输出目录
-- **THEN** 它拒绝启动 reviewer，并不得生成 `review-pass.json`
+- **THEN** 它拒绝启动 reviewer，并不得生成 `review-report.md`
 
 #### Scenario: 运行时输入输出例外
 - **WHEN** `git status --short` 只包含本次 `.local/cross-agent-review/<change>/<head_ref_short>/prepared-inputs/review-input.json` 或本次输出目录中的 review runtime artifacts（审查运行产物）
 - **THEN** review mechanism（审查机制）MAY 继续运行
 - **AND** 该例外 MUST NOT 放行其他 workspace（工作区）变更
-- **AND** 该 allowlist（允许清单）MUST 同时适用于启动、派发前和生成 `review-pass.json` 前的所有 clean worktree（干净工作区）检查
+- **AND** 该 allowlist（允许清单）MUST 同时适用于启动和派发前的所有 clean worktree（干净工作区）检查
 
 #### Scenario: head ref 不匹配
 - **WHEN** `review-input.json` 中的 `head_ref` 不等于当前 `git rev-parse HEAD`
@@ -55,16 +55,16 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 - **WHEN** `review-input.json` 中的 `base_ref` 不能解析为有效 Git ref（Git 引用）
 - **THEN** review mechanism（审查机制）拒绝启动 reviewer，并报告 base mismatch（基准提交不匹配）
 
-#### Scenario: 派发前或生成 pass marker 前工作区变化
-- **WHEN** reviewer 派发前或生成 pass marker（通过标记）前工作区变为 dirty（未提交）
-- **THEN** review mechanism（审查机制）拒绝继续，并不得生成 `review-pass.json`
+#### Scenario: 派发前工作区变化
+- **WHEN** reviewer 派发前工作区变为 dirty（未提交）
+- **THEN** review mechanism（审查机制）拒绝继续，并不得生成 `review-report.md`
 
 #### Scenario: 修复后重新 review
 - **WHEN** review（审查）发现 blocking finding（阻塞发现）且实现被修复
 - **THEN** 修复必须提交形成新的 `head_ref` 后，才可以重新运行 review（审查）并生成新的 pass marker（通过标记）
 
 ### Requirement: reviewer 角色派发
-系统 MUST 将一次 review（审查）拆分给两个明确角色的 reviewer agent（审查代理），并要求每个 reviewer 返回结构化发现。
+系统 MUST 将一次 review（审查）拆分给两个明确角色的 reviewer agent（审查代理），并要求每个 reviewer 返回轻量 Markdown（标记文本）审查结果。
 
 #### Scenario: 默认角色
 - **WHEN** review mechanism（审查机制）启动默认 review（审查）
@@ -112,50 +112,53 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 
 - **WHEN** 调用方选择 `convergence`（收敛）或 `endless`（无尽）模式
 - **THEN** review output（审查输出）契约 MUST 保持一致
-- **AND** `review-pass.json` MUST 记录本次使用的 `mode`
+- **AND** `mark-pass`（标记通过）写入的 pass marker（通过标记）MUST 记录本次使用的 `mode`
 
 ### Requirement: review 报告和严重级别
-系统 MUST 为每次 review（审查）生成人类可读报告，并使用统一严重级别汇总 findings（发现项）。
+系统 MUST 为每次 review（审查）生成人类可读报告，并保留 reviewer（审查代理）原始 Markdown（标记文本）输出。review mechanism（审查机制）MUST NOT 解析 finding（发现项）、去重、计数或判断是否通过。
 
 #### Scenario: 阻塞发现
-- **WHEN** 任一 reviewer 返回 CRITICAL 或 IMPORTANT finding（发现项）
-- **THEN** 汇总报告把该 finding 计入 `blocking_findings`
+- **WHEN** 任一 reviewer（审查代理）输出 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）finding（发现项）
+- **THEN** 汇总报告保留该 reviewer（审查代理）的原始 Markdown（标记文本）
+- **AND** 主 agent（主代理）负责判断该 finding（发现项）是否阻断 pass marker（通过标记）
 
 #### Scenario: 非阻塞发现
-- **WHEN** reviewer 只返回 WARNING 或 SUGGESTION finding（发现项）
-- **THEN** 汇总报告记录这些 finding，但不计入 `blocking_findings`
+- **WHEN** reviewer（审查代理）只输出 WARNING（警告）或 SUGGESTION（建议）finding（发现项）
+- **THEN** 汇总报告保留该 reviewer（审查代理）的原始 Markdown（标记文本）
+- **AND** 主 agent（主代理）负责把它们作为 residual risk（残留风险）或建议处理
 
 #### Scenario: reviewer 返回非法结果
-- **WHEN** reviewer 超时或返回无法解析的结构化结果
-- **THEN** 汇总报告把该 reviewer 计为 CRITICAL finding（发现项）
-
-#### Scenario: findings 去重
-- **WHEN** 多个 reviewer 返回相同 severity、location 和 summary 的 finding
-- **THEN** review mechanism（审查机制）只计入一条去重后的 finding
+- **WHEN** reviewer 超时、SDK dispatch（开发包派发）失败或 reviewer 返回空结果
+- **THEN** review mechanism（审查机制）把该运行态失败写成 CRITICAL（严重阻断）Markdown（标记文本）finding（发现项）
 
 ### Requirement: review pass marker
-系统 MUST 只在 blocking findings（阻塞发现）为 0 时生成机器可读 pass marker（通过标记）。默认输出 MUST 只包含人类可读报告和可选 pass marker（通过标记）。
+系统 MUST 将 review report（审查报告）和 pass marker（通过标记）分离。`run`（运行）只写人类可读报告；`mark-pass`（标记通过）只在主 agent（主代理）完成语义判断后写入 Agent Guard（代理守卫）默认 guard-defined evidence（守卫定义证据）目录。
 
-#### Scenario: review 通过
-- **WHEN** review（审查）完成且 `blocking_findings` 为 0
+#### Scenario: review 完成
+- **WHEN** review（审查）完成
+- **THEN** 系统生成 `review-report.md`
+- **AND** 系统不得在 `.local/cross-agent-review/<change>/<head_ref_short>/` 生成 `review-pass.json`
+
+#### Scenario: 主 agent 写入 pass marker
+- **WHEN** 主 agent（主代理）读取 `review-report.md`
+- **AND** 主 agent（主代理）确认没有未处理的 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）finding（发现项）
 - **AND** 当前 worktree（工作区）仍然干净
 - **AND** 当前 `HEAD` 仍等于 `head_ref`
-- **THEN** 系统生成 `review-pass.json`，包含 `status: pass`、`change`、`mode`、`base_ref`、`head_ref`、`blocking_findings`、`report` 和 `report_hash`
+- **THEN** `mark-pass`（标记通过）写入 `.local/guard/evidence/<profile_id>/cross_agent_review_pass/<change>/<head_ref_short>/pass.json`
+- **AND** pass marker（通过标记）包含 `schema_version: guard-evidence/v1`、`status: pass`、`producer: cross-agent-review`、`profile_id`、`artifact_id: cross_agent_review_pass`、`subject_id`、`head_ref`、`head_ref_short`、`blocking_findings: 0`、`scope`、`report`、`report_hash` 和 `created_at`
 
-#### Scenario: review 不通过
-- **WHEN** review（审查）完成且 `blocking_findings` 大于 0
-- **THEN** 系统生成 `review-report.md`
-- **AND** 系统不得生成 `review-pass.json`
+#### Scenario: 主 agent 不写 pass marker
+- **WHEN** 主 agent（主代理）判断仍有未处理的 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）finding（发现项）
+- **THEN** 主 agent（主代理）不得运行 `mark-pass`（标记通过）
 
 #### Scenario: pass marker report hash
-- **WHEN** 系统生成 `review-pass.json`
-- **THEN** `report_hash` MUST 匹配同一输出目录内 `review-report.md` 的内容 hash（哈希）
+- **WHEN** `mark-pass`（标记通过）写入 pass marker（通过标记）
+- **THEN** `report_hash` MUST 匹配同一次 review（审查）生成的 `review-report.md` 内容 hash（哈希）
 
 #### Scenario: 默认输出目录
 - **WHEN** review mechanism（审查机制）完成一次 review（审查）
 - **THEN** 系统 MUST 把 `review-report.md` 写入 `.local/cross-agent-review/<change>/<head_ref_short>/`
-- **AND** blocking findings（阻塞发现）为 0 时，系统 MUST 把 `review-pass.json` 写入同一目录
-- **AND** 系统 MUST NOT 默认写入 `review-results.json`、`inputs/manifest.json`、`prompts/<role>.txt` 或 `raw/<role>.txt`
+- **AND** 系统 MUST NOT 默认写入 `review-pass.json`、`review-results.json`、`inputs/manifest.json`、`prompts/<role>.txt` 或 `raw/<role>.txt`
 
 ### Requirement: Comet 边界
 系统 MUST 让 cross-agent review（跨代理审查）保持为独立审查证据，不替代 Comet verify（Comet 验证）。
@@ -190,13 +193,14 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 - **AND** 提示 MUST 指示 reviewer agent（审查代理）只审查 `base_ref...head_ref` 范围
 - **AND** 提示 MUST 指示 reviewer agent（审查代理）使用 `spec_file`、`design_file` 和 `plan_file` 作为需求上下文
 - **AND** 提示 MUST 包含 review subject commands（审查对象命令）的短列表
+- **AND** 提示 MUST 指示 reviewer agent（审查代理）返回固定 Markdown（标记文本）格式，并为每个 finding（发现项）包含 `Severity`
 - **AND** 提示 MUST NOT 内联完整 diff output（差异输出）、context file（上下文文件）正文、changed files（变更文件）清单或长命令块
 
 #### Scenario: reviewer prompt 使用独立模板
 - **WHEN** 系统生成 reviewer prompt（审查提示词）
 - **THEN** prompt（提示词）正文结构 MUST 来自 cross-agent-review（跨代理审查）插件内的独立模板文件，便于修改和复用
 - **AND** Python 脚本 MUST 作为调用方和渲染入口，负责提供模板变量、读取模板和渲染模板
-- **AND** 模板变量 MUST 限制为 role（角色）、input file path（输入文件路径）、review subject commands（审查对象命令）、role focus（角色重点）、severity rubric（严重级别规则）和 output schema（输出结构）
+- **AND** 模板变量 MUST 限制为 role（角色）、input file path（输入文件路径）、review subject commands（审查对象命令）、role focus（角色重点）和 severity rubric（严重级别规则）
 
 #### Scenario: debug 排障产物
 - **WHEN** 调用方通过 `--debug` 显式启用 debug mode（排障模式）
@@ -225,20 +229,20 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 - **THEN** agent（代理）MUST NOT 自动调用 `cross-agent-review` Skill
 
 ### Requirement: review timeout ownership
-系统 MUST 由 cross-agent-review（跨代理审查）插件脚本管理 reviewer dispatch（审查代理派发）超时。调用方 MUST NOT 在插件命令外层包装短于插件内部上限的 timeout（超时）等待。
+系统 MUST 由 cross-agent-review（跨代理审查）插件脚本管理 reviewer dispatch（审查代理派发）超时。调用方 MUST NOT 在插件命令外层包装短于插件内部上限的 timeout/watchdog（超时/看门等待）。
 
 #### Scenario: 插件内部管理超时
 - **WHEN** cross-agent-review（跨代理审查）真实派发 reviewer agent（审查代理）
 - **THEN** 单个 reviewer agent（审查代理）的内部 timeout（超时）MUST 为 480 秒
 - **AND** 整体 SDK dispatch（开发包派发）的内部 timeout（超时）MUST 为 540 秒
-- **AND** 超时结果 MUST 由插件脚本转换为结构化 CRITICAL finding（严重发现项）
+- **AND** timeout（超时）结果 MUST 由插件脚本转换为带 CRITICAL（严重阻断）finding（发现项）的 Markdown（标记文本）审查结果
 
 #### Scenario: 主 agent 调用插件
 - **WHEN** 主 agent（代理）调用 cross-agent-review（跨代理审查）插件命令
 - **THEN** 主 agent（代理）MUST 直接等待插件脚本返回
 - **AND** 主 agent（代理）MUST NOT 在外层添加小于 540 秒的 timeout（超时）、watchdog（看门等待）或等价提前终止包装
 
-#### Scenario: 外层短超时会造成错误失败
+#### Scenario: 外层短 timeout 会造成错误失败
 - **WHEN** 调用方在外层设置的等待时间短于插件内部 480 秒或 540 秒上限
 - **THEN** 该调用契约 MUST 被视为无效
-- **AND** 调用说明 MUST 指示移除外层短 timeout（超时），而不是调低插件内部超时
+- **AND** 调用说明 MUST 指示移除外层短 timeout（超时），而不是调低插件内部 timeout（超时）

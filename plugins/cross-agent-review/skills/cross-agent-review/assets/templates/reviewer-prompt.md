@@ -7,11 +7,9 @@ Review only base_ref...head_ref from the input file.
 Use spec_file, design_file, and plan_file as requirements context.
 
 Output contract:
-- Your entire final response MUST be exactly one JSON object.
-- The first character of the response MUST be `{`.
-- The last character of the response MUST be `}`.
-- Do not write any preface, explanation, summary, or conclusion outside the JSON object.
-- Do not wrap the JSON object in Markdown fences.
+- Return only the lightweight Markdown format below.
+- Do not use JSON.
+- Do not wrap the response in Markdown fences.
 
 Review commands:
 
@@ -22,13 +20,21 @@ Focus:
 
 {{ severity_rubric }}
 
-Return only a single JSON object. Do not use Markdown.
+Format:
 
-Schema:
+# Review Result: {{ role }}
 
-{{ schema_json }}
+## Findings
+- Severity: CRITICAL|IMPORTANT|WARNING|SUGGESTION
+  Location: path-or-component
+  Summary: one-line issue summary
+  Evidence: specific evidence from the supplied inputs
+  Recommendation: concrete next action
 
 Use only these severity values: CRITICAL, IMPORTANT, WARNING, SUGGESTION.
-If there are no issues, return "findings": [].
+If there are no issues, write exactly:
+
+No findings.
+
 Do not put pass, aligned, ok, or informational observations in findings.
 Do not use severity aliases such as high, medium, low, minor, or info.

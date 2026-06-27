@@ -8,6 +8,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -47,12 +48,11 @@ SEVERITY_RUBRIC = "\n".join(
         "- SUGGESTION: maintainability or clarity improvement that should not block.",
     ]
 )
-# Individual reviewers time out first; the subprocess gets a wider window to
-# aggregate structured timeout findings and write normal outputs.
 SDK_DISPATCH_TIMEOUT_SECONDS = 540
 SDK_REVIEWER_TIMEOUT_SECONDS = 480
-BLOCKING_SEVERITIES = {"CRITICAL", "IMPORTANT"}
-ALL_SEVERITIES = BLOCKING_SEVERITIES | {"WARNING", "SUGGESTION"}
+DEFAULT_PROFILE_ID = "comet-review-gate"
+DEFAULT_ARTIFACT_ID = "cross_agent_review_pass"
+DEFAULT_SUBJECT_TYPE = "comet-change"
 
 
 @dataclass(frozen=True)
@@ -86,6 +86,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--debug", action="store_true")
     run_parser.add_argument("--sdk-python", type=Path)
     run_parser.add_argument("--fake-reviewer-results")
+    mark_parser = subparsers.add_parser("mark-pass")
+    mark_parser.add_argument("--input-file", type=Path, required=True)
+    mark_parser.add_argument("--profile-id", default=DEFAULT_PROFILE_ID)
+    mark_parser.add_argument("--artifact-id", default=DEFAULT_ARTIFACT_ID)
+    mark_parser.add_argument("--subject-id")
+    mark_parser.add_argument("--subject-type", default=DEFAULT_SUBJECT_TYPE)
     subparsers.add_parser("_sdk-dispatch")
     return parser
 
@@ -238,9 +244,9 @@ def load_review_input(args: argparse.Namespace) -> ReviewInput:
         plan_file=plan_file,
         input_file=input_file,
         output_dir=input_file.parent.parent,
-        debug=args.debug,
-        sdk_python=args.sdk_python,
-        fake_reviewer_results=args.fake_reviewer_results,
+        debug=getattr(args, "debug", False),
+        sdk_python=getattr(args, "sdk_python", None),
+        fake_reviewer_results=getattr(args, "fake_reviewer_results", None),
     )
 
 
@@ -294,19 +300,33 @@ def resolve_sdk_python(explicit: Path | None, require_real_sdk: bool) -> str:
     raise ValueError("sdk_unavailable: install claude-agent-sdk or pass --sdk-python")
 
 
+def markdown_review(role: str, text: str) -> dict:
+    return {"role": role, "text": text.strip() + "\n"}
+
+
+def no_blocking_review(role: str) -> dict:
+    return markdown_review(
+        role,
+        f"""# Review Result: {role}
+## Findings
+No findings.
+""",
+    )
+
+
 def load_fake_reviewer_results(raw: str | None) -> list[dict]:
     if raw is None:
         return []
-    data = json.loads(raw)
-    if not isinstance(data, list):
+    if raw.strip() == "[]":
+        return [no_blocking_review(role) for role in REVIEWER_ROLES]
+    blocks = [block.strip() for block in raw.split("\n--- reviewer ---\n") if block.strip()]
+    if not blocks:
         raise ValueError("invalid_fake_reviewer_results")
-    required_fields = {"role", "status", "findings"}
-    for item in data:
-        if not isinstance(item, dict) or not required_fields <= item.keys():
-            raise ValueError("invalid_fake_reviewer_results")
-        if item["role"] not in REVIEWER_ROLES:
-            raise ValueError(f"invalid_fake_reviewer_role: {item['role']}")
-    return data
+    if len(blocks) == 1:
+        return [markdown_review(role, blocks[0]) for role in REVIEWER_ROLES]
+    if len(blocks) != len(REVIEWER_ROLES):
+        raise ValueError("invalid_fake_reviewer_results")
+    return [markdown_review(role, text) for role, text in zip(REVIEWER_ROLES, blocks, strict=True)]
 
 
 def render_template(path: Path, values: dict[str, str]) -> str:
@@ -330,30 +350,12 @@ def reviewer_prompt(review_args: ReviewInput, role: str) -> str:
             f"- {git_command_text(['diff', '--name-status', '--find-renames', '--find-copies-harder', diff_range])}",
         ]
     )
-    schema_json = json.dumps(
-        {
-            "role": role,
-            "status": "completed",
-            "findings": [
-                {
-                    "severity": "CRITICAL",
-                    "location": "path-or-component",
-                    "summary": "one-line issue summary",
-                    "evidence": "specific evidence from the supplied inputs",
-                    "recommendation": "concrete next action",
-                }
-            ],
-        },
-        ensure_ascii=False,
-        indent=2,
-    )
     return render_template(
         REVIEWER_PROMPT_TEMPLATE,
         {
             "role": role,
             "input_file_path": str(review_args.input_file),
             "review_subject_commands": review_subject_commands,
-            "schema_json": schema_json,
             "severity_rubric": SEVERITY_RUBRIC,
             "role_focus": ROLE_FOCUS.get(role, ""),
         },
@@ -368,19 +370,17 @@ def dispatch_reviewers(review_args: ReviewInput, sdk_python: str) -> list[dict]:
 
 
 def reviewer_failure(role: str, summary: str, evidence: str, recommendation: str) -> dict:
-    return {
-        "role": role,
-        "status": "failed",
-        "findings": [
-            {
-                "severity": "CRITICAL",
-                "location": role,
-                "summary": summary,
-                "evidence": evidence,
-                "recommendation": recommendation,
-            }
-        ],
-    }
+    return markdown_review(
+        role,
+        f"""# Review Result: {role}
+## Findings
+- Severity: CRITICAL
+  Location: {role}
+  Summary: {summary}
+  Evidence: {evidence}
+  Recommendation: {recommendation}
+""",
+    )
 
 
 def timeout_reviewer_results(raw_dir: Path | None, evidence: str) -> list[dict]:
@@ -388,12 +388,7 @@ def timeout_reviewer_results(raw_dir: Path | None, evidence: str) -> list[dict]:
     for role in REVIEWER_ROLES:
         raw_path = raw_dir / f"{role}.txt" if raw_dir is not None else None
         if raw_path is not None and raw_path.exists():
-            raw_text = raw_path.read_text(encoding="utf-8", errors="replace")
-            parsed = parse_reviewer_result(raw_text)
-            if parsed is not None:
-                reviewers.append(parsed)
-                continue
-            role_evidence = raw_text or evidence
+            role_evidence = raw_path.read_text(encoding="utf-8", errors="replace") or evidence
         else:
             role_evidence = evidence
             if raw_path is not None:
@@ -459,14 +454,6 @@ def run_sdk_dispatch_subprocess(review_args: ReviewInput, sdk_python: str) -> li
     return [item for item in data if isinstance(item, dict)]
 
 
-def parse_reviewer_result(result_text: str) -> dict | None:
-    try:
-        parsed = json.loads(result_text.strip())
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
-
-
 def run_sdk_dispatch() -> int:
     import asyncio
     from claude_agent_sdk import ClaudeAgentOptions, query
@@ -489,22 +476,18 @@ def run_sdk_dispatch() -> int:
                 if hasattr(message, "result"):
                     result_text = message.result
             write_raw(role, result_text)
-            parsed = parse_reviewer_result(result_text)
-            if parsed is not None:
-                return parsed
-            return {
-                "role": role,
-                "status": "failed",
-                "findings": [
-                    {
-                        "severity": "CRITICAL",
-                        "location": role,
-                        "summary": "Reviewer returned invalid JSON",
-                        "evidence": result_text or "<empty reviewer result>",
-                        "recommendation": "Rerun review after checking reviewer prompt",
-                    }
-                ],
-            }
+            return markdown_review(
+                role,
+                result_text
+                or f"""# Review Result: {role}
+## Findings
+- Severity: CRITICAL
+  Location: {role}
+  Summary: Reviewer returned empty output
+  Evidence: <empty reviewer result>
+  Recommendation: Rerun review after checking reviewer prompt.
+""",
+            )
 
         async def run_one(role: str) -> dict:
             try:
@@ -512,34 +495,20 @@ def run_sdk_dispatch() -> int:
             except asyncio.TimeoutError:
                 evidence = f"Exceeded {SDK_REVIEWER_TIMEOUT_SECONDS} seconds."
                 write_raw(role, f"Reviewer timed out\n{evidence}")
-                return {
-                    "role": role,
-                    "status": "failed",
-                    "findings": [
-                        {
-                            "severity": "CRITICAL",
-                            "location": role,
-                            "summary": "Reviewer timed out",
-                            "evidence": evidence,
-                            "recommendation": "Rerun review after checking Claude Agent SDK availability.",
-                        }
-                    ],
-                }
+                return reviewer_failure(
+                    role,
+                    "Reviewer timed out",
+                    evidence,
+                    "Rerun review after checking Claude Agent SDK availability.",
+                )
             except Exception as error:
                 write_raw(role, f"{type(error).__name__}: {error}")
-                return {
-                    "role": role,
-                    "status": "failed",
-                    "findings": [
-                        {
-                            "severity": "CRITICAL",
-                            "location": role,
-                            "summary": "Reviewer SDK dispatch failed",
-                            "evidence": f"{type(error).__name__}: {error}",
-                            "recommendation": "Rerun review after checking Claude Agent SDK availability.",
-                        }
-                    ],
-                }
+                return reviewer_failure(
+                    role,
+                    "Reviewer SDK dispatch failed",
+                    f"{type(error).__name__}: {error}",
+                    "Rerun review after checking Claude Agent SDK availability.",
+                )
 
         return await asyncio.gather(*(run_one(role) for role in payload["roles"]))
 
@@ -563,92 +532,8 @@ def debug_dir_for(review_input: ReviewInput) -> Path:
     return review_input.output_dir / "debug"
 
 
-def first_text(raw: dict, names: Sequence[str]) -> str:
-    for name in names:
-        value = raw.get(name)
-        if value is not None and value != "":
-            return str(value)
-    return ""
-
-
-def finding_location(raw: dict) -> str:
-    location = first_text(raw, ["location", "area"])
-    if location:
-        return location
-    file = raw.get("file")
-    line = raw.get("line")
-    if file is not None and line is not None:
-        return f"{file}:{line}"
-    return str(file) if file is not None else ""
-
-
-def normalize_severity(raw: dict) -> str:
-    severity = str(raw.get("severity", "")).upper()
-    return severity if severity in ALL_SEVERITIES else ""
-
-
-def invalid_reviewer_finding(role: str, summary: str, raw: object) -> dict:
-    location = finding_location(raw) if isinstance(raw, dict) else ""
-    return {
-        "severity": "CRITICAL",
-        "location": location or role,
-        "summary": summary,
-        "evidence": json.dumps(raw, ensure_ascii=False) if isinstance(raw, dict) else repr(raw),
-        "recommendation": "Fix reviewer prompt or rerun review with strict JSON output.",
-    }
-
-
-def normalize_reviewer_findings(role: str, reviewer: dict) -> list[dict]:
-    raw_findings = reviewer.get("findings", [])
-    if isinstance(raw_findings, list):
-        return raw_findings
-    return [
-        {
-            "severity": "CRITICAL",
-            "location": role,
-            "summary": "Reviewer returned invalid findings",
-            "evidence": json.dumps(reviewer, ensure_ascii=False),
-            "recommendation": "Rerun review or fix reviewer prompt",
-        }
-    ]
-
-
-def normalize_finding(raw: dict) -> dict:
-    severity = normalize_severity(raw)
-    return {
-        "severity": severity,
-        "location": finding_location(raw),
-        "summary": first_text(raw, ["summary", "description", "message", "issue", "detail"]),
-        "evidence": first_text(raw, ["evidence", "detail", "spec_scenario"]),
-        "recommendation": first_text(raw, ["recommendation", "suggestion"]),
-    }
-
-
 def aggregate(reviewers: list[dict]) -> dict:
-    findings: list[dict] = []
-    seen: set[tuple[str, str, str]] = set()
-    for reviewer in reviewers:
-        role = str(reviewer.get("role", "unknown"))
-        raw_findings = normalize_reviewer_findings(role, reviewer)
-        for raw in raw_findings:
-            if not isinstance(raw, dict):
-                raw = invalid_reviewer_finding(role, "Reviewer returned invalid finding", raw)
-            elif "severity" not in raw:
-                raw = invalid_reviewer_finding(role, "Reviewer output missing severity", raw)
-            elif not normalize_severity(raw):
-                raw = invalid_reviewer_finding(role, f"Reviewer output used invalid severity: {raw.get('severity')}", raw)
-            finding = normalize_finding(raw)
-            key = (finding["severity"], finding["location"], finding["summary"])
-            if key in seen:
-                continue
-            seen.add(key)
-            findings.append(finding)
-    blocking = sum(1 for finding in findings if finding["severity"] in BLOCKING_SEVERITIES)
-    return {
-        "reviewers": reviewers,
-        "findings": findings,
-        "blocking_findings": blocking,
-    }
+    return {"reviewers": reviewers}
 
 
 def write_json(path: Path, value: dict) -> None:
@@ -662,21 +547,24 @@ def render_report(review_args: ReviewInput, summary: dict) -> str:
         "",
         f"- Base ref: `{review_args.base_ref}`",
         f"- Head ref: `{review_args.head_ref}`",
-        f"- Blocking findings: `{summary['blocking_findings']}`",
         "",
-        "## Findings",
+        "## Reviewer Outputs",
         "",
     ]
-    if not summary["findings"]:
-        lines.append("No findings.")
-    for finding in summary["findings"]:
+    for reviewer in summary["reviewers"]:
+        role = str(reviewer.get("role", "unknown"))
+        text = str(reviewer.get("text", "")).strip() or f"""# Review Result: {role}
+## Findings
+- Severity: CRITICAL
+  Location: {role}
+  Summary: Reviewer returned empty output
+  Evidence: <empty reviewer result>
+  Recommendation: Rerun review after checking reviewer prompt."""
         lines.extend(
             [
-                f"### {finding['severity']}: {finding['summary']}",
+                f"### {role}",
                 "",
-                f"- Location: `{finding['location']}`",
-                f"- Evidence: {finding['evidence']}",
-                f"- Recommendation: {finding['recommendation']}",
+                text,
                 "",
             ]
         )
@@ -701,27 +589,85 @@ def write_outputs(review_args: ReviewInput, summary: dict) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     report_text = render_report(review_args, summary)
     report_path = out_dir / "review-report.md"
-    pass_path = out_dir / "review-pass.json"
     report_path.write_text(report_text, encoding="utf-8")
-    if summary["blocking_findings"] == 0:
-        ensure_clean_subject(Path.cwd(), review_args.head_ref, runtime_allowed_paths(review_args))
+    (out_dir / "review-pass.json").unlink(missing_ok=True)
+    return 0
+
+
+def guard_pass_path(
+    review_args: ReviewInput,
+    *,
+    profile_id: str,
+    artifact_id: str,
+    subject_id: str,
+) -> Path:
+    return (
+        Path.cwd()
+        / ".local"
+        / "guard"
+        / "evidence"
+        / validate_path_segment(profile_id, review_args.input_file)
+        / validate_path_segment(artifact_id, review_args.input_file)
+        / validate_path_segment(subject_id, review_args.input_file)
+        / validate_path_segment(short_ref(review_args.head_ref), review_args.input_file)
+        / "pass.json"
+    )
+
+
+def mark_pass_allowed_paths(review_args: ReviewInput, pass_path: Path) -> list[Path]:
+    return [review_args.input_file, output_dir_for(review_args) / "review-report.md", pass_path]
+
+
+def run_mark_pass(args: argparse.Namespace) -> int:
+    try:
+        review_args = load_review_input(args)
+        subject_id = args.subject_id or review_args.change
+        report_path = output_dir_for(review_args) / "review-report.md"
+        if not report_path.is_file():
+            raise ValueError(f"missing_file: {report_path}")
+        pass_path = guard_pass_path(
+            review_args,
+            profile_id=args.profile_id,
+            artifact_id=args.artifact_id,
+            subject_id=subject_id,
+        )
+        ensure_clean_subject(Path.cwd(), review_args.head_ref, mark_pass_allowed_paths(review_args, pass_path))
+        report_relative = report_path.relative_to(Path.cwd())
         report_hash = hashlib.sha256(report_path.read_bytes()).hexdigest()
         write_json(
             pass_path,
             {
+                "schema_version": "guard-evidence/v1",
                 "status": "pass",
+                "producer": "cross-agent-review",
+                "profile_id": args.profile_id,
+                "artifact_id": args.artifact_id,
+                "subject_type": args.subject_type,
+                "subject_id": subject_id,
                 "change": review_args.change,
                 "mode": review_args.mode,
                 "base_ref": review_args.base_ref,
                 "head_ref": review_args.head_ref,
+                "head_ref_short": short_ref(review_args.head_ref),
                 "blocking_findings": 0,
-                "report": "review-report.md",
-                "report_hash": report_hash,
+                "scope": {
+                    "change": review_args.change,
+                    "mode": review_args.mode,
+                    "base_ref": review_args.base_ref,
+                    "report": str(report_relative),
+                },
+                "report": str(report_relative),
+                "report_hash": f"sha256:{report_hash}",
+                "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             },
         )
-        return 0
-    pass_path.unlink(missing_ok=True)
-    return 1
+    except (ValueError, json.JSONDecodeError) as exc:
+        print("status: failed")
+        print(f"error: {exc}")
+        return 1
+    print("status: pass_marked")
+    print(f"path: {pass_path.relative_to(Path.cwd())}")
+    return 0
 
 
 def run_review(args: argparse.Namespace) -> int:
@@ -742,7 +688,7 @@ def run_review(args: argparse.Namespace) -> int:
         print("status: failed")
         print(f"error: {exc}")
         return 1
-    print("status: pass" if status == 0 else "status: findings")
+    print("status: review_ready")
     return status
 
 
@@ -752,6 +698,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_sdk_dispatch()
     if parsed.command == "run":
         return run_review(parsed)
+    if parsed.command == "mark-pass":
+        return run_mark_pass(parsed)
     return 2
 
 

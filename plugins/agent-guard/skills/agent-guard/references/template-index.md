@@ -28,8 +28,7 @@
 - 如果上游流程没有稳定产物，Agent Guard（代理守卫）可以在 `artifacts.yaml` 中定义 guard-defined evidence（守卫定义证据）默认路径：`.local/guard/evidence/{profile_id}/{artifact_id}/{subject_id}/{git_head_short}/pass.json`。该文件由主 agent（主代理）在上游检查通过后写入，Runtime（运行时）只负责读取和校验。
 - `deny.reason`、`deny.next` 和 `deny.suggestion` 可以在 Guard Profile（守卫画像）中场景化配置；Runtime（运行时）只透传或渲染，不内置业务流程。
 - 禁止新增 reviewed wrapper。
-- 禁止修改 cross-agent-review 默认输出目录。
-- 对已有外部产物，禁止复制 pass marker 到 `.local/guard/evidence`。
+- 对真正已有的 external artifact（外部产物），禁止复制 pass marker（通过标记）到 `.local/guard/evidence` 绕过原始路径。
 - 禁止把 `verify --apply` 作为主拦截点。
 - 禁止在 Agent Guard 中实现 cross-agent-review 内部流程。
 

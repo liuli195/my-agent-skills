@@ -177,13 +177,28 @@ def commit_review_context(project: Path) -> str:
     return git(project, "rev-parse", "HEAD")
 
 
+NO_BLOCKING_REVIEW = """# Review Result
+## Findings
+No findings.
+"""
+
+BLOCKING_REVIEW = """# Review Result
+## Findings
+- Severity: IMPORTANT
+  Location: app.txt:1
+  Summary: Wrong behavior
+  Evidence: Evidence
+  Recommendation: Fix behavior
+"""
+
+
 def review_args(
     project: Path,
     head: str,
     *,
     base: str | None = None,
     mode: str = "convergence",
-    fake_reviewer_results: str | None = "[]",
+    fake_reviewer_results: str | None = NO_BLOCKING_REVIEW,
 ) -> list[str]:
     args = [
         "run",
@@ -195,6 +210,27 @@ def review_args(
     return args
 
 
+def guard_pass_path(
+    project: Path,
+    head: str,
+    *,
+    change: str = "demo",
+    profile_id: str = "comet-review-gate",
+    artifact_id: str = "cross_agent_review_pass",
+) -> Path:
+    return (
+        project
+        / ".local"
+        / "guard"
+        / "evidence"
+        / profile_id
+        / artifact_id
+        / change
+        / head[:12]
+        / "pass.json"
+    )
+
+
 def test_run_accepts_single_review_input_file(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     init_repo(project)
@@ -203,11 +239,11 @@ def test_run_accepts_single_review_input_file(tmp_path: Path) -> None:
     result = run(*review_args(project, head), cwd=project)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: pass" in result.stdout
+    assert "status: review_ready" in result.stdout
     assert (project / ".local" / "cross-agent-review" / "demo" / head[:12] / "review-report.md").is_file()
 
 
-def test_default_outputs_are_report_and_pass_marker_only(tmp_path: Path) -> None:
+def test_default_outputs_are_report_only(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
@@ -218,7 +254,8 @@ def test_default_outputs_are_report_and_pass_marker_only(tmp_path: Path) -> None
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert (output_dir / "review-report.md").is_file()
-    assert (output_dir / "review-pass.json").is_file()
+    assert not (output_dir / "review-pass.json").exists()
+    assert not guard_pass_path(project, head).exists()
     assert not (output_dir / "review-results.json").exists()
     assert not (output_dir / "inputs").exists()
     assert not (output_dir / "prompts").exists()
@@ -226,7 +263,7 @@ def test_default_outputs_are_report_and_pass_marker_only(tmp_path: Path) -> None
     assert not (output_dir / "debug").exists()
 
 
-def test_convergence_pass_marker_records_mode_and_refs(tmp_path: Path) -> None:
+def test_mark_pass_writes_guard_evidence_default_path(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     base = init_repo(project)
     write_file(project / "app.txt", "two\n")
@@ -238,16 +275,30 @@ def test_convergence_pass_marker_records_mode_and_refs(tmp_path: Path) -> None:
     head = git(project, "rev-parse", "HEAD")
     input_file = write_review_input(project, base, head, mode="convergence")
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    review_result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    result = run("mark-pass", "--input-file", str(input_file), cwd=project)
 
+    assert review_result.returncode == 0, review_result.stdout + review_result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
-    marker = json.loads((input_file.parent.parent / "review-pass.json").read_text(encoding="utf-8"))
+    marker_path = guard_pass_path(project, head)
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert marker_path.is_file()
+    assert marker["schema_version"] == "guard-evidence/v1"
+    assert marker["producer"] == "cross-agent-review"
+    assert marker["profile_id"] == "comet-review-gate"
+    assert marker["artifact_id"] == "cross_agent_review_pass"
+    assert marker["subject_type"] == "comet-change"
+    assert marker["subject_id"] == "demo"
+    assert marker["head_ref_short"] == head[:12]
+    assert marker["blocking_findings"] == 0
     assert marker["mode"] == "convergence"
     assert marker["base_ref"] == base
     assert marker["head_ref"] == head
+    assert marker["report"] == str((input_file.parent.parent / "review-report.md").relative_to(project))
+    assert marker["report_hash"].startswith("sha256:")
 
 
-def test_endless_pass_marker_records_mode_and_refs(tmp_path: Path) -> None:
+def test_mark_pass_records_endless_mode_and_refs(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     base = init_repo(project)
     write_file(project / "app.txt", "two\n")
@@ -259,44 +310,30 @@ def test_endless_pass_marker_records_mode_and_refs(tmp_path: Path) -> None:
     head = git(project, "rev-parse", "HEAD")
     input_file = write_review_input(project, base, head, mode="endless")
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    review_result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    result = run("mark-pass", "--input-file", str(input_file), cwd=project)
 
+    assert review_result.returncode == 0, review_result.stdout + review_result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
-    marker = json.loads((input_file.parent.parent / "review-pass.json").read_text(encoding="utf-8"))
+    marker = json.loads(guard_pass_path(project, head).read_text(encoding="utf-8"))
     assert marker["mode"] == "endless"
     assert marker["base_ref"] == base
     assert marker["head_ref"] == head
 
 
-def test_blocking_findings_write_report_without_results_or_pass_marker(tmp_path: Path) -> None:
+def test_blocking_findings_write_report_without_pass_marker(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
     input_file = write_review_input(project, head, head)
     output_dir = input_file.parent.parent
-    fake = json.dumps(
-        [
-            {
-                "role": "implementation-correctness",
-                "status": "completed",
-                "findings": [
-                    {
-                        "severity": "IMPORTANT",
-                        "location": "app.txt:1",
-                        "summary": "Wrong behavior",
-                        "evidence": "Evidence",
-                        "recommendation": "Fix behavior",
-                    }
-                ],
-            }
-        ]
-    )
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", fake, cwd=project)
+    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", BLOCKING_REVIEW, cwd=project)
 
-    assert result.returncode == 1
+    assert result.returncode == 0
     assert (output_dir / "review-report.md").is_file()
     assert not (output_dir / "review-pass.json").exists()
+    assert not guard_pass_path(project, head).exists()
     assert not (output_dir / "inputs").exists()
 
 
@@ -337,7 +374,7 @@ def test_debug_writes_input_prompts_and_raw_under_debug(tmp_path: Path, monkeypa
     }
 
 
-def test_debug_timeout_writes_missing_raw_timeout_evidence(tmp_path: Path, monkeypatch) -> None:
+def test_sdk_dispatch_subprocess_uses_plugin_owned_timeout(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
     init_repo(project)
@@ -347,16 +384,13 @@ def test_debug_timeout_writes_missing_raw_timeout_evidence(tmp_path: Path, monke
     review_input = module.load_review_input(
         types.SimpleNamespace(input_file=input_file, debug=True, sdk_python=None, fake_reviewer_results=None)
     )
-
     def fake_run(*args, **kwargs):
+        assert kwargs["timeout"] == module.SDK_DISPATCH_TIMEOUT_SECONDS
         payload = json.loads(kwargs["input"])
         raw_dir = Path(payload["raw_dir"])
         raw_dir.mkdir(parents=True, exist_ok=True)
         raw_path = raw_dir / f"{payload['roles'][0]}.txt"
-        raw_path.write_text(
-            json.dumps({"role": payload["roles"][0], "status": "completed", "findings": []}),
-            encoding="utf-8",
-        )
+        raw_path.write_text(NO_BLOCKING_REVIEW, encoding="utf-8")
         raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
@@ -368,24 +402,9 @@ def test_debug_timeout_writes_missing_raw_timeout_evidence(tmp_path: Path, monke
     assert (raw_dir / "spec-alignment.txt").is_file()
     assert missing_raw.is_file()
     assert "sdk_dispatch_timeout" in missing_raw.read_text(encoding="utf-8")
-    assert [reviewer["status"] for reviewer in reviewers] == ["completed", "failed"]
-
-
-@pytest.mark.parametrize("removed_role", ["risk-review", "tests-and-edge-cases"])
-def test_fake_reviewer_results_reject_removed_roles(tmp_path: Path, removed_role: str) -> None:
-    project = tmp_path / "repo"
-    init_repo(project)
-    head = commit_review_context(project)
-    input_file = write_review_input(project, head, head)
-    output_dir = input_file.parent.parent
-    fake = json.dumps([{"role": removed_role, "status": "completed", "findings": []}])
-
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", fake, cwd=project)
-
-    assert result.returncode == 1
-    assert "invalid_fake_reviewer_role" in result.stdout
-    assert removed_role in result.stdout
-    assert not (output_dir / "review-pass.json").exists()
+    assert [reviewer["role"] for reviewer in reviewers] == ["spec-alignment", "implementation-correctness"]
+    assert "No findings." in reviewers[0]["text"]
+    assert "Severity: CRITICAL" in reviewers[1]["text"]
 
 
 def test_missing_input_file_fails(tmp_path: Path) -> None:
@@ -652,8 +671,8 @@ def test_clean_worktree_checks_reuse_runtime_allowlist(tmp_path: Path, monkeypat
 
     assert module.run_review(parsed) == 0
 
-    assert len(calls) == 3
-    assert calls[0] == calls[1] == calls[2]
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
     output_dir = input_file.parent.parent
     debug_dir = output_dir / "debug"
     assert set(calls[0]) == {
@@ -677,6 +696,7 @@ def test_diff_file_argument_is_not_required(tmp_path: Path) -> None:
     result = run(*review_args(project, head), cwd=project)
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: review_ready" in result.stdout
 
 
 def make_review_input_for_module(module, tmp_path: Path, *, debug: bool = False):
@@ -729,11 +749,10 @@ def test_reviewer_prompt_references_review_input_file_only(tmp_path: Path, monke
     assert f"git diff {base}...{head}" in prompt
     assert f"git log {base}..{head} --oneline" in prompt
     assert f"git diff --name-status --find-renames --find-copies-harder {base}...{head}" in prompt
-    assert "Your entire final response MUST be exactly one JSON object." in prompt
-    assert "The first character of the response MUST be `{`." in prompt
-    assert "The last character of the response MUST be `}`." in prompt
-    assert "Do not write any preface, explanation, summary, or conclusion outside the JSON object." in prompt
-    assert "Do not wrap the JSON object in Markdown fences." in prompt
+    assert "Return only the lightweight Markdown format below." in prompt
+    assert "Do not use JSON." in prompt
+    assert "# Review Result:" in prompt
+    assert "Do not wrap the response in Markdown fences." in prompt
     assert "Manifest file:" not in prompt
     assert "Changed files:" not in prompt
     assert "Spec bytes:" not in prompt
@@ -761,7 +780,6 @@ def test_reviewer_prompt_template_uses_limited_variables(tmp_path: Path, monkeyp
         "role",
         "input_file_path",
         "review_subject_commands",
-        "schema_json",
         "severity_rubric",
         "role_focus",
     }
@@ -830,7 +848,7 @@ def test_input_files_in_space_directory_are_allowed(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0
-    assert "status: pass" in result.stdout
+    assert "status: review_ready" in result.stdout
 
 
 def test_head_mismatch_rejects_before_dispatch(tmp_path: Path) -> None:
@@ -920,7 +938,7 @@ def test_default_run_does_not_archive_context_snapshots_or_git_manifest(tmp_path
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert (output_dir / "review-report.md").is_file()
-    assert (output_dir / "review-pass.json").is_file()
+    assert not (output_dir / "review-pass.json").exists()
     assert not (output_dir / "inputs").exists()
     assert not (output_dir / "prompts").exists()
     assert not (output_dir / "raw").exists()
@@ -965,7 +983,7 @@ def test_prompt_contains_review_context(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert (output_dir / "review-report.md").is_file()
-    assert (output_dir / "review-pass.json").is_file()
+    assert not (output_dir / "review-pass.json").exists()
 
 
 def test_reviewer_prompt_references_review_input_not_diff_file(tmp_path: Path, monkeypatch) -> None:
@@ -986,7 +1004,7 @@ def test_reviewer_prompt_references_review_input_not_diff_file(tmp_path: Path, m
     prompt = module.reviewer_prompt(review, "spec-alignment")
 
     assert "Role: spec-alignment" in prompt
-    assert "Return only a single JSON object. Do not use Markdown." in prompt
+    assert "Return only the lightweight Markdown format below." in prompt
     assert f"Read: {input_file}" in prompt
     assert "Review only base_ref...head_ref from the input file." in prompt
     assert "Use spec_file, design_file, and plan_file as requirements context." in prompt
@@ -1013,7 +1031,7 @@ def test_reviewer_prompt_references_input_file_and_role_rubrics(tmp_path: Path) 
         assert "Severity rubric:" in prompt
         assert f"Read: {review.input_file}" in prompt
         assert "Manifest file:" not in prompt
-        assert "Return only a single JSON object" in prompt
+        assert "# Review Result:" in prompt
 
 
 def test_reviewer_prompt_template_is_loaded_from_file(tmp_path: Path, monkeypatch) -> None:
@@ -1100,15 +1118,13 @@ def test_sdk_dispatch_subprocess_writes_debug_prompt_artifacts(tmp_path: Path, m
         return subprocess.CompletedProcess(
             args=args[0],
             returncode=0,
-            stdout=json.dumps([{"role": "spec-alignment", "status": "completed", "findings": []}]),
+            stdout=json.dumps([{"role": "spec-alignment", "text": NO_BLOCKING_REVIEW}]),
             stderr="",
         )
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
 
-    assert module.run_sdk_dispatch_subprocess(review, sys.executable) == [
-        {"role": "spec-alignment", "status": "completed", "findings": []}
-    ]
+    assert module.run_sdk_dispatch_subprocess(review, sys.executable) == [{"role": "spec-alignment", "text": NO_BLOCKING_REVIEW}]
 
     prompts_dir = review.output_dir / "debug" / "prompts"
     assert {path.name for path in prompts_dir.iterdir()} == {
@@ -1134,8 +1150,8 @@ def test_sdk_dispatch_subprocess_uses_only_two_roles(tmp_path: Path, monkeypatch
             returncode=0,
             stdout=json.dumps(
                 [
-                    {"role": "spec-alignment", "status": "completed", "findings": []},
-                    {"role": "implementation-correctness", "status": "completed", "findings": []},
+                    {"role": "spec-alignment", "text": NO_BLOCKING_REVIEW},
+                    {"role": "implementation-correctness", "text": NO_BLOCKING_REVIEW},
                 ]
             ),
             stderr="",
@@ -1151,30 +1167,29 @@ def test_sdk_dispatch_subprocess_uses_only_two_roles(tmp_path: Path, monkeypatch
     assert "raw_dir" not in captured_payload
 
 
-def test_sdk_dispatch_subprocess_returns_role_failures_on_timeout(tmp_path: Path, monkeypatch) -> None:
+def test_sdk_dispatch_subprocess_uses_plugin_owned_timeout_without_debug(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
-    review = make_review_args_for_module(module, tmp_path, debug=True)
+    review = make_review_args_for_module(module, tmp_path)
+    captured_timeout = None
 
     def fake_run(*args, **kwargs):
+        nonlocal captured_timeout
+        captured_timeout = kwargs["timeout"]
         payload = json.loads(kwargs["input"])
-        raw_dir = Path(payload["raw_dir"])
-        raw_dir.mkdir(parents=True, exist_ok=True)
-        (raw_dir / "implementation-correctness.txt").write_text(
-            json.dumps({"role": "implementation-correctness", "status": "completed", "findings": []}),
-            encoding="utf-8",
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=json.dumps([{"role": role, "text": NO_BLOCKING_REVIEW} for role in payload["roles"]]),
+            stderr="",
         )
-        raise subprocess.TimeoutExpired(args[0], timeout=module.SDK_DISPATCH_TIMEOUT_SECONDS)
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
 
     results = module.run_sdk_dispatch_subprocess(review, sys.executable)
 
-    by_role = {result["role"]: result for result in results}
-    assert module.SDK_DISPATCH_TIMEOUT_SECONDS < 600
-    assert by_role["implementation-correctness"]["status"] == "completed"
-    assert by_role["spec-alignment"]["status"] == "failed"
-    assert by_role["spec-alignment"]["findings"][0]["summary"] == "Reviewer dispatch timed out"
-    assert by_role["spec-alignment"]["findings"][0]["severity"] == "CRITICAL"
+    assert captured_timeout == 540
+    assert module.SDK_DISPATCH_TIMEOUT_SECONDS == 540
+    assert [result["role"] for result in results] == module.REVIEWER_ROLES
 
 
 def test_sdk_dispatch_writes_raw_reviewer_output(monkeypatch, tmp_path: Path) -> None:
@@ -1187,7 +1202,7 @@ def test_sdk_dispatch_writes_raw_reviewer_output(monkeypatch, tmp_path: Path) ->
 
     async def fake_query(*, prompt, options):
         class Message:
-            result = json.dumps({"role": "spec-alignment", "status": "completed", "findings": []})
+            result = NO_BLOCKING_REVIEW
 
         yield Message()
 
@@ -1210,78 +1225,38 @@ def test_sdk_dispatch_writes_raw_reviewer_output(monkeypatch, tmp_path: Path) ->
 
     assert module.run_sdk_dispatch() == 0
 
-    assert json.loads((raw_dir / "spec-alignment.txt").read_text(encoding="utf-8")) == {
-        "role": "spec-alignment",
-        "status": "completed",
-        "findings": [],
-    }
+    assert (raw_dir / "spec-alignment.txt").read_text(encoding="utf-8") == NO_BLOCKING_REVIEW
 
 
-def test_reviewer_prompt_requires_strict_json_contract(tmp_path: Path) -> None:
+def test_reviewer_prompt_requires_lightweight_markdown_contract(tmp_path: Path) -> None:
     module = load_script_module()
     review = make_review_args_for_module(module, tmp_path)
 
     prompt = module.reviewer_prompt(review, "spec-alignment")
 
-    assert "Return only a single JSON object. Do not use Markdown." in prompt
+    assert "Return only the lightweight Markdown format below." in prompt
+    assert "Do not use JSON." in prompt
+    assert "# Review Result:" in prompt
     assert "Use only these severity values: CRITICAL, IMPORTANT, WARNING, SUGGESTION." in prompt
-    assert 'If there are no issues, return "findings": []' in prompt
+    assert "If there are no issues, write exactly:" in prompt
     assert "Do not put pass, aligned, ok, or informational observations in findings." in prompt
     assert "Do not use severity aliases such as high, medium, low, minor, or info." in prompt
 
 
-def test_fake_reviewer_results_reject_non_dict_items(tmp_path: Path) -> None:
-    project = tmp_path / "repo"
-    init_repo(project)
-    head = commit_review_context(project)
-
-    result = run(
-        *review_args(project, head, fake_reviewer_results=json.dumps(["not a reviewer"])),
-        cwd=project,
-    )
-
-    assert result.returncode == 1
-    assert "invalid_fake_reviewer_results" in result.stdout
-
-
-def test_fake_reviewer_results_reject_missing_required_fields(tmp_path: Path) -> None:
-    project = tmp_path / "repo"
-    init_repo(project)
-    head = commit_review_context(project)
-
-    result = run(
-        *review_args(
-            project,
-            head,
-            fake_reviewer_results=json.dumps([{"role": "spec-alignment", "status": "completed"}]),
-        ),
-        cwd=project,
-    )
-
-    assert result.returncode == 1
-    assert "invalid_fake_reviewer_results" in result.stdout
-
-
-def test_fake_reviewer_results_generate_report_and_pass_marker_without_results_file(tmp_path: Path) -> None:
+def test_fake_reviewer_results_generate_report_without_results_file(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
     output_dir = project / ".local" / "cross-agent-review" / "demo" / head[:12]
-    fake = json.dumps(
-        [
-            {"role": "spec-alignment", "status": "completed", "findings": []},
-            {"role": "implementation-correctness", "status": "completed", "findings": []},
-        ]
-    )
 
     result = run(
-        *review_args(project, head, fake_reviewer_results=fake),
+        *review_args(project, head, fake_reviewer_results=NO_BLOCKING_REVIEW),
         cwd=project,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert (output_dir / "review-report.md").is_file()
-    assert (output_dir / "review-pass.json").is_file()
+    assert not (output_dir / "review-pass.json").exists()
 
 
 def test_sdk_dispatch_uses_default_sdk_tools(monkeypatch, capsys) -> None:
@@ -1294,7 +1269,7 @@ def test_sdk_dispatch_uses_default_sdk_tools(monkeypatch, capsys) -> None:
 
     async def fake_query(*, prompt, options):
         class Message:
-            result = json.dumps({"role": "spec-alignment", "status": "completed", "findings": []})
+            result = NO_BLOCKING_REVIEW
 
         yield Message()
 
@@ -1320,7 +1295,7 @@ def test_sdk_dispatch_uses_default_sdk_tools(monkeypatch, capsys) -> None:
     assert captured_options == [{"cwd": str(REPO_ROOT)}]
 
 
-def test_sdk_dispatch_reports_reviewer_timeout(monkeypatch, capsys, tmp_path: Path) -> None:
+def test_sdk_dispatch_uses_plugin_owned_reviewer_timeout(monkeypatch, capsys, tmp_path: Path) -> None:
     module = load_script_module()
     raw_dir = tmp_path / "raw"
 
@@ -1330,18 +1305,16 @@ def test_sdk_dispatch_reports_reviewer_timeout(monkeypatch, capsys, tmp_path: Pa
 
     async def fake_query(*, prompt, options):
         class Message:
-            result = json.dumps({"role": "spec-alignment", "status": "completed", "findings": []})
+            result = NO_BLOCKING_REVIEW
 
         yield Message()
 
-    async def fake_wait_for(awaitable, timeout):
-        assert timeout == 480
-        if hasattr(awaitable, "close"):
-            awaitable.close()
-        raise asyncio.TimeoutError
-
     fake_sdk = types.SimpleNamespace(ClaudeAgentOptions=FakeClaudeAgentOptions, query=fake_query)
     monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake_sdk)
+    async def fake_wait_for(awaitable, timeout):
+        assert timeout == 480
+        return await awaitable
+
     monkeypatch.setattr(asyncio, "wait_for", fake_wait_for)
     monkeypatch.setattr(
         sys,
@@ -1361,24 +1334,9 @@ def test_sdk_dispatch_reports_reviewer_timeout(monkeypatch, capsys, tmp_path: Pa
     assert module.run_sdk_dispatch() == 0
 
     data = json.loads(capsys.readouterr().out)
-    assert data == [
-        {
-            "role": "spec-alignment",
-            "status": "failed",
-            "findings": [
-                {
-                    "severity": "CRITICAL",
-                    "location": "spec-alignment",
-                    "summary": "Reviewer timed out",
-                    "evidence": "Exceeded 480 seconds.",
-                    "recommendation": "Rerun review after checking Claude Agent SDK availability.",
-                }
-            ],
-        }
-    ]
-    raw_text = (raw_dir / "spec-alignment.txt").read_text(encoding="utf-8")
-    assert "Reviewer timed out" in raw_text
-    assert "Exceeded 480 seconds." in raw_text
+    assert data[0]["role"] == "spec-alignment"
+    assert "No findings." in data[0]["text"]
+    assert (raw_dir / "spec-alignment.txt").read_text(encoding="utf-8") == NO_BLOCKING_REVIEW
 
 
 def test_sdk_dispatch_subprocess_timeout_reports_clear_error(tmp_path: Path, monkeypatch) -> None:
@@ -1398,8 +1356,8 @@ def test_sdk_dispatch_subprocess_timeout_reports_clear_error(tmp_path: Path, mon
     assert captured_timeout == module.SDK_DISPATCH_TIMEOUT_SECONDS
     assert module.SDK_DISPATCH_TIMEOUT_SECONDS == 540
     assert {result["role"] for result in results} == set(module.REVIEWER_ROLES)
-    assert all(result["status"] == "failed" for result in results)
-    assert all(result["findings"][0]["summary"] == "Reviewer dispatch timed out" for result in results)
+    assert all("Severity: CRITICAL" in result["text"] for result in results)
+    assert all("Reviewer dispatch timed out" in result["text"] for result in results)
 
 
 def test_sdk_dispatch_subprocess_invalid_stdout_reports_clear_error(tmp_path: Path, monkeypatch) -> None:
@@ -1420,28 +1378,19 @@ def test_sdk_dispatch_subprocess_invalid_stdout_reports_clear_error(tmp_path: Pa
         raise AssertionError("expected sdk_dispatch_invalid_output")
 
 
-def test_non_blocking_findings_generate_pass_marker(tmp_path: Path) -> None:
+def test_non_blocking_findings_generate_report_without_pass_marker(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
     output_dir = project / ".local" / "cross-agent-review" / "demo" / head[:12]
-    fake = json.dumps(
-        [
-            {
-                "role": "spec-alignment",
-                "status": "completed",
-                "findings": [
-                    {
-                        "severity": "WARNING",
-                        "location": "app.txt:1",
-                        "summary": "Minor issue",
-                        "evidence": "Evidence",
-                        "recommendation": "Recommendation",
-                    }
-                ],
-            }
-        ]
-    )
+    fake = """# Review Result
+## Findings
+- Severity: WARNING
+  Location: app.txt:1
+  Summary: Minor issue
+  Evidence: Evidence
+  Recommendation: Recommendation
+"""
 
     result = run(
         *review_args(project, head, fake_reviewer_results=fake),
@@ -1450,7 +1399,7 @@ def test_non_blocking_findings_generate_pass_marker(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert (output_dir / "review-report.md").is_file()
-    assert (output_dir / "review-pass.json").is_file()
+    assert not (output_dir / "review-pass.json").exists()
 
 
 def test_blocking_findings_do_not_generate_pass_marker(tmp_path: Path) -> None:
@@ -1458,35 +1407,19 @@ def test_blocking_findings_do_not_generate_pass_marker(tmp_path: Path) -> None:
     init_repo(project)
     head = commit_review_context(project)
     output_dir = project / ".local" / "cross-agent-review" / "demo" / head[:12]
-    fake = json.dumps(
-        [
-            {
-                "role": "implementation-correctness",
-                "status": "completed",
-                "findings": [
-                    {
-                        "severity": "IMPORTANT",
-                        "location": "app.txt:1",
-                        "summary": "Wrong behavior",
-                        "evidence": "Evidence",
-                        "recommendation": "Fix behavior",
-                    }
-                ],
-            }
-        ]
-    )
+    fake = BLOCKING_REVIEW
 
     result = run(
         *review_args(project, head, fake_reviewer_results=fake),
         cwd=project,
     )
 
-    assert result.returncode == 1
+    assert result.returncode == 0
     assert (output_dir / "review-report.md").is_file()
     assert not (output_dir / "review-pass.json").exists()
 
 
-def test_blocking_findings_remove_stale_pass_marker_from_reused_output_dir(tmp_path: Path) -> None:
+def test_run_removes_stale_legacy_pass_marker_from_reused_output_dir(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
@@ -1496,25 +1429,9 @@ def test_blocking_findings_remove_stale_pass_marker_from_reused_output_dir(tmp_p
     clean_result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
 
     assert clean_result.returncode == 0, clean_result.stdout + clean_result.stderr
-    assert (output_dir / "review-pass.json").is_file()
+    (output_dir / "review-pass.json").write_text("stale\n", encoding="utf-8")
 
-    blocking_fake = json.dumps(
-        [
-            {
-                "role": "implementation-correctness",
-                "status": "completed",
-                "findings": [
-                    {
-                        "severity": "IMPORTANT",
-                        "location": "app.txt:1",
-                        "summary": "Wrong behavior",
-                        "evidence": "Evidence",
-                        "recommendation": "Fix behavior",
-                    }
-                ],
-            }
-        ]
-    )
+    blocking_fake = BLOCKING_REVIEW
 
     blocking_result = run(
         "run",
@@ -1525,118 +1442,42 @@ def test_blocking_findings_remove_stale_pass_marker_from_reused_output_dir(tmp_p
         cwd=project,
     )
 
-    assert blocking_result.returncode == 1
+    assert blocking_result.returncode == 0
     assert not (output_dir / "review-pass.json").exists()
 
 
-def test_report_hash_matches_report(tmp_path: Path) -> None:
+def test_mark_pass_report_hash_matches_report(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
     input_file = write_review_input(project, head, head)
     output_dir = input_file.parent.parent
     result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    mark_result = run("mark-pass", "--input-file", str(input_file), cwd=project)
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert mark_result.returncode == 0, mark_result.stdout + mark_result.stderr
     report = (output_dir / "review-report.md").read_bytes()
-    marker = json.loads((output_dir / "review-pass.json").read_text(encoding="utf-8"))
+    marker = json.loads(guard_pass_path(project, head).read_text(encoding="utf-8"))
     import hashlib
 
-    assert marker["report_hash"] == hashlib.sha256(report).hexdigest()
+    assert marker["report_hash"] == "sha256:" + hashlib.sha256(report).hexdigest()
     assert marker["head_ref"] == head
 
 
-def test_duplicate_findings_are_counted_once(tmp_path: Path) -> None:
-    module = load_script_module()
-    finding = {
-        "severity": "IMPORTANT",
-        "location": "app.txt:1",
-        "summary": "Duplicate",
-        "evidence": "Evidence",
-        "recommendation": "Fix",
-    }
-    summary = module.aggregate(
-        [
-            {"role": "spec-alignment", "status": "completed", "findings": [finding]},
-            {"role": "implementation-correctness", "status": "completed", "findings": [finding]},
-        ]
-    )
-
-    assert summary["blocking_findings"] == 1
-    assert summary["findings"] == [finding]
-
-
-def test_aggregate_blocks_findings_without_severity() -> None:
+def test_aggregate_preserves_reviewer_text_without_parsing() -> None:
     module = load_script_module()
 
     summary = module.aggregate(
         [
-            {
-                "role": "implementation-correctness",
-                "status": "pass",
-                "findings": [
-                    {
-                        "location": "app.txt:1",
-                        "issue": None,
-                        "detail": "Reviewed behavior matches the spec.",
-                    }
-                ],
-            }
+            {"role": "spec-alignment", "text": NO_BLOCKING_REVIEW},
+            {"role": "implementation-correctness", "text": BLOCKING_REVIEW},
         ]
     )
 
-    assert summary["blocking_findings"] == 1
-    assert summary["findings"][0]["severity"] == "CRITICAL"
-    assert summary["findings"][0]["summary"] == "Reviewer output missing severity"
-
-
-def test_aggregate_blocks_aligned_records_inside_findings() -> None:
-    module = load_script_module()
-
-    summary = module.aggregate(
-        [
-            {
-                "role": "spec-alignment",
-                "status": "aligned",
-                "findings": [
-                    {
-                        "requirement": "Plugin package",
-                        "status": "aligned",
-                        "evidence": "Manifest and skill entrypoints match the spec.",
-                    }
-                ],
-            }
+    assert summary == {
+        "reviewers": [
+            {"role": "spec-alignment", "text": NO_BLOCKING_REVIEW},
+            {"role": "implementation-correctness", "text": BLOCKING_REVIEW},
         ]
-    )
-
-    assert summary["blocking_findings"] == 1
-    assert summary["findings"][0]["severity"] == "CRITICAL"
-    assert summary["findings"][0]["summary"] == "Reviewer output missing severity"
-
-
-def test_aggregate_blocks_severity_aliases() -> None:
-    module = load_script_module()
-
-    summary = module.aggregate(
-        [
-            {
-                "role": "spec-alignment",
-                "status": "pass-with-findings",
-                "findings": [
-                    {"severity": "minor", "area": "docs", "description": "Tiny wording note."},
-                    {"severity": "medium", "area": "tests", "description": "Add an edge test.", "suggestion": "Cover the boundary."},
-                    {"severity": "low", "area": "docs", "description": "Clarify wording.", "suggestion": "Tighten the text."},
-                    {"severity": "info", "file": "app.py", "line": 3, "message": "No risk."},
-                ],
-            }
-        ]
-    )
-
-    assert summary["blocking_findings"] == 4
-    assert [finding["severity"] for finding in summary["findings"]] == ["CRITICAL", "CRITICAL", "CRITICAL", "CRITICAL"]
-    assert {finding["summary"] for finding in summary["findings"]} == {
-        "Reviewer output used invalid severity: minor",
-        "Reviewer output used invalid severity: medium",
-        "Reviewer output used invalid severity: low",
-        "Reviewer output used invalid severity: info",
     }
