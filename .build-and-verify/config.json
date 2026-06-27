@@ -32,7 +32,6 @@
           "requirements-dev.txt",
           "plugins/**",
           "scripts/local_plugin_build.py",
-          "docs/agent-guard/**",
           "tests/test_local_plugin_build_checks.py"
         ],
         "command": "python -m pytest -q -n 8 -p no:cacheprovider tests/test_local_plugin_build_checks.py",
@@ -46,7 +45,6 @@
           "requirements-dev.txt",
           "plugins",
           "scripts/local_plugin_build.py",
-          "docs/agent-guard",
           "tests/test_local_plugin_build_checks.py"
         ]
       },
@@ -59,7 +57,6 @@
           ".release-flow/**",
           "requirements-dev.txt",
           "plugins/agent-guard/**",
-          "docs/agent-guard/**",
           "tests/test_agent_guard*.py",
           "tests/test_extract_guard_model.py",
           "tests/test_validate_guard_profile.py",
@@ -73,7 +70,6 @@
           ".release-flow",
           "requirements-dev.txt",
           "plugins/agent-guard",
-          "docs/agent-guard",
           "tests/test_agent_guard_runtime_session_focus.py",
           "tests/test_agent_guard_runtime_brief.py",
           "tests/test_agent_guard_skill_entrypoints.py",

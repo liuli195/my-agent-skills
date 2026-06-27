@@ -680,35 +680,24 @@ def test_build_and_verify_init_questionnaire_contains_fixed_flow() -> None:
         "使用用户提供的绝对路径。",
         "允许扫描仓库文件。",
         "不允许扫描，改为手动提供命令。",
-        "接受检测结果。",
-        "修改检测结果。",
-        "纳入全部候选 checks（检查项）。",
-        "只纳入用户选择的 checks（检查项）。",
+        "接受建议候选 checks（检查项）。",
+        "修改候选 checks（检查项）。",
         "手动新增 checks（检查项）。",
         "接受建议 paths（受影响路径）。",
         "修改 paths（受影响路径）。",
-        "接受建议 inputs（缓存输入）。",
-        "修改 inputs（缓存输入）。",
         "接受建议运行参数。",
         "修改 `verify.maxParallel`（最大并行检查数）。",
         "修改 `verify.timeoutSeconds`（超时秒数）。",
-        "新建配置，不覆盖已有配置。",
-        "覆盖已有 `.build-and-verify/config.json`（配置文件）。",
-        "接受 `.build-and-verify/backups/config-YYYYMMDD-HHMMSS.json`（备份配置文件）。",
         "确认写入。",
         "返回前面问题修改草案。",
     ]
     required_questions = [
         "Q1 目标仓库路径确认",
         "Q2 扫描授权",
-        "Q3 检测结果确认",
-        "Q4 check（检查项）选择",
-        "Q5 paths（受影响路径）确认",
-        "Q6 inputs（缓存输入）确认",
-        "Q7 并行和超时确认",
-        "Q8 覆盖确认",
-        "Q9 备份路径确认",
-        "Q10 最终写入确认",
+        "Q3 候选 check（检查项）确认",
+        "Q4 paths（受影响路径）确认",
+        "Q5 并行和超时确认",
+        "Q6 覆盖与最终写入确认",
     ]
 
     for question in required_questions:
@@ -729,12 +718,44 @@ def test_build_and_verify_init_questionnaire_contains_fixed_flow() -> None:
     assert "选择后果" in text
     assert "跳转规则" in text
     assert "不得自由编造初始化问题" in text
-    assert "不得跳过 Q10 最终写入确认" in text
+    assert "不得跳过 Q6 最终写入确认" in text
     assert "用户沉默不能视为确认" in text
-    assert "如果配置已存在，必须停止并说明原因" in text
-    assert "修改备份路径：必须仍在目标仓库内，且不得覆盖已有文件" in text
+    assert "inputs（缓存输入）默认由 agent（代理）根据 paths（受影响路径）和 command（命令）来源推导" in text
+    assert "覆盖已有配置时自动使用默认备份路径" in text
+    assert "Q7" not in text
+    assert "Q8" not in text
+    assert "Q9" not in text
+    assert "Q10" not in text
+    assert "Q6 inputs（缓存输入）确认" not in text
+    assert "Q9 备份路径确认" not in text
     assert "dry run" not in text
     assert "试运行）" not in text
+
+
+def test_build_and_verify_init_current_specs_match_simplified_flow() -> None:
+    active_spec = (
+        REPO_ROOT / "openspec" / "specs" / "test-framework-plugin" / "spec.md"
+    ).read_text(encoding="utf-8")
+    design = (
+        REPO_ROOT
+        / "docs"
+        / "superpowers"
+        / "specs"
+        / "2026-06-26-build-and-verify-init-skill-design.md"
+    ).read_text(encoding="utf-8")
+
+    assert "默认从 `paths`（受影响路径）和 command（命令）来源推导 `inputs`" in active_spec
+    assert "不得单独要求用户选择备份路径" in active_spec
+    assert "通用候选" in active_spec
+    assert "固定为 6 步" in design
+    assert "inputs（缓存输入）默认由 agent（代理）从 paths（受影响路径）和 command（命令）来源推导" in design
+    assert "不单独询问备份路径" in design
+    assert "通用候选" in design
+    for stale_text in [active_spec, design]:
+        assert "10 个固定问题" not in stale_text
+        assert "inputs（缓存输入）确认" not in stale_text
+        assert "备份路径确认" not in stale_text
+        assert "首版只识别 Node（节点运行时）和 Python（Python 语言）" not in stale_text
 
 
 def test_build_and_verify_init_ecosystem_detection_covers_node_python_and_fallback() -> None:
@@ -846,6 +867,50 @@ def test_build_and_verify_init_template_node_lockfile_conflict_requires_user_cho
     assert all("npm run" not in command for command in resolved["commands"])
 
 
+def test_build_and_verify_init_generic_candidate_rules_are_constrained() -> None:
+    questionnaire = (INIT_REFERENCE_ROOT / "questionnaire.md").read_text(encoding="utf-8")
+    ecosystem = (INIT_REFERENCE_ROOT / "ecosystem-detection.md").read_text(encoding="utf-8")
+    config_draft = (INIT_REFERENCE_ROOT / "config-draft.md").read_text(encoding="utf-8")
+
+    for token in [
+        "Generic Candidate Discovery（通用候选发现）",
+        "不得运行候选 command（命令）",
+        "Makefile（任务文件）",
+        "`scripts/`（脚本目录）",
+        "`tests/`（测试目录）",
+        "`openspec/`（开放规格目录）",
+        "source（来源）",
+        "confidence（置信度）",
+        "reason（纳入理由）",
+        "risk（风险提示）",
+        "High（高）",
+        "Medium（中）",
+        "Low（低）",
+        "deploy（部署）",
+        "publish（发布）",
+        "release（发布流程）",
+        "push（推送）",
+        "delete（删除）",
+        "remove（移除）",
+        "migrate（迁移）",
+    ]:
+        assert token in ecosystem
+
+    for token in [
+        "已有配置候选、生态候选和通用候选",
+        "高置信度候选",
+        "中低置信度候选",
+    ]:
+        assert token in questionnaire
+
+    for token in [
+        "高置信度候选可以默认建议纳入",
+        "中低置信度候选只能展示给用户选择",
+        "风险候选不得默认纳入",
+    ]:
+        assert token in config_draft
+
+
 def test_build_and_verify_init_template_deduplicates_conflicting_check_ids() -> None:
     candidates = [
         {"section": "verify", "id": "verify.node-tests", "script": "test"},
@@ -883,6 +948,8 @@ def test_build_and_verify_init_config_draft_rules_cover_commands_paths_inputs_an
         "只能在解释含义并获得用户确认后写入",
     ]:
         assert token in text
+    assert "inputs（缓存输入）默认从 paths（受影响路径）和 command（命令）来源推导" in text
+    assert "写入前必须逐项展示 inputs（缓存输入）并等待用户确认" not in text
 
 
 def test_build_and_verify_init_references_have_cross_file_flow_invariants() -> None:
