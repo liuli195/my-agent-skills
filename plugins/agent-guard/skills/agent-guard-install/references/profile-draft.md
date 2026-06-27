@@ -37,8 +37,7 @@ install 阶段只产出场景化草案，不把拦截接入运行态。
 - `artifacts.yaml` 声明 artifact（产物）路径；已有外部完成证据应通过原始 artifact 引用。
 - 如果原流程没有稳定产物，可以由 Agent Guard（代理守卫）定义 guard-defined evidence（守卫定义证据）默认路径：`.local/guard/evidence/{profile_id}/{artifact_id}/{subject_id}/{git_head_short}/pass.json`。主 agent（主代理）在上游检查通过后写入该文件，Runtime（运行时）只校验。
 - 禁止新增 reviewed wrapper。
-- 禁止修改 cross-agent-review 默认输出目录。
-- 对已有外部产物，禁止复制 pass marker 到 `.local/guard/evidence`。
+- 对真正已有的 external artifact（外部产物），禁止复制 pass marker（通过标记）到 `.local/guard/evidence` 绕过原始路径。
 - 禁止把 `verify --apply` 作为主拦截点。
 
 troubleshoot（排障）：如果草案校验失败，先检查 artifact ID 是否在 `artifacts.yaml` 中存在，再检查证据路径是否仍属于被守卫对象的发布形态。

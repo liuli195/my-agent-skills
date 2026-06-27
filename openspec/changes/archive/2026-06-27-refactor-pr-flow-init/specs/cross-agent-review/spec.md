@@ -1,38 +1,4 @@
-# cross-agent-review Specification
-
-## Purpose
-Define the independent cross-agent review workflow, reviewer roles, report contract, and guard pass marker handoff.
-## Requirements
-### Requirement: 跨 agent review 输入契约
-系统 MUST 只接收一个 caller-prepared `review-input.json`（审查输入文件）作为 cross-agent-review（跨代理审查）的启动输入。该文件 MUST 位于同一次 review（审查）的 `prepared-inputs`（预备输入目录）下，并包含 review subject（审查对象）、模式和上下文文件引用。
-
-#### Scenario: 输入完整
-- **WHEN** 调用方提供 `--input-file`，且该文件路径为 `.local/cross-agent-review/<change>/<head_ref_short>/prepared-inputs/review-input.json`
-- **AND** `review-input.json` 包含 `change`、`mode`、`base_ref`、`head_ref`、`spec_file`、`design_file` 和 `plan_file`
-- **THEN** review mechanism（审查机制）可以启动跨 agent review（跨代理审查）
-
-#### Scenario: 输入缺少关键字段
-- **WHEN** `review-input.json` 缺少 `change`、`mode`、`base_ref`、`head_ref`、`spec_file`、`design_file` 或 `plan_file` 任一字段
-- **THEN** review mechanism（审查机制）拒绝启动，并报告缺失字段
-
-#### Scenario: 输入文件缺失
-- **WHEN** `review-input.json` 引用的 `spec_file`、`design_file` 或 `plan_file` 不存在
-- **THEN** review mechanism（审查机制）拒绝启动，并报告缺失文件
-
-#### Scenario: prepared inputs 边界
-- **WHEN** 调用方准备 review input（审查输入）
-- **THEN** 调用方 MUST 把 `review-input.json` 写入同一次 review（审查）的 `prepared-inputs`（预备输入目录）
-- **AND** review mechanism（审查机制）MUST NOT 从分散的 `spec_file`、`design_file` 或 `tasks_file` CLI（命令行接口）参数启动
-
-#### Scenario: prepared inputs 只包含一个输入文件
-- **WHEN** review mechanism（审查机制）读取 `prepared-inputs`（预备输入目录）
-- **THEN** 该目录作为 review input（审查输入）MUST 只包含 `review-input.json` 一个普通文件
-- **AND** 如果该目录包含 `spec.md`、`design.md`、`tasks.md`、`plan.md`、`manifest.json` 或其他普通文件，review mechanism（审查机制）MUST 拒绝启动并报告 unexpected prepared input（意外预备输入）
-
-#### Scenario: plan file 取代 tasks file
-- **WHEN** 调用方准备 review input（审查输入）
-- **THEN** `review-input.json` MUST 使用 `plan_file` 引用 `docs/superpowers/plans/` 下的 Superpowers plan（超级能力计划）
-- **AND** review mechanism（审查机制）MUST NOT 要求或读取 `tasks_file`
+## MODIFIED Requirements
 
 ### Requirement: review subject 绑定
 系统 MUST 把 review（审查）绑定到 caller-prepared `review-input.json`（审查输入文件）声明的 `base_ref`、`head_ref` 和上下文文件。
@@ -111,18 +77,6 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 - **THEN** 系统 MUST 把 `review-report.md` 写入 `.local/cross-agent-review/<change>/<head_ref_short>/`
 - **AND** 系统 MUST NOT 默认写入 `review-pass.json`、`review-results.json`、`inputs/manifest.json`、`prompts/<role>.txt` 或 `raw/<role>.txt`
 
-### Requirement: Comet 边界
-系统 MUST 让 cross-agent review（跨代理审查）保持为独立审查证据，不替代 Comet verify（Comet 验证）。
-
-#### Scenario: 不运行构建或测试
-- **WHEN** review mechanism（审查机制）执行 review
-- **THEN** 它不得要求调用方预先运行测试或提供测试结果文件
-- **AND** 它不得负责运行构建命令或测试命令
-
-#### Scenario: 不推进 Comet phase
-- **WHEN** review mechanism（审查机制）完成 review
-- **THEN** 它不得修改 `.comet.yaml` 或推进 Comet phase（阶段）
-
 ### Requirement: review input snapshots
 系统 MUST 让 reviewer prompt（审查代理提示词）引用 `review-input.json`（审查输入文件）和短审查命令，不内联大 diff（差异）内容。
 
@@ -135,20 +89,6 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 - **WHEN** 系统生成 reviewer prompt（审查提示词）
 - **THEN** Python 脚本 MUST 作为调用方和渲染入口，负责提供模板变量、读取模板和渲染模板
 - **AND** 模板变量 MUST 限制为 role（角色）、input file path（输入文件路径）、review subject commands（审查对象命令）、role focus（角色重点）和 severity rubric（严重级别规则）
-
-### Requirement: Skill invocation boundary
-
-系统 MUST 限制 `cross-agent-review`（跨代理审查）Skill（技能）的自动调用场景，避免在验证或通用审查阶段重复运行。
-
-#### Scenario: 允许的调用场景
-
-- **WHEN** 当前流程处于 Comet build completion（构建完成）阶段、PR Flow local review（本地审查）阶段，或用户显式调用 `cross-agent-review`
-- **THEN** agent（代理）MAY 调用 `cross-agent-review` Skill
-
-#### Scenario: 禁止的自动调用场景
-
-- **WHEN** 当前流程处于 Comet verify（验证）阶段或通用 code review（代码审查）阶段
-- **THEN** agent（代理）MUST NOT 自动调用 `cross-agent-review` Skill
 
 ### Requirement: review timeout ownership
 系统 MUST 由 cross-agent-review（跨代理审查）插件脚本管理 reviewer dispatch（审查代理派发）超时。调用方 MUST NOT 在插件命令外层包装短于插件内部上限的 timeout/watchdog（超时/看门等待）。
