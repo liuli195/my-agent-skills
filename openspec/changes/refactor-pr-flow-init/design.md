@@ -15,6 +15,8 @@ PR Flow（拉取请求流程）现有 `init`（初始化）脚本会直接写默
 - `init`（初始化）脚本保留写入本地文件能力，但只写已确认的配置输入。
 - 校验覆盖字段合法性和跨配置依赖。
 - GitHub（代码托管平台）配置意图进入 `setup.github`（GitHub 配置建议）区，供 agent（代理）后续人工配置。
+- `cross-agent-review`（跨代理审查）输出轻量 Markdown（标记文本）审查报告，主 agent（主代理）负责按 severity（严重级别）判断是否写入 pass marker（通过标记）。
+- Agent Guard（代理守卫）使用统一 `.local/guard/evidence/` 默认目录读取主 agent（主代理）生成的 guard-defined evidence（守卫定义证据）。
 
 **Non-Goals:**
 
@@ -106,6 +108,16 @@ validate（校验）必须覆盖这些依赖：
 - cleanup（清理）：auto-delete head branch（自动删除源分支）可能和 cleanup（清理）删除远端源分支职责重叠，默认给 warning（警告）。
 - tweak（小改）：只跳过插件内 review gate（审查门禁），不能绕过远端 required review（必需审查）。
 
+### 7. Cross-agent review（跨代理审查）职责分离
+
+`cross-agent-review run`（跨代理审查运行）只负责派发 reviewer（审查代理）并聚合 Markdown（标记文本）报告。reviewer（审查代理）输出必须包含 `Severity: CRITICAL|IMPORTANT|WARNING|SUGGESTION`（严重级别）。脚本不解析 finding（发现项）、不去重、不计算阻断数量，也不生成旧 `.local/cross-agent-review/.../review-pass.json`（审查通过文件）。
+
+主 agent（主代理）读取 `review-report.md`（审查报告）后做语义判断。只有没有未处理 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）时，主 agent（主代理）才调用 `mark-pass`（标记通过）写入 `.local/guard/evidence/<profile_id>/cross_agent_review_pass/<change>/<head_ref_short>/pass.json`。
+
+Agent Guard（代理守卫）只通过 artifacts.yaml（产物注册文件）读取该 guard-defined evidence（守卫定义证据），不得准备 cross-agent-review（跨代理审查）输入、派发 reviewer（审查代理）或推进 Comet phase（彗星阶段）。
+
+插件内部保留 reviewer（审查代理）480 秒和 SDK dispatch（开发包派发）540 秒 timeout（超时）。主 agent（主代理）不得在插件命令外层再包装短于 540 秒的 timeout/watchdog（超时/看门等待）。
+
 ## Risks / Trade-offs
 
 - 配置问答变长 -> 通过 Skill（技能）分组提问和默认值降低负担。
@@ -120,3 +132,4 @@ validate（校验）必须覆盖这些依赖：
 3. 增加 validate（校验）入口和结构化输出。
 4. 调整 init（初始化）写入路径，只支持已确认配置输入写入。
 5. 更新测试，覆盖旧默认写入被拒绝、确认配置写入、端到端初始化回归和依赖矩阵。
+6. 更新 cross-agent-review（跨代理审查）、Agent Guard（代理守卫）和 Comet review gate（彗星审查门禁）规格，记录 pass marker（通过标记）职责和默认 evidence（证据）路径。

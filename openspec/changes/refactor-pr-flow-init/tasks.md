@@ -35,3 +35,12 @@
 - [x] 4.6 Add tests that Plugin（插件）/Skill（技能） content is organized by user scenario, and questionnaire（问答模板） contains fixed questions, fixed options, consequences and jump rules.
 - [x] 4.7 Add an end-to-end regression from `pr-flow-init` Skill（初始化技能） entrypoint: load references（参考文件）, simulate fixed questionnaire（问答模板） answers and final confirmation, generate draft, run read-only validate（校验）, write via confirmed config input, and perform post-write structure check without running diagnose、complete、cleanup、hotfix or tweak（诊断、收尾、清理、热修复、小改）.
 - [x] 4.8 Run focused PR Flow（拉取请求流程） tests and OpenSpec（开放规格） strict validation.
+
+## 5. Cross-Agent Review And Guard Evidence
+
+- [x] 5.1 Simplify cross-agent-review（跨代理审查） output to Markdown（标记文本） `review-report.md`（审查报告） and remove automatic `review-pass.json`（审查通过文件） generation.
+- [x] 5.2 Define severity（严重级别） values `CRITICAL`、`IMPORTANT`、`WARNING` and `SUGGESTION`, and require main agent（主代理） semantic pass/fail judgment.
+- [x] 5.3 Add `mark-pass`（标记通过） to write guard-defined evidence（守卫定义证据） under `.local/guard/evidence/<profile_id>/cross_agent_review_pass/<change>/<head_ref_short>/pass.json`.
+- [x] 5.4 Update Agent Guard（代理守卫） runtime, skill references, specs and tests so `cross_agent_review_pass` uses the unified guard evidence（守卫证据） path.
+- [x] 5.5 Keep plugin-owned SDK（开发包） timeout（超时） at 480 seconds per reviewer（审查代理） and 540 seconds per dispatch（派发）, while forbidding an extra shorter main-agent timeout/watchdog（主代理超时/看门等待） wrapper.
+- [x] 5.6 Run focused cross-agent-review（跨代理审查） and Agent Guard（代理守卫） tests, OpenSpec（开放规格） strict validation, diff check（差异检查） and full pytest（测试） regression.

@@ -1020,3 +1020,12 @@ Expected: clean（干净） or only intentional changes already committed.
 - [x] 无不必要抽象：validate（校验）用简单 list（列表） issue（问题）结构，不新增 schema（结构定义）库或 class（类）。
 - [x] 运行边界：init（初始化）不做终端交互、不调用 GitHub API（GitHub 接口）、不运行 diagnose、complete、cleanup、hotfix 或 tweak（诊断、收尾、清理、热修复、小改）。
 - [x] 写入边界：init（初始化）只写 `.pr-flow/config.yaml`、`.pr-flow/pr-template.md`、`.pr-flow/.gitignore`。
+
+## Scope Addendum: Cross-Agent Review And Guard Evidence
+
+- [x] cross-agent-review（跨代理审查）`run`（运行）只写 Markdown（标记文本）`review-report.md`（审查报告），不再生成旧 `review-pass.json`（审查通过文件）。
+- [x] reviewer（审查代理）输出固定 severity（严重级别）：`CRITICAL`、`IMPORTANT`、`WARNING`、`SUGGESTION`。
+- [x] 主 agent（主代理）读取审查报告并判断是否还有未处理 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）。
+- [x] `mark-pass`（标记通过）写入 `.local/guard/evidence/<profile_id>/cross_agent_review_pass/<change>/<head_ref_short>/pass.json`。
+- [x] Agent Guard（代理守卫）只读取 guard-defined evidence（守卫定义证据），不实现 cross-agent-review（跨代理审查）内部流程。
+- [x] 插件内部保留 480 秒 reviewer（审查代理）和 540 秒 SDK dispatch（开发包派发）timeout（超时）；主 agent（主代理）不得外层包装更短 timeout/watchdog（超时/看门等待）。

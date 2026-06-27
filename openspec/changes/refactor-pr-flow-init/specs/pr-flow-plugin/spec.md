@@ -36,6 +36,28 @@
 - **THEN** complete、cleanup、hotfix、tweak 和 diagnose（收尾、清理、热修复、小改、诊断）命令 MUST NOT 把 `setup.github` 作为运行配置消费
 - **THEN** `setup.github` MUST 只作为 agent（代理）继续人工配置 GitHub（代码托管平台）的建议输入
 
+### Requirement: Review gate modes
+系统 MUST 支持 GitHub（代码托管平台）、local（本地）、dual（双门禁）和 skip（跳过）四种 review gate（审查门禁）模式。
+
+#### Scenario: Local review evidence
+- **WHEN** `reviewGate.mode` 为 `local` 或 `dual`
+- **THEN** 系统 MUST 校验本地 review evidence（审查证据）
+- **THEN** 首版 MUST 支持配置的 JSON review pass evidence（审查通过证据），默认路径为 `.pr-flow/review-pass.json`
+- **THEN** 本地 evidence MUST 匹配当前 base、head 和 diff（差异）
+
+### Requirement: Cross-agent-review evidence generation
+系统 MUST 保持 `cross-agent-review`（跨代理审查）输出可被调用方读取，并由主 agent（主代理）在通过后生成 PR Flow local/dual review gate（本地/双门禁审查门禁）所需 evidence（证据）。
+
+#### Scenario: Prepared input paths
+- **WHEN** 系统运行 `cross-agent-review`
+- **THEN** 输入快照 MUST 写入 `.local/cross-agent-review/<change>/<head>/prepared-inputs/`
+
+#### Scenario: Strict reviewer output
+- **WHEN** reviewer（审查代理）返回 findings（发现项）
+- **THEN** 每个 finding MUST 使用 `CRITICAL`、`IMPORTANT`、`WARNING` 或 `SUGGESTION` severity（严重级别）
+- **THEN** 主 agent（主代理）MUST 把缺失 severity 或使用别名的 finding 视为 invalid reviewer finding（无效审查发现）
+- **THEN** 外部自定义 reviewer MUST 在使用本版本前迁移旧 severity aliases（严重级别别名）
+
 ## ADDED Requirements
 
 ### Requirement: PR Flow init validates confirmed configuration
