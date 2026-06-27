@@ -1226,6 +1226,43 @@ def test_pr_flow_plugin_init_entrypoints_route_to_pr_flow_init() -> None:
         assert "只读 validate（校验）" in text
 
 
+def test_pr_flow_init_end_to_end_from_skill_to_confirmed_write(tmp_path: Path) -> None:
+    skill_dir = REPO_ROOT / "plugins" / "pr-flow" / "skills" / "pr-flow-init"
+    skill_text = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    questionnaire = (skill_dir / "references" / "questionnaire.md").read_text(encoding="utf-8")
+    config_draft = (skill_dir / "references" / "config-draft.md").read_text(encoding="utf-8")
+    validation = (skill_dir / "references" / "validation.md").read_text(encoding="utf-8")
+
+    assert "references/questionnaire.md" in skill_text
+    assert "固定问题" in questionnaire
+    assert "setup.github" in config_draft
+    assert "error（错误）" in validation
+
+    project = tmp_path / "project"
+    project.mkdir()
+    config = default_pr_flow_config_for_test("main")
+    config["setup"] = {"github": {"requiredChecks": ["ci"], "requiredReview": True}}
+    draft = tmp_path / "confirmed.yaml"
+    draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    validate_result = run("validate", "--project", str(project), "--config", str(draft))
+    assert validate_result.returncode == 0, validate_result.stdout + validate_result.stderr
+    assert "status: validation_passed" in validate_result.stdout
+
+    init_result = run("init", "--project", str(project), "--config", str(draft))
+    assert init_result.returncode == 0, init_result.stdout + init_result.stderr
+
+    written = yaml.safe_load((project / ".pr-flow" / "config.yaml").read_text(encoding="utf-8"))
+    assert written["defaults"]["baseBranch"] == "main"
+    assert written["setup"]["github"]["requiredChecks"] == ["ci"]
+    assert (project / ".pr-flow" / "pr-template.md").is_file()
+    assert (project / ".pr-flow" / ".gitignore").read_text(encoding="utf-8") == "/runs/\n/last-status.json\n"
+
+    combined_output = validate_result.stdout + init_result.stdout
+    for forbidden in ["status: ready", "status: merge_complete", "cleanup_complete", "hotfix_complete"]:
+        assert forbidden not in combined_output
+
+
 def test_validate_reads_only_provided_config_and_reports_suggestions(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
