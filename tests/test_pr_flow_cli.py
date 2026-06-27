@@ -194,7 +194,13 @@ def test_command_stub_placeholder_matches_body_file_path(tmp_path: Path) -> None
 def test_pr_flow_in_process_invocation_captures_output(tmp_path: Path) -> None:
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
-    result = invoke_pr_flow(["init", "--project", str(tmp_path)])
+    draft = tmp_path / "confirmed.yaml"
+    draft.write_text(
+        yaml.safe_dump(default_pr_flow_config_for_test(), allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    result = invoke_pr_flow(["init", "--project", str(tmp_path), "--config", str(draft)])
 
     assert result.returncode == 0
     assert "status: initialized" in result.stdout
@@ -508,8 +514,7 @@ def _create_cleanup_project(tmp_path: Path) -> tuple[Path, Path]:
 
     project = tmp_path / "project"
     assert init_repo(project) == "main"
-    init_result = run("init", "--project", str(project))
-    assert init_result.returncode == 0, init_result.stdout + init_result.stderr
+    write_confirmed_pr_flow_config(project)
     git(project, "add", ".pr-flow")
     git(project, "commit", "-m", "configure pr flow")
     git(project, "remote", "add", "origin", str(remote))
@@ -946,6 +951,20 @@ def write_review_pass_file(project: Path, relative_path: str = ".pr-flow/review-
     return fingerprint
 
 
+def default_pr_flow_config_for_test(base_branch: str = "main") -> dict:
+    return load_pr_flow_module().default_config(base_branch)
+
+
+def write_confirmed_pr_flow_config(project: Path, config: dict | None = None) -> None:
+    draft = project.parent / f"{project.name}-confirmed-pr-flow.yaml"
+    draft.write_text(
+        yaml.safe_dump(config or default_pr_flow_config_for_test(), allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    result = run("init", "--project", str(project), "--config", str(draft))
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def configure_complete(
     project: Path,
     *,
@@ -953,7 +972,7 @@ def configure_complete(
     merge_strategy: str = "merge",
     evidence_path: str | None = None,
 ) -> None:
-    assert run("init", "--project", str(project)).returncode == 0
+    write_confirmed_pr_flow_config(project)
     config_path = project / ".pr-flow" / "config.yaml"
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     config["defaults"]["wait"] = {"timeoutSeconds": 0, "pollSeconds": 0}
@@ -974,7 +993,7 @@ def configure_hotfix(
     allow_hotfix: bool = True,
     verify_command: str = "git rev-parse HEAD",
 ) -> None:
-    assert run("init", "--project", str(project)).returncode == 0
+    write_confirmed_pr_flow_config(project)
     config_path = project / ".pr-flow" / "config.yaml"
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     config.setdefault("authorization", {})
@@ -1063,8 +1082,13 @@ def write_review_pass(
 def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
+    draft = tmp_path / "confirmed.yaml"
+    draft.write_text(
+        yaml.safe_dump(default_pr_flow_config_for_test("main"), allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
 
-    result = run("init", "--project", str(project), "--base-branch", "main")
+    result = run("init", "--project", str(project), "--config", str(draft))
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: initialized" in result.stdout
@@ -1091,6 +1115,38 @@ def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
     assert (project / ".pr-flow" / ".gitignore").read_text(encoding="utf-8") == "/runs/\n/last-status.json\n"
 
 
+def test_init_without_confirmed_config_does_not_write_defaults(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = run("init", "--project", str(project), "--base-branch", "main")
+
+    assert result.returncode == 2
+    assert "confirmed config required" in result.stdout
+    assert not (project / ".pr-flow" / "config.yaml").exists()
+    assert not (project / ".pr-flow" / "pr-template.md").exists()
+    assert not (project / ".pr-flow" / ".gitignore").exists()
+
+
+def test_init_validation_errors_block_all_writes(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    draft = tmp_path / "invalid.yaml"
+    draft.write_text(
+        yaml.safe_dump({"defaults": {"reviewGate": {"mode": "local"}}}, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    result = run("init", "--project", str(project), "--config", str(draft))
+
+    assert result.returncode == 1
+    assert "status: validation_failed" in result.stdout
+    assert "error: defaults.baseBranch missing" in result.stdout
+    assert not (project / ".pr-flow" / "config.yaml").exists()
+    assert not (project / ".pr-flow" / "pr-template.md").exists()
+    assert not (project / ".pr-flow" / ".gitignore").exists()
+
+
 def test_current_repo_hotfix_verify_command_uses_BUILD_AND_VERIFY_full() -> None:
     config = yaml.safe_load((REPO_ROOT / ".pr-flow" / "config.yaml").read_text(encoding="utf-8"))
 
@@ -1103,8 +1159,13 @@ def test_current_repo_hotfix_verify_command_uses_BUILD_AND_VERIFY_full() -> None
 def test_init_does_not_call_gh_api(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
+    draft = tmp_path / "confirmed.yaml"
+    draft.write_text(
+        yaml.safe_dump(default_pr_flow_config_for_test(), allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
 
-    result = run("init", "--project", str(project))
+    result = run("init", "--project", str(project), "--config", str(draft))
 
     assert result.returncode == 0
     assert "gh api" not in result.stdout
@@ -1238,9 +1299,7 @@ def test_status_file_is_written_for_stop_state(tmp_path: Path) -> None:
     module = load_pr_flow_module()
     project = tmp_path / "project"
     project.mkdir()
-    init_result = invoke_pr_flow(["init", "--project", str(project)], module=module)
-
-    assert init_result.returncode == 0, init_result.stdout + init_result.stderr
+    write_confirmed_pr_flow_config(project)
     result = invoke_pr_flow(["diagnose", "--project", str(project)], module=module)
 
     assert result.returncode == 1
@@ -1256,7 +1315,7 @@ def test_diagnose_outputs_push_required_without_upstream(tmp_path: Path) -> None
     module = load_pr_flow_module()
     project = tmp_path / "project"
     assert init_repo(project) == "main"
-    assert invoke_pr_flow(["init", "--project", str(project)], module=module).returncode == 0
+    write_confirmed_pr_flow_config(project)
     git(project, "switch", "-c", "feature/no-upstream")
 
     result = invoke_pr_flow(["diagnose", "--project", str(project)], module=module)

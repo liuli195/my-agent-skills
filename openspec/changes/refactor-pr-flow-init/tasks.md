@@ -16,20 +16,20 @@
 - [x] 2.4 Validate hotfix（热修复） dependencies: allow-list（允许列表）, authorization phrase（授权短语）, verify command（验证命令）, remote（远端名） and Rulesets bypass（规则集绕过权限） suggestion.
 - [x] 2.5 Validate review gate（审查门禁）, checks（检查）, merge strategy（合并方式）, cleanup（清理） and tweak（小改） dependency warnings.
 - [x] 2.6 Preserve fast/full verify（快速/完整验证） boundary checks in validation output.
-- [ ] 2.7 Ensure validate（校验） errors block init（初始化） writes; warnings（警告） and setup suggestions（配置建议） only require display before confirmation.
+- [x] 2.7 Ensure validate（校验） errors block init（初始化） writes; warnings（警告） and setup suggestions（配置建议） only require display before confirmation.
 
 ## 3. Init Write Path
 
-- [ ] 3.1 Keep `init`（初始化） script（脚本） able to write `.pr-flow/config.yaml`（配置文件）, PR template（拉取请求模板） and `.pr-flow/.gitignore`（忽略文件）.
-- [ ] 3.2 Add a confirmed-config input path for init（初始化）, reusing validate（校验） before write.
-- [ ] 3.3 Reject or make non-writing any old default init（初始化） call that lacks confirmed config input; do not silently write generated defaults from `--base-branch`（目标分支参数） alone.
-- [ ] 3.4 Ensure init（初始化） never performs terminal prompts（终端提示）, GitHub API（GitHub 接口） writes, or flow dry runs（试运行）.
+- [x] 3.1 Keep `init`（初始化） script（脚本） able to write `.pr-flow/config.yaml`（配置文件）, PR template（拉取请求模板） and `.pr-flow/.gitignore`（忽略文件）.
+- [x] 3.2 Add a confirmed-config input path for init（初始化）, reusing validate（校验） before write.
+- [x] 3.3 Reject or make non-writing any old default init（初始化） call that lacks confirmed config input; do not silently write generated defaults from `--base-branch`（目标分支参数） alone.
+- [x] 3.4 Ensure init（初始化） never performs terminal prompts（终端提示）, GitHub API（GitHub 接口） writes, or flow dry runs（试运行）.
 
 ## 4. Tests And Verification
 
 - [x] 4.1 Update PR Flow CLI（命令行接口） tests for validate（校验） success and failure output.
 - [x] 4.2 Add dependency matrix tests for hotfix（热修复）, review gate（审查门禁）, checks（检查）, merge strategy（合并方式）, cleanup（清理） and tweak（小改）.
-- [ ] 4.3 Update init（初始化） tests to cover confirmed config write path and old default write rejection.
+- [x] 4.3 Update init（初始化） tests to cover confirmed config write path and old default write rejection.
 - [x] 4.4 Update package or Skill（技能） tests to ensure `pr-flow-init` documents agent（代理）问答 rather than script（脚本） terminal interaction.
 - [x] 4.5 Add tests that require `pr-flow-init/references/questionnaire.md`, `config-draft.md` and `validation.md`（问答模板、配置草案规则、校验规则） to exist and be referenced by the Skill（技能） entrypoint.
 - [ ] 4.6 Add tests that Plugin（插件）/Skill（技能） content is organized by user scenario, and questionnaire（问答模板） contains fixed questions, fixed options, consequences and jump rules.

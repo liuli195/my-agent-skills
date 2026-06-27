@@ -746,13 +746,29 @@ def run_init(args: argparse.Namespace) -> int:
     project = resolve_project(args.project)
     pr_flow_dir = project / ".pr-flow"
 
-    config_text = yaml.safe_dump(default_config(args.base_branch), allow_unicode=True, sort_keys=False)
-    write_text_if_missing(pr_flow_dir / "config.yaml", config_text)
+    if args.config is None:
+        print("status: confirmed_config_required")
+        print("confirmed config required: use pr-flow-init Skill and pass --config <path>")
+        return 2
+
+    config = load_config_path(args.config)
+    issues = validate_config(config)
+    if validation_has_errors(issues):
+        print("status: validation_failed")
+        for issue in issues:
+            print(f"{issue['level']}: {issue['message']}")
+        return 1
+
+    config_text = yaml.safe_dump(config, allow_unicode=True, sort_keys=False)
+    pr_flow_dir.mkdir(parents=True, exist_ok=True)
+    (pr_flow_dir / "config.yaml").write_text(config_text, encoding="utf-8")
     write_text_if_missing(pr_flow_dir / "pr-template.md", PR_TEMPLATE)
     write_text_if_missing(pr_flow_dir / ".gitignore", PR_FLOW_GITIGNORE)
 
     print("status: initialized")
-    print(f"GitHub Rulesets suggestion: protect {args.base_branch} with pull request review and passing checks.")
+    for issue in issues:
+        print(f"{issue['level']}: {issue['message']}")
+    print("GitHub Rulesets suggestion: review setup suggestions before configuring GitHub.")
     return 0
 
 
@@ -1260,6 +1276,7 @@ def build_parser() -> argparse.ArgumentParser:
             subparser.add_argument("--reason")
         if command == "init":
             subparser.add_argument("--base-branch", default="main")
+            subparser.add_argument("--config", type=Path)
         subparser.set_defaults(command=command)
     return parser
 
