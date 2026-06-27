@@ -729,6 +729,11 @@ def test_reviewer_prompt_references_review_input_file_only(tmp_path: Path, monke
     assert f"git diff {base}...{head}" in prompt
     assert f"git log {base}..{head} --oneline" in prompt
     assert f"git diff --name-status --find-renames --find-copies-harder {base}...{head}" in prompt
+    assert "Your entire final response MUST be exactly one JSON object." in prompt
+    assert "The first character of the response MUST be `{`." in prompt
+    assert "The last character of the response MUST be `}`." in prompt
+    assert "Do not write any preface, explanation, summary, or conclusion outside the JSON object." in prompt
+    assert "Do not wrap the JSON object in Markdown fences." in prompt
     assert "Manifest file:" not in prompt
     assert "Changed files:" not in prompt
     assert "Spec bytes:" not in prompt

@@ -1092,6 +1092,7 @@ def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: initialized" in result.stdout
+    assert "GitHub setup suggestion: configure GitHub required review" in result.stdout
     assert "GitHub Rulesets suggestion" in result.stdout
 
     config = yaml.safe_load((project / ".pr-flow" / "config.yaml").read_text(encoding="utf-8"))

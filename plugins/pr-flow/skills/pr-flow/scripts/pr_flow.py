@@ -790,7 +790,10 @@ def run_init(args: argparse.Namespace) -> int:
 
     print("status: initialized")
     for issue in issues:
-        print(f"{issue['level']}: {issue['message']}")
+        if issue["level"] == "setup suggestion":
+            print(f"GitHub setup suggestion: {issue['message']}")
+        else:
+            print(f"{issue['level']}: {issue['message']}")
     print("GitHub Rulesets suggestion: review setup suggestions before configuring GitHub.")
     return 0
 
