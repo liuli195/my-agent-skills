@@ -3,7 +3,7 @@
 - [x] 1.1 Update `pr-flow-init` Skill（初始化技能） to describe agent（代理）问答、草案展示、校验、用户确认和写入边界。
 - [x] 1.2 Restructure `pr-flow-init` Skill（初始化技能） for progressive disclosure（渐进式披露）: hard boundaries（硬边界）, closed loop（闭环）, required flow（必需流程）, output（输出） and `references/`（参考文件） list only.
 - [x] 1.3 Add `references/questionnaire.md`（问答模板） with fixed questions, fixed options, selection consequences and jump rules.
-- [ ] 1.4 Organize PR Flow init（拉取请求流程初始化）Plugin（插件）/Skill（技能） content and `references/`（参考文件） by user scenario: first-time enablement（初次启用）, review gate（审查门禁）, hotfix（热修复）, cleanup（清理）, GitHub setup suggestions（GitHub 配置建议） and final write confirmation（最终写入确认）.
+- [x] 1.4 Organize PR Flow init（拉取请求流程初始化）Plugin（插件）/Skill（技能） content and `references/`（参考文件） by user scenario: first-time enablement（初次启用）, review gate（审查门禁）, hotfix（热修复）, cleanup（清理）, GitHub setup suggestions（GitHub 配置建议） and final write confirmation（最终写入确认）.
 - [x] 1.5 Add `references/config-draft.md`（配置草案规则） for `.pr-flow/config.yaml`（配置文件） shape, defaults（默认配置）, branch overrides（分支覆盖） and `setup.github`（GitHub 配置建议）.
 - [x] 1.6 Add `references/validation.md`（校验规则） for dependency matrix（依赖矩阵）, validation output（校验输出） and write summary（写入摘要）.
 - [x] 1.7 Keep existing PR Flow（拉取请求流程） command boundaries in the Skill（技能） text: no commit（提交）, push（推送）, merge（合并）, or GitHub API（GitHub 接口） writes during init（初始化）.
@@ -32,6 +32,6 @@
 - [x] 4.3 Update init（初始化） tests to cover confirmed config write path and old default write rejection.
 - [x] 4.4 Update package or Skill（技能） tests to ensure `pr-flow-init` documents agent（代理）问答 rather than script（脚本） terminal interaction.
 - [x] 4.5 Add tests that require `pr-flow-init/references/questionnaire.md`, `config-draft.md` and `validation.md`（问答模板、配置草案规则、校验规则） to exist and be referenced by the Skill（技能） entrypoint.
-- [ ] 4.6 Add tests that Plugin（插件）/Skill（技能） content is organized by user scenario, and questionnaire（问答模板） contains fixed questions, fixed options, consequences and jump rules.
+- [x] 4.6 Add tests that Plugin（插件）/Skill（技能） content is organized by user scenario, and questionnaire（问答模板） contains fixed questions, fixed options, consequences and jump rules.
 - [ ] 4.7 Add an end-to-end regression from `pr-flow-init` Skill（初始化技能） entrypoint: load references（参考文件）, simulate fixed questionnaire（问答模板） answers and final confirmation, generate draft, run read-only validate（校验）, write via confirmed config input, and perform post-write structure check without running diagnose、complete、cleanup、hotfix or tweak（诊断、收尾、清理、热修复、小改）.
 - [ ] 4.8 Run focused PR Flow（拉取请求流程） tests and OpenSpec（开放规格） strict validation.

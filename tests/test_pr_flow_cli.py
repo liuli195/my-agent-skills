@@ -1189,6 +1189,43 @@ def test_pr_flow_init_skill_uses_progressive_disclosure_references() -> None:
     assert "完整问答" not in skill_text
 
 
+def test_pr_flow_init_content_is_organized_by_user_scenario() -> None:
+    init_dir = REPO_ROOT / "plugins" / "pr-flow" / "skills" / "pr-flow-init"
+    combined = "\n".join(
+        [
+            (init_dir / "SKILL.md").read_text(encoding="utf-8"),
+            (init_dir / "references" / "questionnaire.md").read_text(encoding="utf-8"),
+            (init_dir / "references" / "config-draft.md").read_text(encoding="utf-8"),
+            (init_dir / "references" / "validation.md").read_text(encoding="utf-8"),
+        ]
+    )
+
+    for scenario in [
+        "初次启用 PR Flow",
+        "review gate",
+        "hotfix",
+        "cleanup",
+        "GitHub setup suggestions",
+        "最终写入确认",
+    ]:
+        assert scenario in combined
+    for template_term in ["固定问题", "固定选项", "选择后果", "跳转规则"]:
+        assert template_term in combined
+
+
+def test_pr_flow_plugin_init_entrypoints_route_to_pr_flow_init() -> None:
+    paths = [
+        REPO_ROOT / "plugins" / "pr-flow" / ".codex-plugin" / "plugin.json",
+        REPO_ROOT / "plugins" / "pr-flow" / ".claude-plugin" / "plugin.json",
+        REPO_ROOT / "plugins" / "pr-flow" / "skills" / "pr-flow" / "SKILL.md",
+    ]
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        assert "pr-flow-init" in text
+        assert "agent（代理）问答" in text
+        assert "只读 validate（校验）" in text
+
+
 def test_validate_reads_only_provided_config_and_reports_suggestions(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
