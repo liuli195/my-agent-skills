@@ -1,0 +1,197 @@
+{
+  "version": 1,
+  "build": {
+    "checks": [
+      {
+        "id": "build.local-plugin-package",
+        "command": "python scripts/local_plugin_build.py",
+        "inputs": [
+          ".claude-plugin/marketplace.json",
+          ".agents/plugins/marketplace.json",
+          ".release-flow/projection.yaml",
+          "plugins",
+          "scripts/local_plugin_build.py"
+        ]
+      }
+    ]
+  },
+  "verify": {
+    "maxParallel": 0,
+    "timeoutSeconds": 180,
+    "checks": [
+      {
+        "id": "verify.local-build-contract",
+        "parallel": true,
+        "paths": [
+          ".agents/**",
+          ".claude-plugin/**",
+          ".release-flow/**",
+          ".build-and-verify/**",
+          ".comet.yaml",
+          ".comet/config.yaml",
+          "requirements-dev.txt",
+          "plugins/**",
+          "scripts/local_plugin_build.py",
+          "docs/agent-guard/**",
+          "tests/test_local_plugin_build_checks.py"
+        ],
+        "command": "python -m pytest -q -n 8 -p no:cacheprovider tests/test_local_plugin_build_checks.py",
+        "inputs": [
+          ".agents",
+          ".claude-plugin",
+          ".release-flow",
+          ".build-and-verify/config.json",
+          ".comet.yaml",
+          ".comet/config.yaml",
+          "requirements-dev.txt",
+          "plugins",
+          "scripts/local_plugin_build.py",
+          "docs/agent-guard",
+          "tests/test_local_plugin_build_checks.py"
+        ]
+      },
+      {
+        "id": "verify.agent-guard",
+        "parallel": true,
+        "paths": [
+          ".agents/**",
+          ".claude-plugin/**",
+          ".release-flow/**",
+          "requirements-dev.txt",
+          "plugins/agent-guard/**",
+          "docs/agent-guard/**",
+          "tests/test_agent_guard*.py",
+          "tests/test_extract_guard_model.py",
+          "tests/test_validate_guard_profile.py",
+          "tests/test_init_user_guard.py",
+          "tests/test_init_project_guard.py"
+        ],
+        "command": "python -m pytest -q -n 8 -p no:cacheprovider tests/test_agent_guard_runtime_session_focus.py tests/test_agent_guard_runtime_brief.py tests/test_agent_guard_skill_entrypoints.py tests/test_agent_guard_runtime_router.py tests/test_agent_guard_plugin_installer.py tests/test_agent_guard_plugin_runtime_e2e.py tests/test_agent_guard_plugin_package.py tests/test_agent_guard_prd_full_e2e.py tests/test_extract_guard_model.py tests/test_validate_guard_profile.py tests/test_init_user_guard.py tests/test_init_project_guard.py",
+        "inputs": [
+          ".agents",
+          ".claude-plugin",
+          ".release-flow",
+          "requirements-dev.txt",
+          "plugins/agent-guard",
+          "docs/agent-guard",
+          "tests/test_agent_guard_runtime_session_focus.py",
+          "tests/test_agent_guard_runtime_brief.py",
+          "tests/test_agent_guard_skill_entrypoints.py",
+          "tests/test_agent_guard_runtime_router.py",
+          "tests/test_agent_guard_plugin_installer.py",
+          "tests/test_agent_guard_plugin_runtime_e2e.py",
+          "tests/test_agent_guard_plugin_package.py",
+          "tests/test_agent_guard_prd_full_e2e.py",
+          "tests/test_extract_guard_model.py",
+          "tests/test_validate_guard_profile.py",
+          "tests/test_init_user_guard.py",
+          "tests/test_init_project_guard.py"
+        ]
+      },
+      {
+        "id": "verify.release-flow",
+        "parallel": true,
+        "paths": [
+          ".agents/**",
+          ".claude-plugin/**",
+          ".release-flow/**",
+          ".github/workflows/release.yml",
+          "requirements-dev.txt",
+          "plugins/release-flow/**",
+          "tests/test_release_flow*.py"
+        ],
+        "command": "python -m pytest -q -n 8 -p no:cacheprovider tests/test_release_flow_cli.py tests/test_release_flow_plugin_package.py",
+        "inputs": [
+          ".agents",
+          ".claude-plugin",
+          ".release-flow",
+          ".github/workflows/release.yml",
+          "requirements-dev.txt",
+          "plugins/release-flow",
+          "tests/test_release_flow_cli.py",
+          "tests/test_release_flow_plugin_package.py"
+        ]
+      },
+      {
+        "id": "verify.pr-flow",
+        "parallel": true,
+        "paths": [
+          ".agents/**",
+          ".claude-plugin/**",
+          ".release-flow/**",
+          "requirements-dev.txt",
+          "plugins/pr-flow/**",
+          "tests/test_pr_flow*.py"
+        ],
+        "command": "python -m pytest -q -n auto -p no:cacheprovider tests/test_pr_flow_cli.py tests/test_pr_flow_plugin_package.py",
+        "inputs": [
+          ".agents",
+          ".claude-plugin",
+          ".release-flow",
+          "requirements-dev.txt",
+          "plugins/pr-flow",
+          "tests/test_pr_flow_cli.py",
+          "tests/test_pr_flow_plugin_package.py"
+        ]
+      },
+      {
+        "id": "verify.cross-agent-review",
+        "parallel": true,
+        "paths": [
+          ".agents/**",
+          ".claude-plugin/**",
+          ".release-flow/**",
+          "requirements-dev.txt",
+          "plugins/cross-agent-review/**",
+          "tests/test_cross_agent_review*.py"
+        ],
+        "command": "python -m pytest -q -n 8 -p no:cacheprovider tests/test_cross_agent_review_cli.py tests/test_cross_agent_review_plugin_package.py",
+        "inputs": [
+          ".agents",
+          ".claude-plugin",
+          ".release-flow",
+          "requirements-dev.txt",
+          "plugins/cross-agent-review",
+          "tests/test_cross_agent_review_cli.py",
+          "tests/test_cross_agent_review_plugin_package.py"
+        ]
+      },
+      {
+        "id": "verify.build-and-verify",
+        "parallel": true,
+        "paths": [
+          ".agents/**",
+          ".claude-plugin/**",
+          ".release-flow/**",
+          ".build-and-verify/**",
+          "requirements-dev.txt",
+          "plugins/build-and-verify/**",
+          "tests/test_build_and_verify_plugin.py"
+        ],
+        "command": "python -m pytest -q -n 8 -p no:cacheprovider tests/test_build_and_verify_plugin.py",
+        "inputs": [
+          ".agents",
+          ".claude-plugin",
+          ".release-flow",
+          ".build-and-verify/config.json",
+          "requirements-dev.txt",
+          "plugins/build-and-verify",
+          "tests/test_build_and_verify_plugin.py"
+        ]
+      },
+      {
+        "id": "verify.openspec",
+        "parallel": true,
+        "paths": [
+          "openspec/**",
+          "docs/superpowers/**"
+        ],
+        "command": "openspec validate --all --strict --no-interactive",
+        "inputs": [
+          "openspec",
+          "docs/superpowers"
+        ]
+      }
+    ]
+  }
+}
