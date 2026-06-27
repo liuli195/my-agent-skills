@@ -268,34 +268,6 @@ def test_endless_pass_marker_records_mode_and_refs(tmp_path: Path) -> None:
     assert marker["head_ref"] == head
 
 
-def test_review_subject_commands_use_input_base_and_head_refs(tmp_path: Path) -> None:
-    module = load_script_module()
-    project = tmp_path / "repo"
-    base = init_repo(project)
-    write_file(project / "app.txt", "two\n")
-    write_file(project / "spec.md", "spec body\n")
-    write_file(project / "design.md", "design body\n")
-    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
-    git(project, "add", "app.txt", "spec.md", "design.md", "docs/superpowers/plans/demo.md")
-    git(project, "commit", "-m", "feature")
-    head = git(project, "rev-parse", "HEAD")
-    input_file = write_review_input(project, base, head, mode="endless")
-    cwd = Path.cwd()
-    try:
-        os.chdir(project)
-        review_input = module.load_review_input(
-            types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None, fake_reviewer_results=None)
-        )
-    finally:
-        os.chdir(cwd)
-
-    commands = module.review_subject_commands(review_input)
-
-    assert commands["diff_command"] == f"git diff {base}...{head}"
-    assert commands["commit_list_command"] == f"git log {base}..{head} --oneline"
-    assert commands["changed_files_command"] == f"git diff --name-status --find-renames --find-copies-harder {base}...{head}"
-
-
 def test_blocking_findings_write_report_without_results_or_pass_marker(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     init_repo(project)
@@ -325,7 +297,6 @@ def test_blocking_findings_write_report_without_results_or_pass_marker(tmp_path:
     assert result.returncode == 1
     assert (output_dir / "review-report.md").is_file()
     assert not (output_dir / "review-pass.json").exists()
-    assert not (output_dir / "review-results.json").exists()
     assert not (output_dir / "inputs").exists()
 
 
@@ -755,12 +726,14 @@ def test_reviewer_prompt_references_review_input_file_only(tmp_path: Path, monke
     assert f"Read: {input_file}" in prompt
     assert "Review only base_ref...head_ref from the input file." in prompt
     assert "Use spec_file, design_file, and plan_file as requirements context." in prompt
+    assert f"git diff {base}...{head}" in prompt
+    assert f"git log {base}..{head} --oneline" in prompt
+    assert f"git diff --name-status --find-renames --find-copies-harder {base}...{head}" in prompt
     assert "Manifest file:" not in prompt
     assert "Changed files:" not in prompt
     assert "Spec bytes:" not in prompt
     assert "Design file:" not in prompt
     assert "Tasks file:" not in prompt
-    assert "git diff" not in prompt
     assert "spec body" not in prompt
     assert "plan body" not in prompt
 
@@ -782,6 +755,7 @@ def test_reviewer_prompt_template_uses_limited_variables(tmp_path: Path, monkeyp
     assert set(captured_values) == {
         "role",
         "input_file_path",
+        "review_subject_commands",
         "schema_json",
         "severity_rubric",
         "role_focus",
@@ -942,37 +916,9 @@ def test_default_run_does_not_archive_context_snapshots_or_git_manifest(tmp_path
     assert result.returncode == 0, result.stdout + result.stderr
     assert (output_dir / "review-report.md").is_file()
     assert (output_dir / "review-pass.json").is_file()
-    assert not (output_dir / "review-results.json").exists()
     assert not (output_dir / "inputs").exists()
     assert not (output_dir / "prompts").exists()
     assert not (output_dir / "raw").exists()
-
-
-def test_changed_file_entries_from_git_reports_file_statuses(tmp_path: Path) -> None:
-    module = load_script_module()
-    project = tmp_path / "repo"
-    init_repo(project)
-    write_file(project / "source.txt", "copy body\n")
-    write_file(project / "old.txt", "rename body\n")
-    write_file(project / "path with space.txt", "before\n")
-    write_file(project / "removed.txt", "delete me\n")
-    git(project, "add", "source.txt", "old.txt", "path with space.txt", "removed.txt")
-    git(project, "commit", "-m", "base files")
-    base = git(project, "rev-parse", "HEAD")
-    shutil.copyfile(project / "source.txt", project / "copy.txt")
-    git(project, "mv", "old.txt", "new.txt")
-    git(project, "rm", "removed.txt")
-    write_file(project / "path with space.txt", "after\n")
-    git(project, "add", "copy.txt", "path with space.txt")
-    git(project, "commit", "-m", "change files")
-    head = git(project, "rev-parse", "HEAD")
-
-    assert module.changed_file_entries_from_git(project, base, head) == [
-        {"path": "copy.txt", "status": "copied", "previous_path": "source.txt"},
-        {"path": "new.txt", "status": "renamed", "previous_path": "old.txt"},
-        {"path": "path with space.txt", "status": "modified"},
-        {"path": "removed.txt", "status": "deleted"},
-    ]
 
 
 def test_run_rejects_legacy_tests_file_argument(tmp_path: Path) -> None:
@@ -1015,7 +961,6 @@ def test_prompt_contains_review_context(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert (output_dir / "review-report.md").is_file()
     assert (output_dir / "review-pass.json").is_file()
-    assert not (output_dir / "review-results.json").exists()
 
 
 def test_reviewer_prompt_references_review_input_not_diff_file(tmp_path: Path, monkeypatch) -> None:
@@ -1040,10 +985,12 @@ def test_reviewer_prompt_references_review_input_not_diff_file(tmp_path: Path, m
     assert f"Read: {input_file}" in prompt
     assert "Review only base_ref...head_ref from the input file." in prompt
     assert "Use spec_file, design_file, and plan_file as requirements context." in prompt
+    assert f"git diff {base}...{head}" in prompt
+    assert f"git log {base}..{head} --oneline" in prompt
+    assert f"git diff --name-status --find-renames --find-copies-harder {base}...{head}" in prompt
     assert "Change: demo-change" not in prompt
     assert f"Base ref: {base}" not in prompt
     assert f"Head ref: {head}" not in prompt
-    assert f"git diff {base}...{head}" not in prompt
     assert "Changed files:" not in prompt
     assert "Diff file:" not in prompt
     assert "diff.patch" not in prompt
@@ -1121,6 +1068,7 @@ def test_reviewer_prompt_does_not_inline_large_diff_or_context(tmp_path: Path, m
     prompt = module.reviewer_prompt(review, "implementation-correctness")
 
     assert f"Read: {input_file}" in prompt
+    assert f"git diff {base}...{head}" in prompt
     assert f"Spec file: {spec_file}" not in prompt
     assert f"Design file: {design_file}" not in prompt
     assert f"Plan file: {plan_file}" not in prompt
@@ -1164,6 +1112,7 @@ def test_sdk_dispatch_subprocess_writes_debug_prompt_artifacts(tmp_path: Path, m
     }
     assert captured_payload["raw_dir"] == str(review.output_dir / "debug" / "raw")
     assert captured_payload["force_exit"] is True
+    assert "readonly_tools" not in captured_payload
     assert "Role: spec-alignment" in (prompts_dir / "spec-alignment.txt").read_text(encoding="utf-8")
 
 
@@ -1193,6 +1142,7 @@ def test_sdk_dispatch_subprocess_uses_only_two_roles(tmp_path: Path, monkeypatch
 
     assert [item["role"] for item in results] == ["spec-alignment", "implementation-correctness"]
     assert captured_payload["roles"] == ["spec-alignment", "implementation-correctness"]
+    assert "readonly_tools" not in captured_payload
     assert "raw_dir" not in captured_payload
 
 
@@ -1246,7 +1196,6 @@ def test_sdk_dispatch_writes_raw_reviewer_output(monkeypatch, tmp_path: Path) ->
                 {
                     "cwd": str(REPO_ROOT),
                     "roles": ["spec-alignment"],
-                    "readonly_tools": ["Read", "Grep"],
                     "prompts": {"spec-alignment": "prompt"},
                     "raw_dir": str(raw_dir),
                 }
@@ -1328,10 +1277,9 @@ def test_fake_reviewer_results_generate_report_and_pass_marker_without_results_f
     assert result.returncode == 0, result.stdout + result.stderr
     assert (output_dir / "review-report.md").is_file()
     assert (output_dir / "review-pass.json").is_file()
-    assert not (output_dir / "review-results.json").exists()
 
 
-def test_sdk_dispatch_disallows_write_and_execution_tools(monkeypatch, capsys) -> None:
+def test_sdk_dispatch_uses_default_sdk_tools(monkeypatch, capsys) -> None:
     module = load_script_module()
     captured_options = []
 
@@ -1355,7 +1303,6 @@ def test_sdk_dispatch_disallows_write_and_execution_tools(monkeypatch, capsys) -
                 {
                     "cwd": str(REPO_ROOT),
                     "roles": ["spec-alignment"],
-                    "readonly_tools": ["Read", "Grep"],
                     "prompts": {"spec-alignment": "prompt"},
                 }
             )
@@ -1365,49 +1312,7 @@ def test_sdk_dispatch_disallows_write_and_execution_tools(monkeypatch, capsys) -
     assert module.run_sdk_dispatch() == 0
 
     capsys.readouterr()
-    assert captured_options
-    disallowed = set(captured_options[0]["disallowed_tools"])
-    assert {"Edit", "Write", "NotebookEdit", "TodoWrite", "Bash"} <= disallowed
-
-
-def test_sdk_dispatch_accepts_json_wrapped_in_markdown_fence(monkeypatch, capsys) -> None:
-    module = load_script_module()
-
-    class FakeClaudeAgentOptions:
-        def __init__(self, **kwargs):
-            pass
-
-    async def fake_query(*, prompt, options):
-        class Message:
-            result = (
-                "```json\n"
-                + json.dumps({"role": "spec-alignment", "status": "completed", "findings": []})
-                + "\n```"
-            )
-
-        yield Message()
-
-    fake_sdk = types.SimpleNamespace(ClaudeAgentOptions=FakeClaudeAgentOptions, query=fake_query)
-    monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake_sdk)
-    monkeypatch.setattr(
-        sys,
-        "stdin",
-        io.StringIO(
-            json.dumps(
-                {
-                    "cwd": str(REPO_ROOT),
-                    "roles": ["spec-alignment"],
-                    "readonly_tools": ["Read", "Grep"],
-                    "prompts": {"spec-alignment": "prompt"},
-                }
-            )
-        ),
-    )
-
-    assert module.run_sdk_dispatch() == 0
-
-    data = json.loads(capsys.readouterr().out)
-    assert data == [{"role": "spec-alignment", "status": "completed", "findings": []}]
+    assert captured_options == [{"cwd": str(REPO_ROOT)}]
 
 
 def test_sdk_dispatch_reports_reviewer_timeout(monkeypatch, capsys, tmp_path: Path) -> None:
@@ -1441,7 +1346,6 @@ def test_sdk_dispatch_reports_reviewer_timeout(monkeypatch, capsys, tmp_path: Pa
                 {
                     "cwd": str(REPO_ROOT),
                     "roles": ["spec-alignment"],
-                    "readonly_tools": ["Read", "Grep"],
                     "prompts": {"spec-alignment": "prompt"},
                     "raw_dir": str(raw_dir),
                 }
@@ -1470,55 +1374,6 @@ def test_sdk_dispatch_reports_reviewer_timeout(monkeypatch, capsys, tmp_path: Pa
     raw_text = (raw_dir / "spec-alignment.txt").read_text(encoding="utf-8")
     assert "Reviewer timed out" in raw_text
     assert "Exceeded 480 seconds." in raw_text
-
-
-def test_sdk_dispatch_retries_transient_reviewer_exception(monkeypatch, capsys) -> None:
-    module = load_script_module()
-    calls = 0
-    sleeps = []
-
-    class FakeClaudeAgentOptions:
-        def __init__(self, **kwargs):
-            pass
-
-    async def fake_query(*, prompt, options):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise RuntimeError("transient sdk failure")
-
-        class Message:
-            result = json.dumps({"role": "spec-alignment", "status": "completed", "findings": []})
-
-        yield Message()
-
-    async def fake_sleep(seconds):
-        sleeps.append(seconds)
-
-    fake_sdk = types.SimpleNamespace(ClaudeAgentOptions=FakeClaudeAgentOptions, query=fake_query)
-    monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake_sdk)
-    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
-    monkeypatch.setattr(
-        sys,
-        "stdin",
-        io.StringIO(
-            json.dumps(
-                {
-                    "cwd": str(REPO_ROOT),
-                    "roles": ["spec-alignment"],
-                    "readonly_tools": ["Read", "Grep"],
-                    "prompts": {"spec-alignment": "prompt"},
-                }
-            )
-        ),
-    )
-
-    assert module.run_sdk_dispatch() == 0
-
-    data = json.loads(capsys.readouterr().out)
-    assert data == [{"role": "spec-alignment", "status": "completed", "findings": []}]
-    assert calls == 2
-    assert sleeps == [1]
 
 
 def test_sdk_dispatch_subprocess_timeout_reports_clear_error(tmp_path: Path, monkeypatch) -> None:
@@ -1591,7 +1446,6 @@ def test_non_blocking_findings_generate_pass_marker(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert (output_dir / "review-report.md").is_file()
     assert (output_dir / "review-pass.json").is_file()
-    assert not (output_dir / "review-results.json").exists()
 
 
 def test_blocking_findings_do_not_generate_pass_marker(tmp_path: Path) -> None:
@@ -1625,7 +1479,6 @@ def test_blocking_findings_do_not_generate_pass_marker(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert (output_dir / "review-report.md").is_file()
     assert not (output_dir / "review-pass.json").exists()
-    assert not (output_dir / "review-results.json").exists()
 
 
 def test_blocking_findings_remove_stale_pass_marker_from_reused_output_dir(tmp_path: Path) -> None:
@@ -1701,8 +1554,7 @@ def test_duplicate_findings_are_counted_once(tmp_path: Path) -> None:
         [
             {"role": "spec-alignment", "status": "completed", "findings": [finding]},
             {"role": "implementation-correctness", "status": "completed", "findings": [finding]},
-        ],
-        [],
+        ]
     )
 
     assert summary["blocking_findings"] == 1
@@ -1725,8 +1577,7 @@ def test_aggregate_blocks_findings_without_severity() -> None:
                     }
                 ],
             }
-        ],
-        [],
+        ]
     )
 
     assert summary["blocking_findings"] == 1
@@ -1750,8 +1601,7 @@ def test_aggregate_blocks_aligned_records_inside_findings() -> None:
                     }
                 ],
             }
-        ],
-        [],
+        ]
     )
 
     assert summary["blocking_findings"] == 1
@@ -1774,8 +1624,7 @@ def test_aggregate_blocks_severity_aliases() -> None:
                     {"severity": "info", "file": "app.py", "line": 3, "message": "No risk."},
                 ],
             }
-        ],
-        [],
+        ]
     )
 
     assert summary["blocking_findings"] == 4
@@ -1785,62 +1634,4 @@ def test_aggregate_blocks_severity_aliases() -> None:
         "Reviewer output used invalid severity: medium",
         "Reviewer output used invalid severity: low",
         "Reviewer output used invalid severity: info",
-    }
-
-
-def test_aggregate_treats_pass_dict_findings_with_no_issues_as_non_blocking() -> None:
-    module = load_script_module()
-
-    summary = module.aggregate(
-        [
-            {
-                "role": "implementation-correctness",
-                "status": "pass",
-                "findings": {
-                    "spec_compliance": {"verdict": "pass", "details": "Matches spec."},
-                    "issues": [],
-                },
-            }
-        ],
-        [],
-    )
-
-    assert summary["blocking_findings"] == 0
-    assert summary["findings"] == []
-
-
-def test_aggregate_blocks_dict_gaps_with_severity_aliases() -> None:
-    module = load_script_module()
-
-    summary = module.aggregate(
-        [
-            {
-                "role": "spec-alignment",
-                "status": "pass_with_gaps",
-                "findings": {
-                    "summary": "Coverage is acceptable with gaps.",
-                    "gaps": [
-                        {
-                            "severity": "medium",
-                            "area": "manifest",
-                            "detail": "Missing required-field tests.",
-                            "recommendation": "Add one regression test.",
-                        },
-                        {
-                            "severity": "low",
-                            "area": "cli",
-                            "detail": "Unknown command path is not covered.",
-                        },
-                    ],
-                },
-            }
-        ],
-        [],
-    )
-
-    assert summary["blocking_findings"] == 2
-    assert [finding["severity"] for finding in summary["findings"]] == ["CRITICAL", "CRITICAL"]
-    assert {finding["summary"] for finding in summary["findings"]} == {
-        "Reviewer output used invalid severity: medium",
-        "Reviewer output used invalid severity: low",
     }

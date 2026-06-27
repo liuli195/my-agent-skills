@@ -6,6 +6,10 @@ Use read-only inspection. Do not edit files.
 Review only base_ref...head_ref from the input file.
 Use spec_file, design_file, and plan_file as requirements context.
 
+Review commands:
+
+{{ review_subject_commands }}
+
 Focus:
 {{ role_focus }}
 

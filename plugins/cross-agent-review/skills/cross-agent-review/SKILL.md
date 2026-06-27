@@ -33,6 +33,7 @@ STRICTLY FORBIDDEN:
 - 当前 worktree 必须干净。
 - 当前 `HEAD` 必须等于 `review-input.json`（审查输入文件）里的 `head_ref`。
 - 当前 Python、默认 Claude SDK venv，或 `--sdk-python` 指定的 Python 必须能导入 `claude_agent_sdk`。
+- reviewer（审查代理）使用 Claude Agent SDK（Claude 代理开发包）默认 tools（工具集）；本插件不配置 `tools`、`allowed_tools` 或 `disallowed_tools`。
 
 ## 命令
 
@@ -83,6 +84,7 @@ git diff <base-ref>...<head-ref> -- <path>
 ```
 
 Reviewer prompt（审查代理提示词）引用 `review-input.json`（审查输入文件），不内联大 diff（差异）内容；reviewer（审查代理）按需读取相关片段，不能整读大 diff（差异）。
+Reviewer prompt（审查代理提示词）会内联三条短命令：`git diff <base-ref>...<head-ref>`、`git log <base-ref>..<head-ref> --oneline` 和 `git diff --name-status --find-renames --find-copies-harder <base-ref>...<head-ref>`。
 
 Comet build completion（构建完成）调用时，`base_ref` 应优先使用 implementation baseline（实施基准，例如 plan 文件头的 `base-ref`），避免把已完成的历史 change（变更）卷入本次 review（审查）diff（差异）。只有在没有实施基准时，才回退到 change init baseline（变更初始化基准）。
 

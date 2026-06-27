@@ -75,10 +75,11 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 - **WHEN** 当前 Python、默认 Claude SDK venv 和显式 SDK Python 都不能导入 Claude Agent SDK（Claude 代理开发包）
 - **THEN** review mechanism（审查机制）拒绝启动 reviewer，并报告 SDK（开发包）不可用
 
-#### Scenario: 只读 reviewer workspace
+#### Scenario: reviewer 行为约束
 - **WHEN** review mechanism（审查机制）派发 reviewer
 - **THEN** reviewer 可以读取 workspace（工作区）上下文
-- **AND** reviewer 不得获得写入文件或修改 Git 状态的工具权限
+- **AND** reviewer prompt（审查提示词）MUST 明确要求不得编辑文件、提交、推送或修改 Git state（Git 状态）
+- **AND** review mechanism（审查机制）MUST 使用 Claude Agent SDK（Claude 代理开发包）默认 tool set（工具集），不得额外配置 `tools`、`allowed_tools` 或 `disallowed_tools`
 
 ### Requirement: review（审查）模式选择
 
@@ -188,13 +189,14 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 - **AND** 提示 MUST 指示 reviewer agent（审查代理）只读检查 repository（仓库）
 - **AND** 提示 MUST 指示 reviewer agent（审查代理）只审查 `base_ref...head_ref` 范围
 - **AND** 提示 MUST 指示 reviewer agent（审查代理）使用 `spec_file`、`design_file` 和 `plan_file` 作为需求上下文
+- **AND** 提示 MUST 包含 review subject commands（审查对象命令）的短列表
 - **AND** 提示 MUST NOT 内联完整 diff output（差异输出）、context file（上下文文件）正文、changed files（变更文件）清单或长命令块
 
 #### Scenario: reviewer prompt 使用独立模板
 - **WHEN** 系统生成 reviewer prompt（审查提示词）
 - **THEN** prompt（提示词）正文结构 MUST 来自 cross-agent-review（跨代理审查）插件内的独立模板文件，便于修改和复用
 - **AND** Python 脚本 MUST 作为调用方和渲染入口，负责提供模板变量、读取模板和渲染模板
-- **AND** 模板变量 MUST 限制为 role（角色）、input file path（输入文件路径）、role focus（角色重点）、severity rubric（严重级别规则）和 output schema（输出结构）
+- **AND** 模板变量 MUST 限制为 role（角色）、input file path（输入文件路径）、review subject commands（审查对象命令）、role focus（角色重点）、severity rubric（严重级别规则）和 output schema（输出结构）
 
 #### Scenario: debug 排障产物
 - **WHEN** 调用方通过 `--debug` 显式启用 debug mode（排障模式）
@@ -240,4 +242,3 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 - **WHEN** 调用方在外层设置的等待时间短于插件内部 480 秒或 540 秒上限
 - **THEN** 该调用契约 MUST 被视为无效
 - **AND** 调用说明 MUST 指示移除外层短 timeout（超时），而不是调低插件内部超时
-

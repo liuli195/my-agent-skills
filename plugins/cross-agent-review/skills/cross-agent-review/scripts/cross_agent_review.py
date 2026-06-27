@@ -7,7 +7,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -16,11 +16,6 @@ SKILL_ROOT = SCRIPT_PATH.parents[1]
 REVIEWER_PROMPT_TEMPLATE = SKILL_ROOT / "assets" / "templates" / "reviewer-prompt.md"
 REQUIRED_INPUT_FIELDS = ["change", "mode", "base_ref", "head_ref", "spec_file", "design_file", "plan_file"]
 VALID_MODES = {"convergence", "endless"}
-INPUT_SNAPSHOT_NAMES = {
-    "spec_file": "spec.md",
-    "design_file": "design.md",
-    "plan_file": "plan.md",
-}
 REVIEWER_ROLES = [
     "spec-alignment",
     "implementation-correctness",
@@ -52,33 +47,12 @@ SEVERITY_RUBRIC = "\n".join(
         "- SUGGESTION: maintainability or clarity improvement that should not block.",
     ]
 )
-READONLY_TOOLS = ["Read", "Glob", "Grep", "Bash(git diff *)", "Bash(git show *)", "Bash(git status *)"]
-DISALLOWED_TOOLS = ["Edit", "Write", "NotebookEdit", "TodoWrite", "MultiEdit", "Bash"]
 # Individual reviewers time out first; the subprocess gets a wider window to
 # aggregate structured timeout findings and write normal outputs.
 SDK_DISPATCH_TIMEOUT_SECONDS = 540
 SDK_REVIEWER_TIMEOUT_SECONDS = 480
-SDK_REVIEWER_ATTEMPTS = 2
 BLOCKING_SEVERITIES = {"CRITICAL", "IMPORTANT"}
-NON_BLOCKING_SEVERITIES = {"WARNING", "SUGGESTION"}
-ALL_SEVERITIES = BLOCKING_SEVERITIES | NON_BLOCKING_SEVERITIES
-SEVERITY_ALIASES = {
-    "CRITICAL": "CRITICAL",
-    "IMPORTANT": "IMPORTANT",
-    "WARNING": "WARNING",
-    "SUGGESTION": "SUGGESTION",
-}
-STATUS_MAP = {
-    "A": "added",
-    "C": "copied",
-    "D": "deleted",
-    "M": "modified",
-    "R": "renamed",
-    "T": "modified",
-    "U": "modified",
-    "X": "modified",
-    "B": "modified",
-}
+ALL_SEVERITIES = BLOCKING_SEVERITIES | {"WARNING", "SUGGESTION"}
 
 
 @dataclass(frozen=True)
@@ -335,10 +309,6 @@ def load_fake_reviewer_results(raw: str | None) -> list[dict]:
     return data
 
 
-def read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
-
-
 def render_template(path: Path, values: dict[str, str]) -> str:
     rendered = path.read_text(encoding="utf-8")
     for key, value in values.items():
@@ -350,120 +320,16 @@ def git_command_text(args: Sequence[str]) -> str:
     return "git " + " ".join(args)
 
 
-def review_subject_commands(review_args: ReviewInput) -> dict[str, str]:
+def reviewer_prompt(review_args: ReviewInput, role: str) -> str:
     diff_range = f"{review_args.base_ref}...{review_args.head_ref}"
     commit_range = f"{review_args.base_ref}..{review_args.head_ref}"
-    return {
-        "diff_command": git_command_text(["diff", diff_range]),
-        "commit_list_command": git_command_text(["log", commit_range, "--oneline"]),
-        "changed_files_command": git_command_text(
-            ["diff", "--name-status", "--find-renames", "--find-copies-harder", diff_range]
-        ),
-        "path_diff_command_template": git_command_text(["diff", diff_range, "--", "<path>"]),
-    }
-
-
-def review_subject_commands_prompt(review_args: ReviewInput) -> str:
-    commands = review_subject_commands(review_args)
-    return "\n".join(
+    review_subject_commands = "\n".join(
         [
-            f"- {commands['diff_command']}",
-            f"- {commands['commit_list_command']}",
-            f"- {commands['changed_files_command']}",
-            f"- {commands['path_diff_command_template']}",
+            f"- {git_command_text(['diff', diff_range])}",
+            f"- {git_command_text(['log', commit_range, '--oneline'])}",
+            f"- {git_command_text(['diff', '--name-status', '--find-renames', '--find-copies-harder', diff_range])}",
         ]
     )
-
-
-def changed_files_prompt(cwd: Path, review_args: ReviewInput, limit: int = 160) -> str:
-    try:
-        entries = changed_file_entries_from_git(cwd, review_args.base_ref, review_args.head_ref)
-    except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError):
-        return "- <unavailable>"
-    if not entries:
-        return "- <none>"
-
-    lines: list[str] = []
-    for entry in entries[:limit]:
-        line = f"- {entry['status']}: {entry['path']}"
-        previous_path = entry.get("previous_path")
-        if previous_path:
-            line = f"{line} (from {previous_path})"
-        lines.append(line)
-
-    remaining = len(entries) - limit
-    if remaining > 0:
-        lines.append(f"- <{remaining} more>")
-    return "\n".join(lines)
-
-
-def merge_base(cwd: Path, base_ref: str, head_ref: str) -> str:
-    return git_output(["merge-base", base_ref, head_ref], cwd)
-
-
-def changed_file_entries_from_git(cwd: Path, base_ref: str, head_ref: str) -> list[dict[str, str]]:
-    output = git_output_bytes(
-        [
-            "diff",
-            "--name-status",
-            "--find-renames",
-            "--find-copies-harder",
-            "-z",
-            f"{base_ref}...{head_ref}",
-        ],
-        cwd,
-    )
-    entries: list[dict[str, str]] = []
-    parts = [part for part in output.split(b"\0") if part]
-    index = 0
-    while index < len(parts):
-        status_token = parts[index].decode("utf-8", errors="surrogateescape")
-        index += 1
-        status = STATUS_MAP.get(status_token[:1], "modified")
-        if status in {"renamed", "copied"}:
-            if index + 1 >= len(parts):
-                break
-            previous_path = parts[index].decode("utf-8", errors="surrogateescape")
-            path = parts[index + 1].decode("utf-8", errors="surrogateescape")
-            index += 2
-            entries.append({"path": path, "status": status, "previous_path": previous_path})
-            continue
-        if index >= len(parts):
-            break
-        path = parts[index].decode("utf-8", errors="surrogateescape")
-        index += 1
-        entries.append({"path": path, "status": status})
-    return entries
-
-
-def commit_entries(cwd: Path, base_ref: str, head_ref: str) -> list[dict[str, str]]:
-    output = git_output(["log", f"{base_ref}..{head_ref}", "--oneline"], cwd)
-    entries: list[dict[str, str]] = []
-    for line in output.splitlines():
-        if not line:
-            continue
-        sha, _, summary = line.partition(" ")
-        entries.append({"sha": sha, "summary": summary})
-    return entries
-
-
-def relative_to_output(review_args: ReviewInput, path: Path) -> str:
-    try:
-        return path.relative_to(output_dir_for(review_args)).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
-def input_file_metadata(review_args: ReviewInput, path: Path) -> dict:
-    content = path.read_bytes()
-    return {
-        "path": relative_to_output(review_args, path),
-        "bytes": len(content),
-        "sha256": hashlib.sha256(content).hexdigest(),
-    }
-
-
-def reviewer_prompt(review_args: ReviewInput, role: str) -> str:
     schema_json = json.dumps(
         {
             "role": role,
@@ -486,6 +352,7 @@ def reviewer_prompt(review_args: ReviewInput, role: str) -> str:
         {
             "role": role,
             "input_file_path": str(review_args.input_file),
+            "review_subject_commands": review_subject_commands,
             "schema_json": schema_json,
             "severity_rubric": SEVERITY_RUBRIC,
             "role_focus": ROLE_FOCUS.get(role, ""),
@@ -562,7 +429,6 @@ def run_sdk_dispatch_subprocess(review_args: ReviewInput, sdk_python: str) -> li
     payload = {
         "cwd": str(Path.cwd()),
         "roles": REVIEWER_ROLES,
-        "readonly_tools": READONLY_TOOLS,
         "prompts": prompts,
         "force_exit": True,
     }
@@ -593,70 +459,12 @@ def run_sdk_dispatch_subprocess(review_args: ReviewInput, sdk_python: str) -> li
     return [item for item in data if isinstance(item, dict)]
 
 
-def balanced_json_object_candidates(text: str) -> list[str]:
-    candidates: list[str] = []
-    start = text.find("{")
-    while start != -1:
-        depth = 0
-        in_string = False
-        escaped = False
-        for index in range(start, len(text)):
-            char = text[index]
-            if in_string:
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == '"':
-                    in_string = False
-                continue
-            if char == '"':
-                in_string = True
-            elif char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-                if depth == 0:
-                    candidates.append(text[start : index + 1])
-                    break
-        start = text.find("{", start + 1)
-    return candidates
-
-
-def markdown_fence_bodies(text: str) -> list[str]:
-    bodies: list[str] = []
-    lines = text.splitlines()
-    index = 0
-    while index < len(lines):
-        fence = lines[index].strip()
-        if not fence.startswith("```"):
-            index += 1
-            continue
-        language = fence[3:].strip().lower()
-        end = index + 1
-        while end < len(lines) and lines[end].strip() != "```":
-            end += 1
-        if end < len(lines) and language in {"", "json"}:
-            bodies.append("\n".join(lines[index + 1 : end]))
-            index = end
-        index += 1
-    return bodies
-
-
 def parse_reviewer_result(result_text: str) -> dict | None:
-    candidates = [result_text.strip()]
-    candidates.extend(markdown_fence_bodies(result_text))
-    candidates.extend(balanced_json_object_candidates(result_text))
-    for candidate in candidates:
-        if not candidate:
-            continue
-        try:
-            parsed = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict):
-            return parsed
-    return None
+    try:
+        parsed = json.loads(result_text.strip())
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def run_sdk_dispatch() -> int:
@@ -675,11 +483,7 @@ def run_sdk_dispatch() -> int:
             (raw_dir / f"{role}.txt").write_text(text, encoding="utf-8")
 
         async def query_one(role: str) -> dict:
-            options = ClaudeAgentOptions(
-                cwd=payload["cwd"],
-                allowed_tools=payload["readonly_tools"],
-                disallowed_tools=DISALLOWED_TOOLS,
-            )
+            options = ClaudeAgentOptions(cwd=payload["cwd"])
             result_text = ""
             async for message in query(prompt=payload["prompts"][role], options=options):
                 if hasattr(message, "result"):
@@ -703,45 +507,39 @@ def run_sdk_dispatch() -> int:
             }
 
         async def run_one(role: str) -> dict:
-            last_error: Exception | None = None
-            for attempt in range(1, SDK_REVIEWER_ATTEMPTS + 1):
-                try:
-                    return await asyncio.wait_for(query_one(role), timeout=SDK_REVIEWER_TIMEOUT_SECONDS)
-                except asyncio.TimeoutError:
-                    evidence = f"Exceeded {SDK_REVIEWER_TIMEOUT_SECONDS} seconds."
-                    write_raw(role, f"Reviewer timed out\n{evidence}")
-                    return {
-                        "role": role,
-                        "status": "failed",
-                        "findings": [
-                            {
-                                "severity": "CRITICAL",
-                                "location": role,
-                                "summary": "Reviewer timed out",
-                                "evidence": evidence,
-                                "recommendation": "Rerun review after checking Claude Agent SDK availability.",
-                            }
-                        ],
-                    }
-                except Exception as error:
-                    last_error = error
-                    write_raw(role, f"{type(error).__name__}: {error}")
-                    if attempt < SDK_REVIEWER_ATTEMPTS:
-                        await asyncio.sleep(1)
-                        continue
-            return {
-                "role": role,
-                "status": "failed",
-                "findings": [
-                    {
-                        "severity": "CRITICAL",
-                        "location": role,
-                        "summary": "Reviewer SDK dispatch failed",
-                        "evidence": f"{type(last_error).__name__}: {last_error}",
-                        "recommendation": "Rerun review after checking Claude Agent SDK availability.",
-                    }
-                ],
-            }
+            try:
+                return await asyncio.wait_for(query_one(role), timeout=SDK_REVIEWER_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                evidence = f"Exceeded {SDK_REVIEWER_TIMEOUT_SECONDS} seconds."
+                write_raw(role, f"Reviewer timed out\n{evidence}")
+                return {
+                    "role": role,
+                    "status": "failed",
+                    "findings": [
+                        {
+                            "severity": "CRITICAL",
+                            "location": role,
+                            "summary": "Reviewer timed out",
+                            "evidence": evidence,
+                            "recommendation": "Rerun review after checking Claude Agent SDK availability.",
+                        }
+                    ],
+                }
+            except Exception as error:
+                write_raw(role, f"{type(error).__name__}: {error}")
+                return {
+                    "role": role,
+                    "status": "failed",
+                    "findings": [
+                        {
+                            "severity": "CRITICAL",
+                            "location": role,
+                            "summary": "Reviewer SDK dispatch failed",
+                            "evidence": f"{type(error).__name__}: {error}",
+                            "recommendation": "Rerun review after checking Claude Agent SDK availability.",
+                        }
+                    ],
+                }
 
         return await asyncio.gather(*(run_one(role) for role in payload["roles"]))
 
@@ -765,18 +563,6 @@ def debug_dir_for(review_input: ReviewInput) -> Path:
     return review_input.output_dir / "debug"
 
 
-def archive_input_snapshots(review_args: ReviewInput) -> ReviewInput:
-    inputs_dir = output_dir_for(review_args) / "inputs"
-    inputs_dir.mkdir(parents=True, exist_ok=True)
-    replacements: dict[str, Path] = {}
-    for field, filename in INPUT_SNAPSHOT_NAMES.items():
-        source = getattr(review_args, field)
-        target = inputs_dir / filename
-        target.write_bytes(source.read_bytes())
-        replacements[field] = target
-    return replace(review_args, **replacements)
-
-
 def first_text(raw: dict, names: Sequence[str]) -> str:
     for name in names:
         value = raw.get(name)
@@ -798,7 +584,7 @@ def finding_location(raw: dict) -> str:
 
 def normalize_severity(raw: dict) -> str:
     severity = str(raw.get("severity", "")).upper()
-    return SEVERITY_ALIASES.get(severity, "")
+    return severity if severity in ALL_SEVERITIES else ""
 
 
 def invalid_reviewer_finding(role: str, summary: str, raw: object) -> dict:
@@ -816,13 +602,6 @@ def normalize_reviewer_findings(role: str, reviewer: dict) -> list[dict]:
     raw_findings = reviewer.get("findings", [])
     if isinstance(raw_findings, list):
         return raw_findings
-    if isinstance(raw_findings, dict):
-        issues = raw_findings.get("issues")
-        if isinstance(issues, list):
-            return [issue for issue in issues if isinstance(issue, dict)]
-        gaps = raw_findings.get("gaps")
-        if isinstance(gaps, list):
-            return [gap for gap in gaps if isinstance(gap, dict)]
     return [
         {
             "severity": "CRITICAL",
@@ -845,7 +624,7 @@ def normalize_finding(raw: dict) -> dict:
     }
 
 
-def aggregate(reviewers: list[dict], skipped: list[dict]) -> dict:
+def aggregate(reviewers: list[dict]) -> dict:
     findings: list[dict] = []
     seen: set[tuple[str, str, str]] = set()
     for reviewer in reviewers:
@@ -867,10 +646,8 @@ def aggregate(reviewers: list[dict], skipped: list[dict]) -> dict:
     blocking = sum(1 for finding in findings if finding["severity"] in BLOCKING_SEVERITIES)
     return {
         "reviewers": reviewers,
-        "skipped_reviewers": skipped,
         "findings": findings,
         "blocking_findings": blocking,
-        "readonly_tools": READONLY_TOOLS,
     }
 
 
@@ -903,20 +680,7 @@ def render_report(review_args: ReviewInput, summary: dict) -> str:
                 "",
             ]
         )
-    if summary["skipped_reviewers"]:
-        lines.extend(["## Skipped Reviewers", ""])
-        for skipped in summary["skipped_reviewers"]:
-            lines.append(f"- `{skipped['role']}`: {skipped['reason']}")
     return "\n".join(lines).rstrip() + "\n"
-
-
-def allowed_input_paths(review_args: ReviewInput) -> list[Path]:
-    return [
-        review_args.input_file,
-        review_args.spec_file,
-        review_args.design_file,
-        review_args.plan_file,
-    ]
 
 
 def runtime_allowed_paths(review_input: ReviewInput) -> list[Path]:
@@ -932,7 +696,7 @@ def runtime_allowed_paths(review_input: ReviewInput) -> list[Path]:
     ]
 
 
-def write_outputs(review_args: ReviewInput, summary: dict, extra_allowed_paths: Sequence[Path] = ()) -> int:
+def write_outputs(review_args: ReviewInput, summary: dict) -> int:
     out_dir = output_dir_for(review_args)
     out_dir.mkdir(parents=True, exist_ok=True)
     report_text = render_report(review_args, summary)
@@ -972,8 +736,7 @@ def run_review(args: argparse.Namespace) -> int:
         )
         ensure_clean_subject(Path.cwd(), review_args.head_ref, allowed_paths)
         reviewers = dispatch_reviewers(review_args, sdk_python)
-        skipped = []
-        summary = aggregate(reviewers, skipped)
+        summary = aggregate(reviewers)
         status = write_outputs(review_args, summary)
     except (ValueError, json.JSONDecodeError) as exc:
         print("status: failed")
