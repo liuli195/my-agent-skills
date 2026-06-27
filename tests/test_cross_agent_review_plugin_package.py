@@ -155,12 +155,15 @@ def test_cross_agent_review_skill_does_not_require_test_evidence() -> None:
     assert "调用方已运行测试" not in text
 
 
-def test_cross_agent_review_spec_documents_manifest_based_prompt_contract() -> None:
+def test_cross_agent_review_spec_documents_lightweight_review_input_contract() -> None:
     spec = REPO_ROOT / "openspec" / "specs" / "cross-agent-review" / "spec.md"
     text = spec.read_text(encoding="utf-8")
 
-    assert "manifest.json" in text
-    assert "按需读取" in text
+    assert "prepared-inputs/review-input.json" in text
+    assert "spec_file" in text
+    assert "design_file" in text
+    assert "plan_file" in text
+    assert "inputs/manifest.json" in text
     assert "提示中的 diff、spec、design 和 tasks 内容 MUST" not in text
 
 

@@ -36,7 +36,7 @@ REQUIRED_INIT_REFERENCES = {
     "config-draft.md",
     "validation.md",
 }
-PLUGIN_VERSION = "0.1.14"
+PLUGIN_VERSION = "0.1.15"
 PLUGIN_DESCRIPTION = "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）"
 
 
@@ -967,16 +967,8 @@ def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_conf
     assert positions == sorted(positions)
 
 
-def test_build_and_verify_init_delta_spec_targets_test_framework_plugin_capability() -> None:
-    spec_path = (
-        REPO_ROOT
-        / "openspec"
-        / "changes"
-        / "add-build-and-verify-init-skill"
-        / "specs"
-        / "test-framework-plugin"
-        / "spec.md"
-    )
+def test_build_and_verify_init_spec_targets_test_framework_plugin_capability() -> None:
+    spec_path = REPO_ROOT / "openspec" / "specs" / "test-framework-plugin" / "spec.md"
     text = spec_path.read_text(encoding="utf-8")
 
     assert "Runtime and initialization skill surfaces" in text
