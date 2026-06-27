@@ -12,7 +12,10 @@ RELEASE_FLOW_PROJECTION = REPO_ROOT / ".release-flow" / "projection.yaml"
 
 PLUGIN_NAME = "pr-flow"
 PLUGIN_VERSION = "0.1.15"
-PLUGIN_DESCRIPTION = "PR Flow Plugin（拉取请求流程插件）"
+PLUGIN_DESCRIPTION = (
+    "PR Flow Plugin（拉取请求流程插件）。pr-flow-init 初始化 PR Flow（拉取请求流程）配置："
+    "agent（代理）问答、配置草案、只读 validate（校验）和用户确认后本地写入。"
+)
 ENTRYPOINT_COMMANDS = {
     "pr-flow": "diagnose",
     "pr-flow-init": "init",
@@ -81,6 +84,12 @@ def test_pr_flow_skill_entrypoints_call_shared_script() -> None:
         assert skill_text.startswith("---\n")
         assert f"name: {skill_name}" in front_matter
         assert "description:" in front_matter
+        if skill_name == "pr-flow-init":
+            assert "## Hard Boundaries" in skill_text
+            assert "references/questionnaire.md" in skill_text
+            assert "validate --config <path>" in skill_text
+            assert "init --project <repo> --config <path>" in skill_text
+            continue
         assert "## 边界" in skill_text
         assert "pr_flow.py" in skill_text
         assert f" {command}" in skill_text
