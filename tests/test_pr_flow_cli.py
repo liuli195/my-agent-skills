@@ -1093,7 +1093,7 @@ def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: initialized" in result.stdout
     assert "GitHub setup suggestion: configure GitHub required review" in result.stdout
-    assert "GitHub Rulesets suggestion" in result.stdout
+    assert "GitHub Rulesets suggestion" not in result.stdout
 
     config = yaml.safe_load((project / ".pr-flow" / "config.yaml").read_text(encoding="utf-8"))
     assert config["defaults"]["baseBranch"] == "main"
@@ -1124,6 +1124,8 @@ def test_init_without_confirmed_config_does_not_write_defaults(tmp_path: Path) -
 
     assert result.returncode == 2
     assert "confirmed config required" in result.stdout
+    assert "--base-branch no longer generates defaults" in result.stdout
+    assert "defaults and branches" in result.stdout
     assert not (project / ".pr-flow" / "config.yaml").exists()
     assert not (project / ".pr-flow" / "pr-template.md").exists()
     assert not (project / ".pr-flow" / ".gitignore").exists()
@@ -1364,11 +1366,15 @@ def test_validate_reports_bad_yaml_as_structured_error(tmp_path: Path) -> None:
         ),
         (
             lambda config: config["setup"]["github"].update({"autoDeleteHeadBranch": True}),
-            "warning: GitHub auto-delete head branch overlaps PR Flow cleanup",
+            "warning: GitHub auto-delete head branch overlaps with pr-flow cleanup",
         ),
         (
             lambda config: config["setup"]["github"].update({"requiredReviews": True}),
             "setup suggestion: tweak cannot bypass GitHub required review",
+        ),
+        (
+            lambda config: config["defaults"].update({"mergeStrategy": "fast-forward"}),
+            "error: defaults.mergeStrategy unsupported: fast-forward",
         ),
     ],
 )

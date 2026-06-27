@@ -129,11 +129,11 @@ def validate_config(config: dict[str, Any]) -> list[dict[str, str]]:
     if not isinstance(branches, dict) or not branches:
         add_issue(issues, "error", "branches must contain at least one branch")
 
-    merge_strategy = defaults.get("mergeStrategy")
+    merge_strategy = defaults.get("mergeStrategy", "merge")
     if merge_strategy and merge_strategy not in {"merge", "squash", "rebase"}:
         add_issue(issues, "error", f"defaults.mergeStrategy unsupported: {merge_strategy}")
     elif isinstance(merge_strategy, str) and merge_strategy:
-        add_issue(issues, "setup suggestion", f"configure GitHub merge method {merge_strategy}")
+        add_issue(issues, "setup suggestion", f"enable GitHub merge method: {merge_strategy}")
 
     review_gate = defaults.get("reviewGate")
     review_gate = review_gate if isinstance(review_gate, dict) else {}
@@ -161,7 +161,7 @@ def validate_config(config: dict[str, Any]) -> list[dict[str, str]]:
     if github.get("requiredReview") is True or github.get("requiredReviews") is True:
         add_issue(issues, "setup suggestion", "tweak cannot bypass GitHub required review")
     if github.get("autoDeleteHeadBranch") is True:
-        add_issue(issues, "warning", "GitHub auto-delete head branch overlaps PR Flow cleanup")
+        add_issue(issues, "warning", "GitHub auto-delete head branch overlaps with pr-flow cleanup")
 
     authorization = config.get("authorization")
     authorization = authorization if isinstance(authorization, dict) else {}
@@ -770,7 +770,9 @@ def run_init(args: argparse.Namespace) -> int:
 
     if args.config is None:
         print("status: confirmed_config_required")
-        print("confirmed config required: use pr-flow-init Skill and pass --config <path>")
+        if getattr(args, "base_branch", None):
+            print("confirmed config required: --base-branch no longer generates defaults")
+        print("confirmed config required: use pr-flow-init Skill to create YAML with defaults and branches, then pass --config <path>")
         return 2
 
     config, issues = load_config_path_for_validation(args.config)
@@ -792,9 +794,6 @@ def run_init(args: argparse.Namespace) -> int:
     for issue in issues:
         if issue["level"] == "setup suggestion":
             print(f"GitHub setup suggestion: {issue['message']}")
-        else:
-            print(f"{issue['level']}: {issue['message']}")
-    print("GitHub Rulesets suggestion: review setup suggestions before configuring GitHub.")
     return 0
 
 
@@ -1302,7 +1301,7 @@ def build_parser() -> argparse.ArgumentParser:
         if command == "tweak":
             subparser.add_argument("--reason")
         if command == "init":
-            subparser.add_argument("--base-branch", default="main")
+            subparser.add_argument("--base-branch", default=None)
             subparser.add_argument("--config", type=Path)
         subparser.set_defaults(command=command)
     return parser
