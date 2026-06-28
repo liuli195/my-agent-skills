@@ -1,0 +1,8 @@
+- [x] Add failing Runtime test for short HEAD review-pass path.
+- [x] Add validator coverage for `git_head_short`.
+- [x] Implement `git_head_short` in Agent Guard Runtime and validator.
+- [x] Keep built-in Comet review gate profile validation green.
+- [x] Update Comet review gate templates and specs.
+- [x] Harden cross-agent-review SDK output parsing for Markdown-wrapped JSON.
+- [x] Normalize cross-agent-review reviewer observations and severity aliases.
+- [x] Run focused tests and OpenSpec validation.
