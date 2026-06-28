@@ -297,30 +297,12 @@ PR Flow（拉取请求流程）MUST preserve the boundary between default fast v
 ### Requirement: PR Flow init uses scenario-oriented progressive-disclosure guidance
 系统 MUST 让 PR Flow init（拉取请求流程初始化）的 Plugin（插件）和 Skill（技能）内容使用用户场景组织和 progressive disclosure（渐进式披露），并用固定问答模板约束 agent（代理）初始化流程。
 
-#### Scenario: Skill entrypoint delegates detail to references
-- **WHEN** agent（代理）加载 `pr-flow-init` Skill（初始化技能）
-- **THEN** Skill（技能）入口 MUST 声明 hard boundaries（硬边界）、closed loop（闭环）、required flow（必需流程）和 output（输出）
-- **THEN** Skill（技能）入口 MUST 指向 `references/questionnaire.md`（问答模板）、`references/config-draft.md`（配置草案规则）和 `references/validation.md`（校验规则）
-- **THEN** Skill（技能）入口 MUST NOT 内联完整问答细节
-
 #### Scenario: Questionnaire is fixed
 - **WHEN** agent（代理）执行 `pr-flow-init` Skill（初始化技能）
 - **THEN** agent（代理）MUST 先读取 `references/questionnaire.md`（问答模板）
 - **THEN** questionnaire（问答模板）MUST 定义固定问题、固定选项、选择后果和跳转规则
 - **THEN** agent（代理）MUST NOT 临场编造初始化问题或跳过最终写入确认
 - **THEN** 用户沉默 MUST NOT 被视为确认
+- **THEN** branch protection（分支保护）选择 GitHub Rulesets（GitHub 规则集）时，remote tasks（远端待办）MUST 默认启用 `Restrict deletions`（限制删除）
+- **THEN** branch protection（分支保护）选择 GitHub Rulesets（GitHub 规则集）时，remote tasks（远端待办）MUST 默认启用 `Block force pushes`（阻止强制推送）
 
-#### Scenario: Plugin and Skill content are organized by user scenario
-- **WHEN** 维护 PR Flow init（拉取请求流程初始化）的 Plugin（插件）和 Skill（技能）内容
-- **THEN** Skill（技能）入口和 `references/`（参考文件）MUST 按用户场景组织，而不是按 YAML（配置格式）字段或 script（脚本）函数平铺
-- **THEN** 用户场景 MUST 覆盖初次启用 PR Flow（拉取请求流程）、review gate（审查门禁）、hotfix（热修复）、cleanup（清理）、GitHub（代码托管平台）远端配置建议和最终写入确认
-- **THEN** questionnaire（问答模板）MUST 作为固定执行模板服务这些场景，但场景组织要求不只限于 questionnaire（问答模板）
-- **THEN** Plugin（插件）级验收范围 MUST include init（初始化）相关的 `.codex-plugin/plugin.json`、`.claude-plugin/plugin.json` 和 `skills/pr-flow/SKILL.md`（总入口）描述或路由内容
-- **THEN** unrelated complete、cleanup、hotfix 和 tweak（收尾、清理、热修复、小改）Skill（技能）内容 MUST NOT be reorganized unless it directly describes init（初始化）
-
-#### Scenario: Draft and validation rules are fixed references
-- **WHEN** agent（代理）生成配置草案
-- **THEN** agent（代理）MUST 读取 `references/config-draft.md`（配置草案规则）
-- **WHEN** agent（代理）执行写入前校验或展示校验摘要
-- **THEN** agent（代理）MUST 读取 `references/validation.md`（校验规则）
-- **THEN** agent（代理）MUST 按这些固定参考文件展示草案、问题、影响和建议
