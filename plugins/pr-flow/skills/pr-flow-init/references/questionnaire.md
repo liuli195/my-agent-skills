@@ -51,6 +51,7 @@ agent（代理）必须按本文件执行，不能临场编造问题。现有 `.
 
 选择后果：
 - 本地配置只记录 `setup.github`（GitHub 配置建议），不自动写远端。
+- 派生写入 `defaults.reviewGate.mode: github`，表示本地 PR Flow（拉取请求流程）不做本地审查门禁，审查与保护交给 GitHub（代码托管平台）远端规则。
 - 远端待办必须写成创建或更新 branch ruleset（分支规则集）。
 - 远端待办必须启用 `Require a pull request before merging`（合并前要求拉取请求）。
 - 默认写明 `required_approving_review_count: 0`，表示要求通过 PR（拉取请求）修改受保护分支，但不强制 approving review（批准审查）。

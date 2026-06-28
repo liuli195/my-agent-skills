@@ -54,7 +54,7 @@ agent（代理）展示草案时必须给用户可读摘要，禁止展示完整
 
 - `defaults.baseBranch`
 - `defaults.mergeStrategy`
-- `defaults.reviewGate`
+- `defaults.reviewGate.mode`：由 branch protection（分支保护）选择派生为 `github`，不单独提问。
 - `defaults.hotfix.verifyCommand`
 - `defaults.wait`
 - `defaults.pr.bodyTemplatePath`

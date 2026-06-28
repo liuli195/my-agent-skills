@@ -791,6 +791,8 @@ def run_init(args: argparse.Namespace) -> int:
 
     print("status: initialized")
     for issue in issues:
+        if issue["level"] == "warning":
+            print(f"warning: {issue['message']}")
         if issue["level"] == "remote task":
             print(f"GitHub remote task: {issue['message']}")
     return 0

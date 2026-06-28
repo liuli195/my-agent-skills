@@ -211,7 +211,7 @@ Run:
 git diff -- plugins/pr-flow/skills/pr-flow-init tests/test_pr_flow_cli.py openspec/changes/optimize-pr-flow-init-template docs/superpowers
 ```
 
-Confirm no runtime script file such as `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py` changed.
+Confirm no runtime script semantics changed beyond the validate（校验）output terminology sync in `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py`.
 
 - [x] **Step 3: Mark OpenSpec tasks complete**
 

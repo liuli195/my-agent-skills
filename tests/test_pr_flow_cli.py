@@ -1269,6 +1269,7 @@ def test_pr_flow_init_questionnaire_uses_latest_flow() -> None:
     assert "不能声明远端状态已确认" in questionnaire
     assert "PR Flow（拉取请求流程）合并前使用哪种审查门禁" not in questionnaire
     branch_protection_section = questionnaire.split("## 场景：branch protection", 1)[1].split("## 场景：PR status checks", 1)[0]
+    assert "defaults.reviewGate.mode: github" in branch_protection_section
     assert "从 automatic inspection（自动检查）得到的 remote branches（远端分支）逐项列出" in branch_protection_section
     assert "发布分支" not in branch_protection_section
     pr_status_section = questionnaire.split("## 场景：PR status checks", 1)[1].split("## 场景：CodeQL security check", 1)[0]
@@ -1288,6 +1289,8 @@ def test_pr_flow_init_draft_and_validation_are_user_readable() -> None:
     assert "禁止展示完整 YAML" in config_draft
     assert "```yaml" not in config_draft
     assert "仅当 `allowHotfixPush: true`" in config_draft
+    assert "defaults.reviewGate.mode" in config_draft
+    assert "不单独提问" in config_draft
     assert "not inspected" in config_draft
     assert "no access" in config_draft
     assert "不代表 init（初始化）已经写入远端" in config_draft
@@ -1408,6 +1411,20 @@ def test_validate_does_not_report_local_review_evidence_as_remote_task(tmp_path:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "remote task: document review-pass.json evidence contract" not in result.stdout
+    assert "warning: document review-pass.json evidence contract" in result.stdout
+
+
+def test_init_prints_warnings_from_confirmed_config(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    config = default_pr_flow_config_for_test()
+    config["defaults"]["reviewGate"] = {"mode": "local", "evidencePath": ".pr-flow/review-pass.json"}
+    draft = tmp_path / "confirmed.yaml"
+    draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    result = run("init", "--project", str(project), "--config", str(draft))
+
+    assert result.returncode == 0, result.stdout + result.stderr
     assert "warning: document review-pass.json evidence contract" in result.stdout
 
 
