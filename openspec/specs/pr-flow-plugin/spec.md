@@ -272,18 +272,18 @@ PR Flow（拉取请求流程）MUST preserve the boundary between default fast v
 - **THEN** validate（校验）MUST 要求存在非空 `authorization.phraseHash`
 - **THEN** validate（校验）MUST 要求存在非空 `hotfix.verifyCommand`
 - **THEN** validate（校验）MUST 要求该分支存在非空 `remote`
-- **THEN** validate（校验）MUST 输出 Rulesets bypass（规则集绕过权限）配置建议
+- **THEN** validate（校验）MUST 输出 Rulesets bypass（规则集绕过权限）远端待办
 
 #### Scenario: Validate checks review gate dependencies
 - **WHEN** `reviewGate.mode` 是 `github` 或 `dual`
-- **THEN** validate（校验）MUST 输出 required review（必需审查）远端配置建议
+- **THEN** validate（校验）MUST 输出 required review（必需审查）远端待办
 - **WHEN** `reviewGate.mode` 是 `local` 或 `dual`
 - **THEN** validate（校验）MUST 要求存在非空 `reviewGate.evidencePath`
 - **THEN** validate（校验）MUST 输出 review-pass.json（审查通过文件）字段契约 warning（警告）
 
 #### Scenario: Validate checks GitHub setup dependencies
 - **WHEN** 配置声明 required checks（必需检查）意图
-- **THEN** validate（校验）MUST 输出 GitHub Rulesets（GitHub 规则集）配置建议
+- **THEN** validate（校验）MUST 输出 GitHub Rulesets（GitHub 规则集）远端待办
 - **WHEN** 配置声明 merge strategy（合并方式）
 - **THEN** validate（校验）MUST 输出对应 merge method（合并方式）需要在 GitHub（代码托管平台）启用的建议
 - **WHEN** 配置启用 auto-delete head branch（自动删除源分支）意图
