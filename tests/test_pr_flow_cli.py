@@ -1397,9 +1397,10 @@ def test_validate_reads_only_provided_config_and_reports_suggestions(tmp_path: P
     assert not (project / ".pr-flow" / "config.yaml").exists()
 
 
-def test_validate_does_not_report_local_review_evidence_as_remote_task(tmp_path: Path) -> None:
+@pytest.mark.parametrize("review_mode", ["local", "dual"])
+def test_validate_does_not_report_local_review_evidence_as_remote_task(tmp_path: Path, review_mode: str) -> None:
     config = default_pr_flow_config_for_test()
-    config["defaults"]["reviewGate"] = {"mode": "local", "evidencePath": ".pr-flow/review-pass.json"}
+    config["defaults"]["reviewGate"] = {"mode": review_mode, "evidencePath": ".pr-flow/review-pass.json"}
     draft = tmp_path / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
