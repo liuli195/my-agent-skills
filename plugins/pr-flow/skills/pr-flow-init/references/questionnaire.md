@@ -156,15 +156,21 @@ agent（代理）必须按本文件执行，不能临场编造问题。现有 `.
 
 ## 场景：最终写入确认
 
-固定问题：是否确认写入 `.pr-flow/config.yaml`、`.pr-flow/pr-template.md` 和 `.pr-flow/.gitignore`？
+固定问题：最终如何处理本次 PR Flow（拉取请求流程）初始化配置？
 
 固定选项：
-- `yes`：仅在 validate（校验）没有 error（错误）时写入。
-- `no`：停止，不写入。
+- 不写入，放弃本次配置。
+- 只写入本地配置。
+- 按 remote tasks（远端待办）完成 GitHub（代码托管平台）配置，然后再写入本地配置。
 
-选择后果：用户沉默 MUST NOT 被视为确认。
+选择后果：
+- 不写入，放弃本次配置：停止，不写入 `.pr-flow/config.yaml`、`.pr-flow/pr-template.md` 和 `.pr-flow/.gitignore`。
+- 只写入本地配置：仅在 validate（校验）没有 error（错误）时运行 init（初始化）写入本地文件，不写 GitHub（代码托管平台）远端配置。
+- 按 remote tasks（远端待办）完成 GitHub（代码托管平台）配置，然后再写入本地配置：agent（代理）先按远端待办执行 GitHub（代码托管平台）配置，再在 validate（校验）没有 error（错误）时运行 init（初始化）写入本地文件。
+- GitHub（代码托管平台）配置由 agent（代理）执行；插件不提供 GitHub（代码托管平台）配置脚本能力。
+- 用户沉默 MUST NOT 被视为确认。
 
-跳转规则：`yes` 运行 init（初始化）写入；`no` 停止。
+跳转规则：选项 1 停止；选项 2 运行 init（初始化）写入本地配置；选项 3 先完成 remote tasks（远端待办），再运行 init（初始化）写入本地配置。
 
 ## 禁止重复问题
 

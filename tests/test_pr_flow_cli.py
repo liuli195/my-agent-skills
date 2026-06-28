@@ -1279,6 +1279,16 @@ def test_pr_flow_init_questionnaire_uses_latest_flow() -> None:
     assert "来源 workflow/job（工作流/任务）" in pr_status_section
     assert "验证内容" in pr_status_section
     assert "失败影响" in pr_status_section
+    final_write_section = questionnaire.split("## 场景：最终写入确认", 1)[1].split("## 禁止重复问题", 1)[0]
+    final_options_block = final_write_section.split("固定选项：", 1)[1].split("选择后果：", 1)[0]
+    final_options = [line for line in final_options_block.splitlines() if line.startswith("- ")]
+    assert final_options == [
+        "- 不写入，放弃本次配置。",
+        "- 只写入本地配置。",
+        "- 按 remote tasks（远端待办）完成 GitHub（代码托管平台）配置，然后再写入本地配置。",
+    ]
+    assert "GitHub（代码托管平台）配置由 agent（代理）执行" in final_write_section
+    assert "插件不提供 GitHub（代码托管平台）配置脚本能力" in final_write_section
 
 
 def test_pr_flow_init_draft_and_validation_are_user_readable() -> None:
