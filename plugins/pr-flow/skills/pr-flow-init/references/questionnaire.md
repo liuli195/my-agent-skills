@@ -72,7 +72,7 @@ agent（代理）必须按本文件执行，不能临场编造问题。现有 `.
 固定问题：是否启用 CodeQL security check（CodeQL 安全检查）？
 
 固定选项：
-- 开启：在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果），并选择 `CodeQL` 作为 code scanning tool（代码扫描工具）。
+- 开启：在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果），选择 `CodeQL` 作为 code scanning tool（代码扫描工具），阈值采用 GitHub 默认阈值。
 - 不开启：不生成 CodeQL（代码扫描工具）远端待办。
 
 选择后果：

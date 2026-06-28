@@ -38,7 +38,7 @@ canonical_spec: openspec
 2. 询问 default PR target branch（默认拉取请求目标分支）。
 3. 询问哪些分支需要通过 GitHub Rulesets（GitHub 规则集）保护；远端待办必须写成创建或更新 branch ruleset（分支规则集），启用 `Require a pull request before merging`（合并前要求拉取请求），默认 `required_approving_review_count: 0`。
 4. 询问 PR status checks（拉取请求状态检查）；没有具体 check name（检查名称）时，不编造名称，只记录新增或识别检查后再启用 `Require status checks to pass before merging`（合并前要求状态检查通过）。
-5. 询问是否启用 CodeQL security check（CodeQL 安全检查）；只提供“开启”和“不开启”。开启时，远端待办必须要求在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果），并选择 `CodeQL` 作为 code scanning tool（代码扫描工具）。
+5. 询问是否启用 CodeQL security check（CodeQL 安全检查）；只提供“开启”和“不开启”。开启时，远端待办必须要求在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果）、选择 `CodeQL` 作为 code scanning tool（代码扫描工具），并采用 GitHub 默认阈值。
 6. 询问 hotfix（热修复）直推；只有允许后才问授权短语是复用现有还是新设。
 7. 询问 allowed merge methods（允许合并方式）。
 8. 展示 GitHub 推荐配置（GitHub 远端配置建议）场景，列出 remote tasks（远端待办）并说明没有写入远端。
@@ -64,7 +64,7 @@ canonical_spec: openspec
 - read-only inspection（只读检查）必须出现在问答前。
 - 最新六个主问题必须存在，旧的独立 review gate（审查门禁）不能再作为主问题。
 - GitHub（代码托管平台）远端待办必须包含官方规则名。
-- CodeQL security check（CodeQL 安全检查）必须在 PR status checks（拉取请求状态检查）之后、hotfix（热修复）之前，并锁定 `Require code scanning results`（要求代码扫描结果）和 `CodeQL`。
+- CodeQL security check（CodeQL 安全检查）必须在 PR status checks（拉取请求状态检查）之后、hotfix（热修复）之前，并锁定 `Require code scanning results`（要求代码扫描结果）、`CodeQL` 和 GitHub 默认阈值。
 - GitHub 推荐配置（GitHub 远端配置建议）必须作为 final confirmation（最终确认）前的显式场景出现。
 - 草案和校验说明必须先给用户可读摘要，再给 YAML（配置格式）细节。
 - 既有用户场景测试必须替换旧 `review gate`（审查门禁）、`cleanup`（清理）和 `GitHub setup suggestions`（GitHub 配置建议）主流程断言。

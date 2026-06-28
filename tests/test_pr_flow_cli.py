@@ -1092,7 +1092,7 @@ def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: initialized" in result.stdout
-    assert "GitHub setup suggestion: configure GitHub required review" in result.stdout
+    assert "GitHub remote task: configure GitHub required review" in result.stdout
     assert "GitHub Rulesets suggestion" not in result.stdout
 
     config = yaml.safe_load((project / ".pr-flow" / "config.yaml").read_text(encoding="utf-8"))
@@ -1249,6 +1249,14 @@ def test_pr_flow_init_questionnaire_uses_latest_flow() -> None:
     assert "不开启" in questionnaire
     assert "Require code scanning results" in questionnaire
     assert "CodeQL" in questionnaire
+    assert "GitHub 默认阈值" in questionnaire
+    codeql_section = questionnaire.split("## 场景：CodeQL security check", 1)[1].split("## 场景：hotfix", 1)[0]
+    codeql_options_block = codeql_section.split("固定选项：", 1)[1].split("选择后果：", 1)[0]
+    codeql_options = [line for line in codeql_options_block.splitlines() if line.startswith("- ")]
+    assert codeql_options == [
+        "- 开启：在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果），选择 `CodeQL` 作为 code scanning tool（代码扫描工具），阈值采用 GitHub 默认阈值。",
+        "- 不开启：不生成 CodeQL（代码扫描工具）远端待办。",
+    ]
     assert "reuse existing authorization phrase" in questionnaire
     assert "create new authorization phrase" in questionnaire
     assert "authorization.phraseHashAlgorithm: md5" in questionnaire
@@ -1274,6 +1282,10 @@ def test_pr_flow_init_draft_and_validation_are_user_readable() -> None:
     assert "新增或识别 PR status checks" in config_draft
     assert "Require code scanning results" in config_draft
     assert "CodeQL" in config_draft
+    assert "GitHub 默认阈值" in config_draft
+    draft_yaml = yaml.safe_load(config_draft.split("```yaml", 1)[1].split("```", 1)[0])
+    assert "authorization" in draft_yaml
+    assert "authorization" not in draft_yaml["branches"]["main"]
 
     for heading in ["error（错误）", "warning（警告）", "remote tasks（远端待办）"]:
         assert heading in validation
@@ -1282,6 +1294,7 @@ def test_pr_flow_init_draft_and_validation_are_user_readable() -> None:
     assert "不能声明远端状态已确认" in validation
     assert "Require code scanning results" in validation
     assert "CodeQL" in validation
+    assert "GitHub 默认阈值" in validation
 
 
 def test_pr_flow_init_skill_uses_remote_tasks_not_setup_suggestions() -> None:
@@ -1369,9 +1382,21 @@ def test_validate_reads_only_provided_config_and_reports_suggestions(tmp_path: P
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: validation_passed" in result.stdout
-    assert "setup suggestion: configure GitHub required review" in result.stdout
-    assert "setup suggestion: configure GitHub Rulesets required checks" in result.stdout
+    assert "remote task: configure GitHub required review" in result.stdout
+    assert "remote task: configure GitHub Rulesets required checks" in result.stdout
     assert not (project / ".pr-flow" / "config.yaml").exists()
+
+
+def test_validate_does_not_report_local_review_evidence_as_remote_task(tmp_path: Path) -> None:
+    config = default_pr_flow_config_for_test()
+    config["defaults"]["reviewGate"] = {"mode": "local", "evidencePath": ".pr-flow/review-pass.json"}
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    result = run("validate", "--config", str(draft))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "remote task: document review-pass.json evidence contract" not in result.stdout
 
 
 def test_validate_reports_errors_for_missing_core_shape(tmp_path: Path) -> None:
@@ -1446,7 +1471,7 @@ def test_validate_reports_bad_yaml_as_structured_error(tmp_path: Path) -> None:
         ),
         (
             lambda config: config["setup"]["github"].update({"requiredReviews": True}),
-            "setup suggestion: tweak cannot bypass GitHub required review",
+            "remote task: tweak cannot bypass GitHub required review",
         ),
         (
             lambda config: config["defaults"].update({"mergeStrategy": "fast-forward"}),

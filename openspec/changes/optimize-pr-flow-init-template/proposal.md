@@ -9,7 +9,7 @@
 - 更新 `pr-flow-init`（拉取请求流程初始化）问答模板，采用最新 6 问流程。
 - 明确 branch protection（分支保护）使用 GitHub Rulesets（GitHub 规则集）实现，并启用 `Require a pull request before merging`（合并前要求拉取请求）。
 - 将 PR status checks（拉取请求状态检查）作为独立问题，不再和 PR review（拉取请求代码审查）混问。
-- 在 PR status checks（拉取请求状态检查）后新增 CodeQL security check（CodeQL 安全检查）问题；开启时远端待办要求 `Require code scanning results`（要求代码扫描结果）并选择 `CodeQL`。
+- 在 PR status checks（拉取请求状态检查）后新增 CodeQL security check（CodeQL 安全检查）问题；开启时远端待办要求 `Require code scanning results`（要求代码扫描结果）、选择 `CodeQL`，并采用 GitHub 默认阈值。
 - 将草案展示改为用户可读摘要优先，YAML（配置格式）只作为附录。
 - 将 validation（校验）摘要和 setup suggestion（配置建议）改为结构化、可执行的远端待办。
 - 保留现有本地 `validate`（校验）和 `init`（初始化）脚本边界，不自动写 GitHub（代码托管平台）远端配置。
