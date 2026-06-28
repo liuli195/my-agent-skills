@@ -36,7 +36,7 @@ REQUIRED_INIT_REFERENCES = {
     "config-draft.md",
     "validation.md",
 }
-PLUGIN_VERSION = "0.1.16"
+PLUGIN_VERSION = "0.1.17"
 PLUGIN_DESCRIPTION = "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）"
 
 
