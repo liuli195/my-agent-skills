@@ -2,6 +2,8 @@
 comet_change: optimize-pr-flow-init-template
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-28-optimize-pr-flow-init-template
+status: final
 ---
 
 # PR Flow Init Template Design

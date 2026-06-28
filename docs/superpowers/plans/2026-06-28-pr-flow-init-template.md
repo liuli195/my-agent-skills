@@ -2,6 +2,7 @@
 change: optimize-pr-flow-init-template
 design-doc: docs/superpowers/specs/2026-06-28-pr-flow-init-template-design.md
 base-ref: a4bd6df12207defb355693fbfab7b77abcb6f8d6
+archived-with: 2026-06-28-optimize-pr-flow-init-template
 ---
 
 # PR Flow Init Template Implementation Plan
@@ -14,6 +15,7 @@ base-ref: a4bd6df12207defb355693fbfab7b77abcb6f8d6
 
 **Tech Stack:** Python（Python 语言）pytest（测试框架）, Markdown（标记文档）, OpenSpec（开放规格）, Comet（彗星流程）.
 
+archived-with: 2026-06-28-optimize-pr-flow-init-template
 ---
 
 ## File Map

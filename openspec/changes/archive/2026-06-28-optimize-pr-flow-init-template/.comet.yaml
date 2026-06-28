@@ -16,6 +16,6 @@ verification_report: docs/superpowers/reports/2026-06-28-optimize-pr-flow-init-t
 branch_status: handled
 created_at: 2026-06-27
 verified_at: 2026-06-28
-archived: false
+archived: true
 handoff_context: openspec/changes/optimize-pr-flow-init-template/.comet/handoff/spec-context.json
 handoff_hash: 87ce12bf3bf1782a5d73d8d4010d372b380bc5848209f46ab6ef5f7ad93096cb

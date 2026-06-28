@@ -303,6 +303,42 @@ PR Flow（拉取请求流程）MUST preserve the boundary between default fast v
 - **THEN** questionnaire（问答模板）MUST 定义固定问题、固定选项、选择后果和跳转规则
 - **THEN** agent（代理）MUST NOT 临场编造初始化问题或跳过最终写入确认
 - **THEN** 用户沉默 MUST NOT 被视为确认
-- **THEN** branch protection（分支保护）选择 GitHub Rulesets（GitHub 规则集）时，remote tasks（远端待办）MUST 默认启用 `Restrict deletions`（限制删除）
-- **THEN** branch protection（分支保护）选择 GitHub Rulesets（GitHub 规则集）时，remote tasks（远端待办）MUST 默认启用 `Block force pushes`（阻止强制推送）
+- **THEN** 最终写入确认 MUST 提供 3 个固定选项：不写入放弃本次配置、只写入本地配置、按 remote tasks（远端待办）完成 GitHub（代码托管平台）配置后再写入本地配置
+- **THEN** questionnaire（问答模板）MUST 明确 GitHub（代码托管平台）配置由 agent（代理）执行
+- **THEN** questionnaire（问答模板）MUST 明确插件不提供 GitHub（代码托管平台）配置脚本能力
+
+### Requirement: PR Flow init presents executable GitHub setup guidance
+PR Flow init（拉取请求流程初始化）MUST separate local config writes（本地配置写入） from GitHub setup guidance（GitHub 配置建议） and present GitHub guidance as executable manual tasks.
+
+#### Scenario: Remote guidance shows current state before recommendations
+- **WHEN** agent（代理）prepares the confirmation summary for `pr-flow-init`
+- **THEN** it MUST show the current GitHub（代码托管平台）state for Rulesets（规则集）, branch protection（分支保护）, merge methods（合并方式）, auto-delete head branch（自动删除源分支）, and PR status checks（拉取请求状态检查） when that state has been inspected
+- **THEN** it MUST show recommended GitHub setup separately from local files that will be written
+- **THEN** it MUST NOT imply that GitHub setup has been applied
+
+#### Scenario: Remote tasks use GitHub official rule names
+- **WHEN** GitHub setup guidance includes branch protection（分支保护）
+- **THEN** it MUST describe the task as creating or updating a branch ruleset（分支规则集） for the selected target branches
+- **THEN** it MUST name `Require a pull request before merging`（合并前要求拉取请求） as the rule that requires protected branches to change through PR（拉取请求）
+- **THEN** it MUST set `required_approving_review_count: 0` unless the user explicitly chooses an approving review（批准审查） requirement
+
+#### Scenario: PR status checks are concrete or explicit future work
+- **WHEN** the user chooses to require PR status checks（拉取请求状态检查）
+- **AND** no concrete PR check names are available from inspected workflows
+- **THEN** the GitHub setup guidance MUST record a task to add or identify PR status checks before enabling `Require status checks to pass before merging`（合并前要求状态检查通过）
+- **THEN** it MUST NOT invent check names
+
+#### Scenario: CodeQL security check is an explicit ruleset task
+- **WHEN** the user chooses to enable CodeQL security check（CodeQL 安全检查）
+- **THEN** GitHub setup guidance MUST record a Rulesets（规则集）task to configure `Require code scanning results`（要求代码扫描结果）
+- **THEN** it MUST select `CodeQL` as the code scanning tool（代码扫描工具）
+- **THEN** it MUST use GitHub 默认阈值 for code scanning thresholds（代码扫描阈值）
+- **WHEN** the user chooses not to enable CodeQL security check（CodeQL 安全检查）
+- **THEN** GitHub setup guidance MUST NOT include a CodeQL（代码扫描工具）remote task（远端待办）
+
+#### Scenario: Confirmation summary is user-readable first
+- **WHEN** agent（代理）shows the init draft before final confirmation
+- **THEN** it MUST first show user-readable tables for local writes, GitHub current state, GitHub recommendations, and validation results
+- **THEN** it MUST NOT show a complete YAML（配置格式）draft
+- **THEN** it MAY show only necessary field paths or small field fragments after the user-readable summary
 
