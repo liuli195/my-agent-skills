@@ -130,11 +130,17 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 
 - **WHEN** 用户准备发布某个 tag
 - **THEN** 系统 MUST 创建 `.release-flow/releases/<tag>/release-plan.json`
-- **THEN** release-plan MUST 包含 version、tag、sourceRef、channelBranch、workflow file、projection registry 和 dryRun 标记
+- **THEN** release-plan MUST 包含 version、tag、sourceRef、channelBranch、workflow file 和 projection registry
 - **THEN** 发布目录名 MUST 使用 tag
 - **THEN** 系统 MUST NOT 创建本地发布分支
 - **THEN** 系统 MUST NOT 创建 tag
 - **THEN** 系统 MUST NOT push 发布内容
+
+#### Scenario: 不提供发布初始化试运行
+
+- **WHEN** 用户准备发布某个 tag
+- **THEN** `release-init` MUST NOT 提供 `--dry-run` 分支逻辑
+- **THEN** 预览发布命令 MUST 使用 `publish --dry-run`
 
 ### Requirement: 发布前检查
 
@@ -164,11 +170,13 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 - **WHEN** 执行 preflight
 - **THEN** 系统 MUST 验证 release-plan tag（发布计划标签）与 manifest version（清单版本）一致
 
-#### Scenario: 检查发布投影差异
+#### Scenario: 检查发布投影
 
 - **WHEN** 执行 preflight
-- **THEN** 系统 MUST 从 `main` 和 projection 生成 expected marketplace tree（期望市场分支树）
-- **THEN** 系统 MUST 拒绝未被 projection 描述的 `main` 与 `marketplace` 差异
+- **THEN** 系统 MUST 在临时目录中从 source branch（源分支）和 projection（发布投影）生成 expected marketplace tree（期望市场分支树）
+- **THEN** 系统 MUST 拒绝无法生成的发布投影
+- **THEN** 系统 MUST NOT 要求旧 `marketplace` 分支已经等于待发布投影
+- **THEN** `preflight` MUST NOT 接收 `--channel-tree`
 
 ### Requirement: 发布执行阶段
 
@@ -182,6 +190,15 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 - **THEN** 本地系统 MUST NOT 创建 tag
 - **THEN** 本地系统 MUST NOT push 发布内容
 
+#### Scenario: 发布试运行输出明确字段
+
+- **WHEN** 用户执行 `publish --dry-run`
+- **THEN** 输出 MUST 包含 `release_tag` 表示 release tag（发布标签）
+- **THEN** 输出 MUST 包含 `git_tag_created: false`
+- **THEN** 输出 MUST 包含 `local_branch_created: false`
+- **THEN** 输出 MUST 包含 `push_run: false`
+- **THEN** 输出 MUST NOT 包含重复的 `tag` 字段
+
 #### Scenario: GitHub Workflow 执行发布
 
 - **WHEN** GitHub Workflow 运行
@@ -193,6 +210,7 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 - **THEN** workflow MUST 创建或更新远端 `marketplace` 分支
 - **THEN** workflow MUST 创建 tag
 - **THEN** workflow MUST 创建 GitHub Release
+- **THEN** `ci-publish` MUST NOT 提供 `--dry-run` 分支逻辑
 
 ### Requirement: 发布记录与总结
 
@@ -270,15 +288,11 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 - **THEN** 生成的 catalog MUST 包含发布插件条目
 
 ### Requirement: Marketplace identity 漂移检查
+
 系统 MUST 在发布前检查和发布投影中发现 marketplace identity 与生成产物不一致的漂移。
 
 #### Scenario: 拒绝旧名残留
-- **WHEN** 生成产物或 channel tree（通道树）中存在和 marketplace identity 不一致的旧 marketplace name
+
+- **WHEN** 生成产物中存在和 marketplace identity 不一致的旧 marketplace name
 - **THEN** `preflight` MUST 拒绝继续
 - **THEN** 错误输出 MUST 指出不一致字段和期望 identity 值
-
-#### Scenario: 拒绝未声明 marketplace 差异
-- **WHEN** `marketplace` 分支中的 marketplace catalog 与 source branch 加 projection 生成的 expected tree（期望树）不一致
-- **THEN** `preflight` MUST 拒绝未被 projection 或 identity 声明的差异
-- **THEN** 系统 MUST 保持不调用真实 GitHub Settings API 的首版边界
-
