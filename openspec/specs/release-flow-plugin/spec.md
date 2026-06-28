@@ -288,9 +288,11 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 - **THEN** 生成的 catalog MUST 包含发布插件条目
 
 ### Requirement: Marketplace identity 漂移检查
+
 系统 MUST 在发布前检查和发布投影中发现 marketplace identity 与生成产物不一致的漂移。
 
 #### Scenario: 拒绝旧名残留
+
 - **WHEN** 生成产物中存在和 marketplace identity 不一致的旧 marketplace name
 - **THEN** `preflight` MUST 拒绝继续
 - **THEN** 错误输出 MUST 指出不一致字段和期望 identity 值

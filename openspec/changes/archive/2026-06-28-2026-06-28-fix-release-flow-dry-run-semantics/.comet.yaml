@@ -13,7 +13,7 @@ design_doc: null
 plan: null
 verify_result: pass
 verification_report: docs/superpowers/reports/2026-06-28-fix-release-flow-dry-run-semantics-verify.md
-branch_status: unhandled
+branch_status: handled
 created_at: 2026-06-28
 verified_at: 2026-06-28
-archived: false
+archived: true
