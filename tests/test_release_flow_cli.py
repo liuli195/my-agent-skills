@@ -347,8 +347,18 @@ def test_release_init_creates_release_plan_only_for_tag(tmp_path: Path) -> None:
     assert plan["channelBranch"] == "marketplace"
     assert plan["workflowFile"] == ".github/workflows/release.yml"
     assert plan["projectionRegistry"] == ".release-flow/projection.yaml"
-    assert plan["dryRun"] is False
+    assert "dryRun" not in plan
     assert not (project / "marketplace").exists()
+
+
+def test_release_init_rejects_dry_run_flag(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    write_release_flow_files(project)
+
+    result = run("release-init", "--project", str(project), "--tag", "v0.1.1", "--version", "0.1.1", "--dry-run")
+
+    assert result.returncode == 2
+    assert not (project / ".release-flow" / "releases" / "v0.1.1" / "release-plan.json").exists()
 
 
 def test_release_init_refuses_existing_plan_without_replace(tmp_path: Path) -> None:
@@ -765,9 +775,8 @@ def test_preflight_writes_report_when_checks_pass(tmp_path: Path) -> None:
     assert report["version"]["expected"] == "0.1.1"
 
 
-def test_preflight_rejects_unmanaged_marketplace_drift(tmp_path: Path) -> None:
+def test_preflight_checks_projection_without_channel_tree(tmp_path: Path) -> None:
     project = tmp_path / "project"
-    channel_tree = tmp_path / "channel"
     vars_file = tmp_path / "vars.json"
     write_release_flow_files(
         project,
@@ -786,13 +795,8 @@ transforms:
 """,
     )
     write_manifest(project / "plugins" / "agent-guard" / ".codex-plugin" / "plugin.json", "0.1.1")
-    write_json(project / ".agents" / "plugins" / "marketplace.json", {"name": "local-dev"})
     write_json(vars_file, {"CODEX_MARKETPLACE_CATALOG_NAME": "agent-guard-marketplace"})
     run("release-init", "--project", str(project), "--tag", "v0.1.1", "--version", "0.1.1")
-    write_json(
-        channel_tree / ".agents" / "plugins" / "marketplace.json",
-        {"name": "agent-guard-marketplace", "manual": True},
-    )
 
     result = run(
         "preflight",
@@ -802,82 +806,21 @@ transforms:
         "v0.1.1",
         "--github-vars-file",
         str(vars_file),
-        "--channel-tree",
-        str(channel_tree),
     )
 
     assert result.returncode == 1
-    assert "unmanaged_channel_diff: .agents/plugins/marketplace.json" in result.stdout
+    assert "missing_file:" in result.stdout
+    assert ".agents" in result.stdout
+    assert "marketplace.json" in result.stdout
 
 
-def test_preflight_rejects_channel_marketplace_identity_drift(tmp_path: Path) -> None:
+def test_preflight_rejects_channel_tree_argument(tmp_path: Path) -> None:
     project = tmp_path / "project"
     channel_tree = tmp_path / "channel"
     vars_file = tmp_path / "vars.json"
-    write_release_flow_files(project, marketplace_identity_projection())
+    write_release_flow_files(project)
     write_manifest(project / "plugins" / "agent-guard" / ".codex-plugin" / "plugin.json", "0.1.1")
-    write_json(vars_file, marketplace_identity_vars())
-    run("release-init", "--project", str(project), "--tag", "v0.1.1", "--version", "0.1.1")
-    write_json(
-        channel_tree / ".agents" / "plugins" / "marketplace.json",
-        {
-            "name": "old-agent-guard-marketplace",
-            "interface": {"displayName": "Old Agent Guard Marketplace"},
-            "plugins": [],
-        },
-    )
-    write_json(
-        channel_tree / ".claude-plugin" / "marketplace.json",
-        {
-            "name": "my-agent-skills-marketplace",
-            "owner": {"name": "My Agent Skills Marketplace"},
-            "plugins": [],
-        },
-    )
-
-    result = run(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v0.1.1",
-        "--github-vars-file",
-        str(vars_file),
-        "--channel-tree",
-        str(channel_tree),
-    )
-
-    assert result.returncode == 1
-    assert (
-        "marketplace_identity_mismatch: .agents/plugins/marketplace.json /name"
-        in result.stdout
-    )
-    assert "old-agent-guard-marketplace" in result.stdout
-
-
-def test_preflight_skips_drift_detection_when_required_variable_missing(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    channel_tree = tmp_path / "channel"
-    vars_file = tmp_path / "vars.json"
-    write_release_flow_files(
-        project,
-        """version: 1
-
-variables:
-  CODEX_MARKETPLACE_CATALOG_NAME:
-    source: github-actions-variable
-    required: true
-
-transforms:
-  - path: .agents/plugins/marketplace.json
-    type: json-env
-    set:
-      /name: CODEX_MARKETPLACE_CATALOG_NAME
-""",
-    )
-    write_manifest(project / "plugins" / "agent-guard" / ".codex-plugin" / "plugin.json", "0.1.1")
-    write_json(project / ".agents" / "plugins" / "marketplace.json", {"name": "local-dev"})
-    write_json(vars_file, {})
+    write_json(vars_file, {"CODEX_MARKETPLACE_CATALOG_NAME": "agent-guard-marketplace"})
     run("release-init", "--project", str(project), "--tag", "v0.1.1", "--version", "0.1.1")
     channel_tree.mkdir()
 
@@ -893,128 +836,7 @@ transforms:
         str(channel_tree),
     )
 
-    assert result.returncode == 1
-    assert "missing_required_variable: CODEX_MARKETPLACE_CATALOG_NAME" in result.stdout
-    assert "projection_variable_missing" not in result.stdout
-
-
-def test_preflight_uses_git_tracked_files_for_expected_channel_tree(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    channel_tree = tmp_path / "channel"
-    vars_file = tmp_path / "vars.json"
-    write_release_flow_files(
-        project,
-        """version: 1
-
-variables:
-  CODEX_MARKETPLACE_CATALOG_NAME:
-    source: github-actions-variable
-    required: true
-
-transforms:
-  - path: .agents/plugins/marketplace.json
-    type: json-env
-    set:
-      /name: CODEX_MARKETPLACE_CATALOG_NAME
-""",
-    )
-    write_manifest(project / "plugins" / "agent-guard" / ".codex-plugin" / "plugin.json", "0.1.1")
-    write_json(project / ".agents" / "plugins" / "marketplace.json", {"name": "local-dev"})
-    write_json(vars_file, {"CODEX_MARKETPLACE_CATALOG_NAME": "agent-guard-marketplace"})
-    subprocess.run(["git", "-C", str(project), "init"], check=True, capture_output=True, text=True)
-    subprocess.run(["git", "-C", str(project), "add", "."], check=True, capture_output=True, text=True)
-    write_json(project / "untracked-build-output.json", {"generated": True})
-    run("release-init", "--project", str(project), "--tag", "v0.1.1", "--version", "0.1.1")
-    for relative_path in [
-        ".release-flow/config.yaml",
-        ".release-flow/projection.yaml",
-        "plugins/agent-guard/.codex-plugin/plugin.json",
-    ]:
-        source = project / relative_path
-        target = channel_tree / relative_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
-    write_json(
-        channel_tree / ".agents" / "plugins" / "marketplace.json",
-        {"name": "agent-guard-marketplace"},
-    )
-
-    result = run(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v0.1.1",
-        "--github-vars-file",
-        str(vars_file),
-        "--channel-tree",
-        str(channel_tree),
-    )
-
-    assert result.returncode == 0
-    assert "status: preflight_passed" in result.stdout
-    assert "unmanaged_channel_diff" not in result.stdout
-
-
-def test_preflight_rejects_dirty_tracked_files_before_drift_detection(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    channel_tree = tmp_path / "channel"
-    vars_file = tmp_path / "vars.json"
-    write_release_flow_files(
-        project,
-        """version: 1
-
-variables:
-  CODEX_MARKETPLACE_CATALOG_NAME:
-    source: github-actions-variable
-    required: true
-
-transforms:
-  - path: .agents/plugins/marketplace.json
-    type: json-env
-    set:
-      /name: CODEX_MARKETPLACE_CATALOG_NAME
-""",
-    )
-    write_manifest(project / "plugins" / "agent-guard" / ".codex-plugin" / "plugin.json", "0.1.1")
-    write_json(project / ".agents" / "plugins" / "marketplace.json", {"name": "local-dev"})
-    write_json(vars_file, {"CODEX_MARKETPLACE_CATALOG_NAME": "agent-guard-marketplace"})
-    subprocess.run(["git", "-C", str(project), "init"], check=True, capture_output=True, text=True)
-    subprocess.run(["git", "-C", str(project), "config", "user.email", "test@example.com"], check=True)
-    subprocess.run(["git", "-C", str(project), "config", "user.name", "Test"], check=True)
-    subprocess.run(["git", "-C", str(project), "add", "."], check=True, capture_output=True, text=True)
-    subprocess.run(["git", "-C", str(project), "commit", "-m", "baseline"], check=True, capture_output=True, text=True)
-    write_json(project / ".agents" / "plugins" / "marketplace.json", {"name": "dirty-local"})
-    run("release-init", "--project", str(project), "--tag", "v0.1.1", "--version", "0.1.1")
-    for relative_path in [
-        ".release-flow/config.yaml",
-        ".release-flow/projection.yaml",
-        "plugins/agent-guard/.codex-plugin/plugin.json",
-    ]:
-        source = project / relative_path
-        target = channel_tree / relative_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
-    write_json(
-        channel_tree / ".agents" / "plugins" / "marketplace.json",
-        {"name": "agent-guard-marketplace"},
-    )
-
-    result = run(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v0.1.1",
-        "--github-vars-file",
-        str(vars_file),
-        "--channel-tree",
-        str(channel_tree),
-    )
-
-    assert result.returncode == 1
-    assert "dirty_tracked_files:" in result.stdout
-    assert "unmanaged_channel_diff" not in result.stdout
+    assert result.returncode == 2
 
 
 def test_publish_refuses_missing_release_plan(tmp_path: Path) -> None:
@@ -1038,9 +860,11 @@ def test_publish_dry_run_prints_workflow_dispatch_without_git_writes(tmp_path: P
     assert "status: dry_run" in result.stdout
     assert "gh workflow run .github/workflows/release.yml" in result.stdout
     assert "-f version=0.1.1" in result.stdout
-    assert "local_branch: not_created" in result.stdout
-    assert "tag: not_created" in result.stdout
-    assert "push: not_run" in result.stdout
+    assert "release_tag: v0.1.1" in result.stdout
+    assert "local_branch_created: false" in result.stdout
+    assert "git_tag_created: false" in result.stdout
+    assert "push_run: false" in result.stdout
+    assert not any(line.startswith("tag:") for line in result.stdout.splitlines())
 
 
 def test_publish_requires_authorization_without_dry_run(tmp_path: Path) -> None:
@@ -1124,7 +948,7 @@ def test_workflow_template_is_thin_entrypoint() -> None:
     assert "scripts/release-flow" not in template
 
 
-def test_ci_publish_dry_run_applies_projection_without_remote_writes(tmp_path: Path) -> None:
+def test_ci_publish_rejects_dry_run_argument(tmp_path: Path) -> None:
     project = tmp_path / "project"
     vars_file = tmp_path / "vars.json"
     write_release_flow_files(
@@ -1150,21 +974,8 @@ def test_ci_publish_dry_run_applies_projection_without_remote_writes(tmp_path: P
         "--dry-run",
     )
 
-    assert result.returncode == 0
-    assert "status: ci_dry_run" in result.stdout
-    assert "channel_branch: marketplace" in result.stdout
-    assert "tag: v0.1.1" in result.stdout
-    assert "remote_write: not_run" in result.stdout
-    projected_marketplace = tmp_path / "project-projected" / ".agents" / "plugins" / "marketplace.json"
-    assert projected_marketplace.is_file()
-    catalog = json.loads(projected_marketplace.read_text(encoding="utf-8"))
-    assert catalog["name"] == "my-agent-skills-marketplace"
-    assert [plugin["name"] for plugin in catalog["plugins"]] == [
-        "agent-guard",
-        "release-flow",
-        "cross-agent-review",
-        "pr-flow",
-    ]
+    assert result.returncode == 2
+    assert not (tmp_path / "project-projected").exists()
 
 
 def test_ci_publish_rejects_untrusted_release_plan_path(tmp_path: Path) -> None:
@@ -1186,7 +997,7 @@ def test_ci_publish_rejects_untrusted_release_plan_path(tmp_path: Path) -> None:
         str(outside_plan),
         "--vars-file",
         str(vars_file),
-        "--dry-run",
+        "--authorize-ci-publish",
     )
 
     assert result.returncode == 1
@@ -1212,7 +1023,7 @@ def test_ci_publish_rejects_other_project_release_plan_path(tmp_path: Path) -> N
         ".release-flow/releases/v0.1.1/other-plan.json",
         "--vars-file",
         str(vars_file),
-        "--dry-run",
+        "--authorize-ci-publish",
     )
 
     assert result.returncode == 1

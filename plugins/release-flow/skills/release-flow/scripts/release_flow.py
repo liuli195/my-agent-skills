@@ -828,7 +828,6 @@ def run_release_init(args: argparse.Namespace) -> int:
         "channelBranch": config.release_channel_branch,
         "workflowFile": config.workflow_file,
         "projectionRegistry": str(projection.path.relative_to(args.project)).replace("\\", "/"),
-        "dryRun": bool(args.dry_run),
     }
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -951,30 +950,6 @@ def git_tracked_files(project: Path) -> list[Path] | None:
     ]
 
 
-def dirty_tracked_files(project: Path) -> list[str] | None:
-    head = subprocess.run(
-        ["git", "-C", str(project), "rev-parse", "--verify", "HEAD"],
-        check=False,
-        capture_output=True,
-    )
-    if head.returncode != 0:
-        return []
-    result = subprocess.run(
-        ["git", "-C", str(project), "status", "--porcelain", "--untracked-files=no"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return None
-    dirty_files: list[str] = []
-    for line in result.stdout.splitlines():
-        if len(line) < 4:
-            continue
-        dirty_files.append(line[3:].strip())
-    return dirty_files
-
-
 def copy_tracked_project_for_expected(source: Path, target: Path, tracked_files: list[Path]) -> None:
     target.mkdir(parents=True, exist_ok=True)
     for relative_path in tracked_files:
@@ -1003,35 +978,6 @@ def copy_project_for_expected(source: Path, target: Path) -> None:
     shutil.copytree(source, target, ignore=ignore)
 
 
-def tree_file_paths(root: Path) -> set[str]:
-    if not root.exists():
-        return set()
-    ignored_parts = {".git", "__pycache__", ".pytest_cache"}
-    paths: set[str] = set()
-    for path in root.rglob("*"):
-        relative = path.relative_to(root)
-        if ignored_expected_path(relative):
-            continue
-        if path.is_file():
-            paths.add(relative.as_posix())
-    return paths
-
-
-def unmanaged_channel_diffs(expected_tree: Path, channel_tree: Path) -> list[str]:
-    expected_paths = tree_file_paths(expected_tree)
-    channel_paths = tree_file_paths(channel_tree)
-    diffs: list[str] = []
-    for relative_path in sorted(expected_paths | channel_paths):
-        expected_path = expected_tree / relative_path
-        channel_path = channel_tree / relative_path
-        if relative_path not in expected_paths or relative_path not in channel_paths:
-            diffs.append(relative_path)
-            continue
-        if expected_path.read_bytes() != channel_path.read_bytes():
-            diffs.append(relative_path)
-    return diffs
-
-
 def preflight_errors(
     project: Path,
     tag: str,
@@ -1039,7 +985,6 @@ def preflight_errors(
     projection: Projection,
     plan: dict[str, Any],
     vars_data: dict[str, Any],
-    channel_tree: Path | None,
 ) -> tuple[list[str], dict[str, Any]]:
     errors: list[str] = []
     expected_version = tag_version(tag)
@@ -1080,28 +1025,15 @@ def preflight_errors(
     except ValueError as exc:
         errors.append(str(exc))
 
-    channel_diffs: list[str] = []
-    if channel_tree is not None and not errors:
-        dirty_files = dirty_tracked_files(project)
-        if dirty_files:
-            errors.append(f"dirty_tracked_files: {', '.join(dirty_files)}")
-
-    if channel_tree is not None and not errors:
+    if not errors:
         with tempfile.TemporaryDirectory(prefix="release-flow-preflight-") as temp_dir:
             expected_tree = Path(temp_dir) / "expected"
             copy_project_for_expected(project, expected_tree)
             expected_projection = read_projection(expected_tree)
             apply_projection(expected_tree, expected_projection, vars_data)
-            identity_errors = [
-                *marketplace_identity_errors(expected_tree, expected_projection),
-                *marketplace_identity_errors(channel_tree, expected_projection),
-            ]
+            identity_errors = marketplace_identity_errors(expected_tree, expected_projection)
             if identity_errors:
                 errors.extend(identity_errors)
-            else:
-                channel_diffs = unmanaged_channel_diffs(expected_tree, channel_tree)
-        for diff in channel_diffs:
-            errors.append(f"unmanaged_channel_diff: {diff}")
 
     report = {
         "tag": tag,
@@ -1112,7 +1044,6 @@ def preflight_errors(
             "manifests": versions,
             "mismatchedManifests": mismatched_manifests,
         },
-        "channel": {"unmanagedDiffs": channel_diffs},
     }
     return errors, report
 
@@ -1133,7 +1064,6 @@ def run_preflight(args: argparse.Namespace) -> int:
             projection,
             plan,
             vars_data,
-            args.channel_tree,
         )
     except ValueError as exc:
         print("status: issues")
@@ -1185,11 +1115,11 @@ def run_publish(args: argparse.Namespace) -> int:
     command = workflow_dispatch_command(config, args.tag, plan_version)
     if args.dry_run:
         print("status: dry_run")
-        print(f"tag: {plan.get('tag', args.tag)}")
+        print(f"release_tag: {plan.get('tag', args.tag)}")
         print(f"workflow_dispatch: {command}")
-        print("local_branch: not_created")
-        print("tag: not_created")
-        print("push: not_run")
+        print("local_branch_created: false")
+        print("git_tag_created: false")
+        print("push_run: false")
         return 0
 
     result = subprocess.run(command.split(), check=False, text=True)
@@ -1261,13 +1191,6 @@ def resolve_release_plan_arg(project: Path, config: FlowConfig, tag: str, releas
     return resolved_path
 
 
-def copy_project_for_ci_publish(source: Path, target: Path) -> None:
-    def ignore(directory: str, names: list[str]) -> set[str]:
-        return {name for name in names if name in {".git", "__pycache__", ".pytest_cache"}}
-
-    shutil.copytree(source, target, ignore=ignore)
-
-
 def run_checked(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     resolved_command = list(command)
     if command and command[0] == "gh":
@@ -1322,7 +1245,7 @@ def run_ci_publish_remote(project: Path, config: FlowConfig, projection: Project
 
 
 def run_ci_publish(args: argparse.Namespace) -> int:
-    if not args.dry_run and not args.authorize_ci_publish:
+    if not args.authorize_ci_publish:
         print("status: issues")
         print("error: ci_publish_requires_authorize_ci_publish")
         return 2
@@ -1345,29 +1268,6 @@ def run_ci_publish(args: argparse.Namespace) -> int:
         print("status: issues")
         print(f"error: release_plan_tag_mismatch: {args.tag}")
         return 1
-
-    if args.dry_run:
-        projected_project = args.project.parent / f"{args.project.name}-projected"
-        if projected_project.exists():
-            print("status: issues")
-            print(f"error: projected_directory_exists: {projected_project}")
-            return 1
-
-        try:
-            copy_project_for_ci_publish(args.project, projected_project)
-            projected_projection = read_projection(projected_project)
-            apply_projection(projected_project, projected_projection, vars_data)
-        except ValueError as exc:
-            print("status: issues")
-            print(f"error: {exc}")
-            return 1
-
-        print("status: ci_dry_run")
-        print(f"projected_project: {projected_project}")
-        print(f"channel_branch: {config.release_channel_branch}")
-        print(f"tag: {args.tag}")
-        print("remote_write: not_run")
-        return 0
 
     try:
         run_ci_publish_remote(args.project, config, projection, args.tag, vars_data)
@@ -1404,13 +1304,11 @@ def build_parser() -> argparse.ArgumentParser:
     release_init.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
     release_init.add_argument("--tag", required=True, help="发布标签。")
     release_init.add_argument("--version", required=True, help="发布版本。")
-    release_init.add_argument("--dry-run", action="store_true", help="标记 release plan 为 dry run。")
     release_init.add_argument("--replace", action="store_true", help="覆盖已有 release plan。")
     preflight = subparsers.add_parser("preflight", help="执行 release-flow 发布前检查。")
     preflight.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
     preflight.add_argument("--tag", required=True, help="发布标签。")
     preflight.add_argument("--github-vars-file", type=Path, help="GitHub Actions variables JSON 文件。")
-    preflight.add_argument("--channel-tree", type=Path, help="本地 channel tree 目录。")
     publish = subparsers.add_parser("publish", help="触发 GitHub release workflow。")
     publish.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
     publish.add_argument("--tag", required=True, help="发布标签。")
@@ -1425,7 +1323,6 @@ def build_parser() -> argparse.ArgumentParser:
     ci_publish.add_argument("--tag", required=True, help="发布标签。")
     ci_publish.add_argument("--release-plan", type=Path, required=True, help="release plan 路径。")
     ci_publish.add_argument("--vars-file", type=Path, required=True, help="变量 JSON 文件。")
-    ci_publish.add_argument("--dry-run", action="store_true", help="只执行本地 projection 演练。")
     ci_publish.add_argument("--authorize-ci-publish", action="store_true", help="授权 CI 远端写入。")
     return parser
 
