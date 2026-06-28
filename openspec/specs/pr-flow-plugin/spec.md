@@ -285,7 +285,7 @@ PR Flow（拉取请求流程）MUST preserve the boundary between default fast v
 - **WHEN** 配置声明 required checks（必需检查）意图
 - **THEN** validate（校验）MUST 输出 GitHub Rulesets（GitHub 规则集）远端待办
 - **WHEN** 配置声明 merge strategy（合并方式）
-- **THEN** validate（校验）MUST 输出对应 merge method（合并方式）需要在 GitHub（代码托管平台）启用的建议
+- **THEN** validate（校验）MUST 输出对应 merge method（合并方式）需要在 GitHub（代码托管平台）启用的远端待办
 - **WHEN** 配置启用 auto-delete head branch（自动删除源分支）意图
 - **THEN** validate（校验）MUST 输出 cleanup（清理）职责重叠 warning（警告）
 
