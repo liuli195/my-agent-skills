@@ -111,11 +111,26 @@ def setup_github_from_config(config: dict[str, Any]) -> dict[str, Any]:
     return github if isinstance(github, dict) else {}
 
 
+def has_codeql_workflow(project: Path) -> bool:
+    workflows = project / ".github" / "workflows"
+    if not workflows.is_dir():
+        return False
+    for path in workflows.iterdir():
+        if path.suffix.lower() not in {".yml", ".yaml"}:
+            continue
+        try:
+            if "codeql-action" in path.read_text(encoding="utf-8").lower():
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def positive_int(value: Any) -> bool:
     return isinstance(value, int) and value > 0
 
 
-def validate_config(config: dict[str, Any]) -> list[dict[str, str]]:
+def validate_config(config: dict[str, Any], project: Path | None = None) -> list[dict[str, str]]:
     issues: list[dict[str, str]] = []
     if not isinstance(config, dict):
         add_issue(issues, "error", "config must be a mapping")
@@ -157,6 +172,10 @@ def validate_config(config: dict[str, Any]) -> list[dict[str, str]]:
     github = setup_github_from_config(config)
     if github.get("requiredChecks"):
         add_issue(issues, "remote task", "configure GitHub Rulesets required checks")
+    if github.get("codeScanning"):
+        add_issue(issues, "remote task", "configure GitHub Rulesets CodeQL code scanning")
+        if project is not None and not has_codeql_workflow(project):
+            add_issue(issues, "remote task", "create or enable CodeQL scan producer")
     if github.get("requiredReview") is True or github.get("requiredReviews") is True:
         add_issue(issues, "remote task", "tweak cannot bypass GitHub required review")
     if github.get("autoDeleteHeadBranch") is True:
@@ -454,6 +473,35 @@ def gh_pr_not_found(result: subprocess.CompletedProcess[str]) -> bool:
     return "no pull request" in text or "no pull requests" in text
 
 
+def gh_pr_merge_policy_blocked(result: subprocess.CompletedProcess[str]) -> bool:
+    text = f"{result.stdout}\n{result.stderr}".lower()
+    return "base branch policy prohibits the merge" in text
+
+
+def missing_upstream_state(project: Path, config: dict[str, Any]) -> dict[str, Any] | None:
+    base_branch = base_branch_from_config(config)
+    branch_result = git(project, "branch", "--show-current")
+    if branch_result.returncode != 0 or not branch_result.stdout.strip():
+        details = command_failure_details("git_current_branch_failed", branch_result)
+        return stop_state("EXCEPTION_REQUIRED", details["reason"], details)
+    branch = branch_result.stdout.strip()
+
+    upstream_result = git(project, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    if upstream_result.returncode == 0 or branch == base_branch:
+        return None
+
+    remote = remote_for_base_branch(config, base_branch)
+    details = command_failure_details("missing_upstream", upstream_result)
+    details.update(
+        {
+            "branch": branch,
+            "baseBranch": base_branch,
+            "nextCommand": f"git push -u {remote} {branch}",
+        }
+    )
+    return stop_state("PUSH_REQUIRED", "push current branch before continuing", details)
+
+
 def find_pr(project: Path) -> dict[str, Any] | None:
     result = gh(project, "pr", "view", "--json", PR_VIEW_FIELDS)
     if result.returncode != 0:
@@ -609,6 +657,9 @@ def merge_pr(project: Path, config: dict[str, Any], pr: dict[str, Any]) -> dict[
                 "mergeStrategy": defaults_from_config(config).get("mergeStrategy", "merge"),
             }
         )
+        if gh_pr_merge_policy_blocked(result):
+            details["reason"] = "ruleset_merge_blocking"
+            raise PrFlowError("ruleset_merge_blocking", details)
         raise PrFlowError("gh_pr_merge_failed", details)
     return None
 
@@ -776,7 +827,7 @@ def run_init(args: argparse.Namespace) -> int:
 
     config, issues = load_config_path_for_validation(args.config)
     if not issues:
-        issues = validate_config(config)
+        issues = validate_config(config, args.project)
     if validation_has_errors(issues):
         print("status: validation_failed")
         for issue in issues:
@@ -801,7 +852,7 @@ def run_init(args: argparse.Namespace) -> int:
 def run_validate(args: argparse.Namespace) -> int:
     config, issues = load_config_path_for_validation(args.config)
     if not issues:
-        issues = validate_config(config)
+        issues = validate_config(config, args.project)
     if validation_has_errors(issues):
         print("status: validation_failed")
     else:
@@ -858,6 +909,10 @@ def run_diagnose(args: argparse.Namespace) -> int:
     }
     if pr_result.returncode != 0:
         gh_details.update(command_failure_details("gh_pr_view_failed", pr_result))
+        if gh_pr_not_found(pr_result) and branch != base_branch:
+            gh_details["reason"] = "pr_missing"
+            gh_details["nextCommand"] = "complete"
+            return stop(project, args.command, "DISPATCH_REQUIRED", "pr_missing", gh_details)
         return stop(project, args.command, "EXCEPTION_REQUIRED", "gh_pr_view_failed", gh_details)
 
     try:
@@ -911,6 +966,9 @@ def run_lifecycle(
     try:
         pr = find_pr(project)
         if pr is None:
+            push_stop = missing_upstream_state(project, config)
+            if push_stop is not None:
+                return stop_from_state(project, command, push_stop)
             pr = create_pr(project, config)
         pr = sync_pr(project, pr)
         if before_checks is not None:
@@ -944,6 +1002,8 @@ def run_lifecycle(
     try:
         merge_pr(project, config, pr)
     except PrFlowError as exc:
+        if exc.reason == "ruleset_merge_blocking":
+            return stop(project, command, "DISPATCH_REQUIRED", exc.reason, exc.details)
         return stop(project, command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
 
     print("status: merge_complete")

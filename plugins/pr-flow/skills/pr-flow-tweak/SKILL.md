@@ -16,5 +16,5 @@ description: "PR Flow（拉取请求流程）tweak（小改）路径，用于非
 ## 命令
 
 ```bash
-python ../pr-flow/scripts/pr_flow.py tweak --project /path/to/project --reason "small docs polish"
+python plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py tweak --project /path/to/project --reason "small docs polish"
 ```

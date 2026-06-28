@@ -16,5 +16,5 @@ authorization phrase（授权短语）只是“我确认”的替代，不是权
 ## 命令
 
 ```bash
-python ../pr-flow/scripts/pr_flow.py hotfix --project . --target main --authorization-phrase <phrase>
+python plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py hotfix --project . --target main --authorization-phrase <phrase>
 ```

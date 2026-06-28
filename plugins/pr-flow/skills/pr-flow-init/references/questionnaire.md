@@ -86,11 +86,11 @@ agent（代理）必须按本文件执行，不能临场编造问题。现有 `.
 固定问题：是否启用 CodeQL security check（CodeQL 安全检查）？
 
 固定选项：
-- 开启：在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果），选择 `CodeQL` 作为 code scanning tool（代码扫描工具），阈值采用 GitHub 默认阈值。
+- 开启：在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果），选择 `CodeQL` 作为 code scanning tool（代码扫描工具），阈值采用 GitHub 默认阈值，并创建或启用 CodeQL scan producer（CodeQL 扫描结果来源）。
 - 不开启：不生成 CodeQL（代码扫描工具）远端待办。
 
 选择后果：
-- 开启：只写入 `setup.github`（GitHub 配置建议）remote task（远端待办），不自动写 GitHub（代码托管平台）远端。
+- 开启：只写入 `setup.github`（GitHub 配置建议）remote task（远端待办），包含 Rulesets rule（规则集规则）和 CodeQL scan producer（CodeQL 扫描结果来源），不自动写 GitHub（代码托管平台）远端。
 - 不开启：不写 CodeQL（代码扫描工具）远端待办。
 
 跳转规则：继续 hotfix（热修复）场景。
