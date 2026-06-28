@@ -56,6 +56,8 @@ agent（代理）必须按本文件执行，不能临场编造问题。现有 `.
 - 远端待办必须写成创建或更新 branch ruleset（分支规则集）。
 - 远端待办必须启用 `Require a pull request before merging`（合并前要求拉取请求）。
 - 默认写明 `required_approving_review_count: 0`，表示要求通过 PR（拉取请求）修改受保护分支，但不强制 approving review（批准审查）。
+- 远端待办必须默认启用 `Restrict deletions`（限制删除）。
+- 远端待办必须默认启用 `Block force pushes`（阻止强制推送）。
 
 跳转规则：继续 PR status checks（拉取请求状态检查）场景。
 

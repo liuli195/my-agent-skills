@@ -1273,6 +1273,10 @@ def test_pr_flow_init_questionnaire_uses_latest_flow() -> None:
     assert "暂不配置远端保护" in branch_protection_section
     assert "不得派生 `defaults.reviewGate.mode: github`" in branch_protection_section
     assert "从 automatic inspection（自动检查）得到的 remote branches（远端分支）逐项列出" in branch_protection_section
+    assert "Restrict deletions" in branch_protection_section
+    assert "限制删除" in branch_protection_section
+    assert "Block force pushes" in branch_protection_section
+    assert "阻止强制推送" in branch_protection_section
     assert "发布分支" not in branch_protection_section
     pr_status_section = questionnaire.split("## 场景：PR status checks", 1)[1].split("## 场景：CodeQL security check", 1)[0]
     assert "每个 check name（检查名称）必须附带用途说明" in pr_status_section
