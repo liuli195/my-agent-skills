@@ -7,51 +7,8 @@ identity:
   claude:
     marketplaceName: my-agent-skills-marketplace
     ownerName: My Agent Skills Marketplace
-  releaseFlowPlugin:
-    repositoryVariable: RELEASE_FLOW_PLUGIN_REPOSITORY
-    refVariable: RELEASE_FLOW_PLUGIN_REF
 
-variables:
-  CODEX_MARKETPLACE_CATALOG_NAME:
-    source: github-actions-variable
-    required: true
-    sensitive: false
-    description: Codex marketplace catalog name for the latest channel
-    expected: identity.codex.marketplaceName
-    example: my-agent-skills-marketplace
-  CODEX_MARKETPLACE_DISPLAY_NAME:
-    source: github-actions-variable
-    required: true
-    sensitive: false
-    description: Codex marketplace display name for the latest channel
-    expected: identity.codex.displayName
-    example: My Agent Skills Marketplace
-  CLAUDE_MARKETPLACE_CATALOG_NAME:
-    source: github-actions-variable
-    required: true
-    sensitive: false
-    description: Claude marketplace catalog name for the latest channel
-    expected: identity.claude.marketplaceName
-    example: my-agent-skills-marketplace
-  CLAUDE_MARKETPLACE_OWNER_NAME:
-    source: github-actions-variable
-    required: true
-    sensitive: false
-    description: Claude marketplace owner name for the latest channel
-    expected: identity.claude.ownerName
-    example: My Agent Skills Marketplace
-  RELEASE_FLOW_PLUGIN_REPOSITORY:
-    source: github-actions-variable
-    required: true
-    sensitive: false
-    description: GitHub repository used by workflow checkout for release-flow plugin
-    example: liuli/my-agent-skills
-  RELEASE_FLOW_PLUGIN_REF:
-    source: github-actions-variable
-    required: true
-    sensitive: false
-    description: Git ref used by workflow checkout for release-flow plugin
-    example: main
+variables: {}
 
 generators:
   - path: .agents/plugins/marketplace.json
@@ -65,10 +22,10 @@ transforms:
   - path: .agents/plugins/marketplace.json
     type: json-env
     set:
-      /name: CODEX_MARKETPLACE_CATALOG_NAME
-      /interface/displayName: CODEX_MARKETPLACE_DISPLAY_NAME
+      /name: identity.codex.marketplaceName
+      /interface/displayName: identity.codex.displayName
   - path: .claude-plugin/marketplace.json
     type: json-env
     set:
-      /name: CLAUDE_MARKETPLACE_CATALOG_NAME
-      /owner/name: CLAUDE_MARKETPLACE_OWNER_NAME
+      /name: identity.claude.marketplaceName
+      /owner/name: identity.claude.ownerName

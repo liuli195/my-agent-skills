@@ -74,16 +74,9 @@ class ProjectionClaudeIdentity:
 
 
 @dataclass(frozen=True)
-class ProjectionReleaseFlowPluginIdentity:
-    repository_variable: str
-    ref_variable: str
-
-
-@dataclass(frozen=True)
 class ProjectionIdentity:
     codex: ProjectionCodexIdentity
     claude: ProjectionClaudeIdentity
-    release_flow_plugin: ProjectionReleaseFlowPluginIdentity
 
 
 @dataclass(frozen=True)
@@ -246,9 +239,8 @@ def read_projection_identity(data: dict[str, Any]) -> ProjectionIdentity | None:
     claude_data = identity_data.get("claude")
     if not isinstance(claude_data, dict):
         raise ValueError("projection_identity_claude_invalid")
-    release_flow_plugin_data = identity_data.get("releaseFlowPlugin")
-    if not isinstance(release_flow_plugin_data, dict):
-        raise ValueError("projection_identity_release_flow_plugin_invalid")
+    if "releaseFlowPlugin" in identity_data:
+        raise ValueError("projection_identity_release_flow_plugin_unsupported")
 
     return ProjectionIdentity(
         codex=ProjectionCodexIdentity(
@@ -273,18 +265,6 @@ def read_projection_identity(data: dict[str, Any]) -> ProjectionIdentity | None:
                 claude_data,
                 "ownerName",
                 "projection_identity_missing: identity.claude.ownerName",
-            ),
-        ),
-        release_flow_plugin=ProjectionReleaseFlowPluginIdentity(
-            repository_variable=require_string(
-                release_flow_plugin_data,
-                "repositoryVariable",
-                "projection_identity_missing: identity.releaseFlowPlugin.repositoryVariable",
-            ),
-            ref_variable=require_string(
-                release_flow_plugin_data,
-                "refVariable",
-                "projection_identity_missing: identity.releaseFlowPlugin.refVariable",
             ),
         ),
     )
@@ -398,10 +378,6 @@ def projection_identity_value(projection: Projection, reference: str) -> str:
         "identity.codex.displayName": projection.identity.codex.display_name,
         "identity.claude.marketplaceName": projection.identity.claude.marketplace_name,
         "identity.claude.ownerName": projection.identity.claude.owner_name,
-        "identity.releaseFlowPlugin.repositoryVariable": (
-            projection.identity.release_flow_plugin.repository_variable
-        ),
-        "identity.releaseFlowPlugin.refVariable": projection.identity.release_flow_plugin.ref_variable,
     }
     try:
         return values[reference]
@@ -418,28 +394,6 @@ def expected_variable_value(projection: Projection, variable: ProjectionVariable
     return projection_identity_value(projection, expected)
 
 
-def required_github_variable_details(projection: Projection) -> list[ProjectionVariable]:
-    return [
-        variable
-        for variable in projection.variables.values()
-        if variable.source == SUPPORTED_VARIABLE_SOURCE and variable.required
-    ]
-
-
-def projection_identity_variable_errors(
-    projection: Projection, variable_name: str
-) -> list[str]:
-    variable = projection.variables.get(variable_name)
-    if variable is None:
-        return [f"projection_identity_variable_missing: {variable_name}"]
-    errors: list[str] = []
-    if variable.source != SUPPORTED_VARIABLE_SOURCE:
-        errors.append(f"projection_identity_variable_source_unsupported: {variable_name}")
-    if not variable.required:
-        errors.append(f"projection_identity_variable_not_required: {variable_name}")
-    return errors
-
-
 def projection_errors(projection: Projection) -> list[str]:
     errors: list[str] = []
     for variable in projection.variables.values():
@@ -452,19 +406,6 @@ def projection_errors(projection: Projection) -> list[str]:
                 expected_variable_value(projection, variable)
             except ValueError as exc:
                 errors.append(str(exc))
-    if projection.identity is not None:
-        errors.extend(
-            projection_identity_variable_errors(
-                projection,
-                projection.identity.release_flow_plugin.repository_variable,
-            )
-        )
-        errors.extend(
-            projection_identity_variable_errors(
-                projection,
-                projection.identity.release_flow_plugin.ref_variable,
-            )
-        )
     for generator in projection.generators:
         if generator.type != SUPPORTED_GENERATOR_TYPE:
             errors.append(f"projection_generator_type_unsupported: {generator.path}")
@@ -478,9 +419,11 @@ def projection_errors(projection: Projection) -> list[str]:
     for transform in projection.transforms:
         if transform.type != SUPPORTED_TRANSFORM_TYPE:
             errors.append(f"projection_transform_type_unsupported: {transform.path}")
-        for pointer, variable_name in transform.set.items():
-            if variable_name not in projection.variables:
-                errors.append(f"projection_transform_variable_unknown: {variable_name}")
+        for pointer, reference in transform.set.items():
+            try:
+                projection_identity_value(projection, reference)
+            except ValueError as exc:
+                errors.append(str(exc))
             if not pointer.startswith("/"):
                 errors.append(f"projection_transform_pointer_invalid: {pointer}")
     return errors
@@ -632,13 +575,11 @@ def apply_projection_generator(
     target_path.write_text(json.dumps(target, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def apply_json_env_transform(project: Path, transform: ProjectionTransform, vars_data: dict[str, Any]) -> None:
+def apply_json_env_transform(project: Path, projection: Projection, transform: ProjectionTransform) -> None:
     target_path = resolve_project_path(project, transform.path, "invalid_projection_transform_path")
     target = read_json_mapping(target_path)
-    for pointer, variable_name in transform.set.items():
-        if variable_name not in vars_data:
-            raise ValueError(f"projection_variable_missing: {variable_name}")
-        set_json_pointer(target, pointer, vars_data[variable_name])
+    for pointer, reference in transform.set.items():
+        set_json_pointer(target, pointer, projection_identity_value(projection, reference))
     target_path.write_text(json.dumps(target, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
@@ -651,8 +592,7 @@ def run_project(args: argparse.Namespace) -> int:
         return 1
     try:
         projection = read_projection(args.project)
-        vars_data = read_json_mapping(args.vars_file)
-        apply_projection(args.project, projection, vars_data)
+        apply_projection(args.project, projection)
     except ValueError as exc:
         print("status: issues")
         print(f"error: {exc}")
@@ -694,17 +634,6 @@ def run_github_plan(args: argparse.Namespace) -> int:
     print(f"actions_workflow_permissions: {workflow_permissions}")
     print(f"rulesets: {'required' if rulesets_enabled else 'not_required'}")
     print(f"branch_protection_fallback: {str(bool(branch_protection_fallback)).lower()}")
-    print("actions_variables:")
-    for variable in projection.variables.values():
-        if variable.source == SUPPORTED_VARIABLE_SOURCE:
-            print(f"  - {variable.name}")
-            print(f"    required: {str(variable.required).lower()}")
-            description = variable.raw.get("description")
-            if isinstance(description, str):
-                print(f"    description: {description}")
-            expected = variable.raw.get("expected")
-            if isinstance(expected, str):
-                print(f"    expected: {expected}")
     return 0
 
 
@@ -729,12 +658,6 @@ def run_configure_github(args: argparse.Namespace) -> int:
         config, ["actions", "workflowPermissions"], "read-and-write"
     )
     rulesets_enabled = github_config_value(config, ["rulesets", "enabled"], True)
-    variables = [
-        variable
-        for variable in projection.variables.values()
-        if variable.source == SUPPORTED_VARIABLE_SOURCE
-    ]
-
     if args.dry_run:
         print("status: manual_steps")
         print(f"project: {args.project}")
@@ -743,18 +666,6 @@ def run_configure_github(args: argparse.Namespace) -> int:
             print("Create Rulesets for main, marketplace, and tags")
         else:
             print("Rulesets are disabled in release-flow config")
-        print("Create GitHub Actions Variables")
-        for variable in variables:
-            print(f"  - {variable.name}")
-            print(f"    required: {str(variable.required).lower()}")
-            description = variable.raw.get("description")
-            if isinstance(description, str):
-                print(f"    description: {description}")
-            expected = variable.raw.get("expected")
-            if isinstance(expected, str):
-                print(f"    expected: {expected}")
-            if variable.required:
-                print(f"Set GitHub Actions Variable {variable.name}")
         return 0
 
     print("status: issues")
@@ -837,50 +748,11 @@ def run_release_init(args: argparse.Namespace) -> int:
     return 0
 
 
-def required_github_variables(projection: Projection) -> list[str]:
-    return [variable.name for variable in required_github_variable_details(projection)]
-
-
-def apply_projection(project: Path, projection: Projection, vars_data: dict[str, Any]) -> None:
+def apply_projection(project: Path, projection: Projection) -> None:
     for generator in projection.generators:
         apply_projection_generator(project, projection, generator)
     for transform in projection.transforms:
-        apply_json_env_transform(project, transform, vars_data)
-
-
-def required_variable_report(
-    projection: Projection, vars_data: dict[str, Any]
-) -> list[dict[str, Any]]:
-    report: list[dict[str, Any]] = []
-    for variable in required_github_variable_details(projection):
-        expected_reference = variable.raw.get("expected")
-        expected_value = expected_variable_value(projection, variable)
-        item: dict[str, Any] = {
-            "name": variable.name,
-            "description": variable.raw.get("description", ""),
-            "expected": expected_reference if isinstance(expected_reference, str) else None,
-            "expectedValue": expected_value,
-            "manualStep": f"Set GitHub Actions Variable {variable.name}",
-            "present": variable.name in vars_data,
-        }
-        report.append(item)
-    return report
-
-
-def identity_variable_errors(projection: Projection, vars_data: dict[str, Any]) -> list[str]:
-    errors: list[str] = []
-    for variable in projection.variables.values():
-        if variable.name not in vars_data:
-            continue
-        expected_value = expected_variable_value(projection, variable)
-        if expected_value is None:
-            continue
-        actual_value = str(vars_data[variable.name])
-        if actual_value != expected_value:
-            errors.append(f"identity_variable_mismatch: {variable.name}")
-            errors.append(f"expected: {expected_value}")
-            errors.append(f"actual: {actual_value}")
-    return errors
+        apply_json_env_transform(project, projection, transform)
 
 
 def marketplace_identity_value(data: dict[str, Any], pointer: str) -> Any:
@@ -984,29 +856,9 @@ def preflight_errors(
     config: FlowConfig,
     projection: Projection,
     plan: dict[str, Any],
-    vars_data: dict[str, Any],
 ) -> tuple[list[str], dict[str, Any]]:
     errors: list[str] = []
     expected_version = tag_version(tag)
-    missing_variables = [
-        variable_name
-        for variable_name in required_github_variables(projection)
-        if variable_name not in vars_data
-    ]
-    required_variables = required_variable_report(projection, vars_data)
-    required_variables_by_name = {item["name"]: item for item in required_variables}
-    for variable_name in missing_variables:
-        errors.append(f"missing_required_variable: {variable_name}")
-        variable_report = required_variables_by_name.get(variable_name, {})
-        description = variable_report.get("description")
-        if description:
-            errors.append(f"variable_description: {description}")
-        manual_step = variable_report.get("manualStep")
-        if manual_step:
-            errors.append(f"manual_step: {manual_step}")
-
-    if not missing_variables:
-        errors.extend(identity_variable_errors(projection, vars_data))
 
     plan_version = plan.get("version")
     if plan.get("tag") != tag:
@@ -1030,14 +882,13 @@ def preflight_errors(
             expected_tree = Path(temp_dir) / "expected"
             copy_project_for_expected(project, expected_tree)
             expected_projection = read_projection(expected_tree)
-            apply_projection(expected_tree, expected_projection, vars_data)
+            apply_projection(expected_tree, expected_projection)
             identity_errors = marketplace_identity_errors(expected_tree, expected_projection)
             if identity_errors:
                 errors.extend(identity_errors)
 
     report = {
         "tag": tag,
-        "variables": {"missing": missing_variables, "required": required_variables},
         "version": {
             "expected": expected_version,
             "releasePlan": plan_version,
@@ -1056,14 +907,12 @@ def run_preflight(args: argparse.Namespace) -> int:
         if errors:
             raise ValueError(errors[0])
         plan = read_release_plan(args.project, config, args.tag)
-        vars_data = read_json_mapping(args.github_vars_file) if args.github_vars_file else {}
         errors, report = preflight_errors(
             args.project,
             args.tag,
             config,
             projection,
             plan,
-            vars_data,
         )
     except ValueError as exc:
         print("status: issues")
@@ -1087,7 +936,7 @@ def workflow_dispatch_command(config: FlowConfig, tag: str, version: str) -> str
     validate_release_tag(tag)
     release_plan = f".release-flow/releases/{tag}/release-plan.json"
     return (
-        f"gh workflow run {config.workflow_file} -f tag={tag} "
+        f"gh workflow run {config.workflow_file} --ref {config.release_source_ref} -f tag={tag} "
         f"-f version={version} -f releasePlan={release_plan}"
     )
 
@@ -1218,7 +1067,7 @@ def release_branch_name(tag: str) -> str:
     return f"release-flow-{safe_tag}"
 
 
-def run_ci_publish_remote(project: Path, config: FlowConfig, projection: Projection, tag: str, vars_data: dict[str, Any]) -> None:
+def run_ci_publish_remote(project: Path, config: FlowConfig, projection: Projection, tag: str) -> None:
     branch_name = release_branch_name(tag)
     run_checked(["git", "config", "user.name", "github-actions[bot]"], project)
     run_checked(
@@ -1232,7 +1081,7 @@ def run_ci_publish_remote(project: Path, config: FlowConfig, projection: Project
     )
     run_checked(["git", "checkout", "--orphan", branch_name], project)
     shutil.rmtree(project / ".release-flow" / "releases", ignore_errors=True)
-    apply_projection(project, projection, vars_data)
+    apply_projection(project, projection)
     run_checked(["git", "add", "-A"], project)
     run_checked(["git", "commit", "-m", f"release: {tag}"], project)
     run_checked(
@@ -1258,7 +1107,6 @@ def run_ci_publish(args: argparse.Namespace) -> int:
             raise ValueError(errors[0])
         release_plan_path_arg = resolve_release_plan_arg(args.project, config, args.tag, args.release_plan)
         plan = read_json_mapping(release_plan_path_arg)
-        vars_data = read_json_mapping(args.vars_file)
     except ValueError as exc:
         print("status: issues")
         print(f"error: {exc}")
@@ -1270,7 +1118,7 @@ def run_ci_publish(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        run_ci_publish_remote(args.project, config, projection, args.tag, vars_data)
+        run_ci_publish_remote(args.project, config, projection, args.tag)
     except ValueError as exc:
         print("status: issues")
         print(f"error: {exc}")
@@ -1293,7 +1141,6 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
     project = subparsers.add_parser("project", help="应用 release-flow projection。")
     project.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
-    project.add_argument("--vars-file", type=Path, required=True, help="变量 JSON 文件。")
     github_plan = subparsers.add_parser("github-plan", help="输出 GitHub release-flow 配置计划。")
     github_plan.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
     configure_github = subparsers.add_parser("configure-github", help="输出或执行 GitHub release-flow 配置。")
@@ -1308,7 +1155,6 @@ def build_parser() -> argparse.ArgumentParser:
     preflight = subparsers.add_parser("preflight", help="执行 release-flow 发布前检查。")
     preflight.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
     preflight.add_argument("--tag", required=True, help="发布标签。")
-    preflight.add_argument("--github-vars-file", type=Path, help="GitHub Actions variables JSON 文件。")
     publish = subparsers.add_parser("publish", help="触发 GitHub release workflow。")
     publish.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
     publish.add_argument("--tag", required=True, help="发布标签。")
@@ -1322,7 +1168,6 @@ def build_parser() -> argparse.ArgumentParser:
     ci_publish.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
     ci_publish.add_argument("--tag", required=True, help="发布标签。")
     ci_publish.add_argument("--release-plan", type=Path, required=True, help="release plan 路径。")
-    ci_publish.add_argument("--vars-file", type=Path, required=True, help="变量 JSON 文件。")
     ci_publish.add_argument("--authorize-ci-publish", action="store_true", help="授权 CI 远端写入。")
     return parser
 
