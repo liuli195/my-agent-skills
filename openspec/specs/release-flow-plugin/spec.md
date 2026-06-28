@@ -82,13 +82,21 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 - **WHEN** projection 声明 transforms（转换）
 - **THEN** transform MUST 声明目标文件路径
 - **THEN** transform type MUST 支持 `json-env`
-- **THEN** transform MUST 使用 JSON Pointer（JSON 指针）声明字段路径到变量名的映射
+- **THEN** transform MUST 使用 JSON Pointer（JSON 指针）声明字段路径到 projection identity（投影身份）引用的映射
 
-#### Scenario: 变量值托管到 GitHub
+#### Scenario: 非敏感发布身份来自 projection
 
-- **WHEN** 发布流程需要变量值
-- **THEN** 变量值 MUST 从 GitHub Actions Variables 读取
-- **THEN** release-flow init/preflight MUST 检查 required 变量在 GitHub Actions Variables 中存在
+- **WHEN** 发布流程需要 marketplace identity（市场身份）这类非敏感发布身份
+- **THEN** 变量值 MUST 从 `.release-flow/projection.yaml` 的 identity（身份）读取
+- **THEN** release-flow init/preflight MUST NOT 要求这些非敏感身份存在于 GitHub Actions Variables
+- **THEN** release-flow MUST NOT 要求用户为这些非敏感身份准备本地环境变量或变量文件
+- **THEN** projection MUST NOT 将 `CODEX_MARKETPLACE_CATALOG_NAME`、`CODEX_MARKETPLACE_DISPLAY_NAME`、`CLAUDE_MARKETPLACE_CATALOG_NAME`、`CLAUDE_MARKETPLACE_OWNER_NAME`、`RELEASE_FLOW_PLUGIN_REPOSITORY` 或 `RELEASE_FLOW_PLUGIN_REF` 声明为 GitHub Actions Variables
+
+#### Scenario: 应用投影不接收变量文件
+
+- **WHEN** 用户运行 `project`
+- **THEN** 系统 MUST NOT 接收 `--vars-file`
+- **THEN** 系统 MUST 直接从 `.release-flow/projection.yaml` 的 identity 读取非敏感发布身份
 
 ### Requirement: 项目启用阶段
 
@@ -107,7 +115,8 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 #### Scenario: 生成 GitHub 配置方案
 
 - **WHEN** 项目启用阶段检查 GitHub 仓库
-- **THEN** 系统 MUST 输出 Actions 权限、Rulesets 和 Actions Variables 的期望配置方案
+- **THEN** 系统 MUST 输出 Actions 权限和 Rulesets 的期望配置方案
+- **THEN** 系统 MUST NOT 输出非敏感 marketplace identity 的 GitHub Actions Variables 配置方案
 
 #### Scenario: 授权后修改 GitHub 配置
 
@@ -144,7 +153,7 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 
 ### Requirement: 发布前检查
 
-系统 MUST 提供 release-flow preflight（发布前检查）阶段，用于在发布前验证本地配置、变量输入、版本、manifest（清单）和发布投影。首版 GitHub 仓库设置 MUST 由 `github-plan` 和 `configure-github --dry-run` 输出方案与手动步骤；认证远端回读验证 MAY 在后续版本加入。
+系统 MUST 提供 release-flow preflight（发布前检查）阶段，用于在发布前验证本地配置、版本、manifest（清单）和发布投影。GitHub 仓库设置 MUST 由 `github-plan` 和 `configure-github --dry-run` 输出方案与手动步骤；认证远端回读验证 MAY 在后续版本加入。
 
 #### Scenario: 检查配置文件
 
@@ -152,18 +161,19 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 - **THEN** 系统 MUST 验证 `.release-flow/config.yaml` 存在且合法
 - **THEN** 系统 MUST 验证 `.release-flow/projection.yaml` 存在且合法
 
-#### Scenario: 检查变量
+#### Scenario: 不接收变量快照
 
 - **WHEN** 执行 preflight
-- **THEN** 系统 MUST 验证 projection 中 required 变量存在于传入的 GitHub Actions Variables 快照
-- **THEN** 系统 MUST 拒绝缺失变量
+- **THEN** 系统 MUST NOT 接收 `--github-vars-file`
+- **THEN** 系统 MUST NOT 要求 GitHub Actions Variables 快照
+- **THEN** 系统 MUST 从 `.release-flow/projection.yaml` 的 identity 读取非敏感发布身份
 
 #### Scenario: GitHub 仓库设置首版边界
 
 - **WHEN** 执行 preflight
 - **THEN** 系统 MUST NOT 调用真实 GitHub API
 - **THEN** 系统 MUST NOT 声称已回读验证 GitHub Rulesets 或 workflow permissions
-- **THEN** 系统 MUST 依赖 `github-plan` 和 `configure-github --dry-run` 输出 Actions 权限、Rulesets 和 Actions Variables 的手动配置步骤
+- **THEN** 系统 MUST 依赖 `github-plan` 和 `configure-github --dry-run` 输出 Actions 权限与 Rulesets 的手动配置步骤
 
 #### Scenario: 检查版本一致性
 
@@ -204,13 +214,15 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 - **WHEN** GitHub Workflow 运行
 - **THEN** workflow MUST checkout 配置指定的 source ref
 - **THEN** workflow MUST 安装 release-flow 脚本依赖
-- **THEN** workflow MUST 读取 `.release-flow/projection.yaml`
-- **THEN** workflow MUST 从 GitHub Actions Variables 读取变量值
-- **THEN** workflow MUST 应用 `json-env` transforms
+- **THEN** workflow MUST 直接运行 source repo 内的 release-flow 脚本
+- **THEN** workflow MUST 读取 source repo 内的 `.release-flow/projection.yaml`
+- **THEN** workflow MUST 从 projection identity 读取非敏感 marketplace identity
+- **THEN** workflow MUST 应用 projection transforms
 - **THEN** workflow MUST 创建或更新远端 `marketplace` 分支
 - **THEN** workflow MUST 创建 tag
 - **THEN** workflow MUST 创建 GitHub Release
 - **THEN** `ci-publish` MUST NOT 提供 `--dry-run` 分支逻辑
+- **THEN** `ci-publish` MUST NOT 接收 `--vars-file`
 
 ### Requirement: 发布记录与总结
 
@@ -245,7 +257,7 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 - **WHEN** 项目启用 release-flow
 - **THEN** 系统 MUST 声明 Codex marketplace catalog name（目录名）和 display name（显示名）
 - **THEN** 系统 MUST 声明 Claude marketplace catalog name（目录名）和 owner name（所有者名）
-- **THEN** 系统 MUST 声明 release-flow plugin repository（插件仓库）和 ref（引用）
+- **THEN** 系统 MUST NOT 声明 release-flow plugin repository（插件仓库）或 ref（引用）作为 marketplace identity 字段
 - **THEN** 这些 identity 字段 MUST 位于 `.release-flow/projection.yaml`，而不是 `.release-flow/config.yaml`
 
 #### Scenario: 模板共享 identity
@@ -254,24 +266,31 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 - **THEN** 生成内容 MUST NOT 硬编码和 identity 不一致的旧 marketplace 名称
 
 ### Requirement: 发布插件来源变量声明
-系统 MUST 显式声明并校验 release-flow workflow 使用的 release-flow plugin source variables（插件来源变量）。
 
-#### Scenario: 初始化模板声明插件来源变量
+系统 MUST 不再要求 release-flow workflow 使用 GitHub Variables 声明 release-flow plugin source（插件来源）。
+
+#### Scenario: 初始化模板不声明插件来源变量
+
 - **WHEN** 生成 release-flow 初始化模板
-- **THEN** projection 模板 MUST 声明 `RELEASE_FLOW_PLUGIN_REPOSITORY`
-- **THEN** projection 模板 MUST 声明 `RELEASE_FLOW_PLUGIN_REF`
-- **THEN** 两个变量 MUST 标记为 required GitHub Actions Variables（必需仓库变量）
+- **THEN** projection 模板 MUST NOT 声明 `RELEASE_FLOW_PLUGIN_REPOSITORY`
+- **THEN** projection 模板 MUST NOT 声明 `RELEASE_FLOW_PLUGIN_REF`
+- **THEN** 两个变量 MUST NOT 声明为 GitHub Actions Variables（仓库变量）
 
-#### Scenario: GitHub 配置方案展示插件来源变量
+#### Scenario: GitHub 配置方案不展示插件来源变量
+
 - **WHEN** 用户运行 `github-plan` 或 `configure-github --dry-run`
-- **THEN** 输出 MUST 包含 `RELEASE_FLOW_PLUGIN_REPOSITORY`
-- **THEN** 输出 MUST 包含 `RELEASE_FLOW_PLUGIN_REF`
-- **THEN** 输出 MUST 说明这些变量用于 checkout release-flow plugin
+- **THEN** 输出 MUST NOT 包含 `RELEASE_FLOW_PLUGIN_REPOSITORY`
+- **THEN** 输出 MUST NOT 包含 `RELEASE_FLOW_PLUGIN_REF`
+- **THEN** 输出 MUST NOT 包含 `CODEX_MARKETPLACE_CATALOG_NAME`
+- **THEN** 输出 MUST NOT 包含 `CODEX_MARKETPLACE_DISPLAY_NAME`
+- **THEN** 输出 MUST NOT 包含 `CLAUDE_MARKETPLACE_CATALOG_NAME`
+- **THEN** 输出 MUST NOT 包含 `CLAUDE_MARKETPLACE_OWNER_NAME`
 
-#### Scenario: 发布前检查拒绝缺失插件来源变量
-- **WHEN** 执行 `preflight` 且 GitHub Actions Variables 快照缺少 `RELEASE_FLOW_PLUGIN_REPOSITORY` 或 `RELEASE_FLOW_PLUGIN_REF`
-- **THEN** 系统 MUST 拒绝发布前检查
-- **THEN** 错误输出 MUST 包含缺失变量名、变量含义和手动设置步骤
+#### Scenario: 发布前检查不检查插件来源变量
+
+- **WHEN** 执行 `preflight`
+- **THEN** 系统 MUST NOT 检查 `RELEASE_FLOW_PLUGIN_REPOSITORY`
+- **THEN** 系统 MUST NOT 检查 `RELEASE_FLOW_PLUGIN_REF`
 
 ### Requirement: Codex marketplace 由发布流程生成
 系统 MUST 允许 source branch（源分支）不持久保存 Codex repo-local marketplace（仓库本地市场）文件，并在 release channel（发布通道）生成正式 Codex marketplace catalog。
@@ -296,3 +315,4 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 - **WHEN** 生成产物中存在和 marketplace identity 不一致的旧 marketplace name
 - **THEN** `preflight` MUST 拒绝继续
 - **THEN** 错误输出 MUST 指出不一致字段和期望 identity 值
+

@@ -2,6 +2,7 @@
 change: remove-release-flow-github-vars
 design-doc: docs/superpowers/specs/2026-06-29-remove-release-flow-github-vars-design.md
 base-ref: 4c062b57d1e7e6e477aaa12aeb1c3109a36a59ed
+archived-with: 2026-06-28-remove-release-flow-github-vars
 ---
 
 # Remove Release-Flow GitHub Variables Implementation Plan

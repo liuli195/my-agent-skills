@@ -2,6 +2,8 @@
 comet_change: remove-release-flow-github-vars
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-28-remove-release-flow-github-vars
+status: final
 ---
 
 # Remove Release-Flow GitHub Variables Design
