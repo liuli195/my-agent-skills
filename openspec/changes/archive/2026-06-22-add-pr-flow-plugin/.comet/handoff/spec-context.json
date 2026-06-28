@@ -1,0 +1,14 @@
+{
+  "change": "add-pr-flow-plugin",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "08bc5afac46e1917458707b9ff2779a661124fb19a8a9c636980d4353e9378ac",
+  "files": [
+    { "path": "openspec/changes/add-pr-flow-plugin/proposal.md", "sha256": "77903735644789c14fca0806295fbb501e98428130202bc0635f9687f0216226", "role": "supporting" },
+    { "path": "openspec/changes/add-pr-flow-plugin/design.md", "sha256": "a07dccd31cf6fbfb9d910a6d5e83c1e8e877054bf18b62bb332a5cb51a3cd92b", "role": "supporting" },
+    { "path": "openspec/changes/add-pr-flow-plugin/tasks.md", "sha256": "97c4c54a6e4361d9603012ce13032c641b1a41295eb7b2c0bf49003b10cb881f", "role": "supporting" },
+    { "path": "openspec/changes/add-pr-flow-plugin/specs/pr-flow-plugin/spec.md", "sha256": "f571f39cb51645d023ac966b524be04807e35ad7bc6fb1b83e2ebd69fa89efcc", "role": "spec" }
+  ]
+}
