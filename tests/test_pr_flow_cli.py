@@ -869,6 +869,8 @@ def run_tweak_in_process(
     git_stub = CommandStub(consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
+        (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),
         (["status", "--short"], ""),
         (["branch", "--show-current"], "feature/example\n"),
@@ -1252,11 +1254,12 @@ def test_pr_flow_init_questionnaire_uses_latest_flow() -> None:
     assert "Require code scanning results" in questionnaire
     assert "CodeQL" in questionnaire
     assert "GitHub 默认阈值" in questionnaire
+    assert "CodeQL scan producer（CodeQL 扫描结果来源）" in questionnaire
     codeql_section = questionnaire.split("## 场景：CodeQL security check", 1)[1].split("## 场景：hotfix", 1)[0]
     codeql_options_block = codeql_section.split("固定选项：", 1)[1].split("选择后果：", 1)[0]
     codeql_options = [line for line in codeql_options_block.splitlines() if line.startswith("- ")]
     assert codeql_options == [
-        "- 开启：在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果），选择 `CodeQL` 作为 code scanning tool（代码扫描工具），阈值采用 GitHub 默认阈值。",
+        "- 开启：在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果），选择 `CodeQL` 作为 code scanning tool（代码扫描工具），阈值采用 GitHub 默认阈值，并创建或启用 CodeQL scan producer（CodeQL 扫描结果来源）。",
         "- 不开启：不生成 CodeQL（代码扫描工具）远端待办。",
     ]
     assert "reuse existing authorization phrase" in questionnaire
@@ -1315,6 +1318,7 @@ def test_pr_flow_init_draft_and_validation_are_user_readable() -> None:
     assert "Require code scanning results" in config_draft
     assert "CodeQL" in config_draft
     assert "GitHub 默认阈值" in config_draft
+    assert "CodeQL scan producer（CodeQL 扫描结果来源）" in config_draft
     assert "authorization must stay top-level" in config_draft
 
     for heading in ["error（错误）", "warning（警告）", "remote tasks（远端待办）"]:
@@ -1325,6 +1329,7 @@ def test_pr_flow_init_draft_and_validation_are_user_readable() -> None:
     assert "Require code scanning results" in validation
     assert "CodeQL" in validation
     assert "GitHub 默认阈值" in validation
+    assert "CodeQL scan producer（CodeQL 扫描结果来源）" in validation
 
 
 def test_pr_flow_init_skill_uses_remote_tasks_not_setup_suggestions() -> None:
@@ -1346,6 +1351,31 @@ def test_pr_flow_plugin_init_entrypoints_route_to_pr_flow_init() -> None:
         assert "pr-flow-init" in text
         assert "agent（代理）问答" in text
         assert "只读 validate（校验）" in text
+
+
+def test_pr_flow_skill_shows_source_repo_diagnose_entrypoint() -> None:
+    skill_path = REPO_ROOT / "plugins" / "pr-flow" / "skills" / "pr-flow" / "SKILL.md"
+    skill_text = skill_path.read_text(encoding="utf-8")
+
+    assert "python plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py diagnose --project ." in skill_text
+    assert "python scripts/pr_flow.py diagnose --project ." not in skill_text
+
+
+@pytest.mark.parametrize(
+    ("skill_name", "command"),
+    [
+        ("pr-flow-complete", "complete --project ."),
+        ("pr-flow-cleanup", "cleanup --project . --pr <number>"),
+        ("pr-flow-hotfix", "hotfix --project . --target main --authorization-phrase <phrase>"),
+        ("pr-flow-tweak", 'tweak --project /path/to/project --reason "small docs polish"'),
+    ],
+)
+def test_pr_flow_command_skills_show_source_repo_script_entrypoint(skill_name: str, command: str) -> None:
+    skill_path = REPO_ROOT / "plugins" / "pr-flow" / "skills" / skill_name / "SKILL.md"
+    skill_text = skill_path.read_text(encoding="utf-8")
+
+    assert f"python plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py {command}" in skill_text
+    assert "python ../pr-flow/scripts/pr_flow.py" not in skill_text
 
 
 def test_pr_flow_init_end_to_end_from_skill_to_confirmed_write(tmp_path: Path) -> None:
@@ -1415,6 +1445,36 @@ def test_validate_reads_only_provided_config_and_reports_suggestions(tmp_path: P
     assert "remote task: configure GitHub required review" in result.stdout
     assert "remote task: configure GitHub Rulesets required checks" in result.stdout
     assert not (project / ".pr-flow" / "config.yaml").exists()
+
+
+def test_validate_reports_missing_codeql_scan_source(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    config = default_pr_flow_config_for_test()
+    config["setup"] = {"github": {"codeScanning": {"tool": "CodeQL"}}}
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    result = run("validate", "--project", str(project), "--config", str(draft))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "remote task: create or enable CodeQL scan producer" in result.stdout
+
+
+def test_validate_accepts_existing_codeql_workflow_source(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    workflow = project / ".github" / "workflows" / "codeql.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text("uses: github/codeql-action/analyze@v4\n", encoding="utf-8")
+    config = default_pr_flow_config_for_test()
+    config["setup"] = {"github": {"codeScanning": {"tool": "CodeQL"}}}
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    result = run("validate", "--project", str(project), "--config", str(draft))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "remote task: create or enable CodeQL scan producer" not in result.stdout
 
 
 @pytest.mark.parametrize("review_mode", ["local", "dual"])
@@ -1595,6 +1655,39 @@ def test_diagnose_outputs_push_required_without_upstream(tmp_path: Path) -> None
     assert "push current branch before continuing" in result.stdout
 
 
+def test_complete_outputs_push_required_without_upstream(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_minimal_pr_flow_config(project)
+    git_stub = CommandStub()
+    git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
+    git_stub.add(
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        stderr="fatal: no upstream configured\n",
+        returncode=128,
+    )
+    gh_stub = CommandStub()
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found for branch\n", returncode=1)
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    result = invoke_pr_flow(["complete", "--project", str(project)], module=module)
+
+    assert result.returncode == 1
+    assert "status: PUSH_REQUIRED" in result.stdout
+    assert gh_stub.calls == [("pr", "view", "--json", module.PR_VIEW_FIELDS)]
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "PUSH_REQUIRED"
+    assert status["command"] == "complete"
+    assert status["details"]["branch"] == "feature/no-upstream"
+    assert status["details"]["reason"] == "missing_upstream"
+    assert status["details"]["nextCommand"] == "git push -u origin feature/no-upstream"
+
+
 def test_diagnose_outputs_exception_for_unknown_gh_failure(tmp_path: Path, monkeypatch) -> None:
     project, result = run_diagnose_in_process(
         tmp_path,
@@ -1634,6 +1727,40 @@ def test_diagnose_on_base_branch_without_pr_reports_gh_pr_view_failed(tmp_path: 
     assert status["details"]["baseBranch"] == "main"
     assert status["details"]["reason"] == "gh_pr_view_failed"
     assert "no pull requests found" in status["details"]["stderr"]
+
+
+def test_diagnose_on_feature_branch_without_pr_reports_dispatch_required(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_minimal_pr_flow_config(project)
+    git_stub = CommandStub()
+    git_stub.add(["branch", "--show-current"], stdout="feature/ready\n")
+    git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/ready\n")
+    git_stub.add(["status", "--short"], stdout="")
+    gh_stub = CommandStub()
+    gh_stub.add(
+        ["pr", "view", "--json", "number,state,isDraft,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup"],
+        stderr="no pull requests found for branch\n",
+        returncode=1,
+    )
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    result = invoke_pr_flow(["diagnose", "--project", str(project)], module=module)
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    assert "pr_missing" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "DISPATCH_REQUIRED"
+    assert status["command"] == "diagnose"
+    assert status["details"]["branch"] == "feature/ready"
+    assert status["details"]["reason"] == "pr_missing"
+    assert status["details"]["nextCommand"] == "complete"
 
 
 @pytest.mark.parametrize(
@@ -2048,6 +2175,37 @@ def test_complete_reports_exception_when_gh_pr_merge_fails(tmp_path: Path, monke
     assert status["command"] == "complete"
     assert status["details"]["reason"] == "gh_pr_merge_failed"
     assert status["details"]["stderr"] == "merge failed"
+
+
+def test_complete_reports_dispatch_when_ruleset_blocks_merge(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision="APPROVED",
+            head_oid="b" * 40,
+        ),
+        git_responses=[
+            (["branch", "--show-current"], "feature/example\n", 0),
+            (["rev-parse", "HEAD"], "b" * 40 + "\n", 0),
+        ],
+        merge_returncode=1,
+        merge_stderr=(
+            "X Pull request owner/repo#90 is not mergeable: the base branch policy prohibits the merge.\n"
+            "To have the pull request merged after all the requirements have been met, add the --auto flag.\n"
+            "To use administrator privileges to immediately merge the pull request, add the --admin flag.\n"
+        ),
+    )
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    assert "ruleset_merge_blocking" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "DISPATCH_REQUIRED"
+    assert status["command"] == "complete"
+    assert status["details"]["reason"] == "ruleset_merge_blocking"
+    assert status["details"]["pr"] == 12
 
 
 def test_complete_rejects_unknown_merge_strategy(tmp_path: Path, monkeypatch) -> None:

@@ -6,20 +6,11 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 ### Requirement: PR Flow Plugin package
 系统 MUST 提供 `pr-flow` Plugin（插件），用于个人仓库复用 PR Flow（拉取请求流程）。
 
-#### Scenario: Codex plugin structure
-- **WHEN** 发布 `pr-flow` Plugin
-- **THEN** 插件包 MUST 包含 `.codex-plugin/plugin.json`
-- **THEN** Codex manifest（清单）MUST 声明插件 `name`、`version`、`description` 和 `skills`
-
-#### Scenario: Claude plugin structure
-- **WHEN** 发布 `pr-flow` Plugin
-- **THEN** 插件包 MUST 包含 `.claude-plugin/plugin.json`
-- **THEN** Claude manifest（清单）MUST 声明插件 `name`、`version`、`description` 和 `skills`
-
-#### Scenario: Skill entrypoints
-- **WHEN** 安装 `pr-flow` Plugin
-- **THEN** 插件包 MUST 提供 `pr-flow`、`pr-flow-init`、`pr-flow-complete`、`pr-flow-cleanup`、`pr-flow-hotfix` 和 `pr-flow-tweak` Skill（技能）
-- **THEN** 这些 Skill MUST 调用共享确定性脚本，而不是复制多套流程逻辑
+#### Scenario: Skill entrypoints expose source repository commands
+- **WHEN** maintainer（维护者）reads a PR Flow Skill（拉取请求流程技能）inside the source repository（源码仓库）
+- **THEN** command examples for diagnose、complete、cleanup、hotfix and tweak（诊断、收尾、清理、热修复和小改） MUST point to `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py`
+- **THEN** command examples MUST NOT point to a missing root-level `scripts/pr_flow.py`
+- **THEN** command examples MUST NOT point to an installed-skill relative `../pr-flow/scripts/pr_flow.py` path when documenting source repository（源码仓库） usage（用法）
 
 ### Requirement: Repository PR Flow configuration
 系统 MUST 使用 `.pr-flow/config.yaml` 保存仓库共享 PR Flow 配置，并将该文件纳入 Git（版本管理）。
@@ -60,61 +51,22 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 ### Requirement: Diagnose stop states
 系统 MUST 提供 diagnose（诊断）入口，用于解释当前 PR Flow 卡点，并输出固定 stop state（停机状态）。
 
-#### Scenario: Missing remote head branch
-- **WHEN** 当前分支没有对应远端 head branch（功能分支）
-- **THEN** diagnose MUST 输出 `PUSH_REQUIRED`
-- **THEN** diagnose MUST 提示用户先 push（推送）当前分支
-
-#### Scenario: Required checks need external progress
-- **WHEN** GitHub checks（检查）未完成或需要外部系统启动
-- **THEN** diagnose MUST 输出 `DISPATCH_REQUIRED`
-- **THEN** diagnose MUST 保留可继续执行的下一步提示
-
-#### Scenario: Review or checks block merge
-- **WHEN** review gate（审查门禁）或 required checks（必需检查）阻塞 PR
-- **THEN** diagnose MUST 输出 `REPLY_OR_FIX_REQUIRED`
-
-#### Scenario: Draft PR needs ready transition
-- **WHEN** PR 是 draft（草稿）且 checks（检查）已通过
-- **THEN** diagnose MUST 输出 `DISPATCH_REQUIRED`
-- **THEN** diagnose MUST 使用 `pr_is_draft` 作为 reason（原因）
-- **THEN** diagnose MUST 提供将 PR 转为 ready（可审查）的下一步提示
-
-#### Scenario: No stop state remains
-- **WHEN** 当前 PR 没有 push、checks、review、draft 或异常阻塞
-- **THEN** diagnose MUST 输出 `ready`
-- **THEN** diagnose MUST 以成功退出码返回
-- **THEN** diagnose MUST 提供 `complete` 作为下一步提示
-
-#### Scenario: Unexpected state
-- **WHEN** 系统无法安全判断下一步
-- **THEN** diagnose MUST 输出 `EXCEPTION_REQUIRED`
-- **THEN** diagnose MUST 保留足够上下文供人工判断
+#### Scenario: Feature branch has no PR yet
+- **WHEN** diagnose（诊断）runs on a non-base branch（非目标分支）
+- **AND** the branch already has upstream（上游分支）
+- **AND** `gh pr view`（查看拉取请求） reports no PR（拉取请求）
+- **THEN** diagnose（诊断） MUST output `DISPATCH_REQUIRED`（需要外部进展）
+- **THEN** diagnose（诊断） MUST use `pr_missing` as reason（原因）
+- **THEN** diagnose（诊断） MUST provide `complete`（收尾） as the next command（下一步命令）
 
 ### Requirement: Complete PR lifecycle
 系统 MUST 提供 complete（完整流程），从当前分支创建或同步 PR 到合并后清理。
 
-#### Scenario: Complete happy path
-- **WHEN** 当前分支可以创建或同步 PR
-- **THEN** 系统 MUST 创建或同步 PR
-- **THEN** 系统 MUST 等待配置中的 checks
-- **THEN** 系统 MUST 执行配置中的 review gate
-- **THEN** 系统 MUST 按配置中的 merge strategy（合并策略）合并 PR
-- **THEN** 系统 MUST 执行 cleanup（清理）
-
-#### Scenario: No dry run mode
-- **WHEN** 用户运行 complete、cleanup、hotfix 或 tweak
-- **THEN** 系统 MUST 执行真实流程
-- **THEN** 系统 MUST NOT 提供 dry-run（试运行）分支逻辑
-
-#### Scenario: Head locked merge
-- **WHEN** 系统合并 PR
-- **THEN** 系统 MUST 锁定当前 head commit（头提交）
-- **THEN** 系统 MUST NOT 合并已经移动的 head branch
-
-#### Scenario: Configured merge strategy
-- **WHEN** 配置声明 `merge`、`squash` 或 `rebase`
-- **THEN** 系统 MUST 严格按配置选择 GitHub merge strategy
+#### Scenario: Rulesets block merge
+- **WHEN** `gh pr merge`（合并拉取请求） fails because the base branch policy（目标分支策略） prohibits the merge（合并）
+- **THEN** complete（收尾） MUST output `DISPATCH_REQUIRED`（需要外部进展）
+- **THEN** complete（收尾） MUST use `ruleset_merge_blocking` as reason（原因）
+- **THEN** complete（收尾） MUST preserve the original GitHub（代码托管平台） error text for diagnosis（诊断）
 
 ### Requirement: Review gate modes
 系统 MUST 支持 GitHub（代码托管平台）、local（本地）、dual（双门禁）和 skip（跳过）四种 review gate（审查门禁）模式。
@@ -246,53 +198,12 @@ PR Flow（拉取请求流程）MUST preserve the boundary between default fast v
 ### Requirement: PR Flow init validates confirmed configuration
 系统 MUST 提供只读配置校验能力，用于校验 `pr-flow-init` Skill（初始化技能）生成的配置草案。
 
-#### Scenario: Validate reads only provided config
-- **WHEN** agent（代理）调用 `pr_flow.py validate --config <path>`
-- **THEN** validate（校验）MUST 只读取 `<path>` 指向的配置文件
-- **THEN** validate（校验）MUST NOT 写入 `.pr-flow/config.yaml`
-- **THEN** validate（校验）MUST NOT 调用 GitHub API（GitHub 接口）
-- **THEN** validate（校验）MUST NOT 执行 `diagnose`、`complete`、`cleanup`、`hotfix` 或 `tweak`（诊断、收尾、清理、热修复、小改）
-
-#### Scenario: Validate reports structured results
-- **WHEN** validate（校验）发现配置问题
-- **THEN** validate（校验）MUST 输出 error（错误）、warning（警告）或 remote task（远端待办）
-- **THEN** error（错误）MUST 表示配置本身不可用
-- **THEN** warning（警告）MUST 表示配置可写入但存在流程风险
-- **THEN** remote task（远端待办）MUST 表示需要用户或 agent（代理）另行处理的 GitHub（代码托管平台）配置
-
-#### Scenario: Validation errors block init writes
-- **WHEN** init（初始化）准备写入已确认配置
-- **AND** validate（校验）对该配置输出一个或多个 error（错误）
-- **THEN** init（初始化）MUST stop without writing `.pr-flow/config.yaml`、PR body template（拉取请求正文模板）或 `.pr-flow/.gitignore`
-- **THEN** warning（警告）和 remote task（远端待办）MAY be shown before final confirmation, but MUST NOT block writing by themselves
-
-#### Scenario: Validate checks hotfix dependencies
-- **WHEN** 任一 `branches.<branch>.allowHotfixPush` 为 `true`
-- **THEN** validate（校验）MUST 要求存在 `authorization.phraseHashAlgorithm: md5`
-- **THEN** validate（校验）MUST 要求存在非空 `authorization.phraseHash`
-- **THEN** validate（校验）MUST 要求存在非空 `hotfix.verifyCommand`
-- **THEN** validate（校验）MUST 要求该分支存在非空 `remote`
-- **THEN** validate（校验）MUST 输出 Rulesets bypass（规则集绕过权限）远端待办
-
-#### Scenario: Validate checks review gate dependencies
-- **WHEN** `reviewGate.mode` 是 `github` 或 `dual`
-- **THEN** validate（校验）MUST 输出 required review（必需审查）远端待办
-- **WHEN** `reviewGate.mode` 是 `local` 或 `dual`
-- **THEN** validate（校验）MUST 要求存在非空 `reviewGate.evidencePath`
-- **THEN** validate（校验）MUST 输出 review-pass.json（审查通过文件）字段契约 warning（警告）
-
-#### Scenario: Validate checks GitHub setup dependencies
-- **WHEN** 配置声明 required checks（必需检查）意图
-- **THEN** validate（校验）MUST 输出 GitHub Rulesets（GitHub 规则集）远端待办
-- **WHEN** 配置声明 merge strategy（合并方式）
-- **THEN** validate（校验）MUST 输出对应 merge method（合并方式）需要在 GitHub（代码托管平台）启用的远端待办
-- **WHEN** 配置启用 auto-delete head branch（自动删除源分支）意图
-- **THEN** validate（校验）MUST 输出 cleanup（清理）职责重叠 warning（警告）
-
-#### Scenario: Validate preserves verification mode boundaries
-- **WHEN** validate（校验）读取 review gate evidence（审查门禁证据）路径或 setup.github（GitHub 配置建议）
-- **THEN** validate（校验）MUST NOT 推断 full verify（完整验证）已经运行
-- **THEN** validate（校验）MUST 保持 full verify（完整验证）仅作为 hotfix.verifyCommand（热修复验证命令）或 PR CI（拉取请求持续集成）建议的显式配置
+#### Scenario: Validate reports missing CodeQL scan producer
+- **WHEN** validate（校验） reads a config（配置） that declares CodeQL code scanning（代码扫描） guidance
+- **AND** the project（项目） has no local CodeQL workflow（代码扫描工作流）
+- **THEN** validate（校验） MUST output a remote task（远端待办） to create or enable a CodeQL scan producer（CodeQL 扫描结果来源）
+- **WHEN** the project（项目） has a local workflow（工作流） using `codeql-action`
+- **THEN** validate（校验） MUST NOT output the missing scan producer（扫描结果来源） remote task（远端待办）
 
 ### Requirement: PR Flow init uses scenario-oriented progressive-disclosure guidance
 系统 MUST 让 PR Flow init（拉取请求流程初始化）的 Plugin（插件）和 Skill（技能）内容使用用户场景组织和 progressive disclosure（渐进式披露），并用固定问答模板约束 agent（代理）初始化流程。
@@ -310,35 +221,10 @@ PR Flow（拉取请求流程）MUST preserve the boundary between default fast v
 ### Requirement: PR Flow init presents executable GitHub setup guidance
 PR Flow init（拉取请求流程初始化）MUST separate local config writes（本地配置写入） from GitHub setup guidance（GitHub 配置建议） and present GitHub guidance as executable manual tasks.
 
-#### Scenario: Remote guidance shows current state before recommendations
-- **WHEN** agent（代理）prepares the confirmation summary for `pr-flow-init`
-- **THEN** it MUST show the current GitHub（代码托管平台）state for Rulesets（规则集）, branch protection（分支保护）, merge methods（合并方式）, auto-delete head branch（自动删除源分支）, and PR status checks（拉取请求状态检查） when that state has been inspected
-- **THEN** it MUST show recommended GitHub setup separately from local files that will be written
-- **THEN** it MUST NOT imply that GitHub setup has been applied
-
-#### Scenario: Remote tasks use GitHub official rule names
-- **WHEN** GitHub setup guidance includes branch protection（分支保护）
-- **THEN** it MUST describe the task as creating or updating a branch ruleset（分支规则集） for the selected target branches
-- **THEN** it MUST name `Require a pull request before merging`（合并前要求拉取请求） as the rule that requires protected branches to change through PR（拉取请求）
-- **THEN** it MUST set `required_approving_review_count: 0` unless the user explicitly chooses an approving review（批准审查） requirement
-
-#### Scenario: PR status checks are concrete or explicit future work
-- **WHEN** the user chooses to require PR status checks（拉取请求状态检查）
-- **AND** no concrete PR check names are available from inspected workflows
-- **THEN** the GitHub setup guidance MUST record a task to add or identify PR status checks before enabling `Require status checks to pass before merging`（合并前要求状态检查通过）
-- **THEN** it MUST NOT invent check names
-
-#### Scenario: CodeQL security check is an explicit ruleset task
+#### Scenario: CodeQL security check includes scan producer
 - **WHEN** the user chooses to enable CodeQL security check（CodeQL 安全检查）
 - **THEN** GitHub setup guidance MUST record a Rulesets（规则集）task to configure `Require code scanning results`（要求代码扫描结果）
+- **THEN** GitHub setup guidance MUST record a task to create or enable a CodeQL scan producer（CodeQL 扫描结果来源）
 - **THEN** it MUST select `CodeQL` as the code scanning tool（代码扫描工具）
 - **THEN** it MUST use GitHub 默认阈值 for code scanning thresholds（代码扫描阈值）
-- **WHEN** the user chooses not to enable CodeQL security check（CodeQL 安全检查）
-- **THEN** GitHub setup guidance MUST NOT include a CodeQL（代码扫描工具）remote task（远端待办）
-
-#### Scenario: Confirmation summary is user-readable first
-- **WHEN** agent（代理）shows the init draft before final confirmation
-- **THEN** it MUST first show user-readable tables for local writes, GitHub current state, GitHub recommendations, and validation results
-- **THEN** it MUST NOT show a complete YAML（配置格式）draft
-- **THEN** it MAY show only necessary field paths or small field fragments after the user-readable summary
 

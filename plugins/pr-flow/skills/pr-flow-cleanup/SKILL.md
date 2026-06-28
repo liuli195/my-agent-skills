@@ -16,5 +16,5 @@ cleanup 不查询 GitHub Branch Protection（GitHub 分支保护）或 Rulesets�
 ## 命令
 
 ```bash
-python ../pr-flow/scripts/pr_flow.py cleanup --project . --pr <number>
+python plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py cleanup --project . --pr <number>
 ```

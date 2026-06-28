@@ -34,7 +34,7 @@ agent（代理）展示草案时必须给用户可读摘要，禁止展示完整
 - 启用 `Require a pull request before merging`（合并前要求拉取请求）。
 - 设置 `required_approving_review_count: 0`。
 - 如需要 PR status checks（拉取请求状态检查），先新增或识别 PR status checks（拉取请求状态检查）的具体 check name（检查名称），再启用 `Require status checks to pass before merging`（合并前要求状态检查通过）。
-- 如启用 CodeQL security check（CodeQL 安全检查），在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果），选择 `CodeQL` 作为 code scanning tool（代码扫描工具），阈值采用 GitHub 默认阈值。
+- 如启用 CodeQL security check（CodeQL 安全检查），在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果），选择 `CodeQL` 作为 code scanning tool（代码扫描工具），阈值采用 GitHub 默认阈值，并创建或启用 CodeQL scan producer（CodeQL 扫描结果来源）。
 - 如允许 hotfix（热修复）直推，配置 Rulesets bypass（规则集绕过权限）。
 - 配置 allowed merge methods（允许合并方式）。
 
