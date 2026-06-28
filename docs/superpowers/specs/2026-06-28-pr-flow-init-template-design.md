@@ -36,7 +36,7 @@ canonical_spec: openspec
 1. 自动检查仓库和 GitHub（代码托管平台）当前状态，包括默认分支、远端分支、Rulesets（规则集）、branch protection（分支保护）、merge methods（合并方式）、auto-delete head branch（自动删除源分支）和可用 PR status checks（拉取请求状态检查）。
    - 若 GitHub access（GitHub 访问权限）、`gh` CLI（GitHub 命令行工具）或 network（网络）不可用，必须显示 `not inspected`（未检查）或 `no access`（无权限），只输出推荐远端待办，不声明远端当前状态已确认。
 2. 询问 default PR target branch（默认拉取请求目标分支）。
-3. 询问哪些分支需要通过 GitHub Rulesets（GitHub 规则集）保护；候选分支来自检查到的 remote branches（远端分支），远端待办必须写成创建或更新 branch ruleset（分支规则集），启用 `Require a pull request before merging`（合并前要求拉取请求），默认 `required_approving_review_count: 0`。
+3. 询问哪些分支需要通过 GitHub Rulesets（GitHub 规则集）保护；候选分支来自检查到的 remote branches（远端分支），选择保护分支时才派生 `defaults.reviewGate.mode: github`，选择暂不配置远端保护时保持现有或默认值不变；远端待办必须写成创建或更新 branch ruleset（分支规则集），启用 `Require a pull request before merging`（合并前要求拉取请求），默认 `required_approving_review_count: 0`。
 4. 询问 PR status checks（拉取请求状态检查）；候选检查项必须解释来源 workflow/job（工作流/任务）、验证内容和失败影响；没有具体 check name（检查名称）时，不编造名称，只记录新增或识别检查后再启用 `Require status checks to pass before merging`（合并前要求状态检查通过）。
 5. 询问是否启用 CodeQL security check（CodeQL 安全检查）；只提供“开启”和“不开启”。开启时，远端待办必须要求在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果）、选择 `CodeQL` 作为 code scanning tool（代码扫描工具），并采用 GitHub 默认阈值。
 6. 询问 hotfix（热修复）直推；只有允许后才问授权短语是复用现有还是新设。

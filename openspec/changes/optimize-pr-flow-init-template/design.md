@@ -30,7 +30,7 @@
 
 ### 2. branch protection（分支保护）用 Rulesets（规则集）表达
 
-模板把 branch protection（分支保护）定义为 GitHub Rulesets（GitHub 规则集）中的 branch ruleset（分支规则集），并明确启用 `Require a pull request before merging`（合并前要求拉取请求）。分支选项来自 automatic inspection（自动检查）得到的 remote branches（远端分支），不得固定写死 release、main 或其他分支名。默认 `required_approving_review_count: 0`，表示要求通过 PR（拉取请求）改分支，但不强制 approving review（批准审查）。
+模板把 branch protection（分支保护）定义为 GitHub Rulesets（GitHub 规则集）中的 branch ruleset（分支规则集），并明确启用 `Require a pull request before merging`（合并前要求拉取请求）。分支选项来自 automatic inspection（自动检查）得到的 remote branches（远端分支），不得固定写死 release、main 或其他分支名。选择保护分支时才派生 `defaults.reviewGate.mode: github`；选择暂不配置远端保护时保持现有或默认值不变。默认 `required_approving_review_count: 0`，表示要求通过 PR（拉取请求）改分支，但不强制 approving review（批准审查）。
 
 ### 3. PR status checks（拉取请求状态检查）单独问
 

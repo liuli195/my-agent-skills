@@ -1270,6 +1270,8 @@ def test_pr_flow_init_questionnaire_uses_latest_flow() -> None:
     assert "PR Flow（拉取请求流程）合并前使用哪种审查门禁" not in questionnaire
     branch_protection_section = questionnaire.split("## 场景：branch protection", 1)[1].split("## 场景：PR status checks", 1)[0]
     assert "defaults.reviewGate.mode: github" in branch_protection_section
+    assert "暂不配置远端保护" in branch_protection_section
+    assert "不得派生 `defaults.reviewGate.mode: github`" in branch_protection_section
     assert "从 automatic inspection（自动检查）得到的 remote branches（远端分支）逐项列出" in branch_protection_section
     assert "发布分支" not in branch_protection_section
     pr_status_section = questionnaire.split("## 场景：PR status checks", 1)[1].split("## 场景：CodeQL security check", 1)[0]
@@ -1291,6 +1293,7 @@ def test_pr_flow_init_draft_and_validation_are_user_readable() -> None:
     assert "仅当 `allowHotfixPush: true`" in config_draft
     assert "defaults.reviewGate.mode" in config_draft
     assert "不单独提问" in config_draft
+    assert "选择暂不配置远端保护时保持现有或默认值不变" in config_draft
     assert "not inspected" in config_draft
     assert "no access" in config_draft
     assert "不代表 init（初始化）已经写入远端" in config_draft
