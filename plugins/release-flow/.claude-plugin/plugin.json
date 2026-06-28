@@ -1,6 +1,6 @@
 {
   "name": "release-flow",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "Release Flow Plugin（发布流程插件）",
   "skills": "./skills",
   "assets": "skills/release-flow/assets"
