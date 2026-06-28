@@ -1,5 +1,5 @@
 workflow: full
-phase: build
+phase: verify
 context_compression: beta
 build_mode: executing-plans
 build_pause: null
@@ -11,7 +11,7 @@ auto_transition: true
 base_ref: a4bd6df12207defb355693fbfab7b77abcb6f8d6
 design_doc: docs/superpowers/specs/2026-06-28-pr-flow-init-template-design.md
 plan: docs/superpowers/plans/2026-06-28-pr-flow-init-template.md
-verify_result: fail
+verify_result: pending
 verification_report: docs/superpowers/reports/2026-06-28-optimize-pr-flow-init-template-verify.md
 branch_status: handled
 created_at: 2026-06-27
