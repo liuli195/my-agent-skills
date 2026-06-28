@@ -1092,7 +1092,7 @@ def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: initialized" in result.stdout
-    assert "GitHub setup suggestion: configure GitHub required review" in result.stdout
+    assert "GitHub remote task: configure GitHub required review" in result.stdout
     assert "GitHub Rulesets suggestion" not in result.stdout
 
     config = yaml.safe_load((project / ".pr-flow" / "config.yaml").read_text(encoding="utf-8"))
@@ -1189,6 +1189,8 @@ def test_pr_flow_init_skill_uses_progressive_disclosure_references() -> None:
         assert reference in skill_text
         assert (skill_path.parent / reference).is_file()
     assert "用户沉默 MUST NOT 被视为确认" in skill_text
+    assert "即使仓库已存在 `.pr-flow/config.yaml`" in skill_text
+    assert "不能代替用户回答或确认" in skill_text
     assert "完整问答" not in skill_text
 
 
@@ -1204,16 +1206,133 @@ def test_pr_flow_init_content_is_organized_by_user_scenario() -> None:
     )
 
     for scenario in [
-        "初次启用 PR Flow",
-        "review gate",
+        "automatic inspection",
+        "default PR target branch",
+        "branch protection",
+        "PR status checks",
+        "CodeQL security check",
         "hotfix",
-        "cleanup",
-        "GitHub setup suggestions",
+        "merge methods",
+        "GitHub 推荐配置",
         "最终写入确认",
     ]:
         assert scenario in combined
     for template_term in ["固定问题", "固定选项", "选择后果", "跳转规则"]:
         assert template_term in combined
+    assert "每次只提出一个问题" in combined
+
+
+def test_pr_flow_init_questionnaire_uses_latest_flow() -> None:
+    init_dir = REPO_ROOT / "plugins" / "pr-flow" / "skills" / "pr-flow-init"
+    questionnaire = (init_dir / "references" / "questionnaire.md").read_text(encoding="utf-8")
+
+    ordered_sections = [
+        "## 场景：automatic inspection",
+        "## 场景：default PR target branch",
+        "## 场景：branch protection",
+        "## 场景：PR status checks",
+        "## 场景：CodeQL security check",
+        "## 场景：hotfix",
+        "## 场景：authorization phrase",
+        "## 场景：merge methods",
+        "## 场景：GitHub 推荐配置",
+        "## 场景：最终写入确认",
+    ]
+    positions = [questionnaire.index(section) for section in ordered_sections]
+    assert positions == sorted(positions)
+    assert "GitHub Rulesets" in questionnaire
+    assert "每次只提出一个问题" in questionnaire
+    assert "Require a pull request before merging" in questionnaire
+    assert "required_approving_review_count: 0" in questionnaire
+    assert "PR status checks" in questionnaire
+    assert "Require status checks to pass before merging" in questionnaire
+    assert "CodeQL security check" in questionnaire
+    assert "开启" in questionnaire
+    assert "不开启" in questionnaire
+    assert "Require code scanning results" in questionnaire
+    assert "CodeQL" in questionnaire
+    assert "GitHub 默认阈值" in questionnaire
+    codeql_section = questionnaire.split("## 场景：CodeQL security check", 1)[1].split("## 场景：hotfix", 1)[0]
+    codeql_options_block = codeql_section.split("固定选项：", 1)[1].split("选择后果：", 1)[0]
+    codeql_options = [line for line in codeql_options_block.splitlines() if line.startswith("- ")]
+    assert codeql_options == [
+        "- 开启：在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果），选择 `CodeQL` 作为 code scanning tool（代码扫描工具），阈值采用 GitHub 默认阈值。",
+        "- 不开启：不生成 CodeQL（代码扫描工具）远端待办。",
+    ]
+    assert "reuse existing authorization phrase" in questionnaire
+    assert "create new authorization phrase" in questionnaire
+    assert "authorization.phraseHashAlgorithm: md5" in questionnaire
+    assert "authorization.phraseHash" in questionnaire
+    assert "merge methods" in questionnaire
+    assert "not inspected" in questionnaire
+    assert "no access" in questionnaire
+    assert "不能声明远端状态已确认" in questionnaire
+    assert "PR Flow（拉取请求流程）合并前使用哪种审查门禁" not in questionnaire
+    branch_protection_section = questionnaire.split("## 场景：branch protection", 1)[1].split("## 场景：PR status checks", 1)[0]
+    assert "defaults.reviewGate.mode: github" in branch_protection_section
+    assert "暂不配置远端保护" in branch_protection_section
+    assert "不得派生 `defaults.reviewGate.mode: github`" in branch_protection_section
+    assert "从 automatic inspection（自动检查）得到的 remote branches（远端分支）逐项列出" in branch_protection_section
+    assert "Restrict deletions" in branch_protection_section
+    assert "限制删除" in branch_protection_section
+    assert "Block force pushes" in branch_protection_section
+    assert "阻止强制推送" in branch_protection_section
+    assert "发布分支" not in branch_protection_section
+    pr_status_section = questionnaire.split("## 场景：PR status checks", 1)[1].split("## 场景：CodeQL security check", 1)[0]
+    assert "每个 check name（检查名称）必须附带用途说明" in pr_status_section
+    assert "来源 workflow/job（工作流/任务）" in pr_status_section
+    assert "验证内容" in pr_status_section
+    assert "失败影响" in pr_status_section
+    final_write_section = questionnaire.split("## 场景：最终写入确认", 1)[1].split("## 禁止重复问题", 1)[0]
+    final_options_block = final_write_section.split("固定选项：", 1)[1].split("选择后果：", 1)[0]
+    final_options = [line for line in final_options_block.splitlines() if line.startswith("- ")]
+    assert final_options == [
+        "- 不写入，放弃本次配置。",
+        "- 只写入本地配置。",
+        "- 按 remote tasks（远端待办）完成 GitHub（代码托管平台）配置，然后再写入本地配置。",
+    ]
+    assert "GitHub（代码托管平台）配置由 agent（代理）执行" in final_write_section
+    assert "插件不提供 GitHub（代码托管平台）配置脚本能力" in final_write_section
+
+
+def test_pr_flow_init_draft_and_validation_are_user_readable() -> None:
+    init_dir = REPO_ROOT / "plugins" / "pr-flow" / "skills" / "pr-flow-init"
+    config_draft = (init_dir / "references" / "config-draft.md").read_text(encoding="utf-8")
+    validation = (init_dir / "references" / "validation.md").read_text(encoding="utf-8")
+
+    for heading in ["本地将写入", "GitHub 当前状态", "GitHub 推荐配置", "validation results"]:
+        assert heading in config_draft
+    assert "禁止展示完整 YAML" in config_draft
+    assert "```yaml" not in config_draft
+    assert "仅当 `allowHotfixPush: true`" in config_draft
+    assert "defaults.reviewGate.mode" in config_draft
+    assert "不单独提问" in config_draft
+    assert "选择暂不配置远端保护时保持现有或默认值不变" in config_draft
+    assert "not inspected" in config_draft
+    assert "no access" in config_draft
+    assert "不代表 init（初始化）已经写入远端" in config_draft
+    assert "新增或识别 PR status checks" in config_draft
+    assert "Require code scanning results" in config_draft
+    assert "CodeQL" in config_draft
+    assert "GitHub 默认阈值" in config_draft
+    assert "authorization must stay top-level" in config_draft
+
+    for heading in ["error（错误）", "warning（警告）", "remote tasks（远端待办）"]:
+        assert heading in validation
+    assert "not inspected" in validation
+    assert "no access" in validation
+    assert "不能声明远端状态已确认" in validation
+    assert "Require code scanning results" in validation
+    assert "CodeQL" in validation
+    assert "GitHub 默认阈值" in validation
+
+
+def test_pr_flow_init_skill_uses_remote_tasks_not_setup_suggestions() -> None:
+    skill_path = REPO_ROOT / "plugins" / "pr-flow" / "skills" / "pr-flow-init" / "SKILL.md"
+    skill_text = skill_path.read_text(encoding="utf-8")
+
+    assert "remote tasks（远端待办）" in skill_text
+    assert "warning（警告）或 setup suggestion（配置建议）" not in skill_text
 
 
 def test_pr_flow_plugin_init_entrypoints_route_to_pr_flow_init() -> None:
@@ -1293,9 +1412,37 @@ def test_validate_reads_only_provided_config_and_reports_suggestions(tmp_path: P
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: validation_passed" in result.stdout
-    assert "setup suggestion: configure GitHub required review" in result.stdout
-    assert "setup suggestion: configure GitHub Rulesets required checks" in result.stdout
+    assert "remote task: configure GitHub required review" in result.stdout
+    assert "remote task: configure GitHub Rulesets required checks" in result.stdout
     assert not (project / ".pr-flow" / "config.yaml").exists()
+
+
+@pytest.mark.parametrize("review_mode", ["local", "dual"])
+def test_validate_does_not_report_local_review_evidence_as_remote_task(tmp_path: Path, review_mode: str) -> None:
+    config = default_pr_flow_config_for_test()
+    config["defaults"]["reviewGate"] = {"mode": review_mode, "evidencePath": ".pr-flow/review-pass.json"}
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    result = run("validate", "--config", str(draft))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "remote task: document review-pass.json evidence contract" not in result.stdout
+    assert "warning: document review-pass.json evidence contract" in result.stdout
+
+
+def test_init_prints_warnings_from_confirmed_config(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    config = default_pr_flow_config_for_test()
+    config["defaults"]["reviewGate"] = {"mode": "local", "evidencePath": ".pr-flow/review-pass.json"}
+    draft = tmp_path / "confirmed.yaml"
+    draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    result = run("init", "--project", str(project), "--config", str(draft))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "warning: document review-pass.json evidence contract" in result.stdout
 
 
 def test_validate_reports_errors_for_missing_core_shape(tmp_path: Path) -> None:
@@ -1370,7 +1517,7 @@ def test_validate_reports_bad_yaml_as_structured_error(tmp_path: Path) -> None:
         ),
         (
             lambda config: config["setup"]["github"].update({"requiredReviews": True}),
-            "setup suggestion: tweak cannot bypass GitHub required review",
+            "remote task: tweak cannot bypass GitHub required review",
         ),
         (
             lambda config: config["defaults"].update({"mergeStrategy": "fast-forward"}),

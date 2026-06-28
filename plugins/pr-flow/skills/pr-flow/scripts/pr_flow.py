@@ -133,7 +133,7 @@ def validate_config(config: dict[str, Any]) -> list[dict[str, str]]:
     if merge_strategy and merge_strategy not in {"merge", "squash", "rebase"}:
         add_issue(issues, "error", f"defaults.mergeStrategy unsupported: {merge_strategy}")
     elif isinstance(merge_strategy, str) and merge_strategy:
-        add_issue(issues, "setup suggestion", f"enable GitHub merge method: {merge_strategy}")
+        add_issue(issues, "remote task", f"enable GitHub merge method: {merge_strategy}")
 
     review_gate = defaults.get("reviewGate")
     review_gate = review_gate if isinstance(review_gate, dict) else {}
@@ -143,10 +143,9 @@ def validate_config(config: dict[str, Any]) -> list[dict[str, str]]:
     if review_mode in {"local", "dual"} and not review_gate.get("evidencePath"):
         add_issue(issues, "error", "defaults.reviewGate.evidencePath missing")
     if review_mode in {"github", "dual"}:
-        add_issue(issues, "setup suggestion", "configure GitHub required review")
+        add_issue(issues, "remote task", "configure GitHub required review")
     if review_mode in {"local", "dual"}:
-        add_issue(issues, "setup suggestion", "document review-pass.json evidence contract")
-
+        add_issue(issues, "warning", "document review-pass.json evidence contract")
     wait = defaults.get("wait")
     if wait is not None and not isinstance(wait, dict):
         add_issue(issues, "error", "defaults.wait must be a mapping")
@@ -157,9 +156,9 @@ def validate_config(config: dict[str, Any]) -> list[dict[str, str]]:
 
     github = setup_github_from_config(config)
     if github.get("requiredChecks"):
-        add_issue(issues, "setup suggestion", "configure GitHub Rulesets required checks")
+        add_issue(issues, "remote task", "configure GitHub Rulesets required checks")
     if github.get("requiredReview") is True or github.get("requiredReviews") is True:
-        add_issue(issues, "setup suggestion", "tweak cannot bypass GitHub required review")
+        add_issue(issues, "remote task", "tweak cannot bypass GitHub required review")
     if github.get("autoDeleteHeadBranch") is True:
         add_issue(issues, "warning", "GitHub auto-delete head branch overlaps with pr-flow cleanup")
 
@@ -180,7 +179,7 @@ def validate_config(config: dict[str, Any]) -> list[dict[str, str]]:
             add_issue(issues, "error", f"branches.{branch_name}.hotfix.verifyCommand missing")
         if not branch.get("remote"):
             add_issue(issues, "error", f"branches.{branch_name}.remote missing")
-        add_issue(issues, "setup suggestion", f"configure GitHub Rulesets bypass for {branch_name}")
+        add_issue(issues, "remote task", f"configure GitHub Rulesets bypass for {branch_name}")
 
     return issues
 
@@ -792,8 +791,10 @@ def run_init(args: argparse.Namespace) -> int:
 
     print("status: initialized")
     for issue in issues:
-        if issue["level"] == "setup suggestion":
-            print(f"GitHub setup suggestion: {issue['message']}")
+        if issue["level"] == "warning":
+            print(f"warning: {issue['message']}")
+        elif issue["level"] == "remote task":
+            print(f"GitHub remote task: {issue['message']}")
     return 0
 
 
