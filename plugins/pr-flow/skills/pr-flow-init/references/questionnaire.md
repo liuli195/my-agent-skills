@@ -2,6 +2,8 @@
 
 agent（代理）必须按本文件执行，不能临场编造问题。现有 `.pr-flow/config.yaml`（配置文件）、branch state（分支状态）或 history（历史记录）只能作为参考，不能代替用户回答或最终确认。
 
+交互硬约束：每次只提出一个问题。必须等用户回答当前问题后，才能进入下一个问题；不得一次性列出全部问题让用户批量回答。
+
 ## 场景：automatic inspection（自动检查）
 
 固定动作：提问前先做只读检查，并用表格展示已检查到的当前状态。
@@ -39,10 +41,13 @@ agent（代理）必须按本文件执行，不能临场编造问题。现有 `.
 固定问题：哪些分支需要通过 GitHub Rulesets（GitHub 规则集）做 branch protection（分支保护）？
 
 固定选项：
-- 默认 PR target branch（默认拉取请求目标分支）。
-- 发布分支。
-- 默认 PR target branch（默认拉取请求目标分支）和发布分支。
+- 从 automatic inspection（自动检查）得到的 remote branches（远端分支）逐项列出，让用户多选。
+- 默认 PR target branch（默认拉取请求目标分支）：如果存在于 remote branches（远端分支）中，标注为推荐。
 - 暂不配置远端保护。
+
+选项规则：
+- 不得固定写死 release、main 或其他分支名。
+- 如果没有检查到 remote branches（远端分支），先说明当前状态为 `not inspected`（未检查）或 `no access`（无权限），再让用户手工输入要保护的分支名或选择暂不配置。
 
 选择后果：
 - 本地配置只记录 `setup.github`（GitHub 配置建议），不自动写远端。
@@ -60,6 +65,11 @@ agent（代理）必须按本文件执行，不能临场编造问题。现有 `.
 - 暂不启用：适合没有稳定 PR 工作流的仓库。
 - 启用已检查到的具体 check name（检查名称）。
 - 先记录待办：新增或识别 PR status checks（拉取请求状态检查）后，再启用远端规则。
+
+检查项展示规则：
+- 每个 check name（检查名称）必须附带用途说明后才能让用户选择。
+- 用途说明至少包含：来源 workflow/job（工作流/任务）、验证内容、失败影响。
+- 如果无法判断某个 check name（检查名称）的用途，必须标注“用途未识别”，不得假装已理解。
 
 选择后果：
 - 如果用户选择启用但没有具体 check name（检查名称），必须记录 remote task（远端待办）：新增或识别 PR status checks（拉取请求状态检查）后再启用 `Require status checks to pass before merging`（合并前要求状态检查通过）。

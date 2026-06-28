@@ -24,21 +24,21 @@
 
 ### 1. 问答从“字段驱动”改为“用户决策驱动”
 
-采用 6 个主问题：默认 PR target branch（拉取请求目标分支）、branch protection（分支保护）目标、PR status checks（拉取请求状态检查）、CodeQL security check（CodeQL 安全检查）、hotfix（热修复）直推、merge methods（合并方式）。hotfix（热修复）授权短语只在允许 hotfix 后作为补充问题出现。
+采用 6 个主问题：默认 PR target branch（拉取请求目标分支）、branch protection（分支保护）目标、PR status checks（拉取请求状态检查）、CodeQL security check（CodeQL 安全检查）、hotfix（热修复）直推、merge methods（合并方式）。agent（代理）必须每次只提出一个问题，等用户回答后再继续。hotfix（热修复）授权短语只在允许 hotfix 后作为补充问题出现。
 
 替代方案是保留旧 `reviewGate`（审查门禁）问题并补说明。该方案仍会让用户把本地 review gate（审查门禁）误解为 GitHub PR review（拉取请求代码审查），因此放弃。
 
 ### 2. branch protection（分支保护）用 Rulesets（规则集）表达
 
-模板把 branch protection（分支保护）定义为 GitHub Rulesets（GitHub 规则集）中的 branch ruleset（分支规则集），并明确启用 `Require a pull request before merging`（合并前要求拉取请求）。默认 `required_approving_review_count: 0`，表示要求通过 PR（拉取请求）改分支，但不强制 approving review（批准审查）。
+模板把 branch protection（分支保护）定义为 GitHub Rulesets（GitHub 规则集）中的 branch ruleset（分支规则集），并明确启用 `Require a pull request before merging`（合并前要求拉取请求）。分支选项来自 automatic inspection（自动检查）得到的 remote branches（远端分支），不得固定写死 release、main 或其他分支名。默认 `required_approving_review_count: 0`，表示要求通过 PR（拉取请求）改分支，但不强制 approving review（批准审查）。
 
 ### 3. PR status checks（拉取请求状态检查）单独问
 
-PR status checks（拉取请求状态检查）需要具体 check name（检查名称）。当自动检查没有发现可用 PR 工作流时，模板只能记录“待新增或识别 PR status checks 后再启用 `Require status checks to pass before merging`”，不能编造检查名。
+PR status checks（拉取请求状态检查）需要具体 check name（检查名称）。展示每个候选检查项时必须解释来源 workflow/job（工作流/任务）、验证内容和失败影响。当自动检查没有发现可用 PR 工作流时，模板只能记录“待新增或识别 PR status checks 后再启用 `Require status checks to pass before merging`”，不能编造检查名。
 
 ### 4. 草案展示面向用户，而不是面向 YAML（配置格式）
 
-`config-draft.md`（配置草案规则）先要求展示用户可读表格：本地将写入、GitHub 当前状态、GitHub 推荐配置、风险和待办。YAML（配置格式）只作为附录，避免用户先看到配置细节而看不出流程含义。
+`config-draft.md`（配置草案规则）要求展示用户可读表格：本地将写入、GitHub 当前状态、GitHub 推荐配置、风险和待办。禁止展示完整 YAML（配置格式）草案，只允许展示必要字段路径或小片段。
 
 ### 4a. CodeQL 安全检查单独问
 

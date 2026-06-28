@@ -1219,6 +1219,7 @@ def test_pr_flow_init_content_is_organized_by_user_scenario() -> None:
         assert scenario in combined
     for template_term in ["固定问题", "固定选项", "选择后果", "跳转规则"]:
         assert template_term in combined
+    assert "每次只提出一个问题" in combined
 
 
 def test_pr_flow_init_questionnaire_uses_latest_flow() -> None:
@@ -1240,6 +1241,7 @@ def test_pr_flow_init_questionnaire_uses_latest_flow() -> None:
     positions = [questionnaire.index(section) for section in ordered_sections]
     assert positions == sorted(positions)
     assert "GitHub Rulesets" in questionnaire
+    assert "每次只提出一个问题" in questionnaire
     assert "Require a pull request before merging" in questionnaire
     assert "required_approving_review_count: 0" in questionnaire
     assert "PR status checks" in questionnaire
@@ -1266,6 +1268,14 @@ def test_pr_flow_init_questionnaire_uses_latest_flow() -> None:
     assert "no access" in questionnaire
     assert "不能声明远端状态已确认" in questionnaire
     assert "PR Flow（拉取请求流程）合并前使用哪种审查门禁" not in questionnaire
+    branch_protection_section = questionnaire.split("## 场景：branch protection", 1)[1].split("## 场景：PR status checks", 1)[0]
+    assert "从 automatic inspection（自动检查）得到的 remote branches（远端分支）逐项列出" in branch_protection_section
+    assert "发布分支" not in branch_protection_section
+    pr_status_section = questionnaire.split("## 场景：PR status checks", 1)[1].split("## 场景：CodeQL security check", 1)[0]
+    assert "每个 check name（检查名称）必须附带用途说明" in pr_status_section
+    assert "来源 workflow/job（工作流/任务）" in pr_status_section
+    assert "验证内容" in pr_status_section
+    assert "失败影响" in pr_status_section
 
 
 def test_pr_flow_init_draft_and_validation_are_user_readable() -> None:
@@ -1273,9 +1283,11 @@ def test_pr_flow_init_draft_and_validation_are_user_readable() -> None:
     config_draft = (init_dir / "references" / "config-draft.md").read_text(encoding="utf-8")
     validation = (init_dir / "references" / "validation.md").read_text(encoding="utf-8")
 
-    assert config_draft.index("用户可读摘要") < config_draft.index("YAML 附录")
     for heading in ["本地将写入", "GitHub 当前状态", "GitHub 推荐配置", "validation results"]:
         assert heading in config_draft
+    assert "禁止展示完整 YAML" in config_draft
+    assert "```yaml" not in config_draft
+    assert "仅当 `allowHotfixPush: true`" in config_draft
     assert "not inspected" in config_draft
     assert "no access" in config_draft
     assert "不代表 init（初始化）已经写入远端" in config_draft
@@ -1283,9 +1295,7 @@ def test_pr_flow_init_draft_and_validation_are_user_readable() -> None:
     assert "Require code scanning results" in config_draft
     assert "CodeQL" in config_draft
     assert "GitHub 默认阈值" in config_draft
-    draft_yaml = yaml.safe_load(config_draft.split("```yaml", 1)[1].split("```", 1)[0])
-    assert "authorization" in draft_yaml
-    assert "authorization" not in draft_yaml["branches"]["main"]
+    assert "authorization must stay top-level" in config_draft
 
     for heading in ["error（错误）", "warning（警告）", "remote tasks（远端待办）"]:
         assert heading in validation

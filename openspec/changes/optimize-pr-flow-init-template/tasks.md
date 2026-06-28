@@ -7,6 +7,7 @@
 - [x] 1.4 Add tests that require user-readable draft and validation summary sections before YAML（配置格式） details.
 - [x] 1.5 Preserve the existing plugin entrypoint（插件入口） routing test for `.codex-plugin/plugin.json`, `.claude-plugin/plugin.json` and `skills/pr-flow/SKILL.md`（总入口） without turning those files into planned source edits unless wording conflicts with the init（初始化） contract.
 - [x] 1.6 Add tests that require CodeQL security check（CodeQL 安全检查） immediately after PR status checks（拉取请求状态检查）, with only enable/disable options and `Require code scanning results` using `CodeQL`.
+- [x] 1.7 Add tests for real interaction fixes: one question at a time, dynamic branch protection options, explained PR status checks, and user-readable draft without full YAML（配置格式） display.
 
 ## 2. Skill References
 
@@ -16,6 +17,7 @@
 - [x] 2.4 Preserve the existing `SKILL.md`（技能入口） constraint that existing config and branch state cannot replace user answers or confirmation.
 - [x] 2.5 Document the GitHub（代码托管平台）not-inspected case: when GitHub access, `gh` CLI（GitHub 命令行工具） or network is unavailable, the summary must show `not inspected`（未检查） or `no access`（无权限） and must not present recommendations as confirmed current state.
 - [x] 2.6 Update questionnaire（问答模板）, config draft（配置草案规则） and validation（校验规则） with CodeQL security check（CodeQL 安全检查） remote tasks（远端待办）.
+- [x] 2.7 Update questionnaire（问答模板） and config draft（配置草案规则） to address real interaction fixes.
 
 ## 3. Verification
 

@@ -1,6 +1,6 @@
 # PR Flow Init Config Draft
 
-agent（代理）展示草案时必须先给用户可读摘要，再给 YAML 附录。YAML（配置格式）不能作为第一屏主体。
+agent（代理）展示草案时必须给用户可读摘要，禁止展示完整 YAML（配置格式）草案。只能展示必要字段片段或字段路径，不能用完整配置文件替代用户可读摘要。
 
 ## 用户可读摘要
 
@@ -46,52 +46,26 @@ agent（代理）展示草案时必须先给用户可读摘要，再给 YAML 附
 - warning（警告）：允许继续，但必须展示风险。
 - remote tasks（远端待办）：需要人工或后续 agent（代理）执行的 GitHub（代码托管平台）配置。
 
-## YAML 附录
+## YAML 写入约束
 
 草案 MUST 使用 `defaults`（默认配置）加 `branches`（分支覆盖）。`setup.github`（GitHub 配置建议）MUST NOT be consumed by diagnose、complete、cleanup、hotfix or tweak（诊断、收尾、清理、热修复、小改）。
 
-```yaml
-defaults:
-  baseBranch: main
-  mergeStrategy: merge
-  reviewGate:
-    mode: github
-    evidencePath: .pr-flow/review-pass.json
-  hotfix:
-    verifyCommand: python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full
-  wait:
-    timeoutSeconds: 600
-    pollSeconds: 15
-  pr:
-    bodyTemplatePath: .pr-flow/pr-template.md
-    requiredSections:
-      - Summary
-      - Scope
-      - Verification
-      - Risk
-      - Rollback
-branches:
-  main:
-    remote: origin
-    allowHotfixPush: false
-authorization:
-  phraseHashAlgorithm: md5
-  phraseHash: "<only when allowHotfixPush is true>"
-setup:
-  github:
-    branchRulesets:
-      - branches:
-          - main
-        rules:
-          - Require a pull request before merging
-        required_approving_review_count: 0
-    statusChecks:
-      required: false
-      task: add or identify PR status checks before enabling Require status checks to pass before merging
-    codeScanning:
-      required: false
-      task: enable Require code scanning results with CodeQL as the code scanning tool
-      thresholds: GitHub defaults
-    allowedMergeMethods:
-      - merge
-```
+必须写入或保持的关键字段路径：
+
+- `defaults.baseBranch`
+- `defaults.mergeStrategy`
+- `defaults.reviewGate`
+- `defaults.hotfix.verifyCommand`
+- `defaults.wait`
+- `defaults.pr.bodyTemplatePath`
+- `defaults.pr.requiredSections`
+- `branches.<branch>.remote`
+- `branches.<branch>.allowHotfixPush`
+- `authorization.phraseHashAlgorithm`：仅当 `allowHotfixPush: true` 时写入或保持。
+- `authorization.phraseHash`：仅当 `allowHotfixPush: true` 时写入或保持。
+- `setup.github.branchRulesets`
+- `setup.github.statusChecks`
+- `setup.github.codeScanning`
+- `setup.github.allowedMergeMethods`
+
+`authorization must stay top-level`：`authorization`（授权）必须保持在顶层，不能放到 `branches.<branch>`（分支配置）下面。
