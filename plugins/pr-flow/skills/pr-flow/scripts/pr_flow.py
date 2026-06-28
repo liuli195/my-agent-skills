@@ -144,6 +144,8 @@ def validate_config(config: dict[str, Any]) -> list[dict[str, str]]:
         add_issue(issues, "error", "defaults.reviewGate.evidencePath missing")
     if review_mode in {"github", "dual"}:
         add_issue(issues, "remote task", "configure GitHub required review")
+    if review_mode in {"local", "dual"}:
+        add_issue(issues, "warning", "document review-pass.json evidence contract")
     wait = defaults.get("wait")
     if wait is not None and not isinstance(wait, dict):
         add_issue(issues, "error", "defaults.wait must be a mapping")

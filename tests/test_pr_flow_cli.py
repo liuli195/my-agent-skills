@@ -1407,6 +1407,7 @@ def test_validate_does_not_report_local_review_evidence_as_remote_task(tmp_path:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "remote task: document review-pass.json evidence contract" not in result.stdout
+    assert "warning: document review-pass.json evidence contract" in result.stdout
 
 
 def test_validate_reports_errors_for_missing_core_shape(tmp_path: Path) -> None:

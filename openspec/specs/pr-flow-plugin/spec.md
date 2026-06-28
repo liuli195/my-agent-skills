@@ -255,16 +255,16 @@ PR Flow（拉取请求流程）MUST preserve the boundary between default fast v
 
 #### Scenario: Validate reports structured results
 - **WHEN** validate（校验）发现配置问题
-- **THEN** validate（校验）MUST 输出 error（错误）、warning（警告）或 setup suggestion（配置建议）
+- **THEN** validate（校验）MUST 输出 error（错误）、warning（警告）或 remote task（远端待办）
 - **THEN** error（错误）MUST 表示配置本身不可用
 - **THEN** warning（警告）MUST 表示配置可写入但存在流程风险
-- **THEN** setup suggestion（配置建议）MUST 表示需要用户或 agent（代理）另行处理的 GitHub（代码托管平台）或环境配置
+- **THEN** remote task（远端待办）MUST 表示需要用户或 agent（代理）另行处理的 GitHub（代码托管平台）配置
 
 #### Scenario: Validation errors block init writes
 - **WHEN** init（初始化）准备写入已确认配置
 - **AND** validate（校验）对该配置输出一个或多个 error（错误）
 - **THEN** init（初始化）MUST stop without writing `.pr-flow/config.yaml`、PR body template（拉取请求正文模板）或 `.pr-flow/.gitignore`
-- **THEN** warning（警告）和 setup suggestion（配置建议）MAY be shown before final confirmation, but MUST NOT block writing by themselves
+- **THEN** warning（警告）和 remote task（远端待办）MAY be shown before final confirmation, but MUST NOT block writing by themselves
 
 #### Scenario: Validate checks hotfix dependencies
 - **WHEN** 任一 `branches.<branch>.allowHotfixPush` 为 `true`
@@ -279,7 +279,7 @@ PR Flow（拉取请求流程）MUST preserve the boundary between default fast v
 - **THEN** validate（校验）MUST 输出 required review（必需审查）远端配置建议
 - **WHEN** `reviewGate.mode` 是 `local` 或 `dual`
 - **THEN** validate（校验）MUST 要求存在非空 `reviewGate.evidencePath`
-- **THEN** validate（校验）MUST 输出 review-pass.json（审查通过文件）字段契约建议
+- **THEN** validate（校验）MUST 输出 review-pass.json（审查通过文件）字段契约 warning（警告）
 
 #### Scenario: Validate checks GitHub setup dependencies
 - **WHEN** 配置声明 required checks（必需检查）意图

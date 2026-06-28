@@ -10,7 +10,7 @@ canonical_spec: openspec
 
 `pr-flow-init`（拉取请求流程初始化）已经有入口 Skill（技能）和三个 reference（参考文件），但现有问答模板仍把本地运行配置、GitHub（代码托管平台）远端配置建议和用户操作待办混在一起。实际交互中，default PR target branch（默认拉取请求目标分支）、branch protection（分支保护）、PR review（拉取请求代码审查）和 PR status checks（拉取请求状态检查）容易被混问。
 
-本次变更只修正模板和测试契约，不改 `pr_flow.py`（拉取请求流程脚本）运行语义。
+本次变更主要修正模板和测试契约；`pr_flow.py`（拉取请求流程脚本）只同步 validate（校验）输出名：GitHub 配置建议输出为 `remote task`（远端待办），本地 review-pass.json（审查通过文件）契约保留为 warning（警告）。
 
 ## 目标
 
