@@ -4,11 +4,11 @@
   "mode": "beta",
   "canonical_spec": "openspec",
   "generated_by": "comet-handoff.sh",
-  "context_hash": "bc417a65eafbd0f44ee3bd7b62808bf821a94648f1204aec72121b5ab993f640",
+  "context_hash": "87ce12bf3bf1782a5d73d8d4010d372b380bc5848209f46ab6ef5f7ad93096cb",
   "files": [
-    { "path": "openspec/changes/optimize-pr-flow-init-template/proposal.md", "sha256": "2573ecb00df03ab9ace4ccd025d1b3b03df3a9fa4ad402c9f75f9e965d568ca7", "role": "supporting" },
-    { "path": "openspec/changes/optimize-pr-flow-init-template/design.md", "sha256": "ba96146cc5b8b3a937d61c18a3a09ee81cac78829642b03adca4bc6e7feeb63f", "role": "supporting" },
-    { "path": "openspec/changes/optimize-pr-flow-init-template/tasks.md", "sha256": "aa34f0b73e6f8e30959999416b24c8cf24dace02c0b50d3062b377630f894768", "role": "supporting" },
-    { "path": "openspec/changes/optimize-pr-flow-init-template/specs/pr-flow-plugin/spec.md", "sha256": "610262eed1dbce07a7fd3791f0ca0d824b032dbeb50056d08ad73b267f639d97", "role": "spec" }
+    { "path": "openspec/changes/optimize-pr-flow-init-template/proposal.md", "sha256": "fca1d8dc164ed276f85c9183918e8e659c47ad9949f6a15e63cdc303642cc48b", "role": "supporting" },
+    { "path": "openspec/changes/optimize-pr-flow-init-template/design.md", "sha256": "1489104cce501a669098b48acbc35aa52078088ec2d8c4cbb751621c240463ab", "role": "supporting" },
+    { "path": "openspec/changes/optimize-pr-flow-init-template/tasks.md", "sha256": "59b0f7af58a9f6b1883e2b0f9f8694933d795a8ed5cc1459b3b079e7cbf64174", "role": "supporting" },
+    { "path": "openspec/changes/optimize-pr-flow-init-template/specs/pr-flow-plugin/spec.md", "sha256": "bd00e252fe0a18732840b5a4be6a283906c90efd80426ccb13cf57420c79ebae", "role": "spec" }
   ]
 }
