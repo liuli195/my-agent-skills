@@ -1,0 +1,14 @@
+{
+  "change": "optimize-pr-flow-init-template",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "bc417a65eafbd0f44ee3bd7b62808bf821a94648f1204aec72121b5ab993f640",
+  "files": [
+    { "path": "openspec/changes/optimize-pr-flow-init-template/proposal.md", "sha256": "2573ecb00df03ab9ace4ccd025d1b3b03df3a9fa4ad402c9f75f9e965d568ca7", "role": "supporting" },
+    { "path": "openspec/changes/optimize-pr-flow-init-template/design.md", "sha256": "ba96146cc5b8b3a937d61c18a3a09ee81cac78829642b03adca4bc6e7feeb63f", "role": "supporting" },
+    { "path": "openspec/changes/optimize-pr-flow-init-template/tasks.md", "sha256": "aa34f0b73e6f8e30959999416b24c8cf24dace02c0b50d3062b377630f894768", "role": "supporting" },
+    { "path": "openspec/changes/optimize-pr-flow-init-template/specs/pr-flow-plugin/spec.md", "sha256": "610262eed1dbce07a7fd3791f0ca0d824b032dbeb50056d08ad73b267f639d97", "role": "spec" }
+  ]
+}

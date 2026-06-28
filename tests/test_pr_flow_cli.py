@@ -1189,6 +1189,8 @@ def test_pr_flow_init_skill_uses_progressive_disclosure_references() -> None:
         assert reference in skill_text
         assert (skill_path.parent / reference).is_file()
     assert "用户沉默 MUST NOT 被视为确认" in skill_text
+    assert "即使仓库已存在 `.pr-flow/config.yaml`" in skill_text
+    assert "不能代替用户回答或确认" in skill_text
     assert "完整问答" not in skill_text
 
 
@@ -1204,16 +1206,90 @@ def test_pr_flow_init_content_is_organized_by_user_scenario() -> None:
     )
 
     for scenario in [
-        "初次启用 PR Flow",
-        "review gate",
+        "automatic inspection",
+        "default PR target branch",
+        "branch protection",
+        "PR status checks",
+        "CodeQL security check",
         "hotfix",
-        "cleanup",
-        "GitHub setup suggestions",
+        "merge methods",
+        "GitHub 推荐配置",
         "最终写入确认",
     ]:
         assert scenario in combined
     for template_term in ["固定问题", "固定选项", "选择后果", "跳转规则"]:
         assert template_term in combined
+
+
+def test_pr_flow_init_questionnaire_uses_latest_flow() -> None:
+    init_dir = REPO_ROOT / "plugins" / "pr-flow" / "skills" / "pr-flow-init"
+    questionnaire = (init_dir / "references" / "questionnaire.md").read_text(encoding="utf-8")
+
+    ordered_sections = [
+        "## 场景：automatic inspection",
+        "## 场景：default PR target branch",
+        "## 场景：branch protection",
+        "## 场景：PR status checks",
+        "## 场景：CodeQL security check",
+        "## 场景：hotfix",
+        "## 场景：authorization phrase",
+        "## 场景：merge methods",
+        "## 场景：GitHub 推荐配置",
+        "## 场景：最终写入确认",
+    ]
+    positions = [questionnaire.index(section) for section in ordered_sections]
+    assert positions == sorted(positions)
+    assert "GitHub Rulesets" in questionnaire
+    assert "Require a pull request before merging" in questionnaire
+    assert "required_approving_review_count: 0" in questionnaire
+    assert "PR status checks" in questionnaire
+    assert "Require status checks to pass before merging" in questionnaire
+    assert "CodeQL security check" in questionnaire
+    assert "开启" in questionnaire
+    assert "不开启" in questionnaire
+    assert "Require code scanning results" in questionnaire
+    assert "CodeQL" in questionnaire
+    assert "reuse existing authorization phrase" in questionnaire
+    assert "create new authorization phrase" in questionnaire
+    assert "authorization.phraseHashAlgorithm: md5" in questionnaire
+    assert "authorization.phraseHash" in questionnaire
+    assert "merge methods" in questionnaire
+    assert "not inspected" in questionnaire
+    assert "no access" in questionnaire
+    assert "不能声明远端状态已确认" in questionnaire
+    assert "PR Flow（拉取请求流程）合并前使用哪种审查门禁" not in questionnaire
+
+
+def test_pr_flow_init_draft_and_validation_are_user_readable() -> None:
+    init_dir = REPO_ROOT / "plugins" / "pr-flow" / "skills" / "pr-flow-init"
+    config_draft = (init_dir / "references" / "config-draft.md").read_text(encoding="utf-8")
+    validation = (init_dir / "references" / "validation.md").read_text(encoding="utf-8")
+
+    assert config_draft.index("用户可读摘要") < config_draft.index("YAML 附录")
+    for heading in ["本地将写入", "GitHub 当前状态", "GitHub 推荐配置", "validation results"]:
+        assert heading in config_draft
+    assert "not inspected" in config_draft
+    assert "no access" in config_draft
+    assert "不代表 init（初始化）已经写入远端" in config_draft
+    assert "新增或识别 PR status checks" in config_draft
+    assert "Require code scanning results" in config_draft
+    assert "CodeQL" in config_draft
+
+    for heading in ["error（错误）", "warning（警告）", "remote tasks（远端待办）"]:
+        assert heading in validation
+    assert "not inspected" in validation
+    assert "no access" in validation
+    assert "不能声明远端状态已确认" in validation
+    assert "Require code scanning results" in validation
+    assert "CodeQL" in validation
+
+
+def test_pr_flow_init_skill_uses_remote_tasks_not_setup_suggestions() -> None:
+    skill_path = REPO_ROOT / "plugins" / "pr-flow" / "skills" / "pr-flow-init" / "SKILL.md"
+    skill_text = skill_path.read_text(encoding="utf-8")
+
+    assert "remote tasks（远端待办）" in skill_text
+    assert "warning（警告）或 setup suggestion（配置建议）" not in skill_text
 
 
 def test_pr_flow_plugin_init_entrypoints_route_to_pr_flow_init() -> None:
