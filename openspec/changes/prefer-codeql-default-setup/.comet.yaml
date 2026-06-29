@@ -1,5 +1,5 @@
 workflow: full
-phase: verify
+phase: archive
 context_compression: beta
 build_mode: executing-plans
 build_pause: null
@@ -11,11 +11,11 @@ auto_transition: true
 base_ref: 2ff3172c4141ea4349a9c0280efb3f76beb89115
 design_doc: docs/superpowers/specs/2026-06-29-prefer-codeql-default-setup-design.md
 plan: docs/superpowers/plans/2026-06-29-prefer-codeql-default-setup.md
-verify_result: pending
+verify_result: pass
 verification_report: docs/superpowers/reports/2026-06-29-prefer-codeql-default-setup-verify.md
 branch_status: handled
 created_at: 2026-06-29
-verified_at: null
+verified_at: 2026-06-29
 archived: false
 handoff_context: openspec/changes/prefer-codeql-default-setup/.comet/handoff/spec-context.json
 handoff_hash: dffa350f6b0ebc9cd1af386e990084e85796717c05c81d67a09ba466495b0605
