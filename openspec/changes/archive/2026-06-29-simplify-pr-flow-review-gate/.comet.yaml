@@ -16,6 +16,6 @@ verification_report: docs/superpowers/reports/2026-06-30-simplify-pr-flow-review
 branch_status: handled
 created_at: 2026-06-29
 verified_at: 2026-06-29
-archived: false
+archived: true
 handoff_context: openspec/changes/simplify-pr-flow-review-gate/.comet/handoff/spec-context.json
 handoff_hash: c535e1942dbfb66999fc448508e0e580251a193ac70d5acf3e086de8d1ff025a

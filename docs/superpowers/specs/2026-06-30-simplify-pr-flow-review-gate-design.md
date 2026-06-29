@@ -2,6 +2,8 @@
 comet_change: simplify-pr-flow-review-gate
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-29-simplify-pr-flow-review-gate
+status: final
 ---
 
 # Simplify PR Flow Review Gate
