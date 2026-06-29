@@ -1,7 +1,10 @@
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -11,7 +14,7 @@ CLAUDE_REPO_MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 RELEASE_FLOW_PROJECTION = REPO_ROOT / ".release-flow" / "projection.yaml"
 
 PLUGIN_NAME = "pr-flow"
-PLUGIN_VERSION = "0.1.19"
+PLUGIN_VERSION = "0.1.20"
 PLUGIN_DESCRIPTION = (
     "PR Flow Plugin（拉取请求流程插件）。pr-flow-init 初始化 PR Flow（拉取请求流程）配置："
     "agent（代理）问答、配置草案、只读 validate（校验）和用户确认后本地写入。"
@@ -132,6 +135,9 @@ def test_pr_flow_bare_commands_report_stable_contract() -> None:
 
 
 def test_pr_flow_package_passes_repo_build_checks() -> None:
+    if shutil.which("claude") is None:
+        pytest.skip("claude CLI is required for package validation")
+
     result = subprocess.run(
         [
             sys.executable,

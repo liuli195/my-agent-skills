@@ -819,6 +819,9 @@ def run_complete_in_process(
     git_stub = CommandStub()
     for args, stdout, returncode in git_responses or []:
         git_stub.add(args, stdout=stdout, returncode=returncode)
+    git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
+    git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
+    git_stub.add(["rev-list", "--count", "@{u}..HEAD"], stdout="0\n")
     monkeypatch.setattr(module, "gh", gh_stub)
     monkeypatch.setattr(module, "git", git_stub)
     result = invoke_pr_flow(["complete", "--project", str(project)], module=module)
@@ -873,6 +876,7 @@ def run_tweak_in_process(
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),
         (["status", "--short"], ""),
+        (["branch", "--show-current"], "feature/example\n"),
         (["branch", "--show-current"], "feature/example\n"),
         (["push", "origin", "--delete", "feature/example"], ""),
         (["ls-remote", "--heads", "origin", "feature/example"], ""),
@@ -1232,8 +1236,8 @@ def test_pr_flow_init_questionnaire_uses_latest_flow() -> None:
         "## 场景：automatic inspection",
         "## 场景：default PR target branch",
         "## 场景：branch protection",
-        "## 场景：PR status checks",
         "## 场景：CodeQL security check",
+        "## 场景：PR status checks",
         "## 场景：hotfix",
         "## 场景：authorization phrase",
         "## 场景：merge methods",
@@ -1255,13 +1259,15 @@ def test_pr_flow_init_questionnaire_uses_latest_flow() -> None:
     assert "CodeQL" in questionnaire
     assert "GitHub 默认阈值" in questionnaire
     assert "CodeQL scan producer（CodeQL 扫描结果来源）" in questionnaire
-    codeql_section = questionnaire.split("## 场景：CodeQL security check", 1)[1].split("## 场景：hotfix", 1)[0]
+    codeql_section = questionnaire.split("## 场景：CodeQL security check", 1)[1].split("## 场景：PR status checks", 1)[0]
     codeql_options_block = codeql_section.split("固定选项：", 1)[1].split("选择后果：", 1)[0]
     codeql_options = [line for line in codeql_options_block.splitlines() if line.startswith("- ")]
     assert codeql_options == [
         "- 开启：在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果），选择 `CodeQL` 作为 code scanning tool（代码扫描工具），阈值采用 GitHub 默认阈值，并创建或启用 CodeQL scan producer（CodeQL 扫描结果来源）。",
         "- 不开启：不生成 CodeQL（代码扫描工具）远端待办。",
     ]
+    assert "开启：继续 PR status checks（拉取请求状态检查）场景，允许展示 `Analyze Python` 作为高级额外选项" in codeql_section
+    assert "不允许展示 `Analyze Python` 或 `CodeQL` 作为 CodeQL（代码扫描工具）相关 status check（状态检查）选项" in codeql_section
     assert "reuse existing authorization phrase" in questionnaire
     assert "create new authorization phrase" in questionnaire
     assert "authorization.phraseHashAlgorithm: md5" in questionnaire
@@ -1271,7 +1277,7 @@ def test_pr_flow_init_questionnaire_uses_latest_flow() -> None:
     assert "no access" in questionnaire
     assert "不能声明远端状态已确认" in questionnaire
     assert "PR Flow（拉取请求流程）合并前使用哪种审查门禁" not in questionnaire
-    branch_protection_section = questionnaire.split("## 场景：branch protection", 1)[1].split("## 场景：PR status checks", 1)[0]
+    branch_protection_section = questionnaire.split("## 场景：branch protection", 1)[1].split("## 场景：CodeQL security check", 1)[0]
     assert "defaults.reviewGate.mode: github" in branch_protection_section
     assert "暂不配置远端保护" in branch_protection_section
     assert "不得派生 `defaults.reviewGate.mode: github`" in branch_protection_section
@@ -1281,11 +1287,15 @@ def test_pr_flow_init_questionnaire_uses_latest_flow() -> None:
     assert "Block force pushes" in branch_protection_section
     assert "阻止强制推送" in branch_protection_section
     assert "发布分支" not in branch_protection_section
-    pr_status_section = questionnaire.split("## 场景：PR status checks", 1)[1].split("## 场景：CodeQL security check", 1)[0]
+    pr_status_section = questionnaire.split("## 场景：PR status checks", 1)[1].split("## 场景：hotfix", 1)[0]
     assert "每个 check name（检查名称）必须附带用途说明" in pr_status_section
     assert "来源 workflow/job（工作流/任务）" in pr_status_section
     assert "验证内容" in pr_status_section
     assert "失败影响" in pr_status_section
+    assert "非安全扫描 check name（检查名称）" in pr_status_section
+    assert "`Analyze Python`" in pr_status_section
+    assert "高级额外选项" in pr_status_section
+    assert "`CodeQL` status check（状态检查）默认不推荐重复选择" in pr_status_section
     final_write_section = questionnaire.split("## 场景：最终写入确认", 1)[1].split("## 禁止重复问题", 1)[0]
     final_options_block = final_write_section.split("固定选项：", 1)[1].split("选择后果：", 1)[0]
     final_options = [line for line in final_options_block.splitlines() if line.startswith("- ")]
@@ -1655,14 +1665,14 @@ def test_diagnose_outputs_push_required_without_upstream(tmp_path: Path) -> None
     assert "push current branch before continuing" in result.stdout
 
 
-def test_complete_outputs_push_required_without_upstream(tmp_path: Path, monkeypatch) -> None:
+def test_complete_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
     project = tmp_path / "project"
     project.mkdir()
-    write_minimal_pr_flow_config(project)
+    write_complete_pr_flow_config(project)
     git_stub = CommandStub()
     git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
     git_stub.add(
@@ -1670,7 +1680,79 @@ def test_complete_outputs_push_required_without_upstream(tmp_path: Path, monkeyp
         stderr="fatal: no upstream configured\n",
         returncode=128,
     )
-    gh_stub = CommandStub()
+    git_stub.add(["status", "--porcelain"], stdout="")
+    git_stub.add(["push", "-u", "origin", "feature/no-upstream"])
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found for branch\n", returncode=1)
+    gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fno-upstream", "--jq", "length"], stdout="0\n")
+    gh_stub.add(["pr", "create", "--base", "main", "--fill"], stdout="https://github.example/test/repo/pull/12\n")
+    pending_pr = pr_view_json(checks=[{"name": "ci", "status": "QUEUED"}], head_oid="a" * 40)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    result = invoke_pr_flow(["complete", "--project", str(project)], module=module)
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    assert ("push", "-u", "origin", "feature/no-upstream") in git_stub.calls
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "DISPATCH_REQUIRED"
+    assert status["command"] == "complete"
+    assert status["details"]["reason"] == "checks_pending"
+
+
+def test_complete_auto_pushes_existing_pr_when_local_branch_is_ahead(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    pending_pr = pr_view_json(checks=[{"name": "ci", "status": "QUEUED"}], head_oid="a" * 40)
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
+    gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fexample", "--jq", "length"], stdout="0\n")
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
+    git_stub = CommandStub()
+    git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
+    git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
+    git_stub.add(["rev-list", "--count", "@{u}..HEAD"], stdout="1\n")
+    git_stub.add(["status", "--porcelain"], stdout="")
+    git_stub.add(["push"])
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    result = invoke_pr_flow(["complete", "--project", str(project)], module=module)
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    assert ("push",) in git_stub.calls
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "DISPATCH_REQUIRED"
+    assert status["command"] == "complete"
+    assert status["details"]["reason"] == "checks_pending"
+
+
+def test_complete_refuses_auto_push_when_worktree_dirty(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    git_stub = CommandStub()
+    git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
+    git_stub.add(
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        stderr="fatal: no upstream configured\n",
+        returncode=128,
+    )
+    git_stub.add(["status", "--porcelain"], stdout=" M README.md\n")
+    gh_stub = CommandStub(consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found for branch\n", returncode=1)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
@@ -1678,13 +1760,110 @@ def test_complete_outputs_push_required_without_upstream(tmp_path: Path, monkeyp
     result = invoke_pr_flow(["complete", "--project", str(project)], module=module)
 
     assert result.returncode == 1
-    assert "status: PUSH_REQUIRED" in result.stdout
-    assert gh_stub.calls == [("pr", "view", "--json", module.PR_VIEW_FIELDS)]
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    assert not any(call and call[0] == "push" for call in git_stub.calls)
+    assert not any(call and call[0] == "api" for call in gh_stub.calls)
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "PUSH_REQUIRED"
-    assert status["command"] == "complete"
+    assert status["details"]["reason"] == "worktree_dirty"
+    assert status["details"]["dirtyFiles"] == [" M README.md"]
+
+
+def test_complete_refuses_auto_push_when_remote_branch_has_active_rules(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    git_stub = CommandStub()
+    git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
+    git_stub.add(
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        stderr="fatal: no upstream configured\n",
+        returncode=128,
+    )
+    git_stub.add(["status", "--porcelain"], stdout="")
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found for branch\n", returncode=1)
+    gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fno-upstream", "--jq", "length"], stdout="1\n")
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    result = invoke_pr_flow(["complete", "--project", str(project)], module=module)
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    assert not any(call and call[0] == "push" for call in git_stub.calls)
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "protected_branch_auto_push_blocked"
     assert status["details"]["branch"] == "feature/no-upstream"
-    assert status["details"]["reason"] == "missing_upstream"
+
+
+def test_complete_refuses_auto_push_when_remote_rules_lookup_fails(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    git_stub = CommandStub()
+    git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
+    git_stub.add(
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        stderr="fatal: no upstream configured\n",
+        returncode=128,
+    )
+    git_stub.add(["status", "--porcelain"], stdout="")
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found for branch\n", returncode=1)
+    gh_stub.add(
+        ["api", "repos/{owner}/{repo}/rules/branches/feature%2Fno-upstream", "--jq", "length"],
+        stderr="api failed\n",
+        returncode=1,
+    )
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    result = invoke_pr_flow(["complete", "--project", str(project)], module=module)
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    assert not any(call and call[0] == "push" for call in git_stub.calls)
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "remote_branch_rules_lookup_failed"
+
+
+def test_complete_outputs_push_required_when_auto_push_fails(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    git_stub = CommandStub()
+    git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
+    git_stub.add(
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        stderr="fatal: no upstream configured\n",
+        returncode=128,
+    )
+    git_stub.add(["status", "--porcelain"], stdout="")
+    git_stub.add(["push", "-u", "origin", "feature/no-upstream"], stderr="push failed\n", returncode=1)
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found for branch\n", returncode=1)
+    gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fno-upstream", "--jq", "length"], stdout="0\n")
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    result = invoke_pr_flow(["complete", "--project", str(project)], module=module)
+
+    assert result.returncode == 1
+    assert "status: PUSH_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "git_push_failed"
     assert status["details"]["nextCommand"] == "git push -u origin feature/no-upstream"
 
 
@@ -1910,8 +2089,11 @@ def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path, 
     git_stub = CommandStub(consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
+        (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),
         (["status", "--short"], ""),
+        (["branch", "--show-current"], "feature/example\n"),
         (["branch", "--show-current"], "feature/example\n"),
         (["push", "origin", "--delete", "feature/example"], ""),
         (["ls-remote", "--heads", "origin", "feature/example"], ""),
@@ -1980,8 +2162,11 @@ def test_complete_does_not_run_build_and_verify_full_verify(tmp_path: Path, monk
     git_stub = CommandStub(consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
+        (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),
         (["status", "--short"], ""),
+        (["branch", "--show-current"], "feature/example\n"),
         (["branch", "--show-current"], "feature/example\n"),
         (["push", "origin", "--delete", "feature/example"], ""),
         (["ls-remote", "--heads", "origin", "feature/example"], ""),

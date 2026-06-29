@@ -24,3 +24,35 @@ branches:
   main:
     remote: origin
     allowHotfixPush: true
+setup:
+  github:
+    branchRulesets:
+    - name: PR Flow protected branches
+      branches:
+      - main
+      requirePullRequestBeforeMerging: true
+      requiredApprovingReviewCount: 0
+      restrictDeletions: true
+      blockForcePushes: true
+    - name: Release Flow channel branch
+      branches:
+      - marketplace
+      restrictDeletions: true
+      note: keep deletion-only protection
+    requiredChecks:
+    - Full Verify
+    statusChecks:
+      required:
+      - name: Full Verify
+        source: Full Verify workflow job
+        purpose: repository full verification
+    codeScanning:
+      tool: CodeQL
+      requireResults: true
+      alertsThreshold: github-default
+    allowedMergeMethods:
+    - merge
+    autoDeleteHeadBranch: false
+    hotfixBypass:
+      branches:
+      - main

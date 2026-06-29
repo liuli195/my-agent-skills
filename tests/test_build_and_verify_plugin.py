@@ -7,7 +7,6 @@ import shutil
 import shlex
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 from typing import Any, Callable
 
@@ -24,7 +23,6 @@ RELEASE_FLOW_SCRIPT = REPO_ROOT / "plugins" / "release-flow" / "skills" / "relea
 BUILD_AND_VERIFY_SCRIPT = (
     PLUGIN_ROOT / "skills" / "build-and-verify" / "scripts" / "build_and_verify.py"
 )
-CHANGE_BASE_REF = "4030d1ceb81fa6e450ef517e09d2ff391f5260b2"
 
 PLUGIN_NAME = "build-and-verify"
 INIT_SKILL_NAME = "build-and-verify-init"
@@ -36,7 +34,7 @@ REQUIRED_INIT_REFERENCES = {
     "config-draft.md",
     "validation.md",
 }
-PLUGIN_VERSION = "0.1.19"
+PLUGIN_VERSION = "0.1.20"
 PLUGIN_DESCRIPTION = "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）"
 
 
@@ -1166,20 +1164,9 @@ def test_build_and_verify_explicit_pytest_paths_cover_removed_pyproject_testpath
         for token in check["command"].split()
         if token.startswith("tests/") and token.endswith(".py")
     }
-    result = subprocess.run(
-        ["git", "show", f"{CHANGE_BASE_REF}:pyproject.toml"],
-        cwd=REPO_ROOT,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert result.returncode == 0, result.stderr
-    pytest_options = tomllib.loads(result.stdout)["tool"]["pytest"]["ini_options"]
     expected_test_files = {
         path.relative_to(REPO_ROOT).as_posix()
-        for testpath in pytest_options["testpaths"]
-        for pattern in pytest_options.get("python_files", ["test_*.py"])
-        for path in (REPO_ROOT / testpath).glob(pattern)
+        for path in (REPO_ROOT / "tests").glob("test_*.py")
     }
 
     assert explicit_test_files == expected_test_files
@@ -1199,7 +1186,7 @@ def test_build_and_verify_release_projection_passes_real_validate() -> None:
 
 def test_build_and_verify_release_projection_projects_real_catalogs(tmp_path: Path) -> None:
     project = tmp_path / "project"
-    vars_file = write_release_projection_project(project)
+    write_release_projection_project(project)
 
     result = subprocess.run(
         [
@@ -1208,8 +1195,6 @@ def test_build_and_verify_release_projection_projects_real_catalogs(tmp_path: Pa
             "project",
             "--project",
             str(project),
-            "--vars-file",
-            str(vars_file),
         ],
         cwd=REPO_ROOT,
         check=False,

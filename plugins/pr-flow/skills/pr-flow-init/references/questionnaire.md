@@ -59,26 +59,6 @@ agent（代理）必须按本文件执行，不能临场编造问题。现有 `.
 - 远端待办必须默认启用 `Restrict deletions`（限制删除）。
 - 远端待办必须默认启用 `Block force pushes`（阻止强制推送）。
 
-跳转规则：继续 PR status checks（拉取请求状态检查）场景。
-
-## 场景：PR status checks（拉取请求状态检查）
-
-固定问题：是否要求 PR status checks（拉取请求状态检查）通过后才能合并？
-
-固定选项：
-- 暂不启用：适合没有稳定 PR 工作流的仓库。
-- 启用已检查到的具体 check name（检查名称）。
-- 先记录待办：新增或识别 PR status checks（拉取请求状态检查）后，再启用远端规则。
-
-检查项展示规则：
-- 每个 check name（检查名称）必须附带用途说明后才能让用户选择。
-- 用途说明至少包含：来源 workflow/job（工作流/任务）、验证内容、失败影响。
-- 如果无法判断某个 check name（检查名称）的用途，必须标注“用途未识别”，不得假装已理解。
-
-选择后果：
-- 如果用户选择启用但没有具体 check name（检查名称），必须记录 remote task（远端待办）：新增或识别 PR status checks（拉取请求状态检查）后再启用 `Require status checks to pass before merging`（合并前要求状态检查通过）。
-- agent（代理）不得编造 check name（检查名称）。
-
 跳转规则：继续 CodeQL security check（CodeQL 安全检查）场景。
 
 ## 场景：CodeQL security check（CodeQL 安全检查）
@@ -92,6 +72,30 @@ agent（代理）必须按本文件执行，不能临场编造问题。现有 `.
 选择后果：
 - 开启：只写入 `setup.github`（GitHub 配置建议）remote task（远端待办），包含 Rulesets rule（规则集规则）和 CodeQL scan producer（CodeQL 扫描结果来源），不自动写 GitHub（代码托管平台）远端。
 - 不开启：不写 CodeQL（代码扫描工具）远端待办。
+
+跳转规则：
+- 开启：继续 PR status checks（拉取请求状态检查）场景，允许展示 `Analyze Python` 作为高级额外选项。
+- 不开启：继续 PR status checks（拉取请求状态检查）场景，但不允许展示 `Analyze Python` 或 `CodeQL` 作为 CodeQL（代码扫描工具）相关 status check（状态检查）选项。
+
+## 场景：PR status checks（拉取请求状态检查）
+
+固定问题：是否要求 PR status checks（拉取请求状态检查）通过后才能合并？
+
+固定选项：
+- 暂不启用：适合没有稳定 PR 工作流的仓库。
+- 启用已检查到的非安全扫描 check name（检查名称）。
+- 开启 CodeQL security check（CodeQL 安全检查）时，可额外启用 `Analyze Python`：只作为要求 CodeQL analysis workflow job（CodeQL 分析工作流任务）成功的高级额外选项。
+- 先记录待办：新增或识别 PR status checks（拉取请求状态检查）后，再启用远端规则。
+
+检查项展示规则：
+- 每个 check name（检查名称）必须附带用途说明后才能让用户选择。
+- 用途说明至少包含：来源 workflow/job（工作流/任务）、验证内容、失败影响。
+- 如果无法判断某个 check name（检查名称）的用途，必须标注“用途未识别”，不得假装已理解。
+- `CodeQL` status check（状态检查）默认不推荐重复选择；CodeQL security gate（CodeQL 安全门禁）默认由 `Require code scanning results`（要求代码扫描结果）表达。
+
+选择后果：
+- 如果用户选择启用但没有具体 check name（检查名称），必须记录 remote task（远端待办）：新增或识别 PR status checks（拉取请求状态检查）后再启用 `Require status checks to pass before merging`（合并前要求状态检查通过）。
+- agent（代理）不得编造 check name（检查名称）。
 
 跳转规则：继续 hotfix（热修复）场景。
 
@@ -168,7 +172,7 @@ agent（代理）必须按本文件执行，不能临场编造问题。现有 `.
 选择后果：
 - 不写入，放弃本次配置：停止，不写入 `.pr-flow/config.yaml`、`.pr-flow/pr-template.md` 和 `.pr-flow/.gitignore`。
 - 只写入本地配置：仅在 validate（校验）没有 error（错误）时运行 init（初始化）写入本地文件，不写 GitHub（代码托管平台）远端配置。
-- 按 remote tasks（远端待办）完成 GitHub（代码托管平台）配置，然后再写入本地配置：agent（代理）先按远端待办执行 GitHub（代码托管平台）配置，再在 validate（校验）没有 error（错误）时运行 init（初始化）写入本地文件。
+- 按 remote tasks（远端待办）完成 GitHub（代码托管平台）配置，然后再写入本地配置：agent（代理）先按远端待办执行 GitHub（代码托管平台）配置，再在 validate（校验）没有 error（错误）时运行 init（初始化）写入本地文件。用户选择此选项，即代表用户授权进行 GitHub（代码托管平台）配置。
 - GitHub（代码托管平台）配置由 agent（代理）执行；插件不提供 GitHub（代码托管平台）配置脚本能力。
 - 用户沉默 MUST NOT 被视为确认。
 
