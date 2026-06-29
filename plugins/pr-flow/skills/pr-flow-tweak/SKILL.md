@@ -11,10 +11,10 @@ description: "PR Flow（拉取请求流程）tweak（小改）路径，用于非
 
 该路径跳过 review gate（审查门禁），但仍保留 checks（检查）、merge（合并）和 cleanup（清理）。
 
-只进入 PR Flow（拉取请求流程）tweak（小改）路径，不修改 OpenSpec（开放规格）任务。
+只进入 PR Flow（拉取请求流程）tweak（小改）路径，不修改 OpenSpec（开放规格）任务。`--reason` 只说明为什么使用 tweak（小改）路径，不写入 PR body（拉取请求正文）。
 
 ## 命令
 
 ```bash
-python plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py tweak --project /path/to/project --reason "small docs polish"
+python plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py tweak --project . --reason "small docs polish" --summary "更新 PR Flow 文档措辞" --scope "只修改 PR Flow 文档" --fixes 98
 ```
