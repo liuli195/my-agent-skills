@@ -1,0 +1,14 @@
+{
+  "change": "add-json-artifact-checks",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "f9d24ba1a404310e8d31e4b4f32f37d89f9de67d82ec176497e951895391d031",
+  "files": [
+    { "path": "openspec/changes/add-json-artifact-checks/proposal.md", "sha256": "f8106e7d3ec22d00cb15757aa037673c346bd182cf887678cb4feda9b22c555c", "role": "supporting" },
+    { "path": "openspec/changes/add-json-artifact-checks/design.md", "sha256": "51b152216b1ac124419bc3c8c90b32d02e45526ee4522cc95971f35732c95adf", "role": "supporting" },
+    { "path": "openspec/changes/add-json-artifact-checks/tasks.md", "sha256": "8e8039f0de92301dfecfa47d5e8993c82168e690183b57b4d10c13d79f5e0cf9", "role": "supporting" },
+    { "path": "openspec/changes/add-json-artifact-checks/specs/agent-guard-core/spec.md", "sha256": "060100706e3f9aaf2169d01cec4edd2dd29a6f71c2455184d983af0be8f2cb11", "role": "spec" }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "change": "rename-test-framework-to-build-and-verify",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "99b68391065785bf9db0679945b14f659ea47bf512d0dc921ae53290df59a37e",
+  "files": [
+    { "path": "openspec/changes/rename-test-framework-to-build-and-verify/proposal.md", "sha256": "a39f6ec9ecfd4678bc306de81eca21f722822a857a7b92e8713f194591e3db63", "role": "supporting" },
+    { "path": "openspec/changes/rename-test-framework-to-build-and-verify/design.md", "sha256": "3c27c4ec2968c99938014ad589e0758d45aec60f9d210a2230c6f705337054c9", "role": "supporting" },
+    { "path": "openspec/changes/rename-test-framework-to-build-and-verify/tasks.md", "sha256": "37238b623ac91dfa8e306adfd88603d7a74268d3dcfbfeebdc2d8da9c524880e", "role": "supporting" },
+    { "path": "openspec/changes/rename-test-framework-to-build-and-verify/specs/full-verification-runtime/spec.md", "sha256": "13c70e4b9b83009bfd80c526a1c3e555642f32cb2086980b59564a677db7ac17", "role": "spec" },
+    { "path": "openspec/changes/rename-test-framework-to-build-and-verify/specs/local-plugin-build-checks/spec.md", "sha256": "78f9f05068ae86eaab46d08cee4e89fde67856fbae2f2bd076ace9efa93ff944", "role": "spec" },
+    { "path": "openspec/changes/rename-test-framework-to-build-and-verify/specs/local-verification-modes/spec.md", "sha256": "8cd8ba3b64dbd251affb2f0b5d6fe4fbe8ce8a1a43987f4ca42fb59716f8e3fc", "role": "spec" },
+    { "path": "openspec/changes/rename-test-framework-to-build-and-verify/specs/pr-flow-plugin/spec.md", "sha256": "41173519cdc48ba4f27c0ebda58e7387d1e88a6d345e97118c4e5580e8eb6e6f", "role": "spec" },
+    { "path": "openspec/changes/rename-test-framework-to-build-and-verify/specs/test-framework-plugin/spec.md", "sha256": "e617371c61c4925b05147ee53624cb2cb7d725e98c9d4ceca0bdc1d034c708b0", "role": "spec" }
+  ]
+}
