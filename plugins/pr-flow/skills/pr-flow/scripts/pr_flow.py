@@ -15,6 +15,7 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import yaml
 
@@ -502,6 +503,90 @@ def missing_upstream_state(project: Path, config: dict[str, Any]) -> dict[str, A
     return stop_state("PUSH_REQUIRED", "push current branch before continuing", details)
 
 
+def auto_push_current_branch_if_needed(project: Path, config: dict[str, Any]) -> dict[str, Any] | None:
+    base_branch = base_branch_from_config(config)
+    branch_result = git(project, "branch", "--show-current")
+    if branch_result.returncode != 0 or not branch_result.stdout.strip():
+        details = command_failure_details("git_current_branch_failed", branch_result)
+        return stop_state("EXCEPTION_REQUIRED", details["reason"], details)
+    branch = branch_result.stdout.strip()
+
+    upstream_result = git(project, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    if upstream_result.returncode == 0:
+        ahead_result = git(project, "rev-list", "--count", "@{u}..HEAD")
+        if ahead_result.returncode != 0:
+            details = command_failure_details("git_ahead_check_failed", ahead_result)
+            details.update({"branch": branch, "baseBranch": base_branch, "upstream": upstream_result.stdout.strip()})
+            return stop_state("EXCEPTION_REQUIRED", details["reason"], details)
+        try:
+            ahead_count = int(ahead_result.stdout.strip() or "0")
+        except ValueError:
+            details = {
+                "reason": "git_ahead_check_invalid",
+                "branch": branch,
+                "baseBranch": base_branch,
+                "upstream": upstream_result.stdout.strip(),
+                "stdout": ahead_result.stdout,
+            }
+            return stop_state("EXCEPTION_REQUIRED", "git_ahead_check_invalid", details)
+        if ahead_count <= 0:
+            return None
+        push_args = ("push",)
+        next_command = "git push"
+    else:
+        if branch == base_branch:
+            return None
+        remote = remote_for_base_branch(config, base_branch)
+        push_args = ("push", "-u", remote, branch)
+        next_command = f"git push -u {remote} {branch}"
+
+    details = {"reason": "auto_push_required", "branch": branch, "baseBranch": base_branch, "nextCommand": next_command}
+    if branch == base_branch:
+        details["reason"] = "protected_branch_auto_push_blocked"
+        return stop_state("EXCEPTION_REQUIRED", "protected_branch_auto_push_blocked", details)
+
+    status_result = git(project, "status", "--porcelain")
+    if status_result.returncode != 0:
+        error_details = command_failure_details("git_status_failed", status_result)
+        error_details.update(details)
+        error_details["reason"] = "git_status_failed"
+        return stop_state("EXCEPTION_REQUIRED", "git_status_failed", error_details)
+    dirty_files = [line for line in status_result.stdout.splitlines() if line]
+    if dirty_files:
+        dirty_details = dict(details)
+        dirty_details["reason"] = "worktree_dirty"
+        dirty_details["dirtyFiles"] = dirty_files
+        return stop_state("EXCEPTION_REQUIRED", "worktree_dirty", dirty_details)
+
+    branch_rules_endpoint = f"repos/{{owner}}/{{repo}}/rules/branches/{quote(branch, safe='')}"
+    rules_result = gh(project, "api", branch_rules_endpoint, "--jq", "length")
+    if rules_result.returncode != 0:
+        error_details = command_failure_details("remote_branch_rules_lookup_failed", rules_result)
+        error_details.update(details)
+        error_details["reason"] = "remote_branch_rules_lookup_failed"
+        return stop_state("EXCEPTION_REQUIRED", "remote_branch_rules_lookup_failed", error_details)
+    try:
+        rule_count = int(rules_result.stdout.strip() or "0")
+    except ValueError:
+        invalid_details = dict(details)
+        invalid_details["reason"] = "remote_branch_rules_lookup_invalid"
+        invalid_details["stdout"] = rules_result.stdout
+        return stop_state("EXCEPTION_REQUIRED", "remote_branch_rules_lookup_invalid", invalid_details)
+    if rule_count > 0:
+        protected_details = dict(details)
+        protected_details["reason"] = "protected_branch_auto_push_blocked"
+        protected_details["activeRules"] = rule_count
+        return stop_state("EXCEPTION_REQUIRED", "protected_branch_auto_push_blocked", protected_details)
+
+    push_result = git(project, *push_args)
+    if push_result.returncode != 0:
+        push_details = command_failure_details("git_push_failed", push_result)
+        push_details.update(details)
+        push_details["reason"] = "git_push_failed"
+        return stop_state("PUSH_REQUIRED", "push current branch before continuing", push_details)
+    return None
+
+
 def find_pr(project: Path) -> dict[str, Any] | None:
     result = gh(project, "pr", "view", "--json", PR_VIEW_FIELDS)
     if result.returncode != 0:
@@ -965,10 +1050,15 @@ def run_lifecycle(
 ) -> int:
     try:
         pr = find_pr(project)
-        if pr is None:
+        if command == "complete":
+            push_stop = auto_push_current_branch_if_needed(project, config)
+            if push_stop is not None:
+                return stop_from_state(project, command, push_stop)
+        elif pr is None:
             push_stop = missing_upstream_state(project, config)
             if push_stop is not None:
                 return stop_from_state(project, command, push_stop)
+        if pr is None:
             pr = create_pr(project, config)
         pr = sync_pr(project, pr)
         if before_checks is not None:

@@ -36,7 +36,7 @@ REQUIRED_INIT_REFERENCES = {
     "config-draft.md",
     "validation.md",
 }
-PLUGIN_VERSION = "0.1.19"
+PLUGIN_VERSION = "0.1.20"
 PLUGIN_DESCRIPTION = "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）"
 
 
@@ -1199,7 +1199,7 @@ def test_build_and_verify_release_projection_passes_real_validate() -> None:
 
 def test_build_and_verify_release_projection_projects_real_catalogs(tmp_path: Path) -> None:
     project = tmp_path / "project"
-    vars_file = write_release_projection_project(project)
+    write_release_projection_project(project)
 
     result = subprocess.run(
         [
@@ -1208,8 +1208,6 @@ def test_build_and_verify_release_projection_projects_real_catalogs(tmp_path: Pa
             "project",
             "--project",
             str(project),
-            "--vars-file",
-            str(vars_file),
         ],
         cwd=REPO_ROOT,
         check=False,

@@ -62,6 +62,30 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 ### Requirement: Complete PR lifecycle
 系统 MUST 提供 complete（完整流程），从当前分支创建或同步 PR 到合并后清理。
 
+#### Scenario: Safe auto-push before PR lifecycle
+- **WHEN** 用户在功能分支运行 complete（收尾）
+- **AND** 本地工作区干净
+- **AND** 当前分支不是 `defaults.baseBranch`（默认目标分支）
+- **AND** GitHub（代码托管平台）远端确认当前分支没有 active rules（有效规则）
+- **AND** 当前分支没有 upstream（上游分支）或本地提交尚未推送
+- **THEN** complete（收尾） MUST 执行普通 `git push`（推送）
+- **THEN** 无 upstream（上游分支）时 MUST 使用 `git push -u <remote> <branch>`
+- **THEN** 已有 upstream（上游分支）时 MUST 使用 `git push`
+- **THEN** 推送成功后 MUST 继续创建或同步 PR（拉取请求）
+
+#### Scenario: Auto-push refuses unsafe branch
+- **WHEN** complete（收尾）准备自动推送当前分支
+- **AND** 当前分支等于 `defaults.baseBranch`（默认目标分支）或 GitHub（代码托管平台）远端显示当前分支有 active rules（有效规则）
+- **THEN** complete（收尾） MUST NOT push（推送）
+- **THEN** complete（收尾） MUST output `EXCEPTION_REQUIRED`（需要人工处理）
+
+#### Scenario: Auto-push fails closed on uncertainty
+- **WHEN** complete（收尾）准备自动推送当前分支
+- **AND** 本地工作区不干净、GitHub（代码托管平台）保护状态查询失败、保护状态无法解析或 `git push`（推送）失败
+- **THEN** complete（收尾） MUST NOT continue to create, sync, or merge PR（拉取请求）
+- **THEN** complete（收尾） MUST output `EXCEPTION_REQUIRED`（需要人工处理） for dirty or uncertain state
+- **THEN** complete（收尾） MUST output `PUSH_REQUIRED`（需要推送） when `git push`（推送） itself fails
+
 #### Scenario: Rulesets block merge
 - **WHEN** `gh pr merge`（合并拉取请求） fails because the base branch policy（目标分支策略） prohibits the merge（合并）
 - **THEN** complete（收尾） MUST output `DISPATCH_REQUIRED`（需要外部进展）
@@ -208,15 +232,12 @@ PR Flow（拉取请求流程）MUST preserve the boundary between default fast v
 ### Requirement: PR Flow init uses scenario-oriented progressive-disclosure guidance
 系统 MUST 让 PR Flow init（拉取请求流程初始化）的 Plugin（插件）和 Skill（技能）内容使用用户场景组织和 progressive disclosure（渐进式披露），并用固定问答模板约束 agent（代理）初始化流程。
 
-#### Scenario: Questionnaire is fixed
+#### Scenario: Questionnaire separates CodeQL security from status checks
 - **WHEN** agent（代理）执行 `pr-flow-init` Skill（初始化技能）
-- **THEN** agent（代理）MUST 先读取 `references/questionnaire.md`（问答模板）
-- **THEN** questionnaire（问答模板）MUST 定义固定问题、固定选项、选择后果和跳转规则
-- **THEN** agent（代理）MUST NOT 临场编造初始化问题或跳过最终写入确认
-- **THEN** 用户沉默 MUST NOT 被视为确认
-- **THEN** 最终写入确认 MUST 提供 3 个固定选项：不写入放弃本次配置、只写入本地配置、按 remote tasks（远端待办）完成 GitHub（代码托管平台）配置后再写入本地配置
-- **THEN** questionnaire（问答模板）MUST 明确 GitHub（代码托管平台）配置由 agent（代理）执行
-- **THEN** questionnaire（问答模板）MUST 明确插件不提供 GitHub（代码托管平台）配置脚本能力
+- **THEN** questionnaire（问答模板）MUST ask CodeQL security check（CodeQL 安全检查） before PR status checks（拉取请求状态检查）
+- **THEN** if the user does not enable CodeQL security check（CodeQL 安全检查）, the later PR status checks（拉取请求状态检查） question MUST NOT offer `Analyze Python` or `CodeQL` CodeQL-related checks（CodeQL 相关检查）
+- **THEN** if the user enables CodeQL security check（CodeQL 安全检查）, the later PR status checks（拉取请求状态检查） question MUST default to non-security-scan checks（非安全扫描检查） and only present `Analyze Python` as an optional advanced status check（高级状态检查） when its purpose is explained
+- **THEN** questionnaire（问答模板）MUST treat `Require code scanning results`（要求代码扫描结果） as the primary CodeQL security gate（CodeQL 安全门禁）
 
 ### Requirement: PR Flow init presents executable GitHub setup guidance
 PR Flow init（拉取请求流程初始化）MUST separate local config writes（本地配置写入） from GitHub setup guidance（GitHub 配置建议） and present GitHub guidance as executable manual tasks.
