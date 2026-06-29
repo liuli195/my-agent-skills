@@ -1,0 +1,4 @@
+- [x] Add failing questionnaire（问答模板）contract test for the 3 final write choices.
+- [x] Update questionnaire（问答模板）final write confirmation wording.
+- [x] Run focused PR Flow init（拉取请求流程初始化）test.
+- [x] Run OpenSpec（开放规格）strict validation for this hotfix（热修复）.
