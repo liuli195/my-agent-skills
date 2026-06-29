@@ -367,7 +367,10 @@ def hotfix_verify_command(branch_config: dict[str, Any]) -> str:
 
 def split_hotfix_verify_command(command: str) -> list[str]:
     if os.name != "nt":
-        return shlex.split(command)
+        if "\\" not in command:
+            return shlex.split(command)
+        placeholder = "\0"
+        return [part.replace(placeholder, "\\") for part in shlex.split(command.replace("\\", placeholder))]
 
     argc = ctypes.c_int()
     shell32 = ctypes.windll.shell32

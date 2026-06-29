@@ -1,7 +1,10 @@
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -132,6 +135,9 @@ def test_pr_flow_bare_commands_report_stable_contract() -> None:
 
 
 def test_pr_flow_package_passes_repo_build_checks() -> None:
+    if shutil.which("claude") is None:
+        pytest.skip("claude CLI is required for package validation")
+
     result = subprocess.run(
         [
             sys.executable,

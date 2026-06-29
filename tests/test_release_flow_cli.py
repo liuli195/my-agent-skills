@@ -888,6 +888,10 @@ def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: 
     fake_bin = tmp_path / "bin"
     gh_log = tmp_path / "gh.log"
     fake_bin.mkdir()
+    fake_gh_sh = f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{gh_log}\"\n"
+    fake_gh_posix = fake_bin / "gh"
+    fake_gh_posix.write_text(fake_gh_sh, encoding="utf-8")
+    fake_gh_posix.chmod(0o755)
     fake_gh = f"@echo off\r\necho %*>> \"{gh_log}\"\r\n"
     (fake_bin / "gh.cmd").write_text(fake_gh, encoding="utf-8")
     (fake_bin / "gh.bat").write_text(fake_gh, encoding="utf-8")
@@ -903,7 +907,12 @@ def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: 
     )
     (project / ".release-flow" / ".gitignore").write_text("/releases/\n", encoding="utf-8")
     write_json(project / ".agents" / "plugins" / "marketplace.json", {"name": "local-dev"})
-    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "init", "--bare", "--initial-branch=main", str(remote)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     assert git(project, "init").returncode == 0
     assert git(project, "config", "user.email", "test@example.com").returncode == 0
     assert git(project, "config", "user.name", "Test").returncode == 0
