@@ -112,21 +112,6 @@ def setup_github_from_config(config: dict[str, Any]) -> dict[str, Any]:
     return github if isinstance(github, dict) else {}
 
 
-def has_codeql_workflow(project: Path) -> bool:
-    workflows = project / ".github" / "workflows"
-    if not workflows.is_dir():
-        return False
-    for path in workflows.iterdir():
-        if path.suffix.lower() not in {".yml", ".yaml"}:
-            continue
-        try:
-            if "codeql-action" in path.read_text(encoding="utf-8").lower():
-                return True
-        except OSError:
-            continue
-    return False
-
-
 def positive_int(value: Any) -> bool:
     return isinstance(value, int) and value > 0
 
@@ -174,9 +159,8 @@ def validate_config(config: dict[str, Any], project: Path | None = None) -> list
     if github.get("requiredChecks"):
         add_issue(issues, "remote task", "configure GitHub Rulesets required checks")
     if github.get("codeScanning"):
+        add_issue(issues, "remote task", "enable CodeQL Default setup")
         add_issue(issues, "remote task", "configure GitHub Rulesets CodeQL code scanning")
-        if project is not None and not has_codeql_workflow(project):
-            add_issue(issues, "remote task", "create or enable CodeQL scan producer")
     if github.get("requiredReview") is True or github.get("requiredReviews") is True:
         add_issue(issues, "remote task", "tweak cannot bypass GitHub required review")
     if github.get("autoDeleteHeadBranch") is True:

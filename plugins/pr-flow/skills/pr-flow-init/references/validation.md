@@ -30,7 +30,7 @@ validation results（校验结果）必须按下面三组展示。
 - 启用 `Require a pull request before merging`（合并前要求拉取请求）。
 - 设置 `required_approving_review_count: 0`。
 - 新增或识别 PR status checks（拉取请求状态检查）后，启用 `Require status checks to pass before merging`（合并前要求状态检查通过）。
-- 如启用 CodeQL security check（CodeQL 安全检查），在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果），选择 `CodeQL` 作为 code scanning tool（代码扫描工具），阈值采用 GitHub 默认阈值，并创建或启用 CodeQL scan producer（CodeQL 扫描结果来源）。
+- 如启用 CodeQL security check（CodeQL 安全检查），启用 CodeQL Default setup（CodeQL 默认配置）；在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果），选择 `CodeQL` 作为 code scanning tool（代码扫描工具），阈值采用 GitHub 默认阈值。
 - 配置 allowed merge methods（允许合并方式）。
 - 配置 Rulesets bypass（规则集绕过权限）。
 
@@ -43,7 +43,7 @@ GitHub access（GitHub 访问权限）、`gh` CLI（GitHub 命令行工具）或
 | hotfix（热修复） | `allowHotfixPush: true` 要求 `authorization.phraseHashAlgorithm: md5`、非空 `authorization.phraseHash`、非空 `hotfix.verifyCommand`、非空 `remote`，并输出 Rulesets bypass（规则集绕过权限）远端待办。 |
 | branch protection（分支保护） | 通过 GitHub Rulesets（GitHub 规则集）远端待办表达；本地 init（初始化）不写远端。 |
 | PR status checks（拉取请求状态检查） | 没有具体 check name（检查名称）时，只能输出新增或识别检查后的远端待办，不得编造名称。 |
-| CodeQL security check（CodeQL 安全检查） | 开启时输出 GitHub Rulesets（GitHub 规则集）远端待办：配置 `Require code scanning results`（要求代码扫描结果），选择 `CodeQL` 作为 code scanning tool（代码扫描工具），阈值采用 GitHub 默认阈值，并创建或启用 CodeQL scan producer（CodeQL 扫描结果来源）。 |
+| CodeQL security check（CodeQL 安全检查） | 开启时输出 GitHub（代码托管平台）远端待办：启用 CodeQL Default setup（CodeQL 默认配置）；在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果），选择 `CodeQL` 作为 code scanning tool（代码扫描工具），阈值采用 GitHub 默认阈值。 |
 | merge methods（合并方式） | `merge`、`squash`、`rebase` 输出对应 GitHub（代码托管平台）allowed merge methods（允许合并方式）远端待办。 |
 | cleanup（清理） | auto-delete head branch（自动删除源分支）和 PR Flow cleanup（清理）同时存在时输出 warning（警告）。 |
 | fast/full verify（快速/完整验证） | full verify（完整验证）只作为显式 `hotfix.verifyCommand`（热修复验证命令）或 PR CI（拉取请求持续集成）建议，不从证据路径推断。 |

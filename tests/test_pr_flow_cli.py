@@ -1258,16 +1258,16 @@ def test_pr_flow_init_questionnaire_uses_latest_flow() -> None:
     assert "Require code scanning results" in questionnaire
     assert "CodeQL" in questionnaire
     assert "GitHub 默认阈值" in questionnaire
-    assert "CodeQL scan producer（CodeQL 扫描结果来源）" in questionnaire
+    assert "CodeQL Default setup（CodeQL 默认配置）" in questionnaire
     codeql_section = questionnaire.split("## 场景：CodeQL security check", 1)[1].split("## 场景：PR status checks", 1)[0]
     codeql_options_block = codeql_section.split("固定选项：", 1)[1].split("选择后果：", 1)[0]
     codeql_options = [line for line in codeql_options_block.splitlines() if line.startswith("- ")]
     assert codeql_options == [
-        "- 开启：在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果），选择 `CodeQL` 作为 code scanning tool（代码扫描工具），阈值采用 GitHub 默认阈值，并创建或启用 CodeQL scan producer（CodeQL 扫描结果来源）。",
+        "- 开启：启用 CodeQL Default setup（CodeQL 默认配置）；在 GitHub Rulesets（GitHub 规则集）中配置 `Require code scanning results`（要求代码扫描结果），选择 `CodeQL` 作为 code scanning tool（代码扫描工具），阈值采用 GitHub 默认阈值。",
         "- 不开启：不生成 CodeQL（代码扫描工具）远端待办。",
     ]
-    assert "开启：继续 PR status checks（拉取请求状态检查）场景，允许展示 `Analyze Python` 作为高级额外选项" in codeql_section
-    assert "不允许展示 `Analyze Python` 或 `CodeQL` 作为 CodeQL（代码扫描工具）相关 status check（状态检查）选项" in codeql_section
+    assert "开启：继续 PR status checks（拉取请求状态检查）场景；后续只展示非安全扫描 check name（检查名称）" in codeql_section
+    assert "CodeQL scan producer（CodeQL 扫描结果来源）" not in codeql_section
     assert "reuse existing authorization phrase" in questionnaire
     assert "create new authorization phrase" in questionnaire
     assert "authorization.phraseHashAlgorithm: md5" in questionnaire
@@ -1293,9 +1293,16 @@ def test_pr_flow_init_questionnaire_uses_latest_flow() -> None:
     assert "验证内容" in pr_status_section
     assert "失败影响" in pr_status_section
     assert "非安全扫描 check name（检查名称）" in pr_status_section
-    assert "`Analyze Python`" in pr_status_section
-    assert "高级额外选项" in pr_status_section
-    assert "`CodeQL` status check（状态检查）默认不推荐重复选择" in pr_status_section
+    for forbidden_check in [
+        "`Analyze Python`",
+        "Analyze Python",
+        "`Analyze (python)`",
+        "Analyze (python)",
+        "`Analyze (actions)`",
+        "Analyze (actions)",
+        "`CodeQL` status check",
+    ]:
+        assert forbidden_check not in pr_status_section
     final_write_section = questionnaire.split("## 场景：最终写入确认", 1)[1].split("## 禁止重复问题", 1)[0]
     final_options_block = final_write_section.split("固定选项：", 1)[1].split("选择后果：", 1)[0]
     final_options = [line for line in final_options_block.splitlines() if line.startswith("- ")]
@@ -1325,10 +1332,6 @@ def test_pr_flow_init_draft_and_validation_are_user_readable() -> None:
     assert "no access" in config_draft
     assert "不代表 init（初始化）已经写入远端" in config_draft
     assert "新增或识别 PR status checks" in config_draft
-    assert "Require code scanning results" in config_draft
-    assert "CodeQL" in config_draft
-    assert "GitHub 默认阈值" in config_draft
-    assert "CodeQL scan producer（CodeQL 扫描结果来源）" in config_draft
     assert "authorization must stay top-level" in config_draft
 
     for heading in ["error（错误）", "warning（警告）", "remote tasks（远端待办）"]:
@@ -1336,10 +1339,14 @@ def test_pr_flow_init_draft_and_validation_are_user_readable() -> None:
     assert "not inspected" in validation
     assert "no access" in validation
     assert "不能声明远端状态已确认" in validation
-    assert "Require code scanning results" in validation
-    assert "CodeQL" in validation
-    assert "GitHub 默认阈值" in validation
-    assert "CodeQL scan producer（CodeQL 扫描结果来源）" in validation
+    for text in [config_draft, validation]:
+        assert "启用 CodeQL Default setup（CodeQL 默认配置）" in text
+        assert "Require code scanning results" in text
+        assert "CodeQL" in text
+        assert "GitHub 默认阈值" in text
+        assert "CodeQL scan producer" not in text
+        assert "defaultSetup" not in text
+        assert "default_setup" not in text
 
 
 def test_pr_flow_init_skill_uses_remote_tasks_not_setup_suggestions() -> None:
@@ -1403,7 +1410,13 @@ def test_pr_flow_init_end_to_end_from_skill_to_confirmed_write(tmp_path: Path) -
     project = tmp_path / "project"
     project.mkdir()
     config = default_pr_flow_config_for_test("main")
-    config["setup"] = {"github": {"requiredChecks": ["ci"], "requiredReview": True}}
+    config["setup"] = {
+        "github": {
+            "requiredChecks": ["ci"],
+            "requiredReview": True,
+            "codeScanning": {"tool": "CodeQL"},
+        }
+    }
     draft = tmp_path / "confirmed.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
@@ -1417,10 +1430,15 @@ def test_pr_flow_init_end_to_end_from_skill_to_confirmed_write(tmp_path: Path) -
     written = yaml.safe_load((project / ".pr-flow" / "config.yaml").read_text(encoding="utf-8"))
     assert written["defaults"]["baseBranch"] == "main"
     assert written["setup"]["github"]["requiredChecks"] == ["ci"]
+    assert written["setup"]["github"]["codeScanning"] == {"tool": "CodeQL"}
+    serialized_written = json.dumps(written, sort_keys=True)
+    for forbidden_field in ["defaultSetup", "default_setup", "codeqlDefaultSetup", "codeql_default_setup"]:
+        assert forbidden_field not in serialized_written
     assert (project / ".pr-flow" / "pr-template.md").is_file()
     assert (project / ".pr-flow" / ".gitignore").read_text(encoding="utf-8") == "/runs/\n/last-status.json\n"
 
     combined_output = validate_result.stdout + init_result.stdout
+    assert "remote task: enable CodeQL Default setup" in validate_result.stdout
     for forbidden in ["status: ready", "status: merge_complete", "cleanup_complete", "hotfix_complete"]:
         assert forbidden not in combined_output
 
@@ -1457,7 +1475,7 @@ def test_validate_reads_only_provided_config_and_reports_suggestions(tmp_path: P
     assert not (project / ".pr-flow" / "config.yaml").exists()
 
 
-def test_validate_reports_missing_codeql_scan_source(tmp_path: Path) -> None:
+def test_validate_reports_codeql_default_setup_tasks(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
     config = default_pr_flow_config_for_test()
@@ -1468,10 +1486,12 @@ def test_validate_reports_missing_codeql_scan_source(tmp_path: Path) -> None:
     result = run("validate", "--project", str(project), "--config", str(draft))
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "remote task: create or enable CodeQL scan producer" in result.stdout
+    assert "remote task: enable CodeQL Default setup" in result.stdout
+    assert "remote task: configure GitHub Rulesets CodeQL code scanning" in result.stdout
+    assert "CodeQL scan producer" not in result.stdout
 
 
-def test_validate_accepts_existing_codeql_workflow_source(tmp_path: Path) -> None:
+def test_validate_reports_codeql_default_setup_even_with_existing_codeql_workflow(tmp_path: Path) -> None:
     project = tmp_path / "project"
     workflow = project / ".github" / "workflows" / "codeql.yml"
     workflow.parent.mkdir(parents=True)
@@ -1484,7 +1504,30 @@ def test_validate_accepts_existing_codeql_workflow_source(tmp_path: Path) -> Non
     result = run("validate", "--project", str(project), "--config", str(draft))
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "remote task: create or enable CodeQL scan producer" not in result.stdout
+    assert "remote task: enable CodeQL Default setup" in result.stdout
+    assert "remote task: configure GitHub Rulesets CodeQL code scanning" in result.stdout
+    assert "CodeQL scan producer" not in result.stdout
+
+
+def test_validate_does_not_call_gh_cli_or_github_api(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    project = tmp_path / "project"
+    project.mkdir()
+    config = default_pr_flow_config_for_test()
+    config["setup"] = {"github": {"codeScanning": {"tool": "CodeQL"}}}
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    module = load_pr_flow_module()
+    gh_stub = CommandStub()
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    result = invoke_pr_flow(["validate", "--project", str(project), "--config", str(draft)], module=module)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "remote task: enable CodeQL Default setup" in result.stdout
+    assert gh_stub.calls == []
 
 
 @pytest.mark.parametrize("review_mode", ["local", "dual"])
