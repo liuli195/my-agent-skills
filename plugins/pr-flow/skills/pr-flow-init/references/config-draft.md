@@ -54,7 +54,7 @@ agent（代理）展示草案时必须给用户可读摘要，禁止展示完整
 
 - `defaults.baseBranch`
 - `defaults.mergeStrategy`
-- `defaults.reviewGate.mode`：仅在用户选择保护一个或多个分支时，由 branch protection（分支保护）选择派生为 `github`，不单独提问；选择暂不配置远端保护时保持现有或默认值不变。
+- `defaults.reviewGate.mode`：由 branch protection（分支保护）选择派生，不单独提问；选择一个或多个保护分支时派生为 `github`，选择暂不配置远端保护时派生为 `skip`。
 - `defaults.hotfix.verifyCommand`
 - `defaults.wait`
 - `defaults.pr.bodyTemplatePath`

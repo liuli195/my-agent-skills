@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 import yaml
 import pytest
@@ -217,17 +218,6 @@ def git(project: Path, *args: str) -> str:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     return result.stdout.strip()
-
-
-def diff_fingerprint(project: Path, base_ref: str = "main", head_ref: str = "feature/example") -> str:
-    result = subprocess.run(
-        ["git", "diff", "--binary", f"{base_ref}...{head_ref}"],
-        cwd=project,
-        check=False,
-        capture_output=True,
-    )
-    assert result.returncode == 0, result.stdout.decode(errors="replace") + result.stderr.decode(errors="replace")
-    return f"sha256:{hashlib.sha256(result.stdout).hexdigest()}"
 
 
 def init_repo(project: Path) -> str:
@@ -768,15 +758,18 @@ def write_complete_pr_flow_config(
     *,
     review_mode: str = "github",
     merge_strategy: str = "merge",
-    evidence_path: str = ".pr-flow/review-pass.json",
+    evidence_path: str | None = None,
 ) -> None:
     config_dir = project / ".pr-flow"
     config_dir.mkdir(parents=True, exist_ok=True)
+    review_gate = {"mode": review_mode}
+    if evidence_path is not None:
+        review_gate["evidencePath"] = evidence_path
     config = {
         "defaults": {
             "baseBranch": "main",
             "mergeStrategy": merge_strategy,
-            "reviewGate": {"mode": review_mode, "evidencePath": evidence_path},
+            "reviewGate": review_gate,
             "wait": {"timeoutSeconds": 0, "pollSeconds": 0},
         },
         "branches": {"main": {"remote": "origin"}},
@@ -791,6 +784,7 @@ def run_complete_in_process(
     pr_stdout: str | None = None,
     pr_responses: list[tuple[str, str, int]] | None = None,
     cleanup_stdout: str | None = None,
+    review_mode: str = "github",
     merge_strategy: str = "merge",
     git_responses: list[tuple[list[str], str, int]] | None = None,
     merge_returncode: int = 0,
@@ -802,7 +796,7 @@ def run_complete_in_process(
     module = load_pr_flow_module()
     project = tmp_path / "project"
     project.mkdir()
-    write_complete_pr_flow_config(project, merge_strategy=merge_strategy)
+    write_complete_pr_flow_config(project, review_mode=review_mode, merge_strategy=merge_strategy)
     gh_stub = CommandStub(consume=pr_responses is not None)
     if pr_responses is None:
         assert pr_stdout is not None
@@ -924,8 +918,11 @@ def run_diagnose_in_process(
     return project, result
 
 
-def review_gate_config_for_test(mode: str, evidence_path: str = ".pr-flow/review-pass.json") -> dict:
-    return {"defaults": {"reviewGate": {"mode": mode, "evidencePath": evidence_path}}}
+def review_gate_config_for_test(mode: Any, evidence_path: str | None = None) -> dict:
+    review_gate = {"mode": mode}
+    if evidence_path is not None:
+        review_gate["evidencePath"] = evidence_path
+    return {"defaults": {"reviewGate": review_gate}}
 
 
 def passing_review_pr(review_decision: str = "APPROVED") -> dict:
@@ -936,25 +933,6 @@ def passing_review_pr(review_decision: str = "APPROVED") -> dict:
             head_oid="b" * 40,
         )
     )
-
-
-def write_review_pass_file(project: Path, relative_path: str = ".pr-flow/review-pass.json") -> str:
-    fingerprint = "sha256:" + "1" * 64
-    evidence_path = project / relative_path
-    evidence_path.parent.mkdir(parents=True, exist_ok=True)
-    evidence_path.write_text(
-        json.dumps(
-            {
-                "status": "pass",
-                "base_ref": "main",
-                "head_ref": "feature/example",
-                "diff_fingerprint": fingerprint,
-                "blocking_findings": 0,
-            }
-        ),
-        encoding="utf-8",
-    )
-    return fingerprint
 
 
 def default_pr_flow_config_for_test(base_branch: str = "main") -> dict:
@@ -1063,28 +1041,6 @@ def _create_hotfix_project(
     return project, remote, before_commit
 
 
-def write_review_pass(
-    project: Path,
-    relative_path: str = ".pr-flow/review-pass.json",
-    *,
-    fingerprint: str | None = None,
-) -> None:
-    evidence_path = project / relative_path
-    evidence_path.parent.mkdir(parents=True, exist_ok=True)
-    evidence_path.write_text(
-        json.dumps(
-            {
-                "status": "pass",
-                "base_ref": "main",
-                "head_ref": "feature/example",
-                "diff_fingerprint": fingerprint or diff_fingerprint(project),
-                "blocking_findings": 0,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-
 def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -1105,7 +1061,7 @@ def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
     assert config["defaults"]["baseBranch"] == "main"
     assert config["defaults"]["mergeStrategy"] == "merge"
     assert config["defaults"]["reviewGate"]["mode"] == "github"
-    assert config["defaults"]["reviewGate"]["evidencePath"] == ".pr-flow/review-pass.json"
+    assert "evidencePath" not in config["defaults"]["reviewGate"]
     assert (
         config["defaults"]["hotfix"]["verifyCommand"]
         == "python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full"
@@ -1279,8 +1235,10 @@ def test_pr_flow_init_questionnaire_uses_latest_flow() -> None:
     assert "PR Flow（拉取请求流程）合并前使用哪种审查门禁" not in questionnaire
     branch_protection_section = questionnaire.split("## 场景：branch protection", 1)[1].split("## 场景：CodeQL security check", 1)[0]
     assert "defaults.reviewGate.mode: github" in branch_protection_section
+    assert "defaults.reviewGate.mode: skip" in branch_protection_section
     assert "暂不配置远端保护" in branch_protection_section
-    assert "不得派生 `defaults.reviewGate.mode: github`" in branch_protection_section
+    assert "保持现有或默认 `reviewGate.mode` 不变" not in branch_protection_section
+    assert "不得派生 `defaults.reviewGate.mode: github`" not in branch_protection_section
     assert "从 automatic inspection（自动检查）得到的 remote branches（远端分支）逐项列出" in branch_protection_section
     assert "Restrict deletions" in branch_protection_section
     assert "限制删除" in branch_protection_section
@@ -1327,7 +1285,8 @@ def test_pr_flow_init_draft_and_validation_are_user_readable() -> None:
     assert "仅当 `allowHotfixPush: true`" in config_draft
     assert "defaults.reviewGate.mode" in config_draft
     assert "不单独提问" in config_draft
-    assert "选择暂不配置远端保护时保持现有或默认值不变" in config_draft
+    assert "选择暂不配置远端保护时派生为 `skip`" in config_draft
+    assert "选择暂不配置远端保护时保持现有或默认值不变" not in config_draft
     assert "not inspected" in config_draft
     assert "no access" in config_draft
     assert "不代表 init（初始化）已经写入远端" in config_draft
@@ -1453,7 +1412,7 @@ def test_validate_reads_only_provided_config_and_reports_suggestions(tmp_path: P
                 "defaults": {
                     "baseBranch": "main",
                     "mergeStrategy": "merge",
-                    "reviewGate": {"mode": "github", "evidencePath": ".pr-flow/review-pass.json"},
+                    "reviewGate": {"mode": "github"},
                     "hotfix": {"verifyCommand": "python -m pytest"},
                     "wait": {"timeoutSeconds": 600, "pollSeconds": 15},
                 },
@@ -1530,8 +1489,23 @@ def test_validate_does_not_call_gh_cli_or_github_api(tmp_path: Path, monkeypatch
     assert gh_stub.calls == []
 
 
+@pytest.mark.parametrize("review_mode", ["github", "skip"])
+def test_validate_accepts_supported_review_gate_modes(tmp_path: Path, review_mode: str) -> None:
+    config = default_pr_flow_config_for_test()
+    config["defaults"]["reviewGate"] = {"mode": review_mode}
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    result = run("validate", "--config", str(draft))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: validation_passed" in result.stdout
+    assert "defaults.reviewGate.evidencePath" not in result.stdout
+    assert "review-pass.json" not in result.stdout
+
+
 @pytest.mark.parametrize("review_mode", ["local", "dual"])
-def test_validate_does_not_report_local_review_evidence_as_remote_task(tmp_path: Path, review_mode: str) -> None:
+def test_validate_rejects_removed_review_gate_modes(tmp_path: Path, review_mode: str) -> None:
     config = default_pr_flow_config_for_test()
     config["defaults"]["reviewGate"] = {"mode": review_mode, "evidencePath": ".pr-flow/review-pass.json"}
     draft = tmp_path / "draft.yaml"
@@ -1539,12 +1513,29 @@ def test_validate_does_not_report_local_review_evidence_as_remote_task(tmp_path:
 
     result = run("validate", "--config", str(draft))
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "status: validation_failed" in result.stdout
+    assert f"error: defaults.reviewGate.mode unsupported: {review_mode}" in result.stdout
     assert "remote task: document review-pass.json evidence contract" not in result.stdout
-    assert "warning: document review-pass.json evidence contract" in result.stdout
+    assert "defaults.reviewGate.evidencePath missing" not in result.stdout
 
 
-def test_init_prints_warnings_from_confirmed_config(tmp_path: Path) -> None:
+@pytest.mark.parametrize("review_mode", [[], {}, None, 1, ""])
+def test_validate_rejects_invalid_review_gate_mode_values(tmp_path: Path, review_mode) -> None:
+    config = default_pr_flow_config_for_test()
+    config["defaults"]["reviewGate"] = {"mode": review_mode}
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    result = run("validate", "--config", str(draft))
+
+    assert result.returncode == 1
+    assert "status: validation_failed" in result.stdout
+    assert "error: defaults.reviewGate.mode unsupported:" in result.stdout
+    assert "remote task: configure GitHub required review" not in result.stdout
+
+
+def test_init_rejects_removed_review_gate_modes(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
     config = default_pr_flow_config_for_test()
@@ -1554,8 +1545,9 @@ def test_init_prints_warnings_from_confirmed_config(tmp_path: Path) -> None:
 
     result = run("init", "--project", str(project), "--config", str(draft))
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "warning: document review-pass.json evidence contract" in result.stdout
+    assert result.returncode == 1
+    assert "status: validation_failed" in result.stdout
+    assert "error: defaults.reviewGate.mode unsupported: local" in result.stdout
 
 
 def test_validate_reports_errors_for_missing_core_shape(tmp_path: Path) -> None:
@@ -1571,7 +1563,7 @@ def test_validate_reports_errors_for_missing_core_shape(tmp_path: Path) -> None:
     assert "status: validation_failed" in result.stdout
     assert "error: defaults.baseBranch missing" in result.stdout
     assert "error: branches must contain at least one branch" in result.stdout
-    assert "error: defaults.reviewGate.evidencePath missing" in result.stdout
+    assert "error: defaults.reviewGate.mode unsupported: local" in result.stdout
 
 
 def test_validate_reports_errors_for_invalid_wait_shape(tmp_path: Path) -> None:
@@ -1622,7 +1614,7 @@ def test_validate_reports_bad_yaml_as_structured_error(tmp_path: Path) -> None:
         ),
         (
             lambda config: config["defaults"].update({"reviewGate": {"mode": "local"}}),
-            "error: defaults.reviewGate.evidencePath missing",
+            "error: defaults.reviewGate.mode unsupported: local",
         ),
         (
             lambda config: config["setup"]["github"].update({"autoDeleteHeadBranch": True}),
@@ -1643,7 +1635,7 @@ def test_validate_dependency_matrix(tmp_path: Path, mutate, expected: str) -> No
         "defaults": {
             "baseBranch": "main",
             "mergeStrategy": "merge",
-            "reviewGate": {"mode": "github", "evidencePath": ".pr-flow/review-pass.json"},
+            "reviewGate": {"mode": "github"},
             "hotfix": {"verifyCommand": "python -m pytest"},
             "wait": {"timeoutSeconds": 600, "pollSeconds": 15},
         },
@@ -2505,56 +2497,28 @@ def test_complete_wait_timeout_zero_reports_pending_checks_without_sleep(tmp_pat
     assert status["details"]["reason"] == "checks_pending"
 
 
-def test_complete_local_review_gate_accepts_review_pass_evidence(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("review_mode", ["local", "dual"])
+def test_complete_rejects_removed_review_gate_modes(tmp_path: Path, review_mode: str) -> None:
     module = load_pr_flow_module()
-    project = tmp_path / "project"
-    fingerprint = write_review_pass_file(project)
-    monkeypatch.setattr(module, "current_diff_fingerprint", lambda project_arg, pr: fingerprint)
 
-    result = module.check_review_gate(project, review_gate_config_for_test("local"), passing_review_pr("CHANGES_REQUESTED"))
-
-    assert result is None
-
-
-def test_complete_local_review_gate_blocks_stale_diff_evidence(tmp_path: Path, monkeypatch) -> None:
-    module = load_pr_flow_module()
-    project = tmp_path / "project"
-    write_review_pass_file(project)
-    monkeypatch.setattr(module, "current_diff_fingerprint", lambda project_arg, pr: "sha256:" + "0" * 64)
-
-    result = module.check_review_gate(project, review_gate_config_for_test("local"), passing_review_pr("CHANGES_REQUESTED"))
+    result = module.check_review_gate(tmp_path, review_gate_config_for_test(review_mode), passing_review_pr())
 
     assert result is not None
-    assert result["status"] == "REPLY_OR_FIX_REQUIRED"
-    assert result["details"]["reason"] == "local_review_evidence_failed"
+    assert result["status"] == "EXCEPTION_REQUIRED"
+    assert result["details"]["reason"] == "unknown_review_gate_mode"
+    assert result["details"]["reviewGateMode"] == review_mode
 
 
-def test_complete_dual_review_gate_requires_github_and_local_evidence(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("review_mode", [[], {}, None, 1, ""])
+def test_complete_rejects_invalid_review_gate_mode_values(tmp_path: Path, review_mode) -> None:
     module = load_pr_flow_module()
-    project = tmp_path / "project"
-    fingerprint = write_review_pass_file(project)
-    monkeypatch.setattr(module, "current_diff_fingerprint", lambda project_arg, pr: fingerprint)
 
-    result = module.check_review_gate(project, review_gate_config_for_test("dual"), passing_review_pr())
-
-    assert result is None
-
-
-def test_complete_dual_review_gate_blocks_github_changes_requested_even_with_local_evidence(tmp_path: Path) -> None:
-    module = load_pr_flow_module()
-    write_review_pass_file(tmp_path)
-
-    result = module.check_review_gate(
-        tmp_path,
-        review_gate_config_for_test("dual"),
-        passing_review_pr(review_decision="CHANGES_REQUESTED"),
-    )
+    result = module.check_review_gate(tmp_path, review_gate_config_for_test(review_mode), passing_review_pr())
 
     assert result is not None
-    assert result["status"] == "REPLY_OR_FIX_REQUIRED"
-    assert result["details"]["reason"] == "review_gate_blocking"
-    assert result["details"]["reviewGateMode"] == "dual"
-    assert result["details"]["reviewDecision"] == "CHANGES_REQUESTED"
+    assert result["status"] == "EXCEPTION_REQUIRED"
+    assert result["details"]["reason"] == "unknown_review_gate_mode"
+    assert result["details"]["reviewGateMode"] == review_mode
 
 
 def test_tweak_requires_reason(tmp_path: Path) -> None:
