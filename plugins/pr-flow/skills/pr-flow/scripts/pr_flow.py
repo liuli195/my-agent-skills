@@ -23,6 +23,7 @@ import yaml
 COMMANDS = ("diagnose", "init", "validate", "complete", "cleanup", "hotfix", "tweak")
 PR_VIEW_FIELDS = "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid"
 BLOCKING_REVIEW_DECISIONS = {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}
+SUPPORTED_REVIEW_GATE_MODES = {"github", "skip"}
 PR_TEMPLATE = """## Summary
 
 ## Scope
@@ -58,7 +59,7 @@ def default_config(base_branch: str) -> dict:
         "defaults": {
             "baseBranch": base_branch,
             "mergeStrategy": "merge",
-            "reviewGate": {"mode": "github", "evidencePath": ".pr-flow/review-pass.json"},
+            "reviewGate": {"mode": "github"},
             "hotfix": {
                 "verifyCommand": "python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full"
             },
@@ -138,15 +139,11 @@ def validate_config(config: dict[str, Any], project: Path | None = None) -> list
 
     review_gate = defaults.get("reviewGate")
     review_gate = review_gate if isinstance(review_gate, dict) else {}
-    review_mode = review_gate.get("mode", "github")
-    if review_mode not in {"skip", "github", "local", "dual"}:
+    review_mode = review_gate["mode"] if "mode" in review_gate else "github"
+    if not isinstance(review_mode, str) or review_mode not in SUPPORTED_REVIEW_GATE_MODES:
         add_issue(issues, "error", f"defaults.reviewGate.mode unsupported: {review_mode}")
-    if review_mode in {"local", "dual"} and not review_gate.get("evidencePath"):
-        add_issue(issues, "error", "defaults.reviewGate.evidencePath missing")
-    if review_mode in {"github", "dual"}:
+    elif review_mode == "github":
         add_issue(issues, "remote task", "configure GitHub required review")
-    if review_mode in {"local", "dual"}:
-        add_issue(issues, "warning", "document review-pass.json evidence contract")
     wait = defaults.get("wait")
     if wait is not None and not isinstance(wait, dict):
         add_issue(issues, "error", "defaults.wait must be a mapping")
@@ -785,71 +782,13 @@ def wait_for_checks(
         current = sync_pr(project, current)
 
 
-def review_gate_mode(config: dict[str, Any]) -> str:
-    mode = review_gate_config(config).get("mode", "github")
-    return mode if isinstance(mode, str) and mode else "github"
+def review_gate_mode(config: dict[str, Any]) -> Any:
+    review_gate = review_gate_config(config)
+    return review_gate["mode"] if "mode" in review_gate else "github"
 
 
 def github_review_is_blocking(pr: dict[str, Any]) -> bool:
     return pr.get("reviewDecision") in BLOCKING_REVIEW_DECISIONS
-
-
-def load_local_review_evidence(project: Path, config: dict[str, Any]) -> dict[str, Any]:
-    evidence_path_value = review_gate_config(config).get("evidencePath", ".pr-flow/review-pass.json")
-    evidence_path = Path(evidence_path_value) if isinstance(evidence_path_value, str) else Path(".pr-flow/review-pass.json")
-    if not evidence_path.is_absolute():
-        evidence_path = project / evidence_path
-    try:
-        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise PrFlowError("local_review_evidence_missing", {"reason": "local_review_evidence_missing", "path": str(evidence_path)}) from exc
-    except json.JSONDecodeError as exc:
-        raise PrFlowError(
-            "local_review_evidence_parse_failed",
-            {"reason": "local_review_evidence_parse_failed", "path": str(evidence_path), "error": str(exc)},
-        ) from exc
-    if not isinstance(evidence, dict):
-        raise PrFlowError("local_review_evidence_parse_failed", {"reason": "local_review_evidence_parse_failed", "path": str(evidence_path)})
-    return evidence
-
-
-def current_diff_fingerprint(project: Path, pr: dict[str, Any]) -> str:
-    base_ref = pr.get("baseRefName")
-    head_ref = pr.get("headRefName")
-    details = {
-        "reason": "local_review_diff_failed",
-        "baseRefName": base_ref,
-        "headRefName": head_ref,
-    }
-    if not isinstance(base_ref, str) or not base_ref or not isinstance(head_ref, str) or not head_ref:
-        raise PrFlowError("local_review_diff_failed", details)
-
-    command = ["git", "diff", "--binary", f"{base_ref}...{head_ref}"]
-    try:
-        result = subprocess.run(command, cwd=project, check=False, capture_output=True)
-    except FileNotFoundError as exc:
-        details["stderr"] = str(exc)
-        raise PrFlowError("local_review_diff_failed", details) from exc
-    if result.returncode != 0:
-        details.update(
-            {
-                "returncode": result.returncode,
-                "stdout": result.stdout.decode(errors="replace").strip(),
-                "stderr": result.stderr.decode(errors="replace").strip(),
-            }
-        )
-        raise PrFlowError("local_review_diff_failed", details)
-    return f"sha256:{hashlib.sha256(result.stdout).hexdigest()}"
-
-
-def local_review_evidence_passes(evidence: dict[str, Any], pr: dict[str, Any], diff_fingerprint: str) -> bool:
-    return (
-        evidence.get("status") == "pass"
-        and evidence.get("base_ref") == pr.get("baseRefName")
-        and evidence.get("head_ref") == pr.get("headRefName")
-        and evidence.get("diff_fingerprint") == diff_fingerprint
-        and evidence.get("blocking_findings") == 0
-    )
 
 
 def check_review_gate(project: Path, config: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any] | None:
@@ -864,24 +803,12 @@ def check_review_gate(project: Path, config: dict[str, Any], pr: dict[str, Any])
     }
     if mode == "skip":
         return None
-    if mode not in {"github", "local", "dual"}:
+    if mode != "github":
         details["reason"] = "unknown_review_gate_mode"
         return stop_state("EXCEPTION_REQUIRED", "unknown_review_gate_mode", details)
 
-    if mode in {"github", "dual"} and github_review_is_blocking(pr):
+    if github_review_is_blocking(pr):
         return stop_state("REPLY_OR_FIX_REQUIRED", "review_gate_blocking", details)
-
-    if mode in {"local", "dual"}:
-        try:
-            evidence = load_local_review_evidence(project, config)
-            diff_fingerprint = current_diff_fingerprint(project, pr)
-        except PrFlowError as exc:
-            details.update(exc.details)
-            details["reason"] = exc.reason
-            return stop_state("REPLY_OR_FIX_REQUIRED", exc.reason, details)
-        if not local_review_evidence_passes(evidence, pr, diff_fingerprint):
-            details["reason"] = "local_review_evidence_failed"
-            return stop_state("REPLY_OR_FIX_REQUIRED", "local_review_evidence_failed", details)
 
     return None
 
