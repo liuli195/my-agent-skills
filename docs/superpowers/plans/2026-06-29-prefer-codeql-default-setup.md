@@ -2,6 +2,7 @@
 change: prefer-codeql-default-setup
 design-doc: docs/superpowers/specs/2026-06-29-prefer-codeql-default-setup-design.md
 base-ref: 2ff3172c4141ea4349a9c0280efb3f76beb89115
+archived-with: 2026-06-29-prefer-codeql-default-setup
 ---
 
 # Prefer CodeQL Default Setup（优先 CodeQL 默认配置）Implementation Plan（实施计划）
@@ -14,6 +15,7 @@ base-ref: 2ff3172c4141ea4349a9c0280efb3f76beb89115
 
 **Tech Stack（技术栈）:** Python（编程语言）、pytest（测试框架）、YAML（配置格式）、OpenSpec（开放规格）、PR Flow（拉取请求流程）。
 
+archived-with: 2026-06-29-prefer-codeql-default-setup
 ---
 
 ## 文件结构

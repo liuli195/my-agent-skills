@@ -2,6 +2,8 @@
 comet_change: prefer-codeql-default-setup
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-29-prefer-codeql-default-setup
+status: final
 ---
 
 # Prefer CodeQL Default Setup Design

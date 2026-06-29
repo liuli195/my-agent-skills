@@ -16,6 +16,6 @@ verification_report: docs/superpowers/reports/2026-06-29-prefer-codeql-default-s
 branch_status: handled
 created_at: 2026-06-29
 verified_at: 2026-06-29
-archived: false
+archived: true
 handoff_context: openspec/changes/prefer-codeql-default-setup/.comet/handoff/spec-context.json
 handoff_hash: dffa350f6b0ebc9cd1af386e990084e85796717c05c81d67a09ba466495b0605
