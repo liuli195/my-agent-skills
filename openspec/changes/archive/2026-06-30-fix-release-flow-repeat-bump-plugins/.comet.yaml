@@ -1,5 +1,5 @@
 workflow: hotfix
-phase: verify
+phase: archive
 context_compression: beta
 build_mode: direct
 build_pause: null
@@ -11,9 +11,9 @@ auto_transition: true
 base_ref: 25c3eacce805a0636c1493a89604064039d64a63
 design_doc: null
 plan: null
-verify_result: pending
-verification_report: docs/superpowers/reports/2026-07-01-fix-agent-guard-command-containers-verify.md
+verify_result: pass
+verification_report: docs/superpowers/reports/2026-07-01-fix-release-flow-repeat-bump-plugins-verify.md
 branch_status: handled
 created_at: 2026-06-30
-verified_at: null
-archived: false
+verified_at: 2026-06-30
+archived: true
