@@ -621,6 +621,9 @@ def test_preflight_accepts_partial_plugin_bump(tmp_path: Path) -> None:
     write_plugin_manifests(project, "release-flow", "0.1.0")
     init_project_with_remote(project, remote)
     write_plugin_manifests(project, "agent-guard", "0.1.1")
+    assert git(project, "add", ".").returncode == 0
+    assert git(project, "commit", "-m", "bump agent guard").returncode == 0
+    assert git(project, "push", "origin", "HEAD:refs/heads/main").returncode == 0
 
     result = run(
         "preflight",
@@ -640,6 +643,31 @@ def test_preflight_accepts_partial_plugin_bump(tmp_path: Path) -> None:
     assert not (project / ".release-flow" / "releases").exists()
 
 
+def test_preflight_rejects_bump_not_merged_to_source_ref(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    remote = tmp_path / "remote.git"
+    write_release_flow_files(project)
+    write_plugin_manifests(project, "agent-guard", "0.1.0")
+    write_plugin_manifests(project, "release-flow", "0.1.0")
+    init_project_with_remote(project, remote)
+    write_plugin_manifests(project, "agent-guard", "0.1.1")
+
+    result = run(
+        "preflight",
+        "--project",
+        str(project),
+        "--tag",
+        "v0.1.1",
+        "--version",
+        "0.1.1",
+        "--bump-plugins",
+        "agent-guard",
+    )
+
+    assert result.returncode == 1
+    assert "source_ref_requires_pr: main: plugins/agent-guard/.codex-plugin/plugin.json" in result.stdout
+
+
 def test_preflight_merges_repeated_bump_plugins(tmp_path: Path) -> None:
     project = tmp_path / "project"
     remote = tmp_path / "remote.git"
@@ -649,6 +677,9 @@ def test_preflight_merges_repeated_bump_plugins(tmp_path: Path) -> None:
     init_project_with_remote(project, remote)
     write_plugin_manifests(project, "agent-guard", "0.1.1")
     write_plugin_manifests(project, "release-flow", "0.1.1")
+    assert git(project, "add", ".").returncode == 0
+    assert git(project, "commit", "-m", "bump release plugins").returncode == 0
+    assert git(project, "push", "origin", "HEAD:refs/heads/main").returncode == 0
 
     result = run(
         "preflight",
@@ -1245,6 +1276,9 @@ def test_release_flow_local_e2e(tmp_path: Path) -> None:
     )
     init_project_with_remote(project, remote)
     write_plugin_manifests(project, "agent-guard", "0.1.1")
+    assert git(project, "add", ".").returncode == 0
+    assert git(project, "commit", "-m", "bump agent guard").returncode == 0
+    assert git(project, "push", "origin", "HEAD:refs/heads/main").returncode == 0
 
     preflight = run(
         "preflight",
