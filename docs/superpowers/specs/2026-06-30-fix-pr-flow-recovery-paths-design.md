@@ -2,6 +2,8 @@
 comet_change: fix-pr-flow-recovery-paths
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-30-fix-pr-flow-recovery-paths
+status: final
 ---
 
 # Fix PR Flow Recovery Paths

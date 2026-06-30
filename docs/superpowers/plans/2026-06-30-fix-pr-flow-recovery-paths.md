@@ -2,6 +2,7 @@
 change: fix-pr-flow-recovery-paths
 design-doc: docs/superpowers/specs/2026-06-30-fix-pr-flow-recovery-paths-design.md
 base-ref: a38f21b519c4d7ab0d694f9c6ae6293abe3ea315
+archived-with: 2026-06-30-fix-pr-flow-recovery-paths
 ---
 
 # Fix PR Flow Recovery Paths Implementation Plan
@@ -14,6 +15,7 @@ base-ref: a38f21b519c4d7ab0d694f9c6ae6293abe3ea315
 
 **Tech Stack:** Python（解释器） standard library（标准库）, pytest（测试工具）, OpenSpec（开放规格）。
 
+archived-with: 2026-06-30-fix-pr-flow-recovery-paths
 ---
 
 ### Task 1: Recovery Behavior Tests

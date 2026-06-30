@@ -16,6 +16,6 @@ verification_report: docs/superpowers/reports/2026-06-30-fix-pr-flow-recovery-pa
 branch_status: handled
 created_at: 2026-06-30
 verified_at: 2026-06-30
-archived: false
+archived: true
 handoff_context: openspec/changes/fix-pr-flow-recovery-paths/.comet/handoff/spec-context.json
 handoff_hash: 3fff697f05cd8e8e83663538814b133f1f28163691300571d7498cffb559acb6
