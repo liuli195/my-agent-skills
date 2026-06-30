@@ -282,6 +282,8 @@ def test_mark_pass_writes_guard_evidence_default_path(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     marker_path = guard_pass_path(project, head)
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert f"head_ref_short: {head[:12]}" in result.stdout
+    assert f"path: {marker_path.relative_to(project)}" in result.stdout
     assert marker_path.is_file()
     assert marker["schema_version"] == "guard-evidence/v1"
     assert marker["producer"] == "cross-agent-review"
@@ -937,6 +939,8 @@ def test_default_run_does_not_archive_context_snapshots_or_git_manifest(tmp_path
     result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert f"head_ref_short: {head[:12]}" in result.stdout
+    assert f"input_file: {input_file.relative_to(project)}" in result.stdout
     assert (output_dir / "review-report.md").is_file()
     assert not (output_dir / "review-pass.json").exists()
     assert not (output_dir / "inputs").exists()

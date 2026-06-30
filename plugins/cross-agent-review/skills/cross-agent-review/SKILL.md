@@ -67,6 +67,8 @@ python scripts/cross_agent_review.py mark-pass \
 .local/cross-agent-review/<change>/<head_ref_short>/prepared-inputs/review-input.json
 ```
 
+`<head_ref_short>`（短头引用）等于 `head_ref`（头引用）的前 12 个字符。
+
 不要在 `.local/` 下创建独立的输入根目录。
 
 `review-input.json`（审查输入文件）字段固定为：

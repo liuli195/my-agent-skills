@@ -1002,12 +1002,38 @@ def run_preflight(args: argparse.Namespace) -> int:
     return 0
 
 
-def workflow_dispatch_command(config: FlowConfig, tag: str, version: str, bump_plugins: list[str]) -> str:
+DEFAULT_GH_WORKFLOW_RUN_RETRIES = 3
+
+
+def workflow_dispatch_args(config: FlowConfig, tag: str, version: str, bump_plugins: list[str]) -> list[str]:
     validate_release_tag(tag)
-    return (
-        f"gh workflow run {config.workflow_file} --ref {config.release_source_ref} -f tag={tag} "
-        f"-f version={version} -f bumpPlugins={','.join(bump_plugins)}"
-    )
+    return [
+        shutil.which("gh") or "gh",
+        "workflow",
+        "run",
+        config.workflow_file,
+        "--ref",
+        config.release_source_ref,
+        "-f",
+        f"tag={tag}",
+        "-f",
+        f"version={version}",
+        "-f",
+        f"bumpPlugins={','.join(bump_plugins)}",
+    ]
+
+
+def gh_transient_eof(result: subprocess.CompletedProcess[str]) -> bool:
+    return result.returncode != 0 and "eof" in f"{result.stdout}\n{result.stderr}".lower()
+
+
+def run_workflow_dispatch(project: Path, command: list[str]) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(command, cwd=project, check=False, text=True, capture_output=True)
+    for _ in range(DEFAULT_GH_WORKFLOW_RUN_RETRIES):
+        if not gh_transient_eof(result):
+            break
+        result = subprocess.run(command, cwd=project, check=False, text=True, capture_output=True)
+    return result
 
 
 def run_publish(args: argparse.Namespace) -> int:
@@ -1019,22 +1045,16 @@ def run_publish(args: argparse.Namespace) -> int:
         print(f"error: {exc}")
         return 1
 
-    if not args.dry_run and not args.authorize_publish:
+    if not args.authorize_publish:
         print("status: issues")
         print("error: publish_requires_authorize_publish")
         return 2
 
-    command = workflow_dispatch_command(config, args.tag, args.version, bump_plugins)
-    if args.dry_run:
-        print("status: dry_run")
-        print(f"release_tag: {args.tag}")
-        print(f"workflow_dispatch: {command}")
-        print("local_branch_created: false")
-        print("git_tag_created: false")
-        print("push_run: false")
-        return 0
-
-    result = subprocess.run(command.split(), check=False, text=True)
+    result = run_workflow_dispatch(args.project, workflow_dispatch_args(config, args.tag, args.version, bump_plugins))
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
     return result.returncode
 
 
@@ -1242,7 +1262,6 @@ def build_parser() -> argparse.ArgumentParser:
     publish.add_argument("--tag", required=True, help="发布标签。")
     publish.add_argument("--version", required=True, help="发布版本。")
     publish.add_argument("--bump-plugins", required=True, help="逗号分隔插件名；空字符串表示不提升插件。")
-    publish.add_argument("--dry-run", action="store_true", help="只打印 workflow dispatch 命令。")
     publish.add_argument("--authorize-publish", action="store_true", help="授权触发 GitHub 发布。")
     ci_publish = subparsers.add_parser("ci-publish", help="CI 中发布 release channel。")
     ci_publish.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")

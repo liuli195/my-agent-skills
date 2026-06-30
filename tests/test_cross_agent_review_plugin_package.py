@@ -44,6 +44,7 @@ def test_cross_agent_review_skill_documents_single_review_input_contract() -> No
     text = skill.read_text(encoding="utf-8")
 
     assert ".local/cross-agent-review/<change>/<head_ref_short>/prepared-inputs/review-input.json" in text
+    assert "`<head_ref_short>`（短头引用）等于 `head_ref`（头引用）的前 12 个字符。" in text
     assert "--input-file" in text
     assert "plan_file" in text
     assert "tasks_file" not in text

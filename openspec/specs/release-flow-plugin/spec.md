@@ -187,13 +187,27 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 - **THEN** 本地系统 MUST NOT 创建 tag（标签）
 - **THEN** 本地系统 MUST NOT push（推送）发布内容
 
-#### Scenario: 发布试运行输出明确字段
+#### Scenario: publish 不支持 dry-run
 
 - **WHEN** 用户执行 `publish --dry-run`（发布试运行）
-- **THEN** 输出 MUST 包含 release tag（发布标签）
-- **THEN** 输出 MUST 包含 `git_tag_created: false`
-- **THEN** 输出 MUST 包含 `local_branch_created: false`
-- **THEN** 输出 MUST 包含 `push_run: false`
+- **THEN** CLI（命令行接口） MUST reject（拒绝） the argument
+- **THEN** 系统 MUST NOT print workflow dispatch（工作流触发） preview output（预览输出）
+
+#### Scenario: publish workflow trigger retries EOF
+
+- **WHEN** 用户执行 authorized publish（已授权发布）
+- **AND** `gh workflow run`（触发工作流） fails with EOF（连接提前结束）
+- **THEN** 本地系统 MUST retry（重试） the workflow trigger（工作流触发） with a bounded retry count
+- **THEN** retry attempts（重试尝试） MUST NOT create local branches（本地分支）、tags（标签） or pushes（推送）
+- **THEN** if a retry succeeds, publish（发布） MUST return success
+
+#### Scenario: publish workflow trigger reports exhausted EOF retry
+
+- **WHEN** 用户执行 authorized publish（已授权发布）
+- **AND** every bounded retry of `gh workflow run`（触发工作流） fails with EOF（连接提前结束）
+- **THEN** publish（发布） MUST return the final failure code
+- **THEN** publish（发布） MUST preserve the final GitHub CLI（GitHub 命令行） output for diagnosis（诊断）
+- **THEN** retry attempts（重试尝试） MUST NOT create local branches（本地分支）、tags（标签） or pushes（推送）
 
 #### Scenario: GitHub Workflow 执行发布
 
