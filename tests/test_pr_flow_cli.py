@@ -1337,7 +1337,7 @@ def test_complete_fills_existing_empty_body_before_checks(tmp_path: Path, monkey
     assert gh_stub.body_files[0]["body"] == expected_pr_body(fixes=())
 
 
-def test_complete_stops_when_existing_human_body_conflicts_with_fixes(tmp_path: Path, monkeypatch) -> None:
+def test_complete_appends_missing_fixes_to_existing_human_body(tmp_path: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
@@ -1355,23 +1355,91 @@ def test_complete_stops_when_existing_human_body_conflicts_with_fixes(tmp_path: 
     gh_stub = CommandStub(consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
+    gh_stub.add(["pr", "edit", "12", "--body-file", "__placeholder__"])
+    gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
+    gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
     git_stub = CommandStub(consume=True)
-    git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
-    git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
-    git_stub.add(["rev-list", "--count", "@{u}..HEAD"], stdout="0\n")
+    for git_args, stdout in [
+        (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
+        (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
+        (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "HEAD"], head_oid + "\n"),
+        (["status", "--short"], ""),
+        (["branch", "--show-current"], "feature/example\n"),
+        (["push", "origin", "--delete", "feature/example"], ""),
+        (["ls-remote", "--heads", "origin", "feature/example"], ""),
+        (["checkout", "main"], ""),
+        (["pull", "--ff-only", "origin", "main"], ""),
+        (["branch", "-d", "feature/example"], ""),
+        (["branch", "--show-current"], "main\n"),
+    ]:
+        git_stub.add(git_args, stdout=stdout)
     monkeypatch.setattr(module, "gh", gh_stub)
     monkeypatch.setattr(module, "git", git_stub)
 
     result = invoke_pr_flow(complete_args(project, fixes=("98",)), module=module)
 
-    assert result.returncode == 1
-    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "pr_body_required"
-    assert status["details"]["pr"] == "12"
-    assert status["details"]["conflict"] == "existing_body_not_overwritten"
-    assert status["details"]["closingReferences"] == ["Fixes #98"]
+    assert status["status"] == "cleanup_complete"
+    assert len(gh_stub.body_files) == 1
+    assert gh_stub.body_files[0]["body"] == "Human body\n\n## Closing References\n\nFixes #98\n"
+
+
+def test_complete_continues_when_existing_human_body_already_has_fixes(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    head_oid = "b" * 40
+    pr_stdout = pr_view_json(
+        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        review_decision="APPROVED",
+        head_oid=head_oid,
+        body="Human body\n\n## Closing References\n\nFixes #98\n",
+    )
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
+    gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
+    gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
+    git_stub = CommandStub(consume=True)
+    for git_args, stdout in [
+        (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
+        (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
+        (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "HEAD"], head_oid + "\n"),
+        (["status", "--short"], ""),
+        (["branch", "--show-current"], "feature/example\n"),
+        (["push", "origin", "--delete", "feature/example"], ""),
+        (["ls-remote", "--heads", "origin", "feature/example"], ""),
+        (["checkout", "main"], ""),
+        (["pull", "--ff-only", "origin", "main"], ""),
+        (["branch", "-d", "feature/example"], ""),
+        (["branch", "--show-current"], "main\n"),
+    ]:
+        git_stub.add(git_args, stdout=stdout)
+    monkeypatch.setattr(module, "gh", gh_stub)
+    monkeypatch.setattr(module, "git", git_stub)
+
+    result = invoke_pr_flow(complete_args(project, fixes=("98",)), module=module)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
     assert all(call[:2] != ("pr", "edit") for call in gh_stub.calls)
+
+
+def test_closing_reference_match_does_not_treat_prefix_issue_as_present() -> None:
+    module = load_pr_flow_module()
+
+    assert module.has_closing_reference("Human body\n\nFixes #980\n", "98") is False
+    assert module.has_closing_reference("Human body\n\nFixes #98\n", "98") is True
 
 
 def test_complete_keeps_existing_human_body_without_fixes(tmp_path: Path, monkeypatch) -> None:
@@ -1844,6 +1912,19 @@ def test_validate_accepts_supported_review_gate_modes(tmp_path: Path, review_mod
     assert "review-pass.json" not in result.stdout
 
 
+def test_validate_warns_when_supported_review_gate_keeps_deprecated_evidencePath(tmp_path: Path) -> None:
+    config = default_pr_flow_config_for_test()
+    config["defaults"]["reviewGate"] = {"mode": "github", "evidencePath": ".pr-flow/review-pass.json"}
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    result = run("validate", "--config", str(draft))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: validation_passed" in result.stdout
+    assert "warning: defaults.reviewGate.evidencePath is deprecated and is not read" in result.stdout
+
+
 @pytest.mark.parametrize("review_mode", ["local", "dual"])
 def test_validate_rejects_removed_review_gate_modes(tmp_path: Path, review_mode: str) -> None:
     config = default_pr_flow_config_for_test()
@@ -2260,6 +2341,72 @@ def test_diagnose_outputs_exception_for_unknown_gh_failure(tmp_path: Path, monke
     assert status["command"] == "diagnose"
     assert status["details"]["branch"] == "main"
     assert status["details"]["reason"] == "gh_pr_view_failed"
+
+
+def test_diagnose_retries_transient_eof_without_repeated_stop_output(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    monkeypatch.setenv("PR_FLOW_GH_PR_VIEW_RETRIES", "1")
+    pr_stdout = pr_view_json(
+        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        review_decision="APPROVED",
+        head_oid="b" * 40,
+        body="Human body",
+    )
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr='Post "https://api.github.com/graphql": EOF\n', returncode=1)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
+    git_stub = CommandStub(consume=True)
+    git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
+    git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
+    git_stub.add(["status", "--short"], stdout="")
+    monkeypatch.setattr(module, "gh", gh_stub)
+    monkeypatch.setattr(module, "git", git_stub)
+
+    result = invoke_pr_flow(["diagnose", "--project", str(project)], module=module)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.count("status:") == 1
+    assert "status: ready" in result.stdout
+    assert gh_stub.calls.count(("pr", "view", "--json", module.PR_VIEW_FIELDS)) == 2
+
+
+def test_diagnose_reports_dispatch_when_transient_eof_retries_are_exhausted(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    monkeypatch.setenv("PR_FLOW_GH_PR_VIEW_RETRIES", "1")
+    gh_stub = CommandStub(consume=True)
+    for _ in range(2):
+        gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr='Post "https://api.github.com/graphql": EOF\n', returncode=1)
+    git_stub = CommandStub(consume=True)
+    git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
+    git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
+    git_stub.add(["status", "--short"], stdout="")
+    monkeypatch.setattr(module, "gh", gh_stub)
+    monkeypatch.setattr(module, "git", git_stub)
+
+    result = invoke_pr_flow(["diagnose", "--project", str(project)], module=module)
+
+    assert result.returncode == 1
+    assert result.stdout.count("status:") == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    assert "gh_pr_view_transient_failed" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "DISPATCH_REQUIRED"
+    assert status["details"]["reason"] == "gh_pr_view_transient_failed"
+    assert status["details"]["transientCategory"] == "eof"
+    assert status["details"]["retryAttempts"] == 1
+    assert "diagnose" in status["details"]["nextCommand"]
 
 
 def test_diagnose_on_base_branch_without_pr_reports_gh_pr_view_failed(tmp_path: Path, monkeypatch) -> None:
@@ -2793,6 +2940,117 @@ def test_complete_reports_dispatch_when_ruleset_blocks_merge(tmp_path: Path, mon
     assert status["command"] == "complete"
     assert status["details"]["reason"] == "ruleset_merge_blocking"
     assert status["details"]["pr"] == 12
+
+
+def test_complete_returns_checks_pending_when_ruleset_recovery_wait_times_out(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_responses=[
+            (
+                pr_view_json(
+                    checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                    review_decision="APPROVED",
+                    head_oid="b" * 40,
+                ),
+                "",
+                0,
+            ),
+            (
+                pr_view_json(
+                    checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                    review_decision="APPROVED",
+                    head_oid="b" * 40,
+                ),
+                "",
+                0,
+            ),
+            (
+                pr_view_json(
+                    checks=[{"name": "ci", "status": "QUEUED", "conclusion": None}],
+                    review_decision="APPROVED",
+                    head_oid="b" * 40,
+                ),
+                "",
+                0,
+            ),
+        ],
+        git_responses=[
+            (["branch", "--show-current"], "feature/example\n", 0),
+            (["rev-parse", "HEAD"], "b" * 40 + "\n", 0),
+        ],
+        merge_returncode=1,
+        merge_stderr="X Pull request owner/repo#90 is not mergeable: the base branch policy prohibits the merge.\n",
+    )
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "checks_pending"
+
+
+def test_complete_waits_for_checks_after_ruleset_block_then_retries_merge(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    config_path = project / ".pr-flow" / "config.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["defaults"]["wait"] = {"timeoutSeconds": 30, "pollSeconds": 15}
+    config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    head_oid = "b" * 40
+    completed_pr = pr_view_json(
+        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        review_decision="APPROVED",
+        head_oid=head_oid,
+    )
+    pending_pr = pr_view_json(
+        checks=[{"name": "ci", "status": "QUEUED", "conclusion": None}],
+        review_decision="APPROVED",
+        head_oid=head_oid,
+    )
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
+    gh_stub.add(
+        ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid],
+        stderr="X Pull request owner/repo#90 is not mergeable: the base branch policy prohibits the merge.\n",
+        returncode=1,
+    )
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
+    gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
+    gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
+    git_stub = CommandStub(consume=True)
+    for git_args, stdout in [
+        (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
+        (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
+        (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "HEAD"], head_oid + "\n"),
+        (["rev-parse", "HEAD"], head_oid + "\n"),
+        (["status", "--short"], ""),
+        (["branch", "--show-current"], "feature/example\n"),
+        (["push", "origin", "--delete", "feature/example"], ""),
+        (["ls-remote", "--heads", "origin", "feature/example"], ""),
+        (["checkout", "main"], ""),
+        (["pull", "--ff-only", "origin", "main"], ""),
+        (["branch", "-d", "feature/example"], ""),
+        (["branch", "--show-current"], "main\n"),
+    ]:
+        git_stub.add(git_args, stdout=stdout)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(module, "gh", gh_stub)
+    monkeypatch.setattr(module, "git", git_stub)
+
+    result = invoke_pr_flow(complete_args(project), module=module)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
+    assert gh_stub.calls.count(("pr", "merge", "12", "--merge", "--match-head-commit", head_oid)) == 2
 
 
 def test_complete_rejects_unknown_merge_strategy(tmp_path: Path, monkeypatch) -> None:
@@ -3371,6 +3629,47 @@ def test_cleanup_merged_pr_checks_out_base_pulls_and_deletes_branches(tmp_path: 
     assert status["details"]["remote"] == "origin"
     calls = json.loads(calls_path.read_text(encoding="utf-8"))
     assert calls == [["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"]]
+
+
+def test_cleanup_retries_transient_eof_pr_view_before_cleanup(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_minimal_pr_flow_config(project)
+    monkeypatch.setenv("PR_FLOW_GH_PR_VIEW_RETRIES", "1")
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(
+        ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
+        stderr='Post "https://api.github.com/graphql": EOF\n',
+        returncode=1,
+    )
+    gh_stub.add(
+        ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
+        stdout=cleanup_pr_view_json(),
+    )
+    git_stub = CommandStub(consume=True)
+    for git_args, stdout in [
+        (["status", "--short"], ""),
+        (["branch", "--show-current"], "feature/example\n"),
+        (["push", "origin", "--delete", "feature/example"], ""),
+        (["ls-remote", "--heads", "origin", "feature/example"], ""),
+        (["checkout", "main"], ""),
+        (["pull", "--ff-only", "origin", "main"], ""),
+        (["branch", "-d", "feature/example"], ""),
+        (["branch", "--show-current"], "main\n"),
+    ]:
+        git_stub.add(git_args, stdout=stdout)
+    monkeypatch.setattr(module, "gh", gh_stub)
+    monkeypatch.setattr(module, "git", git_stub)
+
+    result = invoke_pr_flow(["cleanup", "--project", str(project), "--pr", "12"], module=module)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
+    assert gh_stub.calls.count(("pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner")) == 2
 
 
 def test_cleanup_partial_remote_delete_failure_reports_recovery_state(tmp_path: Path, monkeypatch) -> None:

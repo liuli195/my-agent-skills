@@ -26,6 +26,8 @@ PR_BODY_REQUIRED_SECTIONS = ("Summary", "Scope", "Closing References")
 PR_VIEW_FIELDS = "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid,body"
 BLOCKING_REVIEW_DECISIONS = {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}
 SUPPORTED_REVIEW_GATE_MODES = {"github", "skip"}
+DEFAULT_GH_PR_VIEW_RETRIES = 3
+GH_PR_VIEW_RETRIES_ENV = "PR_FLOW_GH_PR_VIEW_RETRIES"
 PR_TEMPLATE = """## Summary
 
 <!-- 用一句话说明本次 PR 的目的和主要变化。 -->
@@ -144,6 +146,8 @@ def validate_config(config: dict[str, Any], project: Path | None = None) -> list
         add_issue(issues, "error", f"defaults.reviewGate.mode unsupported: {review_mode}")
     elif review_mode == "github":
         add_issue(issues, "remote task", "configure GitHub required review")
+    if "evidencePath" in review_gate:
+        add_issue(issues, "warning", "defaults.reviewGate.evidencePath is deprecated and is not read")
     wait = defaults.get("wait")
     if wait is not None and not isinstance(wait, dict):
         add_issue(issues, "error", "defaults.wait must be a mapping")
@@ -250,6 +254,77 @@ def command_failure_details(reason: str, result: subprocess.CompletedProcess[str
         "stdout": result.stdout.strip(),
         "stderr": result.stderr.strip(),
     }
+
+
+def transient_pr_view_category(result: subprocess.CompletedProcess[str]) -> str:
+    text = f"{result.stdout}\n{result.stderr}".lower()
+    return "eof" if "eof" in text else ""
+
+
+def gh_pr_view_retries() -> int:
+    raw = os.environ.get(GH_PR_VIEW_RETRIES_ENV)
+    if raw is None:
+        return DEFAULT_GH_PR_VIEW_RETRIES
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_GH_PR_VIEW_RETRIES
+
+
+def gh_pr_view(project: Path, *args: str) -> tuple[subprocess.CompletedProcess[str], str, int]:
+    result = gh(project, *args)
+    category = transient_pr_view_category(result) if result.returncode != 0 else ""
+    retry_attempts = 0
+    for _ in range(gh_pr_view_retries()):
+        if result.returncode == 0 or not category:
+            break
+        retry_attempts += 1
+        result = gh(project, *args)
+        category = transient_pr_view_category(result) if result.returncode != 0 else ""
+    return result, category, retry_attempts
+
+
+def pr_view_failure_details(
+    result: subprocess.CompletedProcess[str],
+    transient_category: str,
+    retry_attempts: int,
+    *,
+    pr: str | None = None,
+    next_command: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    reason = "gh_pr_view_transient_failed" if transient_category else "gh_pr_view_failed"
+    details = command_failure_details(reason, result)
+    if pr is not None:
+        details["pr"] = pr
+    if transient_category:
+        details["transientCategory"] = transient_category
+        details["retryAttempts"] = retry_attempts
+        if next_command is not None:
+            details["nextCommand"] = next_command
+    return reason, details
+
+
+def error_status(reason: str) -> str:
+    return "DISPATCH_REQUIRED" if reason in {"gh_pr_view_transient_failed", "ruleset_merge_blocking"} else "EXCEPTION_REQUIRED"
+
+
+def add_default_next_command(details: dict[str, Any], next_command: str | None) -> dict[str, Any]:
+    if next_command and details.get("reason") == "gh_pr_view_transient_failed":
+        details.setdefault("nextCommand", next_command)
+    return details
+
+
+def command_next_command(command: str, project: Path, args: argparse.Namespace | None = None) -> str:
+    command_args = [
+        sys.executable,
+        "plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py",
+        command,
+        "--project",
+        str(project),
+    ]
+    if command == "cleanup" and args is not None:
+        command_args.extend(["--pr", str(getattr(args, "pr", "<number>"))])
+    return " ".join(shlex.quote(part) for part in command_args)
 
 
 def pr_body_next_command(command: str, project: Path, args: argparse.Namespace) -> str:
@@ -661,12 +736,12 @@ def auto_push_current_branch_if_needed(project: Path, config: dict[str, Any]) ->
 
 
 def find_pr(project: Path) -> dict[str, Any] | None:
-    result = gh(project, "pr", "view", "--json", PR_VIEW_FIELDS)
+    result, transient_category, retry_attempts = gh_pr_view(project, "pr", "view", "--json", PR_VIEW_FIELDS)
     if result.returncode != 0:
         if gh_pr_not_found(result):
             return None
-        details = command_failure_details("gh_pr_view_failed", result)
-        raise PrFlowError("gh_pr_view_failed", details)
+        reason, details = pr_view_failure_details(result, transient_category, retry_attempts)
+        raise PrFlowError(reason, details)
     return parse_pr_result(result)
 
 
@@ -750,32 +825,50 @@ def update_pr_body(project: Path, pr: dict[str, Any], body: str) -> None:
         raise PrFlowError("gh_pr_edit_failed", details)
 
 
+def closing_references_for_fixes(fixes: Sequence[str]) -> list[str]:
+    return [f"Fixes #{issue}" for issue in fixes]
+
+
+def has_closing_reference(body: str, issue: str) -> bool:
+    issue_ref = re.escape(str(issue))
+    return re.search(rf"(?:^|[^\w#])Fixes\s+#{issue_ref}(?![\w-])", body, re.IGNORECASE) is not None
+
+
+def append_closing_references(body: str, missing_references: Sequence[str]) -> str:
+    text = body.rstrip()
+    references = "\n".join(missing_references)
+    if "## Closing References" in text:
+        return f"{text}\n{references}\n"
+    return f"{text}\n\n## Closing References\n\n{references}\n"
+
+
 def reconcile_existing_pr_body(project: Path, pr: dict[str, Any], body: str, fixes: Sequence[str]) -> None:
     if not strip_html_comments(pr.get("body")):
         update_pr_body(project, pr, body)
         return
     if fixes:
-        closing_references = [f"Fixes #{issue}" for issue in fixes]
-        pr_number = pr_number_for_command(pr)
-        raise PrFlowError(
-            "pr_body_required",
-            {
-                "reason": "pr_body_required",
-                "pr": pr_number,
-                "conflict": "existing_body_not_overwritten",
-                "closingReferences": closing_references,
-                "nextAction": f"Edit PR #{pr_number} body manually and add: {', '.join(closing_references)}",
-            },
-        )
+        existing_body = pr.get("body") if isinstance(pr.get("body"), str) else ""
+        missing_references = [
+            reference for issue, reference in zip(fixes, closing_references_for_fixes(fixes))
+            if not has_closing_reference(existing_body, str(issue))
+        ]
+        if missing_references:
+            update_pr_body(project, pr, append_closing_references(existing_body, missing_references))
 
 
 def view_pr_for_cleanup(project: Path, pr_number: str) -> dict[str, Any]:
     fields = "number,state,headRefName,baseRefName,headRepositoryOwner"
-    result = gh(project, "pr", "view", pr_number, "--json", fields)
+    next_command = command_next_command("cleanup", project, argparse.Namespace(pr=pr_number))
+    result, transient_category, retry_attempts = gh_pr_view(project, "pr", "view", pr_number, "--json", fields)
     if result.returncode != 0:
-        details = command_failure_details("gh_pr_view_failed", result)
-        details["pr"] = pr_number
-        raise PrFlowError("gh_pr_view_failed", details)
+        reason, details = pr_view_failure_details(
+            result,
+            transient_category,
+            retry_attempts,
+            pr=pr_number,
+            next_command=next_command,
+        )
+        raise PrFlowError(reason, details)
     return parse_pr_result(result)
 
 
@@ -895,6 +988,19 @@ def wait_for_checks(
         current = sync_pr(project, current)
 
 
+def retry_merge_after_ruleset_block(
+    project: Path,
+    config: dict[str, Any],
+    pr: dict[str, Any],
+) -> dict[str, Any] | None:
+    current = sync_pr(project, pr)
+    check_stop = wait_for_checks(project, current, wait_config_from_config(config))
+    if check_stop is not None:
+        return check_stop
+    merge_pr(project, config, current)
+    return None
+
+
 def review_gate_mode(config: dict[str, Any]) -> Any:
     review_gate = review_gate_config(config)
     return review_gate["mode"] if "mode" in review_gate else "github"
@@ -1006,13 +1112,7 @@ def run_diagnose(args: argparse.Namespace) -> int:
         return stop(project, args.command, "EXCEPTION_REQUIRED", details["reason"], details)
     dirty = status_result.stdout.strip()
 
-    pr_result = gh(
-        project,
-        "pr",
-        "view",
-        "--json",
-        PR_VIEW_FIELDS,
-    )
+    pr_result, transient_category, retry_attempts = gh_pr_view(project, "pr", "view", "--json", PR_VIEW_FIELDS)
     gh_details: dict[str, Any] = {
         "branch": branch,
         "baseBranch": base_branch,
@@ -1020,8 +1120,14 @@ def run_diagnose(args: argparse.Namespace) -> int:
         "dirty": dirty,
     }
     if pr_result.returncode != 0:
-        gh_details.update(command_failure_details("gh_pr_view_failed", pr_result))
-        if gh_pr_not_found(pr_result) and branch != base_branch:
+        reason, failure_details = pr_view_failure_details(
+            pr_result,
+            transient_category,
+            retry_attempts,
+            next_command=command_next_command(args.command, project),
+        )
+        gh_details.update(failure_details)
+        if not transient_category and gh_pr_not_found(pr_result) and branch != base_branch:
             gh_details["reason"] = "pr_missing"
             gh_details["nextCommand"] = pr_body_next_command(
                 "complete",
@@ -1030,7 +1136,7 @@ def run_diagnose(args: argparse.Namespace) -> int:
             )
             gh_details["optionalFixesArg"] = "--fixes 98"
             return stop(project, args.command, "DISPATCH_REQUIRED", "pr_missing", gh_details)
-        return stop(project, args.command, "EXCEPTION_REQUIRED", "gh_pr_view_failed", gh_details)
+        return stop(project, args.command, error_status(reason), reason, gh_details)
 
     try:
         pr = json.loads(pr_result.stdout)
@@ -1095,6 +1201,7 @@ def run_lifecycle(
     before_checks: Any | None = None,
     pr_body: str | None = None,
     fixes: Sequence[str] = (),
+    next_command: str | None = None,
 ) -> int:
     try:
         pr = find_pr(project)
@@ -1115,12 +1222,12 @@ def run_lifecycle(
         if before_checks is not None:
             before_checks(pr)
     except PrFlowError as exc:
-        return stop(project, command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
+        return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
 
     try:
         check_stop = wait_for_checks(project, pr, wait_config_from_config(config))
     except PrFlowError as exc:
-        return stop(project, command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
+        return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
     if check_stop is not None:
         return stop_from_state(project, command, check_stop)
 
@@ -1144,8 +1251,20 @@ def run_lifecycle(
         merge_pr(project, config, pr)
     except PrFlowError as exc:
         if exc.reason == "ruleset_merge_blocking":
-            return stop(project, command, "DISPATCH_REQUIRED", exc.reason, exc.details)
-        return stop(project, command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
+            try:
+                recovery_stop = retry_merge_after_ruleset_block(project, config, pr)
+            except PrFlowError as recovery_exc:
+                return stop(
+                    project,
+                    command,
+                    error_status(recovery_exc.reason),
+                    recovery_exc.reason,
+                    add_default_next_command(recovery_exc.details, next_command),
+                )
+            if recovery_stop is not None:
+                return stop_from_state(project, command, recovery_stop)
+        else:
+            return stop(project, command, error_status(exc.reason), exc.reason, exc.details)
 
     print("status: merge_complete")
     print(f"pr: {pr_number_for_command(pr)}")
@@ -1183,7 +1302,14 @@ def run_complete(args: argparse.Namespace) -> int:
         return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
     except PrFlowError as exc:
         return stop(project, args.command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
-    return run_lifecycle(project, config, args.command, pr_body=body, fixes=fixes)
+    return run_lifecycle(
+        project,
+        config,
+        args.command,
+        pr_body=body,
+        fixes=fixes,
+        next_command=pr_body_next_command(args.command, project, args),
+    )
 
 
 def run_tweak(args: argparse.Namespace) -> int:
@@ -1205,6 +1331,7 @@ def run_tweak(args: argparse.Namespace) -> int:
         skip_review_gate=True,
         pr_body=body,
         fixes=fixes,
+        next_command=pr_body_next_command(args.command, project, args),
     )
 
 
@@ -1481,7 +1608,7 @@ def run_cleanup(args: argparse.Namespace) -> int:
     except PrFlowError as exc:
         if completed_cleanup_steps:
             exc.details["completedCleanupSteps"] = completed_cleanup_steps
-        return stop(project, args.command, "EXCEPTION_REQUIRED", exc.reason, add_cleanup_recovery(exc.details, str(args.pr)))
+        return stop(project, args.command, error_status(exc.reason), exc.reason, add_cleanup_recovery(exc.details, str(args.pr)))
 
 
 def build_parser() -> argparse.ArgumentParser:
