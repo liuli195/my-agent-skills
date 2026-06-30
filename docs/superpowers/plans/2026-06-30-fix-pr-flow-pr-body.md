@@ -2,6 +2,7 @@
 change: fix-pr-flow-pr-body
 design-doc: docs/superpowers/specs/2026-06-30-fix-pr-flow-pr-body-design.md
 base-ref: 8205bf9bb61e4bc3cafd743b19ca55e14f732671
+archived-with: 2026-06-30-fix-pr-flow-pr-body
 ---
 
 # PR Flow（拉取请求流程）PR Body（拉取请求正文）Implementation Plan（实施计划）
@@ -14,6 +15,7 @@ base-ref: 8205bf9bb61e4bc3cafd743b19ca55e14f732671
 
 **Tech Stack（技术栈）：** Python（编程语言）标准库、PyYAML（配置解析库）、GitHub CLI（GitHub 命令行工具）、pytest（测试运行器）、OpenSpec（开放规格）。
 
+archived-with: 2026-06-30-fix-pr-flow-pr-body
 ---
 
 ## File Structure（文件结构）
@@ -1043,9 +1045,11 @@ if not strip_html_comments(pr.get("body")):
 把 `plugins/pr-flow/skills/pr-flow-complete/SKILL.md`（收尾技能说明）替换为：
 
 ```markdown
+archived-with: 2026-06-30-fix-pr-flow-pr-body
 ---
 name: pr-flow-complete
 description: "执行 PR Flow（拉取请求流程）收尾：创建或同步 PR、等待 checks（检查）、执行 review gate（审查门禁）、合并并清理。"
+archived-with: 2026-06-30-fix-pr-flow-pr-body
 ---
 
 # PR Flow Complete
@@ -1066,9 +1070,11 @@ python plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py complete --project . --
 把 `plugins/pr-flow/skills/pr-flow-tweak/SKILL.md`（小改技能说明）替换为：
 
 ```markdown
+archived-with: 2026-06-30-fix-pr-flow-pr-body
 ---
 name: pr-flow-tweak
 description: "PR Flow（拉取请求流程）tweak（小改）路径，用于非 BUG（缺陷）小改动 PR（拉取请求）。"
+archived-with: 2026-06-30-fix-pr-flow-pr-body
 ---
 
 # PR Flow Tweak

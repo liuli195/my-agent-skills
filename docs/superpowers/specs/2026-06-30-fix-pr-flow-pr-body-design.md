@@ -2,6 +2,8 @@
 comet_change: fix-pr-flow-pr-body
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-30-fix-pr-flow-pr-body
+status: final
 ---
 
 # PR Flow PR Body Design
