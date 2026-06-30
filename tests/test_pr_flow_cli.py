@@ -2145,7 +2145,7 @@ def test_status_file_is_written_for_stop_state(tmp_path: Path) -> None:
     assert status["details"]["reason"] == "git_current_branch_failed"
 
 
-def test_diagnose_outputs_push_required_without_upstream(tmp_path: Path) -> None:
+def test_diagnose_outputs_dispatch_required_without_upstream(tmp_path: Path) -> None:
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
@@ -2157,13 +2157,16 @@ def test_diagnose_outputs_push_required_without_upstream(tmp_path: Path) -> None
     result = invoke_pr_flow(["diagnose", "--project", str(project)], module=module)
 
     assert result.returncode == 1
-    assert "status: PUSH_REQUIRED" in result.stdout
+    assert "status: DISPATCH_REQUIRED" in result.stdout
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "PUSH_REQUIRED"
+    assert status["status"] == "DISPATCH_REQUIRED"
     assert status["command"] == "diagnose"
     assert status["details"]["branch"] == "feature/no-upstream"
+    assert status["details"]["baseBranch"] == "main"
     assert status["details"]["reason"] == "missing_upstream"
-    assert "push current branch before continuing" in result.stdout
+    assert " complete " in f" {status['details']['nextCommand']} "
+    assert "--summary" in status["details"]["nextCommand"]
+    assert "--scope" in status["details"]["nextCommand"]
 
 
 def test_complete_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path: Path, monkeypatch) -> None:

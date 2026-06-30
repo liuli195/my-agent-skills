@@ -1097,11 +1097,6 @@ def run_diagnose(args: argparse.Namespace) -> int:
 
     upstream_result = git(project, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
     upstream = upstream_result.stdout.strip() if upstream_result.returncode == 0 else ""
-    if upstream_result.returncode != 0 and branch != base_branch:
-        details = command_failure_details("missing_upstream", upstream_result)
-        details["branch"] = branch
-        details["baseBranch"] = base_branch
-        return stop(project, args.command, "PUSH_REQUIRED", "push current branch before continuing", details)
 
     status_result = git(project, "status", "--short")
     if status_result.returncode != 0:
@@ -1111,6 +1106,25 @@ def run_diagnose(args: argparse.Namespace) -> int:
         details["upstream"] = upstream
         return stop(project, args.command, "EXCEPTION_REQUIRED", details["reason"], details)
     dirty = status_result.stdout.strip()
+
+    if upstream_result.returncode != 0 and branch != base_branch:
+        details = command_failure_details("missing_upstream", upstream_result)
+        details.update(
+            {
+                "branch": branch,
+                "baseBranch": base_branch,
+                "upstream": "",
+                "dirty": dirty,
+                "reason": "missing_upstream",
+                "nextCommand": pr_body_next_command(
+                    "complete",
+                    project,
+                    argparse.Namespace(summary="", scope="", fixes=[]),
+                ),
+                "optionalFixesArg": "--fixes 98",
+            }
+        )
+        return stop(project, args.command, "DISPATCH_REQUIRED", "missing_upstream", details)
 
     pr_result, transient_category, retry_attempts = gh_pr_view(project, "pr", "view", "--json", PR_VIEW_FIELDS)
     gh_details: dict[str, Any] = {
