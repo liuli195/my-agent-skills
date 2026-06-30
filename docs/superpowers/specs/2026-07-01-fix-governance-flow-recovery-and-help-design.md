@@ -2,6 +2,8 @@
 comet_change: fix-governance-flow-recovery-and-help
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-30-fix-governance-flow-recovery-and-help
+status: final
 ---
 
 # Governance Flow Recovery and Help Design

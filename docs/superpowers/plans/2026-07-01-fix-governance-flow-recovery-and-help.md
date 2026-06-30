@@ -2,6 +2,7 @@
 change: fix-governance-flow-recovery-and-help
 design-doc: docs/superpowers/specs/2026-07-01-fix-governance-flow-recovery-and-help-design.md
 base-ref: b99c574ed10222db03401887ff10fe9137a3f09c
+archived-with: 2026-06-30-fix-governance-flow-recovery-and-help
 ---
 
 # Governance Flow Recovery and Help Implementation Plan
