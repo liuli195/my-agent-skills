@@ -666,6 +666,7 @@ def run_mark_pass(args: argparse.Namespace) -> int:
         print(f"error: {exc}")
         return 1
     print("status: pass_marked")
+    print(f"head_ref_short: {short_ref(review_args.head_ref)}")
     print(f"path: {pass_path.relative_to(Path.cwd())}")
     return 0
 
@@ -689,6 +690,8 @@ def run_review(args: argparse.Namespace) -> int:
         print(f"error: {exc}")
         return 1
     print("status: review_ready")
+    print(f"head_ref_short: {short_ref(review_args.head_ref)}")
+    print(f"input_file: {review_args.input_file.relative_to(Path.cwd())}")
     return status
 
 

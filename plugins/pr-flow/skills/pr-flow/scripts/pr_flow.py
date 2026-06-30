@@ -349,6 +349,15 @@ def require_pr_body_args(project: Path, command: str, args: argparse.Namespace) 
     scope = str(getattr(args, "scope", "") or "").strip()
     fixes = [str(issue).strip() for issue in (getattr(args, "fixes", None) or []) if str(issue).strip()]
     invalid_fixes = [issue for issue in fixes if not issue.isdecimal() or int(issue) <= 0]
+    if invalid_fixes:
+        raise PrFlowError(
+            "invalid_fixes",
+            {
+                "reason": "invalid_fixes",
+                "invalidFixes": invalid_fixes,
+                "nextAction": "Pass each issue number separately, for example --fixes 41 --fixes 43 --fixes 44.",
+            },
+        )
     missing = []
     if not summary:
         missing.append("--summary")
@@ -361,15 +370,6 @@ def require_pr_body_args(project: Path, command: str, args: argparse.Namespace) 
                 "reason": "pr_body_required",
                 "missingArgs": missing,
                 "nextCommand": pr_body_next_command(command, project, args),
-            },
-        )
-    if invalid_fixes:
-        raise PrFlowError(
-            "pr_body_required",
-            {
-                "reason": "pr_body_required",
-                "invalidFixes": invalid_fixes,
-                "nextAction": "Pass --fixes as issue numbers without #, for example --fixes 98.",
             },
         )
     return summary, scope, fixes
@@ -1638,7 +1638,12 @@ def build_parser() -> argparse.ArgumentParser:
         if command in {"complete", "tweak"}:
             subparser.add_argument("--summary")
             subparser.add_argument("--scope")
-            subparser.add_argument("--fixes", action="append", default=[])
+            subparser.add_argument(
+                "--fixes",
+                action="append",
+                default=[],
+                help="Issue number to close; repeat for multiple issues, for example --fixes 41 --fixes 43.",
+            )
         if command == "tweak":
             subparser.add_argument("--reason")
         if command == "init":

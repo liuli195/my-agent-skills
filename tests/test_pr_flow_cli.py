@@ -1165,7 +1165,17 @@ def test_complete_requires_summary_scope_before_auto_push_or_pr_create(tmp_path:
     assert "--scope" in status["details"]["nextCommand"]
 
 
-def test_complete_rejects_non_numeric_fixes_before_auto_push_or_pr_create(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("bad_fix", ["41,43", "#98", "abc", "0", "-1"])
+@pytest.mark.parametrize(
+    ("command_args", "command"),
+    [
+        (lambda project, fixes: complete_args(project, fixes=fixes), "complete"),
+        (lambda project, fixes: tweak_args(project, reason="small docs polish", fixes=fixes), "tweak"),
+    ],
+)
+def test_pr_body_commands_reject_invalid_fixes_before_git_or_gh_calls(
+    tmp_path: Path, monkeypatch, bad_fix: str, command_args, command: str
+) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
@@ -1178,7 +1188,7 @@ def test_complete_rejects_non_numeric_fixes_before_auto_push_or_pr_create(tmp_pa
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
 
-    result = invoke_pr_flow(complete_args(project, fixes=("#98", "abc")), module=module)
+    result = invoke_pr_flow(command_args(project, (bad_fix,)), module=module)
 
     assert result.returncode == 1
     assert "status: EXCEPTION_REQUIRED" in result.stdout
@@ -1186,10 +1196,12 @@ def test_complete_rejects_non_numeric_fixes_before_auto_push_or_pr_create(tmp_pa
     assert gh_stub.calls == []
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["status"] == "EXCEPTION_REQUIRED"
-    assert status["command"] == "complete"
-    assert status["details"]["reason"] == "pr_body_required"
-    assert status["details"]["invalidFixes"] == ["#98", "abc"]
-    assert status["details"]["nextAction"] == "Pass --fixes as issue numbers without #, for example --fixes 98."
+    assert status["command"] == command
+    assert status["details"]["reason"] == "invalid_fixes"
+    assert status["details"]["invalidFixes"] == [bad_fix]
+    assert status["details"]["nextAction"] == (
+        "Pass each issue number separately, for example --fixes 41 --fixes 43 --fixes 44."
+    )
 
 
 def test_tweak_requires_summary_scope_before_pr_sync(tmp_path: Path, monkeypatch) -> None:
@@ -1288,6 +1300,39 @@ def test_create_pr_uses_generated_body_file(tmp_path: Path, monkeypatch) -> None
     assert gh_stub.body_files[0]["body"] == body
 
 
+def test_create_pr_retries_transient_eof_when_syncing_created_pr(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    body = expected_pr_body()
+    monkeypatch.setenv("PR_FLOW_GH_PR_VIEW_RETRIES", "1")
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"], stdout="created\n")
+    gh_stub.add(
+        ["pr", "view", "--json", module.PR_VIEW_FIELDS],
+        stderr='Post "https://api.github.com/graphql": EOF\n',
+        returncode=1,
+    )
+    gh_stub.add(
+        ["pr", "view", "--json", module.PR_VIEW_FIELDS],
+        stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision="APPROVED",
+            head_oid="b" * 40,
+            body=body,
+        ),
+    )
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    pr = module.create_pr(project, {"defaults": {"baseBranch": "main"}}, body)
+
+    assert pr["number"] == 12
+    assert len(gh_stub.calls) == 3
+    assert gh_stub.body_files[0]["body"] == body
+
+
 def test_complete_fills_existing_empty_body_before_checks(tmp_path: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
@@ -1337,7 +1382,7 @@ def test_complete_fills_existing_empty_body_before_checks(tmp_path: Path, monkey
     assert gh_stub.body_files[0]["body"] == expected_pr_body(fixes=())
 
 
-def test_complete_appends_missing_fixes_to_existing_human_body(tmp_path: Path, monkeypatch) -> None:
+def test_complete_appends_repeated_fixes_to_existing_human_body(tmp_path: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
@@ -1378,14 +1423,14 @@ def test_complete_appends_missing_fixes_to_existing_human_body(tmp_path: Path, m
     monkeypatch.setattr(module, "gh", gh_stub)
     monkeypatch.setattr(module, "git", git_stub)
 
-    result = invoke_pr_flow(complete_args(project, fixes=("98",)), module=module)
+    result = invoke_pr_flow(complete_args(project, fixes=("98", "99")), module=module)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: cleanup_complete" in result.stdout
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["status"] == "cleanup_complete"
     assert len(gh_stub.body_files) == 1
-    assert gh_stub.body_files[0]["body"] == "Human body\n\n## Closing References\n\nFixes #98\n"
+    assert gh_stub.body_files[0]["body"] == "Human body\n\n## Closing References\n\nFixes #98\nFixes #99\n"
 
 
 def test_complete_continues_when_existing_human_body_already_has_fixes(tmp_path: Path, monkeypatch) -> None:

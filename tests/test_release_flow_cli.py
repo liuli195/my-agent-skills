@@ -786,14 +786,47 @@ def test_preflight_rejects_channel_tree_argument(tmp_path: Path) -> None:
     assert result.returncode == 2
 
 
-def test_publish_dry_run_prints_workflow_dispatch_without_git_writes(tmp_path: Path) -> None:
+def fake_gh_for_publish(bin_dir: Path, calls: Path, *, always_eof: bool = False) -> Path:
+    bin_dir.mkdir()
+    seen = calls.with_name("gh-seen.txt")
+    if os.name == "nt":
+        gh = bin_dir / "gh.cmd"
+        eof_line = 'echo Get ""https://api.github.com/repos/x/actions/workflows/release.yml"": EOF 1>&2'
+        if always_eof:
+            body = f'@echo off\r\necho %*>>"{calls}"\r\n{eof_line}\r\nexit /b 1\r\n'
+        else:
+            body = (
+                f'@echo off\r\necho %*>>"{calls}"\r\n'
+                f'if not exist "{seen}" (echo seen>"{seen}" & {eof_line} & exit /b 1)\r\n'
+                "exit /b 0\r\n"
+            )
+        gh.write_text(body, encoding="utf-8")
+        return gh
+
+    gh = bin_dir / "gh"
+    if always_eof:
+        body = (
+            "#!/bin/sh\n"
+            f'printf "%s\\n" "$*" >> "{calls}"\n'
+            'printf "%s\\n" "Get \\"https://api.github.com/repos/x/actions/workflows/release.yml\\": EOF" >&2\n'
+            "exit 1\n"
+        )
+    else:
+        body = (
+            "#!/bin/sh\n"
+            f'printf "%s\\n" "$*" >> "{calls}"\n'
+            f'if [ ! -f "{seen}" ]; then touch "{seen}"; '
+            'printf "%s\\n" "Get \\"https://api.github.com/repos/x/actions/workflows/release.yml\\": EOF" >&2; exit 1; fi\n'
+            "exit 0\n"
+        )
+    gh.write_text(body, encoding="utf-8")
+    gh.chmod(0o755)
+    return gh
+
+
+def test_publish_rejects_dry_run_argument(tmp_path: Path) -> None:
     project = tmp_path / "project"
     write_release_flow_files(project)
-    config = project / ".release-flow" / "config.yaml"
-    config.write_text(
-        config.read_text(encoding="utf-8").replace("sourceRef: main", "sourceRef: release-source"),
-        encoding="utf-8",
-    )
 
     result = run(
         "publish",
@@ -808,19 +841,64 @@ def test_publish_dry_run_prints_workflow_dispatch_without_git_writes(tmp_path: P
         "--dry-run",
     )
 
-    assert result.returncode == 0
-    assert "status: dry_run" in result.stdout
-    assert "gh workflow run .github/workflows/release.yml" in result.stdout
-    assert "--ref release-source" in result.stdout
-    assert "-f tag=v0.1.1" in result.stdout
-    assert "-f version=0.1.1" in result.stdout
-    assert "-f bumpPlugins=agent-guard" in result.stdout
-    assert "releasePlan" not in result.stdout
-    assert "release_tag: v0.1.1" in result.stdout
-    assert "local_branch_created: false" in result.stdout
-    assert "git_tag_created: false" in result.stdout
-    assert "push_run: false" in result.stdout
-    assert not any(line.startswith("tag:") for line in result.stdout.splitlines())
+    assert result.returncode == 2
+    assert "--dry-run" in result.stderr
+    assert "workflow_dispatch:" not in result.stdout
+
+
+def test_publish_retries_workflow_run_eof_then_succeeds(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    write_release_flow_files(project)
+    calls = tmp_path / "gh-calls.txt"
+    bin_dir = tmp_path / "bin"
+    fake_gh_for_publish(bin_dir, calls)
+    env = os.environ.copy()
+    env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+
+    result = run(
+        "publish",
+        "--project",
+        str(project),
+        "--tag",
+        "v0.1.1",
+        "--version",
+        "0.1.1",
+        "--bump-plugins",
+        "agent-guard",
+        "--authorize-publish",
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert calls.read_text(encoding="utf-8").count("workflow run") == 2
+
+
+def test_publish_reports_last_eof_after_workflow_run_retries_exhausted(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    write_release_flow_files(project)
+    calls = tmp_path / "gh-calls.txt"
+    bin_dir = tmp_path / "bin"
+    fake_gh_for_publish(bin_dir, calls, always_eof=True)
+    env = os.environ.copy()
+    env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+
+    result = run(
+        "publish",
+        "--project",
+        str(project),
+        "--tag",
+        "v0.1.1",
+        "--version",
+        "0.1.1",
+        "--bump-plugins",
+        "agent-guard",
+        "--authorize-publish",
+        env=env,
+    )
+
+    assert result.returncode == 1
+    assert "EOF" in result.stderr
+    assert calls.read_text(encoding="utf-8").count("workflow run") == 4
 
 
 def test_publish_requires_authorization_without_dry_run(tmp_path: Path) -> None:
@@ -1095,6 +1173,11 @@ def test_release_flow_local_e2e(tmp_path: Path) -> None:
         "agent-guard",
     )
     assert preflight.returncode == 0, preflight.stdout + preflight.stderr
+    calls = tmp_path / "gh-calls.txt"
+    bin_dir = tmp_path / "bin"
+    fake_gh_for_publish(bin_dir, calls)
+    env = os.environ.copy()
+    env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
     publish = run(
         "publish",
         "--project",
@@ -1105,8 +1188,10 @@ def test_release_flow_local_e2e(tmp_path: Path) -> None:
         "0.1.1",
         "--bump-plugins",
         "agent-guard",
-        "--dry-run",
+        "--authorize-publish",
+        env=env,
     )
     assert publish.returncode == 0, publish.stdout + publish.stderr
+    assert calls.read_text(encoding="utf-8").count("workflow run") == 2
     assert not (project / ".release-flow" / ".gitignore").exists()
     assert not (project / ".release-flow" / "releases").exists()
