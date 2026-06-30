@@ -198,16 +198,27 @@ def review_args(
     *,
     base: str | None = None,
     mode: str = "convergence",
-    fake_reviewer_results: str | None = NO_BLOCKING_REVIEW,
 ) -> list[str]:
-    args = [
+    return [
         "run",
         "--input-file",
         str(write_review_input(project, base or head, head, mode=mode)),
     ]
-    if fake_reviewer_results is not None:
-        args.extend(["--fake-reviewer-results", fake_reviewer_results])
-    return args
+
+
+def reviewer_results(module, text: str = NO_BLOCKING_REVIEW) -> list[dict]:
+    return [module.markdown_review(role, text) for role in module.REVIEWER_ROLES]
+
+
+def run_review_in_process(module, monkeypatch, project: Path, *args: str, reviewer_text: str = NO_BLOCKING_REVIEW) -> int:
+    monkeypatch.chdir(project)
+    monkeypatch.setattr(module, "resolve_sdk_python", lambda explicit, require_real_sdk: "fake-sdk")
+    monkeypatch.setattr(
+        module,
+        "dispatch_reviewers",
+        lambda review_args, sdk_python: reviewer_results(module, reviewer_text),
+    )
+    return module.main(list(args))
 
 
 def guard_pass_path(
@@ -231,28 +242,31 @@ def guard_pass_path(
     )
 
 
-def test_run_accepts_single_review_input_file(tmp_path: Path) -> None:
+def test_run_accepts_single_review_input_file(tmp_path: Path, monkeypatch, capsys) -> None:
+    module = load_script_module()
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
 
-    result = run(*review_args(project, head), cwd=project)
+    status = run_review_in_process(module, monkeypatch, project, *review_args(project, head))
+    captured = capsys.readouterr()
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: review_ready" in result.stdout
+    assert status == 0
+    assert "status: review_ready" in captured.out
     assert (project / ".local" / "cross-agent-review" / "demo" / head[:12] / "review-report.md").is_file()
 
 
-def test_default_outputs_are_report_only(tmp_path: Path) -> None:
+def test_default_outputs_are_report_only(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
     input_file = write_review_input(project, head, head)
     output_dir = input_file.parent.parent
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    status = run_review_in_process(module, monkeypatch, project, "run", "--input-file", str(input_file))
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert status == 0
     assert (output_dir / "review-report.md").is_file()
     assert not (output_dir / "review-pass.json").exists()
     assert not guard_pass_path(project, head).exists()
@@ -263,7 +277,8 @@ def test_default_outputs_are_report_only(tmp_path: Path) -> None:
     assert not (output_dir / "debug").exists()
 
 
-def test_mark_pass_writes_guard_evidence_default_path(tmp_path: Path) -> None:
+def test_mark_pass_writes_guard_evidence_default_path(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
     project = tmp_path / "repo"
     base = init_repo(project)
     write_file(project / "app.txt", "two\n")
@@ -275,10 +290,10 @@ def test_mark_pass_writes_guard_evidence_default_path(tmp_path: Path) -> None:
     head = git(project, "rev-parse", "HEAD")
     input_file = write_review_input(project, base, head, mode="convergence")
 
-    review_result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    review_status = run_review_in_process(module, monkeypatch, project, "run", "--input-file", str(input_file))
     result = run("mark-pass", "--input-file", str(input_file), cwd=project)
 
-    assert review_result.returncode == 0, review_result.stdout + review_result.stderr
+    assert review_status == 0
     assert result.returncode == 0, result.stdout + result.stderr
     marker_path = guard_pass_path(project, head)
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
@@ -300,7 +315,8 @@ def test_mark_pass_writes_guard_evidence_default_path(tmp_path: Path) -> None:
     assert marker["report_hash"].startswith("sha256:")
 
 
-def test_mark_pass_records_endless_mode_and_refs(tmp_path: Path) -> None:
+def test_mark_pass_records_endless_mode_and_refs(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
     project = tmp_path / "repo"
     base = init_repo(project)
     write_file(project / "app.txt", "two\n")
@@ -312,10 +328,10 @@ def test_mark_pass_records_endless_mode_and_refs(tmp_path: Path) -> None:
     head = git(project, "rev-parse", "HEAD")
     input_file = write_review_input(project, base, head, mode="endless")
 
-    review_result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    review_status = run_review_in_process(module, monkeypatch, project, "run", "--input-file", str(input_file))
     result = run("mark-pass", "--input-file", str(input_file), cwd=project)
 
-    assert review_result.returncode == 0, review_result.stdout + review_result.stderr
+    assert review_status == 0
     assert result.returncode == 0, result.stdout + result.stderr
     marker = json.loads(guard_pass_path(project, head).read_text(encoding="utf-8"))
     assert marker["mode"] == "endless"
@@ -323,16 +339,25 @@ def test_mark_pass_records_endless_mode_and_refs(tmp_path: Path) -> None:
     assert marker["head_ref"] == head
 
 
-def test_blocking_findings_write_report_without_pass_marker(tmp_path: Path) -> None:
+def test_blocking_findings_write_report_without_pass_marker(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
     input_file = write_review_input(project, head, head)
     output_dir = input_file.parent.parent
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", BLOCKING_REVIEW, cwd=project)
+    status = run_review_in_process(
+        module,
+        monkeypatch,
+        project,
+        "run",
+        "--input-file",
+        str(input_file),
+        reviewer_text=BLOCKING_REVIEW,
+    )
 
-    assert result.returncode == 0
+    assert status == 0
     assert (output_dir / "review-report.md").is_file()
     assert not (output_dir / "review-pass.json").exists()
     assert not guard_pass_path(project, head).exists()
@@ -347,7 +372,7 @@ def test_debug_writes_input_prompts_and_raw_under_debug(tmp_path: Path, monkeypa
     input_file = write_review_input(project, head, head)
     monkeypatch.chdir(project)
     review_input = module.load_review_input(
-        types.SimpleNamespace(input_file=input_file, debug=True, sdk_python=None, fake_reviewer_results=None)
+        types.SimpleNamespace(input_file=input_file, debug=True, sdk_python=None)
     )
 
     def fake_run(*args, **kwargs):
@@ -384,7 +409,7 @@ def test_sdk_dispatch_subprocess_uses_plugin_owned_timeout(tmp_path: Path, monke
     input_file = write_review_input(project, head, head)
     monkeypatch.chdir(project)
     review_input = module.load_review_input(
-        types.SimpleNamespace(input_file=input_file, debug=True, sdk_python=None, fake_reviewer_results=None)
+        types.SimpleNamespace(input_file=input_file, debug=True, sdk_python=None)
     )
     def fake_run(*args, **kwargs):
         assert kwargs["timeout"] == module.SDK_DISPATCH_TIMEOUT_SECONDS
@@ -427,7 +452,7 @@ def test_missing_required_review_input_field_fails(tmp_path: Path) -> None:
     del payload["plan_file"]
     input_file.write_text(json.dumps(payload), encoding="utf-8")
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    result = run("run", "--input-file", str(input_file), cwd=project)
 
     assert result.returncode == 1
     assert "missing_field: plan_file" in result.stdout
@@ -443,7 +468,7 @@ def test_missing_referenced_plan_file_fails(tmp_path: Path) -> None:
         payload_overrides={"plan_file": "docs/superpowers/plans/missing.md"},
     )
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    result = run("run", "--input-file", str(input_file), cwd=project)
 
     assert result.returncode == 1
     assert "missing_file" in result.stdout
@@ -455,7 +480,7 @@ def test_invalid_mode_fails(tmp_path: Path) -> None:
     head = init_repo(project)
     input_file = write_review_input(project, head, head, mode="wide")
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    result = run("run", "--input-file", str(input_file), cwd=project)
 
     assert result.returncode == 1
     assert "invalid_mode: wide" in result.stdout
@@ -468,7 +493,7 @@ def test_prepared_inputs_rejects_extra_regular_file(tmp_path: Path) -> None:
     input_file = write_review_input(project, head, head)
     write_file(input_file.parent / "plan.md", "old snapshot\n")
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    result = run("run", "--input-file", str(input_file), cwd=project)
 
     assert result.returncode == 1
     assert "unexpected_prepared_input" in result.stdout
@@ -483,7 +508,7 @@ def test_prepared_inputs_rejects_extra_directory(tmp_path: Path) -> None:
     write_file(input_file.parent / "extra" / "junk.txt", "junk\n")
     output_dir = input_file.parent.parent
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    result = run("run", "--input-file", str(input_file), cwd=project)
 
     assert result.returncode == 1
     assert "unexpected_prepared_input" in result.stdout
@@ -500,7 +525,7 @@ def test_input_file_must_be_named_review_input_json_under_prepared_inputs(tmp_pa
     wrong_file.write_text(input_file.read_text(encoding="utf-8"), encoding="utf-8")
     input_file.unlink()
 
-    result = run("run", "--input-file", str(wrong_file), "--fake-reviewer-results", "[]", cwd=project)
+    result = run("run", "--input-file", str(wrong_file), cwd=project)
 
     assert result.returncode == 1
     assert "invalid_input_file_location" in result.stdout
@@ -515,7 +540,7 @@ def test_input_file_must_be_under_change_and_head_runtime_dir(tmp_path: Path) ->
     write_file(wrong_input_file, valid_input_file.read_text(encoding="utf-8"))
     write_file(wrong_input_file.parent / "dirty.txt", "dirty\n")
 
-    result = run("run", "--input-file", str(wrong_input_file), "--fake-reviewer-results", "[]", cwd=project)
+    result = run("run", "--input-file", str(wrong_input_file), cwd=project)
 
     assert result.returncode == 1
     assert "invalid_input_file_location" in result.stdout
@@ -529,7 +554,7 @@ def test_change_path_traversal_rejects_input_location(tmp_path: Path) -> None:
     input_file = write_review_input(project, head, head, change="../../escape")
     output_dir = input_file.parent.parent
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    result = run("run", "--input-file", str(input_file), cwd=project)
 
     assert result.returncode == 1
     assert "invalid_input_file_location" in result.stdout
@@ -542,7 +567,7 @@ def test_invalid_base_ref_fails_before_dispatch(tmp_path: Path) -> None:
     head = commit_review_context(project)
     input_file = write_review_input(project, "0" * 40, head)
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    result = run("run", "--input-file", str(input_file), cwd=project)
 
     assert result.returncode == 1
     assert "base_ref_mismatch" in result.stdout
@@ -555,7 +580,7 @@ def test_dirty_worktree_outside_runtime_artifacts_rejects_before_dispatch(tmp_pa
     input_file = write_review_input(project, head, head)
     write_file(project / "dirty.txt", "dirty\n")
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    result = run("run", "--input-file", str(input_file), cwd=project)
 
     assert result.returncode == 1
     assert "dirty_worktree" in result.stdout
@@ -570,7 +595,7 @@ def test_output_dir_root_extra_file_rejects_before_dispatch(tmp_path: Path) -> N
     output_dir = input_file.parent.parent
     write_file(output_dir / "notes.txt", "not a review runtime artifact\n")
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    result = run("run", "--input-file", str(input_file), cwd=project)
 
     assert result.returncode == 1
     assert "dirty_worktree" in result.stdout
@@ -586,7 +611,7 @@ def test_debug_extra_file_rejects_before_dispatch(tmp_path: Path, debug_child: s
     output_dir = input_file.parent.parent
     write_file(output_dir / "debug" / debug_child / "extra.txt", "not a runtime artifact\n")
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    result = run("run", "--input-file", str(input_file), cwd=project)
 
     assert result.returncode == 1
     assert "dirty_worktree" in result.stdout
@@ -610,7 +635,7 @@ def test_runtime_artifact_file_path_directory_children_reject_before_dispatch(
     output_dir = input_file.parent.parent
     write_file(output_dir / artifact_child, "not a runtime artifact\n")
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    result = run("run", "--input-file", str(input_file), cwd=project)
 
     assert result.returncode == 1
     assert "dirty_worktree" in result.stdout
@@ -625,7 +650,7 @@ def test_renamed_tracked_file_into_runtime_artifacts_rejects_before_dispatch(tmp
     output_dir = input_file.parent.parent
     git(project, "mv", "app.txt", str(output_dir / "app.txt"))
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    result = run("run", "--input-file", str(input_file), cwd=project)
 
     assert result.returncode == 1
     assert "dirty_worktree" in result.stdout
@@ -641,7 +666,7 @@ def test_copied_tracked_file_into_runtime_artifacts_rejects_before_dispatch(tmp_
     shutil.copyfile(project / "app.txt", output_dir / "app.txt")
     git(project, "add", str(output_dir / "app.txt"))
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    result = run("run", "--input-file", str(input_file), cwd=project)
 
     assert result.returncode == 1
     assert "dirty_worktree" in result.stdout
@@ -659,8 +684,6 @@ def test_clean_worktree_checks_reuse_runtime_allowlist(tmp_path: Path, monkeypat
             "run",
             "--input-file",
             str(input_file),
-            "--fake-reviewer-results",
-            "[]",
         ]
     )
     calls = []
@@ -669,6 +692,8 @@ def test_clean_worktree_checks_reuse_runtime_allowlist(tmp_path: Path, monkeypat
         calls.append([Path(path).resolve() for path in allowed_dirty_paths])
 
     monkeypatch.setattr(module, "ensure_clean_subject", fake_ensure_clean_subject)
+    monkeypatch.setattr(module, "resolve_sdk_python", lambda explicit, require_real_sdk: "fake-sdk")
+    monkeypatch.setattr(module, "dispatch_reviewers", lambda review_args, sdk_python: reviewer_results(module))
     monkeypatch.chdir(project)
 
     assert module.run_review(parsed) == 0
@@ -690,15 +715,17 @@ def test_clean_worktree_checks_reuse_runtime_allowlist(tmp_path: Path, monkeypat
     assert output_dir.resolve() not in calls[0]
 
 
-def test_diff_file_argument_is_not_required(tmp_path: Path) -> None:
+def test_diff_file_argument_is_not_required(tmp_path: Path, monkeypatch, capsys) -> None:
+    module = load_script_module()
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
 
-    result = run(*review_args(project, head), cwd=project)
+    status = run_review_in_process(module, monkeypatch, project, *review_args(project, head))
+    captured = capsys.readouterr()
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: review_ready" in result.stdout
+    assert status == 0
+    assert "status: review_ready" in captured.out
 
 
 def make_review_input_for_module(module, tmp_path: Path, *, debug: bool = False):
@@ -711,7 +738,6 @@ def make_review_input_for_module(module, tmp_path: Path, *, debug: bool = False)
                 input_file=input_file,
                 debug=debug,
                 sdk_python=None,
-                fake_reviewer_results=None,
             )
         )
     finally:
@@ -740,7 +766,7 @@ def test_reviewer_prompt_references_review_input_file_only(tmp_path: Path, monke
     input_file = write_review_input(project, base, head)
     monkeypatch.chdir(project)
     review_input = module.load_review_input(
-        types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None, fake_reviewer_results=None)
+        types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None)
     )
 
     prompt = module.reviewer_prompt(review_input, "spec-alignment")
@@ -818,7 +844,8 @@ def test_dirty_worktree_rejects_before_dispatch(tmp_path: Path) -> None:
     assert not (project / ".local" / "cross-agent-review" / "demo" / head[:12] / "review-pass.json").exists()
 
 
-def test_input_files_in_space_directory_are_allowed(tmp_path: Path) -> None:
+def test_input_files_in_space_directory_are_allowed(tmp_path: Path, monkeypatch, capsys) -> None:
+    module = load_script_module()
     project = tmp_path / "repo"
     init_repo(project)
     commit_review_context(project)
@@ -840,17 +867,18 @@ def test_input_files_in_space_directory_are_allowed(tmp_path: Path) -> None:
         },
     )
 
-    result = run(
+    status = run_review_in_process(
+        module,
+        monkeypatch,
+        project,
         "run",
         "--input-file",
         str(input_file),
-        "--fake-reviewer-results",
-        "[]",
-        cwd=project,
     )
+    captured = capsys.readouterr()
 
-    assert result.returncode == 0
-    assert "status: review_ready" in result.stdout
+    assert status == 0
+    assert "status: review_ready" in captured.out
 
 
 def test_head_mismatch_rejects_before_dispatch(tmp_path: Path) -> None:
@@ -919,28 +947,31 @@ def test_sdk_python_invalid_file_reports_clear_error_without_traceback(tmp_path:
     assert "Traceback" not in result.stderr
 
 
-def test_fake_reviewer_results_bypass_real_sdk_for_tests(tmp_path: Path) -> None:
+def test_run_can_be_exercised_with_internal_dispatch_injection(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
 
-    result = run(*review_args(project, head), cwd=project)
+    status = run_review_in_process(module, monkeypatch, project, *review_args(project, head))
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert status == 0
 
 
-def test_default_run_does_not_archive_context_snapshots_or_git_manifest(tmp_path: Path) -> None:
+def test_default_run_does_not_archive_context_snapshots_or_git_manifest(tmp_path: Path, monkeypatch, capsys) -> None:
+    module = load_script_module()
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
     input_file = write_review_input(project, head, head)
     output_dir = input_file.parent.parent
 
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    status = run_review_in_process(module, monkeypatch, project, "run", "--input-file", str(input_file))
+    captured = capsys.readouterr()
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert f"head_ref_short: {head[:12]}" in result.stdout
-    assert f"input_file: {input_file.relative_to(project)}" in result.stdout
+    assert status == 0
+    assert f"head_ref_short: {head[:12]}" in captured.out
+    assert f"input_file: {input_file.relative_to(project)}" in captured.out
     assert (output_dir / "review-report.md").is_file()
     assert not (output_dir / "review-pass.json").exists()
     assert not (output_dir / "inputs").exists()
@@ -967,6 +998,27 @@ def test_run_rejects_legacy_tests_file_argument(tmp_path: Path) -> None:
     assert not (output_dir / "review-report.md").exists()
 
 
+def test_run_rejects_fake_reviewer_results_argument(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    init_repo(project)
+    head = commit_review_context(project)
+    input_file = write_review_input(project, head, head)
+    output_dir = input_file.parent.parent
+
+    result = run(
+        "run",
+        "--input-file",
+        str(input_file),
+        "--fake-reviewer-results",
+        "[]",
+        cwd=project,
+    )
+
+    assert result.returncode == 2
+    assert "unrecognized arguments: --fake-reviewer-results" in result.stderr
+    assert not (output_dir / "review-report.md").exists()
+
+
 def test_reviewer_prompt_does_not_reference_legacy_tests_file(tmp_path: Path) -> None:
     module = load_script_module()
     review = make_review_args_for_module(module, tmp_path)
@@ -977,15 +1029,16 @@ def test_reviewer_prompt_does_not_reference_legacy_tests_file(tmp_path: Path) ->
     assert "Tests file:" not in prompt
 
 
-def test_prompt_contains_review_context(tmp_path: Path) -> None:
+def test_prompt_contains_review_context(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
     input_file = write_review_input(project, head, head)
     output_dir = input_file.parent.parent
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    status = run_review_in_process(module, monkeypatch, project, "run", "--input-file", str(input_file))
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert status == 0
     assert (output_dir / "review-report.md").is_file()
     assert not (output_dir / "review-pass.json").exists()
 
@@ -1002,7 +1055,7 @@ def test_reviewer_prompt_references_review_input_not_diff_file(tmp_path: Path, m
     input_file = write_review_input(project, base, head)
     monkeypatch.chdir(project)
     review = module.load_review_input(
-        types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None, fake_reviewer_results=None)
+        types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None)
     )
 
     prompt = module.reviewer_prompt(review, "spec-alignment")
@@ -1089,7 +1142,7 @@ def test_reviewer_prompt_does_not_inline_large_diff_or_context(tmp_path: Path, m
     )
     monkeypatch.chdir(project)
     review = module.load_review_input(
-        types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None, fake_reviewer_results=None)
+        types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None)
     )
 
     prompt = module.reviewer_prompt(review, "implementation-correctness")
@@ -1247,18 +1300,16 @@ def test_reviewer_prompt_requires_lightweight_markdown_contract(tmp_path: Path) 
     assert "Do not use severity aliases such as high, medium, low, minor, or info." in prompt
 
 
-def test_fake_reviewer_results_generate_report_without_results_file(tmp_path: Path) -> None:
+def test_internal_dispatch_injection_generates_report_without_results_file(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
     output_dir = project / ".local" / "cross-agent-review" / "demo" / head[:12]
 
-    result = run(
-        *review_args(project, head, fake_reviewer_results=NO_BLOCKING_REVIEW),
-        cwd=project,
-    )
+    status = run_review_in_process(module, monkeypatch, project, *review_args(project, head))
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert status == 0
     assert (output_dir / "review-report.md").is_file()
     assert not (output_dir / "review-pass.json").exists()
 
@@ -1382,12 +1433,13 @@ def test_sdk_dispatch_subprocess_invalid_stdout_reports_clear_error(tmp_path: Pa
         raise AssertionError("expected sdk_dispatch_invalid_output")
 
 
-def test_non_blocking_findings_generate_report_without_pass_marker(tmp_path: Path) -> None:
+def test_non_blocking_findings_generate_report_without_pass_marker(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
     output_dir = project / ".local" / "cross-agent-review" / "demo" / head[:12]
-    fake = """# Review Result
+    review_text = """# Review Result
 ## Findings
 - Severity: WARNING
   Location: app.txt:1
@@ -1396,70 +1448,66 @@ def test_non_blocking_findings_generate_report_without_pass_marker(tmp_path: Pat
   Recommendation: Recommendation
 """
 
-    result = run(
-        *review_args(project, head, fake_reviewer_results=fake),
-        cwd=project,
-    )
+    status = run_review_in_process(module, monkeypatch, project, *review_args(project, head), reviewer_text=review_text)
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert status == 0
     assert (output_dir / "review-report.md").is_file()
     assert not (output_dir / "review-pass.json").exists()
 
 
-def test_blocking_findings_do_not_generate_pass_marker(tmp_path: Path) -> None:
+def test_blocking_findings_do_not_generate_pass_marker(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
     output_dir = project / ".local" / "cross-agent-review" / "demo" / head[:12]
-    fake = BLOCKING_REVIEW
+    review_text = BLOCKING_REVIEW
 
-    result = run(
-        *review_args(project, head, fake_reviewer_results=fake),
-        cwd=project,
-    )
+    status = run_review_in_process(module, monkeypatch, project, *review_args(project, head), reviewer_text=review_text)
 
-    assert result.returncode == 0
+    assert status == 0
     assert (output_dir / "review-report.md").is_file()
     assert not (output_dir / "review-pass.json").exists()
 
 
-def test_run_removes_stale_legacy_pass_marker_from_reused_output_dir(tmp_path: Path) -> None:
+def test_run_removes_stale_legacy_pass_marker_from_reused_output_dir(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
     input_file = write_review_input(project, head, head)
     output_dir = input_file.parent.parent
 
-    clean_result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    clean_status = run_review_in_process(module, monkeypatch, project, "run", "--input-file", str(input_file))
 
-    assert clean_result.returncode == 0, clean_result.stdout + clean_result.stderr
+    assert clean_status == 0
     (output_dir / "review-pass.json").write_text("stale\n", encoding="utf-8")
 
-    blocking_fake = BLOCKING_REVIEW
-
-    blocking_result = run(
+    blocking_status = run_review_in_process(
+        module,
+        monkeypatch,
+        project,
         "run",
         "--input-file",
         str(input_file),
-        "--fake-reviewer-results",
-        blocking_fake,
-        cwd=project,
+        reviewer_text=BLOCKING_REVIEW,
     )
 
-    assert blocking_result.returncode == 0
+    assert blocking_status == 0
     assert not (output_dir / "review-pass.json").exists()
 
 
-def test_mark_pass_report_hash_matches_report(tmp_path: Path) -> None:
+def test_mark_pass_report_hash_matches_report(tmp_path: Path, monkeypatch) -> None:
+    module = load_script_module()
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
     input_file = write_review_input(project, head, head)
     output_dir = input_file.parent.parent
-    result = run("run", "--input-file", str(input_file), "--fake-reviewer-results", "[]", cwd=project)
+    status = run_review_in_process(module, monkeypatch, project, "run", "--input-file", str(input_file))
     mark_result = run("mark-pass", "--input-file", str(input_file), cwd=project)
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert status == 0
     assert mark_result.returncode == 0, mark_result.stdout + mark_result.stderr
     report = (output_dir / "review-report.md").read_bytes()
     marker = json.loads(guard_pass_path(project, head).read_text(encoding="utf-8"))

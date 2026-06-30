@@ -68,7 +68,6 @@ class ReviewInput:
     output_dir: Path
     debug: bool
     sdk_python: Path | None
-    fake_reviewer_results: str | None
 
 
 @dataclass(frozen=True)
@@ -85,7 +84,6 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--input-file", type=Path, required=True)
     run_parser.add_argument("--debug", action="store_true")
     run_parser.add_argument("--sdk-python", type=Path)
-    run_parser.add_argument("--fake-reviewer-results")
     mark_parser = subparsers.add_parser("mark-pass")
     mark_parser.add_argument("--input-file", type=Path, required=True)
     mark_parser.add_argument("--profile-id", default=DEFAULT_PROFILE_ID)
@@ -246,7 +244,6 @@ def load_review_input(args: argparse.Namespace) -> ReviewInput:
         output_dir=input_file.parent.parent,
         debug=getattr(args, "debug", False),
         sdk_python=getattr(args, "sdk_python", None),
-        fake_reviewer_results=getattr(args, "fake_reviewer_results", None),
     )
 
 
@@ -304,31 +301,6 @@ def markdown_review(role: str, text: str) -> dict:
     return {"role": role, "text": text.strip() + "\n"}
 
 
-def no_blocking_review(role: str) -> dict:
-    return markdown_review(
-        role,
-        f"""# Review Result: {role}
-## Findings
-No findings.
-""",
-    )
-
-
-def load_fake_reviewer_results(raw: str | None) -> list[dict]:
-    if raw is None:
-        return []
-    if raw.strip() == "[]":
-        return [no_blocking_review(role) for role in REVIEWER_ROLES]
-    blocks = [block.strip() for block in raw.split("\n--- reviewer ---\n") if block.strip()]
-    if not blocks:
-        raise ValueError("invalid_fake_reviewer_results")
-    if len(blocks) == 1:
-        return [markdown_review(role, blocks[0]) for role in REVIEWER_ROLES]
-    if len(blocks) != len(REVIEWER_ROLES):
-        raise ValueError("invalid_fake_reviewer_results")
-    return [markdown_review(role, text) for role, text in zip(REVIEWER_ROLES, blocks, strict=True)]
-
-
 def render_template(path: Path, values: dict[str, str]) -> str:
     rendered = path.read_text(encoding="utf-8")
     for key, value in values.items():
@@ -363,9 +335,6 @@ def reviewer_prompt(review_args: ReviewInput, role: str) -> str:
 
 
 def dispatch_reviewers(review_args: ReviewInput, sdk_python: str) -> list[dict]:
-    fake_results = load_fake_reviewer_results(review_args.fake_reviewer_results)
-    if review_args.fake_reviewer_results is not None:
-        return fake_results
     return run_sdk_dispatch_subprocess(review_args, sdk_python)
 
 
@@ -677,10 +646,7 @@ def run_review(args: argparse.Namespace) -> int:
         validate_base_ref(Path.cwd(), review_args.base_ref)
         allowed_paths = runtime_allowed_paths(review_args)
         ensure_clean_subject(Path.cwd(), review_args.head_ref, allowed_paths)
-        sdk_python = resolve_sdk_python(
-            review_args.sdk_python,
-            require_real_sdk=review_args.fake_reviewer_results is None or review_args.sdk_python is not None,
-        )
+        sdk_python = resolve_sdk_python(review_args.sdk_python, require_real_sdk=True)
         ensure_clean_subject(Path.cwd(), review_args.head_ref, allowed_paths)
         reviewers = dispatch_reviewers(review_args, sdk_python)
         summary = aggregate(reviewers)

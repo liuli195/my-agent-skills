@@ -961,6 +961,33 @@ def test_workflows_are_thin_entrypoints() -> None:
         assert "scripts/release-flow" not in workflow
 
 
+def test_workflows_use_current_low_risk_action_versions() -> None:
+    workflow_paths = [
+        *sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")),
+        REPO_ROOT
+        / "plugins"
+        / "release-flow"
+        / "skills"
+        / "release-flow"
+        / "assets"
+        / "templates"
+        / "github"
+        / "workflows"
+        / "release.yml",
+    ]
+    workflows = {path: path.read_text(encoding="utf-8") for path in workflow_paths}
+    combined = "\n".join(workflows.values())
+
+    assert "actions/checkout@v4" not in combined
+    assert "actions/setup-node@v4" not in combined
+    assert 'node-version: "20"' not in combined
+    assert "actions/setup-python@v5" not in combined
+
+    codeql_workflow = workflows[REPO_ROOT / ".github" / "workflows" / "codeql.yml"]
+    assert "github/codeql-action/init@v4" in codeql_workflow
+    assert "github/codeql-action/analyze@v4" in codeql_workflow
+
+
 def test_ci_publish_rejects_dry_run_argument(tmp_path: Path) -> None:
     project = tmp_path / "project"
     write_release_flow_files(
