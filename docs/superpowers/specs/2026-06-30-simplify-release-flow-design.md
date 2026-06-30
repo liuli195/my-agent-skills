@@ -2,6 +2,8 @@
 comet_change: simplify-release-flow
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-30-simplify-release-flow
+status: final
 ---
 
 # Simplify Release Flow Design

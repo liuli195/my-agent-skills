@@ -2,6 +2,7 @@
 change: simplify-release-flow
 design-doc: docs/superpowers/specs/2026-06-30-simplify-release-flow-design.md
 base-ref: f4eecc28da22940e63f7b284ea3fafcf9d9454b4
+archived-with: 2026-06-30-simplify-release-flow
 ---
 
 # Simplify Release Flow Implementation Plan
@@ -14,6 +15,7 @@ base-ref: f4eecc28da22940e63f7b284ea3fafcf9d9454b4
 
 **Tech Stack:** Python（编程语言）、argparse（参数解析）、YAML（配置格式）、JSON（数据格式）、git（版本管理）、gh（GitHub 命令行）、pytest（测试工具）、GitHub Actions（GitHub 自动化）。
 
+archived-with: 2026-06-30-simplify-release-flow
 ---
 
 ## 文件结构
