@@ -1,0 +1,4 @@
+# Comet guard-readable project commands
+# Keep in sync with .comet/config.yaml until the guard reads that file directly.
+build_command: python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py build --project .
+verify_command: python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project .
