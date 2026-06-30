@@ -14,9 +14,7 @@ defaults:
     requiredSections:
     - Summary
     - Scope
-    - Verification
-    - Risk
-    - Rollback
+    - Closing References
 authorization:
   phraseHashAlgorithm: md5
   phraseHash: 4f9ee82bfd2ac6399a3e330ac49d75f1

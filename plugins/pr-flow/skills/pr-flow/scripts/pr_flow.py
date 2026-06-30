@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -21,26 +22,25 @@ import yaml
 
 
 COMMANDS = ("diagnose", "init", "validate", "complete", "cleanup", "hotfix", "tweak")
-PR_VIEW_FIELDS = "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid"
+PR_BODY_REQUIRED_SECTIONS = ("Summary", "Scope", "Closing References")
+PR_VIEW_FIELDS = "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid,body"
 BLOCKING_REVIEW_DECISIONS = {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}
 SUPPORTED_REVIEW_GATE_MODES = {"github", "skip"}
 PR_TEMPLATE = """## Summary
 
+<!-- 用一句话说明本次 PR 的目的和主要变化。 -->
+
 ## Scope
 
-## Verification
+<!-- 列出本次 PR 的影响范围，例如代码、测试、文档或配置。 -->
 
-## Risk
+## Closing References
 
-## Rollback
+<!-- 写 Fixes #123；没有关闭的问题单时写 None。 -->
 """
 PR_FLOW_GITIGNORE = "/runs/\n/last-status.json\n"
-TWEAK_BODY_TEMPLATE = """## Tweak Path
+HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
-Review gate skipped for non-bug small change.
-
-Reason: {reason}
-"""
 
 
 def resolve_project(path: Path) -> Path:
@@ -66,7 +66,7 @@ def default_config(base_branch: str) -> dict:
             "wait": {"timeoutSeconds": 600, "pollSeconds": 15},
             "pr": {
                 "bodyTemplatePath": ".pr-flow/pr-template.md",
-                "requiredSections": ["Summary", "Scope", "Verification", "Risk", "Rollback"],
+                "requiredSections": list(PR_BODY_REQUIRED_SECTIONS),
             },
         },
         "branches": {
@@ -250,6 +250,95 @@ def command_failure_details(reason: str, result: subprocess.CompletedProcess[str
         "stdout": result.stdout.strip(),
         "stderr": result.stderr.strip(),
     }
+
+
+def pr_body_next_command(command: str, project: Path, args: argparse.Namespace) -> str:
+    command_args = [
+        sys.executable,
+        "plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py",
+        command,
+        "--project",
+        str(project),
+    ]
+    if command == "tweak":
+        command_args.extend(["--reason", str(getattr(args, "reason", "") or "small docs polish")])
+    command_args.extend(["--summary", str(getattr(args, "summary", "") or "说明本次 PR 的主要变化")])
+    command_args.extend(["--scope", str(getattr(args, "scope", "") or "列出本次 PR 的影响范围")])
+    for issue in getattr(args, "fixes", []) or []:
+        command_args.extend(["--fixes", str(issue)])
+    return " ".join(shlex.quote(part) for part in command_args)
+
+
+def require_pr_body_args(project: Path, command: str, args: argparse.Namespace) -> tuple[str, str, list[str]]:
+    summary = str(getattr(args, "summary", "") or "").strip()
+    scope = str(getattr(args, "scope", "") or "").strip()
+    fixes = [str(issue).strip() for issue in (getattr(args, "fixes", None) or []) if str(issue).strip()]
+    invalid_fixes = [issue for issue in fixes if not issue.isdecimal() or int(issue) <= 0]
+    missing = []
+    if not summary:
+        missing.append("--summary")
+    if not scope:
+        missing.append("--scope")
+    if missing:
+        raise PrFlowError(
+            "pr_body_required",
+            {
+                "reason": "pr_body_required",
+                "missingArgs": missing,
+                "nextCommand": pr_body_next_command(command, project, args),
+            },
+        )
+    if invalid_fixes:
+        raise PrFlowError(
+            "pr_body_required",
+            {
+                "reason": "pr_body_required",
+                "invalidFixes": invalid_fixes,
+                "nextAction": "Pass --fixes as issue numbers without #, for example --fixes 98.",
+            },
+        )
+    return summary, scope, fixes
+
+
+def pr_body_config(config: dict[str, Any]) -> dict[str, Any]:
+    pr_config = defaults_from_config(config).get("pr")
+    return pr_config if isinstance(pr_config, dict) else {}
+
+
+def pr_body_template_path(project: Path, config: dict[str, Any]) -> Path:
+    value = pr_body_config(config).get("bodyTemplatePath", ".pr-flow/pr-template.md")
+    path = Path(value) if isinstance(value, str) and value else Path(".pr-flow/pr-template.md")
+    return path if path.is_absolute() else project / path
+
+
+def strip_html_comments(value: Any) -> str:
+    text = value if isinstance(value, str) else ""
+    return HTML_COMMENT_RE.sub("", text).strip()
+
+
+def render_pr_body(project: Path, config: dict[str, Any], summary: str, scope: str, fixes: Sequence[str]) -> str:
+    template_path = pr_body_template_path(project, config)
+    configured_sections = pr_body_config(config).get("requiredSections")
+    configured_sections = configured_sections if isinstance(configured_sections, list) else []
+    template = template_path.read_text(encoding="utf-8") if template_path.exists() else ""
+    missing_sections = [
+        section
+        for section in PR_BODY_REQUIRED_SECTIONS
+        if section not in configured_sections or f"## {section}" not in template
+    ]
+    if not template.strip() or missing_sections:
+        raise PrFlowError(
+            "pr_body_required",
+            {
+                "reason": "pr_body_required",
+                "templatePath": str(template_path),
+                "missingSections": missing_sections,
+                "nextAction": "Add ## Summary, ## Scope, and ## Closing References to the PR body template.",
+            },
+        )
+    references = "\n".join(f"Fixes #{issue}" for issue in fixes) if fixes else "None"
+    # The template is a validation contract and authoring guide; rendering stays deterministic here.
+    return f"## Summary\n\n{summary}\n\n## Scope\n\n{scope}\n\n## Closing References\n\n{references}\n"
 
 
 def base_branch_from_config(config: dict[str, Any]) -> str:
@@ -614,8 +703,21 @@ def confirm_remote_branch_deleted(project: Path, remote: str, branch: str) -> No
         )
 
 
-def create_pr(project: Path, config: dict[str, Any]) -> dict[str, Any]:
-    result = gh(project, "pr", "create", "--base", base_branch_from_config(config), "--fill")
+def gh_with_body_file(project: Path, args: Sequence[str], body: str) -> subprocess.CompletedProcess[str]:
+    body_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as body_file:
+            body_file.write(body)
+            body_path = Path(body_file.name)
+        return gh(project, *args, "--body-file", str(body_path))
+    finally:
+        if body_path is not None:
+            body_path.unlink(missing_ok=True)
+
+
+def create_pr(project: Path, config: dict[str, Any], body: str | None = None) -> dict[str, Any]:
+    args = ("pr", "create", "--base", base_branch_from_config(config), "--fill")
+    result = gh_with_body_file(project, args, body) if body is not None else gh(project, *args)
     if result.returncode != 0:
         details = command_failure_details("gh_pr_create_failed", result)
         raise PrFlowError("gh_pr_create_failed", details)
@@ -641,19 +743,30 @@ def pr_number_for_command(pr: dict[str, Any]) -> str:
 
 def update_pr_body(project: Path, pr: dict[str, Any], body: str) -> None:
     pr_number = pr_number_for_command(pr)
-    body_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as body_file:
-            body_file.write(body)
-            body_path = Path(body_file.name)
-        result = gh(project, "pr", "edit", pr_number, "--body-file", str(body_path))
-    finally:
-        if body_path is not None:
-            body_path.unlink(missing_ok=True)
+    result = gh_with_body_file(project, ("pr", "edit", pr_number), body)
     if result.returncode != 0:
         details = command_failure_details("gh_pr_edit_failed", result)
         details["pr"] = pr_number
         raise PrFlowError("gh_pr_edit_failed", details)
+
+
+def reconcile_existing_pr_body(project: Path, pr: dict[str, Any], body: str, fixes: Sequence[str]) -> None:
+    if not strip_html_comments(pr.get("body")):
+        update_pr_body(project, pr, body)
+        return
+    if fixes:
+        closing_references = [f"Fixes #{issue}" for issue in fixes]
+        pr_number = pr_number_for_command(pr)
+        raise PrFlowError(
+            "pr_body_required",
+            {
+                "reason": "pr_body_required",
+                "pr": pr_number,
+                "conflict": "existing_body_not_overwritten",
+                "closingReferences": closing_references,
+                "nextAction": f"Edit PR #{pr_number} body manually and add: {', '.join(closing_references)}",
+            },
+        )
 
 
 def view_pr_for_cleanup(project: Path, pr_number: str) -> dict[str, Any]:
@@ -898,7 +1011,7 @@ def run_diagnose(args: argparse.Namespace) -> int:
         "pr",
         "view",
         "--json",
-        "number,state,isDraft,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup",
+        PR_VIEW_FIELDS,
     )
     gh_details: dict[str, Any] = {
         "branch": branch,
@@ -910,7 +1023,12 @@ def run_diagnose(args: argparse.Namespace) -> int:
         gh_details.update(command_failure_details("gh_pr_view_failed", pr_result))
         if gh_pr_not_found(pr_result) and branch != base_branch:
             gh_details["reason"] = "pr_missing"
-            gh_details["nextCommand"] = "complete"
+            gh_details["nextCommand"] = pr_body_next_command(
+                "complete",
+                project,
+                argparse.Namespace(summary="", scope="", fixes=[]),
+            )
+            gh_details["optionalFixesArg"] = "--fixes 98"
             return stop(project, args.command, "DISPATCH_REQUIRED", "pr_missing", gh_details)
         return stop(project, args.command, "EXCEPTION_REQUIRED", "gh_pr_view_failed", gh_details)
 
@@ -934,6 +1052,15 @@ def run_diagnose(args: argparse.Namespace) -> int:
             "baseRefName": pr.get("baseRefName"),
         }
     )
+    if not strip_html_comments(pr.get("body")):
+        gh_details["reason"] = "pr_body_required"
+        gh_details["nextCommand"] = pr_body_next_command(
+            "complete",
+            project,
+            argparse.Namespace(summary="", scope="", fixes=[]),
+        )
+        gh_details["optionalFixesArg"] = "--fixes 98"
+        return stop(project, args.command, "EXCEPTION_REQUIRED", "pr_body_required", gh_details)
     checks = pr_checks(pr)
     if has_pending_check(checks):
         gh_details["reason"] = "checks_pending"
@@ -947,7 +1074,12 @@ def run_diagnose(args: argparse.Namespace) -> int:
         return stop(project, args.command, "DISPATCH_REQUIRED", "pr_is_draft", gh_details)
 
     gh_details["reason"] = "ready_to_complete"
-    gh_details["nextCommand"] = "complete"
+    gh_details["nextCommand"] = pr_body_next_command(
+        "complete",
+        project,
+        argparse.Namespace(summary="", scope="", fixes=[]),
+    )
+    gh_details["optionalFixesArg"] = "--fixes 98"
     write_status(project, args.command, "ready", gh_details)
     print("status: ready")
     print("ready_to_complete")
@@ -961,9 +1093,12 @@ def run_lifecycle(
     *,
     skip_review_gate: bool = False,
     before_checks: Any | None = None,
+    pr_body: str | None = None,
+    fixes: Sequence[str] = (),
 ) -> int:
     try:
         pr = find_pr(project)
+        existing_pr = pr is not None
         if command == "complete":
             push_stop = auto_push_current_branch_if_needed(project, config)
             if push_stop is not None:
@@ -973,8 +1108,10 @@ def run_lifecycle(
             if push_stop is not None:
                 return stop_from_state(project, command, push_stop)
         if pr is None:
-            pr = create_pr(project, config)
+            pr = create_pr(project, config, pr_body)
         pr = sync_pr(project, pr)
+        if pr_body is not None and existing_pr:
+            reconcile_existing_pr_body(project, pr, pr_body, fixes)
         if before_checks is not None:
             before_checks(pr)
     except PrFlowError as exc:
@@ -1039,27 +1176,35 @@ def run_complete(args: argparse.Namespace) -> int:
     project = resolve_project(args.project)
     try:
         config = load_config(project)
+        summary, scope, fixes = require_pr_body_args(project, args.command, args)
+        body = render_pr_body(project, config, summary, scope, fixes)
     except FileNotFoundError:
         details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
         return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
-    return run_lifecycle(project, config, args.command)
+    except PrFlowError as exc:
+        return stop(project, args.command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
+    return run_lifecycle(project, config, args.command, pr_body=body, fixes=fixes)
 
 
 def run_tweak(args: argparse.Namespace) -> int:
     project = resolve_project(args.project)
     try:
         config = load_config(project)
+        summary, scope, fixes = require_pr_body_args(project, args.command, args)
+        body = render_pr_body(project, config, summary, scope, fixes)
     except FileNotFoundError:
         details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
         return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
+    except PrFlowError as exc:
+        return stop(project, args.command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
 
-    body = TWEAK_BODY_TEMPLATE.format(reason=args.reason)
     return run_lifecycle(
         project,
         config,
         args.command,
         skip_review_gate=True,
-        before_checks=lambda pr: update_pr_body(project, pr, body),
+        pr_body=body,
+        fixes=fixes,
     )
 
 
@@ -1363,6 +1508,10 @@ def build_parser() -> argparse.ArgumentParser:
             subparser.add_argument("--project", type=Path, required=True)
             subparser.add_argument("--target", required=True)
             subparser.add_argument("--authorization-phrase", required=True)
+        if command in {"complete", "tweak"}:
+            subparser.add_argument("--summary")
+            subparser.add_argument("--scope")
+            subparser.add_argument("--fixes", action="append", default=[])
         if command == "tweak":
             subparser.add_argument("--reason")
         if command == "init":
