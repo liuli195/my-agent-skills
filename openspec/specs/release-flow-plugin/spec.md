@@ -329,6 +329,12 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 - **THEN** preflight（发布前检查）MUST 不要求任何插件 manifest（插件清单）版本等于发布版本
 - **THEN** 任何 manifest（插件清单）版本与远端发布通道同路径 manifest（插件清单）版本不一致 MUST 被拒绝
 
+#### Scenario: CLI 重复声明提升插件
+
+- **WHEN** 用户重复传入 `--bump-plugins`（提升插件版本参数）
+- **THEN** preflight（发布前检查）、publish（发布）和 `ci-publish`（CI 发布）MUST NOT 静默丢弃前面的插件
+- **AND** 系统 MUST 将重复参数合并为同一个 `bumpPlugins`（提升插件列表）或输出明确错误
+
 #### Scenario: 未声明提升导致版本漂移
 
 - **WHEN** 某个插件 manifest（插件清单）版本不同于远端发布通道同路径版本但不在 `bumpPlugins`（提升插件列表）中
@@ -386,4 +392,3 @@ The release-flow generated GitHub Workflow template MUST use current GitHub Acti
 - **THEN** the workflow MUST use `actions/checkout@v5`
 - **THEN** the workflow MUST NOT use `actions/checkout@v4`
 - **THEN** the workflow MUST keep the existing `workflow_dispatch` inputs and CI publish output contract
-

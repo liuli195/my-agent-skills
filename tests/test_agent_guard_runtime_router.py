@@ -154,6 +154,9 @@ def test_command_context_module_exposes_shared_envelope_helpers() -> None:
     assert module.tool_name_from_envelope(envelope) == "Bash"
     assert module.command_from_envelope(envelope) == "git status"
     assert module.command_from_envelope({"payload": {"command": "git status --short"}}) == "git status --short"
+    for container in ["input", "parameters", "params", "args", "arguments"]:
+        assert module.command_from_envelope({"payload": {container: {"command": f"git status --{container}"}}}) == f"git status --{container}"
+        assert module.command_from_envelope({"payload": {container: {"cmd": f"git diff --{container}"}}}) == f"git diff --{container}"
     assert module.command_from_envelope({"payload": {"tool_input": {"command": ["git", "status"]}}}) == ""
 
 
@@ -598,6 +601,34 @@ def test_hook_router_preserves_top_level_command_for_global_command_guard(tmp_pa
     assert payload["status"] == "deny"
     assert payload["reason"] == "global_command_guard_required"
     assert payload["captures"] == {"change": "demo"}
+
+
+def test_global_command_guard_uses_parameters_command_and_audits_command(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    command = "comet-guard.sh demo build --apply"
+    write_global_command_guard(profile, "verify_requires_review", "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) build --apply")
+
+    result = pre_tool_payload(
+        project,
+        user_home,
+        {
+            "session_id": "session-1",
+            "cwd": str(project),
+            "tool_name": "Bash",
+            "parameters": {"command": command},
+        },
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "deny"
+    assert payload["captures"] == {"change": "demo"}
+    audit = json.loads(Path(payload["audit_path"]).read_text(encoding="utf-8"))
+    assert audit["detail"]["global_command_guard"]["command"] == command
 
 
 def test_hook_router_blocks_codex_stdin_hook_with_native_deny_output(tmp_path: Path) -> None:
