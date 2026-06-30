@@ -59,6 +59,17 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 - **THEN** diagnose（诊断） MUST use `pr_missing` as reason（原因）
 - **THEN** diagnose（诊断） MUST provide `complete`（收尾） as the next command（下一步命令）
 
+#### Scenario: Feature branch has no upstream yet
+- **WHEN** diagnose（诊断）runs on a non-base branch（非目标分支）
+- **AND** the branch has no upstream（上游分支）
+- **AND** `complete`（收尾） can own safe auto-push（自动推送） handling
+- **THEN** diagnose（诊断） MUST output `DISPATCH_REQUIRED`（需要外部进展）
+- **THEN** diagnose（诊断） MUST use `missing_upstream` as reason（原因）
+- **THEN** diagnose（诊断） MUST preserve the missing upstream（缺少上游分支） fact in stop-state details（停止状态详情）
+- **THEN** stop-state details（停止状态详情） MUST include `branch`（分支） and `baseBranch`（目标分支）
+- **THEN** diagnose（诊断） MUST provide `complete`（收尾） as the next command（下一步命令） using the existing PR body（拉取请求正文） next-command format with `--summary` and `--scope`
+- **THEN** diagnose（诊断） MUST NOT present manual `git push`（推送） as the only next step
+
 ### Requirement: Complete PR lifecycle
 系统 MUST 提供 complete（完整流程），从当前分支创建或同步 PR 到合并后清理。
 
