@@ -756,9 +756,9 @@ def ensure_remote_branch(project: Path, branch: str) -> None:
         raise ValueError(f"remote_ref_missing: {ref}: {output}")
 
 
-def remote_manifest_version(project: Path, config: FlowConfig, manifest_file: str) -> str | None:
-    ref = f"origin/{config.release_channel_branch}"
-    ensure_remote_branch(project, config.release_channel_branch)
+def remote_ref_manifest_version(project: Path, branch: str, manifest_file: str) -> str | None:
+    ref = f"origin/{branch}"
+    ensure_remote_branch(project, branch)
     result = subprocess.run(
         ["git", "-C", str(project), "show", f"{ref}:{manifest_file}"],
         check=False,
@@ -772,6 +772,14 @@ def remote_manifest_version(project: Path, config: FlowConfig, manifest_file: st
     if not isinstance(version, str):
         raise ValueError(f"remote_manifest_version_missing: {manifest_file}")
     return version
+
+
+def remote_manifest_version(project: Path, config: FlowConfig, manifest_file: str) -> str | None:
+    return remote_ref_manifest_version(project, config.release_channel_branch, manifest_file)
+
+
+def source_ref_manifest_version(project: Path, config: FlowConfig, manifest_file: str) -> str | None:
+    return remote_ref_manifest_version(project, config.release_source_ref, manifest_file)
 
 
 def apply_projection(project: Path, projection: Projection) -> None:
@@ -947,6 +955,9 @@ def preflight_errors(
                 if plugin_name in bumped:
                     if current != version:
                         errors.append(f"manifest_version_mismatch: {manifest_file}")
+                    source = source_ref_manifest_version(project, config, manifest_file)
+                    if source != version:
+                        errors.append(f"source_ref_requires_pr: {config.release_source_ref}: {manifest_file}")
                 else:
                     remote = remote_manifest_version(project, config, manifest_file)
                     if remote is None or current != remote:
