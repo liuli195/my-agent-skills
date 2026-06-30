@@ -134,7 +134,7 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 
 ### Requirement: 发布前检查
 
-系统 MUST 提供 release-flow preflight（发布前检查）阶段，用于在发布前验证本地配置、发布输入、manifest（插件清单）、发布投影和远端发布冲突。
+系统 MUST 提供 release-flow preflight（发布前检查）阶段，用于在发布前验证本地配置、发布输入、manifest（插件清单）、source ref（源引用）、发布投影和远端发布冲突。
 
 #### Scenario: 检查配置文件
 
@@ -153,6 +153,14 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 - **WHEN** 执行 preflight（发布前检查）
 - **THEN** 系统 MUST 只要求 `bumpPlugins`（提升插件列表）声明的插件 manifest（插件清单）版本等于发布版本
 - **THEN** 系统 MUST 拒绝未声明插件的 manifest（插件清单）版本不同于远端发布通道同路径版本
+
+#### Scenario: 检查 source ref 已包含版本提升
+
+- **WHEN** 执行 preflight（发布前检查）
+- **AND** `bumpPlugins`（提升插件列表）声明了需要提升版本的插件
+- **THEN** 系统 MUST 验证远端 `sourceRef`（源引用）中这些插件 manifest（插件清单）版本等于发布版本
+- **THEN** 任一版本提升尚未进入远端 `sourceRef`（源引用）时 MUST 拒绝继续
+- **THEN** 错误 MUST 指出需要先通过 PR（拉取请求）把版本提升合入 `sourceRef`（源引用）
 
 #### Scenario: 检查发布投影
 
@@ -392,3 +400,4 @@ The release-flow generated GitHub Workflow template MUST use current GitHub Acti
 - **THEN** the workflow MUST use `actions/checkout@v5`
 - **THEN** the workflow MUST NOT use `actions/checkout@v4`
 - **THEN** the workflow MUST keep the existing `workflow_dispatch` inputs and CI publish output contract
+
