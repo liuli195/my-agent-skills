@@ -583,6 +583,36 @@ def test_preflight_rejects_unknown_bump_plugin(tmp_path: Path) -> None:
     assert "plugin_unknown: missing-plugin" in result.stdout
 
 
+def test_bump_plugins_parser_accepts_comma_empty_and_repeated_args() -> None:
+    release_flow = load_release_flow_module()
+    parser = release_flow.build_parser()
+
+    assert release_flow.parse_bump_plugins("agent-guard,release-flow") == ["agent-guard", "release-flow"]
+    assert release_flow.parse_bump_plugins("") == []
+    for command, authorization in [
+        ("preflight", []),
+        ("publish", ["--authorize-publish"]),
+        ("ci-publish", ["--authorize-ci-publish"]),
+    ]:
+        args = parser.parse_args(
+            [
+                command,
+                "--project",
+                ".",
+                "--tag",
+                "v0.1.1",
+                "--version",
+                "0.1.1",
+                "--bump-plugins",
+                "agent-guard",
+                "--bump-plugins",
+                "release-flow",
+                *authorization,
+            ]
+        )
+        assert release_flow.parse_bump_plugins(args.bump_plugins) == ["agent-guard", "release-flow"]
+
+
 def test_preflight_accepts_partial_plugin_bump(tmp_path: Path) -> None:
     project = tmp_path / "project"
     remote = tmp_path / "remote.git"
@@ -608,6 +638,34 @@ def test_preflight_accepts_partial_plugin_bump(tmp_path: Path) -> None:
     assert "status: preflight_passed" in result.stdout
     assert "bumpPlugins: agent-guard" in result.stdout
     assert not (project / ".release-flow" / "releases").exists()
+
+
+def test_preflight_merges_repeated_bump_plugins(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    remote = tmp_path / "remote.git"
+    write_release_flow_files(project)
+    write_plugin_manifests(project, "agent-guard", "0.1.0")
+    write_plugin_manifests(project, "release-flow", "0.1.0")
+    init_project_with_remote(project, remote)
+    write_plugin_manifests(project, "agent-guard", "0.1.1")
+    write_plugin_manifests(project, "release-flow", "0.1.1")
+
+    result = run(
+        "preflight",
+        "--project",
+        str(project),
+        "--tag",
+        "v0.1.1",
+        "--version",
+        "0.1.1",
+        "--bump-plugins",
+        "agent-guard",
+        "--bump-plugins",
+        "release-flow",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "bumpPlugins: agent-guard,release-flow" in result.stdout
 
 
 def test_preflight_fetches_missing_channel_branch_for_actions_checkout(tmp_path: Path) -> None:

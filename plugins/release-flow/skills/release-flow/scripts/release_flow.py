@@ -680,16 +680,17 @@ def tag_version(tag: str) -> str:
     return tag
 
 
-def parse_bump_plugins(raw: str) -> list[str]:
-    if raw == "":
+def parse_bump_plugins(raw: str | list[str]) -> list[str]:
+    values = raw if isinstance(raw, list) else [raw]
+    if values == [""]:
         return []
-    plugins = [item.strip() for item in raw.split(",")]
+    plugins = [item.strip() for value in values for item in value.split(",") if value != ""]
     if any(not item for item in plugins):
         raise ValueError("bump_plugins_invalid")
     for plugin_name in plugins:
         if plugin_name not in PLUGIN_REGISTRY:
             raise ValueError(f"plugin_unknown: {plugin_name}")
-    return plugins
+    return list(dict.fromkeys(plugins))
 
 
 def plugin_manifest_paths(plugin_name: str) -> list[str]:
@@ -1256,18 +1257,18 @@ def build_parser() -> argparse.ArgumentParser:
     preflight.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
     preflight.add_argument("--tag", required=True, help="发布标签。")
     preflight.add_argument("--version", required=True, help="发布版本。")
-    preflight.add_argument("--bump-plugins", required=True, help="逗号分隔插件名；空字符串表示不提升插件。")
+    preflight.add_argument("--bump-plugins", action="append", required=True, help="逗号分隔插件名；空字符串表示不提升插件。")
     publish = subparsers.add_parser("publish", help="触发 GitHub release workflow。")
     publish.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
     publish.add_argument("--tag", required=True, help="发布标签。")
     publish.add_argument("--version", required=True, help="发布版本。")
-    publish.add_argument("--bump-plugins", required=True, help="逗号分隔插件名；空字符串表示不提升插件。")
+    publish.add_argument("--bump-plugins", action="append", required=True, help="逗号分隔插件名；空字符串表示不提升插件。")
     publish.add_argument("--authorize-publish", action="store_true", help="授权触发 GitHub 发布。")
     ci_publish = subparsers.add_parser("ci-publish", help="CI 中发布 release channel。")
     ci_publish.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
     ci_publish.add_argument("--tag", required=True, help="发布标签。")
     ci_publish.add_argument("--version", required=True, help="发布版本。")
-    ci_publish.add_argument("--bump-plugins", required=True, help="逗号分隔插件名；空字符串表示不提升插件。")
+    ci_publish.add_argument("--bump-plugins", action="append", required=True, help="逗号分隔插件名；空字符串表示不提升插件。")
     ci_publish.add_argument("--authorize-ci-publish", action="store_true", help="授权 CI 远端写入。")
     return parser
 
