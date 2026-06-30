@@ -48,18 +48,17 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 - **THEN** 配置 MUST 声明 GitHub Workflow 文件路径
 - **THEN** 配置 MUST 声明触发方式为 `workflow_dispatch`
 
-#### Scenario: 声明本地发布记录目录
+#### Scenario: 不声明本地发布记录目录
 
-- **WHEN** 项目配置声明 records（记录）
-- **THEN** 配置 MUST 声明 `.release-flow/releases` 为本地发布记录目录
-- **THEN** 发布记录目录 MUST NOT 纳入 Git 版本管理
+- **WHEN** 项目配置声明 release-flow（发布流程）设置
+- **THEN** 配置 MUST NOT 声明本地 release record（发布记录）目录
+- **THEN** 发布流程 MUST NOT 依赖 `.release-flow/releases/<tag>/` 持久目录
 
-#### Scenario: 声明 GitHub 期望设置
+#### Scenario: 不声明 GitHub Rulesets 期望设置
 
 - **WHEN** 项目配置声明 GitHub 仓库设置
-- **THEN** 配置 MUST 支持声明 Actions 权限、Rulesets（规则集）、release channel（发布通道）写入规则和 tag（标签）规则
-- **THEN** 首版 MUST 使用 Rulesets 模型
-- **THEN** 首版 MUST NOT 要求 Branch Protection（分支保护）兜底
+- **THEN** 配置 MUST NOT 声明 GitHub Rulesets（GitHub 规则集）期望
+- **THEN** preflight（发布前检查）MUST NOT 检查 GitHub Rulesets（GitHub 规则集）
 
 ### Requirement: 发布投影变量注册表
 
@@ -100,155 +99,121 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 
 ### Requirement: 项目启用阶段
 
-系统 MUST 提供 project setup（项目启用）阶段，用于调研仓库、生成目标项目配置，并输出 GitHub 配置方案。首版 MUST NOT 在没有额外实现仓库上下文和认证回读前修改 GitHub 仓库设置。
+系统 MUST 提供 project setup（项目启用）阶段，用于生成目标项目配置，并输出 GitHub Actions（GitHub 自动化任务）权限配置方案。首版 MUST NOT 在没有额外实现仓库上下文和认证回读前修改 GitHub 仓库设置。
 
 #### Scenario: 生成目标项目配置
 
-- **WHEN** 用户在目标项目启用 release-flow
-- **THEN** 系统 MUST 生成 `.release-flow/config.yaml`
-- **THEN** 系统 MUST 生成 `.release-flow/projection.yaml`
-- **THEN** 系统 MUST 生成 `.release-flow/.gitignore` 并忽略 `/releases/`
-- **THEN** 系统 MUST 从插件模板生成目标项目的薄 GitHub Workflow 入口
+- **WHEN** 用户在目标项目启用 release-flow（发布流程）
+- **THEN** 系统 MUST 生成 `.release-flow/config.yaml`（配置文件）
+- **THEN** 系统 MUST 生成 `.release-flow/projection.yaml`（投影配置）
+- **THEN** 系统 MUST 从插件模板生成目标项目的薄 GitHub Workflow（GitHub 工作流）入口
+- **THEN** 系统 MUST NOT 生成只服务本地 release record（发布记录）的 `.release-flow/.gitignore`
 - **THEN** 系统 MUST NOT 将插件内的发布脚本复制到目标项目仓库
-- **THEN** 系统 MUST NOT 创建 `.release-flow/releases/<tag>/release-plan.json`
+- **THEN** 系统 MUST NOT 创建 `.release-flow/releases/<tag>/release-plan.json`（发布计划文件）
 
 #### Scenario: 生成 GitHub 配置方案
 
 - **WHEN** 项目启用阶段检查 GitHub 仓库
-- **THEN** 系统 MUST 输出 Actions 权限和 Rulesets 的期望配置方案
-- **THEN** 系统 MUST NOT 输出非敏感 marketplace identity 的 GitHub Actions Variables 配置方案
+- **THEN** 系统 MUST 输出 Actions permissions（自动化任务权限）的期望配置方案
+- **THEN** 系统 MUST NOT 输出 GitHub Rulesets（GitHub 规则集）的期望配置方案
+- **THEN** 系统 MUST NOT 输出非敏感 marketplace identity（市场身份）的 GitHub Actions Variables（GitHub 变量）配置方案
 
 #### Scenario: 授权后修改 GitHub 配置
 
 - **WHEN** 用户明确授权自动配置 GitHub
 - **THEN** 首版系统 MUST 报告自动写入 GitHub 暂不可用
-- **THEN** 系统 MUST NOT 调用真实 GitHub 设置 API
-- **THEN** 后续版本 MAY 使用 `gh` 或 GitHub API 修改仓库设置并回读验证结果
+- **THEN** 系统 MUST NOT 调用真实 GitHub 设置 API（接口）
+- **THEN** 后续版本 MAY 使用 `gh`（GitHub 命令行）或 GitHub API（接口）修改仓库设置并回读验证结果
 
 #### Scenario: 未授权时输出手动步骤
 
 - **WHEN** 用户未授权自动配置 GitHub
-- **THEN** 系统 MUST 输出用户可手动执行的配置步骤
+- **THEN** 系统 MUST 输出用户可手动执行的 Actions permissions（自动化任务权限）配置步骤
+- **THEN** 系统 MUST NOT 输出 GitHub Rulesets（GitHub 规则集）配置步骤
 - **THEN** 系统 MUST NOT 修改 GitHub 仓库设置
-
-### Requirement: 单次发布初始化阶段
-
-系统 MUST 提供 release init（单次发布初始化）阶段，用于在每次发布前创建本地 release-plan（发布计划）。
-
-#### Scenario: 创建本次发布计划
-
-- **WHEN** 用户准备发布某个 tag
-- **THEN** 系统 MUST 创建 `.release-flow/releases/<tag>/release-plan.json`
-- **THEN** release-plan MUST 包含 version、tag、sourceRef、channelBranch、workflow file 和 projection registry
-- **THEN** 发布目录名 MUST 使用 tag
-- **THEN** 系统 MUST NOT 创建本地发布分支
-- **THEN** 系统 MUST NOT 创建 tag
-- **THEN** 系统 MUST NOT push 发布内容
-
-#### Scenario: 不提供发布初始化试运行
-
-- **WHEN** 用户准备发布某个 tag
-- **THEN** `release-init` MUST NOT 提供 `--dry-run` 分支逻辑
-- **THEN** 预览发布命令 MUST 使用 `publish --dry-run`
 
 ### Requirement: 发布前检查
 
-系统 MUST 提供 release-flow preflight（发布前检查）阶段，用于在发布前验证本地配置、版本、manifest（清单）和发布投影。GitHub 仓库设置 MUST 由 `github-plan` 和 `configure-github --dry-run` 输出方案与手动步骤；认证远端回读验证 MAY 在后续版本加入。
+系统 MUST 提供 release-flow preflight（发布前检查）阶段，用于在发布前验证本地配置、发布输入、manifest（插件清单）、发布投影和远端发布冲突。
 
 #### Scenario: 检查配置文件
 
-- **WHEN** 执行 preflight
-- **THEN** 系统 MUST 验证 `.release-flow/config.yaml` 存在且合法
-- **THEN** 系统 MUST 验证 `.release-flow/projection.yaml` 存在且合法
+- **WHEN** 执行 preflight（发布前检查）
+- **THEN** 系统 MUST 验证 `.release-flow/config.yaml`（配置文件）存在且合法
+- **THEN** 系统 MUST 验证 `.release-flow/projection.yaml`（投影配置）存在且合法
 
-#### Scenario: 不接收变量快照
+#### Scenario: 检查发布输入
 
-- **WHEN** 执行 preflight
-- **THEN** 系统 MUST NOT 接收 `--github-vars-file`
-- **THEN** 系统 MUST NOT 要求 GitHub Actions Variables 快照
-- **THEN** 系统 MUST 从 `.release-flow/projection.yaml` 的 identity 读取非敏感发布身份
-
-#### Scenario: GitHub 仓库设置首版边界
-
-- **WHEN** 执行 preflight
-- **THEN** 系统 MUST NOT 调用真实 GitHub API
-- **THEN** 系统 MUST NOT 声称已回读验证 GitHub Rulesets 或 workflow permissions
-- **THEN** 系统 MUST 依赖 `github-plan` 和 `configure-github --dry-run` 输出 Actions 权限与 Rulesets 的手动配置步骤
+- **WHEN** 执行 preflight（发布前检查）
+- **THEN** 系统 MUST 验证 `tag`（标签）和 `version`（版本）一致
+- **THEN** 系统 MUST 验证 `bumpPlugins`（提升插件列表）存在且只包含已注册插件
 
 #### Scenario: 检查版本一致性
 
-- **WHEN** 执行 preflight
-- **THEN** 系统 MUST 验证 release-plan tag（发布计划标签）与 manifest version（清单版本）一致
+- **WHEN** 执行 preflight（发布前检查）
+- **THEN** 系统 MUST 只要求 `bumpPlugins`（提升插件列表）声明的插件 manifest（插件清单）版本等于发布版本
+- **THEN** 系统 MUST 拒绝未声明插件的 manifest（插件清单）版本不同于远端发布通道同路径版本
 
 #### Scenario: 检查发布投影
 
-- **WHEN** 执行 preflight
-- **THEN** 系统 MUST 在临时目录中从 source branch（源分支）和 projection（发布投影）生成 expected marketplace tree（期望市场分支树）
+- **WHEN** 执行 preflight（发布前检查）
+- **THEN** 系统 MUST 验证 projection（投影）可以由单一 Plugin registry（插件注册表）生成
 - **THEN** 系统 MUST 拒绝无法生成的发布投影
-- **THEN** 系统 MUST NOT 要求旧 `marketplace` 分支已经等于待发布投影
-- **THEN** `preflight` MUST NOT 接收 `--channel-tree`
+- **THEN** 系统 MUST NOT 要求用户在源码分支运行正式 marketplace（市场）projection（投影）
+
+#### Scenario: 检查远端发布冲突
+
+- **WHEN** 执行 preflight（发布前检查）
+- **THEN** 系统 MUST 检查远端 tag（标签）是否已存在
+- **THEN** 系统 MUST 检查 GitHub Release（GitHub 发布）是否已存在
+- **THEN** 任一已存在时 MUST 拒绝继续
+
+#### Scenario: 不检查 GitHub Rulesets
+
+- **WHEN** 执行 preflight（发布前检查）
+- **THEN** 系统 MUST NOT 读取 GitHub Rulesets（GitHub 规则集）
+- **THEN** 系统 MUST NOT 声称已验证 GitHub Rulesets（GitHub 规则集）
 
 ### Requirement: 发布执行阶段
 
-系统 MUST 提供 release-flow publish（发布）阶段，通过 GitHub Workflow 执行发布，本地不得执行发布 Git 写操作。
+系统 MUST 提供 release-flow publish（发布）阶段，通过 GitHub Workflow（GitHub 工作流）执行发布，本地不得执行发布 Git（版本管理）写操作。
 
 #### Scenario: 本地只触发 workflow
 
-- **WHEN** 用户执行 publish
-- **THEN** 本地系统 MUST 使用 `workflow_dispatch` 触发 GitHub Workflow
+- **WHEN** 用户执行 publish（发布）
+- **THEN** 本地系统 MUST 使用 `workflow_dispatch`（工作流触发）触发 GitHub Workflow（GitHub 工作流）
+- **THEN** 本地系统 MUST 只传递 `tag`（标签）、`version`（版本）和 `bumpPlugins`（提升插件列表）
 - **THEN** 本地系统 MUST NOT 创建发布分支
-- **THEN** 本地系统 MUST NOT 创建 tag
-- **THEN** 本地系统 MUST NOT push 发布内容
+- **THEN** 本地系统 MUST NOT 创建 tag（标签）
+- **THEN** 本地系统 MUST NOT push（推送）发布内容
 
 #### Scenario: 发布试运行输出明确字段
 
-- **WHEN** 用户执行 `publish --dry-run`
-- **THEN** 输出 MUST 包含 `release_tag` 表示 release tag（发布标签）
+- **WHEN** 用户执行 `publish --dry-run`（发布试运行）
+- **THEN** 输出 MUST 包含 release tag（发布标签）
 - **THEN** 输出 MUST 包含 `git_tag_created: false`
 - **THEN** 输出 MUST 包含 `local_branch_created: false`
 - **THEN** 输出 MUST 包含 `push_run: false`
-- **THEN** 输出 MUST NOT 包含重复的 `tag` 字段
 
 #### Scenario: GitHub Workflow 执行发布
 
-- **WHEN** GitHub Workflow 运行
-- **THEN** workflow MUST checkout 配置指定的 source ref
-- **THEN** workflow MUST 安装 release-flow 脚本依赖
-- **THEN** workflow MUST 直接运行 source repo 内的 release-flow 脚本
-- **THEN** workflow MUST 读取 source repo 内的 `.release-flow/projection.yaml`
-- **THEN** workflow MUST 从 projection identity 读取非敏感 marketplace identity
-- **THEN** workflow MUST 应用 projection transforms
-- **THEN** workflow MUST 创建或更新远端 `marketplace` 分支
-- **THEN** workflow MUST 创建 tag
-- **THEN** workflow MUST 创建 GitHub Release
-- **THEN** `ci-publish` MUST NOT 提供 `--dry-run` 分支逻辑
-- **THEN** `ci-publish` MUST NOT 接收 `--vars-file`
+- **WHEN** GitHub Workflow（GitHub 工作流）运行
+- **THEN** workflow（工作流）MUST checkout（检出）配置指定的 source ref（源引用）
+- **THEN** workflow（工作流）MUST 直接运行 source repo（源码仓库）内的 release-flow（发布流程）脚本
+- **THEN** workflow（工作流）MUST 读取 source repo（源码仓库）内的 `.release-flow/projection.yaml`（投影配置）
+- **THEN** workflow（工作流）MUST 在隔离发布树中应用 projection（投影）
+- **THEN** workflow（工作流）MUST 创建或更新远端 `marketplace`（市场分支）
+- **THEN** workflow（工作流）MUST 创建 tag（标签）
+- **THEN** workflow（工作流）MUST 创建 GitHub Release（GitHub 发布）
+- **THEN** `ci-publish`（持续集成发布）MUST NOT 提供 `--dry-run`（试运行）分支逻辑
 
-### Requirement: 发布记录与总结
+#### Scenario: CI 输出发布追溯字段
 
-系统 MUST 在本地 `.release-flow/releases/<tag>/` 保存每次发布的本地审计记录，并确保该目录不进入 Git。
-
-#### Scenario: 读取发布计划
-
-- **WHEN** publish 读取本次发布信息
-- **THEN** 系统 MUST 读取 `.release-flow/releases/<tag>/release-plan.json`
-- **THEN** 系统 MUST 拒绝缺失 release-plan 的 publish
-
-#### Scenario: 保存发布前检查结果
-
-- **WHEN** preflight 完成
-- **THEN** 系统 MUST 写入 `.release-flow/releases/<tag>/preflight-report.json`
-
-#### Scenario: 保存 workflow 结果
-
-- **WHEN** publish 触发 workflow
-- **THEN** 系统 MUST 写入 `.release-flow/releases/<tag>/workflow-run.json`
-
-#### Scenario: 输出发布总结
-
-- **WHEN** 发布流程结束
-- **THEN** 系统 MUST 写入 `.release-flow/releases/<tag>/release-summary.md`
-- **THEN** 总结 MUST 包含 tag、GitHub Release URL、`marketplace` commit、变量检查结果和发布结论
+- **WHEN** GitHub Workflow（GitHub 工作流）发布成功
+- **THEN** 输出 MUST 包含 release URL（发布链接）
+- **THEN** 输出 MUST 包含 marketplace commit（市场提交）
+- **THEN** 输出 MUST 包含 tag commit（标签提交）
+- **THEN** 输出 MUST 包含 workflow run URL（工作流运行链接）
 
 ### Requirement: Marketplace identity 注册
 系统 MUST 在 `.release-flow/projection.yaml` 的 project projection（项目投影）语义中声明单一 marketplace identity（市场身份），并让 release-flow 的模板、配置方案和发布检查共同读取该 identity。
@@ -315,4 +280,82 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 - **WHEN** 生成产物中存在和 marketplace identity 不一致的旧 marketplace name
 - **THEN** `preflight` MUST 拒绝继续
 - **THEN** 错误输出 MUST 指出不一致字段和期望 identity 值
+
+### Requirement: 插件发布清单单一注册表
+
+系统 MUST 使用单一 Plugin registry（插件注册表）描述可发布插件，并从该注册表推导 projection（投影）校验、Codex marketplace（Codex 市场）生成和 manifest（插件清单）路径。
+
+#### Scenario: 新增插件只需注册一次
+
+- **WHEN** 维护者把插件加入发布范围
+- **THEN** 系统 MUST 只要求在单一 Plugin registry（插件注册表）中声明该插件
+- **THEN** projection（投影）校验、marketplace（市场）生成和 manifest（插件清单）版本检查 MUST 使用同一声明
+
+#### Scenario: projection 插件未注册
+
+- **WHEN** `.release-flow/projection.yaml`（投影配置）引用未注册插件
+- **THEN** preflight（发布前检查）和 CI（持续集成）发布 MUST 拒绝继续
+- **THEN** 错误 MUST 指出未注册插件名
+
+### Requirement: 发布输入选择提升插件
+
+系统 MUST 使用 `bumpPlugins`（提升插件列表）声明本次发布需要提升版本的插件。
+
+版本漂移比较基准 MUST 是远端发布通道 `origin/<channelBranch>`（远端通道分支）中同路径 manifest（插件清单）的版本。
+
+#### Scenario: 只提升部分插件
+
+- **WHEN** `bumpPlugins`（提升插件列表）只包含部分插件
+- **THEN** preflight（发布前检查）MUST 只要求这些插件的 manifest（插件清单）版本等于发布版本
+- **THEN** 未声明插件的 manifest（插件清单）版本 MUST 等于远端发布通道同路径 manifest（插件清单）版本
+
+#### Scenario: 不提升插件
+
+- **WHEN** `bumpPlugins`（提升插件列表）为空列表
+- **THEN** preflight（发布前检查）MUST 不要求任何插件 manifest（插件清单）版本等于发布版本
+- **THEN** 任何 manifest（插件清单）版本与远端发布通道同路径 manifest（插件清单）版本不一致 MUST 被拒绝
+
+#### Scenario: 未声明提升导致版本漂移
+
+- **WHEN** 某个插件 manifest（插件清单）版本不同于远端发布通道同路径版本但不在 `bumpPlugins`（提升插件列表）中
+- **THEN** preflight（发布前检查）MUST 拒绝继续
+- **THEN** 错误 MUST 指出该插件需要加入 `bumpPlugins`（提升插件列表）或撤回版本变更
+
+#### Scenario: 未声明新插件
+
+- **WHEN** 某个插件在远端发布通道没有同路径 manifest（插件清单）且不在 `bumpPlugins`（提升插件列表）中
+- **THEN** preflight（发布前检查）MUST 拒绝继续
+- **THEN** 错误 MUST 指出该插件需要加入 `bumpPlugins`（提升插件列表）
+
+### Requirement: 远端发布冲突检查
+
+系统 MUST 在发布前检查和 CI（持续集成）发布前检查远端 tag（标签）和 GitHub Release（GitHub 发布）是否已存在。
+
+#### Scenario: 远端 tag 已存在
+
+- **WHEN** 远端已存在本次发布 tag（标签）
+- **THEN** preflight（发布前检查）和 CI（持续集成）发布 MUST 拒绝继续
+- **THEN** 输出 MUST 明确报告 release already exists（发布已存在）
+
+#### Scenario: GitHub Release 已存在
+
+- **WHEN** GitHub Release（GitHub 发布）已存在本次发布 tag（标签）
+- **THEN** preflight（发布前检查）和 CI（持续集成）发布 MUST 拒绝继续
+- **THEN** 输出 MUST 明确报告 release already exists（发布已存在）
+
+### Requirement: 发布投影只在隔离发布环境执行
+
+系统 MUST NOT 要求维护者在源码分支运行正式 marketplace（市场）projection（投影）。
+
+#### Scenario: 本地源码分支保持 DEV 身份
+
+- **WHEN** 维护者在源码分支执行发布前检查
+- **THEN** preflight（发布前检查）MUST NOT 要求运行本地 `project`（投影）命令
+- **THEN** 源码分支中的 DEV（开发）marketplace（市场）配置 MUST 保持不变
+
+#### Scenario: CI 生成正式发布投影
+
+- **WHEN** GitHub Workflow（GitHub 工作流）执行发布
+- **THEN** CI（持续集成）MUST 在隔离发布树中应用正式 marketplace（市场）projection（投影）
+- **THEN** 正式 marketplace（市场）身份 MUST 只写入发布通道产物
 

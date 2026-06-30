@@ -558,7 +558,7 @@ def release_projection_plugins() -> list[str]:
     return plugins
 
 
-def write_release_projection_project(project: Path) -> Path:
+def write_release_projection_project(project: Path) -> None:
     release_flow_dir = project / ".release-flow"
     release_flow_dir.mkdir(parents=True)
     (project / ".agents" / "plugins").mkdir(parents=True)
@@ -585,25 +585,6 @@ def write_release_projection_project(project: Path) -> Path:
         + "\n",
         encoding="utf-8",
     )
-
-    vars_file = project / "release-vars.json"
-    vars_file.write_text(
-        json.dumps(
-            {
-                "CODEX_MARKETPLACE_CATALOG_NAME": "my-agent-skills-marketplace",
-                "CODEX_MARKETPLACE_DISPLAY_NAME": "My Agent Skills Marketplace",
-                "CLAUDE_MARKETPLACE_CATALOG_NAME": "my-agent-skills-marketplace",
-                "CLAUDE_MARKETPLACE_OWNER_NAME": "My Agent Skills Marketplace",
-                "RELEASE_FLOW_PLUGIN_REPOSITORY": "liuli/my-agent-skills",
-                "RELEASE_FLOW_PLUGIN_REF": "main",
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    return vars_file
 
 
 def test_build_and_verify_plugin_has_dual_manifests() -> None:
@@ -1073,7 +1054,6 @@ def test_build_and_verify_registered_in_marketplaces_and_projection() -> None:
 
 def test_build_and_verify_registered_in_release_flow_sources() -> None:
     release_files = [
-        RELEASE_FLOW_CONFIG,
         RELEASE_FLOW_PROJECTION,
         RELEASE_FLOW_SCRIPT,
     ]

@@ -5,12 +5,14 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import urlparse
 
 import yaml
 
@@ -24,17 +26,71 @@ SUPPORTED_VARIABLE_SOURCE = "github-actions-variable"
 SUPPORTED_TRANSFORM_TYPE = "json-env"
 SUPPORTED_GENERATOR_TYPE = "codex-marketplace"
 SUPPORTED_GENERATOR_IDENTITY = "codex"
-SUPPORTED_CODEX_MARKETPLACE_PLUGINS = {
-    "agent-guard",
-    "release-flow",
-    "cross-agent-review",
-    "pr-flow",
-    "build-and-verify",
+PLUGIN_REGISTRY: dict[str, dict[str, Any]] = {
+    "agent-guard": {
+        "manifests": [
+            "plugins/agent-guard/.codex-plugin/plugin.json",
+            "plugins/agent-guard/.claude-plugin/plugin.json",
+        ],
+        "codexMarketplace": {
+            "name": "agent-guard",
+            "source": {"source": "local", "path": "./plugins/agent-guard"},
+            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+            "category": "Productivity",
+        },
+    },
+    "release-flow": {
+        "manifests": [
+            "plugins/release-flow/.codex-plugin/plugin.json",
+            "plugins/release-flow/.claude-plugin/plugin.json",
+        ],
+        "codexMarketplace": {
+            "name": "release-flow",
+            "source": {"source": "local", "path": "./plugins/release-flow"},
+            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+            "category": "Developer Tools",
+        },
+    },
+    "cross-agent-review": {
+        "manifests": [
+            "plugins/cross-agent-review/.codex-plugin/plugin.json",
+            "plugins/cross-agent-review/.claude-plugin/plugin.json",
+        ],
+        "codexMarketplace": {
+            "name": "cross-agent-review",
+            "source": {"source": "local", "path": "./plugins/cross-agent-review"},
+            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+            "category": "Developer Tools",
+        },
+    },
+    "pr-flow": {
+        "manifests": [
+            "plugins/pr-flow/.codex-plugin/plugin.json",
+            "plugins/pr-flow/.claude-plugin/plugin.json",
+        ],
+        "codexMarketplace": {
+            "name": "pr-flow",
+            "source": {"source": "local", "path": "./plugins/pr-flow"},
+            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+            "category": "Developer Tools",
+        },
+    },
+    "build-and-verify": {
+        "manifests": [
+            "plugins/build-and-verify/.codex-plugin/plugin.json",
+            "plugins/build-and-verify/.claude-plugin/plugin.json",
+        ],
+        "codexMarketplace": {
+            "name": "build-and-verify",
+            "source": {"source": "local", "path": "./plugins/build-and-verify"},
+            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+            "category": "Developer Tools",
+        },
+    },
 }
 SETUP_TARGETS = [
     ("release-flow/config.yaml", ".release-flow/config.yaml"),
     ("release-flow/projection.yaml", ".release-flow/projection.yaml"),
-    ("release-flow/gitignore", ".release-flow/.gitignore"),
     ("github/workflows/release.yml", ".github/workflows/release.yml"),
 ]
 
@@ -48,8 +104,6 @@ class FlowConfig:
     release_branch_mode: str
     workflow_file: str
     workflow_trigger: str
-    records_directory: str
-    manifest_version_files: list[str]
     raw: dict[str, Any]
 
 
@@ -163,6 +217,13 @@ def validate_release_tag(tag: str) -> str:
 def read_config(project: Path) -> FlowConfig:
     path = project / ".release-flow" / "config.yaml"
     data = load_yaml_mapping(path)
+    if "records" in data:
+        raise ValueError("invalid_config: records is no longer supported")
+    if "manifests" in data:
+        raise ValueError("invalid_config: manifests.versionFiles is no longer supported")
+    github = data.get("github", {})
+    if isinstance(github, dict) and "rulesets" in github:
+        raise ValueError("invalid_config: github.rulesets is no longer supported")
     version = data.get("version")
     if not isinstance(version, int):
         raise ValueError("config_version_invalid")
@@ -189,22 +250,6 @@ def read_config(project: Path) -> FlowConfig:
     if workflow_trigger != "workflow_dispatch":
         raise ValueError("invalid_config: workflow.trigger must be workflow_dispatch")
 
-    records = data.get("records")
-    if not isinstance(records, dict):
-        raise ValueError("invalid_config: records must be mapping")
-    records_directory = records.get("directory")
-    if records_directory != ".release-flow/releases":
-        raise ValueError("invalid_config: records.directory must be .release-flow/releases")
-
-    manifests = data.get("manifests")
-    if not isinstance(manifests, dict):
-        raise ValueError("invalid_config: manifests must be mapping")
-    manifest_version_files = manifests.get("versionFiles")
-    if not isinstance(manifest_version_files, list) or not all(
-        isinstance(item, str) for item in manifest_version_files
-    ):
-        raise ValueError("invalid_config: manifests.versionFiles must be string list")
-
     return FlowConfig(
         path=path,
         version=version,
@@ -213,8 +258,6 @@ def read_config(project: Path) -> FlowConfig:
         release_branch_mode=release_branch_mode,
         workflow_file=workflow_file,
         workflow_trigger=workflow_trigger,
-        records_directory=records_directory,
-        manifest_version_files=manifest_version_files,
         raw=data,
     )
 
@@ -414,7 +457,7 @@ def projection_errors(projection: Projection) -> list[str]:
         if projection.identity is None:
             errors.append(f"projection_generator_identity_missing: {generator.path}")
         for plugin_name in generator.plugins:
-            if plugin_name not in SUPPORTED_CODEX_MARKETPLACE_PLUGINS:
+            if plugin_name not in PLUGIN_REGISTRY:
                 errors.append(f"projection_generator_plugin_unknown: {plugin_name}")
     for transform in projection.transforms:
         if transform.type != SUPPORTED_TRANSFORM_TYPE:
@@ -512,40 +555,8 @@ def set_json_pointer(data: dict[str, Any], pointer: str, value: Any) -> None:
 
 
 def codex_marketplace_entry(plugin_name: str) -> dict[str, Any]:
-    entries = {
-        "agent-guard": {
-            "name": "agent-guard",
-            "source": {"source": "local", "path": "./plugins/agent-guard"},
-            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
-            "category": "Productivity",
-        },
-        "release-flow": {
-            "name": "release-flow",
-            "source": {"source": "local", "path": "./plugins/release-flow"},
-            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
-            "category": "Developer Tools",
-        },
-        "cross-agent-review": {
-            "name": "cross-agent-review",
-            "source": {"source": "local", "path": "./plugins/cross-agent-review"},
-            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
-            "category": "Developer Tools",
-        },
-        "pr-flow": {
-            "name": "pr-flow",
-            "source": {"source": "local", "path": "./plugins/pr-flow"},
-            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
-            "category": "Developer Tools",
-        },
-        "build-and-verify": {
-            "name": "build-and-verify",
-            "source": {"source": "local", "path": "./plugins/build-and-verify"},
-            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
-            "category": "Developer Tools",
-        },
-    }
     try:
-        return entries[plugin_name]
+        return dict(PLUGIN_REGISTRY[plugin_name]["codexMarketplace"])
     except KeyError as exc:
         raise ValueError(f"projection_generator_plugin_unknown: {plugin_name}") from exc
 
@@ -625,15 +636,9 @@ def run_github_plan(args: argparse.Namespace) -> int:
     workflow_permissions = github_config_value(
         config, ["actions", "workflowPermissions"], "read-and-write"
     )
-    rulesets_enabled = github_config_value(config, ["rulesets", "enabled"], True)
-    branch_protection_fallback = github_config_value(
-        config, ["rulesets", "branchProtectionFallback"], False
-    )
 
     print("status: github_plan")
     print(f"actions_workflow_permissions: {workflow_permissions}")
-    print(f"rulesets: {'required' if rulesets_enabled else 'not_required'}")
-    print(f"branch_protection_fallback: {str(bool(branch_protection_fallback)).lower()}")
     return 0
 
 
@@ -657,35 +662,15 @@ def run_configure_github(args: argparse.Namespace) -> int:
     workflow_permissions = github_config_value(
         config, ["actions", "workflowPermissions"], "read-and-write"
     )
-    rulesets_enabled = github_config_value(config, ["rulesets", "enabled"], True)
     if args.dry_run:
         print("status: manual_steps")
         print(f"project: {args.project}")
         print(f"Set Actions workflow permissions to {workflow_permissions}")
-        if rulesets_enabled:
-            print("Create Rulesets for main, marketplace, and tags")
-        else:
-            print("Rulesets are disabled in release-flow config")
         return 0
 
     print("status: issues")
     print("error: github_write_not_available_without_repository_context")
     return 2
-
-
-def release_plan_path(project: Path, config: FlowConfig, tag: str) -> Path:
-    safe_tag = validate_release_tag(tag)
-    return project / config.records_directory / safe_tag / "release-plan.json"
-
-
-def read_release_plan(project: Path, config: FlowConfig, tag: str) -> dict[str, Any]:
-    plan_path = release_plan_path(project, config, tag)
-    try:
-        return read_json_mapping(plan_path)
-    except ValueError as exc:
-        if str(exc).startswith("missing_file:"):
-            raise ValueError(f"missing_release_plan: {tag}") from exc
-        raise
 
 
 def tag_version(tag: str) -> str:
@@ -695,57 +680,97 @@ def tag_version(tag: str) -> str:
     return tag
 
 
-def manifest_versions(project: Path, config: FlowConfig) -> dict[str, str]:
-    versions: dict[str, str] = {}
-    for manifest_file in config.manifest_version_files:
-        manifest_relative_path = Path(manifest_file)
-        manifest_path = resolve_project_path(project, manifest_relative_path, "invalid_manifest_path")
-        manifest = read_json_mapping(manifest_path)
-        version = manifest.get("version")
-        if not isinstance(version, str):
-            raise ValueError(f"manifest_version_missing: {manifest_file}")
-        versions[manifest_file.replace("\\", "/")] = version
-    return versions
+def parse_bump_plugins(raw: str) -> list[str]:
+    if raw == "":
+        return []
+    plugins = [item.strip() for item in raw.split(",")]
+    if any(not item for item in plugins):
+        raise ValueError("bump_plugins_invalid")
+    for plugin_name in plugins:
+        if plugin_name not in PLUGIN_REGISTRY:
+            raise ValueError(f"plugin_unknown: {plugin_name}")
+    return plugins
 
 
-def run_release_init(args: argparse.Namespace) -> int:
+def plugin_manifest_paths(plugin_name: str) -> list[str]:
     try:
-        config = read_config(args.project)
-        projection = read_projection(args.project)
-        errors = projection_errors(projection)
-        if errors:
-            raise ValueError(errors[0])
-    except ValueError as exc:
-        print("status: issues")
-        print(f"error: {exc}")
-        return 1
+        manifests = PLUGIN_REGISTRY[plugin_name]["manifests"]
+    except KeyError as exc:
+        raise ValueError(f"plugin_unknown: {plugin_name}") from exc
+    return [str(manifest) for manifest in manifests]
 
-    try:
-        plan_path = release_plan_path(args.project, config, args.tag)
-    except ValueError as exc:
-        print("status: issues")
-        print(f"error: {exc}")
-        return 1
 
-    if plan_path.exists() and not args.replace:
-        print("status: issues")
-        print(f"error: release_plan_exists: {args.tag}")
-        return 1
+def manifest_version(project: Path, manifest_file: str) -> str:
+    manifest_path = resolve_project_path(project, Path(manifest_file), "invalid_manifest_path")
+    manifest = read_json_mapping(manifest_path)
+    version = manifest.get("version")
+    if not isinstance(version, str):
+        raise ValueError(f"manifest_version_missing: {manifest_file}")
+    return version
 
-    plan = {
-        "version": args.version,
-        "tag": args.tag,
-        "sourceRef": config.release_source_ref,
-        "channelBranch": config.release_channel_branch,
-        "workflowFile": config.workflow_file,
-        "projectionRegistry": str(projection.path.relative_to(args.project)).replace("\\", "/"),
-    }
-    plan_path.parent.mkdir(parents=True, exist_ok=True)
-    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    print("status: release_plan_created")
-    print(f"release_plan: {plan_path}")
-    return 0
+def git_output(project: Path, args: list[str]) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(project), *args],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        output = (result.stderr or result.stdout).strip()
+        raise ValueError(f"command_failed: git {' '.join(args)}: {output}")
+    return result.stdout
+
+
+def git_ref_exists(project: Path, ref: str) -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(project), "rev-parse", "--verify", ref],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def ensure_remote_branch(project: Path, branch: str) -> None:
+    ref = f"origin/{branch}"
+    if git_ref_exists(project, ref):
+        return
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(project),
+            "fetch",
+            "--depth=1",
+            "origin",
+            f"{branch}:refs/remotes/origin/{branch}",
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        output = (result.stderr or result.stdout).strip()
+        raise ValueError(f"remote_ref_missing: {ref}: {output}")
+
+
+def remote_manifest_version(project: Path, config: FlowConfig, manifest_file: str) -> str | None:
+    ref = f"origin/{config.release_channel_branch}"
+    ensure_remote_branch(project, config.release_channel_branch)
+    result = subprocess.run(
+        ["git", "-C", str(project), "show", f"{ref}:{manifest_file}"],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        return None
+    data = json.loads(result.stdout)
+    version = data.get("version")
+    if not isinstance(version, str):
+        raise ValueError(f"remote_manifest_version_missing: {manifest_file}")
+    return version
 
 
 def apply_projection(project: Path, projection: Projection) -> None:
@@ -804,7 +829,7 @@ def ignored_expected_path(relative_path: Path) -> bool:
     ignored_parts = {".git", "__pycache__", ".pytest_cache"}
     if ignored_parts.intersection(relative_path.parts):
         return True
-    return ".release-flow" in relative_path.parts and "releases" in relative_path.parts
+    return False
 
 
 def git_tracked_files(project: Path) -> list[Path] | None:
@@ -842,40 +867,92 @@ def copy_project_for_expected(source: Path, target: Path) -> None:
         return
 
     def ignore(directory: str, names: list[str]) -> set[str]:
-        ignored = {name for name in names if name in {".git", "__pycache__", ".pytest_cache"}}
-        if Path(directory).name == ".release-flow":
-            ignored.add("releases")
-        return ignored
+        return {name for name in names if name in {".git", "__pycache__", ".pytest_cache"}}
 
     shutil.copytree(source, target, ignore=ignore)
+
+
+def origin_url(project: Path) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(project), "config", "--get", "remote.origin.url"],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def origin_is_github(project: Path) -> bool:
+    url = origin_url(project).lower()
+    if url.startswith("git@github.com:"):
+        return True
+    return urlparse(url).hostname == "github.com"
+
+
+def remote_release_errors(project: Path, tag: str) -> list[str]:
+    tag_result = subprocess.run(
+        ["git", "-C", str(project), "ls-remote", "--tags", "origin", f"refs/tags/{tag}"],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if tag_result.returncode != 0:
+        return [f"remote_release_unknown: {tag}"]
+    errors: list[str] = []
+    if tag_result.stdout.strip():
+        errors.append(f"release already exists: {tag}")
+    if not origin_is_github(project):
+        return errors
+    try:
+        gh_result = subprocess.run(
+            ["gh", "release", "view", tag],
+            cwd=project,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except FileNotFoundError:
+        return [*errors, f"remote_release_unknown: {tag}"]
+    gh_output = (gh_result.stderr or gh_result.stdout).lower()
+    if gh_result.returncode == 0:
+        errors.append(f"release already exists: {tag}")
+    elif "not found" not in gh_output and "could not resolve" not in gh_output:
+        errors.append(f"remote_release_unknown: {tag}")
+    return errors
 
 
 def preflight_errors(
     project: Path,
     tag: str,
+    version: str,
+    bump_plugins: list[str],
     config: FlowConfig,
     projection: Projection,
-    plan: dict[str, Any],
-) -> tuple[list[str], dict[str, Any]]:
+) -> list[str]:
     errors: list[str] = []
     expected_version = tag_version(tag)
+    if version != expected_version:
+        errors.append(f"release_version_mismatch: {tag}")
 
-    plan_version = plan.get("version")
-    if plan.get("tag") != tag:
-        errors.append(f"release_plan_tag_mismatch: {tag}")
-    if plan_version != expected_version:
-        errors.append(f"release_plan_version_mismatch: {tag}")
-
-    versions: dict[str, str] = {}
-    mismatched_manifests: list[str] = []
-    try:
-        versions = manifest_versions(project, config)
-        for manifest_file, version in versions.items():
-            if version != expected_version:
-                mismatched_manifests.append(manifest_file)
-                errors.append(f"manifest_version_mismatch: {manifest_file}")
-    except ValueError as exc:
-        errors.append(str(exc))
+    projection_plugins = sorted({plugin for generator in projection.generators for plugin in generator.plugins})
+    bumped = set(bump_plugins)
+    for plugin_name in projection_plugins:
+        if plugin_name not in PLUGIN_REGISTRY:
+            errors.append(f"projection_generator_plugin_unknown: {plugin_name}")
+            continue
+        try:
+            for manifest_file in plugin_manifest_paths(plugin_name):
+                current = manifest_version(project, manifest_file)
+                if plugin_name in bumped:
+                    if current != version:
+                        errors.append(f"manifest_version_mismatch: {manifest_file}")
+                else:
+                    remote = remote_manifest_version(project, config, manifest_file)
+                    if remote is None or current != remote:
+                        errors.append(f"plugin_requires_bump: {plugin_name}")
+                        break
+        except (json.JSONDecodeError, ValueError) as exc:
+            errors.append(str(exc))
 
     if not errors:
         with tempfile.TemporaryDirectory(prefix="release-flow-preflight-") as temp_dir:
@@ -887,16 +964,8 @@ def preflight_errors(
             if identity_errors:
                 errors.extend(identity_errors)
 
-    report = {
-        "tag": tag,
-        "version": {
-            "expected": expected_version,
-            "releasePlan": plan_version,
-            "manifests": versions,
-            "mismatchedManifests": mismatched_manifests,
-        },
-    }
-    return errors, report
+    errors.extend(remote_release_errors(project, tag))
+    return errors
 
 
 def run_preflight(args: argparse.Namespace) -> int:
@@ -906,13 +975,14 @@ def run_preflight(args: argparse.Namespace) -> int:
         errors = projection_errors(projection)
         if errors:
             raise ValueError(errors[0])
-        plan = read_release_plan(args.project, config, args.tag)
-        errors, report = preflight_errors(
+        bump_plugins = parse_bump_plugins(args.bump_plugins)
+        errors = preflight_errors(
             args.project,
             args.tag,
+            args.version,
+            bump_plugins,
             config,
             projection,
-            plan,
         )
     except ValueError as exc:
         print("status: issues")
@@ -925,26 +995,25 @@ def run_preflight(args: argparse.Namespace) -> int:
             print(f"error: {error}")
         return 1
 
-    report_path = release_plan_path(args.project, config, args.tag).parent / "preflight-report.json"
-    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print("status: preflight_passed")
-    print(f"preflight_report: {report_path}")
+    print(f"release_tag: {args.tag}")
+    print(f"version: {args.version}")
+    print(f"bumpPlugins: {','.join(bump_plugins)}")
     return 0
 
 
-def workflow_dispatch_command(config: FlowConfig, tag: str, version: str) -> str:
+def workflow_dispatch_command(config: FlowConfig, tag: str, version: str, bump_plugins: list[str]) -> str:
     validate_release_tag(tag)
-    release_plan = f".release-flow/releases/{tag}/release-plan.json"
     return (
         f"gh workflow run {config.workflow_file} --ref {config.release_source_ref} -f tag={tag} "
-        f"-f version={version} -f releasePlan={release_plan}"
+        f"-f version={version} -f bumpPlugins={','.join(bump_plugins)}"
     )
 
 
 def run_publish(args: argparse.Namespace) -> int:
     try:
         config = read_config(args.project)
-        plan = read_release_plan(args.project, config, args.tag)
+        bump_plugins = parse_bump_plugins(args.bump_plugins)
     except ValueError as exc:
         print("status: issues")
         print(f"error: {exc}")
@@ -955,16 +1024,10 @@ def run_publish(args: argparse.Namespace) -> int:
         print("error: publish_requires_authorize_publish")
         return 2
 
-    plan_version = plan.get("version")
-    if not isinstance(plan_version, str):
-        print("status: issues")
-        print(f"error: release_plan_version_missing: {args.tag}")
-        return 1
-
-    command = workflow_dispatch_command(config, args.tag, plan_version)
+    command = workflow_dispatch_command(config, args.tag, args.version, bump_plugins)
     if args.dry_run:
         print("status: dry_run")
-        print(f"release_tag: {plan.get('tag', args.tag)}")
+        print(f"release_tag: {args.tag}")
         print(f"workflow_dispatch: {command}")
         print("local_branch_created: false")
         print("git_tag_created: false")
@@ -973,71 +1036,6 @@ def run_publish(args: argparse.Namespace) -> int:
 
     result = subprocess.run(command.split(), check=False, text=True)
     return result.returncode
-
-
-def release_record_directory(project: Path, config: FlowConfig, tag: str) -> Path:
-    return release_plan_path(project, config, tag).parent
-
-
-def release_summary_markdown(tag: str, plan: dict[str, Any], workflow_run: dict[str, Any]) -> str:
-    lines = [
-        f"# Release {tag}",
-        "",
-        f"- tag: {tag}",
-        f"- version: {plan.get('version', '')}",
-        f"- conclusion: {workflow_run.get('conclusion', '')}",
-        f"- GitHub Release URL: {workflow_run.get('releaseUrl', '')}",
-        f"- marketplace commit: {workflow_run.get('marketplaceCommit', '')}",
-        f"- workflow run: {workflow_run.get('url', '')}",
-        f"- workflow run databaseId: {workflow_run.get('databaseId', '')}",
-        "",
-    ]
-    variables = workflow_run.get("variables", {})
-    if isinstance(variables, dict) and variables:
-        lines.append("## Variables")
-        for name, value in sorted(variables.items()):
-            lines.append(f"- {name}: {value}")
-        lines.append("")
-    return "\n".join(lines)
-
-
-def run_summarize(args: argparse.Namespace) -> int:
-    try:
-        config = read_config(args.project)
-        plan = read_release_plan(args.project, config, args.tag)
-        workflow_run = read_json_mapping(args.workflow_run_file)
-    except ValueError as exc:
-        print("status: issues")
-        print(f"error: {exc}")
-        return 1
-
-    record_directory = release_record_directory(args.project, config, args.tag)
-    workflow_run_path = record_directory / "workflow-run.json"
-    summary_path = record_directory / "release-summary.md"
-    workflow_run_path.write_text(
-        json.dumps(workflow_run, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    summary_path.write_text(
-        release_summary_markdown(args.tag, plan, workflow_run),
-        encoding="utf-8",
-    )
-
-    print("status: summarized")
-    print(f"workflow_run: {workflow_run_path}")
-    print(f"release_summary: {summary_path}")
-    return 0
-
-
-def resolve_release_plan_arg(project: Path, config: FlowConfig, tag: str, release_plan: Path) -> Path:
-    validate_release_tag(tag)
-    expected_path = release_plan_path(project, config, tag).resolve()
-    if release_plan.is_absolute() or not is_relative_path_inside_project(release_plan):
-        raise ValueError(f"invalid_release_plan_path: {release_plan}")
-    resolved_path = resolve_project_path(project, release_plan, "invalid_release_plan_path").resolve()
-    if resolved_path != expected_path:
-        raise ValueError(f"invalid_release_plan_path: {release_plan}")
-    return resolved_path
 
 
 def run_checked(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -1062,35 +1060,113 @@ def run_checked(command: list[str], cwd: Path) -> subprocess.CompletedProcess[st
     return result
 
 
+def local_git_config_values(project: Path, key: str) -> list[str]:
+    result = subprocess.run(
+        ["git", "-C", str(project), "config", "--local", "--get-all", key],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode == 1:
+        return []
+    if result.returncode != 0:
+        raise ValueError(f"command_failed: git config --local --get-all {key}")
+    return result.stdout.splitlines()
+
+
+def local_git_config_entries(project: Path) -> list[tuple[str, str]]:
+    result = subprocess.run(
+        ["git", "-C", str(project), "config", "--local", "--list"],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise ValueError("command_failed: git config --local --list")
+    entries: list[tuple[str, str]] = []
+    for line in result.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if key and separator:
+            entries.append((key, value))
+    return entries
+
+
+def add_local_git_config(project: Path, key: str, value: str) -> None:
+    result = subprocess.run(
+        ["git", "-C", str(project), "config", "--local", "--add", key, value],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise ValueError(f"command_failed: git config --local --add {key}")
+
+
+def copy_git_auth_config(source: Path, target: Path) -> None:
+    for key, value in local_git_config_entries(source):
+        if key.startswith("http.") and key.endswith(".extraheader"):
+            add_local_git_config(target, key, value)
+    for key in ["credential.helper", "credential.useHttpPath"]:
+        for value in local_git_config_values(source, key):
+            add_local_git_config(target, key, value)
+
+
 def release_branch_name(tag: str) -> str:
     safe_tag = validate_release_tag(tag)
     return f"release-flow-{safe_tag}"
 
 
-def run_ci_publish_remote(project: Path, config: FlowConfig, projection: Projection, tag: str) -> None:
+def workflow_run_url() -> str:
+    server = os.environ.get("GITHUB_SERVER_URL")
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    run_id = os.environ.get("GITHUB_RUN_ID")
+    if server and repo and run_id:
+        return f"{server}/{repo}/actions/runs/{run_id}"
+    return ""
+
+
+def run_ci_publish_remote(
+    project: Path, config: FlowConfig, projection: Projection, tag: str
+) -> dict[str, str]:
     branch_name = release_branch_name(tag)
-    run_checked(["git", "config", "user.name", "github-actions[bot]"], project)
-    run_checked(
-        [
-            "git",
-            "config",
-            "user.email",
-            "41898282+github-actions[bot]@users.noreply.github.com",
-        ],
-        project,
-    )
-    run_checked(["git", "checkout", "--orphan", branch_name], project)
-    shutil.rmtree(project / ".release-flow" / "releases", ignore_errors=True)
-    apply_projection(project, projection)
-    run_checked(["git", "add", "-A"], project)
-    run_checked(["git", "commit", "-m", f"release: {tag}"], project)
-    run_checked(
-        ["git", "push", "origin", f"HEAD:refs/heads/{config.release_channel_branch}", "--force"],
-        project,
-    )
-    run_checked(["git", "tag", "--", tag], project)
-    run_checked(["git", "push", "origin", f"refs/tags/{tag}"], project)
-    run_checked(["gh", "release", "create", tag, "--title", tag, "--notes", f"Release {tag}"], project)
+    with tempfile.TemporaryDirectory(prefix="release-flow-ci-") as temp_dir:
+        release_tree = Path(temp_dir) / "release-tree"
+        copy_project_for_expected(project, release_tree)
+        apply_projection(release_tree, projection)
+        run_checked(["git", "init"], release_tree)
+        copy_git_auth_config(project, release_tree)
+        run_checked(["git", "remote", "add", "origin", origin_url(project)], release_tree)
+        run_checked(["git", "config", "user.name", "github-actions[bot]"], release_tree)
+        run_checked(
+            [
+                "git",
+                "config",
+                "user.email",
+                "41898282+github-actions[bot]@users.noreply.github.com",
+            ],
+            release_tree,
+        )
+        run_checked(["git", "checkout", "--orphan", branch_name], release_tree)
+        run_checked(["git", "add", "-A"], release_tree)
+        run_checked(["git", "commit", "-m", f"release: {tag}"], release_tree)
+        marketplace_commit = git_output(release_tree, ["rev-parse", "HEAD"]).strip()
+        run_checked(
+            ["git", "push", "origin", f"HEAD:refs/heads/{config.release_channel_branch}", "--force"],
+            release_tree,
+        )
+        run_checked(["git", "tag", "--", tag], release_tree)
+        tag_commit = git_output(release_tree, ["rev-list", "-n", "1", tag]).strip()
+        run_checked(["git", "push", "origin", f"refs/tags/{tag}"], release_tree)
+        release = run_checked(
+            ["gh", "release", "create", tag, "--title", tag, "--notes", f"Release {tag}"],
+            release_tree,
+        )
+        return {
+            "release_url": release.stdout.strip().splitlines()[0] if release.stdout.strip() else "",
+            "marketplace_commit": marketplace_commit,
+            "tag_commit": tag_commit,
+            "workflow_run_url": workflow_run_url(),
+        }
 
 
 def run_ci_publish(args: argparse.Namespace) -> int:
@@ -1105,20 +1181,28 @@ def run_ci_publish(args: argparse.Namespace) -> int:
         errors = projection_errors(projection)
         if errors:
             raise ValueError(errors[0])
-        release_plan_path_arg = resolve_release_plan_arg(args.project, config, args.tag, args.release_plan)
-        plan = read_json_mapping(release_plan_path_arg)
+        bump_plugins = parse_bump_plugins(args.bump_plugins)
     except ValueError as exc:
         print("status: issues")
         print(f"error: {exc}")
         return 1
 
-    if plan.get("tag") != args.tag:
+    errors = preflight_errors(
+        args.project,
+        args.tag,
+        args.version,
+        bump_plugins,
+        config,
+        projection,
+    )
+    if errors:
         print("status: issues")
-        print(f"error: release_plan_tag_mismatch: {args.tag}")
+        for error in errors:
+            print(f"error: {error}")
         return 1
 
     try:
-        run_ci_publish_remote(args.project, config, projection, args.tag)
+        trace = run_ci_publish_remote(args.project, config, projection, args.tag)
     except ValueError as exc:
         print("status: issues")
         print(f"error: {exc}")
@@ -1127,7 +1211,8 @@ def run_ci_publish(args: argparse.Namespace) -> int:
     print("status: ci_published")
     print(f"channel_branch: {config.release_channel_branch}")
     print(f"tag: {args.tag}")
-    print("remote_write: completed")
+    for key, value in trace.items():
+        print(f"{key}: {value}")
     return 0
 
 
@@ -1147,27 +1232,23 @@ def build_parser() -> argparse.ArgumentParser:
     configure_github.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
     configure_github.add_argument("--dry-run", action="store_true", help="只输出手动配置步骤。")
     configure_github.add_argument("--authorize-github", action="store_true", help="授权写入 GitHub 配置。")
-    release_init = subparsers.add_parser("release-init", help="创建 release plan。")
-    release_init.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
-    release_init.add_argument("--tag", required=True, help="发布标签。")
-    release_init.add_argument("--version", required=True, help="发布版本。")
-    release_init.add_argument("--replace", action="store_true", help="覆盖已有 release plan。")
     preflight = subparsers.add_parser("preflight", help="执行 release-flow 发布前检查。")
     preflight.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
     preflight.add_argument("--tag", required=True, help="发布标签。")
+    preflight.add_argument("--version", required=True, help="发布版本。")
+    preflight.add_argument("--bump-plugins", required=True, help="逗号分隔插件名；空字符串表示不提升插件。")
     publish = subparsers.add_parser("publish", help="触发 GitHub release workflow。")
     publish.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
     publish.add_argument("--tag", required=True, help="发布标签。")
+    publish.add_argument("--version", required=True, help="发布版本。")
+    publish.add_argument("--bump-plugins", required=True, help="逗号分隔插件名；空字符串表示不提升插件。")
     publish.add_argument("--dry-run", action="store_true", help="只打印 workflow dispatch 命令。")
     publish.add_argument("--authorize-publish", action="store_true", help="授权触发 GitHub 发布。")
-    summarize = subparsers.add_parser("summarize", help="写入 release workflow 摘要记录。")
-    summarize.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
-    summarize.add_argument("--tag", required=True, help="发布标签。")
-    summarize.add_argument("--workflow-run-file", type=Path, required=True, help="workflow run JSON 文件。")
     ci_publish = subparsers.add_parser("ci-publish", help="CI 中发布 release channel。")
     ci_publish.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
     ci_publish.add_argument("--tag", required=True, help="发布标签。")
-    ci_publish.add_argument("--release-plan", type=Path, required=True, help="release plan 路径。")
+    ci_publish.add_argument("--version", required=True, help="发布版本。")
+    ci_publish.add_argument("--bump-plugins", required=True, help="逗号分隔插件名；空字符串表示不提升插件。")
     ci_publish.add_argument("--authorize-ci-publish", action="store_true", help="授权 CI 远端写入。")
     return parser
 
@@ -1185,14 +1266,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         return run_github_plan(args)
     if args.command == "configure-github":
         return run_configure_github(args)
-    if args.command == "release-init":
-        return run_release_init(args)
     if args.command == "preflight":
         return run_preflight(args)
     if args.command == "publish":
         return run_publish(args)
-    if args.command == "summarize":
-        return run_summarize(args)
     if args.command == "ci-publish":
         return run_ci_publish(args)
     parser.error(f"unsupported command: {args.command}")
