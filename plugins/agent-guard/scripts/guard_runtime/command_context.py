@@ -5,13 +5,17 @@ from typing import Any
 
 def command_from_envelope(envelope: dict[str, Any]) -> str:
     payload = envelope.get("payload", {})
-    tool_input = payload.get("tool_input") if isinstance(payload, dict) else {}
-    if isinstance(tool_input, dict):
-        command = tool_input.get("command")
-        if isinstance(command, str):
-            return command
-    command = payload.get("command") if isinstance(payload, dict) else None
-    return command if isinstance(command, str) else ""
+    if not isinstance(payload, dict):
+        return ""
+    for container_name in ["tool_input", None, "input", "parameters", "params", "args", "arguments"]:
+        container = payload if container_name is None else payload.get(container_name)
+        if not isinstance(container, dict):
+            continue
+        for key in ["command", "cmd"]:
+            command = container.get(key)
+            if isinstance(command, str):
+                return command
+    return ""
 
 
 def tool_name_from_envelope(envelope: dict[str, Any]) -> str:
