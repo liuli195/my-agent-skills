@@ -1,9 +1,0 @@
-{
-  "version": "0.1.7",
-  "tag": "v0.1.7",
-  "sourceRef": "main",
-  "channelBranch": "marketplace",
-  "workflowFile": ".github/workflows/release.yml",
-  "projectionRegistry": ".release-flow/projection.yaml",
-  "dryRun": false
-}

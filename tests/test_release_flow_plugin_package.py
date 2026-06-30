@@ -36,11 +36,11 @@ def test_release_flow_package_contains_skill_scripts_and_templates() -> None:
         "skills/release-flow/scripts/release_flow.py",
         "skills/release-flow/assets/templates/release-flow/config.yaml",
         "skills/release-flow/assets/templates/release-flow/projection.yaml",
-        "skills/release-flow/assets/templates/release-flow/gitignore",
         "skills/release-flow/assets/templates/github/workflows/release.yml",
     ]
     for item in required:
         assert (PLUGIN_ROOT / item).exists(), item
+    assert not (PLUGIN_ROOT / "skills/release-flow/assets/templates/release-flow/gitignore").exists()
 
     text = (skill_root / "SKILL.md").read_text(encoding="utf-8")
     assert "release-flow" in text
