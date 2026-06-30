@@ -941,6 +941,21 @@ def test_ci_publish_copies_checkout_git_auth_config_to_release_tree(tmp_path: Pa
     assert git(release_tree, "config", "--local", "--get-all", "credential.useHttpPath").stdout == "true\n"
 
 
+def test_origin_is_github_uses_exact_host(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert git(project, "init").returncode == 0
+    assert git(project, "remote", "add", "origin", "https://evilgithub.com/org/repo.git").returncode == 0
+    release_flow = load_release_flow_module()
+
+    assert not release_flow.origin_is_github(project)
+
+    assert git(project, "remote", "set-url", "origin", "https://github.com/org/repo.git").returncode == 0
+    assert release_flow.origin_is_github(project)
+    assert git(project, "remote", "set-url", "origin", "git@github.com:org/repo.git").returncode == 0
+    assert release_flow.origin_is_github(project)
+
+
 def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: Path) -> None:
     project = tmp_path / "project"
     clone = tmp_path / "fresh-clone"

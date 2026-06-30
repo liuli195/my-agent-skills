@@ -12,6 +12,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import urlparse
 
 import yaml
 
@@ -883,7 +884,9 @@ def origin_url(project: Path) -> str:
 
 def origin_is_github(project: Path) -> bool:
     url = origin_url(project).lower()
-    return "github.com" in url
+    if url.startswith("git@github.com:"):
+        return True
+    return urlparse(url).hostname == "github.com"
 
 
 def remote_release_errors(project: Path, tag: str) -> list[str]:
