@@ -655,6 +655,8 @@ def test_preflight_accepts_empty_bump_plugins_when_versions_do_not_drift(tmp_pat
     write_plugin_manifests(project, "agent-guard", "0.1.0")
     write_plugin_manifests(project, "release-flow", "0.1.0")
     init_project_with_remote(project, remote)
+    env = os.environ.copy()
+    env["GITHUB_REPOSITORY"] = "liuli195/my-agent-skills"
 
     result = run(
         "preflight",
@@ -666,6 +668,7 @@ def test_preflight_accepts_empty_bump_plugins_when_versions_do_not_drift(tmp_pat
         "0.1.1",
         "--bump-plugins",
         "",
+        env=env,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr

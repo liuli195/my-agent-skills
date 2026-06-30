@@ -883,7 +883,7 @@ def origin_url(project: Path) -> str:
 
 def origin_is_github(project: Path) -> bool:
     url = origin_url(project).lower()
-    return "github.com" in url or bool(os.environ.get("GITHUB_REPOSITORY"))
+    return "github.com" in url
 
 
 def remote_release_errors(project: Path, tag: str) -> list[str]:
