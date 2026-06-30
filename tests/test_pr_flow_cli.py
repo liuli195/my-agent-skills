@@ -1435,6 +1435,13 @@ def test_complete_continues_when_existing_human_body_already_has_fixes(tmp_path:
     assert all(call[:2] != ("pr", "edit") for call in gh_stub.calls)
 
 
+def test_closing_reference_match_does_not_treat_prefix_issue_as_present() -> None:
+    module = load_pr_flow_module()
+
+    assert module.has_closing_reference("Human body\n\nFixes #980\n", "98") is False
+    assert module.has_closing_reference("Human body\n\nFixes #98\n", "98") is True
+
+
 def test_complete_keeps_existing_human_body_without_fixes(tmp_path: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow

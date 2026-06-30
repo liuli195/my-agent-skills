@@ -829,6 +829,11 @@ def closing_references_for_fixes(fixes: Sequence[str]) -> list[str]:
     return [f"Fixes #{issue}" for issue in fixes]
 
 
+def has_closing_reference(body: str, issue: str) -> bool:
+    issue_ref = re.escape(str(issue))
+    return re.search(rf"(?:^|[^\w#])Fixes\s+#{issue_ref}(?![\w-])", body, re.IGNORECASE) is not None
+
+
 def append_closing_references(body: str, missing_references: Sequence[str]) -> str:
     text = body.rstrip()
     references = "\n".join(missing_references)
@@ -843,8 +848,10 @@ def reconcile_existing_pr_body(project: Path, pr: dict[str, Any], body: str, fix
         return
     if fixes:
         existing_body = pr.get("body") if isinstance(pr.get("body"), str) else ""
-        closing_references = closing_references_for_fixes(fixes)
-        missing_references = [reference for reference in closing_references if reference not in existing_body]
+        missing_references = [
+            reference for issue, reference in zip(fixes, closing_references_for_fixes(fixes))
+            if not has_closing_reference(existing_body, str(issue))
+        ]
         if missing_references:
             update_pr_body(project, pr, append_closing_references(existing_body, missing_references))
 
