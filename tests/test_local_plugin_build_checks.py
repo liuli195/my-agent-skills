@@ -1249,15 +1249,15 @@ def test_root_comet_yaml_points_to_check_commands_for_guard() -> None:
     import yaml
 
     data = yaml.safe_load((REPO_ROOT / ".comet.yaml").read_text(encoding="utf-8"))
-    script = REPO_ROOT / "plugins" / "build-and-verify" / "skills" / "build-and-verify" / "scripts" / "build_and_verify.py"
+    script = REPO_ROOT / ".build-and-verify" / "runtime" / "build_and_verify.py"
 
     assert (
         data["build_command"]
-        == "python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py build --project ."
+        == "python .build-and-verify/runtime/build_and_verify.py build --project ."
     )
     assert (
         data["verify_command"]
-        == "python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project ."
+        == "python .build-and-verify/runtime/build_and_verify.py verify --project ."
     )
     assert script.is_file()
 

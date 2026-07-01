@@ -621,10 +621,13 @@ def test_build_and_verify_plugin_has_runtime_and_init_skill_entrypoints() -> Non
     assert "不写用户级配置" in runtime_skill_text
     assert "不配置 CI（持续集成）" in runtime_skill_text
     assert "不内置仓库业务逻辑" in runtime_skill_text
-    assert "不向目标仓库复制 runner（运行器）" in runtime_skill_text
+    assert "复制同一套 runtime（运行时）到 `.build-and-verify/runtime/`" in runtime_skill_text
+    assert "只提示 runtime（运行时）版本落后，不自动更新仓库文件" in runtime_skill_text
     assert "scripts/build_and_verify.py init" in runtime_skill_text
+    assert "scripts/build_and_verify.py update-runtime" in runtime_skill_text
     assert "scripts/build_and_verify.py build" in runtime_skill_text
     assert "scripts/build_and_verify.py verify" in runtime_skill_text
+    assert ".build-and-verify/runtime/build_and_verify.py verify" in runtime_skill_text
     assert "timeoutSeconds" in runtime_skill_text
     assert "pytest-xdist" in runtime_skill_text
 
@@ -1230,11 +1233,149 @@ def test_build_and_verify_init_writes_config_gitignore_and_cache(tmp_path: Path)
     assert read_json(project / ".build-and-verify" / "config.json")["verify"]["checks"] == []
 
 
+def test_build_and_verify_init_copies_repository_runtime(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = run_build_and_verify("init", "--project", str(project))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    runtime = project / ".build-and-verify" / "runtime"
+    assert (runtime / "build_and_verify.py").is_file()
+    assert (runtime / "build_and_verify_runner.py").is_file()
+    assert (runtime / "version.json").is_file()
+
+
+def test_copied_repository_runtime_can_initialize_another_project(tmp_path: Path) -> None:
+    source_project = tmp_path / "source"
+    target_project = tmp_path / "target"
+    source_project.mkdir()
+    target_project.mkdir()
+    assert run_build_and_verify("init", "--project", str(source_project)).returncode == 0
+    repository_script = (
+        source_project / ".build-and-verify" / "runtime" / "build_and_verify.py"
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(repository_script), "init", "--project", str(target_project)],
+        cwd=target_project,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (target_project / ".build-and-verify" / "config.json").is_file()
+    assert (target_project / ".build-and-verify" / "runtime" / "build_and_verify.py").is_file()
+
+
+def test_build_and_verify_update_runtime_refreshes_runtime_without_config(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
+    config_path = project / ".build-and-verify" / "config.json"
+    runtime_file = project / ".build-and-verify" / "runtime" / "build_and_verify.py"
+    config_before = config_path.read_text(encoding="utf-8")
+    runtime_file.write_text("stale\n", encoding="utf-8")
+
+    result = run_build_and_verify("update-runtime", "--project", str(project))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "stale" not in runtime_file.read_text(encoding="utf-8")
+    assert config_path.read_text(encoding="utf-8") == config_before
+
+
+def test_copied_repository_runtime_can_update_itself(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
+    repository_script = project / ".build-and-verify" / "runtime" / "build_and_verify.py"
+
+    result = subprocess.run(
+        [sys.executable, str(repository_script), "update-runtime", "--project", str(project)],
+        cwd=project,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: runtime-updated" in result.stdout
+
+
+def test_build_and_verify_verify_does_not_mutate_repository_runtime(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
+    write_json(
+        project / ".build-and-verify" / "config.json",
+        {"version": 1, "build": {"checks": []}, "verify": {"checks": []}},
+    )
+    runtime_file = project / ".build-and-verify" / "runtime" / "build_and_verify.py"
+    before = runtime_file.read_bytes()
+
+    result = run_check(project, "verify")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert runtime_file.read_bytes() == before
+
+
+def test_build_and_verify_verify_reports_newer_user_runtime_without_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    project.mkdir()
+    installed_runtime = (
+        home
+        / ".codex"
+        / "plugins"
+        / "cache"
+        / "vendor"
+        / "build-and-verify"
+        / "9.9.9"
+        / "skills"
+        / "build-and-verify"
+        / "scripts"
+    )
+    installed_runtime.mkdir(parents=True)
+    installed_script = installed_runtime / "build_and_verify.py"
+    installed_script.write_text("# newer\n", encoding="utf-8")
+    write_json(
+        installed_runtime / "version.json",
+        {
+            "plugin": "build-and-verify",
+            "plugin_version": "9.9.9",
+            "runtime_version": "9.9.9",
+        },
+    )
+    monkeypatch.setenv("USERPROFILE", str(home))
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
+    write_json(
+        project / ".build-and-verify" / "config.json",
+        {"version": 1, "build": {"checks": []}, "verify": {"checks": []}},
+    )
+    runtime_file = project / ".build-and-verify" / "runtime" / "build_and_verify.py"
+    before = runtime_file.read_bytes()
+
+    result = run_check(project, "verify")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "runtime_outdated: repository=0.1.32 installed=9.9.9" in result.stdout
+    assert f"python {installed_script} update-runtime --project {project}" in result.stdout
+    assert runtime_file.read_bytes() == before
+
+
 @pytest.mark.parametrize(
     "existing",
     [
         Path(".build-and-verify/config.json"),
         Path(".build-and-verify/.gitignore"),
+        Path(".build-and-verify/runtime"),
     ],
 )
 def test_build_and_verify_init_refuses_existing_files_before_writes(
@@ -1244,13 +1385,19 @@ def test_build_and_verify_init_refuses_existing_files_before_writes(
     project.mkdir()
     existing_path = project / existing
     existing_path.parent.mkdir(parents=True, exist_ok=True)
-    existing_path.write_text("keep me\n", encoding="utf-8")
+    if existing.suffix:
+        existing_path.write_text("keep me\n", encoding="utf-8")
+    else:
+        existing_path.mkdir()
 
     result = run_build_and_verify("init", "--project", str(project))
 
     assert result.returncode != 0
     assert f"existing_file: {existing.as_posix()}" in result.stderr
-    assert existing_path.read_text(encoding="utf-8") == "keep me\n"
+    if existing.suffix:
+        assert existing_path.read_text(encoding="utf-8") == "keep me\n"
+    else:
+        assert existing_path.is_dir()
     generated_files = [
         Path(".build-and-verify/config.json"),
         Path(".build-and-verify/.gitignore"),

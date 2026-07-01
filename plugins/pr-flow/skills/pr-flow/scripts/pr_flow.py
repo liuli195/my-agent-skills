@@ -63,7 +63,7 @@ def default_config(base_branch: str) -> dict:
             "mergeStrategy": "merge",
             "reviewGate": {"mode": "github"},
             "hotfix": {
-                "verifyCommand": "python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full"
+                "verifyCommand": "python .build-and-verify/runtime/build_and_verify.py verify --project . --full"
             },
             "wait": {"timeoutSeconds": 600, "pollSeconds": 15},
             "pr": {

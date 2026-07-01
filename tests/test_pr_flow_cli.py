@@ -1120,7 +1120,7 @@ def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
     assert "evidencePath" not in config["defaults"]["reviewGate"]
     assert (
         config["defaults"]["hotfix"]["verifyCommand"]
-        == "python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full"
+        == "python .build-and-verify/runtime/build_and_verify.py verify --project . --full"
     )
     assert config["defaults"]["wait"] == {"timeoutSeconds": 600, "pollSeconds": 15}
     assert config["defaults"]["pr"]["bodyTemplatePath"] == ".pr-flow/pr-template.md"
@@ -1566,7 +1566,7 @@ def test_current_repo_hotfix_verify_command_uses_BUILD_AND_VERIFY_full() -> None
 
     assert (
         config["defaults"]["hotfix"]["verifyCommand"]
-        == "python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full"
+        == "python .build-and-verify/runtime/build_and_verify.py verify --project . --full"
     )
 
 
