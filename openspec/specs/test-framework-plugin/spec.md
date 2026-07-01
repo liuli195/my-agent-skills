@@ -30,6 +30,7 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **WHEN** 用户对目标仓库运行 build-and-verify init（构建与验证初始化）
 - **THEN** 系统 MUST 创建 `.build-and-verify/config.json`
 - **THEN** 系统 MUST 创建 `.build-and-verify/.gitignore`
+- **THEN** `.build-and-verify/.gitignore` MUST 包含 `/cache/`、`/runs/` 和 `/backups/`
 - **THEN** 系统 MUST NOT 向目标仓库复制 runner（运行器）脚本
 
 #### Scenario: Init defines local cache location
@@ -207,6 +208,7 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 
 #### Scenario: Config structure is validated after write
 - **WHEN** agent（代理）写入 `.build-and-verify/config.json`（配置文件）
+- **THEN** agent（代理） MUST 确保 `.build-and-verify/.gitignore`（忽略规则）包含 `/cache/`、`/runs/` 和 `/backups/`
 - **THEN** agent（代理） MUST 校验配置结构符合 build-and-verify（构建与验证）runner（运行器）契约
 - **THEN** agent（代理） MUST 报告配置校验结果
 
@@ -228,3 +230,4 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **THEN** 覆盖已有配置时，agent（代理） MUST 检查备份目录可创建且备份路径仍在目标仓库内
 - **THEN** agent（代理） MUST 允许用户在存在依赖或环境问题时仍写入配置
 - **THEN** agent（代理） MUST 明确说明用户可以让 agent（代理）协助处理环境和外部依赖问题
+

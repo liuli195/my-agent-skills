@@ -84,7 +84,7 @@
   - 返回前面问题修改草案。
   - 停止初始化。
 - 选择后果：
-  - 确认写入：先展示完整摘要、候选 checks（检查项）、paths（受影响路径）、自动推导的 inputs（缓存输入）、运行参数、覆盖摘要、targeted dependency checks（定向依赖检查）结果、environment checks（环境检查）结果、备份路径和写入后 config validation（配置校验）计划，再写入配置。
+  - 确认写入：先展示完整摘要、候选 checks（检查项）、paths（受影响路径）、自动推导的 inputs（缓存输入）、运行参数、覆盖摘要、`.build-and-verify/.gitignore`（忽略规则）更新计划、targeted dependency checks（定向依赖检查）结果、environment checks（环境检查）结果、备份路径和写入后 config validation（配置校验）计划，再写入配置。
   - 返回修改：按用户指定问题返回。
   - 停止初始化：不写入配置。
-- 跳转规则：只有明确选择确认写入时才允许写入；覆盖已有配置时自动使用默认备份路径 `.build-and-verify/backups/config-YYYYMMDD-HHMMSS.json`（备份配置文件），并确保 `.build-and-verify/.gitignore`（忽略规则）包含 `/backups/`；写入后执行 validation（校验）定义的 config（配置）结构校验。
+- 跳转规则：只有明确选择确认写入时才允许写入；写入时必须确保 `.build-and-verify/.gitignore`（忽略规则）包含 `/cache/`、`/runs/` 和 `/backups/`；覆盖已有配置时自动使用默认备份路径 `.build-and-verify/backups/config-YYYYMMDD-HHMMSS.json`（备份配置文件）；写入后执行 validation（校验）定义的 config（配置）结构校验。
