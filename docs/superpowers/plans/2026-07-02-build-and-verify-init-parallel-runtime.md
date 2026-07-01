@@ -2,6 +2,7 @@
 change: fix-build-and-verify-init-parallel-runtime
 design-doc: docs/superpowers/specs/2026-07-02-build-and-verify-init-parallel-runtime-design.md
 base-ref: 35717b7e89d2564a2d690733e991bc58d4332b12
+archived-with: 2026-07-01-fix-build-and-verify-init-parallel-runtime
 ---
 
 # Build and Verify Init Parallel Runtime（构建与验证初始化并行运行时）实施计划
@@ -14,6 +15,7 @@ base-ref: 35717b7e89d2564a2d690733e991bc58d4332b12
 
 **Tech Stack（技术栈）:** Python（Python 语言）标准库、pytest（Python 测试框架）、pytest-xdist（Pytest 并行插件）、OpenSpec（开放规格）、Markdown（文档格式）、JSON（配置格式）。
 
+archived-with: 2026-07-01-fix-build-and-verify-init-parallel-runtime
 ---
 
 ## File Map（文件地图）
@@ -30,6 +32,7 @@ base-ref: 35717b7e89d2564a2d690733e991bc58d4332b12
 - Modify（修改）: `.build-and-verify/runtime/build_and_verify.py`、`.build-and-verify/runtime/build_and_verify_runner.py`、`.build-and-verify/runtime/version.json`，只刷新当前仓库 runtime（运行时）快照。
 - Do not touch（不得触碰）: `D:\My Project\Quant-Research-Lab`，不写入、不初始化、不覆盖、不刷新 runtime（运行时）。
 
+archived-with: 2026-07-01-fix-build-and-verify-init-parallel-runtime
 ---
 
 ### Task 1: Runner（运行器）配置字段校验
@@ -189,6 +192,7 @@ python -m pytest -q tests/test_build_and_verify_plugin.py -k "check_parallel or 
 
 Expected（预期）: PASS（通过）。
 
+archived-with: 2026-07-01-fix-build-and-verify-init-parallel-runtime
 ---
 
 ### Task 2: Pytest Xdist Workers（Pytest 工作进程数）
@@ -430,6 +434,7 @@ python -m pytest -q tests/test_build_and_verify_plugin.py -k "pytest_xdist_worke
 
 Expected（预期）: PASS（通过）。
 
+archived-with: 2026-07-01-fix-build-and-verify-init-parallel-runtime
 ---
 
 ### Task 3: Shared Fast/Full Scheduler（快速/完整共用调度器）
@@ -637,6 +642,7 @@ python -m pytest -q tests/test_build_and_verify_plugin.py -k "fast_verify_runs_c
 
 Expected（预期）: PASS（通过）。
 
+archived-with: 2026-07-01-fix-build-and-verify-init-parallel-runtime
 ---
 
 ### Task 4: Init Config Overwrite（初始化覆盖）
@@ -862,6 +868,7 @@ python -m pytest -q tests/test_build_and_verify_plugin.py -k "init_writes_config
 
 Expected（预期）: PASS（通过）。
 
+archived-with: 2026-07-01-fix-build-and-verify-init-parallel-runtime
 ---
 
 ### Task 5: Build and Verify Init Skill（构建与验证初始化技能）文案和依赖检查
@@ -1033,6 +1040,7 @@ python -m pytest -q tests/test_build_and_verify_plugin.py -k "build_and_verify_i
 
 Expected（预期）: PASS（通过）。
 
+archived-with: 2026-07-01-fix-build-and-verify-init-parallel-runtime
 ---
 
 ### Task 6: Current Repository Config and Runtime Snapshot（当前仓库配置与运行时快照）
@@ -1114,6 +1122,7 @@ git diff --name-only -- "D:\My Project\Quant-Research-Lab"
 
 Expected（预期）: no output（无输出）. If Git（版本管理） refuses the path because it is outside the repository（仓库）, that is also acceptable and confirms this workflow did not stage or diff that path.
 
+archived-with: 2026-07-01-fix-build-and-verify-init-parallel-runtime
 ---
 
 ### Task 7: Temporary Target Repository End-to-End（临时目标仓库端到端回归）
@@ -1202,6 +1211,7 @@ python -m pytest -q tests/test_build_and_verify_plugin.py::test_build_and_verify
 
 Expected（预期）: PASS（通过） after Tasks 1-6.
 
+archived-with: 2026-07-01-fix-build-and-verify-init-parallel-runtime
 ---
 
 ### Task 8: Final Verification（最终验证）
@@ -1263,6 +1273,7 @@ git diff --name-only
 
 Expected（预期）: changed files are limited to the File Map（文件地图） above, plus no path under `D:\My Project\Quant-Research-Lab`.
 
+archived-with: 2026-07-01-fix-build-and-verify-init-parallel-runtime
 ---
 
 ## Self Review（自查）

@@ -34,15 +34,23 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **THEN** 系统 MUST 复制当前 runtime（运行时）快照到 `.build-and-verify/runtime/`
 - **THEN** 仓库内 runtime（运行时）快照 MUST 包含 `build_and_verify.py`、`build_and_verify_runner.py` 和版本元数据
 
+#### Scenario: Init writes confirmed config when provided
+- **WHEN** 用户运行 `python <build-and-verify-script> init --project <repo> --config <config-file> --overwrite`
+- **THEN** 系统 MUST 使用 `<config-file>` 内容写入 `.build-and-verify/config.json`
+- **THEN** 系统 MUST 在已有 `.build-and-verify/config.json` 时先备份到 `.build-and-verify/backups/config-YYYYMMDD-HHMMSS.json`
+- **THEN** 系统 MUST 在没有已有 `.build-and-verify/config.json` 时直接写入 confirmed config（已确认配置）
+- **THEN** 系统 MUST 合并 `.build-and-verify/.gitignore` 默认规则而不是覆盖用户已有规则
+- **THEN** 系统 MUST 复制当前 runtime（运行时）快照到 `.build-and-verify/runtime/`
+
 #### Scenario: Init defines local cache location
 - **WHEN** 初始化产物写入目标仓库
 - **THEN** 系统 MUST 使用 `.build-and-verify/cache/` 作为本地 cache（缓存）目录
 - **THEN** 系统 MUST 创建 `.build-and-verify/cache/` 目录
 - **THEN** 系统 MUST NOT 要求将 cache（缓存）内容纳入 Git（版本管理）
 
-#### Scenario: Init refuses conflicting files
+#### Scenario: Init refuses conflicting files without overwrite
 - **WHEN** 目标仓库已经存在 `.build-and-verify/config.json`、`.build-and-verify/.gitignore` 或 `.build-and-verify/runtime/`
-- **THEN** 系统 MUST 在写入任何初始化产物前拒绝静默覆盖
+- **THEN** 系统 MUST 在没有 `--overwrite`（覆盖参数）时拒绝静默覆盖
 - **THEN** 系统 MUST 返回 non-zero（非零）退出码并报告 target-repository-relative（目标仓库相对）冲突路径
 
 #### Scenario: Init stays uncoupled from repository business logic
@@ -58,6 +66,9 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **THEN** `.build-and-verify/config.json` MUST 支持 `build.checks`
 - **THEN** `.build-and-verify/config.json` MUST 支持 `verify.checks`
 - **THEN** `.build-and-verify/config.json` MUST NOT 要求独立的 `verify.fast.checks`
+- **THEN** check（检查项）配置 MUST 使用 `checkParallel`（检查项间并行）表达 check（检查项）之间并行
+- **THEN** check（检查项）配置 MUST 使用 `pytestXdistWorkers`（Pytest 工作进程数）表达 pytest（Python 测试框架）内部并行
+- **THEN** check（检查项）配置 MUST NOT 支持旧 `parallel`（并行）字段
 
 #### Scenario: Command entrypoint exposes minimum commands
 - **WHEN** 目标仓库完成初始化
@@ -85,6 +96,13 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **THEN** 系统 MUST NOT 通过读取 cache（缓存）跳过 configured `verify.checks`
 - **THEN** 成功通过的 check（检查项） MUST 使用同一套 cache key（缓存键）写入或刷新 passed-result cache（通过结果缓存）
 - **THEN** failed（失败）结果 MUST NOT 写入 passed-result cache（通过结果缓存）
+
+#### Scenario: Pytest xdist workers are explicit
+- **WHEN** check（检查项）配置声明 `pytestXdistWorkers`（Pytest 工作进程数）
+- **THEN** `pytestXdistWorkers` MUST 是 `"auto"` 或正整数
+- **THEN** 系统 MUST 仅对 pytest（Python 测试框架）命令应用 pytest-xdist（Pytest 并行插件）参数
+- **THEN** 系统 MUST 拒绝在非 pytest（Python 测试框架）命令上声明 `pytestXdistWorkers`（Pytest 工作进程数）
+- **THEN** 系统 MUST 在 pytest-xdist（Pytest 并行插件）不可用时报错，不得静默降级为串行
 
 ### Requirement: Build and Verify provides fast cache verification
 系统 MUST 将 fast（快速验证）实现为 full（全量验证）标准检查项上的 changed-files（变更文件）筛选和 passed-result cache（通过结果缓存）。
@@ -196,7 +214,7 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **THEN** agent（代理） MUST 在写入前等待用户确认 `paths`（受影响路径），并在最终写入摘要中展示自动推导的 `inputs`（缓存输入）
 
 #### Scenario: Draft config explains runtime tuning
-- **WHEN** 配置草案包含 `verify.maxParallel`（最大并行检查数）、`verify.timeoutSeconds`（超时秒数）或 `parallel: true`（并行检查）
+- **WHEN** 配置草案包含 `verify.maxParallel`（最大并行检查数）、`verify.timeoutSeconds`（超时秒数）、`checkParallel`（检查项间并行）或 `pytestXdistWorkers`（Pytest 工作进程数）
 - **THEN** agent（代理） MUST 逐项解释这些运行参数
 - **THEN** agent（代理） MUST 等待用户确认后才能写入这些运行参数
 - **THEN** agent（代理） MUST NOT 为没有 `auto`（自动）语义的工具硬编码 `auto`（自动）参数
@@ -230,7 +248,7 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 #### Scenario: Targeted dependency checks report issues before write without blocking write
 - **WHEN** 配置草案包含可识别依赖特征
 - **THEN** agent（代理） MUST 在最终写入确认前执行 targeted dependency checks（定向依赖检查）
-- **THEN** 命令包含 `pytest -n` 或 `--numprocesses` 时，agent（代理） MUST 检查 `pytest-xdist`（Pytest 并行插件）是否可用
+- **THEN** 配置包含 `pytestXdistWorkers`（Pytest 工作进程数）时，agent（代理） MUST 检查 `pytest-xdist`（Pytest 并行插件）是否可用
 - **THEN** 命令调用外部可执行文件时，agent（代理） MUST 检查该入口是否可找到
 - **THEN** `paths`（受影响路径）或 `inputs`（缓存输入）指向不存在文件或目录时，agent（代理） MUST 提示用户确认
 - **THEN** agent（代理） MUST 允许用户在存在依赖或环境问题时仍写入配置

@@ -2,6 +2,8 @@
 comet_change: fix-build-and-verify-init-parallel-runtime
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-07-01-fix-build-and-verify-init-parallel-runtime
+status: final
 ---
 
 # Build and Verify Init Parallel Runtime Design
