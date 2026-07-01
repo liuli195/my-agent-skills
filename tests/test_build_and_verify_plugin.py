@@ -1365,7 +1365,7 @@ def test_build_and_verify_verify_reports_newer_user_runtime_without_mutation(
     result = run_check(project, "verify")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "runtime_outdated: repository=0.1.32 installed=9.9.9" in result.stdout
+    assert "runtime_outdated: repository=0.1.33 installed=9.9.9" in result.stdout
     assert f"python {installed_script} update-runtime --project {project}" in result.stdout
     assert runtime_file.read_bytes() == before
 
