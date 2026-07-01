@@ -40,6 +40,7 @@
           ".claude-plugin",
           ".release-flow",
           ".build-and-verify/config.json",
+          ".build-and-verify/runtime",
           ".comet.yaml",
           ".comet/config.yaml",
           "requirements-dev.txt",
@@ -170,6 +171,7 @@
           ".claude-plugin",
           ".release-flow",
           ".build-and-verify/config.json",
+          ".build-and-verify/runtime",
           "requirements-dev.txt",
           "plugins/build-and-verify",
           "tests/test_build_and_verify_plugin.py"

@@ -35,4 +35,4 @@ jobs:
           python -m pip install -r requirements-dev.txt
 
       - name: Run full verification
-        run: python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full
+        run: python .build-and-verify/runtime/build_and_verify.py verify --project . --full
