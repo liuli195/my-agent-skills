@@ -35,6 +35,7 @@ REQUIRED_INIT_REFERENCES = {
     "validation.md",
 }
 PLUGIN_DESCRIPTION = "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）"
+DEFAULT_BUILD_AND_VERIFY_GITIGNORE = ["/cache/", "/runs/", "/backups/"]
 
 
 def read_json(path: Path) -> dict:
@@ -305,11 +306,12 @@ def assert_init_wizard_config_structure(config: dict[str, Any]) -> None:
     )
 
 
-def ensure_init_wizard_gitignore_includes_backups(build_dir: Path) -> None:
+def ensure_init_wizard_gitignore(build_dir: Path) -> None:
     gitignore = build_dir / ".gitignore"
     lines = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
-    if "/backups/" not in lines:
-        lines.append("/backups/")
+    for entry in DEFAULT_BUILD_AND_VERIFY_GITIGNORE:
+        if entry not in lines:
+            lines.append(entry)
     gitignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -477,6 +479,7 @@ def simulate_init_wizard_write(
     config_path = build_dir / "config.json"
     reported_backup_path = None
     build_dir.mkdir(parents=True, exist_ok=True)
+    ensure_init_wizard_gitignore(build_dir)
 
     if config_path.exists():
         assert overwrite
@@ -487,7 +490,6 @@ def simulate_init_wizard_write(
         )
         reported_backup_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(config_path, reported_backup_path)
-        ensure_init_wizard_gitignore_includes_backups(build_dir)
 
     write_json(config_path, config)
     assert_init_wizard_config_structure(read_json(config_path))
@@ -988,6 +990,9 @@ def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_conf
         "不安装依赖",
         ".build-and-verify/backups/config-YYYYMMDD-HHMMSS.json",
         "如果 backups（备份）目录不存在，必须先创建该目录",
+        "Local Git Ignore（本地 Git 忽略）",
+        "/cache/",
+        "/runs/",
         "/backups/",
         "config（配置）结构校验",
         "verify.timeoutSeconds",
@@ -1005,7 +1010,8 @@ def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_conf
     ordered_steps = [
         "写入前执行 targeted dependency checks（定向依赖检查）",
         "写入前执行 environment checks（环境检查）",
-        "用户最终确认后，必要时备份已有配置",
+        "用户最终确认后，确保 `.build-and-verify/.gitignore`（忽略规则）包含默认本地目录规则",
+        "必要时备份已有配置",
         "写入 `.build-and-verify/config.json`（配置文件）",
         "写入后执行 config（配置）结构校验",
     ]
@@ -1213,7 +1219,9 @@ def test_build_and_verify_init_writes_config_gitignore_and_cache(tmp_path: Path)
         "build": {"checks": []},
         "verify": {"checks": []},
     }
-    assert (project / ".build-and-verify" / ".gitignore").read_text(encoding="utf-8") == "/cache/\n/runs/\n"
+    assert (project / ".build-and-verify" / ".gitignore").read_text(
+        encoding="utf-8"
+    ) == "/cache/\n/runs/\n/backups/\n"
     assert "build-and-verify-init" not in result.stdout
     assert "questionnaire" not in result.stdout.lower()
     assert "questionnaire" not in result.stderr.lower()
@@ -1252,6 +1260,25 @@ def test_build_and_verify_init_refuses_existing_files_before_writes(
         if path != existing_path:
             assert not path.exists()
     assert not (project / ".build-and-verify" / "cache").exists()
+
+
+def test_build_and_verify_init_template_simulation_writes_default_gitignore(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    draft_config = {
+        "version": 1,
+        "build": {"checks": []},
+        "verify": {"checks": []},
+    }
+
+    report = simulate_init_wizard_write(project, draft_config, overwrite=False)
+
+    gitignore = project / ".build-and-verify" / ".gitignore"
+    assert gitignore.read_text(encoding="utf-8").splitlines() == DEFAULT_BUILD_AND_VERIFY_GITIGNORE
+    assert report["backup_path"] is None
+    assert read_json(project / ".build-and-verify" / "config.json") == draft_config
 
 
 def test_build_and_verify_init_template_simulation_writes_backup_and_valid_config(
