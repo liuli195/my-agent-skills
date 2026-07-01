@@ -1,0 +1,15 @@
+{
+  "change": "agent-guard-marketplace-subscription",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "2c8d7c07fcb15918708d33e7c2deb73a711224966f1344cd4c60c673190576d1",
+  "files": [
+    { "path": "openspec/changes/agent-guard-marketplace-subscription/proposal.md", "sha256": "08b488548b2815a8a0b1286eb2653d5d383648a55cc15e662606d6f77974bf31" },
+    { "path": "openspec/changes/agent-guard-marketplace-subscription/design.md", "sha256": "f269225893d5ea93930e40ca813a69fe829097fa61e94fdc088da1815c9f619d" },
+    { "path": "openspec/changes/agent-guard-marketplace-subscription/tasks.md", "sha256": "04aa9808173d23ba61a9950aaa9e44ba21b63bb924152a33bad1578b8170fcab" },
+    { "path": "openspec/changes/agent-guard-marketplace-subscription/specs/agent-guard-plugin-runtime/spec.md", "sha256": "2959c104bde3b110fe45f5f117e22d08db1e702456945c2a7e4939de3b0e51cd" },
+    { "path": "openspec/changes/agent-guard-marketplace-subscription/specs/agent-guard-skill-entrypoints/spec.md", "sha256": "2aee9a59ddfa4d50c9690814b42c13802b1cd85a21752faaf978e185826b28bc" }
+  ]
+}

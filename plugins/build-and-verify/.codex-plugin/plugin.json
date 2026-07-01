@@ -1,0 +1,6 @@
+{
+  "name": "build-and-verify",
+  "version": "0.1.32",
+  "description": "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）",
+  "skills": "./skills"
+}
