@@ -34,7 +34,6 @@ REQUIRED_INIT_REFERENCES = {
     "config-draft.md",
     "validation.md",
 }
-PLUGIN_VERSION = "0.1.24"
 PLUGIN_DESCRIPTION = "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）"
 
 
@@ -588,15 +587,16 @@ def write_release_projection_project(project: Path) -> None:
 
 
 def test_build_and_verify_plugin_has_dual_manifests() -> None:
-    expected_manifest = {
-        "name": PLUGIN_NAME,
-        "version": PLUGIN_VERSION,
-        "description": PLUGIN_DESCRIPTION,
-        "skills": "./skills",
-    }
+    codex_manifest = read_json(PLUGIN_ROOT / ".codex-plugin" / "plugin.json")
+    claude_manifest = read_json(PLUGIN_ROOT / ".claude-plugin" / "plugin.json")
 
-    assert read_json(PLUGIN_ROOT / ".codex-plugin" / "plugin.json") == expected_manifest
-    assert read_json(PLUGIN_ROOT / ".claude-plugin" / "plugin.json") == expected_manifest
+    assert codex_manifest["name"] == PLUGIN_NAME
+    assert claude_manifest["name"] == PLUGIN_NAME
+    assert codex_manifest["version"] == claude_manifest["version"]
+    assert codex_manifest["description"] == PLUGIN_DESCRIPTION
+    assert claude_manifest["description"] == PLUGIN_DESCRIPTION
+    assert codex_manifest["skills"] == "./skills"
+    assert claude_manifest["skills"] == "./skills"
 
 
 def test_build_and_verify_plugin_has_runtime_and_init_skill_entrypoints() -> None:

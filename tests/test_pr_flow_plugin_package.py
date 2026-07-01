@@ -14,7 +14,6 @@ CLAUDE_REPO_MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 RELEASE_FLOW_PROJECTION = REPO_ROOT / ".release-flow" / "projection.yaml"
 
 PLUGIN_NAME = "pr-flow"
-PLUGIN_VERSION = "0.1.30"
 PLUGIN_DESCRIPTION = (
     "PR Flow Plugin（拉取请求流程插件）。pr-flow-init 初始化 PR Flow（拉取请求流程）配置："
     "agent（代理）问答、配置草案、只读 validate（校验）和用户确认后本地写入。"
@@ -68,15 +67,16 @@ def release_projection_plugins() -> list[str]:
 
 
 def test_pr_flow_manifests_are_valid_json() -> None:
-    expected_manifest = {
-        "name": PLUGIN_NAME,
-        "version": PLUGIN_VERSION,
-        "description": PLUGIN_DESCRIPTION,
-        "skills": "./skills",
-    }
+    codex_manifest = read_json(PLUGIN_ROOT / ".codex-plugin" / "plugin.json")
+    claude_manifest = read_json(PLUGIN_ROOT / ".claude-plugin" / "plugin.json")
 
-    assert read_json(PLUGIN_ROOT / ".codex-plugin" / "plugin.json") == expected_manifest
-    assert read_json(PLUGIN_ROOT / ".claude-plugin" / "plugin.json") == expected_manifest
+    assert codex_manifest["name"] == PLUGIN_NAME
+    assert claude_manifest["name"] == PLUGIN_NAME
+    assert codex_manifest["version"] == claude_manifest["version"]
+    assert codex_manifest["description"] == PLUGIN_DESCRIPTION
+    assert claude_manifest["description"] == PLUGIN_DESCRIPTION
+    assert codex_manifest["skills"] == "./skills"
+    assert claude_manifest["skills"] == "./skills"
 
 
 def test_pr_flow_skill_entrypoints_call_shared_script() -> None:

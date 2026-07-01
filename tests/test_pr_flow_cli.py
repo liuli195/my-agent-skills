@@ -870,6 +870,7 @@ def run_complete_in_process(
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
     git_stub.add(["rev-list", "--count", "@{u}..HEAD"], stdout="0\n")
+    git_stub.add(["rev-list", "--count", "HEAD..@{u}"], stdout="0\n")
     monkeypatch.setattr(module, "gh", gh_stub)
     monkeypatch.setattr(module, "git", git_stub)
     result = invoke_pr_flow(complete_args(project), module=module)
@@ -921,6 +922,7 @@ def run_tweak_in_process(
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
         (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
+        (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),
         (["status", "--short"], ""),
@@ -1360,6 +1362,7 @@ def test_complete_fills_existing_empty_body_before_checks(tmp_path: Path, monkey
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
         (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
+        (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),
         (["status", "--short"], ""),
         (["branch", "--show-current"], "feature/example\n"),
@@ -1409,6 +1412,7 @@ def test_complete_appends_repeated_fixes_to_existing_human_body(tmp_path: Path, 
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
         (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
+        (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),
         (["status", "--short"], ""),
@@ -1459,6 +1463,7 @@ def test_complete_continues_when_existing_human_body_already_has_fixes(tmp_path:
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
         (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
+        (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),
         (["status", "--short"], ""),
@@ -1509,6 +1514,7 @@ def test_complete_keeps_existing_human_body_without_fixes(tmp_path: Path, monkey
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
     git_stub.add(["rev-list", "--count", "@{u}..HEAD"], stdout="0\n")
+    git_stub.add(["rev-list", "--count", "HEAD..@{u}"], stdout="0\n")
     monkeypatch.setattr(module, "gh", gh_stub)
     monkeypatch.setattr(module, "git", git_stub)
 
@@ -2225,6 +2231,7 @@ def test_complete_auto_pushes_existing_pr_when_local_branch_is_ahead(tmp_path: P
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
     git_stub.add(["rev-list", "--count", "@{u}..HEAD"], stdout="1\n")
+    git_stub.add(["rev-list", "--count", "HEAD..@{u}"], stdout="0\n")
     git_stub.add(["status", "--porcelain"], stdout="")
     git_stub.add(["push"])
     monkeypatch.setattr(module, "git", git_stub)
@@ -2239,6 +2246,56 @@ def test_complete_auto_pushes_existing_pr_when_local_branch_is_ahead(tmp_path: P
     assert status["status"] == "DISPATCH_REQUIRED"
     assert status["command"] == "complete"
     assert status["details"]["reason"] == "checks_pending"
+
+
+@pytest.mark.parametrize(
+    ("args_factory", "command"),
+    [
+        (complete_args, "complete"),
+        (lambda project: tweak_args(project, reason="small docs polish"), "tweak"),
+    ],
+)
+def test_lifecycle_refuses_auto_push_when_upstream_has_new_commits(
+    tmp_path: Path,
+    monkeypatch,
+    args_factory,
+    command: str,
+) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    pending_pr = pr_view_json(checks=[{"name": "ci", "status": "QUEUED"}], head_oid="a" * 40)
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
+    gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fexample", "--jq", "length"], stdout="0\n")
+    git_stub = CommandStub()
+    git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
+    git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
+    git_stub.add(["rev-list", "--count", "@{u}..HEAD"], stdout="1\n")
+    git_stub.add(["rev-list", "--count", "HEAD..@{u}"], stdout="1\n")
+    git_stub.add(["status", "--porcelain"], stdout="")
+    git_stub.add(["push"])
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    result = invoke_pr_flow(args_factory(project), module=module)
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    assert not any(call and call[0] == "push" for call in git_stub.calls)
+    assert not any(call and call[0] == "api" for call in gh_stub.calls)
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "EXCEPTION_REQUIRED"
+    assert status["command"] == command
+    assert status["details"]["reason"] == "upstream_branch_diverged"
+    assert status["details"]["aheadCount"] == 1
+    assert status["details"]["behindCount"] == 1
+    assert status["details"]["syncCommand"] == "git pull --rebase"
+    assert command in status["details"]["nextCommand"]
 
 
 def test_complete_refuses_auto_push_when_worktree_dirty(tmp_path: Path, monkeypatch) -> None:
@@ -2727,6 +2784,7 @@ def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path, 
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
         (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
+        (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),
         (["status", "--short"], ""),
         (["branch", "--show-current"], "feature/example\n"),
@@ -2800,6 +2858,7 @@ def test_complete_does_not_run_build_and_verify_full_verify(tmp_path: Path, monk
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
         (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
+        (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),
         (["status", "--short"], ""),
         (["branch", "--show-current"], "feature/example\n"),
@@ -3061,6 +3120,7 @@ def test_complete_uses_auto_merge_when_ruleset_suggests_auto(tmp_path: Path, mon
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
         (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
+        (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),
@@ -3171,6 +3231,7 @@ def test_complete_waits_for_checks_after_ruleset_block_then_retries_merge(tmp_pa
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
         (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
+        (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),
@@ -3243,6 +3304,7 @@ def test_complete_uses_auto_merge_when_ruleset_suggests_auto_after_wait(tmp_path
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
         (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
+        (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),

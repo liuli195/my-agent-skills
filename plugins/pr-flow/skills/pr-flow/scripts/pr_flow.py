@@ -632,7 +632,11 @@ def gh_pr_merge_auto_suggested(result: subprocess.CompletedProcess[str]) -> bool
     return "add the --auto flag" in text or "add --auto" in text
 
 
-def auto_push_current_branch_if_needed(project: Path, config: dict[str, Any]) -> dict[str, Any] | None:
+def auto_push_current_branch_if_needed(
+    project: Path,
+    config: dict[str, Any],
+    next_command: str | None = None,
+) -> dict[str, Any] | None:
     base_branch = base_branch_from_config(config)
     branch_result = git(project, "branch", "--show-current")
     if branch_result.returncode != 0 or not branch_result.stdout.strip():
@@ -658,6 +662,41 @@ def auto_push_current_branch_if_needed(project: Path, config: dict[str, Any]) ->
                 "stdout": ahead_result.stdout,
             }
             return stop_state("EXCEPTION_REQUIRED", "git_ahead_check_invalid", details)
+        behind_result = git(project, "rev-list", "--count", "HEAD..@{u}")
+        if behind_result.returncode != 0:
+            details = command_failure_details("git_behind_check_failed", behind_result)
+            details.update(
+                {
+                    "branch": branch,
+                    "baseBranch": base_branch,
+                    "upstream": upstream_result.stdout.strip(),
+                }
+            )
+            return stop_state("EXCEPTION_REQUIRED", details["reason"], details)
+        try:
+            behind_count = int(behind_result.stdout.strip() or "0")
+        except ValueError:
+            details = {
+                "reason": "git_behind_check_invalid",
+                "branch": branch,
+                "baseBranch": base_branch,
+                "upstream": upstream_result.stdout.strip(),
+                "stdout": behind_result.stdout,
+            }
+            return stop_state("EXCEPTION_REQUIRED", "git_behind_check_invalid", details)
+        if behind_count > 0:
+            details = {
+                "reason": "upstream_branch_diverged",
+                "branch": branch,
+                "baseBranch": base_branch,
+                "upstream": upstream_result.stdout.strip(),
+                "aheadCount": ahead_count,
+                "behindCount": behind_count,
+                "syncCommand": "git pull --rebase",
+            }
+            if next_command:
+                details["nextCommand"] = next_command
+            return stop_state("EXCEPTION_REQUIRED", "sync upstream before pushing", details)
         if ahead_count <= 0:
             return None
         push_args = ("push",)
@@ -1213,7 +1252,7 @@ def run_lifecycle(
         pr = find_pr(project)
         existing_pr = pr is not None
         if command in {"complete", "tweak"}:
-            push_stop = auto_push_current_branch_if_needed(project, config)
+            push_stop = auto_push_current_branch_if_needed(project, config, next_command)
             if push_stop is not None:
                 return stop_from_state(project, command, push_stop)
         if pr is None:
