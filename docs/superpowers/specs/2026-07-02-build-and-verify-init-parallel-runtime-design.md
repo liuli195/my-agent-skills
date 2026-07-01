@@ -19,7 +19,7 @@ canonical_spec: openspec
 - `checkParallel`（检查项间并行）：check（检查项）之间可并行调度。
 - `pytestXdistWorkers`（Pytest 工作进程数）：pytest（Python 测试框架）内部 worker（工作进程）数量，值为 `"auto"` 或正整数。
 
-旧 `parallel`（并行）字段不再支持。默认 `verify`（快速验证）先按 changed files（变更文件）和 cache（缓存）筛选需要执行的 check（检查项），再复用完整验证的调度器；`verify --full`（完整验证）直接调度全部 check（检查项），不因 cache（缓存）跳过。
+旧 `parallel`（并行）字段不再支持。默认 `verify`（快速验证）先按 changed files（变更文件）和 cache（缓存）筛选需要执行的 check（检查项），再复用完整验证的调度器；`verify --full`（完整验证）直接调度全部 check（检查项），不因 cache（缓存）跳过。`pytestXdistWorkers`（Pytest 工作进程数）只允许声明在 pytest（Python 测试框架）命令上，非 pytest（Python 测试框架）命令声明该字段属于配置错误。
 
 `build-and-verify-init`（构建与验证初始化）在最终写入前检查草案中的运行参数。草案包含 `pytestXdistWorkers`（Pytest 工作进程数）时，先检查目标环境是否可用 `pytest-xdist`（Pytest 并行插件），并列出影响和建议；该检查不自动安装依赖，也不阻止用户确认写入。
 

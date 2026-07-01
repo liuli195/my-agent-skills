@@ -78,6 +78,7 @@
 - **WHEN** check（检查项）配置声明 `pytestXdistWorkers`（Pytest 工作进程数）
 - **THEN** `pytestXdistWorkers` MUST 是 `"auto"` 或正整数
 - **THEN** 系统 MUST 仅对 pytest（Python 测试框架）命令应用 pytest-xdist（Pytest 并行插件）参数
+- **THEN** 系统 MUST 拒绝在非 pytest（Python 测试框架）命令上声明 `pytestXdistWorkers`（Pytest 工作进程数）
 - **THEN** 系统 MUST 在 pytest-xdist（Pytest 并行插件）不可用时报错，不得静默降级为串行
 
 ### Requirement: Guided initialization drafts generic repository checks
