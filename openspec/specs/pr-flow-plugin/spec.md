@@ -100,6 +100,7 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 #### Scenario: Rulesets block merge
 - **WHEN** `gh pr merge`（合并拉取请求） fails because the base branch policy（目标分支策略） prohibits the merge（合并）
 - **AND** PR checks（拉取请求检查） are no longer pending（等待中）
+- **AND** GitHub CLI（GitHub 命令行） does not suggest `--auto`（自动合并）
 - **THEN** complete（收尾） MUST output `DISPATCH_REQUIRED`（需要外部进展）
 - **THEN** complete（收尾） MUST use `ruleset_merge_blocking` as reason（原因）
 - **THEN** complete（收尾） MUST preserve the original GitHub（代码托管平台） error text for diagnosis（诊断）
@@ -111,6 +112,14 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 - **THEN** complete（收尾） MUST return the checks wait stop state（检查等待停止状态） unchanged if checks（检查） fail or remain pending until timeout
 - **THEN** complete（收尾） MUST retry merge（合并） only after checks（检查） are no longer pending（等待中） and no checks wait stop state（检查等待停止状态） is returned
 - **THEN** complete（收尾） MUST keep using `ruleset_merge_blocking` as reason（原因） if merge（合并） remains blocked after waiting
+
+#### Scenario: Rulesets suggest auto-merge
+- **WHEN** `gh pr merge`（合并拉取请求） fails because the base branch policy（目标分支策略） prohibits the merge（合并）
+- **AND** PR checks（拉取请求检查） are no longer pending（等待中）
+- **AND** GitHub CLI（GitHub 命令行） suggests `--auto`（自动合并）
+- **THEN** complete（收尾） MUST retry the existing merge（合并） command with `--auto`（自动合并）
+- **THEN** complete（收尾） MUST preserve `--match-head-commit`（匹配头提交）
+- **THEN** complete（收尾） MUST NOT suggest or use `--admin`（管理员绕过）
 
 #### Scenario: Transient PR view failure is retried
 - **WHEN** a read-only `gh pr view`（查看拉取请求） call fails with EOF（连接提前结束）
@@ -227,6 +236,15 @@ PR Flow（拉取请求流程）MUST preserve the boundary between default fast v
 - **THEN** 系统 MUST 创建或同步 PR
 - **THEN** 系统 MUST 等待 checks、合并 PR 并执行 cleanup
 - **THEN** 系统 MUST 跳过 review gate
+
+#### Scenario: Tweak reuses safe auto-push
+- **WHEN** 用户在功能分支运行 tweak（小改）
+- **AND** 本地工作区干净
+- **AND** 当前分支不是 `defaults.baseBranch`（默认目标分支）
+- **AND** GitHub（代码托管平台）远端确认当前分支没有 active rules（有效规则）
+- **AND** 当前分支没有 upstream（上游分支）或本地提交尚未推送
+- **THEN** tweak（小改） MUST reuse the same safe auto-push（安全自动推送） behavior as complete（收尾）
+- **THEN** 推送成功后 MUST continue to create or sync PR（拉取请求）
 
 #### Scenario: Tweak reason
 - **WHEN** 用户运行 tweak
