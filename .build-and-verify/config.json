@@ -21,7 +21,6 @@
     "checks": [
       {
         "id": "verify.local-build-contract",
-        "parallel": true,
         "paths": [
           ".agents/**",
           ".claude-plugin/**",
@@ -34,7 +33,7 @@
           "scripts/local_plugin_build.py",
           "tests/test_local_plugin_build_checks.py"
         ],
-        "command": "python -m pytest -q -n 8 -p no:cacheprovider tests/test_local_plugin_build_checks.py",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_local_plugin_build_checks.py",
         "inputs": [
           ".agents",
           ".claude-plugin",
@@ -47,11 +46,12 @@
           "plugins",
           "scripts/local_plugin_build.py",
           "tests/test_local_plugin_build_checks.py"
-        ]
+        ],
+        "checkParallel": true,
+        "pytestXdistWorkers": 8
       },
       {
         "id": "verify.agent-guard",
-        "parallel": true,
         "paths": [
           ".agents/**",
           ".claude-plugin/**",
@@ -64,7 +64,7 @@
           "tests/test_init_user_guard.py",
           "tests/test_init_project_guard.py"
         ],
-        "command": "python -m pytest -q -n 8 -p no:cacheprovider tests/test_agent_guard_runtime_session_focus.py tests/test_agent_guard_runtime_brief.py tests/test_agent_guard_skill_entrypoints.py tests/test_agent_guard_runtime_router.py tests/test_agent_guard_plugin_installer.py tests/test_agent_guard_plugin_runtime_e2e.py tests/test_agent_guard_plugin_package.py tests/test_agent_guard_prd_full_e2e.py tests/test_extract_guard_model.py tests/test_validate_guard_profile.py tests/test_init_user_guard.py tests/test_init_project_guard.py",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_agent_guard_runtime_session_focus.py tests/test_agent_guard_runtime_brief.py tests/test_agent_guard_skill_entrypoints.py tests/test_agent_guard_runtime_router.py tests/test_agent_guard_plugin_installer.py tests/test_agent_guard_plugin_runtime_e2e.py tests/test_agent_guard_plugin_package.py tests/test_agent_guard_prd_full_e2e.py tests/test_extract_guard_model.py tests/test_validate_guard_profile.py tests/test_init_user_guard.py tests/test_init_project_guard.py",
         "inputs": [
           ".agents",
           ".claude-plugin",
@@ -83,11 +83,12 @@
           "tests/test_validate_guard_profile.py",
           "tests/test_init_user_guard.py",
           "tests/test_init_project_guard.py"
-        ]
+        ],
+        "checkParallel": true,
+        "pytestXdistWorkers": 8
       },
       {
         "id": "verify.release-flow",
-        "parallel": true,
         "paths": [
           ".agents/**",
           ".claude-plugin/**",
@@ -97,7 +98,7 @@
           "plugins/release-flow/**",
           "tests/test_release_flow*.py"
         ],
-        "command": "python -m pytest -q -n 8 -p no:cacheprovider tests/test_release_flow_cli.py tests/test_release_flow_plugin_package.py",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_release_flow_cli.py tests/test_release_flow_plugin_package.py",
         "inputs": [
           ".agents",
           ".claude-plugin",
@@ -107,11 +108,12 @@
           "plugins/release-flow",
           "tests/test_release_flow_cli.py",
           "tests/test_release_flow_plugin_package.py"
-        ]
+        ],
+        "checkParallel": true,
+        "pytestXdistWorkers": 8
       },
       {
         "id": "verify.pr-flow",
-        "parallel": true,
         "paths": [
           ".agents/**",
           ".claude-plugin/**",
@@ -120,7 +122,7 @@
           "plugins/pr-flow/**",
           "tests/test_pr_flow*.py"
         ],
-        "command": "python -m pytest -q -n auto -p no:cacheprovider tests/test_pr_flow_cli.py tests/test_pr_flow_plugin_package.py",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_pr_flow_cli.py tests/test_pr_flow_plugin_package.py",
         "inputs": [
           ".agents",
           ".claude-plugin",
@@ -129,11 +131,12 @@
           "plugins/pr-flow",
           "tests/test_pr_flow_cli.py",
           "tests/test_pr_flow_plugin_package.py"
-        ]
+        ],
+        "checkParallel": true,
+        "pytestXdistWorkers": "auto"
       },
       {
         "id": "verify.cross-agent-review",
-        "parallel": true,
         "paths": [
           ".agents/**",
           ".claude-plugin/**",
@@ -142,7 +145,7 @@
           "plugins/cross-agent-review/**",
           "tests/test_cross_agent_review*.py"
         ],
-        "command": "python -m pytest -q -n 8 -p no:cacheprovider tests/test_cross_agent_review_cli.py tests/test_cross_agent_review_plugin_package.py",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py tests/test_cross_agent_review_plugin_package.py",
         "inputs": [
           ".agents",
           ".claude-plugin",
@@ -151,11 +154,12 @@
           "plugins/cross-agent-review",
           "tests/test_cross_agent_review_cli.py",
           "tests/test_cross_agent_review_plugin_package.py"
-        ]
+        ],
+        "checkParallel": true,
+        "pytestXdistWorkers": 8
       },
       {
         "id": "verify.build-and-verify",
-        "parallel": true,
         "paths": [
           ".agents/**",
           ".claude-plugin/**",
@@ -165,7 +169,7 @@
           "plugins/build-and-verify/**",
           "tests/test_build_and_verify_plugin.py"
         ],
-        "command": "python -m pytest -q -n 8 -p no:cacheprovider tests/test_build_and_verify_plugin.py",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_build_and_verify_plugin.py",
         "inputs": [
           ".agents",
           ".claude-plugin",
@@ -175,11 +179,12 @@
           "requirements-dev.txt",
           "plugins/build-and-verify",
           "tests/test_build_and_verify_plugin.py"
-        ]
+        ],
+        "checkParallel": true,
+        "pytestXdistWorkers": 8
       },
       {
         "id": "verify.openspec",
-        "parallel": true,
         "paths": [
           "openspec/**",
           "docs/superpowers/**"
@@ -188,7 +193,8 @@
         "inputs": [
           "openspec",
           "docs/superpowers"
-        ]
+        ],
+        "checkParallel": true
       }
     ]
   }

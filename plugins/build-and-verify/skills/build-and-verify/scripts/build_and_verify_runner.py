@@ -60,6 +60,16 @@ def _command_tokens(command: Any) -> list[str]:
     return []
 
 
+def _uses_pytest(command: Any) -> bool:
+    tokens = _command_tokens(command)
+    has_pytest = any(token == "pytest" or token.endswith("/pytest") or token.endswith("\\pytest") for token in tokens)
+    has_pytest_module = any(
+        token == "-m" and index + 1 < len(tokens) and tokens[index + 1] == "pytest"
+        for index, token in enumerate(tokens)
+    )
+    return has_pytest or has_pytest_module
+
+
 def uses_pytest_xdist(command: Any) -> bool:
     tokens = _command_tokens(command)
     has_xdist_flag = any(
@@ -69,19 +79,51 @@ def uses_pytest_xdist(command: Any) -> bool:
         or token.startswith("--numprocesses=")
         for token in tokens
     )
-    has_pytest = any(token == "pytest" or token.endswith("/pytest") or token.endswith("\\pytest") for token in tokens)
-    has_pytest_module = any(
-        token == "-m" and index + 1 < len(tokens) and tokens[index + 1] == "pytest"
-        for index, token in enumerate(tokens)
-    )
-    return has_xdist_flag and (has_pytest or has_pytest_module)
+    return has_xdist_flag and _uses_pytest(command)
+
+
+def _pytest_xdist_workers(value: Any) -> str | None:
+    if value is None:
+        return None
+    if value == "auto":
+        return "auto"
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigError('pytestXdistWorkers must be "auto" or positive integer')
+    return str(value)
+
+
+def _command_with_pytest_xdist_workers(command: Any, workers: str | None) -> Any:
+    if workers is None or not _uses_pytest(command) or uses_pytest_xdist(command):
+        return command
+    if isinstance(command, list):
+        tokens = [str(item) for item in command]
+        for index, token in enumerate(tokens):
+            if token == "pytest" or token.endswith("/pytest") or token.endswith("\\pytest"):
+                return tokens[: index + 1] + ["-n", workers] + tokens[index + 1 :]
+            if token == "-m" and index + 1 < len(tokens) and tokens[index + 1] == "pytest":
+                insert_at = index + 2
+                return tokens[:insert_at] + ["-n", workers] + tokens[insert_at:]
+    if isinstance(command, str):
+        tokens = _command_tokens(command)
+        for index, token in enumerate(tokens):
+            if token == "pytest" or token.endswith("/pytest") or token.endswith("\\pytest"):
+                tokens = tokens[: index + 1] + ["-n", workers] + tokens[index + 1 :]
+                return shlex.join(tokens)
+            if token == "-m" and index + 1 < len(tokens) and tokens[index + 1] == "pytest":
+                insert_at = index + 2
+                tokens = tokens[:insert_at] + ["-n", workers] + tokens[insert_at:]
+                return shlex.join(tokens)
+    return command
 
 
 def _dependency_error(check: dict[str, Any]) -> str | None:
-    if uses_pytest_xdist(check.get("command")) and importlib.util.find_spec("xdist") is None:
+    command = check.get("command")
+    workers = _pytest_xdist_workers(check.get("pytestXdistWorkers"))
+    needs_xdist = uses_pytest_xdist(command) or (workers is not None and _uses_pytest(command))
+    if needs_xdist and importlib.util.find_spec("xdist") is None:
         return (
             f"missing_dependency: {check.get('id')}: pytest-xdist is required "
-            "for pytest -n; install requirements-dev.txt\n"
+            "for pytest xdist workers; install requirements-dev.txt\n"
         )
     return None
 
@@ -148,6 +190,28 @@ def _load_config(project: Path) -> dict[str, Any]:
                 raise ConfigError(
                     "invalid_config: .build-and-verify/config.json: "
                     f"{section}.checks[{index}].command must be non-empty string or list of non-empty strings"
+                )
+            if "parallel" in check:
+                raise ConfigError(
+                    "invalid_config: .build-and-verify/config.json: "
+                    f"{section}.checks[{index}].parallel is no longer supported; use checkParallel"
+                )
+            if "checkParallel" in check and not isinstance(check.get("checkParallel"), bool):
+                raise ConfigError(
+                    "invalid_config: .build-and-verify/config.json: "
+                    f"{section}.checks[{index}].checkParallel must be boolean"
+                )
+            try:
+                workers = _pytest_xdist_workers(check.get("pytestXdistWorkers"))
+            except ConfigError as error:
+                raise ConfigError(
+                    "invalid_config: .build-and-verify/config.json: "
+                    f"{section}.checks[{index}].{error}"
+                ) from None
+            if workers is not None and not _uses_pytest(command):
+                raise ConfigError(
+                    "invalid_config: .build-and-verify/config.json: "
+                    f"{section}.checks[{index}].pytestXdistWorkers requires pytest command"
                 )
             for field in ("paths", "inputs"):
                 value = check.get(field)
@@ -468,6 +532,10 @@ def _run_check(project: Path, check: dict[str, Any], runner: Runner) -> int:
     if dependency_error is not None:
         print(dependency_error, end="", file=sys.stderr)
         return 1
+    command = _command_with_pytest_xdist_workers(
+        command,
+        _pytest_xdist_workers(check.get("pytestXdistWorkers")),
+    )
     use_shell = isinstance(command, str)
     try:
         result = runner(
@@ -530,6 +598,10 @@ def _run_check_result(
             duration_seconds=time.monotonic() - started_at,
             cache_key=key,
         )
+    command = _command_with_pytest_xdist_workers(
+        command,
+        _pytest_xdist_workers(check.get("pytestXdistWorkers")),
+    )
     use_shell = isinstance(command, str)
     run_kwargs = {
         "cwd": project,
@@ -610,6 +682,77 @@ def _config_error(error: ConfigError) -> int:
     return 1
 
 
+def _run_scheduled_checks(
+    project: Path,
+    config: dict[str, Any],
+    selected: list[dict[str, Any]],
+    changed_files: list[str],
+    runner: Runner,
+) -> tuple[int, list[str]]:
+    indexed_selected = list(enumerate(selected))
+    parallel_checks = [(index, check) for index, check in indexed_selected if check.get("checkParallel") is True]
+    serial_checks = [(index, check) for index, check in indexed_selected if check.get("checkParallel") is not True]
+    results: list[CheckResult] = []
+    if parallel_checks:
+        max_workers = _max_parallel_checks(config, len(parallel_checks))
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        interrupted = False
+        try:
+            futures = {
+                executor.submit(_run_check_result, index, project, check, config, changed_files, runner): (
+                    index,
+                    check,
+                )
+                for index, check in parallel_checks
+            }
+            for future in futures:
+                index, check = futures[future]
+                try:
+                    results.append(future.result())
+                except KeyboardInterrupt as error:
+                    interrupted = True
+                    results.append(
+                        CheckResult(
+                            index,
+                            check,
+                            1,
+                            stderr=(
+                                f"parallel_check_interrupted: {check.get('id')}: "
+                                f"KeyboardInterrupt: {error}\n"
+                            ),
+                        )
+                    )
+                    break
+        finally:
+            executor.shutdown(wait=not interrupted, cancel_futures=interrupted)
+        if not interrupted:
+            results.extend(
+                _run_check_result(index, project, check, config, changed_files, runner)
+                for index, check in serial_checks
+            )
+    else:
+        results.extend(
+            _run_check_result(index, project, check, config, changed_files, runner)
+            for index, check in serial_checks
+        )
+
+    failures = 0
+    failed_ids: list[str] = []
+    for result in sorted(results, key=lambda item: item.index):
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr)
+        print(f"duration: {result.check.get('id')} seconds={result.duration_seconds:.2f}")
+        if result.returncode == 0:
+            if result.cache_key is not None:
+                _cache_store(project, result.cache_key, result.check)
+        else:
+            failures += 1
+            failed_ids.append(str(result.check.get("id")))
+    return failures, failed_ids
+
+
 def run_build(project: Path, runner: Runner = subprocess.run) -> int:
     try:
         config = _load_config(project)
@@ -649,65 +792,7 @@ def run_verify(
     selected = checks if full else _selected_checks(checks, changed_files)
     failures = 0
     if full:
-        indexed_selected = list(enumerate(selected))
-        parallel_checks = [(index, check) for index, check in indexed_selected if check.get("parallel") is True]
-        serial_checks = [(index, check) for index, check in indexed_selected if check.get("parallel") is not True]
-        results: list[CheckResult] = []
-        if parallel_checks:
-            max_workers = _max_parallel_checks(config, len(parallel_checks))
-            executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-            interrupted = False
-            try:
-                futures = {
-                    executor.submit(_run_check_result, index, project, check, config, changed_files, runner): (
-                        index,
-                        check,
-                    )
-                    for index, check in parallel_checks
-                }
-                for future in futures:
-                    index, check = futures[future]
-                    try:
-                        results.append(future.result())
-                    except KeyboardInterrupt as error:
-                        interrupted = True
-                        results.append(
-                            CheckResult(
-                                index,
-                                check,
-                                1,
-                                stderr=(
-                                    f"parallel_check_interrupted: {check.get('id')}: "
-                                    f"KeyboardInterrupt: {error}\n"
-                                ),
-                            )
-                        )
-                        break
-            finally:
-                executor.shutdown(wait=not interrupted, cancel_futures=interrupted)
-            if not interrupted:
-                results.extend(
-                    _run_check_result(index, project, check, config, changed_files, runner)
-                    for index, check in serial_checks
-                )
-        else:
-            results.extend(
-                _run_check_result(index, project, check, config, changed_files, runner)
-                for index, check in serial_checks
-            )
-        failed_ids: list[str] = []
-        for result in sorted(results, key=lambda item: item.index):
-            if result.stdout:
-                print(result.stdout, end="")
-            if result.stderr:
-                print(result.stderr, end="", file=sys.stderr)
-            print(f"duration: {result.check.get('id')} seconds={result.duration_seconds:.2f}")
-            if result.returncode == 0:
-                if result.cache_key is not None:
-                    _cache_store(project, result.cache_key, result.check)
-            else:
-                failures += 1
-                failed_ids.append(str(result.check.get("id")))
+        failures, failed_ids = _run_scheduled_checks(project, config, selected, changed_files, runner)
         if failed_ids:
             print(f"failed: {', '.join(failed_ids)}")
         print(f"checked: {_check_ids(selected)}")
@@ -717,6 +802,7 @@ def run_verify(
             return 1
         print("status: passed")
         return 0
+    cache_misses: list[dict[str, Any]] = []
     for check in selected:
         try:
             key = _cache_key(project, config, check, changed_files)
@@ -727,11 +813,11 @@ def run_verify(
         if _cache_load(project, key):
             print(f"cache-hit: {check.get('id')}")
             continue
-        result = _run_check(project, check, runner)
-        if result == 0:
-            _cache_store(project, key, check)
-        else:
-            failures += 1
+        cache_misses.append(check)
+    scheduled_failures, failed_ids = _run_scheduled_checks(project, config, cache_misses, changed_files, runner)
+    failures += scheduled_failures
+    if failed_ids:
+        print(f"failed: {', '.join(failed_ids)}")
     print(f"checked: {_check_ids(selected)}")
     print(f"full-not-run: {str(not full).lower()}")
     if failures:
