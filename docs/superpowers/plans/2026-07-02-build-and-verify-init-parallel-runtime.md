@@ -6,7 +6,7 @@ base-ref: 35717b7e89d2564a2d690733e991bc58d4332b12
 
 # Build and Verify Init Parallel Runtime（构建与验证初始化并行运行时）实施计划
 
-> **For agentic workers（给代理执行者）:** REQUIRED SUB-SKILL（必需子技能）: Use superpowers:subagent-driven-development（子代理驱动开发，推荐）or superpowers:executing-plans（计划执行）to implement this plan task-by-task（逐项实施本计划）. Steps（步骤）use checkbox（复选框）`- [ ]` syntax（语法）for tracking（跟踪）.
+> **For agentic workers（给代理执行者）:** REQUIRED SUB-SKILL（必需子技能）: Use superpowers:subagent-driven-development（子代理驱动开发，推荐）or superpowers:executing-plans（计划执行）to implement this plan task-by-task（逐项实施本计划）. Steps（步骤）use checkbox（复选框）`- [x]` syntax（语法）for tracking（跟踪）.
 
 **Goal（目标）:** 让 `build-and-verify`（构建与验证）只通过 `init --config --overwrite`（初始化覆盖命令）写入已确认配置和 runtime（运行时），并把 check（检查项）之间并行与 pytest（Python 测试框架）内部并行拆成 `checkParallel`（检查项间并行）和 `pytestXdistWorkers`（Pytest 工作进程数）。
 
@@ -38,7 +38,7 @@ base-ref: 35717b7e89d2564a2d690733e991bc58d4332b12
 - Modify（修改）: `tests/test_build_and_verify_plugin.py`
 - Modify（修改）: `plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify_runner.py`
 
-- [ ] **Step 1: Add failing tests（添加失败测试）**
+- [x] **Step 1: Add failing tests（添加失败测试）**
 
 Add tests near existing runner（运行器）config（配置） tests in `tests/test_build_and_verify_plugin.py`:
 
@@ -133,7 +133,7 @@ def test_build_and_verify_runner_rejects_invalid_check_parallel(
     assert "checkParallel must be boolean" in result.stderr
 ```
 
-- [ ] **Step 2: Run tests and verify failure（运行测试并确认失败）**
+- [x] **Step 2: Run tests and verify failure（运行测试并确认失败）**
 
 Run（运行）:
 
@@ -143,7 +143,7 @@ python -m pytest -q tests/test_build_and_verify_plugin.py::test_build_and_verify
 
 Expected（预期）: at least（至少）the legacy `parallel`（旧并行字段） rejection（拒绝） test fails because the runner（运行器） still accepts it.
 
-- [ ] **Step 3: Implement minimal validation（实现最小校验）**
+- [x] **Step 3: Implement minimal validation（实现最小校验）**
 
 In `plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify_runner.py`, inside `_load_config()` check（检查项） loop, add this before existing `paths` / `inputs` validation（校验）:
 
@@ -161,7 +161,7 @@ In `plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify_ru
                 )
 ```
 
-- [ ] **Step 4: Update old tests to new field（更新旧测试字段）**
+- [x] **Step 4: Update old tests to new field（更新旧测试字段）**
 
 In `tests/test_build_and_verify_plugin.py`, replace existing test configs that use:
 
@@ -179,7 +179,7 @@ with:
 
 Do not rename unrelated prose yet; Skill（技能）文案 changes are covered in Task 5.
 
-- [ ] **Step 5: Run focused runner field tests（运行聚焦字段测试）**
+- [x] **Step 5: Run focused runner field tests（运行聚焦字段测试）**
 
 Run（运行）:
 
@@ -197,7 +197,7 @@ Expected（预期）: PASS（通过）。
 - Modify（修改）: `tests/test_build_and_verify_plugin.py`
 - Modify（修改）: `plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify_runner.py`
 
-- [ ] **Step 1: Add failing tests（添加失败测试）**
+- [x] **Step 1: Add failing tests（添加失败测试）**
 
 Add tests near existing `pytest-xdist`（Pytest 并行插件） tests:
 
@@ -314,7 +314,7 @@ def test_build_and_verify_runner_requires_xdist_for_pytest_xdist_workers(
     assert "missing_dependency: pytest-workers: pytest-xdist is required" in captured.err
 ```
 
-- [ ] **Step 2: Run tests and verify failure（运行测试并确认失败）**
+- [x] **Step 2: Run tests and verify failure（运行测试并确认失败）**
 
 Run（运行）:
 
@@ -324,7 +324,7 @@ python -m pytest -q tests/test_build_and_verify_plugin.py -k "pytest_xdist_worke
 
 Expected（预期）: FAIL（失败） because `pytestXdistWorkers`（Pytest 工作进程数） is not implemented.
 
-- [ ] **Step 3: Implement workers parsing（实现进程数字段解析）**
+- [x] **Step 3: Implement workers parsing（实现进程数字段解析）**
 
 In `build_and_verify_runner.py`, add helpers near `uses_pytest_xdist()`:
 
@@ -361,7 +361,7 @@ In `_load_config()`, validate（校验） each check（检查项）:
                 ) from None
 ```
 
-- [ ] **Step 4: Apply workers to pytest commands（把进程数字段应用到 pytest 命令）**
+- [x] **Step 4: Apply workers to pytest commands（把进程数字段应用到 pytest 命令）**
 
 Add helper near `_dependency_error()`:
 
@@ -420,7 +420,7 @@ with:
     )
 ```
 
-- [ ] **Step 5: Run focused workers tests（运行聚焦工作进程测试）**
+- [x] **Step 5: Run focused workers tests（运行聚焦工作进程测试）**
 
 Run（运行）:
 
@@ -438,7 +438,7 @@ Expected（预期）: PASS（通过）。
 - Modify（修改）: `tests/test_build_and_verify_plugin.py`
 - Modify（修改）: `plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify_runner.py`
 
-- [ ] **Step 1: Add failing fast parallel test（添加快速并行失败测试）**
+- [x] **Step 1: Add failing fast parallel test（添加快速并行失败测试）**
 
 Add a test near full verify（完整验证） parallel tests:
 
@@ -503,7 +503,7 @@ def test_build_and_verify_runner_fast_verify_runs_check_parallel_cache_misses_co
     assert "full-not-run: true" in captured.out
 ```
 
-- [ ] **Step 2: Run test and verify failure（运行测试并确认失败）**
+- [x] **Step 2: Run test and verify failure（运行测试并确认失败）**
 
 Run（运行）:
 
@@ -513,7 +513,7 @@ python -m pytest -q tests/test_build_and_verify_plugin.py::test_build_and_verify
 
 Expected（预期）: FAIL（失败） because fast（快速） currently runs selected checks（检查项） serially.
 
-- [ ] **Step 3: Extract shared scheduler（抽出共用调度器）**
+- [x] **Step 3: Extract shared scheduler（抽出共用调度器）**
 
 In `build_and_verify_runner.py`, add a helper before `run_verify()`:
 
@@ -623,11 +623,11 @@ Then simplify `run_verify()` after `selected`:
     return 0
 ```
 
-- [ ] **Step 4: Remove old duplicate full-only branch（删除旧的完整验证专用分支）**
+- [x] **Step 4: Remove old duplicate full-only branch（删除旧的完整验证专用分支）**
 
 Delete the old `if full:` branch and the old serial fast（快速） loop from `run_verify()`. Keep cache（缓存） behavior through `_run_verify_checks(..., use_cache=not full)` only.
 
-- [ ] **Step 5: Run scheduler tests（运行调度器测试）**
+- [x] **Step 5: Run scheduler tests（运行调度器测试）**
 
 Run（运行）:
 
@@ -645,7 +645,7 @@ Expected（预期）: PASS（通过）。
 - Modify（修改）: `tests/test_build_and_verify_plugin.py`
 - Modify（修改）: `plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py`
 
-- [ ] **Step 1: Add failing init tests（添加初始化失败测试）**
+- [x] **Step 1: Add failing init tests（添加初始化失败测试）**
 
 Add tests near existing init（初始化） tests:
 
@@ -750,7 +750,7 @@ def test_build_and_verify_init_config_requires_overwrite_for_existing_config(
     assert "existing_file: .build-and-verify/config.json" in result.stderr
 ```
 
-- [ ] **Step 2: Run tests and verify failure（运行测试并确认失败）**
+- [x] **Step 2: Run tests and verify failure（运行测试并确认失败）**
 
 Run（运行）:
 
@@ -760,7 +760,7 @@ python -m pytest -q tests/test_build_and_verify_plugin.py -k "init_writes_confir
 
 Expected（预期）: FAIL（失败） because `--config`（配置参数） and `--overwrite`（覆盖参数） do not exist.
 
-- [ ] **Step 3: Add parser arguments（添加命令参数）**
+- [x] **Step 3: Add parser arguments（添加命令参数）**
 
 In `build_and_verify.py`, extend init parser（初始化命令解析）:
 
@@ -777,7 +777,7 @@ Change main（主入口）:
         return _init_project(Path(args.project).resolve(), config=Path(args.config).resolve() if args.config else None, overwrite=args.overwrite)
 ```
 
-- [ ] **Step 4: Implement overwrite init（实现覆盖初始化）**
+- [x] **Step 4: Implement overwrite init（实现覆盖初始化）**
 
 In `build_and_verify.py`, add imports and helpers:
 
@@ -852,7 +852,7 @@ def _init_project(project: Path, *, config: Path | None = None, overwrite: bool 
     return 0
 ```
 
-- [ ] **Step 5: Preserve old init behavior（保留旧初始化行为）**
+- [x] **Step 5: Preserve old init behavior（保留旧初始化行为）**
 
 Run（运行）:
 
@@ -874,7 +874,7 @@ Expected（预期）: PASS（通过）。
 - Modify（修改）: `plugins/build-and-verify/skills/build-and-verify-init/references/questionnaire.md`
 - Modify（修改）: `plugins/build-and-verify/skills/build-and-verify-init/references/ecosystem-detection.md`
 
-- [ ] **Step 1: Add failing docs tests（添加文案失败测试）**
+- [x] **Step 1: Add failing docs tests（添加文案失败测试）**
 
 Update existing tests or add these near init Skill（初始化技能） reference tests:
 
@@ -925,7 +925,7 @@ Update `test_build_and_verify_init_template_detects_pytest_xdist_dependency()` t
     }
 ```
 
-- [ ] **Step 2: Run docs tests and verify failure（运行文案测试并确认失败）**
+- [x] **Step 2: Run docs tests and verify failure（运行文案测试并确认失败）**
 
 Run（运行）:
 
@@ -935,7 +935,7 @@ python -m pytest -q tests/test_build_and_verify_plugin.py -k "init_skill_calls_r
 
 Expected（预期）: FAIL（失败） because references（参考文档） still use old wording.
 
-- [ ] **Step 3: Update Skill hard boundaries（更新技能硬边界）**
+- [x] **Step 3: Update Skill hard boundaries（更新技能硬边界）**
 
 In `plugins/build-and-verify/skills/build-and-verify-init/SKILL.md`, replace the old hard boundary:
 
@@ -955,7 +955,7 @@ In Required Flow（必需流程） and Output（输出）, state（说明）:
 - 最终写入时，先把用户确认的草案保存为临时 confirmed config（已确认配置），再调用 `python <build-and-verify-script> init --project <repo> --config <confirmed-config> --overwrite`（初始化覆盖命令）。不得由 agent（代理）直接写 `.build-and-verify/config.json`（配置文件）。
 ```
 
-- [ ] **Step 4: Update reference rules（更新参考规则）**
+- [x] **Step 4: Update reference rules（更新参考规则）**
 
 In `config-draft.md`:
 
@@ -980,7 +980,7 @@ In `questionnaire.md`, Q5/Q6 must name `checkParallel`（检查项间并行） a
 
 In `ecosystem-detection.md`, existing config（已有配置） scan must preserve `checkParallel`（检查项间并行） and `pytestXdistWorkers`（Pytest 工作进程数），and report old `parallel`（旧并行字段） as migration needed.
 
-- [ ] **Step 5: Update test helper validation（更新测试辅助校验）**
+- [x] **Step 5: Update test helper validation（更新测试辅助校验）**
 
 In `tests/test_build_and_verify_plugin.py`, update `init_wizard_targeted_dependency_issues()`:
 
@@ -1023,7 +1023,7 @@ Update `test_build_and_verify_init_template_validates_per_check_runtime_tuning()
         ("parallel", True, False),
 ```
 
-- [ ] **Step 6: Run Skill docs tests（运行技能文案测试）**
+- [x] **Step 6: Run Skill docs tests（运行技能文案测试）**
 
 Run（运行）:
 
@@ -1043,7 +1043,7 @@ Expected（预期）: PASS（通过）。
 - Modify（修改）: `.build-and-verify/runtime/build_and_verify_runner.py`
 - Modify（修改）: `.build-and-verify/runtime/version.json`
 
-- [ ] **Step 1: Update only current repo config（只更新当前仓库配置）**
+- [x] **Step 1: Update only current repo config（只更新当前仓库配置）**
 
 In `.build-and-verify/config.json`, for every current verify check（验证检查项） in `D:\My Project\my-agent-skills`:
 
@@ -1084,7 +1084,7 @@ Example（示例）:
 
 Do not add（不要新增） or update（更新） any path under `D:\My Project\Quant-Research-Lab`.
 
-- [ ] **Step 2: Refresh only current repo runtime snapshot（只刷新当前仓库运行时快照）**
+- [x] **Step 2: Refresh only current repo runtime snapshot（只刷新当前仓库运行时快照）**
 
 Run（运行） from `D:\My Project\my-agent-skills`:
 
@@ -1104,7 +1104,7 @@ Verify（验证） only these files changed for runtime（运行时）:
 git diff -- .build-and-verify/runtime/build_and_verify.py .build-and-verify/runtime/build_and_verify_runner.py .build-and-verify/runtime/version.json
 ```
 
-- [ ] **Step 3: Check forbidden repository was not touched（检查禁用仓库未被触碰）**
+- [x] **Step 3: Check forbidden repository was not touched（检查禁用仓库未被触碰）**
 
 Run（运行）:
 
@@ -1121,7 +1121,7 @@ Expected（预期）: no output（无输出）. If Git（版本管理） refuses
 **Files（文件）:**
 - Modify（修改）: `tests/test_build_and_verify_plugin.py`
 
-- [ ] **Step 1: Add end-to-end regression（添加端到端回归）**
+- [x] **Step 1: Add end-to-end regression（添加端到端回归）**
 
 Add this test near init（初始化） runtime tests:
 
@@ -1192,7 +1192,7 @@ def test_build_and_verify_init_config_overwrite_e2e_temp_target_repo(
     assert (target / "e2e.log").read_text(encoding="utf-8").splitlines() == ["verify", "verify"]
 ```
 
-- [ ] **Step 2: Run end-to-end regression（运行端到端回归）**
+- [x] **Step 2: Run end-to-end regression（运行端到端回归）**
 
 Run（运行）:
 
@@ -1209,7 +1209,7 @@ Expected（预期）: PASS（通过） after Tasks 1-6.
 **Files（文件）:**
 - Verify（验证） only.
 
-- [ ] **Step 1: Run build-and-verify plugin tests（运行构建与验证插件测试）**
+- [x] **Step 1: Run build-and-verify plugin tests（运行构建与验证插件测试）**
 
 Run（运行）:
 
@@ -1219,7 +1219,7 @@ python -m pytest -q tests/test_build_and_verify_plugin.py
 
 Expected（预期）: PASS（通过）.
 
-- [ ] **Step 2: Run OpenSpec strict validation（运行开放规格严格校验）**
+- [x] **Step 2: Run OpenSpec strict validation（运行开放规格严格校验）**
 
 Run（运行）:
 
@@ -1233,7 +1233,7 @@ Expected（预期）: PASS（通过）. If local OpenSpec（开放规格） only
 openspec validate --all --strict --no-interactive
 ```
 
-- [ ] **Step 3: Run repository fast verification（运行仓库快速验证）**
+- [x] **Step 3: Run repository fast verification（运行仓库快速验证）**
 
 Run（运行）:
 
@@ -1243,7 +1243,7 @@ python .build-and-verify/runtime/build_and_verify.py verify --project "D:\My Pro
 
 Expected（预期）: `status: passed`.
 
-- [ ] **Step 4: Run repository full verification（运行仓库完整验证）**
+- [x] **Step 4: Run repository full verification（运行仓库完整验证）**
 
 Run（运行）:
 
@@ -1253,7 +1253,7 @@ python .build-and-verify/runtime/build_and_verify.py verify --project "D:\My Pro
 
 Expected（预期）: `status: passed`.
 
-- [ ] **Step 5: Confirm scope（确认范围）**
+- [x] **Step 5: Confirm scope（确认范围）**
 
 Run（运行）:
 
