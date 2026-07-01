@@ -627,28 +627,9 @@ def gh_pr_merge_policy_blocked(result: subprocess.CompletedProcess[str]) -> bool
     return "base branch policy prohibits the merge" in text
 
 
-def missing_upstream_state(project: Path, config: dict[str, Any]) -> dict[str, Any] | None:
-    base_branch = base_branch_from_config(config)
-    branch_result = git(project, "branch", "--show-current")
-    if branch_result.returncode != 0 or not branch_result.stdout.strip():
-        details = command_failure_details("git_current_branch_failed", branch_result)
-        return stop_state("EXCEPTION_REQUIRED", details["reason"], details)
-    branch = branch_result.stdout.strip()
-
-    upstream_result = git(project, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
-    if upstream_result.returncode == 0 or branch == base_branch:
-        return None
-
-    remote = remote_for_base_branch(config, base_branch)
-    details = command_failure_details("missing_upstream", upstream_result)
-    details.update(
-        {
-            "branch": branch,
-            "baseBranch": base_branch,
-            "nextCommand": f"git push -u {remote} {branch}",
-        }
-    )
-    return stop_state("PUSH_REQUIRED", "push current branch before continuing", details)
+def gh_pr_merge_auto_suggested(result: subprocess.CompletedProcess[str]) -> bool:
+    text = f"{result.stdout}\n{result.stderr}".lower()
+    return "add the --auto flag" in text or "add --auto" in text
 
 
 def auto_push_current_branch_if_needed(project: Path, config: dict[str, Any]) -> dict[str, Any] | None:
@@ -885,7 +866,7 @@ def head_oid(project: Path) -> str:
     return require_git_success(project, "git_head_oid_failed", "rev-parse", "HEAD").stdout.strip()
 
 
-def merge_pr(project: Path, config: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any] | None:
+def merge_pr(project: Path, config: dict[str, Any], pr: dict[str, Any], *, auto: bool = False) -> dict[str, Any] | None:
     pr_number = pr.get("number")
     if isinstance(pr_number, bool) or not isinstance(pr_number, (int, str)) or str(pr_number) == "":
         raise PrFlowError(
@@ -921,7 +902,10 @@ def merge_pr(project: Path, config: dict[str, Any], pr: dict[str, Any]) -> dict[
             },
         )
 
-    result = gh(project, "pr", "merge", str(pr_number), strategy_flag, "--match-head-commit", current_head_oid)
+    merge_args = ["pr", "merge", str(pr_number), strategy_flag, "--match-head-commit", current_head_oid]
+    if auto:
+        merge_args.append("--auto")
+    result = gh(project, *merge_args)
     if result.returncode != 0:
         details = command_failure_details("gh_pr_merge_failed", result)
         details.update(
@@ -934,6 +918,7 @@ def merge_pr(project: Path, config: dict[str, Any], pr: dict[str, Any]) -> dict[
         )
         if gh_pr_merge_policy_blocked(result):
             details["reason"] = "ruleset_merge_blocking"
+            details["autoMergeSuggested"] = gh_pr_merge_auto_suggested(result)
             raise PrFlowError("ruleset_merge_blocking", details)
         raise PrFlowError("gh_pr_merge_failed", details)
     return None
@@ -992,12 +977,19 @@ def retry_merge_after_ruleset_block(
     project: Path,
     config: dict[str, Any],
     pr: dict[str, Any],
+    merge_details: dict[str, Any],
 ) -> dict[str, Any] | None:
     current = sync_pr(project, pr)
     check_stop = wait_for_checks(project, current, wait_config_from_config(config))
     if check_stop is not None:
         return check_stop
-    merge_pr(project, config, current)
+    try:
+        merge_pr(project, config, current, auto=merge_details.get("autoMergeSuggested") is True)
+    except PrFlowError as exc:
+        if exc.reason == "ruleset_merge_blocking" and exc.details.get("autoMergeSuggested") is True:
+            merge_pr(project, config, current, auto=True)
+            return None
+        raise
     return None
 
 
@@ -1220,12 +1212,8 @@ def run_lifecycle(
     try:
         pr = find_pr(project)
         existing_pr = pr is not None
-        if command == "complete":
+        if command in {"complete", "tweak"}:
             push_stop = auto_push_current_branch_if_needed(project, config)
-            if push_stop is not None:
-                return stop_from_state(project, command, push_stop)
-        elif pr is None:
-            push_stop = missing_upstream_state(project, config)
             if push_stop is not None:
                 return stop_from_state(project, command, push_stop)
         if pr is None:
@@ -1266,7 +1254,7 @@ def run_lifecycle(
     except PrFlowError as exc:
         if exc.reason == "ruleset_merge_blocking":
             try:
-                recovery_stop = retry_merge_after_ruleset_block(project, config, pr)
+                recovery_stop = retry_merge_after_ruleset_block(project, config, pr, exc.details)
             except PrFlowError as recovery_exc:
                 return stop(
                     project,
