@@ -2,6 +2,7 @@
 change: sync-build-verify-runtime
 design-doc: docs/superpowers/specs/2026-07-01-sync-build-verify-runtime-design.md
 base-ref: b96a29134761e08bb9a71d917e9fcc8a1c6296c9
+archived-with: 2026-07-01-sync-build-verify-runtime
 ---
 
 # Sync Build And Verify Runtime Implementation Plan
@@ -14,6 +15,7 @@ base-ref: b96a29134761e08bb9a71d917e9fcc8a1c6296c9
 
 **Tech Stack:** Python（Python 语言） standard library, existing pytest（Python 测试运行器） tests, existing OpenSpec（开放规格） docs.
 
+archived-with: 2026-07-01-sync-build-verify-runtime
 ---
 
 ## File Structure

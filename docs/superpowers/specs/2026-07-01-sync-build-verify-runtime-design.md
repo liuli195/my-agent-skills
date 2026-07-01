@@ -2,6 +2,8 @@
 comet_change: sync-build-verify-runtime
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-07-01-sync-build-verify-runtime
+status: final
 ---
 
 # Sync Build And Verify Runtime Design
