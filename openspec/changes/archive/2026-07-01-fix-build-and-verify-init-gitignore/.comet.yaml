@@ -16,4 +16,4 @@ verification_report: docs/superpowers/reports/2026-07-01-fix-build-and-verify-in
 branch_status: handled
 created_at: 2026-07-01
 verified_at: 2026-07-01
-archived: false
+archived: true
