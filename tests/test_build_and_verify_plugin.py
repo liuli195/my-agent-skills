@@ -224,12 +224,17 @@ def init_wizard_targeted_dependency_issues(
     for section, check in init_wizard_iter_checks(config):
         check_id = check.get("id", "<missing-id>")
         command = check.get("command")
-        if init_wizard_uses_pytest_parallel(command) and not xdist_available:
+        command_tokens = init_wizard_command_tokens(command)
+        workers = check.get("pytestXdistWorkers")
+        command_needs_xdist = init_wizard_uses_pytest_parallel(command) or (
+            workers is not None and "pytest" in command_tokens
+        )
+        if command_needs_xdist and not xdist_available:
             issues.append(
                 init_wizard_issue(
-                    f"{check_id} 使用 pytest-xdist（Pytest 并行插件）参数，但当前环境不可用",
+                    f"{check_id} 需要 pytest-xdist（Pytest 并行插件），但当前环境不可用",
                     "该 check（检查项）后续 verify（验证）可能失败。",
-                    "请安装 pytest-xdist（Pytest 并行插件），或移除 `-n` / `--numprocesses` 参数后再运行。",
+                    "请安装 pytest-xdist（Pytest 并行插件），或移除 `pytestXdistWorkers`（Pytest 工作进程数）后再运行。",
                 )
             )
 
@@ -282,8 +287,13 @@ def assert_init_wizard_config_structure(config: dict[str, Any]) -> None:
                     isinstance(value, list)
                     and all(init_wizard_non_empty_string(item) for item in value)
                 )
-            parallel = check.get("parallel")
-            assert parallel is None or isinstance(parallel, bool)
+            assert "parallel" not in check
+            check_parallel = check.get("checkParallel")
+            assert check_parallel is None or isinstance(check_parallel, bool)
+            workers = check.get("pytestXdistWorkers")
+            assert workers is None or workers == "auto" or (
+                not isinstance(workers, bool) and isinstance(workers, int) and workers > 0
+            )
             check_timeout_seconds = check.get("timeoutSeconds")
             assert check_timeout_seconds is None or (
                 not isinstance(check_timeout_seconds, bool)
@@ -927,13 +937,15 @@ def test_build_and_verify_init_config_draft_rules_cover_commands_paths_inputs_an
         "inputs（缓存输入）",
         "verify.maxParallel",
         "verify.timeoutSeconds",
-        "parallel: true",
+        "checkParallel",
+        "pytestXdistWorkers",
         "auto（自动）语义",
         "只能在解释含义并获得用户确认后写入",
     ]:
         assert token in text
     assert "inputs（缓存输入）默认从 paths（受影响路径）和 command（命令）来源推导" in text
     assert "写入前必须逐项展示 inputs（缓存输入）并等待用户确认" not in text
+    assert "`parallel: true`" not in text
 
 
 def test_build_and_verify_init_references_have_cross_file_flow_invariants() -> None:
@@ -981,6 +993,34 @@ def test_build_and_verify_init_skill_closes_interactive_validation_loop_inside_p
     assert "试运行）" not in text
 
 
+def test_build_and_verify_init_skill_calls_runtime_init_config_overwrite() -> None:
+    skill = (INIT_SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    validation = (INIT_REFERENCE_ROOT / "validation.md").read_text(encoding="utf-8")
+
+    assert "init --config --overwrite" in skill
+    assert "init --config --overwrite" in validation
+    assert "仍只写空模板" not in skill
+    assert "不得由 agent（代理）直接写 `.build-and-verify/config.json`" in skill
+
+
+def test_build_and_verify_init_references_use_check_parallel_and_pytest_workers() -> None:
+    text = "\n".join(
+        (INIT_SKILL_ROOT / name).read_text(encoding="utf-8")
+        for name in [
+            "SKILL.md",
+            "references/questionnaire.md",
+            "references/ecosystem-detection.md",
+            "references/config-draft.md",
+            "references/validation.md",
+        ]
+    )
+
+    assert "checkParallel" in text
+    assert "pytestXdistWorkers" in text
+    assert "`parallel: true`" not in text
+    assert "保留 check id（检查项标识）、command（命令）、paths（受影响路径）、inputs（缓存输入）、parallel" not in text
+
+
 def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_config_validation() -> None:
     text = (INIT_REFERENCE_ROOT / "validation.md").read_text(encoding="utf-8")
 
@@ -999,6 +1039,8 @@ def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_conf
         "/backups/",
         "config（配置）结构校验",
         "verify.timeoutSeconds",
+        "checkParallel",
+        "pytestXdistWorkers",
         "大于 0 的 number（数字）",
         "允许为空 string list（字符串清单）",
         "Closed Loop（闭环）",
@@ -1013,9 +1055,8 @@ def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_conf
     ordered_steps = [
         "写入前执行 targeted dependency checks（定向依赖检查）",
         "写入前执行 environment checks（环境检查）",
-        "用户最终确认后，确保 `.build-and-verify/.gitignore`（忽略规则）包含默认本地目录规则",
-        "必要时备份已有配置",
-        "写入 `.build-and-verify/config.json`（配置文件）",
+        "用户最终确认后，把草案保存为临时 confirmed config（已确认配置）",
+        "init --config --overwrite",
         "写入后执行 config（配置）结构校验",
     ]
     positions = [text.index(step) for step in ordered_steps]
@@ -1136,7 +1177,8 @@ def test_build_and_verify_pytest_options_live_in_explicit_commands() -> None:
         if "pytest" in command:
             tokens = command.split()
             assert " -q " in f" {command} "
-            assert "-n" in tokens
+            assert "-n" not in tokens
+            assert check["pytestXdistWorkers"]
             assert "-p" in tokens
             assert "no:cacheprovider" in tokens
             assert " tests/" in f" {command} "
@@ -1244,6 +1286,128 @@ def test_build_and_verify_init_copies_repository_runtime(tmp_path: Path) -> None
     assert (runtime / "build_and_verify.py").is_file()
     assert (runtime / "build_and_verify_runner.py").is_file()
     assert (runtime / "version.json").is_file()
+
+
+def test_build_and_verify_init_writes_confirmed_config_with_overwrite(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    build_dir = project / ".build-and-verify"
+    build_dir.mkdir()
+    old_config = {"version": 1, "build": {"checks": []}, "verify": {"checks": []}}
+    confirmed_config = {
+        "version": 1,
+        "build": {"checks": []},
+        "verify": {
+            "checks": [
+                {
+                    "id": "verify.confirmed",
+                    "command": command_that_logs("confirmed"),
+                    "inputs": [],
+                }
+            ]
+        },
+    }
+    write_json(build_dir / "config.json", old_config)
+    (build_dir / ".gitignore").write_text("/custom/\n/cache/\n", encoding="utf-8")
+    confirmed = tmp_path / "confirmed.json"
+    write_json(confirmed, confirmed_config)
+
+    result = run_build_and_verify(
+        "init",
+        "--project",
+        str(project),
+        "--config",
+        str(confirmed),
+        "--overwrite",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert read_json(build_dir / "config.json") == confirmed_config
+    backups = list((build_dir / "backups").glob("config-*.json"))
+    assert len(backups) == 1
+    assert read_json(backups[0]) == old_config
+    assert set((build_dir / ".gitignore").read_text(encoding="utf-8").splitlines()) == {
+        "/custom/",
+        "/cache/",
+        "/runs/",
+        "/backups/",
+    }
+    assert (build_dir / "runtime" / "build_and_verify.py").is_file()
+    assert (build_dir / "cache").is_dir()
+
+
+def test_build_and_verify_init_config_overwrite_e2e_temp_target_repo(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target-repo"
+    target.mkdir()
+    assert git(target, "init").returncode == 0
+    assert git(target, "config", "user.email", "test@example.invalid").returncode == 0
+    assert git(target, "config", "user.name", "Test User").returncode == 0
+    confirmed = tmp_path / "confirmed.json"
+    verify_script = (
+        "from pathlib import Path; "
+        "Path('e2e.log').open('a', encoding='utf-8').write('verify\\n')"
+    )
+    write_json(
+        confirmed,
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "verify.e2e",
+                        "command": [sys.executable, "-c", verify_script],
+                        "paths": ["src/**"],
+                        "inputs": ["src"],
+                        "checkParallel": True,
+                    }
+                ]
+            },
+        },
+    )
+    (target / "src").mkdir()
+    (target / "src" / "app.py").write_text("print('ok')\n", encoding="utf-8")
+
+    init = run_build_and_verify(
+        "init",
+        "--project",
+        str(target),
+        "--config",
+        str(confirmed),
+        "--overwrite",
+    )
+    repository_script = target / ".build-and-verify" / "runtime" / "build_and_verify.py"
+    fast = subprocess.run(
+        [sys.executable, str(repository_script), "verify", "--project", str(target)],
+        cwd=target,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    full = subprocess.run(
+        [sys.executable, str(repository_script), "verify", "--project", str(target), "--full"],
+        cwd=target,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert init.returncode == 0, init.stdout + init.stderr
+    assert (target / ".build-and-verify" / "config.json").is_file()
+    assert (target / ".build-and-verify" / "cache").is_dir()
+    assert repository_script.is_file()
+    assert fast.returncode == 0, fast.stdout + fast.stderr
+    assert "full-not-run: true" in fast.stdout
+    assert full.returncode == 0, full.stdout + full.stderr
+    assert "full-not-run: false" in full.stdout
+    assert (target / "e2e.log").read_text(encoding="utf-8").splitlines() == [
+        "verify",
+        "verify",
+    ]
 
 
 def test_copied_repository_runtime_can_initialize_another_project(tmp_path: Path) -> None:
@@ -1466,7 +1630,7 @@ def test_build_and_verify_init_template_simulation_writes_backup_and_valid_confi
                     "command": [sys.executable, "-m", "pytest", "--version"],
                     "paths": ["src/**", "tests/**"],
                     "inputs": ["pyproject.toml", "pytest.ini", "src", "tests"],
-                    "parallel": True,
+                    "checkParallel": True,
                     "timeoutSeconds": 30,
                 }
             ],
@@ -1632,7 +1796,8 @@ def test_build_and_verify_init_template_detects_pytest_xdist_dependency(
             "checks": [
                 {
                     "id": "verify.pytest-parallel",
-                    "command": "python -m pytest -n auto",
+                    "command": "python -m pytest",
+                    "pytestXdistWorkers": "auto",
                 },
                 {"id": "verify.pytest-serial", "command": "python -m pytest"},
             ]
@@ -1965,11 +2130,14 @@ def test_build_and_verify_init_template_validates_runtime_tuning_boundaries(
 @pytest.mark.parametrize(
     ("field", "value", "valid"),
     [
-        ("parallel", True, True),
-        ("parallel", None, True),
-        ("parallel", False, True),
-        ("parallel", "true", False),
-        ("parallel", 1, False),
+        ("checkParallel", True, True),
+        ("checkParallel", False, True),
+        ("checkParallel", "true", False),
+        ("pytestXdistWorkers", "auto", True),
+        ("pytestXdistWorkers", 1, True),
+        ("pytestXdistWorkers", 0, False),
+        ("pytestXdistWorkers", True, False),
+        ("parallel", True, False),
         ("timeoutSeconds", 0.5, True),
         ("timeoutSeconds", 1, True),
         ("timeoutSeconds", None, True),
@@ -2071,6 +2239,96 @@ def test_build_and_verify_runner_full_verify_allows_empty_checks(tmp_path: Path)
     assert "status: passed" in result.stdout
 
 
+def test_build_and_verify_runner_rejects_legacy_parallel_field(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".build-and-verify").mkdir()
+    write_json(
+        project / ".build-and-verify" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "legacy-parallel",
+                        "command": command_that_logs("legacy-parallel"),
+                        "parallel": True,
+                        "inputs": [],
+                    }
+                ]
+            },
+        },
+    )
+
+    result = run_check(project, "verify", "--full")
+
+    assert result.returncode == 1
+    assert "parallel is no longer supported; use checkParallel" in result.stderr
+    assert "status: failed" in result.stdout
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_build_and_verify_runner_accepts_check_parallel_bool(
+    tmp_path: Path, value: bool
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".build-and-verify").mkdir()
+    write_json(
+        project / ".build-and-verify" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "check-parallel",
+                        "command": command_that_logs("check-parallel"),
+                        "checkParallel": value,
+                        "inputs": [],
+                    }
+                ]
+            },
+        },
+    )
+
+    result = run_check(project, "verify", "--full")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("value", ["true", 1, 0, None])
+def test_build_and_verify_runner_rejects_invalid_check_parallel(
+    tmp_path: Path, value: object
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".build-and-verify").mkdir()
+    write_json(
+        project / ".build-and-verify" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "bad-check-parallel",
+                        "command": command_that_logs("bad-check-parallel"),
+                        "checkParallel": value,
+                        "inputs": [],
+                    }
+                ]
+            },
+        },
+    )
+
+    result = run_check(project, "verify", "--full")
+
+    assert result.returncode == 1
+    assert "checkParallel must be boolean" in result.stderr
+
+
 def test_build_and_verify_runner_full_verify_runs_parallel_checks_concurrently(tmp_path: Path, capsys) -> None:
     import threading
     import time
@@ -2086,9 +2344,9 @@ def test_build_and_verify_runner_full_verify_runs_parallel_checks_concurrently(t
             "build": {"checks": []},
             "verify": {
                 "checks": [
-                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
-                    {"id": "parallel-b", "command": ["parallel-b"], "parallel": True, "inputs": []},
-                    {"id": "serial-c", "command": ["serial-c"], "parallel": False, "inputs": []},
+                    {"id": "parallel-a", "command": ["parallel-a"], "checkParallel": True, "inputs": []},
+                    {"id": "parallel-b", "command": ["parallel-b"], "checkParallel": True, "inputs": []},
+                    {"id": "serial-c", "command": ["serial-c"], "checkParallel": False, "inputs": []},
                 ]
             },
         },
@@ -2119,6 +2377,66 @@ def test_build_and_verify_runner_full_verify_runs_parallel_checks_concurrently(t
     assert "full-not-run: false" in captured.out
 
 
+def test_build_and_verify_runner_fast_verify_runs_check_parallel_cache_misses_concurrently(
+    tmp_path: Path, capsys
+) -> None:
+    import threading
+    import time
+
+    module = load_build_and_verify_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".build-and-verify").mkdir()
+    (project / "src").mkdir()
+    (project / "src" / "app.py").write_text("changed\n", encoding="utf-8")
+    write_json(
+        project / ".build-and-verify" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "fast-a",
+                        "command": ["fast-a"],
+                        "paths": ["src/**"],
+                        "inputs": ["src"],
+                        "checkParallel": True,
+                    },
+                    {
+                        "id": "fast-b",
+                        "command": ["fast-b"],
+                        "paths": ["src/**"],
+                        "inputs": ["src"],
+                        "checkParallel": True,
+                    },
+                ]
+            },
+        },
+    )
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def fake_runner(command, **_kwargs):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.2)
+        with lock:
+            active -= 1
+        return subprocess.CompletedProcess(command, 0, stdout=f"{command[0]}\n", stderr="")
+
+    result = module._runner().run_verify(project, runner=fake_runner, full=False)
+    captured = capsys.readouterr()
+
+    assert result == 0
+    assert max_active > 1
+    assert "checked: fast-a, fast-b" in captured.out
+    assert "full-not-run: true" in captured.out
+
+
 def test_build_and_verify_runner_full_verify_honors_max_parallel_checks(tmp_path: Path) -> None:
     import threading
     import time
@@ -2135,9 +2453,9 @@ def test_build_and_verify_runner_full_verify_honors_max_parallel_checks(tmp_path
             "verify": {
                 "maxParallel": 2,
                 "checks": [
-                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
-                    {"id": "parallel-b", "command": ["parallel-b"], "parallel": True, "inputs": []},
-                    {"id": "parallel-c", "command": ["parallel-c"], "parallel": True, "inputs": []},
+                    {"id": "parallel-a", "command": ["parallel-a"], "checkParallel": True, "inputs": []},
+                    {"id": "parallel-b", "command": ["parallel-b"], "checkParallel": True, "inputs": []},
+                    {"id": "parallel-c", "command": ["parallel-c"], "checkParallel": True, "inputs": []},
                 ],
             },
         },
@@ -2181,9 +2499,9 @@ def test_build_and_verify_runner_full_verify_zero_max_parallel_means_unlimited(
             "verify": {
                 "maxParallel": 0,
                 "checks": [
-                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
-                    {"id": "parallel-b", "command": ["parallel-b"], "parallel": True, "inputs": []},
-                    {"id": "parallel-c", "command": ["parallel-c"], "parallel": True, "inputs": []},
+                    {"id": "parallel-a", "command": ["parallel-a"], "checkParallel": True, "inputs": []},
+                    {"id": "parallel-b", "command": ["parallel-b"], "checkParallel": True, "inputs": []},
+                    {"id": "parallel-c", "command": ["parallel-c"], "checkParallel": True, "inputs": []},
                 ],
             },
         },
@@ -2223,7 +2541,7 @@ def test_build_and_verify_runner_rejects_negative_max_parallel(tmp_path: Path) -
             "verify": {
                 "maxParallel": -1,
                 "checks": [
-                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                    {"id": "parallel-a", "command": ["parallel-a"], "checkParallel": True, "inputs": []},
                 ],
             },
         },
@@ -2254,7 +2572,7 @@ def test_build_and_verify_runner_reports_missing_xdist_before_running_pytest(
                     {
                         "id": "pytest-parallel",
                         "command": "python -m pytest -n 8 tests",
-                        "parallel": False,
+                        "checkParallel": False,
                         "inputs": [],
                     },
                 ],
@@ -2278,6 +2596,152 @@ def test_build_and_verify_runner_reports_missing_xdist_before_running_pytest(
     assert "status: failed" in captured.out
 
 
+@pytest.mark.parametrize("workers", ["auto", 1, 8])
+def test_build_and_verify_runner_applies_pytest_xdist_workers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, workers: object
+) -> None:
+    module = load_build_and_verify_module()
+    runner = module._runner()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".build-and-verify").mkdir()
+    write_json(
+        project / ".build-and-verify" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "pytest-workers",
+                        "command": [sys.executable, "-m", "pytest", "tests"],
+                        "pytestXdistWorkers": workers,
+                        "inputs": [],
+                    }
+                ]
+            },
+        },
+    )
+    calls = []
+
+    def fake_runner(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        runner.importlib.util,
+        "find_spec",
+        lambda name: object() if name == "xdist" else None,
+    )
+
+    result = runner.run_verify(project, runner=fake_runner, full=True)
+
+    assert result == 0
+    assert calls == [[sys.executable, "-m", "pytest", "-n", str(workers), "tests"]]
+
+
+@pytest.mark.parametrize("workers", [0, -1, True, "8", ""])
+def test_build_and_verify_runner_rejects_invalid_pytest_xdist_workers(
+    tmp_path: Path, workers: object
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".build-and-verify").mkdir()
+    write_json(
+        project / ".build-and-verify" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "bad-workers",
+                        "command": [sys.executable, "-m", "pytest"],
+                        "pytestXdistWorkers": workers,
+                        "inputs": [],
+                    }
+                ]
+            },
+        },
+    )
+
+    result = run_check(project, "verify", "--full")
+
+    assert result.returncode == 1
+    assert 'pytestXdistWorkers must be "auto" or positive integer' in result.stderr
+
+
+def test_build_and_verify_runner_rejects_pytest_xdist_workers_on_non_pytest_command(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".build-and-verify").mkdir()
+    write_json(
+        project / ".build-and-verify" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "not-pytest",
+                        "command": [sys.executable, "-m", "unittest"],
+                        "pytestXdistWorkers": 8,
+                        "inputs": [],
+                    }
+                ]
+            },
+        },
+    )
+
+    result = run_check(project, "verify", "--full")
+
+    assert result.returncode == 1
+    assert "pytestXdistWorkers requires pytest command" in result.stderr
+
+
+def test_build_and_verify_runner_requires_xdist_for_pytest_xdist_workers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    module = load_build_and_verify_module()
+    runner = module._runner()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".build-and-verify").mkdir()
+    write_json(
+        project / ".build-and-verify" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "pytest-workers",
+                        "command": [sys.executable, "-m", "pytest"],
+                        "pytestXdistWorkers": "auto",
+                        "inputs": [],
+                    }
+                ]
+            },
+        },
+    )
+    calls = []
+
+    def fake_runner(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(runner.importlib.util, "find_spec", lambda _name: None)
+
+    result = runner.run_verify(project, runner=fake_runner, full=True)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert calls == []
+    assert "missing_dependency: pytest-workers: pytest-xdist is required" in captured.err
+
+
 def test_build_and_verify_runner_full_verify_aggregates_missing_xdist_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
@@ -2296,13 +2760,13 @@ def test_build_and_verify_runner_full_verify_aggregates_missing_xdist_failures(
                     {
                         "id": "pytest-a",
                         "command": "python -m pytest -n 8 tests/a",
-                        "parallel": True,
+                        "checkParallel": True,
                         "inputs": [],
                     },
                     {
                         "id": "pytest-b",
                         "command": [sys.executable, "-m", "pytest", "-n", "8", "tests/b"],
-                        "parallel": True,
+                        "checkParallel": True,
                         "inputs": [],
                     },
                 ],
@@ -2346,7 +2810,7 @@ def test_build_and_verify_runner_rejects_invalid_check_timeout_seconds(
                         "id": "invalid-timeout",
                         "command": command_that_logs("invalid-timeout"),
                         "timeoutSeconds": timeout_seconds,
-                        "parallel": False,
+                        "checkParallel": False,
                         "inputs": [],
                     },
                 ],
@@ -2376,7 +2840,7 @@ def test_build_and_verify_runner_full_verify_reports_parallel_check_timeout(
             "verify": {
                 "timeoutSeconds": 1,
                 "checks": [
-                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                    {"id": "parallel-a", "command": ["parallel-a"], "checkParallel": True, "inputs": []},
                 ],
             },
         },
@@ -2408,7 +2872,7 @@ def test_build_and_verify_runner_full_verify_reports_parallel_check_exception(
             "build": {"checks": []},
             "verify": {
                 "checks": [
-                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                    {"id": "parallel-a", "command": ["parallel-a"], "checkParallel": True, "inputs": []},
                 ],
             },
         },
@@ -2440,7 +2904,7 @@ def test_build_and_verify_runner_full_verify_reports_keyboard_interrupt_from_par
             "build": {"checks": []},
             "verify": {
                 "checks": [
-                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
+                    {"id": "parallel-a", "command": ["parallel-a"], "checkParallel": True, "inputs": []},
                 ],
             },
         },
@@ -2472,8 +2936,8 @@ def test_build_and_verify_runner_full_verify_skips_serial_checks_after_parallel_
             "build": {"checks": []},
             "verify": {
                 "checks": [
-                    {"id": "parallel-a", "command": ["parallel-a"], "parallel": True, "inputs": []},
-                    {"id": "serial-after-interrupt", "command": ["serial-after-interrupt"], "parallel": False, "inputs": []},
+                    {"id": "parallel-a", "command": ["parallel-a"], "checkParallel": True, "inputs": []},
+                    {"id": "serial-after-interrupt", "command": ["serial-after-interrupt"], "checkParallel": False, "inputs": []},
                 ],
             },
         },
@@ -2512,8 +2976,8 @@ def test_build_and_verify_runner_full_verify_reports_serial_failure_after_parall
             "build": {"checks": []},
             "verify": {
                 "checks": [
-                    {"id": "parallel-pass", "command": ["parallel-pass"], "parallel": True, "inputs": []},
-                    {"id": "serial-fail", "command": ["serial-fail"], "parallel": False, "inputs": []},
+                    {"id": "parallel-pass", "command": ["parallel-pass"], "checkParallel": True, "inputs": []},
+                    {"id": "serial-fail", "command": ["serial-fail"], "checkParallel": False, "inputs": []},
                 ],
             },
         },

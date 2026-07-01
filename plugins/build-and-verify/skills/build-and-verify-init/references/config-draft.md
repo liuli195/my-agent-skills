@@ -32,7 +32,8 @@
 ## Existing Configuration（已有配置）
 
 - 已有 `.build-and-verify/config.json`（配置文件）候选尽量原样保留。
-- 保留 check id（检查项标识）、command（命令）、paths（受影响路径）、inputs（缓存输入）、parallel（并行检查）和 timeoutSeconds（超时秒数）。
+- 保留 check id（检查项标识）、command（命令）、paths（受影响路径）、inputs（缓存输入）、checkParallel（检查项间并行）、pytestXdistWorkers（Pytest 工作进程数）和 timeoutSeconds（超时秒数）。
+- 已有配置含旧 `parallel`（旧并行字段）时，必须提示用户迁移为 `checkParallel`（检查项间并行），不得写入新草案。
 - 覆盖前展示覆盖摘要、自动生成的备份路径和最终写入确认。
 
 ## Generic Candidates（通用候选）
@@ -96,5 +97,7 @@
 
 - `verify.maxParallel`（最大并行检查数）只能在解释含义并获得用户确认后写入。
 - `verify.timeoutSeconds`（超时秒数）只能在解释含义并获得用户确认后写入。
-- `parallel: true`（并行检查）只能在解释 runner（运行器）并行语义并获得用户确认后写入。
+- `checkParallel: true`（检查项间并行）只能在解释 runner（运行器）并行语义并获得用户确认后写入。
+- `pytestXdistWorkers`（Pytest 工作进程数）只能在 command（命令）是 pytest（Python 测试框架）命令、解释 pytest-xdist（Pytest 并行插件）依赖并获得用户确认后写入；值只能是 `"auto"`（自动）或正整数。
+- `parallel`（旧并行字段）不得写入新草案；已有配置含该字段时，必须提示用户重新确认并迁移为 `checkParallel`（检查项间并行）。
 - 并行默认推荐 auto（自动）语义；如果某个工具没有 auto（自动）语义，不能硬编码 auto（自动）参数。

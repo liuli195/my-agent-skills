@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 from types import ModuleType
 
@@ -142,6 +143,34 @@ def _copy_runtime(project: Path) -> None:
     )
 
 
+def _load_config_file(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise ValueError(f"missing_config_file: {path}") from None
+    except json.JSONDecodeError as error:
+        raise ValueError(f"invalid_config_file: {path}: {error.msg}") from None
+    if not isinstance(data, dict):
+        raise ValueError(f"invalid_config_file: {path}: root must be object")
+    return data
+
+
+def _merge_gitignore(path: Path) -> None:
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    for entry in DEFAULT_GITIGNORE.splitlines():
+        if entry not in lines:
+            lines.append(entry)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _backup_config(config_target: Path, project: Path) -> Path:
+    backup_dir = project / ".build-and-verify" / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup = backup_dir / f"config-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+    shutil.copy2(config_target, backup)
+    return backup
+
+
 def _runner() -> ModuleType:
     global _RUNNER_MODULE
     if _RUNNER_MODULE is not None:
@@ -157,27 +186,41 @@ def _runner() -> ModuleType:
     return module
 
 
-def _init_project(project: Path) -> int:
+def _init_project(
+    project: Path,
+    *,
+    config: Path | None = None,
+    overwrite: bool = False,
+) -> int:
     config_target = project / ".build-and-verify" / "config.json"
     gitignore_target = project / ".build-and-verify" / ".gitignore"
     runtime_target = _runtime_target(project)
+    try:
+        confirmed_config = DEFAULT_CONFIG if config is None else _load_config_file(config)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1
 
     # Preflight before mkdir/copy so a failed init does not create framework artifacts.
-    for target in [config_target, gitignore_target, runtime_target]:
-        if target.exists():
-            print(f"existing_file: {target.relative_to(project).as_posix()}", file=sys.stderr)
-            return 1
+    if not overwrite or config is None:
+        for target in [config_target, gitignore_target, runtime_target]:
+            if target.exists():
+                print(f"existing_file: {target.relative_to(project).as_posix()}", file=sys.stderr)
+                return 1
 
     project.mkdir(parents=True, exist_ok=True)
     config_target.parent.mkdir(parents=True, exist_ok=True)
+    backup = _backup_config(config_target, project) if config_target.exists() else None
+    _merge_gitignore(gitignore_target)
     config_target.write_text(
-        json.dumps(DEFAULT_CONFIG, ensure_ascii=False, indent=2) + "\n",
+        json.dumps(confirmed_config, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    gitignore_target.write_text(DEFAULT_GITIGNORE, encoding="utf-8")
     _copy_runtime(project)
     (project / ".build-and-verify" / "cache").mkdir(parents=True, exist_ok=True)
 
+    if backup is not None:
+        print(f"backup: {backup.relative_to(project).as_posix()}")
     print("status: initialized")
     return 0
 
@@ -193,6 +236,8 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     init_parser = subparsers.add_parser("init")
     init_parser.add_argument("--project", required=True)
+    init_parser.add_argument("--config")
+    init_parser.add_argument("--overwrite", action="store_true")
     update_parser = subparsers.add_parser("update-runtime")
     update_parser.add_argument("--project", required=True)
     build_parser = subparsers.add_parser("build")
@@ -210,7 +255,11 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit as error:
         return int(error.code) if isinstance(error.code, int) else 2
     if args.command == "init":
-        return _init_project(Path(args.project).resolve())
+        return _init_project(
+            Path(args.project).resolve(),
+            config=Path(args.config).resolve() if args.config else None,
+            overwrite=bool(args.overwrite),
+        )
     if args.command == "update-runtime":
         return _update_runtime(Path(args.project).resolve())
     if args.command == "build":
