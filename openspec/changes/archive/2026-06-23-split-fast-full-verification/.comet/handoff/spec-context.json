@@ -1,0 +1,17 @@
+{
+  "change": "split-fast-full-verification",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "3610ebb69513edb02dd335563207e94b770230b7b4d4a7da0ee41b21d42a29f2",
+  "files": [
+    { "path": "openspec/changes/split-fast-full-verification/proposal.md", "sha256": "17eaae994d8805675cbae3ca2d317d4955e3c84385da2498fa04ac01f9af0d40", "role": "supporting" },
+    { "path": "openspec/changes/split-fast-full-verification/design.md", "sha256": "e8fea13ae3098d930df4302fce1d0f7a3091b33af35e8473881f091b4124d811", "role": "supporting" },
+    { "path": "openspec/changes/split-fast-full-verification/tasks.md", "sha256": "af922cabcbddcfb355bc208d2c1b5432af534c1308d1e03d3a973cb638b9dc23", "role": "supporting" },
+    { "path": "openspec/changes/split-fast-full-verification/specs/local-plugin-build-checks/spec.md", "sha256": "8101e5454fda0a1dd0735e89069aa2be0b715cb8cfe3d375838aa959ba4f32d8", "role": "spec" },
+    { "path": "openspec/changes/split-fast-full-verification/specs/local-verification-modes/spec.md", "sha256": "305b2343e85f369bc10bf1cb58ef5acd1f4eac171de6808063277c0ba3b15edb", "role": "spec" },
+    { "path": "openspec/changes/split-fast-full-verification/specs/pr-flow-plugin/spec.md", "sha256": "2499822caa636472c00b335c7cbb520e24429b8d9b599d310666915ae803f62d", "role": "spec" },
+    { "path": "openspec/changes/split-fast-full-verification/specs/test-framework-plugin/spec.md", "sha256": "95144ca8ce41c000a05fe7c007caae25151b7d9c90e1dd6ebe7ea0f445ec26e7", "role": "spec" }
+  ]
+}
