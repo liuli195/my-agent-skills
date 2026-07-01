@@ -1,0 +1,14 @@
+{
+  "change": "prefer-codeql-default-setup",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "dffa350f6b0ebc9cd1af386e990084e85796717c05c81d67a09ba466495b0605",
+  "files": [
+    { "path": "openspec/changes/prefer-codeql-default-setup/proposal.md", "sha256": "d0912357a88a602b02fab9ac91c4612d7912ffd3cced35336ace3c606340f241", "role": "supporting" },
+    { "path": "openspec/changes/prefer-codeql-default-setup/design.md", "sha256": "15063fc641b94b3b27b8ce89c2a1f3970ff46b6ca77f6620a9c9fae00a7b6da3", "role": "supporting" },
+    { "path": "openspec/changes/prefer-codeql-default-setup/tasks.md", "sha256": "7c19cf3157ec410c3b054ec6475c5448f452d5fcb39f0acc988faf3fa139a472", "role": "supporting" },
+    { "path": "openspec/changes/prefer-codeql-default-setup/specs/pr-flow-plugin/spec.md", "sha256": "294f1335a3f01e327aad11e8b1a00204a7b4aeb69ad51ff57254c21882b22ca7", "role": "spec" }
+  ]
+}
