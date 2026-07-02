@@ -48,7 +48,7 @@
           "tests/test_local_plugin_build_checks.py"
         ],
         "checkParallel": true,
-        "pytestXdistWorkers": 8
+        "pytestXdistWorkers": "auto"
       },
       {
         "id": "verify.agent-guard",
@@ -85,7 +85,7 @@
           "tests/test_init_project_guard.py"
         ],
         "checkParallel": true,
-        "pytestXdistWorkers": 8
+        "pytestXdistWorkers": "auto"
       },
       {
         "id": "verify.release-flow",
@@ -110,7 +110,7 @@
           "tests/test_release_flow_plugin_package.py"
         ],
         "checkParallel": true,
-        "pytestXdistWorkers": 8
+        "pytestXdistWorkers": "auto"
       },
       {
         "id": "verify.pr-flow",
@@ -156,7 +156,7 @@
           "tests/test_cross_agent_review_plugin_package.py"
         ],
         "checkParallel": true,
-        "pytestXdistWorkers": 8
+        "pytestXdistWorkers": "auto"
       },
       {
         "id": "verify.build-and-verify",
@@ -167,9 +167,10 @@
           ".build-and-verify/**",
           "requirements-dev.txt",
           "plugins/build-and-verify/**",
-          "tests/test_build_and_verify_plugin.py"
+          "tests/test_build_and_verify_plugin.py",
+          "tests/test_test_runtime_boundaries.py"
         ],
-        "command": "python -m pytest -q -p no:cacheprovider tests/test_build_and_verify_plugin.py",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_build_and_verify_plugin.py tests/test_test_runtime_boundaries.py",
         "inputs": [
           ".agents",
           ".claude-plugin",
@@ -178,10 +179,11 @@
           ".build-and-verify/runtime",
           "requirements-dev.txt",
           "plugins/build-and-verify",
-          "tests/test_build_and_verify_plugin.py"
+          "tests/test_build_and_verify_plugin.py",
+          "tests/test_test_runtime_boundaries.py"
         ],
         "checkParallel": true,
-        "pytestXdistWorkers": 8
+        "pytestXdistWorkers": "auto"
       },
       {
         "id": "verify.openspec",

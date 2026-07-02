@@ -1,3 +1,6 @@
+import contextlib
+import importlib.util
+import io
 import json
 import subprocess
 import sys
@@ -7,6 +10,36 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "cross-agent-review"
 SCRIPT = PLUGIN_ROOT / "skills" / "cross-agent-review" / "scripts" / "cross_agent_review.py"
+_SCRIPT_MODULE = None
+
+
+def script_module():
+    global _SCRIPT_MODULE
+    if _SCRIPT_MODULE is not None:
+        return _SCRIPT_MODULE
+    spec = importlib.util.spec_from_file_location("cross_agent_review_package_for_tests", SCRIPT)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    _SCRIPT_MODULE = module
+    return module
+
+
+def run_script(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.chdir(cwd or REPO_ROOT), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        try:
+            returncode = int(script_module().main(args))
+        except SystemExit as error:
+            returncode = error.code if isinstance(error.code, int) else 1
+    return subprocess.CompletedProcess(
+        [sys.executable, str(SCRIPT), *args],
+        returncode,
+        stdout.getvalue(),
+        stderr.getvalue(),
+    )
 
 
 def read_json(path: Path) -> dict:
@@ -170,25 +203,18 @@ def test_cross_agent_review_spec_documents_lightweight_review_input_contract() -
 
 
 def test_cross_agent_review_rejects_removed_cli_options(tmp_path: Path) -> None:
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(SCRIPT),
-            "run",
-            "--input-file",
-            str(tmp_path / "review-input.json"),
-            "--spec-file",
-            str(tmp_path / "spec.md"),
-            "--design-file",
-            str(tmp_path / "design.md"),
-            "--tasks-file",
-            str(tmp_path / "tasks.md"),
-            "--disable-risk-review",
-        ],
+    result = run_script(
+        "run",
+        "--input-file",
+        str(tmp_path / "review-input.json"),
+        "--spec-file",
+        str(tmp_path / "spec.md"),
+        "--design-file",
+        str(tmp_path / "design.md"),
+        "--tasks-file",
+        str(tmp_path / "tasks.md"),
+        "--disable-risk-review",
         cwd=PLUGIN_ROOT / "skills" / "cross-agent-review",
-        text=True,
-        capture_output=True,
-        check=False,
     )
 
     assert result.returncode == 2

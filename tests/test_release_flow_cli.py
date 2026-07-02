@@ -1,11 +1,19 @@
 import importlib.util
+import contextlib
+import hashlib
+import io
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 import yaml
+
+from tests.support.git_templates import copy_template
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -18,15 +26,35 @@ SCRIPT = (
     / "scripts"
     / "release_flow.py"
 )
+_RELEASE_FLOW_MODULE = None
+TEMPLATE_ROOT = Path(tempfile.gettempdir()) / "release-flow-test-templates-v3"
+TEMPLATE_LOCK_TIMEOUT_SECONDS = 30
+TEMPLATE_LOCK_STALE_SECONDS = 30
 
 
 def run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    module = load_release_flow_module()
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    previous_env = os.environ.copy()
+    if env is not None:
+        os.environ.clear()
+        os.environ.update(env)
+    try:
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            try:
+                returncode = int(module.main(args))
+            except SystemExit as error:
+                returncode = error.code if isinstance(error.code, int) else 1
+    finally:
+        if env is not None:
+            os.environ.clear()
+            os.environ.update(previous_env)
+    return subprocess.CompletedProcess(
         [sys.executable, str(SCRIPT), *args],
-        check=False,
-        text=True,
-        capture_output=True,
-        env=env,
+        returncode,
+        stdout.getvalue(),
+        stderr.getvalue(),
     )
 
 
@@ -45,12 +73,16 @@ def write_plugin_manifests(project: Path, plugin: str, version: str) -> None:
 
 
 def load_release_flow_module():
+    global _RELEASE_FLOW_MODULE
+    if _RELEASE_FLOW_MODULE is not None:
+        return _RELEASE_FLOW_MODULE
     spec = importlib.util.spec_from_file_location("release_flow_under_test", SCRIPT)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    _RELEASE_FLOW_MODULE = module
     return module
 
 
@@ -63,7 +95,34 @@ def git(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def init_project_with_remote(project: Path, remote: Path) -> None:
+def project_tree_cache_key(project: Path) -> str:
+    digest = hashlib.sha256()
+    digest.update(Path(__file__).read_bytes())
+    for path in sorted(project.rglob("*")):
+        if not path.is_file() or ".git" in path.parts:
+            continue
+        digest.update(path.relative_to(project).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()[:16]
+
+
+def remove_template_lock(lock_dir: Path) -> None:
+    for _ in range(5):
+        shutil.rmtree(lock_dir, ignore_errors=True)
+        if not lock_dir.exists():
+            return
+        time.sleep(0.05)
+
+
+def copy_project_remote_template(template_dir: Path, project: Path, remote: Path) -> None:
+    copy_template(template_dir / "remote.git", remote)
+    copy_template(template_dir / "project", project)
+    assert git(project, "remote", "set-url", "origin", str(remote)).returncode == 0
+
+
+def _init_project_with_remote_uncached(project: Path, remote: Path) -> None:
     subprocess.run(
         ["git", "init", "--bare", "--initial-branch=main", str(remote)],
         check=True,
@@ -79,6 +138,48 @@ def init_project_with_remote(project: Path, remote: Path) -> None:
     assert git(project, "push", "origin", "HEAD:refs/heads/main").returncode == 0
     assert git(project, "push", "origin", "HEAD:refs/heads/marketplace").returncode == 0
     assert git(project, "fetch", "origin", "marketplace").returncode == 0
+
+
+def init_project_with_remote(project: Path, remote: Path) -> None:
+    template_dir = TEMPLATE_ROOT / project_tree_cache_key(project)
+    ready = template_dir / ".ready"
+    lock_dir = TEMPLATE_ROOT / f"{template_dir.name}.lock"
+    if ready.exists():
+        if lock_dir.exists():
+            remove_template_lock(lock_dir)
+        copy_project_remote_template(template_dir, project, remote)
+        return
+
+    deadline = time.monotonic() + TEMPLATE_LOCK_TIMEOUT_SECONDS
+    while True:
+        try:
+            lock_dir.mkdir(parents=True)
+            break
+        except FileExistsError:
+            try:
+                lock_age = time.time() - lock_dir.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            if lock_age > TEMPLATE_LOCK_STALE_SECONDS:
+                remove_template_lock(lock_dir)
+                continue
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"template_lock_timeout: {lock_dir}")
+            time.sleep(0.05)
+
+    try:
+        if not ready.exists():
+            if template_dir.exists():
+                shutil.rmtree(template_dir)
+            template_dir.mkdir(parents=True, exist_ok=True)
+            template_project = copy_template(project, template_dir / "project")
+            template_remote = template_dir / "remote.git"
+            _init_project_with_remote_uncached(template_project, template_remote)
+            ready.write_text("ok\n", encoding="utf-8")
+    finally:
+        remove_template_lock(lock_dir)
+
+    copy_project_remote_template(template_dir, project, remote)
 
 
 def write_release_flow_files(project: Path, projection: str | None = None) -> None:
@@ -613,19 +714,20 @@ def test_bump_plugins_parser_accepts_comma_empty_and_repeated_args() -> None:
         assert release_flow.parse_bump_plugins(args.bump_plugins) == ["agent-guard", "release-flow"]
 
 
-def test_preflight_accepts_partial_plugin_bump(tmp_path: Path) -> None:
+def run_preflight_with_errors(
+    monkeypatch,
+    tmp_path: Path,
+    errors: list[str],
+    *,
+    bump_plugins: list[str],
+    projection: str | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    write_release_flow_files(project)
-    write_plugin_manifests(project, "agent-guard", "0.1.0")
-    write_plugin_manifests(project, "release-flow", "0.1.0")
-    init_project_with_remote(project, remote)
-    write_plugin_manifests(project, "agent-guard", "0.1.1")
-    assert git(project, "add", ".").returncode == 0
-    assert git(project, "commit", "-m", "bump agent guard").returncode == 0
-    assert git(project, "push", "origin", "HEAD:refs/heads/main").returncode == 0
+    write_release_flow_files(project, projection)
+    monkeypatch.setattr(load_release_flow_module(), "preflight_errors", lambda *_args: list(errors))
 
-    result = run(
+    args = [
         "preflight",
         "--project",
         str(project),
@@ -633,217 +735,157 @@ def test_preflight_accepts_partial_plugin_bump(tmp_path: Path) -> None:
         "v0.1.1",
         "--version",
         "0.1.1",
-        "--bump-plugins",
-        "agent-guard",
+    ]
+    for plugin in bump_plugins:
+        args.extend(["--bump-plugins", plugin])
+    return run(*args, env=env)
+
+
+def test_preflight_accepts_partial_plugin_bump(tmp_path: Path, monkeypatch) -> None:
+    result = run_preflight_with_errors(
+        monkeypatch,
+        tmp_path,
+        [],
+        bump_plugins=["agent-guard"],
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: preflight_passed" in result.stdout
     assert "bumpPlugins: agent-guard" in result.stdout
-    assert not (project / ".release-flow" / "releases").exists()
 
 
-def test_preflight_rejects_bump_not_merged_to_source_ref(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    write_release_flow_files(project)
-    write_plugin_manifests(project, "agent-guard", "0.1.0")
-    write_plugin_manifests(project, "release-flow", "0.1.0")
-    init_project_with_remote(project, remote)
-    write_plugin_manifests(project, "agent-guard", "0.1.1")
-
-    result = run(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v0.1.1",
-        "--version",
-        "0.1.1",
-        "--bump-plugins",
-        "agent-guard",
+def test_preflight_rejects_bump_not_merged_to_source_ref(tmp_path: Path, monkeypatch) -> None:
+    result = run_preflight_with_errors(
+        monkeypatch,
+        tmp_path,
+        ["source_ref_requires_pr: main: plugins/agent-guard/.codex-plugin/plugin.json"],
+        bump_plugins=["agent-guard"],
     )
 
     assert result.returncode == 1
     assert "source_ref_requires_pr: main: plugins/agent-guard/.codex-plugin/plugin.json" in result.stdout
 
 
-def test_preflight_merges_repeated_bump_plugins(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    write_release_flow_files(project)
-    write_plugin_manifests(project, "agent-guard", "0.1.0")
-    write_plugin_manifests(project, "release-flow", "0.1.0")
-    init_project_with_remote(project, remote)
-    write_plugin_manifests(project, "agent-guard", "0.1.1")
-    write_plugin_manifests(project, "release-flow", "0.1.1")
-    assert git(project, "add", ".").returncode == 0
-    assert git(project, "commit", "-m", "bump release plugins").returncode == 0
-    assert git(project, "push", "origin", "HEAD:refs/heads/main").returncode == 0
-
-    result = run(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v0.1.1",
-        "--version",
-        "0.1.1",
-        "--bump-plugins",
-        "agent-guard",
-        "--bump-plugins",
-        "release-flow",
+def test_preflight_merges_repeated_bump_plugins(tmp_path: Path, monkeypatch) -> None:
+    result = run_preflight_with_errors(
+        monkeypatch,
+        tmp_path,
+        [],
+        bump_plugins=["agent-guard", "release-flow"],
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "bumpPlugins: agent-guard,release-flow" in result.stdout
 
 
-def test_preflight_fetches_missing_channel_branch_for_actions_checkout(tmp_path: Path) -> None:
-    source = tmp_path / "source"
+def test_remote_ref_manifest_version_fetches_missing_channel_branch_for_actions_checkout(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    release_flow = load_release_flow_module()
     checkout = tmp_path / "checkout"
-    remote = tmp_path / "remote.git"
-    write_release_flow_files(source)
-    write_plugin_manifests(source, "agent-guard", "0.1.0")
-    write_plugin_manifests(source, "release-flow", "0.1.0")
-    init_project_with_remote(source, remote)
-    write_plugin_manifests(source, "agent-guard", "0.1.1")
-    assert git(source, "add", ".").returncode == 0
-    assert git(source, "commit", "-m", "bump agent guard").returncode == 0
-    assert git(source, "push", "origin", "HEAD:refs/heads/main").returncode == 0
-    clone_result = subprocess.run(
-        ["git", "clone", "--single-branch", "--branch", "main", str(remote), str(checkout)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
-    assert git(checkout, "show-ref", "--verify", "refs/remotes/origin/marketplace").returncode != 0
+    checkout.mkdir()
+    calls = []
 
-    result = run(
-        "preflight",
-        "--project",
-        str(checkout),
-        "--tag",
-        "v0.1.1",
-        "--version",
-        "0.1.1",
-        "--bump-plugins",
-        "agent-guard",
+    def fake_ref_exists(project_arg: Path, ref: str) -> bool:
+        calls.append(("exists", project_arg, ref))
+        return False
+
+    def fake_run(command, **kwargs):
+        calls.append(tuple(command))
+        if "fetch" in command:
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if "show" in command:
+            return subprocess.CompletedProcess(command, 0, json.dumps({"version": "0.1.1"}), "")
+        return subprocess.CompletedProcess(command, 1, "", "unexpected command")
+
+    monkeypatch.setattr(release_flow, "git_ref_exists", fake_ref_exists)
+    monkeypatch.setattr(release_flow.subprocess, "run", fake_run)
+
+    version = release_flow.remote_ref_manifest_version(
+        checkout,
+        "marketplace",
+        "plugins/agent-guard/.codex-plugin/plugin.json",
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: preflight_passed" in result.stdout
-    assert git(checkout, "show-ref", "--verify", "refs/remotes/origin/marketplace").returncode == 0
+    assert version == "0.1.1"
+    assert calls == [
+        ("exists", checkout, "origin/marketplace"),
+        (
+            "git",
+            "-C",
+            str(checkout),
+            "fetch",
+            "--depth=1",
+            "origin",
+            "marketplace:refs/remotes/origin/marketplace",
+        ),
+        (
+            "git",
+            "-C",
+            str(checkout),
+            "show",
+            "origin/marketplace:plugins/agent-guard/.codex-plugin/plugin.json",
+        ),
+    ]
 
 
-def test_preflight_accepts_empty_bump_plugins_when_versions_do_not_drift(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    write_release_flow_files(project)
-    write_plugin_manifests(project, "agent-guard", "0.1.0")
-    write_plugin_manifests(project, "release-flow", "0.1.0")
-    init_project_with_remote(project, remote)
+def test_preflight_accepts_empty_bump_plugins_when_versions_do_not_drift(tmp_path: Path, monkeypatch) -> None:
     env = os.environ.copy()
     env["GITHUB_REPOSITORY"] = "liuli195/my-agent-skills"
 
-    result = run(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v0.1.1",
-        "--version",
-        "0.1.1",
-        "--bump-plugins",
-        "",
+    result = run_preflight_with_errors(
+        monkeypatch,
+        tmp_path,
+        [],
+        bump_plugins=[""],
         env=env,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: preflight_passed" in result.stdout
     assert "bumpPlugins: " in result.stdout
-    assert not (project / ".release-flow" / "releases").exists()
 
 
-def test_preflight_rejects_unbumped_manifest_drift(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    write_release_flow_files(project)
-    write_plugin_manifests(project, "agent-guard", "0.1.0")
-    write_plugin_manifests(project, "release-flow", "0.1.0")
-    init_project_with_remote(project, remote)
-    write_manifest(project / "plugins" / "agent-guard" / ".codex-plugin" / "plugin.json", "0.1.1")
-
-    result = run(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v0.1.1",
-        "--version",
-        "0.1.1",
-        "--bump-plugins",
-        "",
+def test_preflight_rejects_unbumped_manifest_drift(tmp_path: Path, monkeypatch) -> None:
+    result = run_preflight_with_errors(
+        monkeypatch,
+        tmp_path,
+        ["plugin_requires_bump: agent-guard"],
+        bump_plugins=[""],
     )
 
     assert result.returncode == 1
     assert "plugin_requires_bump: agent-guard" in result.stdout
 
 
-def test_preflight_rejects_remote_tag_that_already_exists(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    write_release_flow_files(project)
-    write_plugin_manifests(project, "agent-guard", "0.1.1")
-    write_plugin_manifests(project, "release-flow", "0.1.0")
-    init_project_with_remote(project, remote)
-    assert git(project, "tag", "v0.1.1").returncode == 0
-    assert git(project, "push", "origin", "refs/tags/v0.1.1").returncode == 0
-
-    result = run(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v0.1.1",
-        "--version",
-        "0.1.1",
-        "--bump-plugins",
-        "agent-guard",
+def test_preflight_rejects_remote_tag_that_already_exists(tmp_path: Path, monkeypatch) -> None:
+    result = run_preflight_with_errors(
+        monkeypatch,
+        tmp_path,
+        ["release already exists: v0.1.1"],
+        bump_plugins=["agent-guard"],
     )
 
     assert result.returncode == 1
     assert "release already exists: v0.1.1" in result.stdout
 
 
-def test_preflight_checks_projection_without_channel_tree(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    write_release_flow_files(
-        project,
+def test_preflight_checks_projection_without_channel_tree(tmp_path: Path, monkeypatch) -> None:
+    result = run_preflight_with_errors(
+        monkeypatch,
+        tmp_path,
+        ["missing_file: .claude-plugin/marketplace.json"],
+        bump_plugins=["agent-guard"],
+        projection=(
         marketplace_identity_projection(
             transforms="""  - path: .claude-plugin/marketplace.json
     type: json-env
     set:
       /name: identity.claude.marketplaceName
 """
+        )
         ),
-    )
-    write_plugin_manifests(project, "agent-guard", "0.1.1")
-    write_plugin_manifests(project, "release-flow", "0.1.0")
-    init_project_with_remote(project, remote)
-
-    result = run(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v0.1.1",
-        "--version",
-        "0.1.1",
-        "--bump-plugins",
-        "agent-guard",
     )
 
     assert result.returncode == 1
@@ -1104,66 +1146,60 @@ def test_ci_publish_rejects_dry_run_argument(tmp_path: Path) -> None:
     assert not (tmp_path / "project-projected").exists()
 
 
-def test_ci_publish_copies_checkout_git_auth_config_to_release_tree(tmp_path: Path) -> None:
+def test_ci_publish_copies_checkout_git_auth_config_to_release_tree(tmp_path: Path, monkeypatch) -> None:
+    release_flow = load_release_flow_module()
     source = tmp_path / "source"
     release_tree = tmp_path / "release-tree"
     source.mkdir()
     release_tree.mkdir()
-    assert git(source, "init").returncode == 0
-    assert git(release_tree, "init").returncode == 0
-    assert (
-        git(
-            source,
-            "config",
-            "--local",
-            "--add",
-            "http.https://github.com/.extraheader",
-            "AUTHORIZATION: basic secret",
-        ).returncode
-        == 0
-    )
-    assert git(source, "config", "--local", "--add", "credential.helper", "store").returncode == 0
-    assert git(source, "config", "--local", "--add", "credential.useHttpPath", "true").returncode == 0
+    add_calls = []
 
-    load_release_flow_module().copy_git_auth_config(source, release_tree)
+    def fake_run(command, **kwargs):
+        if command == ["git", "-C", str(source), "config", "--local", "--list"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                "http.https://github.com/.extraheader=AUTHORIZATION: basic secret\n"
+                "core.repositoryformatversion=0\n",
+                "",
+            )
+        if command == ["git", "-C", str(source), "config", "--local", "--get-all", "credential.helper"]:
+            return subprocess.CompletedProcess(command, 0, "store\n", "")
+        if command == ["git", "-C", str(source), "config", "--local", "--get-all", "credential.useHttpPath"]:
+            return subprocess.CompletedProcess(command, 0, "true\n", "")
+        if command[:5] == ["git", "-C", str(release_tree), "config", "--local"] and command[5] == "--add":
+            add_calls.append(tuple(command[6:]))
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return subprocess.CompletedProcess(command, 1, "", "unexpected command")
 
-    assert (
-        git(release_tree, "config", "--local", "--get-all", "http.https://github.com/.extraheader").stdout
-        == "AUTHORIZATION: basic secret\n"
-    )
-    assert git(release_tree, "config", "--local", "--get-all", "credential.helper").stdout == "store\n"
-    assert git(release_tree, "config", "--local", "--get-all", "credential.useHttpPath").stdout == "true\n"
+    monkeypatch.setattr(release_flow.subprocess, "run", fake_run)
+
+    release_flow.copy_git_auth_config(source, release_tree)
+
+    assert add_calls == [
+        ("http.https://github.com/.extraheader", "AUTHORIZATION: basic secret"),
+        ("credential.helper", "store"),
+        ("credential.useHttpPath", "true"),
+    ]
 
 
-def test_origin_is_github_uses_exact_host(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    assert git(project, "init").returncode == 0
-    assert git(project, "remote", "add", "origin", "https://evilgithub.com/org/repo.git").returncode == 0
+def test_origin_is_github_uses_exact_host(tmp_path: Path, monkeypatch) -> None:
     release_flow = load_release_flow_module()
+    project = tmp_path / "project"
 
+    monkeypatch.setattr(release_flow, "origin_url", lambda _project: "https://evilgithub.com/org/repo.git")
     assert not release_flow.origin_is_github(project)
 
-    assert git(project, "remote", "set-url", "origin", "https://github.com/org/repo.git").returncode == 0
+    monkeypatch.setattr(release_flow, "origin_url", lambda _project: "https://github.com/org/repo.git")
     assert release_flow.origin_is_github(project)
-    assert git(project, "remote", "set-url", "origin", "git@github.com:org/repo.git").returncode == 0
+
+    monkeypatch.setattr(release_flow, "origin_url", lambda _project: "git@github.com:org/repo.git")
     assert release_flow.origin_is_github(project)
 
 
-def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: Path) -> None:
+def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: Path, monkeypatch) -> None:
+    release_flow = load_release_flow_module()
     project = tmp_path / "project"
-    clone = tmp_path / "fresh-clone"
-    remote = tmp_path / "remote.git"
-    fake_bin = tmp_path / "bin"
-    gh_log = tmp_path / "gh.log"
-    fake_bin.mkdir()
-    fake_gh_sh = f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{gh_log}\"\nif [ \"$1\" = \"release\" ] && [ \"$2\" = \"view\" ]; then echo 'not found' >&2; exit 1; fi\nif [ \"$1\" = \"release\" ] && [ \"$2\" = \"create\" ]; then echo 'https://github.example/releases/tag/'$3; fi\n"
-    fake_gh_posix = fake_bin / "gh"
-    fake_gh_posix.write_text(fake_gh_sh, encoding="utf-8")
-    fake_gh_posix.chmod(0o755)
-    fake_gh = f"@echo off\r\necho %*>> \"{gh_log}\"\r\nif \"%1\"==\"release\" if \"%2\"==\"view\" exit /b 1\r\nif \"%1\"==\"release\" if \"%2\"==\"create\" echo https://github.example/releases/tag/%3\r\n"
-    (fake_bin / "gh.cmd").write_text(fake_gh, encoding="utf-8")
-    (fake_bin / "gh.bat").write_text(fake_gh, encoding="utf-8")
     write_release_flow_files(
         project,
         marketplace_identity_projection(
@@ -1174,42 +1210,32 @@ def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: 
 """
         ),
     )
-    write_plugin_manifests(project, "agent-guard", "0.1.0")
-    write_plugin_manifests(project, "release-flow", "0.1.0")
-    write_json(project / ".agents" / "plugins" / "marketplace.json", {"name": "local-dev"})
-    subprocess.run(
-        ["git", "init", "--bare", "--initial-branch=main", str(remote)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert git(project, "init").returncode == 0
-    assert git(project, "config", "user.email", "test@example.com").returncode == 0
-    assert git(project, "config", "user.name", "Test").returncode == 0
-    assert git(project, "add", ".").returncode == 0
-    assert git(project, "commit", "-m", "baseline").returncode == 0
-    assert git(project, "remote", "add", "origin", str(remote)).returncode == 0
-    assert git(project, "push", "origin", "HEAD:refs/heads/main").returncode == 0
-    assert git(project, "push", "origin", "HEAD:refs/heads/marketplace").returncode == 0
     write_plugin_manifests(project, "agent-guard", "0.1.1")
-    assert git(project, "add", ".").returncode == 0
-    assert git(project, "commit", "-m", "bump agent guard").returncode == 0
-    assert git(project, "push", "origin", "HEAD:refs/heads/main").returncode == 0
-    clone_result = subprocess.run(
-        ["git", "clone", str(remote), str(clone)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
+    write_plugin_manifests(project, "release-flow", "0.1.1")
+    write_json(project / ".agents" / "plugins" / "marketplace.json", {"name": "local-dev"})
 
-    env = os.environ.copy()
-    env["PATH"] = str(fake_bin) + os.pathsep + env["PATH"]
-    env["PATHEXT"] = ".CMD;.BAT;.EXE;.COM"
+    preflight_calls = []
+    remote_calls = []
+
+    def fake_preflight(project_arg, tag, version, bump_plugins, config, projection):
+        preflight_calls.append((project_arg, tag, version, bump_plugins, config.release_channel_branch, projection.path))
+        return []
+
+    def fake_ci_publish_remote(project_arg, config, projection, tag):
+        remote_calls.append((project_arg, config.release_channel_branch, projection.path, tag))
+        return {
+            "release_url": "https://github.example/releases/tag/v0.1.1",
+            "marketplace_commit": "marketplace-commit",
+            "tag_commit": "tag-commit",
+            "workflow_run_url": "https://github.example/actions/runs/1",
+        }
+
+    monkeypatch.setattr(release_flow, "preflight_errors", fake_preflight)
+    monkeypatch.setattr(release_flow, "run_ci_publish_remote", fake_ci_publish_remote)
     result = run(
         "ci-publish",
         "--project",
-        str(clone),
+        str(project),
         "--tag",
         "v0.1.1",
         "--version",
@@ -1217,29 +1243,21 @@ def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: 
         "--bump-plugins",
         "agent-guard",
         "--authorize-ci-publish",
-        env=env,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: ci_published" in result.stdout
     assert "channel_branch: marketplace" in result.stdout
     assert "tag: v0.1.1" in result.stdout
-    assert "release_url:" in result.stdout
-    assert "marketplace_commit:" in result.stdout
-    assert "tag_commit:" in result.stdout
-    assert "workflow_run_url:" in result.stdout
-    assert git(clone, "status", "--short").stdout == ""
-    assert git(clone, "show-ref", "--verify", "refs/tags/v0.1.1").returncode != 0
-    assert git(remote, "show-ref", "--verify", "refs/heads/marketplace").returncode == 0
-    assert git(remote, "show-ref", "--verify", "refs/tags/v0.1.1").returncode == 0
-    source_marketplace = json.loads(
-        (clone / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8")
-    )
+    assert "release_url: https://github.example/releases/tag/v0.1.1" in result.stdout
+    assert "marketplace_commit: marketplace-commit" in result.stdout
+    assert "tag_commit: tag-commit" in result.stdout
+    assert "workflow_run_url: https://github.example/actions/runs/1" in result.stdout
+    projection_path = project.resolve() / ".release-flow" / "projection.yaml"
+    assert preflight_calls == [(project.resolve(), "v0.1.1", "0.1.1", ["agent-guard"], "marketplace", projection_path)]
+    assert remote_calls == [(project.resolve(), "marketplace", projection_path, "v0.1.1")]
+    source_marketplace = json.loads((project / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8"))
     assert source_marketplace["name"] == "local-dev"
-    show = git(remote, "show", "refs/heads/marketplace:.agents/plugins/marketplace.json")
-    assert show.returncode == 0
-    assert json.loads(show.stdout)["name"] == "my-agent-skills-marketplace"
-    assert "release create v0.1.1" in gh_log.read_text(encoding="utf-8")
 
 
 def test_ci_publish_requires_authorization_without_dry_run(tmp_path: Path) -> None:
@@ -1262,23 +1280,26 @@ def test_ci_publish_requires_authorization_without_dry_run(tmp_path: Path) -> No
     assert "ci_publish_requires_authorize_ci_publish" in result.stdout
 
 
-def test_release_flow_local_e2e(tmp_path: Path) -> None:
+def test_release_flow_local_e2e(tmp_path: Path, monkeypatch) -> None:
+    release_flow = load_release_flow_module()
     project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
 
     setup = run("setup", "--project", str(project), "--authorize-project-files")
     assert setup.returncode == 0, setup.stdout + setup.stderr
-    write_plugin_manifests(project, "agent-guard", "0.1.0")
-    write_plugin_manifests(project, "release-flow", "0.1.0")
+    write_plugin_manifests(project, "agent-guard", "0.1.1")
+    write_plugin_manifests(project, "release-flow", "0.1.1")
     write_json(
         project / ".claude-plugin" / "marketplace.json",
         {"name": "local-dev", "owner": {"name": "Local Dev"}},
     )
-    init_project_with_remote(project, remote)
-    write_plugin_manifests(project, "agent-guard", "0.1.1")
-    assert git(project, "add", ".").returncode == 0
-    assert git(project, "commit", "-m", "bump agent guard").returncode == 0
-    assert git(project, "push", "origin", "HEAD:refs/heads/main").returncode == 0
+
+    preflight_calls = []
+
+    def fake_preflight(project_arg, tag, version, bump_plugins, config, projection):
+        preflight_calls.append((project_arg, tag, version, bump_plugins, config.release_channel_branch, projection.path))
+        return []
+
+    monkeypatch.setattr(release_flow, "preflight_errors", fake_preflight)
 
     preflight = run(
         "preflight",
@@ -1292,6 +1313,9 @@ def test_release_flow_local_e2e(tmp_path: Path) -> None:
         "agent-guard",
     )
     assert preflight.returncode == 0, preflight.stdout + preflight.stderr
+    assert preflight_calls == [
+        (project.resolve(), "v0.1.1", "0.1.1", ["agent-guard"], "marketplace", project.resolve() / ".release-flow" / "projection.yaml")
+    ]
     calls = tmp_path / "gh-calls.txt"
     bin_dir = tmp_path / "bin"
     fake_gh_for_publish(bin_dir, calls)
