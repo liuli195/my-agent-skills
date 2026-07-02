@@ -1,3 +1,6 @@
+import contextlib
+import importlib.util
+import io
 import json
 import subprocess
 import sys
@@ -7,9 +10,52 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "agent-guard"
 INSTALLER = PLUGIN_ROOT / "skills" / "agent-guard" / "scripts" / "install_agent_guard_plugin.py"
+_MODULE_CACHE = {}
+SUBPROCESS_WRAPPERS = {"activate_guard.py", "render_guard_brief.py", "run_guard_event.py"}
+
+
+def load_script_module(script: Path):
+    script = script.resolve()
+    module = _MODULE_CACHE.get(script)
+    if module is not None:
+        return module
+    spec = importlib.util.spec_from_file_location(f"agent_guard_prd_e2e_{len(_MODULE_CACHE)}", script)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    script_dir = str(script.parent)
+    added_path = False
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+        added_path = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if added_path:
+            sys.path.remove(script_dir)
+    _MODULE_CACHE[script] = module
+    return module
 
 
 def run(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    script = Path(args[0])
+    if script.suffix == ".py" and script.name not in SUBPROCESS_WRAPPERS:
+        module = load_script_module(script)
+        if hasattr(module, "main"):
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.chdir(cwd or REPO_ROOT), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                try:
+                    returncode = int(module.main(args[1:]))
+                except SystemExit as error:
+                    returncode = error.code if isinstance(error.code, int) else 1
+            return subprocess.CompletedProcess(
+                [sys.executable, *args],
+                returncode,
+                stdout.getvalue(),
+                stderr.getvalue(),
+            )
     return subprocess.run(
         [sys.executable, *args],
         cwd=cwd or REPO_ROOT,

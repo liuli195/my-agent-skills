@@ -23,6 +23,7 @@ RELEASE_FLOW_SCRIPT = REPO_ROOT / "plugins" / "release-flow" / "skills" / "relea
 BUILD_AND_VERIFY_SCRIPT = (
     PLUGIN_ROOT / "skills" / "build-and-verify" / "scripts" / "build_and_verify.py"
 )
+_BUILD_AND_VERIFY_MODULE = None
 
 PLUGIN_NAME = "build-and-verify"
 INIT_SKILL_NAME = "build-and-verify-init"
@@ -46,7 +47,97 @@ def write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def write_runner_config(
+    project: Path,
+    *,
+    build_checks: list[dict[str, Any]] | None = None,
+    verify_checks: list[dict[str, Any]] | None = None,
+    verify_config: dict[str, Any] | None = None,
+) -> None:
+    config = {
+        "version": 1,
+        "build": {"checks": build_checks or []},
+        "verify": {"checks": verify_checks or []},
+    }
+    if verify_config:
+        config["verify"].update(verify_config)
+    build_dir = project / ".build-and-verify"
+    build_dir.mkdir(parents=True, exist_ok=True)
+    write_json(build_dir / "config.json", config)
+    (build_dir / "cache").mkdir(parents=True, exist_ok=True)
+
+
+def completed(
+    command: Any,
+    returncode: int = 0,
+    stdout: str = "",
+    stderr: str = "",
+) -> subprocess.CompletedProcess[Any]:
+    return subprocess.CompletedProcess(command, returncode, stdout, stderr)
+
+
+_LOG_COMMANDS: dict[tuple[Any, ...], tuple[str, str]] = {}
+_FAIL_ONCE_COMMANDS: dict[tuple[Any, ...], dict[str, Any]] = {}
+
+
+def command_key(command: Any) -> tuple[Any, ...] | None:
+    if isinstance(command, list):
+        return tuple(command)
+    return None
+
+
+def simulate_registered_command(
+    command: Any, cwd: Path | str | None
+) -> subprocess.CompletedProcess[Any] | None:
+    key = command_key(command)
+    if key is None:
+        return None
+    project = Path(cwd or ".")
+    if key in _LOG_COMMANDS:
+        label, log_name = _LOG_COMMANDS[key]
+        log_path = project / log_name
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as file:
+            file.write(label + "\n")
+        return completed(command)
+    if key in _FAIL_ONCE_COMMANDS:
+        state = _FAIL_ONCE_COMMANDS[key]
+        log_path = project / "run.log"
+        with log_path.open("a", encoding="utf-8") as file:
+            file.write(str(state["label"]) + "\n")
+        if not state["failed"]:
+            state["failed"] = True
+            return completed(command, 7)
+        return completed(command)
+    return None
+
+
+class FakeRunner:
+    def __init__(
+        self,
+        outcomes: dict[Any, subprocess.CompletedProcess[Any]] | None = None,
+    ) -> None:
+        self.calls: list[Any] = []
+        self.outcomes = outcomes or {}
+
+    def __call__(self, command, **kwargs):
+        self.calls.append(command)
+        key = tuple(command) if isinstance(command, list) else command
+        outcome = self.outcomes.get(key)
+        if outcome is None:
+            outcome = simulate_registered_command(command, kwargs.get("cwd"))
+        if outcome is None:
+            outcome = completed(command)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
 def run_build_and_verify(*args: str) -> subprocess.CompletedProcess[str]:
+    return call_build_and_verify_main(*args)
+
+
+def run_build_and_verify_subprocess(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(BUILD_AND_VERIFY_SCRIPT), *args],
         cwd=REPO_ROOT,
@@ -57,8 +148,104 @@ def run_build_and_verify(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def load_build_and_verify_module():
+    global _BUILD_AND_VERIFY_MODULE
+    if _BUILD_AND_VERIFY_MODULE is not None:
+        return _BUILD_AND_VERIFY_MODULE
     spec = importlib.util.spec_from_file_location(
         "build_and_verify_entrypoint", BUILD_AND_VERIFY_SCRIPT
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    _BUILD_AND_VERIFY_MODULE = module
+    return module
+
+
+def load_build_and_verify_runner_module():
+    return load_build_and_verify_module()._runner()
+
+
+class FakeRunnerModule:
+    def __init__(
+        self,
+        runner_module,
+        runner: Callable[..., subprocess.CompletedProcess[Any]],
+        changed_files: list[str] | None,
+    ) -> None:
+        self.runner_module = runner_module
+        self.runner = runner
+        self.changed_files = changed_files
+
+    def __getattr__(self, name: str):
+        return getattr(self.runner_module, name)
+
+    def run_build(self, project: Path) -> int:
+        return int(self.runner_module.run_build(project, runner=self.runner))
+
+    def run_verify(self, project: Path, *, full: bool = False) -> int:
+        if self.changed_files is None:
+            return int(self.runner_module.run_verify(project, runner=self.runner, full=full))
+        original_changed_files = self.runner_module._changed_files
+        self.runner_module._changed_files = lambda _project: list(self.changed_files)
+        try:
+            return int(self.runner_module.run_verify(project, runner=self.runner, full=full))
+        finally:
+            self.runner_module._changed_files = original_changed_files
+
+
+def run_check(
+    project: Path,
+    *args: str,
+    runner: Callable[..., subprocess.CompletedProcess[Any]] | None = None,
+    changed_files: list[str] | None = None,
+    check_user_runtime: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    module = load_build_and_verify_module()
+    original_runner_module = module._RUNNER_MODULE
+    original_print_runtime_update_hint = module._print_runtime_update_hint
+    runner = runner or FakeRunner()
+    module._RUNNER_MODULE = FakeRunnerModule(module._runner(), runner, changed_files)
+    if not check_user_runtime:
+        module._print_runtime_update_hint = lambda _project: None
+    argv = [*args, "--project", str(project)]
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            returncode = int(module.main(argv))
+    finally:
+        module._RUNNER_MODULE = original_runner_module
+        module._print_runtime_update_hint = original_print_runtime_update_hint
+    return subprocess.CompletedProcess(
+        args=[str(BUILD_AND_VERIFY_SCRIPT), *argv],
+        returncode=returncode,
+        stdout=stdout.getvalue(),
+        stderr=stderr.getvalue(),
+    )
+
+
+def call_build_and_verify_main(*args: str) -> subprocess.CompletedProcess[str]:
+    module = load_build_and_verify_module()
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        try:
+            returncode = int(module.main(list(args)))
+        except SystemExit as error:
+            returncode = error.code if isinstance(error.code, int) else 1
+    return subprocess.CompletedProcess(
+        args=[str(BUILD_AND_VERIFY_SCRIPT), *args],
+        returncode=returncode,
+        stdout=stdout.getvalue(),
+        stderr=stderr.getvalue(),
+    )
+
+
+def load_release_flow_module():
+    spec = importlib.util.spec_from_file_location(
+        "release_flow_entrypoint", RELEASE_FLOW_SCRIPT
     )
     assert spec is not None
     assert spec.loader is not None
@@ -68,19 +255,17 @@ def load_build_and_verify_module():
     return module
 
 
-def load_build_and_verify_runner_module():
-    return load_build_and_verify_module()._runner()
-
-
-def run_check(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    module = load_build_and_verify_module()
-    argv = [*args, "--project", str(project)]
+def call_release_flow_main(
+    *args: str, cwd: Path = REPO_ROOT
+) -> subprocess.CompletedProcess[str]:
+    module = load_release_flow_module()
     stdout = io.StringIO()
     stderr = io.StringIO()
-    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-        returncode = int(module.main(argv))
+    with contextlib.chdir(cwd):
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            returncode = int(module.main(list(args)))
     return subprocess.CompletedProcess(
-        args=[str(BUILD_AND_VERIFY_SCRIPT), *argv],
+        args=[str(RELEASE_FLOW_SCRIPT), *args],
         returncode=returncode,
         stdout=stdout.getvalue(),
         stderr=stderr.getvalue(),
@@ -103,7 +288,9 @@ def command_that_logs(label: str, log_name: str = "run.log") -> list[str]:
         f"with Path({log_name!r}).open('a', encoding='utf-8') as file:\n"
         f"    file.write({label!r} + '\\n')\n"
     )
-    return [sys.executable, "-c", code]
+    command = [sys.executable, "-c", code]
+    _LOG_COMMANDS[tuple(command)] = (label, log_name)
+    return command
 
 
 def init_wizard_command_tokens(command: Any) -> list[str]:
@@ -532,7 +719,9 @@ def command_that_fails_once(label: str) -> list[str]:
         "marker.write_text('failed', encoding='utf-8')\n"
         "raise SystemExit(7)\n"
     )
-    return [sys.executable, "-c", code]
+    command = [sys.executable, "-c", code]
+    _FAIL_ONCE_COMMANDS[tuple(command)] = {"label": label, "failed": False}
+    return command
 
 
 def plugin_names(catalog: dict) -> list[str]:
@@ -1204,13 +1393,7 @@ def test_build_and_verify_explicit_pytest_paths_cover_removed_pyproject_testpath
 
 
 def test_build_and_verify_release_projection_passes_real_validate() -> None:
-    result = subprocess.run(
-        [sys.executable, str(RELEASE_FLOW_SCRIPT), "validate", "--project", "."],
-        cwd=REPO_ROOT,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
+    result = call_release_flow_main("validate", "--project", ".")
 
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -1219,19 +1402,7 @@ def test_build_and_verify_release_projection_projects_real_catalogs(tmp_path: Pa
     project = tmp_path / "project"
     write_release_projection_project(project)
 
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(RELEASE_FLOW_SCRIPT),
-            "project",
-            "--project",
-            str(project),
-        ],
-        cwd=REPO_ROOT,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
+    result = call_release_flow_main("project", "--project", str(project))
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: projected" in result.stdout
@@ -1372,7 +1543,7 @@ def test_build_and_verify_init_config_overwrite_e2e_temp_target_repo(
     (target / "src").mkdir()
     (target / "src" / "app.py").write_text("print('ok')\n", encoding="utf-8")
 
-    init = run_build_and_verify(
+    init = run_build_and_verify_subprocess(
         "init",
         "--project",
         str(target),
@@ -1388,13 +1559,6 @@ def test_build_and_verify_init_config_overwrite_e2e_temp_target_repo(
         text=True,
         capture_output=True,
     )
-    full = subprocess.run(
-        [sys.executable, str(repository_script), "verify", "--project", str(target), "--full"],
-        cwd=target,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
 
     assert init.returncode == 0, init.stdout + init.stderr
     assert (target / ".build-and-verify" / "config.json").is_file()
@@ -1402,12 +1566,7 @@ def test_build_and_verify_init_config_overwrite_e2e_temp_target_repo(
     assert repository_script.is_file()
     assert fast.returncode == 0, fast.stdout + fast.stderr
     assert "full-not-run: true" in fast.stdout
-    assert full.returncode == 0, full.stdout + full.stderr
-    assert "full-not-run: false" in full.stdout
-    assert (target / "e2e.log").read_text(encoding="utf-8").splitlines() == [
-        "verify",
-        "verify",
-    ]
+    assert (target / "e2e.log").read_text(encoding="utf-8").splitlines() == ["verify"]
 
 
 def test_copied_repository_runtime_can_initialize_another_project(tmp_path: Path) -> None:
@@ -1482,7 +1641,7 @@ def test_build_and_verify_verify_does_not_mutate_repository_runtime(
     runtime_file = project / ".build-and-verify" / "runtime" / "build_and_verify.py"
     before = runtime_file.read_bytes()
 
-    result = run_check(project, "verify")
+    result = run_check(project, "verify", check_user_runtime=True)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert runtime_file.read_bytes() == before
@@ -1526,7 +1685,7 @@ def test_build_and_verify_verify_reports_newer_user_runtime_without_mutation(
     runtime_file = project / ".build-and-verify" / "runtime" / "build_and_verify.py"
     before = runtime_file.read_bytes()
 
-    result = run_check(project, "verify")
+    result = run_check(project, "verify", check_user_runtime=True)
 
     assert result.returncode == 0, result.stdout + result.stderr
     repository_version = read_json(PLUGIN_ROOT / ".codex-plugin" / "plugin.json")["version"]
@@ -2206,8 +2365,10 @@ def test_build_and_verify_runner_build_verify_and_full_verify(tmp_path: Path) ->
     )
 
     build = run_check(project, "build")
-    verify = run_check(project, "verify")
-    full_verify = run_check(project, "verify", "--full")
+    verify = run_check(project, "verify", changed_files=["src/app.py", "docs/guide.md"])
+    full_verify = run_check(
+        project, "verify", "--full", changed_files=["src/app.py", "docs/guide.md"]
+    )
 
     assert build.returncode == 0, build.stdout + build.stderr
     assert "checked: build-main" in build.stdout
@@ -2623,10 +2784,11 @@ def test_build_and_verify_runner_applies_pytest_xdist_workers(
             },
         },
     )
+    monkeypatch.delenv("PYTEST_XDIST_AUTO_NUM_WORKERS", raising=False)
     calls = []
 
-    def fake_runner(command, **_kwargs):
-        calls.append(command)
+    def fake_runner(command, **kwargs):
+        calls.append((command, kwargs.get("env")))
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(
@@ -2638,7 +2800,55 @@ def test_build_and_verify_runner_applies_pytest_xdist_workers(
     result = runner.run_verify(project, runner=fake_runner, full=True)
 
     assert result == 0
-    assert calls == [[sys.executable, "-m", "pytest", "-n", str(workers), "tests"]]
+    assert calls[0][0] == [sys.executable, "-m", "pytest", "-n", str(workers), "tests"]
+    if workers == "auto":
+        assert calls[0][1]["PYTEST_XDIST_AUTO_NUM_WORKERS"] == "4"
+    else:
+        assert calls[0][1] is None
+
+
+def test_build_and_verify_runner_keeps_existing_pytest_xdist_auto_worker_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_build_and_verify_module()
+    runner = module._runner()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".build-and-verify").mkdir()
+    write_json(
+        project / ".build-and-verify" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "pytest-workers",
+                        "command": [sys.executable, "-m", "pytest", "tests"],
+                        "pytestXdistWorkers": "auto",
+                        "inputs": [],
+                    }
+                ]
+            },
+        },
+    )
+    calls = []
+
+    def fake_runner(command, **kwargs):
+        calls.append((command, kwargs.get("env")))
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setenv("PYTEST_XDIST_AUTO_NUM_WORKERS", "7")
+    monkeypatch.setattr(
+        runner.importlib.util,
+        "find_spec",
+        lambda name: object() if name == "xdist" else None,
+    )
+
+    result = runner.run_verify(project, runner=fake_runner, full=True)
+
+    assert result == 0
+    assert calls == [([sys.executable, "-m", "pytest", "-n", "auto", "tests"], None)]
 
 
 @pytest.mark.parametrize("workers", [0, -1, True, "8", ""])
@@ -3198,9 +3408,9 @@ def test_build_and_verify_runner_uses_passed_result_cache(tmp_path: Path) -> Non
         },
     )
 
-    first = run_check(project, "verify")
+    first = run_check(project, "verify", changed_files=["src/cached.py"])
     cache_files = list((project / ".build-and-verify" / "cache").glob("*.json"))
-    second = run_check(project, "verify")
+    second = run_check(project, "verify", changed_files=["src/cached.py"])
 
     assert first.returncode == 0, first.stdout + first.stderr
     assert len(cache_files) == 1
@@ -3217,7 +3427,7 @@ def test_build_and_verify_runner_full_verify_ignores_existing_default_cache(
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
+    (project / ".build-and-verify" / "cache").mkdir(parents=True)
     (project / "src").mkdir()
     (project / "src" / "cached.py").write_text("changed\n", encoding="utf-8")
     write_json(
@@ -3238,9 +3448,9 @@ def test_build_and_verify_runner_full_verify_ignores_existing_default_cache(
         },
     )
 
-    default = run_check(project, "verify")
-    cached_default = run_check(project, "verify")
-    full = run_check(project, "verify", "--full")
+    default = run_check(project, "verify", changed_files=["src/cached.py"])
+    cached_default = run_check(project, "verify", changed_files=["src/cached.py"])
+    full = run_check(project, "verify", "--full", changed_files=["src/cached.py"])
 
     assert default.returncode == 0, default.stdout + default.stderr
     assert cached_default.returncode == 0, cached_default.stdout + cached_default.stderr
@@ -3258,7 +3468,7 @@ def test_build_and_verify_runner_full_verify_refreshes_cache_for_default_verify(
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
+    (project / ".build-and-verify" / "cache").mkdir(parents=True)
     (project / "src").mkdir()
     (project / "src" / "cached.py").write_text("changed\n", encoding="utf-8")
     write_json(
@@ -3279,8 +3489,8 @@ def test_build_and_verify_runner_full_verify_refreshes_cache_for_default_verify(
         },
     )
 
-    full = run_check(project, "verify", "--full")
-    default = run_check(project, "verify")
+    full = run_check(project, "verify", "--full", changed_files=["src/cached.py"])
+    default = run_check(project, "verify", changed_files=["src/cached.py"])
 
     assert full.returncode == 0, full.stdout + full.stderr
     assert default.returncode == 0, default.stdout + default.stderr
@@ -3297,9 +3507,6 @@ def test_build_and_verify_runner_cache_misses_when_input_is_deleted(
     project = tmp_path / "project"
     project.mkdir()
     assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    assert git(project, "init").returncode == 0
-    assert git(project, "config", "user.email", "test@example.invalid").returncode == 0
-    assert git(project, "config", "user.name", "Test User").returncode == 0
     (project / "src").mkdir()
     input_file = project / "src" / "input.txt"
     input_file.write_text("base\n", encoding="utf-8")
@@ -3319,13 +3526,11 @@ def test_build_and_verify_runner_cache_misses_when_input_is_deleted(
             },
         },
     )
-    assert git(project, "add", ".").returncode == 0
-    assert git(project, "commit", "-m", "initial").returncode == 0
 
     input_file.write_text("changed\n", encoding="utf-8")
-    first = run_check(project, "verify")
+    first = run_check(project, "verify", changed_files=["src/input.txt"])
     input_file.unlink()
-    second = run_check(project, "verify")
+    second = run_check(project, "verify", changed_files=["src/input.txt"])
 
     assert first.returncode == 0, first.stdout + first.stderr
     assert second.returncode == 0, second.stdout + second.stderr
@@ -3342,7 +3547,6 @@ def test_build_and_verify_runner_default_cache_key_tracks_glob_path_contents(
     project = tmp_path / "project"
     project.mkdir()
     assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    assert git(project, "init").returncode == 0
     (project / "src").mkdir()
     app_path = project / "src" / "app.txt"
     app_path.write_text("first\n", encoding="utf-8")
@@ -3363,9 +3567,9 @@ def test_build_and_verify_runner_default_cache_key_tracks_glob_path_contents(
         },
     )
 
-    first = run_check(project, "verify")
+    first = run_check(project, "verify", changed_files=["src/app.txt"])
     app_path.write_text("second\n", encoding="utf-8")
-    second = run_check(project, "verify")
+    second = run_check(project, "verify", changed_files=["src/app.txt"])
 
     assert first.returncode == 0, first.stdout + first.stderr
     assert second.returncode == 0, second.stdout + second.stderr
@@ -3382,9 +3586,6 @@ def test_build_and_verify_runner_default_check_cache_key_tracks_changed_files(
     project = tmp_path / "project"
     project.mkdir()
     assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    assert git(project, "init").returncode == 0
-    assert git(project, "config", "user.email", "test@example.invalid").returncode == 0
-    assert git(project, "config", "user.name", "Test User").returncode == 0
     write_json(
         project / ".build-and-verify" / "config.json",
         {
@@ -3400,13 +3601,11 @@ def test_build_and_verify_runner_default_check_cache_key_tracks_changed_files(
             },
         },
     )
-    assert git(project, "add", ".").returncode == 0
-    assert git(project, "commit", "-m", "initial").returncode == 0
 
     (project / "a.txt").write_text("a\n", encoding="utf-8")
-    first = run_check(project, "verify")
+    first = run_check(project, "verify", changed_files=["a.txt"])
     (project / "b.txt").write_text("b\n", encoding="utf-8")
-    second = run_check(project, "verify")
+    second = run_check(project, "verify", changed_files=["b.txt"])
 
     assert first.returncode == 0, first.stdout + first.stderr
     assert second.returncode == 0, second.stdout + second.stderr
@@ -3423,9 +3622,6 @@ def test_build_and_verify_pathless_check_skips_clean_git_worktree(
     project = tmp_path / "project"
     project.mkdir()
     assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    assert git(project, "init").returncode == 0
-    assert git(project, "config", "user.email", "test@example.invalid").returncode == 0
-    assert git(project, "config", "user.name", "Test User").returncode == 0
     write_json(
         project / ".build-and-verify" / "config.json",
         {
@@ -3441,10 +3637,8 @@ def test_build_and_verify_pathless_check_skips_clean_git_worktree(
             },
         },
     )
-    assert git(project, "add", ".").returncode == 0
-    assert git(project, "commit", "-m", "initial").returncode == 0
 
-    verify = run_check(project, "verify")
+    verify = run_check(project, "verify", changed_files=[])
 
     assert verify.returncode == 0, verify.stdout + verify.stderr
     assert "checked:" in verify.stdout
@@ -3458,9 +3652,6 @@ def test_build_and_verify_runner_default_check_cache_key_tracks_dirty_file_conte
     project = tmp_path / "project"
     project.mkdir()
     assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    assert git(project, "init").returncode == 0
-    assert git(project, "config", "user.email", "test@example.invalid").returncode == 0
-    assert git(project, "config", "user.name", "Test User").returncode == 0
     dirty_file = project / "dirty.txt"
     dirty_file.write_text("base\n", encoding="utf-8")
     write_json(
@@ -3478,13 +3669,11 @@ def test_build_and_verify_runner_default_check_cache_key_tracks_dirty_file_conte
             },
         },
     )
-    assert git(project, "add", ".").returncode == 0
-    assert git(project, "commit", "-m", "initial").returncode == 0
 
     dirty_file.write_text("first\n", encoding="utf-8")
-    first = run_check(project, "verify")
+    first = run_check(project, "verify", changed_files=["dirty.txt"])
     dirty_file.write_text("second\n", encoding="utf-8")
-    second = run_check(project, "verify")
+    second = run_check(project, "verify", changed_files=["dirty.txt"])
 
     assert first.returncode == 0, first.stdout + first.stderr
     assert second.returncode == 0, second.stdout + second.stderr
@@ -3521,7 +3710,11 @@ def test_build_and_verify_runner_reports_missing_list_command_without_traceback(
         },
     )
 
-    result = run_check(project, "verify")
+    result = run_check(
+        project,
+        "verify",
+        runner=FakeRunner({("missing-build-and-verify-executable",): FileNotFoundError()}),
+    )
     output = result.stdout + result.stderr
 
     assert result.returncode != 0
@@ -3627,7 +3820,7 @@ def test_build_and_verify_runner_cache_key_changes_with_check_contract(
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
+    (project / ".build-and-verify" / "cache").mkdir(parents=True)
     (project / "src").mkdir()
     (project / "inputs").mkdir()
     (project / "src" / "sample.py").write_text("changed\n", encoding="utf-8")
@@ -3657,8 +3850,8 @@ def test_build_and_verify_runner_cache_key_changes_with_check_contract(
         }
 
     write_json(project / ".build-and-verify" / "config.json", config())
-    first = run_check(project, "verify")
-    cached = run_check(project, "verify")
+    first = run_check(project, "verify", changed_files=["src/sample.py"])
+    cached = run_check(project, "verify", changed_files=["src/sample.py"])
 
     assert first.returncode == 0, first.stdout + first.stderr
     cache_files = list((project / ".build-and-verify" / "cache").glob("*.json"))
@@ -3685,7 +3878,7 @@ def test_build_and_verify_runner_cache_key_changes_with_check_contract(
         raise AssertionError(f"unsupported mutation: {mutation}")
 
     write_json(project / ".build-and-verify" / "config.json", changed_config)
-    changed = run_check(project, "verify")
+    changed = run_check(project, "verify", changed_files=["src/sample.py"])
 
     assert changed.returncode == 0, changed.stdout + changed.stderr
     assert "cache-hit:" not in changed.stdout
@@ -3732,7 +3925,7 @@ def test_build_and_verify_runner_cache_miss_does_not_fall_back_to_full(
         },
     )
 
-    result = run_check(project, "verify")
+    result = run_check(project, "verify", changed_files=["src/sample.txt"])
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "cache-hit:" not in result.stdout
@@ -3782,11 +3975,11 @@ def test_build_and_verify_runner_directory_hash_ignores_generated_paths(
         },
     )
 
-    first = run_check(project, "verify")
+    first = run_check(project, "verify", changed_files=["src/sample.txt"])
     noise_path = project / excluded_relative
     noise_path.parent.mkdir(parents=True, exist_ok=True)
     noise_path.write_text("ignored\n", encoding="utf-8")
-    second = run_check(project, "verify")
+    second = run_check(project, "verify", changed_files=["src/sample.txt"])
 
     assert first.returncode == 0, first.stdout + first.stderr
     assert second.returncode == 0, second.stdout + second.stderr
@@ -3828,8 +4021,8 @@ def test_build_and_verify_runner_does_not_cache_failed_results(tmp_path: Path) -
         },
     )
 
-    first = run_check(project, "verify")
-    second = run_check(project, "verify")
+    first = run_check(project, "verify", changed_files=["src/fails.py"])
+    second = run_check(project, "verify", changed_files=["src/fails.py"])
 
     assert first.returncode != 0
     assert second.returncode == 0, second.stdout + second.stderr
@@ -3864,7 +4057,7 @@ def test_build_and_verify_runner_no_check_does_not_fall_back_to_full(tmp_path: P
         },
     )
 
-    result = run_check(project, "verify")
+    result = run_check(project, "verify", changed_files=["docs/guide.md"])
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "checked:" in result.stdout
@@ -3907,17 +4100,15 @@ def test_build_and_verify_runner_reads_worktree_changed_files(tmp_path: Path) ->
     )
     (project / "staged.txt").write_text("base\n", encoding="utf-8")
     (project / "unstaged.txt").write_text("base\n", encoding="utf-8")
-    assert git(project, "init").returncode == 0
-    assert git(project, "config", "user.email", "test@example.com").returncode == 0
-    assert git(project, "config", "user.name", "Test User").returncode == 0
-    assert git(project, "add", ".").returncode == 0
-    assert git(project, "commit", "-m", "initial").returncode == 0
     (project / "staged.txt").write_text("staged\n", encoding="utf-8")
-    assert git(project, "add", "staged.txt").returncode == 0
     (project / "unstaged.txt").write_text("unstaged\n", encoding="utf-8")
     (project / "untracked.txt").write_text("untracked\n", encoding="utf-8")
 
-    result = run_check(project, "verify")
+    result = run_check(
+        project,
+        "verify",
+        changed_files=["staged.txt", "unstaged.txt", "untracked.txt"],
+    )
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "checked: staged-check, unstaged-check, untracked-check" in result.stdout

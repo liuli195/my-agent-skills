@@ -1,3 +1,6 @@
+import contextlib
+import importlib.util
+import io
 import shutil
 import subprocess
 import sys
@@ -9,28 +12,57 @@ PLUGIN_SKILL = REPO_ROOT / "plugins" / "agent-guard" / "skills" / "agent-guard"
 INIT_USER_GUARD = PLUGIN_SKILL / "scripts" / "init_user_guard.py"
 VALIDATOR = PLUGIN_SKILL / "scripts" / "validate_guard_profile.py"
 MINIMAL_PROFILE = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "minimal"
+_INIT_MODULE = None
+_VALIDATOR_MODULE = None
+
+
+def load_script_module(path: Path, name: str):
+    if str(path.parent) not in sys.path:
+        sys.path.insert(0, str(path.parent))
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def run_main(module, script: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.chdir(REPO_ROOT), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        try:
+            returncode = int(module.main(args))
+        except SystemExit as error:
+            returncode = error.code if isinstance(error.code, int) else 1
+    return subprocess.CompletedProcess(
+        [sys.executable, str(script), *args],
+        returncode,
+        stdout.getvalue(),
+        stderr.getvalue(),
+    )
+
+
+def init_module():
+    global _INIT_MODULE
+    if _INIT_MODULE is None:
+        _INIT_MODULE = load_script_module(INIT_USER_GUARD, "init_user_guard_for_tests")
+    return _INIT_MODULE
+
+
+def validator_module():
+    global _VALIDATOR_MODULE
+    if _VALIDATOR_MODULE is None:
+        _VALIDATOR_MODULE = load_script_module(VALIDATOR, "validate_guard_profile_for_init_user_tests")
+    return _VALIDATOR_MODULE
 
 
 def run_init(args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(INIT_USER_GUARD), *args],
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+    return run_main(init_module(), INIT_USER_GUARD, args)
 
 
 def run_validator(profile_path: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(VALIDATOR), str(profile_path)],
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+    return run_main(validator_module(), VALIDATOR, [str(profile_path)])
 
 
 def test_user_guard_initialization_defaults_to_dry_run(tmp_path: Path) -> None:

@@ -1,3 +1,6 @@
+import contextlib
+import importlib.util
+import io
 import shutil
 import subprocess
 import sys
@@ -13,16 +16,36 @@ MINIMAL_PROFILE = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "min
 MIRRORED_MINIMAL_PROFILE = REPO_ROOT / "plugins" / "agent-guard" / "assets" / "templates" / "guard-profile" / "minimal"
 COMET_REVIEW_GATE_PROFILE = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "comet-review-gate"
 MIRRORED_COMET_REVIEW_GATE_PROFILE = REPO_ROOT / "plugins" / "agent-guard" / "assets" / "templates" / "guard-profile" / "comet-review-gate"
+_VALIDATOR_MODULE = None
+
+
+def load_validator_module():
+    global _VALIDATOR_MODULE
+    if _VALIDATOR_MODULE is not None:
+        return _VALIDATOR_MODULE
+    spec = importlib.util.spec_from_file_location("validate_guard_profile_for_tests", VALIDATOR)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    _VALIDATOR_MODULE = module
+    return module
 
 
 def run_validator(profile_path: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    module = load_validator_module()
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.chdir(REPO_ROOT), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        try:
+            returncode = int(module.main([str(profile_path)]))
+        except SystemExit as error:
+            returncode = error.code if isinstance(error.code, int) else 1
+    return subprocess.CompletedProcess(
         [sys.executable, str(VALIDATOR), str(profile_path)],
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
+        returncode,
+        stdout.getvalue(),
+        stderr.getvalue(),
     )
 
 

@@ -1,3 +1,6 @@
+import contextlib
+import importlib.util
+import io
 import subprocess
 import sys
 from pathlib import Path
@@ -7,28 +10,61 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_SKILL = REPO_ROOT / "plugins" / "agent-guard" / "skills" / "agent-guard"
 EXTRACTOR = PLUGIN_SKILL / "scripts" / "extract_guard_model.py"
 VALIDATOR = PLUGIN_SKILL / "scripts" / "validate_guard_profile.py"
+_EXTRACTOR_MODULE = None
+_VALIDATOR_MODULE = None
+
+
+def load_script_module(path: Path, name: str):
+    if str(path.parent) not in sys.path:
+        sys.path.insert(0, str(path.parent))
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def run_main(module, script: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.chdir(REPO_ROOT), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        try:
+            returncode = int(module.main(args))
+        except SystemExit as error:
+            returncode = error.code if isinstance(error.code, int) else 1
+    return subprocess.CompletedProcess(
+        [sys.executable, str(script), *args],
+        returncode,
+        stdout.getvalue(),
+        stderr.getvalue(),
+    )
+
+
+def extractor_module():
+    global _EXTRACTOR_MODULE
+    if _EXTRACTOR_MODULE is None:
+        _EXTRACTOR_MODULE = load_script_module(EXTRACTOR, "extract_guard_model_for_tests")
+    return _EXTRACTOR_MODULE
+
+
+def validator_module():
+    global _VALIDATOR_MODULE
+    if _VALIDATOR_MODULE is None:
+        _VALIDATOR_MODULE = load_script_module(VALIDATOR, "validate_guard_profile_for_extract_tests")
+    return _VALIDATOR_MODULE
 
 
 def run_extractor(input_path: Path, output_path: Path, extra_args: list[str] | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(EXTRACTOR), str(input_path), "--output", str(output_path), *(extra_args or [])],
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
+    return run_main(
+        extractor_module(),
+        EXTRACTOR,
+        [str(input_path), "--output", str(output_path), *(extra_args or [])],
     )
 
 
 def run_validator(profile_path: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(VALIDATOR), str(profile_path)],
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+    return run_main(validator_module(), VALIDATOR, [str(profile_path)])
 
 
 def write_complete_extraction_input(path: Path) -> None:

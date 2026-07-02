@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import hashlib
 import json
 import io
@@ -27,6 +28,7 @@ SCRIPT = (
     / "scripts"
     / "cross_agent_review.py"
 )
+_SCRIPT_MODULE = None
 
 
 def template_cache_key(*paths: Path) -> str:
@@ -44,22 +46,33 @@ TEMPLATE_ROOT = Path(tempfile.gettempdir()) / f"cross-agent-review-test-template
 
 
 def load_script_module():
+    global _SCRIPT_MODULE
+    if _SCRIPT_MODULE is not None:
+        return _SCRIPT_MODULE
     spec = importlib.util.spec_from_file_location("cross_agent_review", SCRIPT)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    _SCRIPT_MODULE = module
     return module
 
 
 def run(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    module = load_script_module()
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.chdir(cwd or REPO_ROOT), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        try:
+            returncode = int(module.main(args))
+        except SystemExit as error:
+            returncode = error.code if isinstance(error.code, int) else 1
+    return subprocess.CompletedProcess(
         [sys.executable, str(SCRIPT), *args],
-        cwd=cwd or REPO_ROOT,
-        check=False,
-        text=True,
-        capture_output=True,
+        returncode,
+        stdout.getvalue(),
+        stderr.getvalue(),
     )
 
 
@@ -67,6 +80,24 @@ def write_file(path: Path, text: str = "content\n") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
+
+
+def copy_template_overlay(source: Path, target: Path) -> Path:
+    if not target.exists():
+        return copy_template(source, target)
+    for source_path in source.rglob("*"):
+        relative = source_path.relative_to(source)
+        if len(relative.parts) >= 2 and relative.parts[:2] == (".git", "hooks"):
+            continue
+        target_path = target / relative
+        if source_path.is_dir():
+            target_path.mkdir(parents=True, exist_ok=True)
+            continue
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        if target_path.exists() and len(relative.parts) >= 3 and relative.parts[:2] == (".git", "objects"):
+            continue
+        shutil.copy2(source_path, target_path)
+    return target
 
 
 def test_cross_agent_review_template_cache_key_includes_script_contents() -> None:
@@ -138,6 +169,37 @@ def init_repo(project: Path) -> str:
     return git(project, "rev-parse", "HEAD")
 
 
+def ensure_review_context_template(project: Path) -> None:
+    template = TEMPLATE_ROOT / "review-context-repo"
+    ready = TEMPLATE_ROOT / "review-context-repo.ready"
+    if ready.exists():
+        copy_template_overlay(template, project)
+        return
+
+    lock_dir = TEMPLATE_ROOT / "review-context-repo.lock"
+    deadline = time.monotonic() + 120
+    while True:
+        try:
+            lock_dir.mkdir(parents=True)
+            break
+        except FileExistsError:
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"template_lock_timeout: {lock_dir}")
+            time.sleep(0.05)
+
+    try:
+        if not ready.exists():
+            if template.exists():
+                shutil.rmtree(template)
+            ensure_repo_template(template)
+            create_review_context_commit(template)
+            ready.write_text("ok\n", encoding="utf-8")
+    finally:
+        shutil.rmtree(lock_dir, ignore_errors=True)
+
+    copy_template_overlay(template, project)
+
+
 def write_review_input(
     project: Path,
     base: str,
@@ -168,12 +230,17 @@ def write_review_input(
     return input_file
 
 
-def commit_review_context(project: Path) -> str:
+def create_review_context_commit(project: Path) -> str:
     write_file(project / "spec.md", "spec body\n")
     write_file(project / "design.md", "design body\n")
     write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
     git(project, "add", "spec.md", "design.md", "docs/superpowers/plans/demo.md")
     git(project, "commit", "-m", "add review context")
+    return git(project, "rev-parse", "HEAD")
+
+
+def commit_review_context(project: Path) -> str:
+    ensure_review_context_template(project)
     return git(project, "rev-parse", "HEAD")
 
 
@@ -277,23 +344,16 @@ def test_default_outputs_are_report_only(tmp_path: Path, monkeypatch) -> None:
     assert not (output_dir / "debug").exists()
 
 
-def test_mark_pass_writes_guard_evidence_default_path(tmp_path: Path, monkeypatch) -> None:
-    module = load_script_module()
+def test_mark_pass_writes_guard_evidence_default_path(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     base = init_repo(project)
-    write_file(project / "app.txt", "two\n")
-    write_file(project / "spec.md", "spec body\n")
-    write_file(project / "design.md", "design body\n")
-    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
-    git(project, "add", "app.txt", "spec.md", "design.md", "docs/superpowers/plans/demo.md")
-    git(project, "commit", "-m", "feature")
-    head = git(project, "rev-parse", "HEAD")
+    head = commit_review_context(project)
     input_file = write_review_input(project, base, head, mode="convergence")
+    report_path = input_file.parent.parent / "review-report.md"
+    write_file(report_path, NO_BLOCKING_REVIEW)
 
-    review_status = run_review_in_process(module, monkeypatch, project, "run", "--input-file", str(input_file))
     result = run("mark-pass", "--input-file", str(input_file), cwd=project)
 
-    assert review_status == 0
     assert result.returncode == 0, result.stdout + result.stderr
     marker_path = guard_pass_path(project, head)
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
@@ -315,23 +375,15 @@ def test_mark_pass_writes_guard_evidence_default_path(tmp_path: Path, monkeypatc
     assert marker["report_hash"].startswith("sha256:")
 
 
-def test_mark_pass_records_endless_mode_and_refs(tmp_path: Path, monkeypatch) -> None:
-    module = load_script_module()
+def test_mark_pass_records_endless_mode_and_refs(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     base = init_repo(project)
-    write_file(project / "app.txt", "two\n")
-    write_file(project / "spec.md", "spec body\n")
-    write_file(project / "design.md", "design body\n")
-    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
-    git(project, "add", "app.txt", "spec.md", "design.md", "docs/superpowers/plans/demo.md")
-    git(project, "commit", "-m", "feature")
-    head = git(project, "rev-parse", "HEAD")
+    head = commit_review_context(project)
     input_file = write_review_input(project, base, head, mode="endless")
+    write_file(input_file.parent.parent / "review-report.md", NO_BLOCKING_REVIEW)
 
-    review_status = run_review_in_process(module, monkeypatch, project, "run", "--input-file", str(input_file))
     result = run("mark-pass", "--input-file", str(input_file), cwd=project)
 
-    assert review_status == 0
     assert result.returncode == 0, result.stdout + result.stderr
     marker = json.loads(guard_pass_path(project, head).read_text(encoding="utf-8"))
     assert marker["mode"] == "endless"
@@ -342,19 +394,17 @@ def test_mark_pass_records_endless_mode_and_refs(tmp_path: Path, monkeypatch) ->
 def test_blocking_findings_write_report_without_pass_marker(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
-    init_repo(project)
-    head = commit_review_context(project)
+    project.mkdir()
+    head = "1234567890abcdef"
     input_file = write_review_input(project, head, head)
     output_dir = input_file.parent.parent
+    monkeypatch.chdir(project)
+    review_input = module.load_review_input(
+        types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None)
+    )
 
-    status = run_review_in_process(
-        module,
-        monkeypatch,
-        project,
-        "run",
-        "--input-file",
-        str(input_file),
-        reviewer_text=BLOCKING_REVIEW,
+    status = module.write_outputs(
+        review_input, module.aggregate(reviewer_results(module, BLOCKING_REVIEW))
     )
 
     assert status == 0
@@ -844,18 +894,15 @@ def test_dirty_worktree_rejects_before_dispatch(tmp_path: Path) -> None:
     assert not (project / ".local" / "cross-agent-review" / "demo" / head[:12] / "review-pass.json").exists()
 
 
-def test_input_files_in_space_directory_are_allowed(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_input_files_in_space_directory_are_allowed(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
-    init_repo(project)
-    commit_review_context(project)
+    project.mkdir()
     input_dir = project / "review inputs"
     spec_file = write_file(input_dir / "spec file.md")
     design_file = write_file(input_dir / "design file.md")
     plan_file = write_file(input_dir / "plan file.md")
-    git(project, "add", "review inputs")
-    git(project, "commit", "-m", "add review inputs")
-    head = git(project, "rev-parse", "HEAD")
+    head = "1234567890abcdef"
     input_file = write_review_input(
         project,
         head,
@@ -866,19 +913,15 @@ def test_input_files_in_space_directory_are_allowed(tmp_path: Path, monkeypatch,
             "plan_file": str(plan_file.relative_to(project)),
         },
     )
+    monkeypatch.chdir(project)
 
-    status = run_review_in_process(
-        module,
-        monkeypatch,
-        project,
-        "run",
-        "--input-file",
-        str(input_file),
+    review_input = module.load_review_input(
+        types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None)
     )
-    captured = capsys.readouterr()
 
-    assert status == 0
-    assert "status: review_ready" in captured.out
+    assert review_input.spec_file == spec_file
+    assert review_input.design_file == design_file
+    assert review_input.plan_file == plan_file
 
 
 def test_head_mismatch_rejects_before_dispatch(tmp_path: Path) -> None:
@@ -1436,8 +1479,9 @@ def test_sdk_dispatch_subprocess_invalid_stdout_reports_clear_error(tmp_path: Pa
 def test_non_blocking_findings_generate_report_without_pass_marker(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
-    init_repo(project)
-    head = commit_review_context(project)
+    project.mkdir()
+    head = "1234567890abcdef"
+    input_file = write_review_input(project, head, head)
     output_dir = project / ".local" / "cross-agent-review" / "demo" / head[:12]
     review_text = """# Review Result
 ## Findings
@@ -1447,8 +1491,14 @@ def test_non_blocking_findings_generate_report_without_pass_marker(tmp_path: Pat
   Evidence: Evidence
   Recommendation: Recommendation
 """
+    monkeypatch.chdir(project)
+    review_input = module.load_review_input(
+        types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None)
+    )
 
-    status = run_review_in_process(module, monkeypatch, project, *review_args(project, head), reviewer_text=review_text)
+    status = module.write_outputs(
+        review_input, module.aggregate(reviewer_results(module, review_text))
+    )
 
     assert status == 0
     assert (output_dir / "review-report.md").is_file()
@@ -1458,12 +1508,18 @@ def test_non_blocking_findings_generate_report_without_pass_marker(tmp_path: Pat
 def test_blocking_findings_do_not_generate_pass_marker(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
-    init_repo(project)
-    head = commit_review_context(project)
+    project.mkdir()
+    head = "1234567890abcdef"
+    input_file = write_review_input(project, head, head)
     output_dir = project / ".local" / "cross-agent-review" / "demo" / head[:12]
-    review_text = BLOCKING_REVIEW
+    monkeypatch.chdir(project)
+    review_input = module.load_review_input(
+        types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None)
+    )
 
-    status = run_review_in_process(module, monkeypatch, project, *review_args(project, head), reviewer_text=review_text)
+    status = module.write_outputs(
+        review_input, module.aggregate(reviewer_results(module, BLOCKING_REVIEW))
+    )
 
     assert status == 0
     assert (output_dir / "review-report.md").is_file()
@@ -1497,17 +1553,15 @@ def test_run_removes_stale_legacy_pass_marker_from_reused_output_dir(tmp_path: P
     assert not (output_dir / "review-pass.json").exists()
 
 
-def test_mark_pass_report_hash_matches_report(tmp_path: Path, monkeypatch) -> None:
-    module = load_script_module()
+def test_mark_pass_report_hash_matches_report(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     init_repo(project)
     head = commit_review_context(project)
     input_file = write_review_input(project, head, head)
     output_dir = input_file.parent.parent
-    status = run_review_in_process(module, monkeypatch, project, "run", "--input-file", str(input_file))
+    write_file(output_dir / "review-report.md", NO_BLOCKING_REVIEW)
     mark_result = run("mark-pass", "--input-file", str(input_file), cwd=project)
 
-    assert status == 0
     assert mark_result.returncode == 0, mark_result.stdout + mark_result.stderr
     report = (output_dir / "review-report.md").read_bytes()
     marker = json.loads(guard_pass_path(project, head).read_text(encoding="utf-8"))

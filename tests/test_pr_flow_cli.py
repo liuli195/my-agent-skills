@@ -1,5 +1,7 @@
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -26,6 +28,7 @@ SCRIPT = (
     / "scripts"
     / "pr_flow.py"
 )
+_PR_FLOW_MODULE = None
 
 
 def template_cache_key(*paths: Path) -> str:
@@ -47,22 +50,42 @@ TEMPLATE_LOCK_STALE_SECONDS = 30
 
 
 def load_pr_flow_module():
+    global _PR_FLOW_MODULE
+    if _PR_FLOW_MODULE is not None:
+        return _PR_FLOW_MODULE
     spec = importlib.util.spec_from_file_location("pr_flow_under_test", SCRIPT)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    _PR_FLOW_MODULE = module
     return module
 
 
 def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    module = load_pr_flow_module()
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    previous_env = os.environ.copy()
+    if env is not None:
+        os.environ.clear()
+        os.environ.update(env)
+    try:
+        with contextlib.chdir(cwd or REPO_ROOT), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            try:
+                returncode = int(module.main(args))
+            except SystemExit as error:
+                returncode = error.code if isinstance(error.code, int) else 1
+    finally:
+        if env is not None:
+            os.environ.clear()
+            os.environ.update(previous_env)
+    return subprocess.CompletedProcess(
         [sys.executable, str(SCRIPT), *args],
-        cwd=cwd or REPO_ROOT,
-        check=False,
-        text=True,
-        capture_output=True,
-        env=env,
+        returncode,
+        stdout.getvalue(),
+        stderr.getvalue(),
     )
 
 
@@ -450,7 +473,40 @@ def ensure_project_remote_template(template_name: str, tmp_path: Path, creator) 
     return copy_project_remote_template(template_dir, tmp_path)
 
 
-def test_project_template_recovers_stale_lock(tmp_path: Path) -> None:
+def _create_minimal_project_remote_template(tmp_path: Path) -> tuple[Path, Path]:
+    remote = tmp_path / "remote.git"
+    remote_init = subprocess.run(
+        ["git", "init", "--bare", str(remote)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert remote_init.returncode == 0, remote_init.stdout + remote_init.stderr
+
+    project = tmp_path / "project"
+    assert init_repo(project) == "main"
+    git(project, "remote", "add", "origin", str(remote))
+    git(project, "push", "-u", "origin", "main")
+    return project, remote
+
+
+def fake_project_remote_template(template_dir: Path) -> None:
+    (template_dir / "project").mkdir()
+    (template_dir / "remote.git").mkdir()
+
+
+def fake_copy_project_remote_template(template_dir: Path, tmp_path: Path) -> tuple[Path, Path]:
+    remote = copy_template(template_dir / "remote.git", tmp_path / "remote.git")
+    project = copy_template(template_dir / "project", tmp_path / "project")
+    return project, remote
+
+
+def test_project_template_recovers_stale_lock(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "copy_project_remote_template",
+        fake_copy_project_remote_template,
+    )
     template_name = f"stale-lock-{tmp_path.name}"
     lock_dir = TEMPLATE_ROOT / f"{template_name}.lock"
     lock_dir.mkdir(parents=True, exist_ok=True)
@@ -460,7 +516,7 @@ def test_project_template_recovers_stale_lock(tmp_path: Path) -> None:
     project, remote = ensure_project_remote_template(
         template_name,
         tmp_path,
-        lambda template_dir: _create_cleanup_project(template_dir),
+        fake_project_remote_template,
     )
 
     assert project.is_dir()
@@ -468,7 +524,14 @@ def test_project_template_recovers_stale_lock(tmp_path: Path) -> None:
     assert not lock_dir.exists()
 
 
-def test_project_template_recreates_incomplete_template_after_stale_lock(tmp_path: Path) -> None:
+def test_project_template_recreates_incomplete_template_after_stale_lock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "copy_project_remote_template",
+        fake_copy_project_remote_template,
+    )
     template_name = f"incomplete-template-{os.getpid()}-{time.monotonic_ns()}"
     template_dir = TEMPLATE_ROOT / template_name
     lock_dir = TEMPLATE_ROOT / f"{template_name}.lock"
@@ -481,7 +544,7 @@ def test_project_template_recreates_incomplete_template_after_stale_lock(tmp_pat
     project, remote = ensure_project_remote_template(
         template_name,
         tmp_path,
-        lambda template_dir: _create_cleanup_project(template_dir),
+        fake_project_remote_template,
     )
 
     assert project.is_dir()
@@ -2152,14 +2215,24 @@ def test_status_file_is_written_for_stop_state(tmp_path: Path) -> None:
     assert status["details"]["reason"] == "git_current_branch_failed"
 
 
-def test_diagnose_outputs_dispatch_required_without_upstream(tmp_path: Path) -> None:
+def test_diagnose_outputs_dispatch_required_without_upstream(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
     project = tmp_path / "project"
-    assert init_repo(project) == "main"
-    write_confirmed_pr_flow_config(project)
-    git(project, "switch", "-c", "feature/no-upstream")
+    project.mkdir()
+    write_minimal_pr_flow_config(project)
+    git_stub = CommandStub()
+    git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
+    git_stub.add(
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        stderr="fatal: no upstream configured\n",
+        returncode=128,
+    )
+    git_stub.add(["status", "--short"], stdout="")
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "gh", CommandStub())
 
     result = invoke_pr_flow(["diagnose", "--project", str(project)], module=module)
 
@@ -2716,53 +2789,105 @@ def test_diagnose_outputs_stop_state_matrix(
             assert status["details"][key] == value
 
 
-def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path: Path) -> None:
-    project, _remote = init_complete_project(tmp_path)
-    head_oid = git(project, "rev-parse", "HEAD")
-    fake_bin, calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {"stderr": "no pull requests found\n", "exit_code": 1},
-            {"stdout": "https://github.example/test/repo/pull/12\n"},
-            {"stdout": passing_pr_view_json(project)},
-            {"stdout": passing_pr_view_json(project)},
-            {"stdout": ""},
-            {"stdout": cleanup_pr_view_json()},
-        ],
-    )
+def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
 
-    result = run_with_path(fake_bin, *complete_args(project))
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    head_oid = "b" * 40
+    completed_pr = pr_view_json(
+        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        review_decision="APPROVED",
+        head_oid=head_oid,
+    )
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found\n", returncode=1)
+    gh_stub.add(["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"], stdout="https://github.example/test/repo/pull/12\n")
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
+    gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
+    gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
+    git_stub = CommandStub(consume=True)
+    for git_args, stdout in [
+        (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
+        (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
+        (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
+        (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "HEAD"], head_oid + "\n"),
+        (["status", "--short"], ""),
+        (["branch", "--show-current"], "feature/example\n"),
+        (["push", "origin", "--delete", "feature/example"], ""),
+        (["ls-remote", "--heads", "origin", "feature/example"], ""),
+        (["checkout", "main"], ""),
+        (["pull", "--ff-only", "origin", "main"], ""),
+        (["branch", "-d", "feature/example"], ""),
+        (["branch", "--show-current"], "main\n"),
+    ]:
+        git_stub.add(git_args, stdout=stdout)
+    monkeypatch.setattr(module, "gh", gh_stub)
+    monkeypatch.setattr(module, "git", git_stub)
+
+    result = invoke_pr_flow(complete_args(project), module=module)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: cleanup_complete" in result.stdout
-    calls = json.loads(calls_path.read_text(encoding="utf-8"))
+    calls = [list(call) for call in gh_stub.calls]
     assert calls[0][:2] == ["pr", "view"]
     assert calls[1][:2] == ["pr", "create"]
     assert calls[4] == ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid]
     assert calls[5] == ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"]
+    assert gh_stub.body_files[0]["body"] == expected_pr_body(fixes=())
 
 
-def test_complete_full_flow_uses_configured_squash_strategy(tmp_path: Path) -> None:
-    project, _remote = init_complete_project(tmp_path, merge_strategy="squash")
-    head_oid = git(project, "rev-parse", "HEAD")
-    fake_bin, calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {"stderr": "no pull requests found\n", "exit_code": 1},
-            {"stdout": "https://github.example/test/repo/pull/12\n"},
-            {"stdout": passing_pr_view_json(project)},
-            {"stdout": passing_pr_view_json(project)},
-            {"stdout": ""},
-            {"stdout": cleanup_pr_view_json()},
-        ],
+def test_complete_full_flow_uses_configured_squash_strategy(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project, merge_strategy="squash")
+    head_oid = "b" * 40
+    completed_pr = pr_view_json(
+        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        review_decision="APPROVED",
+        head_oid=head_oid,
     )
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
+    gh_stub.add(["pr", "merge", "12", "--squash", "--match-head-commit", head_oid])
+    gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
+    git_stub = CommandStub(consume=True)
+    for git_args, stdout in [
+        (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
+        (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
+        (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
+        (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "HEAD"], head_oid + "\n"),
+        (["status", "--short"], ""),
+        (["branch", "--show-current"], "feature/example\n"),
+        (["push", "origin", "--delete", "feature/example"], ""),
+        (["ls-remote", "--heads", "origin", "feature/example"], ""),
+        (["checkout", "main"], ""),
+        (["pull", "--ff-only", "origin", "main"], ""),
+        (["branch", "-d", "feature/example"], ""),
+        (["branch", "--show-current"], "main\n"),
+    ]:
+        git_stub.add(git_args, stdout=stdout)
+    monkeypatch.setattr(module, "gh", gh_stub)
+    monkeypatch.setattr(module, "git", git_stub)
 
-    result = run_with_path(fake_bin, *complete_args(project))
+    result = invoke_pr_flow(complete_args(project), module=module)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: cleanup_complete" in result.stdout
-    calls = json.loads(calls_path.read_text(encoding="utf-8"))
-    assert calls[4] == ["pr", "merge", "12", "--squash", "--match-head-commit", head_oid]
+    assert ("pr", "merge", "12", "--squash", "--match-head-commit", head_oid) in gh_stub.calls
 
 
 def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path, monkeypatch) -> None:
@@ -3834,23 +3959,45 @@ def test_hotfix_rejects_when_verify_command_fails(tmp_path: Path, monkeypatch) -
     assert status["details"]["returncode"] != 0
 
 
-def test_hotfix_pushes_head_to_target_and_writes_audit_record(tmp_path: Path) -> None:
-    project, remote, before_commit = init_hotfix_project(tmp_path)
-    head_commit = git(project, "rev-parse", "HEAD")
+def test_hotfix_pushes_head_to_target_and_writes_audit_record(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
 
-    result = run(
-        "hotfix",
-        "--project",
-        str(project),
-        "--target",
-        "main",
-        "--authorization-phrase",
-        HOTFIX_PHRASE,
+    pr_flow = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_hotfix_pr_flow_config(project)
+    before_commit = "a" * 40
+    head_commit = "b" * 40
+    git_stub = CommandStub(consume=True)
+    for git_args, stdout in [
+        (["fetch", "origin", "main"], ""),
+        (["rev-parse", "origin/main"], before_commit + "\n"),
+        (["rev-parse", "HEAD"], head_commit + "\n"),
+        (["merge-base", "HEAD", "origin/main"], before_commit + "\n"),
+        (["status", "--short"], ""),
+        (["push", "origin", "HEAD:refs/heads/main"], ""),
+        (["fetch", "origin", "main"], ""),
+        (["rev-parse", "origin/main"], head_commit + "\n"),
+        (["config", "--get", "user.name"], "Test User\n"),
+        (["config", "--get", "user.email"], "test@example.com\n"),
+    ]:
+        git_stub.add(git_args, stdout=stdout)
+
+    def fake_verify(project_arg: Path, command: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([command], 0, head_commit + "\n", "")
+
+    monkeypatch.setattr(pr_flow, "git", git_stub)
+    monkeypatch.setattr(pr_flow, "run_hotfix_verify_command", fake_verify)
+
+    result = invoke_pr_flow(
+        ["hotfix", "--project", str(project), "--target", "main", "--authorization-phrase", HOTFIX_PHRASE],
+        module=pr_flow,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: hotfix_complete" in result.stdout
-    assert git_bare(remote, "rev-parse", "refs/heads/main") == head_commit
+    assert ("push", "origin", "HEAD:refs/heads/main") in git_stub.calls
 
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["details"]["remoteAfter"] == head_commit
@@ -3876,36 +4023,55 @@ def test_hotfix_pushes_head_to_target_and_writes_audit_record(tmp_path: Path) ->
     }
 
 
-def test_cleanup_merged_pr_checks_out_base_pulls_and_deletes_branches(tmp_path: Path) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    fake_bin, calls_path = write_fake_gh_sequence(
-        tmp_path / "bin",
-        [
-            {"stdout": cleanup_pr_view_json()},
-        ],
-    )
-    stale_local_base = git(project, "rev-parse", "main")
-    remote_base_after_merge = git_bare(remote, "rev-parse", "refs/heads/main")
-    assert stale_local_base != remote_base_after_merge
-    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode == 0
+def test_cleanup_merged_pr_checks_out_base_pulls_and_deletes_branches(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
 
-    result = run_with_path(fake_bin, "cleanup", "--project", str(project), "--pr", "12")
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_minimal_pr_flow_config(project)
+    gh_stub = CommandStub()
+    gh_stub.add(
+        ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
+        stdout=cleanup_pr_view_json(),
+    )
+    git_stub = CommandStub(consume=True)
+    for git_args, stdout in [
+        (["status", "--short"], ""),
+        (["branch", "--show-current"], "feature/example\n"),
+        (["push", "origin", "--delete", "feature/example"], ""),
+        (["ls-remote", "--heads", "origin", "feature/example"], ""),
+        (["checkout", "main"], ""),
+        (["pull", "--ff-only", "origin", "main"], ""),
+        (["branch", "-d", "feature/example"], ""),
+        (["branch", "--show-current"], "main\n"),
+    ]:
+        git_stub.add(git_args, stdout=stdout)
+    monkeypatch.setattr(module, "gh", gh_stub)
+    monkeypatch.setattr(module, "git", git_stub)
+
+    result = invoke_pr_flow(["cleanup", "--project", str(project), "--pr", "12"], module=module)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: cleanup_complete" in result.stdout
     assert "branch: main" in result.stdout
-    assert git(project, "branch", "--show-current") == "main"
-    assert git(project, "rev-parse", "main") == remote_base_after_merge
-    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode != 0
-    local_branches = git(project, "branch", "--format", "%(refname:short)").splitlines()
-    assert "feature/example" not in local_branches
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["status"] == "cleanup_complete"
     assert status["command"] == "cleanup"
     assert status["details"]["pr"] == 12
     assert status["details"]["remote"] == "origin"
-    calls = json.loads(calls_path.read_text(encoding="utf-8"))
-    assert calls == [["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"]]
+    assert gh_stub.calls == [("pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner")]
+    assert git_stub.calls == [
+        ("status", "--short"),
+        ("branch", "--show-current"),
+        ("push", "origin", "--delete", "feature/example"),
+        ("ls-remote", "--heads", "origin", "feature/example"),
+        ("checkout", "main"),
+        ("pull", "--ff-only", "origin", "main"),
+        ("branch", "-d", "feature/example"),
+        ("branch", "--show-current"),
+    ]
 
 
 def test_cleanup_retries_transient_eof_pr_view_before_cleanup(tmp_path: Path, monkeypatch) -> None:

@@ -5,7 +5,11 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
+
+from tests.support.git_templates import copy_template
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -15,7 +19,26 @@ HOOK_ROUTER = PLUGIN_ROOT / "scripts" / "hook_router.py"
 RUN_GUARD_EVENT = PLUGIN_SKILL / "scripts" / "run_guard_event.py"
 RUNTIME_CLI = PLUGIN_ROOT / "scripts" / "guard_runtime" / "cli.py"
 MINIMAL_PROFILE = PLUGIN_SKILL / "assets" / "templates" / "guard-profile" / "minimal"
+GIT_TEMPLATE_ROOT = Path(tempfile.gettempdir()) / "agent-guard-runtime-router-git-template-v1"
+GIT_TEMPLATE_LOCK_STALE_SECONDS = 30
+GIT_TEMPLATE_LOCK_TIMEOUT_SECONDS = 30
+_HOOK_ROUTER_MODULE = None
 _RUNTIME_CLI_MODULE = None
+
+
+def load_hook_router_module():
+    global _HOOK_ROUTER_MODULE
+    if _HOOK_ROUTER_MODULE is not None:
+        return _HOOK_ROUTER_MODULE
+    if str(HOOK_ROUTER.parent) not in sys.path:
+        sys.path.insert(0, str(HOOK_ROUTER.parent))
+    spec = importlib.util.spec_from_file_location("agent_guard_hook_router_for_tests", HOOK_ROUTER)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    _HOOK_ROUTER_MODULE = module
+    return module
 
 
 def load_runtime_cli_module():
@@ -32,28 +55,46 @@ def load_runtime_cli_module():
     return module
 
 
-def run_hook(args: list[str], payload: dict) -> subprocess.CompletedProcess[str]:
-    payload_file = Path(args[args.index("--payload-file") + 1])
-    payload_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    return subprocess.run(
-        [sys.executable, str(HOOK_ROUTER), *args],
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
+def run_main_in_process(
+    module,
+    script: Path,
+    args: list[str],
+    *,
+    cwd: Path = REPO_ROOT,
+    stdin: str = "",
+) -> subprocess.CompletedProcess[str]:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    previous_stdin = sys.stdin
+    try:
+        sys.stdin = io.StringIO(stdin)
+        with contextlib.chdir(cwd), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            try:
+                returncode = int(module.main(args))
+            except SystemExit as error:
+                returncode = error.code if isinstance(error.code, int) else 1
+    finally:
+        sys.stdin = previous_stdin
+    return subprocess.CompletedProcess(
+        [sys.executable, str(script), *args],
+        returncode,
+        stdout.getvalue(),
+        stderr.getvalue(),
     )
 
 
+def run_hook(args: list[str], payload: dict) -> subprocess.CompletedProcess[str]:
+    payload_file = Path(args[args.index("--payload-file") + 1])
+    payload_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return run_main_in_process(load_hook_router_module(), HOOK_ROUTER, args)
+
+
 def run_hook_stdin(args: list[str], payload: dict) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(HOOK_ROUTER), *args],
-        cwd=REPO_ROOT,
-        input=json.dumps(payload, ensure_ascii=False),
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
+    return run_main_in_process(
+        load_hook_router_module(),
+        HOOK_ROUTER,
+        args,
+        stdin=json.dumps(payload, ensure_ascii=False),
     )
 
 
@@ -495,19 +536,84 @@ def project_git_head(project: Path) -> str:
     ).stdout.strip()
 
 
-def init_git_repo(project: Path) -> str:
-    project.mkdir(parents=True, exist_ok=True)
+def remove_git_template_lock(lock_dir: Path) -> None:
+    for _ in range(5):
+        shutil.rmtree(lock_dir, ignore_errors=True)
+        if not lock_dir.exists():
+            return
+        time.sleep(0.05)
+
+
+def create_basic_git_repo(project: Path) -> str:
     subprocess.run(["git", "init"], cwd=project, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    (project / "README.md").write_text("test\n", encoding="utf-8")
-    subprocess.run(["git", "add", "README.md"], cwd=project, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     subprocess.run(
-        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"],
+        ["git", "config", "user.email", "test@example.com"],
         cwd=project,
         check=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=project,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    (project / "README.md").write_text("test\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=project, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=project,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return project_git_head(project)
+
+
+def basic_git_template() -> Path:
+    ready = GIT_TEMPLATE_ROOT / ".ready"
+    lock_dir = GIT_TEMPLATE_ROOT.with_name(f"{GIT_TEMPLATE_ROOT.name}.lock")
+    if ready.exists():
+        if lock_dir.exists():
+            remove_git_template_lock(lock_dir)
+        return GIT_TEMPLATE_ROOT
+
+    deadline = time.monotonic() + GIT_TEMPLATE_LOCK_TIMEOUT_SECONDS
+    while True:
+        try:
+            lock_dir.mkdir(parents=True)
+            break
+        except FileExistsError:
+            try:
+                lock_age = time.time() - lock_dir.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            if lock_age > GIT_TEMPLATE_LOCK_STALE_SECONDS:
+                remove_git_template_lock(lock_dir)
+                continue
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"template_lock_timeout: {lock_dir}")
+            time.sleep(0.05)
+
+    try:
+        if not ready.exists():
+            if GIT_TEMPLATE_ROOT.exists():
+                shutil.rmtree(GIT_TEMPLATE_ROOT)
+            GIT_TEMPLATE_ROOT.mkdir(parents=True, exist_ok=True)
+            create_basic_git_repo(GIT_TEMPLATE_ROOT)
+            ready.write_text("ok\n", encoding="utf-8")
+    finally:
+        remove_git_template_lock(lock_dir)
+    return GIT_TEMPLATE_ROOT
+
+
+def init_git_repo(project: Path) -> str:
+    copy_template(basic_git_template(), project)
     return project_git_head(project)
 
 
@@ -1403,6 +1509,11 @@ def test_planning_review_guard_denies_stale_pass_marker(tmp_path: Path) -> None:
 
 
 def test_planning_review_guard_denies_invalid_pass_marker_fields(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    head_ref = init_git_repo(project)
+    write_planning_review_profile(user_home)
     cases = [
         ("bad-status", {"status": "fail"}, "status"),
         ("bad-producer", {"producer": "other-review"}, "producer"),
@@ -1414,11 +1525,6 @@ def test_planning_review_guard_denies_invalid_pass_marker_fields(tmp_path: Path)
     ]
 
     for change, overrides, failed_field in cases:
-        project = tmp_path / change / "project"
-        user_home = tmp_path / change / "user-home"
-        project.mkdir(parents=True)
-        head_ref = init_git_repo(project)
-        write_planning_review_profile(user_home)
         data = planning_review_pass_data(change, head_ref)
         for key, value in overrides.items():
             if value is None:

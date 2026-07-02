@@ -1,3 +1,6 @@
+import contextlib
+import importlib.util
+import io
 import json
 import shutil
 import subprocess
@@ -8,16 +11,36 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "agent-guard"
 INSTALLER = PLUGIN_ROOT / "skills" / "agent-guard" / "scripts" / "install_agent_guard_plugin.py"
+_INSTALLER_MODULE = None
+
+
+def installer_module():
+    global _INSTALLER_MODULE
+    if _INSTALLER_MODULE is not None:
+        return _INSTALLER_MODULE
+    spec = importlib.util.spec_from_file_location("install_agent_guard_plugin_for_tests", INSTALLER)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    _INSTALLER_MODULE = module
+    return module
 
 
 def run_installer(args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    module = installer_module()
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.chdir(REPO_ROOT), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        try:
+            returncode = int(module.main(args))
+        except SystemExit as error:
+            returncode = error.code if isinstance(error.code, int) else 1
+    return subprocess.CompletedProcess(
         [sys.executable, str(INSTALLER), *args],
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
+        returncode,
+        stdout.getvalue(),
+        stderr.getvalue(),
     )
 
 
