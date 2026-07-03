@@ -20,15 +20,15 @@ base-ref: 7cc2c413a9d34845a899ad826b859b6e83996dc8
 
 ## File Structure（文件结构）
 
-- Modify（修改）: `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py`  
+- Modify（修改）: `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py`
   负责 PR Flow（拉取请求流程）失败分类、恢复动作补全和 `--fixes None`（修复问题编号为空）提示。
-- Modify（修改）: `plugins/release-flow/skills/release-flow/scripts/release_flow.py`  
+- Modify（修改）: `plugins/release-flow/skills/release-flow/scripts/release_flow.py`
   负责 Release Flow（发布流程）preflight（发布预检）错误输出层恢复动作格式化。
-- Modify（修改）: `tests/test_pr_flow_cli.py`  
+- Modify（修改）: `tests/test_pr_flow_cli.py`
   覆盖 PR Flow（拉取请求流程）鉴权失败、瞬时 PR（拉取请求）查询失败、checks（检查）等待、ruleset（规则集）阻塞和 `--fixes None`（修复问题编号为空）。
-- Modify（修改）: `tests/test_release_flow_cli.py`  
+- Modify（修改）: `tests/test_release_flow_cli.py`
   覆盖 Release Flow（发布流程）三类 preflight（发布预检）恢复动作，保留 publish（发布）现有行为。
-- Modify（修改）: `tests/test_pr_flow_plugin_package.py`  
+- Modify（修改）: `tests/test_pr_flow_plugin_package.py`
   放仓库级防回归检查，确保可恢复 stop state（停止状态）带 `nextAction`（下一步动作）或 `nextCommand`（下一条命令）。
 
 不新增依赖、不新增框架、不新增状态机。

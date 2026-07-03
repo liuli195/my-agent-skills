@@ -1,12 +1,12 @@
 workflow: full
-phase: build
+phase: verify
 context_compression: beta
 build_mode: executing-plans
 build_pause: null
 subagent_dispatch: null
 tdd_mode: tdd
 isolation: branch
-verify_mode: null
+verify_mode: full
 auto_transition: true
 base_ref: 5b7d6a74bda8d3c7ad09d4a3b2fcbf614770c788
 design_doc: docs/superpowers/specs/2026-07-03-stabilize-flow-recovery-actions-design.md
