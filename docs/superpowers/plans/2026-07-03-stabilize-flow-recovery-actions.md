@@ -14,6 +14,8 @@ base-ref: 7cc2c413a9d34845a899ad826b859b6e83996dc8
 
 **Tech Stack（技术栈）:** Python（Python 语言）、pytest（测试工具）、现有 `gh`（GitHub 命令行）和 git（版本控制）调用封装。
 
+**Completion Evidence（完成证据）:** 本计划的实现和测试已在当前 head tree（当前提交树）中完成；最后一次计划同步提交只记录复选框状态，不单独承载实现 diff（差异）。实现提交包括 `28a304f`（补齐 PR Flow 恢复动作）、`5c8dae4`（补齐 Release Flow 预检恢复动作）、`765ee97`（增加恢复动作防回归检查）、`671f4cd`（同步 invalid fixes 状态断言）和 `421940c`（修复 gh 鉴权恢复状态）。已运行验证：`python -m pytest tests/test_pr_flow_cli.py tests/test_release_flow_cli.py tests/test_pr_flow_plugin_package.py -q`，结果 `219 passed`；`python .build-and-verify/runtime/build_and_verify.py verify --project .`，结果 `status: passed`；PR Flow（拉取请求流程）用户入口回归 `4 passed`；Release Flow（发布流程）preflight（发布预检）和 publish（发布）形态回归 `5 passed`。`.comet.yaml` 的 `verify_result: pending` 表示 Comet（双星流程）尚未进入 verify（验证）阶段，不表示这些 build（构建）阶段验证步骤未运行。
+
 ---
 
 ## File Structure（文件结构）
