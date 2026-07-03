@@ -2,6 +2,7 @@
 change: stabilize-flow-recovery-actions
 design-doc: docs/superpowers/specs/2026-07-03-stabilize-flow-recovery-actions-design.md
 base-ref: 7cc2c413a9d34845a899ad826b859b6e83996dc8
+archived-with: 2026-07-03-stabilize-flow-recovery-actions
 ---
 
 # 稳定流程恢复动作 Implementation Plan（实施计划）
@@ -16,6 +17,7 @@ base-ref: 7cc2c413a9d34845a899ad826b859b6e83996dc8
 
 **Completion Evidence（完成证据）:** 本计划的实现和测试已在当前 head tree（当前提交树）中完成；最后一次计划同步提交只记录复选框状态，不单独承载实现 diff（差异）。实现提交包括 `28a304f`（补齐 PR Flow 恢复动作）、`5c8dae4`（补齐 Release Flow 预检恢复动作）、`765ee97`（增加恢复动作防回归检查）、`671f4cd`（同步 invalid fixes 状态断言）和 `421940c`（修复 gh 鉴权恢复状态）。已运行验证：`python -m pytest tests/test_pr_flow_cli.py tests/test_release_flow_cli.py tests/test_pr_flow_plugin_package.py -q`，结果 `219 passed`；`python .build-and-verify/runtime/build_and_verify.py verify --project .`，结果 `status: passed`；PR Flow（拉取请求流程）用户入口回归 `4 passed`；Release Flow（发布流程）preflight（发布预检）和 publish（发布）形态回归 `5 passed`。`.comet.yaml` 的 `verify_result: pending` 表示 Comet（双星流程）尚未进入 verify（验证）阶段，不表示这些 build（构建）阶段验证步骤未运行。
 
+archived-with: 2026-07-03-stabilize-flow-recovery-actions
 ---
 
 ## File Structure（文件结构）
@@ -33,6 +35,7 @@ base-ref: 7cc2c413a9d34845a899ad826b859b6e83996dc8
 
 不新增依赖、不新增框架、不新增状态机。
 
+archived-with: 2026-07-03-stabilize-flow-recovery-actions
 ---
 
 ### Task 1: PR Flow（拉取请求流程）恢复动作测试
@@ -137,6 +140,7 @@ python -m pytest tests/test_pr_flow_cli.py::test_diagnose_reports_dispatch_for_g
 
 Expected（预期）: FAIL（失败）。失败点应包含当前 `gh`（GitHub 命令行）鉴权仍是 `gh_pr_view_failed`（查看拉取请求失败）、`--fixes None`（修复问题编号为空）仍是普通 `EXCEPTION_REQUIRED`（需要人工处理）、checks（检查）或 ruleset（规则集）缺恢复动作。
 
+archived-with: 2026-07-03-stabilize-flow-recovery-actions
 ---
 
 ### Task 2: PR Flow（拉取请求流程）最小实现
@@ -333,6 +337,7 @@ git commit -m "补齐 PR Flow 恢复动作"
 
 Expected（预期）: 创建一个只包含 PR Flow（拉取请求流程）测试和实现的 commit（提交）。
 
+archived-with: 2026-07-03-stabilize-flow-recovery-actions
 ---
 
 ### Task 3: Release Flow（发布流程）preflight（发布预检）恢复动作
@@ -447,6 +452,7 @@ git commit -m "补齐 Release Flow 预检恢复动作"
 
 Expected（预期）: 创建一个只包含 Release Flow（发布流程）测试和实现的 commit（提交）。
 
+archived-with: 2026-07-03-stabilize-flow-recovery-actions
 ---
 
 ### Task 4: 仓库级防回归检查
@@ -498,6 +504,7 @@ git commit -m "增加恢复动作防回归检查"
 
 Expected（预期）: 创建一个只包含仓库级防回归测试的 commit（提交）。
 
+archived-with: 2026-07-03-stabilize-flow-recovery-actions
 ---
 
 ### Task 5: Focused Verification（聚焦验证）
@@ -527,6 +534,7 @@ python .build-and-verify/runtime/build_and_verify.py verify --project . --fast
 
 Expected（预期）: `status: passed`（状态通过）或等价成功输出；命令退出码为 `0`。
 
+archived-with: 2026-07-03-stabilize-flow-recovery-actions
 ---
 
 ### Task 6: End-to-End Regression（端到端回归）

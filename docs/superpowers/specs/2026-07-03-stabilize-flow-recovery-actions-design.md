@@ -2,6 +2,8 @@
 comet_change: stabilize-flow-recovery-actions
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-07-03-stabilize-flow-recovery-actions
+status: final
 ---
 
 # Stabilize Flow Recovery Actions Design

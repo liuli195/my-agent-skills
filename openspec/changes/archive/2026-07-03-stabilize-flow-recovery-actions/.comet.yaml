@@ -16,6 +16,6 @@ verification_report: docs/superpowers/reports/2026-07-03-stabilize-flow-recovery
 branch_status: handled
 created_at: 2026-07-02
 verified_at: 2026-07-03
-archived: false
+archived: true
 handoff_context: openspec/changes/stabilize-flow-recovery-actions/.comet/handoff/spec-context.json
 handoff_hash: 774656eba09ef62050a3979e960e11e8a851efd940cefd00c8ee5e488a426607
