@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Preflight failures expose ordered next actions
-Release Flow preflight（发布预检） MUST translate known blocking errors into ordered next actions without changing publish（发布） behavior.
+Release Flow preflight（发布预检） MUST translate the three preflight（发布预检） errors listed in this change（变更） into ordered next actions without changing publish（发布） behavior.
 
 #### Scenario: Source ref missing version bump explains PR path
 - **WHEN** preflight（发布预检） fails because `sourceRef`（源引用） does not contain the requested manifest（清单） version bump（版本提升）
