@@ -980,6 +980,25 @@ def preflight_errors(
     return errors
 
 
+def preflight_next_action(error: str) -> str:
+    if error.startswith("source_ref_requires_pr: "):
+        return "create and merge the version bump through PR Flow, then rerun release-flow preflight"
+    if error.startswith("manifest_version_mismatch: "):
+        manifest_path = error.split(": ", 1)[1]
+        return f"correct the manifest version in {manifest_path}, then rerun release-flow preflight"
+    if error.startswith("release already exists: "):
+        return "choose a new release version and rerun release-flow preflight"
+    return ""
+
+
+def print_preflight_errors(errors: list[str]) -> None:
+    for error in errors:
+        print(f"error: {error}")
+        next_action = preflight_next_action(error)
+        if next_action:
+            print(f"nextAction: {next_action}")
+
+
 def run_preflight(args: argparse.Namespace) -> int:
     try:
         config = read_config(args.project)
@@ -1003,8 +1022,7 @@ def run_preflight(args: argparse.Namespace) -> int:
 
     if errors:
         print("status: issues")
-        for error in errors:
-            print(f"error: {error}")
+        print_preflight_errors(errors)
         return 1
 
     print("status: preflight_passed")
@@ -1229,8 +1247,7 @@ def run_ci_publish(args: argparse.Namespace) -> int:
     )
     if errors:
         print("status: issues")
-        for error in errors:
-            print(f"error: {error}")
+        print_preflight_errors(errors)
         return 1
 
     try:
