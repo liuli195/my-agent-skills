@@ -186,6 +186,25 @@ def test_pr_flow_bare_commands_report_stable_contract() -> None:
         assert "status: not_implemented" not in skill_text
 
 
+def test_recoverable_stop_states_have_recovery_actions() -> None:
+    module = pr_flow_module()
+    recoverable_reasons = {
+        "gh_auth_required",
+        "gh_pr_view_transient_failed",
+        "checks_pending",
+        "checks_or_review_blocking",
+        "ruleset_merge_blocking",
+        "invalid_fixes",
+    }
+
+    for reason in recoverable_reasons:
+        assert module.error_status(reason) in {"DISPATCH_REQUIRED", "PUSH_REQUIRED", "REPLY_OR_FIX_REQUIRED"}
+
+    for reason in recoverable_reasons - {"gh_pr_view_transient_failed", "invalid_fixes"}:
+        details = module.add_recovery_action({"reason": reason})
+        assert "nextAction" in details or "nextCommand" in details
+
+
 def test_pr_flow_package_passes_repo_build_checks() -> None:
     if shutil.which("claude") is None:
         pytest.skip("claude CLI is required for package validation")
