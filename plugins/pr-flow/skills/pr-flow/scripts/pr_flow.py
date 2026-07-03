@@ -247,13 +247,59 @@ def stop(project: Path, command: str, status: str, message: str, details: dict[s
     return 1
 
 
+GH_AUTH_REQUIRED_MARKERS = (
+    "gh auth login",
+    "not logged into any github hosts",
+    "authentication required",
+    "requires authentication",
+    "bad credentials",
+    "http 401",
+)
+
+RECOVERABLE_NEXT_ACTIONS = {
+    "checks_pending": {
+        "nextAction": "Wait for GitHub checks to finish, then rerun the same PR Flow command.",
+    },
+    "checks_or_review_blocking": {
+        "nextAction": "Fix failing checks or requested changes, then rerun the same PR Flow command.",
+    },
+    "ruleset_merge_blocking": {
+        "nextAction": "Wait for ruleset requirements to pass or enable auto-merge, then rerun the same PR Flow command.",
+    },
+    "gh_auth_required": {
+        "nextCommand": "gh auth status",
+    },
+}
+
+
+def gh_auth_required(result: subprocess.CompletedProcess[str]) -> bool:
+    text = f"{result.stdout}\n{result.stderr}".lower()
+    return any(marker in text for marker in GH_AUTH_REQUIRED_MARKERS)
+
+
+def classify_command_failure(reason: str, result: subprocess.CompletedProcess[str]) -> str:
+    if reason.startswith("gh_") and gh_auth_required(result):
+        return "gh_auth_required"
+    return reason
+
+
+def add_recovery_action(details: dict[str, Any], next_command: str | None = None) -> dict[str, Any]:
+    reason = str(details.get("reason") or "")
+    if next_command and reason in {"gh_pr_view_transient_failed", "checks_pending", "ruleset_merge_blocking"}:
+        details.setdefault("nextCommand", next_command)
+    for key, value in RECOVERABLE_NEXT_ACTIONS.get(reason, {}).items():
+        details.setdefault(key, value)
+    return details
+
+
 def command_failure_details(reason: str, result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
-    return {
-        "reason": reason,
+    classified_reason = classify_command_failure(reason, result)
+    return add_recovery_action({
+        "reason": classified_reason,
         "returncode": result.returncode,
         "stdout": result.stdout.strip(),
         "stderr": result.stderr.strip(),
-    }
+    })
 
 
 def transient_pr_view_category(result: subprocess.CompletedProcess[str]) -> str:
@@ -294,24 +340,26 @@ def pr_view_failure_details(
 ) -> tuple[str, dict[str, Any]]:
     reason = "gh_pr_view_transient_failed" if transient_category else "gh_pr_view_failed"
     details = command_failure_details(reason, result)
+    reason = str(details["reason"])
     if pr is not None:
         details["pr"] = pr
     if transient_category:
         details["transientCategory"] = transient_category
         details["retryAttempts"] = retry_attempts
-        if next_command is not None:
-            details["nextCommand"] = next_command
+    add_recovery_action(details, next_command)
     return reason, details
 
 
 def error_status(reason: str) -> str:
-    return "DISPATCH_REQUIRED" if reason in {"gh_pr_view_transient_failed", "ruleset_merge_blocking"} else "EXCEPTION_REQUIRED"
+    if reason in {"gh_auth_required", "gh_pr_view_transient_failed", "checks_pending", "ruleset_merge_blocking"}:
+        return "DISPATCH_REQUIRED"
+    if reason in {"checks_or_review_blocking", "invalid_fixes"}:
+        return "REPLY_OR_FIX_REQUIRED"
+    return "EXCEPTION_REQUIRED"
 
 
 def add_default_next_command(details: dict[str, Any], next_command: str | None) -> dict[str, Any]:
-    if next_command and details.get("reason") == "gh_pr_view_transient_failed":
-        details.setdefault("nextCommand", next_command)
-    return details
+    return add_recovery_action(details, next_command)
 
 
 def command_next_command(command: str, project: Path, args: argparse.Namespace | None = None) -> str:
@@ -350,12 +398,15 @@ def require_pr_body_args(project: Path, command: str, args: argparse.Namespace) 
     fixes = [str(issue).strip() for issue in (getattr(args, "fixes", None) or []) if str(issue).strip()]
     invalid_fixes = [issue for issue in fixes if not issue.isdecimal() or int(issue) <= 0]
     if invalid_fixes:
+        next_action = "Pass each issue number separately, for example --fixes 41 --fixes 43 --fixes 44."
+        if any(issue.lower() == "none" for issue in invalid_fixes):
+            next_action = "Remove --fixes when there is no issue to close."
         raise PrFlowError(
             "invalid_fixes",
             {
                 "reason": "invalid_fixes",
                 "invalidFixes": invalid_fixes,
-                "nextAction": "Pass each issue number separately, for example --fixes 41 --fixes 43 --fixes 44.",
+                "nextAction": next_action,
             },
         )
     missing = []
@@ -958,7 +1009,7 @@ def merge_pr(project: Path, config: dict[str, Any], pr: dict[str, Any], *, auto:
         if gh_pr_merge_policy_blocked(result):
             details["reason"] = "ruleset_merge_blocking"
             details["autoMergeSuggested"] = gh_pr_merge_auto_suggested(result)
-            raise PrFlowError("ruleset_merge_blocking", details)
+            raise PrFlowError("ruleset_merge_blocking", add_recovery_action(details))
         raise PrFlowError("gh_pr_merge_failed", details)
     return None
 
@@ -999,15 +1050,15 @@ def wait_for_checks(
         }
         if has_failing_check(checks):
             details["reason"] = "checks_or_review_blocking"
-            return stop_state("REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking", details)
+            return stop_state("REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking", add_recovery_action(details))
         if not has_pending_check(checks):
             return None
         if timeout_seconds <= 0:
-            return stop_state("DISPATCH_REQUIRED", "checks_pending", details)
+            return stop_state("DISPATCH_REQUIRED", "checks_pending", add_recovery_action(details))
 
         remaining = timeout_seconds - (time.monotonic() - started_at)
         if remaining <= 0:
-            return stop_state("DISPATCH_REQUIRED", "checks_pending", details)
+            return stop_state("DISPATCH_REQUIRED", "checks_pending", add_recovery_action(details))
         time.sleep(min(max(poll_seconds, 1), remaining))
         current = sync_pr(project, current)
 
@@ -1215,10 +1266,16 @@ def run_diagnose(args: argparse.Namespace) -> int:
     checks = pr_checks(pr)
     if has_pending_check(checks):
         gh_details["reason"] = "checks_pending"
-        return stop(project, args.command, "DISPATCH_REQUIRED", "checks_pending", gh_details)
+        return stop(
+            project,
+            args.command,
+            "DISPATCH_REQUIRED",
+            "checks_pending",
+            add_recovery_action(gh_details, command_next_command(args.command, project)),
+        )
     if has_failing_check(checks) or pr.get("reviewDecision") in {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}:
         gh_details["reason"] = "checks_or_review_blocking"
-        return stop(project, args.command, "REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking", gh_details)
+        return stop(project, args.command, "REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking", add_recovery_action(gh_details))
     if pr.get("isDraft") is True:
         gh_details["reason"] = "pr_is_draft"
         gh_details["nextCommand"] = "gh pr ready"
@@ -1342,7 +1399,7 @@ def run_complete(args: argparse.Namespace) -> int:
         details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
         return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
     except PrFlowError as exc:
-        return stop(project, args.command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
+        return stop(project, args.command, error_status(exc.reason), exc.reason, add_recovery_action(exc.details))
     return run_lifecycle(
         project,
         config,
@@ -1363,7 +1420,7 @@ def run_tweak(args: argparse.Namespace) -> int:
         details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
         return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
     except PrFlowError as exc:
-        return stop(project, args.command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
+        return stop(project, args.command, error_status(exc.reason), exc.reason, add_recovery_action(exc.details))
 
     return run_lifecycle(
         project,
