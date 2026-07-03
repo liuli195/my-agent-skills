@@ -1257,11 +1257,11 @@ def test_pr_body_commands_reject_invalid_fixes_before_git_or_gh_calls(
     result = invoke_pr_flow(command_args(project, (bad_fix,)), module=module)
 
     assert result.returncode == 1
-    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
     assert git_stub.calls == []
     assert gh_stub.calls == []
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "EXCEPTION_REQUIRED"
+    assert status["status"] == "REPLY_OR_FIX_REQUIRED"
     assert status["command"] == command
     assert status["details"]["reason"] == "invalid_fixes"
     assert status["details"]["invalidFixes"] == [bad_fix]
