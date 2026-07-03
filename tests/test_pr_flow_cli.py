@@ -1231,6 +1231,96 @@ def test_complete_requires_summary_scope_before_auto_push_or_pr_create(tmp_path:
     assert "--scope" in status["details"]["nextCommand"]
 
 
+def test_complete_reports_dispatch_when_pr_create_requires_gh_auth(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    git_stub = CommandStub()
+    git_stub.add(["branch", "--show-current"], stdout="main\n")
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull request found\n", returncode=1)
+    gh_stub.add(
+        ["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"],
+        stderr="gh: To get started with GitHub CLI, please run: gh auth login\n",
+        returncode=4,
+    )
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    result = invoke_pr_flow(complete_args(project), module=module)
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "DISPATCH_REQUIRED"
+    assert status["command"] == "complete"
+    assert status["details"]["reason"] == "gh_auth_required"
+    assert status["details"]["nextCommand"] == "gh auth status"
+
+
+def test_tweak_reports_dispatch_when_remote_branch_rules_lookup_requires_gh_auth(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    git_stub = CommandStub()
+    git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
+    git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], returncode=1)
+    git_stub.add(["status", "--porcelain"], stdout="")
+    gh_stub = CommandStub()
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull request found\n", returncode=1)
+    gh_stub.add(
+        ["api", "repos/{owner}/{repo}/rules/branches/feature%2Fexample", "--jq", "length"],
+        stderr="gh: To get started with GitHub CLI, please run: gh auth login\n",
+        returncode=4,
+    )
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    result = invoke_pr_flow(tweak_args(project, reason="small docs polish"), module=module)
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "DISPATCH_REQUIRED"
+    assert status["command"] == "tweak"
+    assert status["details"]["reason"] == "gh_auth_required"
+    assert status["details"]["nextCommand"] == "gh auth status"
+
+
+def test_complete_reports_dispatch_when_pr_merge_requires_gh_auth(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision="APPROVED",
+            head_oid="b" * 40,
+        ),
+        cleanup_stdout=cleanup_pr_view_json(),
+        git_responses=[(["rev-parse", "HEAD"], "b" * 40 + "\n", 0)],
+        merge_returncode=4,
+        merge_stderr="gh: To get started with GitHub CLI, please run: gh auth login\n",
+    )
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "DISPATCH_REQUIRED"
+    assert status["command"] == "complete"
+    assert status["details"]["reason"] == "gh_auth_required"
+    assert status["details"]["nextCommand"] == "gh auth status"
+
+
 @pytest.mark.parametrize("bad_fix", ["41,43", "#98", "abc", "0", "-1"])
 @pytest.mark.parametrize(
     ("command_args", "command"),

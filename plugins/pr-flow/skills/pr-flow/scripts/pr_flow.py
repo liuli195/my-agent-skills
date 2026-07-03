@@ -236,8 +236,8 @@ def gh(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 class PrFlowError(RuntimeError):
     def __init__(self, reason: str, details: dict[str, Any]) -> None:
-        super().__init__(reason)
-        self.reason = reason
+        self.reason = str(details.get("reason") or reason)
+        super().__init__(self.reason)
         self.details = details
 
 
@@ -780,7 +780,12 @@ def auto_push_current_branch_if_needed(
     branch_rules_endpoint = f"repos/{{owner}}/{{repo}}/rules/branches/{quote(branch, safe='')}"
     rules_result = gh(project, "api", branch_rules_endpoint, "--jq", "length")
     if rules_result.returncode != 0:
-        error_details = command_failure_details("remote_branch_rules_lookup_failed", rules_result)
+        error_details = command_failure_details("gh_remote_branch_rules_lookup_failed", rules_result)
+        if error_details["reason"] == "gh_auth_required":
+            for key, value in details.items():
+                if key not in {"reason", "nextCommand"}:
+                    error_details[key] = value
+            return stop_state(error_status("gh_auth_required"), "gh_auth_required", error_details)
         error_details.update(details)
         error_details["reason"] = "remote_branch_rules_lookup_failed"
         return stop_state("EXCEPTION_REQUIRED", "remote_branch_rules_lookup_failed", error_details)
