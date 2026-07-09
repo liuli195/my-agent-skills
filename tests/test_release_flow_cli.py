@@ -766,6 +766,51 @@ def test_preflight_rejects_bump_not_merged_to_source_ref(tmp_path: Path, monkeyp
     assert "source_ref_requires_pr: main: plugins/agent-guard/.codex-plugin/plugin.json" in result.stdout
 
 
+def test_preflight_source_ref_requires_pr_prints_next_action(tmp_path: Path, monkeypatch) -> None:
+    result = run_preflight_with_errors(
+        monkeypatch,
+        tmp_path,
+        ["source_ref_requires_pr: main: plugins/agent-guard/.codex-plugin/plugin.json"],
+        bump_plugins=["agent-guard"],
+    )
+
+    assert result.returncode == 1
+    assert "error: source_ref_requires_pr: main: plugins/agent-guard/.codex-plugin/plugin.json" in result.stdout
+    assert (
+        "nextAction: create and merge the version bump through PR Flow, "
+        "then rerun release-flow preflight"
+    ) in result.stdout
+
+
+def test_preflight_manifest_mismatch_prints_next_action(tmp_path: Path, monkeypatch) -> None:
+    result = run_preflight_with_errors(
+        monkeypatch,
+        tmp_path,
+        ["manifest_version_mismatch: plugins/agent-guard/.codex-plugin/plugin.json"],
+        bump_plugins=["agent-guard"],
+    )
+
+    assert result.returncode == 1
+    assert "error: manifest_version_mismatch: plugins/agent-guard/.codex-plugin/plugin.json" in result.stdout
+    assert (
+        "nextAction: correct the manifest version in "
+        "plugins/agent-guard/.codex-plugin/plugin.json, then rerun release-flow preflight"
+    ) in result.stdout
+
+
+def test_preflight_existing_release_prints_next_action(tmp_path: Path, monkeypatch) -> None:
+    result = run_preflight_with_errors(
+        monkeypatch,
+        tmp_path,
+        ["release already exists: v0.1.1"],
+        bump_plugins=["agent-guard"],
+    )
+
+    assert result.returncode == 1
+    assert "error: release already exists: v0.1.1" in result.stdout
+    assert "nextAction: choose a new release version and rerun release-flow preflight" in result.stdout
+
+
 def test_preflight_merges_repeated_bump_plugins(tmp_path: Path, monkeypatch) -> None:
     result = run_preflight_with_errors(
         monkeypatch,

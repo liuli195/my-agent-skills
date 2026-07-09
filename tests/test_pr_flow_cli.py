@@ -1231,6 +1231,96 @@ def test_complete_requires_summary_scope_before_auto_push_or_pr_create(tmp_path:
     assert "--scope" in status["details"]["nextCommand"]
 
 
+def test_complete_reports_dispatch_when_pr_create_requires_gh_auth(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    git_stub = CommandStub()
+    git_stub.add(["branch", "--show-current"], stdout="main\n")
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull request found\n", returncode=1)
+    gh_stub.add(
+        ["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"],
+        stderr="gh: To get started with GitHub CLI, please run: gh auth login\n",
+        returncode=4,
+    )
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    result = invoke_pr_flow(complete_args(project), module=module)
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "DISPATCH_REQUIRED"
+    assert status["command"] == "complete"
+    assert status["details"]["reason"] == "gh_auth_required"
+    assert status["details"]["nextCommand"] == "gh auth status"
+
+
+def test_tweak_reports_dispatch_when_remote_branch_rules_lookup_requires_gh_auth(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    git_stub = CommandStub()
+    git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
+    git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], returncode=1)
+    git_stub.add(["status", "--porcelain"], stdout="")
+    gh_stub = CommandStub()
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull request found\n", returncode=1)
+    gh_stub.add(
+        ["api", "repos/{owner}/{repo}/rules/branches/feature%2Fexample", "--jq", "length"],
+        stderr="gh: To get started with GitHub CLI, please run: gh auth login\n",
+        returncode=4,
+    )
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    result = invoke_pr_flow(tweak_args(project, reason="small docs polish"), module=module)
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "DISPATCH_REQUIRED"
+    assert status["command"] == "tweak"
+    assert status["details"]["reason"] == "gh_auth_required"
+    assert status["details"]["nextCommand"] == "gh auth status"
+
+
+def test_complete_reports_dispatch_when_pr_merge_requires_gh_auth(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision="APPROVED",
+            head_oid="b" * 40,
+        ),
+        cleanup_stdout=cleanup_pr_view_json(),
+        git_responses=[(["rev-parse", "HEAD"], "b" * 40 + "\n", 0)],
+        merge_returncode=4,
+        merge_stderr="gh: To get started with GitHub CLI, please run: gh auth login\n",
+    )
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "DISPATCH_REQUIRED"
+    assert status["command"] == "complete"
+    assert status["details"]["reason"] == "gh_auth_required"
+    assert status["details"]["nextCommand"] == "gh auth status"
+
+
 @pytest.mark.parametrize("bad_fix", ["41,43", "#98", "abc", "0", "-1"])
 @pytest.mark.parametrize(
     ("command_args", "command"),
@@ -1257,17 +1347,53 @@ def test_pr_body_commands_reject_invalid_fixes_before_git_or_gh_calls(
     result = invoke_pr_flow(command_args(project, (bad_fix,)), module=module)
 
     assert result.returncode == 1
-    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
     assert git_stub.calls == []
     assert gh_stub.calls == []
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "EXCEPTION_REQUIRED"
+    assert status["status"] == "REPLY_OR_FIX_REQUIRED"
     assert status["command"] == command
     assert status["details"]["reason"] == "invalid_fixes"
     assert status["details"]["invalidFixes"] == [bad_fix]
     assert status["details"]["nextAction"] == (
         "Pass each issue number separately, for example --fixes 41 --fixes 43 --fixes 44."
     )
+
+
+@pytest.mark.parametrize(
+    ("command_args", "command"),
+    [
+        (lambda project: complete_args(project, fixes=("None",)), "complete"),
+        (lambda project: tweak_args(project, reason="small docs polish", fixes=("None",)), "tweak"),
+    ],
+)
+def test_pr_body_commands_reject_none_fixes_with_remove_guidance(
+    tmp_path: Path, monkeypatch, command_args, command: str
+) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    git_stub = CommandStub()
+    gh_stub = CommandStub()
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    result = invoke_pr_flow(command_args(project), module=module)
+
+    assert result.returncode == 1
+    assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
+    assert git_stub.calls == []
+    assert gh_stub.calls == []
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "REPLY_OR_FIX_REQUIRED"
+    assert status["command"] == command
+    assert status["details"]["reason"] == "invalid_fixes"
+    assert status["details"]["invalidFixes"] == ["None"]
+    assert status["details"]["nextAction"] == "Remove --fixes when there is no issue to close."
 
 
 def test_tweak_requires_summary_scope_before_pr_sync(tmp_path: Path, monkeypatch) -> None:
@@ -2538,6 +2664,9 @@ def test_tweak_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path: P
     assert status["status"] == "DISPATCH_REQUIRED"
     assert status["command"] == "tweak"
     assert status["details"]["reason"] == "checks_pending"
+    action = status["details"].get("nextAction") or status["details"].get("nextCommand")
+    assert action is not None
+    assert "checks" in action
 
 
 def test_diagnose_outputs_exception_for_unknown_gh_failure(tmp_path: Path, monkeypatch) -> None:
@@ -2624,6 +2753,26 @@ def test_diagnose_reports_dispatch_when_transient_eof_retries_are_exhausted(tmp_
     assert status["details"]["transientCategory"] == "eof"
     assert status["details"]["retryAttempts"] == 1
     assert "diagnose" in status["details"]["nextCommand"]
+    assert "diagnose --project" in status["details"]["nextCommand"]
+    assert str(project) in status["details"]["nextCommand"]
+
+
+def test_diagnose_reports_dispatch_for_gh_auth_failure(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_diagnose_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout="",
+        pr_stderr="gh: To get started with GitHub CLI, please run: gh auth login\n",
+        pr_returncode=4,
+    )
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    assert "gh_auth_required" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "DISPATCH_REQUIRED"
+    assert status["details"]["reason"] == "gh_auth_required"
+    assert status["details"]["nextCommand"] == "gh auth status"
 
 
 def test_diagnose_on_base_branch_without_pr_reports_gh_pr_view_failed(tmp_path: Path, monkeypatch) -> None:
@@ -3210,6 +3359,9 @@ def test_complete_reports_dispatch_when_ruleset_blocks_merge(tmp_path: Path, mon
     assert status["command"] == "complete"
     assert status["details"]["reason"] == "ruleset_merge_blocking"
     assert status["details"]["pr"] == 12
+    action = status["details"].get("nextAction") or status["details"].get("nextCommand")
+    assert action is not None
+    assert "ruleset" in action
 
 
 def test_complete_uses_auto_merge_when_ruleset_suggests_auto(tmp_path: Path, monkeypatch) -> None:
@@ -3314,6 +3466,9 @@ def test_complete_returns_checks_pending_when_ruleset_recovery_wait_times_out(tm
     assert "status: DISPATCH_REQUIRED" in result.stdout
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["details"]["reason"] == "checks_pending"
+    action = status["details"].get("nextAction") or status["details"].get("nextCommand")
+    assert action is not None
+    assert "checks" in action
 
 
 def test_complete_waits_for_checks_after_ruleset_block_then_retries_merge(tmp_path: Path, monkeypatch) -> None:

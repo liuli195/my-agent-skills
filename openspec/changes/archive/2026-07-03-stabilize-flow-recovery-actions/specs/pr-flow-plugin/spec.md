@@ -6,7 +6,7 @@ PR Flow（拉取请求流程） MUST classify known recoverable failures through
 #### Scenario: GitHub authentication failure is actionable
 - **WHEN** a `gh`（GitHub 命令行） operation fails because authentication is missing, expired, or unauthorized
 - **THEN** PR Flow（拉取请求流程） MUST NOT report the failure as a generic `EXCEPTION_REQUIRED`（需要人工处理）
-- **THEN** stop-state details（停止状态详情） MUST use a stable reason（原因） for GitHub authentication recovery
+- **THEN** stop-state details（停止状态详情） MUST use `gh_auth_required` as reason（原因）
 - **THEN** stop-state details（停止状态详情） MUST include a `nextAction`（下一步动作） or `nextCommand`（下一条命令） that tells the user how to check or refresh GitHub authentication
 
 #### Scenario: Transient PR view failure remains recoverable
