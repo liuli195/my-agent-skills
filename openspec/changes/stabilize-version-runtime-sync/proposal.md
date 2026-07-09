@@ -8,7 +8,7 @@
 - 保持 Codex（编码助手）和 Claude（编码助手）manifest（清单）版本一致性检查。
 - Release Flow（发布流程）在发布前发现 build-and-verify（构建与验证）runtime（运行时）未同步时输出 `runtime_update_required`，阻止发布并给出更新命令。
 - build/verify（构建/验证）发现 runtime（运行时）落后时继续只提示，不自动修改文件。
-- plugin-sync（插件同步）负责目标仓库 runtime（运行时）检查、授权更新、更新后 diff（变更）提示 PR Flow（拉取请求流程）。
+- plugin-sync（插件同步）在用户级路径 `C:\Users\liuli\.agents\skills\plugin-sync` 负责目标仓库 runtime（运行时）检查、授权更新、更新后 diff（变更）提示 PR Flow（拉取请求流程）；本变更只改现有 skill（技能）说明和引用页，不新增仓库内承载位置。
 
 ## Capabilities
 
@@ -25,6 +25,6 @@
 ## Impact
 
 - 影响版本一致性测试、Release Flow preflight（发布预检）、build-and-verify（构建与验证）runtime（运行时）提示契约。
-- plugin-sync（插件同步）源码当前不在本仓库内，实施前需要确认修改用户级 skill（技能）路径或另建仓库内承载位置。
+- plugin-sync（插件同步）源码不在本仓库内；用户已授权修改用户级 skill（技能）路径 `C:\Users\liuli\.agents\skills\plugin-sync`。
 - 不新增版本注册中心。
 - 不要求普通开发中间态 runtime（运行时）永远等于 manifest（清单）。

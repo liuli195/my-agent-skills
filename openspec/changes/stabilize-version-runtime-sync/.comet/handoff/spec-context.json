@@ -1,0 +1,17 @@
+{
+  "change": "stabilize-version-runtime-sync",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "af804637b3f42074ee304ec8c3e323195b9bb1f8790eb6d076ec7537b40832e1",
+  "files": [
+    { "path": "openspec/changes/stabilize-version-runtime-sync/proposal.md", "sha256": "c3b2b8d5c8f08e51366e34c61a87a132e5de0c2790031c6b23d735dc28047ed7", "role": "supporting" },
+    { "path": "openspec/changes/stabilize-version-runtime-sync/design.md", "sha256": "15368db1410a5f4570254ed93190170d8f4edcd127435b649baf9e077d07980b", "role": "supporting" },
+    { "path": "openspec/changes/stabilize-version-runtime-sync/tasks.md", "sha256": "ee6bcbc6292542c3c98b9fcd3664c71a4b9bbefedaa08e9d01879bd7354e4337", "role": "supporting" },
+    { "path": "openspec/changes/stabilize-version-runtime-sync/specs/local-plugin-build-checks/spec.md", "sha256": "b2ed2fea4e9c592de4acfec34673882876c54c9c29cbeae2f22ae01e7ad517a0", "role": "spec" },
+    { "path": "openspec/changes/stabilize-version-runtime-sync/specs/plugin-sync-runtime-sync/spec.md", "sha256": "b63ec6efe9a7f679fa8c134b5c14e17465eebf6fabdfc4950b54a143b91cb8c2", "role": "spec" },
+    { "path": "openspec/changes/stabilize-version-runtime-sync/specs/release-flow-plugin/spec.md", "sha256": "14b24ec462ef1a2014125ae91b15021e7f5672b90c1904aa213c4310ef425de3", "role": "spec" },
+    { "path": "openspec/changes/stabilize-version-runtime-sync/specs/test-framework-plugin/spec.md", "sha256": "5998fb9489f509ce80e59ae033c0ce6c43ff53c8c2b19636b174c00a8e7e33cd", "role": "spec" }
+  ]
+}
