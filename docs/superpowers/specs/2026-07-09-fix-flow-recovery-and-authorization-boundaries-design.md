@@ -2,6 +2,8 @@
 comet_change: fix-flow-recovery-and-authorization-boundaries
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-07-09-fix-flow-recovery-and-authorization-boundaries
+status: final
 ---
 
 # Fix Flow Recovery And Authorization Boundaries Design

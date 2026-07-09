@@ -16,6 +16,6 @@ verification_report: docs/superpowers/reports/2026-07-09-fix-flow-recovery-and-a
 branch_status: handled
 created_at: 2026-07-09
 verified_at: 2026-07-09
-archived: false
+archived: true
 handoff_context: openspec/changes/fix-flow-recovery-and-authorization-boundaries/.comet/handoff/spec-context.json
 handoff_hash: fd17e995e4327b73f3add139dfd0b1f78cbd83ef919859d1fc5830ae421a771d
