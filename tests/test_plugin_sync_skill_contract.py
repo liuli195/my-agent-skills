@@ -7,7 +7,7 @@ from pathlib import Path
 PLUGIN_SYNC_ROOT = Path(
     os.environ.get(
         "PLUGIN_SYNC_SKILL_ROOT",
-        Path.home() / ".agents" / "skills" / "plugin-sync",
+        Path(__file__).parent / "fixtures" / "plugin-sync",
     )
 )
 
