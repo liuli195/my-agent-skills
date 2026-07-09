@@ -808,7 +808,69 @@ def test_preflight_existing_release_prints_next_action(tmp_path: Path, monkeypat
 
     assert result.returncode == 1
     assert "error: release already exists: v9.9.1" in result.stdout
-    assert "nextAction: choose a new release version and rerun release-flow preflight" in result.stdout
+    assert (
+        "nextAction: requested release/tag already exists; choose the release version with the user and agent, "
+        "then rerun release-flow preflight"
+    ) in result.stdout
+    assert "new release version" not in result.stdout
+
+
+def test_preflight_multi_error_prints_one_summary_path_without_version_inference(
+    tmp_path: Path, monkeypatch
+) -> None:
+    errors = [
+        "release already exists: v9.9.1",
+        "manifest_version_mismatch: plugins/agent-guard/.codex-plugin/plugin.json",
+        "source_ref_requires_pr: main: plugins/agent-guard/.codex-plugin/plugin.json",
+        "plugin_requires_bump: release-flow",
+    ]
+
+    result = run_preflight_with_errors(
+        monkeypatch,
+        tmp_path,
+        errors,
+        bump_plugins=["agent-guard"],
+    )
+
+    assert result.returncode == 1
+    for error in errors:
+        assert f"error: {error}" in result.stdout
+    next_actions = [line for line in result.stdout.splitlines() if line.startswith("nextAction:")]
+    assert next_actions == [
+        "nextAction: current state: release/tag already exists; manifest versions do not match requested release; "
+        "source ref lacks version bump; some plugins need bumpPlugins. handling path: choose the release version "
+        "with the user and agent, correct manifest versions through PR Flow, create and merge the source-ref "
+        "version bump through PR Flow, include required plugins in bumpPlugins through PR Flow when they should "
+        "ship, then rerun release-flow preflight"
+    ]
+    assert "latest version" not in result.stdout
+    assert "next version" not in result.stdout
+
+
+def test_preflight_multi_error_with_untracked_error_keeps_per_error_next_actions(
+    tmp_path: Path, monkeypatch
+) -> None:
+    errors = [
+        "manifest_version_mismatch: plugins/agent-guard/.codex-plugin/plugin.json",
+        "runtime_update_required: build-and-verify runtime=9.8.0 requested=9.9.0",
+    ]
+
+    result = run_preflight_with_errors(
+        monkeypatch,
+        tmp_path,
+        errors,
+        bump_plugins=["agent-guard"],
+    )
+
+    assert result.returncode == 1
+    next_actions = [line for line in result.stdout.splitlines() if line.startswith("nextAction:")]
+    assert next_actions == [
+        "nextAction: correct the manifest version in plugins/agent-guard/.codex-plugin/plugin.json, "
+        "then rerun release-flow preflight",
+        "nextAction: run python plugins/build-and-verify/skills/build-and-verify/scripts/"
+        f"build_and_verify.py update-runtime --project {tmp_path / 'project'}",
+    ]
+    assert "current state:" not in result.stdout
 
 
 def test_preflight_rejects_stale_build_and_verify_runtime(tmp_path: Path, monkeypatch) -> None:

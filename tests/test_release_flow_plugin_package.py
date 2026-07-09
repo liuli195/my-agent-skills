@@ -49,6 +49,13 @@ def test_release_flow_package_contains_skill_scripts_and_templates() -> None:
     assert "not yet written" not in text
 
 
+def test_release_flow_skill_boundary_prohibits_remote_governance_changes_without_current_confirmation() -> None:
+    text = (PLUGIN_ROOT / "skills" / "release-flow" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "禁止在当前对话未获得用户明确确认时修改 GitHub Rulesets" in text
+    assert "只能输出 remote tasks（远端待办）" in text
+
+
 def test_release_flow_workflow_template_installs_pyyaml() -> None:
     workflow = (
         PLUGIN_ROOT

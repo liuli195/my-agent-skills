@@ -1262,6 +1262,43 @@ def test_complete_reports_dispatch_when_pr_create_requires_gh_auth(tmp_path: Pat
     assert status["details"]["nextCommand"] == "gh auth status"
 
 
+def test_complete_reports_dispatch_when_created_pr_view_temporarily_fails(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    git_stub = CommandStub()
+    git_stub.add(["branch", "--show-current"], stdout="main\n")
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull request found\n", returncode=1)
+    gh_stub.add(
+        ["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"],
+        stdout="https://github.example/test/repo/pull/12\n",
+    )
+    gh_stub.add(
+        ["pr", "view", "--json", module.PR_VIEW_FIELDS],
+        stderr="GraphQL: Could not resolve to a PullRequest\n",
+        returncode=1,
+    )
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    result = invoke_pr_flow(complete_args(project), module=module)
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "DISPATCH_REQUIRED"
+    assert status["command"] == "complete"
+    assert status["details"]["reason"] == "gh_pr_view_transient_failed"
+    assert status["details"]["transientCategory"] == "post_create_view"
+    assert "complete" in status["details"]["nextCommand"]
+    assert str(project) in status["details"]["nextCommand"]
+
+
 def test_tweak_reports_dispatch_when_remote_branch_rules_lookup_requires_gh_auth(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1523,6 +1560,31 @@ def test_create_pr_retries_transient_eof_when_syncing_created_pr(tmp_path: Path,
     assert pr["number"] == 12
     assert len(gh_stub.calls) == 3
     assert gh_stub.body_files[0]["body"] == body
+
+
+def test_create_pr_missing_after_success_does_not_report_create_output_as_view_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    body = expected_pr_body()
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"], stdout="created\n")
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull request found\n", returncode=1)
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    with pytest.raises(module.PrFlowError) as error:
+        module.create_pr(project, {"defaults": {"baseBranch": "main"}}, body, "python pr_flow.py complete --project .")
+
+    assert error.value.reason == "gh_pr_view_transient_failed"
+    assert error.value.details["transientCategory"] == "post_create_view"
+    assert "nextCommand" in error.value.details
+    assert "returncode" not in error.value.details
+    assert "stdout" not in error.value.details
+    assert "stderr" not in error.value.details
 
 
 def test_complete_fills_existing_empty_body_before_checks(tmp_path: Path, monkeypatch) -> None:
