@@ -2,6 +2,8 @@
 comet_change: stabilize-version-runtime-sync
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-07-09-stabilize-version-runtime-sync
+status: final
 ---
 
 # Stabilize Version Runtime Sync Design

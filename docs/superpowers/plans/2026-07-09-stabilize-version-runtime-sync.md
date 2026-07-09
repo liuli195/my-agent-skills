@@ -2,6 +2,7 @@
 change: stabilize-version-runtime-sync
 design-doc: docs/superpowers/specs/2026-07-09-stabilize-version-runtime-sync-design.md
 base-ref: cf1ae747b7678203cf3c522d7769f705797238d5
+archived-with: 2026-07-09-stabilize-version-runtime-sync
 ---
 
 # Stabilize Version Runtime Sync Implementation Plan
@@ -14,6 +15,7 @@ base-ref: cf1ae747b7678203cf3c522d7769f705797238d5
 
 **Tech Stack:** Python（Python 语言）标准库、pytest（测试框架）、PowerShell（命令行）、OpenSpec（规格流程）文档。
 
+archived-with: 2026-07-09-stabilize-version-runtime-sync
 ---
 
 ### Task 1: Version Source Tests

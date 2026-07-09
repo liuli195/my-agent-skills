@@ -16,6 +16,6 @@ verification_report: docs/superpowers/reports/2026-07-09-stabilize-version-runti
 branch_status: handled
 created_at: 2026-07-02
 verified_at: 2026-07-09
-archived: false
+archived: true
 handoff_context: openspec/changes/stabilize-version-runtime-sync/.comet/handoff/spec-context.json
 handoff_hash: af804637b3f42074ee304ec8c3e323195b9bb1f8790eb6d076ec7537b40832e1
