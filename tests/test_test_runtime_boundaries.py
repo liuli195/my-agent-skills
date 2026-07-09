@@ -537,6 +537,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     "tests/test_release_flow_cli.py::test_preflight_rejects_remote_tag_that_already_exists": (
         "covers release-flow real git remote tag rejection"
     ),
+    "tests/test_release_flow_cli.py::test_preflight_rejects_stale_build_and_verify_runtime": (
+        "covers release-flow real git build-and-verify runtime preflight"
+    ),
     "tests/test_release_flow_cli.py::test_release_flow_local_e2e": (
         "covers release-flow real git local end-to-end lifecycle"
     ),
@@ -887,6 +890,7 @@ CURRENT_E2E_ALLOWLIST_IDENTITIES = {
     "tests/test_build_and_verify_plugin.py::test_build_and_verify_user_level_skill_path_runs_verify_without_git",
     "tests/test_build_and_verify_plugin.py::test_copied_repository_runtime_can_initialize_another_project",
     "tests/test_build_and_verify_plugin.py::test_copied_repository_runtime_can_update_itself",
+    "tests/test_release_flow_cli.py::test_preflight_rejects_stale_build_and_verify_runtime",
     "tests/test_cross_agent_review_cli.py::test_change_path_traversal_rejects_input_location",
     "tests/test_cross_agent_review_cli.py::test_clean_worktree_checks_reuse_runtime_allowlist",
     "tests/test_cross_agent_review_cli.py::test_copied_tracked_file_into_runtime_artifacts_rejects_before_dispatch",
@@ -1029,4 +1033,3 @@ def test_build_and_verify_keeps_focused_real_entrypoint_coverage() -> None:
         "tests/test_build_and_verify_plugin.py::test_build_and_verify_init_config_overwrite_e2e_temp_target_repo",
         "tests/test_build_and_verify_plugin.py::test_build_and_verify_user_level_skill_path_runs_verify_without_git",
     ]
-

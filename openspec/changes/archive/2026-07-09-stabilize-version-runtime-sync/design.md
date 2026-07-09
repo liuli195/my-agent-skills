@@ -34,6 +34,6 @@
 
 ## Risks / Trade-offs
 
-- [Risk] plugin-sync（插件同步）源码当前不在仓库内 → 实施前确认是否允许修改用户级 skill（技能）路径。
+- [Risk] plugin-sync（插件同步）源码当前不在仓库内 → 用户已授权修改 `C:\Users\liuli\.agents\skills\plugin-sync`；实施时直接检查并更新该用户级 skill（技能）的现有说明和引用页。
 - [Risk] runtime（运行时）落后不阻塞普通验证 → 由 Release Flow preflight（发布预检）在发布前阻塞。
 - [Risk] 版本扫描误伤假版本 fixture（测试夹具） → 允许极少数明确白名单，例如 `9.9.9`。

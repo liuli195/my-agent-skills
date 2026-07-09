@@ -70,7 +70,7 @@ def make_plugin(root: Path, name: str) -> Path:
         plugin / ".claude-plugin" / "plugin.json",
         {
             "name": name,
-            "version": "0.1.0",
+            "version": "9.9.0",
             "description": f"{name} plugin",
             "skills": "./skills",
         },
@@ -79,7 +79,7 @@ def make_plugin(root: Path, name: str) -> Path:
         plugin / ".codex-plugin" / "plugin.json",
         {
             "name": name,
-            "version": "0.1.0",
+            "version": "9.9.0",
             "description": f"{name} plugin",
             "skills": "./skills",
         },
@@ -1064,7 +1064,7 @@ def test_build_reports_manifest_name_mismatch(tmp_path: Path) -> None:
         tmp_path / "plugins" / "alpha" / ".claude-plugin" / "plugin.json",
         {
             "name": "wrong",
-            "version": "0.1.0",
+            "version": "9.9.0",
             "description": "wrong plugin",
             "skills": "./skills",
         },

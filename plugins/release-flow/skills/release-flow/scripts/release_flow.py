@@ -88,6 +88,12 @@ PLUGIN_REGISTRY: dict[str, dict[str, Any]] = {
         },
     },
 }
+BUILD_AND_VERIFY_PLUGIN = "build-and-verify"
+BUILD_AND_VERIFY_CONFIG_FILE = Path(".build-and-verify/config.json")
+BUILD_AND_VERIFY_RUNTIME_VERSION_FILE = Path(".build-and-verify/runtime/version.json")
+BUILD_AND_VERIFY_UPDATE_SCRIPT = Path(
+    "plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py"
+)
 SETUP_TARGETS = [
     ("release-flow/config.yaml", ".release-flow/config.yaml"),
     ("release-flow/projection.yaml", ".release-flow/projection.yaml"),
@@ -710,6 +716,30 @@ def manifest_version(project: Path, manifest_file: str) -> str:
     return version
 
 
+def build_and_verify_runtime_version(project: Path) -> str | None:
+    if not (project / BUILD_AND_VERIFY_CONFIG_FILE).is_file():
+        return None
+    version_path = project / BUILD_AND_VERIFY_RUNTIME_VERSION_FILE
+    if not version_path.is_file():
+        return "missing"
+    try:
+        data = read_json_mapping(version_path)
+    except ValueError:
+        return "invalid"
+    version = data.get("runtime_version") or data.get("plugin_version")
+    return version if isinstance(version, str) and version else "missing"
+
+
+def build_and_verify_runtime_update_error(project: Path, requested_version: str) -> str:
+    runtime_version = build_and_verify_runtime_version(project)
+    if runtime_version is None or runtime_version == requested_version:
+        return ""
+    return (
+        "runtime_update_required: build-and-verify "
+        f"runtime={runtime_version} requested={requested_version}"
+    )
+
+
 def git_output(project: Path, args: list[str]) -> str:
     result = subprocess.run(
         ["git", "-C", str(project), *args],
@@ -966,6 +996,11 @@ def preflight_errors(
         except (json.JSONDecodeError, ValueError) as exc:
             errors.append(str(exc))
 
+    if BUILD_AND_VERIFY_PLUGIN in bumped:
+        runtime_error = build_and_verify_runtime_update_error(project, version)
+        if runtime_error:
+            errors.append(runtime_error)
+
     if not errors:
         with tempfile.TemporaryDirectory(prefix="release-flow-preflight-") as temp_dir:
             expected_tree = Path(temp_dir) / "expected"
@@ -980,7 +1015,7 @@ def preflight_errors(
     return errors
 
 
-def preflight_next_action(error: str) -> str:
+def preflight_next_action(error: str, project: Path | None = None) -> str:
     if error.startswith("source_ref_requires_pr: "):
         return "create and merge the version bump through PR Flow, then rerun release-flow preflight"
     if error.startswith("manifest_version_mismatch: "):
@@ -988,13 +1023,19 @@ def preflight_next_action(error: str) -> str:
         return f"correct the manifest version in {manifest_path}, then rerun release-flow preflight"
     if error.startswith("release already exists: "):
         return "choose a new release version and rerun release-flow preflight"
+    if error.startswith("runtime_update_required: "):
+        project_arg = project if project is not None else Path(".")
+        return (
+            f"run python {BUILD_AND_VERIFY_UPDATE_SCRIPT.as_posix()} update-runtime "
+            f"--project {project_arg}"
+        )
     return ""
 
 
-def print_preflight_errors(errors: list[str]) -> None:
+def print_preflight_errors(errors: list[str], project: Path | None = None) -> None:
     for error in errors:
         print(f"error: {error}")
-        next_action = preflight_next_action(error)
+        next_action = preflight_next_action(error, project)
         if next_action:
             print(f"nextAction: {next_action}")
 
@@ -1022,7 +1063,7 @@ def run_preflight(args: argparse.Namespace) -> int:
 
     if errors:
         print("status: issues")
-        print_preflight_errors(errors)
+        print_preflight_errors(errors, args.project)
         return 1
 
     print("status: preflight_passed")
@@ -1247,7 +1288,7 @@ def run_ci_publish(args: argparse.Namespace) -> int:
     )
     if errors:
         print("status: issues")
-        print_preflight_errors(errors)
+        print_preflight_errors(errors, args.project)
         return 1
 
     try:

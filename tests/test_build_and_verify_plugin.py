@@ -1694,6 +1694,67 @@ def test_build_and_verify_verify_reports_newer_user_runtime_without_mutation(
     assert runtime_file.read_bytes() == before
 
 
+def test_build_and_verify_verify_runtime_hint_preserves_failure_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    project.mkdir()
+    installed_runtime = (
+        home
+        / ".codex"
+        / "plugins"
+        / "cache"
+        / "vendor"
+        / "build-and-verify"
+        / "9.9.9"
+        / "skills"
+        / "build-and-verify"
+        / "scripts"
+    )
+    installed_runtime.mkdir(parents=True)
+    installed_script = installed_runtime / "build_and_verify.py"
+    installed_script.write_text("# newer\n", encoding="utf-8")
+    write_json(
+        installed_runtime / "version.json",
+        {
+            "plugin": "build-and-verify",
+            "plugin_version": "9.9.9",
+            "runtime_version": "9.9.9",
+        },
+    )
+    monkeypatch.setenv("USERPROFILE", str(home))
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
+    write_json(
+        project / ".build-and-verify" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "fails",
+                        "command": command_that_fails_once("fails"),
+                        "inputs": [],
+                    }
+                ]
+            },
+        },
+    )
+    runtime_file = project / ".build-and-verify" / "runtime" / "build_and_verify.py"
+    before = runtime_file.read_bytes()
+
+    result = run_check(project, "verify", "--full", check_user_runtime=True)
+
+    assert result.returncode == 1
+    repository_version = read_json(PLUGIN_ROOT / ".codex-plugin" / "plugin.json")["version"]
+    assert f"runtime_outdated: repository={repository_version} installed=9.9.9" in result.stdout
+    assert f"python {installed_script} update-runtime --project {project}" in result.stdout
+    assert "failed: fails" in result.stdout
+    assert "status: failed" in result.stdout
+    assert runtime_file.read_bytes() == before
+
+
 @pytest.mark.parametrize(
     "existing",
     [

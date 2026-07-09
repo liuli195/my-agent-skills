@@ -383,16 +383,16 @@ def test_removed_commands_are_not_registered(tmp_path: Path) -> None:
         "--project",
         str(project),
         "--tag",
-        "v0.1.1",
+        "v9.9.1",
         "--version",
-        "0.1.1",
+        "9.9.1",
     )
     summarize = run(
         "summarize",
         "--project",
         str(project),
         "--tag",
-        "v0.1.1",
+        "v9.9.1",
         "--workflow-run-file",
         str(workflow_run_file),
     )
@@ -444,7 +444,7 @@ def test_preflight_rejects_github_vars_file_argument(tmp_path: Path) -> None:
         "--project",
         str(project),
         "--tag",
-        "v0.1.1",
+        "v9.9.1",
         "--github-vars-file",
         str(vars_file),
     )
@@ -463,9 +463,9 @@ def test_ci_publish_rejects_vars_file_argument(tmp_path: Path) -> None:
         "--project",
         str(project),
         "--tag",
-        "v0.1.1",
+        "v9.9.1",
         "--version",
-        "0.1.1",
+        "9.9.1",
         "--bump-plugins",
         "agent-guard",
         "--vars-file",
@@ -659,7 +659,7 @@ def test_preflight_rejects_missing_bump_plugins(tmp_path: Path) -> None:
     project = tmp_path / "project"
     write_release_flow_files(project)
 
-    result = run("preflight", "--project", str(project), "--tag", "v0.1.1", "--version", "0.1.1")
+    result = run("preflight", "--project", str(project), "--tag", "v9.9.1", "--version", "9.9.1")
 
     assert result.returncode == 2
 
@@ -673,9 +673,9 @@ def test_preflight_rejects_unknown_bump_plugin(tmp_path: Path) -> None:
         "--project",
         str(project),
         "--tag",
-        "v0.1.1",
+        "v9.9.1",
         "--version",
-        "0.1.1",
+        "9.9.1",
         "--bump-plugins",
         "missing-plugin",
     )
@@ -701,9 +701,9 @@ def test_bump_plugins_parser_accepts_comma_empty_and_repeated_args() -> None:
                 "--project",
                 ".",
                 "--tag",
-                "v0.1.1",
+                "v9.9.1",
                 "--version",
-                "0.1.1",
+                "9.9.1",
                 "--bump-plugins",
                 "agent-guard",
                 "--bump-plugins",
@@ -732,9 +732,9 @@ def run_preflight_with_errors(
         "--project",
         str(project),
         "--tag",
-        "v0.1.1",
+        "v9.9.1",
         "--version",
-        "0.1.1",
+        "9.9.1",
     ]
     for plugin in bump_plugins:
         args.extend(["--bump-plugins", plugin])
@@ -802,13 +802,97 @@ def test_preflight_existing_release_prints_next_action(tmp_path: Path, monkeypat
     result = run_preflight_with_errors(
         monkeypatch,
         tmp_path,
-        ["release already exists: v0.1.1"],
+        ["release already exists: v9.9.1"],
         bump_plugins=["agent-guard"],
     )
 
     assert result.returncode == 1
-    assert "error: release already exists: v0.1.1" in result.stdout
+    assert "error: release already exists: v9.9.1" in result.stdout
     assert "nextAction: choose a new release version and rerun release-flow preflight" in result.stdout
+
+
+def test_preflight_rejects_stale_build_and_verify_runtime(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    remote = tmp_path / "remote.git"
+    write_release_flow_files(
+        project,
+        """version: 1
+
+identity:
+  codex:
+    marketplaceName: my-agent-skills-marketplace
+    displayName: My Agent Skills Marketplace
+  claude:
+    marketplaceName: my-agent-skills-marketplace
+    ownerName: My Agent Skills Marketplace
+
+variables:
+  {}
+generators:
+  - path: .agents/plugins/marketplace.json
+    type: codex-marketplace
+    identity: codex
+    plugins:
+      - build-and-verify
+
+transforms:
+  []
+""",
+    )
+    write_plugin_manifests(project, "build-and-verify", "9.9.0")
+    write_json(
+        project / ".build-and-verify" / "config.json",
+        {"version": 1, "build": {"checks": []}, "verify": {"checks": []}},
+    )
+    runtime_version = project / ".build-and-verify" / "runtime" / "version.json"
+    write_json(
+        runtime_version,
+        {
+            "plugin": "build-and-verify",
+            "plugin_version": "9.8.0",
+            "runtime_version": "9.8.0",
+        },
+    )
+    before_runtime = runtime_version.read_text(encoding="utf-8")
+    init_project_with_remote(project, remote)
+    monkeypatch.setattr(load_release_flow_module(), "remote_release_errors", lambda *_args: [])
+
+    result = run(
+        "preflight",
+        "--project",
+        str(project),
+        "--tag",
+        "v9.9.0",
+        "--version",
+        "9.9.0",
+        "--bump-plugins",
+        "build-and-verify",
+    )
+
+    assert result.returncode == 1
+    assert "error: runtime_update_required: build-and-verify runtime=9.8.0 requested=9.9.0" in result.stdout
+    assert (
+        "nextAction: run python plugins/build-and-verify/skills/build-and-verify/scripts/"
+        f"build_and_verify.py update-runtime --project {project}"
+    ) in result.stdout
+    assert runtime_version.read_text(encoding="utf-8") == before_runtime
+
+    runtime_version.write_text("{", encoding="utf-8")
+
+    invalid_result = run(
+        "preflight",
+        "--project",
+        str(project),
+        "--tag",
+        "v9.9.0",
+        "--version",
+        "9.9.0",
+        "--bump-plugins",
+        "build-and-verify",
+    )
+
+    assert invalid_result.returncode == 1
+    assert "error: runtime_update_required: build-and-verify runtime=invalid requested=9.9.0" in invalid_result.stdout
 
 
 def test_preflight_merges_repeated_bump_plugins(tmp_path: Path, monkeypatch) -> None:
@@ -841,7 +925,7 @@ def test_remote_ref_manifest_version_fetches_missing_channel_branch_for_actions_
         if "fetch" in command:
             return subprocess.CompletedProcess(command, 0, "", "")
         if "show" in command:
-            return subprocess.CompletedProcess(command, 0, json.dumps({"version": "0.1.1"}), "")
+            return subprocess.CompletedProcess(command, 0, json.dumps({"version": "9.9.1"}), "")
         return subprocess.CompletedProcess(command, 1, "", "unexpected command")
 
     monkeypatch.setattr(release_flow, "git_ref_exists", fake_ref_exists)
@@ -853,7 +937,7 @@ def test_remote_ref_manifest_version_fetches_missing_channel_branch_for_actions_
         "plugins/agent-guard/.codex-plugin/plugin.json",
     )
 
-    assert version == "0.1.1"
+    assert version == "9.9.1"
     assert calls == [
         ("exists", checkout, "origin/marketplace"),
         (
@@ -908,12 +992,12 @@ def test_preflight_rejects_remote_tag_that_already_exists(tmp_path: Path, monkey
     result = run_preflight_with_errors(
         monkeypatch,
         tmp_path,
-        ["release already exists: v0.1.1"],
+        ["release already exists: v9.9.1"],
         bump_plugins=["agent-guard"],
     )
 
     assert result.returncode == 1
-    assert "release already exists: v0.1.1" in result.stdout
+    assert "release already exists: v9.9.1" in result.stdout
 
 
 def test_preflight_checks_projection_without_channel_tree(tmp_path: Path, monkeypatch) -> None:
@@ -950,9 +1034,9 @@ def test_preflight_rejects_channel_tree_argument(tmp_path: Path) -> None:
         "--project",
         str(project),
         "--tag",
-        "v0.1.1",
+        "v9.9.1",
         "--version",
-        "0.1.1",
+        "9.9.1",
         "--bump-plugins",
         "agent-guard",
         "--channel-tree",
@@ -1009,9 +1093,9 @@ def test_publish_rejects_dry_run_argument(tmp_path: Path) -> None:
         "--project",
         str(project),
         "--tag",
-        "v0.1.1",
+        "v9.9.1",
         "--version",
-        "0.1.1",
+        "9.9.1",
         "--bump-plugins",
         "agent-guard",
         "--dry-run",
@@ -1036,9 +1120,9 @@ def test_publish_retries_workflow_run_eof_then_succeeds(tmp_path: Path) -> None:
         "--project",
         str(project),
         "--tag",
-        "v0.1.1",
+        "v9.9.1",
         "--version",
-        "0.1.1",
+        "9.9.1",
         "--bump-plugins",
         "agent-guard",
         "--authorize-publish",
@@ -1063,9 +1147,9 @@ def test_publish_reports_last_eof_after_workflow_run_retries_exhausted(tmp_path:
         "--project",
         str(project),
         "--tag",
-        "v0.1.1",
+        "v9.9.1",
         "--version",
-        "0.1.1",
+        "9.9.1",
         "--bump-plugins",
         "agent-guard",
         "--authorize-publish",
@@ -1086,9 +1170,9 @@ def test_publish_requires_authorization_without_dry_run(tmp_path: Path) -> None:
         "--project",
         str(project),
         "--tag",
-        "v0.1.1",
+        "v9.9.1",
         "--version",
-        "0.1.1",
+        "9.9.1",
         "--bump-plugins",
         "agent-guard",
     )
@@ -1179,9 +1263,9 @@ def test_ci_publish_rejects_dry_run_argument(tmp_path: Path) -> None:
         "--project",
         str(project),
         "--tag",
-        "v0.1.1",
+        "v9.9.1",
         "--version",
-        "0.1.1",
+        "9.9.1",
         "--bump-plugins",
         "agent-guard",
         "--dry-run",
@@ -1255,8 +1339,8 @@ def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: 
 """
         ),
     )
-    write_plugin_manifests(project, "agent-guard", "0.1.1")
-    write_plugin_manifests(project, "release-flow", "0.1.1")
+    write_plugin_manifests(project, "agent-guard", "9.9.1")
+    write_plugin_manifests(project, "release-flow", "9.9.1")
     write_json(project / ".agents" / "plugins" / "marketplace.json", {"name": "local-dev"})
 
     preflight_calls = []
@@ -1269,7 +1353,7 @@ def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: 
     def fake_ci_publish_remote(project_arg, config, projection, tag):
         remote_calls.append((project_arg, config.release_channel_branch, projection.path, tag))
         return {
-            "release_url": "https://github.example/releases/tag/v0.1.1",
+            "release_url": "https://github.example/releases/tag/v9.9.1",
             "marketplace_commit": "marketplace-commit",
             "tag_commit": "tag-commit",
             "workflow_run_url": "https://github.example/actions/runs/1",
@@ -1282,9 +1366,9 @@ def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: 
         "--project",
         str(project),
         "--tag",
-        "v0.1.1",
+        "v9.9.1",
         "--version",
-        "0.1.1",
+        "9.9.1",
         "--bump-plugins",
         "agent-guard",
         "--authorize-ci-publish",
@@ -1293,14 +1377,14 @@ def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: ci_published" in result.stdout
     assert "channel_branch: marketplace" in result.stdout
-    assert "tag: v0.1.1" in result.stdout
-    assert "release_url: https://github.example/releases/tag/v0.1.1" in result.stdout
+    assert "tag: v9.9.1" in result.stdout
+    assert "release_url: https://github.example/releases/tag/v9.9.1" in result.stdout
     assert "marketplace_commit: marketplace-commit" in result.stdout
     assert "tag_commit: tag-commit" in result.stdout
     assert "workflow_run_url: https://github.example/actions/runs/1" in result.stdout
     projection_path = project.resolve() / ".release-flow" / "projection.yaml"
-    assert preflight_calls == [(project.resolve(), "v0.1.1", "0.1.1", ["agent-guard"], "marketplace", projection_path)]
-    assert remote_calls == [(project.resolve(), "marketplace", projection_path, "v0.1.1")]
+    assert preflight_calls == [(project.resolve(), "v9.9.1", "9.9.1", ["agent-guard"], "marketplace", projection_path)]
+    assert remote_calls == [(project.resolve(), "marketplace", projection_path, "v9.9.1")]
     source_marketplace = json.loads((project / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8"))
     assert source_marketplace["name"] == "local-dev"
 
@@ -1314,9 +1398,9 @@ def test_ci_publish_requires_authorization_without_dry_run(tmp_path: Path) -> No
         "--project",
         str(project),
         "--tag",
-        "v0.1.1",
+        "v9.9.1",
         "--version",
-        "0.1.1",
+        "9.9.1",
         "--bump-plugins",
         "agent-guard",
     )
@@ -1331,8 +1415,8 @@ def test_release_flow_local_e2e(tmp_path: Path, monkeypatch) -> None:
 
     setup = run("setup", "--project", str(project), "--authorize-project-files")
     assert setup.returncode == 0, setup.stdout + setup.stderr
-    write_plugin_manifests(project, "agent-guard", "0.1.1")
-    write_plugin_manifests(project, "release-flow", "0.1.1")
+    write_plugin_manifests(project, "agent-guard", "9.9.1")
+    write_plugin_manifests(project, "release-flow", "9.9.1")
     write_json(
         project / ".claude-plugin" / "marketplace.json",
         {"name": "local-dev", "owner": {"name": "Local Dev"}},
@@ -1351,15 +1435,15 @@ def test_release_flow_local_e2e(tmp_path: Path, monkeypatch) -> None:
         "--project",
         str(project),
         "--tag",
-        "v0.1.1",
+        "v9.9.1",
         "--version",
-        "0.1.1",
+        "9.9.1",
         "--bump-plugins",
         "agent-guard",
     )
     assert preflight.returncode == 0, preflight.stdout + preflight.stderr
     assert preflight_calls == [
-        (project.resolve(), "v0.1.1", "0.1.1", ["agent-guard"], "marketplace", project.resolve() / ".release-flow" / "projection.yaml")
+        (project.resolve(), "v9.9.1", "9.9.1", ["agent-guard"], "marketplace", project.resolve() / ".release-flow" / "projection.yaml")
     ]
     calls = tmp_path / "gh-calls.txt"
     bin_dir = tmp_path / "bin"
@@ -1371,9 +1455,9 @@ def test_release_flow_local_e2e(tmp_path: Path, monkeypatch) -> None:
         "--project",
         str(project),
         "--tag",
-        "v0.1.1",
+        "v9.9.1",
         "--version",
-        "0.1.1",
+        "9.9.1",
         "--bump-plugins",
         "agent-guard",
         "--authorize-publish",
