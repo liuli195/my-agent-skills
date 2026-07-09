@@ -98,89 +98,29 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 - **THEN** 系统 MUST 直接从 `.release-flow/projection.yaml` 的 identity 读取非敏感发布身份
 
 ### Requirement: 项目启用阶段
-
 系统 MUST 提供 project setup（项目启用）阶段，用于生成目标项目配置，并输出 GitHub Actions（GitHub 自动化任务）权限配置方案。首版 MUST NOT 在没有额外实现仓库上下文和认证回读前修改 GitHub 仓库设置。
 
-#### Scenario: 生成目标项目配置
-
-- **WHEN** 用户在目标项目启用 release-flow（发布流程）
-- **THEN** 系统 MUST 生成 `.release-flow/config.yaml`（配置文件）
-- **THEN** 系统 MUST 生成 `.release-flow/projection.yaml`（投影配置）
-- **THEN** 系统 MUST 从插件模板生成目标项目的薄 GitHub Workflow（GitHub 工作流）入口
-- **THEN** 系统 MUST NOT 生成只服务本地 release record（发布记录）的 `.release-flow/.gitignore`
-- **THEN** 系统 MUST NOT 将插件内的发布脚本复制到目标项目仓库
-- **THEN** 系统 MUST NOT 创建 `.release-flow/releases/<tag>/release-plan.json`（发布计划文件）
-
-#### Scenario: 生成 GitHub 配置方案
-
-- **WHEN** 项目启用阶段检查 GitHub 仓库
-- **THEN** 系统 MUST 输出 Actions permissions（自动化任务权限）的期望配置方案
-- **THEN** 系统 MUST NOT 输出 GitHub Rulesets（GitHub 规则集）的期望配置方案
-- **THEN** 系统 MUST NOT 输出非敏感 marketplace identity（市场身份）的 GitHub Actions Variables（GitHub 变量）配置方案
-
-#### Scenario: 授权后修改 GitHub 配置
-
-- **WHEN** 用户明确授权自动配置 GitHub
-- **THEN** 首版系统 MUST 报告自动写入 GitHub 暂不可用
-- **THEN** 系统 MUST NOT 调用真实 GitHub 设置 API（接口）
-- **THEN** 后续版本 MAY 使用 `gh`（GitHub 命令行）或 GitHub API（接口）修改仓库设置并回读验证结果
-
-#### Scenario: 未授权时输出手动步骤
-
-- **WHEN** 用户未授权自动配置 GitHub
-- **THEN** 系统 MUST 输出用户可手动执行的 Actions permissions（自动化任务权限）配置步骤
-- **THEN** 系统 MUST NOT 输出 GitHub Rulesets（GitHub 规则集）配置步骤
-- **THEN** 系统 MUST NOT 修改 GitHub 仓库设置
+#### Scenario: Remote governance changes require current confirmation
+- **WHEN** Release Flow（发布流程） guidance mentions GitHub Rulesets（GitHub 规则集）、branch protection（分支保护）、workflow variables（工作流变量） or repository settings（仓库设置）
+- **THEN** Skill（技能） guidance MUST prohibit modifying those remote settings without explicit confirmation in the current conversation
+- **THEN** without confirmation, the Skill（技能） MUST only output remote tasks（远端待办）
 
 ### Requirement: 发布前检查
-
 系统 MUST 提供 release-flow preflight（发布前检查）阶段，用于在发布前验证本地配置、发布输入、manifest（插件清单）、source ref（源引用）、发布投影和远端发布冲突。
 
-#### Scenario: 检查配置文件
+#### Scenario: 多个 preflight 问题输出汇总路径
+- **WHEN** preflight（发布前检查）同时发现多个错误
+- **AND** every emitted error（错误） is release（发布）冲突、manifest（清单）版本不匹配、source ref（源引用）未合入版本提升 or plugin（插件）需要一并提升版本
+- **THEN** preflight（发布前检查） MUST keep printing each underlying error（底层错误）
+- **THEN** preflight（发布前检查） MUST print exactly one summary next action（汇总下一步动作） for the multi-error set
+- **THEN** the summary MUST describe the current state and handling path（处理路径）, including that release（发布） conflicts require the user and agent（代理） to choose the release version（发布版本） before rerunning preflight（发布前检查）
+- **THEN** the summary MUST describe manifest（清单）、source ref（源引用） and plugin（插件） version issues as requiring the PR（拉取请求） path
+- **THEN** the summary MUST NOT infer or suggest a latest version（最新版本） or next version（下一版本）
 
-- **WHEN** 执行 preflight（发布前检查）
-- **THEN** 系统 MUST 验证 `.release-flow/config.yaml`（配置文件）存在且合法
-- **THEN** 系统 MUST 验证 `.release-flow/projection.yaml`（投影配置）存在且合法
-
-#### Scenario: 检查发布输入
-
-- **WHEN** 执行 preflight（发布前检查）
-- **THEN** 系统 MUST 验证 `tag`（标签）和 `version`（版本）一致
-- **THEN** 系统 MUST 验证 `bumpPlugins`（提升插件列表）存在且只包含已注册插件
-
-#### Scenario: 检查版本一致性
-
-- **WHEN** 执行 preflight（发布前检查）
-- **THEN** 系统 MUST 只要求 `bumpPlugins`（提升插件列表）声明的插件 manifest（插件清单）版本等于发布版本
-- **THEN** 系统 MUST 拒绝未声明插件的 manifest（插件清单）版本不同于远端发布通道同路径版本
-
-#### Scenario: 检查 source ref 已包含版本提升
-
-- **WHEN** 执行 preflight（发布前检查）
-- **AND** `bumpPlugins`（提升插件列表）声明了需要提升版本的插件
-- **THEN** 系统 MUST 验证远端 `sourceRef`（源引用）中这些插件 manifest（插件清单）版本等于发布版本
-- **THEN** 任一版本提升尚未进入远端 `sourceRef`（源引用）时 MUST 拒绝继续
-- **THEN** 错误 MUST 指出需要先通过 PR（拉取请求）把版本提升合入 `sourceRef`（源引用）
-
-#### Scenario: 检查发布投影
-
-- **WHEN** 执行 preflight（发布前检查）
-- **THEN** 系统 MUST 验证 projection（投影）可以由单一 Plugin registry（插件注册表）生成
-- **THEN** 系统 MUST 拒绝无法生成的发布投影
-- **THEN** 系统 MUST NOT 要求用户在源码分支运行正式 marketplace（市场）projection（投影）
-
-#### Scenario: 检查远端发布冲突
-
-- **WHEN** 执行 preflight（发布前检查）
-- **THEN** 系统 MUST 检查远端 tag（标签）是否已存在
-- **THEN** 系统 MUST 检查 GitHub Release（GitHub 发布）是否已存在
-- **THEN** 任一已存在时 MUST 拒绝继续
-
-#### Scenario: 不检查 GitHub Rulesets
-
-- **WHEN** 执行 preflight（发布前检查）
-- **THEN** 系统 MUST NOT 读取 GitHub Rulesets（GitHub 规则集）
-- **THEN** 系统 MUST NOT 声称已验证 GitHub Rulesets（GitHub 规则集）
+#### Scenario: 未跟踪 preflight 问题保留逐条恢复提示
+- **WHEN** preflight（发布前检查）同时发现多个错误
+- **AND** at least one error（错误） is not release（发布）冲突、manifest（清单）版本不匹配、source ref（源引用）未合入版本提升 or plugin（插件）需要一并提升版本
+- **THEN** preflight（发布前检查） MUST keep per-error nextAction（逐条下一步动作） output for errors（错误） that already have one
 
 ### Requirement: 发布执行阶段
 

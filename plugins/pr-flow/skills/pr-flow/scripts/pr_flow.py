@@ -257,6 +257,12 @@ GH_AUTH_REQUIRED_MARKERS = (
 )
 
 RECOVERABLE_NEXT_ACTIONS = {
+    "gh_auth_required": {
+        "nextCommand": "gh auth status",
+    },
+    "gh_pr_view_transient_failed": {
+        "nextAction": "Wait briefly, then rerun the same PR Flow command.",
+    },
     "checks_pending": {
         "nextAction": "Wait for GitHub checks to finish, then rerun the same PR Flow command.",
     },
@@ -266,10 +272,38 @@ RECOVERABLE_NEXT_ACTIONS = {
     "ruleset_merge_blocking": {
         "nextAction": "Wait for ruleset requirements to pass or enable auto-merge, then rerun the same PR Flow command.",
     },
-    "gh_auth_required": {
-        "nextCommand": "gh auth status",
+    "invalid_fixes": {
+        "nextAction": "Fix the invalid issue references, then rerun the same PR Flow command.",
+    },
+    "pr_missing": {
+        "nextAction": "Run PR Flow complete with summary and scope to create the pull request.",
+    },
+    "missing_upstream": {
+        "nextAction": "Run PR Flow complete to push the current branch and create the pull request.",
     },
 }
+
+RECOVERABLE_STOP_STATUSES = {
+    "gh_auth_required": "DISPATCH_REQUIRED",
+    "gh_pr_view_transient_failed": "DISPATCH_REQUIRED",
+    "checks_pending": "DISPATCH_REQUIRED",
+    "ruleset_merge_blocking": "DISPATCH_REQUIRED",
+    "pr_missing": "DISPATCH_REQUIRED",
+    "missing_upstream": "DISPATCH_REQUIRED",
+    "checks_or_review_blocking": "REPLY_OR_FIX_REQUIRED",
+    "invalid_fixes": "REPLY_OR_FIX_REQUIRED",
+}
+
+
+def post_create_pr_view_details(details: dict[str, Any], next_command: str | None) -> dict[str, Any]:
+    converted = dict(details)
+    previous_category = converted.get("transientCategory")
+    if previous_category and previous_category != "post_create_view":
+        converted["underlyingTransientCategory"] = previous_category
+    converted["reason"] = "gh_pr_view_transient_failed"
+    converted["transientCategory"] = "post_create_view"
+    add_recovery_action(converted, next_command)
+    return converted
 
 
 def gh_auth_required(result: subprocess.CompletedProcess[str]) -> bool:
@@ -351,11 +385,7 @@ def pr_view_failure_details(
 
 
 def error_status(reason: str) -> str:
-    if reason in {"gh_auth_required", "gh_pr_view_transient_failed", "checks_pending", "ruleset_merge_blocking"}:
-        return "DISPATCH_REQUIRED"
-    if reason in {"checks_or_review_blocking", "invalid_fixes"}:
-        return "REPLY_OR_FIX_REQUIRED"
-    return "EXCEPTION_REQUIRED"
+    return RECOVERABLE_STOP_STATUSES.get(reason, "EXCEPTION_REQUIRED")
 
 
 def add_default_next_command(details: dict[str, Any], next_command: str | None) -> dict[str, Any]:
@@ -866,16 +896,27 @@ def gh_with_body_file(project: Path, args: Sequence[str], body: str) -> subproce
             body_path.unlink(missing_ok=True)
 
 
-def create_pr(project: Path, config: dict[str, Any], body: str | None = None) -> dict[str, Any]:
+def create_pr(
+    project: Path,
+    config: dict[str, Any],
+    body: str | None = None,
+    next_command: str | None = None,
+) -> dict[str, Any]:
     args = ("pr", "create", "--base", base_branch_from_config(config), "--fill")
     result = gh_with_body_file(project, args, body) if body is not None else gh(project, *args)
     if result.returncode != 0:
         details = command_failure_details("gh_pr_create_failed", result)
         raise PrFlowError("gh_pr_create_failed", details)
-    pr = find_pr(project)
+    try:
+        pr = find_pr(project)
+    except PrFlowError as exc:
+        if exc.reason in {"gh_pr_view_failed", "gh_pr_view_transient_failed"}:
+            details = post_create_pr_view_details(exc.details, next_command)
+            raise PrFlowError("gh_pr_view_transient_failed", details) from exc
+        raise
     if pr is None:
-        details = command_failure_details("gh_pr_create_missing_pr", result)
-        raise PrFlowError("gh_pr_create_missing_pr", details)
+        details = {"reason": "gh_pr_view_transient_failed"}
+        raise PrFlowError("gh_pr_view_transient_failed", post_create_pr_view_details(details, next_command))
     return pr
 
 
@@ -1318,7 +1359,7 @@ def run_lifecycle(
             if push_stop is not None:
                 return stop_from_state(project, command, push_stop)
         if pr is None:
-            pr = create_pr(project, config, pr_body)
+            pr = create_pr(project, config, pr_body, next_command)
         pr = sync_pr(project, pr)
         if pr_body is not None and existing_pr:
             reconcile_existing_pr_body(project, pr, pr_body, fixes)

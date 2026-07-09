@@ -1022,7 +1022,10 @@ def preflight_next_action(error: str, project: Path | None = None) -> str:
         manifest_path = error.split(": ", 1)[1]
         return f"correct the manifest version in {manifest_path}, then rerun release-flow preflight"
     if error.startswith("release already exists: "):
-        return "choose a new release version and rerun release-flow preflight"
+        return (
+            "requested release/tag already exists; choose the release version with the user and agent, "
+            "then rerun release-flow preflight"
+        )
     if error.startswith("runtime_update_required: "):
         project_arg = project if project is not None else Path(".")
         return (
@@ -1032,9 +1035,46 @@ def preflight_next_action(error: str, project: Path | None = None) -> str:
     return ""
 
 
+def preflight_summary_next_action(errors: list[str]) -> str:
+    if len(errors) < 2:
+        return ""
+
+    tracked_prefixes = (
+        "release already exists: ",
+        "manifest_version_mismatch: ",
+        "source_ref_requires_pr: ",
+        "plugin_requires_bump: ",
+    )
+    if any(not error.startswith(tracked_prefixes) for error in errors):
+        return ""
+
+    states: list[str] = []
+    actions: list[str] = []
+    if any(error.startswith("release already exists: ") for error in errors):
+        states.append("release/tag already exists")
+        actions.append("choose the release version with the user and agent")
+    if any(error.startswith("manifest_version_mismatch: ") for error in errors):
+        states.append("manifest versions do not match requested release")
+    if any(error.startswith("source_ref_requires_pr: ") for error in errors):
+        states.append("source ref lacks version bump")
+    if any(error.startswith("manifest_version_mismatch: ") for error in errors):
+        actions.append("correct manifest versions through PR Flow")
+    if any(error.startswith("source_ref_requires_pr: ") for error in errors):
+        actions.append("create and merge the source-ref version bump through PR Flow")
+    if any(error.startswith("plugin_requires_bump: ") for error in errors):
+        states.append("some plugins need bumpPlugins")
+        actions.append("include required plugins in bumpPlugins through PR Flow when they should ship")
+    return f"current state: {'; '.join(states)}. handling path: {', '.join(actions)}, then rerun release-flow preflight"
+
+
 def print_preflight_errors(errors: list[str], project: Path | None = None) -> None:
     for error in errors:
         print(f"error: {error}")
+    summary_next_action = preflight_summary_next_action(errors)
+    if summary_next_action:
+        print(f"nextAction: {summary_next_action}")
+        return
+    for error in errors:
         next_action = preflight_next_action(error, project)
         if next_action:
             print(f"nextAction: {next_action}")

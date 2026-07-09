@@ -24,6 +24,7 @@ Use this skill when the user wants to:
 - Plugin scripts and templates stay inside this plugin package.
 - Local publish commands do not create branches, create tags, or push commits.
 - GitHub repository settings are modified only after explicit user authorization.
+- 禁止在当前对话未获得用户明确确认时修改 GitHub Rulesets（GitHub 规则集）、branch protection（分支保护）、workflow variables（工作流变量）或 repository settings（仓库设置）；未确认时只能输出 remote tasks（远端待办）。
 
 ## Commands
 
