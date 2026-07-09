@@ -1,0 +1,3 @@
+- [x] 更新 `cross-agent-review`（跨代理审查）Skill（技能）说明，默认收敛模式，显式无尽模式。
+- [x] 更新 reviewer prompt（审查提示词）模板和参考设计文档，保持简洁模式指引。
+- [x] 更新 `cross-agent-review`（跨代理审查）OpenSpec（开放规格）契约并运行验证。

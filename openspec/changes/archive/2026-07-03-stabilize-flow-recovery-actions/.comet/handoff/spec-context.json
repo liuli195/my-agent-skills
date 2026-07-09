@@ -1,0 +1,16 @@
+{
+  "change": "stabilize-flow-recovery-actions",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "774656eba09ef62050a3979e960e11e8a851efd940cefd00c8ee5e488a426607",
+  "files": [
+    { "path": "openspec/changes/stabilize-flow-recovery-actions/proposal.md", "sha256": "0bc4300b36afc34e5c2da3b528a9f605b5974e6a7ea0065e0c7916f9f2299a03", "role": "supporting" },
+    { "path": "openspec/changes/stabilize-flow-recovery-actions/design.md", "sha256": "46ed58c3a70860c1115fcebf194a3572b58c4b89fad09e4fef2b978f4306d45a", "role": "supporting" },
+    { "path": "openspec/changes/stabilize-flow-recovery-actions/tasks.md", "sha256": "e48956289c29f38f835e53eea146080bb67b309b3d5bf6610a4618233eaeb1d3", "role": "supporting" },
+    { "path": "openspec/changes/stabilize-flow-recovery-actions/specs/local-plugin-build-checks/spec.md", "sha256": "b180238d5fad18cffd2caedc296f6aee1c043f3a65fd6f9b40b55ef3c4c710fc", "role": "spec" },
+    { "path": "openspec/changes/stabilize-flow-recovery-actions/specs/pr-flow-plugin/spec.md", "sha256": "af6adf7d187b71f61bb2d340deed441776d99d07c1d74d1fbc99faf86348720c", "role": "spec" },
+    { "path": "openspec/changes/stabilize-flow-recovery-actions/specs/release-flow-plugin/spec.md", "sha256": "28d79d5e4cc0dd7ad9118a86894fb90a0ce2657528dc45d2375e15736a7d2207", "role": "spec" }
+  ]
+}
