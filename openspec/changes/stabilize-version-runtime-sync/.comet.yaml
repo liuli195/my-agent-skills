@@ -1,5 +1,5 @@
 workflow: full
-phase: build
+phase: archive
 context_compression: beta
 build_mode: executing-plans
 build_pause: null
@@ -11,11 +11,11 @@ auto_transition: true
 base_ref: 5b7d6a74bda8d3c7ad09d4a3b2fcbf614770c788
 design_doc: docs/superpowers/specs/2026-07-09-stabilize-version-runtime-sync-design.md
 plan: docs/superpowers/plans/2026-07-09-stabilize-version-runtime-sync.md
-verify_result: pending
-verification_report: null
-branch_status: pending
+verify_result: pass
+verification_report: docs/superpowers/reports/2026-07-09-stabilize-version-runtime-sync-verify.md
+branch_status: handled
 created_at: 2026-07-02
-verified_at: null
+verified_at: 2026-07-09
 archived: false
 handoff_context: openspec/changes/stabilize-version-runtime-sync/.comet/handoff/spec-context.json
 handoff_hash: af804637b3f42074ee304ec8c3e323195b9bb1f8790eb6d076ec7537b40832e1
