@@ -283,6 +283,48 @@ def committed_review_subject(tmp_path: Path) -> tuple[Path, str, str, Path]:
     return project, base, head, write_review_input(project, base, head)
 
 
+def review_subject_with_full_and_summary_files(tmp_path: Path) -> tuple[Path, Path]:
+    project = tmp_path / "repo"
+    base = init_repo(project)
+    write_file(project / "spec.md", "spec body\n")
+    write_file(project / "design.md", "design body\n")
+    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
+    write_file(project / "src" / "app.py", "print('behavior')\n")
+    write_file(project / "docs" / "process.md", "generated process body\n")
+    git(project, "add", ".")
+    git(project, "commit", "-m", "review subject")
+    head = git(project, "rev-parse", "HEAD")
+    input_file = write_review_input(
+        project,
+        base,
+        head,
+        payload_overrides={
+            "summary_only": [
+                {"path": "docs/process.md", "reason": "过程文档仅供按需核对"}
+            ]
+        },
+    )
+    module = load_script_module()
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        module.atomic_write_json(
+            review_input.output_dir / "review-state.json",
+            module.initial_review_state(review_input),
+        )
+    return project, input_file
+
+
+def committed_review_input(tmp_path: Path) -> tuple[Path, Path]:
+    project, _, _, input_file = committed_review_subject(tmp_path)
+    return project, input_file
+
+
+def review_args_from_input(input_file: Path) -> list[str]:
+    return ["run", "--input-file", str(input_file)]
+
+
 def test_changed_file_entries_preserves_rename_and_copy_sources(tmp_path: Path) -> None:
     project = tmp_path / "repo"
     base = init_repo(project)
@@ -364,6 +406,36 @@ def test_initial_state_records_subject_context_hashes_and_role_scopes(tmp_path: 
     assert saved["roles"]["spec-alignment"]["attempts"] == []
     assert "status" not in saved["roles"]["spec-alignment"]
     assert review_input.output_dir / "review-state.json" in allowed_paths
+
+
+def test_role_input_contains_only_full_review_diff_and_summary_stats(
+    tmp_path: Path, capsys
+) -> None:
+    project, input_file = review_subject_with_full_and_summary_files(tmp_path)
+    module = load_script_module()
+    state_file = input_file.parent.parent / "review-state.json"
+
+    with contextlib.chdir(project):
+        assert (
+            module.main(
+                [
+                    "_role-input",
+                    "--input-file",
+                    str(input_file),
+                    "--state-file",
+                    str(state_file),
+                    "--role",
+                    "implementation-correctness",
+                ]
+            )
+            == 0
+        )
+
+    output = capsys.readouterr().out
+    assert "+print('behavior')" in output
+    assert "generated process body" not in output
+    assert "docs/process.md" in output
+    assert "过程文档仅供按需核对" in output
 
 
 @pytest.mark.parametrize(
@@ -593,8 +665,11 @@ def review_args(
     ]
 
 
-def reviewer_results(module, text: str = NO_BLOCKING_REVIEW) -> list[dict]:
-    return [module.markdown_review(role, text) for role in module.REVIEWER_ROLES]
+def reviewer_state(module, text: str = NO_BLOCKING_REVIEW) -> dict:
+    state = {"roles": {role: {"attempts": []} for role in module.REVIEWER_ROLES}}
+    for role in module.REVIEWER_ROLES:
+        module.record_role_result(state, role, "completed", text)
+    return state
 
 
 def run_review_in_process(module, monkeypatch, project: Path, *args: str, reviewer_text: str = NO_BLOCKING_REVIEW) -> int:
@@ -602,8 +677,8 @@ def run_review_in_process(module, monkeypatch, project: Path, *args: str, review
     monkeypatch.setattr(module, "resolve_sdk_python", lambda explicit, require_real_sdk: "fake-sdk")
     monkeypatch.setattr(
         module,
-        "dispatch_reviewers",
-        lambda review_args, sdk_python: reviewer_results(module, reviewer_text),
+        "run_sdk_role_subprocess",
+        lambda review_args, sdk_python, role: ("completed", reviewer_text),
     )
     return module.main(list(args))
 
@@ -723,9 +798,7 @@ def test_blocking_findings_write_report_without_pass_marker(tmp_path: Path, monk
         types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None)
     )
 
-    status = module.write_outputs(
-        review_input, module.aggregate(reviewer_results(module, BLOCKING_REVIEW))
-    )
+    status = module.write_outputs(review_input, reviewer_state(module, BLOCKING_REVIEW))
 
     assert status == 0
     assert (output_dir / "review-report.md").is_file()
@@ -745,19 +818,15 @@ def test_debug_writes_input_prompts_and_raw_under_debug(tmp_path: Path, monkeypa
         types.SimpleNamespace(input_file=input_file, debug=True, sdk_python=None)
     )
 
-    def fake_run(*args, **kwargs):
-        payload = json.loads(kwargs["input"])
-        raw_dir = Path(payload["raw_dir"])
+    def fake_role(_review_input, _sdk_python, role):
+        raw_dir = review_input.output_dir / "debug" / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
-        for role in payload["roles"]:
-            (raw_dir / f"{role}.txt").write_text(
-                json.dumps({"role": role, "status": "completed", "findings": []}),
-                encoding="utf-8",
-            )
-        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout=json.dumps([]), stderr="")
+        (raw_dir / f"{role}.txt").write_text(NO_BLOCKING_REVIEW, encoding="utf-8")
+        return "completed", NO_BLOCKING_REVIEW
 
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
-    module.run_sdk_dispatch_subprocess(review_input, sys.executable)
+    monkeypatch.setattr(module, "run_sdk_role_subprocess", fake_role)
+    state = {"roles": {role: {"attempts": []} for role in module.REVIEWER_ROLES}}
+    module.dispatch_roles(review_input, sys.executable, state, module.REVIEWER_ROLES)
 
     debug_dir = input_file.parent.parent / "debug"
     assert json.loads((debug_dir / "review-input.json").read_text(encoding="utf-8"))["mode"] == "convergence"
@@ -771,7 +840,7 @@ def test_debug_writes_input_prompts_and_raw_under_debug(tmp_path: Path, monkeypa
     }
 
 
-def test_sdk_dispatch_subprocess_uses_plugin_owned_timeout(tmp_path: Path, monkeypatch) -> None:
+def test_sdk_role_subprocess_uses_plugin_owned_timeout(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
     init_repo(project)
@@ -784,24 +853,17 @@ def test_sdk_dispatch_subprocess_uses_plugin_owned_timeout(tmp_path: Path, monke
     def fake_run(*args, **kwargs):
         assert kwargs["timeout"] == module.SDK_DISPATCH_TIMEOUT_SECONDS
         payload = json.loads(kwargs["input"])
-        raw_dir = Path(payload["raw_dir"])
-        raw_dir.mkdir(parents=True, exist_ok=True)
-        raw_path = raw_dir / f"{payload['roles'][0]}.txt"
-        raw_path.write_text(NO_BLOCKING_REVIEW, encoding="utf-8")
+        assert payload["roles"] == ["spec-alignment"]
         raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
 
-    reviewers = module.run_sdk_dispatch_subprocess(review_input, sys.executable)
+    status, output = module.run_sdk_role_subprocess(
+        review_input, sys.executable, "spec-alignment"
+    )
 
-    raw_dir = input_file.parent.parent / "debug" / "raw"
-    missing_raw = raw_dir / "implementation-correctness.txt"
-    assert (raw_dir / "spec-alignment.txt").is_file()
-    assert missing_raw.is_file()
-    assert "sdk_dispatch_timeout" in missing_raw.read_text(encoding="utf-8")
-    assert [reviewer["role"] for reviewer in reviewers] == ["spec-alignment", "implementation-correctness"]
-    assert "No findings." in reviewers[0]["text"]
-    assert "Severity: CRITICAL" in reviewers[1]["text"]
+    assert status == "timed_out"
+    assert "Reviewer dispatch timed out" in output
 
 
 def test_missing_input_file_fails(tmp_path: Path) -> None:
@@ -1063,7 +1125,11 @@ def test_clean_worktree_checks_reuse_runtime_allowlist(tmp_path: Path, monkeypat
 
     monkeypatch.setattr(module, "ensure_clean_subject", fake_ensure_clean_subject)
     monkeypatch.setattr(module, "resolve_sdk_python", lambda explicit, require_real_sdk: "fake-sdk")
-    monkeypatch.setattr(module, "dispatch_reviewers", lambda review_args, sdk_python: reviewer_results(module))
+    monkeypatch.setattr(
+        module,
+        "run_sdk_role_subprocess",
+        lambda review_args, sdk_python, role: ("completed", NO_BLOCKING_REVIEW),
+    )
     monkeypatch.chdir(project)
 
     assert module.run_review(parsed) == 0
@@ -1141,13 +1207,14 @@ def test_reviewer_prompt_references_review_input_file_only(tmp_path: Path, monke
     )
 
     prompt = module.reviewer_prompt(review_input, "spec-alignment")
+    state_file = input_file.parent.parent / "review-state.json"
 
-    assert f"Read: {input_file}" in prompt
-    assert "Review only base_ref...head_ref from the input file." in prompt
-    assert "Use spec_file, design_file, and plan_file as requirements context." in prompt
-    assert f"git diff {base}...{head}" in prompt
-    assert f"git log {base}..{head} --oneline" in prompt
-    assert f"git diff --name-status --find-renames --find-copies-harder {base}...{head}" in prompt
+    assert str(input_file) in prompt
+    assert str(state_file) in prompt
+    assert "_role-input" in prompt
+    assert f"git diff {base}...{head}" not in prompt
+    assert f"git log {base}..{head} --oneline" not in prompt
+    assert f"git diff --name-status --find-renames --find-copies-harder {base}...{head}" not in prompt
     assert "Return only the lightweight Markdown format below." in prompt
     assert "Do not use JSON." in prompt
     assert "# Review Result:" in prompt
@@ -1178,12 +1245,17 @@ def test_reviewer_prompt_template_uses_limited_variables(tmp_path: Path, monkeyp
     assert set(captured_values) == {
         "role",
         "input_file_path",
-        "review_subject_commands",
+        "state_file_path",
+        "role_input_command",
         "severity_rubric",
         "role_focus",
     }
     assert captured_values["role"] == "implementation-correctness"
     assert captured_values["input_file_path"] == str(review_input.input_file)
+    assert captured_values["state_file_path"] == str(
+        review_input.output_dir / "review-state.json"
+    )
+    assert "_role-input" in captured_values["role_input_command"]
     for legacy_key in ["change", "manifest_path", "changed_files", "context_files", "tasks_file"]:
         assert legacy_key not in captured_values
 
@@ -1423,15 +1495,16 @@ def test_reviewer_prompt_references_review_input_not_diff_file(tmp_path: Path, m
     )
 
     prompt = module.reviewer_prompt(review, "spec-alignment")
+    state_file = input_file.parent.parent / "review-state.json"
 
     assert "Role: spec-alignment" in prompt
     assert "Return only the lightweight Markdown format below." in prompt
-    assert f"Read: {input_file}" in prompt
-    assert "Review only base_ref...head_ref from the input file." in prompt
-    assert "Use spec_file, design_file, and plan_file as requirements context." in prompt
-    assert f"git diff {base}...{head}" in prompt
-    assert f"git log {base}..{head} --oneline" in prompt
-    assert f"git diff --name-status --find-renames --find-copies-harder {base}...{head}" in prompt
+    assert str(input_file) in prompt
+    assert str(state_file) in prompt
+    assert "_role-input" in prompt
+    assert f"git diff {base}...{head}" not in prompt
+    assert f"git log {base}..{head} --oneline" not in prompt
+    assert f"git diff --name-status --find-renames --find-copies-harder {base}...{head}" not in prompt
     assert "Change: demo-change" not in prompt
     assert f"Base ref: {base}" not in prompt
     assert f"Head ref: {head}" not in prompt
@@ -1450,7 +1523,9 @@ def test_reviewer_prompt_references_input_file_and_role_rubrics(tmp_path: Path) 
         prompt = module.reviewer_prompt(review, role)
         assert f"Focus for {role}:" in prompt
         assert "Severity rubric:" in prompt
-        assert f"Read: {review.input_file}" in prompt
+        assert str(review.input_file) in prompt
+        assert str(review.output_dir / "review-state.json") in prompt
+        assert "_role-input" in prompt
         assert "Manifest file:" not in prompt
         assert "# Review Result:" in prompt
 
@@ -1511,8 +1586,10 @@ def test_reviewer_prompt_does_not_inline_large_diff_or_context(tmp_path: Path, m
 
     prompt = module.reviewer_prompt(review, "implementation-correctness")
 
-    assert f"Read: {input_file}" in prompt
-    assert f"git diff {base}...{head}" in prompt
+    assert str(input_file) in prompt
+    assert str(review.output_dir / "review-state.json") in prompt
+    assert "_role-input" in prompt
+    assert f"git diff {base}...{head}" not in prompt
     assert f"Spec file: {spec_file}" not in prompt
     assert f"Design file: {design_file}" not in prompt
     assert f"Plan file: {plan_file}" not in prompt
@@ -1528,37 +1605,9 @@ def test_reviewer_prompt_does_not_inline_large_diff_or_context(tmp_path: Path, m
     assert len(prompt) < 5000
 
 
-def test_sdk_dispatch_subprocess_writes_debug_prompt_artifacts(tmp_path: Path, monkeypatch) -> None:
-    module = load_script_module()
-    review = make_review_args_for_module(module, tmp_path, debug=True)
-    captured_payload = None
-
-    def fake_run(*args, **kwargs):
-        nonlocal captured_payload
-        captured_payload = json.loads(kwargs["input"])
-        return subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout=json.dumps([{"role": "spec-alignment", "text": NO_BLOCKING_REVIEW}]),
-            stderr="",
-        )
-
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
-
-    assert module.run_sdk_dispatch_subprocess(review, sys.executable) == [{"role": "spec-alignment", "text": NO_BLOCKING_REVIEW}]
-
-    prompts_dir = review.output_dir / "debug" / "prompts"
-    assert {path.name for path in prompts_dir.iterdir()} == {
-        "spec-alignment.txt",
-        "implementation-correctness.txt",
-    }
-    assert captured_payload["raw_dir"] == str(review.output_dir / "debug" / "raw")
-    assert captured_payload["force_exit"] is True
-    assert "readonly_tools" not in captured_payload
-    assert "Role: spec-alignment" in (prompts_dir / "spec-alignment.txt").read_text(encoding="utf-8")
-
-
-def test_sdk_dispatch_subprocess_uses_only_two_roles(tmp_path: Path, monkeypatch) -> None:
+def test_sdk_role_subprocess_payload_contains_only_requested_role(
+    tmp_path: Path, monkeypatch
+) -> None:
     module = load_script_module()
     review_input = make_review_input_for_module(module, tmp_path)
     captured_payload = None
@@ -1571,8 +1620,11 @@ def test_sdk_dispatch_subprocess_uses_only_two_roles(tmp_path: Path, monkeypatch
             returncode=0,
             stdout=json.dumps(
                 [
-                    {"role": "spec-alignment", "text": NO_BLOCKING_REVIEW},
-                    {"role": "implementation-correctness", "text": NO_BLOCKING_REVIEW},
+                    {
+                        "role": "spec-alignment",
+                        "execution_status": "completed",
+                        "text": NO_BLOCKING_REVIEW,
+                    }
                 ]
             ),
             stderr="",
@@ -1580,37 +1632,15 @@ def test_sdk_dispatch_subprocess_uses_only_two_roles(tmp_path: Path, monkeypatch
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
 
-    results = module.run_sdk_dispatch_subprocess(review_input, sys.executable)
+    status, output = module.run_sdk_role_subprocess(
+        review_input, sys.executable, "spec-alignment"
+    )
 
-    assert [item["role"] for item in results] == ["spec-alignment", "implementation-correctness"]
-    assert captured_payload["roles"] == ["spec-alignment", "implementation-correctness"]
+    assert (status, output) == ("completed", NO_BLOCKING_REVIEW)
+    assert captured_payload["roles"] == ["spec-alignment"]
+    assert set(captured_payload["prompts"]) == {"spec-alignment"}
     assert "readonly_tools" not in captured_payload
     assert "raw_dir" not in captured_payload
-
-
-def test_sdk_dispatch_subprocess_uses_plugin_owned_timeout_without_debug(tmp_path: Path, monkeypatch) -> None:
-    module = load_script_module()
-    review = make_review_args_for_module(module, tmp_path)
-    captured_timeout = None
-
-    def fake_run(*args, **kwargs):
-        nonlocal captured_timeout
-        captured_timeout = kwargs["timeout"]
-        payload = json.loads(kwargs["input"])
-        return subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout=json.dumps([{"role": role, "text": NO_BLOCKING_REVIEW} for role in payload["roles"]]),
-            stderr="",
-        )
-
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
-
-    results = module.run_sdk_dispatch_subprocess(review, sys.executable)
-
-    assert captured_timeout == 540
-    assert module.SDK_DISPATCH_TIMEOUT_SECONDS == 540
-    assert [result["role"] for result in results] == module.REVIEWER_ROLES
 
 
 def test_sdk_dispatch_writes_raw_reviewer_output(monkeypatch, tmp_path: Path) -> None:
@@ -1647,6 +1677,190 @@ def test_sdk_dispatch_writes_raw_reviewer_output(monkeypatch, tmp_path: Path) ->
     assert module.run_sdk_dispatch() == 0
 
     assert (raw_dir / "spec-alignment.txt").read_text(encoding="utf-8") == NO_BLOCKING_REVIEW
+
+
+def invoke_task2_sdk_dispatch(module, monkeypatch, capsys, query) -> dict:
+    class FakeClaudeAgentOptions:
+        def __init__(self, **kwargs):
+            pass
+
+    monkeypatch.setitem(
+        sys.modules,
+        "claude_agent_sdk",
+        types.SimpleNamespace(ClaudeAgentOptions=FakeClaudeAgentOptions, query=query),
+    )
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(
+            json.dumps(
+                {
+                    "cwd": str(REPO_ROOT),
+                    "roles": ["spec-alignment"],
+                    "prompts": {"spec-alignment": "prompt"},
+                }
+            )
+        ),
+    )
+    assert module.run_sdk_dispatch() == 0
+    return json.loads(capsys.readouterr().out)[0]
+
+
+def test_task2_sdk_dispatch_nonempty_result_is_completed(monkeypatch, capsys) -> None:
+    module = load_script_module()
+
+    async def fake_query(*, prompt, options):
+        yield types.SimpleNamespace(result=BLOCKING_REVIEW)
+
+    result = invoke_task2_sdk_dispatch(module, monkeypatch, capsys, fake_query)
+
+    assert result["execution_status"] == "completed"
+    assert result["text"] == BLOCKING_REVIEW
+
+
+def test_task2_sdk_dispatch_empty_result_is_failed(monkeypatch, capsys) -> None:
+    module = load_script_module()
+
+    async def fake_query(*, prompt, options):
+        if False:
+            yield
+
+    result = invoke_task2_sdk_dispatch(module, monkeypatch, capsys, fake_query)
+
+    assert result["execution_status"] == "failed"
+    assert "Reviewer returned empty output" in result["text"]
+
+
+def test_task2_sdk_dispatch_query_exception_is_failed(monkeypatch, capsys) -> None:
+    module = load_script_module()
+
+    async def fake_query(*, prompt, options):
+        raise RuntimeError("query broke")
+        yield
+
+    result = invoke_task2_sdk_dispatch(module, monkeypatch, capsys, fake_query)
+
+    assert result["execution_status"] == "failed"
+    assert "RuntimeError: query broke" in result["text"]
+
+
+def test_task2_sdk_dispatch_wait_timeout_is_timed_out(monkeypatch, capsys) -> None:
+    module = load_script_module()
+
+    async def fake_query(*, prompt, options):
+        yield types.SimpleNamespace(result=NO_BLOCKING_REVIEW)
+
+    async def fake_wait_for(awaitable, timeout):
+        assert timeout == module.SDK_REVIEWER_TIMEOUT_SECONDS
+        awaitable.close()
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(asyncio, "wait_for", fake_wait_for)
+    result = invoke_task2_sdk_dispatch(module, monkeypatch, capsys, fake_query)
+
+    assert result["execution_status"] == "timed_out"
+    assert "Reviewer timed out" in result["text"]
+
+
+def test_completed_role_is_saved_before_sibling_timeout(tmp_path: Path, monkeypatch) -> None:
+    project, input_file = committed_review_input(tmp_path)
+    module = load_script_module()
+    state_path = input_file.parent.parent / "review-state.json"
+
+    def fake_role(_review_input, _python, role):
+        if role == "spec-alignment":
+            return "completed", "# Review Result\n## Findings\nNone\n"
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if state_path.exists():
+                saved = json.loads(state_path.read_text(encoding="utf-8"))
+                if saved["roles"]["spec-alignment"].get("status") == "completed":
+                    break
+            time.sleep(0.01)
+        else:
+            raise AssertionError("completed sibling was not persisted immediately")
+        failure = module.reviewer_failure(
+            role,
+            "Reviewer timed out",
+            "Exceeded 480 seconds.",
+            "Retry",
+        )
+        return "timed_out", failure["text"]
+
+    monkeypatch.setattr(
+        module,
+        "resolve_sdk_python",
+        lambda explicit, require_real_sdk: "fake-sdk",
+    )
+    monkeypatch.setattr(module, "run_sdk_role_subprocess", fake_role, raising=False)
+
+    result = run(*review_args_from_input(input_file), cwd=project)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert state["roles"]["spec-alignment"]["status"] == "completed"
+    assert state["roles"]["implementation-correctness"]["status"] == "timed_out"
+    for role in module.REVIEWER_ROLES:
+        output = state["roles"][role]["output"]
+        assert state["roles"][role]["output_hash"] == module.sha256_bytes(output.encode("utf-8"))
+
+
+def test_parent_future_exception_is_saved_as_failed_markdown(tmp_path: Path, monkeypatch) -> None:
+    project, input_file = committed_review_input(tmp_path)
+    module = load_script_module()
+
+    def fake_role(_review_input, _python, role):
+        if role == "implementation-correctness":
+            raise RuntimeError("worker broke")
+        return "completed", NO_BLOCKING_REVIEW
+
+    monkeypatch.setattr(module, "run_sdk_role_subprocess", fake_role, raising=False)
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        state = module.initial_review_state(review_input)
+        module.atomic_write_json(review_input.output_dir / "review-state.json", state)
+        module.dispatch_roles(review_input, "fake-sdk", state, module.REVIEWER_ROLES)
+
+    role_state = state["roles"]["implementation-correctness"]
+    assert role_state["status"] == "failed"
+    assert isinstance(role_state["output"], str)
+    assert "RuntimeError: worker broke" in role_state["output"]
+    assert role_state["output_hash"] == module.sha256_bytes(role_state["output"].encode("utf-8"))
+
+
+def test_report_is_rebuilt_from_state_and_hash_is_saved(tmp_path: Path) -> None:
+    project, input_file = committed_review_input(tmp_path)
+    module = load_script_module()
+
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        state = module.initial_review_state(review_input)
+        module.record_role_result(
+            state,
+            "spec-alignment",
+            "completed",
+            "# Review Result: spec-alignment\n## Findings\nSpec state output\n",
+        )
+        module.record_role_result(
+            state,
+            "implementation-correctness",
+            "failed",
+            "# Review Result: implementation-correctness\n## Findings\nImplementation state output\n",
+        )
+        module.atomic_write_json(review_input.output_dir / "review-state.json", state)
+        assert module.write_outputs(review_input, state) == 0
+
+    report_path = review_input.output_dir / "review-report.md"
+    report = report_path.read_text(encoding="utf-8")
+    saved = json.loads((review_input.output_dir / "review-state.json").read_text(encoding="utf-8"))
+    assert "Spec state output" in report
+    assert "Implementation state output" in report
+    assert saved["report"]["path"] == report_path.relative_to(project).as_posix()
+    assert saved["report"]["hash"] == module.sha256_bytes(report_path.read_bytes())
 
 
 def test_reviewer_prompt_requires_lightweight_markdown_contract(tmp_path: Path) -> None:
@@ -1758,28 +1972,7 @@ def test_sdk_dispatch_uses_plugin_owned_reviewer_timeout(monkeypatch, capsys, tm
     assert (raw_dir / "spec-alignment.txt").read_text(encoding="utf-8") == NO_BLOCKING_REVIEW
 
 
-def test_sdk_dispatch_subprocess_timeout_reports_clear_error(tmp_path: Path, monkeypatch) -> None:
-    module = load_script_module()
-    review = make_review_args_for_module(module, tmp_path)
-    captured_timeout = None
-
-    def fake_run(*args, **kwargs):
-        nonlocal captured_timeout
-        captured_timeout = kwargs["timeout"]
-        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
-
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
-
-    results = module.run_sdk_dispatch_subprocess(review, sys.executable)
-
-    assert captured_timeout == module.SDK_DISPATCH_TIMEOUT_SECONDS
-    assert module.SDK_DISPATCH_TIMEOUT_SECONDS == 540
-    assert {result["role"] for result in results} == set(module.REVIEWER_ROLES)
-    assert all("Severity: CRITICAL" in result["text"] for result in results)
-    assert all("Reviewer dispatch timed out" in result["text"] for result in results)
-
-
-def test_sdk_dispatch_subprocess_invalid_stdout_reports_clear_error(tmp_path: Path, monkeypatch) -> None:
+def test_sdk_role_subprocess_invalid_stdout_is_failed(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     review = make_review_args_for_module(module, tmp_path)
 
@@ -1788,13 +1981,13 @@ def test_sdk_dispatch_subprocess_invalid_stdout_reports_clear_error(tmp_path: Pa
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
 
-    try:
-        module.run_sdk_dispatch_subprocess(review, sys.executable)
-    except ValueError as exc:
-        assert "sdk_dispatch_invalid_output" in str(exc)
-        assert "stdout was not valid JSON" in str(exc)
-    else:
-        raise AssertionError("expected sdk_dispatch_invalid_output")
+    status, output = module.run_sdk_role_subprocess(
+        review, sys.executable, "spec-alignment"
+    )
+
+    assert status == "failed"
+    assert "sdk_dispatch_invalid_output" in output
+    assert "stdout was not valid JSON" in output
 
 
 def test_non_blocking_findings_generate_report_without_pass_marker(tmp_path: Path, monkeypatch) -> None:
@@ -1817,9 +2010,7 @@ def test_non_blocking_findings_generate_report_without_pass_marker(tmp_path: Pat
         types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None)
     )
 
-    status = module.write_outputs(
-        review_input, module.aggregate(reviewer_results(module, review_text))
-    )
+    status = module.write_outputs(review_input, reviewer_state(module, review_text))
 
     assert status == 0
     assert (output_dir / "review-report.md").is_file()
@@ -1838,9 +2029,7 @@ def test_blocking_findings_do_not_generate_pass_marker(tmp_path: Path, monkeypat
         types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None)
     )
 
-    status = module.write_outputs(
-        review_input, module.aggregate(reviewer_results(module, BLOCKING_REVIEW))
-    )
+    status = module.write_outputs(review_input, reviewer_state(module, BLOCKING_REVIEW))
 
     assert status == 0
     assert (output_dir / "review-report.md").is_file()
@@ -1892,19 +2081,16 @@ def test_mark_pass_report_hash_matches_report(tmp_path: Path) -> None:
     assert marker["head_ref"] == head
 
 
-def test_aggregate_preserves_reviewer_text_without_parsing() -> None:
+def test_reviewer_state_preserves_reviewer_text_without_parsing() -> None:
     module = load_script_module()
 
-    summary = module.aggregate(
-        [
-            {"role": "spec-alignment", "text": NO_BLOCKING_REVIEW},
-            {"role": "implementation-correctness", "text": BLOCKING_REVIEW},
-        ]
+    state = reviewer_state(module, NO_BLOCKING_REVIEW)
+    module.record_role_result(
+        state,
+        "implementation-correctness",
+        "completed",
+        BLOCKING_REVIEW,
     )
 
-    assert summary == {
-        "reviewers": [
-            {"role": "spec-alignment", "text": NO_BLOCKING_REVIEW},
-            {"role": "implementation-correctness", "text": BLOCKING_REVIEW},
-        ]
-    }
+    assert state["roles"]["spec-alignment"]["output"] == NO_BLOCKING_REVIEW
+    assert state["roles"]["implementation-correctness"]["output"] == BLOCKING_REVIEW

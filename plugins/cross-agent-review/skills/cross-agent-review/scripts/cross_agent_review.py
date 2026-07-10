@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -107,6 +108,10 @@ def build_parser() -> argparse.ArgumentParser:
     mark_parser.add_argument("--artifact-id", default=DEFAULT_ARTIFACT_ID)
     mark_parser.add_argument("--subject-id")
     mark_parser.add_argument("--subject-type", default=DEFAULT_SUBJECT_TYPE)
+    role_input_parser = subparsers.add_parser("_role-input")
+    role_input_parser.add_argument("--input-file", type=Path, required=True)
+    role_input_parser.add_argument("--state-file", type=Path, required=True)
+    role_input_parser.add_argument("--role", choices=REVIEWER_ROLES, required=True)
     subparsers.add_parser("_sdk-dispatch")
     return parser
 
@@ -517,6 +522,92 @@ def atomic_write_json(path: Path, value: dict) -> None:
         temp_path.unlink(missing_ok=True)
 
 
+def render_context_index(state: dict) -> str:
+    lines = ["## Authoritative context"]
+    for name, context in state["subject"]["contexts"].items():
+        lines.append(f"- {name}: {context['path']} ({context['hash']})")
+    return "\n".join(lines)
+
+
+def render_summary_stats(review_input: ReviewInput, state: dict) -> str:
+    summary_paths = [
+        item["path"] for item in state["files"] if item["classification"] == "summary_only"
+    ]
+    if not summary_paths:
+        return ""
+    reasons = {item["path"]: item["reason"] for item in state["files"]}
+    lines = ["## Summary-only changes"]
+    lines.extend(f"- {path}: {reasons[path]}" for path in summary_paths)
+    stats = git_output(
+        ["diff", "--stat", f"{review_input.base_ref}...{review_input.head_ref}", "--", *summary_paths],
+        Path.cwd(),
+    )
+    if stats:
+        lines.extend(["", stats])
+    return "\n".join(lines)
+
+
+def render_role_input(review_input: ReviewInput, state: dict, role: str) -> str:
+    full_paths = state["roles"][role]["scope"]["full_review"]
+    sections = [render_context_index(state), render_summary_stats(review_input, state)]
+    if full_paths:
+        sections.append(
+            git_output(
+                [
+                    "diff",
+                    f"{review_input.base_ref}...{review_input.head_ref}",
+                    "--",
+                    *full_paths,
+                ],
+                Path.cwd(),
+            )
+        )
+    return "\n\n".join(part for part in sections if part).rstrip() + "\n"
+
+
+def load_role_state(review_input: ReviewInput, state_file: Path, role: str) -> dict:
+    expected_path = review_input.output_dir / "review-state.json"
+    if state_file.resolve() != expected_path.resolve():
+        raise ValueError(f"invalid_state_file_location: {state_file}")
+    if not state_file.is_file():
+        raise ValueError(f"missing_file: {state_file}")
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    subject = state.get("subject")
+    if not isinstance(subject, dict) or subject.get("input_hash") != sha256_bytes(
+        review_input.input_file.read_bytes()
+    ):
+        raise ValueError("input_hash_mismatch")
+    current_head = git_output(["rev-parse", "HEAD"], Path.cwd())
+    if current_head != review_input.head_ref:
+        raise ValueError(
+            f"head_ref_mismatch: expected={review_input.head_ref} actual={current_head}"
+        )
+    expected = initial_review_state(review_input)
+    if subject != expected["subject"]:
+        raise ValueError("state_subject_mismatch")
+    role_state = state.get("roles", {}).get(role)
+    if (
+        state.get("schema_version") != expected["schema_version"]
+        or state.get("files") != expected["files"]
+        or not isinstance(role_state, dict)
+        or role_state.get("scope") != expected["roles"][role]["scope"]
+    ):
+        raise ValueError("state_scope_mismatch")
+    return state
+
+
+def run_role_input(args: argparse.Namespace) -> int:
+    try:
+        review_input = load_review_input(args)
+        state = load_role_state(review_input, args.state_file, args.role)
+        print(render_role_input(review_input, state, args.role), end="")
+    except (ValueError, json.JSONDecodeError) as exc:
+        print("status: failed")
+        print(f"error: {exc}")
+        return 1
+    return 0
+
+
 def candidate_sdk_pythons(explicit: Path | None) -> list[Path]:
     candidates: list[Path] = []
     env_value = os.environ.get("CROSS_AGENT_REVIEW_SDK_PYTHON")
@@ -567,8 +658,12 @@ def resolve_sdk_python(explicit: Path | None, require_real_sdk: bool) -> str:
     raise ValueError("sdk_unavailable: install claude-agent-sdk or pass --sdk-python")
 
 
-def markdown_review(role: str, text: str) -> dict:
-    return {"role": role, "text": text.strip() + "\n"}
+def markdown_review(role: str, text: str, execution_status: str = "completed") -> dict:
+    return {
+        "role": role,
+        "execution_status": execution_status,
+        "text": text.strip() + "\n",
+    }
 
 
 def render_template(path: Path, values: dict[str, str]) -> str:
@@ -578,18 +673,19 @@ def render_template(path: Path, values: dict[str, str]) -> str:
     return rendered
 
 
-def git_command_text(args: Sequence[str]) -> str:
-    return "git " + " ".join(args)
-
-
 def reviewer_prompt(review_args: ReviewInput, role: str) -> str:
-    diff_range = f"{review_args.base_ref}...{review_args.head_ref}"
-    commit_range = f"{review_args.base_ref}..{review_args.head_ref}"
-    review_subject_commands = "\n".join(
+    state_file = review_args.output_dir / "review-state.json"
+    role_input_command = subprocess.list2cmdline(
         [
-            f"- {git_command_text(['diff', diff_range])}",
-            f"- {git_command_text(['log', commit_range, '--oneline'])}",
-            f"- {git_command_text(['diff', '--name-status', '--find-renames', '--find-copies-harder', diff_range])}",
+            "python",
+            str(SCRIPT_PATH),
+            "_role-input",
+            "--input-file",
+            str(review_args.input_file),
+            "--state-file",
+            str(state_file),
+            "--role",
+            role,
         ]
     )
     return render_template(
@@ -597,18 +693,21 @@ def reviewer_prompt(review_args: ReviewInput, role: str) -> str:
         {
             "role": role,
             "input_file_path": str(review_args.input_file),
-            "review_subject_commands": review_subject_commands,
+            "state_file_path": str(state_file),
+            "role_input_command": role_input_command,
             "severity_rubric": SEVERITY_RUBRIC,
             "role_focus": ROLE_FOCUS.get(role, ""),
         },
     )
 
 
-def dispatch_reviewers(review_args: ReviewInput, sdk_python: str) -> list[dict]:
-    return run_sdk_dispatch_subprocess(review_args, sdk_python)
-
-
-def reviewer_failure(role: str, summary: str, evidence: str, recommendation: str) -> dict:
+def reviewer_failure(
+    role: str,
+    summary: str,
+    evidence: str,
+    recommendation: str,
+    execution_status: str = "failed",
+) -> dict:
     return markdown_review(
         role,
         f"""# Review Result: {role}
@@ -619,29 +718,8 @@ def reviewer_failure(role: str, summary: str, evidence: str, recommendation: str
   Evidence: {evidence}
   Recommendation: {recommendation}
 """,
+        execution_status,
     )
-
-
-def timeout_reviewer_results(raw_dir: Path | None, evidence: str) -> list[dict]:
-    reviewers: list[dict] = []
-    for role in REVIEWER_ROLES:
-        raw_path = raw_dir / f"{role}.txt" if raw_dir is not None else None
-        if raw_path is not None and raw_path.exists():
-            role_evidence = raw_path.read_text(encoding="utf-8", errors="replace") or evidence
-        else:
-            role_evidence = evidence
-            if raw_path is not None:
-                raw_path.parent.mkdir(parents=True, exist_ok=True)
-                raw_path.write_text(role_evidence + "\n", encoding="utf-8")
-        reviewers.append(
-            reviewer_failure(
-                role,
-                "Reviewer dispatch timed out",
-                role_evidence,
-                "Rerun review after checking Claude Agent SDK availability.",
-            )
-        )
-    return reviewers
 
 
 def write_debug_dispatch_artifacts(review_args: ReviewInput, prompts: dict[str, str]) -> Path:
@@ -657,20 +735,30 @@ def write_debug_dispatch_artifacts(review_args: ReviewInput, prompts: dict[str, 
     return raw_dir
 
 
-def run_sdk_dispatch_subprocess(review_args: ReviewInput, sdk_python: str) -> list[dict]:
-    prompts = {role: reviewer_prompt(review_args, role) for role in REVIEWER_ROLES}
-    raw_dir = write_debug_dispatch_artifacts(review_args, prompts) if review_args.debug else None
+def invalid_sdk_role_result(role: str, evidence: str) -> tuple[str, str]:
+    failure = reviewer_failure(
+        role,
+        "Reviewer SDK dispatch failed",
+        evidence,
+        "Rerun review after checking Claude Agent SDK availability.",
+    )
+    return "failed", failure["text"]
+
+
+def run_sdk_role_subprocess(
+    review_input: ReviewInput, sdk_python: str, role: str
+) -> tuple[str, str]:
     payload = {
         "cwd": str(Path.cwd()),
-        "roles": REVIEWER_ROLES,
-        "prompts": prompts,
+        "roles": [role],
+        "prompts": {role: reviewer_prompt(review_input, role)},
         "force_exit": True,
     }
-    if raw_dir is not None:
-        payload["raw_dir"] = str(raw_dir)
+    if review_input.debug:
+        payload["raw_dir"] = str(debug_dir_for(review_input) / "raw")
     try:
         result = subprocess.run(
-            [sdk_python, str(Path(__file__).resolve()), "_sdk-dispatch"],
+            [sdk_python, str(SCRIPT_PATH), "_sdk-dispatch"],
             input=json.dumps(payload, ensure_ascii=False),
             text=True,
             capture_output=True,
@@ -678,19 +766,77 @@ def run_sdk_dispatch_subprocess(review_args: ReviewInput, sdk_python: str) -> li
             timeout=SDK_DISPATCH_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
-        return timeout_reviewer_results(
-            raw_dir,
-            f"sdk_dispatch_timeout: exceeded {SDK_DISPATCH_TIMEOUT_SECONDS}s",
+        failure = reviewer_failure(
+            role,
+            "Reviewer dispatch timed out",
+            f"Exceeded {SDK_DISPATCH_TIMEOUT_SECONDS} seconds.",
+            "Rerun review after checking Claude Agent SDK availability.",
+            "timed_out",
         )
+        return "timed_out", failure["text"]
     if result.returncode != 0:
-        raise ValueError(f"sdk_dispatch_failed: {result.stderr.strip() or result.stdout.strip()}")
+        return invalid_sdk_role_result(
+            role, f"sdk_dispatch_failed: {result.stderr.strip() or result.stdout.strip()}"
+        )
     try:
         data = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise ValueError("sdk_dispatch_invalid_output: stdout was not valid JSON") from exc
-    if not isinstance(data, list):
-        raise ValueError("sdk_dispatch_invalid_output: stdout JSON was not a list")
-    return [item for item in data if isinstance(item, dict)]
+    except json.JSONDecodeError:
+        return invalid_sdk_role_result(role, "sdk_dispatch_invalid_output: stdout was not valid JSON")
+    if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
+        return invalid_sdk_role_result(role, "sdk_dispatch_invalid_output: expected one result")
+    item = data[0]
+    status = item.get("execution_status")
+    text = item.get("text")
+    if (
+        item.get("role") != role
+        or status not in {"completed", "failed", "timed_out"}
+        or not isinstance(text, str)
+        or not text
+    ):
+        return invalid_sdk_role_result(role, "sdk_dispatch_invalid_output: invalid role result")
+    return status, text
+
+
+def record_role_result(state: dict, role: str, status: str, output: str) -> None:
+    output_hash = sha256_bytes(output.encode("utf-8"))
+    attempt = {"status": status, "output": output, "output_hash": output_hash}
+    role_state = state["roles"][role]
+    role_state["attempts"].append(attempt)
+    role_state.update(attempt)
+
+
+def dispatch_roles(
+    review_input: ReviewInput,
+    sdk_python: str,
+    state: dict,
+    roles: Sequence[str],
+) -> dict:
+    state_path = review_input.output_dir / "review-state.json"
+    if review_input.debug:
+        write_debug_dispatch_artifacts(
+            review_input, {role: reviewer_prompt(review_input, role) for role in roles}
+        )
+    with ThreadPoolExecutor(max_workers=len(roles)) as executor:
+        futures = {
+            executor.submit(run_sdk_role_subprocess, review_input, sdk_python, role): role
+            for role in roles
+        }
+        for future in as_completed(futures):
+            role = futures[future]
+            try:
+                status, output = future.result()
+            except Exception as error:
+                status = "failed"
+                failure = reviewer_failure(
+                    role,
+                    "Reviewer SDK dispatch failed",
+                    f"{type(error).__name__}: {error}",
+                    "Retry",
+                )
+                output = failure["text"]
+            record_role_result(state, role, status, output)
+            atomic_write_json(state_path, state)
+    return state
 
 
 def run_sdk_dispatch() -> int:
@@ -714,40 +860,41 @@ def run_sdk_dispatch() -> int:
             async for message in query(prompt=payload["prompts"][role], options=options):
                 if hasattr(message, "result"):
                     result_text = message.result
-            write_raw(role, result_text)
-            return markdown_review(
-                role,
-                result_text
-                or f"""# Review Result: {role}
-## Findings
-- Severity: CRITICAL
-  Location: {role}
-  Summary: Reviewer returned empty output
-  Evidence: <empty reviewer result>
-  Recommendation: Rerun review after checking reviewer prompt.
-""",
-            )
+            if result_text:
+                result = markdown_review(role, result_text)
+            else:
+                result = reviewer_failure(
+                    role,
+                    "Reviewer returned empty output",
+                    "<empty reviewer result>",
+                    "Rerun review after checking reviewer prompt.",
+                )
+            write_raw(role, result["text"])
+            return result
 
         async def run_one(role: str) -> dict:
             try:
                 return await asyncio.wait_for(query_one(role), timeout=SDK_REVIEWER_TIMEOUT_SECONDS)
             except asyncio.TimeoutError:
                 evidence = f"Exceeded {SDK_REVIEWER_TIMEOUT_SECONDS} seconds."
-                write_raw(role, f"Reviewer timed out\n{evidence}")
-                return reviewer_failure(
+                failure = reviewer_failure(
                     role,
                     "Reviewer timed out",
                     evidence,
                     "Rerun review after checking Claude Agent SDK availability.",
+                    "timed_out",
                 )
+                write_raw(role, failure["text"])
+                return failure
             except Exception as error:
-                write_raw(role, f"{type(error).__name__}: {error}")
-                return reviewer_failure(
+                failure = reviewer_failure(
                     role,
                     "Reviewer SDK dispatch failed",
                     f"{type(error).__name__}: {error}",
                     "Rerun review after checking Claude Agent SDK availability.",
                 )
+                write_raw(role, failure["text"])
+                return failure
 
         return await asyncio.gather(*(run_one(role) for role in payload["roles"]))
 
@@ -771,16 +918,12 @@ def debug_dir_for(review_input: ReviewInput) -> Path:
     return review_input.output_dir / "debug"
 
 
-def aggregate(reviewers: list[dict]) -> dict:
-    return {"reviewers": reviewers}
-
-
 def write_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def render_report(review_args: ReviewInput, summary: dict) -> str:
+def render_report(review_args: ReviewInput, state: dict) -> str:
     lines = [
         f"# Cross-Agent Review: {review_args.change}",
         "",
@@ -790,15 +933,11 @@ def render_report(review_args: ReviewInput, summary: dict) -> str:
         "## Reviewer Outputs",
         "",
     ]
-    for reviewer in summary["reviewers"]:
-        role = str(reviewer.get("role", "unknown"))
-        text = str(reviewer.get("text", "")).strip() or f"""# Review Result: {role}
-## Findings
-- Severity: CRITICAL
-  Location: {role}
-  Summary: Reviewer returned empty output
-  Evidence: <empty reviewer result>
-  Recommendation: Rerun review after checking reviewer prompt."""
+    for role in REVIEWER_ROLES:
+        text = state["roles"][role].get("output")
+        if not isinstance(text, str) or not text:
+            raise ValueError(f"role_output_missing: {role}")
+        text = text.strip()
         lines.extend(
             [
                 f"### {role}",
@@ -824,12 +963,17 @@ def runtime_allowed_paths(review_input: ReviewInput) -> list[Path]:
     ]
 
 
-def write_outputs(review_args: ReviewInput, summary: dict) -> int:
+def write_outputs(review_args: ReviewInput, state: dict) -> int:
     out_dir = output_dir_for(review_args)
     out_dir.mkdir(parents=True, exist_ok=True)
-    report_text = render_report(review_args, summary)
+    report_text = render_report(review_args, state)
     report_path = out_dir / "review-report.md"
     report_path.write_text(report_text, encoding="utf-8")
+    state["report"] = {
+        "path": report_path.resolve().relative_to(Path.cwd().resolve()).as_posix(),
+        "hash": sha256_bytes(report_path.read_bytes()),
+    }
+    atomic_write_json(out_dir / "review-state.json", state)
     (out_dir / "review-pass.json").unlink(missing_ok=True)
     return 0
 
@@ -919,9 +1063,10 @@ def run_review(args: argparse.Namespace) -> int:
         ensure_clean_subject(Path.cwd(), review_args.head_ref, allowed_paths)
         sdk_python = resolve_sdk_python(review_args.sdk_python, require_real_sdk=True)
         ensure_clean_subject(Path.cwd(), review_args.head_ref, allowed_paths)
-        reviewers = dispatch_reviewers(review_args, sdk_python)
-        summary = aggregate(reviewers)
-        status = write_outputs(review_args, summary)
+        state = initial_review_state(review_args)
+        atomic_write_json(review_args.output_dir / "review-state.json", state)
+        dispatch_roles(review_args, sdk_python, state, REVIEWER_ROLES)
+        status = write_outputs(review_args, state)
     except (ValueError, json.JSONDecodeError) as exc:
         print("status: failed")
         print(f"error: {exc}")
@@ -936,6 +1081,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parsed = build_parser().parse_args(argv)
     if parsed.command == "_sdk-dispatch":
         return run_sdk_dispatch()
+    if parsed.command == "_role-input":
+        return run_role_input(parsed)
     if parsed.command == "run":
         return run_review(parsed)
     if parsed.command == "mark-pass":
