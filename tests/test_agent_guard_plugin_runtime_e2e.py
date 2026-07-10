@@ -594,7 +594,7 @@ def test_record_evidence_rejects_symlink_without_mutating_target(tmp_path: Path)
 
 def test_planning_review_uses_generic_evidence_entry_and_existing_hook_router(tmp_path: Path) -> None:
     project = init_git_project(tmp_path / "project")
-    (project / ".gitignore").write_text(".local/guard/evidence/\n", encoding="utf-8")
+    (project / ".gitignore").write_text(".local/guard/\n", encoding="utf-8")
     git(project, "add", ".gitignore")
     git(project, "commit", "-m", "ignore runtime evidence")
     user_home = tmp_path / "home"
@@ -684,6 +684,34 @@ global_command_guards:
             "report_hash": "sha256:" + hashlib.sha256(canonical).hexdigest(),
         },
     )
+    hook_payload = write_payload(
+        tmp_path / "planning-hook.json",
+        {
+            "session_id": "planning-session",
+            "cwd": str(project),
+            "tool_name": "Bash",
+            "tool_input": {"command": "comet-guard.sh planning-demo design --apply"},
+        },
+    )
+    router_args = [
+        str(HOOK_ROUTER),
+        "--source",
+        "codex",
+        "--event",
+        "PreToolUse",
+        "--project",
+        str(project),
+        "--user-home",
+        str(user_home),
+        "--payload-file",
+        str(hook_payload),
+    ]
+
+    denied = run(router_args)
+
+    assert denied.returncode == 1, denied.stdout + denied.stderr
+    assert output_json(denied)["status"] == "deny"
+    assert output_json(denied)["reason"] == "planning_review_required"
 
     recorded = run(
         record_evidence_args(
@@ -702,33 +730,7 @@ global_command_guards:
     assert evidence["review"] == review
     assert evidence["report_hash"] == "sha256:" + hashlib.sha256(canonical).hexdigest()
 
-    routed = run(
-        [
-            str(HOOK_ROUTER),
-            "--source",
-            "codex",
-            "--event",
-            "PreToolUse",
-            "--project",
-            str(project),
-            "--user-home",
-            str(user_home),
-            "--payload-file",
-            str(
-                write_payload(
-                    tmp_path / "planning-hook.json",
-                    {
-                        "session_id": "planning-session",
-                        "cwd": str(project),
-                        "tool_name": "Bash",
-                        "tool_input": {
-                            "command": "comet-guard.sh planning-demo design --apply"
-                        },
-                    },
-                )
-            ),
-        ]
-    )
+    routed = run(router_args)
 
     assert routed.returncode == 0, routed.stdout + routed.stderr
     assert output_json(routed)["status"] == "allow"

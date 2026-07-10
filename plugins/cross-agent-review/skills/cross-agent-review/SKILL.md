@@ -20,6 +20,14 @@ STRICTLY FORBIDDEN:
 - Comet verify（双星验证）阶段自动调用。
 - 通用 code review（代码审查）阶段自动调用。
 
+## 模式选择
+
+本 Skill（技能）默认使用 `convergence`（收敛）模式。
+
+- Comet build completion（双星构建完成）或 PR Flow local review（拉取请求流程本地审查）：使用 `convergence`（收敛）模式。
+- 用户显式调用 cross-agent-review（跨代理审查）且没有说明模式：使用 `convergence`（收敛）模式。
+- 用户明确要求“无尽模式”“每轮完整复查”“不要收窄范围”或等价表达：使用 `endless`（无尽）模式。
+
 ## 前置条件
 
 - 当前 worktree（工作区）干净，当前 `HEAD`（提交头）等于输入中的 `head_ref`（头引用）。
@@ -100,6 +108,8 @@ python scripts/cross_agent_review.py revalidate \
 ```
 
 `mode`（模式）只能是 `convergence`（收敛）或 `endless`（无尽）。review（审查）范围由 `base_ref`（基准引用）和 `head_ref`（当前提交引用）控制。
+
+Comet build completion（双星构建完成）调用时，`base_ref`（基准引用）优先使用 plan（计划）文件头的 implementation baseline（实施基准）。只有缺少 implementation baseline（实施基准）时，才回退到 change init baseline（变更初始化基准）。
 
 - `summary_only`（仅摘要）逐项使用精确项目相对路径和非空 `reason`（理由）；它只降低主要输入噪音，不禁止 reviewer（审查代理）按需读取原文。
 - `checkbox-only`（仅复选框）只允许 Markdown task checkbox（标记任务复选框）状态变化。

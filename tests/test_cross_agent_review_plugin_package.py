@@ -153,6 +153,21 @@ def test_cross_agent_review_skill_documents_allowed_mode_values() -> None:
     assert "`mode`（模式）只能是 `convergence`（收敛）或 `endless`（无尽）" in text
 
 
+def test_cross_agent_review_skill_documents_default_mode_and_comet_baseline() -> None:
+    skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+
+    for phrase in [
+        "默认使用 `convergence`（收敛）模式",
+        "Comet build completion（双星构建完成）或 PR Flow local review（拉取请求流程本地审查）：使用 `convergence`（收敛）模式",
+        "用户显式调用 cross-agent-review（跨代理审查）且没有说明模式：使用 `convergence`（收敛）模式",
+        "用户明确要求“无尽模式”“每轮完整复查”“不要收窄范围”或等价表达：使用 `endless`（无尽）模式",
+        "优先使用 plan（计划）文件头的 implementation baseline（实施基准）",
+        "只有缺少 implementation baseline（实施基准）时，才回退到 change init baseline（变更初始化基准）",
+    ]:
+        assert phrase in text
+
+
 def test_cross_agent_review_skill_documents_review_range_refs() -> None:
     skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
     text = skill.read_text(encoding="utf-8")
