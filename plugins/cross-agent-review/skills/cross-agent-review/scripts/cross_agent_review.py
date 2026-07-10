@@ -69,9 +69,6 @@ SEVERITY_RUBRIC = "\n".join(
 )
 SDK_DISPATCH_TIMEOUT_SECONDS = 540
 SDK_REVIEWER_TIMEOUT_SECONDS = 480
-DEFAULT_PROFILE_ID = "comet-review-gate"
-DEFAULT_ARTIFACT_ID = "cross_agent_review_pass"
-DEFAULT_SUBJECT_TYPE = "comet-change"
 
 
 @dataclass(frozen=True)
@@ -160,12 +157,6 @@ def build_parser() -> argparse.ArgumentParser:
     revalidate_parser = subparsers.add_parser("revalidate")
     revalidate_parser.add_argument("--input-file", type=Path, required=True)
     revalidate_parser.add_argument("--previous-state", type=Path, required=True)
-    mark_parser = subparsers.add_parser("mark-pass")
-    mark_parser.add_argument("--input-file", type=Path, required=True)
-    mark_parser.add_argument("--profile-id", default=DEFAULT_PROFILE_ID)
-    mark_parser.add_argument("--artifact-id", default=DEFAULT_ARTIFACT_ID)
-    mark_parser.add_argument("--subject-id")
-    mark_parser.add_argument("--subject-type", default=DEFAULT_SUBJECT_TYPE)
     role_input_parser = subparsers.add_parser("_role-input")
     role_input_parser.add_argument("--input-file", type=Path, required=True)
     role_input_parser.add_argument("--state-file", type=Path, required=True)
@@ -1637,11 +1628,6 @@ def debug_dir_for(review_input: ReviewInput) -> Path:
     return review_input.output_dir / "debug"
 
 
-def write_json(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-
 def render_report(state: dict) -> str:
     subject = state["subject"]
     lines = [
@@ -1692,83 +1678,6 @@ def write_outputs(review_args: ReviewInput, state: dict) -> int:
     state["report_hash"] = sha256_bytes(report_bytes)
     atomic_write_json(out_dir / "review-state.json", state)
     (out_dir / "review-pass.json").unlink(missing_ok=True)
-    return 0
-
-
-def guard_pass_path(
-    review_args: ReviewInput,
-    *,
-    profile_id: str,
-    artifact_id: str,
-    subject_id: str,
-) -> Path:
-    return (
-        Path.cwd()
-        / ".local"
-        / "guard"
-        / "evidence"
-        / validate_path_segment(profile_id, review_args.input_file)
-        / validate_path_segment(artifact_id, review_args.input_file)
-        / validate_path_segment(subject_id, review_args.input_file)
-        / validate_path_segment(short_ref(review_args.head_ref), review_args.input_file)
-        / "pass.json"
-    )
-
-
-def mark_pass_allowed_paths(review_args: ReviewInput, pass_path: Path) -> list[Path]:
-    return [review_args.input_file, output_dir_for(review_args) / "review-report.md", pass_path]
-
-
-def run_mark_pass(args: argparse.Namespace) -> int:
-    try:
-        review_args = load_review_input(args)
-        subject_id = args.subject_id or review_args.change
-        report_path = output_dir_for(review_args) / "review-report.md"
-        if not report_path.is_file():
-            raise ValueError(f"missing_file: {report_path}")
-        pass_path = guard_pass_path(
-            review_args,
-            profile_id=args.profile_id,
-            artifact_id=args.artifact_id,
-            subject_id=subject_id,
-        )
-        ensure_clean_subject(Path.cwd(), review_args.head_ref, mark_pass_allowed_paths(review_args, pass_path))
-        report_relative = report_path.relative_to(Path.cwd())
-        report_hash = hashlib.sha256(report_path.read_bytes()).hexdigest()
-        write_json(
-            pass_path,
-            {
-                "schema_version": "guard-evidence/v1",
-                "status": "pass",
-                "producer": "cross-agent-review",
-                "profile_id": args.profile_id,
-                "artifact_id": args.artifact_id,
-                "subject_type": args.subject_type,
-                "subject_id": subject_id,
-                "change": review_args.change,
-                "mode": review_args.mode,
-                "base_ref": review_args.base_ref,
-                "head_ref": review_args.head_ref,
-                "head_ref_short": short_ref(review_args.head_ref),
-                "blocking_findings": 0,
-                "scope": {
-                    "change": review_args.change,
-                    "mode": review_args.mode,
-                    "base_ref": review_args.base_ref,
-                    "report": str(report_relative),
-                },
-                "report": str(report_relative),
-                "report_hash": f"sha256:{report_hash}",
-                "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            },
-        )
-    except (ValueError, json.JSONDecodeError) as exc:
-        print("status: failed")
-        print(f"error: {exc}")
-        return 1
-    print("status: pass_marked")
-    print(f"head_ref_short: {short_ref(review_args.head_ref)}")
-    print(f"path: {pass_path.relative_to(Path.cwd())}")
     return 0
 
 
@@ -1868,8 +1777,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_retry(parsed)
     if parsed.command == "revalidate":
         return run_revalidate(parsed)
-    if parsed.command == "mark-pass":
-        return run_mark_pass(parsed)
     return 2
 
 

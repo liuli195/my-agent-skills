@@ -3,65 +3,60 @@ name: cross-agent-review
 description: "运行跨代理审查。仅用于 Comet build completion（构建完成）、PR Flow local review（本地审查）或用户显式调用。"
 ---
 
-# Cross-Agent Review
+# Cross-Agent Review（跨代理审查）
 
-本 skill 运行独立 cross-agent review（跨代理审查），不推进 Comet phase（阶段），不运行构建或测试，不自动安装 Claude Agent SDK。
+本 Skill（技能）运行独立审查，不推进 Comet phase（双星阶段），不运行构建或测试，不自动安装 Claude Agent SDK（Claude 代理开发包）。
 
 ## 调用边界（强制）
 
 ONLY ALLOWED:
-- Comet build completion（构建完成）阶段：进入 verify（验证）前，生成 `review-report.md`（审查报告）；主 agent（主代理）确认无 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）后，再写供 Agent Guard（代理守卫）build gate（构建门禁）使用的 pass marker（通过标记）。
-- PR Flow（拉取请求流程）阶段已启用 local review（本地审查）。
-- 用户显式调用 `cross-agent-review`（跨代理审查）。
+
+- Comet build completion（双星构建完成）阶段进入 verify（验证）前。
+- PR Flow（拉取请求流程）启用 local review（本地审查）时。
+- 用户显式调用 cross-agent-review（跨代理审查）时。
 
 STRICTLY FORBIDDEN:
-- Comet verify（验证）阶段自动调用。
+
+- Comet verify（双星验证）阶段自动调用。
 - 通用 code review（代码审查）阶段自动调用。
-
-## 模式选择
-
-本 Skill（技能）默认使用收敛模式。模式是主 agent（代理）准备输入和复审范围的策略，不新增 CLI（命令行接口）参数，不改变脚本调用方式。
-
-`mode`（模式）只能是 `convergence`（收敛）或 `endless`（无尽）。
-
-- Comet build completion（构建完成）或 PR Flow local review（本地审查）：使用 `convergence`（收敛）模式。首轮覆盖完整 review subject（审查对象）；修复 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）findings（发现项）后重跑时，优先复核上一轮阻断问题、对应修复、变更路径和直接受影响上下文；只有证据显示风险外溢时再扩大范围。
-- 用户显式调用 cross-agent-review（跨代理审查）且没有说明模式：使用 `convergence`（收敛）模式，按上面的首轮/复审规则处理。
-- 用户明确要求“无尽模式”“每轮完整复查”“不要收窄范围”或等价表达：使用 `endless`（无尽）模式。每轮都覆盖完整 review subject（审查对象）和必要上下文，不按上一轮结果收窄；仍以没有 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）findings（发现项）作为通过条件。
 
 ## 前置条件
 
-- 当前 worktree 必须干净。
-- 当前 `HEAD` 必须等于 `review-input.json`（审查输入文件）里的 `head_ref`。
-- 当前 Python、默认 Claude SDK venv，或 `--sdk-python` 指定的 Python 必须能导入 `claude_agent_sdk`。
-- reviewer（审查代理）使用 Claude Agent SDK（Claude 代理开发包）默认 tools（工具集）；本插件不配置 `tools`、`allowed_tools` 或 `disallowed_tools`。
+- 当前 worktree（工作区）干净，当前 `HEAD`（提交头）等于输入中的 `head_ref`（头引用）。
+- 当前 Python（脚本运行环境）、默认 Claude SDK venv（Claude 开发包虚拟环境），或 `--sdk-python` 指定的 Python（脚本运行环境）可以导入 `claude_agent_sdk`。
+- 主 agent（主代理）直接等待脚本返回，不在外层增加短于 540 秒的 timeout/watchdog（超时/看门等待）。插件内部上限为单 reviewer（审查代理）480 秒、整体 SDK dispatch（开发包派发）540 秒。
 
 ## 命令
 
+首次或重新执行真实审查：
+
 ```bash
 python scripts/cross_agent_review.py run \
   --input-file .local/cross-agent-review/<change>/<head_ref_short>/prepared-inputs/review-input.json
 ```
 
-排障时显式开启 `--debug`（排障开关）：
+只重试 `failed`（失败）或 `timed_out`（超时）的角色：
 
 ```bash
-python scripts/cross_agent_review.py run \
+python scripts/cross_agent_review.py retry \
+  --input-file .local/cross-agent-review/<change>/<head_ref_short>/prepared-inputs/review-input.json
+```
+
+只验证声明式机械变化并复用上一轮完成结果：
+
+```bash
+python scripts/cross_agent_review.py revalidate \
   --input-file .local/cross-agent-review/<change>/<head_ref_short>/prepared-inputs/review-input.json \
-  --debug
+  --previous-state .local/cross-agent-review/<change>/<previous_head_ref_short>/review-state.json
 ```
 
-主 agent（主代理）读完 `review-report.md`（审查报告）并确认可以通过后，再显式写入 guard-defined evidence（守卫定义证据）：
+`run/retry/revalidate`（运行/重试/重新校验）只生成 `review-report.md`（审查报告）和 `review-state.json`（审查状态）。主 agent（主代理）读取两者并作出语义结论；外部 workflow（工作流）需要证据时，调用该 workflow（工作流）自己声明的通用证据入口。
 
-```bash
-python scripts/cross_agent_review.py mark-pass \
-  --input-file .local/cross-agent-review/<change>/<head_ref_short>/prepared-inputs/review-input.json
-```
+本 Skill（技能）不知道 Guard Profile（守卫画像）、artifact id（产物编号）、证据路径或 evidence schema（证据结构）。
 
-## 输入文件准备
+## 输入文件
 
-`prepared-inputs`（预备输入目录）只包含一个 regular file（常规文件）：`review-input.json`（审查输入文件）。
-
-路径固定为：
+`prepared-inputs`（预备输入目录）只包含 `review-input.json`（审查输入文件），固定路径为：
 
 ```text
 .local/cross-agent-review/<change>/<head_ref_short>/prepared-inputs/review-input.json
@@ -69,68 +64,65 @@ python scripts/cross_agent_review.py mark-pass \
 
 `<head_ref_short>`（短头引用）等于 `head_ref`（头引用）的前 12 个字符。
 
-不要在 `.local/` 下创建独立的输入根目录。
+完整示例：
 
-`review-input.json`（审查输入文件）字段固定为：
+```json
+{
+  "change": "demo",
+  "mode": "convergence",
+  "base_ref": "origin/main",
+  "head_ref": "0123456789abcdef0123456789abcdef01234567",
+  "spec_file": "openspec/changes/demo/specs/capability/spec.md",
+  "design_file": "openspec/changes/demo/design.md",
+  "plan_file": "docs/superpowers/plans/demo.md",
+  "summary_only": [
+    {
+      "path": "docs/process.md",
+      "reason": "过程文档仅供按需核对"
+    }
+  ],
+  "revalidation_policy": [
+    {
+      "path": "docs/checklist.md",
+      "validator": "checkbox-only"
+    },
+    {
+      "path": "manifest.yaml",
+      "validator": "mapping-fields-only",
+      "format": "yaml",
+      "fields": [
+        "status",
+        "evidence"
+      ]
+    }
+  ]
+}
+```
 
-- `change`
-- `mode`
-- `base_ref`
-- `head_ref`
-- `spec_file`
-- `design_file`
-- `plan_file`
+`mode`（模式）只能是 `convergence`（收敛）或 `endless`（无尽）。review（审查）范围由 `base_ref`（基准引用）和 `head_ref`（当前提交引用）控制。
 
-review（审查）范围由 `base_ref`（基准引用）和 `head_ref`（当前提交引用）控制；以下命令中的 `<base-ref>` 和 `<head-ref>` 必须分别来自这两个字段。
+- `summary_only`（仅摘要）逐项使用精确项目相对路径和非空 `reason`（理由）；它只降低主要输入噪音，不禁止 reviewer（审查代理）按需读取原文。
+- `checkbox-only`（仅复选框）只允许 Markdown task checkbox（标记任务复选框）状态变化。
+- `mapping-fields-only`（仅映射字段）只允许 JSON/YAML（数据/配置）顶层映射中列出的字段变化。
+- 未分类文件默认进入 `full_review`（完整审查），不能按扩展名、目录或大小排除。
 
-review subject（审查对象）命令包括：
+出现未声明文件、重叠策略、解析失败、规格或设计变化、重命名、复制、脏工作区或哈希不匹配时，`revalidate`（重新校验）拒绝复用；更新当前输入后，改用 `run`（运行）执行真实审查。不得把失败降级成局部复用或伪造结果。
+
+审查范围可用以下命令核对：
 
 ```bash
-git diff <base-ref>...<head-ref>
-git log <base-ref>..<head-ref> --oneline
 git diff --name-status --find-renames --find-copies-harder <base-ref>...<head-ref>
 git diff <base-ref>...<head-ref> -- <path>
 ```
 
-Reviewer prompt（审查代理提示词）引用 `review-input.json`（审查输入文件），不内联大 diff（差异）内容；reviewer（审查代理）按需读取相关片段，不能整读大 diff（差异）。
-Reviewer prompt（审查代理提示词）会内联三条短命令：`git diff <base-ref>...<head-ref>`、`git log <base-ref>..<head-ref> --oneline` 和 `git diff --name-status --find-renames --find-copies-harder <base-ref>...<head-ref>`。
+## Reviewer（审查代理）与输出
 
-Comet build completion（构建完成）调用时，`base_ref` 应优先使用 implementation baseline（实施基准，例如 plan 文件头的 `base-ref`），避免把已完成的历史 change（变更）卷入本次 review（审查）diff（差异）。只有在没有实施基准时，才回退到 change init baseline（变更初始化基准）。
+固定角色只有：
 
-## Reviewer（审查代理）角色
+- `spec-alignment`（规格对齐）
+- `implementation-correctness`（实施正确性）
 
-默认 reviewer（审查代理）角色只有：
-
-- `spec-alignment`
-- `implementation-correctness`
-
-## 输出文件
-
-默认输出只有：
-
-- `review-report.md`（审查报告）
-
-`mark-pass`（标记通过）输出：
-
-- `.local/guard/evidence/<profile_id>/cross_agent_review_pass/<change>/<head_ref_short>/pass.json`
-
-只有使用 `--debug`（排障开关）时才写入 debug（排障）输出：
-
-- `debug/review-input.json`
-- `debug/prompts/<role>.txt`
-- `debug/raw/<role>.txt`
-
-## Timeout（超时）
-
-插件内部保留 480 秒单 reviewer（审查代理）和 540 秒 SDK dispatch（开发包派发）timeout（超时），用于保证审查不会无限等待。
-
-“不要手动添加 timeout/watchdog（超时/看门等待）”指主 agent（主代理）调用插件时不能在外层再包一层计时器，尤其不能设置短于插件内部 540 秒的外层 timeout（超时）。
-
-## Reviewer 输出契约
-
-Reviewer（审查代理）必须只返回一个轻量 Markdown（标记文本）结果，不要返回 JSON（结构化数据）或解释性前后缀。
-
-格式固定为：
+每个角色返回轻量 Markdown（标记文本）：
 
 ```markdown
 # Review Result: <role>
@@ -143,24 +135,17 @@ Reviewer（审查代理）必须只返回一个轻量 Markdown（标记文本）
   Recommendation: concrete next action
 ```
 
-只允许以下 severity（严重级别）值：
+没有问题时在 `## Findings` 下写 `No findings.`。只允许 `CRITICAL`（严重阻断）、`IMPORTANT`（重要阻断）、`WARNING`（警告）、`SUGGESTION`（建议），不要使用 severity aliases（严重级别别名）；缺少 `Severity:` 的 finding（发现项）按阻断处理或要求重新审查。
 
-- `CRITICAL`（严重阻断）：可能导致数据丢失、安全暴露、必需流程中断，或 reviewer/tool（审查代理/工具）失败。
-- `IMPORTANT`（重要阻断）：明确回归、缺少必需场景，或正常使用中很可能触发的边界错误。
-- `WARNING`（警告）：有合理风险或覆盖缺口，但影响有限或不确定。
-- `SUGGESTION`（建议）：可维护性或清晰度改进，不应阻断通过。
+脚本只聚合文本并保存角色状态，不解析 finding（发现项）、不去重、不判断是否通过。主 agent（主代理）负责语义判断。
 
-不要使用 severity aliases（严重级别别名），例如 `high`、`medium`、`low`、`minor` 或 `info`。
-缺少 `Severity:` 的 finding（发现项）属于无效 reviewer 输出，主 agent（主代理）应按阻断处理或要求重新审查。
+默认输出：
 
-如果没有问题，`## Findings` 下写：
+- `review-report.md`（审查报告）
+- `review-state.json`（审查状态）
 
-```markdown
-No findings.
-```
+只有 `run/retry`（运行/重试）使用 `--debug`（排障开关）时才增加：
 
-脚本只做文本聚合，不解析 finding（发现项）、不去重、不判断是否通过。主 agent（主代理）读取 `review-report.md` 后判断是否还有 CRITICAL（严重阻断）或 IMPORTANT（重要阻断），并在通过后运行 `mark-pass`（标记通过）。`mark-pass` 只写 Guard（守卫）默认 evidence（证据）目录，不读取或解析 reviewer（审查代理）正文。
-
-## 兼容性说明
-
-本版本不再要求 reviewer（审查代理）返回 JSON（结构化数据）findings（发现项）数组。调用方或外部自定义 reviewer（审查代理）需要改为上述 Markdown（标记文本）格式。
+- `debug/review-input.json`（排障输入）
+- `debug/prompts/<role>.txt`（角色提示词）
+- `debug/raw/<role>.txt`（角色原始输出）

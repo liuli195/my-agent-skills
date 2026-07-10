@@ -112,6 +112,13 @@ def test_missing_required_args_fail() -> None:
     assert "error:" in result.stderr
 
 
+def test_mark_pass_is_not_a_command() -> None:
+    result = run("mark-pass")
+
+    assert result.returncode == 2
+    assert "invalid choice" in result.stderr
+
+
 def git(project: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args],
@@ -699,27 +706,6 @@ def run_review_in_process(module, monkeypatch, project: Path, *args: str, review
     return module.main(list(args))
 
 
-def guard_pass_path(
-    project: Path,
-    head: str,
-    *,
-    change: str = "demo",
-    profile_id: str = "comet-review-gate",
-    artifact_id: str = "cross_agent_review_pass",
-) -> Path:
-    return (
-        project
-        / ".local"
-        / "guard"
-        / "evidence"
-        / profile_id
-        / artifact_id
-        / change
-        / head[:12]
-        / "pass.json"
-    )
-
-
 def test_run_accepts_single_review_input_file(tmp_path: Path, monkeypatch, capsys) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
@@ -734,7 +720,7 @@ def test_run_accepts_single_review_input_file(tmp_path: Path, monkeypatch, capsy
     assert (project / ".local" / "cross-agent-review" / "demo" / head[:12] / "review-report.md").is_file()
 
 
-def test_default_outputs_are_report_only(tmp_path: Path, monkeypatch) -> None:
+def test_default_outputs_are_report_and_state_only(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
     init_repo(project)
@@ -746,60 +732,13 @@ def test_default_outputs_are_report_only(tmp_path: Path, monkeypatch) -> None:
 
     assert status == 0
     assert (output_dir / "review-report.md").is_file()
+    assert (output_dir / "review-state.json").is_file()
     assert not (output_dir / "review-pass.json").exists()
-    assert not guard_pass_path(project, head).exists()
     assert not (output_dir / "review-results.json").exists()
     assert not (output_dir / "inputs").exists()
     assert not (output_dir / "prompts").exists()
     assert not (output_dir / "raw").exists()
     assert not (output_dir / "debug").exists()
-
-
-def test_mark_pass_writes_guard_evidence_default_path(tmp_path: Path) -> None:
-    project = tmp_path / "repo"
-    base = init_repo(project)
-    head = commit_review_context(project)
-    input_file = write_review_input(project, base, head, mode="convergence")
-    report_path = input_file.parent.parent / "review-report.md"
-    write_file(report_path, NO_BLOCKING_REVIEW)
-
-    result = run("mark-pass", "--input-file", str(input_file), cwd=project)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    marker_path = guard_pass_path(project, head)
-    marker = json.loads(marker_path.read_text(encoding="utf-8"))
-    assert f"head_ref_short: {head[:12]}" in result.stdout
-    assert f"path: {marker_path.relative_to(project)}" in result.stdout
-    assert marker_path.is_file()
-    assert marker["schema_version"] == "guard-evidence/v1"
-    assert marker["producer"] == "cross-agent-review"
-    assert marker["profile_id"] == "comet-review-gate"
-    assert marker["artifact_id"] == "cross_agent_review_pass"
-    assert marker["subject_type"] == "comet-change"
-    assert marker["subject_id"] == "demo"
-    assert marker["head_ref_short"] == head[:12]
-    assert marker["blocking_findings"] == 0
-    assert marker["mode"] == "convergence"
-    assert marker["base_ref"] == base
-    assert marker["head_ref"] == head
-    assert marker["report"] == str((input_file.parent.parent / "review-report.md").relative_to(project))
-    assert marker["report_hash"].startswith("sha256:")
-
-
-def test_mark_pass_records_endless_mode_and_refs(tmp_path: Path) -> None:
-    project = tmp_path / "repo"
-    base = init_repo(project)
-    head = commit_review_context(project)
-    input_file = write_review_input(project, base, head, mode="endless")
-    write_file(input_file.parent.parent / "review-report.md", NO_BLOCKING_REVIEW)
-
-    result = run("mark-pass", "--input-file", str(input_file), cwd=project)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    marker = json.loads(guard_pass_path(project, head).read_text(encoding="utf-8"))
-    assert marker["mode"] == "endless"
-    assert marker["base_ref"] == base
-    assert marker["head_ref"] == head
 
 
 def test_blocking_findings_write_report_without_pass_marker(tmp_path: Path, monkeypatch) -> None:
@@ -821,7 +760,6 @@ def test_blocking_findings_write_report_without_pass_marker(tmp_path: Path, monk
     assert status == 0
     assert (output_dir / "review-report.md").is_file()
     assert not (output_dir / "review-pass.json").exists()
-    assert not guard_pass_path(project, head).exists()
     assert not (output_dir / "inputs").exists()
 
 
@@ -3209,24 +3147,6 @@ def test_run_removes_stale_legacy_pass_marker_from_reused_output_dir(tmp_path: P
 
     assert blocking_status == 0
     assert not (output_dir / "review-pass.json").exists()
-
-
-def test_mark_pass_report_hash_matches_report(tmp_path: Path) -> None:
-    project = tmp_path / "repo"
-    init_repo(project)
-    head = commit_review_context(project)
-    input_file = write_review_input(project, head, head)
-    output_dir = input_file.parent.parent
-    write_file(output_dir / "review-report.md", NO_BLOCKING_REVIEW)
-    mark_result = run("mark-pass", "--input-file", str(input_file), cwd=project)
-
-    assert mark_result.returncode == 0, mark_result.stdout + mark_result.stderr
-    report = (output_dir / "review-report.md").read_bytes()
-    marker = json.loads(guard_pass_path(project, head).read_text(encoding="utf-8"))
-    import hashlib
-
-    assert marker["report_hash"] == "sha256:" + hashlib.sha256(report).hexdigest()
-    assert marker["head_ref"] == head
 
 
 def test_reviewer_state_preserves_reviewer_text_without_parsing() -> None:

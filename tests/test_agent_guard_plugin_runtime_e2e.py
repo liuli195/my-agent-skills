@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 import os
@@ -589,6 +590,148 @@ def test_record_evidence_rejects_symlink_without_mutating_target(tmp_path: Path)
 
     assert_record_failed(result, "unsafe_evidence_path")
     assert target.read_text(encoding="utf-8") == '{"original": true}\n'
+
+
+def test_planning_review_uses_generic_evidence_entry_and_existing_hook_router(tmp_path: Path) -> None:
+    project = init_git_project(tmp_path / "project")
+    (project / ".gitignore").write_text(".local/guard/evidence/\n", encoding="utf-8")
+    git(project, "add", ".gitignore")
+    git(project, "commit", "-m", "ignore runtime evidence")
+    user_home = tmp_path / "home"
+    profile = user_home / ".agents" / "guards" / "demo-profile"
+    write_guard_defined_artifact(profile, artifact_id="planning_review_pass")
+    (profile / "global-command-guards.yaml").write_text(
+        """
+global_command_guards:
+  - id: planning_review_gate
+    description: 规划审查门禁。
+    tool: Bash
+    match:
+      command_patterns:
+        - 'comet-guard\\.sh\\s+(?P<subject_id>[A-Za-z0-9._-]+)\\s+design\\s+--apply(?:\\s|$)'
+      required_captures:
+        - subject_id
+    evidence:
+      artifact: planning_review_pass
+    checks:
+      - field: status
+        predicate: equals
+        value: pass
+      - field: schema_version
+        predicate: equals
+        value: guard-evidence/v1
+      - field: producer
+        predicate: equals
+        value: planning-review
+      - field: profile_id
+        predicate: equals
+        value_from: profile_id
+      - field: artifact_id
+        predicate: equals
+        value_from: artifact_id
+      - field: subject_type
+        predicate: equals
+        value: comet-change
+      - field: subject_id
+        predicate: equals
+        value_from: subject_id
+      - field: head_ref
+        predicate: equals
+        value_from: git_head
+      - field: head_ref_short
+        predicate: equals
+        value_from: git_head_short
+      - field: blocking_findings
+        predicate: number_lte
+        value: 0
+      - field: review.decision
+        predicate: equals
+        value: PASS
+      - field: scope
+        predicate: exists
+      - field: report
+        predicate: equals
+        value: inline:review
+      - field: report_hash
+        predicate: exists
+    deny:
+      reason: planning_review_required
+      next: record_planning_review_evidence
+      suggestion: 记录当前规划审查结论。
+""".lstrip(),
+        encoding="utf-8",
+    )
+    review = {
+        "mode": "convergence",
+        "scope": ["proposal.md", "design.md", "tasks.md"],
+        "blocking": 0,
+        "findings": [],
+        "decision": "PASS",
+    }
+    canonical = json.dumps(
+        review,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    fields = write_payload(
+        tmp_path / "planning-fields.json",
+        {
+            "review": review,
+            "blocking_findings": 0,
+            "scope": review["scope"],
+            "report": "inline:review",
+            "report_hash": "sha256:" + hashlib.sha256(canonical).hexdigest(),
+        },
+    )
+
+    recorded = run(
+        record_evidence_args(
+            project,
+            user_home,
+            fields,
+            artifact="planning_review_pass",
+            subject_type="comet-change",
+            subject_id="planning-demo",
+            producer="planning-review",
+        )
+    )
+
+    assert recorded.returncode == 0, recorded.stdout + recorded.stderr
+    evidence = json.loads((project / output_json(recorded)["path"]).read_text(encoding="utf-8"))
+    assert evidence["review"] == review
+    assert evidence["report_hash"] == "sha256:" + hashlib.sha256(canonical).hexdigest()
+
+    routed = run(
+        [
+            str(HOOK_ROUTER),
+            "--source",
+            "codex",
+            "--event",
+            "PreToolUse",
+            "--project",
+            str(project),
+            "--user-home",
+            str(user_home),
+            "--payload-file",
+            str(
+                write_payload(
+                    tmp_path / "planning-hook.json",
+                    {
+                        "session_id": "planning-session",
+                        "cwd": str(project),
+                        "tool_name": "Bash",
+                        "tool_input": {
+                            "command": "comet-guard.sh planning-demo design --apply"
+                        },
+                    },
+                )
+            ),
+        ]
+    )
+
+    assert routed.returncode == 0, routed.stdout + routed.stderr
+    assert output_json(routed)["status"] == "allow"
 
 
 def test_plugin_runtime_e2e_from_verify_to_state_completed(tmp_path: Path) -> None:
