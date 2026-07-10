@@ -206,7 +206,7 @@ python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py -k 
 
 Expected（预期）：PASS（通过）。
 
-- [x] **Step 7: 提交检查点（仅获授权时）**
+- [x] **Step 7: 提交 Task 1 检查点（仅获授权时）**
 
 ```powershell
 git add plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py tests/test_cross_agent_review_cli.py
