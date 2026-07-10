@@ -162,6 +162,57 @@ def test_global_command_guard_docs_are_scenario_oriented() -> None:
         assert phrase in combined_text
 
 
+def test_agent_guard_run_documents_generic_record_evidence_contract() -> None:
+    skill_dir = SOURCE_SKILL.parent / "agent-guard-run"
+    skill_text = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    events_text = (skill_dir / "references" / "events.md").read_text(encoding="utf-8")
+    combined_text = skill_text + "\n" + events_text
+
+    for phrase in [
+        "record-evidence",
+        "--profile-source project|user",
+        "--business-fields-file",
+        "demo-profile",
+        "demo-pass",
+        "主 agent（主代理）先完成语义判断",
+        "Runtime（运行时）不读取报告、不判断 findings（发现项）、不自动调用",
+    ]:
+        assert phrase in combined_text
+    for field in [
+        "schema_version",
+        "status",
+        "producer",
+        "profile_id",
+        "artifact_id",
+        "subject_type",
+        "subject_id",
+        "head_ref",
+        "head_ref_short",
+        "created_at",
+    ]:
+        assert f"`{field}`" in combined_text
+
+
+def test_agent_guard_run_description_routes_record_evidence() -> None:
+    skill_dir = SOURCE_SKILL.parent / "agent-guard-run"
+
+    assert "记录 guard-defined evidence（守卫定义证据）" in skill_description(skill_dir)
+
+
+def test_agent_guard_record_evidence_example_has_no_fixed_ids() -> None:
+    events_text = (
+        SOURCE_SKILL.parent / "agent-guard-run" / "references" / "events.md"
+    ).read_text(encoding="utf-8")
+    example = next(
+        block.split("```", 1)[0].lower()
+        for block in events_text.split("```powershell")[1:]
+        if "record-evidence" in block
+    )
+
+    for fixed_id in ["comet", "cross-agent-review", "planning-review"]:
+        assert fixed_id not in example
+
+
 def test_templates_do_not_include_python_cache_artifacts() -> None:
     templates_root = SOURCE_SKILL / "assets" / "templates"
 

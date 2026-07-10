@@ -68,8 +68,26 @@ def test_cross_agent_review_skill_and_script_are_packaged() -> None:
     assert prompt_template.is_file()
     text = skill.read_text(encoding="utf-8")
     assert "Claude Agent SDK" in text
-    assert "mark-pass" in text
+    assert "retry" in text
+    assert "revalidate" in text
     assert "不自动安装" in text
+
+
+def test_cross_agent_review_package_has_no_agent_guard_evidence_knowledge() -> None:
+    text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in PLUGIN_ROOT.rglob("*")
+        if path.is_file() and path.suffix in {".py", ".md"}
+    )
+
+    for forbidden in [
+        "mark-pass",
+        "comet-review-gate",
+        "cross_agent_review_pass",
+        ".local/guard/evidence",
+        "guard-evidence/v1",
+    ]:
+        assert forbidden not in text
 
 
 def test_cross_agent_review_skill_documents_single_review_input_contract() -> None:
@@ -86,11 +104,68 @@ def test_cross_agent_review_skill_documents_single_review_input_contract() -> No
     assert "--tasks-file" not in text
 
 
+def test_cross_agent_review_skill_documents_exact_optional_input_contract() -> None:
+    skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+    payloads = [
+        json.loads(block.split("```", 1)[0])
+        for block in text.split("```json\n")[1:]
+    ]
+    review_input = next(payload for payload in payloads if "summary_only" in payload)
+
+    assert review_input["summary_only"] == [
+        {"path": "docs/process.md", "reason": "过程文档仅供按需核对"}
+    ]
+    assert review_input["revalidation_policy"] == [
+        {"path": "docs/checklist.md", "validator": "checkbox-only"},
+        {
+            "path": "manifest.yaml",
+            "validator": "mapping-fields-only",
+            "format": "yaml",
+            "fields": ["status", "evidence"],
+        },
+    ]
+    for required in [
+        "change",
+        "mode",
+        "base_ref",
+        "head_ref",
+        "spec_file",
+        "design_file",
+        "plan_file",
+    ]:
+        assert required in review_input
+
+
+def test_cross_agent_review_skill_documents_revalidation_fallback() -> None:
+    skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+
+    for reason in ["未声明文件", "重叠策略", "解析失败", "规格或设计变化"]:
+        assert reason in text
+    assert "改用 `run`（运行）执行真实审查" in text
+
+
 def test_cross_agent_review_skill_documents_allowed_mode_values() -> None:
     skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
     text = skill.read_text(encoding="utf-8")
 
     assert "`mode`（模式）只能是 `convergence`（收敛）或 `endless`（无尽）" in text
+
+
+def test_cross_agent_review_skill_documents_default_mode_and_comet_baseline() -> None:
+    skill = PLUGIN_ROOT / "skills" / "cross-agent-review" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+
+    for phrase in [
+        "默认使用 `convergence`（收敛）模式",
+        "Comet build completion（双星构建完成）或 PR Flow local review（拉取请求流程本地审查）：使用 `convergence`（收敛）模式",
+        "用户显式调用 cross-agent-review（跨代理审查）且没有说明模式：使用 `convergence`（收敛）模式",
+        "用户明确要求“无尽模式”“每轮完整复查”“不要收窄范围”或等价表达：使用 `endless`（无尽）模式",
+        "优先使用 plan（计划）文件头的 implementation baseline（实施基准）",
+        "只有缺少 implementation baseline（实施基准）时，才回退到 change init baseline（变更初始化基准）",
+    ]:
+        assert phrase in text
 
 
 def test_cross_agent_review_skill_documents_review_range_refs() -> None:
@@ -105,8 +180,7 @@ def test_cross_agent_review_skill_documents_default_and_debug_outputs() -> None:
     text = skill.read_text(encoding="utf-8")
 
     assert "review-report.md" in text
-    assert "pass.json" in text
-    assert "cross_agent_review_pass" in text
+    assert "review-state.json" in text
     assert "review-results.json" not in text
     assert "inputs/manifest.json" not in text
     assert "inputs/spec.md" not in text

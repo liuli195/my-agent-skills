@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import contextlib
 import hashlib
@@ -111,6 +112,13 @@ def test_missing_required_args_fail() -> None:
     assert "error:" in result.stderr
 
 
+def test_mark_pass_is_not_a_command() -> None:
+    result = run("mark-pass")
+
+    assert result.returncode == 2
+    assert "invalid choice" in result.stderr
+
+
 def git(project: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args],
@@ -208,26 +216,426 @@ def write_review_input(
     mode: str = "convergence",
     change: str = "demo",
     payload_overrides: dict | None = None,
+    preserve_context: bool = False,
 ) -> Path:
     output_dir = project / ".local" / "cross-agent-review" / change / head[:12]
     prepared_dir = output_dir / "prepared-inputs"
-    spec_file = write_file(project / "spec.md", "spec body\n")
-    design_file = write_file(project / "design.md", "design body\n")
-    plan_file = write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
+    context_files = {
+        "spec_file": (project / "spec.md", "spec body\n"),
+        "design_file": (project / "design.md", "design body\n"),
+        "plan_file": (project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n"),
+    }
+    if not preserve_context:
+        for path, text in context_files.values():
+            write_file(path, text)
     payload = {
         "change": change,
         "mode": mode,
         "base_ref": base,
         "head_ref": head,
-        "spec_file": str(spec_file.relative_to(project)),
-        "design_file": str(design_file.relative_to(project)),
-        "plan_file": str(plan_file.relative_to(project)),
+        **{
+            field: path.relative_to(project).as_posix()
+            for field, (path, _text) in context_files.items()
+        },
     }
     if payload_overrides:
         payload.update(payload_overrides)
     input_file = prepared_dir / "review-input.json"
     write_file(input_file, json.dumps(payload, ensure_ascii=False) + "\n")
     return input_file
+
+
+def test_review_input_classifies_context_summary_and_default_full(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    init_repo(project)
+    base = git(project, "rev-parse", "HEAD")
+    write_file(project / "spec.md", "spec body\n")
+    write_file(project / "design.md", "design body\n")
+    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
+    write_file(project / "src" / "app.py", "print('ok')\n")
+    write_file(project / "docs" / "process.md", "generated plan\n")
+    git(project, "add", ".")
+    git(project, "commit", "-m", "review subject")
+    head = git(project, "rev-parse", "HEAD")
+    input_file = write_review_input(
+        project,
+        base,
+        head,
+        payload_overrides={
+            "summary_only": [
+                {"path": "docs/process.md", "reason": "过程文档仅供按需核对"}
+            ]
+        },
+    )
+
+    module = load_script_module()
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        state = module.initial_review_state(review_input)
+
+    by_path = {item["path"]: item for item in state["files"]}
+    assert by_path["spec.md"]["classification"] == "authoritative_context"
+    assert by_path["spec.md"]["reason"] is None
+    assert by_path["src/app.py"]["classification"] == "full_review"
+    assert by_path["docs/process.md"]["classification"] == "summary_only"
+    assert by_path["docs/process.md"]["reason"] == "过程文档仅供按需核对"
+    assert "spec.md" in state["roles"]["spec-alignment"]["scope"]["authoritative_context"]
+
+
+def committed_review_subject(tmp_path: Path) -> tuple[Path, str, str, Path]:
+    project = tmp_path / "repo"
+    base = init_repo(project)
+    write_file(project / "spec.md", "spec body\n")
+    write_file(project / "design.md", "design body\n")
+    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
+    write_file(project / "src" / "app.py", "print('ok')\n")
+    git(project, "add", ".")
+    git(project, "commit", "-m", "review subject")
+    head = git(project, "rev-parse", "HEAD")
+    return project, base, head, write_review_input(project, base, head)
+
+
+def review_subject_with_full_and_summary_files(tmp_path: Path) -> tuple[Path, Path]:
+    project = tmp_path / "repo"
+    base = init_repo(project)
+    write_file(project / "spec.md", "spec body\n")
+    write_file(project / "design.md", "design body\n")
+    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
+    write_file(project / "src" / "app.py", "print('behavior')\n")
+    write_file(project / "docs" / "process.md", "generated process body\n")
+    git(project, "add", ".")
+    git(project, "commit", "-m", "review subject")
+    head = git(project, "rev-parse", "HEAD")
+    input_file = write_review_input(
+        project,
+        base,
+        head,
+        payload_overrides={
+            "summary_only": [
+                {"path": "docs/process.md", "reason": "过程文档仅供按需核对"}
+            ]
+        },
+    )
+    module = load_script_module()
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        module.atomic_write_json(
+            review_input.output_dir / "review-state.json",
+            module.initial_review_state(review_input),
+        )
+    return project, input_file
+
+
+def committed_review_input(tmp_path: Path) -> tuple[Path, Path]:
+    project, _, _, input_file = committed_review_subject(tmp_path)
+    return project, input_file
+
+
+def review_args_from_input(input_file: Path) -> list[str]:
+    return ["run", "--input-file", str(input_file)]
+
+
+def test_changed_file_entries_preserves_rename_and_copy_sources(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    base = init_repo(project)
+    write_file(project / "spec.md", "spec body\n")
+    write_file(project / "design.md", "design body\n")
+    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
+    git(project, "mv", "app.txt", "renamed.txt")
+    shutil.copyfile(project / "renamed.txt", project / "copied.txt")
+    git(project, "add", ".")
+    git(project, "commit", "-m", "rename and copy")
+    head = git(project, "rev-parse", "HEAD")
+    input_file = write_review_input(project, base, head)
+
+    module = load_script_module()
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        entries = module.changed_file_entries(review_input)
+
+    by_path = {entry["path"]: entry for entry in entries}
+    assert by_path["renamed.txt"]["status"].startswith("R")
+    assert by_path["renamed.txt"]["old_path"] == "app.txt"
+    assert by_path["copied.txt"]["status"].startswith("C")
+    assert by_path["copied.txt"]["old_path"] == "app.txt"
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        b"Q\0src/app.py\0",
+        b"R100\0old.py\0",
+        b"M\0src/app.py\0extra\0",
+        b"R\0old.py\0new.py\0",
+        b"C101\0old.py\0new.py\0",
+        b"M100\0src/app.py\0",
+    ],
+)
+def test_changed_file_entries_rejects_malformed_name_status(
+    tmp_path: Path, monkeypatch, output: bytes
+) -> None:
+    project, _, _, input_file = committed_review_subject(tmp_path)
+    module = load_script_module()
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        monkeypatch.setattr(module, "git_output_bytes", lambda *_: output)
+        with pytest.raises(ValueError) as exc_info:
+            module.changed_file_entries(review_input)
+
+    assert str(exc_info.value) == "invalid_changed_file_entries"
+
+
+def test_initial_state_records_subject_context_hashes_and_role_scopes(tmp_path: Path) -> None:
+    project, base, head, input_file = committed_review_subject(tmp_path)
+    module = load_script_module()
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        state = module.initial_review_state(review_input)
+        module.atomic_write_json(review_input.output_dir / "review-state.json", state)
+        allowed_paths = module.runtime_allowed_paths(review_input)
+    saved = json.loads((review_input.output_dir / "review-state.json").read_text(encoding="utf-8"))
+
+    assert saved["schema_version"] == "cross-agent-review-state/v1"
+    assert saved["subject"]["change"] == "demo"
+    assert saved["subject"]["base_ref"] == base
+    assert saved["subject"]["head_ref"] == head
+    assert saved["subject"]["head_ref_short"] == head[:12]
+    assert saved["subject"]["input_file"] == input_file.relative_to(project).as_posix()
+    assert saved["subject"]["input_hash"].startswith("sha256:")
+    assert set(saved["subject"]["contexts"]) == {"spec", "design", "plan"}
+    assert all(
+        context["hash"].startswith("sha256:")
+        for context in saved["subject"]["contexts"].values()
+    )
+    assert saved["roles"]["spec-alignment"]["attempts"] == []
+    assert "status" not in saved["roles"]["spec-alignment"]
+    assert review_input.output_dir / "review-state.json" in allowed_paths
+
+
+def test_role_input_contains_only_full_review_diff_and_summary_stats(
+    tmp_path: Path, capsys
+) -> None:
+    project, input_file = review_subject_with_full_and_summary_files(tmp_path)
+    module = load_script_module()
+    state_file = input_file.parent.parent / "review-state.json"
+
+    with contextlib.chdir(project):
+        assert (
+            module.main(
+                [
+                    "_role-input",
+                    "--input-file",
+                    str(input_file),
+                    "--state-file",
+                    str(state_file),
+                    "--role",
+                    "implementation-correctness",
+                ]
+            )
+            == 0
+        )
+
+    output = capsys.readouterr().out
+    assert "+print('behavior')" in output
+    assert "generated process body" not in output
+    assert "docs/process.md" in output
+    assert "过程文档仅供按需核对" in output
+    assert "- docs/process.md: 过程文档仅供按需核对 (status: A)" in output
+    assert "1\t0\tdocs/process.md" in output
+
+
+@pytest.mark.parametrize(
+    ("summary_only", "error"),
+    [
+        (
+            [
+                {"path": "src/app.py", "reason": "first"},
+                {"path": "src/app.py", "reason": "second"},
+            ],
+            "invalid_summary_only: duplicate_path=src/app.py",
+        ),
+        ([{"path": "src/app.py", "reason": ""}], "invalid_summary_only: empty_reason=src/app.py"),
+        ([{"path": "C:\\outside.txt", "reason": "outside"}], "path_outside_project"),
+        ([{"path": "../src/app.py", "reason": "traversal"}], "path_outside_project"),
+        ([{"path": "src/../src/app.py", "reason": "traversal"}], "path_outside_project"),
+        ([{"path": "src/./app.py", "reason": "dot segment"}], "path_outside_project"),
+        ([{"path": "src//app.py", "reason": "empty segment"}], "path_outside_project"),
+        ([{"path": "src\\app.py", "reason": "backslash"}], "path_outside_project"),
+        (
+            [{"path": "not-changed.md", "reason": "not changed"}],
+            "invalid_summary_only: not_changed=not-changed.md",
+        ),
+        ([{"path": "spec.md", "reason": "overlap"}], "classification_overlap"),
+    ],
+)
+def test_summary_only_rejects_invalid_entries(
+    tmp_path: Path, summary_only: list[dict[str, str]], error: str
+) -> None:
+    project = tmp_path / "repo"
+    base = init_repo(project)
+    write_file(project / "spec.md", "spec body\n")
+    write_file(project / "design.md", "design body\n")
+    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
+    write_file(project / "src" / "app.py", "print('ok')\n")
+    git(project, "add", ".")
+    git(project, "commit", "-m", "review subject")
+    head = git(project, "rev-parse", "HEAD")
+    input_file = write_review_input(
+        project,
+        base,
+        head,
+        payload_overrides={"summary_only": summary_only},
+    )
+
+    module = load_script_module()
+    with contextlib.chdir(project), pytest.raises(ValueError, match=error):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        module.initial_review_state(review_input)
+
+
+def test_summary_only_reports_sorted_classification_overlap_paths(tmp_path: Path) -> None:
+    project, base, head, _ = committed_review_subject(tmp_path)
+    input_file = write_review_input(
+        project,
+        base,
+        head,
+        payload_overrides={
+            "summary_only": [
+                {"path": "spec.md", "reason": "overlap"},
+                {"path": "design.md", "reason": "overlap"},
+            ]
+        },
+    )
+    module = load_script_module()
+
+    with contextlib.chdir(project), pytest.raises(ValueError) as exc_info:
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        module.initial_review_state(review_input)
+
+    assert str(exc_info.value) == "classification_overlap: paths=design.md,spec.md"
+
+
+def test_review_input_parses_revalidation_policy(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    input_file = write_review_input(
+        project,
+        "base",
+        "head",
+        payload_overrides={
+            "revalidation_policy": [
+                {"path": "checks.md", "validator": "checkbox-only"},
+                {
+                    "path": "manifest.yaml",
+                    "validator": "mapping-fields-only",
+                    "format": "yaml",
+                    "fields": ["status", "evidence"],
+                },
+            ]
+        },
+    )
+
+    module = load_script_module()
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+
+    assert review_input.revalidation_policy == (
+        module.RevalidationPolicy(path="checks.md", validator="checkbox-only"),
+        module.RevalidationPolicy(
+            path="manifest.yaml",
+            validator="mapping-fields-only",
+            format="yaml",
+            fields=("status", "evidence"),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("policy", "error"),
+    [
+        ({}, "expected_array"),
+        (
+            [
+                {"path": "checks.md", "validator": "checkbox-only"},
+                {"path": "checks.md", "validator": "checkbox-only"},
+            ],
+            "duplicate_path=checks.md",
+        ),
+        ([{"path": "../checks.md", "validator": "checkbox-only"}], "path_outside_project"),
+        ([{"path": "checks.md", "validator": "unknown"}], "invalid_validator"),
+        ([{"path": "checks.md", "validator": []}], "invalid_validator"),
+        (
+            [{"path": "manifest.json", "validator": "mapping-fields-only", "fields": ["status"]}],
+            "invalid_format",
+        ),
+        (
+            [
+                {
+                    "path": "manifest.json",
+                    "validator": "mapping-fields-only",
+                    "format": [],
+                    "fields": ["status"],
+                }
+            ],
+            "invalid_format",
+        ),
+        (
+            [
+                {
+                    "path": "manifest.json",
+                    "validator": "mapping-fields-only",
+                    "format": "json",
+                    "fields": [],
+                }
+            ],
+            "invalid_fields",
+        ),
+        (
+            [
+                {
+                    "path": "manifest.json",
+                    "validator": "mapping-fields-only",
+                    "format": "json",
+                    "fields": ["status", "status"],
+                }
+            ],
+            "duplicate_field=status",
+        ),
+    ],
+)
+def test_revalidation_policy_rejects_invalid_entries(
+    tmp_path: Path, policy: object, error: str
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    input_file = write_review_input(
+        project,
+        "base",
+        "head",
+        payload_overrides={"revalidation_policy": policy},
+    )
+
+    module = load_script_module()
+    with contextlib.chdir(project), pytest.raises(ValueError, match=error):
+        module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
 
 
 def create_review_context_commit(project: Path) -> str:
@@ -273,8 +681,18 @@ def review_args(
     ]
 
 
-def reviewer_results(module, text: str = NO_BLOCKING_REVIEW) -> list[dict]:
-    return [module.markdown_review(role, text) for role in module.REVIEWER_ROLES]
+def reviewer_state(module, review_input, text: str = NO_BLOCKING_REVIEW) -> dict:
+    state = {
+        "subject": {
+            "change": review_input.change,
+            "base_ref": review_input.base_ref,
+            "head_ref": review_input.head_ref,
+        },
+        "roles": {role: {"attempts": []} for role in module.REVIEWER_ROLES},
+    }
+    for role in module.REVIEWER_ROLES:
+        module.record_role_result(state, role, "completed", text)
+    return state
 
 
 def run_review_in_process(module, monkeypatch, project: Path, *args: str, reviewer_text: str = NO_BLOCKING_REVIEW) -> int:
@@ -282,31 +700,10 @@ def run_review_in_process(module, monkeypatch, project: Path, *args: str, review
     monkeypatch.setattr(module, "resolve_sdk_python", lambda explicit, require_real_sdk: "fake-sdk")
     monkeypatch.setattr(
         module,
-        "dispatch_reviewers",
-        lambda review_args, sdk_python: reviewer_results(module, reviewer_text),
+        "run_sdk_role_subprocess",
+        lambda review_args, sdk_python, role: ("completed", reviewer_text),
     )
     return module.main(list(args))
-
-
-def guard_pass_path(
-    project: Path,
-    head: str,
-    *,
-    change: str = "demo",
-    profile_id: str = "comet-review-gate",
-    artifact_id: str = "cross_agent_review_pass",
-) -> Path:
-    return (
-        project
-        / ".local"
-        / "guard"
-        / "evidence"
-        / profile_id
-        / artifact_id
-        / change
-        / head[:12]
-        / "pass.json"
-    )
 
 
 def test_run_accepts_single_review_input_file(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -323,7 +720,7 @@ def test_run_accepts_single_review_input_file(tmp_path: Path, monkeypatch, capsy
     assert (project / ".local" / "cross-agent-review" / "demo" / head[:12] / "review-report.md").is_file()
 
 
-def test_default_outputs_are_report_only(tmp_path: Path, monkeypatch) -> None:
+def test_default_outputs_are_report_and_state_only(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
     init_repo(project)
@@ -335,60 +732,13 @@ def test_default_outputs_are_report_only(tmp_path: Path, monkeypatch) -> None:
 
     assert status == 0
     assert (output_dir / "review-report.md").is_file()
+    assert (output_dir / "review-state.json").is_file()
     assert not (output_dir / "review-pass.json").exists()
-    assert not guard_pass_path(project, head).exists()
     assert not (output_dir / "review-results.json").exists()
     assert not (output_dir / "inputs").exists()
     assert not (output_dir / "prompts").exists()
     assert not (output_dir / "raw").exists()
     assert not (output_dir / "debug").exists()
-
-
-def test_mark_pass_writes_guard_evidence_default_path(tmp_path: Path) -> None:
-    project = tmp_path / "repo"
-    base = init_repo(project)
-    head = commit_review_context(project)
-    input_file = write_review_input(project, base, head, mode="convergence")
-    report_path = input_file.parent.parent / "review-report.md"
-    write_file(report_path, NO_BLOCKING_REVIEW)
-
-    result = run("mark-pass", "--input-file", str(input_file), cwd=project)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    marker_path = guard_pass_path(project, head)
-    marker = json.loads(marker_path.read_text(encoding="utf-8"))
-    assert f"head_ref_short: {head[:12]}" in result.stdout
-    assert f"path: {marker_path.relative_to(project)}" in result.stdout
-    assert marker_path.is_file()
-    assert marker["schema_version"] == "guard-evidence/v1"
-    assert marker["producer"] == "cross-agent-review"
-    assert marker["profile_id"] == "comet-review-gate"
-    assert marker["artifact_id"] == "cross_agent_review_pass"
-    assert marker["subject_type"] == "comet-change"
-    assert marker["subject_id"] == "demo"
-    assert marker["head_ref_short"] == head[:12]
-    assert marker["blocking_findings"] == 0
-    assert marker["mode"] == "convergence"
-    assert marker["base_ref"] == base
-    assert marker["head_ref"] == head
-    assert marker["report"] == str((input_file.parent.parent / "review-report.md").relative_to(project))
-    assert marker["report_hash"].startswith("sha256:")
-
-
-def test_mark_pass_records_endless_mode_and_refs(tmp_path: Path) -> None:
-    project = tmp_path / "repo"
-    base = init_repo(project)
-    head = commit_review_context(project)
-    input_file = write_review_input(project, base, head, mode="endless")
-    write_file(input_file.parent.parent / "review-report.md", NO_BLOCKING_REVIEW)
-
-    result = run("mark-pass", "--input-file", str(input_file), cwd=project)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    marker = json.loads(guard_pass_path(project, head).read_text(encoding="utf-8"))
-    assert marker["mode"] == "endless"
-    assert marker["base_ref"] == base
-    assert marker["head_ref"] == head
 
 
 def test_blocking_findings_write_report_without_pass_marker(tmp_path: Path, monkeypatch) -> None:
@@ -404,13 +754,12 @@ def test_blocking_findings_write_report_without_pass_marker(tmp_path: Path, monk
     )
 
     status = module.write_outputs(
-        review_input, module.aggregate(reviewer_results(module, BLOCKING_REVIEW))
+        review_input, reviewer_state(module, review_input, BLOCKING_REVIEW)
     )
 
     assert status == 0
     assert (output_dir / "review-report.md").is_file()
     assert not (output_dir / "review-pass.json").exists()
-    assert not guard_pass_path(project, head).exists()
     assert not (output_dir / "inputs").exists()
 
 
@@ -425,19 +774,15 @@ def test_debug_writes_input_prompts_and_raw_under_debug(tmp_path: Path, monkeypa
         types.SimpleNamespace(input_file=input_file, debug=True, sdk_python=None)
     )
 
-    def fake_run(*args, **kwargs):
-        payload = json.loads(kwargs["input"])
-        raw_dir = Path(payload["raw_dir"])
+    def fake_role(_review_input, _sdk_python, role):
+        raw_dir = review_input.output_dir / "debug" / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
-        for role in payload["roles"]:
-            (raw_dir / f"{role}.txt").write_text(
-                json.dumps({"role": role, "status": "completed", "findings": []}),
-                encoding="utf-8",
-            )
-        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout=json.dumps([]), stderr="")
+        (raw_dir / f"{role}.txt").write_text(NO_BLOCKING_REVIEW, encoding="utf-8")
+        return "completed", NO_BLOCKING_REVIEW
 
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
-    module.run_sdk_dispatch_subprocess(review_input, sys.executable)
+    monkeypatch.setattr(module, "run_sdk_role_subprocess", fake_role)
+    state = {"roles": {role: {"attempts": []} for role in module.REVIEWER_ROLES}}
+    module.dispatch_roles(review_input, sys.executable, state, module.REVIEWER_ROLES)
 
     debug_dir = input_file.parent.parent / "debug"
     assert json.loads((debug_dir / "review-input.json").read_text(encoding="utf-8"))["mode"] == "convergence"
@@ -451,7 +796,7 @@ def test_debug_writes_input_prompts_and_raw_under_debug(tmp_path: Path, monkeypa
     }
 
 
-def test_sdk_dispatch_subprocess_uses_plugin_owned_timeout(tmp_path: Path, monkeypatch) -> None:
+def test_sdk_role_subprocess_uses_plugin_owned_timeout(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     project = tmp_path / "repo"
     init_repo(project)
@@ -464,24 +809,17 @@ def test_sdk_dispatch_subprocess_uses_plugin_owned_timeout(tmp_path: Path, monke
     def fake_run(*args, **kwargs):
         assert kwargs["timeout"] == module.SDK_DISPATCH_TIMEOUT_SECONDS
         payload = json.loads(kwargs["input"])
-        raw_dir = Path(payload["raw_dir"])
-        raw_dir.mkdir(parents=True, exist_ok=True)
-        raw_path = raw_dir / f"{payload['roles'][0]}.txt"
-        raw_path.write_text(NO_BLOCKING_REVIEW, encoding="utf-8")
+        assert payload["roles"] == ["spec-alignment"]
         raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
 
-    reviewers = module.run_sdk_dispatch_subprocess(review_input, sys.executable)
+    status, output = module.run_sdk_role_subprocess(
+        review_input, sys.executable, "spec-alignment"
+    )
 
-    raw_dir = input_file.parent.parent / "debug" / "raw"
-    missing_raw = raw_dir / "implementation-correctness.txt"
-    assert (raw_dir / "spec-alignment.txt").is_file()
-    assert missing_raw.is_file()
-    assert "sdk_dispatch_timeout" in missing_raw.read_text(encoding="utf-8")
-    assert [reviewer["role"] for reviewer in reviewers] == ["spec-alignment", "implementation-correctness"]
-    assert "No findings." in reviewers[0]["text"]
-    assert "Severity: CRITICAL" in reviewers[1]["text"]
+    assert status == "timed_out"
+    assert "Reviewer dispatch timed out" in output
 
 
 def test_missing_input_file_fails(tmp_path: Path) -> None:
@@ -743,7 +1081,11 @@ def test_clean_worktree_checks_reuse_runtime_allowlist(tmp_path: Path, monkeypat
 
     monkeypatch.setattr(module, "ensure_clean_subject", fake_ensure_clean_subject)
     monkeypatch.setattr(module, "resolve_sdk_python", lambda explicit, require_real_sdk: "fake-sdk")
-    monkeypatch.setattr(module, "dispatch_reviewers", lambda review_args, sdk_python: reviewer_results(module))
+    monkeypatch.setattr(
+        module,
+        "run_sdk_role_subprocess",
+        lambda review_args, sdk_python, role: ("completed", NO_BLOCKING_REVIEW),
+    )
     monkeypatch.chdir(project)
 
     assert module.run_review(parsed) == 0
@@ -756,6 +1098,7 @@ def test_clean_worktree_checks_reuse_runtime_allowlist(tmp_path: Path, monkeypat
         input_file.resolve(),
         (output_dir / "review-report.md").resolve(),
         (output_dir / "review-pass.json").resolve(),
+        (output_dir / "review-state.json").resolve(),
         (debug_dir / "review-input.json").resolve(),
         (debug_dir / "prompts" / "spec-alignment.txt").resolve(),
         (debug_dir / "prompts" / "implementation-correctness.txt").resolve(),
@@ -820,13 +1163,14 @@ def test_reviewer_prompt_references_review_input_file_only(tmp_path: Path, monke
     )
 
     prompt = module.reviewer_prompt(review_input, "spec-alignment")
+    state_file = input_file.parent.parent / "review-state.json"
 
-    assert f"Read: {input_file}" in prompt
-    assert "Review only base_ref...head_ref from the input file." in prompt
-    assert "Use spec_file, design_file, and plan_file as requirements context." in prompt
-    assert f"git diff {base}...{head}" in prompt
-    assert f"git log {base}..{head} --oneline" in prompt
-    assert f"git diff --name-status --find-renames --find-copies-harder {base}...{head}" in prompt
+    assert str(input_file) in prompt
+    assert str(state_file) in prompt
+    assert "_role-input" in prompt
+    assert f"git diff {base}...{head}" not in prompt
+    assert f"git log {base}..{head} --oneline" not in prompt
+    assert f"git diff --name-status --find-renames --find-copies-harder {base}...{head}" not in prompt
     assert "Return only the lightweight Markdown format below." in prompt
     assert "Do not use JSON." in prompt
     assert "# Review Result:" in prompt
@@ -857,12 +1201,17 @@ def test_reviewer_prompt_template_uses_limited_variables(tmp_path: Path, monkeyp
     assert set(captured_values) == {
         "role",
         "input_file_path",
-        "review_subject_commands",
+        "state_file_path",
+        "role_input_command",
         "severity_rubric",
         "role_focus",
     }
     assert captured_values["role"] == "implementation-correctness"
     assert captured_values["input_file_path"] == str(review_input.input_file)
+    assert captured_values["state_file_path"] == str(
+        review_input.output_dir / "review-state.json"
+    )
+    assert "_role-input" in captured_values["role_input_command"]
     for legacy_key in ["change", "manifest_path", "changed_files", "context_files", "tasks_file"]:
         assert legacy_key not in captured_values
 
@@ -1102,15 +1451,16 @@ def test_reviewer_prompt_references_review_input_not_diff_file(tmp_path: Path, m
     )
 
     prompt = module.reviewer_prompt(review, "spec-alignment")
+    state_file = input_file.parent.parent / "review-state.json"
 
     assert "Role: spec-alignment" in prompt
     assert "Return only the lightweight Markdown format below." in prompt
-    assert f"Read: {input_file}" in prompt
-    assert "Review only base_ref...head_ref from the input file." in prompt
-    assert "Use spec_file, design_file, and plan_file as requirements context." in prompt
-    assert f"git diff {base}...{head}" in prompt
-    assert f"git log {base}..{head} --oneline" in prompt
-    assert f"git diff --name-status --find-renames --find-copies-harder {base}...{head}" in prompt
+    assert str(input_file) in prompt
+    assert str(state_file) in prompt
+    assert "_role-input" in prompt
+    assert f"git diff {base}...{head}" not in prompt
+    assert f"git log {base}..{head} --oneline" not in prompt
+    assert f"git diff --name-status --find-renames --find-copies-harder {base}...{head}" not in prompt
     assert "Change: demo-change" not in prompt
     assert f"Base ref: {base}" not in prompt
     assert f"Head ref: {head}" not in prompt
@@ -1129,7 +1479,9 @@ def test_reviewer_prompt_references_input_file_and_role_rubrics(tmp_path: Path) 
         prompt = module.reviewer_prompt(review, role)
         assert f"Focus for {role}:" in prompt
         assert "Severity rubric:" in prompt
-        assert f"Read: {review.input_file}" in prompt
+        assert str(review.input_file) in prompt
+        assert str(review.output_dir / "review-state.json") in prompt
+        assert "_role-input" in prompt
         assert "Manifest file:" not in prompt
         assert "# Review Result:" in prompt
 
@@ -1190,8 +1542,10 @@ def test_reviewer_prompt_does_not_inline_large_diff_or_context(tmp_path: Path, m
 
     prompt = module.reviewer_prompt(review, "implementation-correctness")
 
-    assert f"Read: {input_file}" in prompt
-    assert f"git diff {base}...{head}" in prompt
+    assert str(input_file) in prompt
+    assert str(review.output_dir / "review-state.json") in prompt
+    assert "_role-input" in prompt
+    assert f"git diff {base}...{head}" not in prompt
     assert f"Spec file: {spec_file}" not in prompt
     assert f"Design file: {design_file}" not in prompt
     assert f"Plan file: {plan_file}" not in prompt
@@ -1207,37 +1561,9 @@ def test_reviewer_prompt_does_not_inline_large_diff_or_context(tmp_path: Path, m
     assert len(prompt) < 5000
 
 
-def test_sdk_dispatch_subprocess_writes_debug_prompt_artifacts(tmp_path: Path, monkeypatch) -> None:
-    module = load_script_module()
-    review = make_review_args_for_module(module, tmp_path, debug=True)
-    captured_payload = None
-
-    def fake_run(*args, **kwargs):
-        nonlocal captured_payload
-        captured_payload = json.loads(kwargs["input"])
-        return subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout=json.dumps([{"role": "spec-alignment", "text": NO_BLOCKING_REVIEW}]),
-            stderr="",
-        )
-
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
-
-    assert module.run_sdk_dispatch_subprocess(review, sys.executable) == [{"role": "spec-alignment", "text": NO_BLOCKING_REVIEW}]
-
-    prompts_dir = review.output_dir / "debug" / "prompts"
-    assert {path.name for path in prompts_dir.iterdir()} == {
-        "spec-alignment.txt",
-        "implementation-correctness.txt",
-    }
-    assert captured_payload["raw_dir"] == str(review.output_dir / "debug" / "raw")
-    assert captured_payload["force_exit"] is True
-    assert "readonly_tools" not in captured_payload
-    assert "Role: spec-alignment" in (prompts_dir / "spec-alignment.txt").read_text(encoding="utf-8")
-
-
-def test_sdk_dispatch_subprocess_uses_only_two_roles(tmp_path: Path, monkeypatch) -> None:
+def test_sdk_role_subprocess_payload_contains_only_requested_role(
+    tmp_path: Path, monkeypatch
+) -> None:
     module = load_script_module()
     review_input = make_review_input_for_module(module, tmp_path)
     captured_payload = None
@@ -1250,8 +1576,11 @@ def test_sdk_dispatch_subprocess_uses_only_two_roles(tmp_path: Path, monkeypatch
             returncode=0,
             stdout=json.dumps(
                 [
-                    {"role": "spec-alignment", "text": NO_BLOCKING_REVIEW},
-                    {"role": "implementation-correctness", "text": NO_BLOCKING_REVIEW},
+                    {
+                        "role": "spec-alignment",
+                        "execution_status": "completed",
+                        "text": NO_BLOCKING_REVIEW,
+                    }
                 ]
             ),
             stderr="",
@@ -1259,37 +1588,48 @@ def test_sdk_dispatch_subprocess_uses_only_two_roles(tmp_path: Path, monkeypatch
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
 
-    results = module.run_sdk_dispatch_subprocess(review_input, sys.executable)
+    status, output = module.run_sdk_role_subprocess(
+        review_input, sys.executable, "spec-alignment"
+    )
 
-    assert [item["role"] for item in results] == ["spec-alignment", "implementation-correctness"]
-    assert captured_payload["roles"] == ["spec-alignment", "implementation-correctness"]
+    assert (status, output) == ("completed", NO_BLOCKING_REVIEW)
+    assert captured_payload["roles"] == ["spec-alignment"]
+    assert set(captured_payload["prompts"]) == {"spec-alignment"}
     assert "readonly_tools" not in captured_payload
     assert "raw_dir" not in captured_payload
 
 
-def test_sdk_dispatch_subprocess_uses_plugin_owned_timeout_without_debug(tmp_path: Path, monkeypatch) -> None:
+def test_sdk_role_subprocess_whitespace_result_is_failed(
+    tmp_path: Path, monkeypatch
+) -> None:
     module = load_script_module()
-    review = make_review_args_for_module(module, tmp_path)
-    captured_timeout = None
+    review_input = make_review_input_for_module(module, tmp_path)
 
     def fake_run(*args, **kwargs):
-        nonlocal captured_timeout
-        captured_timeout = kwargs["timeout"]
-        payload = json.loads(kwargs["input"])
         return subprocess.CompletedProcess(
             args=args[0],
             returncode=0,
-            stdout=json.dumps([{"role": role, "text": NO_BLOCKING_REVIEW} for role in payload["roles"]]),
+            stdout=json.dumps(
+                [
+                    {
+                        "role": "spec-alignment",
+                        "execution_status": "completed",
+                        "text": " \n\t",
+                    }
+                ]
+            ),
             stderr="",
         )
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
 
-    results = module.run_sdk_dispatch_subprocess(review, sys.executable)
+    status, output = module.run_sdk_role_subprocess(
+        review_input, sys.executable, "spec-alignment"
+    )
 
-    assert captured_timeout == 540
-    assert module.SDK_DISPATCH_TIMEOUT_SECONDS == 540
-    assert [result["role"] for result in results] == module.REVIEWER_ROLES
+    assert status == "failed"
+    assert "Severity: CRITICAL" in output
+    assert "invalid role result" in output
 
 
 def test_sdk_dispatch_writes_raw_reviewer_output(monkeypatch, tmp_path: Path) -> None:
@@ -1326,6 +1666,1283 @@ def test_sdk_dispatch_writes_raw_reviewer_output(monkeypatch, tmp_path: Path) ->
     assert module.run_sdk_dispatch() == 0
 
     assert (raw_dir / "spec-alignment.txt").read_text(encoding="utf-8") == NO_BLOCKING_REVIEW
+
+
+def invoke_task2_sdk_dispatch(module, monkeypatch, capsys, query) -> dict:
+    class FakeClaudeAgentOptions:
+        def __init__(self, **kwargs):
+            pass
+
+    monkeypatch.setitem(
+        sys.modules,
+        "claude_agent_sdk",
+        types.SimpleNamespace(ClaudeAgentOptions=FakeClaudeAgentOptions, query=query),
+    )
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(
+            json.dumps(
+                {
+                    "cwd": str(REPO_ROOT),
+                    "roles": ["spec-alignment"],
+                    "prompts": {"spec-alignment": "prompt"},
+                }
+            )
+        ),
+    )
+    assert module.run_sdk_dispatch() == 0
+    return json.loads(capsys.readouterr().out)[0]
+
+
+def test_task2_sdk_dispatch_nonempty_result_is_completed(monkeypatch, capsys) -> None:
+    module = load_script_module()
+
+    async def fake_query(*, prompt, options):
+        yield types.SimpleNamespace(result=BLOCKING_REVIEW)
+
+    result = invoke_task2_sdk_dispatch(module, monkeypatch, capsys, fake_query)
+
+    assert result["execution_status"] == "completed"
+    assert result["text"] == BLOCKING_REVIEW
+
+
+def test_task2_sdk_dispatch_empty_result_is_failed(monkeypatch, capsys) -> None:
+    module = load_script_module()
+
+    async def fake_query(*, prompt, options):
+        if False:
+            yield
+
+    result = invoke_task2_sdk_dispatch(module, monkeypatch, capsys, fake_query)
+
+    assert result["execution_status"] == "failed"
+    assert "Reviewer returned empty output" in result["text"]
+
+
+def test_task2_sdk_dispatch_whitespace_result_is_failed(monkeypatch, capsys) -> None:
+    module = load_script_module()
+
+    async def fake_query(*, prompt, options):
+        yield types.SimpleNamespace(result=" \n\t")
+
+    result = invoke_task2_sdk_dispatch(module, monkeypatch, capsys, fake_query)
+
+    assert result["execution_status"] == "failed"
+    assert "Severity: CRITICAL" in result["text"]
+    assert "Reviewer returned empty output" in result["text"]
+
+
+def test_task2_sdk_dispatch_query_exception_is_failed(monkeypatch, capsys) -> None:
+    module = load_script_module()
+
+    async def fake_query(*, prompt, options):
+        raise RuntimeError("query broke")
+        yield
+
+    result = invoke_task2_sdk_dispatch(module, monkeypatch, capsys, fake_query)
+
+    assert result["execution_status"] == "failed"
+    assert "RuntimeError: query broke" in result["text"]
+
+
+def test_task2_sdk_dispatch_wait_timeout_is_timed_out(monkeypatch, capsys) -> None:
+    module = load_script_module()
+
+    async def fake_query(*, prompt, options):
+        yield types.SimpleNamespace(result=NO_BLOCKING_REVIEW)
+
+    async def fake_wait_for(awaitable, timeout):
+        assert timeout == module.SDK_REVIEWER_TIMEOUT_SECONDS
+        awaitable.close()
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(asyncio, "wait_for", fake_wait_for)
+    result = invoke_task2_sdk_dispatch(module, monkeypatch, capsys, fake_query)
+
+    assert result["execution_status"] == "timed_out"
+    assert "Reviewer timed out" in result["text"]
+
+
+def test_completed_role_is_saved_before_sibling_timeout(tmp_path: Path, monkeypatch) -> None:
+    project, input_file = committed_review_input(tmp_path)
+    module = load_script_module()
+    state_path = input_file.parent.parent / "review-state.json"
+
+    def fake_role(_review_input, _python, role):
+        if role == "spec-alignment":
+            return "completed", "# Review Result\n## Findings\nNone\n"
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if state_path.exists():
+                saved = json.loads(state_path.read_text(encoding="utf-8"))
+                if saved["roles"]["spec-alignment"].get("status") == "completed":
+                    break
+            time.sleep(0.01)
+        else:
+            raise AssertionError("completed sibling was not persisted immediately")
+        failure = module.reviewer_failure(
+            role,
+            "Reviewer timed out",
+            "Exceeded 480 seconds.",
+            "Retry",
+        )
+        return "timed_out", failure["text"]
+
+    monkeypatch.setattr(
+        module,
+        "resolve_sdk_python",
+        lambda explicit, require_real_sdk: "fake-sdk",
+    )
+    monkeypatch.setattr(module, "run_sdk_role_subprocess", fake_role, raising=False)
+
+    result = run(*review_args_from_input(input_file), cwd=project)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert state["roles"]["spec-alignment"]["status"] == "completed"
+    assert state["roles"]["implementation-correctness"]["status"] == "timed_out"
+    for role in module.REVIEWER_ROLES:
+        output = state["roles"][role]["output"]
+        assert state["roles"][role]["output_hash"] == module.sha256_bytes(output.encode("utf-8"))
+
+
+def test_parent_future_exception_is_saved_as_failed_markdown(tmp_path: Path, monkeypatch) -> None:
+    project, input_file = committed_review_input(tmp_path)
+    module = load_script_module()
+
+    def fake_role(_review_input, _python, role):
+        if role == "implementation-correctness":
+            raise RuntimeError("worker broke")
+        return "completed", NO_BLOCKING_REVIEW
+
+    monkeypatch.setattr(module, "run_sdk_role_subprocess", fake_role, raising=False)
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        state = module.initial_review_state(review_input)
+        module.atomic_write_json(review_input.output_dir / "review-state.json", state)
+        module.dispatch_roles(review_input, "fake-sdk", state, module.REVIEWER_ROLES)
+
+    role_state = state["roles"]["implementation-correctness"]
+    assert role_state["status"] == "failed"
+    assert isinstance(role_state["output"], str)
+    assert "RuntimeError: worker broke" in role_state["output"]
+    assert role_state["output_hash"] == module.sha256_bytes(role_state["output"].encode("utf-8"))
+
+
+def test_record_role_result_rejects_whitespace_completed_output() -> None:
+    module = load_script_module()
+    state = {"roles": {"spec-alignment": {"attempts": []}}}
+
+    module.record_role_result(state, "spec-alignment", "completed", " \n\t")
+
+    role_state = state["roles"]["spec-alignment"]
+    assert role_state["status"] == "failed"
+    assert role_state["output"].strip()
+    assert "Severity: CRITICAL" in role_state["output"]
+    assert role_state["output_hash"] == module.sha256_bytes(
+        role_state["output"].encode("utf-8")
+    )
+
+
+@pytest.mark.parametrize(
+    ("previous_finished_at", "started_at", "finished_at", "expected"),
+    [
+        (
+            "2026-07-10T01:02:10.000000Z",
+            "2026-07-10T01:02:05.000000Z",
+            "2026-07-10T01:02:12.000000Z",
+            ("2026-07-10T01:02:10.000000Z", "2026-07-10T01:02:12.000000Z"),
+        ),
+        (
+            "2026-07-10T01:02:04.000000Z",
+            "2026-07-10T01:02:06.000000Z",
+            "2026-07-10T01:02:05.000000Z",
+            ("2026-07-10T01:02:06.000000Z", "2026-07-10T01:02:06.000000Z"),
+        ),
+    ],
+)
+def test_record_role_result_clamps_reversed_attempt_boundaries(
+    previous_finished_at: str,
+    started_at: str,
+    finished_at: str,
+    expected: tuple[str, str],
+) -> None:
+    module = load_script_module()
+    role = "spec-alignment"
+    state = {"roles": {role: {"attempts": []}}}
+    module.record_role_result(
+        state,
+        role,
+        "completed",
+        NO_BLOCKING_REVIEW,
+        "2026-07-10T01:02:00.000000Z",
+        previous_finished_at,
+    )
+
+    module.record_role_result(
+        state, role, "completed", NO_BLOCKING_REVIEW, started_at, finished_at
+    )
+
+    attempt = state["roles"][role]["attempts"][-1]
+    assert (attempt["started_at"], attempt["finished_at"]) == expected
+
+
+def test_dispatch_records_numbered_attempt_timestamps_at_boundaries(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_script_module()
+    review_input = make_review_input_for_module(module, tmp_path)
+    role = "spec-alignment"
+    state = {"roles": {role: {"attempts": []}}}
+    events = []
+    real_datetime = module.datetime
+    timestamps = iter(
+        [
+            real_datetime(2026, 7, 10, 1, 2, 3, tzinfo=module.UTC),
+            real_datetime(2026, 7, 10, 1, 2, 4, tzinfo=module.UTC),
+            real_datetime(2026, 7, 10, 1, 2, 5, tzinfo=module.UTC),
+            real_datetime(2026, 7, 10, 1, 2, 6, tzinfo=module.UTC),
+        ]
+    )
+
+    class FakeDateTime(real_datetime):
+        @classmethod
+        def now(cls, timezone):
+            assert timezone is module.UTC
+            value = next(timestamps)
+            events.append(value.isoformat(timespec="microseconds").replace("+00:00", "Z"))
+            return value
+
+    def fake_role(*_args):
+        events.append("worker")
+        return "completed", NO_BLOCKING_REVIEW
+
+    monkeypatch.setattr(module, "datetime", FakeDateTime)
+    monkeypatch.setattr(module, "run_sdk_role_subprocess", fake_role)
+
+    module.dispatch_roles(review_input, "fake-sdk", state, [role])
+    module.dispatch_roles(review_input, "fake-sdk", state, [role])
+
+    role_state = state["roles"][role]
+    assert events == [
+        "2026-07-10T01:02:03.000000Z",
+        "worker",
+        "2026-07-10T01:02:04.000000Z",
+        "2026-07-10T01:02:05.000000Z",
+        "worker",
+        "2026-07-10T01:02:06.000000Z",
+    ]
+    assert [attempt["number"] for attempt in role_state["attempts"]] == [1, 2]
+    assert role_state["attempts"][0] == {
+        "number": 1,
+        "started_at": "2026-07-10T01:02:03.000000Z",
+        "finished_at": "2026-07-10T01:02:04.000000Z",
+        "status": "completed",
+        "output": NO_BLOCKING_REVIEW,
+        "output_hash": module.sha256_bytes(NO_BLOCKING_REVIEW.encode("utf-8")),
+    }
+    assert role_state["attempts"][1]["started_at"] == "2026-07-10T01:02:05.000000Z"
+    assert role_state["attempts"][1]["finished_at"] == "2026-07-10T01:02:06.000000Z"
+    assert role_state["status"] == "completed"
+    assert role_state["output"] == NO_BLOCKING_REVIEW
+    assert role_state["output_hash"] == module.sha256_bytes(
+        NO_BLOCKING_REVIEW.encode("utf-8")
+    )
+    assert "number" not in role_state
+    assert "started_at" not in role_state
+    assert "finished_at" not in role_state
+
+
+def test_report_is_rebuilt_only_from_state_and_top_level_hash_is_saved(
+    tmp_path: Path,
+) -> None:
+    project, input_file = committed_review_input(tmp_path)
+    module = load_script_module()
+
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        state = module.initial_review_state(review_input)
+        module.record_role_result(
+            state,
+            "spec-alignment",
+            "completed",
+            "# Review Result: spec-alignment\n## Findings\nSpec state output\n",
+        )
+        module.record_role_result(
+            state,
+            "implementation-correctness",
+            "failed",
+            "# Review Result: implementation-correctness\n## Findings\nImplementation state output\n",
+        )
+        state["subject"].update(
+            {
+                "change": "state-only-change",
+                "base_ref": "state-only-base",
+                "head_ref": "state-only-head",
+            }
+        )
+        before = json.loads(json.dumps(state))
+        report_text = module.render_report(state)
+        with pytest.raises(TypeError):
+            module.render_report(review_input, state)
+        module.atomic_write_json(review_input.output_dir / "review-state.json", state)
+        assert module.write_outputs(review_input, state) == 0
+
+    report_path = review_input.output_dir / "review-report.md"
+    report = report_path.read_text(encoding="utf-8")
+    saved = json.loads((review_input.output_dir / "review-state.json").read_text(encoding="utf-8"))
+    assert report == report_text
+    assert report_path.read_bytes() == report_text.encode("utf-8")
+    assert "# Cross-Agent Review: state-only-change" in report
+    assert "- Base ref: `state-only-base`" in report
+    assert "- Head ref: `state-only-head`" in report
+    assert "Spec state output" in report
+    assert "Implementation state output" in report
+    assert saved["report_hash"] == module.sha256_bytes(report_path.read_bytes())
+    assert "report" not in saved
+    assert set(saved) == {*before, "report_hash"}
+    for key, value in before.items():
+        assert saved[key] == value
+
+
+def review_state_for_retry(
+    tmp_path: Path, statuses: tuple[str, str]
+) -> tuple[Path, Path, dict]:
+    project, input_file = committed_review_input(tmp_path)
+    module = load_script_module()
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        state = module.initial_review_state(review_input)
+        for index, (role, status) in enumerate(
+            zip(module.REVIEWER_ROLES, statuses, strict=True), start=1
+        ):
+            module.record_role_result(
+                state,
+                role,
+                status,
+                f"# Review Result: {role}\n## Findings\nOriginal {status} output\n",
+                f"2026-07-10T01:02:0{index}.000000Z",
+                f"2026-07-10T01:02:1{index}.000000Z",
+            )
+        if "reused" in statuses:
+            state.update(
+                {
+                    "source_head_ref": review_input.base_ref,
+                    "source_state": (
+                        Path(".local")
+                        / "cross-agent-review"
+                        / review_input.change
+                        / review_input.base_ref[:12]
+                        / "review-state.json"
+                    ).as_posix(),
+                    "validated_changes": [],
+                }
+            )
+        module.write_outputs(review_input, state)
+    saved = json.loads(
+        (input_file.parent.parent / "review-state.json").read_text(encoding="utf-8")
+    )
+    return project, input_file, saved
+
+
+@pytest.mark.parametrize(
+    ("preserved_status", "retry_status"),
+    [("completed", "failed"), ("reused", "timed_out")],
+)
+def test_retry_dispatches_only_failed_role_and_preserves_success(
+    tmp_path: Path,
+    monkeypatch,
+    preserved_status: str,
+    retry_status: str,
+) -> None:
+    project, input_file, original_state = review_state_for_retry(
+        tmp_path, (preserved_status, retry_status)
+    )
+    module = load_script_module()
+    calls: list[list[str]] = []
+
+    def fake_dispatch(review_input, sdk_python, state, roles):
+        calls.append(list(roles))
+        assert sdk_python == "fake-sdk"
+        assert state["roles"][roles[0]]["scope"] == original_state["roles"][roles[0]][
+            "scope"
+        ]
+        module.record_role_result(
+            state,
+            roles[0],
+            "completed",
+            "# Review Result: implementation-correctness\n## Findings\nRetry output\n",
+            "2026-07-10T02:03:04.000000Z",
+            "2026-07-10T02:03:05.000000Z",
+        )
+        module.atomic_write_json(review_input.output_dir / "review-state.json", state)
+        return state
+
+    monkeypatch.setattr(module, "dispatch_roles", fake_dispatch)
+    monkeypatch.setattr(
+        module,
+        "resolve_sdk_python",
+        lambda explicit, require_real_sdk: "fake-sdk",
+    )
+
+    result = run("retry", "--input-file", str(input_file), cwd=project)
+    state_path = input_file.parent.parent / "review-state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    report_path = input_file.parent.parent / "review-report.md"
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert calls == [["implementation-correctness"]]
+    assert state["roles"]["spec-alignment"] == original_state["roles"]["spec-alignment"]
+    retried = state["roles"]["implementation-correctness"]
+    assert len(retried["attempts"]) == 2
+    assert retried["attempts"][0] == original_state["roles"][
+        "implementation-correctness"
+    ]["attempts"][0]
+    assert retried["attempts"][1]["number"] == 2
+    assert retried["attempts"][1]["started_at"] == "2026-07-10T02:03:04.000000Z"
+    assert retried["attempts"][1]["finished_at"] == "2026-07-10T02:03:05.000000Z"
+    assert retried["status"] == "completed"
+    assert "Retry output" in report_path.read_text(encoding="utf-8")
+    assert state["report_hash"] == module.sha256_bytes(report_path.read_bytes())
+
+
+def test_retry_with_no_retryable_roles_does_not_dispatch(tmp_path: Path, monkeypatch) -> None:
+    project, input_file, _ = review_state_for_retry(tmp_path, ("completed", "reused"))
+    module = load_script_module()
+    state_path = input_file.parent.parent / "review-state.json"
+    before = state_path.read_bytes()
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("no reviewer or SDK resolution should run")
+
+    monkeypatch.setattr(module, "dispatch_roles", unexpected)
+    monkeypatch.setattr(module, "resolve_sdk_python", unexpected)
+
+    result = run("retry", "--input-file", str(input_file), cwd=project)
+
+    assert result.returncode != 0
+    assert result.stdout == "status: no_retryable_roles\n"
+    assert state_path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ("schema", "state_mismatch"),
+        ("subject_change", "state_mismatch"),
+        ("subject_mode", "state_mismatch"),
+        ("subject_base", "state_mismatch"),
+        ("subject_head", "state_mismatch"),
+        ("subject_input_file", "state_mismatch"),
+        ("subject_contexts", "state_mismatch"),
+        ("input_hash", "input_hash_mismatch"),
+        ("files", "state_mismatch"),
+        ("roles", "state_mismatch"),
+        ("scope", "retry_scope_mismatch"),
+        ("output_hash", "output_hash_mismatch"),
+        ("attempt_output_hash", "output_hash_mismatch"),
+        ("attempts", "state_mismatch"),
+        ("top_extra", "state_mismatch"),
+        ("role_extra", "state_mismatch"),
+        ("attempt_extra", "state_mismatch"),
+        ("role_status_list", "state_mismatch"),
+        ("role_status_dict", "state_mismatch"),
+        ("attempt_status_list", "state_mismatch"),
+        ("attempt_status_dict", "state_mismatch"),
+        ("attempt_number_bool", "state_mismatch"),
+        ("attempt_number_float", "state_mismatch"),
+    ],
+)
+def test_retry_rejects_state_not_bound_to_current_input_and_repository(
+    tmp_path: Path, monkeypatch, mutation: str, reason: str
+) -> None:
+    project, input_file, state = review_state_for_retry(
+        tmp_path, ("completed", "timed_out")
+    )
+    module = load_script_module()
+    role = "implementation-correctness"
+    if mutation == "schema":
+        state["schema_version"] = "cross-agent-review-state/v0"
+    elif mutation.startswith("subject_"):
+        key = mutation.removeprefix("subject_")
+        if key == "contexts":
+            state["subject"][key]["spec"]["hash"] = "sha256:wrong"
+        else:
+            state["subject"][{"base": "base_ref", "head": "head_ref"}.get(key, key)] = (
+                "wrong"
+            )
+    elif mutation == "input_hash":
+        state["subject"]["input_hash"] = "sha256:wrong"
+    elif mutation == "files":
+        state["files"][0]["classification"] = "summary_only"
+    elif mutation == "roles":
+        state["roles"]["unbound-reviewer"] = state["roles"][role].copy()
+    elif mutation == "scope":
+        state["roles"][role]["scope"]["full_review"].append("outside.py")
+    elif mutation == "output_hash":
+        state["roles"][role]["output_hash"] = "sha256:wrong"
+    elif mutation == "attempt_output_hash":
+        state["roles"][role]["attempts"][0]["output_hash"] = "sha256:wrong"
+    elif mutation == "attempts":
+        state["roles"][role]["attempts"] = []
+    elif mutation == "top_extra":
+        state["extra"] = True
+    elif mutation == "role_extra":
+        state["roles"][role]["extra"] = True
+    elif mutation == "attempt_extra":
+        state["roles"][role]["attempts"][0]["extra"] = True
+    elif mutation.startswith("role_status_"):
+        state["roles"][role]["status"] = [] if mutation.endswith("list") else {}
+    elif mutation.startswith("attempt_status_"):
+        state["roles"][role]["attempts"][0]["status"] = (
+            [] if mutation.endswith("list") else {}
+        )
+    elif mutation == "attempt_number_bool":
+        state["roles"][role]["attempts"][0]["number"] = True
+    elif mutation == "attempt_number_float":
+        state["roles"][role]["attempts"][0]["number"] = 1.0
+    state_path = input_file.parent.parent / "review-state.json"
+    report_path = input_file.parent.parent / "review-report.md"
+    module.atomic_write_json(state_path, state)
+    state_before = state_path.read_bytes()
+    report_before = report_path.read_bytes()
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("invalid state must be rejected before SDK resolution or dispatch")
+
+    monkeypatch.setattr(module, "resolve_sdk_python", unexpected)
+    monkeypatch.setattr(module, "dispatch_roles", unexpected)
+
+    result = run("retry", "--input-file", str(input_file), cwd=project)
+
+    assert result.returncode != 0
+    assert f"error: {reason}" in result.stdout
+    assert result.stderr == ""
+    assert state_path.read_bytes() == state_before
+    assert report_path.read_bytes() == report_before
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ("missing_report", "output_hash_mismatch"),
+        ("changed_report", "output_hash_mismatch"),
+        ("missing_report_hash", "state_mismatch"),
+        ("malformed_report_hash", "output_hash_mismatch"),
+        ("changed_report_hash", "output_hash_mismatch"),
+    ],
+)
+def test_retry_rejects_report_not_bound_to_state_before_dispatch(
+    tmp_path: Path, monkeypatch, mutation: str, reason: str
+) -> None:
+    project, input_file, state = review_state_for_retry(
+        tmp_path, ("completed", "timed_out")
+    )
+    module = load_script_module()
+    state_path = input_file.parent.parent / "review-state.json"
+    report_path = input_file.parent.parent / "review-report.md"
+    if mutation == "missing_report":
+        report_path.unlink()
+    elif mutation == "changed_report":
+        report_path.write_text("changed report\n", encoding="utf-8")
+    elif mutation == "missing_report_hash":
+        state.pop("report_hash")
+        module.atomic_write_json(state_path, state)
+    elif mutation == "malformed_report_hash":
+        state["report_hash"] = "sha256:not-a-hash"
+        module.atomic_write_json(state_path, state)
+    elif mutation == "changed_report_hash":
+        state["report_hash"] = "sha256:" + "0" * 64
+        module.atomic_write_json(state_path, state)
+    state_before = state_path.read_bytes()
+    report_before = report_path.read_bytes() if report_path.exists() else None
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("invalid report must be rejected before SDK resolution or dispatch")
+
+    monkeypatch.setattr(module, "resolve_sdk_python", unexpected)
+    monkeypatch.setattr(module, "dispatch_roles", unexpected)
+
+    result = run("retry", "--input-file", str(input_file), cwd=project)
+
+    assert result.returncode != 0
+    assert f"error: {reason}" in result.stdout
+    assert result.stderr == ""
+    assert state_path.read_bytes() == state_before
+    assert (report_path.read_bytes() if report_path.exists() else None) == report_before
+
+
+def test_retry_rejects_attempt_history_time_reversal_before_dispatch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project, input_file, state = review_state_for_retry(
+        tmp_path, ("completed", "timed_out")
+    )
+    module = load_script_module()
+    role = "implementation-correctness"
+    module.record_role_result(
+        state,
+        role,
+        "timed_out",
+        "# Review Result: implementation-correctness\n## Findings\nSecond timeout\n",
+        "2026-07-10T01:03:00.000000Z",
+        "2026-07-10T01:04:00.000000Z",
+    )
+    report_path = input_file.parent.parent / "review-report.md"
+    report_path.write_bytes(module.render_report(state).encode("utf-8"))
+    state["report_hash"] = module.sha256_bytes(report_path.read_bytes())
+    second = state["roles"][role]["attempts"][1]
+    second["started_at"] = "2026-07-10T01:01:00.000000Z"
+    second["finished_at"] = "2026-07-10T01:01:30.000000Z"
+    state_path = input_file.parent.parent / "review-state.json"
+    module.atomic_write_json(state_path, state)
+    state_before = state_path.read_bytes()
+    report_before = report_path.read_bytes()
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("reversed attempt history must be rejected before SDK resolution or dispatch")
+
+    monkeypatch.setattr(module, "resolve_sdk_python", unexpected)
+    monkeypatch.setattr(module, "dispatch_roles", unexpected)
+
+    result = run("retry", "--input-file", str(input_file), cwd=project)
+
+    assert result.returncode != 0
+    assert "error: state_mismatch" in result.stdout
+    assert result.stderr == ""
+    assert state_path.read_bytes() == state_before
+    assert report_path.read_bytes() == report_before
+
+
+def test_retry_rejects_malformed_state_as_state_mismatch(tmp_path: Path, monkeypatch) -> None:
+    project, input_file, _ = review_state_for_retry(tmp_path, ("completed", "failed"))
+    module = load_script_module()
+    state_path = input_file.parent.parent / "review-state.json"
+    state_path.write_text("{not-json\n", encoding="utf-8")
+    monkeypatch.setattr(module, "resolve_sdk_python", lambda *_args, **_kwargs: pytest.fail())
+    monkeypatch.setattr(module, "dispatch_roles", lambda *_args, **_kwargs: pytest.fail())
+
+    result = run("retry", "--input-file", str(input_file), cwd=project)
+
+    assert result.returncode != 0
+    assert "error: state_mismatch" in result.stdout
+
+
+def test_retry_parser_does_not_accept_scope_or_path_arguments(tmp_path: Path) -> None:
+    project, input_file, _ = review_state_for_retry(tmp_path, ("completed", "failed"))
+
+    result = run(
+        "retry",
+        "--input-file",
+        str(input_file),
+        "--paths",
+        "src/app.py",
+        cwd=project,
+    )
+
+    assert result.returncode == 2
+    assert "unrecognized arguments: --paths" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ("- [ ] one\n- [x] two\n", "- [x] one\n- [x] two\n"),
+        ("* [X] one\n", "* [ ] one\n"),
+    ],
+)
+def test_checkbox_only_accepts_only_checkbox_state(before: str, after: str) -> None:
+    module = load_script_module()
+
+    assert module.validate_checkbox_only(before.encode(), after.encode()) is None
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "reason"),
+    [
+        (b"- [ ] one\n", b"- [x] changed\n", "checkbox_content_changed"),
+        (b"- [ ] one\n", b"- [x] one\n- [ ] two\n", "checkbox_line_count_changed"),
+        (b"- [ ] one\n", b"- [x] one\r\n", "checkbox_content_changed"),
+        (b"\xff", b"\xff", "checkbox_not_utf8"),
+    ],
+)
+def test_checkbox_only_rejects_other_changes(
+    before: bytes, after: bytes, reason: str
+) -> None:
+    module = load_script_module()
+
+    assert module.validate_checkbox_only(before, after) == reason
+
+
+@pytest.mark.parametrize(
+    ("format_name", "before", "after"),
+    [
+        ("yaml", b"phase: build\nname: demo\n", b"phase: verify\nname: demo\n"),
+        ("json", b'{"phase":"build","name":"demo"}\n', b'{"phase":"verify","name":"demo"}\n'),
+    ],
+)
+def test_mapping_fields_only_accepts_declared_field(
+    format_name: str, before: bytes, after: bytes
+) -> None:
+    module = load_script_module()
+
+    assert module.validate_mapping_fields_only(before, after, format_name, ("phase",)) is None
+
+
+@pytest.mark.parametrize(
+    ("format_name", "before", "after", "reason"),
+    [
+        ("yaml", b"phase: build\nname: demo\n", b"phase: build\nname: changed\n", "mapping_undeclared_field_changed"),
+        ("yaml", b"phase: build\nphase: verify\n", b"phase: done\n", "mapping_duplicate_key"),
+        ("json", b'{"phase":"build","phase":"verify"}', b'{"phase":"done"}', "mapping_duplicate_key"),
+        ("yaml", b"- build\n", b"- verify\n", "mapping_not_mapping"),
+        ("yaml", b"1: build\n", b"1: verify\n", "mapping_non_string_key"),
+        ("yaml", b"phase: !Danger build\n", b"phase: verify\n", "mapping_parse_failed"),
+        ("yaml", b"phase: [\n", b"phase: verify\n", "mapping_parse_failed"),
+        ("json", b'{"phase":NaN}', b'{"phase":NaN}', "mapping_parse_failed"),
+        ("toml", b"phase = 'build'\n", b"phase = 'verify'\n", "mapping_unknown_format"),
+    ],
+)
+def test_mapping_fields_only_rejects_unsafe_or_undeclared_data(
+    format_name: str, before: bytes, after: bytes, reason: str
+) -> None:
+    module = load_script_module()
+
+    assert module.validate_mapping_fields_only(before, after, format_name, ("phase",)) == reason
+
+
+@pytest.mark.parametrize(
+    ("format_name", "before", "after"),
+    [
+        ("yaml", b"phase: build\nprotected: true\n", b"phase: build\nprotected: 1\n"),
+        ("json", b'{"phase":"build","protected":1}', b'{"phase":"build","protected":1.0}'),
+        (
+            "yaml",
+            b"phase: build\nprotected:\n  enabled: true\n",
+            b"phase: build\nprotected:\n  enabled: 1\n",
+        ),
+        (
+            "json",
+            b'{"phase":"build","protected":[1]}',
+            b'{"phase":"build","protected":[1.0]}',
+        ),
+        (
+            "yaml",
+            b"phase: build\nprotected: !!set\n  true: null\n",
+            b"phase: build\nprotected: !!set\n  1: null\n",
+        ),
+        (
+            "yaml",
+            b"phase: build\nprotected:\n  values: !!set\n    1: null\n",
+            b"phase: build\nprotected:\n  values: !!set\n    1.0: null\n",
+        ),
+    ],
+)
+def test_mapping_fields_only_rejects_undeclared_type_changes(
+    format_name: str, before: bytes, after: bytes
+) -> None:
+    module = load_script_module()
+
+    assert (
+        module.validate_mapping_fields_only(before, after, format_name, ("phase",))
+        == "mapping_undeclared_field_changed"
+    )
+
+
+def test_strict_equal_accepts_same_set_in_different_order() -> None:
+    module = load_script_module()
+
+    assert module.strict_equal({"alpha", 1}, {1, "alpha"})
+
+
+def prepare_revalidation(
+    tmp_path: Path,
+    *,
+    before: str = "- [ ] one\n",
+    after: str = "- [x] one\n",
+    policy: list[dict] | None = None,
+    ignored_context: str | None = None,
+    advance_head: bool = True,
+) -> tuple[Path, Path, Path, str, str]:
+    project = tmp_path / "repo"
+    base = init_repo(project)
+    write_file(project / "spec.md", "spec body\n")
+    write_file(project / "design.md", "design body\n")
+    target = write_file(project / "docs" / "superpowers" / "plans" / "demo.md", before)
+    write_file(project / "alternate-spec.md", "alternate spec\n")
+    if ignored_context is not None:
+        write_file(project / ".gitignore", f"{ignored_context}.md\n")
+    git(project, "add", ".")
+    git(project, "commit", "-m", "review baseline")
+    previous_head = git(project, "rev-parse", "HEAD")
+    policy = policy or [{"path": "docs/superpowers/plans/demo.md", "validator": "checkbox-only"}]
+    previous_input = write_review_input(
+        project,
+        base,
+        previous_head,
+        payload_overrides={"revalidation_policy": policy},
+        preserve_context=True,
+    )
+    module = load_script_module()
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=previous_input, debug=False, sdk_python=None)
+        )
+        state = module.initial_review_state(review_input)
+        for role in module.REVIEWER_ROLES:
+            module.record_role_result(
+                state,
+                role,
+                "completed",
+                f"# Review Result: {role}\n## Findings\nNo findings.\n",
+            )
+        module.write_outputs(review_input, state)
+
+    if not advance_head:
+        return project, previous_input.parent.parent / "review-state.json", previous_input, previous_head, previous_head
+
+    write_file(target, after)
+    git(project, "add", target.relative_to(project).as_posix())
+    git(project, "commit", "-m", "mechanical update")
+    current_head = git(project, "rev-parse", "HEAD")
+    current_input = write_review_input(
+        project,
+        base,
+        current_head,
+        payload_overrides={"revalidation_policy": policy},
+        preserve_context=True,
+    )
+    return project, previous_input.parent.parent / "review-state.json", current_input, previous_head, current_head
+
+
+def assert_revalidate_rejected(
+    monkeypatch,
+    project: Path,
+    previous_state: Path,
+    current_input: Path,
+    reason: str,
+) -> None:
+    module = load_script_module()
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("revalidate rejection must happen before SDK resolution or dispatch")
+
+    monkeypatch.setattr(module, "resolve_sdk_python", unexpected)
+    monkeypatch.setattr(module, "dispatch_roles", unexpected)
+    state_path = current_input.parent.parent / "review-state.json"
+    report_path = current_input.parent.parent / "review-report.md"
+
+    result = run(
+        "revalidate",
+        "--input-file",
+        str(current_input),
+        "--previous-state",
+        str(previous_state),
+        cwd=project,
+    )
+
+    assert result.returncode != 0
+    assert f"error: {reason}" in result.stdout
+    assert result.stderr == ""
+    assert not state_path.exists()
+    assert not report_path.exists()
+
+
+@pytest.mark.parametrize("context_name", ["spec", "design", "plan"])
+def test_revalidate_rejects_tampered_context_hash(
+    tmp_path: Path, monkeypatch, context_name: str
+) -> None:
+    project, previous_state, current_input, _previous_head, _current_head = prepare_revalidation(
+        tmp_path
+    )
+    module = load_script_module()
+    state = json.loads(previous_state.read_text(encoding="utf-8"))
+    state["subject"]["contexts"][context_name]["hash"] = "sha256:" + "0" * 64
+    module.atomic_write_json(previous_state, state)
+
+    assert_revalidate_rejected(
+        monkeypatch,
+        project,
+        previous_state,
+        current_input,
+        "context_hash_mismatch",
+    )
+
+
+@pytest.mark.parametrize("context_name", ["spec", "design"])
+def test_revalidate_rejects_ignored_context_missing_from_commits(
+    tmp_path: Path, monkeypatch, context_name: str
+) -> None:
+    project, previous_state, current_input, _previous_head, _current_head = prepare_revalidation(
+        tmp_path,
+        ignored_context=context_name,
+    )
+
+    assert_revalidate_rejected(
+        monkeypatch,
+        project,
+        previous_state,
+        current_input,
+        "context_git_blob_unavailable",
+    )
+
+
+@pytest.mark.parametrize("link_kind", ["hardlink", "symlink"])
+def test_revalidate_replaces_linked_report_without_changing_target(
+    tmp_path: Path, link_kind: str
+) -> None:
+    project, previous_state, current_input, _previous_head, _current_head = prepare_revalidation(
+        tmp_path
+    )
+    report_path = current_input.parent.parent / "review-report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    linked_target = write_file(tmp_path / f"{link_kind}-target.md", "do not change\n")
+    if link_kind == "hardlink":
+        os.link(linked_target, report_path)
+    else:
+        try:
+            report_path.symlink_to(linked_target)
+        except OSError as exc:
+            pytest.skip(f"symlink unavailable: {exc}")
+
+    result = run(
+        "revalidate",
+        "--input-file",
+        str(current_input),
+        "--previous-state",
+        str(previous_state),
+        cwd=project,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert linked_target.read_text(encoding="utf-8") == "do not change\n"
+    assert report_path.read_text(encoding="utf-8").startswith("# Cross-Agent Review:")
+    assert not report_path.is_symlink()
+
+
+def test_revalidate_rejects_same_head_before_incremental_work(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project, previous_state, current_input, _previous_head, _current_head = prepare_revalidation(
+        tmp_path,
+        advance_head=False,
+    )
+    state_before = previous_state.read_bytes()
+    report_path = previous_state.with_name("review-report.md")
+    report_before = report_path.read_bytes()
+    module = load_script_module()
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("same-head rejection must happen before incremental work or writes")
+
+    for name in (
+        "ensure_clean_subject",
+        "incremental_changes",
+        "write_outputs",
+        "resolve_sdk_python",
+        "dispatch_roles",
+    ):
+        monkeypatch.setattr(module, name, unexpected)
+
+    result = run(
+        "revalidate",
+        "--input-file",
+        str(current_input),
+        "--previous-state",
+        str(previous_state),
+        cwd=project,
+    )
+
+    assert result.returncode != 0
+    assert "error: same_head_ref" in result.stdout
+    assert previous_state.read_bytes() == state_before
+    assert report_path.read_bytes() == report_before
+
+
+def test_revalidate_rejects_previous_state_output_collision(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project, previous_state, current_input, _previous_head, _current_head = prepare_revalidation(
+        tmp_path
+    )
+    module = load_script_module()
+    with contextlib.chdir(project):
+        current = module.load_review_input(
+            argparse.Namespace(input_file=current_input, debug=False, sdk_python=None)
+        )
+    collision_current = module.ReviewInput(
+        **{**vars(current), "output_dir": previous_state.parent}
+    )
+    state_before = previous_state.read_bytes()
+    report_path = previous_state.with_name("review-report.md")
+    report_before = report_path.read_bytes()
+    monkeypatch.setattr(module, "load_review_input", lambda _args: collision_current)
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("output collision rejection must happen before incremental work or writes")
+
+    for name in (
+        "ensure_clean_subject",
+        "incremental_changes",
+        "write_outputs",
+        "resolve_sdk_python",
+        "dispatch_roles",
+    ):
+        monkeypatch.setattr(module, name, unexpected)
+
+    result = run(
+        "revalidate",
+        "--input-file",
+        str(current_input),
+        "--previous-state",
+        str(previous_state),
+        cwd=project,
+    )
+
+    assert result.returncode != 0
+    assert "error: previous_state_output_collision" in result.stdout
+    assert previous_state.read_bytes() == state_before
+    assert report_path.read_bytes() == report_before
+
+
+@pytest.mark.parametrize(
+    ("status", "path", "policy_count", "reason"),
+    [
+        ("M", "other.md", 1, "reuse_policy_missing"),
+        ("M", "target.md", 2, "reuse_policy_overlap"),
+        ("A", "target.md", 1, "unsupported_change_status"),
+        ("D", "target.md", 1, "unsupported_change_status"),
+        ("R100", "target.md", 1, "unsupported_change_status"),
+        ("C100", "target.md", 1, "unsupported_change_status"),
+        ("T", "target.md", 1, "unsupported_change_status"),
+        ("U", "target.md", 1, "unsupported_change_status"),
+        ("M", "spec.md", 1, "validator_failed"),
+        ("M", "design.md", 1, "validator_failed"),
+    ],
+)
+def test_revalidate_rejects_undeclared_overlapping_or_unsupported_changes(
+    tmp_path: Path,
+    status: str,
+    path: str,
+    policy_count: int,
+    reason: str,
+) -> None:
+    module = load_script_module()
+    policies = tuple(
+        module.RevalidationPolicy(path="target.md", validator="checkbox-only")
+        for _ in range(policy_count)
+    )
+    current = types.SimpleNamespace(
+        revalidation_policy=policies,
+        spec_file=tmp_path / "spec.md",
+        design_file=tmp_path / "design.md",
+        head_ref="current",
+    )
+
+    with contextlib.chdir(tmp_path), pytest.raises(ValueError) as exc_info:
+        module.validate_declared_changes(current, [{"status": status, "path": path}])
+
+    assert reason in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ("dirty", "dirty_worktree"),
+        ("head", "head_ref_mismatch"),
+        ("input_hash", "input_hash_mismatch"),
+        ("report_hash", "output_hash_mismatch"),
+        ("output_hash", "output_hash_mismatch"),
+        ("reused", "reused_source_not_allowed"),
+        ("state_change", "previous_state_location_mismatch"),
+        ("state_head", "previous_state_location_mismatch"),
+        ("state_path", "previous_state_location_mismatch"),
+    ],
+)
+def test_revalidate_rejects_invalid_source_before_writes_or_sdk(
+    tmp_path: Path, monkeypatch, mutation: str, reason: str
+) -> None:
+    project, previous_state, current_input, _previous_head, _current_head = prepare_revalidation(
+        tmp_path
+    )
+    module = load_script_module()
+    state = json.loads(previous_state.read_text(encoding="utf-8"))
+    if mutation == "dirty":
+        write_file(project / "dirty.txt", "dirty\n")
+    elif mutation == "head":
+        write_file(project / "later.txt", "later\n")
+        git(project, "add", "later.txt")
+        git(project, "commit", "-m", "later")
+    elif mutation == "input_hash":
+        previous_input = project / state["subject"]["input_file"]
+        previous_input.write_bytes(previous_input.read_bytes() + b"\n")
+    elif mutation == "report_hash":
+        report_path = previous_state.parent / "review-report.md"
+        report_path.write_bytes(report_path.read_bytes() + b"changed\n")
+    elif mutation == "output_hash":
+        state["roles"]["spec-alignment"]["output"] += "changed\n"
+        module.atomic_write_json(previous_state, state)
+    elif mutation == "reused":
+        role = state["roles"]["spec-alignment"]
+        role["status"] = "reused"
+        role["attempts"][-1]["status"] = "reused"
+        module.atomic_write_json(previous_state, state)
+    elif mutation == "state_change":
+        state["subject"]["change"] = "other"
+        module.atomic_write_json(previous_state, state)
+    elif mutation == "state_head":
+        state["subject"]["head_ref"] = "0" * 40
+        module.atomic_write_json(previous_state, state)
+    elif mutation == "state_path":
+        wrong_state = previous_state.parent.parent / "wrong" / "review-state.json"
+        wrong_state.parent.mkdir(parents=True)
+        wrong_state.write_bytes(previous_state.read_bytes())
+        previous_state = wrong_state
+
+    assert_revalidate_rejected(
+        monkeypatch, project, previous_state, current_input, reason
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ("mode", "reuse_source_mismatch"),
+        ("base_ref", "reuse_source_mismatch"),
+        ("spec_file", "reuse_source_mismatch"),
+        ("summary_only", "reuse_source_mismatch"),
+    ],
+)
+def test_revalidate_rejects_changed_review_contract(
+    tmp_path: Path, monkeypatch, mutation: str, reason: str
+) -> None:
+    project, previous_state, current_input, previous_head, _current_head = prepare_revalidation(
+        tmp_path
+    )
+    payload = json.loads(current_input.read_text(encoding="utf-8"))
+    if mutation == "mode":
+        payload["mode"] = "endless"
+    elif mutation == "base_ref":
+        payload["base_ref"] = previous_head
+    elif mutation == "spec_file":
+        payload["spec_file"] = "alternate-spec.md"
+    elif mutation == "summary_only":
+        payload["summary_only"] = [{"path": "app.txt", "reason": "different"}]
+    current_input.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    assert_revalidate_rejected(
+        monkeypatch, project, previous_state, current_input, reason
+    )
+
+
+def test_revalidate_writes_current_reused_state_without_sdk(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project, previous_state, current_input, previous_head, current_head = prepare_revalidation(
+        tmp_path
+    )
+    module = load_script_module()
+    previous = json.loads(previous_state.read_text(encoding="utf-8"))
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("successful revalidation must not resolve or call the SDK")
+
+    monkeypatch.setattr(module, "resolve_sdk_python", unexpected)
+    monkeypatch.setattr(module, "dispatch_roles", unexpected)
+
+    result = run(
+        "revalidate",
+        "--input-file",
+        str(current_input),
+        "--previous-state",
+        str(previous_state),
+        cwd=project,
+    )
+
+    state_path = current_input.parent.parent / "review-state.json"
+    report_path = current_input.parent.parent / "review-report.md"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.startswith("status: review_revalidated\n")
+    assert state["subject"]["head_ref"] == current_head
+    assert state["source_head_ref"] == previous_head
+    assert state["source_state"] == previous_state.relative_to(project).as_posix()
+    assert state["validated_changes"] == [
+        {
+            "path": "docs/superpowers/plans/demo.md",
+            "validator": "checkbox-only",
+        }
+    ]
+    for role in module.REVIEWER_ROLES:
+        assert state["roles"][role]["status"] == "reused"
+        assert state["roles"][role]["attempts"][-1]["status"] == "reused"
+        assert state["roles"][role]["output"] == previous["roles"][role]["output"]
+        assert state["roles"][role]["output_hash"] == module.sha256_bytes(
+            state["roles"][role]["output"].encode("utf-8")
+        )
+    assert report_path.read_bytes() == module.render_report(state).encode("utf-8")
+    assert state["report_hash"] == module.sha256_bytes(report_path.read_bytes())
+    assert not (current_input.parent.parent / "review-pass.json").exists()
+
+    shutil.rmtree(previous_state.parent)
+    retry = run("retry", "--input-file", str(current_input), cwd=project)
+    assert retry.returncode != 0
+    assert retry.stdout == "status: no_retryable_roles\n"
+
+
+def test_revalidate_accepts_declared_yaml_mapping_field(
+    tmp_path: Path, monkeypatch
+) -> None:
+    policy = [
+        {
+            "path": "docs/superpowers/plans/demo.md",
+            "validator": "mapping-fields-only",
+            "format": "yaml",
+            "fields": ["phase"],
+        }
+    ]
+    project, previous_state, current_input, _previous_head, _current_head = prepare_revalidation(
+        tmp_path,
+        before="phase: build\nname: demo\n",
+        after="phase: verify\nname: demo\n",
+        policy=policy,
+    )
+    module = load_script_module()
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("mapping revalidation must not resolve or call the SDK")
+
+    monkeypatch.setattr(module, "resolve_sdk_python", unexpected)
+    monkeypatch.setattr(module, "dispatch_roles", unexpected)
+
+    result = run(
+        "revalidate",
+        "--input-file",
+        str(current_input),
+        "--previous-state",
+        str(previous_state),
+        cwd=project,
+    )
+
+    state = json.loads(
+        (current_input.parent.parent / "review-state.json").read_text(encoding="utf-8")
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert state["validated_changes"] == [
+        {
+            "path": "docs/superpowers/plans/demo.md",
+            "validator": "mapping-fields-only",
+            "format": "yaml",
+            "fields": ["phase"],
+        }
+    ]
 
 
 def test_reviewer_prompt_requires_lightweight_markdown_contract(tmp_path: Path) -> None:
@@ -1437,28 +3054,7 @@ def test_sdk_dispatch_uses_plugin_owned_reviewer_timeout(monkeypatch, capsys, tm
     assert (raw_dir / "spec-alignment.txt").read_text(encoding="utf-8") == NO_BLOCKING_REVIEW
 
 
-def test_sdk_dispatch_subprocess_timeout_reports_clear_error(tmp_path: Path, monkeypatch) -> None:
-    module = load_script_module()
-    review = make_review_args_for_module(module, tmp_path)
-    captured_timeout = None
-
-    def fake_run(*args, **kwargs):
-        nonlocal captured_timeout
-        captured_timeout = kwargs["timeout"]
-        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
-
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
-
-    results = module.run_sdk_dispatch_subprocess(review, sys.executable)
-
-    assert captured_timeout == module.SDK_DISPATCH_TIMEOUT_SECONDS
-    assert module.SDK_DISPATCH_TIMEOUT_SECONDS == 540
-    assert {result["role"] for result in results} == set(module.REVIEWER_ROLES)
-    assert all("Severity: CRITICAL" in result["text"] for result in results)
-    assert all("Reviewer dispatch timed out" in result["text"] for result in results)
-
-
-def test_sdk_dispatch_subprocess_invalid_stdout_reports_clear_error(tmp_path: Path, monkeypatch) -> None:
+def test_sdk_role_subprocess_invalid_stdout_is_failed(tmp_path: Path, monkeypatch) -> None:
     module = load_script_module()
     review = make_review_args_for_module(module, tmp_path)
 
@@ -1467,13 +3063,13 @@ def test_sdk_dispatch_subprocess_invalid_stdout_reports_clear_error(tmp_path: Pa
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
 
-    try:
-        module.run_sdk_dispatch_subprocess(review, sys.executable)
-    except ValueError as exc:
-        assert "sdk_dispatch_invalid_output" in str(exc)
-        assert "stdout was not valid JSON" in str(exc)
-    else:
-        raise AssertionError("expected sdk_dispatch_invalid_output")
+    status, output = module.run_sdk_role_subprocess(
+        review, sys.executable, "spec-alignment"
+    )
+
+    assert status == "failed"
+    assert "sdk_dispatch_invalid_output" in output
+    assert "stdout was not valid JSON" in output
 
 
 def test_non_blocking_findings_generate_report_without_pass_marker(tmp_path: Path, monkeypatch) -> None:
@@ -1497,7 +3093,7 @@ def test_non_blocking_findings_generate_report_without_pass_marker(tmp_path: Pat
     )
 
     status = module.write_outputs(
-        review_input, module.aggregate(reviewer_results(module, review_text))
+        review_input, reviewer_state(module, review_input, review_text)
     )
 
     assert status == 0
@@ -1518,7 +3114,7 @@ def test_blocking_findings_do_not_generate_pass_marker(tmp_path: Path, monkeypat
     )
 
     status = module.write_outputs(
-        review_input, module.aggregate(reviewer_results(module, BLOCKING_REVIEW))
+        review_input, reviewer_state(module, review_input, BLOCKING_REVIEW)
     )
 
     assert status == 0
@@ -1553,37 +3149,17 @@ def test_run_removes_stale_legacy_pass_marker_from_reused_output_dir(tmp_path: P
     assert not (output_dir / "review-pass.json").exists()
 
 
-def test_mark_pass_report_hash_matches_report(tmp_path: Path) -> None:
-    project = tmp_path / "repo"
-    init_repo(project)
-    head = commit_review_context(project)
-    input_file = write_review_input(project, head, head)
-    output_dir = input_file.parent.parent
-    write_file(output_dir / "review-report.md", NO_BLOCKING_REVIEW)
-    mark_result = run("mark-pass", "--input-file", str(input_file), cwd=project)
-
-    assert mark_result.returncode == 0, mark_result.stdout + mark_result.stderr
-    report = (output_dir / "review-report.md").read_bytes()
-    marker = json.loads(guard_pass_path(project, head).read_text(encoding="utf-8"))
-    import hashlib
-
-    assert marker["report_hash"] == "sha256:" + hashlib.sha256(report).hexdigest()
-    assert marker["head_ref"] == head
-
-
-def test_aggregate_preserves_reviewer_text_without_parsing() -> None:
+def test_reviewer_state_preserves_reviewer_text_without_parsing() -> None:
     module = load_script_module()
+    review_input = types.SimpleNamespace(change="demo", base_ref="base", head_ref="head")
 
-    summary = module.aggregate(
-        [
-            {"role": "spec-alignment", "text": NO_BLOCKING_REVIEW},
-            {"role": "implementation-correctness", "text": BLOCKING_REVIEW},
-        ]
+    state = reviewer_state(module, review_input, NO_BLOCKING_REVIEW)
+    module.record_role_result(
+        state,
+        "implementation-correctness",
+        "completed",
+        BLOCKING_REVIEW,
     )
 
-    assert summary == {
-        "reviewers": [
-            {"role": "spec-alignment", "text": NO_BLOCKING_REVIEW},
-            {"role": "implementation-correctness", "text": BLOCKING_REVIEW},
-        ]
-    }
+    assert state["roles"]["spec-alignment"]["output"] == NO_BLOCKING_REVIEW
+    assert state["roles"]["implementation-correctness"]["output"] == BLOCKING_REVIEW

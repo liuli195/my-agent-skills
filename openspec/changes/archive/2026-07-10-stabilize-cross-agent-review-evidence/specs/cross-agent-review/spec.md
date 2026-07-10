@@ -1,8 +1,5 @@
-# cross-agent-review Specification
+## MODIFIED Requirements
 
-## Purpose
-Define the independent cross-agent review workflow, reviewer roles, report contract, and guard pass marker handoff.
-## Requirements
 ### Requirement: 跨 agent review 输入契约
 系统 MUST 只接收一个 caller-prepared `review-input.json`（调用方准备的审查输入文件）作为 Cross Agent Review（跨代理审查）的启动输入。该文件 MUST 位于同一次 review（审查）的 `prepared-inputs`（预备输入目录）下，并包含审查对象、模式和权威上下文文件引用；调用方 MAY 在同一文件中声明仅摘要路径和跨提交重新校验策略。
 
@@ -44,23 +41,6 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 - **THEN** 调用方 MAY 在 `revalidation_policy` 中按精确项目相对路径声明受支持校验器及其参数
 - **AND** 该声明 MUST NOT 改变首次真实审查的文件范围
 
-### Requirement: review subject 绑定
-系统 MUST 把 review（审查）绑定到 caller-prepared `review-input.json`（审查输入文件）声明的 `base_ref`、`head_ref` 和上下文文件。
-
-#### Scenario: 启动时工作区不干净
-- **WHEN** review mechanism（审查机制）启动时 `git status --short` 非空，且变化不属于本次 `review-input.json` 或本次输出目录
-- **THEN** 它拒绝启动 reviewer，并不得生成 `review-report.md`
-
-#### Scenario: 运行时输入输出例外
-- **WHEN** `git status --short` 只包含本次 `.local/cross-agent-review/<change>/<head_ref_short>/prepared-inputs/review-input.json` 或本次输出目录中的 review runtime artifacts（审查运行产物）
-- **THEN** review mechanism（审查机制）MAY 继续运行
-- **AND** 该例外 MUST NOT 放行其他 workspace（工作区）变更
-- **AND** 该 allowlist（允许清单）MUST 同时适用于启动和派发前的所有 clean worktree（干净工作区）检查
-
-#### Scenario: 派发前工作区变化
-- **WHEN** reviewer 派发前工作区变为 dirty（未提交）
-- **THEN** review mechanism（审查机制）拒绝继续，并不得生成 `review-report.md`
-
 ### Requirement: reviewer 角色派发
 系统 MUST 将一次 review（审查）拆分给两个明确角色的 reviewer agent（审查代理），为每个角色建立独立输入范围和独立运行结果，并要求每个 reviewer（审查代理）返回轻量 Markdown（标记文本）审查结果。
 
@@ -86,35 +66,6 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 - **THEN** `review-state.json`（审查状态文件）的 `subject.mode` MUST 记录本次使用的 `mode`
 - **AND** report（报告）与 retry（重试）MUST 继续绑定该模式
 
-### Requirement: review 报告和严重级别
-系统 MUST 为每次 review（审查）生成人类可读报告，并保留 reviewer（审查代理）原始 Markdown（标记文本）输出。review mechanism（审查机制）MUST NOT 解析 finding（发现项）、去重、计数或判断是否通过。
-
-#### Scenario: 阻塞发现
-- **WHEN** 任一 reviewer（审查代理）输出 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）finding（发现项）
-- **THEN** 汇总报告保留该 reviewer（审查代理）的原始 Markdown（标记文本）
-- **AND** 主 agent（主代理）负责判断该 finding（发现项）是否阻断 pass marker（通过标记）
-
-#### Scenario: 非阻塞发现
-- **WHEN** reviewer（审查代理）只输出 WARNING（警告）或 SUGGESTION（建议）finding（发现项）
-- **THEN** 汇总报告保留该 reviewer（审查代理）的原始 Markdown（标记文本）
-- **AND** 主 agent（主代理）负责把它们作为 residual risk（残留风险）或建议处理
-
-#### Scenario: reviewer 返回非法结果
-- **WHEN** reviewer 超时、SDK dispatch（开发包派发）失败或 reviewer 返回空结果
-- **THEN** review mechanism（审查机制）把该运行态失败写成 CRITICAL（严重阻断）Markdown（标记文本）finding（发现项）
-
-### Requirement: Comet 边界
-系统 MUST 让 cross-agent review（跨代理审查）保持为独立审查证据，不替代 Comet verify（Comet 验证）。
-
-#### Scenario: 不运行构建或测试
-- **WHEN** review mechanism（审查机制）执行 review
-- **THEN** 它不得要求调用方预先运行测试或提供测试结果文件
-- **AND** 它不得负责运行构建命令或测试命令
-
-#### Scenario: 不推进 Comet phase
-- **WHEN** review mechanism（审查机制）完成 review
-- **THEN** 它不得修改 `.comet.yaml` 或推进 Comet phase（阶段）
-
 ### Requirement: review input snapshots
 系统 MUST 让 reviewer prompt（审查代理提示词）引用 `review-input.json`（审查输入文件）、`review-state.json`（审查状态文件）和由插件执行的短 role-input command（角色输入命令），不内联大 diff（差异）内容或变更文件清单。
 
@@ -134,39 +85,6 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 - **THEN** Python（脚本语言）脚本 MUST 作为调用方和渲染入口，负责提供模板变量、读取模板和渲染模板
 - **AND** 模板变量 MUST 限制为 role（角色）、input file path（输入文件路径）、state file path（状态文件路径）、role input command（角色输入命令）、role focus（角色重点）和 severity rubric（严重级别规则）
 
-### Requirement: Skill invocation boundary
-
-系统 MUST 限制 `cross-agent-review`（跨代理审查）Skill（技能）的自动调用场景，避免在验证或通用审查阶段重复运行。
-
-#### Scenario: 允许的调用场景
-
-- **WHEN** 当前流程处于 Comet build completion（构建完成）阶段、PR Flow local review（本地审查）阶段，或用户显式调用 `cross-agent-review`
-- **THEN** agent（代理）MAY 调用 `cross-agent-review` Skill
-
-#### Scenario: 禁止的自动调用场景
-
-- **WHEN** 当前流程处于 Comet verify（验证）阶段或通用 code review（代码审查）阶段
-- **THEN** agent（代理）MUST NOT 自动调用 `cross-agent-review` Skill
-
-### Requirement: review timeout ownership
-系统 MUST 由 cross-agent-review（跨代理审查）插件脚本管理 reviewer dispatch（审查代理派发）超时。调用方 MUST NOT 在插件命令外层包装短于插件内部上限的 timeout/watchdog（超时/看门等待）。
-
-#### Scenario: 插件内部管理超时
-- **WHEN** cross-agent-review（跨代理审查）真实派发 reviewer agent（审查代理）
-- **THEN** 单个 reviewer agent（审查代理）的内部 timeout（超时）MUST 为 480 秒
-- **AND** 整体 SDK dispatch（开发包派发）的内部 timeout（超时）MUST 为 540 秒
-- **AND** timeout（超时）结果 MUST 由插件脚本转换为带 CRITICAL（严重阻断）finding（发现项）的 Markdown（标记文本）审查结果
-
-#### Scenario: 主 agent 调用插件
-- **WHEN** 主 agent（代理）调用 cross-agent-review（跨代理审查）插件命令
-- **THEN** 主 agent（代理）MUST 直接等待插件脚本返回
-- **AND** 主 agent（代理）MUST NOT 在外层添加小于 540 秒的 timeout（超时）、watchdog（看门等待）或等价提前终止包装
-
-#### Scenario: 外层短 timeout 会造成错误失败
-- **WHEN** 调用方在外层设置的等待时间短于插件内部 480 秒或 540 秒上限
-- **THEN** 该调用契约 MUST 被视为无效
-- **AND** 调用说明 MUST 指示移除外层短 timeout（超时），而不是调低插件内部 timeout（超时）
-
 ### Requirement: head_ref_short path convention is explicit
 系统 MUST 明确 `head_ref_short`（短头引用）等于 `head_ref`（头引用）的前 12 个字符，并在 Cross Agent Review（跨代理审查）的用户可见路径中保持一致。
 
@@ -185,18 +103,7 @@ Define the independent cross-agent review workflow, reviewer roles, report contr
 - **THEN** 输出目录 MUST 使用同一个 12 位 `head_ref_short`（短头引用）
 - **AND** 命令输出 MUST 包含可复制的报告和状态路径
 
-### Requirement: Production run cannot inject reviewer results
-The cross-agent-review `run` command MUST NOT provide a user-visible way to inject reviewer results or bypass real reviewer dispatch.
-
-#### Scenario: Fake reviewer flag is rejected
-- **WHEN** a user runs `cross_agent_review.py run` with `--fake-reviewer-results`
-- **THEN** argument parsing MUST fail before review execution
-- **THEN** no review report or pass evidence MUST be generated by that invocation
-
-#### Scenario: Run dispatches real reviewers
-- **WHEN** a user runs `cross_agent_review.py run` with a valid `review-input.json`
-- **THEN** the command MUST dispatch reviewer agents through the real reviewer dispatch path
-- **THEN** it MUST NOT synthesize no-finding reviewer output from command-line input
+## ADDED Requirements
 
 ### Requirement: 角色化文件投影
 系统 MUST 从 Git（版本控制）审查范围生成单一文件清单，并让每个文件恰好属于 `authoritative_context`（权威上下文）、`summary_only`（仅摘要）或 `full_review`（完整审查）之一；分类 MUST 写入 `review-state.json`（审查状态文件）。
@@ -293,3 +200,9 @@ The cross-agent-review `run` command MUST NOT provide a user-visible way to inje
 - **THEN** 系统 MUST 拒绝再次 `revalidate`（重新校验）
 - **AND** 调用方 MUST 运行真实 review（审查）建立新的语义基线
 
+## REMOVED Requirements
+
+### Requirement: review pass marker
+**Reason**: `mark-pass`（标记通过）把 Agent Guard（代理守卫）的画像、产物、路径和证据字段耦合进 Cross Agent Review（跨代理审查），违反“审查方只产出事实、主代理决定、守卫拥有证据契约”的职责边界。
+
+**Migration**: 主代理读取 `review-report.md`（审查报告）和 `review-state.json`（审查状态文件）并确认没有未处理的 CRITICAL（严重阻断）或 IMPORTANT（重要阻断）finding（发现项）后，显式调用 Agent Guard（代理守卫）的通用 `record-evidence`（记录证据）入口。Cross Agent Review（跨代理审查）不再提供 `mark-pass`（标记通过）命令，也不再包含任何 Guard Profile（守卫画像）、artifact id（产物编号）、证据路径或 `guard-evidence/v1`（守卫证据第一版）字段知识。

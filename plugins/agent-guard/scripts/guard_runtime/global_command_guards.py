@@ -157,7 +157,7 @@ def _skip_when_matches(
         if missing_template_values:
             continue
         try:
-            path = _resolve_artifact_path(project, user_home, runtime_scope, rendered)
+            path = resolve_artifact_path(project, user_home, runtime_scope, rendered)
         except UnsafeEvidencePath:
             continue
         if not path.exists():
@@ -225,7 +225,9 @@ def _resolve_evidence_path(project: Path, user_home: Path, runtime_scope: str, r
     return resolved
 
 
-def _resolve_artifact_path(project: Path, user_home: Path, runtime_scope: str, rendered: str) -> Path:
+def resolve_artifact_path(project: Path, user_home: Path, runtime_scope: str, rendered: str) -> Path:
+    if runtime_scope not in {"project", "user"}:
+        raise UnsafeEvidencePath("unsafe_evidence_path")
     path = Path(rendered)
     windows_path = PureWindowsPath(rendered)
     if path.is_absolute() or windows_path.is_absolute() or windows_path.drive or windows_path.root:
@@ -239,30 +241,29 @@ def _resolve_artifact_path(project: Path, user_home: Path, runtime_scope: str, r
     return candidate
 
 
-def _load_profile_artifacts(profile_dir: Path) -> dict[str, str]:
+def load_profile_artifacts(profile_dir: Path) -> dict[str, dict[str, Any]]:
     artifacts_path = profile_dir / "artifacts.yaml"
-    if not artifacts_path.exists():
-        return {}
     data = yaml.safe_load(artifacts_path.read_text(encoding="utf-8")) or {}
-    if not isinstance(data, dict):
-        return {}
-    artifacts = data.get("artifacts")
+    artifacts = data.get("artifacts") if isinstance(data, dict) else None
     if not isinstance(artifacts, list):
-        return {}
-    artifact_paths: dict[str, str] = {}
+        raise ValueError("artifact_registry_invalid")
+    result: dict[str, dict[str, Any]] = {}
     for artifact in artifacts:
         if not isinstance(artifact, dict):
-            continue
+            raise ValueError("artifact_registry_invalid")
         artifact_id = artifact.get("id")
         artifact_path = artifact.get("path")
         if (
-            isinstance(artifact_id, str)
-            and artifact_id
-            and isinstance(artifact_path, str)
-            and artifact_path
+            not isinstance(artifact_id, str)
+            or not artifact_id.strip()
+            or not isinstance(artifact_path, str)
+            or not artifact_path.strip()
         ):
-            artifact_paths[artifact_id] = artifact_path
-    return artifact_paths
+            raise ValueError("artifact_registry_invalid")
+        if artifact_id in result:
+            raise ValueError(f"artifact_id_duplicate: {artifact_id}")
+        result[artifact_id] = dict(artifact)
+    return result
 
 
 def _json_check_detail(check: dict[str, Any], actual: Any, expected: Any, include_expected: bool) -> dict[str, Any]:
@@ -311,7 +312,7 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
     failing_guards: list[dict[str, Any]] = []
     captures: dict[str, str] = {}
     captures_by_guard: dict[str, dict[str, str]] = {}
-    artifact_cache: dict[Path, dict[str, str]] = {}
+    artifact_cache: dict[Path, dict[str, dict[str, Any]]] = {}
     first_deny: dict[str, Any] = {}
 
     for guard in collect_global_command_guards(project, user_home):
@@ -370,10 +371,26 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
                     artifact_id = alt_artifact
 
         if artifact_id is not None:
-            if guard.profile_dir not in artifact_cache:
-                artifact_cache[guard.profile_dir] = _load_profile_artifacts(guard.profile_dir)
-            artifact_template = artifact_cache[guard.profile_dir].get(artifact_id)
-            if artifact_template is None:
+            try:
+                if guard.profile_dir not in artifact_cache:
+                    artifact_cache[guard.profile_dir] = load_profile_artifacts(guard.profile_dir)
+            except (OSError, yaml.YAMLError, ValueError):
+                failure = {
+                    "effective_guard_id": guard.effective_guard_id,
+                    "source_scope": guard.source_scope,
+                    "profile_id": guard.profile_id,
+                    "guard_id": guard.guard_id,
+                    "captures": guard_captures,
+                    "artifact_id": artifact_id,
+                    "evidence_path": str(guard.profile_dir / "artifacts.yaml"),
+                    "failure_reason": "artifact_registry_invalid",
+                }
+                if not first_deny:
+                    first_deny = deny
+                failing_guards.append(failure)
+                continue
+            artifact = artifact_cache[guard.profile_dir].get(artifact_id)
+            if artifact is None:
                 failure = {
                     "effective_guard_id": guard.effective_guard_id,
                     "source_scope": guard.source_scope,
@@ -388,7 +405,22 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
                     first_deny = deny
                 failing_guards.append(failure)
                 continue
-            template = artifact_template
+            template = artifact.get("path")
+            if not isinstance(template, str) or not template:
+                failure = {
+                    "effective_guard_id": guard.effective_guard_id,
+                    "source_scope": guard.source_scope,
+                    "profile_id": guard.profile_id,
+                    "guard_id": guard.guard_id,
+                    "captures": guard_captures,
+                    "artifact_id": artifact_id,
+                    "evidence_path": str(guard.profile_dir / "artifacts.yaml"),
+                    "failure_reason": "artifact_registry_invalid",
+                }
+                if not first_deny:
+                    first_deny = deny
+                failing_guards.append(failure)
+                continue
         else:
             template = evidence.get("path") if isinstance(evidence, dict) else ""
         render_values = dict(values)
@@ -399,7 +431,7 @@ def evaluate_global_command_guards(project: Path, user_home: Path, envelope: dic
         try:
             rendered, missing_template_values = render_template(template if isinstance(template, str) else "", render_values)
             if artifact_id is not None:
-                evidence_path = _resolve_artifact_path(project, user_home, runtime_scope, rendered)
+                evidence_path = resolve_artifact_path(project, user_home, runtime_scope, rendered)
             else:
                 evidence_path = _resolve_evidence_path(project, user_home, runtime_scope, rendered)
         except UnsafeEvidencePath:

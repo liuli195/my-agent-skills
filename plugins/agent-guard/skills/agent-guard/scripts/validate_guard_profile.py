@@ -62,6 +62,7 @@ GLOBAL_COMMAND_GUARD_VALUE_FROM_FIELDS = {
 }
 GLOBAL_COMMAND_GUARDS_FILE = "global-command-guards.yaml"
 SESSION_FOCUS_CATEGORIES = {"state_machine", "guard_points", "artifacts"}
+DEFAULT_GUARD_EVIDENCE_PATH = ".local/guard/evidence/{profile_id}/{artifact_id}/{subject_id}/{git_head_short}/pass.json"
 
 REQUIRED_FIELDS = {
     "manifest": [
@@ -422,6 +423,25 @@ def validate_artifact_contract(configs: dict[str, dict[str, Any]]) -> list[Valid
                     "把 `reuse_policy` 改成 `deny` 或 `allow`；未写时默认按 `deny` 处理。",
                 )
             )
+        if artifact.get("owner") == "agent-guard":
+            if artifact.get("type") != "json":
+                issues.append(
+                    ValidationIssue(
+                        "artifacts",
+                        f"artifacts.{artifact_id}.type",
+                        "必须是 `json`。",
+                        "改为 `type: json`。",
+                    )
+                )
+            if artifact.get("path") != DEFAULT_GUARD_EVIDENCE_PATH:
+                issues.append(
+                    ValidationIssue(
+                        "artifacts",
+                        f"artifacts.{artifact_id}.path",
+                        "必须使用 guard-defined evidence 默认路径。",
+                        f"改为 `{DEFAULT_GUARD_EVIDENCE_PATH}`。",
+                    )
+                )
     return issues
 
 
@@ -1025,7 +1045,6 @@ def validate_references(configs: dict[str, dict[str, Any]]) -> list[ValidationIs
 
     issues.extend(validate_deprecated_fields(configs))
     issues.extend(validate_state_permissions(configs))
-    issues.extend(validate_artifact_contract(configs))
     issues.extend(validate_state_transition_shape(configs))
 
     initial_state = configs["state_machine"].get("initial_state")
@@ -1251,6 +1270,9 @@ def validate_profile(profile_dir: Path) -> tuple[list[str], list[ValidationIssue
 
     if has_global_command_guards_file:
         checked.append("global_command_guards")
+
+    if "artifacts" in configs:
+        issues.extend(validate_artifact_contract(configs))
 
     reference_categories = {"state_machine", "guard_points", "artifacts"}
     if not issues and reference_categories.issubset(configs):

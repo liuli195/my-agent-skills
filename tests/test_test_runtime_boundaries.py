@@ -474,12 +474,6 @@ E2E_ALLOWLIST: dict[str, str] = {
     "tests/test_cross_agent_review_cli.py::test_copied_tracked_file_into_runtime_artifacts_rejects_before_dispatch": (
         "covers cross-agent-review real git tracked-file protection"
     ),
-    "tests/test_cross_agent_review_cli.py::test_mark_pass_records_endless_mode_and_refs": (
-        "covers cross-agent-review real git review refs"
-    ),
-    "tests/test_cross_agent_review_cli.py::test_mark_pass_writes_guard_evidence_default_path": (
-        "covers cross-agent-review real git evidence path"
-    ),
     "tests/test_cross_agent_review_cli.py::test_renamed_tracked_file_into_runtime_artifacts_rejects_before_dispatch": (
         "covers cross-agent-review real git rename protection"
     ),
@@ -572,7 +566,6 @@ E2E_ALLOWLIST.update(
             "tests/test_cross_agent_review_cli.py::test_input_file_must_be_under_change_and_head_runtime_dir",
             "tests/test_cross_agent_review_cli.py::test_invalid_base_ref_fails_before_dispatch",
             "tests/test_cross_agent_review_cli.py::test_invalid_mode_fails",
-            "tests/test_cross_agent_review_cli.py::test_mark_pass_report_hash_matches_report",
             "tests/test_cross_agent_review_cli.py::test_missing_input_file_fails",
             "tests/test_cross_agent_review_cli.py::test_missing_referenced_plan_file_fails",
             "tests/test_cross_agent_review_cli.py::test_missing_required_args_fail",
@@ -753,7 +746,6 @@ E2E_ALLOWLIST.update(
         for identity in [
             "tests/test_cross_agent_review_cli.py::test_clean_worktree_checks_reuse_runtime_allowlist",
             "tests/test_cross_agent_review_cli.py::test_debug_writes_input_prompts_and_raw_under_debug",
-            "tests/test_cross_agent_review_cli.py::test_default_outputs_are_report_only",
             "tests/test_cross_agent_review_cli.py::test_default_run_does_not_archive_context_snapshots_or_git_manifest",
             "tests/test_cross_agent_review_cli.py::test_diff_file_argument_is_not_required",
             "tests/test_cross_agent_review_cli.py::test_internal_dispatch_injection_generates_report_without_results_file",
@@ -761,7 +753,6 @@ E2E_ALLOWLIST.update(
             "tests/test_cross_agent_review_cli.py::test_run_accepts_single_review_input_file",
             "tests/test_cross_agent_review_cli.py::test_run_can_be_exercised_with_internal_dispatch_injection",
             "tests/test_cross_agent_review_cli.py::test_run_removes_stale_legacy_pass_marker_from_reused_output_dir",
-            "tests/test_cross_agent_review_cli.py::test_sdk_dispatch_subprocess_uses_plugin_owned_timeout",
         ]
     }
 )
@@ -850,8 +841,97 @@ E2E_ALLOWLIST.update(
     }
 )
 
+E2E_ALLOWLIST.update(
+    {
+        "tests/test_agent_guard_plugin_runtime_e2e.py::test_cross_agent_review_public_cli_records_evidence_and_unlocks_guard": (
+            "covers cross-agent-review run and retry through agent-guard evidence and hook gate"
+        ),
+        "tests/test_agent_guard_plugin_runtime_e2e.py::test_planning_review_uses_generic_evidence_entry_and_existing_hook_router": (
+            "covers planning-review fields through agent-guard evidence and hook gate"
+        ),
+    }
+)
+
+E2E_ALLOWLIST.update(
+    {
+        identity: f"covers packaged agent-guard record-evidence CLI boundary: {identity.rsplit('::', 1)[1]}"
+        for identity in [
+            "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_atomically_replaces_hardlink_without_mutating_target",
+            "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_does_not_accept_caller_head_override",
+            "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_does_not_fall_back_to_other_profile_source",
+            "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_each_reserved_business_field",
+            "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_guard_root_alias_inside_source_anchor",
+            "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_guard_root_alias_outside_source_anchor",
+            "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_invalid_business_fields",
+            "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_invalid_profile_registry_or_artifact",
+            "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_non_segment_identifiers",
+            "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_nonstandard_template_before_git",
+            "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_profile_alias_outside_source_root",
+            "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_symlink_without_mutating_target",
+            "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_symlinked_artifact_registry",
+            "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_requires_clean_worktree",
+            "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_requires_git_repository",
+            "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_writes_current_head_guard_owned_artifact",
+        ]
+    }
+)
+
+E2E_ALLOWLIST.update(
+    {
+        identity: f"covers cross-agent-review real git runtime boundary: {identity.rsplit('::', 1)[1]}"
+        for identity in [
+            "tests/test_cross_agent_review_cli.py::test_changed_file_entries_preserves_rename_and_copy_sources",
+            "tests/test_cross_agent_review_cli.py::test_changed_file_entries_rejects_malformed_name_status",
+            "tests/test_cross_agent_review_cli.py::test_completed_role_is_saved_before_sibling_timeout",
+            "tests/test_cross_agent_review_cli.py::test_default_outputs_are_report_and_state_only",
+            "tests/test_cross_agent_review_cli.py::test_initial_state_records_subject_context_hashes_and_role_scopes",
+            "tests/test_cross_agent_review_cli.py::test_parent_future_exception_is_saved_as_failed_markdown",
+            "tests/test_cross_agent_review_cli.py::test_report_is_rebuilt_only_from_state_and_top_level_hash_is_saved",
+            "tests/test_cross_agent_review_cli.py::test_retry_dispatches_only_failed_role_and_preserves_success",
+            "tests/test_cross_agent_review_cli.py::test_retry_parser_does_not_accept_scope_or_path_arguments",
+            "tests/test_cross_agent_review_cli.py::test_retry_rejects_attempt_history_time_reversal_before_dispatch",
+            "tests/test_cross_agent_review_cli.py::test_retry_rejects_malformed_state_as_state_mismatch",
+            "tests/test_cross_agent_review_cli.py::test_retry_rejects_report_not_bound_to_state_before_dispatch",
+            "tests/test_cross_agent_review_cli.py::test_retry_rejects_state_not_bound_to_current_input_and_repository",
+            "tests/test_cross_agent_review_cli.py::test_retry_with_no_retryable_roles_does_not_dispatch",
+            "tests/test_cross_agent_review_cli.py::test_revalidate_accepts_declared_yaml_mapping_field",
+            "tests/test_cross_agent_review_cli.py::test_revalidate_rejects_changed_review_contract",
+            "tests/test_cross_agent_review_cli.py::test_revalidate_rejects_ignored_context_missing_from_commits",
+            "tests/test_cross_agent_review_cli.py::test_revalidate_rejects_invalid_source_before_writes_or_sdk",
+            "tests/test_cross_agent_review_cli.py::test_revalidate_rejects_previous_state_output_collision",
+            "tests/test_cross_agent_review_cli.py::test_revalidate_rejects_same_head_before_incremental_work",
+            "tests/test_cross_agent_review_cli.py::test_revalidate_rejects_tampered_context_hash",
+            "tests/test_cross_agent_review_cli.py::test_revalidate_replaces_linked_report_without_changing_target",
+            "tests/test_cross_agent_review_cli.py::test_revalidate_writes_current_reused_state_without_sdk",
+            "tests/test_cross_agent_review_cli.py::test_review_input_classifies_context_summary_and_default_full",
+            "tests/test_cross_agent_review_cli.py::test_role_input_contains_only_full_review_diff_and_summary_stats",
+            "tests/test_cross_agent_review_cli.py::test_sdk_role_subprocess_uses_plugin_owned_timeout",
+            "tests/test_cross_agent_review_cli.py::test_summary_only_rejects_invalid_entries",
+            "tests/test_cross_agent_review_cli.py::test_summary_only_reports_sorted_classification_overlap_paths",
+        ]
+    }
+)
+
 CURRENT_E2E_ALLOWLIST_IDENTITIES = {
+    "tests/test_agent_guard_plugin_runtime_e2e.py::test_cross_agent_review_public_cli_records_evidence_and_unlocks_guard",
+    "tests/test_agent_guard_plugin_runtime_e2e.py::test_planning_review_uses_generic_evidence_entry_and_existing_hook_router",
     "tests/test_agent_guard_plugin_runtime_e2e.py::test_plugin_runtime_e2e_from_verify_to_state_completed",
+    "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_atomically_replaces_hardlink_without_mutating_target",
+    "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_does_not_accept_caller_head_override",
+    "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_does_not_fall_back_to_other_profile_source",
+    "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_each_reserved_business_field",
+    "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_guard_root_alias_inside_source_anchor",
+    "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_guard_root_alias_outside_source_anchor",
+    "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_invalid_business_fields",
+    "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_invalid_profile_registry_or_artifact",
+    "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_non_segment_identifiers",
+    "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_nonstandard_template_before_git",
+    "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_profile_alias_outside_source_root",
+    "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_symlink_without_mutating_target",
+    "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_rejects_symlinked_artifact_registry",
+    "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_requires_clean_worktree",
+    "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_requires_git_repository",
+    "tests/test_agent_guard_plugin_runtime_e2e.py::test_record_evidence_writes_current_head_guard_owned_artifact",
     "tests/test_agent_guard_prd_full_e2e.py::test_agent_guard_plugin_prd_full_end_to_end_regression",
     "tests/test_agent_guard_runtime_brief.py::test_activation_writes_latest_guard_brief_for_session_focus_instance",
     "tests/test_agent_guard_runtime_brief.py::test_brief_injection_dedupes_by_session_and_brief_hash",
@@ -894,9 +974,12 @@ CURRENT_E2E_ALLOWLIST_IDENTITIES = {
     "tests/test_cross_agent_review_cli.py::test_change_path_traversal_rejects_input_location",
     "tests/test_cross_agent_review_cli.py::test_clean_worktree_checks_reuse_runtime_allowlist",
     "tests/test_cross_agent_review_cli.py::test_copied_tracked_file_into_runtime_artifacts_rejects_before_dispatch",
+    "tests/test_cross_agent_review_cli.py::test_changed_file_entries_preserves_rename_and_copy_sources",
+    "tests/test_cross_agent_review_cli.py::test_changed_file_entries_rejects_malformed_name_status",
+    "tests/test_cross_agent_review_cli.py::test_completed_role_is_saved_before_sibling_timeout",
     "tests/test_cross_agent_review_cli.py::test_debug_extra_file_rejects_before_dispatch",
     "tests/test_cross_agent_review_cli.py::test_debug_writes_input_prompts_and_raw_under_debug",
-    "tests/test_cross_agent_review_cli.py::test_default_outputs_are_report_only",
+    "tests/test_cross_agent_review_cli.py::test_default_outputs_are_report_and_state_only",
     "tests/test_cross_agent_review_cli.py::test_default_run_does_not_archive_context_snapshots_or_git_manifest",
     "tests/test_cross_agent_review_cli.py::test_diff_file_argument_is_not_required",
     "tests/test_cross_agent_review_cli.py::test_dirty_worktree_outside_runtime_artifacts_rejects_before_dispatch",
@@ -905,32 +988,52 @@ CURRENT_E2E_ALLOWLIST_IDENTITIES = {
     "tests/test_cross_agent_review_cli.py::test_input_file_must_be_named_review_input_json_under_prepared_inputs",
     "tests/test_cross_agent_review_cli.py::test_input_file_must_be_under_change_and_head_runtime_dir",
     "tests/test_cross_agent_review_cli.py::test_internal_dispatch_injection_generates_report_without_results_file",
+    "tests/test_cross_agent_review_cli.py::test_initial_state_records_subject_context_hashes_and_role_scopes",
     "tests/test_cross_agent_review_cli.py::test_invalid_base_ref_fails_before_dispatch",
     "tests/test_cross_agent_review_cli.py::test_invalid_mode_fails",
-    "tests/test_cross_agent_review_cli.py::test_mark_pass_records_endless_mode_and_refs",
-    "tests/test_cross_agent_review_cli.py::test_mark_pass_report_hash_matches_report",
-    "tests/test_cross_agent_review_cli.py::test_mark_pass_writes_guard_evidence_default_path",
     "tests/test_cross_agent_review_cli.py::test_missing_input_file_fails",
     "tests/test_cross_agent_review_cli.py::test_missing_referenced_plan_file_fails",
     "tests/test_cross_agent_review_cli.py::test_missing_required_review_input_field_fails",
     "tests/test_cross_agent_review_cli.py::test_output_dir_root_extra_file_rejects_before_dispatch",
     "tests/test_cross_agent_review_cli.py::test_prepared_inputs_rejects_extra_directory",
     "tests/test_cross_agent_review_cli.py::test_prepared_inputs_rejects_extra_regular_file",
+    "tests/test_cross_agent_review_cli.py::test_parent_future_exception_is_saved_as_failed_markdown",
     "tests/test_cross_agent_review_cli.py::test_prompt_contains_review_context",
     "tests/test_cross_agent_review_cli.py::test_renamed_tracked_file_into_runtime_artifacts_rejects_before_dispatch",
     "tests/test_cross_agent_review_cli.py::test_reviewer_prompt_does_not_inline_large_diff_or_context",
     "tests/test_cross_agent_review_cli.py::test_reviewer_prompt_references_review_input_file_only",
     "tests/test_cross_agent_review_cli.py::test_reviewer_prompt_references_review_input_not_diff_file",
+    "tests/test_cross_agent_review_cli.py::test_report_is_rebuilt_only_from_state_and_top_level_hash_is_saved",
+    "tests/test_cross_agent_review_cli.py::test_retry_dispatches_only_failed_role_and_preserves_success",
+    "tests/test_cross_agent_review_cli.py::test_retry_parser_does_not_accept_scope_or_path_arguments",
+    "tests/test_cross_agent_review_cli.py::test_retry_rejects_attempt_history_time_reversal_before_dispatch",
+    "tests/test_cross_agent_review_cli.py::test_retry_rejects_malformed_state_as_state_mismatch",
+    "tests/test_cross_agent_review_cli.py::test_retry_rejects_report_not_bound_to_state_before_dispatch",
+    "tests/test_cross_agent_review_cli.py::test_retry_rejects_state_not_bound_to_current_input_and_repository",
+    "tests/test_cross_agent_review_cli.py::test_retry_with_no_retryable_roles_does_not_dispatch",
     "tests/test_cross_agent_review_cli.py::test_run_accepts_single_review_input_file",
     "tests/test_cross_agent_review_cli.py::test_run_can_be_exercised_with_internal_dispatch_injection",
     "tests/test_cross_agent_review_cli.py::test_run_rejects_fake_reviewer_results_argument",
     "tests/test_cross_agent_review_cli.py::test_run_rejects_legacy_tests_file_argument",
     "tests/test_cross_agent_review_cli.py::test_run_removes_stale_legacy_pass_marker_from_reused_output_dir",
     "tests/test_cross_agent_review_cli.py::test_runtime_artifact_file_path_directory_children_reject_before_dispatch",
-    "tests/test_cross_agent_review_cli.py::test_sdk_dispatch_subprocess_uses_plugin_owned_timeout",
+    "tests/test_cross_agent_review_cli.py::test_revalidate_accepts_declared_yaml_mapping_field",
+    "tests/test_cross_agent_review_cli.py::test_revalidate_rejects_changed_review_contract",
+    "tests/test_cross_agent_review_cli.py::test_revalidate_rejects_ignored_context_missing_from_commits",
+    "tests/test_cross_agent_review_cli.py::test_revalidate_rejects_invalid_source_before_writes_or_sdk",
+    "tests/test_cross_agent_review_cli.py::test_revalidate_rejects_previous_state_output_collision",
+    "tests/test_cross_agent_review_cli.py::test_revalidate_rejects_same_head_before_incremental_work",
+    "tests/test_cross_agent_review_cli.py::test_revalidate_rejects_tampered_context_hash",
+    "tests/test_cross_agent_review_cli.py::test_revalidate_replaces_linked_report_without_changing_target",
+    "tests/test_cross_agent_review_cli.py::test_revalidate_writes_current_reused_state_without_sdk",
+    "tests/test_cross_agent_review_cli.py::test_review_input_classifies_context_summary_and_default_full",
+    "tests/test_cross_agent_review_cli.py::test_role_input_contains_only_full_review_diff_and_summary_stats",
+    "tests/test_cross_agent_review_cli.py::test_sdk_role_subprocess_uses_plugin_owned_timeout",
     "tests/test_cross_agent_review_cli.py::test_sdk_missing_reports_clear_error",
     "tests/test_cross_agent_review_cli.py::test_sdk_python_directory_reports_clear_error_without_traceback",
     "tests/test_cross_agent_review_cli.py::test_sdk_python_invalid_file_reports_clear_error_without_traceback",
+    "tests/test_cross_agent_review_cli.py::test_summary_only_rejects_invalid_entries",
+    "tests/test_cross_agent_review_cli.py::test_summary_only_reports_sorted_classification_overlap_paths",
     "tests/test_pr_flow_cli.py::test_project_template_recovers_stale_lock",
     "tests/test_pr_flow_cli.py::test_project_template_recreates_incomplete_template_after_stale_lock",
 }

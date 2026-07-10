@@ -1,24 +1,24 @@
 Role: {{ role }}
 
-Read: {{ input_file_path }}
+Input: {{ input_file_path }}
+State: {{ state_file_path }}
 
 Use read-only inspection. Do not edit files.
-Review only base_ref...head_ref from the input file.
-Use spec_file, design_file, and plan_file as requirements context.
+Use this command to load the verified, role-scoped review input:
 
-Output contract:
-- Return only the lightweight Markdown format below.
-- Do not use JSON.
-- Do not wrap the response in Markdown fences.
+{{ role_input_command }}
 
-Review commands:
-
-{{ review_subject_commands }}
+Read the listed authoritative context files only as needed. Do not run an unscoped diff.
 
 Focus:
 {{ role_focus }}
 
 {{ severity_rubric }}
+
+Output contract:
+- Return only the lightweight Markdown format below.
+- Do not use JSON.
+- Do not wrap the response in Markdown fences.
 
 Format:
 
