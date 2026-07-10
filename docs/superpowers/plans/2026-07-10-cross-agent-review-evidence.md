@@ -226,7 +226,7 @@ git commit -m "实现跨代理审查输入投影和状态基础"
 - Consumes（输入）：Task 1 的 `initial_review_state()`、`atomic_write_json()` 和角色 scope（范围）。
 - Produces（输出）：`render_role_input()`、`run_sdk_role_subprocess()`、`dispatch_roles()`、`record_role_result()`。
 
-- [ ] **Step 1: 写 role-input（角色输入）范围测试**
+- [x] **Step 1: 写 role-input（角色输入）范围测试**
 
 ```python
 def test_role_input_contains_only_full_review_diff_and_summary_stats(tmp_path: Path, capsys) -> None:
@@ -243,7 +243,7 @@ def test_role_input_contains_only_full_review_diff_and_summary_stats(tmp_path: P
 
 更新 prompt（提示词）测试，断言不存在无路径 `git diff <base>...<head>`，存在 `_role-input` 命令、input path（输入路径）和 state path（状态路径）。
 
-- [ ] **Step 2: 运行新测试并确认失败**
+- [x] **Step 2: 运行新测试并确认失败**
 
 Run（运行）：
 
@@ -253,7 +253,7 @@ python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py -k 
 
 Expected（预期）：FAIL（失败），旧 prompt（提示词）仍包含完整差异命令。
 
-- [ ] **Step 3: 实现内部 role-input（角色输入）命令**
+- [x] **Step 3: 实现内部 role-input（角色输入）命令**
 
 ```python
 def render_role_input(review_input: ReviewInput, state: dict, role: str) -> str:
@@ -267,7 +267,7 @@ def render_role_input(review_input: ReviewInput, state: dict, role: str) -> str:
 
 `_role-input` 必须重新校验 input hash（输入哈希）、state subject（状态对象）和完整 `HEAD`（提交头）；不接受任意 path 参数（路径参数）。模板只渲染 role、input path、state path、role-input command、role focus 和 severity rubric。
 
-- [ ] **Step 4: 写逐角色完成与超时测试**
+- [x] **Step 4: 写逐角色完成与超时测试**
 
 ```python
 def test_completed_role_is_saved_before_sibling_timeout(tmp_path: Path, monkeypatch) -> None:
@@ -289,7 +289,7 @@ def test_completed_role_is_saved_before_sibling_timeout(tmp_path: Path, monkeypa
     assert state["roles"]["implementation-correctness"]["status"] == "timed_out"
 ```
 
-- [ ] **Step 5: 实现独立并发派发与状态归并**
+- [x] **Step 5: 实现独立并发派发与状态归并**
 
 先扩展内部 `_sdk-dispatch`（开发包内部派发）结果契约，使执行状态与 Markdown（标记文本）分离：
 
@@ -331,7 +331,7 @@ def dispatch_roles(review_input: ReviewInput, sdk_python: str, state: dict, role
 
 另补父进程 future（异步结果）直接抛异常的测试，断言对应角色 `status == "failed"`、`output` 是 Markdown（标记文本）字符串，且 `output_hash == sha256_bytes(output.encode("utf-8"))`；不得把 `reviewer_failure()` 返回的数据对象直接写入状态。
 
-- [ ] **Step 6: 从状态生成报告并运行 Task 2 测试**
+- [x] **Step 6: 从状态生成报告并运行 Task 2 测试**
 
 `render_report()` 改为读取 state（状态）的两个角色输出；报告写完后计算文件字节哈希并再次原子更新 state（状态）。
 
@@ -343,7 +343,7 @@ python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py -k 
 
 Expected（预期）：PASS（通过）。
 
-- [ ] **Step 7: 提交检查点（仅获授权时）**
+- [x] **Step 7: 提交 Task 2 检查点（仅获授权时）**
 
 ```powershell
 git add plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py plugins/cross-agent-review/skills/cross-agent-review/assets/templates/reviewer-prompt.md tests/test_cross_agent_review_cli.py
