@@ -443,6 +443,55 @@ def test_load_profile_artifacts_rejects_duplicate_id(tmp_path: Path) -> None:
         load_global_command_guards_module().load_profile_artifacts(profile)
 
 
+@pytest.mark.parametrize(
+    "artifact",
+    [
+        {"path": "evidence/pass.json"},
+        {"id": "", "path": "evidence/pass.json"},
+        {"id": "   ", "path": "evidence/pass.json"},
+        {"id": [], "path": "evidence/pass.json"},
+        {"id": "review_pass"},
+        {"id": "review_pass", "path": ""},
+        {"id": "review_pass", "path": "   "},
+        {"id": "review_pass", "path": []},
+    ],
+)
+def test_load_profile_artifacts_rejects_invalid_required_strings(tmp_path: Path, artifact: dict) -> None:
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    profile.joinpath("artifacts.yaml").write_text(
+        json.dumps({"artifacts": [artifact]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="^artifact_registry_invalid$"):
+        load_global_command_guards_module().load_profile_artifacts(profile)
+
+
+def test_session_focus_artifact_lookup_reuses_shared_registry_loader(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    artifact = {
+        "id": "completion_note",
+        "path": ".local/guard/artifacts/{profile_id}/{instance_id}/{state_version}/completion-note.json",
+    }
+    profile.joinpath("artifacts.yaml").write_text(
+        json.dumps({"artifacts": [artifact, artifact]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    load_runtime_cli_module()
+
+    with pytest.raises(ValueError, match="artifact_id_duplicate: completion_note"):
+        sys.modules["core"].resolved_artifact_path(
+            project,
+            "repo-policy",
+            "instance-1",
+            1,
+            "completion_note",
+        )
+
+
 def test_resolve_artifact_path_uses_explicit_scope_roots(tmp_path: Path) -> None:
     project = tmp_path / "project"
     user_home = tmp_path / "user-home"
@@ -1042,6 +1091,23 @@ def test_hook_router_denies_structurally_invalid_artifact_registry(tmp_path: Pat
     profile = project / ".agents" / "guards" / "repo-policy"
     profile.mkdir(parents=True)
     profile.joinpath("artifacts.yaml").write_text("artifacts: invalid\n", encoding="utf-8")
+
+    assert_artifact_registry_invalid(profile, project, user_home)
+
+
+@pytest.mark.parametrize("path", [None, "", "   ", []])
+def test_hook_router_denies_invalid_artifact_path_as_registry_invalid(tmp_path: Path, path: object) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    artifact = {"id": "cross_agent_review_pass"}
+    if path is not None:
+        artifact["path"] = path
+    profile.joinpath("artifacts.yaml").write_text(
+        json.dumps({"artifacts": [artifact]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
     assert_artifact_registry_invalid(profile, project, user_home)
 

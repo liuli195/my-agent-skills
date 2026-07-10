@@ -1045,7 +1045,6 @@ def validate_references(configs: dict[str, dict[str, Any]]) -> list[ValidationIs
 
     issues.extend(validate_deprecated_fields(configs))
     issues.extend(validate_state_permissions(configs))
-    issues.extend(validate_artifact_contract(configs))
     issues.extend(validate_state_transition_shape(configs))
 
     initial_state = configs["state_machine"].get("initial_state")
@@ -1271,6 +1270,9 @@ def validate_profile(profile_dir: Path) -> tuple[list[str], list[ValidationIssue
 
     if has_global_command_guards_file:
         checked.append("global_command_guards")
+
+    if "artifacts" in configs:
+        issues.extend(validate_artifact_contract(configs))
 
     reference_categories = {"state_machine", "guard_points", "artifacts"}
     if not issues and reference_categories.issubset(configs):

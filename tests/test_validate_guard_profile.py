@@ -1032,6 +1032,65 @@ def test_guard_defined_artifact_standard_contract_passes(tmp_path: Path) -> None
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def write_global_command_guard_only_profile(profile: Path, artifact_type: str, artifact_path: str) -> None:
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    (profile / "state-machine.yaml").unlink()
+    (profile / "guard-points.yaml").unlink()
+    artifacts = profile / "artifacts.yaml"
+    text = artifacts.read_text(encoding="utf-8")
+    text = text.replace("type: note", f"type: {artifact_type}")
+    text = text.replace("owner: guard", "owner: agent-guard")
+    text = text.replace(
+        ".local/guard/artifacts/{profile_id}/{instance_id}/{state_version}/completion-note.json",
+        artifact_path,
+    )
+    artifacts.write_text(text, encoding="utf-8")
+    write_global_command_guards(profile, valid_global_command_guard_with_artifact_yaml())
+
+
+@pytest.mark.parametrize(
+    ("artifact_type", "artifact_path", "expected_field"),
+    [
+        (
+            "note",
+            ".local/guard/evidence/{profile_id}/{artifact_id}/{subject_id}/{git_head_short}/pass.json",
+            "artifacts.completion_note.type",
+        ),
+        (
+            "json",
+            ".local/guard/artifacts/{profile_id}/{instance_id}/{state_version}/completion-note.json",
+            "artifacts.completion_note.path",
+        ),
+    ],
+)
+def test_global_command_guard_only_profile_rejects_invalid_guard_defined_artifact(
+    tmp_path: Path,
+    artifact_type: str,
+    artifact_path: str,
+    expected_field: str,
+) -> None:
+    profile = tmp_path / "profile"
+    write_global_command_guard_only_profile(profile, artifact_type, artifact_path)
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert f"category=artifacts field={expected_field}" in result.stdout
+
+
+def test_global_command_guard_only_profile_accepts_valid_guard_defined_artifact(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    write_global_command_guard_only_profile(
+        profile,
+        "json",
+        ".local/guard/evidence/{profile_id}/{artifact_id}/{subject_id}/{git_head_short}/pass.json",
+    )
+
+    result = run_validator(profile)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_manifest_mode_is_rejected(tmp_path: Path) -> None:
     profile = tmp_path / "profile"
     shutil.copytree(MINIMAL_PROFILE, profile)

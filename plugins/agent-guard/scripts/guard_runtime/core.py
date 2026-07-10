@@ -16,7 +16,7 @@ import yaml
 try:
     from .command_context import command_from_envelope, tool_name_from_envelope
     from .command_matcher import command_prefix_matches, normalize_command_prefix
-    from .global_command_guards import evaluate_global_command_guards
+    from .global_command_guards import evaluate_global_command_guards, load_profile_artifacts
     from .json_checks import (
         ARRAY_PREDICATES as JSON_ARTIFACT_ARRAY_PREDICATES,
         JSON_PREDICATES as JSON_ARTIFACT_PREDICATES,
@@ -28,7 +28,7 @@ try:
 except ImportError:
     from command_context import command_from_envelope, tool_name_from_envelope
     from command_matcher import command_prefix_matches, normalize_command_prefix
-    from global_command_guards import evaluate_global_command_guards
+    from global_command_guards import evaluate_global_command_guards, load_profile_artifacts
     from json_checks import (
         ARRAY_PREDICATES as JSON_ARTIFACT_ARRAY_PREDICATES,
         JSON_PREDICATES as JSON_ARTIFACT_PREDICATES,
@@ -779,15 +779,10 @@ def artifact_path(project: Path, user_home: Path | None, scope: str, template: s
 
 
 def resolved_artifact_path(project: Path, profile_id: str, instance_id: str, state_version: int, artifact_id: str, user_home: Path | None = None, scope: str = "project") -> Path | None:
-    artifacts = read_yaml(profile_dir(project, profile_id, user_home, scope) / "artifacts.yaml").get("artifacts", [])
-    for artifact in artifacts if isinstance(artifacts, list) else []:
-        if not isinstance(artifact, dict) or artifact.get("id") != artifact_id:
-            continue
-        template = artifact.get("path")
-        if not isinstance(template, str):
-            return None
-        return artifact_path(project, user_home, scope, template, profile_id, instance_id, state_version)
-    return None
+    artifact = load_profile_artifacts(profile_dir(project, profile_id, user_home, scope)).get(artifact_id)
+    if artifact is None:
+        return None
+    return artifact_path(project, user_home, scope, artifact["path"], profile_id, instance_id, state_version)
 
 
 def artifact_exists(project: Path, profile_id: str, instance_id: str, state_version: int, artifact_id: str, user_home: Path | None = None, scope: str = "project") -> bool:

@@ -249,9 +249,17 @@ def load_profile_artifacts(profile_dir: Path) -> dict[str, dict[str, Any]]:
         raise ValueError("artifact_registry_invalid")
     result: dict[str, dict[str, Any]] = {}
     for artifact in artifacts:
-        if not isinstance(artifact, dict) or not isinstance(artifact.get("id"), str) or not artifact["id"]:
+        if not isinstance(artifact, dict):
             raise ValueError("artifact_registry_invalid")
-        artifact_id = artifact["id"]
+        artifact_id = artifact.get("id")
+        artifact_path = artifact.get("path")
+        if (
+            not isinstance(artifact_id, str)
+            or not artifact_id.strip()
+            or not isinstance(artifact_path, str)
+            or not artifact_path.strip()
+        ):
+            raise ValueError("artifact_registry_invalid")
         if artifact_id in result:
             raise ValueError(f"artifact_id_duplicate: {artifact_id}")
         result[artifact_id] = dict(artifact)
