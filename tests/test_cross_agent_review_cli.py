@@ -2480,12 +2480,42 @@ def test_mapping_fields_only_rejects_unsafe_or_undeclared_data(
     assert module.validate_mapping_fields_only(before, after, format_name, ("phase",)) == reason
 
 
+@pytest.mark.parametrize(
+    ("format_name", "before", "after"),
+    [
+        ("yaml", b"phase: build\nprotected: true\n", b"phase: build\nprotected: 1\n"),
+        ("json", b'{"phase":"build","protected":1}', b'{"phase":"build","protected":1.0}'),
+        (
+            "yaml",
+            b"phase: build\nprotected:\n  enabled: true\n",
+            b"phase: build\nprotected:\n  enabled: 1\n",
+        ),
+        (
+            "json",
+            b'{"phase":"build","protected":[1]}',
+            b'{"phase":"build","protected":[1.0]}',
+        ),
+    ],
+)
+def test_mapping_fields_only_rejects_undeclared_type_changes(
+    format_name: str, before: bytes, after: bytes
+) -> None:
+    module = load_script_module()
+
+    assert (
+        module.validate_mapping_fields_only(before, after, format_name, ("phase",))
+        == "mapping_undeclared_field_changed"
+    )
+
+
 def prepare_revalidation(
     tmp_path: Path,
     *,
     before: str = "- [ ] one\n",
     after: str = "- [x] one\n",
     policy: list[dict] | None = None,
+    ignored_context: str | None = None,
+    advance_head: bool = True,
 ) -> tuple[Path, Path, Path, str, str]:
     project = tmp_path / "repo"
     base = init_repo(project)
@@ -2493,6 +2523,8 @@ def prepare_revalidation(
     write_file(project / "design.md", "design body\n")
     target = write_file(project / "docs" / "superpowers" / "plans" / "demo.md", before)
     write_file(project / "alternate-spec.md", "alternate spec\n")
+    if ignored_context is not None:
+        write_file(project / ".gitignore", f"{ignored_context}.md\n")
     git(project, "add", ".")
     git(project, "commit", "-m", "review baseline")
     previous_head = git(project, "rev-parse", "HEAD")
@@ -2518,6 +2550,9 @@ def prepare_revalidation(
                 f"# Review Result: {role}\n## Findings\nNo findings.\n",
             )
         module.write_outputs(review_input, state)
+
+    if not advance_head:
+        return project, previous_input.parent.parent / "review-state.json", previous_input, previous_head, previous_head
 
     write_file(target, after)
     git(project, "add", target.relative_to(project).as_posix())
@@ -2564,6 +2599,163 @@ def assert_revalidate_rejected(
     assert result.stderr == ""
     assert not state_path.exists()
     assert not report_path.exists()
+
+
+@pytest.mark.parametrize("context_name", ["spec", "design", "plan"])
+def test_revalidate_rejects_tampered_context_hash(
+    tmp_path: Path, monkeypatch, context_name: str
+) -> None:
+    project, previous_state, current_input, _previous_head, _current_head = prepare_revalidation(
+        tmp_path
+    )
+    module = load_script_module()
+    state = json.loads(previous_state.read_text(encoding="utf-8"))
+    state["subject"]["contexts"][context_name]["hash"] = "sha256:" + "0" * 64
+    module.atomic_write_json(previous_state, state)
+
+    assert_revalidate_rejected(
+        monkeypatch,
+        project,
+        previous_state,
+        current_input,
+        "context_hash_mismatch",
+    )
+
+
+@pytest.mark.parametrize("context_name", ["spec", "design"])
+def test_revalidate_rejects_ignored_context_missing_from_commits(
+    tmp_path: Path, monkeypatch, context_name: str
+) -> None:
+    project, previous_state, current_input, _previous_head, _current_head = prepare_revalidation(
+        tmp_path,
+        ignored_context=context_name,
+    )
+
+    assert_revalidate_rejected(
+        monkeypatch,
+        project,
+        previous_state,
+        current_input,
+        "context_git_blob_unavailable",
+    )
+
+
+@pytest.mark.parametrize("link_kind", ["hardlink", "symlink"])
+def test_revalidate_replaces_linked_report_without_changing_target(
+    tmp_path: Path, link_kind: str
+) -> None:
+    project, previous_state, current_input, _previous_head, _current_head = prepare_revalidation(
+        tmp_path
+    )
+    report_path = current_input.parent.parent / "review-report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    linked_target = write_file(tmp_path / f"{link_kind}-target.md", "do not change\n")
+    if link_kind == "hardlink":
+        os.link(linked_target, report_path)
+    else:
+        try:
+            report_path.symlink_to(linked_target)
+        except OSError as exc:
+            pytest.skip(f"symlink unavailable: {exc}")
+
+    result = run(
+        "revalidate",
+        "--input-file",
+        str(current_input),
+        "--previous-state",
+        str(previous_state),
+        cwd=project,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert linked_target.read_text(encoding="utf-8") == "do not change\n"
+    assert report_path.read_text(encoding="utf-8").startswith("# Cross-Agent Review:")
+    assert not report_path.is_symlink()
+
+
+def test_revalidate_rejects_same_head_before_incremental_work(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project, previous_state, current_input, _previous_head, _current_head = prepare_revalidation(
+        tmp_path,
+        advance_head=False,
+    )
+    state_before = previous_state.read_bytes()
+    report_path = previous_state.with_name("review-report.md")
+    report_before = report_path.read_bytes()
+    module = load_script_module()
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("same-head rejection must happen before incremental work or writes")
+
+    for name in (
+        "ensure_clean_subject",
+        "incremental_changes",
+        "write_outputs",
+        "resolve_sdk_python",
+        "dispatch_roles",
+    ):
+        monkeypatch.setattr(module, name, unexpected)
+
+    result = run(
+        "revalidate",
+        "--input-file",
+        str(current_input),
+        "--previous-state",
+        str(previous_state),
+        cwd=project,
+    )
+
+    assert result.returncode != 0
+    assert "error: same_head_ref" in result.stdout
+    assert previous_state.read_bytes() == state_before
+    assert report_path.read_bytes() == report_before
+
+
+def test_revalidate_rejects_previous_state_output_collision(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project, previous_state, current_input, _previous_head, _current_head = prepare_revalidation(
+        tmp_path
+    )
+    module = load_script_module()
+    with contextlib.chdir(project):
+        current = module.load_review_input(
+            argparse.Namespace(input_file=current_input, debug=False, sdk_python=None)
+        )
+    collision_current = module.ReviewInput(
+        **{**vars(current), "output_dir": previous_state.parent}
+    )
+    state_before = previous_state.read_bytes()
+    report_path = previous_state.with_name("review-report.md")
+    report_before = report_path.read_bytes()
+    monkeypatch.setattr(module, "load_review_input", lambda _args: collision_current)
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("output collision rejection must happen before incremental work or writes")
+
+    for name in (
+        "ensure_clean_subject",
+        "incremental_changes",
+        "write_outputs",
+        "resolve_sdk_python",
+        "dispatch_roles",
+    ):
+        monkeypatch.setattr(module, name, unexpected)
+
+    result = run(
+        "revalidate",
+        "--input-file",
+        str(current_input),
+        "--previous-state",
+        str(previous_state),
+        cwd=project,
+    )
+
+    assert result.returncode != 0
+    assert "error: previous_state_output_collision" in result.stdout
+    assert previous_state.read_bytes() == state_before
+    assert report_path.read_bytes() == report_before
 
 
 @pytest.mark.parametrize(

@@ -407,6 +407,35 @@ def parse_declared_mapping(value: bytes, format_name: str) -> dict:
     return parsed
 
 
+def strict_equal(before: object, after: object) -> bool:
+    if type(before) is not type(after):
+        return False
+    if isinstance(before, dict):
+        if len(before) != len(after):
+            return False
+        remaining = list(after.items())
+        for before_key, before_value in before.items():
+            match = next(
+                (
+                    index
+                    for index, (after_key, _after_value) in enumerate(remaining)
+                    if strict_equal(before_key, after_key)
+                ),
+                None,
+            )
+            if match is None:
+                return False
+            if not strict_equal(before_value, remaining.pop(match)[1]):
+                return False
+        return True
+    if isinstance(before, (list, tuple)):
+        return len(before) == len(after) and all(
+            strict_equal(before_item, after_item)
+            for before_item, after_item in zip(before, after, strict=True)
+        )
+    return before == after
+
+
 def validate_mapping_fields_only(
     before: bytes,
     after: bytes,
@@ -421,13 +450,13 @@ def validate_mapping_fields_only(
     changed = {
         key
         for key in set(before_map) | set(after_map)
-        if before_map.get(key, MISSING) != after_map.get(key, MISSING)
+        if not strict_equal(before_map.get(key, MISSING), after_map.get(key, MISSING))
     }
     if not changed <= set(fields):
         return "mapping_undeclared_field_changed"
     reduced_before = {key: value for key, value in before_map.items() if key not in fields}
     reduced_after = {key: value for key, value in after_map.items() if key not in fields}
-    return None if reduced_before == reduced_after else "mapping_structure_changed"
+    return None if strict_equal(reduced_before, reduced_after) else "mapping_structure_changed"
 
 
 def validate_path_segment(segment: str, input_file: Path) -> str:
@@ -619,11 +648,17 @@ def classify_files(review_input: ReviewInput, entries: list[dict]) -> list[dict]
 
 def initial_review_state(review_input: ReviewInput) -> dict:
     files = classify_files(review_input, changed_file_entries(review_input))
+
+    def context_entry(path: Path) -> dict[str, str]:
+        relative_path = path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+        try:
+            content = read_git_blob(review_input.head_ref, relative_path)
+        except ValueError:
+            content = path.read_bytes()
+        return {"path": relative_path, "hash": sha256_bytes(content)}
+
     contexts = {
-        name: {
-            "path": path.resolve().relative_to(Path.cwd().resolve()).as_posix(),
-            "hash": sha256_bytes(path.read_bytes()),
-        }
+        name: context_entry(path)
         for name, path in {
             "spec": review_input.spec_file,
             "design": review_input.design_file,
@@ -658,17 +693,23 @@ def initial_review_state(review_input: ReviewInput) -> dict:
     }
 
 
-def atomic_write_json(path: Path, value: dict) -> None:
+def atomic_write_bytes(path: Path, value: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     temp_path = Path(temporary)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
-            json.dump(value, stream, ensure_ascii=False, indent=2)
-            stream.write("\n")
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(value)
         os.replace(temp_path, path)
     finally:
         temp_path.unlink(missing_ok=True)
+
+
+def atomic_write_json(path: Path, value: dict) -> None:
+    atomic_write_bytes(
+        path,
+        (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+    )
 
 
 def render_context_index(state: dict) -> str:
@@ -1088,6 +1129,25 @@ def validate_reuse_source(current: ReviewInput, previous_state: dict) -> ReviewI
     mismatch = next((name for name, values in comparable.items() if values[0] != values[1]), None)
     if mismatch is not None:
         raise ValueError(f"reuse_source_mismatch: {mismatch}")
+
+    context_paths = {
+        "spec": current.spec_file,
+        "design": current.design_file,
+        "plan": current.plan_file,
+    }
+    for name, path in context_paths.items():
+        relative_path = context_relative_path(path)
+        try:
+            previous_blob = read_git_blob(previous.head_ref, relative_path)
+            current_blob = read_git_blob(current.head_ref, relative_path)
+        except ValueError as exc:
+            raise ValueError(f"context_git_blob_unavailable: {name}") from exc
+        previous_hash = sha256_bytes(previous_blob)
+        current_hash = sha256_bytes(current_blob)
+        if contexts[name]["hash"] != previous_hash:
+            raise ValueError(f"context_hash_mismatch: {name}")
+        if name in {"spec", "design"} and current_hash != previous_hash:
+            raise ValueError(f"validator_failed: protected_context_changed={relative_path}")
     return previous
 
 
@@ -1610,7 +1670,7 @@ def write_outputs(review_args: ReviewInput, state: dict) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     report_bytes = render_report(state).encode("utf-8")
     report_path = out_dir / "review-report.md"
-    report_path.write_bytes(report_bytes)
+    atomic_write_bytes(report_path, report_bytes)
     state["report_hash"] = sha256_bytes(report_bytes)
     atomic_write_json(out_dir / "review-state.json", state)
     (out_dir / "review-pass.json").unlink(missing_ok=True)
@@ -1753,6 +1813,10 @@ def run_revalidate(args: argparse.Namespace) -> int:
             else Path.cwd() / args.previous_state
         )
         previous_state = load_previous_state(source_path)
+        if previous_state["subject"]["head_ref"] == current.head_ref:
+            raise ValueError("same_head_ref")
+        if source_path.resolve() == (current.output_dir / "review-state.json").resolve():
+            raise ValueError("previous_state_output_collision")
         ensure_clean_subject(
             Path.cwd(),
             current.head_ref,
