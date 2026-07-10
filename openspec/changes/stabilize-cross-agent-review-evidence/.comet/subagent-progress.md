@@ -42,7 +42,7 @@
   - `3.1 先补失败测试，覆盖 checkbox-only（仅复选框）和 mapping-fields-only（仅映射字段）的允许变化`
   - `3.2 先补拒绝测试，覆盖未声明文件、重叠策略、重命名、复制、规格或设计变化、解析失败、脏工作区、提交头或输入输出哈希不匹配和链式复用`
   - `3.3 实现 revalidate（重新校验）入口，在不调用 SDK（开发包）的前提下为当前提交生成来源可追溯的 reused（复用）报告和状态`
-- Stage: `BLOCKED`
+- Stage: `exception-review-fix`
 - Base commit: `43d4206`
 - Implementation commits: `2c5c10d`, `1afdc35`
 - Changed files: `cross_agent_review.py`, `test_cross_agent_review_cli.py` (`+961/-59`)
@@ -50,8 +50,8 @@
 - GREEN evidence: 定向 40 通过；Cross Agent Review（跨代理审查）完整 197 通过；`py_compile`（语法编译检查）和 `git diff --check`（差异格式检查）通过
 - Risk signals: 安全解析、跨提交事实复用、状态白名单、公共 CLI（命令行接口）、diff（差异）超过 200 行
 - Task review: BLOCKED（阻断）— 初审 3 Critical（严重阻断）+ 1 Important（重要阻断）均已修复；复审仍发现 YAML（配置）`!!set`（集合）中的 `true/1/1.0` 可绕过严格类型比较
-- Review-fix round: `1/1`
-- Decision required: 是否显式授权一次例外修复轮，只在现有 `strict_equal()`（严格比较）补集合元素的类型敏感匹配并复审
+- Review-fix round: `2/2`（用户显式授权一次例外修复轮）
+- Decision: 只补现有 `strict_equal()`（严格比较）的集合元素类型敏感匹配，并进行窄范围复审
 
 ## Task 2: 角色限定输入与逐角色持久化
 
