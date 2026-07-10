@@ -616,8 +616,49 @@ def load_bound_state(review_input: ReviewInput) -> dict:
         state = json.loads(state_file.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("state_mismatch") from exc
-    if not isinstance(state, dict) or not isinstance(state.get("subject"), dict):
+    if (
+        not isinstance(state, dict)
+        or set(state) != {"schema_version", "subject", "files", "roles", "report_hash"}
+        or not isinstance(state["subject"], dict)
+        or not isinstance(state["files"], list)
+        or not isinstance(state["roles"], dict)
+        or set(state["roles"]) != set(REVIEWER_ROLES)
+        or not isinstance(state["report_hash"], str)
+    ):
         raise ValueError("state_mismatch")
+
+    for role in REVIEWER_ROLES:
+        role_state = state["roles"][role]
+        if (
+            not isinstance(role_state, dict)
+            or set(role_state) != {"scope", "attempts", "status", "output", "output_hash"}
+            or not isinstance(role_state["scope"], dict)
+            or not isinstance(role_state["attempts"], list)
+            or not role_state["attempts"]
+            or not isinstance(role_state["status"], str)
+            or role_state["status"] not in TERMINAL_ROLE_STATUSES
+            or not isinstance(role_state["output"], str)
+            or not role_state["output"].strip()
+            or not isinstance(role_state["output_hash"], str)
+        ):
+            raise ValueError("state_mismatch")
+        for number, attempt in enumerate(role_state["attempts"], start=1):
+            if (
+                not isinstance(attempt, dict)
+                or set(attempt)
+                != {"number", "started_at", "finished_at", "status", "output", "output_hash"}
+                or type(attempt["number"]) is not int
+                or attempt["number"] != number
+                or not isinstance(attempt["started_at"], str)
+                or not isinstance(attempt["finished_at"], str)
+                or not isinstance(attempt["status"], str)
+                or attempt["status"] not in TERMINAL_ROLE_STATUSES
+                or not isinstance(attempt["output"], str)
+                or not attempt["output"].strip()
+                or not isinstance(attempt["output_hash"], str)
+            ):
+                raise ValueError("state_mismatch")
+
     if state["subject"].get("input_hash") != sha256_bytes(
         review_input.input_file.read_bytes()
     ):
@@ -627,41 +668,22 @@ def load_bound_state(review_input: ReviewInput) -> dict:
     if (
         state.get("schema_version") != expected["schema_version"]
         or state["subject"] != expected["subject"]
-        or state.get("files") != expected["files"]
-        or not isinstance(state.get("roles"), dict)
-        or set(state["roles"]) != set(REVIEWER_ROLES)
+        or state["files"] != expected["files"]
     ):
         raise ValueError("state_mismatch")
 
     for role in REVIEWER_ROLES:
         role_state = state["roles"][role]
-        if not isinstance(role_state, dict):
-            raise ValueError("state_mismatch")
         if role_state.get("scope") != expected["roles"][role]["scope"]:
             raise ValueError("retry_scope_mismatch")
-        attempts = role_state.get("attempts")
-        if (
-            not isinstance(attempts, list)
-            or not attempts
-            or role_state.get("status") not in TERMINAL_ROLE_STATUSES
-            or not isinstance(role_state.get("output"), str)
-            or not role_state["output"].strip()
-        ):
-            raise ValueError("state_mismatch")
+        attempts = role_state["attempts"]
         if role_state.get("output_hash") != sha256_bytes(
             role_state["output"].encode("utf-8")
         ):
             raise ValueError("output_hash_mismatch")
 
-        for number, attempt in enumerate(attempts, start=1):
-            if (
-                not isinstance(attempt, dict)
-                or attempt.get("number") != number
-                or attempt.get("status") not in TERMINAL_ROLE_STATUSES
-                or not isinstance(attempt.get("output"), str)
-                or not attempt["output"].strip()
-            ):
-                raise ValueError("state_mismatch")
+        previous_finished_at = None
+        for attempt in attempts:
             if attempt.get("output_hash") != sha256_bytes(
                 attempt["output"].encode("utf-8")
             ):
@@ -678,8 +700,11 @@ def load_bound_state(review_input: ReviewInput) -> dict:
                 if timestamp.utcoffset() != UTC.utcoffset(None):
                     raise ValueError("state_mismatch")
                 timestamps.append(timestamp)
-            if timestamps[0] > timestamps[1]:
+            if timestamps[0] > timestamps[1] or (
+                previous_finished_at is not None and timestamps[0] < previous_finished_at
+            ):
                 raise ValueError("state_mismatch")
+            previous_finished_at = timestamps[1]
 
         latest = attempts[-1]
         if any(
@@ -687,6 +712,17 @@ def load_bound_state(review_input: ReviewInput) -> dict:
             for key in ("status", "output", "output_hash")
         ):
             raise ValueError("state_mismatch")
+
+    report_bytes = render_report(state).encode("utf-8")
+    try:
+        saved_report_bytes = (review_input.output_dir / "review-report.md").read_bytes()
+    except OSError as exc:
+        raise ValueError("output_hash_mismatch") from exc
+    if (
+        saved_report_bytes != report_bytes
+        or state["report_hash"] != sha256_bytes(report_bytes)
+    ):
+        raise ValueError("output_hash_mismatch")
     return state
 
 
@@ -1095,10 +1131,10 @@ def runtime_allowed_paths(review_input: ReviewInput) -> list[Path]:
 def write_outputs(review_args: ReviewInput, state: dict) -> int:
     out_dir = output_dir_for(review_args)
     out_dir.mkdir(parents=True, exist_ok=True)
-    report_text = render_report(state)
+    report_bytes = render_report(state).encode("utf-8")
     report_path = out_dir / "review-report.md"
-    report_path.write_text(report_text, encoding="utf-8")
-    state["report_hash"] = sha256_bytes(report_path.read_bytes())
+    report_path.write_bytes(report_bytes)
+    state["report_hash"] = sha256_bytes(report_bytes)
     atomic_write_json(out_dir / "review-state.json", state)
     (out_dir / "review-pass.json").unlink(missing_ok=True)
     return 0

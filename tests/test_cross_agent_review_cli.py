@@ -2009,6 +2009,7 @@ def test_report_is_rebuilt_only_from_state_and_top_level_hash_is_saved(
     report = report_path.read_text(encoding="utf-8")
     saved = json.loads((review_input.output_dir / "review-state.json").read_text(encoding="utf-8"))
     assert report == report_text
+    assert report_path.read_bytes() == report_text.encode("utf-8")
     assert "# Cross-Agent Review: state-only-change" in report
     assert "- Base ref: `state-only-base`" in report
     assert "- Head ref: `state-only-head`" in report
@@ -2146,6 +2147,15 @@ def test_retry_with_no_retryable_roles_does_not_dispatch(tmp_path: Path, monkeyp
         ("output_hash", "output_hash_mismatch"),
         ("attempt_output_hash", "output_hash_mismatch"),
         ("attempts", "state_mismatch"),
+        ("top_extra", "state_mismatch"),
+        ("role_extra", "state_mismatch"),
+        ("attempt_extra", "state_mismatch"),
+        ("role_status_list", "state_mismatch"),
+        ("role_status_dict", "state_mismatch"),
+        ("attempt_status_list", "state_mismatch"),
+        ("attempt_status_dict", "state_mismatch"),
+        ("attempt_number_bool", "state_mismatch"),
+        ("attempt_number_float", "state_mismatch"),
     ],
 )
 def test_retry_rejects_state_not_bound_to_current_input_and_repository(
@@ -2180,7 +2190,27 @@ def test_retry_rejects_state_not_bound_to_current_input_and_repository(
         state["roles"][role]["attempts"][0]["output_hash"] = "sha256:wrong"
     elif mutation == "attempts":
         state["roles"][role]["attempts"] = []
-    module.atomic_write_json(input_file.parent.parent / "review-state.json", state)
+    elif mutation == "top_extra":
+        state["extra"] = True
+    elif mutation == "role_extra":
+        state["roles"][role]["extra"] = True
+    elif mutation == "attempt_extra":
+        state["roles"][role]["attempts"][0]["extra"] = True
+    elif mutation.startswith("role_status_"):
+        state["roles"][role]["status"] = [] if mutation.endswith("list") else {}
+    elif mutation.startswith("attempt_status_"):
+        state["roles"][role]["attempts"][0]["status"] = (
+            [] if mutation.endswith("list") else {}
+        )
+    elif mutation == "attempt_number_bool":
+        state["roles"][role]["attempts"][0]["number"] = True
+    elif mutation == "attempt_number_float":
+        state["roles"][role]["attempts"][0]["number"] = 1.0
+    state_path = input_file.parent.parent / "review-state.json"
+    report_path = input_file.parent.parent / "review-report.md"
+    module.atomic_write_json(state_path, state)
+    state_before = state_path.read_bytes()
+    report_before = report_path.read_bytes()
 
     def unexpected(*_args, **_kwargs):
         pytest.fail("invalid state must be rejected before SDK resolution or dispatch")
@@ -2192,6 +2222,101 @@ def test_retry_rejects_state_not_bound_to_current_input_and_repository(
 
     assert result.returncode != 0
     assert f"error: {reason}" in result.stdout
+    assert result.stderr == ""
+    assert state_path.read_bytes() == state_before
+    assert report_path.read_bytes() == report_before
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ("missing_report", "output_hash_mismatch"),
+        ("changed_report", "output_hash_mismatch"),
+        ("missing_report_hash", "state_mismatch"),
+        ("malformed_report_hash", "output_hash_mismatch"),
+        ("changed_report_hash", "output_hash_mismatch"),
+    ],
+)
+def test_retry_rejects_report_not_bound_to_state_before_dispatch(
+    tmp_path: Path, monkeypatch, mutation: str, reason: str
+) -> None:
+    project, input_file, state = review_state_for_retry(
+        tmp_path, ("completed", "timed_out")
+    )
+    module = load_script_module()
+    state_path = input_file.parent.parent / "review-state.json"
+    report_path = input_file.parent.parent / "review-report.md"
+    if mutation == "missing_report":
+        report_path.unlink()
+    elif mutation == "changed_report":
+        report_path.write_text("changed report\n", encoding="utf-8")
+    elif mutation == "missing_report_hash":
+        state.pop("report_hash")
+        module.atomic_write_json(state_path, state)
+    elif mutation == "malformed_report_hash":
+        state["report_hash"] = "sha256:not-a-hash"
+        module.atomic_write_json(state_path, state)
+    elif mutation == "changed_report_hash":
+        state["report_hash"] = "sha256:" + "0" * 64
+        module.atomic_write_json(state_path, state)
+    state_before = state_path.read_bytes()
+    report_before = report_path.read_bytes() if report_path.exists() else None
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("invalid report must be rejected before SDK resolution or dispatch")
+
+    monkeypatch.setattr(module, "resolve_sdk_python", unexpected)
+    monkeypatch.setattr(module, "dispatch_roles", unexpected)
+
+    result = run("retry", "--input-file", str(input_file), cwd=project)
+
+    assert result.returncode != 0
+    assert f"error: {reason}" in result.stdout
+    assert result.stderr == ""
+    assert state_path.read_bytes() == state_before
+    assert (report_path.read_bytes() if report_path.exists() else None) == report_before
+
+
+def test_retry_rejects_attempt_history_time_reversal_before_dispatch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project, input_file, state = review_state_for_retry(
+        tmp_path, ("completed", "timed_out")
+    )
+    module = load_script_module()
+    role = "implementation-correctness"
+    module.record_role_result(
+        state,
+        role,
+        "timed_out",
+        "# Review Result: implementation-correctness\n## Findings\nSecond timeout\n",
+        "2026-07-10T01:03:00.000000Z",
+        "2026-07-10T01:04:00.000000Z",
+    )
+    report_path = input_file.parent.parent / "review-report.md"
+    report_path.write_bytes(module.render_report(state).encode("utf-8"))
+    state["report_hash"] = module.sha256_bytes(report_path.read_bytes())
+    second = state["roles"][role]["attempts"][1]
+    second["started_at"] = "2026-07-10T01:01:00.000000Z"
+    second["finished_at"] = "2026-07-10T01:01:30.000000Z"
+    state_path = input_file.parent.parent / "review-state.json"
+    module.atomic_write_json(state_path, state)
+    state_before = state_path.read_bytes()
+    report_before = report_path.read_bytes()
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("reversed attempt history must be rejected before SDK resolution or dispatch")
+
+    monkeypatch.setattr(module, "resolve_sdk_python", unexpected)
+    monkeypatch.setattr(module, "dispatch_roles", unexpected)
+
+    result = run("retry", "--input-file", str(input_file), cwd=project)
+
+    assert result.returncode != 0
+    assert "error: state_mismatch" in result.stdout
+    assert result.stderr == ""
+    assert state_path.read_bytes() == state_before
+    assert report_path.read_bytes() == report_before
 
 
 def test_retry_rejects_malformed_state_as_state_mismatch(tmp_path: Path, monkeypatch) -> None:
