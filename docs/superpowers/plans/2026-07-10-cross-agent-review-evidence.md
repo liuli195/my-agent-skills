@@ -1,3 +1,9 @@
+---
+change: stabilize-cross-agent-review-evidence
+design-doc: docs/superpowers/specs/2026-07-10-cross-agent-review-evidence-design.md
+base-ref: 41f635b98ee2c4db0e06bfff658c4379cae49adc
+---
+
 # Cross Agent Review（跨代理审查）稳定化与通用证据写入实施计划
 
 > **For agentic workers（给代理执行者）：** REQUIRED SUB-SKILL（必需子技能）：使用 `superpowers:subagent-driven-development`（超级能力子代理驱动开发，推荐）或 `superpowers:executing-plans`（超级能力执行计划）逐项实施。所有步骤使用 checkbox（复选框）跟踪。
