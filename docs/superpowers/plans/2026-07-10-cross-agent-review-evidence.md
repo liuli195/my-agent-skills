@@ -360,7 +360,7 @@ git commit -m "保存跨代理审查逐角色结果"
 - Consumes（输入）：Task 2 的 `dispatch_roles()` 和状态格式。
 - Produces（输出）：`retryable_roles()`、`run_retry()` 和 `retry`（重试）CLI（命令行）入口。
 
-- [ ] **Step 1: 写只重试失败角色测试**
+- [x] **Step 1: 写只重试失败角色测试**
 
 ```python
 def test_retry_dispatches_only_failed_role_and_preserves_success(tmp_path: Path, monkeypatch) -> None:
@@ -386,7 +386,7 @@ def test_retry_dispatches_only_failed_role_and_preserves_success(tmp_path: Path,
 
 另加两个成功角色返回 `no_retryable_roles` 且 dispatch（派发）未调用的测试。
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 ```powershell
 python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py -k "retry_dispatches or no_retryable_roles"
@@ -394,7 +394,7 @@ python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py -k 
 
 Expected（预期）：FAIL（失败），`retry`（重试）子命令不存在。
 
-- [ ] **Step 3: 实现最小 retry（重试）入口**
+- [x] **Step 3: 实现最小 retry（重试）入口**
 
 ```python
 def retryable_roles(state: dict) -> list[str]:
@@ -421,7 +421,7 @@ def run_retry(args: argparse.Namespace) -> int:
 
 parser（参数解析器）复用 `run`（运行）的 `--input-file/--debug/--sdk-python` 参数，不添加路径缩放参数；scope（范围）只从原状态读取。
 
-- [ ] **Step 4: 运行 retry（重试）与完整 Cross Agent Review（跨代理审查）测试**
+- [x] **Step 4: 运行 retry（重试）与完整 Cross Agent Review（跨代理审查）测试**
 
 ```powershell
 python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py
@@ -429,7 +429,7 @@ python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py
 
 Expected（预期）：PASS（通过）。
 
-- [ ] **Step 5: 提交检查点（仅获授权时）**
+- [x] **Step 5: 提交 Task 3 检查点（仅获授权时）**
 
 ```powershell
 git add plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py tests/test_cross_agent_review_cli.py
