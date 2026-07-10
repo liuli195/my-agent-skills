@@ -6,10 +6,11 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 
 SCRIPT_PATH = Path(__file__).resolve()
@@ -56,6 +57,20 @@ DEFAULT_SUBJECT_TYPE = "comet-change"
 
 
 @dataclass(frozen=True)
+class SummaryOnly:
+    path: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class RevalidationPolicy:
+    path: str
+    validator: str
+    format: str | None = None
+    fields: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ReviewInput:
     change: str
     mode: str
@@ -68,6 +83,8 @@ class ReviewInput:
     output_dir: Path
     debug: bool
     sdk_python: Path | None
+    summary_only: tuple[SummaryOnly, ...]
+    revalidation_policy: tuple[RevalidationPolicy, ...]
 
 
 @dataclass(frozen=True)
@@ -107,6 +124,10 @@ def git_output_bytes(args: list[str], cwd: Path) -> bytes:
         stderr = result.stderr.decode("utf-8", errors="replace").strip()
         raise ValueError(f"git_failed: {' '.join(args)}: {stderr}")
     return result.stdout
+
+
+def sha256_bytes(value: bytes) -> str:
+    return "sha256:" + hashlib.sha256(value).hexdigest()
 
 
 def status_entries(cwd: Path) -> list[StatusEntry]:
@@ -166,6 +187,95 @@ def resolve_context_path(raw_path: str) -> Path:
     if path.is_absolute():
         return path
     return Path.cwd() / path
+
+
+def project_relative_path(raw: str, project: Path) -> str:
+    path = Path(raw)
+    windows = PureWindowsPath(raw)
+    if path.is_absolute() or windows.is_absolute() or windows.drive or windows.root:
+        raise ValueError(f"path_outside_project: {raw}")
+    resolved = (project / path).resolve()
+    try:
+        relative = resolved.relative_to(project.resolve())
+    except ValueError as exc:
+        raise ValueError(f"path_outside_project: {raw}") from exc
+    return relative.as_posix()
+
+
+def parse_summary_only(value: object, project: Path) -> tuple[SummaryOnly, ...]:
+    if not isinstance(value, list):
+        raise ValueError("invalid_summary_only: expected_array")
+    parsed: list[SummaryOnly] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"path", "reason"}:
+            raise ValueError("invalid_summary_only: invalid_entry")
+        raw_path = item["path"]
+        reason = item["reason"]
+        if not isinstance(raw_path, str) or not raw_path:
+            raise ValueError("invalid_summary_only: invalid_path")
+        path = project_relative_path(raw_path, project)
+        if path in seen:
+            raise ValueError(f"invalid_summary_only: duplicate_path={path}")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError(f"invalid_summary_only: empty_reason={path}")
+        seen.add(path)
+        parsed.append(SummaryOnly(path=path, reason=reason))
+    return tuple(parsed)
+
+
+def parse_revalidation_policy(value: object, project: Path) -> tuple[RevalidationPolicy, ...]:
+    if not isinstance(value, list):
+        raise ValueError("invalid_revalidation_policy: expected_array")
+    parsed: list[RevalidationPolicy] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("invalid_revalidation_policy: invalid_entry")
+        raw_path = item.get("path")
+        validator = item.get("validator")
+        if not isinstance(raw_path, str) or not raw_path:
+            raise ValueError("invalid_revalidation_policy: invalid_path")
+        path = project_relative_path(raw_path, project)
+        if path in seen:
+            raise ValueError(f"invalid_revalidation_policy: duplicate_path={path}")
+        if not isinstance(validator, str) or validator not in {
+            "checkbox-only",
+            "mapping-fields-only",
+        }:
+            raise ValueError(f"invalid_revalidation_policy: invalid_validator={validator}")
+        if validator == "checkbox-only":
+            if set(item) != {"path", "validator"}:
+                raise ValueError(f"invalid_revalidation_policy: invalid_fields={path}")
+            policy = RevalidationPolicy(path=path, validator=validator)
+        else:
+            if set(item) != {"path", "validator", "format", "fields"}:
+                if not isinstance(item.get("format"), str) or item.get("format") not in {
+                    "json",
+                    "yaml",
+                }:
+                    raise ValueError(f"invalid_revalidation_policy: invalid_format={path}")
+                raise ValueError(f"invalid_revalidation_policy: invalid_fields={path}")
+            format_name = item["format"]
+            fields = item["fields"]
+            if not isinstance(format_name, str) or format_name not in {"json", "yaml"}:
+                raise ValueError(f"invalid_revalidation_policy: invalid_format={path}")
+            if not isinstance(fields, list) or not fields or any(
+                not isinstance(field, str) or not field for field in fields
+            ):
+                raise ValueError(f"invalid_revalidation_policy: invalid_fields={path}")
+            if len(fields) != len(set(fields)):
+                duplicate = next(field for index, field in enumerate(fields) if field in fields[:index])
+                raise ValueError(f"invalid_revalidation_policy: duplicate_field={duplicate}")
+            policy = RevalidationPolicy(
+                path=path,
+                validator=validator,
+                format=format_name,
+                fields=tuple(fields),
+            )
+        seen.add(path)
+        parsed.append(policy)
+    return tuple(parsed)
 
 
 def validate_path_segment(segment: str, input_file: Path) -> str:
@@ -232,6 +342,10 @@ def load_review_input(args: argparse.Namespace) -> ReviewInput:
     for path in [spec_file, design_file, plan_file]:
         if not path.is_file():
             raise ValueError(f"missing_file: {path}")
+    summary_only = parse_summary_only(payload.get("summary_only", []), Path.cwd())
+    revalidation_policy = parse_revalidation_policy(
+        payload.get("revalidation_policy", []), Path.cwd()
+    )
     return ReviewInput(
         change=str(payload["change"]),
         mode=mode,
@@ -244,7 +358,132 @@ def load_review_input(args: argparse.Namespace) -> ReviewInput:
         output_dir=input_file.parent.parent,
         debug=getattr(args, "debug", False),
         sdk_python=getattr(args, "sdk_python", None),
+        summary_only=summary_only,
+        revalidation_policy=revalidation_policy,
     )
+
+
+def changed_file_entries(review_input: ReviewInput) -> list[dict]:
+    output = git_output_bytes(
+        [
+            "diff",
+            "--name-status",
+            "-z",
+            "--find-renames",
+            "--find-copies-harder",
+            f"{review_input.base_ref}...{review_input.head_ref}",
+        ],
+        Path.cwd(),
+    )
+    fields = output.split(b"\0")
+    entries: list[dict] = []
+    index = 0
+    while index < len(fields) and fields[index]:
+        status = fields[index].decode("ascii", errors="replace")
+        index += 1
+        first_path = fields[index].decode("utf-8", errors="surrogateescape")
+        index += 1
+        if status.startswith(("R", "C")):
+            path = fields[index].decode("utf-8", errors="surrogateescape")
+            index += 1
+            entries.append(
+                {
+                    "status": status,
+                    "path": project_relative_path(path, Path.cwd()),
+                    "old_path": project_relative_path(first_path, Path.cwd()),
+                }
+            )
+        else:
+            entries.append(
+                {
+                    "status": status,
+                    "path": project_relative_path(first_path, Path.cwd()),
+                }
+            )
+    return entries
+
+
+def classify_files(review_input: ReviewInput, entries: list[dict]) -> list[dict]:
+    contexts = {
+        review_input.spec_file.resolve().relative_to(Path.cwd().resolve()).as_posix(),
+        review_input.design_file.resolve().relative_to(Path.cwd().resolve()).as_posix(),
+        review_input.plan_file.resolve().relative_to(Path.cwd().resolve()).as_posix(),
+    }
+    summaries = {item.path: item.reason for item in review_input.summary_only}
+    changed = {item["path"] for item in entries}
+    unknown = sorted(set(summaries) - changed)
+    if unknown:
+        raise ValueError(f"invalid_summary_only: not_changed={','.join(unknown)}")
+    if contexts & set(summaries):
+        raise ValueError("classification_overlap")
+    return [
+        {
+            **entry,
+            "classification": (
+                "authoritative_context"
+                if entry["path"] in contexts
+                else "summary_only"
+                if entry["path"] in summaries
+                else "full_review"
+            ),
+            "reason": summaries.get(entry["path"]),
+        }
+        for entry in entries
+    ]
+
+
+def initial_review_state(review_input: ReviewInput) -> dict:
+    files = classify_files(review_input, changed_file_entries(review_input))
+    contexts = {
+        name: {
+            "path": path.resolve().relative_to(Path.cwd().resolve()).as_posix(),
+            "hash": sha256_bytes(path.read_bytes()),
+        }
+        for name, path in {
+            "spec": review_input.spec_file,
+            "design": review_input.design_file,
+            "plan": review_input.plan_file,
+        }.items()
+    }
+
+    def role_scope() -> dict[str, list[str]]:
+        return {
+            classification: [
+                item["path"] for item in files if item["classification"] == classification
+            ]
+            for classification in ("authoritative_context", "full_review", "summary_only")
+        }
+
+    return {
+        "schema_version": "cross-agent-review-state/v1",
+        "subject": {
+            "change": review_input.change,
+            "mode": review_input.mode,
+            "base_ref": review_input.base_ref,
+            "head_ref": review_input.head_ref,
+            "head_ref_short": review_input.head_ref[:12],
+            "input_file": review_input.input_file.resolve()
+            .relative_to(Path.cwd().resolve())
+            .as_posix(),
+            "input_hash": sha256_bytes(review_input.input_file.read_bytes()),
+            "contexts": contexts,
+        },
+        "files": files,
+        "roles": {role: {"attempts": [], "scope": role_scope()} for role in REVIEWER_ROLES},
+    }
+
+
+def atomic_write_json(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temp_path = Path(temporary)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+            json.dump(value, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def candidate_sdk_pythons(explicit: Path | None) -> list[Path]:
@@ -547,6 +786,7 @@ def runtime_allowed_paths(review_input: ReviewInput) -> list[Path]:
         review_input.input_file,
         output_dir / "review-report.md",
         output_dir / "review-pass.json",
+        output_dir / "review-state.json",
         debug_dir / "review-input.json",
         *(debug_dir / "prompts" / f"{role}.txt" for role in REVIEWER_ROLES),
         *(debug_dir / "raw" / f"{role}.txt" for role in REVIEWER_ROLES),

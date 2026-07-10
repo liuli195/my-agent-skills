@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import contextlib
 import hashlib
@@ -228,6 +229,270 @@ def write_review_input(
     input_file = prepared_dir / "review-input.json"
     write_file(input_file, json.dumps(payload, ensure_ascii=False) + "\n")
     return input_file
+
+
+def test_review_input_classifies_context_summary_and_default_full(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    init_repo(project)
+    base = git(project, "rev-parse", "HEAD")
+    write_file(project / "spec.md", "spec body\n")
+    write_file(project / "design.md", "design body\n")
+    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
+    write_file(project / "src" / "app.py", "print('ok')\n")
+    write_file(project / "docs" / "process.md", "generated plan\n")
+    git(project, "add", ".")
+    git(project, "commit", "-m", "review subject")
+    head = git(project, "rev-parse", "HEAD")
+    input_file = write_review_input(
+        project,
+        base,
+        head,
+        payload_overrides={
+            "summary_only": [
+                {"path": "docs/process.md", "reason": "过程文档仅供按需核对"}
+            ]
+        },
+    )
+
+    module = load_script_module()
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        state = module.initial_review_state(review_input)
+
+    by_path = {item["path"]: item for item in state["files"]}
+    assert by_path["spec.md"]["classification"] == "authoritative_context"
+    assert by_path["spec.md"]["reason"] is None
+    assert by_path["src/app.py"]["classification"] == "full_review"
+    assert by_path["docs/process.md"]["classification"] == "summary_only"
+    assert by_path["docs/process.md"]["reason"] == "过程文档仅供按需核对"
+    assert "spec.md" in state["roles"]["spec-alignment"]["scope"]["authoritative_context"]
+
+
+def committed_review_subject(tmp_path: Path) -> tuple[Path, str, str, Path]:
+    project = tmp_path / "repo"
+    base = init_repo(project)
+    write_file(project / "spec.md", "spec body\n")
+    write_file(project / "design.md", "design body\n")
+    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
+    write_file(project / "src" / "app.py", "print('ok')\n")
+    git(project, "add", ".")
+    git(project, "commit", "-m", "review subject")
+    head = git(project, "rev-parse", "HEAD")
+    return project, base, head, write_review_input(project, base, head)
+
+
+def test_changed_file_entries_preserves_rename_and_copy_sources(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    base = init_repo(project)
+    write_file(project / "spec.md", "spec body\n")
+    write_file(project / "design.md", "design body\n")
+    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
+    git(project, "mv", "app.txt", "renamed.txt")
+    shutil.copyfile(project / "renamed.txt", project / "copied.txt")
+    git(project, "add", ".")
+    git(project, "commit", "-m", "rename and copy")
+    head = git(project, "rev-parse", "HEAD")
+    input_file = write_review_input(project, base, head)
+
+    module = load_script_module()
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        entries = module.changed_file_entries(review_input)
+
+    by_path = {entry["path"]: entry for entry in entries}
+    assert by_path["renamed.txt"]["status"].startswith("R")
+    assert by_path["renamed.txt"]["old_path"] == "app.txt"
+    assert by_path["copied.txt"]["status"].startswith("C")
+    assert by_path["copied.txt"]["old_path"] == "app.txt"
+
+
+def test_initial_state_records_subject_context_hashes_and_role_scopes(tmp_path: Path) -> None:
+    project, base, head, input_file = committed_review_subject(tmp_path)
+    module = load_script_module()
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        state = module.initial_review_state(review_input)
+        module.atomic_write_json(review_input.output_dir / "review-state.json", state)
+        allowed_paths = module.runtime_allowed_paths(review_input)
+    saved = json.loads((review_input.output_dir / "review-state.json").read_text(encoding="utf-8"))
+
+    assert saved["schema_version"] == "cross-agent-review-state/v1"
+    assert saved["subject"]["change"] == "demo"
+    assert saved["subject"]["base_ref"] == base
+    assert saved["subject"]["head_ref"] == head
+    assert saved["subject"]["head_ref_short"] == head[:12]
+    assert saved["subject"]["input_file"] == input_file.relative_to(project).as_posix()
+    assert saved["subject"]["input_hash"].startswith("sha256:")
+    assert set(saved["subject"]["contexts"]) == {"spec", "design", "plan"}
+    assert all(
+        context["hash"].startswith("sha256:")
+        for context in saved["subject"]["contexts"].values()
+    )
+    assert saved["roles"]["spec-alignment"]["attempts"] == []
+    assert "status" not in saved["roles"]["spec-alignment"]
+    assert review_input.output_dir / "review-state.json" in allowed_paths
+
+
+@pytest.mark.parametrize(
+    ("summary_only", "error"),
+    [
+        (
+            [
+                {"path": "src/app.py", "reason": "first"},
+                {"path": "src/app.py", "reason": "second"},
+            ],
+            "invalid_summary_only: duplicate_path=src/app.py",
+        ),
+        ([{"path": "src/app.py", "reason": ""}], "invalid_summary_only: empty_reason=src/app.py"),
+        ([{"path": "C:\\outside.txt", "reason": "outside"}], "path_outside_project"),
+        ([{"path": "../src/app.py", "reason": "traversal"}], "path_outside_project"),
+        (
+            [{"path": "not-changed.md", "reason": "not changed"}],
+            "invalid_summary_only: not_changed=not-changed.md",
+        ),
+        ([{"path": "spec.md", "reason": "overlap"}], "classification_overlap"),
+    ],
+)
+def test_summary_only_rejects_invalid_entries(
+    tmp_path: Path, summary_only: list[dict[str, str]], error: str
+) -> None:
+    project = tmp_path / "repo"
+    base = init_repo(project)
+    write_file(project / "spec.md", "spec body\n")
+    write_file(project / "design.md", "design body\n")
+    write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
+    write_file(project / "src" / "app.py", "print('ok')\n")
+    git(project, "add", ".")
+    git(project, "commit", "-m", "review subject")
+    head = git(project, "rev-parse", "HEAD")
+    input_file = write_review_input(
+        project,
+        base,
+        head,
+        payload_overrides={"summary_only": summary_only},
+    )
+
+    module = load_script_module()
+    with contextlib.chdir(project), pytest.raises(ValueError, match=error):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        module.initial_review_state(review_input)
+
+
+def test_review_input_parses_revalidation_policy(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    input_file = write_review_input(
+        project,
+        "base",
+        "head",
+        payload_overrides={
+            "revalidation_policy": [
+                {"path": "checks.md", "validator": "checkbox-only"},
+                {
+                    "path": "manifest.yaml",
+                    "validator": "mapping-fields-only",
+                    "format": "yaml",
+                    "fields": ["status", "evidence"],
+                },
+            ]
+        },
+    )
+
+    module = load_script_module()
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+
+    assert review_input.revalidation_policy == (
+        module.RevalidationPolicy(path="checks.md", validator="checkbox-only"),
+        module.RevalidationPolicy(
+            path="manifest.yaml",
+            validator="mapping-fields-only",
+            format="yaml",
+            fields=("status", "evidence"),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("policy", "error"),
+    [
+        ({}, "expected_array"),
+        (
+            [
+                {"path": "checks.md", "validator": "checkbox-only"},
+                {"path": "checks.md", "validator": "checkbox-only"},
+            ],
+            "duplicate_path=checks.md",
+        ),
+        ([{"path": "../checks.md", "validator": "checkbox-only"}], "path_outside_project"),
+        ([{"path": "checks.md", "validator": "unknown"}], "invalid_validator"),
+        ([{"path": "checks.md", "validator": []}], "invalid_validator"),
+        (
+            [{"path": "manifest.json", "validator": "mapping-fields-only", "fields": ["status"]}],
+            "invalid_format",
+        ),
+        (
+            [
+                {
+                    "path": "manifest.json",
+                    "validator": "mapping-fields-only",
+                    "format": [],
+                    "fields": ["status"],
+                }
+            ],
+            "invalid_format",
+        ),
+        (
+            [
+                {
+                    "path": "manifest.json",
+                    "validator": "mapping-fields-only",
+                    "format": "json",
+                    "fields": [],
+                }
+            ],
+            "invalid_fields",
+        ),
+        (
+            [
+                {
+                    "path": "manifest.json",
+                    "validator": "mapping-fields-only",
+                    "format": "json",
+                    "fields": ["status", "status"],
+                }
+            ],
+            "duplicate_field=status",
+        ),
+    ],
+)
+def test_revalidation_policy_rejects_invalid_entries(
+    tmp_path: Path, policy: object, error: str
+) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    input_file = write_review_input(
+        project,
+        "base",
+        "head",
+        payload_overrides={"revalidation_policy": policy},
+    )
+
+    module = load_script_module()
+    with contextlib.chdir(project), pytest.raises(ValueError, match=error):
+        module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
 
 
 def create_review_context_commit(project: Path) -> str:
@@ -756,6 +1021,7 @@ def test_clean_worktree_checks_reuse_runtime_allowlist(tmp_path: Path, monkeypat
         input_file.resolve(),
         (output_dir / "review-report.md").resolve(),
         (output_dir / "review-pass.json").resolve(),
+        (output_dir / "review-state.json").resolve(),
         (debug_dir / "review-input.json").resolve(),
         (debug_dir / "prompts" / "spec-alignment.txt").resolve(),
         (debug_dir / "prompts" / "implementation-correctness.txt").resolve(),
