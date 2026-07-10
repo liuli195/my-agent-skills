@@ -3,7 +3,24 @@
 - Change: `stabilize-cross-agent-review-evidence`
 - Review mode: `standard`
 - TDD mode: `tdd`
-- Current plan task: `Task 7: 删除 mark-pass（标记通过）并更新调用契约`
+- Current plan task: `Task 8: 发布形态端到端回归与完成验证`
+
+## Task 8: 发布形态端到端回归与完成验证
+
+- OpenSpec mapping:
+  - `6.1` Cross Agent Review（跨代理审查）发布入口到 Agent Guard（代理守卫）门禁的完整链路
+  - `6.2` Planning Review（规划审查）五字段结果到同一通用证据入口和门禁的完整链路
+  - `6.3` OpenSpec（开放规格）、两个插件、包完整性与仓库 full（完整）验证
+- Stage: `completed`
+- Base commit: `15f06b0`
+- Risk signals: 发布形态端到端回归、两个插件集成、完整仓库验证
+- Full verification diagnosis: `test_e2e_allowlist_entries_match_current_runtime_hits` 在未包含 Task 8 新测试的 `HEAD`（提交头）上稳定失败；根因是 Task 1-7 重构后 E2E allowlist（端到端允许清单）快照漂移，Task 8 最小扩展 `tests/test_test_runtime_boundaries.py`
+- Implementation commit: `e5c9c71`
+- Changed files: `test_agent_guard_plugin_runtime_e2e.py`, `test_test_runtime_boundaries.py`（`+339/-15`）
+- RED evidence: 跨插件发布链 1 失败（SDK（开发包）不可用）；E2E allowlist（端到端允许清单）快照 1 失败
+- GREEN evidence: 两条业务链 2 通过；边界扫描 10 通过；Cross Agent Review（跨代理审查）215 通过；Agent Guard（代理守卫）277 通过；full（完整）7/7 通过（69/277/58/173/215/183/OpenSpec 16），`full-not-run: false`，`status: passed`
+- Task review: PASS（通过）— 无 Critical/Important/Minor（严重/重要/次要）；46 个新增清单身份均有真实扫描命中，5 个删除身份均已消失
+- Review-fix round: `0/1`
 
 ## Task 7: 删除 mark-pass（标记通过）并更新调用契约
 

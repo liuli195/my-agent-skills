@@ -35,6 +35,6 @@
 
 ## 6. 端到端回归与仓库验证
 
-- [ ] 6.1 从 Cross Agent Review（跨代理审查）发布形态 CLI（命令行）执行角色审查、失败角色重试或机械重新校验、主代理业务字段构造、Agent Guard（代理守卫）证据记录和 Global Command Guard（全局命令守卫点）放行的完整回归
-- [ ] 6.2 从 Planning Review（规划审查）五字段结果执行主代理业务字段构造、通用证据记录和 Comet design gate（双星设计门禁）放行的完整回归，证明 Planning Review（规划审查）技能无需写文件
-- [ ] 6.3 运行 OpenSpec（开放规格）严格校验、两个插件的定向测试、包完整性检查和仓库 full（完整）验证，并逐项复核没有修改 Comet（双星工作流）内部或用户级安装状态
+- [x] 6.1 从 Cross Agent Review（跨代理审查）发布形态 CLI（命令行）执行角色审查、失败角色重试或机械重新校验、主代理业务字段构造、Agent Guard（代理守卫）证据记录和 Global Command Guard（全局命令守卫点）放行的完整回归
+- [x] 6.2 从 Planning Review（规划审查）五字段结果执行主代理业务字段构造、通用证据记录和 Comet design gate（双星设计门禁）放行的完整回归，证明 Planning Review（规划审查）技能无需写文件
+- [x] 6.3 运行 OpenSpec（开放规格）严格校验、两个插件的定向测试、包完整性检查和仓库 full（完整）验证，并逐项复核没有修改 Comet（双星工作流）内部或用户级安装状态

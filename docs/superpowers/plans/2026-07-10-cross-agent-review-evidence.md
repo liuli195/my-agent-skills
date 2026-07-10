@@ -921,6 +921,7 @@ git commit -m "迁移审查通过证据所有权"
 
 **Files（文件）：**
 - Modify if needed（按需修改）：`tests/test_agent_guard_plugin_runtime_e2e.py`
+- Modify if needed（按需修改）：`tests/test_test_runtime_boundaries.py`
 - Modify（修改）：`openspec/changes/stabilize-cross-agent-review-evidence/tasks.md`
 - Verify（验证）：所有本变更文件
 
@@ -928,7 +929,7 @@ git commit -m "迁移审查通过证据所有权"
 - Consumes（输入）：Task 1-7 全部用户入口。
 - Produces（输出）：两条完整业务链回归、OpenSpec（开放规格）严格通过和仓库 full（完整）验证结果。
 
-- [ ] **Step 1: 完成 Cross Agent Review（跨代理审查）到门禁的发布形态回归**
+- [x] **Step 1: 完成 Cross Agent Review（跨代理审查）到门禁的发布形态回归**
 
 测试必须从脚本文件入口执行，而不是直接调用内部函数：
 
@@ -944,11 +945,11 @@ cross_agent_review.py run
 
 SDK（开发包）测试替身只能作为可导入的测试环境模块进入真实 `_sdk-dispatch`（内部派发）路径，生产 `run`（运行）不得新增 fake result flag（伪结果参数）。
 
-- [ ] **Step 2: 完成 Planning Review（规划审查）到门禁的发布形态回归**
+- [x] **Step 2: 完成 Planning Review（规划审查）到门禁的发布形态回归**
 
 从五字段 JSON（数据）构造规范哈希，执行同一个 `record-evidence`（记录证据）和 hook router（钩子路由器）入口，断言 `planning_review_pass`（规划审查通过标记）匹配当前完整 `HEAD`（提交头）并放行；测试后断言没有 Planning Review Skill（规划审查技能）产物写入。
 
-- [ ] **Step 3: 运行 OpenSpec（开放规格）严格校验**
+- [x] **Step 3: 运行 OpenSpec（开放规格）严格校验**
 
 ```powershell
 openspec validate stabilize-cross-agent-review-evidence --strict
@@ -956,7 +957,7 @@ openspec validate stabilize-cross-agent-review-evidence --strict
 
 Expected（预期）：`Change 'stabilize-cross-agent-review-evidence' is valid`。
 
-- [ ] **Step 4: 运行插件定向验证**
+- [x] **Step 4: 运行插件定向验证**
 
 ```powershell
 python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py tests/test_cross_agent_review_plugin_package.py
@@ -965,11 +966,11 @@ python -m pytest -q -p no:cacheprovider tests/test_agent_guard_runtime_session_f
 
 Expected（预期）：两条命令均 PASS（通过）。
 
-- [ ] **Step 5: 运行 package（包）和 full verification（完整验证）**
+- [x] **Step 5: 运行 package（包）和 full verification（完整验证）**
 
 先按 Build and Verify（构建与验证）Skill（技能）定位仓库入口，再执行 full（完整）模式。若仓库入口等价命令为当前配置中的 runner（运行器），预期最终 `status: passed`。
 
-- [ ] **Step 6: 复核差异边界**
+- [x] **Step 6: 复核差异边界**
 
 ```powershell
 git diff --name-only
@@ -979,11 +980,11 @@ git status --short
 
 人工断言：没有修改 Comet（双星工作流）技能/脚本、没有写用户级 Plugin（插件）或 Guard Profile（守卫画像）、没有新第三方依赖、没有残留临时文件。
 
-- [ ] **Step 7: 更新 OpenSpec tasks（开放规格任务）**
+- [x] **Step 7: 更新 OpenSpec tasks（开放规格任务）**
 
 只在对应实现和验证真实通过后，把 `openspec/changes/stabilize-cross-agent-review-evidence/tasks.md` 中的复选框逐项改为 `[x]`；不得预先勾选。
 
-- [ ] **Step 8: 最终提交（仅获授权时）**
+- [x] **Step 8: 最终提交（仅获授权时）**
 
 ```powershell
 git add plugins/cross-agent-review plugins/agent-guard tests openspec/changes/stabilize-cross-agent-review-evidence docs/superpowers/specs/2026-07-10-cross-agent-review-evidence-design.md docs/superpowers/plans/2026-07-10-cross-agent-review-evidence.md
