@@ -18,7 +18,7 @@ verification_report: docs/superpowers/reports/2026-07-11-stabilize-cross-agent-r
 branch_status: handled
 created_at: 2026-07-10
 verified_at: 2026-07-10
-archived: false
+archived: true
 direct_override: null
 handoff_context: openspec/changes/stabilize-cross-agent-review-evidence/.comet/handoff/spec-context.json
 handoff_hash: 1bb6c91e11dafd23dd510e8468062472cdd24bf26afefbc1c0d8d827400a2804

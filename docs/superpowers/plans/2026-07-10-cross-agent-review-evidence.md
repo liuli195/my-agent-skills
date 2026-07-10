@@ -2,6 +2,7 @@
 change: stabilize-cross-agent-review-evidence
 design-doc: docs/superpowers/specs/2026-07-10-cross-agent-review-evidence-design.md
 base-ref: 41f635b98ee2c4db0e06bfff658c4379cae49adc
+archived-with: 2026-07-10-stabilize-cross-agent-review-evidence
 ---
 
 # Cross Agent Review（跨代理审查）稳定化与通用证据写入实施计划
@@ -25,6 +26,7 @@ base-ref: 41f635b98ee2c4db0e06bfff658c4379cae49adc
 - 不新增第三方依赖、运行时模块、数据库、配置框架或证据版本。
 - 所有实现按 TDD（测试驱动开发）先红后绿；提交步骤只有在用户另行明确授权 Git commit（版本提交）后才能执行，否则记录 `commit_skipped_not_authorized`。
 
+archived-with: 2026-07-10-stabilize-cross-agent-review-evidence
 ---
 
 ### Task 1: 文件投影与原子状态基础

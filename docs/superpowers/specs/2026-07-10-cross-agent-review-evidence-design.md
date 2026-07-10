@@ -2,6 +2,8 @@
 comet_change: stabilize-cross-agent-review-evidence
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-07-10-stabilize-cross-agent-review-evidence
+status: final
 ---
 
 # Cross Agent Review（跨代理审查）稳定化与通用证据写入设计

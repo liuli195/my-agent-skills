@@ -4,5 +4,6 @@
   "openspec_tasks": "openspec/changes/stabilize-cross-agent-review-evidence/tasks.md",
   "openspec_delta_spec": "openspec/changes/stabilize-cross-agent-review-evidence/specs/agent-guard-core/spec.md",
   "handoff_context": "openspec/changes/stabilize-cross-agent-review-evidence/.comet/handoff/spec-context.json",
-  "handoff_markdown": "openspec/changes/stabilize-cross-agent-review-evidence/.comet/handoff/spec-context.md"
+  "handoff_markdown": "openspec/changes/stabilize-cross-agent-review-evidence/.comet/handoff/spec-context.md",
+  "archive_directory": "openspec/changes/archive/2026-07-10-stabilize-cross-agent-review-evidence"
 }
