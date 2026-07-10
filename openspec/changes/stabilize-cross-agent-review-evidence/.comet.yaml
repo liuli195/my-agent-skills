@@ -1,6 +1,6 @@
 workflow: full
 language: zh-CN
-phase: build
+phase: verify
 context_compression: beta
 build_mode: subagent-driven-development
 build_pause: null
