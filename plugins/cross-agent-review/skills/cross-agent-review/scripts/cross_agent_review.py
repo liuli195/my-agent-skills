@@ -949,10 +949,25 @@ def record_role_result(
         status, output = "failed", failure["text"]
     output_hash = sha256_bytes(output.encode("utf-8"))
     role_state = state["roles"][role]
+    started_at = started_at or utc_now()
+    finished_at = finished_at or utc_now()
+    previous_finished_at = (
+        role_state["attempts"][-1]["finished_at"]
+        if role_state["attempts"]
+        else started_at
+    )
+    if datetime.fromisoformat(started_at[:-1] + "+00:00") < datetime.fromisoformat(
+        previous_finished_at[:-1] + "+00:00"
+    ):
+        started_at = previous_finished_at
+    if datetime.fromisoformat(finished_at[:-1] + "+00:00") < datetime.fromisoformat(
+        started_at[:-1] + "+00:00"
+    ):
+        finished_at = started_at
     attempt = {
         "number": len(role_state["attempts"]) + 1,
-        "started_at": started_at or utc_now(),
-        "finished_at": finished_at or utc_now(),
+        "started_at": started_at,
+        "finished_at": finished_at,
         "status": status,
         "output": output,
         "output_hash": output_hash,

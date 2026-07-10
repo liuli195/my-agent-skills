@@ -1902,6 +1902,49 @@ def test_record_role_result_rejects_whitespace_completed_output() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("previous_finished_at", "started_at", "finished_at", "expected"),
+    [
+        (
+            "2026-07-10T01:02:10.000000Z",
+            "2026-07-10T01:02:05.000000Z",
+            "2026-07-10T01:02:12.000000Z",
+            ("2026-07-10T01:02:10.000000Z", "2026-07-10T01:02:12.000000Z"),
+        ),
+        (
+            "2026-07-10T01:02:04.000000Z",
+            "2026-07-10T01:02:06.000000Z",
+            "2026-07-10T01:02:05.000000Z",
+            ("2026-07-10T01:02:06.000000Z", "2026-07-10T01:02:06.000000Z"),
+        ),
+    ],
+)
+def test_record_role_result_clamps_reversed_attempt_boundaries(
+    previous_finished_at: str,
+    started_at: str,
+    finished_at: str,
+    expected: tuple[str, str],
+) -> None:
+    module = load_script_module()
+    role = "spec-alignment"
+    state = {"roles": {role: {"attempts": []}}}
+    module.record_role_result(
+        state,
+        role,
+        "completed",
+        NO_BLOCKING_REVIEW,
+        "2026-07-10T01:02:00.000000Z",
+        previous_finished_at,
+    )
+
+    module.record_role_result(
+        state, role, "completed", NO_BLOCKING_REVIEW, started_at, finished_at
+    )
+
+    attempt = state["roles"][role]["attempts"][-1]
+    assert (attempt["started_at"], attempt["finished_at"]) == expected
+
+
 def test_dispatch_records_numbered_attempt_timestamps_at_boundaries(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1920,7 +1963,7 @@ def test_dispatch_records_numbered_attempt_timestamps_at_boundaries(
         ]
     )
 
-    class FakeDateTime:
+    class FakeDateTime(real_datetime):
         @classmethod
         def now(cls, timezone):
             assert timezone is module.UTC
