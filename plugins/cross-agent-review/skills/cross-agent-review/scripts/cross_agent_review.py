@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
+
+import yaml
 
 
 SCRIPT_PATH = Path(__file__).resolve()
@@ -24,6 +27,19 @@ REVIEWER_ROLES = [
     "implementation-correctness",
 ]
 TERMINAL_ROLE_STATUSES = {"completed", "failed", "timed_out", "reused"}
+CHECKBOX = re.compile(r"^(?P<prefix>\s*[-*+]\s+\[)[ xX](?P<suffix>\].*)$")
+MISSING = object()
+STATE_FIELDS = {"schema_version", "subject", "files", "roles", "report_hash"}
+REUSED_STATE_FIELDS = {"source_head_ref", "source_state", "validated_changes"}
+ROLE_STATE_FIELDS = {"scope", "attempts", "status", "output", "output_hash"}
+ATTEMPT_FIELDS = {
+    "number",
+    "started_at",
+    "finished_at",
+    "status",
+    "output",
+    "output_hash",
+}
 ROLE_FOCUS = {
     "spec-alignment": "\n".join(
         [
@@ -96,6 +112,40 @@ class StatusEntry:
     old_path: Path | None = None
 
 
+class DuplicateMappingKey(ValueError):
+    pass
+
+
+class StrictSafeLoader(yaml.SafeLoader):
+    pass
+
+
+def construct_strict_mapping(
+    loader: StrictSafeLoader, node: yaml.MappingNode, deep: bool = False
+) -> dict:
+    loader.flatten_mapping(node)
+    mapping = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            if key in mapping:
+                raise DuplicateMappingKey("mapping_duplicate_key")
+        except TypeError as exc:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                "found unhashable key",
+                key_node.start_mark,
+            ) from exc
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+StrictSafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, construct_strict_mapping
+)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cross_agent_review.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -107,6 +157,9 @@ def build_parser() -> argparse.ArgumentParser:
     retry_parser.add_argument("--input-file", type=Path, required=True)
     retry_parser.add_argument("--debug", action="store_true")
     retry_parser.add_argument("--sdk-python", type=Path)
+    revalidate_parser = subparsers.add_parser("revalidate")
+    revalidate_parser.add_argument("--input-file", type=Path, required=True)
+    revalidate_parser.add_argument("--previous-state", type=Path, required=True)
     mark_parser = subparsers.add_parser("mark-pass")
     mark_parser.add_argument("--input-file", type=Path, required=True)
     mark_parser.add_argument("--profile-id", default=DEFAULT_PROFILE_ID)
@@ -297,6 +350,86 @@ def parse_revalidation_policy(value: object, project: Path) -> tuple[Revalidatio
     return tuple(parsed)
 
 
+def validate_checkbox_only(before: bytes, after: bytes) -> str | None:
+    try:
+        before_lines = before.decode("utf-8").splitlines(keepends=True)
+        after_lines = after.decode("utf-8").splitlines(keepends=True)
+    except UnicodeDecodeError:
+        return "checkbox_not_utf8"
+    if len(before_lines) != len(after_lines):
+        return "checkbox_line_count_changed"
+
+    def normalized(line: str) -> str:
+        return CHECKBOX.sub(r"\g<prefix> \g<suffix>", line)
+
+    return (
+        None
+        if [normalized(line) for line in before_lines]
+        == [normalized(line) for line in after_lines]
+        else "checkbox_content_changed"
+    )
+
+
+def strict_json_mapping(pairs: list[tuple[str, object]]) -> dict:
+    mapping = {}
+    for key, value in pairs:
+        if key in mapping:
+            raise DuplicateMappingKey("mapping_duplicate_key")
+        mapping[key] = value
+    return mapping
+
+
+def reject_nonstandard_json_constant(_value: str) -> None:
+    raise ValueError("mapping_parse_failed")
+
+
+def parse_declared_mapping(value: bytes, format_name: str) -> dict:
+    if format_name not in {"json", "yaml"}:
+        raise ValueError("mapping_unknown_format")
+    try:
+        text = value.decode("utf-8")
+        if format_name == "json":
+            parsed = json.loads(
+                text,
+                object_pairs_hook=strict_json_mapping,
+                parse_constant=reject_nonstandard_json_constant,
+            )
+        else:
+            parsed = yaml.load(text, Loader=StrictSafeLoader)
+    except DuplicateMappingKey as exc:
+        raise ValueError("mapping_duplicate_key") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError, yaml.YAMLError) as exc:
+        raise ValueError("mapping_parse_failed") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("mapping_not_mapping")
+    if any(not isinstance(key, str) for key in parsed):
+        raise ValueError("mapping_non_string_key")
+    return parsed
+
+
+def validate_mapping_fields_only(
+    before: bytes,
+    after: bytes,
+    format_name: str,
+    fields: tuple[str, ...],
+) -> str | None:
+    try:
+        before_map = parse_declared_mapping(before, format_name)
+        after_map = parse_declared_mapping(after, format_name)
+    except ValueError as exc:
+        return str(exc)
+    changed = {
+        key
+        for key in set(before_map) | set(after_map)
+        if before_map.get(key, MISSING) != after_map.get(key, MISSING)
+    }
+    if not changed <= set(fields):
+        return "mapping_undeclared_field_changed"
+    reduced_before = {key: value for key, value in before_map.items() if key not in fields}
+    reduced_after = {key: value for key, value in after_map.items() if key not in fields}
+    return None if reduced_before == reduced_after else "mapping_structure_changed"
+
+
 def validate_path_segment(segment: str, input_file: Path) -> str:
     if (
         not segment
@@ -337,7 +470,10 @@ def validate_prepared_inputs_dir(input_file: Path) -> None:
 
 def validate_base_ref(cwd: Path, base_ref: str) -> None:
     try:
-        git_output(["rev-parse", "--verify", f"{base_ref}^{{commit}}"], cwd)
+        git_output(
+            ["rev-parse", "--verify", "--end-of-options", f"{base_ref}^{{commit}}"],
+            cwd,
+        )
     except ValueError as exc:
         raise ValueError(f"base_ref_mismatch: {base_ref}") from exc
 
@@ -382,7 +518,7 @@ def load_review_input(args: argparse.Namespace) -> ReviewInput:
     )
 
 
-def changed_file_entries(review_input: ReviewInput) -> list[dict]:
+def name_status_entries(diff_range: str) -> list[dict]:
     output = git_output_bytes(
         [
             "diff",
@@ -390,7 +526,7 @@ def changed_file_entries(review_input: ReviewInput) -> list[dict]:
             "-z",
             "--find-renames",
             "--find-copies-harder",
-            f"{review_input.base_ref}...{review_input.head_ref}",
+            diff_range,
         ],
         Path.cwd(),
     )
@@ -441,6 +577,14 @@ def changed_file_entries(review_input: ReviewInput) -> list[dict]:
                 }
             )
     return entries
+
+
+def changed_file_entries(review_input: ReviewInput) -> list[dict]:
+    return name_status_entries(f"{review_input.base_ref}...{review_input.head_ref}")
+
+
+def incremental_changes(previous_head: str, current_head: str) -> list[dict]:
+    return name_status_entries(f"{previous_head}..{current_head}")
 
 
 def classify_files(review_input: ReviewInput, entries: list[dict]) -> list[dict]:
@@ -610,83 +754,117 @@ def load_role_state(review_input: ReviewInput, state_file: Path, role: str) -> d
     return state
 
 
-def load_bound_state(review_input: ReviewInput) -> dict:
-    state_file = review_input.output_dir / "review-state.json"
-    try:
-        state = json.loads(state_file.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ValueError("state_mismatch") from exc
+def validate_reused_state_fields(state: dict) -> None:
+    source_head = state.get("source_head_ref")
+    source_state = state.get("source_state")
+    changes = state.get("validated_changes")
     if (
-        not isinstance(state, dict)
-        or set(state) != {"schema_version", "subject", "files", "roles", "report_hash"}
-        or not isinstance(state["subject"], dict)
-        or not isinstance(state["files"], list)
-        or not isinstance(state["roles"], dict)
-        or set(state["roles"]) != set(REVIEWER_ROLES)
-        or not isinstance(state["report_hash"], str)
+        not isinstance(source_head, str)
+        or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", source_head) is None
+        or not isinstance(source_state, str)
+        or not isinstance(changes, list)
     ):
         raise ValueError("state_mismatch")
+    expected_source = (
+        PurePosixPath(".local")
+        / "cross-agent-review"
+        / str(state["subject"].get("change", ""))
+        / source_head[:12]
+        / "review-state.json"
+    ).as_posix()
+    try:
+        normalized_source = project_relative_path(source_state, Path.cwd())
+    except ValueError as exc:
+        raise ValueError("state_mismatch") from exc
+    if normalized_source != expected_source:
+        raise ValueError("state_mismatch")
+    seen: set[str] = set()
+    for change in changes:
+        if not isinstance(change, dict):
+            raise ValueError("state_mismatch")
+        validator = change.get("validator")
+        if validator not in {"checkbox-only", "mapping-fields-only"}:
+            raise ValueError("state_mismatch")
+        expected_fields = (
+            {"path", "validator"}
+            if validator == "checkbox-only"
+            else {"path", "validator", "format", "fields"}
+        )
+        if set(change) != expected_fields:
+            raise ValueError("state_mismatch")
+        try:
+            path = project_relative_path(change["path"], Path.cwd())
+        except (TypeError, ValueError) as exc:
+            raise ValueError("state_mismatch") from exc
+        if path in seen:
+            raise ValueError("state_mismatch")
+        seen.add(path)
+        if validator == "mapping-fields-only" and (
+            change.get("format") not in {"json", "yaml"}
+            or not isinstance(change.get("fields"), list)
+            or not change["fields"]
+            or any(not isinstance(field, str) or not field for field in change["fields"])
+            or len(change["fields"]) != len(set(change["fields"]))
+        ):
+            raise ValueError("state_mismatch")
+
+
+def validate_state_records(
+    state: object,
+    current_statuses: set[str] = TERMINAL_ROLE_STATUSES,
+    attempt_statuses: set[str] = TERMINAL_ROLE_STATUSES,
+) -> None:
+    if (
+        not isinstance(state, dict)
+        or not isinstance(state.get("subject"), dict)
+        or not isinstance(state.get("files"), list)
+        or not isinstance(state.get("roles"), dict)
+        or set(state["roles"]) != set(REVIEWER_ROLES)
+        or not isinstance(state.get("report_hash"), str)
+    ):
+        raise ValueError("state_mismatch")
+    has_reused = any(
+        isinstance(state["roles"][role], dict)
+        and state["roles"][role].get("status") == "reused"
+        for role in REVIEWER_ROLES
+    )
+    if set(state) != STATE_FIELDS | (REUSED_STATE_FIELDS if has_reused else set()):
+        raise ValueError("state_mismatch")
+    if has_reused:
+        validate_reused_state_fields(state)
 
     for role in REVIEWER_ROLES:
         role_state = state["roles"][role]
         if (
             not isinstance(role_state, dict)
-            or set(role_state) != {"scope", "attempts", "status", "output", "output_hash"}
+            or set(role_state) != ROLE_STATE_FIELDS
             or not isinstance(role_state["scope"], dict)
             or not isinstance(role_state["attempts"], list)
             or not role_state["attempts"]
             or not isinstance(role_state["status"], str)
-            or role_state["status"] not in TERMINAL_ROLE_STATUSES
+            or role_state["status"] not in current_statuses
             or not isinstance(role_state["output"], str)
             or not role_state["output"].strip()
             or not isinstance(role_state["output_hash"], str)
         ):
             raise ValueError("state_mismatch")
+        previous_finished_at = None
         for number, attempt in enumerate(role_state["attempts"], start=1):
             if (
                 not isinstance(attempt, dict)
-                or set(attempt)
-                != {"number", "started_at", "finished_at", "status", "output", "output_hash"}
+                or set(attempt) != ATTEMPT_FIELDS
                 or type(attempt["number"]) is not int
                 or attempt["number"] != number
-                or not isinstance(attempt["started_at"], str)
-                or not isinstance(attempt["finished_at"], str)
                 or not isinstance(attempt["status"], str)
-                or attempt["status"] not in TERMINAL_ROLE_STATUSES
+                or attempt["status"] not in attempt_statuses
                 or not isinstance(attempt["output"], str)
                 or not attempt["output"].strip()
                 or not isinstance(attempt["output_hash"], str)
             ):
                 raise ValueError("state_mismatch")
-
-    if state["subject"].get("input_hash") != sha256_bytes(
-        review_input.input_file.read_bytes()
-    ):
-        raise ValueError("input_hash_mismatch")
-
-    expected = initial_review_state(review_input)
-    if (
-        state.get("schema_version") != expected["schema_version"]
-        or state["subject"] != expected["subject"]
-        or state["files"] != expected["files"]
-    ):
-        raise ValueError("state_mismatch")
-
-    for role in REVIEWER_ROLES:
-        role_state = state["roles"][role]
-        if role_state.get("scope") != expected["roles"][role]["scope"]:
-            raise ValueError("retry_scope_mismatch")
-        attempts = role_state["attempts"]
-        if role_state.get("output_hash") != sha256_bytes(
-            role_state["output"].encode("utf-8")
-        ):
-            raise ValueError("output_hash_mismatch")
-
-        previous_finished_at = None
-        for attempt in attempts:
-            if attempt.get("output_hash") != sha256_bytes(
-                attempt["output"].encode("utf-8")
-            ):
+            if (role_state["status"] == "reused") != (attempt["status"] == "reused"):
+                raise ValueError("state_mismatch")
+            if attempt["output_hash"] != sha256_bytes(attempt["output"].encode("utf-8")):
                 raise ValueError("output_hash_mismatch")
             timestamps = []
             for key in ("started_at", "finished_at"):
@@ -705,24 +883,308 @@ def load_bound_state(review_input: ReviewInput) -> dict:
             ):
                 raise ValueError("state_mismatch")
             previous_finished_at = timestamps[1]
-
-        latest = attempts[-1]
+        if role_state["output_hash"] != sha256_bytes(role_state["output"].encode("utf-8")):
+            raise ValueError("output_hash_mismatch")
+        latest = role_state["attempts"][-1]
         if any(
-            role_state.get(key) != latest.get(key)
+            role_state[key] != latest[key]
             for key in ("status", "output", "output_hash")
         ):
             raise ValueError("state_mismatch")
+
+
+def load_bound_state(review_input: ReviewInput) -> dict:
+    state_file = review_input.output_dir / "review-state.json"
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("state_mismatch") from exc
+    validate_state_records(state)
+    if state["subject"].get("input_hash") != sha256_bytes(
+        review_input.input_file.read_bytes()
+    ):
+        raise ValueError("input_hash_mismatch")
+
+    expected = initial_review_state(review_input)
+    if (
+        state.get("schema_version") != expected["schema_version"]
+        or state["subject"] != expected["subject"]
+        or state["files"] != expected["files"]
+    ):
+        raise ValueError("state_mismatch")
+    for role in REVIEWER_ROLES:
+        if state["roles"][role]["scope"] != expected["roles"][role]["scope"]:
+            raise ValueError("retry_scope_mismatch")
 
     report_bytes = render_report(state).encode("utf-8")
     try:
         saved_report_bytes = (review_input.output_dir / "review-report.md").read_bytes()
     except OSError as exc:
         raise ValueError("output_hash_mismatch") from exc
-    if (
-        saved_report_bytes != report_bytes
-        or state["report_hash"] != sha256_bytes(report_bytes)
-    ):
+    if saved_report_bytes != report_bytes or state["report_hash"] != sha256_bytes(report_bytes):
         raise ValueError("output_hash_mismatch")
+    return state
+
+
+def load_previous_state(path: Path) -> dict:
+    state_file = path if path.is_absolute() else Path.cwd() / path
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("state_mismatch") from exc
+    subject = state.get("subject") if isinstance(state, dict) else None
+    if not isinstance(subject, dict):
+        raise ValueError("state_mismatch")
+    change = subject.get("change")
+    head_ref = subject.get("head_ref")
+    if not isinstance(change, str) or not isinstance(head_ref, str):
+        raise ValueError("state_mismatch")
+    expected = (
+        Path.cwd()
+        / ".local"
+        / "cross-agent-review"
+        / change
+        / head_ref[:12]
+        / "review-state.json"
+    )
+    try:
+        state_file.resolve().relative_to(Path.cwd().resolve())
+    except ValueError as exc:
+        raise ValueError("previous_state_location_mismatch") from exc
+    if (
+        state_file.is_symlink()
+        or state_file.resolve() != expected.resolve()
+        or subject.get("head_ref_short") != head_ref[:12]
+    ):
+        raise ValueError("previous_state_location_mismatch")
+    return state
+
+
+def read_git_blob(ref: str, path: str) -> bytes:
+    return git_output_bytes(["show", f"{ref}:{path}"], Path.cwd())
+
+
+def review_input_from_state(state: dict) -> ReviewInput:
+    input_path = state["subject"].get("input_file")
+    if not isinstance(input_path, str):
+        raise ValueError("state_mismatch")
+    expected = (
+        PurePosixPath(".local")
+        / "cross-agent-review"
+        / state["subject"]["change"]
+        / state["subject"]["head_ref"][:12]
+        / "prepared-inputs"
+        / "review-input.json"
+    ).as_posix()
+    try:
+        normalized = project_relative_path(input_path, Path.cwd())
+    except ValueError as exc:
+        raise ValueError("state_mismatch") from exc
+    if normalized != expected:
+        raise ValueError("state_mismatch")
+    return load_review_input(
+        argparse.Namespace(
+            input_file=Path.cwd() / normalized,
+            debug=False,
+            sdk_python=None,
+        )
+    )
+
+
+def context_relative_path(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError as exc:
+        raise ValueError(f"path_outside_project: {path}") from exc
+
+
+def validate_reuse_source(current: ReviewInput, previous_state: dict) -> ReviewInput:
+    roles = previous_state.get("roles")
+    if not isinstance(roles, dict) or set(roles) != set(REVIEWER_ROLES):
+        raise ValueError("state_mismatch")
+    statuses = [
+        role_state.get("status") if isinstance(role_state, dict) else None
+        for role_state in roles.values()
+    ]
+    if any(status != "completed" for status in statuses):
+        raise ValueError("reused_source_not_allowed")
+    validate_state_records(
+        previous_state,
+        current_statuses={"completed"},
+        attempt_statuses={"completed", "failed", "timed_out"},
+    )
+    previous = review_input_from_state(previous_state)
+    validate_base_ref(Path.cwd(), previous.base_ref)
+    try:
+        resolved_head = git_output(
+            [
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                f"{previous.head_ref}^{{commit}}",
+            ],
+            Path.cwd(),
+        )
+    except ValueError as exc:
+        raise ValueError("state_mismatch") from exc
+    if resolved_head != previous.head_ref:
+        raise ValueError("state_mismatch")
+    if previous_state["subject"].get("input_hash") != sha256_bytes(
+        previous.input_file.read_bytes()
+    ):
+        raise ValueError("input_hash_mismatch")
+
+    expected = initial_review_state(previous)
+    contexts = previous_state["subject"].get("contexts")
+    if not isinstance(contexts, dict) or set(contexts) != {"spec", "design", "plan"}:
+        raise ValueError("state_mismatch")
+    for name, expected_context in expected["subject"]["contexts"].items():
+        context = contexts[name]
+        if (
+            not isinstance(context, dict)
+            or set(context) != {"path", "hash"}
+            or context.get("path") != expected_context["path"]
+            or not isinstance(context.get("hash"), str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", context["hash"]) is None
+        ):
+            raise ValueError("state_mismatch")
+    expected["subject"]["contexts"] = contexts
+    if (
+        previous_state.get("schema_version") != expected["schema_version"]
+        or previous_state["subject"] != expected["subject"]
+        or previous_state["files"] != expected["files"]
+    ):
+        raise ValueError("state_mismatch")
+    for role in REVIEWER_ROLES:
+        if previous_state["roles"][role]["scope"] != expected["roles"][role]["scope"]:
+            raise ValueError("state_mismatch")
+
+    report = render_report(previous_state).encode("utf-8")
+    try:
+        saved_report = (previous.output_dir / "review-report.md").read_bytes()
+    except OSError as exc:
+        raise ValueError("output_hash_mismatch") from exc
+    if saved_report != report or previous_state["report_hash"] != sha256_bytes(report):
+        raise ValueError("output_hash_mismatch")
+
+    comparable = {
+        "change": (current.change, previous.change),
+        "mode": (current.mode, previous.mode),
+        "base_ref": (current.base_ref, previous.base_ref),
+        "spec_file": (
+            context_relative_path(current.spec_file),
+            context_relative_path(previous.spec_file),
+        ),
+        "design_file": (
+            context_relative_path(current.design_file),
+            context_relative_path(previous.design_file),
+        ),
+        "plan_file": (
+            context_relative_path(current.plan_file),
+            context_relative_path(previous.plan_file),
+        ),
+        "summary_only": (current.summary_only, previous.summary_only),
+    }
+    mismatch = next((name for name, values in comparable.items() if values[0] != values[1]), None)
+    if mismatch is not None:
+        raise ValueError(f"reuse_source_mismatch: {mismatch}")
+    return previous
+
+
+def previous_runtime_allowed_paths(state_path: Path) -> list[Path]:
+    output_dir = state_path.parent
+    debug_dir = output_dir / "debug"
+    return [
+        output_dir / "prepared-inputs" / "review-input.json",
+        output_dir / "review-report.md",
+        output_dir / "review-pass.json",
+        output_dir / "review-state.json",
+        debug_dir / "review-input.json",
+        *(debug_dir / "prompts" / f"{role}.txt" for role in REVIEWER_ROLES),
+        *(debug_dir / "raw" / f"{role}.txt" for role in REVIEWER_ROLES),
+    ]
+
+
+def validate_declared_changes(
+    current: ReviewInput,
+    changes: list[dict],
+    previous_head: str | None = None,
+) -> list[dict]:
+    if not current.revalidation_policy:
+        raise ValueError("reuse_policy_missing")
+    protected = {
+        context_relative_path(current.spec_file),
+        context_relative_path(current.design_file),
+    }
+    policies: dict[str, list[RevalidationPolicy]] = {}
+    for policy in current.revalidation_policy:
+        policies.setdefault(policy.path, []).append(policy)
+    validated: list[dict] = []
+    for change in changes:
+        status = change.get("status")
+        path = change.get("path")
+        if status != "M":
+            raise ValueError(f"unsupported_change_status: {status} path={path}")
+        if path in protected:
+            raise ValueError(f"validator_failed: protected_context_changed={path}")
+        matches = policies.get(path, [])
+        if not matches:
+            raise ValueError(f"reuse_policy_missing: {path}")
+        if len(matches) != 1:
+            raise ValueError(f"reuse_policy_overlap: {path}")
+        policy = matches[0]
+        if previous_head is None:
+            raise ValueError("validator_failed: previous_head_missing")
+        try:
+            before = read_git_blob(previous_head, path)
+            after = read_git_blob(current.head_ref, path)
+        except ValueError as exc:
+            raise ValueError(f"validator_failed: git_blob_unavailable={path}") from exc
+        if policy.validator == "checkbox-only":
+            reason = validate_checkbox_only(before, after)
+            result = {"path": path, "validator": policy.validator}
+        else:
+            reason = validate_mapping_fields_only(
+                before,
+                after,
+                policy.format or "",
+                policy.fields,
+            )
+            result = {
+                "path": path,
+                "validator": policy.validator,
+                "format": policy.format,
+                "fields": list(policy.fields),
+            }
+        if reason is not None:
+            raise ValueError(f"validator_failed: {path}: {reason}")
+        validated.append(result)
+    return validated
+
+
+def reused_state(
+    current: ReviewInput,
+    previous_state: dict,
+    validations: list[dict],
+    source_state: Path,
+) -> dict:
+    state = initial_review_state(current)
+    state.update(
+        {
+            "source_head_ref": previous_state["subject"]["head_ref"],
+            "source_state": source_state.resolve()
+            .relative_to(Path.cwd().resolve())
+            .as_posix(),
+            "validated_changes": validations,
+        }
+    )
+    for role in REVIEWER_ROLES:
+        record_role_result(
+            state,
+            role,
+            "reused",
+            previous_state["roles"][role]["output"],
+        )
     return state
 
 
@@ -1281,6 +1743,37 @@ def run_retry(args: argparse.Namespace) -> int:
         return 1
 
 
+def run_revalidate(args: argparse.Namespace) -> int:
+    try:
+        current = load_review_input(args)
+        validate_base_ref(Path.cwd(), current.base_ref)
+        source_path = (
+            args.previous_state
+            if args.previous_state.is_absolute()
+            else Path.cwd() / args.previous_state
+        )
+        previous_state = load_previous_state(source_path)
+        ensure_clean_subject(
+            Path.cwd(),
+            current.head_ref,
+            [*runtime_allowed_paths(current), *previous_runtime_allowed_paths(source_path)],
+        )
+        previous = validate_reuse_source(current, previous_state)
+        changes = incremental_changes(previous.head_ref, current.head_ref)
+        validations = validate_declared_changes(current, changes, previous.head_ref)
+        state = reused_state(current, previous_state, validations, source_path)
+        status = write_outputs(current, state)
+    except (ValueError, json.JSONDecodeError, UnicodeError) as exc:
+        print("status: failed")
+        print(f"error: {exc}")
+        return 1
+    print("status: review_revalidated")
+    print(f"head_ref_short: {short_ref(current.head_ref)}")
+    print(f"report: {(current.output_dir / 'review-report.md').relative_to(Path.cwd())}")
+    print(f"state: {(current.output_dir / 'review-state.json').relative_to(Path.cwd())}")
+    return status
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parsed = build_parser().parse_args(argv)
     if parsed.command == "_sdk-dispatch":
@@ -1291,6 +1784,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_review(parsed)
     if parsed.command == "retry":
         return run_retry(parsed)
+    if parsed.command == "revalidate":
+        return run_revalidate(parsed)
     if parsed.command == "mark-pass":
         return run_mark_pass(parsed)
     return 2

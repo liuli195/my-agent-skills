@@ -209,20 +209,27 @@ def write_review_input(
     mode: str = "convergence",
     change: str = "demo",
     payload_overrides: dict | None = None,
+    preserve_context: bool = False,
 ) -> Path:
     output_dir = project / ".local" / "cross-agent-review" / change / head[:12]
     prepared_dir = output_dir / "prepared-inputs"
-    spec_file = write_file(project / "spec.md", "spec body\n")
-    design_file = write_file(project / "design.md", "design body\n")
-    plan_file = write_file(project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n")
+    context_files = {
+        "spec_file": (project / "spec.md", "spec body\n"),
+        "design_file": (project / "design.md", "design body\n"),
+        "plan_file": (project / "docs" / "superpowers" / "plans" / "demo.md", "plan body\n"),
+    }
+    if not preserve_context:
+        for path, text in context_files.values():
+            write_file(path, text)
     payload = {
         "change": change,
         "mode": mode,
         "base_ref": base,
         "head_ref": head,
-        "spec_file": str(spec_file.relative_to(project)),
-        "design_file": str(design_file.relative_to(project)),
-        "plan_file": str(plan_file.relative_to(project)),
+        **{
+            field: path.relative_to(project).as_posix()
+            for field, (path, _text) in context_files.items()
+        },
     }
     if payload_overrides:
         payload.update(payload_overrides)
@@ -2086,6 +2093,20 @@ def review_state_for_retry(
                 f"2026-07-10T01:02:0{index}.000000Z",
                 f"2026-07-10T01:02:1{index}.000000Z",
             )
+        if "reused" in statuses:
+            state.update(
+                {
+                    "source_head_ref": review_input.base_ref,
+                    "source_state": (
+                        Path(".local")
+                        / "cross-agent-review"
+                        / review_input.change
+                        / review_input.base_ref[:12]
+                        / "review-state.json"
+                    ).as_posix(),
+                    "validated_changes": [],
+                }
+            )
         module.write_outputs(review_input, state)
     saved = json.loads(
         (input_file.parent.parent / "review-state.json").read_text(encoding="utf-8")
@@ -2390,6 +2411,392 @@ def test_retry_parser_does_not_accept_scope_or_path_arguments(tmp_path: Path) ->
 
     assert result.returncode == 2
     assert "unrecognized arguments: --paths" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ("- [ ] one\n- [x] two\n", "- [x] one\n- [x] two\n"),
+        ("* [X] one\n", "* [ ] one\n"),
+    ],
+)
+def test_checkbox_only_accepts_only_checkbox_state(before: str, after: str) -> None:
+    module = load_script_module()
+
+    assert module.validate_checkbox_only(before.encode(), after.encode()) is None
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "reason"),
+    [
+        (b"- [ ] one\n", b"- [x] changed\n", "checkbox_content_changed"),
+        (b"- [ ] one\n", b"- [x] one\n- [ ] two\n", "checkbox_line_count_changed"),
+        (b"- [ ] one\n", b"- [x] one\r\n", "checkbox_content_changed"),
+        (b"\xff", b"\xff", "checkbox_not_utf8"),
+    ],
+)
+def test_checkbox_only_rejects_other_changes(
+    before: bytes, after: bytes, reason: str
+) -> None:
+    module = load_script_module()
+
+    assert module.validate_checkbox_only(before, after) == reason
+
+
+@pytest.mark.parametrize(
+    ("format_name", "before", "after"),
+    [
+        ("yaml", b"phase: build\nname: demo\n", b"phase: verify\nname: demo\n"),
+        ("json", b'{"phase":"build","name":"demo"}\n', b'{"phase":"verify","name":"demo"}\n'),
+    ],
+)
+def test_mapping_fields_only_accepts_declared_field(
+    format_name: str, before: bytes, after: bytes
+) -> None:
+    module = load_script_module()
+
+    assert module.validate_mapping_fields_only(before, after, format_name, ("phase",)) is None
+
+
+@pytest.mark.parametrize(
+    ("format_name", "before", "after", "reason"),
+    [
+        ("yaml", b"phase: build\nname: demo\n", b"phase: build\nname: changed\n", "mapping_undeclared_field_changed"),
+        ("yaml", b"phase: build\nphase: verify\n", b"phase: done\n", "mapping_duplicate_key"),
+        ("json", b'{"phase":"build","phase":"verify"}', b'{"phase":"done"}', "mapping_duplicate_key"),
+        ("yaml", b"- build\n", b"- verify\n", "mapping_not_mapping"),
+        ("yaml", b"1: build\n", b"1: verify\n", "mapping_non_string_key"),
+        ("yaml", b"phase: !Danger build\n", b"phase: verify\n", "mapping_parse_failed"),
+        ("yaml", b"phase: [\n", b"phase: verify\n", "mapping_parse_failed"),
+        ("json", b'{"phase":NaN}', b'{"phase":NaN}', "mapping_parse_failed"),
+        ("toml", b"phase = 'build'\n", b"phase = 'verify'\n", "mapping_unknown_format"),
+    ],
+)
+def test_mapping_fields_only_rejects_unsafe_or_undeclared_data(
+    format_name: str, before: bytes, after: bytes, reason: str
+) -> None:
+    module = load_script_module()
+
+    assert module.validate_mapping_fields_only(before, after, format_name, ("phase",)) == reason
+
+
+def prepare_revalidation(
+    tmp_path: Path,
+    *,
+    before: str = "- [ ] one\n",
+    after: str = "- [x] one\n",
+    policy: list[dict] | None = None,
+) -> tuple[Path, Path, Path, str, str]:
+    project = tmp_path / "repo"
+    base = init_repo(project)
+    write_file(project / "spec.md", "spec body\n")
+    write_file(project / "design.md", "design body\n")
+    target = write_file(project / "docs" / "superpowers" / "plans" / "demo.md", before)
+    write_file(project / "alternate-spec.md", "alternate spec\n")
+    git(project, "add", ".")
+    git(project, "commit", "-m", "review baseline")
+    previous_head = git(project, "rev-parse", "HEAD")
+    policy = policy or [{"path": "docs/superpowers/plans/demo.md", "validator": "checkbox-only"}]
+    previous_input = write_review_input(
+        project,
+        base,
+        previous_head,
+        payload_overrides={"revalidation_policy": policy},
+        preserve_context=True,
+    )
+    module = load_script_module()
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=previous_input, debug=False, sdk_python=None)
+        )
+        state = module.initial_review_state(review_input)
+        for role in module.REVIEWER_ROLES:
+            module.record_role_result(
+                state,
+                role,
+                "completed",
+                f"# Review Result: {role}\n## Findings\nNo findings.\n",
+            )
+        module.write_outputs(review_input, state)
+
+    write_file(target, after)
+    git(project, "add", target.relative_to(project).as_posix())
+    git(project, "commit", "-m", "mechanical update")
+    current_head = git(project, "rev-parse", "HEAD")
+    current_input = write_review_input(
+        project,
+        base,
+        current_head,
+        payload_overrides={"revalidation_policy": policy},
+        preserve_context=True,
+    )
+    return project, previous_input.parent.parent / "review-state.json", current_input, previous_head, current_head
+
+
+def assert_revalidate_rejected(
+    monkeypatch,
+    project: Path,
+    previous_state: Path,
+    current_input: Path,
+    reason: str,
+) -> None:
+    module = load_script_module()
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("revalidate rejection must happen before SDK resolution or dispatch")
+
+    monkeypatch.setattr(module, "resolve_sdk_python", unexpected)
+    monkeypatch.setattr(module, "dispatch_roles", unexpected)
+    state_path = current_input.parent.parent / "review-state.json"
+    report_path = current_input.parent.parent / "review-report.md"
+
+    result = run(
+        "revalidate",
+        "--input-file",
+        str(current_input),
+        "--previous-state",
+        str(previous_state),
+        cwd=project,
+    )
+
+    assert result.returncode != 0
+    assert f"error: {reason}" in result.stdout
+    assert result.stderr == ""
+    assert not state_path.exists()
+    assert not report_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("status", "path", "policy_count", "reason"),
+    [
+        ("M", "other.md", 1, "reuse_policy_missing"),
+        ("M", "target.md", 2, "reuse_policy_overlap"),
+        ("A", "target.md", 1, "unsupported_change_status"),
+        ("D", "target.md", 1, "unsupported_change_status"),
+        ("R100", "target.md", 1, "unsupported_change_status"),
+        ("C100", "target.md", 1, "unsupported_change_status"),
+        ("T", "target.md", 1, "unsupported_change_status"),
+        ("U", "target.md", 1, "unsupported_change_status"),
+        ("M", "spec.md", 1, "validator_failed"),
+        ("M", "design.md", 1, "validator_failed"),
+    ],
+)
+def test_revalidate_rejects_undeclared_overlapping_or_unsupported_changes(
+    tmp_path: Path,
+    status: str,
+    path: str,
+    policy_count: int,
+    reason: str,
+) -> None:
+    module = load_script_module()
+    policies = tuple(
+        module.RevalidationPolicy(path="target.md", validator="checkbox-only")
+        for _ in range(policy_count)
+    )
+    current = types.SimpleNamespace(
+        revalidation_policy=policies,
+        spec_file=tmp_path / "spec.md",
+        design_file=tmp_path / "design.md",
+        head_ref="current",
+    )
+
+    with contextlib.chdir(tmp_path), pytest.raises(ValueError) as exc_info:
+        module.validate_declared_changes(current, [{"status": status, "path": path}])
+
+    assert reason in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ("dirty", "dirty_worktree"),
+        ("head", "head_ref_mismatch"),
+        ("input_hash", "input_hash_mismatch"),
+        ("report_hash", "output_hash_mismatch"),
+        ("output_hash", "output_hash_mismatch"),
+        ("reused", "reused_source_not_allowed"),
+        ("state_change", "previous_state_location_mismatch"),
+        ("state_head", "previous_state_location_mismatch"),
+        ("state_path", "previous_state_location_mismatch"),
+    ],
+)
+def test_revalidate_rejects_invalid_source_before_writes_or_sdk(
+    tmp_path: Path, monkeypatch, mutation: str, reason: str
+) -> None:
+    project, previous_state, current_input, _previous_head, _current_head = prepare_revalidation(
+        tmp_path
+    )
+    module = load_script_module()
+    state = json.loads(previous_state.read_text(encoding="utf-8"))
+    if mutation == "dirty":
+        write_file(project / "dirty.txt", "dirty\n")
+    elif mutation == "head":
+        write_file(project / "later.txt", "later\n")
+        git(project, "add", "later.txt")
+        git(project, "commit", "-m", "later")
+    elif mutation == "input_hash":
+        previous_input = project / state["subject"]["input_file"]
+        previous_input.write_bytes(previous_input.read_bytes() + b"\n")
+    elif mutation == "report_hash":
+        report_path = previous_state.parent / "review-report.md"
+        report_path.write_bytes(report_path.read_bytes() + b"changed\n")
+    elif mutation == "output_hash":
+        state["roles"]["spec-alignment"]["output"] += "changed\n"
+        module.atomic_write_json(previous_state, state)
+    elif mutation == "reused":
+        role = state["roles"]["spec-alignment"]
+        role["status"] = "reused"
+        role["attempts"][-1]["status"] = "reused"
+        module.atomic_write_json(previous_state, state)
+    elif mutation == "state_change":
+        state["subject"]["change"] = "other"
+        module.atomic_write_json(previous_state, state)
+    elif mutation == "state_head":
+        state["subject"]["head_ref"] = "0" * 40
+        module.atomic_write_json(previous_state, state)
+    elif mutation == "state_path":
+        wrong_state = previous_state.parent.parent / "wrong" / "review-state.json"
+        wrong_state.parent.mkdir(parents=True)
+        wrong_state.write_bytes(previous_state.read_bytes())
+        previous_state = wrong_state
+
+    assert_revalidate_rejected(
+        monkeypatch, project, previous_state, current_input, reason
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ("mode", "reuse_source_mismatch"),
+        ("base_ref", "reuse_source_mismatch"),
+        ("spec_file", "reuse_source_mismatch"),
+        ("summary_only", "reuse_source_mismatch"),
+    ],
+)
+def test_revalidate_rejects_changed_review_contract(
+    tmp_path: Path, monkeypatch, mutation: str, reason: str
+) -> None:
+    project, previous_state, current_input, previous_head, _current_head = prepare_revalidation(
+        tmp_path
+    )
+    payload = json.loads(current_input.read_text(encoding="utf-8"))
+    if mutation == "mode":
+        payload["mode"] = "endless"
+    elif mutation == "base_ref":
+        payload["base_ref"] = previous_head
+    elif mutation == "spec_file":
+        payload["spec_file"] = "alternate-spec.md"
+    elif mutation == "summary_only":
+        payload["summary_only"] = [{"path": "app.txt", "reason": "different"}]
+    current_input.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    assert_revalidate_rejected(
+        monkeypatch, project, previous_state, current_input, reason
+    )
+
+
+def test_revalidate_writes_current_reused_state_without_sdk(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project, previous_state, current_input, previous_head, current_head = prepare_revalidation(
+        tmp_path
+    )
+    module = load_script_module()
+    previous = json.loads(previous_state.read_text(encoding="utf-8"))
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("successful revalidation must not resolve or call the SDK")
+
+    monkeypatch.setattr(module, "resolve_sdk_python", unexpected)
+    monkeypatch.setattr(module, "dispatch_roles", unexpected)
+
+    result = run(
+        "revalidate",
+        "--input-file",
+        str(current_input),
+        "--previous-state",
+        str(previous_state),
+        cwd=project,
+    )
+
+    state_path = current_input.parent.parent / "review-state.json"
+    report_path = current_input.parent.parent / "review-report.md"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.startswith("status: review_revalidated\n")
+    assert state["subject"]["head_ref"] == current_head
+    assert state["source_head_ref"] == previous_head
+    assert state["source_state"] == previous_state.relative_to(project).as_posix()
+    assert state["validated_changes"] == [
+        {
+            "path": "docs/superpowers/plans/demo.md",
+            "validator": "checkbox-only",
+        }
+    ]
+    for role in module.REVIEWER_ROLES:
+        assert state["roles"][role]["status"] == "reused"
+        assert state["roles"][role]["attempts"][-1]["status"] == "reused"
+        assert state["roles"][role]["output"] == previous["roles"][role]["output"]
+        assert state["roles"][role]["output_hash"] == module.sha256_bytes(
+            state["roles"][role]["output"].encode("utf-8")
+        )
+    assert report_path.read_bytes() == module.render_report(state).encode("utf-8")
+    assert state["report_hash"] == module.sha256_bytes(report_path.read_bytes())
+    assert not (current_input.parent.parent / "review-pass.json").exists()
+
+    shutil.rmtree(previous_state.parent)
+    retry = run("retry", "--input-file", str(current_input), cwd=project)
+    assert retry.returncode != 0
+    assert retry.stdout == "status: no_retryable_roles\n"
+
+
+def test_revalidate_accepts_declared_yaml_mapping_field(
+    tmp_path: Path, monkeypatch
+) -> None:
+    policy = [
+        {
+            "path": "docs/superpowers/plans/demo.md",
+            "validator": "mapping-fields-only",
+            "format": "yaml",
+            "fields": ["phase"],
+        }
+    ]
+    project, previous_state, current_input, _previous_head, _current_head = prepare_revalidation(
+        tmp_path,
+        before="phase: build\nname: demo\n",
+        after="phase: verify\nname: demo\n",
+        policy=policy,
+    )
+    module = load_script_module()
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("mapping revalidation must not resolve or call the SDK")
+
+    monkeypatch.setattr(module, "resolve_sdk_python", unexpected)
+    monkeypatch.setattr(module, "dispatch_roles", unexpected)
+
+    result = run(
+        "revalidate",
+        "--input-file",
+        str(current_input),
+        "--previous-state",
+        str(previous_state),
+        cwd=project,
+    )
+
+    state = json.loads(
+        (current_input.parent.parent / "review-state.json").read_text(encoding="utf-8")
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert state["validated_changes"] == [
+        {
+            "path": "docs/superpowers/plans/demo.md",
+            "validator": "mapping-fields-only",
+            "format": "yaml",
+            "fields": ["phase"],
+        }
+    ]
 
 
 def test_reviewer_prompt_requires_lightweight_markdown_contract(tmp_path: Path) -> None:
