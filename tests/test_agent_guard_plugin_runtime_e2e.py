@@ -212,10 +212,10 @@ def test_record_evidence_writes_current_head_guard_owned_artifact(tmp_path: Path
     assert evidence == {
         "schema_version": "guard-evidence/v1",
         "status": "pass",
-        "producer": "reviewer",
+        "producer": " reviewer ",
         "profile_id": "demo-profile",
         "artifact_id": "demo-pass",
-        "subject_type": "change",
+        "subject_type": " change ",
         "subject_id": "demo",
         "head_ref": head,
         "head_ref_short": head[:12],
@@ -341,6 +341,23 @@ def test_record_evidence_rejects_guard_root_alias_outside_source_anchor(tmp_path
 
 
 @pytest.mark.parametrize("source", ["project", "user"])
+def test_record_evidence_rejects_guard_root_alias_inside_source_anchor(tmp_path: Path, source: str) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    user_home = tmp_path / "home"
+    anchor = project if source == "project" else user_home
+    alternate_root = anchor / "alternate-guards"
+    write_guard_defined_artifact(alternate_root / "demo-profile")
+    root = profile_path(project, user_home, source).parent
+    create_directory_alias(root, alternate_root)
+    fields = write_payload(tmp_path / "fields.json", {})
+
+    result = run(record_evidence_args(project, user_home, fields, profile_source=source))
+
+    assert_record_failed(result, "profile_not_found")
+
+
+@pytest.mark.parametrize("source", ["project", "user"])
 def test_record_evidence_rejects_symlinked_artifact_registry(tmp_path: Path, source: str) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -387,18 +404,28 @@ def test_record_evidence_rejects_non_segment_identifiers(tmp_path: Path, overrid
 )
 def test_record_evidence_rejects_blank_metadata_before_profile_lookup(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
     override: str,
     value: str,
     reason: str,
 ) -> None:
     project = tmp_path / "project"
-    project.mkdir()
     user_home = tmp_path / "home"
     fields = write_payload(tmp_path / "fields.json", {})
+    module = load_runtime_cli(monkeypatch)
 
-    result = run(record_evidence_args(project, user_home, fields, **{override: value}))
+    def reject_resolve(_path: Path, *_args, **_kwargs) -> Path:
+        raise OSError("path resolution should not run")
 
-    assert_record_failed(result, reason)
+    monkeypatch.setattr(Path, "resolve", reject_resolve)
+
+    code = module.main(record_evidence_args(project, user_home, fields, **{override: value})[1:])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.err == ""
+    assert json.loads(captured.out) == {"status": "failed", "reason": reason}
 
 
 def test_record_evidence_requires_git_repository(tmp_path: Path) -> None:

@@ -138,11 +138,13 @@ def trusted_profile_dir(
     profile_id: str,
 ) -> Path:
     anchor = project if source == "project" else user_home
-    root = (anchor / ".agents" / "guards").resolve()
+    root = anchor / ".agents" / "guards"
     try:
-        root.relative_to(anchor)
-    except ValueError as error:
+        resolved_root = root.resolve(strict=True)
+    except OSError as error:
         raise ValueError("profile_not_found") from error
+    if resolved_root != root or not resolved_root.is_dir():
+        raise ValueError("profile_not_found")
 
     profile = root / profile_id
     if profile.is_symlink():
@@ -184,14 +186,12 @@ def load_record_evidence_artifacts(profile: Path) -> dict[str, dict[str, Any]]:
 
 
 def record_evidence(args: argparse.Namespace) -> int:
+    if not args.producer.strip():
+        raise ValueError("producer_required")
+    if not args.subject_type.strip():
+        raise ValueError("subject_type_required")
     project = args.project.resolve()
     user_home = args.user_home.resolve()
-    producer = args.producer.strip()
-    subject_type = args.subject_type.strip()
-    if not producer:
-        raise ValueError("producer_required")
-    if not subject_type:
-        raise ValueError("subject_type_required")
     for value in (args.profile, args.artifact, args.subject_id):
         safe_segment(value)
 
@@ -228,10 +228,10 @@ def record_evidence(args: argparse.Namespace) -> int:
     body = {
         "schema_version": "guard-evidence/v1",
         "status": "pass",
-        "producer": producer,
+        "producer": args.producer,
         "profile_id": args.profile,
         "artifact_id": args.artifact,
-        "subject_type": subject_type,
+        "subject_type": args.subject_type,
         "subject_id": args.subject_id,
         "head_ref": head,
         "head_ref_short": head[:12],
