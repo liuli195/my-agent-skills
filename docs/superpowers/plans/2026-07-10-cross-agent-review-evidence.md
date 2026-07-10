@@ -386,7 +386,7 @@ def test_retry_dispatches_only_failed_role_and_preserves_success(tmp_path: Path,
 
 另加两个成功角色返回 `no_retryable_roles` 且 dispatch（派发）未调用的测试。
 
-- [x] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行 Task 3 测试并确认失败**
 
 ```powershell
 python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py -k "retry_dispatches or no_retryable_roles"
