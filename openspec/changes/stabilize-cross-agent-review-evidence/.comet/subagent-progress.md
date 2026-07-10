@@ -3,7 +3,7 @@
 - Change: `stabilize-cross-agent-review-evidence`
 - Review mode: `standard`
 - TDD mode: `tdd`
-- Current plan task: `Task 2: 角色限定输入与逐角色持久化`
+- Current plan task: `Task 3: 失败角色 retry（重试）`
 
 ## Task 1: 文件投影与原子状态基础
 
@@ -19,6 +19,22 @@
 - Risk signals: 安全边界、共享状态、模块级 API（接口）、diff（差异）超过 200 行
 - Task review: PASS（通过）— 初审 1 Important（重要）+ 2 Minor（次要）均在唯一修复轮关闭；新独立复审 findings（发现项）为空
 - Review-fix round: `1/1`
+
+## Task 3: 失败角色 retry（重试）
+
+- OpenSpec mapping:
+  - `2.3 先补失败测试，证明一个角色超时不覆盖另一个成功结果，retry（重试）只派发失败或超时角色且不扩大原角色范围`
+  - `2.4 实现 retry（重试）入口、尝试追加和基于最新角色终态的报告重建`
+- Stage: `BLOCKED`
+- Base commit: `d2da439`
+- Implementation commits: `52767e8`, `a5f14f7`
+- Changed files: `cross_agent_review.py`, `test_cross_agent_review_cli.py` (`+317/-0`)
+- RED evidence: retry（重试）定向 3 失败；扩展边界 19 失败，均因入口缺失
+- GREEN evidence: retry（重试）边界 19 通过；`tests/test_cross_agent_review_cli.py` 完整 122 通过；`git diff --check`（差异格式检查）通过
+- Risk signals: 公共 CLI（命令行接口）、状态信任边界、diff（差异）超过 200 行
+- Task review: BLOCKED（阻断）— 初审 3 Important（重要）已修复；复审的 `reused`（复用）结论与已确认规格冲突，已拒绝；剩余真实 Important（重要）为新 attempt（尝试）在系统时钟回拨时可能写出自身下一次会拒绝的非单调历史
+- Review-fix round: `1/1`
+- Decision required: 是否显式授权一次例外修复轮，统一夹紧新 attempt（尝试）的开始/结束时间并复审
 
 ## Task 2: 角色限定输入与逐角色持久化
 
