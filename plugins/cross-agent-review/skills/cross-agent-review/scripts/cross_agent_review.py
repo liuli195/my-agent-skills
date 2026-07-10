@@ -428,6 +428,24 @@ def strict_equal(before: object, after: object) -> bool:
             if not strict_equal(before_value, remaining.pop(match)[1]):
                 return False
         return True
+    if isinstance(before, set):
+        if len(before) != len(after):
+            return False
+        # ponytail: 配置集合很小，O(n²) 扫描若实测成为瓶颈再升级为规范化键。
+        remaining = list(after)
+        for before_item in before:
+            match = next(
+                (
+                    index
+                    for index, after_item in enumerate(remaining)
+                    if strict_equal(before_item, after_item)
+                ),
+                None,
+            )
+            if match is None:
+                return False
+            remaining.pop(match)
+        return True
     if isinstance(before, (list, tuple)):
         return len(before) == len(after) and all(
             strict_equal(before_item, after_item)

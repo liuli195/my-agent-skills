@@ -2495,6 +2495,16 @@ def test_mapping_fields_only_rejects_unsafe_or_undeclared_data(
             b'{"phase":"build","protected":[1]}',
             b'{"phase":"build","protected":[1.0]}',
         ),
+        (
+            "yaml",
+            b"phase: build\nprotected: !!set\n  true: null\n",
+            b"phase: build\nprotected: !!set\n  1: null\n",
+        ),
+        (
+            "yaml",
+            b"phase: build\nprotected:\n  values: !!set\n    1: null\n",
+            b"phase: build\nprotected:\n  values: !!set\n    1.0: null\n",
+        ),
     ],
 )
 def test_mapping_fields_only_rejects_undeclared_type_changes(
@@ -2506,6 +2516,12 @@ def test_mapping_fields_only_rejects_undeclared_type_changes(
         module.validate_mapping_fields_only(before, after, format_name, ("phase",))
         == "mapping_undeclared_field_changed"
     )
+
+
+def test_strict_equal_accepts_same_set_in_different_order() -> None:
+    module = load_script_module()
+
+    assert module.strict_equal({"alpha", 1}, {1, "alpha"})
 
 
 def prepare_revalidation(
