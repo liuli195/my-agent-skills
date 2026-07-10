@@ -557,7 +557,7 @@ git commit -m "支持机械变化重新校验"
 - Consumes（输入）：现有 `render_template()`、`_resolve_artifact_path()`、`_load_profile_artifacts()`。
 - Produces（输出）：公开的 `resolve_artifact_path()`、`load_profile_artifacts()`，以及 guard-defined artifact（守卫定义产物）静态校验。
 
-- [ ] **Step 1: 写完整产物声明加载测试**
+- [x] **Step 1: 写完整产物声明加载测试**
 
 ```python
 def test_load_profile_artifacts_preserves_owner_type_and_path(tmp_path: Path) -> None:
@@ -578,11 +578,11 @@ def test_load_profile_artifacts_preserves_owner_type_and_path(tmp_path: Path) ->
     }
 ```
 
-- [ ] **Step 2: 写 Guard Profile（守卫画像）校验测试**
+- [x] **Step 2: 写 Guard Profile（守卫画像）校验测试**
 
 增加用例：`owner: agent-guard` + 非 JSON（数据）失败；缺失标准路径变量失败；标准声明通过；`owner: guard`（守卫拥有）的现有 minimal（最小）模板继续通过。
 
-- [ ] **Step 3: 运行测试并确认失败**
+- [x] **Step 3: 运行 Task 5 测试并确认失败**
 
 ```powershell
 python -m pytest -q -p no:cacheprovider tests/test_agent_guard_runtime_router.py tests/test_validate_guard_profile.py -k "load_profile_artifacts or guard_defined"
@@ -590,7 +590,7 @@ python -m pytest -q -p no:cacheprovider tests/test_agent_guard_runtime_router.py
 
 Expected（预期）：FAIL（失败），加载器仍只返回路径。
 
-- [ ] **Step 4: 提升现有函数而不新增模块**
+- [x] **Step 4: 提升现有函数而不新增模块**
 
 ```python
 def load_profile_artifacts(profile_dir: Path) -> dict[str, dict[str, Any]]:
@@ -628,7 +628,7 @@ def resolve_artifact_path(project: Path, user_home: Path, runtime_scope: str, re
 
 在 `evaluate_global_command_guards()`（评估全局命令守卫）加载注册文件处捕获 `OSError`、`yaml.YAMLError` 和 `ValueError`，把缺失或非法注册表转换为 deny（拒绝）详情 `artifact_registry_invalid`，避免 hook router（钩子路由器）异常退出。增加重复 artifact id（产物编号）与非法 YAML（配置）均稳定拒绝的测试。
 
-- [ ] **Step 5: 增加 guard-defined artifact（守卫定义产物）校验**
+- [x] **Step 5: 增加 guard-defined artifact（守卫定义产物）校验**
 
 在 `validate_artifact_contract()` 中，当 `owner == "agent-guard"` 时要求：
 
@@ -642,7 +642,7 @@ if artifact.get("owner") == "agent-guard":
         issues.append(ValidationIssue("artifacts", f"artifacts.{artifact_id}.path", "必须使用 guard-defined evidence 默认路径。", f"改为 `{DEFAULT_GUARD_EVIDENCE_PATH}`。"))
 ```
 
-- [ ] **Step 6: 运行 Agent Guard（代理守卫）读取与校验测试**
+- [x] **Step 6: 运行 Agent Guard（代理守卫）读取与校验测试**
 
 ```powershell
 python -m pytest -q -p no:cacheprovider tests/test_agent_guard_runtime_router.py tests/test_validate_guard_profile.py
@@ -650,7 +650,7 @@ python -m pytest -q -p no:cacheprovider tests/test_agent_guard_runtime_router.py
 
 Expected（预期）：PASS（通过）。
 
-- [ ] **Step 7: 提交检查点（仅获授权时）**
+- [x] **Step 7: 提交 Task 5 检查点（仅获授权时）**
 
 ```powershell
 git add plugins/agent-guard/scripts/guard_runtime/global_command_guards.py plugins/agent-guard/skills/agent-guard/scripts/validate_guard_profile.py tests/test_agent_guard_runtime_router.py tests/test_validate_guard_profile.py

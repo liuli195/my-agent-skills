@@ -3,7 +3,7 @@
 - Change: `stabilize-cross-agent-review-evidence`
 - Review mode: `standard`
 - TDD mode: `tdd`
-- Current plan task: `Task 4: 严格 revalidate（重新校验）`
+- Current plan task: `Task 5: 共享 Agent Guard（代理守卫）产物契约`
 
 ## Task 1: 文件投影与原子状态基础
 
@@ -52,6 +52,19 @@
 - Task review: PASS（通过）— 初审 3 Critical（严重阻断）+ 1 Important（重要阻断）均已修复；用户授权例外修复 YAML（配置）集合旁路后，新独立窄范围复审 findings（发现项）为空
 - Review-fix round: `2/2`（用户显式授权一次例外修复轮）
 - Decision: 只补现有 `strict_equal()`（严格比较）的集合元素类型敏感匹配，并进行窄范围复审
+
+## Task 5: 共享 Agent Guard（代理守卫）产物契约
+
+- OpenSpec mapping: 部分覆盖 `4.1`、`4.3`；等待 Task 6（任务 6）完成通用写入入口后统一勾选
+- Stage: `completed`
+- Base commit: `58bdae0`
+- Implementation commits: `3198144`, `1e84e56`
+- Changed files: `global_command_guards.py`, `validate_guard_profile.py`, `test_agent_guard_runtime_router.py`, `test_validate_guard_profile.py` (`+271/-29`)
+- RED evidence: 公开加载/静态约束 4 失败；路径/注册表边界 4 失败；缺失/非法/重复注册表 3 失败
+- GREEN evidence: 定向 142 通过；Agent Guard（代理守卫）完整 200 通过；`py_compile`（语法编译检查）与 `git diff --check`（差异格式检查）通过
+- Risk signals: 共享注册表 API（接口）、安全路径、Global Command Guard（全局命令守卫点）、diff（差异）超过 200 行
+- Task review: PASS（通过）— 3 个真实 Important（重要）均已修复；`skip_when`（跳过条件）误报按上游规格拒绝；新独立复审 findings（发现项）为空
+- Review-fix round: `1/1`
 
 ## Task 2: 角色限定输入与逐角色持久化
 
