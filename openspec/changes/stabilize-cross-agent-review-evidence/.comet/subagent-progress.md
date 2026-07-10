@@ -28,7 +28,7 @@
   - `4.3` 共享注册表与安全路径语义
   - `4.4` Runtime CLI（运行时命令行）记录入口与原子写入
   - `4.5` Agent Guard Run Skill（代理守卫运行技能）通用说明
-- Stage: `BLOCKED`
+- Stage: `exception-review-fix`
 - Base commit: `051e454`
 - Implementation commits: `7ad427b`, `784dc7f`
 - Changed files: `cli.py`, Agent Guard Run `SKILL.md`（技能说明）、`events.md`, `test_agent_guard_plugin_runtime_e2e.py`, `test_agent_guard_skill_entrypoints.py` (`+605/-4`)
@@ -36,8 +36,8 @@
 - GREEN evidence: record-evidence（记录证据）33 通过；Skill（技能）静态 3 通过且全新压力场景 PASS（通过）；四文件回归 199 通过；Agent Guard（代理守卫）验证 250 通过
 - Risk signals: 通用安全写入 CLI（命令行接口）、Git（版本控制）与路径信任边界、Skill（技能）行为契约、diff（差异）超过 200 行
 - Task review: BLOCKED（阻断）— 初审全部问题已修复；复审仍有 2 Important（重要）：标准来源根链接到锚点内部其他目录仍可通过，producer/subject_type（生产方/对象类型）判空晚于路径解析且非空值被静默去空白
-- Review-fix round: `1/1`
-- Decision required: 是否显式授权一次例外修复轮，只封闭来源根别名并前移元数据判空且保留原值
+- Review-fix round: `2/2`（用户显式授权一次例外修复轮）
+- Decision: 只封闭标准来源根别名，并在任何路径解析前判空 producer/subject_type（生产方/对象类型）且写入保留原值
 
 ## Task 3: 失败角色 retry（重试）
 
