@@ -9,6 +9,8 @@ import tempfile
 import time
 from pathlib import Path
 
+import pytest
+
 from tests.support.git_templates import copy_template
 
 
@@ -24,6 +26,7 @@ GIT_TEMPLATE_LOCK_STALE_SECONDS = 30
 GIT_TEMPLATE_LOCK_TIMEOUT_SECONDS = 30
 _HOOK_ROUTER_MODULE = None
 _RUNTIME_CLI_MODULE = None
+_GLOBAL_COMMAND_GUARDS_MODULE = None
 
 
 def load_hook_router_module():
@@ -52,6 +55,19 @@ def load_runtime_cli_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     _RUNTIME_CLI_MODULE = module
+    return module
+
+
+def load_global_command_guards_module():
+    global _GLOBAL_COMMAND_GUARDS_MODULE
+    if _GLOBAL_COMMAND_GUARDS_MODULE is not None:
+        return _GLOBAL_COMMAND_GUARDS_MODULE
+    module_path = PLUGIN_ROOT / "scripts" / "guard_runtime" / "global_command_guards.py"
+    spec = importlib.util.spec_from_file_location("global_command_guards_for_tests", module_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _GLOBAL_COMMAND_GUARDS_MODULE = module
     return module
 
 
@@ -395,6 +411,77 @@ artifacts:
 """.lstrip(),
         encoding="utf-8",
     )
+
+
+def test_load_profile_artifacts_preserves_owner_type_and_path(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    write_cross_agent_review_artifacts(profile)
+    module = load_global_command_guards_module()
+
+    artifacts = module.load_profile_artifacts(profile)
+
+    assert artifacts["cross_agent_review_pass"] == {
+        "id": "cross_agent_review_pass",
+        "type": "json",
+        "owner": "agent-guard",
+        "required_for": ["produce_cross_agent_review_pass_marker"],
+        "path": ".local/guard/evidence/{profile_id}/{artifact_id}/{subject_id}/{git_head_short}/pass.json",
+        "reuse_policy": "deny",
+    }
+
+
+def test_load_profile_artifacts_rejects_duplicate_id(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    write_cross_agent_review_artifacts(profile)
+    artifacts = profile / "artifacts.yaml"
+    declaration = artifacts.read_text(encoding="utf-8").split("artifacts:\n", 1)[1]
+    artifacts.write_text(f"artifacts:\n{declaration}{declaration}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="artifact_id_duplicate: cross_agent_review_pass"):
+        load_global_command_guards_module().load_profile_artifacts(profile)
+
+
+def test_resolve_artifact_path_uses_explicit_scope_roots(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    module = load_global_command_guards_module()
+
+    assert module.resolve_artifact_path(project, user_home, "project", "evidence/pass.json") == project / "evidence" / "pass.json"
+    assert module.resolve_artifact_path(project, user_home, "user", "evidence/pass.json") == user_home / ".agents" / "guard" / "evidence" / "pass.json"
+
+
+def test_resolve_artifact_path_rejects_unsafe_inputs(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    module = load_global_command_guards_module()
+
+    for scope, rendered in [
+        ("invalid", "evidence/pass.json"),
+        ("project", str(tmp_path / "absolute.json")),
+        ("project", "C:\\outside\\pass.json"),
+        ("project", "\\outside\\pass.json"),
+        ("project", "../outside/pass.json"),
+    ]:
+        with pytest.raises(module.UnsafeEvidencePath, match="unsafe_evidence_path"):
+            module.resolve_artifact_path(project, user_home, scope, rendered)
+
+
+def test_resolve_artifact_path_rejects_symlink_escape(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    outside = tmp_path / "outside"
+    project.mkdir()
+    outside.mkdir()
+    try:
+        (project / "linked").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink unavailable: {exc}")
+
+    module = load_global_command_guards_module()
+    with pytest.raises(module.UnsafeEvidencePath, match="unsafe_evidence_path"):
+        module.resolve_artifact_path(project, user_home, "project", "linked/pass.json")
 
 
 def write_short_head_cross_agent_review_artifacts(profile: Path) -> None:
@@ -900,6 +987,63 @@ def test_global_command_guard_passes_with_artifact(tmp_path: Path) -> None:
     assert payload["status"] == "allow"
     audit = json.loads(Path(payload["audit_path"]).read_text(encoding="utf-8"))
     assert audit["detail"]["kind"] == "session_focus_boundary"
+
+
+def assert_artifact_registry_invalid(profile: Path, project: Path, user_home: Path) -> None:
+    write_global_command_guard_with_artifact(
+        profile,
+        "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) build --apply",
+        "cross_agent_review_pass",
+    )
+
+    result = pre_tool(project, user_home, "comet-guard.sh demo build --apply")
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "deny"
+    assert payload["failing_guards"][0]["failure_reason"] == "artifact_registry_invalid"
+
+
+def test_hook_router_denies_missing_artifact_registry_as_invalid(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+
+    assert_artifact_registry_invalid(profile, project, user_home)
+
+
+def test_hook_router_denies_invalid_yaml_artifact_registry_as_invalid(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    profile.joinpath("artifacts.yaml").write_text("artifacts: [\n", encoding="utf-8")
+
+    assert_artifact_registry_invalid(profile, project, user_home)
+
+
+def test_hook_router_denies_duplicate_artifact_id_registry_as_invalid(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    write_cross_agent_review_artifacts(profile)
+    artifacts = profile / "artifacts.yaml"
+    declaration = artifacts.read_text(encoding="utf-8").split("artifacts:\n", 1)[1]
+    artifacts.write_text(f"artifacts:\n{declaration}{declaration}", encoding="utf-8")
+
+    assert_artifact_registry_invalid(profile, project, user_home)
+
+
+def test_hook_router_denies_structurally_invalid_artifact_registry(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    profile.joinpath("artifacts.yaml").write_text("artifacts: invalid\n", encoding="utf-8")
+
+    assert_artifact_registry_invalid(profile, project, user_home)
 
 
 def test_global_command_guard_passes_with_short_head_artifact_path(tmp_path: Path) -> None:
@@ -1551,6 +1695,7 @@ def test_global_command_guard_denies_unknown_artifact_reference(tmp_path: Path) 
     head_ref = init_git_repo(project)
     profile = user_home / ".agents" / "guards" / "personal-policy"
     profile.mkdir(parents=True)
+    write_cross_agent_review_artifacts(profile)
     write_global_command_guard_with_artifact(profile, "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) build --apply", "missing_review_pass")
     write_cross_agent_review_marker(
         project,

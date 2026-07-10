@@ -979,6 +979,59 @@ def test_artifact_reuse_policy_must_be_allow_or_deny(tmp_path: Path) -> None:
     assert "必须是 `deny` 或 `allow`" in result.stdout
 
 
+def test_guard_defined_artifact_requires_json_type(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    artifacts = profile / "artifacts.yaml"
+    text = artifacts.read_text(encoding="utf-8")
+    text = text.replace("owner: guard", "owner: agent-guard")
+    text = text.replace(
+        ".local/guard/artifacts/{profile_id}/{instance_id}/{state_version}/completion-note.json",
+        ".local/guard/evidence/{profile_id}/{artifact_id}/{subject_id}/{git_head_short}/pass.json",
+    )
+    artifacts.write_text(text, encoding="utf-8")
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=artifacts field=artifacts.completion_note.type" in result.stdout
+    assert "必须是 `json`" in result.stdout
+
+
+def test_guard_defined_artifact_requires_default_evidence_path(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    artifacts = profile / "artifacts.yaml"
+    text = artifacts.read_text(encoding="utf-8")
+    text = text.replace("type: note", "type: json")
+    text = text.replace("owner: guard", "owner: agent-guard")
+    artifacts.write_text(text, encoding="utf-8")
+
+    result = run_validator(profile)
+
+    assert result.returncode == 1
+    assert "category=artifacts field=artifacts.completion_note.path" in result.stdout
+    assert "必须使用 guard-defined evidence 默认路径" in result.stdout
+
+
+def test_guard_defined_artifact_standard_contract_passes(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+    shutil.copytree(MINIMAL_PROFILE, profile)
+    artifacts = profile / "artifacts.yaml"
+    text = artifacts.read_text(encoding="utf-8")
+    text = text.replace("type: note", "type: json")
+    text = text.replace("owner: guard", "owner: agent-guard")
+    text = text.replace(
+        ".local/guard/artifacts/{profile_id}/{instance_id}/{state_version}/completion-note.json",
+        ".local/guard/evidence/{profile_id}/{artifact_id}/{subject_id}/{git_head_short}/pass.json",
+    )
+    artifacts.write_text(text, encoding="utf-8")
+
+    result = run_validator(profile)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_manifest_mode_is_rejected(tmp_path: Path) -> None:
     profile = tmp_path / "profile"
     shutil.copytree(MINIMAL_PROFILE, profile)
