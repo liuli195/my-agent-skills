@@ -37,7 +37,7 @@ base-ref: 41f635b98ee2c4db0e06bfff658c4379cae49adc
 - Consumes（输入）：现有 `ReviewInput`（审查输入）、`git_output_bytes()`、`write_review_input()` 测试助手。
 - Produces（输出）：`SummaryOnly`、`RevalidationPolicy`、扩展后的 `ReviewInput`、`changed_file_entries()`、`classify_files()`、`initial_review_state()`、`atomic_write_json()`。
 
-- [ ] **Step 1: 写输入分类失败测试**
+- [x] **Step 1: 写输入分类失败测试**
 
 在 `tests/test_cross_agent_review_cli.py` 增加精确用例，使用现有 `payload_overrides`：
 
@@ -80,7 +80,7 @@ def test_review_input_classifies_context_summary_and_default_full(tmp_path: Path
 
 同时参数化以下拒绝：重复路径、空理由、绝对路径、`..`、非变更路径、权威上下文与 `summary_only`（仅摘要）重叠。
 
-- [ ] **Step 2: 运行分类测试并确认失败**
+- [x] **Step 2: 运行分类测试并确认失败**
 
 Run（运行）：
 
@@ -90,7 +90,7 @@ python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py -k 
 
 Expected（预期）：FAIL（失败），提示 `initial_review_state` 或新输入字段尚不存在。
 
-- [ ] **Step 3: 实现最小输入与分类函数**
+- [x] **Step 3: 实现最小输入与分类函数**
 
 在现有脚本中增加以下结构和函数；路径只做精确匹配：
 
@@ -157,7 +157,7 @@ def classify_files(review_input: ReviewInput, entries: list[dict]) -> list[dict]
 
 扩展 `load_review_input()` 严格解析数组、拒绝重复，并用 `git diff --name-status -z --find-renames --find-copies-harder` 构建 entry（条目）。
 
-- [ ] **Step 4: 增加原子状态测试并确认失败**
+- [x] **Step 4: 增加原子状态测试并确认失败**
 
 ```python
 def test_initial_state_records_subject_context_hashes_and_role_scopes(tmp_path: Path) -> None:
@@ -176,7 +176,7 @@ def test_initial_state_records_subject_context_hashes_and_role_scopes(tmp_path: 
     assert "status" not in saved["roles"]["spec-alignment"]
 ```
 
-- [ ] **Step 5: 实现状态初始化和原子写入**
+- [x] **Step 5: 实现状态初始化和原子写入**
 
 ```python
 def atomic_write_json(path: Path, value: dict) -> None:
@@ -196,7 +196,7 @@ def atomic_write_json(path: Path, value: dict) -> None:
 
 同时把 `output_dir / "review-state.json"` 加入现有 `runtime_allowed_paths()`；这样首次状态写入后，派发前第二次 clean-worktree（干净工作区）检查仍只放行本次输入、报告、状态和 debug（调试）产物，不放行其他变更。
 
-- [ ] **Step 6: 运行 Task 1 定向测试**
+- [x] **Step 6: 运行 Task 1 定向测试**
 
 Run（运行）：
 
@@ -206,7 +206,7 @@ python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py -k 
 
 Expected（预期）：PASS（通过）。
 
-- [ ] **Step 7: 提交检查点（仅获授权时）**
+- [x] **Step 7: 提交检查点（仅获授权时）**
 
 ```powershell
 git add plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py tests/test_cross_agent_review_cli.py
