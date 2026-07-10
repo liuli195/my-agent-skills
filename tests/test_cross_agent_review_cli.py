@@ -310,6 +310,33 @@ def test_changed_file_entries_preserves_rename_and_copy_sources(tmp_path: Path) 
     assert by_path["copied.txt"]["old_path"] == "app.txt"
 
 
+@pytest.mark.parametrize(
+    "output",
+    [
+        b"Q\0src/app.py\0",
+        b"R100\0old.py\0",
+        b"M\0src/app.py\0extra\0",
+        b"R\0old.py\0new.py\0",
+        b"C101\0old.py\0new.py\0",
+        b"M100\0src/app.py\0",
+    ],
+)
+def test_changed_file_entries_rejects_malformed_name_status(
+    tmp_path: Path, monkeypatch, output: bytes
+) -> None:
+    project, _, _, input_file = committed_review_subject(tmp_path)
+    module = load_script_module()
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        monkeypatch.setattr(module, "git_output_bytes", lambda *_: output)
+        with pytest.raises(ValueError) as exc_info:
+            module.changed_file_entries(review_input)
+
+    assert str(exc_info.value) == "invalid_changed_file_entries"
+
+
 def test_initial_state_records_subject_context_hashes_and_role_scopes(tmp_path: Path) -> None:
     project, base, head, input_file = committed_review_subject(tmp_path)
     module = load_script_module()
@@ -352,6 +379,10 @@ def test_initial_state_records_subject_context_hashes_and_role_scopes(tmp_path: 
         ([{"path": "src/app.py", "reason": ""}], "invalid_summary_only: empty_reason=src/app.py"),
         ([{"path": "C:\\outside.txt", "reason": "outside"}], "path_outside_project"),
         ([{"path": "../src/app.py", "reason": "traversal"}], "path_outside_project"),
+        ([{"path": "src/../src/app.py", "reason": "traversal"}], "path_outside_project"),
+        ([{"path": "src/./app.py", "reason": "dot segment"}], "path_outside_project"),
+        ([{"path": "src//app.py", "reason": "empty segment"}], "path_outside_project"),
+        ([{"path": "src\\app.py", "reason": "backslash"}], "path_outside_project"),
         (
             [{"path": "not-changed.md", "reason": "not changed"}],
             "invalid_summary_only: not_changed=not-changed.md",
@@ -384,6 +415,30 @@ def test_summary_only_rejects_invalid_entries(
             argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
         )
         module.initial_review_state(review_input)
+
+
+def test_summary_only_reports_sorted_classification_overlap_paths(tmp_path: Path) -> None:
+    project, base, head, _ = committed_review_subject(tmp_path)
+    input_file = write_review_input(
+        project,
+        base,
+        head,
+        payload_overrides={
+            "summary_only": [
+                {"path": "spec.md", "reason": "overlap"},
+                {"path": "design.md", "reason": "overlap"},
+            ]
+        },
+    )
+    module = load_script_module()
+
+    with contextlib.chdir(project), pytest.raises(ValueError) as exc_info:
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        module.initial_review_state(review_input)
+
+    assert str(exc_info.value) == "classification_overlap: paths=design.md,spec.md"
 
 
 def test_review_input_parses_revalidation_policy(tmp_path: Path) -> None:

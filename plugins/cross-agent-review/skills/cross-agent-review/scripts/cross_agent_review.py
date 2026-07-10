@@ -10,7 +10,7 @@ import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 
 SCRIPT_PATH = Path(__file__).resolve()
@@ -191,8 +191,17 @@ def resolve_context_path(raw_path: str) -> Path:
 
 def project_relative_path(raw: str, project: Path) -> str:
     path = Path(raw)
+    posix = PurePosixPath(raw)
     windows = PureWindowsPath(raw)
-    if path.is_absolute() or windows.is_absolute() or windows.drive or windows.root:
+    if (
+        path.is_absolute()
+        or windows.is_absolute()
+        or windows.drive
+        or windows.root
+        or "\\" in raw
+        or any(segment in {"", ".", ".."} for segment in raw.split("/"))
+        or raw != posix.as_posix()
+    ):
         raise ValueError(f"path_outside_project: {raw}")
     resolved = (project / path).resolve()
     try:
@@ -375,29 +384,50 @@ def changed_file_entries(review_input: ReviewInput) -> list[dict]:
         ],
         Path.cwd(),
     )
-    fields = output.split(b"\0")
+    if output and not output.endswith(b"\0"):
+        raise ValueError("invalid_changed_file_entries")
+    fields = output[:-1].split(b"\0") if output else []
     entries: list[dict] = []
     index = 0
-    while index < len(fields) and fields[index]:
-        status = fields[index].decode("ascii", errors="replace")
+    while index < len(fields):
+        try:
+            status = fields[index].decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise ValueError("invalid_changed_file_entries") from exc
         index += 1
-        first_path = fields[index].decode("utf-8", errors="surrogateescape")
-        index += 1
-        if status.startswith(("R", "C")):
-            path = fields[index].decode("utf-8", errors="surrogateescape")
-            index += 1
+        if status in {"A", "B", "D", "M", "T", "U", "X"}:
+            path_count = 1
+        elif (
+            len(status) == 4
+            and status[0] in {"R", "C"}
+            and status[1:].isdigit()
+            and int(status[1:]) <= 100
+        ):
+            path_count = 2
+        else:
+            raise ValueError("invalid_changed_file_entries")
+        if index + path_count > len(fields) or any(
+            not field for field in fields[index : index + path_count]
+        ):
+            raise ValueError("invalid_changed_file_entries")
+        paths = [
+            field.decode("utf-8", errors="surrogateescape")
+            for field in fields[index : index + path_count]
+        ]
+        index += path_count
+        if path_count == 2:
             entries.append(
                 {
                     "status": status,
-                    "path": project_relative_path(path, Path.cwd()),
-                    "old_path": project_relative_path(first_path, Path.cwd()),
+                    "path": project_relative_path(paths[1], Path.cwd()),
+                    "old_path": project_relative_path(paths[0], Path.cwd()),
                 }
             )
         else:
             entries.append(
                 {
                     "status": status,
-                    "path": project_relative_path(first_path, Path.cwd()),
+                    "path": project_relative_path(paths[0], Path.cwd()),
                 }
             )
     return entries
@@ -414,8 +444,9 @@ def classify_files(review_input: ReviewInput, entries: list[dict]) -> list[dict]
     unknown = sorted(set(summaries) - changed)
     if unknown:
         raise ValueError(f"invalid_summary_only: not_changed={','.join(unknown)}")
-    if contexts & set(summaries):
-        raise ValueError("classification_overlap")
+    overlap = sorted(contexts & set(summaries))
+    if overlap:
+        raise ValueError(f"classification_overlap: paths={','.join(overlap)}")
     return [
         {
             **entry,
