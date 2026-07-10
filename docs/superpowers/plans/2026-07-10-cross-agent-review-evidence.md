@@ -835,7 +835,7 @@ git commit -m "增加通用守卫证据记录入口"
 - Consumes（输入）：Task 2-4 的报告/状态，Task 6 的 `record-evidence`（记录证据）。
 - Produces（输出）：只包含 `run/retry/revalidate`（运行/重试/重新校验）的 Cross Agent Review（跨代理审查）发布契约，以及两个审查来源到同一证据入口的集成夹具。
 
-- [ ] **Step 1: 先反转旧 package（包）与 CLI（命令行）测试**
+- [x] **Step 1: 先反转旧 package（包）与 CLI（命令行）测试**
 
 ```python
 def test_mark_pass_is_not_a_command() -> None:
@@ -854,7 +854,7 @@ def test_cross_agent_review_package_has_no_agent_guard_evidence_knowledge() -> N
         assert forbidden not in text
 ```
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 ```powershell
 python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py tests/test_cross_agent_review_plugin_package.py -k "mark_pass or no_agent_guard"
@@ -862,11 +862,11 @@ python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py tes
 
 Expected（预期）：FAIL（失败），旧命令与文档仍存在。
 
-- [ ] **Step 3: 删除专用证据代码**
+- [x] **Step 3: 删除专用证据代码**
 
 删除 `DEFAULT_PROFILE_ID`、`DEFAULT_ARTIFACT_ID`、`DEFAULT_SUBJECT_TYPE`、mark parser（标记参数解析器）、`guard_pass_path()`、`mark_pass_allowed_paths()`、`run_mark_pass()` 和 main dispatch（主分派）分支。保留报告字节哈希函数供 state（状态）和调用方使用，但不得保留 Agent Guard（代理守卫）字段常量。
 
-- [ ] **Step 4: 更新 Cross Agent Review Skill（跨代理审查技能）**
+- [x] **Step 4: 更新 Cross Agent Review Skill（跨代理审查技能）**
 
 文档写清：
 
@@ -878,7 +878,7 @@ run/retry/revalidate 只生成 review-report.md 和 review-state.json。
 
 补充 `summary_only`（仅摘要）与 `revalidation_policy`（重新校验策略）的精确 JSON（数据）示例和失败回退说明。
 
-- [ ] **Step 5: 增加 Planning Review（规划审查）规范哈希集成测试**
+- [x] **Step 5: 增加 Planning Review（规划审查）规范哈希集成测试**
 
 在 Agent Guard（代理守卫）端测试夹具构造：
 
@@ -902,7 +902,7 @@ fields = {
 
 调用 Task 6 同一 Runtime CLI（运行时命令行），再通过现有 hook router（钩子路由器）断言 planning gate（规划门禁）允许；不导入或修改 Planning Review Skill（规划审查技能）。
 
-- [ ] **Step 6: 运行两个插件完整定向测试**
+- [x] **Step 6: 运行两个插件完整定向测试**
 
 ```powershell
 python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py tests/test_cross_agent_review_plugin_package.py tests/test_agent_guard_runtime_router.py tests/test_agent_guard_plugin_runtime_e2e.py tests/test_validate_guard_profile.py tests/test_agent_guard_skill_entrypoints.py
@@ -910,7 +910,7 @@ python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py tes
 
 Expected（预期）：PASS（通过）。
 
-- [ ] **Step 7: 提交原子迁移检查点（仅获授权时）**
+- [x] **Step 7: 提交原子迁移检查点（仅获授权时）**
 
 ```powershell
 git add plugins/cross-agent-review plugins/agent-guard tests/test_cross_agent_review_cli.py tests/test_cross_agent_review_plugin_package.py tests/test_agent_guard_runtime_router.py tests/test_agent_guard_plugin_runtime_e2e.py tests/test_validate_guard_profile.py tests/test_agent_guard_skill_entrypoints.py

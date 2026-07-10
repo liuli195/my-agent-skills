@@ -28,10 +28,10 @@
 
 ## 5. 所有权迁移与兼容集成
 
-- [ ] 5.1 先修改测试，要求 Cross Agent Review（跨代理审查）拒绝 `mark-pass`（标记通过）命令，且源码、技能和包检查不再包含 Agent Guard（代理守卫）画像、产物、路径或证据字段知识
-- [ ] 5.2 删除 Cross Agent Review（跨代理审查）的 `mark-pass`（标记通过）实现、常量、文档和旧测试，并更新运行、重试与重新校验的用户入口说明
-- [ ] 5.3 更新 Agent Guard（代理守卫）规格、规则与验证器，使 guard-defined evidence（守卫定义证据）明确要求 `type: json`（数据类型）和 `owner: agent-guard`（代理守卫拥有），但不在插件内加入 Comet（双星工作流）专用画像模板
-- [ ] 5.4 更新 Comet review gate（双星审查门禁）集成说明和测试夹具：Cross Agent Review（跨代理审查）主代理从报告和状态提供平面业务字段；Planning Review（规划审查）主代理额外提供五字段 `review`（审查结果）对象及其规范哈希
+- [x] 5.1 先修改测试，要求 Cross Agent Review（跨代理审查）拒绝 `mark-pass`（标记通过）命令，且源码、技能和包检查不再包含 Agent Guard（代理守卫）画像、产物、路径或证据字段知识
+- [x] 5.2 删除 Cross Agent Review（跨代理审查）的 `mark-pass`（标记通过）实现、常量、文档和旧测试，并更新运行、重试与重新校验的用户入口说明
+- [x] 5.3 更新 Agent Guard（代理守卫）规格、规则与验证器，使 guard-defined evidence（守卫定义证据）明确要求 `type: json`（数据类型）和 `owner: agent-guard`（代理守卫拥有），但不在插件内加入 Comet（双星工作流）专用画像模板
+- [x] 5.4 更新 Comet review gate（双星审查门禁）集成说明和测试夹具：Cross Agent Review（跨代理审查）主代理从报告和状态提供平面业务字段；Planning Review（规划审查）主代理额外提供五字段 `review`（审查结果）对象及其规范哈希
 
 ## 6. 端到端回归与仓库验证
 

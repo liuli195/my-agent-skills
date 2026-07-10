@@ -3,7 +3,25 @@
 - Change: `stabilize-cross-agent-review-evidence`
 - Review mode: `standard`
 - TDD mode: `tdd`
-- Current plan task: `Task 6: 通用 record-evidence（记录证据）`
+- Current plan task: `Task 7: 删除 mark-pass（标记通过）并更新调用契约`
+
+## Task 7: 删除 mark-pass（标记通过）并更新调用契约
+
+- OpenSpec mapping:
+  - `5.1` 删除 Cross Agent Review（跨代理审查）的专用证据命令、常量与路径知识
+  - `5.2` 明确主 Agent（代理）读取报告并调用外部工作流的通用证据入口
+  - `5.3` 补充 Planning Review（规划审查）共用 record-evidence（记录证据）的集成夹具
+  - `5.4` 保持 Cross Agent Review（跨代理审查）发布契约只包含 run/retry/revalidate（运行/重试/重新校验）
+- Stage: `completed`
+- Base commit: `7f98fbe`
+- Risk signals: 公共 CLI（命令行接口）删除、跨插件所有权迁移、Skill（技能）行为契约、集成测试
+- Review findings: 2 Important（重要）— Planning Review（规划审查）夹具缺少写入前拒绝对照；Skill（技能）误删默认模式和实施基准规则
+- Implementation commits: `56f1b7e`, `5d7f4fe`
+- Changed files: Cross Agent Review（跨代理审查）脚本与 Skill（技能）、三个 Cross Agent Review（跨代理审查）测试、Agent Guard（代理守卫）端到端测试（`+319/-311`）
+- RED evidence: 旧命令/包知识 2 失败；文档结构 2 失败；复审修复保护 2 失败；旧 Skill（技能）压力场景 4/5 误判
+- GREEN evidence: 焦点 4 通过；修复保护 2 通过；Skill（技能）压力场景 5/5 正确；六文件完整定向回归 440 通过；`py_compile`（语法编译检查）与 `git diff --check`（差异格式检查）通过
+- Task review: PASS（通过）— 初审 2 Important（重要）均在唯一修复轮关闭；全新窄范围复审 findings（发现项）为空
+- Review-fix round: `1/1`
 
 ## Task 1: 文件投影与原子状态基础
 
