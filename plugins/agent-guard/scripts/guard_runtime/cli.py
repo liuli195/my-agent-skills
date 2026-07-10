@@ -21,7 +21,6 @@ from core import (
     list_active_instances,
     load_instance,
     now_iso,
-    profile_dir,
     read_session_observation,
     run_brief,
     run_state_completed,
@@ -44,6 +43,9 @@ RESERVED_EVIDENCE_FIELDS = {
     "head_ref_short",
     "created_at",
 }
+GUARD_EVIDENCE_PATH_TEMPLATE = (
+    ".local/guard/evidence/{profile_id}/{artifact_id}/{subject_id}/{git_head_short}/pass.json"
+)
 
 
 class JsonArgumentParser(argparse.ArgumentParser):
@@ -88,9 +90,28 @@ def git_head_and_clean(project: Path) -> str:
 
 
 def load_business_fields(path: Path) -> dict[str, Any]:
+    def reject_constant(_value: str) -> None:
+        raise ValueError
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError
+            result[key] = value
+        return result
+
     try:
-        fields = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
+        text = path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError("business_fields_invalid_utf8") from error
+    try:
+        fields = json.loads(
+            text,
+            parse_constant=reject_constant,
+            object_pairs_hook=reject_duplicate_keys,
+        )
+    except (json.JSONDecodeError, ValueError) as error:
         raise ValueError("business_fields_invalid_json") from error
     if not isinstance(fields, dict):
         raise ValueError("business_fields_object_required")
@@ -103,34 +124,87 @@ def atomic_write_evidence(path: Path, body: dict[str, Any]) -> None:
     temp_path = Path(temporary)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
-            json.dump(body, stream, ensure_ascii=False, indent=2)
+            json.dump(body, stream, ensure_ascii=False, indent=2, allow_nan=False)
             stream.write("\n")
         os.replace(temp_path, path)
     finally:
         temp_path.unlink(missing_ok=True)
 
 
-def record_evidence(args: argparse.Namespace) -> int:
-    project = args.project.resolve()
-    user_home = args.user_home.resolve()
-    for value in (args.profile, args.artifact, args.subject_id):
-        safe_segment(value)
+def trusted_profile_dir(
+    project: Path,
+    user_home: Path,
+    source: str,
+    profile_id: str,
+) -> Path:
+    anchor = project if source == "project" else user_home
+    root = (anchor / ".agents" / "guards").resolve()
+    try:
+        root.relative_to(anchor)
+    except ValueError as error:
+        raise ValueError("profile_not_found") from error
 
-    profile = profile_dir(project, args.profile, user_home, args.profile_source)
-    if not profile.is_dir():
+    profile = root / profile_id
+    if profile.is_symlink():
         raise ValueError("profile_not_found")
+    try:
+        resolved_profile = profile.resolve(strict=True)
+    except OSError as error:
+        raise ValueError("profile_not_found") from error
+    if resolved_profile != profile or resolved_profile.parent != root or not resolved_profile.is_dir():
+        raise ValueError("profile_not_found")
+
     registry = profile / "artifacts.yaml"
+    if registry.is_symlink():
+        raise ValueError("artifact_registry_invalid")
     if not registry.is_file():
         raise ValueError("artifact_registry_missing")
     try:
-        artifacts = load_profile_artifacts(profile)
+        resolved_registry = registry.resolve(strict=True)
+    except OSError as error:
+        raise ValueError("artifact_registry_unreadable") from error
+    if resolved_registry != registry or resolved_registry.parent != resolved_profile:
+        raise ValueError("artifact_registry_invalid")
+    return resolved_profile
+
+
+def load_record_evidence_artifacts(profile: Path) -> dict[str, dict[str, Any]]:
+    try:
+        return load_profile_artifacts(profile)
+    except UnicodeError as error:
+        raise ValueError("artifact_registry_invalid") from error
     except yaml.YAMLError as error:
         raise ValueError("artifact_registry_invalid") from error
+    except OSError as error:
+        raise ValueError("artifact_registry_unreadable") from error
+    except ValueError as error:
+        if str(error).startswith("artifact_id_duplicate: "):
+            raise
+        raise ValueError("artifact_registry_invalid") from error
+
+
+def record_evidence(args: argparse.Namespace) -> int:
+    project = args.project.resolve()
+    user_home = args.user_home.resolve()
+    producer = args.producer.strip()
+    subject_type = args.subject_type.strip()
+    if not producer:
+        raise ValueError("producer_required")
+    if not subject_type:
+        raise ValueError("subject_type_required")
+    for value in (args.profile, args.artifact, args.subject_id):
+        safe_segment(value)
+
+    profile = trusted_profile_dir(project, user_home, args.profile_source, args.profile)
+    artifacts = load_record_evidence_artifacts(profile)
     artifact = artifacts.get(args.artifact)
     if artifact is None:
         raise ValueError("artifact_not_found")
     if artifact.get("owner") != "agent-guard" or artifact.get("type") != "json":
         raise ValueError("artifact_not_guard_defined")
+    path_template = artifact.get("path")
+    if path_template != GUARD_EVIDENCE_PATH_TEMPLATE:
+        raise ValueError("unsafe_evidence_path")
 
     head = git_head_and_clean(project)
     values = {
@@ -140,7 +214,7 @@ def record_evidence(args: argparse.Namespace) -> int:
         "git_head": head,
         "git_head_short": head[:12],
     }
-    rendered, missing = render_template(str(artifact.get("path", "")), values)
+    rendered, missing = render_template(path_template, values)
     if missing:
         raise ValueError(f"evidence_path_template_value_missing: {','.join(missing)}")
     if (project / Path(rendered)).is_symlink():
@@ -154,10 +228,10 @@ def record_evidence(args: argparse.Namespace) -> int:
     body = {
         "schema_version": "guard-evidence/v1",
         "status": "pass",
-        "producer": args.producer,
+        "producer": producer,
         "profile_id": args.profile,
         "artifact_id": args.artifact,
-        "subject_type": args.subject_type,
+        "subject_type": subject_type,
         "subject_id": args.subject_id,
         "head_ref": head,
         "head_ref_short": head[:12],

@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import shutil
@@ -80,6 +81,61 @@ def write_guard_defined_artifact(
     )
 
 
+def profile_path(project: Path, user_home: Path, source: str) -> Path:
+    anchor = project if source == "project" else user_home
+    return anchor / ".agents" / "guards" / "demo-profile"
+
+
+def create_directory_alias(alias: Path, target: Path) -> None:
+    alias.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(alias), str(target)],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if result.returncode != 0:
+            pytest.skip(f"junction unavailable: {result.stdout}{result.stderr}")
+        return
+    try:
+        alias.symlink_to(target, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"symlink unavailable: {error}")
+
+
+def create_file_symlink(alias: Path, target: Path) -> None:
+    alias.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        alias.symlink_to(target)
+    except OSError as error:
+        pytest.skip(f"symlink unavailable: {error}")
+
+
+def load_runtime_cli(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.syspath_prepend(str(RUNTIME_CLI.parent))
+    monkeypatch.delitem(sys.modules, "core", raising=False)
+    monkeypatch.delitem(sys.modules, "global_command_guards", raising=False)
+    spec = importlib.util.spec_from_file_location("agent_guard_runtime_cli_test", RUNTIME_CLI)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def prepare_evidence_link_fixture(project: Path) -> tuple[Path, Path]:
+    target = project / "target.json"
+    target.write_text('{"original": true}\n', encoding="utf-8")
+    (project / ".gitignore").write_text(".local/guard/evidence/\n", encoding="utf-8")
+    git(project, "add", ".")
+    git(project, "commit", "-m", "track link fixture")
+    head = git(project, "rev-parse", "HEAD")
+    evidence = project / ".local" / "guard" / "evidence" / "demo-profile" / "demo-pass" / "demo" / head[:12] / "pass.json"
+    evidence.parent.mkdir(parents=True)
+    return target, evidence
+
+
 def record_evidence_args(
     project: Path,
     user_home: Path,
@@ -133,7 +189,15 @@ def test_record_evidence_writes_current_head_guard_owned_artifact(tmp_path: Path
     write_guard_defined_artifact(profile)
     fields = write_payload(tmp_path / "fields.json", {"blocking_findings": 0, "report": "inline:review"})
 
-    result = run(record_evidence_args(project, user_home, fields))
+    result = run(
+        record_evidence_args(
+            project,
+            user_home,
+            fields,
+            producer=" reviewer ",
+            subject_type=" change ",
+        )
+    )
 
     assert result.returncode == 0, result.stdout + result.stderr
     body = output_json(result)
@@ -179,6 +243,8 @@ def test_record_evidence_does_not_fall_back_to_other_profile_source(tmp_path: Pa
         ("profile_missing", "profile_not_found"),
         ("registry_missing", "artifact_registry_missing"),
         ("registry_invalid", "artifact_registry_invalid"),
+        ("registry_invalid_utf8", "artifact_registry_invalid"),
+        ("registry_invalid_structure", "artifact_registry_invalid"),
         ("artifact_duplicate", "artifact_id_duplicate: demo-pass"),
         ("artifact_missing", "artifact_not_found"),
         ("owner_invalid", "artifact_not_guard_defined"),
@@ -199,6 +265,12 @@ def test_record_evidence_rejects_invalid_profile_registry_or_artifact(
     elif setup == "registry_invalid":
         profile.mkdir(parents=True)
         (profile / "artifacts.yaml").write_text("artifacts: [", encoding="utf-8")
+    elif setup == "registry_invalid_utf8":
+        profile.mkdir(parents=True)
+        (profile / "artifacts.yaml").write_bytes(b"artifacts:\n  - \xff\n")
+    elif setup == "registry_invalid_structure":
+        profile.mkdir(parents=True)
+        (profile / "artifacts.yaml").write_text("artifacts: {}\n", encoding="utf-8")
     elif setup == "artifact_duplicate":
         write_guard_defined_artifact(profile)
         with (profile / "artifacts.yaml").open("a", encoding="utf-8") as stream:
@@ -217,27 +289,72 @@ def test_record_evidence_rejects_invalid_profile_registry_or_artifact(
 
 
 @pytest.mark.parametrize(
-    ("path", "reason"),
+    "path",
     [
-        ("/tmp/pass.json", "unsafe_evidence_path"),
-        (r"C:\\temp\\pass.json", "unsafe_evidence_path"),
-        ("../pass.json", "unsafe_evidence_path"),
-        (".local/guard/evidence/{missing}/pass.json", "evidence_path_template_value_missing: missing"),
+        ".git/config",
+        "src/main.py",
+        ".agents/guard/evidence/{profile_id}/{artifact_id}/{subject_id}/{git_head_short}/pass.json",
+        ".local/guard/evidence/{profile_id}/{artifact_id}/../{subject_id}/{git_head_short}/pass.json",
     ],
 )
-def test_record_evidence_rejects_unsafe_or_unrenderable_artifact_path(
-    tmp_path: Path,
-    path: str,
-    reason: str,
-) -> None:
-    project = init_git_project(tmp_path / "project")
+def test_record_evidence_rejects_nonstandard_template_before_git(tmp_path: Path, path: str) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
     user_home = tmp_path / "home"
     write_guard_defined_artifact(user_home / ".agents" / "guards" / "demo-profile", path=path)
     fields = write_payload(tmp_path / "fields.json", {})
 
     result = run(record_evidence_args(project, user_home, fields))
 
-    assert_record_failed(result, reason)
+    assert_record_failed(result, "unsafe_evidence_path")
+
+
+@pytest.mark.parametrize("source", ["project", "user"])
+def test_record_evidence_rejects_profile_alias_outside_source_root(tmp_path: Path, source: str) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    user_home = tmp_path / "home"
+    external_profile = tmp_path / "external" / "demo-profile"
+    write_guard_defined_artifact(external_profile)
+    create_directory_alias(profile_path(project, user_home, source), external_profile)
+    fields = write_payload(tmp_path / "fields.json", {})
+
+    result = run(record_evidence_args(project, user_home, fields, profile_source=source))
+
+    assert_record_failed(result, "profile_not_found")
+
+
+@pytest.mark.parametrize("source", ["project", "user"])
+def test_record_evidence_rejects_guard_root_alias_outside_source_anchor(tmp_path: Path, source: str) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    user_home = tmp_path / "home"
+    external_root = tmp_path / "external-guards"
+    write_guard_defined_artifact(external_root / "demo-profile")
+    root = profile_path(project, user_home, source).parent
+    create_directory_alias(root, external_root)
+    fields = write_payload(tmp_path / "fields.json", {})
+
+    result = run(record_evidence_args(project, user_home, fields, profile_source=source))
+
+    assert_record_failed(result, "profile_not_found")
+
+
+@pytest.mark.parametrize("source", ["project", "user"])
+def test_record_evidence_rejects_symlinked_artifact_registry(tmp_path: Path, source: str) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    user_home = tmp_path / "home"
+    external_profile = tmp_path / "external"
+    write_guard_defined_artifact(external_profile)
+    profile = profile_path(project, user_home, source)
+    profile.mkdir(parents=True)
+    create_file_symlink(profile / "artifacts.yaml", external_profile / "artifacts.yaml")
+    fields = write_payload(tmp_path / "fields.json", {})
+
+    result = run(record_evidence_args(project, user_home, fields, profile_source=source))
+
+    assert_record_failed(result, "artifact_registry_invalid")
 
 
 @pytest.mark.parametrize(
@@ -257,6 +374,31 @@ def test_record_evidence_rejects_non_segment_identifiers(tmp_path: Path, overrid
     result = run(record_evidence_args(project, user_home, fields, **{override: value}))
 
     assert_record_failed(result, "unsafe_segment")
+
+
+@pytest.mark.parametrize(
+    ("override", "value", "reason"),
+    [
+        ("producer", "", "producer_required"),
+        ("producer", "   ", "producer_required"),
+        ("subject_type", "", "subject_type_required"),
+        ("subject_type", "\t ", "subject_type_required"),
+    ],
+)
+def test_record_evidence_rejects_blank_metadata_before_profile_lookup(
+    tmp_path: Path,
+    override: str,
+    value: str,
+    reason: str,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    user_home = tmp_path / "home"
+    fields = write_payload(tmp_path / "fields.json", {})
+
+    result = run(record_evidence_args(project, user_home, fields, **{override: value}))
+
+    assert_record_failed(result, reason)
 
 
 def test_record_evidence_requires_git_repository(tmp_path: Path) -> None:
@@ -286,20 +428,65 @@ def test_record_evidence_requires_clean_worktree(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("content", "reason"),
     [
-        ("{", "business_fields_invalid_json"),
-        ("[]", "business_fields_object_required"),
+        (b'{"value":"\xff"}', "business_fields_invalid_utf8"),
+        (b"{", "business_fields_invalid_json"),
+        (b'{"score":NaN}', "business_fields_invalid_json"),
+        (b'{"score":Infinity}', "business_fields_invalid_json"),
+        (b'{"score":-Infinity}', "business_fields_invalid_json"),
+        (b'{"decision":"pass","decision":"fail"}', "business_fields_invalid_json"),
+        (b'{"nested":{"key":1,"key":2}}', "business_fields_invalid_json"),
+        (b"[]", "business_fields_object_required"),
+        (b'"value"', "business_fields_object_required"),
     ],
 )
-def test_record_evidence_rejects_invalid_business_fields(tmp_path: Path, content: str, reason: str) -> None:
+def test_record_evidence_rejects_invalid_business_fields(tmp_path: Path, content: bytes, reason: str) -> None:
     project = init_git_project(tmp_path / "project")
     user_home = tmp_path / "home"
     write_guard_defined_artifact(user_home / ".agents" / "guards" / "demo-profile")
     fields = tmp_path / "fields.json"
-    fields.write_text(content, encoding="utf-8")
+    fields.write_bytes(content)
 
     result = run(record_evidence_args(project, user_home, fields))
 
     assert_record_failed(result, reason)
+
+
+def test_record_evidence_maps_registry_read_error_without_leaking_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    user_home = tmp_path / "home"
+    write_guard_defined_artifact(user_home / ".agents" / "guards" / "demo-profile")
+    fields = write_payload(tmp_path / "fields.json", {})
+    module = load_runtime_cli(monkeypatch)
+
+    def unreadable_registry(_profile: Path) -> dict:
+        raise PermissionError("C:/secret/outside/artifacts.yaml")
+
+    monkeypatch.setattr(module, "load_profile_artifacts", unreadable_registry)
+
+    code = module.main(record_evidence_args(project, user_home, fields)[1:])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.err == ""
+    assert json.loads(captured.out) == {"status": "failed", "reason": "artifact_registry_unreadable"}
+
+
+def test_atomic_write_evidence_rejects_nonfinite_numbers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_runtime_cli(monkeypatch)
+    path = tmp_path / "evidence.json"
+
+    with pytest.raises(ValueError, match="Out of range float values"):
+        module.atomic_write_evidence(path, {"score": float("nan")})
+
+    assert not path.exists()
 
 
 @pytest.mark.parametrize(
@@ -348,18 +535,9 @@ def test_record_evidence_does_not_accept_caller_head_override(tmp_path: Path) ->
 def test_record_evidence_atomically_replaces_hardlink_without_mutating_target(tmp_path: Path) -> None:
     project = init_git_project(tmp_path / "project")
     user_home = tmp_path / "home"
-    artifact_path = ".local/guard/evidence/demo-profile/demo-pass/demo/pass.json"
-    write_guard_defined_artifact(
-        user_home / ".agents" / "guards" / "demo-profile",
-        path=artifact_path,
-    )
-    target = project / "target.json"
-    target.write_text('{"original": true}\n', encoding="utf-8")
-    evidence = project / artifact_path
-    evidence.parent.mkdir(parents=True)
+    write_guard_defined_artifact(user_home / ".agents" / "guards" / "demo-profile")
+    target, evidence = prepare_evidence_link_fixture(project)
     os.link(target, evidence)
-    git(project, "add", ".")
-    git(project, "commit", "-m", "track hardlink fixture")
     fields = write_payload(tmp_path / "fields.json", {"result": "ok"})
 
     result = run(record_evidence_args(project, user_home, fields))
@@ -372,21 +550,12 @@ def test_record_evidence_atomically_replaces_hardlink_without_mutating_target(tm
 def test_record_evidence_rejects_symlink_without_mutating_target(tmp_path: Path) -> None:
     project = init_git_project(tmp_path / "project")
     user_home = tmp_path / "home"
-    artifact_path = ".local/guard/evidence/demo-profile/demo-pass/demo/pass.json"
-    write_guard_defined_artifact(
-        user_home / ".agents" / "guards" / "demo-profile",
-        path=artifact_path,
-    )
-    target = project / "target.json"
-    target.write_text('{"original": true}\n', encoding="utf-8")
-    evidence = project / artifact_path
-    evidence.parent.mkdir(parents=True)
+    write_guard_defined_artifact(user_home / ".agents" / "guards" / "demo-profile")
+    target, evidence = prepare_evidence_link_fixture(project)
     try:
         evidence.symlink_to(target)
     except OSError as error:
         pytest.skip(f"symlink unavailable: {error}")
-    git(project, "add", ".")
-    git(project, "commit", "-m", "track symlink fixture")
     fields = write_payload(tmp_path / "fields.json", {"result": "ok"})
 
     result = run(record_evidence_args(project, user_home, fields))

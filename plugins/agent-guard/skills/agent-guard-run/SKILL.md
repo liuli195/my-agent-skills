@@ -1,6 +1,6 @@
 ---
 name: agent-guard-run
-description: 运行守卫：激活 Session Focus Instance（会话焦点实例）、切换焦点、关闭实例、提交标准事件并处理状态推进结果。Use when 用户要运行、激活、切换、关闭、提交事件或推进一个已初始化守卫。
+description: 运行守卫：激活 Session Focus Instance（会话焦点实例）、切换焦点、关闭实例、提交标准事件并处理状态推进结果。Use when 用户要运行、激活、切换、关闭、提交事件、推进一个已初始化守卫，或记录 guard-defined evidence（守卫定义证据）。
 ---
 
 # agent-guard-run

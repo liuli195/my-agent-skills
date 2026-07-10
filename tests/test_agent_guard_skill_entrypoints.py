@@ -191,8 +191,26 @@ def test_agent_guard_run_documents_generic_record_evidence_contract() -> None:
         "created_at",
     ]:
         assert f"`{field}`" in combined_text
-    for fixed_id in ["comet/", "cross-agent-review/", "planning-review/"]:
-        assert fixed_id not in combined_text.lower()
+
+
+def test_agent_guard_run_description_routes_record_evidence() -> None:
+    skill_dir = SOURCE_SKILL.parent / "agent-guard-run"
+
+    assert "记录 guard-defined evidence（守卫定义证据）" in skill_description(skill_dir)
+
+
+def test_agent_guard_record_evidence_example_has_no_fixed_ids() -> None:
+    events_text = (
+        SOURCE_SKILL.parent / "agent-guard-run" / "references" / "events.md"
+    ).read_text(encoding="utf-8")
+    example = next(
+        block.split("```", 1)[0].lower()
+        for block in events_text.split("```powershell")[1:]
+        if "record-evidence" in block
+    )
+
+    for fixed_id in ["comet", "cross-agent-review", "planning-review"]:
+        assert fixed_id not in example
 
 
 def test_templates_do_not_include_python_cache_artifacts() -> None:
