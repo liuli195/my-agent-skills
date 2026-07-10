@@ -2021,6 +2021,209 @@ def test_report_is_rebuilt_only_from_state_and_top_level_hash_is_saved(
         assert saved[key] == value
 
 
+def review_state_for_retry(
+    tmp_path: Path, statuses: tuple[str, str]
+) -> tuple[Path, Path, dict]:
+    project, input_file = committed_review_input(tmp_path)
+    module = load_script_module()
+    with contextlib.chdir(project):
+        review_input = module.load_review_input(
+            argparse.Namespace(input_file=input_file, debug=False, sdk_python=None)
+        )
+        state = module.initial_review_state(review_input)
+        for index, (role, status) in enumerate(
+            zip(module.REVIEWER_ROLES, statuses, strict=True), start=1
+        ):
+            module.record_role_result(
+                state,
+                role,
+                status,
+                f"# Review Result: {role}\n## Findings\nOriginal {status} output\n",
+                f"2026-07-10T01:02:0{index}.000000Z",
+                f"2026-07-10T01:02:1{index}.000000Z",
+            )
+        module.write_outputs(review_input, state)
+    saved = json.loads(
+        (input_file.parent.parent / "review-state.json").read_text(encoding="utf-8")
+    )
+    return project, input_file, saved
+
+
+@pytest.mark.parametrize(
+    ("preserved_status", "retry_status"),
+    [("completed", "failed"), ("reused", "timed_out")],
+)
+def test_retry_dispatches_only_failed_role_and_preserves_success(
+    tmp_path: Path,
+    monkeypatch,
+    preserved_status: str,
+    retry_status: str,
+) -> None:
+    project, input_file, original_state = review_state_for_retry(
+        tmp_path, (preserved_status, retry_status)
+    )
+    module = load_script_module()
+    calls: list[list[str]] = []
+
+    def fake_dispatch(review_input, sdk_python, state, roles):
+        calls.append(list(roles))
+        assert sdk_python == "fake-sdk"
+        assert state["roles"][roles[0]]["scope"] == original_state["roles"][roles[0]][
+            "scope"
+        ]
+        module.record_role_result(
+            state,
+            roles[0],
+            "completed",
+            "# Review Result: implementation-correctness\n## Findings\nRetry output\n",
+            "2026-07-10T02:03:04.000000Z",
+            "2026-07-10T02:03:05.000000Z",
+        )
+        module.atomic_write_json(review_input.output_dir / "review-state.json", state)
+        return state
+
+    monkeypatch.setattr(module, "dispatch_roles", fake_dispatch)
+    monkeypatch.setattr(
+        module,
+        "resolve_sdk_python",
+        lambda explicit, require_real_sdk: "fake-sdk",
+    )
+
+    result = run("retry", "--input-file", str(input_file), cwd=project)
+    state_path = input_file.parent.parent / "review-state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    report_path = input_file.parent.parent / "review-report.md"
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert calls == [["implementation-correctness"]]
+    assert state["roles"]["spec-alignment"] == original_state["roles"]["spec-alignment"]
+    retried = state["roles"]["implementation-correctness"]
+    assert len(retried["attempts"]) == 2
+    assert retried["attempts"][0] == original_state["roles"][
+        "implementation-correctness"
+    ]["attempts"][0]
+    assert retried["attempts"][1]["number"] == 2
+    assert retried["attempts"][1]["started_at"] == "2026-07-10T02:03:04.000000Z"
+    assert retried["attempts"][1]["finished_at"] == "2026-07-10T02:03:05.000000Z"
+    assert retried["status"] == "completed"
+    assert "Retry output" in report_path.read_text(encoding="utf-8")
+    assert state["report_hash"] == module.sha256_bytes(report_path.read_bytes())
+
+
+def test_retry_with_no_retryable_roles_does_not_dispatch(tmp_path: Path, monkeypatch) -> None:
+    project, input_file, _ = review_state_for_retry(tmp_path, ("completed", "reused"))
+    module = load_script_module()
+    state_path = input_file.parent.parent / "review-state.json"
+    before = state_path.read_bytes()
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("no reviewer or SDK resolution should run")
+
+    monkeypatch.setattr(module, "dispatch_roles", unexpected)
+    monkeypatch.setattr(module, "resolve_sdk_python", unexpected)
+
+    result = run("retry", "--input-file", str(input_file), cwd=project)
+
+    assert result.returncode != 0
+    assert result.stdout == "status: no_retryable_roles\n"
+    assert state_path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ("schema", "state_mismatch"),
+        ("subject_change", "state_mismatch"),
+        ("subject_mode", "state_mismatch"),
+        ("subject_base", "state_mismatch"),
+        ("subject_head", "state_mismatch"),
+        ("subject_input_file", "state_mismatch"),
+        ("subject_contexts", "state_mismatch"),
+        ("input_hash", "input_hash_mismatch"),
+        ("files", "state_mismatch"),
+        ("roles", "state_mismatch"),
+        ("scope", "retry_scope_mismatch"),
+        ("output_hash", "output_hash_mismatch"),
+        ("attempt_output_hash", "output_hash_mismatch"),
+        ("attempts", "state_mismatch"),
+    ],
+)
+def test_retry_rejects_state_not_bound_to_current_input_and_repository(
+    tmp_path: Path, monkeypatch, mutation: str, reason: str
+) -> None:
+    project, input_file, state = review_state_for_retry(
+        tmp_path, ("completed", "timed_out")
+    )
+    module = load_script_module()
+    role = "implementation-correctness"
+    if mutation == "schema":
+        state["schema_version"] = "cross-agent-review-state/v0"
+    elif mutation.startswith("subject_"):
+        key = mutation.removeprefix("subject_")
+        if key == "contexts":
+            state["subject"][key]["spec"]["hash"] = "sha256:wrong"
+        else:
+            state["subject"][{"base": "base_ref", "head": "head_ref"}.get(key, key)] = (
+                "wrong"
+            )
+    elif mutation == "input_hash":
+        state["subject"]["input_hash"] = "sha256:wrong"
+    elif mutation == "files":
+        state["files"][0]["classification"] = "summary_only"
+    elif mutation == "roles":
+        state["roles"]["unbound-reviewer"] = state["roles"][role].copy()
+    elif mutation == "scope":
+        state["roles"][role]["scope"]["full_review"].append("outside.py")
+    elif mutation == "output_hash":
+        state["roles"][role]["output_hash"] = "sha256:wrong"
+    elif mutation == "attempt_output_hash":
+        state["roles"][role]["attempts"][0]["output_hash"] = "sha256:wrong"
+    elif mutation == "attempts":
+        state["roles"][role]["attempts"] = []
+    module.atomic_write_json(input_file.parent.parent / "review-state.json", state)
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("invalid state must be rejected before SDK resolution or dispatch")
+
+    monkeypatch.setattr(module, "resolve_sdk_python", unexpected)
+    monkeypatch.setattr(module, "dispatch_roles", unexpected)
+
+    result = run("retry", "--input-file", str(input_file), cwd=project)
+
+    assert result.returncode != 0
+    assert f"error: {reason}" in result.stdout
+
+
+def test_retry_rejects_malformed_state_as_state_mismatch(tmp_path: Path, monkeypatch) -> None:
+    project, input_file, _ = review_state_for_retry(tmp_path, ("completed", "failed"))
+    module = load_script_module()
+    state_path = input_file.parent.parent / "review-state.json"
+    state_path.write_text("{not-json\n", encoding="utf-8")
+    monkeypatch.setattr(module, "resolve_sdk_python", lambda *_args, **_kwargs: pytest.fail())
+    monkeypatch.setattr(module, "dispatch_roles", lambda *_args, **_kwargs: pytest.fail())
+
+    result = run("retry", "--input-file", str(input_file), cwd=project)
+
+    assert result.returncode != 0
+    assert "error: state_mismatch" in result.stdout
+
+
+def test_retry_parser_does_not_accept_scope_or_path_arguments(tmp_path: Path) -> None:
+    project, input_file, _ = review_state_for_retry(tmp_path, ("completed", "failed"))
+
+    result = run(
+        "retry",
+        "--input-file",
+        str(input_file),
+        "--paths",
+        "src/app.py",
+        cwd=project,
+    )
+
+    assert result.returncode == 2
+    assert "unrecognized arguments: --paths" in result.stderr
+
+
 def test_reviewer_prompt_requires_lightweight_markdown_contract(tmp_path: Path) -> None:
     module = load_script_module()
     review = make_review_args_for_module(module, tmp_path)

@@ -23,6 +23,7 @@ REVIEWER_ROLES = [
     "spec-alignment",
     "implementation-correctness",
 ]
+TERMINAL_ROLE_STATUSES = {"completed", "failed", "timed_out", "reused"}
 ROLE_FOCUS = {
     "spec-alignment": "\n".join(
         [
@@ -102,6 +103,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--input-file", type=Path, required=True)
     run_parser.add_argument("--debug", action="store_true")
     run_parser.add_argument("--sdk-python", type=Path)
+    retry_parser = subparsers.add_parser("retry")
+    retry_parser.add_argument("--input-file", type=Path, required=True)
+    retry_parser.add_argument("--debug", action="store_true")
+    retry_parser.add_argument("--sdk-python", type=Path)
     mark_parser = subparsers.add_parser("mark-pass")
     mark_parser.add_argument("--input-file", type=Path, required=True)
     mark_parser.add_argument("--profile-id", default=DEFAULT_PROFILE_ID)
@@ -602,6 +607,86 @@ def load_role_state(review_input: ReviewInput, state_file: Path, role: str) -> d
         or role_state.get("scope") != expected["roles"][role]["scope"]
     ):
         raise ValueError("state_scope_mismatch")
+    return state
+
+
+def load_bound_state(review_input: ReviewInput) -> dict:
+    state_file = review_input.output_dir / "review-state.json"
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("state_mismatch") from exc
+    if not isinstance(state, dict) or not isinstance(state.get("subject"), dict):
+        raise ValueError("state_mismatch")
+    if state["subject"].get("input_hash") != sha256_bytes(
+        review_input.input_file.read_bytes()
+    ):
+        raise ValueError("input_hash_mismatch")
+
+    expected = initial_review_state(review_input)
+    if (
+        state.get("schema_version") != expected["schema_version"]
+        or state["subject"] != expected["subject"]
+        or state.get("files") != expected["files"]
+        or not isinstance(state.get("roles"), dict)
+        or set(state["roles"]) != set(REVIEWER_ROLES)
+    ):
+        raise ValueError("state_mismatch")
+
+    for role in REVIEWER_ROLES:
+        role_state = state["roles"][role]
+        if not isinstance(role_state, dict):
+            raise ValueError("state_mismatch")
+        if role_state.get("scope") != expected["roles"][role]["scope"]:
+            raise ValueError("retry_scope_mismatch")
+        attempts = role_state.get("attempts")
+        if (
+            not isinstance(attempts, list)
+            or not attempts
+            or role_state.get("status") not in TERMINAL_ROLE_STATUSES
+            or not isinstance(role_state.get("output"), str)
+            or not role_state["output"].strip()
+        ):
+            raise ValueError("state_mismatch")
+        if role_state.get("output_hash") != sha256_bytes(
+            role_state["output"].encode("utf-8")
+        ):
+            raise ValueError("output_hash_mismatch")
+
+        for number, attempt in enumerate(attempts, start=1):
+            if (
+                not isinstance(attempt, dict)
+                or attempt.get("number") != number
+                or attempt.get("status") not in TERMINAL_ROLE_STATUSES
+                or not isinstance(attempt.get("output"), str)
+                or not attempt["output"].strip()
+            ):
+                raise ValueError("state_mismatch")
+            if attempt.get("output_hash") != sha256_bytes(
+                attempt["output"].encode("utf-8")
+            ):
+                raise ValueError("output_hash_mismatch")
+            timestamps = []
+            for key in ("started_at", "finished_at"):
+                value = attempt.get(key)
+                if not isinstance(value, str) or not value.endswith("Z"):
+                    raise ValueError("state_mismatch")
+                try:
+                    timestamp = datetime.fromisoformat(value[:-1] + "+00:00")
+                except ValueError as exc:
+                    raise ValueError("state_mismatch") from exc
+                if timestamp.utcoffset() != UTC.utcoffset(None):
+                    raise ValueError("state_mismatch")
+                timestamps.append(timestamp)
+            if timestamps[0] > timestamps[1]:
+                raise ValueError("state_mismatch")
+
+        latest = attempts[-1]
+        if any(
+            role_state.get(key) != latest.get(key)
+            for key in ("status", "output", "output_hash")
+        ):
+            raise ValueError("state_mismatch")
     return state
 
 
@@ -1118,6 +1203,33 @@ def run_review(args: argparse.Namespace) -> int:
     return status
 
 
+def retryable_roles(state: dict) -> list[str]:
+    return [
+        role
+        for role in REVIEWER_ROLES
+        if state["roles"][role].get("status") in {"failed", "timed_out"}
+    ]
+
+
+def run_retry(args: argparse.Namespace) -> int:
+    try:
+        review_input = load_review_input(args)
+        allowed_paths = runtime_allowed_paths(review_input)
+        ensure_clean_subject(Path.cwd(), review_input.head_ref, allowed_paths)
+        state = load_bound_state(review_input)
+        roles = retryable_roles(state)
+        if not roles:
+            print("status: no_retryable_roles")
+            return 1
+        sdk_python = resolve_sdk_python(review_input.sdk_python, require_real_sdk=True)
+        dispatch_roles(review_input, sdk_python, state, roles)
+        return write_outputs(review_input, state)
+    except (ValueError, json.JSONDecodeError) as exc:
+        print("status: failed")
+        print(f"error: {exc}")
+        return 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parsed = build_parser().parse_args(argv)
     if parsed.command == "_sdk-dispatch":
@@ -1126,6 +1238,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_role_input(parsed)
     if parsed.command == "run":
         return run_review(parsed)
+    if parsed.command == "retry":
+        return run_retry(parsed)
     if parsed.command == "mark-pass":
         return run_mark_pass(parsed)
     return 2
