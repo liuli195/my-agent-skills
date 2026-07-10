@@ -446,7 +446,7 @@ git commit -m "支持只重试失败审查角色"
 - Consumes（输入）：Task 1 的策略、Task 2 的状态与报告哈希。
 - Produces（输出）：`validate_checkbox_only()`、`validate_mapping_fields_only()`、`validate_reuse_source()`、`run_revalidate()`。
 
-- [ ] **Step 1: 写两个允许校验器的失败测试**
+- [x] **Step 1: 写两个允许校验器的失败测试**
 
 ```python
 @pytest.mark.parametrize(
@@ -468,11 +468,11 @@ def test_mapping_fields_only_accepts_declared_yaml_field() -> None:
     assert module.validate_mapping_fields_only(before, after, "yaml", ("phase",)) is None
 ```
 
-- [ ] **Step 2: 写拒绝矩阵测试**
+- [x] **Step 2: 写拒绝矩阵测试**
 
 参数化验证：普通文字变化、行数变化、未声明映射字段、YAML（配置）重复键、非映射、未知格式、未声明文件、策略重叠、A/D/R/C/T/U 状态、规格变化、设计变化、脏工作区、input/report/output hash（输入/报告/输出哈希）不匹配、上一角色 `reused`（复用）。每个用例断言稳定 reason token（原因标识）。
 
-- [ ] **Step 3: 运行校验器测试并确认失败**
+- [x] **Step 3: 运行校验器测试并确认失败**
 
 ```powershell
 python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py -k "checkbox_only or mapping_fields_only or revalidate_rejects"
@@ -480,7 +480,7 @@ python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py -k 
 
 Expected（预期）：FAIL（失败），校验器不存在。
 
-- [ ] **Step 4: 实现两个纯校验器**
+- [x] **Step 4: 实现两个纯校验器**
 
 ```python
 CHECKBOX = re.compile(r"^(?P<prefix>\s*[-*+]\s+\[)[ xX](?P<suffix>\].*)$")
@@ -511,7 +511,7 @@ def validate_mapping_fields_only(before: bytes, after: bytes, format_name: str, 
 
 YAML（配置）使用 `yaml.SafeLoader` 的自定义 mapping constructor（映射构造器）拒绝重复键；不执行任意 tag（标签）或脚本。
 
-- [ ] **Step 5: 实现复用来源校验和当前提交输出**
+- [x] **Step 5: 实现复用来源校验和当前提交输出**
 
 ```python
 def run_revalidate(args: argparse.Namespace) -> int:
@@ -530,7 +530,7 @@ def run_revalidate(args: argparse.Namespace) -> int:
 
 `git show <ref>:<path>` 读取 blob（文件版本），不 checkout（签出）。任一拒绝返回非零且不调用 `resolve_sdk_python()` 或 dispatch（派发）。
 
-- [ ] **Step 6: 运行 revalidate（重新校验）和全部 Cross Agent Review（跨代理审查）测试**
+- [x] **Step 6: 运行 revalidate（重新校验）和全部 Cross Agent Review（跨代理审查）测试**
 
 ```powershell
 python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py tests/test_cross_agent_review_plugin_package.py
@@ -538,7 +538,7 @@ python -m pytest -q -p no:cacheprovider tests/test_cross_agent_review_cli.py tes
 
 Expected（预期）：PASS（通过）。
 
-- [ ] **Step 7: 提交检查点（仅获授权时）**
+- [x] **Step 7: 提交 Task 4 检查点（仅获授权时）**
 
 ```powershell
 git add plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py tests/test_cross_agent_review_cli.py
