@@ -670,7 +670,7 @@ git commit -m "统一代理守卫产物注册契约"
 - Consumes（输入）：Task 5 的 `load_profile_artifacts()`、`render_template()`、`resolve_artifact_path()`；现有 `profile_dir()`、`now_iso()`、`print_json()`。
 - Produces（输出）：`RESERVED_EVIDENCE_FIELDS`、`safe_segment()`、`git_head_and_clean()`、`atomic_write_evidence()`、`record_evidence()`、CLI（命令行）子命令。
 
-- [ ] **Step 1: 写成功入口端到端失败测试**
+- [x] **Step 1: 写成功入口端到端失败测试**
 
 ```python
 def test_record_evidence_writes_current_head_guard_owned_artifact(tmp_path: Path) -> None:
@@ -702,11 +702,11 @@ def test_record_evidence_writes_current_head_guard_owned_artifact(tmp_path: Path
     assert evidence["blocking_findings"] == 0
 ```
 
-- [ ] **Step 2: 写安全拒绝矩阵**
+- [x] **Step 2: 写安全拒绝矩阵**
 
 参数化：未知画像、另一个 source scope（来源范围）才存在、未知产物、`owner != agent-guard`、`type != json`、绝对路径、Windows drive path（驱动器路径）、`..` 逃逸、缺失变量、非 Git（版本控制）仓库、脏工作区、非法 JSON（数据）、非对象、十个保留字段冲突、包含斜杠的 profile/artifact/subject（画像/产物/对象）编号。
 
-- [ ] **Step 3: 运行入口测试并确认失败**
+- [x] **Step 3: 运行入口测试并确认失败**
 
 ```powershell
 python -m pytest -q -p no:cacheprovider tests/test_agent_guard_plugin_runtime_e2e.py -k "record_evidence"
@@ -714,7 +714,7 @@ python -m pytest -q -p no:cacheprovider tests/test_agent_guard_plugin_runtime_e2
 
 Expected（预期）：FAIL（失败），CLI（命令行）没有 `record-evidence`（记录证据）。
 
-- [ ] **Step 4: 实现标准字段、仓库校验和原子写入**
+- [x] **Step 4: 实现标准字段、仓库校验和原子写入**
 
 ```python
 RESERVED_EVIDENCE_FIELDS = {
@@ -748,7 +748,7 @@ def atomic_write_evidence(path: Path, body: dict[str, Any]) -> None:
         temp_path.unlink(missing_ok=True)
 ```
 
-- [ ] **Step 5: 实现 record_evidence（记录证据）**
+- [x] **Step 5: 实现 record_evidence（记录证据）**
 
 ```python
 def record_evidence(args: argparse.Namespace) -> int:
@@ -803,11 +803,11 @@ def record_evidence(args: argparse.Namespace) -> int:
 
 安全拒绝矩阵必须额外包含：重复 artifact id（产物编号）返回 `artifact_id_duplicate`、画像目录缺失返回 `profile_not_found`、`artifacts.yaml`（产物注册文件）缺失返回 `artifact_registry_missing`、非法 YAML（配置）返回 `artifact_registry_invalid`；这些失败发生在路径渲染和证据写入前。
 
-- [ ] **Step 6: 更新通用 Skill（技能）说明**
+- [x] **Step 6: 更新通用 Skill（技能）说明**
 
 在 Agent Guard Run Skill（代理守卫运行技能）只说明参数、保留字段和“主代理先完成语义判断”；示例使用 `demo-profile/demo-pass`，不出现 Comet（双星工作流）、Cross Agent Review（跨代理审查）或 Planning Review（规划审查）固定编号。
 
-- [ ] **Step 7: 运行 Agent Guard（代理守卫）定向测试**
+- [x] **Step 7: 运行 Agent Guard（代理守卫）定向测试**
 
 ```powershell
 python -m pytest -q -p no:cacheprovider tests/test_agent_guard_plugin_runtime_e2e.py tests/test_agent_guard_skill_entrypoints.py tests/test_agent_guard_runtime_router.py tests/test_validate_guard_profile.py
@@ -815,7 +815,7 @@ python -m pytest -q -p no:cacheprovider tests/test_agent_guard_plugin_runtime_e2
 
 Expected（预期）：PASS（通过）。
 
-- [ ] **Step 8: 提交检查点（仅获授权时）**
+- [x] **Step 8: 提交 Task 6 检查点（仅获授权时）**
 
 ```powershell
 git add plugins/agent-guard/scripts/guard_runtime/cli.py plugins/agent-guard/scripts/guard_runtime/global_command_guards.py plugins/agent-guard/skills/agent-guard-run tests/test_agent_guard_plugin_runtime_e2e.py tests/test_agent_guard_skill_entrypoints.py

@@ -20,11 +20,11 @@
 
 ## 4. Agent Guard（代理守卫）通用证据写入
 
-- [ ] 4.1 先补失败测试，覆盖画像来源显式选择、`artifacts.yaml`（产物注册文件）查找、`type: json`（数据类型）与 `owner: agent-guard`（代理守卫拥有）校验、未知产物和外部产物拒绝
-- [ ] 4.2 先补安全测试，覆盖绝对路径、Windows drive path（Windows 驱动器路径）、目录逃逸、缺失模板字段、脏工作区、非 Git（版本控制）项目和保留字段冲突拒绝
-- [ ] 4.3 实现共享产物注册与安全路径解析能力，确保 Global Command Guard（全局命令守卫点）读取和 `record-evidence`（记录证据）写入使用一致语义
-- [ ] 4.4 实现 Runtime CLI（运行时命令行）的 `record-evidence`（记录证据）子命令、`guard-evidence/v1`（守卫证据第一版）标准字段注入和原子 JSON（数据）写入
-- [ ] 4.5 补充 Agent Guard Run Skill（代理守卫运行技能）入口说明和参数示例，明确只有主代理完成语义判断后才能调用
+- [x] 4.1 先补失败测试，覆盖画像来源显式选择、`artifacts.yaml`（产物注册文件）查找、`type: json`（数据类型）与 `owner: agent-guard`（代理守卫拥有）校验、未知产物和外部产物拒绝
+- [x] 4.2 先补安全测试，覆盖绝对路径、Windows drive path（Windows 驱动器路径）、目录逃逸、缺失模板字段、脏工作区、非 Git（版本控制）项目和保留字段冲突拒绝
+- [x] 4.3 实现共享产物注册与安全路径解析能力，确保 Global Command Guard（全局命令守卫点）读取和 `record-evidence`（记录证据）写入使用一致语义
+- [x] 4.4 实现 Runtime CLI（运行时命令行）的 `record-evidence`（记录证据）子命令、`guard-evidence/v1`（守卫证据第一版）标准字段注入和原子 JSON（数据）写入
+- [x] 4.5 补充 Agent Guard Run Skill（代理守卫运行技能）入口说明和参数示例，明确只有主代理完成语义判断后才能调用
 
 ## 5. 所有权迁移与兼容集成
 
