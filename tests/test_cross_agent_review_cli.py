@@ -436,6 +436,8 @@ def test_role_input_contains_only_full_review_diff_and_summary_stats(
     assert "generated process body" not in output
     assert "docs/process.md" in output
     assert "过程文档仅供按需核对" in output
+    assert "- docs/process.md: 过程文档仅供按需核对 (status: A)" in output
+    assert "1\t0\tdocs/process.md" in output
 
 
 @pytest.mark.parametrize(
@@ -665,8 +667,15 @@ def review_args(
     ]
 
 
-def reviewer_state(module, text: str = NO_BLOCKING_REVIEW) -> dict:
-    state = {"roles": {role: {"attempts": []} for role in module.REVIEWER_ROLES}}
+def reviewer_state(module, review_input, text: str = NO_BLOCKING_REVIEW) -> dict:
+    state = {
+        "subject": {
+            "change": review_input.change,
+            "base_ref": review_input.base_ref,
+            "head_ref": review_input.head_ref,
+        },
+        "roles": {role: {"attempts": []} for role in module.REVIEWER_ROLES},
+    }
     for role in module.REVIEWER_ROLES:
         module.record_role_result(state, role, "completed", text)
     return state
@@ -798,7 +807,9 @@ def test_blocking_findings_write_report_without_pass_marker(tmp_path: Path, monk
         types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None)
     )
 
-    status = module.write_outputs(review_input, reviewer_state(module, BLOCKING_REVIEW))
+    status = module.write_outputs(
+        review_input, reviewer_state(module, review_input, BLOCKING_REVIEW)
+    )
 
     assert status == 0
     assert (output_dir / "review-report.md").is_file()
@@ -1643,6 +1654,39 @@ def test_sdk_role_subprocess_payload_contains_only_requested_role(
     assert "raw_dir" not in captured_payload
 
 
+def test_sdk_role_subprocess_whitespace_result_is_failed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_script_module()
+    review_input = make_review_input_for_module(module, tmp_path)
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=json.dumps(
+                [
+                    {
+                        "role": "spec-alignment",
+                        "execution_status": "completed",
+                        "text": " \n\t",
+                    }
+                ]
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    status, output = module.run_sdk_role_subprocess(
+        review_input, sys.executable, "spec-alignment"
+    )
+
+    assert status == "failed"
+    assert "Severity: CRITICAL" in output
+    assert "invalid role result" in output
+
+
 def test_sdk_dispatch_writes_raw_reviewer_output(monkeypatch, tmp_path: Path) -> None:
     module = load_script_module()
     raw_dir = tmp_path / "raw"
@@ -1728,6 +1772,19 @@ def test_task2_sdk_dispatch_empty_result_is_failed(monkeypatch, capsys) -> None:
     result = invoke_task2_sdk_dispatch(module, monkeypatch, capsys, fake_query)
 
     assert result["execution_status"] == "failed"
+    assert "Reviewer returned empty output" in result["text"]
+
+
+def test_task2_sdk_dispatch_whitespace_result_is_failed(monkeypatch, capsys) -> None:
+    module = load_script_module()
+
+    async def fake_query(*, prompt, options):
+        yield types.SimpleNamespace(result=" \n\t")
+
+    result = invoke_task2_sdk_dispatch(module, monkeypatch, capsys, fake_query)
+
+    assert result["execution_status"] == "failed"
+    assert "Severity: CRITICAL" in result["text"]
     assert "Reviewer returned empty output" in result["text"]
 
 
@@ -1830,7 +1887,90 @@ def test_parent_future_exception_is_saved_as_failed_markdown(tmp_path: Path, mon
     assert role_state["output_hash"] == module.sha256_bytes(role_state["output"].encode("utf-8"))
 
 
-def test_report_is_rebuilt_from_state_and_hash_is_saved(tmp_path: Path) -> None:
+def test_record_role_result_rejects_whitespace_completed_output() -> None:
+    module = load_script_module()
+    state = {"roles": {"spec-alignment": {"attempts": []}}}
+
+    module.record_role_result(state, "spec-alignment", "completed", " \n\t")
+
+    role_state = state["roles"]["spec-alignment"]
+    assert role_state["status"] == "failed"
+    assert role_state["output"].strip()
+    assert "Severity: CRITICAL" in role_state["output"]
+    assert role_state["output_hash"] == module.sha256_bytes(
+        role_state["output"].encode("utf-8")
+    )
+
+
+def test_dispatch_records_numbered_attempt_timestamps_at_boundaries(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_script_module()
+    review_input = make_review_input_for_module(module, tmp_path)
+    role = "spec-alignment"
+    state = {"roles": {role: {"attempts": []}}}
+    events = []
+    real_datetime = module.datetime
+    timestamps = iter(
+        [
+            real_datetime(2026, 7, 10, 1, 2, 3, tzinfo=module.UTC),
+            real_datetime(2026, 7, 10, 1, 2, 4, tzinfo=module.UTC),
+            real_datetime(2026, 7, 10, 1, 2, 5, tzinfo=module.UTC),
+            real_datetime(2026, 7, 10, 1, 2, 6, tzinfo=module.UTC),
+        ]
+    )
+
+    class FakeDateTime:
+        @classmethod
+        def now(cls, timezone):
+            assert timezone is module.UTC
+            value = next(timestamps)
+            events.append(value.isoformat(timespec="microseconds").replace("+00:00", "Z"))
+            return value
+
+    def fake_role(*_args):
+        events.append("worker")
+        return "completed", NO_BLOCKING_REVIEW
+
+    monkeypatch.setattr(module, "datetime", FakeDateTime)
+    monkeypatch.setattr(module, "run_sdk_role_subprocess", fake_role)
+
+    module.dispatch_roles(review_input, "fake-sdk", state, [role])
+    module.dispatch_roles(review_input, "fake-sdk", state, [role])
+
+    role_state = state["roles"][role]
+    assert events == [
+        "2026-07-10T01:02:03.000000Z",
+        "worker",
+        "2026-07-10T01:02:04.000000Z",
+        "2026-07-10T01:02:05.000000Z",
+        "worker",
+        "2026-07-10T01:02:06.000000Z",
+    ]
+    assert [attempt["number"] for attempt in role_state["attempts"]] == [1, 2]
+    assert role_state["attempts"][0] == {
+        "number": 1,
+        "started_at": "2026-07-10T01:02:03.000000Z",
+        "finished_at": "2026-07-10T01:02:04.000000Z",
+        "status": "completed",
+        "output": NO_BLOCKING_REVIEW,
+        "output_hash": module.sha256_bytes(NO_BLOCKING_REVIEW.encode("utf-8")),
+    }
+    assert role_state["attempts"][1]["started_at"] == "2026-07-10T01:02:05.000000Z"
+    assert role_state["attempts"][1]["finished_at"] == "2026-07-10T01:02:06.000000Z"
+    assert role_state["status"] == "completed"
+    assert role_state["output"] == NO_BLOCKING_REVIEW
+    assert role_state["output_hash"] == module.sha256_bytes(
+        NO_BLOCKING_REVIEW.encode("utf-8")
+    )
+    assert "number" not in role_state
+    assert "started_at" not in role_state
+    assert "finished_at" not in role_state
+
+
+def test_report_is_rebuilt_only_from_state_and_top_level_hash_is_saved(
+    tmp_path: Path,
+) -> None:
     project, input_file = committed_review_input(tmp_path)
     module = load_script_module()
 
@@ -1851,16 +1991,34 @@ def test_report_is_rebuilt_from_state_and_hash_is_saved(tmp_path: Path) -> None:
             "failed",
             "# Review Result: implementation-correctness\n## Findings\nImplementation state output\n",
         )
+        state["subject"].update(
+            {
+                "change": "state-only-change",
+                "base_ref": "state-only-base",
+                "head_ref": "state-only-head",
+            }
+        )
+        before = json.loads(json.dumps(state))
+        report_text = module.render_report(state)
+        with pytest.raises(TypeError):
+            module.render_report(review_input, state)
         module.atomic_write_json(review_input.output_dir / "review-state.json", state)
         assert module.write_outputs(review_input, state) == 0
 
     report_path = review_input.output_dir / "review-report.md"
     report = report_path.read_text(encoding="utf-8")
     saved = json.loads((review_input.output_dir / "review-state.json").read_text(encoding="utf-8"))
+    assert report == report_text
+    assert "# Cross-Agent Review: state-only-change" in report
+    assert "- Base ref: `state-only-base`" in report
+    assert "- Head ref: `state-only-head`" in report
     assert "Spec state output" in report
     assert "Implementation state output" in report
-    assert saved["report"]["path"] == report_path.relative_to(project).as_posix()
-    assert saved["report"]["hash"] == module.sha256_bytes(report_path.read_bytes())
+    assert saved["report_hash"] == module.sha256_bytes(report_path.read_bytes())
+    assert "report" not in saved
+    assert set(saved) == {*before, "report_hash"}
+    for key, value in before.items():
+        assert saved[key] == value
 
 
 def test_reviewer_prompt_requires_lightweight_markdown_contract(tmp_path: Path) -> None:
@@ -2010,7 +2168,9 @@ def test_non_blocking_findings_generate_report_without_pass_marker(tmp_path: Pat
         types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None)
     )
 
-    status = module.write_outputs(review_input, reviewer_state(module, review_text))
+    status = module.write_outputs(
+        review_input, reviewer_state(module, review_input, review_text)
+    )
 
     assert status == 0
     assert (output_dir / "review-report.md").is_file()
@@ -2029,7 +2189,9 @@ def test_blocking_findings_do_not_generate_pass_marker(tmp_path: Path, monkeypat
         types.SimpleNamespace(input_file=input_file, debug=False, sdk_python=None)
     )
 
-    status = module.write_outputs(review_input, reviewer_state(module, BLOCKING_REVIEW))
+    status = module.write_outputs(
+        review_input, reviewer_state(module, review_input, BLOCKING_REVIEW)
+    )
 
     assert status == 0
     assert (output_dir / "review-report.md").is_file()
@@ -2083,8 +2245,9 @@ def test_mark_pass_report_hash_matches_report(tmp_path: Path) -> None:
 
 def test_reviewer_state_preserves_reviewer_text_without_parsing() -> None:
     module = load_script_module()
+    review_input = types.SimpleNamespace(change="demo", base_ref="base", head_ref="head")
 
-    state = reviewer_state(module, NO_BLOCKING_REVIEW)
+    state = reviewer_state(module, review_input, NO_BLOCKING_REVIEW)
     module.record_role_result(
         state,
         "implementation-correctness",

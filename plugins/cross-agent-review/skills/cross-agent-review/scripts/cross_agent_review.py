@@ -530,16 +530,25 @@ def render_context_index(state: dict) -> str:
 
 
 def render_summary_stats(review_input: ReviewInput, state: dict) -> str:
-    summary_paths = [
-        item["path"] for item in state["files"] if item["classification"] == "summary_only"
+    summary_files = [
+        item for item in state["files"] if item["classification"] == "summary_only"
     ]
-    if not summary_paths:
+    if not summary_files:
         return ""
-    reasons = {item["path"]: item["reason"] for item in state["files"]}
+    summary_paths = [item["path"] for item in summary_files]
     lines = ["## Summary-only changes"]
-    lines.extend(f"- {path}: {reasons[path]}" for path in summary_paths)
+    lines.extend(
+        f"- {item['path']}: {item['reason']} (status: {item['status']})"
+        for item in summary_files
+    )
     stats = git_output(
-        ["diff", "--stat", f"{review_input.base_ref}...{review_input.head_ref}", "--", *summary_paths],
+        [
+            "diff",
+            "--numstat",
+            f"{review_input.base_ref}...{review_input.head_ref}",
+            "--",
+            *summary_paths,
+        ],
         Path.cwd(),
     )
     if stats:
@@ -791,18 +800,46 @@ def run_sdk_role_subprocess(
         item.get("role") != role
         or status not in {"completed", "failed", "timed_out"}
         or not isinstance(text, str)
-        or not text
+        or not text.strip()
     ):
         return invalid_sdk_role_result(role, "sdk_dispatch_invalid_output: invalid role result")
     return status, text
 
 
-def record_role_result(state: dict, role: str, status: str, output: str) -> None:
+def utc_now() -> str:
+    return datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def record_role_result(
+    state: dict,
+    role: str,
+    status: str,
+    output: str,
+    started_at: str | None = None,
+    finished_at: str | None = None,
+) -> None:
+    if not isinstance(output, str) or not output.strip():
+        failure = reviewer_failure(
+            role,
+            "Reviewer returned empty output",
+            "<empty reviewer result>",
+            "Rerun review after checking reviewer prompt.",
+        )
+        status, output = "failed", failure["text"]
     output_hash = sha256_bytes(output.encode("utf-8"))
-    attempt = {"status": status, "output": output, "output_hash": output_hash}
     role_state = state["roles"][role]
+    attempt = {
+        "number": len(role_state["attempts"]) + 1,
+        "started_at": started_at or utc_now(),
+        "finished_at": finished_at or utc_now(),
+        "status": status,
+        "output": output,
+        "output_hash": output_hash,
+    }
     role_state["attempts"].append(attempt)
-    role_state.update(attempt)
+    role_state.update(
+        {key: attempt[key] for key in ("status", "output", "output_hash")}
+    )
 
 
 def dispatch_roles(
@@ -817,12 +854,15 @@ def dispatch_roles(
             review_input, {role: reviewer_prompt(review_input, role) for role in roles}
         )
     with ThreadPoolExecutor(max_workers=len(roles)) as executor:
-        futures = {
-            executor.submit(run_sdk_role_subprocess, review_input, sdk_python, role): role
-            for role in roles
-        }
+        futures = {}
+        for role in roles:
+            started_at = utc_now()
+            future = executor.submit(
+                run_sdk_role_subprocess, review_input, sdk_python, role
+            )
+            futures[future] = (role, started_at)
         for future in as_completed(futures):
-            role = futures[future]
+            role, started_at = futures[future]
             try:
                 status, output = future.result()
             except Exception as error:
@@ -834,7 +874,10 @@ def dispatch_roles(
                     "Retry",
                 )
                 output = failure["text"]
-            record_role_result(state, role, status, output)
+            finished_at = utc_now()
+            record_role_result(
+                state, role, status, output, started_at, finished_at
+            )
             atomic_write_json(state_path, state)
     return state
 
@@ -860,7 +903,7 @@ def run_sdk_dispatch() -> int:
             async for message in query(prompt=payload["prompts"][role], options=options):
                 if hasattr(message, "result"):
                     result_text = message.result
-            if result_text:
+            if isinstance(result_text, str) and result_text.strip():
                 result = markdown_review(role, result_text)
             else:
                 result = reviewer_failure(
@@ -923,19 +966,20 @@ def write_json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def render_report(review_args: ReviewInput, state: dict) -> str:
+def render_report(state: dict) -> str:
+    subject = state["subject"]
     lines = [
-        f"# Cross-Agent Review: {review_args.change}",
+        f"# Cross-Agent Review: {subject['change']}",
         "",
-        f"- Base ref: `{review_args.base_ref}`",
-        f"- Head ref: `{review_args.head_ref}`",
+        f"- Base ref: `{subject['base_ref']}`",
+        f"- Head ref: `{subject['head_ref']}`",
         "",
         "## Reviewer Outputs",
         "",
     ]
     for role in REVIEWER_ROLES:
         text = state["roles"][role].get("output")
-        if not isinstance(text, str) or not text:
+        if not isinstance(text, str) or not text.strip():
             raise ValueError(f"role_output_missing: {role}")
         text = text.strip()
         lines.extend(
@@ -966,13 +1010,10 @@ def runtime_allowed_paths(review_input: ReviewInput) -> list[Path]:
 def write_outputs(review_args: ReviewInput, state: dict) -> int:
     out_dir = output_dir_for(review_args)
     out_dir.mkdir(parents=True, exist_ok=True)
-    report_text = render_report(review_args, state)
+    report_text = render_report(state)
     report_path = out_dir / "review-report.md"
     report_path.write_text(report_text, encoding="utf-8")
-    state["report"] = {
-        "path": report_path.resolve().relative_to(Path.cwd().resolve()).as_posix(),
-        "hash": sha256_bytes(report_path.read_bytes()),
-    }
+    state["report_hash"] = sha256_bytes(report_path.read_bytes())
     atomic_write_json(out_dir / "review-state.json", state)
     (out_dir / "review-pass.json").unlink(missing_ok=True)
     return 0
