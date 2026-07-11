@@ -4,7 +4,7 @@ Agent Guard writes one audit file for every allowed command without an active Se
 
 ## What Changes
 
-- `PreToolUse` without an active session focus no longer writes a `no_session_focus_instance` audit or returns `audit_path` when execution is allowed.
+- `PreToolUse` without an active session focus no longer writes a `no_session_focus_instance` audit or returns a path for that suppressed audit when execution is allowed. An independent Global Command Guard audit remains available.
 - No-focus blocking results and all other deny, ask, error, and state-transition audits remain unchanged.
 - After the new version is active, delete existing no-focus allow audits once across the three repositories. Other runtime artifacts keep their current format and layout.
 

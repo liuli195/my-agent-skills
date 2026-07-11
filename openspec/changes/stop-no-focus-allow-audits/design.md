@@ -17,7 +17,7 @@
 ## Decisions
 
 - Branch on `deny_on_no_focus` inside the shared focus-boundary function. The allow path returns without calling `write_audit`; the blocking path keeps the existing audit. This single change covers both a missing binding and a binding to an inactive instance.
-- Omit the optional `audit_path` from allow results instead of returning a path that does not exist.
+- Omit the optional `audit_path` when the suppressed no-focus audit would have been the only audit. Preserve the path of an independently produced Global Command Guard audit.
 - Run history cleanup once after release; do not add a product command for one-time operations.
 
 ## Risks / Trade-offs

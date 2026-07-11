@@ -729,8 +729,9 @@ def route_pre_tool_use(project: Path, user_home: Path, envelope: dict[str, Any])
             "captures_by_guard": global_guard.get("captures_by_guard", {}),
             "audit_path": str(audit_path),
         }, 1
+    global_guard_audit_path = None
     if global_guard.get("matched_guard_ids") or global_guard.get("skipped_guard_ids"):
-        write_audit(
+        global_guard_audit_path = write_audit(
             project,
             "allow",
             str(global_guard["reason"]),
@@ -741,6 +742,8 @@ def route_pre_tool_use(project: Path, user_home: Path, envelope: dict[str, Any])
 
     focus, boundary_body, code = focus_boundary_result(project, user_home, source, session_id, False, runtime_scope_from_envelope(envelope))
     if focus is None:
+        if global_guard_audit_path is not None:
+            boundary_body["audit_path"] = str(global_guard_audit_path)
         return boundary_body, code
 
     binding = focus["binding"]

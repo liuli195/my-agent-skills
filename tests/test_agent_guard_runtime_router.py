@@ -1000,13 +1000,9 @@ def test_global_command_guard_passes_with_valid_evidence(tmp_path: Path) -> None
     payload = body(result)
     assert payload["status"] == "allow"
     audit = json.loads(Path(payload["audit_path"]).read_text(encoding="utf-8"))
-    assert audit["detail"]["kind"] == "session_focus_boundary"
-    global_audits = [
-        json.loads(path.read_text(encoding="utf-8"))
-        for path in (project / ".local" / "guard" / "audit").glob("*.json")
-        if json.loads(path.read_text(encoding="utf-8"))["reason"] == "global_command_guard_passed"
-    ]
-    assert global_audits[0]["detail"]["kind"] == "global_command_guard"
+    assert audit["reason"] == "global_command_guard_passed"
+    assert audit["detail"]["kind"] == "global_command_guard"
+    assert len(list((project / ".local" / "guard" / "audit").glob("*.json"))) == 1
 
 
 def test_global_command_guard_passes_with_artifact(tmp_path: Path) -> None:
@@ -1035,7 +1031,9 @@ def test_global_command_guard_passes_with_artifact(tmp_path: Path) -> None:
     payload = body(result)
     assert payload["status"] == "allow"
     audit = json.loads(Path(payload["audit_path"]).read_text(encoding="utf-8"))
-    assert audit["detail"]["kind"] == "session_focus_boundary"
+    assert audit["reason"] == "global_command_guard_passed"
+    assert audit["detail"]["kind"] == "global_command_guard"
+    assert len(list((project / ".local" / "guard" / "audit").glob("*.json"))) == 1
 
 
 def assert_artifact_registry_invalid(profile: Path, project: Path, user_home: Path) -> None:

@@ -5,4 +5,4 @@
 
 ## 2. Contract and verification
 
-- [ ] 2.1 Update affected Agent Guard（代理守卫）contract text and run the plugin's complete verification flow.
+- [x] 2.1 Update affected Agent Guard（代理守卫）contract text and run the plugin's complete verification flow.

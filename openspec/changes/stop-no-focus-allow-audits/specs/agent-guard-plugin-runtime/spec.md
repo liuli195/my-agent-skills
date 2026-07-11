@@ -20,7 +20,8 @@ The system MUST preserve existing Session Focus permission semantics. A Global C
 #### Scenario: Allow without an active session focus
 - **WHEN** the `PreToolUse` entrypoint has no active Session Focus Instance and continues execution
 - **THEN** the Runtime returns `status=allow` and `reason=no_session_focus_instance`
-- **AND** the Runtime does not write an audit file or include `audit_path` in the result
+- **AND** the Runtime does not write a `no_session_focus_instance` audit or include a path for that suppressed audit
+- **AND** the Runtime retains and returns any independently produced Global Command Guard audit
 
 #### Scenario: Block without an active session focus
 - **WHEN** an entrypoint that requires an active Session Focus Instance has no active focus
