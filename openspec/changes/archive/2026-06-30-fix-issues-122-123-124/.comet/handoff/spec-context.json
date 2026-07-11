@@ -1,0 +1,17 @@
+{
+  "change": "fix-issues-122-123-124",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "68587d17e746f5fde55a0a1845f299f59599e9f48c8d99e807ab663e66c88fa5",
+  "files": [
+    { "path": "openspec/changes/fix-issues-122-123-124/proposal.md", "sha256": "83547714c3a4d2318d6a06d17d22c19573d04d7476822e65caf64ec549ad2c1c", "role": "supporting" },
+    { "path": "openspec/changes/fix-issues-122-123-124/design.md", "sha256": "11f84b64e6576e39ae887965a5ee66a49eb42bb1dd1c06660cf9a615ad50f331", "role": "supporting" },
+    { "path": "openspec/changes/fix-issues-122-123-124/tasks.md", "sha256": "d891997c7e74d3d0442ca383b3ba538581503a9a55f069d4e2c8d3d1f0008d64", "role": "supporting" },
+    { "path": "openspec/changes/fix-issues-122-123-124/specs/cross-agent-review/spec.md", "sha256": "8251d32a19da7e3277416773d00634497cd7c3874366d1c97b9b2afe5f3066bd", "role": "spec" },
+    { "path": "openspec/changes/fix-issues-122-123-124/specs/local-plugin-build-checks/spec.md", "sha256": "1dbc2270cf13a552deb76e9a1e55b7b2d401cb55bc1f706ea5d35a67e471f013", "role": "spec" },
+    { "path": "openspec/changes/fix-issues-122-123-124/specs/pr-flow-plugin/spec.md", "sha256": "f7a57caf4170ea473b1d04cba3c254ca3d4f6cf2f2c1dbf565b833a6162ee265", "role": "spec" },
+    { "path": "openspec/changes/fix-issues-122-123-124/specs/release-flow-plugin/spec.md", "sha256": "354e9aa4e097becba9208c55d1a86154101cf86b99bde70c582bbdeca049d14a", "role": "spec" }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "change": "stabilize-cross-agent-review-evidence",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "1bb6c91e11dafd23dd510e8468062472cdd24bf26afefbc1c0d8d827400a2804",
+  "files": [
+    {
+      "path": "openspec/changes/stabilize-cross-agent-review-evidence/proposal.md",
+      "sha256": "49c297d1ea0b60f015937a61eef3a78e322574a06744a13de1f5ba94a567a014",
+      "role": "supporting"
+    },
+    {
+      "path": "openspec/changes/stabilize-cross-agent-review-evidence/design.md",
+      "sha256": "15d882827a8013214bc77ee17bac42eca7b49f3833451ce6736574d2427fb6fb",
+      "role": "supporting"
+    },
+    {
+      "path": "openspec/changes/stabilize-cross-agent-review-evidence/tasks.md",
+      "sha256": "c97704e97739bc3986b3f39fd673b115ecdaec783273194fe5d3b56448b1c1dd",
+      "role": "supporting"
+    },
+    {
+      "path": "openspec/changes/stabilize-cross-agent-review-evidence/specs/agent-guard-core/spec.md",
+      "sha256": "beff08abdd32ea85eede600f28aaef1b56a1a60f00087ee9a2ed8a9e113019ae",
+      "role": "spec"
+    },
+    {
+      "path": "openspec/changes/stabilize-cross-agent-review-evidence/specs/agent-guard-plugin-runtime/spec.md",
+      "sha256": "63f5ea4729b7dcd0e4678ed63440721670c9b07332ab788c461a47ea649f9c9c",
+      "role": "spec"
+    },
+    {
+      "path": "openspec/changes/stabilize-cross-agent-review-evidence/specs/comet-agent-review-gate/spec.md",
+      "sha256": "a7a3aed4f0511e0dbfabe03d9b3bff8a3a91e347ebbfe92456f62db656accdb1",
+      "role": "spec"
+    },
+    {
+      "path": "openspec/changes/stabilize-cross-agent-review-evidence/specs/cross-agent-review/spec.md",
+      "sha256": "22e58ab1d16ae88d11ea09e87fb432a4c30c9dff1bdecb6f9114448f41045c94",
+      "role": "spec"
+    }
+  ]
+}

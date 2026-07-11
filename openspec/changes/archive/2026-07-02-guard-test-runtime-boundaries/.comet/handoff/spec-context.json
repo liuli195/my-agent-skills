@@ -1,0 +1,15 @@
+{
+  "change": "guard-test-runtime-boundaries",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "c31d4b3e7a59eca94e6f97c66eff7a51f1d9bb3c2989bc6c8c72040e4db68af7",
+  "files": [
+    { "path": "openspec/changes/guard-test-runtime-boundaries/proposal.md", "sha256": "4eae05f35fe0b56ea8d3a6e6fcb3da33e9d41aca333d759be12d9fa092cd9830", "role": "supporting" },
+    { "path": "openspec/changes/guard-test-runtime-boundaries/design.md", "sha256": "216e2635ac1784bcb069a548a5b2201327cef1be4998c1cdf8016f7c6c531698", "role": "supporting" },
+    { "path": "openspec/changes/guard-test-runtime-boundaries/tasks.md", "sha256": "5de4aacc84782ebf704af2635c60b92a14b20591b38d0db4641b8e2dc5c74b3b", "role": "supporting" },
+    { "path": "openspec/changes/guard-test-runtime-boundaries/specs/local-plugin-build-checks/spec.md", "sha256": "4d38bf6dd77922763fcb96397a2d57e9640d9dd2e60335487336ab0238c17b79", "role": "spec" },
+    { "path": "openspec/changes/guard-test-runtime-boundaries/specs/test-framework-plugin/spec.md", "sha256": "031e7fa6a415786795b6e19c4dea66928932993d4a05ae051d28aa2af69841c1", "role": "spec" }
+  ]
+}
