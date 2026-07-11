@@ -16,7 +16,7 @@
     ]
   },
   "verify": {
-    "maxParallel": 0,
+    "maxParallel": 7,
     "timeoutSeconds": 180,
     "checks": [
       {
@@ -48,7 +48,7 @@
           "tests/test_local_plugin_build_checks.py"
         ],
         "checkParallel": true,
-        "pytestXdistWorkers": "auto"
+        "pytestXdistWorkers": 4
       },
       {
         "id": "verify.agent-guard",
@@ -85,7 +85,7 @@
           "tests/test_init_project_guard.py"
         ],
         "checkParallel": true,
-        "pytestXdistWorkers": "auto"
+        "pytestXdistWorkers": 4
       },
       {
         "id": "verify.release-flow",
@@ -110,7 +110,7 @@
           "tests/test_release_flow_plugin_package.py"
         ],
         "checkParallel": true,
-        "pytestXdistWorkers": "auto"
+        "pytestXdistWorkers": 4
       },
       {
         "id": "verify.pr-flow",
@@ -133,7 +133,7 @@
           "tests/test_pr_flow_plugin_package.py"
         ],
         "checkParallel": true,
-        "pytestXdistWorkers": "auto"
+        "pytestXdistWorkers": 4
       },
       {
         "id": "verify.cross-agent-review",
@@ -156,7 +156,7 @@
           "tests/test_cross_agent_review_plugin_package.py"
         ],
         "checkParallel": true,
-        "pytestXdistWorkers": "auto"
+        "pytestXdistWorkers": 4
       },
       {
         "id": "verify.build-and-verify",
@@ -187,7 +187,7 @@
           "tests/test_test_runtime_boundaries.py"
         ],
         "checkParallel": true,
-        "pytestXdistWorkers": "auto"
+        "pytestXdistWorkers": 4
       },
       {
         "id": "verify.openspec",
