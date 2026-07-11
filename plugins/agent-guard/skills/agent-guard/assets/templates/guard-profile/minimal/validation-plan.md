@@ -7,4 +7,4 @@
 - 校验 terminal states（终态）引用已有状态。
 - 校验 Guard Brief（守卫简报）模板变量能由 latest brief（最新简报）字段填充。
 - 校验显式激活只能通过 Session Focus Binding（会话焦点绑定）绑定 Guard Instance（守卫实例）。
-- 校验缺少 Session Focus Binding（会话焦点绑定）时放行并写 `no_session_focus_instance` 审计。
+- 校验缺少 Session Focus Binding（会话焦点绑定）时放行，且不写 `no_session_focus_instance` 审计。

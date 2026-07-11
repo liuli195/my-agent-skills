@@ -660,14 +660,16 @@ def focus_boundary_result(
 ) -> tuple[dict[str, Any] | None, dict[str, Any], int]:
     focus = resolve_focus(project, user_home, source, session_id)
     if focus["status"] == "none":
-        audit_path = write_audit(project, "allow", "no_session_focus_instance", {"kind": "session_focus_boundary", "source": source, "session_id": session_id}, user_home, runtime_scope)
         status = "no_session_focus_instance" if deny_on_no_focus else "allow"
-        return None, {
+        body = {
             "status": status,
             "reason": "no_session_focus_instance",
-            "audit_path": str(audit_path),
             "next": "先 activate（激活）当前 Session Focus Instance（会话焦点实例）。",
-        }, 1 if deny_on_no_focus else 0
+        }
+        if deny_on_no_focus:
+            audit_path = write_audit(project, "allow", "no_session_focus_instance", {"kind": "session_focus_boundary", "source": source, "session_id": session_id}, user_home, runtime_scope)
+            body["audit_path"] = str(audit_path)
+        return None, body, 1 if deny_on_no_focus else 0
     if focus["status"] == "invalid":
         audit_path = write_audit(project, "error", "invalid_session_focus_binding", {"kind": "session_focus_boundary", **focus}, user_home, runtime_scope)
         return None, {"status": "invalid_session_focus_binding", "reason": "invalid_session_focus_binding", "audit_path": str(audit_path)}, 1
@@ -681,16 +683,19 @@ def focus_boundary_result(
     scope = str(binding.get("scope") or "project")
     state = load_instance(project, profile_id, instance_id, user_home, scope)
     if state is None or state.get("status") != "active":
-        audit_path = write_audit(
-            project,
-            "allow",
-            "no_session_focus_instance",
-            {"kind": "session_focus_boundary", "source": source, "session_id": session_id, "profile_id": profile_id, "instance_id": instance_id},
-            user_home,
-            scope,
-        )
         status = "no_session_focus_instance" if deny_on_no_focus else "allow"
-        return None, {"status": status, "reason": "no_session_focus_instance", "audit_path": str(audit_path)}, 1 if deny_on_no_focus else 0
+        body = {"status": status, "reason": "no_session_focus_instance"}
+        if deny_on_no_focus:
+            audit_path = write_audit(
+                project,
+                "allow",
+                "no_session_focus_instance",
+                {"kind": "session_focus_boundary", "source": source, "session_id": session_id, "profile_id": profile_id, "instance_id": instance_id},
+                user_home,
+                scope,
+            )
+            body["audit_path"] = str(audit_path)
+        return None, body, 1 if deny_on_no_focus else 0
     return {"binding": binding, "state": state}, {}, 0
 
 
@@ -724,8 +729,9 @@ def route_pre_tool_use(project: Path, user_home: Path, envelope: dict[str, Any])
             "captures_by_guard": global_guard.get("captures_by_guard", {}),
             "audit_path": str(audit_path),
         }, 1
+    global_guard_audit_path = None
     if global_guard.get("matched_guard_ids") or global_guard.get("skipped_guard_ids"):
-        write_audit(
+        global_guard_audit_path = write_audit(
             project,
             "allow",
             str(global_guard["reason"]),
@@ -736,6 +742,8 @@ def route_pre_tool_use(project: Path, user_home: Path, envelope: dict[str, Any])
 
     focus, boundary_body, code = focus_boundary_result(project, user_home, source, session_id, False, runtime_scope_from_envelope(envelope))
     if focus is None:
+        if global_guard_audit_path is not None:
+            boundary_body["audit_path"] = str(global_guard_audit_path)
         return boundary_body, code
 
     binding = focus["binding"]

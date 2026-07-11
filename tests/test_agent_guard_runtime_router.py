@@ -1000,13 +1000,9 @@ def test_global_command_guard_passes_with_valid_evidence(tmp_path: Path) -> None
     payload = body(result)
     assert payload["status"] == "allow"
     audit = json.loads(Path(payload["audit_path"]).read_text(encoding="utf-8"))
-    assert audit["detail"]["kind"] == "session_focus_boundary"
-    global_audits = [
-        json.loads(path.read_text(encoding="utf-8"))
-        for path in (project / ".local" / "guard" / "audit").glob("*.json")
-        if json.loads(path.read_text(encoding="utf-8"))["reason"] == "global_command_guard_passed"
-    ]
-    assert global_audits[0]["detail"]["kind"] == "global_command_guard"
+    assert audit["reason"] == "global_command_guard_passed"
+    assert audit["detail"]["kind"] == "global_command_guard"
+    assert len(list((project / ".local" / "guard" / "audit").glob("*.json"))) == 1
 
 
 def test_global_command_guard_passes_with_artifact(tmp_path: Path) -> None:
@@ -1035,7 +1031,9 @@ def test_global_command_guard_passes_with_artifact(tmp_path: Path) -> None:
     payload = body(result)
     assert payload["status"] == "allow"
     audit = json.loads(Path(payload["audit_path"]).read_text(encoding="utf-8"))
-    assert audit["detail"]["kind"] == "session_focus_boundary"
+    assert audit["reason"] == "global_command_guard_passed"
+    assert audit["detail"]["kind"] == "global_command_guard"
+    assert len(list((project / ".local" / "guard" / "audit").glob("*.json"))) == 1
 
 
 def assert_artifact_registry_invalid(profile: Path, project: Path, user_home: Path) -> None:
@@ -2183,7 +2181,7 @@ def test_global_command_guard_reports_unreadable_evidence_separately_from_invali
     assert "error" not in failure
 
 
-def test_pre_tool_use_without_global_command_guard_match_keeps_existing_session_focus_behavior(tmp_path: Path) -> None:
+def test_pre_tool_use_without_global_command_guard_match_allows_without_focus_audit(tmp_path: Path) -> None:
     project = tmp_path / "project"
     user_home = tmp_path / "user-home"
     project.mkdir()
@@ -2197,7 +2195,8 @@ def test_pre_tool_use_without_global_command_guard_match_keeps_existing_session_
     payload = body(result)
     assert payload["status"] == "allow"
     assert payload["reason"] == "no_session_focus_instance"
-    assert len(list((project / ".local" / "guard" / "audit").glob("*.json"))) == 1
+    assert "audit_path" not in payload
+    assert not (project / ".local" / "guard" / "audit").exists()
 
 
 def write_profile(project: Path) -> Path:
@@ -2409,7 +2408,7 @@ def read_brief(project: Path, user_home: Path) -> dict:
     return body(result)
 
 
-def test_pre_tool_use_without_focus_allows_and_audits(tmp_path: Path) -> None:
+def test_pre_tool_use_without_focus_allows_without_audit(tmp_path: Path) -> None:
     project = tmp_path / "project"
     user_home = tmp_path / "user-home"
     project.mkdir()
@@ -2421,9 +2420,8 @@ def test_pre_tool_use_without_focus_allows_and_audits(tmp_path: Path) -> None:
     payload = body(result)
     assert payload["status"] == "allow"
     assert payload["reason"] == "no_session_focus_instance"
-    audit = json.loads(Path(payload["audit_path"]).read_text(encoding="utf-8"))
-    assert audit["status"] == "allow"
-    assert audit["reason"] == "no_session_focus_instance"
+    assert "audit_path" not in payload
+    assert not (project / ".local" / "guard" / "audit").exists()
 
 
 def test_pre_tool_use_missing_session_id_returns_error_without_focus_audit(tmp_path: Path) -> None:
@@ -2496,17 +2494,24 @@ def test_missing_or_closed_instance_is_treated_as_no_focus(tmp_path: Path) -> No
 
     missing_state = project / ".local" / "guard" / "state" / "minimal-sample" / instance_id
     shutil.rmtree(missing_state)
+    audit_dir = project / ".local" / "guard" / "audit"
+    audit_count = len(list(audit_dir.glob("*.json")))
     missing = pre_tool(project, user_home)
     assert missing.returncode == 0, missing.stdout + missing.stderr
     assert body(missing)["reason"] == "no_session_focus_instance"
+    assert "audit_path" not in body(missing)
+    assert len(list(audit_dir.glob("*.json"))) == audit_count
 
     activated = activate(project, user_home)
     instance_id = activated["instance_id"]
     close = run_cli(["close-instance", "--project", str(project), "--profile", "minimal-sample", "--instance-id", instance_id])
     assert close.returncode == 0, close.stdout + close.stderr
+    audit_count = len(list(audit_dir.glob("*.json")))
     closed = pre_tool(project, user_home)
     assert closed.returncode == 0, closed.stdout + closed.stderr
     assert body(closed)["reason"] == "no_session_focus_instance"
+    assert "audit_path" not in body(closed)
+    assert len(list(audit_dir.glob("*.json"))) == audit_count
 
 
 def test_valid_focus_evaluates_allow_ask_deny_and_incompatible_version(tmp_path: Path) -> None:
@@ -2553,6 +2558,7 @@ def test_state_completed_requires_focus_and_rejects_profile_or_instance_args(tmp
     assert no_focus.returncode == 1
     assert body(no_focus)["status"] == "no_session_focus_instance"
     assert "activate" in body(no_focus)["next"]
+    assert Path(body(no_focus)["audit_path"]).is_file()
 
     rejected = run_cli(
         [
