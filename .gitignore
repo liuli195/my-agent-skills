@@ -52,11 +52,6 @@ tmp/
 /.release-flow/releases/
 
 # ========================
-# Code intelligence indexes
-# ========================
-/codegraph/
-/.codegraph/
-
 # ========================
 # OS / editor
 # ========================

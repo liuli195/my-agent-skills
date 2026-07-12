@@ -84,8 +84,6 @@ flowchart TD
     E --> E3["Comet skills"]
     E --> E4["Comet scripts"]
     E --> E5["Rules / Hooks"]
-    E --> E6["CodeGraph"]
-
     E3 --> F["/comet 主入口"]
     F --> G1["/comet-open"]
     G1 --> G2["/comet-design"]
@@ -126,8 +124,7 @@ flowchart TD
 - 识别用户当前项目已配置哪些 AI coding platforms；
 - 安装 OpenSpec / Superpowers / Comet Skills；
 - 分发 Comet scripts、rules、hooks；
-- 创建 `docs/superpowers/specs/` 与 `docs/superpowers/plans/` 工作目录；
-- 可选安装 CodeGraph。
+- 创建 `docs/superpowers/specs/` 与 `docs/superpowers/plans/` 工作目录。
 
 **核心文件：**
 
@@ -154,8 +151,7 @@ src/commands/update.ts
   5. 决定 overwrite / skip / install；
   6. 调用 OpenSpec 与 Superpowers 安装逻辑；
   7. 复制 Comet Skills、Rules、Hooks；
-  8. 可选安装 CodeGraph；
-  9. 创建工作目录。
+  8. 创建工作目录。
 
 ---
 
@@ -779,51 +775,9 @@ open → lightweight build → light verify → archive
 
 ---
 
-## 10. CodeGraph 集成
+## 10. Agent 继续分析时的注意事项
 
-**核心文件：**
-
-```text
-src/core/codegraph.ts
-```
-
-**职责：**
-
-- 检查 `codegraph` CLI；
-- 不存在则安装 `@colbymchenry/codegraph`；
-- 对支持的平台运行：
-
-```bash
-codegraph install --target=<targets> --location=<local|global> --yes
-```
-
-- project scope 下再运行：
-
-```bash
-codegraph init -i
-```
-
-**支持平台示例：**
-
-```text
-claude
-cursor
-codex
-opencode
-gemini
-kiro
-antigravity
-```
-
-**架构作用：**
-
-减少 Agent 对大型代码库的重复搜索和读取成本。
-
----
-
-## 11. Agent 继续分析时的注意事项
-
-### 11.1 不要误判 Comet 的主价值
+### 10.1 不要误判 Comet 的主价值
 
 Comet 的主价值不是：
 
@@ -837,7 +791,7 @@ Comet 的主价值不是：
 为 AI coding 建立可恢复、可验证、可审计的流程基础设施
 ```
 
-### 11.2 不要只读 README
+### 10.2 不要只读 README
 
 README 能理解整体，但实现细节在：
 
@@ -849,7 +803,7 @@ src/core/*.ts
 
 尤其是 `SKILL.md` 中包含大量 Agent 行为约束，这些约束才是运行时工作流的核心。
 
-### 11.3 区分三类“状态”
+### 10.3 区分三类“状态”
 
 ```text
 OpenSpec state:
@@ -864,13 +818,13 @@ Git / implementation state:
 
 三者不能混为一谈。
 
-### 11.4 区分 phase advancement 与 auto transition
+### 10.4 区分 phase advancement 与 auto transition
 
 - `guard --apply` 总是负责 phase advancement；
 - `auto_transition` 只控制是否自动调用下一 Skill；
 - 即使 `auto_transition=false`，阶段状态仍然可以被推进。
 
-### 11.5 用户决策点不能自动跳过
+### 10.5 用户决策点不能自动跳过
 
 以下必须停下来等用户确认：
 
