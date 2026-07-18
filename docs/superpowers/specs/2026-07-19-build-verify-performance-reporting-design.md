@@ -2,6 +2,8 @@
 comet_change: add-build-verify-performance-reporting
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-07-18-add-build-verify-performance-reporting
+status: final
 ---
 
 # Build and Verify（构建与验证）性能预算警告与诊断报告技术设计

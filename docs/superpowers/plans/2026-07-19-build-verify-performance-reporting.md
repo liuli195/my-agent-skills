@@ -2,6 +2,7 @@
 change: add-build-verify-performance-reporting
 design-doc: docs/superpowers/specs/2026-07-19-build-verify-performance-reporting-design.md
 base-ref: a6ae972eba609ef3ae71c1e9e51d088cbadccd54
+archived-with: 2026-07-18-add-build-verify-performance-reporting
 ---
 
 # Build and Verify（构建与验证）性能报告 Implementation Plan（实施计划）
