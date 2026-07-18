@@ -2,6 +2,7 @@
 change: support-parallel-pr-flow-worktrees
 design-doc: docs/superpowers/specs/2026-07-18-pr-flow-parallel-worktrees-design.md
 base-ref: 897308bf86dfd47024749812f9a7abada2826d31
+archived-with: 2026-07-18-support-parallel-pr-flow-worktrees
 ---
 
 # PR Flow（拉取请求流程）多工作树并行实施计划
@@ -23,6 +24,7 @@ base-ref: 897308bf86dfd47024749812f9a7abada2826d31
 - cleanup（清理）仍只检测脏工作区并停止，不修改或清理用户改动。
 - 所有改动必须通过 PR Flow（拉取请求流程）完整端到端回归。
 
+archived-with: 2026-07-18-support-parallel-pr-flow-worktrees
 ---
 
 ## 文件范围

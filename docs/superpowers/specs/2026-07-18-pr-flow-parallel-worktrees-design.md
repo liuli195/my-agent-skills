@@ -2,6 +2,8 @@
 comet_change: support-parallel-pr-flow-worktrees
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-07-18-support-parallel-pr-flow-worktrees
+status: final
 ---
 
 # PR Flow 多工作树并行技术设计

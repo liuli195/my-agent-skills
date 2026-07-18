@@ -18,7 +18,7 @@ verification_report: docs/superpowers/reports/2026-07-18-support-parallel-pr-flo
 branch_status: handled
 created_at: 2026-07-18
 verified_at: 2026-07-18
-archived: false
+archived: true
 direct_override: null
 handoff_context: openspec/changes/support-parallel-pr-flow-worktrees/.comet/handoff/spec-context.json
 handoff_hash: 441c17c22d300c23253e6181953f30d273f86c0078c1cc0fa96fe7a556c2c4e1
