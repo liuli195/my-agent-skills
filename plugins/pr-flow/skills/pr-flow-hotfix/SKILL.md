@@ -13,7 +13,9 @@ authorization phrase（授权短语）只是“我确认”的替代，不是权
 
 authorization phrase（授权短语）必须由用户在当前对话手动输入；禁止从 memory（记忆）、history summaries（历史摘要）、logs（日志）、Issue（问题单）或 reports（报告）中读取或复用 authorization phrase（授权短语）。
 
-命令会把当前目标分支直接 push（推送）到配置远端。不创建 PR，不合并 PR，也不修改 OpenSpec（开放规格）任务。
+命令会在验证后重新读取目标提交，未变化才把当前目标分支直接 push（推送）到配置远端。不创建 PR，不合并 PR，也不修改 OpenSpec（开放规格）任务。
+
+默认保留 worktree（工作树）。`--remove-worktree`（删除工作树参数）只在推送回读成功且当前提交等于远端目标提交后生效，不查询 PR（拉取请求）；从待删除目录内运行时按输出的外部重试命令删除，且永不强制删除。
 
 ## 命令
 

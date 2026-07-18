@@ -399,6 +399,21 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    "tests/test_pr_flow_cli.py::test_competing_mutation_reports_lock_without_rewriting_status": (
+        "covers PR Flow cross-process mutation lock behavior in a real git repository"
+    ),
+    "tests/test_pr_flow_cli.py::test_diagnose_reports_active_lock_without_writing_status": (
+        "covers PR Flow read-only diagnosis while a real operation lock is held"
+    ),
+    "tests/test_pr_flow_cli.py::test_linked_worktrees_use_independent_process_locks_and_status": (
+        "covers linked-worktree isolation across real PR Flow processes"
+    ),
+    "tests/test_pr_flow_cli.py::test_linked_worktrees_complete_independently_through_cli": (
+        "covers concurrent complete entrypoints across real linked worktrees"
+    ),
+    "tests/test_pr_flow_cli.py::test_write_status_keeps_compatibility_file_and_branch_run": (
+        "covers per-worktree PR Flow status paths in a real git repository"
+    ),
     "tests/test_agent_guard_plugin_installer.py::test_authorized_install_is_repeatable_and_updates_marketplaces": (
         "covers packaged agent-guard installer repeatable write entrypoint"
     ),
@@ -1036,6 +1051,11 @@ CURRENT_E2E_ALLOWLIST_IDENTITIES = {
     "tests/test_cross_agent_review_cli.py::test_summary_only_reports_sorted_classification_overlap_paths",
     "tests/test_pr_flow_cli.py::test_project_template_recovers_stale_lock",
     "tests/test_pr_flow_cli.py::test_project_template_recreates_incomplete_template_after_stale_lock",
+    "tests/test_pr_flow_cli.py::test_competing_mutation_reports_lock_without_rewriting_status",
+    "tests/test_pr_flow_cli.py::test_diagnose_reports_active_lock_without_writing_status",
+    "tests/test_pr_flow_cli.py::test_linked_worktrees_use_independent_process_locks_and_status",
+    "tests/test_pr_flow_cli.py::test_linked_worktrees_complete_independently_through_cli",
+    "tests/test_pr_flow_cli.py::test_write_status_keeps_compatibility_file_and_branch_run",
 }
 
 E2E_ALLOWLIST = {

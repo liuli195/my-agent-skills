@@ -24,7 +24,15 @@ def completed(
 
 def matches(expected: tuple[str, ...], actual: tuple[str, ...]) -> bool:
     return len(expected) == len(actual) and all(
-        expected_item == actual_item or expected_item == "__placeholder__"
+        expected_item == actual_item
+        or expected_item == "__placeholder__"
+        or (expected_item == "__snapshot_ref__" and actual_item.startswith("refs/pr-flow/") and actual_item.endswith("/base"))
+        or (
+            expected_item == "__snapshot_refspec__"
+            and actual_item.startswith("+refs/heads/")
+            and ":refs/pr-flow/" in actual_item
+            and actual_item.endswith("/base")
+        )
         for expected_item, actual_item in zip(expected, actual)
     )
 
@@ -61,10 +69,19 @@ class CommandStub:
             (
                 index
                 for index, (expected, _) in enumerate(self.responses)
-                if matches(expected, normalized) or matches(expected, call)
+                if expected == normalized or expected == call
             ),
             None,
         )
+        if match_index is None:
+            match_index = next(
+                (
+                    index
+                    for index, (expected, _) in enumerate(self.responses)
+                    if matches(expected, normalized) or matches(expected, call)
+                ),
+                None,
+            )
         if match_index is not None:
             _, response = self.responses[match_index]
             if self.consume:

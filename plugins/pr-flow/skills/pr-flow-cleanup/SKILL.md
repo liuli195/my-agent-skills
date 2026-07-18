@@ -7,9 +7,9 @@ description: "清理已合并 PR 的 head branch（源分支），同步 base br
 
 ## 边界
 
-只处理已合并 PR 的 cleanup（清理）。会校验 PR 已合并、当前工作区干净、当前分支等于 PR head branch（源分支），且 head branch 不等于 base branch（目标分支）。
+只处理已合并 PR 的 cleanup（清理）。会校验 PR 已合并、当前工作区干净、当前工作树位于 PR head branch（源分支）或最新远端目标提交的 detached HEAD（分离头），且 head branch 不等于 base branch（目标分支）。
 
-命令会删除远端 head branch（源分支）、切回并同步 base branch（目标分支）、删除本地 head branch（源分支）。不合并 PR，不创建提交，也不修改 OpenSpec（开放规格）任务。
+命令会定位到最新远端目标提交的 detached HEAD（分离头），再按实时状态安全删除远端和本地 head branch（源分支）；失败后可直接重试。默认保留 worktree（工作树）；`--remove-worktree`（删除工作树参数）仅在安全收尾后生效，从待删除目录内运行时按输出的外部重试命令删除，且永不强制删除。不合并 PR，不创建提交，也不修改 OpenSpec（开放规格）任务。
 
 cleanup 不查询 GitHub Branch Protection（GitHub 分支保护）或 Rulesets（规则集），也不自动配置远端保护规则；它只保证不删除 base branch。
 
