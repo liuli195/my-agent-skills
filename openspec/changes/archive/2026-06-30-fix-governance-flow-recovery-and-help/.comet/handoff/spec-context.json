@@ -1,0 +1,16 @@
+{
+  "change": "fix-governance-flow-recovery-and-help",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "4128dbd416aafb8cd7e015bc78e8dfb0b9bf4931907b534211671dff144b53a5",
+  "files": [
+    { "path": "openspec/changes/fix-governance-flow-recovery-and-help/proposal.md", "sha256": "55cf47d87f870d0e2ba62f23f7bd7966c5185b7e3160adf6cd5a27158acfc3cd", "role": "supporting" },
+    { "path": "openspec/changes/fix-governance-flow-recovery-and-help/design.md", "sha256": "2893b31322c415700e84fdb981cf99b4cdb9410b1dc475d2fc6d14fab4d85382", "role": "supporting" },
+    { "path": "openspec/changes/fix-governance-flow-recovery-and-help/tasks.md", "sha256": "fbe236037e480e844d9400e6b475a8949156dcb5111783f414a55326e6e70b7c", "role": "supporting" },
+    { "path": "openspec/changes/fix-governance-flow-recovery-and-help/specs/cross-agent-review/spec.md", "sha256": "39d2601487c4785d7b27340cc0815541d9273300ed7862f23d6dae8a7033b4fd", "role": "spec" },
+    { "path": "openspec/changes/fix-governance-flow-recovery-and-help/specs/pr-flow-plugin/spec.md", "sha256": "1e8d6676282fefa41585ca110e8f9016606831efc5cd48011fea4fac58fbc073", "role": "spec" },
+    { "path": "openspec/changes/fix-governance-flow-recovery-and-help/specs/release-flow-plugin/spec.md", "sha256": "35994306632cca290458fdffa09a708d1a4fc86ca16c779881097ed89a17511b", "role": "spec" }
+  ]
+}

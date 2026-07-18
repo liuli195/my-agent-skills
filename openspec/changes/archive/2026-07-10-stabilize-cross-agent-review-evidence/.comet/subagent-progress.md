@@ -1,0 +1,138 @@
+# Subagent Progress
+
+- Change: `stabilize-cross-agent-review-evidence`
+- Review mode: `standard`
+- TDD mode: `tdd`
+- Current plan task: `Task 8: 发布形态端到端回归与完成验证`
+
+## Task 8: 发布形态端到端回归与完成验证
+
+- OpenSpec mapping:
+  - `6.1` Cross Agent Review（跨代理审查）发布入口到 Agent Guard（代理守卫）门禁的完整链路
+  - `6.2` Planning Review（规划审查）五字段结果到同一通用证据入口和门禁的完整链路
+  - `6.3` OpenSpec（开放规格）、两个插件、包完整性与仓库 full（完整）验证
+- Stage: `completed`
+- Base commit: `15f06b0`
+- Risk signals: 发布形态端到端回归、两个插件集成、完整仓库验证
+- Full verification diagnosis: `test_e2e_allowlist_entries_match_current_runtime_hits` 在未包含 Task 8 新测试的 `HEAD`（提交头）上稳定失败；根因是 Task 1-7 重构后 E2E allowlist（端到端允许清单）快照漂移，Task 8 最小扩展 `tests/test_test_runtime_boundaries.py`
+- Implementation commit: `e5c9c71`
+- Changed files: `test_agent_guard_plugin_runtime_e2e.py`, `test_test_runtime_boundaries.py`（`+339/-15`）
+- RED evidence: 跨插件发布链 1 失败（SDK（开发包）不可用）；E2E allowlist（端到端允许清单）快照 1 失败
+- GREEN evidence: 两条业务链 2 通过；边界扫描 10 通过；Cross Agent Review（跨代理审查）215 通过；Agent Guard（代理守卫）277 通过；full（完整）7/7 通过（69/277/58/173/215/183/OpenSpec 16），`full-not-run: false`，`status: passed`
+- Task review: PASS（通过）— 无 Critical/Important/Minor（严重/重要/次要）；46 个新增清单身份均有真实扫描命中，5 个删除身份均已消失
+- Review-fix round: `0/1`
+
+## Task 7: 删除 mark-pass（标记通过）并更新调用契约
+
+- OpenSpec mapping:
+  - `5.1` 删除 Cross Agent Review（跨代理审查）的专用证据命令、常量与路径知识
+  - `5.2` 明确主 Agent（代理）读取报告并调用外部工作流的通用证据入口
+  - `5.3` 补充 Planning Review（规划审查）共用 record-evidence（记录证据）的集成夹具
+  - `5.4` 保持 Cross Agent Review（跨代理审查）发布契约只包含 run/retry/revalidate（运行/重试/重新校验）
+- Stage: `completed`
+- Base commit: `7f98fbe`
+- Risk signals: 公共 CLI（命令行接口）删除、跨插件所有权迁移、Skill（技能）行为契约、集成测试
+- Review findings: 2 Important（重要）— Planning Review（规划审查）夹具缺少写入前拒绝对照；Skill（技能）误删默认模式和实施基准规则
+- Implementation commits: `56f1b7e`, `5d7f4fe`
+- Changed files: Cross Agent Review（跨代理审查）脚本与 Skill（技能）、三个 Cross Agent Review（跨代理审查）测试、Agent Guard（代理守卫）端到端测试（`+319/-311`）
+- RED evidence: 旧命令/包知识 2 失败；文档结构 2 失败；复审修复保护 2 失败；旧 Skill（技能）压力场景 4/5 误判
+- GREEN evidence: 焦点 4 通过；修复保护 2 通过；Skill（技能）压力场景 5/5 正确；六文件完整定向回归 440 通过；`py_compile`（语法编译检查）与 `git diff --check`（差异格式检查）通过
+- Task review: PASS（通过）— 初审 2 Important（重要）均在唯一修复轮关闭；全新窄范围复审 findings（发现项）为空
+- Review-fix round: `1/1`
+
+## Task 1: 文件投影与原子状态基础
+
+- OpenSpec mapping:
+  - `1.1 先补失败测试，覆盖精确权威上下文、带理由的 summary_only（仅摘要）、未分类默认完整审查，以及重复、越界和非变更路径拒绝`
+  - `1.2 实现 review-input.json（审查输入文件）扩展、Git（版本控制）文件清单和三个内部分类，不增加扩展名、目录或 Comet（双星工作流）硬编码`
+- Stage: `completed`
+- Base commit: `a94062c`
+- Implementation commits: `1f604dd`, `83312a1`
+- Changed files: `cross_agent_review.py`, `test_cross_agent_review_cli.py` (`+507/-1`)
+- RED evidence: 分类 7 失败；重新校验策略 8 失败；原子状态 1 失败；精确状态 1 失败；rename/copy（重命名/复制）与错误类型 3 失败
+- GREEN evidence: 定向 7 通过；`tests/test_cross_agent_review_cli.py` 完整 83 通过；`git diff --check`（差异格式检查）通过
+- Risk signals: 安全边界、共享状态、模块级 API（接口）、diff（差异）超过 200 行
+- Task review: PASS（通过）— 初审 1 Important（重要）+ 2 Minor（次要）均在唯一修复轮关闭；新独立复审 findings（发现项）为空
+- Review-fix round: `1/1`
+
+## Task 6: 通用 record-evidence（记录证据）
+
+- OpenSpec mapping:
+  - `4.1` Guard Profile（守卫画像）来源、产物查找与 guard-defined（守卫定义）校验
+  - `4.2` 路径、Git（版本控制）、工作区与保留字段安全矩阵
+  - `4.3` 共享注册表与安全路径语义
+  - `4.4` Runtime CLI（运行时命令行）记录入口与原子写入
+  - `4.5` Agent Guard Run Skill（代理守卫运行技能）通用说明
+- Stage: `completed`
+- Base commit: `051e454`
+- Implementation commits: `7ad427b`, `784dc7f`, `47c5b78`
+- Changed files: `cli.py`, Agent Guard Run `SKILL.md`（技能说明）、`events.md`, `test_agent_guard_plugin_runtime_e2e.py`, `test_agent_guard_skill_entrypoints.py` (`+605/-4`)
+- RED evidence: record-evidence（记录证据）33 失败；Skill（技能）静态 1 失败；旧说明压力场景 FAIL（失败）
+- GREEN evidence: record-evidence（记录证据）33 通过；Skill（技能）静态 3 通过且全新压力场景 PASS（通过）；四文件回归 199 通过；Agent Guard（代理守卫）验证 250 通过
+- Risk signals: 通用安全写入 CLI（命令行接口）、Git（版本控制）与路径信任边界、Skill（技能）行为契约、diff（差异）超过 200 行
+- Task review: PASS（通过）— 初审全部问题已修复；用户授权例外修复来源根别名和元数据判空顺序后，新独立窄范围复审 findings（发现项）为空
+- Review-fix round: `2/2`（用户显式授权一次例外修复轮）
+- Decision: 只封闭标准来源根别名，并在任何路径解析前判空 producer/subject_type（生产方/对象类型）且写入保留原值
+
+## Task 3: 失败角色 retry（重试）
+
+- OpenSpec mapping:
+  - `2.3 先补失败测试，证明一个角色超时不覆盖另一个成功结果，retry（重试）只派发失败或超时角色且不扩大原角色范围`
+  - `2.4 实现 retry（重试）入口、尝试追加和基于最新角色终态的报告重建`
+- Stage: `completed`
+- Base commit: `d2da439`
+- Implementation commits: `52767e8`, `a5f14f7`, `3b17ec2`
+- Changed files: `cross_agent_review.py`, `test_cross_agent_review_cli.py` (`+317/-0`)
+- RED evidence: retry（重试）定向 3 失败；扩展边界 19 失败，均因入口缺失
+- GREEN evidence: retry（重试）边界 19 通过；`tests/test_cross_agent_review_cli.py` 完整 122 通过；`git diff --check`（差异格式检查）通过
+- Risk signals: 公共 CLI（命令行接口）、状态信任边界、diff（差异）超过 200 行
+- Task review: PASS（通过）— 初审 3 Important（重要）已修复；复审的 `reused`（复用）误报已拒绝；用户授权例外修复共享时间入口后，新独立窄范围复审 findings（发现项）为空
+- Review-fix round: `2/2`（用户显式授权一次例外修复轮）
+- Decision: 修复共享 `record_role_result()`（记录角色结果）的时间单调性；保持规格明确要求的 `reused`（复用）终态
+
+## Task 4: 严格 revalidate（重新校验）
+
+- OpenSpec mapping:
+  - `3.1 先补失败测试，覆盖 checkbox-only（仅复选框）和 mapping-fields-only（仅映射字段）的允许变化`
+  - `3.2 先补拒绝测试，覆盖未声明文件、重叠策略、重命名、复制、规格或设计变化、解析失败、脏工作区、提交头或输入输出哈希不匹配和链式复用`
+  - `3.3 实现 revalidate（重新校验）入口，在不调用 SDK（开发包）的前提下为当前提交生成来源可追溯的 reused（复用）报告和状态`
+- Stage: `completed`
+- Base commit: `43d4206`
+- Implementation commits: `2c5c10d`, `1afdc35`, `9e1ccc7`
+- Changed files: `cross_agent_review.py`, `test_cross_agent_review_cli.py` (`+961/-59`)
+- RED evidence: 校验器与 revalidate（重新校验）定向 38 失败
+- GREEN evidence: 定向 40 通过；Cross Agent Review（跨代理审查）完整 197 通过；`py_compile`（语法编译检查）和 `git diff --check`（差异格式检查）通过
+- Risk signals: 安全解析、跨提交事实复用、状态白名单、公共 CLI（命令行接口）、diff（差异）超过 200 行
+- Task review: PASS（通过）— 初审 3 Critical（严重阻断）+ 1 Important（重要阻断）均已修复；用户授权例外修复 YAML（配置）集合旁路后，新独立窄范围复审 findings（发现项）为空
+- Review-fix round: `2/2`（用户显式授权一次例外修复轮）
+- Decision: 只补现有 `strict_equal()`（严格比较）的集合元素类型敏感匹配，并进行窄范围复审
+
+## Task 5: 共享 Agent Guard（代理守卫）产物契约
+
+- OpenSpec mapping: 部分覆盖 `4.1`、`4.3`；等待 Task 6（任务 6）完成通用写入入口后统一勾选
+- Stage: `completed`
+- Base commit: `58bdae0`
+- Implementation commits: `3198144`, `1e84e56`
+- Changed files: `global_command_guards.py`, `validate_guard_profile.py`, `test_agent_guard_runtime_router.py`, `test_validate_guard_profile.py` (`+271/-29`)
+- RED evidence: 公开加载/静态约束 4 失败；路径/注册表边界 4 失败；缺失/非法/重复注册表 3 失败
+- GREEN evidence: 定向 142 通过；Agent Guard（代理守卫）完整 200 通过；`py_compile`（语法编译检查）与 `git diff --check`（差异格式检查）通过
+- Risk signals: 共享注册表 API（接口）、安全路径、Global Command Guard（全局命令守卫点）、diff（差异）超过 200 行
+- Task review: PASS（通过）— 3 个真实 Important（重要）均已修复；`skip_when`（跳过条件）误报按上游规格拒绝；新独立复审 findings（发现项）为空
+- Review-fix round: `1/1`
+
+## Task 2: 角色限定输入与逐角色持久化
+
+- OpenSpec mapping:
+  - `1.3 先补失败测试，证明两个角色不再收到无范围完整差异，且 role-input command（角色输入命令）只输出状态声明的精确路径差异`
+  - `1.4 实现角色范围、短 role-input command（角色输入命令）和提示词模板更新，保留摘要文件按需读取能力`
+  - `2.1 先补失败测试，覆盖 review-state.json（审查状态文件）的对象、文件、角色范围、尝试、输出路径和哈希契约`
+  - `2.2 实现同目录临时文件加原子替换，并在每个独立并发角色返回后立即写入 completed（完成）、failed（失败）或 timed_out（超时）状态`
+- Stage: `completed`
+- Base commit: `7f96458`
+- Implementation commits: `4f682b6`, `db6bbe7`
+- Changed files: `reviewer-prompt.md`, `cross_agent_review.py`, `test_cross_agent_review_cli.py` (`+594/-261`)
+- RED evidence: role-input/prompt（角色输入/提示词）6 失败；逐角色派发 6 失败；状态报告 1 失败
+- GREEN evidence: Task 2（任务 2）定向 17 通过；`tests/test_cross_agent_review_cli.py` 完整 99 通过；`git diff --check`（差异格式检查）通过
+- Risk signals: 安全边界、并发共享状态、schema/API（结构/接口）、diff（差异）超过 200 行
+- Task review: PASS（通过）— 初审 4 Important（重要）均已修复；复审新增“清理预先注入的旧 `state.report`”不属于当前 v1（第一版）状态来源或 Task 2（任务 2）契约，协调者核对真实调用链后拒绝该误报
+- Review-fix round: `1/1`
