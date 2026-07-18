@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import shlex
 import subprocess
 import sys
@@ -95,6 +96,19 @@ def _pytest_xdist_workers(value: Any) -> str | None:
     return str(value)
 
 
+def _string_command_token_spans(command: str) -> list[tuple[str, int]]:
+    spans: list[tuple[str, int]] = []
+    for match in re.finditer(r'''"[^"]*"|'[^']*'|\S+''', command):
+        raw = match.group(0)
+        token = (
+            raw[1:-1]
+            if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {'"', "'"}
+            else raw
+        )
+        spans.append((token, match.end()))
+    return spans
+
+
 def _command_with_pytest_xdist_workers(command: Any, workers: str | None) -> Any:
     if workers is None or not _uses_pytest(command) or uses_pytest_xdist(command):
         return command
@@ -107,15 +121,17 @@ def _command_with_pytest_xdist_workers(command: Any, workers: str | None) -> Any
                 insert_at = index + 2
                 return tokens[:insert_at] + ["-n", workers] + tokens[insert_at:]
     if isinstance(command, str):
-        tokens = _command_tokens(command)
-        for index, token in enumerate(tokens):
+        tokens = _string_command_token_spans(command)
+        for index, (token, end) in enumerate(tokens):
             if token == "pytest" or token.endswith("/pytest") or token.endswith("\\pytest"):
-                tokens = tokens[: index + 1] + ["-n", workers] + tokens[index + 1 :]
-                return shlex.join(tokens)
-            if token == "-m" and index + 1 < len(tokens) and tokens[index + 1] == "pytest":
-                insert_at = index + 2
-                tokens = tokens[:insert_at] + ["-n", workers] + tokens[insert_at:]
-                return shlex.join(tokens)
+                return f"{command[:end]} -n {workers}{command[end:]}"
+            if (
+                token == "-m"
+                and index + 1 < len(tokens)
+                and tokens[index + 1][0] == "pytest"
+            ):
+                end = tokens[index + 1][1]
+                return f"{command[:end]} -n {workers}{command[end:]}"
     return command
 
 
