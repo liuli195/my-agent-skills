@@ -16,7 +16,7 @@ Build and Verify 在为字符串形式的 Pytest 命令注入 `pytestXdistWorker
 
 ### Modified Capabilities
 
-无；这是既有 Build and Verify 运行时行为的缺陷修复，不改变规格要求。
+- `test-framework-plugin`：明确字符串形式的 Pytest 命令在注入并行参数时必须保留原有 shell 语法、路径和引号。
 
 ## Impact
 
