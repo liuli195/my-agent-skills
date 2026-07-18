@@ -3296,6 +3296,53 @@ def test_build_and_verify_runner_applies_pytest_xdist_workers(
         assert calls[0][1] is None
 
 
+def test_build_and_verify_runner_preserves_windows_shell_command_when_applying_xdist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_build_and_verify_module()
+    runner = module._runner()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".build-and-verify").mkdir()
+    command = (
+        r"set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1&& "
+        r".\.venv\Scripts\python.exe -m pytest tests\example.py"
+    )
+    write_json(
+        project / ".build-and-verify" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "pytest-workers",
+                        "command": command,
+                        "pytestXdistWorkers": 4,
+                        "inputs": [],
+                    }
+                ]
+            },
+        },
+    )
+    calls = []
+
+    def fake_runner(actual_command, **kwargs):
+        calls.append(actual_command)
+        return subprocess.CompletedProcess(actual_command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        runner.importlib.util,
+        "find_spec",
+        lambda name: object() if name == "xdist" else None,
+    )
+
+    result = runner.run_verify(project, runner=fake_runner, full=True)
+
+    assert result == 0
+    assert calls == [command.replace("-m pytest", "-m pytest -n 4")]
+
+
 def test_build_and_verify_runner_keeps_existing_pytest_xdist_auto_worker_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
