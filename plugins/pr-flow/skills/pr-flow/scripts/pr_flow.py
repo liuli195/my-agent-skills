@@ -1437,6 +1437,7 @@ def retry_merge_after_ruleset_block(
         review_stop = check_review_gate(project, config, current)
         if review_stop is not None:
             return review_stop
+    require_same_pr_commits(pr, sync_pr(project, current))
     try:
         merge_pr(project, config, current, auto=merge_details.get("autoMergeSuggested") is True)
     except PrFlowError as exc:
@@ -1627,6 +1628,8 @@ def run_diagnose(args: argparse.Namespace) -> int:
             "isDraft": pr.get("isDraft"),
             "headRefName": pr.get("headRefName"),
             "baseRefName": pr.get("baseRefName"),
+            "headRefOid": pr.get("headRefOid"),
+            "baseRefOid": pr.get("baseRefOid"),
         }
     )
     if not strip_html_comments(pr.get("body")):
@@ -1979,7 +1982,7 @@ def run_hotfix(args: argparse.Namespace) -> int:
         remote_ref = f"{remote}/{target}"
         remote_head = remote_branch_snapshot(project, remote, target)
         current_head = head_oid(project)
-        merge_base = require_git_success(project, "git_merge_base_failed", "merge-base", "HEAD", remote_ref).stdout.strip()
+        merge_base = require_git_success(project, "git_merge_base_failed", "merge-base", "HEAD", remote_head).stdout.strip()
         details.update(
             {
                 "remoteHead": remote_head,

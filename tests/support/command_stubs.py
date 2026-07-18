@@ -37,17 +37,6 @@ def matches(expected: tuple[str, ...], actual: tuple[str, ...]) -> bool:
     )
 
 
-def legacy_snapshot_alias(call: tuple[str, ...]) -> tuple[str, ...] | None:
-    if len(call) == 5 and call[:4] == ("fetch", "--no-write-fetch-head", "--refmap=", "origin"):
-        refspec = call[4]
-        if refspec.startswith("+refs/heads/") and ":refs/pr-flow/" in refspec:
-            branch = refspec.removeprefix("+refs/heads/").split(":", 1)[0]
-            return ("fetch", "origin", branch)
-    if len(call) == 2 and call[0] == "rev-parse" and call[1].startswith("refs/pr-flow/"):
-        return ("rev-parse", "origin/main")
-    return None
-
-
 @dataclass
 class CommandStub:
     responses: list[tuple[tuple[str, ...], subprocess.CompletedProcess[str]]] = field(default_factory=list)
@@ -76,7 +65,6 @@ class CommandStub:
             with open(body_path, encoding="utf-8") as body:
                 self.body_files.append({"args": call, "body": body.read()})
         normalized = call[1:] if call and call[0] == "gh" else call
-        aliases = tuple(alias for candidate in (normalized, call) if (alias := legacy_snapshot_alias(candidate)) is not None)
         match_index = next(
             (
                 index
@@ -85,15 +73,6 @@ class CommandStub:
             ),
             None,
         )
-        if match_index is None and aliases:
-            match_index = next(
-                (
-                    index
-                    for index, (expected, _) in enumerate(self.responses)
-                    if expected in aliases
-                ),
-                None,
-            )
         if match_index is None:
             match_index = next(
                 (

@@ -356,6 +356,31 @@ def test_ruleset_retry_rejects_changed_base_before_reusing_gates(tmp_path: Path,
     assert error.value.details["baseRefOid"] == "a" * 40
     assert error.value.details["currentBaseRefOid"] == "c" * 40
 
+
+def test_ruleset_retry_rechecks_commits_after_gates(tmp_path: Path, monkeypatch) -> None:
+    module = load_pr_flow_module()
+    original = json.loads(
+        pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision="APPROVED",
+            head_oid="b" * 40,
+            base_oid="a" * 40,
+        )
+    )
+    snapshots = iter((original, {**original, "baseRefOid": "c" * 40}))
+    monkeypatch.setattr(module, "sync_pr", lambda *_args: next(snapshots))
+    monkeypatch.setattr(
+        module,
+        "required_checks",
+        lambda *_args: [{"bucket": "pass", "name": "ci", "state": "SUCCESS"}],
+    )
+    monkeypatch.setattr(module, "merge_pr", lambda *_args, **_kwargs: pytest.fail("must not merge"))
+
+    with pytest.raises(module.PrFlowError) as error:
+        module.retry_merge_after_ruleset_block(tmp_path, module.default_config("main"), original, {})
+
+    assert error.value.reason == "base_outdated"
+
 def test_pr_view_fields_include_base_commit() -> None:
     assert "baseRefOid" in load_pr_flow_module().PR_VIEW_FIELDS.split(",")
 
@@ -413,7 +438,7 @@ def test_hotfix_stops_when_target_moves_during_verification(tmp_path: Path, monk
     monkeypatch.setattr(module, "remote_branch_snapshot", lambda *_args: next(snapshots))
     git_stub = CommandStub(consume=True)
     git_stub.add(["rev-parse", "HEAD"], stdout=head + "\n")
-    git_stub.add(["merge-base", "HEAD", "origin/main"], stdout=before + "\n")
+    git_stub.add(["merge-base", "HEAD", before], stdout=before + "\n")
     git_stub.add(["status", "--short"], stdout="")
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(
@@ -1261,10 +1286,10 @@ def run_hotfix_in_process(
     )
     git_stub = CommandStub()
     default_responses = [
-        (["fetch", "origin", "main"], "", 0),
-        (["rev-parse", "origin/main"], "a" * 40 + "\n", 0),
+        (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], "", 0),
+        (["rev-parse", "__snapshot_ref__"], "a" * 40 + "\n", 0),
         (["rev-parse", "HEAD"], "b" * 40 + "\n", 0),
-        (["merge-base", "HEAD", "origin/main"], "a" * 40 + "\n", 0),
+        (["merge-base", "HEAD", "a" * 40], "a" * 40 + "\n", 0),
         (["status", "--short"], "", 0),
     ]
     for args, stdout, returncode in git_responses or default_responses:
@@ -1419,8 +1444,8 @@ def run_complete_in_process(
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
     git_stub.add(["rev-list", "--count", "@{u}..HEAD"], stdout="0\n")
     git_stub.add(["rev-list", "--count", "HEAD..@{u}"], stdout="0\n")
-    git_stub.add(["fetch", "origin", "main"])
-    git_stub.add(["rev-parse", "origin/main"], stdout="a" * 40 + "\n")
+    git_stub.add(["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"])
+    git_stub.add(["rev-parse", "__snapshot_ref__"], stdout="a" * 40 + "\n")
     git_stub.add(["merge-base", "--is-ancestor", "a" * 40, "b" * 40])
     allow_cleanup(git_stub, project)
     monkeypatch.setattr(module, "gh", gh_stub)
@@ -1478,8 +1503,8 @@ def run_tweak_in_process(
         (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
         (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),
-        (["fetch", "origin", "main"], ""),
-        (["rev-parse", "origin/main"], "a" * 40 + "\n"),
+        (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
+        (["rev-parse", "__snapshot_ref__"], "a" * 40 + "\n"),
         (["merge-base", "--is-ancestor", "a" * 40, head_oid], ""),
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),
@@ -3443,8 +3468,8 @@ def test_diagnose_rejects_stale_remote_base_before_pr_dispatch(tmp_path: Path, m
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/ready\n")
     git_stub.add(["status", "--short"], stdout="")
     git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
-    git_stub.add(["fetch", "origin", "main"])
-    git_stub.add(["rev-parse", "origin/main"], stdout="c" * 40 + "\n")
+    git_stub.add(["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"])
+    git_stub.add(["rev-parse", "__snapshot_ref__"], stdout="c" * 40 + "\n")
     git_stub.add(["merge-base", "--is-ancestor", "c" * 40, "b" * 40], returncode=1)
     gh_stub = CommandStub()
     monkeypatch.setattr(module, "git", git_stub)
@@ -3593,8 +3618,8 @@ def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path
         (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
             (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
             (["rev-parse", "HEAD"], head_oid + "\n"),
-            (["fetch", "origin", "main"], ""),
-            (["rev-parse", "origin/main"], "a" * 40 + "\n"),
+            (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
+            (["rev-parse", "__snapshot_ref__"], "a" * 40 + "\n"),
             (["merge-base", "--is-ancestor", "a" * 40, head_oid], ""),
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "HEAD"], head_oid + "\n"),
@@ -3697,8 +3722,8 @@ def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path, 
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
         (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
             (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
-            (["fetch", "origin", "main"], ""),
-            (["rev-parse", "origin/main"], "a" * 40 + "\n"),
+            (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
+            (["rev-parse", "__snapshot_ref__"], "a" * 40 + "\n"),
             (["merge-base", "--is-ancestor", "a" * 40, head_oid], ""),
         (["rev-parse", "HEAD"], head_oid + "\n"),
         (["status", "--short"], ""),
@@ -4081,6 +4106,7 @@ def test_complete_uses_auto_merge_when_ruleset_suggests_auto(tmp_path: Path, mon
     allow_current_base(git_stub, head_oid)
     allow_cleanup(git_stub, project)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     monkeypatch.setattr(module, "gh", gh_stub)
     monkeypatch.setattr(module, "git", git_stub)
 
@@ -4211,6 +4237,7 @@ def test_complete_waits_for_checks_after_ruleset_block_then_retries_merge(tmp_pa
     allow_current_base(git_stub, head_oid)
     allow_cleanup(git_stub, project)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(module, "gh", gh_stub)
     monkeypatch.setattr(module, "git", git_stub)
@@ -4290,6 +4317,7 @@ def test_complete_uses_auto_merge_when_ruleset_suggests_auto_after_wait(tmp_path
         git_stub.add(git_args, stdout=stdout)
     allow_current_base(git_stub, head_oid)
     allow_cleanup(git_stub, project)
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(module, "gh", gh_stub)
@@ -4647,10 +4675,10 @@ def test_hotfix_rejects_dirty_worktree_before_push(tmp_path: Path, monkeypatch) 
         tmp_path,
         monkeypatch,
         git_responses=[
-            (["fetch", "origin", "main"], "", 0),
-            (["rev-parse", "origin/main"], "a" * 40 + "\n", 0),
+            (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], "", 0),
+            (["rev-parse", "__snapshot_ref__"], "a" * 40 + "\n", 0),
             (["rev-parse", "HEAD"], "b" * 40 + "\n", 0),
-            (["merge-base", "HEAD", "origin/main"], "a" * 40 + "\n", 0),
+            (["merge-base", "HEAD", "a" * 40], "a" * 40 + "\n", 0),
             (["status", "--short"], "dirty.txt\n", 0),
         ],
     )
@@ -4677,13 +4705,13 @@ def test_hotfix_writes_audit_record_when_post_push_readback_mismatches(tmp_path:
     remote_after = "0" * 40
     git_stub = CommandStub(consume=True)
     for git_args, stdout in [
-        (["fetch", "origin", "main"], ""),
-        (["rev-parse", "origin/main"], before_commit + "\n"),
+        (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
+        (["rev-parse", "__snapshot_ref__"], before_commit + "\n"),
         (["rev-parse", "HEAD"], head_commit + "\n"),
-            (["merge-base", "HEAD", "origin/main"], before_commit + "\n"),
+            (["merge-base", "HEAD", before_commit], before_commit + "\n"),
             (["status", "--short"], ""),
-            (["fetch", "origin", "main"], ""),
-            (["rev-parse", "origin/main"], before_commit + "\n"),
+            (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
+            (["rev-parse", "__snapshot_ref__"], before_commit + "\n"),
             (["push", "origin", "HEAD:refs/heads/main"], ""),
         (["config", "--get", "user.name"], "Test User\n"),
         (["config", "--get", "user.email"], "test@example.com\n"),
@@ -4764,10 +4792,10 @@ def test_hotfix_rejects_when_head_is_not_based_on_latest_remote_target(tmp_path:
         tmp_path,
         monkeypatch,
         git_responses=[
-            (["fetch", "origin", "main"], "", 0),
-            (["rev-parse", "origin/main"], remote_head + "\n", 0),
+            (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], "", 0),
+            (["rev-parse", "__snapshot_ref__"], remote_head + "\n", 0),
             (["rev-parse", "HEAD"], "b" * 40 + "\n", 0),
-            (["merge-base", "HEAD", "origin/main"], "c" * 40 + "\n", 0),
+            (["merge-base", "HEAD", remote_head], "c" * 40 + "\n", 0),
         ],
     )
 
@@ -4806,13 +4834,13 @@ def test_hotfix_pushes_head_to_target_and_writes_audit_record(tmp_path: Path, mo
     head_commit = "b" * 40
     git_stub = CommandStub(consume=True)
     for git_args, stdout in [
-        (["fetch", "origin", "main"], ""),
-        (["rev-parse", "origin/main"], before_commit + "\n"),
+        (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
+        (["rev-parse", "__snapshot_ref__"], before_commit + "\n"),
         (["rev-parse", "HEAD"], head_commit + "\n"),
-            (["merge-base", "HEAD", "origin/main"], before_commit + "\n"),
+            (["merge-base", "HEAD", before_commit], before_commit + "\n"),
             (["status", "--short"], ""),
-            (["fetch", "origin", "main"], ""),
-            (["rev-parse", "origin/main"], before_commit + "\n"),
+            (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
+            (["rev-parse", "__snapshot_ref__"], before_commit + "\n"),
             (["push", "origin", "HEAD:refs/heads/main"], ""),
         (["fetch", "origin", "main"], ""),
         (["rev-parse", "origin/main"], head_commit + "\n"),
@@ -4899,8 +4927,8 @@ def test_cleanup_retries_transient_eof_pr_view_before_cleanup(tmp_path: Path, mo
     base_oid = "a" * 40
     for git_args, stdout in [
         (["status", "--short"], ""),
-        (["fetch", "origin", "main"], ""),
-        (["rev-parse", "origin/main"], base_oid + "\n"),
+        (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
+        (["rev-parse", "__snapshot_ref__"], base_oid + "\n"),
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "HEAD"], "b" * 40 + "\n"),
         (["worktree", "list", "--porcelain", "-z"], f"worktree {project}\0HEAD {'b' * 40}\0branch refs/heads/feature/example\0\0"),

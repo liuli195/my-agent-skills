@@ -458,39 +458,11 @@ git commit -m "实现 PR Flow 工作树安全清理"
 
 **Interfaces:**
 - Consumes: Tasks 1–4 的完整命令入口和现有 `init_complete_project` 裸仓库夹具。
-- Produces: 扩展后的 `init_complete_project(..., linked_worktrees=2, event_control=True)`、测试内 `start_pr_flow()`/`finish()`/`wait_event()` 小助手，以及可重复的双工作树独立子进程端到端回归；不新增生产接口或测试模块。
+- Produces: 复用 `init_complete_project` 的双工作树独立子进程端到端回归；不新增生产接口、测试模块或事件控制框架。
 
 - [ ] **Step 1: 扩展现有裸仓库夹具并写入失败的并行端到端测试**
 
-让 `init_complete_project` 可创建两个关联工作树和两个源分支。使用 `tests/support/pr_flow_invocation.py` 从两个独立 `subprocess.Popen`（子进程）启动真实 CLI（命令行入口）；假 `gh`（GitHub 命令）在每次调用后向事件目录写文件，并等待测试写入对应释放文件：
-
-```python
-def wait_event(path: Path, timeout: float = 10) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if path.exists():
-            return
-        time.sleep(0.02)
-    raise AssertionError(f"event not observed: {path}")
-
-
-def test_two_worktrees_run_independently_and_stale_base_stops_only_one(tmp_path: Path) -> None:
-    repo, first, second, events = init_complete_project(tmp_path, linked_worktrees=2, event_control=True)
-    one = start_pr_flow(first, "complete", env={"PR_FLOW_EVENTS": str(events / "one")})
-    two = start_pr_flow(second, "complete", env={"PR_FLOW_EVENTS": str(events / "two")})
-    wait_event(events / "one" / "checked")
-    advance_remote_base(repo)
-    (events / "one" / "continue").touch()
-    (events / "two" / "continue").touch()
-    one_result, two_result = finish(one), finish(two)
-
-    assert "base_outdated" in one_result.stdout
-    assert two_result.returncode == 0
-    assert branch_run(first, "feature/one")["details"]["sourceBranch"] == "feature/one"
-    assert branch_run(second, "feature/two")["details"]["sourceBranch"] == "feature/two"
-```
-
-同一测试组再覆盖：一个工作树持锁或失败不阻断另一个；目标冲突只停止当前流程；同一源分支被另一工作树检出时不删除远端/本地源分支；cleanup（清理）安全收尾及外部显式删除。同步只使用事件文件，不使用固定长等待。
+复用 `init_complete_project` 创建两个关联工作树和两个源分支，从两个独立 `subprocess.Popen`（子进程）启动真实 CLI（命令行入口），断言两个 complete（完整流程）均完成、状态互不覆盖并停在同一最新目标提交。远端推进、失败、冲突、分支占用和显式删除复用 Tasks 1–4 的定向回归，不重复构建并发事件框架。
 
 - [ ] **Step 2: 运行端到端测试并确认 RED（失败）或确认新场景可检出回归**
 
