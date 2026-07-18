@@ -170,16 +170,6 @@ def _load_config(project: Path) -> dict[str, Any]:
                     "invalid_config: .build-and-verify/config.json: "
                     "verify.maxParallel must be non-negative integer"
                 )
-            full_budget = section_config.get("fullBudgetSeconds")
-            if full_budget is not None and (
-                isinstance(full_budget, bool)
-                or not isinstance(full_budget, int)
-                or full_budget <= 0
-            ):
-                raise ConfigError(
-                    "invalid_config: .build-and-verify/config.json: "
-                    "verify.fullBudgetSeconds must be positive integer"
-                )
         checks = section_config.get("checks", [])
         if not isinstance(checks, list):
             raise ConfigError(
@@ -836,14 +826,25 @@ def run_verify(
     selected = checks if full else _selected_checks(checks, changed_files)
     failures = 0
     if full:
+        verify_config = config.get("verify", {})
+        budget_seconds = verify_config.get("fullBudgetSeconds")
+        if budget_seconds is not None and (
+            isinstance(budget_seconds, bool)
+            or not isinstance(budget_seconds, int)
+            or budget_seconds <= 0
+        ):
+            return _config_error(
+                ConfigError(
+                    "invalid_config: .build-and-verify/config.json: "
+                    "verify.fullBudgetSeconds must be positive integer"
+                )
+            )
         started_at = time.monotonic()
         failures, failed_ids, results = _run_scheduled_checks(
             project, config, selected, changed_files, runner
         )
         total_seconds = round(time.monotonic() - started_at, 2)
         if len(results) == len(selected):
-            verify_config = config.get("verify", {})
-            budget_seconds = verify_config.get("fullBudgetSeconds")
             over_budget = (
                 total_seconds > budget_seconds if budget_seconds is not None else None
             )

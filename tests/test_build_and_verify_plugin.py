@@ -2802,6 +2802,30 @@ def test_build_and_verify_fast_verify_leaves_performance_report_unchanged(
     assert report_path.read_bytes() == original
 
 
+def test_build_and_verify_fast_verify_ignores_invalid_full_budget(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(
+        project,
+        verify_checks=[{"id": "fast", "command": ["fast"], "inputs": []}],
+        verify_config={"fullBudgetSeconds": 0},
+    )
+    runner = FakeRunner()
+
+    result = run_check(
+        project,
+        "verify",
+        runner=runner,
+        changed_files=["src/app.py"],
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert runner.calls == [["fast"]]
+    assert "fullBudgetSeconds" not in result.stdout + result.stderr
+
+
 def test_build_and_verify_report_write_failure_preserves_functional_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

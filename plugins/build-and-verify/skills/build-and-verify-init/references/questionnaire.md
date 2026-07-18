@@ -62,9 +62,9 @@
 
 - 固定选项：
   - 接受建议运行参数。
-- 修改 `verify.maxParallel`（最大并行检查数）。
-- 修改 `verify.timeoutSeconds`（超时秒数）。
-- 启用、修改或保持禁用 `verify.fullBudgetSeconds`（完整验证预算秒数）。
+  - 修改 `verify.maxParallel`（最大并行检查数）。
+  - 修改 `verify.timeoutSeconds`（超时秒数）。
+  - 启用、修改或保持禁用 `verify.fullBudgetSeconds`（完整验证预算秒数）。
   - 修改单个 check（检查项）的 `checkParallel`（检查项间并行）。
   - 修改 pytest（Python 测试框架）check（检查项）的 `pytestXdistWorkers`（Pytest 工作进程数）。
   - 使用 agent（代理）基于本机情况给出的建议。
@@ -73,8 +73,8 @@
 - 选择后果：
   - 接受建议：写入用户确认后的并行和超时设置。
   - 修改最大并行数：只影响 verify（验证）并行调度。
-- 修改超时：只影响单个 check（检查项）的最长运行时间。
-- 修改完整验证预算：只有用户确认正整数后才写入 `verify.fullBudgetSeconds`（完整验证预算秒数）；超预算只警告并记录报告，不阻断功能验证。保持禁用时未启用时省略该字段。
+  - 修改超时：只影响单个 check（检查项）的最长运行时间。
+  - 修改完整验证预算：只有用户确认正整数后才写入 `verify.fullBudgetSeconds`（完整验证预算秒数）；超预算只警告并记录报告，不阻断功能验证。保持禁用时未启用时省略该字段。
   - 修改 `checkParallel`（检查项间并行）：允许该 check（检查项）与其他确认安全的 check（检查项）在 runner（运行器）内并行执行。
   - 修改 `pytestXdistWorkers`（Pytest 工作进程数）：只影响 pytest（Python 测试框架）命令内部 worker（工作进程）数量，并需要 pytest-xdist（Pytest 并行插件）。
   - 使用本机建议：agent（代理）可以参考 CPU（处理器）核心数和项目规模提出建议，但必须等待用户确认。
