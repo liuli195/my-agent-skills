@@ -225,6 +225,13 @@ def write_status(project: Path, command: str, status: str, details: dict) -> Non
     source_branch = status_source_branch(project, enriched)
     if source_branch:
         enriched.setdefault("sourceBranch", source_branch)
+    for target, source in (
+        ("targetBranch", "baseRefName"),
+        ("sourceOid", "headRefOid"),
+        ("targetOid", "baseRefOid"),
+    ):
+        if enriched.get(source):
+            enriched.setdefault(target, enriched[source])
     payload = {
         "status": status,
         "command": command,
@@ -668,8 +675,20 @@ def remote_for_base_branch(config: dict[str, Any], base_branch: str) -> str:
 
 
 def remote_branch_snapshot(project: Path, remote: str, branch: str) -> str:
-    require_git_success(project, "git_fetch_target_failed", "fetch", remote, branch)
-    result = require_git_success(project, "git_remote_target_head_failed", "rev-parse", f"{remote}/{branch}")
+    worktree = resolve_project(project)
+    normalized = os.path.normcase(str(worktree)) if os.name == "nt" else str(worktree)
+    snapshot_ref = f"refs/pr-flow/{stable_key(normalized)}/base"
+    refspec = f"+refs/heads/{branch}:{snapshot_ref}"
+    require_git_success(
+        project,
+        "git_fetch_target_failed",
+        "fetch",
+        "--no-write-fetch-head",
+        "--refmap=",
+        remote,
+        refspec,
+    )
+    result = require_git_success(project, "git_remote_target_head_failed", "rev-parse", snapshot_ref)
     oid = result.stdout.strip()
     if not oid:
         raise PrFlowError(
@@ -1358,6 +1377,8 @@ def wait_for_checks(
             "pr": current.get("number"),
             "headRefName": current.get("headRefName"),
             "baseRefName": current.get("baseRefName"),
+            "headRefOid": current.get("headRefOid"),
+            "baseRefOid": current.get("baseRefOid"),
         }
         if has_failing_check(checks):
             details["reason"] = "checks_or_review_blocking"
@@ -1372,17 +1393,31 @@ def wait_for_checks(
             return stop_state("DISPATCH_REQUIRED", "checks_pending", add_recovery_action(details))
         time.sleep(min(max(poll_seconds, 1), remaining))
         updated = sync_pr(project, current)
-        if updated.get("headRefOid") != pr.get("headRefOid"):
-            raise PrFlowError(
-                "head_moved",
-                {
-                    "reason": "head_moved",
-                    "pr": pr.get("number"),
-                    "headRefOid": pr.get("headRefOid"),
-                    "currentHeadOid": updated.get("headRefOid"),
-                },
-            )
+        require_same_pr_commits(pr, updated)
         current = updated
+
+
+def require_same_pr_commits(original: dict[str, Any], current: dict[str, Any]) -> None:
+    if current.get("headRefOid") != original.get("headRefOid"):
+        raise PrFlowError(
+            "head_moved",
+            {
+                "reason": "head_moved",
+                "pr": original.get("number"),
+                "headRefOid": original.get("headRefOid"),
+                "currentHeadOid": current.get("headRefOid"),
+            },
+        )
+    if current.get("baseRefOid") != original.get("baseRefOid"):
+        raise PrFlowError(
+            "base_outdated",
+            {
+                "reason": "base_outdated",
+                "pr": original.get("number"),
+                "baseRefOid": original.get("baseRefOid"),
+                "currentBaseRefOid": current.get("baseRefOid"),
+            },
+        )
 
 
 def retry_merge_after_ruleset_block(
@@ -1390,11 +1425,18 @@ def retry_merge_after_ruleset_block(
     config: dict[str, Any],
     pr: dict[str, Any],
     merge_details: dict[str, Any],
+    *,
+    skip_review_gate: bool = False,
 ) -> dict[str, Any] | None:
     current = sync_pr(project, pr)
+    require_same_pr_commits(pr, current)
     check_stop = wait_for_checks(project, current, wait_config_from_config(config))
     if check_stop is not None:
         return check_stop
+    if not skip_review_gate:
+        review_stop = check_review_gate(project, config, current)
+        if review_stop is not None:
+            return review_stop
     try:
         merge_pr(project, config, current, auto=merge_details.get("autoMergeSuggested") is True)
     except PrFlowError as exc:
@@ -1510,6 +1552,17 @@ def run_diagnose(args: argparse.Namespace) -> int:
         details["upstream"] = upstream
         return stop(project, args.command, "EXCEPTION_REQUIRED", details["reason"], details)
     dirty = status_result.stdout.strip()
+
+    try:
+        require_current_base(
+            project,
+            config,
+            base_branch,
+            head_oid(project),
+            command_next_command(args.command, project),
+        )
+    except PrFlowError as exc:
+        return stop(project, args.command, error_status(exc.reason), exc.reason, exc.details)
 
     if upstream_result.returncode != 0 and branch != base_branch:
         details = command_failure_details("missing_upstream", upstream_result)
@@ -1684,22 +1737,10 @@ def run_lifecycle(
         latest_pr = sync_pr(project, pr)
     except PrFlowError as exc:
         return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
-    if latest_pr.get("headRefOid") != pr.get("headRefOid"):
-        details = {
-            "reason": "head_moved",
-            "pr": pr.get("number"),
-            "headRefOid": pr.get("headRefOid"),
-            "currentHeadOid": latest_pr.get("headRefOid"),
-        }
-        return stop(project, command, error_status("head_moved"), "head_moved", add_default_next_command(details, next_command))
-    if latest_pr.get("baseRefOid") != pr.get("baseRefOid"):
-        details = {
-            "reason": "base_outdated",
-            "pr": pr.get("number"),
-            "baseRefOid": pr.get("baseRefOid"),
-            "currentBaseRefOid": latest_pr.get("baseRefOid"),
-        }
-        return stop(project, command, error_status("base_outdated"), "base_outdated", add_default_next_command(details, next_command))
+    try:
+        require_same_pr_commits(pr, latest_pr)
+    except PrFlowError as exc:
+        return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
     pr = latest_pr
 
     current_branch = require_git_success(project, "git_current_branch_failed", "branch", "--show-current").stdout.strip()
@@ -1718,7 +1759,13 @@ def run_lifecycle(
     except PrFlowError as exc:
         if exc.reason == "ruleset_merge_blocking":
             try:
-                recovery_stop = retry_merge_after_ruleset_block(project, config, pr, exc.details)
+                recovery_stop = retry_merge_after_ruleset_block(
+                    project,
+                    config,
+                    pr,
+                    exc.details,
+                    skip_review_gate=skip_review_gate,
+                )
             except PrFlowError as recovery_exc:
                 return stop(
                     project,

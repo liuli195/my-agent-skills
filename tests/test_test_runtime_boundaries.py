@@ -408,6 +408,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     "tests/test_pr_flow_cli.py::test_linked_worktrees_use_independent_process_locks_and_status": (
         "covers linked-worktree isolation across real PR Flow processes"
     ),
+    "tests/test_pr_flow_cli.py::test_linked_worktrees_complete_independently_through_cli": (
+        "covers concurrent complete entrypoints across real linked worktrees"
+    ),
     "tests/test_pr_flow_cli.py::test_write_status_keeps_compatibility_file_and_branch_run": (
         "covers per-worktree PR Flow status paths in a real git repository"
     ),
@@ -1051,6 +1054,7 @@ CURRENT_E2E_ALLOWLIST_IDENTITIES = {
     "tests/test_pr_flow_cli.py::test_competing_mutation_reports_lock_without_rewriting_status",
     "tests/test_pr_flow_cli.py::test_diagnose_reports_active_lock_without_writing_status",
     "tests/test_pr_flow_cli.py::test_linked_worktrees_use_independent_process_locks_and_status",
+    "tests/test_pr_flow_cli.py::test_linked_worktrees_complete_independently_through_cli",
     "tests/test_pr_flow_cli.py::test_write_status_keeps_compatibility_file_and_branch_run",
 }
 

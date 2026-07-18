@@ -308,9 +308,10 @@ def test_require_current_base_fetches_remote_and_rejects_stale_source(tmp_path: 
     module = load_pr_flow_module()
     project = tmp_path / "project"
     project.mkdir()
+    snapshot_ref = remote_snapshot_ref(project)
     git_stub = CommandStub(consume=True)
-    git_stub.add(["fetch", "origin", "main"])
-    git_stub.add(["rev-parse", "origin/main"], stdout="base-after\n")
+    git_stub.add(["fetch", "--no-write-fetch-head", "--refmap=", "origin", f"+refs/heads/main:{snapshot_ref}"])
+    git_stub.add(["rev-parse", snapshot_ref], stdout="base-after\n")
     git_stub.add(["merge-base", "--is-ancestor", "base-after", "feature-head"], returncode=1)
     monkeypatch.setattr(module, "git", git_stub)
 
@@ -327,11 +328,33 @@ def test_require_current_base_fetches_remote_and_rejects_stale_source(tmp_path: 
     assert error.value.details["baseCommit"] == "base-after"
     assert error.value.details["sourceCommit"] == "feature-head"
     assert git_stub.calls == [
-        ("fetch", "origin", "main"),
-        ("rev-parse", "origin/main"),
+        ("fetch", "--no-write-fetch-head", "--refmap=", "origin", f"+refs/heads/main:{snapshot_ref}"),
+        ("rev-parse", snapshot_ref),
         ("merge-base", "--is-ancestor", "base-after", "feature-head"),
     ]
 
+
+def test_ruleset_retry_rejects_changed_base_before_reusing_gates(tmp_path: Path, monkeypatch) -> None:
+    module = load_pr_flow_module()
+    original = json.loads(
+        pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision="APPROVED",
+            head_oid="b" * 40,
+            base_oid="a" * 40,
+        )
+    )
+    changed = {**original, "baseRefOid": "c" * 40}
+    monkeypatch.setattr(module, "sync_pr", lambda *_args: changed)
+    monkeypatch.setattr(module, "required_checks", lambda *_args: pytest.fail("must not reuse checks"))
+    monkeypatch.setattr(module, "merge_pr", lambda *_args, **_kwargs: pytest.fail("must not merge"))
+
+    with pytest.raises(module.PrFlowError) as error:
+        module.retry_merge_after_ruleset_block(tmp_path, {}, original, {})
+
+    assert error.value.reason == "base_outdated"
+    assert error.value.details["baseRefOid"] == "a" * 40
+    assert error.value.details["currentBaseRefOid"] == "c" * 40
 
 def test_pr_view_fields_include_base_commit() -> None:
     assert "baseRefOid" in load_pr_flow_module().PR_VIEW_FIELDS.split(",")
@@ -567,9 +590,91 @@ with module.operation_lock(project, "complete", argparse.Namespace(project=proje
         holder.communicate(timeout=10)
 
 
+def test_linked_worktrees_complete_independently_through_cli(tmp_path: Path) -> None:
+    first, _remote = init_complete_project(tmp_path)
+    git(first, "fetch", "origin", "main")
+    git(first, "checkout", "-B", "main", "origin/main")
+    base_oid = git(first, "rev-parse", "HEAD")
+
+    git(first, "checkout", "-b", "feature/one")
+    git(first, "push", "-u", "origin", "feature/one")
+    first_oid = git(first, "rev-parse", "HEAD")
+
+    second = tmp_path / "second"
+    git(first, "worktree", "add", "-b", "feature/two", str(second), "main")
+    git(second, "push", "-u", "origin", "feature/two")
+    second_oid = git(second, "rev-parse", "HEAD")
+
+    def responses(branch: str, head_oid: str, number: int) -> list[dict[str, object]]:
+        pr = json.loads(
+            pr_view_json(
+                checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                review_decision="APPROVED",
+                head_oid=head_oid,
+                base_oid=base_oid,
+            )
+        )
+        pr.update({"number": number, "headRefName": branch})
+        pr_text = json.dumps(pr) + "\n"
+        cleanup = json.dumps(
+            {
+                "number": number,
+                "state": "MERGED",
+                "headRefName": branch,
+                "baseRefName": "main",
+                "headRepositoryOwner": {"login": "test-owner"},
+            }
+        ) + "\n"
+        return [
+            {"stdout": pr_text},
+            {"stdout": pr_text},
+            {"stdout": json.dumps([{"bucket": "pass", "name": "ci", "state": "SUCCESS"}])},
+            {"stdout": pr_text},
+            {},
+            {"stdout": cleanup},
+        ]
+
+    first_bin, _ = write_fake_gh_sequence(tmp_path / "first-bin", responses("feature/one", first_oid, 11))
+    second_bin, _ = write_fake_gh_sequence(tmp_path / "second-bin", responses("feature/two", second_oid, 12))
+
+    def command(project: Path, fake_bin: Path) -> tuple[list[str], dict[str, str]]:
+        env = os.environ.copy()
+        env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
+        return (
+            [
+                sys.executable,
+                str(SCRIPT),
+                "complete",
+                "--project",
+                str(project),
+                "--summary",
+                "parallel worktree",
+                "--scope",
+                "test",
+            ],
+            env,
+        )
+
+    first_command, first_env = command(first, first_bin)
+    second_command, second_env = command(second, second_bin)
+    first_process = subprocess.Popen(first_command, cwd=REPO_ROOT, env=first_env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    second_process = subprocess.Popen(second_command, cwd=REPO_ROOT, env=second_env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    first_stdout, first_stderr = first_process.communicate(timeout=30)
+    second_stdout, second_stderr = second_process.communicate(timeout=30)
+
+    assert first_process.returncode == 0, first_stdout + first_stderr
+    assert second_process.returncode == 0, second_stdout + second_stderr
+    assert "cleanup_complete" in first_stdout
+    assert "cleanup_complete" in second_stdout
+    assert git(first, "branch", "--show-current") == ""
+    assert git(second, "branch", "--show-current") == ""
+    assert git(first, "rev-parse", "HEAD") == base_oid
+    assert git(second, "rev-parse", "HEAD") == base_oid
+
+
 def allow_current_base(git_stub, source_oid: str) -> None:
-    git_stub.add(["fetch", "origin", "main"])
-    git_stub.add(["rev-parse", "origin/main"], stdout="a" * 40 + "\n")
+    git_stub.add(["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"])
+    git_stub.add(["rev-parse", "__snapshot_ref__"], stdout="a" * 40 + "\n")
     git_stub.add(["merge-base", "--is-ancestor", "a" * 40, source_oid])
 
 
@@ -580,10 +685,16 @@ def allow_required_checks(gh_stub, bucket: str = "pass") -> None:
     )
 
 
+def remote_snapshot_ref(project: Path) -> str:
+    normalized = os.path.normcase(str(project.resolve())) if os.name == "nt" else str(project.resolve())
+    return f"refs/pr-flow/{hashlib.sha256(normalized.encode('utf-8')).hexdigest()}/base"
+
+
 def allow_cleanup(git_stub, project: Path, head_ref: str = "feature/example", base_ref: str = "main") -> None:
     base_oid = "a" * 40
-    git_stub.add(["fetch", "origin", base_ref])
-    git_stub.add(["rev-parse", f"origin/{base_ref}"], stdout=base_oid + "\n")
+    snapshot_ref = remote_snapshot_ref(project)
+    git_stub.add(["fetch", "--no-write-fetch-head", "--refmap=", "origin", f"+refs/heads/{base_ref}:{snapshot_ref}"])
+    git_stub.add(["rev-parse", snapshot_ref], stdout=base_oid + "\n")
     git_stub.add(["branch", "--show-current"], stdout=head_ref + "\n")
     git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
     git_stub.add(
@@ -1072,9 +1183,10 @@ def run_cleanup_in_process(
     base_ref = pr.get("baseRefName", "main")
     head_ref = pr.get("headRefName", "feature/example")
     base_oid = "a" * 40
+    snapshot_ref = remote_snapshot_ref(project)
     git_stub.add(["status", "--short"], stdout="")
-    git_stub.add(["fetch", "origin", base_ref])
-    git_stub.add(["rev-parse", f"origin/{base_ref}"], stdout=base_oid + "\n")
+    git_stub.add(["fetch", "--no-write-fetch-head", "--refmap=", "origin", f"+refs/heads/{base_ref}:{snapshot_ref}"])
+    git_stub.add(["rev-parse", snapshot_ref], stdout=base_oid + "\n")
     git_stub.add(["branch", "--show-current"], stdout=head_ref + "\n")
     git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
     git_stub.add(
@@ -1997,6 +2109,7 @@ def test_complete_fills_existing_empty_body_before_checks(tmp_path: Path, monkey
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "edit", "12", "--body-file", "__placeholder__"])
     gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
+    allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
     git_stub = CommandStub(consume=True)
     for git_args, stdout in [
@@ -2050,6 +2163,7 @@ def test_complete_appends_repeated_fixes_to_existing_human_body(tmp_path: Path, 
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "edit", "12", "--body-file", "__placeholder__"])
     gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
+    allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
     git_stub = CommandStub(consume=True)
     for git_args, stdout in [
@@ -2104,6 +2218,7 @@ def test_complete_continues_when_existing_human_body_already_has_fixes(tmp_path:
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
+    allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
     git_stub = CommandStub(consume=True)
     for git_args, stdout in [
@@ -2177,6 +2292,8 @@ def test_complete_keeps_existing_human_body_without_fixes(tmp_path: Path, monkey
     assert all(call[:2] != ("pr", "edit") for call in gh_stub.calls)
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["details"]["reason"] == "checks_pending"
+    assert status["details"]["sourceOid"] == "b" * 40
+    assert status["details"]["targetOid"] == "a" * 40
 
 
 def test_init_without_confirmed_config_does_not_write_defaults(tmp_path: Path) -> None:
@@ -2820,6 +2937,8 @@ def test_diagnose_outputs_dispatch_required_without_upstream(tmp_path: Path, mon
         returncode=128,
     )
     git_stub.add(["status", "--short"], stdout="")
+    git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
+    allow_current_base(git_stub, "b" * 40)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", CommandStub())
 
@@ -3184,6 +3303,8 @@ def test_diagnose_retries_transient_eof_without_repeated_stop_output(tmp_path: P
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
     git_stub.add(["status", "--short"], stdout="")
+    git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
+    allow_current_base(git_stub, "b" * 40)
     monkeypatch.setattr(module, "gh", gh_stub)
     monkeypatch.setattr(module, "git", git_stub)
 
@@ -3211,6 +3332,8 @@ def test_diagnose_reports_dispatch_when_transient_eof_retries_are_exhausted(tmp_
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
     git_stub.add(["status", "--short"], stdout="")
+    git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
+    allow_current_base(git_stub, "b" * 40)
     monkeypatch.setattr(module, "gh", gh_stub)
     monkeypatch.setattr(module, "git", git_stub)
 
@@ -3281,6 +3404,8 @@ def test_diagnose_on_feature_branch_without_pr_reports_dispatch_required(tmp_pat
     git_stub.add(["branch", "--show-current"], stdout="feature/ready\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/ready\n")
     git_stub.add(["status", "--short"], stdout="")
+    git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
+    allow_current_base(git_stub, "b" * 40)
     gh_stub = CommandStub()
     gh_stub.add(
         ["pr", "view", "--json", module.PR_VIEW_FIELDS],
@@ -3303,6 +3428,33 @@ def test_diagnose_on_feature_branch_without_pr_reports_dispatch_required(tmp_pat
     assert "--summary" in status["details"]["nextCommand"]
     assert "--scope" in status["details"]["nextCommand"]
     assert status["details"]["optionalFixesArg"] == "--fixes 98"
+
+
+def test_diagnose_rejects_stale_remote_base_before_pr_dispatch(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_minimal_pr_flow_config(project)
+    git_stub = CommandStub()
+    git_stub.add(["branch", "--show-current"], stdout="feature/ready\n")
+    git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/ready\n")
+    git_stub.add(["status", "--short"], stdout="")
+    git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
+    git_stub.add(["fetch", "origin", "main"])
+    git_stub.add(["rev-parse", "origin/main"], stdout="c" * 40 + "\n")
+    git_stub.add(["merge-base", "--is-ancestor", "c" * 40, "b" * 40], returncode=1)
+    gh_stub = CommandStub()
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    result = invoke_pr_flow(["diagnose", "--project", str(project)], module=module)
+
+    assert result.returncode == 1
+    assert "base_outdated" in result.stdout
+    assert gh_stub.calls == []
 
 
 def test_diagnose_existing_empty_body_reports_pr_body_required(tmp_path: Path, monkeypatch) -> None:
@@ -3426,6 +3578,7 @@ def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path
         head_oid=head_oid,
     )
     gh_stub = CommandStub(consume=True)
+    allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found\n", returncode=1)
     gh_stub.add(["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"], stdout="https://github.example/test/repo/pull/12\n")
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
@@ -3486,6 +3639,7 @@ def test_complete_full_flow_uses_configured_squash_strategy(tmp_path: Path, monk
         head_oid=head_oid,
     )
     gh_stub = CommandStub(consume=True)
+    allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     gh_stub.add(["pr", "merge", "12", "--squash", "--match-head-commit", head_oid])
@@ -3531,6 +3685,7 @@ def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path, 
     write_complete_pr_flow_config(project)
     head_oid = "b" * 40
     gh_stub = CommandStub(consume=True)
+    allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED", head_oid=head_oid))
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED", head_oid=head_oid))
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED", head_oid=head_oid))
@@ -3583,6 +3738,7 @@ def test_complete_does_not_run_build_and_verify_full_verify(tmp_path: Path, monk
     write_complete_pr_flow_config(project)
     head_oid = "b" * 40
     gh_stub = CommandStub(consume=True)
+    allow_required_checks(gh_stub)
     for command in [
         ["pr", "view", "--json", module.PR_VIEW_FIELDS],
         ["pr", "view", "--json", module.PR_VIEW_FIELDS],
@@ -3888,6 +4044,8 @@ def test_complete_uses_auto_merge_when_ruleset_suggests_auto(tmp_path: Path, mon
         head_oid=head_oid,
     )
     gh_stub = CommandStub(consume=True)
+    allow_required_checks(gh_stub)
+    allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     gh_stub.add(
@@ -4017,6 +4175,9 @@ def test_complete_waits_for_checks_after_ruleset_block_then_retries_merge(tmp_pa
         head_oid=head_oid,
     )
     gh_stub = CommandStub(consume=True)
+    allow_required_checks(gh_stub)
+    allow_required_checks(gh_stub, "pending")
+    allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     gh_stub.add(
@@ -4085,6 +4246,9 @@ def test_complete_uses_auto_merge_when_ruleset_suggests_auto_after_wait(tmp_path
         head_oid=head_oid,
     )
     gh_stub = CommandStub(consume=True)
+    allow_required_checks(gh_stub)
+    allow_required_checks(gh_stub, "pending")
+    allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     gh_stub.add(
