@@ -833,6 +833,7 @@ def write_fake_gh_sequence(bin_dir: Path, responses: list[dict[str, object]]) ->
 def pr_view_json(
     *,
     checks: list[dict],
+    state: str = "OPEN",
     review_decision: str = "REVIEW_REQUIRED",
     head_oid: str | None = None,
     base_oid: str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -841,7 +842,7 @@ def pr_view_json(
 ) -> str:
     payload = {
         "number": 12,
-        "state": "OPEN",
+        "state": state,
         "isDraft": is_draft,
         "mergeStateStatus": "BLOCKED",
         "reviewDecision": review_decision,
@@ -3586,6 +3587,91 @@ def test_diagnose_outputs_stop_state_matrix(
             assert value in status["details"]["nextCommand"]
         else:
             assert status["details"][key] == value
+
+
+@pytest.mark.parametrize(
+    ("state", "is_active"),
+    [("OPEN", True), ("MERGED", False), ("CLOSED", False)],
+)
+def test_find_pr_treats_only_open_pr_as_active(tmp_path: Path, monkeypatch, state: str, is_active: bool) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    gh_stub = CommandStub()
+    gh_stub.add(
+        ["pr", "view", "--json", module.PR_VIEW_FIELDS],
+        stdout=pr_view_json(checks=[], state=state, head_oid="c" * 40),
+    )
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    pr = module.find_pr(project)
+
+    assert (pr is not None) is is_active
+
+
+@pytest.mark.parametrize("command", ["complete", "tweak"])
+@pytest.mark.parametrize("terminal_state", ["MERGED", "CLOSED"])
+def test_terminal_pr_starts_new_lifecycle_from_current_head(
+    tmp_path: Path, monkeypatch, command: str, terminal_state: str
+) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_complete_pr_flow_config(project)
+    current_head = "b" * 40
+    old_head = "c" * 40
+    active_pr = pr_view_json(
+        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        review_decision="APPROVED",
+        head_oid=current_head,
+    )
+    gh_stub = CommandStub(consume=True)
+    gh_stub.add(
+        ["pr", "view", "--json", module.PR_VIEW_FIELDS],
+        stdout=pr_view_json(checks=[], state=terminal_state, head_oid=old_head),
+    )
+    gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fexample", "--jq", "length"], stdout="0\n")
+    gh_stub.add(["pr", "create", "--base", "main", "--fill"], stdout="https://github.example/test/repo/pull/12\n")
+    for _ in range(3):
+        gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=active_pr)
+    git_stub = CommandStub(consume=True)
+    for args, stdout in [
+        (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
+        (["rev-list", "--count", "@{u}..HEAD"], "1\n"),
+        (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
+        (["status", "--porcelain"], ""),
+        (["rev-parse", "HEAD"], current_head + "\n"),
+        (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
+        (["rev-parse", "__snapshot_ref__"], "a" * 40 + "\n"),
+        (["merge-base", "--is-ancestor", "a" * 40, current_head], ""),
+        (["push"], ""),
+        (["branch", "--show-current"], "feature/example\n"),
+    ]:
+        git_stub.add(args, stdout=stdout)
+    monkeypatch.setattr(module, "gh", gh_stub)
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "wait_for_checks", lambda *_args: None)
+    monkeypatch.setattr(module, "check_review_gate", lambda *_args: None)
+    monkeypatch.setattr(module, "merge_pr", lambda *_args: None)
+    monkeypatch.setattr(module, "run_cleanup", lambda *_args: 0)
+
+    result = module.run_lifecycle(
+        project,
+        module.load_config(project),
+        command,
+        skip_review_gate=command == "tweak",
+    )
+
+    assert result == 0
+    assert ("pr", "create", "--base", "main", "--fill") in gh_stub.calls
+    assert ("push",) in git_stub.calls
+    assert ("merge-base", "--is-ancestor", "a" * 40, current_head) in git_stub.calls
+    assert all(old_head not in call for call in git_stub.calls)
 
 
 def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path: Path, monkeypatch) -> None:
