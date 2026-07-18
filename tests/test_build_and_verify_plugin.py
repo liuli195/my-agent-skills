@@ -1616,6 +1616,80 @@ def test_build_and_verify_init_config_overwrite_e2e_temp_target_repo(
     assert (target / "e2e.log").read_text(encoding="utf-8").splitlines() == ["verify"]
 
 
+def test_copied_runtime_full_performance_report_e2e_temp_target_repo(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
+    runtime_script = project / ".build-and-verify" / "runtime" / "build_and_verify.py"
+    slow_check = (
+        "import time; from pathlib import Path; time.sleep(1.05); "
+        "Path('performance.log').open('a', encoding='utf-8').write('slow\\n')"
+    )
+    marker_check = (
+        "from pathlib import Path; "
+        "Path('performance.log').open('a', encoding='utf-8').write('marker\\n')"
+    )
+    write_runner_config(
+        project,
+        verify_checks=[
+            {"id": "slow", "command": [sys.executable, "-c", slow_check], "inputs": []},
+            {"id": "marker", "command": [sys.executable, "-c", marker_check], "inputs": []},
+        ],
+        verify_config={"fullBudgetSeconds": 1},
+    )
+
+    automatic = subprocess.run(
+        [sys.executable, str(runtime_script), "verify", "--project", str(project), "--full"],
+        cwd=project,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    report_path = project / ".build-and-verify" / "runs" / "performance-report.json"
+    assert automatic.returncode == 0, automatic.stdout + automatic.stderr
+    assert "performance-warning:" in automatic.stdout
+    assert (project / "performance.log").read_text(encoding="utf-8").splitlines() == [
+        "slow",
+        "marker",
+    ]
+    automatic_report = read_json(report_path)
+    assert automatic_report["overBudget"] is True
+
+    explicit_check = (
+        "from pathlib import Path; "
+        "Path('performance.log').open('a', encoding='utf-8').write('explicit\\n')"
+    )
+    write_runner_config(
+        project,
+        verify_checks=[
+            {"id": "explicit", "command": [sys.executable, "-c", explicit_check], "inputs": []}
+        ],
+    )
+
+    explicit = subprocess.run(
+        [
+            sys.executable,
+            str(runtime_script),
+            "verify",
+            "--project",
+            str(project),
+            "--full",
+            "--performance-report",
+        ],
+        cwd=project,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert explicit.returncode == 0, explicit.stdout + explicit.stderr
+    assert read_json(report_path)["budgetSeconds"] is None
+    assert read_json(report_path)["overBudget"] is None
+
+
 def test_copied_repository_runtime_can_initialize_another_project(tmp_path: Path) -> None:
     source_project = tmp_path / "source"
     target_project = tmp_path / "target"

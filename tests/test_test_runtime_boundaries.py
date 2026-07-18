@@ -474,6 +474,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     "tests/test_build_and_verify_plugin.py::test_build_and_verify_init_config_overwrite_e2e_temp_target_repo": (
         "covers packaged init entrypoint and copied runtime fast-verify entrypoint"
     ),
+    "tests/test_build_and_verify_plugin.py::test_copied_runtime_full_performance_report_e2e_temp_target_repo": (
+        "covers copied runtime full-verify performance-report entrypoint"
+    ),
     "tests/test_build_and_verify_plugin.py::test_copied_repository_runtime_can_initialize_another_project": (
         "covers copied repository runtime init entrypoint"
     ),
@@ -982,6 +985,7 @@ CURRENT_E2E_ALLOWLIST_IDENTITIES = {
     "tests/test_agent_guard_runtime_session_focus.py::test_hook_adapter_converts_codex_and_claude_lifecycle_payloads",
     "tests/test_agent_guard_runtime_session_focus.py::test_session_start_writes_observation_and_missing_observation_blocks_activation",
     "tests/test_build_and_verify_plugin.py::test_build_and_verify_init_config_overwrite_e2e_temp_target_repo",
+    "tests/test_build_and_verify_plugin.py::test_copied_runtime_full_performance_report_e2e_temp_target_repo",
     "tests/test_build_and_verify_plugin.py::test_build_and_verify_user_level_skill_path_runs_verify_without_git",
     "tests/test_build_and_verify_plugin.py::test_copied_repository_runtime_can_initialize_another_project",
     "tests/test_build_and_verify_plugin.py::test_copied_repository_runtime_can_update_itself",
@@ -1144,6 +1148,7 @@ def test_build_and_verify_keeps_focused_real_entrypoint_coverage() -> None:
 
     assert build_and_verify_entries == [
         "tests/test_build_and_verify_plugin.py::test_build_and_verify_init_config_overwrite_e2e_temp_target_repo",
+        "tests/test_build_and_verify_plugin.py::test_copied_runtime_full_performance_report_e2e_temp_target_repo",
         "tests/test_build_and_verify_plugin.py::test_copied_repository_runtime_can_initialize_another_project",
         "tests/test_build_and_verify_plugin.py::test_build_and_verify_user_level_skill_path_runs_verify_without_git",
         "tests/test_build_and_verify_plugin.py::test_copied_repository_runtime_can_update_itself",
