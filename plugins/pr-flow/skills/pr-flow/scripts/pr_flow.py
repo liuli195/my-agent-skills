@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
 import hashlib
 import hmac
@@ -189,15 +190,51 @@ def validate_config(config: dict[str, Any], project: Path | None = None) -> list
     return issues
 
 
+def stable_key(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def worktree_context(project: Path) -> dict[str, str]:
+    worktree = resolve_project(project)
+    result = git(worktree, "rev-parse", "--git-common-dir")
+    common = result.stdout.strip() if result.returncode == 0 else ".git"
+    common_path = Path(common)
+    common_dir = common_path.resolve() if common_path.is_absolute() else (worktree / common_path).resolve()
+    normalized = os.path.normcase(str(worktree)) if os.name == "nt" else str(worktree)
+    return {
+        "worktreePath": str(worktree),
+        "commonGitDir": str(common_dir),
+        "worktreeKey": stable_key(normalized),
+    }
+
+
+def status_source_branch(project: Path, details: dict[str, Any]) -> str:
+    for key in ("sourceBranch", "headRefName", "branch"):
+        value = details.get(key)
+        if isinstance(value, str) and value:
+            return value
+    result = git(project, "branch", "--show-current")
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
 def write_status(project: Path, command: str, status: str, details: dict) -> None:
-    status_path = project / ".pr-flow" / "last-status.json"
-    status_path.parent.mkdir(parents=True, exist_ok=True)
+    status_dir = project / ".pr-flow"
+    status_dir.mkdir(parents=True, exist_ok=True)
+    enriched = {**worktree_context(project), **details}
+    source_branch = status_source_branch(project, enriched)
+    if source_branch:
+        enriched.setdefault("sourceBranch", source_branch)
     payload = {
         "status": status,
         "command": command,
-        "details": details,
+        "details": enriched,
     }
-    status_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    (status_dir / "last-status.json").write_text(text, encoding="utf-8")
+    if source_branch:
+        runs_dir = status_dir / "runs"
+        runs_dir.mkdir(exist_ok=True)
+        (runs_dir / f"{stable_key(source_branch)}.json").write_text(text, encoding="utf-8")
 
 
 def print_stop(status: str, message: str) -> None:
@@ -239,6 +276,103 @@ class PrFlowError(RuntimeError):
         self.reason = str(details.get("reason") or reason)
         super().__init__(self.reason)
         self.details = details
+
+
+def lock_file_path(project: Path) -> Path:
+    context = worktree_context(project)
+    return Path(context["commonGitDir"]) / "pr-flow-locks" / f"{context['worktreeKey']}.lock"
+
+
+def try_file_lock(handle: Any) -> bool:
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+    import fcntl
+
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def unlock_file(handle: Any) -> None:
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def read_lock_metadata(handle: Any) -> dict[str, Any]:
+    handle.seek(1)
+    try:
+        value = json.loads(handle.read().decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, PermissionError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+@contextlib.contextmanager
+def operation_lock(project: Path, command: str, args: argparse.Namespace):
+    path = lock_file_path(project)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        if path.stat().st_size == 0:
+            handle.write(b"\0")
+            handle.flush()
+        if not try_file_lock(handle):
+            details = read_lock_metadata(handle)
+            details.setdefault("reason", "flow_locked")
+            raise PrFlowError("flow_locked", details)
+        try:
+            branch = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=project,
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            metadata = {
+                "reason": "flow_locked",
+                "command": command,
+                "worktree": str(resolve_project(project)),
+                "sourceBranch": branch.stdout.strip() if branch.returncode == 0 else "",
+                "pid": os.getpid(),
+                "actor": hotfix_actor(project),
+                "nextCommand": command_next_command(command, project, args),
+            }
+            handle.seek(1)
+            handle.truncate()
+            handle.write(json.dumps(metadata, ensure_ascii=False).encode("utf-8"))
+            handle.flush()
+            yield
+        finally:
+            unlock_file(handle)
+
+
+def active_lock_details(project: Path) -> dict[str, Any] | None:
+    path = lock_file_path(project)
+    if not path.exists():
+        return None
+    with path.open("a+b") as handle:
+        if path.stat().st_size == 0:
+            handle.write(b"\0")
+            handle.flush()
+        if try_file_lock(handle):
+            unlock_file(handle)
+            return None
+        return read_lock_metadata(handle)
 
 
 def stop(project: Path, command: str, status: str, message: str, details: dict[str, Any]) -> int:
@@ -1805,18 +1939,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "validate":
         return run_validate(args)
     if args.command == "diagnose":
+        active = active_lock_details(resolve_project(args.project))
+        if active is not None:
+            print_stop("DISPATCH_REQUIRED", "flow_locked")
+            print(json.dumps(active, ensure_ascii=False))
+            return 1
         return run_diagnose(args)
-    if args.command == "complete":
-        return run_complete(args)
-    if args.command == "cleanup":
-        return run_cleanup(args)
-    if args.command == "hotfix":
-        return run_hotfix(args)
     if args.command == "tweak" and (args.reason is None or not args.reason.strip()):
         print_stop("tweak_requires_reason", "tweak_requires_reason: --reason")
         return 2
-    if args.command == "tweak":
-        return run_tweak(args)
+    runners = {
+        "complete": run_complete,
+        "cleanup": run_cleanup,
+        "hotfix": run_hotfix,
+        "tweak": run_tweak,
+    }
+    if args.command in runners:
+        project = resolve_project(args.project)
+        try:
+            with operation_lock(project, args.command, args):
+                return runners[args.command](args)
+        except PrFlowError as exc:
+            if exc.reason != "flow_locked":
+                raise
+            print_stop("DISPATCH_REQUIRED", "flow_locked")
+            print(json.dumps(exc.details, ensure_ascii=False))
+            return 1
     return 2
 
 

@@ -1,3 +1,4 @@
+import argparse
 import contextlib
 import hashlib
 import importlib.util
@@ -253,6 +254,52 @@ def init_repo(project: Path) -> str:
     git(project, "add", "README.md")
     git(project, "commit", "-m", "init")
     return git(project, "branch", "--show-current")
+
+
+def test_write_status_keeps_compatibility_file_and_branch_run(tmp_path: Path) -> None:
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    init_repo(project)
+
+    module.write_status(project, "complete", "ready", {"sourceBranch": "feature/one"})
+
+    latest = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
+    runs = list((project / ".pr-flow/runs").glob("*.json"))
+    assert len(runs) == 1
+    assert json.loads(runs[0].read_text(encoding="utf-8")) == latest
+    assert latest["details"]["sourceBranch"] == "feature/one"
+    assert Path(latest["details"]["worktreePath"]) == project.resolve()
+    assert latest["details"]["commonGitDir"]
+
+
+def test_competing_mutation_reports_lock_without_rewriting_status(tmp_path: Path, capsys) -> None:
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    init_repo(project)
+    module.write_status(project, "complete", "ready", {"sourceBranch": "feature/one"})
+    before = (project / ".pr-flow/last-status.json").read_bytes()
+
+    with module.operation_lock(project, "complete", argparse.Namespace(project=project)):
+        result = module.main(["cleanup", "--project", str(project), "--pr", "12"])
+
+    assert result == 1
+    assert "flow_locked" in capsys.readouterr().out
+    assert (project / ".pr-flow/last-status.json").read_bytes() == before
+
+
+def test_diagnose_reports_active_lock_without_writing_status(tmp_path: Path, capsys) -> None:
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    init_repo(project)
+
+    with module.operation_lock(project, "complete", argparse.Namespace(project=project)):
+        assert module.main(["diagnose", "--project", str(project)]) == 1
+
+    output = capsys.readouterr().out
+    assert "flow_locked" in output
+    assert "actor" in output
+    assert "nextCommand" in output
+    assert not (project / ".pr-flow/last-status.json").exists()
 
 
 def init_feature_branch(project: Path) -> None:
