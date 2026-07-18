@@ -503,6 +503,70 @@ def test_cleanup_retry_from_latest_detached_base_finishes(tmp_path: Path, monkey
     assert "cleanup_complete" in result.stdout
 
 
+def test_linked_worktrees_use_independent_process_locks_and_status(tmp_path: Path) -> None:
+    project = tmp_path / "first"
+    assert init_repo(project) == "main"
+    write_minimal_pr_flow_config(project)
+    git(project, "add", ".pr-flow")
+    git(project, "commit", "-m", "configure pr flow")
+    git(project, "checkout", "-b", "feature/one")
+    other = tmp_path / "second"
+    git(project, "worktree", "add", "-b", "feature/two", str(other), "main")
+    ready = tmp_path / "ready"
+    release = tmp_path / "release"
+    holder_code = """
+import argparse
+import importlib.util
+import pathlib
+import sys
+import time
+spec = importlib.util.spec_from_file_location("pr_flow_holder", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+project = pathlib.Path(sys.argv[2])
+with module.operation_lock(project, "complete", argparse.Namespace(project=project)):
+    pathlib.Path(sys.argv[3]).write_text("ready", encoding="utf-8")
+    while not pathlib.Path(sys.argv[4]).exists():
+        time.sleep(0.02)
+"""
+    holder = subprocess.Popen(
+        [sys.executable, "-c", holder_code, str(SCRIPT), str(project), str(ready), str(release)],
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert ready.exists(), holder.communicate(timeout=1)
+
+        independent = subprocess.run(
+            [sys.executable, str(SCRIPT), "diagnose", "--project", str(other)],
+            cwd=REPO_ROOT,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        competing = subprocess.run(
+            [sys.executable, str(SCRIPT), "cleanup", "--project", str(project), "--pr", "12"],
+            cwd=REPO_ROOT,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+
+        assert "flow_locked" not in independent.stdout
+        assert (other / ".pr-flow/last-status.json").exists()
+        assert "flow_locked" in competing.stdout
+        assert not (project / ".pr-flow/last-status.json").exists()
+    finally:
+        release.touch()
+        holder.communicate(timeout=10)
+
+
 def allow_current_base(git_stub, source_oid: str) -> None:
     git_stub.add(["fetch", "origin", "main"])
     git_stub.add(["rev-parse", "origin/main"], stdout="a" * 40 + "\n")

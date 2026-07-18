@@ -1,0 +1,8 @@
+{
+  "openspec_proposal": "openspec/changes/support-parallel-pr-flow-worktrees/proposal.md",
+  "openspec_design": "openspec/changes/support-parallel-pr-flow-worktrees/design.md",
+  "openspec_tasks": "openspec/changes/support-parallel-pr-flow-worktrees/tasks.md",
+  "openspec_delta_spec": "openspec/changes/support-parallel-pr-flow-worktrees/specs/pr-flow-plugin/spec.md",
+  "handoff_context": "openspec/changes/support-parallel-pr-flow-worktrees/.comet/handoff/spec-context.json",
+  "handoff_markdown": "openspec/changes/support-parallel-pr-flow-worktrees/.comet/handoff/spec-context.md"
+}
