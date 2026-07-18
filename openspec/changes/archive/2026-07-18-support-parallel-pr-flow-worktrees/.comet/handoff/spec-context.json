@@ -1,0 +1,30 @@
+{
+  "change": "support-parallel-pr-flow-worktrees",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "441c17c22d300c23253e6181953f30d273f86c0078c1cc0fa96fe7a556c2c4e1",
+  "files": [
+    {
+      "path": "openspec/changes/support-parallel-pr-flow-worktrees/proposal.md",
+      "sha256": "6e2ae42f953cd177e3189e0cefd899ad67bd0bfaa7dc0c7e28cc97fd8ec11b43",
+      "role": "supporting"
+    },
+    {
+      "path": "openspec/changes/support-parallel-pr-flow-worktrees/design.md",
+      "sha256": "3acd47e2cc8577275b0ad30d035fd17b15a401429924b6d80ae834161bdd4a3a",
+      "role": "supporting"
+    },
+    {
+      "path": "openspec/changes/support-parallel-pr-flow-worktrees/tasks.md",
+      "sha256": "6e03225fbc12acef2288263eb4d56039418204333b9b707e9462fa603bb75930",
+      "role": "supporting"
+    },
+    {
+      "path": "openspec/changes/support-parallel-pr-flow-worktrees/specs/pr-flow-plugin/spec.md",
+      "sha256": "c75b2189608aa02ef076664e4aaf3fb89c923988d8974e2b8d80a6e2e68c5013",
+      "role": "spec"
+    }
+  ]
+}
