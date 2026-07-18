@@ -193,12 +193,15 @@ class FakeRunnerModule:
         runtime_version: str = "unknown",
     ) -> int:
         def call_runner() -> int:
-            kwargs: dict[str, Any] = {"runner": self.runner, "full": full}
-            if performance_report:
-                kwargs["performance_report"] = performance_report
-            if runtime_version != "unknown":
-                kwargs["runtime_version"] = runtime_version
-            return int(self.runner_module.run_verify(project, **kwargs))
+            return int(
+                self.runner_module.run_verify(
+                    project,
+                    runner=self.runner,
+                    full=full,
+                    performance_report=performance_report,
+                    runtime_version=runtime_version,
+                )
+            )
 
         if self.changed_files is None:
             return call_runner()
@@ -2469,12 +2472,15 @@ def test_build_and_verify_runner_full_verify_allows_empty_checks(tmp_path: Path)
     project.mkdir()
     assert run_build_and_verify("init", "--project", str(project)).returncode == 0
 
-    result = run_check(project, "verify", "--full")
+    result = run_check(project, "verify", "--full", "--performance-report")
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "checked:" in result.stdout
     assert "full-not-run: false" in result.stdout
     assert "status: passed" in result.stdout
+    assert read_json(
+        project / ".build-and-verify" / "runs" / "performance-report.json"
+    )["checks"] == []
 
 
 @pytest.mark.parametrize("value", [True, 0, -1, 1.5, "1"])
@@ -2567,6 +2573,192 @@ def test_build_and_verify_full_performance_report_matrix(
         assert report["verificationStatus"] == (
             "failed" if functional_returncode else "passed"
         )
+
+
+def test_build_and_verify_performance_report_schema_is_exact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(
+        project,
+        verify_checks=[
+            {"id": "first", "command": ["first"], "inputs": []},
+            {"id": "second", "command": ["second"], "inputs": []},
+        ],
+    )
+    runner = FakeRunner(
+        {
+            ("first",): completed(["first"]),
+            ("second",): completed(["second"], returncode=1),
+        }
+    )
+    ticks = iter([0.0, 0.0, 1.234, 2.0, 4.567, 10.0])
+    monkeypatch.setattr(
+        load_build_and_verify_runner_module().time, "monotonic", lambda: next(ticks)
+    )
+
+    result = run_check(
+        project,
+        "verify",
+        "--full",
+        "--performance-report",
+        runner=runner,
+        changed_files=[],
+    )
+
+    assert result.returncode == 1
+    report = read_json(
+        project / ".build-and-verify" / "runs" / "performance-report.json"
+    )
+    assert set(report) == {
+        "schemaVersion",
+        "runtimeVersion",
+        "generatedAt",
+        "totalSeconds",
+        "budgetSeconds",
+        "overBudget",
+        "verificationStatus",
+        "checks",
+    }
+    assert report["generatedAt"].endswith("Z")
+    assert report["checks"] == [
+        {"id": "first", "status": "passed", "durationSeconds": 1.23},
+        {"id": "second", "status": "failed", "durationSeconds": 2.57},
+    ]
+
+
+def test_build_and_verify_incomplete_full_results_skip_performance(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(
+        project,
+        verify_checks=[
+            {
+                "id": "interrupted",
+                "command": ["interrupted"],
+                "checkParallel": True,
+                "inputs": [],
+            },
+            {
+                "id": "not-returned",
+                "command": ["not-returned"],
+                "checkParallel": True,
+                "inputs": [],
+            },
+        ],
+        verify_config={"fullBudgetSeconds": 1},
+    )
+    report_path = project / ".build-and-verify" / "runs" / "performance-report.json"
+    report_path.parent.mkdir(parents=True)
+    original = b"{\"previous\": true}\n"
+    report_path.write_bytes(original)
+    runner = FakeRunner({("interrupted",): KeyboardInterrupt("interrupted")})
+
+    result = run_check(
+        project,
+        "verify",
+        "--full",
+        "--performance-report",
+        runner=runner,
+        changed_files=[],
+    )
+
+    assert result.returncode == 1
+    assert "performance-warning:" not in result.stdout
+    assert "performance-report" not in result.stdout + result.stderr
+    assert report_path.read_bytes() == original
+
+
+def test_build_and_verify_fast_verify_leaves_performance_report_unchanged(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(
+        project,
+        verify_checks=[{"id": "fast", "command": ["fast"], "inputs": []}],
+        verify_config={"fullBudgetSeconds": 1},
+    )
+    report_path = project / ".build-and-verify" / "runs" / "performance-report.json"
+    report_path.parent.mkdir(parents=True)
+    original = b"{\"previous\": true}\n"
+    report_path.write_bytes(original)
+
+    result = run_check(
+        project,
+        "verify",
+        runner=FakeRunner(),
+        changed_files=["src/app.py"],
+    )
+
+    assert result.returncode == 0
+    assert "performance" not in result.stdout + result.stderr
+    assert report_path.read_bytes() == original
+
+
+def test_build_and_verify_report_write_failure_preserves_functional_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(
+        project,
+        verify_checks=[{"id": "verify", "command": ["verify"], "inputs": []}],
+    )
+    path_type = type(project)
+    original_write_text = path_type.write_text
+
+    def fail_report_temp(self, *args, **kwargs):
+        if self.name == ".performance-report.json.tmp":
+            raise OSError("write failed")
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(path_type, "write_text", fail_report_temp)
+
+    result = run_check(
+        project,
+        "verify",
+        "--full",
+        "--performance-report",
+        runner=FakeRunner(),
+        changed_files=[],
+    )
+
+    assert result.returncode == 0
+    assert "performance-report-warning:" in result.stderr
+
+
+def test_build_and_verify_performance_report_replaces_atomically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(
+        project,
+        verify_checks=[{"id": "verify", "command": ["verify"], "inputs": []}],
+    )
+    path_type = type(project)
+    original_replace = path_type.replace
+    replacements: list[tuple[str, str]] = []
+
+    def track_replace(self, target):
+        replacements.append((self.name, Path(target).name))
+        return original_replace(self, target)
+
+    monkeypatch.setattr(path_type, "replace", track_replace)
+
+    result = run_check(
+        project,
+        "verify",
+        "--full",
+        "--performance-report",
+        runner=FakeRunner(),
+        changed_files=[],
+    )
+
+    assert result.returncode == 0
+    assert (".performance-report.json.tmp", "performance-report.json") in replacements
 
 
 def test_build_and_verify_runner_rejects_legacy_parallel_field(tmp_path: Path) -> None:
