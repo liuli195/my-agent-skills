@@ -1,0 +1,14 @@
+{
+  "change": "refactor-pr-flow-init",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "29ae2628a69c4916d7f5e3bc7e3a8cb2ac097f69f75b451a5a0eb2b1f2afe198",
+  "files": [
+    { "path": "openspec/changes/refactor-pr-flow-init/proposal.md", "sha256": "2458b55449b0b42d9e91c3f06058f54ceac58d9f7e0f99685c734c6e6d3d3739", "role": "supporting" },
+    { "path": "openspec/changes/refactor-pr-flow-init/design.md", "sha256": "06e2527bed2e839484e0ee48177caceaf95eb0d37f911d81c242507bd01e1260", "role": "supporting" },
+    { "path": "openspec/changes/refactor-pr-flow-init/tasks.md", "sha256": "42cb4ed41ff60719d15102ffedc38ba90b8ff76756c51ccf78f94006d84037d7", "role": "supporting" },
+    { "path": "openspec/changes/refactor-pr-flow-init/specs/pr-flow-plugin/spec.md", "sha256": "5e3cbbb5a41f7458fb4220e048cac53205da66812ad22432bd5786080c204089", "role": "spec" }
+  ]
+}

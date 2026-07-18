@@ -1,0 +1,3 @@
+- [x] 添加 dry-run（试运行）语义的失败测试。
+- [x] 删除误导性 dry-run（试运行）入口并修正 `publish --dry-run`（发布试运行）输出字段。
+- [x] 同步 Release Flow（发布流程）OpenSpec（开放规格）并运行相关验证。

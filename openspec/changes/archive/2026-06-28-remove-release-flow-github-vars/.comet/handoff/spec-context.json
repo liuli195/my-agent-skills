@@ -1,0 +1,14 @@
+{
+  "change": "remove-release-flow-github-vars",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "c8557bdbdb223a076b6c83f05ee78e8d612ce0748aec954c4eeca9a52d7ab38f",
+  "files": [
+    { "path": "openspec/changes/remove-release-flow-github-vars/proposal.md", "sha256": "d59b5c01e854f70ca57cf6386106ca8a8ff9a5f6624d499c3a8f062ff9adc3c8", "role": "supporting" },
+    { "path": "openspec/changes/remove-release-flow-github-vars/design.md", "sha256": "c04540004e5b7514dcf62c5bffcdf0a3f7b5f84efb9d084b53f93ea8945ee266", "role": "supporting" },
+    { "path": "openspec/changes/remove-release-flow-github-vars/tasks.md", "sha256": "e6dc0dfe703e682da7f80d45493f8b10d9c96dabff85e30b016aaaccf0dfa478", "role": "supporting" },
+    { "path": "openspec/changes/remove-release-flow-github-vars/specs/release-flow-plugin/spec.md", "sha256": "71a9533ba8b228c001535bae9f4f4fdc6f5e24525794a97adaec809298e38667", "role": "spec" }
+  ]
+}
