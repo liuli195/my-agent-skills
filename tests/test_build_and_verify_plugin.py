@@ -184,13 +184,28 @@ class FakeRunnerModule:
     def run_build(self, project: Path) -> int:
         return int(self.runner_module.run_build(project, runner=self.runner))
 
-    def run_verify(self, project: Path, *, full: bool = False) -> int:
+    def run_verify(
+        self,
+        project: Path,
+        *,
+        full: bool = False,
+        performance_report: bool = False,
+        runtime_version: str = "unknown",
+    ) -> int:
+        def call_runner() -> int:
+            kwargs: dict[str, Any] = {"runner": self.runner, "full": full}
+            if performance_report:
+                kwargs["performance_report"] = performance_report
+            if runtime_version != "unknown":
+                kwargs["runtime_version"] = runtime_version
+            return int(self.runner_module.run_verify(project, **kwargs))
+
         if self.changed_files is None:
-            return int(self.runner_module.run_verify(project, runner=self.runner, full=full))
+            return call_runner()
         original_changed_files = self.runner_module._changed_files
         self.runner_module._changed_files = lambda _project: list(self.changed_files)
         try:
-            return int(self.runner_module.run_verify(project, runner=self.runner, full=full))
+            return call_runner()
         finally:
             self.runner_module._changed_files = original_changed_files
 
@@ -2460,6 +2475,98 @@ def test_build_and_verify_runner_full_verify_allows_empty_checks(tmp_path: Path)
     assert "checked:" in result.stdout
     assert "full-not-run: false" in result.stdout
     assert "status: passed" in result.stdout
+
+
+@pytest.mark.parametrize("value", [True, 0, -1, 1.5, "1"])
+def test_build_and_verify_invalid_full_budget_rejects_before_checks(
+    tmp_path: Path, value: object
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(
+        project,
+        verify_checks=[{"id": "verify", "command": ["verify"], "inputs": []}],
+        verify_config={"fullBudgetSeconds": value},
+    )
+    runner = FakeRunner()
+
+    result = run_check(project, "verify", "--full", runner=runner, changed_files=[])
+
+    assert result.returncode == 1
+    assert "verify.fullBudgetSeconds must be positive integer" in result.stderr
+    assert runner.calls == []
+
+
+def test_build_and_verify_performance_report_requires_full(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(
+        project,
+        verify_checks=[{"id": "verify", "command": ["verify"], "inputs": []}],
+    )
+    runner = FakeRunner()
+
+    result = run_check(project, "verify", "--performance-report", runner=runner)
+
+    assert result.returncode == 2
+    assert "--performance-report requires --full" in result.stderr
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize(
+    ("budget", "total", "explicit_report", "functional_returncode", "writes_report", "warns"),
+    [
+        (10, 9.00, False, 0, False, False),
+        (10, 9.00, True, 0, True, False),
+        (10, 10.004, False, 0, False, False),
+        (10, 11.00, False, 0, True, True),
+        (10, 11.00, True, 1, True, True),
+        (None, 9.00, True, 0, True, False),
+    ],
+)
+def test_build_and_verify_full_performance_report_matrix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    budget: int | None,
+    total: float,
+    explicit_report: bool,
+    functional_returncode: int,
+    writes_report: bool,
+    warns: bool,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    verify_config = {"fullBudgetSeconds": budget} if budget is not None else None
+    write_runner_config(
+        project,
+        verify_checks=[{"id": "verify", "command": ["verify"], "inputs": []}],
+        verify_config=verify_config,
+    )
+    runner = FakeRunner(
+        {("verify",): completed(["verify"], returncode=functional_returncode)}
+    )
+    ticks = iter([0.0, 0.0, 0.0, total])
+    monkeypatch.setattr(
+        load_build_and_verify_runner_module().time, "monotonic", lambda: next(ticks)
+    )
+    args = ["verify", "--full"]
+    if explicit_report:
+        args.append("--performance-report")
+
+    result = run_check(project, *args, runner=runner, changed_files=[])
+
+    assert result.returncode == (1 if functional_returncode else 0)
+    assert ("performance-warning:" in result.stdout) is warns
+    report_path = project / ".build-and-verify" / "runs" / "performance-report.json"
+    assert report_path.exists() is writes_report
+    if writes_report:
+        report = read_json(report_path)
+        assert report["totalSeconds"] == round(total, 2)
+        assert report["budgetSeconds"] == budget
+        assert report["overBudget"] is (total > budget if budget is not None else None)
+        assert report["verificationStatus"] == (
+            "failed" if functional_returncode else "passed"
+        )
 
 
 def test_build_and_verify_runner_rejects_legacy_parallel_field(tmp_path: Path) -> None:
