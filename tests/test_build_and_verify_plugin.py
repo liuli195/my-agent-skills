@@ -812,7 +812,7 @@ def test_build_and_verify_plugin_has_dual_manifests() -> None:
     assert codex_manifest["name"] == PLUGIN_NAME
     assert claude_manifest["name"] == PLUGIN_NAME
     assert codex_manifest["version"] == claude_manifest["version"]
-    assert codex_manifest["version"] == "0.1.37"
+    assert codex_manifest["version"]
     assert codex_manifest["description"] == PLUGIN_DESCRIPTION
     assert claude_manifest["description"] == PLUGIN_DESCRIPTION
     assert codex_manifest["skills"] == "./skills"
@@ -1503,7 +1503,9 @@ def test_build_and_verify_init_copies_repository_runtime(tmp_path: Path) -> None
         "build_and_verify_runner.py",
         "version.json",
     ]
-    assert read_json(runtime / "version.json")["runtime_version"] == "0.1.37"
+    assert read_json(runtime / "version.json")["runtime_version"] == read_json(
+        PLUGIN_ROOT / ".codex-plugin" / "plugin.json"
+    )["version"]
 
 
 def test_build_and_verify_init_writes_confirmed_config_with_overwrite(
