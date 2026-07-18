@@ -44,7 +44,7 @@ base-ref: 897308bf86dfd47024749812f9a7abada2826d31
 - Consumes: 现有 `git()`、`write_status()`、`command_next_command()`、`hotfix_actor()` 和 `main()`。
 - Produces: `worktree_context(project) -> dict[str, str]`、`stable_key(value) -> str`、`operation_lock(project, command, args)`；后续任务通过上下文字段和外层锁运行。测试直接复用现有 `init_repo()`，不新增测试框架。
 
-- [ ] **Step 1: 写入隔离状态和锁竞争的失败测试**
+- [x] **Step 1: 写入隔离状态和锁竞争的失败测试**
 
 在 `tests/test_pr_flow_cli.py` 增加定向测试，复用 `load_pr_flow_module()` 和现有 Git（版本控制）初始化助手；断言两个工作树写入不同分支状态，同一工作树的锁竞争不覆盖任何状态，diagnose（诊断）只输出持锁者信息：
 
@@ -91,13 +91,13 @@ def test_diagnose_reports_active_lock_without_writing_status(tmp_path: Path, cap
     assert not (project / ".pr-flow/last-status.json").exists()
 ```
 
-- [ ] **Step 2: 运行测试并确认 RED（失败）**
+- [x] **Step 2: 运行测试并确认 RED（失败）**
 
 Run: `python -m pytest -q -p no:cacheprovider tests/test_pr_flow_cli.py -k "write_status_keeps or competing_mutation or diagnose_reports_active_lock"`
 
 Expected: FAIL（失败），因为分支状态、上下文和 `operation_lock` 尚不存在。
 
-- [ ] **Step 3: 在现有脚本实现最小工作树上下文、双写状态和文件锁**
+- [x] **Step 3: 在现有脚本实现最小工作树上下文、双写状态和文件锁**
 
 在 `pr_flow.py` 顶部增加 `hashlib`、`contextlib` 和平台锁所需的标准库导入。紧邻 `write_status()`/`git()` 增加下列结构；平台锁仅封装 `msvcrt.locking` 与 `fcntl.flock`，竞争时抛出携带元数据的 `PrFlowError("flow_locked", ...)`：
 
@@ -140,13 +140,13 @@ def write_status(project: Path, command: str, status: str, details: dict) -> Non
 
 实现 `operation_lock()` 时把锁文件放到 `commonGitDir/pr-flow-locks/<worktreeKey>.lock`，成功加锁后先截断、写入并 `flush()` 元数据，再运行命令；`main()` 仅包围 `complete`、`tweak`、`cleanup`、`hotfix`，内部 cleanup（清理）直接调用 `run_cleanup()`，不二次加锁。diagnose（诊断）先非阻塞探测相同锁；锁被占用时打印 `DISPATCH_REQUIRED / flow_locked` 和元数据并直接返回，不调用 `stop()`。
 
-- [ ] **Step 4: 运行定向测试并确认 GREEN（通过）**
+- [x] **Step 4: 运行定向测试并确认 GREEN（通过）**
 
 Run: `python -m pytest -q -p no:cacheprovider tests/test_pr_flow_cli.py -k "status or lock or diagnose"`
 
 Expected: PASS（通过），且现有状态兼容测试不变。
 
-- [ ] **Step 5: 提交此独立交付**
+- [x] **Step 5: 提交此独立交付**
 
 ```powershell
 git add plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py tests/test_pr_flow_cli.py
@@ -163,7 +163,7 @@ git commit -m "实现 PR Flow 工作树状态与操作锁隔离"
 - Consumes: Task 1 的外层锁，现有 `remote_for_base_branch()`、`require_git_success()`、`auto_push_current_branch_if_needed()` 和 `run_lifecycle()`。
 - Produces: `remote_branch_snapshot(project, remote, branch) -> str`、`require_current_base(project, config, base_branch, source_oid, next_command) -> str`；Task 3 的 hotfix（热修复）复用同一快照函数。测试继续使用现有 `init_complete_project()`、`CommandStub` 和 `complete_args()`。
 
-- [ ] **Step 1: 写入远端目标推进时禁止修改的失败测试**
+- [x] **Step 1: 写入远端目标推进时禁止修改的失败测试**
 
 基于现有 `test_complete_auto_pushes_*` 测试的 `CommandStub`（命令替身）增加：
 
@@ -185,13 +185,13 @@ def test_complete_stops_before_push_when_remote_base_advanced(tmp_path: Path, mo
 
 再增加合并门禁完成后 `baseRefOid` 改变的测试，断言不调用 `gh pr merge` 且状态为 `base_outdated`。
 
-- [ ] **Step 2: 运行测试并确认 RED（失败）**
+- [x] **Step 2: 运行测试并确认 RED（失败）**
 
 Run: `python -m pytest -q -p no:cacheprovider tests/test_pr_flow_cli.py -k "remote_base_advanced or base_oid_changed"`
 
 Expected: FAIL（失败），现有流程仍可能继续推送或合并。
 
-- [ ] **Step 3: 提取并复用远端快照，在所有远端修改前校验祖先关系**
+- [x] **Step 3: 提取并复用远端快照，在所有远端修改前校验祖先关系**
 
 在 `remote_for_base_branch()` 后增加：
 
@@ -220,13 +220,13 @@ def require_current_base(
 
 将 `PR_VIEW_FIELDS` 补入 `baseRefOid`。`run_lifecycle()` 在 auto-push（自动推送）前读取配置目标分支并调用 `require_current_base()`；检查和 review gate（审查门禁）完成后 `sync_pr()`，比较首次与最新 `headRefOid`/`baseRefOid`：源变化使用 `head_moved`，目标变化使用 `base_outdated`，随后才调用 `merge_pr()`。只读 `find_pr()`/`sync_pr()` 可先执行，但 `push`、`pr create`、`pr edit`、`pr merge` 必须位于基线校验之后。
 
-- [ ] **Step 4: 运行最新基线相关测试并确认 GREEN（通过）**
+- [x] **Step 4: 运行最新基线相关测试并确认 GREEN（通过）**
 
 Run: `python -m pytest -q -p no:cacheprovider tests/test_pr_flow_cli.py -k "base_outdated or base_oid or auto_push or merge"`
 
 Expected: PASS（通过）；过期基线路径无远端修改。
 
-- [ ] **Step 5: 提交此独立交付**
+- [x] **Step 5: 提交此独立交付**
 
 ```powershell
 git add plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py tests/test_pr_flow_cli.py
@@ -243,7 +243,7 @@ git commit -m "使用最新远端目标提交约束 PR Flow"
 - Consumes: Task 2 的 `remote_branch_snapshot()`，现有 `sync_pr()`、`wait_for_checks()`、`merge_pr()`、`run_hotfix()`。
 - Produces: `required_checks(project, pr_number) -> list[dict[str, Any]]`；合并前固定源/目标提交，hotfix（热修复）验证后复核目标快照。测试继续使用现有 `init_hotfix_project()`、`run_hotfix_in_process()` 和 Git（版本控制）远端读取助手，不创建平行夹具。
 
-- [ ] **Step 1: 写入必需检查和 hotfix（热修复）竞争的失败测试**
+- [x] **Step 1: 写入必需检查和 hotfix（热修复）竞争的失败测试**
 
 用参数化测试覆盖空、缺失、等待、失败和成功 bucket（分组）；明确断言命令包含 `--required`：
 
@@ -276,13 +276,13 @@ def test_hotfix_stops_when_target_moves_during_verification(tmp_path: Path, monk
 
 并改造现有 head moved（源提交变化）测试，使 required checks（必需检查）完成后再次读取 PR（拉取请求），源或目标提交变化均废弃旧结果。
 
-- [ ] **Step 2: 运行测试并确认 RED（失败）**
+- [x] **Step 2: 运行测试并确认 RED（失败）**
 
 Run: `python -m pytest -q -p no:cacheprovider tests/test_pr_flow_cli.py -k "required_checks or target_moves_during_verification or head_moved"`
 
 Expected: FAIL（失败），因为当前代码读取 `statusCheckRollup` 且 hotfix（热修复）不做推送前目标复核。
 
-- [ ] **Step 3: 用 GitHub CLI（GitHub 命令行工具）直接读取必需检查并复核快照**
+- [x] **Step 3: 用 GitHub CLI（GitHub 命令行工具）直接读取必需检查并复核快照**
 
 以最小函数替换 `pr_checks()` 的数据来源：
 
@@ -307,13 +307,13 @@ def required_checks(project: Path, pr_number: Any) -> list[dict[str, Any]]:
 
 在 `run_hotfix()` 中首次使用 `remote_branch_snapshot()` 记录 `remote_head`；完整验证与授权校验之后、push（推送）之前再次调用。如果值变化，返回 `base_outdated`，不得推送；相同才执行现有推送与 `confirm_hotfix_remote_readback()`。
 
-- [ ] **Step 4: 运行门禁和 hotfix（热修复）测试并确认 GREEN（通过）**
+- [x] **Step 4: 运行门禁和 hotfix（热修复）测试并确认 GREEN（通过）**
 
 Run: `python -m pytest -q -p no:cacheprovider tests/test_pr_flow_cli.py -k "checks or head_moved or hotfix"`
 
 Expected: PASS（通过）；成功门禁至少有一项必需检查，目标推进时 hotfix（热修复）不推送。
 
-- [ ] **Step 5: 提交此独立交付**
+- [x] **Step 5: 提交此独立交付**
 
 ```powershell
 git add plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py tests/test_pr_flow_cli.py
@@ -334,7 +334,7 @@ git commit -m "收紧必需检查与热修复目标复核"
 - Consumes: Task 1 的上下文/外层锁，Task 2 的 `remote_branch_snapshot()`，现有 cleanup（清理）错误状态和 hotfix（热修复）回读结果。
 - Produces: `list_worktrees(project) -> list[dict[str, Any]]`、`remove_worktree(project, target) -> None`；四条修改流程支持 `--remove-worktree`（删除工作树参数）。测试从现有 `init_cleanup_project()` 和 `init_complete_project()` 扩展关联工作树、分支存在性和 Git（版本控制）调用断言，不另建夹具模块。
 
-- [ ] **Step 1: 写入工作树解析、占用保护、幂等重试和显式删除的失败测试**
+- [x] **Step 1: 写入工作树解析、占用保护、幂等重试和显式删除的失败测试**
 
 增加解析器最小样例及真实 Git（版本控制）清理场景：
 
@@ -381,13 +381,13 @@ def test_remove_worktree_is_explicit_and_never_forced(tmp_path: Path, monkeypatc
 
 另加主工作树、脏工作树、从待删除目录内运行时只输出外部重试命令，以及 hotfix（热修复）回读后删除且不调用 `gh pr view` 的测试。更新 complete（完整流程）/tweak（小改）测试，断言参数传给内部 cleanup（清理）。
 
-- [ ] **Step 2: 运行测试并确认 RED（失败）**
+- [x] **Step 2: 运行测试并确认 RED（失败）**
 
 Run: `python -m pytest -q -p no:cacheprovider tests/test_pr_flow_cli.py -k "worktree or cleanup_retry or remove_worktree"`
 
 Expected: FAIL（失败），现有 cleanup（清理）切换本地目标分支且没有删除参数。
 
-- [ ] **Step 3: 使用 Git（版本控制）原生清单实现预检和分离头清理**
+- [x] **Step 3: 使用 Git（版本控制）原生清单实现预检和分离头清理**
 
 在 `pr_flow.py` 增加空字符解析器：
 
@@ -434,17 +434,17 @@ def remove_worktree(project: Path, target: Path) -> None:
 
 从目标内部运行时不调用 `remove_worktree()`，而是在安全收尾后输出保留全部参数、可从外部执行的 `nextCommand`；从 `--project` 指向目标之外运行时才直接删除并回读。
 
-- [ ] **Step 4: 更新四个 Skill（技能）说明**
+- [x] **Step 4: 更新四个 Skill（技能）说明**
 
 在各自现有参数/恢复段落只增加三条事实，不复制设计：默认保留工作树；`--remove-worktree` 仅在安全收尾完成后删除且从不强制；内部调用时按输出的外部重试命令完成删除。hotfix（热修复）明确回读失败或目标变化时不删除、无需 PR（拉取请求）。
 
-- [ ] **Step 5: 运行清理、完整流程和打包测试并确认 GREEN（通过）**
+- [x] **Step 5: 运行清理、完整流程和打包测试并确认 GREEN（通过）**
 
 Run: `python -m pytest -q -p no:cacheprovider tests/test_pr_flow_cli.py tests/test_pr_flow_plugin_package.py -k "cleanup or complete or tweak or hotfix or package"`
 
 Expected: PASS（通过）；所有 worktree remove（删除工作树）调用均无 `--force`。
 
-- [ ] **Step 6: 提交此独立交付**
+- [x] **Step 6: 提交此独立交付**
 
 ```powershell
 git add plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py tests/test_pr_flow_cli.py plugins/pr-flow/skills/pr-flow-complete/SKILL.md plugins/pr-flow/skills/pr-flow-tweak/SKILL.md plugins/pr-flow/skills/pr-flow-cleanup/SKILL.md plugins/pr-flow/skills/pr-flow-hotfix/SKILL.md
@@ -460,45 +460,45 @@ git commit -m "实现 PR Flow 工作树安全清理"
 - Consumes: Tasks 1–4 的完整命令入口和现有 `init_complete_project` 裸仓库夹具。
 - Produces: 复用 `init_complete_project` 的双工作树独立子进程端到端回归；不新增生产接口、测试模块或事件控制框架。
 
-- [ ] **Step 1: 扩展现有裸仓库夹具并写入失败的并行端到端测试**
+- [x] **Step 1: 扩展现有裸仓库夹具并写入失败的并行端到端测试**
 
 复用 `init_complete_project` 创建两个关联工作树和两个源分支，从两个独立 `subprocess.Popen`（子进程）启动真实 CLI（命令行入口），断言两个 complete（完整流程）均完成、状态互不覆盖并停在同一最新目标提交。远端推进、失败、冲突、分支占用和显式删除复用 Tasks 1–4 的定向回归，不重复构建并发事件框架。
 
-- [ ] **Step 2: 运行端到端测试并确认 RED（失败）或确认新场景可检出回归**
+- [x] **Step 2: 运行端到端测试并确认 RED（失败）或确认新场景可检出回归**
 
 Run: `python -m pytest -q -p no:cacheprovider tests/test_pr_flow_cli.py -k "two_worktrees or linked_worktree"`
 
 Expected: 首次运行至少一个新增场景 FAIL（失败）；完成 Tasks 1–4 后逐项修正测试替身/实现，直至全部 PASS（通过）。
 
-- [ ] **Step 3: 只修正端到端测试暴露的共享实现缺口**
+- [x] **Step 3: 只修正端到端测试暴露的共享实现缺口**
 
 若失败来自生产逻辑，只在 `pr_flow.py` 已有共享函数修正根因；不得增加新模块、依赖、配置、锁层或测试专用生产分支。每次修正后重跑上一步命令，Expected: PASS（通过）。
 
-- [ ] **Step 4: 运行 PR Flow（拉取请求流程）定向测试和 Plugin（插件）打包测试**
+- [x] **Step 4: 运行 PR Flow（拉取请求流程）定向测试和 Plugin（插件）打包测试**
 
 Run: `python -m pytest -q -p no:cacheprovider tests/test_pr_flow_cli.py tests/test_pr_flow_plugin_package.py`
 
 Expected: 全部 PASS（通过）。
 
-- [ ] **Step 5: 构建本地 Plugin（插件）发布形态**
+- [x] **Step 5: 构建本地 Plugin（插件）发布形态**
 
 Run: `python scripts/local_plugin_build.py`
 
 Expected: 命令退出码为 0，PR Flow Plugin（拉取请求流程插件）成功构建且无缺失文件。
 
-- [ ] **Step 6: 运行仓库 Build and Verify（构建与验证）完整模式**
+- [x] **Step 6: 运行仓库 Build and Verify（构建与验证）完整模式**
 
 先按 `build-and-verify:build-and-verify`（构建与验证）Skill（技能）读取仓库配置，再执行其 full（完整）验证入口。
 
 Expected: 覆盖用户入口或发布形态的完整业务流程全部 PASS（通过）；若环境阻断，保留原始命令和错误证据，不以定向测试替代。
 
-- [ ] **Step 7: 运行 OpenSpec（开放规格）严格校验**
+- [x] **Step 7: 运行 OpenSpec（开放规格）严格校验**
 
 Run: `openspec validate --all --strict --no-interactive`
 
 Expected: `support-parallel-pr-flow-worktrees` 及全部现行规格校验通过。
 
-- [ ] **Step 8: 对照 OpenSpec（开放规格）任务逐项勾选并提交验证交付**
+- [x] **Step 8: 对照 OpenSpec（开放规格）任务逐项勾选并提交验证交付**
 
 确认 `openspec/changes/support-parallel-pr-flow-worktrees/tasks.md` 的 1.1–5.3 均有测试或运行证据后再勾选对应项。
 
