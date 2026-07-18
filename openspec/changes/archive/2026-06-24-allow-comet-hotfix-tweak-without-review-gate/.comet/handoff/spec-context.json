@@ -1,0 +1,15 @@
+{
+  "change": "allow-comet-hotfix-tweak-without-review-gate",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "e2ad4d070a99fdf3f346ab7b02343e295a831c8e7f179bc5597a2f8b188442a8",
+  "files": [
+    { "path": "openspec/changes/allow-comet-hotfix-tweak-without-review-gate/proposal.md", "sha256": "7d60494c1bd1ccf47b716610f5fe8ce4ddea9da63dbc4b31aea80205afc2a3b3", "role": "supporting" },
+    { "path": "openspec/changes/allow-comet-hotfix-tweak-without-review-gate/design.md", "sha256": "8e4fc228849025fe96576cd6c43367fbaad8e3fdd1ad9d099d936debd3100643", "role": "supporting" },
+    { "path": "openspec/changes/allow-comet-hotfix-tweak-without-review-gate/tasks.md", "sha256": "5913e2492652a5675f4700eadf6c8fce9f0b51c5bee30766de40aae675b9cc7a", "role": "supporting" },
+    { "path": "openspec/changes/allow-comet-hotfix-tweak-without-review-gate/specs/agent-guard-plugin-runtime/spec.md", "sha256": "0f13fcd1664d5dce62f33ed4807ec89ac918e7f464f9733b181aa4c47fb7d084", "role": "spec" },
+    { "path": "openspec/changes/allow-comet-hotfix-tweak-without-review-gate/specs/comet-agent-review-gate/spec.md", "sha256": "9c2941f58906524270e0c1e430bff088b32d721901ca2d5d33a84ab1081768ed", "role": "spec" }
+  ]
+}
