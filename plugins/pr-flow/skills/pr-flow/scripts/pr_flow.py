@@ -24,7 +24,7 @@ import yaml
 
 COMMANDS = ("diagnose", "init", "validate", "complete", "cleanup", "hotfix", "tweak")
 PR_BODY_REQUIRED_SECTIONS = ("Summary", "Scope", "Closing References")
-PR_VIEW_FIELDS = "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid,body"
+PR_VIEW_FIELDS = "number,state,mergeStateStatus,reviewDecision,headRefName,baseRefName,statusCheckRollup,headRefOid,baseRefOid,body"
 BLOCKING_REVIEW_DECISIONS = {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}
 SUPPORTED_REVIEW_GATE_MODES = {"github", "skip"}
 DEFAULT_GH_PR_VIEW_RETRIES = 3
@@ -323,6 +323,20 @@ def read_lock_metadata(handle: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def lock_git_value(project: Path, *args: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=project,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except FileNotFoundError:
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
 @contextlib.contextmanager
 def operation_lock(project: Path, command: str, args: argparse.Namespace):
     path = lock_file_path(project)
@@ -336,20 +350,16 @@ def operation_lock(project: Path, command: str, args: argparse.Namespace):
             details.setdefault("reason", "flow_locked")
             raise PrFlowError("flow_locked", details)
         try:
-            branch = subprocess.run(
-                ["git", "branch", "--show-current"],
-                cwd=project,
-                check=False,
-                text=True,
-                capture_output=True,
-            )
             metadata = {
                 "reason": "flow_locked",
                 "command": command,
                 "worktree": str(resolve_project(project)),
-                "sourceBranch": branch.stdout.strip() if branch.returncode == 0 else "",
+                "sourceBranch": lock_git_value(project, "branch", "--show-current"),
                 "pid": os.getpid(),
-                "actor": hotfix_actor(project),
+                "actor": {
+                    "name": lock_git_value(project, "config", "--get", "user.name"),
+                    "email": lock_git_value(project, "config", "--get", "user.email"),
+                },
                 "nextCommand": command_next_command(command, project, args),
             }
             handle.seek(1)
@@ -650,6 +660,45 @@ def remote_for_base_branch(config: dict[str, Any], base_branch: str) -> str:
     return remote if isinstance(remote, str) and remote else "origin"
 
 
+def remote_branch_snapshot(project: Path, remote: str, branch: str) -> str:
+    require_git_success(project, "git_fetch_target_failed", "fetch", remote, branch)
+    result = require_git_success(project, "git_remote_target_head_failed", "rev-parse", f"{remote}/{branch}")
+    oid = result.stdout.strip()
+    if not oid:
+        raise PrFlowError(
+            "git_remote_target_head_failed",
+            {"reason": "git_remote_target_head_failed", "remote": remote, "branch": branch},
+        )
+    return oid
+
+
+def require_current_base(
+    project: Path,
+    config: dict[str, Any],
+    base_branch: str,
+    source_oid: str,
+    next_command: str | None,
+) -> str:
+    remote = remote_for_base_branch(config, base_branch)
+    base_oid = remote_branch_snapshot(project, remote, base_branch)
+    ancestor = git(project, "merge-base", "--is-ancestor", base_oid, source_oid)
+    if ancestor.returncode != 0:
+        raise PrFlowError(
+            "base_outdated",
+            add_recovery_action(
+                {
+                    "reason": "base_outdated",
+                    "sourceCommit": source_oid,
+                    "baseCommit": base_oid,
+                    "baseRefName": base_branch,
+                    "remote": remote,
+                },
+                next_command,
+            ),
+        )
+    return base_oid
+
+
 def require_authorization_phrase_configured(config: dict[str, Any]) -> None:
     authorization = config.get("authorization")
     if not isinstance(authorization, dict):
@@ -851,6 +900,7 @@ def auto_push_current_branch_if_needed(
     project: Path,
     config: dict[str, Any],
     next_command: str | None = None,
+    before_push: Any | None = None,
 ) -> dict[str, Any] | None:
     base_branch = base_branch_from_config(config)
     branch_result = git(project, "branch", "--show-current")
@@ -966,6 +1016,8 @@ def auto_push_current_branch_if_needed(
         protected_details["activeRules"] = rule_count
         return stop_state("EXCEPTION_REQUIRED", "protected_branch_auto_push_blocked", protected_details)
 
+    if before_push is not None:
+        before_push()
     push_result = git(project, *push_args)
     if push_result.returncode != 0:
         push_details = command_failure_details("git_push_failed", push_result)
@@ -1488,10 +1540,33 @@ def run_lifecycle(
     try:
         pr = find_pr(project)
         existing_pr = pr is not None
+        base_oid: str | None = None
+
+        def check_base() -> None:
+            nonlocal base_oid
+            if base_oid is not None:
+                return
+            source_oid = pr.get("headRefOid") if pr is not None else None
+            if not isinstance(source_oid, str) or not source_oid:
+                if existing_pr:
+                    raise PrFlowError(
+                        "missing_head_ref_oid",
+                        {"reason": "missing_head_ref_oid", "pr": pr.get("number"), "headRefName": pr.get("headRefName")},
+                    )
+                source_oid = head_oid(project)
+            base_oid = require_current_base(
+                project,
+                config,
+                base_branch_from_config(config),
+                source_oid,
+                next_command,
+            )
+
         if command in {"complete", "tweak"}:
-            push_stop = auto_push_current_branch_if_needed(project, config, next_command)
+            push_stop = auto_push_current_branch_if_needed(project, config, next_command, check_base)
             if push_stop is not None:
                 return stop_from_state(project, command, push_stop)
+        check_base()
         if pr is None:
             pr = create_pr(project, config, pr_body, next_command)
         pr = sync_pr(project, pr)
@@ -1513,6 +1588,28 @@ def run_lifecycle(
         review_stop = check_review_gate(project, config, pr)
         if review_stop is not None:
             return stop_from_state(project, command, review_stop)
+
+    try:
+        latest_pr = sync_pr(project, pr)
+    except PrFlowError as exc:
+        return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
+    if latest_pr.get("headRefOid") != pr.get("headRefOid"):
+        details = {
+            "reason": "head_moved",
+            "pr": pr.get("number"),
+            "headRefOid": pr.get("headRefOid"),
+            "currentHeadOid": latest_pr.get("headRefOid"),
+        }
+        return stop(project, command, error_status("head_moved"), "head_moved", add_default_next_command(details, next_command))
+    if latest_pr.get("baseRefOid") != pr.get("baseRefOid"):
+        details = {
+            "reason": "base_outdated",
+            "pr": pr.get("number"),
+            "baseRefOid": pr.get("baseRefOid"),
+            "currentBaseRefOid": latest_pr.get("baseRefOid"),
+        }
+        return stop(project, command, error_status("base_outdated"), "base_outdated", add_default_next_command(details, next_command))
+    pr = latest_pr
 
     current_branch = require_git_success(project, "git_current_branch_failed", "branch", "--show-current").stdout.strip()
     head_ref = pr.get("headRefName")
