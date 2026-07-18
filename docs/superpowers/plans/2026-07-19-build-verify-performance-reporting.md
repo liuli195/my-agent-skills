@@ -27,7 +27,7 @@ base-ref: a6ae972eba609ef3ae71c1e9e51d088cbadccd54
 
 ## Execution Precondition（执行前置条件）
 
-- [ ] **在实现工作区建立前记录全部规划产物**
+- [x] **在实现工作区建立前记录全部规划产物**
 
 branch（分支）模式在新分支创建后执行；worktree（独立工作区）模式在创建 worktree 前执行：
 
@@ -54,7 +54,7 @@ Expected（预期）：proposal（提案）、design（设计）、delta spec（
 - `_run_scheduled_checks(project, config, selected, changed_files, runner) -> tuple[int, list[str], list[CheckResult]]`
 - `_write_performance_report(path, payload) -> bool`
 
-- [ ] **Step 1：写失败测试**
+- [x] **Step 1：写失败测试**
 
 在现有 `tests/test_build_and_verify_plugin.py` 中增加：
 
@@ -73,7 +73,7 @@ Expected（预期）：proposal（提案）、design（设计）、delta spec（
 
 报告断言至少包含 `budgetSeconds`、`overBudget`、`verificationStatus` 和两位小数的 `totalSeconds`。
 
-- [ ] **Step 2：运行测试并确认失败**
+- [x] **Step 2：运行测试并确认失败**
 
 ```powershell
 python -m pytest tests/test_build_and_verify_plugin.py -k "invalid_full_budget or performance_report_requires_full or full_performance_report_matrix" -q
@@ -81,7 +81,7 @@ python -m pytest tests/test_build_and_verify_plugin.py -k "invalid_full_budget o
 
 Expected（预期）：失败于新配置、参数或报告行为尚未实现，不得出现测试收集错误。
 
-- [ ] **Step 3：实现最小运行时能力**
+- [x] **Step 3：实现最小运行时能力**
 
 在 `build_and_verify.py`：
 
@@ -109,7 +109,7 @@ Expected（预期）：失败于新配置、参数或报告行为尚未实现，
 - 报告写入同目录 `.performance-report.json.tmp`，再用 `Path.replace`（原子替换）覆盖最终文件；写入失败输出 `performance-report-warning`，返回原功能结果。
 - 未触发报告时直接返回，不调用任何删除逻辑。
 
-- [ ] **Step 4：运行聚焦回归**
+- [x] **Step 4：运行聚焦回归**
 
 ```powershell
 python -m pytest tests/test_build_and_verify_plugin.py -k "invalid_full_budget or performance_report_requires_full or full_performance_report_matrix or runner_build_verify_and_full_verify or full_verify_allows_empty_checks" -q
@@ -117,7 +117,7 @@ python -m pytest tests/test_build_and_verify_plugin.py -k "invalid_full_budget o
 
 Expected（预期）：全部通过，既有 full（完整）与空检查行为保持不变。
 
-- [ ] **Step 5：提交任务**
+- [x] **Step 5：提交任务**
 
 ```powershell
 git add plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify_runner.py tests/test_build_and_verify_plugin.py
@@ -135,7 +135,7 @@ git commit -m "feat: 增加完整验证性能报告"
 
 **Interfaces（接口）：** 消费 Task 1 的固定报告结构，不增加新类型或状态对象。
 
-- [ ] **Step 1：保留测试辅助类既有语义**
+- [x] **Step 1：保留测试辅助类既有语义**
 
 扩展 `FakeRunnerModule.run_verify`（假运行器模块运行验证）时保留原 `_changed_files` 替换和 `finally` 恢复：
 
@@ -161,7 +161,7 @@ finally:
     self.runner_module._changed_files = original_changed_files
 ```
 
-- [ ] **Step 2：写四个边界测试**
+- [x] **Step 2：写四个边界测试**
 
 1. `test_build_and_verify_performance_report_schema_is_exact`：用两个检查项断言顶层键集合完全等于八个固定字段、`generatedAt` 以 `Z` 结尾、检查顺序保持配置顺序、每项键集合完全等于 `id`/`status`/`durationSeconds` 且耗时为两位小数；同时扩展现有空检查测试，显式请求报告并断言 `checks == []`。
 2. `test_build_and_verify_incomplete_full_results_skip_performance`：两个所选检查只返回一个结果，即使有预算和显式参数，也无性能警告且预置报告内容不变。
@@ -170,7 +170,7 @@ finally:
 
 原子替换复用现有 cache（缓存）原子写入测试模式，只增加一个 `Path.replace` 调用断言，不增加独立 writer（写入器）抽象。
 
-- [ ] **Step 3：运行测试并确认先失败后通过**
+- [x] **Step 3：运行测试并确认先失败后通过**
 
 ```powershell
 python -m pytest tests/test_build_and_verify_plugin.py -k "performance_report_schema or incomplete_full_results or fast_verify_leaves_performance_report or report_write_failure or performance_report_replaces" -q
@@ -178,7 +178,7 @@ python -m pytest tests/test_build_and_verify_plugin.py -k "performance_report_sc
 
 Expected（预期）：RED（失败）阶段命中新边界；最小修正后 GREEN（通过）。
 
-- [ ] **Step 4：运行现有运行器回归**
+- [x] **Step 4：运行现有运行器回归**
 
 ```powershell
 python -m pytest tests/test_build_and_verify_plugin.py -k "build_and_verify_runner or performance_report or cache_store_writes_temp" -q
@@ -186,7 +186,7 @@ python -m pytest tests/test_build_and_verify_plugin.py -k "build_and_verify_runn
 
 Expected（预期）：并行、缓存、超时、中断、fast（快速）与 full（完整）相关测试全部通过。
 
-- [ ] **Step 5：提交任务**
+- [x] **Step 5：提交任务**
 
 ```powershell
 git add plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify_runner.py tests/test_build_and_verify_plugin.py
@@ -209,7 +209,7 @@ git commit -m "test: 完善性能报告运行边界"
 - Modify（修改）：`plugins/build-and-verify/.claude-plugin/plugin.json`
 - Modify（修改）：`tests/test_build_and_verify_plugin.py`
 
-- [ ] **Step 1：写文档与版本契约测试**
+- [x] **Step 1：写文档与版本契约测试**
 
 断言：
 
@@ -218,26 +218,26 @@ git commit -m "test: 完善性能报告运行边界"
 - 运行时复制仍只有两个脚本和 `version.json`。
 - 双 manifest（清单）版本都为 `0.1.37`，复制出的 `runtime_version` 同步为 `0.1.37`。
 
-- [ ] **Step 2：运行测试并确认失败**
+- [x] **Step 2：运行测试并确认失败**
 
 ```powershell
 python -m pytest tests/test_build_and_verify_plugin.py -k "dual_manifests or runtime_and_init_skill_entrypoints or init_questionnaire or init_config_draft or init_validation or init_copies_repository_runtime" -q
 ```
 
-- [ ] **Step 3：更新现有文档和双 manifest（清单）**
+- [x] **Step 3：更新现有文档和双 manifest（清单）**
 
 - Q5 增加启用、修改或保持禁用完整预算；Q6 展示最终值或未启用。
 - 已有配置扫描保留该字段；草案无确认不写；写后校验排除布尔值和非正整数。
 - 通用模板保持无预算字段。
 - 两份 manifest（清单）从 `0.1.36` 更新到 `0.1.37`；不新建源码 `version.json`。
 
-- [ ] **Step 4：运行契约测试确认通过**
+- [x] **Step 4：运行契约测试确认通过**
 
 ```powershell
 python -m pytest tests/test_build_and_verify_plugin.py -k "dual_manifests or runtime_and_init_skill_entrypoints or init_references or init_questionnaire or init_config_draft or init_validation or init_copies_repository_runtime" -q
 ```
 
-- [ ] **Step 5：提交任务**
+- [x] **Step 5：提交任务**
 
 ```powershell
 git add plugins/build-and-verify/.codex-plugin/plugin.json plugins/build-and-verify/.claude-plugin/plugin.json plugins/build-and-verify/skills/build-and-verify/SKILL.md plugins/build-and-verify/skills/build-and-verify-init tests/test_build_and_verify_plugin.py
@@ -253,7 +253,7 @@ git commit -m "docs: 增加性能预算初始化说明"
 - Modify（修改）：`tests/test_build_and_verify_plugin.py`
 - Modify（修改）：`tests/test_test_runtime_boundaries.py`
 
-- [ ] **Step 1：写一个临时目标仓库 E2E（端到端测试）**
+- [x] **Step 1：写一个临时目标仓库 E2E（端到端测试）**
 
 从插件源码入口执行 `init`（初始化）复制实际运行时，然后在同一临时仓库依次验证：
 
@@ -262,11 +262,11 @@ git commit -m "docs: 增加性能预算初始化说明"
 
 该测试不调用本仓库业务检查。功能失败且超预算的退出码组合继续由 Task 1 进程内矩阵验证，避免第二次真实等待。
 
-- [ ] **Step 2：精确登记 E2E allowlist（端到端允许清单）**
+- [x] **Step 2：精确登记 E2E allowlist（端到端允许清单）**
 
 只增加测试函数 identity（标识）及“复制后 full verify（完整验证）性能报告入口”理由，同步现有精确身份列表；不放宽扫描规则。
 
-- [ ] **Step 3：运行发布形态与边界测试**
+- [x] **Step 3：运行发布形态与边界测试**
 
 ```powershell
 python -m pytest tests/test_build_and_verify_plugin.py::test_copied_runtime_full_performance_report_e2e_temp_target_repo tests/test_test_runtime_boundaries.py::test_e2e_allowlist_entries_match_current_runtime_hits tests/test_test_runtime_boundaries.py::test_build_and_verify_keeps_focused_real_entrypoint_coverage -q
@@ -274,7 +274,7 @@ python -m pytest tests/test_build_and_verify_plugin.py::test_copied_runtime_full
 
 Expected（预期）：三个测试通过，真实等待只发生一次。
 
-- [ ] **Step 4：提交任务**
+- [x] **Step 4：提交任务**
 
 ```powershell
 git add tests/test_build_and_verify_plugin.py tests/test_test_runtime_boundaries.py
@@ -289,20 +289,20 @@ git commit -m "test: 验证复制运行时性能报告"
 
 - Modify（修改）：`openspec/changes/add-build-verify-performance-reporting/tasks.md`（仅在证据通过后勾选）
 
-- [ ] **Step 1：运行插件测试与格式检查**
+- [x] **Step 1：运行插件测试与格式检查**
 
 ```powershell
 git diff --check
 python -m pytest tests/test_build_and_verify_plugin.py tests/test_test_runtime_boundaries.py -q
 ```
 
-- [ ] **Step 2：运行 OpenSpec（开放规格）严格校验**
+- [x] **Step 2：运行 OpenSpec（开放规格）严格校验**
 
 ```powershell
 openspec validate add-build-verify-performance-reporting --strict --no-interactive
 ```
 
-- [ ] **Step 3：运行仓库 build/fast/full（构建/快速/完整）主流程**
+- [x] **Step 3：运行仓库 build/fast/full（构建/快速/完整）主流程**
 
 不修改根目录业务配置：
 
@@ -314,7 +314,7 @@ python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify
 
 Expected（预期）：三条命令都返回 0。
 
-- [ ] **Step 4：复核范围并完成任务勾选**
+- [x] **Step 4：复核范围并完成任务勾选**
 
 ```powershell
 git diff --name-only a6ae972eba609ef3ae71c1e9e51d088cbadccd54..HEAD
@@ -323,7 +323,7 @@ git status --short
 
 确认没有根目录 `.build-and-verify/config.json`、CI（持续集成）、安装缓存或用户环境副本进入差异；逐项勾选 `tasks.md`。
 
-- [ ] **Step 5：提交验证记录**
+- [x] **Step 5：提交验证记录**
 
 ```powershell
 git add openspec/changes/add-build-verify-performance-reporting/tasks.md
