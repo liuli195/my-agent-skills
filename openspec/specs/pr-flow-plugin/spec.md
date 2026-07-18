@@ -71,7 +71,7 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 - **THEN** diagnose（诊断） MUST NOT present manual `git push`（推送） as the only next step
 
 ### Requirement: Complete PR lifecycle
-系统 MUST 提供 complete（完整流程），从当前分支创建或同步 PR 到合并后清理。
+系统 MUST 提供 complete（完整流程），从当前分支创建或同步活动 PR（拉取请求）到合并后清理。仅 `OPEN`（未合并）状态的同名 PR（拉取请求）可作为当前活动 PR（拉取请求）。
 
 #### Scenario: Recoverable PR view failure after creation
 - **WHEN** `complete`（收尾）成功创建 PR（拉取请求）
@@ -81,6 +81,12 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 - **THEN** stop-state details（停止状态详情） MUST use `gh_pr_view_transient_failed` as reason（原因）
 - **THEN** stop-state details（停止状态详情） MUST include `transientCategory: post_create_view`（创建后查看分类）
 - **THEN** stop-state details（停止状态详情） MUST include a command（命令） to retry the same `complete`（收尾） operation
+
+#### Scenario: Terminal same-name PR starts a new batch
+- **WHEN** `complete`（收尾）在当前分支查询到状态为 `MERGED`（已合并）或 `CLOSED`（已关闭）的同名 PR（拉取请求）
+- **THEN** 系统 MUST NOT 使用该 PR（拉取请求）的 `headRefOid`（源提交）进行基线校验
+- **THEN** 系统 MUST 使用当前 `HEAD`（当前提交）校验最新远端目标分支
+- **THEN** 系统 MUST 推送当前批次并创建新的 PR（拉取请求）
 
 ### Requirement: Review gate modes
 系统 MUST 只支持 GitHub（代码托管平台）和 skip（跳过）两种 review gate（审查门禁）模式。
@@ -187,11 +193,11 @@ PR Flow（拉取请求流程）MUST preserve the boundary between default fast v
 - **THEN** PR Flow（拉取请求流程） MUST keep fast verify（快速验证） and full verify（完整验证） results（结果） distinct
 
 ### Requirement: Tweak PR path
-系统 MUST 提供 tweak（非 bug 小改动）路径，用于跳过 review gate 但保留 PR 流程。
+系统 MUST 提供 tweak（非 bug 小改动）路径，用于跳过 review gate（审查门禁）但保留 PR（拉取请求）流程。
 
 #### Scenario: Tweak requires PR
 - **WHEN** 用户运行 tweak
-- **THEN** 系统 MUST 创建或同步 PR
+- **THEN** 系统 MUST 创建或同步活动 PR
 - **THEN** 系统 MUST 等待 checks、合并 PR 并执行 cleanup
 - **THEN** 系统 MUST 跳过 review gate
 
@@ -210,6 +216,12 @@ PR Flow（拉取请求流程）MUST preserve the boundary between default fast v
 - **THEN** reason（原因） MUST only justify using the tweak（小改） path
 - **THEN** 系统 MUST NOT 在 PR body（拉取请求正文）中写入独立的 tweak path（小改路径）正文或 reason（原因）
 - **THEN** PR body（拉取请求正文） MUST use the same `Summary`、`Scope` and `Closing References` sections as `complete`（收尾）
+
+#### Scenario: Terminal same-name PR starts a new batch
+- **WHEN** `tweak`（小改）在当前分支查询到状态为 `MERGED`（已合并）或 `CLOSED`（已关闭）的同名 PR（拉取请求）
+- **THEN** 系统 MUST NOT 使用该 PR（拉取请求）的 `headRefOid`（源提交）进行基线校验
+- **THEN** 系统 MUST 使用当前 `HEAD`（当前提交）校验最新远端目标分支
+- **THEN** 系统 MUST 推送当前批次并创建新的 PR（拉取请求）
 
 ### Requirement: Authorization phrase confirmation
 系统 MUST 支持仓库共用 authorization phrase，用于替代用户说“我确认”。

@@ -1092,7 +1092,8 @@ def find_pr(project: Path) -> dict[str, Any] | None:
             return None
         reason, details = pr_view_failure_details(result, transient_category, retry_attempts)
         raise PrFlowError(reason, details)
-    return parse_pr_result(result)
+    pr = parse_pr_result(result)
+    return pr if pr.get("state") == "OPEN" else None
 
 
 def sync_pr(project: Path, pr: dict[str, Any]) -> dict[str, Any]:
