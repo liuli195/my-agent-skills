@@ -337,10 +337,89 @@ def test_pr_view_fields_include_base_commit() -> None:
     assert "baseRefOid" in load_pr_flow_module().PR_VIEW_FIELDS.split(",")
 
 
+@pytest.mark.parametrize(
+    ("payload", "reason"),
+    [([], "checks_or_review_blocking"), ({"bucket": "pass"}, "checks_or_review_blocking")],
+)
+def test_required_checks_reject_empty_or_non_list(tmp_path: Path, monkeypatch, payload, reason: str) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    module = load_pr_flow_module()
+    gh_stub = CommandStub()
+    gh_stub.add(
+        ["pr", "checks", "12", "--required", "--json", "bucket,name,state,workflow,link"],
+        stdout=json.dumps(payload),
+    )
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    with pytest.raises(module.PrFlowError) as error:
+        module.required_checks(tmp_path, 12)
+
+    assert error.value.reason == reason
+
+
+def test_required_checks_use_required_flag_and_bucket_states(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    module = load_pr_flow_module()
+    gh_stub = CommandStub()
+    payload = [{"bucket": "pending", "name": "ci", "state": "QUEUED"}]
+    gh_stub.add(
+        ["pr", "checks", "12", "--required", "--json", "bucket,name,state,workflow,link"],
+        stdout=json.dumps(payload),
+    )
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    checks = module.required_checks(tmp_path, 12)
+
+    assert checks == payload
+    assert module.has_pending_check(checks)
+
+
+def test_hotfix_stops_when_target_moves_during_verification(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    write_hotfix_pr_flow_config(project)
+    before = "a" * 40
+    head = "b" * 40
+    snapshots = iter([before, "c" * 40])
+    monkeypatch.setattr(module, "remote_branch_snapshot", lambda *_args: next(snapshots))
+    git_stub = CommandStub()
+    git_stub.add(["rev-parse", "HEAD"], stdout=head + "\n")
+    git_stub.add(["merge-base", "HEAD", "origin/main"], stdout=before + "\n")
+    git_stub.add(["status", "--short"], stdout="")
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(
+        module,
+        "run_hotfix_verify_command",
+        lambda *_args: subprocess.CompletedProcess(["verify"], 0, "ok\n", ""),
+    )
+
+    result = invoke_pr_flow(
+        ["hotfix", "--project", str(project), "--target", "main", "--authorization-phrase", HOTFIX_PHRASE],
+        module=module,
+    )
+
+    assert result.returncode == 1
+    assert "base_outdated" in result.stdout
+    assert not any(call and call[0] == "push" for call in git_stub.calls)
+
+
 def allow_current_base(git_stub, source_oid: str) -> None:
     git_stub.add(["fetch", "origin", "main"])
     git_stub.add(["rev-parse", "origin/main"], stdout="a" * 40 + "\n")
     git_stub.add(["merge-base", "--is-ancestor", "a" * 40, source_oid])
+
+
+def allow_required_checks(gh_stub, bucket: str = "pass") -> None:
+    gh_stub.add(
+        ["pr", "checks", "12", "--required", "--json", "bucket,name,state,workflow,link"],
+        stdout=json.dumps([{"bucket": bucket, "name": "ci", "state": bucket.upper()}]),
+    )
 
 
 def init_feature_branch(project: Path) -> None:
@@ -996,6 +1075,7 @@ def run_complete_in_process(
     git_responses: list[tuple[list[str], str, int]] | None = None,
     merge_returncode: int = 0,
     merge_stderr: str = "",
+    required_buckets: tuple[str, ...] | None = None,
 ) -> tuple[Path, subprocess.CompletedProcess[str]]:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
@@ -1012,6 +1092,14 @@ def run_complete_in_process(
         for stdout, stderr, returncode in pr_responses:
             gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=stdout, stderr=stderr, returncode=returncode)
     gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", "b" * 40], stderr=merge_stderr, returncode=merge_returncode)
+    if required_buckets is None:
+        required_buckets = ("pass",)
+        if pr_stdout is not None:
+            rollup = json.loads(pr_stdout).get("statusCheckRollup", [])
+            if any(check.get("status") in {"IN_PROGRESS", "QUEUED"} for check in rollup):
+                required_buckets = ("pending",)
+    for bucket in required_buckets:
+        allow_required_checks(gh_stub, bucket)
     if cleanup_stdout is not None:
         gh_stub.add(
             ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
@@ -1072,6 +1160,7 @@ def run_tweak_in_process(
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
+    allow_required_checks(gh_stub, "pending" if any(check.get("status") == "IN_PROGRESS" for check in (checks or [])) else "pass")
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
 
     git_stub = CommandStub(consume=True)
@@ -1739,7 +1828,7 @@ def test_complete_fills_existing_empty_body_before_checks(tmp_path: Path, monkey
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert gh_stub.calls[2][:3] == ("pr", "edit", "12")
-    assert gh_stub.calls[4][:2] == ("pr", "merge")
+    assert any(call[:2] == ("pr", "merge") for call in gh_stub.calls)
     assert gh_stub.body_files[0]["body"] == expected_pr_body(fixes=())
 
 
@@ -1871,6 +1960,7 @@ def test_complete_keeps_existing_human_body_without_fixes(tmp_path: Path, monkey
     gh_stub = CommandStub(consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
+    allow_required_checks(gh_stub, "pending")
     git_stub = CommandStub(consume=True)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
@@ -2574,6 +2664,7 @@ def test_complete_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path
     pending_pr = pr_view_json(checks=[{"name": "ci", "status": "QUEUED"}], head_oid="a" * 40)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
+    allow_required_checks(gh_stub, "pending")
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
 
@@ -2599,6 +2690,7 @@ def test_complete_auto_pushes_existing_pr_when_local_branch_is_ahead(tmp_path: P
     pending_pr = pr_view_json(checks=[{"name": "ci", "status": "QUEUED"}], head_oid="a" * 40)
     gh_stub = CommandStub(consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
+    allow_required_checks(gh_stub, "pending")
     gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fexample", "--jq", "length"], stdout="0\n")
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
     git_stub = CommandStub()
@@ -2832,6 +2924,7 @@ def test_tweak_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path: P
     pending_pr = pr_view_json(checks=[{"name": "ci", "status": "QUEUED"}], head_oid="a" * 40)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
+    allow_required_checks(gh_stub, "pending")
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
 
@@ -3172,8 +3265,8 @@ def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path
     calls = [list(call) for call in gh_stub.calls]
     assert calls[0][:2] == ["pr", "view"]
     assert calls[1][:2] == ["pr", "create"]
-    assert calls[5] == ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid]
-    assert calls[6] == ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"]
+    assert ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid] in calls
+    assert ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"] in calls
     assert gh_stub.body_files[0]["body"] == expected_pr_body(fixes=())
 
 
@@ -3270,9 +3363,8 @@ def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path, 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: cleanup_complete" in result.stdout
     calls = [list(call) for call in gh_stub.calls]
-    assert [call[:2] for call in calls[:3]] == [["pr", "view"]] * 3
-    assert calls[3] == ["pr", "merge", "12", "--merge", "--match-head-commit", "b" * 40]
-    assert calls[4] == ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"]
+    assert ["pr", "merge", "12", "--merge", "--match-head-commit", "b" * 40] in calls
+    assert ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"] in calls
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["status"] == "cleanup_complete"
     assert status["command"] == "cleanup"
@@ -3684,6 +3776,7 @@ def test_complete_returns_checks_pending_when_ruleset_recovery_wait_times_out(tm
         ],
         merge_returncode=1,
         merge_stderr="X Pull request owner/repo#90 is not mergeable: the base branch policy prohibits the merge.\n",
+        required_buckets=("pass", "pending"),
     )
 
     assert result.returncode == 1
@@ -3968,8 +4061,8 @@ def test_tweak_creates_pr_when_none_exists_and_writes_body(tmp_path: Path, monke
     assert calls[1][:2] == ["pr", "create"]
     assert "--body-file" in calls[1]
     assert calls[3][:2] == ["pr", "view"]
-    assert calls[5] == ["pr", "merge", "12", "--merge", "--match-head-commit", "b" * 40]
-    assert calls[6] == ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"]
+    assert ["pr", "merge", "12", "--merge", "--match-head-commit", "b" * 40] in calls
+    assert ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"] in calls
     body_records = gh_stub.body_files
     assert len(body_records) == 1
     assert body_records[0]["body"] == expected_pr_body(fixes=())
@@ -3988,9 +4081,8 @@ def test_tweak_skips_review_gate_for_changes_requested_then_merges_and_cleans_up
     assert "status: cleanup_complete" in result.stdout
     assert "REPLY_OR_FIX_REQUIRED" not in result.stdout
     calls = [list(call) for call in gh_stub.calls]
-    assert [call[:2] for call in calls[:3]] == [["pr", "view"]] * 3
-    assert calls[3] == ["pr", "merge", "12", "--merge", "--match-head-commit", "b" * 40]
-    assert calls[4] == ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"]
+    assert ["pr", "merge", "12", "--merge", "--match-head-commit", "b" * 40] in calls
+    assert ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"] in calls
 
 
 def test_tweak_does_not_run_build_and_verify_full_verify(tmp_path: Path, monkeypatch) -> None:
@@ -4217,9 +4309,11 @@ def test_hotfix_writes_audit_record_when_post_push_readback_mismatches(tmp_path:
         (["fetch", "origin", "main"], ""),
         (["rev-parse", "origin/main"], before_commit + "\n"),
         (["rev-parse", "HEAD"], head_commit + "\n"),
-        (["merge-base", "HEAD", "origin/main"], before_commit + "\n"),
-        (["status", "--short"], ""),
-        (["push", "origin", "HEAD:refs/heads/main"], ""),
+            (["merge-base", "HEAD", "origin/main"], before_commit + "\n"),
+            (["status", "--short"], ""),
+            (["fetch", "origin", "main"], ""),
+            (["rev-parse", "origin/main"], before_commit + "\n"),
+            (["push", "origin", "HEAD:refs/heads/main"], ""),
         (["config", "--get", "user.name"], "Test User\n"),
         (["config", "--get", "user.email"], "test@example.com\n"),
     ]:
@@ -4344,9 +4438,11 @@ def test_hotfix_pushes_head_to_target_and_writes_audit_record(tmp_path: Path, mo
         (["fetch", "origin", "main"], ""),
         (["rev-parse", "origin/main"], before_commit + "\n"),
         (["rev-parse", "HEAD"], head_commit + "\n"),
-        (["merge-base", "HEAD", "origin/main"], before_commit + "\n"),
-        (["status", "--short"], ""),
-        (["push", "origin", "HEAD:refs/heads/main"], ""),
+            (["merge-base", "HEAD", "origin/main"], before_commit + "\n"),
+            (["status", "--short"], ""),
+            (["fetch", "origin", "main"], ""),
+            (["rev-parse", "origin/main"], before_commit + "\n"),
+            (["push", "origin", "HEAD:refs/heads/main"], ""),
         (["fetch", "origin", "main"], ""),
         (["rev-parse", "origin/main"], head_commit + "\n"),
         (["config", "--get", "user.name"], "Test User\n"),

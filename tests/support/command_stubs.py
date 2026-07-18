@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import os
 from collections.abc import Sequence
@@ -75,4 +76,6 @@ class CommandStub:
                 stderr=response.stderr,
                 returncode=response.returncode,
             )
+        if normalized[:3] == ("pr", "checks", "12") and "--required" in normalized:
+            return completed(call, stdout=json.dumps([{"bucket": "pass", "name": "ci", "state": "SUCCESS"}]))
         return completed(call, stderr=f"unexpected_command: {' '.join(call)}\n", returncode=1)

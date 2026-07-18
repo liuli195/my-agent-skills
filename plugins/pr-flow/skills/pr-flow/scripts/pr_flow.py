@@ -28,6 +28,7 @@ PR_VIEW_FIELDS = "number,state,mergeStateStatus,reviewDecision,headRefName,baseR
 BLOCKING_REVIEW_DECISIONS = {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}
 SUPPORTED_REVIEW_GATE_MODES = {"github", "skip"}
 DEFAULT_GH_PR_VIEW_RETRIES = 3
+REQUIRED_CHECK_FIELDS = "bucket,name,state,workflow,link"
 GH_PR_VIEW_RETRIES_ENV = "PR_FLOW_GH_PR_VIEW_RETRIES"
 PR_TEMPLATE = """## Summary
 
@@ -844,12 +845,42 @@ def pr_checks(pr: dict[str, Any]) -> list[Any]:
     return checks if isinstance(checks, list) else []
 
 
+def required_checks(project: Path, pr_number: Any) -> list[dict[str, Any]]:
+    result = gh(
+        project,
+        "pr",
+        "checks",
+        str(pr_number),
+        "--required",
+        "--json",
+        REQUIRED_CHECK_FIELDS,
+    )
+    if result.returncode != 0:
+        raise PrFlowError(
+            "checks_or_review_blocking",
+            command_failure_details("checks_or_review_blocking", result),
+        )
+    try:
+        checks = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise PrFlowError(
+            "checks_or_review_blocking",
+            {"reason": "checks_or_review_blocking", "error": str(exc)},
+        ) from exc
+    if not isinstance(checks, list) or not checks or not all(isinstance(check, dict) for check in checks):
+        raise PrFlowError(
+            "checks_or_review_blocking",
+            {"reason": "checks_or_review_blocking", "pr": pr_number},
+        )
+    return checks
+
+
 def has_pending_check(checks: list[Any]) -> bool:
     pending_values = {"PENDING", "IN_PROGRESS", "QUEUED", "REQUESTED", "WAITING", "EXPECTED"}
     for check in checks:
         if not isinstance(check, dict):
             continue
-        if check_value(check, "status") in pending_values or check_value(check, "state") in pending_values:
+        if check_value(check, "bucket") == "PENDING" or check_value(check, "status") in pending_values or check_value(check, "state") in pending_values:
             return True
     return False
 
@@ -860,6 +891,8 @@ def has_failing_check(checks: list[Any]) -> bool:
         if not isinstance(check, dict):
             continue
         if (
+            check_value(check, "bucket") in {"FAIL", "CANCEL"}
+            or
             check_value(check, "conclusion") in failing_values
             or check_value(check, "status") in failing_values
             or check_value(check, "state") in failing_values
@@ -1273,7 +1306,7 @@ def wait_for_checks(
     current = pr
 
     while True:
-        checks = pr_checks(current)
+        checks = required_checks(project, current.get("number"))
         details = {
             "reason": "checks_pending",
             "pr": current.get("number"),
@@ -1292,7 +1325,18 @@ def wait_for_checks(
         if remaining <= 0:
             return stop_state("DISPATCH_REQUIRED", "checks_pending", add_recovery_action(details))
         time.sleep(min(max(poll_seconds, 1), remaining))
-        current = sync_pr(project, current)
+        updated = sync_pr(project, current)
+        if updated.get("headRefOid") != pr.get("headRefOid"):
+            raise PrFlowError(
+                "head_moved",
+                {
+                    "reason": "head_moved",
+                    "pr": pr.get("number"),
+                    "headRefOid": pr.get("headRefOid"),
+                    "currentHeadOid": updated.get("headRefOid"),
+                },
+            )
+        current = updated
 
 
 def retry_merge_after_ruleset_block(
@@ -1841,9 +1885,8 @@ def run_hotfix(args: argparse.Namespace) -> int:
             details["reason"] = "hotfix_push_not_allowed"
             return stop(project, args.command, "EXCEPTION_REQUIRED", "hotfix_push_not_allowed", details)
 
-        require_git_success(project, "git_fetch_target_failed", "fetch", remote, target)
         remote_ref = f"{remote}/{target}"
-        remote_head = require_git_success(project, "git_remote_target_head_failed", "rev-parse", remote_ref).stdout.strip()
+        remote_head = remote_branch_snapshot(project, remote, target)
         current_head = head_oid(project)
         merge_base = require_git_success(project, "git_merge_base_failed", "merge-base", "HEAD", remote_ref).stdout.strip()
         details.update(
@@ -1868,6 +1911,17 @@ def run_hotfix(args: argparse.Namespace) -> int:
         verify_command = hotfix_verify_command(branch_config)
         verification = run_hotfix_verify_command(project, verify_command)
         verify_authorization_phrase(config, args.authorization_phrase)
+
+        current_remote_head = remote_branch_snapshot(project, remote, target)
+        if current_remote_head != remote_head:
+            details.update(
+                {
+                    "reason": "base_outdated",
+                    "remoteHead": remote_head,
+                    "currentRemoteHead": current_remote_head,
+                }
+            )
+            return stop(project, args.command, "EXCEPTION_REQUIRED", "base_outdated", details)
 
         require_git_success(project, "git_hotfix_push_failed", "push", remote, f"HEAD:refs/heads/{target}")
         try:
