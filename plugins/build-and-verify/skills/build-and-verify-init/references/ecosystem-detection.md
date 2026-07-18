@@ -11,7 +11,7 @@
 ## Existing Configuration（已有配置）
 
 - 信号：`.build-and-verify/config.json`（配置文件）存在。
-- 读取已有 `build.checks`（构建检查项）和 `verify.checks`（验证检查项），逐项保留 check id（检查项标识）、command（命令）、paths（受影响路径）、inputs（缓存输入）、checkParallel（检查项间并行）、pytestXdistWorkers（Pytest 工作进程数）和 timeoutSeconds（超时秒数）。
+- 读取已有 `build.checks`（构建检查项）和 `verify.checks`（验证检查项），逐项保留 check id（检查项标识）、command（命令）、paths（受影响路径）、inputs（缓存输入）、checkParallel（检查项间并行）、pytestXdistWorkers（Pytest 工作进程数）和 timeoutSeconds（超时秒数）；保留已有 `verify.fullBudgetSeconds`（完整验证预算秒数），但不得自行启用或修改。
 - 已有配置包含旧 `parallel`（旧并行字段）时，必须把它作为 migration needed（需要迁移）风险提示展示，并让用户确认迁移为 `checkParallel`（检查项间并行）。
 - confidence（置信度）为 High（高），risk（风险提示）为“来自已有配置，覆盖前必须备份并确认”。
 - 已有配置无法解析为 JSON（JSON 配置格式）时，不得猜测内容；报告问题并继续其他候选扫描。

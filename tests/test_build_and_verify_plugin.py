@@ -184,13 +184,31 @@ class FakeRunnerModule:
     def run_build(self, project: Path) -> int:
         return int(self.runner_module.run_build(project, runner=self.runner))
 
-    def run_verify(self, project: Path, *, full: bool = False) -> int:
+    def run_verify(
+        self,
+        project: Path,
+        *,
+        full: bool = False,
+        performance_report: bool = False,
+        runtime_version: str = "unknown",
+    ) -> int:
+        def call_runner() -> int:
+            return int(
+                self.runner_module.run_verify(
+                    project,
+                    runner=self.runner,
+                    full=full,
+                    performance_report=performance_report,
+                    runtime_version=runtime_version,
+                )
+            )
+
         if self.changed_files is None:
-            return int(self.runner_module.run_verify(project, runner=self.runner, full=full))
+            return call_runner()
         original_changed_files = self.runner_module._changed_files
         self.runner_module._changed_files = lambda _project: list(self.changed_files)
         try:
-            return int(self.runner_module.run_verify(project, runner=self.runner, full=full))
+            return call_runner()
         finally:
             self.runner_module._changed_files = original_changed_files
 
@@ -794,6 +812,7 @@ def test_build_and_verify_plugin_has_dual_manifests() -> None:
     assert codex_manifest["name"] == PLUGIN_NAME
     assert claude_manifest["name"] == PLUGIN_NAME
     assert codex_manifest["version"] == claude_manifest["version"]
+    assert codex_manifest["version"]
     assert codex_manifest["description"] == PLUGIN_DESCRIPTION
     assert claude_manifest["description"] == PLUGIN_DESCRIPTION
     assert codex_manifest["skills"] == "./skills"
@@ -829,6 +848,11 @@ def test_build_and_verify_plugin_has_runtime_and_init_skill_entrypoints() -> Non
     assert ".build-and-verify/runtime/build_and_verify.py verify" in runtime_skill_text
     assert "timeoutSeconds" in runtime_skill_text
     assert "pytest-xdist" in runtime_skill_text
+    assert "verify.fullBudgetSeconds" in runtime_skill_text
+    assert "--performance-report" in runtime_skill_text
+    assert ".build-and-verify/runs/performance-report.json" in runtime_skill_text
+    assert "不改变功能验证退出状态" in runtime_skill_text
+    assert "未触发报告时不创建、不覆盖也不删除已有报告" in runtime_skill_text
 
     assert init_skill_text.startswith("---\n")
     assert f"name: {INIT_SKILL_NAME}" in init_front_matter
@@ -871,6 +895,7 @@ def test_build_and_verify_init_questionnaire_contains_fixed_flow() -> None:
         "接受建议运行参数。",
         "修改 `verify.maxParallel`（最大并行检查数）。",
         "修改 `verify.timeoutSeconds`（超时秒数）。",
+        "启用、修改或保持禁用 `verify.fullBudgetSeconds`（完整验证预算秒数）。",
         "确认写入。",
         "返回前面问题修改草案。",
     ]
@@ -1126,6 +1151,7 @@ def test_build_and_verify_init_config_draft_rules_cover_commands_paths_inputs_an
         "inputs（缓存输入）",
         "verify.maxParallel",
         "verify.timeoutSeconds",
+        "verify.fullBudgetSeconds",
         "checkParallel",
         "pytestXdistWorkers",
         "auto（自动）语义",
@@ -1160,6 +1186,20 @@ def test_build_and_verify_init_references_have_cross_file_flow_invariants() -> N
         "verify.node-verify",
     ]:
         assert check_id in ecosystem
+
+
+def test_build_and_verify_init_documents_optional_full_budget() -> None:
+    skill = (INIT_SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    questionnaire = (INIT_REFERENCE_ROOT / "questionnaire.md").read_text(encoding="utf-8")
+    ecosystem = (INIT_REFERENCE_ROOT / "ecosystem-detection.md").read_text(encoding="utf-8")
+    config_draft = (INIT_REFERENCE_ROOT / "config-draft.md").read_text(encoding="utf-8")
+    validation = (INIT_REFERENCE_ROOT / "validation.md").read_text(encoding="utf-8")
+
+    for text in [skill, questionnaire, ecosystem, config_draft, validation]:
+        assert "verify.fullBudgetSeconds" in text
+    assert "用户确认正整数后" in questionnaire + config_draft
+    assert "未启用时省略" in questionnaire + config_draft
+    assert "只警告并记录报告" in skill + questionnaire
 
 
 def test_build_and_verify_init_skill_closes_interactive_validation_loop_inside_plugin() -> None:
@@ -1228,6 +1268,7 @@ def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_conf
         "/backups/",
         "config（配置）结构校验",
         "verify.timeoutSeconds",
+        "verify.fullBudgetSeconds",
         "checkParallel",
         "pytestXdistWorkers",
         "大于 0 的 number（数字）",
@@ -1457,6 +1498,14 @@ def test_build_and_verify_init_copies_repository_runtime(tmp_path: Path) -> None
     assert (runtime / "build_and_verify.py").is_file()
     assert (runtime / "build_and_verify_runner.py").is_file()
     assert (runtime / "version.json").is_file()
+    assert sorted(path.name for path in runtime.iterdir()) == [
+        "build_and_verify.py",
+        "build_and_verify_runner.py",
+        "version.json",
+    ]
+    assert read_json(runtime / "version.json")["runtime_version"] == read_json(
+        PLUGIN_ROOT / ".codex-plugin" / "plugin.json"
+    )["version"]
 
 
 def test_build_and_verify_init_writes_confirmed_config_with_overwrite(
@@ -1567,6 +1616,80 @@ def test_build_and_verify_init_config_overwrite_e2e_temp_target_repo(
     assert fast.returncode == 0, fast.stdout + fast.stderr
     assert "full-not-run: true" in fast.stdout
     assert (target / "e2e.log").read_text(encoding="utf-8").splitlines() == ["verify"]
+
+
+def test_copied_runtime_full_performance_report_e2e_temp_target_repo(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
+    runtime_script = project / ".build-and-verify" / "runtime" / "build_and_verify.py"
+    slow_check = (
+        "import time; from pathlib import Path; time.sleep(1.05); "
+        "Path('performance.log').open('a', encoding='utf-8').write('slow\\n')"
+    )
+    marker_check = (
+        "from pathlib import Path; "
+        "Path('performance.log').open('a', encoding='utf-8').write('marker\\n')"
+    )
+    write_runner_config(
+        project,
+        verify_checks=[
+            {"id": "slow", "command": [sys.executable, "-c", slow_check], "inputs": []},
+            {"id": "marker", "command": [sys.executable, "-c", marker_check], "inputs": []},
+        ],
+        verify_config={"fullBudgetSeconds": 1},
+    )
+
+    automatic = subprocess.run(
+        [sys.executable, str(runtime_script), "verify", "--project", str(project), "--full"],
+        cwd=project,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    report_path = project / ".build-and-verify" / "runs" / "performance-report.json"
+    assert automatic.returncode == 0, automatic.stdout + automatic.stderr
+    assert "performance-warning:" in automatic.stdout
+    assert (project / "performance.log").read_text(encoding="utf-8").splitlines() == [
+        "slow",
+        "marker",
+    ]
+    automatic_report = read_json(report_path)
+    assert automatic_report["overBudget"] is True
+
+    explicit_check = (
+        "from pathlib import Path; "
+        "Path('performance.log').open('a', encoding='utf-8').write('explicit\\n')"
+    )
+    write_runner_config(
+        project,
+        verify_checks=[
+            {"id": "explicit", "command": [sys.executable, "-c", explicit_check], "inputs": []}
+        ],
+    )
+
+    explicit = subprocess.run(
+        [
+            sys.executable,
+            str(runtime_script),
+            "verify",
+            "--project",
+            str(project),
+            "--full",
+            "--performance-report",
+        ],
+        cwd=project,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert explicit.returncode == 0, explicit.stdout + explicit.stderr
+    assert read_json(report_path)["budgetSeconds"] is None
+    assert read_json(report_path)["overBudget"] is None
 
 
 def test_copied_repository_runtime_can_initialize_another_project(tmp_path: Path) -> None:
@@ -2454,12 +2577,317 @@ def test_build_and_verify_runner_full_verify_allows_empty_checks(tmp_path: Path)
     project.mkdir()
     assert run_build_and_verify("init", "--project", str(project)).returncode == 0
 
-    result = run_check(project, "verify", "--full")
+    result = run_check(project, "verify", "--full", "--performance-report")
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "checked:" in result.stdout
     assert "full-not-run: false" in result.stdout
     assert "status: passed" in result.stdout
+    assert read_json(
+        project / ".build-and-verify" / "runs" / "performance-report.json"
+    )["checks"] == []
+
+
+@pytest.mark.parametrize("value", [True, 0, -1, 1.5, "1"])
+def test_build_and_verify_invalid_full_budget_rejects_before_checks(
+    tmp_path: Path, value: object
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(
+        project,
+        verify_checks=[{"id": "verify", "command": ["verify"], "inputs": []}],
+        verify_config={"fullBudgetSeconds": value},
+    )
+    runner = FakeRunner()
+
+    result = run_check(project, "verify", "--full", runner=runner, changed_files=[])
+
+    assert result.returncode == 1
+    assert "verify.fullBudgetSeconds must be positive integer" in result.stderr
+    assert runner.calls == []
+
+
+def test_build_and_verify_performance_report_requires_full(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(
+        project,
+        verify_checks=[{"id": "verify", "command": ["verify"], "inputs": []}],
+    )
+    runner = FakeRunner()
+
+    result = run_check(project, "verify", "--performance-report", runner=runner)
+
+    assert result.returncode == 2
+    assert "--performance-report requires --full" in result.stderr
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize(
+    ("budget", "total", "explicit_report", "functional_returncode", "writes_report", "warns"),
+    [
+        (10, 9.00, False, 0, False, False),
+        (10, 9.00, True, 0, True, False),
+        (10, 10.004, False, 0, False, False),
+        (10, 11.00, False, 0, True, True),
+        (10, 11.00, True, 1, True, True),
+        (None, 9.00, True, 0, True, False),
+    ],
+)
+def test_build_and_verify_full_performance_report_matrix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    budget: int | None,
+    total: float,
+    explicit_report: bool,
+    functional_returncode: int,
+    writes_report: bool,
+    warns: bool,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    verify_config = {"fullBudgetSeconds": budget} if budget is not None else None
+    write_runner_config(
+        project,
+        verify_checks=[{"id": "verify", "command": ["verify"], "inputs": []}],
+        verify_config=verify_config,
+    )
+    runner = FakeRunner(
+        {("verify",): completed(["verify"], returncode=functional_returncode)}
+    )
+    ticks = iter([0.0, 0.0, 0.0, total])
+    monkeypatch.setattr(
+        load_build_and_verify_runner_module().time, "monotonic", lambda: next(ticks)
+    )
+    args = ["verify", "--full"]
+    if explicit_report:
+        args.append("--performance-report")
+
+    result = run_check(project, *args, runner=runner, changed_files=[])
+
+    assert result.returncode == (1 if functional_returncode else 0)
+    assert ("performance-warning:" in result.stdout) is warns
+    report_path = project / ".build-and-verify" / "runs" / "performance-report.json"
+    assert report_path.exists() is writes_report
+    if writes_report:
+        report = read_json(report_path)
+        assert report["totalSeconds"] == round(total, 2)
+        assert report["budgetSeconds"] == budget
+        assert report["overBudget"] is (total > budget if budget is not None else None)
+        assert report["verificationStatus"] == (
+            "failed" if functional_returncode else "passed"
+        )
+
+
+def test_build_and_verify_performance_report_schema_is_exact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(
+        project,
+        verify_checks=[
+            {"id": "first", "command": ["first"], "inputs": []},
+            {"id": "second", "command": ["second"], "inputs": []},
+        ],
+    )
+    runner = FakeRunner(
+        {
+            ("first",): completed(["first"]),
+            ("second",): completed(["second"], returncode=1),
+        }
+    )
+    ticks = iter([0.0, 0.0, 1.234, 2.0, 4.567, 10.0])
+    monkeypatch.setattr(
+        load_build_and_verify_runner_module().time, "monotonic", lambda: next(ticks)
+    )
+
+    result = run_check(
+        project,
+        "verify",
+        "--full",
+        "--performance-report",
+        runner=runner,
+        changed_files=[],
+    )
+
+    assert result.returncode == 1
+    report = read_json(
+        project / ".build-and-verify" / "runs" / "performance-report.json"
+    )
+    assert set(report) == {
+        "schemaVersion",
+        "runtimeVersion",
+        "generatedAt",
+        "totalSeconds",
+        "budgetSeconds",
+        "overBudget",
+        "verificationStatus",
+        "checks",
+    }
+    assert report["generatedAt"].endswith("Z")
+    assert report["checks"] == [
+        {"id": "first", "status": "passed", "durationSeconds": 1.23},
+        {"id": "second", "status": "failed", "durationSeconds": 2.57},
+    ]
+
+
+def test_build_and_verify_incomplete_full_results_skip_performance(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(
+        project,
+        verify_checks=[
+            {
+                "id": "interrupted",
+                "command": ["interrupted"],
+                "checkParallel": True,
+                "inputs": [],
+            },
+            {
+                "id": "not-returned",
+                "command": ["not-returned"],
+                "checkParallel": True,
+                "inputs": [],
+            },
+        ],
+        verify_config={"fullBudgetSeconds": 1},
+    )
+    report_path = project / ".build-and-verify" / "runs" / "performance-report.json"
+    report_path.parent.mkdir(parents=True)
+    original = b"{\"previous\": true}\n"
+    report_path.write_bytes(original)
+    runner = FakeRunner({("interrupted",): KeyboardInterrupt("interrupted")})
+
+    result = run_check(
+        project,
+        "verify",
+        "--full",
+        "--performance-report",
+        runner=runner,
+        changed_files=[],
+    )
+
+    assert result.returncode == 1
+    assert "performance-warning:" not in result.stdout
+    assert "performance-report" not in result.stdout + result.stderr
+    assert report_path.read_bytes() == original
+
+
+def test_build_and_verify_fast_verify_leaves_performance_report_unchanged(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(
+        project,
+        verify_checks=[{"id": "fast", "command": ["fast"], "inputs": []}],
+        verify_config={"fullBudgetSeconds": 1},
+    )
+    report_path = project / ".build-and-verify" / "runs" / "performance-report.json"
+    report_path.parent.mkdir(parents=True)
+    original = b"{\"previous\": true}\n"
+    report_path.write_bytes(original)
+
+    result = run_check(
+        project,
+        "verify",
+        runner=FakeRunner(),
+        changed_files=["src/app.py"],
+    )
+
+    assert result.returncode == 0
+    assert "performance" not in result.stdout + result.stderr
+    assert report_path.read_bytes() == original
+
+
+def test_build_and_verify_fast_verify_ignores_invalid_full_budget(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(
+        project,
+        verify_checks=[{"id": "fast", "command": ["fast"], "inputs": []}],
+        verify_config={"fullBudgetSeconds": 0},
+    )
+    runner = FakeRunner()
+
+    result = run_check(
+        project,
+        "verify",
+        runner=runner,
+        changed_files=["src/app.py"],
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert runner.calls == [["fast"]]
+    assert "fullBudgetSeconds" not in result.stdout + result.stderr
+
+
+def test_build_and_verify_report_write_failure_preserves_functional_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(
+        project,
+        verify_checks=[{"id": "verify", "command": ["verify"], "inputs": []}],
+    )
+    path_type = type(project)
+    original_write_text = path_type.write_text
+
+    def fail_report_temp(self, *args, **kwargs):
+        if self.name == ".performance-report.json.tmp":
+            raise OSError("write failed")
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(path_type, "write_text", fail_report_temp)
+
+    result = run_check(
+        project,
+        "verify",
+        "--full",
+        "--performance-report",
+        runner=FakeRunner(),
+        changed_files=[],
+    )
+
+    assert result.returncode == 0
+    assert "performance-report-warning:" in result.stderr
+
+
+def test_build_and_verify_performance_report_replaces_atomically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(
+        project,
+        verify_checks=[{"id": "verify", "command": ["verify"], "inputs": []}],
+    )
+    path_type = type(project)
+    original_replace = path_type.replace
+    replacements: list[tuple[str, str]] = []
+
+    def track_replace(self, target):
+        replacements.append((self.name, Path(target).name))
+        return original_replace(self, target)
+
+    monkeypatch.setattr(path_type, "replace", track_replace)
+
+    result = run_check(
+        project,
+        "verify",
+        "--full",
+        "--performance-report",
+        runner=FakeRunner(),
+        changed_files=[],
+    )
+
+    assert result.returncode == 0
+    assert (".performance-report.json.tmp", "performance-report.json") in replacements
 
 
 def test_build_and_verify_runner_rejects_legacy_parallel_field(tmp_path: Path) -> None:

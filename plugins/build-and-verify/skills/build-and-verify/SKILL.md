@@ -27,6 +27,7 @@ python scripts/build_and_verify.py update-runtime --project .
 python scripts/build_and_verify.py build --project .
 python scripts/build_and_verify.py verify --project .
 python scripts/build_and_verify.py verify --project . --full
+python scripts/build_and_verify.py verify --project . --full --performance-report
 ```
 
 仓库稳定入口可从 `.build-and-verify/runtime/` 调用：
@@ -47,6 +48,10 @@ python .build-and-verify/runtime/build_and_verify.py verify --project .
 - 没有 `inputs` 的 global check（全局检查项）使用当前 changed files（变更文件）计算 cache key（缓存键）；需要更稳定缓存时，目标仓库应显式配置 `inputs`。
 - 有 `paths` 但没有 `inputs` 的 verify check（验证检查项）会扫描目标仓库文件来计算 cache key（缓存键）；大型仓库应显式配置 `inputs` 降低默认 verify（快速验证）开销。
 - `verify --full`（完整验证）运行全部 `verify.checks`，不读取 cache（缓存）跳过检查；成功通过后会写入或刷新 passed-result cache（通过结果缓存）。
+- `verify.fullBudgetSeconds`（完整验证预算秒数）是可选正整数；缺省时不判断总耗时预算。
+- 完整验证只在全部检查结束后判断预算。超预算会输出 `performance-warning`（性能警告）并自动写入 `.build-and-verify/runs/performance-report.json`（性能报告），但不改变功能验证退出状态。
+- `verify --full --performance-report`（完整验证性能报告）可在无预算或预算内时主动写入同一路径的固定报告。未触发报告时不创建、不覆盖也不删除已有报告。
+- performance report（性能报告）固定记录运行时版本、生成时间、完整验证总耗时、预算、超预算状态、功能验证状态和各检查耗时；报告写入失败只输出 `performance-report-warning`（性能报告警告），不改变功能验证退出状态。
 - `verify.timeoutSeconds` 可设置 verify（验证）检查默认 timeout（超时）秒数；`verify.checks[].timeoutSeconds` 可覆盖单个 check（检查项）。未配置时默认 300 秒。
 - 当前仓库的验证配置使用 `pytest-xdist`（Pytest 并行插件）执行 `-n` 并行参数；运行本仓库验证前需要安装 `requirements-dev.txt` 中声明的开发依赖。
 - `command` 来自目标仓库配置，按 checked-out repository（已检出仓库）可信输入执行；不要在不信任的仓库内容上运行 build（构建检查）或 verify（验证）。
