@@ -547,6 +547,12 @@ def command_next_command(command: str, project: Path, args: argparse.Namespace |
     ]
     if command == "cleanup" and args is not None:
         command_args.extend(["--pr", str(getattr(args, "pr", "<number>"))])
+    if command == "hotfix" and args is not None:
+        command_args.extend(
+            ["--target", str(getattr(args, "target", "<target>")), "--authorization-phrase", "<authorization-phrase>"]
+        )
+    if args is not None and getattr(args, "remove_worktree", False):
+        command_args.append("--remove-worktree")
     return " ".join(shlex.quote(part) for part in command_args)
 
 
@@ -1103,6 +1109,46 @@ def confirm_remote_branch_deleted(project: Path, remote: str, branch: str) -> No
         )
 
 
+def parse_worktrees(raw: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    current: dict[str, Any] = {}
+    for field in raw.split("\0"):
+        if not field:
+            if current:
+                records.append(current)
+                current = {}
+            continue
+        key, separator, value = field.partition(" ")
+        current[{"worktree": "path", "HEAD": "head"}.get(key, key)] = value if separator else True
+    if current:
+        records.append(current)
+    return records
+
+
+def list_worktrees(project: Path) -> list[dict[str, Any]]:
+    result = require_git_success(project, "git_worktree_list_failed", "worktree", "list", "--porcelain", "-z")
+    return parse_worktrees(result.stdout)
+
+
+def normalized_path(path: str | Path) -> str:
+    resolved = str(Path(path).resolve())
+    return os.path.normcase(resolved) if os.name == "nt" else resolved
+
+
+def remove_worktree(project: Path, target: Path) -> None:
+    worktrees = list_worktrees(project)
+    target_key = normalized_path(target)
+    if not worktrees or normalized_path(worktrees[0]["path"]) == target_key:
+        raise PrFlowError("main_worktree_removal_forbidden", {"reason": "main_worktree_removal_forbidden"})
+    dirty = require_git_success(target, "git_status_failed", "status", "--short").stdout.strip()
+    if dirty:
+        raise PrFlowError("dirty_worktree", {"reason": "dirty_worktree", "dirty": dirty})
+    controller = Path(worktrees[0]["path"])
+    require_git_success(controller, "git_worktree_remove_failed", "worktree", "remove", str(target.resolve()))
+    if any(normalized_path(item["path"]) == target_key for item in list_worktrees(controller)):
+        raise PrFlowError("git_worktree_remove_failed", {"reason": "git_worktree_remove_failed"})
+
+
 def gh_with_body_file(project: Path, args: Sequence[str], body: str) -> subprocess.CompletedProcess[str]:
     body_path: Path | None = None
     try:
@@ -1580,6 +1626,7 @@ def run_lifecycle(
     pr_body: str | None = None,
     fixes: Sequence[str] = (),
     next_command: str | None = None,
+    remove_worktree_after: bool = False,
 ) -> int:
     try:
         pr = find_pr(project)
@@ -1687,25 +1734,20 @@ def run_lifecycle(
 
     print("status: merge_complete")
     print(f"pr: {pr_number_for_command(pr)}")
-    cleanup_args = argparse.Namespace(command="cleanup", project=project, pr=str(pr.get("number")))
+    cleanup_args = argparse.Namespace(
+        command="cleanup",
+        project=project,
+        pr=str(pr.get("number")),
+        remove_worktree=remove_worktree_after,
+    )
     return run_cleanup(cleanup_args)
 
 
 def add_cleanup_recovery(details: dict[str, Any], pr_number: str | None = None) -> dict[str, Any]:
     recovery_pr = str(details.get("pr") or pr_number or "<number>")
-    completed_steps = details.get("completedCleanupSteps")
-    if isinstance(completed_steps, list) and "remote_head_deleted" in completed_steps:
-        details.setdefault(
-            "recovery",
-            "Remote head branch was already deleted. Sync the base branch, then delete the local head branch manually; "
-            f"do not rerun full `pr-flow-cleanup --project . --pr {recovery_pr}` until local state is reconciled.",
-        )
-        return details
     details.setdefault(
         "recovery",
-        "Resolve the reported condition, then run "
-        f"`pr-flow-cleanup --project . --pr {recovery_pr}`. "
-        "If the remote head branch was already deleted, sync the base branch and delete the local head branch manually.",
+        f"Resolve the reported condition, then rerun `pr-flow-cleanup --project . --pr {recovery_pr}`.",
     )
     return details
 
@@ -1728,6 +1770,7 @@ def run_complete(args: argparse.Namespace) -> int:
         pr_body=body,
         fixes=fixes,
         next_command=pr_body_next_command(args.command, project, args),
+        remove_worktree_after=getattr(args, "remove_worktree", False),
     )
 
 
@@ -1751,6 +1794,7 @@ def run_tweak(args: argparse.Namespace) -> int:
         pr_body=body,
         fixes=fixes,
         next_command=pr_body_next_command(args.command, project, args),
+        remove_worktree_after=getattr(args, "remove_worktree", False),
     )
 
 
@@ -1964,6 +2008,14 @@ def run_hotfix(args: argparse.Namespace) -> int:
         print("status: hotfix_complete")
         print(f"target: {target}")
         print(f"after: {current_head}")
+        if getattr(args, "remove_worktree", False):
+            project_key = normalized_path(project)
+            cwd_key = normalized_path(Path.cwd())
+            if cwd_key == project_key or cwd_key.startswith(project_key + os.sep):
+                print(f"nextCommand: {command_next_command('hotfix', project, args)}")
+            else:
+                remove_worktree(project, project)
+                print(f"removed: {project}")
         return 0
     except FileNotFoundError:
         details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
@@ -1974,7 +2026,6 @@ def run_hotfix(args: argparse.Namespace) -> int:
 
 def run_cleanup(args: argparse.Namespace) -> int:
     project = resolve_project(args.project)
-    completed_cleanup_steps: list[str] = []
     try:
         config = load_config(project)
         pr = view_pr_for_cleanup(project, str(args.pr))
@@ -1999,44 +2050,67 @@ def run_cleanup(args: argparse.Namespace) -> int:
             details["dirty"] = dirty
             return stop(project, args.command, "EXCEPTION_REQUIRED", "dirty_worktree", add_cleanup_recovery(details, str(args.pr)))
 
-        branch_result = require_git_success(project, "git_current_branch_failed", "branch", "--show-current")
-        current_branch = branch_result.stdout.strip()
-        if current_branch != head_ref:
-            details["reason"] = "current_branch_mismatch"
-            details["currentBranch"] = current_branch
-            return stop(project, args.command, "EXCEPTION_REQUIRED", "current_branch_mismatch", add_cleanup_recovery(details, str(args.pr)))
         if head_ref == base_ref:
             details["reason"] = "protected_base_branch"
-            details["currentBranch"] = current_branch
             return stop(project, args.command, "EXCEPTION_REQUIRED", "protected_base_branch", add_cleanup_recovery(details, str(args.pr)))
 
         remote = remote_for_base_branch(config, base_ref)
         details["remote"] = remote
-        require_git_success(project, "git_push_delete_failed", "push", remote, "--delete", head_ref)
-        completed_cleanup_steps.append("remote_head_deleted")
-        confirm_remote_branch_deleted(project, remote, head_ref)
-        completed_cleanup_steps.append("remote_delete_confirmed")
-        require_git_success(project, "git_checkout_base_failed", "checkout", base_ref)
-        completed_cleanup_steps.append("base_checked_out")
-        require_git_success(project, "git_pull_ff_only_failed", "pull", "--ff-only", remote, base_ref)
-        completed_cleanup_steps.append("base_synced")
-        require_git_success(project, "git_branch_delete_failed", "branch", "-d", head_ref)
-        completed_cleanup_steps.append("local_head_deleted")
+        base_oid = remote_branch_snapshot(project, remote, base_ref)
+        details["baseCommit"] = base_oid
+        current_branch = require_git_success(project, "git_current_branch_failed", "branch", "--show-current").stdout.strip()
+        current_oid = head_oid(project)
+        if current_branch != head_ref and not (not current_branch and current_oid == base_oid):
+            details.update({"reason": "current_branch_mismatch", "currentBranch": current_branch, "currentHead": current_oid})
+            return stop(project, args.command, "EXCEPTION_REQUIRED", "current_branch_mismatch", add_cleanup_recovery(details, str(args.pr)))
 
-        final_branch = require_git_success(project, "git_current_branch_failed", "branch", "--show-current").stdout.strip()
+        project_key = normalized_path(project)
+        worktrees = list_worktrees(project)
+        occupied = [
+            item["path"]
+            for item in worktrees
+            if normalized_path(item["path"]) != project_key and item.get("branch") == f"refs/heads/{head_ref}"
+        ]
+        if occupied:
+            details.update({"reason": "source_branch_checked_out", "occupiedWorktrees": occupied})
+            return stop(project, args.command, "EXCEPTION_REQUIRED", "source_branch_checked_out", add_cleanup_recovery(details, str(args.pr)))
+
+        remote_head = require_git_success(project, "git_remote_head_check_failed", "ls-remote", "--heads", remote, head_ref)
+        local_head = git(project, "show-ref", "--verify", "--quiet", f"refs/heads/{head_ref}")
+        if local_head.returncode not in {0, 1}:
+            raise PrFlowError("git_local_head_check_failed", command_failure_details("git_local_head_check_failed", local_head))
+
+        if current_branch == head_ref:
+            require_git_success(project, "git_detach_base_failed", "checkout", "--detach", base_oid)
+        if remote_head.stdout.strip():
+            require_git_success(project, "git_push_delete_failed", "push", remote, "--delete", head_ref)
+            confirm_remote_branch_deleted(project, remote, head_ref)
+        if local_head.returncode == 0:
+            require_git_success(project, "git_branch_delete_failed", "branch", "-d", head_ref)
+
         details["reason"] = "cleanup_complete"
-        details["currentBranch"] = final_branch
-        write_status(project, args.command, "cleanup_complete", details)
+        details["currentBranch"] = ""
+        details["currentHead"] = base_oid
+        removed = False
+        if getattr(args, "remove_worktree", False):
+            cwd_key = normalized_path(Path.cwd())
+            if cwd_key == project_key or cwd_key.startswith(project_key + os.sep):
+                details["nextCommand"] = command_next_command("cleanup", project, args)
+                details["removeWorktreePending"] = True
+            else:
+                remove_worktree(project, project)
+                details["worktreeRemoved"] = True
+                removed = True
+        if not removed:
+            write_status(project, args.command, "cleanup_complete", details)
         print("status: cleanup_complete")
-        print(f"branch: {final_branch}")
+        print(f"head: {base_oid}")
         print(f"deleted: {head_ref}")
         return 0
     except FileNotFoundError:
         details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
         return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
     except PrFlowError as exc:
-        if completed_cleanup_steps:
-            exc.details["completedCleanupSteps"] = completed_cleanup_steps
         return stop(project, args.command, error_status(exc.reason), exc.reason, add_cleanup_recovery(exc.details, str(args.pr)))
 
 
@@ -2073,6 +2147,8 @@ def build_parser() -> argparse.ArgumentParser:
                 default=[],
                 help="Issue number to close; repeat for multiple issues, for example --fixes 41 --fixes 43.",
             )
+        if command in {"complete", "tweak", "cleanup", "hotfix"}:
+            subparser.add_argument("--remove-worktree", action="store_true")
         if command == "tweak":
             subparser.add_argument("--reason")
         if command == "init":
