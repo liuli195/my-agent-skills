@@ -812,6 +812,7 @@ def test_build_and_verify_plugin_has_dual_manifests() -> None:
     assert codex_manifest["name"] == PLUGIN_NAME
     assert claude_manifest["name"] == PLUGIN_NAME
     assert codex_manifest["version"] == claude_manifest["version"]
+    assert codex_manifest["version"] == "0.1.37"
     assert codex_manifest["description"] == PLUGIN_DESCRIPTION
     assert claude_manifest["description"] == PLUGIN_DESCRIPTION
     assert codex_manifest["skills"] == "./skills"
@@ -847,6 +848,11 @@ def test_build_and_verify_plugin_has_runtime_and_init_skill_entrypoints() -> Non
     assert ".build-and-verify/runtime/build_and_verify.py verify" in runtime_skill_text
     assert "timeoutSeconds" in runtime_skill_text
     assert "pytest-xdist" in runtime_skill_text
+    assert "verify.fullBudgetSeconds" in runtime_skill_text
+    assert "--performance-report" in runtime_skill_text
+    assert ".build-and-verify/runs/performance-report.json" in runtime_skill_text
+    assert "不改变功能验证退出状态" in runtime_skill_text
+    assert "未触发报告时不创建、不覆盖也不删除已有报告" in runtime_skill_text
 
     assert init_skill_text.startswith("---\n")
     assert f"name: {INIT_SKILL_NAME}" in init_front_matter
@@ -889,6 +895,7 @@ def test_build_and_verify_init_questionnaire_contains_fixed_flow() -> None:
         "接受建议运行参数。",
         "修改 `verify.maxParallel`（最大并行检查数）。",
         "修改 `verify.timeoutSeconds`（超时秒数）。",
+        "启用、修改或保持禁用 `verify.fullBudgetSeconds`（完整验证预算秒数）。",
         "确认写入。",
         "返回前面问题修改草案。",
     ]
@@ -1144,6 +1151,7 @@ def test_build_and_verify_init_config_draft_rules_cover_commands_paths_inputs_an
         "inputs（缓存输入）",
         "verify.maxParallel",
         "verify.timeoutSeconds",
+        "verify.fullBudgetSeconds",
         "checkParallel",
         "pytestXdistWorkers",
         "auto（自动）语义",
@@ -1178,6 +1186,20 @@ def test_build_and_verify_init_references_have_cross_file_flow_invariants() -> N
         "verify.node-verify",
     ]:
         assert check_id in ecosystem
+
+
+def test_build_and_verify_init_documents_optional_full_budget() -> None:
+    skill = (INIT_SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    questionnaire = (INIT_REFERENCE_ROOT / "questionnaire.md").read_text(encoding="utf-8")
+    ecosystem = (INIT_REFERENCE_ROOT / "ecosystem-detection.md").read_text(encoding="utf-8")
+    config_draft = (INIT_REFERENCE_ROOT / "config-draft.md").read_text(encoding="utf-8")
+    validation = (INIT_REFERENCE_ROOT / "validation.md").read_text(encoding="utf-8")
+
+    for text in [skill, questionnaire, ecosystem, config_draft, validation]:
+        assert "verify.fullBudgetSeconds" in text
+    assert "用户确认正整数后" in questionnaire + config_draft
+    assert "未启用时省略" in questionnaire + config_draft
+    assert "只警告并记录报告" in skill + questionnaire
 
 
 def test_build_and_verify_init_skill_closes_interactive_validation_loop_inside_plugin() -> None:
@@ -1246,6 +1268,7 @@ def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_conf
         "/backups/",
         "config（配置）结构校验",
         "verify.timeoutSeconds",
+        "verify.fullBudgetSeconds",
         "checkParallel",
         "pytestXdistWorkers",
         "大于 0 的 number（数字）",
@@ -1475,6 +1498,12 @@ def test_build_and_verify_init_copies_repository_runtime(tmp_path: Path) -> None
     assert (runtime / "build_and_verify.py").is_file()
     assert (runtime / "build_and_verify_runner.py").is_file()
     assert (runtime / "version.json").is_file()
+    assert sorted(path.name for path in runtime.iterdir()) == [
+        "build_and_verify.py",
+        "build_and_verify_runner.py",
+        "version.json",
+    ]
+    assert read_json(runtime / "version.json")["runtime_version"] == "0.1.37"
 
 
 def test_build_and_verify_init_writes_confirmed_config_with_overwrite(
