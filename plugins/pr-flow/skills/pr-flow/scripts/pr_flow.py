@@ -2126,6 +2126,43 @@ def run_cleanup(args: argparse.Namespace) -> int:
             details.update({"reason": "source_branch_checked_out", "occupiedWorktrees": occupied})
             return stop(project, args.command, "EXCEPTION_REQUIRED", "source_branch_checked_out", add_cleanup_recovery(details, str(args.pr)))
 
+        base_branch_ref = f"refs/heads/{base_ref}"
+        local_base = git(project, "rev-parse", "--verify", "--quiet", base_branch_ref)
+        if local_base.returncode not in {0, 1}:
+            raise PrFlowError("git_local_base_check_failed", command_failure_details("git_local_base_check_failed", local_base))
+        local_base_oid = local_base.stdout.strip() if local_base.returncode == 0 else ""
+        occupied_base = [item["path"] for item in worktrees if item.get("branch") == base_branch_ref]
+        if local_base_oid != base_oid and occupied_base:
+            details.update(
+                {
+                    "reason": "base_branch_checked_out",
+                    "localBaseCommit": local_base_oid or None,
+                    "occupiedWorktrees": occupied_base,
+                }
+            )
+            return stop(project, args.command, "EXCEPTION_REQUIRED", "base_branch_checked_out", add_cleanup_recovery(details, str(args.pr)))
+        if local_base_oid and local_base_oid != base_oid:
+            ancestor = git(project, "merge-base", "--is-ancestor", local_base_oid, base_oid)
+            if ancestor.returncode not in {0, 1}:
+                raise PrFlowError(
+                    "git_local_base_ancestor_check_failed",
+                    command_failure_details("git_local_base_ancestor_check_failed", ancestor),
+                )
+            if ancestor.returncode == 1:
+                details.update(
+                    {
+                        "reason": "local_base_not_fast_forward",
+                        "localBaseCommit": local_base_oid,
+                    }
+                )
+                return stop(
+                    project,
+                    args.command,
+                    "EXCEPTION_REQUIRED",
+                    "local_base_not_fast_forward",
+                    add_cleanup_recovery(details, str(args.pr)),
+                )
+
         remote_head = require_git_success(project, "git_remote_head_check_failed", "ls-remote", "--heads", remote, head_ref)
         local_head = git(project, "show-ref", "--verify", "--quiet", f"refs/heads/{head_ref}")
         if local_head.returncode not in {0, 1}:
@@ -2133,6 +2170,20 @@ def run_cleanup(args: argparse.Namespace) -> int:
 
         if current_branch == head_ref:
             require_git_success(project, "git_detach_base_failed", "checkout", "--detach", base_oid)
+        if local_base_oid != base_oid:
+            require_git_success(project, "git_sync_base_failed", "branch", "-f", base_ref, base_oid)
+        final_base_oid = require_git_success(project, "git_sync_base_readback_failed", "rev-parse", base_branch_ref).stdout.strip()
+        final_head_oid = head_oid(project)
+        if final_base_oid != base_oid or final_head_oid != base_oid:
+            raise PrFlowError(
+                "git_sync_base_mismatch",
+                {
+                    "reason": "git_sync_base_mismatch",
+                    "baseCommit": base_oid,
+                    "localBaseCommit": final_base_oid,
+                    "currentHead": final_head_oid,
+                },
+            )
         if remote_head.stdout.strip():
             require_git_success(project, "git_push_delete_failed", "push", remote, "--delete", head_ref)
             confirm_remote_branch_deleted(project, remote, head_ref)
@@ -2141,7 +2192,8 @@ def run_cleanup(args: argparse.Namespace) -> int:
 
         details["reason"] = "cleanup_complete"
         details["currentBranch"] = ""
-        details["currentHead"] = base_oid
+        details["currentHead"] = final_head_oid
+        details["localBaseCommit"] = final_base_oid
         removed = False
         if getattr(args, "remove_worktree", False):
             cwd_key = normalized_path(Path.cwd())

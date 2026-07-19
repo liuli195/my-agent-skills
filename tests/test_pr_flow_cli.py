@@ -527,7 +527,7 @@ def test_cleanup_stops_before_deletion_when_source_checked_out_elsewhere(tmp_pat
     assert result.returncode == 1
     status = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
     assert status["details"]["reason"] == "source_branch_checked_out"
-    assert str(other) in status["details"]["occupiedWorktrees"]
+    assert other.resolve() in [Path(path).resolve() for path in status["details"]["occupiedWorktrees"]]
 
 
 def test_cleanup_retry_from_latest_detached_base_finishes(tmp_path: Path, monkeypatch) -> None:
@@ -540,6 +540,7 @@ def test_cleanup_retry_from_latest_detached_base_finishes(tmp_path: Path, monkey
         pr_stdout=cleanup_pr_view_json(),
         git_responses=[
             (["branch", "--show-current"], "", 0),
+            (["rev-parse", "HEAD"], base_oid + "\n", 0),
             (["rev-parse", "HEAD"], base_oid + "\n", 0),
             (["worktree", "list", "--porcelain", "-z"], worktrees, 0),
             (["ls-remote", "--heads", "origin", "feature/example"], "", 0),
@@ -726,10 +727,13 @@ def allow_cleanup(git_stub, project: Path, head_ref: str = "feature/example", ba
         ["worktree", "list", "--porcelain", "-z"],
         stdout=f"worktree {project}\0HEAD {'b' * 40}\0branch refs/heads/{head_ref}\0\0",
     )
+    git_stub.add(["rev-parse", "--verify", "--quiet", f"refs/heads/{base_ref}"], stdout=base_oid + "\n")
     git_stub.add(["ls-remote", "--heads", "origin", head_ref], stdout=f"{'b' * 40}\trefs/heads/{head_ref}\n")
     git_stub.add(["ls-remote", "--heads", "origin", head_ref], stdout="")
     git_stub.add(["show-ref", "--verify", "--quiet", f"refs/heads/{head_ref}"])
     git_stub.add(["checkout", "--detach", base_oid])
+    git_stub.add(["rev-parse", f"refs/heads/{base_ref}"], stdout=base_oid + "\n")
+    git_stub.add(["rev-parse", "HEAD"], stdout=base_oid + "\n")
     git_stub.add(["push", "origin", "--delete", head_ref])
     git_stub.add(["branch", "-d", head_ref])
 
@@ -1219,10 +1223,13 @@ def run_cleanup_in_process(
         ["worktree", "list", "--porcelain", "-z"],
         stdout=f"worktree {project}\0HEAD {'b' * 40}\0branch refs/heads/{head_ref}\0\0",
     )
+    git_stub.add(["rev-parse", "--verify", "--quiet", f"refs/heads/{base_ref}"], stdout=base_oid + "\n")
     git_stub.add(["ls-remote", "--heads", "origin", head_ref], stdout=f"{'b' * 40}\trefs/heads/{head_ref}\n")
     git_stub.add(["ls-remote", "--heads", "origin", head_ref], stdout="")
     git_stub.add(["show-ref", "--verify", "--quiet", f"refs/heads/{head_ref}"])
     git_stub.add(["checkout", "--detach", base_oid])
+    git_stub.add(["rev-parse", f"refs/heads/{base_ref}"], stdout=base_oid + "\n")
+    git_stub.add(["rev-parse", "HEAD"], stdout=base_oid + "\n")
     git_stub.add(["push", "origin", "--delete", head_ref])
     git_stub.add(["branch", "-d", head_ref])
     monkeypatch.setattr(module, "gh", gh_stub)
@@ -4974,6 +4981,82 @@ def test_hotfix_pushes_head_to_target_and_writes_audit_record(tmp_path: Path, mo
     }
 
 
+def run_cleanup_with_real_git(project: Path, monkeypatch) -> subprocess.CompletedProcess[str]:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    gh_stub = CommandStub()
+    gh_stub.add(
+        ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
+        stdout=cleanup_pr_view_json(),
+    )
+    monkeypatch.setattr(module, "gh", gh_stub)
+    return invoke_pr_flow(["cleanup", "--project", str(project), "--pr", "12"], module=module)
+
+
+def test_cleanup_detaches_and_fast_forwards_local_base_end_to_end(tmp_path: Path, monkeypatch) -> None:
+    project, remote = init_cleanup_project(tmp_path)
+    remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
+    assert git(project, "rev-parse", "main") != remote_base
+
+    result = run_cleanup_with_real_git(project, monkeypatch)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert git(project, "branch", "--show-current") == ""
+    assert git(project, "rev-parse", "HEAD") == remote_base
+    assert git(project, "rev-parse", "main") == remote_base
+
+
+def test_cleanup_creates_missing_local_base_end_to_end(tmp_path: Path, monkeypatch) -> None:
+    project, remote = init_cleanup_project(tmp_path)
+    remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
+    git(project, "branch", "-D", "main")
+
+    result = run_cleanup_with_real_git(project, monkeypatch)
+    local_base = subprocess.run(
+        ["git", "rev-parse", "main"],
+        cwd=project,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert local_base.returncode == 0, local_base.stdout + local_base.stderr
+    assert local_base.stdout.strip() == remote_base
+
+
+def test_cleanup_refuses_diverged_local_base_end_to_end(tmp_path: Path, monkeypatch) -> None:
+    project, remote = init_cleanup_project(tmp_path)
+    git(project, "checkout", "main")
+    (project / "LOCAL.md").write_text("local only\n", encoding="utf-8")
+    git(project, "add", "LOCAL.md")
+    git(project, "commit", "-m", "local only")
+    git(project, "checkout", "feature/example")
+
+    result = run_cleanup_with_real_git(project, monkeypatch)
+
+    assert result.returncode == 1
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "local_base_not_fast_forward"
+    assert git_bare(remote, "show-ref", "--verify", "refs/heads/feature/example")
+
+
+def test_cleanup_refuses_stale_base_checked_out_elsewhere_end_to_end(tmp_path: Path, monkeypatch) -> None:
+    project, remote = init_cleanup_project(tmp_path)
+    other = tmp_path / "base-worktree"
+    git(project, "worktree", "add", str(other), "main")
+
+    result = run_cleanup_with_real_git(project, monkeypatch)
+
+    assert result.returncode == 1
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "base_branch_checked_out"
+    assert other.resolve() in [Path(path).resolve() for path in status["details"]["occupiedWorktrees"]]
+    assert git_bare(remote, "show-ref", "--verify", "refs/heads/feature/example")
+
+
 def test_cleanup_detaches_latest_base_and_deletes_source_branches(tmp_path: Path, monkeypatch) -> None:
     project, result = run_cleanup_in_process(
         tmp_path,
@@ -5018,9 +5101,12 @@ def test_cleanup_retries_transient_eof_pr_view_before_cleanup(tmp_path: Path, mo
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "HEAD"], "b" * 40 + "\n"),
         (["worktree", "list", "--porcelain", "-z"], f"worktree {project}\0HEAD {'b' * 40}\0branch refs/heads/feature/example\0\0"),
+        (["rev-parse", "--verify", "--quiet", "refs/heads/main"], base_oid + "\n"),
         (["ls-remote", "--heads", "origin", "feature/example"], "b" * 40 + "\trefs/heads/feature/example\n"),
         (["show-ref", "--verify", "--quiet", "refs/heads/feature/example"], ""),
         (["checkout", "--detach", base_oid], ""),
+        (["rev-parse", "refs/heads/main"], base_oid + "\n"),
+        (["rev-parse", "HEAD"], base_oid + "\n"),
         (["push", "origin", "--delete", "feature/example"], ""),
         (["ls-remote", "--heads", "origin", "feature/example"], ""),
         (["branch", "-d", "feature/example"], ""),
@@ -5056,7 +5142,7 @@ def test_cleanup_uses_live_state_instead_of_completed_step_markers(tmp_path: Pat
     assert "completedCleanupSteps" not in status["details"]
 
 
-def test_cleanup_no_longer_checks_out_or_pulls_local_base_branch(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_does_not_checkout_or_pull_local_base_branch(tmp_path: Path, monkeypatch) -> None:
     project, result = run_cleanup_in_process(
         tmp_path,
         monkeypatch,
