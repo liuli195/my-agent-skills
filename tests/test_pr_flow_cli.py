@@ -716,13 +716,21 @@ def remote_snapshot_ref(project: Path) -> str:
     return f"refs/pr-flow/{hashlib.sha256(normalized.encode('utf-8')).hexdigest()}/base"
 
 
-def allow_cleanup(git_stub, project: Path, head_ref: str = "feature/example", base_ref: str = "main") -> None:
+def allow_cleanup(
+    git_stub,
+    project: Path,
+    head_ref: str = "feature/example",
+    base_ref: str = "main",
+    *,
+    add_current_head: bool = True,
+) -> None:
     base_oid = "a" * 40
     snapshot_ref = remote_snapshot_ref(project)
     git_stub.add(["fetch", "--no-write-fetch-head", "--refmap=", "origin", f"+refs/heads/{base_ref}:{snapshot_ref}"])
     git_stub.add(["rev-parse", snapshot_ref], stdout=base_oid + "\n")
     git_stub.add(["branch", "--show-current"], stdout=head_ref + "\n")
-    git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
+    if add_current_head:
+        git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
     git_stub.add(
         ["worktree", "list", "--porcelain", "-z"],
         stdout=f"worktree {project}\0HEAD {'b' * 40}\0branch refs/heads/{head_ref}\0\0",
@@ -1527,7 +1535,7 @@ def run_tweak_in_process(
         (["branch", "--show-current"], "main\n"),
     ]:
         git_stub.add(git_args, stdout=stdout)
-    allow_cleanup(git_stub, project)
+    allow_cleanup(git_stub, project, add_current_head=bool(first_pr_returncode))
     monkeypatch.setattr(module, "gh", gh_stub)
     monkeypatch.setattr(module, "git", git_stub)
     result = invoke_pr_flow(tweak_args(project, reason=reason), module=module)
