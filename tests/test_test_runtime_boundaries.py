@@ -516,6 +516,18 @@ E2E_ALLOWLIST: dict[str, str] = {
     "tests/test_pr_flow_cli.py::test_cleanup_merged_pr_checks_out_base_pulls_and_deletes_branches": (
         "covers pr-flow real git cleanup lifecycle"
     ),
+    "tests/test_pr_flow_cli.py::test_cleanup_creates_missing_local_base_end_to_end": (
+        "covers pr-flow real git cleanup creation of a missing local base"
+    ),
+    "tests/test_pr_flow_cli.py::test_cleanup_detaches_and_fast_forwards_local_base_end_to_end": (
+        "covers pr-flow real git cleanup synchronization of a stale local base"
+    ),
+    "tests/test_pr_flow_cli.py::test_cleanup_refuses_diverged_local_base_end_to_end": (
+        "covers pr-flow real git cleanup protection of divergent local base commits"
+    ),
+    "tests/test_pr_flow_cli.py::test_cleanup_refuses_stale_base_checked_out_elsewhere_end_to_end": (
+        "covers pr-flow real git cleanup protection of an occupied stale local base"
+    ),
     "tests/test_pr_flow_cli.py::test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up": (
         "covers pr-flow real git complete lifecycle"
     ),
@@ -1053,6 +1065,10 @@ CURRENT_E2E_ALLOWLIST_IDENTITIES = {
     "tests/test_cross_agent_review_cli.py::test_sdk_python_invalid_file_reports_clear_error_without_traceback",
     "tests/test_cross_agent_review_cli.py::test_summary_only_rejects_invalid_entries",
     "tests/test_cross_agent_review_cli.py::test_summary_only_reports_sorted_classification_overlap_paths",
+    "tests/test_pr_flow_cli.py::test_cleanup_creates_missing_local_base_end_to_end",
+    "tests/test_pr_flow_cli.py::test_cleanup_detaches_and_fast_forwards_local_base_end_to_end",
+    "tests/test_pr_flow_cli.py::test_cleanup_refuses_diverged_local_base_end_to_end",
+    "tests/test_pr_flow_cli.py::test_cleanup_refuses_stale_base_checked_out_elsewhere_end_to_end",
     "tests/test_pr_flow_cli.py::test_project_template_recovers_stale_lock",
     "tests/test_pr_flow_cli.py::test_project_template_recreates_incomplete_template_after_stale_lock",
     "tests/test_pr_flow_cli.py::test_competing_mutation_reports_lock_without_rewriting_status",
