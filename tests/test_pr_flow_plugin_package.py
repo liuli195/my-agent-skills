@@ -1,3 +1,4 @@
+import argparse
 import contextlib
 import importlib.util
 import io
@@ -196,6 +197,35 @@ def test_recoverable_stop_states_have_recovery_actions() -> None:
     for reason in recoverable_reasons:
         details = module.add_recovery_action({"reason": reason}, "python pr_flow.py complete --project .")
         assert "nextAction" in details or "nextCommand" in details
+
+
+def test_pr_flow_recovery_commands_use_the_executing_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    module = pr_flow_module()
+    expected_script = str(PR_FLOW_SCRIPT.resolve())
+
+    command = module.command_next_command("diagnose", tmp_path)
+    body_command = module.pr_body_next_command(
+        "complete",
+        tmp_path,
+        argparse.Namespace(summary="summary", scope="scope", fixes=["174"]),
+    )
+
+    assert expected_script in command
+    assert expected_script in body_command
+    assert "plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py" not in command
+    assert "plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py" not in body_command
+    assert str(tmp_path) in command
+    assert str(tmp_path) in body_command
+
+    with monkeypatch.context() as patch:
+        patch.setattr(module.os, "name", "nt")
+        windows_command = module.script_command(["diagnose", "--project", str(tmp_path / "project with spaces")])
+        windows_hotfix = module.command_next_command("hotfix", tmp_path, argparse.Namespace(target="main"))
+
+    assert f'"{expected_script}"' in windows_command
+    assert "'" not in windows_command
+    assert '<authorization-phrase>' not in windows_hotfix
+    assert '--authorization-phrase "REPLACE AUTHORIZATION PHRASE"' in windows_hotfix
 
 
 def test_pr_flow_skill_boundaries_prohibit_remote_governance_and_memory_phrase_reuse() -> None:

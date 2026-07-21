@@ -125,6 +125,13 @@ def test_hook_adapter_converts_codex_and_claude_lifecycle_payloads(tmp_path: Pat
             {"session_id": "claude-s1", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": "git status"}},
             "lifecycle.pre_tool_use",
         ),
+        ("pi", "SessionStart", {"session_id": "pi-s1", "cwd": str(project)}, "lifecycle.session_start"),
+        (
+            "pi",
+            "PreToolUse",
+            {"session_id": "pi-s1", "cwd": str(project), "tool_name": "read", "tool_input": {"path": "README.md"}},
+            "lifecycle.pre_tool_use",
+        ),
     ]
 
     for source, event, payload, expected_event_type in cases:
@@ -155,8 +162,8 @@ def test_hook_adapter_converts_codex_and_claude_lifecycle_payloads(tmp_path: Pat
         assert "guard_profile_id" not in envelope
         assert "profile_id" not in envelope
         if event == "PreToolUse":
-            assert envelope["payload"]["tool"]["name"] == "Bash"
-            assert envelope["payload"]["tool_input"]["command"] == "git status"
+            assert envelope["payload"]["tool"]["name"] == payload["tool_name"]
+            assert envelope["payload"]["tool_input"] == payload["tool_input"]
 
 
 def test_session_start_writes_observation_and_missing_observation_blocks_activation(tmp_path: Path) -> None:

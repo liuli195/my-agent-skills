@@ -15,7 +15,17 @@ description: "PR Flow（拉取请求流程）tweak（小改）路径，用于非
 
 默认保留当前 worktree（工作树）。`--remove-worktree`（删除工作树参数）只在合并和安全 cleanup（清理）完成后生效；从待删除目录内运行时，按输出的外部重试命令完成删除，且永不强制删除。
 
+## Pi 入口
+
+在 Pi（编码助手）中，调用 `pr_flow`（PR Flow 工具）：
+
+```json
+{"argv":["tweak","--project",".","--reason","small docs polish","--summary","更新 PR Flow 文档措辞","--scope","只修改 PR Flow 文档","--fixes","98"]}
+```
+
 ## 命令
+
+源码仓库维护者或其他宿主继续使用：
 
 ```bash
 python plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py tweak --project . --reason "small docs polish" --summary "更新 PR Flow 文档措辞" --scope "只修改 PR Flow 文档" --fixes 98

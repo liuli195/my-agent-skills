@@ -544,10 +544,13 @@ def add_default_next_command(details: dict[str, Any], next_command: str | None) 
     return add_recovery_action(details, next_command)
 
 
+def script_command(parts: list[str]) -> str:
+    command = [sys.executable, str(Path(__file__).resolve()), *parts]
+    return subprocess.list2cmdline(command) if os.name == "nt" else shlex.join(command)
+
+
 def command_next_command(command: str, project: Path, args: argparse.Namespace | None = None) -> str:
     command_args = [
-        sys.executable,
-        "plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py",
         command,
         "--project",
         str(project),
@@ -556,17 +559,15 @@ def command_next_command(command: str, project: Path, args: argparse.Namespace |
         command_args.extend(["--pr", str(getattr(args, "pr", "<number>"))])
     if command == "hotfix" and args is not None:
         command_args.extend(
-            ["--target", str(getattr(args, "target", "<target>")), "--authorization-phrase", "<authorization-phrase>"]
+            ["--target", str(getattr(args, "target", "<target>")), "--authorization-phrase", "REPLACE AUTHORIZATION PHRASE"]
         )
     if args is not None and getattr(args, "remove_worktree", False):
         command_args.append("--remove-worktree")
-    return " ".join(shlex.quote(part) for part in command_args)
+    return script_command(command_args)
 
 
 def pr_body_next_command(command: str, project: Path, args: argparse.Namespace) -> str:
     command_args = [
-        sys.executable,
-        "plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py",
         command,
         "--project",
         str(project),
@@ -577,7 +578,7 @@ def pr_body_next_command(command: str, project: Path, args: argparse.Namespace) 
     command_args.extend(["--scope", str(getattr(args, "scope", "") or "列出本次 PR 的影响范围")])
     for issue in getattr(args, "fixes", []) or []:
         command_args.extend(["--fixes", str(issue)])
-    return " ".join(shlex.quote(part) for part in command_args)
+    return script_command(command_args)
 
 
 def require_pr_body_args(project: Path, command: str, args: argparse.Namespace) -> tuple[str, str, list[str]]:

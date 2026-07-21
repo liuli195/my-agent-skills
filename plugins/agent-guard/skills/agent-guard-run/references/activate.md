@@ -7,7 +7,7 @@
 Plugin Runtime（插件运行时）稳定入口：
 
 ```text
-python <plugin>/scripts/guard_runtime/cli.py activate --source codex --session-id <session-id> --profile <id>
+python <plugin>/scripts/guard_runtime/cli.py activate --source <source> --session-id <session-id> --profile <id>
 ```
 
 源码仓库辅助脚本：
@@ -15,6 +15,8 @@ python <plugin>/scripts/guard_runtime/cli.py activate --source codex --session-i
 ```powershell
 python ../agent-guard/scripts/activate_guard.py
 ```
+
+Pi（编码助手）会话由 Pi extension（扩展）在 `session_start`（会话启动）时设置当前进程的 `AGENT_GUARD_SOURCE=pi` 和 `AGENT_GUARD_SESSION_ID`。Pi 中调用源码仓库辅助脚本时可省略 `--source` 和 `--session-id`；直接调用稳定 Runtime（运行时）入口时传入这两个环境变量的值。其他宿主必须传入其自身的 `source + session_id`。
 
 ## 规则
 

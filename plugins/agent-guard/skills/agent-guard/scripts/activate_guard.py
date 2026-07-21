@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目目录，默认当前目录")
     parser.add_argument("--user-home", type=Path, default=Path.home(), help="用户级运行态根目录")
     parser.add_argument("--profile", required=True, help="Guard Profile（守卫画像）ID")
-    parser.add_argument("--source", default="codex", choices=["codex", "claude"], help="当前会话来源")
+    parser.add_argument("--source", default=os.environ.get("AGENT_GUARD_SOURCE", "codex"), choices=["codex", "claude", "pi"], help="当前会话来源")
     parser.add_argument("--session-id", help="当前 session_id")
     parser.add_argument("--scope", default="project", choices=["project", "user"], help="Session Focus Binding（会话焦点绑定）作用域")
     parser.add_argument("--context-json", help="兼容旧参数；可从其中读取 session_id")
@@ -53,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--select-instance")
     args = parser.parse_args(argv)
 
-    session_id = args.session_id
+    session_id = args.session_id or os.environ.get("AGENT_GUARD_SESSION_ID")
     if not session_id and args.context_json:
         try:
             context = json.loads(args.context_json)

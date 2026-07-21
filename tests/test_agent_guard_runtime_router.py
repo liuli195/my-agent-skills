@@ -946,6 +946,40 @@ def test_hook_router_blocks_claude_stdin_hook_with_exit_code_2(tmp_path: Path) -
     assert "global_command_guard_required" in result.stderr
 
 
+def test_hook_router_blocks_pi_stdin_hook_with_standard_deny_output(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    user_home = tmp_path / "user-home"
+    project.mkdir()
+    profile = project / ".agents" / "guards" / "repo-policy"
+    profile.mkdir(parents=True)
+    write_global_command_guard(profile, "verify_requires_review", "comet-guard.sh (?P<change>[A-Za-z0-9._-]+) build --apply")
+
+    result = run_hook_stdin(
+        [
+            "--source",
+            "pi",
+            "--event",
+            "PreToolUse",
+            "--project",
+            str(project),
+            "--user-home",
+            str(user_home),
+        ],
+        {
+            "session_id": "pi-session-1",
+            "cwd": str(project),
+            "tool_name": "Bash",
+            "tool_input": {"command": "comet-guard.sh demo build --apply"},
+        },
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    payload = body(result)
+    assert payload["status"] == "deny"
+    assert payload["reason"] == "global_command_guard_required"
+    assert "hookSpecificOutput" not in payload
+
+
 def test_run_guard_event_preserves_standard_payload_command_for_global_command_guard(tmp_path: Path) -> None:
     project = tmp_path / "project"
     user_home = tmp_path / "user-home"
