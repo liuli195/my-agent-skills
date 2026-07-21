@@ -292,6 +292,11 @@ def lock_file_path(project: Path) -> Path:
     return Path(context["commonGitDir"]) / "pr-flow-locks" / f"{context['worktreeKey']}.lock"
 
 
+def base_checkout_lock_file_path(project: Path, base_ref: str) -> Path:
+    context = worktree_context(project)
+    return Path(context["commonGitDir"]) / "pr-flow-locks" / f"base-{stable_key(base_ref)}.lock"
+
+
 def try_file_lock(handle: Any) -> bool:
     handle.seek(0)
     if os.name == "nt":
@@ -375,6 +380,29 @@ def operation_lock(project: Path, command: str, args: argparse.Namespace):
             handle.truncate()
             handle.write(json.dumps(metadata, ensure_ascii=False).encode("utf-8"))
             handle.flush()
+            yield
+        finally:
+            unlock_file(handle)
+
+
+@contextlib.contextmanager
+def base_checkout_lock(project: Path, base_ref: str):
+    path = base_checkout_lock_file_path(project, base_ref)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        if path.stat().st_size == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
             yield
         finally:
             unlock_file(handle)
@@ -2113,7 +2141,9 @@ def run_cleanup(args: argparse.Namespace) -> int:
         details["baseCommit"] = base_oid
         current_branch = require_git_success(project, "git_current_branch_failed", "branch", "--show-current").stdout.strip()
         current_oid = head_oid(project)
-        if current_branch != head_ref and not (not current_branch and current_oid == base_oid):
+        is_detached_base = not current_branch and current_oid == base_oid
+        is_synced_base = current_branch == base_ref and current_oid == base_oid
+        if current_branch != head_ref and not is_detached_base and not is_synced_base:
             details.update({"reason": "current_branch_mismatch", "currentBranch": current_branch, "currentHead": current_oid})
             return stop(project, args.command, "EXCEPTION_REQUIRED", "current_branch_mismatch", add_cleanup_recovery(details, str(args.pr)))
 
@@ -2133,16 +2163,6 @@ def run_cleanup(args: argparse.Namespace) -> int:
         if local_base.returncode not in {0, 1}:
             raise PrFlowError("git_local_base_check_failed", command_failure_details("git_local_base_check_failed", local_base))
         local_base_oid = local_base.stdout.strip() if local_base.returncode == 0 else ""
-        occupied_base = [item["path"] for item in worktrees if item.get("branch") == base_branch_ref]
-        if local_base_oid != base_oid and occupied_base:
-            details.update(
-                {
-                    "reason": "base_branch_checked_out",
-                    "localBaseCommit": local_base_oid or None,
-                    "occupiedWorktrees": occupied_base,
-                }
-            )
-            return stop(project, args.command, "EXCEPTION_REQUIRED", "base_branch_checked_out", add_cleanup_recovery(details, str(args.pr)))
         if local_base_oid and local_base_oid != base_oid:
             ancestor = git(project, "merge-base", "--is-ancestor", local_base_oid, base_oid)
             if ancestor.returncode not in {0, 1}:
@@ -2170,22 +2190,93 @@ def run_cleanup(args: argparse.Namespace) -> int:
         if local_head.returncode not in {0, 1}:
             raise PrFlowError("git_local_head_check_failed", command_failure_details("git_local_head_check_failed", local_head))
 
-        if current_branch == head_ref:
-            require_git_success(project, "git_detach_base_failed", "checkout", "--detach", base_oid)
-        if local_base_oid != base_oid:
-            require_git_success(project, "git_sync_base_failed", "branch", "-f", base_ref, base_oid)
-        final_base_oid = require_git_success(project, "git_sync_base_readback_failed", "rev-parse", base_branch_ref).stdout.strip()
-        final_head_oid = head_oid(project)
-        if final_base_oid != base_oid or final_head_oid != base_oid:
-            raise PrFlowError(
-                "git_sync_base_mismatch",
-                {
-                    "reason": "git_sync_base_mismatch",
-                    "baseCommit": base_oid,
-                    "localBaseCommit": final_base_oid,
-                    "currentHead": final_head_oid,
-                },
-            )
+        with base_checkout_lock(project, base_ref):
+            refreshed_worktrees = list_worktrees(project)
+            occupied_base = [
+                item["path"]
+                for item in refreshed_worktrees
+                if normalized_path(item["path"]) != project_key and item.get("branch") == base_branch_ref
+            ]
+            if local_base_oid != base_oid and occupied_base:
+                details.update(
+                    {
+                        "reason": "base_branch_checked_out",
+                        "localBaseCommit": local_base_oid or None,
+                        "occupiedWorktrees": occupied_base,
+                    }
+                )
+                return stop(
+                    project,
+                    args.command,
+                    "EXCEPTION_REQUIRED",
+                    "base_branch_checked_out",
+                    add_cleanup_recovery(details, str(args.pr)),
+                )
+
+            if current_branch == head_ref:
+                require_git_success(project, "git_detach_base_failed", "checkout", "--detach", base_oid)
+            if local_base_oid != base_oid:
+                require_git_success(project, "git_sync_base_failed", "branch", "-f", base_ref, base_oid)
+
+            base_checkout: dict[str, Any]
+            if occupied_base:
+                base_checkout = {
+                    "status": "skipped",
+                    "reason": "base_branch_occupied",
+                    "occupiedWorktrees": occupied_base,
+                }
+            else:
+                checkout_base = git(project, "checkout", base_ref)
+                if checkout_base.returncode == 0:
+                    base_checkout = {"status": "checked_out"}
+                else:
+                    refreshed_worktrees = list_worktrees(project)
+                    refreshed_occupied_base = [
+                        item["path"]
+                        for item in refreshed_worktrees
+                        if normalized_path(item["path"]) != project_key and item.get("branch") == base_branch_ref
+                    ]
+                    checkout_failure = command_failure_details("git_checkout_base_failed", checkout_base)
+                    checkout_failure["gitArgs"] = ["checkout", base_ref]
+                    if not refreshed_occupied_base:
+                        raise PrFlowError("git_checkout_base_failed", checkout_failure)
+                    refreshed_base_oid = require_git_success(
+                        project, "git_sync_base_readback_failed", "rev-parse", base_branch_ref
+                    ).stdout.strip()
+                    if refreshed_base_oid != base_oid:
+                        checkout_failure.update(
+                            {
+                                "reason": "base_branch_checked_out",
+                                "localBaseCommit": refreshed_base_oid,
+                                "occupiedWorktrees": refreshed_occupied_base,
+                            }
+                        )
+                        raise PrFlowError("base_branch_checked_out", checkout_failure)
+                    occupied_base = refreshed_occupied_base
+                    base_checkout = {
+                        "status": "skipped",
+                        "reason": "base_branch_occupied",
+                        "occupiedWorktrees": occupied_base,
+                    }
+
+            final_base_oid = require_git_success(
+                project, "git_sync_base_readback_failed", "rev-parse", base_branch_ref
+            ).stdout.strip()
+            final_head_oid = head_oid(project)
+            final_branch = require_git_success(project, "git_current_branch_failed", "branch", "--show-current").stdout.strip()
+            expected_branch = "" if occupied_base else base_ref
+            if final_base_oid != base_oid or final_head_oid != base_oid or final_branch != expected_branch:
+                raise PrFlowError(
+                    "git_sync_base_mismatch",
+                    {
+                        "reason": "git_sync_base_mismatch",
+                        "baseCommit": base_oid,
+                        "localBaseCommit": final_base_oid,
+                        "currentHead": final_head_oid,
+                        "currentBranch": final_branch,
+                        "expectedBranch": expected_branch,
+                    },
+                )
         if remote_head.stdout.strip():
             require_git_success(project, "git_push_delete_failed", "push", remote, "--delete", head_ref)
             confirm_remote_branch_deleted(project, remote, head_ref)
@@ -2193,9 +2284,10 @@ def run_cleanup(args: argparse.Namespace) -> int:
             require_git_success(project, "git_branch_delete_failed", "branch", "-d", head_ref)
 
         details["reason"] = "cleanup_complete"
-        details["currentBranch"] = ""
+        details["currentBranch"] = final_branch
         details["currentHead"] = final_head_oid
         details["localBaseCommit"] = final_base_oid
+        details["baseCheckout"] = base_checkout
         removed = False
         if getattr(args, "remove_worktree", False):
             cwd_key = normalized_path(Path.cwd())
