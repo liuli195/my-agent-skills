@@ -220,7 +220,9 @@ def test_pr_flow_recovery_commands_use_the_executing_script(tmp_path: Path, monk
         windows_command = module.script_command(["diagnose", "--project", str(tmp_path / "project with spaces")])
         windows_hotfix = module.command_next_command("hotfix", tmp_path, argparse.Namespace(target="main"))
 
-    assert f'"{expected_script}"' in windows_command
+    assert windows_command == subprocess.list2cmdline(
+        [sys.executable, expected_script, "diagnose", "--project", str(tmp_path / "project with spaces")]
+    )
     assert "'" not in windows_command
     assert '<authorization-phrase>' not in windows_hotfix
     assert '--authorization-phrase "REPLACE AUTHORIZATION PHRASE"' in windows_hotfix
