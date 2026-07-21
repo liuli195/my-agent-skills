@@ -280,6 +280,28 @@ def gh(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, 127, "", str(exc))
 
 
+def orca_executable() -> str:
+    if configured := os.environ.get("ORCA_CLI_COMMAND"):
+        return configured
+    if os.environ.get("ORCA_DEV_REPO_ROOT"):
+        return "orca-dev"
+    return "orca-ide" if sys.platform.startswith("linux") else "orca"
+
+
+def orca(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    command = [orca_executable(), *args]
+    try:
+        return subprocess.run(
+            command,
+            cwd=project,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except FileNotFoundError as exc:
+        return subprocess.CompletedProcess(command, 127, "", str(exc))
+
+
 class PrFlowError(RuntimeError):
     def __init__(self, reason: str, details: dict[str, Any]) -> None:
         self.reason = str(details.get("reason") or reason)
@@ -328,6 +350,13 @@ def unlock_file(handle: Any) -> None:
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+def initialize_lock_file(path: Path, handle: Any) -> None:
+    if path.stat().st_size == 0:
+        handle.seek(0)
+        handle.write(b"\0")
+        handle.flush()
+
+
 def read_lock_metadata(handle: Any) -> dict[str, Any]:
     handle.seek(1)
     try:
@@ -356,14 +385,12 @@ def operation_lock(project: Path, command: str, args: argparse.Namespace):
     path = lock_file_path(project)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+b") as handle:
-        if path.stat().st_size == 0:
-            handle.write(b"\0")
-            handle.flush()
         if not try_file_lock(handle):
             details = read_lock_metadata(handle)
             details.setdefault("reason", "flow_locked")
             raise PrFlowError("flow_locked", details)
         try:
+            initialize_lock_file(path, handle)
             metadata = {
                 "reason": "flow_locked",
                 "command": command,
@@ -390,9 +417,6 @@ def base_checkout_lock(project: Path, base_ref: str):
     path = base_checkout_lock_file_path(project, base_ref)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+b") as handle:
-        if path.stat().st_size == 0:
-            handle.write(b"\0")
-            handle.flush()
         handle.seek(0)
         if os.name == "nt":
             import msvcrt
@@ -403,6 +427,7 @@ def base_checkout_lock(project: Path, base_ref: str):
 
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
+            initialize_lock_file(path, handle)
             yield
         finally:
             unlock_file(handle)
@@ -413,11 +438,11 @@ def active_lock_details(project: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
     with path.open("a+b") as handle:
-        if path.stat().st_size == 0:
-            handle.write(b"\0")
-            handle.flush()
         if try_file_lock(handle):
-            unlock_file(handle)
+            try:
+                initialize_lock_file(path, handle)
+            finally:
+                unlock_file(handle)
             return None
         return read_lock_metadata(handle)
 
@@ -1185,6 +1210,28 @@ def normalized_path(path: str | Path) -> str:
     return os.path.normcase(resolved) if os.name == "nt" else resolved
 
 
+def find_orca_worktree_id(project: Path, target: Path) -> str | None:
+    result = orca(project, "worktree", "ps", "--json")
+    if result.returncode != 0:
+        return None
+    try:
+        payload = json.loads(result.stdout)
+        worktrees = payload["result"]["worktrees"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return None
+    if not isinstance(worktrees, list):
+        return None
+    target_key = normalized_path(target)
+    for item in worktrees:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            continue
+        if normalized_path(item["path"]) != target_key:
+            continue
+        worktree_id = item.get("worktreeId")
+        return worktree_id if isinstance(worktree_id, str) and worktree_id else None
+    return None
+
+
 def remove_worktree(project: Path, target: Path) -> None:
     worktrees = list_worktrees(project)
     target_key = normalized_path(target)
@@ -1194,7 +1241,16 @@ def remove_worktree(project: Path, target: Path) -> None:
     if dirty:
         raise PrFlowError("dirty_worktree", {"reason": "dirty_worktree", "dirty": dirty})
     controller = Path(worktrees[0]["path"])
-    require_git_success(controller, "git_worktree_remove_failed", "worktree", "remove", str(target.resolve()))
+    orca_worktree_id = find_orca_worktree_id(controller, target)
+    if orca_worktree_id:
+        result = orca(controller, "worktree", "rm", "--worktree", f"id:{orca_worktree_id}", "--json")
+        if result.returncode != 0:
+            raise PrFlowError(
+                "orca_worktree_remove_failed",
+                command_failure_details("orca_worktree_remove_failed", result),
+            )
+    else:
+        require_git_success(controller, "git_worktree_remove_failed", "worktree", "remove", str(target.resolve()))
     if any(normalized_path(item["path"]) == target_key for item in list_worktrees(controller)):
         raise PrFlowError("git_worktree_remove_failed", {"reason": "git_worktree_remove_failed"})
 

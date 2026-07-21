@@ -510,6 +510,116 @@ def test_remove_worktree_uses_native_non_forced_remove(tmp_path: Path, monkeypat
     assert not any("--force" in call for call in git_stub.calls)
 
 
+def worktree_removal_records(main: Path, target: Path) -> tuple[str, str]:
+    before = (
+        f"worktree {main}\0HEAD aaaa\0branch refs/heads/main\0\0"
+        f"worktree {target}\0HEAD bbbb\0detached\0\0"
+    )
+    after = f"worktree {main}\0HEAD aaaa\0branch refs/heads/main\0\0"
+    return before, after
+
+
+def orca_worktree_ps_json(target: Path, worktree_id: str) -> str:
+    return json.dumps({"result": {"worktrees": [{"path": str(target), "worktreeId": worktree_id}]}})
+
+
+def test_remove_worktree_prefers_matched_orca_worktree(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    module = load_pr_flow_module()
+    main = tmp_path / "main"
+    target = tmp_path / "feature one"
+    main.mkdir()
+    target.mkdir()
+    before, after = worktree_removal_records(main, target)
+    git_stub = CommandStub(consume=True)
+    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
+    git_stub.add(["status", "--short"], stdout="")
+    git_stub.add(["worktree", "remove", str(target.resolve())])
+    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
+    orca_stub = CommandStub(consume=True)
+    orca_path = str(target).replace("\\", "/")
+    if os.name == "nt":
+        orca_path = orca_path.upper()
+    orca_payload = {"result": {"worktrees": [{"path": orca_path, "worktreeId": "repo::target"}]}}
+    orca_stub.add(["worktree", "ps", "--json"], stdout=json.dumps(orca_payload))
+    orca_stub.add(["worktree", "rm", "--worktree", "id:repo::target", "--json"])
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "orca", orca_stub, raising=False)
+
+    module.remove_worktree(target, target)
+
+    assert ("worktree", "rm", "--worktree", "id:repo::target", "--json") in orca_stub.calls
+    assert not any(call[:2] == ("worktree", "remove") for call in git_stub.calls)
+    assert not any("--force" in call for call in orca_stub.calls)
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "stderr"),
+    [
+        (0, '{"result":{"worktrees":[]}}', ""),
+        (127, "", "orca not found"),
+        (0, "not-json", ""),
+    ],
+)
+def test_remove_worktree_falls_back_to_git_when_orca_is_unavailable_or_unmatched(
+    tmp_path: Path, monkeypatch, returncode: int, stdout: str, stderr: str
+) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    module = load_pr_flow_module()
+    main = tmp_path / "main"
+    target = tmp_path / "feature one"
+    main.mkdir()
+    target.mkdir()
+    before, after = worktree_removal_records(main, target)
+    git_stub = CommandStub(consume=True)
+    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
+    git_stub.add(["status", "--short"], stdout="")
+    git_stub.add(["worktree", "remove", str(target.resolve())])
+    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
+    orca_stub = CommandStub(consume=True)
+    orca_stub.add(["worktree", "ps", "--json"], returncode=returncode, stdout=stdout, stderr=stderr)
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "orca", orca_stub, raising=False)
+
+    module.remove_worktree(target, target)
+
+    assert ("worktree", "remove", str(target.resolve())) in git_stub.calls
+    assert not any(call[:2] == ("worktree", "rm") for call in orca_stub.calls)
+
+
+def test_remove_worktree_stops_when_matched_orca_removal_fails(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    module = load_pr_flow_module()
+    main = tmp_path / "main"
+    target = tmp_path / "feature one"
+    main.mkdir()
+    target.mkdir()
+    before, after = worktree_removal_records(main, target)
+    git_stub = CommandStub(consume=True)
+    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
+    git_stub.add(["status", "--short"], stdout="")
+    git_stub.add(["worktree", "remove", str(target.resolve())])
+    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
+    orca_stub = CommandStub(consume=True)
+    orca_stub.add(["worktree", "ps", "--json"], stdout=orca_worktree_ps_json(target, "repo::target"))
+    orca_stub.add(
+        ["worktree", "rm", "--worktree", "id:repo::target", "--json"],
+        stderr="permission denied",
+        returncode=1,
+    )
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "orca", orca_stub, raising=False)
+
+    with pytest.raises(module.PrFlowError, match="orca_worktree_remove_failed") as error:
+        module.remove_worktree(target, target)
+
+    assert error.value.details["stderr"] == "permission denied"
+    assert not any(call[:2] == ("worktree", "remove") for call in git_stub.calls)
+
+
 def test_cleanup_stops_before_deletion_when_source_checked_out_elsewhere(tmp_path: Path, monkeypatch) -> None:
     project = tmp_path / "project"
     other = tmp_path / "other"
