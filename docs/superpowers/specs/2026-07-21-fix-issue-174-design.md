@@ -2,6 +2,8 @@
 comet_change: fix-issue-174
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-07-21-fix-issue-174
+status: final
 ---
 
 # Issue 174 Pi 兼容性设计
