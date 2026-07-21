@@ -44,6 +44,7 @@ PR_TEMPLATE = """## Summary
 """
 PR_FLOW_GITIGNORE = "/runs/\n/last-status.json\n"
 HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+EXECUTING_SCRIPT = str(Path(__file__).resolve())
 
 
 
@@ -545,7 +546,7 @@ def add_default_next_command(details: dict[str, Any], next_command: str | None) 
 
 
 def script_command(parts: list[str]) -> str:
-    command = [sys.executable, str(Path(__file__).resolve()), *parts]
+    command = [sys.executable, EXECUTING_SCRIPT, *parts]
     return subprocess.list2cmdline(command) if os.name == "nt" else shlex.join(command)
 
 
