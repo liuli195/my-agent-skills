@@ -538,7 +538,10 @@ def test_remove_worktree_prefers_matched_orca_worktree(tmp_path: Path, monkeypat
     git_stub.add(["worktree", "remove", str(target.resolve())])
     git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
     orca_stub = CommandStub(consume=True)
-    orca_payload = {"result": {"worktrees": [{"path": str(target).replace("\\", "/"), "worktreeId": "repo::target"}]}}
+    orca_path = str(target).replace("\\", "/")
+    if os.name == "nt":
+        orca_path = orca_path.upper()
+    orca_payload = {"result": {"worktrees": [{"path": orca_path, "worktreeId": "repo::target"}]}}
     orca_stub.add(["worktree", "ps", "--json"], stdout=json.dumps(orca_payload))
     orca_stub.add(["worktree", "rm", "--worktree", "id:repo::target", "--json"])
     monkeypatch.setattr(module, "git", git_stub)
