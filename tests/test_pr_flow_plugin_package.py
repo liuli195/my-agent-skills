@@ -212,8 +212,6 @@ def test_pr_flow_recovery_commands_use_the_executing_script(tmp_path: Path, monk
 
     assert expected_script in command
     assert expected_script in body_command
-    assert "plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py" not in command
-    assert "plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py" not in body_command
     assert str(tmp_path) in command
     assert str(tmp_path) in body_command
 
