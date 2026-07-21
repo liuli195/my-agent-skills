@@ -175,6 +175,54 @@ def test_plugin_package_contains_runtime_skills_and_templates() -> None:
     assert not (PLUGIN_ROOT / "skills" / "agent-guard-hooks").exists()
 
 
+def test_plugin_skill_wrappers_use_pi_session_environment(monkeypatch) -> None:
+    core_scripts = PLUGIN_ROOT / "skills" / "agent-guard" / "scripts"
+    activate_guard = load_module(core_scripts / "activate_guard.py", "pi_activate_guard")
+    render_guard_brief = load_module(core_scripts / "render_guard_brief.py", "pi_render_guard_brief")
+    run_guard_event = load_module(core_scripts / "run_guard_event.py", "pi_run_guard_event")
+    commands: list[list[str]] = []
+
+    class Completed:
+        returncode = 0
+
+    def fake_run(command: list[str], **_kwargs):
+        commands.append(command)
+        return Completed()
+
+    monkeypatch.setenv("AGENT_GUARD_SOURCE", "pi")
+    monkeypatch.setenv("AGENT_GUARD_SESSION_ID", "pi-session-1")
+    monkeypatch.setattr(activate_guard.subprocess, "run", fake_run)
+    monkeypatch.setattr(render_guard_brief.subprocess, "run", fake_run)
+    monkeypatch.setattr(run_guard_event.subprocess, "run", fake_run)
+
+    assert activate_guard.main(["--profile", "minimal-sample", "--create"]) == 0
+    assert render_guard_brief.main([]) == 0
+    assert run_guard_event.run_state_completed(REPO_ROOT, REPO_ROOT, {"context": {}}) == 0
+    assert all("pi" in command for command in commands)
+    assert all("pi-session-1" in command for command in commands)
+
+
+def test_run_guard_event_uses_pi_session_environment_for_tool_events(monkeypatch) -> None:
+    script = PLUGIN_ROOT / "skills" / "agent-guard" / "scripts" / "run_guard_event.py"
+    run_guard_event = load_module(script, "pi_run_guard_event_pre_tool_use")
+    payloads: list[dict] = []
+
+    class Completed:
+        returncode = 0
+
+    def fake_run(command: list[str], **_kwargs):
+        payload_file = Path(command[command.index("--payload-file") + 1])
+        payloads.append(json.loads(payload_file.read_text(encoding="utf-8")))
+        return Completed()
+
+    monkeypatch.setenv("AGENT_GUARD_SOURCE", "pi")
+    monkeypatch.setenv("AGENT_GUARD_SESSION_ID", "pi-session-1")
+    monkeypatch.setattr(run_guard_event.subprocess, "run", fake_run)
+
+    assert run_guard_event.run_pre_tool_use(REPO_ROOT, REPO_ROOT, {"context": {}, "tool": {"name": "bash"}}) == 0
+    assert payloads == [{"session_id": "pi-session-1", "cwd": str(REPO_ROOT), "tool_name": "bash"}]
+
+
 def test_legacy_root_agent_guard_skills_are_removed() -> None:
     legacy_root = REPO_ROOT / "skills"
     if not legacy_root.exists():

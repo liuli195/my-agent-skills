@@ -5,7 +5,7 @@
 ## 运行入口
 
 ```text
-python <plugin>/scripts/guard_runtime/cli.py state-completed --source codex --session-id <session-id>
+python <plugin>/scripts/guard_runtime/cli.py state-completed --source <source> --session-id <session-id>
 ```
 
 源码仓库辅助脚本：
@@ -21,7 +21,7 @@ python ../agent-guard/scripts/run_guard_event.py
 - `event_type`
 - `context`
 
-`source` 可选，缺省为 `codex`。`payload` 可选，缺省为空对象。Hook Adapter（钩子适配器）输出的标准事件仍必须包含 `source/event_type/context/payload`。
+`source` 可选，缺省为 `codex`；Pi（编码助手）会话的 extension（扩展）会在 `session_start`（会话启动）设置 `AGENT_GUARD_SOURCE=pi` 和 `AGENT_GUARD_SESSION_ID`，源码仓库辅助脚本会以它们补全缺失的 `source + session_id`。`payload` 可选，缺省为空对象。Hook Adapter（钩子适配器）输出的标准事件仍必须包含 `source/event_type/context/payload`。
 
 主 agent（主代理）主动推进状态时，`event_type` 必须是 `state_completed`。Runtime（运行时）只能从当前 Session Focus Binding（会话焦点绑定）读取 `profile_id + instance_id`，调用方不得指定画像或实例。
 

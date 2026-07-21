@@ -40,7 +40,7 @@ def exit_code_for_pre_tool_use(body: dict, code: int, stdin_hook: bool, source: 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Agent Guard Hook Router（钩子路由器）。")
-    parser.add_argument("--source", choices=["codex", "claude"], required=True, help="Hook（钩子）来源。")
+    parser.add_argument("--source", choices=["codex", "claude", "pi"], required=True, help="Hook（钩子）来源。")
     parser.add_argument("--event", choices=["SessionStart", "PreToolUse"], required=True, help="Hook（钩子）事件。")
     parser.add_argument("--project", type=Path, default=Path.cwd(), help="项目目录。")
     parser.add_argument("--user-home", type=Path, default=Path.home(), help="用户级运行态根目录。")

@@ -56,11 +56,13 @@ def read_event(path: Path) -> dict:
 def session_id(event: dict) -> str | None:
     context = event.get("context")
     value = context.get("session_id") if isinstance(context, dict) else None
-    return value if isinstance(value, str) else None
+    if isinstance(value, str):
+        return value
+    return os.environ.get("AGENT_GUARD_SESSION_ID")
 
 
 def run_state_completed(project: Path, user_home: Path, event: dict) -> int:
-    source = event.get("source") if isinstance(event.get("source"), str) else "codex"
+    source = event.get("source") if isinstance(event.get("source"), str) else os.environ.get("AGENT_GUARD_SOURCE", "codex")
     sid = session_id(event)
     if not sid:
         print("status: error")
@@ -94,7 +96,7 @@ def run_pre_tool_use(project: Path, user_home: Path, event: dict) -> int:
     hook_payload = dict(payload)
     if "tool_input" not in hook_payload and isinstance(payload.get("command"), str):
         hook_payload["tool_input"] = {"command": payload["command"]}
-    hook_payload["session_id"] = context.get("session_id")
+    hook_payload["session_id"] = context.get("session_id") or os.environ.get("AGENT_GUARD_SESSION_ID")
     hook_payload["cwd"] = context.get("cwd") or str(project)
     if isinstance(tool.get("name"), str):
         hook_payload["tool_name"] = tool["name"]
@@ -107,7 +109,7 @@ def run_pre_tool_use(project: Path, user_home: Path, event: dict) -> int:
                 sys.executable,
                 str(hook_router()),
                 "--source",
-                str(event.get("source") or "codex"),
+                str(event.get("source") or os.environ.get("AGENT_GUARD_SOURCE", "codex")),
                 "--event",
                 "PreToolUse",
                 "--project",
