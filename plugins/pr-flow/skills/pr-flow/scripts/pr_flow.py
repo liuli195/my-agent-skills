@@ -350,6 +350,13 @@ def unlock_file(handle: Any) -> None:
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+def initialize_lock_file(path: Path, handle: Any) -> None:
+    if path.stat().st_size == 0:
+        handle.seek(0)
+        handle.write(b"\0")
+        handle.flush()
+
+
 def read_lock_metadata(handle: Any) -> dict[str, Any]:
     handle.seek(1)
     try:
@@ -378,14 +385,12 @@ def operation_lock(project: Path, command: str, args: argparse.Namespace):
     path = lock_file_path(project)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+b") as handle:
-        if path.stat().st_size == 0:
-            handle.write(b"\0")
-            handle.flush()
         if not try_file_lock(handle):
             details = read_lock_metadata(handle)
             details.setdefault("reason", "flow_locked")
             raise PrFlowError("flow_locked", details)
         try:
+            initialize_lock_file(path, handle)
             metadata = {
                 "reason": "flow_locked",
                 "command": command,
@@ -412,9 +417,6 @@ def base_checkout_lock(project: Path, base_ref: str):
     path = base_checkout_lock_file_path(project, base_ref)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+b") as handle:
-        if path.stat().st_size == 0:
-            handle.write(b"\0")
-            handle.flush()
         handle.seek(0)
         if os.name == "nt":
             import msvcrt
@@ -425,6 +427,7 @@ def base_checkout_lock(project: Path, base_ref: str):
 
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
+            initialize_lock_file(path, handle)
             yield
         finally:
             unlock_file(handle)
@@ -435,11 +438,11 @@ def active_lock_details(project: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
     with path.open("a+b") as handle:
-        if path.stat().st_size == 0:
-            handle.write(b"\0")
-            handle.flush()
         if try_file_lock(handle):
-            unlock_file(handle)
+            try:
+                initialize_lock_file(path, handle)
+            finally:
+                unlock_file(handle)
             return None
         return read_lock_metadata(handle)
 
