@@ -16,14 +16,14 @@ plan: docs/superpowers/plans/2026-07-21-fix-issue-174.md
 verify_result: pass
 verify_failures: 0
 verification_report: docs/superpowers/reports/2026-07-21-fix-issue-174-verify.md
-branch_status: pending
+branch_status: handled
 created_at: 2026-07-21
 verified_at: 2026-07-21
 archive_confirmation: confirmed
 archived: true
 bound_branch: tweak/20260721/fix-issue-174
 direct_override: null
-handoff_context: openspec/changes/fix-issue-174/.comet/handoff/spec-context.json
+handoff_context: openspec/changes/archive/2026-07-21-fix-issue-174/.comet/handoff/spec-context.json
 handoff_hash: d7dc3df44c0427ceb1ac8e65f0de51e98ba2bdcb29dea0ddc6338be7a2989b52
 classic_profile: full
 classic_migration: 1
