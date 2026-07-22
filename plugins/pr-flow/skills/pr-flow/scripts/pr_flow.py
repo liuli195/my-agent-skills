@@ -2254,20 +2254,46 @@ def run_cleanup(args: argparse.Namespace) -> int:
                 if normalized_path(item["path"]) != project_key and item.get("branch") == base_branch_ref
             ]
             if local_base_oid != base_oid and occupied_base:
-                details.update(
-                    {
-                        "reason": "base_branch_checked_out",
-                        "localBaseCommit": local_base_oid or None,
-                        "occupiedWorktrees": occupied_base,
-                    }
+                occupied_project = Path(occupied_base[0])
+                occupied_branch = require_git_success(
+                    occupied_project, "git_occupied_base_branch_failed", "branch", "--show-current"
+                ).stdout.strip()
+                occupied_status = require_git_success(
+                    occupied_project, "git_occupied_base_status_failed", "status", "--short"
+                ).stdout.strip()
+                operation_paths = [
+                    require_git_success(occupied_project, "git_occupied_base_state_failed", "rev-parse", "--git-path", marker)
+                    .stdout.strip()
+                    for marker in ("MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "sequencer")
+                ]
+                operation_in_progress = any(
+                    (Path(path) if Path(path).is_absolute() else occupied_project / path).exists()
+                    for path in operation_paths
                 )
-                return stop(
-                    project,
-                    args.command,
-                    "EXCEPTION_REQUIRED",
-                    "base_branch_checked_out",
-                    add_cleanup_recovery(details, str(args.pr)),
-                )
+                occupied_oid = head_oid(occupied_project)
+                if (
+                    len(occupied_base) != 1
+                    or occupied_branch != base_ref
+                    or occupied_status
+                    or operation_in_progress
+                    or occupied_oid != local_base_oid
+                ):
+                    details.update(
+                        {
+                            "reason": "base_branch_checked_out",
+                            "localBaseCommit": local_base_oid or None,
+                            "occupiedWorktrees": occupied_base,
+                        }
+                    )
+                    return stop(
+                        project,
+                        args.command,
+                        "EXCEPTION_REQUIRED",
+                        "base_branch_checked_out",
+                        add_cleanup_recovery(details, str(args.pr)),
+                    )
+                require_git_success(occupied_project, "git_sync_occupied_base_failed", "merge", "--ff-only", base_oid)
+                local_base_oid = base_oid
 
             if current_branch == head_ref:
                 require_git_success(project, "git_detach_base_failed", "checkout", "--detach", base_oid)
