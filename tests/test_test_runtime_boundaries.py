@@ -528,8 +528,11 @@ E2E_ALLOWLIST: dict[str, str] = {
     "tests/test_pr_flow_cli.py::test_cleanup_refuses_diverged_local_base_end_to_end": (
         "covers pr-flow real git cleanup protection of divergent local base commits"
     ),
-    "tests/test_pr_flow_cli.py::test_cleanup_refuses_stale_base_checked_out_elsewhere_end_to_end": (
-        "covers pr-flow real git cleanup protection of an occupied stale local base"
+    "tests/test_pr_flow_cli.py::test_cleanup_fast_forwards_stale_base_checked_out_elsewhere_end_to_end": (
+        "covers pr-flow real git cleanup of an occupied stale local base"
+    ),
+    "tests/test_pr_flow_cli.py::test_cleanup_refuses_unsafe_stale_base_worktree_end_to_end": (
+        "covers pr-flow real git cleanup protection of unsafe occupied stale local bases"
     ),
     "tests/test_pr_flow_cli.py::test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up": (
         "covers pr-flow real git complete lifecycle"
@@ -1072,7 +1075,8 @@ CURRENT_E2E_ALLOWLIST_IDENTITIES = {
     "tests/test_pr_flow_cli.py::test_cleanup_returns_to_available_local_base_end_to_end",
     "tests/test_pr_flow_cli.py::test_cleanup_keeps_detached_when_synced_base_is_checked_out_elsewhere",
     "tests/test_pr_flow_cli.py::test_cleanup_refuses_diverged_local_base_end_to_end",
-    "tests/test_pr_flow_cli.py::test_cleanup_refuses_stale_base_checked_out_elsewhere_end_to_end",
+    "tests/test_pr_flow_cli.py::test_cleanup_fast_forwards_stale_base_checked_out_elsewhere_end_to_end",
+    "tests/test_pr_flow_cli.py::test_cleanup_refuses_unsafe_stale_base_worktree_end_to_end",
     "tests/test_pr_flow_cli.py::test_project_template_recovers_stale_lock",
     "tests/test_pr_flow_cli.py::test_project_template_recreates_incomplete_template_after_stale_lock",
     "tests/test_pr_flow_cli.py::test_competing_mutation_reports_lock_without_rewriting_status",

@@ -5289,18 +5289,48 @@ def test_cleanup_refuses_diverged_local_base_end_to_end(tmp_path: Path, monkeypa
     assert git_bare(remote, "show-ref", "--verify", "refs/heads/feature/example")
 
 
-def test_cleanup_refuses_stale_base_checked_out_elsewhere_end_to_end(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_fast_forwards_stale_base_checked_out_elsewhere_end_to_end(tmp_path: Path, monkeypatch) -> None:
     project, remote = init_cleanup_project(tmp_path)
+    remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
     other = tmp_path / "base-worktree"
     git(project, "worktree", "add", str(other), "main")
 
     result = run_cleanup_with_real_git(project, monkeypatch)
 
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert git(other, "branch", "--show-current") == "main"
+    assert git(other, "rev-parse", "HEAD") == remote_base
+    assert git(project, "branch", "--show-current") == ""
+    assert git(project, "rev-parse", "HEAD") == remote_base
+    assert subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", "refs/heads/feature/example"], cwd=project
+    ).returncode == 1
+    assert subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", "refs/heads/feature/example"], cwd=remote
+    ).returncode == 1
+
+
+@pytest.mark.parametrize("unsafe_state", ["dirty", "rebase"])
+def test_cleanup_refuses_unsafe_stale_base_worktree_end_to_end(
+    tmp_path: Path, monkeypatch, unsafe_state: str
+) -> None:
+    project, remote = init_cleanup_project(tmp_path)
+    stale_base = git(project, "rev-parse", "main")
+    other = tmp_path / "base-worktree"
+    git(project, "worktree", "add", str(other), "main")
+    if unsafe_state == "dirty":
+        (other / "DIRTY.md").write_text("dirty\n", encoding="utf-8")
+    else:
+        git_path = Path(git(other, "rev-parse", "--git-path", "rebase-merge"))
+        git_path.mkdir(parents=True)
+
+    result = run_cleanup_with_real_git(project, monkeypatch)
+
     assert result.returncode == 1
+    assert git(other, "rev-parse", "HEAD") == stale_base
+    assert git_bare(remote, "show-ref", "--verify", "refs/heads/feature/example")
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["details"]["reason"] == "base_branch_checked_out"
-    assert other.resolve() in [Path(path).resolve() for path in status["details"]["occupiedWorktrees"]]
-    assert git_bare(remote, "show-ref", "--verify", "refs/heads/feature/example")
 
 
 def test_cleanup_returns_to_latest_base_and_deletes_source_branches(tmp_path: Path, monkeypatch) -> None:
