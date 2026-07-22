@@ -155,8 +155,12 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 - **THEN** 当前工作树 MUST remain at the latest remote target commit in detached HEAD（最新远端目标提交的分离头）
 - **THEN** cleanup（清理） MUST 删除已合并 PR（拉取请求）的远端源分支和本地源分支
 - **THEN** 完成状态 MUST record `baseCheckout.status: skipped`、`baseCheckout.reason: base_branch_occupied` and the occupying worktree（记录跳过状态、原因和占用工作树）
-- **WHEN** 该分支不等于最新远端目标提交
-- **THEN** cleanup（清理） MUST stop before deleting either source branch（在删除任一源分支前停止）
+- **WHEN** 被占用的目标分支落后于最新远端目标提交
+- **AND** 占用工作树仍检出该目标分支、工作区和暂存区干净、无进行中的 Git（版本管理）操作、当前提交仍等于预检提交，且可以安全快进
+- **THEN** cleanup（清理） MUST 在占用工作树中使用 `git merge --ff-only`（仅快进合并）同步目标分支
+- **THEN** 当前工作树 MUST remain at the latest remote target commit in detached HEAD（最新远端目标提交的分离头）并完成源分支清理
+- **WHEN** 任一安全条件不满足或仅快进失败
+- **THEN** cleanup（清理） MUST fail closed（安全关闭）并在删除任一源分支前停止
 - **THEN** stop-state details（停止状态详情） MUST identify the occupying worktree（占用工作树）
 
 #### Scenario: Cleanup handles a base branch occupied during checkout
