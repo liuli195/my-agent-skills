@@ -21,3 +21,7 @@
 
 - 修改 `.build-and-verify/config.json`（构建与验证配置文件）。
 - 恢复 `tests/test_build_and_verify_plugin.py`（构建与验证插件测试）的测试清单一致性。
+
+## 回归证据
+
+- 修复前运行 `python -m pytest -q tests/test_build_and_verify_plugin.py::test_build_and_verify_explicit_pytest_paths_cover_removed_pyproject_testpaths`（显式测试路径覆盖检查）失败；缺少 `tests/test_setup_worktree_script.py`（工作树初始化脚本测试）。

@@ -1,6 +1,6 @@
 ## 1. 回归证据
 
-- [ ] 1.1 运行 `test_build_and_verify_explicit_pytest_paths_cover_removed_pyproject_testpaths`（显式测试路径覆盖检查），确认新工作树初始化脚本测试尚未登记时失败。
+- [x] 1.1 运行 `test_build_and_verify_explicit_pytest_paths_cover_removed_pyproject_testpaths`（显式测试路径覆盖检查），确认新工作树初始化脚本测试尚未登记时失败。
 
 ## 2. 配置修复
 
