@@ -1350,7 +1350,6 @@ def test_build_and_verify_active_surfaces_do_not_keep_old_entrypoints() -> None:
     assert not (REPO_ROOT / "plugins" / "test-framework").exists()
     active_paths = [
         REPO_ROOT / ".build-and-verify" / "config.json",
-        REPO_ROOT / ".comet.yaml",
         REPO_ROOT / ".pr-flow" / "config.yaml",
         REPO_ROOT / ".release-flow" / "config.yaml",
         REPO_ROOT / ".release-flow" / "projection.yaml",

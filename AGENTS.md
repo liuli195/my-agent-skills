@@ -2,19 +2,10 @@
 
 本仓库用于开发和维护个人 Agent Plugin（插件）与 Skill（技能）。
 
-## 通用入口
-
-本仓库按 single-context 处理：[规则文档](docs/rules/index.md) 和 [OpenSpec 规格](openspec/specs/) 共同作为领域上下文。详见 [domain.md](docs/agents/domain.md)。
-
 ## 核心规则
 - **规则优先**：仓库规则最优先是元规则。任何与规则冲突的改动、对规则本身的改动都必须显式获得授权，否则不得执行。
 
 ## 通用规则
-
-### 决策跟踪器
-
-- **Issue 跟踪**：Issue 和 PRD 统一记录在 GitHub Issues。详见 [issue-tracker.md](docs/agents/issue-tracker.md)。
-- **Triage 标签**：使用默认五类 triage 标签。详见 [triage-labels.md](docs/agents/triage-labels.md)。
 
 ### 环境与工具
 
@@ -42,3 +33,19 @@
 ### 输出与引用
 
 - **输出**：简体中文，使用用户语言，禁止技术语言。英文名词后面必须跟（中文释义）。
+
+<comet-ambient-resume>
+<!-- Managed by Comet. Edits inside this block may be replaced by comet init/update. -->
+<!-- Contract: comet.resume_probe.v2 -->
+
+## Comet Ambient Resume
+
+在这个仓库中，开始处理需要改动或调查的任务前，如果可能存在活跃 Comet workflow，把当前用户请求传入只读探针：`comet resume-probe . --stdin --json`。
+
+- 只信任返回的 `workflow`、`skill` 和 `entrySource`；它们只由项目配置或无配置兼容回退决定。不得扫描或切换另一套 workflow。
+- 如果 probe 返回 `auto_resume`，简短说明选中的 active change，并进入 `nextCommand` 指向的永久入口。不要把状态命令当作恢复入口直接推进。
+- 如果 probe 返回 `ask_user`，只问一个简短问题并等待用户回复。
+- 如果 probe 返回 `out_of_scope` 或 `none`，不要进入 Comet workflow。
+- 如果配置或状态无效且没有 `nextCommand`，停止并报告原因；不要猜测另一个 workflow。
+- 不能只因为存在 active change 就把无关任务挂到该 change。Native 的未提交改动由 Native 入口检查，不由探针自动归因。
+</comet-ambient-resume>

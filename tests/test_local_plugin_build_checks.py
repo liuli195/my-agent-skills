@@ -1245,27 +1245,9 @@ def test_comet_config_does_not_duplicate_guard_commands() -> None:
     assert "verify_command" not in data
 
 
-def test_root_comet_yaml_points_to_check_commands_for_guard() -> None:
-    import yaml
-
-    data = yaml.safe_load((REPO_ROOT / ".comet.yaml").read_text(encoding="utf-8"))
-    script = REPO_ROOT / ".build-and-verify" / "runtime" / "build_and_verify.py"
-
-    assert (
-        data["build_command"]
-        == "python .build-and-verify/runtime/build_and_verify.py build --project ."
-    )
-    assert (
-        data["verify_command"]
-        == "python .build-and-verify/runtime/build_and_verify.py verify --project ."
-    )
-    assert script.is_file()
-
-
 def test_active_automation_does_not_reference_removed_check_entrypoint() -> None:
     active_files = [
         REPO_ROOT / ".github" / "workflows" / "release.yml",
-        REPO_ROOT / ".comet.yaml",
         REPO_ROOT / ".comet" / "config.yaml",
         REPO_ROOT / ".build-and-verify" / "config.json",
     ]
@@ -1294,8 +1276,8 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
     local_build_contract = check_by_id["verify.local-build-contract"]
     assert ".comet/config.yaml" in local_build_contract["paths"]
     assert ".comet/config.yaml" in local_build_contract["inputs"]
-    assert ".comet.yaml" in local_build_contract["paths"]
-    assert ".comet.yaml" in local_build_contract["inputs"]
+    assert ".comet.yaml" not in local_build_contract["paths"]
+    assert ".comet.yaml" not in local_build_contract["inputs"]
     assert "." not in local_build_contract["inputs"]
     for check in checks:
         assert "docs/agent-guard/**" not in check.get("paths", [])
