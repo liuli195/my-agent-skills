@@ -20,3 +20,4 @@
 - `.venv\Scripts\python.exe -m pytest -q tests/test_setup_worktree_script.py`：2 passed。
 - `openspec validate configure-build-and-verify-init-script --strict`（严格规格校验）：通过。
 - Build and Verify（构建与验证）的 build（构建检查）和默认 verify（快速验证）：通过。
+- 升级判定：用户选择继续 Tweak（小改流程）；15 个变更文件主要为 OpenSpec（开放规格）和 Comet（彗星流程）元数据，未涉及跨模块架构变更。
