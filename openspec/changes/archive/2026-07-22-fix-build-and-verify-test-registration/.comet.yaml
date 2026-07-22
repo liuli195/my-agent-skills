@@ -16,12 +16,12 @@ plan: null
 verify_result: pass
 verify_failures: 0
 verification_report: docs/superpowers/reports/2026-07-22-fix-build-and-verify-test-registration-verify.md
-branch_status: pending
+branch_status: handled
 created_at: 2026-07-22
 verified_at: 2026-07-22
 archive_confirmation: confirmed
 archived: true
-bound_branch: liuli195/build-verify-init
+bound_branch: main
 direct_override: null
 handoff_context: null
 handoff_hash: null
