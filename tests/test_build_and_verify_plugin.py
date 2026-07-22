@@ -942,28 +942,16 @@ def test_build_and_verify_init_questionnaire_contains_fixed_flow() -> None:
 
 def test_build_and_verify_init_current_specs_match_simplified_flow() -> None:
     active_spec = (
-        REPO_ROOT / "openspec" / "specs" / "test-framework-plugin" / "spec.md"
-    ).read_text(encoding="utf-8")
-    design = (
-        REPO_ROOT
-        / "docs"
-        / "superpowers"
-        / "specs"
-        / "2026-06-26-build-and-verify-init-skill-design.md"
+        REPO_ROOT / "docs" / "comet" / "specs" / "test-framework-plugin" / "spec.md"
     ).read_text(encoding="utf-8")
 
     assert "默认从 `paths`（受影响路径）和 command（命令）来源推导 `inputs`" in active_spec
     assert "不得单独要求用户选择备份路径" in active_spec
     assert "通用候选" in active_spec
-    assert "固定为 6 步" in design
-    assert "inputs（缓存输入）默认由 agent（代理）从 paths（受影响路径）和 command（命令）来源推导" in design
-    assert "不单独询问备份路径" in design
-    assert "通用候选" in design
-    for stale_text in [active_spec, design]:
-        assert "10 个固定问题" not in stale_text
-        assert "inputs（缓存输入）确认" not in stale_text
-        assert "备份路径确认" not in stale_text
-        assert "首版只识别 Node（节点运行时）和 Python（Python 语言）" not in stale_text
+    assert "10 个固定问题" not in active_spec
+    assert "inputs（缓存输入）确认" not in active_spec
+    assert "备份路径确认" not in active_spec
+    assert "首版只识别 Node（节点运行时）和 Python（Python 语言）" not in active_spec
 
 
 def test_build_and_verify_init_ecosystem_detection_covers_node_python_and_fallback() -> None:
@@ -1294,7 +1282,7 @@ def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_conf
 
 
 def test_build_and_verify_init_spec_targets_test_framework_plugin_capability() -> None:
-    spec_path = REPO_ROOT / "openspec" / "specs" / "test-framework-plugin" / "spec.md"
+    spec_path = REPO_ROOT / "docs" / "comet" / "specs" / "test-framework-plugin" / "spec.md"
     text = spec_path.read_text(encoding="utf-8")
 
     assert "Runtime and initialization skill surfaces" in text

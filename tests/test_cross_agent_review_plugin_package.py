@@ -265,7 +265,7 @@ def test_cross_agent_review_skill_does_not_require_test_evidence() -> None:
 
 
 def test_cross_agent_review_spec_documents_lightweight_review_input_contract() -> None:
-    spec = REPO_ROOT / "openspec" / "specs" / "cross-agent-review" / "spec.md"
+    spec = REPO_ROOT / "docs" / "comet" / "specs" / "cross-agent-review" / "spec.md"
     text = spec.read_text(encoding="utf-8")
 
     assert "prepared-inputs/review-input.json" in text
