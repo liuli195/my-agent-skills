@@ -19,8 +19,8 @@ verification_report: docs/superpowers/reports/2026-07-22-fix-build-and-verify-te
 branch_status: pending
 created_at: 2026-07-22
 verified_at: 2026-07-22
-archive_confirmation: pending
-archived: false
+archive_confirmation: confirmed
+archived: true
 bound_branch: liuli195/build-verify-init
 direct_override: null
 handoff_context: null

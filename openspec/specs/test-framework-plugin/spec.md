@@ -141,6 +141,10 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **THEN** 根目录 `pyproject.toml` MUST NOT 存在
 - **THEN** `.build-and-verify/config.json` 中的 pytest（Python 测试运行器）命令 MUST 显式声明测试路径和所需命令参数
 
+#### Scenario: Explicit pytest commands cover repository tests
+- **WHEN** 仓库 `tests/`（测试目录）包含 `test_*.py`（Python 测试文件）
+- **THEN** `.build-and-verify/config.json` 中 pytest（Python 测试运行器）命令声明的测试文件集合 MUST 与该目录中的文件集合一致
+
 #### Scenario: No root wrapper entrypoint
 - **WHEN** 本仓库活跃自动化和 guard（守卫）命令文件被检查
 - **THEN** 它们 MUST NOT 引用根目录测试 wrapper（包装入口）
