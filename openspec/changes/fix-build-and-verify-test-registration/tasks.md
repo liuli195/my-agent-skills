@@ -8,4 +8,11 @@
 
 ## 3. 验证
 
-- [ ] 3.1 运行定向回归测试、完整 pytest（Python 测试运行器）套件、OpenSpec（开放规格）严格校验及 Build and Verify（构建与验证）的 build（构建检查）和默认 verify（快速验证）。
+- [x] 3.1 运行定向回归测试、完整 pytest（Python 测试运行器）套件、OpenSpec（开放规格）严格校验及 Build and Verify（构建与验证）的 build（构建检查）和默认 verify（快速验证）。
+
+## 验证记录
+
+- 定向回归测试：1 passed。
+- 完整 pytest（Python 测试运行器）套件：1050 passed，6 个既有编码警告。
+- OpenSpec（开放规格）严格校验：通过。
+- Build and Verify（构建与验证）的 build（构建检查）和默认 verify（快速验证）：通过。
