@@ -8,14 +8,14 @@ subagent_dispatch: null
 tdd_mode: direct
 review_mode: off
 isolation: worktree
-verify_mode: light
+verify_mode: full
 auto_transition: true
 base_ref: b37f5ed83b11282408147cbaf1d5e46096f304d6
 design_doc: null
 plan: null
 verify_result: pending
 verify_failures: 0
-verification_report: null
+verification_report: docs/superpowers/reports/2026-07-22-configure-build-and-verify-init-script-verify.md
 branch_status: pending
 created_at: 2026-07-21
 verified_at: null
