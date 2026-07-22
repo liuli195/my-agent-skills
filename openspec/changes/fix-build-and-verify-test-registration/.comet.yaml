@@ -8,14 +8,14 @@ subagent_dispatch: null
 tdd_mode: direct
 review_mode: off
 isolation: branch
-verify_mode: light
+verify_mode: full
 auto_transition: true
 base_ref: 64e3d95e4773c2976a6c838d414f214ec6e57e26
 design_doc: null
 plan: null
 verify_result: pending
 verify_failures: 0
-verification_report: null
+verification_report: docs/superpowers/reports/2026-07-22-fix-build-and-verify-test-registration-verify.md
 branch_status: pending
 created_at: 2026-07-22
 verified_at: null
