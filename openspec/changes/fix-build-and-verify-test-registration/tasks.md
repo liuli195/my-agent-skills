@@ -4,7 +4,7 @@
 
 ## 2. 配置修复
 
-- [ ] 2.1 在 `verify.build-and-verify`（构建与验证检查）的 `paths`（受影响路径）、`command`（执行命令）和 `inputs`（缓存输入）中登记 `tests/test_setup_worktree_script.py`（工作树初始化脚本测试）。
+- [x] 2.1 在 `verify.build-and-verify`（构建与验证检查）的 `paths`（受影响路径）、`command`（执行命令）和 `inputs`（缓存输入）中登记 `tests/test_setup_worktree_script.py`（工作树初始化脚本测试）。
 
 ## 3. 验证
 
