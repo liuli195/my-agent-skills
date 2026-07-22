@@ -853,6 +853,10 @@ def allow_cleanup(
     git_stub.add(["rev-parse", f"refs/heads/{base_ref}"], stdout=base_oid + "\n")
     git_stub.add(["rev-parse", "HEAD"], stdout=base_oid + "\n")
     git_stub.add(["branch", "--show-current"], stdout=base_ref + "\n")
+    git_stub.add(
+        ["fetch", "--no-write-fetch-head", "--refmap=", "origin", f"+refs/heads/{base_ref}:refs/remotes/origin/{base_ref}"]
+    )
+    git_stub.add(["rev-parse", f"refs/remotes/origin/{base_ref}"], stdout=base_oid + "\n")
     git_stub.add(["push", "origin", "--delete", head_ref])
     git_stub.add(["branch", "-d", head_ref])
 
@@ -1350,6 +1354,10 @@ def run_cleanup_in_process(
     git_stub.add(["rev-parse", f"refs/heads/{base_ref}"], stdout=base_oid + "\n")
     git_stub.add(["rev-parse", "HEAD"], stdout=base_oid + "\n")
     git_stub.add(["branch", "--show-current"], stdout=base_ref + "\n")
+    git_stub.add(
+        ["fetch", "--no-write-fetch-head", "--refmap=", "origin", f"+refs/heads/{base_ref}:refs/remotes/origin/{base_ref}"]
+    )
+    git_stub.add(["rev-parse", f"refs/remotes/origin/{base_ref}"], stdout=base_oid + "\n")
     git_stub.add(["push", "origin", "--delete", head_ref])
     git_stub.add(["branch", "-d", head_ref])
     monkeypatch.setattr(module, "gh", gh_stub)
@@ -5184,6 +5192,8 @@ def test_cleanup_detaches_when_base_becomes_occupied_during_checkout(tmp_path: P
         (["rev-parse", "refs/heads/main"], base_oid + "\n", 0),
         (["rev-parse", "HEAD"], base_oid + "\n", 0),
         (["branch", "--show-current"], "", 0),
+        (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "+refs/heads/main:refs/remotes/origin/main"], "", 0),
+        (["rev-parse", "refs/remotes/origin/main"], base_oid + "\n", 0),
         (["push", "origin", "--delete", "feature/example"], "", 0),
         (["ls-remote", "--heads", "origin", "feature/example"], "", 0),
         (["branch", "-d", "feature/example"], "", 0),
@@ -5235,6 +5245,8 @@ def test_cleanup_retries_source_deletion_from_synced_base(tmp_path: Path, monkey
         (["rev-parse", "refs/heads/main"], base_oid + "\n"),
         (["rev-parse", "HEAD"], base_oid + "\n"),
         (["branch", "--show-current"], "main\n"),
+        (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "+refs/heads/main:refs/remotes/origin/main"], ""),
+        (["rev-parse", "refs/remotes/origin/main"], base_oid + "\n"),
         (["push", "origin", "--delete", "feature/example"], ""),
         (["ls-remote", "--heads", "origin", "feature/example"], ""),
         (["branch", "-d", "feature/example"], ""),
@@ -5300,6 +5312,7 @@ def test_cleanup_fast_forwards_stale_base_checked_out_elsewhere_end_to_end(tmp_p
     assert result.returncode == 0, result.stdout + result.stderr
     assert git(other, "branch", "--show-current") == "main"
     assert git(other, "rev-parse", "HEAD") == remote_base
+    assert git(project, "rev-parse", "refs/remotes/origin/main") == remote_base
     assert git(project, "branch", "--show-current") == ""
     assert git(project, "rev-parse", "HEAD") == remote_base
     assert subprocess.run(
@@ -5387,6 +5400,8 @@ def test_cleanup_retries_transient_eof_pr_view_before_cleanup(tmp_path: Path, mo
         (["rev-parse", "refs/heads/main"], base_oid + "\n"),
         (["rev-parse", "HEAD"], base_oid + "\n"),
         (["branch", "--show-current"], "main\n"),
+        (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "+refs/heads/main:refs/remotes/origin/main"], ""),
+        (["rev-parse", "refs/remotes/origin/main"], base_oid + "\n"),
         (["push", "origin", "--delete", "feature/example"], ""),
         (["ls-remote", "--heads", "origin", "feature/example"], ""),
         (["branch", "-d", "feature/example"], ""),
@@ -5400,6 +5415,24 @@ def test_cleanup_retries_transient_eof_pr_view_before_cleanup(tmp_path: Path, mo
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: cleanup_complete" in result.stdout
     assert gh_stub.calls.count(("pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner")) == 2
+
+
+def test_cleanup_refuses_remote_base_change_during_cleanup(tmp_path: Path, monkeypatch) -> None:
+    base_oid = "a" * 40
+    project, result = run_cleanup_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=cleanup_pr_view_json(),
+        git_responses=[
+            (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "+refs/heads/main:refs/remotes/origin/main"], "", 0),
+            (["rev-parse", "refs/remotes/origin/main"], "c" * 40 + "\n", 0),
+        ],
+    )
+
+    assert_cleanup_exception(project, result, "git_cleanup_consistency_mismatch")
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["baseCommit"] == base_oid
+    assert status["details"]["remoteBaseCommit"] == "c" * 40
 
 
 def test_cleanup_uses_live_state_instead_of_completed_step_markers(tmp_path: Path, monkeypatch) -> None:

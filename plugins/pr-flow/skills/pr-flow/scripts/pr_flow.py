@@ -2359,6 +2359,31 @@ def run_cleanup(args: argparse.Namespace) -> int:
                         "expectedBranch": expected_branch,
                     },
                 )
+        remote_base_ref = f"refs/remotes/{remote}/{base_ref}"
+        require_git_success(
+            project,
+            "git_refresh_remote_base_failed",
+            "fetch",
+            "--no-write-fetch-head",
+            "--refmap=",
+            remote,
+            f"+refs/heads/{base_ref}:{remote_base_ref}",
+        )
+        remote_base_oid = require_git_success(
+            project, "git_remote_base_readback_failed", "rev-parse", remote_base_ref
+        ).stdout.strip()
+        if remote_base_oid != base_oid:
+            raise PrFlowError(
+                "git_cleanup_consistency_mismatch",
+                {
+                    "reason": "git_cleanup_consistency_mismatch",
+                    "baseCommit": base_oid,
+                    "remoteBaseCommit": remote_base_oid,
+                    "localBaseCommit": final_base_oid,
+                    "currentHead": final_head_oid,
+                },
+            )
+
         if remote_head.stdout.strip():
             require_git_success(project, "git_push_delete_failed", "push", remote, "--delete", head_ref)
             confirm_remote_branch_deleted(project, remote, head_ref)

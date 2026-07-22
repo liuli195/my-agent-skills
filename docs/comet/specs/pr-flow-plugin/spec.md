@@ -158,6 +158,8 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 - **WHEN** 被占用的目标分支落后于最新远端目标提交
 - **AND** 占用工作树仍检出该目标分支、工作区和暂存区干净、无进行中的 Git（版本管理）操作、当前提交仍等于预检提交，且可以安全快进
 - **THEN** cleanup（清理） MUST 在占用工作树中使用 `git merge --ff-only`（仅快进合并）同步目标分支
+- **THEN** cleanup（清理） MUST 刷新本地 remote-tracking branch（远端跟踪分支）副本
+- **THEN** cleanup（清理） MUST 在删除源分支前确认远端跟踪分支、本地目标分支和当前提交均等于本轮最新远端目标提交
 - **THEN** 当前工作树 MUST remain at the latest remote target commit in detached HEAD（最新远端目标提交的分离头）并完成源分支清理
 - **WHEN** 任一安全条件不满足或仅快进失败
 - **THEN** cleanup（清理） MUST fail closed（安全关闭）并在删除任一源分支前停止
