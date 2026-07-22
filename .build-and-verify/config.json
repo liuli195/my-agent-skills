@@ -173,9 +173,10 @@
           "tests/test_build_and_verify_plugin.py",
           "tests/test_plugin_sync_skill_contract.py",
           "tests/test_version_source_of_truth.py",
-          "tests/test_test_runtime_boundaries.py"
+          "tests/test_test_runtime_boundaries.py",
+          "tests/test_setup_worktree_script.py"
         ],
-        "command": "python -m pytest -q -p no:cacheprovider tests/test_build_and_verify_plugin.py tests/test_plugin_sync_skill_contract.py tests/test_version_source_of_truth.py tests/test_test_runtime_boundaries.py",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_build_and_verify_plugin.py tests/test_plugin_sync_skill_contract.py tests/test_version_source_of_truth.py tests/test_test_runtime_boundaries.py tests/test_setup_worktree_script.py",
         "inputs": [
           ".agents",
           ".claude-plugin",
@@ -187,7 +188,8 @@
           "tests/test_build_and_verify_plugin.py",
           "tests/test_plugin_sync_skill_contract.py",
           "tests/test_version_source_of_truth.py",
-          "tests/test_test_runtime_boundaries.py"
+          "tests/test_test_runtime_boundaries.py",
+          "tests/test_setup_worktree_script.py"
         ],
         "checkParallel": true,
         "pytestXdistWorkers": 4
