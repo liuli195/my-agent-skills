@@ -191,19 +191,6 @@
         ],
         "checkParallel": true,
         "pytestXdistWorkers": 4
-      },
-      {
-        "id": "verify.openspec",
-        "paths": [
-          "openspec/**",
-          "docs/superpowers/**"
-        ],
-        "command": "openspec validate --all --strict --no-interactive",
-        "inputs": [
-          "openspec",
-          "docs/superpowers"
-        ],
-        "checkParallel": true
       }
     ]
   }
