@@ -1,0 +1,14 @@
+{
+  "change": "add-local-plugin-build-checks",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "7969939d124ae18d633a3bb5c8cc2d24f4aacc512266fa0cb33feac527987e46",
+  "files": [
+    { "path": "openspec/changes/add-local-plugin-build-checks/proposal.md", "sha256": "295e92ce8e8cf518f8bfda086f29a67eafc313ef999cb0ffdd8fee1b222ba831", "role": "supporting" },
+    { "path": "openspec/changes/add-local-plugin-build-checks/design.md", "sha256": "6ab425b240669afd921b0e00321b51178de2593c7721c90c08267052ea7ea8e0", "role": "supporting" },
+    { "path": "openspec/changes/add-local-plugin-build-checks/tasks.md", "sha256": "98a05ff61f405c57e0885a2fa87a11669466eeaf54127292f98089c138fdfb4c", "role": "supporting" },
+    { "path": "openspec/changes/add-local-plugin-build-checks/specs/local-plugin-build-checks/spec.md", "sha256": "d135f99a1f95da2180087f4fe68e65a5062d9959ce740ebaccd8ca0c9e22294c", "role": "spec" }
+  ]
+}

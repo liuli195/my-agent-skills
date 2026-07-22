@@ -1,0 +1,87 @@
+"""读取当前 Session Focus Instance（会话焦点实例）的 Guard Brief（守卫简报）。"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+def plugin_root_candidates() -> list[Path]:
+    source_root = Path(__file__).resolve().parents[3]
+    candidates = [
+        source_root,
+        source_root / "plugins" / "agent-guard",
+    ]
+    for env_name in ["PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "AGENT_GUARD_PLUGIN_ROOT"]:
+        env_value = os.environ.get(env_name)
+        if env_value:
+            candidates.append(Path(env_value))
+    candidates.extend(
+        [
+            Path.home() / ".codex" / "plugins" / "agent-guard",
+            Path.home() / ".claude" / "plugins" / "agent-guard",
+        ]
+    )
+    return candidates
+
+
+def runtime_cli() -> Path:
+    fallback = plugin_root_candidates()[1] / "scripts" / "guard_runtime" / "cli.py"
+    for root in plugin_root_candidates():
+        candidate = root / "scripts" / "guard_runtime" / "cli.py"
+        if candidate.exists():
+            return candidate
+    return fallback
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="读取并注入当前 Guard Brief（守卫简报）。")
+    parser.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目目录，默认当前目录")
+    parser.add_argument("--user-home", type=Path, default=Path.home(), help="用户级运行态根目录")
+    parser.add_argument("--source", default=os.environ.get("AGENT_GUARD_SOURCE", "codex"), choices=["codex", "claude", "pi"], help="当前会话来源")
+    parser.add_argument("--session-id", help="当前 session_id")
+    parser.add_argument("--context-json", help="可从其中读取 session_id")
+    args = parser.parse_args(argv)
+
+    session_id = args.session_id or os.environ.get("AGENT_GUARD_SESSION_ID")
+    if not session_id and args.context_json:
+        try:
+            context = json.loads(args.context_json)
+        except json.JSONDecodeError as exc:
+            print("status: error")
+            print(f"reason: invalid_context_json: {exc}")
+            return 2
+        if isinstance(context, dict) and isinstance(context.get("session_id"), str):
+            session_id = context["session_id"]
+    if not session_id:
+        print("status: error")
+        print("reason: session_id_required")
+        return 2
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(runtime_cli()),
+            "brief",
+            "--project",
+            str(args.project.resolve()),
+            "--user-home",
+            str(args.user_home.resolve()),
+            "--source",
+            args.source,
+            "--session-id",
+            session_id,
+        ],
+        cwd=args.project.resolve(),
+        text=True,
+        check=False,
+    )
+    return completed.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())
