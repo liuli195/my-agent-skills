@@ -49,3 +49,13 @@
 - 如果配置或状态无效且没有 `nextCommand`，停止并报告原因；不要猜测另一个 workflow。
 - 不能只因为存在 active change 就把无关任务挂到该 change。Native 的未提交改动由 Native 入口检查，不由探针自动归因。
 </comet-ambient-resume>
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+This repository uses a single-context layout. See `docs/agents/domain.md`.
