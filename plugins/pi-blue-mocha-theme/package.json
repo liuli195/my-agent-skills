@@ -1,0 +1,15 @@
+{
+  "name": "pi-blue-mocha-theme",
+  "version": "0.1.0",
+  "description": "Blue Mocha theme for Pi",
+  "keywords": [
+    "pi-package",
+    "theme"
+  ],
+  "private": true,
+  "pi": {
+    "themes": [
+      "./themes"
+    ]
+  }
+}
