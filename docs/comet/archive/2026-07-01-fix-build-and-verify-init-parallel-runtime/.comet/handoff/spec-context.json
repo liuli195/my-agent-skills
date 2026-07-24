@@ -1,0 +1,15 @@
+{
+  "change": "fix-build-and-verify-init-parallel-runtime",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "1269a0e8d805d3f68afa2556bb5e2c5ea59bcb4939deba67b29a49d2211a7180",
+  "files": [
+    { "path": "openspec/changes/fix-build-and-verify-init-parallel-runtime/proposal.md", "sha256": "8cf26cd900fd2ab0ff109b9eebe333ea0e0299c0da00ad471cc414d98716db85", "role": "supporting" },
+    { "path": "openspec/changes/fix-build-and-verify-init-parallel-runtime/design.md", "sha256": "57d13a8df6e9aaaf2805033690ed4487c19b35f2876226cbcd67fb92c4d60957", "role": "supporting" },
+    { "path": "openspec/changes/fix-build-and-verify-init-parallel-runtime/tasks.md", "sha256": "5a3dd6d8d16d2cdb46ddd702b3e07fc8007c628a1868a0230cbc0d9a218b96fa", "role": "supporting" },
+    { "path": "openspec/changes/fix-build-and-verify-init-parallel-runtime/specs/full-verification-runtime/spec.md", "sha256": "2944a2962fe66049869db938f1ec1bb325f5f22ea1b4a4061a744127689d15cd", "role": "spec" },
+    { "path": "openspec/changes/fix-build-and-verify-init-parallel-runtime/specs/test-framework-plugin/spec.md", "sha256": "8048430bdbf135baf974329609eadf1f7468dee58aa925b165c882e0e801b5a2", "role": "spec" }
+  ]
+}

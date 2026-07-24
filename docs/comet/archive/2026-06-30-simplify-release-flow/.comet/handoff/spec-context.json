@@ -1,0 +1,14 @@
+{
+  "change": "simplify-release-flow",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "aa448e3dd899b463b4b3c953da91faabca2263869554bc4a5180d1d8169e8744",
+  "files": [
+    { "path": "openspec/changes/simplify-release-flow/proposal.md", "sha256": "e650e2f96b5283034742f58bbd0fa0ca2c8acb43e5a7fdcaaa0d9eee70995d81", "role": "supporting" },
+    { "path": "openspec/changes/simplify-release-flow/design.md", "sha256": "3cfa74b356d91be5d8785e7ef003ab3168f5e904adbbd42e1ffb1587404d3b0f", "role": "supporting" },
+    { "path": "openspec/changes/simplify-release-flow/tasks.md", "sha256": "a5c99f99e23590a5f1e96aa3b8c0d7791f373bbac8a737acbba6a1146450044c", "role": "supporting" },
+    { "path": "openspec/changes/simplify-release-flow/specs/release-flow-plugin/spec.md", "sha256": "6ef6b65e20af714d90269a81f16553f588c5bac8cd1283adfd02e3c12aa620cb", "role": "spec" }
+  ]
+}

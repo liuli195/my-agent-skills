@@ -1,0 +1,34 @@
+version: 1
+
+identity:
+  codex:
+    marketplaceName: my-agent-skills-marketplace
+    displayName: My Agent Skills Marketplace
+  claude:
+    marketplaceName: my-agent-skills-marketplace
+    ownerName: My Agent Skills Marketplace
+
+variables: {}
+
+generators:
+  - path: .agents/plugins/marketplace.json
+    type: codex-marketplace
+    identity: codex
+    plugins:
+      - agent-guard
+      - release-flow
+      - cross-agent-review
+      - pr-flow
+      - build-and-verify
+
+transforms:
+  - path: .agents/plugins/marketplace.json
+    type: json-env
+    set:
+      /name: identity.codex.marketplaceName
+      /interface/displayName: identity.codex.displayName
+  - path: .claude-plugin/marketplace.json
+    type: json-env
+    set:
+      /name: identity.claude.marketplaceName
+      /owner/name: identity.claude.ownerName

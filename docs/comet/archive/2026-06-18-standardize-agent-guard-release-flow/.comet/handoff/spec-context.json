@@ -1,0 +1,15 @@
+{
+  "change": "standardize-agent-guard-release-flow",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "64710d634e90c8dd9351e5acf1da74d66196b0ead4200a049628afaf5c82a854",
+  "files": [
+    { "path": "openspec/changes/standardize-agent-guard-release-flow/proposal.md", "sha256": "5a3c9201ea983c8707748ea321172b034e5224874fdb9e7b64c1559a9263a53b", "role": "supporting" },
+    { "path": "openspec/changes/standardize-agent-guard-release-flow/design.md", "sha256": "44a180bb812d928286c178c16b426e97eb6ef852a977ce7a847ebb3a69809e19", "role": "supporting" },
+    { "path": "openspec/changes/standardize-agent-guard-release-flow/tasks.md", "sha256": "312b5bb437da7552b5aed97e69226d2b4aba34e15e7df3f88a909c44fc914d8d", "role": "supporting" },
+    { "path": "openspec/changes/standardize-agent-guard-release-flow/specs/agent-guard-plugin-runtime/spec.md", "sha256": "51e902834998f6fe2f3c1f0ba925efdb86174e1a119a34765e5197845f012c31", "role": "spec" },
+    { "path": "openspec/changes/standardize-agent-guard-release-flow/specs/release-flow-plugin/spec.md", "sha256": "15c85716d7d3e40ed312dc2d28b539c3ffa5ff3afa5c00fcdc1efdf7abbca4f7", "role": "spec" }
+  ]
+}

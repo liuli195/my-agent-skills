@@ -1,0 +1,14 @@
+{
+  "change": "refactor-cross-agent-review-input-contract",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "73cb750306b7577bf2524b0ad0fdb8bd5ba8e6879ee9a5fea9139217472d46a9",
+  "files": [
+    { "path": "openspec/changes/refactor-cross-agent-review-input-contract/proposal.md", "sha256": "d2b1a47c42274da014a1dfeb3afee281bff917a8363e00c7df58b6ad9f376e23", "role": "supporting" },
+    { "path": "openspec/changes/refactor-cross-agent-review-input-contract/design.md", "sha256": "8cbe44a52ea9509ef8db86a46e2e97f3b79634d59a11936bd685d7e1c4e0f710", "role": "supporting" },
+    { "path": "openspec/changes/refactor-cross-agent-review-input-contract/tasks.md", "sha256": "e22905973f9b713bf0b8df824abd5d07bb000c489fe26b176763e6d5d70902f3", "role": "supporting" },
+    { "path": "openspec/changes/refactor-cross-agent-review-input-contract/specs/cross-agent-review/spec.md", "sha256": "5094e16db392c45fd5050baf89315c6b8db0b43cd61a7fe16466fe15a5716281", "role": "spec" }
+  ]
+}
