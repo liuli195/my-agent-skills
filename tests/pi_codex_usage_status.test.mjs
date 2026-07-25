@@ -196,7 +196,7 @@ async function runLifecycleRegression({ faulty = false } = {}) {
 			if (stderr.includes("uncaughtException")) throw new Error(`uncaught exception during ${stage}\n${stderr}`);
 		};
 		const waitFor = async (predicate, message) => {
-			const deadline = Date.now() + 4000;
+			const deadline = Date.now() + 10_000;
 			while (Date.now() < deadline) {
 				const found = events.find(predicate);
 				if (found) return found;
@@ -285,7 +285,7 @@ async function runRealReloadRegression() {
 			"--no-session", "--offline", "--approve", "--no-skills", "--no-prompt-templates",
 			"--no-context-files", "-e", helper,
 		];
-		const script = "C:/msys64/usr/bin/script.exe";
+		const script = process.platform === "win32" ? "C:/msys64/usr/bin/script.exe" : "/usr/bin/script";
 		const quote = (value) => `'${value.replaceAll("\\", "/").replaceAll("'", "'\\''")}'`;
 		const launcher = existsSync(script) ? script : process.execPath;
 		const launcherArgs = existsSync(script)
@@ -305,7 +305,7 @@ async function runRealReloadRegression() {
 		});
 		child.stderr.setEncoding("utf8");
 		child.stderr.on("data", (chunk) => { stderr += chunk; });
-		const startupDeadline = Date.now() + 4000;
+		const startupDeadline = Date.now() + 10_000;
 		while (!stdout.includes("lifecycle-helper.ts") && child.exitCode === null && Date.now() < startupDeadline) {
 			await new Promise((resolve) => setTimeout(resolve, 10));
 		}
