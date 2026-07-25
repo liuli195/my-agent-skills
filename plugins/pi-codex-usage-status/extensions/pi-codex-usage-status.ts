@@ -50,19 +50,23 @@ export default function (pi: ExtensionAPI): void {
 	let usage: CodexUsage | undefined;
 	let refreshing = false;
 	let generation = 0;
+	let statusUI: ExtensionContext["ui"] | undefined;
 
-	const stop = (ctx?: ExtensionContext): void => {
+	const stop = (clearStatus = true): void => {
 		generation += 1;
 		if (timer) clearInterval(timer);
 		timer = undefined;
 		controller?.abort();
 		controller = undefined;
 		refreshing = false;
-		ctx?.ui.setStatus(STATUS_KEY, undefined);
+		const ui = statusUI;
+		statusUI = undefined;
+		if (clearStatus) ui?.setStatus(STATUS_KEY, undefined);
 	};
 
 	pi.on("session_start", (_event, ctx) => {
-		stop(ctx);
+		stop();
+		statusUI = ctx.ui;
 		usage = undefined;
 		const settings = SettingsManager.create(ctx.cwd).getGlobalSettings() as unknown;
 		const interval = refreshMilliseconds(settings);
@@ -87,9 +91,14 @@ export default function (pi: ExtensionAPI): void {
 			}
 		};
 
-		void refresh();
-		timer = setInterval(() => void refresh(), interval);
+		const runRefresh = (): void => {
+			// Runtime invalidation can happen without another event reaching this extension instance.
+			void refresh().catch(() => stop(false));
+		};
+
+		runRefresh();
+		timer = setInterval(runRefresh, interval);
 	});
 
-	pi.on("session_shutdown", (_event, ctx) => stop(ctx));
+	pi.on("session_shutdown", stop);
 }
