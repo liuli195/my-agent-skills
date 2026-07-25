@@ -95,9 +95,14 @@ export default function (pi) {
 		ctx.modelRegistry.getAll = () => [{ provider: "openai-codex" }];
 		ctx.modelRegistry.getApiKeyAndHeaders = async () => ({ ok: true, apiKey: token });
 		if (event.reason === "reload" && process.env.PI_LIFECYCLE_MARKER) {
-			setTimeout(() => void release(false).then(() => {
-				appendFileSync(process.env.PI_LIFECYCLE_MARKER, "reloaded\\n");
-			}), 50);
+			const setStatus = ctx.ui.setStatus.bind(ctx.ui);
+			ctx.ui.setStatus = (key, text) => {
+				setStatus(key, text);
+				if (key === "mcp-codex" && text?.startsWith("Codex：75%/")) {
+					appendFileSync(process.env.PI_LIFECYCLE_MARKER, "status-restored\\n");
+				}
+			};
+			setTimeout(() => void release(false), 50);
 		}
 	});
 	pi.registerCommand("test-reload", {
@@ -150,6 +155,10 @@ async function runLifecycleRegression({ faulty = false } = {}) {
 			const usageModule = join(process.cwd(), "plugins", "pi-codex-usage-status", "extensions", "usage.ts").replaceAll("\\", "/");
 			await writeFile(extension, source
 				.replace('from "./usage.ts"', `from ${JSON.stringify(usageModule)}`)
+				.replace(
+					"if (!setStatus(statusUI, usage ? formatUsage(usage) : undefined)) stop(false);",
+					"ctx.ui.setStatus(STATUS_KEY, usage ? formatUsage(usage) : undefined);",
+				)
 				.replace("void refresh().catch(() => stop(false));", "void refresh();"));
 		}
 		const cli = join(process.env.APPDATA, "npm", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
@@ -235,7 +244,9 @@ async function runLifecycleRegression({ faulty = false } = {}) {
 		await waitFor((event) => event.method === "setStatus" && event.statusText?.startsWith("Codex：75%/"), "periodic refresh did not publish usage");
 		assertHealthy("periodic refresh");
 
+		events.length = 0;
 		send({ id: "shutdown", type: "prompt", message: "/test-shutdown" });
+		await waitFor((event) => event.method === "setStatus" && event.statusText === undefined, "shutdown did not clear status");
 		await waitFor((event) => event.id === "shutdown" && event.success === true, "shutdown command failed");
 		const exitCode = child.exitCode ?? await Promise.race([
 			new Promise((resolve) => child.once("exit", resolve)),
@@ -307,7 +318,8 @@ async function runRealReloadRegression() {
 		if (child.exitCode !== null || stderr.includes("This extension ctx is stale")) {
 			throw new Error(`stale ctx after real reload\n${stderr}`);
 		}
-		if (!existsSync(marker)) throw new Error(`real reload did not complete\nstdout: ${stdout}\nstderr: ${stderr}`);
+		if (!existsSync(marker)) throw new Error(`real reload did not restore status\nstdout: ${stdout}\nstderr: ${stderr}`);
+		await new Promise((resolve) => setTimeout(resolve, 100));
 		child.stdin.write("/test-shutdown\r");
 		const exitCode = child.exitCode ?? await Promise.race([
 			new Promise((resolve) => child.once("exit", resolve)),

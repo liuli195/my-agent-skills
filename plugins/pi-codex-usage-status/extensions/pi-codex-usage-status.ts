@@ -52,6 +52,17 @@ export default function (pi: ExtensionAPI): void {
 	let generation = 0;
 	let statusUI: ExtensionContext["ui"] | undefined;
 
+	const setStatus = (ui: ExtensionContext["ui"] | undefined, text: string | undefined): boolean => {
+		if (!ui) return true;
+		try {
+			ui.setStatus(STATUS_KEY, text);
+			return true;
+		} catch {
+			// Pi can invalidate a runtime before its shutdown reaches this extension instance.
+			return false;
+		}
+	};
+
 	const stop = (clearStatus = true): void => {
 		generation += 1;
 		if (timer) clearInterval(timer);
@@ -61,7 +72,7 @@ export default function (pi: ExtensionAPI): void {
 		refreshing = false;
 		const ui = statusUI;
 		statusUI = undefined;
-		if (clearStatus) ui?.setStatus(STATUS_KEY, undefined);
+		if (clearStatus) setStatus(ui, undefined);
 	};
 
 	pi.on("session_start", (_event, ctx) => {
@@ -86,7 +97,7 @@ export default function (pi: ExtensionAPI): void {
 				if (controller === currentController) controller = undefined;
 				if (sessionGeneration === generation) {
 					refreshing = false;
-					ctx.ui.setStatus(STATUS_KEY, usage ? formatUsage(usage) : undefined);
+					if (!setStatus(statusUI, usage ? formatUsage(usage) : undefined)) stop(false);
 				}
 			}
 		};
