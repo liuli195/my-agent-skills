@@ -1,7 +1,7 @@
 {
-  "name": "pi-blue-mocha-theme",
+  "name": "pi-my-theme",
   "version": "0.1.0",
-  "description": "Blue Mocha theme for Pi",
+  "description": "Personal themes for Pi",
   "keywords": [
     "pi-package",
     "theme"

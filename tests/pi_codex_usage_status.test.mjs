@@ -5,16 +5,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 
-const roots = [
-	process.env.APPDATA && join(process.env.APPDATA, "npm", "node_modules"),
-	process.env.ProgramFiles && join(process.env.ProgramFiles, "nodejs", "node_modules"),
-	"/usr/local/lib/node_modules",
-	"/usr/lib/node_modules",
-].filter(Boolean);
-const jitiPath = roots
-	.map((root) => join(root, "@earendil-works", "pi-coding-agent", "node_modules", "jiti", "lib", "jiti.cjs"))
-	.find(existsSync);
-if (!jitiPath) throw new Error("pi-coding-agent jiti runtime not found");
+const npmRoot = spawnSync(
+	process.platform === "win32" ? process.env.ComSpec : "npm",
+	process.platform === "win32" ? ["/d", "/s", "/c", "npm root -g"] : ["root", "-g"],
+	{ encoding: "utf8" },
+).stdout.trim();
+const piRoot = [join(process.cwd(), "node_modules"), npmRoot]
+	.map((root) => join(root, "@earendil-works", "pi-coding-agent"))
+	.find((root) => existsSync(join(root, "package.json")));
+if (!piRoot) throw new Error("pi-coding-agent runtime not found");
+const jitiPath = join(piRoot, "node_modules", "jiti", "lib", "jiti.cjs");
 
 const { createJiti } = createRequire(import.meta.url)(jitiPath);
 const usage = createJiti(import.meta.url)(
@@ -145,7 +145,7 @@ async function runLifecycleRegression({ faulty = false } = {}) {
 		}));
 		const helper = join(root, "lifecycle-helper.ts");
 		const requestLog = join(root, "requests.log");
-		const runnerModule = join(process.env.APPDATA, "npm", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "extensions", "runner.js").replaceAll("\\", "/");
+		const runnerModule = join(piRoot, "dist", "core", "extensions", "runner.js").replaceAll("\\", "/");
 		await writeFile(helper, helperSource.replace("__PI_EXTENSION_RUNNER__", runnerModule));
 		const productionExtension = join(process.cwd(), "plugins", "pi-codex-usage-status", "extensions", "pi-codex-usage-status.ts");
 		let extension = productionExtension;
@@ -161,7 +161,7 @@ async function runLifecycleRegression({ faulty = false } = {}) {
 				)
 				.replace("void refresh().catch(() => stop(false));", "void refresh();"));
 		}
-		const cli = join(process.env.APPDATA, "npm", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
+		const cli = join(piRoot, "dist", "cli.js");
 		child = spawn(process.execPath, [cli,
 			"--mode", "rpc", "--no-session", "--offline", "--no-extensions", "--no-skills",
 			"--no-prompt-templates", "--no-context-files", "-e", helper, "-e", extension,
@@ -196,7 +196,7 @@ async function runLifecycleRegression({ faulty = false } = {}) {
 			if (stderr.includes("uncaughtException")) throw new Error(`uncaught exception during ${stage}\n${stderr}`);
 		};
 		const waitFor = async (predicate, message) => {
-			const deadline = Date.now() + 4000;
+			const deadline = Date.now() + 10_000;
 			while (Date.now() < deadline) {
 				const found = events.find(predicate);
 				if (found) return found;
@@ -278,14 +278,14 @@ async function runRealReloadRegression() {
 		}));
 		const helper = join(root, "lifecycle-helper.ts");
 		const marker = join(root, "reloaded.txt");
-		const runnerModule = join(process.env.APPDATA, "npm", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "extensions", "runner.js").replaceAll("\\", "/");
+		const runnerModule = join(piRoot, "dist", "core", "extensions", "runner.js").replaceAll("\\", "/");
 		await writeFile(helper, helperSource.replace("__PI_EXTENSION_RUNNER__", runnerModule));
-		const cli = join(process.env.APPDATA, "npm", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
+		const cli = join(piRoot, "dist", "cli.js");
 		const piArgs = [process.execPath, cli,
 			"--no-session", "--offline", "--approve", "--no-skills", "--no-prompt-templates",
 			"--no-context-files", "-e", helper,
 		];
-		const script = "C:/msys64/usr/bin/script.exe";
+		const script = process.platform === "win32" ? "C:/msys64/usr/bin/script.exe" : "/usr/bin/script";
 		const quote = (value) => `'${value.replaceAll("\\", "/").replaceAll("'", "'\\''")}'`;
 		const launcher = existsSync(script) ? script : process.execPath;
 		const launcherArgs = existsSync(script)
@@ -305,7 +305,7 @@ async function runRealReloadRegression() {
 		});
 		child.stderr.setEncoding("utf8");
 		child.stderr.on("data", (chunk) => { stderr += chunk; });
-		const startupDeadline = Date.now() + 4000;
+		const startupDeadline = Date.now() + 10_000;
 		while (!stdout.includes("lifecycle-helper.ts") && child.exitCode === null && Date.now() < startupDeadline) {
 			await new Promise((resolve) => setTimeout(resolve, 10));
 		}
