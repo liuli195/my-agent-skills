@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
-  "name": "blue-mocha",
+  "name": "blue-nobkgd",
   "vars": {
     "rosewater": "#f5e0dc",
     "pink": "#f5c2e7",
