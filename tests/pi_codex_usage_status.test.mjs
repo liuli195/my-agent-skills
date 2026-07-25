@@ -30,6 +30,14 @@ const parsed = usage.parseUsage({
 });
 if (!parsed) throw new Error("seven-day window not parsed");
 if (usage.formatUsage(parsed, now) !== "Codex：85%/6D21H") throw new Error("active format mismatch");
+const boundaryUsage = { remainingPercent: 85, resetAtMs: now + 3_600_000 };
+if (usage.formatUsage(boundaryUsage, now) !== "Codex：85%/0D1H") throw new Error("hour boundary mismatch");
+if (usage.formatUsage({ ...boundaryUsage, resetAtMs: now + 45 * 60_000 + 59_000 }, now) !== "Codex：85%/45M") {
+	throw new Error("minute format mismatch");
+}
+if (usage.formatUsage({ ...boundaryUsage, resetAtMs: now + 59_000 }, now) !== "Codex：85%/0M") {
+	throw new Error("sub-minute format mismatch");
+}
 if (usage.formatUsage(parsed, parsed.resetAtMs) !== "Codex：--%/0D0H") throw new Error("expired format mismatch");
 if (usage.refreshMilliseconds({}) !== 15_000) throw new Error("default interval mismatch");
 if (usage.refreshMilliseconds({ codexUsageStatus: { refreshSeconds: 30 } }) !== 30_000) {

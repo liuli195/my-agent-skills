@@ -47,6 +47,9 @@ export function formatUsage(usage: CodexUsage, now = Date.now()): string {
 	const remainingMs = usage.resetAtMs - now;
 	if (remainingMs <= 0) return "Codex：--%/0D0H";
 	const totalHours = Math.floor(remainingMs / 3_600_000);
+	if (totalHours === 0) {
+		return `Codex：${Math.floor(usage.remainingPercent)}%/${Math.floor(remainingMs / 60_000)}M`;
+	}
 	const days = Math.floor(totalHours / 24);
 	const hours = totalHours % 24;
 	return `Codex：${Math.floor(usage.remainingPercent)}%/${days}D${hours}H`;
