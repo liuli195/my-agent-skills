@@ -25,8 +25,18 @@ interface OpenAICodexWebSocketDebugStats {
 
 interface RequestSnapshot {
 	sequence: number;
+	sessionIdHash: string;
 	statsBefore?: OpenAICodexWebSocketDebugStats;
 }
+
+interface PromptUsage {
+	input: number;
+	cacheRead: number;
+	cacheWrite: number;
+}
+
+const CACHE_MISS_NOISE_FLOOR = 1_024;
+const LARGE_CACHE_MISS_TOKENS = 20_000;
 
 const LOG_PATH = join(getAgentDir(), "diagnostics", "openai-codex-cache.jsonl");
 const STAT_KEYS = [
@@ -166,6 +176,22 @@ function append(entry: JsonRecord): void {
 	appendFileSync(LOG_PATH, `${JSON.stringify(entry)}\n`, "utf8");
 }
 
+export function detectMissedTokens(
+	previousPromptTokens: number | undefined,
+	reportedCache: boolean,
+	usage: PromptUsage,
+): number | undefined {
+	const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+	if (
+		previousPromptTokens === undefined
+		|| promptTokens <= 0
+		|| (usage.cacheRead + usage.cacheWrite === 0 && !reportedCache)
+	) return undefined;
+
+	const missedTokens = Math.min(previousPromptTokens, promptTokens) - usage.cacheRead;
+	return missedTokens > CACHE_MISS_NOISE_FLOOR ? missedTokens : undefined;
+}
+
 export default async function (pi: ExtensionAPI): Promise<void> {
 	const providerModulePath = join(
 		getPackageDir(),
@@ -186,6 +212,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	let previousWithoutInput: JsonRecord | undefined;
 	let pending: RequestSnapshot | undefined;
 	let previousPromptTokens: number | undefined;
+	let previousModelKey: string | undefined;
+	let reportedCache = false;
 
 	pi.on("session_start", (_event, ctx) => {
 		sequence = 0;
@@ -194,6 +222,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		previousWithoutInput = undefined;
 		pending = undefined;
 		previousPromptTokens = undefined;
+		previousModelKey = undefined;
+		reportedCache = false;
 		append({
 			type: "session_start",
 			timestamp: localTimestamp(),
@@ -216,14 +246,16 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			? firstDifference(previousWithoutInput, withoutInput)
 			: undefined;
 		const sessionId = ctx.sessionManager.getSessionId();
+		const sessionIdHash = hash(sessionId);
 		const statsBefore = getOpenAICodexWebSocketDebugStats(sessionId);
 		sequence += 1;
-		pending = { sequence, statsBefore };
+		pending = { sequence, sessionIdHash, statsBefore };
 
 		append({
 			type: "request",
 			timestamp: localTimestamp(),
 			sequence,
+			sessionIdHash,
 			model: payload.model,
 			inputItems: input.length,
 			inputHash: hash(input),
@@ -249,10 +281,12 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 
 		const usage = message.usage;
 		const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
-		const hasPromptUsage = promptTokens > 0;
-		const missedTokens = !hasPromptUsage || previousPromptTokens === undefined
-			? undefined
-			: Math.max(0, Math.min(previousPromptTokens, promptTokens) - usage.cacheRead);
+		const hasValidPromptUsage = promptTokens > 0 && message.stopReason !== "error" && message.stopReason !== "aborted";
+		const missedTokens = hasValidPromptUsage
+			? detectMissedTokens(previousPromptTokens, reportedCache, usage)
+			: undefined;
+		const modelKey = `${message.provider}/${message.model}`;
+		const modelChanged = previousModelKey !== undefined && previousModelKey !== modelKey;
 		const statsAfter = getOpenAICodexWebSocketDebugStats(ctx.sessionManager.getSessionId());
 		const delta = statsDelta(pending?.statsBefore, statsAfter);
 
@@ -260,12 +294,15 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			type: "response",
 			timestamp: localTimestamp(),
 			sequence: pending?.sequence,
+			sessionIdHash: pending?.sessionIdHash ?? hash(ctx.sessionManager.getSessionId()),
 			stopReason: message.stopReason,
 			promptTokens,
 			inputTokens: usage.input,
 			cacheReadTokens: usage.cacheRead,
 			cacheWriteTokens: usage.cacheWrite,
 			missedTokens,
+			largeMiss: missedTokens !== undefined && missedTokens >= LARGE_CACHE_MISS_TOKENS,
+			modelChanged,
 			statsDelta: delta,
 			lastInputItems: statsAfter?.lastInputItems,
 			lastDeltaInputItems: statsAfter?.lastDeltaInputItems,
@@ -275,10 +312,14 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			diagnostics: message.diagnostics?.map((diagnostic) => diagnostic.type),
 		});
 
-		if (missedTokens !== undefined && missedTokens >= 20_000) {
+		if (missedTokens !== undefined && missedTokens >= LARGE_CACHE_MISS_TOKENS) {
 			ctx.ui.notify(`Cache diagnostics captured request #${pending?.sequence ?? "?"}`, "warning");
 		}
-		if (hasPromptUsage) previousPromptTokens = promptTokens;
+		if (hasValidPromptUsage) {
+			previousPromptTokens = promptTokens;
+			previousModelKey = modelKey;
+			reportedCache ||= usage.cacheRead + usage.cacheWrite > 0;
+		}
 		pending = undefined;
 	});
 
@@ -287,6 +328,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		previousInput = undefined;
 		previousWithoutInput = undefined;
 		previousPromptTokens = undefined;
+		previousModelKey = undefined;
+		reportedCache = false;
 	});
 
 	pi.registerCommand("cache-diagnostics", {
