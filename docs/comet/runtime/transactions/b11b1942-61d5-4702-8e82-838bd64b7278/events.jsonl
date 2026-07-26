@@ -1,0 +1,8 @@
+{"sequence":1,"timestamp":"2026-07-26T15:20:02.677Z","type":"prepared"}
+{"sequence":2,"timestamp":"2026-07-26T15:20:03.402Z","type":"operation-started","operationId":"spec-1-pi-cache-diagnostics-miss-audit"}
+{"sequence":3,"timestamp":"2026-07-26T15:20:03.547Z","type":"operation-completed","operationId":"spec-1-pi-cache-diagnostics-miss-audit"}
+{"sequence":4,"timestamp":"2026-07-26T15:20:03.571Z","type":"operation-started","operationId":"archive-change"}
+{"sequence":5,"timestamp":"2026-07-26T15:20:03.879Z","type":"operation-completed","operationId":"archive-change"}
+{"sequence":6,"timestamp":"2026-07-26T15:20:04.076Z","type":"archive-finalization-started"}
+{"sequence":7,"timestamp":"2026-07-26T15:20:04.153Z","type":"archive-finalized"}
+{"sequence":8,"timestamp":"2026-07-26T15:20:04.213Z","type":"commit"}

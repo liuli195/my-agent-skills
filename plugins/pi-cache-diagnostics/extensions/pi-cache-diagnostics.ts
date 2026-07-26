@@ -1,346 +1,414 @@
-import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { gzip, gunzip } from "node:zlib";
+import { promisify } from "node:util";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { getAgentDir, getPackageDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, getPackageDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+// ponytail: OpenAI Codex only; add provider evidence adapters when another provider needs auditing.
+const PROVIDER = "openai-codex";
+const SCHEMA_VERSION = 1;
+const ROOT = join(getAgentDir(), "diagnostics", "pi-cache-diagnostics");
+const ACTIVE_DIR = join(ROOT, "active");
+const CHECKPOINT_DIR = join(ROOT, "checkpoints");
+const MISSES_DIR = join(ROOT, "misses");
+const gzipAsync = promisify(gzip);
+const gunzipAsync = promisify(gunzip);
 
 type JsonRecord = Record<string, unknown>;
+type CacheMiss = { missedTokens: number; missedCost: number; idleMs: number; modelChanged: boolean };
+type DebugStats = Record<string, unknown>;
+type CapturedEvent = JsonRecord & {
+	type: string;
+	eventSequence: number;
+	timestampMs: number;
+	timestampUtc: string;
+	timestampLocal: string;
+};
 
-interface OpenAICodexWebSocketDebugStats {
-	requests: number;
-	connectionsCreated: number;
-	connectionsReused: number;
-	cachedContextRequests: number;
-	storeTrueRequests: number;
-	fullContextRequests: number;
-	deltaRequests: number;
-	lastInputItems: number;
-	lastDeltaInputItems?: number;
-	lastPreviousResponseId?: string;
-	websocketFailures: number;
-	sseFallbacks: number;
-	websocketFallbackActive?: boolean;
-	lastWebSocketError?: string;
-}
-
-interface RequestSnapshot {
-	sequence: number;
+interface SessionState {
 	sessionIdHash: string;
-	statsBefore?: OpenAICodexWebSocketDebugStats;
+	eventSequence: number;
+	baseline: CapturedEvent[];
+	window: CapturedEvent[];
+	currentRequestStart?: number;
+	providerRequestId?: string;
+	evidenceIncomplete: boolean;
+	activePath: string;
+	checkpointPath: string;
 }
 
-interface PromptUsage {
-	input: number;
-	cacheRead: number;
-	cacheWrite: number;
+function hash(value: string): string {
+	return createHash("sha256").update(value).digest("hex");
 }
 
-const CACHE_MISS_NOISE_FLOOR = 1_024;
-const LARGE_CACHE_MISS_TOKENS = 20_000;
-
-const LOG_PATH = join(getAgentDir(), "diagnostics", "openai-codex-cache.jsonl");
-const STAT_KEYS = [
-	"requests",
-	"connectionsCreated",
-	"connectionsReused",
-	"cachedContextRequests",
-	"storeTrueRequests",
-	"fullContextRequests",
-	"deltaRequests",
-	"websocketFailures",
-	"sseFallbacks",
-] as const;
-
-function isRecord(value: unknown): value is JsonRecord {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function serialized(value: unknown): string {
-	return JSON.stringify(value) ?? "undefined";
-}
-
-function hash(value: unknown): string {
-	return createHash("sha256").update(serialized(value)).digest("hex");
-}
-
-function localTimestamp(): string {
-	const date = new Date();
+function localTimestamp(date: Date): string {
 	const offsetMinutes = -date.getTimezoneOffset();
 	const local = new Date(date.getTime() + offsetMinutes * 60_000).toISOString().slice(0, -1);
 	const sign = offsetMinutes >= 0 ? "+" : "-";
-	const absoluteOffset = Math.abs(offsetMinutes);
-	const hours = String(Math.floor(absoluteOffset / 60)).padStart(2, "0");
-	const minutes = String(absoluteOffset % 60).padStart(2, "0");
-	return `${local}${sign}${hours}:${minutes}`;
+	const offset = Math.abs(offsetMinutes);
+	return `${local}${sign}${String(Math.floor(offset / 60)).padStart(2, "0")}:${String(offset % 60).padStart(2, "0")}`;
 }
 
-function stringDifference(previous: string, current: string): JsonRecord | undefined {
-	if (previous === current) return undefined;
-
-	let commonPrefixChars = 0;
-	while (
-		commonPrefixChars < previous.length
-		&& commonPrefixChars < current.length
-		&& previous[commonPrefixChars] === current[commonPrefixChars]
-	) {
-		commonPrefixChars += 1;
-	}
-
-	let commonSuffixChars = 0;
-	while (
-		commonSuffixChars < previous.length - commonPrefixChars
-		&& commonSuffixChars < current.length - commonPrefixChars
-		&& previous[previous.length - commonSuffixChars - 1] === current[current.length - commonSuffixChars - 1]
-	) {
-		commonSuffixChars += 1;
-	}
-
-	const oldChangedEnd = previous.length - commonSuffixChars;
-	const newChangedEnd = current.length - commonSuffixChars;
-	const oldChanged = previous.slice(commonPrefixChars, oldChangedEnd);
-	const newChanged = current.slice(commonPrefixChars, newChangedEnd);
-	const snippetStart = Math.max(0, commonPrefixChars - 100);
-	const oldSnippetEnd = Math.min(previous.length, snippetStart + 200);
-	const newSnippetEnd = Math.min(current.length, snippetStart + 200);
-	const beforeDifference = current.slice(0, commonPrefixChars);
-	const lastNewline = beforeDifference.lastIndexOf("\n");
-	const headings = current.slice(0, commonPrefixChars + 1).match(/^#{1,6}\s+.*$/gm);
-
-	return {
-		line: (beforeDifference.match(/\n/g)?.length ?? 0) + 1,
-		column: commonPrefixChars - lastNewline,
-		section: headings?.at(-1),
-		commonPrefixChars,
-		commonSuffixChars,
-		oldLength: previous.length,
-		newLength: current.length,
-		oldChangedChars: oldChanged.length,
-		newChangedChars: newChanged.length,
-		oldChangedHash: hash(oldChanged),
-		newChangedHash: hash(newChanged),
-		oldSnippetStart: snippetStart,
-		newSnippetStart: snippetStart,
-		oldSnippet: previous.slice(snippetStart, oldSnippetEnd),
-		newSnippet: current.slice(snippetStart, newSnippetEnd),
-		oldChangedTruncated: oldChangedEnd > oldSnippetEnd,
-		newChangedTruncated: newChangedEnd > newSnippetEnd,
-	};
-}
-
-function firstDifference(left: unknown, right: unknown, path = "$"): string | undefined {
-	if (serialized(left) === serialized(right)) return undefined;
-	if (Array.isArray(left) && Array.isArray(right)) {
-		const length = Math.min(left.length, right.length);
-		for (let index = 0; index < length; index++) {
-			const difference = firstDifference(left[index], right[index], `${path}[${index}]`);
-			if (difference) return difference;
+function jsonSafe(value: unknown): unknown {
+	const seen = new WeakSet<object>();
+	const encoded = JSON.stringify(value, (_key, item: unknown) => {
+		if (typeof item === "bigint") return { $type: "bigint", value: item.toString() };
+		if (typeof item === "function") return { $type: "function", name: item.name };
+		if (typeof item === "symbol") return { $type: "symbol", value: String(item) };
+		if (item && typeof item === "object") {
+			if (seen.has(item)) return { $type: "circular" };
+			seen.add(item);
 		}
-		return `${path}.length`;
-	}
-	if (isRecord(left) && isRecord(right)) {
-		const leftKeys = Object.keys(left);
-		const rightKeys = Object.keys(right);
-		if (serialized(leftKeys) !== serialized(rightKeys)) return `${path}.[[key-order]]`;
-		for (const key of leftKeys) {
-			const difference = firstDifference(left[key], right[key], `${path}.${key}`);
-			if (difference) return difference;
-		}
-	}
-	return path;
+		return item;
+	});
+	return encoded === undefined ? { $type: "undefined" } : JSON.parse(encoded);
 }
 
-function compareInputPrefix(previous: unknown[], current: unknown[]): {
-	matches: boolean;
-	firstDifference?: string;
-} {
-	if (current.length < previous.length) {
-		return { matches: false, firstDifference: "$.input.length" };
-	}
-	for (let index = 0; index < previous.length; index++) {
-		const difference = firstDifference(previous[index], current[index], `$.input[${index}]`);
-		if (difference) return { matches: false, firstDifference: difference };
-	}
-	return { matches: true };
+function timestampFields(now = new Date()): Pick<CapturedEvent, "timestampMs" | "timestampUtc" | "timestampLocal"> {
+	return { timestampMs: now.getTime(), timestampUtc: now.toISOString(), timestampLocal: localTimestamp(now) };
 }
 
-function statsDelta(
-	before: OpenAICodexWebSocketDebugStats | undefined,
-	after: OpenAICodexWebSocketDebugStats | undefined,
-): Partial<Record<(typeof STAT_KEYS)[number], number>> | undefined {
-	if (!before || !after) return undefined;
-	return Object.fromEntries(STAT_KEYS.map((key) => [key, after[key] - before[key]]));
+function filterHeaders(headers: Record<string, unknown>): JsonRecord {
+	const sensitive = /authorization|auth|cookie|token|secret|credential|session|signature|password|api[-_]?key/i;
+	const allowed = /^(date|retry-after|traceparent|tracestate|request-id|x-request-id|x-trace-id|x-correlation-id|x-cache|x-cache-status|cf-cache-status|x-ratelimit-[a-z0-9-]+|ratelimit-[a-z0-9-]+|openai-processing-ms|openai-version|x-openai-version|x-model|x-client-version|user-agent)$/i;
+	return Object.fromEntries(Object.entries(headers).map(([name, value]) => [
+		name,
+		sensitive.test(name)
+			? { excluded: true, reason: "credential" }
+			: allowed.test(name) ? jsonSafe(value) : { excluded: true, reason: "not-allowlisted" },
+	]));
 }
 
-function append(entry: JsonRecord): void {
-	mkdirSync(join(getAgentDir(), "diagnostics"), { recursive: true });
-	appendFileSync(LOG_PATH, `${JSON.stringify(entry)}\n`, "utf8");
+function lines(events: CapturedEvent[]): string {
+	return `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
 }
 
-export function detectMissedTokens(
-	previousPromptTokens: number | undefined,
-	reportedCache: boolean,
-	usage: PromptUsage,
-): number | undefined {
-	const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
-	if (
-		previousPromptTokens === undefined
-		|| promptTokens <= 0
-		|| (usage.cacheRead + usage.cacheWrite === 0 && !reportedCache)
-	) return undefined;
+function safeFilename(value: string): string {
+	return value.replace(/[^a-zA-Z0-9._-]/g, "-");
+}
 
-	const missedTokens = Math.min(previousPromptTokens, promptTokens) - usage.cacheRead;
-	return missedTokens > CACHE_MISS_NOISE_FLOOR ? missedTokens : undefined;
+async function ensureDirectories(): Promise<void> {
+	await Promise.all([mkdir(ACTIVE_DIR, { recursive: true }), mkdir(CHECKPOINT_DIR, { recursive: true }), mkdir(MISSES_DIR, { recursive: true })]);
 }
 
 export default async function (pi: ExtensionAPI): Promise<void> {
-	const providerModulePath = join(
-		getPackageDir(),
-		"node_modules",
-		"@earendil-works",
-		"pi-ai",
-		"dist",
-		"api",
-		"openai-codex-responses.js",
-	);
-	const { getOpenAICodexWebSocketDebugStats } = await import(pathToFileURL(providerModulePath).href) as {
-		getOpenAICodexWebSocketDebugStats(sessionId: string): OpenAICodexWebSocketDebugStats | undefined;
-	};
+	const packageDir = getPackageDir();
+	const cacheStatsPath = join(packageDir, "dist", "core", "cache-stats.js");
+	const providerPath = join(packageDir, "node_modules", "@earendil-works", "pi-ai", "dist", "api", "openai-codex-responses.js");
+	const [{ detectCacheMiss }, { getOpenAICodexWebSocketDebugStats }] = await Promise.all([
+		import(pathToFileURL(cacheStatsPath).href) as Promise<{
+			detectCacheMiss(entries: unknown[], message: unknown, models: unknown): CacheMiss | undefined;
+		}>,
+		import(pathToFileURL(providerPath).href) as Promise<{
+			getOpenAICodexWebSocketDebugStats(sessionId: string): DebugStats | undefined;
+		}>,
+	]);
 
-	let sequence = 0;
-	let previousInput: unknown[] | undefined;
-	let previousInstructions: string | undefined;
-	let previousWithoutInput: JsonRecord | undefined;
-	let pending: RequestSnapshot | undefined;
-	let previousPromptTokens: number | undefined;
-	let previousModelKey: string | undefined;
-	let reportedCache = false;
+	let state: SessionState | undefined;
+	let lastEvidence: string | undefined;
+	let lastError: string | undefined;
+	let fileQueue = Promise.resolve();
+	let lifecycleQueue = Promise.resolve();
+	const notifiedErrors = new Set<string>();
 
-	pi.on("session_start", (_event, ctx) => {
-		sequence = 0;
-		previousInput = undefined;
-		previousInstructions = undefined;
-		previousWithoutInput = undefined;
-		pending = undefined;
-		previousPromptTokens = undefined;
-		previousModelKey = undefined;
-		reportedCache = false;
-		append({
-			type: "session_start",
-			timestamp: localTimestamp(),
-			sessionIdHash: hash(ctx.sessionManager.getSessionId()),
+	function serializeFileOperation<T>(operation: () => Promise<T>): Promise<T> {
+		const result = fileQueue.then(operation, operation);
+		fileQueue = result.then(() => undefined, () => undefined);
+		return result;
+	}
+
+	function serializeLifecycle(operation: () => Promise<void>): Promise<void> {
+		const result = lifecycleQueue.then(operation, operation);
+		lifecycleQueue = result.then(() => undefined, () => undefined);
+		return result;
+	}
+
+	async function reportFailure(kind: string, error: unknown, ctx?: ExtensionContext): Promise<void> {
+		lastError = `${kind}: ${error instanceof Error ? error.message : String(error)}`;
+		if (state) {
+			state.evidenceIncomplete = true;
+			capture("audit_failure", { operation: kind, error: lastError });
+		}
+		if (ctx && !notifiedErrors.has(kind)) {
+			notifiedErrors.add(kind);
+			try {
+				ctx.ui.notify(`Cache diagnostics ${kind} failed; model request was not interrupted`, "warning");
+			} catch {
+				// A reload can invalidate the UI context before background I/O reports its failure.
+			}
+		}
+	}
+
+	function capture(type: string, data: JsonRecord = {}): CapturedEvent | undefined {
+		if (!state) return undefined;
+		state.eventSequence += 1;
+		const safeData = jsonSafe(data) as JsonRecord;
+		const source = safeData.event as JsonRecord | undefined;
+		const message = safeData.message as JsonRecord | undefined;
+		const sourceTimestamp = source?.timestamp ?? message?.timestamp;
+		const event = {
+			type,
+			eventSequence: state.eventSequence,
+			...timestampFields(),
+			...(typeof sourceTimestamp === "number" ? { sourceTimestampMs: sourceTimestamp } : {}),
+			...safeData,
+		} satisfies CapturedEvent;
+		state.window.push(event);
+		return event;
+	}
+
+	async function persistActive(ctx?: ExtensionContext, target = state): Promise<boolean> {
+		if (!target) return false;
+		const content = lines([...target.baseline, ...target.window]);
+		const temporaryPath = `${target.activePath}.${randomUUID()}.tmp`;
+		try {
+			await serializeFileOperation(async () => {
+				await ensureDirectories();
+				await writeFile(temporaryPath, content, "utf8");
+				await rename(temporaryPath, target.activePath);
+			});
+			return true;
+		} catch (error) {
+			await rm(temporaryPath, { force: true }).catch(() => undefined);
+			await reportFailure("write", error, ctx);
+			return false;
+		}
+	}
+
+	function isMissing(error: unknown): boolean {
+		return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+	}
+
+	async function restore(sessionId: string, ctx: ExtensionContext): Promise<void> {
+		const sessionIdHash = hash(sessionId);
+		const originalActivePath = join(ACTIVE_DIR, `${sessionIdHash}.jsonl`);
+		const checkpointPath = join(CHECKPOINT_DIR, `${sessionIdHash}.jsonl.gz`);
+		let activePath = originalActivePath;
+		let restored: CapturedEvent[] = [];
+		let restoreError: unknown;
+		try {
+			await ensureDirectories();
+			try {
+				restored = readEvents(await readFile(originalActivePath));
+			} catch (activeError) {
+				if (!isMissing(activeError)) throw activeError;
+				try {
+					restored = readEvents(await gunzipAsync(await readFile(checkpointPath)));
+				} catch (checkpointError) {
+					if (!isMissing(checkpointError)) throw checkpointError;
+				}
+			}
+		} catch (error) {
+			restoreError = error;
+			activePath = join(ACTIVE_DIR, `${sessionIdHash}.recovery-${randomUUID()}.jsonl`);
+		}
+		state = {
+			sessionIdHash,
+			eventSequence: restored.at(-1)?.eventSequence ?? 0,
+			baseline: restored,
+			window: [],
+			evidenceIncomplete: restoreError !== undefined,
+			activePath,
+			checkpointPath,
+		};
+		if (restoreError) await reportFailure("restore", restoreError, ctx);
+		capture("session_start", { sessionIdHash });
+		await persistActive(ctx);
+	}
+
+	function readEvents(buffer: Buffer): CapturedEvent[] {
+		return buffer.toString("utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as CapturedEvent);
+	}
+
+	async function checkpoint(ctx?: ExtensionContext, target = state): Promise<void> {
+		if (!target) return;
+		if (!await persistActive(ctx, target)) {
+			await persistActive(ctx, target);
+			return;
+		}
+		const temporaryPath = `${target.checkpointPath}.${randomUUID()}.tmp`;
+		try {
+			await serializeFileOperation(async () => {
+				const compressed = await gzipAsync(await readFile(target.activePath));
+				await writeFile(temporaryPath, compressed);
+				await rename(temporaryPath, target.checkpointPath);
+				await rm(target.activePath, { force: true });
+			});
+		} catch (error) {
+			await rm(temporaryPath, { force: true }).catch(() => undefined);
+			await reportFailure("checkpoint", error, ctx);
+			await persistActive(ctx, target);
+		}
+	}
+
+	async function finalizeMiss(miss: CacheMiss, message: JsonRecord, ctx: ExtensionContext): Promise<void> {
+		if (!state) return;
+		const complete = capture("evidence_complete", { providerRequestId: state.providerRequestId });
+		if (!complete) return;
+		const bodyEvents = [...state.baseline, ...state.window];
+		const manifest: CapturedEvent = {
+			type: "evidence_manifest",
+			eventSequence: 0,
+			...timestampFields(),
+			schemaVersion: SCHEMA_VERSION,
+			sessionIdHash: state.sessionIdHash,
+			provider: message.provider,
+			model: message.model,
+			providerRequestId: state.providerRequestId,
+			missedTokens: miss.missedTokens,
+			miss: jsonSafe(miss),
+			evidenceIncomplete: state.evidenceIncomplete || state.baseline.length === 0,
+			eventCount: bodyEvents.length,
+			startTimestampMs: bodyEvents.at(0)?.timestampMs,
+			endTimestampMs: bodyEvents.at(-1)?.timestampMs,
+		};
+		const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+		const requestId = safeFilename(state.providerRequestId ?? "unobserved");
+		const sessionDir = join(MISSES_DIR, state.sessionIdHash);
+		const base = `${stamp}-${state.eventSequence}-miss-${miss.missedTokens}-${requestId}`;
+		const jsonlPath = join(sessionDir, `${base}.jsonl`);
+		const gzipTmpPath = join(sessionDir, `${base}.jsonl.gz.tmp`);
+		const gzipPath = join(sessionDir, `${base}.jsonl.gz`);
+		try {
+			await serializeFileOperation(async () => {
+				await mkdir(sessionDir, { recursive: true });
+				await writeFile(jsonlPath, lines([manifest, ...bodyEvents]), "utf8");
+				try {
+					await writeFile(gzipTmpPath, await gzipAsync(await readFile(jsonlPath)));
+					await rename(gzipTmpPath, gzipPath);
+					await rm(jsonlPath, { force: true });
+					lastEvidence = gzipPath;
+				} catch (error) {
+					const failedPath = `${jsonlPath}.failed`;
+					const message = error instanceof Error ? error.message : String(error);
+					const failedManifest = { ...manifest, evidenceIncomplete: true, storageStatus: "compression_failed", storageError: message };
+					const failureEvent: CapturedEvent = {
+						type: "evidence_storage_failure",
+						eventSequence: complete.eventSequence + 1,
+						...timestampFields(),
+						operation: "compression",
+						error: message,
+					};
+					await writeFile(failedPath, lines([failedManifest, ...bodyEvents, failureEvent]), "utf8");
+					await Promise.all([rm(jsonlPath, { force: true }), rm(gzipTmpPath, { force: true })]);
+					lastEvidence = failedPath;
+					await reportFailure("compression", error, ctx);
+				}
+			});
+		} catch (error) {
+			await reportFailure("evidence", error, ctx);
+		}
+	}
+
+	function finishAssistant(message: JsonRecord, ctx: ExtensionContext): void {
+		if (!state) return;
+		const miss = detectCacheMiss(ctx.sessionManager.getEntries(), message, ctx.modelRegistry);
+		capture("message_end", {
+			providerRequestId: state.providerRequestId,
+			message,
+			transportStatsAfter: getOpenAICodexWebSocketDebugStats(ctx.sessionManager.getSessionId()),
+			cacheMiss: miss,
 		});
+		if (miss) void finalizeMiss(miss, message, ctx);
+
+		const usage = message.usage as JsonRecord | undefined;
+		const promptTokens = Number(usage?.input ?? 0) + Number(usage?.cacheRead ?? 0) + Number(usage?.cacheWrite ?? 0);
+		if (promptTokens > 0) {
+			const start = state.currentRequestStart ?? Math.max(0, state.window.length - 1);
+			state.baseline = state.window.slice(start);
+			state.window = [];
+			state.currentRequestStart = undefined;
+			state.providerRequestId = undefined;
+			state.evidenceIncomplete = false;
+		}
+		void persistActive(ctx);
+	}
+
+	pi.on("session_start", (event, ctx) => serializeLifecycle(async () => {
+		await restore(ctx.sessionManager.getSessionId(), ctx);
+		capture("session_start_reason", { reason: event.reason, previousSessionFile: event.previousSessionFile });
+		await persistActive(ctx);
+	}));
+	pi.on("session_shutdown", (event, ctx) => serializeLifecycle(async () => {
+		const closingState = state;
+		capture("session_shutdown", { event });
+		await checkpoint(ctx, closingState);
+		if (state === closingState) state = undefined;
+	}));
+	pi.on("session_compact", async (event, ctx) => {
+		capture("session_compact", { event });
+		if (state) {
+			state.baseline = [];
+			state.evidenceIncomplete = false;
+		}
+		await persistActive(ctx);
 	});
+	pi.on("session_tree", async (event, ctx) => {
+		capture("session_tree", { event });
+		if (state) {
+			state.baseline = [];
+			state.evidenceIncomplete = true;
+		}
+		await persistActive(ctx);
+	});
+
+	for (const eventName of [
+		"input", "before_agent_start", "agent_start", "agent_end", "turn_start", "turn_end", "context",
+		"tool_execution_start", "tool_execution_end", "model_select", "thinking_level_select",
+	] as const) {
+		pi.on(eventName, (event, ctx) => {
+			capture(eventName, { event });
+			void persistActive(ctx);
+		});
+	}
 
 	pi.on("before_provider_request", (event, ctx) => {
-		if (ctx.model?.provider !== "openai-codex" || !isRecord(event.payload)) return;
-
-		const payload = event.payload;
-		const input = Array.isArray(payload.input) ? payload.input : [];
-		const instructions = typeof payload.instructions === "string" ? payload.instructions : undefined;
-		const { input: _input, previous_response_id: _previousResponseId, ...withoutInput } = payload;
-		const prefix = previousInput ? compareInputPrefix(previousInput, input) : undefined;
-		const instructionsDifference = previousInstructions && instructions
-			? stringDifference(previousInstructions, instructions)
-			: undefined;
-		const firstWithoutInputDifference = previousWithoutInput
-			? firstDifference(previousWithoutInput, withoutInput)
-			: undefined;
-		const sessionId = ctx.sessionManager.getSessionId();
-		const sessionIdHash = hash(sessionId);
-		const statsBefore = getOpenAICodexWebSocketDebugStats(sessionId);
-		sequence += 1;
-		pending = { sequence, sessionIdHash, statsBefore };
-
-		append({
-			type: "request",
-			timestamp: localTimestamp(),
-			sequence,
-			sessionIdHash,
-			model: payload.model,
-			inputItems: input.length,
-			inputHash: hash(input),
-			instructionsLength: instructions?.length,
-			instructionsHash: hash(payload.instructions),
-			instructionsDifference,
-			toolsCount: Array.isArray(payload.tools) ? payload.tools.length : 0,
-			toolsHash: hash(payload.tools),
-			withoutInputHash: hash(withoutInput),
-			firstWithoutInputDifference,
-			previousInputPrefixMatches: prefix?.matches,
-			firstPrefixDifference: prefix?.firstDifference,
-			statsAvailable: statsBefore !== undefined,
+		if (ctx.model?.provider !== PROVIDER || !state) return;
+		state.providerRequestId = randomUUID();
+		state.currentRequestStart = state.window.length;
+		capture("provider_request_observed", {
+			providerRequestId: state.providerRequestId,
+			observedProviderPayload: event.payload,
+			transportStatsBefore: getOpenAICodexWebSocketDebugStats(ctx.sessionManager.getSessionId()),
 		});
-		previousInput = input;
-		previousInstructions = instructions;
-		previousWithoutInput = withoutInput;
+		void persistActive(ctx);
 	});
-
+	pi.on("before_provider_headers", (event, ctx) => {
+		if (ctx.model?.provider !== PROVIDER) return;
+		capture("provider_headers_observed", { providerRequestId: state?.providerRequestId, headers: filterHeaders(event.headers) });
+		void persistActive(ctx);
+	});
+	pi.on("after_provider_response", (event, ctx) => {
+		if (ctx.model?.provider !== PROVIDER) return;
+		capture("provider_response_observed", {
+			providerRequestId: state?.providerRequestId,
+			status: event.status,
+			headers: filterHeaders(event.headers),
+		});
+		void persistActive(ctx);
+	});
 	pi.on("message_end", (event, ctx) => {
-		const message = event.message;
-		if (message.role !== "assistant" || message.provider !== "openai-codex") return;
-
-		const usage = message.usage;
-		const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
-		const hasValidPromptUsage = promptTokens > 0 && message.stopReason !== "error" && message.stopReason !== "aborted";
-		const missedTokens = hasValidPromptUsage
-			? detectMissedTokens(previousPromptTokens, reportedCache, usage)
-			: undefined;
-		const modelKey = `${message.provider}/${message.model}`;
-		const modelChanged = previousModelKey !== undefined && previousModelKey !== modelKey;
-		const statsAfter = getOpenAICodexWebSocketDebugStats(ctx.sessionManager.getSessionId());
-		const delta = statsDelta(pending?.statsBefore, statsAfter);
-
-		append({
-			type: "response",
-			timestamp: localTimestamp(),
-			sequence: pending?.sequence,
-			sessionIdHash: pending?.sessionIdHash ?? hash(ctx.sessionManager.getSessionId()),
-			stopReason: message.stopReason,
-			promptTokens,
-			inputTokens: usage.input,
-			cacheReadTokens: usage.cacheRead,
-			cacheWriteTokens: usage.cacheWrite,
-			missedTokens,
-			largeMiss: missedTokens !== undefined && missedTokens >= LARGE_CACHE_MISS_TOKENS,
-			modelChanged,
-			statsDelta: delta,
-			lastInputItems: statsAfter?.lastInputItems,
-			lastDeltaInputItems: statsAfter?.lastDeltaInputItems,
-			previousResponseIdSent: statsAfter?.lastPreviousResponseId !== undefined,
-			websocketFallbackActive: statsAfter?.websocketFallbackActive,
-			lastWebSocketError: statsAfter?.lastWebSocketError,
-			diagnostics: message.diagnostics?.map((diagnostic) => diagnostic.type),
-		});
-
-		if (missedTokens !== undefined && missedTokens >= LARGE_CACHE_MISS_TOKENS) {
-			ctx.ui.notify(`Cache diagnostics captured request #${pending?.sequence ?? "?"}`, "warning");
-		}
-		if (hasValidPromptUsage) {
-			previousPromptTokens = promptTokens;
-			previousModelKey = modelKey;
-			reportedCache ||= usage.cacheRead + usage.cacheWrite > 0;
-		}
-		pending = undefined;
-	});
-
-	pi.on("session_compact", () => {
-		append({ type: "session_compact", timestamp: localTimestamp() });
-		previousInput = undefined;
-		previousWithoutInput = undefined;
-		previousPromptTokens = undefined;
-		previousModelKey = undefined;
-		reportedCache = false;
+		const message = event.message as unknown as JsonRecord;
+		if (message.role === "assistant" && message.provider === PROVIDER) finishAssistant(message, ctx);
 	});
 
 	pi.registerCommand("cache-diagnostics", {
-		description: "Show OpenAI Codex cache diagnostic status",
+		description: "Show OpenAI Codex cache evidence status",
 		handler: async (_args, ctx) => {
-			const stats = getOpenAICodexWebSocketDebugStats(ctx.sessionManager.getSessionId());
+			let count = 0;
+			try {
+				for (const session of await readdir(MISSES_DIR, { withFileTypes: true })) {
+					if (!session.isDirectory()) continue;
+					count += (await readdir(join(MISSES_DIR, session.name))).filter((name) => name.endsWith(".jsonl.gz") || name.endsWith(".jsonl.failed")).length;
+				}
+			} catch {
+				// No evidence directory yet.
+			}
 			ctx.ui.notify(
-				stats
-					? `Cache diagnostics active • ${stats.deltaRequests} delta / ${stats.fullContextRequests} full • ${LOG_PATH}`
-					: `Cache diagnostics active • waiting for first OpenAI Codex request • ${LOG_PATH}`,
-				"info",
+				`Cache diagnostics active • ${count} evidence package${count === 1 ? "" : "s"} • ${lastError ?? "healthy"} • ${lastEvidence ?? ROOT}`,
+				lastError ? "warning" : "info",
 			);
 		},
 	});
