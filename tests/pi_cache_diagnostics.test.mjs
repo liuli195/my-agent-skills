@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { gunzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -15,7 +16,6 @@ const piRoot = [join(process.cwd(), "node_modules"), npmRoot]
 if (!piRoot) throw new Error("pi-coding-agent runtime not found");
 
 const extensionPath = join(process.cwd(), "plugins", "pi-cache-diagnostics", "extensions", "pi-cache-diagnostics.ts");
-
 const root = await mkdtemp(join(tmpdir(), "pi-cache-diagnostics-"));
 try {
 	const helper = join(root, "e2e.cjs");
@@ -28,50 +28,61 @@ try {
 	};\n`);
 	await writeFile(helper, String.raw`
 const { createJiti } = require(${JSON.stringify(join(piRoot, "node_modules", "jiti", "lib", "jiti.cjs"))});
-const loaded = createJiti(__filename)(${JSON.stringify(extensionPath)});
-const extension = loaded.default;
-const noMiss = loaded.detectMissedTokens(undefined, false, { input: 30000, cacheRead: 0, cacheWrite: 0 });
-if (noMiss !== undefined) throw new Error("first uncached request was counted as a miss");
-const newTail = loaded.detectMissedTokens(30000, true, { input: 25000, cacheRead: 30000, cacheWrite: 0 });
-if (newTail !== undefined) throw new Error("fully cached old prefix plus a large new tail was counted as a miss");
-const realMiss = loaded.detectMissedTokens(55000, true, { input: 55000, cacheRead: 0, cacheWrite: 0 });
-if (realMiss !== 55000) throw new Error("real miss mismatch: " + realMiss);
+const extension = createJiti(__filename)(${JSON.stringify(extensionPath)}).default;
 const handlers = new Map();
 const notifications = [];
 const pi = {
 	on(name, handler) { handlers.set(name, handler); },
 	registerCommand() {},
 };
-let sessionId = "private-session-id";
+const entries = [];
+const sessionId = "private-session-id";
 const ctx = {
 	model: { provider: "openai-codex" },
-	sessionManager: { getSessionId: () => sessionId },
+	modelRegistry: { getModel: () => ({ cost: { cacheRead: 0 } }) },
+	sessionManager: {
+		getSessionId: () => sessionId,
+		getEntries: () => entries,
+	},
 	ui: { notify: (...args) => notifications.push(args) },
 };
-const request = (model = "gpt-5.6-sol") => handlers.get("before_provider_request")({ payload: {
-	model, input: [], instructions: "stable", tools: [],
-}}, ctx);
-const response = (usage, stopReason = "stop", model = "gpt-5.6-sol") => handlers.get("message_end")({ message: {
-	role: "assistant", provider: "openai-codex", model, usage,
-	stopReason, diagnostics: [],
-}}, ctx);
+async function request() {
+	await handlers.get("before_provider_request")({ payload: {
+		model: "gpt-5.6-sol", input: [], instructions: "stable", tools: [],
+	}}, ctx);
+	await handlers.get("before_provider_headers")({ headers: {
+		authorization: "Bearer secret", "x-client-auth": "custom-secret", "x-request-id": "request-visible", "x-unrelated": "hidden",
+	}}, ctx);
+	await handlers.get("after_provider_response")({ status: 200, headers: {
+		"set-cookie": "secret-cookie", "x-request-id": "response-visible",
+	}}, ctx);
+}
+async function response(usage) {
+	const message = {
+		role: "assistant", provider: "openai-codex", model: "gpt-5.6-sol", usage,
+		stopReason: "stop", timestamp: Date.now(), content: [],
+	};
+	await handlers.get("message_end")({ message }, ctx);
+	entries.push({ type: "message", message });
+}
 (async () => {
 	await extension(pi);
-	handlers.get("session_start")({}, ctx);
-	request(); response({ input: 30000, cacheRead: 0, cacheWrite: 0 });
-	request(); response({ input: 25000, cacheRead: 30000, cacheWrite: 0 });
-	request(); response({ input: 55000, cacheRead: 0, cacheWrite: 0 });
-	request(); response({ input: 70000, cacheRead: 0, cacheWrite: 0 }, "error");
-	request(); response({ input: 80000, cacheRead: 0, cacheWrite: 0 }, "aborted");
-	request(); response({ input: 0, cacheRead: 0, cacheWrite: 0 });
-	request(); response({ input: 30000, cacheRead: 30000, cacheWrite: 0 });
-	request("gpt-5.6-terra"); response({ input: 1000, cacheRead: 60000, cacheWrite: 0 }, "stop", "gpt-5.6-terra");
-	handlers.get("session_compact")();
-	request("gpt-5.6-terra"); response({ input: 61000, cacheRead: 0, cacheWrite: 0 }, "stop", "gpt-5.6-terra");
-	sessionId = "second-private-session-id";
-	handlers.get("session_start")({}, ctx);
-	request(); response({ input: 30000, cacheRead: 0, cacheWrite: 0 });
-	if (notifications.length !== 2) throw new Error("large-miss notification mismatch: " + notifications.length);
+	await handlers.get("session_start")({ reason: "startup" }, ctx);
+	await request(); await response({ input: 30000, cacheRead: 0, cacheWrite: 0, cost: { input: 0, cacheRead: 0, cacheWrite: 0 } });
+	await request(); await response({ input: 1000, cacheRead: 29696, cacheWrite: 0, cost: { input: 0, cacheRead: 0, cacheWrite: 0 } });
+	await request(); await response({ input: 31000, cacheRead: 0, cacheWrite: 0, cost: { input: 0, cacheRead: 0, cacheWrite: 0 } });
+	await Promise.all([
+		handlers.get("session_shutdown")({ reason: "reload" }, ctx),
+		handlers.get("session_start")({ reason: "reload" }, ctx),
+	]);
+	await request(); await response({ input: 31000, cacheRead: 0, cacheWrite: 0, cost: { input: 0, cacheRead: 0, cacheWrite: 0 } });
+	await handlers.get("session_tree")({ newLeafId: "older", oldLeafId: "newer" }, ctx);
+	await request(); await response({ input: 31000, cacheRead: 0, cacheWrite: 0, cost: { input: 0, cacheRead: 0, cacheWrite: 0 } });
+	entries.push({ type: "compaction" });
+	await handlers.get("session_compact")({ reason: "manual", willRetry: false }, ctx);
+	await request(); await response({ input: 31000, cacheRead: 0, cacheWrite: 0, cost: { input: 0, cacheRead: 0, cacheWrite: 0 } });
+	await handlers.get("session_shutdown")({ reason: "quit" }, ctx);
+	if (notifications.length) throw new Error("successful audit emitted a notification");
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 `);
 	const run = spawnSync(process.execPath, [helper], {
@@ -87,27 +98,32 @@ const response = (usage, stopReason = "stop", model = "gpt-5.6-sol") => handlers
 		encoding: "utf8",
 	});
 	if (run.status !== 0) throw new Error(`extension flow failed:\n${run.stdout}\n${run.stderr}`);
-	const rows = (await readFile(join(root, ".pi", "agent", "diagnostics", "openai-codex-cache.jsonl"), "utf8"))
-		.trim().split("\n").map(JSON.parse);
-	const responses = rows.filter((row) => row.type === "response");
-	if (responses[0].missedTokens !== undefined) throw new Error("cold request miss was logged");
-	if (responses[1].missedTokens !== undefined || responses[1].largeMiss) throw new Error("new tail was logged as a miss");
-	if (responses[2].missedTokens !== 55_000 || !responses[2].largeMiss) throw new Error("large miss was not logged");
-	if (responses[3].missedTokens !== undefined) throw new Error("error response was counted as a miss");
-	if (responses[4].missedTokens !== undefined) throw new Error("aborted response was counted as a miss");
-	if (responses[5].missedTokens !== undefined) throw new Error("zero-usage response was counted as a miss");
-	if (responses[6].missedTokens !== 25_000) throw new Error("invalid responses replaced the prior baseline");
-	if (!responses[7].modelChanged) throw new Error("model switch was not logged");
-	if (responses[8].missedTokens !== undefined) throw new Error("compaction did not reset the miss baseline");
-	if (responses[9].missedTokens !== undefined) throw new Error("new session did not reset the miss baseline");
-	const firstSessionHash = responses[0].sessionIdHash;
-	const secondSessionHash = responses[9].sessionIdHash;
-	if (!firstSessionHash || !secondSessionHash || firstSessionHash === secondSessionHash) {
-		throw new Error("sessions were not separated by anonymous hashes");
+
+	const diagnostics = join(root, ".pi", "agent", "diagnostics", "pi-cache-diagnostics");
+	const sessionDirs = await readdir(join(diagnostics, "misses"));
+	if (sessionDirs.length !== 1 || sessionDirs[0] === "private-session-id") throw new Error("session id was not hashed");
+	const evidenceFiles = (await readdir(join(diagnostics, "misses", sessionDirs[0]))).filter((name) => name.endsWith(".jsonl.gz"));
+	if (evidenceFiles.length !== 3 || evidenceFiles.some((name) => !name.includes("miss-"))) {
+		throw new Error(`expected three native miss evidence packages, got ${evidenceFiles}`);
 	}
-	if (responses.some((row) => ["private-session-id", "second-private-session-id"].includes(row.sessionIdHash))) {
-		throw new Error("raw session id leaked into diagnostics");
-	}
+	const packages = await Promise.all(evidenceFiles.map(async (name) => gunzipSync(await readFile(join(diagnostics, "misses", sessionDirs[0], name)))
+		.toString("utf8").trim().split("\n").map(JSON.parse)));
+	const evidence = packages[0];
+	if (packages.some((rows) => rows[0].type !== "evidence_manifest" || rows[0].schemaVersion !== 1)) throw new Error("manifest missing");
+	if (packages.some((rows) => rows.at(-1).type !== "evidence_complete")) throw new Error("completion marker missing");
+	if (packages.filter((rows) => rows[0].evidenceIncomplete).length !== 1) throw new Error("tree evidence boundary was not marked exactly once");
+	if (!packages.some((rows) => rows.some((row) => row.type === "session_start_reason" && row.reason === "reload"))) throw new Error("reload checkpoint was not restored into evidence");
+	const requestHeaders = evidence.find((row) => row.type === "provider_headers_observed").headers;
+	if (!requestHeaders.authorization.excluded || requestHeaders.authorization.value) throw new Error("authorization leaked");
+	if (!requestHeaders["x-client-auth"].excluded || requestHeaders["x-client-auth"].value) throw new Error("custom credential header leaked");
+	if (requestHeaders["x-request-id"] !== "request-visible") throw new Error("allowlisted request id missing");
+	if (!requestHeaders["x-unrelated"].excluded) throw new Error("unknown header leaked");
+	const responseHeaders = evidence.find((row) => row.type === "provider_response_observed").headers;
+	if (!responseHeaders["set-cookie"].excluded || responseHeaders["set-cookie"].value) throw new Error("cookie leaked");
+	if (["Bearer secret", "custom-secret", "secret-cookie"].some((secret) => JSON.stringify(evidence).includes(secret))) throw new Error("credential value leaked");
+
+	const oldLog = join(root, ".pi", "agent", "diagnostics", "openai-codex-cache.jsonl");
+	if (existsSync(oldLog)) throw new Error("legacy log was modified");
 } finally {
 	await rm(root, { recursive: true, force: true });
 }
