@@ -33,9 +33,10 @@
           "scripts/local_plugin_build.py",
           "tests/test_local_plugin_build_checks.py",
           "tests/test_pi_codex_usage_status.py",
-          "tests/pi_codex_usage_status.test.mjs"
+          "tests/pi_codex_usage_status.test.mjs",
+          "tests/pi_cache_diagnostics.test.mjs"
         ],
-        "command": "python -m pytest -q -p no:cacheprovider tests/test_local_plugin_build_checks.py tests/test_pi_codex_usage_status.py && node tests/pi_codex_usage_status.test.mjs",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_local_plugin_build_checks.py tests/test_pi_codex_usage_status.py && node tests/pi_codex_usage_status.test.mjs && node tests/pi_cache_diagnostics.test.mjs",
         "inputs": [
           ".agents",
           ".claude-plugin",
@@ -48,7 +49,8 @@
           "scripts/local_plugin_build.py",
           "tests/test_local_plugin_build_checks.py",
           "tests/test_pi_codex_usage_status.py",
-          "tests/pi_codex_usage_status.test.mjs"
+          "tests/pi_codex_usage_status.test.mjs",
+          "tests/pi_cache_diagnostics.test.mjs"
         ],
         "checkParallel": true,
         "pytestXdistWorkers": 4
