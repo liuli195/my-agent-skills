@@ -1374,14 +1374,17 @@ def test_build_and_verify_active_surfaces_do_not_keep_old_entrypoints() -> None:
             assert old_entrypoint not in text, f"{path} still references {old_entrypoint}"
 
 
-def test_build_and_verify_root_build_check_uses_local_plugin_build() -> None:
+def test_build_and_verify_root_build_checks_cover_plugins() -> None:
     config = read_json(REPO_ROOT / ".build-and-verify" / "config.json")
-    build_checks = config["build"]["checks"]
+    check_by_id = {check["id"]: check for check in config["build"]["checks"]}
 
-    assert len(build_checks) == 1
-    assert build_checks[0]["id"] == "build.local-plugin-package"
-    assert build_checks[0]["command"] == "python scripts/local_plugin_build.py"
-    assert "scripts/local_plugin_build.py" in build_checks[0]["inputs"]
+    assert list(check_by_id) == ["build.pi-tool-display", "build.local-plugin-package"]
+    assert check_by_id["build.pi-tool-display"]["command"] == (
+        "npm run build --prefix plugins/pi-tool-display"
+    )
+    local_plugin_build = check_by_id["build.local-plugin-package"]
+    assert local_plugin_build["command"] == "python scripts/local_plugin_build.py"
+    assert "scripts/local_plugin_build.py" in local_plugin_build["inputs"]
 
 
 def test_build_and_verify_pytest_options_live_in_explicit_commands() -> None:

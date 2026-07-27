@@ -1,0 +1,76 @@
+{
+  "name": "pi-tool-display",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pure TUI display wrapper for compact Pi tool rows and trustworthy tool-provided diffs, without changing tool execution or model/session data.",
+  "type": "module",
+  "main": "./extensions/pi-tool-display.ts",
+  "exports": {
+    ".": "./extensions/pi-tool-display.ts",
+    "./tool-display-api-consumer": {
+      "types": "./tool-display-api-consumer.d.ts",
+      "default": "./tool-display-api-consumer.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "npm run typecheck",
+    "test": "tsx --test tests/*.test.ts",
+    "test:contract:local": "tsx --test tests/real-runtime-contract.test.ts",
+    "test:contract:required": "tsx --test tests/real-runtime-contract.test.ts",
+    "check": "npm run lint && npm run test",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "pi-coding-agent",
+    "pi-tui",
+    "coding-agent",
+    "tui",
+    "tool-rendering",
+    "tool-output",
+    "diff-visualization",
+    "output-truncation",
+    "hide",
+    "collapse",
+    "truncate",
+    "compact",
+    "diff",
+    "output-mode"
+  ],
+  "author": "liuli195",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/liuli195/pi-tool-display.git"
+  },
+  "bugs": {
+    "url": "https://github.com/liuli195/pi-tool-display/issues"
+  },
+  "homepage": "https://github.com/liuli195/pi-tool-display#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/pi-tool-display.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "overrides": {
+    "file-type": ">=21.3.1",
+    "protobufjs": "7.6.3",
+    "ws": "8.21.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.81.1",
+    "pi-mcp-adapter": "^2.11.0",
+    "tsx": "4.22.4",
+    "typescript": "6.0.3"
+  }
+}

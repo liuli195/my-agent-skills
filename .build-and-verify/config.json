@@ -3,6 +3,17 @@
   "build": {
     "checks": [
       {
+        "id": "build.pi-tool-display",
+        "command": "npm run build --prefix plugins/pi-tool-display",
+        "inputs": [
+          "plugins/pi-tool-display/package.json",
+          "plugins/pi-tool-display/package-lock.json",
+          "plugins/pi-tool-display/tsconfig.json",
+          "plugins/pi-tool-display/extensions",
+          "plugins/pi-tool-display/src"
+        ]
+      },
+      {
         "id": "build.local-plugin-package",
         "command": "python scripts/local_plugin_build.py",
         "inputs": [
@@ -20,6 +31,23 @@
     "timeoutSeconds": 180,
     "fullBudgetSeconds": 60,
     "checks": [
+      {
+        "id": "verify.pi-tool-display",
+        "paths": [
+          "plugins/pi-tool-display/**",
+          ".build-and-verify/config.json"
+        ],
+        "command": "npm run check --prefix plugins/pi-tool-display",
+        "inputs": [
+          "plugins/pi-tool-display/package.json",
+          "plugins/pi-tool-display/package-lock.json",
+          "plugins/pi-tool-display/tsconfig.json",
+          "plugins/pi-tool-display/extensions",
+          "plugins/pi-tool-display/src",
+          "plugins/pi-tool-display/tests"
+        ],
+        "checkParallel": true
+      },
       {
         "id": "verify.local-build-contract",
         "paths": [
