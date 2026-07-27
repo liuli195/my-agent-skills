@@ -172,42 +172,6 @@ def _projection_plugins(root: Path) -> tuple[list[str], list[str]]:
     return plugins, []
 
 
-def _relative_file_set(root: Path) -> set[Path]:
-    if not root.exists():
-        return set()
-    return {path.relative_to(root) for path in root.rglob("*") if path.is_file()}
-
-
-def check_guard_profile_template_mirrors(root: Path) -> list[str]:
-    left = root / "plugins" / "agent-guard" / "assets" / "templates" / "guard-profile"
-    right = (
-        root
-        / "plugins"
-        / "agent-guard"
-        / "skills"
-        / "agent-guard"
-        / "assets"
-        / "templates"
-        / "guard-profile"
-    )
-
-    errors: list[str] = []
-    left_files = _relative_file_set(left)
-    right_files = _relative_file_set(right)
-    if left_files != right_files:
-        errors.append(
-            "guard_profile_template_files_mismatch: "
-            f"left_only={sorted(str(path) for path in left_files - right_files)} "
-            f"right_only={sorted(str(path) for path in right_files - left_files)}"
-        )
-
-    for relative_path in sorted(left_files & right_files):
-        if (left / relative_path).read_bytes() != (right / relative_path).read_bytes():
-            errors.append(f"guard_profile_template_mismatch: {relative_path}")
-
-    return errors
-
-
 def run_build(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> list[str]:
     errors: list[str] = []
     plugins, marketplace_errors = _marketplace_plugins(root)
@@ -318,7 +282,6 @@ def run_build(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> list[s
             f"projection={sorted(set(projection_plugins))}"
         )
 
-    errors.extend(check_guard_profile_template_mirrors(root))
     return errors
 
 

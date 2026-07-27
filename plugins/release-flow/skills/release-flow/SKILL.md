@@ -39,5 +39,5 @@ Read `.release-flow/config.yaml` and `.release-flow/projection.yaml` before runn
 Use `preflight`（发布前检查） before `publish`（发布）. Trigger publish（发布） only with explicit authorization:
 
 ```powershell
-python <plugin-root>/skills/release-flow/scripts/release_flow.py publish --project . --tag v0.1.1 --version 0.1.1 --bump-plugins agent-guard --authorize-publish
+python <plugin-root>/skills/release-flow/scripts/release_flow.py publish --project . --tag v0.1.1 --version 0.1.1 --bump-plugins release-flow --authorize-publish
 ```

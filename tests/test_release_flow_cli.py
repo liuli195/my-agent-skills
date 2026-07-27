@@ -227,7 +227,7 @@ generators:
     type: codex-marketplace
     identity: codex
     plugins:
-      - agent-guard
+      - pr-flow
       - release-flow
 
 transforms:
@@ -467,7 +467,7 @@ def test_ci_publish_rejects_vars_file_argument(tmp_path: Path) -> None:
         "--version",
         "9.9.1",
         "--bump-plugins",
-        "agent-guard",
+        "pr-flow",
         "--vars-file",
         str(vars_file),
         "--authorize-ci-publish",
@@ -486,7 +486,7 @@ variables:
   SOME_VARIABLE:
     source: github-actions-variable
     required: true
-    value: agent-guard-marketplace
+    value: pr-flow-marketplace
 
 transforms: []
 """,
@@ -535,10 +535,10 @@ def test_project_generates_codex_marketplace_from_projection_identity(tmp_path: 
     )
     assert target["name"] == "my-agent-skills-marketplace"
     assert target["interface"]["displayName"] == "My Agent Skills Marketplace"
-    assert [entry["name"] for entry in target["plugins"]] == ["agent-guard", "release-flow"]
+    assert [entry["name"] for entry in target["plugins"]] == ["pr-flow", "release-flow"]
     assert target["plugins"][0]["source"] == {
         "source": "local",
-        "path": "./plugins/agent-guard",
+        "path": "./plugins/pr-flow",
     }
 
 
@@ -688,7 +688,7 @@ def test_bump_plugins_parser_accepts_comma_empty_and_repeated_args() -> None:
     release_flow = load_release_flow_module()
     parser = release_flow.build_parser()
 
-    assert release_flow.parse_bump_plugins("agent-guard,release-flow") == ["agent-guard", "release-flow"]
+    assert release_flow.parse_bump_plugins("pr-flow,release-flow") == ["pr-flow", "release-flow"]
     assert release_flow.parse_bump_plugins("") == []
     for command, authorization in [
         ("preflight", []),
@@ -705,13 +705,13 @@ def test_bump_plugins_parser_accepts_comma_empty_and_repeated_args() -> None:
                 "--version",
                 "9.9.1",
                 "--bump-plugins",
-                "agent-guard",
+                "pr-flow",
                 "--bump-plugins",
                 "release-flow",
                 *authorization,
             ]
         )
-        assert release_flow.parse_bump_plugins(args.bump_plugins) == ["agent-guard", "release-flow"]
+        assert release_flow.parse_bump_plugins(args.bump_plugins) == ["pr-flow", "release-flow"]
 
 
 def run_preflight_with_errors(
@@ -746,36 +746,36 @@ def test_preflight_accepts_partial_plugin_bump(tmp_path: Path, monkeypatch) -> N
         monkeypatch,
         tmp_path,
         [],
-        bump_plugins=["agent-guard"],
+        bump_plugins=["pr-flow"],
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: preflight_passed" in result.stdout
-    assert "bumpPlugins: agent-guard" in result.stdout
+    assert "bumpPlugins: pr-flow" in result.stdout
 
 
 def test_preflight_rejects_bump_not_merged_to_source_ref(tmp_path: Path, monkeypatch) -> None:
     result = run_preflight_with_errors(
         monkeypatch,
         tmp_path,
-        ["source_ref_requires_pr: main: plugins/agent-guard/.codex-plugin/plugin.json"],
-        bump_plugins=["agent-guard"],
+        ["source_ref_requires_pr: main: plugins/pr-flow/.codex-plugin/plugin.json"],
+        bump_plugins=["pr-flow"],
     )
 
     assert result.returncode == 1
-    assert "source_ref_requires_pr: main: plugins/agent-guard/.codex-plugin/plugin.json" in result.stdout
+    assert "source_ref_requires_pr: main: plugins/pr-flow/.codex-plugin/plugin.json" in result.stdout
 
 
 def test_preflight_source_ref_requires_pr_prints_next_action(tmp_path: Path, monkeypatch) -> None:
     result = run_preflight_with_errors(
         monkeypatch,
         tmp_path,
-        ["source_ref_requires_pr: main: plugins/agent-guard/.codex-plugin/plugin.json"],
-        bump_plugins=["agent-guard"],
+        ["source_ref_requires_pr: main: plugins/pr-flow/.codex-plugin/plugin.json"],
+        bump_plugins=["pr-flow"],
     )
 
     assert result.returncode == 1
-    assert "error: source_ref_requires_pr: main: plugins/agent-guard/.codex-plugin/plugin.json" in result.stdout
+    assert "error: source_ref_requires_pr: main: plugins/pr-flow/.codex-plugin/plugin.json" in result.stdout
     assert (
         "nextAction: create and merge the version bump through PR Flow, "
         "then rerun release-flow preflight"
@@ -786,15 +786,15 @@ def test_preflight_manifest_mismatch_prints_next_action(tmp_path: Path, monkeypa
     result = run_preflight_with_errors(
         monkeypatch,
         tmp_path,
-        ["manifest_version_mismatch: plugins/agent-guard/.codex-plugin/plugin.json"],
-        bump_plugins=["agent-guard"],
+        ["manifest_version_mismatch: plugins/pr-flow/.codex-plugin/plugin.json"],
+        bump_plugins=["pr-flow"],
     )
 
     assert result.returncode == 1
-    assert "error: manifest_version_mismatch: plugins/agent-guard/.codex-plugin/plugin.json" in result.stdout
+    assert "error: manifest_version_mismatch: plugins/pr-flow/.codex-plugin/plugin.json" in result.stdout
     assert (
         "nextAction: correct the manifest version in "
-        "plugins/agent-guard/.codex-plugin/plugin.json, then rerun release-flow preflight"
+        "plugins/pr-flow/.codex-plugin/plugin.json, then rerun release-flow preflight"
     ) in result.stdout
 
 
@@ -803,7 +803,7 @@ def test_preflight_existing_release_prints_next_action(tmp_path: Path, monkeypat
         monkeypatch,
         tmp_path,
         ["release already exists: v9.9.1"],
-        bump_plugins=["agent-guard"],
+        bump_plugins=["pr-flow"],
     )
 
     assert result.returncode == 1
@@ -820,8 +820,8 @@ def test_preflight_multi_error_prints_one_summary_path_without_version_inference
 ) -> None:
     errors = [
         "release already exists: v9.9.1",
-        "manifest_version_mismatch: plugins/agent-guard/.codex-plugin/plugin.json",
-        "source_ref_requires_pr: main: plugins/agent-guard/.codex-plugin/plugin.json",
+        "manifest_version_mismatch: plugins/pr-flow/.codex-plugin/plugin.json",
+        "source_ref_requires_pr: main: plugins/pr-flow/.codex-plugin/plugin.json",
         "plugin_requires_bump: release-flow",
     ]
 
@@ -829,7 +829,7 @@ def test_preflight_multi_error_prints_one_summary_path_without_version_inference
         monkeypatch,
         tmp_path,
         errors,
-        bump_plugins=["agent-guard"],
+        bump_plugins=["pr-flow"],
     )
 
     assert result.returncode == 1
@@ -851,7 +851,7 @@ def test_preflight_multi_error_with_untracked_error_keeps_per_error_next_actions
     tmp_path: Path, monkeypatch
 ) -> None:
     errors = [
-        "manifest_version_mismatch: plugins/agent-guard/.codex-plugin/plugin.json",
+        "manifest_version_mismatch: plugins/pr-flow/.codex-plugin/plugin.json",
         "runtime_update_required: build-and-verify runtime=9.8.0 requested=9.9.0",
     ]
 
@@ -859,13 +859,13 @@ def test_preflight_multi_error_with_untracked_error_keeps_per_error_next_actions
         monkeypatch,
         tmp_path,
         errors,
-        bump_plugins=["agent-guard"],
+        bump_plugins=["pr-flow"],
     )
 
     assert result.returncode == 1
     next_actions = [line for line in result.stdout.splitlines() if line.startswith("nextAction:")]
     assert next_actions == [
-        "nextAction: correct the manifest version in plugins/agent-guard/.codex-plugin/plugin.json, "
+        "nextAction: correct the manifest version in plugins/pr-flow/.codex-plugin/plugin.json, "
         "then rerun release-flow preflight",
         "nextAction: run python plugins/build-and-verify/skills/build-and-verify/scripts/"
         f"build_and_verify.py update-runtime --project {tmp_path / 'project'}",
@@ -962,11 +962,11 @@ def test_preflight_merges_repeated_bump_plugins(tmp_path: Path, monkeypatch) -> 
         monkeypatch,
         tmp_path,
         [],
-        bump_plugins=["agent-guard", "release-flow"],
+        bump_plugins=["pr-flow", "release-flow"],
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "bumpPlugins: agent-guard,release-flow" in result.stdout
+    assert "bumpPlugins: pr-flow,release-flow" in result.stdout
 
 
 def test_remote_ref_manifest_version_fetches_missing_channel_branch_for_actions_checkout(
@@ -996,7 +996,7 @@ def test_remote_ref_manifest_version_fetches_missing_channel_branch_for_actions_
     version = release_flow.remote_ref_manifest_version(
         checkout,
         "marketplace",
-        "plugins/agent-guard/.codex-plugin/plugin.json",
+        "plugins/pr-flow/.codex-plugin/plugin.json",
     )
 
     assert version == "9.9.1"
@@ -1016,7 +1016,7 @@ def test_remote_ref_manifest_version_fetches_missing_channel_branch_for_actions_
             "-C",
             str(checkout),
             "show",
-            "origin/marketplace:plugins/agent-guard/.codex-plugin/plugin.json",
+            "origin/marketplace:plugins/pr-flow/.codex-plugin/plugin.json",
         ),
     ]
 
@@ -1042,12 +1042,12 @@ def test_preflight_rejects_unbumped_manifest_drift(tmp_path: Path, monkeypatch) 
     result = run_preflight_with_errors(
         monkeypatch,
         tmp_path,
-        ["plugin_requires_bump: agent-guard"],
+        ["plugin_requires_bump: pr-flow"],
         bump_plugins=[""],
     )
 
     assert result.returncode == 1
-    assert "plugin_requires_bump: agent-guard" in result.stdout
+    assert "plugin_requires_bump: pr-flow" in result.stdout
 
 
 def test_preflight_rejects_remote_tag_that_already_exists(tmp_path: Path, monkeypatch) -> None:
@@ -1055,7 +1055,7 @@ def test_preflight_rejects_remote_tag_that_already_exists(tmp_path: Path, monkey
         monkeypatch,
         tmp_path,
         ["release already exists: v9.9.1"],
-        bump_plugins=["agent-guard"],
+        bump_plugins=["pr-flow"],
     )
 
     assert result.returncode == 1
@@ -1067,7 +1067,7 @@ def test_preflight_checks_projection_without_channel_tree(tmp_path: Path, monkey
         monkeypatch,
         tmp_path,
         ["missing_file: .claude-plugin/marketplace.json"],
-        bump_plugins=["agent-guard"],
+        bump_plugins=["pr-flow"],
         projection=(
         marketplace_identity_projection(
             transforms="""  - path: .claude-plugin/marketplace.json
@@ -1100,7 +1100,7 @@ def test_preflight_rejects_channel_tree_argument(tmp_path: Path) -> None:
         "--version",
         "9.9.1",
         "--bump-plugins",
-        "agent-guard",
+        "pr-flow",
         "--channel-tree",
         str(channel_tree),
     )
@@ -1159,7 +1159,7 @@ def test_publish_rejects_dry_run_argument(tmp_path: Path) -> None:
         "--version",
         "9.9.1",
         "--bump-plugins",
-        "agent-guard",
+        "pr-flow",
         "--dry-run",
     )
 
@@ -1186,7 +1186,7 @@ def test_publish_retries_workflow_run_eof_then_succeeds(tmp_path: Path) -> None:
         "--version",
         "9.9.1",
         "--bump-plugins",
-        "agent-guard",
+        "pr-flow",
         "--authorize-publish",
         env=env,
     )
@@ -1213,7 +1213,7 @@ def test_publish_reports_last_eof_after_workflow_run_retries_exhausted(tmp_path:
         "--version",
         "9.9.1",
         "--bump-plugins",
-        "agent-guard",
+        "pr-flow",
         "--authorize-publish",
         env=env,
     )
@@ -1236,7 +1236,7 @@ def test_publish_requires_authorization_without_dry_run(tmp_path: Path) -> None:
         "--version",
         "9.9.1",
         "--bump-plugins",
-        "agent-guard",
+        "pr-flow",
     )
 
     assert result.returncode == 2
@@ -1329,7 +1329,7 @@ def test_ci_publish_rejects_dry_run_argument(tmp_path: Path) -> None:
         "--version",
         "9.9.1",
         "--bump-plugins",
-        "agent-guard",
+        "pr-flow",
         "--dry-run",
     )
 
@@ -1401,7 +1401,7 @@ def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: 
 """
         ),
     )
-    write_plugin_manifests(project, "agent-guard", "9.9.1")
+    write_plugin_manifests(project, "pr-flow", "9.9.1")
     write_plugin_manifests(project, "release-flow", "9.9.1")
     write_json(project / ".agents" / "plugins" / "marketplace.json", {"name": "local-dev"})
 
@@ -1432,7 +1432,7 @@ def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: 
         "--version",
         "9.9.1",
         "--bump-plugins",
-        "agent-guard",
+        "pr-flow",
         "--authorize-ci-publish",
     )
 
@@ -1445,7 +1445,7 @@ def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: 
     assert "tag_commit: tag-commit" in result.stdout
     assert "workflow_run_url: https://github.example/actions/runs/1" in result.stdout
     projection_path = project.resolve() / ".release-flow" / "projection.yaml"
-    assert preflight_calls == [(project.resolve(), "v9.9.1", "9.9.1", ["agent-guard"], "marketplace", projection_path)]
+    assert preflight_calls == [(project.resolve(), "v9.9.1", "9.9.1", ["pr-flow"], "marketplace", projection_path)]
     assert remote_calls == [(project.resolve(), "marketplace", projection_path, "v9.9.1")]
     source_marketplace = json.loads((project / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8"))
     assert source_marketplace["name"] == "local-dev"
@@ -1464,7 +1464,7 @@ def test_ci_publish_requires_authorization_without_dry_run(tmp_path: Path) -> No
         "--version",
         "9.9.1",
         "--bump-plugins",
-        "agent-guard",
+        "pr-flow",
     )
 
     assert result.returncode == 2
@@ -1477,7 +1477,7 @@ def test_release_flow_local_e2e(tmp_path: Path, monkeypatch) -> None:
 
     setup = run("setup", "--project", str(project), "--authorize-project-files")
     assert setup.returncode == 0, setup.stdout + setup.stderr
-    write_plugin_manifests(project, "agent-guard", "9.9.1")
+    write_plugin_manifests(project, "pr-flow", "9.9.1")
     write_plugin_manifests(project, "release-flow", "9.9.1")
     write_json(
         project / ".claude-plugin" / "marketplace.json",
@@ -1501,11 +1501,11 @@ def test_release_flow_local_e2e(tmp_path: Path, monkeypatch) -> None:
         "--version",
         "9.9.1",
         "--bump-plugins",
-        "agent-guard",
+        "pr-flow",
     )
     assert preflight.returncode == 0, preflight.stdout + preflight.stderr
     assert preflight_calls == [
-        (project.resolve(), "v9.9.1", "9.9.1", ["agent-guard"], "marketplace", project.resolve() / ".release-flow" / "projection.yaml")
+        (project.resolve(), "v9.9.1", "9.9.1", ["pr-flow"], "marketplace", project.resolve() / ".release-flow" / "projection.yaml")
     ]
     calls = tmp_path / "gh-calls.txt"
     bin_dir = tmp_path / "bin"
@@ -1521,7 +1521,7 @@ def test_release_flow_local_e2e(tmp_path: Path, monkeypatch) -> None:
         "--version",
         "9.9.1",
         "--bump-plugins",
-        "agent-guard",
+        "pr-flow",
         "--authorize-publish",
         env=env,
     )

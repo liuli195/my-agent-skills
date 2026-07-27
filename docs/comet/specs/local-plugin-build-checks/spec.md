@@ -63,13 +63,6 @@ The build command SHALL（必须）validate that `.release-flow/projection.yaml`
 - **WHEN** projection plugin lists are checked
 - **THEN** duplicate plugin names are reported as build errors
 
-### Requirement: Build command validates Guard Profile template mirrors
-The build command SHALL（必须）validate that mirrored Guard Profile（守卫画像）template directories stay byte-for-byte consistent.
-
-#### Scenario: Mirrored template files match
-- **WHEN** the build command compares `plugins/agent-guard/assets/templates/guard-profile/` with `plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/`
-- **THEN** every mirrored file exists on both sides and has identical content
-
 ### Requirement: Verify command follows initialized build-and-verify contract
 The repository SHALL（必须）provide a verify command initialized by the build-and-verify（构建与验证）Plugin（插件） contract.
 

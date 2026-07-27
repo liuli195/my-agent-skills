@@ -15,9 +15,7 @@ generators:
     type: codex-marketplace
     identity: codex
     plugins:
-      - agent-guard
       - release-flow
-      - cross-agent-review
       - pr-flow
       - build-and-verify
 

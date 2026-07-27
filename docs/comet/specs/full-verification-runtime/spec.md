@@ -17,7 +17,7 @@ Full repository verification SHALL（必须）complete in under 60 seconds on th
 - **THEN** the evidence MUST identify the largest remaining contributors if the command is still close to the target
 
 ### Requirement: Test optimization preserves behavioral coverage
-The test suite SHALL（必须）reduce avoidable overhead without dropping local build contract（本地构建契约）, PR Flow（拉取请求流程）, Release Flow（发布流程）, Agent Guard（代理守卫）, cross-agent-review（跨代理审查）, Build and Verify（构建与验证）behavior coverage, or OpenSpec（开放规格）validation coverage.
+The test suite SHALL（必须）reduce avoidable overhead without dropping local build contract（本地构建契约）, PR Flow（拉取请求流程）, Release Flow（发布流程）, Build and Verify（构建与验证）behavior coverage, or OpenSpec（开放规格）validation coverage.
 
 #### Scenario: PR Flow lifecycle coverage remains
 - **WHEN** PR Flow（拉取请求流程）tests are optimized
