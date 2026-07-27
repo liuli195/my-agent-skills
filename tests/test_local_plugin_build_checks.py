@@ -1157,6 +1157,7 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
     check_by_id = {check["id"]: check for check in checks}
 
     assert [check["id"] for check in checks] == [
+        "verify.pi-tool-display",
         "verify.local-build-contract",
         "verify.release-flow",
         "verify.pr-flow",

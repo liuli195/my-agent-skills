@@ -33,6 +33,7 @@ htmlcov/
 # ========================
 # Temporary and cache files
 # ========================
+node_modules/
 *.tmp
 *.temp
 *.cache
