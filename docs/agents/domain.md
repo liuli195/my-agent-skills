@@ -17,7 +17,9 @@ This repository uses a single-context layout:
 /
 ├── CONTEXT.md
 ├── docs/comet/specs/
-└── src/
+├── plugins/
+├── scripts/
+└── tests/
 ```
 
 ## Use the glossary's vocabulary

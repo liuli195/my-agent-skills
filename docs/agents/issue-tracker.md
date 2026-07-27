@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
+Work items for this repo live as GitHub issues. Formal specifications live under `docs/comet/specs/`. Use the `gh` CLI for all issue operations.
 
 ## Conventions
 
