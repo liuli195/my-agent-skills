@@ -247,11 +247,11 @@ def test_pr_flow_package_passes_repo_build_checks() -> None:
     assert "status: build checks passed" in result.stdout
 
 
-def test_claude_marketplace_appends_pr_flow_after_cross_agent_review() -> None:
+def test_claude_marketplace_appends_pr_flow_after_release_flow() -> None:
     catalog = read_json(CLAUDE_REPO_MARKETPLACE)
     names = plugin_names(catalog)
 
-    assert plugin_after(names, "cross-agent-review") == PLUGIN_NAME
+    assert plugin_after(names, "release-flow") == PLUGIN_NAME
     assert catalog["plugins"][names.index(PLUGIN_NAME)] == {
         "name": PLUGIN_NAME,
         "source": "./plugins/pr-flow",
@@ -259,11 +259,11 @@ def test_claude_marketplace_appends_pr_flow_after_cross_agent_review() -> None:
     }
 
 
-def test_codex_dev_marketplace_appends_pr_flow_after_cross_agent_review() -> None:
+def test_codex_dev_marketplace_appends_pr_flow_after_release_flow() -> None:
     catalog = read_json(CODEX_REPO_MARKETPLACE)
     names = plugin_names(catalog)
 
-    assert plugin_after(names, "cross-agent-review") == PLUGIN_NAME
+    assert plugin_after(names, "release-flow") == PLUGIN_NAME
     assert catalog["plugins"][names.index(PLUGIN_NAME)] == {
         "name": PLUGIN_NAME,
         "source": {"source": "local", "path": "./plugins/pr-flow"},
@@ -272,7 +272,7 @@ def test_codex_dev_marketplace_appends_pr_flow_after_cross_agent_review() -> Non
     }
 
 
-def test_release_projection_appends_pr_flow_after_cross_agent_review() -> None:
+def test_release_projection_appends_pr_flow_after_release_flow() -> None:
     plugins = release_projection_plugins()
 
-    assert plugin_after(plugins, "cross-agent-review") == PLUGIN_NAME
+    assert plugin_after(plugins, "release-flow") == PLUGIN_NAME

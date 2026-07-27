@@ -15,7 +15,6 @@ generators:
     type: codex-marketplace
     identity: codex
     plugins:
-      - agent-guard
       - release-flow
 
 transforms:

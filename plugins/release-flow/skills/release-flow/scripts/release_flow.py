@@ -27,18 +27,6 @@ SUPPORTED_TRANSFORM_TYPE = "json-env"
 SUPPORTED_GENERATOR_TYPE = "codex-marketplace"
 SUPPORTED_GENERATOR_IDENTITY = "codex"
 PLUGIN_REGISTRY: dict[str, dict[str, Any]] = {
-    "agent-guard": {
-        "manifests": [
-            "plugins/agent-guard/.codex-plugin/plugin.json",
-            "plugins/agent-guard/.claude-plugin/plugin.json",
-        ],
-        "codexMarketplace": {
-            "name": "agent-guard",
-            "source": {"source": "local", "path": "./plugins/agent-guard"},
-            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
-            "category": "Productivity",
-        },
-    },
     "release-flow": {
         "manifests": [
             "plugins/release-flow/.codex-plugin/plugin.json",
@@ -47,18 +35,6 @@ PLUGIN_REGISTRY: dict[str, dict[str, Any]] = {
         "codexMarketplace": {
             "name": "release-flow",
             "source": {"source": "local", "path": "./plugins/release-flow"},
-            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
-            "category": "Developer Tools",
-        },
-    },
-    "cross-agent-review": {
-        "manifests": [
-            "plugins/cross-agent-review/.codex-plugin/plugin.json",
-            "plugins/cross-agent-review/.claude-plugin/plugin.json",
-        ],
-        "codexMarketplace": {
-            "name": "cross-agent-review",
-            "source": {"source": "local", "path": "./plugins/cross-agent-review"},
             "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
             "category": "Developer Tools",
         },

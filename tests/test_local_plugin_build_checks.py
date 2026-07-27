@@ -1130,112 +1130,6 @@ def test_build_reports_duplicate_projection_plugin(tmp_path: Path) -> None:
     assert any("duplicate_projection_plugin" in error for error in errors)
 
 
-def guard_profile_template_dirs(root: Path) -> tuple[Path, Path]:
-    left = root / "plugins" / "agent-guard" / "assets" / "templates" / "guard-profile"
-    right = (
-        root
-        / "plugins"
-        / "agent-guard"
-        / "skills"
-        / "agent-guard"
-        / "assets"
-        / "templates"
-        / "guard-profile"
-    )
-    return left, right
-
-
-def make_guard_profile_mirrors(root: Path, content: str = "schema_version: guard-profile/v1\n") -> None:
-    left, right = guard_profile_template_dirs(root)
-    template_files = [
-        ".gitkeep",
-        "confirmed-notes.yaml",
-        "minimal/GUARD-MANIFEST.yaml",
-        "minimal/activation-model.yaml",
-        "minimal/artifacts.yaml",
-        "minimal/brief-template.md",
-        "minimal/execution-model.yaml",
-        "minimal/global-command-guards.yaml",
-        "minimal/guard-points.yaml",
-        "minimal/observation-model.yaml",
-        "minimal/state-machine.yaml",
-        "minimal/target-model.yaml",
-        "minimal/validation-plan.md",
-    ]
-    for template_file in template_files:
-        file_content = "" if template_file == ".gitkeep" else f"# {template_file}\n{content}"
-        for base in (left, right):
-            path = base / template_file
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(file_content, encoding="utf-8")
-
-
-def test_build_accepts_matching_guard_profile_mirrors(tmp_path: Path) -> None:
-    module = load_local_build_module()
-    make_guard_profile_mirrors(tmp_path)
-
-    errors = module.check_guard_profile_template_mirrors(tmp_path)
-
-    assert errors == []
-
-
-def test_build_reports_guard_profile_mirror_mismatch(tmp_path: Path) -> None:
-    module = load_local_build_module()
-    make_guard_profile_mirrors(tmp_path)
-    _left, right = guard_profile_template_dirs(tmp_path)
-    right_file = right / "minimal" / "GUARD-MANIFEST.yaml"
-    right_file.write_text("schema_version: changed\n", encoding="utf-8")
-
-    errors = module.check_guard_profile_template_mirrors(tmp_path)
-
-    assert any("guard_profile_template_mismatch" in error for error in errors)
-
-
-def test_build_reports_guard_profile_mirror_file_set_mismatch(tmp_path: Path) -> None:
-    module = load_local_build_module()
-    make_guard_profile_mirrors(tmp_path)
-    _left, right = guard_profile_template_dirs(tmp_path)
-    (right / "EXTRA.yaml").write_text("extra: true\n", encoding="utf-8")
-
-    errors = module.check_guard_profile_template_mirrors(tmp_path)
-
-    assert any("guard_profile_template_files_mismatch" in error for error in errors)
-
-
-def test_run_build_reports_guard_profile_mirror_mismatch(tmp_path: Path) -> None:
-    module = load_local_build_module()
-    make_plugin(tmp_path, "agent-guard")
-    make_marketplace(tmp_path, ["agent-guard"])
-    make_projection(tmp_path, ["agent-guard"])
-    make_guard_profile_mirrors(tmp_path)
-    _left, right = guard_profile_template_dirs(tmp_path)
-    (right / "minimal" / "GUARD-MANIFEST.yaml").write_text("schema_version: changed\n", encoding="utf-8")
-
-    errors = module.run_build(
-        tmp_path,
-        runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
-    )
-
-    assert any("guard_profile_template_mismatch" in error for error in errors)
-
-
-def test_run_build_reports_guard_profile_mirror_file_set_mismatch(tmp_path: Path) -> None:
-    module = load_local_build_module()
-    make_plugin(tmp_path, "agent-guard")
-    make_marketplace(tmp_path, ["agent-guard"])
-    make_projection(tmp_path, ["agent-guard"])
-    make_guard_profile_mirrors(tmp_path)
-    _left, right = guard_profile_template_dirs(tmp_path)
-    (right / "EXTRA.yaml").write_text("extra: true\n", encoding="utf-8")
-
-    errors = module.run_build(
-        tmp_path,
-        runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
-    )
-
-    assert any("guard_profile_template_files_mismatch" in error for error in errors)
-
-
 def test_comet_config_does_not_duplicate_guard_commands() -> None:
     import yaml
 
@@ -1264,10 +1158,8 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
 
     assert [check["id"] for check in checks] == [
         "verify.local-build-contract",
-        "verify.agent-guard",
         "verify.release-flow",
         "verify.pr-flow",
-        "verify.cross-agent-review",
         "verify.build-and-verify",
     ]
     assert "pytest.full" not in check_by_id
