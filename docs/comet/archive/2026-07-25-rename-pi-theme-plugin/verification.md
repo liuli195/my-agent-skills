@@ -1,0 +1,59 @@
+# Commands and results
+
+通过。实现与已确认规格一致。
+
+- `python .build-and-verify/runtime/build_and_verify.py verify --project .`：通过，69 项检查通过。
+- Python（编程语言）读取扩展清单、两份主题及 Pi 用户配置：通过；包名为 `pi-my-theme`，主题名为 `blue-nobkgd` 与 `blue-moch-new`，背景值符合规格，用户配置指向新路径且当前主题为 `blue-nobkgd`。
+- `%APPDATA%\npm\pi.cmd list`：通过，Pi（编码代理）从用户配置识别 `D:\My Project\my-agent-skills\plugins\pi-my-theme`。
+- `%APPDATA%\npm\pi.cmd --offline --list-models`：通过，Pi（编码代理）使用更新后的用户配置完成真实启动加载且未报告主题错误。
+
+# Skipped checks
+
+- 未执行 `--full`（完整验证）；仓库规则仅允许明确授权的特定场景执行。
+- 未切换到 `blue-moch-new` 进行交互显示检查；当前用户配置按确认保持 `blue-nobkgd`。
+
+# Spec consistency
+
+实现覆盖全部 4 项验收行为。`blue-nobkgd` 保留 `customMessageBg` 与 `selectedBg` 的 `surface0` 背景，仅移除用户消息及三种工具背景；未发现规格偏差。
+
+# Known limitations and risks
+
+- 非交互启动证明主题配置能够加载，但未对终端画面进行截图比对。
+- Pi 用户配置位于仓库外，不会进入 Git（版本管理）提交；已在本机直接核对并通过 Pi 用户入口验证。
+
+# Conclusion
+
+通过。实现可以归档。
+
+# Acceptance evidence
+
+<!-- comet-native:acceptance-evidence:start -->
+[
+  {
+    "acceptance_id": "acceptance-1161b937aea22d2cacc6bf72f42aef440ed97f297b2e93ad9b14056689b29e21",
+    "evidence_refs": [
+      "plugins/pi-my-theme/themes/blue-nobkgd.json"
+    ]
+  },
+  {
+    "acceptance_id": "acceptance-3a486d55f3739140fd9de8d94fd6f6cb65a08b72d72bbdbed9ac03dba15cfe1b",
+    "evidence_refs": [
+      "plugins/pi-my-theme/themes/blue-moch-new.json"
+    ]
+  },
+  {
+    "acceptance_id": "acceptance-4dc98e59dbb96cd6403186f9b58528f68a7b1ee59c7057399576705d96860b76",
+    "evidence_refs": [
+      "plugins/pi-my-theme/package.json"
+    ]
+  },
+  {
+    "acceptance_id": "acceptance-fa76355d2943d58fe645970730a595ea3ea169b5f5ce62e5fdc7724872e3850f",
+    "evidence_refs": [
+      "plugins/pi-my-theme/package.json",
+      "plugins/pi-my-theme/themes/blue-moch-new.json",
+      "plugins/pi-my-theme/themes/blue-nobkgd.json"
+    ]
+  }
+]
+<!-- comet-native:acceptance-evidence:end -->

@@ -1,0 +1,27 @@
+{
+  "schema": "comet.native.transaction.v2",
+  "id": "b11b1942-61d5-4702-8e82-838bd64b7278",
+  "kind": "archive",
+  "status": "committed",
+  "change": "pi-cache-diagnostics-miss-audit",
+  "createdAt": "2026-07-26T15:20:01.764Z",
+  "preflightHash": "e3d6cca1be0a2617e2a01e69d404c7c7a454a4804951a67cfae609a8e12efa8c",
+  "operations": [
+    {
+      "id": "spec-1-pi-cache-diagnostics-miss-audit",
+      "type": "write",
+      "target": "specs/pi-cache-diagnostics-miss-audit/spec.md",
+      "staged": "runtime/transactions/b11b1942-61d5-4702-8e82-838bd64b7278/staged/specs/pi-cache-diagnostics-miss-audit/spec.md",
+      "expectedTargetHash": null,
+      "stagedHash": "43f4746abb70dc3928d3a9b3bc5f5b0438abdddd98060b6a59d89e94f042c070"
+    },
+    {
+      "id": "archive-change",
+      "type": "move",
+      "source": "changes/pi-cache-diagnostics-miss-audit",
+      "target": "archive/2026-07-26-pi-cache-diagnostics-miss-audit",
+      "expectedSourceHash": "623ab2b27248ae42a79967e330dbb9c5e24fe4d854d21b020369c81967a8a041",
+      "expectedTargetHash": null
+    }
+  ]
+}

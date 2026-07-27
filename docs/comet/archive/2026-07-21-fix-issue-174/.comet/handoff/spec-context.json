@@ -1,0 +1,35 @@
+{
+  "change": "fix-issue-174",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "d7dc3df44c0427ceb1ac8e65f0de51e98ba2bdcb29dea0ddc6338be7a2989b52",
+  "files": [
+    {
+      "path": "openspec/changes/fix-issue-174/proposal.md",
+      "sha256": "3fd8ddf3c22e6b604e43730c850c7400e3d2bd93b50e2bf0f255569bece373e0",
+      "role": "supporting"
+    },
+    {
+      "path": "openspec/changes/fix-issue-174/design.md",
+      "sha256": "9a53a783529a938e64704112050b6879d7d784ee960a4a1bfffe03aea259b77d",
+      "role": "supporting"
+    },
+    {
+      "path": "openspec/changes/fix-issue-174/tasks.md",
+      "sha256": "ad7d0b85819786551cdf54baadd7e7a8df910e076b03a782e7529bcf339826f3",
+      "role": "supporting"
+    },
+    {
+      "path": "openspec/changes/fix-issue-174/specs/agent-guard-plugin-runtime/spec.md",
+      "sha256": "52ae923fb21f0c50115794c057a13f9ddc0ce9a4bb0eb9b34fe7f5d5d2f5787e",
+      "role": "spec"
+    },
+    {
+      "path": "openspec/changes/fix-issue-174/specs/pr-flow-plugin/spec.md",
+      "sha256": "5748b51086fad6e01e9f76dba4325a4082e83001c1694c41bf07b947c02e9ab5",
+      "role": "spec"
+    }
+  ]
+}

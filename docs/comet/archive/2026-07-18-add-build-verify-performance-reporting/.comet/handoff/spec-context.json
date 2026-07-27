@@ -1,0 +1,30 @@
+{
+  "change": "add-build-verify-performance-reporting",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "634327d7954afb32d10efc79f027d86bef9db065ee4e34443a63f6bd0d0d2a8f",
+  "files": [
+    {
+      "path": "openspec/changes/add-build-verify-performance-reporting/proposal.md",
+      "sha256": "c363e0ac134e66de8175c90a65865c4bacebf2aa22e154078f1944ba9f977470",
+      "role": "supporting"
+    },
+    {
+      "path": "openspec/changes/add-build-verify-performance-reporting/design.md",
+      "sha256": "a25b2c40da4ff8c6d850a39a7dafb7c14d8c5b00b4023be56a49789e4e9bf149",
+      "role": "supporting"
+    },
+    {
+      "path": "openspec/changes/add-build-verify-performance-reporting/tasks.md",
+      "sha256": "8fff0eefa977c5f586c8bd2ba0d675af5dc294993ef7cc14042522840eaae3a9",
+      "role": "supporting"
+    },
+    {
+      "path": "openspec/changes/add-build-verify-performance-reporting/specs/test-framework-plugin/spec.md",
+      "sha256": "dc219026398b708ea5866c1ee76ba29c4f7694f99eb75fc3bedff0258f4b8c50",
+      "role": "spec"
+    }
+  ]
+}

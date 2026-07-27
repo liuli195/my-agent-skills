@@ -1,0 +1,14 @@
+{
+  "change": "add-guard-gate-binding",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "d56aa0f8f8c87f32a633b7c7c044a617bd64e8af840fe2afa0b1fdb03ff96d27",
+  "files": [
+    { "path": "openspec/changes/add-guard-gate-binding/proposal.md", "sha256": "ffd75dfb704ef6cdf7e1f46d694960b0e55961d7b986879553bb8cca3749f979", "role": "supporting" },
+    { "path": "openspec/changes/add-guard-gate-binding/design.md", "sha256": "9e8df4e6041c5a5d684a1819aadae028336947242d793f531947becf7640127b", "role": "supporting" },
+    { "path": "openspec/changes/add-guard-gate-binding/tasks.md", "sha256": "aa3ded61fd382bc611989740c7e4e82cf7f8fb96916e7becdb8e3c0fe5b2673f", "role": "supporting" },
+    { "path": "openspec/changes/add-guard-gate-binding/specs/agent-guard-plugin-runtime/spec.md", "sha256": "e4ea2a824d0aae93458cae3d8eb91d0bd5e4d85b7284f44a10f80299125cd7fc", "role": "spec" }
+  ]
+}

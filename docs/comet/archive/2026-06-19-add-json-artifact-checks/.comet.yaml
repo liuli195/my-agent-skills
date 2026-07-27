@@ -1,0 +1,23 @@
+workflow: full
+phase: archive
+context_compression: beta
+build_mode: executing-plans
+build_pause: null
+subagent_dispatch: confirmed
+tdd_mode: tdd
+isolation: branch
+verify_mode: full
+build_command: python -m pytest -q
+verify_command: python -m pytest -q
+auto_transition: true
+base_ref: 73ade80fc55b6d6b03b346af124f9d481450406c
+design_doc: docs/superpowers/specs/2026-06-19-json-artifact-checks-design.md
+plan: docs/superpowers/plans/2026-06-19-json-artifact-checks.md
+verify_result: pass
+verification_report: docs/superpowers/reports/2026-06-19-add-json-artifact-checks-verify.md
+branch_status: handled
+created_at: 2026-06-18
+verified_at: 2026-06-19
+archived: true
+handoff_context: openspec/changes/add-json-artifact-checks/.comet/handoff/spec-context.json
+handoff_hash: f9d24ba1a404310e8d31e4b4f32f37d89f9de67d82ec176497e951895391d031
