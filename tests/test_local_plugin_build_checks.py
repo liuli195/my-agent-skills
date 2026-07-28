@@ -1161,10 +1161,24 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
         "verify.local-build-contract",
         "verify.release-flow",
         "verify.pr-flow",
+        "verify.openspec",
         "verify.my-spec",
         "verify.build-and-verify",
     ]
     assert "pytest.full" not in check_by_id
+
+    openspec = check_by_id["verify.openspec"]
+    assert openspec["paths"] == [
+        "openspec/specs/**",
+        "plugins/my-spec/skills/my-spec/scripts/spec_ops.py",
+    ]
+    assert openspec["inputs"] == [
+        "openspec/specs",
+        "plugins/my-spec/skills/my-spec/scripts/spec_ops.py",
+    ]
+    assert openspec["command"] == (
+        "python plugins/my-spec/skills/my-spec/scripts/spec_ops.py validate-main openspec/specs"
+    )
 
     local_build_contract = check_by_id["verify.local-build-contract"]
     assert ".comet/config.yaml" in local_build_contract["paths"]

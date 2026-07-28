@@ -1,8 +1,11 @@
 # pr-flow-plugin Specification
 
 ## Purpose
+
 Define the reusable PR Flow（拉取请求流程）Plugin（插件） for personal repositories, including repository configuration, diagnose stop states, complete lifecycle handling, cleanup, hotfix, tweak, and configurable review gate behavior.
+
 ## Requirements
+
 ### Requirement: PR Flow Plugin package
 系统 MUST 提供 `pr-flow` Plugin（插件），用于个人仓库复用 PR Flow（拉取请求流程）。
 
@@ -11,7 +14,6 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 - **THEN** command examples for diagnose、complete、cleanup、hotfix and tweak（诊断、收尾、清理、热修复和小改） MUST point to `plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py`
 - **THEN** command examples MUST NOT point to a missing root-level `scripts/pr_flow.py`
 - **THEN** command examples MUST NOT point to an installed-skill relative `../pr-flow/scripts/pr_flow.py` path when documenting source repository（源码仓库） usage（用法）
-
 ### Requirement: Repository PR Flow configuration
 系统 MUST 使用 `.pr-flow/config.yaml` 保存仓库共享 PR Flow 配置，并将该文件纳入 Git（版本管理）。
 
@@ -47,7 +49,6 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 - **WHEN** `.pr-flow/config.yaml` 包含 `setup.github`（GitHub 配置建议）
 - **THEN** complete、cleanup、hotfix、tweak 和 diagnose（收尾、清理、热修复、小改、诊断）命令 MUST NOT 把 `setup.github` 作为运行配置消费
 - **THEN** `setup.github` MUST 只作为 agent（代理）继续人工配置 GitHub（代码托管平台）的建议输入
-
 ### Requirement: Diagnose stop states
 系统 MUST 提供 diagnose（诊断）入口，用于解释当前 PR Flow 卡点，并输出固定 stop state（停机状态）。
 
@@ -69,7 +70,6 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 - **THEN** stop-state details（停止状态详情） MUST include `branch`（分支） and `baseBranch`（目标分支）
 - **THEN** diagnose（诊断） MUST provide `complete`（收尾） as the next command（下一步命令） using the existing PR body（拉取请求正文） next-command format with `--summary` and `--scope`
 - **THEN** diagnose（诊断） MUST NOT present manual `git push`（推送） as the only next step
-
 ### Requirement: Complete PR lifecycle
 系统 MUST 提供 complete（完整流程），从当前分支创建或同步活动 PR（拉取请求）到合并后清理。仅 `OPEN`（未合并）状态的同名 PR（拉取请求）可作为当前活动 PR（拉取请求）。
 
@@ -87,7 +87,6 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 - **THEN** 系统 MUST NOT 使用该 PR（拉取请求）的 `headRefOid`（源提交）进行基线校验
 - **THEN** 系统 MUST 使用当前 `HEAD`（当前提交）校验最新远端目标分支
 - **THEN** 系统 MUST 推送当前批次并创建新的 PR（拉取请求）
-
 ### Requirement: Review gate modes
 系统 MUST 只支持 GitHub（代码托管平台）和 skip（跳过）两种 review gate（审查门禁）模式。
 
@@ -110,7 +109,6 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 - **WHEN** `.pr-flow/config.yaml`（配置文件） contains `defaults.reviewGate.evidencePath`（审查证据路径）
 - **THEN** validate（校验） MUST report a warning（警告） that the field is deprecated（已废弃） and not read
 - **THEN** complete（收尾） MUST NOT treat `evidencePath`（审查证据路径） as local review evidence（本地审查证据）
-
 ### Requirement: Cleanup merged PR
 系统 MUST 提供 cleanup（清理）入口，安全清理已合并 PR（拉取请求）的本地和远端源分支，将本地目标分支同步到最新远端目标提交；当该分支未被其他工作树占用时，当前工作树 MUST 切回该分支，否则 MUST 保持安全的 detached HEAD（分离头）并记录原因。
 
@@ -192,7 +190,6 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 #### Scenario: Cleanup does not invent authorization
 - **WHEN** cleanup（清理）按配置和当前状态可安全执行
 - **THEN** 系统 MUST NOT 因 authorization phrase（授权短语）功能额外要求确认
-
 ### Requirement: Hotfix direct push path
 系统 MUST 提供 hotfix（热修复）路径，用于紧急直推显式允许的目标分支。
 
@@ -220,7 +217,6 @@ Define the reusable PR Flow（拉取请求流程）Plugin（插件） for person
 - **THEN** 系统 MUST 回读远端目标分支
 - **THEN** 远端目标分支 MUST 等于预期 head commit
 - **THEN** 系统 MUST 写入最小本地审计记录
-
 ### Requirement: PR Flow preserves build-and-verify verification mode boundaries
 PR Flow（拉取请求流程）MUST preserve the boundary between default fast verify（快速验证） and explicit full verify（完整验证） when it references build-and-verify（构建与验证） commands.
 
@@ -244,7 +240,6 @@ PR Flow（拉取请求流程）MUST preserve the boundary between default fast v
 - **WHEN** PR Flow（拉取请求流程） consumes review gate（审查门禁） mode（模式） or check status（检查状态）
 - **THEN** PR Flow（拉取请求流程） MUST NOT infer that full verify（完整验证） has run unless an external check explicitly identifies the full command
 - **THEN** PR Flow（拉取请求流程） MUST keep fast verify（快速验证） and full verify（完整验证） results（结果） distinct
-
 ### Requirement: Tweak PR path
 系统 MUST 提供 tweak（非 bug 小改动）路径，用于跳过 review gate（审查门禁）但保留 PR（拉取请求）流程。
 
@@ -275,7 +270,6 @@ PR Flow（拉取请求流程）MUST preserve the boundary between default fast v
 - **THEN** 系统 MUST NOT 使用该 PR（拉取请求）的 `headRefOid`（源提交）进行基线校验
 - **THEN** 系统 MUST 使用当前 `HEAD`（当前提交）校验最新远端目标分支
 - **THEN** 系统 MUST 推送当前批次并创建新的 PR（拉取请求）
-
 ### Requirement: Authorization phrase confirmation
 系统 MUST 支持仓库共用 authorization phrase，用于替代用户说“我确认”。
 
@@ -283,7 +277,6 @@ PR Flow（拉取请求流程）MUST preserve the boundary between default fast v
 - **WHEN** PR Flow hotfix（拉取请求流程热修复） requires authorization phrase（授权短语）
 - **THEN** the Skill（技能） MUST require manual input from the current conversation
 - **THEN** the Skill（技能） MUST prohibit reading or reusing authorization phrase（授权短语） from memory（记忆）、history summaries（历史摘要）、logs（日志）、Issue（问题单） or reports（报告）
-
 ### Requirement: PR Flow init validates confirmed configuration
 系统 MUST 提供只读配置校验能力，用于校验 `pr-flow-init` Skill（初始化技能）生成的配置草案。
 
@@ -295,7 +288,6 @@ PR Flow（拉取请求流程）MUST preserve the boundary between default fast v
 - **THEN** validate（校验） MUST NOT report remote CodeQL Default setup（CodeQL 默认配置） as confirmed
 - **WHEN** the project（项目） has a local workflow（工作流） using `codeql-action`
 - **THEN** validate（校验） MUST still output the CodeQL Default setup（CodeQL 默认配置） remote task（远端待办）
-
 ### Requirement: PR Flow init uses scenario-oriented progressive-disclosure guidance
 系统 MUST 让 PR Flow init（拉取请求流程初始化）的 Plugin（插件）和 Skill（技能）内容使用用户场景组织和 progressive disclosure（渐进式披露），并用固定问答模板约束 agent（代理）初始化流程。
 
@@ -305,7 +297,6 @@ PR Flow（拉取请求流程）MUST preserve the boundary between default fast v
 - **THEN** if the user does not enable CodeQL security check（CodeQL 安全检查）, the later PR status checks（拉取请求状态检查） question MUST NOT offer `Analyze Python`, `Analyze (python)`, `Analyze (actions)` or `CodeQL` CodeQL-related checks（CodeQL 相关检查）
 - **THEN** if the user enables CodeQL security check（CodeQL 安全检查）, the later PR status checks（拉取请求状态检查） question MUST default to non-security-scan checks（非安全扫描检查） and MUST NOT present CodeQL-related checks（CodeQL 相关检查） as status check（状态检查） options
 - **THEN** questionnaire（问答模板）MUST treat `Require code scanning results`（要求代码扫描结果） as the primary CodeQL security gate（CodeQL 安全门禁）
-
 ### Requirement: PR Flow init presents executable GitHub setup guidance
 PR Flow init（拉取请求流程初始化）MUST separate local config writes（本地配置写入） from GitHub setup guidance（GitHub 配置建议） and present GitHub guidance as executable manual tasks.
 
@@ -313,7 +304,6 @@ PR Flow init（拉取请求流程初始化）MUST separate local config writes�
 - **WHEN** PR Flow init（拉取请求流程初始化）mentions GitHub Rulesets（GitHub 规则集）、branch protection（分支保护）、workflow variables（工作流变量） or repository settings（仓库设置）
 - **THEN** Skill（技能） guidance MUST prohibit modifying those remote settings without explicit confirmation in the current conversation
 - **THEN** without confirmation, the Skill（技能） MUST only output remote tasks（远端待办）
-
 ### Requirement: PR Flow init derives review gate mode from branch protection choice
 系统 MUST 由 `pr-flow-init`（初始化）branch protection（分支保护）选择派生 review gate（审查门禁）模式，不新增单独 review gate mode（审查门禁模式）问题。
 
@@ -326,7 +316,6 @@ PR Flow init（拉取请求流程初始化）MUST separate local config writes�
 - **WHEN** 用户在 branch protection（分支保护）步骤选择暂不配置远端保护
 - **THEN** init（初始化）草案 MUST 写入 `defaults.reviewGate.mode: skip`
 - **THEN** init（初始化）草案 MUST NOT keep or infer `defaults.reviewGate.mode: github`
-
 ### Requirement: PR body template and closing references
 系统 MUST 让 PR Flow（拉取请求流程）在 `complete`（收尾）和 `tweak`（小改）路径中生成、校验并保留可审计的 PR body（拉取请求正文）。
 
@@ -392,7 +381,6 @@ PR Flow init（拉取请求流程初始化）MUST separate local config writes�
 - **WHEN** `diagnose`（诊断）发现已有 PR（拉取请求）正文为空
 - **THEN** `diagnose`（诊断） MUST output `EXCEPTION_REQUIRED`（需要人工处理）
 - **THEN** stop state（停止状态） details（详情） MUST include `reason: pr_body_required` 和可执行 `nextCommand`（下一步命令）
-
 ### Requirement: Invalid fixes input is reported directly
 系统 MUST 在 `complete`（收尾）和 `tweak`（小改）路径中把无效 `--fixes`（修复问题编号）参数作为独立输入错误报告，不得让用户误以为只是缺少 PR body（拉取请求正文）。
 
@@ -409,7 +397,6 @@ PR Flow init（拉取请求流程初始化）MUST separate local config writes�
 - **AND** 每个 `--fixes`（修复问题编号）值都是大于 0 的数字
 - **THEN** 系统 MUST accept repeated `--fixes`（修复问题编号） arguments
 - **THEN** PR body（拉取请求正文） MUST render each value as a `Fixes #<number>` closing reference（关闭引用）
-
 ### Requirement: Post-create PR sync uses transient PR view retry
 系统 MUST 让创建 PR（拉取请求）后的同步查看路径复用 bounded retry（有界重试）行为。
 
@@ -418,7 +405,6 @@ PR Flow init（拉取请求流程初始化）MUST separate local config writes�
 - **AND** the immediate post-create `gh pr view`（查看拉取请求） sync fails once with EOF（连接提前结束）
 - **AND** a retry succeeds
 - **THEN** PR Flow（拉取请求流程） MUST continue the lifecycle without printing an intermediate stop state（停止状态）
-
 ### Requirement: Auto-push refuses upstream divergence
 PR Flow（拉取请求流程）MUST refuse safe auto-push（安全自动推送） when the current branch is behind its upstream（上游分支）.
 
@@ -445,7 +431,6 @@ PR Flow（拉取请求流程）MUST refuse safe auto-push（安全自动推送�
 - **AND** 当前分支 is behind（落后） upstream（上游分支）
 - **THEN** PR Flow（拉取请求流程） MUST stop before create、sync or merge PR（创建、同步或合并拉取请求）
 - **THEN** PR Flow（拉取请求流程） MUST output `EXCEPTION_REQUIRED`（需要人工处理）
-
 ### Requirement: Recoverable PR Flow failures expose recovery actions
 PR Flow（拉取请求流程） MUST classify known recoverable failures through a shared contract and MUST include a recovery action in stop-state details（停止状态详情）.
 
@@ -454,7 +439,6 @@ PR Flow（拉取请求流程） MUST classify known recoverable failures through
 - **AND** the reason（原因） is one of `gh_auth_required`, `gh_pr_view_transient_failed`, `checks_pending`, `ruleset_merge_blocking`, `checks_or_review_blocking`, `invalid_fixes`, `pr_missing` or `missing_upstream`
 - **THEN** that reason MUST NOT map to `EXCEPTION_REQUIRED`（需要异常处理）
 - **THEN** recovery details MUST include `nextAction`（下一步动作） or `nextCommand`（下一步命令）
-
 ### Requirement: PR Flow isolates linked worktree runs
 PR Flow（拉取请求流程）MUST 为每个 worktree（工作树）解析独立流程上下文和运行状态，并只互斥同一目标工作树与当前分支上的修改命令。
 
@@ -480,7 +464,6 @@ PR Flow（拉取请求流程）MUST 为每个 worktree（工作树）解析独�
 - **WHEN** PR Flow（拉取请求流程）在普通单工作树仓库运行
 - **THEN** 现有命令参数和 `.pr-flow/last-status.json` MUST remain available
 - **THEN** 运行状态 MUST use the same isolated run contract（隔离运行契约） without requiring new configuration（新配置）
-
 ### Requirement: PR Flow validates the latest remote base before dispatch
 PR Flow（拉取请求流程）MUST 在 diagnose（诊断）、complete（完整流程）和 tweak（小改）进入 PR（拉取请求）生命周期前读取并验证最新远端目标提交。
 
@@ -496,7 +479,6 @@ PR Flow（拉取请求流程）MUST 在 diagnose（诊断）、complete（完整
 - **THEN** stop-state details（停止状态详情） MUST provide a recovery command（恢复命令）
 - **THEN** PR Flow（拉取请求流程） MUST NOT automatically rebase（变基）、merge（合并） or resolve conflicts（解决冲突）
 - **THEN** 一个工作树的冲突 MUST NOT modify or block another worktree（工作树）
-
 ### Requirement: PR gates belong to the current source and target commits
 complete（完整流程）和 tweak（小改）MUST 只使用当前源/目标提交上的非空 required checks（必需检查），并在合并前复核这两个提交。
 
@@ -520,7 +502,6 @@ complete（完整流程）和 tweak（小改）MUST 只使用当前源/目标提
 - **WHEN** 用户运行 tweak（小改）
 - **THEN** tweak（小改） MUST use the same latest-base、required-check and commit-revalidation（最新基线、必需检查和提交复核） rules as complete（完整流程）
 - **THEN** tweak（小改） MUST skip only review gate（审查门禁）
-
 ### Requirement: Hotfix revalidates the remote target before push
 hotfix（热修复）MUST 使用独立工作树运行状态，并在验证与授权后、推送前复核远端目标提交。
 
@@ -534,7 +515,6 @@ hotfix（热修复）MUST 使用独立工作树运行状态，并在验证与授
 - **WHEN** hotfix（热修复）验证后读取的远端目标提交不同于验证前记录
 - **THEN** hotfix（热修复） MUST NOT push（推送）
 - **THEN** stop-state details（停止状态详情） MUST require sync（同步） and full re-verification（重新完整验证）
-
 ### Requirement: PR Flow explicitly removes safe linked worktrees
 PR Flow（拉取请求流程）MUST 默认保留工作树，并只在用户显式传入 `--remove-worktree`（删除工作树参数）且安全条件全部满足时删除关联工作树。目标由 Orca（工作区管理器）登记时，PR Flow（拉取请求流程）MUST 优先使用 Orca（工作区管理器）删除；未登记或 Orca（工作区管理器）不可用时，PR Flow（拉取请求流程）MUST 使用非强制 Git（版本管理）删除。
 
@@ -582,7 +562,6 @@ PR Flow（拉取请求流程）MUST 默认保留工作树，并只在用户显�
 - **AND** 推送完成且远端回读结果等于当前提交
 - **THEN** 当前提交 MUST equal the latest remote target commit（等于最新远端目标提交） before the linked worktree MAY be removed（删除）
 - **THEN** hotfix（热修复） MUST NOT query a PR or enter PR cleanup（查询拉取请求或进入拉取请求清理）
-
 ### Requirement: 已安装插件从自身位置执行 PR Flow
 PR Flow Plugin（拉取请求流程插件）MUST 为 Pi（编码助手）提供从已安装插件自身位置解析 `pr_flow.py`（PR Flow 脚本）的执行入口。脚本位置 MUST 与目标项目目录分离；目标项目仍由 `--project`（项目参数）解析。
 
@@ -600,4 +579,3 @@ PR Flow Plugin（拉取请求流程插件）MUST 为 Pi（编码助手）提供�
 - **WHEN** Codex（编码助手）或 Claude（克劳德）从其插件缓存运行 PR Flow（拉取请求流程）
 - **THEN** 入口和恢复命令 MUST 指向该已安装版本的脚本
 - **THEN** 源码仓库中的文档仍 MAY 展示维护者专用的源码路径示例，且不得要求目标仓库复制该路径
-

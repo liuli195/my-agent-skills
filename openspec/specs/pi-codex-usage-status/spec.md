@@ -1,4 +1,10 @@
-## ADDED Requirements
+# Pi Codex Usage Status
+
+## Purpose
+
+本 capability（能力）定义 `pi-codex-usage-status` Pi（编码代理）扩展在状态栏显示 Codex（代码代理）订阅 7 天额度剩余比例和重置倒计时的行为。
+
+## Requirements
 
 ### Requirement: Pi 状态栏显示 Codex 7 天额度
 
@@ -77,7 +83,11 @@
 - **THEN** 状态栏 MUST 继续显示上次取得的剩余百分比
 - **THEN** 重置倒计时 MUST 继续推进
 - **THEN** 到达重置时间后 MUST 显示 `Codex：--%/0D0H`
-
 ### Requirement: 扩展保护认证信息
 
 系统 MUST NOT 在状态栏、日志或错误提示中暴露 Codex（代码代理）认证信息。
+
+#### Scenario: 认证请求失败
+
+- **WHEN** Codex（代码代理）认证请求失败或返回错误
+- **THEN** 状态栏、日志和错误提示 MUST NOT 包含认证令牌或其他认证信息

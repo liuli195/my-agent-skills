@@ -1,8 +1,11 @@
 # local-plugin-build-checks Specification
 
 ## Purpose
+
 TBD - created by archiving change add-local-plugin-build-checks. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Build command validates local plugin package shape
 The repository SHALL（必须）provide a local build command through the initialized build-and-verify（构建与验证）Plugin（插件）contract. Repository-specific package-shape checks remain repository-owned configured checks, not plugin-owned framework logic.
 
@@ -21,7 +24,6 @@ The repository SHALL（必须）provide a local build command through the initia
 - **WHEN** repository active automation and build-and-verify（构建与验证） configuration are inspected
 - **THEN** root `pyproject.toml` MUST NOT exist
 - **THEN** pytest（Python 测试运行器） commands in `.build-and-verify/config.json` MUST explicitly provide required paths and command options
-
 ### Requirement: Build command runs Claude plugin validation
 The build command SHALL（必须）run Claude（Claude 编码工具）plugin validation for the repository marketplace and every local plugin listed in `.claude-plugin/marketplace.json`.
 
@@ -36,7 +38,6 @@ The build command SHALL（必须）run Claude（Claude 编码工具）plugin val
 #### Scenario: Strict validation is not required
 - **WHEN** the build command runs Claude plugin validation
 - **THEN** it does not require `--strict` mode to pass
-
 ### Requirement: Build command validates marketplace and manifest consistency
 The build command SHALL（必须）validate that marketplace entries and plugin manifests are structurally consistent for Claude（Claude 编码工具）and Codex（OpenAI 编码代理）plugin surfaces.
 
@@ -51,7 +52,6 @@ The build command SHALL（必须）validate that marketplace entries and plugin 
 #### Scenario: Plugin manifests declare required fields
 - **WHEN** a local plugin is checked
 - **THEN** its `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json` declare required fields and reference existing local paths
-
 ### Requirement: Build command validates release projection registration
 The build command SHALL（必须）validate that `.release-flow/projection.yaml` registration agrees with local plugin marketplace entries.
 
@@ -62,7 +62,6 @@ The build command SHALL（必须）validate that `.release-flow/projection.yaml`
 #### Scenario: Projection plugin names are unique
 - **WHEN** projection plugin lists are checked
 - **THEN** duplicate plugin names are reported as build errors
-
 ### Requirement: Verify command follows initialized build-and-verify contract
 The repository SHALL（必须）provide a verify command initialized by the build-and-verify（构建与验证）Plugin（插件） contract.
 
@@ -85,7 +84,6 @@ The repository SHALL（必须）provide a verify command initialized by the buil
 - **THEN** it defines `build_command: python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py build --project .`
 - **THEN** it defines `verify_command: python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project .`
 - **THEN** those commands act as the project-level（项目级） guard（守卫） compatibility shim（兼容层） for the committed build-and-verify（构建与验证） runner（运行器） under `plugins/build-and-verify/`
-
 ### Requirement: Repository workflows avoid deprecated Node runtime references
 The repository's active GitHub workflows MUST avoid Node.js 20 action/runtime references when a current replacement is available.
 
@@ -109,7 +107,6 @@ The repository's active GitHub workflows MUST avoid Node.js 20 action/runtime re
 #### Scenario: CodeQL action stays on current available major
 - **WHEN** `.github/workflows/codeql.yml` is inspected
 - **THEN** `github/codeql-action/init` and `github/codeql-action/analyze` MAY remain on `@v4` while no newer major is available
-
 ### Requirement: Plugin manifest version tests use manifest source of truth
 Repository-owned local plugin package tests MUST NOT maintain a duplicate hard-coded plugin version source when validating dual Codex（代码助手） and Claude（代码助手） manifest（清单） files.
 
@@ -118,7 +115,6 @@ Repository-owned local plugin package tests MUST NOT maintain a duplicate hard-c
 - **THEN** the test MUST read version（版本） values from the manifest（清单） files
 - **THEN** the test MUST assert the two manifest（清单） versions are equal
 - **THEN** the test MUST NOT require a second hard-coded plugin version constant to be updated during release version bump（版本提升）
-
 ### Requirement: Repository tests enforce runtime boundary
 Repository-owned tests MUST enforce a boundary between ordinary tests and explicit E2E（端到端测试） coverage across the whole `tests/` tree.
 
@@ -148,7 +144,6 @@ The boundary MUST apply to plugin test families for Build and Verify（构建与
 - **WHEN** repository tests scan plugin-focused tests for Build and Verify（构建与验证）, PR Flow（拉取请求流程）, Release Flow（发布流程）, Cross Agent Review（跨代理审查）, or Agent Guard（代理守卫）
 - **THEN** ordinary branch behavior in those plugin tests MUST use in-process（进程内） or fake runner（假执行器） execution
 - **THEN** any real subprocess（子进程）, CLI（命令行）, temporary git（版本控制）, or broad cache（缓存） behavior in those plugin tests MUST be explicitly allowlisted by test function identity（测试函数身份） with a distinct E2E（端到端测试） reason
-
 ### Requirement: Repository checks enforce recoverable stop action contract
 Repository-owned checks（仓库检查） MUST guard the recoverable stop-state contract for local plugin scripts.
 
@@ -159,7 +154,6 @@ Repository-owned checks（仓库检查） MUST guard the recoverable stop-state 
 #### Scenario: Known recoverable reasons do not become generic exceptions
 - **WHEN** repository tests cover known recoverable reasons（原因） such as GitHub authentication, transient PR view failure, pending checks, ruleset blocking, and invalid user input
 - **THEN** those reasons（原因） MUST NOT be reported only as generic `EXCEPTION_REQUIRED`（需要人工处理）
-
 ### Requirement: Repository tests guard plugin version source of truth
 Repository-owned tests MUST prevent duplicate real plugin version facts while allowing normal release intermediate states.
 
@@ -178,4 +172,3 @@ Repository-owned tests MUST prevent duplicate real plugin version facts while al
 - **WHEN** build-and-verify（构建与验证）runtime（运行时） version（版本） temporarily differs from the build-and-verify plugin manifest（插件清单） during a release preparation state
 - **THEN** ordinary repository tests MUST NOT fail solely because of that mismatch
 - **THEN** release readiness MUST be checked by the Release Flow preflight（发布预检） runtime（运行时） synchronization rule
-

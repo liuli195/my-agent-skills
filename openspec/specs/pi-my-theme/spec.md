@@ -1,41 +1,45 @@
-# pi-my-theme 完整目标规格
+# Pi My Theme
 
-## 目标
+## Purpose
 
-仓库提供名为 `pi-my-theme` 的本地 Pi（编码代理）主题扩展，并由同一个扩展公开两套主题。
+本 capability（能力）定义 `pi-my-theme` 本地 Pi（编码代理）主题扩展提供的两套主题及其用户可见背景色行为。
 
-## 扩展身份与加载
+## Requirements
 
-- 扩展目录必须为 `plugins/pi-my-theme`。
-- `package.json` 的包名必须为 `pi-my-theme`。
-- 扩展必须继续使用 Pi（编码代理）原生主题目录加载方式公开 `themes` 目录内的所有主题。
-- Pi（编码代理）用户配置的本地包路径必须指向 `D:\My Project\my-agent-skills\plugins\pi-my-theme`。
+### Requirement: Pi My Theme 扩展身份
 
-## 主题
+系统 MUST 以 `pi-my-theme` 名称加载本地主题扩展，并通过 Pi（编码代理）原生主题加载方式公开扩展中的所有主题。
 
-### blue-nobkgd
+#### Scenario: Pi 加载主题扩展
 
-- 名称必须为 `blue-nobkgd`。
-- 配置以当前 `blue-mocha` 为基准。
-- `userMessageBg`、`toolPendingBg`、`toolSuccessBg`、`toolErrorBg` 必须为空字符串。
-- `customMessageBg` 必须保留 `surface0`；上下文压缩摘要、分支摘要、技能调用和默认自定义消息继续显示背景。
-- `selectedBg` 必须保留 `surface0`，用于菜单和选中项高亮，不视为消息块背景。
-- 其他颜色保持当前值。
+- **WHEN** Pi（编码代理）从用户配置的本地扩展路径加载 `pi-my-theme`
+- **THEN** 可用主题列表包含该扩展公开的 `blue-nobkgd` 和 `blue-moch-new`
+### Requirement: 无消息块背景主题
 
-### blue-moch-new
+`blue-nobkgd` 主题 MUST 不显示用户消息及工具等待、成功和失败消息块背景，同时保留自定义消息与选中项背景。
 
-- 名称必须严格为用户指定的 `blue-moch-new`。
-- 配置必须与提交 `abb118b` 的父提交中的原始 `blue-mocha` 相同，仅名称不同。
-- `userMessageBg`、`toolPendingBg`、`toolSuccessBg`、`toolErrorBg` 必须为 `mantle`。
+#### Scenario: 显示普通消息和工具状态
 
-## 用户配置
+- **WHEN** 用户启用 `blue-nobkgd` 并显示用户消息或工具等待、成功、失败状态
+- **THEN** 对应消息块不显示背景色
 
-- 当前主题必须从更名后不存在的 `blue-mocha` 切换为 `blue-nobkgd`，保持当前无用户消息和工具背景色的显示效果。
-- 除扩展路径和当前主题外，不改变用户配置。
+#### Scenario: 显示自定义消息和选中项
 
-## 验收
+- **WHEN** 用户启用 `blue-nobkgd` 并显示上下文压缩摘要、分支摘要、技能调用、默认自定义消息或菜单选中项
+- **THEN** 自定义消息和选中项继续使用 `surface0` 背景
+### Requirement: 原始消息块背景主题
 
-1. 扩展路径、包名和用户配置路径均使用 `pi-my-theme`。
-2. 两份主题文件可解析，名称分别为 `blue-nobkgd` 与 `blue-moch-new`。
-3. 两套主题仅在名称及指定背景色上存在预期差异。
-4. 用户配置引用存在的扩展路径和主题名。
+`blue-moch-new` 主题 MUST 保留原始 `blue-mocha` 的配色，并为用户消息及工具等待、成功和失败消息块使用 `mantle` 背景。
+
+#### Scenario: 显示普通消息和工具状态
+
+- **WHEN** 用户启用 `blue-moch-new` 并显示用户消息或工具等待、成功、失败状态
+- **THEN** 对应消息块使用 `mantle` 背景
+### Requirement: 当前主题配置有效
+
+用户配置 MUST 引用存在的 `pi-my-theme` 扩展路径和 `blue-nobkgd` 主题，不得继续引用已更名的 `blue-mocha`。
+
+#### Scenario: Pi 启动并读取用户配置
+
+- **WHEN** Pi（编码代理）读取当前扩展路径和主题配置
+- **THEN** `pi-my-theme` 能够加载，且当前主题解析为 `blue-nobkgd`

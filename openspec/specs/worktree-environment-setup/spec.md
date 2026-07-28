@@ -1,8 +1,11 @@
 # worktree-environment-setup Specification
 
 ## Purpose
+
 TBD - created by archiving change configure-build-and-verify-init-script. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: 工作树环境初始化入口
 系统 MUST 提供 `scripts/setup-worktree.ps1`（工作树初始化脚本），用于为本仓库工作树准备本地 Python（Python 语言）开发环境。
 
@@ -15,7 +18,6 @@ TBD - created by archiving change configure-build-and-verify-init-script. Update
 - **WHEN** 开发者运行脚本且仓库 `.venv\Scripts\python.exe`（本地虚拟环境解释器）已存在
 - **THEN** 脚本 MUST 不重建或删除该环境
 - **THEN** 脚本 MUST 使用该本地解释器升级 pip（包安装工具）并安装 `requirements-dev.txt`（开发依赖清单）
-
 ### Requirement: 初始化失败可见且不扩展职责
 脚本 MUST 保留失败命令的非零退出码，且只能执行环境创建与依赖安装。
 
