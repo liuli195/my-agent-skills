@@ -1,8 +1,8 @@
-# Triage Labels
+# 问题分流标签
 
-The skills use five canonical triage roles. This file maps those roles to the labels used in this repository's issue tracker.
+技能使用五种标准问题分流角色。对于本地 Markdown 问题，这些值记录为问题状态。
 
-| Canonical role | Tracker label |
+| 标准角色 | 本地状态 |
 | --- | --- |
 | `needs-triage` | `needs-triage` |
 | `needs-info` | `needs-info` |
@@ -10,4 +10,4 @@ The skills use five canonical triage roles. This file maps those roles to the la
 | `ready-for-human` | `ready-for-human` |
 | `wontfix` | `wontfix` |
 
-When a skill mentions a canonical triage role, use the corresponding tracker label from this table.
+当技能提到标准问题分流角色时，使用本表对应的本地状态。

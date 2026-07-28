@@ -1,33 +1,33 @@
-# Domain Docs
+# 领域文档
 
-How the engineering skills should consume this repo's domain documentation when exploring the codebase.
+工程技能在调查代码库时，应按以下规则使用本仓库的领域文档。
 
-## Before exploring, read these
+## 调查前阅读
 
-- **`CONTEXT.md`** at the repo root.
-- **`docs/comet/specs/`** — read specifications that touch the area you're about to work in.
+- 仓库根目录的 `CONTEXT.md`
+- `openspec/specs/` 中与当前工作相关的规格
 
-If any of these files don't exist, **proceed silently**. Don't flag their absence or suggest creating them upfront. Create domain documentation only when terms or specifications actually get resolved.
+如果这些文件不存在，直接继续，不要报告缺失，也不要预先建议创建。只有在领域术语或规格确实得到确认后，才创建领域文档。
 
-## File structure
+## 文件结构
 
-This repository uses a single-context layout:
+本仓库采用 single-context（单上下文）布局：
 
-```
+```text
 /
 ├── CONTEXT.md
-├── docs/comet/specs/
+├── openspec/specs/
 ├── plugins/
 ├── scripts/
 └── tests/
 ```
 
-## Use the glossary's vocabulary
+## 使用词汇表中的术语
 
-When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, or a test name), use the term as defined in `CONTEXT.md`. Don't drift to synonyms the glossary explicitly avoids.
+当输出需要命名领域概念时，例如问题标题、重构建议、假设或测试名称，应使用 `CONTEXT.md` 中定义的术语，不要改用词汇表明确排除的同义词。
 
-If the concept you need isn't in the glossary yet, either reconsider whether you're inventing language the project doesn't use or note a real gap for `/domain-modeling`.
+如果所需概念尚未出现在词汇表中，应先确认是否正在创造仓库并未使用的新术语；若确实存在缺口，则交由 `/domain-modeling` 处理。
 
-## Flag specification conflicts
+## 标明规格冲突
 
-If your output contradicts an existing specification, surface it explicitly rather than silently overriding it.
+如果输出与现有规格冲突，必须明确指出，不得静默覆盖。
