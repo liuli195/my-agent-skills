@@ -426,6 +426,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_build_and_verify_plugin.py::test_build_and_verify_user_level_skill_path_runs_verify_without_git': (
         'covers user-level skill path fast-verify entrypoint without git; function=test_build_and_verify_user_level_skill_path_runs_verify_without_git'
     ),
+    'tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_directory_hash_uses_git_visible_files': (
+        'covers packaged cache behavior against tracked, visible untracked, and ignored files in a real git repository; function=test_build_and_verify_runner_directory_hash_uses_git_visible_files'
+    ),
     'tests/test_build_and_verify_plugin.py::test_copied_repository_runtime_can_update_itself': (
         'covers copied repository runtime update-runtime entrypoint; function=test_copied_repository_runtime_can_update_itself'
     ),
@@ -573,6 +576,7 @@ def test_build_and_verify_keeps_focused_real_entrypoint_coverage() -> None:
         "tests/test_build_and_verify_plugin.py::test_copied_runtime_full_performance_report_e2e_temp_target_repo",
         "tests/test_build_and_verify_plugin.py::test_copied_repository_runtime_can_initialize_another_project",
         "tests/test_build_and_verify_plugin.py::test_build_and_verify_user_level_skill_path_runs_verify_without_git",
+        "tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_directory_hash_uses_git_visible_files",
         "tests/test_build_and_verify_plugin.py::test_copied_repository_runtime_can_update_itself",
     ]
     assert init_entries == [
