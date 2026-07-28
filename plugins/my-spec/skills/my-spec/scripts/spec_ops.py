@@ -59,7 +59,9 @@ def _spec_files(root: Path) -> list[Path]:
     return files
 
 
-def _requirement_blocks(lines: list[str], *, allow_empty_body: bool) -> OrderedDict[str, str]:
+def _requirement_blocks(
+    lines: list[str], *, allow_empty_body: bool, merge_identical_duplicates: bool = False
+) -> OrderedDict[str, str]:
     starts = [index for index, line in enumerate(lines) if REQUIREMENT.fullmatch(line)]
     stray = [line for line in lines if line.startswith("### ") and not REQUIREMENT.fullmatch(line)]
     if stray:
@@ -68,9 +70,11 @@ def _requirement_blocks(lines: list[str], *, allow_empty_body: bool) -> OrderedD
     for position, start in enumerate(starts):
         end = starts[position + 1] if position + 1 < len(starts) else len(lines)
         title = REQUIREMENT.fullmatch(lines[start]).group(1)  # type: ignore[union-attr]
-        if title in result:
-            raise SpecError(f"duplicate_requirement: {title}")
         block = "\n".join(lines[start:end]).strip() + "\n"
+        if title in result:
+            if merge_identical_duplicates and result[title] == block:
+                continue
+            raise SpecError(f"duplicate_requirement: {title}")
         if not allow_empty_body:
             _validate_requirement(title, block)
         result[title] = block
@@ -96,7 +100,7 @@ def _validate_requirement(title: str, block: str) -> None:
             raise SpecError(f"missing_then: {title}: {lines[start]}")
 
 
-def _parse_main(path: Path) -> MainSpec:
+def _parse_main(path: Path, *, merge_identical_duplicates: bool = False) -> MainSpec:
     lines = _text(path).splitlines()
     if not lines or not re.fullmatch(r"# \S.*", lines[0]):
         raise SpecError(f"missing_capability_heading: {path}")
@@ -112,21 +116,29 @@ def _parse_main(path: Path) -> MainSpec:
     purpose = "\n".join(lines[purpose_index + 1 : requirements_index]).strip()
     if not purpose:
         raise SpecError(f"empty_purpose: {path}")
-    requirements = _requirement_blocks(lines[requirements_index + 1 :], allow_empty_body=False)
+    requirements = _requirement_blocks(
+        lines[requirements_index + 1 :],
+        allow_empty_body=False,
+        merge_identical_duplicates=merge_identical_duplicates,
+    )
     return MainSpec(lines[0][2:].strip(), purpose, requirements)
 
 
-def _load_main(root: Path) -> OrderedDict[str, MainSpec]:
+def _load_main(root: Path, *, merge_identical_duplicates: bool = False) -> OrderedDict[str, MainSpec]:
     specs: OrderedDict[str, MainSpec] = OrderedDict()
-    titles: dict[str, Path] = {}
+    titles: dict[str, tuple[Path, str]] = {}
     for path in _spec_files(root):
         capability = path.parent.name
-        spec = _parse_main(path)
+        spec = _parse_main(path, merge_identical_duplicates=merge_identical_duplicates)
         specs[capability] = spec
-        for title in spec.requirements:
+        for title, block in list(spec.requirements.items()):
             if title in titles:
-                raise SpecError(f"duplicate_requirement_global: {title}: {titles[title]}: {path}")
-            titles[title] = path
+                previous_path, previous_block = titles[title]
+                if merge_identical_duplicates and previous_block == block:
+                    del spec.requirements[title]
+                    continue
+                raise SpecError(f"duplicate_requirement_global: {title}: {previous_path}: {path}")
+            titles[title] = (path, block)
     return specs
 
 
@@ -180,24 +192,30 @@ def validate_main(root: Path) -> None:
 
 
 def validate_delta(delta_root: Path, specs_root: Path) -> None:
-    specs = _load_main(specs_root)
+    specs = _load_main(specs_root, merge_identical_duplicates=True)
     deltas = _load_delta(delta_root)
     locations = {title: capability for capability, spec in specs.items() for title in spec.requirements}
+    contents = {title: block for spec in specs.values() for title, block in spec.requirements.items()}
     touched: set[str] = set()
 
     for delta in deltas:
         for old, new in delta.operations["RENAMED"]:  # type: ignore[union-attr]
             if not old or not new:
                 raise SpecError("empty_rename_title")
-            if old not in locations:
-                raise SpecError(f"rename_source_missing: {old}")
-            if new in locations:
-                raise SpecError(f"rename_target_exists: {new}")
             if old in touched or new in touched:
                 raise SpecError(f"requirement_used_by_multiple_operations: {old}")
             touched.update((old, new))
-            locations[new] = delta.capability
-            del locations[old]
+            if old in locations and new not in locations:
+                locations[new] = delta.capability
+                contents[new] = _replace_heading(contents[old], new)
+                del locations[old]
+                del contents[old]
+            elif old not in locations and locations.get(new) == delta.capability:
+                continue
+            elif new in locations:
+                raise SpecError(f"rename_target_exists: {new}")
+            else:
+                raise SpecError(f"rename_source_missing: {old}")
 
     for operation in ("REMOVED", "MODIFIED", "ADDED"):
         for delta in deltas:
@@ -207,16 +225,21 @@ def validate_delta(delta_root: Path, specs_root: Path) -> None:
                 if title in touched:
                     raise SpecError(f"requirement_used_by_multiple_operations: {title}")
                 touched.add(title)
-                if operation in {"REMOVED", "MODIFIED"} and title not in locations:
-                    raise SpecError(f"{operation.lower()}_source_missing: {title}")
-                if operation == "ADDED" and title in locations:
-                    raise SpecError(f"added_requirement_exists: {title}")
-                if operation in {"ADDED", "MODIFIED"}:
-                    _validate_requirement(title, block)
                 if operation == "REMOVED":
-                    del locations[title]
-                else:
+                    locations.pop(title, None)
+                    contents.pop(title, None)
+                    continue
+                _validate_requirement(title, block)
+                if operation == "MODIFIED":
+                    if title not in locations:
+                        raise SpecError(f"modified_source_missing: {title}")
                     locations[title] = delta.capability
+                    contents[title] = block
+                elif title not in locations:
+                    locations[title] = delta.capability
+                    contents[title] = block
+                elif locations[title] != delta.capability or contents[title] != block:
+                    raise SpecError(f"added_requirement_exists: {title}")
 
     existing = set(specs)
     for delta in deltas:
@@ -263,23 +286,34 @@ def _write_preview(specs: OrderedDict[str, MainSpec], output_root: Path) -> None
 
 def _merged_specs(specs_root: Path, delta_root: Path) -> OrderedDict[str, MainSpec]:
     validate_delta(delta_root, specs_root)
-    specs = _load_main(specs_root)
+    specs = _load_main(specs_root, merge_identical_duplicates=True)
     deltas = _load_delta(delta_root)
+    locations = {title: capability for capability, spec in specs.items() for title in spec.requirements}
     for delta in deltas:
         for old, new in delta.operations["RENAMED"]:  # type: ignore[union-attr]
+            if old not in locations:
+                continue
             source_capability, block = _find(specs, old)
             del specs[source_capability].requirements[old]
             _target(specs, delta).requirements[new] = _replace_heading(block, new)
+            del locations[old]
+            locations[new] = delta.capability
     for operation in ("REMOVED", "MODIFIED", "ADDED"):
         for delta in deltas:
             blocks = delta.operations[operation]
             assert isinstance(blocks, OrderedDict)
             for title, block in blocks.items():
-                if operation != "ADDED":
-                    source_capability, _old_block = _find(specs, title)
-                    del specs[source_capability].requirements[title]
-                if operation != "REMOVED":
-                    _target(specs, delta).requirements[title] = block
+                if operation == "REMOVED":
+                    if title in locations:
+                        del specs[locations.pop(title)].requirements[title]
+                    continue
+                if title in locations:
+                    source = specs[locations[title]].requirements[title]
+                    if operation == "ADDED" or (locations[title] == delta.capability and source == block):
+                        continue
+                    del specs[locations[title]].requirements[title]
+                _target(specs, delta).requirements[title] = block
+                locations[title] = delta.capability
     return specs
 
 

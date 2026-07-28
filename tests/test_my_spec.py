@@ -51,6 +51,40 @@ def write(path: Path, text: str) -> None:
     path.write_text(text.rstrip() + "\n", encoding="utf-8")
 
 
+def install_spec_ops(tmp_path: Path, entry: str) -> Path:
+    agents_home = tmp_path / "agents"
+    installed = run_python(INSTALL, "--agents-home", agents_home, "--claude-home", tmp_path / "claude")
+    assert installed.returncode == 0, installed.stderr
+    skill = agents_home / "skills" / "my-spec"
+    assert f"/{entry}" in (skill / "SKILL.md").read_text(encoding="utf-8")
+    reference = {"spec-add": "add-document.md", "spec-review": "review.md", "spec-audit": "audit.md"}[entry]
+    assert (skill / "references" / reference).is_file()
+    return skill / "scripts" / "spec_ops.py"
+
+
+def run_confirmed_workflow(
+    cli: Path,
+    specs: Path,
+    delta: Path,
+    preview: Path,
+    *expected_diff: str,
+) -> str:
+    validated = run_python(cli, "validate-delta", delta, specs)
+    assert validated.returncode == 0, validated.stderr
+    generated = run_python(cli, "apply-delta", specs, delta, preview)
+    assert generated.returncode == 0, generated.stderr
+    assert run_python(cli, "validate-main", preview).returncode == 0
+    diff = run_python(cli, "diff", specs, preview)
+    assert diff.returncode == 0, diff.stderr
+    for fragment in expected_diff:
+        assert fragment in diff.stdout
+    applied = run_python(cli, "apply-delta", specs, delta, specs)
+    assert applied.returncode == 0, applied.stderr
+    assert run_python(cli, "validate-main", specs).returncode == 0
+    assert run_python(cli, "diff", specs, preview).stdout == ""
+    return diff.stdout
+
+
 def test_spec_ops_cli_validates_applies_all_delta_operations_and_diffs(tmp_path: Path) -> None:
     specs = tmp_path / "specs"
     delta = tmp_path / "delta"
@@ -125,6 +159,15 @@ TO: 密码登录
     assert "旧导出" in diff.stdout
     assert "注销" in diff.stdout
 
+    first_apply = run_python(SPEC_OPS, "apply-delta", specs, delta, specs)
+    assert first_apply.returncode == 0, first_apply.stderr
+    before_repeat = (specs / "accounts" / "spec.md").read_bytes()
+    repeated_validation = run_python(SPEC_OPS, "validate-delta", delta, specs)
+    assert repeated_validation.returncode == 0, repeated_validation.stderr
+    repeated_apply = run_python(SPEC_OPS, "apply-delta", specs, delta, specs)
+    assert repeated_apply.returncode == 0, repeated_apply.stderr
+    assert (specs / "accounts" / "spec.md").read_bytes() == before_repeat
+
 
 def test_spec_ops_cli_rejects_invalid_specs_and_delta_references(tmp_path: Path) -> None:
     specs = tmp_path / "specs"
@@ -142,14 +185,21 @@ def test_spec_ops_cli_rejects_invalid_specs_and_delta_references(tmp_path: Path)
     write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
     write(
         delta / "accounts" / "spec.md",
-        """## REMOVED Requirements
+        """## MODIFIED Requirements
 
 ### Requirement: 不存在的需求
+
+系统 MUST 返回结果。
+
+#### Scenario: 正常流程
+
+- **WHEN** 用户执行操作
+- **THEN** 系统返回结果
 """,
     )
     invalid_delta = run_python(SPEC_OPS, "validate-delta", delta, specs)
     assert invalid_delta.returncode != 0
-    assert "removed_source_missing: 不存在的需求" in invalid_delta.stderr
+    assert "modified_source_missing: 不存在的需求" in invalid_delta.stderr
     assert "Traceback" not in invalid_delta.stderr
 
 
@@ -184,6 +234,32 @@ def test_spec_ops_cli_initializes_a_new_capability_from_an_empty_spec_library(tm
     assert applied.returncode == 0, applied.stderr
     assert run_python(SPEC_OPS, "validate-main", preview).returncode == 0
     assert "### Requirement: 接收通知" in (preview / "notifications" / "spec.md").read_text(encoding="utf-8")
+
+
+def test_spec_ops_preview_auto_merges_identical_duplicate_requirements_but_main_validation_stays_strict(
+    tmp_path: Path,
+) -> None:
+    specs = tmp_path / "specs"
+    delta = tmp_path / "delta"
+    preview = tmp_path / "preview"
+    duplicate = requirement("登录", "允许用户登录")
+    write(specs / "accounts" / "spec.md", main_spec("Accounts", duplicate))
+    write(specs / "sessions" / "spec.md", main_spec("Sessions", duplicate))
+    delta.mkdir()
+
+    strict = run_python(SPEC_OPS, "validate-main", specs)
+    assert strict.returncode != 0
+    assert "duplicate_requirement_global: 登录" in strict.stderr
+
+    merged = run_python(SPEC_OPS, "apply-delta", specs, delta, preview)
+    assert merged.returncode == 0, merged.stderr
+    assert run_python(SPEC_OPS, "validate-main", preview).returncode == 0
+    assert (preview / "accounts" / "spec.md").read_text(encoding="utf-8").count(
+        "### Requirement: 登录"
+    ) == 1
+    diff = run_python(SPEC_OPS, "diff", specs, preview)
+    assert diff.returncode == 0
+    assert "-### Requirement: 登录" in diff.stdout
 
 
 def test_skill_entry_routes_spec_add_review_and_audit_with_safe_boundaries() -> None:
@@ -241,6 +317,82 @@ def test_install_command_copies_shared_skill_links_claude_and_refuses_unknown_ta
     assert not (unsafe_agents / "skills" / "my-spec").exists()
 
 
+def test_installed_spec_add_deterministic_post_analysis_flow_previews_diffs_and_applies(
+    tmp_path: Path,
+) -> None:
+    cli = install_spec_ops(tmp_path, "spec-add")
+    specs = tmp_path / "add" / "specs"
+    delta = tmp_path / "add" / "delta"
+    preview = tmp_path / "add" / "preview"
+    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许用户登录")))
+    write(
+        delta / "accounts" / "spec.md",
+        """## ADDED Requirements
+
+### Requirement: 注销
+
+系统 MUST 允许用户注销。
+
+#### Scenario: 主动注销
+
+- **WHEN** 用户选择注销
+- **THEN** 系统结束会话
+""",
+    )
+
+    run_confirmed_workflow(cli, specs, delta, preview, "+### Requirement: 注销")
+    assert "### Requirement: 注销" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
+
+
+def test_installed_spec_review_deterministic_duplicate_flow_previews_diffs_and_applies(
+    tmp_path: Path,
+) -> None:
+    cli = install_spec_ops(tmp_path, "spec-review")
+    specs = tmp_path / "review" / "specs"
+    delta = tmp_path / "review" / "delta"
+    preview = tmp_path / "review" / "preview"
+    duplicate = requirement("登录", "允许用户登录")
+    write(specs / "accounts" / "spec.md", main_spec("Accounts", duplicate, duplicate))
+    delta.mkdir(parents=True)
+
+    run_confirmed_workflow(cli, specs, delta, preview, "-### Requirement: 登录")
+    assert (specs / "accounts" / "spec.md").read_text(encoding="utf-8").count(
+        "### Requirement: 登录"
+    ) == 1
+
+
+def test_installed_spec_audit_deterministic_post_analysis_flow_previews_diffs_and_applies(
+    tmp_path: Path,
+) -> None:
+    cli = install_spec_ops(tmp_path, "spec-audit")
+    specs = tmp_path / "audit" / "missing-specs"
+    delta = tmp_path / "audit" / "delta"
+    preview = tmp_path / "audit" / "preview"
+    write(
+        delta / "notifications" / "spec.md",
+        """# Notifications
+
+## Purpose
+
+描述通知的外部行为。
+
+## ADDED Requirements
+
+### Requirement: 接收通知
+
+系统 MUST 向订阅用户发送通知。
+
+#### Scenario: 新消息
+
+- **WHEN** 新消息到达
+- **THEN** 系统发送通知
+""",
+    )
+
+    run_confirmed_workflow(cli, specs, delta, preview, "+### Requirement: 接收通知")
+    assert (specs / "notifications" / "spec.md").is_file()
+
+
 def test_my_spec_plugin_is_discoverable_by_claude_and_codex() -> None:
     for host in (".claude-plugin", ".codex-plugin"):
         manifest = json.loads((PLUGIN_ROOT / host / "plugin.json").read_text(encoding="utf-8"))
@@ -278,9 +430,9 @@ def test_apply_delta_can_atomically_replace_main_after_final_confirmation(tmp_pa
     assert not any(path.name.startswith(".my-spec-") for path in specs.parent.iterdir())
     assert run_python(SPEC_OPS, "validate-main", specs).returncode == 0
 
-    empty_delta = tmp_path / "empty-delta"
-    empty_delta.mkdir()
     before = (specs / "accounts" / "spec.md").read_bytes()
-    repeated = run_python(SPEC_OPS, "apply-delta", specs, empty_delta, specs)
+    repeated_validation = run_python(SPEC_OPS, "validate-delta", delta, specs)
+    assert repeated_validation.returncode == 0, repeated_validation.stderr
+    repeated = run_python(SPEC_OPS, "apply-delta", specs, delta, specs)
     assert repeated.returncode == 0, repeated.stderr
     assert (specs / "accounts" / "spec.md").read_bytes() == before
