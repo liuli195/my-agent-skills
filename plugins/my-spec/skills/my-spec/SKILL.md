@@ -1,6 +1,6 @@
 ---
 name: my-spec
-description: 管理 OpenSpec（开放规格）。当用户调用 /spec-add、/spec-review 或 /spec-audit，或要求从文档新增规格、审查规格库内部质量、对照仓库审计规格时使用。
+description: 统一管理 OpenSpec（开放规格）。当用户调用统一入口，或请求同时涉及新增、内部审查和仓库审计而尚未选择专用入口时使用。
 ---
 
 # my-spec
@@ -9,9 +9,11 @@ description: 管理 OpenSpec（开放规格）。当用户调用 /spec-add、/sp
 
 ## 入口
 
-- `/spec-add`：读取 [references/add-document.md](references/add-document.md)，只处理用户指定文档。
-- `/spec-review`：读取 [references/review.md](references/review.md)，只审查规格库内部。
-- `/spec-audit`：读取 [references/audit.md](references/audit.md)，审计 Git（版本管理）可见的整个仓库；规格库不存在时按空库初始化。
+- `my-spec-add`：读取 [references/add-document.md](references/add-document.md)，只处理用户指定文档。
+- `my-spec-review`：读取 [references/review.md](references/review.md)，只审查规格库内部。
+- `my-spec-audit`：读取 [references/audit.md](references/audit.md)，审计 Git（版本管理）可见的整个仓库；规格库不存在时按空库初始化。
+
+用户未指定入口时，根据请求范围选择且只执行一个入口；范围不明确时先询问。
 
 修改前同时读取 [references/openspec-rules.md](references/openspec-rules.md)。创建内容时复用 `assets/` 模板。所有确定性校验、预览、完整差异和应用都调用 `scripts/spec_ops.py`。
 

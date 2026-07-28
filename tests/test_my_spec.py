@@ -9,7 +9,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "my-spec"
 SPEC_OPS = PLUGIN_ROOT / "skills" / "my-spec" / "scripts" / "spec_ops.py"
-INSTALL = PLUGIN_ROOT / "scripts" / "install.py"
+SKILL_NAMES = ("my-spec", "my-spec-add", "my-spec-review", "my-spec-audit")
 
 
 def run_python(script: Path, *args: object) -> subprocess.CompletedProcess[str]:
@@ -49,17 +49,6 @@ def main_spec(capability: str, *requirements: str) -> str:
 def write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text.rstrip() + "\n", encoding="utf-8")
-
-
-def install_spec_ops(tmp_path: Path, entry: str) -> Path:
-    agents_home = tmp_path / "agents"
-    installed = run_python(INSTALL, "--agents-home", agents_home, "--claude-home", tmp_path / "claude")
-    assert installed.returncode == 0, installed.stderr
-    skill = agents_home / "skills" / "my-spec"
-    assert f"/{entry}" in (skill / "SKILL.md").read_text(encoding="utf-8")
-    reference = {"spec-add": "add-document.md", "spec-review": "review.md", "spec-audit": "audit.md"}[entry]
-    assert (skill / "references" / reference).is_file()
-    return skill / "scripts" / "spec_ops.py"
 
 
 def run_confirmed_workflow(
@@ -262,12 +251,20 @@ def test_spec_ops_preview_auto_merges_identical_duplicate_requirements_but_main_
     assert "-### Requirement: 登录" in diff.stdout
 
 
-def test_skill_entry_routes_spec_add_review_and_audit_with_safe_boundaries() -> None:
+def test_skill_entries_route_add_review_and_audit_with_safe_boundaries() -> None:
     skill = (PLUGIN_ROOT / "skills" / "my-spec" / "SKILL.md").read_text(encoding="utf-8")
     assert "name: my-spec" in skill
-    assert "/spec-add" in skill and "references/add-document.md" in skill
-    assert "/spec-review" in skill and "references/review.md" in skill
-    assert "/spec-audit" in skill and "references/audit.md" in skill
+    assert "my-spec-add" in skill and "references/add-document.md" in skill
+    assert "my-spec-review" in skill and "references/review.md" in skill
+    assert "my-spec-audit" in skill and "references/audit.md" in skill
+
+    for name in SKILL_NAMES:
+        entry = (PLUGIN_ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+        assert f"name: {name}" in entry
+    for name in SKILL_NAMES[1:]:
+        entry = (PLUGIN_ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+        assert "../my-spec/SKILL.md" in entry
+        assert "../my-spec/scripts/spec_ops.py" in entry
 
     add = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "add-document.md").read_text(encoding="utf-8")
     review = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "review.md").read_text(encoding="utf-8")
@@ -283,44 +280,20 @@ def test_skill_entry_routes_spec_add_review_and_audit_with_safe_boundaries() -> 
     assert "只读取用户指定的文档" in add
 
 
-def test_install_command_copies_shared_skill_links_claude_and_refuses_unknown_targets(tmp_path: Path) -> None:
-    agents_home = tmp_path / "agents"
-    claude_home = tmp_path / "claude"
+def test_plugin_uses_default_skill_paths_without_legacy_installer() -> None:
+    assert not (PLUGIN_ROOT / "scripts" / "install.py").exists()
+    assert not (PLUGIN_ROOT / "scripts").exists()
 
-    first = run_python(INSTALL, "--agents-home", agents_home, "--claude-home", claude_home)
-    assert first.returncode == 0, first.stderr
-    installed = agents_home / "skills" / "my-spec"
-    claude_skill = claude_home / "skills" / "my-spec"
-    assert installed.is_dir() and not installed.is_symlink()
-    assert (installed / "SKILL.md").is_file()
-    assert (installed / ".my-spec-install.json").is_file()
-    installed_cli = installed / "scripts" / "spec_ops.py"
-    assert run_python(installed_cli, "validate-main", tmp_path / "empty-specs").returncode == 0
-    assert claude_skill.resolve() == installed.resolve()
-    assert claude_skill.is_symlink() or (hasattr(claude_skill, "is_junction") and claude_skill.is_junction())
-
-    (installed / "SKILL.md").write_text("stale\n", encoding="utf-8")
-    repeated = run_python(INSTALL, "--agents-home", agents_home, "--claude-home", claude_home)
-    assert repeated.returncode == 0, repeated.stderr
-    assert (installed / "SKILL.md").read_text(encoding="utf-8") != "stale\n"
-    assert claude_skill.resolve() == installed.resolve()
-
-    unsafe_agents = tmp_path / "unsafe-agents"
-    unsafe_claude = tmp_path / "unsafe-claude"
-    unknown = unsafe_claude / "skills" / "my-spec"
-    unknown.mkdir(parents=True)
-    (unknown / "user.txt").write_text("keep\n", encoding="utf-8")
-    refused = run_python(INSTALL, "--agents-home", unsafe_agents, "--claude-home", unsafe_claude)
-    assert refused.returncode != 0
-    assert "claude_target_not_expected_link" in refused.stderr
-    assert (unknown / "user.txt").read_text(encoding="utf-8") == "keep\n"
-    assert not (unsafe_agents / "skills" / "my-spec").exists()
+    package = json.loads((PLUGIN_ROOT / "package.json").read_text(encoding="utf-8"))
+    assert package["name"] == "pi-my-spec"
+    assert package["pi"]["extensions"] == ["./extensions/pi-my-spec.ts"]
+    assert package["pi"]["skills"] == ["./skills"]
 
 
-def test_installed_spec_add_deterministic_post_analysis_flow_previews_diffs_and_applies(
+def test_spec_add_deterministic_post_analysis_flow_previews_diffs_and_applies(
     tmp_path: Path,
 ) -> None:
-    cli = install_spec_ops(tmp_path, "spec-add")
+    cli = SPEC_OPS
     specs = tmp_path / "add" / "specs"
     delta = tmp_path / "add" / "delta"
     preview = tmp_path / "add" / "preview"
@@ -344,10 +317,10 @@ def test_installed_spec_add_deterministic_post_analysis_flow_previews_diffs_and_
     assert "### Requirement: 注销" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
 
 
-def test_installed_spec_review_deterministic_duplicate_flow_previews_diffs_and_applies(
+def test_spec_review_deterministic_duplicate_flow_previews_diffs_and_applies(
     tmp_path: Path,
 ) -> None:
-    cli = install_spec_ops(tmp_path, "spec-review")
+    cli = SPEC_OPS
     specs = tmp_path / "review" / "specs"
     delta = tmp_path / "review" / "delta"
     preview = tmp_path / "review" / "preview"
@@ -361,10 +334,10 @@ def test_installed_spec_review_deterministic_duplicate_flow_previews_diffs_and_a
     ) == 1
 
 
-def test_installed_spec_audit_deterministic_post_analysis_flow_previews_diffs_and_applies(
+def test_spec_audit_deterministic_post_analysis_flow_previews_diffs_and_applies(
     tmp_path: Path,
 ) -> None:
-    cli = install_spec_ops(tmp_path, "spec-audit")
+    cli = SPEC_OPS
     specs = tmp_path / "audit" / "missing-specs"
     delta = tmp_path / "audit" / "delta"
     preview = tmp_path / "audit" / "preview"
@@ -393,10 +366,19 @@ def test_installed_spec_audit_deterministic_post_analysis_flow_previews_diffs_an
     assert (specs / "notifications" / "spec.md").is_file()
 
 
-def test_my_spec_plugin_is_discoverable_by_claude_and_codex() -> None:
+def test_pi_extension_registers_four_default_commands_and_routes_to_skills() -> None:
+    source = (PLUGIN_ROOT / "extensions" / "pi-my-spec.ts").read_text(encoding="utf-8")
+    for name in SKILL_NAMES:
+        assert f'"{name}": "{name}"' in source
+    assert "pi.registerCommand(command" in source
+    assert "pi.sendUserMessage" in source
+
+
+def test_my_spec_plugin_is_discoverable_by_pi_claude_and_codex() -> None:
     for host in (".claude-plugin", ".codex-plugin"):
         manifest = json.loads((PLUGIN_ROOT / host / "plugin.json").read_text(encoding="utf-8"))
         assert manifest["name"] == "my-spec"
+        assert manifest["version"] == "0.1.48"
         assert manifest["skills"] == "./skills"
 
     claude_marketplace = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))

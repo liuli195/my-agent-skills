@@ -1,4 +1,4 @@
-# /spec-add
+# my-spec-add
 
 只读取用户指定的文档和当前 `openspec/specs/`；不得扩展为全仓库扫描。
 

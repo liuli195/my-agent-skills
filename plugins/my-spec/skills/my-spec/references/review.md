@@ -1,6 +1,6 @@
-# /spec-review
+# my-spec-review
 
-只读取 `openspec/specs/`，不得读取仓库其他文件。该入口不与 `/spec-audit` 的全仓库范围重叠。
+只读取 `openspec/specs/`，不得读取仓库其他文件。该入口不与 `my-spec-audit` 的全仓库范围重叠。
 
 1. 获取共享运行锁并记录主规格指纹。
 2. 检查全局标题、正文、Scenario（场景）及能力间关系。
