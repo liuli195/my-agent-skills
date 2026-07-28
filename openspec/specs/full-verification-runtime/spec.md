@@ -1,8 +1,11 @@
 # full-verification-runtime Specification
 
 ## Purpose
+
 TBD - created by archiving change optimize-full-verification-runtime. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Full verification has a local runtime target
 Full repository verification SHALL（必须）complete in under 60 seconds on the local development machine while preserving the existing behavior coverage. The current full verification command for this repository SHALL（必须）be `python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full` unless a later OpenSpec（开放规格）change explicitly replaces it.
 
@@ -15,7 +18,6 @@ Full repository verification SHALL（必须）complete in under 60 seconds on th
 - **WHEN** full verification is optimized
 - **THEN** the verification report MUST include before and after timing evidence
 - **THEN** the evidence MUST identify the largest remaining contributors if the command is still close to the target
-
 ### Requirement: Test optimization preserves behavioral coverage
 The test suite SHALL（必须）reduce avoidable overhead without dropping local build contract（本地构建契约）, PR Flow（拉取请求流程）, Release Flow（发布流程）, Build and Verify（构建与验证）behavior coverage, or OpenSpec（开放规格）validation coverage.
 
@@ -37,7 +39,6 @@ The test suite SHALL（必须）reduce avoidable overhead without dropping local
 #### Scenario: No dependency is added just for speed without review
 - **WHEN** a speed improvement requires a new test dependency such as pytest-xdist（并行测试插件）
 - **THEN** the dependency MUST be explicitly evaluated in design or review notes before adoption
-
 ### Requirement: Optimization strategy applies across the repository
 The repository SHALL（必须）apply both the repo-native test optimization layer and the build-and-verify（构建与验证） parallel execution layer across the full configured verification suite where safe, rather than special-casing one slow test file.
 
@@ -59,7 +60,6 @@ The repository SHALL（必须）apply both the repo-native test optimization lay
 - **THEN** checks（检查项）without explicit `checkParallel` metadata（元数据）MUST default to serial execution（串行执行）
 - **THEN** checks（检查项）that need pytest-xdist（Pytest 并行插件）MUST declare `pytestXdistWorkers`（Pytest 工作进程数）
 - **THEN** full verification MUST NOT become a partial or marker-filtered（测试标记过滤）subset to meet the runtime target
-
 ### Requirement: Test-writing rules are captured as OpenSpec artifacts first
 Repository test-writing rules for this change SHALL（必须）be expressed through OpenSpec（规格流程）change artifacts before any separate rule-document location is chosen.
 
@@ -67,7 +67,6 @@ Repository test-writing rules for this change SHALL（必须）be expressed thro
 - **WHEN** test-writing rules are documented for this change
 - **THEN** files under `docs/rules/` MUST NOT be created or modified
 - **THEN** the rules MUST be represented in the OpenSpec（规格流程）change spec, design notes, tasks, or another explicitly confirmed location outside `docs/rules/`
-
 ### Requirement: Build-and-verify verification coverage remains
 Build-and-verify（构建与验证）tests SHALL（必须）preserve verify selection（验证选择）, cache behavior（缓存行为）, full mode（完整模式）, failure reporting（失败报告）, and serial fallback（串行兜底） behavior coverage.
 
@@ -75,7 +74,6 @@ Build-and-verify（构建与验证）tests SHALL（必须）preserve verify sele
 - **WHEN** build-and-verify（构建与验证）tests are optimized or renamed
 - **THEN** verify selection（验证选择）, cache behavior（缓存行为）, full mode（完整模式）, failure reporting（失败报告）, and serial fallback（串行兜底） behavior MUST remain covered
 - **THEN** full mode（完整模式） MUST NOT skip required checks（检查项） because of cache hits（缓存命中）
-
 ### Requirement: Parallel execution is coordinated by build-and-verify
 Parallel execution SHALL（必须）be coordinated by the build-and-verify（构建与验证）runner（运行器） across configured verification checks where safe.
 
@@ -97,4 +95,3 @@ Parallel execution SHALL（必须）be coordinated by the build-and-verify（构
 - **THEN** the runner（运行器） MUST run that pytest command with pytest-xdist（Pytest 并行插件） workers
 - **THEN** the runner（运行器） MUST treat missing pytest-xdist（Pytest 并行插件） as a failed check（检查项）
 - **THEN** `checkParallel`（检查项间并行） MUST NOT by itself imply pytest-xdist（Pytest 并行插件） usage
-

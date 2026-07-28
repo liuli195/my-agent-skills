@@ -1,3 +1,5 @@
+# Agent Guard Brief Injection
+
 ## Purpose
 
 本 capability（能力）定义 Session Focus（会话焦点）架构下 Guard Brief（守卫简报）和 Guard Injection（守卫注入）的基线：latest brief（最新简报）生命周期、pull-to-inject（读取触发注入）、焦点化路径、payload（载荷）结构、稳定 `brief_hash`、状态完成门禁、失败处理和 Runtime-owned（运行时拥有的）可注入内容。
@@ -14,7 +16,6 @@
 #### Scenario: 状态结果后刷新
 - **WHEN** state completion（状态完成）成功，或因必需 artifacts（产物）或 guard points（守卫点）缺失而失败
 - **THEN** Runtime（运行时）用当前状态、失败信息或下一步信息刷新 latest brief（最新简报）内容
-
 ### Requirement: 读取触发注入
 系统 MUST 在第一版基线中使用 pull-to-inject（读取触发注入）行为，即 agent（代理）显式读取当前 latest brief（最新简报），Runtime（运行时）记录 injection state（注入状态）。
 
@@ -25,7 +26,6 @@
 #### Scenario: 重复读取简报
 - **WHEN** agent（代理）为同一个 `source + session_id + profile_id + instance_id` 再次读取同一份 brief（简报）
 - **THEN** Runtime（运行时）返回 `already_injected`，不重复写入 injection record（注入记录）
-
 ### Requirement: 基于焦点的简报身份
 系统 MUST 使用 Session Focus Instance（会话焦点实例）识别 latest brief（最新简报）和 injection records（注入记录），使用 `profile_id + instance_id`，不使用 `subject_key_hash`。
 
@@ -36,7 +36,6 @@
 #### Scenario: 注入记录路径
 - **WHEN** 写入 injection record（注入记录）
 - **THEN** 它保存在 `.local/guard/injections/<source>/<session_id-hash>/<profile_id>/<instance_id>.json`
-
 ### Requirement: 简报载荷内容
 系统 MUST 在 latest brief payload（最新简报载荷）中包含足够结构化数据，让 agent（代理）理解当前状态、允许动作、禁止动作、缺失产物、最近拒绝原因、权限、转换条件、状态完成指令、审计位置和 brief hash（简报哈希）。
 
@@ -47,7 +46,6 @@
 #### Scenario: 终止状态载荷
 - **WHEN** 当前 instance（实例）处于 terminal state（终止状态）
 - **THEN** brief（简报）提示流程已完成和审计位置，不提示 agent（代理）再次提交 `state_completed` 事件
-
 ### Requirement: 简报哈希稳定性
 系统 MUST 根据影响业务含义的 brief（简报）字段计算 `brief_hash`，并且必须排除只和时间戳有关的变化。
 
@@ -58,7 +56,6 @@
 #### Scenario: 生成时间变化
 - **WHEN** 只有 `generated_at` 变化，业务字段没有变化
 - **THEN** 生成的 `brief_hash` 保持不变
-
 ### Requirement: 状态完成简报门禁
 系统 MUST 要求当前 `brief_hash` 已经通过 brief entrypoint（简报入口）读取后，才接受 `state_completed` transition（状态完成转换）。
 
@@ -69,7 +66,6 @@
 #### Scenario: 完成前已读取简报
 - **WHEN** 当前 `brief_hash` 已经为当前 session（会话）和 instance（实例）读取并记录
 - **THEN** Runtime（运行时）可以评估 state completion transition（状态完成转换）
-
 ### Requirement: 简报失败处理
 系统 MUST 在不存在有效且唯一的 Session Focus Instance（会话焦点实例）时清晰地让 brief read（简报读取）失败，并且不得为无效焦点状态写 injection records（注入记录）。
 
@@ -80,7 +76,6 @@
 #### Scenario: 多焦点或无效焦点
 - **WHEN** brief reading（简报读取）发现多个 focus bindings（焦点绑定）或一个无效 focus binding（焦点绑定）
 - **THEN** Runtime（运行时）返回 error（错误），审计焦点问题，并且不写 injection record（注入记录）
-
 ### Requirement: Runtime 拥有简报内容
 系统 MUST 确保 injectable brief content（可注入简报内容）来自 Runtime-generated latest brief files（运行时生成的最新简报文件），而不是手写文本或调用方提供的状态文本。
 

@@ -1,8 +1,11 @@
 # plugin-sync-runtime-sync Specification
 
 ## Purpose
+
 TBD - created by archiving change stabilize-version-runtime-sync. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Plugin Sync closes build-and-verify runtime synchronization
 Plugin Sync（插件同步） skill instructions（技能说明） MUST define how to detect and optionally update build-and-verify（构建与验证） runtime（运行时） snapshots for configured target repositories.
 
@@ -47,4 +50,3 @@ Plugin Sync（插件同步） skill instructions（技能说明） MUST define h
 - **AND** Git（版本管理） reports tracked changes under `.build-and-verify/runtime/`
 - **THEN** the instructions（说明） MUST require reporting that the repository should use PR Flow（拉取请求流程） for the change
 - **THEN** the instructions（说明） MUST forbid commit, push（推送）, or open PR（拉取请求）
-

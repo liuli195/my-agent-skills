@@ -1,8 +1,11 @@
 # test-framework-plugin Specification
 
 ## Purpose
+
 This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` to model the rename（改名） of an existing capability. Its shipped Plugin（插件） and Skill（技能） name is `build-and-verify`, which is the repository build（构建检查） and verify（验证） entry point.
+
 ## Requirements
+
 ### Requirement: Build and Verify plugin package supports Claude and Codex
 系统 MUST 提供轻量 `build-and-verify` Plugin（构建与验证插件），同一套能力 MUST 同时面向 Claude（Claude 版本）和 Codex（Codex 版本）。
 
@@ -22,7 +25,6 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **THEN** 插件包 MUST 提供 `build-and-verify-init` Skill（构建与验证初始化技能）作为对话式初始化向导入口
 - **THEN** `build-and-verify` Skill（技能） MUST 调用共享确定性脚本，而不是复制多套流程逻辑
 - **THEN** `build-and-verify-init` Skill（技能） MUST 使用参考文件表达固定初始化流程，而不是新增命令行初始化脚本
-
 ### Requirement: Build and Verify initializes standard artifacts
 系统 MUST 为目标仓库初始化最小构建检查、验证配置和仓库内 runtime（运行时）入口结构。
 
@@ -57,7 +59,6 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **WHEN** 插件初始化目标仓库
 - **THEN** 模板 MUST NOT 内置 PR Flow（拉取请求流程）、Release Flow（发布流程）、Comet（双星流程）或任一具体仓库业务检查
 - **THEN** 仓库业务检查 MUST 只通过 `.build-and-verify/config.json` 声明
-
 ### Requirement: Build and Verify provides unified configuration and commands
 系统 MUST 通过一个配置文件和同一套 runtime（运行时）命令入口表达 build（构建检查）与 verify（验证）行为。
 
@@ -104,7 +105,6 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **THEN** 对字符串命令应用 pytest-xdist（Pytest 并行插件）参数时，系统 MUST 保留原命令的 shell（命令行解释器）语法、路径和引号
 - **THEN** 系统 MUST 拒绝在非 pytest（Python 测试框架）命令上声明 `pytestXdistWorkers`（Pytest 工作进程数）
 - **THEN** 系统 MUST 在 pytest-xdist（Pytest 并行插件）不可用时报错，不得静默降级为串行
-
 ### Requirement: Build and Verify provides fast cache verification
 系统 MUST 将 fast（快速验证）实现为 full（全量验证）标准检查项上的 changed-files（变更文件）筛选和 passed-result cache（通过结果缓存）。
 
@@ -132,7 +132,6 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **WHEN** 选中的 check（检查项）没有可用 passed-result cache（通过结果缓存）
 - **THEN** 系统 MUST 运行该 check（检查项）自身
 - **THEN** 系统 MUST NOT 因 cache miss（缓存未命中）自动运行 full（全量验证）
-
 ### Requirement: Build and Verify has no root-level Python test configuration dependency
 系统 MUST 不依赖根目录 Python（Python 语言）测试配置来定义本仓库 build（构建检查）或 verify（验证）行为。
 
@@ -149,7 +148,6 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **WHEN** 本仓库活跃自动化和 guard（守卫）命令文件被检查
 - **THEN** 它们 MUST NOT 引用根目录测试 wrapper（包装入口）
 - **THEN** 它们 MUST 引用仓库内 `.build-and-verify/runtime/build_and_verify.py` 或当前安装的 build-and-verify（构建与验证）Skill（技能）脚本
-
 ### Requirement: Build and Verify provides template-driven guided initialization
 系统 MUST 通过 `build-and-verify-init` Skill（构建与验证初始化技能）提供模板化对话式初始化向导，用于为通用仓库生成 `.build-and-verify/config.json`（配置文件）。
 
@@ -175,7 +173,6 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **THEN** 系统 MUST 复制当前 runtime（运行时）快照到 `.build-and-verify/runtime/`
 - **THEN** 系统 MUST NOT 在命令行 init（初始化）中执行对话式问答
 - **THEN** 系统 MUST NOT 在命令行 init（初始化）中自动生成仓库业务检查项
-
 ### Requirement: Guided initialization drafts generic repository checks
 `build-and-verify-init` Skill（构建与验证初始化技能） MUST 为通用仓库生成可审查的 build（构建检查）和 verify（验证）配置草案。
 
@@ -223,7 +220,6 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **THEN** agent（代理） MUST 逐项解释这些运行参数
 - **THEN** agent（代理） MUST 等待用户确认后才能写入这些运行参数
 - **THEN** agent（代理） MUST NOT 为没有 `auto`（自动）语义的工具硬编码 `auto`（自动）参数
-
 ### Requirement: Guided initialization protects existing configuration
 `build-and-verify-init` Skill（构建与验证初始化技能） MUST 在覆盖已有配置前保护用户已有 `.build-and-verify/config.json`（配置文件）。
 
@@ -240,7 +236,6 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **THEN** agent（代理） MUST 确保 `.build-and-verify/.gitignore`（忽略规则）包含 `/backups/`
 - **THEN** agent（代理） MUST NOT 要求用户单独选择备份路径
 - **THEN** agent（代理） MUST 在写入结果中报告备份路径
-
 ### Requirement: Guided initialization validates config and environment before completion
 `build-and-verify-init` Skill（构建与验证初始化技能） MUST 在最终写入确认前执行定向依赖检查和环境检查，并在写入后执行配置校验。
 
@@ -268,7 +263,6 @@ This capability keeps the OpenSpec（开放规格） id `test-framework-plugin` 
 - **THEN** 覆盖已有配置时，agent（代理） MUST 检查备份目录可创建且备份路径仍在目标仓库内
 - **THEN** agent（代理） MUST 允许用户在存在依赖或环境问题时仍写入配置
 - **THEN** agent（代理） MUST 明确说明用户可以让 agent（代理）协助处理环境和外部依赖问题
-
 ### Requirement: Build and Verify tests minimize repeated real entrypoints
 Build and Verify（构建与验证） tests MUST keep real entrypoint coverage small and move repeated branch coverage to in-process（进程内） tests.
 
@@ -294,7 +288,6 @@ Build and Verify（构建与验证） tests MUST keep real entrypoint coverage s
 - **THEN** `maxParallel`（最大并行检查数） MUST be fixed to `0`
 - **THEN** Pytest（测试工具） workers（工作进程） MUST use `auto`
 - **THEN** the measured Full（完整验证） wall time MUST be less than or equal to 30 seconds
-
 ### Requirement: Build and Verify stale runtime handling remains non-mutating
 Build and Verify（构建与验证） build（构建） and verify（验证） commands MUST report newer available runtime（运行时） without modifying repository files.
 
@@ -305,7 +298,6 @@ Build and Verify（构建与验证） build（构建） and verify（验证） c
 - **THEN** output（输出） MUST include an explicit update-runtime（更新运行时） command
 - **THEN** the stale runtime（运行时） report MUST NOT by itself change the build（构建） or verify（验证） exit status
 - **THEN** build（构建） and verify（验证） MUST NOT modify `.build-and-verify/runtime/`
-
 ### Requirement: Full verify provides non-blocking total performance warnings
 Build and Verify（构建与验证） MUST allow a target repository to declare an optional positive integer `verify.fullBudgetSeconds`（完整验证预算秒数） for full verification wall time, and the performance result MUST NOT replace or change functional verification status.
 
@@ -333,7 +325,6 @@ Build and Verify（构建与验证） MUST allow a target repository to declare 
 - **AND** the value is not a positive integer
 - **THEN** configuration validation MUST fail before configured checks run
 - **THEN** the system MUST report the invalid field
-
 ### Requirement: Full verify records a fixed performance report on demand or over budget
 Build and Verify（构建与验证） MUST support `verify --full --performance-report`（完整验证性能报告） and MUST conditionally record one fixed-format report without coupling to repository business test output.
 
@@ -380,7 +371,6 @@ Build and Verify（构建与验证） MUST support `verify --full --performance-
 - **WHEN** a user provides `--performance-report` without `--full`
 - **THEN** argument validation MUST fail before configured checks run
 - **THEN** the system MUST explain that performance reporting requires full verification
-
 ### Requirement: Guided initialization supports optional full verification budget
 Build and Verify Init（构建与验证初始化） MUST allow a user to opt into the generic full verification budget without supplying a repository-specific default.
 
@@ -394,4 +384,3 @@ Build and Verify Init（构建与验证初始化） MUST allow a user to opt int
 - **WHEN** a user does not choose a full verification budget during guided initialization
 - **THEN** the generated config MUST omit `verify.fullBudgetSeconds`
 - **THEN** the plugin template MUST NOT impose a repository-specific performance target
-
