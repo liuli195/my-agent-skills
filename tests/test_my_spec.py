@@ -375,10 +375,11 @@ def test_pi_extension_registers_four_default_commands_and_routes_to_skills() -> 
 
 
 def test_my_spec_plugin_is_discoverable_by_pi_claude_and_codex() -> None:
+    package_version = json.loads((PLUGIN_ROOT / "package.json").read_text(encoding="utf-8"))["version"]
     for host in (".claude-plugin", ".codex-plugin"):
         manifest = json.loads((PLUGIN_ROOT / host / "plugin.json").read_text(encoding="utf-8"))
         assert manifest["name"] == "my-spec"
-        assert manifest["version"] == "0.1.48"
+        assert manifest["version"] == package_version
         assert manifest["skills"] == "./skills"
 
     claude_marketplace = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
