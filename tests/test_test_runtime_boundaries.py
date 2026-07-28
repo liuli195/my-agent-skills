@@ -468,17 +468,14 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_spec_ops_preview_auto_merges_identical_duplicate_requirements_but_main_validation_stays_strict': (
         'covers strict validation plus deterministic preview repair for identical duplicates; function=test_spec_ops_preview_auto_merges_identical_duplicate_requirements_but_main_validation_stays_strict'
     ),
-    'tests/test_my_spec.py::test_installed_spec_add_deterministic_post_analysis_flow_previews_diffs_and_applies': (
-        'covers the installed spec-add deterministic post-analysis workflow; function=test_installed_spec_add_deterministic_post_analysis_flow_previews_diffs_and_applies'
+    'tests/test_my_spec.py::test_spec_add_deterministic_post_analysis_flow_previews_diffs_and_applies': (
+        'covers the packaged spec-add deterministic post-analysis workflow; function=test_spec_add_deterministic_post_analysis_flow_previews_diffs_and_applies'
     ),
-    'tests/test_my_spec.py::test_installed_spec_review_deterministic_duplicate_flow_previews_diffs_and_applies': (
-        'covers the installed spec-review deterministic duplicate workflow; function=test_installed_spec_review_deterministic_duplicate_flow_previews_diffs_and_applies'
+    'tests/test_my_spec.py::test_spec_review_deterministic_duplicate_flow_previews_diffs_and_applies': (
+        'covers the packaged spec-review deterministic duplicate workflow; function=test_spec_review_deterministic_duplicate_flow_previews_diffs_and_applies'
     ),
-    'tests/test_my_spec.py::test_installed_spec_audit_deterministic_post_analysis_flow_previews_diffs_and_applies': (
-        'covers the installed spec-audit deterministic post-analysis workflow; function=test_installed_spec_audit_deterministic_post_analysis_flow_previews_diffs_and_applies'
-    ),
-    'tests/test_my_spec.py::test_install_command_copies_shared_skill_links_claude_and_refuses_unknown_targets': (
-        'covers the packaged installer copy, directory-link, repeat-sync, and safety-refusal seam; function=test_install_command_copies_shared_skill_links_claude_and_refuses_unknown_targets'
+    'tests/test_my_spec.py::test_spec_audit_deterministic_post_analysis_flow_previews_diffs_and_applies': (
+        'covers the packaged spec-audit deterministic post-analysis workflow; function=test_spec_audit_deterministic_post_analysis_flow_previews_diffs_and_applies'
     ),
     'tests/test_my_spec.py::test_apply_delta_can_atomically_replace_main_after_final_confirmation': (
         'covers packaged spec_ops CLI final atomic replacement and idempotent no-op behavior; function=test_apply_delta_can_atomically_replace_main_after_final_confirmation'
