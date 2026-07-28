@@ -8,7 +8,7 @@
 |---|---|
 | `/spec-audit` | 对照整个仓库审计规格；规格库不存在时创建初始规格 |
 | `/spec-review` | 仅审查规格库内部的冲突、重复、过期和格式问题 |
-| `/spec-add` | 将用户指定文档映射为增量规格并合并 |
+| `/spec-add` | 将 Agent（代理）为当前请求选取的相关证据映射为增量规格并合并 |
 
 `/spec-audit` 将不存在的规格库视为空规格库，因此不再设置独立的 `/spec-init`。
 
@@ -155,7 +155,7 @@ git ls-files --cached --others --exclude-standard
 排除：
 
 - `openspec/specs/`：作为主规格基准单独读取
-- `.spec-work/`
+- `.local/spec-work/`
 - 二进制文件
 - 已被 `.gitignore`（忽略规则）排除的依赖和构建产物
 
@@ -214,11 +214,11 @@ git ls-files --cached --others --exclude-standard
 ## `/spec-add`
 
 ```text
-读取用户指定文档
+Agent（代理）为当前请求选取会话、文档、代码或其他相关证据
 → 读取当前主规格
 → 提取可验证行为
 → 生成相对于主规格的 Delta（增量规格）
-→ 逐条处理冲突和低可信候选
+→ 完整保存并逐条处理冲突、删除和低可信候选
 → 生成完整预览
 → 严格校验
 → 展示完整差异
@@ -227,7 +227,7 @@ git ls-files --cached --others --exclude-standard
 → 最终校验
 ```
 
-只处理用户指定文档，不扩展为整个仓库审计。
+指定文档是可选来源。Agent（代理）自主选择当前请求的相关证据，但 `/spec-add` 不执行整个仓库的机械审计。
 
 ---
 
@@ -244,6 +244,10 @@ git ls-files --cached --others --exclude-standard
 
 ## `spec_ops.py` 负责
 
+- 初始化运行状态和共享锁
+- 一次性保存完整 `conflicts` 清单
+- 读取当前冲突、记录决定、推进游标和报告状态
+- 拒绝只保存数量、越序决定和非法状态转换
 - 解析规格
 - 校验格式和引用
 - 检测确定性重复
@@ -260,7 +264,7 @@ git ls-files --cached --others --exclude-standard
 ## 工作目录
 
 ```text
-.spec-work/
+.local/spec-work/
 ├── lock
 └── current/
     ├── state.json
@@ -297,7 +301,7 @@ READY_TO_APPLY
 ## 运行锁
 
 - 同一仓库同时只允许一个 my-spec（规格管理）运行。
-- `/spec-audit`、`/spec-review` 和 `/spec-add` 共用 `.spec-work/lock`。
+- `/spec-audit`、`/spec-review` 和 `/spec-add` 共用 `.local/spec-work/lock`。
 - 已有锁时停止并报告当前命令和启动时间。
 - 异常遗留锁不能只按时间自动删除。
 - 只有确认对应进程已不存在后才能清除遗留锁。
@@ -309,7 +313,8 @@ READY_TO_APPLY
 每次只处理一条冲突或低可信候选：
 
 ```text
-读取当前冲突
+分析完成后一次性保存完整 conflicts
+→ 按 currentConflict 读取当前冲突
 → 展示候选内容
 → 展示来源与证据
 → 说明无法自动决定的原因
@@ -317,7 +322,10 @@ READY_TO_APPLY
 → 等待用户决定
 → 保存决定
 → 推进游标
+→ 从同一 conflicts 清单读取下一项
 ```
+
+首次展示前必须保存完整清单；只有数量或第一项的状态无效。进入 `WAITING_DECISION` 后禁止重新扫描获取下一项。
 
 用户可以选择：
 
@@ -343,7 +351,7 @@ READY_TO_APPLY
 所有冲突处理完后：
 
 1. 校验 Delta（增量规格）。
-2. 在 `.spec-work/current/preview/` 生成完整合并结果。
+2. 在 `.local/spec-work/current/preview/` 生成完整合并结果。
 3. 校验完整预览。
 4. 使用 `diff` 输出完整、不截断的文件级差异。
 5. 等待用户最终确认。
@@ -360,9 +368,9 @@ READY_TO_APPLY
 ```text
 openspec/specs/
     ↓ 重命名
-.spec-work/current/backup/
+.local/spec-work/current/backup/
 
-.spec-work/current/preview/
+.local/spec-work/current/preview/
     ↓ 重命名
 openspec/specs/
 ```
@@ -471,9 +479,14 @@ RENAMED → REMOVED → MODIFIED → ADDED
 
 | 命令 | 功能 |
 |---|---|
+| `state-init <work-dir> <command> <specs-fingerprint> <input-fingerprint>` | 初始化运行状态和共享锁 |
+| `state-set-conflicts <work-dir> <conflicts-json> <specs-fingerprint> <input-fingerprint>` | 校验指纹并原子保存完整待决定清单 |
+| `state-current <work-dir> <specs-fingerprint> <input-fingerprint>` | 校验指纹并读取当前待决定项 |
+| `state-decide <work-dir> <expected-conflict-id> <decision> <specs-fingerprint> <input-fingerprint>` | 校验当前项身份和指纹，保存决定并推进游标 |
+| `state-status <work-dir> <specs-fingerprint> <input-fingerprint>` | 校验指纹并报告稳定总数和剩余数 |
 | `validate-main <specs-dir>` | 校验完整规格库 |
 | `validate-delta <delta-dir> <specs-dir>` | 校验 Delta（增量规格）及其引用 |
-| `apply-delta <specs-dir> <delta-dir> <output-dir>` | 将 Delta（增量规格）应用到预览目录 |
+| `apply-delta <specs-dir> <delta-dir> <output-dir> <work-dir> <specs-fingerprint> <input-fingerprint>` | 仅在状态就绪且指纹一致时将 Delta（增量规格）应用到预览或主规格 |
 | `diff <old-dir> <new-dir>` | 输出完整文件级差异 |
 
 命令约束：
@@ -503,7 +516,8 @@ RENAMED → REMOVED → MODIFIED → ADDED
 | 空规格库运行 `/spec-audit` | 生成初始 Delta（增量规格），最终确认后创建规格库 |
 | 已有规格运行 `/spec-audit` | 对照整个仓库生成新增、修改、删除和改名候选 |
 | 运行 `/spec-review` | 只读取 `openspec/specs/`，不扫描仓库其他内容 |
-| 运行 `/spec-add` | 只映射用户指定文档相对主规格的变化 |
+| 无指定文档运行 `/spec-add` | 映射 Agent（代理）为当前请求选取的相关证据，不扩展为全仓库审计 |
+| 逐项决定被中断后继续 | 从已保存的完整 `conflicts` 清单返回同一当前项，不重新扫描 |
 | 标题和正文均相同 | 自动合并 |
 | 标题相同但正文不同 | 作为冲突逐条询问 |
 | 标题变化但无改名证据 | 作为删除并新增处理 |
