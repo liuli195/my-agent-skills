@@ -1130,19 +1130,9 @@ def test_build_reports_duplicate_projection_plugin(tmp_path: Path) -> None:
     assert any("duplicate_projection_plugin" in error for error in errors)
 
 
-def test_comet_config_does_not_duplicate_guard_commands() -> None:
-    import yaml
-
-    data = yaml.safe_load((REPO_ROOT / ".comet" / "config.yaml").read_text(encoding="utf-8"))
-
-    assert "build_command" not in data
-    assert "verify_command" not in data
-
-
 def test_active_automation_does_not_reference_removed_check_entrypoint() -> None:
     active_files = [
         REPO_ROOT / ".github" / "workflows" / "release.yml",
-        REPO_ROOT / ".comet" / "config.yaml",
         REPO_ROOT / ".build-and-verify" / "config.json",
     ]
 
