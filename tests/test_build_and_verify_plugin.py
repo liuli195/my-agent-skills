@@ -29,6 +29,9 @@ PLUGIN_NAME = "build-and-verify"
 INIT_SKILL_NAME = "build-and-verify-init"
 INIT_SKILL_ROOT = PLUGIN_ROOT / "skills" / INIT_SKILL_NAME
 INIT_REFERENCE_ROOT = INIT_SKILL_ROOT / "references"
+REVIEW_SKILL_NAME = "build-and-verify-review"
+REVIEW_SKILL_ROOT = PLUGIN_ROOT / "skills" / REVIEW_SKILL_NAME
+REVIEW_REFERENCE_ROOT = REVIEW_SKILL_ROOT / "references"
 REQUIRED_INIT_REFERENCES = {
     "questionnaire.md",
     "ecosystem-detection.md",
@@ -819,7 +822,7 @@ def test_build_and_verify_plugin_has_dual_manifests() -> None:
     assert claude_manifest["skills"] == "./skills"
 
 
-def test_build_and_verify_plugin_has_runtime_and_init_skill_entrypoints() -> None:
+def test_build_and_verify_plugin_has_runtime_init_and_review_skill_entrypoints() -> None:
     skill_root = PLUGIN_ROOT / "skills"
     runtime_script_path = skill_root / PLUGIN_NAME / "scripts" / "build_and_verify.py"
     skill_dirs = sorted(path.name for path in skill_root.iterdir() if path.is_dir())
@@ -828,7 +831,7 @@ def test_build_and_verify_plugin_has_runtime_and_init_skill_entrypoints() -> Non
     init_skill_text = (INIT_SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
     init_front_matter = init_skill_text.split("---", 2)[1]
 
-    assert skill_dirs == [PLUGIN_NAME, INIT_SKILL_NAME]
+    assert skill_dirs == [PLUGIN_NAME, INIT_SKILL_NAME, REVIEW_SKILL_NAME]
     assert runtime_script_path.is_file()
     assert runtime_skill_text.startswith("---\n")
     assert f"name: {PLUGIN_NAME}" in runtime_front_matter
@@ -870,6 +873,63 @@ def test_build_and_verify_plugin_has_runtime_and_init_skill_entrypoints() -> Non
     assert "不配置 CI（持续集成）" in init_skill_text
     assert "dry run" not in init_skill_text
     assert "试运行）" not in init_skill_text
+
+
+def test_build_and_verify_review_defines_confirmed_flow() -> None:
+    skill = (REVIEW_SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    review = (REVIEW_REFERENCE_ROOT / "review.md").read_text(encoding="utf-8")
+    review_contract_text = skill + review
+
+    assert f"name: {REVIEW_SKILL_NAME}" in skill.split("---", 2)[1]
+    assert "../build-and-verify-init/references/ecosystem-detection.md" in skill
+    assert "../build-and-verify-init/references/config-draft.md" in skill
+    assert "../build-and-verify-init/references/validation.md" in skill
+    assert "不得运行候选 command（命令）" in review_contract_text
+    for token in [
+        "命令来源",
+        "构建或验证分组",
+        "重复关系",
+        "paths（受影响路径）",
+        "inputs（缓存输入）",
+        "副作用风险",
+        "废弃字段",
+        "缺失",
+        "错误",
+        "重复",
+        "缓存",
+        "风险",
+        "High（高）",
+        "Medium（中）",
+        "Low（低）",
+        "逐项接受或拒绝",
+        "整体写入确认",
+        "init --config --overwrite",
+        "verify --full",
+        "不得自动回滚",
+    ]:
+        assert token in review_contract_text
+    assert "不修改仓库脚本" in review_contract_text
+    assert "不修改测试代码" in review_contract_text
+    assert "不自动调整并行数、超时或完整验证预算" in review_contract_text
+    for reference in [
+        INIT_REFERENCE_ROOT / "ecosystem-detection.md",
+        INIT_REFERENCE_ROOT / "config-draft.md",
+        INIT_REFERENCE_ROOT / "validation.md",
+        REVIEW_REFERENCE_ROOT / "review.md",
+    ]:
+        assert reference.is_file()
+    ordered_steps = [
+        "确认目标仓库和扫描授权",
+        "按 `references/review.md`（审查规则）输出分组结果和修改建议",
+        "让用户逐项接受或拒绝建议",
+        "定向依赖检查和环境检查",
+        "等待整体写入确认",
+        "init --config --overwrite",
+        "执行配置结构校验",
+        "verify --full",
+    ]
+    positions = [skill.index(step) for step in ordered_steps]
+    assert positions == sorted(positions)
 
 
 def test_build_and_verify_init_references_all_required_files() -> None:
@@ -1905,6 +1965,74 @@ def test_build_and_verify_init_refuses_existing_files_before_writes(
         if path != existing_path:
             assert not path.exists()
     assert not (project / ".build-and-verify" / "cache").exists()
+
+
+def test_build_and_verify_review_template_simulation_writes_backup_then_runs_full_verify(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "package.json").write_text(
+        json.dumps({"scripts": {"build": "vite build", "test": "pytest"}}),
+        encoding="utf-8",
+    )
+    build_dir = project / ".build-and-verify"
+    build_dir.mkdir()
+    original_config = {
+        "version": 1,
+        "build": {"checks": []},
+        "verify": {"checks": []},
+    }
+    write_json(build_dir / "config.json", original_config)
+
+    scripts = read_json(project / "package.json")["scripts"]
+    recommendations = [
+        {
+            "id": f"{section}.node{'-tests' if script == 'test' else ''}",
+            "command": f"npm {'test' if script == 'test' else 'run build'}",
+            "confidence": "High",
+        }
+        for script, section in [("build", "build"), ("test", "verify")]
+        if script in scripts
+    ]
+    assert [item["id"] for item in recommendations] == [
+        "build.node",
+        "verify.node-tests",
+    ]
+
+    selected = [item for item in recommendations if item["id"] == "verify.node-tests"]
+    assert read_json(build_dir / "config.json") == original_config
+    for overall_write_confirmed in [None, False]:
+        if overall_write_confirmed:
+            raise AssertionError("沉默或拒绝整体确认时不得进入写入流程")
+        assert read_json(build_dir / "config.json") == original_config
+
+    confirmed_config = {
+        "version": 1,
+        "build": {"checks": []},
+        "verify": {
+            "checks": [
+                {
+                    "id": "verify.node-tests",
+                    "command": selected[0]["command"],
+                    "paths": ["package.json"],
+                    "inputs": ["package.json"],
+                }
+            ]
+        },
+    }
+
+    assert read_json(build_dir / "config.json") == original_config
+    report = simulate_init_wizard_write(project, confirmed_config, overwrite=True)
+    runner = FakeRunner()
+    result = run_check(project, "verify", "--full", runner=runner)
+
+    assert read_json(report["backup_path"]) == original_config
+    assert read_json(build_dir / "config.json") == confirmed_config
+    assert runner.calls == [confirmed_config["verify"]["checks"][0]["command"]]
+    assert result.returncode == 0
+    assert "full-not-run: false" in result.stdout
+    assert "status: passed" in result.stdout
 
 
 def test_build_and_verify_init_template_simulation_writes_default_gitignore(
