@@ -269,6 +269,7 @@ def test_skill_entries_route_add_review_and_audit_with_safe_boundaries() -> None
     add = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "add-document.md").read_text(encoding="utf-8")
     review = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "review.md").read_text(encoding="utf-8")
     audit = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "audit.md").read_text(encoding="utf-8")
+    rules = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "openspec-rules.md").read_text(encoding="utf-8")
     for procedure in (add, review, audit):
         assert "一次只展示一条" in procedure
         assert "完整差异" in procedure
@@ -277,6 +278,8 @@ def test_skill_entries_route_add_review_and_audit_with_safe_boundaries() -> None
     assert "只读取 `openspec/specs/`" in review
     assert "不得读取仓库其他文件" in review
     assert "git ls-files --cached --others --exclude-standard" in audit
+    assert ".local/spec-work/" in skill and ".local/spec-work/" in audit and ".local/spec-work/" in rules
+    assert ".spec-work/" not in skill + audit + rules
     assert "只读取用户指定的文档" in add
 
 

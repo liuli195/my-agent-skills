@@ -10,7 +10,7 @@
 
 ## Delta
 
-Delta（增量规格）按能力放在 `.spec-work/current/delta/<capability-name>/spec.md`，只允许：
+Delta（增量规格）按能力放在 `.local/spec-work/current/delta/<capability-name>/spec.md`，只允许：
 
 - `## RENAMED Requirements`：连续的 `FROM: <旧标题>`、`TO: <新标题>` 对。
 - `## REMOVED Requirements`：用 Requirement（需求）标题引用。

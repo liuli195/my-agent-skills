@@ -16,7 +16,7 @@
 - **THEN** 系统按代理是否空闲执行警告或发送对应 Skill（技能）请求
 ### Requirement: 规格入口保持范围隔离
 
-系统 MUST 让 add 入口只读取用户指定文档、review 入口只读取 `openspec/specs/`，并让 audit 入口只读取 Git（版本管理）可见文件且排除主规格、`.spec-work/` 和二进制文件。
+系统 MUST 让 add 入口只读取用户指定文档、review 入口只读取 `openspec/specs/`，并让 audit 入口只读取 Git（版本管理）可见文件且排除主规格、`.local/spec-work/` 和二进制文件。
 
 #### Scenario: 用户选择规格入口
 
@@ -51,3 +51,11 @@
 
 - **WHEN** Pi、Claude 或 Codex 加载本地插件市场
 - **THEN** 市场中出现 `my-spec`，且四个规格 Skill（技能）均可发现
+### Requirement: 规格运行文件集中在本地目录
+
+系统 MUST 将 my-spec 的共享锁、当前命令状态、输入、主规格指纹、决定、Delta（增量规格）、预览和恢复材料保存在 `.local/spec-work/`，不得在仓库根目录创建 `.spec-work/`。
+
+#### Scenario: 规格入口创建运行文件
+
+- **WHEN** 任一 my-spec 入口开始处理规格任务
+- **THEN** 所有临时运行文件均位于 `.local/spec-work/`
