@@ -1,0 +1,8 @@
+{"sequence":1,"timestamp":"2026-07-25T01:27:29.568Z","type":"prepared"}
+{"sequence":2,"timestamp":"2026-07-25T01:27:30.487Z","type":"operation-started","operationId":"spec-1-pi-codex-usage-status"}
+{"sequence":3,"timestamp":"2026-07-25T01:27:30.791Z","type":"operation-completed","operationId":"spec-1-pi-codex-usage-status"}
+{"sequence":4,"timestamp":"2026-07-25T01:27:30.818Z","type":"operation-started","operationId":"archive-change"}
+{"sequence":5,"timestamp":"2026-07-25T01:27:31.364Z","type":"operation-completed","operationId":"archive-change"}
+{"sequence":6,"timestamp":"2026-07-25T01:27:31.635Z","type":"archive-finalization-started"}
+{"sequence":7,"timestamp":"2026-07-25T01:27:31.728Z","type":"archive-finalized"}
+{"sequence":8,"timestamp":"2026-07-25T01:27:31.830Z","type":"commit"}

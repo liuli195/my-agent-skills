@@ -1,0 +1,14 @@
+{
+  "change": "simplify-pr-flow-review-gate",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "c535e1942dbfb66999fc448508e0e580251a193ac70d5acf3e086de8d1ff025a",
+  "files": [
+    { "path": "openspec/changes/simplify-pr-flow-review-gate/proposal.md", "sha256": "00861d7786a5b09394eaca37aa883687c4fd0238a80b4b3eaa3da4d3e78efab5", "role": "supporting" },
+    { "path": "openspec/changes/simplify-pr-flow-review-gate/design.md", "sha256": "03fcf582f1f265c3852f00100b7f333fd1197b447e647bf3a55edafce0672a4c", "role": "supporting" },
+    { "path": "openspec/changes/simplify-pr-flow-review-gate/tasks.md", "sha256": "730f31080afa8cbfd6c223b928172da297b9bff913d3f0397c4ddedbe8564e27", "role": "supporting" },
+    { "path": "openspec/changes/simplify-pr-flow-review-gate/specs/pr-flow-plugin/spec.md", "sha256": "3afb399f3e895a409923ba1d9ddad96b55ea2c37e5fbe7b151dfb72056a89b60", "role": "spec" }
+  ]
+}
