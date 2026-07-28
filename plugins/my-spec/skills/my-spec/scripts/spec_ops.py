@@ -341,8 +341,9 @@ def apply_delta(specs_root: Path, delta_root: Path, output_root: Path) -> None:
     except Exception:
         if preview.exists():
             shutil.rmtree(preview)
-        if specs_root.exists() and backup.exists():
-            shutil.rmtree(specs_root)
+        if backup.exists():
+            if specs_root.exists():
+                shutil.rmtree(specs_root)
             backup.rename(specs_root)
         elif not had_specs and specs_root.exists():
             shutil.rmtree(specs_root)
