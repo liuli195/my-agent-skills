@@ -4641,6 +4641,73 @@ def test_build_and_verify_runner_directory_hash_ignores_generated_paths(
     assert run_log.read_text(encoding="utf-8").splitlines() == ["directory-hash"]
 
 
+def test_build_and_verify_runner_directory_hash_uses_git_visible_files(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    (project / ".gitignore").write_text("src/ignored/\n", encoding="utf-8")
+    (project / "src" / "ignored").mkdir(parents=True)
+    tracked = project / "src" / "tracked.txt"
+    visible = project / "src" / "visible.txt"
+    ignored = project / "src" / "ignored" / "dependency.txt"
+    tracked.write_text("tracked-v1\n", encoding="utf-8")
+    visible.write_text("visible-v1\n", encoding="utf-8")
+    ignored.write_text("ignored-v1\n", encoding="utf-8")
+    subprocess.run(["git", "add", ".gitignore", "src/tracked.txt"], cwd=project, check=True)
+    write_json(
+        project / ".build-and-verify" / "config.json",
+        {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "git-visible-directory",
+                        "command": command_that_logs("git-visible-directory"),
+                        "paths": ["src/**"],
+                        "inputs": ["src"],
+                    }
+                ]
+            },
+        },
+    )
+
+    first = run_check(project, "verify", changed_files=["src/tracked.txt"])
+    ignored.write_text("ignored-v2\n", encoding="utf-8")
+    ignored_change = run_check(project, "verify", changed_files=["src/tracked.txt"])
+    visible.write_text("visible-v2\n", encoding="utf-8")
+    visible_change = run_check(project, "verify", changed_files=["src/tracked.txt"])
+    tracked.write_text("tracked-v2\n", encoding="utf-8")
+    tracked_change = run_check(project, "verify", changed_files=["src/tracked.txt"])
+    config = read_json(project / ".build-and-verify" / "config.json")
+    config["verify"]["checks"][0].update(
+        id="explicit-ignored-file",
+        inputs=["src/ignored/dependency.txt"],
+    )
+    write_json(project / ".build-and-verify" / "config.json", config)
+    explicit_first = run_check(project, "verify", changed_files=["src/tracked.txt"])
+    ignored.write_text("ignored-v3\n", encoding="utf-8")
+    explicit_change = run_check(project, "verify", changed_files=["src/tracked.txt"])
+
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert ignored_change.returncode == 0, ignored_change.stdout + ignored_change.stderr
+    assert "cache-hit: git-visible-directory" in ignored_change.stdout
+    assert "cache-hit:" not in visible_change.stdout
+    assert "cache-hit:" not in tracked_change.stdout
+    assert explicit_first.returncode == 0, explicit_first.stdout + explicit_first.stderr
+    assert "cache-hit:" not in explicit_change.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "git-visible-directory",
+        "git-visible-directory",
+        "git-visible-directory",
+        "git-visible-directory",
+        "git-visible-directory",
+    ]
+
+
 def test_build_and_verify_cache_key_covers_runtime_and_cache_versions() -> None:
     template = (
         PLUGIN_ROOT / "skills" / "build-and-verify" / "scripts" / "build_and_verify_runner.py"

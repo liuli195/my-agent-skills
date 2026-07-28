@@ -436,6 +436,22 @@ def _validate_check_inputs(project: Path, check: dict[str, Any]) -> None:
         _validate_project_relative_input(project, input_path)
 
 
+def _git_visible_files(project: Path, relative: str) -> list[Path] | None:
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", relative],
+            cwd=project,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return [project / name for name in result.stdout.split("\0") if name]
+
+
 def _hash_input(project: Path, input_path: str) -> dict[str, Any]:
     relative, path = _validate_project_relative_input(project, input_path)
     if not path.exists():
@@ -444,22 +460,32 @@ def _hash_input(project: Path, input_path: str) -> dict[str, Any]:
         return {"path": relative, "type": "file", "sha256": _hash_file(path)}
     if path.is_dir():
         files: list[dict[str, str]] = []
-        for root, dirs, names in os.walk(path):
-            root_path = Path(root)
-            kept_dirs: list[str] = []
-            for name in dirs:
-                child_relative = (root_path / name).relative_to(project).as_posix()
-                if not _is_excluded_relative(child_relative):
-                    kept_dirs.append(name)
-            dirs[:] = kept_dirs
-            for name in sorted(names):
-                file_path = root_path / name
-                child_relative = file_path.relative_to(project).as_posix()
-                if _is_excluded_relative(child_relative):
+        git_files = _git_visible_files(project, relative)
+        if git_files is not None:
+            for file_path in git_files:
+                if not file_path.is_file():
                     continue
+                child_relative = file_path.relative_to(project).as_posix()
                 if not _is_relative_to_project(project, file_path):
                     raise ValueError(f"invalid_input_path: {child_relative}")
                 files.append({"path": child_relative, "sha256": _hash_file(file_path)})
+        else:
+            for root, dirs, names in os.walk(path):
+                root_path = Path(root)
+                kept_dirs: list[str] = []
+                for name in dirs:
+                    child_relative = (root_path / name).relative_to(project).as_posix()
+                    if not _is_excluded_relative(child_relative):
+                        kept_dirs.append(name)
+                dirs[:] = kept_dirs
+                for name in sorted(names):
+                    file_path = root_path / name
+                    child_relative = file_path.relative_to(project).as_posix()
+                    if _is_excluded_relative(child_relative):
+                        continue
+                    if not _is_relative_to_project(project, file_path):
+                        raise ValueError(f"invalid_input_path: {child_relative}")
+                    files.append({"path": child_relative, "sha256": _hash_file(file_path)})
         return {"path": relative, "type": "directory", "files": sorted(files, key=lambda item: item["path"])}
     return {"path": relative, "type": "other"}
 
