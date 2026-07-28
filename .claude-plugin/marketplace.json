@@ -22,7 +22,7 @@
     {
       "name": "my-spec",
       "source": "./plugins/my-spec",
-      "description": "OpenSpec audit, review, and document-to-delta Skill（开放规格审计、审查与文档增量技能）"
+      "description": "MySpec audit, review, and document-to-delta Skill（开放规格审计、审查与文档增量技能）"
     }
   ]
 }

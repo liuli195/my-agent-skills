@@ -27,7 +27,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install Node dependencies
-        run: npm install -g @fission-ai/openspec@1.4.1 @earendil-works/pi-coding-agent@0.82.1
+        run: npm install -g @earendil-works/pi-coding-agent@0.82.1
 
       - name: Install dependencies
         run: |

@@ -133,14 +133,14 @@
         "pytestXdistWorkers": 4
       },
       {
-        "id": "verify.openspec",
+        "id": "verify.myspec",
         "paths": [
-          "openspec/specs/**",
+          "myspec/specs/**",
           "plugins/my-spec/skills/my-spec/scripts/spec_ops.py"
         ],
-        "command": "python plugins/my-spec/skills/my-spec/scripts/spec_ops.py validate-main openspec/specs",
+        "command": "python plugins/my-spec/skills/my-spec/scripts/spec_ops.py validate-main myspec/specs",
         "inputs": [
-          "openspec/specs",
+          "myspec/specs",
           "plugins/my-spec/skills/my-spec/scripts/spec_ops.py"
         ]
       },

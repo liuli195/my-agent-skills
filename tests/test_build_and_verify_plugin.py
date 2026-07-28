@@ -1002,7 +1002,7 @@ def test_build_and_verify_init_questionnaire_contains_fixed_flow() -> None:
 
 def test_build_and_verify_init_current_specs_match_simplified_flow() -> None:
     active_spec = (
-        REPO_ROOT / "openspec" / "specs" / "test-framework-plugin" / "spec.md"
+        REPO_ROOT / "myspec" / "specs" / "test-framework-plugin" / "spec.md"
     ).read_text(encoding="utf-8")
 
     assert "默认从 `paths`（受影响路径）和 command（命令）来源推导 `inputs`" in active_spec
@@ -1342,7 +1342,7 @@ def test_build_and_verify_init_validation_rules_cover_dependency_backup_and_conf
 
 
 def test_build_and_verify_init_spec_targets_test_framework_plugin_capability() -> None:
-    spec_path = REPO_ROOT / "openspec" / "specs" / "test-framework-plugin" / "spec.md"
+    spec_path = REPO_ROOT / "myspec" / "specs" / "test-framework-plugin" / "spec.md"
     text = spec_path.read_text(encoding="utf-8")
 
     assert "Runtime and initialization skill surfaces" in text

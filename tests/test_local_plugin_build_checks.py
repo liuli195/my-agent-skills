@@ -1151,23 +1151,23 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
         "verify.local-build-contract",
         "verify.release-flow",
         "verify.pr-flow",
-        "verify.openspec",
+        "verify.myspec",
         "verify.my-spec",
         "verify.build-and-verify",
     ]
     assert "pytest.full" not in check_by_id
 
-    openspec = check_by_id["verify.openspec"]
-    assert openspec["paths"] == [
-        "openspec/specs/**",
+    myspec = check_by_id["verify.myspec"]
+    assert myspec["paths"] == [
+        "myspec/specs/**",
         "plugins/my-spec/skills/my-spec/scripts/spec_ops.py",
     ]
-    assert openspec["inputs"] == [
-        "openspec/specs",
+    assert myspec["inputs"] == [
+        "myspec/specs",
         "plugins/my-spec/skills/my-spec/scripts/spec_ops.py",
     ]
-    assert openspec["command"] == (
-        "python plugins/my-spec/skills/my-spec/scripts/spec_ops.py validate-main openspec/specs"
+    assert myspec["command"] == (
+        "python plugins/my-spec/skills/my-spec/scripts/spec_ops.py validate-main myspec/specs"
     )
 
     local_build_contract = check_by_id["verify.local-build-contract"]
