@@ -1,0 +1,14 @@
+{
+  "change": "simplify-cross-agent-review-contract",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "28a8f49177aec958040705e687545efb4252796cbd05d33cffbb795317e689c9",
+  "files": [
+    { "path": "openspec/changes/simplify-cross-agent-review-contract/proposal.md", "sha256": "b09cdfa4743ef27b735b24c457638f42106fdab24fba8cac9276bc7955f0dcbb", "role": "supporting" },
+    { "path": "openspec/changes/simplify-cross-agent-review-contract/design.md", "sha256": "54348b6e3351c5bd6458f1c2acb4fd621d4c4bce4be9867825382020cdcef8a8", "role": "supporting" },
+    { "path": "openspec/changes/simplify-cross-agent-review-contract/tasks.md", "sha256": "35a9912ca3a31768ed9ec3a44ac3cb35018d3e81f451a833f5022617c3094d36", "role": "supporting" },
+    { "path": "openspec/changes/simplify-cross-agent-review-contract/specs/cross-agent-review/spec.md", "sha256": "a88c4d26ced60a794dd3418e7f6fd6795c3faefbb3be90644fd6228a58f4ed2a", "role": "spec" }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "change": "fix-flow-recovery-and-authorization-boundaries",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "fd17e995e4327b73f3add139dfd0b1f78cbd83ef919859d1fc5830ae421a771d",
+  "files": [
+    { "path": "openspec/changes/fix-flow-recovery-and-authorization-boundaries/proposal.md", "sha256": "f8e09ec274bad8708ba1fc5b4fc60ec1eccbbf0c2d72f87f10804cf17648121e", "role": "supporting" },
+    { "path": "openspec/changes/fix-flow-recovery-and-authorization-boundaries/design.md", "sha256": "acaddd4e9f9e917a918d73e5ce049f489867002dd7f1856188002b38ab763748", "role": "supporting" },
+    { "path": "openspec/changes/fix-flow-recovery-and-authorization-boundaries/tasks.md", "sha256": "3ff02b49a0ed9b6cb1b197dc28a2586176a48928d2c46a9f94f728f80410539a", "role": "supporting" },
+    { "path": "openspec/changes/fix-flow-recovery-and-authorization-boundaries/specs/pr-flow-plugin/spec.md", "sha256": "5159022cd4d41fb1573b8605fc8d5506d2335fd76e03e809aa29780452a61992", "role": "spec" },
+    { "path": "openspec/changes/fix-flow-recovery-and-authorization-boundaries/specs/release-flow-plugin/spec.md", "sha256": "e4bb62df1697c81f86dc2affd579ee8d418cb993de0c34fee6722de68c68a58d", "role": "spec" }
+  ]
+}

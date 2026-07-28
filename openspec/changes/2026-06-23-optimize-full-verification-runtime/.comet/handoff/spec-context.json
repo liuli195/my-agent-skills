@@ -1,0 +1,14 @@
+{
+  "change": "optimize-full-verification-runtime",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "fdd6d2abe0fc30a1d5477fa0297581c42f54e18cc129e49d6635f87cd6077542",
+  "files": [
+    { "path": "openspec/changes/optimize-full-verification-runtime/proposal.md", "sha256": "73973b970a008e006644fb2ecaf45023bc62ac60a2a448a6a3b2b9e46dee315a", "role": "supporting" },
+    { "path": "openspec/changes/optimize-full-verification-runtime/design.md", "sha256": "bf99e75aaf019e5049a5705eb98ab49dc012d9f4e7264501d427e5e9baacdeef", "role": "supporting" },
+    { "path": "openspec/changes/optimize-full-verification-runtime/tasks.md", "sha256": "d2a68a5ee5a545614cb283b08055051612c96d9afa7b84e8acfc7f691898ee32", "role": "supporting" },
+    { "path": "openspec/changes/optimize-full-verification-runtime/specs/full-verification-runtime/spec.md", "sha256": "0b6c7b69acc190735629cb1b1505e1e4fb8ec92e13ac40685a1c454d3122d3cc", "role": "spec" }
+  ]
+}

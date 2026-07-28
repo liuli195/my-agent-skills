@@ -1,0 +1,13 @@
+{
+  "name": "pi-my-spec",
+  "version": "0.1.51",
+  "private": true,
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "skills": [
+      "./skills"
+    ]
+  }
+}
