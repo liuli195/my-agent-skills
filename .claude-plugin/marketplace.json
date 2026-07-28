@@ -18,6 +18,11 @@
       "name": "build-and-verify",
       "source": "./plugins/build-and-verify",
       "description": "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）"
+    },
+    {
+      "name": "my-spec",
+      "source": "./plugins/my-spec",
+      "description": "OpenSpec audit, review, and document-to-delta Skill（开放规格审计、审查与文档增量技能）"
     }
   ]
 }
