@@ -304,7 +304,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 
 	function finishAssistant(message: JsonRecord, ctx: ExtensionContext): void {
 		if (!state) return;
-		const miss = detectCacheMiss(ctx.sessionManager.getEntries(), message, ctx.modelRegistry);
+		const miss = detectCacheMiss(ctx.sessionManager.getEntries(), message, {
+			getModel: (provider: string, modelId: string) => ctx.modelRegistry.find(provider, modelId),
+		});
 		capture("message_end", {
 			providerRequestId: state.providerRequestId,
 			message,

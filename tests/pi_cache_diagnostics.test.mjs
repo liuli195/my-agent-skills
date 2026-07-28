@@ -39,7 +39,7 @@ const entries = [];
 const sessionId = "private-session-id";
 const ctx = {
 	model: { provider: "openai-codex" },
-	modelRegistry: { getModel: () => ({ cost: { cacheRead: 0 } }) },
+	modelRegistry: { find: () => ({ cost: { cacheRead: 0 } }) },
 	sessionManager: {
 		getSessionId: () => sessionId,
 		getEntries: () => entries,
