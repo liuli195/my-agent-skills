@@ -1,0 +1,14 @@
+{
+  "change": "add-cross-agent-review-mechanism",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "0789cc37fff3b6905a1b3c6c11886a6e0b5b961f222dfcb494d0f8fe2edb0a2f",
+  "files": [
+    { "path": "openspec/changes/add-cross-agent-review-mechanism/proposal.md", "sha256": "3d25a7e3f9e2d1d81d7c881e6cb91fd2ba32c130fa0a204d9550c3296fa78d57", "role": "supporting" },
+    { "path": "openspec/changes/add-cross-agent-review-mechanism/design.md", "sha256": "f4341c5c7b6437142c97d85d975b491a1e3e576cd90be522d3be5dba5c723a99", "role": "supporting" },
+    { "path": "openspec/changes/add-cross-agent-review-mechanism/tasks.md", "sha256": "079556faa12f52547008d5c76e4fd3f4e0905e0d983ccf90c14e94a07860014d", "role": "supporting" },
+    { "path": "openspec/changes/add-cross-agent-review-mechanism/specs/cross-agent-review/spec.md", "sha256": "2177d206d0b3c39709865e7d839d8bedc62f818f8c37627783b6d2a8f581ae65", "role": "spec" }
+  ]
+}

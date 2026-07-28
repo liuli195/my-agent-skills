@@ -1,0 +1,15 @@
+{
+  "change": "fix-release-flow-marketplace-identity",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "7ec9a922ecaa4184f6db400a8bf980558a9b0976ce45bb73dd157d05869ebc52",
+  "files": [
+    { "path": "openspec/changes/fix-release-flow-marketplace-identity/proposal.md", "sha256": "276f644871f5cadc2154742b6efc37a51632e9ff363f623bc98c2564e8ec3c21", "role": "supporting" },
+    { "path": "openspec/changes/fix-release-flow-marketplace-identity/design.md", "sha256": "25b901f8b2ff3a8a07ce28640e7be9a5613670659b55a6ae0456b030bf24af24", "role": "supporting" },
+    { "path": "openspec/changes/fix-release-flow-marketplace-identity/tasks.md", "sha256": "e584c709a0870c0585233573823798ea13df1d3061ce371e1e340f7c0c6b1951", "role": "supporting" },
+    { "path": "openspec/changes/fix-release-flow-marketplace-identity/specs/agent-guard-plugin-runtime/spec.md", "sha256": "10d3b9ef49717b749b2c98bee1a1ad126454ad3848b47bb0181cd0da3f96db50", "role": "spec" },
+    { "path": "openspec/changes/fix-release-flow-marketplace-identity/specs/release-flow-plugin/spec.md", "sha256": "c30b81eec1927464ce1fbaa81e996d0887bf7ce6e046dd9daf0c34465c6399f3", "role": "spec" }
+  ]
+}

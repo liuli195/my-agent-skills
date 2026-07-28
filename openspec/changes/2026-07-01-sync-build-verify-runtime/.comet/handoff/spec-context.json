@@ -1,0 +1,14 @@
+{
+  "change": "sync-build-verify-runtime",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "a86b9b7fa30fd9b47218a2b7e478191fdd90f7f241c97ec38faf897804695fad",
+  "files": [
+    { "path": "openspec/changes/sync-build-verify-runtime/proposal.md", "sha256": "cb16dac19748e6e7d052378c03ea3cffcea42d90ca7fdf5bdd5f9dea6a6303ee", "role": "supporting" },
+    { "path": "openspec/changes/sync-build-verify-runtime/design.md", "sha256": "ca2498e19b303aaf781af3e223776895a1cded5cc1b06856d1144c4f6ff70551", "role": "supporting" },
+    { "path": "openspec/changes/sync-build-verify-runtime/tasks.md", "sha256": "45f07fdecdd42ac9558598bb334c800ee7063348660242f06bec73b7b8819c42", "role": "supporting" },
+    { "path": "openspec/changes/sync-build-verify-runtime/specs/test-framework-plugin/spec.md", "sha256": "a2bb6a3f08eb233566d6cf352187b339c01c5505641e373a391fc7b77a251a08", "role": "spec" }
+  ]
+}

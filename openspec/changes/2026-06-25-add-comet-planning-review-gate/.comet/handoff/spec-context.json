@@ -1,0 +1,16 @@
+{
+  "change": "add-comet-planning-review-gate",
+  "phase": "design",
+  "mode": "beta",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "8053c3f63c1e6c00a3c7131572ee3e5e7a9c0aea23135d31abe4048dc310f453",
+  "files": [
+    { "path": "openspec/changes/add-comet-planning-review-gate/proposal.md", "sha256": "e71433e65b74c92b0ec774bec84ab3102770393b1712c592699d09c06944922f", "role": "supporting" },
+    { "path": "openspec/changes/add-comet-planning-review-gate/design.md", "sha256": "2b383a8857e79a5147321a571b5c43d112f40e0504a3588105ebf880b8be724e", "role": "supporting" },
+    { "path": "openspec/changes/add-comet-planning-review-gate/tasks.md", "sha256": "40e85dceb4211f3553cca978299454c2aa386ed9b0dc0ada1c1d9a08c4c9a324", "role": "supporting" },
+    { "path": "openspec/changes/add-comet-planning-review-gate/specs/agent-guard-core/spec.md", "sha256": "e3a07b4184d9217c3bccaee43b193b5d91c5cc03d6ac9aea41940508e02ece1e", "role": "spec" },
+    { "path": "openspec/changes/add-comet-planning-review-gate/specs/agent-guard-plugin-runtime/spec.md", "sha256": "b1c58d402b87a329cf61334cdf680d5515660ed1c7112787aca3260fb11ae256", "role": "spec" },
+    { "path": "openspec/changes/add-comet-planning-review-gate/specs/comet-agent-review-gate/spec.md", "sha256": "ade530547626fbb09436740589257cf5ec9bfb3d2cb6f701646eb35c1c72e392", "role": "spec" }
+  ]
+}
