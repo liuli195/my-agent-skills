@@ -51,6 +51,45 @@ def write(path: Path, text: str) -> None:
     path.write_text(text.rstrip() + "\n", encoding="utf-8")
 
 
+def ready_state(cli: Path, root: Path, command: str = "add") -> Path:
+    work = root / ".local" / "spec-work"
+    conflicts = root / "no-conflicts.json"
+    write(conflicts, "[]")
+    initialized = run_python(
+        cli, "state-init", work, command, "specs-fingerprint", "input-fingerprint"
+    )
+    assert initialized.returncode == 0, initialized.stderr
+    stored = run_python(
+        cli,
+        "state-set-conflicts",
+        work,
+        conflicts,
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert stored.returncode == 0, stored.stderr
+    return work
+
+
+def apply_ready(
+    cli: Path,
+    specs: Path,
+    delta: Path,
+    output: Path,
+    work: Path,
+) -> subprocess.CompletedProcess[str]:
+    return run_python(
+        cli,
+        "apply-delta",
+        specs,
+        delta,
+        output,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+
+
 def run_confirmed_workflow(
     cli: Path,
     specs: Path,
@@ -58,16 +97,35 @@ def run_confirmed_workflow(
     preview: Path,
     *expected_diff: str,
 ) -> str:
+    work = ready_state(cli, preview.parent)
     validated = run_python(cli, "validate-delta", delta, specs)
     assert validated.returncode == 0, validated.stderr
-    generated = run_python(cli, "apply-delta", specs, delta, preview)
+    generated = run_python(
+        cli,
+        "apply-delta",
+        specs,
+        delta,
+        preview,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
     assert generated.returncode == 0, generated.stderr
     assert run_python(cli, "validate-main", preview).returncode == 0
     diff = run_python(cli, "diff", specs, preview)
     assert diff.returncode == 0, diff.stderr
     for fragment in expected_diff:
         assert fragment in diff.stdout
-    applied = run_python(cli, "apply-delta", specs, delta, specs)
+    applied = run_python(
+        cli,
+        "apply-delta",
+        specs,
+        delta,
+        specs,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
     assert applied.returncode == 0, applied.stderr
     assert run_python(cli, "validate-main", specs).returncode == 0
     assert run_python(cli, "diff", specs, preview).stdout == ""
@@ -128,9 +186,10 @@ TO: 密码登录
 """,
     )
 
+    work = ready_state(SPEC_OPS, tmp_path / "state")
     assert run_python(SPEC_OPS, "validate-main", specs).returncode == 0
     assert run_python(SPEC_OPS, "validate-delta", delta, specs).returncode == 0
-    applied = run_python(SPEC_OPS, "apply-delta", specs, delta, preview)
+    applied = apply_ready(SPEC_OPS, specs, delta, preview, work)
     assert applied.returncode == 0, applied.stderr
     assert run_python(SPEC_OPS, "validate-main", preview).returncode == 0
 
@@ -148,12 +207,13 @@ TO: 密码登录
     assert "旧导出" in diff.stdout
     assert "注销" in diff.stdout
 
-    first_apply = run_python(SPEC_OPS, "apply-delta", specs, delta, specs)
+    first_apply = apply_ready(SPEC_OPS, specs, delta, specs, work)
     assert first_apply.returncode == 0, first_apply.stderr
     before_repeat = (specs / "accounts" / "spec.md").read_bytes()
     repeated_validation = run_python(SPEC_OPS, "validate-delta", delta, specs)
     assert repeated_validation.returncode == 0, repeated_validation.stderr
-    repeated_apply = run_python(SPEC_OPS, "apply-delta", specs, delta, specs)
+    repeated_work = ready_state(SPEC_OPS, tmp_path / "repeated-state")
+    repeated_apply = apply_ready(SPEC_OPS, specs, delta, specs, repeated_work)
     assert repeated_apply.returncode == 0, repeated_apply.stderr
     assert (specs / "accounts" / "spec.md").read_bytes() == before_repeat
 
@@ -192,6 +252,277 @@ def test_spec_ops_cli_rejects_invalid_specs_and_delta_references(tmp_path: Path)
     assert "Traceback" not in invalid_delta.stderr
 
 
+def test_spec_ops_cli_persists_complete_conflicts_and_resumes_in_a_new_process(
+    tmp_path: Path,
+) -> None:
+    work = tmp_path / ".local" / "spec-work"
+    conflicts_file = tmp_path / "conflicts.json"
+    conflicts = [
+        {
+            "id": f"conflict-{index:02d}",
+            "candidate": f"候选 {index}",
+            "evidence": [f"spec.md:{index}"],
+            "reason": "语义冲突",
+            "recommendation": "采用建议",
+        }
+        for index in range(1, 14)
+    ]
+    write(conflicts_file, json.dumps(conflicts, ensure_ascii=False))
+
+    initialized = run_python(
+        SPEC_OPS,
+        "state-init",
+        work,
+        "review",
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert initialized.returncode == 0, initialized.stderr
+    stored = run_python(
+        SPEC_OPS,
+        "state-set-conflicts",
+        work,
+        conflicts_file,
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert stored.returncode == 0, stored.stderr
+    assert json.loads(stored.stdout) == {"status": "WAITING_DECISION", "total": 13, "remaining": 13}
+
+    first = json.loads(
+        run_python(
+            SPEC_OPS, "state-current", work, "specs-fingerprint", "input-fingerprint"
+        ).stdout
+    )
+    assert first["index"] == 0
+    assert first["total"] == 13
+    assert first["conflict"] == conflicts[0]
+
+    decided = run_python(
+        SPEC_OPS,
+        "state-decide",
+        work,
+        "conflict-01",
+        "accept",
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert decided.returncode == 0, decided.stderr
+    second = json.loads(
+        run_python(
+            SPEC_OPS, "state-current", work, "specs-fingerprint", "input-fingerprint"
+        ).stdout
+    )
+    assert second["index"] == 1
+    assert second["total"] == 13
+    assert second["conflict"] == conflicts[1]
+    assert json.loads(
+        run_python(SPEC_OPS, "state-status", work, "specs-fingerprint", "input-fingerprint").stdout
+    ) == {
+        "status": "WAITING_DECISION",
+        "total": 13,
+        "decided": 1,
+        "remaining": 12,
+    }
+
+
+def test_spec_ops_cli_rejects_incomplete_or_out_of_order_conflict_state(tmp_path: Path) -> None:
+    work = tmp_path / ".local" / "spec-work"
+    stale_delta = work / "current" / "delta" / "stale" / "spec.md"
+    write(stale_delta, "stale")
+    assert run_python(
+        SPEC_OPS, "state-init", work, "audit", "specs-fingerprint", "input-fingerprint"
+    ).returncode == 0
+    assert not stale_delta.exists()
+
+    count_only = tmp_path / "count-only.json"
+    write(count_only, '{"count": 13}')
+    incomplete = run_python(
+        SPEC_OPS,
+        "state-set-conflicts",
+        work,
+        count_only,
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert incomplete.returncode != 0
+    assert "conflicts_must_be_array" in incomplete.stderr
+
+    duplicate_file = tmp_path / "duplicates.json"
+    duplicate = {
+        "id": "same",
+        "candidate": "候选",
+        "evidence": ["spec.md:1"],
+        "reason": "冲突",
+        "recommendation": "采用建议",
+    }
+    write(duplicate_file, json.dumps([duplicate, duplicate], ensure_ascii=False))
+    duplicates = run_python(
+        SPEC_OPS,
+        "state-set-conflicts",
+        work,
+        duplicate_file,
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert duplicates.returncode != 0
+    assert "duplicate_conflict_id: same" in duplicates.stderr
+
+    missing_evidence_file = tmp_path / "missing-evidence.json"
+    write(
+        missing_evidence_file,
+        json.dumps([{**duplicate, "id": "missing", "evidence": []}], ensure_ascii=False),
+    )
+    missing = run_python(
+        SPEC_OPS,
+        "state-set-conflicts",
+        work,
+        missing_evidence_file,
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert missing.returncode != 0
+    assert "invalid_conflict_field: missing: evidence" in missing.stderr
+
+    premature = run_python(
+        SPEC_OPS,
+        "state-decide",
+        work,
+        "same",
+        "accept",
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert premature.returncode != 0
+    assert "invalid_state: expected_WAITING_DECISION" in premature.stderr
+
+    valid_file = tmp_path / "valid.json"
+    write(valid_file, json.dumps([duplicate], ensure_ascii=False))
+    assert run_python(
+        SPEC_OPS,
+        "state-set-conflicts",
+        work,
+        valid_file,
+        "specs-fingerprint",
+        "input-fingerprint",
+    ).returncode == 0
+    stale = run_python(
+        SPEC_OPS, "state-current", work, "changed-specs", "input-fingerprint"
+    )
+    assert stale.returncode != 0
+    assert "specs_fingerprint_changed" in stale.stderr
+
+    specs = tmp_path / "specs"
+    delta = tmp_path / "delta"
+    preview = tmp_path / "preview"
+    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
+    delta.mkdir()
+    blocked = apply_ready(SPEC_OPS, specs, delta, preview, work)
+    assert blocked.returncode != 0
+    assert "invalid_state: expected_READY_TO_APPLY" in blocked.stderr
+
+    state_path = work / "current" / "state.json"
+    inconsistent = json.loads(state_path.read_text(encoding="utf-8"))
+    inconsistent["status"] = "READY_TO_APPLY"
+    state_path.write_text(json.dumps(inconsistent), encoding="utf-8")
+    tampered = apply_ready(SPEC_OPS, specs, delta, preview, work)
+    assert tampered.returncode != 0
+    assert "invalid_state_document" in tampered.stderr
+
+
+def test_spec_ops_cli_records_each_supported_conflict_decision(tmp_path: Path) -> None:
+    work = tmp_path / ".local" / "spec-work"
+    conflicts_file = tmp_path / "conflicts.json"
+    conflicts = [
+        {
+            "id": f"conflict-{index}",
+            "candidate": f"候选 {index}",
+            "evidence": [f"spec.md:{index}"],
+            "reason": "需要决定",
+            "recommendation": "采用建议",
+        }
+        for index in range(4)
+    ]
+    write(conflicts_file, json.dumps(conflicts, ensure_ascii=False))
+    assert run_python(
+        SPEC_OPS, "state-init", work, "add", "specs-fingerprint", "input-fingerprint"
+    ).returncode == 0
+    assert run_python(
+        SPEC_OPS,
+        "state-set-conflicts",
+        work,
+        conflicts_file,
+        "specs-fingerprint",
+        "input-fingerprint",
+    ).returncode == 0
+
+    assert run_python(
+        SPEC_OPS,
+        "state-decide",
+        work,
+        "conflict-0",
+        "accept",
+        "specs-fingerprint",
+        "input-fingerprint",
+    ).returncode == 0
+    repeated = run_python(
+        SPEC_OPS,
+        "state-decide",
+        work,
+        "conflict-0",
+        "accept",
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert repeated.returncode != 0
+    assert "unexpected_conflict_id: expected_conflict-1: conflict-0" in repeated.stderr
+    assert run_python(
+        SPEC_OPS,
+        "state-decide",
+        work,
+        "conflict-1",
+        "ignore",
+        "specs-fingerprint",
+        "input-fingerprint",
+    ).returncode == 0
+    modified = run_python(
+        SPEC_OPS,
+        "state-decide",
+        work,
+        "conflict-2",
+        "accept-modified",
+        "specs-fingerprint",
+        "input-fingerprint",
+        "--modified-content",
+        "修改后的完整候选",
+    )
+    assert modified.returncode == 0, modified.stderr
+    final = run_python(
+        SPEC_OPS,
+        "state-decide",
+        work,
+        "conflict-3",
+        "defer",
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert final.returncode == 0, final.stderr
+    assert json.loads(final.stdout) == {
+        "status": "READY_TO_APPLY",
+        "total": 4,
+        "decided": 4,
+        "remaining": 0,
+    }
+    state = json.loads((work / "current" / "state.json").read_text(encoding="utf-8"))
+    assert [item["decision"] for item in state["decisions"]] == [
+        "accept",
+        "ignore",
+        "accept-modified",
+        "defer",
+    ]
+    assert state["decisions"][2]["modifiedContent"] == "修改后的完整候选"
+
+
 def test_spec_ops_cli_initializes_a_new_capability_from_an_empty_spec_library(tmp_path: Path) -> None:
     specs = tmp_path / "missing-specs"
     delta = tmp_path / "delta"
@@ -217,9 +548,10 @@ def test_spec_ops_cli_initializes_a_new_capability_from_an_empty_spec_library(tm
 """,
     )
 
+    work = ready_state(SPEC_OPS, tmp_path / "state")
     validated = run_python(SPEC_OPS, "validate-delta", delta, specs)
     assert validated.returncode == 0, validated.stderr
-    applied = run_python(SPEC_OPS, "apply-delta", specs, delta, preview)
+    applied = apply_ready(SPEC_OPS, specs, delta, preview, work)
     assert applied.returncode == 0, applied.stderr
     assert run_python(SPEC_OPS, "validate-main", preview).returncode == 0
     assert "### Requirement: 接收通知" in (preview / "notifications" / "spec.md").read_text(encoding="utf-8")
@@ -240,7 +572,8 @@ def test_spec_ops_preview_auto_merges_identical_duplicate_requirements_but_main_
     assert strict.returncode != 0
     assert "duplicate_requirement_global: 登录" in strict.stderr
 
-    merged = run_python(SPEC_OPS, "apply-delta", specs, delta, preview)
+    work = ready_state(SPEC_OPS, tmp_path / "state", "review")
+    merged = apply_ready(SPEC_OPS, specs, delta, preview, work)
     assert merged.returncode == 0, merged.stderr
     assert run_python(SPEC_OPS, "validate-main", preview).returncode == 0
     assert (preview / "accounts" / "spec.md").read_text(encoding="utf-8").count(
@@ -269,6 +602,7 @@ def test_skill_entries_route_add_review_and_audit_with_safe_boundaries() -> None
     add = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "add-document.md").read_text(encoding="utf-8")
     review = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "review.md").read_text(encoding="utf-8")
     audit = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "audit.md").read_text(encoding="utf-8")
+    rules = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "openspec-rules.md").read_text(encoding="utf-8")
     for procedure in (add, review, audit):
         assert "一次只展示一条" in procedure
         assert "完整差异" in procedure
@@ -277,7 +611,14 @@ def test_skill_entries_route_add_review_and_audit_with_safe_boundaries() -> None
     assert "只读取 `openspec/specs/`" in review
     assert "不得读取仓库其他文件" in review
     assert "git ls-files --cached --others --exclude-standard" in audit
-    assert "只读取用户指定的文档" in add
+    assert ".local/spec-work/" in skill and ".local/spec-work/" in audit and ".local/spec-work/" in rules
+    assert ".spec-work/" not in skill + audit + rules
+    assert "Agent" in add and "相关证据" in add
+    assert "指定文档" not in add
+    for procedure in (add, review, audit):
+        assert "state-set-conflicts" in procedure
+        assert "首次展示" in procedure
+        assert "禁止重新" in procedure
 
 
 def test_plugin_uses_default_skill_paths_without_legacy_installer() -> None:
@@ -407,15 +748,18 @@ def test_apply_delta_can_atomically_replace_main_after_final_confirmation(tmp_pa
 """,
     )
 
-    applied = run_python(SPEC_OPS, "apply-delta", specs, delta, specs)
+    work = ready_state(SPEC_OPS, tmp_path / "state")
+    applied = apply_ready(SPEC_OPS, specs, delta, specs, work)
     assert applied.returncode == 0, applied.stderr
     assert "系统 MUST 允许密码登录。" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
     assert not any(path.name.startswith(".my-spec-") for path in specs.parent.iterdir())
+    assert not work.exists()
     assert run_python(SPEC_OPS, "validate-main", specs).returncode == 0
 
     before = (specs / "accounts" / "spec.md").read_bytes()
     repeated_validation = run_python(SPEC_OPS, "validate-delta", delta, specs)
     assert repeated_validation.returncode == 0, repeated_validation.stderr
-    repeated = run_python(SPEC_OPS, "apply-delta", specs, delta, specs)
+    repeated_work = ready_state(SPEC_OPS, tmp_path / "repeated-state")
+    repeated = apply_ready(SPEC_OPS, specs, delta, specs, repeated_work)
     assert repeated.returncode == 0, repeated.stderr
     assert (specs / "accounts" / "spec.md").read_bytes() == before

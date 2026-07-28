@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import json
 import re
 import shutil
 import sys
@@ -16,6 +17,9 @@ SCENARIO = re.compile(r"^#### Scenario: (\S.*)$")
 CAPABILITY = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 OPERATIONS = ("RENAMED", "REMOVED", "MODIFIED", "ADDED")
 OPERATION_HEADING = re.compile(r"^## (ADDED|MODIFIED|REMOVED|RENAMED) Requirements$")
+RUN_STATUSES = ("ANALYZING", "WAITING_DECISION", "READY_TO_APPLY")
+DECISIONS = ("accept", "ignore", "accept-modified", "defer")
+CONFLICT_FIELDS = ("id", "candidate", "evidence", "reason", "recommendation")
 
 
 class SpecError(ValueError):
@@ -317,7 +321,19 @@ def _merged_specs(specs_root: Path, delta_root: Path) -> OrderedDict[str, MainSp
     return specs
 
 
-def apply_delta(specs_root: Path, delta_root: Path, output_root: Path) -> None:
+def apply_delta(
+    specs_root: Path,
+    delta_root: Path,
+    output_root: Path,
+    work_root: Path,
+    specs_fingerprint: str,
+    input_fingerprint: str,
+) -> None:
+    state = _load_state(work_root)
+    _assert_fingerprints(state, specs_fingerprint, input_fingerprint)
+    summary = _state_summary(state)
+    if summary["status"] != "READY_TO_APPLY" or summary["remaining"] != 0:
+        raise SpecError("invalid_state: expected_READY_TO_APPLY")
     specs = _merged_specs(specs_root, delta_root)
     if output_root.resolve(strict=False) != specs_root.resolve(strict=False):
         if output_root.exists() and any(output_root.iterdir()):
@@ -338,6 +354,12 @@ def apply_delta(specs_root: Path, delta_root: Path, output_root: Path) -> None:
         validate_main(specs_root)
         if backup.exists():
             shutil.rmtree(backup)
+        shutil.rmtree(work_root / "current")
+        (work_root / "lock").unlink()
+        try:
+            work_root.rmdir()
+        except OSError:
+            pass
     except Exception:
         if preview.exists():
             shutil.rmtree(preview)
@@ -348,6 +370,215 @@ def apply_delta(specs_root: Path, delta_root: Path, output_root: Path) -> None:
         elif not had_specs and specs_root.exists():
             shutil.rmtree(specs_root)
         raise
+
+
+def _state_path(work_root: Path) -> Path:
+    return work_root / "current" / "state.json"
+
+
+def _atomic_json(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _read_json(path: Path) -> object:
+    try:
+        return json.loads(_text(path))
+    except json.JSONDecodeError as exc:
+        raise SpecError(f"invalid_json: {path}: {exc.msg}") from exc
+
+
+def _load_state(work_root: Path) -> dict[str, object]:
+    value = _read_json(_state_path(work_root))
+    if not isinstance(value, dict):
+        raise SpecError("invalid_state_document")
+    return value
+
+
+def _state_summary(state: dict[str, object]) -> dict[str, object]:
+    conflicts = state.get("conflicts")
+    decisions = state.get("decisions")
+    status = state.get("status")
+    cursor = state.get("currentConflict")
+    if (
+        not isinstance(conflicts, list)
+        or not isinstance(decisions, list)
+        or status not in RUN_STATUSES
+        or not isinstance(cursor, int)
+        or cursor != len(decisions)
+        or cursor > len(conflicts)
+    ):
+        raise SpecError("invalid_state_document")
+    total = len(conflicts)
+    decided = len(decisions)
+    if (
+        (status == "ANALYZING" and (total or decided or cursor))
+        or (status == "WAITING_DECISION" and cursor >= total)
+        or (status == "READY_TO_APPLY" and cursor != total)
+    ):
+        raise SpecError("invalid_state_document")
+    return {
+        "status": status,
+        "total": total,
+        "decided": decided,
+        "remaining": total - decided,
+    }
+
+
+def state_init(
+    work_root: Path,
+    command: str,
+    specs_fingerprint: str,
+    input_fingerprint: str,
+) -> None:
+    if command not in {"add", "review", "audit"}:
+        raise SpecError(f"invalid_state_command: {command}")
+    if not specs_fingerprint or not input_fingerprint:
+        raise SpecError("missing_state_fingerprint")
+    work_root.mkdir(parents=True, exist_ok=True)
+    lock = work_root / "lock"
+    try:
+        with lock.open("x", encoding="utf-8") as handle:
+            handle.write(command + "\n")
+    except FileExistsError as exc:
+        raise SpecError(f"state_locked: {work_root}") from exc
+    try:
+        current = work_root / "current"
+        if current.exists():
+            shutil.rmtree(current)
+        _atomic_json(
+            _state_path(work_root),
+            {
+                "command": command,
+                "status": "ANALYZING",
+                "specsFingerprint": specs_fingerprint,
+                "inputFingerprint": input_fingerprint,
+                "currentConflict": 0,
+                "conflicts": [],
+                "decisions": [],
+            },
+        )
+    except Exception:
+        lock.unlink(missing_ok=True)
+        raise
+
+
+def _validate_conflicts(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise SpecError("conflicts_must_be_array")
+    result: list[dict[str, object]] = []
+    identifiers: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            raise SpecError("conflict_must_be_object")
+        identifier = item.get("id")
+        if not isinstance(identifier, str) or not identifier.strip():
+            raise SpecError("invalid_conflict_field: <unknown>: id")
+        if identifier in identifiers:
+            raise SpecError(f"duplicate_conflict_id: {identifier}")
+        identifiers.add(identifier)
+        for field_name in CONFLICT_FIELDS[1:]:
+            field_value = item.get(field_name)
+            valid = (
+                isinstance(field_value, str) and bool(field_value.strip())
+                if field_name != "evidence"
+                else isinstance(field_value, list)
+                and bool(field_value)
+                and all(isinstance(entry, str) and entry.strip() for entry in field_value)
+            )
+            if not valid:
+                raise SpecError(f"invalid_conflict_field: {identifier}: {field_name}")
+        result.append({field_name: item[field_name] for field_name in CONFLICT_FIELDS})
+    return result
+
+
+def _assert_fingerprints(
+    state: dict[str, object], specs_fingerprint: str, input_fingerprint: str
+) -> None:
+    if state.get("specsFingerprint") != specs_fingerprint:
+        raise SpecError("specs_fingerprint_changed")
+    if state.get("inputFingerprint") != input_fingerprint:
+        raise SpecError("input_fingerprint_changed")
+
+
+def state_set_conflicts(
+    work_root: Path,
+    conflicts_path: Path,
+    specs_fingerprint: str,
+    input_fingerprint: str,
+) -> dict[str, object]:
+    state = _load_state(work_root)
+    _assert_fingerprints(state, specs_fingerprint, input_fingerprint)
+    if state.get("status") != "ANALYZING":
+        raise SpecError("invalid_state: expected_ANALYZING")
+    conflicts = _validate_conflicts(_read_json(conflicts_path))
+    state["conflicts"] = conflicts
+    state["currentConflict"] = 0
+    state["decisions"] = []
+    state["status"] = "WAITING_DECISION" if conflicts else "READY_TO_APPLY"
+    _atomic_json(_state_path(work_root), state)
+    summary = _state_summary(state)
+    return {"status": summary["status"], "total": summary["total"], "remaining": summary["remaining"]}
+
+
+def state_current(
+    work_root: Path, specs_fingerprint: str, input_fingerprint: str
+) -> dict[str, object]:
+    state = _load_state(work_root)
+    _assert_fingerprints(state, specs_fingerprint, input_fingerprint)
+    if state.get("status") != "WAITING_DECISION":
+        raise SpecError("invalid_state: expected_WAITING_DECISION")
+    conflicts = state["conflicts"]
+    index = state["currentConflict"]
+    if not isinstance(conflicts, list) or not isinstance(index, int) or not 0 <= index < len(conflicts):
+        raise SpecError("invalid_conflict_cursor")
+    return {"index": index, "total": len(conflicts), "conflict": conflicts[index]}
+
+
+def state_decide(
+    work_root: Path,
+    expected_conflict_id: str,
+    decision: str,
+    specs_fingerprint: str,
+    input_fingerprint: str,
+    modified_content: str | None = None,
+) -> dict[str, object]:
+    state = _load_state(work_root)
+    _assert_fingerprints(state, specs_fingerprint, input_fingerprint)
+    if state.get("status") != "WAITING_DECISION":
+        raise SpecError("invalid_state: expected_WAITING_DECISION")
+    if decision not in DECISIONS:
+        raise SpecError(f"invalid_decision: {decision}")
+    if decision == "accept-modified" and not (modified_content and modified_content.strip()):
+        raise SpecError("modified_content_required")
+    if decision != "accept-modified" and modified_content is not None:
+        raise SpecError("modified_content_not_allowed")
+    conflicts = state.get("conflicts")
+    decisions = state.get("decisions")
+    index = state.get("currentConflict")
+    if not isinstance(conflicts, list) or not isinstance(decisions, list) or not isinstance(index, int):
+        raise SpecError("invalid_state_document")
+    if index != len(decisions) or not 0 <= index < len(conflicts):
+        raise SpecError("invalid_conflict_cursor")
+    conflict = conflicts[index]
+    if not isinstance(conflict, dict) or not isinstance(conflict.get("id"), str):
+        raise SpecError("invalid_state_document")
+    if conflict["id"] != expected_conflict_id:
+        raise SpecError(f"unexpected_conflict_id: expected_{conflict['id']}: {expected_conflict_id}")
+    record: dict[str, object] = {"conflictId": conflict["id"], "decision": decision}
+    if modified_content is not None:
+        record["modifiedContent"] = modified_content
+    decisions.append(record)
+    state["currentConflict"] = index + 1
+    state["status"] = "READY_TO_APPLY" if index + 1 == len(conflicts) else "WAITING_DECISION"
+    _atomic_json(_state_path(work_root), state)
+    return _state_summary(state)
 
 
 def diff_dirs(old_root: Path, new_root: Path) -> str:
@@ -380,9 +611,37 @@ def _parser() -> argparse.ArgumentParser:
     apply_parser.add_argument("specs_dir", type=Path)
     apply_parser.add_argument("delta_dir", type=Path)
     apply_parser.add_argument("output_dir", type=Path)
+    apply_parser.add_argument("work_dir", type=Path)
+    apply_parser.add_argument("specs_fingerprint")
+    apply_parser.add_argument("input_fingerprint")
     diff_parser = commands.add_parser("diff")
     diff_parser.add_argument("old_dir", type=Path)
     diff_parser.add_argument("new_dir", type=Path)
+    state_init_parser = commands.add_parser("state-init")
+    state_init_parser.add_argument("work_dir", type=Path)
+    state_init_parser.add_argument("run_command")
+    state_init_parser.add_argument("specs_fingerprint")
+    state_init_parser.add_argument("input_fingerprint")
+    state_set_parser = commands.add_parser("state-set-conflicts")
+    state_set_parser.add_argument("work_dir", type=Path)
+    state_set_parser.add_argument("conflicts_file", type=Path)
+    state_set_parser.add_argument("specs_fingerprint")
+    state_set_parser.add_argument("input_fingerprint")
+    state_current_parser = commands.add_parser("state-current")
+    state_current_parser.add_argument("work_dir", type=Path)
+    state_current_parser.add_argument("specs_fingerprint")
+    state_current_parser.add_argument("input_fingerprint")
+    state_decide_parser = commands.add_parser("state-decide")
+    state_decide_parser.add_argument("work_dir", type=Path)
+    state_decide_parser.add_argument("expected_conflict_id")
+    state_decide_parser.add_argument("decision")
+    state_decide_parser.add_argument("specs_fingerprint")
+    state_decide_parser.add_argument("input_fingerprint")
+    state_decide_parser.add_argument("--modified-content")
+    state_status_parser = commands.add_parser("state-status")
+    state_status_parser.add_argument("work_dir", type=Path)
+    state_status_parser.add_argument("specs_fingerprint")
+    state_status_parser.add_argument("input_fingerprint")
     return parser
 
 
@@ -394,9 +653,55 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "validate-delta":
             validate_delta(args.delta_dir, args.specs_dir)
         elif args.command == "apply-delta":
-            apply_delta(args.specs_dir, args.delta_dir, args.output_dir)
+            apply_delta(
+                args.specs_dir,
+                args.delta_dir,
+                args.output_dir,
+                args.work_dir,
+                args.specs_fingerprint,
+                args.input_fingerprint,
+            )
         elif args.command == "diff":
             sys.stdout.write(diff_dirs(args.old_dir, args.new_dir))
+        elif args.command == "state-init":
+            state_init(args.work_dir, args.run_command, args.specs_fingerprint, args.input_fingerprint)
+        elif args.command == "state-set-conflicts":
+            print(
+                json.dumps(
+                    state_set_conflicts(
+                        args.work_dir,
+                        args.conflicts_file,
+                        args.specs_fingerprint,
+                        args.input_fingerprint,
+                    ),
+                    ensure_ascii=False,
+                )
+            )
+        elif args.command == "state-current":
+            print(
+                json.dumps(
+                    state_current(args.work_dir, args.specs_fingerprint, args.input_fingerprint),
+                    ensure_ascii=False,
+                )
+            )
+        elif args.command == "state-decide":
+            print(
+                json.dumps(
+                    state_decide(
+                        args.work_dir,
+                        args.expected_conflict_id,
+                        args.decision,
+                        args.specs_fingerprint,
+                        args.input_fingerprint,
+                        args.modified_content,
+                    ),
+                    ensure_ascii=False,
+                )
+            )
+        elif args.command == "state-status":
+            state = _load_state(args.work_dir)
+            _assert_fingerprints(state, args.specs_fingerprint, args.input_fingerprint)
+            print(json.dumps(_state_summary(state), ensure_ascii=False))
     except SpecError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

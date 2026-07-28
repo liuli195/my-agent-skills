@@ -462,6 +462,15 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_spec_ops_cli_rejects_invalid_specs_and_delta_references': (
         'covers packaged spec_ops CLI trust-boundary failures without tracebacks; function=test_spec_ops_cli_rejects_invalid_specs_and_delta_references'
     ),
+    'tests/test_my_spec.py::test_spec_ops_cli_persists_complete_conflicts_and_resumes_in_a_new_process': (
+        'covers packaged spec_ops CLI complete conflict persistence and cross-process continuation; function=test_spec_ops_cli_persists_complete_conflicts_and_resumes_in_a_new_process'
+    ),
+    'tests/test_my_spec.py::test_spec_ops_cli_rejects_incomplete_or_out_of_order_conflict_state': (
+        'covers packaged spec_ops CLI conflict-state trust-boundary failures; function=test_spec_ops_cli_rejects_incomplete_or_out_of_order_conflict_state'
+    ),
+    'tests/test_my_spec.py::test_spec_ops_cli_records_each_supported_conflict_decision': (
+        'covers packaged spec_ops CLI decision values and ready transition; function=test_spec_ops_cli_records_each_supported_conflict_decision'
+    ),
     'tests/test_my_spec.py::test_spec_ops_cli_initializes_a_new_capability_from_an_empty_spec_library': (
         'covers packaged spec_ops CLI empty-library initialization; function=test_spec_ops_cli_initializes_a_new_capability_from_an_empty_spec_library'
     ),

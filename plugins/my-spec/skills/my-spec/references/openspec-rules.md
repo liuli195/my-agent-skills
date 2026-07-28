@@ -10,7 +10,7 @@
 
 ## Delta
 
-Delta（增量规格）按能力放在 `.spec-work/current/delta/<capability-name>/spec.md`，只允许：
+Delta（增量规格）按能力放在 `.local/spec-work/current/delta/<capability-name>/spec.md`，只允许：
 
 - `## RENAMED Requirements`：连续的 `FROM: <旧标题>`、`TO: <新标题>` 对。
 - `## REMOVED Requirements`：用 Requirement（需求）标题引用。
@@ -26,9 +26,14 @@ Delta（增量规格）按能力放在 `.spec-work/current/delta/<capability-nam
 从 Skill（技能）目录运行：
 
 ```text
+python scripts/spec_ops.py state-init <work-dir> <add|review|audit> <specs-fingerprint> <input-fingerprint>
+python scripts/spec_ops.py state-set-conflicts <work-dir> <conflicts-json> <specs-fingerprint> <input-fingerprint>
+python scripts/spec_ops.py state-current <work-dir> <specs-fingerprint> <input-fingerprint>
+python scripts/spec_ops.py state-decide <work-dir> <expected-conflict-id> <accept|ignore|accept-modified|defer> <specs-fingerprint> <input-fingerprint>
+python scripts/spec_ops.py state-status <work-dir> <specs-fingerprint> <input-fingerprint>
 python scripts/spec_ops.py validate-main <specs-dir>
 python scripts/spec_ops.py validate-delta <delta-dir> <specs-dir>
-python scripts/spec_ops.py apply-delta <specs-dir> <delta-dir> <preview-dir>
+python scripts/spec_ops.py apply-delta <specs-dir> <delta-dir> <preview-dir> <work-dir> <specs-fingerprint> <input-fingerprint>
 python scripts/spec_ops.py diff <specs-dir> <preview-dir>
 ```
 
