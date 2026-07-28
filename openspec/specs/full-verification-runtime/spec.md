@@ -6,18 +6,6 @@ TBD - created by archiving change optimize-full-verification-runtime. Update Pur
 
 ## Requirements
 
-### Requirement: Full verification has a local runtime target
-Full repository verification SHALL（必须）complete in under 60 seconds on the local development machine while preserving the existing behavior coverage. The current full verification command for this repository SHALL（必须）be `python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full` unless a later OpenSpec（开放规格）change explicitly replaces it.
-
-#### Scenario: Full verification completes under target
-- **WHEN** a developer runs the full verification command
-- **THEN** the command MUST complete in under 60 seconds on the local development machine
-- **THEN** the command MUST run all configured verify checks（验证检查项） from `.build-and-verify/config.json`, including the repository's Python（Python 语言）test checks
-
-#### Scenario: Runtime evidence is recorded
-- **WHEN** full verification is optimized
-- **THEN** the verification report MUST include before and after timing evidence
-- **THEN** the evidence MUST identify the largest remaining contributors if the command is still close to the target
 ### Requirement: Test optimization preserves behavioral coverage
 The test suite SHALL（必须）reduce avoidable overhead without dropping local build contract（本地构建契约）, PR Flow（拉取请求流程）, Release Flow（发布流程）, Build and Verify（构建与验证）behavior coverage, or OpenSpec（开放规格）validation coverage.
 
@@ -39,27 +27,6 @@ The test suite SHALL（必须）reduce avoidable overhead without dropping local
 #### Scenario: No dependency is added just for speed without review
 - **WHEN** a speed improvement requires a new test dependency such as pytest-xdist（并行测试插件）
 - **THEN** the dependency MUST be explicitly evaluated in design or review notes before adoption
-### Requirement: Optimization strategy applies across the repository
-The repository SHALL（必须）apply both the repo-native test optimization layer and the build-and-verify（构建与验证） parallel execution layer across the full configured verification suite where safe, rather than special-casing one slow test file.
-
-#### Scenario: Repo-native optimization is suite-wide
-- **WHEN** repository tests repeat expensive Git（版本管理）setup, fake CLI（命令行界面）process scripts, Python CLI（命令行程序）startup, or equivalent setup costs
-- **THEN** the tests SHOULD use shared fixtures（测试夹具）, reusable stubs（替身）, in-process calls, or narrow test seams（测试接缝）when those choices preserve the behavior under test
-- **THEN** required end-to-end（端到端）coverage MUST remain for user-facing workflow paths
-
-#### Scenario: Shared test helpers are repository-wide
-- **WHEN** tests need repeated Git（版本管理）state, fake CLI（命令行界面）responses, or in-process（进程内）command execution
-- **THEN** they SHOULD use shared helpers under `tests/support/`
-- **THEN** they MUST keep required end-to-end（端到端）paths for user-facing workflows
-- **THEN** they MUST NOT document the rule under `docs/rules/`
-
-#### Scenario: Parallel execution is coordinated by Build and Verify
-- **WHEN** full verification uses check-level parallel scheduling（检查项间并行调度）or pytest-xdist（Pytest 并行插件）
-- **THEN** the Build and Verify（构建与验证）runner MUST coordinate parallel execution for configured verify checks（验证检查项）where safe
-- **THEN** checks（检查项）with `checkParallel: true` MUST be eligible for check-level parallel scheduling（检查项间并行调度）
-- **THEN** checks（检查项）without explicit `checkParallel` metadata（元数据）MUST default to serial execution（串行执行）
-- **THEN** checks（检查项）that need pytest-xdist（Pytest 并行插件）MUST declare `pytestXdistWorkers`（Pytest 工作进程数）
-- **THEN** full verification MUST NOT become a partial or marker-filtered（测试标记过滤）subset to meet the runtime target
 ### Requirement: Test-writing rules are captured as OpenSpec artifacts first
 Repository test-writing rules for this change SHALL（必须）be expressed through OpenSpec（规格流程）change artifacts before any separate rule-document location is chosen.
 
@@ -74,8 +41,32 @@ Build-and-verify（构建与验证）tests SHALL（必须）preserve verify sele
 - **WHEN** build-and-verify（构建与验证）tests are optimized or renamed
 - **THEN** verify selection（验证选择）, cache behavior（缓存行为）, full mode（完整模式）, failure reporting（失败报告）, and serial fallback（串行兜底） behavior MUST remain covered
 - **THEN** full mode（完整模式） MUST NOT skip required checks（检查项） because of cache hits（缓存命中）
-### Requirement: Parallel execution is coordinated by build-and-verify
-Parallel execution SHALL（必须）be coordinated by the build-and-verify（构建与验证）runner（运行器） across configured verification checks where safe.
+### Requirement: Full verification has a local runtime target
+Full repository end-to-end verification SHALL（必须）complete in under 60 seconds on the local development machine while preserving the existing behavior coverage. This repository-level target is distinct from any narrower plugin test-suite target. The current full verification command for this repository SHALL（必须）be `python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full` unless a later OpenSpec（开放规格）change explicitly replaces it.
+
+#### Scenario: Full repository verification completes under target
+- **WHEN** a developer runs the full repository verification command
+- **THEN** the command MUST complete in under 60 seconds on the local development machine
+- **THEN** the command MUST run all configured verify checks（验证检查项） from `.build-and-verify/config.json`, including the repository's Python（Python 语言）test checks
+- **THEN** this repository-level target MUST NOT redefine a narrower target for the Build and Verify（构建与验证）plugin's own test suite
+
+#### Scenario: Runtime evidence is recorded
+- **WHEN** full repository verification is optimized
+- **THEN** the verification report MUST include before and after timing evidence
+- **THEN** the evidence MUST identify the largest remaining contributors if the command is still close to the target
+### Requirement: Optimization strategy applies across the repository
+The repository SHALL（必须）apply both the repo-native test optimization layer and the build-and-verify（构建与验证） parallel execution layer across the full configured verification suite where safe, rather than special-casing one slow test file. Parallel execution SHALL（必须）be coordinated by the build-and-verify（构建与验证）runner（运行器）.
+
+#### Scenario: Repo-native optimization is suite-wide
+- **WHEN** repository tests repeat expensive Git（版本管理）setup, fake CLI（命令行界面）process scripts, Python CLI（命令行程序）startup, or equivalent setup costs
+- **THEN** the tests SHOULD use shared fixtures（测试夹具）, reusable stubs（替身）, in-process calls, or narrow test seams（测试接缝）when those choices preserve the behavior under test
+- **THEN** required end-to-end（端到端）coverage MUST remain for user-facing workflow paths
+
+#### Scenario: Shared test helpers are repository-wide
+- **WHEN** tests need repeated Git（版本管理）state, fake CLI（命令行界面）responses, or in-process（进程内）command execution
+- **THEN** they SHOULD use shared helpers under `tests/support/`
+- **THEN** they MUST keep required end-to-end（端到端）paths for user-facing workflows
+- **THEN** they MUST NOT document the rule under `docs/rules/`
 
 #### Scenario: Full verification remains runner-owned
 - **WHEN** full verification（完整验证） runs configured verify checks（验证检查项）

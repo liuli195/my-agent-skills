@@ -621,14 +621,14 @@ def test_skill_entries_route_add_review_and_audit_with_safe_boundaries() -> None
         assert "禁止重新" in procedure
 
 
-def test_plugin_uses_default_skill_paths_without_legacy_installer() -> None:
-    assert not (PLUGIN_ROOT / "scripts" / "install.py").exists()
+def test_plugin_uses_host_native_skill_paths_without_custom_pi_routing() -> None:
     assert not (PLUGIN_ROOT / "scripts").exists()
+    assert not (PLUGIN_ROOT / "extensions").exists()
 
     package = json.loads((PLUGIN_ROOT / "package.json").read_text(encoding="utf-8"))
     assert package["name"] == "pi-my-spec"
-    assert package["pi"]["extensions"] == ["./extensions/pi-my-spec.ts"]
-    assert package["pi"]["skills"] == ["./skills"]
+    assert package["pi"] == {"skills": ["./skills"]}
+    assert "peerDependencies" not in package
 
 
 def test_spec_add_deterministic_post_analysis_flow_previews_diffs_and_applies(
@@ -707,16 +707,12 @@ def test_spec_audit_deterministic_post_analysis_flow_previews_diffs_and_applies(
     assert (specs / "notifications" / "spec.md").is_file()
 
 
-def test_pi_extension_registers_four_default_commands_and_routes_to_skills() -> None:
-    source = (PLUGIN_ROOT / "extensions" / "pi-my-spec.ts").read_text(encoding="utf-8")
-    for name in SKILL_NAMES:
-        assert f'"{name}": "{name}"' in source
-    assert "pi.registerCommand(command" in source
-    assert "pi.sendUserMessage" in source
-
-
 def test_my_spec_plugin_is_discoverable_by_pi_claude_and_codex() -> None:
     package_version = json.loads((PLUGIN_ROOT / "package.json").read_text(encoding="utf-8"))["version"]
+    spec = (REPO_ROOT / "openspec" / "specs" / "my-spec" / "spec.md").read_text(encoding="utf-8")
+    assert "/skill:my-spec-add" in spec
+    assert "/my-spec:my-spec-add" in spec
+    assert "$my-spec-add" in spec
     for host in (".claude-plugin", ".codex-plugin"):
         manifest = json.loads((PLUGIN_ROOT / host / "plugin.json").read_text(encoding="utf-8"))
         assert manifest["name"] == "my-spec"

@@ -107,14 +107,6 @@ The repository's active GitHub workflows MUST avoid Node.js 20 action/runtime re
 #### Scenario: CodeQL action stays on current available major
 - **WHEN** `.github/workflows/codeql.yml` is inspected
 - **THEN** `github/codeql-action/init` and `github/codeql-action/analyze` MAY remain on `@v4` while no newer major is available
-### Requirement: Plugin manifest version tests use manifest source of truth
-Repository-owned local plugin package tests MUST NOT maintain a duplicate hard-coded plugin version source when validating dual Codex（代码助手） and Claude（代码助手） manifest（清单） files.
-
-#### Scenario: Dual manifest version consistency is checked without duplicate constant
-- **WHEN** a local plugin package test validates `.codex-plugin/plugin.json` and `.claude-plugin/plugin.json`
-- **THEN** the test MUST read version（版本） values from the manifest（清单） files
-- **THEN** the test MUST assert the two manifest（清单） versions are equal
-- **THEN** the test MUST NOT require a second hard-coded plugin version constant to be updated during release version bump（版本提升）
 ### Requirement: Repository tests enforce runtime boundary
 Repository-owned tests MUST enforce a boundary between ordinary tests and explicit E2E（端到端测试） coverage across the whole `tests/` tree.
 
@@ -154,8 +146,8 @@ Repository-owned checks（仓库检查） MUST guard the recoverable stop-state 
 #### Scenario: Known recoverable reasons do not become generic exceptions
 - **WHEN** repository tests cover known recoverable reasons（原因） such as GitHub authentication, transient PR view failure, pending checks, ruleset blocking, and invalid user input
 - **THEN** those reasons（原因） MUST NOT be reported only as generic `EXCEPTION_REQUIRED`（需要人工处理）
-### Requirement: Repository tests guard plugin version source of truth
-Repository-owned tests MUST prevent duplicate real plugin version facts while allowing normal release intermediate states.
+### Requirement: Plugin manifest version tests use manifest source of truth
+Repository-owned local plugin package tests MUST prevent duplicate real plugin version facts while allowing normal release intermediate states when validating dual Codex（代码助手） and Claude（代码助手） manifest（清单） files.
 
 #### Scenario: Dual manifest versions are compared from files
 - **WHEN** repository tests validate a local plugin package
