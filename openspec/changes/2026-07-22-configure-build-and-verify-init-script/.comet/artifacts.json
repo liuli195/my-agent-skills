@@ -1,0 +1,7 @@
+{
+  "openspec_proposal": "openspec/changes/configure-build-and-verify-init-script/proposal.md",
+  "openspec_design": "openspec/changes/configure-build-and-verify-init-script/design.md",
+  "openspec_tasks": "openspec/changes/configure-build-and-verify-init-script/tasks.md",
+  "openspec_delta_spec": "openspec/changes/configure-build-and-verify-init-script/specs/worktree-environment-setup/spec.md",
+  "archive_directory": "openspec/changes/archive/2026-07-22-configure-build-and-verify-init-script"
+}
