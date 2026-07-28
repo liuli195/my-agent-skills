@@ -456,6 +456,21 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_pr_flow_cli.py::test_project_template_recreates_incomplete_template_after_stale_lock': (
         'covers pr-flow packaged CLI helper-chain contract: test_project_template_recreates_incomplete_template_after_stale_lock; function=test_project_template_recreates_incomplete_template_after_stale_lock'
     ),
+    'tests/test_my_spec.py::test_spec_ops_cli_validates_applies_all_delta_operations_and_diffs': (
+        'covers the packaged spec_ops CLI validation, all Delta operations, preview, and diff seam; function=test_spec_ops_cli_validates_applies_all_delta_operations_and_diffs'
+    ),
+    'tests/test_my_spec.py::test_spec_ops_cli_rejects_invalid_specs_and_delta_references': (
+        'covers packaged spec_ops CLI trust-boundary failures without tracebacks; function=test_spec_ops_cli_rejects_invalid_specs_and_delta_references'
+    ),
+    'tests/test_my_spec.py::test_spec_ops_cli_initializes_a_new_capability_from_an_empty_spec_library': (
+        'covers packaged spec_ops CLI empty-library initialization; function=test_spec_ops_cli_initializes_a_new_capability_from_an_empty_spec_library'
+    ),
+    'tests/test_my_spec.py::test_install_command_copies_shared_skill_links_claude_and_refuses_unknown_targets': (
+        'covers the packaged installer copy, directory-link, repeat-sync, and safety-refusal seam; function=test_install_command_copies_shared_skill_links_claude_and_refuses_unknown_targets'
+    ),
+    'tests/test_my_spec.py::test_apply_delta_can_atomically_replace_main_after_final_confirmation': (
+        'covers packaged spec_ops CLI final atomic replacement and idempotent no-op behavior; function=test_apply_delta_can_atomically_replace_main_after_final_confirmation'
+    ),
 }
 
 def shared_fixture_infos() -> dict[str, FunctionInfo]:

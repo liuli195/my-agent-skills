@@ -133,6 +133,28 @@
         "pytestXdistWorkers": 4
       },
       {
+        "id": "verify.my-spec",
+        "paths": [
+          ".agents/plugins/marketplace.json",
+          ".claude-plugin/marketplace.json",
+          ".release-flow/projection.yaml",
+          ".build-and-verify/config.json",
+          "plugins/my-spec/**",
+          "tests/test_my_spec.py"
+        ],
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_my_spec.py",
+        "inputs": [
+          ".agents/plugins/marketplace.json",
+          ".claude-plugin/marketplace.json",
+          ".release-flow/projection.yaml",
+          ".build-and-verify/config.json",
+          "plugins/my-spec",
+          "tests/test_my_spec.py"
+        ],
+        "checkParallel": true,
+        "pytestXdistWorkers": 4
+      },
+      {
         "id": "verify.build-and-verify",
         "paths": [
           ".agents/**",

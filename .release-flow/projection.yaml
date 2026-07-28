@@ -18,6 +18,7 @@ generators:
       - release-flow
       - pr-flow
       - build-and-verify
+      - my-spec
 
 transforms:
   - path: .agents/plugins/marketplace.json

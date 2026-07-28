@@ -63,6 +63,18 @@ PLUGIN_REGISTRY: dict[str, dict[str, Any]] = {
             "category": "Developer Tools",
         },
     },
+    "my-spec": {
+        "manifests": [
+            "plugins/my-spec/.codex-plugin/plugin.json",
+            "plugins/my-spec/.claude-plugin/plugin.json",
+        ],
+        "codexMarketplace": {
+            "name": "my-spec",
+            "source": {"source": "local", "path": "./plugins/my-spec"},
+            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+            "category": "Developer Tools",
+        },
+    },
 }
 BUILD_AND_VERIFY_PLUGIN = "build-and-verify"
 BUILD_AND_VERIFY_CONFIG_FILE = Path(".build-and-verify/config.json")

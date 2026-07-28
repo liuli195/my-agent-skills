@@ -1161,6 +1161,7 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
         "verify.local-build-contract",
         "verify.release-flow",
         "verify.pr-flow",
+        "verify.my-spec",
         "verify.build-and-verify",
     ]
     assert "pytest.full" not in check_by_id
