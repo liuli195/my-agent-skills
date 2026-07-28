@@ -6,14 +6,32 @@
 
 ## Requirements
 
-### Requirement: Pi 规格命令按空闲状态路由
+### Requirement: 规格技能使用宿主原生入口
 
-系统 MUST 提供 `/my-spec`、`/my-spec-add`、`/my-spec-review` 和 `/my-spec-audit`；代理忙碌时必须警告且不发送请求，空闲时必须路由到对应 Skill（技能）。
+系统 MUST 让 Pi、Claude 和 Codex 通过各自原生 Skill（技能）机制调用四个 my-spec 技能，不得注册把技能名称重新包装成普通用户消息的代理命令。
 
-#### Scenario: 用户调用规格命令
+#### Scenario: Pi 调用规格技能
 
-- **WHEN** 用户在 Pi（编码代理）中调用任一规格命令
-- **THEN** 系统按代理是否空闲执行警告或发送对应 Skill（技能）请求
+- **WHEN** 用户在 Pi（编码代理）中显式调用 my-spec 技能
+- **THEN** 系统 MUST 使用 `/skill:my-spec`、`/skill:my-spec-add`、`/skill:my-spec-review` 或 `/skill:my-spec-audit`
+- **THEN** Pi MUST 通过原生 Skill（技能）展开处理参数和 `SKILL.md`
+
+#### Scenario: Claude 调用规格技能
+
+- **WHEN** 用户在 Claude（代码代理）插件中显式调用 my-spec 技能
+- **THEN** 系统 MUST 使用 `/my-spec:my-spec`、`/my-spec:my-spec-add`、`/my-spec:my-spec-review` 或 `/my-spec:my-spec-audit`
+
+#### Scenario: Codex 调用规格技能
+
+- **WHEN** 用户在 Codex（代码代理）中显式调用 my-spec 技能
+- **THEN** 系统 MUST 使用 `$my-spec`、`$my-spec-add`、`$my-spec-review` 或 `$my-spec-audit`
+
+#### Scenario: Pi 包不代理原生技能
+
+- **WHEN** Pi 加载 my-spec 包
+- **THEN** 包 MUST 只通过 `pi.skills` 公开技能资源
+- **THEN** 包 MUST NOT 注册 `/my-spec`、`/my-spec-add`、`/my-spec-review` 或 `/my-spec-audit` 扩展命令
+- **THEN** 包 MUST NOT 发送 `Use the <skill> skill` 形式的普通用户消息来模拟技能调用
 ### Requirement: 规格插件在三类宿主中可发现
 
 系统 MUST 让 `my-spec` 同时可被 Pi、Claude 和 Codex 发现，并公开四个规格 Skill（技能）。
