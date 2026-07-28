@@ -1,6 +1,6 @@
 ---
 name: my-spec-add
-description: 从 Agent（代理）为当前请求选取的相关证据新增或更新 OpenSpec（开放规格）。证据可来自会话、文档、代码或其他可读内容。
+description: 从 Agent（代理）为当前请求选取的相关证据新增或更新 MySpec（自有规格）。证据可来自会话、文档、代码或其他可读内容。
 ---
 
 # my-spec-add
@@ -9,7 +9,7 @@ description: 从 Agent（代理）为当前请求选取的相关证据新增或�
 
 执行前读取：
 
-1. [公共规则](../my-spec/references/openspec-rules.md)
+1. [公共规则](../my-spec/references/myspec-rules.md)
 2. [新增文档流程](../my-spec/references/add-document.md)
 3. [统一入口门禁](../my-spec/SKILL.md)
 

@@ -602,13 +602,13 @@ def test_skill_entries_route_add_review_and_audit_with_safe_boundaries() -> None
     add = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "add-document.md").read_text(encoding="utf-8")
     review = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "review.md").read_text(encoding="utf-8")
     audit = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "audit.md").read_text(encoding="utf-8")
-    rules = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "openspec-rules.md").read_text(encoding="utf-8")
+    rules = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "myspec-rules.md").read_text(encoding="utf-8")
     for procedure in (add, review, audit):
         assert "一次只展示一条" in procedure
         assert "完整差异" in procedure
         assert "最终确认" in procedure
         assert "spec_ops.py" in procedure
-    assert "只读取 `openspec/specs/`" in review
+    assert "只读取 `myspec/specs/`" in review
     assert "不得读取仓库其他文件" in review
     assert "git ls-files --cached --others --exclude-standard" in audit
     assert ".local/spec-work/" in skill and ".local/spec-work/" in audit and ".local/spec-work/" in rules
@@ -709,7 +709,7 @@ def test_spec_audit_deterministic_post_analysis_flow_previews_diffs_and_applies(
 
 def test_my_spec_plugin_is_discoverable_by_pi_claude_and_codex() -> None:
     package_version = json.loads((PLUGIN_ROOT / "package.json").read_text(encoding="utf-8"))["version"]
-    spec = (REPO_ROOT / "openspec" / "specs" / "my-spec" / "spec.md").read_text(encoding="utf-8")
+    spec = (REPO_ROOT / "myspec" / "specs" / "my-spec" / "spec.md").read_text(encoding="utf-8")
     assert "/skill:my-spec-add" in spec
     assert "/my-spec:my-spec-add" in spec
     assert "$my-spec-add" in spec
@@ -726,7 +726,7 @@ def test_my_spec_plugin_is_discoverable_by_pi_claude_and_codex() -> None:
 
 
 def test_apply_delta_can_atomically_replace_main_after_final_confirmation(tmp_path: Path) -> None:
-    specs = tmp_path / "openspec" / "specs"
+    specs = tmp_path / "myspec" / "specs"
     delta = tmp_path / "delta"
     write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
     write(

@@ -1,11 +1,11 @@
 ---
 name: my-spec
-description: 统一管理 OpenSpec（开放规格）。当用户调用统一入口，或请求同时涉及新增、内部审查和仓库审计而尚未选择专用入口时使用。
+description: 统一管理 MySpec（自有规格）。当用户调用统一入口，或请求同时涉及新增、内部审查和仓库审计而尚未选择专用入口时使用。
 ---
 
 # my-spec
 
-维护 `openspec/specs/` 这一唯一事实源。结构关键字使用英文，正文语言不限。
+维护 `myspec/specs/` 这一唯一事实源。结构关键字使用英文，正文语言不限。
 
 ## 入口
 
@@ -15,7 +15,7 @@ description: 统一管理 OpenSpec（开放规格）。当用户调用统一入�
 
 用户未指定入口时，根据请求范围选择且只执行一个入口；范围不明确时先询问。
 
-修改前同时读取 [references/openspec-rules.md](references/openspec-rules.md)。创建内容时复用 `assets/` 模板。所有确定性校验、预览、完整差异和应用都调用 `scripts/spec_ops.py`。
+修改前同时读取 [references/myspec-rules.md](references/myspec-rules.md)。创建内容时复用 `assets/` 模板。所有确定性校验、预览、完整差异和应用都调用 `scripts/spec_ops.py`。
 
 ## 不可跳过的门禁
 
@@ -28,4 +28,4 @@ description: 统一管理 OpenSpec（开放规格）。当用户调用统一入�
 7. 应用前重算主规格指纹；变化时停止并重新分析。
 8. 原子替换后再次校验；失败时恢复原目录。成功后才清理本次工作区和锁。
 
-不保存跨运行的忽略、暂缓决定或长期审计报告。不要使用 Git（版本管理）回滚，也不要触碰 `openspec/specs/` 之外的用户内容。
+不保存跨运行的忽略、暂缓决定或长期审计报告。不要使用 Git（版本管理）回滚，也不要触碰 `myspec/specs/` 之外的用户内容。

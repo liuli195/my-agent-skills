@@ -3,7 +3,7 @@
 以当前主规格为基准，对照整个仓库审计；主规格不存在时按空规格库初始化。
 
 1. 调用 `spec_ops.py state-init` 获取共享运行锁并记录输入与主规格指纹。
-2. 运行 `git ls-files --cached --others --exclude-standard` 获取范围，排除 `openspec/specs/`、`.local/spec-work/` 和二进制文件。不要自行维护另一套忽略清单。
+2. 运行 `git ls-files --cached --others --exclude-standard` 获取范围，排除 `myspec/specs/`、`.local/spec-work/` 和二进制文件。不要自行维护另一套忽略清单。
 3. 只提取用户或外部系统可观察、可验证的行为，不把文件结构、函数、内部算法或待办写入规格。
 4. 按“主规格 → 明确需求/设计/用户文档 → 端到端测试 → 实现代码 → 注释/示例/历史文档”展示证据。顺序只影响展示和建议，不能自动覆盖。
 5. 来源冲突、删除和低可信候选必须组成完整 `conflicts` 清单，并在首次展示前调用 `state-set-conflicts` 一次性保存；只保存数量或第一项无效。
