@@ -1,0 +1,439 @@
+import assert from "node:assert/strict";
+import test, { afterEach } from "node:test";
+import {
+  createBashTool,
+  createEditTool,
+  createGrepTool,
+  createFindTool,
+  createLsTool,
+  createReadTool,
+  createWriteTool,
+  initTheme,
+  ToolExecutionComponent,
+  type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
+import { disposeAll, disposeSession, resetDisposed } from "../src/disposable.ts";
+import { registerToolExecutionPatch } from "../src/tool-execution-patch.ts";
+import { registerToolDisplayApi } from "../src/tool-overrides.ts";
+import { DEFAULT_TOOL_DISPLAY_CONFIG, type ToolDisplayConfig } from "../src/types.ts";
+
+initTheme(undefined, false);
+
+afterEach(() => {
+  disposeSession();
+});
+const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+const render = (component: unknown) => (component as { render(width: number): string[] }).render(120).join("\n").trim();
+const plainRender = (component: unknown) => render(component).replace(/\x1b\[[0-9;]*m/g, "");
+const result = { content: [{ type: "text", text: "one\ntwo" }], details: {} };
+const options = { expanded: false, isPartial: false };
+
+function config(customToolOverrides: Record<string, unknown>): ToolDisplayConfig {
+  return { ...DEFAULT_TOOL_DISPLAY_CONFIG, customToolOverrides } as ToolDisplayConfig;
+}
+
+function apiStub() {
+  const handlers: Record<string, (event?: unknown) => unknown> = {};
+  return {
+    api: { on: (event: string, handler: (event?: unknown) => unknown) => { handlers[event] = handler; } } as unknown as ExtensionAPI,
+    handlers,
+  };
+}
+
+function component(toolDefinition: Record<string, unknown>, builtInToolDefinition?: Record<string, unknown>): any {
+  return Object.assign(Object.create(ToolExecutionComponent.prototype), { toolDefinition, builtInToolDefinition });
+}
+
+test("real ToolExecution rows apply read/find/ls policy to same-name third-party owners across reload", () => {
+  const makeRow = (definition: any, name: string, args: Record<string, unknown>, body: string) => {
+    const row = new ToolExecutionComponent(name, `${name}-call`, args, {}, definition, { requestRender() {} } as any, process.cwd());
+    row.updateResult({ content: [{ type: "text", text: body }], details: { truncation: { truncated: true } }, isError: false } as any);
+    return row;
+  };
+  const definitions = [createReadTool(process.cwd()), createFindTool(process.cwd()), createLsTool(process.cwd())];
+  const pristine = definitions.map((definition: any) => ({ definition, descriptors: Object.getOwnPropertyDescriptors(definition), execute: definition.execute }));
+  const rows = [
+    makeRow(definitions[0], "read", { path: "fixture.txt" }, "one\ntwo\nthree"),
+    makeRow(definitions[1], "find", { pattern: "*.ts", path: "." }, "a.ts\nb.ts\nc.ts"),
+    makeRow(definitions[2], "ls", { path: "." }, "a.ts\nb.ts\nc.ts"),
+  ];
+  const run = () => {
+    const { api, handlers } = apiStub();
+    registerToolExecutionPatch(api, () => ({ ...DEFAULT_TOOL_DISPLAY_CONFIG, readOutputMode: "preview", searchOutputMode: "preview", previewLines: 1, showTruncationHints: true }));
+    for (const row of rows) {
+      row.setExpanded(false);
+      assert.doesNotMatch(plainRender(row), /two|three|b\.ts|c\.ts/);
+      assert.match(plainRender(row), /truncated/);
+      row.setExpanded(true);
+      assert.match(plainRender(row), /three|c\.ts/);
+    }
+    handlers.session_shutdown?.({ reason: "reload" });
+  };
+  run();
+  run();
+  for (const { definition, descriptors, execute } of pristine) {
+    assert.strictEqual((definition as any).execute, execute);
+    assert.deepEqual(Object.getOwnPropertyDescriptors(definition), descriptors);
+  }
+});
+
+test("collapsed Bash output honors the visual-line budget across partial, historical, and reloaded rows", () => {
+  const currentConfig = { ...DEFAULT_TOOL_DISPLAY_CONFIG, bashOutputMode: "opencode" as const, bashCollapsedLines: 10, showTruncationHints: true };
+  const body = Array.from(
+    { length: 9 },
+    (_, index) => `C:/Users/liuli/AppData/Roaming/npm/node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/fixture-${index + 1}.js:${2000 + index}: await reloadExtensionsWithLongArguments();`,
+  ).join("\n");
+  const row = new ToolExecutionComponent(
+    "bash",
+    "wrapped-output",
+    { command: "rg reload" },
+    {},
+    createBashTool(process.cwd()),
+    { requestRender() {} } as any,
+    process.cwd(),
+  );
+  const toolResult = {
+    content: [{ type: "text", text: body }],
+    details: { truncation: { truncated: true }, fullOutputPath: "/tmp/full-output" },
+    isError: false,
+  };
+  const renderRow = () => row.render(80).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+  const bashCollapsedLines = 10;
+  const assertFolded = (rendered: string) => {
+    const visibleRows = rendered.split("\n").filter((line) => line.trim());
+    const hintIndex = visibleRows.findIndex((line) => /more visual/.test(line));
+    assert.ok(hintIndex >= 0, `visual omission hint must appear, got rows: ${visibleRows.length}`);
+    assert.ok(hintIndex <= bashCollapsedLines + 1, `hint should appear within budget, got index ${hintIndex}`);
+    assert.match(rendered, /more visual/);
+    assert.match(rendered, /output truncated .* full output: \/tmp\/full-output/);
+    assert.doesNotMatch(rendered, /fixture-9/);
+  };
+
+  row.updateResult(toolResult);
+  const first = apiStub();
+  let reloaded: ReturnType<typeof apiStub> | undefined;
+  registerToolExecutionPatch(first.api, () => currentConfig);
+  try {
+    row.setExpanded(false);
+    assertFolded(renderRow());
+
+    row.updateResult(toolResult, true);
+    assertFolded(renderRow());
+
+    row.updateResult(toolResult);
+    assertFolded(renderRow());
+
+    row.setExpanded(true);
+    const expanded = renderRow();
+    assert.match(expanded, /fixture-9/);
+    assert.doesNotMatch(expanded, /more visual lines/);
+
+    first.handlers.session_shutdown?.({ reason: "reload" });
+    reloaded = apiStub();
+    registerToolExecutionPatch(reloaded.api, () => currentConfig);
+    row.setExpanded(false);
+    assertFolded(renderRow());
+  } finally {
+    reloaded?.handlers.session_shutdown?.({ reason: "reload" });
+    first.handlers.session_shutdown?.({ reason: "reload" });
+  }
+});
+
+test("collapsed split diffs count logical content rows, not headers, metadata, or wraps", () => {
+  const { api, handlers } = apiStub();
+  const currentConfig = {
+    ...DEFAULT_TOOL_DISPLAY_CONFIG,
+    diffViewMode: "split" as const,
+    diffCollapsedLines: 4,
+  };
+  const row = new ToolExecutionComponent(
+    "edit",
+    "four-line-diff",
+    { path: ".pi/settings.json", edits: [] },
+    {},
+    createEditTool(process.cwd()),
+    { requestRender() {} } as any,
+    process.cwd(),
+  );
+  row.updateResult({
+    content: [{ type: "text", text: "Done" }],
+    details: { diff: [
+      "      ...",
+      " 105|const HASHLINE_ANCHOR_LINE_PATTERN = /^([+\\- ])(\\s*\\d+)#([A-Za-z0-9]+| {2}):(.*)$/;",
+      " 106|const LEGACY_LINE_PATTERN = /^([+\\- ])(\\s*\\d+)\\s(.*)$/;",
+      " 107|const HUNK_HEADER_PATTERN = /^@@/;",
+      ' 108|const SPLIT_SEPARATOR = " │ ";',
+      "+109|const SPLIT_HEADER_ROW_COUNT = 2;",
+      " 109|const MIN_LINE_NUMBER_WIDTH = 2;",
+    ].join("\n") },
+    isError: false,
+  } as any);
+
+  registerToolExecutionPatch(api, () => currentConfig);
+  try {
+    row.setExpanded(false);
+    const collapsed = row.render(180).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+    assert.equal(collapsed.match(/\.\.\./g)?.length, 1, "trusted omission metadata stays visible once");
+    assert.match(collapsed, /HASHLINE_ANCHOR_LINE_PATTERN/);
+    assert.match(collapsed, /LEGACY_LINE_PATTERN/);
+    assert.match(collapsed, /HUNK_HEADER_PATTERN/);
+    assert.match(collapsed, /SPLIT_SEPARATOR/);
+    assert.doesNotMatch(collapsed, /SPLIT_HEADER_ROW_COUNT/);
+    assert.match(collapsed, /more visual diff lines .* Ctrl\+O to expand/);
+  } finally {
+    handlers.session_shutdown?.({ reason: "reload" });
+  }
+});
+
+test("configured third-party tools preserve native calls and override results at final renderer selection", () => {
+  const { api, handlers } = apiStub();
+  const instance = component({
+    name: "ordinary_tool",
+    renderCall: () => ({ render: () => ["original call"] }),
+    renderResult: () => ({ render: () => ["original result"] }),
+  });
+  registerToolExecutionPatch(api, () => config({ ordinary_tool: { enabled: true, kind: "generic", outputMode: "summary" } }));
+  try {
+    assert.equal(render(instance.getCallRenderer()({ value: 1 }, theme)), "original call");
+    assert.equal(render(instance.getResultRenderer()(result, options, theme)), "↳ 2 lines returned • Ctrl+O to expand");
+  } finally {
+    handlers.session_shutdown?.({ reason: "reload" });
+  }
+});
+
+test("overrideCallRenderer opts into replacing a third-party call renderer", () => {
+  const { api, handlers } = apiStub();
+  const instance = component({
+    name: "ordinary_tool",
+    renderCall: () => ({ render: () => ["original call"] }),
+  });
+  registerToolExecutionPatch(api, () => config({
+    ordinary_tool: { enabled: true, kind: "generic", outputMode: "summary", overrideCallRenderer: true },
+  }));
+  try {
+    assert.equal(render(instance.getCallRenderer()({ value: 1 }, theme)), "ordinary_tool (1 arg)");
+  } finally {
+    handlers.session_shutdown?.({ reason: "reload" });
+  }
+});
+
+test("MCP proxy and direct tools use only ordinary custom override configuration", () => {
+  const { api, handlers } = apiStub();
+  registerToolExecutionPatch(api, () => config({
+    mcp: { enabled: true, kind: "mcp", outputMode: "summary" },
+    xcodebuild_list_sims: { enabled: true, kind: "mcp", outputMode: "hidden" },
+  }));
+  try {
+    const proxy = component({ name: "mcp" });
+    const direct = component({ name: "xcodebuild_list_sims", label: "MCP xcodebuild_list_sims" });
+    assert.equal(render(proxy.getCallRenderer()({ tool: "read_file", server: "fs" }, theme)), "MCP call fs:read_file (2 args)");
+    assert.equal(render(direct.getCallRenderer()({}, theme)), "MCP xcodebuild_list_sims (no args)");
+    assert.equal(render(direct.getResultRenderer()(result, options, theme)), "");
+  } finally {
+    handlers.session_shutdown?.({ reason: "reload" });
+  }
+});
+
+test("unconfigured third-party and built-in tools retain their original renderers", () => {
+  const { api, handlers } = apiStub();
+  registerToolExecutionPatch(api, () => ({ ...config({ configured: true }), builtInToolDisplays: { ...DEFAULT_TOOL_DISPLAY_CONFIG.builtInToolDisplays, read: false } }));
+  try {
+    const originalCall = () => ({ render: () => ["original call"] });
+    const originalResult = () => ({ render: () => ["original result"] });
+    const unconfigured = component({ name: "unconfigured", renderCall: originalCall, renderResult: originalResult });
+    const builtIn = component(
+      { name: "read", renderCall: originalCall, renderResult: originalResult },
+      { name: "read", renderCall: originalCall, renderResult: originalResult },
+    );
+    assert.equal(unconfigured.getCallRenderer(), originalCall);
+    assert.equal(unconfigured.getResultRenderer(), originalResult);
+    assert.equal(builtIn.getCallRenderer(), originalCall);
+    assert.equal(builtIn.getResultRenderer(), originalResult);
+  } finally {
+    handlers.session_shutdown?.({ reason: "reload" });
+  }
+});
+
+test("pre-upgrade built-in rows without runtime provenance redraw through current renderers", async () => {
+  const ui = { requestRender() {} } as any;
+  const preUpgradeRow = (oldDefinition: { name: string }, args: Record<string, unknown>, toolResult: Record<string, unknown>) => {
+    const name = oldDefinition.name;
+    assert.equal((oldDefinition as unknown as Record<PropertyKey, unknown>)[Symbol.for("pi-tool-display.runtimeBuiltInOverride.v1")], undefined);
+    const row = new ToolExecutionComponent(name, `old-${name}`, args, {}, oldDefinition as any, ui, process.cwd());
+    row.updateResult({ isError: false, details: {}, ...toolResult } as any);
+    return row;
+  };
+  const first = apiStub();
+  let bash!: ToolExecutionComponent;
+  let grep!: ToolExecutionComponent;
+  let write!: ToolExecutionComponent;
+  let edit!: ToolExecutionComponent;
+  try {
+    registerToolExecutionPatch(first.api, () => DEFAULT_TOOL_DISPLAY_CONFIG);
+    bash = preUpgradeRow(createBashTool(process.cwd()), { command: "printf one\nprintf two\nprintf three\nprintf four" }, { content: [{ type: "text", text: "done" }] });
+    grep = preUpgradeRow(createGrepTool(process.cwd()), { pattern: "needle", path: "." }, { content: [{ type: "text", text: "a:1\nb:2\nc:3" }] });
+    write = preUpgradeRow(createWriteTool(process.cwd()), { path: "file.txt", content: "one\ntwo\nthree\nfour\nfive\nsix" }, { content: [{ type: "text", text: "Wrote file.txt" }] });
+    edit = preUpgradeRow(createEditTool(process.cwd()), { path: "file.ts", edits: [] }, {
+      content: [{ type: "text", text: "Done" }],
+      details: { diff: "@@ -1,3 +1,3 @@\n-old one\n-old two\n-old three\n+new one\n+new two\n+new three" },
+    });
+  } finally {
+    first.handlers.session_shutdown?.({ reason: "reload" });
+    disposeAll();
+    resetDisposed();
+  }
+
+  const handlers: Record<string, (event?: unknown) => unknown> = {};
+  let owners: Record<string, unknown>[] = [];
+  const api = {
+    on: (event: string, handler: (event?: unknown) => unknown) => { handlers[event] = handler; },
+    getActiveTools: () => ["bash", "grep", "write", "edit"],
+    getAllTools: () => owners,
+    registerTool: (tool: Record<string, unknown>) => {
+      owners = [
+        ...owners.filter((owner) => owner.name !== tool.name),
+        { name: tool.name, sourceInfo: { source: "local", path: "pi-tool-display.ts" } },
+      ];
+    },
+  } as unknown as ExtensionAPI;
+  const currentConfig = {
+    ...DEFAULT_TOOL_DISPLAY_CONFIG,
+    bashCommandMode: "preview" as const,
+    bashCommandPreviewLines: 2,
+    searchOutputMode: "count" as const,
+    diffViewMode: "unified" as const,
+    diffCollapsedLines: 4,
+  };
+  try {
+    registerToolDisplayApi(() => currentConfig);
+    registerToolExecutionPatch(api, () => currentConfig);
+    await handlers.session_start?.();
+    assert.deepEqual(owners, []);
+    edit.setExpanded(false);
+    assert.doesNotMatch(plainRender(edit), /new three/);
+    edit.setExpanded(true);
+    assert.match(plainRender(edit), /new three/);
+    bash.setExpanded(false);
+    assert.match(plainRender(bash), /printf one/);
+    assert.match(plainRender(bash), /more visual lines/);
+    bash.setExpanded(true);
+    assert.match(plainRender(bash), /printf four/);
+    grep.setExpanded(false);
+    assert.match(plainRender(grep), /3 matches/);
+    grep.setExpanded(true);
+    assert.match(plainRender(grep), /c:3/);
+    write.setExpanded(false);
+    assert.doesNotMatch(plainRender(write), /six|Wrote file\.txt/);
+    write.setExpanded(true);
+    assert.match(plainRender(write), /Wrote file\.txt/);
+    assert.doesNotMatch(plainRender(write), /six|create|overwrite/i);
+  } finally {
+    handlers.session_shutdown?.({ reason: "reload" });
+    disposeAll();
+    resetDisposed();
+  }
+});
+
+test("historical rows refresh display without changing ownership or execution", () => {
+  const owners = [
+    { name: "bash", sourceInfo: { source: "local", path: "third-party.ts" } },
+    { name: "edit", sourceInfo: { source: "built-in" } },
+  ];
+  const makeRuntime = (outputMode: "preview" | "summary") => {
+    const handlers: Record<string, (event?: unknown) => unknown> = {};
+    const api = {
+      on: (event: string, handler: (event?: unknown) => unknown) => { handlers[event] = handler; },
+      getActiveTools: () => ["bash", "edit"],
+      getAllTools: () => owners,
+    } as unknown as ExtensionAPI;
+    return {
+      api,
+      handlers,
+      currentConfig: {
+        ...DEFAULT_TOOL_DISPLAY_CONFIG,
+        bashOutputMode: outputMode,
+        diffViewMode: "unified" as const,
+        diffCollapsedLines: outputMode === "summary" ? 1 : 24,
+      },
+    };
+  };
+  const definitions = [createBashTool(process.cwd()), createEditTool(process.cwd())] as any[];
+  const pristine = definitions.map((definition) => ({
+    descriptors: Object.getOwnPropertyDescriptors(definition),
+    execute: definition.execute,
+  }));
+  const ui = { requestRender() {} } as any;
+  const historical = new ToolExecutionComponent("bash", "old-call", { command: "printf one" }, {}, definitions[0], ui, process.cwd());
+  historical.updateResult({ ...result, isError: false });
+  const historicalEdit = new ToolExecutionComponent("edit", "old-edit", { path: "file.ts", edits: [] }, {}, definitions[1], ui, process.cwd());
+  historicalEdit.updateResult({
+    content: [{ type: "text", text: "Done" }],
+    details: { diff: "@@ -1,3 +1,3 @@\n-old one\n-old two\n-old three\n+new one\n+new two\n+new three" },
+    isError: false,
+  });
+
+  for (const outputMode of ["preview", "summary"] as const) {
+    const runtime = makeRuntime(outputMode);
+    try {
+      registerToolDisplayApi(() => runtime.currentConfig);
+      registerToolExecutionPatch(runtime.api, () => runtime.currentConfig);
+      historical.setExpanded(false);
+      historicalEdit.setExpanded(false);
+      if (outputMode === "summary") {
+        assert.match(plainRender(historical), /↳ 2 lines returned .*Ctrl\+O to expand/);
+        assert.doesNotMatch(plainRender(historicalEdit), /new three/);
+      }
+      historical.setExpanded(true);
+      assert.match(plainRender(historical), /one\s+two/);
+      historicalEdit.setExpanded(true);
+      assert.match(plainRender(historicalEdit), /new three/);
+    } finally {
+      runtime.handlers.session_shutdown?.({ reason: "reload" });
+      disposeAll();
+      resetDisposed();
+    }
+  }
+
+  assert.deepEqual(owners, [
+    { name: "bash", sourceInfo: { source: "local", path: "third-party.ts" } },
+    { name: "edit", sourceInfo: { source: "built-in" } },
+  ]);
+  definitions.forEach((definition, index) => {
+    assert.strictEqual(definition.execute, pristine[index].execute);
+    assert.deepEqual(Object.getOwnPropertyDescriptors(definition), pristine[index].descriptors);
+  });
+});
+
+test("owned disposer restores the host renderer for every session transition", () => {
+  const prototype = ToolExecutionComponent.prototype as any;
+  const originalCall = prototype.getCallRenderer;
+  const runtime = apiStub();
+  const dispose = registerToolExecutionPatch(runtime.api, () => config({ configured: true }));
+  assert.notStrictEqual(prototype.getCallRenderer, originalCall);
+
+  dispose();
+  assert.strictEqual(prototype.getCallRenderer, originalCall);
+  dispose();
+  assert.strictEqual(prototype.getCallRenderer, originalCall);
+});
+
+test("disposal restores the prototype and reinstallation does not stack wrappers", () => {
+  const prototype = ToolExecutionComponent.prototype as any;
+  const originalCall = prototype.getCallRenderer;
+  const originalResult = prototype.getResultRenderer;
+  const first = apiStub();
+  const disposeFirst = registerToolExecutionPatch(first.api, () => config({ configured: true }));
+  const firstPatchedCall = prototype.getCallRenderer;
+  const disposeDuplicate = registerToolExecutionPatch(first.api, () => config({ configured: true }));
+  assert.equal(prototype.getCallRenderer, firstPatchedCall);
+  disposeDuplicate();
+  disposeFirst();
+  assert.equal(prototype.getCallRenderer, originalCall);
+  assert.equal(prototype.getResultRenderer, originalResult);
+
+  const second = apiStub();
+  const disposeSecond = registerToolExecutionPatch(second.api, () => config({ configured: true }));
+  assert.notEqual(prototype.getCallRenderer, originalCall);
+  disposeSecond();
+  assert.equal(prototype.getCallRenderer, originalCall);
+});

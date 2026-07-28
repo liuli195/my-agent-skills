@@ -1,0 +1,204 @@
+{
+  "version": 1,
+  "build": {
+    "checks": [
+      {
+        "id": "build.pi-tool-display",
+        "command": "npm run build --prefix plugins/pi-tool-display",
+        "inputs": [
+          "plugins/pi-tool-display/package.json",
+          "plugins/pi-tool-display/package-lock.json",
+          "plugins/pi-tool-display/tsconfig.json",
+          "plugins/pi-tool-display/extensions",
+          "plugins/pi-tool-display/src"
+        ]
+      },
+      {
+        "id": "build.local-plugin-package",
+        "command": "python scripts/local_plugin_build.py",
+        "inputs": [
+          ".claude-plugin/marketplace.json",
+          ".agents/plugins/marketplace.json",
+          ".release-flow/projection.yaml",
+          "plugins",
+          "scripts/local_plugin_build.py"
+        ]
+      }
+    ]
+  },
+  "verify": {
+    "maxParallel": 7,
+    "timeoutSeconds": 180,
+    "fullBudgetSeconds": 60,
+    "checks": [
+      {
+        "id": "verify.pi-tool-display",
+        "paths": [
+          "plugins/pi-tool-display/**",
+          ".build-and-verify/config.json"
+        ],
+        "command": "npm run check --prefix plugins/pi-tool-display",
+        "inputs": [
+          "plugins/pi-tool-display/package.json",
+          "plugins/pi-tool-display/package-lock.json",
+          "plugins/pi-tool-display/tsconfig.json",
+          "plugins/pi-tool-display/extensions",
+          "plugins/pi-tool-display/src",
+          "plugins/pi-tool-display/tests"
+        ],
+        "checkParallel": true
+      },
+      {
+        "id": "verify.local-build-contract",
+        "paths": [
+          ".agents/**",
+          ".claude-plugin/**",
+          ".release-flow/**",
+          ".build-and-verify/**",
+          ".comet/config.yaml",
+          "requirements-dev.txt",
+          "plugins/**",
+          "scripts/local_plugin_build.py",
+          "tests/test_local_plugin_build_checks.py",
+          "tests/test_pi_codex_usage_status.py",
+          "tests/pi_codex_usage_status.test.mjs",
+          "tests/pi_cache_diagnostics.test.mjs"
+        ],
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_local_plugin_build_checks.py tests/test_pi_codex_usage_status.py && node tests/pi_codex_usage_status.test.mjs && node tests/pi_cache_diagnostics.test.mjs",
+        "inputs": [
+          ".agents",
+          ".claude-plugin",
+          ".release-flow",
+          ".build-and-verify/config.json",
+          ".build-and-verify/runtime",
+          ".comet/config.yaml",
+          "requirements-dev.txt",
+          "plugins",
+          "scripts/local_plugin_build.py",
+          "tests/test_local_plugin_build_checks.py",
+          "tests/test_pi_codex_usage_status.py",
+          "tests/pi_codex_usage_status.test.mjs",
+          "tests/pi_cache_diagnostics.test.mjs"
+        ],
+        "checkParallel": true,
+        "pytestXdistWorkers": 4
+      },
+      {
+        "id": "verify.release-flow",
+        "paths": [
+          ".agents/**",
+          ".claude-plugin/**",
+          ".release-flow/**",
+          ".github/workflows/release.yml",
+          "requirements-dev.txt",
+          "plugins/release-flow/**",
+          "tests/test_release_flow*.py"
+        ],
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_release_flow_cli.py tests/test_release_flow_plugin_package.py",
+        "inputs": [
+          ".agents",
+          ".claude-plugin",
+          ".release-flow",
+          ".github/workflows/release.yml",
+          "requirements-dev.txt",
+          "plugins/release-flow",
+          "tests/test_release_flow_cli.py",
+          "tests/test_release_flow_plugin_package.py"
+        ],
+        "checkParallel": true,
+        "pytestXdistWorkers": 4
+      },
+      {
+        "id": "verify.pr-flow",
+        "paths": [
+          ".agents/**",
+          ".claude-plugin/**",
+          ".release-flow/**",
+          "requirements-dev.txt",
+          "plugins/pr-flow/**",
+          "tests/test_pr_flow*.py"
+        ],
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_pr_flow_cli.py tests/test_pr_flow_plugin_package.py tests/test_pr_flow_pi_extension.py",
+        "inputs": [
+          ".agents",
+          ".claude-plugin",
+          ".release-flow",
+          "requirements-dev.txt",
+          "plugins/pr-flow",
+          "tests/test_pr_flow_cli.py",
+          "tests/test_pr_flow_plugin_package.py",
+          "tests/test_pr_flow_pi_extension.py"
+        ],
+        "checkParallel": true,
+        "pytestXdistWorkers": 4
+      },
+      {
+        "id": "verify.myspec",
+        "paths": [
+          "myspec/specs/**",
+          "plugins/my-spec/skills/my-spec/scripts/spec_ops.py"
+        ],
+        "command": "python plugins/my-spec/skills/my-spec/scripts/spec_ops.py validate-main myspec/specs",
+        "inputs": [
+          "myspec/specs",
+          "plugins/my-spec/skills/my-spec/scripts/spec_ops.py"
+        ]
+      },
+      {
+        "id": "verify.my-spec",
+        "paths": [
+          ".agents/plugins/marketplace.json",
+          ".claude-plugin/marketplace.json",
+          ".release-flow/projection.yaml",
+          ".build-and-verify/config.json",
+          "plugins/my-spec/**",
+          "tests/test_my_spec.py"
+        ],
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_my_spec.py",
+        "inputs": [
+          ".agents/plugins/marketplace.json",
+          ".claude-plugin/marketplace.json",
+          ".release-flow/projection.yaml",
+          ".build-and-verify/config.json",
+          "plugins/my-spec",
+          "tests/test_my_spec.py"
+        ],
+        "checkParallel": true,
+        "pytestXdistWorkers": 4
+      },
+      {
+        "id": "verify.build-and-verify",
+        "paths": [
+          ".agents/**",
+          ".claude-plugin/**",
+          ".release-flow/**",
+          ".build-and-verify/**",
+          "requirements-dev.txt",
+          "plugins/build-and-verify/**",
+          "tests/test_build_and_verify_plugin.py",
+          "tests/test_plugin_sync_skill_contract.py",
+          "tests/test_version_source_of_truth.py",
+          "tests/test_test_runtime_boundaries.py",
+          "tests/test_setup_worktree_script.py"
+        ],
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_build_and_verify_plugin.py tests/test_plugin_sync_skill_contract.py tests/test_version_source_of_truth.py tests/test_test_runtime_boundaries.py tests/test_setup_worktree_script.py",
+        "inputs": [
+          ".agents",
+          ".claude-plugin",
+          ".release-flow",
+          ".build-and-verify/config.json",
+          ".build-and-verify/runtime",
+          "requirements-dev.txt",
+          "plugins/build-and-verify",
+          "tests/test_build_and_verify_plugin.py",
+          "tests/test_plugin_sync_skill_contract.py",
+          "tests/test_version_source_of_truth.py",
+          "tests/test_test_runtime_boundaries.py",
+          "tests/test_setup_worktree_script.py"
+        ],
+        "checkParallel": true,
+        "pytestXdistWorkers": 4
+      }
+    ]
+  }
+}
