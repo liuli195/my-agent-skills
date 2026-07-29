@@ -193,8 +193,136 @@ def run_cli(executable: Path, *args: object, env: dict[str, str] | None = None) 
     )
 
 
+def windows_py_launcher() -> Path:
+    candidates = (
+        Path(sys.executable).parent.parent / "Launcher" / "py.exe",
+        Path(os.environ.get("SystemRoot", "C:/Windows")) / "py.exe",
+        Path(shutil.which("py") or ""),
+    )
+    launcher = next(
+        (path for path in candidates if path.is_file() and "WindowsApps" not in path.parts),
+        None,
+    )
+    assert launcher is not None
+    return launcher
+
+
+def run_launcher_selection(
+    executable: Path,
+    root: Path,
+    versions: dict[str, str],
+    override_version: str | None = None,
+) -> tuple[subprocess.CompletedProcess[str], list[Path], dict[str, Path]]:
+    candidates = root / "candidates"
+    candidates.mkdir(parents=True)
+    paths: dict[str, Path] = {}
+    reported_versions: dict[str, str] = {}
+    for name, version in versions.items():
+        if name == "py":
+            source = windows_py_launcher()
+        else:
+            source = sys.executable
+        path = candidates / (f"{name}.exe" if sys.platform == "win32" else name)
+        shutil.copy2(source, path)
+        paths[name] = path.resolve()
+        if version == "3.11":
+            reported_versions[os.path.normcase(str(paths[name]))] = version
+
+    env = {
+        **os.environ,
+        "PATH": os.pathsep.join(
+            (
+                str(candidates),
+                str(Path(shutil.which("node") or "").parent),
+                str(Path(sys.executable).parent),
+            )
+        ),
+        "PYTHONPATH": str(root),
+        "MYSPEC_TEST_MARKER": str(root / "selected.txt"),
+    }
+    env.pop("MYSPEC_PYTHON", None)
+    if override_version is not None:
+        override = root / ("override.exe" if sys.platform == "win32" else "override")
+        shutil.copy2(sys.executable, override)
+        env["MYSPEC_PYTHON"] = str(override)
+        paths["MYSPEC_PYTHON"] = override.resolve()
+        if override_version == "3.11":
+            reported_versions[os.path.normcase(str(paths["MYSPEC_PYTHON"]))] = override_version
+    if sys.platform == "win32" and versions.get("py") == "3.11":
+        reported_versions[os.path.normcase(str(Path(sys.executable).resolve()))] = "3.11"
+    env["MYSPEC_TEST_VERSIONS"] = json.dumps(reported_versions)
+    write(
+        root / "sitecustomize.py",
+        """import json
+import os
+import sys
+from pathlib import Path
+
+executable = Path(sys.executable).resolve()
+with Path(os.environ["MYSPEC_TEST_MARKER"]).open("a", encoding="utf-8") as marker:
+    marker.write(str(executable) + "\\n")
+version = json.loads(os.environ["MYSPEC_TEST_VERSIONS"]).get(os.path.normcase(str(executable)))
+if version:
+    major, minor = map(int, version.split("."))
+    sys.version_info = type("VersionInfo", (), {"major": major, "minor": minor})()
+""",
+    )
+    result = run_cli(executable, "--help", env=env)
+    marker = Path(env["MYSPEC_TEST_MARKER"])
+    observed = (
+        [Path(line) for line in marker.read_text(encoding="utf-8").splitlines()]
+        if marker.exists()
+        else []
+    )
+    return result, observed, paths
+
+
 def test_packed_myspec_installs_a_working_cli_with_agent_resources(tmp_path: Path) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
+    path_candidates = {"python3.12": "3.12", "python3": "3.12", "python": "3.12"}
+    if sys.platform == "win32":
+        path_candidates["py"] = "3.12"
+
+    override, observed, paths = run_launcher_selection(
+        executable,
+        tmp_path / "override-case",
+        path_candidates,
+        override_version="3.12",
+    )
+    assert override.returncode == 0, override.stderr
+    assert observed[-1] == paths["MYSPEC_PYTHON"]
+
+    cases = [
+        ({**path_candidates}, "python3.12"),
+        ({**path_candidates, "python3.12": "3.11"}, "python3"),
+        ({**path_candidates, "python3.12": "3.11", "python3": "3.11"}, "python"),
+    ]
+    if sys.platform == "win32":
+        cases.append(({name: "3.11" for name in path_candidates} | {"py": "3.12"}, "py"))
+    for index, (versions, expected) in enumerate(cases):
+        result, observed, paths = run_launcher_selection(
+            executable,
+            tmp_path / f"priority-case-{index}",
+            versions,
+            override_version="3.11" if index == 0 else None,
+        )
+        assert result.returncode == 0, result.stderr
+        if expected == "py":
+            assert observed[-1] not in paths.values()
+        else:
+            assert observed[-1] == paths[expected]
+
+    ineligible_versions = {name: "3.11" for name in path_candidates}
+    ineligible, _, _ = run_launcher_selection(
+        executable,
+        tmp_path / "ineligible-case",
+        ineligible_versions,
+        override_version="3.11",
+    )
+    assert ineligible.returncode != 0
+    assert "error: Python 3.12 or newer is required" in ineligible.stderr
+    assert ineligible.stderr.count("(3.11)") == len(ineligible_versions) + 1
+
     help_result = run_cli(executable, "--help")
     assert help_result.returncode == 0
     assert help_result.stdout.startswith("usage: myspec ")
