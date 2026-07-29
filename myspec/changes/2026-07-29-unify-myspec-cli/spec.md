@@ -123,6 +123,7 @@ Skill（技能）只调用 `myspec` 及现有业务子命令，不再寻找、�
 
 ## Further Notes
 
+- Because Codex canonicalizes a local marketplace added through a linked path, its stable npm path must be registered in release mode before Codex can use later development-mode links.
 - The existing remote `my-agent-skills-marketplace` remains useful for discovery and unrelated plugins. Unified MySpec initialization uses the package's self-contained source and disables only duplicate MySpec installations.
 - Agent clients may require a reload, restart or new session after their plugin cache is refreshed. The CLI reports the requirement but does not conceal it.
 - Local and CI reproducibility for external repositories currently depends on manually aligning the Git-visible CI npm pin with the local release-mode CLI. A later PR Flow（拉取请求流程） change may automate that alignment; Build and Verify（构建与验证） remains limited to running configured checks.

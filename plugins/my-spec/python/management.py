@@ -477,7 +477,23 @@ def _codex_marketplaces() -> list[dict[str, object]]:
 
 
 def _codex_plugins() -> list[dict[str, object]]:
-    return _codex_json(("plugin", "list", "--json"), "plugins", "codex_plugin_list_failed")
+    result = _run("codex", "plugin", "list", "--json")
+    if result.returncode != 0:
+        raise ManagementError(f"codex_plugin_list_failed: {result.stderr.strip()}")
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ManagementError("codex_plugin_list_failed: invalid_json") from exc
+    installed = value.get("installed") if isinstance(value, dict) else None
+    available = value.get("available") if isinstance(value, dict) else None
+    if (
+        not isinstance(installed, list)
+        or not all(isinstance(item, dict) for item in installed)
+        or not isinstance(available, list)
+        or not all(isinstance(item, dict) for item in available)
+    ):
+        raise ManagementError("codex_plugin_list_failed: invalid_output")
+    return installed
 
 
 def _named_codex_marketplace(marketplaces: list[dict[str, object]]) -> dict[str, object] | None:
@@ -541,7 +557,16 @@ def _init_codex() -> dict[str, object]:
     if shutil.which("codex") is None:
         raise ManagementError("missing_command: codex")
     stable = _stable_package_root()
-    if _codex_marketplace(stable, _codex_marketplaces()) is None:
+    marketplaces = _codex_marketplaces()
+    marketplace = _named_codex_marketplace(marketplaces)
+    root = marketplace.get("root") if marketplace is not None else None
+    linked = not _same_path(stable, Path(os.path.realpath(stable)))
+    if linked and (not isinstance(root, str) or not _same_path(Path(root), stable)):
+        raise ManagementError(
+            "codex_dev_marketplace_unregistered: run 'myspec init --release', "
+            "then 'myspec init --codex', then 'myspec init --dev'"
+        )
+    if _codex_marketplace(stable, marketplaces) is None:
         _run_codex("codex_marketplace_add_failed", "plugin", "marketplace", "add", str(stable), "--json")
         if _codex_marketplace(stable, _codex_marketplaces()) is None:
             raise ManagementError("codex_marketplace_add_missing")
@@ -560,7 +585,7 @@ def _init_codex() -> dict[str, object]:
         "marketplace": CODEX_MARKETPLACE,
         "source": str(stable),
         "disabledLegacyPlugins": disabled,
-        "reloadRequired": True,
+        "newSessionRequired": True,
     }
 
 
@@ -573,6 +598,8 @@ def _init_all() -> dict[str, object]:
         else:
             initialized = initializers[agent]()
             result[agent] = {"status": "initialized", "source": initialized["source"]}
+            if initialized.get("newSessionRequired") is True:
+                result[agent]["newSessionRequired"] = True
     return result
 
 
@@ -916,16 +943,17 @@ def _refresh_codex() -> str:
 def _refresh_integrations() -> dict[str, object]:
     pi_status = _refresh_pi()
     result: dict[str, object] = {"pi": pi_status}
-    statuses = [pi_status]
+    reload_required = pi_status == "refreshed"
     if shutil.which("claude") is not None:
         claude_status = _refresh_claude()
         result["claude"] = claude_status
-        statuses.append(claude_status)
+        reload_required = reload_required or claude_status == "refreshed"
     if shutil.which("codex") is not None:
         codex_status = _refresh_codex()
         result["codex"] = codex_status
-        statuses.append(codex_status)
-    result["reloadRequired"] = "refreshed" in statuses
+        if codex_status == "refreshed":
+            result["newSessionRequired"] = True
+    result["reloadRequired"] = reload_required
     return result
 
 
@@ -1148,7 +1176,7 @@ def _doctor_codex() -> dict[str, object]:
         "duplicateEnabledSources": len(enabled_sources) > 1,
         "plugins": relevant,
         "skills": _plugin_skills(install_path),
-        "reloadRequired": bool(enabled_sources),
+        "newSessionRequired": bool(enabled_sources),
     }
     return report
 

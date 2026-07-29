@@ -440,7 +440,7 @@ def marketplace(name):
     return next((item for item in state["marketplaces"] if item["name"] == name), None)
 
 def plugin(identifier):
-    return next((item for item in state["plugins"] if item["pluginId"] == identifier), None)
+    return next((item for item in state["installed"] if item["pluginId"] == identifier), None)
 
 def set_enabled(identifier, enabled):
     text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
@@ -504,19 +504,20 @@ def install(identifier):
         "authPolicy": "ON_INSTALL",
     }
     if current:
-        state["plugins"][state["plugins"].index(current)] = record
+        state["installed"][state["installed"].index(current)] = record
     else:
-        state["plugins"].append(record)
+        state["installed"].append(record)
     set_enabled(identifier, True)
     save()
 
 if arguments == ["plugin", "marketplace", "list", "--json"]:
     print(json.dumps({"marketplaces": state["marketplaces"]}))
 elif arguments == ["plugin", "list", "--json"]:
-    plugins = [{**item, "enabled": configured_enabled(item["pluginId"])} for item in state["plugins"]]
-    print(json.dumps({"plugins": plugins}))
+    installed = [{**item, "enabled": configured_enabled(item["pluginId"])} for item in state["installed"]]
+    print(json.dumps({"installed": installed, "available": state["available"]}))
 elif arguments[:3] == ["plugin", "marketplace", "add"] and arguments[-1:] == ["--json"]:
-    source = Path(arguments[3])
+    requested = Path(arguments[3])
+    source = requested.resolve()
     catalog = json.loads((source / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8"))
     if marketplace(catalog["name"]) is None:
         state["marketplaces"].append({
@@ -540,7 +541,7 @@ elif arguments[:2] == ["plugin", "remove"] and arguments[-1:] == ["--json"]:
     target = Path(os.environ["CODEX_HOME"]) / "plugins" / "cache" / current["marketplaceName"] / current["name"] / current["version"]
     if target.exists():
         shutil.rmtree(target)
-    state["plugins"].remove(current)
+    state["installed"].remove(current)
     remove_config(arguments[2])
     save()
     print(json.dumps({"pluginId": arguments[2]}))
@@ -1437,7 +1438,8 @@ def test_packed_myspec_initializes_and_diagnoses_codex_without_deleting_legacy(
         json.dumps(
             {
                 "marketplaces": [legacy_market, unrelated_market],
-                "plugins": [legacy_plugin, unrelated_plugin],
+                "installed": [legacy_plugin, unrelated_plugin],
+                "available": [],
             },
             indent=2,
         ),
@@ -1461,12 +1463,12 @@ enabled = true
         "marketplace": "myspec",
         "source": str(installed_package),
         "disabledLegacyPlugins": ["my-spec@my-agent-skills-marketplace"],
-        "reloadRequired": True,
+        "newSessionRequired": True,
     }
     state = json.loads(codex_state.read_text(encoding="utf-8"))
     assert state["marketplaces"][:2] == [legacy_market, unrelated_market]
     assert state["marketplaces"][2]["name"] == "myspec"
-    plugins = {plugin["pluginId"]: plugin for plugin in state["plugins"]}
+    plugins = {plugin["pluginId"]: plugin for plugin in state["installed"]}
     assert plugins[unrelated_plugin["pluginId"]]["source"] == unrelated_plugin["source"]
     assert plugins["my-spec@myspec"]["version"] == "0.1.53"
     config = (codex_home / "config.toml").read_text(encoding="utf-8")
@@ -1491,7 +1493,8 @@ enabled = true
     assert report["enabledSources"] == ["my-spec@myspec"]
     assert report["disabledSources"] == ["my-spec@my-agent-skills-marketplace"]
     assert report["skills"] == list(SKILL_NAMES)
-    assert report["reloadRequired"] is True
+    assert report["newSessionRequired"] is True
+    assert "reloadRequired" not in report
     assert codex_state.read_bytes() == before_state
     assert (codex_home / "config.toml").read_bytes() == before_config
     assert [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()] == [
@@ -1520,13 +1523,17 @@ def test_packed_myspec_requires_explicit_codex_but_all_initializes_detected_code
             "MYSPEC_CODEX_STATE": str(codex_state),
         }
     )
-    write(codex_state, json.dumps({"marketplaces": [], "plugins": []}, indent=2))
+    write(codex_state, json.dumps({"marketplaces": [], "installed": [], "available": []}, indent=2))
     initialized = run_cli(executable, "init", "--all", env=env)
     assert initialized.returncode == 0, initialized.stderr
     assert json.loads(initialized.stdout) == {
         "pi": {"status": "skipped", "reason": "missing_command: pi"},
         "claude": {"status": "skipped", "reason": "missing_command: claude"},
-        "codex": {"status": "initialized", "source": str(installed_package)},
+        "codex": {
+            "status": "initialized",
+            "source": str(installed_package),
+            "newSessionRequired": True,
+        },
     }
 
 
@@ -1658,6 +1665,66 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
     assert json.loads(explicit.stdout)["source"] == str(REPO_ROOT)
 
 
+def test_packed_myspec_requires_release_registration_before_first_codex_dev_init(
+    tmp_path: Path,
+) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = install_packed_myspec(installed)
+    prefix = installed_package.parents[2]
+    release_tarball = next((installed / "package").glob("*.tgz"))
+    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
+    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
+    env = isolated_myspec_env(tmp_path, prefix, npm_bin, codex_bin)
+    env.update(
+        {
+            "MYSPEC_NPM_LOG": str(npm_log),
+            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
+            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
+            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
+            "MYSPEC_CODEX_LOG": str(codex_log),
+            "MYSPEC_CODEX_STATE": str(codex_state),
+        }
+    )
+    write(codex_state, json.dumps({"marketplaces": [], "installed": [], "available": []}, indent=2))
+
+    entered = run_cli(executable, "init", "--dev", "--source", REPO_ROOT, env=env)
+    assert entered.returncode == 0, entered.stderr
+    before = codex_state.read_bytes()
+    codex_log.write_text("", encoding="utf-8")
+
+    blocked = run_cli(executable, "init", "--codex", env=env)
+    assert blocked.returncode == 1
+    assert blocked.stdout == ""
+    assert (
+        "error: codex_dev_marketplace_unregistered: run 'myspec init --release', "
+        "then 'myspec init --codex', then 'myspec init --dev'"
+    ) in blocked.stderr
+    assert codex_state.read_bytes() == before
+    blocked_calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
+    assert blocked_calls == [["plugin", "marketplace", "list", "--json"]]
+
+    restored = run_cli(executable, "init", "--release", env=env)
+    assert restored.returncode == 0, restored.stderr
+    initialized = run_cli(executable, "init", "--codex", env=env)
+    assert initialized.returncode == 0, initialized.stderr
+    registered = json.loads(codex_state.read_text(encoding="utf-8"))["marketplaces"]
+    assert registered == [
+        {
+            "name": "myspec",
+            "root": str(installed_package),
+            "marketplaceSource": {"sourceType": "local", "source": str(installed_package)},
+        }
+    ]
+
+    codex_log.write_text("", encoding="utf-8")
+    entered_again = run_cli(executable, "init", "--dev", "--source", REPO_ROOT, env=env)
+    assert entered_again.returncode == 0, entered_again.stderr
+    calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
+    assert not any(call[:3] == ["plugin", "marketplace", "add"] for call in calls)
+    assert json.loads(codex_state.read_text(encoding="utf-8"))["marketplaces"] == registered
+
+
 def test_packed_myspec_refreshes_enabled_codex_across_global_mode_switches(
     tmp_path: Path,
 ) -> None:
@@ -1679,7 +1746,7 @@ def test_packed_myspec_refreshes_enabled_codex_across_global_mode_switches(
             "MYSPEC_CODEX_STATE": str(codex_state),
         }
     )
-    write(codex_state, json.dumps({"marketplaces": [], "plugins": []}, indent=2))
+    write(codex_state, json.dumps({"marketplaces": [], "installed": [], "available": []}, indent=2))
     assert run_cli(executable, "init", "--codex", env=env).returncode == 0
     codex_log.write_text("", encoding="utf-8")
 
@@ -1711,9 +1778,12 @@ def test_packed_myspec_refreshes_enabled_codex_across_global_mode_switches(
 
     entered = run_cli(executable, "init", "--dev", "--source", source, env=env)
     assert entered.returncode == 0, entered.stderr
-    assert json.loads(entered.stdout)["codex"] == "refreshed"
+    entered_output = json.loads(entered.stdout)
+    assert entered_output["codex"] == "refreshed"
+    assert entered_output["newSessionRequired"] is True
+    assert entered_output["reloadRequired"] is False
     state = json.loads(codex_state.read_text(encoding="utf-8"))
-    plugin = next(item for item in state["plugins"] if item["pluginId"] == "my-spec@myspec")
+    plugin = next(item for item in state["installed"] if item["pluginId"] == "my-spec@myspec")
     assert plugin["source"] == {"source": "local", "path": str(source / "plugins" / "my-spec")}
     dev_cache = Path(env["CODEX_HOME"]) / "plugins" / "cache" / "myspec" / "my-spec" / "0.1.53"
     assert (dev_cache / "skills" / "my-spec" / "dev-marker.txt").read_text(
@@ -1722,9 +1792,12 @@ def test_packed_myspec_refreshes_enabled_codex_across_global_mode_switches(
 
     restored = run_cli(executable, "init", "--release", env=env)
     assert restored.returncode == 0, restored.stderr
-    assert json.loads(restored.stdout)["codex"] == "refreshed"
+    restored_output = json.loads(restored.stdout)
+    assert restored_output["codex"] == "refreshed"
+    assert restored_output["newSessionRequired"] is True
+    assert restored_output["reloadRequired"] is False
     state = json.loads(codex_state.read_text(encoding="utf-8"))
-    plugin = next(item for item in state["plugins"] if item["pluginId"] == "my-spec@myspec")
+    plugin = next(item for item in state["installed"] if item["pluginId"] == "my-spec@myspec")
     assert plugin["source"] == {"source": "local", "path": str(installed_package)}
     assert not (dev_cache / "skills" / "my-spec" / "dev-marker.txt").exists()
     calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
@@ -1756,7 +1829,7 @@ def test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_codex(
             "MYSPEC_CODEX_STATE": str(codex_state),
         }
     )
-    initial_state: dict[str, object] = {"marketplaces": [], "plugins": []}
+    initial_state: dict[str, object] = {"marketplaces": [], "installed": [], "available": []}
     if disabled:
         cache = tmp_path / "disabled-cache"
         shutil.copytree(installed_package, cache)
@@ -1768,7 +1841,7 @@ def test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_codex(
                     "marketplaceSource": {"sourceType": "local", "source": str(installed_package)},
                 }
             ],
-            "plugins": [
+            "installed": [
                 {
                     "pluginId": "my-spec@myspec",
                     "name": "my-spec",
@@ -1778,6 +1851,7 @@ def test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_codex(
                     "source": {"source": "local", "path": str(cache)},
                 }
             ],
+            "available": [],
         }
         write(
             Path(env["CODEX_HOME"]) / "config.toml",
