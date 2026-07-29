@@ -10,6 +10,7 @@ import subprocess
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
 
 
 PACKAGE_NAME = "@liuli195/myspec"
@@ -193,6 +194,44 @@ def _pi_sources() -> list[PiSource]:
     return result
 
 
+def _git_host_path(source: str) -> tuple[str, str] | None:
+    trimmed = source.strip()
+    has_git_prefix = trimmed.startswith("git:")
+    value = trimmed[4:].strip() if has_git_prefix else trimmed
+    if not has_git_prefix and re.match(r"^(?:https?|ssh|git)://", value, re.IGNORECASE) is None:
+        return None
+
+    scp = re.fullmatch(r"git@([^:]+):(.+)", value)
+    if scp is not None:
+        host, path = scp.groups()
+    elif "://" in value:
+        try:
+            parsed = urlsplit(value)
+        except ValueError:
+            return None
+        host, path = parsed.hostname or "", parsed.path.lstrip("/")
+    else:
+        aliases = {
+            "github": "github.com",
+            "gitlab": "gitlab.com",
+            "bitbucket": "bitbucket.org",
+        }
+        alias = re.fullmatch(r"([^:]+):(.+)", value)
+        if alias is not None and alias.group(1).lower() in aliases:
+            host, path = aliases[alias.group(1).lower()], alias.group(2)
+        else:
+            host, separator, path = value.partition("/")
+            if not separator or ("." not in host and host != "localhost"):
+                return None
+
+    path = path.split("@", 1)[0].lstrip("/").removesuffix(".git")
+    if not host or len(path.split("/")) < 2 or "\\" in host or "\\" in path:
+        return None
+    if host.startswith("/") or path.startswith("/") or ".." in path.split("/"):
+        return None
+    return host.lower(), path
+
+
 def _source_identity(item: PiSource) -> str:
     normalized = item.source.replace("\\", "/").rstrip("/")
     lowered = normalized.lower()
@@ -202,9 +241,8 @@ def _source_identity(item: PiSource) -> str:
         spec = normalized[4:]
         match = re.fullmatch(r"(@?[^@]+(?:/[^@]+)?)(?:@.+)?", spec)
         return "npm:" + (match.group(1) if match else spec).lower()
-    value = re.sub(r"(?:@[^/]+|#[^/]+)$", "", lowered.removeprefix("git:"))
-    value = re.sub(r"^(?:https?|ssh|git)://", "", value)
-    return "git:" + value.removesuffix(".git")
+    git_source = _git_host_path(item.source)
+    return f"git:{git_source[0]}/{git_source[1]}" if git_source else "source:" + normalized
 
 
 def _effective_sources(sources: list[PiSource]) -> list[PiSource]:
@@ -363,6 +401,7 @@ def _validate_dev_source(raw_source: Path) -> tuple[Path, Path, str]:
         package_path,
         package_root / "bin" / "myspec.js",
         package_root / "python" / "spec_ops.py",
+        package_root / "python" / "management.py",
         agents_market,
         claude_market,
         package_root / ".claude-plugin" / "plugin.json",
@@ -443,10 +482,13 @@ def _validated_pending(stage: str, token: str | None) -> dict[str, object]:
     return state
 
 
-def _group_effective_myspec(stable: Path) -> list[tuple[str, str, list[PiSource]]]:
+def _group_effective_myspec(
+    stable: Path,
+    sources: list[PiSource] | None = None,
+) -> list[tuple[str, str, list[PiSource]]]:
     groups: list[tuple[str, str, list[PiSource]]] = []
     by_identity: dict[str, int] = {}
-    for item in _effective_sources(_pi_sources()):
+    for item in _effective_sources(_pi_sources() if sources is None else sources):
         kind = _myspec_source_kind(item, stable)
         if kind is None:
             continue
@@ -532,22 +574,19 @@ def _group_skills(group: list[PiSource]) -> list[str]:
     return [states[path][0] for path in order if path in states and states[path][1]]
 
 
-def _pi_is_configured() -> bool:
+def _pi_is_configured(listed: list[dict[str, str]]) -> bool:
     stable = _stable_package_root()
-    return any(kind == "stable" and _group_skills(group) for _, kind, group in _group_effective_myspec(stable))
+    installed = [item for item in _pi_sources() if _pi_source_listed(item, listed)]
+    return any(
+        kind == "stable" and _group_skills(group)
+        for _, kind, group in _group_effective_myspec(stable, installed)
+    )
 
 
 def _refresh_pi() -> str:
-    if shutil.which("pi") is None or not _pi_is_configured():
+    if shutil.which("pi") is None:
         return "not-installed"
-    stable = _stable_package_root()
-    listed = _pi_list()
-    if not any(
-        _myspec_source_kind(item, stable) == "stable" and _pi_source_listed(item, listed)
-        for item in _pi_sources()
-    ):
-        return "not-installed"
-    return "refreshed"
+    return "refreshed" if _pi_is_configured(_pi_list()) else "not-installed"
 
 
 def _switch_dev(raw_source: Path | None, token: str | None) -> dict[str, object]:
@@ -627,27 +666,33 @@ def _doctor_pi() -> dict[str, object]:
     available = shutil.which("pi") is not None
     listed = _pi_list() if available else []
     configured_sources = _pi_sources()
-    all_sources = [item for item in configured_sources if _pi_source_listed(item, listed)]
-    effective = _effective_sources(all_sources)
-    effective_ids = {_source_identity(item) for item in effective}
+    installed_sources = [item for item in configured_sources if _pi_source_listed(item, listed)]
+    effective = _effective_sources(installed_sources)
     records: list[dict[str, object]] = []
-    for item in all_sources:
+    for item in configured_sources:
         kind = _myspec_source_kind(item, stable)
         if kind is not None:
+            installed = item in installed_sources
+            is_effective = item in effective
             records.append({
                 "scope": item.scope,
                 "settings": str(item.settings_path),
                 "source": item.source,
                 "resolvedPath": str(item.local_path) if item.local_path is not None else None,
                 "kind": kind,
-                "effective": _source_identity(item) in effective_ids and item in effective,
-                "enabled": bool(_group_skills([item])),
+                "installed": installed,
+                "effective": installed and is_effective,
+                "enabled": installed and is_effective and bool(_group_skills([item])),
             })
-    groups = _group_effective_myspec(stable)
+    groups = _group_effective_myspec(stable, installed_sources)
     enabled_groups = [(kind, group, _group_skills(group)) for _, kind, group in groups]
     stable_skills = next((skills for kind, _, skills in enabled_groups if kind == "stable"), [])
     enabled_sources = [group[0].source for _, group, skills in enabled_groups if skills]
-    disabled_sources = [item.source for item in all_sources if _myspec_source_kind(item, stable) is not None and not _group_skills([item])]
+    disabled_sources = [
+        item.source
+        for item in installed_sources
+        if _myspec_source_kind(item, stable) is not None and not _group_skills([item])
+    ]
     linked = not _same_path(stable, real)
     return {
         "cliVersion": cli_version,

@@ -261,6 +261,9 @@ if sys.argv[1:2] == ["list"]:
             raw = source(item)
             if not isinstance(raw, str):
                 continue
+            omitted = json.loads(os.environ.get("MYSPEC_PI_LIST_OMIT_SOURCES", "[]"))
+            if raw in omitted:
+                continue
             package = resolved(raw, path)
             print("  " + raw + (" (filtered)" if isinstance(item, dict) else ""))
             print("    " + str(package))
@@ -420,6 +423,33 @@ def test_packed_myspec_initializes_and_diagnoses_one_pi_source(tmp_path: Path) -
     assert json.loads(broken.stdout)["pi"]["skills"] == list(SKILL_NAMES[:-1])
 
 
+def test_packed_myspec_doctor_does_not_enable_settings_source_missing_from_pi_list(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = installed_package.parents[2]
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    env["MYSPEC_PI_LIST_OMIT_SOURCES"] = json.dumps([str(installed_package)])
+    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    write(settings_path, json.dumps({"packages": [str(installed_package)]}, indent=2))
+
+    diagnosed = run_cli(executable, "doctor", "--pi", env=env)
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    report = json.loads(diagnosed.stdout)["pi"]
+    assert report["registered"] is False
+    assert report["enabledSources"] == []
+    assert report["skills"] == []
+    assert report["reloadRequired"] is False
+    assert report["listedSources"] == []
+    assert len(report["sources"]) == 1
+    assert report["sources"][0]["source"] == str(installed_package)
+    assert report["sources"][0]["installed"] is False
+    assert report["sources"][0]["effective"] is False
+    assert report["sources"][0]["enabled"] is False
+
+
 @pytest.mark.parametrize(
     ("trust", "default_trust", "expected_skills"),
     [
@@ -552,6 +582,50 @@ def test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_f
     assert outside["pi"]["registered"] is True
     assert outside["pi"]["duplicateEnabledSources"] is False
     assert outside["pi"]["skills"] == list(SKILL_NAMES)
+
+
+def test_packed_myspec_pi_git_identity_matches_pi_host_path_semantics(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = installed_package.parents[2]
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    project = tmp_path / "consumer"
+    project.mkdir()
+    user_settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    project_settings = project / ".pi" / "settings.json"
+    user_https = "https://github.com/example/pi-my-spec.git@main"
+    different_host = "https://gitlab.com/example/pi-my-spec.git@main"
+    different_path = "https://github.com/other/pi-my-spec.git@main"
+    project_ssh = "git:git@github.com:example/pi-my-spec.git@feature"
+    write(
+        user_settings,
+        json.dumps(
+            {"packages": [user_https, different_host, different_path]}, indent=2
+        ),
+    )
+    write(
+        Path(env["PI_CODING_AGENT_DIR"]) / "trust.json",
+        json.dumps({str(Path(os.path.realpath(project))): True}, indent=2),
+    )
+    write(project_settings, json.dumps({"packages": [project_ssh]}, indent=2))
+
+    diagnosed = run_cli(executable, "doctor", "--pi", env=env, cwd=project)
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    sources = {
+        source["source"]: source
+        for source in json.loads(diagnosed.stdout)["pi"]["sources"]
+    }
+    assert sources[user_https]["installed"] is True
+    assert sources[user_https]["effective"] is False
+    assert sources[project_ssh]["installed"] is True
+    assert sources[project_ssh]["effective"] is True
+    assert sources[different_host]["installed"] is True
+    assert sources[different_host]["effective"] is True
+    assert sources[different_path]["installed"] is True
+    assert sources[different_path]["effective"] is True
 
 
 def test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest(
@@ -965,6 +1039,7 @@ def test_packed_myspec_rejects_invalid_mode_switches(tmp_path: Path) -> None:
         "bin-entry",
         "bin-file",
         "python-entry",
+        "management-entry",
         "pi-skills",
         "skill-file",
         "codex-marketplace",
@@ -993,6 +1068,43 @@ def test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_st
     shutil.copytree(REPO_ROOT / ".agents", source / ".agents")
     shutil.copytree(REPO_ROOT / ".claude-plugin", source / ".claude-plugin")
     shutil.copytree(PLUGIN_ROOT, source / "plugins" / "my-spec")
+    initialized = subprocess.run(
+        ["git", "init"], cwd=source, text=True, capture_output=True, check=False
+    )
+    assert initialized.returncode == 0, initialized.stderr
+    committed = subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=MySpec Test",
+            "-c",
+            "user.email=myspec@example.invalid",
+            "add",
+            ".",
+        ],
+        cwd=source,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert committed.returncode == 0, committed.stderr
+    committed = subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=MySpec Test",
+            "-c",
+            "user.email=myspec@example.invalid",
+            "commit",
+            "-m",
+            "test source",
+        ],
+        cwd=source,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert committed.returncode == 0, committed.stderr
     package_path = source / "plugins" / "my-spec" / "package.json"
     package = json.loads(package_path.read_text(encoding="utf-8"))
 
@@ -1006,6 +1118,8 @@ def test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_st
         (source / "plugins" / "my-spec" / "bin" / "myspec.js").unlink()
     elif case == "python-entry":
         (source / "plugins" / "my-spec" / "python" / "spec_ops.py").unlink()
+    elif case == "management-entry":
+        (source / "plugins" / "my-spec" / "python" / "management.py").unlink()
     elif case == "pi-skills":
         package["pi"]["skills"].append("./skills/my-spec-extra")
     elif case == "skill-file":
