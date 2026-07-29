@@ -1394,7 +1394,7 @@ def _latest_version() -> str:
         value = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise ManagementError("npm_latest_failed: invalid_json") from exc
-    if not isinstance(value, str) or re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", value) is None:
+    if not isinstance(value, str) or not value.strip():
         raise ManagementError("npm_latest_failed: invalid_version")
     return value
 
