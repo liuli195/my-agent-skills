@@ -634,20 +634,28 @@ def _run(command: str, *arguments: str, cwd: Path | None = None) -> subprocess.C
     )
 
 
-def _stable_package_root() -> Path:
-    result = _run("npm", "root", "--global")
+def _npm_path(argument: str, error_name: str) -> Path:
+    result = _run("npm", argument, "--global")
     if result.returncode != 0:
-        raise SpecError(f"npm_root_failed: {result.stderr.strip()}")
-    return Path(result.stdout.strip()) / "@liuli195" / "myspec"
+        raise SpecError(f"{error_name}: {result.stderr.strip()}")
+    return Path(result.stdout.strip())
 
 
-def _pi_settings_path() -> Path:
+def _stable_package_root() -> Path:
+    return _npm_path("root", "npm_root_failed") / "@liuli195" / "myspec"
+
+
+def _npm_prefix() -> Path:
+    return _npm_path("prefix", "npm_prefix_failed")
+
+
+def _pi_settings_paths() -> tuple[tuple[str, Path], ...]:
     configured = os.environ.get("PI_CODING_AGENT_DIR")
-    return Path(configured) / "settings.json" if configured else Path.home() / ".pi" / "agent" / "settings.json"
+    user = Path(configured) if configured else Path.home() / ".pi" / "agent"
+    return (("user", user / "settings.json"), ("project", Path.cwd() / ".pi" / "settings.json"))
 
 
-def _settings() -> dict[str, object]:
-    path = _pi_settings_path()
+def _read_settings(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     value = _read_json(path)
@@ -664,40 +672,106 @@ def _package_source(item: object) -> str | None:
     return None
 
 
-def _is_legacy_myspec_source(source: str, stable: Path) -> bool:
-    if Path(source).resolve(strict=False) == stable.resolve(strict=False):
-        return False
-    normalized = source.replace("\\", "/").lower().rstrip("/")
-    return (
-        normalized.startswith("npm:@liuli195/myspec")
-        or normalized.endswith("/plugins/my-spec")
-        or normalized.endswith("/pi-my-spec")
-    )
+def _local_source_path(source: str, settings_path: Path) -> Path | None:
+    normalized = source.lower()
+    if normalized.startswith(("npm:", "git:", "http://", "https://", "ssh://", "git://")):
+        return None
+    path = Path(source).expanduser()
+    if not path.is_absolute():
+        path = settings_path.parent / path
+    return Path(os.path.abspath(path))
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
+
+
+@dataclass
+class PiSource:
+    scope: str
+    settings_path: Path
+    settings: dict[str, object]
+    index: int
+    item: object
+    source: str
+    local_path: Path | None
+
+    @property
+    def disabled(self) -> bool:
+        return isinstance(self.item, dict) and self.item.get("skills") == []
+
+
+def _pi_sources() -> list[PiSource]:
+    result: list[PiSource] = []
+    for scope, path in _pi_settings_paths():
+        settings = _read_settings(path)
+        packages = settings.get("packages", [])
+        if not isinstance(packages, list):
+            raise SpecError(f"invalid_pi_packages: {path}")
+        for index, item in enumerate(packages):
+            source = _package_source(item)
+            if source is not None:
+                result.append(
+                    PiSource(scope, path, settings, index, item, source, _local_source_path(source, path))
+                )
+    return result
+
+
+def _myspec_source_kind(item: PiSource, stable: Path) -> str | None:
+    if item.local_path is not None and _same_path(item.local_path, stable):
+        return "stable"
+    normalized = item.source.replace("\\", "/").lower().rstrip("/")
+    if re.fullmatch(r"npm:(?:@liuli195/myspec|pi-my-spec)(?:@[^/]+)?", normalized):
+        return "legacy"
+    local = item.local_path.as_posix().lower().rstrip("/") if item.local_path else ""
+    if local.endswith("/plugins/my-spec") or local.endswith("/pi-my-spec"):
+        return "legacy"
+    if re.search(r"(?:^|[/:])pi-my-spec(?:\.git)?(?:@[^/]+|#[^/]+)?$", normalized):
+        return "legacy"
+    return None
+
+
+def _set_disabled(item: PiSource, disabled: bool) -> None:
+    packages = item.settings["packages"]
+    assert isinstance(packages, list)
+    current = packages[item.index]
+    if isinstance(current, str):
+        if disabled:
+            packages[item.index] = {"source": current, "skills": []}
+        return
+    if disabled:
+        current["skills"] = []
+    else:
+        current.pop("skills", None)
+        current.pop("autoload", None)
 
 
 def _configure_pi_sources(stable: Path) -> list[str]:
-    path = _pi_settings_path()
-    settings = _settings()
-    packages = settings.setdefault("packages", [])
-    if not isinstance(packages, list):
-        raise SpecError(f"invalid_pi_packages: {path}")
+    sources = _pi_sources()
+    stable_sources = [item for item in sources if _myspec_source_kind(item, stable) == "stable"]
+    if not stable_sources:
+        installed = _run("pi", "install", str(stable))
+        if installed.returncode != 0:
+            raise SpecError(f"pi_install_failed: {installed.stderr.strip()}")
+        sources = _pi_sources()
+        stable_sources = [item for item in sources if _myspec_source_kind(item, stable) == "stable"]
+    if not stable_sources:
+        raise SpecError("pi_install_missing_source")
+
+    winner = next((item for item in reversed(stable_sources) if item.scope == "project"), stable_sources[0])
     disabled: list[str] = []
-    for index, item in enumerate(packages):
-        source = _package_source(item)
-        if source is None:
-            continue
-        if Path(source).resolve(strict=False) == stable.resolve(strict=False):
-            if isinstance(item, dict):
-                item.pop("skills", None)
-                item.pop("autoload", None)
-            continue
-        if _is_legacy_myspec_source(source, stable):
-            disabled.append(source)
-            if isinstance(item, str):
-                packages[index] = {"source": source, "skills": []}
-            else:
-                item["skills"] = []
-    _atomic_json(path, settings)
+    touched: dict[Path, dict[str, object]] = {}
+    for item in sources:
+        kind = _myspec_source_kind(item, stable)
+        if kind == "stable":
+            _set_disabled(item, item is not winner)
+            touched[item.settings_path] = item.settings
+        elif kind == "legacy":
+            disabled.append(item.source)
+            _set_disabled(item, True)
+            touched[item.settings_path] = item.settings
+    for path, settings in touched.items():
+        _atomic_json(path, settings)
     return disabled
 
 
@@ -705,9 +779,6 @@ def _init_pi() -> dict[str, object]:
     if shutil.which("pi") is None:
         raise SpecError("missing_command: pi")
     stable = _stable_package_root()
-    installed = _run("pi", "install", str(stable))
-    if installed.returncode != 0:
-        raise SpecError(f"pi_install_failed: {installed.stderr.strip()}")
     disabled = _configure_pi_sources(stable)
     return {
         "pi": "initialized",
@@ -744,20 +815,44 @@ def _mode_state() -> dict[str, object]:
     return value
 
 
+def _marketplace_has_myspec(path: Path, *, agents: bool) -> bool:
+    value = _read_json(path)
+    if not isinstance(value, dict) or not isinstance(value.get("plugins"), list):
+        return False
+    for plugin in value["plugins"]:
+        if not isinstance(plugin, dict) or plugin.get("name") != "my-spec":
+            continue
+        plugin_source = plugin.get("source")
+        if agents:
+            return plugin_source == {"source": "local", "path": "./plugins/my-spec"}
+        return plugin_source == "./plugins/my-spec"
+    return False
+
+
 def _validate_dev_source(raw_source: Path) -> tuple[Path, Path, str]:
     source = raw_source.resolve()
-    required = (
-        source / ".agents" / "plugins" / "marketplace.json",
-        source / ".claude-plugin" / "marketplace.json",
-        source / "plugins" / "my-spec" / "package.json",
-    )
-    missing = next((path for path in required if not path.is_file()), None)
+    agents_market = source / ".agents" / "plugins" / "marketplace.json"
+    claude_market = source / ".claude-plugin" / "marketplace.json"
+    package_root = source / "plugins" / "my-spec"
+    package_path = package_root / "package.json"
+    missing = next((path for path in (agents_market, claude_market, package_path) if not path.is_file()), None)
     if missing is not None:
         raise SpecError(f"invalid_dev_source: missing {missing}")
-    package_root = source / "plugins" / "my-spec"
-    package = _read_json(package_root / "package.json")
-    if not isinstance(package, dict) or package.get("name") != PACKAGE_NAME:
-        raise SpecError(f"invalid_dev_source: package_name {package_root}")
+    package = _read_json(package_path)
+    if (
+        not isinstance(package, dict)
+        or package.get("name") != PACKAGE_NAME
+        or not isinstance(package.get("version"), str)
+        or package.get("pi") != {"skills": ["./skills"]}
+    ):
+        raise SpecError(f"invalid_dev_source: package_manifest {package_root}")
+    if not _marketplace_has_myspec(agents_market, agents=True):
+        raise SpecError(f"invalid_dev_source: marketplace {agents_market}")
+    if not _marketplace_has_myspec(claude_market, agents=False):
+        raise SpecError(f"invalid_dev_source: marketplace {claude_market}")
+    root = _run("git", "rev-parse", "--show-toplevel", cwd=source)
+    if root.returncode != 0 or not _same_path(Path(root.stdout.strip()), source):
+        raise SpecError("invalid_dev_source: git_root")
     commit = _run("git", "rev-parse", "HEAD", cwd=source)
     if commit.returncode != 0:
         raise SpecError(f"invalid_dev_source: git {commit.stderr.strip()}")
@@ -772,16 +867,15 @@ def _exact_command(executable: Path, *arguments: str) -> list[str] | str:
 
 
 def _stable_cli() -> Path:
-    npm_root = _stable_package_root().parents[1]
-    prefix = npm_root.parent
-    return prefix / ("myspec.cmd" if os.name == "nt" else "bin/myspec")
+    prefix = _npm_prefix()
+    return prefix / "myspec.cmd" if os.name == "nt" else prefix / "bin" / "myspec"
 
 
-def _resume_after_switch(arguments: list[str], stage: str) -> dict[str, object]:
-    invocation = _exact_command(_stable_cli(), *arguments)
+def _resume_after_switch(arguments: list[str], token: str) -> dict[str, object]:
+    invocation = _exact_command(_stable_cli(), *arguments, "--_switch-token", token)
     result = subprocess.run(
         invocation,
-        env={**os.environ, "MYSPEC_SWITCH_STAGE": stage},
+        env=os.environ.copy(),
         text=True,
         capture_output=True,
         check=False,
@@ -798,35 +892,45 @@ def _resume_after_switch(arguments: list[str], stage: str) -> dict[str, object]:
     return value
 
 
+def _consume_switch(stage: str, token: str | None) -> dict[str, object]:
+    state = _mode_state()
+    pending = state.get("pendingSwitch")
+    if (
+        token is None
+        or not isinstance(pending, dict)
+        or pending.get("stage") != stage
+        or pending.get("token") != token
+    ):
+        raise SpecError("invalid_switch_token")
+    state.pop("pendingSwitch")
+    _atomic_json(_mode_state_path(), state)
+    return state
+
+
 def _pi_is_configured() -> bool:
-    packages = _settings().get("packages", [])
-    if not isinstance(packages, list):
-        raise SpecError(f"invalid_pi_packages: {_pi_settings_path()}")
     stable = _stable_package_root()
     return any(
-        source is not None
-        and (
-            Path(source).resolve(strict=False) == stable.resolve(strict=False)
-            or _is_legacy_myspec_source(source, stable)
-        )
-        for source in (_package_source(item) for item in packages)
+        _myspec_source_kind(item, stable) == "stable" and not item.disabled
+        for item in _pi_sources()
     )
 
 
 def _refresh_pi() -> str:
     if shutil.which("pi") is None or not _pi_is_configured():
         return "not-installed"
-    _init_pi()
+    listed = _run("pi", "list")
+    if listed.returncode != 0:
+        raise SpecError(f"pi_list_failed: {listed.stderr.strip()}")
     return "refreshed"
 
 
-def _switch_dev(raw_source: Path | None) -> dict[str, object]:
+def _switch_dev(raw_source: Path | None, token: str | None) -> dict[str, object]:
     source, package_root, commit = _validate_dev_source(raw_source or Path.cwd())
-    state = _mode_state()
-    previous = state.get("previousReleaseVersion") if state["mode"] == "dev" else _package_version()
-    if not isinstance(previous, str) or not previous:
-        raise SpecError("missing_previous_release_version")
-    if os.environ.get("MYSPEC_SWITCH_STAGE") == "dev":
+    if token is not None:
+        state = _consume_switch("dev", token)
+        previous = state.get("previousReleaseVersion")
+        if not isinstance(previous, str) or not previous:
+            raise SpecError("missing_previous_release_version")
         pi_status = _refresh_pi()
         return {
             "mode": "dev",
@@ -835,9 +939,11 @@ def _switch_dev(raw_source: Path | None) -> dict[str, object]:
             "pi": pi_status,
             "reloadRequired": pi_status == "refreshed",
         }
-    linked = _run("npm", "link", cwd=package_root)
-    if linked.returncode != 0:
-        raise SpecError(f"npm_link_failed: {linked.stderr.strip()}")
+    state = _mode_state()
+    previous = state.get("previousReleaseVersion") if state["mode"] == "dev" else _package_version()
+    if not isinstance(previous, str) or not previous:
+        raise SpecError("missing_previous_release_version")
+    switch_token = uuid.uuid4().hex
     _atomic_json(
         _mode_state_path(),
         {
@@ -845,17 +951,22 @@ def _switch_dev(raw_source: Path | None) -> dict[str, object]:
             "source": str(source),
             "sourceCommit": commit,
             "previousReleaseVersion": previous,
+            "pendingSwitch": {"stage": "dev", "token": switch_token},
         },
     )
-    return _resume_after_switch(["init", "--dev", "--source", str(source)], "dev")
+    linked = _run("npm", "link", cwd=package_root)
+    if linked.returncode != 0:
+        raise SpecError(f"npm_link_failed: {linked.stderr.strip()}")
+    return _resume_after_switch(["init", "--dev", "--source", str(source)], switch_token)
 
 
-def _switch_release() -> dict[str, object]:
+def _switch_release(token: str | None) -> dict[str, object]:
     state = _mode_state()
     previous = state.get("previousReleaseVersion")
     if not isinstance(previous, str) or not previous:
         raise SpecError("missing_previous_release_version")
-    if os.environ.get("MYSPEC_SWITCH_STAGE") == "release":
+    if token is not None:
+        state = _consume_switch("release", token)
         pi_status = _refresh_pi()
         return {
             "mode": "release",
@@ -865,6 +976,15 @@ def _switch_release() -> dict[str, object]:
         }
     if state["mode"] != "dev":
         raise SpecError("missing_previous_release_version")
+    switch_token = uuid.uuid4().hex
+    _atomic_json(
+        _mode_state_path(),
+        {
+            "mode": "release",
+            "previousReleaseVersion": previous,
+            "pendingSwitch": {"stage": "release", "token": switch_token},
+        },
+    )
     installed = _run(
         "npm",
         "install",
@@ -876,52 +996,87 @@ def _switch_release() -> dict[str, object]:
     )
     if installed.returncode != 0:
         raise SpecError(f"npm_install_failed: {installed.stderr.strip()}")
-    _atomic_json(
-        _mode_state_path(),
-        {"mode": "release", "previousReleaseVersion": previous},
-    )
-    return _resume_after_switch(["init", "--release"], "release")
+    return _resume_after_switch(["init", "--release"], switch_token)
+
+
+def _pi_list() -> list[dict[str, str]]:
+    listed = _run("pi", "list")
+    if listed.returncode != 0:
+        raise SpecError(f"pi_list_failed: {listed.stderr.strip()}")
+    result: list[dict[str, str]] = []
+    pending: str | None = None
+    for line in listed.stdout.splitlines():
+        if line.startswith("  ") and not line.startswith("    "):
+            pending = line.strip().removesuffix(" (filtered)")
+        elif pending is not None and line.startswith("    "):
+            result.append({"source": pending, "path": line.strip()})
+            pending = None
+    return result
+
+
+def _manifest_version(root: Path) -> str | None:
+    path = root / "package.json"
+    if not path.is_file():
+        return None
+    value = _read_json(path)
+    return value.get("version") if isinstance(value, dict) and isinstance(value.get("version"), str) else None
 
 
 def _doctor_pi() -> dict[str, object]:
     stable = _stable_package_root()
+    real = stable.resolve(strict=False)
+    cli_version = _package_version()
+    package_version = _manifest_version(real)
     available = shutil.which("pi") is not None
-    if available:
-        listed = _run("pi", "list")
-        if listed.returncode != 0:
-            raise SpecError(f"pi_list_failed: {listed.stderr.strip()}")
-    settings = _settings()
-    packages = settings.get("packages", [])
-    if not isinstance(packages, list):
-        raise SpecError(f"invalid_pi_packages: {_pi_settings_path()}")
+    listed = _pi_list() if available else []
+    sources = _pi_sources()
+    records: list[dict[str, object]] = []
     enabled: list[str] = []
     disabled: list[str] = []
-    for item in packages:
-        source = _package_source(item)
-        if source is None or (
-            Path(source).resolve(strict=False) != stable.resolve(strict=False)
-            and not _is_legacy_myspec_source(source, stable)
-        ):
+    stable_enabled = False
+    for item in sources:
+        kind = _myspec_source_kind(item, stable)
+        if kind is None:
             continue
-        is_disabled = isinstance(item, dict) and item.get("skills") == []
-        (disabled if is_disabled else enabled).append(source)
-    state = _mode_state()
-    skills = [
-        name
-        for name in SKILL_NAMES
-        if (stable / "skills" / name / "SKILL.md").is_file()
-    ]
+        record = {
+            "scope": item.scope,
+            "settings": str(item.settings_path),
+            "source": item.source,
+            "resolvedPath": str(item.local_path) if item.local_path is not None else None,
+            "kind": kind,
+            "enabled": not item.disabled,
+        }
+        records.append(record)
+        (disabled if item.disabled else enabled).append(item.source)
+        stable_enabled = stable_enabled or (kind == "stable" and not item.disabled)
+    linked = not _same_path(stable, real)
+    stable_listed = any(
+        entry["path"] and _same_path(Path(entry["path"]), real)
+        for entry in listed
+        if entry["source"] in {item.source for item in sources if _myspec_source_kind(item, stable) == "stable"}
+    )
+    registered = stable_enabled and (stable_listed or not available)
+    skills = [name for name in SKILL_NAMES if (real / "skills" / name / "SKILL.md").is_file()]
     return {
-        "cliVersion": _package_version(),
-        "mode": state["mode"],
-        "source": str(state.get("source", stable)),
+        "cliVersion": cli_version,
+        "mode": "dev" if linked else "release",
+        "source": str(real if linked else stable),
+        "npm": {
+            "stablePath": str(stable),
+            "realPath": str(real),
+            "linked": linked,
+            "packageVersion": package_version,
+            "versionMismatch": package_version != cli_version,
+        },
         "pi": {
             "available": available,
-            "registered": str(stable) in enabled,
+            "registered": registered,
             "enabledSources": enabled,
             "disabledSources": disabled,
             "duplicateEnabledSources": len(enabled) > 1,
-            "skills": skills if str(stable) in enabled else [],
+            "sources": records,
+            "listedSources": listed,
+            "skills": skills if registered else [],
             "reloadRequired": bool(enabled),
         },
     }
@@ -977,10 +1132,9 @@ def _parser() -> argparse.ArgumentParser:
     init_target.add_argument("--dev", action="store_true")
     init_target.add_argument("--release", action="store_true")
     init_parser.add_argument("--source", type=Path)
+    init_parser.add_argument("--_switch-token", help=argparse.SUPPRESS)
     doctor_parser = commands.add_parser("doctor")
-    doctor_target = doctor_parser.add_mutually_exclusive_group(required=True)
-    doctor_target.add_argument("--pi", action="store_true")
-    doctor_target.add_argument("--all", action="store_true")
+    doctor_parser.add_argument("--pi", action="store_true")
     return parser
 
 
@@ -1043,14 +1197,16 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(_state_summary(state), ensure_ascii=False))
         elif args.command == "init":
             if args.dev:
-                result = _switch_dev(args.source)
+                result = _switch_dev(args.source, args._switch_token)
             elif args.release:
                 if args.source is not None:
                     raise SpecError("source_only_valid_with_dev")
-                result = _switch_release()
+                result = _switch_release(args._switch_token)
             else:
                 if args.source is not None:
                     raise SpecError("source_only_valid_with_dev")
+                if args._switch_token is not None:
+                    raise SpecError("invalid_switch_token")
                 result = _init_all() if args.all else _init_pi()
             print(json.dumps(result, ensure_ascii=False))
         elif args.command == "doctor":
