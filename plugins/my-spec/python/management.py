@@ -175,6 +175,7 @@ def _pi_sources(listed: list[dict[str, str]]) -> list[PiSource]:
                     for record in listed
                     if record["scope"] == scope
                     and record["source"] == source
+                    and "path" in record
                     and (local_path is None or _same_path(Path(record["path"]), local_path))
                 ),
                 None,
@@ -626,16 +627,17 @@ def _pi_list() -> list[dict[str, str]]:
         raise ManagementError(f"pi_list_failed: {listed.stderr.strip()}")
     result: list[dict[str, str]] = []
     scope: str | None = None
-    pending: str | None = None
+    pending: dict[str, str] | None = None
     for line in listed.stdout.splitlines():
         if line == "User packages:":
             scope, pending = "user", None
         elif line == "Project packages:":
             scope, pending = "project", None
         elif scope is not None and line.startswith("  ") and not line.startswith("    "):
-            pending = line.strip().removesuffix(" (filtered)")
-        elif scope is not None and pending is not None and line.startswith("    "):
-            result.append({"scope": scope, "source": pending, "path": line.strip()})
+            pending = {"scope": scope, "source": line.strip().removesuffix(" (filtered)")}
+            result.append(pending)
+        elif pending is not None and line.startswith("    "):
+            pending["path"] = line.strip()
             pending = None
     return result
 

@@ -279,7 +279,9 @@ if sys.argv[1:2] == ["list"]:
                 continue
             package = resolved(raw, path)
             print("  " + raw + (" (filtered)" if isinstance(item, dict) else ""))
-            print("    " + str(package))
+            source_only = json.loads(os.environ.get("MYSPEC_PI_LIST_SOURCE_ONLY", "[]"))
+            if raw not in source_only:
+                print("    " + str(package))
     if not shown:
         print("No packages installed.")
     raise SystemExit(0)
@@ -839,6 +841,57 @@ def test_packed_myspec_doctor_reads_legacy_git_and_npm_manifests_from_pi_list(
     legacy = [source for source in report["sources"] if source["kind"] == "legacy"]
     assert [source["resolvedPath"] for source in legacy] == [str(npm_package), str(git_package)]
     assert all(source["enabled"] for source in legacy)
+
+
+def test_packed_myspec_keeps_project_legacy_sources_without_installed_paths(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = installed_package.parents[2]
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    project = tmp_path / "consumer"
+    project.mkdir()
+    npm_source = "npm:pi-my-spec@0.1.52"
+    git_source = "git:github.com/example/pi-my-spec@v0.1.52"
+    env["MYSPEC_PI_LIST_SOURCE_ONLY"] = json.dumps([npm_source, git_source])
+    user_settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    project_settings = project / ".pi" / "settings.json"
+    write(user_settings, json.dumps({"packages": [str(installed_package)]}, indent=2))
+    write(
+        Path(env["PI_CODING_AGENT_DIR"]) / "trust.json",
+        json.dumps({str(Path(os.path.realpath(project))): True}, indent=2),
+    )
+    write(
+        project_settings,
+        json.dumps({"packages": [npm_source, git_source]}, indent=2),
+    )
+
+    initialized = run_cli(executable, "init", "--pi", env=env, cwd=project)
+    assert initialized.returncode == 0, initialized.stderr
+    assert json.loads(project_settings.read_text(encoding="utf-8"))["packages"] == [
+        {"source": npm_source, "skills": []},
+        {"source": git_source, "skills": []},
+    ]
+    calls = [json.loads(line)["args"] for line in pi_log.read_text(encoding="utf-8").splitlines()]
+    assert not any(call[:1] == ["install"] for call in calls)
+
+    report = json.loads(run_cli(executable, "doctor", "--pi", env=env, cwd=project).stdout)["pi"]
+    assert report["listedSources"] == [
+        {"scope": "user", "source": str(installed_package), "path": str(installed_package)},
+        {"scope": "project", "source": npm_source},
+        {"scope": "project", "source": git_source},
+    ]
+    assert report["enabledSources"] == [str(installed_package)]
+    assert report["duplicateEnabledSources"] is False
+    sources = {source["source"]: source for source in report["sources"]}
+    for source in (npm_source, git_source):
+        assert sources[source]["scope"] == "project"
+        assert sources[source]["resolvedPath"] is None
+        assert sources[source]["installed"] is False
+        assert sources[source]["effective"] is False
+        assert sources[source]["enabled"] is False
 
 
 def test_packed_myspec_reports_missing_pi_without_installing_it(tmp_path: Path) -> None:
