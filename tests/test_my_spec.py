@@ -183,14 +183,300 @@ def install_packed_myspec(tmp_path: Path) -> tuple[Path, Path]:
     return executable, Path(npm_root.stdout.strip()) / "@liuli195" / "myspec"
 
 
-def run_cli(executable: Path, *args: object, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def run_cli(
+    executable: Path,
+    *args: object,
+    env: dict[str, str] | None = None,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(executable), *(str(arg) for arg in args)],
+        cwd=cwd,
         env=env,
         text=True,
         capture_output=True,
         check=False,
     )
+
+
+def install_fake_pi(root: Path) -> tuple[Path, Path]:
+    bin_dir = root / "bin"
+    bin_dir.mkdir(parents=True)
+    script = root / "fake_pi.py"
+    log = root / "pi.log"
+    write(
+        script,
+        """import json
+import os
+import sys
+from pathlib import Path
+
+config = Path(os.environ["PI_CODING_AGENT_DIR"])
+settings_path = config / "settings.json"
+settings = json.loads(settings_path.read_text(encoding="utf-8")) if settings_path.exists() else {}
+packages = settings.setdefault("packages", [])
+with Path(os.environ["MYSPEC_PI_LOG"]).open("a", encoding="utf-8") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\\n")
+if sys.argv[1:2] == ["install"]:
+    source = sys.argv[2]
+    if not any((item == source) or (isinstance(item, dict) and item.get("source") == source) for item in packages):
+        packages.append(source)
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps(settings, indent=2) + "\\n", encoding="utf-8")
+    raise SystemExit(0)
+if sys.argv[1:2] == ["list"]:
+    print("User packages:")
+    for item in packages:
+        print("  " + (item if isinstance(item, str) else item["source"]))
+    raise SystemExit(0)
+raise SystemExit(2)
+""",
+    )
+    if sys.platform == "win32":
+        launcher = bin_dir / "pi.cmd"
+        write(launcher, f'@"{sys.executable}" "{script}" %*')
+    else:
+        launcher = bin_dir / "pi"
+        write(launcher, f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"')
+        launcher.chmod(0o755)
+    return bin_dir, log
+
+
+def install_fake_npm(root: Path, release_tarball: Path) -> tuple[Path, Path]:
+    bin_dir = root / "bin"
+    bin_dir.mkdir(parents=True)
+    script = root / "fake_npm.py"
+    log = root / "npm.log"
+    npm = shutil.which("npm")
+    assert npm is not None
+    write(
+        script,
+        """import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+arguments = sys.argv[1:]
+with Path(os.environ["MYSPEC_NPM_LOG"]).open("a", encoding="utf-8") as log:
+    log.write(json.dumps(arguments) + "\\n")
+if arguments[:2] == ["install", "--global"]:
+    arguments[-1] = os.environ["MYSPEC_RELEASE_TARBALL"]
+command = [os.environ["MYSPEC_REAL_NPM"], *arguments]
+if os.name == "nt":
+    result = subprocess.run(subprocess.list2cmdline(command), shell=True)
+else:
+    result = subprocess.run(command)
+raise SystemExit(result.returncode)
+""",
+    )
+    if sys.platform == "win32":
+        launcher = bin_dir / "npm.cmd"
+        write(launcher, f'@"{sys.executable}" "{script}" %*')
+    else:
+        launcher = bin_dir / "npm"
+        write(launcher, f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"')
+        launcher.chmod(0o755)
+    return bin_dir, log
+
+
+def isolated_myspec_env(
+    tmp_path: Path,
+    prefix: Path,
+    *extra_paths: Path,
+) -> dict[str, str]:
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    path_entries = [str(path) for path in extra_paths]
+    path_entries.extend(
+        str(path)
+        for path in {
+            Path(shutil.which("node") or "").parent,
+            Path(shutil.which("npm") or "").parent,
+            Path(shutil.which("git") or "").parent,
+            Path(sys.executable).parent,
+        }
+        if path.is_dir()
+    )
+    return {
+        **os.environ,
+        "HOME": str(home),
+        "USERPROFILE": str(home),
+        "PI_CODING_AGENT_DIR": str(home / ".pi" / "agent"),
+        "NPM_CONFIG_PREFIX": str(prefix),
+        "MYSPEC_PYTHON": sys.executable,
+        "PATH": os.pathsep.join(path_entries),
+    }
+
+
+def test_packed_myspec_initializes_and_diagnoses_one_pi_source(tmp_path: Path) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = installed_package.parents[2]
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    legacy = str(REPO_ROOT / "plugins" / "my-spec")
+    write(
+        settings_path,
+        json.dumps(
+            {
+                "packages": [
+                    legacy,
+                    {"source": str(installed_package), "skills": [], "autoload": False},
+                ]
+            },
+            indent=2,
+        ),
+    )
+
+    initialized = run_cli(executable, "init", "--pi", env=env)
+    assert initialized.returncode == 0, initialized.stderr
+    result = json.loads(initialized.stdout)
+    assert result == {
+        "pi": "initialized",
+        "source": str(installed_package),
+        "disabledLegacySources": [legacy],
+        "reloadRequired": True,
+    }
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert settings["packages"] == [
+        {"source": legacy, "skills": []},
+        {"source": str(installed_package)},
+    ]
+
+    settings_before = settings_path.read_bytes()
+    diagnosed = run_cli(executable, "doctor", "--pi", env=env)
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    report = json.loads(diagnosed.stdout)
+    assert report == {
+        "cliVersion": "0.1.53",
+        "mode": "release",
+        "source": str(installed_package),
+        "pi": {
+            "available": True,
+            "registered": True,
+            "enabledSources": [str(installed_package)],
+            "disabledSources": [legacy],
+            "duplicateEnabledSources": False,
+            "skills": list(SKILL_NAMES),
+            "reloadRequired": True,
+        },
+    }
+    assert settings_path.read_bytes() == settings_before
+    assert [json.loads(line) for line in pi_log.read_text(encoding="utf-8").splitlines()] == [
+        ["install", str(installed_package)],
+        ["list"],
+    ]
+
+    shutil.rmtree(installed_package / "skills" / "my-spec-audit")
+    broken = run_cli(executable, "doctor", "--pi", env=env)
+    assert broken.returncode == 0, broken.stderr
+    assert json.loads(broken.stdout)["pi"]["skills"] == list(SKILL_NAMES[:-1])
+
+
+def test_packed_myspec_reports_missing_pi_without_installing_it(tmp_path: Path) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = installed_package.parents[2]
+    env = isolated_myspec_env(tmp_path, prefix)
+
+    explicit = run_cli(executable, "init", "--pi", env=env)
+    assert explicit.returncode == 1
+    assert explicit.stdout == ""
+    assert "error: missing_command: pi" in explicit.stderr
+
+    all_agents = run_cli(executable, "init", "--all", env=env)
+    assert all_agents.returncode == 0, all_agents.stderr
+    assert json.loads(all_agents.stdout) == {
+        "pi": {"status": "skipped", "reason": "missing_command: pi"},
+        "claude": {"status": "skipped", "reason": "missing_command: claude"},
+        "codex": {"status": "skipped", "reason": "missing_command: codex"},
+    }
+    assert not (Path(env["PI_CODING_AGENT_DIR"]) / "settings.json").exists()
+
+
+def test_packed_myspec_switches_pi_between_development_and_saved_release(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = installed_package.parents[2]
+    release_tarball = next((tmp_path / "package").glob("*.tgz"))
+    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, prefix, npm_bin, pi_bin)
+    env.update(
+        {
+            "MYSPEC_NPM_LOG": str(npm_log),
+            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
+            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
+            "MYSPEC_PI_LOG": str(pi_log),
+        }
+    )
+
+    assert run_cli(executable, "init", "--pi", env=env).returncode == 0
+    entered = run_cli(executable, "init", "--dev", env=env, cwd=REPO_ROOT)
+    assert entered.returncode == 0, entered.stderr
+    assert json.loads(entered.stdout) == {
+        "mode": "dev",
+        "source": str(REPO_ROOT),
+        "previousReleaseVersion": "0.1.53",
+        "pi": "refreshed",
+        "reloadRequired": True,
+    }
+    state_path = Path(env["HOME"]) / ".myspec" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["mode"] == "dev"
+    assert state["source"] == str(REPO_ROOT)
+    assert state["previousReleaseVersion"] == "0.1.53"
+    assert state["sourceCommit"] == subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    dev_report = run_cli(executable, "doctor", "--pi", env=env)
+    assert json.loads(dev_report.stdout)["source"] == str(REPO_ROOT)
+    assert json.loads(dev_report.stdout)["mode"] == "dev"
+
+    restored = run_cli(executable, "init", "--release", env=env)
+    assert restored.returncode == 0, restored.stderr
+    assert json.loads(restored.stdout) == {
+        "mode": "release",
+        "version": "0.1.53",
+        "pi": "refreshed",
+        "reloadRequired": True,
+    }
+    assert json.loads(state_path.read_text(encoding="utf-8"))["mode"] == "release"
+    report = json.loads(run_cli(executable, "doctor", "--pi", env=env).stdout)
+    assert report["mode"] == "release"
+    assert report["source"] == str(installed_package)
+    assert report["pi"]["enabledSources"] == [str(installed_package)]
+    assert report["pi"]["skills"] == list(SKILL_NAMES)
+
+    npm_calls = [json.loads(line) for line in npm_log.read_text(encoding="utf-8").splitlines()]
+    assert ["link"] in npm_calls
+    assert ["install", "--global", "--ignore-scripts", "--no-audit", "--no-fund", "@liuli195/myspec@0.1.53"] in npm_calls
+    pi_calls = [json.loads(line) for line in pi_log.read_text(encoding="utf-8").splitlines()]
+    assert pi_calls.count(["install", str(installed_package)]) == 3
+
+    explicit = run_cli(executable, "init", "--dev", "--source", REPO_ROOT, env=env, cwd=tmp_path)
+    assert explicit.returncode == 0, explicit.stderr
+    assert json.loads(explicit.stdout)["source"] == str(REPO_ROOT)
+
+
+def test_packed_myspec_rejects_invalid_mode_switches(tmp_path: Path) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    env = isolated_myspec_env(tmp_path, installed_package.parents[2])
+
+    invalid_source = run_cli(executable, "init", "--dev", "--source", tmp_path, env=env)
+    assert invalid_source.returncode == 1
+    assert "error: invalid_dev_source: missing" in invalid_source.stderr
+    assert not (Path(env["HOME"]) / ".myspec" / "state.json").exists()
+
+    result = run_cli(executable, "init", "--release", env=env)
+    assert result.returncode == 1
+    assert "error: missing_previous_release_version" in result.stderr
 
 
 def windows_py_launcher() -> Path:

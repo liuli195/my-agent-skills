@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import os
 import re
 import shutil
+import subprocess
 import sys
 import uuid
 from collections import OrderedDict
@@ -599,6 +601,332 @@ def diff_dirs(old_root: Path, new_root: Path) -> str:
     return "".join(chunks)
 
 
+SKILL_NAMES = ("my-spec", "my-spec-add", "my-spec-review", "my-spec-audit")
+PACKAGE_NAME = "@liuli195/myspec"
+
+
+def _package_version() -> str:
+    package = _read_json(Path(__file__).resolve().parents[1] / "package.json")
+    if not isinstance(package, dict) or not isinstance(package.get("version"), str):
+        raise SpecError("invalid_package_version")
+    return package["version"]
+
+
+def _command(command: str, *arguments: str) -> list[str] | str:
+    executable = shutil.which(command)
+    if executable is None:
+        raise SpecError(f"missing_command: {command}")
+    values = [executable, *arguments]
+    if os.name == "nt" and Path(executable).suffix.lower() in {".cmd", ".bat"}:
+        return subprocess.list2cmdline(values)
+    return values
+
+
+def _run(command: str, *arguments: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    invocation = _command(command, *arguments)
+    return subprocess.run(
+        invocation,
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        check=False,
+        shell=isinstance(invocation, str),
+    )
+
+
+def _stable_package_root() -> Path:
+    result = _run("npm", "root", "--global")
+    if result.returncode != 0:
+        raise SpecError(f"npm_root_failed: {result.stderr.strip()}")
+    return Path(result.stdout.strip()) / "@liuli195" / "myspec"
+
+
+def _pi_settings_path() -> Path:
+    configured = os.environ.get("PI_CODING_AGENT_DIR")
+    return Path(configured) / "settings.json" if configured else Path.home() / ".pi" / "agent" / "settings.json"
+
+
+def _settings() -> dict[str, object]:
+    path = _pi_settings_path()
+    if not path.exists():
+        return {}
+    value = _read_json(path)
+    if not isinstance(value, dict):
+        raise SpecError(f"invalid_pi_settings: {path}")
+    return value
+
+
+def _package_source(item: object) -> str | None:
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict) and isinstance(item.get("source"), str):
+        return item["source"]
+    return None
+
+
+def _is_legacy_myspec_source(source: str, stable: Path) -> bool:
+    if Path(source).resolve(strict=False) == stable.resolve(strict=False):
+        return False
+    normalized = source.replace("\\", "/").lower().rstrip("/")
+    return (
+        normalized.startswith("npm:@liuli195/myspec")
+        or normalized.endswith("/plugins/my-spec")
+        or normalized.endswith("/pi-my-spec")
+    )
+
+
+def _configure_pi_sources(stable: Path) -> list[str]:
+    path = _pi_settings_path()
+    settings = _settings()
+    packages = settings.setdefault("packages", [])
+    if not isinstance(packages, list):
+        raise SpecError(f"invalid_pi_packages: {path}")
+    disabled: list[str] = []
+    for index, item in enumerate(packages):
+        source = _package_source(item)
+        if source is None:
+            continue
+        if Path(source).resolve(strict=False) == stable.resolve(strict=False):
+            if isinstance(item, dict):
+                item.pop("skills", None)
+                item.pop("autoload", None)
+            continue
+        if _is_legacy_myspec_source(source, stable):
+            disabled.append(source)
+            if isinstance(item, str):
+                packages[index] = {"source": source, "skills": []}
+            else:
+                item["skills"] = []
+    _atomic_json(path, settings)
+    return disabled
+
+
+def _init_pi() -> dict[str, object]:
+    if shutil.which("pi") is None:
+        raise SpecError("missing_command: pi")
+    stable = _stable_package_root()
+    installed = _run("pi", "install", str(stable))
+    if installed.returncode != 0:
+        raise SpecError(f"pi_install_failed: {installed.stderr.strip()}")
+    disabled = _configure_pi_sources(stable)
+    return {
+        "pi": "initialized",
+        "source": str(stable),
+        "disabledLegacySources": disabled,
+        "reloadRequired": True,
+    }
+
+
+def _init_all() -> dict[str, object]:
+    result: dict[str, object] = {}
+    for agent in ("pi", "claude", "codex"):
+        if shutil.which(agent) is None:
+            result[agent] = {"status": "skipped", "reason": f"missing_command: {agent}"}
+        elif agent == "pi":
+            initialized = _init_pi()
+            result[agent] = {"status": "initialized", "source": initialized["source"]}
+        else:
+            result[agent] = {"status": "skipped", "reason": "integration_not_available"}
+    return result
+
+
+def _mode_state_path() -> Path:
+    return Path.home() / ".myspec" / "state.json"
+
+
+def _mode_state() -> dict[str, object]:
+    path = _mode_state_path()
+    if not path.exists():
+        return {"mode": "release"}
+    value = _read_json(path)
+    if not isinstance(value, dict) or value.get("mode") not in {"dev", "release"}:
+        raise SpecError(f"invalid_mode_state: {path}")
+    return value
+
+
+def _validate_dev_source(raw_source: Path) -> tuple[Path, Path, str]:
+    source = raw_source.resolve()
+    required = (
+        source / ".agents" / "plugins" / "marketplace.json",
+        source / ".claude-plugin" / "marketplace.json",
+        source / "plugins" / "my-spec" / "package.json",
+    )
+    missing = next((path for path in required if not path.is_file()), None)
+    if missing is not None:
+        raise SpecError(f"invalid_dev_source: missing {missing}")
+    package_root = source / "plugins" / "my-spec"
+    package = _read_json(package_root / "package.json")
+    if not isinstance(package, dict) or package.get("name") != PACKAGE_NAME:
+        raise SpecError(f"invalid_dev_source: package_name {package_root}")
+    commit = _run("git", "rev-parse", "HEAD", cwd=source)
+    if commit.returncode != 0:
+        raise SpecError(f"invalid_dev_source: git {commit.stderr.strip()}")
+    return source, package_root, commit.stdout.strip()
+
+
+def _exact_command(executable: Path, *arguments: str) -> list[str] | str:
+    values = [str(executable), *arguments]
+    if os.name == "nt" and executable.suffix.lower() in {".cmd", ".bat"}:
+        return subprocess.list2cmdline(values)
+    return values
+
+
+def _stable_cli() -> Path:
+    npm_root = _stable_package_root().parents[1]
+    prefix = npm_root.parent
+    return prefix / ("myspec.cmd" if os.name == "nt" else "bin/myspec")
+
+
+def _resume_after_switch(arguments: list[str], stage: str) -> dict[str, object]:
+    invocation = _exact_command(_stable_cli(), *arguments)
+    result = subprocess.run(
+        invocation,
+        env={**os.environ, "MYSPEC_SWITCH_STAGE": stage},
+        text=True,
+        capture_output=True,
+        check=False,
+        shell=isinstance(invocation, str),
+    )
+    if result.returncode != 0:
+        raise SpecError(f"mode_switch_resume_failed: {result.stderr.strip()}")
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise SpecError("mode_switch_resume_invalid_output") from exc
+    if not isinstance(value, dict):
+        raise SpecError("mode_switch_resume_invalid_output")
+    return value
+
+
+def _pi_is_configured() -> bool:
+    packages = _settings().get("packages", [])
+    if not isinstance(packages, list):
+        raise SpecError(f"invalid_pi_packages: {_pi_settings_path()}")
+    stable = _stable_package_root()
+    return any(
+        source is not None
+        and (
+            Path(source).resolve(strict=False) == stable.resolve(strict=False)
+            or _is_legacy_myspec_source(source, stable)
+        )
+        for source in (_package_source(item) for item in packages)
+    )
+
+
+def _refresh_pi() -> str:
+    if shutil.which("pi") is None or not _pi_is_configured():
+        return "not-installed"
+    _init_pi()
+    return "refreshed"
+
+
+def _switch_dev(raw_source: Path | None) -> dict[str, object]:
+    source, package_root, commit = _validate_dev_source(raw_source or Path.cwd())
+    state = _mode_state()
+    previous = state.get("previousReleaseVersion") if state["mode"] == "dev" else _package_version()
+    if not isinstance(previous, str) or not previous:
+        raise SpecError("missing_previous_release_version")
+    if os.environ.get("MYSPEC_SWITCH_STAGE") == "dev":
+        pi_status = _refresh_pi()
+        return {
+            "mode": "dev",
+            "source": str(source),
+            "previousReleaseVersion": previous,
+            "pi": pi_status,
+            "reloadRequired": pi_status == "refreshed",
+        }
+    linked = _run("npm", "link", cwd=package_root)
+    if linked.returncode != 0:
+        raise SpecError(f"npm_link_failed: {linked.stderr.strip()}")
+    _atomic_json(
+        _mode_state_path(),
+        {
+            "mode": "dev",
+            "source": str(source),
+            "sourceCommit": commit,
+            "previousReleaseVersion": previous,
+        },
+    )
+    return _resume_after_switch(["init", "--dev", "--source", str(source)], "dev")
+
+
+def _switch_release() -> dict[str, object]:
+    state = _mode_state()
+    previous = state.get("previousReleaseVersion")
+    if not isinstance(previous, str) or not previous:
+        raise SpecError("missing_previous_release_version")
+    if os.environ.get("MYSPEC_SWITCH_STAGE") == "release":
+        pi_status = _refresh_pi()
+        return {
+            "mode": "release",
+            "version": previous,
+            "pi": pi_status,
+            "reloadRequired": pi_status == "refreshed",
+        }
+    if state["mode"] != "dev":
+        raise SpecError("missing_previous_release_version")
+    installed = _run(
+        "npm",
+        "install",
+        "--global",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        f"{PACKAGE_NAME}@{previous}",
+    )
+    if installed.returncode != 0:
+        raise SpecError(f"npm_install_failed: {installed.stderr.strip()}")
+    _atomic_json(
+        _mode_state_path(),
+        {"mode": "release", "previousReleaseVersion": previous},
+    )
+    return _resume_after_switch(["init", "--release"], "release")
+
+
+def _doctor_pi() -> dict[str, object]:
+    stable = _stable_package_root()
+    available = shutil.which("pi") is not None
+    if available:
+        listed = _run("pi", "list")
+        if listed.returncode != 0:
+            raise SpecError(f"pi_list_failed: {listed.stderr.strip()}")
+    settings = _settings()
+    packages = settings.get("packages", [])
+    if not isinstance(packages, list):
+        raise SpecError(f"invalid_pi_packages: {_pi_settings_path()}")
+    enabled: list[str] = []
+    disabled: list[str] = []
+    for item in packages:
+        source = _package_source(item)
+        if source is None or (
+            Path(source).resolve(strict=False) != stable.resolve(strict=False)
+            and not _is_legacy_myspec_source(source, stable)
+        ):
+            continue
+        is_disabled = isinstance(item, dict) and item.get("skills") == []
+        (disabled if is_disabled else enabled).append(source)
+    state = _mode_state()
+    skills = [
+        name
+        for name in SKILL_NAMES
+        if (stable / "skills" / name / "SKILL.md").is_file()
+    ]
+    return {
+        "cliVersion": _package_version(),
+        "mode": state["mode"],
+        "source": str(state.get("source", stable)),
+        "pi": {
+            "available": available,
+            "registered": str(stable) in enabled,
+            "enabledSources": enabled,
+            "disabledSources": disabled,
+            "duplicateEnabledSources": len(enabled) > 1,
+            "skills": skills if str(stable) in enabled else [],
+            "reloadRequired": bool(enabled),
+        },
+    }
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="myspec", description="Deterministic MySpec operations")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -642,6 +970,17 @@ def _parser() -> argparse.ArgumentParser:
     state_status_parser.add_argument("work_dir", type=Path)
     state_status_parser.add_argument("specs_fingerprint")
     state_status_parser.add_argument("input_fingerprint")
+    init_parser = commands.add_parser("init")
+    init_target = init_parser.add_mutually_exclusive_group(required=True)
+    init_target.add_argument("--pi", action="store_true")
+    init_target.add_argument("--all", action="store_true")
+    init_target.add_argument("--dev", action="store_true")
+    init_target.add_argument("--release", action="store_true")
+    init_parser.add_argument("--source", type=Path)
+    doctor_parser = commands.add_parser("doctor")
+    doctor_target = doctor_parser.add_mutually_exclusive_group(required=True)
+    doctor_target.add_argument("--pi", action="store_true")
+    doctor_target.add_argument("--all", action="store_true")
     return parser
 
 
@@ -702,6 +1041,20 @@ def main(argv: list[str] | None = None) -> int:
             state = _load_state(args.work_dir)
             _assert_fingerprints(state, args.specs_fingerprint, args.input_fingerprint)
             print(json.dumps(_state_summary(state), ensure_ascii=False))
+        elif args.command == "init":
+            if args.dev:
+                result = _switch_dev(args.source)
+            elif args.release:
+                if args.source is not None:
+                    raise SpecError("source_only_valid_with_dev")
+                result = _switch_release()
+            else:
+                if args.source is not None:
+                    raise SpecError("source_only_valid_with_dev")
+                result = _init_all() if args.all else _init_pi()
+            print(json.dumps(result, ensure_ascii=False))
+        elif args.command == "doctor":
+            print(json.dumps(_doctor_pi(), ensure_ascii=False))
     except SpecError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
