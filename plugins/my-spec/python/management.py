@@ -733,9 +733,26 @@ def _refresh_claude() -> str:
         CLAUDE_MARKETPLACE,
     )
     _run_claude(
-        "claude_plugin_update_failed",
+        "claude_plugin_uninstall_failed",
         "plugin",
-        "update",
+        "uninstall",
+        CLAUDE_PLUGIN,
+        "--scope",
+        scope,
+        "--keep-data",
+    )
+    _run_claude(
+        "claude_plugin_install_failed",
+        "plugin",
+        "install",
+        CLAUDE_PLUGIN,
+        "--scope",
+        scope,
+    )
+    _run_claude(
+        "claude_plugin_enable_failed",
+        "plugin",
+        "enable",
         CLAUDE_PLUGIN,
         "--scope",
         scope,

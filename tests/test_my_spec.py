@@ -369,9 +369,24 @@ elif arguments[:3] == ["plugin", "marketplace", "add"] and len(arguments) == 4:
         })
         save()
 elif arguments[:2] == ["plugin", "install"] and arguments[3:] == ["--scope", "user"]:
+    if os.environ.get("MYSPEC_CLAUDE_FAIL_INSTALL") == "1":
+        print("simulated install failure", file=sys.stderr)
+        raise SystemExit(1)
     refresh(arguments[2])
 elif arguments[:2] == ["plugin", "update"] and arguments[3:] == ["--scope", "user"]:
-    refresh(arguments[2])
+    current = plugin(arguments[2])
+    name, market_name = arguments[2].split("@", 1)
+    source = Path(marketplace(market_name)["path"])
+    version = json.loads((source / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"]
+    if current is None or current["version"] != version:
+        refresh(arguments[2])
+elif arguments[:2] == ["plugin", "uninstall"] and arguments[3:] == ["--scope", "user", "--keep-data"]:
+    current = plugin(arguments[2])
+    if current is None:
+        print("missing plugin", file=sys.stderr)
+        raise SystemExit(1)
+    state["plugins"].remove(current)
+    save()
 elif arguments[:2] in (["plugin", "enable"], ["plugin", "disable"]) and arguments[3:] == ["--scope", "user"]:
     current = plugin(arguments[2])
     if current is None:
@@ -1346,6 +1361,7 @@ def test_packed_myspec_refreshes_enabled_claude_across_global_mode_switches(
     )
     write(claude_state, json.dumps({"marketplaces": [], "plugins": []}, indent=2))
     assert run_cli(executable, "init", "--claude", env=env).returncode == 0
+    claude_log.write_text("", encoding="utf-8")
 
     source = tmp_path / "source"
     shutil.copytree(REPO_ROOT / ".agents", source / ".agents")
@@ -1409,10 +1425,72 @@ def test_packed_myspec_refreshes_enabled_claude_across_global_mode_switches(
     assert not (Path(plugin["installPath"]) / "skills" / "my-spec" / "dev-marker.txt").exists()
     calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
     assert calls.count(["plugin", "marketplace", "update", "myspec"]) == 2
-    assert calls.count(["plugin", "update", "my-spec@myspec", "--scope", "user"]) == 2
+    assert calls.count(["plugin", "uninstall", "my-spec@myspec", "--scope", "user", "--keep-data"]) == 2
+    assert calls.count(["plugin", "install", "my-spec@myspec", "--scope", "user"]) == 2
+    assert calls.count(["plugin", "enable", "my-spec@myspec", "--scope", "user"]) == 2
+    assert not any(call[:2] == ["plugin", "update"] for call in calls)
 
 
-def test_packed_myspec_mode_switch_does_not_install_disabled_claude(
+@pytest.mark.parametrize("disabled", [False, True])
+def test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_claude(
+    tmp_path: Path,
+    disabled: bool,
+) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = install_packed_myspec(installed)
+    prefix = installed_package.parents[2]
+    release_tarball = next((installed / "package").glob("*.tgz"))
+    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
+    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
+    env = isolated_myspec_env(tmp_path, prefix, npm_bin, claude_bin)
+    env.update(
+        {
+            "MYSPEC_NPM_LOG": str(npm_log),
+            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
+            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
+            "MYSPEC_CLAUDE_LOG": str(claude_log),
+            "MYSPEC_CLAUDE_STATE": str(claude_state),
+            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+        }
+    )
+    initial_state = {"marketplaces": [], "plugins": []}
+    if disabled:
+        initial_state = {
+            "marketplaces": [
+                {
+                    "name": "myspec",
+                    "source": "directory",
+                    "path": str(installed_package),
+                    "installLocation": str(installed_package),
+                }
+            ],
+            "plugins": [
+                {
+                    "id": "my-spec@myspec",
+                    "version": "0.1.53",
+                    "scope": "user",
+                    "enabled": False,
+                    "installPath": str(tmp_path / "disabled-plugin-cache"),
+                }
+            ],
+        }
+    write(claude_state, json.dumps(initial_state, indent=2))
+
+    entered = run_cli(executable, "init", "--dev", "--source", REPO_ROOT, env=env)
+    assert entered.returncode == 0, entered.stderr
+    assert json.loads(entered.stdout)["claude"] == "not-installed"
+    restored = run_cli(executable, "init", "--release", env=env)
+    assert restored.returncode == 0, restored.stderr
+    assert json.loads(restored.stdout)["claude"] == "not-installed"
+    calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
+    assert not any(call[:3] == ["plugin", "marketplace", "add"] for call in calls)
+    assert not any(call[:2] == ["plugin", "install"] for call in calls)
+    assert not any(call[:2] == ["plugin", "enable"] for call in calls)
+    assert json.loads(claude_state.read_text(encoding="utf-8")) == initial_state
+
+
+def test_packed_myspec_claude_reinstall_failure_does_not_report_refreshed(
     tmp_path: Path,
 ) -> None:
     installed = tmp_path / "installed"
@@ -1434,21 +1512,25 @@ def test_packed_myspec_mode_switch_does_not_install_disabled_claude(
         }
     )
     write(claude_state, json.dumps({"marketplaces": [], "plugins": []}, indent=2))
+    assert run_cli(executable, "init", "--claude", env=env).returncode == 0
+    claude_log.write_text("", encoding="utf-8")
 
-    entered = run_cli(executable, "init", "--dev", "--source", REPO_ROOT, env=env)
-    assert entered.returncode == 0, entered.stderr
-    assert json.loads(entered.stdout)["claude"] == "not-installed"
-    restored = run_cli(executable, "init", "--release", env=env)
-    assert restored.returncode == 0, restored.stderr
-    assert json.loads(restored.stdout)["claude"] == "not-installed"
+    failed = run_cli(
+        executable,
+        "init",
+        "--dev",
+        "--source",
+        REPO_ROOT,
+        env={**env, "MYSPEC_CLAUDE_FAIL_INSTALL": "1"},
+    )
+    assert failed.returncode == 1
+    assert failed.stdout == ""
+    assert "claude_plugin_install_failed: simulated install failure" in failed.stderr
+    assert "refreshed" not in failed.stderr
     calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
-    assert not any(call[:3] == ["plugin", "marketplace", "add"] for call in calls)
-    assert not any(call[:2] == ["plugin", "install"] for call in calls)
-    assert not any(call[:2] == ["plugin", "enable"] for call in calls)
-    assert json.loads(claude_state.read_text(encoding="utf-8")) == {
-        "marketplaces": [],
-        "plugins": [],
-    }
+    assert ["plugin", "uninstall", "my-spec@myspec", "--scope", "user", "--keep-data"] in calls
+    assert ["plugin", "install", "my-spec@myspec", "--scope", "user"] in calls
+    assert ["plugin", "enable", "my-spec@myspec", "--scope", "user"] not in calls
 
 
 def test_packed_myspec_release_install_failure_stays_in_dev_and_retries(
