@@ -17,6 +17,9 @@ PACKAGE_NAME = "@liuli195/myspec"
 CLAUDE_MARKETPLACE = "myspec"
 CLAUDE_PLUGIN = f"my-spec@{CLAUDE_MARKETPLACE}"
 CLAUDE_LEGACY_PLUGIN = "my-spec@my-agent-skills-marketplace"
+CODEX_MARKETPLACE = "myspec"
+CODEX_PLUGIN = f"my-spec@{CODEX_MARKETPLACE}"
+CODEX_LEGACY_PLUGIN = "my-spec@my-agent-skills-marketplace"
 SKILL_NAMES = ("my-spec", "my-spec-add", "my-spec-review", "my-spec-audit")
 SKILL_PATHS = tuple(f"./skills/{name}" for name in SKILL_NAMES)
 
@@ -44,6 +47,16 @@ def _atomic_json(path: Path, value: object) -> None:
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _atomic_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(text, encoding="utf-8")
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -445,17 +458,121 @@ def _init_claude() -> dict[str, object]:
     }
 
 
+def _codex_json(arguments: tuple[str, ...], key: str, error_name: str) -> list[dict[str, object]]:
+    result = _run("codex", *arguments)
+    if result.returncode != 0:
+        raise ManagementError(f"{error_name}: {result.stderr.strip()}")
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ManagementError(f"{error_name}: invalid_json") from exc
+    items = value.get(key) if isinstance(value, dict) else None
+    if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
+        raise ManagementError(f"{error_name}: invalid_output")
+    return items
+
+
+def _codex_marketplaces() -> list[dict[str, object]]:
+    return _codex_json(("plugin", "marketplace", "list", "--json"), "marketplaces", "codex_marketplace_list_failed")
+
+
+def _codex_plugins() -> list[dict[str, object]]:
+    return _codex_json(("plugin", "list", "--json"), "plugins", "codex_plugin_list_failed")
+
+
+def _named_codex_marketplace(marketplaces: list[dict[str, object]]) -> dict[str, object] | None:
+    matches = [item for item in marketplaces if item.get("name") == CODEX_MARKETPLACE]
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise ManagementError("codex_marketplace_duplicate")
+    return matches[0]
+
+
+def _codex_marketplace(stable: Path, marketplaces: list[dict[str, object]]) -> dict[str, object] | None:
+    marketplace = _named_codex_marketplace(marketplaces)
+    if marketplace is None:
+        return None
+    root = marketplace.get("root")
+    if not isinstance(root, str) or not _same_path(Path(root), stable):
+        raise ManagementError("codex_marketplace_source_mismatch")
+    return marketplace
+
+
+def _run_codex(error_name: str, *arguments: str) -> None:
+    result = _run("codex", *arguments)
+    if result.returncode != 0:
+        raise ManagementError(f"{error_name}: {result.stderr.strip()}")
+
+
+def _codex_config_path() -> Path:
+    return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "config.toml"
+
+
+def _set_codex_plugin_enabled(identifier: str, enabled: bool) -> None:
+    path = _codex_config_path()
+    text = _text(path) if path.exists() else ""
+    header = rf'^\[plugins\."{re.escape(identifier)}"\][ \t]*\n'
+    match = re.search(header, text, re.MULTILINE)
+    value = "true" if enabled else "false"
+    if match is None:
+        addition = f'[plugins."{identifier}"]\nenabled = {value}\n'
+        updated = text.rstrip() + ("\n\n" if text.strip() else "") + addition
+    else:
+        end_match = re.search(r"^\[", text[match.end():], re.MULTILINE)
+        end = match.end() + end_match.start() if end_match is not None else len(text)
+        body = text[match.end():end]
+        if re.search(r"^enabled\s*=", body, re.MULTILINE):
+            body = re.sub(r"^enabled\s*=.*$", f"enabled = {value}", body, count=1, flags=re.MULTILINE)
+        else:
+            body = f"enabled = {value}\n" + body
+        updated = text[:match.end()] + body + text[end:]
+    _atomic_text(path, updated)
+
+
+def _refresh_codex_plugin() -> None:
+    plugins = _codex_plugins()
+    if any(item.get("pluginId") == CODEX_PLUGIN and item.get("installed") is True for item in plugins):
+        _run_codex("codex_plugin_remove_failed", "plugin", "remove", CODEX_PLUGIN, "--json")
+    _run_codex("codex_plugin_add_failed", "plugin", "add", CODEX_PLUGIN, "--json")
+
+
+def _init_codex() -> dict[str, object]:
+    if shutil.which("codex") is None:
+        raise ManagementError("missing_command: codex")
+    stable = _stable_package_root()
+    if _codex_marketplace(stable, _codex_marketplaces()) is None:
+        _run_codex("codex_marketplace_add_failed", "plugin", "marketplace", "add", str(stable), "--json")
+        if _codex_marketplace(stable, _codex_marketplaces()) is None:
+            raise ManagementError("codex_marketplace_add_missing")
+    _refresh_codex_plugin()
+    plugins = _codex_plugins()
+    target = next((item for item in plugins if item.get("pluginId") == CODEX_PLUGIN), None)
+    if target is None or target.get("installed") is not True or target.get("enabled") is not True:
+        raise ManagementError("codex_plugin_enable_missing")
+    disabled: list[str] = []
+    legacy = next((item for item in plugins if item.get("pluginId") == CODEX_LEGACY_PLUGIN), None)
+    if legacy is not None and legacy.get("enabled") is True:
+        _set_codex_plugin_enabled(CODEX_LEGACY_PLUGIN, False)
+        disabled.append(CODEX_LEGACY_PLUGIN)
+    return {
+        "codex": "initialized",
+        "marketplace": CODEX_MARKETPLACE,
+        "source": str(stable),
+        "disabledLegacyPlugins": disabled,
+        "reloadRequired": True,
+    }
+
+
 def _init_all() -> dict[str, object]:
     result: dict[str, object] = {}
-    initializers = {"pi": _init_pi, "claude": _init_claude}
+    initializers = {"pi": _init_pi, "claude": _init_claude, "codex": _init_codex}
     for agent in ("pi", "claude", "codex"):
         if shutil.which(agent) is None:
             result[agent] = {"status": "skipped", "reason": f"missing_command: {agent}"}
-        elif agent in initializers:
+        else:
             initialized = initializers[agent]()
             result[agent] = {"status": "initialized", "source": initialized["source"]}
-        else:
-            result[agent] = {"status": "skipped", "reason": "integration_not_available"}
     return result
 
 
@@ -499,6 +616,20 @@ def _validate_self_claude_marketplace(path: Path) -> bool:
     )
 
 
+def _validate_self_codex_marketplace(path: Path) -> bool:
+    value = _read_json(path)
+    plugins = value.get("plugins") if isinstance(value, dict) else None
+    return (
+        isinstance(value, dict)
+        and value.get("name") == CODEX_MARKETPLACE
+        and isinstance(plugins, list)
+        and len(plugins) == 1
+        and isinstance(plugins[0], dict)
+        and plugins[0].get("name") == "my-spec"
+        and plugins[0].get("source") == {"source": "local", "path": "./"}
+    )
+
+
 def _validate_plugin_manifest(path: Path, version: str) -> bool:
     value = _read_json(path)
     return (
@@ -522,6 +653,7 @@ def _validate_dev_source(raw_source: Path) -> tuple[Path, Path, str]:
         package_root / "python" / "management.py",
         agents_market,
         claude_market,
+        package_root / ".agents" / "plugins" / "marketplace.json",
         package_root / ".claude-plugin" / "marketplace.json",
         package_root / ".claude-plugin" / "plugin.json",
         package_root / ".codex-plugin" / "plugin.json",
@@ -551,6 +683,9 @@ def _validate_dev_source(raw_source: Path) -> tuple[Path, Path, str]:
     self_claude_market = package_root / ".claude-plugin" / "marketplace.json"
     if not _validate_self_claude_marketplace(self_claude_market):
         raise ManagementError(f"invalid_dev_source: marketplace {self_claude_market}")
+    self_codex_market = package_root / ".agents" / "plugins" / "marketplace.json"
+    if not _validate_self_codex_marketplace(self_codex_market):
+        raise ManagementError(f"invalid_dev_source: marketplace {self_codex_market}")
     for path in (
         package_root / ".claude-plugin" / "plugin.json",
         package_root / ".codex-plugin" / "plugin.json",
@@ -763,6 +898,21 @@ def _refresh_claude() -> str:
     return "refreshed"
 
 
+def _refresh_codex() -> str:
+    if shutil.which("codex") is None:
+        return "not-installed"
+    stable = _stable_package_root()
+    marketplace = _codex_marketplace(stable, _codex_marketplaces())
+    target = next((item for item in _codex_plugins() if item.get("pluginId") == CODEX_PLUGIN), None)
+    if marketplace is None or target is None or target.get("installed") is not True or target.get("enabled") is not True:
+        return "not-installed"
+    _refresh_codex_plugin()
+    refreshed = next((item for item in _codex_plugins() if item.get("pluginId") == CODEX_PLUGIN), None)
+    if refreshed is None or refreshed.get("installed") is not True or refreshed.get("enabled") is not True:
+        raise ManagementError("codex_plugin_refresh_missing")
+    return "refreshed"
+
+
 def _refresh_integrations() -> dict[str, object]:
     pi_status = _refresh_pi()
     result: dict[str, object] = {"pi": pi_status}
@@ -771,6 +921,10 @@ def _refresh_integrations() -> dict[str, object]:
         claude_status = _refresh_claude()
         result["claude"] = claude_status
         statuses.append(claude_status)
+    if shutil.which("codex") is not None:
+        codex_status = _refresh_codex()
+        result["codex"] = codex_status
+        statuses.append(codex_status)
     result["reloadRequired"] = "refreshed" in statuses
     return result
 
@@ -965,11 +1119,46 @@ def _doctor_claude() -> dict[str, object]:
     return report
 
 
+def _doctor_codex() -> dict[str, object]:
+    report = _doctor_package()
+    stable = _stable_package_root()
+    available = shutil.which("codex") is not None
+    marketplaces = _codex_marketplaces() if available else []
+    plugins = _codex_plugins() if available else []
+    marketplace = _named_codex_marketplace(marketplaces) if available else None
+    root = Path(marketplace["root"]) if isinstance(marketplace, dict) and isinstance(marketplace.get("root"), str) else None
+    marketplace_registered = root is not None and _same_path(root, stable)
+    relevant = [item for item in plugins if isinstance(item.get("pluginId"), str) and str(item["pluginId"]).startswith("my-spec@")]
+    target = next((item for item in relevant if item.get("pluginId") == CODEX_PLUGIN), None)
+    enabled_sources = [str(item["pluginId"]) for item in relevant if item.get("enabled") is True]
+    disabled_sources = [str(item["pluginId"]) for item in relevant if item.get("enabled") is False]
+    source = target.get("source") if isinstance(target, dict) else None
+    install_path = Path(source["path"]) if isinstance(source, dict) and isinstance(source.get("path"), str) else None
+    report["codex"] = {
+        "available": available,
+        "marketplace": marketplace,
+        "marketplaceRegistered": marketplace_registered,
+        "marketplaceSourceMismatch": marketplace is not None and not marketplace_registered,
+        "source": str(root) if root is not None else None,
+        "version": target.get("version") if isinstance(target, dict) else None,
+        "versionMismatch": not isinstance(target, dict) or target.get("version") != _package_version(),
+        "enabled": isinstance(target, dict) and target.get("enabled") is True,
+        "enabledSources": enabled_sources,
+        "disabledSources": disabled_sources,
+        "duplicateEnabledSources": len(enabled_sources) > 1,
+        "plugins": relevant,
+        "skills": _plugin_skills(install_path),
+        "reloadRequired": bool(enabled_sources),
+    }
+    return report
+
+
 def add_management_parsers(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     init_parser = commands.add_parser("init")
     init_target = init_parser.add_mutually_exclusive_group(required=True)
     init_target.add_argument("--pi", action="store_true")
     init_target.add_argument("--claude", action="store_true")
+    init_target.add_argument("--codex", action="store_true")
     init_target.add_argument("--all", action="store_true")
     init_target.add_argument("--dev", action="store_true")
     init_target.add_argument("--release", action="store_true")
@@ -979,11 +1168,14 @@ def add_management_parsers(commands: argparse._SubParsersAction[argparse.Argumen
     doctor_target = doctor_parser.add_mutually_exclusive_group()
     doctor_target.add_argument("--pi", action="store_true")
     doctor_target.add_argument("--claude", action="store_true")
+    doctor_target.add_argument("--codex", action="store_true")
 
 
 def run_management(args: argparse.Namespace) -> dict[str, object]:
     if args.command == "doctor":
-        return _doctor_claude() if args.claude else _doctor_pi()
+        if args.claude:
+            return _doctor_claude()
+        return _doctor_codex() if args.codex else _doctor_pi()
     if args.dev:
         return _switch_dev(args.source, args._switch_token)
     if args.release:
@@ -996,4 +1188,6 @@ def run_management(args: argparse.Namespace) -> dict[str, object]:
         raise ManagementError("invalid_switch_token")
     if args.all:
         return _init_all()
-    return _init_claude() if args.claude else _init_pi()
+    if args.claude:
+        return _init_claude()
+    return _init_codex() if args.codex else _init_pi()
