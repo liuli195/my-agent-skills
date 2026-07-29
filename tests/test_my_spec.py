@@ -211,11 +211,27 @@ import os
 import sys
 from pathlib import Path
 
-user_settings = Path(os.environ["PI_CODING_AGENT_DIR"]) / "settings.json"
+agent_dir = Path(os.environ["PI_CODING_AGENT_DIR"])
+user_settings = agent_dir / "settings.json"
 project_settings = Path.cwd() / ".pi" / "settings.json"
 
 def load(path):
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+def canonical(path):
+    return Path(os.path.realpath(os.path.abspath(path)))
+
+def project_trusted():
+    decisions = load(agent_dir / "trust.json")
+    current = canonical(Path.cwd())
+    while True:
+        decision = decisions.get(str(current))
+        if isinstance(decision, bool):
+            return decision
+        if current.parent == current:
+            break
+        current = current.parent
+    return load(user_settings).get("defaultProjectTrust") == "always"
 
 def source(item):
     return item if isinstance(item, str) else item.get("source")
@@ -236,7 +252,10 @@ if sys.argv[1:2] == ["install"]:
     user_settings.write_text(json.dumps(settings, indent=2) + "\\n", encoding="utf-8")
     raise SystemExit(0)
 if sys.argv[1:2] == ["list"]:
-    for label, path in (("User packages:", user_settings), ("Project packages:", project_settings)):
+    paths = [("User packages:", user_settings)]
+    if project_trusted():
+        paths.append(("Project packages:", project_settings))
+    for label, path in paths:
         print(label)
         for item in load(path).get("packages", []):
             raw = source(item)
@@ -392,12 +411,88 @@ def test_packed_myspec_initializes_and_diagnoses_one_pi_source(tmp_path: Path) -
     assert settings_path.read_bytes() == settings_before
     assert [json.loads(line)["args"] for line in pi_log.read_text(encoding="utf-8").splitlines()] == [
         ["list"],
+        ["list"],
     ]
 
     shutil.rmtree(installed_package / "skills" / "my-spec-audit")
     broken = run_cli(executable, "doctor", "--pi", env=env)
     assert broken.returncode == 0, broken.stderr
     assert json.loads(broken.stdout)["pi"]["skills"] == list(SKILL_NAMES[:-1])
+
+
+@pytest.mark.parametrize(
+    ("trust", "default_trust", "expected_skills"),
+    [
+        ({}, "ask", SKILL_NAMES),
+        ({"project": True}, "ask", ()),
+        ({"parent": True}, "ask", ()),
+        ({"parent": True, "project": False}, "always", SKILL_NAMES),
+        ({}, "always", ()),
+    ],
+    ids=("untrusted", "trusted-project", "trusted-parent", "explicit-false", "default-always"),
+)
+def test_packed_myspec_pi_configuration_obeys_saved_project_trust(
+    tmp_path: Path,
+    trust: dict[str, bool],
+    default_trust: str,
+    expected_skills: tuple[str, ...],
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = installed_package.parents[2]
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    agent_dir = Path(env["PI_CODING_AGENT_DIR"])
+    project_parent = tmp_path / "consumer"
+    project = project_parent / "nested"
+    project.mkdir(parents=True)
+    user_settings = agent_dir / "settings.json"
+    project_settings = project / ".pi" / "settings.json"
+    trust_path = agent_dir / "trust.json"
+    write(
+        user_settings,
+        json.dumps(
+            {"defaultProjectTrust": default_trust, "packages": [str(installed_package)]},
+            indent=2,
+        ),
+    )
+    write(
+        project_settings,
+        json.dumps(
+            {"packages": [{"source": str(installed_package), "skills": []}]},
+            indent=2,
+        ),
+    )
+    decisions = {
+        str(Path(os.path.realpath(path))): decision
+        for name, decision in trust.items()
+        for path in (project if name == "project" else project_parent,)
+    }
+    write(trust_path, json.dumps(decisions, indent=2))
+
+    project_before = project_settings.read_bytes()
+    initialized = run_cli(executable, "init", "--pi", env=env, cwd=project)
+    assert initialized.returncode == 0, initialized.stderr
+    assert project_settings.read_bytes() == project_before
+    user_before = user_settings.read_bytes()
+    trust_before = trust_path.read_bytes()
+
+    diagnosed = run_cli(executable, "doctor", "--pi", env=env, cwd=project)
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    report = json.loads(diagnosed.stdout)
+    assert report["pi"]["skills"] == list(expected_skills)
+    assert report["pi"]["registered"] is bool(expected_skills)
+    assert report["pi"]["listedSources"] == (
+        [
+            {"source": str(installed_package), "path": str(installed_package)},
+            {"source": str(installed_package), "path": str(installed_package)},
+        ]
+        if not expected_skills
+        else [{"source": str(installed_package), "path": str(installed_package)}]
+    )
+    assert user_settings.read_bytes() == user_before
+    assert project_settings.read_bytes() == project_before
+    assert trust_path.read_bytes() == trust_before
 
 
 def test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_file(
@@ -417,6 +512,10 @@ def test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_f
     legacy_relative = os.path.relpath(legacy_package, project_settings.parent)
     stable_project_relative = os.path.relpath(installed_package, project_settings.parent)
     write(user_settings, json.dumps({"packages": [stable_relative]}, indent=2))
+    write(
+        Path(env["PI_CODING_AGENT_DIR"]) / "trust.json",
+        json.dumps({str(Path(os.path.realpath(project))): True}, indent=2),
+    )
     write(
         project_settings,
         json.dumps(
@@ -468,6 +567,10 @@ def test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest(
     project.mkdir()
     project_settings = project / ".pi" / "settings.json"
     write(user_settings, json.dumps({"packages": [str(installed_package)]}, indent=2))
+    write(
+        Path(env["PI_CODING_AGENT_DIR"]) / "trust.json",
+        json.dumps({str(Path(os.path.realpath(project))): True}, indent=2),
+    )
 
     manifest_path = installed_package / "package.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

@@ -89,10 +89,40 @@ def _package_version() -> str:
     return package["version"]
 
 
-def _pi_settings_paths() -> tuple[tuple[str, Path], ...]:
+def _pi_agent_dir() -> Path:
     configured = os.environ.get("PI_CODING_AGENT_DIR")
-    user = Path(configured) if configured else Path.home() / ".pi" / "agent"
-    return (("user", user / "settings.json"), ("project", Path.cwd() / ".pi" / "settings.json"))
+    return Path(configured) if configured else Path.home() / ".pi" / "agent"
+
+
+def _canonical_path(path: Path) -> Path:
+    return Path(os.path.realpath(os.path.abspath(path)))
+
+
+def _pi_project_trusted(user_settings: Path) -> bool:
+    trust_path = _pi_agent_dir() / "trust.json"
+    decisions = _read_json(trust_path) if trust_path.exists() else {}
+    if not isinstance(decisions, dict) or not all(
+        value is True or value is False or value is None for value in decisions.values()
+    ):
+        raise ManagementError(f"invalid_pi_trust: {trust_path}")
+    current = _canonical_path(Path.cwd())
+    while True:
+        decision = decisions.get(str(current))
+        if isinstance(decision, bool):
+            return decision
+        if current.parent == current:
+            break
+        current = current.parent
+    return _read_settings(user_settings).get("defaultProjectTrust") == "always"
+
+
+def _pi_settings_paths() -> tuple[tuple[str, Path], ...]:
+    user = _pi_agent_dir() / "settings.json"
+    paths = [("user", user)]
+    project = Path.cwd() / ".pi" / "settings.json"
+    if project.exists() and _pi_project_trusted(user):
+        paths.append(("project", project))
+    return tuple(paths)
 
 
 def _read_settings(path: Path) -> dict[str, object]:
@@ -195,6 +225,14 @@ def _effective_sources(sources: list[PiSource]) -> list[PiSource]:
     return result
 
 
+def _pi_source_listed(item: PiSource, listed: list[dict[str, str]]) -> bool:
+    return any(
+        record["source"] == item.source
+        and (item.local_path is None or _same_path(Path(record["path"]), item.local_path))
+        for record in listed
+    )
+
+
 def _myspec_source_kind(item: PiSource, stable: Path) -> str | None:
     if item.local_path is not None and _same_path(item.local_path, stable):
         return "stable"
@@ -248,6 +286,9 @@ def _configure_pi_sources(stable: Path) -> list[str]:
             touched[item.settings_path] = item.settings
     for path, settings in touched.items():
         _atomic_json(path, settings)
+    listed = _pi_list()
+    if not any(_pi_source_listed(item, listed) for item in user_stable):
+        raise ManagementError("pi_install_missing_source")
     return disabled
 
 
@@ -499,9 +540,13 @@ def _pi_is_configured() -> bool:
 def _refresh_pi() -> str:
     if shutil.which("pi") is None or not _pi_is_configured():
         return "not-installed"
-    listed = _run("pi", "list")
-    if listed.returncode != 0:
-        raise ManagementError(f"pi_list_failed: {listed.stderr.strip()}")
+    stable = _stable_package_root()
+    listed = _pi_list()
+    if not any(
+        _myspec_source_kind(item, stable) == "stable" and _pi_source_listed(item, listed)
+        for item in _pi_sources()
+    ):
+        return "not-installed"
     return "refreshed"
 
 
@@ -581,7 +626,8 @@ def _doctor_pi() -> dict[str, object]:
     cli_version = _package_version()
     available = shutil.which("pi") is not None
     listed = _pi_list() if available else []
-    all_sources = _pi_sources()
+    configured_sources = _pi_sources()
+    all_sources = [item for item in configured_sources if _pi_source_listed(item, listed)]
     effective = _effective_sources(all_sources)
     effective_ids = {_source_identity(item) for item in effective}
     records: list[dict[str, object]] = []
