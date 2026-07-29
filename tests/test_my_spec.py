@@ -222,6 +222,9 @@ def canonical(path):
     return Path(os.path.realpath(os.path.abspath(path)))
 
 def project_trusted():
+    override = os.environ.get("MYSPEC_PI_PROJECT_TRUST_OVERRIDE")
+    if override is not None:
+        return override == "true"
     decisions = load(agent_dir / "trust.json")
     current = canonical(Path.cwd())
     while True:
@@ -237,6 +240,9 @@ def source(item):
     return item if isinstance(item, str) else item.get("source")
 
 def resolved(raw, settings_path):
+    mapped = json.loads(os.environ.get("MYSPEC_PI_INSTALLED_PATHS", "{}"))
+    if raw in mapped:
+        return Path(mapped[raw])
     path = Path(raw).expanduser()
     return Path(os.path.abspath(path if path.is_absolute() else settings_path.parent / path))
 
@@ -255,9 +261,16 @@ if sys.argv[1:2] == ["list"]:
     paths = [("User packages:", user_settings)]
     if project_trusted():
         paths.append(("Project packages:", project_settings))
+    shown = False
     for label, path in paths:
+        packages = load(path).get("packages", [])
+        if not packages:
+            continue
+        if shown:
+            print()
         print(label)
-        for item in load(path).get("packages", []):
+        shown = True
+        for item in packages:
             raw = source(item)
             if not isinstance(raw, str):
                 continue
@@ -267,10 +280,8 @@ if sys.argv[1:2] == ["list"]:
             package = resolved(raw, path)
             print("  " + raw + (" (filtered)" if isinstance(item, dict) else ""))
             print("    " + str(package))
-            skills = package / "skills"
-            if skills.is_dir():
-                names = sorted(child.name for child in skills.iterdir() if (child / "SKILL.md").is_file())
-                print("    skills: " + ",".join(names))
+    if not shown:
+        print("No packages installed.")
     raise SystemExit(0)
 raise SystemExit(2)
 """,
@@ -415,6 +426,7 @@ def test_packed_myspec_initializes_and_diagnoses_one_pi_source(tmp_path: Path) -
     assert [json.loads(line)["args"] for line in pi_log.read_text(encoding="utf-8").splitlines()] == [
         ["list"],
         ["list"],
+        ["list"],
     ]
 
     shutil.rmtree(installed_package / "skills" / "my-spec-audit")
@@ -461,7 +473,7 @@ def test_packed_myspec_doctor_does_not_enable_settings_source_missing_from_pi_li
     ],
     ids=("untrusted", "trusted-project", "trusted-parent", "explicit-false", "default-always"),
 )
-def test_packed_myspec_pi_configuration_obeys_saved_project_trust(
+def test_packed_myspec_follows_project_scope_reported_by_pi_list(
     tmp_path: Path,
     trust: dict[str, bool],
     default_trust: str,
@@ -514,15 +526,83 @@ def test_packed_myspec_pi_configuration_obeys_saved_project_trust(
     assert report["pi"]["registered"] is bool(expected_skills)
     assert report["pi"]["listedSources"] == (
         [
-            {"source": str(installed_package), "path": str(installed_package)},
-            {"source": str(installed_package), "path": str(installed_package)},
+            {"scope": "user", "source": str(installed_package), "path": str(installed_package)},
+            {"scope": "project", "source": str(installed_package), "path": str(installed_package)},
         ]
         if not expected_skills
-        else [{"source": str(installed_package), "path": str(installed_package)}]
+        else [{"scope": "user", "source": str(installed_package), "path": str(installed_package)}]
     )
     assert user_settings.read_bytes() == user_before
     assert project_settings.read_bytes() == project_before
     assert trust_path.read_bytes() == trust_before
+
+
+def test_packed_myspec_uses_pi_list_project_scope_over_saved_trust(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = installed_package.parents[2]
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    env["MYSPEC_PI_PROJECT_TRUST_OVERRIDE"] = "true"
+    project = tmp_path / "consumer"
+    project.mkdir()
+    user_settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    project_settings = project / ".pi" / "settings.json"
+    write(user_settings, json.dumps({"packages": [str(installed_package)]}, indent=2))
+    write(
+        Path(env["PI_CODING_AGENT_DIR"]) / "trust.json",
+        json.dumps({str(Path(os.path.realpath(project))): False}, indent=2),
+    )
+    write(
+        project_settings,
+        json.dumps(
+            {"packages": [{"source": str(installed_package), "skills": []}]},
+            indent=2,
+        ),
+    )
+
+    report = json.loads(run_cli(executable, "doctor", "--pi", env=env, cwd=project).stdout)["pi"]
+    assert report["registered"] is False
+    assert report["skills"] == []
+    assert report["listedSources"] == [
+        {"scope": "user", "source": str(installed_package), "path": str(installed_package)},
+        {"scope": "project", "source": str(installed_package), "path": str(installed_package)},
+    ]
+
+
+def test_packed_myspec_ignores_project_settings_absent_from_pi_list(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = installed_package.parents[2]
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    env["MYSPEC_PI_PROJECT_TRUST_OVERRIDE"] = "false"
+    project = tmp_path / "consumer"
+    project.mkdir()
+    user_settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    write(user_settings, json.dumps({"packages": [str(installed_package)]}, indent=2))
+    write(
+        Path(env["PI_CODING_AGENT_DIR"]) / "trust.json",
+        json.dumps({str(Path(os.path.realpath(project))): True}, indent=2),
+    )
+    write(
+        project / ".pi" / "settings.json",
+        json.dumps(
+            {"packages": [{"source": str(installed_package), "skills": []}]},
+            indent=2,
+        ),
+    )
+
+    report = json.loads(run_cli(executable, "doctor", "--pi", env=env, cwd=project).stdout)["pi"]
+    assert report["registered"] is True
+    assert report["skills"] == list(SKILL_NAMES)
+    assert report["listedSources"] == [
+        {"scope": "user", "source": str(installed_package), "path": str(installed_package)}
+    ]
 
 
 def test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_file(
@@ -727,6 +807,40 @@ def test_packed_myspec_doctor_reports_duplicate_enabled_pi_sources(tmp_path: Pat
     assert [source["kind"] for source in report["pi"]["sources"]] == ["stable", "legacy"]
 
 
+def test_packed_myspec_doctor_reads_legacy_git_and_npm_manifests_from_pi_list(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = installed_package.parents[2]
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    npm_source = "npm:pi-my-spec@0.1.52"
+    git_source = "git:github.com/example/pi-my-spec@v0.1.52"
+    npm_package = tmp_path / "pi-installs" / "npm" / "pi-my-spec"
+    git_package = tmp_path / "pi-installs" / "git" / "example" / "pi-my-spec"
+    shutil.copytree(PLUGIN_ROOT, npm_package)
+    shutil.copytree(PLUGIN_ROOT, git_package)
+    env["MYSPEC_PI_INSTALLED_PATHS"] = json.dumps(
+        {npm_source: str(npm_package), git_source: str(git_package)}
+    )
+    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    write(
+        settings_path,
+        json.dumps(
+            {"packages": [str(installed_package), npm_source, git_source]},
+            indent=2,
+        ),
+    )
+
+    report = json.loads(run_cli(executable, "doctor", "--pi", env=env).stdout)["pi"]
+    assert report["duplicateEnabledSources"] is True
+    assert report["enabledSources"] == [str(installed_package), npm_source, git_source]
+    legacy = [source for source in report["sources"] if source["kind"] == "legacy"]
+    assert [source["resolvedPath"] for source in legacy] == [str(npm_package), str(git_package)]
+    assert all(source["enabled"] for source in legacy)
+
+
 def test_packed_myspec_reports_missing_pi_without_installing_it(tmp_path: Path) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
     prefix = installed_package.parents[2]
@@ -794,7 +908,7 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
     assert dev_diagnosis["pi"]["skills"] == list(SKILL_NAMES)
     assert dev_diagnosis["pi"]["registered"] is True
     assert dev_diagnosis["pi"]["listedSources"] == [
-        {"source": str(installed_package), "path": str(installed_package)}
+        {"scope": "user", "source": str(installed_package), "path": str(installed_package)}
     ]
     settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
     assert json.loads(settings_path.read_text(encoding="utf-8"))["packages"] == [
@@ -816,7 +930,7 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
     assert report["pi"]["enabledSources"] == [str(installed_package)]
     assert report["pi"]["skills"] == list(SKILL_NAMES)
     assert report["pi"]["listedSources"] == [
-        {"source": str(installed_package), "path": str(installed_package)}
+        {"scope": "user", "source": str(installed_package), "path": str(installed_package)}
     ]
 
     npm_calls = [json.loads(line) for line in npm_log.read_text(encoding="utf-8").splitlines()]
@@ -945,7 +1059,7 @@ def test_packed_myspec_doctor_uses_actual_installation_not_mode_state(tmp_path: 
     assert report["npm"]["linked"] is False
     assert report["npm"]["versionMismatch"] is False
     assert report["pi"]["listedSources"] == [
-        {"source": str(installed_package), "path": str(installed_package)}
+        {"scope": "user", "source": str(installed_package), "path": str(installed_package)}
     ]
     assert settings_path.read_bytes() == settings_before
     assert (Path(env["HOME"]) / ".myspec" / "state.json").read_bytes() == state_before

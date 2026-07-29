@@ -95,34 +95,10 @@ def _pi_agent_dir() -> Path:
     return Path(configured) if configured else Path.home() / ".pi" / "agent"
 
 
-def _canonical_path(path: Path) -> Path:
-    return Path(os.path.realpath(os.path.abspath(path)))
-
-
-def _pi_project_trusted(user_settings: Path) -> bool:
-    trust_path = _pi_agent_dir() / "trust.json"
-    decisions = _read_json(trust_path) if trust_path.exists() else {}
-    if not isinstance(decisions, dict) or not all(
-        value is True or value is False or value is None for value in decisions.values()
-    ):
-        raise ManagementError(f"invalid_pi_trust: {trust_path}")
-    current = _canonical_path(Path.cwd())
-    while True:
-        decision = decisions.get(str(current))
-        if isinstance(decision, bool):
-            return decision
-        if current.parent == current:
-            break
-        current = current.parent
-    return _read_settings(user_settings).get("defaultProjectTrust") == "always"
-
-
-def _pi_settings_paths() -> tuple[tuple[str, Path], ...]:
-    user = _pi_agent_dir() / "settings.json"
-    paths = [("user", user)]
-    project = Path.cwd() / ".pi" / "settings.json"
-    if project.exists() and _pi_project_trusted(user):
-        paths.append(("project", project))
+def _pi_settings_paths(listed: list[dict[str, str]]) -> tuple[tuple[str, Path], ...]:
+    paths = [("user", _pi_agent_dir() / "settings.json")]
+    if any(record["scope"] == "project" for record in listed):
+        paths.append(("project", Path.cwd() / ".pi" / "settings.json"))
     return tuple(paths)
 
 
@@ -165,6 +141,7 @@ class PiSource:
     item: object
     source: str
     local_path: Path | None
+    installed_path: Path | None
 
     @property
     def autoload_delta(self) -> bool:
@@ -180,17 +157,29 @@ class PiSource:
         return value
 
 
-def _pi_sources() -> list[PiSource]:
+def _pi_sources(listed: list[dict[str, str]]) -> list[PiSource]:
     result: list[PiSource] = []
-    for scope, path in _pi_settings_paths():
+    for scope, path in _pi_settings_paths(listed):
         settings = _read_settings(path)
         packages = settings.get("packages", [])
         if not isinstance(packages, list):
             raise ManagementError(f"invalid_pi_packages: {path}")
         for index, item in enumerate(packages):
             source = _package_source(item)
-            if source is not None:
-                result.append(PiSource(scope, path, settings, index, item, source, _local_source_path(source, path)))
+            if source is None:
+                continue
+            local_path = _local_source_path(source, path)
+            installed_path = next(
+                (
+                    Path(record["path"])
+                    for record in listed
+                    if record["scope"] == scope
+                    and record["source"] == source
+                    and (local_path is None or _same_path(Path(record["path"]), local_path))
+                ),
+                None,
+            )
+            result.append(PiSource(scope, path, settings, index, item, source, local_path, installed_path))
     return result
 
 
@@ -263,14 +252,6 @@ def _effective_sources(sources: list[PiSource]) -> list[PiSource]:
     return result
 
 
-def _pi_source_listed(item: PiSource, listed: list[dict[str, str]]) -> bool:
-    return any(
-        record["source"] == item.source
-        and (item.local_path is None or _same_path(Path(record["path"]), item.local_path))
-        for record in listed
-    )
-
-
 def _myspec_source_kind(item: PiSource, stable: Path) -> str | None:
     if item.local_path is not None and _same_path(item.local_path, stable):
         return "stable"
@@ -301,13 +282,15 @@ def _set_disabled(item: PiSource, disabled: bool) -> None:
 
 
 def _configure_pi_sources(stable: Path) -> list[str]:
-    sources = _pi_sources()
+    listed = _pi_list()
+    sources = _pi_sources(listed)
     user_stable = [item for item in sources if item.scope == "user" and _myspec_source_kind(item, stable) == "stable"]
     if not user_stable:
         installed = _run("pi", "install", str(stable))
         if installed.returncode != 0:
             raise ManagementError(f"pi_install_failed: {installed.stderr.strip()}")
-        sources = _pi_sources()
+        listed = _pi_list()
+        sources = _pi_sources(listed)
         user_stable = [item for item in sources if item.scope == "user" and _myspec_source_kind(item, stable) == "stable"]
     if not user_stable:
         raise ManagementError("pi_install_missing_source")
@@ -325,7 +308,7 @@ def _configure_pi_sources(stable: Path) -> list[str]:
     for path, settings in touched.items():
         _atomic_json(path, settings)
     listed = _pi_list()
-    if not any(_pi_source_listed(item, listed) for item in user_stable):
+    if not any(item.installed_path is not None for item in _pi_sources(listed) if item.scope == "user" and _myspec_source_kind(item, stable) == "stable"):
         raise ManagementError("pi_install_missing_source")
     return disabled
 
@@ -484,11 +467,11 @@ def _validated_pending(stage: str, token: str | None) -> dict[str, object]:
 
 def _group_effective_myspec(
     stable: Path,
-    sources: list[PiSource] | None = None,
+    sources: list[PiSource],
 ) -> list[tuple[str, str, list[PiSource]]]:
     groups: list[tuple[str, str, list[PiSource]]] = []
     by_identity: dict[str, int] = {}
-    for item in _effective_sources(_pi_sources() if sources is None else sources):
+    for item in _effective_sources(sources):
         kind = _myspec_source_kind(item, stable)
         if kind is None:
             continue
@@ -550,9 +533,10 @@ def _group_skills(group: list[PiSource]) -> list[str]:
     states: dict[str, tuple[str, bool]] = {}
     order: list[str] = []
     for item in group:
-        if item.local_path is None or not (item.local_path / "package.json").is_file():
+        root = item.installed_path
+        if root is None or not (root / "package.json").is_file():
             continue
-        skills = _manifest_skills(item.local_path)
+        skills = _manifest_skills(root)
         order.extend(path for path in skills if path not in order)
         patterns = item.skill_filter
         if item.autoload_delta:
@@ -576,7 +560,7 @@ def _group_skills(group: list[PiSource]) -> list[str]:
 
 def _pi_is_configured(listed: list[dict[str, str]]) -> bool:
     stable = _stable_package_root()
-    installed = [item for item in _pi_sources() if _pi_source_listed(item, listed)]
+    installed = [item for item in _pi_sources(listed) if item.installed_path is not None]
     return any(
         kind == "stable" and _group_skills(group)
         for _, kind, group in _group_effective_myspec(stable, installed)
@@ -641,12 +625,17 @@ def _pi_list() -> list[dict[str, str]]:
     if listed.returncode != 0:
         raise ManagementError(f"pi_list_failed: {listed.stderr.strip()}")
     result: list[dict[str, str]] = []
+    scope: str | None = None
     pending: str | None = None
     for line in listed.stdout.splitlines():
-        if line.startswith("  ") and not line.startswith("    "):
+        if line == "User packages:":
+            scope, pending = "user", None
+        elif line == "Project packages:":
+            scope, pending = "project", None
+        elif scope is not None and line.startswith("  ") and not line.startswith("    "):
             pending = line.strip().removesuffix(" (filtered)")
-        elif pending is not None and line.startswith("    ") and not line.strip().startswith("skills:"):
-            result.append({"source": pending, "path": line.strip()})
+        elif scope is not None and pending is not None and line.startswith("    "):
+            result.append({"scope": scope, "source": pending, "path": line.strip()})
             pending = None
     return result
 
@@ -665,8 +654,8 @@ def _doctor_pi() -> dict[str, object]:
     cli_version = _package_version()
     available = shutil.which("pi") is not None
     listed = _pi_list() if available else []
-    configured_sources = _pi_sources()
-    installed_sources = [item for item in configured_sources if _pi_source_listed(item, listed)]
+    configured_sources = _pi_sources(listed)
+    installed_sources = [item for item in configured_sources if item.installed_path is not None]
     effective = _effective_sources(installed_sources)
     records: list[dict[str, object]] = []
     for item in configured_sources:
@@ -678,7 +667,7 @@ def _doctor_pi() -> dict[str, object]:
                 "scope": item.scope,
                 "settings": str(item.settings_path),
                 "source": item.source,
-                "resolvedPath": str(item.local_path) if item.local_path is not None else None,
+                "resolvedPath": str(item.installed_path) if item.installed_path is not None else None,
                 "kind": kind,
                 "installed": installed,
                 "effective": installed and is_effective,
