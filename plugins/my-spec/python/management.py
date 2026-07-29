@@ -12,6 +12,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from typing import TextIO
 from urllib.parse import urlsplit
 
 
@@ -613,6 +614,9 @@ def _install_lock_path() -> Path:
     return Path.home() / ".myspec" / "install.lock"
 
 
+_INSTALL_LOCK_HANDLES: dict[str, TextIO] = {}
+
+
 def _pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -638,6 +642,67 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _lock_file(handle: TextIO) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_file(handle: TextIO) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _locked_value(handle: TextIO) -> dict[str, object]:
+    handle.seek(0)
+    text = handle.read().strip()
+    if not text:
+        return {}
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ManagementError(f"invalid_install_lock: {_install_lock_path()}") from exc
+    if not isinstance(value, dict):
+        raise ManagementError(f"invalid_install_lock: {_install_lock_path()}")
+    return value
+
+
+def _write_lock(handle: TextIO, value: dict[str, object]) -> None:
+    handle.seek(0)
+    handle.truncate()
+    json.dump(value, handle, ensure_ascii=False, indent=2)
+    handle.write("\n")
+    handle.flush()
+
+
+def _open_locked() -> TextIO:
+    path = _install_lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+", encoding="utf-8")
+    if path.stat().st_size == 0:
+        handle.write(" ")
+        handle.flush()
+    try:
+        _lock_file(handle)
+    except OSError:
+        handle.close()
+        raise ManagementError("install_lock_busy")
+    return handle
+
+
 def _lock_value() -> dict[str, object]:
     path = _install_lock_path()
     value = _read_json(path)
@@ -647,42 +712,47 @@ def _lock_value() -> dict[str, object]:
 
 
 def _acquire_install_lock(command: str) -> str:
-    path = _install_lock_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    while True:
-        operation_id = uuid.uuid4().hex
-        value = {
+    try:
+        handle = _open_locked()
+    except ManagementError as exc:
+        if str(exc) != "install_lock_busy":
+            raise
+        current = _lock_value()
+        raise ManagementError(
+            f"install_locked: pid={current.get('pid')} startedAt={current.get('startedAt')} command={current.get('command')}"
+        ) from exc
+    current = _locked_value(handle)
+    pid = current.get("pid")
+    if current and current.get("released") is not True and isinstance(pid, int) and _pid_alive(pid):
+        _unlock_file(handle)
+        handle.close()
+        raise ManagementError(
+            f"install_locked: pid={pid} startedAt={current.get('startedAt')} command={current.get('command')}"
+        )
+    operation_id = uuid.uuid4().hex
+    _write_lock(
+        handle,
+        {
             "pid": os.getpid(),
             "startedAt": datetime.now(timezone.utc).isoformat(),
             "command": command,
             "operationId": operation_id,
-        }
-        try:
-            with path.open("x", encoding="utf-8") as handle:
-                json.dump(value, handle, ensure_ascii=False, indent=2)
-                handle.write("\n")
-            return operation_id
-        except FileExistsError:
-            current = _lock_value()
-            pid = current["pid"]
-            assert isinstance(pid, int)
-            if _pid_alive(pid):
-                raise ManagementError(
-                    f"install_locked: pid={pid} startedAt={current.get('startedAt')} command={current.get('command')}"
-                )
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
+        },
+    )
+    _INSTALL_LOCK_HANDLES[operation_id] = handle
+    return operation_id
 
 
 def _release_install_lock(operation_id: str) -> None:
-    path = _install_lock_path()
-    if not path.exists():
+    handle = _INSTALL_LOCK_HANDLES.pop(operation_id, None)
+    if handle is None:
         return
-    value = _lock_value()
+    value = _locked_value(handle)
     if value.get("operationId") == operation_id and value.get("pid") == os.getpid():
-        path.unlink()
+        value["released"] = True
+        _write_lock(handle, value)
+    _unlock_file(handle)
+    handle.close()
 
 
 def _token_hash(token: str) -> str:
@@ -690,23 +760,37 @@ def _token_hash(token: str) -> str:
 
 
 def _prepare_lock_handoff(operation_id: str, token: str) -> None:
-    value = _lock_value()
+    handle = _INSTALL_LOCK_HANDLES.pop(operation_id, None)
+    if handle is None:
+        raise ManagementError("invalid_install_lock_owner")
+    value = _locked_value(handle)
     if value.get("operationId") != operation_id or value.get("pid") != os.getpid():
         raise ManagementError("invalid_install_lock_owner")
     value["handoffTokenHash"] = _token_hash(token)
-    _atomic_json(_install_lock_path(), value)
+    _write_lock(handle, value)
+    _unlock_file(handle)
+    handle.close()
 
 
 def _claim_install_lock(token: str) -> str:
-    value = _lock_value()
+    try:
+        handle = _open_locked()
+    except ManagementError as exc:
+        raise ManagementError("invalid_install_lock_handoff") from exc
+    value = _locked_value(handle)
     if value.get("handoffTokenHash") != _token_hash(token):
+        _unlock_file(handle)
+        handle.close()
         raise ManagementError("invalid_install_lock_handoff")
     operation_id = value.get("operationId")
     if not isinstance(operation_id, str):
+        _unlock_file(handle)
+        handle.close()
         raise ManagementError("invalid_install_lock_handoff")
     value["pid"] = os.getpid()
     value.pop("handoffTokenHash", None)
-    _atomic_json(_install_lock_path(), value)
+    _write_lock(handle, value)
+    _INSTALL_LOCK_HANDLES[operation_id] = handle
     return operation_id
 
 
@@ -715,6 +799,8 @@ def _lock_report() -> dict[str, object] | None:
     if not path.exists():
         return None
     value = _lock_value()
+    if value.get("released") is True:
+        return None
     pid = value["pid"]
     assert isinstance(pid, int)
     return {
@@ -1579,7 +1665,8 @@ def _management_command(args: argparse.Namespace) -> str:
         (name for name in ("pi", "claude", "codex", "all", "dev", "release") if getattr(args, name, False)),
         "",
     )
-    return f"myspec init --{target}"
+    source = f" --source {args.source}" if args.source is not None else ""
+    return f"myspec init --{target}{source}"
 
 
 def run_management(args: argparse.Namespace) -> dict[str, object]:

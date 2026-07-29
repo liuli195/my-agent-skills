@@ -543,6 +543,11 @@ def install(identifier):
 if arguments == ["plugin", "marketplace", "list", "--json"]:
     print(json.dumps({"marketplaces": state["marketplaces"]}))
 elif arguments == ["plugin", "list", "--json"]:
+    fail_number = int(os.environ.get("MYSPEC_CODEX_FAIL_LIST_NUMBER", "0"))
+    calls = [json.loads(line) for line in Path(os.environ["MYSPEC_CODEX_LOG"]).read_text(encoding="utf-8").splitlines()]
+    if fail_number and sum(call == arguments for call in calls) == fail_number:
+        print("simulated list failure", file=sys.stderr)
+        raise SystemExit(1)
     installed = [{**item, "enabled": configured_enabled(item["pluginId"])} for item in state["installed"]]
     print(json.dumps({"installed": installed, "available": state["available"]}))
 elif arguments[:3] == ["plugin", "marketplace", "add"] and arguments[-1:] == ["--json"]:
@@ -718,7 +723,8 @@ def test_packed_myspec_updates_release_package_and_enabled_integrations_with_new
     assert npm_calls.count(
         ["install", "--global", "--ignore-scripts", "--no-audit", "--no-fund", "@liuli195/myspec@0.1.54"]
     ) == 1
-    assert not (Path(env["HOME"]) / ".myspec" / "install.lock").exists()
+    lock = json.loads((Path(env["HOME"]) / ".myspec" / "install.lock").read_text(encoding="utf-8"))
+    assert lock["released"] is True
     state = json.loads((Path(env["HOME"]) / ".myspec" / "state.json").read_text(encoding="utf-8"))
     assert state["mode"] == "release"
     assert "pendingOperation" not in state
@@ -754,7 +760,8 @@ def test_packed_myspec_update_retries_npm_failure_without_requerying_latest(
     pending = json.loads(state_path.read_text(encoding="utf-8"))["pendingOperation"]
     assert pending["completed"] == ["preflight"]
     assert pending["lastError"] == "npm_install_failed: simulated install failure"
-    assert not (Path(env["HOME"]) / ".myspec" / "install.lock").exists()
+    lock = json.loads((Path(env["HOME"]) / ".myspec" / "install.lock").read_text(encoding="utf-8"))
+    assert lock["released"] is True
 
     retried = run_cli(executable, "update", env=env)
 
@@ -769,15 +776,17 @@ def test_packed_myspec_update_retries_npm_failure_without_requerying_latest(
 
 
 @pytest.mark.parametrize(
-    ("failure_variable", "expected_error", "completed"),
+    ("failure_variable", "failure_value", "expected_error", "completed"),
     [
         (
             "MYSPEC_CLAUDE_FAIL_INSTALL",
+            "1",
             "claude_plugin_install_failed: simulated install failure",
             ["preflight", "npm", "pi", "claude-marketplace", "claude-uninstall"],
         ),
         (
             "MYSPEC_CODEX_FAIL_ADD",
+            "1",
             "codex_plugin_add_failed: simulated add failure",
             [
                 "preflight",
@@ -791,11 +800,30 @@ def test_packed_myspec_update_retries_npm_failure_without_requerying_latest(
                 "codex-remove",
             ],
         ),
+        (
+            "MYSPEC_CODEX_FAIL_LIST_NUMBER",
+            "4",
+            "codex_plugin_list_failed: simulated list failure",
+            [
+                "preflight",
+                "npm",
+                "pi",
+                "claude-marketplace",
+                "claude-uninstall",
+                "claude-install",
+                "claude-enable",
+                "claude",
+                "codex-remove",
+                "codex-add",
+                "codex",
+            ],
+        ),
     ],
 )
 def test_packed_myspec_update_resumes_after_client_refresh_failure(
     tmp_path: Path,
     failure_variable: str,
+    failure_value: str,
     expected_error: str,
     completed: list[str],
 ) -> None:
@@ -833,7 +861,7 @@ def test_packed_myspec_update_resumes_after_client_refresh_failure(
     codex_log.write_text("", encoding="utf-8")
     env["MYSPEC_RELEASE_TARBALL"] = str(new_tarball)
 
-    failed = run_cli(executable, "update", env={**env, failure_variable: "1"})
+    failed = run_cli(executable, "update", env={**env, failure_variable: failure_value})
 
     assert failed.returncode == 1
     assert f"error: {expected_error}" in failed.stderr
@@ -1001,7 +1029,7 @@ def test_packed_myspec_serializes_init_and_reports_locks_without_mutating_them(
     write(lock_path, json.dumps(stale, indent=2))
     recovered = run_cli(executable, "init", "--all", env=env)
     assert recovered.returncode == 0, recovered.stderr
-    assert not lock_path.exists()
+    assert json.loads(lock_path.read_text(encoding="utf-8"))["released"] is True
 
 
 def test_packed_myspec_doctor_reports_partial_update_read_only(tmp_path: Path) -> None:
@@ -1075,7 +1103,8 @@ def test_packed_myspec_update_rejects_dev_mode_and_forged_resume(tmp_path: Path)
     assert "update_requires_release_mode: run 'myspec init --release' first" in rejected.stderr
     assert forged.returncode == 1
     assert "error: invalid_update_token" in forged.stderr
-    assert not (Path(env["HOME"]) / ".myspec" / "install.lock").exists()
+    lock = json.loads((Path(env["HOME"]) / ".myspec" / "install.lock").read_text(encoding="utf-8"))
+    assert lock["released"] is True
 
 
 def test_packed_myspec_initializes_and_diagnoses_one_pi_source(tmp_path: Path) -> None:
