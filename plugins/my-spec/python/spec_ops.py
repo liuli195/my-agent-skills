@@ -600,7 +600,7 @@ def diff_dirs(old_root: Path, new_root: Path) -> str:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Deterministic MySpec operations")
+    parser = argparse.ArgumentParser(prog="myspec", description="Deterministic MySpec operations")
     commands = parser.add_subparsers(dest="command", required=True)
     validate_main_parser = commands.add_parser("validate-main")
     validate_main_parser.add_argument("specs_dir", type=Path)

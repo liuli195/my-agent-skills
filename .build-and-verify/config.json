@@ -136,12 +136,14 @@
         "id": "verify.myspec",
         "paths": [
           "myspec/specs/**",
-          "plugins/my-spec/skills/my-spec/scripts/spec_ops.py"
+          "plugins/my-spec/bin/myspec.js",
+          "plugins/my-spec/python/spec_ops.py"
         ],
-        "command": "python plugins/my-spec/skills/my-spec/scripts/spec_ops.py validate-main myspec/specs",
+        "command": "node plugins/my-spec/bin/myspec.js validate-main myspec/specs",
         "inputs": [
           "myspec/specs",
-          "plugins/my-spec/skills/my-spec/scripts/spec_ops.py"
+          "plugins/my-spec/bin/myspec.js",
+          "plugins/my-spec/python/spec_ops.py"
         ]
       },
       {

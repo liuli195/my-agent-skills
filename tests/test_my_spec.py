@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -8,7 +10,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "my-spec"
-SPEC_OPS = PLUGIN_ROOT / "skills" / "my-spec" / "scripts" / "spec_ops.py"
+SPEC_OPS = PLUGIN_ROOT / "python" / "spec_ops.py"
 SKILL_NAMES = ("my-spec", "my-spec-add", "my-spec-review", "my-spec-audit")
 
 
@@ -130,6 +132,118 @@ def run_confirmed_workflow(
     assert run_python(cli, "validate-main", specs).returncode == 0
     assert run_python(cli, "diff", specs, preview).stdout == ""
     return diff.stdout
+
+
+def test_packed_myspec_installs_a_working_cli_with_agent_resources(tmp_path: Path) -> None:
+    npm = shutil.which("npm")
+    assert npm is not None
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    packed = subprocess.run(
+        [npm, "pack", "--json", "--pack-destination", str(package_dir)],
+        cwd=PLUGIN_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert packed.returncode == 0, packed.stderr
+    package = json.loads(packed.stdout)[0]
+    assert package["name"] == "@liuli195/myspec"
+    tarball = package_dir / package["filename"]
+
+    prefix = tmp_path / "npm-prefix"
+    installed = subprocess.run(
+        [
+            npm,
+            "install",
+            "--global",
+            "--prefix",
+            str(prefix),
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund",
+            str(tarball),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert installed.returncode == 0, installed.stderr
+    executable = prefix / ("myspec.cmd" if sys.platform == "win32" else "bin/myspec")
+    assert executable.is_file()
+    help_result = subprocess.run(
+        [str(executable), "--help"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert help_result.returncode == 0
+    assert help_result.stdout.startswith("usage: myspec ")
+    for command in (
+        "state-init",
+        "state-set-conflicts",
+        "state-current",
+        "state-decide",
+        "state-status",
+        "validate-main",
+        "validate-delta",
+        "apply-delta",
+        "diff",
+    ):
+        assert command in help_result.stdout
+
+    specs = tmp_path / "specs"
+    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
+    valid = subprocess.run(
+        [str(executable), "validate-main", str(specs)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert valid.returncode == 0
+    assert valid.stdout == ""
+    assert valid.stderr == ""
+
+    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")).replace("MUST", "必须"))
+    invalid = subprocess.run(
+        [str(executable), "validate-main", str(specs)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert invalid.returncode == 1
+    assert "error: missing_must_or_shall: 登录" in invalid.stderr
+    assert "Traceback" not in invalid.stderr
+
+    node = shutil.which("node")
+    assert node is not None
+    no_python = subprocess.run(
+        [str(executable), "validate-main", str(specs)],
+        env={**os.environ, "PATH": str(Path(node).parent), "MYSPEC_PYTHON": "not-a-python"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert no_python.returncode != 0
+    assert "error: Python 3.12 or newer is required" in no_python.stderr
+    assert (
+        "checked not-a-python (unavailable), python3.12 (unavailable), "
+        "python3 (unavailable), python (unavailable)"
+    ) in no_python.stderr
+
+    npm_root = subprocess.run(
+        [npm, "root", "--global", "--prefix", str(prefix)],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    installed_package = Path(npm_root.stdout.strip()) / "@liuli195" / "myspec"
+    assert {path.name for path in (installed_package / "skills").iterdir()} == set(SKILL_NAMES)
+    assert (installed_package / ".claude-plugin" / "plugin.json").is_file()
+    assert (installed_package / ".codex-plugin" / "plugin.json").is_file()
+    assert [path.relative_to(installed_package).as_posix() for path in installed_package.rglob("spec_ops.py")] == [
+        "python/spec_ops.py"
+    ]
 
 
 def test_spec_ops_cli_validates_applies_all_delta_operations_and_diffs(tmp_path: Path) -> None:
@@ -626,9 +740,12 @@ def test_plugin_uses_host_native_skill_paths_without_custom_pi_routing() -> None
     assert not (PLUGIN_ROOT / "extensions").exists()
 
     package = json.loads((PLUGIN_ROOT / "package.json").read_text(encoding="utf-8"))
-    assert package["name"] == "pi-my-spec"
+    assert package["name"] == "@liuli195/myspec"
+    assert package["bin"] == {"myspec": "./bin/myspec.js"}
+    assert package["publishConfig"] == {"access": "public"}
     assert package["pi"] == {"skills": ["./skills"]}
     assert "peerDependencies" not in package
+    assert "dependencies" not in package
 
 
 def test_spec_add_deterministic_post_analysis_flow_previews_diffs_and_applies(
