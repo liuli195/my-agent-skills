@@ -298,6 +298,104 @@ raise SystemExit(2)
     return bin_dir, log
 
 
+def install_fake_claude(root: Path) -> tuple[Path, Path, Path]:
+    bin_dir = root / "bin"
+    bin_dir.mkdir(parents=True)
+    script = root / "fake_claude.py"
+    log = root / "claude.log"
+    state = root / "claude-state.json"
+    write(
+        script,
+        """import json
+import os
+import shutil
+import sys
+from pathlib import Path
+
+arguments = sys.argv[1:]
+state_path = Path(os.environ["MYSPEC_CLAUDE_STATE"])
+state = json.loads(state_path.read_text(encoding="utf-8"))
+with Path(os.environ["MYSPEC_CLAUDE_LOG"]).open("a", encoding="utf-8") as log:
+    log.write(json.dumps(arguments) + "\\n")
+
+def save():
+    state_path.write_text(json.dumps(state, indent=2) + "\\n", encoding="utf-8")
+
+def marketplace(name):
+    return next((item for item in state["marketplaces"] if item["name"] == name), None)
+
+def plugin(identifier):
+    return next((item for item in state["plugins"] if item["id"] == identifier), None)
+
+def refresh(identifier):
+    name, market_name = identifier.split("@", 1)
+    market = marketplace(market_name)
+    if market is None or market.get("source") != "directory":
+        print("missing local marketplace", file=sys.stderr)
+        raise SystemExit(1)
+    source = Path(market["path"])
+    manifest = json.loads((source / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    target = Path(os.environ["MYSPEC_CLAUDE_HOME"]) / "plugins" / "cache" / market_name / name / manifest["version"]
+    if target.exists():
+        shutil.rmtree(target)
+    shutil.copytree(source, target)
+    current = plugin(identifier)
+    record = {
+        "id": identifier,
+        "version": manifest["version"],
+        "scope": "user",
+        "enabled": current["enabled"] if current else True,
+        "installPath": str(target),
+    }
+    if current:
+        state["plugins"][state["plugins"].index(current)] = record
+    else:
+        state["plugins"].append(record)
+    save()
+
+if arguments == ["plugin", "marketplace", "list", "--json"]:
+    print(json.dumps(state["marketplaces"]))
+elif arguments == ["plugin", "list", "--json"]:
+    print(json.dumps(state["plugins"]))
+elif arguments[:3] == ["plugin", "marketplace", "add"] and len(arguments) == 4:
+    source = Path(arguments[3])
+    manifest = json.loads((source / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+    if marketplace(manifest["name"]) is None:
+        state["marketplaces"].append({
+            "name": manifest["name"],
+            "source": "directory",
+            "path": str(source),
+            "installLocation": str(source),
+        })
+        save()
+elif arguments[:2] == ["plugin", "install"] and arguments[3:] == ["--scope", "user"]:
+    refresh(arguments[2])
+elif arguments[:2] == ["plugin", "update"] and arguments[3:] == ["--scope", "user"]:
+    refresh(arguments[2])
+elif arguments[:2] in (["plugin", "enable"], ["plugin", "disable"]) and arguments[3:] == ["--scope", "user"]:
+    current = plugin(arguments[2])
+    if current is None:
+        print("missing plugin", file=sys.stderr)
+        raise SystemExit(1)
+    current["enabled"] = arguments[1] == "enable"
+    save()
+elif arguments[:3] == ["plugin", "marketplace", "update"] and len(arguments) == 4:
+    if marketplace(arguments[3]) is None:
+        raise SystemExit(1)
+else:
+    raise SystemExit(2)
+""",
+    )
+    if sys.platform == "win32":
+        launcher = bin_dir / "claude.cmd"
+        write(launcher, f'@"{sys.executable}" "{script}" %*')
+    else:
+        launcher = bin_dir / "claude"
+        write(launcher, f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"')
+        launcher.chmod(0o755)
+    return bin_dir, log, state
+
+
 def install_fake_npm(root: Path, release_tarball: Path) -> tuple[Path, Path]:
     bin_dir = root / "bin"
     bin_dir.mkdir(parents=True)
@@ -894,6 +992,234 @@ def test_packed_myspec_keeps_project_legacy_sources_without_installed_paths(
         assert sources[source]["enabled"] is False
 
 
+def test_packed_myspec_initializes_and_diagnoses_claude_without_deleting_legacy(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = installed_package.parents[2]
+    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
+    env = isolated_myspec_env(tmp_path, prefix, claude_bin)
+    env.update(
+        {
+            "MYSPEC_CLAUDE_LOG": str(claude_log),
+            "MYSPEC_CLAUDE_STATE": str(claude_state),
+            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+        }
+    )
+    legacy_market = {
+        "name": "my-agent-skills-marketplace",
+        "source": "github",
+        "repo": "liuli195/my-agent-skills",
+        "installLocation": str(tmp_path / "legacy-market"),
+    }
+    unrelated_market = {
+        "name": "other-marketplace",
+        "source": "github",
+        "repo": "example/other",
+        "installLocation": str(tmp_path / "other-market"),
+    }
+    legacy_plugin = {
+        "id": "my-spec@my-agent-skills-marketplace",
+        "version": "0.1.52",
+        "scope": "user",
+        "enabled": True,
+        "installPath": str(tmp_path / "legacy-plugin"),
+    }
+    unrelated_plugin = {
+        "id": "other@other-marketplace",
+        "version": "1.0.0",
+        "scope": "user",
+        "enabled": True,
+        "installPath": str(tmp_path / "other-plugin"),
+    }
+    write(
+        claude_state,
+        json.dumps(
+            {
+                "marketplaces": [legacy_market, unrelated_market],
+                "plugins": [legacy_plugin, unrelated_plugin],
+            },
+            indent=2,
+        ),
+    )
+
+    initialized = run_cli(executable, "init", "--claude", env=env)
+    assert initialized.returncode == 0, initialized.stderr
+    assert json.loads(initialized.stdout) == {
+        "claude": "initialized",
+        "marketplace": "myspec",
+        "source": str(installed_package),
+        "disabledLegacyPlugins": ["my-spec@my-agent-skills-marketplace"],
+        "reloadRequired": True,
+    }
+    state = json.loads(claude_state.read_text(encoding="utf-8"))
+    assert state["marketplaces"][:2] == [legacy_market, unrelated_market]
+    assert len(state["marketplaces"]) == 3
+    assert state["marketplaces"][2]["name"] == "myspec"
+    plugins = {plugin["id"]: plugin for plugin in state["plugins"]}
+    assert plugins[legacy_plugin["id"]]["enabled"] is False
+    assert plugins[unrelated_plugin["id"]] == unrelated_plugin
+    assert plugins["my-spec@myspec"]["enabled"] is True
+    assert plugins["my-spec@myspec"]["version"] == "0.1.53"
+
+    state_before = claude_state.read_bytes()
+    claude_log.write_text("", encoding="utf-8")
+    diagnosed = run_cli(executable, "doctor", "--claude", env=env)
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    report = json.loads(diagnosed.stdout)["claude"]
+    assert report["available"] is True
+    assert report["marketplaceRegistered"] is True
+    assert report["marketplaceSourceMismatch"] is False
+    assert report["source"] == str(installed_package)
+    assert report["version"] == "0.1.53"
+    assert report["enabled"] is True
+    assert report["duplicateEnabledSources"] is False
+    assert report["enabledSources"] == ["my-spec@myspec"]
+    assert report["disabledSources"] == ["my-spec@my-agent-skills-marketplace"]
+    assert report["skills"] == list(SKILL_NAMES)
+    assert report["reloadRequired"] is True
+    assert claude_state.read_bytes() == state_before
+    assert [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()] == [
+        ["plugin", "marketplace", "list", "--json"],
+        ["plugin", "list", "--json"],
+    ]
+
+    state["plugins"][0]["enabled"] = True
+    write(claude_state, json.dumps(state, indent=2))
+    duplicate = json.loads(run_cli(executable, "doctor", "--claude", env=env).stdout)["claude"]
+    assert duplicate["duplicateEnabledSources"] is True
+    assert duplicate["enabledSources"] == [
+        "my-spec@my-agent-skills-marketplace",
+        "my-spec@myspec",
+    ]
+
+
+def test_packed_myspec_doctor_reports_claude_marketplace_source_mismatch_read_only(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = installed_package.parents[2]
+    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
+    env = isolated_myspec_env(tmp_path, prefix, claude_bin)
+    env.update(
+        {
+            "MYSPEC_CLAUDE_LOG": str(claude_log),
+            "MYSPEC_CLAUDE_STATE": str(claude_state),
+            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+        }
+    )
+    wrong_source = tmp_path / "wrong-source"
+    write(
+        claude_state,
+        json.dumps(
+            {
+                "marketplaces": [
+                    {
+                        "name": "myspec",
+                        "source": "directory",
+                        "path": str(wrong_source),
+                        "installLocation": str(wrong_source),
+                    }
+                ],
+                "plugins": [],
+            },
+            indent=2,
+        ),
+    )
+    before = claude_state.read_bytes()
+
+    diagnosed = run_cli(executable, "doctor", "--claude", env=env)
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    report = json.loads(diagnosed.stdout)["claude"]
+    assert report["source"] == str(wrong_source)
+    assert report["marketplaceRegistered"] is False
+    assert report["marketplaceSourceMismatch"] is True
+    assert claude_state.read_bytes() == before
+
+
+def test_packed_myspec_explicit_claude_init_refreshes_disabled_stale_plugin(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = installed_package.parents[2]
+    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
+    env = isolated_myspec_env(tmp_path, prefix, claude_bin)
+    env.update(
+        {
+            "MYSPEC_CLAUDE_LOG": str(claude_log),
+            "MYSPEC_CLAUDE_STATE": str(claude_state),
+            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+        }
+    )
+    write(
+        claude_state,
+        json.dumps(
+            {
+                "marketplaces": [
+                    {
+                        "name": "myspec",
+                        "source": "directory",
+                        "path": str(installed_package),
+                        "installLocation": str(installed_package),
+                    }
+                ],
+                "plugins": [
+                    {
+                        "id": "my-spec@myspec",
+                        "version": "0.1.52",
+                        "scope": "user",
+                        "enabled": False,
+                        "installPath": str(tmp_path / "stale-plugin"),
+                    }
+                ],
+            },
+            indent=2,
+        ),
+    )
+
+    initialized = run_cli(executable, "init", "--claude", env=env)
+    assert initialized.returncode == 0, initialized.stderr
+    plugin = json.loads(claude_state.read_text(encoding="utf-8"))["plugins"][0]
+    assert plugin["version"] == "0.1.53"
+    assert plugin["enabled"] is True
+    calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
+    assert ["plugin", "update", "my-spec@myspec", "--scope", "user"] in calls
+
+
+def test_packed_myspec_requires_explicit_claude_but_all_initializes_detected_claude(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = installed_package.parents[2]
+    missing_env = isolated_myspec_env(tmp_path, prefix)
+    missing = run_cli(executable, "init", "--claude", env=missing_env)
+    assert missing.returncode == 1
+    assert missing.stdout == ""
+    assert "error: missing_command: claude" in missing.stderr
+
+    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
+    env = isolated_myspec_env(tmp_path, prefix, claude_bin)
+    env.update(
+        {
+            "MYSPEC_CLAUDE_LOG": str(claude_log),
+            "MYSPEC_CLAUDE_STATE": str(claude_state),
+            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+        }
+    )
+    write(claude_state, json.dumps({"marketplaces": [], "plugins": []}, indent=2))
+    initialized = run_cli(executable, "init", "--all", env=env)
+    assert initialized.returncode == 0, initialized.stderr
+    assert json.loads(initialized.stdout) == {
+        "pi": {"status": "skipped", "reason": "missing_command: pi"},
+        "claude": {"status": "initialized", "source": str(installed_package)},
+        "codex": {"status": "skipped", "reason": "missing_command: codex"},
+    }
+    assert any(
+        plugin["id"] == "my-spec@myspec"
+        for plugin in json.loads(claude_state.read_text(encoding="utf-8"))["plugins"]
+    )
+
+
 def test_packed_myspec_reports_missing_pi_without_installing_it(tmp_path: Path) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
     prefix = installed_package.parents[2]
@@ -995,6 +1321,134 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
     explicit = run_cli(executable, "init", "--dev", "--source", REPO_ROOT, env=env, cwd=tmp_path)
     assert explicit.returncode == 0, explicit.stderr
     assert json.loads(explicit.stdout)["source"] == str(REPO_ROOT)
+
+
+def test_packed_myspec_refreshes_enabled_claude_across_global_mode_switches(
+    tmp_path: Path,
+) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = install_packed_myspec(installed)
+    prefix = installed_package.parents[2]
+    release_tarball = next((installed / "package").glob("*.tgz"))
+    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
+    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
+    env = isolated_myspec_env(tmp_path, prefix, npm_bin, claude_bin)
+    env.update(
+        {
+            "MYSPEC_NPM_LOG": str(npm_log),
+            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
+            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
+            "MYSPEC_CLAUDE_LOG": str(claude_log),
+            "MYSPEC_CLAUDE_STATE": str(claude_state),
+            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+        }
+    )
+    write(claude_state, json.dumps({"marketplaces": [], "plugins": []}, indent=2))
+    assert run_cli(executable, "init", "--claude", env=env).returncode == 0
+
+    source = tmp_path / "source"
+    shutil.copytree(REPO_ROOT / ".agents", source / ".agents")
+    shutil.copytree(REPO_ROOT / ".claude-plugin", source / ".claude-plugin")
+    shutil.copytree(PLUGIN_ROOT, source / "plugins" / "my-spec")
+    marker = source / "plugins" / "my-spec" / "skills" / "my-spec" / "dev-marker.txt"
+    write(marker, "development source")
+    initialized_git = subprocess.run(
+        ["git", "init"], cwd=source, text=True, capture_output=True, check=False
+    )
+    assert initialized_git.returncode == 0, initialized_git.stderr
+    committed = subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=MySpec Test",
+            "-c",
+            "user.email=myspec@example.invalid",
+            "add",
+            ".",
+        ],
+        cwd=source,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert committed.returncode == 0, committed.stderr
+    committed = subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=MySpec Test",
+            "-c",
+            "user.email=myspec@example.invalid",
+            "commit",
+            "-m",
+            "development source",
+        ],
+        cwd=source,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert committed.returncode == 0, committed.stderr
+
+    entered = run_cli(executable, "init", "--dev", "--source", source, env=env)
+    assert entered.returncode == 0, entered.stderr
+    assert json.loads(entered.stdout)["claude"] == "refreshed"
+    state = json.loads(claude_state.read_text(encoding="utf-8"))
+    plugin = next(item for item in state["plugins"] if item["id"] == "my-spec@myspec")
+    dev_cache = Path(plugin["installPath"])
+    assert (dev_cache / "skills" / "my-spec" / "dev-marker.txt").read_text(
+        encoding="utf-8"
+    ) == "development source\n"
+
+    restored = run_cli(executable, "init", "--release", env=env)
+    assert restored.returncode == 0, restored.stderr
+    assert json.loads(restored.stdout)["claude"] == "refreshed"
+    state = json.loads(claude_state.read_text(encoding="utf-8"))
+    plugin = next(item for item in state["plugins"] if item["id"] == "my-spec@myspec")
+    assert not (Path(plugin["installPath"]) / "skills" / "my-spec" / "dev-marker.txt").exists()
+    calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
+    assert calls.count(["plugin", "marketplace", "update", "myspec"]) == 2
+    assert calls.count(["plugin", "update", "my-spec@myspec", "--scope", "user"]) == 2
+
+
+def test_packed_myspec_mode_switch_does_not_install_disabled_claude(
+    tmp_path: Path,
+) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = install_packed_myspec(installed)
+    prefix = installed_package.parents[2]
+    release_tarball = next((installed / "package").glob("*.tgz"))
+    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
+    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
+    env = isolated_myspec_env(tmp_path, prefix, npm_bin, claude_bin)
+    env.update(
+        {
+            "MYSPEC_NPM_LOG": str(npm_log),
+            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
+            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
+            "MYSPEC_CLAUDE_LOG": str(claude_log),
+            "MYSPEC_CLAUDE_STATE": str(claude_state),
+            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+        }
+    )
+    write(claude_state, json.dumps({"marketplaces": [], "plugins": []}, indent=2))
+
+    entered = run_cli(executable, "init", "--dev", "--source", REPO_ROOT, env=env)
+    assert entered.returncode == 0, entered.stderr
+    assert json.loads(entered.stdout)["claude"] == "not-installed"
+    restored = run_cli(executable, "init", "--release", env=env)
+    assert restored.returncode == 0, restored.stderr
+    assert json.loads(restored.stdout)["claude"] == "not-installed"
+    calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
+    assert not any(call[:3] == ["plugin", "marketplace", "add"] for call in calls)
+    assert not any(call[:2] == ["plugin", "install"] for call in calls)
+    assert not any(call[:2] == ["plugin", "enable"] for call in calls)
+    assert json.loads(claude_state.read_text(encoding="utf-8")) == {
+        "marketplaces": [],
+        "plugins": [],
+    }
 
 
 def test_packed_myspec_release_install_failure_stays_in_dev_and_retries(
@@ -1211,6 +1665,7 @@ def test_packed_myspec_rejects_invalid_mode_switches(tmp_path: Path) -> None:
         "skill-file",
         "codex-marketplace",
         "claude-marketplace",
+        "self-claude-marketplace",
         "plugin-manifest",
     ],
 )
@@ -1300,6 +1755,11 @@ def test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_st
         market_path = source / ".claude-plugin" / "marketplace.json"
         market = json.loads(market_path.read_text(encoding="utf-8"))
         next(plugin for plugin in market["plugins"] if plugin["name"] == "my-spec")["source"] = "../wrong"
+        write(market_path, json.dumps(market, indent=2))
+    elif case == "self-claude-marketplace":
+        market_path = source / "plugins" / "my-spec" / ".claude-plugin" / "marketplace.json"
+        market = json.loads(market_path.read_text(encoding="utf-8"))
+        market["plugins"][0]["source"] = "../wrong"
         write(market_path, json.dumps(market, indent=2))
     else:
         plugin_path = source / "plugins" / "my-spec" / ".codex-plugin" / "plugin.json"
@@ -1614,6 +2074,22 @@ def test_packed_myspec_installs_a_working_cli_with_agent_resources(tmp_path: Pat
 
     assert {path.name for path in (installed_package / "skills").iterdir()} == set(SKILL_NAMES)
     assert (installed_package / ".claude-plugin" / "plugin.json").is_file()
+    claude_marketplace = json.loads(
+        (installed_package / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8")
+    )
+    assert claude_marketplace["name"] == "myspec"
+    assert claude_marketplace["description"] == "Self-contained MySpec plugin marketplace"
+    assert claude_marketplace["plugins"] == [
+        {
+            "name": "my-spec",
+            "source": "./",
+            "description": "MySpec audit, review, and document-to-delta Skill（开放规格审计、审查与文档增量技能）",
+        }
+    ]
+    claude_manifest = json.loads(
+        (installed_package / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+    )
+    assert claude_manifest["author"] == {"name": "liuli195"}
     assert (installed_package / ".codex-plugin" / "plugin.json").is_file()
     assert [path.relative_to(installed_package).as_posix() for path in installed_package.rglob("spec_ops.py")] == [
         "python/spec_ops.py",

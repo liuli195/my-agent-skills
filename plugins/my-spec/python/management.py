@@ -14,6 +14,9 @@ from urllib.parse import urlsplit
 
 
 PACKAGE_NAME = "@liuli195/myspec"
+CLAUDE_MARKETPLACE = "myspec"
+CLAUDE_PLUGIN = f"my-spec@{CLAUDE_MARKETPLACE}"
+CLAUDE_LEGACY_PLUGIN = "my-spec@my-agent-skills-marketplace"
 SKILL_NAMES = ("my-spec", "my-spec-add", "my-spec-review", "my-spec-audit")
 SKILL_PATHS = tuple(f"./skills/{name}" for name in SKILL_NAMES)
 
@@ -326,13 +329,130 @@ def _init_pi() -> dict[str, object]:
     }
 
 
+def _claude_json(arguments: tuple[str, ...], error_name: str) -> list[dict[str, object]]:
+    result = _run("claude", *arguments)
+    if result.returncode != 0:
+        raise ManagementError(f"{error_name}: {result.stderr.strip()}")
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ManagementError(f"{error_name}: invalid_json") from exc
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise ManagementError(f"{error_name}: invalid_output")
+    return value
+
+
+def _claude_marketplaces() -> list[dict[str, object]]:
+    return _claude_json(("plugin", "marketplace", "list", "--json"), "claude_marketplace_list_failed")
+
+
+def _claude_plugins() -> list[dict[str, object]]:
+    return _claude_json(("plugin", "list", "--json"), "claude_plugin_list_failed")
+
+
+def _claude_marketplace_path(item: dict[str, object]) -> Path | None:
+    source = item.get("source")
+    candidates = [item.get("path")]
+    if isinstance(source, dict):
+        candidates.append(source.get("path"))
+    return next((Path(value) for value in candidates if isinstance(value, str) and value), None)
+
+
+def _named_claude_marketplace(
+    marketplaces: list[dict[str, object]],
+) -> dict[str, object] | None:
+    matches = [item for item in marketplaces if item.get("name") == CLAUDE_MARKETPLACE]
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise ManagementError("claude_marketplace_duplicate")
+    return matches[0]
+
+
+def _claude_marketplace(
+    stable: Path,
+    marketplaces: list[dict[str, object]],
+) -> dict[str, object] | None:
+    marketplace = _named_claude_marketplace(marketplaces)
+    if marketplace is None:
+        return None
+    source = _claude_marketplace_path(marketplace)
+    if source is None or not _same_path(source, stable):
+        raise ManagementError("claude_marketplace_source_mismatch")
+    return marketplace
+
+
+def _run_claude(error_name: str, *arguments: str) -> None:
+    result = _run("claude", *arguments)
+    if result.returncode != 0:
+        raise ManagementError(f"{error_name}: {result.stderr.strip()}")
+
+
+def _init_claude() -> dict[str, object]:
+    if shutil.which("claude") is None:
+        raise ManagementError("missing_command: claude")
+    stable = _stable_package_root()
+    if _claude_marketplace(stable, _claude_marketplaces()) is None:
+        _run_claude("claude_marketplace_add_failed", "plugin", "marketplace", "add", str(stable))
+        if _claude_marketplace(stable, _claude_marketplaces()) is None:
+            raise ManagementError("claude_marketplace_add_missing")
+
+    plugins = _claude_plugins()
+    target = next((item for item in plugins if item.get("id") == CLAUDE_PLUGIN), None)
+    if target is None:
+        _run_claude("claude_plugin_install_failed", "plugin", "install", CLAUDE_PLUGIN, "--scope", "user")
+    else:
+        scope = target.get("scope") if isinstance(target.get("scope"), str) else "user"
+        _run_claude(
+            "claude_marketplace_update_failed",
+            "plugin",
+            "marketplace",
+            "update",
+            CLAUDE_MARKETPLACE,
+        )
+        _run_claude("claude_plugin_update_failed", "plugin", "update", CLAUDE_PLUGIN, "--scope", scope)
+    _run_claude(
+        "claude_plugin_enable_failed",
+        "plugin",
+        "enable",
+        CLAUDE_PLUGIN,
+        "--scope",
+        "user",
+    )
+    enabled = _claude_plugins()
+    if not any(item.get("id") == CLAUDE_PLUGIN and item.get("enabled") is True for item in enabled):
+        raise ManagementError("claude_plugin_enable_missing")
+
+    disabled: list[str] = []
+    for item in enabled:
+        if item.get("id") == CLAUDE_LEGACY_PLUGIN and item.get("enabled") is True:
+            scope = item.get("scope") if isinstance(item.get("scope"), str) else "user"
+            _run_claude(
+                "claude_plugin_disable_failed",
+                "plugin",
+                "disable",
+                CLAUDE_LEGACY_PLUGIN,
+                "--scope",
+                scope,
+            )
+            disabled.append(CLAUDE_LEGACY_PLUGIN)
+    return {
+        "claude": "initialized",
+        "marketplace": CLAUDE_MARKETPLACE,
+        "source": str(stable),
+        "disabledLegacyPlugins": disabled,
+        "reloadRequired": True,
+    }
+
+
 def _init_all() -> dict[str, object]:
     result: dict[str, object] = {}
+    initializers = {"pi": _init_pi, "claude": _init_claude}
     for agent in ("pi", "claude", "codex"):
         if shutil.which(agent) is None:
             result[agent] = {"status": "skipped", "reason": f"missing_command: {agent}"}
-        elif agent == "pi":
-            initialized = _init_pi()
+        elif agent in initializers:
+            initialized = initializers[agent]()
             result[agent] = {"status": "initialized", "source": initialized["source"]}
         else:
             result[agent] = {"status": "skipped", "reason": "integration_not_available"}
@@ -365,6 +485,20 @@ def _marketplace_has_myspec(path: Path, *, agents: bool) -> bool:
     return plugin_source == expected
 
 
+def _validate_self_claude_marketplace(path: Path) -> bool:
+    value = _read_json(path)
+    plugins = value.get("plugins") if isinstance(value, dict) else None
+    return (
+        isinstance(value, dict)
+        and value.get("name") == CLAUDE_MARKETPLACE
+        and isinstance(plugins, list)
+        and len(plugins) == 1
+        and isinstance(plugins[0], dict)
+        and plugins[0].get("name") == "my-spec"
+        and plugins[0].get("source") == "./"
+    )
+
+
 def _validate_plugin_manifest(path: Path, version: str) -> bool:
     value = _read_json(path)
     return (
@@ -388,6 +522,7 @@ def _validate_dev_source(raw_source: Path) -> tuple[Path, Path, str]:
         package_root / "python" / "management.py",
         agents_market,
         claude_market,
+        package_root / ".claude-plugin" / "marketplace.json",
         package_root / ".claude-plugin" / "plugin.json",
         package_root / ".codex-plugin" / "plugin.json",
     )
@@ -413,7 +548,13 @@ def _validate_dev_source(raw_source: Path) -> tuple[Path, Path, str]:
         raise ManagementError(f"invalid_dev_source: marketplace {agents_market}")
     if not _marketplace_has_myspec(claude_market, agents=False):
         raise ManagementError(f"invalid_dev_source: marketplace {claude_market}")
-    for path in (package_root / ".claude-plugin" / "plugin.json", package_root / ".codex-plugin" / "plugin.json"):
+    self_claude_market = package_root / ".claude-plugin" / "marketplace.json"
+    if not _validate_self_claude_marketplace(self_claude_market):
+        raise ManagementError(f"invalid_dev_source: marketplace {self_claude_market}")
+    for path in (
+        package_root / ".claude-plugin" / "plugin.json",
+        package_root / ".codex-plugin" / "plugin.json",
+    ):
         if not _validate_plugin_manifest(path, version):
             raise ManagementError(f"invalid_dev_source: plugin_manifest {path}")
     root = _run("git", "rev-parse", "--show-toplevel", cwd=source)
@@ -574,6 +715,49 @@ def _refresh_pi() -> str:
     return "refreshed" if _pi_is_configured(_pi_list()) else "not-installed"
 
 
+def _refresh_claude() -> str:
+    if shutil.which("claude") is None:
+        return "not-installed"
+    stable = _stable_package_root()
+    marketplace = _claude_marketplace(stable, _claude_marketplaces())
+    plugins = _claude_plugins()
+    target = next((item for item in plugins if item.get("id") == CLAUDE_PLUGIN), None)
+    if marketplace is None or target is None or target.get("enabled") is not True:
+        return "not-installed"
+    scope = target.get("scope") if isinstance(target.get("scope"), str) else "user"
+    _run_claude(
+        "claude_marketplace_update_failed",
+        "plugin",
+        "marketplace",
+        "update",
+        CLAUDE_MARKETPLACE,
+    )
+    _run_claude(
+        "claude_plugin_update_failed",
+        "plugin",
+        "update",
+        CLAUDE_PLUGIN,
+        "--scope",
+        scope,
+    )
+    refreshed = _claude_plugins()
+    if not any(item.get("id") == CLAUDE_PLUGIN and item.get("enabled") is True for item in refreshed):
+        raise ManagementError("claude_plugin_refresh_missing")
+    return "refreshed"
+
+
+def _refresh_integrations() -> dict[str, object]:
+    pi_status = _refresh_pi()
+    result: dict[str, object] = {"pi": pi_status}
+    statuses = [pi_status]
+    if shutil.which("claude") is not None:
+        claude_status = _refresh_claude()
+        result["claude"] = claude_status
+        statuses.append(claude_status)
+    result["reloadRequired"] = "refreshed" in statuses
+    return result
+
+
 def _switch_dev(raw_source: Path | None, token: str | None) -> dict[str, object]:
     source, package_root, commit = _validate_dev_source(raw_source or Path.cwd())
     if token is not None:
@@ -581,10 +765,15 @@ def _switch_dev(raw_source: Path | None, token: str | None) -> dict[str, object]
         previous = state.get("previousReleaseVersion")
         if not isinstance(previous, str) or not previous:
             raise ManagementError("missing_previous_release_version")
-        pi_status = _refresh_pi()
+        refreshed = _refresh_integrations()
         state.pop("pendingSwitch")
         _atomic_json(_mode_state_path(), state)
-        return {"mode": "dev", "source": str(source), "previousReleaseVersion": previous, "pi": pi_status, "reloadRequired": pi_status == "refreshed"}
+        return {
+            "mode": "dev",
+            "source": str(source),
+            "previousReleaseVersion": previous,
+            **refreshed,
+        }
     state = _mode_state()
     previous = state.get("previousReleaseVersion") if state["mode"] == "dev" else _package_version()
     if not isinstance(previous, str) or not previous:
@@ -607,9 +796,9 @@ def _switch_release(token: str | None) -> dict[str, object]:
         raise ManagementError("missing_previous_release_version")
     if token is not None:
         state = _validated_pending("release", token)
-        pi_status = _refresh_pi()
+        refreshed = _refresh_integrations()
         _atomic_json(_mode_state_path(), {"mode": "release", "previousReleaseVersion": previous})
-        return {"mode": "release", "version": previous, "pi": pi_status, "reloadRequired": pi_status == "refreshed"}
+        return {"mode": "release", "version": previous, **refreshed}
     if state["mode"] != "dev":
         raise ManagementError("missing_previous_release_version")
     switch_token = uuid.uuid4().hex
@@ -650,10 +839,28 @@ def _manifest_version(root: Path) -> str | None:
     return value.get("version") if isinstance(value, dict) and isinstance(value.get("version"), str) else None
 
 
-def _doctor_pi() -> dict[str, object]:
+def _doctor_package() -> dict[str, object]:
     stable = _stable_package_root()
     real = Path(os.path.realpath(stable))
     cli_version = _package_version()
+    linked = not _same_path(stable, real)
+    return {
+        "cliVersion": cli_version,
+        "mode": "dev" if linked else "release",
+        "source": str(real if linked else stable),
+        "npm": {
+            "stablePath": str(stable),
+            "realPath": str(real),
+            "linked": linked,
+            "packageVersion": _manifest_version(stable),
+            "versionMismatch": _manifest_version(stable) != cli_version,
+        },
+    }
+
+
+def _doctor_pi() -> dict[str, object]:
+    stable = _stable_package_root()
+    report = _doctor_package()
     available = shutil.which("pi") is not None
     listed = _pi_list() if available else []
     configured_sources = _pi_sources(listed)
@@ -684,48 +891,82 @@ def _doctor_pi() -> dict[str, object]:
         for item in installed_sources
         if _myspec_source_kind(item, stable) is not None and not _group_skills([item])
     ]
-    linked = not _same_path(stable, real)
-    return {
-        "cliVersion": cli_version,
-        "mode": "dev" if linked else "release",
-        "source": str(real if linked else stable),
-        "npm": {
-            "stablePath": str(stable),
-            "realPath": str(real),
-            "linked": linked,
-            "packageVersion": _manifest_version(stable),
-            "versionMismatch": _manifest_version(stable) != cli_version,
-        },
-        "pi": {
-            "available": available,
-            "registered": bool(stable_skills),
-            "enabledSources": enabled_sources,
-            "disabledSources": disabled_sources,
-            "duplicateEnabledSources": len(enabled_sources) > 1,
-            "sources": records,
-            "listedSources": listed,
-            "skills": stable_skills,
-            "reloadRequired": bool(enabled_sources),
-        },
+    report["pi"] = {
+        "available": available,
+        "registered": bool(stable_skills),
+        "enabledSources": enabled_sources,
+        "disabledSources": disabled_sources,
+        "duplicateEnabledSources": len(enabled_sources) > 1,
+        "sources": records,
+        "listedSources": listed,
+        "skills": stable_skills,
+        "reloadRequired": bool(enabled_sources),
     }
+    return report
+
+
+def _plugin_skills(root: Path | None) -> list[str]:
+    if root is None or not root.is_dir():
+        return []
+    return [name for name in SKILL_NAMES if (root / "skills" / name / "SKILL.md").is_file()]
+
+
+def _doctor_claude() -> dict[str, object]:
+    report = _doctor_package()
+    stable = _stable_package_root()
+    available = shutil.which("claude") is not None
+    marketplaces = _claude_marketplaces() if available else []
+    plugins = _claude_plugins() if available else []
+    marketplace = _named_claude_marketplace(marketplaces) if available else None
+    marketplace_path = _claude_marketplace_path(marketplace) if marketplace is not None else None
+    marketplace_registered = marketplace_path is not None and _same_path(marketplace_path, stable)
+    relevant = [
+        item
+        for item in plugins
+        if isinstance(item.get("id"), str) and str(item["id"]).startswith("my-spec@")
+    ]
+    target = next((item for item in relevant if item.get("id") == CLAUDE_PLUGIN), None)
+    enabled_sources = [str(item["id"]) for item in relevant if item.get("enabled") is True]
+    disabled_sources = [str(item["id"]) for item in relevant if item.get("enabled") is False]
+    install_path = Path(target["installPath"]) if isinstance(target, dict) and isinstance(target.get("installPath"), str) else None
+    report["claude"] = {
+        "available": available,
+        "marketplace": marketplace,
+        "marketplaceRegistered": marketplace_registered,
+        "marketplaceSourceMismatch": marketplace is not None and not marketplace_registered,
+        "source": str(marketplace_path) if marketplace_path is not None else None,
+        "version": target.get("version") if isinstance(target, dict) else None,
+        "versionMismatch": not isinstance(target, dict) or target.get("version") != _package_version(),
+        "enabled": isinstance(target, dict) and target.get("enabled") is True,
+        "enabledSources": enabled_sources,
+        "disabledSources": disabled_sources,
+        "duplicateEnabledSources": len(enabled_sources) > 1,
+        "plugins": relevant,
+        "skills": _plugin_skills(install_path),
+        "reloadRequired": bool(enabled_sources),
+    }
+    return report
 
 
 def add_management_parsers(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     init_parser = commands.add_parser("init")
     init_target = init_parser.add_mutually_exclusive_group(required=True)
     init_target.add_argument("--pi", action="store_true")
+    init_target.add_argument("--claude", action="store_true")
     init_target.add_argument("--all", action="store_true")
     init_target.add_argument("--dev", action="store_true")
     init_target.add_argument("--release", action="store_true")
     init_parser.add_argument("--source", type=Path)
     init_parser.add_argument("--_switch-token", help=argparse.SUPPRESS)
     doctor_parser = commands.add_parser("doctor")
-    doctor_parser.add_argument("--pi", action="store_true")
+    doctor_target = doctor_parser.add_mutually_exclusive_group()
+    doctor_target.add_argument("--pi", action="store_true")
+    doctor_target.add_argument("--claude", action="store_true")
 
 
 def run_management(args: argparse.Namespace) -> dict[str, object]:
     if args.command == "doctor":
-        return _doctor_pi()
+        return _doctor_claude() if args.claude else _doctor_pi()
     if args.dev:
         return _switch_dev(args.source, args._switch_token)
     if args.release:
@@ -736,4 +977,6 @@ def run_management(args: argparse.Namespace) -> dict[str, object]:
         raise ManagementError("source_only_valid_with_dev")
     if args._switch_token is not None:
         raise ManagementError("invalid_switch_token")
-    return _init_all() if args.all else _init_pi()
+    if args.all:
+        return _init_all()
+    return _init_claude() if args.claude else _init_pi()
