@@ -941,6 +941,72 @@ def test_packed_myspec_update_recovers_external_success_before_bookkeeping(
     assert "doctor" not in pending["completed"]
 
 
+def test_packed_myspec_preserves_lock_when_process_status_is_unknown(tmp_path: Path) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = installed_package.parents[2]
+    release_tarball = next((tmp_path / "package").glob("*.tgz"))
+    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    process_probe = tmp_path / "unknown-process-probe"
+    write(
+        process_probe / "sitecustomize.py",
+        """import ctypes
+import os
+
+if os.name == "nt":
+    real_kernel32 = ctypes.windll.kernel32
+
+    class UnknownKernel32:
+        def OpenProcess(self, *_args):
+            return 0
+
+        def GetLastError(self):
+            return 5
+
+        def __getattr__(self, name):
+            return getattr(real_kernel32, name)
+
+    ctypes.windll.kernel32 = UnknownKernel32()
+else:
+    def unknown_process_status(_pid, _signal):
+        raise PermissionError("simulated process query permission error")
+
+    os.kill = unknown_process_status
+""",
+    )
+    env = isolated_myspec_env(tmp_path, prefix, npm_bin, pi_bin)
+    env.update(
+        {
+            "PYTHONPATH": str(process_probe),
+            "MYSPEC_NPM_LOG": str(npm_log),
+            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
+            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
+            "MYSPEC_PI_LOG": str(pi_log),
+        }
+    )
+    lock_path = Path(env["HOME"]) / ".myspec" / "install.lock"
+    lock = {
+        "pid": 424242,
+        "startedAt": "2000-01-01T00:00:00+00:00",
+        "command": "myspec update",
+        "operationId": "unknown-process",
+    }
+
+    for command in (("init", "--pi"), ("update",)):
+        write(lock_path, json.dumps(lock, indent=2))
+        before = lock_path.read_bytes()
+        npm_log.write_text("", encoding="utf-8")
+        pi_log.write_text("", encoding="utf-8")
+
+        rejected = run_cli(executable, *command, env=env)
+
+        assert rejected.returncode == 1
+        assert "error: install_lock_process_unknown: pid=424242" in rejected.stderr
+        assert lock_path.read_bytes() == before
+        assert npm_log.read_text(encoding="utf-8") == ""
+        assert pi_log.read_text(encoding="utf-8") == ""
+
+
 def test_packed_myspec_serializes_init_and_reports_locks_without_mutating_them(
     tmp_path: Path,
 ) -> None:
