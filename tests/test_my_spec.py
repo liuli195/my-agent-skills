@@ -221,8 +221,8 @@ def source(item):
     return item if isinstance(item, str) else item.get("source")
 
 def resolved(raw, settings_path):
-    path = Path(raw)
-    return path.resolve() if path.is_absolute() else (settings_path.parent / path).resolve()
+    path = Path(raw).expanduser()
+    return Path(os.path.abspath(path if path.is_absolute() else settings_path.parent / path))
 
 with Path(os.environ["MYSPEC_PI_LOG"]).open("a", encoding="utf-8") as log:
     log.write(json.dumps({"args": sys.argv[1:], "cwd": str(Path.cwd())}) + "\\n")
@@ -282,6 +282,9 @@ arguments = sys.argv[1:]
 with Path(os.environ["MYSPEC_NPM_LOG"]).open("a", encoding="utf-8") as log:
     log.write(json.dumps(arguments) + "\\n")
 if arguments[:2] == ["install", "--global"]:
+    if os.environ.get("MYSPEC_NPM_FAIL_INSTALL") == "1":
+        print("simulated install failure", file=sys.stderr)
+        raise SystemExit(1)
     arguments[-1] = os.environ["MYSPEC_RELEASE_TARBALL"]
 command = [os.environ["MYSPEC_REAL_NPM"], *arguments]
 if os.name == "nt":
@@ -412,14 +415,27 @@ def test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_f
     shutil.copytree(PLUGIN_ROOT, legacy_package)
     stable_relative = os.path.relpath(installed_package, user_settings.parent)
     legacy_relative = os.path.relpath(legacy_package, project_settings.parent)
+    stable_project_relative = os.path.relpath(installed_package, project_settings.parent)
     write(user_settings, json.dumps({"packages": [stable_relative]}, indent=2))
-    write(project_settings, json.dumps({"packages": [legacy_relative]}, indent=2))
+    write(
+        project_settings,
+        json.dumps(
+            {
+                "packages": [
+                    {"source": stable_project_relative, "skills": []},
+                    legacy_relative,
+                ]
+            },
+            indent=2,
+        ),
+    )
 
     initialized = run_cli(executable, "init", "--pi", env=env, cwd=project)
     assert initialized.returncode == 0, initialized.stderr
     assert json.loads(user_settings.read_text(encoding="utf-8"))["packages"] == [stable_relative]
     assert json.loads(project_settings.read_text(encoding="utf-8"))["packages"] == [
-        {"source": legacy_relative, "skills": []}
+        {"source": stable_project_relative, "skills": []},
+        {"source": legacy_relative, "skills": []},
     ]
     calls = (
         [json.loads(line)["args"] for line in pi_log.read_text(encoding="utf-8").splitlines()]
@@ -429,9 +445,63 @@ def test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_f
     assert not any(call[:1] == ["install"] for call in calls)
 
     report = json.loads(run_cli(executable, "doctor", "--pi", env=env, cwd=project).stdout)
-    assert report["pi"]["registered"] is True
+    assert report["pi"]["registered"] is False
     assert report["pi"]["duplicateEnabledSources"] is False
-    assert report["pi"]["skills"] == list(SKILL_NAMES)
+    assert report["pi"]["skills"] == []
+
+    outside = json.loads(run_cli(executable, "doctor", "--pi", env=env, cwd=tmp_path).stdout)
+    assert outside["pi"]["registered"] is True
+    assert outside["pi"]["duplicateEnabledSources"] is False
+    assert outside["pi"]["skills"] == list(SKILL_NAMES)
+
+
+def test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = installed_package.parents[2]
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    user_settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    project = tmp_path / "consumer"
+    project.mkdir()
+    project_settings = project / ".pi" / "settings.json"
+    write(user_settings, json.dumps({"packages": [str(installed_package)]}, indent=2))
+
+    manifest_path = installed_package / "package.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["pi"]["skills"].append("./skills/my-spec-extra")
+    write(manifest_path, json.dumps(manifest, indent=2))
+    write(installed_package / "skills" / "my-spec-extra" / "SKILL.md", "# extra")
+
+    extra = json.loads(run_cli(executable, "doctor", "--pi", env=env, cwd=project).stdout)
+    assert extra["pi"]["registered"] is True
+    assert extra["pi"]["skills"] == [*SKILL_NAMES, "my-spec-extra"]
+
+    write(
+        project_settings,
+        json.dumps(
+            {
+                "packages": [
+                    {
+                        "source": str(installed_package),
+                        "autoload": False,
+                        "skills": [
+                            "!my-spec-audit",
+                            "+skills/my-spec-audit",
+                            "-skills/my-spec-review",
+                            "!my-spec-extra",
+                        ],
+                    }
+                ]
+            },
+            indent=2,
+        ),
+    )
+    filtered = json.loads(run_cli(executable, "doctor", "--pi", env=env, cwd=project).stdout)
+    assert filtered["pi"]["duplicateEnabledSources"] is False
+    assert filtered["pi"]["skills"] == ["my-spec", "my-spec-add", "my-spec-audit"]
 
 
 def test_packed_myspec_disables_only_exact_legacy_pi_sources(tmp_path: Path) -> None:
@@ -545,8 +615,9 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
     assert dev_diagnosis["source"] == str(PLUGIN_ROOT)
     assert dev_diagnosis["mode"] == "dev"
     assert dev_diagnosis["pi"]["skills"] == list(SKILL_NAMES)
+    assert dev_diagnosis["pi"]["registered"] is True
     assert dev_diagnosis["pi"]["listedSources"] == [
-        {"source": str(installed_package), "path": str(PLUGIN_ROOT)}
+        {"source": str(installed_package), "path": str(installed_package)}
     ]
     settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
     assert json.loads(settings_path.read_text(encoding="utf-8"))["packages"] == [
@@ -580,6 +651,39 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
     explicit = run_cli(executable, "init", "--dev", "--source", REPO_ROOT, env=env, cwd=tmp_path)
     assert explicit.returncode == 0, explicit.stderr
     assert json.loads(explicit.stdout)["source"] == str(REPO_ROOT)
+
+
+def test_packed_myspec_release_install_failure_stays_in_dev_and_retries(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = installed_package.parents[2]
+    release_tarball = next((tmp_path / "package").glob("*.tgz"))
+    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
+    env = isolated_myspec_env(tmp_path, prefix, npm_bin)
+    env.update(
+        {
+            "MYSPEC_NPM_LOG": str(npm_log),
+            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
+            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
+        }
+    )
+
+    entered = run_cli(executable, "init", "--dev", env=env, cwd=REPO_ROOT)
+    assert entered.returncode == 0, entered.stderr
+    state_path = Path(env["HOME"]) / ".myspec" / "state.json"
+
+    failed_env = {**env, "MYSPEC_NPM_FAIL_INSTALL": "1"}
+    failed = run_cli(executable, "init", "--release", env=failed_env)
+    assert failed.returncode == 1
+    assert "error: npm_install_failed: simulated install failure" in failed.stderr
+    failed_state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert failed_state["mode"] == "dev"
+    assert failed_state["previousReleaseVersion"] == "0.1.53"
+
+    retried = run_cli(executable, "init", "--release", env=env)
+    assert retried.returncode == 0, retried.stderr
+    assert json.loads(state_path.read_text(encoding="utf-8"))["mode"] == "release"
 
 
 def test_packed_myspec_mode_switch_does_not_install_a_disabled_pi_integration(
@@ -748,6 +852,88 @@ def test_packed_myspec_rejects_invalid_mode_switches(tmp_path: Path) -> None:
     result = run_cli(executable, "init", "--release", env=env)
     assert result.returncode == 1
     assert "error: missing_previous_release_version" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "package-name",
+        "package-version",
+        "bin-entry",
+        "bin-file",
+        "python-entry",
+        "pi-skills",
+        "skill-file",
+        "codex-marketplace",
+        "claude-marketplace",
+        "plugin-manifest",
+    ],
+)
+def test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_state(
+    tmp_path: Path,
+    case: str,
+) -> None:
+    (tmp_path / "installed").mkdir()
+    executable, installed_package = install_packed_myspec(tmp_path / "installed")
+    prefix = installed_package.parents[2]
+    release_tarball = next((tmp_path / "installed" / "package").glob("*.tgz"))
+    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
+    env = isolated_myspec_env(tmp_path, prefix, npm_bin)
+    env.update(
+        {
+            "MYSPEC_NPM_LOG": str(npm_log),
+            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
+            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
+        }
+    )
+    source = tmp_path / "source"
+    shutil.copytree(REPO_ROOT / ".agents", source / ".agents")
+    shutil.copytree(REPO_ROOT / ".claude-plugin", source / ".claude-plugin")
+    shutil.copytree(PLUGIN_ROOT, source / "plugins" / "my-spec")
+    package_path = source / "plugins" / "my-spec" / "package.json"
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+
+    if case == "package-name":
+        package["name"] = "@liuli195/not-myspec"
+    elif case == "package-version":
+        package["version"] = ""
+    elif case == "bin-entry":
+        package["bin"] = {"myspec": "./bin/other.js"}
+    elif case == "bin-file":
+        (source / "plugins" / "my-spec" / "bin" / "myspec.js").unlink()
+    elif case == "python-entry":
+        (source / "plugins" / "my-spec" / "python" / "spec_ops.py").unlink()
+    elif case == "pi-skills":
+        package["pi"]["skills"].append("./skills/my-spec-extra")
+    elif case == "skill-file":
+        (source / "plugins" / "my-spec" / "skills" / "my-spec-audit" / "SKILL.md").unlink()
+    elif case == "codex-marketplace":
+        market_path = source / ".agents" / "plugins" / "marketplace.json"
+        market = json.loads(market_path.read_text(encoding="utf-8"))
+        next(plugin for plugin in market["plugins"] if plugin["name"] == "my-spec")["source"]["path"] = "../wrong"
+        write(market_path, json.dumps(market, indent=2))
+    elif case == "claude-marketplace":
+        market_path = source / ".claude-plugin" / "marketplace.json"
+        market = json.loads(market_path.read_text(encoding="utf-8"))
+        next(plugin for plugin in market["plugins"] if plugin["name"] == "my-spec")["source"] = "../wrong"
+        write(market_path, json.dumps(market, indent=2))
+    else:
+        plugin_path = source / "plugins" / "my-spec" / ".codex-plugin" / "plugin.json"
+        plugin = json.loads(plugin_path.read_text(encoding="utf-8"))
+        plugin["version"] = "9.9.9"
+        write(plugin_path, json.dumps(plugin, indent=2))
+    write(package_path, json.dumps(package, indent=2))
+
+    rejected = run_cli(executable, "init", "--dev", "--source", source, env=env)
+    assert rejected.returncode == 1
+    assert "error: invalid_dev_source:" in rejected.stderr
+    assert not (Path(env["HOME"]) / ".myspec" / "state.json").exists()
+    calls = (
+        [json.loads(line) for line in npm_log.read_text(encoding="utf-8").splitlines()]
+        if npm_log.exists()
+        else []
+    )
+    assert ["link"] not in calls
 
 
 def windows_py_launcher() -> Path:
@@ -1597,7 +1783,7 @@ def test_plugin_uses_host_native_skill_paths_without_custom_pi_routing() -> None
     assert package["name"] == "@liuli195/myspec"
     assert package["bin"] == {"myspec": "./bin/myspec.js"}
     assert package["publishConfig"] == {"access": "public"}
-    assert package["pi"] == {"skills": ["./skills"]}
+    assert package["pi"] == {"skills": [f"./skills/{name}" for name in SKILL_NAMES]}
     assert "peerDependencies" not in package
     assert "dependencies" not in package
 

@@ -21,7 +21,10 @@
   ],
   "pi": {
     "skills": [
-      "./skills"
+      "./skills/my-spec",
+      "./skills/my-spec-add",
+      "./skills/my-spec-review",
+      "./skills/my-spec-audit"
     ]
   }
 }
