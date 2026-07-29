@@ -308,6 +308,28 @@ def test_packed_myspec_installs_a_working_cli_with_agent_resources(tmp_path: Pat
     assert diff.returncode == 0, diff.stderr
     assert "+### Requirement: 注销" in diff.stdout
 
+    final_apply = run_cli(
+        executable,
+        "apply-delta",
+        specs,
+        delta,
+        specs,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert final_apply.returncode == 0, final_apply.stderr
+    assert final_apply.stdout == ""
+    assert run_cli(executable, "validate-main", specs).returncode == 0
+    assert run_cli(executable, "diff", specs, preview).stdout == ""
+    assert (specs / "accounts" / "spec.md").read_bytes() == (
+        preview / "accounts" / "spec.md"
+    ).read_bytes()
+    assert not (work / "current").exists()
+    assert not (work / "lock").exists()
+    assert not work.exists()
+    assert not any(path.name.startswith(".my-spec-") for path in specs.parent.iterdir())
+
     write(
         specs / "accounts" / "spec.md",
         main_spec("Accounts", requirement("登录", "允许登录")).replace("MUST", "必须"),
