@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
@@ -372,7 +373,7 @@ def refresh(identifier):
     current = plugin(identifier)
     record = {
         "id": identifier,
-        "version": manifest["version"],
+        "version": os.environ.get("MYSPEC_CLAUDE_REPORTED_VERSION", manifest["version"]),
         "scope": "user",
         "enabled": current["enabled"] if current else True,
         "installPath": str(target),
@@ -403,6 +404,9 @@ elif arguments[:2] == ["plugin", "install"] and arguments[3:] == ["--scope", "us
         print("simulated install failure", file=sys.stderr)
         raise SystemExit(1)
     refresh(arguments[2])
+    if os.environ.get("MYSPEC_CLAUDE_FAIL_AFTER_INSTALL") == "1":
+        print("simulated interruption after install", file=sys.stderr)
+        raise SystemExit(1)
 elif arguments[:2] == ["plugin", "update"] and arguments[3:] == ["--scope", "user"]:
     current = plugin(arguments[2])
     name, market_name = arguments[2].split("@", 1)
@@ -417,6 +421,9 @@ elif arguments[:2] == ["plugin", "uninstall"] and arguments[3:] == ["--scope", "
         raise SystemExit(1)
     state["plugins"].remove(current)
     save()
+    if os.environ.get("MYSPEC_CLAUDE_FAIL_AFTER_UNINSTALL") == "1":
+        print("simulated interruption after uninstall", file=sys.stderr)
+        raise SystemExit(1)
 elif arguments[:2] in (["plugin", "enable"], ["plugin", "disable"]) and arguments[3:] == ["--scope", "user"]:
     current = plugin(arguments[2])
     if current is None:
@@ -424,6 +431,9 @@ elif arguments[:2] in (["plugin", "enable"], ["plugin", "disable"]) and argument
         raise SystemExit(1)
     current["enabled"] = arguments[1] == "enable"
     save()
+    if os.environ.get("MYSPEC_CLAUDE_FAIL_AFTER_ENABLED") == str(current["enabled"]).lower():
+        print("simulated interruption after enabled state", file=sys.stderr)
+        raise SystemExit(1)
 elif arguments[:3] == ["plugin", "marketplace", "update"] and len(arguments) == 4:
     if marketplace(arguments[3]) is None:
         raise SystemExit(1)
@@ -526,7 +536,7 @@ def install(identifier):
         "pluginId": identifier,
         "name": name,
         "marketplaceName": market_name,
-        "version": manifest["version"],
+        "version": os.environ.get("MYSPEC_CODEX_REPORTED_VERSION", manifest["version"]),
         "installed": True,
         "source": {"source": "local", "path": str(source)},
         "marketplaceSource": market.get("marketplaceSource"),
@@ -543,11 +553,6 @@ def install(identifier):
 if arguments == ["plugin", "marketplace", "list", "--json"]:
     print(json.dumps({"marketplaces": state["marketplaces"]}))
 elif arguments == ["plugin", "list", "--json"]:
-    fail_number = int(os.environ.get("MYSPEC_CODEX_FAIL_LIST_NUMBER", "0"))
-    calls = [json.loads(line) for line in Path(os.environ["MYSPEC_CODEX_LOG"]).read_text(encoding="utf-8").splitlines()]
-    if fail_number and sum(call == arguments for call in calls) == fail_number:
-        print("simulated list failure", file=sys.stderr)
-        raise SystemExit(1)
     installed = [{**item, "enabled": configured_enabled(item["pluginId"])} for item in state["installed"]]
     print(json.dumps({"installed": installed, "available": state["available"]}))
 elif arguments[:3] == ["plugin", "marketplace", "add"] and arguments[-1:] == ["--json"]:
@@ -563,10 +568,10 @@ elif arguments[:3] == ["plugin", "marketplace", "add"] and arguments[-1:] == ["-
         save()
     print(json.dumps({"name": catalog["name"], "root": str(source)}))
 elif arguments[:2] == ["plugin", "add"] and arguments[-1:] == ["--json"]:
-    if os.environ.get("MYSPEC_CODEX_FAIL_ADD") == "1":
-        print("simulated add failure", file=sys.stderr)
-        raise SystemExit(1)
     install(arguments[2])
+    if os.environ.get("MYSPEC_CODEX_FAIL_AFTER_ADD") == "1":
+        print("simulated interruption after add", file=sys.stderr)
+        raise SystemExit(1)
     print(json.dumps({"pluginId": arguments[2]}))
 elif arguments[:2] == ["plugin", "remove"] and arguments[-1:] == ["--json"]:
     current = plugin(arguments[2])
@@ -625,6 +630,9 @@ if os.name == "nt":
     result = subprocess.run(subprocess.list2cmdline(command), shell=True)
 else:
     result = subprocess.run(command)
+if arguments[:2] == ["install", "--global"] and result.returncode == 0 and os.environ.get("MYSPEC_NPM_FAIL_AFTER_INSTALL") == "1":
+    print("simulated interruption after npm install", file=sys.stderr)
+    raise SystemExit(1)
 raise SystemExit(result.returncode)
 """,
     )
@@ -667,221 +675,6 @@ def isolated_myspec_env(
     }
 
 
-def test_packed_myspec_updates_release_package_and_enabled_integrations_with_new_cli(
-    tmp_path: Path,
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    prefix = installed_package.parents[2]
-    old_tarball = next((installed / "package").glob("*.tgz"))
-    marker = tmp_path / "new-cli.log"
-    new_tarball = pack_myspec_version(tmp_path, "0.1.54", marker)
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", old_tarball)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
-    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, pi_bin, claude_bin, codex_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(old_tarball),
-            "MYSPEC_NPM_LATEST": "0.1.54",
-            "MYSPEC_REEXEC_MARKER": str(marker),
-            "MYSPEC_PI_LOG": str(pi_log),
-            "MYSPEC_CLAUDE_LOG": str(claude_log),
-            "MYSPEC_CLAUDE_STATE": str(claude_state),
-            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
-            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
-            "MYSPEC_CODEX_LOG": str(codex_log),
-            "MYSPEC_CODEX_STATE": str(codex_state),
-        }
-    )
-    write(claude_state, json.dumps({"marketplaces": [], "plugins": []}, indent=2))
-    write(codex_state, json.dumps({"marketplaces": [], "installed": [], "available": []}, indent=2))
-    initialized = run_cli(executable, "init", "--all", env=env)
-    assert initialized.returncode == 0, initialized.stderr
-    marker.unlink(missing_ok=True)
-    npm_log.write_text("", encoding="utf-8")
-    env["MYSPEC_RELEASE_TARBALL"] = str(new_tarball)
-
-    updated = run_cli(executable, "update", env=env)
-
-    assert updated.returncode == 0, updated.stderr
-    output = json.loads(updated.stdout)
-    assert output["version"] == "0.1.54"
-    assert output["pi"] == "refreshed"
-    assert output["claude"] == "refreshed"
-    assert output["codex"] == "refreshed"
-    assert output["doctor"]["cliVersion"] == "0.1.54"
-    assert output["doctor"]["claude"]["version"] == "0.1.54"
-    assert output["doctor"]["codex"]["version"] == "0.1.54"
-    assert marker.read_text(encoding="utf-8").strip()
-    npm_calls = [json.loads(line) for line in npm_log.read_text(encoding="utf-8").splitlines()]
-    assert npm_calls.count(["view", "@liuli195/myspec", "version", "--json"]) == 1
-    assert npm_calls.count(
-        ["install", "--global", "--ignore-scripts", "--no-audit", "--no-fund", "@liuli195/myspec@0.1.54"]
-    ) == 1
-    lock = json.loads((Path(env["HOME"]) / ".myspec" / "install.lock").read_text(encoding="utf-8"))
-    assert lock["released"] is True
-    state = json.loads((Path(env["HOME"]) / ".myspec" / "state.json").read_text(encoding="utf-8"))
-    assert state["mode"] == "release"
-    assert "pendingOperation" not in state
-
-
-def test_packed_myspec_update_retries_npm_failure_without_requerying_latest(
-    tmp_path: Path,
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    prefix = installed_package.parents[2]
-    old_tarball = next((installed / "package").glob("*.tgz"))
-    marker = tmp_path / "new-cli.log"
-    new_tarball = pack_myspec_version(tmp_path, "0.1.54", marker)
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", old_tarball)
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(new_tarball),
-            "MYSPEC_NPM_LATEST": "0.1.54",
-            "MYSPEC_REEXEC_MARKER": str(marker),
-        }
-    )
-
-    failed = run_cli(executable, "update", env={**env, "MYSPEC_NPM_FAIL_INSTALL": "1"})
-
-    assert failed.returncode == 1
-    assert "error: npm_install_failed: simulated install failure" in failed.stderr
-    state_path = Path(env["HOME"]) / ".myspec" / "state.json"
-    pending = json.loads(state_path.read_text(encoding="utf-8"))["pendingOperation"]
-    assert pending["completed"] == ["preflight"]
-    assert pending["lastError"] == "npm_install_failed: simulated install failure"
-    lock = json.loads((Path(env["HOME"]) / ".myspec" / "install.lock").read_text(encoding="utf-8"))
-    assert lock["released"] is True
-
-    retried = run_cli(executable, "update", env=env)
-
-    assert retried.returncode == 0, retried.stderr
-    assert json.loads(retried.stdout)["version"] == "0.1.54"
-    calls = [json.loads(line) for line in npm_log.read_text(encoding="utf-8").splitlines()]
-    assert calls.count(["view", "@liuli195/myspec", "version", "--json"]) == 1
-    assert calls.count(
-        ["install", "--global", "--ignore-scripts", "--no-audit", "--no-fund", "@liuli195/myspec@0.1.54"]
-    ) == 2
-    assert marker.read_text(encoding="utf-8").strip()
-
-
-@pytest.mark.parametrize(
-    ("failure_variable", "failure_value", "expected_error", "completed"),
-    [
-        (
-            "MYSPEC_CLAUDE_FAIL_INSTALL",
-            "1",
-            "claude_plugin_install_failed: simulated install failure",
-            ["preflight", "npm", "pi", "claude-marketplace", "claude-uninstall"],
-        ),
-        (
-            "MYSPEC_CODEX_FAIL_ADD",
-            "1",
-            "codex_plugin_add_failed: simulated add failure",
-            [
-                "preflight",
-                "npm",
-                "pi",
-                "claude-marketplace",
-                "claude-uninstall",
-                "claude-install",
-                "claude-enable",
-                "claude",
-                "codex-remove",
-            ],
-        ),
-        (
-            "MYSPEC_CODEX_FAIL_LIST_NUMBER",
-            "4",
-            "codex_plugin_list_failed: simulated list failure",
-            [
-                "preflight",
-                "npm",
-                "pi",
-                "claude-marketplace",
-                "claude-uninstall",
-                "claude-install",
-                "claude-enable",
-                "claude",
-                "codex-remove",
-                "codex-add",
-                "codex",
-            ],
-        ),
-    ],
-)
-def test_packed_myspec_update_resumes_after_client_refresh_failure(
-    tmp_path: Path,
-    failure_variable: str,
-    failure_value: str,
-    expected_error: str,
-    completed: list[str],
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    prefix = installed_package.parents[2]
-    old_tarball = next((installed / "package").glob("*.tgz"))
-    new_tarball = pack_myspec_version(tmp_path, "0.1.54")
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", old_tarball)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
-    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, pi_bin, claude_bin, codex_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(old_tarball),
-            "MYSPEC_NPM_LATEST": "0.1.54",
-            "MYSPEC_PI_LOG": str(pi_log),
-            "MYSPEC_CLAUDE_LOG": str(claude_log),
-            "MYSPEC_CLAUDE_STATE": str(claude_state),
-            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
-            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
-            "MYSPEC_CODEX_LOG": str(codex_log),
-            "MYSPEC_CODEX_STATE": str(codex_state),
-        }
-    )
-    write(claude_state, json.dumps({"marketplaces": [], "plugins": []}, indent=2))
-    write(codex_state, json.dumps({"marketplaces": [], "installed": [], "available": []}, indent=2))
-    assert run_cli(executable, "init", "--all", env=env).returncode == 0
-    npm_log.write_text("", encoding="utf-8")
-    claude_log.write_text("", encoding="utf-8")
-    codex_log.write_text("", encoding="utf-8")
-    env["MYSPEC_RELEASE_TARBALL"] = str(new_tarball)
-
-    failed = run_cli(executable, "update", env={**env, failure_variable: failure_value})
-
-    assert failed.returncode == 1
-    assert f"error: {expected_error}" in failed.stderr
-    state_path = Path(env["HOME"]) / ".myspec" / "state.json"
-    pending = json.loads(state_path.read_text(encoding="utf-8"))["pendingOperation"]
-    assert pending["completed"] == completed
-    assert pending["lastError"] == expected_error
-
-    retried = run_cli(executable, "update", env=env)
-
-    assert retried.returncode == 0, retried.stderr
-    assert json.loads(retried.stdout)["version"] == "0.1.54"
-    calls = [json.loads(line) for line in npm_log.read_text(encoding="utf-8").splitlines()]
-    assert calls.count(["view", "@liuli195/myspec", "version", "--json"]) == 1
-    assert calls.count(
-        ["install", "--global", "--ignore-scripts", "--no-audit", "--no-fund", "@liuli195/myspec@0.1.54"]
-    ) == 1
-    assert "pendingOperation" not in json.loads(state_path.read_text(encoding="utf-8"))
-
-
 def test_packed_myspec_update_preflights_installed_clients_before_package_write(
     tmp_path: Path,
 ) -> None:
@@ -904,7 +697,22 @@ def test_packed_myspec_update_preflights_installed_clients_before_package_write(
             "MYSPEC_CODEX_STATE": str(codex_state),
         }
     )
-    write(codex_state, json.dumps({"marketplaces": "broken", "installed": [], "available": []}))
+    write(
+        codex_state,
+        json.dumps(
+            {
+                "marketplaces": "broken",
+                "installed": [
+                    {
+                        "pluginId": "my-spec@myspec",
+                        "version": "0.1.53",
+                        "installed": True,
+                    }
+                ],
+                "available": [],
+            }
+        ),
+    )
     package_before = (installed_package / "package.json").read_bytes()
 
     failed = run_cli(executable, "update", env=env)
@@ -916,8 +724,13 @@ def test_packed_myspec_update_preflights_installed_clients_before_package_write(
     calls = [json.loads(line) for line in npm_log.read_text(encoding="utf-8").splitlines()]
     assert not any(call[:2] == ["install", "--global"] for call in calls)
 
+    write(codex_state, json.dumps({"marketplaces": "broken", "installed": [], "available": []}))
+    skipped = run_cli(executable, "update", env={**env, "MYSPEC_NPM_LATEST": "0.1.53"})
+    assert skipped.returncode == 0, skipped.stderr
+    assert "codex" not in json.loads(skipped.stdout)
 
-def test_packed_myspec_update_does_not_install_missing_or_disabled_integrations(
+
+def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_missing(
     tmp_path: Path,
 ) -> None:
     installed = tmp_path / "installed"
@@ -975,25 +788,157 @@ def test_packed_myspec_update_does_not_install_missing_or_disabled_integrations(
             indent=2,
         ),
     )
-    write(codex_state, json.dumps({"marketplaces": [], "installed": [], "available": []}, indent=2))
+    write(
+        codex_state,
+        json.dumps(
+            {
+                "marketplaces": [
+                    {
+                        "name": "myspec",
+                        "root": str(installed_package),
+                        "marketplaceSource": {"sourceType": "local", "source": str(installed_package)},
+                    }
+                ],
+                "installed": [
+                    {
+                        "pluginId": "my-spec@myspec",
+                        "name": "my-spec",
+                        "marketplaceName": "myspec",
+                        "version": "0.1.53",
+                        "installed": True,
+                        "source": {"source": "local", "path": str(installed_package)},
+                    }
+                ],
+                "available": [],
+            },
+            indent=2,
+        ),
+    )
+    write(Path(env["CODEX_HOME"]) / "config.toml", '[plugins."my-spec@myspec"]\nenabled = false\n')
     pi_before = (Path(env["PI_CODING_AGENT_DIR"]) / "settings.json").read_bytes()
-    claude_before = claude_state.read_bytes()
-    codex_before = codex_state.read_bytes()
+
+    interrupted = run_cli(
+        executable,
+        "update",
+        env={**env, "MYSPEC_CLAUDE_FAIL_AFTER_ENABLED": "false"},
+    )
+    assert interrupted.returncode == 1
+    assert "claude_plugin_disable_failed: simulated interruption after enabled state" in interrupted.stderr
 
     updated = run_cli(executable, "update", env=env)
 
     assert updated.returncode == 0, updated.stderr
     output = json.loads(updated.stdout)
-    assert set(output) == {"version", "reloadRequired", "doctor"}
-    assert output["reloadRequired"] is False
+    assert output["version"] == "0.1.54"
+    assert output["pi"] == "refreshed"
+    assert output["claude"] == "refreshed"
+    assert output["codex"] == "refreshed"
+    assert output["doctor"]["pi"]["enabled"] is False
+    assert output["doctor"]["claude"]["enabled"] is False
+    assert output["doctor"]["codex"]["enabled"] is False
+    assert output["doctor"]["claude"]["version"] == "0.1.54"
+    assert output["doctor"]["codex"]["version"] == "0.1.54"
     assert (Path(env["PI_CODING_AGENT_DIR"]) / "settings.json").read_bytes() == pi_before
-    assert claude_state.read_bytes() == claude_before
-    assert codex_state.read_bytes() == codex_before
-    assert not any(
-        call[:2] in (["plugin", "install"], ["plugin", "add"])
-        for log in (claude_log, codex_log)
-        for call in [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    claude_calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
+    assert ["plugin", "uninstall", "my-spec@myspec", "--scope", "user", "--keep-data"] in claude_calls
+    assert ["plugin", "install", "my-spec@myspec", "--scope", "user"] in claude_calls
+    assert claude_calls.count(["plugin", "disable", "my-spec@myspec", "--scope", "user"]) == 1
+    codex_calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
+    assert ["plugin", "remove", "my-spec@myspec", "--json"] in codex_calls
+    assert ["plugin", "add", "my-spec@myspec", "--json"] in codex_calls
+
+
+def test_packed_myspec_update_recovers_external_success_before_bookkeeping(
+    tmp_path: Path,
+) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = install_packed_myspec(installed)
+    prefix = installed_package.parents[2]
+    old_tarball = next((installed / "package").glob("*.tgz"))
+    marker = tmp_path / "new-cli.log"
+    new_tarball = pack_myspec_version(tmp_path, "0.1.54", marker)
+    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", old_tarball)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
+    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
+    env = isolated_myspec_env(tmp_path, prefix, npm_bin, pi_bin, claude_bin, codex_bin)
+    env.update(
+        {
+            "MYSPEC_NPM_LOG": str(npm_log),
+            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
+            "MYSPEC_RELEASE_TARBALL": str(old_tarball),
+            "MYSPEC_NPM_LATEST": "0.1.54",
+            "MYSPEC_REEXEC_MARKER": str(marker),
+            "MYSPEC_PI_LOG": str(pi_log),
+            "MYSPEC_CLAUDE_LOG": str(claude_log),
+            "MYSPEC_CLAUDE_STATE": str(claude_state),
+            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
+            "MYSPEC_CODEX_LOG": str(codex_log),
+            "MYSPEC_CODEX_STATE": str(codex_state),
+        }
     )
+    write(claude_state, json.dumps({"marketplaces": [], "plugins": []}, indent=2))
+    write(codex_state, json.dumps({"marketplaces": [], "installed": [], "available": []}, indent=2))
+    assert run_cli(executable, "init", "--all", env=env).returncode == 0
+    for log in (npm_log, claude_log, codex_log):
+        log.write_text("", encoding="utf-8")
+    env["MYSPEC_RELEASE_TARBALL"] = str(new_tarball)
+
+    failures = [
+        ("MYSPEC_NPM_FAIL_AFTER_INSTALL", "npm_install_failed: simulated interruption after npm install"),
+        ("MYSPEC_CLAUDE_FAIL_AFTER_UNINSTALL", "claude_plugin_uninstall_failed: simulated interruption after uninstall"),
+        ("MYSPEC_CLAUDE_FAIL_AFTER_INSTALL", "claude_plugin_install_failed: simulated interruption after install"),
+        ("MYSPEC_CODEX_FAIL_AFTER_ADD", "codex_plugin_add_failed: simulated interruption after add"),
+    ]
+    for failure_variable, expected_error in failures:
+        failed = run_cli(executable, "update", env={**env, failure_variable: "1"})
+        assert failed.returncode == 1
+        assert f"error: {expected_error}" in failed.stderr
+
+    retried = run_cli(executable, "update", env=env)
+
+    assert retried.returncode == 0, retried.stderr
+    output = json.loads(retried.stdout)
+    assert output["version"] == "0.1.54"
+    assert output["doctor"]["cliVersion"] == "0.1.54"
+    assert output["doctor"]["pi"]["version"] == "0.1.54"
+    assert output["doctor"]["claude"]["version"] == "0.1.54"
+    assert output["doctor"]["codex"]["version"] == "0.1.54"
+    assert marker.read_text(encoding="utf-8").strip()
+    npm_calls = [json.loads(line) for line in npm_log.read_text(encoding="utf-8").splitlines()]
+    claude_calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
+    codex_calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
+    assert npm_calls.count(
+        ["install", "--global", "--ignore-scripts", "--no-audit", "--no-fund", "@liuli195/myspec@0.1.54"]
+    ) == 1
+    assert claude_calls.count(
+        ["plugin", "uninstall", "my-spec@myspec", "--scope", "user", "--keep-data"]
+    ) == 1
+    assert claude_calls.count(["plugin", "install", "my-spec@myspec", "--scope", "user"]) == 1
+    assert codex_calls.count(["plugin", "add", "my-spec@myspec", "--json"]) == 1
+    state_path = Path(env["HOME"]) / ".myspec" / "state.json"
+    assert "pendingOperation" not in json.loads(state_path.read_text(encoding="utf-8"))
+
+    wrong_version_tarball = pack_myspec_version(tmp_path, "0.1.55")
+    mismatch = run_cli(
+        executable,
+        "update",
+        env={
+            **env,
+            "MYSPEC_RELEASE_TARBALL": str(wrong_version_tarball),
+            "MYSPEC_NPM_LATEST": "0.1.55",
+            "MYSPEC_CLAUDE_REPORTED_VERSION": "0.0.0",
+        },
+    )
+    expected_error = "claude_plugin_refresh_version_mismatch"
+    assert mismatch.returncode == 1
+    assert f"error: {expected_error}" in mismatch.stderr
+    pending = json.loads(state_path.read_text(encoding="utf-8"))["pendingOperation"]
+    assert pending["targetVersion"] == "0.1.55"
+    assert pending["lastError"] == expected_error
+    assert "doctor" not in pending["completed"]
 
 
 def test_packed_myspec_serializes_init_and_reports_locks_without_mutating_them(
@@ -1002,6 +947,14 @@ def test_packed_myspec_serializes_init_and_reports_locks_without_mutating_them(
     executable, installed_package = install_packed_myspec(tmp_path)
     env = isolated_myspec_env(tmp_path, installed_package.parents[2])
     lock_path = Path(env["HOME"]) / ".myspec" / "install.lock"
+    for malformed in ({"command": "myspec update"}, {"pid": True}, {"pid": "123"}, {"pid": 0}):
+        write(lock_path, json.dumps(malformed))
+        malformed_before = lock_path.read_bytes()
+        rejected = run_cli(executable, "init", "--all", env=env)
+        assert rejected.returncode == 1
+        assert f"error: invalid_install_lock: {lock_path}" in rejected.stderr
+        assert lock_path.read_bytes() == malformed_before
+
     active = {
         "pid": os.getpid(),
         "startedAt": "2000-01-01T00:00:00+00:00",
@@ -1078,6 +1031,47 @@ def test_packed_myspec_doctor_reports_partial_update_read_only(tmp_path: Path) -
     }
     assert report["installation"]["lock"] is None
     assert state_path.read_bytes() == before
+
+    token = "resume-secret"
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    write(
+        state_path,
+        json.dumps(
+            {
+                "mode": "release",
+                "pendingOperation": {
+                    "command": "update",
+                    "targetVersion": "0.1.54",
+                    "integrations": [],
+                    "scopes": {},
+                    "enabled": {},
+                    "completed": ["preflight", "npm"],
+                    "tokenHash": token_hash,
+                },
+            },
+            indent=2,
+        ),
+    )
+    write(
+        Path(env["HOME"]) / ".myspec" / "install.lock",
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "startedAt": "2000-01-01T00:00:00+00:00",
+                "command": "myspec update",
+                "operationId": "resume-operation",
+                "handoffTokenHash": token_hash,
+            },
+            indent=2,
+        ),
+    )
+    forged = run_cli(executable, "update", "--_update-token", token, env=env)
+    assert forged.returncode == 1
+    assert "error: update_runtime_mismatch:" in forged.stderr
+    assert json.loads(state_path.read_text(encoding="utf-8"))["pendingOperation"]["completed"] == [
+        "preflight",
+        "npm",
+    ]
 
 
 def test_packed_myspec_update_rejects_dev_mode_and_forged_resume(tmp_path: Path) -> None:
