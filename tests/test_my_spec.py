@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -134,7 +138,7 @@ def run_confirmed_workflow(
     return diff.stdout
 
 
-def test_packed_myspec_installs_a_working_cli_with_agent_resources(tmp_path: Path) -> None:
+def install_packed_myspec(tmp_path: Path) -> tuple[Path, Path]:
     npm = shutil.which("npm")
     assert npm is not None
     package_dir = tmp_path / "package"
@@ -149,7 +153,6 @@ def test_packed_myspec_installs_a_working_cli_with_agent_resources(tmp_path: Pat
     assert packed.returncode == 0, packed.stderr
     package = json.loads(packed.stdout)[0]
     assert package["name"] == "@liuli195/myspec"
-    tarball = package_dir / package["filename"]
 
     prefix = tmp_path / "npm-prefix"
     installed = subprocess.run(
@@ -162,7 +165,7 @@ def test_packed_myspec_installs_a_working_cli_with_agent_resources(tmp_path: Pat
             "--ignore-scripts",
             "--no-audit",
             "--no-fund",
-            str(tarball),
+            str(package_dir / package["filename"]),
         ],
         text=True,
         capture_output=True,
@@ -171,12 +174,28 @@ def test_packed_myspec_installs_a_working_cli_with_agent_resources(tmp_path: Pat
     assert installed.returncode == 0, installed.stderr
     executable = prefix / ("myspec.cmd" if sys.platform == "win32" else "bin/myspec")
     assert executable.is_file()
-    help_result = subprocess.run(
-        [str(executable), "--help"],
+    npm_root = subprocess.run(
+        [npm, "root", "--global", "--prefix", str(prefix)],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return executable, Path(npm_root.stdout.strip()) / "@liuli195" / "myspec"
+
+
+def run_cli(executable: Path, *args: object, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(executable), *(str(arg) for arg in args)],
+        env=env,
         text=True,
         capture_output=True,
         check=False,
     )
+
+
+def test_packed_myspec_installs_a_working_cli_with_agent_resources(tmp_path: Path) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    help_result = run_cli(executable, "--help")
     assert help_result.returncode == 0
     assert help_result.stdout.startswith("usage: myspec ")
     for command in (
@@ -193,36 +212,121 @@ def test_packed_myspec_installs_a_working_cli_with_agent_resources(tmp_path: Pat
         assert command in help_result.stdout
 
     specs = tmp_path / "specs"
+    delta = tmp_path / "delta"
+    preview = tmp_path / "preview"
+    work = tmp_path / "work"
+    conflicts_file = tmp_path / "conflicts.json"
     write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
-    valid = subprocess.run(
-        [str(executable), "validate-main", str(specs)],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert valid.returncode == 0
-    assert valid.stdout == ""
-    assert valid.stderr == ""
+    write(
+        delta / "accounts" / "spec.md",
+        """## ADDED Requirements
 
-    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")).replace("MUST", "必须"))
-    invalid = subprocess.run(
-        [str(executable), "validate-main", str(specs)],
-        text=True,
-        capture_output=True,
-        check=False,
+### Requirement: 注销
+
+系统 MUST 允许用户注销。
+
+#### Scenario: 主动注销
+
+- **WHEN** 用户选择注销
+- **THEN** 系统结束会话
+""",
     )
+    conflict = {
+        "id": "conflict-1",
+        "candidate": "新增注销",
+        "evidence": ["accounts/spec.md:1"],
+        "reason": "需要确认",
+        "recommendation": "接受",
+    }
+    write(conflicts_file, json.dumps([conflict], ensure_ascii=False))
+
+    for command in (
+        run_cli(executable, "validate-main", specs),
+        run_cli(executable, "validate-delta", delta, specs),
+        run_cli(executable, "state-init", work, "add", "specs-fingerprint", "input-fingerprint"),
+    ):
+        assert command.returncode == 0, command.stderr
+        assert command.stdout == ""
+        assert command.stderr == ""
+
+    stored = run_cli(
+        executable,
+        "state-set-conflicts",
+        work,
+        conflicts_file,
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert stored.returncode == 0, stored.stderr
+    assert json.loads(stored.stdout) == {"status": "WAITING_DECISION", "total": 1, "remaining": 1}
+    current = run_cli(executable, "state-current", work, "specs-fingerprint", "input-fingerprint")
+    assert current.returncode == 0, current.stderr
+    assert json.loads(current.stdout) == {"index": 0, "total": 1, "conflict": conflict}
+
+    wrong_decision = run_cli(
+        executable,
+        "state-decide",
+        work,
+        "wrong-conflict",
+        "accept",
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert wrong_decision.returncode == 1
+    assert "error: unexpected_conflict_id: expected_conflict-1: wrong-conflict" in wrong_decision.stderr
+    decided = run_cli(
+        executable,
+        "state-decide",
+        work,
+        "conflict-1",
+        "accept",
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert decided.returncode == 0, decided.stderr
+    expected_ready = {"status": "READY_TO_APPLY", "total": 1, "decided": 1, "remaining": 0}
+    assert json.loads(decided.stdout) == expected_ready
+    status = run_cli(executable, "state-status", work, "specs-fingerprint", "input-fingerprint")
+    assert status.returncode == 0, status.stderr
+    assert json.loads(status.stdout) == expected_ready
+
+    applied = run_cli(
+        executable,
+        "apply-delta",
+        specs,
+        delta,
+        preview,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert applied.returncode == 0, applied.stderr
+    assert applied.stdout == ""
+    assert run_cli(executable, "validate-main", preview).returncode == 0
+    assert "### Requirement: 注销" in (preview / "accounts" / "spec.md").read_text(encoding="utf-8")
+    diff = run_cli(executable, "diff", specs, preview)
+    assert diff.returncode == 0, diff.stderr
+    assert "+### Requirement: 注销" in diff.stdout
+
+    write(
+        specs / "accounts" / "spec.md",
+        main_spec("Accounts", requirement("登录", "允许登录")).replace("MUST", "必须"),
+    )
+    invalid = run_cli(executable, "validate-main", specs)
     assert invalid.returncode == 1
     assert "error: missing_must_or_shall: 登录" in invalid.stderr
     assert "Traceback" not in invalid.stderr
+    missing_argument = run_cli(executable, "state-init", work)
+    assert missing_argument.returncode == 2
+    assert "usage: myspec state-init" in missing_argument.stderr
 
     node = shutil.which("node")
     assert node is not None
-    no_python = subprocess.run(
-        [str(executable), "validate-main", str(specs)],
+    no_python = run_cli(
+        executable,
+        "validate-main",
+        specs,
         env={**os.environ, "PATH": str(Path(node).parent), "MYSPEC_PYTHON": "not-a-python"},
-        text=True,
-        capture_output=True,
-        check=False,
     )
     assert no_python.returncode != 0
     assert "error: Python 3.12 or newer is required" in no_python.stderr
@@ -231,19 +335,57 @@ def test_packed_myspec_installs_a_working_cli_with_agent_resources(tmp_path: Pat
         "python3 (unavailable), python (unavailable)"
     ) in no_python.stderr
 
-    npm_root = subprocess.run(
-        [npm, "root", "--global", "--prefix", str(prefix)],
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    installed_package = Path(npm_root.stdout.strip()) / "@liuli195" / "myspec"
     assert {path.name for path in (installed_package / "skills").iterdir()} == set(SKILL_NAMES)
     assert (installed_package / ".claude-plugin" / "plugin.json").is_file()
     assert (installed_package / ".codex-plugin" / "plugin.json").is_file()
     assert [path.relative_to(installed_package).as_posix() for path in installed_package.rglob("spec_ops.py")] == [
-        "python/spec_ops.py"
+        "python/spec_ops.py",
+        "skills/my-spec/scripts/spec_ops.py",
     ]
+
+
+def test_myspec_launcher_forwards_sigterm_to_python(tmp_path: Path) -> None:
+    if sys.platform == "win32":
+        pytest.skip("Windows cannot deliver a catchable SIGTERM to another process")
+    executable, installed_package = install_packed_myspec(tmp_path)
+    marker = tmp_path / "signal.txt"
+    ready = tmp_path / "ready.txt"
+    (installed_package / "python" / "spec_ops.py").write_text(
+        """import os
+import signal
+import sys
+import time
+from pathlib import Path
+
+marker = Path(sys.argv[1])
+ready = Path(sys.argv[2])
+parent = os.getppid()
+
+def stop(signum, _frame):
+    marker.write_text(str(signum), encoding="utf-8")
+    raise SystemExit(0)
+
+signal.signal(signal.SIGTERM, stop)
+ready.write_text("ready", encoding="utf-8")
+while os.getppid() == parent:
+    time.sleep(0.01)
+""",
+        encoding="utf-8",
+    )
+    process = subprocess.Popen(
+        [str(executable), str(marker), str(ready)],
+        env={**os.environ, "MYSPEC_PYTHON": sys.executable},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 10
+    while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert ready.exists(), "Python child did not start"
+
+    process.send_signal(signal.SIGTERM)
+    assert process.wait(timeout=10) == 0
+    assert marker.read_text(encoding="utf-8") == str(signal.SIGTERM)
 
 
 def test_spec_ops_cli_validates_applies_all_delta_operations_and_diffs(tmp_path: Path) -> None:
@@ -712,6 +854,11 @@ def test_skill_entries_route_add_review_and_audit_with_safe_boundaries() -> None
         entry = (PLUGIN_ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
         assert "../my-spec/SKILL.md" in entry
         assert "../my-spec/scripts/spec_ops.py" in entry
+
+    legacy_cli = PLUGIN_ROOT / "skills" / "my-spec" / "scripts" / "spec_ops.py"
+    legacy_help = run_python(legacy_cli, "--help")
+    assert legacy_help.returncode == 0, legacy_help.stderr
+    assert legacy_help.stdout.startswith("usage: myspec ")
 
     add = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "add-document.md").read_text(encoding="utf-8")
     review = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "review.md").read_text(encoding="utf-8")

@@ -40,11 +40,20 @@ const child = spawn(python, [...prefix, core, ...process.argv.slice(2)], {
   stdio: "inherit",
   windowsHide: true,
 });
+const signalHandlers = new Map(
+  ["SIGINT", "SIGTERM"].map((signal) => [signal, () => child.kill(signal)]),
+);
+for (const [signal, handler] of signalHandlers) {
+  process.on(signal, handler);
+}
 child.on("error", (error) => {
   console.error(`error: cannot start Python: ${error.message}`);
   process.exit(1);
 });
 child.on("exit", (code, signal) => {
+  for (const [forwardedSignal, handler] of signalHandlers) {
+    process.off(forwardedSignal, handler);
+  }
   if (signal) {
     process.kill(process.pid, signal);
   } else {
