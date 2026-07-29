@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -9,6 +10,7 @@ import shutil
 import subprocess
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
@@ -607,6 +609,122 @@ def _mode_state_path() -> Path:
     return Path.home() / ".myspec" / "state.json"
 
 
+def _install_lock_path() -> Path:
+    return Path.home() / ".myspec" / "install.lock"
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+
+        process = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        if not process:
+            return ctypes.windll.kernel32.GetLastError() != 87
+        try:
+            exit_code = ctypes.c_ulong()
+            return bool(ctypes.windll.kernel32.GetExitCodeProcess(process, ctypes.byref(exit_code))) and exit_code.value == 259
+        finally:
+            ctypes.windll.kernel32.CloseHandle(process)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+    return True
+
+
+def _lock_value() -> dict[str, object]:
+    path = _install_lock_path()
+    value = _read_json(path)
+    if not isinstance(value, dict) or not isinstance(value.get("pid"), int):
+        raise ManagementError(f"invalid_install_lock: {path}")
+    return value
+
+
+def _acquire_install_lock(command: str) -> str:
+    path = _install_lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    while True:
+        operation_id = uuid.uuid4().hex
+        value = {
+            "pid": os.getpid(),
+            "startedAt": datetime.now(timezone.utc).isoformat(),
+            "command": command,
+            "operationId": operation_id,
+        }
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                json.dump(value, handle, ensure_ascii=False, indent=2)
+                handle.write("\n")
+            return operation_id
+        except FileExistsError:
+            current = _lock_value()
+            pid = current["pid"]
+            assert isinstance(pid, int)
+            if _pid_alive(pid):
+                raise ManagementError(
+                    f"install_locked: pid={pid} startedAt={current.get('startedAt')} command={current.get('command')}"
+                )
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _release_install_lock(operation_id: str) -> None:
+    path = _install_lock_path()
+    if not path.exists():
+        return
+    value = _lock_value()
+    if value.get("operationId") == operation_id and value.get("pid") == os.getpid():
+        path.unlink()
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _prepare_lock_handoff(operation_id: str, token: str) -> None:
+    value = _lock_value()
+    if value.get("operationId") != operation_id or value.get("pid") != os.getpid():
+        raise ManagementError("invalid_install_lock_owner")
+    value["handoffTokenHash"] = _token_hash(token)
+    _atomic_json(_install_lock_path(), value)
+
+
+def _claim_install_lock(token: str) -> str:
+    value = _lock_value()
+    if value.get("handoffTokenHash") != _token_hash(token):
+        raise ManagementError("invalid_install_lock_handoff")
+    operation_id = value.get("operationId")
+    if not isinstance(operation_id, str):
+        raise ManagementError("invalid_install_lock_handoff")
+    value["pid"] = os.getpid()
+    value.pop("handoffTokenHash", None)
+    _atomic_json(_install_lock_path(), value)
+    return operation_id
+
+
+def _lock_report() -> dict[str, object] | None:
+    path = _install_lock_path()
+    if not path.exists():
+        return None
+    value = _lock_value()
+    pid = value["pid"]
+    assert isinstance(pid, int)
+    return {
+        "pid": pid,
+        "startedAt": value.get("startedAt"),
+        "command": value.get("command"),
+        "active": _pid_alive(pid),
+    }
+
+
 def _mode_state() -> dict[str, object]:
     path = _mode_state_path()
     if not path.exists():
@@ -740,7 +858,8 @@ def _stable_cli() -> Path:
     return prefix / "myspec.cmd" if os.name == "nt" else prefix / "bin" / "myspec"
 
 
-def _resume_after_switch(arguments: list[str], token: str) -> dict[str, object]:
+def _resume_after_switch(arguments: list[str], token: str, operation_id: str) -> dict[str, object]:
+    _prepare_lock_handoff(operation_id, token)
     invocation = _exact_command(_stable_cli(), *arguments, "--_switch-token", token)
     result = subprocess.run(
         invocation,
@@ -957,7 +1076,7 @@ def _refresh_integrations() -> dict[str, object]:
     return result
 
 
-def _switch_dev(raw_source: Path | None, token: str | None) -> dict[str, object]:
+def _switch_dev(raw_source: Path | None, token: str | None, operation_id: str) -> dict[str, object]:
     source, package_root, commit = _validate_dev_source(raw_source or Path.cwd())
     if token is not None:
         state = _validated_pending("dev", token)
@@ -985,10 +1104,10 @@ def _switch_dev(raw_source: Path | None, token: str | None) -> dict[str, object]
     linked = _run("npm", "link", cwd=package_root)
     if linked.returncode != 0:
         raise ManagementError(f"npm_link_failed: {linked.stderr.strip()}")
-    return _resume_after_switch(["init", "--dev", "--source", str(source)], switch_token)
+    return _resume_after_switch(["init", "--dev", "--source", str(source)], switch_token, operation_id)
 
 
-def _switch_release(token: str | None) -> dict[str, object]:
+def _switch_release(token: str | None, operation_id: str) -> dict[str, object]:
     state = _mode_state()
     previous = state.get("previousReleaseVersion")
     if not isinstance(previous, str) or not previous:
@@ -1006,7 +1125,7 @@ def _switch_release(token: str | None) -> dict[str, object]:
     installed = _run("npm", "install", "--global", "--ignore-scripts", "--no-audit", "--no-fund", f"{PACKAGE_NAME}@{previous}")
     if installed.returncode != 0:
         raise ManagementError(f"npm_install_failed: {installed.stderr.strip()}")
-    return _resume_after_switch(["init", "--release"], switch_token)
+    return _resume_after_switch(["init", "--release"], switch_token, operation_id)
 
 
 def _pi_list() -> list[dict[str, str]]:
@@ -1181,6 +1300,257 @@ def _doctor_codex() -> dict[str, object]:
     return report
 
 
+def _latest_version() -> str:
+    result = _run("npm", "view", PACKAGE_NAME, "version", "--json")
+    if result.returncode != 0:
+        raise ManagementError(f"npm_latest_failed: {result.stderr.strip()}")
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ManagementError("npm_latest_failed: invalid_json") from exc
+    if not isinstance(value, str) or re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", value) is None:
+        raise ManagementError("npm_latest_failed: invalid_version")
+    return value
+
+
+def _preflight_integrations() -> tuple[list[str], dict[str, str]]:
+    integrations: list[str] = []
+    scopes: dict[str, str] = {}
+    if shutil.which("pi") is not None and _pi_is_configured(_pi_list()):
+        integrations.append("pi")
+    if shutil.which("claude") is not None:
+        stable = _stable_package_root()
+        marketplace = _claude_marketplace(stable, _claude_marketplaces())
+        target = next((item for item in _claude_plugins() if item.get("id") == CLAUDE_PLUGIN), None)
+        if marketplace is not None and target is not None and target.get("enabled") is True:
+            integrations.append("claude")
+            scopes["claude"] = target.get("scope") if isinstance(target.get("scope"), str) else "user"
+    if shutil.which("codex") is not None:
+        stable = _stable_package_root()
+        marketplace = _codex_marketplace(stable, _codex_marketplaces())
+        target = next((item for item in _codex_plugins() if item.get("pluginId") == CODEX_PLUGIN), None)
+        if marketplace is not None and target is not None and target.get("installed") is True and target.get("enabled") is True:
+            integrations.append("codex")
+    return integrations, scopes
+
+
+def _update_pending(state: dict[str, object]) -> dict[str, object] | None:
+    pending = state.get("pendingOperation")
+    if pending is None:
+        return None
+    if not isinstance(pending, dict) or pending.get("command") != "update":
+        raise ManagementError("another_operation_pending")
+    if not isinstance(pending.get("targetVersion"), str):
+        raise ManagementError("invalid_update_state")
+    if not isinstance(pending.get("integrations"), list) or not all(
+        item in {"pi", "claude", "codex"} for item in pending["integrations"]
+    ):
+        raise ManagementError("invalid_update_state")
+    if not isinstance(pending.get("completed"), list) or not all(
+        isinstance(item, str) for item in pending["completed"]
+    ):
+        raise ManagementError("invalid_update_state")
+    return pending
+
+
+def _save_update_step(state: dict[str, object], pending: dict[str, object], step: str) -> None:
+    completed = pending["completed"]
+    assert isinstance(completed, list)
+    if step not in completed:
+        completed.append(step)
+    pending.pop("lastError", None)
+    _atomic_json(_mode_state_path(), state)
+
+
+def _update_claude_steps(
+    state: dict[str, object], pending: dict[str, object], scope: str
+) -> None:
+    completed = pending["completed"]
+    assert isinstance(completed, list)
+    stable = _stable_package_root()
+    if _claude_marketplace(stable, _claude_marketplaces()) is None:
+        raise ManagementError("update_integration_unavailable: claude")
+    if "claude-marketplace" not in completed:
+        _run_claude("claude_marketplace_update_failed", "plugin", "marketplace", "update", CLAUDE_MARKETPLACE)
+        _save_update_step(state, pending, "claude-marketplace")
+    if "claude-uninstall" not in completed:
+        target = next((item for item in _claude_plugins() if item.get("id") == CLAUDE_PLUGIN), None)
+        if target is not None:
+            _run_claude(
+                "claude_plugin_uninstall_failed",
+                "plugin",
+                "uninstall",
+                CLAUDE_PLUGIN,
+                "--scope",
+                scope,
+                "--keep-data",
+            )
+        _save_update_step(state, pending, "claude-uninstall")
+    if "claude-install" not in completed:
+        _run_claude("claude_plugin_install_failed", "plugin", "install", CLAUDE_PLUGIN, "--scope", scope)
+        _save_update_step(state, pending, "claude-install")
+    if "claude-enable" not in completed:
+        _run_claude("claude_plugin_enable_failed", "plugin", "enable", CLAUDE_PLUGIN, "--scope", scope)
+        _save_update_step(state, pending, "claude-enable")
+    if not any(item.get("id") == CLAUDE_PLUGIN and item.get("enabled") is True for item in _claude_plugins()):
+        raise ManagementError("claude_plugin_refresh_missing")
+
+
+def _update_codex_steps(state: dict[str, object], pending: dict[str, object]) -> None:
+    completed = pending["completed"]
+    assert isinstance(completed, list)
+    stable = _stable_package_root()
+    if _codex_marketplace(stable, _codex_marketplaces()) is None:
+        raise ManagementError("update_integration_unavailable: codex")
+    if "codex-remove" not in completed:
+        target = next((item for item in _codex_plugins() if item.get("pluginId") == CODEX_PLUGIN), None)
+        if target is not None and target.get("installed") is True:
+            _run_codex("codex_plugin_remove_failed", "plugin", "remove", CODEX_PLUGIN, "--json")
+        _save_update_step(state, pending, "codex-remove")
+    if "codex-add" not in completed:
+        _run_codex("codex_plugin_add_failed", "plugin", "add", CODEX_PLUGIN, "--json")
+        _save_update_step(state, pending, "codex-add")
+    refreshed = next((item for item in _codex_plugins() if item.get("pluginId") == CODEX_PLUGIN), None)
+    if refreshed is None or refreshed.get("installed") is not True or refreshed.get("enabled") is not True:
+        raise ManagementError("codex_plugin_refresh_missing")
+
+
+def _save_update_error(state: dict[str, object], pending: dict[str, object], error: ManagementError) -> None:
+    try:
+        latest_state = _mode_state()
+        latest_pending = _update_pending(latest_state)
+        if latest_pending is not None:
+            state, pending = latest_state, latest_pending
+        pending["lastError"] = str(error)
+        _atomic_json(_mode_state_path(), state)
+    except (OSError, ManagementError):
+        pass
+
+
+def _resume_after_update(token: str, operation_id: str) -> dict[str, object]:
+    _prepare_lock_handoff(operation_id, token)
+    invocation = _exact_command(_stable_cli(), "update", "--_update-token", token)
+    result = subprocess.run(
+        invocation,
+        env=os.environ.copy(),
+        text=True,
+        capture_output=True,
+        check=False,
+        shell=isinstance(invocation, str),
+    )
+    if result.returncode != 0:
+        message = result.stderr.strip()
+        if message.startswith("error: "):
+            message = message[7:]
+        raise ManagementError(message or "update_resume_failed")
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ManagementError("update_resume_invalid_output") from exc
+    if not isinstance(value, dict):
+        raise ManagementError("update_resume_invalid_output")
+    return value
+
+
+def _doctor_all() -> dict[str, object]:
+    report = _doctor_package()
+    report["pi"] = _doctor_pi()["pi"]
+    report["claude"] = _doctor_claude()["claude"]
+    report["codex"] = _doctor_codex()["codex"]
+    return report
+
+
+def _run_update(token: str | None, operation_id: str) -> dict[str, object]:
+    state = _mode_state()
+    if state.get("mode") == "dev" or _doctor_package()["mode"] == "dev":
+        raise ManagementError("update_requires_release_mode: run 'myspec init --release' first")
+    pending = _update_pending(state)
+    if token is not None:
+        if pending is None or pending.get("tokenHash") != _token_hash(token):
+            raise ManagementError("invalid_update_token")
+    elif pending is None:
+        target = _latest_version()
+        integrations, scopes = _preflight_integrations()
+        pending = {
+            "command": "update",
+            "targetVersion": target,
+            "integrations": integrations,
+            "scopes": scopes,
+            "completed": ["preflight"],
+        }
+        state["mode"] = "release"
+        state["pendingOperation"] = pending
+        _atomic_json(_mode_state_path(), state)
+
+    assert pending is not None
+    target = pending["targetVersion"]
+    integrations = pending["integrations"]
+    completed = pending["completed"]
+    assert isinstance(target, str) and isinstance(integrations, list) and isinstance(completed, list)
+    try:
+        installed_now = False
+        if "npm" not in completed:
+            installed = _run(
+                "npm",
+                "install",
+                "--global",
+                "--ignore-scripts",
+                "--no-audit",
+                "--no-fund",
+                f"{PACKAGE_NAME}@{target}",
+            )
+            if installed.returncode != 0:
+                raise ManagementError(f"npm_install_failed: {installed.stderr.strip()}")
+            _save_update_step(state, pending, "npm")
+            installed_now = True
+        if token is None and (installed_now or _package_version() != target):
+            resume_token = uuid.uuid4().hex
+            pending["tokenHash"] = _token_hash(resume_token)
+            _atomic_json(_mode_state_path(), state)
+            return _resume_after_update(resume_token, operation_id)
+
+        scopes = pending.get("scopes") if isinstance(pending.get("scopes"), dict) else {}
+        result: dict[str, object] = {"version": target}
+        for integration in integrations:
+            if integration not in completed:
+                if integration == "pi":
+                    if _refresh_pi() != "refreshed":
+                        raise ManagementError("update_integration_unavailable: pi")
+                elif integration == "claude":
+                    _update_claude_steps(state, pending, str(scopes.get("claude", "user")))
+                else:
+                    _update_codex_steps(state, pending)
+                _save_update_step(state, pending, integration)
+            result[integration] = "refreshed"
+        result["reloadRequired"] = any(item in integrations for item in ("pi", "claude"))
+        if "codex" in integrations:
+            result["newSessionRequired"] = True
+        report = _doctor_all()
+        _save_update_step(state, pending, "doctor")
+        result["doctor"] = report
+        state.pop("pendingOperation", None)
+        state["previousReleaseVersion"] = target
+        _atomic_json(_mode_state_path(), state)
+        return result
+    except ManagementError as exc:
+        _save_update_error(state, pending, exc)
+        raise
+
+
+def _doctor_operation(report: dict[str, object]) -> dict[str, object]:
+    state = _mode_state()
+    pending = state.get("pendingOperation")
+    operation: dict[str, object] | None = None
+    if isinstance(pending, dict):
+        operation = {
+            key: pending[key]
+            for key in ("command", "targetVersion", "integrations", "completed", "lastError")
+            if key in pending
+        }
+    report["installation"] = {"lock": _lock_report(), "pendingOperation": operation}
+    return report
+
+
 def add_management_parsers(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     init_parser = commands.add_parser("init")
     init_target = init_parser.add_mutually_exclusive_group(required=True)
@@ -1197,25 +1567,60 @@ def add_management_parsers(commands: argparse._SubParsersAction[argparse.Argumen
     doctor_target.add_argument("--pi", action="store_true")
     doctor_target.add_argument("--claude", action="store_true")
     doctor_target.add_argument("--codex", action="store_true")
+    doctor_target.add_argument("--all", action="store_true")
+    update_parser = commands.add_parser("update")
+    update_parser.add_argument("--_update-token", help=argparse.SUPPRESS)
+
+
+def _management_command(args: argparse.Namespace) -> str:
+    if args.command == "update":
+        return "myspec update"
+    target = next(
+        (name for name in ("pi", "claude", "codex", "all", "dev", "release") if getattr(args, name, False)),
+        "",
+    )
+    return f"myspec init --{target}"
 
 
 def run_management(args: argparse.Namespace) -> dict[str, object]:
     if args.command == "doctor":
-        if args.claude:
-            return _doctor_claude()
-        return _doctor_codex() if args.codex else _doctor_pi()
-    if args.dev:
-        return _switch_dev(args.source, args._switch_token)
-    if args.release:
+        if args.all:
+            report = _doctor_all()
+        elif args.claude:
+            report = _doctor_claude()
+        else:
+            report = _doctor_codex() if args.codex else _doctor_pi()
+        return _doctor_operation(report)
+
+    internal_token = args._update_token if args.command == "update" else args._switch_token
+    if internal_token is not None:
+        if args.command == "update":
+            pending = _update_pending(_mode_state())
+            if pending is None or pending.get("tokenHash") != _token_hash(internal_token):
+                raise ManagementError("invalid_update_token")
+        else:
+            stage = "dev" if args.dev else "release" if args.release else ""
+            _validated_pending(stage, internal_token)
+        operation_id = _claim_install_lock(internal_token)
+    else:
+        operation_id = _acquire_install_lock(_management_command(args))
+    try:
+        if args.command == "update":
+            return _run_update(args._update_token, operation_id)
+        if args.dev:
+            return _switch_dev(args.source, args._switch_token, operation_id)
+        if args.release:
+            if args.source is not None:
+                raise ManagementError("source_only_valid_with_dev")
+            return _switch_release(args._switch_token, operation_id)
         if args.source is not None:
             raise ManagementError("source_only_valid_with_dev")
-        return _switch_release(args._switch_token)
-    if args.source is not None:
-        raise ManagementError("source_only_valid_with_dev")
-    if args._switch_token is not None:
-        raise ManagementError("invalid_switch_token")
-    if args.all:
-        return _init_all()
-    if args.claude:
-        return _init_claude()
-    return _init_codex() if args.codex else _init_pi()
+        if args._switch_token is not None:
+            raise ManagementError("invalid_switch_token")
+        if args.all:
+            return _init_all()
+        if args.claude:
+            return _init_claude()
+        return _init_codex() if args.codex else _init_pi()
+    finally:
+        _release_install_lock(operation_id)

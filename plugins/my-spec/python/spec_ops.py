@@ -705,7 +705,7 @@ def main(argv: list[str] | None = None) -> int:
             state = _load_state(args.work_dir)
             _assert_fingerprints(state, args.specs_fingerprint, args.input_fingerprint)
             print(json.dumps(_state_summary(state), ensure_ascii=False))
-        elif args.command in {"init", "doctor"}:
+        elif args.command in {"init", "doctor", "update"}:
             print(json.dumps(run_management(args), ensure_ascii=False))
     except (SpecError, ManagementError) as exc:
         print(f"error: {exc}", file=sys.stderr)
