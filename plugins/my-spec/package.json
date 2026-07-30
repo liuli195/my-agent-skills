@@ -1,0 +1,31 @@
+{
+  "name": "@liuli195/myspec",
+  "version": "0.1.54",
+  "description": "Deterministic MySpec CLI and Agent skills",
+  "keywords": [
+    "myspec",
+    "pi-package"
+  ],
+  "bin": {
+    "myspec": "./bin/myspec.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    ".agents",
+    ".claude-plugin",
+    ".codex-plugin",
+    "bin",
+    "python/*.py",
+    "skills"
+  ],
+  "pi": {
+    "skills": [
+      "./skills/my-spec",
+      "./skills/my-spec-add",
+      "./skills/my-spec-review",
+      "./skills/my-spec-audit"
+    ]
+  }
+}
