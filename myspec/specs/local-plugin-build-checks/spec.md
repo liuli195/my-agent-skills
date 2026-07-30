@@ -62,28 +62,6 @@ The build command SHALL（必须）validate that `.release-flow/projection.yaml`
 #### Scenario: Projection plugin names are unique
 - **WHEN** projection plugin lists are checked
 - **THEN** duplicate plugin names are reported as build errors
-### Requirement: Verify command follows initialized build-and-verify contract
-The repository SHALL（必须）provide a verify command initialized by the build-and-verify（构建与验证）Plugin（插件） contract.
-
-#### Scenario: Verify command defaults to framework fast mode
-- **WHEN** a developer runs `python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project .`
-- **THEN** the command uses `.build-and-verify/config.json` `verify.checks`
-- **THEN** the command applies changed-files（变更文件） selection and passed-result cache（通过结果缓存）
-- **THEN** the command does not bypass changed-files（变更文件） selection and passed-result cache（通过结果缓存） by unconditionally running every configured verify check
-
-#### Scenario: Verify full mode runs all configured checks
-- **WHEN** a developer runs `python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full`
-- **THEN** the command runs all `.build-and-verify/config.json` `verify.checks`
-- **THEN** the command does not use cache（缓存） hits to skip checks（检查项）
-- **THEN** passed checks（已通过检查项） refresh passed-result cache（通过结果缓存）
-- **THEN** failed checks（失败检查项） are not stored as passed-result cache（通过结果缓存）
-- **THEN** the command does not rely on the default verify mode being full（完整验证）
-
-#### Scenario: Comet config keeps guard-compatible command shim
-- **WHEN** Comet（双星流程）reads root `.comet.yaml`
-- **THEN** it defines `build_command: python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py build --project .`
-- **THEN** it defines `verify_command: python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project .`
-- **THEN** those commands act as the project-level（项目级） guard（守卫） compatibility shim（兼容层） for the committed build-and-verify（构建与验证） runner（运行器） under `plugins/build-and-verify/`
 ### Requirement: Repository workflows avoid deprecated Node runtime references
 The repository's active GitHub workflows MUST avoid Node.js 20 action/runtime references when a current replacement is available.
 
@@ -164,3 +142,35 @@ Repository-owned local plugin package tests MUST prevent duplicate real plugin v
 - **WHEN** build-and-verify（构建与验证）runtime（运行时） version（版本） temporarily differs from the build-and-verify plugin manifest（插件清单） during a release preparation state
 - **THEN** ordinary repository tests MUST NOT fail solely because of that mismatch
 - **THEN** release readiness MUST be checked by the Release Flow preflight（发布预检） runtime（运行时） synchronization rule
+### Requirement: Verify command follows initialized build-and-verify contract
+
+The repository SHALL（必须）provide a verify command initialized by the build-and-verify（构建与验证）Plugin（插件） contract. Build and verify check execution MUST preserve each child process exit status even when captured output contains bytes that are not valid UTF-8（字符编码）.
+
+#### Scenario: Verify command defaults to framework fast mode
+
+- **WHEN** a developer runs `python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project .`
+- **THEN** the command uses `.build-and-verify/config.json` `verify.checks`
+- **THEN** the command applies changed-files（变更文件） selection and passed-result cache（通过结果缓存）
+- **THEN** the command does not bypass changed-files（变更文件） selection and passed-result cache（通过结果缓存） by unconditionally running every configured verify check
+
+#### Scenario: Verify full mode runs all configured checks
+
+- **WHEN** a developer runs `python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full`
+- **THEN** the command runs all `.build-and-verify/config.json` `verify.checks`
+- **THEN** the command does not use cache（缓存） hits to skip checks（检查项）
+- **THEN** passed checks（已通过检查项） refresh passed-result cache（通过结果缓存）
+- **THEN** failed checks（失败检查项） are not stored as passed-result cache（通过结果缓存）
+- **THEN** the command does not rely on the default verify mode being full（完整验证）
+
+#### Scenario: Comet config keeps guard-compatible command shim
+
+- **WHEN** Comet（双星流程）reads root `.comet.yaml`
+- **THEN** it defines `build_command: python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py build --project .`
+- **THEN** it defines `verify_command: python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project .`
+- **THEN** those commands act as the project-level（项目级） guard（守卫） compatibility shim（兼容层） for the committed build-and-verify（构建与验证） runner（运行器） under `plugins/build-and-verify/`
+
+#### Scenario: 检查输出包含非法 UTF-8 字节
+
+- **WHEN** build（构建检查）或 verify（验证）的子进程输出包含非法 UTF-8 字节并以非零状态退出
+- **THEN** 运行器 MUST 继续报告该检查的非零退出状态
+- **THEN** 运行器 MUST NOT 以 `UnicodeDecodeError`（解码异常）替代原检查结果
