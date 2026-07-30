@@ -886,6 +886,8 @@ def test_packed_myspec_clients_run_shared_source_cases(tmp_path: Path, client: s
             for source in report["sources"]
         ]
         assert actual == case["expectedSources"], case["id"]
+        if case["id"] == "legacy-enabled":
+            assert report["enabled"] is True
         assert {"enabledSources", "disabledSources", "duplicateEnabledSources"} <= report.keys()
 
     assert seen == [case["id"] for case in SOURCE_CASES]
@@ -1000,7 +1002,10 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
     )
     write(
         Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
-        json.dumps({"packages": [{"source": str(installed_package), "skills": []}]}, indent=2),
+        json.dumps(
+            {"packages": [{"source": str(installed_package), "skills": []}, str(PLUGIN_ROOT)]},
+            indent=2,
+        ),
     )
     write(
         claude_state,
@@ -1012,7 +1017,13 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
                         "source": "directory",
                         "path": str(installed_package),
                         "installLocation": str(installed_package),
-                    }
+                    },
+                    {
+                        "name": "my-agent-skills-marketplace",
+                        "source": "directory",
+                        "path": str(PLUGIN_ROOT),
+                        "installLocation": str(PLUGIN_ROOT),
+                    },
                 ],
                 "plugins": [
                     {
@@ -1021,7 +1032,14 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
                         "scope": "user",
                         "enabled": False,
                         "installPath": str(tmp_path / "disabled-claude"),
-                    }
+                    },
+                    {
+                        "id": "my-spec@my-agent-skills-marketplace",
+                        "version": PACKAGE_VERSION,
+                        "scope": "user",
+                        "enabled": True,
+                        "installPath": str(PLUGIN_ROOT),
+                    },
                 ],
             },
             indent=2,
@@ -1036,7 +1054,12 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
                         "name": "myspec",
                         "root": str(installed_package),
                         "marketplaceSource": {"sourceType": "local", "source": str(installed_package)},
-                    }
+                    },
+                    {
+                        "name": "my-agent-skills-marketplace",
+                        "root": str(PLUGIN_ROOT),
+                        "marketplaceSource": {"sourceType": "local", "source": str(PLUGIN_ROOT)},
+                    },
                 ],
                 "installed": [
                     {
@@ -1046,14 +1069,26 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
                         "version": PACKAGE_VERSION,
                         "installed": True,
                         "source": {"source": "local", "path": str(installed_package)},
-                    }
+                    },
+                    {
+                        "pluginId": "my-spec@my-agent-skills-marketplace",
+                        "name": "my-spec",
+                        "marketplaceName": "my-agent-skills-marketplace",
+                        "version": PACKAGE_VERSION,
+                        "installed": True,
+                        "source": {"source": "local", "path": str(PLUGIN_ROOT)},
+                    },
                 ],
                 "available": [],
             },
             indent=2,
         ),
     )
-    write(Path(env["CODEX_HOME"]) / "config.toml", '[plugins."my-spec@myspec"]\nenabled = false\n')
+    write(
+        Path(env["CODEX_HOME"]) / "config.toml",
+        '[plugins."my-spec@myspec"]\nenabled = false\n'
+        '[plugins."my-spec@my-agent-skills-marketplace"]\nenabled = true\n',
+    )
     pi_before = (Path(env["PI_CODING_AGENT_DIR"]) / "settings.json").read_bytes()
 
     interrupted = run_cli(
@@ -1072,9 +1107,16 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
     assert output["pi"] == "refreshed"
     assert output["claude"] == "refreshed"
     assert output["codex"] == "refreshed"
-    assert output["doctor"]["pi"]["enabled"] is False
-    assert output["doctor"]["claude"]["enabled"] is False
-    assert output["doctor"]["codex"]["enabled"] is False
+    assert output["doctor"]["pi"]["enabled"] is True
+    assert output["doctor"]["claude"]["enabled"] is True
+    assert output["doctor"]["codex"]["enabled"] is True
+    for client in ("pi", "claude", "codex"):
+        stable_source = next(
+            source
+            for source in output["doctor"][client]["sources"]
+            if source["sourceKind"] == "stable"
+        )
+        assert stable_source["enabled"] is False
     assert output["doctor"]["claude"]["version"] == NEXT_VERSION
     assert output["doctor"]["codex"]["version"] == NEXT_VERSION
     assert (Path(env["PI_CODING_AGENT_DIR"]) / "settings.json").read_bytes() == pi_before
@@ -1473,6 +1515,16 @@ def test_packed_myspec_initializes_and_diagnoses_one_pi_source(tmp_path: Path) -
     broken = run_cli(executable, "doctor", "--pi", env=env)
     assert broken.returncode == 0, broken.stderr
     assert json.loads(broken.stdout)["pi"]["skills"] == list(SKILL_NAMES[:-1])
+
+    shutil.rmtree(installed_package / "skills")
+    incomplete = run_cli(executable, "doctor", "--pi", env=env)
+    assert incomplete.returncode == 0, incomplete.stderr
+    incomplete_report = json.loads(incomplete.stdout)["pi"]
+    assert incomplete_report["skills"] == []
+    stable_source = next(
+        source for source in incomplete_report["sources"] if source["sourceKind"] == "stable"
+    )
+    assert stable_source["enabled"] is True
 
 
 def test_packed_myspec_doctor_keeps_enabled_intent_for_settings_source_missing_from_pi_list(

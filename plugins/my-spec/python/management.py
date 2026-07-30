@@ -1400,8 +1400,6 @@ def _doctor_package() -> dict[str, object]:
 
 
 def _pi_source_enabled(item: PiSource) -> bool:
-    if _myspec_manifest_version(item.installed_path) is not None:
-        return bool(_group_skills([item]))
     patterns = item.skill_filter
     if patterns is None:
         return not item.autoload_delta
@@ -1472,9 +1470,7 @@ def _doctor_pi() -> dict[str, object]:
         "installed": bool(stable_versions),
         "version": stable_version,
         "versionMismatch": not stable_versions or any(version != _package_version() for version in stable_versions),
-        "enabled": any(
-            record["sourceKind"] == "stable" and record["enabled"] for record in records
-        ),
+        "enabled": any(record["enabled"] for record in records),
         "enabledSources": enabled_sources,
         "disabledSources": disabled_sources,
         "duplicateEnabledSources": len(enabled_sources) > 1,
@@ -1561,7 +1557,7 @@ def _doctor_claude() -> dict[str, object]:
         "source": str(marketplace_path) if marketplace_path is not None else None,
         "version": target.get("version") if isinstance(target, dict) else None,
         "versionMismatch": not isinstance(target, dict) or target.get("version") != _package_version(),
-        "enabled": isinstance(target, dict) and target.get("enabled") is True,
+        "enabled": any(record["enabled"] for record in records),
         "enabledSources": enabled_sources,
         "disabledSources": disabled_sources,
         "duplicateEnabledSources": len(enabled_sources) > 1,
@@ -1649,7 +1645,7 @@ def _doctor_codex() -> dict[str, object]:
         "source": str(root) if root is not None else None,
         "version": target.get("version") if isinstance(target, dict) else None,
         "versionMismatch": not isinstance(target, dict) or target.get("version") != _package_version(),
-        "enabled": isinstance(target, dict) and target.get("enabled") is True,
+        "enabled": any(record["enabled"] for record in records),
         "enabledSources": enabled_sources,
         "disabledSources": disabled_sources,
         "duplicateEnabledSources": len(enabled_sources) > 1,
@@ -1888,13 +1884,23 @@ def _update_doctor(integrations: list[str]) -> dict[str, object]:
     return report
 
 
+def _stable_source_enabled(report: dict[str, object]) -> bool:
+    sources = report.get("sources")
+    return isinstance(sources, list) and any(
+        isinstance(source, dict)
+        and source.get("sourceKind") == "stable"
+        and source.get("enabled") is True
+        for source in sources
+    )
+
+
 def _verify_pi_update(target: str, enabled: bool) -> None:
     report = _doctor_pi()["pi"]
     if (
         report.get("available") is not True
         or report.get("version") != target
         or report.get("versionMismatch") is True
-        or report.get("enabled") is not enabled
+        or _stable_source_enabled(report) is not enabled
     ):
         raise ManagementError("pi_plugin_refresh_mismatch")
 
@@ -1917,7 +1923,7 @@ def _validate_update_doctor(
             not isinstance(diagnosis, dict)
             or diagnosis.get("version") != target
             or diagnosis.get("versionMismatch") is not False
-            or diagnosis.get("enabled") is not enabled[integration]
+            or _stable_source_enabled(diagnosis) is not enabled[integration]
         ):
             raise ManagementError(f"update_doctor_mismatch: {integration}")
 
