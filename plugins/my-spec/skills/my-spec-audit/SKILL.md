@@ -13,4 +13,4 @@ description: 对照 Git（版本管理）可见的整个仓库审计 MySpec（�
 2. [仓库审计流程](../my-spec/references/audit.md)
 3. [统一入口门禁](../my-spec/SKILL.md)
 
-模板位于 `../my-spec/assets/`；所有确定性操作调用 `../my-spec/scripts/spec_ops.py`。
+模板位于 `../my-spec/assets/`；所有确定性操作调用裸 `myspec ...` CLI（命令行程序），不得解析包内脚本路径。

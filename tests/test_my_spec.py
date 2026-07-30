@@ -3246,8 +3246,27 @@ def test_packed_myspec_installs_a_working_cli_with_agent_resources(tmp_path: Pat
     assert (installed_package / ".codex-plugin" / "plugin.json").is_file()
     assert [path.relative_to(installed_package).as_posix() for path in installed_package.rglob("spec_ops.py")] == [
         "python/spec_ops.py",
-        "skills/my-spec/scripts/spec_ops.py",
     ]
+    skill_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((installed_package / "skills").rglob("*.md"))
+    )
+    assert "spec_ops.py" not in skill_text
+    rules = (installed_package / "skills" / "my-spec" / "references" / "myspec-rules.md").read_text(
+        encoding="utf-8"
+    )
+    for command in (
+        "state-init",
+        "state-set-conflicts",
+        "state-current",
+        "state-decide",
+        "state-status",
+        "validate-main",
+        "validate-delta",
+        "apply-delta",
+        "diff",
+    ):
+        assert f"myspec {command}" in rules
 
 
 def test_myspec_launcher_forwards_sigterm_to_python(tmp_path: Path) -> None:
@@ -3759,12 +3778,10 @@ def test_skill_entries_route_add_review_and_audit_with_safe_boundaries() -> None
     for name in SKILL_NAMES[1:]:
         entry = (PLUGIN_ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
         assert "../my-spec/SKILL.md" in entry
-        assert "../my-spec/scripts/spec_ops.py" in entry
+        assert "myspec ..." in entry
+        assert "spec_ops.py" not in entry
 
-    legacy_cli = PLUGIN_ROOT / "skills" / "my-spec" / "scripts" / "spec_ops.py"
-    legacy_help = run_python(legacy_cli, "--help")
-    assert legacy_help.returncode == 0, legacy_help.stderr
-    assert legacy_help.stdout.startswith("usage: myspec ")
+    assert not (PLUGIN_ROOT / "skills" / "my-spec" / "scripts").exists()
 
     add = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "add-document.md").read_text(encoding="utf-8")
     review = (PLUGIN_ROOT / "skills" / "my-spec" / "references" / "review.md").read_text(encoding="utf-8")
@@ -3774,7 +3791,8 @@ def test_skill_entries_route_add_review_and_audit_with_safe_boundaries() -> None
         assert "一次只展示一条" in procedure
         assert "完整差异" in procedure
         assert "最终确认" in procedure
-        assert "spec_ops.py" in procedure
+        assert "myspec " in procedure
+        assert "spec_ops.py" not in procedure
     assert "只读取 `myspec/specs/`" in review
     assert "不得读取仓库其他文件" in review
     assert "git ls-files --cached --others --exclude-standard" in audit
@@ -3786,6 +3804,35 @@ def test_skill_entries_route_add_review_and_audit_with_safe_boundaries() -> None
         assert "state-set-conflicts" in procedure
         assert "首次展示" in procedure
         assert "禁止重新" in procedure
+
+
+@pytest.mark.skipif(
+    "PLUGIN_SYNC_SKILL_ROOT" not in os.environ,
+    reason="external plugin-sync source is verified only when explicitly supplied",
+)
+def test_plugin_sync_delegates_all_myspec_lifecycle_work_to_myspec_cli() -> None:
+    root = Path(os.environ["PLUGIN_SYNC_SKILL_ROOT"])
+    skill = (root / "SKILL.md").read_text(encoding="utf-8")
+    references = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in sorted((root / "references").glob("*.md"))
+    }
+
+    for command in (
+        "myspec doctor --all",
+        "myspec init --pi",
+        "myspec init --claude",
+        "myspec init --codex",
+        "myspec init --all",
+        "myspec init --dev",
+        "myspec init --release",
+        "myspec update",
+    ):
+        assert f"`{command}`" in skill
+    assert "CLI（命令行程序）拥有" in skill
+    for name in ("check.md", "update-claude.md", "update-codex.md"):
+        assert "MySpec（自有规格）不适用" in references[name]
+    assert "spec_ops.py" not in skill + "\n".join(references.values())
 
 
 def test_plugin_uses_host_native_skill_paths_without_custom_pi_routing() -> None:
