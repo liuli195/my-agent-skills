@@ -13,4 +13,4 @@ description: 从 Agent（代理）为当前请求选取的相关证据新增或�
 2. [新增文档流程](../my-spec/references/add-document.md)
 3. [统一入口门禁](../my-spec/SKILL.md)
 
-模板位于 `../my-spec/assets/`；所有确定性操作调用 `../my-spec/scripts/spec_ops.py`。
+模板位于 `../my-spec/assets/`；所有确定性操作调用裸 `myspec ...` CLI（命令行程序），不得解析包内脚本路径。

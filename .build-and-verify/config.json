@@ -80,7 +80,7 @@
           "tests/pi_codex_usage_status.test.mjs",
           "tests/pi_cache_diagnostics.test.mjs"
         ],
-        "checkParallel": true,
+        "checkParallel": false,
         "pytestXdistWorkers": 4
       },
       {
@@ -136,12 +136,14 @@
         "id": "verify.myspec",
         "paths": [
           "myspec/specs/**",
-          "plugins/my-spec/skills/my-spec/scripts/spec_ops.py"
+          "plugins/my-spec/bin/myspec.js",
+          "plugins/my-spec/python/spec_ops.py"
         ],
-        "command": "python plugins/my-spec/skills/my-spec/scripts/spec_ops.py validate-main myspec/specs",
+        "command": "node plugins/my-spec/bin/myspec.js validate-main myspec/specs",
         "inputs": [
           "myspec/specs",
-          "plugins/my-spec/skills/my-spec/scripts/spec_ops.py"
+          "plugins/my-spec/bin/myspec.js",
+          "plugins/my-spec/python/spec_ops.py"
         ]
       },
       {
@@ -163,8 +165,9 @@
           "plugins/my-spec",
           "tests/test_my_spec.py"
         ],
-        "checkParallel": true,
-        "pytestXdistWorkers": 4
+        "checkParallel": false,
+        "pytestXdistWorkers": 4,
+        "timeoutSeconds": 300
       },
       {
         "id": "verify.build-and-verify",

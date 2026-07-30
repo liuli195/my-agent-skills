@@ -459,6 +459,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_pr_flow_cli.py::test_project_template_recreates_incomplete_template_after_stale_lock': (
         'covers pr-flow packaged CLI helper-chain contract: test_project_template_recreates_incomplete_template_after_stale_lock; function=test_project_template_recreates_incomplete_template_after_stale_lock'
     ),
+    'tests/test_my_spec.py::test_packed_myspec_installs_a_working_cli_with_agent_resources': (
+        'covers npm Tarball packing, isolated installation, and the installed myspec CLI seam; function=test_packed_myspec_installs_a_working_cli_with_agent_resources'
+    ),
     'tests/test_my_spec.py::test_spec_ops_cli_validates_applies_all_delta_operations_and_diffs': (
         'covers the packaged spec_ops CLI validation, all Delta operations, preview, and diff seam; function=test_spec_ops_cli_validates_applies_all_delta_operations_and_diffs'
     ),
@@ -491,6 +494,129 @@ E2E_ALLOWLIST: dict[str, str] = {
     ),
     'tests/test_my_spec.py::test_apply_delta_can_atomically_replace_main_after_final_confirmation': (
         'covers packaged spec_ops CLI final atomic replacement and idempotent no-op behavior; function=test_apply_delta_can_atomically_replace_main_after_final_confirmation'
+    ),
+    'tests/test_my_spec.py::test_myspec_launcher_forwards_sigterm_to_python': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_myspec_launcher_forwards_sigterm_to_python'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_claude_reinstall_failure_does_not_report_refreshed': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_claude_reinstall_failure_does_not_report_refreshed'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_state': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_state'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_disables_only_exact_legacy_pi_sources': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_disables_only_exact_legacy_pi_sources'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_doctor_does_not_enable_settings_source_missing_from_pi_list': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_doctor_does_not_enable_settings_source_missing_from_pi_list'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_doctor_reads_legacy_git_and_npm_manifests_from_pi_list': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_doctor_reads_legacy_git_and_npm_manifests_from_pi_list'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_doctor_reports_actual_package_version_mismatch': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_doctor_reports_actual_package_version_mismatch'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_doctor_reports_claude_marketplace_source_mismatch_read_only': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_doctor_reports_claude_marketplace_source_mismatch_read_only'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_doctor_reports_duplicate_enabled_pi_sources': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_doctor_reports_duplicate_enabled_pi_sources'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_doctor_reports_partial_update_read_only': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_doctor_reports_partial_update_read_only'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_doctor_uses_actual_installation_not_mode_state': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_doctor_uses_actual_installation_not_mode_state'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_explicit_claude_init_refreshes_disabled_stale_plugin': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_explicit_claude_init_refreshes_disabled_stale_plugin'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_follows_project_scope_reported_by_pi_list': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_follows_project_scope_reported_by_pi_list'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_ignores_project_settings_absent_from_pi_list': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_ignores_project_settings_absent_from_pi_list'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_initializes_and_diagnoses_claude_without_deleting_legacy': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_initializes_and_diagnoses_claude_without_deleting_legacy'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_initializes_and_diagnoses_codex_without_deleting_legacy': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_initializes_and_diagnoses_codex_without_deleting_legacy'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_initializes_and_diagnoses_one_pi_source': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_initializes_and_diagnoses_one_pi_source'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_keeps_project_legacy_sources_without_installed_paths': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_keeps_project_legacy_sources_without_installed_paths'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_mode_switch_does_not_install_a_disabled_pi_integration': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_mode_switch_does_not_install_a_disabled_pi_integration'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_claude': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_claude'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_codex': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_codex'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_package_contains_single_codex_marketplace_and_four_skills': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_package_contains_single_codex_marketplace_and_four_skills'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_pi_git_identity_matches_pi_host_path_semantics': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_pi_git_identity_matches_pi_host_path_semantics'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_preserves_lock_when_process_status_is_unknown': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_preserves_lock_when_process_status_is_unknown'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_refreshes_enabled_claude_across_global_mode_switches': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_refreshes_enabled_claude_across_global_mode_switches'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_refreshes_enabled_codex_across_global_mode_switches': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_refreshes_enabled_codex_across_global_mode_switches'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_rejects_invalid_mode_switches': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_rejects_invalid_mode_switches'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_release_install_failure_stays_in_dev_and_retries': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_release_install_failure_stays_in_dev_and_retries'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_reports_missing_pi_without_installing_it': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_reports_missing_pi_without_installing_it'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_requires_explicit_claude_but_all_initializes_detected_claude': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_requires_explicit_claude_but_all_initializes_detected_claude'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_requires_explicit_codex_but_all_initializes_detected_codex': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_requires_explicit_codex_but_all_initializes_detected_codex'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_requires_release_registration_before_first_codex_dev_init': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_requires_release_registration_before_first_codex_dev_init'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_file': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_file'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_serializes_init_and_reports_locks_without_mutating_them': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_serializes_init_and_reports_locks_without_mutating_them'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_switches_pi_between_development_and_saved_release': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_switches_pi_between_development_and_saved_release'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_update_preflights_installed_clients_before_package_write': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_update_preflights_installed_clients_before_package_write'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_update_recovers_external_success_before_bookkeeping': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_update_recovers_external_success_before_bookkeeping'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_missing': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_missing'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_update_rejects_dev_mode_and_forged_resume': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_update_rejects_dev_mode_and_forged_resume'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_uses_pi_list_project_scope_over_saved_trust': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_uses_pi_list_project_scope_over_saved_trust'
     ),
 }
 

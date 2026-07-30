@@ -11,6 +11,8 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from management import ManagementError, add_management_parsers, run_management
+
 
 REQUIREMENT = re.compile(r"^### Requirement: (\S.*)$")
 SCENARIO = re.compile(r"^#### Scenario: (\S.*)$")
@@ -600,7 +602,7 @@ def diff_dirs(old_root: Path, new_root: Path) -> str:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Deterministic MySpec operations")
+    parser = argparse.ArgumentParser(prog="myspec", description="Deterministic MySpec operations")
     commands = parser.add_subparsers(dest="command", required=True)
     validate_main_parser = commands.add_parser("validate-main")
     validate_main_parser.add_argument("specs_dir", type=Path)
@@ -642,6 +644,7 @@ def _parser() -> argparse.ArgumentParser:
     state_status_parser.add_argument("work_dir", type=Path)
     state_status_parser.add_argument("specs_fingerprint")
     state_status_parser.add_argument("input_fingerprint")
+    add_management_parsers(commands)
     return parser
 
 
@@ -702,7 +705,9 @@ def main(argv: list[str] | None = None) -> int:
             state = _load_state(args.work_dir)
             _assert_fingerprints(state, args.specs_fingerprint, args.input_fingerprint)
             print(json.dumps(_state_summary(state), ensure_ascii=False))
-    except SpecError as exc:
+        elif args.command in {"init", "doctor", "update"}:
+            print(json.dumps(run_management(args), ensure_ascii=False))
+    except (SpecError, ManagementError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except OSError as exc:

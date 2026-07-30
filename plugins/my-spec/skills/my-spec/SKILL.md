@@ -15,14 +15,14 @@ description: 统一管理 MySpec（自有规格）。当用户调用统一入口
 
 用户未指定入口时，根据请求范围选择且只执行一个入口；范围不明确时先询问。
 
-修改前同时读取 [references/myspec-rules.md](references/myspec-rules.md)。创建内容时复用 `assets/` 模板。所有确定性校验、预览、完整差异和应用都调用 `scripts/spec_ops.py`。
+修改前同时读取 [references/myspec-rules.md](references/myspec-rules.md)。创建内容时复用 `assets/` 模板。所有确定性状态、校验、预览、完整差异和应用都调用裸 `myspec ...` CLI（命令行程序）；不得解析包内脚本路径。
 
 ## 不可跳过的门禁
 
 1. 获取仓库级 `.local/spec-work/lock`；已有锁时停止，不按时间自动清理。
-2. 调用 `spec_ops.py state-init`，在 `.local/spec-work/current/` 保存当前命令、输入与主规格指纹、完整 `conflicts`、`currentConflict` 和本次 `decisions`。
-3. 分析完成后必须在首次展示前调用 `state-set-conflicts` 一次性保存全部冲突、删除和低可信候选；只保存数量或第一项无效。
-4. `WAITING_DECISION` 期间只调用 `state-current`、`state-decide` 和 `state-status` 读取已保存清单，禁止重新扫描获取下一项；一次只展示一条，禁止批量接受。
+2. 调用 `myspec state-init`，在 `.local/spec-work/current/` 保存当前命令、输入与主规格指纹、完整 `conflicts`、`currentConflict` 和本次 `decisions`。
+3. 分析完成后必须在首次展示前调用 `myspec state-set-conflicts` 一次性保存全部冲突、删除和低可信候选；只保存数量或第一项无效。
+4. `WAITING_DECISION` 期间只调用 `myspec state-current`、`myspec state-decide` 和 `myspec state-status` 读取已保存清单，禁止重新扫描获取下一项；一次只展示一条，禁止批量接受。
 5. 未决项全部处理后，校验 Delta（增量规格），生成并校验预览。
 6. 展示完整、不截断的文件级差异并等待最终确认；确认前不得改动主规格。
 7. 应用前重算主规格指纹；变化时停止并重新分析。
