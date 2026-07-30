@@ -414,6 +414,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_pr_flow_cli.py::test_write_status_keeps_compatibility_file_and_branch_run': (
         'covers per-worktree PR Flow status paths in a real git repository; function=test_write_status_keeps_compatibility_file_and_branch_run'
     ),
+    'tests/test_setup_worktree_script.py::test_setup_worktree_script_links_shared_node_dependencies': (
+        'covers the PowerShell setup entrypoint against a real linked worktree and Windows junction; function=test_setup_worktree_script_links_shared_node_dependencies'
+    ),
     'tests/test_build_and_verify_plugin.py::test_build_and_verify_init_config_overwrite_e2e_temp_target_repo': (
         'covers packaged init entrypoint and copied runtime fast-verify entrypoint; function=test_build_and_verify_init_config_overwrite_e2e_temp_target_repo'
     ),

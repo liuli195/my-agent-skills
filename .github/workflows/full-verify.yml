@@ -33,7 +33,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
-          npm ci --prefix plugins/pi-tool-display
+          npm ci
 
       - name: Install current MySpec package
         shell: bash
@@ -48,3 +48,33 @@ jobs:
 
       - name: Run full verification
         run: python .build-and-verify/runtime/build_and_verify.py verify --project . --full
+
+  windows-worktree-smoke:
+    name: Windows worktree smoke
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Initialize main worktree
+        shell: pwsh
+        run: ./scripts/setup-worktree.ps1
+
+      - name: Initialize linked worktree
+        shell: pwsh
+        run: |
+          git worktree add --detach .worktrees/smoke HEAD
+          ./.worktrees/smoke/scripts/setup-worktree.ps1
+
+      - name: Build from linked worktree
+        run: python .worktrees/smoke/.build-and-verify/runtime/build_and_verify.py build --project .worktrees/smoke

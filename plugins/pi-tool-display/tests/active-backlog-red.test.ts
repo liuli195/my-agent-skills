@@ -61,7 +61,7 @@ test("issue #23: expanded large diffs cap logical Diff lines in small tmux panes
 });
 
 test("PR #24: lockfile uses patched esbuild 0.28.1", () => {
-	const lockfile = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as {
+	const lockfile = JSON.parse(readFileSync(new URL("../../../package-lock.json", import.meta.url), "utf8")) as {
 		packages?: Record<string, { version?: string }>;
 	};
 	assert.equal(lockfile.packages?.["node_modules/esbuild"]?.version, "0.28.1");
