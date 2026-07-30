@@ -35,5 +35,14 @@ jobs:
           python -m pip install -r requirements-dev.txt
           npm ci --prefix plugins/pi-tool-display
 
+      - name: Install current MySpec package
+        shell: bash
+        run: |
+          tarball="$(npm pack ./plugins/my-spec --pack-destination "$RUNNER_TEMP")"
+          prefix="$RUNNER_TEMP/myspec-prefix"
+          npm install -g --prefix "$prefix" "$RUNNER_TEMP/$tarball"
+          echo "$prefix/bin" >> "$GITHUB_PATH"
+          "$prefix/bin/myspec" --help
+
       - name: Run full verification
         run: python .build-and-verify/runtime/build_and_verify.py verify --project . --full

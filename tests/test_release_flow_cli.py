@@ -1263,8 +1263,8 @@ def test_workflows_are_thin_entrypoints() -> None:
         assert "contents: write" in workflow
         assert "ref: main" not in workflow
         assert "Checkout release-flow plugin" not in workflow
-        assert "Install release-flow dependencies" in workflow
-        assert "python -m pip install PyYAML" in workflow
+        assert "Install release-flow dependencies" in workflow or "source/requirements-dev.txt" in workflow
+        assert "python -m pip install PyYAML" in workflow or "pip install -r source/requirements-dev.txt" in workflow
         assert "source/plugins/release-flow/skills/release-flow/scripts/release_flow.py" in workflow
         assert "release-init" not in workflow
         assert "releasePlan" not in workflow
@@ -1281,6 +1281,31 @@ def test_workflows_are_thin_entrypoints() -> None:
         assert "GH_TOKEN" in workflow
         assert "github.token" in workflow
         assert "scripts/release-flow" not in workflow
+
+
+def test_myspec_source_ci_and_release_use_the_packed_current_checkout() -> None:
+    full_verify = (REPO_ROOT / ".github" / "workflows" / "full-verify.yml").read_text(encoding="utf-8")
+    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    for workflow in (full_verify, release):
+        assert "npm pack ./plugins/my-spec" in workflow or "npm pack source/plugins/my-spec" in workflow
+        assert "npm install -g --prefix" in workflow
+        assert 'myspec" --help' in workflow
+        assert '>> "$GITHUB_PATH"' in workflow
+        assert "verify --project" in workflow and "--full" in workflow
+        assert "@liuli195/myspec@latest" not in workflow
+        assert ".whl" not in workflow
+        assert "pi-my-spec" not in workflow
+
+    assert full_verify.index("npm pack ./plugins/my-spec") < full_verify.index("Run full verification")
+    assert "id-token: write" in release
+    assert "registry-url: https://registry.npmjs.org" in release
+    assert "npm publish --provenance --access public" in release
+    assert "BUMP_PLUGINS: ${{ inputs.bumpPlugins }}" in release
+    assert '",$BUMP_PLUGINS," != *",my-spec,"*' in release
+    assert "package.json').version" in release
+    assert release.index("Run full verification") < release.index("npm publish --provenance --access public")
+    assert release.index("npm publish --provenance --access public") < release.index("Publish release channel")
 
 
 def test_workflows_use_current_low_risk_action_versions() -> None:
