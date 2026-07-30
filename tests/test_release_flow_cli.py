@@ -1301,6 +1301,12 @@ def test_myspec_source_ci_and_release_use_the_packed_current_checkout() -> None:
     assert "id-token: write" in release
     assert "registry-url: https://registry.npmjs.org" in release
     assert 'npm publish "$MYSPEC_TARBALL" --provenance --access public' in release
+    assert 'MYSPEC_TEST_TARBALL=$RUNNER_TEMP/$tarball' in full_verify
+    assert 'MYSPEC_TEST_TARBALL=$tarball_path' in release
+    assert "supplied_tarball = os.environ.get(\"MYSPEC_TEST_TARBALL\")" in (
+        REPO_ROOT / "tests" / "test_my_spec.py"
+    ).read_text(encoding="utf-8")
+    assert release.count("${{ inputs.") == 3
     assert "BUMP_PLUGINS: ${{ inputs.bumpPlugins }}" in release
     assert 'normalized_plugins="${BUMP_PLUGINS//[[:space:]]/}"' in release
     assert '",$normalized_plugins," != *",my-spec,"*' in release
@@ -1479,6 +1485,28 @@ def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: 
     assert remote_calls == [(project.resolve(), "marketplace", projection_path, "v9.9.1")]
     source_marketplace = json.loads((project / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8"))
     assert source_marketplace["name"] == "local-dev"
+
+
+def test_existing_release_must_match_the_current_projection_tree(
+    tmp_path: Path, monkeypatch
+) -> None:
+    release_flow = load_release_flow_module()
+    project = tmp_path / "project"
+    write_release_flow_files(project)
+    config = release_flow.read_config(project)
+    projection = release_flow.read_projection(project)
+    tree_ids = iter(["expected-tree", "different-remote-tree"])
+    monkeypatch.setattr(release_flow, "remote_ref_oid", lambda *_args: "same-commit")
+    monkeypatch.setattr(release_flow, "run_checked", lambda *_args: None)
+    monkeypatch.setattr(release_flow, "copy_git_auth_config", lambda *_args: None)
+    monkeypatch.setattr(release_flow, "origin_url", lambda *_args: "https://example.invalid/repo.git")
+    monkeypatch.setattr(release_flow, "git_output", lambda *_args: next(tree_ids))
+
+    error = release_flow.existing_release_ref_error(
+        project, config, projection, "v9.9.1"
+    )
+
+    assert error == "release_projection_mismatch: v9.9.1"
 
 
 def test_ci_publish_recovers_an_existing_tag_without_republishing_channel(

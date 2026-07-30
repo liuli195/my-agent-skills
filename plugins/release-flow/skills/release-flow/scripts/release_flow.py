@@ -1083,7 +1083,9 @@ def remote_ref_oid(project: Path, kind: str, ref: str) -> str:
     return result.stdout.split()[0] if result.returncode == 0 and result.stdout.strip() else ""
 
 
-def existing_release_ref_error(project: Path, config: FlowConfig, tag: str) -> str | None:
+def existing_release_ref_error(
+    project: Path, config: FlowConfig, projection: Projection, tag: str
+) -> str | None:
     tag_commit = remote_ref_oid(project, "tags", f"refs/tags/{tag}")
     channel_commit = remote_ref_oid(
         project, "heads", f"refs/heads/{config.release_channel_branch}"
@@ -1092,6 +1094,25 @@ def existing_release_ref_error(project: Path, config: FlowConfig, tag: str) -> s
         return f"remote_release_unknown: {tag}"
     if tag_commit != channel_commit:
         return f"release_tag_channel_mismatch: {tag}"
+
+    with tempfile.TemporaryDirectory(prefix="release-flow-verify-") as temp_dir:
+        temp_root = Path(temp_dir)
+        expected = temp_root / "expected"
+        copy_project_for_expected(project, expected)
+        apply_projection(expected, projection)
+        run_checked(["git", "init"], expected)
+        run_checked(["git", "add", "-A"], expected)
+        expected_tree = git_output(expected, ["write-tree"]).strip()
+
+        remote = temp_root / "remote"
+        remote.mkdir()
+        run_checked(["git", "init"], remote)
+        copy_git_auth_config(project, remote)
+        run_checked(["git", "remote", "add", "origin", origin_url(project)], remote)
+        run_checked(["git", "fetch", "--depth=1", "origin", tag_commit], remote)
+        remote_tree = git_output(remote, ["rev-parse", "FETCH_HEAD^{tree}"]).strip()
+    if remote_tree != expected_tree:
+        return f"release_projection_mismatch: {tag}"
     return None
 
 
@@ -1117,7 +1138,9 @@ def run_preflight(args: argparse.Namespace) -> int:
             )
             errors = without_existing_release_error(errors, args.tag)
             if had_existing_release:
-                ref_error = existing_release_ref_error(args.project, config, args.tag)
+                ref_error = existing_release_ref_error(
+                    args.project, config, projection, args.tag
+                )
                 if ref_error:
                     errors.append(ref_error)
     except ValueError as exc:
@@ -1325,9 +1348,9 @@ def run_ci_publish_remote(
 
 
 def recover_existing_ci_publish(
-    project: Path, config: FlowConfig, tag: str
+    project: Path, config: FlowConfig, projection: Projection, tag: str
 ) -> dict[str, str]:
-    ref_error = existing_release_ref_error(project, config, tag)
+    ref_error = existing_release_ref_error(project, config, projection, tag)
     if ref_error:
         raise ValueError(ref_error)
     tag_commit = remote_ref_oid(project, "tags", f"refs/tags/{tag}")
@@ -1397,7 +1420,7 @@ def run_ci_publish(args: argparse.Namespace) -> int:
 
     try:
         trace = (
-            recover_existing_ci_publish(args.project, config, args.tag)
+            recover_existing_ci_publish(args.project, config, projection, args.tag)
             if recover_existing
             else run_ci_publish_remote(args.project, config, projection, args.tag)
         )

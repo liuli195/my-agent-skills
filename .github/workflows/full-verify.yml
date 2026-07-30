@@ -43,6 +43,7 @@ jobs:
           prefix="$RUNNER_TEMP/myspec-prefix"
           npm install -g --prefix "$prefix" "$RUNNER_TEMP/$tarball"
           echo "$prefix/bin" >> "$GITHUB_PATH"
+          echo "MYSPEC_TEST_TARBALL=$RUNNER_TEMP/$tarball" >> "$GITHUB_ENV"
           "$prefix/bin/myspec" --help
 
       - name: Run full verification

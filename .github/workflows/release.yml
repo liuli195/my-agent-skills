@@ -24,6 +24,10 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      BUMP_PLUGINS: ${{ inputs.bumpPlugins }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v5
@@ -59,6 +63,7 @@ jobs:
           npm install -g --prefix "$prefix" "$tarball_path"
           echo "$prefix/bin" >> "$GITHUB_PATH"
           echo "MYSPEC_TARBALL=$tarball_path" >> "$GITHUB_ENV"
+          echo "MYSPEC_TEST_TARBALL=$tarball_path" >> "$GITHUB_ENV"
           echo "MYSPEC_INTEGRITY=$integrity" >> "$GITHUB_ENV"
           "$prefix/bin/myspec" --help
 
@@ -70,15 +75,12 @@ jobs:
           python source/plugins/release-flow/skills/release-flow/scripts/release_flow.py
           preflight
           --project source
-          --tag "${{ inputs.tag }}"
-          --version "${{ inputs.version }}"
-          --bump-plugins "${{ inputs.bumpPlugins }}"
+          --tag "$RELEASE_TAG"
+          --version "$RELEASE_VERSION"
+          --bump-plugins "$BUMP_PLUGINS"
           --allow-existing-release
 
       - name: Publish MySpec npm package
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
-          BUMP_PLUGINS: ${{ inputs.bumpPlugins }}
         run: |
           normalized_plugins="${BUMP_PLUGINS//[[:space:]]/}"
           if [[ ",$normalized_plugins," != *",my-spec,"* ]]; then
@@ -105,7 +107,7 @@ jobs:
           python source/plugins/release-flow/skills/release-flow/scripts/release_flow.py
           ci-publish
           --project source
-          --tag "${{ inputs.tag }}"
-          --version "${{ inputs.version }}"
-          --bump-plugins "${{ inputs.bumpPlugins }}"
+          --tag "$RELEASE_TAG"
+          --version "$RELEASE_VERSION"
+          --bump-plugins "$BUMP_PLUGINS"
           --authorize-ci-publish

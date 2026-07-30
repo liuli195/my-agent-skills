@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import signal
@@ -18,6 +19,16 @@ PLUGIN_ROOT = REPO_ROOT / "plugins" / "my-spec"
 SPEC_OPS = PLUGIN_ROOT / "python" / "spec_ops.py"
 SKILL_NAMES = ("my-spec", "my-spec-add", "my-spec-review", "my-spec-audit")
 PACKAGE_VERSION = json.loads((PLUGIN_ROOT / "package.json").read_text(encoding="utf-8"))["version"]
+
+
+def load_management_module():
+    path = PLUGIN_ROOT / "python" / "management.py"
+    spec = importlib.util.spec_from_file_location("myspec_management_test", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def bumped_patch(version: str, amount: int = 1) -> str:
@@ -153,18 +164,24 @@ def run_confirmed_workflow(
 def install_packed_myspec(tmp_path: Path) -> tuple[Path, Path]:
     npm = shutil.which("npm")
     assert npm is not None
-    package_dir = tmp_path / "package"
-    package_dir.mkdir()
-    packed = subprocess.run(
-        [npm, "pack", "--json", "--pack-destination", str(package_dir)],
-        cwd=PLUGIN_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert packed.returncode == 0, packed.stderr
-    package = json.loads(packed.stdout)[0]
-    assert package["name"] == "@liuli195/myspec"
+    supplied_tarball = os.environ.get("MYSPEC_TEST_TARBALL")
+    if supplied_tarball:
+        tarball = Path(supplied_tarball).resolve()
+        assert tarball.is_file()
+    else:
+        package_dir = tmp_path / "package"
+        package_dir.mkdir()
+        packed = subprocess.run(
+            [npm, "pack", "--json", "--pack-destination", str(package_dir)],
+            cwd=PLUGIN_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert packed.returncode == 0, packed.stderr
+        package = json.loads(packed.stdout)[0]
+        assert package["name"] == "@liuli195/myspec"
+        tarball = package_dir / package["filename"]
 
     prefix = tmp_path / "npm-prefix"
     installed = subprocess.run(
@@ -177,7 +194,7 @@ def install_packed_myspec(tmp_path: Path) -> tuple[Path, Path]:
             "--ignore-scripts",
             "--no-audit",
             "--no-fund",
-            str(package_dir / package["filename"]),
+            str(tarball),
         ],
         text=True,
         capture_output=True,
@@ -2510,7 +2527,7 @@ def test_packed_myspec_refreshes_enabled_claude_across_global_mode_switches(
     assert calls.count(["plugin", "marketplace", "update", "myspec"]) == 2
     assert calls.count(["plugin", "uninstall", "my-spec@myspec", "--scope", "user", "--keep-data"]) == 2
     assert calls.count(["plugin", "install", "my-spec@myspec", "--scope", "user"]) == 2
-    assert calls.count(["plugin", "enable", "my-spec@myspec", "--scope", "user"]) == 2
+    assert calls.count(["plugin", "enable", "my-spec@myspec", "--scope", "user"]) == 0
     assert not any(call[:2] == ["plugin", "update"] for call in calls)
 
 
@@ -3027,6 +3044,29 @@ if version:
         else []
     )
     return result, observed, paths
+
+
+def test_atomic_management_write_retries_windows_sharing_violation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    management = load_management_module()
+    target = tmp_path / "settings.json"
+    target.write_text("{}\n", encoding="utf-8")
+    attempts = 0
+
+    def transient_replace(source: Path, destination: Path) -> Path:
+        nonlocal attempts
+        attempts += 1
+        raise PermissionError("simulated file watcher sharing violation")
+
+    monkeypatch.setattr(management.os, "name", "nt")
+    monkeypatch.setattr(Path, "replace", transient_replace)
+    monkeypatch.setattr(management.time, "sleep", lambda _seconds: None)
+
+    management._atomic_json(target, {"packages": ["myspec"]})
+
+    assert attempts == 5
+    assert json.loads(target.read_text(encoding="utf-8")) == {"packages": ["myspec"]}
 
 
 def test_packed_myspec_installs_a_working_cli_with_agent_resources(tmp_path: Path) -> None:

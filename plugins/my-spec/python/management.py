@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -45,12 +46,31 @@ def _read_json(path: Path) -> object:
         raise ManagementError(f"invalid_json: {path}: {exc.msg}") from exc
 
 
+def _replace_with_retry(temporary: Path, path: Path) -> None:
+    for attempt in range(5):
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError:
+            if os.name != "nt":
+                raise
+            if attempt == 4:
+                # ponytail: a live Windows file watcher may deny rename forever; overwrite is the bounded fallback.
+                with path.open("wb") as destination:
+                    destination.write(temporary.read_bytes())
+                    destination.flush()
+                    os.fsync(destination.fileno())
+                temporary.unlink()
+                return
+            time.sleep(0.05 * (attempt + 1))
+
+
 def _atomic_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        temporary.replace(path)
+        _replace_with_retry(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -60,7 +80,7 @@ def _atomic_text(path: Path, text: str) -> None:
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         temporary.write_text(text, encoding="utf-8")
-        temporary.replace(path)
+        _replace_with_retry(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -435,15 +455,17 @@ def _init_claude() -> dict[str, object]:
             CLAUDE_MARKETPLACE,
         )
         _run_claude("claude_plugin_update_failed", "plugin", "update", CLAUDE_PLUGIN, "--scope", scope)
-    _run_claude(
-        "claude_plugin_enable_failed",
-        "plugin",
-        "enable",
-        CLAUDE_PLUGIN,
-        "--scope",
-        "user",
-    )
     enabled = _claude_plugins()
+    if not any(item.get("id") == CLAUDE_PLUGIN and item.get("enabled") is True for item in enabled):
+        _run_claude(
+            "claude_plugin_enable_failed",
+            "plugin",
+            "enable",
+            CLAUDE_PLUGIN,
+            "--scope",
+            "user",
+        )
+        enabled = _claude_plugins()
     if not any(item.get("id") == CLAUDE_PLUGIN and item.get("enabled") is True for item in enabled):
         raise ManagementError("claude_plugin_enable_missing")
 
@@ -564,6 +586,26 @@ def _refresh_codex_plugin() -> None:
     _run_codex("codex_plugin_add_failed", "plugin", "add", CODEX_PLUGIN, "--json")
 
 
+def _codex_marketplace_source(stable: Path) -> Path:
+    if "@" not in str(stable):
+        return stable
+    alias = Path.home() / ".myspec" / "codex-marketplace-source"
+    if alias.exists():
+        if not _same_path(alias, stable):
+            raise ManagementError("codex_marketplace_alias_source_mismatch")
+        return alias
+    alias.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        alias.symlink_to(stable, target_is_directory=True)
+    except OSError as exc:
+        if os.name != "nt":
+            raise ManagementError(f"codex_marketplace_alias_failed: {exc}") from exc
+        result = _run("cmd.exe", "/d", "/c", "mklink", "/j", str(alias), str(stable))
+        if result.returncode != 0:
+            raise ManagementError(f"codex_marketplace_alias_failed: {result.stderr.strip()}") from exc
+    return alias
+
+
 def _init_codex() -> dict[str, object]:
     if shutil.which("codex") is None:
         raise ManagementError("missing_command: codex")
@@ -578,7 +620,8 @@ def _init_codex() -> dict[str, object]:
             "then 'myspec init --codex', then 'myspec init --dev'"
         )
     if _codex_marketplace(stable, marketplaces) is None:
-        _run_codex("codex_marketplace_add_failed", "plugin", "marketplace", "add", str(stable), "--json")
+        source = _codex_marketplace_source(stable)
+        _run_codex("codex_marketplace_add_failed", "plugin", "marketplace", "add", str(source), "--json")
         if _codex_marketplace(stable, _codex_marketplaces()) is None:
             raise ManagementError("codex_marketplace_add_missing")
     _refresh_codex_plugin()
@@ -1153,15 +1196,17 @@ def _refresh_claude() -> str:
         "--scope",
         scope,
     )
-    _run_claude(
-        "claude_plugin_enable_failed",
-        "plugin",
-        "enable",
-        CLAUDE_PLUGIN,
-        "--scope",
-        scope,
-    )
     refreshed = _claude_plugins()
+    if not any(item.get("id") == CLAUDE_PLUGIN and item.get("enabled") is True for item in refreshed):
+        _run_claude(
+            "claude_plugin_enable_failed",
+            "plugin",
+            "enable",
+            CLAUDE_PLUGIN,
+            "--scope",
+            scope,
+        )
+        refreshed = _claude_plugins()
     if not any(item.get("id") == CLAUDE_PLUGIN and item.get("enabled") is True for item in refreshed):
         raise ManagementError("claude_plugin_refresh_missing")
     return "refreshed"
