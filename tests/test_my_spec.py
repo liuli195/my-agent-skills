@@ -164,13 +164,15 @@ def run_confirmed_workflow(
 def install_packed_myspec(tmp_path: Path) -> tuple[Path, Path]:
     npm = shutil.which("npm")
     assert npm is not None
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
     supplied_tarball = os.environ.get("MYSPEC_TEST_TARBALL")
     if supplied_tarball:
-        tarball = Path(supplied_tarball).resolve()
-        assert tarball.is_file()
+        source_tarball = Path(supplied_tarball).resolve()
+        assert source_tarball.is_file()
+        tarball = package_dir / source_tarball.name
+        shutil.copy2(source_tarball, tarball)
     else:
-        package_dir = tmp_path / "package"
-        package_dir.mkdir()
         packed = subprocess.run(
             [npm, "pack", "--json", "--pack-destination", str(package_dir)],
             cwd=PLUGIN_ROOT,
@@ -210,6 +212,11 @@ def install_packed_myspec(tmp_path: Path) -> tuple[Path, Path]:
         check=True,
     )
     return executable, Path(npm_root.stdout.strip()) / "@liuli195" / "myspec"
+
+
+def npm_prefix_for(installed_package: Path) -> Path:
+    node_modules = installed_package.parents[1]
+    return node_modules.parent.parent if node_modules.parent.name == "lib" else node_modules.parent
 
 
 def pack_myspec_version(tmp_path: Path, version: str, marker: Path | None = None) -> Path:
@@ -710,7 +717,7 @@ def test_packed_myspec_update_preflights_installed_clients_before_package_write(
     installed = tmp_path / "installed"
     installed.mkdir()
     executable, installed_package = install_packed_myspec(installed)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     old_tarball = next((installed / "package").glob("*.tgz"))
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", old_tarball)
     codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
@@ -765,7 +772,7 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
     installed = tmp_path / "installed"
     installed.mkdir()
     executable, installed_package = install_packed_myspec(installed)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     old_tarball = next((installed / "package").glob("*.tgz"))
     new_tarball = pack_myspec_version(tmp_path, NEXT_VERSION)
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", old_tarball)
@@ -883,7 +890,7 @@ def test_packed_myspec_update_recovers_external_success_before_bookkeeping(
     installed = tmp_path / "installed"
     installed.mkdir()
     executable, installed_package = install_packed_myspec(installed)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     old_tarball = next((installed / "package").glob("*.tgz"))
     marker = tmp_path / "new-cli.log"
     new_tarball = pack_myspec_version(tmp_path, NEXT_VERSION, marker)
@@ -972,7 +979,7 @@ def test_packed_myspec_update_recovers_external_success_before_bookkeeping(
 
 def test_packed_myspec_preserves_lock_when_process_status_is_unknown(tmp_path: Path) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     release_tarball = next((tmp_path / "package").glob("*.tgz"))
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
@@ -1040,7 +1047,7 @@ def test_packed_myspec_serializes_init_and_reports_locks_without_mutating_them(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    env = isolated_myspec_env(tmp_path, installed_package.parents[2])
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
     lock_path = Path(env["HOME"]) / ".myspec" / "install.lock"
     for malformed in ({"command": "myspec update"}, {"pid": True}, {"pid": "123"}, {"pid": 0}):
         write(lock_path, json.dumps(malformed))
@@ -1087,7 +1094,7 @@ def test_packed_myspec_doctor_reports_partial_update_read_only(tmp_path: Path) -
     second.mkdir()
     executable, _ = install_packed_myspec(first)
     _, installed_package = install_packed_myspec(second)
-    env = isolated_myspec_env(tmp_path, installed_package.parents[2])
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
     package_path = installed_package / "package.json"
     package = json.loads(package_path.read_text(encoding="utf-8"))
     package["version"] = NEXT_VERSION
@@ -1171,7 +1178,7 @@ def test_packed_myspec_doctor_reports_partial_update_read_only(tmp_path: Path) -
 
 def test_packed_myspec_update_rejects_dev_mode_and_forged_resume(tmp_path: Path) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     release_tarball = next((tmp_path / "package").glob("*.tgz"))
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
     env = isolated_myspec_env(tmp_path, prefix, npm_bin)
@@ -1198,7 +1205,7 @@ def test_packed_myspec_update_rejects_dev_mode_and_forged_resume(tmp_path: Path)
 
 def test_packed_myspec_initializes_and_diagnoses_one_pi_source(tmp_path: Path) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     env = isolated_myspec_env(tmp_path, prefix, pi_bin)
     env["MYSPEC_PI_LOG"] = str(pi_log)
@@ -1269,7 +1276,7 @@ def test_packed_myspec_doctor_does_not_enable_settings_source_missing_from_pi_li
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     env = isolated_myspec_env(tmp_path, prefix, pi_bin)
     env["MYSPEC_PI_LOG"] = str(pi_log)
@@ -1310,7 +1317,7 @@ def test_packed_myspec_follows_project_scope_reported_by_pi_list(
     expected_skills: tuple[str, ...],
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     env = isolated_myspec_env(tmp_path, prefix, pi_bin)
     env["MYSPEC_PI_LOG"] = str(pi_log)
@@ -1371,7 +1378,7 @@ def test_packed_myspec_uses_pi_list_project_scope_over_saved_trust(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     env = isolated_myspec_env(tmp_path, prefix, pi_bin)
     env["MYSPEC_PI_LOG"] = str(pi_log)
@@ -1406,7 +1413,7 @@ def test_packed_myspec_ignores_project_settings_absent_from_pi_list(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     env = isolated_myspec_env(tmp_path, prefix, pi_bin)
     env["MYSPEC_PI_LOG"] = str(pi_log)
@@ -1439,7 +1446,7 @@ def test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_f
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     env = isolated_myspec_env(tmp_path, prefix, pi_bin)
     env["MYSPEC_PI_LOG"] = str(pi_log)
@@ -1498,7 +1505,7 @@ def test_packed_myspec_pi_git_identity_matches_pi_host_path_semantics(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     env = isolated_myspec_env(tmp_path, prefix, pi_bin)
     env["MYSPEC_PI_LOG"] = str(pi_log)
@@ -1542,7 +1549,7 @@ def test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     env = isolated_myspec_env(tmp_path, prefix, pi_bin)
     env["MYSPEC_PI_LOG"] = str(pi_log)
@@ -1593,7 +1600,7 @@ def test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest(
 
 def test_packed_myspec_disables_only_exact_legacy_pi_sources(tmp_path: Path) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     env = isolated_myspec_env(tmp_path, prefix, pi_bin)
     env["MYSPEC_PI_LOG"] = str(pi_log)
@@ -1621,7 +1628,7 @@ def test_packed_myspec_disables_only_exact_legacy_pi_sources(tmp_path: Path) -> 
 
 def test_packed_myspec_doctor_reports_duplicate_enabled_pi_sources(tmp_path: Path) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     env = isolated_myspec_env(tmp_path, prefix, pi_bin)
     env["MYSPEC_PI_LOG"] = str(pi_log)
@@ -1641,7 +1648,7 @@ def test_packed_myspec_doctor_reads_legacy_git_and_npm_manifests_from_pi_list(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     env = isolated_myspec_env(tmp_path, prefix, pi_bin)
     env["MYSPEC_PI_LOG"] = str(pi_log)
@@ -1675,7 +1682,7 @@ def test_packed_myspec_keeps_project_legacy_sources_without_installed_paths(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     env = isolated_myspec_env(tmp_path, prefix, pi_bin)
     env["MYSPEC_PI_LOG"] = str(pi_log)
@@ -1726,7 +1733,7 @@ def test_packed_myspec_initializes_and_diagnoses_claude_without_deleting_legacy(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
     env = isolated_myspec_env(tmp_path, prefix, claude_bin)
     env.update(
@@ -1828,7 +1835,7 @@ def test_packed_myspec_doctor_reports_claude_marketplace_source_mismatch_read_on
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
     env = isolated_myspec_env(tmp_path, prefix, claude_bin)
     env.update(
@@ -1871,7 +1878,7 @@ def test_packed_myspec_explicit_claude_init_refreshes_disabled_stale_plugin(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
     env = isolated_myspec_env(tmp_path, prefix, claude_bin)
     env.update(
@@ -1920,7 +1927,7 @@ def test_packed_myspec_requires_explicit_claude_but_all_initializes_detected_cla
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     missing_env = isolated_myspec_env(tmp_path, prefix)
     missing = run_cli(executable, "init", "--claude", env=missing_env)
     assert missing.returncode == 1
@@ -1954,7 +1961,7 @@ def test_packed_myspec_initializes_and_diagnoses_codex_without_deleting_legacy(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
     env = isolated_myspec_env(tmp_path, prefix, codex_bin)
     codex_home = Path(env["HOME"]) / ".codex"
@@ -2074,7 +2081,7 @@ def test_packed_myspec_requires_explicit_codex_but_all_initializes_detected_code
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     missing_env = isolated_myspec_env(tmp_path, prefix)
     missing = run_cli(executable, "init", "--codex", env=missing_env)
     assert missing.returncode == 1
@@ -2131,7 +2138,7 @@ def test_packed_myspec_package_contains_single_codex_marketplace_and_four_skills
 
 def test_packed_myspec_reports_missing_pi_without_installing_it(tmp_path: Path) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     env = isolated_myspec_env(tmp_path, prefix)
 
     explicit = run_cli(executable, "init", "--pi", env=env)
@@ -2153,7 +2160,7 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     release_tarball = next((tmp_path / "package").glob("*.tgz"))
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
@@ -2238,7 +2245,7 @@ def test_packed_myspec_requires_release_registration_before_first_codex_dev_init
     installed = tmp_path / "installed"
     installed.mkdir()
     executable, installed_package = install_packed_myspec(installed)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     release_tarball = next((installed / "package").glob("*.tgz"))
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
     codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
@@ -2298,7 +2305,7 @@ def test_packed_myspec_refreshes_enabled_codex_across_global_mode_switches(
     installed = tmp_path / "installed"
     installed.mkdir()
     executable, installed_package = install_packed_myspec(installed)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     release_tarball = next((installed / "package").glob("*.tgz"))
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
     codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
@@ -2381,7 +2388,7 @@ def test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_codex(
     installed = tmp_path / "installed"
     installed.mkdir()
     executable, installed_package = install_packed_myspec(installed)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     release_tarball = next((installed / "package").glob("*.tgz"))
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
     codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
@@ -2444,7 +2451,7 @@ def test_packed_myspec_refreshes_enabled_claude_across_global_mode_switches(
     installed = tmp_path / "installed"
     installed.mkdir()
     executable, installed_package = install_packed_myspec(installed)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     release_tarball = next((installed / "package").glob("*.tgz"))
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
     claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
@@ -2539,7 +2546,7 @@ def test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_claude(
     installed = tmp_path / "installed"
     installed.mkdir()
     executable, installed_package = install_packed_myspec(installed)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     release_tarball = next((installed / "package").glob("*.tgz"))
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
     claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
@@ -2596,7 +2603,7 @@ def test_packed_myspec_claude_reinstall_failure_does_not_report_refreshed(
     installed = tmp_path / "installed"
     installed.mkdir()
     executable, installed_package = install_packed_myspec(installed)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     release_tarball = next((installed / "package").glob("*.tgz"))
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
     claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
@@ -2637,7 +2644,7 @@ def test_packed_myspec_release_install_failure_stays_in_dev_and_retries(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     release_tarball = next((tmp_path / "package").glob("*.tgz"))
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
     env = isolated_myspec_env(tmp_path, prefix, npm_bin)
@@ -2670,7 +2677,7 @@ def test_packed_myspec_mode_switch_does_not_install_a_disabled_pi_integration(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     release_tarball = next((tmp_path / "package").glob("*.tgz"))
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
@@ -2727,7 +2734,7 @@ def test_packed_myspec_mode_switch_does_not_install_a_disabled_pi_integration(
 
 def test_packed_myspec_doctor_uses_actual_installation_not_mode_state(tmp_path: Path) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     env = isolated_myspec_env(tmp_path, prefix, pi_bin)
     env["MYSPEC_PI_LOG"] = str(pi_log)
@@ -2770,7 +2777,7 @@ def test_packed_myspec_doctor_reports_actual_package_version_mismatch(tmp_path: 
     package["version"] = NEXT_VERSION
     write(package_path, json.dumps(package, indent=2))
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, installed_package.parents[2], pi_bin)
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), pi_bin)
     env["MYSPEC_PI_LOG"] = str(pi_log)
     write(
         Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
@@ -2787,7 +2794,7 @@ def test_packed_myspec_doctor_reports_actual_package_version_mismatch(tmp_path: 
 
 def test_packed_myspec_rejects_invalid_mode_switches(tmp_path: Path) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    env = isolated_myspec_env(tmp_path, installed_package.parents[2])
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
 
     invalid_source = run_cli(executable, "init", "--dev", "--source", tmp_path, env=env)
     assert invalid_source.returncode == 1
@@ -2857,7 +2864,7 @@ def test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_st
 ) -> None:
     (tmp_path / "installed").mkdir()
     executable, installed_package = install_packed_myspec(tmp_path / "installed")
-    prefix = installed_package.parents[2]
+    prefix = npm_prefix_for(installed_package)
     release_tarball = next((tmp_path / "installed" / "package").glob("*.tgz"))
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
     env = isolated_myspec_env(tmp_path, prefix, npm_bin)
