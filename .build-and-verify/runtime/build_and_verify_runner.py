@@ -592,6 +592,8 @@ def _run_check(project: Path, check: dict[str, Any], runner: Runner) -> int:
         "cwd": project,
         "check": False,
         "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
         "capture_output": True,
         "shell": use_shell,
     }
@@ -659,6 +661,8 @@ def _run_check_result(
         "cwd": project,
         "check": False,
         "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
         "capture_output": True,
         "shell": use_shell,
     }

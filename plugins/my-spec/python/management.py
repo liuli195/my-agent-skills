@@ -189,6 +189,7 @@ class PiSource:
     source: str
     local_path: Path | None
     installed_path: Path | None
+    registered: bool
 
     @property
     def autoload_delta(self) -> bool:
@@ -216,18 +217,32 @@ def _pi_sources(listed: list[dict[str, str]]) -> list[PiSource]:
             if source is None:
                 continue
             local_path = _local_source_path(source, path)
-            installed_path = next(
+            registration = next(
                 (
-                    Path(record["path"])
+                    record
                     for record in listed
-                    if record["scope"] == scope
-                    and record["source"] == source
-                    and "path" in record
-                    and (local_path is None or _same_path(Path(record["path"]), local_path))
+                    if record["scope"] == scope and record["source"] == source
                 ),
                 None,
             )
-            result.append(PiSource(scope, path, settings, index, item, source, local_path, installed_path))
+            installed_path = (
+                Path(registration["path"])
+                if registration is not None and "path" in registration
+                else None
+            )
+            result.append(
+                PiSource(
+                    scope,
+                    path,
+                    settings,
+                    index,
+                    item,
+                    source,
+                    local_path,
+                    installed_path,
+                    registration is not None,
+                )
+            )
     return result
 
 
@@ -1054,6 +1069,16 @@ def _validated_pending(stage: str, token: str | None) -> dict[str, object]:
     return state
 
 
+def _pi_source_mismatch(item: PiSource, stable: Path) -> bool:
+    return (
+        _myspec_source_kind(item, stable) == "stable"
+        and item.registered
+        and item.local_path is not None
+        and item.installed_path is not None
+        and not _same_path(item.local_path, item.installed_path)
+    )
+
+
 def _group_effective_myspec(
     stable: Path,
     sources: list[PiSource],
@@ -1062,7 +1087,7 @@ def _group_effective_myspec(
     by_identity: dict[str, int] = {}
     for item in _effective_sources(sources):
         kind = _myspec_source_kind(item, stable)
-        if kind is None:
+        if kind is None or _pi_source_mismatch(item, stable):
             continue
         identity = _source_identity(item)
         if identity not in by_identity:
@@ -1149,10 +1174,10 @@ def _group_skills(group: list[PiSource]) -> list[str]:
 
 def _pi_is_configured(listed: list[dict[str, str]]) -> bool:
     stable = _stable_package_root()
-    installed = [item for item in _pi_sources(listed) if item.installed_path is not None]
+    sources = [item for item in _pi_sources(listed) if item.registered]
     return any(
         kind == "stable" and _group_skills(group)
-        for _, kind, group in _group_effective_myspec(stable, installed)
+        for _, kind, group in _group_effective_myspec(stable, sources)
     )
 
 
@@ -1325,6 +1350,36 @@ def _manifest_version(root: Path) -> str | None:
     return value.get("version") if isinstance(value, dict) and isinstance(value.get("version"), str) else None
 
 
+def _myspec_manifest_version(root: Path | None) -> str | None:
+    if root is None or not root.is_dir():
+        return None
+    value = _read_json(root / "package.json") if (root / "package.json").is_file() else None
+    if not isinstance(value, dict) or value.get("name") not in {PACKAGE_NAME, "pi-my-spec"}:
+        return None
+    version = value.get("version")
+    return version if isinstance(version, str) else None
+
+
+def _source_record(
+    *,
+    installed: bool,
+    registered: bool,
+    enabled: bool,
+    source_kind: str,
+    source_mismatch: bool,
+    **details: object,
+) -> dict[str, object]:
+    return {
+        **details,
+        "installed": installed,
+        "registered": registered,
+        "enabled": enabled,
+        "effective": registered and installed and enabled and not source_mismatch,
+        "sourceKind": source_kind,
+        "sourceMismatch": source_mismatch,
+    }
+
+
 def _doctor_package() -> dict[str, object]:
     stable = _stable_package_root()
     real = Path(os.path.realpath(stable))
@@ -1344,48 +1399,71 @@ def _doctor_package() -> dict[str, object]:
     }
 
 
+def _pi_source_enabled(item: PiSource) -> bool:
+    if _myspec_manifest_version(item.installed_path) is not None:
+        return bool(_group_skills([item]))
+    patterns = item.skill_filter
+    if patterns is None:
+        return not item.autoload_delta
+    return any(not pattern.startswith(("!", "-")) for pattern in patterns)
+
+
 def _doctor_pi() -> dict[str, object]:
     stable = _stable_package_root()
     report = _doctor_package()
     available = shutil.which("pi") is not None
     listed = _pi_list() if available else []
     configured_sources = _pi_sources(listed)
-    installed_sources = [item for item in configured_sources if item.installed_path is not None]
-    effective = _effective_sources(installed_sources)
+    registered_sources = [item for item in configured_sources if item.registered]
+    effective_sources = _effective_sources(registered_sources)
     records: list[dict[str, object]] = []
+    stable_versions: list[str] = []
     for item in configured_sources:
         kind = _myspec_source_kind(item, stable)
-        if kind is not None:
-            installed = item in installed_sources
-            is_effective = item in effective
-            records.append({
-                "scope": item.scope,
-                "settings": str(item.settings_path),
-                "source": item.source,
-                "resolvedPath": str(item.installed_path) if item.installed_path is not None else None,
-                "kind": kind,
-                "installed": installed,
-                "effective": installed and is_effective,
-                "enabled": installed and is_effective and bool(_group_skills([item])),
-            })
-    groups = _group_effective_myspec(stable, installed_sources)
+        if kind is None:
+            continue
+        version = _myspec_manifest_version(item.installed_path)
+        installed = version is not None
+        enabled = _pi_source_enabled(item)
+        mismatch = _pi_source_mismatch(item, stable)
+        effective = (
+            item in effective_sources
+            and item.registered
+            and installed
+            and enabled
+            and not mismatch
+        )
+        record = _source_record(
+            installed=installed,
+            registered=item.registered,
+            enabled=enabled,
+            source_kind=kind,
+            source_mismatch=mismatch,
+            scope=item.scope,
+            settings=str(item.settings_path),
+            source=item.source,
+            resolvedPath=str(item.installed_path) if item.installed_path is not None else None,
+            kind=kind,
+        )
+        record["effective"] = effective
+        records.append(record)
+        if kind == "stable" and version is not None:
+            stable_versions.append(version)
+    groups = _group_effective_myspec(stable, registered_sources)
     enabled_groups = [(kind, group, _group_skills(group)) for _, kind, group in groups]
     stable_skills = next((skills for kind, _, skills in enabled_groups if kind == "stable"), [])
-    stable_versions = [
-        _manifest_version(item.installed_path)
-        for item in installed_sources
-        if item.installed_path is not None and _myspec_source_kind(item, stable) == "stable"
-    ]
     stable_version = stable_versions[0] if stable_versions else None
     enabled_sources = [group[0].source for _, group, skills in enabled_groups if skills]
     disabled_sources = [
         item.source
-        for item in installed_sources
-        if _myspec_source_kind(item, stable) is not None and not _group_skills([item])
+        for item in registered_sources
+        if _myspec_source_kind(item, stable) is not None and not _pi_source_enabled(item)
     ]
     report["pi"] = {
         "available": available,
-        "registered": bool(stable_skills),
+        "registered": any(
+            record["sourceKind"] == "stable" and record["registered"] for record in records
+        ),
         "installed": bool(stable_versions),
         "version": stable_version,
         "versionMismatch": not stable_versions or any(version != _package_version() for version in stable_versions),
@@ -1414,6 +1492,10 @@ def _doctor_claude() -> dict[str, object]:
     marketplaces = _claude_marketplaces() if available else []
     plugins = _claude_plugins() if available else []
     marketplace = _named_claude_marketplace(marketplaces) if available else None
+    legacy_marketplace = next(
+        (item for item in marketplaces if item.get("name") == "my-agent-skills-marketplace"),
+        None,
+    )
     marketplace_path = _claude_marketplace_path(marketplace) if marketplace is not None else None
     marketplace_registered = marketplace_path is not None and _same_path(marketplace_path, stable)
     relevant = [
@@ -1422,9 +1504,48 @@ def _doctor_claude() -> dict[str, object]:
         if isinstance(item.get("id"), str) and str(item["id"]).startswith("my-spec@")
     ]
     target = next((item for item in relevant if item.get("id") == CLAUDE_PLUGIN), None)
+    legacy = next((item for item in relevant if item.get("id") == CLAUDE_LEGACY_PLUGIN), None)
     enabled_sources = [str(item["id"]) for item in relevant if item.get("enabled") is True]
     disabled_sources = [str(item["id"]) for item in relevant if item.get("enabled") is False]
     install_path = Path(target["installPath"]) if isinstance(target, dict) and isinstance(target.get("installPath"), str) else None
+    records: list[dict[str, object]] = []
+    if marketplace is not None or target is not None:
+        mismatch = marketplace is not None and not marketplace_registered
+        records.append(
+            _source_record(
+                installed=_myspec_manifest_version(install_path) is not None,
+                registered=marketplace is not None or target is not None,
+                enabled=isinstance(target, dict) and target.get("enabled") is True,
+                source_kind="stable",
+                source_mismatch=mismatch,
+                id=CLAUDE_PLUGIN,
+                source=str(marketplace_path) if marketplace_path is not None else None,
+                installPath=str(install_path) if install_path is not None else None,
+            )
+        )
+    if legacy_marketplace is not None or legacy is not None:
+        legacy_path = (
+            Path(legacy["installPath"])
+            if isinstance(legacy, dict) and isinstance(legacy.get("installPath"), str)
+            else None
+        )
+        records.append(
+            _source_record(
+                installed=_myspec_manifest_version(legacy_path) is not None,
+                registered=legacy_marketplace is not None or legacy is not None,
+                enabled=isinstance(legacy, dict) and legacy.get("enabled") is True,
+                source_kind="legacy",
+                source_mismatch=False,
+                id=CLAUDE_LEGACY_PLUGIN,
+                source=(
+                    str(_claude_marketplace_path(legacy_marketplace))
+                    if legacy_marketplace is not None
+                    and _claude_marketplace_path(legacy_marketplace) is not None
+                    else None
+                ),
+                installPath=str(legacy_path) if legacy_path is not None else None,
+            )
+        )
     report["claude"] = {
         "available": available,
         "marketplace": marketplace,
@@ -1437,6 +1558,7 @@ def _doctor_claude() -> dict[str, object]:
         "enabledSources": enabled_sources,
         "disabledSources": disabled_sources,
         "duplicateEnabledSources": len(enabled_sources) > 1,
+        "sources": records,
         "plugins": relevant,
         "skills": _plugin_skills(install_path),
         "reloadRequired": bool(enabled_sources),
@@ -1451,14 +1573,67 @@ def _doctor_codex() -> dict[str, object]:
     marketplaces = _codex_marketplaces() if available else []
     plugins = _codex_plugins() if available else []
     marketplace = _named_codex_marketplace(marketplaces) if available else None
+    legacy_marketplace = next(
+        (item for item in marketplaces if item.get("name") == "my-agent-skills-marketplace"),
+        None,
+    )
     root = Path(marketplace["root"]) if isinstance(marketplace, dict) and isinstance(marketplace.get("root"), str) else None
     marketplace_registered = root is not None and _same_path(root, stable)
     relevant = [item for item in plugins if isinstance(item.get("pluginId"), str) and str(item["pluginId"]).startswith("my-spec@")]
     target = next((item for item in relevant if item.get("pluginId") == CODEX_PLUGIN), None)
+    legacy = next((item for item in relevant if item.get("pluginId") == CODEX_LEGACY_PLUGIN), None)
     enabled_sources = [str(item["pluginId"]) for item in relevant if item.get("enabled") is True]
     disabled_sources = [str(item["pluginId"]) for item in relevant if item.get("enabled") is False]
     source = target.get("source") if isinstance(target, dict) else None
     install_path = Path(source["path"]) if isinstance(source, dict) and isinstance(source.get("path"), str) else None
+    records: list[dict[str, object]] = []
+    if marketplace is not None or target is not None:
+        mismatch = marketplace is not None and not marketplace_registered
+        records.append(
+            _source_record(
+                installed=(
+                    isinstance(target, dict)
+                    and target.get("installed") is True
+                    and _myspec_manifest_version(install_path) is not None
+                ),
+                registered=marketplace is not None or target is not None,
+                enabled=isinstance(target, dict) and target.get("enabled") is True,
+                source_kind="stable",
+                source_mismatch=mismatch,
+                pluginId=CODEX_PLUGIN,
+                source=str(root) if root is not None else None,
+                installPath=str(install_path) if install_path is not None else None,
+            )
+        )
+    if legacy_marketplace is not None or legacy is not None:
+        legacy_source = legacy.get("source") if isinstance(legacy, dict) else None
+        legacy_path = (
+            Path(legacy_source["path"])
+            if isinstance(legacy_source, dict) and isinstance(legacy_source.get("path"), str)
+            else None
+        )
+        legacy_root = (
+            Path(legacy_marketplace["root"])
+            if isinstance(legacy_marketplace, dict)
+            and isinstance(legacy_marketplace.get("root"), str)
+            else None
+        )
+        records.append(
+            _source_record(
+                installed=(
+                    isinstance(legacy, dict)
+                    and legacy.get("installed") is True
+                    and _myspec_manifest_version(legacy_path) is not None
+                ),
+                registered=legacy_marketplace is not None or legacy is not None,
+                enabled=isinstance(legacy, dict) and legacy.get("enabled") is True,
+                source_kind="legacy",
+                source_mismatch=False,
+                pluginId=CODEX_LEGACY_PLUGIN,
+                source=str(legacy_root) if legacy_root is not None else None,
+                installPath=str(legacy_path) if legacy_path is not None else None,
+            )
+        )
     report["codex"] = {
         "available": available,
         "marketplace": marketplace,
@@ -1471,6 +1646,7 @@ def _doctor_codex() -> dict[str, object]:
         "enabledSources": enabled_sources,
         "disabledSources": disabled_sources,
         "duplicateEnabledSources": len(enabled_sources) > 1,
+        "sources": records,
         "plugins": relevant,
         "skills": _plugin_skills(install_path),
         "newSessionRequired": bool(enabled_sources),

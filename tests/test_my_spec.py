@@ -19,6 +19,17 @@ PLUGIN_ROOT = REPO_ROOT / "plugins" / "my-spec"
 SPEC_OPS = PLUGIN_ROOT / "python" / "spec_ops.py"
 SKILL_NAMES = ("my-spec", "my-spec-add", "my-spec-review", "my-spec-audit")
 PACKAGE_VERSION = json.loads((PLUGIN_ROOT / "package.json").read_text(encoding="utf-8"))["version"]
+SOURCE_CASES = json.loads(
+    (REPO_ROOT / "tests" / "fixtures" / "myspec_source_cases.json").read_text(encoding="utf-8")
+)
+SOURCE_FIELDS = (
+    "installed",
+    "registered",
+    "enabled",
+    "effective",
+    "sourceKind",
+    "sourceMismatch",
+)
 
 
 def load_management_module():
@@ -716,6 +727,168 @@ def isolated_myspec_env(
     }
 
 
+def source_case_report(
+    client: str,
+    case: dict[str, object],
+    root: Path,
+    executable: Path,
+    installed_package: Path,
+    prefix: Path,
+) -> dict[str, object]:
+    scenario = str(case["scenario"])
+    enabled = scenario != "stable-disabled"
+    installed = scenario != "stable-missing-directory"
+    legacy = scenario == "legacy-enabled"
+    mismatch = scenario == "stable-source-mismatch"
+    source_root = root / ("legacy" if legacy else "wrong-source" if mismatch else "source")
+    if legacy:
+        source_root = source_root / "plugins" / "my-spec"
+    if installed and scenario != "no-source":
+        shutil.copytree(installed_package, source_root)
+
+    if client == "pi":
+        client_bin, log = install_fake_pi(root / "fake-pi")
+        env = isolated_myspec_env(root, prefix, client_bin)
+        env["MYSPEC_PI_LOG"] = str(log)
+        stable_source = str(installed_package)
+        raw_source = str(source_root) if legacy else stable_source
+        item: object = {"source": raw_source, "skills": []} if not enabled else raw_source
+        if scenario == "no-source":
+            item = str(root / "unrelated")
+        write(
+            Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
+            json.dumps({"packages": [item]}, indent=2),
+        )
+        if not installed and scenario != "no-source":
+            env["MYSPEC_PI_LIST_SOURCE_ONLY"] = json.dumps([raw_source])
+        if mismatch:
+            env["MYSPEC_PI_INSTALLED_PATHS"] = json.dumps({raw_source: str(source_root)})
+    elif client == "claude":
+        client_bin, log, state_path = install_fake_claude(root / "fake-claude")
+        env = isolated_myspec_env(root, prefix, client_bin)
+        env.update(
+            {
+                "MYSPEC_CLAUDE_LOG": str(log),
+                "MYSPEC_CLAUDE_STATE": str(state_path),
+                "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+            }
+        )
+        identifier = "my-spec@my-agent-skills-marketplace" if legacy else "my-spec@myspec"
+        marketplaces = []
+        plugins = []
+        if scenario == "no-source":
+            plugins.append(
+                {
+                    "id": "other@other-marketplace",
+                    "version": "1.0.0",
+                    "scope": "user",
+                    "enabled": True,
+                    "installPath": str(root / "unrelated"),
+                }
+            )
+        else:
+            market_name = "my-agent-skills-marketplace" if legacy else "myspec"
+            market_path = source_root if mismatch else installed_package
+            marketplaces.append(
+                {
+                    "name": market_name,
+                    "source": "directory",
+                    "path": str(market_path),
+                    "installLocation": str(market_path),
+                }
+            )
+            plugins.append(
+                {
+                    "id": identifier,
+                    "version": PACKAGE_VERSION,
+                    "scope": "user",
+                    "enabled": enabled,
+                    "installPath": str(source_root),
+                }
+            )
+        write(state_path, json.dumps({"marketplaces": marketplaces, "plugins": plugins}, indent=2))
+    else:
+        client_bin, log, state_path = install_fake_codex(root / "fake-codex")
+        env = isolated_myspec_env(root, prefix, client_bin)
+        codex_home = Path(env["HOME"]) / ".codex"
+        env.update(
+            {
+                "CODEX_HOME": str(codex_home),
+                "MYSPEC_CODEX_LOG": str(log),
+                "MYSPEC_CODEX_STATE": str(state_path),
+            }
+        )
+        identifier = "my-spec@my-agent-skills-marketplace" if legacy else "my-spec@myspec"
+        marketplaces = []
+        plugins = []
+        if scenario == "no-source":
+            plugins.append(
+                {
+                    "pluginId": "other@other-marketplace",
+                    "name": "other",
+                    "marketplaceName": "other-marketplace",
+                    "version": "1.0.0",
+                    "installed": True,
+                    "source": {"source": "local", "path": str(root / "unrelated")},
+                }
+            )
+            identifier = "other@other-marketplace"
+        else:
+            market_name = "my-agent-skills-marketplace" if legacy else "myspec"
+            market_root = source_root if mismatch else installed_package
+            marketplaces.append(
+                {
+                    "name": market_name,
+                    "root": str(market_root),
+                    "marketplaceSource": {"sourceType": "local", "source": str(market_root)},
+                }
+            )
+            plugins.append(
+                {
+                    "pluginId": identifier,
+                    "name": "my-spec",
+                    "marketplaceName": market_name,
+                    "version": PACKAGE_VERSION,
+                    "installed": True,
+                    "source": {"source": "local", "path": str(source_root)},
+                }
+            )
+        write(state_path, json.dumps({"marketplaces": marketplaces, "installed": plugins, "available": []}, indent=2))
+        write(codex_home / "config.toml", f'[plugins."{identifier}"]\nenabled = {str(enabled).lower()}\n')
+
+    diagnosed = run_cli(executable, "doctor", f"--{client}", env=env)
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    return json.loads(diagnosed.stdout)[client]
+
+
+@pytest.mark.parametrize("client", ("pi", "claude", "codex"))
+def test_packed_myspec_clients_run_shared_source_cases(tmp_path: Path, client: str) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = install_packed_myspec(installed)
+    prefix = npm_prefix_for(installed_package)
+    seen = []
+
+    for case in SOURCE_CASES:
+        seen.append(case["id"])
+        report = source_case_report(
+            client,
+            case,
+            tmp_path / str(case["id"]),
+            executable,
+            installed_package,
+            prefix,
+        )
+        actual = [
+            {field: source[field] for field in SOURCE_FIELDS}
+            for source in report["sources"]
+        ]
+        assert actual == case["expectedSources"], case["id"]
+        assert {"enabledSources", "disabledSources", "duplicateEnabledSources"} <= report.keys()
+
+    assert seen == [case["id"] for case in SOURCE_CASES]
+
+
 def test_packed_myspec_update_preflights_installed_clients_before_package_write(
     tmp_path: Path,
 ) -> None:
@@ -1277,7 +1450,7 @@ def test_packed_myspec_initializes_and_diagnoses_one_pi_source(tmp_path: Path) -
     assert json.loads(broken.stdout)["pi"]["skills"] == list(SKILL_NAMES[:-1])
 
 
-def test_packed_myspec_doctor_does_not_enable_settings_source_missing_from_pi_list(
+def test_packed_myspec_doctor_keeps_enabled_intent_for_settings_source_missing_from_pi_list(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
@@ -1301,7 +1474,7 @@ def test_packed_myspec_doctor_does_not_enable_settings_source_missing_from_pi_li
     assert report["sources"][0]["source"] == str(installed_package)
     assert report["sources"][0]["installed"] is False
     assert report["sources"][0]["effective"] is False
-    assert report["sources"][0]["enabled"] is False
+    assert report["sources"][0]["enabled"] is True
 
 
 @pytest.mark.parametrize(
@@ -1365,7 +1538,7 @@ def test_packed_myspec_follows_project_scope_reported_by_pi_list(
     assert diagnosed.returncode == 0, diagnosed.stderr
     report = json.loads(diagnosed.stdout)
     assert report["pi"]["skills"] == list(expected_skills)
-    assert report["pi"]["registered"] is bool(expected_skills)
+    assert report["pi"]["registered"] is True
     assert report["pi"]["listedSources"] == (
         [
             {"scope": "user", "source": str(installed_package), "path": str(installed_package)},
@@ -1406,7 +1579,7 @@ def test_packed_myspec_uses_pi_list_project_scope_over_saved_trust(
     )
 
     report = json.loads(run_cli(executable, "doctor", "--pi", env=env, cwd=project).stdout)["pi"]
-    assert report["registered"] is False
+    assert report["registered"] is True
     assert report["skills"] == []
     assert report["listedSources"] == [
         {"scope": "user", "source": str(installed_package), "path": str(installed_package)},
@@ -1496,7 +1669,7 @@ def test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_f
     assert not any(call[:1] == ["install"] for call in calls)
 
     report = json.loads(run_cli(executable, "doctor", "--pi", env=env, cwd=project).stdout)
-    assert report["pi"]["registered"] is False
+    assert report["pi"]["registered"] is True
     assert report["pi"]["duplicateEnabledSources"] is False
     assert report["pi"]["skills"] == []
 
@@ -1522,6 +1695,12 @@ def test_packed_myspec_pi_git_identity_matches_pi_host_path_semantics(
     different_host = "https://gitlab.com/example/pi-my-spec.git@main"
     different_path = "https://github.com/other/pi-my-spec.git@main"
     project_ssh = "git:git@github.com:example/pi-my-spec.git@feature"
+    env["MYSPEC_PI_INSTALLED_PATHS"] = json.dumps(
+        {
+            source: str(installed_package)
+            for source in (user_https, different_host, different_path, project_ssh)
+        }
+    )
     write(
         user_settings,
         json.dumps(
@@ -2733,7 +2912,7 @@ def test_packed_myspec_mode_switch_does_not_install_a_disabled_pi_integration(
     npm_calls = [json.loads(line) for line in npm_log.read_text(encoding="utf-8").splitlines()]
     assert ["link"] in npm_calls
     report = json.loads(run_cli(executable, "doctor", "--pi", env=env).stdout)
-    assert report["pi"]["registered"] is False
+    assert report["pi"]["registered"] is True
     assert report["pi"]["skills"] == []
 
 
