@@ -798,6 +798,24 @@ def test_preflight_manifest_mismatch_prints_next_action(tmp_path: Path, monkeypa
     ) in result.stdout
 
 
+def test_remote_release_requires_a_remote_tag_even_when_gh_view_succeeds(
+    tmp_path: Path, monkeypatch
+) -> None:
+    release_flow = load_release_flow_module()
+
+    def fake_run(command, **_kwargs):
+        if "ls-remote" in command:
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if "release" in command and "view" in command:
+            return subprocess.CompletedProcess(command, 0, "unexpected release", "")
+        raise AssertionError(command)
+
+    monkeypatch.setattr(release_flow.subprocess, "run", fake_run)
+    monkeypatch.setattr(release_flow, "origin_is_github", lambda _project: True)
+
+    assert release_flow.remote_release_errors(tmp_path, "v9.9.1") == []
+
+
 def test_preflight_existing_release_prints_next_action(tmp_path: Path, monkeypatch) -> None:
     result = run_preflight_with_errors(
         monkeypatch,

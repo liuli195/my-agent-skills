@@ -926,7 +926,8 @@ def remote_release_errors(project: Path, tag: str) -> list[str]:
     if tag_result.returncode != 0:
         return [f"remote_release_unknown: {tag}"]
     errors: list[str] = []
-    if tag_result.stdout.strip():
+    tag_exists = bool(tag_result.stdout.strip())
+    if tag_exists:
         errors.append(f"release already exists: {tag}")
     if not origin_is_github(project):
         return errors
@@ -942,7 +943,8 @@ def remote_release_errors(project: Path, tag: str) -> list[str]:
         return [*errors, f"remote_release_unknown: {tag}"]
     gh_output = (gh_result.stderr or gh_result.stdout).lower()
     if gh_result.returncode == 0:
-        errors.append(f"release already exists: {tag}")
+        if tag_exists:
+            errors.append(f"release already exists: {tag}")
     elif "not found" not in gh_output and "could not resolve" not in gh_output:
         errors.append(f"remote_release_unknown: {tag}")
     return errors
