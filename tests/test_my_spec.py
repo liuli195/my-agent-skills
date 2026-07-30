@@ -1503,6 +1503,37 @@ def test_packed_myspec_doctor_keeps_enabled_intent_for_settings_source_missing_f
     assert report["enabled"] is True
 
 
+def test_packed_myspec_doctor_keeps_enabled_intent_for_missing_pi_source_with_exclusion(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    env["MYSPEC_PI_LIST_SOURCE_ONLY"] = json.dumps([str(installed_package)])
+    write(
+        Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
+        json.dumps(
+            {"packages": [{"source": str(installed_package), "skills": ["!my-spec-audit"]}]},
+            indent=2,
+        ),
+    )
+
+    diagnosed = run_cli(executable, "doctor", "--pi", env=env)
+
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    report = json.loads(diagnosed.stdout)["pi"]
+    assert report["enabled"] is True
+    assert {field: report["sources"][0][field] for field in SOURCE_FIELDS} == {
+        "installed": False,
+        "registered": True,
+        "enabled": True,
+        "effective": False,
+        "sourceKind": "stable",
+        "sourceMismatch": False,
+    }
+
+
 @pytest.mark.parametrize(
     ("trust", "default_trust", "expected_skills"),
     [

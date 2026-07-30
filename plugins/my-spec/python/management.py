@@ -1405,7 +1405,12 @@ def _pi_source_enabled(item: PiSource) -> bool:
     patterns = item.skill_filter
     if patterns is None:
         return not item.autoload_delta
-    return any(not pattern.startswith(("!", "-")) for pattern in patterns)
+    if not patterns or item.autoload_delta:
+        return any(not pattern.startswith(("!", "-")) for pattern in patterns)
+    return any(
+        _pattern_enabled(f"{path.removeprefix('./')}/SKILL.md", name, patterns)
+        for path, name in zip(SKILL_PATHS, SKILL_NAMES)
+    )
 
 
 def _doctor_pi() -> dict[str, object]:
