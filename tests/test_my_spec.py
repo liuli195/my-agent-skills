@@ -4304,6 +4304,11 @@ def test_plugin_uses_host_native_skill_paths_without_custom_pi_routing() -> None
     assert package["name"] == "@liuli195/myspec"
     assert package["bin"] == {"myspec": "./bin/myspec.js"}
     assert package["publishConfig"] == {"access": "public"}
+    assert package["repository"] == {
+        "type": "git",
+        "url": "https://github.com/liuli195/my-agent-skills",
+        "directory": "plugins/my-spec",
+    }
     assert package["pi"] == {"skills": [f"./skills/{name}" for name in SKILL_NAMES]}
     assert "peerDependencies" not in package
     assert "dependencies" not in package
