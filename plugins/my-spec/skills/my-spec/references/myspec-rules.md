@@ -27,9 +27,10 @@ Delta（增量规格）按能力放在 `.local/spec-work/current/delta/<capabili
 
 ```text
 myspec state-init <work-dir> <add|review|audit> <specs-fingerprint> <input-fingerprint>
-myspec state-set-conflicts <work-dir> <conflicts-json> <specs-fingerprint> <input-fingerprint>
+myspec state-set-conflicts <work-dir> <conflicts-file> <specs-fingerprint> <input-fingerprint>
 myspec state-current <work-dir> <specs-fingerprint> <input-fingerprint>
-myspec state-decide <work-dir> <expected-conflict-id> <accept|ignore|accept-modified|defer> <specs-fingerprint> <input-fingerprint>
+myspec state-decide <work-dir> <expected-conflict-id> <accept|ignore|defer> <specs-fingerprint> <input-fingerprint>
+myspec state-decide <work-dir> <expected-conflict-id> accept-modified <specs-fingerprint> <input-fingerprint> --modified-content <完整候选正文>
 myspec state-status <work-dir> <specs-fingerprint> <input-fingerprint>
 myspec validate-main <specs-dir>
 myspec validate-delta <delta-dir> <specs-dir>

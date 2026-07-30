@@ -3804,6 +3804,10 @@ def test_skill_entries_route_add_review_and_audit_with_safe_boundaries() -> None
         assert "state-set-conflicts" in procedure
         assert "首次展示" in procedure
         assert "禁止重新" in procedure
+    assert "<conflicts-file>" in rules
+    assert "<conflicts-json>" not in rules
+    assert "accept-modified" in rules
+    assert "--modified-content <完整候选正文>" in rules
 
 
 @pytest.mark.skipif(
@@ -3830,6 +3834,8 @@ def test_plugin_sync_delegates_all_myspec_lifecycle_work_to_myspec_cli() -> None
     ):
         assert f"`{command}`" in skill
     assert "CLI（命令行程序）拥有" in skill
+    assert "If the request only contains MySpec（自有规格）" in skill
+    assert "remaining non-MySpec（自有规格） scope" in skill
     for name in ("check.md", "update-claude.md", "update-codex.md"):
         assert "MySpec（自有规格）不适用" in references[name]
     assert "spec_ops.py" not in skill + "\n".join(references.values())
