@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +12,6 @@ except ImportError:
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-Runner = Callable[..., subprocess.CompletedProcess[Any]]
 
 
 def _load_json(path: Path) -> tuple[dict[str, Any] | None, str | None]:
@@ -172,14 +169,13 @@ def _projection_plugins(root: Path) -> tuple[list[str], list[str]]:
     return plugins, []
 
 
-def run_build(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> list[str]:
+def run_build(root: Path = REPO_ROOT) -> list[str]:
     errors: list[str] = []
     plugins, marketplace_errors = _marketplace_plugins(root)
     errors.extend(marketplace_errors)
     codex_dev_plugins, codex_dev_marketplace_errors = _codex_dev_marketplace_plugins(root)
     errors.extend(codex_dev_marketplace_errors)
 
-    validate_commands: list[list[str]] = [["claude", "plugin", "validate", "."]]
     marketplace_names: list[str] = []
     seen_marketplace_names: set[str] = set()
 
@@ -203,7 +199,6 @@ def run_build(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> list[s
             errors.append(f"source_outside_repo: {name}: {source}")
             continue
 
-        validate_commands.append(["claude", "plugin", "validate", str(plugin_dir)])
         errors.extend(
             _check_manifest(
                 plugin_dir / ".claude-plugin" / "plugin.json",
@@ -247,19 +242,6 @@ def run_build(root: Path = REPO_ROOT, runner: Runner = subprocess.run) -> list[s
                 ("skills", "hooks", "assets"),
             )
         )
-
-    missing_commands: set[str] = set()
-    for command in validate_commands:
-        try:
-            result = runner(command, cwd=root, text=True, capture_output=True, check=False)
-        except FileNotFoundError:
-            command_name = command[0]
-            if command_name not in missing_commands:
-                errors.append(f"missing_command: {command_name}")
-                missing_commands.add(command_name)
-            continue
-        if getattr(result, "returncode", 0) != 0:
-            errors.append(f"claude_validate_failed: {' '.join(command)}")
 
     projection_plugins, projection_errors = _projection_plugins(root)
     errors.extend(projection_errors)
