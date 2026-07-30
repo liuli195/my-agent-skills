@@ -61,3 +61,12 @@ TBD - created by archiving change split-fast-full-verification. Update Purpose a
 - **WHEN** agent（代理）在其他上下文准备运行 `build-and-verify verify --full`（构建与验证完整验证）
 - **THEN** agent（代理） MUST 输出升级到 full verify（完整验证）的具体原因
 - **THEN** agent（代理） MUST 等待用户确认后才能运行
+### Requirement: Build and Verify does not manage MySpec versions
+
+Build and Verify（构建与验证）MUST 只作为统一构建和验证入口执行目标仓库已配置的检查，不得拥有、推断或同步外部仓库的 MySpec（自有规格）npm（软件包管理器）版本。
+
+#### Scenario: 外部仓库运行统一验证
+
+- **WHEN** Build and Verify 为外部仓库执行已配置检查
+- **THEN** Build and Verify MUST 运行仓库配置的 MySpec 校验命令
+- **THEN** Build and Verify MUST NOT 修改、推断或同步该仓库使用的 MySpec npm 版本
