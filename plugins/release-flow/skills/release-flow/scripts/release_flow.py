@@ -927,8 +927,9 @@ def remote_release_errors(project: Path, tag: str) -> list[str]:
         return [f"remote_release_unknown: {tag}"]
     errors: list[str] = []
     tag_exists = bool(tag_result.stdout.strip())
-    if tag_exists:
-        errors.append(f"release already exists: {tag}")
+    if not tag_exists:
+        return errors
+    errors.append(f"release already exists: {tag}")
     if not origin_is_github(project):
         return errors
     try:
