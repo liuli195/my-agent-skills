@@ -43,11 +43,14 @@ def test_setup_worktree_script_propagates_each_setup_failure() -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows junction behavior")
-def test_setup_worktree_script_links_shared_node_dependencies(tmp_path: Path) -> None:
-    pwsh = shutil.which("pwsh")
+@pytest.mark.parametrize("shell_name", ["powershell", "pwsh"])
+def test_setup_worktree_script_links_shared_node_dependencies(
+    tmp_path: Path, shell_name: str
+) -> None:
+    shell = shutil.which(shell_name)
     true = shutil.which("true")
-    if not pwsh or not true:
-        pytest.skip("pwsh and true executables are required")
+    if not shell or not true:
+        pytest.skip(f"{shell_name} and true executables are required")
 
     project = tmp_path / "project"
     project.mkdir()
@@ -80,7 +83,7 @@ def test_setup_worktree_script_links_shared_node_dependencies(tmp_path: Path) ->
         f'@echo called>>"{npm_marker}"\n@exit /b 99\n', encoding="utf-8"
     )
     env = os.environ | {"PATH": str(fake_bin) + os.pathsep + os.environ["PATH"]}
-    command = [pwsh, "-NoProfile", "-File", str(worktree / "scripts/setup-worktree.ps1")]
+    command = [shell, "-NoProfile", "-File", str(worktree / "scripts/setup-worktree.ps1")]
 
     missing = subprocess.run(
         command,
