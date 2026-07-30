@@ -19,7 +19,13 @@ try {
     else {
         function Get-ManifestHash($path) {
             $text = [IO.File]::ReadAllText($path).Replace("`r`n", "`n")
-            return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($text)))
+            $sha256 = [Security.Cryptography.SHA256]::Create()
+            try {
+                return [BitConverter]::ToString($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($text))).Replace('-', '')
+            }
+            finally {
+                $sha256.Dispose()
+            }
         }
 
         foreach ($manifest in @('package.json', 'package-lock.json', 'plugins\pi-tool-display\package.json')) {
