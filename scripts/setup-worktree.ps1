@@ -47,7 +47,10 @@ try {
         }
         else {
             $link = Get-Item $localNodeModules
-            $actualTarget = if ($link.Target) { [IO.Path]::GetFullPath([string]$link.Target, $projectRoot) } else { '' }
+            $actualTarget = if ($link.Target) {
+                $target = [string]$link.Target
+                [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($target)) { $target } else { Join-Path $projectRoot $target }))
+            } else { '' }
             $expectedTarget = [IO.Path]::GetFullPath($sharedNodeModules)
             if (-not ($link.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
                 -not $actualTarget.Equals($expectedTarget, [StringComparison]::OrdinalIgnoreCase)) {

@@ -100,6 +100,7 @@ def test_setup_worktree_script_links_shared_node_dependencies(
 
     shared_node_modules.mkdir()
     subprocess.run(command, cwd=worktree, env=env, check=True)
+    subprocess.run(command, cwd=worktree, env=env, check=True)
 
     link = worktree / "node_modules"
     assert link.is_junction()
