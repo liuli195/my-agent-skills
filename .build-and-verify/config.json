@@ -154,7 +154,8 @@
           ".release-flow/projection.yaml",
           ".build-and-verify/config.json",
           "plugins/my-spec/**",
-          "tests/test_my_spec.py"
+          "tests/test_my_spec.py",
+          "tests/fixtures/myspec_source_cases.json"
         ],
         "command": "python -m pytest -q -p no:cacheprovider tests/test_my_spec.py",
         "inputs": [
@@ -163,7 +164,8 @@
           ".release-flow/projection.yaml",
           ".build-and-verify/config.json",
           "plugins/my-spec",
-          "tests/test_my_spec.py"
+          "tests/test_my_spec.py",
+          "tests/fixtures/myspec_source_cases.json"
         ],
         "checkParallel": false,
         "pytestXdistWorkers": 4,

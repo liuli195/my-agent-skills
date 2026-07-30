@@ -2690,6 +2690,47 @@ def test_build_and_verify_runner_build_verify_and_full_verify(tmp_path: Path) ->
     ]
 
 
+@pytest.mark.parametrize(
+    ("action", "failure_report"),
+    [
+        ("build", "checked: invalid-output"),
+        ("verify", "failed: invalid-output"),
+    ],
+)
+def test_build_and_verify_runner_reports_failed_check_with_invalid_utf8_output(
+    tmp_path: Path, action: str, failure_report: str
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    check = {
+        "id": "invalid-output",
+        "command": [
+            sys.executable,
+            "-c",
+            "import os; os.write(2, b'invalid: \\xff\\n'); raise SystemExit(7)",
+        ],
+        "inputs": [],
+    }
+    write_runner_config(
+        project,
+        build_checks=[check] if action == "build" else None,
+        verify_checks=[check] if action == "verify" else None,
+    )
+
+    result = run_check(
+        project,
+        action,
+        runner=subprocess.run,
+        changed_files=["changed.txt"],
+    )
+
+    assert result.returncode == 1
+    assert "invalid: \ufffd" in result.stderr
+    assert failure_report in result.stdout
+    assert "status: failed" in result.stdout
+    assert "UnicodeDecodeError" not in result.stderr
+
+
 def test_build_and_verify_runner_full_verify_allows_empty_checks(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
