@@ -1300,12 +1300,17 @@ def test_myspec_source_ci_and_release_use_the_packed_current_checkout() -> None:
     assert full_verify.index("npm pack ./plugins/my-spec") < full_verify.index("Run full verification")
     assert "id-token: write" in release
     assert "registry-url: https://registry.npmjs.org" in release
-    assert "npm publish --provenance --access public" in release
+    assert 'npm publish "$MYSPEC_TARBALL" --provenance --access public' in release
     assert "BUMP_PLUGINS: ${{ inputs.bumpPlugins }}" in release
-    assert '",$BUMP_PLUGINS," != *",my-spec,"*' in release
+    assert 'normalized_plugins="${BUMP_PLUGINS//[[:space:]]/}"' in release
+    assert '",$normalized_plugins," != *",my-spec,"*' in release
     assert "package.json').version" in release
-    assert release.index("Run full verification") < release.index("npm publish --provenance --access public")
-    assert release.index("npm publish --provenance --access public") < release.index("Publish release channel")
+    assert "dist.integrity" in release and "MYSPEC_INTEGRITY" in release
+    assert "Published MySpec package does not match the verified Tarball" in release
+    assert "--allow-existing-release" in release
+    assert release.index("Run full verification") < release.index("Validate release plan")
+    assert release.index("Validate release plan") < release.index('npm publish "$MYSPEC_TARBALL"')
+    assert release.index('npm publish "$MYSPEC_TARBALL"') < release.index("Publish release channel")
 
 
 def test_workflows_use_current_low_risk_action_versions() -> None:
@@ -1474,6 +1479,52 @@ def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: 
     assert remote_calls == [(project.resolve(), "marketplace", projection_path, "v9.9.1")]
     source_marketplace = json.loads((project / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8"))
     assert source_marketplace["name"] == "local-dev"
+
+
+def test_ci_publish_recovers_an_existing_tag_without_republishing_channel(
+    tmp_path: Path, monkeypatch
+) -> None:
+    release_flow = load_release_flow_module()
+    project = tmp_path / "project"
+    write_release_flow_files(project)
+    recovered = {
+        "release_url": "https://github.example/releases/tag/v9.9.1",
+        "marketplace_commit": "same-commit",
+        "tag_commit": "same-commit",
+        "workflow_run_url": "https://github.example/actions/runs/2",
+    }
+    monkeypatch.setattr(
+        release_flow,
+        "preflight_errors",
+        lambda *_args: ["release already exists: v9.9.1"],
+    )
+    monkeypatch.setattr(
+        release_flow,
+        "recover_existing_ci_publish",
+        lambda *_args: recovered,
+    )
+    monkeypatch.setattr(
+        release_flow,
+        "run_ci_publish_remote",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not republish channel")),
+    )
+
+    result = run(
+        "ci-publish",
+        "--project",
+        str(project),
+        "--tag",
+        "v9.9.1",
+        "--version",
+        "9.9.1",
+        "--bump-plugins",
+        "my-spec",
+        "--authorize-ci-publish",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: ci_published" in result.stdout
+    assert "tag_commit: same-commit" in result.stdout
 
 
 def test_ci_publish_requires_authorization_without_dry_run(tmp_path: Path) -> None:

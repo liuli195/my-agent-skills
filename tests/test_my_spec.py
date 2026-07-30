@@ -3031,6 +3031,8 @@ if version:
 
 def test_packed_myspec_installs_a_working_cli_with_agent_resources(tmp_path: Path) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
+    assert not list(installed_package.rglob("__pycache__"))
+    assert not list(installed_package.rglob("*.pyc"))
     path_candidates = {"python3.12": "3.12", "python3": "3.12", "python": "3.12"}
     if sys.platform == "win32":
         path_candidates["py"] = "3.12"

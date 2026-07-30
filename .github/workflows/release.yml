@@ -51,30 +51,51 @@ jobs:
       - name: Install current MySpec package
         shell: bash
         run: |
-          tarball="$(npm pack source/plugins/my-spec --pack-destination "$RUNNER_TEMP")"
+          pack_json="$(npm pack source/plugins/my-spec --pack-destination "$RUNNER_TEMP" --json)"
+          tarball="$(node -e 'console.log(JSON.parse(process.argv[1])[0].filename)' "$pack_json")"
+          integrity="$(node -e 'console.log(JSON.parse(process.argv[1])[0].integrity)' "$pack_json")"
+          tarball_path="$RUNNER_TEMP/$tarball"
           prefix="$RUNNER_TEMP/myspec-prefix"
-          npm install -g --prefix "$prefix" "$RUNNER_TEMP/$tarball"
+          npm install -g --prefix "$prefix" "$tarball_path"
           echo "$prefix/bin" >> "$GITHUB_PATH"
+          echo "MYSPEC_TARBALL=$tarball_path" >> "$GITHUB_ENV"
+          echo "MYSPEC_INTEGRITY=$integrity" >> "$GITHUB_ENV"
           "$prefix/bin/myspec" --help
 
       - name: Run full verification
         run: python source/.build-and-verify/runtime/build_and_verify.py verify --project source --full
 
+      - name: Validate release plan
+        run: >
+          python source/plugins/release-flow/skills/release-flow/scripts/release_flow.py
+          preflight
+          --project source
+          --tag "${{ inputs.tag }}"
+          --version "${{ inputs.version }}"
+          --bump-plugins "${{ inputs.bumpPlugins }}"
+          --allow-existing-release
+
       - name: Publish MySpec npm package
-        working-directory: source/plugins/my-spec
         env:
           RELEASE_VERSION: ${{ inputs.version }}
           BUMP_PLUGINS: ${{ inputs.bumpPlugins }}
         run: |
-          if [[ ",$BUMP_PLUGINS," != *",my-spec,"* ]]; then
+          normalized_plugins="${BUMP_PLUGINS//[[:space:]]/}"
+          if [[ ",$normalized_plugins," != *",my-spec,"* ]]; then
             echo "my-spec is not part of this release"
-          elif [[ "$(node -p "require('./package.json').version")" != "$RELEASE_VERSION" ]]; then
+          elif [[ "$(node -p "require('./source/plugins/my-spec/package.json').version")" != "$RELEASE_VERSION" ]]; then
             echo "MySpec package version does not match release version" >&2
             exit 1
-          elif npm view "@liuli195/myspec@$RELEASE_VERSION" version >/dev/null 2>&1; then
-            echo "@liuli195/myspec@$RELEASE_VERSION is already published"
           else
-            npm publish --provenance --access public
+            published_integrity="$(npm view "@liuli195/myspec@$RELEASE_VERSION" dist.integrity 2>/dev/null || true)"
+            if [[ -n "$published_integrity" && "$published_integrity" != "$MYSPEC_INTEGRITY" ]]; then
+              echo "Published MySpec package does not match the verified Tarball" >&2
+              exit 1
+            elif [[ -n "$published_integrity" ]]; then
+              echo "@liuli195/myspec@$RELEASE_VERSION is already published and verified"
+            else
+              npm publish "$MYSPEC_TARBALL" --provenance --access public
+            fi
           fi
 
       - name: Publish release channel

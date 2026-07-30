@@ -1068,6 +1068,33 @@ def print_preflight_errors(errors: list[str], project: Path | None = None) -> No
             print(f"nextAction: {next_action}")
 
 
+def without_existing_release_error(errors: list[str], tag: str) -> list[str]:
+    existing = f"release already exists: {tag}"
+    return [error for error in errors if error != existing]
+
+
+def remote_ref_oid(project: Path, kind: str, ref: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(project), "ls-remote", f"--{kind}", "origin", ref],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    return result.stdout.split()[0] if result.returncode == 0 and result.stdout.strip() else ""
+
+
+def existing_release_ref_error(project: Path, config: FlowConfig, tag: str) -> str | None:
+    tag_commit = remote_ref_oid(project, "tags", f"refs/tags/{tag}")
+    channel_commit = remote_ref_oid(
+        project, "heads", f"refs/heads/{config.release_channel_branch}"
+    )
+    if not tag_commit or not channel_commit:
+        return f"remote_release_unknown: {tag}"
+    if tag_commit != channel_commit:
+        return f"release_tag_channel_mismatch: {tag}"
+    return None
+
+
 def run_preflight(args: argparse.Namespace) -> int:
     try:
         config = read_config(args.project)
@@ -1084,6 +1111,15 @@ def run_preflight(args: argparse.Namespace) -> int:
             config,
             projection,
         )
+        if args.allow_existing_release:
+            had_existing_release = len(errors) != len(
+                without_existing_release_error(errors, args.tag)
+            )
+            errors = without_existing_release_error(errors, args.tag)
+            if had_existing_release:
+                ref_error = existing_release_ref_error(args.project, config, args.tag)
+                if ref_error:
+                    errors.append(ref_error)
     except ValueError as exc:
         print("status: issues")
         print(f"error: {exc}")
@@ -1288,6 +1324,44 @@ def run_ci_publish_remote(
         }
 
 
+def recover_existing_ci_publish(
+    project: Path, config: FlowConfig, tag: str
+) -> dict[str, str]:
+    ref_error = existing_release_ref_error(project, config, tag)
+    if ref_error:
+        raise ValueError(ref_error)
+    tag_commit = remote_ref_oid(project, "tags", f"refs/tags/{tag}")
+    marketplace_commit = remote_ref_oid(
+        project, "heads", f"refs/heads/{config.release_channel_branch}"
+    )
+
+    release_view = subprocess.run(
+        ["gh", "release", "view", tag, "--json", "url", "--jq", ".url"],
+        cwd=project,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    release_output = (release_view.stderr or release_view.stdout).lower()
+    if release_view.returncode == 0:
+        release_url = release_view.stdout.strip()
+    elif "not found" in release_output or "could not resolve" in release_output:
+        release = run_checked(
+            ["gh", "release", "create", tag, "--title", tag, "--notes", f"Release {tag}"],
+            project,
+        )
+        release_url = release.stdout.strip().splitlines()[0] if release.stdout.strip() else ""
+    else:
+        raise ValueError(f"remote_release_unknown: {tag}")
+
+    return {
+        "release_url": release_url,
+        "marketplace_commit": marketplace_commit,
+        "tag_commit": tag_commit,
+        "workflow_run_url": workflow_run_url(),
+    }
+
+
 def run_ci_publish(args: argparse.Namespace) -> int:
     if not args.authorize_ci_publish:
         print("status: issues")
@@ -1314,13 +1388,19 @@ def run_ci_publish(args: argparse.Namespace) -> int:
         config,
         projection,
     )
-    if errors:
+    existing_release_error = f"release already exists: {args.tag}"
+    recover_existing = bool(errors) and all(error == existing_release_error for error in errors)
+    if errors and not recover_existing:
         print("status: issues")
         print_preflight_errors(errors, args.project)
         return 1
 
     try:
-        trace = run_ci_publish_remote(args.project, config, projection, args.tag)
+        trace = (
+            recover_existing_ci_publish(args.project, config, args.tag)
+            if recover_existing
+            else run_ci_publish_remote(args.project, config, projection, args.tag)
+        )
     except ValueError as exc:
         print("status: issues")
         print(f"error: {exc}")
@@ -1355,6 +1435,11 @@ def build_parser() -> argparse.ArgumentParser:
     preflight.add_argument("--tag", required=True, help="发布标签。")
     preflight.add_argument("--version", required=True, help="发布版本。")
     preflight.add_argument("--bump-plugins", action="append", required=True, help="逗号分隔插件名；空字符串表示不提升插件。")
+    preflight.add_argument(
+        "--allow-existing-release",
+        action="store_true",
+        help="CI 重试时允许已存在的同名远端标签或发布记录。",
+    )
     publish = subparsers.add_parser("publish", help="触发 GitHub release workflow。")
     publish.add_argument("--project", type=Path, default=Path.cwd(), help="目标项目根目录。")
     publish.add_argument("--tag", required=True, help="发布标签。")

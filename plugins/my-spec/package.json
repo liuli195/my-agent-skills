@@ -17,7 +17,7 @@
     ".claude-plugin",
     ".codex-plugin",
     "bin",
-    "python",
+    "python/*.py",
     "skills"
   ],
   "pi": {

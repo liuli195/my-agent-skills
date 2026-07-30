@@ -38,7 +38,8 @@ jobs:
       - name: Install current MySpec package
         shell: bash
         run: |
-          tarball="$(npm pack ./plugins/my-spec --pack-destination "$RUNNER_TEMP")"
+          pack_json="$(npm pack ./plugins/my-spec --pack-destination "$RUNNER_TEMP" --json)"
+          tarball="$(node -e 'console.log(JSON.parse(process.argv[1])[0].filename)' "$pack_json")"
           prefix="$RUNNER_TEMP/myspec-prefix"
           npm install -g --prefix "$prefix" "$RUNNER_TEMP/$tarball"
           echo "$prefix/bin" >> "$GITHUB_PATH"
