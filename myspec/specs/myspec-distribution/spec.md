@@ -64,29 +64,6 @@
 - **WHEN** 新统一来源已启用且 Agent 中存在旧远端或旧源码 MySpec 来源
 - **THEN** 系统 MUST 禁用重复的旧 MySpec 来源
 - **THEN** 系统 MUST NOT 删除插件、市场、缓存目录、市场订阅或用户文件
-### Requirement: MySpec doctor 只读诊断真实安装状态
-
-系统 MUST 让 `myspec doctor` 从 npm（软件包管理器）和真实 Agent（代理）客户端查询模式、来源、版本、启用状态、重复来源、锁、部分操作和重新加载要求，且不得依赖平行保存的安装清单。
-
-#### Scenario: 用户运行诊断
-
-- **WHEN** 用户运行 `myspec doctor` 并选择一个客户端或全部客户端
-- **THEN** 命令 MUST 报告实际安装状态和版本失配
-- **THEN** 命令 MUST NOT 修改插件、市场、模式、锁或用户文件
-### Requirement: MySpec update 统一更新发布模式安装
-
-系统 MUST 让 `myspec update` 只在发布模式解析 npm 最新版本、预检已安装客户端、更新全局包、由新 CLI（命令行程序）继续刷新全部已安装 Agent（代理），并在结束时运行只读诊断。
-
-#### Scenario: 开发模式请求更新
-
-- **WHEN** 用户在开发模式运行 `myspec update`
-- **THEN** 命令 MUST 返回非零结果并要求用户先显式切换发布模式
-- **THEN** 命令 MUST NOT 隐式改变模式
-
-#### Scenario: 发布模式请求更新
-
-- **WHEN** 用户在发布模式运行 `myspec update`
-- **THEN** CLI（命令行程序）和所有已安装 MySpec 插件 MUST 最终使用同一 npm 最新版本
 ### Requirement: MySpec 安装操作可串行且可继续
 
 系统 MUST 让 `init` 与 `update` 共用用户级安装锁，并把外部修改记录为可重复执行的幂等步骤；失败必须立即停止并保留原始错误，不承诺跨客户端自动回滚。
@@ -117,3 +94,70 @@
 - **WHEN** 候选包的源码测试和打包后端到端流程均通过
 - **THEN** 发布流程 MUST 发布版本一致的 npm 包、Git Tag（Git 标签）和 GitHub Release（发布版本）记录
 - **THEN** 发布流程 MUST NOT 生成 Wheel（Python 安装包）、Pi ZIP（Pi 压缩包）或自建发布资产缓存
+### Requirement: MySpec doctor 只读诊断真实安装状态
+
+系统 MUST 让 `myspec doctor` 从 npm（软件包管理器）和真实 Agent（代理）客户端查询模式、来源、版本、启用状态、重复来源、锁、部分操作和重新加载要求，且不得依赖平行保存的安装清单。Pi、Claude 和 Codex MUST 使用一致的来源状态语义，并在保留既有顶层字段的同时公开规范化来源记录。
+
+#### Scenario: 用户运行诊断
+
+- **WHEN** 用户运行 `myspec doctor` 并选择一个客户端或全部客户端
+- **THEN** 命令 MUST 报告实际安装状态和版本失配
+- **THEN** 命令 MUST NOT 修改插件、市场、模式、锁或用户文件
+
+#### Scenario: 三类客户端报告规范化来源
+
+- **WHEN** Pi、Claude 或 Codex 报告一个 MySpec 来源
+- **THEN** 每条来源记录 MUST 分别报告 `installed`、`registered`、`enabled`、`effective`、`sourceKind` 和 `sourceMismatch`
+- **THEN** `installed` MUST 只在宿主报告安装位置且该位置包含可识别 MySpec 包时为真
+- **THEN** `registered` MUST 只表示宿主已经识别并登记该来源，不得从安装或启用状态推导
+- **THEN** `enabled` MUST 表示公开配置允许加载该来源，并与安装目录或技能文件是否存在相互独立
+- **THEN** `effective` MUST 只在来源已登记、已安装、已启用且未被更高优先级来源覆盖时为真
+
+#### Scenario: 诊断区分稳定、旧版和错误来源
+
+- **WHEN** 诊断识别 MySpec 稳定来源或旧版来源
+- **THEN** `sourceKind` MUST 分别报告 `stable` 或 `legacy`
+- **THEN** 旧版来源 MUST NOT 仅因其为旧版而报告来源不匹配
+- **WHEN** 规范目标标识解析到不同来源
+- **THEN** `sourceMismatch` MUST 为真，且错误来源 MUST NOT 实际生效
+- **THEN** 无关来源 MUST NOT 进入 MySpec 来源列表
+
+#### Scenario: 缺失安装仍保留配置事实
+
+- **WHEN** 宿主已登记并启用 MySpec 来源但安装目录缺失
+- **THEN** 诊断 MUST 保持 `registered` 和 `enabled` 为真
+- **THEN** 诊断 MUST 报告 `installed` 和 `effective` 为假
+
+#### Scenario: Pi 来源遵守过滤与项目优先级
+
+- **WHEN** Pi 用户配置或项目配置使用公开来源过滤规则
+- **THEN** 诊断 MUST 仅在规则允许至少一个 MySpec 技能时报告来源已启用
+- **THEN** 相对路径 MUST 以拥有该路径的设置文件为基准解析
+- **THEN** 受信任项目来源 MUST 按项目优先级决定实际生效状态
+
+#### Scenario: 顶层兼容字段与来源记录一致
+
+- **WHEN** 诊断同时返回既有顶层字段和规范化来源记录
+- **THEN** 既有顶层字段 MUST 保留
+- **THEN** 顶层启用状态和启用来源投影 MUST NOT 与规范化来源记录矛盾
+### Requirement: MySpec update 统一更新发布模式安装
+
+系统 MUST 让 `myspec update` 只在发布模式解析 npm 最新版本、预检已安装客户端、更新全局包、由新 CLI（命令行程序）继续刷新全部已安装 Agent（代理），并在结束时运行只读诊断。更新前后 MUST 使用一致的规范化来源判据验证客户端状态。
+
+#### Scenario: 开发模式请求更新
+
+- **WHEN** 用户在开发模式运行 `myspec update`
+- **THEN** 命令 MUST 返回非零结果并要求用户先显式切换发布模式
+- **THEN** 命令 MUST NOT 隐式改变模式
+
+#### Scenario: 发布模式请求更新
+
+- **WHEN** 用户在发布模式运行 `myspec update`
+- **THEN** CLI（命令行程序）和所有已安装 MySpec 插件 MUST 最终使用同一 npm 最新版本
+
+#### Scenario: 更新保留客户端来源状态
+
+- **WHEN** 更新流程保存并验证 Pi、Claude 或 Codex 的来源状态
+- **THEN** Claude 和 Codex MUST 按稳定来源的配置启用状态验证恢复结果
+- **THEN** Pi MUST 按考虑受信任项目覆盖后的稳定来源实际生效状态验证恢复结果
+- **THEN** 更新流程 MUST NOT 把汇总顶层启用状态误作单个稳定来源状态
