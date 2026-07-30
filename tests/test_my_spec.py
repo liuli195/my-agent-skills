@@ -689,16 +689,21 @@ def isolated_myspec_env(
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     path_entries = [str(path) for path in extra_paths]
-    path_entries.extend(
-        str(path)
-        for path in {
-            Path(shutil.which("node") or "").parent,
-            Path(shutil.which("npm") or "").parent,
-            Path(shutil.which("git") or "").parent,
-            Path(sys.executable).parent,
-        }
-        if path.is_dir()
-    )
+    command_paths = [shutil.which(command) for command in ("node", "npm", "git")]
+    if os.name == "nt":
+        path_entries.extend(
+            str(Path(path).parent) for path in command_paths if path is not None
+        )
+        path_entries.append(str(Path(sys.executable).parent))
+    else:
+        command_bin = tmp_path / "system-commands"
+        command_bin.mkdir(exist_ok=True)
+        for path in command_paths:
+            assert path is not None
+            link = command_bin / Path(path).name
+            if not link.exists():
+                link.symlink_to(Path(path).resolve())
+        path_entries.append(str(command_bin))
     return {
         **os.environ,
         "HOME": str(home),
