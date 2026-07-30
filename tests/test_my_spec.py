@@ -1129,6 +1129,72 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
     assert ["plugin", "add", "my-spec@myspec", "--json"] in codex_calls
 
 
+def test_packed_myspec_update_preserves_pi_effective_state_under_project_override(
+    tmp_path: Path,
+) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = install_packed_myspec(installed)
+    prefix = npm_prefix_for(installed_package)
+    old_tarball = next((installed / "package").glob("*.tgz"))
+    new_tarball = pack_myspec_version(tmp_path, NEXT_VERSION)
+    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", old_tarball)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, prefix, npm_bin, pi_bin)
+    env.update(
+        {
+            "MYSPEC_NPM_LOG": str(npm_log),
+            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
+            "MYSPEC_RELEASE_TARBALL": str(new_tarball),
+            "MYSPEC_NPM_LATEST": NEXT_VERSION,
+            "MYSPEC_PI_LOG": str(pi_log),
+            "MYSPEC_PI_PROJECT_TRUST_OVERRIDE": "true",
+        }
+    )
+    project = tmp_path / "consumer"
+    project.mkdir()
+    user_settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    project_settings = project / ".pi" / "settings.json"
+    write(user_settings, json.dumps({"packages": [str(installed_package)]}, indent=2))
+    write(
+        project_settings,
+        json.dumps(
+            {"packages": [{"source": str(installed_package), "skills": []}]},
+            indent=2,
+        ),
+    )
+    user_before = user_settings.read_bytes()
+    project_before = project_settings.read_bytes()
+
+    diagnosed = run_cli(executable, "doctor", "--pi", env=env, cwd=project)
+
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    before = json.loads(diagnosed.stdout)["pi"]
+    assert before["enabled"] is True
+    assert before["skills"] == []
+    assert [
+        (source["scope"], source["enabled"], source["effective"])
+        for source in before["sources"]
+        if source["sourceKind"] == "stable"
+    ] == [("user", True, False), ("project", False, False)]
+
+    updated = run_cli(executable, "update", env=env, cwd=project)
+
+    assert updated.returncode == 0, updated.stderr
+    output = json.loads(updated.stdout)
+    assert output["pi"] == "refreshed"
+    after = output["doctor"]["pi"]
+    assert after["enabled"] is True
+    assert after["skills"] == []
+    assert [
+        (source["scope"], source["enabled"], source["effective"])
+        for source in after["sources"]
+        if source["sourceKind"] == "stable"
+    ] == [("user", True, False), ("project", False, False)]
+    assert user_settings.read_bytes() == user_before
+    assert project_settings.read_bytes() == project_before
+
+
 def test_packed_myspec_update_recovers_external_success_before_bookkeeping(
     tmp_path: Path,
 ) -> None:

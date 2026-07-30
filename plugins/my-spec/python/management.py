@@ -1694,7 +1694,7 @@ def _preflight_integrations() -> tuple[list[str], dict[str, str], dict[str, bool
             raise ManagementError("update_integration_unavailable: pi")
         if installed:
             integrations.append("pi")
-            enabled["pi"] = _pi_is_configured(listed)
+            enabled["pi"] = _stable_source_effective(_doctor_pi()["pi"])
     if shutil.which("claude") is not None:
         target = next((item for item in _claude_plugins() if item.get("id") == CLAUDE_PLUGIN), None)
         if target is not None:
@@ -1904,13 +1904,23 @@ def _stable_source_enabled(report: dict[str, object]) -> bool:
     )
 
 
+def _stable_source_effective(report: dict[str, object]) -> bool:
+    sources = report.get("sources")
+    return isinstance(sources, list) and any(
+        isinstance(source, dict)
+        and source.get("sourceKind") == "stable"
+        and source.get("effective") is True
+        for source in sources
+    )
+
+
 def _verify_pi_update(target: str, enabled: bool) -> None:
     report = _doctor_pi()["pi"]
     if (
         report.get("available") is not True
         or report.get("version") != target
         or report.get("versionMismatch") is True
-        or _stable_source_enabled(report) is not enabled
+        or _stable_source_effective(report) is not enabled
     ):
         raise ManagementError("pi_plugin_refresh_mismatch")
 
@@ -1929,11 +1939,16 @@ def _validate_update_doctor(
         raise ManagementError("update_doctor_mismatch: npm")
     for integration in integrations:
         diagnosis = report.get(integration)
+        restored = (
+            _stable_source_effective(diagnosis)
+            if integration == "pi" and isinstance(diagnosis, dict)
+            else _stable_source_enabled(diagnosis) if isinstance(diagnosis, dict) else False
+        )
         if (
             not isinstance(diagnosis, dict)
             or diagnosis.get("version") != target
             or diagnosis.get("versionMismatch") is not False
-            or _stable_source_enabled(diagnosis) is not enabled[integration]
+            or restored is not enabled[integration]
         ):
             raise ManagementError(f"update_doctor_mismatch: {integration}")
 

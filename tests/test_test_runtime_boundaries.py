@@ -513,6 +513,12 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest'
     ),
+    'tests/test_my_spec.py::test_packed_myspec_doctor_does_not_enable_pi_source_for_unrelated_autoload_delta': (
+        'covers packaged Pi diagnosis excluding an unrelated autoload delta from enabled intent; function=test_packed_myspec_doctor_does_not_enable_pi_source_for_unrelated_autoload_delta'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_doctor_keeps_enabled_intent_for_missing_pi_source_with_exclusion': (
+        'covers packaged Pi diagnosis preserving enabled intent for a registered source with no installed path; function=test_packed_myspec_doctor_keeps_enabled_intent_for_missing_pi_source_with_exclusion'
+    ),
     'tests/test_my_spec.py::test_packed_myspec_doctor_keeps_enabled_intent_for_settings_source_missing_from_pi_list': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_doctor_keeps_enabled_intent_for_settings_source_missing_from_pi_list'
     ),
@@ -608,6 +614,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     ),
     'tests/test_my_spec.py::test_packed_myspec_update_preflights_installed_clients_before_package_write': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_update_preflights_installed_clients_before_package_write'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_update_preserves_pi_effective_state_under_project_override': (
+        'covers packaged update and doctor preserving Pi effective state under a trusted project override; function=test_packed_myspec_update_preserves_pi_effective_state_under_project_override'
     ),
     'tests/test_my_spec.py::test_packed_myspec_update_recovers_external_success_before_bookkeeping': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_update_recovers_external_success_before_bookkeeping'
