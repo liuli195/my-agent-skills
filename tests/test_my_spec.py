@@ -789,14 +789,15 @@ def source_case_report(
         else:
             market_name = "my-agent-skills-marketplace" if legacy else "myspec"
             market_path = source_root if mismatch else installed_package
-            marketplaces.append(
-                {
-                    "name": market_name,
-                    "source": "directory",
-                    "path": str(market_path),
-                    "installLocation": str(market_path),
-                }
-            )
+            if scenario != "stable-unregistered-plugin":
+                marketplaces.append(
+                    {
+                        "name": market_name,
+                        "source": "directory",
+                        "path": str(market_path),
+                        "installLocation": str(market_path),
+                    }
+                )
             plugins.append(
                 {
                     "id": identifier,
@@ -836,13 +837,14 @@ def source_case_report(
         else:
             market_name = "my-agent-skills-marketplace" if legacy else "myspec"
             market_root = source_root if mismatch else installed_package
-            marketplaces.append(
-                {
-                    "name": market_name,
-                    "root": str(market_root),
-                    "marketplaceSource": {"sourceType": "local", "source": str(market_root)},
-                }
-            )
+            if scenario != "stable-unregistered-plugin":
+                marketplaces.append(
+                    {
+                        "name": market_name,
+                        "root": str(market_root),
+                        "marketplaceSource": {"sourceType": "local", "source": str(market_root)},
+                    }
+                )
             plugins.append(
                 {
                     "pluginId": identifier,
@@ -887,6 +889,29 @@ def test_packed_myspec_clients_run_shared_source_cases(tmp_path: Path, client: s
         assert {"enabledSources", "disabledSources", "duplicateEnabledSources"} <= report.keys()
 
     assert seen == [case["id"] for case in SOURCE_CASES]
+
+    if client in {"claude", "codex"}:
+        report = source_case_report(
+            client,
+            {"scenario": "stable-unregistered-plugin"},
+            tmp_path / "stable-unregistered-plugin",
+            executable,
+            installed_package,
+            prefix,
+        )
+        assert [
+            {field: source[field] for field in SOURCE_FIELDS}
+            for source in report["sources"]
+        ] == [
+            {
+                "installed": True,
+                "registered": False,
+                "enabled": True,
+                "effective": False,
+                "sourceKind": "stable",
+                "sourceMismatch": False,
+            }
+        ]
 
 
 def test_packed_myspec_update_preflights_installed_clients_before_package_write(
@@ -1475,6 +1500,7 @@ def test_packed_myspec_doctor_keeps_enabled_intent_for_settings_source_missing_f
     assert report["sources"][0]["installed"] is False
     assert report["sources"][0]["effective"] is False
     assert report["sources"][0]["enabled"] is True
+    assert report["enabled"] is True
 
 
 @pytest.mark.parametrize(

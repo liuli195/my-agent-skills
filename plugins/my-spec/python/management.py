@@ -1467,7 +1467,9 @@ def _doctor_pi() -> dict[str, object]:
         "installed": bool(stable_versions),
         "version": stable_version,
         "versionMismatch": not stable_versions or any(version != _package_version() for version in stable_versions),
-        "enabled": bool(stable_skills),
+        "enabled": any(
+            record["sourceKind"] == "stable" and record["enabled"] for record in records
+        ),
         "enabledSources": enabled_sources,
         "disabledSources": disabled_sources,
         "duplicateEnabledSources": len(enabled_sources) > 1,
@@ -1514,7 +1516,7 @@ def _doctor_claude() -> dict[str, object]:
         records.append(
             _source_record(
                 installed=_myspec_manifest_version(install_path) is not None,
-                registered=marketplace is not None or target is not None,
+                registered=marketplace is not None,
                 enabled=isinstance(target, dict) and target.get("enabled") is True,
                 source_kind="stable",
                 source_mismatch=mismatch,
@@ -1532,7 +1534,7 @@ def _doctor_claude() -> dict[str, object]:
         records.append(
             _source_record(
                 installed=_myspec_manifest_version(legacy_path) is not None,
-                registered=legacy_marketplace is not None or legacy is not None,
+                registered=legacy_marketplace is not None,
                 enabled=isinstance(legacy, dict) and legacy.get("enabled") is True,
                 source_kind="legacy",
                 source_mismatch=False,
@@ -1596,7 +1598,7 @@ def _doctor_codex() -> dict[str, object]:
                     and target.get("installed") is True
                     and _myspec_manifest_version(install_path) is not None
                 ),
-                registered=marketplace is not None or target is not None,
+                registered=marketplace is not None,
                 enabled=isinstance(target, dict) and target.get("enabled") is True,
                 source_kind="stable",
                 source_mismatch=mismatch,
@@ -1625,7 +1627,7 @@ def _doctor_codex() -> dict[str, object]:
                     and legacy.get("installed") is True
                     and _myspec_manifest_version(legacy_path) is not None
                 ),
-                registered=legacy_marketplace is not None or legacy is not None,
+                registered=legacy_marketplace is not None,
                 enabled=isinstance(legacy, dict) and legacy.get("enabled") is True,
                 source_kind="legacy",
                 source_mismatch=False,
