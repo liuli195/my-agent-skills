@@ -42,6 +42,15 @@ def test_setup_worktree_script_propagates_each_setup_failure() -> None:
     assert text.count("if ($LASTEXITCODE) { exit $LASTEXITCODE }") >= 4
 
 
+def test_windows_worktree_build_uses_initialized_environment_and_unified_entry() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/full-verify.yml").read_text(encoding="utf-8")
+    build_step = workflow.split("- name: Build from linked worktree", 1)[1]
+
+    assert ".worktrees/smoke/.venv/Scripts/Activate.ps1" in build_step
+    assert build_step.index("Activate.ps1") < build_step.index("build_and_verify.py build")
+    assert "npm run build" not in build_step
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows junction behavior")
 @pytest.mark.parametrize("shell_name", ["powershell", "pwsh"])
 def test_setup_worktree_script_links_shared_node_dependencies(

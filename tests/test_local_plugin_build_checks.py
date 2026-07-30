@@ -850,29 +850,17 @@ def test_runner_changed_files_falls_back_to_project_scan_when_git_unavailable(
     assert module._changed_files(tmp_path) == ["src/app.py"]
 
 
-def test_build_runs_claude_validation_for_marketplace_and_each_plugin(tmp_path: Path) -> None:
+def test_build_validates_plugins_without_claude_command(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
     module = load_local_build_module()
     make_plugin(tmp_path, "alpha")
-    make_plugin(tmp_path, "beta")
-    make_marketplace(tmp_path, ["alpha", "beta"])
-    make_projection(tmp_path, ["alpha", "beta"])
+    make_marketplace(tmp_path, ["alpha"])
+    make_projection(tmp_path, ["alpha"])
+    monkeypatch.setattr(module, "REPO_ROOT", tmp_path)
 
-    calls: list[tuple[list[str], Path]] = []
-
-    def fake_run(command, cwd, text, capture_output, check):
-        calls.append((command, cwd))
-        return subprocess.CompletedProcess(command, 0, "ok", "")
-
-    errors = module.run_build(tmp_path, runner=fake_run)
-
-    assert errors == []
-    assert calls == [
-        (["claude", "plugin", "validate", "."], tmp_path),
-        (["claude", "plugin", "validate", str(tmp_path / "plugins" / "alpha")], tmp_path),
-        (["claude", "plugin", "validate", str(tmp_path / "plugins" / "beta")], tmp_path),
-    ]
-    assert all(cwd == tmp_path for _command, cwd in calls)
-    assert all("--strict" not in command for command, _cwd in calls)
+    assert module.main(["build"]) == 0
+    assert "status: build checks passed" in capsys.readouterr().out
 
 
 def test_local_plugin_build_main_outputs_stable_status(
@@ -953,10 +941,7 @@ def test_build_rejects_marketplace_source_outside_repo(tmp_path: Path) -> None:
     data["plugins"][0]["source"] = "../outside"
     write_json(tmp_path / ".claude-plugin" / "marketplace.json", data)
 
-    errors = module.run_build(
-        tmp_path,
-        runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
-    )
+    errors = module.run_build(tmp_path)
 
     assert any("source_outside_repo" in error for error in errors)
 
@@ -968,10 +953,7 @@ def test_build_rejects_codex_dev_marketplace_without_dev_name(tmp_path: Path) ->
     make_projection(tmp_path, ["alpha"])
     make_codex_dev_marketplace(tmp_path, ["alpha"], marketplace_name="test-marketplace", display_name="Test Marketplace")
 
-    errors = module.run_build(
-        tmp_path,
-        runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
-    )
+    errors = module.run_build(tmp_path)
 
     assert any("codex_dev_marketplace_name_missing_dev" in error for error in errors)
     assert any("codex_dev_marketplace_display_name_missing_DEV" in error for error in errors)
@@ -986,25 +968,9 @@ def test_build_rejects_codex_dev_marketplace_source_outside_repo(tmp_path: Path)
     data["plugins"][0]["source"]["path"] = "../outside"
     write_json(tmp_path / ".agents" / "plugins" / "marketplace.json", data)
 
-    errors = module.run_build(
-        tmp_path,
-        runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
-    )
+    errors = module.run_build(tmp_path)
 
     assert any("codex_dev_source_outside_repo" in error for error in errors)
-
-
-def test_build_reports_missing_claude_command(tmp_path: Path) -> None:
-    module = load_local_build_module()
-    make_projection(tmp_path, [])
-    make_marketplace(tmp_path, [])
-
-    def missing_claude(*args, **kwargs):
-        raise FileNotFoundError("claude")
-
-    errors = module.run_build(tmp_path, runner=missing_claude)
-
-    assert any("missing_command: claude" in error for error in errors)
 
 
 def test_build_reports_invalid_marketplace_entry(tmp_path: Path) -> None:
@@ -1019,10 +985,7 @@ def test_build_reports_invalid_marketplace_entry(tmp_path: Path) -> None:
         },
     )
 
-    errors = module.run_build(
-        tmp_path,
-        runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
-    )
+    errors = module.run_build(tmp_path)
 
     assert any("invalid_marketplace_entry" in error for error in errors)
 
@@ -1033,10 +996,7 @@ def test_build_reports_duplicate_marketplace_plugin_name(tmp_path: Path) -> None
     make_marketplace(tmp_path, ["alpha", "alpha"])
     make_projection(tmp_path, ["alpha"])
 
-    errors = module.run_build(
-        tmp_path,
-        runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
-    )
+    errors = module.run_build(tmp_path)
 
     assert any("duplicate_marketplace_plugin: alpha" in error for error in errors)
 
@@ -1047,10 +1007,7 @@ def test_build_reports_missing_pyyaml_dependency(tmp_path: Path) -> None:
     make_projection(tmp_path, [])
     module.yaml = None
 
-    errors = module.run_build(
-        tmp_path,
-        runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
-    )
+    errors = module.run_build(tmp_path)
 
     assert any("missing_dependency: PyYAML" in error for error in errors)
 
@@ -1070,10 +1027,7 @@ def test_build_reports_manifest_name_mismatch(tmp_path: Path) -> None:
         },
     )
 
-    errors = module.run_build(
-        tmp_path,
-        runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
-    )
+    errors = module.run_build(tmp_path)
 
     assert any("claude_manifest_name_mismatch" in error for error in errors)
 
@@ -1088,10 +1042,7 @@ def test_build_reports_missing_codex_manifest_path(tmp_path: Path) -> None:
     data["hooks"] = "./missing-hooks"
     write_json(codex_manifest, data)
 
-    errors = module.run_build(
-        tmp_path,
-        runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
-    )
+    errors = module.run_build(tmp_path)
 
     assert any("missing_manifest_path" in error for error in errors)
 
@@ -1102,7 +1053,7 @@ def test_build_reports_projection_plugin_mismatch(tmp_path: Path) -> None:
     make_marketplace(tmp_path, ["alpha"])
     make_projection(tmp_path, ["alpha", "missing"])
 
-    errors = module.run_build(tmp_path, runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""))
+    errors = module.run_build(tmp_path)
 
     assert any("projection_plugins_mismatch" in error for error in errors)
 
@@ -1114,7 +1065,7 @@ def test_build_reports_projection_missing_marketplace_plugin(tmp_path: Path) -> 
     make_marketplace(tmp_path, ["alpha", "beta"])
     make_projection(tmp_path, ["alpha"])
 
-    errors = module.run_build(tmp_path, runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""))
+    errors = module.run_build(tmp_path)
 
     assert any("projection_plugins_mismatch" in error for error in errors)
 
@@ -1125,7 +1076,7 @@ def test_build_reports_duplicate_projection_plugin(tmp_path: Path) -> None:
     make_marketplace(tmp_path, ["alpha"])
     make_projection(tmp_path, ["alpha", "alpha"])
 
-    errors = module.run_build(tmp_path, runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""))
+    errors = module.run_build(tmp_path)
 
     assert any("duplicate_projection_plugin" in error for error in errors)
 

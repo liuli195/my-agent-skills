@@ -77,4 +77,7 @@ jobs:
           ./.worktrees/smoke/scripts/setup-worktree.ps1
 
       - name: Build from linked worktree
-        run: python .worktrees/smoke/.build-and-verify/runtime/build_and_verify.py build --project .worktrees/smoke
+        shell: pwsh
+        run: |
+          . ./.worktrees/smoke/.venv/Scripts/Activate.ps1
+          python .worktrees/smoke/.build-and-verify/runtime/build_and_verify.py build --project .worktrees/smoke

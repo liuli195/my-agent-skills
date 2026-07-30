@@ -24,20 +24,17 @@ The repository SHALL（必须）provide a local build command through the initia
 - **WHEN** repository active automation and build-and-verify（构建与验证） configuration are inspected
 - **THEN** root `pyproject.toml` MUST NOT exist
 - **THEN** pytest（Python 测试运行器） commands in `.build-and-verify/config.json` MUST explicitly provide required paths and command options
-### Requirement: Build command runs Claude plugin validation
-The build command SHALL（必须）run Claude（Claude 编码工具）plugin validation for the repository marketplace and every local plugin listed in `.claude-plugin/marketplace.json`.
+### Requirement: Build command does not require external plugin validators
+The build command SHALL（必须）validate repository-owned plugin package structure without requiring Claude Code（Claude 编码工具）or another globally installed plugin validator.
 
-#### Scenario: Marketplace is validated
-- **WHEN** the build command runs
-- **THEN** it runs `claude plugin validate .`
+#### Scenario: Build runs without Claude Code
+- **WHEN** the build command runs on a correctly initialized checkout without a `claude` command
+- **THEN** repository-owned plugin package checks MUST still run
+- **THEN** the absence of `claude` MUST NOT fail the build
 
-#### Scenario: Local plugin sources are validated
+#### Scenario: Repository-owned structural validation remains
 - **WHEN** `.claude-plugin/marketplace.json` lists local plugin sources
-- **THEN** the build command runs `claude plugin validate <source>` for each local source
-
-#### Scenario: Strict validation is not required
-- **WHEN** the build command runs Claude plugin validation
-- **THEN** it does not require `--strict` mode to pass
+- **THEN** the build command MUST validate those sources through the repository-owned marketplace and manifest consistency checks
 ### Requirement: Build command validates marketplace and manifest consistency
 The build command SHALL（必须）validate that marketplace entries and plugin manifests are structurally consistent for Claude（Claude 编码工具）and Codex（OpenAI 编码代理）plugin surfaces.
 
