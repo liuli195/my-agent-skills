@@ -1131,9 +1131,14 @@ def _manifest_skills(root: Path) -> dict[str, str]:
     return {path: name for path, name in skills.items() if _pattern_enabled(path, name, overrides)}
 
 
-def _pattern_enabled(path: str, name: str, patterns: list[str]) -> bool:
+def _pattern_enabled(
+    path: str,
+    name: str,
+    patterns: list[str],
+    default_enabled: bool = True,
+) -> bool:
     includes = [pattern for pattern in patterns if not pattern.startswith(("!", "+", "-"))]
-    enabled = not includes or any(_matches(path, name, pattern) for pattern in includes)
+    enabled = default_enabled if not includes else any(_matches(path, name, pattern) for pattern in includes)
     if any(_matches(path, name, pattern[1:]) for pattern in patterns if pattern.startswith("!")):
         enabled = False
     if any(_exact_match(path, name, pattern[1:]) for pattern in patterns if pattern.startswith("+")):
@@ -1403,10 +1408,15 @@ def _pi_source_enabled(item: PiSource) -> bool:
     patterns = item.skill_filter
     if patterns is None:
         return not item.autoload_delta
-    if not patterns or item.autoload_delta:
-        return any(not pattern.startswith(("!", "-")) for pattern in patterns)
+    if not patterns:
+        return False
     return any(
-        _pattern_enabled(f"{path.removeprefix('./')}/SKILL.md", name, patterns)
+        _pattern_enabled(
+            f"{path.removeprefix('./')}/SKILL.md",
+            name,
+            patterns,
+            default_enabled=not item.autoload_delta,
+        )
         for path, name in zip(SKILL_PATHS, SKILL_NAMES)
     )
 
@@ -1456,7 +1466,7 @@ def _doctor_pi() -> dict[str, object]:
     enabled_groups = [(kind, group, _group_skills(group)) for _, kind, group in groups]
     stable_skills = next((skills for kind, _, skills in enabled_groups if kind == "stable"), [])
     stable_version = stable_versions[0] if stable_versions else None
-    enabled_sources = [group[0].source for _, group, skills in enabled_groups if skills]
+    enabled_sources = list(dict.fromkeys(record["source"] for record in records if record["enabled"]))
     disabled_sources = [
         item.source
         for item in registered_sources

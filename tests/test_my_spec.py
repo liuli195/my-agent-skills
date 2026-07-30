@@ -1543,9 +1543,9 @@ def test_packed_myspec_doctor_keeps_enabled_intent_for_settings_source_missing_f
     assert diagnosed.returncode == 0, diagnosed.stderr
     report = json.loads(diagnosed.stdout)["pi"]
     assert report["registered"] is False
-    assert report["enabledSources"] == []
+    assert report["enabledSources"] == [str(installed_package)]
     assert report["skills"] == []
-    assert report["reloadRequired"] is False
+    assert report["reloadRequired"] is True
     assert report["listedSources"] == []
     assert len(report["sources"]) == 1
     assert report["sources"][0]["source"] == str(installed_package)
@@ -1584,6 +1584,41 @@ def test_packed_myspec_doctor_keeps_enabled_intent_for_missing_pi_source_with_ex
         "sourceKind": "stable",
         "sourceMismatch": False,
     }
+    assert report["enabledSources"] == [str(installed_package)]
+
+
+def test_packed_myspec_doctor_does_not_enable_pi_source_for_unrelated_autoload_delta(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    write(
+        Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
+        json.dumps(
+            {
+                "packages": [
+                    {
+                        "source": str(installed_package),
+                        "autoload": False,
+                        "skills": ["+unrelated"],
+                    }
+                ]
+            },
+            indent=2,
+        ),
+    )
+
+    diagnosed = run_cli(executable, "doctor", "--pi", env=env)
+
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    report = json.loads(diagnosed.stdout)["pi"]
+    assert report["enabled"] is False
+    assert report["enabledSources"] == []
+    assert report["disabledSources"] == [str(installed_package)]
+    assert report["sources"][0]["enabled"] is False
+    assert report["reloadRequired"] is False
 
 
 @pytest.mark.parametrize(
