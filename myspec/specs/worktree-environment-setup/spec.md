@@ -14,13 +14,13 @@ TBD - created by archiving change configure-build-and-verify-init-script. Update
 - **THEN** 脚本 MUST 立即以非零退出码结束
 - **THEN** 脚本 MUST 不运行后续初始化步骤、构建检查或验证
 
-#### Scenario: 共享依赖缺失
-- **WHEN** 开发者在链接工作树运行脚本，但主仓库根目录共享依赖不存在
+#### Scenario: 共享依赖缺失或过期
+- **WHEN** 开发者在链接工作树运行脚本，但主仓库根目录的 Node.js（运行时）依赖、Python（Python 语言）虚拟环境或虚拟环境依赖指纹缺失或过期
 - **THEN** 脚本 MUST 以非零退出码结束
 - **THEN** 脚本 MUST 提示开发者先在主仓库根目录运行初始化
 
 #### Scenario: 依赖清单不一致
-- **WHEN** 链接工作树与主仓库的 Node.js（运行时）依赖清单不一致
+- **WHEN** 链接工作树与主仓库的 Node.js（运行时）或 Python（Python 语言）依赖清单不一致
 - **THEN** 脚本 MUST 以非零退出码结束
 - **THEN** 脚本 MUST 不修改主仓库共享依赖
 
@@ -29,7 +29,7 @@ TBD - created by archiving change configure-build-and-verify-init-script. Update
 - **THEN** 脚本 MUST 相对于脚本自身定位当前工作树
 - **THEN** 脚本 MUST 按当前工作树身份执行对应的主仓库初始化或共享依赖复用行为
 ### Requirement: 工作树环境初始化入口
-系统 MUST 提供 `scripts/setup-worktree.ps1`（工作树初始化脚本），用于准备本仓库工作树的 Python（Python 语言）开发环境，并让依赖清单一致的工作树共享主仓库根目录的 Node.js（运行时）开发依赖；初始化成功后，开发者 MUST 能使用目标工作区的本地虚拟环境通过 Build and Verify（构建与验证）运行完整构建主流程。
+系统 MUST 提供 `scripts/setup-worktree.ps1`（工作树初始化脚本），用于在主仓库准备唯一的 Python（Python 语言）和 Node.js（运行时）开发依赖实体，并让依赖清单一致的链接工作树通过目录链接共享这些大型依赖；初始化成功后，开发者 MUST 能使用目标工作区的链接环境通过 Build and Verify（构建与验证）运行完整构建主流程。
 
 #### Scenario: 主仓库初始化
 - **WHEN** 开发者在主仓库运行脚本
@@ -37,14 +37,19 @@ TBD - created by archiving change configure-build-and-verify-init-script. Update
 - **THEN** 脚本 MUST 使用根目录锁文件准备根目录 Node.js（运行时）开发依赖
 
 #### Scenario: 工作树复用共享依赖
-- **WHEN** 开发者在依赖清单与主仓库一致的链接工作树运行脚本，且主仓库共享依赖已存在
-- **THEN** 脚本 MUST 让该工作树的根级 `node_modules`（依赖目录）指向主仓库根目录的共享依赖
-- **THEN** 脚本 MUST 不在该工作树重复安装 Node.js（运行时）开发依赖
+- **WHEN** 开发者在依赖清单与主仓库一致的链接工作树运行脚本，且主仓库共享依赖已存在并对应当前依赖清单
+- **THEN** 脚本 MUST 让该工作树的根级 `node_modules`（依赖目录）和 `.venv`（本地虚拟环境）分别指向主仓库根目录的共享依赖
+- **THEN** 脚本 MUST 不在该工作树重复安装 Node.js（运行时）或 Python（Python 语言）开发依赖
 
-#### Scenario: 已有本地 Python 环境时复用
-- **WHEN** 开发者运行脚本且当前工作树 `.venv\Scripts\python.exe`（本地虚拟环境解释器）已存在
-- **THEN** 脚本 MUST 不重建或删除该环境
-- **THEN** 脚本 MUST 使用该本地解释器升级 pip（包安装工具）并安装 `requirements-dev.txt`（开发依赖清单）
+#### Scenario: 已有共享依赖链接时复用
+- **WHEN** 开发者在链接工作树重复运行脚本，且现有 `node_modules` 和 `.venv` 均指向主仓库对应共享依赖
+- **THEN** 脚本 MUST 保留并复用这些目录链接
+- **THEN** 脚本 MUST 不重复安装依赖
+
+#### Scenario: 已有非共享依赖目录时停止
+- **WHEN** 链接工作树的 `node_modules` 或 `.venv` 已存在但不是指向主仓库对应共享依赖的目录链接
+- **THEN** 脚本 MUST 以非零退出码结束
+- **THEN** 脚本 MUST 不覆盖或删除已有目录
 
 #### Scenario: 初始化后运行完整构建主流程
 - **WHEN** 开发者成功初始化主工作区或关联工作树，激活目标工作区的 `.venv`（本地虚拟环境），并从 Build and Verify（构建与验证）入口运行 `build`（构建检查）

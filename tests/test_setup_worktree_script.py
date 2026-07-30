@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import shutil
@@ -81,50 +82,85 @@ def test_setup_worktree_script_links_shared_node_dependencies(
     shared_node_modules = project / "node_modules"
     worktree = project / ".worktrees/test"
     run("git", "worktree", "add", "--detach", str(worktree), "HEAD")
-    python = worktree / ".venv/Scripts/python.exe"
-    python.parent.mkdir(parents=True)
-    shutil.copy2(true, python)
+    shared_venv = project / ".venv"
+    shared_python = shared_venv / "Scripts/python.exe"
+    requirements = (project / "requirements-dev.txt").read_text(encoding="utf-8").replace("\r\n", "\n")
+    fingerprint = hashlib.sha256(requirements.encode()).hexdigest().upper()
 
     npm_marker = project / "npm-called"
+    py_marker = project / "py-called"
     fake_bin = project / "fake-bin"
     fake_bin.mkdir()
     (fake_bin / "npm.cmd").write_text(
         f'@echo called>>"{npm_marker}"\n@exit /b 99\n', encoding="utf-8"
     )
+    (fake_bin / "py.cmd").write_text(
+        f'@echo called>>"{py_marker}"\n@exit /b 99\n', encoding="utf-8"
+    )
     env = os.environ | {"PATH": str(fake_bin) + os.pathsep + os.environ["PATH"]}
     command = [shell, "-NoProfile", "-File", str(worktree / "scripts/setup-worktree.ps1")]
 
-    missing = subprocess.run(
-        command,
-        cwd=worktree,
-        env=env,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-    )
+    def setup(*, check: bool = False) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            command,
+            cwd=worktree,
+            env=env,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=check,
+        )
+
+    missing = setup()
     assert missing.returncode != 0
     assert "Shared Node.js dependencies are missing" in missing.stdout + missing.stderr
     assert not npm_marker.exists()
 
     shared_node_modules.mkdir()
-    subprocess.run(command, cwd=worktree, env=env, check=True)
-    subprocess.run(command, cwd=worktree, env=env, check=True)
+    stale_node = setup()
+    assert stale_node.returncode != 0
+    assert "Shared Node.js dependencies are stale" in stale_node.stdout + stale_node.stderr
+
+    node_fingerprint = "\n".join(
+        f"{hashlib.sha256((project / manifest).read_text(encoding='utf-8').replace(chr(13) + chr(10), chr(10)).encode()).hexdigest().upper()} {manifest}"
+        for manifest in ("package.json", "package-lock.json", "plugins\\pi-tool-display\\package.json")
+    )
+    (shared_node_modules / ".package-lock.sha256").write_text(node_fingerprint + "\n", encoding="ascii")
+    missing_python = setup()
+    assert missing_python.returncode != 0
+    assert "Shared Python environment is missing" in missing_python.stdout + missing_python.stderr
+
+    shared_python.parent.mkdir(parents=True)
+    shutil.copy2(true, shared_python)
+    stale_python = setup()
+    assert stale_python.returncode != 0
+    assert "Shared Python environment is stale" in stale_python.stdout + stale_python.stderr
+
+    (shared_venv / ".requirements.sha256").write_text(
+        f"{fingerprint} requirements-dev.txt\n", encoding="ascii"
+    )
+    setup(check=True)
+    setup(check=True)
 
     link = worktree / "node_modules"
     assert link.is_junction()
     assert link.resolve() == shared_node_modules.resolve()
+    venv_link = worktree / ".venv"
+    assert venv_link.is_junction()
+    assert venv_link.resolve() == shared_venv.resolve()
+    assert not py_marker.exists()
 
     (worktree / "package.json").write_text("{}", encoding="utf-8")
-    result = subprocess.run(
-        command,
-        cwd=worktree,
-        env=env,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-    )
+    result = setup()
     assert result.returncode != 0
     assert "do not match 'package.json'" in result.stdout + result.stderr
     assert not npm_marker.exists()
+
+    shutil.copy2(project / "package.json", worktree / "package.json")
+    venv_link.rmdir()
+    venv_link.mkdir()
+    existing = setup()
+    assert existing.returncode != 0
+    assert "already exists and does not link" in existing.stdout + existing.stderr
+    assert venv_link.is_dir() and not venv_link.is_junction()

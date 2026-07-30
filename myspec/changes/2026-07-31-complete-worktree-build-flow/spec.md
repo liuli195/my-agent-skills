@@ -10,7 +10,7 @@
 
 ## Solution
 
-让主工作区和关联工作树继续通过同一个工作树初始化入口准备各自的 `.venv`，关联工作树继续复用主工作区根级 Node.js 依赖。运行 Build and Verify（构建与验证）前，调用方使用目标工作区初始化得到的 Python 环境，使所有仓库配置检查在同一环境中执行。
+让主工作区和关联工作树继续通过同一个工作树初始化入口准备环境。主工作区保存唯一的 `.venv` 和根级 Node.js 依赖实体；关联工作树通过目录链接共享两者，不重复安装大型依赖。运行 Build and Verify（构建与验证）前，调用方使用目标工作区链接到共享 `.venv` 的 Python 环境，使所有仓库配置检查在同一环境中执行。
 
 移除本地插件包检查对 `claude plugin validate` 的外部调用，不安装 Claude Code（代码代理），并保留仓库已有的清单字段、插件名称、路径存在性、目录边界、市场登记和发布投影一致性检查。CI（持续集成）不得增加直接 npm（软件包管理器）构建或其他并列检查入口；完整主流程仍只从 Build and Verify（构建与验证）进入。
 
@@ -21,7 +21,7 @@
 3. As a main-checkout developer, I want the same initialization contract to prepare the environment used by Build and Verify, so that behavior does not depend on global packages.
 4. As a Windows developer, I want the initialized virtual environment to be used by repository checks, so that PyYAML installed during setup is actually available during the build.
 5. As a developer using multiple worktrees, I want Node.js dependencies shared from the main checkout, so that each worktree does not duplicate hundreds of megabytes.
-6. As a developer using multiple worktrees, I want each checkout to retain its existing isolated Python environment, so that Python setup remains predictable.
+6. As a developer using multiple worktrees, I want each linked worktree to reuse the main checkout's Python environment, so that large Python dependencies are not installed repeatedly.
 7. As a contributor without Claude Code installed, I want repository-owned package checks to run without that unrelated global command, so that local builds are reproducible.
 8. As a maintainer, I want plugin manifests and marketplace registrations still checked, so that removing the external Claude command does not remove the repository's structural safeguards.
 9. As a maintainer, I want release projection consistency still checked with the declared Python dependencies, so that genuine projection drift remains a build failure.
@@ -34,7 +34,9 @@
 ## Implementation Decisions
 
 - Preserve `scripts/setup-worktree.ps1` as the single environment initialization entry for both the main checkout and linked worktrees.
-- Preserve the current environment model: each checkout has its own `.venv`, while compatible linked worktrees use the main checkout's root `node_modules` through the existing directory link.
+- Use the same shared dependency model as the quantitative research repository: the main checkout owns the only `.venv` and root `node_modules` entities, while compatible linked worktrees use directory links to both.
+- Record a Python dependency fingerprint in the shared `.venv`; linked worktrees must stop when the shared environment is missing, stale, or based on a different dependency manifest.
+- Refuse to overwrite or delete an existing linked-worktree `.venv` or `node_modules` that does not point to the expected shared target.
 - Treat initialization as a prerequisite for a fresh checkout. Build and Verify remains non-mutating and does not install dependencies.
 - Run Build and Verify with the target checkout's initialized Python environment active so configured child commands resolve the same Python environment and declared packages.
 - Keep Build and Verify as the only CI build and verification entry. Do not add direct npm, TypeScript, local package script, or equivalent parallel checks.
@@ -63,7 +65,7 @@
 - Adding Claude Code or another large CLI dependency.
 - Replacing PyYAML with a handwritten YAML parser.
 - Making Build and Verify install or update dependencies.
-- Sharing one Python virtual environment between worktrees.
+- Creating or installing a separate Python virtual environment inside each linked worktree.
 - Renaming or moving `.worktrees`.
 - Changing the root Node.js workspace or dependency-link design already delivered for Issue #230.
 - Adding a direct npm, TypeScript, or repository script check to CI alongside Build and Verify.
