@@ -50,3 +50,12 @@ Plugin Sync（插件同步） skill instructions（技能说明） MUST define h
 - **AND** Git（版本管理） reports tracked changes under `.build-and-verify/runtime/`
 - **THEN** the instructions（说明） MUST require reporting that the repository should use PR Flow（拉取请求流程） for the change
 - **THEN** the instructions（说明） MUST forbid commit, push（推送）, or open PR（拉取请求）
+### Requirement: Plugin Sync delegates MySpec lifecycle management
+
+Plugin Sync（插件同步）MUST 将 MySpec（自有规格）的初始化、诊断、机器级模式切换和更新委托给 `myspec` CLI（命令行程序），不得复制 MySpec 的路径、市场、模式或版本规则。
+
+#### Scenario: 用户通过 Plugin Sync 管理 MySpec
+
+- **WHEN** 用户要求 Plugin Sync 检查、初始化、切换或更新 MySpec
+- **THEN** Plugin Sync MUST 调用适用的 `myspec init`、`myspec doctor` 或 `myspec update`
+- **THEN** Plugin Sync MUST NOT 自行推断 MySpec 的包路径、客户端市场、模式或目标版本

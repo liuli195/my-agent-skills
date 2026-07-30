@@ -97,25 +97,6 @@
 - **WHEN** my-spec 运行在逐项决定期间被中断后继续
 - **THEN** 系统 MUST 返回原清单中的同一当前项、稳定总数和既有决定
 - **THEN** 系统 MUST NOT 重新扫描以重建剩余候选
-### Requirement: MySpec 操作错误可见且重复执行稳定
-
-系统 MUST 对无效主规格或 Delta（增量规格）返回非零结果和可识别错误，并确保相同输入的重复预览或应用不产生额外变化。主规格 MUST 包含 Purpose（目的）、Requirements（需求）、全局唯一的 Requirement 标题、`MUST` 或 `SHALL`，以及至少一个包含非空 `WHEN` 和 `THEN` 的 Scenario（场景）。Delta MUST 只支持 RENAMED、REMOVED、MODIFIED 和 ADDED，并按该顺序应用。
-
-#### Scenario: 用户提交无效主规格
-
-- **WHEN** 主规格缺少必要结构、全局标题不唯一、Requirement 缺少 `MUST`/`SHALL` 或 Scenario 缺少非空 `WHEN`/`THEN`
-- **THEN** 系统 MUST 返回非零结果和可识别错误
-
-#### Scenario: 用户提交无效 Delta
-
-- **WHEN** Delta 包含未知操作、重复处理同一 Requirement、引用不存在的标题、添加已存在标题或提供不完整的 MODIFIED Requirement
-- **THEN** 系统 MUST 返回非零结果和可识别错误
-- **THEN** 系统 MUST NOT 修改主规格
-
-#### Scenario: 用户重复执行相同变更
-
-- **WHEN** 用户对相同基线重复预览或应用同一 Delta（增量规格）
-- **THEN** 系统保持结果不变
 ### Requirement: 规格运行文件集中在本地目录
 
 系统 MUST 将 my-spec 的共享锁、当前命令状态、输入、主规格指纹、决定、Delta（增量规格）、预览和恢复材料保存在 `.local/spec-work/`，不得在仓库根目录创建 `.spec-work/`。同一仓库 MUST 同时只允许一个 my-spec 运行；已有锁不得只因超时而自动删除。继续或应用前 MUST 校验主规格和输入指纹，成功应用后 MUST 清理本次运行状态。
@@ -144,3 +125,28 @@
 - **THEN** 最终校验成功后系统 MUST 清理本次锁、备份和工作状态
 - **WHEN** 替换后最终校验失败
 - **THEN** 系统 MUST 恢复原主规格且不得触碰规格目录之外的用户内容
+### Requirement: MySpec 操作错误可见且重复执行稳定
+
+系统 MUST 通过 PATH（可执行文件搜索路径）中的裸 `myspec` CLI（命令行程序）执行状态、校验、预览、差异和应用操作，不得定位或解析包内脚本路径；系统 MUST 对无效主规格或 Delta（增量规格）返回非零结果和可识别错误，并确保相同输入的重复预览或应用不产生额外变化。主规格 MUST 包含 Purpose（目的）、Requirements（需求）、全局唯一的 Requirement 标题、`MUST` 或 `SHALL`，以及至少一个包含非空 `WHEN` 和 `THEN` 的 Scenario（场景）。Delta MUST 只支持 RENAMED、REMOVED、MODIFIED 和 ADDED，并按该顺序应用。
+
+#### Scenario: Skill 执行确定性操作
+
+- **WHEN** 任一 MySpec Skill（技能）执行状态、校验、预览、完整差异或应用操作
+- **THEN** Skill MUST 直接调用 `myspec` 及对应既有业务子命令
+- **THEN** Skill MUST NOT 包含 `spec_ops.py` 路径、绝对安装路径或要求 Agent（代理）选择脚本位置
+
+#### Scenario: 用户提交无效主规格
+
+- **WHEN** 主规格缺少必要结构、全局标题不唯一、Requirement 缺少 `MUST`/`SHALL` 或 Scenario 缺少非空 `WHEN`/`THEN`
+- **THEN** 系统 MUST 返回非零结果和可识别错误
+
+#### Scenario: 用户提交无效 Delta
+
+- **WHEN** Delta 包含未知操作、重复处理同一 Requirement、引用不存在的标题、添加已存在标题或提供不完整的 MODIFIED Requirement
+- **THEN** 系统 MUST 返回非零结果和可识别错误
+- **THEN** 系统 MUST NOT 修改主规格
+
+#### Scenario: 用户重复执行相同变更
+
+- **WHEN** 用户对相同基线重复预览或应用同一 Delta（增量规格）
+- **THEN** 系统保持结果不变
