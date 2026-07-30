@@ -4,10 +4,11 @@
     "checks": [
       {
         "id": "build.pi-tool-display",
-        "command": "npm run build --prefix plugins/pi-tool-display",
+        "command": "npm run build --workspace pi-tool-display",
         "inputs": [
+          "package.json",
+          "package-lock.json",
           "plugins/pi-tool-display/package.json",
-          "plugins/pi-tool-display/package-lock.json",
           "plugins/pi-tool-display/tsconfig.json",
           "plugins/pi-tool-display/extensions",
           "plugins/pi-tool-display/src"
@@ -34,13 +35,16 @@
       {
         "id": "verify.pi-tool-display",
         "paths": [
+          "package.json",
+          "package-lock.json",
           "plugins/pi-tool-display/**",
           ".build-and-verify/config.json"
         ],
-        "command": "npm run check --prefix plugins/pi-tool-display",
+        "command": "npm run check --workspace pi-tool-display",
         "inputs": [
+          "package.json",
+          "package-lock.json",
           "plugins/pi-tool-display/package.json",
-          "plugins/pi-tool-display/package-lock.json",
           "plugins/pi-tool-display/tsconfig.json",
           "plugins/pi-tool-display/extensions",
           "plugins/pi-tool-display/src",

@@ -1440,7 +1440,7 @@ def test_build_and_verify_root_build_checks_cover_plugins() -> None:
 
     assert list(check_by_id) == ["build.pi-tool-display", "build.local-plugin-package"]
     assert check_by_id["build.pi-tool-display"]["command"] == (
-        "npm run build --prefix plugins/pi-tool-display"
+        "npm run build --workspace pi-tool-display"
     )
     local_plugin_build = check_by_id["build.local-plugin-package"]
     assert local_plugin_build["command"] == "python scripts/local_plugin_build.py"

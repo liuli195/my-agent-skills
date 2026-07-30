@@ -50,7 +50,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r source/requirements-dev.txt
           npm install -g @earendil-works/pi-coding-agent@0.82.1
-          npm ci --prefix source/plugins/pi-tool-display
+          npm ci --prefix source
 
       - name: Install current MySpec package
         shell: bash
