@@ -4001,12 +4001,22 @@ def test_build_and_verify_runner_reads_git_status_rename_and_copy_destinations(
     assert runner._git_status_names(tmp_path) == ["renamed.txt", "copied.txt"]
 
 
-def test_build_and_verify_user_level_skill_path_requires_runtime_version(
+def test_build_and_verify_user_level_skill_path_requires_manifest_version(
     tmp_path: Path,
 ) -> None:
-    user_skill = tmp_path / "user-skills" / "build-and-verify"
+    user_plugin = tmp_path / "plugins" / "build-and-verify"
+    user_skill = user_plugin / "skills" / "build-and-verify"
     shutil.copytree(PLUGIN_ROOT / "skills" / "build-and-verify", user_skill)
     script = user_skill / "scripts" / "build_and_verify.py"
+    manifest = user_plugin / ".codex-plugin" / "plugin.json"
+    manifest.parent.mkdir()
+    write_json(
+        manifest,
+        {
+            "name": "build-and-verify",
+            "version": read_json(PLUGIN_ROOT / ".codex-plugin" / "plugin.json")["version"],
+        },
+    )
     project = tmp_path / "project"
     project.mkdir()
 
@@ -4046,9 +4056,26 @@ def test_build_and_verify_user_level_skill_path_requires_runtime_version(
         capture_output=True,
     )
 
-    assert verify.returncode == 1
-    assert "missing_runtime_version" in verify.stderr
-    assert not (project / "run.log").exists()
+    assert verify.returncode == 0, verify.stdout + verify.stderr
+    assert "checked: verify-src" in verify.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "verify-src"
+    ]
+
+    write_json(manifest, {"name": "build-and-verify"})
+    missing_version = subprocess.run(
+        [sys.executable, str(script), "verify", "--project", str(project)],
+        cwd=project,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert missing_version.returncode == 1
+    assert "missing_runtime_version" in missing_version.stderr
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "verify-src"
+    ]
 
 
 def test_build_and_verify_non_git_project_uses_filesystem_scan(
