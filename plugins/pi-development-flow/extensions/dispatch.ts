@@ -144,7 +144,7 @@ async function verifyTicket(worktree: string, path: string) {
     throw new Error("ticket_path must name one published ticket in the target worktree");
   }
   const content = await readFile(ticket, "utf8");
-  if (!/(?:状态：|Status:)\s*ready-for-agent/i.test(content)) {
+  if (!/^(?:-\s*)?(?:状态：|Status:)\s*ready-for-agent\s*$/im.test(content)) {
     throw new Error("ticket_path must have ready-for-agent status");
   }
   return ticketRelative;

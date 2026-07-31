@@ -84,6 +84,12 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
     );
     await mkdir(dirname(ticketPath), { recursive: true });
     await writeFile(ticketPath, "# 01 Marker\n\n- 状态：ready-for-agent\n", "utf8");
+    const invalidTicketPath = join(dirname(ticketPath), "02-not-ready.md");
+    await writeFile(
+      invalidTicketPath,
+      "# 02 Not ready\n\nThe old example says Status: ready-for-agent but this ticket is not ready.\n",
+      "utf8",
+    );
 
     const listeners = new Map();
     const tools = new Map();
@@ -99,6 +105,7 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
       },
     };
     let spawnRequest;
+    let stopRequest;
     let completeSpawn = true;
     events.on("subagents:rpc:ping", ({ requestId }) => {
       events.emit(`subagents:rpc:ping:reply:${requestId}`, {
@@ -120,8 +127,9 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
         }));
       }
     });
-    events.on("subagents:rpc:stop", ({ requestId }) => {
-      events.emit(`subagents:rpc:stop:reply:${requestId}`, { success: true });
+    events.on("subagents:rpc:stop", (request) => {
+      stopRequest = request;
+      events.emit(`subagents:rpc:stop:reply:${request.requestId}`, { success: true });
     });
 
     const pi = {
@@ -179,6 +187,20 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
       ),
       /primary worktree/i,
     );
+    await assert.rejects(
+      tool.execute(
+        "call-invalid-ticket",
+        {
+          worktree_path: worktree,
+          expected_branch: "feature",
+          ticket_path: invalidTicketPath,
+        },
+        undefined,
+        undefined,
+        { cwd: root },
+      ),
+      /ready-for-agent status/i,
+    );
 
     completeSpawn = false;
     await assert.rejects(
@@ -191,6 +213,9 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
       ),
       /timed out/i,
     );
+    assert.equal(stopRequest.agentId, "agent-1");
+    assert.equal(listeners.get("subagents:completed")?.size ?? 0, 0);
+    assert.equal(listeners.get("subagents:failed")?.size ?? 0, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
