@@ -4082,6 +4082,49 @@ def test_build_and_verify_user_level_skill_path_requires_manifest_version(
     ]
 
 
+def test_repository_runtime_requires_runtime_version_before_verify_runs_or_caches(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
+    (project / "src").mkdir()
+    (project / "src" / "app.py").write_text("changed\n", encoding="utf-8")
+    write_runner_config(
+        project,
+        verify_checks=[
+            {
+                "id": "verify-src",
+                "command": command_that_logs("verify-src"),
+                "paths": ["src/**"],
+                "inputs": ["src"],
+            }
+        ],
+    )
+    version_path = project / ".build-and-verify" / "runtime" / "version.json"
+    version = read_json(version_path)
+    del version["runtime_version"]
+    write_json(version_path, version)
+    spec = importlib.util.spec_from_file_location(
+        "repository_build_and_verify", version_path.with_name("build_and_verify.py")
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    runtime = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runtime)
+    runner = FakeRunner()
+    runtime._RUNNER_MODULE = FakeRunnerModule(runtime._runner(), runner, ["src/app.py"])
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        returncode = runtime.main(["verify", "--project", str(project)])
+
+    assert returncode == 1
+    assert "missing_runtime_version" in stderr.getvalue()
+    assert runner.calls == []
+    assert list((project / ".build-and-verify" / "cache").glob("*.json")) == []
+
+
 def test_build_and_verify_non_git_project_uses_filesystem_scan(
     tmp_path: Path,
 ) -> None:
