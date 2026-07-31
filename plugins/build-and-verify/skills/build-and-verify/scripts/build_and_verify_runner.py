@@ -469,10 +469,10 @@ def _hash_input(project: Path, input_path: str) -> dict[str, Any]:
         for file_path in candidates:
             if not file_path.is_file():
                 continue
-            if not _is_relative_to_project(project, file_path):
-                raise ValueError(f"invalid_input_path: {input_path}")
             child_relative = file_path.relative_to(project).as_posix()
             if fnmatch.fnmatch(child_relative, relative):
+                if not _is_relative_to_project(project, file_path):
+                    raise ValueError(f"invalid_input_path: {input_path}")
                 files.append({"path": child_relative, "sha256": _hash_file(file_path)})
         return {"path": relative, "type": "glob", "files": sorted(files, key=lambda item: item["path"])}
     if not path.exists():

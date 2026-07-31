@@ -4578,6 +4578,38 @@ def test_build_and_verify_runner_verify_reports_missing_config_without_traceback
     assert "Traceback" not in output
 
 
+def test_build_and_verify_runner_ignores_nonmatching_external_glob_links(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside\n", encoding="utf-8")
+    (project / "outside-link.txt").symlink_to(outside)
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
+    (project / "requirements.txt").write_text("requirements\n", encoding="utf-8")
+    (project / "src").mkdir()
+    (project / "src" / "app.txt").write_text("changed\n", encoding="utf-8")
+    write_runner_config(
+        project,
+        verify_checks=[
+            {
+                "id": "glob-in-project-input",
+                "command": command_that_logs("glob-in-project-input"),
+                "paths": ["src/**"],
+                "inputs": ["requirements*.txt"],
+            }
+        ],
+    )
+
+    result = run_check(project, "verify", changed_files=["src/app.txt"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "glob-in-project-input"
+    ]
+
+
 def test_build_and_verify_runner_rejects_glob_match_outside_project(
     tmp_path: Path,
 ) -> None:
