@@ -9,7 +9,7 @@ The main agent decides whether and when to delegate.
 
 ## Check
 
-Before the first delegation, check the effective persistent configuration once per session. Resolve project and global agent definitions using Pi Subagents precedence, confirm default agents are disabled, and compare every enabled role's description, model, thinking level, capabilities, prompt mode, and prompt with this contract:
+Before the first delegation, check the effective persistent configuration once per session. Resolve project and global agent definitions using Pi Subagents precedence, confirm default agents are disabled, confirm each pinned model resolves in Pi's active model registry, and compare every enabled role's description, model, thinking level, capabilities, prompt mode, and prompt with this contract:
 
 | Role | Description | Model | Thinking | Capabilities |
 | --- | --- | --- | --- | --- |

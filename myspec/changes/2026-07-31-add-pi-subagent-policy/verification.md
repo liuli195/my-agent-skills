@@ -14,7 +14,7 @@
 - 当前配置缺少正式角色且默认角色仍启用时，主 Agent 明确报告差异；
 - 主 Agent 没有启动子代理，也没有修改配置。
 
-通过隔离的 `PI_CODING_AGENT_DIR`（Pi 配置目录）执行 `pi install <local-package-directory>` 和 `pi list`，确认 Pi 可直接登记该本地 package。隔离目录随后清理，用户级配置未改变。
+保留的 Node.js（运行时）回归通过 Pi 的 `DefaultResourceLoader`（默认资源加载器）从内存设置中的本地 package 路径加载 Skill，并确认来源为 `package`。另通过隔离的 `PI_CODING_AGENT_DIR`（Pi 配置目录）执行 `pi install <local-package-directory>` 和 `pi list`，确认 Pi 可直接登记该本地 package。隔离目录随后清理，用户级配置未改变。
 
 ## 仓库验证
 
