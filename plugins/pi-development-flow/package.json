@@ -1,0 +1,14 @@
+{
+  "name": "pi-development-flow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi-only orchestration for one repository development change from requirements through PR cleanup.",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "skills": [
+      "./skills"
+    ]
+  }
+}
