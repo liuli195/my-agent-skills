@@ -42,6 +42,7 @@
 - [x] Build and Verify（构建与验证）`build`（构建检查）和快速 `verify`（验证）：通过。
 - [x] 通过 `pi -e ./plugins/pi-development-flow` 在新 Pi（编码代理）进程运行只读真实调用冒烟：正确进入需求确认阶段并停在首个用户门禁，Git（版本管理）状态未被修改。
 - [x] 整体代码审查：首次发现 4 项范围内问题，修复后定向复核全部通过，无未解决阻断项。
+- [x] `/my-spec-add`（新增自有规格）：用户确认完整差异后成功固化 `pi-development-flow` 正式规格，MySpec（自有规格）快速验证通过。
 
 ## 已知风险
 
