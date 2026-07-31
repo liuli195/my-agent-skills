@@ -27,3 +27,11 @@ _Avoid_: Product lifecycle, release flow
 **Flow Level（流程等级）**:
 The risk-based classification that selects the cost and gates applied within a Development Flow（开发流程）.
 _Avoid_: Complexity level, task size
+
+**Future Input（未来输入）**:
+A Build and Verify（构建与验证） glob input（通配符输入） that currently matches no files but remains valid so future matching files can invalidate the cache.
+_Avoid_: Missing input, invalid glob
+
+**Glob Input（通配符输入）**:
+A Build and Verify（构建与验证） cache input pattern that expands to a stable Git-visible file set.
+_Avoid_: Literal input, directory input

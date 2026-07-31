@@ -45,7 +45,7 @@ def _runtime_metadata() -> dict[str, str]:
     if version_path.is_file():
         try:
             data = json.loads(version_path.read_text(encoding="utf-8"))
-            version = str(data.get("runtime_version") or data.get("plugin_version") or "unknown")
+            version = str(data.get("runtime_version") or "unknown")
             return {
                 "plugin": "build-and-verify",
                 "plugin_version": str(data.get("plugin_version") or version),
@@ -56,7 +56,7 @@ def _runtime_metadata() -> dict[str, str]:
     manifest_path = _plugin_root() / ".codex-plugin" / "plugin.json"
     if manifest_path.is_file():
         try:
-            version = str(json.loads(manifest_path.read_text(encoding="utf-8")).get("version"))
+            version = str(json.loads(manifest_path.read_text(encoding="utf-8")).get("version") or "unknown")
             return {
                 "plugin": "build-and-verify",
                 "plugin_version": version,

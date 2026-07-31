@@ -385,3 +385,88 @@ Build and Verify（构建与验证） tests MUST keep real entrypoint coverage s
 - **THEN** Pytest（测试工具） workers（工作进程） MUST use `auto`
 - **THEN** the measured plugin test-suite wall time MUST be less than or equal to 30 seconds
 - **THEN** this plugin test-suite target MUST NOT redefine the repository-wide end-to-end full verification target
+### Requirement: Build and Verify expands explicit glob cache inputs
+
+Build and Verify（构建与验证） MUST expand explicit glob inputs（通配符缓存输入） into a stable project-local Git-visible file set so cached verification reflects the matched files.
+
+#### Scenario: Matching files invalidate cached verification
+
+- **WHEN** a matching file is added, removed, or its content changes
+- **THEN** fast verify（快速验证） MUST NOT reuse the earlier passed-result cache（通过结果缓存）
+
+#### Scenario: Glob inputs use the Git-visible file boundary
+
+- **WHEN** an explicit glob input matches tracked files, visible untracked files, and ignored untracked files
+- **THEN** the matched set MUST include the tracked and visible untracked files
+- **THEN** the matched set MUST exclude ignored untracked files
+- **THEN** an explicitly named literal file MUST retain its existing behavior even when ignored
+
+#### Scenario: Future input is valid
+
+- **WHEN** an explicit glob input currently matches no files
+- **THEN** initialization and configuration review MUST report it as a valid Future Input（未来输入）
+- **THEN** verification runtime MUST accept the empty matched set without repeated warnings
+- **THEN** the first future matching file MUST invalidate the empty-set cache
+
+#### Scenario: Glob input remains inside the project
+
+- **WHEN** a glob input uses either path separator or matches candidate files
+- **THEN** slash and backslash forms MUST produce the same matched set
+- **THEN** absolute paths, parent traversal, and matching files outside the project MUST be rejected
+- **THEN** non-matching files outside the project MUST NOT block verification
+
+#### Scenario: Literal missing paths remain distinguishable
+
+- **WHEN** initialization or configuration review encounters a missing literal path
+- **THEN** it MUST distinguish that path from a Future Input（未来输入）
+- **THEN** it MUST report that the literal path may contain a spelling error
+### Requirement: Fast verification selects all checks for configuration changes
+
+Build and Verify（构建与验证） MUST select every current verification check when its repository configuration changes, while continuing to use cache entries created from that same current configuration.
+
+#### Scenario: Configuration is the only changed file
+
+- **WHEN** the Build and Verify（构建与验证） configuration is the only changed file
+- **THEN** fast verify（快速验证） MUST select every current verification check
+- **THEN** output MUST report the overall configuration-change selection reason once
+
+#### Scenario: Current configuration cache remains reusable
+
+- **WHEN** all checks selected by a configuration change already have passed-result cache（通过结果缓存） entries from the same current configuration and runtime version
+- **THEN** fast verify（快速验证） MUST reuse those entries
+- **THEN** cache entries from an earlier configuration MUST NOT be reused
+
+#### Scenario: Invalid configuration stops scheduling
+
+- **WHEN** the changed configuration is structurally invalid
+- **THEN** verification MUST fail before scheduling any configured check
+
+#### Scenario: Ordinary source changes retain path selection
+
+- **WHEN** the configuration is unchanged and ordinary source files change
+- **THEN** fast verify（快速验证） MUST continue selecting checks through their configured paths（受影响路径）
+### Requirement: Verification caches are bound to runtime version
+
+Build and Verify（构建与验证） MUST bind fast and full verification cache entries to the fixed runtime version that produced them.
+
+#### Scenario: Runtime version changes
+
+- **WHEN** the repository runtime is updated to a different runtime version
+- **THEN** fast verify（快速验证） MUST NOT reuse passed-result cache（通过结果缓存） entries from the earlier runtime version
+- **THEN** existing cache files MUST NOT require manual deletion
+
+#### Scenario: Runtime version remains unchanged
+
+- **WHEN** runtime version, configuration, command, and cache inputs remain unchanged
+- **THEN** fast verify（快速验证） MAY reuse the matching passed-result cache（通过结果缓存）
+
+#### Scenario: Full verification records current runtime identity
+
+- **WHEN** full verify（完整验证） writes passed-result cache（通过结果缓存） entries
+- **THEN** those entries MUST use the current fixed runtime version
+
+#### Scenario: Runtime version is missing
+
+- **WHEN** the fixed runtime version is absent
+- **THEN** fast verify（快速验证） and full verify（完整验证） MUST fail before running checks or reading or writing passed-result cache（通过结果缓存）
+- **THEN** build（构建检查） MUST remain available because it does not use verification cache
