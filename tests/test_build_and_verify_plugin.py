@@ -2325,6 +2325,16 @@ def test_build_and_verify_init_template_detects_missing_executable(
     assert all(issue["是否阻止写入"] == "不阻止" for issue in issues)
 
 
+def test_build_and_verify_init_and_review_document_future_inputs_separately() -> None:
+    validation = (INIT_REFERENCE_ROOT / "validation.md").read_text(encoding="utf-8")
+    review = (REVIEW_REFERENCE_ROOT / "review.md").read_text(encoding="utf-8")
+
+    for text in (validation, review):
+        assert "Future Input（未来输入）" in text
+        assert "当前无匹配但合法" in text
+        assert "字面路径不存在，可能存在拼写错误" in text
+
+
 def test_build_and_verify_init_template_detects_missing_paths_and_inputs(
     tmp_path: Path,
 ) -> None:
@@ -4236,6 +4246,140 @@ def test_build_and_verify_runner_cache_misses_when_input_is_deleted(
     ]
 
 
+def test_build_and_verify_runner_glob_inputs_track_visible_matching_files(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    tracked = project / "requirements.txt"
+    tracked.write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "requirements.txt"], cwd=project, check=True)
+    write_runner_config(
+        project,
+        verify_checks=[
+            {
+                "id": "glob-inputs",
+                "command": command_that_logs("glob-inputs"),
+                "paths": ["requirements*.txt"],
+                "inputs": ["requirements*.txt"],
+            }
+        ],
+    )
+
+    first = run_check(project, "verify", changed_files=["requirements.txt"])
+    unchanged = run_check(project, "verify", changed_files=["requirements.txt"])
+    tracked.write_text("changed\n", encoding="utf-8")
+    changed = run_check(project, "verify", changed_files=["requirements.txt"])
+    added = project / "requirements-dev.txt"
+    added.write_text("dev\n", encoding="utf-8")
+    addition = run_check(project, "verify", changed_files=["requirements-dev.txt"])
+    tracked.write_text("changed-again\n", encoding="utf-8")
+    changed_with_addition = run_check(project, "verify", changed_files=["requirements.txt"])
+    added.unlink()
+    deletion = run_check(project, "verify", changed_files=["requirements.txt"])
+
+    assert all(
+        result.returncode == 0
+        for result in (first, unchanged, changed, addition, changed_with_addition, deletion)
+    )
+    assert "cache-hit: glob-inputs" in unchanged.stdout
+    assert "cache-hit:" not in changed.stdout
+    assert "cache-hit:" not in addition.stdout
+    assert "cache-hit:" not in changed_with_addition.stdout
+    assert "cache-hit:" not in deletion.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "glob-inputs",
+        "glob-inputs",
+        "glob-inputs",
+        "glob-inputs",
+        "glob-inputs",
+    ]
+
+
+def test_build_and_verify_runner_accepts_future_glob_inputs(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
+    (project / "src").mkdir()
+    (project / "src" / "app.txt").write_text("changed\n", encoding="utf-8")
+    write_runner_config(
+        project,
+        verify_checks=[
+            {
+                "id": "future-glob-input",
+                "command": command_that_logs("future-glob-input"),
+                "paths": ["src/app.txt"],
+                "inputs": ["future-*.txt"],
+            }
+        ],
+    )
+
+    first = run_check(project, "verify", changed_files=["src/app.txt"])
+    unchanged = run_check(project, "verify", changed_files=["src/app.txt"])
+    (project / "future-config.txt").write_text("future\n", encoding="utf-8")
+    matched = run_check(project, "verify", changed_files=["src/app.txt"])
+
+    assert all(result.returncode == 0 for result in (first, unchanged, matched))
+    assert "warning" not in first.stdout + first.stderr
+    assert "cache-hit: future-glob-input" in unchanged.stdout
+    assert "cache-hit:" not in matched.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "future-glob-input",
+        "future-glob-input",
+    ]
+
+
+def test_build_and_verify_runner_glob_inputs_ignore_ignored_files_and_normalize_separators(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    (project / ".gitignore").write_text("requirements-ignored.txt\n", encoding="utf-8")
+    tracked = project / "requirements.txt"
+    tracked.write_text("tracked\n", encoding="utf-8")
+    subprocess.run(["git", "add", ".gitignore", "requirements.txt"], cwd=project, check=True)
+    visible = project / "requirements-dev.txt"
+    ignored = project / "requirements-ignored.txt"
+    visible.write_text("visible-v1\n", encoding="utf-8")
+    ignored.write_text("ignored-v1\n", encoding="utf-8")
+    check = {
+        "id": "glob-visible",
+        "command": command_that_logs("glob-visible"),
+        "paths": ["requirements*.txt"],
+        "inputs": [r".\requirements*.txt"],
+    }
+    write_runner_config(project, verify_checks=[check])
+
+    first = run_check(project, "verify", changed_files=["requirements.txt"])
+    ignored.write_text("ignored-v2\n", encoding="utf-8")
+    ignored_change = run_check(project, "verify", changed_files=["requirements.txt"])
+    visible.write_text("visible-v2\n", encoding="utf-8")
+    visible_change = run_check(project, "verify", changed_files=["requirements.txt"])
+    check.update(id="literal-ignored", inputs=["requirements-ignored.txt"])
+    write_runner_config(project, verify_checks=[check])
+    literal_first = run_check(project, "verify", changed_files=["requirements.txt"])
+    ignored.write_text("ignored-v3\n", encoding="utf-8")
+    literal_change = run_check(project, "verify", changed_files=["requirements.txt"])
+
+    assert all(
+        result.returncode == 0
+        for result in (first, ignored_change, visible_change, literal_first, literal_change)
+    )
+    assert "cache-hit: glob-visible" in ignored_change.stdout
+    assert "cache-hit:" not in visible_change.stdout
+    assert "cache-hit:" not in literal_change.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
+        "glob-visible",
+        "glob-visible",
+        "glob-visible",
+        "glob-visible",
+    ]
+
+
 def test_build_and_verify_runner_default_cache_key_tracks_glob_path_contents(
     tmp_path: Path,
 ) -> None:
@@ -4432,6 +4576,37 @@ def test_build_and_verify_runner_verify_reports_missing_config_without_traceback
     assert "missing_config: .build-and-verify/config.json" in output
     assert "status: failed" in result.stdout
     assert "Traceback" not in output
+
+
+def test_build_and_verify_runner_rejects_glob_match_outside_project(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside\n", encoding="utf-8")
+    external_link = project / "outside-link.txt"
+    external_link.symlink_to(outside)
+    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
+    (project / "src").mkdir()
+    (project / "src" / "app.txt").write_text("changed\n", encoding="utf-8")
+    write_runner_config(
+        project,
+        verify_checks=[
+            {
+                "id": "glob-outside-input",
+                "command": command_that_logs("glob-outside-input"),
+                "paths": ["src/**"],
+                "inputs": ["*.txt"],
+            }
+        ],
+    )
+
+    result = run_check(project, "verify", changed_files=["src/app.txt"])
+
+    assert result.returncode != 0
+    assert "invalid_input_path: *.txt" in result.stderr
+    assert not (project / "run.log").exists()
 
 
 @pytest.mark.parametrize(

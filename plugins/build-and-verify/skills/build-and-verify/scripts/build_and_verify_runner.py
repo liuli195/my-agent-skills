@@ -251,7 +251,7 @@ def _load_config(project: Path) -> dict[str, Any]:
 
 
 def _normalize_path(path: str | Path) -> str:
-    return Path(path).as_posix().strip("/")
+    return Path(str(path).replace("\\", "/")).as_posix().strip("/")
 
 
 def _dedupe(items: list[str]) -> list[str]:
@@ -452,8 +452,29 @@ def _git_visible_files(project: Path, relative: str) -> list[Path] | None:
     return [project / name for name in result.stdout.split("\0") if name]
 
 
+def _is_glob_input(path: str) -> bool:
+    return any(character in path for character in "*?[")
+
+
 def _hash_input(project: Path, input_path: str) -> dict[str, Any]:
     relative, path = _validate_project_relative_input(project, input_path)
+    if _is_glob_input(relative):
+        git_files = _git_visible_files(project, ".")
+        candidates = (
+            git_files
+            if git_files is not None
+            else [project / item for item in _all_project_files(project)]
+        )
+        files: list[dict[str, str]] = []
+        for file_path in candidates:
+            if not file_path.is_file():
+                continue
+            if not _is_relative_to_project(project, file_path):
+                raise ValueError(f"invalid_input_path: {input_path}")
+            child_relative = file_path.relative_to(project).as_posix()
+            if fnmatch.fnmatch(child_relative, relative):
+                files.append({"path": child_relative, "sha256": _hash_file(file_path)})
+        return {"path": relative, "type": "glob", "files": sorted(files, key=lambda item: item["path"])}
     if not path.exists():
         return {"path": relative, "missing": True}
     if path.is_file():
