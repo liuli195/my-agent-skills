@@ -1,7 +1,7 @@
 # 03 缓存绑定运行时版本
 
 **Status:** completed
-**Prerequisites:** none  
+**Prerequisites:** none
 **Source:** GitHub Issue #240
 
 ## 用户结果

@@ -1,7 +1,7 @@
 # 01 展开通配符缓存输入
 
 **Status:** completed
-**Prerequisites:** none  
+**Prerequisites:** none
 **Source:** GitHub Issue #238
 
 ## 用户结果

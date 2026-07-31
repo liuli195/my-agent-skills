@@ -1,7 +1,7 @@
 # 02 配置变化时选择全部检查
 
 **Status:** completed
-**Prerequisites:** none  
+**Prerequisites:** none
 **Source:** GitHub Issue #239
 
 ## 用户结果
