@@ -1,12 +1,12 @@
-# Implementation
+# Implementation（实施）
 
-## Shape the work
+## Shape the work（组织工作）
 
 Use one feature branch and one `.worktrees/<change>/` worktree when all tickets are sequential. Create an integration branch only when at least two unblocked tickets can safely run in parallel. In that case, give each parallel ticket one ASCII-named branch, one `.worktrees/<change>-<ticket>/` worktree, and one Implementer（实施者）. Run the repository worktree initializer in every new worktree.
 
 The main Agent（代理） decides whether delegation helps and how many parallel tickets the repository and machine can support. Before the first delegation, apply `pi-subagent-policy`; a policy mismatch stops delegation. Use Explorer（探索者） for independent investigation, Implementer for confirmed changes, and Reviewer（审查者） for review. Verify every delegated result before accepting it.
 
-## Implement tickets
+## Implement tickets（实施票据）
 
 - Apply `tdd` to feature, bug, and integration behavior: one confirmed public seam, one failing check, the minimum passing implementation, then the next slice.
 - Documentation, formatting, and behavior-neutral configuration use the smallest relevant check without a ceremonial red/green loop.
@@ -16,7 +16,7 @@ The main Agent（代理） decides whether delegation helps and how many paralle
 
 Record only behavior evidence in the ticket: checked acceptance criteria, red/green result, user-entry smoke result, required review conclusion, and unresolved risk. Derive commits, branches, worktrees, and PR state from Git（版本管理） rather than copying them into the ticket.
 
-## Verify proportionally
+## Verify proportionally（按风险验证）
 
 | Point | Verification |
 | --- | --- |
@@ -24,12 +24,12 @@ Record only behavior evidence in the ticket: checked acceptance criteria, red/gr
 | Integration | Build and Verify fast mode; rerun affected smoke only when conflict resolution or integration changed behavior |
 | Lightweight final | Relevant check plus a real target-behavior smoke when a user path changed |
 | Standard final | One real user-entry or published-form smoke through the changed main success path, plus fast verification |
-| High-risk final | Main success-path smoke plus affected security, failure, migration, or recovery paths, plus fast verification |
+| High-risk final | Main success-path smoke plus affected security, data-integrity, failure, migration, or recovery paths, plus fast verification |
 | PR CI | The repository's full automated checks |
 
 An external client or system adapter receives its own smallest real smoke immediately after completion. Repository rules, the spec, and explicit user requirements may demand stronger verification. Internal unit tests do not replace a required user-entry smoke.
 
-## Review within the diff
+## Review within the diff（在差异内审查）
 
 Use `code-review` for its fixed-point, Standards（规范）, and Spec（规格） review method. `pi-subagent-policy` controls role selection, so both axes use Reviewer rather than a general-purpose role.
 

@@ -1,4 +1,4 @@
-# Resume
+# Resume（恢复）
 
 Resume from existing facts instead of a parallel workflow state file.
 

@@ -1,8 +1,8 @@
-# Initialization
+# Initialization（初始化）
 
 Read this file only for an explicit initialization request or after a formal entry reports a missing prerequisite.
 
-## Readiness
+## Readiness（就绪检查）
 
 Inspect the bounded repository and confirm:
 
@@ -12,7 +12,7 @@ Inspect the bounded repository and confirm:
 - MySpec, Build and Verify, and PR Flow expose their formal entry points;
 - the repository has a worktree initialization entry and ignores its root `.worktrees/` directory.
 
-## Missing prerequisites
+## Missing prerequisites（缺失前置项）
 
 Present one structured initialization plan and wait for authorization. Delegate only to an existing formal entry, such as:
 

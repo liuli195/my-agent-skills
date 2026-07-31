@@ -1,4 +1,4 @@
-# Requirements
+# Requirements（需求）
 
 ## Flow Level（流程等级）
 
@@ -12,7 +12,7 @@ Recommend a level from observable risk, then let the user confirm it.
 
 Security, data integrity, migration, release, and other protected work stays high risk. Missing information defaults to standard. The user may raise any level; lowering a protected level requires changing the scope rather than skipping its controls.
 
-## Discussion route
+## Discussion route（讨论路径）
 
 Choose by decision scale:
 
@@ -22,7 +22,7 @@ Choose by decision scale:
 
 During discussion, retain confirmed domain terms in the conversation. Publish them with the spec and tickets instead of editing the base checkout mid-discussion.
 
-## Publish one change
+## Publish one change（发布单项变更）
 
 1. Confirm the highest public test seam through `to-spec`.
 2. Use `to-tickets` to draft tracer-bullet vertical slices. Every ticket has an independently observable result, runnable verification, and only genuine blockers.
