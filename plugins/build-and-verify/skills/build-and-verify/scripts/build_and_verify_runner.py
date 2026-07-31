@@ -890,7 +890,10 @@ def run_verify(
         return _config_error(error)
     checks = _checks(config, "verify")
     changed_files = _changed_files(project)
-    selected = checks if full else _selected_checks(checks, changed_files)
+    config_changed = ".build-and-verify/config.json" in changed_files
+    selected = checks if full or config_changed else _selected_checks(checks, changed_files)
+    if config_changed and not full:
+        print("selection-reason: config-changed")
     failures = 0
     if full:
         verify_config = config.get("verify", {})

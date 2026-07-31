@@ -252,6 +252,101 @@ def test_runner_default_verify_selects_changed_checks_and_uses_cache(
     assert "verify.docs" not in output
 
 
+def test_runner_config_change_selects_all_checks_once(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = load_check_module()
+    write_runner_config(
+        tmp_path,
+        verify_checks=[
+            {"id": "verify.src", "command": "run-verify-src", "paths": ["src/**"]},
+            {"id": "verify.docs", "command": "run-verify-docs", "paths": ["docs/**"]},
+        ],
+    )
+    monkeypatch.setattr(
+        module,
+        "_changed_files",
+        lambda _root: [".build-and-verify/config.json"],
+        raising=False,
+    )
+    calls: list[str] = []
+
+    def fake_run(command, cwd, check, text, encoding, errors, capture_output, shell=False, timeout=None):
+        calls.append(command)
+        return make_completed(command)
+
+    assert module.run_verify(tmp_path, runner=fake_run) == 0
+
+    output = capsys.readouterr().out
+    assert calls == ["run-verify-src", "run-verify-docs"]
+    assert output.count("selection-reason: config-changed") == 1
+
+
+def test_runner_config_change_invalidates_old_cache_and_reuses_current_cache(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = load_check_module()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("app\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "guide.md").write_text("guide\n", encoding="utf-8")
+    checks = [
+        {"id": "verify.src", "command": "run-verify-src", "paths": ["src/**"], "inputs": ["src/app.py"]},
+        {"id": "verify.docs", "command": "run-verify-docs", "paths": ["docs/**"], "inputs": ["docs/guide.md"]},
+    ]
+    write_runner_config(tmp_path, verify_checks=checks)
+    old_config = module._load_config(tmp_path)
+    for check in checks:
+        module._cache_store(
+            tmp_path,
+            module._cache_key(tmp_path, old_config, check, [".build-and-verify/config.json"]),
+            check,
+        )
+    write_json(
+        tmp_path / ".build-and-verify" / "config.json",
+        {"version": 2, "build": {"checks": []}, "verify": {"checks": checks}},
+    )
+    monkeypatch.setattr(
+        module,
+        "_changed_files",
+        lambda _root: [".build-and-verify/config.json"],
+        raising=False,
+    )
+    calls: list[str] = []
+
+    def fake_run(command, cwd, check, text, encoding, errors, capture_output, shell=False, timeout=None):
+        calls.append(command)
+        return make_completed(command)
+
+    assert module.run_verify(tmp_path, runner=fake_run) == 0
+    first_output = capsys.readouterr().out
+    assert calls == ["run-verify-src", "run-verify-docs"]
+    assert "cache-hit:" not in first_output
+
+    assert module.run_verify(tmp_path, runner=fake_run) == 0
+    second_output = capsys.readouterr().out
+    assert calls == ["run-verify-src", "run-verify-docs"]
+    assert "cache-hit: verify.src" in second_output
+    assert "cache-hit: verify.docs" in second_output
+
+
+def test_runner_invalid_config_stops_before_scheduling_verify_checks(
+    tmp_path: Path, capsys
+) -> None:
+    module = load_check_module()
+    write_json(
+        tmp_path / ".build-and-verify" / "config.json",
+        {"version": 1, "build": {"checks": []}, "verify": {"checks": [{"id": "bad", "command": "run", "paths": "src/**"}]}},
+    )
+
+    def fake_run(*_args, **_kwargs):
+        raise AssertionError("invalid config must stop before scheduling")
+
+    assert module.run_verify(tmp_path, runner=fake_run) == 1
+    captured = capsys.readouterr()
+    assert "verify.checks[0].paths must be list of non-empty strings" in captured.err
+
+
 def test_runner_full_verify_runs_all_checks_without_cache(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:

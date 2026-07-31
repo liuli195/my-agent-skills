@@ -1,6 +1,6 @@
 # 02 配置变化时选择全部检查
 
-**Status:** ready-for-agent  
+**Status:** completed
 **Prerequisites:** none  
 **Source:** GitHub Issue #239
 
@@ -24,3 +24,14 @@
 2. 覆盖整体原因输出、无效配置、当前配置缓存复用和普通路径选择。
 3. 用同一组检查转绿。
 4. 通过 Build and Verify（构建与验证）运行定向检查，并从仓库 runtime（运行时）的 fast verify（快速验证）命令执行最小真实冒烟。
+
+## TDD（测试驱动开发）证据
+
+- [x] 先新增 `test_runner_config_change_selects_all_checks_once`；仓库 runtime（运行时）`verify`（验证）入口红灯，配置文件为唯一变更时未调度任何检查。
+- [x] 最小修复后，同一入口转绿；runner integration seam（运行器集成接缝）覆盖一次整体原因、全部选择、旧配置缓存失效、当前配置缓存复用、缓存命中不强制重跑、无效配置调度前失败和普通源码路径选择。
+
+## 验证证据
+
+- [x] 红灯：`python .build-and-verify/runtime/build_and_verify.py verify --project .`，`test_runner_config_change_selects_all_checks_once` 失败（0 次调度，期望 2 次）。
+- [x] 绿灯与最小真实入口冒烟：`python .build-and-verify/runtime/build_and_verify.py verify --project .`，`verify.local-build-contract` 65 项通过，`verify.build-and-verify` 221 项通过；未使用 `--full`（完整）。
+- [x] canonical runtime（规范运行时）与仓库 runtime snapshot（运行时快照）的 `build_and_verify.py` 和 `build_and_verify_runner.py` 字节一致。
