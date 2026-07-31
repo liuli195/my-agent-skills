@@ -426,8 +426,8 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_build_and_verify_plugin.py::test_copied_repository_runtime_can_initialize_another_project': (
         'covers copied repository runtime init entrypoint; function=test_copied_repository_runtime_can_initialize_another_project'
     ),
-    'tests/test_build_and_verify_plugin.py::test_build_and_verify_user_level_skill_path_runs_verify_without_git': (
-        'covers user-level skill path fast-verify entrypoint without git; function=test_build_and_verify_user_level_skill_path_runs_verify_without_git'
+    'tests/test_build_and_verify_plugin.py::test_build_and_verify_user_level_skill_path_requires_runtime_version': (
+        'covers user-level skill path fast-verify entrypoint missing runtime-version failure; function=test_build_and_verify_user_level_skill_path_requires_runtime_version'
     ),
     'tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_directory_hash_uses_git_visible_files': (
         'covers packaged cache behavior against tracked, visible untracked, and ignored files in a real git repository; function=test_build_and_verify_runner_directory_hash_uses_git_visible_files'
@@ -722,7 +722,7 @@ def test_build_and_verify_keeps_focused_real_entrypoint_coverage() -> None:
         "tests/test_build_and_verify_plugin.py::test_build_and_verify_init_config_overwrite_e2e_temp_target_repo",
         "tests/test_build_and_verify_plugin.py::test_copied_runtime_full_performance_report_e2e_temp_target_repo",
         "tests/test_build_and_verify_plugin.py::test_copied_repository_runtime_can_initialize_another_project",
-        "tests/test_build_and_verify_plugin.py::test_build_and_verify_user_level_skill_path_runs_verify_without_git",
+        "tests/test_build_and_verify_plugin.py::test_build_and_verify_user_level_skill_path_requires_runtime_version",
         "tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_directory_hash_uses_git_visible_files",
         "tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_glob_inputs_track_visible_matching_files",
         "tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_glob_inputs_ignore_ignored_files_and_normalize_separators",
@@ -734,5 +734,5 @@ def test_build_and_verify_keeps_focused_real_entrypoint_coverage() -> None:
     ]
     assert fast_verify_entries == [
         "tests/test_build_and_verify_plugin.py::test_build_and_verify_init_config_overwrite_e2e_temp_target_repo",
-        "tests/test_build_and_verify_plugin.py::test_build_and_verify_user_level_skill_path_runs_verify_without_git",
+        "tests/test_build_and_verify_plugin.py::test_build_and_verify_user_level_skill_path_requires_runtime_version",
     ]

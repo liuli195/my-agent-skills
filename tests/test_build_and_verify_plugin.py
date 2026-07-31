@@ -162,6 +162,14 @@ def load_build_and_verify_module():
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    runner = module._runner()
+    run_verify = runner.run_verify
+
+    def run_verify_with_test_runtime(*args, **kwargs):
+        kwargs.setdefault("runtime_version", "test-runtime")
+        return run_verify(*args, **kwargs)
+
+    runner.run_verify = run_verify_with_test_runtime
     _BUILD_AND_VERIFY_MODULE = module
     return module
 
@@ -3993,7 +4001,7 @@ def test_build_and_verify_runner_reads_git_status_rename_and_copy_destinations(
     assert runner._git_status_names(tmp_path) == ["renamed.txt", "copied.txt"]
 
 
-def test_build_and_verify_user_level_skill_path_runs_verify_without_git(
+def test_build_and_verify_user_level_skill_path_requires_runtime_version(
     tmp_path: Path,
 ) -> None:
     user_skill = tmp_path / "user-skills" / "build-and-verify"
@@ -4038,11 +4046,9 @@ def test_build_and_verify_user_level_skill_path_runs_verify_without_git(
         capture_output=True,
     )
 
-    assert verify.returncode == 0, verify.stdout + verify.stderr
-    assert "checked: verify-src" in verify.stdout
-    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
-        "verify-src"
-    ]
+    assert verify.returncode == 1
+    assert "missing_runtime_version" in verify.stderr
+    assert not (project / "run.log").exists()
 
 
 def test_build_and_verify_non_git_project_uses_filesystem_scan(
