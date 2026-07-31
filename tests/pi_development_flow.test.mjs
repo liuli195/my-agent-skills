@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -74,6 +74,16 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
     await execFileAsync("git", ["-C", root, "config", "user.name", "Test User"]);
     await execFileAsync("git", ["-C", root, "commit", "--allow-empty", "-m", "initial"]);
     await execFileAsync("git", ["-C", root, "worktree", "add", "-b", "feature", worktree]);
+    const ticketPath = join(
+      worktree,
+      "myspec",
+      "changes",
+      "smoke",
+      "issues",
+      "01-marker.md",
+    );
+    await mkdir(dirname(ticketPath), { recursive: true });
+    await writeFile(ticketPath, "# 01 Marker\n\n- 状态：ready-for-agent\n", "utf8");
 
     const listeners = new Map();
     const tools = new Map();
@@ -89,6 +99,7 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
       },
     };
     let spawnRequest;
+    let completeSpawn = true;
     events.on("subagents:rpc:ping", ({ requestId }) => {
       events.emit(`subagents:rpc:ping:reply:${requestId}`, {
         success: true,
@@ -101,11 +112,16 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
         success: true,
         data: { id: "agent-1" },
       });
-      setImmediate(() => events.emit("subagents:completed", {
-        id: "agent-1",
-        status: "completed",
-        result: "implemented",
-      }));
+      if (completeSpawn) {
+        setImmediate(() => events.emit("subagents:completed", {
+          id: "agent-1",
+          status: "completed",
+          result: "implemented",
+        }));
+      }
+    });
+    events.on("subagents:rpc:stop", ({ requestId }) => {
+      events.emit(`subagents:rpc:stop:reply:${requestId}`, { success: true });
     });
 
     const pi = {
@@ -124,13 +140,13 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
       resolve(pluginRoot, "extensions", "dispatch.ts"),
     ).href;
     const { registerWorktreeDispatch } = await import(extensionUrl);
-    registerWorktreeDispatch(pi, {});
+    registerWorktreeDispatch(pi, {}, 10);
 
     const tool = tools.get("dispatch_implementer_in_worktree");
     assert.ok(tool, "missing worktree dispatch tool");
     const result = await tool.execute(
       "call-1",
-      { worktree_path: worktree, expected_branch: "feature", prompt: "Implement ticket 03" },
+      { worktree_path: worktree, expected_branch: "feature", ticket_path: ticketPath },
       undefined,
       undefined,
       { cwd: root },
@@ -139,12 +155,14 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
     assert.equal(spawnRequest.type, "Implementer");
     assert.equal(spawnRequest.options.cwd, worktree);
     assert.equal(spawnRequest.options.isolated, true);
+    assert.match(spawnRequest.prompt, /myspec[\\/]changes[\\/]smoke[\\/]issues[\\/]01-marker\.md/);
+    assert.doesNotMatch(spawnRequest.prompt, /Implement ticket 03/);
     assert.equal(result.details.branch, "feature");
     assert.equal(result.details.result, "implemented");
     await assert.rejects(
       tool.execute(
         "call-2",
-        { worktree_path: worktree, expected_branch: "wrong", prompt: "no" },
+        { worktree_path: worktree, expected_branch: "wrong", ticket_path: ticketPath },
         undefined,
         undefined,
         { cwd: root },
@@ -154,12 +172,24 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
     await assert.rejects(
       tool.execute(
         "call-3",
-        { worktree_path: root, expected_branch: "main", prompt: "no" },
+        { worktree_path: root, expected_branch: "main", ticket_path: ticketPath },
         undefined,
         undefined,
         { cwd: root },
       ),
       /primary worktree/i,
+    );
+
+    completeSpawn = false;
+    await assert.rejects(
+      tool.execute(
+        "call-4",
+        { worktree_path: worktree, expected_branch: "feature", ticket_path: ticketPath },
+        undefined,
+        undefined,
+        { cwd: root },
+      ),
+      /timed out/i,
     );
   } finally {
     await rm(root, { recursive: true, force: true });

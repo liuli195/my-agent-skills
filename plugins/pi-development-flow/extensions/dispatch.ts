@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { realpath } from "node:fs/promises";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { readFile, realpath } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -47,21 +47,29 @@ function rpc<T>(
 function waitForCompletion(
   pi: ExtensionAPI,
   agentId: string,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
 ): Promise<Completion> {
   return new Promise((resolveCompletion, reject) => {
     const offCompleted = pi.events.on("subagents:completed", onCompleted);
     const offFailed = pi.events.on("subagents:failed", onFailed);
-    const onAbort = () => {
-      cleanup();
-      void rpc(pi, "subagents:rpc:stop", { agentId }).catch(() => {});
-      reject(new Error("Subagent dispatch cancelled"));
-    };
+    const timer = setTimeout(
+      () => fail(new Error("Implementer completion timed out"), true),
+      timeoutMs,
+    );
+    const onAbort = () => fail(new Error("Subagent dispatch cancelled"), true);
 
     function cleanup() {
+      clearTimeout(timer);
       offCompleted();
       offFailed();
       signal?.removeEventListener("abort", onAbort);
+    }
+
+    function fail(error: Error, stop = false) {
+      cleanup();
+      if (stop) void rpc(pi, "subagents:rpc:stop", { agentId }).catch(() => {});
+      reject(error);
     }
 
     function onCompleted(raw: unknown) {
@@ -74,8 +82,7 @@ function waitForCompletion(
     function onFailed(raw: unknown) {
       const completion = raw as Completion;
       if (completion.id !== agentId) return;
-      cleanup();
-      reject(new Error(completion.error || `Implementer ended with ${completion.status}`));
+      fail(new Error(completion.error || `Implementer ended with ${completion.status}`));
     }
 
     signal?.addEventListener("abort", onAbort, { once: true });
@@ -128,7 +135,26 @@ async function verifyWorktree(
   return { worktree, branch };
 }
 
-export function registerWorktreeDispatch(pi: ExtensionAPI, parameters: object) {
+async function verifyTicket(worktree: string, path: string) {
+  if (!isAbsolute(path)) throw new Error("ticket_path must be absolute");
+
+  const ticket = await realpath(path);
+  const ticketRelative = relative(worktree, ticket);
+  if (!/^myspec[\\/]changes[\\/][^\\/]+[\\/]issues[\\/][^\\/]+\.md$/i.test(ticketRelative)) {
+    throw new Error("ticket_path must name one published ticket in the target worktree");
+  }
+  const content = await readFile(ticket, "utf8");
+  if (!/(?:状态：|Status:)\s*ready-for-agent/i.test(content)) {
+    throw new Error("ticket_path must have ready-for-agent status");
+  }
+  return ticketRelative;
+}
+
+export function registerWorktreeDispatch(
+  pi: ExtensionAPI,
+  parameters: object,
+  completionTimeoutMs = 30 * 60_000,
+) {
   pi.registerTool({
     name: "dispatch_implementer_in_worktree",
     label: "Dispatch Implementer in Worktree",
@@ -145,6 +171,7 @@ export function registerWorktreeDispatch(pi: ExtensionAPI, parameters: object) {
         params.expected_branch,
         signal,
       );
+      const ticket = await verifyTicket(target.worktree, params.ticket_path);
       const ping = await rpc<{ version: number }>(pi, "subagents:rpc:ping", {}, signal);
       if (ping.version !== 2) {
         throw new Error(`Unsupported pi-subagents RPC protocol ${ping.version}`);
@@ -155,13 +182,18 @@ export function registerWorktreeDispatch(pi: ExtensionAPI, parameters: object) {
         "subagents:rpc:spawn",
         {
           type: "Implementer",
-          prompt: params.prompt,
+          prompt: `Implement exactly one published ticket: \`${ticket}\`. Read that ticket, follow the repository rules, and do not implement any other ticket.`,
           // ponytail: isolate child extensions/MCP; opt in only if a ticket proves it needs them.
           options: { cwd: target.worktree, isolated: true },
         },
         signal,
       );
-      const completion = await waitForCompletion(pi, spawned.id, signal);
+      const completion = await waitForCompletion(
+        pi,
+        spawned.id,
+        signal,
+        completionTimeoutMs,
+      );
 
       return {
         content: [{ type: "text", text: completion.result || "Implementer completed without a text result." }],
@@ -169,6 +201,7 @@ export function registerWorktreeDispatch(pi: ExtensionAPI, parameters: object) {
           agentId: spawned.id,
           worktree: target.worktree,
           branch: target.branch,
+          ticket,
           status: completion.status,
           result: completion.result,
         },

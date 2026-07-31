@@ -7,6 +7,6 @@ export default function register(pi: ExtensionAPI) {
   registerWorktreeDispatch(pi, Type.Object({
     worktree_path: Type.String({ description: "Absolute path to the existing target worktree" }),
     expected_branch: Type.String({ description: "Exact branch expected in the target worktree" }),
-    prompt: Type.String({ description: "Self-contained instructions for exactly one published ticket" }),
+    ticket_path: Type.String({ description: "Absolute path to exactly one ready-for-agent ticket in the target worktree" }),
   }));
 }

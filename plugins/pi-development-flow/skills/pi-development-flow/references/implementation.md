@@ -12,7 +12,7 @@ The main Agent MAY implement sequential tickets directly in the feature worktree
 
 When the main Agent delegates, each Implementer invocation MUST bind exactly one published ticket and MUST NOT combine multiple published tickets. If a ticket cannot be implemented and verified independently, return to ticket design instead of widening the invocation. Sequential delegated tickets may reuse the feature worktree, but each gets a separate invocation after the previous ticket is accepted.
 
-For writable delegation into an existing feature or ticket worktree, use `dispatch_implementer_in_worktree` with its absolute path and expected branch. The flow MUST NOT rely on a prompt to change directories. If tool-enforced binding is unavailable or validation fails, stop before delegation and provide a handoff from the target worktree.
+For writable delegation into an existing feature or ticket worktree, use `dispatch_implementer_in_worktree` with the absolute worktree path, expected branch, and exactly one published `ready-for-agent` ticket path from that worktree. The tool constructs the Implementer prompt; it does not accept a free-form multi-ticket prompt. The flow MUST NOT rely on a prompt to change directories. If tool-enforced binding is unavailable or validation fails, stop before delegation and provide a handoff from the target worktree.
 
 - Apply `tdd` to feature, bug, and integration behavior: one confirmed public seam, one failing check, the minimum passing implementation, then the next slice.
 - Documentation, formatting, and behavior-neutral configuration use the smallest relevant check without a ceremonial red/green loop.
