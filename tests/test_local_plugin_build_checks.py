@@ -307,13 +307,15 @@ def test_runner_config_change_invalidates_old_cache_and_reuses_current_cache(
     for check in checks:
         module._cache_store(
             tmp_path,
-            module._cache_key(tmp_path, old_config, check, [".build-and-verify/config.json"]),
+            module._cache_key(
+                tmp_path,
+                old_config,
+                check,
+                [".build-and-verify/config.json"],
+                runtime_version="test-runtime",
+            ),
             check,
         )
-    write_json(
-        tmp_path / ".build-and-verify" / "config.json",
-        {"version": 2, "build": {"checks": []}, "verify": {"checks": checks}},
-    )
     monkeypatch.setattr(
         module,
         "_changed_files",
@@ -327,15 +329,25 @@ def test_runner_config_change_invalidates_old_cache_and_reuses_current_cache(
         return make_completed(command)
 
     assert module.run_verify(tmp_path, runner=fake_run) == 0
-    first_output = capsys.readouterr().out
+    current_output = capsys.readouterr().out
+    assert calls == []
+    assert "cache-hit: verify.src" in current_output
+    assert "cache-hit: verify.docs" in current_output
+
+    write_json(
+        tmp_path / ".build-and-verify" / "config.json",
+        {"version": 2, "build": {"checks": []}, "verify": {"checks": checks}},
+    )
+    assert module.run_verify(tmp_path, runner=fake_run) == 0
+    changed_output = capsys.readouterr().out
     assert calls == ["run-verify-src", "run-verify-docs"]
-    assert "cache-hit:" not in first_output
+    assert "cache-hit:" not in changed_output
 
     assert module.run_verify(tmp_path, runner=fake_run) == 0
-    second_output = capsys.readouterr().out
+    reused_output = capsys.readouterr().out
     assert calls == ["run-verify-src", "run-verify-docs"]
-    assert "cache-hit: verify.src" in second_output
-    assert "cache-hit: verify.docs" in second_output
+    assert "cache-hit: verify.src" in reused_output
+    assert "cache-hit: verify.docs" in reused_output
 
 
 def test_runner_invalid_config_stops_before_scheduling_verify_checks(
