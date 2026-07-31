@@ -18,10 +18,20 @@
 
 ## 验收标准
 
-- [ ] 需求讨论入口包含独立 MUST（强制）块。
-- [ ] MUST 块同时要求 `grill-with-docs`（带文档拷问）和 `domain-modeling`（领域建模）。
-- [ ] MUST 块明确禁止普通 `grilling`（拷问）替代指定入口。
-- [ ] 任一指定 Skill 缺失、不可读或加载失败时，流程明确停止并报告。
-- [ ] 调用 `to-spec`（生成规格）和 `to-tickets`（拆分票据）前核对本轮工具加载记录。
-- [ ] 真实 Pi 新进程从本地包进入需求阶段时使用正确入口。
-- [ ] Build and Verify（构建与验证）对应检查通过。
+- [x] 需求讨论入口包含独立 MUST（强制）块。
+- [x] MUST 块同时要求 `grill-with-docs`（带文档拷问）和 `domain-modeling`（领域建模）。
+- [x] MUST 块明确禁止普通 `grilling`（拷问）替代指定入口。
+- [x] 任一指定 Skill 缺失、不可读或加载失败时，流程明确停止并报告。
+- [x] 调用 `to-spec`（生成规格）和 `to-tickets`（拆分票据）前核对本轮工具加载记录。
+- [x] 真实 Pi 新进程从本地包进入需求阶段时使用正确入口。
+- [x] Build and Verify（构建与验证）对应检查通过。
+
+## TDD（测试驱动开发）证据
+
+- [x] 红灯：包契约检查因缺少 Requirements（需求）MUST 块失败。
+- [x] 绿灯：同一检查在加入准确技能、禁止替代、停止和工具记录要求后通过。
+
+## 验证证据
+
+- [x] 真实 Pi 新进程读取了 `grill-with-docs` 与 `domain-modeling`，没有读取普通 `grilling`，并停在需求讨论路径。
+- [x] Build and Verify 快速验证通过。

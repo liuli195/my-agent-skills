@@ -13,7 +13,7 @@ Orchestrate one GitHub-hosted repository change by composing the repository's ex
 2. **Confirm requirements.** Read and complete [requirements](references/requirements.md). This phase is complete when the approved domain terms, spec, vertical tickets, and test seams are committed on the change branch.
 3. **Request implementation authorization.** Present the concrete implementation plan as a table covering ticket order and parallel groups, branch and worktree layout, executor, red/green checks, smoke checks, review gates, integration points, cleanup timing, risks, and stop conditions. Wait for explicit authorization; creating the change is not authorization to implement it.
 4. **Implement.** After authorization, read and complete [implementation](references/implementation.md). This phase is complete when every ticket is integrated, its behavior evidence is recorded, the risk-matched final verification and fast verification pass, and the bounded overall review has no blocking finding.
-5. **Deliver.** Read and complete [delivery](references/delivery.md). The Development Flow（开发流程） is complete only when the PR（拉取请求） is merged, the base branch is synchronized, authorized local delivery is verified, and every safely removable branch and worktree is gone.
+5. **Deliver.** Read and complete [delivery](references/delivery.md). The Development Flow（开发流程） is complete when the PR（拉取请求） is merged, the base branch is synchronized, and every safely removable branch and worktree is gone. Local installation, client synchronization, marketplace refresh, and Release Flow（发布流程） remain outside this flow unless the user explicitly requests the exact action.
 
 ## Gates（门禁）
 

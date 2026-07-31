@@ -8,9 +8,15 @@ The main Agent（代理） decides whether delegation helps and how many paralle
 
 ## Implement tickets（实施票据）
 
+The main Agent MAY implement sequential tickets directly in the feature worktree; sequential work does not require delegation. Whether work is direct or delegated, the current ticket must be implemented, verified, and accepted before the next sequential ticket begins.
+
+When the main Agent delegates, each Implementer invocation MUST bind exactly one published ticket and MUST NOT combine multiple published tickets. If a ticket cannot be implemented and verified independently, return to ticket design instead of widening the invocation. Sequential delegated tickets may reuse the feature worktree, but each gets a separate invocation after the previous ticket is accepted.
+
+For writable delegation into an existing feature or ticket worktree, use `dispatch_implementer_in_worktree` with its absolute path and expected branch. The flow MUST NOT rely on a prompt to change directories. If tool-enforced binding is unavailable or validation fails, stop before delegation and provide a handoff from the target worktree.
+
 - Apply `tdd` to feature, bug, and integration behavior: one confirmed public seam, one failing check, the minimum passing implementation, then the next slice.
 - Documentation, formatting, and behavior-neutral configuration use the smallest relevant check without a ceremonial red/green loop.
-- Each Implementer commits focused, verified work on its ticket branch. The main Agent verifies the diff and evidence before integration.
+- Each delegated Implementer commits focused, verified work on its assigned branch. The main Agent verifies the diff and evidence before integration.
 - Integrate only tickets whose blockers are complete. Conflicting core-file work runs sequentially rather than pretending to be parallel.
 - After integration passes its checks, the main Agent non-forcibly removes the integrated ticket worktree and branch without another user prompt. Preserve anything unmerged, dirty, failed, or of unknown origin.
 

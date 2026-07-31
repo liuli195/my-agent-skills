@@ -1,5 +1,16 @@
 # Requirements（需求）
 
+## MUST — Exact discussion Skills（准确讨论技能）
+
+Before any single-session requirements discussion:
+
+- read `grill-with-docs` in the current session;
+- read and use `domain-modeling` as required by that Skill（技能）;
+- MUST NOT substitute ordinary `grilling` for `grill-with-docs`;
+- stop and report the blocker when either required Skill is unavailable or cannot be read.
+
+Before invoking `to-spec` or `to-tickets`, confirm current-session tool-call evidence that both required Skills were read. Do not replace this evidence with a self-reported flag or state file.
+
 ## Flow Level（流程等级）
 
 Recommend a level from observable risk, then let the user confirm it.

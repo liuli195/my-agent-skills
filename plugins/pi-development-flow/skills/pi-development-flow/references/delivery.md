@@ -6,7 +6,7 @@ After the bounded overall review and its fixes pass proportional verification, r
 
 ## PR delivery（拉取请求交付）
 
-Present the final diff, verification evidence, review result, known risks, and requested post-merge local actions. Wait for explicit delivery authorization.
+Present the final diff, verification evidence, review result, and known risks. Wait for explicit delivery authorization.
 
 - Use `pr-flow-tweak` only for a non-bug lightweight change that meets its contract.
 - Use `pr-flow-complete` for standard and high-risk changes.
@@ -17,7 +17,11 @@ Present the final diff, verification evidence, review result, known risks, and r
 
 PR Flow owns merged head-branch cleanup and final worktree removal. Use only non-forced cleanup. Preserve dirty, unmerged, failed, or unknown content and report the blocker.
 
-After merge, synchronize the local base branch and perform any authorized local installation through its formal package entry from the stable base path. For a Pi（编码代理） user-level local package, use `pi install <local-package-directory>` without project-local mode so Pi registers the repository directory rather than copying the Skill（技能） source. Verify that result in a fresh consumer process.
+After merge, synchronize the local base branch.
+
+By default, Development Flow excludes local installation, client synchronization, marketplace refresh, and Release Flow（发布流程）. The flow MUST NOT proactively list or ask about these actions. Perform one only when the user explicitly requests that exact action; a general instruction such as “continue the cleanup” does not authorize installation, synchronization, refresh, or release work.
+
+Use the requested action's formal entry and verify its result. Never infer authorization for a required release when a requested synchronization depends on unpublished content; report that requested action separately. Unrequested or unavailable local delivery MUST NOT block completion or become a default follow-up task.
 
 Declare the Development Flow（开发流程） complete only when:
 
@@ -25,6 +29,5 @@ Declare the Development Flow（开发流程） complete only when:
 - the formal specification is approved and valid;
 - the PR is actually merged;
 - the local base matches the current remote base;
-- authorized local delivery is verified;
 - safely removable ticket, feature, and integration branches and worktrees are gone;
 - no temporary artifact from the flow remains.
