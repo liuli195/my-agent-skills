@@ -1,0 +1,628 @@
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ToolDisplayCapabilities } from "./capabilities.js";
+import type { ToolDisplayConfigController, ToolDisplayConfigMutation } from "./config-command.js";
+import { getToolDisplayConfigPath, mergeProjectConfig } from "./config-store.js";
+import {
+	detectToolDisplayPreset,
+	getToolDisplayPresetConfig,
+	parseToolDisplayPreset,
+	TOOL_DISPLAY_PRESETS,
+	type ToolDisplayPreset,
+} from "./presets.js";
+import { shortenPath } from "./render-utils.js";
+import type { InspectorSettingItem } from "./settings-inspector-modal.js";
+import { type ToolDisplayConfig } from "./types.js";
+
+interface ModalOverlayOptions {
+	anchor: "center";
+	width: number;
+	maxHeight: number;
+	margin: number;
+}
+
+const PREVIEW_LINE_VALUES = ["4", "8", "12", "20", "40"] as const;
+const BASH_PREVIEW_LINE_VALUES = ["0", "5", "10", "20", "40"] as const;
+const BASH_COMMAND_PREVIEW_LINE_VALUES = ["1", "2", "3", "5", "10"] as const;
+const BASH_ERROR_PREVIEW_LINE_VALUES = ["1", "2", "3", "5", "10"] as const;
+const PRESET_COMMAND_HINT = TOOL_DISPLAY_PRESETS.join("|");
+
+function toOnOff(value: boolean): string {
+	return value ? "on" : "off";
+}
+
+function builtInDisplaySummary(config: ToolDisplayConfig): string {
+	const overrides = config.builtInToolDisplays;
+	return `read:${toOnOff(overrides.read)},grep:${toOnOff(overrides.grep)},find:${toOnOff(overrides.find)},ls:${toOnOff(overrides.ls)},bash:${toOnOff(overrides.bash)},edit:${toOnOff(overrides.edit)},write:${toOnOff(overrides.write)}`;
+}
+
+function summarizeConfig(config: ToolDisplayConfig, capabilities: ToolDisplayCapabilities): string {
+	const preset = detectToolDisplayPreset(config);
+	const customOverrides = Object.values(config.customToolOverrides);
+	const parts = [
+		`enabled=${toOnOff(config.enabled)}`,
+		`debug=${toOnOff(config.debug)}`,
+		`preset=${preset}`,
+		`builtIns={${builtInDisplaySummary(config)}}`,
+		`customOverrides=${customOverrides.filter(({ enabled }) => enabled).length}/${customOverrides.length}`,
+		`userBox=${toOnOff(config.enableNativeUserMessageBox)}/${config.userMessageBorderColor}`,
+		`separator=${toOnOff(config.enableToolSeparator)}/${config.toolSeparatorStyle}/${config.toolSeparatorColor}`,
+		`read=${config.readOutputMode}`,
+		`search=${config.searchOutputMode}`,
+		`preview=${config.previewLines}`,
+		`expandedMax=${config.expandedPreviewMaxLines}`,
+		`bash=${config.bashOutputMode}`,
+		`bashLines=${config.bashCollapsedLines}`,
+		`bashCommand=${config.bashCommandMode}/${config.bashCommandPreviewLines}`,
+		`bashError=${config.bashErrorOutputMode}/${config.bashErrorPreviewLines}`,
+		`diff=${config.diffViewMode}/${config.diffIndicatorMode}@${config.diffSplitMinWidth}`,
+		`diffLines=${config.diffCollapsedLines}`,
+		`diffWrap=${toOnOff(config.diffWordWrap)}`,
+		`truncationHints=${toOnOff(config.showTruncationHints)}`,
+	];
+
+	parts.push(`mcpAdapterDefault=${config.mcpOutputMode}`);
+
+	if (capabilities.hasRtkOptimizer) {
+		parts.push(`rtkHints=${toOnOff(config.showRtkCompactionHints)}`);
+	} else {
+		parts.push("rtkHints=auto-off");
+	}
+
+	return parts.join(", ");
+}
+
+function parseNumber(value: string, fallback: number): number {
+	const parsed = Number.parseInt(value, 10);
+	return Number.isNaN(parsed) ? fallback : parsed;
+}
+
+function buildAdvancedNotes(
+	config: ToolDisplayConfig,
+	capabilities: ToolDisplayCapabilities,
+	extra: readonly string[],
+): string[] {
+	const notes = [
+		...extra,
+		"Manual JSON edits also expose enabled, debug, builtInToolDisplays.*, customToolOverrides, the explicit MCP adapter default, expandedPreviewMaxLines, diffSplitMinWidth, diffCollapsedLines, diffWordWrap, and truncation hints.",
+		`Built-in display selection is currently ${builtInDisplaySummary(config)}; changes made in this modal apply immediately without changing tool ownership, activation, schemas, or execution.`,
+		"Manual config.json edits require /reload. Third-party and MCP-style rendering requires an explicit customToolOverrides entry or producer adapter.",
+		"Diffs use only patches or before/after data supplied by the tool; missing evidence is never reconstructed.",
+		`Truncation hints are ${toOnOff(config.showTruncationHints)}${capabilities.hasRtkOptimizer ? `; RTK hints are ${toOnOff(config.showRtkCompactionHints)}.` : "."}`,
+	];
+	return notes;
+}
+
+export function buildInspectorSettings(
+	config: ToolDisplayConfig,
+	capabilities: ToolDisplayCapabilities,
+): InspectorSettingItem[] {
+	const configPath = shortenPath(getToolDisplayConfigPath());
+	const items: InspectorSettingItem[] = [
+		{
+			id: "preset",
+			label: "Preset profile",
+			currentValue: detectToolDisplayPreset(config),
+			values: TOOL_DISPLAY_PRESETS,
+			inspectorTitle: "Preset Profile",
+			inspectorSummary: [
+				"Determines the overall verbosity and layout of the agent's tool output.",
+				"Choosing a preset applies a coherent profile across read, search, explicit adapter defaults, bash, and diff display settings.",
+			],
+			inspectorOptions: [
+				"opencode — strict inline-only tool output",
+				"balanced — compact summaries with counts",
+				"verbose — larger line previews and more visible bash output",
+				"custom — shown automatically when manual overrides no longer match a preset",
+			],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
+				"Presets reset multiple fields together, so manual JSON tuning is the right place for durable custom combinations.",
+			]),
+			inspectorPath: configPath,
+			searchTerms: ["verbosity", "profile", "layout", "custom", ...TOOL_DISPLAY_PRESETS],
+		},
+		{
+			id: "readOutputMode",
+			label: "Read tool output",
+			currentValue: config.readOutputMode,
+			values: ["hidden", "summary", "preview"],
+			inspectorTitle: "Read Tool Output",
+			inspectorSummary: [
+				"Controls how read results appear inline after the tool call header.",
+				"Use hidden for the cleanest transcript, summary for file metrics, or preview when seeing source lines matters in-context.",
+			],
+			inspectorOptions: [
+				"hidden — path and status only",
+				"summary — adds compact file metrics",
+				"preview — shows the first configured preview lines",
+			],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
+				"expandedPreviewMaxLines bounds how many lines can appear after expanding a preview-heavy read result.",
+			]),
+			inspectorPath: configPath,
+			searchTerms: ["file", "source", "preview", "summary", "hidden"],
+		},
+		{
+			id: "searchOutputMode",
+			label: "Grep/Find/Ls output",
+			currentValue: config.searchOutputMode,
+			values: ["hidden", "count", "preview"],
+			inspectorTitle: "Grep / Find / Ls Output",
+			inspectorSummary: [
+				"Controls how search-style tools compress their result sets inside the transcript.",
+				"Count mode keeps discovery actions readable while still surfacing how much data the tool matched.",
+			],
+			inspectorOptions: [
+				"hidden — call header only",
+				"count — totals only for matches or entries",
+				"preview — shows the first configured preview lines",
+			],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
+				"Preview-heavy search output is most effective when paired with larger previewLines values in custom configurations.",
+			]),
+			inspectorPath: configPath,
+			searchTerms: ["grep", "find", "ls", "matches", "count", "results"],
+		},
+	];
+
+	items.push(
+		{
+			id: "previewLines",
+			label: "Preview lines",
+			currentValue: String(config.previewLines),
+			values: PREVIEW_LINE_VALUES,
+			inspectorTitle: "Preview Lines",
+			inspectorSummary: [
+				"Sets how many lines appear when read, search, MCP, or bash preview modes are collapsed inline.",
+				"Accepted manual range: 1 to 80 lines. The quick selector cycles through a curated set for fast tuning.",
+			],
+			inspectorOptions: [
+				"Lower values keep transcripts dense and skimmable",
+				"Higher values surface more source context before expansion",
+			],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
+				"Pair this with expandedPreviewMaxLines when you want larger expanded previews without making collapsed output noisy.",
+			]),
+			inspectorPath: configPath,
+			searchTerms: ["preview", "lines", "range", "collapsed", "read", "grep", "mcp", "bash"],
+		},
+		{
+			id: "bashOutputMode",
+			label: "Bash tool output",
+			currentValue: config.bashOutputMode,
+			values: ["opencode", "summary", "preview"],
+			inspectorTitle: "Bash Tool Output",
+			inspectorSummary: [
+				"Controls how shell command output is rendered when the command finishes successfully.",
+				"The opencode mode keeps command output recognizable while still compressing walls of stdout.",
+			],
+			inspectorOptions: [
+				"opencode — Pi/OpenCode-style collapsed bash view",
+				"summary — output count only",
+				"preview — uses the shared previewLines setting",
+			],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
+				"Quiet commands still collapse aggressively, so mode selection matters most on verbose build, test, and script output.",
+			]),
+			inspectorPath: configPath,
+			searchTerms: ["bash", "shell", "stdout", "command", "opencode"],
+		},
+		{
+			id: "bashCollapsedLines",
+			label: "Bash collapsed lines",
+			currentValue: String(config.bashCollapsedLines),
+			values: BASH_PREVIEW_LINE_VALUES,
+			inspectorTitle: "Bash Collapsed Lines",
+			inspectorSummary: [
+				"Sets the inline visual-row budget used specifically by opencode bash mode before expansion.",
+				"Accepted manual range: 0 to 80 lines. Setting 0 hides collapsed bash output entirely while keeping the command visible.",
+			],
+			inspectorOptions: [
+				"0 — hide collapsed bash output",
+				"5/10/20/40 — progressively larger inline output previews",
+			],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
+				"This setting only changes the opencode bash renderer; preview mode continues to use previewLines instead.",
+			]),
+			inspectorPath: configPath,
+			searchTerms: ["bash", "collapsed", "lines", "stdout", "zero"],
+		},
+		{
+			id: "bashCommandMode",
+			label: "Bash command display",
+			currentValue: config.bashCommandMode,
+			values: ["full", "summary", "preview"],
+			inspectorTitle: "Bash Command Display",
+			inspectorSummary: [
+				"Controls how the shell command itself appears before its output.",
+				"Preview is the compact default and expands with the same Ctrl+O action as tool output.",
+			],
+			inspectorOptions: [
+				"full — always show the complete command",
+				"summary — show one visual line until expanded",
+				"preview — show the configured number of visual lines",
+			],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
+				"Visual lines account for terminal-width wrapping; command execution and model context remain unchanged.",
+			]),
+			inspectorPath: configPath,
+			searchTerms: ["bash", "command", "shell", "preview", "summary", "full"],
+		},
+		{
+			id: "bashCommandPreviewLines",
+			label: "Bash command preview lines",
+			currentValue: String(config.bashCommandPreviewLines),
+			values: BASH_COMMAND_PREVIEW_LINE_VALUES,
+			inspectorTitle: "Bash Command Preview Lines",
+			inspectorSummary: [
+				"Sets how many visual command lines remain visible in preview mode.",
+				"Accepted manual range: 1 to 80 lines.",
+			],
+			inspectorOptions: ["1/2/3/5/10 — progressively larger command previews"],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
+				"This setting only affects bash command preview mode.",
+			]),
+			inspectorPath: configPath,
+			searchTerms: ["bash", "command", "preview", "lines", "visual"],
+		},
+		{
+			id: "bashErrorOutputMode",
+			label: "Bash error output",
+			currentValue: config.bashErrorOutputMode,
+			values: ["full", "summary", "preview"],
+			inspectorTitle: "Bash Error Output",
+			inspectorSummary: [
+				"Controls red output from failed shell commands independently from normal output.",
+				"The failure header is always visible.",
+			],
+			inspectorOptions: [
+				"full — always show complete error output",
+				"summary — show the failure header and error line count",
+				"preview — show the configured number of visual error lines",
+			],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
+				"Ctrl+O expands preview and summary output.",
+			]),
+			inspectorPath: configPath,
+			searchTerms: ["bash", "error", "stderr", "failed", "preview", "red"],
+		},
+		{
+			id: "bashErrorPreviewLines",
+			label: "Bash error preview lines",
+			currentValue: String(config.bashErrorPreviewLines),
+			values: BASH_ERROR_PREVIEW_LINE_VALUES,
+			inspectorTitle: "Bash Error Preview Lines",
+			inspectorSummary: [
+				"Sets how many visual error lines remain visible in preview mode.",
+				"Accepted manual range: 1 to 80 lines.",
+			],
+			inspectorOptions: ["1/2/3/5/10 — progressively larger error previews"],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
+				"This setting only affects failed bash commands in preview mode.",
+			]),
+			inspectorPath: configPath,
+			searchTerms: ["bash", "error", "stderr", "preview", "lines", "visual"],
+		},
+		{
+			id: "diffViewMode",
+			label: "Edit diff layout",
+			currentValue: config.diffViewMode,
+			values: ["auto", "split", "unified"],
+			inspectorTitle: "Edit Diff Layout",
+			inspectorSummary: [
+				"Controls how edit and write diffs are arranged when the extension renders code changes.",
+				"Auto mode adapts to terminal width so wide panes get side-by-side diffs while narrow panes stay readable.",
+			],
+			inspectorOptions: [
+				"auto — adaptive layout based on available width",
+				"split — force side-by-side diff columns",
+				"unified — force a single-column diff",
+			],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
+				"Manual JSON tuning exposes diffSplitMinWidth, diffCollapsedLines, diffIndicatorMode, and diffWordWrap for more aggressive diff control.",
+			]),
+			inspectorPath: configPath,
+			searchTerms: ["diff", "edit", "write", "split", "unified", "auto"],
+		},
+		{
+			id: "diffIndicatorMode",
+			label: "Diff indicators",
+			currentValue: config.diffIndicatorMode,
+			values: ["bars", "classic", "none"],
+			inspectorTitle: "Diff Indicators",
+			inspectorSummary: [
+				"Controls whether changed diff lines use vertical bars, classic +/- markers, or no indicators at all.",
+				"Bars continue across wrapped changed rows, classic markers appear only on the first wrapped row, and none removes the indicator column styling.",
+			],
+			inspectorOptions: [
+				"bars — persistent vertical indicators for changed rows",
+				"classic — + / - markers on the first visual row only",
+				"none — no diff indicator marker",
+			],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
+				"Use config.json when you want this indicator preference to remain explicit alongside other diff rendering overrides.",
+			]),
+			inspectorPath: configPath,
+			searchTerms: ["diff", "indicator", "bars", "classic", "none", "marker"],
+		},
+		{
+			id: "enableToolSeparator",
+			label: "Tool separator",
+			currentValue: toOnOff(config.enableToolSeparator),
+			values: ["on", "off"],
+			inspectorTitle: "Tool Separator",
+			inspectorSummary: ["Adds one separator after every tool row, including partial updates and otherwise-native third-party tools."],
+			inspectorOptions: ["on — separate every tool row", "off — preserve tool rows without separators"],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, ["This is presentation-only and does not modify tool execution or results."]),
+			inspectorPath: configPath,
+			searchTerms: ["tool", "separator", "divider", "line"],
+		},
+		{
+			id: "toolSeparatorStyle",
+			label: "Tool separator style",
+			currentValue: config.toolSeparatorStyle,
+			values: ["dashed", "solid"],
+			inspectorTitle: "Tool Separator Style",
+			inspectorSummary: ["Selects a dashed or solid horizontal separator."],
+			inspectorOptions: ["dashed — subtle segmented line", "solid — continuous line"],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, ["The line is width-safe and rendered with the current Pi Theme."]),
+			inspectorPath: configPath,
+			searchTerms: ["tool", "separator", "dashed", "solid", "style"],
+		},
+		{
+			id: "toolSeparatorColor",
+			label: "Tool separator color",
+			currentValue: config.toolSeparatorColor,
+			values: ["border", "borderAccent", "borderMuted", "accent", "muted", "dim"],
+			inspectorTitle: "Tool Separator Color",
+			inspectorSummary: ["Selects one of six stable Pi Theme foreground tokens."],
+			inspectorOptions: ["border/borderAccent/borderMuted — border semantics", "accent/muted/dim — emphasis levels"],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, ["Direct Hex, RGB, and ANSI colors are intentionally unsupported."]),
+			inspectorPath: configPath,
+			searchTerms: ["tool", "separator", "color", "theme"],
+		},
+		{
+			id: "userMessageBorderColor",
+			label: "User message border color",
+			currentValue: config.userMessageBorderColor,
+			values: ["border", "borderAccent", "borderMuted", "accent", "muted", "dim"],
+			inspectorTitle: "User Message Border Color",
+			inspectorSummary: ["Changes only the USER box border; the user title keeps its accent styling."],
+			inspectorOptions: ["border tokens — structural colors", "accent/muted/dim — stronger or softer emphasis"],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, ["The current Theme resolves the selected token on every redraw."]),
+			inspectorPath: configPath,
+			searchTerms: ["user", "message", "border", "color", "theme"],
+		},
+		{
+			id: "enableNativeUserMessageBox",
+			label: "Native user message box",
+			currentValue: toOnOff(config.enableNativeUserMessageBox),
+			values: ["on", "off"],
+			inspectorTitle: "Native User Message Box",
+			inspectorSummary: [
+				"Toggles the bordered native renderer used for user prompts inside the Pi transcript.",
+				"Keep it on when you want clearer message separation, or turn it off to fall back to Pi's default user message rendering.",
+			],
+			inspectorOptions: [
+				"on — bordered native user prompt box",
+				"off — default Pi prompt rendering",
+			],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
+				"This switch only affects presentation. It does not change stored prompts, markdown handling, or tool behavior.",
+			]),
+			inspectorPath: configPath,
+			searchTerms: ["user", "message", "box", "prompt", "native"],
+		},
+	);
+
+	if (capabilities.hasRtkOptimizer) {
+		items.push({
+			id: "showRtkCompactionHints",
+			label: "RTK compaction hints",
+			currentValue: toOnOff(config.showRtkCompactionHints),
+			values: ["on", "off"],
+			inspectorTitle: "RTK Compaction Hints",
+			inspectorSummary: [
+				"Shows compact notices when RTK metadata reports that tool output was optimized.",
+				"This control appears only when an RTK optimizer is available in the current Pi environment.",
+			],
+			inspectorOptions: [
+				"on — show RTK compaction notices",
+				"off — keep RTK optimization metadata quiet",
+			],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
+				"This setting changes presentation only; RTK execution and compaction remain untouched.",
+			]),
+			inspectorPath: configPath,
+			searchTerms: ["rtk", "compaction", "optimization", "hints"],
+		});
+	}
+
+	return items;
+}
+
+export function createSettingMutation(
+	config: ToolDisplayConfig,
+	id: string,
+	value: string,
+): ToolDisplayConfigMutation | undefined {
+	switch (id) {
+		case "preset": {
+			const preset = parseToolDisplayPreset(value);
+			return preset ? { type: "preset", preset } : undefined;
+		}
+		case "enableNativeUserMessageBox":
+			return { type: "patch", patch: { enableNativeUserMessageBox: value === "on" } };
+		case "enableToolSeparator":
+			return { type: "patch", patch: { enableToolSeparator: value === "on" } };
+		case "toolSeparatorStyle":
+			return { type: "patch", patch: { toolSeparatorStyle: value as ToolDisplayConfig["toolSeparatorStyle"] } };
+		case "toolSeparatorColor":
+			return { type: "patch", patch: { toolSeparatorColor: value as ToolDisplayConfig["toolSeparatorColor"] } };
+		case "userMessageBorderColor":
+			return { type: "patch", patch: { userMessageBorderColor: value as ToolDisplayConfig["userMessageBorderColor"] } };
+		case "readOutputMode":
+			return { type: "patch", patch: { readOutputMode: value as ToolDisplayConfig["readOutputMode"] } };
+		case "searchOutputMode":
+			return { type: "patch", patch: { searchOutputMode: value as ToolDisplayConfig["searchOutputMode"] } };
+		case "previewLines":
+			return { type: "patch", patch: { previewLines: parseNumber(value, config.previewLines) } };
+		case "bashOutputMode":
+			return { type: "patch", patch: { bashOutputMode: value as ToolDisplayConfig["bashOutputMode"] } };
+		case "bashCollapsedLines":
+			return { type: "patch", patch: { bashCollapsedLines: parseNumber(value, config.bashCollapsedLines) } };
+		case "bashCommandMode":
+			return { type: "patch", patch: { bashCommandMode: value as ToolDisplayConfig["bashCommandMode"] } };
+		case "bashCommandPreviewLines":
+			return { type: "patch", patch: { bashCommandPreviewLines: parseNumber(value, config.bashCommandPreviewLines) } };
+		case "bashErrorOutputMode":
+			return { type: "patch", patch: { bashErrorOutputMode: value as ToolDisplayConfig["bashErrorOutputMode"] } };
+		case "bashErrorPreviewLines":
+			return { type: "patch", patch: { bashErrorPreviewLines: parseNumber(value, config.bashErrorPreviewLines) } };
+		case "diffViewMode":
+			return { type: "patch", patch: { diffViewMode: value as ToolDisplayConfig["diffViewMode"] } };
+		case "diffIndicatorMode":
+			return { type: "patch", patch: { diffIndicatorMode: value as ToolDisplayConfig["diffIndicatorMode"] } };
+		case "showRtkCompactionHints":
+			return { type: "patch", patch: { showRtkCompactionHints: value === "on" } };
+		default:
+			return undefined;
+	}
+}
+
+export function applySetting(config: ToolDisplayConfig, id: string, value: string): ToolDisplayConfig {
+	const mutation = createSettingMutation(config, id, value);
+	if (!mutation || mutation.type === "reset") return config;
+	return mutation.type === "preset"
+		? getToolDisplayPresetConfig(mutation.preset)
+		: mergeProjectConfig(config, mutation.patch);
+}
+
+function resolveResponsiveOverlayOptions(): ModalOverlayOptions {
+	const terminalWidth =
+		typeof process.stdout.columns === "number" && Number.isFinite(process.stdout.columns)
+			? process.stdout.columns
+			: 120;
+	const terminalHeight =
+		typeof process.stdout.rows === "number" && Number.isFinite(process.stdout.rows)
+			? process.stdout.rows
+			: 36;
+
+	const margin = 1;
+	const availableWidth = Math.max(72, terminalWidth - margin * 2);
+	const preferredWidth = terminalWidth >= 170 ? 128 : terminalWidth >= 145 ? 118 : terminalWidth >= 120 ? 106 : 92;
+	const width = Math.max(72, Math.min(preferredWidth, availableWidth));
+
+	const availableHeight = Math.max(14, terminalHeight - margin * 2);
+	const preferredHeight = Math.max(14, Math.floor(terminalHeight * 0.78));
+	const maxHeight = Math.min(preferredHeight, availableHeight);
+
+	return {
+		anchor: "center",
+		width,
+		maxHeight,
+		margin,
+	};
+}
+
+export async function openSettingsModal(ctx: ExtensionCommandContext, controller: ToolDisplayConfigController): Promise<void> {
+	const overlayOptions = resolveResponsiveOverlayOptions();
+	const capabilities = controller.getCapabilities();
+
+	const [{ ZellijModal }, { SplitPaneInspectorModal }] = await Promise.all([
+		import("./zellij-modal.js"),
+		import("./settings-inspector-modal.js"),
+	]);
+
+	await ctx.ui.custom<void>(
+		(tui, theme, _keybindings, done) => {
+			const inspector = new SplitPaneInspectorModal(
+				{
+					getSettings: () => buildInspectorSettings(controller.getConfig(), capabilities),
+					onChange: (id, newValue) => {
+						const mutation = createSettingMutation(controller.getConfig(), id, newValue);
+						if (mutation) controller.mutateConfig(mutation, ctx);
+					},
+					onClose: () => done(),
+				},
+				theme,
+			);
+
+			const modal = new ZellijModal(
+				inspector,
+				{
+					borderStyle: "square",
+					padding: 0,
+					titleBar: {},
+					overlay: overlayOptions,
+				},
+				theme,
+			);
+
+			return {
+				render: (width: number) => modal.renderModal(width).lines,
+				invalidate: () => modal.invalidate(),
+				handleInput(data: string) {
+					modal.handleInput(data);
+					tui.requestRender();
+				},
+			};
+		},
+		{ overlay: true, overlayOptions },
+	);
+}
+
+export function handleToolDisplayArgs(args: string, ctx: ExtensionCommandContext, controller: ToolDisplayConfigController): boolean {
+	const raw = args.trim();
+	if (!raw) {
+		return false;
+	}
+
+	const normalized = raw.toLowerCase();
+
+	if (normalized === "show") {
+		ctx.ui.notify(
+			`tool-display: ${summarizeConfig(controller.getConfig(), controller.getCapabilities())}`,
+			"info",
+		);
+		return true;
+	}
+
+	if (normalized === "reset") {
+		controller.mutateConfig({ type: "reset" }, ctx);
+		ctx.ui.notify("Tool display preset reset to opencode.", "info");
+		return true;
+	}
+
+	if (normalized.startsWith("preset ")) {
+		const candidate = normalized.slice("preset ".length).trim();
+		const preset = parseToolDisplayPreset(candidate);
+		if (!preset) {
+			ctx.ui.notify(`Unknown preset. Use: /tool-display preset ${PRESET_COMMAND_HINT}`, "warning");
+			return true;
+		}
+
+		controller.mutateConfig({ type: "preset", preset }, ctx);
+		ctx.ui.notify(`Tool display preset set to ${preset}.`, "info");
+		return true;
+	}
+
+	ctx.ui.notify(`Usage: /tool-display [show|reset|preset ${PRESET_COMMAND_HINT}]`, "warning");
+	return true;
+}
+
+export async function runToolDisplayCommandHandler(
+	args: string,
+	ctx: ExtensionCommandContext,
+	controller: ToolDisplayConfigController,
+): Promise<void> {
+	if (handleToolDisplayArgs(args, ctx, controller)) {
+		return;
+	}
+
+	if (!ctx.hasUI) {
+		ctx.ui.notify("/tool-display requires interactive TUI mode.", "warning");
+		return;
+	}
+
+	await openSettingsModal(ctx, controller);
+}

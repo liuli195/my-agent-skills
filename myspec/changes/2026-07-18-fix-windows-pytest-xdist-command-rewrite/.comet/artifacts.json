@@ -1,0 +1,6 @@
+{
+  "myspec_proposal": "myspec/changes/fix-windows-pytest-xdist-command-rewrite/proposal.md",
+  "myspec_design": "myspec/changes/fix-windows-pytest-xdist-command-rewrite/design.md",
+  "myspec_tasks": "myspec/changes/fix-windows-pytest-xdist-command-rewrite/tasks.md",
+  "archive_directory": "myspec/changes/archive/2026-07-18-fix-windows-pytest-xdist-command-rewrite"
+}
