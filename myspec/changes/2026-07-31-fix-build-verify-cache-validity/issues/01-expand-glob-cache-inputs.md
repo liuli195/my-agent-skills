@@ -34,6 +34,7 @@
 - [x] runner integration seam（运行器集成接缝）覆盖内容变化、新增、删除、空匹配 Future Input（未来输入）、Git（版本管理）可见边界、反斜杠、字面忽略文件和项目外符号链接匹配拒绝。
 - [x] 审查修复：`test_build_and_verify_runner_ignores_nonmatching_external_glob_links` 先由仓库 runtime（运行时）`verify` 入口红灯（`invalid_input_path: requirements*.txt`），将边界拒绝移至通配符实际匹配后以同一入口转绿。
 - [x] 审查修复：`test_build_and_verify_init_and_review_document_future_inputs_separately` 先因初始化校验文档将 `paths`（受影响路径）无匹配定义为 Future Input（未来输入）红灯；仅将无匹配通配符 `inputs`（缓存输入）保留为 Future Input（未来输入），同一检查转绿。
+- [x] 复审阻断修复：先扩展同一文档契约检查，要求初始化和审查同时区分三类情况：无匹配通配符 `inputs`（缓存输入）是 Future Input（未来输入）、字面 `paths`（受影响路径）或 `inputs`（缓存输入）缺失提示可能拼写错误、无匹配通配符 `paths`（受影响路径）不得称 Future Input（未来输入）；仓库 runtime（运行时）fast verify（快速验证）入口先红后绿。
 
 ## 验证证据
 
@@ -42,3 +43,5 @@
 - [x] canonical runtime（规范运行时）与仓库 runtime snapshot（运行时快照）的 `build_and_verify.py` 和 `build_and_verify_runner.py` 字节一致。
 - [x] 审查修复转绿：`python .build-and-verify/runtime/build_and_verify.py verify --project .`，`verify.local-build-contract` 62 项通过、`verify.build-and-verify` 221 项通过，未使用 `--full`（完整）。
 - [x] 审查范围修复转绿：`python -m pytest tests/test_build_and_verify_plugin.py::test_build_and_verify_init_and_review_document_future_inputs_separately -q`，1 项通过；随后仓库 runtime（运行时）fast verify（快速验证）正式入口通过，`verify.local-build-contract` 66 项通过、`verify.build-and-verify` 221 项通过，未使用 `--full`（完整）。
+- [x] 复审阻断红灯：`python .build-and-verify/runtime/build_and_verify.py verify --project .`，`test_build_and_verify_init_and_review_document_future_inputs_separately` 失败，未使用 `--full`（完整）。
+- [x] 复审阻断转绿：同一仓库 runtime（运行时）fast verify（快速验证）正式入口通过，`verify.local-build-contract` 66 项通过、`verify.build-and-verify` 222 项通过，未使用 `--full`（完整）。

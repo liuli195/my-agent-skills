@@ -2337,14 +2337,14 @@ def test_build_and_verify_init_and_review_document_future_inputs_separately() ->
     validation = (INIT_REFERENCE_ROOT / "validation.md").read_text(encoding="utf-8")
     review = (REVIEW_REFERENCE_ROOT / "review.md").read_text(encoding="utf-8")
 
-    assert "inputs（缓存输入）当前无匹配时，报告为合法的 Future Input（未来输入）" in validation
-    assert "paths（受影响路径）当前无匹配" in validation
-    assert "paths（受影响路径）或 inputs（缓存输入）当前无匹配时" not in validation
-
     for text in (validation, review):
+        assert "无匹配通配符 inputs（缓存输入）" in text
         assert "Future Input（未来输入）" in text
         assert "当前无匹配但合法" in text
-    assert "字面路径不存在，可能存在拼写错误" in review
+        assert "不含通配符的 paths（受影响路径）或 inputs（缓存输入）缺失" in text
+        assert "字面路径不存在，可能存在拼写错误" in text
+        assert "无匹配通配符 paths（受影响路径）" in text
+        assert "保持原有无匹配提示，不得称 Future Input（未来输入）" in text
 
 
 def test_build_and_verify_init_template_detects_missing_paths_and_inputs(
