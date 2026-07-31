@@ -19,3 +19,11 @@ _Avoid_: Worker, coder
 **Reviewer（审查者）**:
 The Subagent role（子代理角色）that independently evaluates code or documentation and reports evidenced findings.
 _Avoid_: Auditor, critic
+
+**Development Flow（开发流程）**:
+The end-to-end orchestration of one repository development change from requirement confirmation through implementation, PR（拉取请求）delivery, and cleanup.
+_Avoid_: Product lifecycle, release flow
+
+**Flow Level（流程等级）**:
+The risk-based classification that selects the cost and gates applied within a Development Flow（开发流程）.
+_Avoid_: Complexity level, task size
