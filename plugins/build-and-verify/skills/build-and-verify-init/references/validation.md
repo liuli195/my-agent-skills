@@ -19,8 +19,8 @@ validation（校验）必须在 `build-and-verify-init`（构建与验证初始�
 - 配置包含 `pytestXdistWorkers`（Pytest 工作进程数）且 command（命令）是 pytest（Python 测试框架）命令时，检查 `pytest-xdist`（Pytest 并行插件）是否可用。
 - command（命令）已经包含 `-n` 或 `--numprocesses`（进程数参数）时，也检查 `pytest-xdist`（Pytest 并行插件）是否可用，并建议迁移到 `pytestXdistWorkers`（Pytest 工作进程数）。
 - command（命令）调用外部可执行入口时，检查该可执行入口是否可找到。
-- 含 `*`、`?` 或 `[` 的 paths（受影响路径）或 inputs（缓存输入）当前无匹配时，报告为合法的 Future Input（未来输入）：`当前无匹配但合法`。
-- 不含通配符的 paths（受影响路径）或 inputs（缓存输入）指向缺失文件或目录时，报告：`字面路径不存在，可能存在拼写错误`。
+- 含 `*`、`?` 或 `[` 的 inputs（缓存输入）当前无匹配时，报告为合法的 Future Input（未来输入）：`当前无匹配但合法`。
+- paths（受影响路径）当前无匹配，或不含通配符的 inputs（缓存输入）指向缺失文件或目录时，保持既有缺失或无匹配提示语义，不使用 Future Input（未来输入）。
 - `checkParallel: true`（检查项间并行）只说明 build-and-verify（构建与验证）runner（运行器）支持 check（检查项）间并行，不推断 pytest-xdist（Pytest 并行插件）用法。
 
 执行清单：
@@ -28,7 +28,7 @@ validation（校验）必须在 `build-and-verify-init`（构建与验证初始�
 - 解析每个 check（检查项）的 command（命令），识别第一个可执行入口。
 - 对可执行入口执行本机可发现性检查。
 - 对包含 `pytestXdistWorkers`（Pytest 工作进程数）或 pytest-xdist（Pytest 并行插件）参数的 command（命令），检查 `pytest-xdist`（Pytest 并行插件）是否可用。
-- 对每个 paths（受影响路径）和 inputs（缓存输入）逐项检查：通配符无匹配按 Future Input（未来输入）报告，字面路径缺失按可能拼写错误报告；不得直接中断初始化。
+- 对每个 paths（受影响路径）和 inputs（缓存输入）逐项检查：仅 inputs（缓存输入）的通配符无匹配按 Future Input（未来输入）报告；paths（受影响路径）的无匹配和字面路径缺失保持既有提示；不得直接中断初始化。
 
 ## Environment Checks（环境检查）
 
