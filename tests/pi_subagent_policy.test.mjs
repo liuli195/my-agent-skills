@@ -20,15 +20,12 @@ test("Pi discovers the model-invoked subagent policy", () => {
   assert.match(formatSkillsForPrompt([skill]), /<name>pi-subagent-policy<\/name>/);
 });
 
-test("the policy publishes the three persistent profiles", async () => {
+test("the policy publishes the three persistent Subagent roles", async () => {
   const content = await readFile(skillPath, "utf8");
   const expected = [
-    "Explorer | `openai-codex/gpt-5.6-luna` | `low`",
-    "Implementer | `openai-codex/gpt-5.6-terra` | `medium`",
-    "Reviewer | `openai-codex/gpt-5.6-sol` | `medium`",
-    "Investigate the delegated question in read-only mode and return concise findings with evidence, source locations, and uncertainties.",
-    "Implement the delegated code or documentation task according to the provided requirements, repository rules, and existing patterns; verify the result and report changes and unresolved issues.",
-    "Independently review the delegated code or documentation scope against the provided requirements and repository rules; report actionable findings with severity and evidence.",
+    "Explorer | Read-only investigator for delegated search, research, and evidence gathering. | `openai-codex/gpt-5.6-luna` | `low`",
+    "Implementer | Implements delegated code or documentation from confirmed requirements. | `openai-codex/gpt-5.6-terra` | `medium`",
+    "Reviewer | Independently reviews delegated code or documentation against requirements and repository rules. | `openai-codex/gpt-5.6-sol` | `medium`",
     "check the effective persistent configuration once per session",
     "The main agent decides whether and when to delegate",
     "verify a subagent result before relying on it",

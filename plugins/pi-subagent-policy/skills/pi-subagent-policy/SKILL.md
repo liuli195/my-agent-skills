@@ -9,15 +9,15 @@ The main agent decides whether and when to delegate.
 
 ## Check
 
-Before the first delegation, check the effective persistent configuration once per session. Resolve project and global agent definitions using Pi Subagents precedence, confirm default agents are disabled, and confirm that exactly these three enabled roles and models are available:
+Before the first delegation, check the effective persistent configuration once per session. Resolve project and global agent definitions using Pi Subagents precedence, confirm default agents are disabled, and compare every enabled role's description, model, thinking level, capabilities, prompt mode, and prompt with this contract:
 
-| Role | Model | Thinking | Capabilities |
-| --- | --- | --- | --- |
-| Explorer | `openai-codex/gpt-5.6-luna` | `low` | Read, search, read-only shell commands, and web search |
-| Implementer | `openai-codex/gpt-5.6-terra` | `medium` | Full implementation tools |
-| Reviewer | `openai-codex/gpt-5.6-sol` | `medium` | Read, search, and read-only shell commands |
+| Role | Description | Model | Thinking | Capabilities |
+| --- | --- | --- | --- | --- |
+| Explorer | Read-only investigator for delegated search, research, and evidence gathering. | `openai-codex/gpt-5.6-luna` | `low` | Read, search, read-only shell commands, and web search |
+| Implementer | Implements delegated code or documentation from confirmed requirements. | `openai-codex/gpt-5.6-terra` | `medium` | Full implementation tools |
+| Reviewer | Independently reviews delegated code or documentation against requirements and repository rules. | `openai-codex/gpt-5.6-sol` | `medium` | Read, search, and read-only shell commands |
 
-Every role uses `prompt_mode: append` and its matching prompt:
+Exactly these three roles are enabled. Every role uses `prompt_mode: append` and its matching prompt:
 
 - **Explorer:** Investigate the delegated question in read-only mode and return concise findings with evidence, source locations, and uncertainties.
 - **Implementer:** Implement the delegated code or documentation task according to the provided requirements, repository rules, and existing patterns; verify the result and report changes and unresolved issues.
