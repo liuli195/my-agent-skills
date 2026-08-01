@@ -44,26 +44,6 @@
 - **WHEN** 用户运行 `myspec init --release`
 - **THEN** 系统 MUST 恢复进入开发模式前保存的固定发布版本且不得隐式升级
 - **THEN** 缺少已保存发布版本时系统 MUST 停止并返回非零结果
-### Requirement: MySpec 初始化三类 Agent 的统一来源
-
-系统 MUST 通过 `myspec init --pi`、`--claude`、`--codex` 或 `--all` 初始化对应 Agent（代理）；Pi MUST 登记全局 npm 包稳定目录，Claude 和 Codex MUST 登记包内自包含单插件市场。
-
-#### Scenario: 用户显式初始化一个不可用的 Agent
-
-- **WHEN** 用户显式选择的 Pi、Claude 或 Codex 不可用
-- **THEN** 初始化 MUST 失败且不得安装该 Agent
-
-#### Scenario: 用户初始化所有 Agent
-
-- **WHEN** 用户运行 `myspec init --all`
-- **THEN** `--all` MUST 只包含 Pi、Claude 和 Codex
-- **THEN** 系统 MUST 跳过并报告不可用客户端，且继续初始化其他可用客户端
-
-#### Scenario: 初始化发现旧 MySpec 来源
-
-- **WHEN** 新统一来源已启用且 Agent 中存在旧远端或旧源码 MySpec 来源
-- **THEN** 系统 MUST 禁用重复的旧 MySpec 来源
-- **THEN** 系统 MUST NOT 删除插件、市场、缓存目录、市场订阅或用户文件
 ### Requirement: MySpec 安装操作可串行且可继续
 
 系统 MUST 让 `init` 与 `update` 共用用户级安装锁，并把外部修改记录为可重复执行的幂等步骤；失败必须立即停止并保留原始错误，不承诺跨客户端自动回滚。
@@ -94,6 +74,62 @@
 - **WHEN** 候选包的源码测试和打包后端到端流程均通过
 - **THEN** 发布流程 MUST 发布版本一致的 npm 包、Git Tag（Git 标签）和 GitHub Release（发布版本）记录
 - **THEN** 发布流程 MUST NOT 生成 Wheel（Python 安装包）、Pi ZIP（Pi 压缩包）或自建发布资产缓存
+### Requirement: MySpec update 统一更新发布模式安装
+
+系统 MUST 让 `myspec update` 只在发布模式解析 npm 最新版本、预检已安装客户端、更新全局包、由新 CLI（命令行程序）继续刷新全部已安装 Agent（代理），并在结束时运行只读诊断。更新前后 MUST 使用一致的规范化来源判据验证客户端状态。
+
+#### Scenario: 开发模式请求更新
+
+- **WHEN** 用户在开发模式运行 `myspec update`
+- **THEN** 命令 MUST 返回非零结果并要求用户先显式切换发布模式
+- **THEN** 命令 MUST NOT 隐式改变模式
+
+#### Scenario: 发布模式请求更新
+
+- **WHEN** 用户在发布模式运行 `myspec update`
+- **THEN** CLI（命令行程序）和所有已安装 MySpec 插件 MUST 最终使用同一 npm 最新版本
+
+#### Scenario: 更新保留客户端来源状态
+
+- **WHEN** 更新流程保存并验证 Pi、Claude 或 Codex 的来源状态
+- **THEN** Claude 和 Codex MUST 按稳定来源的配置启用状态验证恢复结果
+- **THEN** Pi MUST 按考虑受信任项目覆盖后的稳定来源实际生效状态验证恢复结果
+- **THEN** 更新流程 MUST NOT 把汇总顶层启用状态误作单个稳定来源状态
+### Requirement: MySpec 初始化三类 Agent 的统一来源
+
+系统 MUST 通过 `myspec init --pi`、`--claude`、`--codex` 或 `--all` 初始化对应 Agent（代理）；Pi MUST 登记全局 npm 包稳定目录，Claude 和 Codex MUST 登记包内自包含单插件市场。
+
+#### Scenario: 用户显式初始化一个不可用的 Agent
+
+- **WHEN** 用户显式选择的 Pi、Claude 或 Codex 不可用
+- **THEN** 初始化 MUST 失败且不得安装该 Agent
+
+#### Scenario: 用户初始化所有 Agent
+
+- **WHEN** 用户运行 `myspec init --all`
+- **THEN** `--all` MUST 只包含 Pi、Claude 和 Codex
+- **THEN** 系统 MUST 跳过并报告不可用客户端，且继续初始化其他可用客户端
+
+#### Scenario: 初始化发现旧 MySpec 来源
+
+- **WHEN** 新统一来源已启用并验证，且 Agent 中存在 Legacy MySpec Source（旧 MySpec 来源）
+- **THEN** 系统 MUST 精确移除用户级旧 MySpec 来源或旧插件记录
+- **THEN** Pi 项目级旧来源 MUST 保留并禁用，不得删除项目配置
+- **THEN** Claude MUST 在卸载旧插件时保留该插件的持久数据
+- **THEN** 系统 MUST NOT 删除共享市场、市场订阅、无关插件、源码目录或用户文件
+
+#### Scenario: 初始化未发现旧 MySpec 来源
+
+- **WHEN** 对应 Agent 不存在 Legacy MySpec Source（旧 MySpec 来源）
+- **THEN** 初始化 MUST 成功且不得调用旧来源删除命令
+- **THEN** 重复初始化 MUST 保持幂等
+
+#### Scenario: 初始化报告旧来源处理结果
+
+- **WHEN** 单客户端初始化或 `myspec init --all` 完成
+- **THEN** Pi 结果 MUST 通过 `removedLegacySources` 和 `disabledProjectLegacySources` 分别报告已删除用户来源和已禁用项目来源
+- **THEN** Claude 和 Codex 结果 MUST 通过 `removedLegacyPlugins` 报告已删除旧插件
+- **THEN** 没有对应处理结果时字段 MUST 返回空数组
 ### Requirement: MySpec doctor 只读诊断真实安装状态
 
 系统 MUST 让 `myspec doctor` 从 npm（软件包管理器）和真实 Agent（代理）客户端查询模式、来源、版本、启用状态、重复来源、锁、部分操作和重新加载要求，且不得依赖平行保存的安装清单。Pi、Claude 和 Codex MUST 使用一致的来源状态语义，并在保留既有顶层字段的同时公开规范化来源记录。
@@ -122,6 +158,12 @@
 - **THEN** `sourceMismatch` MUST 为真，且错误来源 MUST NOT 实际生效
 - **THEN** 无关来源 MUST NOT 进入 MySpec 来源列表
 
+#### Scenario: 共享市场不构成旧来源
+
+- **WHEN** Claude 或 Codex 仍登记共享市场，但该市场的旧 MySpec 插件记录不存在
+- **THEN** 诊断 MUST NOT 创建 Legacy MySpec Source（旧 MySpec 来源）记录或报告第二个已安装来源
+- **THEN** 共享市场 MUST 继续保留并可提供其他插件
+
 #### Scenario: 缺失安装仍保留配置事实
 
 - **WHEN** 宿主已登记并启用 MySpec 来源但安装目录缺失
@@ -140,24 +182,3 @@
 - **WHEN** 诊断同时返回既有顶层字段和规范化来源记录
 - **THEN** 既有顶层字段 MUST 保留
 - **THEN** 顶层启用状态和启用来源投影 MUST NOT 与规范化来源记录矛盾
-### Requirement: MySpec update 统一更新发布模式安装
-
-系统 MUST 让 `myspec update` 只在发布模式解析 npm 最新版本、预检已安装客户端、更新全局包、由新 CLI（命令行程序）继续刷新全部已安装 Agent（代理），并在结束时运行只读诊断。更新前后 MUST 使用一致的规范化来源判据验证客户端状态。
-
-#### Scenario: 开发模式请求更新
-
-- **WHEN** 用户在开发模式运行 `myspec update`
-- **THEN** 命令 MUST 返回非零结果并要求用户先显式切换发布模式
-- **THEN** 命令 MUST NOT 隐式改变模式
-
-#### Scenario: 发布模式请求更新
-
-- **WHEN** 用户在发布模式运行 `myspec update`
-- **THEN** CLI（命令行程序）和所有已安装 MySpec 插件 MUST 最终使用同一 npm 最新版本
-
-#### Scenario: 更新保留客户端来源状态
-
-- **WHEN** 更新流程保存并验证 Pi、Claude 或 Codex 的来源状态
-- **THEN** Claude 和 Codex MUST 按稳定来源的配置启用状态验证恢复结果
-- **THEN** Pi MUST 按考虑受信任项目覆盖后的稳定来源实际生效状态验证恢复结果
-- **THEN** 更新流程 MUST NOT 把汇总顶层启用状态误作单个稳定来源状态
