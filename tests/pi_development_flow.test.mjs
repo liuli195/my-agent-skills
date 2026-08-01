@@ -125,10 +125,13 @@ test("the four gates form the required stage state machine", async () => {
     section(implementation, /### Gate 2 — Enter Implementation/, /\n### Gate |\n## /),
     /Gate 1 — Complete Requirements[^]*Gate 3 — Enter Delivery/,
   );
-  assert.match(
-    section(delivery, /### Gate 3 — Enter Delivery/, /\n### Gate |\n## /),
-    /Gate 2 — Enter Implementation[^]*Gate 4 — Authorize PR Delivery/,
+  const gate3 = section(
+    delivery,
+    /### Gate 3 — Enter Delivery/,
+    /\n### Gate |\n## /,
   );
+  assert.match(gate3, /Gate 2 — Enter Implementation[^]*Gate 4 — Authorize PR Delivery/);
+  assert.match(gate3, /After Gate 3 — Enter Delivery passes, run `my-spec-add`/);
   assert.match(
     section(delivery, /### Gate 4 — Authorize PR Delivery/, /\n### Gate |\n## /),
     /Gate 3 — Enter Delivery[^]*(?:no next formal gate|no further formal gate)/i,

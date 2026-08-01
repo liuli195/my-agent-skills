@@ -69,7 +69,7 @@ During discussion, retain confirmed domain terms in the conversation. Publish th
 
 1. Confirm the highest public test seam through `to-spec`.
 2. Use `to-tickets` to draft tracer-bullet vertical slices. Every ticket has an independently observable result, runnable verification, and only genuine blockers.
-3. Show the spec and ticket breakdown. After approval, create an ASCII-named change branch in `.worktrees/<change>/`, run the repository worktree initializer, and publish:
+3. After receiving the confirmation required by Gate 1 — Complete Requirements（完成需求）, create an ASCII-named change branch in `.worktrees/<change>/`, run the repository worktree initializer, and publish:
    - confirmed terms to the repository domain glossary;
    - the spec to `myspec/changes/<change>/spec.md`;
    - implementation tickets to `myspec/changes/<change>/issues/`.
