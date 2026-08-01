@@ -35,3 +35,7 @@ _Avoid_: Missing input, invalid glob
 **Glob Input（通配符输入）**:
 A Build and Verify（构建与验证） cache input pattern that expands to a stable Git-visible file set.
 _Avoid_: Literal input, directory input
+
+**Legacy MySpec Source（旧 MySpec 来源）**:
+A source record that registers a MySpec（自有规格）plugin from the former shared marketplace or a legacy source path. A shared marketplace registration without an installed MySpec plugin record is not a Legacy MySpec Source.
+_Avoid_: Legacy marketplace, duplicate marketplace
