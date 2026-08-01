@@ -24,6 +24,10 @@ _Avoid_: Auditor, critic
 The end-to-end orchestration of one repository development change from requirement confirmation through implementation, PR（拉取请求）delivery, and cleanup.
 _Avoid_: Product lifecycle, release flow
 
+**Direction Confirmation（方向确认）**:
+A non-gate user alignment with the overall design proposal before Requirements（需求）detail discussion. It neither publishes artifacts nor authorizes implementation or delivery.
+_Avoid_: Gate, implementation authorization
+
 **Gate 3 — Enter Delivery（进入交付）**:
 The final confirmation in `my-spec-add`（新增自有规格）that authorizes its validated atomic application of the formal MySpec（自有规格）difference; it passes only after that application succeeds.
 _Avoid_: Delivery-plan confirmation

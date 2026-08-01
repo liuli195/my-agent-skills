@@ -2,9 +2,11 @@
 
 ## MUST — Dependencies（依赖）
 
-Before any single-session requirements discussion, read `grill-with-docs` in the current session, then read and use `domain-modeling` as required by that Skill（技能）. MUST NOT substitute ordinary `grilling` for `grill-with-docs`.
+Before a new requirements discussion, read and use `codebase-design` in the current session to form an overall design proposal. Scale it to the Flow Level（流程等级）: for a lightweight change, state only the observable result, scope, and highest public test seam; identify Module（模块）, Interface（接口）, and Seam（接缝） only when the change has structural design.
 
-Before invoking `to-spec` or `to-tickets`, read the exact Skill and confirm current-session tool-call evidence that `grill-with-docs` and `domain-modeling` were read. Read `wayfinder` only when dependent decisions require its multi-session route. Do not replace this evidence with a self-reported flag or state file.
+After the user confirms the overall direction, and before discussing any detail, read `grill-with-docs` in the current session, then read and use `domain-modeling` as required by that Skill（技能）. MUST NOT substitute ordinary `grilling` for `grill-with-docs`.
+
+Before invoking `to-spec` or `to-tickets`, read the exact Skill and confirm current-session tool-call evidence that `codebase-design`, `grill-with-docs`, and `domain-modeling` were read. Read `wayfinder` only when dependent decisions require its multi-session route. Do not replace this evidence with a self-reported flag or state file.
 
 If a required Skill is missing, unreadable, fails to load, or is replaced by another entry, stop and report the blocker, preserved requirement artifacts, and Gate 1 — Complete Requirements（完成需求） as the resume point.
 
@@ -57,13 +59,18 @@ Security, data integrity, migration, release, and other protected work stays hig
 
 ## Discussion route（讨论路径）
 
-Choose by decision scale:
+1. Present the overall design proposal before detail discussion. It states the observable result, scope, out-of-scope work, highest public test seam, and any applicable Module（模块）, Interface（接口）, and Seam（接缝）.
+2. Let the user confirm or redirect that direction in normal conversation. Direction Confirmation（方向确认） is not a formal gate: it does not publish artifacts or authorize implementation or delivery.
+3. After Direction Confirmation（方向确认）, use `grill-with-docs` and `domain-modeling` to discuss only unresolved details, one decision at a time. Do not re-ask a detail already answered and confirmed in the current conversation.
+4. Return to the overall design proposal when an answer changes the scope, Module（模块）, Interface（接口）, Seam（接缝）, highest public test seam, or Flow Level（流程等级）; otherwise continue with the unresolved detail.
 
-- Use `grill-with-docs` when the destination and boundaries can be resolved in one session.
-- Use `wayfinder` when dependent decisions, research, or prototypes require multiple sessions. Its individual discussion tickets still use grilling and domain modeling.
-- For an already precise lightweight change, confirm the observable result and test seam without manufacturing an interview.
+Choose the route after Direction Confirmation（方向确认）:
 
-During discussion, retain confirmed domain terms in the conversation. Publish them with the spec and tickets instead of editing the base checkout mid-discussion.
+- Use `grill-with-docs` when the remaining decisions can be resolved in one session.
+- Use `wayfinder` when dependent decisions, research, or prototypes require multiple sessions. Treat the confirmed direction as its destination; its individual discussion tickets only resolve remaining decisions.
+- For an already precise lightweight change, use the minimal proposal and direction confirmation without manufacturing an interview.
+
+During discussion, retain confirmed domain terms and decisions in the conversation. Publish the confirmed terms with the spec and tickets instead of editing the base checkout mid-discussion.
 
 ## Publish one change（发布单项变更）
 
