@@ -510,14 +510,47 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_packed_myspec_clients_run_shared_source_cases': (
         'covers all shared source-state cases through the installed MySpec npm package, native client substitutes, and public doctor CLI; function=test_packed_myspec_clients_run_shared_source_cases'
     ),
+    'tests/test_my_spec.py::test_packed_myspec_claude_init_keeps_legacy_when_stable_version_is_wrong': (
+        'covers packaged Claude cleanup preserving legacy state when stable verification fails; function=test_packed_myspec_claude_init_keeps_legacy_when_stable_version_is_wrong'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_claude_init_retries_incomplete_legacy_uninstall': (
+        'covers packaged Claude cleanup detecting incomplete uninstall and converging on retry; function=test_packed_myspec_claude_init_retries_incomplete_legacy_uninstall'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_claude_init_retries_interrupted_legacy_uninstall': (
+        'covers packaged Claude cleanup converging after an interrupted uninstall; function=test_packed_myspec_claude_init_retries_interrupted_legacy_uninstall'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_codex_init_keeps_legacy_when_stable_version_is_wrong': (
+        'covers packaged Codex cleanup preserving legacy state when stable verification fails; function=test_packed_myspec_codex_init_keeps_legacy_when_stable_version_is_wrong'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_codex_init_retries_incomplete_legacy_removal': (
+        'covers packaged Codex cleanup detecting incomplete removal and converging on retry; function=test_packed_myspec_codex_init_retries_incomplete_legacy_removal'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_codex_init_retries_interrupted_legacy_removal': (
+        'covers packaged Codex cleanup converging after an interrupted removal; function=test_packed_myspec_codex_init_retries_interrupted_legacy_removal'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_init_all_removes_legacy_plugins_and_doctor_reports_stable_sources': (
+        'covers packaged all-client cleanup and stable-only diagnosis through public CLI entrypoints; function=test_packed_myspec_init_all_removes_legacy_plugins_and_doctor_reports_stable_sources'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_pi_init_enables_a_verified_stable_duplicate_before_cleanup': (
+        'covers packaged Pi cleanup selecting a verified stable duplicate before removal; function=test_packed_myspec_pi_init_enables_a_verified_stable_duplicate_before_cleanup'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_pi_init_keeps_legacy_source_when_stable_source_is_unresolved': (
+        'covers packaged Pi cleanup preserving legacy state when stable resolution fails; function=test_packed_myspec_pi_init_keeps_legacy_source_when_stable_source_is_unresolved'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_pi_init_retries_failed_legacy_removal': (
+        'covers packaged Pi cleanup converging after a failed removal; function=test_packed_myspec_pi_init_retries_failed_legacy_removal'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_pi_init_retries_incomplete_legacy_removal': (
+        'covers packaged Pi cleanup detecting incomplete removal and converging on retry; function=test_packed_myspec_pi_init_retries_incomplete_legacy_removal'
+    ),
     'tests/test_my_spec.py::test_packed_myspec_claude_reinstall_failure_does_not_report_refreshed': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_claude_reinstall_failure_does_not_report_refreshed'
     ),
     'tests/test_my_spec.py::test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_state': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_state'
     ),
-    'tests/test_my_spec.py::test_packed_myspec_disables_only_exact_legacy_pi_sources': (
-        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_disables_only_exact_legacy_pi_sources'
+    'tests/test_my_spec.py::test_packed_myspec_removes_only_exact_user_legacy_pi_sources': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_removes_only_exact_user_legacy_pi_sources'
     ),
     'tests/test_my_spec.py::test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest'
@@ -558,11 +591,11 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_packed_myspec_ignores_project_settings_absent_from_pi_list': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_ignores_project_settings_absent_from_pi_list'
     ),
-    'tests/test_my_spec.py::test_packed_myspec_initializes_and_diagnoses_claude_without_deleting_legacy': (
-        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_initializes_and_diagnoses_claude_without_deleting_legacy'
+    'tests/test_my_spec.py::test_packed_myspec_initializes_and_removes_claude_legacy_plugin': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_initializes_and_removes_claude_legacy_plugin'
     ),
-    'tests/test_my_spec.py::test_packed_myspec_initializes_and_diagnoses_codex_without_deleting_legacy': (
-        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_initializes_and_diagnoses_codex_without_deleting_legacy'
+    'tests/test_my_spec.py::test_packed_myspec_initializes_and_removes_codex_legacy_plugin': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_initializes_and_removes_codex_legacy_plugin'
     ),
     'tests/test_my_spec.py::test_packed_myspec_initializes_and_diagnoses_one_pi_source': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_initializes_and_diagnoses_one_pi_source'
