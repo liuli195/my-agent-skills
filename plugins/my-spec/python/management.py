@@ -691,18 +691,34 @@ def _init_codex() -> dict[str, object]:
     _refresh_codex_plugin()
     plugins = _codex_plugins()
     target = next((item for item in plugins if item.get("pluginId") == CODEX_PLUGIN), None)
-    if target is None or target.get("installed") is not True or target.get("enabled") is not True:
-        raise ManagementError("codex_plugin_enable_missing")
-    disabled: list[str] = []
+    target_source = target.get("source") if isinstance(target, dict) else None
+    install_path = (
+        Path(target_source["path"])
+        if isinstance(target_source, dict) and isinstance(target_source.get("path"), str)
+        else None
+    )
+    if (
+        target is None
+        or target.get("installed") is not True
+        or target.get("enabled") is not True
+        or target.get("version") != _package_version()
+        or _myspec_manifest_version(install_path) != _package_version()
+    ):
+        raise ManagementError("codex_plugin_verify_failed")
+    removed_legacy_plugins: list[str] = []
     legacy = next((item for item in plugins if item.get("pluginId") == CODEX_LEGACY_PLUGIN), None)
-    if legacy is not None and legacy.get("enabled") is True:
-        _set_codex_plugin_enabled(CODEX_LEGACY_PLUGIN, False)
-        disabled.append(CODEX_LEGACY_PLUGIN)
+    if legacy is not None:
+        _run_codex("codex_plugin_remove_failed", "plugin", "remove", CODEX_LEGACY_PLUGIN, "--json")
+        removed_legacy_plugins.append(CODEX_LEGACY_PLUGIN)
+    if removed_legacy_plugins and any(
+        item.get("pluginId") == CODEX_LEGACY_PLUGIN for item in _codex_plugins()
+    ):
+        raise ManagementError("codex_plugin_remove_incomplete")
     return {
         "codex": "initialized",
         "marketplace": CODEX_MARKETPLACE,
         "source": str(stable),
-        "disabledLegacyPlugins": disabled,
+        "removedLegacyPlugins": removed_legacy_plugins,
         "newSessionRequired": True,
     }
 
@@ -1667,7 +1683,7 @@ def _doctor_codex() -> dict[str, object]:
                 installPath=str(install_path) if install_path is not None else None,
             )
         )
-    if legacy_marketplace is not None or legacy is not None:
+    if legacy is not None:
         legacy_source = legacy.get("source") if isinstance(legacy, dict) else None
         legacy_path = (
             Path(legacy_source["path"])

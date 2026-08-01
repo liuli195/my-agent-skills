@@ -635,12 +635,16 @@ elif arguments[:2] == ["plugin", "remove"] and arguments[-1:] == ["--json"]:
     if current is None:
         print("missing plugin", file=sys.stderr)
         raise SystemExit(1)
-    target = Path(os.environ["CODEX_HOME"]) / "plugins" / "cache" / current["marketplaceName"] / current["name"] / current["version"]
-    if target.exists():
-        shutil.rmtree(target)
-    state["installed"].remove(current)
-    remove_config(arguments[2])
-    save()
+    if os.environ.get("MYSPEC_CODEX_REMOVE_NOOP") != "1":
+        target = Path(os.environ["CODEX_HOME"]) / "plugins" / "cache" / current["marketplaceName"] / current["name"] / current["version"]
+        if target.exists():
+            shutil.rmtree(target)
+        state["installed"].remove(current)
+        remove_config(arguments[2])
+        save()
+    if os.environ.get("MYSPEC_CODEX_FAIL_AFTER_REMOVE") == "1":
+        print("simulated interruption after remove", file=sys.stderr)
+        raise SystemExit(1)
     print(json.dumps({"pluginId": arguments[2]}))
 else:
     raise SystemExit(2)
@@ -2593,7 +2597,7 @@ def test_packed_myspec_requires_explicit_claude_but_all_initializes_detected_cla
     )
 
 
-def test_packed_myspec_initializes_and_diagnoses_codex_without_deleting_legacy(
+def test_packed_myspec_initializes_and_removes_codex_legacy_plugin(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
@@ -2610,9 +2614,18 @@ def test_packed_myspec_initializes_and_diagnoses_codex_without_deleting_legacy(
     )
     legacy_market_root = tmp_path / "legacy-market"
     unrelated_market_root = tmp_path / "other-market"
-    legacy_cache = tmp_path / "legacy-cache"
+    legacy_source = tmp_path / "legacy-source"
     unrelated_cache = tmp_path / "other-cache"
-    write(legacy_cache / "kept.txt", "legacy cache")
+    legacy_install_cache = (
+        codex_home
+        / "plugins"
+        / "cache"
+        / "my-agent-skills-marketplace"
+        / "my-spec"
+        / PREVIOUS_VERSION
+    )
+    write(legacy_source / "kept.txt", "legacy source")
+    write(legacy_install_cache / "removed.txt", "legacy cache")
     write(unrelated_cache / "kept.txt", "other cache")
     legacy_market = {
         "name": "my-agent-skills-marketplace",
@@ -2633,7 +2646,7 @@ def test_packed_myspec_initializes_and_diagnoses_codex_without_deleting_legacy(
         "marketplaceName": "my-agent-skills-marketplace",
         "version": PREVIOUS_VERSION,
         "installed": True,
-        "source": {"source": "local", "path": str(legacy_cache)},
+        "source": {"source": "local", "path": str(legacy_source)},
     }
     unrelated_plugin = {
         "pluginId": "other@other-marketplace",
@@ -2672,21 +2685,32 @@ enabled = true
         "codex": "initialized",
         "marketplace": "myspec",
         "source": str(installed_package),
-        "disabledLegacyPlugins": ["my-spec@my-agent-skills-marketplace"],
+        "removedLegacyPlugins": ["my-spec@my-agent-skills-marketplace"],
         "newSessionRequired": True,
     }
     state = json.loads(codex_state.read_text(encoding="utf-8"))
     assert state["marketplaces"][:2] == [legacy_market, unrelated_market]
     assert state["marketplaces"][2]["name"] == "myspec"
     plugins = {plugin["pluginId"]: plugin for plugin in state["installed"]}
+    assert legacy_plugin["pluginId"] not in plugins
     assert plugins[unrelated_plugin["pluginId"]]["source"] == unrelated_plugin["source"]
     assert plugins["my-spec@myspec"]["version"] == PACKAGE_VERSION
     config = (codex_home / "config.toml").read_text(encoding="utf-8")
-    assert '[plugins."my-spec@my-agent-skills-marketplace"]\nenabled = false' in config
+    assert '[plugins."my-spec@my-agent-skills-marketplace"]' not in config
     assert '[plugins."my-spec@myspec"]\nenabled = true' in config
     assert '[plugins."other@other-marketplace"]\nenabled = true' in config
-    assert (legacy_cache / "kept.txt").is_file()
+    assert (legacy_source / "kept.txt").is_file()
+    assert not legacy_install_cache.exists()
     assert (unrelated_cache / "kept.txt").is_file()
+    init_calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
+    assert ["plugin", "remove", legacy_plugin["pluginId"], "--json"] in init_calls
+
+    codex_log.write_text("", encoding="utf-8")
+    repeated = run_cli(executable, "init", "--codex", env=env)
+    assert repeated.returncode == 0, repeated.stderr
+    assert json.loads(repeated.stdout)["removedLegacyPlugins"] == []
+    repeat_calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
+    assert ["plugin", "remove", legacy_plugin["pluginId"], "--json"] not in repeat_calls
 
     before_state = codex_state.read_bytes()
     before_config = (codex_home / "config.toml").read_bytes()
@@ -2701,7 +2725,8 @@ enabled = true
     assert report["enabled"] is True
     assert report["duplicateEnabledSources"] is False
     assert report["enabledSources"] == ["my-spec@myspec"]
-    assert report["disabledSources"] == ["my-spec@my-agent-skills-marketplace"]
+    assert report["disabledSources"] == []
+    assert [source["sourceKind"] for source in report["sources"]] == ["stable"]
     assert report["skills"] == list(SKILL_NAMES)
     assert report["newSessionRequired"] is True
     assert "reloadRequired" not in report
@@ -2711,6 +2736,120 @@ enabled = true
         ["plugin", "marketplace", "list", "--json"],
         ["plugin", "list", "--json"],
     ]
+
+
+def test_packed_myspec_codex_init_keeps_legacy_when_stable_version_is_wrong(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), codex_bin)
+    env.update(
+        {
+            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
+            "MYSPEC_CODEX_LOG": str(codex_log),
+            "MYSPEC_CODEX_STATE": str(codex_state),
+            "MYSPEC_CODEX_REPORTED_VERSION": "0.0.0",
+        }
+    )
+    legacy_id = "my-spec@my-agent-skills-marketplace"
+    legacy = {
+        "pluginId": legacy_id,
+        "name": "my-spec",
+        "marketplaceName": "my-agent-skills-marketplace",
+        "version": PREVIOUS_VERSION,
+        "installed": True,
+        "source": {"source": "local", "path": str(tmp_path / "legacy")},
+    }
+    write(codex_state, json.dumps({"marketplaces": [], "installed": [legacy], "available": []}, indent=2))
+    write(Path(env["CODEX_HOME"]) / "config.toml", f'[plugins."{legacy_id}"]\nenabled = true\n')
+
+    initialized = run_cli(executable, "init", "--codex", env=env)
+
+    assert initialized.returncode == 1
+    assert "error: codex_plugin_verify_failed" in initialized.stderr
+    installed = json.loads(codex_state.read_text(encoding="utf-8"))["installed"]
+    assert any(plugin["pluginId"] == legacy_id for plugin in installed)
+    calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
+    assert ["plugin", "remove", legacy_id, "--json"] not in calls
+
+
+def test_packed_myspec_codex_init_retries_incomplete_legacy_removal(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), codex_bin)
+    env.update(
+        {
+            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
+            "MYSPEC_CODEX_LOG": str(codex_log),
+            "MYSPEC_CODEX_STATE": str(codex_state),
+        }
+    )
+    legacy_id = "my-spec@my-agent-skills-marketplace"
+    legacy = {
+        "pluginId": legacy_id,
+        "name": "my-spec",
+        "marketplaceName": "my-agent-skills-marketplace",
+        "version": PREVIOUS_VERSION,
+        "installed": True,
+        "source": {"source": "local", "path": str(tmp_path / "legacy")},
+    }
+    write(codex_state, json.dumps({"marketplaces": [], "installed": [legacy], "available": []}, indent=2))
+    write(Path(env["CODEX_HOME"]) / "config.toml", f'[plugins."{legacy_id}"]\nenabled = true\n')
+
+    incomplete = run_cli(
+        executable,
+        "init",
+        "--codex",
+        env={**env, "MYSPEC_CODEX_REMOVE_NOOP": "1"},
+    )
+    assert incomplete.returncode == 1
+    assert "error: codex_plugin_remove_incomplete" in incomplete.stderr
+
+    retried = run_cli(executable, "init", "--codex", env=env)
+    assert retried.returncode == 0, retried.stderr
+    assert json.loads(retried.stdout)["removedLegacyPlugins"] == [legacy_id]
+
+
+def test_packed_myspec_codex_init_retries_interrupted_legacy_removal(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), codex_bin)
+    env.update(
+        {
+            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
+            "MYSPEC_CODEX_LOG": str(codex_log),
+            "MYSPEC_CODEX_STATE": str(codex_state),
+        }
+    )
+    legacy_id = "my-spec@my-agent-skills-marketplace"
+    legacy = {
+        "pluginId": legacy_id,
+        "name": "my-spec",
+        "marketplaceName": "my-agent-skills-marketplace",
+        "version": PREVIOUS_VERSION,
+        "installed": True,
+        "source": {"source": "local", "path": str(tmp_path / "legacy")},
+    }
+    write(codex_state, json.dumps({"marketplaces": [], "installed": [legacy], "available": []}, indent=2))
+    write(Path(env["CODEX_HOME"]) / "config.toml", f'[plugins."{legacy_id}"]\nenabled = true\n')
+
+    interrupted = run_cli(
+        executable,
+        "init",
+        "--codex",
+        env={**env, "MYSPEC_CODEX_FAIL_AFTER_REMOVE": "1"},
+    )
+    assert interrupted.returncode == 1
+    assert "codex_plugin_remove_failed: simulated interruption after remove" in interrupted.stderr
+
+    retried = run_cli(executable, "init", "--codex", env=env)
+    assert retried.returncode == 0, retried.stderr
+    assert json.loads(retried.stdout)["removedLegacyPlugins"] == []
 
 
 def test_packed_myspec_requires_explicit_codex_but_all_initializes_detected_codex(
