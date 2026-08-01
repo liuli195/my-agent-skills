@@ -1264,9 +1264,30 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
         "verify.pr-flow",
         "verify.myspec",
         "verify.my-spec",
+        "verify.runtime-boundaries",
         "verify.build-and-verify",
     ]
     assert "pytest.full" not in check_by_id
+
+    runtime_boundaries = check_by_id["verify.runtime-boundaries"]
+    assert runtime_boundaries["paths"] == ["requirements-dev.txt", "tests/**"]
+    assert runtime_boundaries["inputs"] == ["requirements-dev.txt", "tests"]
+    assert runtime_boundaries["command"] == (
+        "python -m pytest -q -p no:cacheprovider tests/test_test_runtime_boundaries.py"
+    )
+    assert runtime_boundaries["checkParallel"] is True
+    assert "pytestXdistWorkers" not in runtime_boundaries
+    assert "tests/test_test_runtime_boundaries.py" not in check_by_id[
+        "verify.build-and-verify"
+    ]["command"]
+    selected = {
+        check["id"]
+        for check in load_check_module()._selected_checks(
+            checks, ["tests/test_my_spec.py"]
+        )
+    }
+    assert "verify.runtime-boundaries" in selected
+    assert "verify.build-and-verify" not in selected
 
     myspec = check_by_id["verify.myspec"]
     assert myspec["paths"] == [

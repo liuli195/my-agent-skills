@@ -1466,7 +1466,10 @@ def test_build_and_verify_pytest_options_live_in_explicit_commands() -> None:
             tokens = command.split()
             assert " -q " in f" {command} "
             assert "-n" not in tokens
-            assert check["pytestXdistWorkers"]
+            if check["id"] == "verify.runtime-boundaries":
+                assert "pytestXdistWorkers" not in check
+            else:
+                assert check["pytestXdistWorkers"]
             assert "-p" in tokens
             assert "no:cacheprovider" in tokens
             assert " tests/" in f" {command} "

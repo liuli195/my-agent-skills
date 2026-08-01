@@ -719,17 +719,47 @@ def test_e2e_allowlist_uses_function_identity_and_reasons() -> None:
         assert reason.strip()
 
 
+def format_allowlist_mismatches(
+    stale_entries: list[str], missing_hits: list[RuntimeHit]
+) -> str:
+    sections: list[str] = []
+    if stale_entries:
+        sections.append("stale allowlist entries:\n" + "\n".join(stale_entries))
+    if missing_hits:
+        sections.append(
+            "missing allowlist entries:\n" + "\n".join(format_hit(hit) for hit in missing_hits)
+        )
+    return "\n\n".join(sections)
+
+
+def test_allowlist_mismatch_reports_stale_and_missing_entries() -> None:
+    message = format_allowlist_mismatches(
+        ["tests/test_removed.py::test_removed"],
+        [
+            RuntimeHit(
+                "tests/test_added.py::test_added",
+                "subprocess",
+                1,
+                "subprocess.run",
+            )
+        ],
+    )
+
+    assert "stale allowlist entries:" in message
+    assert "tests/test_removed.py::test_removed" in message
+    assert "missing allowlist entries:" in message
+    assert "tests/test_added.py::test_added:1:" in message
+
+
 def test_e2e_allowlist_entries_match_current_runtime_hits() -> None:
     hits = scan_repository_tests()
     hit_identities = {hit.identity for hit in hits}
-    violations = [
-        format_hit(hit)
-        for hit in hits
-        if hit.identity not in E2E_ALLOWLIST
-    ]
+    stale_entries = sorted(set(E2E_ALLOWLIST) - hit_identities)
+    missing_hits = [hit for hit in hits if hit.identity not in E2E_ALLOWLIST]
 
-    assert sorted(set(E2E_ALLOWLIST) - hit_identities) == []
-    assert violations == []
+    assert not stale_entries and not missing_hits, format_allowlist_mismatches(
+        stale_entries, missing_hits
+    )
 
 
 def test_build_and_verify_keeps_focused_real_entrypoint_coverage() -> None:
