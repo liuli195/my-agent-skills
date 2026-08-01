@@ -27,4 +27,4 @@
 
 ## 验证证据
 
-- [x] `tests/test_build_and_verify_plugin.py` 203 项通过。
+- [x] `tests/test_build_and_verify_plugin.py` 203 项通过；快速验证入口在技能变更场景选中相关检查并通过。
