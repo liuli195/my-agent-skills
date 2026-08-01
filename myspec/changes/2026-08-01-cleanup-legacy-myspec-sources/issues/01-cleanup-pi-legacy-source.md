@@ -8,7 +8,7 @@ GitHub issue #252
 
 **Blocked by:** None — can start immediately.
 
-**Status:** implemented
+**Status:** ready-for-human
 
 - [x] Packed `myspec init --pi` removes only detected user-level legacy sources through the Pi command interface.
 - [x] Project-level legacy sources remain in project settings and are disabled.

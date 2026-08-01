@@ -8,7 +8,7 @@ GitHub issue #252
 
 **Blocked by:** None — can start immediately.
 
-**Status:** implemented
+**Status:** ready-for-human
 
 - [x] Packed `myspec init --claude` uninstalls only the exact legacy plugin with persistent-data preservation.
 - [x] The shared marketplace, unrelated plugins, and persistent user data remain unchanged.

@@ -8,7 +8,7 @@ GitHub issue #252
 
 **Blocked by:** None — can start immediately.
 
-**Status:** implemented
+**Status:** ready-for-human
 
 - [x] Packed `myspec init --codex` removes only the exact legacy plugin through the Codex command interface.
 - [x] The shared marketplace, unrelated plugins, and unrelated cache remain unchanged.
@@ -22,5 +22,5 @@ GitHub issue #252
 - Red（红灯）：Build and Verify（构建与验证）的 `verify.my-spec` 失败，因为初始化仍返回 `disabledLegacyPlugins` 并保留旧插件。
 - Green（绿灯）：同一快速验证在 `verify.my-spec` 中以 89 个通过、2 个跳过完成。
 - User-entry smoke（用户入口冒烟）：打包候选与真实 Codex（代码代理）在隔离 HOME（用户目录）中运行；`init --codex` 删除了预置旧插件，`doctor --codex` 只报告稳定来源。
-- Review（审查）：待执行。
+- Review（审查）：Standards（规范）审查发现状态值不合规，已改为 `ready-for-human`；Spec（规格）审查未发现问题。Targeted follow-up（定向复审）待执行。
 - Unresolved risk（未解决风险）：无。
