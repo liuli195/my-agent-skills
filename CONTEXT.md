@@ -24,6 +24,10 @@ _Avoid_: Auditor, critic
 The end-to-end orchestration of one repository development change from requirement confirmation through implementation, PR（拉取请求）delivery, and cleanup.
 _Avoid_: Product lifecycle, release flow
 
+**Gate 3 — Enter Delivery（进入交付）**:
+The final confirmation in `my-spec-add`（新增自有规格）that authorizes its validated atomic application of the formal MySpec（自有规格）difference; it passes only after that application succeeds.
+_Avoid_: Delivery-plan confirmation
+
 **Flow Level（流程等级）**:
 The risk-based classification that selects the cost and gates applied within a Development Flow（开发流程）.
 _Avoid_: Complexity level, task size
