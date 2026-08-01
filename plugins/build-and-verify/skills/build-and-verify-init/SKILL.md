@@ -30,7 +30,7 @@ Use this skill when the user asks to initialize（初始化）, generate（生�
 1. 读取 `references/questionnaire.md`（问答模板），按固定问题、选项、后果和跳转推进。
 2. 用户允许扫描后，读取 `references/ecosystem-detection.md`（生态识别规则），识别已有配置、Node（节点运行时）、Python（Python 语言）和通用候选；无候选时走手动命令分支。
 3. 生成草案前，读取 `references/config-draft.md`（配置草案规则），生成 `build.checks`（构建检查项）和 `verify.checks`（验证检查项）；只有用户确认正整数后才写入可选 `verify.fullBudgetSeconds`（完整验证预算秒数），未启用时省略。
-4. inputs（缓存输入）默认由 agent（代理）根据 paths（受影响路径）和 command（命令）来源推导，并在最终写入确认摘要中展示。
+4. inputs（缓存输入）默认由 agent（代理）根据 paths（受影响路径）和 command（命令）来源推导；动态扫描范围和必要候选命令探测按 `config-draft.md`（配置草案规则）处理，并在最终写入确认摘要中展示。
 5. 覆盖已有配置时自动使用 `.build-and-verify/backups/config-YYYYMMDD-HHMMSS.json`（备份配置文件），不单独询问备份路径。
 6. 最终写入确认前，读取 `references/validation.md`（校验规则），执行 targeted dependency checks（定向依赖检查）和 environment checks（环境检查），展示问题、影响和建议。
 7. 最终写入时，先把用户确认的草案保存为临时 confirmed config（已确认配置），再调用 `python <build-and-verify-script> init --project <repo> --config <confirmed-config> --overwrite`（初始化覆盖命令）。不得由 agent（代理）直接写 `.build-and-verify/config.json`（配置文件）。
