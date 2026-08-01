@@ -27,4 +27,4 @@
 ## TDD（测试驱动开发）证据
 
 - [x] 红灯：新增诊断与配置契约先因缺少汇总函数和独立检查失败。
-- [x] 绿灯：279 项相关检查通过；快速验证入口仅选中 `verify.my-spec` 和 `verify.runtime-boundaries`。
+- [x] 绿灯：280 项相关检查通过；快速验证入口仅选中 `verify.my-spec` 和 `verify.runtime-boundaries`，目录变更后不会复用旧缓存。

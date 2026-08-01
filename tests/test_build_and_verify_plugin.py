@@ -886,7 +886,8 @@ def test_build_and_verify_plugin_has_runtime_init_and_review_skill_entrypoints()
 def test_build_and_verify_review_defines_confirmed_flow() -> None:
     skill = (REVIEW_SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
     review = (REVIEW_REFERENCE_ROOT / "review.md").read_text(encoding="utf-8")
-    review_contract_text = skill + review
+    config_draft = (INIT_REFERENCE_ROOT / "config-draft.md").read_text(encoding="utf-8")
+    review_contract_text = skill + review + config_draft
 
     assert f"name: {REVIEW_SKILL_NAME}" in skill.split("---", 2)[1]
     assert "../build-and-verify-init/references/ecosystem-detection.md" in skill

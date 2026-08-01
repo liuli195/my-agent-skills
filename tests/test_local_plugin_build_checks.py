@@ -1314,3 +1314,45 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
         assert "docs/agent-guard/**" not in check.get("paths", [])
         assert "docs/agent-guard" not in check.get("inputs", [])
 
+
+def test_runtime_boundaries_cache_tracks_test_directory(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = load_check_module()
+    test_file = tmp_path / "tests" / "test_sample.py"
+    test_file.parent.mkdir()
+    test_file.write_text("first\n", encoding="utf-8")
+    root_config = json.loads(
+        (REPO_ROOT / ".build-and-verify" / "config.json").read_text(encoding="utf-8")
+    )
+    runtime_boundaries = dict(
+        next(
+            check
+            for check in root_config["verify"]["checks"]
+            if check["id"] == "verify.runtime-boundaries"
+        )
+    )
+    runtime_boundaries["command"] = "runtime-boundaries"
+    write_runner_config(tmp_path, verify_checks=[runtime_boundaries])
+    monkeypatch.setattr(
+        module, "_changed_files", lambda _root: ["tests/test_sample.py"]
+    )
+    calls: list[str] = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        return make_completed(command)
+
+    assert module.run_verify(tmp_path, runner=fake_run) == 0
+    first_output = capsys.readouterr().out
+    assert module.run_verify(tmp_path, runner=fake_run) == 0
+    second_output = capsys.readouterr().out
+    test_file.write_text("second\n", encoding="utf-8")
+    assert module.run_verify(tmp_path, runner=fake_run) == 0
+    third_output = capsys.readouterr().out
+
+    assert "cache-hit: verify.runtime-boundaries" not in first_output
+    assert "cache-hit: verify.runtime-boundaries" in second_output
+    assert "cache-hit: verify.runtime-boundaries" not in third_output
+    assert calls == ["runtime-boundaries", "runtime-boundaries"]
+
