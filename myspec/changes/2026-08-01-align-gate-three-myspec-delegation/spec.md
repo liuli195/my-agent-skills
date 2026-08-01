@@ -8,7 +8,7 @@ Pi Development Flow（Pi 开发流程）的 `SKILL.md`（技能入口）规定 G
 
 Development Flow（开发流程）在 Gate 3 委托 `my-spec-add`（新增自有规格）的既有流程：该技能生成完整预览、展示差异并等待最终确认；此最终确认即 Gate 3 的确认。该技能原子应用并校验差异成功后，Gate 3 才通过，并进入 Gate 4 — Authorize PR Delivery（授权 PR 交付）。
 
-Development Flow（开发流程）不复制 `my-spec-add` 的指纹、预览、冲突、失败或恢复规则；该技能未完成时，流程保留产物并按该技能的恢复位置继续。
+Development Flow（开发流程）不复制 `my-spec-add` 的指纹、预览、冲突、失败或恢复规则；该技能未完成时，流程保留产物并按该技能的恢复位置继续。实施票据只修改流程说明和检查；正式 MySpec（自有规格）差异是票据完成后由 Gate 3 应用的交付产物。
 
 ## User Stories
 
@@ -19,6 +19,7 @@ Development Flow（开发流程）不复制 `my-spec-add` 的指纹、预览、�
 ## Implementation Decisions
 
 - 保持四个既有门禁的编号、名称和业务含义不变。
+- 实施票据不直接修改正式 MySpec（自有规格）；该差异由 Gate 3 通过 `my-spec-add`（新增自有规格）在实施票据完成后生成、确认和应用。
 - Gate 3 的确认复用 `my-spec-add`（新增自有规格）展示完整预览差异后的最终确认；该确认授权原子应用与校验。
 - Gate 3 仅在 `my-spec-add`（新增自有规格）成功应用并校验后通过；Gate 4 只在此后确认 PR（拉取请求）交付动作。
 - Development Flow（开发流程）仅声明委托时机与门禁转移，不实现或描述 `my-spec-add` 的内部校验和恢复程序。
