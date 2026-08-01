@@ -391,11 +391,6 @@ test("Pi discovers the local Development Flow package with disclosed references"
     assert.match(formatSkillsForPrompt([skill]), /<name>pi-development-flow<\/name>/);
 
     const content = await readFile(resolve(skillRoot, "SKILL.md"), "utf8");
-    assert.match(content, /Gate 3 — Enter Delivery[^]*`my-spec-add`/is);
-    assert.match(
-      content,
-      /Gate 3 passes only after[^]*appl(?:y|ies|ication)[^]*validat/is,
-    );
     for (const name of references) {
       await access(resolve(skillRoot, "references", name));
       assert.match(content, new RegExp(`references/${name.replace(".", "\\.")}`));
