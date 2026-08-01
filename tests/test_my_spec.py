@@ -334,6 +334,16 @@ if sys.argv[1:2] == ["install"]:
     user_settings.parent.mkdir(parents=True, exist_ok=True)
     user_settings.write_text(json.dumps(settings, indent=2) + "\\n", encoding="utf-8")
     raise SystemExit(0)
+if sys.argv[1:2] == ["remove"]:
+    if os.environ.get("MYSPEC_PI_REMOVE_FAIL") == "1":
+        print("simulated remove failure", file=sys.stderr)
+        raise SystemExit(1)
+    settings = load(user_settings)
+    raw = sys.argv[2]
+    if os.environ.get("MYSPEC_PI_REMOVE_NOOP") != "1":
+        settings["packages"] = [item for item in settings.get("packages", []) if source(item) != raw]
+        user_settings.write_text(json.dumps(settings, indent=2) + "\\n", encoding="utf-8")
+    raise SystemExit(0)
 if sys.argv[1:2] == ["list"]:
     paths = [("User packages:", user_settings)]
     if project_trusted():
@@ -465,8 +475,9 @@ elif arguments[:2] == ["plugin", "uninstall"] and arguments[3:] == ["--scope", "
     if current is None:
         print("missing plugin", file=sys.stderr)
         raise SystemExit(1)
-    state["plugins"].remove(current)
-    save()
+    if os.environ.get("MYSPEC_CLAUDE_UNINSTALL_NOOP") != "1":
+        state["plugins"].remove(current)
+        save()
     if os.environ.get("MYSPEC_CLAUDE_FAIL_AFTER_UNINSTALL") == "1":
         print("simulated interruption after uninstall", file=sys.stderr)
         raise SystemExit(1)
@@ -624,12 +635,16 @@ elif arguments[:2] == ["plugin", "remove"] and arguments[-1:] == ["--json"]:
     if current is None:
         print("missing plugin", file=sys.stderr)
         raise SystemExit(1)
-    target = Path(os.environ["CODEX_HOME"]) / "plugins" / "cache" / current["marketplaceName"] / current["name"] / current["version"]
-    if target.exists():
-        shutil.rmtree(target)
-    state["installed"].remove(current)
-    remove_config(arguments[2])
-    save()
+    if os.environ.get("MYSPEC_CODEX_REMOVE_NOOP") != "1":
+        target = Path(os.environ["CODEX_HOME"]) / "plugins" / "cache" / current["marketplaceName"] / current["name"] / current["version"]
+        if target.exists():
+            shutil.rmtree(target)
+        state["installed"].remove(current)
+        remove_config(arguments[2])
+        save()
+    if os.environ.get("MYSPEC_CODEX_FAIL_AFTER_REMOVE") == "1":
+        print("simulated interruption after remove", file=sys.stderr)
+        raise SystemExit(1)
     print(json.dumps({"pluginId": arguments[2]}))
 else:
     raise SystemExit(2)
@@ -1522,12 +1537,14 @@ def test_packed_myspec_initializes_and_diagnoses_one_pi_source(tmp_path: Path) -
     env["MYSPEC_PI_LOG"] = str(pi_log)
     settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
     legacy = str(REPO_ROOT / "plugins" / "my-spec")
+    unrelated = str(tmp_path / "unrelated")
     write(
         settings_path,
         json.dumps(
             {
                 "packages": [
                     legacy,
+                    unrelated,
                     {"source": str(installed_package), "skills": [], "autoload": False},
                 ]
             },
@@ -1541,14 +1558,12 @@ def test_packed_myspec_initializes_and_diagnoses_one_pi_source(tmp_path: Path) -
     assert result == {
         "pi": "initialized",
         "source": str(installed_package),
-        "disabledLegacySources": [legacy],
+        "removedLegacySources": [legacy],
+        "disabledProjectLegacySources": [],
         "reloadRequired": True,
     }
     settings = json.loads(settings_path.read_text(encoding="utf-8"))
-    assert settings["packages"] == [
-        {"source": legacy, "skills": []},
-        {"source": str(installed_package)},
-    ]
+    assert settings["packages"] == [unrelated, {"source": str(installed_package)}]
 
     settings_before = settings_path.read_bytes()
     diagnosed = run_cli(executable, "doctor", "--pi", env=env)
@@ -1566,13 +1581,14 @@ def test_packed_myspec_initializes_and_diagnoses_one_pi_source(tmp_path: Path) -
     }
     assert report["pi"]["registered"] is True
     assert report["pi"]["enabledSources"] == [str(installed_package)]
-    assert report["pi"]["disabledSources"] == [legacy]
+    assert report["pi"]["disabledSources"] == []
     assert report["pi"]["duplicateEnabledSources"] is False
     assert report["pi"]["skills"] == list(SKILL_NAMES)
     assert report["pi"]["listedSources"]
     assert settings_path.read_bytes() == settings_before
     assert [json.loads(line)["args"] for line in pi_log.read_text(encoding="utf-8").splitlines()] == [
         ["list"],
+        ["remove", legacy],
         ["list"],
         ["list"],
     ]
@@ -1591,6 +1607,61 @@ def test_packed_myspec_initializes_and_diagnoses_one_pi_source(tmp_path: Path) -
         source for source in incomplete_report["sources"] if source["sourceKind"] == "stable"
     )
     assert stable_source["enabled"] is True
+
+
+def test_packed_myspec_pi_init_keeps_legacy_source_when_stable_source_is_unresolved(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    env["MYSPEC_PI_LIST_SOURCE_ONLY"] = json.dumps([str(installed_package)])
+    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    legacy = str(REPO_ROOT / "plugins" / "my-spec")
+    write(settings_path, json.dumps({"packages": [str(installed_package), legacy]}, indent=2))
+
+    initialized = run_cli(executable, "init", "--pi", env=env)
+
+    assert initialized.returncode == 1
+    assert "error: pi_install_missing_source" in initialized.stderr
+    assert json.loads(settings_path.read_text(encoding="utf-8"))["packages"] == [
+        str(installed_package),
+        legacy,
+    ]
+    calls = [json.loads(line)["args"] for line in pi_log.read_text(encoding="utf-8").splitlines()]
+    assert ["remove", legacy] not in calls
+
+
+def test_packed_myspec_pi_init_enables_a_verified_stable_duplicate_before_cleanup(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    unresolved_stable = os.path.relpath(installed_package, settings_path.parent)
+    env["MYSPEC_PI_LIST_SOURCE_ONLY"] = json.dumps([unresolved_stable])
+    legacy = str(REPO_ROOT / "plugins" / "my-spec")
+    write(
+        settings_path,
+        json.dumps(
+            {"packages": [unresolved_stable, str(installed_package), legacy]},
+            indent=2,
+        ),
+    )
+
+    initialized = run_cli(executable, "init", "--pi", env=env)
+
+    assert initialized.returncode == 0, initialized.stderr
+    assert json.loads(settings_path.read_text(encoding="utf-8"))["packages"] == [
+        {"source": unresolved_stable, "skills": []},
+        str(installed_package),
+    ]
+    report = json.loads(run_cli(executable, "doctor", "--pi", env=env).stdout)["pi"]
+    stable_sources = [source for source in report["sources"] if source["sourceKind"] == "stable"]
+    assert any(source["installed"] and source["enabled"] for source in stable_sources)
 
 
 def test_packed_myspec_doctor_keeps_enabled_intent_for_settings_source_missing_from_pi_list(
@@ -1866,6 +1937,8 @@ def test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_f
 
     initialized = run_cli(executable, "init", "--pi", env=env, cwd=project)
     assert initialized.returncode == 0, initialized.stderr
+    assert json.loads(initialized.stdout)["removedLegacySources"] == []
+    assert json.loads(initialized.stdout)["disabledProjectLegacySources"] == [legacy_relative]
     assert json.loads(user_settings.read_text(encoding="utf-8"))["packages"] == [stable_relative]
     assert json.loads(project_settings.read_text(encoding="utf-8"))["packages"] == [
         {"source": stable_project_relative, "skills": []},
@@ -1877,6 +1950,7 @@ def test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_f
         else []
     )
     assert not any(call[:1] == ["install"] for call in calls)
+    assert not any(call[:1] == ["remove"] for call in calls)
 
     report = json.loads(run_cli(executable, "doctor", "--pi", env=env, cwd=project).stdout)
     assert report["pi"]["registered"] is True
@@ -1992,7 +2066,7 @@ def test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest(
     assert filtered["pi"]["skills"] == ["my-spec", "my-spec-add", "my-spec-audit"]
 
 
-def test_packed_myspec_disables_only_exact_legacy_pi_sources(tmp_path: Path) -> None:
+def test_packed_myspec_removes_only_exact_user_legacy_pi_sources(tmp_path: Path) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
     prefix = npm_prefix_for(installed_package)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
@@ -2012,12 +2086,62 @@ def test_packed_myspec_disables_only_exact_legacy_pi_sources(tmp_path: Path) -> 
 
     result = run_cli(executable, "init", "--pi", env=env)
     assert result.returncode == 0, result.stderr
-    packages = json.loads(settings_path.read_text(encoding="utf-8"))["packages"]
-    assert packages[:2] == sources[:2]
-    assert packages[-1] == sources[-1]
-    assert packages[2:-1] == [
-        {"source": source, "skills": []} for source in sources[2:-1]
+    assert json.loads(result.stdout)["removedLegacySources"] == sources[2:-1]
+    assert json.loads(settings_path.read_text(encoding="utf-8"))["packages"] == [
+        *sources[:2],
+        sources[-1],
     ]
+
+
+def test_packed_myspec_pi_init_retries_incomplete_legacy_removal(tmp_path: Path) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    legacy = str(REPO_ROOT / "plugins" / "my-spec")
+    write(settings_path, json.dumps({"packages": [str(installed_package), legacy]}, indent=2))
+
+    incomplete = run_cli(
+        executable,
+        "init",
+        "--pi",
+        env={**env, "MYSPEC_PI_REMOVE_NOOP": "1"},
+    )
+    assert incomplete.returncode == 1
+    assert f"error: pi_remove_incomplete: {legacy}" in incomplete.stderr
+    assert legacy in json.loads(settings_path.read_text(encoding="utf-8"))["packages"]
+
+    retried = run_cli(executable, "init", "--pi", env=env)
+    assert retried.returncode == 0, retried.stderr
+    assert json.loads(retried.stdout)["removedLegacySources"] == [legacy]
+    assert json.loads(settings_path.read_text(encoding="utf-8"))["packages"] == [
+        str(installed_package)
+    ]
+
+
+def test_packed_myspec_pi_init_retries_failed_legacy_removal(tmp_path: Path) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    legacy = str(REPO_ROOT / "plugins" / "my-spec")
+    write(settings_path, json.dumps({"packages": [str(installed_package), legacy]}, indent=2))
+
+    failed = run_cli(
+        executable,
+        "init",
+        "--pi",
+        env={**env, "MYSPEC_PI_REMOVE_FAIL": "1"},
+    )
+    assert failed.returncode == 1
+    assert "error: pi_remove_failed: simulated remove failure" in failed.stderr
+    assert legacy in json.loads(settings_path.read_text(encoding="utf-8"))["packages"]
+
+    retried = run_cli(executable, "init", "--pi", env=env)
+    assert retried.returncode == 0, retried.stderr
+    assert json.loads(retried.stdout)["removedLegacySources"] == [legacy]
 
 
 def test_packed_myspec_doctor_reports_duplicate_enabled_pi_sources(tmp_path: Path) -> None:
@@ -2123,7 +2247,7 @@ def test_packed_myspec_keeps_project_legacy_sources_without_installed_paths(
         assert sources[source]["enabled"] is False
 
 
-def test_packed_myspec_initializes_and_diagnoses_claude_without_deleting_legacy(
+def test_packed_myspec_initializes_and_removes_claude_legacy_plugin(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
@@ -2173,6 +2297,14 @@ def test_packed_myspec_initializes_and_diagnoses_claude_without_deleting_legacy(
             indent=2,
         ),
     )
+    persistent_data = (
+        Path(env["MYSPEC_CLAUDE_HOME"])
+        / "plugins"
+        / "data"
+        / legacy_plugin["id"]
+        / "kept.txt"
+    )
+    write(persistent_data, "keep")
 
     initialized = run_cli(executable, "init", "--claude", env=env)
     assert initialized.returncode == 0, initialized.stderr
@@ -2180,7 +2312,7 @@ def test_packed_myspec_initializes_and_diagnoses_claude_without_deleting_legacy(
         "claude": "initialized",
         "marketplace": "myspec",
         "source": str(installed_package),
-        "disabledLegacyPlugins": ["my-spec@my-agent-skills-marketplace"],
+        "removedLegacyPlugins": ["my-spec@my-agent-skills-marketplace"],
         "reloadRequired": True,
     }
     state = json.loads(claude_state.read_text(encoding="utf-8"))
@@ -2188,10 +2320,27 @@ def test_packed_myspec_initializes_and_diagnoses_claude_without_deleting_legacy(
     assert len(state["marketplaces"]) == 3
     assert state["marketplaces"][2]["name"] == "myspec"
     plugins = {plugin["id"]: plugin for plugin in state["plugins"]}
-    assert plugins[legacy_plugin["id"]]["enabled"] is False
+    assert legacy_plugin["id"] not in plugins
     assert plugins[unrelated_plugin["id"]] == unrelated_plugin
     assert plugins["my-spec@myspec"]["enabled"] is True
     assert plugins["my-spec@myspec"]["version"] == PACKAGE_VERSION
+    assert persistent_data.read_text(encoding="utf-8") == "keep\n"
+    init_calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
+    assert [
+        "plugin",
+        "uninstall",
+        legacy_plugin["id"],
+        "--scope",
+        "user",
+        "--keep-data",
+    ] in init_calls
+
+    claude_log.write_text("", encoding="utf-8")
+    repeated = run_cli(executable, "init", "--claude", env=env)
+    assert repeated.returncode == 0, repeated.stderr
+    assert json.loads(repeated.stdout)["removedLegacyPlugins"] == []
+    repeat_calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
+    assert not any(call[:2] == ["plugin", "uninstall"] for call in repeat_calls)
 
     state_before = claude_state.read_bytes()
     claude_log.write_text("", encoding="utf-8")
@@ -2206,7 +2355,8 @@ def test_packed_myspec_initializes_and_diagnoses_claude_without_deleting_legacy(
     assert report["enabled"] is True
     assert report["duplicateEnabledSources"] is False
     assert report["enabledSources"] == ["my-spec@myspec"]
-    assert report["disabledSources"] == ["my-spec@my-agent-skills-marketplace"]
+    assert report["disabledSources"] == []
+    assert [source["sourceKind"] for source in report["sources"]] == ["stable"]
     assert report["skills"] == list(SKILL_NAMES)
     assert report["reloadRequired"] is True
     assert claude_state.read_bytes() == state_before
@@ -2215,14 +2365,110 @@ def test_packed_myspec_initializes_and_diagnoses_claude_without_deleting_legacy(
         ["plugin", "list", "--json"],
     ]
 
-    state["plugins"][0]["enabled"] = True
-    write(claude_state, json.dumps(state, indent=2))
-    duplicate = json.loads(run_cli(executable, "doctor", "--claude", env=env).stdout)["claude"]
-    assert duplicate["duplicateEnabledSources"] is True
-    assert duplicate["enabledSources"] == [
-        "my-spec@my-agent-skills-marketplace",
-        "my-spec@myspec",
-    ]
+
+def test_packed_myspec_claude_init_keeps_legacy_when_stable_version_is_wrong(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), claude_bin)
+    env.update(
+        {
+            "MYSPEC_CLAUDE_LOG": str(claude_log),
+            "MYSPEC_CLAUDE_STATE": str(claude_state),
+            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+            "MYSPEC_CLAUDE_REPORTED_VERSION": "0.0.0",
+        }
+    )
+    legacy = {
+        "id": "my-spec@my-agent-skills-marketplace",
+        "version": PREVIOUS_VERSION,
+        "scope": "user",
+        "enabled": True,
+        "installPath": str(tmp_path / "legacy-plugin"),
+    }
+    write(claude_state, json.dumps({"marketplaces": [], "plugins": [legacy]}, indent=2))
+
+    initialized = run_cli(executable, "init", "--claude", env=env)
+
+    assert initialized.returncode == 1
+    assert "error: claude_plugin_verify_failed" in initialized.stderr
+    plugins = json.loads(claude_state.read_text(encoding="utf-8"))["plugins"]
+    assert any(plugin["id"] == legacy["id"] for plugin in plugins)
+    calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
+    assert not any(call[:2] == ["plugin", "uninstall"] for call in calls)
+
+
+def test_packed_myspec_claude_init_retries_incomplete_legacy_uninstall(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), claude_bin)
+    env.update(
+        {
+            "MYSPEC_CLAUDE_LOG": str(claude_log),
+            "MYSPEC_CLAUDE_STATE": str(claude_state),
+            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+        }
+    )
+    legacy = {
+        "id": "my-spec@my-agent-skills-marketplace",
+        "version": PREVIOUS_VERSION,
+        "scope": "user",
+        "enabled": False,
+        "installPath": str(tmp_path / "legacy-plugin"),
+    }
+    write(claude_state, json.dumps({"marketplaces": [], "plugins": [legacy]}, indent=2))
+
+    incomplete = run_cli(
+        executable,
+        "init",
+        "--claude",
+        env={**env, "MYSPEC_CLAUDE_UNINSTALL_NOOP": "1"},
+    )
+    assert incomplete.returncode == 1
+    assert "error: claude_plugin_uninstall_incomplete" in incomplete.stderr
+
+    retried = run_cli(executable, "init", "--claude", env=env)
+    assert retried.returncode == 0, retried.stderr
+    assert json.loads(retried.stdout)["removedLegacyPlugins"] == [legacy["id"]]
+
+
+def test_packed_myspec_claude_init_retries_interrupted_legacy_uninstall(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), claude_bin)
+    env.update(
+        {
+            "MYSPEC_CLAUDE_LOG": str(claude_log),
+            "MYSPEC_CLAUDE_STATE": str(claude_state),
+            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+        }
+    )
+    legacy = {
+        "id": "my-spec@my-agent-skills-marketplace",
+        "version": PREVIOUS_VERSION,
+        "scope": "user",
+        "enabled": True,
+        "installPath": str(tmp_path / "legacy-plugin"),
+    }
+    write(claude_state, json.dumps({"marketplaces": [], "plugins": [legacy]}, indent=2))
+
+    interrupted = run_cli(
+        executable,
+        "init",
+        "--claude",
+        env={**env, "MYSPEC_CLAUDE_FAIL_AFTER_UNINSTALL": "1"},
+    )
+    assert interrupted.returncode == 1
+    assert "claude_plugin_uninstall_failed: simulated interruption after uninstall" in interrupted.stderr
+
+    retried = run_cli(executable, "init", "--claude", env=env)
+    assert retried.returncode == 0, retried.stderr
+    assert json.loads(retried.stdout)["removedLegacyPlugins"] == []
 
 
 def test_packed_myspec_doctor_reports_claude_marketplace_source_mismatch_read_only(
@@ -2342,7 +2588,11 @@ def test_packed_myspec_requires_explicit_claude_but_all_initializes_detected_cla
     assert initialized.returncode == 0, initialized.stderr
     assert json.loads(initialized.stdout) == {
         "pi": {"status": "skipped", "reason": "missing_command: pi"},
-        "claude": {"status": "initialized", "source": str(installed_package)},
+        "claude": {
+            "status": "initialized",
+            "source": str(installed_package),
+            "removedLegacyPlugins": [],
+        },
         "codex": {"status": "skipped", "reason": "missing_command: codex"},
     }
     assert any(
@@ -2351,7 +2601,7 @@ def test_packed_myspec_requires_explicit_claude_but_all_initializes_detected_cla
     )
 
 
-def test_packed_myspec_initializes_and_diagnoses_codex_without_deleting_legacy(
+def test_packed_myspec_initializes_and_removes_codex_legacy_plugin(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
@@ -2368,9 +2618,18 @@ def test_packed_myspec_initializes_and_diagnoses_codex_without_deleting_legacy(
     )
     legacy_market_root = tmp_path / "legacy-market"
     unrelated_market_root = tmp_path / "other-market"
-    legacy_cache = tmp_path / "legacy-cache"
+    legacy_source = tmp_path / "legacy-source"
     unrelated_cache = tmp_path / "other-cache"
-    write(legacy_cache / "kept.txt", "legacy cache")
+    legacy_install_cache = (
+        codex_home
+        / "plugins"
+        / "cache"
+        / "my-agent-skills-marketplace"
+        / "my-spec"
+        / PREVIOUS_VERSION
+    )
+    write(legacy_source / "kept.txt", "legacy source")
+    write(legacy_install_cache / "removed.txt", "legacy cache")
     write(unrelated_cache / "kept.txt", "other cache")
     legacy_market = {
         "name": "my-agent-skills-marketplace",
@@ -2391,7 +2650,7 @@ def test_packed_myspec_initializes_and_diagnoses_codex_without_deleting_legacy(
         "marketplaceName": "my-agent-skills-marketplace",
         "version": PREVIOUS_VERSION,
         "installed": True,
-        "source": {"source": "local", "path": str(legacy_cache)},
+        "source": {"source": "local", "path": str(legacy_source)},
     }
     unrelated_plugin = {
         "pluginId": "other@other-marketplace",
@@ -2430,21 +2689,32 @@ enabled = true
         "codex": "initialized",
         "marketplace": "myspec",
         "source": str(installed_package),
-        "disabledLegacyPlugins": ["my-spec@my-agent-skills-marketplace"],
+        "removedLegacyPlugins": ["my-spec@my-agent-skills-marketplace"],
         "newSessionRequired": True,
     }
     state = json.loads(codex_state.read_text(encoding="utf-8"))
     assert state["marketplaces"][:2] == [legacy_market, unrelated_market]
     assert state["marketplaces"][2]["name"] == "myspec"
     plugins = {plugin["pluginId"]: plugin for plugin in state["installed"]}
+    assert legacy_plugin["pluginId"] not in plugins
     assert plugins[unrelated_plugin["pluginId"]]["source"] == unrelated_plugin["source"]
     assert plugins["my-spec@myspec"]["version"] == PACKAGE_VERSION
     config = (codex_home / "config.toml").read_text(encoding="utf-8")
-    assert '[plugins."my-spec@my-agent-skills-marketplace"]\nenabled = false' in config
+    assert '[plugins."my-spec@my-agent-skills-marketplace"]' not in config
     assert '[plugins."my-spec@myspec"]\nenabled = true' in config
     assert '[plugins."other@other-marketplace"]\nenabled = true' in config
-    assert (legacy_cache / "kept.txt").is_file()
+    assert (legacy_source / "kept.txt").is_file()
+    assert not legacy_install_cache.exists()
     assert (unrelated_cache / "kept.txt").is_file()
+    init_calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
+    assert ["plugin", "remove", legacy_plugin["pluginId"], "--json"] in init_calls
+
+    codex_log.write_text("", encoding="utf-8")
+    repeated = run_cli(executable, "init", "--codex", env=env)
+    assert repeated.returncode == 0, repeated.stderr
+    assert json.loads(repeated.stdout)["removedLegacyPlugins"] == []
+    repeat_calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
+    assert ["plugin", "remove", legacy_plugin["pluginId"], "--json"] not in repeat_calls
 
     before_state = codex_state.read_bytes()
     before_config = (codex_home / "config.toml").read_bytes()
@@ -2459,7 +2729,8 @@ enabled = true
     assert report["enabled"] is True
     assert report["duplicateEnabledSources"] is False
     assert report["enabledSources"] == ["my-spec@myspec"]
-    assert report["disabledSources"] == ["my-spec@my-agent-skills-marketplace"]
+    assert report["disabledSources"] == []
+    assert [source["sourceKind"] for source in report["sources"]] == ["stable"]
     assert report["skills"] == list(SKILL_NAMES)
     assert report["newSessionRequired"] is True
     assert "reloadRequired" not in report
@@ -2469,6 +2740,120 @@ enabled = true
         ["plugin", "marketplace", "list", "--json"],
         ["plugin", "list", "--json"],
     ]
+
+
+def test_packed_myspec_codex_init_keeps_legacy_when_stable_version_is_wrong(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), codex_bin)
+    env.update(
+        {
+            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
+            "MYSPEC_CODEX_LOG": str(codex_log),
+            "MYSPEC_CODEX_STATE": str(codex_state),
+            "MYSPEC_CODEX_REPORTED_VERSION": "0.0.0",
+        }
+    )
+    legacy_id = "my-spec@my-agent-skills-marketplace"
+    legacy = {
+        "pluginId": legacy_id,
+        "name": "my-spec",
+        "marketplaceName": "my-agent-skills-marketplace",
+        "version": PREVIOUS_VERSION,
+        "installed": True,
+        "source": {"source": "local", "path": str(tmp_path / "legacy")},
+    }
+    write(codex_state, json.dumps({"marketplaces": [], "installed": [legacy], "available": []}, indent=2))
+    write(Path(env["CODEX_HOME"]) / "config.toml", f'[plugins."{legacy_id}"]\nenabled = true\n')
+
+    initialized = run_cli(executable, "init", "--codex", env=env)
+
+    assert initialized.returncode == 1
+    assert "error: codex_plugin_verify_failed" in initialized.stderr
+    installed = json.loads(codex_state.read_text(encoding="utf-8"))["installed"]
+    assert any(plugin["pluginId"] == legacy_id for plugin in installed)
+    calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
+    assert ["plugin", "remove", legacy_id, "--json"] not in calls
+
+
+def test_packed_myspec_codex_init_retries_incomplete_legacy_removal(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), codex_bin)
+    env.update(
+        {
+            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
+            "MYSPEC_CODEX_LOG": str(codex_log),
+            "MYSPEC_CODEX_STATE": str(codex_state),
+        }
+    )
+    legacy_id = "my-spec@my-agent-skills-marketplace"
+    legacy = {
+        "pluginId": legacy_id,
+        "name": "my-spec",
+        "marketplaceName": "my-agent-skills-marketplace",
+        "version": PREVIOUS_VERSION,
+        "installed": True,
+        "source": {"source": "local", "path": str(tmp_path / "legacy")},
+    }
+    write(codex_state, json.dumps({"marketplaces": [], "installed": [legacy], "available": []}, indent=2))
+    write(Path(env["CODEX_HOME"]) / "config.toml", f'[plugins."{legacy_id}"]\nenabled = true\n')
+
+    incomplete = run_cli(
+        executable,
+        "init",
+        "--codex",
+        env={**env, "MYSPEC_CODEX_REMOVE_NOOP": "1"},
+    )
+    assert incomplete.returncode == 1
+    assert "error: codex_plugin_remove_incomplete" in incomplete.stderr
+
+    retried = run_cli(executable, "init", "--codex", env=env)
+    assert retried.returncode == 0, retried.stderr
+    assert json.loads(retried.stdout)["removedLegacyPlugins"] == [legacy_id]
+
+
+def test_packed_myspec_codex_init_retries_interrupted_legacy_removal(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), codex_bin)
+    env.update(
+        {
+            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
+            "MYSPEC_CODEX_LOG": str(codex_log),
+            "MYSPEC_CODEX_STATE": str(codex_state),
+        }
+    )
+    legacy_id = "my-spec@my-agent-skills-marketplace"
+    legacy = {
+        "pluginId": legacy_id,
+        "name": "my-spec",
+        "marketplaceName": "my-agent-skills-marketplace",
+        "version": PREVIOUS_VERSION,
+        "installed": True,
+        "source": {"source": "local", "path": str(tmp_path / "legacy")},
+    }
+    write(codex_state, json.dumps({"marketplaces": [], "installed": [legacy], "available": []}, indent=2))
+    write(Path(env["CODEX_HOME"]) / "config.toml", f'[plugins."{legacy_id}"]\nenabled = true\n')
+
+    interrupted = run_cli(
+        executable,
+        "init",
+        "--codex",
+        env={**env, "MYSPEC_CODEX_FAIL_AFTER_REMOVE": "1"},
+    )
+    assert interrupted.returncode == 1
+    assert "codex_plugin_remove_failed: simulated interruption after remove" in interrupted.stderr
+
+    retried = run_cli(executable, "init", "--codex", env=env)
+    assert retried.returncode == 0, retried.stderr
+    assert json.loads(retried.stdout)["removedLegacyPlugins"] == []
 
 
 def test_packed_myspec_requires_explicit_codex_but_all_initializes_detected_codex(
@@ -2500,9 +2885,108 @@ def test_packed_myspec_requires_explicit_codex_but_all_initializes_detected_code
         "codex": {
             "status": "initialized",
             "source": str(installed_package),
+            "removedLegacyPlugins": [],
             "newSessionRequired": True,
         },
     }
+
+
+def test_packed_myspec_init_all_removes_legacy_plugins_and_doctor_reports_stable_sources(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
+    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
+    env = isolated_myspec_env(
+        tmp_path,
+        npm_prefix_for(installed_package),
+        pi_bin,
+        claude_bin,
+        codex_bin,
+    )
+    legacy_id = "my-spec@my-agent-skills-marketplace"
+    env.update(
+        {
+            "MYSPEC_PI_LOG": str(pi_log),
+            "MYSPEC_CLAUDE_LOG": str(claude_log),
+            "MYSPEC_CLAUDE_STATE": str(claude_state),
+            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
+            "MYSPEC_CODEX_LOG": str(codex_log),
+            "MYSPEC_CODEX_STATE": str(codex_state),
+        }
+    )
+    write(
+        Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
+        json.dumps({"packages": [str(installed_package), str(PLUGIN_ROOT)]}, indent=2),
+    )
+    claude_legacy_market = {
+        "name": "my-agent-skills-marketplace",
+        "source": "github",
+        "repo": "liuli195/my-agent-skills",
+        "installLocation": str(tmp_path / "claude-legacy-market"),
+    }
+    write(
+        claude_state,
+        json.dumps(
+            {
+                "marketplaces": [claude_legacy_market],
+                "plugins": [
+                    {
+                        "id": legacy_id,
+                        "version": PREVIOUS_VERSION,
+                        "scope": "user",
+                        "enabled": True,
+                        "installPath": str(tmp_path / "claude-legacy-plugin"),
+                    }
+                ],
+            },
+            indent=2,
+        ),
+    )
+    codex_legacy_market = {
+        "name": "my-agent-skills-marketplace",
+        "root": str(tmp_path / "codex-legacy-market"),
+        "marketplaceSource": {"sourceType": "git", "source": "https://example.invalid/legacy.git"},
+    }
+    write(
+        codex_state,
+        json.dumps(
+            {
+                "marketplaces": [codex_legacy_market],
+                "installed": [
+                    {
+                        "pluginId": legacy_id,
+                        "name": "my-spec",
+                        "marketplaceName": "my-agent-skills-marketplace",
+                        "version": PREVIOUS_VERSION,
+                        "installed": True,
+                        "source": {"source": "local", "path": str(tmp_path / "codex-legacy-plugin")},
+                    }
+                ],
+                "available": [],
+            },
+            indent=2,
+        ),
+    )
+    write(Path(env["CODEX_HOME"]) / "config.toml", f'[plugins."{legacy_id}"]\nenabled = true\n')
+
+    initialized = run_cli(executable, "init", "--all", env=env)
+
+    assert initialized.returncode == 0, initialized.stderr
+    output = json.loads(initialized.stdout)
+    assert output["pi"]["removedLegacySources"] == [str(PLUGIN_ROOT)]
+    assert output["pi"]["disabledProjectLegacySources"] == []
+    assert output["claude"]["removedLegacyPlugins"] == [legacy_id]
+    assert output["codex"]["removedLegacyPlugins"] == [legacy_id]
+    assert json.loads(claude_state.read_text(encoding="utf-8"))["marketplaces"][0] == claude_legacy_market
+    assert json.loads(codex_state.read_text(encoding="utf-8"))["marketplaces"][0] == codex_legacy_market
+
+    doctor = json.loads(run_cli(executable, "doctor", "--all", env=env).stdout)
+    for agent in ("pi", "claude", "codex"):
+        assert [source["sourceKind"] for source in doctor[agent]["sources"]] == ["stable"]
+        assert doctor[agent]["disabledSources"] == []
 
 
 def test_packed_myspec_package_contains_single_codex_marketplace_and_four_skills(

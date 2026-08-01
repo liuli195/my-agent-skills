@@ -344,7 +344,7 @@ def _set_disabled(item: PiSource, disabled: bool) -> None:
         current.pop("autoload", None)
 
 
-def _configure_pi_sources(stable: Path) -> list[str]:
+def _configure_pi_sources(stable: Path) -> tuple[list[str], list[str]]:
     listed = _pi_list()
     sources = _pi_sources(listed)
     user_stable = [item for item in sources if item.scope == "user" and _myspec_source_kind(item, stable) == "stable"]
@@ -355,35 +355,67 @@ def _configure_pi_sources(stable: Path) -> list[str]:
         listed = _pi_list()
         sources = _pi_sources(listed)
         user_stable = [item for item in sources if item.scope == "user" and _myspec_source_kind(item, stable) == "stable"]
-    if not user_stable:
+    verified_user_stable = [
+        item
+        for item in user_stable
+        if item.installed_path is not None and not _pi_source_mismatch(item, stable)
+    ]
+    if not verified_user_stable:
         raise ManagementError("pi_install_missing_source")
+    primary_stable = verified_user_stable[0]
 
-    disabled: list[str] = []
+    removed_user_legacy_sources = list(dict.fromkeys(
+        item.source
+        for item in sources
+        if item.scope == "user" and _myspec_source_kind(item, stable) == "legacy"
+    ))
+    disabled_project_legacy_sources: list[str] = []
     touched: dict[Path, dict[str, object]] = {}
-    for index, item in enumerate(user_stable):
-        _set_disabled(item, index > 0)
+    for item in user_stable:
+        _set_disabled(item, item is not primary_stable)
         touched[item.settings_path] = item.settings
     for item in sources:
-        if _myspec_source_kind(item, stable) == "legacy":
-            disabled.append(item.source)
+        if item.scope == "project" and _myspec_source_kind(item, stable) == "legacy":
+            disabled_project_legacy_sources.append(item.source)
             _set_disabled(item, True)
             touched[item.settings_path] = item.settings
     for path, settings in touched.items():
         _atomic_json(path, settings)
+    for source in removed_user_legacy_sources:
+        result = _run("pi", "remove", source)
+        if result.returncode != 0:
+            raise ManagementError(f"pi_remove_failed: {result.stderr.strip()}")
     listed = _pi_list()
-    if not any(item.installed_path is not None for item in _pi_sources(listed) if item.scope == "user" and _myspec_source_kind(item, stable) == "stable"):
+    current = _pi_sources(listed)
+    remaining = [
+        item.source
+        for item in current
+        if item.scope == "user" and _myspec_source_kind(item, stable) == "legacy"
+    ]
+    if remaining:
+        raise ManagementError(f"pi_remove_incomplete: {remaining[0]}")
+    if not any(
+        item.scope == "user"
+        and _myspec_source_kind(item, stable) == "stable"
+        and item.installed_path is not None
+        and not _pi_source_mismatch(item, stable)
+        and _pi_source_enabled(item)
+        for item in current
+    ):
         raise ManagementError("pi_install_missing_source")
-    return disabled
+    return removed_user_legacy_sources, disabled_project_legacy_sources
 
 
 def _init_pi() -> dict[str, object]:
     if shutil.which("pi") is None:
         raise ManagementError("missing_command: pi")
     stable = _stable_package_root()
+    removed_user_legacy_sources, disabled_project_legacy_sources = _configure_pi_sources(stable)
     return {
         "pi": "initialized",
         "source": str(stable),
-        "disabledLegacySources": _configure_pi_sources(stable),
+        "removedLegacySources": removed_user_legacy_sources,
+        "disabledProjectLegacySources": disabled_project_legacy_sources,
         "reloadRequired": True,
     }
 
@@ -470,8 +502,8 @@ def _init_claude() -> dict[str, object]:
             CLAUDE_MARKETPLACE,
         )
         _run_claude("claude_plugin_update_failed", "plugin", "update", CLAUDE_PLUGIN, "--scope", scope)
-    enabled = _claude_plugins()
-    if not any(item.get("id") == CLAUDE_PLUGIN and item.get("enabled") is True for item in enabled):
+    current_plugins = _claude_plugins()
+    if not any(item.get("id") == CLAUDE_PLUGIN and item.get("enabled") is True for item in current_plugins):
         _run_claude(
             "claude_plugin_enable_failed",
             "plugin",
@@ -480,28 +512,45 @@ def _init_claude() -> dict[str, object]:
             "--scope",
             "user",
         )
-        enabled = _claude_plugins()
-    if not any(item.get("id") == CLAUDE_PLUGIN and item.get("enabled") is True for item in enabled):
-        raise ManagementError("claude_plugin_enable_missing")
+        current_plugins = _claude_plugins()
+    target = next((item for item in current_plugins if item.get("id") == CLAUDE_PLUGIN), None)
+    install_path = (
+        Path(target["installPath"])
+        if isinstance(target, dict) and isinstance(target.get("installPath"), str)
+        else None
+    )
+    if (
+        target is None
+        or target.get("enabled") is not True
+        or target.get("version") != _package_version()
+        or _myspec_manifest_version(install_path) != _package_version()
+    ):
+        raise ManagementError("claude_plugin_verify_failed")
 
-    disabled: list[str] = []
-    for item in enabled:
-        if item.get("id") == CLAUDE_LEGACY_PLUGIN and item.get("enabled") is True:
+    removed_legacy_plugins: list[str] = []
+    for item in current_plugins:
+        if item.get("id") == CLAUDE_LEGACY_PLUGIN:
             scope = item.get("scope") if isinstance(item.get("scope"), str) else "user"
             _run_claude(
-                "claude_plugin_disable_failed",
+                "claude_plugin_uninstall_failed",
                 "plugin",
-                "disable",
+                "uninstall",
                 CLAUDE_LEGACY_PLUGIN,
                 "--scope",
                 scope,
+                "--keep-data",
             )
-            disabled.append(CLAUDE_LEGACY_PLUGIN)
+            if CLAUDE_LEGACY_PLUGIN not in removed_legacy_plugins:
+                removed_legacy_plugins.append(CLAUDE_LEGACY_PLUGIN)
+    if removed_legacy_plugins and any(
+        item.get("id") == CLAUDE_LEGACY_PLUGIN for item in _claude_plugins()
+    ):
+        raise ManagementError("claude_plugin_uninstall_incomplete")
     return {
         "claude": "initialized",
         "marketplace": CLAUDE_MARKETPLACE,
         "source": str(stable),
-        "disabledLegacyPlugins": disabled,
+        "removedLegacyPlugins": removed_legacy_plugins,
         "reloadRequired": True,
     }
 
@@ -642,18 +691,34 @@ def _init_codex() -> dict[str, object]:
     _refresh_codex_plugin()
     plugins = _codex_plugins()
     target = next((item for item in plugins if item.get("pluginId") == CODEX_PLUGIN), None)
-    if target is None or target.get("installed") is not True or target.get("enabled") is not True:
-        raise ManagementError("codex_plugin_enable_missing")
-    disabled: list[str] = []
+    target_source = target.get("source") if isinstance(target, dict) else None
+    install_path = (
+        Path(target_source["path"])
+        if isinstance(target_source, dict) and isinstance(target_source.get("path"), str)
+        else None
+    )
+    if (
+        target is None
+        or target.get("installed") is not True
+        or target.get("enabled") is not True
+        or target.get("version") != _package_version()
+        or _myspec_manifest_version(install_path) != _package_version()
+    ):
+        raise ManagementError("codex_plugin_verify_failed")
+    removed_legacy_plugins: list[str] = []
     legacy = next((item for item in plugins if item.get("pluginId") == CODEX_LEGACY_PLUGIN), None)
-    if legacy is not None and legacy.get("enabled") is True:
-        _set_codex_plugin_enabled(CODEX_LEGACY_PLUGIN, False)
-        disabled.append(CODEX_LEGACY_PLUGIN)
+    if legacy is not None:
+        _run_codex("codex_plugin_remove_failed", "plugin", "remove", CODEX_LEGACY_PLUGIN, "--json")
+        removed_legacy_plugins.append(CODEX_LEGACY_PLUGIN)
+    if removed_legacy_plugins and any(
+        item.get("pluginId") == CODEX_LEGACY_PLUGIN for item in _codex_plugins()
+    ):
+        raise ManagementError("codex_plugin_remove_incomplete")
     return {
         "codex": "initialized",
         "marketplace": CODEX_MARKETPLACE,
         "source": str(stable),
-        "disabledLegacyPlugins": disabled,
+        "removedLegacyPlugins": removed_legacy_plugins,
         "newSessionRequired": True,
     }
 
@@ -667,6 +732,13 @@ def _init_all() -> dict[str, object]:
         else:
             initialized = initializers[agent]()
             result[agent] = {"status": "initialized", "source": initialized["source"]}
+            for key in (
+                "removedLegacySources",
+                "disabledProjectLegacySources",
+                "removedLegacyPlugins",
+            ):
+                if key in initialized:
+                    result[agent][key] = initialized[key]
             if initialized.get("newSessionRequired") is True:
                 result[agent]["newSessionRequired"] = True
     return result
@@ -1536,7 +1608,7 @@ def _doctor_claude() -> dict[str, object]:
                 installPath=str(install_path) if install_path is not None else None,
             )
         )
-    if legacy_marketplace is not None or legacy is not None:
+    if legacy is not None:
         legacy_path = (
             Path(legacy["installPath"])
             if isinstance(legacy, dict) and isinstance(legacy.get("installPath"), str)
@@ -1618,7 +1690,7 @@ def _doctor_codex() -> dict[str, object]:
                 installPath=str(install_path) if install_path is not None else None,
             )
         )
-    if legacy_marketplace is not None or legacy is not None:
+    if legacy is not None:
         legacy_source = legacy.get("source") if isinstance(legacy, dict) else None
         legacy_path = (
             Path(legacy_source["path"])
