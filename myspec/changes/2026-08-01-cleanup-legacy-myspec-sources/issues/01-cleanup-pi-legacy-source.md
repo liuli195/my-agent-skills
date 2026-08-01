@@ -22,5 +22,5 @@ GitHub issue #252
 - Red: Build and Verify（构建与验证）`verify.my-spec` failed because initialization still returned `disabledLegacySources` and retained the user legacy source.
 - Green: the same fast verification passed after the review fixes with 83 tests passed and 2 skipped in `verify.my-spec`.
 - User-entry smoke: a packed candidate ran against the real Pi（编码代理）client in an isolated HOME（用户目录）; `init --pi` removed the seeded legacy source and `doctor --pi` reported one enabled source, no disabled source, and no duplicate.
-- Review: initial Standards（规范）and Spec（规格）review found that cleanup preceded stable-source verification, failure/no-op command evidence was incomplete, and result names were vague. The first follow-up found that duplicate stable sources could still enable an unresolved entry. All findings were fixed and covered through the packed CLI seam. Final targeted follow-up pending.
+- Review: initial Standards（规范）and Spec（规格）review found that cleanup preceded stable-source verification, failure/no-op command evidence was incomplete, and result names were vague. The first follow-up found that duplicate stable sources could still enable an unresolved entry. All findings were fixed and covered through the packed CLI seam. Final targeted Standards（规范）and Spec（规格）follow-up found no unresolved or new issue.
 - Unresolved risk: none.
