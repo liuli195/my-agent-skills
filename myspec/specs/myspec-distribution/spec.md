@@ -116,6 +116,7 @@
 - **THEN** 系统 MUST 精确移除用户级旧 MySpec 来源或旧插件记录
 - **THEN** Pi 项目级旧来源 MUST 保留并禁用，不得删除项目配置
 - **THEN** Claude MUST 在卸载旧插件时保留该插件的持久数据
+- **THEN** Codex MUST 删除旧插件记录及其对应缓存，并保留无关缓存
 - **THEN** 系统 MUST NOT 删除共享市场、市场订阅、无关插件、源码目录或用户文件
 
 #### Scenario: 初始化未发现旧 MySpec 来源
@@ -162,6 +163,7 @@
 
 - **WHEN** Claude 或 Codex 仍登记共享市场，但该市场的旧 MySpec 插件记录不存在
 - **THEN** 诊断 MUST NOT 创建 Legacy MySpec Source（旧 MySpec 来源）记录或报告第二个已安装来源
+- **THEN** 诊断 MUST NOT 因残留缓存目录推导旧来源
 - **THEN** 共享市场 MUST 继续保留并可提供其他插件
 
 #### Scenario: 缺失安装仍保留配置事实
