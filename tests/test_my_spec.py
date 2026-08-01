@@ -1628,6 +1628,37 @@ def test_packed_myspec_pi_init_keeps_legacy_source_when_stable_source_is_unresol
     assert ["remove", legacy] not in calls
 
 
+def test_packed_myspec_pi_init_enables_a_verified_stable_duplicate_before_cleanup(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    unresolved_stable = os.path.relpath(installed_package, settings_path.parent)
+    env["MYSPEC_PI_LIST_SOURCE_ONLY"] = json.dumps([unresolved_stable])
+    legacy = str(REPO_ROOT / "plugins" / "my-spec")
+    write(
+        settings_path,
+        json.dumps(
+            {"packages": [unresolved_stable, str(installed_package), legacy]},
+            indent=2,
+        ),
+    )
+
+    initialized = run_cli(executable, "init", "--pi", env=env)
+
+    assert initialized.returncode == 0, initialized.stderr
+    assert json.loads(settings_path.read_text(encoding="utf-8"))["packages"] == [
+        {"source": unresolved_stable, "skills": []},
+        str(installed_package),
+    ]
+    report = json.loads(run_cli(executable, "doctor", "--pi", env=env).stdout)["pi"]
+    stable_sources = [source for source in report["sources"] if source["sourceKind"] == "stable"]
+    assert any(source["installed"] and source["enabled"] for source in stable_sources)
+
+
 def test_packed_myspec_doctor_keeps_enabled_intent_for_settings_source_missing_from_pi_list(
     tmp_path: Path,
 ) -> None:

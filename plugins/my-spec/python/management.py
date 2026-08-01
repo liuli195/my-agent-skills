@@ -355,8 +355,14 @@ def _configure_pi_sources(stable: Path) -> tuple[list[str], list[str]]:
         listed = _pi_list()
         sources = _pi_sources(listed)
         user_stable = [item for item in sources if item.scope == "user" and _myspec_source_kind(item, stable) == "stable"]
-    if not user_stable or not any(item.installed_path is not None for item in user_stable):
+    verified_user_stable = [
+        item
+        for item in user_stable
+        if item.installed_path is not None and not _pi_source_mismatch(item, stable)
+    ]
+    if not verified_user_stable:
         raise ManagementError("pi_install_missing_source")
+    primary_stable = verified_user_stable[0]
 
     removed_user_legacy_sources = list(dict.fromkeys(
         item.source
@@ -365,8 +371,8 @@ def _configure_pi_sources(stable: Path) -> tuple[list[str], list[str]]:
     ))
     disabled_project_legacy_sources: list[str] = []
     touched: dict[Path, dict[str, object]] = {}
-    for index, item in enumerate(user_stable):
-        _set_disabled(item, index > 0)
+    for item in user_stable:
+        _set_disabled(item, item is not primary_stable)
         touched[item.settings_path] = item.settings
     for item in sources:
         if item.scope == "project" and _myspec_source_kind(item, stable) == "legacy":
@@ -388,7 +394,14 @@ def _configure_pi_sources(stable: Path) -> tuple[list[str], list[str]]:
     ]
     if remaining:
         raise ManagementError(f"pi_remove_incomplete: {remaining[0]}")
-    if not any(item.installed_path is not None for item in current if item.scope == "user" and _myspec_source_kind(item, stable) == "stable"):
+    if not any(
+        item.scope == "user"
+        and _myspec_source_kind(item, stable) == "stable"
+        and item.installed_path is not None
+        and not _pi_source_mismatch(item, stable)
+        and _pi_source_enabled(item)
+        for item in current
+    ):
         raise ManagementError("pi_install_missing_source")
     return removed_user_legacy_sources, disabled_project_legacy_sources
 
