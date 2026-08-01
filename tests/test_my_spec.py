@@ -475,8 +475,9 @@ elif arguments[:2] == ["plugin", "uninstall"] and arguments[3:] == ["--scope", "
     if current is None:
         print("missing plugin", file=sys.stderr)
         raise SystemExit(1)
-    state["plugins"].remove(current)
-    save()
+    if os.environ.get("MYSPEC_CLAUDE_UNINSTALL_NOOP") != "1":
+        state["plugins"].remove(current)
+        save()
     if os.environ.get("MYSPEC_CLAUDE_FAIL_AFTER_UNINSTALL") == "1":
         print("simulated interruption after uninstall", file=sys.stderr)
         raise SystemExit(1)
@@ -2242,7 +2243,7 @@ def test_packed_myspec_keeps_project_legacy_sources_without_installed_paths(
         assert sources[source]["enabled"] is False
 
 
-def test_packed_myspec_initializes_and_diagnoses_claude_without_deleting_legacy(
+def test_packed_myspec_initializes_and_removes_claude_legacy_plugin(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
@@ -2292,6 +2293,14 @@ def test_packed_myspec_initializes_and_diagnoses_claude_without_deleting_legacy(
             indent=2,
         ),
     )
+    persistent_data = (
+        Path(env["MYSPEC_CLAUDE_HOME"])
+        / "plugins"
+        / "data"
+        / legacy_plugin["id"]
+        / "kept.txt"
+    )
+    write(persistent_data, "keep")
 
     initialized = run_cli(executable, "init", "--claude", env=env)
     assert initialized.returncode == 0, initialized.stderr
@@ -2299,7 +2308,7 @@ def test_packed_myspec_initializes_and_diagnoses_claude_without_deleting_legacy(
         "claude": "initialized",
         "marketplace": "myspec",
         "source": str(installed_package),
-        "disabledLegacyPlugins": ["my-spec@my-agent-skills-marketplace"],
+        "removedLegacyPlugins": ["my-spec@my-agent-skills-marketplace"],
         "reloadRequired": True,
     }
     state = json.loads(claude_state.read_text(encoding="utf-8"))
@@ -2307,10 +2316,27 @@ def test_packed_myspec_initializes_and_diagnoses_claude_without_deleting_legacy(
     assert len(state["marketplaces"]) == 3
     assert state["marketplaces"][2]["name"] == "myspec"
     plugins = {plugin["id"]: plugin for plugin in state["plugins"]}
-    assert plugins[legacy_plugin["id"]]["enabled"] is False
+    assert legacy_plugin["id"] not in plugins
     assert plugins[unrelated_plugin["id"]] == unrelated_plugin
     assert plugins["my-spec@myspec"]["enabled"] is True
     assert plugins["my-spec@myspec"]["version"] == PACKAGE_VERSION
+    assert persistent_data.read_text(encoding="utf-8") == "keep\n"
+    init_calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
+    assert [
+        "plugin",
+        "uninstall",
+        legacy_plugin["id"],
+        "--scope",
+        "user",
+        "--keep-data",
+    ] in init_calls
+
+    claude_log.write_text("", encoding="utf-8")
+    repeated = run_cli(executable, "init", "--claude", env=env)
+    assert repeated.returncode == 0, repeated.stderr
+    assert json.loads(repeated.stdout)["removedLegacyPlugins"] == []
+    repeat_calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
+    assert not any(call[:2] == ["plugin", "uninstall"] for call in repeat_calls)
 
     state_before = claude_state.read_bytes()
     claude_log.write_text("", encoding="utf-8")
@@ -2325,7 +2351,8 @@ def test_packed_myspec_initializes_and_diagnoses_claude_without_deleting_legacy(
     assert report["enabled"] is True
     assert report["duplicateEnabledSources"] is False
     assert report["enabledSources"] == ["my-spec@myspec"]
-    assert report["disabledSources"] == ["my-spec@my-agent-skills-marketplace"]
+    assert report["disabledSources"] == []
+    assert [source["sourceKind"] for source in report["sources"]] == ["stable"]
     assert report["skills"] == list(SKILL_NAMES)
     assert report["reloadRequired"] is True
     assert claude_state.read_bytes() == state_before
@@ -2334,14 +2361,77 @@ def test_packed_myspec_initializes_and_diagnoses_claude_without_deleting_legacy(
         ["plugin", "list", "--json"],
     ]
 
-    state["plugins"][0]["enabled"] = True
-    write(claude_state, json.dumps(state, indent=2))
-    duplicate = json.loads(run_cli(executable, "doctor", "--claude", env=env).stdout)["claude"]
-    assert duplicate["duplicateEnabledSources"] is True
-    assert duplicate["enabledSources"] == [
-        "my-spec@my-agent-skills-marketplace",
-        "my-spec@myspec",
-    ]
+
+def test_packed_myspec_claude_init_retries_incomplete_legacy_uninstall(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), claude_bin)
+    env.update(
+        {
+            "MYSPEC_CLAUDE_LOG": str(claude_log),
+            "MYSPEC_CLAUDE_STATE": str(claude_state),
+            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+        }
+    )
+    legacy = {
+        "id": "my-spec@my-agent-skills-marketplace",
+        "version": PREVIOUS_VERSION,
+        "scope": "user",
+        "enabled": False,
+        "installPath": str(tmp_path / "legacy-plugin"),
+    }
+    write(claude_state, json.dumps({"marketplaces": [], "plugins": [legacy]}, indent=2))
+
+    incomplete = run_cli(
+        executable,
+        "init",
+        "--claude",
+        env={**env, "MYSPEC_CLAUDE_UNINSTALL_NOOP": "1"},
+    )
+    assert incomplete.returncode == 1
+    assert "error: claude_plugin_uninstall_incomplete" in incomplete.stderr
+
+    retried = run_cli(executable, "init", "--claude", env=env)
+    assert retried.returncode == 0, retried.stderr
+    assert json.loads(retried.stdout)["removedLegacyPlugins"] == [legacy["id"]]
+
+
+def test_packed_myspec_claude_init_retries_interrupted_legacy_uninstall(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), claude_bin)
+    env.update(
+        {
+            "MYSPEC_CLAUDE_LOG": str(claude_log),
+            "MYSPEC_CLAUDE_STATE": str(claude_state),
+            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+        }
+    )
+    legacy = {
+        "id": "my-spec@my-agent-skills-marketplace",
+        "version": PREVIOUS_VERSION,
+        "scope": "user",
+        "enabled": True,
+        "installPath": str(tmp_path / "legacy-plugin"),
+    }
+    write(claude_state, json.dumps({"marketplaces": [], "plugins": [legacy]}, indent=2))
+
+    interrupted = run_cli(
+        executable,
+        "init",
+        "--claude",
+        env={**env, "MYSPEC_CLAUDE_FAIL_AFTER_UNINSTALL": "1"},
+    )
+    assert interrupted.returncode == 1
+    assert "claude_plugin_uninstall_failed: simulated interruption after uninstall" in interrupted.stderr
+
+    retried = run_cli(executable, "init", "--claude", env=env)
+    assert retried.returncode == 0, retried.stderr
+    assert json.loads(retried.stdout)["removedLegacyPlugins"] == []
 
 
 def test_packed_myspec_doctor_reports_claude_marketplace_source_mismatch_read_only(

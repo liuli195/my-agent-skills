@@ -516,24 +516,30 @@ def _init_claude() -> dict[str, object]:
     if not any(item.get("id") == CLAUDE_PLUGIN and item.get("enabled") is True for item in enabled):
         raise ManagementError("claude_plugin_enable_missing")
 
-    disabled: list[str] = []
+    removed_legacy_plugins: list[str] = []
     for item in enabled:
-        if item.get("id") == CLAUDE_LEGACY_PLUGIN and item.get("enabled") is True:
+        if item.get("id") == CLAUDE_LEGACY_PLUGIN:
             scope = item.get("scope") if isinstance(item.get("scope"), str) else "user"
             _run_claude(
-                "claude_plugin_disable_failed",
+                "claude_plugin_uninstall_failed",
                 "plugin",
-                "disable",
+                "uninstall",
                 CLAUDE_LEGACY_PLUGIN,
                 "--scope",
                 scope,
+                "--keep-data",
             )
-            disabled.append(CLAUDE_LEGACY_PLUGIN)
+            if CLAUDE_LEGACY_PLUGIN not in removed_legacy_plugins:
+                removed_legacy_plugins.append(CLAUDE_LEGACY_PLUGIN)
+    if removed_legacy_plugins and any(
+        item.get("id") == CLAUDE_LEGACY_PLUGIN for item in _claude_plugins()
+    ):
+        raise ManagementError("claude_plugin_uninstall_incomplete")
     return {
         "claude": "initialized",
         "marketplace": CLAUDE_MARKETPLACE,
         "source": str(stable),
-        "disabledLegacyPlugins": disabled,
+        "removedLegacyPlugins": removed_legacy_plugins,
         "reloadRequired": True,
     }
 
@@ -1568,7 +1574,7 @@ def _doctor_claude() -> dict[str, object]:
                 installPath=str(install_path) if install_path is not None else None,
             )
         )
-    if legacy_marketplace is not None or legacy is not None:
+    if legacy is not None:
         legacy_path = (
             Path(legacy["installPath"])
             if isinstance(legacy, dict) and isinstance(legacy.get("installPath"), str)
