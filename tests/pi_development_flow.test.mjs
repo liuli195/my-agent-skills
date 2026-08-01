@@ -63,11 +63,32 @@ test("primary stages declare dependencies and their gate state before execution"
     documents["requirements.md"],
     /## MUST — Dependencies（依赖）/,
   );
+  assert.match(requirementsDependencies, /`codebase-design`/);
   assert.match(requirementsDependencies, /`grill-with-docs`/);
   assert.match(requirementsDependencies, /`domain-modeling`/);
   assert.match(requirementsDependencies, /`to-spec`/);
   assert.match(requirementsDependencies, /`to-tickets`/);
   assert.match(requirementsDependencies, /MUST NOT.*`grilling`/);
+  assert.ok(
+    requirementsDependencies.indexOf("`codebase-design`")
+      < requirementsDependencies.indexOf("`grill-with-docs`"),
+    "requirements must design before grilling",
+  );
+  assert.match(
+    requirementsDependencies,
+    /Before invoking `to-spec` or `to-tickets`[^]*current-session tool-call evidence that `codebase-design`, `grill-with-docs`, and `domain-modeling` were read/,
+  );
+
+  const requirements = documents["requirements.md"];
+  assert.match(
+    requirements,
+    /Direction Confirmation.*not a formal gate[^]*does not publish artifacts or authorize implementation or delivery/is,
+  );
+  assert.match(requirements, /only.*unresolved.*detail/i);
+  assert.match(
+    requirements,
+    /Return to the overall design proposal when an answer changes the scope, Module（模块）, Interface（接口）, Seam（接缝）, highest public test seam, or Flow Level（流程等级）; otherwise continue with the unresolved detail\./,
+  );
 
   const implementationDependencies = section(
     documents["implementation.md"],
@@ -151,6 +172,8 @@ test("initialization and resume route through the four gates without MUST blocks
   const resume = await readFile(resolve(skillRoot, "references", "resume.md"), "utf8");
 
   assert.doesNotMatch(initialization, /^## MUST/m);
+  assert.match(initialization, /`codebase-design`/);
+  assert.match(initialization, /`grilling`/);
   assert.match(initialization, /not a fifth.*gate/i);
   assert.match(initialization, /return.*same gate/i);
   assert.match(initialization, /formal entr/i);
@@ -388,6 +411,7 @@ test("Pi discovers the local Development Flow package with disclosed references"
     assert.equal(skill.sourceInfo.source, pluginRoot);
     assert.equal(skill.disableModelInvocation, false);
     assert.match(skill.description, /development change/i);
+    assert.match(skill.description, /design-first requirements/i);
     assert.match(formatSkillsForPrompt([skill]), /<name>pi-development-flow<\/name>/);
 
     const content = await readFile(resolve(skillRoot, "SKILL.md"), "utf8");
