@@ -8,11 +8,19 @@ GitHub issue #252
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** implemented
 
-- [ ] Packed `myspec init --pi` removes only detected user-level legacy sources through the Pi command interface.
-- [ ] Project-level legacy sources remain in project settings and are disabled.
-- [ ] Unrelated packages and the independent MySpec source remain unchanged and enabled.
-- [ ] An already-clean state succeeds without a removal call and reports empty removal results.
-- [ ] A failed or incomplete detected removal returns nonzero and a retry can converge.
-- [ ] Packed CLI verification covers observable settings, command calls, result fields, and doctor output.
+- [x] Packed `myspec init --pi` removes only detected user-level legacy sources through the Pi command interface.
+- [x] Project-level legacy sources remain in project settings and are disabled.
+- [x] Unrelated packages and the independent MySpec source remain unchanged and enabled.
+- [x] An already-clean state succeeds without a removal call and reports empty removal results.
+- [x] A failed or incomplete detected removal returns nonzero and a retry can converge.
+- [x] Packed CLI verification covers observable settings, command calls, result fields, and doctor output.
+
+## Evidence
+
+- Red: Build and Verify（构建与验证）`verify.my-spec` failed because initialization still returned `disabledLegacySources` and retained the user legacy source.
+- Green: the same fast verification passed with 80 tests passed and 2 skipped in `verify.my-spec`.
+- User-entry smoke: a packed candidate ran against the real Pi（编码代理）client in an isolated HOME（用户目录）; `init --pi` removed the seeded legacy source and `doctor --pi` reported one enabled source, no disabled source, and no duplicate.
+- Review: pending.
+- Unresolved risk: none.

@@ -344,7 +344,7 @@ def _set_disabled(item: PiSource, disabled: bool) -> None:
         current.pop("autoload", None)
 
 
-def _configure_pi_sources(stable: Path) -> list[str]:
+def _configure_pi_sources(stable: Path) -> tuple[list[str], list[str]]:
     listed = _pi_list()
     sources = _pi_sources(listed)
     user_stable = [item for item in sources if item.scope == "user" and _myspec_source_kind(item, stable) == "stable"]
@@ -358,32 +358,51 @@ def _configure_pi_sources(stable: Path) -> list[str]:
     if not user_stable:
         raise ManagementError("pi_install_missing_source")
 
-    disabled: list[str] = []
+    removed = list(dict.fromkeys(
+        item.source
+        for item in sources
+        if item.scope == "user" and _myspec_source_kind(item, stable) == "legacy"
+    ))
+    disabled_project: list[str] = []
     touched: dict[Path, dict[str, object]] = {}
     for index, item in enumerate(user_stable):
         _set_disabled(item, index > 0)
         touched[item.settings_path] = item.settings
     for item in sources:
-        if _myspec_source_kind(item, stable) == "legacy":
-            disabled.append(item.source)
+        if item.scope == "project" and _myspec_source_kind(item, stable) == "legacy":
+            disabled_project.append(item.source)
             _set_disabled(item, True)
             touched[item.settings_path] = item.settings
     for path, settings in touched.items():
         _atomic_json(path, settings)
+    for source in removed:
+        result = _run("pi", "remove", source)
+        if result.returncode != 0:
+            raise ManagementError(f"pi_remove_failed: {result.stderr.strip()}")
     listed = _pi_list()
-    if not any(item.installed_path is not None for item in _pi_sources(listed) if item.scope == "user" and _myspec_source_kind(item, stable) == "stable"):
+    current = _pi_sources(listed)
+    remaining = [
+        item.source
+        for item in current
+        if item.scope == "user" and _myspec_source_kind(item, stable) == "legacy"
+    ]
+    if remaining:
+        raise ManagementError(f"pi_remove_incomplete: {remaining[0]}")
+    if not any(item.installed_path is not None for item in current if item.scope == "user" and _myspec_source_kind(item, stable) == "stable"):
         raise ManagementError("pi_install_missing_source")
-    return disabled
+    return removed, disabled_project
 
 
 def _init_pi() -> dict[str, object]:
     if shutil.which("pi") is None:
         raise ManagementError("missing_command: pi")
     stable = _stable_package_root()
+    removed, disabled_project = _configure_pi_sources(stable)
     return {
         "pi": "initialized",
         "source": str(stable),
-        "disabledLegacySources": _configure_pi_sources(stable),
+        "removedLegacySources": removed,
+        "disabledProjectLegacySources": disabled_project,
         "reloadRequired": True,
     }
 

@@ -334,6 +334,13 @@ if sys.argv[1:2] == ["install"]:
     user_settings.parent.mkdir(parents=True, exist_ok=True)
     user_settings.write_text(json.dumps(settings, indent=2) + "\\n", encoding="utf-8")
     raise SystemExit(0)
+if sys.argv[1:2] == ["remove"]:
+    settings = load(user_settings)
+    raw = sys.argv[2]
+    if os.environ.get("MYSPEC_PI_REMOVE_NOOP") != "1":
+        settings["packages"] = [item for item in settings.get("packages", []) if source(item) != raw]
+        user_settings.write_text(json.dumps(settings, indent=2) + "\\n", encoding="utf-8")
+    raise SystemExit(0)
 if sys.argv[1:2] == ["list"]:
     paths = [("User packages:", user_settings)]
     if project_trusted():
@@ -1522,12 +1529,14 @@ def test_packed_myspec_initializes_and_diagnoses_one_pi_source(tmp_path: Path) -
     env["MYSPEC_PI_LOG"] = str(pi_log)
     settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
     legacy = str(REPO_ROOT / "plugins" / "my-spec")
+    unrelated = str(tmp_path / "unrelated")
     write(
         settings_path,
         json.dumps(
             {
                 "packages": [
                     legacy,
+                    unrelated,
                     {"source": str(installed_package), "skills": [], "autoload": False},
                 ]
             },
@@ -1541,14 +1550,12 @@ def test_packed_myspec_initializes_and_diagnoses_one_pi_source(tmp_path: Path) -
     assert result == {
         "pi": "initialized",
         "source": str(installed_package),
-        "disabledLegacySources": [legacy],
+        "removedLegacySources": [legacy],
+        "disabledProjectLegacySources": [],
         "reloadRequired": True,
     }
     settings = json.loads(settings_path.read_text(encoding="utf-8"))
-    assert settings["packages"] == [
-        {"source": legacy, "skills": []},
-        {"source": str(installed_package)},
-    ]
+    assert settings["packages"] == [unrelated, {"source": str(installed_package)}]
 
     settings_before = settings_path.read_bytes()
     diagnosed = run_cli(executable, "doctor", "--pi", env=env)
@@ -1566,13 +1573,14 @@ def test_packed_myspec_initializes_and_diagnoses_one_pi_source(tmp_path: Path) -
     }
     assert report["pi"]["registered"] is True
     assert report["pi"]["enabledSources"] == [str(installed_package)]
-    assert report["pi"]["disabledSources"] == [legacy]
+    assert report["pi"]["disabledSources"] == []
     assert report["pi"]["duplicateEnabledSources"] is False
     assert report["pi"]["skills"] == list(SKILL_NAMES)
     assert report["pi"]["listedSources"]
     assert settings_path.read_bytes() == settings_before
     assert [json.loads(line)["args"] for line in pi_log.read_text(encoding="utf-8").splitlines()] == [
         ["list"],
+        ["remove", legacy],
         ["list"],
         ["list"],
     ]
@@ -1866,6 +1874,8 @@ def test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_f
 
     initialized = run_cli(executable, "init", "--pi", env=env, cwd=project)
     assert initialized.returncode == 0, initialized.stderr
+    assert json.loads(initialized.stdout)["removedLegacySources"] == []
+    assert json.loads(initialized.stdout)["disabledProjectLegacySources"] == [legacy_relative]
     assert json.loads(user_settings.read_text(encoding="utf-8"))["packages"] == [stable_relative]
     assert json.loads(project_settings.read_text(encoding="utf-8"))["packages"] == [
         {"source": stable_project_relative, "skills": []},
@@ -1992,7 +2002,7 @@ def test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest(
     assert filtered["pi"]["skills"] == ["my-spec", "my-spec-add", "my-spec-audit"]
 
 
-def test_packed_myspec_disables_only_exact_legacy_pi_sources(tmp_path: Path) -> None:
+def test_packed_myspec_removes_only_exact_user_legacy_pi_sources(tmp_path: Path) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
     prefix = npm_prefix_for(installed_package)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
@@ -2012,11 +2022,37 @@ def test_packed_myspec_disables_only_exact_legacy_pi_sources(tmp_path: Path) -> 
 
     result = run_cli(executable, "init", "--pi", env=env)
     assert result.returncode == 0, result.stderr
-    packages = json.loads(settings_path.read_text(encoding="utf-8"))["packages"]
-    assert packages[:2] == sources[:2]
-    assert packages[-1] == sources[-1]
-    assert packages[2:-1] == [
-        {"source": source, "skills": []} for source in sources[2:-1]
+    assert json.loads(result.stdout)["removedLegacySources"] == sources[2:-1]
+    assert json.loads(settings_path.read_text(encoding="utf-8"))["packages"] == [
+        *sources[:2],
+        sources[-1],
+    ]
+
+
+def test_packed_myspec_pi_init_retries_incomplete_legacy_removal(tmp_path: Path) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    legacy = str(REPO_ROOT / "plugins" / "my-spec")
+    write(settings_path, json.dumps({"packages": [str(installed_package), legacy]}, indent=2))
+
+    incomplete = run_cli(
+        executable,
+        "init",
+        "--pi",
+        env={**env, "MYSPEC_PI_REMOVE_NOOP": "1"},
+    )
+    assert incomplete.returncode == 1
+    assert f"error: pi_remove_incomplete: {legacy}" in incomplete.stderr
+    assert legacy in json.loads(settings_path.read_text(encoding="utf-8"))["packages"]
+
+    retried = run_cli(executable, "init", "--pi", env=env)
+    assert retried.returncode == 0, retried.stderr
+    assert json.loads(retried.stdout)["removedLegacySources"] == [legacy]
+    assert json.loads(settings_path.read_text(encoding="utf-8"))["packages"] == [
+        str(installed_package)
     ]
 
 
