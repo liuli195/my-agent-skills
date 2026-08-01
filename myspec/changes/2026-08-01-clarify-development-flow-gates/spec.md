@@ -8,7 +8,7 @@ Development Flow（开发流程）已经定义四个门禁等待点，但阶段�
 
 在 Requirements（需求）、Implementation（实施）和 Delivery（交付）参考文档开头分别增加 `MUST — Dependencies（依赖）` 与 `MUST — Gate（门禁）`。依赖块声明准确 Skill、加载时机、失败行为和恢复位置；每个门禁声明使用条件、上一依赖门禁、检查清单、待用户确认内容清单和下一步门禁。
 
-Requirements 通过门禁 1 完成；Implementation 通过门禁 2 进入；完成实施、验证和审查后，通过门禁 3 进入 Delivery；Delivery 在正式规格确认后通过门禁 4 执行 PR（拉取请求）交付。Initialization（初始化）和 Resume（恢复）暂不增加 MUST（必须）块，只在正文补充依赖、授权、门禁返回和恢复规则。
+Requirements 通过门禁 1：完成 Requirements（需求）结束；Implementation 通过门禁 2：进入 Implementation（实施）开始；完成实施、验证和审查后，通过门禁 3：进入 Delivery（交付）；Delivery 在正式规格确认后通过门禁 4：授权 PR（拉取请求）交付。Initialization（初始化）和 Resume（恢复）暂不增加 MUST（必须）块，只在正文补充依赖、授权、门禁返回和恢复规则。
 
 ## User Stories
 
@@ -18,9 +18,9 @@ Requirements 通过门禁 1 完成；Implementation 通过门禁 2 进入；完�
 4. 作为 Development Flow 使用者，我希望每个门禁列出检查清单，以便确认进入或完成阶段所需证据。
 5. 作为 Development Flow 使用者，我希望每个门禁列出必须向用户展示的待确认内容，以免用模糊问题获得授权。
 6. 作为需求确认者，我希望需求、测试接缝和纵向票据获批并发布后，Requirements 阶段才完成。
-7. 作为实施授权者，我希望门禁 1 通过并展示完整实施计划后，门禁 2 才允许进入 Implementation。
-8. 作为交付使用者，我希望实施、验证和审查完成后，门禁 3 才允许进入 Delivery。
-9. 作为交付授权者，我希望 Delivery 中的正式 MySpec（自有规格）差异获批并通过校验后，门禁 4 才允许执行推送、PR 创建或更新、合并及最终清理。
+7. 作为实施授权者，我希望门禁 1：完成 Requirements（需求）通过并展示完整实施计划后，门禁 2：进入 Implementation（实施）才允许通过。
+8. 作为交付使用者，我希望实施、验证和审查完成后，门禁 3：进入 Delivery（交付）才允许通过。
+9. 作为交付授权者，我希望 Delivery 中的正式 MySpec（自有规格）差异获批并通过校验后，门禁 4：授权 PR（拉取请求）交付才允许通过。
 10. 作为初始化使用者，我希望初始化授权不会被记作第五个开发门禁，也不会代替原门禁。
 11. 作为恢复流程使用者，我希望 Resume 根据已有证据识别上一已通过门禁、当前待确认门禁和下一步门禁。
 12. 作为维护者，我希望契约检查能发现依赖块、门禁字段、阶段归属或状态转移缺失。
@@ -56,10 +56,10 @@ Requirements 通过门禁 1 完成；Implementation 通过门禁 2 进入；完�
 
 ### 四个门禁状态
 
-- 门禁 1 是 Requirements 的完成门禁。它没有上一正式门禁；用户批准需求产物，并且获批产物已经发布、提交且工作树干净后，才能转入门禁 2。
-- 门禁 2 是 Implementation 的进入门禁。它依赖门禁 1；通过只表示允许开始实施。只有票据、验证和审查达到完成条件后，才能进入门禁 3。
-- 门禁 3 是 Delivery 的进入门禁。它依赖门禁 2；Implementation 的票据、风险匹配验证、快速验证和整体审查全部达到完成条件后，才能进入 Delivery 的正式规格处理。
-- 门禁 4 是 Delivery 内的 PR 交付授权门禁。它依赖门禁 3；用户批准完整 MySpec 差异，并且差异成功应用和校验后，才能执行推送、PR 创建或更新、合并及最终清理。门禁 4 没有下一正式门禁；Development Flow 最终完成仍要求 PR 实际合并、目标分支同步和安全清理完成。
+- 门禁 1：完成 Requirements（需求）没有上一正式门禁；用户批准需求产物，并且获批产物已经发布、提交且工作树干净后，才能转入门禁 2：进入 Implementation（实施）。
+- 门禁 2：进入 Implementation（实施）依赖门禁 1：完成 Requirements（需求）；通过只表示允许开始实施。只有票据、验证和审查达到完成条件后，才能进入门禁 3：进入 Delivery（交付）。
+- 门禁 3：进入 Delivery（交付）依赖门禁 2：进入 Implementation（实施）；Implementation 的票据、风险匹配验证、快速验证和整体审查全部达到完成条件后，才能进入 Delivery 的正式规格处理。
+- 门禁 4：授权 PR（拉取请求）交付依赖门禁 3：进入 Delivery（交付）；用户批准完整 MySpec 差异，并且差异成功应用和校验后，才能执行推送、PR 创建或更新、合并及最终清理。门禁 4：授权 PR 交付没有下一正式门禁；Development Flow 最终完成仍要求 PR 实际合并、目标分支同步和安全清理完成。
 
 ### Initialization（初始化）与 Resume（恢复）
 
@@ -72,10 +72,10 @@ Requirements 通过门禁 1 完成；Implementation 通过门禁 2 进入；完�
 
 - 扩展现有 Pi Development Flow 契约检查，验证 Requirements、Implementation 和 Delivery 在正文前包含两个统一 MUST 块。
 - 契约检查验证每个正式门禁包含使用条件、上一依赖门禁、检查清单、待用户确认内容清单和下一步门禁。
-- 契约检查验证门禁 1 至门禁 4 的阶段归属、顺序和状态转移条件。
+- 契约检查验证四个带编号和名称的门禁之阶段归属、顺序和状态转移条件。
 - 契约检查验证 Initialization 和 Resume 没有新增 MUST 块，但正文包含对应依赖、授权、返回和恢复规则。
-- 最高公开测试接缝是在临时 Git（版本管理）仓库启动新的 Pi 进程，加载本地 Development Flow 包，并在缺少门禁 2 实施授权时请求修改。
-- 真实冒烟必须证明流程停止、报告从门禁 2 恢复，并且 Git 状态保持不变。
+- 最高公开测试接缝是在临时 Git（版本管理）仓库启动新的 Pi 进程，加载本地 Development Flow 包，并在缺少门禁 2：进入 Implementation（实施）的授权时请求修改。
+- 真实冒烟必须证明流程停止、报告从门禁 2：进入 Implementation（实施）恢复，并且 Git 状态保持不变。
 - 所有正式检查通过 Build and Verify 入口运行。
 
 ## Out of Scope
