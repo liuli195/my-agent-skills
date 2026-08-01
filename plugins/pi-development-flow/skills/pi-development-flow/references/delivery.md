@@ -12,7 +12,7 @@ If an exact required Skill（技能） is missing, unreadable, fails to load, or
 
 #### Usage Condition（使用条件）
 
-Use this entry gate after implementation, proportional verification, fast verification, and the bounded overall review are complete, and before starting Delivery（交付） work, including the formal MySpec（自有规格） process.
+Use this gate after implementation, proportional verification, fast verification, and the bounded overall review are complete, and when `my-spec-add`（新增自有规格） has generated and validated the complete formal MySpec（自有规格） preview difference and is waiting for its final confirmation.
 
 #### Previous Gate（上一依赖门禁）
 
@@ -26,20 +26,20 @@ Confirm that:
 - every acceptance criterion and ticket is complete;
 - proportional and fast verification pass;
 - the bounded overall review has no unresolved blocker;
-- the Delivery plan identifies the formal specification and PR（拉取请求） entries;
-- no Delivery action has started.
+- `my-spec-add` has presented the complete preview difference and reached its final confirmation;
+- no PR（拉取请求） delivery action has started.
 
-If any check fails, preserve the implementation artifacts and return to Implementation rather than entering Delivery.
+If an implementation check fails, preserve the artifacts and return to Implementation. If `my-spec-add` stops or requires a decision, preserve its artifacts and continue from that Skill（技能）'s reported recovery point.
 
 #### Confirmation Output（待用户确认内容清单）
 
-Present the completed tickets and acceptance criteria, behavior evidence, verification results, review result, known risks, and the planned formal specification and PR（拉取请求） entries. Explicitly ask whether the user approves entering Delivery. Implementation authorization or passing checks is not confirmation of Gate 3 — Enter Delivery.
+Gate 3 is the final confirmation required by `my-spec-add`（新增自有规格） for its complete preview difference. Use that Skill（技能）'s confirmation exactly; do not add a second confirmation, exception, or recovery procedure. Implementation authorization or passing checks is not confirmation of Gate 3 — Enter Delivery.
 
-Without explicit confirmation, do not start the formal specification or any other Delivery action; report Gate 3 — Enter Delivery as the resume point.
+Without that confirmation, do not apply the formal specification difference; report the `my-spec-add` recovery point and Gate 3 — Enter Delivery as the resume point.
 
 #### Next Gate（下一步门禁）
 
-Gate 4 — Authorize PR Delivery（授权 PR 交付）. After Gate 3 — Enter Delivery passes, run `my-spec-add`（新增自有规格） and obtain its required confirmation. Gate 4 is reached only after the approved formal specification difference is applied and validated successfully.
+Gate 4 — Authorize PR Delivery（授权 PR 交付）. Gate 3 passes only after `my-spec-add`（新增自有规格） atomically applies and validates the approved formal specification difference successfully.
 
 ### Gate 4 — Authorize PR Delivery（授权 PR 交付）
 
@@ -75,7 +75,7 @@ There is no next formal gate. After Gate 4 — Authorize PR Delivery passes, con
 
 ## Formal specification（正式规格）
 
-After the bounded overall review and its fixes pass proportional verification, run `my-spec-add` against the verified external behavior. Follow its conflict decisions, complete diff, validation, and final user-confirmation gates. Formal specifications are not part of the earlier code-review scope. Run the relevant fast validation after applying the approved specification difference.
+After the bounded overall review and its fixes pass proportional verification, run `my-spec-add`（新增自有规格） against the verified external behavior. Let that Skill（技能） own its conflict decisions, complete difference, validation, final confirmation, application, and recovery. Its final confirmation is Gate 3 — Enter Delivery（进入交付）. Formal specifications are not part of the earlier code-review scope. Run the relevant fast validation after the approved specification difference is applied and validated.
 
 ## PR delivery（拉取请求交付）
 

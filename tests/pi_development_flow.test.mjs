@@ -131,7 +131,12 @@ test("the four gates form the required stage state machine", async () => {
     /\n### Gate |\n## /,
   );
   assert.match(gate3, /Gate 2 — Enter Implementation[^]*Gate 4 — Authorize PR Delivery/);
-  assert.match(gate3, /After Gate 3 — Enter Delivery passes, run `my-spec-add`/);
+  assert.match(gate3, /`my-spec-add`[^]*final confirmation/is);
+  assert.match(
+    gate3,
+    /Gate 3 passes only after[^]*appl(?:y|ies|ication)[^]*validat/is,
+  );
+  assert.doesNotMatch(gate3, /After Gate 3 — Enter Delivery passes, run `my-spec-add`/);
   assert.match(
     section(delivery, /### Gate 4 — Authorize PR Delivery/, /\n### Gate |\n## /),
     /Gate 3 — Enter Delivery[^]*(?:no next formal gate|no further formal gate)/i,
@@ -386,6 +391,11 @@ test("Pi discovers the local Development Flow package with disclosed references"
     assert.match(formatSkillsForPrompt([skill]), /<name>pi-development-flow<\/name>/);
 
     const content = await readFile(resolve(skillRoot, "SKILL.md"), "utf8");
+    assert.match(content, /Gate 3 — Enter Delivery[^]*`my-spec-add`/is);
+    assert.match(
+      content,
+      /Gate 3 passes only after[^]*appl(?:y|ies|ication)[^]*validat/is,
+    );
     for (const name of references) {
       await access(resolve(skillRoot, "references", name));
       assert.match(content, new RegExp(`references/${name.replace(".", "\\.")}`));

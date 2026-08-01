@@ -21,7 +21,7 @@ Keep four numbered and named decisions distinct:
 
 1. **Gate 1 — Complete Requirements（完成需求）.** Approve requirements, test seams, and tickets before publishing the change artifacts.
 2. **Gate 2 — Enter Implementation（进入实施）.** Approve the concrete implementation plan before code or behavior changes.
-3. **Gate 3 — Enter Delivery（进入交付）.** After implementation, review, and verification complete, approve the formal MySpec（自有规格） difference through `my-spec-add` to enter Delivery（交付）.
+3. **Gate 3 — Enter Delivery（进入交付）.** After implementation, review, and verification complete, use the final `my-spec-add`（新增自有规格） confirmation to approve the formal MySpec（自有规格） difference. Gate 3 passes only after that Skill（技能） applies and validates the difference, then enters Gate 4.
 4. **Gate 4 — Authorize PR Delivery（授权 PR 交付）.** After the formal specification is valid, approve push, PR creation or update, merge, and final cleanup.
 
 At any failed gate, preserve the current artifacts and report the exact resume entry.

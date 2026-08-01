@@ -115,8 +115,8 @@
 
 #### Scenario: 进入交付阶段
 
-- **WHEN** Gate 2 — Enter Implementation 已通过，并且所有票据、行为证据、风险匹配验证、快速验证和整体审查达到实施完成条件
-- **THEN** 系统通过 Gate 3 — Enter Delivery 展示实施结果、验证证据、审查结果、已知风险和交付入口，并等待独立确认；通过后才开始正式 MySpec（自有规格）处理
+- **WHEN** Gate 2 — Enter Implementation 已通过，并且所有票据、行为证据、风险匹配验证和整体审查达到实施完成条件，`my-spec-add`（新增自有规格）已生成并校验完整正式 MySpec（自有规格）预览差异且等待最终确认
+- **THEN** 系统把该技能的最终确认作为 Gate 3 — Enter Delivery，并且只在该技能原子应用和校验差异成功后才使 Gate 3 通过并进入 Gate 4
 
 #### Scenario: 授权 PR 交付
 
