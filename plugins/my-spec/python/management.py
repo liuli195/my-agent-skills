@@ -732,6 +732,13 @@ def _init_all() -> dict[str, object]:
         else:
             initialized = initializers[agent]()
             result[agent] = {"status": "initialized", "source": initialized["source"]}
+            for key in (
+                "removedLegacySources",
+                "disabledProjectLegacySources",
+                "removedLegacyPlugins",
+            ):
+                if key in initialized:
+                    result[agent][key] = initialized[key]
             if initialized.get("newSessionRequired") is True:
                 result[agent]["newSessionRequired"] = True
     return result

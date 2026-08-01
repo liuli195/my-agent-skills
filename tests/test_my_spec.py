@@ -2588,7 +2588,11 @@ def test_packed_myspec_requires_explicit_claude_but_all_initializes_detected_cla
     assert initialized.returncode == 0, initialized.stderr
     assert json.loads(initialized.stdout) == {
         "pi": {"status": "skipped", "reason": "missing_command: pi"},
-        "claude": {"status": "initialized", "source": str(installed_package)},
+        "claude": {
+            "status": "initialized",
+            "source": str(installed_package),
+            "removedLegacyPlugins": [],
+        },
         "codex": {"status": "skipped", "reason": "missing_command: codex"},
     }
     assert any(
@@ -2881,9 +2885,108 @@ def test_packed_myspec_requires_explicit_codex_but_all_initializes_detected_code
         "codex": {
             "status": "initialized",
             "source": str(installed_package),
+            "removedLegacyPlugins": [],
             "newSessionRequired": True,
         },
     }
+
+
+def test_packed_myspec_init_all_removes_legacy_plugins_and_doctor_reports_stable_sources(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
+    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
+    env = isolated_myspec_env(
+        tmp_path,
+        npm_prefix_for(installed_package),
+        pi_bin,
+        claude_bin,
+        codex_bin,
+    )
+    legacy_id = "my-spec@my-agent-skills-marketplace"
+    env.update(
+        {
+            "MYSPEC_PI_LOG": str(pi_log),
+            "MYSPEC_CLAUDE_LOG": str(claude_log),
+            "MYSPEC_CLAUDE_STATE": str(claude_state),
+            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
+            "MYSPEC_CODEX_LOG": str(codex_log),
+            "MYSPEC_CODEX_STATE": str(codex_state),
+        }
+    )
+    write(
+        Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
+        json.dumps({"packages": [str(installed_package), str(PLUGIN_ROOT)]}, indent=2),
+    )
+    claude_legacy_market = {
+        "name": "my-agent-skills-marketplace",
+        "source": "github",
+        "repo": "liuli195/my-agent-skills",
+        "installLocation": str(tmp_path / "claude-legacy-market"),
+    }
+    write(
+        claude_state,
+        json.dumps(
+            {
+                "marketplaces": [claude_legacy_market],
+                "plugins": [
+                    {
+                        "id": legacy_id,
+                        "version": PREVIOUS_VERSION,
+                        "scope": "user",
+                        "enabled": True,
+                        "installPath": str(tmp_path / "claude-legacy-plugin"),
+                    }
+                ],
+            },
+            indent=2,
+        ),
+    )
+    codex_legacy_market = {
+        "name": "my-agent-skills-marketplace",
+        "root": str(tmp_path / "codex-legacy-market"),
+        "marketplaceSource": {"sourceType": "git", "source": "https://example.invalid/legacy.git"},
+    }
+    write(
+        codex_state,
+        json.dumps(
+            {
+                "marketplaces": [codex_legacy_market],
+                "installed": [
+                    {
+                        "pluginId": legacy_id,
+                        "name": "my-spec",
+                        "marketplaceName": "my-agent-skills-marketplace",
+                        "version": PREVIOUS_VERSION,
+                        "installed": True,
+                        "source": {"source": "local", "path": str(tmp_path / "codex-legacy-plugin")},
+                    }
+                ],
+                "available": [],
+            },
+            indent=2,
+        ),
+    )
+    write(Path(env["CODEX_HOME"]) / "config.toml", f'[plugins."{legacy_id}"]\nenabled = true\n')
+
+    initialized = run_cli(executable, "init", "--all", env=env)
+
+    assert initialized.returncode == 0, initialized.stderr
+    output = json.loads(initialized.stdout)
+    assert output["pi"]["removedLegacySources"] == [str(PLUGIN_ROOT)]
+    assert output["pi"]["disabledProjectLegacySources"] == []
+    assert output["claude"]["removedLegacyPlugins"] == [legacy_id]
+    assert output["codex"]["removedLegacyPlugins"] == [legacy_id]
+    assert json.loads(claude_state.read_text(encoding="utf-8"))["marketplaces"][0] == claude_legacy_market
+    assert json.loads(codex_state.read_text(encoding="utf-8"))["marketplaces"][0] == codex_legacy_market
+
+    doctor = json.loads(run_cli(executable, "doctor", "--all", env=env).stdout)
+    for agent in ("pi", "claude", "codex"):
+        assert [source["sourceKind"] for source in doctor[agent]["sources"]] == ["stable"]
+        assert doctor[agent]["disabledSources"] == []
 
 
 def test_packed_myspec_package_contains_single_codex_marketplace_and_four_skills(
