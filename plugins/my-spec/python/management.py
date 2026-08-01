@@ -355,27 +355,27 @@ def _configure_pi_sources(stable: Path) -> tuple[list[str], list[str]]:
         listed = _pi_list()
         sources = _pi_sources(listed)
         user_stable = [item for item in sources if item.scope == "user" and _myspec_source_kind(item, stable) == "stable"]
-    if not user_stable:
+    if not user_stable or not any(item.installed_path is not None for item in user_stable):
         raise ManagementError("pi_install_missing_source")
 
-    removed = list(dict.fromkeys(
+    removed_user_legacy_sources = list(dict.fromkeys(
         item.source
         for item in sources
         if item.scope == "user" and _myspec_source_kind(item, stable) == "legacy"
     ))
-    disabled_project: list[str] = []
+    disabled_project_legacy_sources: list[str] = []
     touched: dict[Path, dict[str, object]] = {}
     for index, item in enumerate(user_stable):
         _set_disabled(item, index > 0)
         touched[item.settings_path] = item.settings
     for item in sources:
         if item.scope == "project" and _myspec_source_kind(item, stable) == "legacy":
-            disabled_project.append(item.source)
+            disabled_project_legacy_sources.append(item.source)
             _set_disabled(item, True)
             touched[item.settings_path] = item.settings
     for path, settings in touched.items():
         _atomic_json(path, settings)
-    for source in removed:
+    for source in removed_user_legacy_sources:
         result = _run("pi", "remove", source)
         if result.returncode != 0:
             raise ManagementError(f"pi_remove_failed: {result.stderr.strip()}")
@@ -390,19 +390,19 @@ def _configure_pi_sources(stable: Path) -> tuple[list[str], list[str]]:
         raise ManagementError(f"pi_remove_incomplete: {remaining[0]}")
     if not any(item.installed_path is not None for item in current if item.scope == "user" and _myspec_source_kind(item, stable) == "stable"):
         raise ManagementError("pi_install_missing_source")
-    return removed, disabled_project
+    return removed_user_legacy_sources, disabled_project_legacy_sources
 
 
 def _init_pi() -> dict[str, object]:
     if shutil.which("pi") is None:
         raise ManagementError("missing_command: pi")
     stable = _stable_package_root()
-    removed, disabled_project = _configure_pi_sources(stable)
+    removed_user_legacy_sources, disabled_project_legacy_sources = _configure_pi_sources(stable)
     return {
         "pi": "initialized",
         "source": str(stable),
-        "removedLegacySources": removed,
-        "disabledProjectLegacySources": disabled_project,
+        "removedLegacySources": removed_user_legacy_sources,
+        "disabledProjectLegacySources": disabled_project_legacy_sources,
         "reloadRequired": True,
     }
 

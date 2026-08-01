@@ -335,6 +335,9 @@ if sys.argv[1:2] == ["install"]:
     user_settings.write_text(json.dumps(settings, indent=2) + "\\n", encoding="utf-8")
     raise SystemExit(0)
 if sys.argv[1:2] == ["remove"]:
+    if os.environ.get("MYSPEC_PI_REMOVE_FAIL") == "1":
+        print("simulated remove failure", file=sys.stderr)
+        raise SystemExit(1)
     settings = load(user_settings)
     raw = sys.argv[2]
     if os.environ.get("MYSPEC_PI_REMOVE_NOOP") != "1":
@@ -1601,6 +1604,30 @@ def test_packed_myspec_initializes_and_diagnoses_one_pi_source(tmp_path: Path) -
     assert stable_source["enabled"] is True
 
 
+def test_packed_myspec_pi_init_keeps_legacy_source_when_stable_source_is_unresolved(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    env["MYSPEC_PI_LIST_SOURCE_ONLY"] = json.dumps([str(installed_package)])
+    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    legacy = str(REPO_ROOT / "plugins" / "my-spec")
+    write(settings_path, json.dumps({"packages": [str(installed_package), legacy]}, indent=2))
+
+    initialized = run_cli(executable, "init", "--pi", env=env)
+
+    assert initialized.returncode == 1
+    assert "error: pi_install_missing_source" in initialized.stderr
+    assert json.loads(settings_path.read_text(encoding="utf-8"))["packages"] == [
+        str(installed_package),
+        legacy,
+    ]
+    calls = [json.loads(line)["args"] for line in pi_log.read_text(encoding="utf-8").splitlines()]
+    assert ["remove", legacy] not in calls
+
+
 def test_packed_myspec_doctor_keeps_enabled_intent_for_settings_source_missing_from_pi_list(
     tmp_path: Path,
 ) -> None:
@@ -1887,6 +1914,7 @@ def test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_f
         else []
     )
     assert not any(call[:1] == ["install"] for call in calls)
+    assert not any(call[:1] == ["remove"] for call in calls)
 
     report = json.loads(run_cli(executable, "doctor", "--pi", env=env, cwd=project).stdout)
     assert report["pi"]["registered"] is True
@@ -2054,6 +2082,30 @@ def test_packed_myspec_pi_init_retries_incomplete_legacy_removal(tmp_path: Path)
     assert json.loads(settings_path.read_text(encoding="utf-8"))["packages"] == [
         str(installed_package)
     ]
+
+
+def test_packed_myspec_pi_init_retries_failed_legacy_removal(tmp_path: Path) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), pi_bin)
+    env["MYSPEC_PI_LOG"] = str(pi_log)
+    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    legacy = str(REPO_ROOT / "plugins" / "my-spec")
+    write(settings_path, json.dumps({"packages": [str(installed_package), legacy]}, indent=2))
+
+    failed = run_cli(
+        executable,
+        "init",
+        "--pi",
+        env={**env, "MYSPEC_PI_REMOVE_FAIL": "1"},
+    )
+    assert failed.returncode == 1
+    assert "error: pi_remove_failed: simulated remove failure" in failed.stderr
+    assert legacy in json.loads(settings_path.read_text(encoding="utf-8"))["packages"]
+
+    retried = run_cli(executable, "init", "--pi", env=env)
+    assert retried.returncode == 0, retried.stderr
+    assert json.loads(retried.stdout)["removedLegacySources"] == [legacy]
 
 
 def test_packed_myspec_doctor_reports_duplicate_enabled_pi_sources(tmp_path: Path) -> None:
