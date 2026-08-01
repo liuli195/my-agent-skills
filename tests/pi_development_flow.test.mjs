@@ -26,19 +26,135 @@ const references = [
   "resume.md",
 ];
 
-test("requirements stop unless the exact discussion skills are loaded", async () => {
-  const requirements = await readFile(
-    resolve(skillRoot, "references", "requirements.md"),
+function section(text, start, end = /\n## /) {
+  const offset = text.search(start);
+  assert.notEqual(offset, -1, `missing ${start}`);
+  const tail = text.slice(offset);
+  const endOffset = tail.slice(1).search(end);
+  return endOffset === -1 ? tail : tail.slice(0, endOffset + 1);
+}
+
+const gateFields = [
+  "Usage Condition（使用条件）",
+  "Previous Gate（上一依赖门禁）",
+  "Checks（检查清单）",
+  "Confirmation Output（待用户确认内容清单）",
+  "Next Gate（下一步门禁）",
+];
+
+test("primary stages declare dependencies and their gate state before execution", async () => {
+  const documents = Object.fromEntries(await Promise.all(
+    ["requirements.md", "implementation.md", "delivery.md"].map(async (name) => [
+      name,
+      await readFile(resolve(skillRoot, "references", name), "utf8"),
+    ]),
+  ));
+
+  for (const [name, text] of Object.entries(documents)) {
+    const dependenciesAt = text.indexOf("## MUST — Dependencies（依赖）");
+    const gateAt = text.indexOf("## MUST — Gate（门禁）");
+    const firstOrdinarySectionAt = text.search(/\n## (?!MUST)/);
+    assert.ok(dependenciesAt > 0, `${name} is missing its dependencies block`);
+    assert.ok(gateAt > dependenciesAt, `${name} is missing its gate block`);
+    assert.ok(gateAt < firstOrdinarySectionAt, `${name} declares its gate after execution starts`);
+  }
+
+  const requirementsDependencies = section(
+    documents["requirements.md"],
+    /## MUST — Dependencies（依赖）/,
+  );
+  assert.match(requirementsDependencies, /`grill-with-docs`/);
+  assert.match(requirementsDependencies, /`domain-modeling`/);
+  assert.match(requirementsDependencies, /`to-spec`/);
+  assert.match(requirementsDependencies, /`to-tickets`/);
+  assert.match(requirementsDependencies, /MUST NOT.*`grilling`/);
+
+  const implementationDependencies = section(
+    documents["implementation.md"],
+    /## MUST — Dependencies（依赖）/,
+  );
+  assert.match(implementationDependencies, /`tdd`/);
+  assert.match(implementationDependencies, /`build-and-verify`/);
+  assert.match(implementationDependencies, /`code-review`/);
+  assert.match(implementationDependencies, /`pi-subagent-policy`.*delegat/is);
+
+  const deliveryDependencies = section(
+    documents["delivery.md"],
+    /## MUST — Dependencies（依赖）/,
+  );
+  assert.match(deliveryDependencies, /`my-spec-add`/);
+  assert.match(deliveryDependencies, /`pr-flow-complete`/);
+  assert.match(deliveryDependencies, /`pr-flow-tweak`/);
+  assert.match(deliveryDependencies, /`resolving-merge-conflicts`/);
+});
+
+test("the four gates form the required stage state machine", async () => {
+  const skill = await readFile(resolve(skillRoot, "SKILL.md"), "utf8");
+  for (const name of [
+    "Gate 1 — Complete Requirements（完成需求）",
+    "Gate 2 — Enter Implementation（进入实施）",
+    "Gate 3 — Enter Delivery（进入交付）",
+    "Gate 4 — Authorize PR Delivery（授权 PR 交付）",
+  ]) assert.match(skill, new RegExp(name));
+
+  const ownership = [
+    ["requirements.md", 1, "Complete Requirements"],
+    ["implementation.md", 2, "Enter Implementation"],
+    ["delivery.md", 3, "Enter Delivery"],
+    ["delivery.md", 4, "Authorize PR Delivery"],
+  ];
+
+  for (const [name, number, gateName] of ownership) {
+    const text = await readFile(resolve(skillRoot, "references", name), "utf8");
+    const gate = section(
+      text,
+      new RegExp(`### Gate ${number} — ${gateName}[^\\n]*`),
+      /\n### Gate |\n## /,
+    );
+    for (const field of gateFields) assert.match(gate, new RegExp(`#### ${field}`));
+  }
+
+  const requirements = await readFile(resolve(skillRoot, "references", "requirements.md"), "utf8");
+  const implementation = await readFile(resolve(skillRoot, "references", "implementation.md"), "utf8");
+  const delivery = await readFile(resolve(skillRoot, "references", "delivery.md"), "utf8");
+  assert.match(
+    section(requirements, /### Gate 1 — Complete Requirements/, /\n### Gate |\n## /),
+    /Gate 2 — Enter Implementation/,
+  );
+  assert.match(
+    section(implementation, /### Gate 2 — Enter Implementation/, /\n### Gate |\n## /),
+    /Gate 1 — Complete Requirements[^]*Gate 3 — Enter Delivery/,
+  );
+  const gate3 = section(
+    delivery,
+    /### Gate 3 — Enter Delivery/,
+    /\n### Gate |\n## /,
+  );
+  assert.match(gate3, /Gate 2 — Enter Implementation[^]*Gate 4 — Authorize PR Delivery/);
+  assert.match(gate3, /After Gate 3 — Enter Delivery passes, run `my-spec-add`/);
+  assert.match(
+    section(delivery, /### Gate 4 — Authorize PR Delivery/, /\n### Gate |\n## /),
+    /Gate 3 — Enter Delivery[^]*(?:no next formal gate|no further formal gate)/i,
+  );
+});
+
+test("initialization and resume route through the four gates without MUST blocks", async () => {
+  const initialization = await readFile(
+    resolve(skillRoot, "references", "initialization.md"),
     "utf8",
   );
-  const mustBlock = requirements.match(/## MUST[^]*?(?=\n## )/)?.[0];
+  const resume = await readFile(resolve(skillRoot, "references", "resume.md"), "utf8");
 
-  assert.ok(mustBlock, "missing requirements MUST block");
-  assert.match(mustBlock, /`grill-with-docs`/);
-  assert.match(mustBlock, /`domain-modeling`/);
-  assert.match(mustBlock, /MUST NOT.*`grilling`/);
-  assert.match(mustBlock, /stop/i);
-  assert.match(mustBlock, /tool-call evidence/i);
+  assert.doesNotMatch(initialization, /^## MUST/m);
+  assert.match(initialization, /not a fifth.*gate/i);
+  assert.match(initialization, /return.*same gate/i);
+  assert.match(initialization, /formal entr/i);
+
+  assert.doesNotMatch(resume, /^## MUST/m);
+  assert.match(resume, /previous passed gate/i);
+  assert.match(resume, /current gate.*next gate/i);
+  assert.match(resume, /stage document.*dependencies/i);
+  assert.match(resume, /continue.*resume.*not.*authoriz/is);
 });
 
 test("implementation keeps direct work optional and delegated work ticket-scoped", async () => {

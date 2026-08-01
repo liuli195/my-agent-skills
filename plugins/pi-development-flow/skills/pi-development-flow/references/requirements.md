@@ -1,15 +1,47 @@
 # Requirements（需求）
 
-## MUST — Exact discussion Skills（准确讨论技能）
+## MUST — Dependencies（依赖）
 
-Before any single-session requirements discussion:
+Before any single-session requirements discussion, read `grill-with-docs` in the current session, then read and use `domain-modeling` as required by that Skill（技能）. MUST NOT substitute ordinary `grilling` for `grill-with-docs`.
 
-- read `grill-with-docs` in the current session;
-- read and use `domain-modeling` as required by that Skill（技能）;
-- MUST NOT substitute ordinary `grilling` for `grill-with-docs`;
-- stop and report the blocker when either required Skill is unavailable or cannot be read.
+Before invoking `to-spec` or `to-tickets`, read the exact Skill and confirm current-session tool-call evidence that `grill-with-docs` and `domain-modeling` were read. Read `wayfinder` only when dependent decisions require its multi-session route. Do not replace this evidence with a self-reported flag or state file.
 
-Before invoking `to-spec` or `to-tickets`, confirm current-session tool-call evidence that both required Skills were read. Do not replace this evidence with a self-reported flag or state file.
+If a required Skill is missing, unreadable, fails to load, or is replaced by another entry, stop and report the blocker, preserved requirement artifacts, and Gate 1 — Complete Requirements（完成需求） as the resume point.
+
+## MUST — Gate（门禁）
+
+### Gate 1 — Complete Requirements（完成需求）
+
+#### Usage Condition（使用条件）
+
+Use this completion gate after the domain terms, highest public test seam, specification, and vertical tickets are drafted, and before publishing requirement artifacts.
+
+#### Previous Gate（上一依赖门禁）
+
+There is no previous formal gate. Development Flow（开发流程）starts with requirements discussion.
+
+#### Checks（检查清单）
+
+Confirm that:
+
+- the domain terms are resolved;
+- the highest public test seam is agreed;
+- the specification and vertical tickets are agreed;
+- every blocking edge is genuine;
+- the proposed change name, branch, and worktree layout are clear;
+- no requirement artifact has been published or committed without this confirmation.
+
+If any check fails, preserve the drafts and stop at Gate 1 — Complete Requirements（完成需求）.
+
+#### Confirmation Output（待用户确认内容清单）
+
+Present the complete specification, test seam, ticket breakdown and blocking edges, proposed change name, branch, and worktree. Explicitly ask whether the user approves completing Requirements and publishing those artifacts. Approval of one detail or a request to continue investigation is not approval of Gate 1 — Complete Requirements（完成需求）.
+
+Without explicit confirmation, report the preserved drafts and Gate 1 — Complete Requirements（完成需求） as the resume point.
+
+#### Next Gate（下一步门禁）
+
+Gate 2 — Enter Implementation（进入实施）. Gate 1 — Complete Requirements（完成需求） passes only after the approved requirement artifacts are published, committed, and the change worktree is clean.
 
 ## Flow Level（流程等级）
 
@@ -37,7 +69,7 @@ During discussion, retain confirmed domain terms in the conversation. Publish th
 
 1. Confirm the highest public test seam through `to-spec`.
 2. Use `to-tickets` to draft tracer-bullet vertical slices. Every ticket has an independently observable result, runnable verification, and only genuine blockers.
-3. Show the spec and ticket breakdown. After approval, create an ASCII-named change branch in `.worktrees/<change>/`, run the repository worktree initializer, and publish:
+3. After receiving the confirmation required by Gate 1 — Complete Requirements（完成需求）, create an ASCII-named change branch in `.worktrees/<change>/`, run the repository worktree initializer, and publish:
    - confirmed terms to the repository domain glossary;
    - the spec to `myspec/changes/<change>/spec.md`;
    - implementation tickets to `myspec/changes/<change>/issues/`.
