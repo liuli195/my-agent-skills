@@ -2362,6 +2362,39 @@ def test_packed_myspec_initializes_and_removes_claude_legacy_plugin(
     ]
 
 
+def test_packed_myspec_claude_init_keeps_legacy_when_stable_version_is_wrong(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), claude_bin)
+    env.update(
+        {
+            "MYSPEC_CLAUDE_LOG": str(claude_log),
+            "MYSPEC_CLAUDE_STATE": str(claude_state),
+            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+            "MYSPEC_CLAUDE_REPORTED_VERSION": "0.0.0",
+        }
+    )
+    legacy = {
+        "id": "my-spec@my-agent-skills-marketplace",
+        "version": PREVIOUS_VERSION,
+        "scope": "user",
+        "enabled": True,
+        "installPath": str(tmp_path / "legacy-plugin"),
+    }
+    write(claude_state, json.dumps({"marketplaces": [], "plugins": [legacy]}, indent=2))
+
+    initialized = run_cli(executable, "init", "--claude", env=env)
+
+    assert initialized.returncode == 1
+    assert "error: claude_plugin_verify_failed" in initialized.stderr
+    plugins = json.loads(claude_state.read_text(encoding="utf-8"))["plugins"]
+    assert any(plugin["id"] == legacy["id"] for plugin in plugins)
+    calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
+    assert not any(call[:2] == ["plugin", "uninstall"] for call in calls)
+
+
 def test_packed_myspec_claude_init_retries_incomplete_legacy_uninstall(
     tmp_path: Path,
 ) -> None:

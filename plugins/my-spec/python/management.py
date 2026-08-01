@@ -502,8 +502,8 @@ def _init_claude() -> dict[str, object]:
             CLAUDE_MARKETPLACE,
         )
         _run_claude("claude_plugin_update_failed", "plugin", "update", CLAUDE_PLUGIN, "--scope", scope)
-    enabled = _claude_plugins()
-    if not any(item.get("id") == CLAUDE_PLUGIN and item.get("enabled") is True for item in enabled):
+    current_plugins = _claude_plugins()
+    if not any(item.get("id") == CLAUDE_PLUGIN and item.get("enabled") is True for item in current_plugins):
         _run_claude(
             "claude_plugin_enable_failed",
             "plugin",
@@ -512,12 +512,23 @@ def _init_claude() -> dict[str, object]:
             "--scope",
             "user",
         )
-        enabled = _claude_plugins()
-    if not any(item.get("id") == CLAUDE_PLUGIN and item.get("enabled") is True for item in enabled):
-        raise ManagementError("claude_plugin_enable_missing")
+        current_plugins = _claude_plugins()
+    target = next((item for item in current_plugins if item.get("id") == CLAUDE_PLUGIN), None)
+    install_path = (
+        Path(target["installPath"])
+        if isinstance(target, dict) and isinstance(target.get("installPath"), str)
+        else None
+    )
+    if (
+        target is None
+        or target.get("enabled") is not True
+        or target.get("version") != _package_version()
+        or _myspec_manifest_version(install_path) != _package_version()
+    ):
+        raise ManagementError("claude_plugin_verify_failed")
 
     removed_legacy_plugins: list[str] = []
-    for item in enabled:
+    for item in current_plugins:
         if item.get("id") == CLAUDE_LEGACY_PLUGIN:
             scope = item.get("scope") if isinstance(item.get("scope"), str) else "user"
             _run_claude(
