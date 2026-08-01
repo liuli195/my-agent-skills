@@ -4,7 +4,7 @@
 
 ## Static Evidence（静态证据）
 
-先只读取仓库文件、已有配置和可用的 `.build-and-verify/runs/performance-report.json`（性能报告）。动态扫描命令的实际读取范围无法由静态证据确认，且候选命令探测能消除配置不确定性、成本可接受时，才建议探测。候选命令探测的确认、副作用和停止规则复用 `../build-and-verify-init/references/config-draft.md`（配置草案规则），不得在未确认时运行。
+先只读取仓库文件、已有配置和可用的 `.build-and-verify/runs/performance-report.json`（性能报告）。动态扫描命令的范围判断和候选命令探测完全复用 `../build-and-verify-init/references/config-draft.md`（配置草案规则）。
 
 ## Reasonableness Checks（合理性检查）
 
