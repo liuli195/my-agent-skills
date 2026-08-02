@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFile, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -142,10 +142,6 @@ async function verifyTicket(worktree: string, path: string) {
   const ticketRelative = relative(worktree, ticket);
   if (!/^myspec[\\/]changes[\\/][^\\/]+[\\/]issues[\\/][^\\/]+\.md$/i.test(ticketRelative)) {
     throw new Error("ticket_path must name one published ticket in the target worktree");
-  }
-  const content = await readFile(ticket, "utf8");
-  if (!/^(?:-\s*)?(?:状态：|Status:)\s*ready-for-agent\s*$/im.test(content)) {
-    throw new Error("ticket_path must have ready-for-agent status");
   }
   return ticketRelative;
 }

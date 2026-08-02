@@ -227,13 +227,9 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
       "01-marker.md",
     );
     await mkdir(dirname(ticketPath), { recursive: true });
-    await writeFile(ticketPath, "# 01 Marker\n\n- 状态：ready-for-agent\n", "utf8");
-    const invalidTicketPath = join(dirname(ticketPath), "02-not-ready.md");
-    await writeFile(
-      invalidTicketPath,
-      "# 02 Not ready\n\nThe old example says Status: ready-for-agent but this ticket is not ready.\n",
-      "utf8",
-    );
+    await writeFile(ticketPath, "# 01 Marker\n", "utf8");
+    const invalidTicketPath = join(worktree, "myspec", "changes", "smoke", "spec.md");
+    await writeFile(invalidTicketPath, "# Not a ticket\n", "utf8");
 
     const listeners = new Map();
     const tools = new Map();
@@ -343,7 +339,7 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
         undefined,
         { cwd: root },
       ),
-      /ready-for-agent status/i,
+      /published ticket/i,
     );
 
     completeSpawn = false;
