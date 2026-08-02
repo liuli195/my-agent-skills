@@ -50,9 +50,6 @@ TOOLCHAIN_TOOLS = {
     "build-and-verify": ("build-and-verify", "@liuli195/build-and-verify", "plugins/build-and-verify"),
 }
 OFFICIAL_TOOLCHAIN_REPOSITORY = "https://github.com/liuli195/my-agent-skills"
-SEMVER_RE = re.compile(
-    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|(?!0\d*(?:\.|$))[0-9A-Za-z-]+)(?:\.(?:0|[1-9]\d*|(?!0\d*(?:\.|$))[0-9A-Za-z-]+))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
-)
 HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 EXECUTING_SCRIPT = str(Path(__file__).resolve())
 
@@ -96,10 +93,25 @@ def toolchain_identities() -> dict[str, dict[str, str]]:
     return identities
 
 
+def valid_semver(version: str) -> bool:
+    core, has_build, build = version.partition("+")
+    if has_build and (not build or any(not identifier or not all(char.isascii() and (char.isalnum() or char == "-") for char in identifier) for identifier in build.split("."))):
+        return False
+    core, has_prerelease, prerelease = core.partition("-")
+    if has_prerelease:
+        for identifier in prerelease.split("."):
+            if not identifier or not all(char.isascii() and (char.isalnum() or char == "-") for char in identifier):
+                return False
+            if all("0" <= char <= "9" for char in identifier) and len(identifier) > 1 and identifier[0] == "0":
+                return False
+    parts = core.split(".")
+    return len(parts) == 3 and all(part and all("0" <= char <= "9" for char in part) and (len(part) == 1 or part[0] != "0") for part in parts)
+
+
 def valid_toolchain_identity(identity: dict[str, Any], package_directory: str) -> bool:
     if identity.get("mode") == "release":
         version = identity.get("packageVersion")
-        return isinstance(version, str) and SEMVER_RE.fullmatch(version) is not None
+        return isinstance(version, str) and valid_semver(version)
     return (
         identity.get("mode") == "dev"
         and identity.get("sourceRepository") == OFFICIAL_TOOLCHAIN_REPOSITORY

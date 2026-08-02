@@ -5708,6 +5708,44 @@ def test_complete_rereads_the_new_baseline_with_bounded_toolchain_retries(tmp_pa
     assert "1.0.2" in (project / ".pr-flow/toolchain.json").read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize(
+    "version",
+    [
+        "0.0.0",
+        "1.2.3-rc.1+build.09",
+        "1.2.3-0.alpha-1+001",
+    ],
+)
+def test_valid_toolchain_identity_accepts_strict_semver_release_versions(version: str) -> None:
+    identity = {"mode": "release", "packageVersion": version}
+
+    assert load_pr_flow_module().valid_toolchain_identity(identity, "plugins/my-spec")
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        "01.2.3",
+        "1.02.3",
+        "1.2.03",
+        "1.2.3-01",
+        "1.2.3-alpha..1",
+        "1.2.3+build..1",
+        "1.2.3-",
+    ],
+)
+def test_valid_toolchain_identity_rejects_invalid_release_versions(version: str) -> None:
+    identity = {"mode": "release", "packageVersion": version}
+
+    assert not load_pr_flow_module().valid_toolchain_identity(identity, "plugins/my-spec")
+
+
+def test_valid_toolchain_identity_rejects_an_overlong_malicious_release_version() -> None:
+    identity = {"mode": "release", "packageVersion": "1.2.3-" + "0" * 100_000 + "!"}
+
+    assert not load_pr_flow_module().valid_toolchain_identity(identity, "plugins/my-spec")
+
+
 def test_init_validates_release_and_dev_toolchain_identities_through_public_cli(tmp_path: Path) -> None:
     config = tmp_path / "config.yaml"
     config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
