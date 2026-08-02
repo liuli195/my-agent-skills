@@ -4,7 +4,7 @@
 
 **Blocked by（前置项）：** 01 — 统一工具生命周期与身份；03 — 将仓库自动化改用 Build and Verify CLI。
 
-**Status（状态）：** ready-for-agent
+**Status:** ready-for-agent
 
 - [ ] 本次选中的插件及其 npm（软件包管理器）包统一使用发布版本；未选中的包保留远端版本且不发布。
 - [ ] 每个选中包从当前发布提交打包、隔离快速验证，并只发布已验证候选的对应 Tarball（npm 包文件）。

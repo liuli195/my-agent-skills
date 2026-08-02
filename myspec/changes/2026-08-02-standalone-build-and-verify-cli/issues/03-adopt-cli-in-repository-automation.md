@@ -4,7 +4,7 @@
 
 **Blocked by（前置项）：** 01 — 统一工具生命周期与身份；02 — 迁移 Build and Verify 旧运行时。
 
-**Status（状态）：** ready-for-agent
+**Status:** ready-for-agent
 
 - [ ] 本仓库受管自动化和用户入口改用新 CLI（命令行程序）；调用方转换不改变既有构建、快速验证或完整验证选择语义。
 - [ ] Build and Verify、Plugin Sync（插件同步）和 Release Flow（发布流程）的运行时快照契约被最小替换，没有并行旧入口。

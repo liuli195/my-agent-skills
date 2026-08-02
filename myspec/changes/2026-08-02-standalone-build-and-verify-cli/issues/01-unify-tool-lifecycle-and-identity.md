@@ -4,7 +4,7 @@
 
 **Blocked by（前置项）：** None — can start immediately（无，可立即开始）。
 
-**Status（状态）：** ready-for-agent
+**Status:** ready-for-agent
 
 - [ ] 两个包独立安装、独立版本演进，且都可从其 CLI（命令行程序）管理 Pi、Claude、Codex 的受管资源。
 - [ ] 发布版和源码版身份均可由只读 `doctor`（诊断）机器读取；源码身份包含官方来源、完整提交和固定包目录。
