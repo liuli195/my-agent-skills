@@ -46,8 +46,20 @@ jobs:
           echo "MYSPEC_TEST_TARBALL=$RUNNER_TEMP/$tarball" >> "$GITHUB_ENV"
           "$prefix/bin/myspec" --help
 
+      - name: Install current Build and Verify package
+        shell: bash
+        run: |
+          tarball="$(python plugins/tool-lifecycle/pack.py build-and-verify "$RUNNER_TEMP")"
+          prefix="$RUNNER_TEMP/build-and-verify-prefix"
+          npm install -g --prefix "$prefix" --ignore-scripts --no-audit --no-fund "$tarball"
+          echo "$prefix/bin" >> "$GITHUB_PATH"
+          "$prefix/bin/build-and-verify" --help
+
+      - name: Run candidate quick verification
+        run: build-and-verify verify --project .
+
       - name: Run full verification
-        run: python .build-and-verify/runtime/build_and_verify.py verify --project . --full
+        run: node plugins/build-and-verify/bin/build-and-verify.js verify --project . --full
 
   windows-worktree-smoke:
     name: Windows worktree smoke
@@ -76,8 +88,17 @@ jobs:
           git worktree add --detach .worktrees/smoke HEAD
           ./.worktrees/smoke/scripts/setup-worktree.ps1
 
+      - name: Install current Build and Verify package
+        shell: pwsh
+        run: |
+          $prefix = Join-Path $env:RUNNER_TEMP "build-and-verify-prefix"
+          $tarball = python plugins/tool-lifecycle/pack.py build-and-verify $env:RUNNER_TEMP
+          npm install --global --prefix $prefix --ignore-scripts --no-audit --no-fund $tarball
+          $prefix >> $env:GITHUB_PATH
+          & (Join-Path $prefix "build-and-verify.cmd") --help
+
       - name: Build from linked worktree
         shell: pwsh
         run: |
           . ./.worktrees/smoke/.venv/Scripts/Activate.ps1
-          python .worktrees/smoke/.build-and-verify/runtime/build_and_verify.py build --project .worktrees/smoke
+          build-and-verify build --project .worktrees/smoke

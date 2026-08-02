@@ -9,7 +9,7 @@ Use this skill when the user asks to initialize（初始化）, generate（生�
 
 ## Hard Boundaries（硬边界）
 
-- 不新增命令行初始化脚本；最终写入必须调用 `build-and-verify`（构建与验证）现有 `scripts/build_and_verify.py init --config --overwrite`（初始化覆盖命令），由 runtime（运行时）负责配置写入、备份、`.gitignore`（忽略规则）合并、runtime（运行时）复制和 cache（缓存）创建。
+- 不新增命令行初始化脚本；最终写入必须调用已安装的 `build-and-verify init --config --overwrite`（初始化覆盖命令），由 CLI（命令行程序）负责配置写入、备份、`.gitignore`（忽略规则）合并和 cache（缓存）创建。
 - 不安装依赖，不写用户级配置，不配置 CI（持续集成）。
 - 不修改 runner（运行器）语义。
 - 用户沉默不能视为确认。
@@ -33,7 +33,7 @@ Use this skill when the user asks to initialize（初始化）, generate（生�
 4. inputs（缓存输入）默认由 agent（代理）根据 paths（受影响路径）和 command（命令）来源推导；动态扫描范围和必要候选命令探测按 `config-draft.md`（配置草案规则）处理，并在最终写入确认摘要中展示。
 5. 覆盖已有配置时自动使用 `.build-and-verify/backups/config-YYYYMMDD-HHMMSS.json`（备份配置文件），不单独询问备份路径。
 6. 最终写入确认前，读取 `references/validation.md`（校验规则），执行 targeted dependency checks（定向依赖检查）和 environment checks（环境检查），展示问题、影响和建议。
-7. 最终写入时，先把用户确认的草案保存为临时 confirmed config（已确认配置），再调用 `python <build-and-verify-script> init --project <repo> --config <confirmed-config> --overwrite`（初始化覆盖命令）。不得由 agent（代理）直接写 `.build-and-verify/config.json`（配置文件）。
+7. 最终写入时，先把用户确认的草案保存为临时 confirmed config（已确认配置），再调用 `build-and-verify init --project <repo> --config <confirmed-config> --overwrite`（初始化覆盖命令）。不得由 agent（代理）直接写 `.build-and-verify/config.json`（配置文件）。
 8. 写入后按 `references/validation.md`（校验规则）执行 config（配置）结构校验。
 
 ## Output（输出）

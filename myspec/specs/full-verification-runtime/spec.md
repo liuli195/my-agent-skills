@@ -41,19 +41,6 @@ Build-and-verify（构建与验证）tests SHALL（必须）preserve verify sele
 - **WHEN** build-and-verify（构建与验证）tests are optimized or renamed
 - **THEN** verify selection（验证选择）, cache behavior（缓存行为）, full mode（完整模式）, failure reporting（失败报告）, and serial fallback（串行兜底） behavior MUST remain covered
 - **THEN** full mode（完整模式） MUST NOT skip required checks（检查项） because of cache hits（缓存命中）
-### Requirement: Full verification has a local runtime target
-Full repository end-to-end verification SHALL（必须）complete in under 60 seconds on the local development machine while preserving the existing behavior coverage. This repository-level target is distinct from any narrower plugin test-suite target. The current full verification command for this repository SHALL（必须）be `python plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py verify --project . --full` unless a later MySpec（自有规格）change explicitly replaces it.
-
-#### Scenario: Full repository verification completes under target
-- **WHEN** a developer runs the full repository verification command
-- **THEN** the command MUST complete in under 60 seconds on the local development machine
-- **THEN** the command MUST run all configured verify checks（验证检查项） from `.build-and-verify/config.json`, including the repository's Python（Python 语言）test checks
-- **THEN** this repository-level target MUST NOT redefine a narrower target for the Build and Verify（构建与验证）plugin's own test suite
-
-#### Scenario: Runtime evidence is recorded
-- **WHEN** full repository verification is optimized
-- **THEN** the verification report MUST include before and after timing evidence
-- **THEN** the evidence MUST identify the largest remaining contributors if the command is still close to the target
 ### Requirement: Optimization strategy applies across the repository
 The repository SHALL（必须）apply both the repo-native test optimization layer and the build-and-verify（构建与验证） parallel execution layer across the full configured verification suite where safe, rather than special-casing one slow test file. Parallel execution SHALL（必须）be coordinated by the build-and-verify（构建与验证）runner（运行器）.
 
@@ -86,3 +73,16 @@ The repository SHALL（必须）apply both the repo-native test optimization lay
 - **THEN** the runner（运行器） MUST run that pytest command with pytest-xdist（Pytest 并行插件） workers
 - **THEN** the runner（运行器） MUST treat missing pytest-xdist（Pytest 并行插件） as a failed check（检查项）
 - **THEN** `checkParallel`（检查项间并行） MUST NOT by itself imply pytest-xdist（Pytest 并行插件） usage
+### Requirement: Full verification has a local runtime target
+Full repository end-to-end verification SHALL（必须）complete in under 60 seconds on the local development machine while preserving the existing behavior coverage. This repository-level target is distinct from any narrower plugin test-suite target. The current full verification command for this repository SHALL（必须）be `build-and-verify verify --project . --full` unless a later MySpec（自有规格）change explicitly replaces it.
+
+#### Scenario: Full repository verification completes under target
+- **WHEN** a developer runs the full repository verification command
+- **THEN** the command MUST complete in under 60 seconds on the local development machine
+- **THEN** the command MUST run all configured verify checks（验证检查项） from `.build-and-verify/config.json`, including the repository's Python（Python 语言）test checks
+- **THEN** this repository-level target MUST NOT redefine a narrower target for the Build and Verify（构建与验证）plugin's own test suite
+
+#### Scenario: Runtime evidence is recorded
+- **WHEN** full repository verification is optimized
+- **THEN** the verification report MUST include before and after timing evidence
+- **THEN** the evidence MUST identify the largest remaining contributors if the command is still close to the target

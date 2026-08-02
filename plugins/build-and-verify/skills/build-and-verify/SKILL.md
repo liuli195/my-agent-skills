@@ -14,29 +14,21 @@ Use this skill when this repository needs build（构建检查） or verify（�
 - 不写用户级配置。
 - 不配置 CI（持续集成）。
 - 不内置仓库业务逻辑。
-- `init`（初始化）和 `update-runtime`（更新运行时）复制同一套 runtime（运行时）到 `.build-and-verify/runtime/`。
-- build（构建检查）和 verify（验证）只提示 runtime（运行时）版本落后，不自动更新仓库文件。
+- `init`（初始化）只写入项目配置；`build-and-verify` CLI（命令行程序）是唯一运行入口。
 - 默认 verify（验证）使用 fast（快速）模式。
 - `--full`（完整）只允许 PR Flow hotfix（拉取请求流程热修复）直推流程和 PR CI（拉取请求持续集成）使用；其它情况禁止使用完整模式，除非用户明确说明原因并确认。
 
 ## 命令示例
 
 ```bash
-python scripts/build_and_verify.py init --project .
-python scripts/build_and_verify.py update-runtime --project .
-python scripts/build_and_verify.py build --project .
-python scripts/build_and_verify.py verify --project .
-python scripts/build_and_verify.py verify --project . --full
-python scripts/build_and_verify.py verify --project . --full --performance-report
+build-and-verify init --project .
+build-and-verify build --project .
+build-and-verify verify --project .
+build-and-verify verify --project . --full
+build-and-verify verify --project . --full --performance-report
 ```
 
-仓库稳定入口可从 `.build-and-verify/runtime/` 调用：
-
-```bash
-python .build-and-verify/runtime/build_and_verify.py verify --project .
-```
-
-用户级安装时，由 agent（代理）使用当前 Skill（技能）所在目录调用同一个 `scripts/build_and_verify.py`。
+安装后的 `build-and-verify` CLI（命令行程序）直接运行当前项目配置。
 
 ## 配置语义
 

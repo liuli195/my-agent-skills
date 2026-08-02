@@ -56,7 +56,7 @@ def test_release_flow_skill_boundary_prohibits_remote_governance_changes_without
     assert "只能输出 remote tasks（远端待办）" in text
 
 
-def test_release_flow_workflow_template_installs_pyyaml() -> None:
+def test_release_flow_workflow_template_installs_repository_dependencies() -> None:
     workflow = (
         PLUGIN_ROOT
         / "skills"
@@ -68,8 +68,9 @@ def test_release_flow_workflow_template_installs_pyyaml() -> None:
         / "release.yml"
     ).read_text(encoding="utf-8")
 
-    assert "Install release-flow dependencies" in workflow
-    assert "python -m pip install PyYAML" in workflow
+    assert "Install dependencies" in workflow
+    assert "python -m pip install -r source/requirements-dev.txt" in workflow
+    assert "npm ci --prefix source" in workflow
 
 
 def test_codex_release_flow_entry_is_generated_by_release_projection() -> None:

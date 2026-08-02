@@ -64,6 +64,18 @@ def load_pr_flow_module():
     return module
 
 
+@pytest.fixture(autouse=True)
+def stub_toolchain_identities(monkeypatch):
+    monkeypatch.setattr(
+        load_pr_flow_module(),
+        "toolchain_identities",
+        lambda: {
+            "myspec": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "0.1.55"},
+            "build-and-verify": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "0.1.56"},
+        },
+    )
+
+
 def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     module = load_pr_flow_module()
     stdout = io.StringIO()
@@ -225,7 +237,7 @@ def test_pr_flow_in_process_invocation_captures_output(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    result = invoke_pr_flow(["init", "--project", str(tmp_path), "--config", str(draft)])
+    result = invoke_pr_flow(["init", "--project", str(tmp_path), "--config", str(draft)], module=load_pr_flow_module())
 
     assert result.returncode == 0
     assert "status: initialized" in result.stdout
@@ -1717,6 +1729,8 @@ def write_confirmed_pr_flow_config(project: Path, config: dict | None = None) ->
     )
     result = run("init", "--project", str(project), "--config", str(draft))
     assert result.returncode == 0, result.stdout + result.stderr
+    (project / ".pr-flow" / "toolchain.json").unlink()
+    (project / ".github" / "workflows" / "pr-flow-toolchain.yml").unlink()
 
 
 def configure_complete(
@@ -1811,6 +1825,29 @@ def _create_hotfix_project(
     return project, remote, before_commit
 
 
+def test_init_records_toolchain_and_managed_workflow(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+
+    module = load_pr_flow_module()
+    project = tmp_path / "project"
+    project.mkdir()
+    draft = tmp_path / "confirmed.yaml"
+    draft.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
+    identities = {
+        "myspec": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "0.1.55"},
+        "build-and-verify": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "0.1.56"},
+    }
+    monkeypatch.setattr(module, "toolchain_identities", lambda: identities)
+
+    result = invoke_pr_flow(["init", "--project", str(project), "--config", str(draft)], module=module)
+
+    assert result.returncode == 0, result.stdout
+    assert json.loads((project / ".pr-flow" / "toolchain.json").read_text(encoding="utf-8"))["tools"] == identities
+    workflow = (project / ".github" / "workflows" / "pr-flow-toolchain.yml").read_text(encoding="utf-8")
+    assert "@liuli195/myspec@0.1.55" in workflow
+    assert "@liuli195/build-and-verify@0.1.56" in workflow
+
+
 def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -1834,7 +1871,7 @@ def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
     assert "evidencePath" not in config["defaults"]["reviewGate"]
     assert (
         config["defaults"]["hotfix"]["verifyCommand"]
-        == "python .build-and-verify/runtime/build_and_verify.py verify --project . --full"
+        == "build-and-verify verify --project . --full"
     )
     assert config["defaults"]["wait"] == {"timeoutSeconds": 600, "pollSeconds": 15}
     assert config["defaults"]["pr"]["bodyTemplatePath"] == ".pr-flow/pr-template.md"
@@ -2488,7 +2525,7 @@ def test_current_repo_hotfix_verify_command_uses_BUILD_AND_VERIFY_full() -> None
 
     assert (
         config["defaults"]["hotfix"]["verifyCommand"]
-        == "python .build-and-verify/runtime/build_and_verify.py verify --project . --full"
+        == "build-and-verify verify --project . --full"
     )
 
 
@@ -5527,3 +5564,218 @@ def test_cleanup_rejects_current_branch_mismatch(tmp_path: Path, monkeypatch) ->
     )
 
     assert_cleanup_exception(project, result, "current_branch_mismatch")
+
+
+def write_toolchain_cli(bin_dir: Path, reports: dict[str, dict[str, object]]) -> None:
+    bin_dir.mkdir()
+    for command, report in reports.items():
+        script = bin_dir / f"{command}.py"
+        script.write_text(
+            "\n".join((
+                "import json",
+                "from pathlib import Path",
+                f"reports = {report!r}",
+                "reports = reports if isinstance(reports, list) else [reports]",
+                "state = Path(__file__).with_suffix('.count')",
+                "index = int(state.read_text() if state.exists() else '0')",
+                "state.write_text(str(index + 1))",
+                "print(json.dumps(reports[min(index, len(reports) - 1)]))",
+            )) + "\n",
+            encoding="utf-8",
+        )
+        if os.name == "nt":
+            (bin_dir / f"{command}.cmd").write_text(
+                f'@echo off\n"{sys.executable}" "%~dp0{command}.py" %*\n', encoding="utf-8"
+            )
+        else:
+            launcher = bin_dir / command
+            launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$(dirname "$0")/{command}.py" "$@"\n', encoding="utf-8")
+            launcher.chmod(0o755)
+
+
+def run_public_pr_flow(bin_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    env = os.environ | {"PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", "")}
+    return subprocess.run([sys.executable, str(SCRIPT), *args], check=False, text=True, capture_output=True, env=env)
+
+
+def initialized_toolchain_project(tmp_path: Path, bin_dir: Path) -> Path:
+    project = tmp_path / "project"
+    project.mkdir()
+    for args in (["init"], ["config", "user.email", "test@example.invalid"], ["config", "user.name", "Test"]):
+        assert subprocess.run(["git", *args], cwd=project, check=False).returncode == 0
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
+    assert run_public_pr_flow(bin_dir, "init", "--project", str(project), "--config", str(config)).returncode == 0
+    assert subprocess.run(["git", "add", "."], cwd=project, check=False).returncode == 0
+    assert subprocess.run(["git", "commit", "-m", "baseline"], cwd=project, check=False).returncode == 0
+    return project
+
+
+def sync_through_public_complete(bin_dir: Path, project: Path) -> subprocess.CompletedProcess[str]:
+    return run_public_pr_flow(bin_dir, "complete", "--project", str(project), "--summary", "s", "--scope", "s")
+
+
+def test_complete_commits_only_changed_managed_file_through_public_cli(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    reports = {
+        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3"}},
+        "build-and-verify": {"toolchain": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "1.2.3"}},
+    }
+    write_toolchain_cli(bin_dir, reports)
+    project = initialized_toolchain_project(tmp_path, bin_dir)
+    workflow = project / ".github/workflows/pr-flow-toolchain.yml"
+    workflow.write_text("stale\n", encoding="utf-8")
+    assert subprocess.run(["git", "add", str(workflow.relative_to(project))], cwd=project, check=False).returncode == 0
+    assert subprocess.run(["git", "commit", "-m", "stale workflow"], cwd=project, check=False).returncode == 0
+
+    sync_through_public_complete(bin_dir, project)
+
+    changed = subprocess.run(["git", "show", "--format=", "--name-only", "HEAD"], cwd=project, check=False, text=True, capture_output=True)
+    assert changed.stdout.splitlines() == [".github/workflows/pr-flow-toolchain.yml"]
+    assert subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=project, check=False).returncode == 0
+
+
+def test_complete_refuses_dirty_tree_without_staging_managed_files_through_public_cli(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    reports = {
+        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3"}},
+        "build-and-verify": {"toolchain": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "1.2.3"}},
+    }
+    write_toolchain_cli(bin_dir, reports)
+    project = initialized_toolchain_project(tmp_path, bin_dir)
+    (project / ".pr-flow/toolchain.json").write_text("stale\n", encoding="utf-8")
+    (project / "unrelated.txt").write_text("dirty\n", encoding="utf-8")
+
+    result = sync_through_public_complete(bin_dir, project)
+
+    assert "toolchain_sync_dirty" in result.stdout
+    assert subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=project, check=False).returncode == 0
+    assert (project / ".pr-flow/toolchain.json").read_text(encoding="utf-8") == "stale\n"
+
+
+def test_complete_restores_toolchain_files_and_index_when_commit_fails_through_public_cli(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    reports = {
+        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3"}},
+        "build-and-verify": {"toolchain": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "1.2.3"}},
+    }
+    write_toolchain_cli(bin_dir, reports)
+    project = initialized_toolchain_project(tmp_path, bin_dir)
+    record = project / ".pr-flow/toolchain.json"
+    record.write_text("stale\n", encoding="utf-8")
+    assert subprocess.run(["git", "add", str(record.relative_to(project))], cwd=project, check=False).returncode == 0
+    assert subprocess.run(["git", "commit", "-m", "stale record"], cwd=project, check=False).returncode == 0
+    assert subprocess.run(["git", "config", "user.email", ""], cwd=project, check=False).returncode == 0
+    assert subprocess.run(["git", "config", "user.name", ""], cwd=project, check=False).returncode == 0
+
+    result = sync_through_public_complete(bin_dir, project)
+
+    assert "git_toolchain_commit_failed" in result.stdout
+    assert subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=project, check=False).returncode == 0
+    assert record.read_text(encoding="utf-8") == "stale\n"
+
+
+def test_complete_rereads_the_new_baseline_with_bounded_toolchain_retries(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    reports = {
+        "myspec": [
+            {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.0.0"}},
+            {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.0.1"}},
+            {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.0.2"}},
+        ],
+        "build-and-verify": {"toolchain": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "1.0.0"}},
+    }
+    write_toolchain_cli(bin_dir, reports)
+    project = initialized_toolchain_project(tmp_path, bin_dir)
+    baseline = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project, check=False, text=True, capture_output=True).stdout.strip()
+
+    result = sync_through_public_complete(bin_dir, project)
+
+    commits = subprocess.run(["git", "rev-list", "--count", f"{baseline}..HEAD"], cwd=project, check=False, text=True, capture_output=True)
+    assert commits.stdout.strip() == "2", result.stdout + result.stderr
+    assert "1.0.2" in (project / ".pr-flow/toolchain.json").read_text(encoding="utf-8")
+
+
+def test_init_validates_release_and_dev_toolchain_identities_through_public_cli(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
+    reports = {
+        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3-rc.1+build.9"}},
+        "build-and-verify": {"toolchain": {"mode": "dev", "packageName": "@liuli195/build-and-verify", "sourceRepository": "https://github.com/liuli195/my-agent-skills", "sourceCommit": "a" * 40, "packageDirectory": "plugins/build-and-verify"}},
+    }
+    bin_dir = tmp_path / "bin"
+    write_toolchain_cli(bin_dir, reports)
+
+    result = run_public_pr_flow(bin_dir, "init", "--project", str(tmp_path / "project"), "--config", str(config))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    workflow = (tmp_path / "project" / ".github/workflows/pr-flow-toolchain.yml").read_text(encoding="utf-8")
+    assert "@liuli195/myspec@1.2.3-rc.1+build.9" in workflow
+    assert "checkout --detach " + "a" * 40 in workflow
+
+
+@pytest.mark.parametrize(
+    ("tool", "toolchain"),
+    [
+        (tool, identity)
+        for tool, package_name, package_directory in (
+            ("myspec", "@liuli195/myspec", "plugins/my-spec"),
+            ("build-and-verify", "@liuli195/build-and-verify", "plugins/build-and-verify"),
+        )
+        for identity in (
+            {"mode": "unknown", "packageName": package_name},
+            {"mode": "release", "packageName": "other", "packageVersion": "1.2.3"},
+            {"mode": "dev", "packageName": package_name, "sourceRepository": "https://github.com/liuli195/my-agent-skills", "packageDirectory": package_directory},
+            {"mode": "dev", "packageName": package_name, "sourceRepository": "https://github.com/liuli195/my-agent-skills", "sourceCommit": "a" * 39, "packageDirectory": package_directory},
+            {"mode": "dev", "packageName": package_name, "sourceRepository": "https://example.invalid/repo", "sourceCommit": "a" * 40, "packageDirectory": package_directory},
+            {"mode": "dev", "packageName": package_name, "sourceRepository": "https://github.com/liuli195/my-agent-skills", "sourceCommit": "a" * 40, "packageDirectory": "other"},
+            {"mode": "dev", "packageName": "other", "sourceRepository": "https://github.com/liuli195/my-agent-skills", "sourceCommit": "a" * 40, "packageDirectory": package_directory},
+        )
+    ],
+)
+def test_init_rejects_untrusted_toolchain_identity_through_public_cli(
+    tmp_path: Path, tool: str, toolchain: dict[str, object]
+) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    reports = {
+        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3"}},
+        "build-and-verify": {"toolchain": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "1.2.3"}},
+    }
+    reports[tool] = {"toolchain": toolchain}
+    write_toolchain_cli(bin_dir, reports)
+
+    result = run_public_pr_flow(bin_dir, "init", "--project", str(tmp_path / "project"), "--config", str(config))
+
+    assert result.returncode == 1
+    assert "status: toolchain_identity_invalid" in result.stdout
+    assert not (tmp_path / "project" / ".pr-flow/toolchain.json").exists()
+
+
+@pytest.mark.parametrize("command, extra", [("diagnose", []), ("complete", ["--summary", "s", "--scope", "s"]), ("tweak", ["--reason", "r", "--summary", "s", "--scope", "s"])])
+def test_legacy_repositories_keep_flow_behavior_with_upgrade_prompt(tmp_path: Path, command: str, extra: list[str]) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert subprocess.run(["git", "init"], cwd=project, check=False).returncode == 0
+    write_complete_pr_flow_config(project)
+
+    result = subprocess.run([sys.executable, str(SCRIPT), command, "--project", str(project), *extra], check=False, text=True, capture_output=True)
+
+    assert "upgrade available: rerun pr-flow-init to record the managed toolchain" in result.stdout
+
+
+def test_legacy_cleanup_and_hotfix_keep_behavior_with_upgrade_prompt(tmp_path: Path, monkeypatch) -> None:
+    project, cleanup = run_cleanup_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=json.dumps({"number": 12, "state": "OPEN", "headRefName": "feature/example", "baseRefName": "main"}),
+    )
+    assert "upgrade available: rerun pr-flow-init to record the managed toolchain" in cleanup.stdout
+    assert_cleanup_exception(project, cleanup, "pr_not_merged")
+
+    hotfix_root = tmp_path / "hotfix"
+    hotfix_root.mkdir()
+    _, hotfix = run_hotfix_in_process(hotfix_root, monkeypatch, allow_hotfix=False)
+    assert "upgrade available: rerun pr-flow-init to record the managed toolchain" in hotfix.stdout
+    assert "hotfix_push_not_allowed" in hotfix.stdout

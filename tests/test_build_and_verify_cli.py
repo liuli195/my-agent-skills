@@ -94,6 +94,27 @@ def test_repository_automation_uses_build_and_verify_cli() -> None:
     assert all("build-and-verify" in command for command in commands)
     assert all(".build-and-verify/runtime/build_and_verify.py" not in command for command in commands)
     assert all("scripts/build_and_verify.py" not in command for command in commands)
+    assert "build-and-verify verify --project . --full" not in commands[0]
+    assert "build-and-verify verify --project source --full" not in commands[1]
+
+
+def test_build_and_verify_package_excludes_legacy_skill_runtime() -> None:
+    npm = shutil.which("npm")
+    assert npm is not None
+
+    packed = subprocess.run(
+        [npm, "pack", "--dry-run", "--json"],
+        cwd=PACKAGE_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert packed.returncode == 0, packed.stderr
+    files = {entry["path"] for entry in json.loads(packed.stdout)[0]["files"]}
+    assert "python/build_and_verify.py" in files
+    assert "python/build_and_verify_runner.py" in files
+    assert not any(path.startswith("skills/build-and-verify/scripts/") for path in files)
 
 
 def test_controlled_pack_rejects_unknown_package(tmp_path: Path) -> None:

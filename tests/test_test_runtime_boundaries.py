@@ -405,6 +405,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_build_and_verify_cli.py::test_controlled_pack_rejects_repository_output': (
         'covers the controlled package CLI rejecting repository output; function=test_controlled_pack_rejects_repository_output'
     ),
+    'tests/test_build_and_verify_cli.py::test_build_and_verify_package_excludes_legacy_skill_runtime': (
+        'covers npm package contents excluding the removed legacy skill runtime; function=test_build_and_verify_package_excludes_legacy_skill_runtime'
+    ),
     'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_rejects_untrusted_dev_source': (
         'covers the isolated Build and Verify CLI rejecting an untrusted development source; function=test_packed_build_and_verify_rejects_untrusted_dev_source'
     ),
@@ -447,20 +450,29 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_pr_flow_cli.py::test_write_status_keeps_compatibility_file_and_branch_run': (
         'covers per-worktree PR Flow status paths in a real git repository; function=test_write_status_keeps_compatibility_file_and_branch_run'
     ),
+    'tests/test_pr_flow_cli.py::test_complete_commits_only_changed_managed_file_through_public_cli': (
+        'covers the public complete CLI committing only the changed managed toolchain workflow; function=test_complete_commits_only_changed_managed_file_through_public_cli'
+    ),
+    'tests/test_pr_flow_cli.py::test_complete_refuses_dirty_tree_without_staging_managed_files_through_public_cli': (
+        'covers the public complete CLI rejecting dirty toolchain synchronization without staged files; function=test_complete_refuses_dirty_tree_without_staging_managed_files_through_public_cli'
+    ),
+    'tests/test_pr_flow_cli.py::test_complete_restores_toolchain_files_and_index_when_commit_fails_through_public_cli': (
+        'covers the public complete CLI restoring its managed files and index after a toolchain commit failure; function=test_complete_restores_toolchain_files_and_index_when_commit_fails_through_public_cli'
+    ),
+    'tests/test_pr_flow_cli.py::test_complete_rereads_the_new_baseline_with_bounded_toolchain_retries': (
+        'covers the public complete CLI bounded toolchain identity retries from each new commit baseline; function=test_complete_rereads_the_new_baseline_with_bounded_toolchain_retries'
+    ),
+    'tests/test_pr_flow_cli.py::test_init_validates_release_and_dev_toolchain_identities_through_public_cli': (
+        'covers the public init CLI accepting fixed release and trusted source toolchain identities; function=test_init_validates_release_and_dev_toolchain_identities_through_public_cli'
+    ),
+    'tests/test_pr_flow_cli.py::test_init_rejects_untrusted_toolchain_identity_through_public_cli': (
+        'covers the public init CLI rejecting non-fixed or untrusted toolchain identities; function=test_init_rejects_untrusted_toolchain_identity_through_public_cli'
+    ),
+    'tests/test_pr_flow_cli.py::test_legacy_repositories_keep_flow_behavior_with_upgrade_prompt': (
+        'covers public diagnose complete and tweak CLI upgrade prompts for legacy repositories; function=test_legacy_repositories_keep_flow_behavior_with_upgrade_prompt'
+    ),
     'tests/test_setup_worktree_script.py::test_setup_worktree_script_links_shared_node_dependencies': (
         'covers the PowerShell setup entrypoint against a real linked worktree and Windows junction; function=test_setup_worktree_script_links_shared_node_dependencies'
-    ),
-    'tests/test_build_and_verify_plugin.py::test_build_and_verify_init_config_overwrite_e2e_temp_target_repo': (
-        'covers packaged init entrypoint and copied runtime fast-verify entrypoint; function=test_build_and_verify_init_config_overwrite_e2e_temp_target_repo'
-    ),
-    'tests/test_build_and_verify_plugin.py::test_copied_runtime_full_performance_report_e2e_temp_target_repo': (
-        'covers copied runtime full-verify performance-report entrypoint; function=test_copied_runtime_full_performance_report_e2e_temp_target_repo'
-    ),
-    'tests/test_build_and_verify_plugin.py::test_copied_repository_runtime_can_initialize_another_project': (
-        'covers copied repository runtime init entrypoint; function=test_copied_repository_runtime_can_initialize_another_project'
-    ),
-    'tests/test_build_and_verify_plugin.py::test_build_and_verify_user_level_skill_path_requires_manifest_version': (
-        'covers user-level skill path fast-verify entrypoint manifest-version success and missing-version failure; function=test_build_and_verify_user_level_skill_path_requires_manifest_version'
     ),
     'tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_directory_hash_uses_git_visible_files': (
         'covers packaged cache behavior against tracked, visible untracked, and ignored files in a real git repository; function=test_build_and_verify_runner_directory_hash_uses_git_visible_files'
@@ -470,9 +482,6 @@ E2E_ALLOWLIST: dict[str, str] = {
     ),
     'tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_glob_inputs_ignore_ignored_files_and_normalize_separators': (
         'covers glob cache behavior for ignored files, literal ignored inputs, and Windows separators in a real git repository; function=test_build_and_verify_runner_glob_inputs_ignore_ignored_files_and_normalize_separators'
-    ),
-    'tests/test_build_and_verify_plugin.py::test_copied_repository_runtime_can_update_itself': (
-        'covers copied repository runtime update-runtime entrypoint; function=test_copied_repository_runtime_can_update_itself'
     ),
     'tests/test_pr_flow_cli.py::test_cleanup_creates_missing_local_base_end_to_end': (
         'covers pr-flow real git cleanup creation of a missing local base; function=test_cleanup_creates_missing_local_base_end_to_end'
@@ -492,8 +501,8 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_pr_flow_cli.py::test_cleanup_refuses_unsafe_stale_base_worktree_end_to_end': (
         'covers pr-flow real git cleanup protection of unsafe occupied stale local bases; function=test_cleanup_refuses_unsafe_stale_base_worktree_end_to_end'
     ),
-    'tests/test_release_flow_cli.py::test_preflight_rejects_stale_build_and_verify_runtime': (
-        'covers release-flow real git build-and-verify runtime preflight; function=test_preflight_rejects_stale_build_and_verify_runtime'
+    'tests/test_release_flow_cli.py::test_preflight_ignores_legacy_build_and_verify_runtime': (
+        'covers release-flow preflight ignoring a legacy build-and-verify runtime; function=test_preflight_ignores_legacy_build_and_verify_runtime'
     ),
     'tests/test_pr_flow_cli.py::test_project_template_recovers_stale_lock': (
         'covers pr-flow packaged CLI helper-chain contract: test_project_template_recovers_stale_lock; function=test_project_template_recovers_stale_lock'
@@ -815,20 +824,9 @@ def test_build_and_verify_keeps_focused_real_entrypoint_coverage() -> None:
     ]
 
     assert build_and_verify_entries == [
-        "tests/test_build_and_verify_plugin.py::test_build_and_verify_init_config_overwrite_e2e_temp_target_repo",
-        "tests/test_build_and_verify_plugin.py::test_copied_runtime_full_performance_report_e2e_temp_target_repo",
-        "tests/test_build_and_verify_plugin.py::test_copied_repository_runtime_can_initialize_another_project",
-        "tests/test_build_and_verify_plugin.py::test_build_and_verify_user_level_skill_path_requires_manifest_version",
         "tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_directory_hash_uses_git_visible_files",
         "tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_glob_inputs_track_visible_matching_files",
         "tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_glob_inputs_ignore_ignored_files_and_normalize_separators",
-        "tests/test_build_and_verify_plugin.py::test_copied_repository_runtime_can_update_itself",
     ]
-    assert init_entries == [
-        "tests/test_build_and_verify_plugin.py::test_build_and_verify_init_config_overwrite_e2e_temp_target_repo",
-        "tests/test_build_and_verify_plugin.py::test_copied_repository_runtime_can_initialize_another_project",
-    ]
-    assert fast_verify_entries == [
-        "tests/test_build_and_verify_plugin.py::test_build_and_verify_init_config_overwrite_e2e_temp_target_repo",
-        "tests/test_build_and_verify_plugin.py::test_build_and_verify_user_level_skill_path_requires_manifest_version",
-    ]
+    assert init_entries == []
+    assert fast_verify_entries == []
