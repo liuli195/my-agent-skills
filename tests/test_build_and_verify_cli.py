@@ -63,6 +63,14 @@ def _controlled_dev_source(tmp_path: Path) -> tuple[Path, Path]:
         check=False,
     )
     assert committed.returncode == 0, committed.stderr
+    executable = subprocess.run(
+        ["git", "update-index", "--chmod=+x", str(launcher.relative_to(source))],
+        cwd=source,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert executable.returncode == 0, executable.stderr
     committed = subprocess.run(
         ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-m", "source"],
         cwd=source,
