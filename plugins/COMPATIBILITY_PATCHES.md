@@ -33,13 +33,14 @@
 ### @amaster.ai/pi-computer-use（桌面操作插件）：Windows 命名管道启动等待
 
 - **状态**：已应用，升级后必须复查
-- **应用时版本**：`0.1.6`（安装来源未固定版本）
+- **应用时版本**：`0.1.7`（安装来源未固定版本）
 - **文件**：`C:\Users\liuli\.pi\agent\npm\node_modules\@amaster.ai\pi-computer-use\dist\mcp-client.js`
-- **位置**：当前版本第 112–114 行；定位锚点为 `const socket = await this.ensureDaemon(layout, signal);` 之后、`const mcpArgs = [` 之前。
+- **位置**：`const socket = await this.ensureDaemon(layout, signal);` 之后、`const mcpArgs = [` 之前。
 - **改动**：Windows（视窗系统）下，后台驱动报告就绪后等待 1.5 秒，再启动 MCP（模型上下文协议）连接。
 - **原因**：插件原先看到 `daemon listening on` 后立即连接；此时命名管道尚未真正接受客户端，导致 `cua-driver connection failed (McpError)`。
-- **诊断证据**：原始流程稳定失败并报告没有后台驱动监听；等待 1.5 秒后连接成功。
-- **验证结果**：通过插件真实 `CuaDriverClient`（驱动客户端）完成连接并发现 50 个工具，状态为 `ready`（就绪）。
+- **上游比对**：从 npm（Node 软件包管理器）获取 `@amaster.ai/pi-computer-use@0.1.7` 官方 Tarball（归档包）；SHA-512 为 `838f5fd0763f54989e7cd52309aa72ae85b24b2b0ea41242463b95ee87ab8d9d56b7d73e4a25fe1e64582dcfa5bbf2bf70446086dc077310604b4e201a31bb68`。修复前，本地安装目录与官方归档包逐文件一致；目标文件 SHA-256 为 `2e5e07a0c21c201f52f404369b268ccf0af2de31551e39bd745d347f5ac89585`。
+- **修复后差异**：仅 `dist/mcp-client.js` 在上述位置新增两行 Windows（视窗系统）等待逻辑；其余安装文件不变。修复后文件 SHA-256 为 `49108cbc62e58882f2c52970d25c2aad91e086f32cd162c9ec339576008c81dc`。
+- **验证结果**：`computer_use_connect` 在修复前持续报告驱动不可用；修复后以更新后的真实 `CuaDriverClient`（驱动客户端）连接、发现 50 个工具，并关闭该临时客户端。
 - **升级判断**：
   1. 检查上游是否加入 Windows（视窗系统）命名管道就绪探测、启动等待或连接重试。
   2. 先在未套用本地改动的新版上运行真实连接验证。
