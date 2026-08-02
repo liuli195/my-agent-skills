@@ -173,53 +173,6 @@ This capability keeps the MySpec（自有规格） id `test-framework-plugin` to
 - **THEN** 系统 MUST 复制当前 runtime（运行时）快照到 `.build-and-verify/runtime/`
 - **THEN** 系统 MUST NOT 在命令行 init（初始化）中执行对话式问答
 - **THEN** 系统 MUST NOT 在命令行 init（初始化）中自动生成仓库业务检查项
-### Requirement: Guided initialization drafts generic repository checks
-`build-and-verify-init` Skill（构建与验证初始化技能） MUST 为通用仓库生成可审查的 build（构建检查）和 verify（验证）配置草案。
-
-#### Scenario: Node repository detection
-- **WHEN** 目标仓库包含 `package.json`（包配置）
-- **THEN** agent（代理） MUST 读取 `scripts`（脚本）并识别 build、test、lint 和 typecheck 等候选命令
-- **THEN** agent（代理） MUST 展示候选 Node（节点运行时）checks（检查项）并等待用户选择
-- **THEN** `check`（检查脚本）和 `verify`（验证脚本）候选 MUST 使用不同 check id（检查项标识）
-
-#### Scenario: Python repository detection
-- **WHEN** 目标仓库包含 Python（Python 语言）配置迹象
-- **THEN** agent（代理） MUST 检查 `pyproject.toml`（项目配置）、`pytest.ini`（测试配置）、`tox.ini`（测试环境配置）、`noxfile.py`（任务配置）和 `requirements*.txt`（依赖清单）中的相关文件
-- **THEN** agent（代理） MUST 优先建议 pytest（Python 测试运行器）和现有脚本作为候选 checks（检查项）
-- **THEN** agent（代理） MUST 展示候选 Python（Python 语言）checks（检查项）并等待用户选择
-
-#### Scenario: Generic candidate discovery
-- **WHEN** 目标仓库包含 `Makefile`（任务文件）、`scripts/`（脚本目录）、`tests/`（测试目录）或 `myspec/`（开放规格目录）等通用信号
-- **THEN** agent（代理） MUST 分类候选 checks（检查项），并展示 source（来源）、confidence（置信度）、reason（纳入理由）和 risk（风险提示）
-- **THEN** agent（代理） MUST NOT 运行候选 command（命令）
-- **THEN** 风险候选 MUST NOT 默认纳入配置草案
-
-#### Scenario: Mixed repository
-- **WHEN** 目标仓库同时包含 Node（节点运行时）、Python（Python 语言）或通用候选信号
-- **THEN** agent（代理） MUST 同时展示多类候选 checks（检查项）
-- **THEN** agent（代理） MUST 让用户选择纳入哪些 checks（检查项）
-
-#### Scenario: No recognized ecosystem fallback
-- **WHEN** 目标仓库没有可识别的已有配置、Node（节点运行时）、Python（Python 语言）或通用候选信号
-- **THEN** agent（代理） MUST 继续使用固定 questionnaire（问答模板）
-- **THEN** agent（代理） MUST 让用户手动提供 build（构建检查）和 verify（验证）候选命令
-- **THEN** agent（代理） MUST 继续确认 `paths`（受影响路径）和运行参数，自动推导 `inputs`（缓存输入），并使用默认备份路径完成覆盖备份和配置校验
-
-#### Scenario: Draft config includes paths and inputs
-- **WHEN** agent（代理）生成配置草案
-- **THEN** 草案 MUST 同时支持 `build.checks`（构建检查项）和 `verify.checks`（验证检查项）
-- **THEN** check id（检查项标识） MUST 使用短横线格式，例如 `build.node` 或 `verify.python-tests`
-- **THEN** command（命令）默认 MUST 使用字符串形式
-- **THEN** agent（代理） MUST 只在用户明确要求更稳定参数边界时使用列表形式 command（命令）
-- **THEN** agent（代理） MUST 为 verify checks（验证检查项）建议 `paths`（受影响路径）
-- **THEN** agent（代理） MUST 从 `paths`（受影响路径）和 command（命令）来源推导 `inputs`（缓存输入）
-- **THEN** agent（代理） MUST 在写入前等待用户确认 `paths`（受影响路径），并在最终写入摘要中展示自动推导的 `inputs`（缓存输入）
-
-#### Scenario: Draft config explains runtime tuning
-- **WHEN** 配置草案包含 `verify.maxParallel`（最大并行检查数）、`verify.timeoutSeconds`（超时秒数）、`checkParallel`（检查项间并行）或 `pytestXdistWorkers`（Pytest 工作进程数）
-- **THEN** agent（代理） MUST 逐项解释这些运行参数
-- **THEN** agent（代理） MUST 等待用户确认后才能写入这些运行参数
-- **THEN** agent（代理） MUST NOT 为没有 `auto`（自动）语义的工具硬编码 `auto`（自动）参数
 ### Requirement: Guided initialization protects existing configuration
 `build-and-verify-init` Skill（构建与验证初始化技能） MUST 在覆盖已有配置前保护用户已有 `.build-and-verify/config.json`（配置文件）。
 
@@ -470,3 +423,63 @@ Build and Verify（构建与验证） MUST bind fast and full verification cache
 - **WHEN** the fixed runtime version is absent
 - **THEN** fast verify（快速验证） and full verify（完整验证） MUST fail before running checks or reading or writing passed-result cache（通过结果缓存）
 - **THEN** build（构建检查） MUST remain available because it does not use verification cache
+### Requirement: Guided initialization drafts generic repository checks
+`build-and-verify-init` Skill（构建与验证初始化技能） MUST 为通用仓库生成可审查的 build（构建检查）和 verify（验证）配置草案。
+
+#### Scenario: Node repository detection
+- **WHEN** 目标仓库包含 `package.json`（包配置）
+- **THEN** agent（代理） MUST 读取 `scripts`（脚本）并识别 build、test、lint 和 typecheck 等候选命令
+- **THEN** agent（代理） MUST 展示候选 Node（节点运行时）checks（检查项）并等待用户选择
+- **THEN** `check`（检查脚本）和 `verify`（验证脚本）候选 MUST 使用不同 check id（检查项标识）
+
+#### Scenario: Python repository detection
+- **WHEN** 目标仓库包含 Python（Python 语言）配置迹象
+- **THEN** agent（代理） MUST 检查 `pyproject.toml`（项目配置）、`pytest.ini`（测试配置）、`tox.ini`（测试环境配置）、`noxfile.py`（任务配置）和 `requirements*.txt`（依赖清单）中的相关文件
+- **THEN** agent（代理） MUST 优先建议 pytest（Python 测试运行器）和现有脚本作为候选 checks（检查项）
+- **THEN** agent（代理） MUST 展示候选 Python（Python 语言）checks（检查项）并等待用户选择
+
+#### Scenario: Generic candidate discovery
+- **WHEN** 目标仓库包含 `Makefile`（任务文件）、`scripts/`（脚本目录）、`tests/`（测试目录）或 `myspec/`（开放规格目录）等通用信号
+- **THEN** agent（代理） MUST 分类候选 checks（检查项），并展示 source（来源）、confidence（置信度）、reason（纳入理由）和 risk（风险提示）
+- **THEN** agent（代理） MUST 先使用静态证据，不得在未确认时运行候选 command（命令）
+- **THEN** 静态证据不足且探测能消除配置不确定性、成本可接受时，agent（代理） MAY 建议并在用户确认后运行完整命令组
+- **THEN** 风险候选 MUST NOT 默认纳入配置草案
+
+#### Scenario: Mixed repository
+- **WHEN** 目标仓库同时包含 Node（节点运行时）、Python（Python 语言）或通用候选信号
+- **THEN** agent（代理） MUST 同时展示多类候选 checks（检查项）
+- **THEN** agent（代理） MUST 让用户选择纳入哪些 checks（检查项）
+
+#### Scenario: No recognized ecosystem fallback
+- **WHEN** 目标仓库没有可识别的已有配置、Node（节点运行时）、Python（Python 语言）或通用候选信号
+- **THEN** agent（代理） MUST 继续使用固定 questionnaire（问答模板）
+- **THEN** agent（代理） MUST 让用户手动提供 build（构建检查）和 verify（验证）候选命令
+- **THEN** agent（代理） MUST 继续确认 `paths`（受影响路径）和运行参数，自动推导 `inputs`（缓存输入），并使用默认备份路径完成覆盖备份和配置校验
+
+#### Scenario: Draft config includes paths and inputs
+- **WHEN** agent（代理）生成配置草案
+- **THEN** 草案 MUST 同时支持 `build.checks`（构建检查项）和 `verify.checks`（验证检查项）
+- **THEN** check id（检查项标识） MUST 使用短横线格式，例如 `build.node` 或 `verify.python-tests`
+- **THEN** command（命令）默认 MUST 使用字符串形式
+- **THEN** agent（代理） MUST 只在用户明确要求更稳定参数边界时使用列表形式 command（命令）
+- **THEN** agent（代理） MUST 为 verify checks（验证检查项）建议 `paths`（受影响路径）
+- **THEN** agent（代理） MUST 从 `paths`（受影响路径）和 command（命令）来源推导 `inputs`（缓存输入）
+- **THEN** agent（代理） MUST 在写入前等待用户确认 `paths`（受影响路径），并在最终写入摘要中展示自动推导的 `inputs`（缓存输入）
+
+#### Scenario: Draft config explains runtime tuning
+- **WHEN** 配置草案包含 `verify.maxParallel`（最大并行检查数）、`verify.timeoutSeconds`（超时秒数）、`checkParallel`（检查项间并行）或 `pytestXdistWorkers`（Pytest 工作进程数）
+- **THEN** agent（代理） MUST 逐项解释这些运行参数
+- **THEN** agent（代理） MUST 等待用户确认后才能写入这些运行参数
+- **THEN** agent（代理） MUST NOT 为没有 `auto`（自动）语义的工具硬编码 `auto`（自动）参数
+### Requirement: Dynamic scanned verification inputs stay aligned
+Build and Verify（构建与验证）配置指导 MUST 让动态扫描检查的快速选择和缓存输入覆盖其实际读取范围。
+
+#### Scenario: Dynamic scan widens configuration scope
+- **WHEN** 静态证据显示一个检查读取的范围大于其现有 `paths`（受影响路径）或 `inputs`（缓存输入）
+- **THEN** 初始化和审查 MUST 建议以实际读取范围补全两者
+- **THEN** 若该范围会让复合检查在不相关变更时运行，初始化和审查 MUST 建议拆分专用检查
+
+#### Scenario: Confirmed candidate probe has a visible mutation
+- **WHEN** 用户确认执行候选命令探测
+- **THEN** agent（代理） MUST 在执行前展示完整命令组、总成本和可能副作用，并在执行前后核对 Git（版本管理）可见改动
+- **THEN** 发现 Git（版本管理）可见改动时，agent（代理） MUST 停止后续建议和写入，保留现场，且 MUST NOT 自动清理或恢复

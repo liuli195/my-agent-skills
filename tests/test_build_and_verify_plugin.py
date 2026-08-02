@@ -886,13 +886,14 @@ def test_build_and_verify_plugin_has_runtime_init_and_review_skill_entrypoints()
 def test_build_and_verify_review_defines_confirmed_flow() -> None:
     skill = (REVIEW_SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
     review = (REVIEW_REFERENCE_ROOT / "review.md").read_text(encoding="utf-8")
-    review_contract_text = skill + review
+    config_draft = (INIT_REFERENCE_ROOT / "config-draft.md").read_text(encoding="utf-8")
+    review_contract_text = skill + review + config_draft
 
     assert f"name: {REVIEW_SKILL_NAME}" in skill.split("---", 2)[1]
     assert "../build-and-verify-init/references/ecosystem-detection.md" in skill
     assert "../build-and-verify-init/references/config-draft.md" in skill
     assert "../build-and-verify-init/references/validation.md" in skill
-    assert "不得运行候选 command（命令）" in review_contract_text
+    assert "不得在未确认时运行候选 command（命令）" in review_contract_text
     for token in [
         "命令来源",
         "构建或验证分组",
@@ -914,9 +915,18 @@ def test_build_and_verify_review_defines_confirmed_flow() -> None:
         "init --config --overwrite",
         "verify --full",
         "不得自动回滚",
+        "动态扫描命令",
+        "实际读取范围",
+        "专用检查",
+        "静态证据不足",
+        "总成本",
+        "Git（版本管理）可见改动",
+        "保留现场",
+        "不自动清理或恢复",
     ]:
         assert token in review_contract_text
     assert "不修改仓库脚本" in review_contract_text
+    assert "运行边界" not in review_contract_text
     assert "不修改测试代码" in review_contract_text
     assert "不自动调整并行数、超时或完整验证预算" in review_contract_text
     for reference in [
@@ -1212,8 +1222,18 @@ def test_build_and_verify_init_config_draft_rules_cover_commands_paths_inputs_an
         "pytestXdistWorkers",
         "auto（自动）语义",
         "只能在解释含义并获得用户确认后写入",
+        "动态扫描命令",
+        "实际读取范围",
+        "专用检查",
+        "静态证据不足",
+        "候选命令探测",
+        "总成本",
+        "Git（版本管理）可见改动",
+        "保留现场",
+        "不自动清理或恢复",
     ]:
         assert token in text
+    assert "运行边界" not in text
     assert "inputs（缓存输入）默认从 paths（受影响路径）和 command（命令）来源推导" in text
     assert "写入前必须逐项展示 inputs（缓存输入）并等待用户确认" not in text
     assert "`parallel: true`" not in text
@@ -1466,7 +1486,10 @@ def test_build_and_verify_pytest_options_live_in_explicit_commands() -> None:
             tokens = command.split()
             assert " -q " in f" {command} "
             assert "-n" not in tokens
-            assert check["pytestXdistWorkers"]
+            if check["id"] == "verify.runtime-boundaries":
+                assert "pytestXdistWorkers" not in check
+            else:
+                assert check["pytestXdistWorkers"]
             assert "-p" in tokens
             assert "no:cacheprovider" in tokens
             assert " tests/" in f" {command} "
