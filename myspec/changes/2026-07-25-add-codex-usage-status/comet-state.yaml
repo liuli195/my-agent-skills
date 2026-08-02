@@ -1,0 +1,22 @@
+schema: comet.native.v3
+minimum_runtime_version: 3
+revision: 5
+name: add-codex-usage-status
+language: zh-CN
+phase: archive
+brief: brief.md
+approval: confirmed
+approved_contract_hash: 4e4cd91dfda9e5cb7b5b78bfa811ece53c19696fd314f95b282b57ecaa2a5eb3
+spec_changes:
+  - capability: pi-codex-usage-status
+    operation: create
+    source: specs/pi-codex-usage-status/spec.md
+    base_hash: null
+verification_result: pass
+verification_report: verification.md
+implementation_scope: runtime/evidence/scopes/e42111840c2e41639a1cb88760df4069ab621184a9af87fb6b34f027bc5729ce.json
+verification_evidence: runtime/evidence/verifications/219616ee42f6e163642d0a9d99d7c17eed43d75615931b29990964a833082976.json
+partial_allowance: null
+archived: true
+created_at: 2026-07-24
+run_id: 2b181dae-8d26-49cd-9f82-62d816e1bb75

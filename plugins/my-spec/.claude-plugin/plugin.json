@@ -1,0 +1,9 @@
+{
+  "name": "my-spec",
+  "version": "0.1.58",
+  "description": "MySpec audit, review, and document-to-delta Skill（开放规格审计、审查与文档增量技能）",
+  "author": {
+    "name": "liuli195"
+  },
+  "skills": "./skills"
+}

@@ -1,0 +1,6 @@
+{
+  "name": "build-and-verify",
+  "plugins": [
+    {"name": "build-and-verify", "source": {"source": "local", "path": "./"}}
+  ]
+}

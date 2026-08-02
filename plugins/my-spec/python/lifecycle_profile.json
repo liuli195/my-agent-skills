@@ -1,0 +1,17 @@
+{
+  "PACKAGE_NAME": "@liuli195/myspec",
+  "CLAUDE_MARKETPLACE": "myspec",
+  "CLAUDE_PLUGIN": "my-spec@myspec",
+  "CLAUDE_LEGACY_PLUGIN": "my-spec@my-agent-skills-marketplace",
+  "CODEX_MARKETPLACE": "myspec",
+  "CODEX_PLUGIN": "my-spec@myspec",
+  "CODEX_LEGACY_PLUGIN": "my-spec@my-agent-skills-marketplace",
+  "SKILL_NAMES": ["my-spec", "my-spec-add", "my-spec-review", "my-spec-audit"],
+  "NPM_DIRECTORY": "myspec",
+  "SOURCE_DIRECTORY": "my-spec",
+  "COMMAND_NAME": "myspec",
+  "PRIMARY_MODULE": "spec_ops.py",
+  "LEGACY_PI_PACKAGE": "pi-my-spec",
+  "STATE_DIRECTORY": "myspec",
+  "PLUGIN_NAME": "my-spec"
+}

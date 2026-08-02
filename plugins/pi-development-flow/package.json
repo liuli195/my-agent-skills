@@ -1,0 +1,22 @@
+{
+  "name": "pi-development-flow",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pi-only orchestration for one repository development change from requirements through PR cleanup.",
+  "keywords": [
+    "pi-package"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/pi-development-flow.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  }
+}
