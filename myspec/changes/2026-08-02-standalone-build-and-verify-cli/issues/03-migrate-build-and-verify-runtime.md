@@ -1,8 +1,8 @@
-# 02 — 迁移 Build and Verify 旧运行时
+# 03 — 迁移 Build and Verify 旧运行时
 
 **What to build（构建内容）：** 已配置 Build and Verify（构建与验证）的仓库可由新 CLI（命令行程序）完成快速验证后清理识别的旧运行时快照，并让 Plugin Sync（插件同步）委托该工具的生命周期而非维护运行时版本同步。
 
-**Blocked by（前置项）：** 01 — 统一工具生命周期与身份。
+**Blocked by（前置项）：** 02 — 统一工具生命周期与身份。
 
 **Status:** ready-for-agent
 

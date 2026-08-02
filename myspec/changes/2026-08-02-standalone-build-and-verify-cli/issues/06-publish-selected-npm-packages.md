@@ -1,8 +1,8 @@
-# 05 — 发布选中 npm 包与首次发布准备
+# 06 — 发布选中 npm 包与首次发布准备
 
 **What to build（构建内容）：** Release Flow（发布流程）保持现有单一发布版本和 `bumpPlugins`（提升插件列表）选择语义，并将 MySpec（自有规格）专用 npm（软件包管理器）发布最小泛化为对本次选中 npm 包的候选验证、完整性核对和发布；首次发布在远端操作前进入人工准备停止点。
 
-**Blocked by（前置项）：** 01 — 统一工具生命周期与身份；03 — 将仓库自动化改用 Build and Verify CLI。
+**Blocked by（前置项）：** 02 — 统一工具生命周期与身份；04 — 将仓库自动化改用 Build and Verify CLI。
 
 **Status:** ready-for-agent
 

@@ -1,8 +1,8 @@
-# 03 — 将仓库自动化改用 Build and Verify CLI
+# 04 — 将仓库自动化改用 Build and Verify CLI
 
 **What to build（构建内容）：** 本仓库自身的构建、验证、发布前检查、Skill（技能）说明和正式 MySpec（自有规格）契约使用 Build and Verify（构建与验证）CLI（命令行程序），不再依赖仓库复制的运行时快照或 MySpec 专用 npm（软件包管理器）发布假设。
 
-**Blocked by（前置项）：** 01 — 统一工具生命周期与身份；02 — 迁移 Build and Verify 旧运行时。
+**Blocked by（前置项）：** 02 — 统一工具生命周期与身份；03 — 迁移 Build and Verify 旧运行时。
 
 **Status:** ready-for-agent
 

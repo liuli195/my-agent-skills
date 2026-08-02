@@ -1,8 +1,8 @@
-# 01 — 统一工具生命周期与身份
+# 02 — 统一工具生命周期与身份
 
 **What to build（构建内容）：** Build and Verify（构建与验证）成为独立 npm（软件包管理器）CLI（命令行程序），与 MySpec（自有规格）各自支持一致的发布版／源码版生命周期、三端 Agent（代理）初始化、诊断和更新；两者都能输出 PR Flow（拉取请求流程）所需的稳定工具身份。
 
-**Blocked by（前置项）：** None — can start immediately（无，可立即开始）。
+**Blocked by（前置项）：** 01 — 移除派发票据状态门禁。
 
 **Status:** ready-for-agent
 

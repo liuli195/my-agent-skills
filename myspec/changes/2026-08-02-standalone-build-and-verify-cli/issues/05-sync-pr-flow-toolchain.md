@@ -1,8 +1,8 @@
-# 04 — 同步 PR Flow 工具链身份
+# 05 — 同步 PR Flow 工具链身份
 
 **What to build（构建内容）：** PR Flow（拉取请求流程）把本机 MySpec（自有规格）和 Build and Verify（构建与验证）的诊断身份写入 Git 可见工具链记录，并由专用受管 CI（持续集成）工作流以同一固定发布包或受信任源码包验证该身份。
 
-**Blocked by（前置项）：** 01 — 统一工具生命周期与身份。
+**Blocked by（前置项）：** 02 — 统一工具生命周期与身份。
 
 **Status:** ready-for-agent
 
