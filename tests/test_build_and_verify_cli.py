@@ -43,8 +43,14 @@ def _isolated_env(tmp_path: Path, prefix: Path) -> dict[str, str]:
 
 def _controlled_dev_source(tmp_path: Path) -> tuple[Path, Path]:
     source = tmp_path / "source"
+    source.mkdir()
+    shutil.copy2(REPO_ROOT / ".gitignore", source / ".gitignore")
     for relative in (".agents", ".claude-plugin", "plugins/build-and-verify", "plugins/tool-lifecycle"):
-        shutil.copytree(REPO_ROOT / relative, source / relative)
+        shutil.copytree(
+            REPO_ROOT / relative,
+            source / relative,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
     initialized = subprocess.run(["git", "init"], cwd=source, text=True, capture_output=True, check=False)
     assert initialized.returncode == 0, initialized.stderr
     committed = subprocess.run(
@@ -449,3 +455,4 @@ def test_packed_build_and_verify_accepts_controlled_ssh_dev_source(tmp_path: Pat
     report = json.loads(entered.stdout)
     assert report["mode"] == "dev"
     assert report["source"] == str(source)
+    assert _git(source, "status", "--porcelain").stdout == ""

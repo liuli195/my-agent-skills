@@ -94,6 +94,8 @@ def write(path: Path, text: str) -> None:
 
 def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
     source = tmp_path / "source"
+    source.mkdir()
+    shutil.copy2(REPO_ROOT / ".gitignore", source / ".gitignore")
     for relative in (".agents", ".claude-plugin", "plugins/my-spec", "plugins/tool-lifecycle"):
         shutil.copytree(
             REPO_ROOT / relative,
@@ -144,7 +146,6 @@ def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
 def controlled_dev_env(env: dict[str, str], source: Path) -> dict[str, str]:
     return {
         **env,
-        "PYTHONDONTWRITEBYTECODE": "1",
         "PATH": os.pathsep.join([str(source.parent / "controlled-git"), env["PATH"]]),
     }
 
@@ -3116,6 +3117,9 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
     assert run_cli(executable, "init", "--pi", env=env).returncode == 0
     entered = run_cli(executable, "init", "--dev", env=env, cwd=source)
     assert entered.returncode == 0, entered.stderr
+    assert subprocess.run(
+        ["git", "status", "--porcelain"], cwd=source, text=True, capture_output=True, check=True
+    ).stdout == ""
     assert json.loads(entered.stdout) == {
         "mode": "dev",
         "source": str(source),
@@ -3172,6 +3176,9 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
     assert ["install", "--global", "--ignore-scripts", "--no-audit", "--no-fund", f"@liuli195/myspec@{PACKAGE_VERSION}"] in npm_calls
     pi_calls = [json.loads(line)["args"] for line in pi_log.read_text(encoding="utf-8").splitlines()]
     assert pi_calls.count(["install", str(installed_package)]) == 1
+    assert subprocess.run(
+        ["git", "status", "--porcelain"], cwd=source, text=True, capture_output=True, check=True
+    ).stdout == ""
 
     explicit = run_cli(executable, "init", "--dev", "--source", source, env=env, cwd=tmp_path)
     assert explicit.returncode == 0, explicit.stderr

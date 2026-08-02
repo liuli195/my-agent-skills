@@ -29,6 +29,10 @@ SCRIPT = (
     / "scripts"
     / "pr_flow.py"
 )
+MYSPEC_VERSION = json.loads((REPO_ROOT / "plugins" / "my-spec" / "package.json").read_text(encoding="utf-8"))["version"]
+BUILD_AND_VERIFY_VERSION = json.loads(
+    (REPO_ROOT / "plugins" / "build-and-verify" / "package.json").read_text(encoding="utf-8")
+)["version"]
 _PR_FLOW_MODULE = None
 
 
@@ -70,8 +74,12 @@ def stub_toolchain_identities(monkeypatch):
         load_pr_flow_module(),
         "toolchain_identities",
         lambda: {
-            "myspec": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "0.1.55"},
-            "build-and-verify": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "0.1.56"},
+            "myspec": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": MYSPEC_VERSION},
+            "build-and-verify": {
+                "mode": "release",
+                "packageName": "@liuli195/build-and-verify",
+                "packageVersion": BUILD_AND_VERIFY_VERSION,
+            },
         },
     )
 
@@ -1834,8 +1842,12 @@ def test_init_records_toolchain_and_managed_workflow(tmp_path: Path, monkeypatch
     draft = tmp_path / "confirmed.yaml"
     draft.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
     identities = {
-        "myspec": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "0.1.55"},
-        "build-and-verify": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "0.1.56"},
+        "myspec": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": MYSPEC_VERSION},
+        "build-and-verify": {
+            "mode": "release",
+            "packageName": "@liuli195/build-and-verify",
+            "packageVersion": BUILD_AND_VERIFY_VERSION,
+        },
     }
     monkeypatch.setattr(module, "toolchain_identities", lambda: identities)
 
@@ -1844,8 +1856,8 @@ def test_init_records_toolchain_and_managed_workflow(tmp_path: Path, monkeypatch
     assert result.returncode == 0, result.stdout
     assert json.loads((project / ".pr-flow" / "toolchain.json").read_text(encoding="utf-8"))["tools"] == identities
     workflow = (project / ".github" / "workflows" / "pr-flow-toolchain.yml").read_text(encoding="utf-8")
-    assert "@liuli195/myspec@0.1.55" in workflow
-    assert "@liuli195/build-and-verify@0.1.56" in workflow
+    assert f"@liuli195/myspec@{MYSPEC_VERSION}" in workflow
+    assert f"@liuli195/build-and-verify@{BUILD_AND_VERIFY_VERSION}" in workflow
 
 
 def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
