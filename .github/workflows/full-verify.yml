@@ -1,0 +1,103 @@
+name: Full Verify
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-verify:
+    name: Full Verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Node dependencies
+        run: npm install -g @earendil-works/pi-coding-agent@0.82.1
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+          npm ci
+
+      - name: Install current MySpec package
+        shell: bash
+        run: |
+          tarball="$(python plugins/tool-lifecycle/pack.py myspec "$RUNNER_TEMP")"
+          prefix="$RUNNER_TEMP/myspec-prefix"
+          npm install -g --prefix "$prefix" --ignore-scripts --no-audit --no-fund "$tarball"
+          echo "$prefix/bin" >> "$GITHUB_PATH"
+          echo "MYSPEC_TEST_TARBALL=$tarball" >> "$GITHUB_ENV"
+          "$prefix/bin/myspec" --help
+
+      - name: Install current Build and Verify package
+        shell: bash
+        run: |
+          tarball="$(python plugins/tool-lifecycle/pack.py build-and-verify "$RUNNER_TEMP")"
+          prefix="$RUNNER_TEMP/build-and-verify-prefix"
+          npm install -g --prefix "$prefix" --ignore-scripts --no-audit --no-fund "$tarball"
+          echo "$prefix/bin" >> "$GITHUB_PATH"
+          "$prefix/bin/build-and-verify" --help
+
+      - name: Run candidate quick verification
+        run: build-and-verify verify --project .
+
+      - name: Run full verification
+        run: node plugins/build-and-verify/bin/build-and-verify.js verify --project . --full
+
+  windows-worktree-smoke:
+    name: Windows worktree smoke
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Initialize main worktree
+        shell: pwsh
+        run: ./scripts/setup-worktree.ps1
+
+      - name: Initialize linked worktree
+        shell: pwsh
+        run: |
+          git worktree add --detach .worktrees/smoke HEAD
+          ./.worktrees/smoke/scripts/setup-worktree.ps1
+
+      - name: Install current Build and Verify package
+        shell: pwsh
+        run: |
+          $prefix = Join-Path $env:RUNNER_TEMP "build-and-verify-prefix"
+          $tarball = python plugins/tool-lifecycle/pack.py build-and-verify $env:RUNNER_TEMP
+          npm install --global --prefix $prefix --ignore-scripts --no-audit --no-fund $tarball
+          $prefix >> $env:GITHUB_PATH
+          & (Join-Path $prefix "build-and-verify.cmd") --help
+
+      - name: Build from linked worktree
+        shell: pwsh
+        run: |
+          . ./.worktrees/smoke/.venv/Scripts/Activate.ps1
+          build-and-verify build --project .worktrees/smoke
