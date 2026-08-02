@@ -1256,11 +1256,12 @@ def test_myspec_source_ci_and_release_use_the_packed_current_checkout() -> None:
     full_verify = (REPO_ROOT / ".github" / "workflows" / "full-verify.yml").read_text(encoding="utf-8")
     release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
-    assert "npm pack ./plugins/my-spec" in full_verify
-    assert "npm install -g --prefix" in full_verify
+    assert "npm pack ./plugins/my-spec" not in full_verify
+    assert 'tarball="$(python plugins/tool-lifecycle/pack.py myspec "$RUNNER_TEMP")"' in full_verify
+    assert 'npm install -g --prefix "$prefix" --ignore-scripts --no-audit --no-fund "$tarball"' in full_verify
     assert 'myspec" --help' in full_verify
-    assert 'MYSPEC_TEST_TARBALL=$RUNNER_TEMP/$tarball' in full_verify
-    assert full_verify.index("npm pack ./plugins/my-spec") < full_verify.index("Run candidate quick verification")
+    assert 'MYSPEC_TEST_TARBALL=$tarball' in full_verify
+    assert full_verify.index("pack.py myspec") < full_verify.index("Run candidate quick verification")
     for workflow in (full_verify, release):
         assert "verify --project" in workflow
         assert "build-and-verify verify --project . --full" not in workflow

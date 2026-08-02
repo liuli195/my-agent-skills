@@ -38,12 +38,11 @@ jobs:
       - name: Install current MySpec package
         shell: bash
         run: |
-          pack_json="$(npm pack ./plugins/my-spec --pack-destination "$RUNNER_TEMP" --json)"
-          tarball="$(node -e 'console.log(JSON.parse(process.argv[1])[0].filename)' "$pack_json")"
+          tarball="$(python plugins/tool-lifecycle/pack.py myspec "$RUNNER_TEMP")"
           prefix="$RUNNER_TEMP/myspec-prefix"
-          npm install -g --prefix "$prefix" "$RUNNER_TEMP/$tarball"
+          npm install -g --prefix "$prefix" --ignore-scripts --no-audit --no-fund "$tarball"
           echo "$prefix/bin" >> "$GITHUB_PATH"
-          echo "MYSPEC_TEST_TARBALL=$RUNNER_TEMP/$tarball" >> "$GITHUB_ENV"
+          echo "MYSPEC_TEST_TARBALL=$tarball" >> "$GITHUB_ENV"
           "$prefix/bin/myspec" --help
 
       - name: Install current Build and Verify package

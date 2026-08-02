@@ -51,7 +51,7 @@ TOOLCHAIN_TOOLS = {
 }
 OFFICIAL_TOOLCHAIN_REPOSITORY = "https://github.com/liuli195/my-agent-skills"
 SEMVER_RE = re.compile(
-    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|(?!0\d*(?:\.|$))[0-9A-Za-z-]+)(?:\.(?:0|[1-9]\d*|(?!0\d*(?:\.|$))[0-9A-Za-z-]+))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
 HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 EXECUTING_SCRIPT = str(Path(__file__).resolve())
