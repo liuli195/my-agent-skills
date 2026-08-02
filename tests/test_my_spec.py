@@ -104,6 +104,8 @@ def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
         )
     if marker is not None:
         write(source / "plugins" / "my-spec" / "skills" / "my-spec" / "dev-marker.txt", marker)
+    launcher = source / "plugins" / "my-spec" / "bin" / "myspec.js"
+    launcher.chmod(launcher.stat().st_mode | 0o111)
     remote = tmp_path / "origin.git"
     for command in (
         ["git", "init", "--bare", remote],

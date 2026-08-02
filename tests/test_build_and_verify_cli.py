@@ -51,6 +51,8 @@ def _controlled_dev_source(tmp_path: Path) -> tuple[Path, Path]:
             source / relative,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
+    launcher = source / "plugins" / "build-and-verify" / "bin" / "build-and-verify.js"
+    launcher.chmod(launcher.stat().st_mode | 0o111)
     initialized = subprocess.run(["git", "init"], cwd=source, text=True, capture_output=True, check=False)
     assert initialized.returncode == 0, initialized.stderr
     committed = subprocess.run(
