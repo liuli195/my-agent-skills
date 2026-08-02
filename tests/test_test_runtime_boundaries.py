@@ -504,6 +504,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_release_flow_cli.py::test_preflight_ignores_legacy_build_and_verify_runtime': (
         'covers release-flow preflight ignoring a legacy build-and-verify runtime; function=test_preflight_ignores_legacy_build_and_verify_runtime'
     ),
+    'tests/test_release_flow_cli.py::test_release_workflows_publish_only_verified_selected_npm_packages': (
+        'covers release workflow Node manifest loading through the exact relative candidate paths; function=test_release_workflows_publish_only_verified_selected_npm_packages'
+    ),
     'tests/test_pr_flow_cli.py::test_project_template_recovers_stale_lock': (
         'covers pr-flow packaged CLI helper-chain contract: test_project_template_recovers_stale_lock; function=test_project_template_recovers_stale_lock'
     ),

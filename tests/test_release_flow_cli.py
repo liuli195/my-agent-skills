@@ -1289,7 +1289,7 @@ def test_myspec_source_ci_and_release_use_the_packed_current_checkout() -> None:
     assert release.index('npm publish "$MYSPEC_TARBALL"') < release.index("Publish release channel")
 
 
-def test_release_workflows_publish_only_verified_selected_npm_packages() -> None:
+def test_release_workflows_publish_only_verified_selected_npm_packages(tmp_path: Path) -> None:
     workflow_paths = [
         REPO_ROOT / ".github" / "workflows" / "release.yml",
         REPO_ROOT
@@ -1324,6 +1324,20 @@ def test_release_workflows_publish_only_verified_selected_npm_packages() -> None
         assert "FIRST_PUBLISH_REQUIRED" in workflow
         assert "env.FIRST_PUBLISH_REQUIRED != 'true'" in workflow
         assert workflow.index("Upload npm package candidates") < workflow.index("Publish release channel")
+        for plugin in ("my-spec", "build-and-verify"):
+            manifest = f"./source/plugins/{plugin}/package.json"
+            assert workflow.count(manifest) == 2
+            path = tmp_path / manifest.removeprefix("./")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}", encoding="utf-8")
+            loaded = subprocess.run(
+                ["node", "-e", "require(process.argv[1])", manifest],
+                cwd=tmp_path,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert loaded.returncode == 0, loaded.stderr
 
 
 def test_release_workflows_reject_invalid_selection_before_package_steps() -> None:
