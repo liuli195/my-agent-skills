@@ -399,6 +399,39 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    'tests/test_build_and_verify_cli.py::test_controlled_pack_rejects_unknown_package': (
+        'covers the controlled package CLI rejecting an unknown package; function=test_controlled_pack_rejects_unknown_package'
+    ),
+    'tests/test_build_and_verify_cli.py::test_controlled_pack_rejects_repository_output': (
+        'covers the controlled package CLI rejecting repository output; function=test_controlled_pack_rejects_repository_output'
+    ),
+    'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_rejects_untrusted_dev_source': (
+        'covers the isolated Build and Verify CLI rejecting an untrusted development source; function=test_packed_build_and_verify_rejects_untrusted_dev_source'
+    ),
+    'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_doctor_reports_machine_readable_release_identity': (
+        'covers the isolated Build and Verify npm package through its public doctor CLI; function=test_packed_build_and_verify_doctor_reports_machine_readable_release_identity'
+    ),
+    'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_accepts_controlled_ssh_dev_source': (
+        'covers the packaged Build and Verify development-mode entrypoint with an official SSH remote and published commit; function=test_packed_build_and_verify_accepts_controlled_ssh_dev_source'
+    ),
+    'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_migrates_recognized_runtime_after_fast_verify': (
+        'covers the installed Build and Verify CLI fast-verify migration in a clean temporary git repository; function=test_packed_build_and_verify_migrates_recognized_runtime_after_fast_verify'
+    ),
+    'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_preserves_legacy_runtime_when_verify_fails': (
+        'covers the installed Build and Verify CLI preserving a legacy runtime after verification failure; function=test_packed_build_and_verify_preserves_legacy_runtime_when_verify_fails'
+    ),
+    'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_rejects_unrecognized_legacy_runtime': (
+        'covers the installed Build and Verify CLI refusing an unrecognized legacy runtime before verification; function=test_packed_build_and_verify_rejects_unrecognized_legacy_runtime'
+    ),
+    'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_preserves_runtime_when_fast_verify_stages_external_file': (
+        'covers the installed Build and Verify CLI preserving its legacy runtime when fast verification stages an external file; function=test_packed_build_and_verify_preserves_runtime_when_fast_verify_stages_external_file'
+    ),
+    'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_restores_runtime_when_migration_commit_fails': (
+        'covers the installed Build and Verify CLI restoring a legacy runtime after its migration commit fails; function=test_packed_build_and_verify_restores_runtime_when_migration_commit_fails'
+    ),
+    'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_rejects_dirty_legacy_migration': (
+        'covers the installed Build and Verify CLI rejecting legacy migration in a dirty temporary git repository; function=test_packed_build_and_verify_rejects_dirty_legacy_migration'
+    ),
     'tests/test_pr_flow_cli.py::test_competing_mutation_reports_lock_without_rewriting_status': (
         'covers PR Flow cross-process mutation lock behavior in a real git repository; function=test_competing_mutation_reports_lock_without_rewriting_status'
     ),

@@ -1,0 +1,7 @@
+{
+  "name": "build-and-verify",
+  "owner": {"name": "Build and Verify"},
+  "plugins": [
+    {"name": "build-and-verify", "source": "./", "description": "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）"}
+  ]
+}

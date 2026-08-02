@@ -23,6 +23,7 @@
     ".codex-plugin",
     "bin",
     "python/*.py",
+    "python/lifecycle_profile.json",
     "skills"
   ],
   "pi": {

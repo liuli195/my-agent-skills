@@ -202,11 +202,12 @@
           "requirements-dev.txt",
           "plugins/build-and-verify/**",
           "tests/test_build_and_verify_plugin.py",
+          "tests/test_build_and_verify_cli.py",
           "tests/test_plugin_sync_skill_contract.py",
           "tests/test_version_source_of_truth.py",
           "tests/test_setup_worktree_script.py"
         ],
-        "command": "python -m pytest -q -p no:cacheprovider tests/test_build_and_verify_plugin.py tests/test_plugin_sync_skill_contract.py tests/test_version_source_of_truth.py tests/test_setup_worktree_script.py",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_build_and_verify_plugin.py tests/test_build_and_verify_cli.py tests/test_plugin_sync_skill_contract.py tests/test_version_source_of_truth.py tests/test_setup_worktree_script.py",
         "inputs": [
           ".agents",
           ".claude-plugin",

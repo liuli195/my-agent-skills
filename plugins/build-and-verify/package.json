@@ -1,0 +1,15 @@
+{
+  "name": "@liuli195/build-and-verify",
+  "version": "0.1.56",
+  "description": "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）",
+  "keywords": ["build", "verify", "pi-package"],
+  "bin": {"build-and-verify": "./bin/build-and-verify.js"},
+  "publishConfig": {"access": "public"},
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/liuli195/my-agent-skills",
+    "directory": "plugins/build-and-verify"
+  },
+  "files": [".agents", ".claude-plugin", ".codex-plugin", "bin", "python/*.py", "python/lifecycle_profile.json", "skills"],
+  "pi": {"skills": ["./skills/build-and-verify", "./skills/build-and-verify-init", "./skills/build-and-verify-review"]}
+}
