@@ -27,7 +27,7 @@ agent（代理）必须完成问答、草案展示、只读 validate（校验）
 3. 读取 `references/config-draft.md`（配置草案规则）并展示 `.pr-flow/config.yaml`（配置文件）草案。
 4. 读取 `references/validation.md`（校验规则）并运行只读 `validate --config <path>`（校验配置）。
 5. 如果 validate（校验）有 error（错误），停止，不写入。
-6. 如果只有 warning（警告）或 remote tasks（远端待办），展示影响并请求最终确认。
+6. 展示 warning（警告）或 remote tasks（远端待办）的影响（如有），并在最终确认前明确说明初始化还会新增 `.pr-flow/toolchain.json`（工具链身份记录）和 `.github/workflows/pr-flow-toolchain.yml`（工具链工作流）。
 7. 用户明确确认后，运行 `init --project <repo> --config <path>`（初始化写入配置）。
 
 ## Output
@@ -35,6 +35,8 @@ agent（代理）必须完成问答、草案展示、只读 validate（校验）
 - `.pr-flow/config.yaml`（配置文件）。
 - `.pr-flow/pr-template.md`（拉取请求模板）。
 - `.pr-flow/.gitignore`（忽略文件）。
+- `.pr-flow/toolchain.json`（工具链身份记录）。
+- `.github/workflows/pr-flow-toolchain.yml`（工具链工作流）。
 - GitHub（代码托管平台）remote tasks（远端待办）摘要，不声明已执行。
 
 ## References

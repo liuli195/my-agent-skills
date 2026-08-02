@@ -47,3 +47,11 @@ _Avoid_: Literal input, directory input
 **Legacy MySpec Source（旧 MySpec 来源）**:
 A source record that registers a MySpec（自有规格）plugin from the former shared marketplace or a legacy source path. A shared marketplace registration without an installed MySpec plugin record is not a Legacy MySpec Source.
 _Avoid_: Legacy marketplace, duplicate marketplace
+
+**Toolchain Identity（工具链身份）**:
+The machine-readable identity of one managed tool: its mode and package version, or its official source repository, complete commit, and fixed package directory.
+_Avoid_: Tool version pin, installation source
+
+**Toolchain Record（工具链记录）**:
+The Git-visible repository record of selected Toolchain Identities（工具链身份） used by PR Flow（拉取请求流程） CI（持续集成） synchronization.
+_Avoid_: Tool lockfile, CI configuration

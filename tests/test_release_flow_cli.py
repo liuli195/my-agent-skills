@@ -865,33 +865,7 @@ def test_preflight_multi_error_prints_one_summary_path_without_version_inference
     assert "next version" not in result.stdout
 
 
-def test_preflight_multi_error_with_untracked_error_keeps_per_error_next_actions(
-    tmp_path: Path, monkeypatch
-) -> None:
-    errors = [
-        "manifest_version_mismatch: plugins/pr-flow/.codex-plugin/plugin.json",
-        "runtime_update_required: build-and-verify runtime=9.8.0 requested=9.9.0",
-    ]
-
-    result = run_preflight_with_errors(
-        monkeypatch,
-        tmp_path,
-        errors,
-        bump_plugins=["pr-flow"],
-    )
-
-    assert result.returncode == 1
-    next_actions = [line for line in result.stdout.splitlines() if line.startswith("nextAction:")]
-    assert next_actions == [
-        "nextAction: correct the manifest version in plugins/pr-flow/.codex-plugin/plugin.json, "
-        "then rerun release-flow preflight",
-        "nextAction: run python plugins/build-and-verify/skills/build-and-verify/scripts/"
-        f"build_and_verify.py update-runtime --project {tmp_path / 'project'}",
-    ]
-    assert "current state:" not in result.stdout
-
-
-def test_preflight_rejects_stale_build_and_verify_runtime(tmp_path: Path, monkeypatch) -> None:
+def test_preflight_ignores_legacy_build_and_verify_runtime(tmp_path: Path, monkeypatch) -> None:
     project = tmp_path / "project"
     remote = tmp_path / "remote.git"
     write_release_flow_files(
@@ -933,7 +907,6 @@ transforms:
             "runtime_version": "9.8.0",
         },
     )
-    before_runtime = runtime_version.read_text(encoding="utf-8")
     init_project_with_remote(project, remote)
     monkeypatch.setattr(load_release_flow_module(), "remote_release_errors", lambda *_args: [])
 
@@ -949,30 +922,8 @@ transforms:
         "build-and-verify",
     )
 
-    assert result.returncode == 1
-    assert "error: runtime_update_required: build-and-verify runtime=9.8.0 requested=9.9.0" in result.stdout
-    assert (
-        "nextAction: run python plugins/build-and-verify/skills/build-and-verify/scripts/"
-        f"build_and_verify.py update-runtime --project {project}"
-    ) in result.stdout
-    assert runtime_version.read_text(encoding="utf-8") == before_runtime
-
-    runtime_version.write_text("{", encoding="utf-8")
-
-    invalid_result = run(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v9.9.0",
-        "--version",
-        "9.9.0",
-        "--bump-plugins",
-        "build-and-verify",
-    )
-
-    assert invalid_result.returncode == 1
-    assert "error: runtime_update_required: build-and-verify runtime=invalid requested=9.9.0" in invalid_result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "runtime_update_required" not in result.stdout
 
 
 def test_preflight_merges_repeated_bump_plugins(tmp_path: Path, monkeypatch) -> None:
@@ -1305,36 +1256,81 @@ def test_myspec_source_ci_and_release_use_the_packed_current_checkout() -> None:
     full_verify = (REPO_ROOT / ".github" / "workflows" / "full-verify.yml").read_text(encoding="utf-8")
     release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
+    assert "npm pack ./plugins/my-spec" not in full_verify
+    assert 'tarball="$(python plugins/tool-lifecycle/pack.py myspec "$RUNNER_TEMP")"' in full_verify
+    assert 'npm install -g --prefix "$prefix" --ignore-scripts --no-audit --no-fund "$tarball"' in full_verify
+    assert 'myspec" --help' in full_verify
+    assert 'MYSPEC_TEST_TARBALL=$tarball' in full_verify
+    assert full_verify.index("pack.py myspec") < full_verify.index("Run candidate quick verification")
     for workflow in (full_verify, release):
-        assert "npm pack ./plugins/my-spec" in workflow or "npm pack source/plugins/my-spec" in workflow
-        assert "npm install -g --prefix" in workflow
-        assert 'myspec" --help' in workflow
-        assert '>> "$GITHUB_PATH"' in workflow
-        assert "verify --project" in workflow and "--full" in workflow
+        assert "verify --project" in workflow
+        assert "build-and-verify verify --project . --full" not in workflow
+        assert "build-and-verify verify --project source --full" not in workflow
         assert "@liuli195/myspec@latest" not in workflow
         assert ".whl" not in workflow
         assert "pi-my-spec" not in workflow
 
-    assert full_verify.index("npm pack ./plugins/my-spec") < full_verify.index("Run full verification")
+    assert "node plugins/build-and-verify/bin/build-and-verify.js verify --project . --full" in full_verify
     assert "id-token: write" in release
     assert "registry-url: https://registry.npmjs.org" in release
     assert 'npm publish "$MYSPEC_TARBALL" --provenance --access public' in release
-    assert 'MYSPEC_TEST_TARBALL=$RUNNER_TEMP/$tarball' in full_verify
-    assert 'MYSPEC_TEST_TARBALL=$tarball_path' in release
     assert "supplied_tarball = os.environ.get(\"MYSPEC_TEST_TARBALL\")" in (
         REPO_ROOT / "tests" / "test_my_spec.py"
     ).read_text(encoding="utf-8")
     assert release.count("${{ inputs.") == 3
     assert "BUMP_PLUGINS: ${{ inputs.bumpPlugins }}" in release
-    assert 'normalized_plugins="${BUMP_PLUGINS//[[:space:]]/}"' in release
-    assert '",$normalized_plugins," != *",my-spec,"*' in release
-    assert "package.json').version" in release
-    assert "dist.integrity" in release and "MYSPEC_INTEGRITY" in release
-    assert "Published MySpec package does not match the verified Tarball" in release
+    assert 'NORMALIZED_BUMP_PLUGINS=${BUMP_PLUGINS//[[:space:]]/}' in release
+    assert '",$normalized_plugins,"' in release
+    assert "package.json').name" not in release
+    assert "dist.integrity" in release and "integrity" in release
+    assert "does not match the verified Tarball" in release
     assert "--allow-existing-release" in release
-    assert release.index("Run full verification") < release.index("Validate release plan")
-    assert release.index("Validate release plan") < release.index('npm publish "$MYSPEC_TARBALL"')
+    assert release.index("Validate release plan") < release.index("Prepare verified MySpec npm package")
     assert release.index('npm publish "$MYSPEC_TARBALL"') < release.index("Publish release channel")
+
+
+def test_release_workflows_publish_only_verified_selected_npm_packages() -> None:
+    workflow_paths = [
+        REPO_ROOT / ".github" / "workflows" / "release.yml",
+        REPO_ROOT
+        / "plugins"
+        / "release-flow"
+        / "skills"
+        / "release-flow"
+        / "assets"
+        / "templates"
+        / "github"
+        / "workflows"
+        / "release.yml",
+    ]
+    for workflow_path in workflow_paths:
+        workflow = workflow_path.read_text(encoding="utf-8")
+        assert "replace(" not in workflow
+        assert 'NORMALIZED_BUMP_PLUGINS=${BUMP_PLUGINS//[[:space:]]/}' in workflow
+        assert workflow.index("Validate release plan") < workflow.index("Prepare verified MySpec npm package")
+        for plugin, package_tool in (("my-spec", "myspec"), ("build-and-verify", "build-and-verify")):
+            selected = f'[[ ",$normalized_plugins," == *",{plugin},"* ]] || exit 0'
+            assert workflow.count(selected) == 2
+            assert f'pack.py "{package_tool}"' in workflow
+            assert f'npm install -g --prefix "$prefix"' in workflow
+            assert f'"$prefix/bin/{package_tool}"' in workflow
+            assert f'plugins/{plugin}' in workflow
+        assert '"$prefix/bin/myspec" doctor' in workflow
+        assert '"$prefix/bin/build-and-verify" verify --project source' in workflow
+        assert 'p.repository?.url !== "https://github.com/liuli195/my-agent-skills"' in workflow
+        assert 'npm publish "$MYSPEC_TARBALL" --provenance --access public' in workflow
+        assert 'npm publish "$BUILD_AND_VERIFY_TARBALL" --provenance --access public' in workflow
+        assert "actions/upload-artifact@v4" in workflow
+        assert "FIRST_PUBLISH_REQUIRED" in workflow
+        assert "env.FIRST_PUBLISH_REQUIRED != 'true'" in workflow
+        assert workflow.index("Upload npm package candidates") < workflow.index("Publish release channel")
+
+
+def test_release_workflows_reject_invalid_selection_before_package_steps() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    assert workflow.index("Validate release plan") < workflow.index("Normalize selected npm packages")
+    assert "--bump-plugins \"$BUMP_PLUGINS\"" in workflow
 
 
 def test_workflows_use_current_low_risk_action_versions() -> None:

@@ -20,9 +20,7 @@ CLAUDE_REPO_MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 RELEASE_FLOW_PROJECTION = REPO_ROOT / ".release-flow" / "projection.yaml"
 RELEASE_FLOW_CONFIG = REPO_ROOT / ".release-flow" / "config.yaml"
 RELEASE_FLOW_SCRIPT = REPO_ROOT / "plugins" / "release-flow" / "skills" / "release-flow" / "scripts" / "release_flow.py"
-BUILD_AND_VERIFY_SCRIPT = (
-    PLUGIN_ROOT / "skills" / "build-and-verify" / "scripts" / "build_and_verify.py"
-)
+BUILD_AND_VERIFY_SCRIPT = PLUGIN_ROOT / "python" / "build_and_verify.py"
 _BUILD_AND_VERIFY_MODULE = None
 
 PLUGIN_NAME = "build-and-verify"
@@ -202,6 +200,7 @@ class FakeRunnerModule:
         full: bool = False,
         performance_report: bool = False,
         runtime_version: str = "unknown",
+        synthetic_changed_paths: list[str] | None = None,
     ) -> int:
         def call_runner() -> int:
             return int(
@@ -211,9 +210,12 @@ class FakeRunnerModule:
                     full=full,
                     performance_report=performance_report,
                     runtime_version=runtime_version,
+                    synthetic_changed_paths=(self.changed_files if synthetic_changed_paths is None else synthetic_changed_paths),
                 )
             )
 
+        if synthetic_changed_paths is not None:
+            return call_runner()
         if self.changed_files is None:
             return call_runner()
         original_changed_files = self.runner_module._changed_files
@@ -229,15 +231,11 @@ def run_check(
     *args: str,
     runner: Callable[..., subprocess.CompletedProcess[Any]] | None = None,
     changed_files: list[str] | None = None,
-    check_user_runtime: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     module = load_build_and_verify_module()
     original_runner_module = module._RUNNER_MODULE
-    original_print_runtime_update_hint = module._print_runtime_update_hint
     runner = runner or FakeRunner()
     module._RUNNER_MODULE = FakeRunnerModule(module._runner(), runner, changed_files)
-    if not check_user_runtime:
-        module._print_runtime_update_hint = lambda _project: None
     argv = [*args, "--project", str(project)]
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -246,7 +244,6 @@ def run_check(
             returncode = int(module.main(argv))
     finally:
         module._RUNNER_MODULE = original_runner_module
-        module._print_runtime_update_hint = original_print_runtime_update_hint
     return subprocess.CompletedProcess(
         args=[str(BUILD_AND_VERIFY_SCRIPT), *argv],
         returncode=returncode,
@@ -830,9 +827,9 @@ def test_build_and_verify_plugin_has_dual_manifests() -> None:
     assert claude_manifest["skills"] == "./skills"
 
 
-def test_build_and_verify_plugin_has_runtime_init_and_review_skill_entrypoints() -> None:
+def test_build_and_verify_plugin_uses_cli_for_init_and_verify_without_runtime_snapshots() -> None:
     skill_root = PLUGIN_ROOT / "skills"
-    runtime_script_path = skill_root / PLUGIN_NAME / "scripts" / "build_and_verify.py"
+    cli_path = PLUGIN_ROOT / "bin" / "build-and-verify.js"
     skill_dirs = sorted(path.name for path in skill_root.iterdir() if path.is_dir())
     runtime_skill_text = (skill_root / PLUGIN_NAME / "SKILL.md").read_text(encoding="utf-8")
     runtime_front_matter = runtime_skill_text.split("---", 2)[1]
@@ -840,7 +837,7 @@ def test_build_and_verify_plugin_has_runtime_init_and_review_skill_entrypoints()
     init_front_matter = init_skill_text.split("---", 2)[1]
 
     assert skill_dirs == [PLUGIN_NAME, INIT_SKILL_NAME, REVIEW_SKILL_NAME]
-    assert runtime_script_path.is_file()
+    assert cli_path.is_file()
     assert runtime_skill_text.startswith("---\n")
     assert f"name: {PLUGIN_NAME}" in runtime_front_matter
     assert "本仓库 build（构建检查）和 verify（验证）的统一入口" in runtime_skill_text
@@ -850,13 +847,13 @@ def test_build_and_verify_plugin_has_runtime_init_and_review_skill_entrypoints()
     assert "不写用户级配置" in runtime_skill_text
     assert "不配置 CI（持续集成）" in runtime_skill_text
     assert "不内置仓库业务逻辑" in runtime_skill_text
-    assert "复制同一套 runtime（运行时）到 `.build-and-verify/runtime/`" in runtime_skill_text
-    assert "只提示 runtime（运行时）版本落后，不自动更新仓库文件" in runtime_skill_text
-    assert "scripts/build_and_verify.py init" in runtime_skill_text
-    assert "scripts/build_and_verify.py update-runtime" in runtime_skill_text
-    assert "scripts/build_and_verify.py build" in runtime_skill_text
-    assert "scripts/build_and_verify.py verify" in runtime_skill_text
-    assert ".build-and-verify/runtime/build_and_verify.py verify" in runtime_skill_text
+    assert "`init`（初始化）只写入项目配置；`build-and-verify` CLI（命令行程序）是唯一运行入口。" in runtime_skill_text
+    assert "build-and-verify init --project ." in runtime_skill_text
+    assert "build-and-verify build --project ." in runtime_skill_text
+    assert "build-and-verify verify --project ." in runtime_skill_text
+    assert ".build-and-verify/runtime/" not in runtime_skill_text
+    assert "update-runtime" not in runtime_skill_text
+    assert "scripts/build_and_verify.py" not in runtime_skill_text
     assert "timeoutSeconds" in runtime_skill_text
     assert "pytest-xdist" in runtime_skill_text
     assert "verify.fullBudgetSeconds" in runtime_skill_text
@@ -1568,27 +1565,6 @@ def test_build_and_verify_init_writes_config_gitignore_and_cache(tmp_path: Path)
     assert read_json(project / ".build-and-verify" / "config.json")["verify"]["checks"] == []
 
 
-def test_build_and_verify_init_copies_repository_runtime(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-
-    result = run_build_and_verify("init", "--project", str(project))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    runtime = project / ".build-and-verify" / "runtime"
-    assert (runtime / "build_and_verify.py").is_file()
-    assert (runtime / "build_and_verify_runner.py").is_file()
-    assert (runtime / "version.json").is_file()
-    assert sorted(path.name for path in runtime.iterdir()) == [
-        "build_and_verify.py",
-        "build_and_verify_runner.py",
-        "version.json",
-    ]
-    assert read_json(runtime / "version.json")["runtime_version"] == read_json(
-        PLUGIN_ROOT / ".codex-plugin" / "plugin.json"
-    )["version"]
-
-
 def test_build_and_verify_init_writes_confirmed_config_with_overwrite(
     tmp_path: Path,
 ) -> None:
@@ -1635,328 +1611,8 @@ def test_build_and_verify_init_writes_confirmed_config_with_overwrite(
         "/runs/",
         "/backups/",
     }
-    assert (build_dir / "runtime" / "build_and_verify.py").is_file()
+    assert not (build_dir / "runtime").exists()
     assert (build_dir / "cache").is_dir()
-
-
-def test_build_and_verify_init_config_overwrite_e2e_temp_target_repo(
-    tmp_path: Path,
-) -> None:
-    target = tmp_path / "target-repo"
-    target.mkdir()
-    assert git(target, "init").returncode == 0
-    assert git(target, "config", "user.email", "test@example.invalid").returncode == 0
-    assert git(target, "config", "user.name", "Test User").returncode == 0
-    confirmed = tmp_path / "confirmed.json"
-    verify_script = (
-        "from pathlib import Path; "
-        "Path('e2e.log').open('a', encoding='utf-8').write('verify\\n')"
-    )
-    write_json(
-        confirmed,
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "verify.e2e",
-                        "command": [sys.executable, "-c", verify_script],
-                        "paths": ["src/**"],
-                        "inputs": ["src"],
-                        "checkParallel": True,
-                    }
-                ]
-            },
-        },
-    )
-    (target / "src").mkdir()
-    (target / "src" / "app.py").write_text("print('ok')\n", encoding="utf-8")
-
-    init = run_build_and_verify_subprocess(
-        "init",
-        "--project",
-        str(target),
-        "--config",
-        str(confirmed),
-        "--overwrite",
-    )
-    repository_script = target / ".build-and-verify" / "runtime" / "build_and_verify.py"
-    fast = subprocess.run(
-        [sys.executable, str(repository_script), "verify", "--project", str(target)],
-        cwd=target,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-
-    assert init.returncode == 0, init.stdout + init.stderr
-    assert (target / ".build-and-verify" / "config.json").is_file()
-    assert (target / ".build-and-verify" / "cache").is_dir()
-    assert repository_script.is_file()
-    assert fast.returncode == 0, fast.stdout + fast.stderr
-    assert "full-not-run: true" in fast.stdout
-    assert (target / "e2e.log").read_text(encoding="utf-8").splitlines() == ["verify"]
-
-
-def test_copied_runtime_full_performance_report_e2e_temp_target_repo(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    runtime_script = project / ".build-and-verify" / "runtime" / "build_and_verify.py"
-    slow_check = (
-        "import time; from pathlib import Path; time.sleep(1.05); "
-        "Path('performance.log').open('a', encoding='utf-8').write('slow\\n')"
-    )
-    marker_check = (
-        "from pathlib import Path; "
-        "Path('performance.log').open('a', encoding='utf-8').write('marker\\n')"
-    )
-    write_runner_config(
-        project,
-        verify_checks=[
-            {"id": "slow", "command": [sys.executable, "-c", slow_check], "inputs": []},
-            {"id": "marker", "command": [sys.executable, "-c", marker_check], "inputs": []},
-        ],
-        verify_config={"fullBudgetSeconds": 1},
-    )
-
-    automatic = subprocess.run(
-        [sys.executable, str(runtime_script), "verify", "--project", str(project), "--full"],
-        cwd=project,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-
-    report_path = project / ".build-and-verify" / "runs" / "performance-report.json"
-    assert automatic.returncode == 0, automatic.stdout + automatic.stderr
-    assert "performance-warning:" in automatic.stdout
-    assert (project / "performance.log").read_text(encoding="utf-8").splitlines() == [
-        "slow",
-        "marker",
-    ]
-    automatic_report = read_json(report_path)
-    assert automatic_report["overBudget"] is True
-
-    explicit_check = (
-        "from pathlib import Path; "
-        "Path('performance.log').open('a', encoding='utf-8').write('explicit\\n')"
-    )
-    write_runner_config(
-        project,
-        verify_checks=[
-            {"id": "explicit", "command": [sys.executable, "-c", explicit_check], "inputs": []}
-        ],
-    )
-
-    explicit = subprocess.run(
-        [
-            sys.executable,
-            str(runtime_script),
-            "verify",
-            "--project",
-            str(project),
-            "--full",
-            "--performance-report",
-        ],
-        cwd=project,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-
-    assert explicit.returncode == 0, explicit.stdout + explicit.stderr
-    assert read_json(report_path)["budgetSeconds"] is None
-    assert read_json(report_path)["overBudget"] is None
-
-
-def test_copied_repository_runtime_can_initialize_another_project(tmp_path: Path) -> None:
-    source_project = tmp_path / "source"
-    target_project = tmp_path / "target"
-    source_project.mkdir()
-    target_project.mkdir()
-    assert run_build_and_verify("init", "--project", str(source_project)).returncode == 0
-    repository_script = (
-        source_project / ".build-and-verify" / "runtime" / "build_and_verify.py"
-    )
-
-    result = subprocess.run(
-        [sys.executable, str(repository_script), "init", "--project", str(target_project)],
-        cwd=target_project,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert (target_project / ".build-and-verify" / "config.json").is_file()
-    assert (target_project / ".build-and-verify" / "runtime" / "build_and_verify.py").is_file()
-
-
-def test_build_and_verify_update_runtime_refreshes_runtime_without_config(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    config_path = project / ".build-and-verify" / "config.json"
-    runtime_file = project / ".build-and-verify" / "runtime" / "build_and_verify.py"
-    config_before = config_path.read_text(encoding="utf-8")
-    runtime_file.write_text("stale\n", encoding="utf-8")
-
-    result = run_build_and_verify("update-runtime", "--project", str(project))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "stale" not in runtime_file.read_text(encoding="utf-8")
-    assert config_path.read_text(encoding="utf-8") == config_before
-
-
-def test_copied_repository_runtime_can_update_itself(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    repository_script = project / ".build-and-verify" / "runtime" / "build_and_verify.py"
-
-    result = subprocess.run(
-        [sys.executable, str(repository_script), "update-runtime", "--project", str(project)],
-        cwd=project,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: runtime-updated" in result.stdout
-
-
-def test_build_and_verify_verify_does_not_mutate_repository_runtime(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {"version": 1, "build": {"checks": []}, "verify": {"checks": []}},
-    )
-    runtime_file = project / ".build-and-verify" / "runtime" / "build_and_verify.py"
-    before = runtime_file.read_bytes()
-
-    result = run_check(project, "verify", check_user_runtime=True)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert runtime_file.read_bytes() == before
-
-
-def test_build_and_verify_verify_reports_newer_user_runtime_without_mutation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project = tmp_path / "project"
-    home = tmp_path / "home"
-    project.mkdir()
-    installed_runtime = (
-        home
-        / ".codex"
-        / "plugins"
-        / "cache"
-        / "vendor"
-        / "build-and-verify"
-        / "9.9.9"
-        / "skills"
-        / "build-and-verify"
-        / "scripts"
-    )
-    installed_runtime.mkdir(parents=True)
-    installed_script = installed_runtime / "build_and_verify.py"
-    installed_script.write_text("# newer\n", encoding="utf-8")
-    write_json(
-        installed_runtime / "version.json",
-        {
-            "plugin": "build-and-verify",
-            "plugin_version": "9.9.9",
-            "runtime_version": "9.9.9",
-        },
-    )
-    monkeypatch.setenv("USERPROFILE", str(home))
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {"version": 1, "build": {"checks": []}, "verify": {"checks": []}},
-    )
-    runtime_file = project / ".build-and-verify" / "runtime" / "build_and_verify.py"
-    before = runtime_file.read_bytes()
-
-    result = run_check(project, "verify", check_user_runtime=True)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    repository_version = read_json(PLUGIN_ROOT / ".codex-plugin" / "plugin.json")["version"]
-    assert f"runtime_outdated: repository={repository_version} installed=9.9.9" in result.stdout
-    assert f"python {installed_script} update-runtime --project {project}" in result.stdout
-    assert runtime_file.read_bytes() == before
-
-
-def test_build_and_verify_verify_runtime_hint_preserves_failure_status(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project = tmp_path / "project"
-    home = tmp_path / "home"
-    project.mkdir()
-    installed_runtime = (
-        home
-        / ".codex"
-        / "plugins"
-        / "cache"
-        / "vendor"
-        / "build-and-verify"
-        / "9.9.9"
-        / "skills"
-        / "build-and-verify"
-        / "scripts"
-    )
-    installed_runtime.mkdir(parents=True)
-    installed_script = installed_runtime / "build_and_verify.py"
-    installed_script.write_text("# newer\n", encoding="utf-8")
-    write_json(
-        installed_runtime / "version.json",
-        {
-            "plugin": "build-and-verify",
-            "plugin_version": "9.9.9",
-            "runtime_version": "9.9.9",
-        },
-    )
-    monkeypatch.setenv("USERPROFILE", str(home))
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "fails",
-                        "command": command_that_fails_once("fails"),
-                        "inputs": [],
-                    }
-                ]
-            },
-        },
-    )
-    runtime_file = project / ".build-and-verify" / "runtime" / "build_and_verify.py"
-    before = runtime_file.read_bytes()
-
-    result = run_check(project, "verify", "--full", check_user_runtime=True)
-
-    assert result.returncode == 1
-    repository_version = read_json(PLUGIN_ROOT / ".codex-plugin" / "plugin.json")["version"]
-    assert f"runtime_outdated: repository={repository_version} installed=9.9.9" in result.stdout
-    assert f"python {installed_script} update-runtime --project {project}" in result.stdout
-    assert "failed: fails" in result.stdout
-    assert "status: failed" in result.stdout
-    assert runtime_file.read_bytes() == before
 
 
 @pytest.mark.parametrize(
@@ -1964,7 +1620,6 @@ def test_build_and_verify_verify_runtime_hint_preserves_failure_status(
     [
         Path(".build-and-verify/config.json"),
         Path(".build-and-verify/.gitignore"),
-        Path(".build-and-verify/runtime"),
     ],
 )
 def test_build_and_verify_init_refuses_existing_files_before_writes(
@@ -4028,126 +3683,6 @@ def test_build_and_verify_runner_reads_git_status_rename_and_copy_destinations(
     assert runner._git_status_names(tmp_path) == ["renamed.txt", "copied.txt"]
 
 
-def test_build_and_verify_user_level_skill_path_requires_manifest_version(
-    tmp_path: Path,
-) -> None:
-    user_plugin = tmp_path / "plugins" / "build-and-verify"
-    user_skill = user_plugin / "skills" / "build-and-verify"
-    shutil.copytree(PLUGIN_ROOT / "skills" / "build-and-verify", user_skill)
-    script = user_skill / "scripts" / "build_and_verify.py"
-    manifest = user_plugin / ".codex-plugin" / "plugin.json"
-    manifest.parent.mkdir()
-    write_json(
-        manifest,
-        {
-            "name": "build-and-verify",
-            "version": read_json(PLUGIN_ROOT / ".codex-plugin" / "plugin.json")["version"],
-        },
-    )
-    project = tmp_path / "project"
-    project.mkdir()
-
-    init = subprocess.run(
-        [sys.executable, str(script), "init", "--project", str(project)],
-        cwd=tmp_path,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert init.returncode == 0, init.stdout + init.stderr
-    (project / "src").mkdir()
-    (project / "src" / "app.py").write_text("changed\n", encoding="utf-8")
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "verify-src",
-                        "command": command_that_logs("verify-src"),
-                        "paths": ["src/**"],
-                        "inputs": ["src"],
-                    }
-                ]
-            },
-        },
-    )
-
-    verify = subprocess.run(
-        [sys.executable, str(script), "verify", "--project", str(project)],
-        cwd=project,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-
-    assert verify.returncode == 0, verify.stdout + verify.stderr
-    assert "checked: verify-src" in verify.stdout
-    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
-        "verify-src"
-    ]
-
-    write_json(manifest, {"name": "build-and-verify"})
-    missing_version = subprocess.run(
-        [sys.executable, str(script), "verify", "--project", str(project)],
-        cwd=project,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-
-    assert missing_version.returncode == 1
-    assert "missing_runtime_version" in missing_version.stderr
-    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
-        "verify-src"
-    ]
-
-
-def test_repository_runtime_requires_runtime_version_before_verify_runs_or_caches(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    (project / "src").mkdir()
-    (project / "src" / "app.py").write_text("changed\n", encoding="utf-8")
-    write_runner_config(
-        project,
-        verify_checks=[
-            {
-                "id": "verify-src",
-                "command": command_that_logs("verify-src"),
-                "paths": ["src/**"],
-                "inputs": ["src"],
-            }
-        ],
-    )
-    version_path = project / ".build-and-verify" / "runtime" / "version.json"
-    version = read_json(version_path)
-    del version["runtime_version"]
-    write_json(version_path, version)
-    spec = importlib.util.spec_from_file_location(
-        "repository_build_and_verify", version_path.with_name("build_and_verify.py")
-    )
-    assert spec is not None
-    assert spec.loader is not None
-    runtime = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(runtime)
-    runner = FakeRunner()
-    runtime._RUNNER_MODULE = FakeRunnerModule(runtime._runner(), runner, ["src/app.py"])
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-        returncode = runtime.main(["verify", "--project", str(project)])
-
-    assert returncode == 1
-    assert "missing_runtime_version" in stderr.getvalue()
-    assert runner.calls == []
-    assert list((project / ".build-and-verify" / "cache").glob("*.json")) == []
-
-
 def test_build_and_verify_non_git_project_uses_filesystem_scan(
     tmp_path: Path,
 ) -> None:
@@ -5060,9 +4595,7 @@ def test_build_and_verify_runner_directory_hash_uses_git_visible_files(
 
 
 def test_build_and_verify_cache_key_covers_runtime_and_cache_versions() -> None:
-    template = (
-        PLUGIN_ROOT / "skills" / "build-and-verify" / "scripts" / "build_and_verify_runner.py"
-    ).read_text(encoding="utf-8")
+    template = (PLUGIN_ROOT / "python" / "build_and_verify_runner.py").read_text(encoding="utf-8")
 
     assert '"cache_version": CACHE_VERSION' in template
     assert '"framework_version": FRAMEWORK_VERSION' in template

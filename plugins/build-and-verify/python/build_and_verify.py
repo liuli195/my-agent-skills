@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -28,31 +29,15 @@ def _templates_root() -> Path:
     return _skill_root() / "assets" / "templates"
 
 
-def _runtime_root() -> Path:
-    return Path(__file__).resolve().parent
-
-
 def _runtime_target(project: Path) -> Path:
     return project / ".build-and-verify" / "runtime"
 
 
 def _plugin_root() -> Path:
-    return _skill_root().parents[1]
+    return Path(__file__).resolve().parents[1]
 
 
 def _runtime_metadata() -> dict[str, str]:
-    version_path = _runtime_root() / VERSION_FILE
-    if version_path.is_file():
-        try:
-            data = json.loads(version_path.read_text(encoding="utf-8"))
-            version = str(data.get("runtime_version") or "unknown")
-            return {
-                "plugin": "build-and-verify",
-                "plugin_version": str(data.get("plugin_version") or version),
-                "runtime_version": version,
-            }
-        except json.JSONDecodeError:
-            pass
     manifest_path = _plugin_root() / ".codex-plugin" / "plugin.json"
     if manifest_path.is_file():
         try:
@@ -69,78 +54,6 @@ def _runtime_metadata() -> dict[str, str]:
         "plugin_version": "unknown",
         "runtime_version": "unknown",
     }
-
-
-def _version_key(version: str) -> tuple[int, ...]:
-    parts: list[int] = []
-    for part in version.split("."):
-        if not part.isdigit():
-            break
-        parts.append(int(part))
-    return tuple(parts)
-
-
-def _user_runtime_roots() -> list[Path]:
-    home = os.environ.get("USERPROFILE") or os.environ.get("HOME")
-    if not home:
-        return []
-    root = Path(home)
-    return [
-        root / ".codex" / "plugins" / "cache",
-        root / ".claude" / "plugins" / "cache",
-        root / ".claude" / "plugins",
-    ]
-
-
-def _newer_user_runtime() -> tuple[Path, str, str] | None:
-    current = _runtime_metadata().get("runtime_version", "unknown")
-    current_key = _version_key(current)
-    if not current_key:
-        return None
-    best: tuple[Path, str, str] | None = None
-    for root in _user_runtime_roots():
-        if not root.is_dir():
-            continue
-        for version_path in root.glob("**/skills/build-and-verify/scripts/version.json"):
-            script = version_path.with_name("build_and_verify.py")
-            if not script.is_file() or script.resolve() == Path(__file__).resolve():
-                continue
-            try:
-                data = json.loads(version_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                continue
-            if data.get("plugin") != "build-and-verify":
-                continue
-            installed = str(data.get("runtime_version") or data.get("plugin_version") or "")
-            installed_key = _version_key(installed)
-            if installed_key <= current_key:
-                continue
-            if best is None or installed_key > _version_key(best[2]):
-                best = (script, current, installed)
-    return best
-
-
-def _print_runtime_update_hint(project: Path) -> None:
-    newer = _newer_user_runtime()
-    if newer is None:
-        return
-    script, current, installed = newer
-    print(f"runtime_outdated: repository={current} installed={installed}")
-    print(f"run: python {script} update-runtime --project {project}")
-
-
-def _copy_runtime(project: Path) -> None:
-    target = _runtime_target(project)
-    target.mkdir(parents=True, exist_ok=True)
-    for filename in RUNTIME_FILES:
-        source = _runtime_root() / filename
-        destination = target / filename
-        if source.resolve() != destination.resolve():
-            shutil.copyfile(source, destination)
-    (target / VERSION_FILE).write_text(
-        json.dumps(_runtime_metadata(), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
 
 
 def _load_config_file(path: Path) -> dict:
@@ -194,7 +107,6 @@ def _init_project(
 ) -> int:
     config_target = project / ".build-and-verify" / "config.json"
     gitignore_target = project / ".build-and-verify" / ".gitignore"
-    runtime_target = _runtime_target(project)
     try:
         confirmed_config = DEFAULT_CONFIG if config is None else _load_config_file(config)
     except ValueError as error:
@@ -203,7 +115,7 @@ def _init_project(
 
     # Preflight before mkdir/copy so a failed init does not create framework artifacts.
     if not overwrite or config is None:
-        for target in [config_target, gitignore_target, runtime_target]:
+        for target in [config_target, gitignore_target]:
             if target.exists():
                 print(f"existing_file: {target.relative_to(project).as_posix()}", file=sys.stderr)
                 return 1
@@ -216,7 +128,6 @@ def _init_project(
         json.dumps(confirmed_config, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    _copy_runtime(project)
     (project / ".build-and-verify" / "cache").mkdir(parents=True, exist_ok=True)
 
     if backup is not None:
@@ -225,10 +136,99 @@ def _init_project(
     return 0
 
 
-def _update_runtime(project: Path) -> int:
-    _copy_runtime(project)
-    print("status: runtime-updated")
-    return 0
+def _legacy_runtime(project: Path) -> tuple[Path | None, bool]:
+    runtime = _runtime_target(project)
+    if not runtime.exists():
+        return None, False
+    if (
+        not runtime.is_dir()
+        or {path.name for path in runtime.iterdir()} != {*RUNTIME_FILES, VERSION_FILE}
+        or not all(path.is_file() for path in runtime.iterdir())
+    ):
+        return runtime, False
+    try:
+        metadata = json.loads((runtime / VERSION_FILE).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return runtime, False
+    required_metadata = {"plugin", "plugin_version", "runtime_version"}
+    recognized = (
+        isinstance(metadata, dict)
+        and set(metadata) == required_metadata
+        and metadata.get("plugin") == "build-and-verify"
+        and all(
+            isinstance(metadata.get(field), str) and metadata[field]
+            for field in required_metadata
+        )
+    )
+    return runtime, recognized
+
+
+def _git(project: Path, *args: str) -> subprocess.CompletedProcess[str] | None:
+    try:
+        return subprocess.run(
+            ["git", *args], cwd=project, text=True, capture_output=True, check=False
+        )
+    except OSError:
+        return None
+
+
+def _migration_ready(project: Path) -> bool:
+    status = _git(project, "status", "--porcelain")
+    if status is None or status.returncode != 0:
+        print("legacy_runtime_not_migrated: git_repository_required", file=sys.stderr)
+        return False
+    if status.stdout:
+        print("legacy_runtime_not_migrated: git_worktree_not_clean", file=sys.stderr)
+        return False
+    return True
+
+
+def _restore_runtime(project: Path, relative: str) -> None:
+    _git(project, "restore", "--source=HEAD", "--staged", "--worktree", "--", relative)
+
+
+def _only_runtime_deletions_staged(project: Path, relative: str) -> bool:
+    staged = _git(project, "diff", "--cached", "--name-status", "-z")
+    if staged is None or staged.returncode != 0:
+        return False
+    entries = staged.stdout.split("\0")
+    pairs = zip(entries[::2], entries[1::2])
+    allowed_prefix = relative.rstrip("/") + "/"
+    return bool(entries[0]) and all(
+        status == "D" and path.startswith(allowed_prefix)
+        for status, path in pairs
+        if status
+    )
+
+
+def _migrate_legacy_runtime(project: Path, runtime: Path) -> int:
+    relative = runtime.relative_to(project).as_posix()
+    if not _migration_ready(project):
+        return 1
+    removed = _git(project, "rm", "-r", "--", relative)
+    if removed is None or removed.returncode != 0:
+        _restore_runtime(project, relative)
+        print("legacy_runtime_not_migrated: removal_failed", file=sys.stderr)
+        return 1
+    if not _only_runtime_deletions_staged(project, relative):
+        _restore_runtime(project, relative)
+        print("legacy_runtime_not_migrated: unexpected_staged_changes", file=sys.stderr)
+        return 1
+    committed = _git(
+        project,
+        "commit",
+        "--only",
+        "-m",
+        "迁移：移除 Build and Verify 旧运行时",
+        "--",
+        relative,
+    )
+    if committed is not None and committed.returncode == 0:
+        print("status: legacy-runtime-migrated")
+        return 0
+    _restore_runtime(project, relative)
+    print("legacy_runtime_not_migrated: commit_failed", file=sys.stderr)
+    return 1
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -238,8 +238,6 @@ def _build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--project", required=True)
     init_parser.add_argument("--config")
     init_parser.add_argument("--overwrite", action="store_true")
-    update_parser = subparsers.add_parser("update-runtime")
-    update_parser.add_argument("--project", required=True)
     build_parser = subparsers.add_parser("build")
     build_parser.add_argument("--project", default=".")
     verify_parser = subparsers.add_parser("verify")
@@ -267,23 +265,35 @@ def main(argv: list[str] | None = None) -> int:
             config=Path(args.config).resolve() if args.config else None,
             overwrite=bool(args.overwrite),
         )
-    if args.command == "update-runtime":
-        return _update_runtime(Path(args.project).resolve())
     if args.command == "build":
-        project = Path(args.project).resolve()
-        _print_runtime_update_hint(project)
-        return int(_runner().run_build(project))
+        return int(_runner().run_build(Path(args.project).resolve()))
     if args.command == "verify":
         project = Path(args.project).resolve()
-        _print_runtime_update_hint(project)
-        return int(
+        legacy_runtime, recognized_legacy_runtime = _legacy_runtime(project)
+        if legacy_runtime is not None and not recognized_legacy_runtime:
+            print("legacy_runtime_not_migrated: unrecognized_runtime", file=sys.stderr)
+            return 1
+        if legacy_runtime is not None and not _migration_ready(project):
+            return 1
+        result = int(
             _runner().run_verify(
                 project,
                 full=args.full,
                 performance_report=args.performance_report,
                 runtime_version=_runtime_metadata()["runtime_version"],
+                synthetic_changed_paths=(
+                    sorted(
+                        path.relative_to(project).as_posix()
+                        for path in legacy_runtime.iterdir()
+                    )
+                    if legacy_runtime is not None
+                    else None
+                ),
             )
         )
+        if result != 0 or legacy_runtime is None:
+            return result
+        return _migrate_legacy_runtime(project, legacy_runtime)
     parser.error(f"unsupported command: {args.command}")
     return 2
 

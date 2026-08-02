@@ -346,17 +346,15 @@ Release Flow preflight（发布预检） MUST translate the three preflight（�
 - **WHEN** preflight（发布预检） finds that the requested tag（标签） or GitHub Release（GitHub 发布） already exists
 - **THEN** output（输出） MUST preserve `release already exists`（发布已存在）
 - **THEN** output（输出） MUST include a next action to choose a new release version（发布版本） and rerun preflight（发布预检）
-### Requirement: Preflight blocks stale build-and-verify runtime before release
-Release Flow preflight（发布预检） MUST block release（发布） when build-and-verify（构建与验证） runtime（运行时） has not been synchronized for a build-and-verify（构建与验证） plugin bump（版本提升）.
+### Requirement: Preflight does not require a build-and-verify runtime snapshot
+Release Flow preflight（发布预检） MUST use the selected build-and-verify（构建与验证） package metadata and MUST NOT require a repository runtime（运行时） snapshot.
 
-#### Scenario: Build-and-verify runtime is stale for requested release
+#### Scenario: Build-and-verify is selected for release
 - **WHEN** preflight（发布预检） is run for a release（发布） that bumps the build-and-verify（构建与验证） plugin
-- **AND** the repository `.build-and-verify/runtime/version.json` does not match the requested build-and-verify（构建与验证） plugin release version（发布版本）
-- **THEN** preflight（发布预检） MUST refuse to continue
-- **THEN** output（输出） MUST use `runtime_update_required` as reason（原因）
-- **THEN** output（输出） MUST include the repository runtime（运行时） version（版本）, requested plugin（插件） version（版本）, and update-runtime（更新运行时） command
+- **THEN** preflight（发布预检） MUST validate the selected package metadata
+- **THEN** preflight（发布预检） MUST NOT read or require `.build-and-verify/runtime/version.json`
 
-#### Scenario: Runtime check does not mutate files
-- **WHEN** preflight（发布预检） checks build-and-verify（构建与验证） runtime（运行时） synchronization
-- **THEN** preflight（发布预检） MUST NOT update `.build-and-verify/runtime/`
+#### Scenario: Package preflight does not mutate files
+- **WHEN** preflight（发布预检） checks build-and-verify（构建与验证） package metadata
+- **THEN** preflight（发布预检） MUST NOT create or update `.build-and-verify/runtime/`
 - **THEN** preflight（发布预检） MUST NOT commit, push（推送）, or open PR（拉取请求）

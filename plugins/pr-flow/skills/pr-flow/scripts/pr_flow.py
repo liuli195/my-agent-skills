@@ -43,6 +43,13 @@ PR_TEMPLATE = """## Summary
 <!-- 写 Fixes #123；没有关闭的问题单时写 None。 -->
 """
 PR_FLOW_GITIGNORE = "/runs/\n/last-status.json\n"
+TOOLCHAIN_PATH = Path(".pr-flow/toolchain.json")
+TOOLCHAIN_WORKFLOW_PATH = Path(".github/workflows/pr-flow-toolchain.yml")
+TOOLCHAIN_TOOLS = {
+    "myspec": ("myspec", "@liuli195/myspec", "plugins/my-spec"),
+    "build-and-verify": ("build-and-verify", "@liuli195/build-and-verify", "plugins/build-and-verify"),
+}
+OFFICIAL_TOOLCHAIN_REPOSITORY = "https://github.com/liuli195/my-agent-skills"
 HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 EXECUTING_SCRIPT = str(Path(__file__).resolve())
 
@@ -59,6 +66,170 @@ def write_text_if_missing(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def toolchain_identities() -> dict[str, dict[str, str]]:
+    identities: dict[str, dict[str, str]] = {}
+    for key, (command, package_name, package_directory) in TOOLCHAIN_TOOLS.items():
+        try:
+            result = subprocess.run([shutil.which(command) or command, "doctor"], check=False, text=True, capture_output=True)
+            report = json.loads(result.stdout) if result.returncode == 0 else None
+        except (FileNotFoundError, json.JSONDecodeError):
+            report = None
+        toolchain = report.get("toolchain") if isinstance(report, dict) else None
+        if not isinstance(toolchain, dict):
+            raise PrFlowError("toolchain_doctor_failed", {"reason": "toolchain_doctor_failed", "tool": key})
+        mode = toolchain.get("mode")
+        identity = {"mode": mode, "packageName": toolchain.get("packageName")}
+        if mode == "release":
+            identity["packageVersion"] = toolchain.get("packageVersion")
+        elif mode == "dev":
+            identity.update({
+                "sourceRepository": toolchain.get("sourceRepository"),
+                "sourceCommit": toolchain.get("sourceCommit"),
+                "packageDirectory": toolchain.get("packageDirectory"),
+            })
+        if identity.get("packageName") != package_name or not valid_toolchain_identity(identity, package_directory):
+            raise PrFlowError("toolchain_identity_invalid", {"reason": "toolchain_identity_invalid", "tool": key})
+        identities[key] = identity
+    return identities
+
+
+def valid_semver(version: str) -> bool:
+    core, has_build, build = version.partition("+")
+    if has_build and (not build or any(not identifier or not all(char.isascii() and (char.isalnum() or char == "-") for char in identifier) for identifier in build.split("."))):
+        return False
+    core, has_prerelease, prerelease = core.partition("-")
+    if has_prerelease:
+        for identifier in prerelease.split("."):
+            if not identifier or not all(char.isascii() and (char.isalnum() or char == "-") for char in identifier):
+                return False
+            if all("0" <= char <= "9" for char in identifier) and len(identifier) > 1 and identifier[0] == "0":
+                return False
+    parts = core.split(".")
+    return len(parts) == 3 and all(part and all("0" <= char <= "9" for char in part) and (len(part) == 1 or part[0] != "0") for part in parts)
+
+
+def valid_toolchain_identity(identity: dict[str, Any], package_directory: str) -> bool:
+    if identity.get("mode") == "release":
+        version = identity.get("packageVersion")
+        return isinstance(version, str) and valid_semver(version)
+    return (
+        identity.get("mode") == "dev"
+        and identity.get("sourceRepository") == OFFICIAL_TOOLCHAIN_REPOSITORY
+        and isinstance(identity.get("sourceCommit"), str)
+        and re.fullmatch(r"[0-9a-f]{40}", identity["sourceCommit"]) is not None
+        and identity.get("packageDirectory") == package_directory
+    )
+
+
+def toolchain_record(identities: dict[str, dict[str, str]]) -> str:
+    return json.dumps({"schemaVersion": 1, "tools": identities}, ensure_ascii=False, indent=2) + "\n"
+
+
+def toolchain_install_step(key: str, identity: dict[str, str]) -> str:
+    _, package_name, _ = TOOLCHAIN_TOOLS[key]
+    if identity["mode"] == "release":
+        package = shlex.quote(f"{package_name}@{identity['packageVersion']}")
+        return f"      - run: npm install --global --ignore-scripts --no-audit --no-fund {package}"
+    return "\n".join((
+        "      - run: |",
+        f"          git clone --no-checkout {OFFICIAL_TOOLCHAIN_REPOSITORY} $RUNNER_TEMP/{key}",
+        f"          git -C $RUNNER_TEMP/{key} checkout --detach {identity['sourceCommit']}",
+        f"          tarball=$(python $RUNNER_TEMP/{key}/plugins/tool-lifecycle/pack.py {key} $RUNNER_TEMP)",
+        "          npm install --global --ignore-scripts --no-audit --no-fund \"$tarball\"",
+    ))
+
+
+def toolchain_workflow(identities: dict[str, dict[str, str]]) -> str:
+    installs = "\n".join(toolchain_install_step(key, identities[key]) for key in TOOLCHAIN_TOOLS)
+    return "\n".join((
+        "name: PR Flow toolchain",
+        "",
+        "on:",
+        "  pull_request:",
+        "  workflow_dispatch:",
+        "",
+        "permissions:",
+        "  contents: read",
+        "",
+        "jobs:",
+        "  pr-flow-toolchain:",
+        "    runs-on: ubuntu-latest",
+        "    steps:",
+        "      - uses: actions/checkout@v5",
+        "      - uses: actions/setup-node@v6",
+        "        with:",
+        "          node-version: '24'",
+        "      - uses: actions/setup-python@v6",
+        "        with:",
+        "          python-version: '3.12'",
+        installs,
+        "      - run: myspec doctor --all",
+        "      - run: build-and-verify verify --project .",
+        "",
+    ))
+
+
+def toolchain_changes(project: Path, identities: dict[str, dict[str, str]]) -> dict[Path, str]:
+    desired = {
+        TOOLCHAIN_PATH: toolchain_record(identities),
+        TOOLCHAIN_WORKFLOW_PATH: toolchain_workflow(identities),
+    }
+    return {
+        path: text
+        for path, text in desired.items()
+        if not (project / path).exists() or (project / path).read_text(encoding="utf-8") != text
+    }
+
+
+def restore_toolchain_changes(project: Path, originals: dict[Path, bytes | None]) -> None:
+    paths = [path.as_posix() for path in originals]
+    if paths:
+        git(project, "restore", "--staged", "--", *paths)
+    for path, original in originals.items():
+        target = project / path
+        if original is None:
+            target.unlink(missing_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(original)
+
+
+def commit_toolchain_changes(project: Path, changes: dict[Path, str]) -> None:
+    originals = {path: (project / path).read_bytes() if (project / path).exists() else None for path in changes}
+    paths = [path.as_posix() for path in changes]
+    try:
+        for path, text in changes.items():
+            target = project / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+        require_git_success(project, "git_toolchain_add_failed", "add", "--", *paths)
+        staged = require_git_success(project, "git_toolchain_staged_failed", "diff", "--cached", "--name-only").stdout.splitlines()
+        if set(staged) != set(paths):
+            raise PrFlowError("toolchain_sync_scope_invalid", {"reason": "toolchain_sync_scope_invalid", "staged": staged})
+        require_git_success(project, "git_toolchain_commit_failed", "commit", "-m", "chore: sync PR Flow toolchain")
+    except Exception:
+        restore_toolchain_changes(project, originals)
+        raise
+
+
+def sync_toolchain(project: Path) -> bool:
+    if not (project / TOOLCHAIN_PATH).exists():
+        return False
+    committed = False
+    for _ in range(2):
+        identities = toolchain_identities()
+        changes = toolchain_changes(project, identities)
+        if not changes:
+            return committed
+        if require_git_success(project, "git_status_failed", "status", "--porcelain").stdout.strip():
+            raise PrFlowError("toolchain_sync_dirty", {"reason": "toolchain_sync_dirty"})
+        commit_toolchain_changes(project, changes)
+        committed = True
+    if not toolchain_changes(project, toolchain_identities()):
+        return committed
+    raise PrFlowError("toolchain_identity_unstable", {"reason": "toolchain_identity_unstable"})
+
+
 def default_config(base_branch: str) -> dict:
     return {
         "defaults": {
@@ -66,7 +237,7 @@ def default_config(base_branch: str) -> dict:
             "mergeStrategy": "merge",
             "reviewGate": {"mode": "github"},
             "hotfix": {
-                "verifyCommand": "python .build-and-verify/runtime/build_and_verify.py verify --project . --full"
+                "verifyCommand": "build-and-verify verify --project . --full"
             },
             "wait": {"timeoutSeconds": 600, "pollSeconds": 15},
             "pr": {
@@ -1586,11 +1757,21 @@ def run_init(args: argparse.Namespace) -> int:
             print(f"{issue['level']}: {issue['message']}")
         return 1
 
+    try:
+        identities = toolchain_identities()
+    except PrFlowError as exc:
+        print(f"status: {exc.reason}")
+        return 1
+
     config_text = yaml.safe_dump(config, allow_unicode=True, sort_keys=False)
     pr_flow_dir.mkdir(parents=True, exist_ok=True)
     (pr_flow_dir / "config.yaml").write_text(config_text, encoding="utf-8")
     write_text_if_missing(pr_flow_dir / "pr-template.md", PR_TEMPLATE)
     write_text_if_missing(pr_flow_dir / ".gitignore", PR_FLOW_GITIGNORE)
+    for path, text in toolchain_changes(project, identities).items():
+        target = project / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
 
     print("status: initialized")
     for issue in issues:
@@ -1622,6 +1803,8 @@ def run_diagnose(args: argparse.Namespace) -> int:
         details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
         return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
 
+    if not (project / TOOLCHAIN_PATH).exists():
+        print("upgrade available: rerun pr-flow-init to record the managed toolchain")
     base_branch = base_branch_from_config(config)
     branch_result = git(project, "branch", "--show-current")
     if branch_result.returncode != 0 or not branch_result.stdout.strip():
@@ -1759,6 +1942,10 @@ def run_diagnose(args: argparse.Namespace) -> int:
     return 0
 
 
+def toolchain_upgrade_available(project: Path) -> bool:
+    return not (project / TOOLCHAIN_PATH).exists()
+
+
 def run_lifecycle(
     project: Path,
     config: dict[str, Any],
@@ -1772,6 +1959,10 @@ def run_lifecycle(
     remove_worktree_after: bool = False,
 ) -> int:
     try:
+        if toolchain_upgrade_available(project):
+            print("upgrade available: rerun pr-flow-init to record the managed toolchain")
+        else:
+            sync_toolchain(project)
         pr = find_pr(project)
         existing_pr = pr is not None
         base_oid: str | None = None
@@ -2055,6 +2246,8 @@ def run_hotfix(args: argparse.Namespace) -> int:
     target = args.target
     try:
         config = load_config(project)
+        if toolchain_upgrade_available(project):
+            print("upgrade available: rerun pr-flow-init to record the managed toolchain")
         branch_config = branch_config_for_target(config, target)
         remote = hotfix_remote(branch_config)
         details: dict[str, Any] = {
@@ -2165,6 +2358,8 @@ def run_cleanup(args: argparse.Namespace) -> int:
     project = resolve_project(args.project)
     try:
         config = load_config(project)
+        if toolchain_upgrade_available(project):
+            print("upgrade available: rerun pr-flow-init to record the managed toolchain")
         pr = view_pr_for_cleanup(project, str(args.pr))
         head_ref, base_ref = require_cleanup_pr_fields(pr)
 

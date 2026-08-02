@@ -6,173 +6,6 @@ This capability keeps the MySpec（自有规格） id `test-framework-plugin` to
 
 ## Requirements
 
-### Requirement: Build and Verify plugin package supports Claude and Codex
-系统 MUST 提供轻量 `build-and-verify` Plugin（构建与验证插件），同一套能力 MUST 同时面向 Claude（Claude 版本）和 Codex（Codex 版本）。
-
-#### Scenario: Codex plugin structure
-- **WHEN** 发布 `build-and-verify` Plugin（插件）
-- **THEN** 插件包 MUST 包含 `.codex-plugin/plugin.json`
-- **THEN** Codex manifest（清单） MUST 声明插件 `name`、`version`、`description` 和 `skills`
-
-#### Scenario: Claude plugin structure
-- **WHEN** 发布 `build-and-verify` Plugin（插件）
-- **THEN** 插件包 MUST 包含 `.claude-plugin/plugin.json`
-- **THEN** Claude manifest（清单） MUST 声明插件 `name`、`version`、`description` 和 `skills`
-
-#### Scenario: Runtime and initialization skill surfaces
-- **WHEN** 安装 `build-and-verify` Plugin（插件）
-- **THEN** 插件包 MUST 提供 `build-and-verify` Skill（构建与验证技能）作为运行入口
-- **THEN** 插件包 MUST 提供 `build-and-verify-init` Skill（构建与验证初始化技能）作为对话式初始化向导入口
-- **THEN** `build-and-verify` Skill（技能） MUST 调用共享确定性脚本，而不是复制多套流程逻辑
-- **THEN** `build-and-verify-init` Skill（技能） MUST 使用参考文件表达固定初始化流程，而不是新增命令行初始化脚本
-### Requirement: Build and Verify initializes standard artifacts
-系统 MUST 为目标仓库初始化最小构建检查、验证配置和仓库内 runtime（运行时）入口结构。
-
-#### Scenario: Init creates standard files
-- **WHEN** 用户对目标仓库运行 build-and-verify init（构建与验证初始化）
-- **THEN** 系统 MUST 创建 `.build-and-verify/config.json`
-- **THEN** 系统 MUST 创建 `.build-and-verify/.gitignore`
-- **THEN** `.build-and-verify/.gitignore` MUST 包含 `/cache/`、`/runs/` 和 `/backups/`
-- **THEN** 系统 MUST 复制当前 runtime（运行时）快照到 `.build-and-verify/runtime/`
-- **THEN** 仓库内 runtime（运行时）快照 MUST 包含 `build_and_verify.py`、`build_and_verify_runner.py` 和版本元数据
-
-#### Scenario: Init writes confirmed config when provided
-- **WHEN** 用户运行 `python <build-and-verify-script> init --project <repo> --config <config-file> --overwrite`
-- **THEN** 系统 MUST 使用 `<config-file>` 内容写入 `.build-and-verify/config.json`
-- **THEN** 系统 MUST 在已有 `.build-and-verify/config.json` 时先备份到 `.build-and-verify/backups/config-YYYYMMDD-HHMMSS.json`
-- **THEN** 系统 MUST 在没有已有 `.build-and-verify/config.json` 时直接写入 confirmed config（已确认配置）
-- **THEN** 系统 MUST 合并 `.build-and-verify/.gitignore` 默认规则而不是覆盖用户已有规则
-- **THEN** 系统 MUST 复制当前 runtime（运行时）快照到 `.build-and-verify/runtime/`
-
-#### Scenario: Init defines local cache location
-- **WHEN** 初始化产物写入目标仓库
-- **THEN** 系统 MUST 使用 `.build-and-verify/cache/` 作为本地 cache（缓存）目录
-- **THEN** 系统 MUST 创建 `.build-and-verify/cache/` 目录
-- **THEN** 系统 MUST NOT 要求将 cache（缓存）内容纳入 Git（版本管理）
-
-#### Scenario: Init refuses conflicting files without overwrite
-- **WHEN** 目标仓库已经存在 `.build-and-verify/config.json`、`.build-and-verify/.gitignore` 或 `.build-and-verify/runtime/`
-- **THEN** 系统 MUST 在没有 `--overwrite`（覆盖参数）时拒绝静默覆盖
-- **THEN** 系统 MUST 返回 non-zero（非零）退出码并报告 target-repository-relative（目标仓库相对）冲突路径
-
-#### Scenario: Init stays uncoupled from repository business logic
-- **WHEN** 插件初始化目标仓库
-- **THEN** 模板 MUST NOT 内置 PR Flow（拉取请求流程）、Release Flow（发布流程）、Comet（双星流程）或任一具体仓库业务检查
-- **THEN** 仓库业务检查 MUST 只通过 `.build-and-verify/config.json` 声明
-### Requirement: Build and Verify provides unified configuration and commands
-系统 MUST 通过一个配置文件和同一套 runtime（运行时）命令入口表达 build（构建检查）与 verify（验证）行为。
-
-#### Scenario: Config declares canonical checks
-- **WHEN** 目标仓库配置 build-and-verify（构建与验证）
-- **THEN** `.build-and-verify/config.json` MUST 支持 `build.checks`
-- **THEN** `.build-and-verify/config.json` MUST 支持 `verify.checks`
-- **THEN** `.build-and-verify/config.json` MUST NOT 要求独立的 `verify.fast.checks`
-- **THEN** check（检查项）配置 MUST 使用 `checkParallel`（检查项间并行）表达 check（检查项）之间并行
-- **THEN** check（检查项）配置 MUST 使用 `pytestXdistWorkers`（Pytest 工作进程数）表达 pytest（Python 测试框架）内部并行
-- **THEN** check（检查项）配置 MUST NOT 支持旧 `parallel`（并行）字段
-
-#### Scenario: Command entrypoint exposes minimum commands
-- **WHEN** 目标仓库完成初始化
-- **THEN** `python <build-and-verify-script> build --project <repo>` MUST 运行 configured `build.checks`
-- **THEN** `python <build-and-verify-script> verify --project <repo>` MUST 运行默认 fast（快速验证）执行模式
-- **THEN** `python <build-and-verify-script> verify --project <repo> --full` MUST 运行完整 `verify.checks`
-- **THEN** `python <build-and-verify-script> update-runtime --project <repo>` MUST 显式刷新 `.build-and-verify/runtime/`
-- **THEN** `<build-and-verify-script>` MUST 支持当前安装的 user-level（用户级）Skill（技能）脚本路径和仓库内 `.build-and-verify/runtime/build_and_verify.py` 路径
-
-#### Scenario: Update runtime copies the executing runtime
-- **WHEN** 用户运行 `python <build-and-verify-script> update-runtime --project <repo>`
-- **THEN** 系统 MUST 从 `<build-and-verify-script>` 所在 runtime（运行时）目录复制 `build_and_verify.py`、`build_and_verify_runner.py` 和版本元数据
-- **THEN** 系统 MUST NOT 从隐式用户级路径自动选择其他复制来源
-- **THEN** 系统 MUST NOT 修改 `.build-and-verify/config.json`
-
-#### Scenario: Repository runtime reports newer installed runtime without mutating files
-- **WHEN** 用户运行仓库内 `python .build-and-verify/runtime/build_and_verify.py build --project <repo>` 或 `python .build-and-verify/runtime/build_and_verify.py verify --project <repo>`
-- **THEN** 系统 MUST 尽力比较仓库内 runtime（运行时）版本与可发现的 Codex（代码助手）或 Claude（Claude 版本）user-level（用户级）runtime（运行时）版本
-- **THEN** user-level（用户级）runtime（运行时）版本领先时，系统 MUST 输出使用该新版脚本运行 `update-runtime`（更新运行时）的提示
-- **THEN** user-level（用户级）runtime（运行时）不可发现时，系统 MUST 静默继续运行原命令
-- **THEN** build（构建）和 verify（验证）命令 MUST NOT 自动修改 `.build-and-verify/runtime/`
-
-#### Scenario: Full verify refreshes passed cache
-- **WHEN** 用户运行 `python <build-and-verify-script> verify --project <repo> --full`
-- **THEN** 系统 MUST NOT 通过读取 cache（缓存）跳过 configured `verify.checks`
-- **THEN** 成功通过的 check（检查项） MUST 使用同一套 cache key（缓存键）写入或刷新 passed-result cache（通过结果缓存）
-- **THEN** failed（失败）结果 MUST NOT 写入 passed-result cache（通过结果缓存）
-
-#### Scenario: Pytest xdist workers are explicit
-- **WHEN** check（检查项）配置声明 `pytestXdistWorkers`（Pytest 工作进程数）
-- **THEN** `pytestXdistWorkers` MUST 是 `"auto"` 或正整数
-- **THEN** 系统 MUST 仅对 pytest（Python 测试框架）命令应用 pytest-xdist（Pytest 并行插件）参数
-- **THEN** 对字符串命令应用 pytest-xdist（Pytest 并行插件）参数时，系统 MUST 保留原命令的 shell（命令行解释器）语法、路径和引号
-- **THEN** 系统 MUST 拒绝在非 pytest（Python 测试框架）命令上声明 `pytestXdistWorkers`（Pytest 工作进程数）
-- **THEN** 系统 MUST 在 pytest-xdist（Pytest 并行插件）不可用时报错，不得静默降级为串行
-### Requirement: Build and Verify provides fast cache verification
-系统 MUST 将 fast（快速验证）实现为 full（全量验证）标准检查项上的 changed-files（变更文件）筛选和 passed-result cache（通过结果缓存）。
-
-#### Scenario: Fast verify selects configured checks by changed files
-- **WHEN** 用户运行 `python <build-and-verify-script> verify --project <repo>`
-- **THEN** 系统 MUST 默认从 worktree（工作区）收集 changed files（变更文件）
-- **THEN** 默认 worktree（工作区）来源 MUST 包含 staged tracked changes（已暂存已跟踪变更）、unstaged tracked changes（未暂存已跟踪变更）和 untracked non-ignored files（未跟踪且未忽略文件）
-- **THEN** 系统 MUST 根据 configured check（配置检查项）的 `paths` 选择受影响 checks（检查项）
-
-#### Scenario: Fast verify treats pathless checks as global checks
-- **WHEN** configured verify check（配置验证检查项）没有 `paths`
-- **THEN** 系统 MUST 将该 check（检查项）视为 global check（全局检查项）
-- **THEN** 默认 fast verify（快速验证） MUST 在存在任意 changed file（变更文件）时选择该 check（检查项）
-- **THEN** 默认 fast verify（快速验证） MUST 在没有 changed files（变更文件）时不选择该 check（检查项）
-- **THEN** 没有 `inputs` 的 global check（全局检查项） MUST 使用当前 changed files（变更文件）作为 cache key（缓存键）的输入来源
-
-#### Scenario: Cache uses passed results only
-- **WHEN** 选中的 check（检查项）存在匹配 cache key（缓存键）
-- **THEN** 系统 MUST 只复用 passed（已通过）的缓存结果
-- **THEN** cache key（缓存键） MUST 覆盖 check id（检查项标识）、command（命令）、inputs（输入）、config（配置）、Python（运行器）版本、framework（框架）版本和 cache（缓存）版本
-- **THEN** directory hashing（目录哈希） MUST 排除 `.build-and-verify/cache/`、`.git/` 和运行态缓存目录
-- **THEN** 系统 MUST NOT 缓存 failed（失败）结果作为通过结果
-
-#### Scenario: Cache miss runs selected check only
-- **WHEN** 选中的 check（检查项）没有可用 passed-result cache（通过结果缓存）
-- **THEN** 系统 MUST 运行该 check（检查项）自身
-- **THEN** 系统 MUST NOT 因 cache miss（缓存未命中）自动运行 full（全量验证）
-### Requirement: Build and Verify has no root-level Python test configuration dependency
-系统 MUST 不依赖根目录 Python（Python 语言）测试配置来定义本仓库 build（构建检查）或 verify（验证）行为。
-
-#### Scenario: Root pyproject test config is absent
-- **WHEN** 本仓库 build-and-verify（构建与验证）配置完成迁移
-- **THEN** 根目录 `pyproject.toml` MUST NOT 存在
-- **THEN** `.build-and-verify/config.json` 中的 pytest（Python 测试运行器）命令 MUST 显式声明测试路径和所需命令参数
-
-#### Scenario: Explicit pytest commands cover repository tests
-- **WHEN** 仓库 `tests/`（测试目录）包含 `test_*.py`（Python 测试文件）
-- **THEN** `.build-and-verify/config.json` 中 pytest（Python 测试运行器）命令声明的测试文件集合 MUST 与该目录中的文件集合一致
-
-#### Scenario: No root wrapper entrypoint
-- **WHEN** 本仓库活跃自动化和 guard（守卫）命令文件被检查
-- **THEN** 它们 MUST NOT 引用根目录测试 wrapper（包装入口）
-- **THEN** 它们 MUST 引用仓库内 `.build-and-verify/runtime/build_and_verify.py` 或当前安装的 build-and-verify（构建与验证）Skill（技能）脚本
-### Requirement: Build and Verify provides template-driven guided initialization
-系统 MUST 通过 `build-and-verify-init` Skill（构建与验证初始化技能）提供模板化对话式初始化向导，用于为通用仓库生成 `.build-and-verify/config.json`（配置文件）。
-
-#### Scenario: Guided initialization uses fixed questionnaire
-- **WHEN** agent（代理）使用 `build-and-verify-init` Skill（构建与验证初始化技能）
-- **THEN** Skill（技能） MUST 指示 agent（代理）读取固定 questionnaire（问答模板）
-- **THEN** questionnaire（问答模板） MUST 定义固定问题、固定选项、后果说明和跳转规则
-- **THEN** questionnaire（问答模板） MUST 覆盖目标仓库路径确认、扫描授权、候选 check（检查项）确认、`paths`（受影响路径）确认、并行与超时确认、覆盖与最终写入确认
-- **THEN** agent（代理） MUST 默认从 `paths`（受影响路径）和 command（命令）来源推导 `inputs`（缓存输入），并在最终写入确认摘要中展示
-- **THEN** 覆盖已有配置时，agent（代理） MUST 使用默认备份路径，不得单独要求用户选择备份路径
-- **THEN** agent（代理） MUST NOT 自由编造初始化问题或跳过最终写入确认
-
-#### Scenario: Guided initialization uses progressive disclosure references
-- **WHEN** 发布 `build-and-verify-init` Skill（构建与验证初始化技能）
-- **THEN** Skill（技能） MUST 将固定问答模板放在独立 reference（参考文件）
-- **THEN** Skill（技能） MUST 将已有配置、Node（节点运行时）、Python（Python 语言）和通用候选识别规则放在独立 reference（参考文件）
-- **THEN** Skill（技能） MUST 将配置草案规则放在独立 reference（参考文件）
-- **THEN** Skill（技能） MUST 将依赖检查、环境检查和配置校验规则放在独立 reference（参考文件）
-
-#### Scenario: Guided initialization keeps command-line init non-interactive
-- **WHEN** 用户运行 `python <build-and-verify-script> init --project <repo>`
-- **THEN** 系统 MUST 创建空的 `.build-and-verify/config.json`（配置文件）模板
-- **THEN** 系统 MUST 复制当前 runtime（运行时）快照到 `.build-and-verify/runtime/`
-- **THEN** 系统 MUST NOT 在命令行 init（初始化）中执行对话式问答
-- **THEN** 系统 MUST NOT 在命令行 init（初始化）中自动生成仓库业务检查项
 ### Requirement: Guided initialization protects existing configuration
 `build-and-verify-init` Skill（构建与验证初始化技能） MUST 在覆盖已有配置前保护用户已有 `.build-and-verify/config.json`（配置文件）。
 
@@ -216,16 +49,6 @@ This capability keeps the MySpec（自有规格） id `test-framework-plugin` to
 - **THEN** 覆盖已有配置时，agent（代理） MUST 检查备份目录可创建且备份路径仍在目标仓库内
 - **THEN** agent（代理） MUST 允许用户在存在依赖或环境问题时仍写入配置
 - **THEN** agent（代理） MUST 明确说明用户可以让 agent（代理）协助处理环境和外部依赖问题
-### Requirement: Build and Verify stale runtime handling remains non-mutating
-Build and Verify（构建与验证） build（构建） and verify（验证） commands MUST report newer available runtime（运行时） without modifying repository files.
-
-#### Scenario: Build and verify only report stale runtime
-- **WHEN** 用户运行 build（构建） or verify（验证） from a repository runtime（运行时）
-- **AND** a newer user-level（用户级） build-and-verify（构建与验证） runtime（运行时） is discoverable
-- **THEN** output（输出） MUST report that the repository runtime（运行时） is stale
-- **THEN** output（输出） MUST include an explicit update-runtime（更新运行时） command
-- **THEN** the stale runtime（运行时） report MUST NOT by itself change the build（构建） or verify（验证） exit status
-- **THEN** build（构建） and verify（验证） MUST NOT modify `.build-and-verify/runtime/`
 ### Requirement: Full verify provides non-blocking total performance warnings
 Build and Verify（构建与验证） MUST allow a target repository to declare an optional positive integer `verify.fullBudgetSeconds`（完整验证预算秒数） for full verification wall time, and the performance result MUST NOT replace or change functional verification status.
 
@@ -398,31 +221,6 @@ Build and Verify（构建与验证） MUST select every current verification che
 
 - **WHEN** the configuration is unchanged and ordinary source files change
 - **THEN** fast verify（快速验证） MUST continue selecting checks through their configured paths（受影响路径）
-### Requirement: Verification caches are bound to runtime version
-
-Build and Verify（构建与验证） MUST bind fast and full verification cache entries to the fixed runtime version that produced them.
-
-#### Scenario: Runtime version changes
-
-- **WHEN** the repository runtime is updated to a different runtime version
-- **THEN** fast verify（快速验证） MUST NOT reuse passed-result cache（通过结果缓存） entries from the earlier runtime version
-- **THEN** existing cache files MUST NOT require manual deletion
-
-#### Scenario: Runtime version remains unchanged
-
-- **WHEN** runtime version, configuration, command, and cache inputs remain unchanged
-- **THEN** fast verify（快速验证） MAY reuse the matching passed-result cache（通过结果缓存）
-
-#### Scenario: Full verification records current runtime identity
-
-- **WHEN** full verify（完整验证） writes passed-result cache（通过结果缓存） entries
-- **THEN** those entries MUST use the current fixed runtime version
-
-#### Scenario: Runtime version is missing
-
-- **WHEN** the fixed runtime version is absent
-- **THEN** fast verify（快速验证） and full verify（完整验证） MUST fail before running checks or reading or writing passed-result cache（通过结果缓存）
-- **THEN** build（构建检查） MUST remain available because it does not use verification cache
 ### Requirement: Guided initialization drafts generic repository checks
 `build-and-verify-init` Skill（构建与验证初始化技能） MUST 为通用仓库生成可审查的 build（构建检查）和 verify（验证）配置草案。
 
@@ -483,3 +281,186 @@ Build and Verify（构建与验证）配置指导 MUST 让动态扫描检查的�
 - **WHEN** 用户确认执行候选命令探测
 - **THEN** agent（代理） MUST 在执行前展示完整命令组、总成本和可能副作用，并在执行前后核对 Git（版本管理）可见改动
 - **THEN** 发现 Git（版本管理）可见改动时，agent（代理） MUST 停止后续建议和写入，保留现场，且 MUST NOT 自动清理或恢复
+### Requirement: Build and Verify plugin package supports Claude and Codex
+系统 MUST 提供轻量 `build-and-verify` Plugin（构建与验证插件），同一套能力 MUST 同时面向 Claude（Claude 版本）和 Codex（Codex 版本）。
+
+#### Scenario: Codex plugin structure
+- **WHEN** 发布 `build-and-verify` Plugin（插件）
+- **THEN** 插件包 MUST 包含 `.codex-plugin/plugin.json`
+- **THEN** Codex manifest（清单） MUST 声明插件 `name`、`version`、`description` 和 `skills`
+
+#### Scenario: Claude plugin structure
+- **WHEN** 发布 `build-and-verify` Plugin（插件）
+- **THEN** 插件包 MUST 包含 `.claude-plugin/plugin.json`
+- **THEN** Claude manifest（清单） MUST 声明插件 `name`、`version`、`description` 和 `skills`
+
+#### Scenario: Runtime and initialization skill surfaces
+- **WHEN** 安装 `build-and-verify` Plugin（插件）
+- **THEN** 插件包 MUST 提供 `build-and-verify` Skill（构建与验证技能）作为运行入口
+- **THEN** 插件包 MUST 提供 `build-and-verify-init` Skill（构建与验证初始化技能）作为对话式初始化向导入口
+- **THEN** `build-and-verify` Skill（技能） MUST 调用已安装的 `build-and-verify` CLI（命令行程序），而不是复制多套流程逻辑
+- **THEN** `build-and-verify-init` Skill（技能） MUST 使用参考文件表达固定初始化流程，而不是新增命令行初始化脚本
+### Requirement: Build and Verify initializes standard artifacts
+系统 MUST 为目标仓库初始化最小构建检查和验证配置；已安装的 CLI（命令行程序）是唯一运行入口。
+
+#### Scenario: Init creates standard files
+- **WHEN** 用户对目标仓库运行 build-and-verify init（构建与验证初始化）
+- **THEN** 系统 MUST 创建 `.build-and-verify/config.json`
+- **THEN** 系统 MUST 创建 `.build-and-verify/.gitignore`
+- **THEN** `.build-and-verify/.gitignore` MUST 包含 `/cache/`、`/runs/` 和 `/backups/`
+- **THEN** 系统 MUST NOT 创建 `.build-and-verify/runtime/` 运行时快照
+
+#### Scenario: Init writes confirmed config when provided
+- **WHEN** 用户运行 `build-and-verify init --project <repo> --config <config-file> --overwrite`
+- **THEN** 系统 MUST 使用 `<config-file>` 内容写入 `.build-and-verify/config.json`
+- **THEN** 系统 MUST 在已有 `.build-and-verify/config.json` 时先备份到 `.build-and-verify/backups/config-YYYYMMDD-HHMMSS.json`
+- **THEN** 系统 MUST 在没有已有 `.build-and-verify/config.json` 时直接写入 confirmed config（已确认配置）
+- **THEN** 系统 MUST 合并 `.build-and-verify/.gitignore` 默认规则而不是覆盖用户已有规则
+- **THEN** 系统 MUST NOT 复制运行时快照到目标仓库
+
+#### Scenario: Init defines local cache location
+- **WHEN** 初始化产物写入目标仓库
+- **THEN** 系统 MUST 使用 `.build-and-verify/cache/` 作为本地 cache（缓存）目录
+- **THEN** 系统 MUST 创建 `.build-and-verify/cache/` 目录
+- **THEN** 系统 MUST NOT 要求将 cache（缓存）内容纳入 Git（版本管理）
+
+#### Scenario: Init refuses conflicting files without overwrite
+- **WHEN** 目标仓库已经存在 `.build-and-verify/config.json` 或 `.build-and-verify/.gitignore`
+- **THEN** 系统 MUST 在没有 `--overwrite`（覆盖参数）时拒绝静默覆盖
+- **THEN** 系统 MUST 返回 non-zero（非零）退出码并报告 target-repository-relative（目标仓库相对）冲突路径
+
+#### Scenario: Init stays uncoupled from repository business logic
+- **WHEN** 插件初始化目标仓库
+- **THEN** 模板 MUST NOT 内置 PR Flow（拉取请求流程）、Release Flow（发布流程）、Comet（双星流程）或任一具体仓库业务检查
+- **THEN** 仓库业务检查 MUST 只通过 `.build-and-verify/config.json` 声明
+### Requirement: Build and Verify provides unified configuration and commands
+系统 MUST 通过一个配置文件和安装后的 CLI（命令行程序）表达 build（构建检查）与 verify（验证）行为。
+
+#### Scenario: Config declares canonical checks
+- **WHEN** 目标仓库配置 build-and-verify（构建与验证）
+- **THEN** `.build-and-verify/config.json` MUST 支持 `build.checks`
+- **THEN** `.build-and-verify/config.json` MUST 支持 `verify.checks`
+- **THEN** `.build-and-verify/config.json` MUST NOT 要求独立的 `verify.fast.checks`
+- **THEN** check（检查项）配置 MUST 使用 `checkParallel`（检查项间并行）表达 check（检查项）之间并行
+- **THEN** check（检查项）配置 MUST 使用 `pytestXdistWorkers`（Pytest 工作进程数）表达 pytest（Python 测试框架）内部并行
+- **THEN** check（检查项）配置 MUST NOT 支持旧 `parallel`（并行）字段
+
+#### Scenario: Command entrypoint exposes minimum commands
+- **WHEN** 目标仓库完成初始化
+- **THEN** `build-and-verify build --project <repo>` MUST 运行 configured `build.checks`
+- **THEN** `build-and-verify verify --project <repo>` MUST 运行默认 fast（快速验证）执行模式
+- **THEN** `build-and-verify verify --project <repo> --full` MUST 运行完整 `verify.checks`
+- **THEN** 命令 MUST NOT 在目标仓库复制、刷新或依赖 `.build-and-verify/runtime/`
+
+#### Scenario: Full verify refreshes passed cache
+- **WHEN** 用户运行 `build-and-verify verify --project <repo> --full`
+- **THEN** 系统 MUST NOT 通过读取 cache（缓存）跳过 configured `verify.checks`
+- **THEN** 成功通过的 check（检查项） MUST 使用同一套 cache key（缓存键）写入或刷新 passed-result cache（通过结果缓存）
+- **THEN** failed（失败）结果 MUST NOT 写入 passed-result cache（通过结果缓存）
+
+#### Scenario: Pytest xdist workers are explicit
+- **WHEN** check（检查项）配置声明 `pytestXdistWorkers`（Pytest 工作进程数）
+- **THEN** `pytestXdistWorkers` MUST 是 `"auto"` 或正整数
+- **THEN** 系统 MUST 仅对 pytest（Python 测试框架）命令应用 pytest-xdist（Pytest 并行插件）参数
+- **THEN** 对字符串命令应用 pytest-xdist（Pytest 并行插件）参数时，系统 MUST 保留原命令的 shell（命令行解释器）语法、路径和引号
+- **THEN** 系统 MUST 拒绝在非 pytest（Python 测试框架）命令上声明 `pytestXdistWorkers`（Pytest 工作进程数）
+- **THEN** 系统 MUST 在 pytest-xdist（Pytest 并行插件）不可用时报错，不得静默降级为串行
+### Requirement: Build and Verify provides fast cache verification
+系统 MUST 将 fast（快速验证）实现为 full（全量验证）标准检查项上的 changed-files（变更文件）筛选和 passed-result cache（通过结果缓存）。
+
+#### Scenario: Fast verify selects configured checks by changed files
+- **WHEN** 用户运行 `build-and-verify verify --project <repo>`
+- **THEN** 系统 MUST 默认从 worktree（工作区）收集 changed files（变更文件）
+- **THEN** 默认 worktree（工作区）来源 MUST 包含 staged tracked changes（已暂存已跟踪变更）、unstaged tracked changes（未暂存已跟踪变更）和 untracked non-ignored files（未跟踪且未忽略文件）
+- **THEN** 系统 MUST 根据 configured check（配置检查项）的 `paths` 选择受影响 checks（检查项）
+
+#### Scenario: Fast verify treats pathless checks as global checks
+- **WHEN** configured verify check（配置验证检查项）没有 `paths`
+- **THEN** 系统 MUST 将该 check（检查项）视为 global check（全局检查项）
+- **THEN** 默认 fast verify（快速验证） MUST 在存在任意 changed file（变更文件）时选择该 check（检查项）
+- **THEN** 默认 fast verify（快速验证） MUST 在没有 changed files（变更文件）时不选择该 check（检查项）
+- **THEN** 没有 `inputs` 的 global check（全局检查项） MUST 使用当前 changed files（变更文件）作为 cache key（缓存键）的输入来源
+
+#### Scenario: Cache uses passed results only
+- **WHEN** 选中的 check（检查项）存在匹配 cache key（缓存键）
+- **THEN** 系统 MUST 只复用 passed（已通过）的缓存结果
+- **THEN** cache key（缓存键） MUST 覆盖 check id（检查项标识）、command（命令）、inputs（输入）、config（配置）、Python（运行器）版本、framework（框架）版本和 cache（缓存）版本
+- **THEN** directory hashing（目录哈希） MUST 排除 `.build-and-verify/cache/`、`.git/` 和运行态缓存目录
+- **THEN** 系统 MUST NOT 缓存 failed（失败）结果作为通过结果
+
+#### Scenario: Cache miss runs selected check only
+- **WHEN** 选中的 check（检查项）没有可用 passed-result cache（通过结果缓存）
+- **THEN** 系统 MUST 运行该 check（检查项）自身
+- **THEN** 系统 MUST NOT 因 cache miss（缓存未命中）自动运行 full（全量验证）
+### Requirement: Build and Verify has no root-level Python test configuration dependency
+系统 MUST 不依赖根目录 Python（Python 语言）测试配置来定义本仓库 build（构建检查）或 verify（验证）行为。
+
+#### Scenario: Root pyproject test config is absent
+- **WHEN** 本仓库 build-and-verify（构建与验证）配置完成迁移
+- **THEN** 根目录 `pyproject.toml` MUST NOT 存在
+- **THEN** `.build-and-verify/config.json` 中的 pytest（Python 测试运行器）命令 MUST 显式声明测试路径和所需命令参数
+
+#### Scenario: Explicit pytest commands cover repository tests
+- **WHEN** 仓库 `tests/`（测试目录）包含 `test_*.py`（Python 测试文件）
+- **THEN** `.build-and-verify/config.json` 中 pytest（Python 测试运行器）命令声明的测试文件集合 MUST 与该目录中的文件集合一致
+
+#### Scenario: No root wrapper entrypoint
+- **WHEN** 本仓库活跃自动化和 guard（守卫）命令文件被检查
+- **THEN** 它们 MUST NOT 引用根目录测试 wrapper（包装入口）
+- **THEN** 它们 MUST 调用安装后的 `build-and-verify` CLI（命令行程序）
+### Requirement: Build and Verify provides template-driven guided initialization
+系统 MUST 通过 `build-and-verify-init` Skill（构建与验证初始化技能）提供模板化对话式初始化向导，用于为通用仓库生成 `.build-and-verify/config.json`（配置文件）。
+
+#### Scenario: Guided initialization uses fixed questionnaire
+- **WHEN** agent（代理）使用 `build-and-verify-init` Skill（构建与验证初始化技能）
+- **THEN** Skill（技能） MUST 指示 agent（代理）读取固定 questionnaire（问答模板）
+- **THEN** questionnaire（问答模板） MUST 定义固定问题、固定选项、后果说明和跳转规则
+- **THEN** questionnaire（问答模板） MUST 覆盖目标仓库路径确认、扫描授权、候选 check（检查项）确认、`paths`（受影响路径）确认、并行与超时确认、覆盖与最终写入确认
+- **THEN** agent（代理） MUST 默认从 `paths`（受影响路径）和 command（命令）来源推导 `inputs`（缓存输入），并在最终写入确认摘要中展示
+- **THEN** 覆盖已有配置时，agent（代理） MUST 使用默认备份路径，不得单独要求用户选择备份路径
+- **THEN** agent（代理） MUST NOT 自由编造初始化问题或跳过最终写入确认
+
+#### Scenario: Guided initialization uses progressive disclosure references
+- **WHEN** 发布 `build-and-verify-init` Skill（构建与验证初始化技能）
+- **THEN** Skill（技能） MUST 将固定问答模板放在独立 reference（参考文件）
+- **THEN** Skill（技能） MUST 将已有配置、Node（节点运行时）、Python（Python 语言）和通用候选识别规则放在独立 reference（参考文件）
+- **THEN** Skill（技能） MUST 将配置草案规则放在独立 reference（参考文件）
+- **THEN** Skill（技能） MUST 将依赖检查、环境检查和配置校验规则放在独立 reference（参考文件）
+
+#### Scenario: Guided initialization keeps command-line init non-interactive
+- **WHEN** 用户运行 `build-and-verify init --project <repo>`
+- **THEN** 系统 MUST 创建空的 `.build-and-verify/config.json`（配置文件）模板
+- **THEN** 系统 MUST NOT 复制运行时快照到目标仓库
+- **THEN** 系统 MUST NOT 在命令行 init（初始化）中执行对话式问答
+- **THEN** 系统 MUST NOT 在命令行 init（初始化）中自动生成仓库业务检查项
+### Requirement: Verification caches are bound to runtime version
+
+Build and Verify（构建与验证） MUST bind fast and full verification cache entries to the fixed CLI（命令行程序） runtime（运行时） version that produced them.
+
+#### Scenario: CLI runtime version changes
+
+- **WHEN** the installed CLI（命令行程序） runtime（运行时） is updated to a different runtime version
+- **THEN** fast verify（快速验证） MUST NOT reuse passed-result cache（通过结果缓存） entries from the earlier runtime version
+- **THEN** existing cache files MUST NOT require manual deletion
+
+#### Scenario: Runtime version remains unchanged
+
+- **WHEN** runtime version, configuration, command, and cache inputs remain unchanged
+- **THEN** fast verify（快速验证） MAY reuse the matching passed-result cache（通过结果缓存）
+
+#### Scenario: Full verification records current runtime identity
+
+- **WHEN** full verify（完整验证） writes passed-result cache（通过结果缓存） entries
+- **THEN** those entries MUST use the current fixed runtime version
+
+#### Scenario: Runtime version is missing
+
+- **WHEN** the fixed runtime version is absent
+- **THEN** fast verify（快速验证） and full verify（完整验证） MUST fail before running checks or reading or writing passed-result cache（通过结果缓存）
+- **THEN** build（构建检查） MUST remain available because it does not use verification cache
+### Requirement: Build and Verify uses the installed CLI without repository runtime snapshots
+Build and Verify（构建与验证） build（构建） and verify（验证） commands MUST execute through the installed CLI（命令行程序） without copying a repository runtime（运行时） snapshot.
+
+#### Scenario: Build and verify do not create a runtime snapshot
+- **WHEN** 用户运行 `build-and-verify build`（构建）或 `build-and-verify verify`（验证）
+- **THEN** commands MUST NOT create, refresh or require `.build-and-verify/runtime/`

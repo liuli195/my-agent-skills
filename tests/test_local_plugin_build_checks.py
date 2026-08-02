@@ -11,13 +11,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_BUILD_SCRIPT = REPO_ROOT / "scripts" / "local_plugin_build.py"
 BUILD_AND_VERIFY_RUNNER = (
-    REPO_ROOT
-    / "plugins"
-    / "build-and-verify"
-    / "skills"
-    / "build-and-verify"
-    / "scripts"
-    / "build_and_verify_runner.py"
+    REPO_ROOT / "plugins" / "build-and-verify" / "python" / "build_and_verify_runner.py"
 )
 
 

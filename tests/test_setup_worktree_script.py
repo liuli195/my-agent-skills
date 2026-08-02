@@ -48,7 +48,10 @@ def test_windows_worktree_build_uses_initialized_environment_and_unified_entry()
     build_step = workflow.split("- name: Build from linked worktree", 1)[1]
 
     assert ".worktrees/smoke/.venv/Scripts/Activate.ps1" in build_step
-    assert build_step.index("Activate.ps1") < build_step.index("build_and_verify.py build")
+    assert "build-and-verify build --project .worktrees/smoke" in build_step
+    assert build_step.index("Activate.ps1") < build_step.index("build-and-verify build")
+    assert "build_and_verify.py" not in build_step
+    assert ".build-and-verify/runtime/" not in build_step
     assert "npm run build" not in build_step
 
 

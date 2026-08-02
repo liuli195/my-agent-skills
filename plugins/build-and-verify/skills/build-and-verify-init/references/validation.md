@@ -11,7 +11,7 @@ validation（校验）必须在 `build-and-verify-init`（构建与验证初始�
 1. 写入前执行 targeted dependency checks（定向依赖检查）。
 2. 写入前执行 environment checks（环境检查）。
 3. 用户最终确认后，把草案保存为临时 confirmed config（已确认配置）。
-4. 调用 `python <build-and-verify-script> init --project <repo> --config <confirmed-config> --overwrite`（初始化覆盖命令，简称 `init --config --overwrite`）完成配置写入、必要备份、`.gitignore`（忽略规则）合并、runtime（运行时）复制和 cache（缓存）创建。
+4. 调用 `build-and-verify init --project <repo> --config <confirmed-config> --overwrite`（初始化覆盖命令，简称 `init --config --overwrite`）完成配置写入、必要备份、`.gitignore`（忽略规则）合并和 cache（缓存）创建。
 5. 写入后执行 config（配置）结构校验。
 
 ## Targeted Dependency Checks（定向依赖检查）

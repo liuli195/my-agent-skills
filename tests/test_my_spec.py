@@ -16,6 +16,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "my-spec"
+PACK = REPO_ROOT / "plugins" / "tool-lifecycle" / "pack.py"
 SPEC_OPS = PLUGIN_ROOT / "python" / "spec_ops.py"
 SKILL_NAMES = ("my-spec", "my-spec-add", "my-spec-review", "my-spec-audit")
 PACKAGE_VERSION = json.loads((PLUGIN_ROOT / "package.json").read_text(encoding="utf-8"))["version"]
@@ -89,6 +90,66 @@ def main_spec(capability: str, *requirements: str) -> str:
 def write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text.rstrip() + "\n", encoding="utf-8")
+
+
+def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
+    source = tmp_path / "source"
+    source.mkdir()
+    shutil.copy2(REPO_ROOT / ".gitignore", source / ".gitignore")
+    for relative in (".agents", ".claude-plugin", "plugins/my-spec", "plugins/tool-lifecycle"):
+        shutil.copytree(
+            REPO_ROOT / relative,
+            source / relative,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+    if marker is not None:
+        write(source / "plugins" / "my-spec" / "skills" / "my-spec" / "dev-marker.txt", marker)
+    launcher = source / "plugins" / "my-spec" / "bin" / "myspec.js"
+    launcher.chmod(launcher.stat().st_mode | 0o111)
+    remote = tmp_path / "origin.git"
+    for command in (
+        ["git", "init", "--bare", remote],
+        ["git", "init", source],
+        ["git", "-C", source, "add", "."],
+        ["git", "-C", source, "-c", "user.name=MySpec Test", "-c", "user.email=myspec@example.invalid", "commit", "-m", "development source"],
+        ["git", "-C", source, "remote", "add", "origin", "https://github.com/liuli195/my-agent-skills"],
+        ["git", "-C", source, "config", f"url.{remote.as_uri()}.insteadOf", "https://github.com/liuli195/my-agent-skills"],
+        ["git", "-C", source, "push", remote.as_uri(), "HEAD:refs/heads/main"],
+    ):
+        result = subprocess.run(command, text=True, capture_output=True, check=False)
+        assert result.returncode == 0, result.stderr
+    git = shutil.which("git")
+    assert git is not None
+    if os.name == "nt":
+        git = str(Path(git).parents[2] / "cmd" / "git.exe")
+    bin_dir = tmp_path / "controlled-git"
+    bin_dir.mkdir()
+    if os.name == "nt":
+        script = bin_dir / "git.py"
+        write(
+            script,
+            "import subprocess\nimport sys\n"
+            "args = sys.argv[1:]\n"
+            "if args == ['remote', 'get-url', 'origin']:\n"
+            "    print('https://github.com/liuli195/my-agent-skills')\n"
+            "    raise SystemExit()\n"
+            "if args == ['ls-remote', 'origin']:\n"
+            f"    raise SystemExit(subprocess.run([{git!r}, 'ls-remote', {remote.as_uri()!r}]).returncode)\n"
+            f"raise SystemExit(subprocess.run([{git!r}, *args]).returncode)",
+        )
+        write(bin_dir / "git.cmd", f'@"{sys.executable}" "{script}" %*')
+    else:
+        wrapper = bin_dir / "git"
+        write(wrapper, f'#!/bin/sh\nif [ "$1" = remote ] && [ "$2" = get-url ] && [ "$3" = origin ]; then echo https://github.com/liuli195/my-agent-skills; exit; fi\nif [ "$1" = ls-remote ] && [ "$2" = origin ]; then exec "{git}" ls-remote "{remote.as_uri()}"; fi\nexec "{git}" "$@"')
+        wrapper.chmod(0o755)
+    return source
+
+
+def controlled_dev_env(env: dict[str, str], source: Path) -> dict[str, str]:
+    return {
+        **env,
+        "PATH": os.pathsep.join([str(source.parent / "controlled-git"), env["PATH"]]),
+    }
 
 
 def ready_state(cli: Path, root: Path, command: str = "add") -> Path:
@@ -185,16 +246,13 @@ def install_packed_myspec(tmp_path: Path) -> tuple[Path, Path]:
         shutil.copy2(source_tarball, tarball)
     else:
         packed = subprocess.run(
-            [npm, "pack", "--json", "--pack-destination", str(package_dir)],
-            cwd=PLUGIN_ROOT,
+            [sys.executable, str(PACK), "myspec", str(package_dir)],
             text=True,
             capture_output=True,
             check=False,
         )
         assert packed.returncode == 0, packed.stderr
-        package = json.loads(packed.stdout)[0]
-        assert package["name"] == "@liuli195/myspec"
-        tarball = package_dir / package["filename"]
+        tarball = Path(packed.stdout.strip())
 
     prefix = tmp_path / "npm-prefix"
     installed = subprocess.run(
@@ -247,10 +305,12 @@ def pack_myspec_version(tmp_path: Path, version: str, marker: Path | None = None
             'require("node:fs").appendFileSync(process.env.MYSPEC_REEXEC_MARKER, `${process.pid}\\n`);',
         )
         write(launcher, text)
+    management = (REPO_ROOT / "plugins" / "tool-lifecycle" / "python" / "management.py").read_text(encoding="utf-8")
+    write(source / "python" / "management.py", management)
     package_dir = tmp_path / f"package-{version}"
     package_dir.mkdir()
     packed = subprocess.run(
-        [shutil.which("npm") or "npm", "pack", "--json", "--pack-destination", str(package_dir)],
+        [shutil.which("npm") or "npm", "pack", "--ignore-scripts", "--json", "--pack-destination", str(package_dir)],
         cwd=source,
         text=True,
         capture_output=True,
@@ -1515,7 +1575,9 @@ def test_packed_myspec_update_rejects_dev_mode_and_forged_resume(tmp_path: Path)
             "MYSPEC_RELEASE_TARBALL": str(release_tarball),
         }
     )
-    entered = run_cli(executable, "init", "--dev", "--source", REPO_ROOT, env=env)
+    source = controlled_dev_source(tmp_path)
+    env = controlled_dev_env(env, source)
+    entered = run_cli(executable, "init", "--dev", "--source", source, env=env)
     assert entered.returncode == 0, entered.stderr
 
     rejected = run_cli(executable, "update", env=env)
@@ -3052,12 +3114,17 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
         }
     )
 
+    source = controlled_dev_source(tmp_path)
+    env = controlled_dev_env(env, source)
     assert run_cli(executable, "init", "--pi", env=env).returncode == 0
-    entered = run_cli(executable, "init", "--dev", env=env, cwd=REPO_ROOT)
+    entered = run_cli(executable, "init", "--dev", env=env, cwd=source)
     assert entered.returncode == 0, entered.stderr
+    assert subprocess.run(
+        ["git", "status", "--porcelain"], cwd=source, text=True, capture_output=True, check=True
+    ).stdout == ""
     assert json.loads(entered.stdout) == {
         "mode": "dev",
-        "source": str(REPO_ROOT),
+        "source": str(source),
         "previousReleaseVersion": PACKAGE_VERSION,
         "pi": "refreshed",
         "reloadRequired": True,
@@ -3065,18 +3132,18 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
     state_path = Path(env["HOME"]) / ".myspec" / "state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state["mode"] == "dev"
-    assert state["source"] == str(REPO_ROOT)
+    assert state["source"] == str(source)
     assert state["previousReleaseVersion"] == PACKAGE_VERSION
     assert state["sourceCommit"] == subprocess.run(
         ["git", "rev-parse", "HEAD"],
-        cwd=REPO_ROOT,
+        cwd=source,
         text=True,
         capture_output=True,
         check=True,
     ).stdout.strip()
     dev_report = run_cli(executable, "doctor", "--pi", env=env)
     dev_diagnosis = json.loads(dev_report.stdout)
-    assert dev_diagnosis["source"] == str(PLUGIN_ROOT)
+    assert dev_diagnosis["source"] == str(source / "plugins" / "my-spec")
     assert dev_diagnosis["mode"] == "dev"
     assert dev_diagnosis["pi"]["skills"] == list(SKILL_NAMES)
     assert dev_diagnosis["pi"]["registered"] is True
@@ -3111,10 +3178,13 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
     assert ["install", "--global", "--ignore-scripts", "--no-audit", "--no-fund", f"@liuli195/myspec@{PACKAGE_VERSION}"] in npm_calls
     pi_calls = [json.loads(line)["args"] for line in pi_log.read_text(encoding="utf-8").splitlines()]
     assert pi_calls.count(["install", str(installed_package)]) == 1
+    assert subprocess.run(
+        ["git", "status", "--porcelain"], cwd=source, text=True, capture_output=True, check=True
+    ).stdout == ""
 
-    explicit = run_cli(executable, "init", "--dev", "--source", REPO_ROOT, env=env, cwd=tmp_path)
+    explicit = run_cli(executable, "init", "--dev", "--source", source, env=env, cwd=tmp_path)
     assert explicit.returncode == 0, explicit.stderr
-    assert json.loads(explicit.stdout)["source"] == str(REPO_ROOT)
+    assert json.loads(explicit.stdout)["source"] == str(source)
 
 
 def test_packed_myspec_requires_release_registration_before_first_codex_dev_init(
@@ -3140,7 +3210,9 @@ def test_packed_myspec_requires_release_registration_before_first_codex_dev_init
     )
     write(codex_state, json.dumps({"marketplaces": [], "installed": [], "available": []}, indent=2))
 
-    entered = run_cli(executable, "init", "--dev", "--source", REPO_ROOT, env=env)
+    source = controlled_dev_source(tmp_path)
+    env = controlled_dev_env(env, source)
+    entered = run_cli(executable, "init", "--dev", "--source", source, env=env)
     assert entered.returncode == 0, entered.stderr
     before = codex_state.read_bytes()
     codex_log.write_text("", encoding="utf-8")
@@ -3170,7 +3242,7 @@ def test_packed_myspec_requires_release_registration_before_first_codex_dev_init
     ]
 
     codex_log.write_text("", encoding="utf-8")
-    entered_again = run_cli(executable, "init", "--dev", "--source", REPO_ROOT, env=env)
+    entered_again = run_cli(executable, "init", "--dev", "--source", source, env=env)
     assert entered_again.returncode == 0, entered_again.stderr
     calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
     assert not any(call[:3] == ["plugin", "marketplace", "add"] for call in calls)
@@ -3202,31 +3274,8 @@ def test_packed_myspec_refreshes_enabled_codex_across_global_mode_switches(
     assert run_cli(executable, "init", "--codex", env=env).returncode == 0
     codex_log.write_text("", encoding="utf-8")
 
-    source = tmp_path / "source"
-    shutil.copytree(REPO_ROOT / ".agents", source / ".agents")
-    shutil.copytree(REPO_ROOT / ".claude-plugin", source / ".claude-plugin")
-    shutil.copytree(PLUGIN_ROOT, source / "plugins" / "my-spec")
-    marker = source / "plugins" / "my-spec" / "skills" / "my-spec" / "dev-marker.txt"
-    write(marker, "development source")
-    assert subprocess.run(["git", "init"], cwd=source, capture_output=True).returncode == 0
-    assert subprocess.run(["git", "add", "."], cwd=source, capture_output=True).returncode == 0
-    committed = subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=MySpec Test",
-            "-c",
-            "user.email=myspec@example.invalid",
-            "commit",
-            "-m",
-            "development source",
-        ],
-        cwd=source,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert committed.returncode == 0, committed.stderr
+    source = controlled_dev_source(tmp_path, "development source")
+    env = controlled_dev_env(env, source)
 
     entered = run_cli(executable, "init", "--dev", "--source", source, env=env)
     assert entered.returncode == 0, entered.stderr
@@ -3311,7 +3360,9 @@ def test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_codex(
         )
     write(codex_state, json.dumps(initial_state, indent=2))
 
-    entered = run_cli(executable, "init", "--dev", "--source", REPO_ROOT, env=env)
+    source = controlled_dev_source(tmp_path)
+    env = controlled_dev_env(env, source)
+    entered = run_cli(executable, "init", "--dev", "--source", source, env=env)
     assert entered.returncode == 0, entered.stderr
     assert json.loads(entered.stdout)["codex"] == "not-installed"
     restored = run_cli(executable, "init", "--release", env=env)
@@ -3348,49 +3399,8 @@ def test_packed_myspec_refreshes_enabled_claude_across_global_mode_switches(
     assert run_cli(executable, "init", "--claude", env=env).returncode == 0
     claude_log.write_text("", encoding="utf-8")
 
-    source = tmp_path / "source"
-    shutil.copytree(REPO_ROOT / ".agents", source / ".agents")
-    shutil.copytree(REPO_ROOT / ".claude-plugin", source / ".claude-plugin")
-    shutil.copytree(PLUGIN_ROOT, source / "plugins" / "my-spec")
-    marker = source / "plugins" / "my-spec" / "skills" / "my-spec" / "dev-marker.txt"
-    write(marker, "development source")
-    initialized_git = subprocess.run(
-        ["git", "init"], cwd=source, text=True, capture_output=True, check=False
-    )
-    assert initialized_git.returncode == 0, initialized_git.stderr
-    committed = subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=MySpec Test",
-            "-c",
-            "user.email=myspec@example.invalid",
-            "add",
-            ".",
-        ],
-        cwd=source,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert committed.returncode == 0, committed.stderr
-    committed = subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=MySpec Test",
-            "-c",
-            "user.email=myspec@example.invalid",
-            "commit",
-            "-m",
-            "development source",
-        ],
-        cwd=source,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert committed.returncode == 0, committed.stderr
+    source = controlled_dev_source(tmp_path, "development source")
+    env = controlled_dev_env(env, source)
 
     entered = run_cli(executable, "init", "--dev", "--source", source, env=env)
     assert entered.returncode == 0, entered.stderr
@@ -3462,7 +3472,9 @@ def test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_claude(
         }
     write(claude_state, json.dumps(initial_state, indent=2))
 
-    entered = run_cli(executable, "init", "--dev", "--source", REPO_ROOT, env=env)
+    source = controlled_dev_source(tmp_path)
+    env = controlled_dev_env(env, source)
+    entered = run_cli(executable, "init", "--dev", "--source", source, env=env)
     assert entered.returncode == 0, entered.stderr
     assert json.loads(entered.stdout)["claude"] == "not-installed"
     restored = run_cli(executable, "init", "--release", env=env)
@@ -3499,13 +3511,15 @@ def test_packed_myspec_claude_reinstall_failure_does_not_report_refreshed(
     write(claude_state, json.dumps({"marketplaces": [], "plugins": []}, indent=2))
     assert run_cli(executable, "init", "--claude", env=env).returncode == 0
     claude_log.write_text("", encoding="utf-8")
+    source = controlled_dev_source(tmp_path)
+    env = controlled_dev_env(env, source)
 
     failed = run_cli(
         executable,
         "init",
         "--dev",
         "--source",
-        REPO_ROOT,
+        source,
         env={**env, "MYSPEC_CLAUDE_FAIL_INSTALL": "1"},
     )
     assert failed.returncode == 1
@@ -3534,7 +3548,9 @@ def test_packed_myspec_release_install_failure_stays_in_dev_and_retries(
         }
     )
 
-    entered = run_cli(executable, "init", "--dev", env=env, cwd=REPO_ROOT)
+    source = controlled_dev_source(tmp_path)
+    env = controlled_dev_env(env, source)
+    entered = run_cli(executable, "init", "--dev", env=env, cwd=source)
     assert entered.returncode == 0, entered.stderr
     state_path = Path(env["HOME"]) / ".myspec" / "state.json"
 
@@ -3575,12 +3591,14 @@ def test_packed_myspec_mode_switch_does_not_install_a_disabled_pi_integration(
         json.dumps({"packages": [{"source": str(installed_package), "skills": []}]}, indent=2),
     )
 
+    source = controlled_dev_source(tmp_path)
+    env = controlled_dev_env(env, source)
     forged = run_cli(
         executable,
         "init",
         "--dev",
         "--source",
-        REPO_ROOT,
+        source,
         "--_switch-token",
         "forged",
         env=env,
@@ -3588,7 +3606,7 @@ def test_packed_myspec_mode_switch_does_not_install_a_disabled_pi_integration(
     assert forged.returncode == 1
     assert "error: invalid_switch_token" in forged.stderr
 
-    entered = run_cli(executable, "init", "--dev", "--source", REPO_ROOT, env=env)
+    entered = run_cli(executable, "init", "--dev", "--source", source, env=env)
     assert entered.returncode == 0, entered.stderr
     assert json.loads(entered.stdout)["pi"] == "not-installed"
     restored = run_cli(executable, "init", "--release", env=env)
@@ -3629,6 +3647,11 @@ def test_packed_myspec_doctor_uses_actual_installation_not_mode_state(tmp_path: 
     assert diagnosed.returncode == 0, diagnosed.stderr
     report = json.loads(diagnosed.stdout)
     assert report["mode"] == "release"
+    assert report["toolchain"] == {
+        "mode": "release",
+        "packageName": "@liuli195/myspec",
+        "packageVersion": PACKAGE_VERSION,
+    }
     assert report["source"] == str(installed_package)
     assert report["npm"]["linked"] is False
     assert report["npm"]["versionMismatch"] is False
@@ -3757,6 +3780,7 @@ def test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_st
     shutil.copytree(REPO_ROOT / ".agents", source / ".agents")
     shutil.copytree(REPO_ROOT / ".claude-plugin", source / ".claude-plugin")
     shutil.copytree(PLUGIN_ROOT, source / "plugins" / "my-spec")
+    shutil.copytree(REPO_ROOT / "plugins" / "tool-lifecycle", source / "plugins" / "tool-lifecycle")
     initialized = subprocess.run(
         ["git", "init"], cwd=source, text=True, capture_output=True, check=False
     )

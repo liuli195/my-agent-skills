@@ -6,7 +6,7 @@
 4. Run:
 
 ```bash
-python .build-and-verify/runtime/build_and_verify.py verify --project .
+build-and-verify verify --project .
 ```
 
 5. Open a pull request using the repository template.

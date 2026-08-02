@@ -887,6 +887,7 @@ def run_verify(
     full: bool = False,
     performance_report: bool = False,
     runtime_version: str = "unknown",
+    synthetic_changed_paths: list[str] | None = None,
 ) -> int:
     if not _is_non_empty_string(runtime_version) or runtime_version == "unknown":
         print("missing_runtime_version", file=sys.stderr)
@@ -897,7 +898,11 @@ def run_verify(
     except ConfigError as error:
         return _config_error(error)
     checks = _checks(config, "verify")
-    changed_files = _changed_files(project)
+    changed_files = (
+        _dedupe(synthetic_changed_paths)
+        if synthetic_changed_paths is not None
+        else _changed_files(project)
+    )
     config_changed = ".build-and-verify/config.json" in changed_files
     selected = checks if full or config_changed else _selected_checks(checks, changed_files)
     if config_changed and not full:
