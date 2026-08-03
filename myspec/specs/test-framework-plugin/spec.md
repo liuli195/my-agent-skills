@@ -464,3 +464,21 @@ Build and Verify（构建与验证） build（构建） and verify（验证） c
 #### Scenario: Build and verify do not create a runtime snapshot
 - **WHEN** 用户运行 `build-and-verify build`（构建）或 `build-and-verify verify`（验证）
 - **THEN** commands MUST NOT create, refresh or require `.build-and-verify/runtime/`
+### Requirement: Build and Verify 生命周期遵守统一 Codex 目录和旧来源迁移契约
+
+Build and Verify MUST 让其 `doctor`、`init --codex`、`init --all` 和 `update` 复用共享生命周期规则：显式 `--codex-home` 优先，Orca 临时目录回退到用户默认目录，Codex 子进程和配置读写使用同一目录；`update` 发现用户级或仍启用的项目级 Legacy MySpec Source（旧 MySpec 来源）时 MUST 在任何软件包、待处理状态或客户端写入前以非零结果停止并报告精确的 `init` 命令。完成迁移后重新运行 `update` MUST 刷新稳定来源并返回只读诊断。
+
+#### Scenario: Build and Verify 使用显式 Codex 目录
+
+- **WHEN** 用户运行打包后的 `build-and-verify doctor` 或 `init --codex` 并传入有效 `--codex-home`
+- **THEN** 命令 MUST 把同一目录用于 Codex 子进程和配置读写
+
+#### Scenario: Build and Verify 阻断旧来源
+
+- **WHEN** Codex 仍登记 Legacy MySpec Source 且用户运行 `build-and-verify update`
+- **THEN** 命令 MUST 返回非零、不得安装软件包或写入客户端配置，并 MUST 报告 `build-and-verify init --codex`
+
+#### Scenario: Build and Verify 迁移后更新
+
+- **WHEN** 用户完成 `build-and-verify init --codex` 迁移后再次运行 `build-and-verify update`
+- **THEN** 命令 MUST 完成稳定来源刷新并返回成功诊断

@@ -184,3 +184,40 @@
 - **WHEN** 诊断同时返回既有顶层字段和规范化来源记录
 - **THEN** 既有顶层字段 MUST 保留
 - **THEN** 顶层启用状态和启用来源投影 MUST NOT 与规范化来源记录矛盾
+### Requirement: 生命周期命令选择 Codex 配置目录
+
+系统 MUST 让 `myspec doctor`、`myspec init --codex`、`myspec init --all` 和 `myspec update` 使用统一的 Codex 配置目录选择：显式 `--codex-home` 优先；继承的 Orca 临时目录 MUST 回退到用户默认 Codex 目录；非 Orca 自定义目录 MUST 保持有效；Codex 子进程和配置文件读写 MUST 使用同一解析结果；不可用的显式目录 MUST 返回非零且不得静默回退。诊断 MUST 报告实际目录和选择来源。
+
+#### Scenario: Orca 临时目录回退
+
+- **WHEN** 生命周期命令继承的 `CODEX_HOME` 与 Orca 临时运行目录匹配且用户未显式指定目录
+- **THEN** 命令 MUST 使用用户默认 Codex 目录，并在诊断中报告 `orca-user-default` 来源
+
+#### Scenario: 显式目录优先
+
+- **WHEN** 用户传入有效的 `--codex-home <directory>`
+- **THEN** Codex 子进程和配置读写 MUST 使用 `<directory>`，且不得使用继承目录
+
+#### Scenario: 显式目录不可用
+
+- **WHEN** 用户传入不存在、非目录或不可读写的 `--codex-home`
+- **THEN** 命令 MUST 返回非零、可操作错误，且 MUST NOT 改用其他目录
+### Requirement: 更新阻断未迁移的旧来源
+
+系统 MUST 让 `myspec update` 在查询最新版本、创建待处理状态、安装软件包或写入客户端之前检查 Pi、Claude 和 Codex 的 MySpec 来源。用户级旧来源或仍启用的项目级旧来源存在时，`update` MUST 返回非零结果，报告实际受影响客户端及可直接执行的 `init` 迁移命令，并 MUST NOT 自动迁移。项目级旧来源经 `init --pi` 按既有契约禁用后，`update` MUST 放行；完成迁移后再次运行 `update` MUST 刷新稳定来源并运行只读诊断。
+
+#### Scenario: 旧来源阻断且保持状态不变
+
+- **WHEN** 任一受支持客户端仍有需要迁移的旧 MySpec 来源，且用户运行 `myspec update`
+- **THEN** 命令 MUST 返回非零并列出实际客户端的 `init` 命令
+- **THEN** 命令 MUST NOT 安装软件包、创建待处理状态或修改客户端配置
+
+#### Scenario: 迁移后继续更新
+
+- **WHEN** 用户按提示完成 `init` 迁移并重新运行 `myspec update`
+- **THEN** 命令 MUST 刷新稳定来源并返回最终只读诊断结果
+
+#### Scenario: 项目级旧来源保护
+
+- **WHEN** 项目级旧来源已按 `init --pi` 既有契约禁用且仍保留在项目配置中
+- **THEN** `myspec update` MUST NOT 再次阻断，且 MUST 保留该项目配置
