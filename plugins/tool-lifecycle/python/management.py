@@ -1893,7 +1893,10 @@ def _legacy_migration_clients(stable: Path) -> list[str]:
     clients: list[str] = []
     if shutil.which("pi") is not None:
         sources = _pi_sources(_pi_list())
-        if any(_tool_source_kind(item, stable) == "legacy" for item in sources):
+        if any(
+            item.scope == "user" and _tool_source_kind(item, stable) == "legacy"
+            for item in sources
+        ):
             clients.append("pi")
     if shutil.which("claude") is not None:
         if any(item.get("id") == CLAUDE_LEGACY_PLUGIN for item in _claude_plugins()):

@@ -1348,13 +1348,20 @@ def test_packed_myspec_update_preserves_pi_effective_state_under_project_overrid
     )
     project = tmp_path / "consumer"
     project.mkdir()
+    legacy_project = project / "plugins" / "my-spec"
+    shutil.copytree(PLUGIN_ROOT, legacy_project)
     user_settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
     project_settings = project / ".pi" / "settings.json"
     write(user_settings, json.dumps({"packages": [str(installed_package)]}, indent=2))
     write(
         project_settings,
         json.dumps(
-            {"packages": [{"source": str(installed_package), "skills": []}]},
+            {
+                "packages": [
+                    {"source": str(installed_package), "skills": []},
+                    str(legacy_project),
+                ]
+            },
             indent=2,
         ),
     )
