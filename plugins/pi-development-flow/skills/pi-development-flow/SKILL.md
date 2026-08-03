@@ -27,6 +27,6 @@ Keep four numbered and named decisions distinct:
 2. **Gate 2 — Enter Implementation（进入实施）.** Approve the concrete implementation plan before code or behavior changes.
 3. **Gate 3 — Enter Delivery（进入交付）.** After implementation, review, and verification complete, use the final `my-spec-add`（新增自有规格） confirmation to approve the formal MySpec（自有规格） difference. Gate 3 passes only after that Skill（技能） applies and validates the difference, then enters Gate 4.
 4. **Gate 4 — Authorize PR Delivery（授权 PR 交付）.** After the formal specification is valid, approve push, PR creation or update, merge, and final cleanup.
-5. **Completion Check — 完成检查.** After Gate 4 delivery, report whether final completion is proven; report cleanup residue and request explicit force-cleanup authorization when needed. This is not a fifth authorization gate.
+After Gate 4 delivery, run **Completion Check — 完成检查**: report whether final completion is proven, report cleanup residue, and request explicit force-cleanup authorization when needed. This is not a fifth numbered or authorization gate.
 
 At any failed gate or completion check, preserve the current artifacts and report the exact resume entry.
