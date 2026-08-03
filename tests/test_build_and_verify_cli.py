@@ -532,6 +532,19 @@ def test_packed_build_and_verify_codex_doctor_resolves_orca_and_explicit_homes(
     assert env_log.read_text(encoding="utf-8") == ""
     assert env["CODEX_HOME"] == str(orca_home)
 
+    missing_home = tmp_path / "missing-codex-home"
+    missing = subprocess.run(
+        [executable, "doctor", "--codex", "--codex-home", missing_home],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+
+    assert missing.returncode == 1
+    assert f"error: codex_home_unavailable: {missing_home}: directory does not exist" in missing.stderr
+
 
 def test_packed_build_and_verify_rejects_dirty_legacy_migration(tmp_path: Path) -> None:
     npm = shutil.which("npm")

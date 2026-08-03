@@ -238,10 +238,10 @@ def _is_orca_codex_home(path: Path) -> bool:
     return "orca" in parts and "codex-runtime-home" in parts
 
 
-def _validate_codex_home(selection: CodexHomeSelection, *, allow_missing: bool) -> None:
+def _validate_codex_home(selection: CodexHomeSelection) -> None:
     path = selection.path
     if not path.exists():
-        if allow_missing or not selection.explicit:
+        if not selection.explicit:
             return
         raise ManagementError(
             f"codex_home_unavailable: {path}: directory does not exist; create it or choose another directory"
@@ -252,11 +252,7 @@ def _validate_codex_home(selection: CodexHomeSelection, *, allow_missing: bool) 
         raise ManagementError(f"codex_home_unavailable: {path}: directory is not readable and writable")
 
 
-def _select_codex_home(
-    requested: Path | None,
-    *,
-    allow_missing: bool = False,
-) -> CodexHomeSelection:
+def _select_codex_home(requested: Path | None) -> CodexHomeSelection:
     if requested is not None:
         selection = CodexHomeSelection(_absolute_path(requested), "explicit", True)
     else:
@@ -267,7 +263,7 @@ def _select_codex_home(
             selection = CodexHomeSelection(_absolute_path(inherited), "environment", False)
         else:
             selection = CodexHomeSelection(_default_codex_home(), "user-default", False)
-    _validate_codex_home(selection, allow_missing=allow_missing)
+    _validate_codex_home(selection)
     return selection
 
 
@@ -1789,10 +1785,10 @@ def _doctor_claude() -> dict[str, object]:
 
 
 def _doctor_codex() -> dict[str, object]:
-    selection = _current_codex_home()
     report = _doctor_package()
     stable = _stable_package_root()
     available = shutil.which("codex") is not None
+    selection = _CODEX_HOME_SELECTION if available or _CODEX_HOME_SELECTION is not None else None
     marketplaces = _codex_marketplaces() if available else []
     plugins = _codex_plugins() if available else []
     marketplace = _named_codex_marketplace(marketplaces) if available else None
@@ -1858,8 +1854,8 @@ def _doctor_codex() -> dict[str, object]:
             )
         )
     report["codex"] = {
-        "codexHome": str(selection.path),
-        "codexHomeSource": selection.source,
+        "codexHome": str(selection.path) if selection is not None else None,
+        "codexHomeSource": selection.source if selection is not None else None,
         "available": available,
         "marketplace": marketplace,
         "marketplaceRegistered": marketplace_registered,
@@ -2307,21 +2303,19 @@ def _management_command(args: argparse.Namespace) -> str:
 
 def _management_uses_codex(args: argparse.Namespace) -> bool:
     codex_available = shutil.which("codex") is not None
+    explicit_home = getattr(args, "codex_home", None) is not None
     if args.command == "update":
-        return codex_available
+        return codex_available or explicit_home
     if args.command == "doctor":
-        return codex_available and (args.codex or args.all)
-    return codex_available and (args.codex or args.all or args.dev or args.release)
+        return (args.codex or args.all) and (codex_available or explicit_home)
+    return (args.codex or args.all or args.dev or args.release) and (codex_available or explicit_home)
 
 
 def run_management(args: argparse.Namespace) -> dict[str, object]:
     global _CODEX_HOME_SELECTION
     _CODEX_HOME_SELECTION = None
     if _management_uses_codex(args):
-        _CODEX_HOME_SELECTION = _select_codex_home(
-            getattr(args, "codex_home", None),
-            allow_missing=args.command == "init",
-        )
+        _CODEX_HOME_SELECTION = _select_codex_home(getattr(args, "codex_home", None))
     if args.command == "doctor":
         if args.all:
             report = _doctor_all()
