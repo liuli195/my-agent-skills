@@ -1894,7 +1894,8 @@ def _legacy_migration_clients(stable: Path) -> list[str]:
     if shutil.which("pi") is not None:
         sources = _pi_sources(_pi_list())
         if any(
-            item.scope == "user" and _tool_source_kind(item, stable) == "legacy"
+            _tool_source_kind(item, stable) == "legacy"
+            and (item.scope == "user" or _pi_source_enabled(item))
             for item in sources
         ):
             clients.append("pi")

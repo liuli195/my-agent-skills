@@ -1365,6 +1365,12 @@ def test_packed_myspec_update_preserves_pi_effective_state_under_project_overrid
             indent=2,
         ),
     )
+    blocked = run_cli(executable, "update", env=env, cwd=project)
+    assert blocked.returncode == 1
+    assert "error: legacy_source_migration_required: pi: run myspec init --pi" in blocked.stderr
+
+    initialized = run_cli(executable, "init", "--pi", env=env, cwd=project)
+    assert initialized.returncode == 0, initialized.stderr
     user_before = user_settings.read_bytes()
     project_before = project_settings.read_bytes()
 
