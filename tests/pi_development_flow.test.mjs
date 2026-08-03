@@ -23,6 +23,7 @@ const references = [
   "requirements.md",
   "implementation.md",
   "delivery.md",
+  "output-template.md",
   "resume.md",
 ];
 
@@ -116,6 +117,7 @@ test("the four gates form the required stage state machine", async () => {
     "Gate 2 — Enter Implementation（进入实施）",
     "Gate 3 — Enter Delivery（进入交付）",
     "Gate 4 — Authorize PR Delivery（授权 PR 交付）",
+    "Completion Check — 完成检查",
   ]) assert.match(skill, new RegExp(name));
 
   const ownership = [
@@ -160,8 +162,35 @@ test("the four gates form the required stage state machine", async () => {
   assert.doesNotMatch(gate3, /After Gate 3 — Enter Delivery passes, run `my-spec-add`/);
   assert.match(
     section(delivery, /### Gate 4 — Authorize PR Delivery/, /\n### Gate |\n## /),
-    /Gate 3 — Enter Delivery[^]*(?:no next formal gate|no further formal gate)/i,
+    /(?:no next formal gate|no further formal gate)/i,
   );
+});
+
+test("gate outputs use one exact four-section template", async () => {
+  const template = await readFile(resolve(skillRoot, "references", "output-template.md"), "utf8");
+  const skill = await readFile(resolve(skillRoot, "SKILL.md"), "utf8");
+  const headings = [
+    "### 状态与待确认",
+    "### 核心内容摘要",
+    "### 引用",
+    "### 下一步",
+  ];
+  assert.deepEqual(
+    [...template.matchAll(/^### .*$/gm)].map(({ 0: heading }) => heading),
+    headings,
+  );
+  for (const name of headings) assert.match(template, new RegExp(`^${name}$`, "m"));
+  assert.match(template, /Gate 1 — Complete Requirements（完成需求）/);
+  assert.match(template, /Gate 2 — Enter Implementation（进入实施）/);
+  assert.match(template, /Gate 3 — Enter Delivery（进入交付）/);
+  assert.match(template, /Gate 4 — Authorize PR Delivery（授权 PR 交付）/);
+  assert.match(template, /Completion Check — 完成检查/);
+  assert.match(template, /requirements|需求/i);
+  assert.match(template, /implementation plan|实施计划/i);
+  assert.match(template, /specification difference|规格差异/i);
+  assert.match(template, /delivery actions|交付动作/i);
+  assert.match(template, /cleanup residue|清理残留/i);
+  assert.match(skill, /references\/output-template\.md/);
 });
 
 test("initialization and resume route through the four gates without MUST blocks", async () => {

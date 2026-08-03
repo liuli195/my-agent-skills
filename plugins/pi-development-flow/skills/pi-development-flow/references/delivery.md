@@ -2,6 +2,8 @@
 
 ## MUST — Dependencies（依赖）
 
+Before presenting Gate 3, Gate 4, or Completion Check output, read [output-template](output-template.md) and use its exact titles, four blocks, and order.
+
 Before preparing or applying the formal specification difference, read `my-spec-add`（新增自有规格）. Before PR（拉取请求） delivery, read `pr-flow-tweak`（小改流程） only for a qualifying non-bug Lightweight（轻量） change; read `pr-flow-complete`（完整拉取请求流程） for Standard（标准） and High risk（高风险） changes. If a merge or rebase conflict exists, read `resolving-merge-conflicts`（解决合并冲突） before resolving it.
 
 If an exact required Skill（技能） is missing, unreadable, fails to load, or is replaced by an informal entry, stop and report the preserved artifacts and the current named gate as the resume point. Do not bypass a formal entry with ordinary Git（版本管理） commands.

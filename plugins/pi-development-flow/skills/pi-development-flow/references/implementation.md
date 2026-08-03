@@ -2,6 +2,8 @@
 
 ## MUST — Dependencies（依赖）
 
+Before presenting Gate 2 output, read [output-template](output-template.md) and use its exact titles, four blocks, and order.
+
 Before changing feature, bug, or integration behavior, read and apply `tdd`（测试驱动开发）. Before verification, read `build-and-verify`（构建与验证） and use its formal entry. Before review, read `code-review`（代码审查）.
 
 Read `pi-subagent-policy`（Pi 子代理策略） only after deciding delegation is useful and before the first delegation. If a required Skill（技能） is missing, unreadable, fails to load, or is replaced by an informal entry, stop and report the current ticket, preserved evidence, and Gate 2 — Enter Implementation（进入实施） as the resume point. Do not replace Build and Verify with a new verification entry.

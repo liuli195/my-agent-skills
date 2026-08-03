@@ -2,6 +2,8 @@
 
 ## MUST — Dependencies（依赖）
 
+Before presenting Gate 1 output, read [output-template](output-template.md) and use its exact titles, four blocks, and order.
+
 Before a new requirements discussion, read and use `codebase-design` in the current session to form an overall design proposal. Scale it to the Flow Level（流程等级）: for a lightweight change, state only the observable result, scope, and highest public test seam; identify Module（模块）, Interface（接口）, and Seam（接缝） only when the change has structural design.
 
 After the user confirms the overall direction, and before discussing any detail, read `grill-with-docs` in the current session, then read and use `domain-modeling` as required by that Skill（技能）. MUST NOT substitute ordinary `grilling` for `grill-with-docs`.
