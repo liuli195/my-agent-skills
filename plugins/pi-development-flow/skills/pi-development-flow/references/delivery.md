@@ -73,7 +73,39 @@ Without explicit confirmation, do not perform any listed delivery action and rep
 
 #### Next Gate（下一步门禁）
 
-There is no next formal gate. After Gate 4 — Authorize PR Delivery passes, continue through PR delivery. Development Flow（开发流程） completes only after the PR is actually merged, the base branch is synchronized, and safe cleanup finishes.
+Completion Check — 完成检查. Gate 4 only authorizes delivery; it does not prove final completion.
+
+### Completion Check — 完成检查
+
+#### Usage Condition（使用条件）
+
+Use this check after the authorized PR delivery has finished and the PR is merged, the local base is synchronized, and the selected cleanup action has returned a result.
+
+#### Previous Gate（上一依赖门禁）
+
+Gate 4 — Authorize PR Delivery（授权 PR 交付）. Its authorized delivery actions must be complete or have a preserved stop state.
+
+#### Checks（检查清单）
+
+Confirm that:
+
+- every acceptance criterion and required check passes;
+- the formal specification is approved and valid;
+- the PR is actually merged;
+- the local base matches the current remote base;
+- safely removable branches and worktrees are gone;
+- no temporary artifact remains;
+- unrequested local installation, client synchronization, marketplace refresh, and release work are not completion blockers.
+
+If Git（版本管理） registration and branch cleanup are complete but an entity worktree directory remains, report `未完成`, the exact path, and the cleanup reason. Do not treat that state as `最终完成`.
+
+#### Confirmation Output（待用户确认内容清单）
+
+Use [output-template](output-template.md) exactly. If cleanup residue exists, ask whether the user grants explicit authorization for force cleanup of that exact residue. Do not force-delete automatically. A refusal preserves the residue and reports the recovery position; an authorization permits only the separately scoped cleanup action, after which this check runs again. This is not a fifth formal authorization gate.
+
+#### Next Gate（下一步门禁）
+
+There is no next gate. Report `最终完成` only after all checks pass; otherwise preserve the evidence and report the recovery position.
 
 ## Formal specification（正式规格）
 
@@ -98,11 +130,4 @@ By default, Development Flow excludes local installation, client synchronization
 
 Use the requested action's formal entry and verify its result. Never infer authorization for a required release when a requested synchronization depends on unpublished content; report that requested action separately. Unrequested or unavailable local delivery MUST NOT block completion or become a default follow-up task.
 
-Declare the Development Flow（开发流程） complete only when:
-
-- every acceptance criterion and required check passes;
-- the formal specification is approved and valid;
-- the PR is actually merged;
-- the local base matches the current remote base;
-- safely removable ticket, feature, and integration branches and worktrees are gone;
-- no temporary artifact from the flow remains.
+Completion Check（完成检查） owns the final completion conclusion. Do not declare the Development Flow（开发流程） complete from a successful Gate 4 authorization or a partial cleanup result.

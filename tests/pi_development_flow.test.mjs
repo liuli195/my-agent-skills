@@ -162,7 +162,7 @@ test("the four gates form the required stage state machine", async () => {
   assert.doesNotMatch(gate3, /After Gate 3 — Enter Delivery passes, run `my-spec-add`/);
   assert.match(
     section(delivery, /### Gate 4 — Authorize PR Delivery/, /\n### Gate |\n## /),
-    /(?:no next formal gate|no further formal gate)/i,
+    /Completion Check — 完成检查/,
   );
 });
 
@@ -191,6 +191,27 @@ test("gate outputs use one exact four-section template", async () => {
   assert.match(template, /delivery actions|交付动作/i);
   assert.match(template, /cleanup residue|清理残留/i);
   assert.match(skill, /references\/output-template\.md/);
+});
+
+test("completion check distinguishes final completion from cleanup residue", async () => {
+  const delivery = await readFile(
+    resolve(skillRoot, "references", "delivery.md"),
+    "utf8",
+  );
+  const completion = section(
+    delivery,
+    /### Completion Check — 完成检查/,
+    /\n### Gate |\n## /,
+  );
+
+  assert.match(completion, /Gate 4 — Authorize PR Delivery/);
+  assert.match(completion, /final completion|最终完成/i);
+  assert.match(completion, /cleanup residue|清理残留/i);
+  assert.match(completion, /force cleanup|强制清理/i);
+  assert.match(completion, /explicit authorization|明确授权/i);
+  assert.match(completion, /not.*fifth.*gate|不新增第五个正式授权门禁/is);
+  assert.match(completion, /unrequested.*(?:not|does not).*block|未请求.*不.*阻塞/is);
+  assert.match(completion, /output-template\.md/);
 });
 
 test("initialization and resume route through the four gates without MUST blocks", async () => {
