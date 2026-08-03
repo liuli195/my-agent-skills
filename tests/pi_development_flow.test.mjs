@@ -209,6 +209,38 @@ test("implementation requires tool-enforced cwd for writable delegation", async 
   assert.match(implementation, /stop before delegation.*handoff/i);
 });
 
+test("direct Agent dispatch blocks writable and unknown roles but allows read-only roles", async () => {
+  const listeners = new Map();
+  const pi = {
+    on(name, handler) {
+      listeners.set(name, handler);
+    },
+    registerTool() {},
+  };
+  const dispatchUrl = pathToFileURL(
+    resolve(pluginRoot, "extensions", "dispatch.ts"),
+  ).href;
+  const { registerDirectAgentGuard } = await import(dispatchUrl);
+  registerDirectAgentGuard(pi);
+
+  const guard = listeners.get("tool_call");
+  assert.ok(guard, "missing direct Agent guard");
+  const call = (input, toolName = "Agent") => guard({ toolName, input }, {});
+
+  for (const role of ["Implementer", "unknown", ""]) {
+    const result = await call({ subagent_type: role });
+    assert.equal(result?.block, true, `expected ${role || "empty"} role to be blocked`);
+    assert.match(result?.reason ?? "", /dispatch_implementer_in_worktree/);
+  }
+  const resumed = await call({ subagent_type: "Explorer", resume: "agent-1" });
+  assert.equal(resumed?.block, true);
+
+  for (const role of ["Explorer", "Reviewer", "Architect", "explorer"]) {
+    assert.equal(await call({ subagent_type: role }), undefined, `${role} should be allowed`);
+  }
+  assert.equal(await call({ subagent_type: "Implementer" }, "other_tool"), undefined);
+});
+
 test("worktree dispatch binds Implementer to one verified non-primary worktree", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-development-flow-dispatch-"));
   const worktree = join(root, "feature");
@@ -302,7 +334,7 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
 
     assert.equal(spawnRequest.type, "Implementer");
     assert.equal(spawnRequest.options.cwd, worktree);
-    assert.equal(spawnRequest.options.isolated, true);
+    assert.equal(spawnRequest.options.isolated, false);
     assert.match(spawnRequest.prompt, /myspec[\\/]changes[\\/]smoke[\\/]issues[\\/]01-marker\.md/);
     assert.doesNotMatch(spawnRequest.prompt, /Implement ticket 03/);
     assert.equal(result.details.branch, "feature");
@@ -395,10 +427,13 @@ test("Pi discovers the local Development Flow package with disclosed references"
     await loader.reload();
 
     const extensions = loader.getExtensions().extensions;
+    const flowExtension = extensions.find(({ resolvedPath }) => resolvedPath.endsWith("pi-development-flow.ts"));
     assert.ok(
-      extensions.some(({ resolvedPath }) => resolvedPath.endsWith("pi-development-flow.ts")),
+      flowExtension,
       `missing pi-development-flow extension: ${JSON.stringify(loader.getExtensions().errors)}`,
     );
+    assert.ok(flowExtension.handlers.has("tool_call"), "missing direct Agent guard handler");
+    assert.deepEqual(loader.getExtensions().errors, []);
 
     const result = loader.getSkills();
     const skill = result.skills.find(({ name }) => name === "pi-development-flow");

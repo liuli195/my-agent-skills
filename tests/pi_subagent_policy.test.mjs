@@ -46,15 +46,18 @@ test("Pi discovers the model-invoked policy through the local package entry", as
   }
 });
 
-test("the policy publishes the three persistent Subagent roles", async () => {
+test("the policy publishes the four persistent Subagent roles", async () => {
   const content = await readFile(skillPath, "utf8");
   const expected = [
     "Explorer | Read-only investigator",
     "Implementer | Implements delegated",
     "Reviewer | Independently reviews",
     "openai-codex/gpt-5.6-luna",
-    "openai-codex/gpt-5.6-terra",
     "openai-codex/gpt-5.6-sol",
+    "| Implementer | Implements delegated code or documentation from confirmed requirements. | `openai-codex/gpt-5.6-luna` | `max` | Full implementation tools; no extensions; preloaded TDD |",
+    "extensions: false",
+    "skills: tdd",
+    "/skill:tdd",
     "check the effective persistent configuration once per session",
     "active model registry",
     "The main agent decides whether and when to delegate",

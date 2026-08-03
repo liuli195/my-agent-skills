@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  isToolCallEventType,
+  type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
 
 type RpcReply<T> =
   | { success: true; data?: T }
@@ -14,6 +17,27 @@ type Completion = {
   result?: string;
   error?: string;
 };
+
+type AgentInput = Record<string, unknown>;
+
+const DIRECT_READ_ONLY_ROLES = new Set(["explorer", "reviewer", "architect"]);
+
+export function registerDirectAgentGuard(pi: ExtensionAPI) {
+  pi.on("tool_call", (event) => {
+    if (!isToolCallEventType<"Agent", AgentInput>("Agent", event)) return;
+
+    const role = typeof event.input.subagent_type === "string"
+      ? event.input.subagent_type.toLowerCase()
+      : "";
+    const hasResume = Object.prototype.hasOwnProperty.call(event.input, "resume");
+    if (!hasResume && DIRECT_READ_ONLY_ROLES.has(role)) return;
+
+    return {
+      block: true,
+      reason: "Direct Agent calls for writable, unknown, or resumed subagents are blocked. Use dispatch_implementer_in_worktree.",
+    };
+  });
+}
 
 function rpc<T>(
   pi: ExtensionAPI,
@@ -179,8 +203,8 @@ export function registerWorktreeDispatch(
         {
           type: "Implementer",
           prompt: `Implement exactly one published ticket: \`${ticket}\`. Read that ticket, follow the repository rules, and do not implement any other ticket.`,
-          // ponytail: isolate child extensions/MCP; opt in only if a ticket proves it needs them.
-          options: { cwd: target.worktree, isolated: true },
+          // Implementer config disables extensions and preloads only the confirmed TDD skill.
+          options: { cwd: target.worktree, isolated: false },
         },
         signal,
       );
