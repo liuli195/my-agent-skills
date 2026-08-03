@@ -5036,6 +5036,26 @@ def test_packed_myspec_codex_doctor_uses_user_home_when_orca_home_is_inherited(
     assert env["CODEX_HOME"] == str(orca_home)
 
 
+def test_packed_myspec_explicit_codex_home_errors_without_codex(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
+    missing_home = tmp_path / "missing-codex-home"
+
+    diagnosed = run_cli(
+        executable,
+        "doctor",
+        "--codex",
+        "--codex-home",
+        missing_home,
+        env=env,
+    )
+
+    assert diagnosed.returncode == 1
+    assert f"error: codex_home_unavailable: {missing_home}: directory does not exist" in diagnosed.stderr
+
+
 def test_packed_myspec_bare_doctor_does_not_require_codex_home(
     tmp_path: Path,
 ) -> None:

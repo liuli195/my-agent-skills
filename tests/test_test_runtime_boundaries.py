@@ -564,6 +564,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_packed_myspec_bare_doctor_does_not_require_codex_home': (
         'covers the installed MySpec CLI preserving the bare doctor default when Codex home is invalid; function=test_packed_myspec_bare_doctor_does_not_require_codex_home'
     ),
+    'tests/test_my_spec.py::test_packed_myspec_explicit_codex_home_errors_without_codex': (
+        'covers the installed MySpec CLI rejecting an explicit unavailable Codex profile even when Codex is absent; function=test_packed_myspec_explicit_codex_home_errors_without_codex'
+    ),
     'tests/test_my_spec.py::test_packed_myspec_claude_init_keeps_legacy_when_stable_version_is_wrong': (
         'covers packaged Claude cleanup preserving legacy state when stable verification fails; function=test_packed_myspec_claude_init_keeps_legacy_when_stable_version_is_wrong'
     ),
