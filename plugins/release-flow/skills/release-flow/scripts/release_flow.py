@@ -687,6 +687,20 @@ def tag_version(tag: str) -> str:
     return tag
 
 
+def semver_core(version: str) -> tuple[int, int, int] | None:
+    core = version.split("+", 1)[0].split("-", 1)[0]
+    parts = core.split(".")
+    if len(parts) != 3 or any(not part.isdigit() or (len(part) > 1 and part.startswith("0")) for part in parts):
+        return None
+    return tuple(int(part) for part in parts)
+
+
+def version_is_advanced(current: str, baseline: str) -> bool:
+    current_core = semver_core(current)
+    baseline_core = semver_core(baseline)
+    return current_core is not None and baseline_core is not None and current_core > baseline_core
+
+
 def parse_bump_plugins(raw: str | list[str]) -> list[str]:
     values = raw if isinstance(raw, list) else [raw]
     if values == [""]:
@@ -1092,7 +1106,8 @@ def preflight_errors(
                             f"source_ref_requires_pr: {config.release_source_ref}: {version_file}"
                         )
                 if input_changed and any(
-                    baseline is not None and current_versions[version_file] == baseline
+                    baseline is not None
+                    and not version_is_advanced(current_versions[version_file], baseline)
                     for version_file, baseline in baseline_versions.items()
                 ):
                     errors.append(f"plugin_version_not_bumped: {plugin_name}")

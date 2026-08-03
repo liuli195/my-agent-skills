@@ -525,6 +525,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_release_flow_cli.py::test_preflight_rejects_selected_content_without_version_advancement': (
         'covers release-flow preflight rejecting selected content without a baseline version advancement; function=test_preflight_rejects_selected_content_without_version_advancement'
     ),
+    'tests/test_release_flow_cli.py::test_preflight_rejects_selected_version_downgrade': (
+        'covers release-flow preflight rejecting selected version downgrade; function=test_preflight_rejects_selected_version_downgrade'
+    ),
     'tests/test_release_flow_cli.py::test_preflight_accepts_selected_npm_plugin_with_all_versions_advanced': (
         'covers release-flow preflight accepting a selected NPM target with consistent advanced versions; function=test_preflight_accepts_selected_npm_plugin_with_all_versions_advanced'
     ),
