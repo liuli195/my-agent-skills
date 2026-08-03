@@ -67,3 +67,11 @@ _Avoid_: Tool version pin, installation source
 **Toolchain Record（工具链记录）**:
 The Git-visible repository record of selected Toolchain Identities（工具链身份） used by PR Flow（拉取请求流程） CI（持续集成） synchronization.
 _Avoid_: Tool lockfile, CI configuration
+
+**Release Input（发布输入）**:
+The plugin content and release metadata that a release exposes to its consumers, regardless of whether the consumer receives it from the marketplace or an NPM package.
+_Avoid_: Source-only change, build-only change
+
+**Release Baseline（发布基线）**:
+The latest published representation of a plugin against which the next release determines content and version drift.
+_Avoid_: Working tree, latest source branch
