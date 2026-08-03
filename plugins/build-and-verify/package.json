@@ -10,6 +10,6 @@
     "url": "https://github.com/liuli195/my-agent-skills",
     "directory": "plugins/build-and-verify"
   },
-  "files": [".agents", ".claude-plugin", ".codex-plugin", "bin", "python/*.py", "python/lifecycle_profile.json", "skills"],
+  "files": [".agents", ".claude-plugin", ".codex-plugin", "bin", "python/*.py", "python/lifecycle_profile.json", "skills/*/SKILL.md", "skills/*/references/**", "skills/*/assets/**"],
   "pi": {"skills": ["./skills/build-and-verify", "./skills/build-and-verify-init", "./skills/build-and-verify-review"]}
 }

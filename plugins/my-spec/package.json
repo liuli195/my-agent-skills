@@ -24,7 +24,9 @@
     "bin",
     "python/*.py",
     "python/lifecycle_profile.json",
-    "skills"
+    "skills/*/SKILL.md",
+    "skills/*/references/**",
+    "skills/*/assets/**"
   ],
   "pi": {
     "skills": [
