@@ -12,3 +12,13 @@
 - [ ] 本地工作流契约检查先失败后通过，覆盖汇总任务依赖和失败结果处理。
 - [ ] 真实拉取请求成功路径确认 `Full Verify` 指向汇总任务。
 - [ ] 受控平台失败路径确认 `Full Verify` 失败或保持阻塞。
+
+## Behavior Evidence
+
+- Red：实现前运行 `python -m pytest -q -p no:cacheprovider tests/test_build_and_verify_cli.py -k full_verify_is_the_cross_platform_required_gate`，因缺少 `full-verify-gate` 失败。
+- Green：新增汇总任务后同一检查通过（1 passed）。
+- Targeted checks：`python -m pytest -q -p no:cacheprovider tests/test_build_and_verify_cli.py tests/test_setup_worktree_script.py`，22 passed。
+- Fast verification：`build-and-verify verify --project .`，通过；运行 2 项受影响检查。
+- User-entry smoke：待 PR CI（拉取请求持续集成）运行后确认真实必需检查指向汇总任务。
+- Review：待有界代码审查。
+- Known risk：本地无法模拟 GitHub Actions（GitHub 工作流）任务结果组合；失败路径需由真实 PR CI 或等价受控运行确认。

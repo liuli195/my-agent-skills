@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = REPO_ROOT / "plugins" / "build-and-verify"
@@ -112,6 +114,26 @@ def test_repository_automation_uses_build_and_verify_cli() -> None:
     assert all("scripts/build_and_verify.py" not in command for command in commands)
     assert "build-and-verify verify --project . --full" not in commands[0]
     assert "build-and-verify verify --project source --full" not in commands[1]
+
+
+def test_full_verify_is_the_cross_platform_required_gate() -> None:
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github" / "workflows" / "full-verify.yml").read_text(encoding="utf-8")
+    )
+    jobs = workflow["jobs"]
+    gate = jobs["full-verify-gate"]
+    gate_step = gate["steps"][0]
+    gate_run = gate_step["run"]
+
+    assert jobs["full-verify"]["name"] == "Linux Full Verify"
+    assert jobs["windows-worktree-smoke"]["name"] == "Windows worktree smoke"
+    assert gate["name"] == "Full Verify"
+    assert set(gate["needs"]) == {"full-verify", "windows-worktree-smoke"}
+    assert gate["if"] == "${{ always() }}"
+    assert gate_step["env"]["LINUX_RESULT"] == "${{ needs.full-verify.result }}"
+    assert gate_step["env"]["WINDOWS_RESULT"] == "${{ needs.windows-worktree-smoke.result }}"
+    assert '!= "success"' in gate_run
+    assert "exit 1" in gate_run
 
 
 def test_build_and_verify_package_excludes_legacy_skill_runtime() -> None:

@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   full-verify:
-    name: Full Verify
+    name: Linux Full Verify
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -101,3 +101,21 @@ jobs:
         run: |
           . ./.worktrees/smoke/.venv/Scripts/Activate.ps1
           build-and-verify build --project .worktrees/smoke
+
+  full-verify-gate:
+    name: Full Verify
+    if: ${{ always() }}
+    needs:
+      - full-verify
+      - windows-worktree-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all platform checks
+        env:
+          LINUX_RESULT: ${{ needs.full-verify.result }}
+          WINDOWS_RESULT: ${{ needs.windows-worktree-smoke.result }}
+        run: |
+          if [ "$LINUX_RESULT" != "success" ] || [ "$WINDOWS_RESULT" != "success" ]; then
+            echo "Linux=$LINUX_RESULT Windows=$WINDOWS_RESULT"
+            exit 1
+          fi
