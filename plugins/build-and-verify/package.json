@@ -1,6 +1,6 @@
 {
   "name": "@liuli195/build-and-verify",
-  "version": "0.1.57",
+  "version": "0.1.59",
   "description": "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）",
   "keywords": ["build", "verify", "pi-package"],
   "bin": {"build-and-verify": "./bin/build-and-verify.js"},
