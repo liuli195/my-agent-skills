@@ -762,9 +762,9 @@ def git_ref_exists(project: Path, ref: str) -> bool:
     return result.returncode == 0
 
 
-def ensure_remote_branch(project: Path, branch: str) -> None:
+def ensure_remote_branch(project: Path, branch: str, *, refresh: bool = False) -> None:
     ref = f"origin/{branch}"
-    if git_ref_exists(project, ref):
+    if not refresh and git_ref_exists(project, ref):
         return
     result = subprocess.run(
         [
@@ -774,7 +774,7 @@ def ensure_remote_branch(project: Path, branch: str) -> None:
             "fetch",
             "--depth=1",
             "origin",
-            f"{branch}:refs/remotes/origin/{branch}",
+            f"+{branch}:refs/remotes/origin/{branch}",
         ],
         check=False,
         text=True,
@@ -807,12 +807,7 @@ def plugin_target_exists(project: Path, config: FlowConfig, plugin_name: str) ->
     return git_path_exists(project, f"origin/{config.release_channel_branch}", root)
 
 
-def release_input_changed(project: Path, config: FlowConfig, plugin_name: str) -> bool:
-    release_inputs = plugin_release_inputs(plugin_name)
-    for release_input in release_inputs:
-        resolve_project_path(project, Path(release_input), "invalid_release_input_path")
-    ensure_remote_branch(project, config.release_channel_branch)
-    ref = f"origin/{config.release_channel_branch}"
+def git_paths_changed(project: Path, revisions: list[str], paths: list[str]) -> bool:
     result = subprocess.run(
         [
             "git",
@@ -820,17 +815,36 @@ def release_input_changed(project: Path, config: FlowConfig, plugin_name: str) -
             str(project),
             "diff",
             "--quiet",
-            ref,
+            *revisions,
             "--",
-            *(Path(release_input).as_posix() for release_input in release_inputs),
+            *(Path(path).as_posix() for path in paths),
         ],
         check=False,
         capture_output=True,
     )
     if result.returncode not in {0, 1}:
         output = result.stderr.decode("utf-8", errors="replace").strip()
-        raise ValueError(f"command_failed: git diff {ref}: {output}")
+        raise ValueError(f"command_failed: git diff {' '.join(revisions)}: {output}")
     return result.returncode == 1
+
+
+def release_input_changed(project: Path, config: FlowConfig, plugin_name: str) -> bool:
+    release_inputs = plugin_release_inputs(plugin_name)
+    for release_input in release_inputs:
+        resolve_project_path(project, Path(release_input), "invalid_release_input_path")
+    ensure_remote_branch(project, config.release_channel_branch)
+    ensure_remote_branch(project, config.release_source_ref)
+    channel_ref = f"origin/{config.release_channel_branch}"
+    source_ref = f"origin/{config.release_source_ref}"
+    if git_paths_changed(project, [channel_ref], release_inputs):
+        return True
+    if git_paths_changed(project, [source_ref], release_inputs):
+        return True
+    return source_ref != channel_ref and git_paths_changed(
+        project,
+        [source_ref, channel_ref],
+        release_inputs,
+    )
 
 
 def remote_ref_manifest_version(project: Path, branch: str, manifest_file: str) -> str | None:
@@ -1023,6 +1037,14 @@ def preflight_errors(
     if version != expected_version:
         errors.append(f"release_version_mismatch: {tag}")
 
+    try:
+        for branch in dict.fromkeys((config.release_channel_branch, config.release_source_ref)):
+            ensure_remote_branch(project, branch, refresh=True)
+    except ValueError as exc:
+        errors.append(str(exc))
+        errors.extend(remote_release_errors(project, tag))
+        return errors
+
     projection_plugins = sorted({plugin for generator in projection.generators for plugin in generator.plugins})
     for plugin_name in projection_plugins:
         if plugin_name not in PLUGIN_REGISTRY:
@@ -1033,6 +1055,7 @@ def preflight_errors(
         plugin_name
         for plugin_name in PLUGIN_REGISTRY
         if plugin_release_shape(plugin_name) == "npm"
+        or plugin_target_exists(project, config, plugin_name)
     )
     bumped = set(bump_plugins)
     for plugin_name in sorted(published_plugins):

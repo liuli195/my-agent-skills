@@ -58,6 +58,16 @@ def run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedPr
     )
 
 
+def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), *args],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
 def write_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -1006,7 +1016,7 @@ def test_remote_ref_manifest_version_fetches_missing_channel_branch_for_actions_
             "fetch",
             "--depth=1",
             "origin",
-            "marketplace:refs/remotes/origin/marketplace",
+            "+marketplace:refs/remotes/origin/marketplace",
         ),
         (
             "git",
@@ -1697,7 +1707,7 @@ def test_preflight_rejects_changed_marketplace_input_without_bump(tmp_path: Path
     init_release_input_project(project, remote)
     (project / "plugins" / "pr-flow" / "content.txt").write_text("changed\n", encoding="utf-8")
 
-    result = run(
+    result = run_cli(
         "preflight",
         "--project",
         str(project),
@@ -1713,13 +1723,70 @@ def test_preflight_rejects_changed_marketplace_input_without_bump(tmp_path: Path
     assert "plugin_requires_bump: pr-flow" in result.stdout
 
 
+def test_preflight_refreshes_remote_baseline_before_comparing(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    remote = tmp_path / "remote.git"
+    init_release_input_project(project, remote)
+    old_main = git(project, "rev-parse", "origin/main").stdout.strip()
+    old_marketplace = git(project, "rev-parse", "origin/marketplace").stdout.strip()
+    (project / "plugins" / "pr-flow" / "content.txt").write_text("remote\n", encoding="utf-8")
+    assert git(project, "add", "plugins/pr-flow/content.txt").returncode == 0
+    assert git(project, "commit", "-m", "remote marketplace content").returncode == 0
+    assert git(project, "push", "origin", "HEAD:refs/heads/main").returncode == 0
+    assert git(project, "push", "origin", "HEAD:refs/heads/marketplace").returncode == 0
+    assert git(project, "update-ref", "refs/remotes/origin/main", old_main).returncode == 0
+    assert git(project, "update-ref", "refs/remotes/origin/marketplace", old_marketplace).returncode == 0
+
+    result = run_cli(
+        "preflight",
+        "--project",
+        str(project),
+        "--tag",
+        "v1.0.0",
+        "--version",
+        "1.0.0",
+        "--bump-plugins",
+        "",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: preflight_passed" in result.stdout
+
+
+def test_preflight_rejects_changed_unprojected_marketplace_input_without_bump(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    remote = tmp_path / "remote.git"
+    init_release_input_project(project, remote)
+    projection = project / ".release-flow" / "projection.yaml"
+    projection.write_text(
+        projection.read_text(encoding="utf-8").replace("      - release-flow\n", ""),
+        encoding="utf-8",
+    )
+    (project / "plugins" / "release-flow" / "content.txt").write_text("changed\n", encoding="utf-8")
+
+    result = run_cli(
+        "preflight",
+        "--project",
+        str(project),
+        "--tag",
+        "v1.0.0",
+        "--version",
+        "1.0.0",
+        "--bump-plugins",
+        "",
+    )
+
+    assert result.returncode == 1
+    assert "plugin_requires_bump: release-flow" in result.stdout
+
+
 def test_preflight_rejects_changed_npm_input_without_bump_when_not_in_projection(tmp_path: Path) -> None:
     project = tmp_path / "project"
     remote = tmp_path / "remote.git"
     init_release_input_project(project, remote)
     (project / "plugins" / "build-and-verify" / "content.txt").write_text("changed\n", encoding="utf-8")
 
-    result = run(
+    result = run_cli(
         "preflight",
         "--project",
         str(project),
@@ -1743,7 +1810,7 @@ def test_preflight_rejects_shared_npm_input_when_only_one_npm_plugin_is_selected
         "changed\n", encoding="utf-8"
     )
 
-    result = run(
+    result = run_cli(
         "preflight",
         "--project",
         str(project),
@@ -1768,7 +1835,7 @@ def test_preflight_rejects_npm_metadata_drift_without_bump(tmp_path: Path) -> No
         {"version": "1.0.0", "description": "changed"},
     )
 
-    result = run(
+    result = run_cli(
         "preflight",
         "--project",
         str(project),
@@ -1790,7 +1857,7 @@ def test_preflight_rejects_selected_content_without_version_advancement(tmp_path
     init_release_input_project(project, remote)
     (project / "plugins" / "release-flow" / "content.txt").write_text("changed\n", encoding="utf-8")
 
-    result = run(
+    result = run_cli(
         "preflight",
         "--project",
         str(project),
@@ -1813,7 +1880,7 @@ def test_preflight_accepts_selected_npm_plugin_with_all_versions_advanced(tmp_pa
     (project / "plugins" / "build-and-verify" / "content.txt").write_text("changed\n", encoding="utf-8")
     advance_plugin_version_on_source_ref(project, "build-and-verify", "1.0.1")
 
-    result = run(
+    result = run_cli(
         "preflight",
         "--project",
         str(project),
@@ -1836,7 +1903,7 @@ def test_preflight_checks_npm_package_version_with_plugin_manifests(tmp_path: Pa
     (project / "plugins" / "build-and-verify" / "content.txt").write_text("changed\n", encoding="utf-8")
     write_plugin_manifests(project, "build-and-verify", "1.0.1")
 
-    result = run(
+    result = run_cli(
         "preflight",
         "--project",
         str(project),
@@ -1865,7 +1932,7 @@ def test_preflight_accepts_projection_only_change_without_plugin_input_drift(tmp
         encoding="utf-8",
     )
 
-    result = run(
+    result = run_cli(
         "preflight",
         "--project",
         str(project),
@@ -1887,7 +1954,7 @@ def test_preflight_rejects_shared_npm_packer_input_when_only_one_npm_plugin_is_s
     init_release_input_project(project, remote)
     (project / "plugins" / "tool-lifecycle" / "pack.py").write_text("changed\n", encoding="utf-8")
 
-    result = run(
+    result = run_cli(
         "preflight",
         "--project",
         str(project),

@@ -507,6 +507,12 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_release_flow_cli.py::test_preflight_rejects_changed_marketplace_input_without_bump': (
         'covers release-flow preflight rejecting changed marketplace input without a selected bump; function=test_preflight_rejects_changed_marketplace_input_without_bump'
     ),
+    'tests/test_release_flow_cli.py::test_preflight_refreshes_remote_baseline_before_comparing': (
+        'covers release-flow preflight refreshing the remote release baseline; function=test_preflight_refreshes_remote_baseline_before_comparing'
+    ),
+    'tests/test_release_flow_cli.py::test_preflight_rejects_changed_unprojected_marketplace_input_without_bump': (
+        'covers release-flow preflight checking an unprojected marketplace target; function=test_preflight_rejects_changed_unprojected_marketplace_input_without_bump'
+    ),
     'tests/test_release_flow_cli.py::test_preflight_rejects_changed_npm_input_without_bump_when_not_in_projection': (
         'covers release-flow preflight checking an NPM target omitted from the marketplace projection; function=test_preflight_rejects_changed_npm_input_without_bump_when_not_in_projection'
     ),
