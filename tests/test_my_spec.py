@@ -5022,6 +5022,19 @@ def test_packed_myspec_codex_doctor_uses_user_home_when_orca_home_is_inherited(
     ]
     assert env["CODEX_HOME"] == str(orca_home)
 
+    initialized = run_cli(
+        executable,
+        "init",
+        "--codex",
+        "--codex-home",
+        explicit_home,
+        env=env,
+    )
+
+    assert initialized.returncode == 0, initialized.stderr
+    assert (explicit_home / "config.toml").is_file()
+    assert env["CODEX_HOME"] == str(orca_home)
+
 
 def test_packed_myspec_bare_doctor_does_not_require_codex_home(
     tmp_path: Path,

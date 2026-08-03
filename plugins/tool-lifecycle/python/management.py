@@ -2303,12 +2303,11 @@ def _management_command(args: argparse.Namespace) -> str:
 
 def _management_uses_codex(args: argparse.Namespace) -> bool:
     codex_available = shutil.which("codex") is not None
-    explicit_home = getattr(args, "codex_home", None) is not None
     if args.command == "update":
-        return codex_available or explicit_home
+        return codex_available
     if args.command == "doctor":
-        return (args.codex or args.all) and (codex_available or explicit_home)
-    return (args.codex or args.all or args.dev or args.release) and (codex_available or explicit_home)
+        return codex_available and (args.codex or args.all)
+    return codex_available and (args.codex or args.all or args.dev or args.release)
 
 
 def run_management(args: argparse.Namespace) -> dict[str, object]:
