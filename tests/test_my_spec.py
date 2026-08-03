@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import signal
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1178,7 +1179,12 @@ def test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes(tmp_pa
     assert "error: legacy_source_migration_required" in blocked.stderr
     assert "pi: run myspec init --pi" in blocked.stderr
     assert "claude: run myspec init --claude" in blocked.stderr
-    assert f"codex: run myspec init --codex --codex-home \"{codex_home}\"" in blocked.stderr
+    codex_command = (
+        subprocess.list2cmdline(["myspec", "init", "--codex", "--codex-home", str(codex_home)])
+        if os.name == "nt"
+        else shlex.join(["myspec", "init", "--codex", "--codex-home", str(codex_home)])
+    )
+    assert f"codex: run {codex_command}" in blocked.stderr
     assert not any(json.loads(line)[:2] == ["install", "--global"] for line in npm_log.read_text(encoding="utf-8").splitlines())
     assert not (Path(env["HOME"]) / ".myspec" / "state.json").exists()
     assert user_settings.read_bytes() == before["pi"]
