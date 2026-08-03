@@ -127,12 +127,14 @@ def test_full_verify_is_the_cross_platform_required_gate() -> None:
 
     assert jobs["full-verify"]["name"] == "Linux Full Verify"
     assert jobs["windows-worktree-smoke"]["name"] == "Windows worktree smoke"
+    assert "needs" not in jobs["full-verify"]
+    assert "needs" not in jobs["windows-worktree-smoke"]
     assert gate["name"] == "Full Verify"
     assert set(gate["needs"]) == {"full-verify", "windows-worktree-smoke"}
     assert gate["if"] == "${{ always() }}"
     assert gate_step["env"]["LINUX_RESULT"] == "${{ needs.full-verify.result }}"
     assert gate_step["env"]["WINDOWS_RESULT"] == "${{ needs.windows-worktree-smoke.result }}"
-    assert '!= "success"' in gate_run
+    assert 'if [ "$LINUX_RESULT" != "success" ] || [ "$WINDOWS_RESULT" != "success" ]; then' in gate_run
     assert "exit 1" in gate_run
 
 
