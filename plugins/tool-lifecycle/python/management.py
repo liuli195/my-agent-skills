@@ -218,33 +218,56 @@ def _default_codex_home() -> Path:
     return _absolute_path(Path(configured_home) / ".codex") if configured_home else _absolute_path(Path.home() / ".codex")
 
 
-def _validate_codex_home(selection: CodexHomeSelection) -> None:
+def _path_within(path: Path, root: Path) -> bool:
+    try:
+        normalized_path = os.path.normcase(os.path.abspath(path))
+        normalized_root = os.path.normcase(os.path.abspath(root))
+        return os.path.commonpath([normalized_path, normalized_root]) == normalized_root
+    except ValueError:
+        return False
+
+
+def _is_orca_codex_home(path: Path) -> bool:
+    configured = os.environ.get("ORCA_CODEX_HOME")
+    if configured and _same_path(path, Path(configured)):
+        return True
+    user_data = os.environ.get("ORCA_USER_DATA_PATH")
+    if user_data and _path_within(path, Path(user_data)):
+        return True
+    parts = {part.casefold() for part in Path(os.path.normpath(str(path))).parts}
+    return "orca" in parts and "codex-runtime-home" in parts
+
+
+def _validate_codex_home(selection: CodexHomeSelection, *, allow_missing: bool) -> None:
     path = selection.path
     if not path.exists():
-        if selection.explicit:
-            raise ManagementError(
-                f"codex_home_unavailable: {path}: directory does not exist; create it or choose another directory"
-            )
-        return
+        if allow_missing or not selection.explicit:
+            return
+        raise ManagementError(
+            f"codex_home_unavailable: {path}: directory does not exist; create it or choose another directory"
+        )
     if not path.is_dir():
         raise ManagementError(f"codex_home_unavailable: {path}: not a directory")
     if not os.access(path, os.R_OK | os.W_OK):
         raise ManagementError(f"codex_home_unavailable: {path}: directory is not readable and writable")
 
 
-def _select_codex_home(requested: Path | None) -> CodexHomeSelection:
+def _select_codex_home(
+    requested: Path | None,
+    *,
+    allow_missing: bool = False,
+) -> CodexHomeSelection:
     if requested is not None:
         selection = CodexHomeSelection(_absolute_path(requested), "explicit", True)
     else:
         inherited = os.environ.get("CODEX_HOME")
-        orca_home = os.environ.get("ORCA_CODEX_HOME")
-        if inherited and orca_home and _same_path(Path(inherited), Path(orca_home)):
+        if inherited and _is_orca_codex_home(Path(inherited)):
             selection = CodexHomeSelection(_default_codex_home(), "orca-user-default", False)
         elif inherited:
             selection = CodexHomeSelection(_absolute_path(inherited), "environment", False)
         else:
             selection = CodexHomeSelection(_default_codex_home(), "user-default", False)
-    _validate_codex_home(selection)
+    _validate_codex_home(selection, allow_missing=allow_missing)
     return selection
 
 
@@ -1206,8 +1229,8 @@ def _stable_cli() -> Path:
 
 def _resume_after_switch(arguments: list[str], token: str, operation_id: str) -> dict[str, object]:
     _prepare_lock_handoff(operation_id, token)
-    selection = _current_codex_home()
-    codex_home = ["--codex-home", str(selection.path)] if selection.explicit else []
+    selection = _CODEX_HOME_SELECTION
+    codex_home = ["--codex-home", str(selection.path)] if selection is not None and selection.explicit else []
     invocation = _exact_command(_stable_cli(), *arguments, *codex_home, "--_switch-token", token)
     environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
     result = subprocess.run(
@@ -2044,8 +2067,8 @@ def _resume_after_update(token: str, operation_id: str, target: str) -> dict[str
     if _manifest_version(stable) != target or not _stable_cli().is_file():
         raise ManagementError("update_runtime_mismatch: updated global package is unavailable")
     _prepare_lock_handoff(operation_id, token)
-    selection = _current_codex_home()
-    codex_home = ["--codex-home", str(selection.path)] if selection.explicit else []
+    selection = _CODEX_HOME_SELECTION
+    codex_home = ["--codex-home", str(selection.path)] if selection is not None and selection.explicit else []
     invocation = _exact_command(_stable_cli(), "update", *codex_home, "--_update-token", token)
     result = subprocess.run(
         invocation,
@@ -2283,18 +2306,22 @@ def _management_command(args: argparse.Namespace) -> str:
 
 
 def _management_uses_codex(args: argparse.Namespace) -> bool:
+    codex_available = shutil.which("codex") is not None
     if args.command == "update":
-        return True
+        return codex_available
     if args.command == "doctor":
-        return not args.pi and not args.claude
-    return args.codex or args.all or args.dev or args.release
+        return codex_available and (args.codex or args.all)
+    return codex_available and (args.codex or args.all or args.dev or args.release)
 
 
 def run_management(args: argparse.Namespace) -> dict[str, object]:
     global _CODEX_HOME_SELECTION
     _CODEX_HOME_SELECTION = None
     if _management_uses_codex(args):
-        _CODEX_HOME_SELECTION = _select_codex_home(getattr(args, "codex_home", None))
+        _CODEX_HOME_SELECTION = _select_codex_home(
+            getattr(args, "codex_home", None),
+            allow_missing=args.command == "init",
+        )
     if args.command == "doctor":
         if args.all:
             report = _doctor_all()

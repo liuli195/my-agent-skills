@@ -561,6 +561,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_packed_myspec_codex_doctor_uses_user_home_when_orca_home_is_inherited': (
         'covers the installed MySpec CLI selecting the user Codex profile when Orca inherits a temporary profile; function=test_packed_myspec_codex_doctor_uses_user_home_when_orca_home_is_inherited'
     ),
+    'tests/test_my_spec.py::test_packed_myspec_bare_doctor_does_not_require_codex_home': (
+        'covers the installed MySpec CLI preserving the bare doctor default when Codex home is invalid; function=test_packed_myspec_bare_doctor_does_not_require_codex_home'
+    ),
     'tests/test_my_spec.py::test_packed_myspec_claude_init_keeps_legacy_when_stable_version_is_wrong': (
         'covers packaged Claude cleanup preserving legacy state when stable verification fails; function=test_packed_myspec_claude_init_keeps_legacy_when_stable_version_is_wrong'
     ),

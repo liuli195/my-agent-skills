@@ -4964,13 +4964,13 @@ def test_packed_myspec_codex_doctor_uses_user_home_when_orca_home_is_inherited(
     codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
     env = isolated_myspec_env(tmp_path, prefix, codex_bin)
     user_home = Path(env["USERPROFILE"]) / ".codex"
-    orca_home = tmp_path / "orca-runtime-home"
+    orca_home = tmp_path / "orca-user-data" / "codex-runtime-home" / "home"
     user_home.mkdir(parents=True, exist_ok=True)
     orca_home.mkdir(parents=True, exist_ok=True)
     env.update(
         {
             "CODEX_HOME": str(orca_home),
-            "ORCA_CODEX_HOME": str(orca_home),
+            "ORCA_USER_DATA_PATH": str(tmp_path / "orca-user-data"),
             "MYSPEC_CODEX_LOG": str(codex_log),
             "MYSPEC_CODEX_STATE": str(codex_state),
             "MYSPEC_CODEX_ENV_LOG": str(tmp_path / "codex-env.log"),
@@ -5021,3 +5021,36 @@ def test_packed_myspec_codex_doctor_uses_user_home_when_orca_home_is_inherited(
         str(explicit_home),
     ]
     assert env["CODEX_HOME"] == str(orca_home)
+
+
+def test_packed_myspec_bare_doctor_does_not_require_codex_home(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = npm_prefix_for(installed_package)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
+    env = isolated_myspec_env(tmp_path, prefix, pi_bin, codex_bin)
+    bad_codex_home = tmp_path / "invalid-codex-home"
+    bad_codex_home.write_text("not a directory", encoding="utf-8")
+    env.update(
+        {
+            "CODEX_HOME": str(bad_codex_home),
+            "MYSPEC_PI_LOG": str(pi_log),
+            "MYSPEC_CODEX_LOG": str(codex_log),
+            "MYSPEC_CODEX_STATE": str(codex_state),
+        }
+    )
+    env.pop("ORCA_CODEX_HOME", None)
+    env.pop("ORCA_USER_DATA_PATH", None)
+    write(Path(env["PI_CODING_AGENT_DIR"]) / "settings.json", json.dumps({"packages": []}))
+    write(
+        codex_state,
+        json.dumps({"marketplaces": "broken", "installed": [], "available": []}),
+    )
+
+    diagnosed = run_cli(executable, "doctor", env=env)
+
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    assert json.loads(diagnosed.stdout)["pi"]["available"] is True
+    assert not codex_log.exists()

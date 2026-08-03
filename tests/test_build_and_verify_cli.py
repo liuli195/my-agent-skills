@@ -470,13 +470,13 @@ def test_packed_build_and_verify_codex_doctor_resolves_orca_and_explicit_homes(
     executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
     env = _isolated_env(tmp_path, prefix)
     user_home = Path(env["USERPROFILE"]) / ".codex"
-    orca_home = tmp_path / "orca-runtime-home"
-    orca_home.mkdir()
+    orca_home = tmp_path / "orca-user-data" / "codex-runtime-home" / "home"
+    orca_home.mkdir(parents=True)
     env.update(
         {
             "PATH": os.pathsep.join([str(fake_bin), env["PATH"]]),
             "CODEX_HOME": str(orca_home),
-            "ORCA_CODEX_HOME": str(orca_home),
+            "ORCA_USER_DATA_PATH": str(tmp_path / "orca-user-data"),
             "CODEX_ENV_LOG": str(env_log),
         }
     )
