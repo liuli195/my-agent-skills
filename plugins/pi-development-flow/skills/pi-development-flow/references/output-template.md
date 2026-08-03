@@ -31,10 +31,10 @@ Every gate and completion result MUST use the fixed title and the four blocks be
 
 ## Summary content（摘要内容）
 
-- Gate 1：需求、测试接缝、票据和工作树。
-- Gate 2：实施计划、验证、审查、风险和停止条件。
+- Gate 1：目标、范围、测试接缝、票据及阻塞关系、变更工作树。
+- Gate 2：票据顺序、并行组、执行隔离、验证、审查、风险和停止条件。
 - Gate 3：正式规格差异和校验结果；确认沿用 `my-spec-add`。
-- Gate 4：最终差异、验证审查结果和交付动作。
+- Gate 4：最终差异、验证审查结果、已知风险和准确交付动作。
 - Completion Check：完成条件、实际状态和清理残留。
 
 长内容只通过“引用”提供入口；摘要保留作出当前判断所需的重点。

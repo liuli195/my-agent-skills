@@ -39,6 +39,7 @@ Gate 4 — Authorize PR Delivery（授权 PR 交付）完成后执行 Completion
 - `引用` 指向完整规格、实施计划、差异、验证证据或恢复文档；没有引用时写明无。
 - `下一步` 只说明下一门禁、流程结束或恢复位置。
 - 代理不得自行改名、调换、拆分、合并或新增这四个区块。
+- Gate 3 的 Development Flow 摘要使用这四个区块并引用 `my-spec-add` 的详细结果；该技能的原始确认保持不变，不被重写、包裹或重复提问。
 
 ### Gate-specific summaries（门禁专属摘要）
 

@@ -80,6 +80,8 @@ test("primary stages declare dependencies and their gate state before execution"
     /Before invoking `to-spec` or `to-tickets`[^]*current-session tool-call evidence that `codebase-design`, `grill-with-docs`, and `domain-modeling` were read/,
   );
 
+  for (const text of Object.values(documents)) assert.match(text, /output-template\.md/);
+
   const requirements = documents["requirements.md"];
   assert.match(
     requirements,
@@ -159,6 +161,8 @@ test("the four gates form the required stage state machine", async () => {
     gate3,
     /Gate 3 passes only after[^]*appl(?:y|ies|ication)[^]*validat/is,
   );
+  assert.match(gate3, /Development Flow summary uses.*output-template/is);
+  assert.match(gate3, /detailed final confirmation.*exact.*output/is);
   assert.doesNotMatch(gate3, /After Gate 3 — Enter Delivery passes, run `my-spec-add`/);
   assert.match(
     section(delivery, /### Gate 4 — Authorize PR Delivery/, /\n### Gate |\n## /),
@@ -185,11 +189,11 @@ test("gate outputs use one exact four-section template", async () => {
   assert.match(template, /Gate 3 — Enter Delivery（进入交付）/);
   assert.match(template, /Gate 4 — Authorize PR Delivery（授权 PR 交付）/);
   assert.match(template, /Completion Check — 完成检查/);
-  assert.match(template, /requirements|需求/i);
-  assert.match(template, /implementation plan|实施计划/i);
-  assert.match(template, /specification difference|规格差异/i);
-  assert.match(template, /delivery actions|交付动作/i);
-  assert.match(template, /cleanup residue|清理残留/i);
+  assert.match(template, /Gate 1：目标、范围、测试接缝、票据及阻塞关系、变更工作树/);
+  assert.match(template, /Gate 2：票据顺序、并行组、执行隔离、验证、审查、风险和停止条件/);
+  assert.match(template, /Gate 3：正式规格差异和校验结果；确认沿用 `my-spec-add`/);
+  assert.match(template, /Gate 4：最终差异、验证审查结果、已知风险和准确交付动作/);
+  assert.match(template, /Completion Check：完成条件、实际状态和清理残留/);
   assert.match(skill, /references\/output-template\.md/);
 });
 
@@ -207,8 +211,13 @@ test("completion check distinguishes final completion from cleanup residue", asy
   assert.match(completion, /Gate 4 — Authorize PR Delivery/);
   assert.match(completion, /final completion|最终完成/i);
   assert.match(completion, /cleanup residue|清理残留/i);
+  assert.match(completion, /physical worktree directory|实体工作树目录/i);
+  assert.match(completion, /exact path|精确路径/i);
+  assert.match(completion, /cleanup reason|清理原因/i);
   assert.match(completion, /force cleanup|强制清理/i);
   assert.match(completion, /explicit authorization|明确授权/i);
+  assert.match(completion, /refusal.*residue.*recovery|拒绝.*残留.*恢复/is);
+  assert.match(completion, /authorization.*check.*again|授权.*再次.*检查/is);
   assert.match(completion, /not.*fifth.*gate|不新增第五个正式授权门禁/is);
   assert.match(completion, /unrequested.*(?:not|does not).*block|未请求.*不.*阻塞/is);
   assert.match(completion, /output-template\.md/);

@@ -35,7 +35,7 @@ If an implementation check fails, preserve the artifacts and return to Implement
 
 #### Confirmation Output（待用户确认内容清单）
 
-Gate 3 is the final confirmation required by `my-spec-add`（新增自有规格） for its complete preview difference. Use that Skill（技能）'s confirmation exactly; do not add a second confirmation, exception, or recovery procedure. Implementation authorization or passing checks is not confirmation of Gate 3 — Enter Delivery.
+Gate 3's Development Flow summary uses [output-template](output-template.md), while the detailed final confirmation required by `my-spec-add`（新增自有规格） remains that Skill（技能）'s exact output. Cite it without rewriting or wrapping it, and do not add a second confirmation, exception, or recovery procedure. Implementation authorization or passing checks is not confirmation of Gate 3 — Enter Delivery.
 
 Without that confirmation, do not apply the formal specification difference; report the `my-spec-add` recovery point and Gate 3 — Enter Delivery as the resume point.
 
@@ -97,7 +97,7 @@ Confirm that:
 - no temporary artifact remains;
 - unrequested local installation, client synchronization, marketplace refresh, and release work are not completion blockers.
 
-If Git（版本管理） registration and branch cleanup are complete but an entity worktree directory remains, report `未完成`, the exact path, and the cleanup reason. Do not treat that state as `最终完成`.
+If Git（版本管理） registration and branch cleanup are complete but a physical worktree directory remains as Cleanup Residue（清理残留）, report `未完成`, the exact path, and the cleanup reason. Do not treat that state as `最终完成`.
 
 #### Confirmation Output（待用户确认内容清单）
 
