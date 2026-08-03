@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -41,6 +42,16 @@ SKILL_PATHS = tuple(f"./skills/{name}" for name in SKILL_NAMES)
 
 class ManagementError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class CodexHomeSelection:
+    path: Path
+    source: str
+    explicit: bool
+
+
+_CODEX_HOME_SELECTION: CodexHomeSelection | None = None
 
 
 def _text(path: Path) -> str:
@@ -106,11 +117,20 @@ def _command(command: str, *arguments: str) -> list[str] | str:
     return values
 
 
-def _run(command: str, *arguments: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    command: str,
+    *arguments: str,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     invocation = _command(command, *arguments)
+    if command == "codex":
+        selection = _current_codex_home()
+        env = {**os.environ, **(env or {}), "CODEX_HOME": str(selection.path)}
     return subprocess.run(
         invocation,
         cwd=cwd,
+        env=env,
         text=True,
         capture_output=True,
         check=False,
@@ -188,6 +208,71 @@ def _local_source_path(source: str, settings_path: Path) -> Path | None:
 
 def _same_path(left: Path, right: Path) -> bool:
     return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
+
+
+def _absolute_path(value: str | Path) -> Path:
+    return Path(os.path.abspath(Path(value).expanduser()))
+
+
+def _default_codex_home() -> Path:
+    configured_home = os.environ.get("USERPROFILE") or os.environ.get("HOME")
+    return _absolute_path(Path(configured_home) / ".codex") if configured_home else _absolute_path(Path.home() / ".codex")
+
+
+def _path_within(path: Path, root: Path) -> bool:
+    try:
+        normalized_path = os.path.normcase(os.path.abspath(path))
+        normalized_root = os.path.normcase(os.path.abspath(root))
+        return os.path.commonpath([normalized_path, normalized_root]) == normalized_root
+    except ValueError:
+        return False
+
+
+def _is_orca_codex_home(path: Path) -> bool:
+    configured = os.environ.get("ORCA_CODEX_HOME")
+    if configured and _same_path(path, Path(configured)):
+        return True
+    user_data = os.environ.get("ORCA_USER_DATA_PATH")
+    if user_data and _path_within(path, Path(user_data)):
+        return True
+    parts = {part.casefold() for part in Path(os.path.normpath(str(path))).parts}
+    return "orca" in parts and "codex-runtime-home" in parts
+
+
+def _validate_codex_home(selection: CodexHomeSelection) -> None:
+    path = selection.path
+    if not path.exists():
+        if not selection.explicit:
+            return
+        raise ManagementError(
+            f"codex_home_unavailable: {path}: directory does not exist; create it or choose another directory"
+        )
+    if not path.is_dir():
+        raise ManagementError(f"codex_home_unavailable: {path}: not a directory")
+    if not os.access(path, os.R_OK | os.W_OK):
+        raise ManagementError(f"codex_home_unavailable: {path}: directory is not readable and writable")
+
+
+def _select_codex_home(requested: Path | None) -> CodexHomeSelection:
+    if requested is not None:
+        selection = CodexHomeSelection(_absolute_path(requested), "explicit", True)
+    else:
+        inherited = os.environ.get("CODEX_HOME")
+        if inherited and _is_orca_codex_home(Path(inherited)):
+            selection = CodexHomeSelection(_default_codex_home(), "orca-user-default", False)
+        elif inherited:
+            selection = CodexHomeSelection(_absolute_path(inherited), "environment", False)
+        else:
+            selection = CodexHomeSelection(_default_codex_home(), "user-default", False)
+    _validate_codex_home(selection)
+    return selection
+
+
+def _current_codex_home() -> CodexHomeSelection:
+    global _CODEX_HOME_SELECTION
+    if _CODEX_HOME_SELECTION is None:
+        _CODEX_HOME_SELECTION = _select_codex_home(None)
+    return _CODEX_HOME_SELECTION
 
 
 @dataclass
@@ -629,7 +714,7 @@ def _run_codex(error_name: str, *arguments: str) -> None:
 
 
 def _codex_config_path() -> Path:
-    return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "config.toml"
+    return _current_codex_home().path / "config.toml"
 
 
 def _set_codex_plugin_enabled(identifier: str, enabled: bool) -> None:
@@ -1141,7 +1226,9 @@ def _stable_cli() -> Path:
 
 def _resume_after_switch(arguments: list[str], token: str, operation_id: str) -> dict[str, object]:
     _prepare_lock_handoff(operation_id, token)
-    invocation = _exact_command(_stable_cli(), *arguments, "--_switch-token", token)
+    selection = _CODEX_HOME_SELECTION
+    codex_home = ["--codex-home", str(selection.path)] if selection is not None and selection.explicit else []
+    invocation = _exact_command(_stable_cli(), *arguments, *codex_home, "--_switch-token", token)
     environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
     result = subprocess.run(
         invocation,
@@ -1702,6 +1789,7 @@ def _doctor_codex() -> dict[str, object]:
     report = _doctor_package()
     stable = _stable_package_root()
     available = shutil.which("codex") is not None
+    selection = _CODEX_HOME_SELECTION if available or _CODEX_HOME_SELECTION is not None else None
     marketplaces = _codex_marketplaces() if available else []
     plugins = _codex_plugins() if available else []
     marketplace = _named_codex_marketplace(marketplaces) if available else None
@@ -1767,6 +1855,8 @@ def _doctor_codex() -> dict[str, object]:
             )
         )
     report["codex"] = {
+        "codexHome": str(selection.path) if selection is not None else None,
+        "codexHomeSource": selection.source if selection is not None else None,
         "available": available,
         "marketplace": marketplace,
         "marketplaceRegistered": marketplace_registered,
@@ -1799,11 +1889,45 @@ def _latest_version() -> str:
     return value
 
 
+def _legacy_migration_clients(stable: Path) -> list[str]:
+    clients: list[str] = []
+    if shutil.which("pi") is not None:
+        sources = _pi_sources(_pi_list())
+        if any(
+            _tool_source_kind(item, stable) == "legacy"
+            and (item.scope == "user" or _pi_source_enabled(item))
+            for item in sources
+        ):
+            clients.append("pi")
+    if shutil.which("claude") is not None:
+        if any(item.get("id") == CLAUDE_LEGACY_PLUGIN for item in _claude_plugins()):
+            clients.append("claude")
+    if shutil.which("codex") is not None:
+        if any(item.get("pluginId") == CODEX_LEGACY_PLUGIN for item in _codex_plugins()):
+            clients.append("codex")
+    return clients
+
+
+def _migration_command(client: str) -> str:
+    arguments = [COMMAND_NAME, "init", f"--{client}"]
+    if client == "codex" and _CODEX_HOME_SELECTION is not None and _CODEX_HOME_SELECTION.explicit:
+        arguments.extend(["--codex-home", str(_CODEX_HOME_SELECTION.path)])
+    return subprocess.list2cmdline(arguments) if os.name == "nt" else shlex.join(arguments)
+
+
+def _require_legacy_migration(stable: Path) -> None:
+    clients = _legacy_migration_clients(stable)
+    if clients:
+        commands = "; ".join(f"{client}: run {_migration_command(client)}" for client in clients)
+        raise ManagementError(f"legacy_source_migration_required: {commands}")
+
+
 def _preflight_integrations() -> tuple[list[str], dict[str, str], dict[str, bool]]:
     integrations: list[str] = []
     scopes: dict[str, str] = {}
     enabled: dict[str, bool] = {}
     stable = _stable_package_root()
+    _require_legacy_migration(stable)
     if shutil.which("pi") is not None:
         listed = _pi_list()
         sources = _pi_sources(listed)
@@ -1974,7 +2098,9 @@ def _resume_after_update(token: str, operation_id: str, target: str) -> dict[str
     if _manifest_version(stable) != target or not _stable_cli().is_file():
         raise ManagementError("update_runtime_mismatch: updated global package is unavailable")
     _prepare_lock_handoff(operation_id, token)
-    invocation = _exact_command(_stable_cli(), "update", "--_update-token", token)
+    selection = _CODEX_HOME_SELECTION
+    codex_home = ["--codex-home", str(selection.path)] if selection is not None and selection.explicit else []
+    invocation = _exact_command(_stable_cli(), "update", *codex_home, "--_update-token", token)
     result = subprocess.run(
         invocation,
         env=os.environ.copy(),
@@ -2080,9 +2206,11 @@ def _run_update(token: str | None, operation_id: str) -> dict[str, object]:
     if token is not None:
         if pending is None or pending.get("tokenHash") != _token_hash(token):
             raise ManagementError("invalid_update_token")
-    elif pending is None:
-        target = _latest_version()
+    if pending is not None:
+        _require_legacy_migration(_stable_package_root())
+    else:
         integrations, scopes, enabled = _preflight_integrations()
+        target = _latest_version()
         pending = {
             "command": "update",
             "targetVersion": target,
@@ -2185,6 +2313,7 @@ def add_management_parsers(commands: argparse._SubParsersAction[argparse.Argumen
     init_target.add_argument("--dev", action="store_true")
     init_target.add_argument("--release", action="store_true")
     init_parser.add_argument("--source", type=Path)
+    init_parser.add_argument("--codex-home", type=Path)
     init_parser.add_argument("--_switch-token", help=argparse.SUPPRESS)
     doctor_parser = commands.add_parser("doctor")
     doctor_target = doctor_parser.add_mutually_exclusive_group()
@@ -2192,7 +2321,9 @@ def add_management_parsers(commands: argparse._SubParsersAction[argparse.Argumen
     doctor_target.add_argument("--claude", action="store_true")
     doctor_target.add_argument("--codex", action="store_true")
     doctor_target.add_argument("--all", action="store_true")
+    doctor_parser.add_argument("--codex-home", type=Path)
     update_parser = commands.add_parser("update")
+    update_parser.add_argument("--codex-home", type=Path)
     update_parser.add_argument("--_update-token", help=argparse.SUPPRESS)
 
 
@@ -2207,7 +2338,25 @@ def _management_command(args: argparse.Namespace) -> str:
     return f"{COMMAND_NAME} init --{target}{source}"
 
 
+def _management_uses_codex(args: argparse.Namespace) -> bool:
+    codex_available = shutil.which("codex") is not None
+    explicit_home = getattr(args, "codex_home", None) is not None
+    if args.command == "update":
+        return codex_available
+    if args.command == "doctor":
+        if args.codex:
+            return codex_available or explicit_home
+        return codex_available and args.all
+    if args.codex:
+        return codex_available or explicit_home
+    return codex_available and (args.all or args.dev or args.release)
+
+
 def run_management(args: argparse.Namespace) -> dict[str, object]:
+    global _CODEX_HOME_SELECTION
+    _CODEX_HOME_SELECTION = None
+    if _management_uses_codex(args):
+        _CODEX_HOME_SELECTION = _select_codex_home(getattr(args, "codex_home", None))
     if args.command == "doctor":
         if args.all:
             report = _doctor_all()

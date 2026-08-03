@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import signal
+import shlex
 import shutil
 import subprocess
 import sys
@@ -105,6 +106,7 @@ def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
     if marker is not None:
         write(source / "plugins" / "my-spec" / "skills" / "my-spec" / "dev-marker.txt", marker)
     launcher = source / "plugins" / "my-spec" / "bin" / "myspec.js"
+    launcher.write_bytes(launcher.read_bytes().replace(b"\r\n", b"\n"))
     launcher.chmod(launcher.stat().st_mode | 0o111)
     remote = tmp_path / "origin.git"
     for command in (
@@ -589,6 +591,10 @@ state = json.loads(state_path.read_text(encoding="utf-8"))
 config_path = Path(os.environ["CODEX_HOME"]) / "config.toml"
 with Path(os.environ["MYSPEC_CODEX_LOG"]).open("a", encoding="utf-8") as log:
     log.write(json.dumps(arguments) + "\\n")
+environment_log = os.environ.get("MYSPEC_CODEX_ENV_LOG")
+if environment_log:
+    with Path(environment_log).open("a", encoding="utf-8") as log:
+        log.write(os.environ.get("CODEX_HOME", "") + "\\n")
 
 def save():
     state_path.write_text(json.dumps(state, indent=2) + "\\n", encoding="utf-8")
@@ -1046,6 +1052,154 @@ def test_packed_myspec_update_preflights_installed_clients_before_package_write(
     assert "codex" not in json.loads(skipped.stdout)
 
 
+def test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes(tmp_path: Path) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = install_packed_myspec(installed)
+    prefix = npm_prefix_for(installed_package)
+    old_tarball = next((installed / "package").glob("*.tgz"))
+    new_tarball = pack_myspec_version(tmp_path, NEXT_VERSION)
+    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", old_tarball)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
+    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
+    env = isolated_myspec_env(tmp_path, prefix, npm_bin, pi_bin, claude_bin, codex_bin)
+    codex_home = tmp_path / "codex home"
+    codex_home.mkdir()
+    env.update(
+        {
+            "MYSPEC_NPM_LOG": str(npm_log),
+            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
+            "MYSPEC_RELEASE_TARBALL": str(new_tarball),
+            "MYSPEC_NPM_LATEST": NEXT_VERSION,
+            "MYSPEC_PI_LOG": str(pi_log),
+            "MYSPEC_CLAUDE_LOG": str(claude_log),
+            "MYSPEC_CLAUDE_STATE": str(claude_state),
+            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+            "CODEX_HOME": str(codex_home),
+            "MYSPEC_CODEX_LOG": str(codex_log),
+            "MYSPEC_CODEX_STATE": str(codex_state),
+        }
+    )
+    legacy_source = str(PLUGIN_ROOT)
+    user_settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    write(user_settings, json.dumps({"packages": [str(installed_package), legacy_source]}, indent=2))
+    write(
+        claude_state,
+        json.dumps(
+            {
+                "marketplaces": [
+                    {
+                        "name": "myspec",
+                        "source": "directory",
+                        "path": str(installed_package),
+                        "installLocation": str(installed_package),
+                    },
+                    {
+                        "name": "my-agent-skills-marketplace",
+                        "source": "directory",
+                        "path": legacy_source,
+                        "installLocation": legacy_source,
+                    },
+                ],
+                "plugins": [
+                    {
+                        "id": "my-spec@myspec",
+                        "version": PACKAGE_VERSION,
+                        "scope": "user",
+                        "enabled": True,
+                        "installPath": str(installed_package),
+                    },
+                    {
+                        "id": "my-spec@my-agent-skills-marketplace",
+                        "version": PACKAGE_VERSION,
+                        "scope": "user",
+                        "enabled": True,
+                        "installPath": legacy_source,
+                    },
+                ],
+            },
+            indent=2,
+        ),
+    )
+    write(
+        codex_state,
+        json.dumps(
+            {
+                "marketplaces": [
+                    {
+                        "name": "myspec",
+                        "root": str(installed_package),
+                        "marketplaceSource": {"sourceType": "local", "source": str(installed_package)},
+                    },
+                    {
+                        "name": "my-agent-skills-marketplace",
+                        "root": legacy_source,
+                        "marketplaceSource": {"sourceType": "local", "source": legacy_source},
+                    },
+                ],
+                "installed": [
+                    {
+                        "pluginId": "my-spec@myspec",
+                        "name": "my-spec",
+                        "marketplaceName": "myspec",
+                        "version": PACKAGE_VERSION,
+                        "installed": True,
+                        "source": {"source": "local", "path": str(installed_package)},
+                    },
+                    {
+                        "pluginId": "my-spec@my-agent-skills-marketplace",
+                        "name": "my-spec",
+                        "marketplaceName": "my-agent-skills-marketplace",
+                        "version": PACKAGE_VERSION,
+                        "installed": True,
+                        "source": {"source": "local", "path": legacy_source},
+                    },
+                ],
+                "available": [],
+            },
+            indent=2,
+        ),
+    )
+    codex_config = codex_home / "config.toml"
+    write(
+        codex_config,
+        '[plugins."my-spec@myspec"]\nenabled = true\n'
+        '[plugins."my-spec@my-agent-skills-marketplace"]\nenabled = true\n',
+    )
+    before = {
+        "pi": user_settings.read_bytes(),
+        "claude": claude_state.read_bytes(),
+        "codex": codex_state.read_bytes(),
+        "config": codex_config.read_bytes(),
+    }
+
+    blocked = run_cli(executable, "update", "--codex-home", codex_home, env=env)
+
+    assert blocked.returncode == 1
+    assert "error: legacy_source_migration_required" in blocked.stderr
+    assert "pi: run myspec init --pi" in blocked.stderr
+    assert "claude: run myspec init --claude" in blocked.stderr
+    codex_command = (
+        subprocess.list2cmdline(["myspec", "init", "--codex", "--codex-home", str(codex_home)])
+        if os.name == "nt"
+        else shlex.join(["myspec", "init", "--codex", "--codex-home", str(codex_home)])
+    )
+    assert f"codex: run {codex_command}" in blocked.stderr
+    assert not any(json.loads(line)[:2] == ["install", "--global"] for line in npm_log.read_text(encoding="utf-8").splitlines())
+    assert not (Path(env["HOME"]) / ".myspec" / "state.json").exists()
+    assert user_settings.read_bytes() == before["pi"]
+    assert claude_state.read_bytes() == before["claude"]
+    assert codex_state.read_bytes() == before["codex"]
+    assert codex_config.read_bytes() == before["config"]
+
+    migrated = run_cli(executable, "init", "--all", env=env)
+    assert migrated.returncode == 0, migrated.stderr
+    updated = run_cli(executable, "update", env=env)
+    assert updated.returncode == 0, updated.stderr
+    assert json.loads(updated.stdout)["version"] == NEXT_VERSION
+
+
 def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_missing(
     tmp_path: Path,
 ) -> None:
@@ -1078,7 +1232,7 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
     write(
         Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
         json.dumps(
-            {"packages": [{"source": str(installed_package), "skills": []}, str(PLUGIN_ROOT)]},
+            {"packages": [{"source": str(installed_package), "skills": []}]},
             indent=2,
         ),
     )
@@ -1093,12 +1247,6 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
                         "path": str(installed_package),
                         "installLocation": str(installed_package),
                     },
-                    {
-                        "name": "my-agent-skills-marketplace",
-                        "source": "directory",
-                        "path": str(PLUGIN_ROOT),
-                        "installLocation": str(PLUGIN_ROOT),
-                    },
                 ],
                 "plugins": [
                     {
@@ -1107,13 +1255,6 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
                         "scope": "user",
                         "enabled": False,
                         "installPath": str(tmp_path / "disabled-claude"),
-                    },
-                    {
-                        "id": "my-spec@my-agent-skills-marketplace",
-                        "version": PACKAGE_VERSION,
-                        "scope": "user",
-                        "enabled": True,
-                        "installPath": str(PLUGIN_ROOT),
                     },
                 ],
             },
@@ -1130,11 +1271,6 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
                         "root": str(installed_package),
                         "marketplaceSource": {"sourceType": "local", "source": str(installed_package)},
                     },
-                    {
-                        "name": "my-agent-skills-marketplace",
-                        "root": str(PLUGIN_ROOT),
-                        "marketplaceSource": {"sourceType": "local", "source": str(PLUGIN_ROOT)},
-                    },
                 ],
                 "installed": [
                     {
@@ -1145,14 +1281,6 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
                         "installed": True,
                         "source": {"source": "local", "path": str(installed_package)},
                     },
-                    {
-                        "pluginId": "my-spec@my-agent-skills-marketplace",
-                        "name": "my-spec",
-                        "marketplaceName": "my-agent-skills-marketplace",
-                        "version": PACKAGE_VERSION,
-                        "installed": True,
-                        "source": {"source": "local", "path": str(PLUGIN_ROOT)},
-                    },
                 ],
                 "available": [],
             },
@@ -1161,8 +1289,7 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
     )
     write(
         Path(env["CODEX_HOME"]) / "config.toml",
-        '[plugins."my-spec@myspec"]\nenabled = false\n'
-        '[plugins."my-spec@my-agent-skills-marketplace"]\nenabled = true\n',
+        '[plugins."my-spec@myspec"]\nenabled = false\n',
     )
     pi_before = (Path(env["PI_CODING_AGENT_DIR"]) / "settings.json").read_bytes()
 
@@ -1182,9 +1309,9 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
     assert output["pi"] == "refreshed"
     assert output["claude"] == "refreshed"
     assert output["codex"] == "refreshed"
-    assert output["doctor"]["pi"]["enabled"] is True
-    assert output["doctor"]["claude"]["enabled"] is True
-    assert output["doctor"]["codex"]["enabled"] is True
+    assert output["doctor"]["pi"]["enabled"] is False
+    assert output["doctor"]["claude"]["enabled"] is False
+    assert output["doctor"]["codex"]["enabled"] is False
     for client in ("pi", "claude", "codex"):
         stable_source = next(
             source
@@ -1228,16 +1355,29 @@ def test_packed_myspec_update_preserves_pi_effective_state_under_project_overrid
     )
     project = tmp_path / "consumer"
     project.mkdir()
+    legacy_project = project / "plugins" / "my-spec"
+    shutil.copytree(PLUGIN_ROOT, legacy_project)
     user_settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
     project_settings = project / ".pi" / "settings.json"
     write(user_settings, json.dumps({"packages": [str(installed_package)]}, indent=2))
     write(
         project_settings,
         json.dumps(
-            {"packages": [{"source": str(installed_package), "skills": []}]},
+            {
+                "packages": [
+                    {"source": str(installed_package), "skills": []},
+                    str(legacy_project),
+                ]
+            },
             indent=2,
         ),
     )
+    blocked = run_cli(executable, "update", env=env, cwd=project)
+    assert blocked.returncode == 1
+    assert "error: legacy_source_migration_required: pi: run myspec init --pi" in blocked.stderr
+
+    initialized = run_cli(executable, "init", "--pi", env=env, cwd=project)
+    assert initialized.returncode == 0, initialized.stderr
     user_before = user_settings.read_bytes()
     project_before = project_settings.read_bytes()
 
@@ -4950,3 +5090,136 @@ def test_apply_delta_can_atomically_replace_main_after_final_confirmation(tmp_pa
     repeated = apply_ready(SPEC_OPS, specs, delta, specs, repeated_work)
     assert repeated.returncode == 0, repeated.stderr
     assert (specs / "accounts" / "spec.md").read_bytes() == before
+
+
+def test_packed_myspec_codex_doctor_uses_user_home_when_orca_home_is_inherited(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = npm_prefix_for(installed_package)
+    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
+    env = isolated_myspec_env(tmp_path, prefix, codex_bin)
+    user_home = Path(env["USERPROFILE"]) / ".codex"
+    orca_home = tmp_path / "orca-user-data" / "codex-runtime-home" / "home"
+    user_home.mkdir(parents=True, exist_ok=True)
+    orca_home.mkdir(parents=True, exist_ok=True)
+    env.update(
+        {
+            "CODEX_HOME": str(orca_home),
+            "ORCA_USER_DATA_PATH": str(tmp_path / "orca-user-data"),
+            "MYSPEC_CODEX_LOG": str(codex_log),
+            "MYSPEC_CODEX_STATE": str(codex_state),
+            "MYSPEC_CODEX_ENV_LOG": str(tmp_path / "codex-env.log"),
+        }
+    )
+    write(
+        codex_state,
+        json.dumps(
+            {
+                "marketplaces": [],
+                "installed": [],
+                "available": [],
+            },
+            indent=2,
+        ),
+    )
+
+    diagnosed = run_cli(executable, "doctor", "--codex", env=env)
+
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    report = json.loads(diagnosed.stdout)["codex"]
+    assert report["codexHome"] == str(user_home)
+    assert report["codexHomeSource"] == "orca-user-default"
+    assert (tmp_path / "codex-env.log").read_text(encoding="utf-8").splitlines() == [
+        str(user_home),
+        str(user_home),
+    ]
+    assert env["CODEX_HOME"] == str(orca_home)
+
+    explicit_home = tmp_path / "custom-codex-home"
+    explicit_home.mkdir()
+    (tmp_path / "codex-env.log").write_text("", encoding="utf-8")
+    explicit = run_cli(
+        executable,
+        "doctor",
+        "--codex",
+        "--codex-home",
+        explicit_home,
+        env=env,
+    )
+
+    assert explicit.returncode == 0, explicit.stderr
+    report = json.loads(explicit.stdout)["codex"]
+    assert report["codexHome"] == str(explicit_home)
+    assert report["codexHomeSource"] == "explicit"
+    assert (tmp_path / "codex-env.log").read_text(encoding="utf-8").splitlines() == [
+        str(explicit_home),
+        str(explicit_home),
+    ]
+    assert env["CODEX_HOME"] == str(orca_home)
+
+    initialized = run_cli(
+        executable,
+        "init",
+        "--codex",
+        "--codex-home",
+        explicit_home,
+        env=env,
+    )
+
+    assert initialized.returncode == 0, initialized.stderr
+    assert (explicit_home / "config.toml").is_file()
+    assert env["CODEX_HOME"] == str(orca_home)
+
+
+def test_packed_myspec_explicit_codex_home_errors_without_codex(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
+    missing_home = tmp_path / "missing-codex-home"
+
+    diagnosed = run_cli(
+        executable,
+        "doctor",
+        "--codex",
+        "--codex-home",
+        missing_home,
+        env=env,
+    )
+
+    assert diagnosed.returncode == 1
+    assert f"error: codex_home_unavailable: {missing_home}: directory does not exist" in diagnosed.stderr
+
+
+def test_packed_myspec_bare_doctor_does_not_require_codex_home(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = npm_prefix_for(installed_package)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
+    env = isolated_myspec_env(tmp_path, prefix, pi_bin, codex_bin)
+    bad_codex_home = tmp_path / "invalid-codex-home"
+    bad_codex_home.write_text("not a directory", encoding="utf-8")
+    env.update(
+        {
+            "CODEX_HOME": str(bad_codex_home),
+            "MYSPEC_PI_LOG": str(pi_log),
+            "MYSPEC_CODEX_LOG": str(codex_log),
+            "MYSPEC_CODEX_STATE": str(codex_state),
+        }
+    )
+    env.pop("ORCA_CODEX_HOME", None)
+    env.pop("ORCA_USER_DATA_PATH", None)
+    write(Path(env["PI_CODING_AGENT_DIR"]) / "settings.json", json.dumps({"packages": []}))
+    write(
+        codex_state,
+        json.dumps({"marketplaces": "broken", "installed": [], "available": []}),
+    )
+
+    diagnosed = run_cli(executable, "doctor", env=env)
+
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    assert json.loads(diagnosed.stdout)["pi"]["available"] is True
+    assert not codex_log.exists()
