@@ -28,3 +28,8 @@
 - 受控工作树冒烟：临时 Git 主工作区与 `feature` 工作树通过真实 Pi 和 RPC 派发；目标工作树创建标记并报告 `branch=feature`、`model=gpt-5.6-luna`、`reasoning=max`，主工作区保持干净，Pi 正常返回 `agent_settled`。
 - TDD 冒烟：真实受控 Implementer 在目标工作树先产生 `MODULE_NOT_FOUND` 红灯，再以同一 `node --test answer.test.js` 绿灯通过；证据记录 `model=gpt-5.6-luna`、`reasoning=max`，临时仓库已清理。
 - 用户级配置修改前已保存原始哈希；修改后 Implementer 配置包含 `extensions:false`、`skills:tdd`、Luna、Max 和 `/skill:tdd` 提示，其他全局设置未修改。
+
+## Review conclusion
+
+- Standards（规范）审查：无阻断项；已将技能描述中的 `isolated implementation` 修正为 `worktree-bound implementation`，避免与资源隔离语义混淆。
+- Spec（规格）审查：无阻断项；真实 Pi 用户入口冒烟证据已记录，未新增不可重复的端到端测试框架。

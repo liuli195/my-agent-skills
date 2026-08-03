@@ -1,6 +1,6 @@
 ---
 name: pi-development-flow
-description: Orchestrate one Pi development change from design-first requirements discussion through isolated implementation, review, PR delivery, and cleanup. Use when starting or resuming repository development work that must follow the complete development flow.
+description: Orchestrate one Pi development change from design-first requirements discussion through worktree-bound implementation, review, PR delivery, and cleanup. Use when starting or resuming repository development work that must follow the complete development flow.
 ---
 
 # Pi Development Flow（Pi 开发流程）
