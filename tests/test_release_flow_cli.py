@@ -1873,6 +1873,28 @@ def test_preflight_rejects_selected_content_without_version_advancement(tmp_path
     assert "plugin_version_not_bumped: release-flow" in result.stdout
 
 
+def test_preflight_accepts_semver_prerelease_advancement(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    remote = tmp_path / "remote.git"
+    init_release_input_project(project, remote, version="1.0.0-alpha")
+    advance_plugin_version_on_source_ref(project, "release-flow", "1.0.0-beta")
+
+    result = run_cli(
+        "preflight",
+        "--project",
+        str(project),
+        "--tag",
+        "v1.0.0-beta",
+        "--version",
+        "1.0.0-beta",
+        "--bump-plugins",
+        "release-flow",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: preflight_passed" in result.stdout
+
+
 def test_preflight_rejects_selected_version_downgrade(tmp_path: Path) -> None:
     project = tmp_path / "project"
     remote = tmp_path / "remote.git"

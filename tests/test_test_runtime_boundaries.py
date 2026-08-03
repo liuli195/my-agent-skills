@@ -525,6 +525,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_release_flow_cli.py::test_preflight_rejects_selected_content_without_version_advancement': (
         'covers release-flow preflight rejecting selected content without a baseline version advancement; function=test_preflight_rejects_selected_content_without_version_advancement'
     ),
+    'tests/test_release_flow_cli.py::test_preflight_accepts_semver_prerelease_advancement': (
+        'covers release-flow preflight comparing valid SemVer prerelease advancement; function=test_preflight_accepts_semver_prerelease_advancement'
+    ),
     'tests/test_release_flow_cli.py::test_preflight_rejects_selected_version_downgrade': (
         'covers release-flow preflight rejecting selected version downgrade; function=test_preflight_rejects_selected_version_downgrade'
     ),

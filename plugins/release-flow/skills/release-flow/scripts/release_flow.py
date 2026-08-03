@@ -687,18 +687,60 @@ def tag_version(tag: str) -> str:
     return tag
 
 
-def semver_core(version: str) -> tuple[int, int, int] | None:
-    core = version.split("+", 1)[0].split("-", 1)[0]
-    parts = core.split(".")
-    if len(parts) != 3 or any(not part.isdigit() or (len(part) > 1 and part.startswith("0")) for part in parts):
+def semver_key(version: str) -> tuple[tuple[int, int, int], tuple[tuple[int, int | str], ...]] | None:
+    main, has_build, build = version.partition("+")
+    if has_build and (
+        not build
+        or any(
+            not identifier
+            or any(not character.isascii() or not (character.isalnum() or character == "-") for character in identifier)
+            for identifier in build.split(".")
+        )
+    ):
         return None
-    return tuple(int(part) for part in parts)
+    core, has_prerelease, prerelease = main.partition("-")
+    parts = core.split(".")
+    if len(parts) != 3 or any(
+        not part
+        or any(not character.isascii() or not character.isdigit() for character in part)
+        or (len(part) > 1 and part.startswith("0"))
+        for part in parts
+    ):
+        return None
+    prerelease_key: list[tuple[int, int | str]] = []
+    if has_prerelease:
+        for identifier in prerelease.split("."):
+            if not identifier or any(
+                not character.isascii() or not (character.isalnum() or character == "-")
+                for character in identifier
+            ):
+                return None
+            if identifier.isdigit():
+                if len(identifier) > 1 and identifier.startswith("0"):
+                    return None
+                prerelease_key.append((0, int(identifier)))
+            else:
+                prerelease_key.append((1, identifier))
+    return (tuple(int(part) for part in parts), tuple(prerelease_key))
 
 
 def version_is_advanced(current: str, baseline: str) -> bool:
-    current_core = semver_core(current)
-    baseline_core = semver_core(baseline)
-    return current_core is not None and baseline_core is not None and current_core > baseline_core
+    current_key = semver_key(current)
+    baseline_key = semver_key(baseline)
+    if current_key is None or baseline_key is None:
+        return False
+    current_core, current_prerelease = current_key
+    baseline_core, baseline_prerelease = baseline_key
+    if current_core != baseline_core:
+        return current_core > baseline_core
+    if not current_prerelease or not baseline_prerelease:
+        return not current_prerelease and bool(baseline_prerelease)
+    for current_identifier, baseline_identifier in zip(current_prerelease, baseline_prerelease):
+        if current_identifier != baseline_identifier:
+            if current_identifier[0] != baseline_identifier[0]:
+                return current_identifier[0] > baseline_identifier[0]
+            return current_identifier[1] > baseline_identifier[1]
+    return len(current_prerelease) > len(baseline_prerelease)
 
 
 def parse_bump_plugins(raw: str | list[str]) -> list[str]:
