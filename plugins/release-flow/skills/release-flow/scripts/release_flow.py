@@ -28,7 +28,9 @@ SUPPORTED_GENERATOR_TYPE = "codex-marketplace"
 SUPPORTED_GENERATOR_IDENTITY = "codex"
 PLUGIN_REGISTRY: dict[str, dict[str, Any]] = {
     "release-flow": {
-        "manifests": [
+        "releaseShape": "marketplace",
+        "releaseInputs": ["plugins/release-flow"],
+        "versionFiles": [
             "plugins/release-flow/.codex-plugin/plugin.json",
             "plugins/release-flow/.claude-plugin/plugin.json",
         ],
@@ -40,7 +42,9 @@ PLUGIN_REGISTRY: dict[str, dict[str, Any]] = {
         },
     },
     "pr-flow": {
-        "manifests": [
+        "releaseShape": "marketplace",
+        "releaseInputs": ["plugins/pr-flow"],
+        "versionFiles": [
             "plugins/pr-flow/.codex-plugin/plugin.json",
             "plugins/pr-flow/.claude-plugin/plugin.json",
         ],
@@ -52,9 +56,16 @@ PLUGIN_REGISTRY: dict[str, dict[str, Any]] = {
         },
     },
     "build-and-verify": {
-        "manifests": [
+        "releaseShape": "npm",
+        "releaseInputs": [
+            "plugins/build-and-verify",
+            "plugins/tool-lifecycle/python/management.py",
+            "plugins/tool-lifecycle/pack.py",
+        ],
+        "versionFiles": [
             "plugins/build-and-verify/.codex-plugin/plugin.json",
             "plugins/build-and-verify/.claude-plugin/plugin.json",
+            "plugins/build-and-verify/package.json",
         ],
         "codexMarketplace": {
             "name": "build-and-verify",
@@ -64,9 +75,16 @@ PLUGIN_REGISTRY: dict[str, dict[str, Any]] = {
         },
     },
     "my-spec": {
-        "manifests": [
+        "releaseShape": "npm",
+        "releaseInputs": [
+            "plugins/my-spec",
+            "plugins/tool-lifecycle/python/management.py",
+            "plugins/tool-lifecycle/pack.py",
+        ],
+        "versionFiles": [
             "plugins/my-spec/.codex-plugin/plugin.json",
             "plugins/my-spec/.claude-plugin/plugin.json",
+            "plugins/my-spec/package.json",
         ],
         "codexMarketplace": {
             "name": "my-spec",
@@ -669,6 +687,62 @@ def tag_version(tag: str) -> str:
     return tag
 
 
+def semver_key(version: str) -> tuple[tuple[int, int, int], tuple[tuple[int, int | str], ...]] | None:
+    main, has_build, build = version.partition("+")
+    if has_build and (
+        not build
+        or any(
+            not identifier
+            or any(not character.isascii() or not (character.isalnum() or character == "-") for character in identifier)
+            for identifier in build.split(".")
+        )
+    ):
+        return None
+    core, has_prerelease, prerelease = main.partition("-")
+    parts = core.split(".")
+    if len(parts) != 3 or any(
+        not part
+        or any(not character.isascii() or not character.isdigit() for character in part)
+        or (len(part) > 1 and part.startswith("0"))
+        for part in parts
+    ):
+        return None
+    prerelease_key: list[tuple[int, int | str]] = []
+    if has_prerelease:
+        for identifier in prerelease.split("."):
+            if not identifier or any(
+                not character.isascii() or not (character.isalnum() or character == "-")
+                for character in identifier
+            ):
+                return None
+            if identifier.isdigit():
+                if len(identifier) > 1 and identifier.startswith("0"):
+                    return None
+                prerelease_key.append((0, int(identifier)))
+            else:
+                prerelease_key.append((1, identifier))
+    return (tuple(int(part) for part in parts), tuple(prerelease_key))
+
+
+def version_is_advanced(current: str, baseline: str) -> bool:
+    current_key = semver_key(current)
+    baseline_key = semver_key(baseline)
+    if current_key is None or baseline_key is None:
+        return False
+    current_core, current_prerelease = current_key
+    baseline_core, baseline_prerelease = baseline_key
+    if current_core != baseline_core:
+        return current_core > baseline_core
+    if not current_prerelease or not baseline_prerelease:
+        return not current_prerelease and bool(baseline_prerelease)
+    for current_identifier, baseline_identifier in zip(current_prerelease, baseline_prerelease):
+        if current_identifier != baseline_identifier:
+            if current_identifier[0] != baseline_identifier[0]:
+                return current_identifier[0] > baseline_identifier[0]
+            return current_identifier[1] > baseline_identifier[1]
+    return len(current_prerelease) > len(baseline_prerelease)
+
+
 def parse_bump_plugins(raw: str | list[str]) -> list[str]:
     values = raw if isinstance(raw, list) else [raw]
     if values == [""]:
@@ -682,12 +756,34 @@ def parse_bump_plugins(raw: str | list[str]) -> list[str]:
     return list(dict.fromkeys(plugins))
 
 
-def plugin_manifest_paths(plugin_name: str) -> list[str]:
+def plugin_release_inputs(plugin_name: str) -> list[str]:
     try:
-        manifests = PLUGIN_REGISTRY[plugin_name]["manifests"]
+        inputs = PLUGIN_REGISTRY[plugin_name]["releaseInputs"]
     except KeyError as exc:
         raise ValueError(f"plugin_unknown: {plugin_name}") from exc
-    return [str(manifest) for manifest in manifests]
+    if not isinstance(inputs, list) or not all(isinstance(path, str) for path in inputs):
+        raise ValueError(f"plugin_release_inputs_invalid: {plugin_name}")
+    return list(inputs)
+
+
+def plugin_version_files(plugin_name: str) -> list[str]:
+    try:
+        version_files = PLUGIN_REGISTRY[plugin_name]["versionFiles"]
+    except KeyError as exc:
+        raise ValueError(f"plugin_unknown: {plugin_name}") from exc
+    if not isinstance(version_files, list) or not all(isinstance(path, str) for path in version_files):
+        raise ValueError(f"plugin_version_files_invalid: {plugin_name}")
+    return list(version_files)
+
+
+def plugin_release_shape(plugin_name: str) -> str:
+    try:
+        shape = PLUGIN_REGISTRY[plugin_name]["releaseShape"]
+    except KeyError as exc:
+        raise ValueError(f"plugin_unknown: {plugin_name}") from exc
+    if shape not in {"marketplace", "npm"}:
+        raise ValueError(f"plugin_release_shape_invalid: {plugin_name}")
+    return str(shape)
 
 
 def manifest_version(project: Path, manifest_file: str) -> str:
@@ -722,9 +818,9 @@ def git_ref_exists(project: Path, ref: str) -> bool:
     return result.returncode == 0
 
 
-def ensure_remote_branch(project: Path, branch: str) -> None:
+def ensure_remote_branch(project: Path, branch: str, *, refresh: bool = False) -> None:
     ref = f"origin/{branch}"
-    if git_ref_exists(project, ref):
+    if not refresh and git_ref_exists(project, ref):
         return
     result = subprocess.run(
         [
@@ -734,7 +830,7 @@ def ensure_remote_branch(project: Path, branch: str) -> None:
             "fetch",
             "--depth=1",
             "origin",
-            f"{branch}:refs/remotes/origin/{branch}",
+            f"+{branch}:refs/remotes/origin/{branch}",
         ],
         check=False,
         text=True,
@@ -743,6 +839,68 @@ def ensure_remote_branch(project: Path, branch: str) -> None:
     if result.returncode != 0:
         output = (result.stderr or result.stdout).strip()
         raise ValueError(f"remote_ref_missing: {ref}: {output}")
+
+
+def git_path_exists(project: Path, ref: str, path: Path) -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(project), "ls-tree", "--name-only", ref, "--", path.as_posix()],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        output = (result.stderr or result.stdout).strip()
+        raise ValueError(f"command_failed: git ls-tree {ref}: {output}")
+    return bool(result.stdout.strip())
+
+
+def plugin_target_exists(project: Path, config: FlowConfig, plugin_name: str) -> bool:
+    release_inputs = plugin_release_inputs(plugin_name)
+    root = Path(release_inputs[0])
+    if (project / root).exists():
+        return True
+    ensure_remote_branch(project, config.release_channel_branch)
+    return git_path_exists(project, f"origin/{config.release_channel_branch}", root)
+
+
+def git_paths_changed(project: Path, revisions: list[str], paths: list[str]) -> bool:
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(project),
+            "diff",
+            "--quiet",
+            *revisions,
+            "--",
+            *(Path(path).as_posix() for path in paths),
+        ],
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode not in {0, 1}:
+        output = result.stderr.decode("utf-8", errors="replace").strip()
+        raise ValueError(f"command_failed: git diff {' '.join(revisions)}: {output}")
+    return result.returncode == 1
+
+
+def release_input_changed(project: Path, config: FlowConfig, plugin_name: str) -> bool:
+    release_inputs = plugin_release_inputs(plugin_name)
+    for release_input in release_inputs:
+        resolve_project_path(project, Path(release_input), "invalid_release_input_path")
+    ensure_remote_branch(project, config.release_channel_branch)
+    ensure_remote_branch(project, config.release_source_ref)
+    channel_ref = f"origin/{config.release_channel_branch}"
+    source_ref = f"origin/{config.release_source_ref}"
+    if git_paths_changed(project, [channel_ref], release_inputs):
+        return True
+    if git_paths_changed(project, [source_ref], release_inputs):
+        return True
+    return source_ref != channel_ref and git_paths_changed(
+        project,
+        [source_ref, channel_ref],
+        release_inputs,
+    )
 
 
 def remote_ref_manifest_version(project: Path, branch: str, manifest_file: str) -> str | None:
@@ -935,26 +1093,73 @@ def preflight_errors(
     if version != expected_version:
         errors.append(f"release_version_mismatch: {tag}")
 
+    try:
+        for branch in dict.fromkeys((config.release_channel_branch, config.release_source_ref)):
+            ensure_remote_branch(project, branch, refresh=True)
+    except ValueError as exc:
+        errors.append(str(exc))
+        errors.extend(remote_release_errors(project, tag))
+        return errors
+
     projection_plugins = sorted({plugin for generator in projection.generators for plugin in generator.plugins})
-    bumped = set(bump_plugins)
     for plugin_name in projection_plugins:
         if plugin_name not in PLUGIN_REGISTRY:
             errors.append(f"projection_generator_plugin_unknown: {plugin_name}")
+
+    published_plugins = set(projection_plugins)
+    published_plugins.update(
+        plugin_name
+        for plugin_name in PLUGIN_REGISTRY
+        if plugin_release_shape(plugin_name) == "npm"
+        or plugin_target_exists(project, config, plugin_name)
+    )
+    bumped = set(bump_plugins)
+    for plugin_name in sorted(published_plugins):
+        if plugin_name not in PLUGIN_REGISTRY:
+            continue
+        if (
+            plugin_name not in projection_plugins
+            and plugin_release_shape(plugin_name) == "npm"
+            and not plugin_target_exists(project, config, plugin_name)
+        ):
             continue
         try:
-            for manifest_file in plugin_manifest_paths(plugin_name):
-                current = manifest_version(project, manifest_file)
-                if plugin_name in bumped:
+            input_changed = release_input_changed(project, config, plugin_name)
+            version_files = plugin_version_files(plugin_name)
+            current_versions = {
+                version_file: manifest_version(project, version_file)
+                for version_file in version_files
+            }
+            baseline_versions = {
+                version_file: remote_ref_manifest_version(
+                    project,
+                    config.release_channel_branch,
+                    version_file,
+                )
+                for version_file in version_files
+            }
+            if plugin_name in bumped:
+                for version_file, current in current_versions.items():
                     if current != version:
-                        errors.append(f"manifest_version_mismatch: {manifest_file}")
-                    source = source_ref_manifest_version(project, config, manifest_file)
+                        errors.append(f"manifest_version_mismatch: {version_file}")
+                    source = source_ref_manifest_version(project, config, version_file)
                     if source != version:
-                        errors.append(f"source_ref_requires_pr: {config.release_source_ref}: {manifest_file}")
-                else:
-                    remote = remote_manifest_version(project, config, manifest_file)
-                    if remote is None or current != remote:
-                        errors.append(f"plugin_requires_bump: {plugin_name}")
-                        break
+                        errors.append(
+                            f"source_ref_requires_pr: {config.release_source_ref}: {version_file}"
+                        )
+                if input_changed and any(
+                    baseline is not None
+                    and not version_is_advanced(current_versions[version_file], baseline)
+                    for version_file, baseline in baseline_versions.items()
+                ):
+                    errors.append(f"plugin_version_not_bumped: {plugin_name}")
+            elif input_changed:
+                errors.append(f"plugin_requires_bump: {plugin_name}")
+            elif any(
+                baseline is None or current_versions[version_file] != baseline
+                for version_file, baseline in baseline_versions.items()
+            ):
+                errors.append(f"plugin_requires_bump: {plugin_name}")
         except (json.JSONDecodeError, ValueError) as exc:
             errors.append(str(exc))
 
@@ -975,6 +1180,8 @@ def preflight_errors(
 def preflight_next_action(error: str, project: Path | None = None) -> str:
     if error.startswith("source_ref_requires_pr: "):
         return "create and merge the version bump through PR Flow, then rerun release-flow preflight"
+    if error.startswith("plugin_version_not_bumped: "):
+        return "advance the plugin version through PR Flow, then rerun release-flow preflight"
     if error.startswith("manifest_version_mismatch: "):
         manifest_path = error.split(": ", 1)[1]
         return f"correct the manifest version in {manifest_path}, then rerun release-flow preflight"
@@ -995,6 +1202,7 @@ def preflight_summary_next_action(errors: list[str]) -> str:
         "manifest_version_mismatch: ",
         "source_ref_requires_pr: ",
         "plugin_requires_bump: ",
+        "plugin_version_not_bumped: ",
     )
     if any(not error.startswith(tracked_prefixes) for error in errors):
         return ""
@@ -1015,6 +1223,9 @@ def preflight_summary_next_action(errors: list[str]) -> str:
     if any(error.startswith("plugin_requires_bump: ") for error in errors):
         states.append("some plugins need bumpPlugins")
         actions.append("include required plugins in bumpPlugins through PR Flow when they should ship")
+    if any(error.startswith("plugin_version_not_bumped: ") for error in errors):
+        states.append("selected plugins need a version advancement")
+        actions.append("advance selected plugin versions through PR Flow")
     return f"current state: {'; '.join(states)}. handling path: {', '.join(actions)}, then rerun release-flow preflight"
 
 

@@ -251,41 +251,6 @@ TBD - created by archiving change standardize-agent-guard-release-flow. Update P
 - **WHEN** `.release-flow/projection.yaml`（投影配置）引用未注册插件
 - **THEN** preflight（发布前检查）和 CI（持续集成）发布 MUST 拒绝继续
 - **THEN** 错误 MUST 指出未注册插件名
-### Requirement: 发布输入选择提升插件
-
-系统 MUST 使用 `bumpPlugins`（提升插件列表）声明本次发布需要提升版本的插件。
-
-版本漂移比较基准 MUST 是远端发布通道 `origin/<channelBranch>`（远端通道分支）中同路径 manifest（插件清单）的版本。
-
-#### Scenario: 只提升部分插件
-
-- **WHEN** `bumpPlugins`（提升插件列表）只包含部分插件
-- **THEN** preflight（发布前检查）MUST 只要求这些插件的 manifest（插件清单）版本等于发布版本
-- **THEN** 未声明插件的 manifest（插件清单）版本 MUST 等于远端发布通道同路径 manifest（插件清单）版本
-
-#### Scenario: 不提升插件
-
-- **WHEN** `bumpPlugins`（提升插件列表）为空列表
-- **THEN** preflight（发布前检查）MUST 不要求任何插件 manifest（插件清单）版本等于发布版本
-- **THEN** 任何 manifest（插件清单）版本与远端发布通道同路径 manifest（插件清单）版本不一致 MUST 被拒绝
-
-#### Scenario: CLI 重复声明提升插件
-
-- **WHEN** 用户重复传入 `--bump-plugins`（提升插件版本参数）
-- **THEN** preflight（发布前检查）、publish（发布）和 `ci-publish`（CI 发布）MUST NOT 静默丢弃前面的插件
-- **AND** 系统 MUST 将重复参数合并为同一个 `bumpPlugins`（提升插件列表）或输出明确错误
-
-#### Scenario: 未声明提升导致版本漂移
-
-- **WHEN** 某个插件 manifest（插件清单）版本不同于远端发布通道同路径版本但不在 `bumpPlugins`（提升插件列表）中
-- **THEN** preflight（发布前检查）MUST 拒绝继续
-- **THEN** 错误 MUST 指出该插件需要加入 `bumpPlugins`（提升插件列表）或撤回版本变更
-
-#### Scenario: 未声明新插件
-
-- **WHEN** 某个插件在远端发布通道没有同路径 manifest（插件清单）且不在 `bumpPlugins`（提升插件列表）中
-- **THEN** preflight（发布前检查）MUST 拒绝继续
-- **THEN** 错误 MUST 指出该插件需要加入 `bumpPlugins`（提升插件列表）
 ### Requirement: 远端发布冲突检查
 
 系统 MUST 在发布前检查和 CI（持续集成）发布前检查远端 tag（标签）和 GitHub Release（GitHub 发布）是否已存在。
@@ -358,3 +323,93 @@ Release Flow preflight（发布预检） MUST use the selected build-and-verify�
 - **WHEN** preflight（发布预检） checks build-and-verify（构建与验证） package metadata
 - **THEN** preflight（发布预检） MUST NOT create or update `.build-and-verify/runtime/`
 - **THEN** preflight（发布预检） MUST NOT commit, push（推送）, or open PR（拉取请求）
+### Requirement: 发布输入选择提升插件
+
+系统 MUST 使用 `bumpPlugins`（提升插件列表）声明本次发布需要提升版本的插件，并以远端发布通道的最新内容作为 Release Baseline（发布基线）。
+
+系统 MUST 对每个实际发布目标检查其 Release Input（发布输入）与版本文件。Release Input（发布输入）包括消费者可获得的插件内容，以及会改变 NPM（Node 包管理器）候选包的打包输入。
+
+当发布输入相对 Release Baseline（发布基线）发生变化时，系统 MUST 要求该插件出现在 `bumpPlugins`（提升插件列表）中，并要求其所有公开版本文件相对基线严格递增且等于本次发布版本。
+
+#### Scenario: 只提升部分插件
+
+- **WHEN** `bumpPlugins`（提升插件列表）只包含部分插件
+- **AND** 未声明插件的 Release Input（发布输入）未发生变化
+- **THEN** preflight（发布前检查） MUST 允许未声明插件继续使用远端基线版本
+- **THEN** preflight（发布前检查） MUST 要求已声明插件的所有版本文件等于本次发布版本
+- **THEN** 已声明插件的版本 MUST 严格高于其远端基线版本
+
+#### Scenario: 市场插件源码发生同版本漂移
+
+- **WHEN** `release-flow` 或 `pr-flow` 的发布内容相对远端发布通道发生变化
+- **AND** 插件未出现在 `bumpPlugins`（提升插件列表）中
+- **THEN** preflight（发布前检查） MUST 拒绝继续
+- **THEN** 错误 MUST 指出该插件需要版本提升
+
+#### Scenario: NPM 插件源码或元数据发生同版本漂移
+
+- **WHEN** `build-and-verify` 或 `my-spec` 的插件内容、NPM 元数据或打包输入相对远端基线发生变化
+- **AND** 插件未出现在 `bumpPlugins`（提升插件列表）中
+- **THEN** preflight（发布前检查） MUST 拒绝继续
+- **THEN** 错误 MUST 指出该插件需要版本提升
+
+#### Scenario: 共享 NPM 打包输入发生变化
+
+- **WHEN** 同时影响多个 NPM 插件候选包的共享打包输入发生变化
+- **AND** 只有部分受影响插件出现在 `bumpPlugins`（提升插件列表）中
+- **THEN** preflight（发布前检查） MUST 拒绝继续
+- **THEN** 每个受影响插件 MUST 单独完成版本提升和选择
+
+#### Scenario: NPM 发布目标不在市场投影中
+
+- **WHEN** NPM 发布目标未出现在 marketplace projection（市场投影）中
+- **AND** 该目标存在于当前发布项目或远端发布基线
+- **THEN** preflight（发布前检查） MUST 继续检查该目标的发布输入和版本文件
+
+#### Scenario: 选中插件版本未递增
+
+- **WHEN** 插件出现在 `bumpPlugins`（提升插件列表）中
+- **AND** 其发布输入或版本文件相对远端基线发生变化
+- **AND** 至少一个版本文件没有严格高于远端基线
+- **THEN** preflight（发布前检查） MUST 拒绝继续
+- **THEN** 错误 MUST 指出该插件版本未提升
+
+#### Scenario: NPM 版本文件不一致
+
+- **WHEN** NPM 插件出现在 `bumpPlugins`（提升插件列表）中
+- **AND** 两个插件清单或 NPM 元数据中的任一版本文件不等于本次发布版本
+- **THEN** preflight（发布前检查） MUST 拒绝继续
+- **THEN** 错误 MUST 指出不一致的版本文件
+
+#### Scenario: 不提升插件
+
+- **WHEN** `bumpPlugins`（提升插件列表）为空列表
+- **AND** 所有实际发布目标的 Release Input（发布输入）和版本文件都与远端基线一致
+- **THEN** preflight（发布前检查） MUST 允许目录或投影变化
+- **THEN** preflight（发布前检查） MUST 不要求任何插件等于本次全局发布版本
+
+#### Scenario: 远端基线已更新
+
+- **WHEN** 本地保存的远端分支引用早于远端发布通道或源引用
+- **THEN** preflight（发布前检查） MUST 在比较发布输入和版本前刷新远端引用
+- **THEN** 比较结果 MUST 反映远端当前发布通道和源引用
+
+#### Scenario: CLI 重复声明提升插件
+
+- **WHEN** 用户重复传入 `--bump-plugins`（提升插件版本参数）
+- **THEN** preflight（发布前检查）、publish（发布）和 `ci-publish`（CI 发布） MUST NOT 静默丢弃前面的插件
+- **AND** 系统 MUST 将重复参数合并为同一个 `bumpPlugins`（提升插件列表）或输出明确错误
+
+#### Scenario: 未声明提升导致版本漂移
+
+- **WHEN** 某个插件版本文件不同于远端发布通道同路径版本
+- **AND** 插件不在 `bumpPlugins`（提升插件列表）中
+- **THEN** preflight（发布前检查） MUST 拒绝继续
+- **THEN** 错误 MUST 指出该插件需要加入 `bumpPlugins`（提升插件列表）或撤回版本变更
+
+#### Scenario: 未声明新插件
+
+- **WHEN** 某个实际发布目标在远端发布通道没有对应版本文件
+- **AND** 该目标不在 `bumpPlugins`（提升插件列表）中
+- **THEN** preflight（发布前检查） MUST 拒绝继续
+- **THEN** 错误 MUST 指出该目标需要加入 `bumpPlugins`（提升插件列表）
