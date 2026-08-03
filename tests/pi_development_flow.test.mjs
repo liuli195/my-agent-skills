@@ -23,6 +23,7 @@ const references = [
   "requirements.md",
   "implementation.md",
   "delivery.md",
+  "output-template.md",
   "resume.md",
 ];
 
@@ -79,6 +80,8 @@ test("primary stages declare dependencies and their gate state before execution"
     /Before invoking `to-spec` or `to-tickets`[^]*current-session tool-call evidence that `codebase-design`, `grill-with-docs`, and `domain-modeling` were read/,
   );
 
+  for (const text of Object.values(documents)) assert.match(text, /output-template\.md/);
+
   const requirements = documents["requirements.md"];
   assert.match(
     requirements,
@@ -116,6 +119,7 @@ test("the four gates form the required stage state machine", async () => {
     "Gate 2 — Enter Implementation（进入实施）",
     "Gate 3 — Enter Delivery（进入交付）",
     "Gate 4 — Authorize PR Delivery（授权 PR 交付）",
+    "Completion Check — 完成检查",
   ]) assert.match(skill, new RegExp(name));
 
   const ownership = [
@@ -157,11 +161,67 @@ test("the four gates form the required stage state machine", async () => {
     gate3,
     /Gate 3 passes only after[^]*appl(?:y|ies|ication)[^]*validat/is,
   );
+  assert.match(gate3, /Development Flow summary uses.*output-template/is);
+  assert.match(gate3, /detailed final confirmation.*exact.*output/is);
   assert.doesNotMatch(gate3, /After Gate 3 — Enter Delivery passes, run `my-spec-add`/);
   assert.match(
     section(delivery, /### Gate 4 — Authorize PR Delivery/, /\n### Gate |\n## /),
-    /Gate 3 — Enter Delivery[^]*(?:no next formal gate|no further formal gate)/i,
+    /Completion Check — 完成检查/,
   );
+});
+
+test("gate outputs use one exact four-section template", async () => {
+  const template = await readFile(resolve(skillRoot, "references", "output-template.md"), "utf8");
+  const skill = await readFile(resolve(skillRoot, "SKILL.md"), "utf8");
+  const headings = [
+    "### 状态与待确认",
+    "### 核心内容摘要",
+    "### 引用",
+    "### 下一步",
+  ];
+  assert.deepEqual(
+    [...template.matchAll(/^### .*$/gm)].map(({ 0: heading }) => heading),
+    headings,
+  );
+  for (const name of headings) assert.match(template, new RegExp(`^${name}$`, "m"));
+  assert.match(template, /Gate 1 — Complete Requirements（完成需求）/);
+  assert.match(template, /Gate 2 — Enter Implementation（进入实施）/);
+  assert.match(template, /Gate 3 — Enter Delivery（进入交付）/);
+  assert.match(template, /Gate 4 — Authorize PR Delivery（授权 PR 交付）/);
+  assert.match(template, /Completion Check — 完成检查/);
+  assert.match(template, /Gate 1：目标、范围、测试接缝、票据及阻塞关系、变更工作树/);
+  assert.match(template, /Gate 2：票据顺序、并行组、执行隔离、验证、审查、风险和停止条件/);
+  assert.match(template, /Gate 3：正式规格差异和校验结果；确认沿用 `my-spec-add`/);
+  assert.match(template, /Gate 4：最终差异、验证审查结果、已知风险和准确交付动作/);
+  assert.match(template, /Completion Check：完成条件、实际状态和清理残留/);
+  assert.match(skill, /references\/output-template\.md/);
+});
+
+test("completion check distinguishes final completion from cleanup residue", async () => {
+  const delivery = await readFile(
+    resolve(skillRoot, "references", "delivery.md"),
+    "utf8",
+  );
+  const completion = section(
+    delivery,
+    /### Completion Check — 完成检查/,
+    /\n### Gate |\n## /,
+  );
+
+  assert.match(completion, /Gate 4 — Authorize PR Delivery/);
+  assert.match(completion, /final completion|最终完成/i);
+  assert.match(completion, /cleanup residue|清理残留/i);
+  assert.match(completion, /physical worktree directory|实体工作树目录/i);
+  assert.match(completion, /exact path|精确路径/i);
+  assert.match(completion, /cleanup reason|清理原因/i);
+  assert.match(completion, /citation evidence|引用证据/i);
+  assert.match(completion, /force cleanup|强制清理/i);
+  assert.match(completion, /explicit authorization|明确授权/i);
+  assert.match(completion, /refusal.*residue.*recovery|拒绝.*残留.*恢复/is);
+  assert.match(completion, /authorization.*check.*again|授权.*再次.*检查/is);
+  assert.match(completion, /not.*fifth.*gate|不新增第五个正式授权门禁/is);
+  assert.match(completion, /unrequested.*(?:not|does not).*block|未请求.*不.*阻塞/is);
+  assert.match(completion, /output-template\.md/);
 });
 
 test("initialization and resume route through the four gates without MUST blocks", async () => {
