@@ -97,7 +97,7 @@ Confirm that:
 - no temporary artifact remains;
 - unrequested local installation, client synchronization, marketplace refresh, and release work are not completion blockers.
 
-If Git（版本管理） registration and branch cleanup are complete but a physical worktree directory（实体工作树目录） remains as Cleanup Residue（清理残留）, report `未完成`, the exact path, and the cleanup reason. Do not treat that state as `最终完成`.
+If Git（版本管理） registration and branch cleanup are complete but a physical worktree directory（实体工作树目录） remains as Cleanup Residue（清理残留）, report `未完成`, the exact path, the cleanup reason, and citation evidence. Do not treat that state as `最终完成`.
 
 #### Confirmation Output（待用户确认内容清单）
 

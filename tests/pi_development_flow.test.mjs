@@ -214,6 +214,7 @@ test("completion check distinguishes final completion from cleanup residue", asy
   assert.match(completion, /physical worktree directory|实体工作树目录/i);
   assert.match(completion, /exact path|精确路径/i);
   assert.match(completion, /cleanup reason|清理原因/i);
+  assert.match(completion, /citation evidence|引用证据/i);
   assert.match(completion, /force cleanup|强制清理/i);
   assert.match(completion, /explicit authorization|明确授权/i);
   assert.match(completion, /refusal.*residue.*recovery|拒绝.*残留.*恢复/is);
