@@ -24,6 +24,18 @@ _Avoid_: Auditor, critic
 The end-to-end orchestration of one repository development change from requirement confirmation through implementation, PR（拉取请求）delivery, and cleanup.
 _Avoid_: Product lifecycle, release flow
 
+**Direct Agent dispatch（直接 Agent 派发）**:
+A main Agent call to the generic `Agent` tool without the controlled worktree dispatch interface; it is not a writable Implementer route.
+_Avoid_: direct implementation
+
+**Controlled Implementer dispatch（受控 Implementer 派发）**:
+The verified route that starts one writable Implementer for one published ticket in one existing non-primary Git worktree.
+_Avoid_: informal delegation
+
+**Resource isolation（资源隔离）**:
+The execution setting that controls which extensions and skills a subagent can load; it is distinct from Git worktree isolation.
+_Avoid_: filesystem isolation
+
 **Direction Confirmation（方向确认）**:
 A non-gate user alignment with the overall design proposal before Requirements（需求）detail discussion. It neither publishes artifacts nor authorizes implementation or delivery.
 _Avoid_: Gate, implementation authorization
