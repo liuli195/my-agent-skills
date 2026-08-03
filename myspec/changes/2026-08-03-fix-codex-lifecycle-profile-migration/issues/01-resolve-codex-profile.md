@@ -14,6 +14,6 @@
 
 ## Verification（验证）
 
-- 打包命令行测试：`build-and-verify verify --project .` 的受影响检查中，运行时边界测试 11/11 通过；MySpec 测试 81 项通过，新增目录选择测试通过。其余 12 项失败均为既有开发源 `npm link` 换行导致的 `invalid_dev_source: dirty_worktree`，与本票据无关。
+- 打包命令行测试：`build-and-verify verify --project .` 的受影响检查中，MySpec 测试 94 项通过、2 项跳过，运行时边界测试 11/11 通过；Build and Verify 测试此前已 214/214 通过。
 - 真实 Orca 环境冒烟：分别运行打包后的 `myspec doctor --codex` 和 `build-and-verify doctor --codex`，均解析为 `C:\Users\liuli\.codex`，来源为 `orca-user-default`，Codex 可用；运行前后用户 Codex 目录文件哈希一致。
 - 最终针对性审查：无阻断发现。

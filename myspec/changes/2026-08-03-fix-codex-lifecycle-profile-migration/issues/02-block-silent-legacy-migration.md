@@ -16,6 +16,6 @@
 ## Verification（验证）
 
 - 打包入口目标测试：MySpec 和 Build and Verify 的旧来源阻断、无写入、迁移失败重试和迁移后 `update` 均通过。
-- Build and Verify 快速验证：`verify.build-and-verify` 214/214、`verify.runtime-boundaries` 11/11 通过；`verify.my-spec` 82 项通过，12 项为既有受控开发源 `npm link` 换行导致的 `invalid_dev_source: dirty_worktree` 失败。
+- Build and Verify 快速验证：`verify.my-spec` 94 项通过、2 项跳过，`verify.build-and-verify` 214/214、`verify.runtime-boundaries` 11/11 通过。
 - 项目级保护：启用中的项目级旧来源会先阻断；`init --pi` 按既有契约禁用后，`update` 放行且保留项目文件。
 - 最终针对性审查：无阻断发现。
