@@ -67,3 +67,19 @@ _Avoid_: Tool version pin, installation source
 **Toolchain Record（工具链记录）**:
 The Git-visible repository record of selected Toolchain Identities（工具链身份） used by PR Flow（拉取请求流程） CI（持续集成） synchronization.
 _Avoid_: Tool lockfile, CI configuration
+
+**Codex 配置目录（Codex Configuration Directory）**:
+The directory that a lifecycle command intentionally selects as the Codex client profile it reads and writes.
+_Avoid_: inherited Codex home
+
+**Orca 临时配置目录（Orca Temporary Configuration Directory）**:
+The isolated Codex client profile owned by an Orca（开发环境） session; it is not the default target for lifecycle management.
+_Avoid_: user Codex directory, permanent profile
+
+**用户 Codex 配置目录（User Codex Configuration Directory）**:
+The persistent Codex client profile used by default when lifecycle management is running inside an Orca session.
+_Avoid_: Orca runtime home
+
+**客户端迁移（Client Migration）**:
+The explicit convergence of a client from a Legacy MySpec Source（旧 MySpec 来源） to the current managed source while preserving unrelated client state.
+_Avoid_: silent refresh, automatic cleanup
