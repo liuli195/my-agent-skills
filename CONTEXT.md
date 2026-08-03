@@ -99,3 +99,15 @@ _Avoid_: Source-only change, build-only change
 **Release Baseline（发布基线）**:
 The latest published representation of a plugin against which the next release determines content and version drift.
 _Avoid_: Working tree, latest source branch
+
+**Platform Verification Job（平台验证任务）**:
+A continuous-integration result that validates the repository on one required execution platform.
+_Avoid_: Platform-specific optional check
+
+**Cross-Platform Verification Gate（跨平台验证汇总门禁）**:
+The single required result whose success means every required Platform Verification Job（平台验证任务） succeeded.
+_Avoid_: Workflow label, individual platform result
+
+**Required Check（必需检查）**:
+A GitHub status result that a repository rule requires before a pull request may merge.
+_Avoid_: Any visible check, workflow conclusion
