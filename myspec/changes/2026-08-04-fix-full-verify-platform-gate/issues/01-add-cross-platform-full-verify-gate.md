@@ -21,4 +21,5 @@
 - Fast verification：`build-and-verify verify --project .`，通过；运行 2 项受影响检查。
 - User-entry smoke：待 PR CI（拉取请求持续集成）运行后确认真实必需检查指向汇总任务。
 - Review：Standards（规范）与 Spec（规格）审查及修复跟进均无阻断发现；保留两项待真实 PR CI 验证。
+- MySpec：已将跨平台汇总门禁要求应用到 `local-plugin-build-checks` 主规格；`myspec validate-main myspec/specs` 通过。
 - Known risk：本地无法模拟 GitHub Actions（GitHub 工作流）任务结果组合；失败路径需由真实 PR CI 或等价受控运行确认。
