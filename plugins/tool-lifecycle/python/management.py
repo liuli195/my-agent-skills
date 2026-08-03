@@ -43,6 +43,16 @@ class ManagementError(ValueError):
     pass
 
 
+@dataclass(frozen=True)
+class CodexHomeSelection:
+    path: Path
+    source: str
+    explicit: bool
+
+
+_CODEX_HOME_SELECTION: CodexHomeSelection | None = None
+
+
 def _text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8").replace("\r\n", "\n")
@@ -106,11 +116,20 @@ def _command(command: str, *arguments: str) -> list[str] | str:
     return values
 
 
-def _run(command: str, *arguments: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    command: str,
+    *arguments: str,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     invocation = _command(command, *arguments)
+    if command == "codex":
+        selection = _current_codex_home()
+        env = {**os.environ, **(env or {}), "CODEX_HOME": str(selection.path)}
     return subprocess.run(
         invocation,
         cwd=cwd,
+        env=env,
         text=True,
         capture_output=True,
         check=False,
@@ -188,6 +207,52 @@ def _local_source_path(source: str, settings_path: Path) -> Path | None:
 
 def _same_path(left: Path, right: Path) -> bool:
     return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
+
+
+def _absolute_path(value: str | Path) -> Path:
+    return Path(os.path.abspath(Path(value).expanduser()))
+
+
+def _default_codex_home() -> Path:
+    configured_home = os.environ.get("USERPROFILE") or os.environ.get("HOME")
+    return _absolute_path(Path(configured_home) / ".codex") if configured_home else _absolute_path(Path.home() / ".codex")
+
+
+def _validate_codex_home(selection: CodexHomeSelection) -> None:
+    path = selection.path
+    if not path.exists():
+        if selection.explicit:
+            raise ManagementError(
+                f"codex_home_unavailable: {path}: directory does not exist; create it or choose another directory"
+            )
+        return
+    if not path.is_dir():
+        raise ManagementError(f"codex_home_unavailable: {path}: not a directory")
+    if not os.access(path, os.R_OK | os.W_OK):
+        raise ManagementError(f"codex_home_unavailable: {path}: directory is not readable and writable")
+
+
+def _select_codex_home(requested: Path | None) -> CodexHomeSelection:
+    if requested is not None:
+        selection = CodexHomeSelection(_absolute_path(requested), "explicit", True)
+    else:
+        inherited = os.environ.get("CODEX_HOME")
+        orca_home = os.environ.get("ORCA_CODEX_HOME")
+        if inherited and orca_home and _same_path(Path(inherited), Path(orca_home)):
+            selection = CodexHomeSelection(_default_codex_home(), "orca-user-default", False)
+        elif inherited:
+            selection = CodexHomeSelection(_absolute_path(inherited), "environment", False)
+        else:
+            selection = CodexHomeSelection(_default_codex_home(), "user-default", False)
+    _validate_codex_home(selection)
+    return selection
+
+
+def _current_codex_home() -> CodexHomeSelection:
+    global _CODEX_HOME_SELECTION
+    if _CODEX_HOME_SELECTION is None:
+        _CODEX_HOME_SELECTION = _select_codex_home(None)
+    return _CODEX_HOME_SELECTION
 
 
 @dataclass
@@ -629,7 +694,7 @@ def _run_codex(error_name: str, *arguments: str) -> None:
 
 
 def _codex_config_path() -> Path:
-    return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "config.toml"
+    return _current_codex_home().path / "config.toml"
 
 
 def _set_codex_plugin_enabled(identifier: str, enabled: bool) -> None:
@@ -1141,7 +1206,9 @@ def _stable_cli() -> Path:
 
 def _resume_after_switch(arguments: list[str], token: str, operation_id: str) -> dict[str, object]:
     _prepare_lock_handoff(operation_id, token)
-    invocation = _exact_command(_stable_cli(), *arguments, "--_switch-token", token)
+    selection = _current_codex_home()
+    codex_home = ["--codex-home", str(selection.path)] if selection.explicit else []
+    invocation = _exact_command(_stable_cli(), *arguments, *codex_home, "--_switch-token", token)
     environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
     result = subprocess.run(
         invocation,
@@ -1699,6 +1766,7 @@ def _doctor_claude() -> dict[str, object]:
 
 
 def _doctor_codex() -> dict[str, object]:
+    selection = _current_codex_home()
     report = _doctor_package()
     stable = _stable_package_root()
     available = shutil.which("codex") is not None
@@ -1767,6 +1835,8 @@ def _doctor_codex() -> dict[str, object]:
             )
         )
     report["codex"] = {
+        "codexHome": str(selection.path),
+        "codexHomeSource": selection.source,
         "available": available,
         "marketplace": marketplace,
         "marketplaceRegistered": marketplace_registered,
@@ -1974,7 +2044,9 @@ def _resume_after_update(token: str, operation_id: str, target: str) -> dict[str
     if _manifest_version(stable) != target or not _stable_cli().is_file():
         raise ManagementError("update_runtime_mismatch: updated global package is unavailable")
     _prepare_lock_handoff(operation_id, token)
-    invocation = _exact_command(_stable_cli(), "update", "--_update-token", token)
+    selection = _current_codex_home()
+    codex_home = ["--codex-home", str(selection.path)] if selection.explicit else []
+    invocation = _exact_command(_stable_cli(), "update", *codex_home, "--_update-token", token)
     result = subprocess.run(
         invocation,
         env=os.environ.copy(),
@@ -2185,6 +2257,7 @@ def add_management_parsers(commands: argparse._SubParsersAction[argparse.Argumen
     init_target.add_argument("--dev", action="store_true")
     init_target.add_argument("--release", action="store_true")
     init_parser.add_argument("--source", type=Path)
+    init_parser.add_argument("--codex-home", type=Path)
     init_parser.add_argument("--_switch-token", help=argparse.SUPPRESS)
     doctor_parser = commands.add_parser("doctor")
     doctor_target = doctor_parser.add_mutually_exclusive_group()
@@ -2192,7 +2265,9 @@ def add_management_parsers(commands: argparse._SubParsersAction[argparse.Argumen
     doctor_target.add_argument("--claude", action="store_true")
     doctor_target.add_argument("--codex", action="store_true")
     doctor_target.add_argument("--all", action="store_true")
+    doctor_parser.add_argument("--codex-home", type=Path)
     update_parser = commands.add_parser("update")
+    update_parser.add_argument("--codex-home", type=Path)
     update_parser.add_argument("--_update-token", help=argparse.SUPPRESS)
 
 
@@ -2207,7 +2282,19 @@ def _management_command(args: argparse.Namespace) -> str:
     return f"{COMMAND_NAME} init --{target}{source}"
 
 
+def _management_uses_codex(args: argparse.Namespace) -> bool:
+    if args.command == "update":
+        return True
+    if args.command == "doctor":
+        return not args.pi and not args.claude
+    return args.codex or args.all or args.dev or args.release
+
+
 def run_management(args: argparse.Namespace) -> dict[str, object]:
+    global _CODEX_HOME_SELECTION
+    _CODEX_HOME_SELECTION = None
+    if _management_uses_codex(args):
+        _CODEX_HOME_SELECTION = _select_codex_home(getattr(args, "codex_home", None))
     if args.command == "doctor":
         if args.all:
             report = _doctor_all()

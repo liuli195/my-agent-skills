@@ -414,6 +414,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_doctor_reports_machine_readable_release_identity': (
         'covers the isolated Build and Verify npm package through its public doctor CLI; function=test_packed_build_and_verify_doctor_reports_machine_readable_release_identity'
     ),
+    'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_codex_doctor_resolves_orca_and_explicit_homes': (
+        'covers the installed Build and Verify CLI selecting an Orca-safe Codex profile and preserving explicit overrides; function=test_packed_build_and_verify_codex_doctor_resolves_orca_and_explicit_homes'
+    ),
     'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_accepts_controlled_ssh_dev_source': (
         'covers the packaged Build and Verify development-mode entrypoint with an official SSH remote and published commit; function=test_packed_build_and_verify_accepts_controlled_ssh_dev_source'
     ),
@@ -554,6 +557,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     ),
     'tests/test_my_spec.py::test_packed_myspec_clients_run_shared_source_cases': (
         'covers all shared source-state cases through the installed MySpec npm package, native client substitutes, and public doctor CLI; function=test_packed_myspec_clients_run_shared_source_cases'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_codex_doctor_uses_user_home_when_orca_home_is_inherited': (
+        'covers the installed MySpec CLI selecting the user Codex profile when Orca inherits a temporary profile; function=test_packed_myspec_codex_doctor_uses_user_home_when_orca_home_is_inherited'
     ),
     'tests/test_my_spec.py::test_packed_myspec_claude_init_keeps_legacy_when_stable_version_is_wrong': (
         'covers packaged Claude cleanup preserving legacy state when stable verification fails; function=test_packed_myspec_claude_init_keeps_legacy_when_stable_version_is_wrong'

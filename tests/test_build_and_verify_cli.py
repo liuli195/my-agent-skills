@@ -410,6 +410,129 @@ def test_packed_build_and_verify_restores_runtime_when_migration_commit_fails(tm
     assert _git(project, "status", "--porcelain").stdout == ""
 
 
+def test_packed_build_and_verify_codex_doctor_resolves_orca_and_explicit_homes(
+    tmp_path: Path,
+) -> None:
+    npm = shutil.which("npm")
+    assert npm is not None
+    packed = subprocess.run(
+        [sys.executable, str(PACK), "build-and-verify", str(tmp_path / "package")],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert packed.returncode == 0, packed.stderr
+    prefix = tmp_path / "prefix"
+    installed = subprocess.run(
+        [
+            npm,
+            "install",
+            "--global",
+            "--prefix",
+            str(prefix),
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund",
+            packed.stdout.strip(),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert installed.returncode == 0, installed.stderr
+    fake_bin = tmp_path / "fake-codex" / "bin"
+    fake_bin.mkdir(parents=True)
+    env_log = tmp_path / "codex-env.log"
+    probe = fake_bin.parent / "codex_probe.py"
+    probe.write_text(
+        "import json\n"
+        "import os\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "Path(os.environ['CODEX_ENV_LOG']).open('a', encoding='utf-8').write(os.environ['CODEX_HOME'] + '\\n')\n"
+        "if sys.argv[1:] == ['plugin', 'marketplace', 'list', '--json']:\n"
+        "    print(json.dumps({'marketplaces': []}))\n"
+        "elif sys.argv[1:] == ['plugin', 'list', '--json']:\n"
+        "    print(json.dumps({'installed': [], 'available': []}))\n"
+        "else:\n"
+        "    raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    if sys.platform == "win32":
+        (fake_bin / "codex.cmd").write_text(
+            f'@"{sys.executable}" "{probe}" %*\n',
+            encoding="utf-8",
+        )
+    else:
+        launcher = fake_bin / "codex"
+        launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{probe}" "$@"\n', encoding="utf-8")
+        launcher.chmod(0o755)
+    executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
+    env = _isolated_env(tmp_path, prefix)
+    user_home = Path(env["USERPROFILE"]) / ".codex"
+    orca_home = tmp_path / "orca-runtime-home"
+    orca_home.mkdir()
+    env.update(
+        {
+            "PATH": os.pathsep.join([str(fake_bin), env["PATH"]]),
+            "CODEX_HOME": str(orca_home),
+            "ORCA_CODEX_HOME": str(orca_home),
+            "CODEX_ENV_LOG": str(env_log),
+        }
+    )
+
+    inherited = subprocess.run(
+        [executable, "doctor", "--codex"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+
+    assert inherited.returncode == 0, inherited.stderr
+    report = json.loads(inherited.stdout)["codex"]
+    assert report["codexHome"] == str(user_home)
+    assert report["codexHomeSource"] == "orca-user-default"
+    assert env_log.read_text(encoding="utf-8").splitlines() == [str(user_home), str(user_home)]
+
+    explicit_home = tmp_path / "custom-codex-home"
+    explicit_home.mkdir()
+    env_log.write_text("", encoding="utf-8")
+    explicit = subprocess.run(
+        [executable, "doctor", "--codex", "--codex-home", explicit_home],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+
+    assert explicit.returncode == 0, explicit.stderr
+    report = json.loads(explicit.stdout)["codex"]
+    assert report["codexHome"] == str(explicit_home)
+    assert report["codexHomeSource"] == "explicit"
+    assert env_log.read_text(encoding="utf-8").splitlines() == [str(explicit_home), str(explicit_home)]
+    assert env["CODEX_HOME"] == str(orca_home)
+
+    unavailable_home = tmp_path / "not-a-directory"
+    unavailable_home.write_text("not a directory", encoding="utf-8")
+    env_log.write_text("", encoding="utf-8")
+    unavailable = subprocess.run(
+        [executable, "doctor", "--codex", "--codex-home", unavailable_home],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+
+    assert unavailable.returncode == 1
+    assert f"error: codex_home_unavailable: {unavailable_home}: not a directory" in unavailable.stderr
+    assert env_log.read_text(encoding="utf-8") == ""
+    assert env["CODEX_HOME"] == str(orca_home)
+
+
 def test_packed_build_and_verify_rejects_dirty_legacy_migration(tmp_path: Path) -> None:
     npm = shutil.which("npm")
     assert npm is not None

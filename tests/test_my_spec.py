@@ -589,6 +589,10 @@ state = json.loads(state_path.read_text(encoding="utf-8"))
 config_path = Path(os.environ["CODEX_HOME"]) / "config.toml"
 with Path(os.environ["MYSPEC_CODEX_LOG"]).open("a", encoding="utf-8") as log:
     log.write(json.dumps(arguments) + "\\n")
+environment_log = os.environ.get("MYSPEC_CODEX_ENV_LOG")
+if environment_log:
+    with Path(environment_log).open("a", encoding="utf-8") as log:
+        log.write(os.environ.get("CODEX_HOME", "") + "\\n")
 
 def save():
     state_path.write_text(json.dumps(state, indent=2) + "\\n", encoding="utf-8")
@@ -4950,3 +4954,70 @@ def test_apply_delta_can_atomically_replace_main_after_final_confirmation(tmp_pa
     repeated = apply_ready(SPEC_OPS, specs, delta, specs, repeated_work)
     assert repeated.returncode == 0, repeated.stderr
     assert (specs / "accounts" / "spec.md").read_bytes() == before
+
+
+def test_packed_myspec_codex_doctor_uses_user_home_when_orca_home_is_inherited(
+    tmp_path: Path,
+) -> None:
+    executable, installed_package = install_packed_myspec(tmp_path)
+    prefix = npm_prefix_for(installed_package)
+    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
+    env = isolated_myspec_env(tmp_path, prefix, codex_bin)
+    user_home = Path(env["USERPROFILE"]) / ".codex"
+    orca_home = tmp_path / "orca-runtime-home"
+    user_home.mkdir(parents=True, exist_ok=True)
+    orca_home.mkdir(parents=True, exist_ok=True)
+    env.update(
+        {
+            "CODEX_HOME": str(orca_home),
+            "ORCA_CODEX_HOME": str(orca_home),
+            "MYSPEC_CODEX_LOG": str(codex_log),
+            "MYSPEC_CODEX_STATE": str(codex_state),
+            "MYSPEC_CODEX_ENV_LOG": str(tmp_path / "codex-env.log"),
+        }
+    )
+    write(
+        codex_state,
+        json.dumps(
+            {
+                "marketplaces": [],
+                "installed": [],
+                "available": [],
+            },
+            indent=2,
+        ),
+    )
+
+    diagnosed = run_cli(executable, "doctor", "--codex", env=env)
+
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    report = json.loads(diagnosed.stdout)["codex"]
+    assert report["codexHome"] == str(user_home)
+    assert report["codexHomeSource"] == "orca-user-default"
+    assert (tmp_path / "codex-env.log").read_text(encoding="utf-8").splitlines() == [
+        str(user_home),
+        str(user_home),
+    ]
+    assert env["CODEX_HOME"] == str(orca_home)
+
+    explicit_home = tmp_path / "custom-codex-home"
+    explicit_home.mkdir()
+    (tmp_path / "codex-env.log").write_text("", encoding="utf-8")
+    explicit = run_cli(
+        executable,
+        "doctor",
+        "--codex",
+        "--codex-home",
+        explicit_home,
+        env=env,
+    )
+
+    assert explicit.returncode == 0, explicit.stderr
+    report = json.loads(explicit.stdout)["codex"]
+    assert report["codexHome"] == str(explicit_home)
+    assert report["codexHomeSource"] == "explicit"
+    assert (tmp_path / "codex-env.log").read_text(encoding="utf-8").splitlines() == [
+        str(explicit_home),
+        str(explicit_home),
+    ]
+    assert env["CODEX_HOME"] == str(orca_home)
