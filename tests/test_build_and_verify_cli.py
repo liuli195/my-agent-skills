@@ -253,8 +253,7 @@ def test_packed_build_and_verify_update_blocks_legacy_codex_before_writes(tmp_pa
     npm = shutil.which("npm")
     node = shutil.which("node")
     assert npm is not None and node is not None
-    major, minor, patch = PACKAGE_VERSION.split(".")
-    latest = f"{major}.{minor}.{int(patch) + 1}"
+    latest = PACKAGE_VERSION
     packed = subprocess.run(
         [sys.executable, str(PACK), "build-and-verify", str(tmp_path / "package")],
         text=True,
@@ -276,6 +275,7 @@ def test_packed_build_and_verify_update_blocks_legacy_codex_before_writes(tmp_pa
     npm_log = tmp_path / "npm.log"
     codex_log = tmp_path / "codex.log"
     codex_state = tmp_path / "codex-state.json"
+    codex_failure_marker = tmp_path / "codex-failure-marker"
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
     package_root = subprocess.run(
@@ -338,9 +338,12 @@ def test_packed_build_and_verify_update_blocks_legacy_codex_before_writes(tmp_pa
         "import json, os, re, sys\n"
         "from pathlib import Path\n"
         "args = sys.argv[1:]\n"
-        "state = json.loads(Path(os.environ['BUILD_CODEX_STATE']).read_text(encoding='utf-8'))\n"
+        "state_path = Path(os.environ['BUILD_CODEX_STATE'])\n"
+        "state = json.loads(state_path.read_text(encoding='utf-8'))\n"
         "with Path(os.environ['BUILD_CODEX_LOG']).open('a', encoding='utf-8') as log:\n"
         "    log.write(json.dumps(args) + '\\n')\n"
+        "def save():\n"
+        "    state_path.write_text(json.dumps(state), encoding='utf-8')\n"
         "if args == ['plugin', 'marketplace', 'list', '--json']:\n"
         "    print(json.dumps({'marketplaces': state['marketplaces']}))\n"
         "elif args == ['plugin', 'list', '--json']:\n"
@@ -353,6 +356,21 @@ def test_packed_build_and_verify_update_blocks_legacy_codex_before_writes(tmp_pa
         "        current['enabled'] = bool(re.search(rf'(?ms)^\\[plugins\\.\"{identifier}\"\\]\\s*\\n.*?^enabled\\s*=\\s*true\\s*$', config))\n"
         "        installed.append(current)\n"
         "    print(json.dumps({'installed': installed, 'available': state['available']}))\n"
+        "elif args[:2] == ['plugin', 'remove']:\n"
+        "    identifier = args[2]\n"
+        "    if identifier == 'build-and-verify@my-agent-skills-marketplace' and not Path(os.environ['BUILD_CODEX_FAIL_MARKER']).exists():\n"
+        "        Path(os.environ['BUILD_CODEX_FAIL_MARKER']).write_text('failed', encoding='utf-8')\n"
+        "        raise SystemExit(77)\n"
+        "    state['installed'] = [item for item in state['installed'] if item['pluginId'] != identifier]\n"
+        "    save()\n"
+        "elif args == ['plugin', 'add', 'build-and-verify@build-and-verify', '--json']:\n"
+        "    state['installed'] = [item for item in state['installed'] if item['pluginId'] != 'build-and-verify@build-and-verify']\n"
+        "    state['installed'].append({'pluginId': 'build-and-verify@build-and-verify', 'installed': True, 'version': os.environ['BUILD_PACKAGE_VERSION'], 'source': {'source': 'local', 'path': os.environ['BUILD_STABLE']}})\n"
+        "    config_path = Path(os.environ['CODEX_HOME']) / 'config.toml'\n"
+        "    config = config_path.read_text(encoding='utf-8') if config_path.exists() else ''\n"
+        "    if '[plugins.\"build-and-verify@build-and-verify\"]' not in config:\n"
+        "        config_path.write_text(config.rstrip() + '\\n[plugins.\"build-and-verify@build-and-verify\"]\\nenabled = true\\n', encoding='utf-8')\n"
+        "    save()\n"
         "else:\n"
         "    raise SystemExit(2)\n",
     )
@@ -376,6 +394,9 @@ def test_packed_build_and_verify_update_blocks_legacy_codex_before_writes(tmp_pa
         "BUILD_NPM_LATEST": latest,
         "BUILD_CODEX_LOG": str(codex_log),
         "BUILD_CODEX_STATE": str(codex_state),
+        "BUILD_CODEX_FAIL_MARKER": str(codex_failure_marker),
+        "BUILD_PACKAGE_VERSION": PACKAGE_VERSION,
+        "BUILD_STABLE": str(stable),
         "PATH": os.pathsep.join(
             [str(fake_bin), str(Path(sys.executable).parent), str(Path(node).parent)]
         ),
@@ -398,6 +419,42 @@ def test_packed_build_and_verify_update_blocks_legacy_codex_before_writes(tmp_pa
     assert not (Path(env["HOME"]) / ".build-and-verify" / "state.json").exists()
     assert "plugin remove" not in codex_log.read_text(encoding="utf-8")
     assert (codex_state.read_bytes(), codex_config.read_bytes()) == codex_before
+
+    failed_migration = subprocess.run(
+        [executable, "init", "--codex"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+    assert failed_migration.returncode == 1
+    assert "error: codex_plugin_remove_failed:" in failed_migration.stderr
+
+    migrated = subprocess.run(
+        [executable, "init", "--codex"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+    assert migrated.returncode == 0, migrated.stderr
+    assert not any(
+        item["pluginId"] == "build-and-verify@my-agent-skills-marketplace"
+        for item in json.loads(codex_state.read_text(encoding="utf-8"))["installed"]
+    )
+
+    updated = subprocess.run(
+        [executable, "update"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+    assert updated.returncode == 0, updated.stderr
+    assert json.loads(updated.stdout)["version"] == PACKAGE_VERSION
 
 
 def _git(project: Path, *args: str) -> subprocess.CompletedProcess[str]:

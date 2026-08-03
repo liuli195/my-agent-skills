@@ -1893,22 +1893,13 @@ def _legacy_migration_clients(stable: Path) -> list[str]:
     clients: list[str] = []
     if shutil.which("pi") is not None:
         sources = _pi_sources(_pi_list())
-        if any(
-            _tool_source_kind(item, stable) == "legacy" and _pi_source_enabled(item)
-            for item in sources
-        ):
+        if any(_tool_source_kind(item, stable) == "legacy" for item in sources):
             clients.append("pi")
     if shutil.which("claude") is not None:
-        if any(
-            item.get("id") == CLAUDE_LEGACY_PLUGIN and item.get("enabled") is True
-            for item in _claude_plugins()
-        ):
+        if any(item.get("id") == CLAUDE_LEGACY_PLUGIN for item in _claude_plugins()):
             clients.append("claude")
     if shutil.which("codex") is not None:
-        if any(
-            item.get("pluginId") == CODEX_LEGACY_PLUGIN and item.get("enabled") is True
-            for item in _codex_plugins()
-        ):
+        if any(item.get("pluginId") == CODEX_LEGACY_PLUGIN for item in _codex_plugins()):
             clients.append("codex")
     return clients
 
@@ -1923,7 +1914,7 @@ def _migration_command(client: str) -> str:
 def _require_legacy_migration(stable: Path) -> None:
     clients = _legacy_migration_clients(stable)
     if clients:
-        commands = "; ".join(f"{client}: run '{_migration_command(client)}'" for client in clients)
+        commands = "; ".join(f"{client}: run {_migration_command(client)}" for client in clients)
         raise ManagementError(f"legacy_source_migration_required: {commands}")
 
 

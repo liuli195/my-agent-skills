@@ -1176,9 +1176,9 @@ def test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes(tmp_pa
 
     assert blocked.returncode == 1
     assert "error: legacy_source_migration_required" in blocked.stderr
-    assert "pi: run 'myspec init --pi'" in blocked.stderr
-    assert "claude: run 'myspec init --claude'" in blocked.stderr
-    assert f"codex: run 'myspec init --codex --codex-home \"{codex_home}\"'" in blocked.stderr
+    assert "pi: run myspec init --pi" in blocked.stderr
+    assert "claude: run myspec init --claude" in blocked.stderr
+    assert f"codex: run myspec init --codex --codex-home \"{codex_home}\"" in blocked.stderr
     assert not any(json.loads(line)[:2] == ["install", "--global"] for line in npm_log.read_text(encoding="utf-8").splitlines())
     assert not (Path(env["HOME"]) / ".myspec" / "state.json").exists()
     assert user_settings.read_bytes() == before["pi"]
