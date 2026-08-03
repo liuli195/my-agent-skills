@@ -24,6 +24,14 @@ _Avoid_: Auditor, critic
 The end-to-end orchestration of one repository development change from requirement confirmation through implementation, PR（拉取请求）delivery, and cleanup.
 _Avoid_: Product lifecycle, release flow
 
+**Completion Check（完成检查）**:
+The post-delivery check that decides whether the Development Flow is finally complete, reports cleanup residue, and returns to a safe recovery decision when completion is not proven.
+_Avoid_: Fifth authorization gate, automatic cleanup
+
+**Cleanup Residue（清理残留）**:
+A physical worktree or temporary artifact that remains after the traceable Git（版本管理）cleanup has completed; it must be reported and never force-removed without explicit authorization.
+_Avoid_: Successful cleanup, harmless leftover
+
 **Direct Agent dispatch（直接 Agent 派发）**:
 A main Agent call to the generic `Agent` tool without the controlled worktree dispatch interface; it is not a writable Implementer route.
 _Avoid_: direct implementation
