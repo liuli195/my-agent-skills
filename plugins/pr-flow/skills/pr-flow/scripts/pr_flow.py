@@ -6,6 +6,7 @@ import ctypes
 import hashlib
 import hmac
 import json
+import ntpath
 import os
 import re
 import shlex
@@ -2140,7 +2141,7 @@ def run_hotfix_verify_command(project: Path, command: str) -> subprocess.Complet
         ) from exc
     if not command_args:
         raise PrFlowError("hotfix_verify_command_missing", {"reason": "hotfix_verify_command_missing"})
-    if os.name == "nt":
+    if os.name == "nt" and not ntpath.dirname(command_args[0]):
         command_args[0] = shutil.which(command_args[0]) or command_args[0]
 
     try:
