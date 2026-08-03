@@ -414,6 +414,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_doctor_reports_machine_readable_release_identity': (
         'covers the isolated Build and Verify npm package through its public doctor CLI; function=test_packed_build_and_verify_doctor_reports_machine_readable_release_identity'
     ),
+    'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_update_blocks_legacy_codex_before_writes': (
+        'covers the installed Build and Verify update CLI blocking legacy Codex migration before package, state, or client writes; function=test_packed_build_and_verify_update_blocks_legacy_codex_before_writes'
+    ),
     'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_codex_doctor_resolves_orca_and_explicit_homes': (
         'covers the installed Build and Verify CLI selecting an Orca-safe Codex profile and preserving explicit overrides; function=test_packed_build_and_verify_codex_doctor_resolves_orca_and_explicit_homes'
     ),
@@ -713,6 +716,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     ),
     'tests/test_my_spec.py::test_packed_myspec_update_preflights_installed_clients_before_package_write': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_update_preflights_installed_clients_before_package_write'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes': (
+        'covers the installed MySpec update CLI blocking all enabled legacy client sources before package, state, or client writes; function=test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes'
     ),
     'tests/test_my_spec.py::test_packed_myspec_update_preserves_pi_effective_state_under_project_override': (
         'covers packaged update and doctor preserving Pi effective state under a trusted project override; function=test_packed_myspec_update_preserves_pi_effective_state_under_project_override'

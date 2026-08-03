@@ -1050,6 +1050,149 @@ def test_packed_myspec_update_preflights_installed_clients_before_package_write(
     assert "codex" not in json.loads(skipped.stdout)
 
 
+def test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes(tmp_path: Path) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = install_packed_myspec(installed)
+    prefix = npm_prefix_for(installed_package)
+    old_tarball = next((installed / "package").glob("*.tgz"))
+    new_tarball = pack_myspec_version(tmp_path, NEXT_VERSION)
+    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", old_tarball)
+    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
+    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
+    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
+    env = isolated_myspec_env(tmp_path, prefix, npm_bin, pi_bin, claude_bin, codex_bin)
+    codex_home = tmp_path / "codex home"
+    codex_home.mkdir()
+    env.update(
+        {
+            "MYSPEC_NPM_LOG": str(npm_log),
+            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
+            "MYSPEC_RELEASE_TARBALL": str(new_tarball),
+            "MYSPEC_NPM_LATEST": NEXT_VERSION,
+            "MYSPEC_PI_LOG": str(pi_log),
+            "MYSPEC_CLAUDE_LOG": str(claude_log),
+            "MYSPEC_CLAUDE_STATE": str(claude_state),
+            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
+            "CODEX_HOME": str(codex_home),
+            "MYSPEC_CODEX_LOG": str(codex_log),
+            "MYSPEC_CODEX_STATE": str(codex_state),
+        }
+    )
+    legacy_source = str(PLUGIN_ROOT)
+    user_settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    write(user_settings, json.dumps({"packages": [str(installed_package), legacy_source]}, indent=2))
+    write(
+        claude_state,
+        json.dumps(
+            {
+                "marketplaces": [
+                    {
+                        "name": "myspec",
+                        "source": "directory",
+                        "path": str(installed_package),
+                        "installLocation": str(installed_package),
+                    },
+                    {
+                        "name": "my-agent-skills-marketplace",
+                        "source": "directory",
+                        "path": legacy_source,
+                        "installLocation": legacy_source,
+                    },
+                ],
+                "plugins": [
+                    {
+                        "id": "my-spec@myspec",
+                        "version": PACKAGE_VERSION,
+                        "scope": "user",
+                        "enabled": True,
+                        "installPath": str(installed_package),
+                    },
+                    {
+                        "id": "my-spec@my-agent-skills-marketplace",
+                        "version": PACKAGE_VERSION,
+                        "scope": "user",
+                        "enabled": True,
+                        "installPath": legacy_source,
+                    },
+                ],
+            },
+            indent=2,
+        ),
+    )
+    write(
+        codex_state,
+        json.dumps(
+            {
+                "marketplaces": [
+                    {
+                        "name": "myspec",
+                        "root": str(installed_package),
+                        "marketplaceSource": {"sourceType": "local", "source": str(installed_package)},
+                    },
+                    {
+                        "name": "my-agent-skills-marketplace",
+                        "root": legacy_source,
+                        "marketplaceSource": {"sourceType": "local", "source": legacy_source},
+                    },
+                ],
+                "installed": [
+                    {
+                        "pluginId": "my-spec@myspec",
+                        "name": "my-spec",
+                        "marketplaceName": "myspec",
+                        "version": PACKAGE_VERSION,
+                        "installed": True,
+                        "source": {"source": "local", "path": str(installed_package)},
+                    },
+                    {
+                        "pluginId": "my-spec@my-agent-skills-marketplace",
+                        "name": "my-spec",
+                        "marketplaceName": "my-agent-skills-marketplace",
+                        "version": PACKAGE_VERSION,
+                        "installed": True,
+                        "source": {"source": "local", "path": legacy_source},
+                    },
+                ],
+                "available": [],
+            },
+            indent=2,
+        ),
+    )
+    codex_config = codex_home / "config.toml"
+    write(
+        codex_config,
+        '[plugins."my-spec@myspec"]\nenabled = true\n'
+        '[plugins."my-spec@my-agent-skills-marketplace"]\nenabled = true\n',
+    )
+    before = {
+        "pi": user_settings.read_bytes(),
+        "claude": claude_state.read_bytes(),
+        "codex": codex_state.read_bytes(),
+        "config": codex_config.read_bytes(),
+    }
+
+    blocked = run_cli(executable, "update", "--codex-home", codex_home, env=env)
+
+    assert blocked.returncode == 1
+    assert "error: legacy_source_migration_required" in blocked.stderr
+    assert "pi: run 'myspec init --pi'" in blocked.stderr
+    assert "claude: run 'myspec init --claude'" in blocked.stderr
+    assert f"codex: run 'myspec init --codex --codex-home \"{codex_home}\"'" in blocked.stderr
+    assert not any(json.loads(line)[:2] == ["install", "--global"] for line in npm_log.read_text(encoding="utf-8").splitlines())
+    assert not (Path(env["HOME"]) / ".myspec" / "state.json").exists()
+    assert user_settings.read_bytes() == before["pi"]
+    assert claude_state.read_bytes() == before["claude"]
+    assert codex_state.read_bytes() == before["codex"]
+    assert codex_config.read_bytes() == before["config"]
+
+    migrated = run_cli(executable, "init", "--all", env=env)
+    assert migrated.returncode == 0, migrated.stderr
+    updated = run_cli(executable, "update", env=env)
+    assert updated.returncode == 0, updated.stderr
+    assert json.loads(updated.stdout)["version"] == NEXT_VERSION
+
+
 def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_missing(
     tmp_path: Path,
 ) -> None:
@@ -1082,7 +1225,7 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
     write(
         Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
         json.dumps(
-            {"packages": [{"source": str(installed_package), "skills": []}, str(PLUGIN_ROOT)]},
+            {"packages": [{"source": str(installed_package), "skills": []}]},
             indent=2,
         ),
     )
@@ -1097,12 +1240,6 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
                         "path": str(installed_package),
                         "installLocation": str(installed_package),
                     },
-                    {
-                        "name": "my-agent-skills-marketplace",
-                        "source": "directory",
-                        "path": str(PLUGIN_ROOT),
-                        "installLocation": str(PLUGIN_ROOT),
-                    },
                 ],
                 "plugins": [
                     {
@@ -1111,13 +1248,6 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
                         "scope": "user",
                         "enabled": False,
                         "installPath": str(tmp_path / "disabled-claude"),
-                    },
-                    {
-                        "id": "my-spec@my-agent-skills-marketplace",
-                        "version": PACKAGE_VERSION,
-                        "scope": "user",
-                        "enabled": True,
-                        "installPath": str(PLUGIN_ROOT),
                     },
                 ],
             },
@@ -1134,11 +1264,6 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
                         "root": str(installed_package),
                         "marketplaceSource": {"sourceType": "local", "source": str(installed_package)},
                     },
-                    {
-                        "name": "my-agent-skills-marketplace",
-                        "root": str(PLUGIN_ROOT),
-                        "marketplaceSource": {"sourceType": "local", "source": str(PLUGIN_ROOT)},
-                    },
                 ],
                 "installed": [
                     {
@@ -1149,14 +1274,6 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
                         "installed": True,
                         "source": {"source": "local", "path": str(installed_package)},
                     },
-                    {
-                        "pluginId": "my-spec@my-agent-skills-marketplace",
-                        "name": "my-spec",
-                        "marketplaceName": "my-agent-skills-marketplace",
-                        "version": PACKAGE_VERSION,
-                        "installed": True,
-                        "source": {"source": "local", "path": str(PLUGIN_ROOT)},
-                    },
                 ],
                 "available": [],
             },
@@ -1165,8 +1282,7 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
     )
     write(
         Path(env["CODEX_HOME"]) / "config.toml",
-        '[plugins."my-spec@myspec"]\nenabled = false\n'
-        '[plugins."my-spec@my-agent-skills-marketplace"]\nenabled = true\n',
+        '[plugins."my-spec@myspec"]\nenabled = false\n',
     )
     pi_before = (Path(env["PI_CODING_AGENT_DIR"]) / "settings.json").read_bytes()
 
@@ -1186,9 +1302,9 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
     assert output["pi"] == "refreshed"
     assert output["claude"] == "refreshed"
     assert output["codex"] == "refreshed"
-    assert output["doctor"]["pi"]["enabled"] is True
-    assert output["doctor"]["claude"]["enabled"] is True
-    assert output["doctor"]["codex"]["enabled"] is True
+    assert output["doctor"]["pi"]["enabled"] is False
+    assert output["doctor"]["claude"]["enabled"] is False
+    assert output["doctor"]["codex"]["enabled"] is False
     for client in ("pi", "claude", "codex"):
         stable_source = next(
             source

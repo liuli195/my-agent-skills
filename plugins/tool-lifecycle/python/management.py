@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1888,11 +1889,50 @@ def _latest_version() -> str:
     return value
 
 
+def _legacy_migration_clients(stable: Path) -> list[str]:
+    clients: list[str] = []
+    if shutil.which("pi") is not None:
+        sources = _pi_sources(_pi_list())
+        if any(
+            _tool_source_kind(item, stable) == "legacy" and _pi_source_enabled(item)
+            for item in sources
+        ):
+            clients.append("pi")
+    if shutil.which("claude") is not None:
+        if any(
+            item.get("id") == CLAUDE_LEGACY_PLUGIN and item.get("enabled") is True
+            for item in _claude_plugins()
+        ):
+            clients.append("claude")
+    if shutil.which("codex") is not None:
+        if any(
+            item.get("pluginId") == CODEX_LEGACY_PLUGIN and item.get("enabled") is True
+            for item in _codex_plugins()
+        ):
+            clients.append("codex")
+    return clients
+
+
+def _migration_command(client: str) -> str:
+    arguments = [COMMAND_NAME, "init", f"--{client}"]
+    if client == "codex" and _CODEX_HOME_SELECTION is not None and _CODEX_HOME_SELECTION.explicit:
+        arguments.extend(["--codex-home", str(_CODEX_HOME_SELECTION.path)])
+    return subprocess.list2cmdline(arguments) if os.name == "nt" else shlex.join(arguments)
+
+
+def _require_legacy_migration(stable: Path) -> None:
+    clients = _legacy_migration_clients(stable)
+    if clients:
+        commands = "; ".join(f"{client}: run '{_migration_command(client)}'" for client in clients)
+        raise ManagementError(f"legacy_source_migration_required: {commands}")
+
+
 def _preflight_integrations() -> tuple[list[str], dict[str, str], dict[str, bool]]:
     integrations: list[str] = []
     scopes: dict[str, str] = {}
     enabled: dict[str, bool] = {}
     stable = _stable_package_root()
+    _require_legacy_migration(stable)
     if shutil.which("pi") is not None:
         listed = _pi_list()
         sources = _pi_sources(listed)
@@ -2171,9 +2211,11 @@ def _run_update(token: str | None, operation_id: str) -> dict[str, object]:
     if token is not None:
         if pending is None or pending.get("tokenHash") != _token_hash(token):
             raise ManagementError("invalid_update_token")
-    elif pending is None:
-        target = _latest_version()
+    if pending is not None:
+        _require_legacy_migration(_stable_package_root())
+    else:
         integrations, scopes, enabled = _preflight_integrations()
+        target = _latest_version()
         pending = {
             "command": "update",
             "targetVersion": target,

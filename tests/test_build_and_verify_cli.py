@@ -249,6 +249,157 @@ def test_packed_build_and_verify_doctor_reports_machine_readable_release_identit
     }
 
 
+def test_packed_build_and_verify_update_blocks_legacy_codex_before_writes(tmp_path: Path) -> None:
+    npm = shutil.which("npm")
+    node = shutil.which("node")
+    assert npm is not None and node is not None
+    major, minor, patch = PACKAGE_VERSION.split(".")
+    latest = f"{major}.{minor}.{int(patch) + 1}"
+    packed = subprocess.run(
+        [sys.executable, str(PACK), "build-and-verify", str(tmp_path / "package")],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert packed.returncode == 0, packed.stderr
+    prefix = tmp_path / "prefix"
+    installed = subprocess.run(
+        [npm, "install", "--global", "--prefix", str(prefix), "--ignore-scripts", "--no-audit", "--no-fund", packed.stdout.strip()],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert installed.returncode == 0, installed.stderr
+    executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    npm_log = tmp_path / "npm.log"
+    codex_log = tmp_path / "codex.log"
+    codex_state = tmp_path / "codex-state.json"
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    package_root = subprocess.run(
+        [npm, "root", "--global", "--prefix", str(prefix)],
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    stable = Path(package_root) / "@liuli195" / "build-and-verify"
+    legacy = tmp_path / "legacy-source"
+    write = lambda path, value: path.write_text(value, encoding="utf-8")
+    write(
+        codex_state,
+        json.dumps(
+            {
+                "marketplaces": [
+                    {"name": "build-and-verify", "root": str(stable)},
+                    {"name": "my-agent-skills-marketplace", "root": str(legacy)},
+                ],
+                "installed": [
+                    {
+                        "pluginId": "build-and-verify@build-and-verify",
+                        "installed": True,
+                    },
+                    {
+                        "pluginId": "build-and-verify@my-agent-skills-marketplace",
+                        "installed": True,
+                    },
+                ],
+                "available": [],
+            },
+            indent=2,
+        ),
+    )
+    codex_config = codex_home / "config.toml"
+    write(
+        codex_config,
+        '[plugins."build-and-verify@build-and-verify"]\nenabled = true\n'
+        '[plugins."build-and-verify@my-agent-skills-marketplace"]\nenabled = true\n',
+    )
+    codex_before = codex_state.read_bytes(), codex_config.read_bytes()
+    write(
+        fake_bin / "fake-npm.py",
+        "import json, os, subprocess, sys\n"
+        "args = sys.argv[1:]\n"
+        "with open(os.environ['BUILD_NPM_LOG'], 'a', encoding='utf-8') as log:\n"
+        "    log.write(json.dumps(args) + '\\n')\n"
+        "if args == ['view', '@liuli195/build-and-verify', 'version', '--json']:\n"
+        "    print(json.dumps(os.environ['BUILD_NPM_LATEST']))\n"
+        "    raise SystemExit(0)\n"
+        "if args[:2] == ['install', '--global']:\n"
+        "    raise SystemExit(77)\n"
+        "real = os.environ['BUILD_REAL_NPM']\n"
+        "command = [real, *args]\n"
+        "result = subprocess.run(subprocess.list2cmdline(command) if os.name == 'nt' else command, shell=os.name == 'nt')\n"
+        "raise SystemExit(result.returncode)\n",
+    )
+    write(
+        fake_bin / "fake-codex.py",
+        "import json, os, re, sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "state = json.loads(Path(os.environ['BUILD_CODEX_STATE']).read_text(encoding='utf-8'))\n"
+        "with Path(os.environ['BUILD_CODEX_LOG']).open('a', encoding='utf-8') as log:\n"
+        "    log.write(json.dumps(args) + '\\n')\n"
+        "if args == ['plugin', 'marketplace', 'list', '--json']:\n"
+        "    print(json.dumps({'marketplaces': state['marketplaces']}))\n"
+        "elif args == ['plugin', 'list', '--json']:\n"
+        "    text = Path(os.environ['CODEX_HOME']) / 'config.toml'\n"
+        "    config = text.read_text(encoding='utf-8') if text.exists() else ''\n"
+        "    installed = []\n"
+        "    for item in state['installed']:\n"
+        "        current = dict(item)\n"
+        "        identifier = re.escape(item['pluginId'])\n"
+        "        current['enabled'] = bool(re.search(rf'(?ms)^\\[plugins\\.\"{identifier}\"\\]\\s*\\n.*?^enabled\\s*=\\s*true\\s*$', config))\n"
+        "        installed.append(current)\n"
+        "    print(json.dumps({'installed': installed, 'available': state['available']}))\n"
+        "else:\n"
+        "    raise SystemExit(2)\n",
+    )
+    for name in ("npm", "codex"):
+        script = fake_bin / f"fake-{name}.py"
+        launcher = fake_bin / (f"{name}.cmd" if sys.platform == "win32" else name)
+        if sys.platform == "win32":
+            write(launcher, f'@"{sys.executable}" "{script}" %*\n')
+        else:
+            write(launcher, f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n')
+            launcher.chmod(0o755)
+    env = {
+        **os.environ,
+        "BUILD_AND_VERIFY_PYTHON": sys.executable,
+        "NPM_CONFIG_PREFIX": str(prefix),
+        "HOME": str(tmp_path / "home"),
+        "USERPROFILE": str(tmp_path / "home"),
+        "CODEX_HOME": str(codex_home),
+        "BUILD_NPM_LOG": str(npm_log),
+        "BUILD_REAL_NPM": str(npm),
+        "BUILD_NPM_LATEST": latest,
+        "BUILD_CODEX_LOG": str(codex_log),
+        "BUILD_CODEX_STATE": str(codex_state),
+        "PATH": os.pathsep.join(
+            [str(fake_bin), str(Path(sys.executable).parent), str(Path(node).parent)]
+        ),
+    }
+    blocked = subprocess.run(
+        [executable, "update"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+
+    assert blocked.returncode == 1
+    assert "error: legacy_source_migration_required" in blocked.stderr
+    assert "build-and-verify init --codex" in blocked.stderr
+    assert "build-and-verify init --pi" not in blocked.stderr
+    assert "build-and-verify init --claude" not in blocked.stderr
+    assert not any(json.loads(line)[:2] == ["install", "--global"] for line in npm_log.read_text(encoding="utf-8").splitlines())
+    assert not (Path(env["HOME"]) / ".build-and-verify" / "state.json").exists()
+    assert "plugin remove" not in codex_log.read_text(encoding="utf-8")
+    assert (codex_state.read_bytes(), codex_config.read_bytes()) == codex_before
+
+
 def _git(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["git", *args], cwd=project, text=True, capture_output=True, check=False)
 
