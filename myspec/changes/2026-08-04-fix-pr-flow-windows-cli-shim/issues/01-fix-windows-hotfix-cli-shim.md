@@ -21,3 +21,4 @@
 - 真实冒烟：临时本地远端和 `.cmd` 垫片执行真实 `hotfix` 入口，输出 `status: hotfix_complete`，远端回读匹配。
 - 快速验证：`build-and-verify verify --project .` → `status: passed`。
 - 审查：规范审查无阻断发现；规格审查发现的相对路径风险已修复，针对性复核无阻断发现。
+- 正式规格：现有主规格已覆盖运行 `hotfix.verifyCommand`；Windows 垫片解析属于实现细节，不应用额外规格差异，主规格保持不变。
