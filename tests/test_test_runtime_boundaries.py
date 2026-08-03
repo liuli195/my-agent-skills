@@ -504,6 +504,33 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_release_flow_cli.py::test_preflight_ignores_legacy_build_and_verify_runtime': (
         'covers release-flow preflight ignoring a legacy build-and-verify runtime; function=test_preflight_ignores_legacy_build_and_verify_runtime'
     ),
+    'tests/test_release_flow_cli.py::test_preflight_rejects_changed_marketplace_input_without_bump': (
+        'covers release-flow preflight rejecting changed marketplace input without a selected bump; function=test_preflight_rejects_changed_marketplace_input_without_bump'
+    ),
+    'tests/test_release_flow_cli.py::test_preflight_rejects_changed_npm_input_without_bump_when_not_in_projection': (
+        'covers release-flow preflight checking an NPM target omitted from the marketplace projection; function=test_preflight_rejects_changed_npm_input_without_bump_when_not_in_projection'
+    ),
+    'tests/test_release_flow_cli.py::test_preflight_rejects_shared_npm_input_when_only_one_npm_plugin_is_selected': (
+        'covers release-flow preflight associating shared NPM inputs with every affected target; function=test_preflight_rejects_shared_npm_input_when_only_one_npm_plugin_is_selected'
+    ),
+    'tests/test_release_flow_cli.py::test_preflight_rejects_npm_metadata_drift_without_bump': (
+        'covers release-flow preflight rejecting NPM metadata drift without a selected bump; function=test_preflight_rejects_npm_metadata_drift_without_bump'
+    ),
+    'tests/test_release_flow_cli.py::test_preflight_rejects_selected_content_without_version_advancement': (
+        'covers release-flow preflight rejecting selected content without a baseline version advancement; function=test_preflight_rejects_selected_content_without_version_advancement'
+    ),
+    'tests/test_release_flow_cli.py::test_preflight_accepts_selected_npm_plugin_with_all_versions_advanced': (
+        'covers release-flow preflight accepting a selected NPM target with consistent advanced versions; function=test_preflight_accepts_selected_npm_plugin_with_all_versions_advanced'
+    ),
+    'tests/test_release_flow_cli.py::test_preflight_checks_npm_package_version_with_plugin_manifests': (
+        'covers release-flow preflight checking NPM package metadata alongside plugin manifests; function=test_preflight_checks_npm_package_version_with_plugin_manifests'
+    ),
+    'tests/test_release_flow_cli.py::test_preflight_accepts_projection_only_change_without_plugin_input_drift': (
+        'covers release-flow preflight accepting projection-only changes without plugin input drift; function=test_preflight_accepts_projection_only_change_without_plugin_input_drift'
+    ),
+    'tests/test_release_flow_cli.py::test_preflight_rejects_shared_npm_packer_input_when_only_one_npm_plugin_is_selected': (
+        'covers release-flow preflight associating shared NPM packer input with every affected target; function=test_preflight_rejects_shared_npm_packer_input_when_only_one_npm_plugin_is_selected'
+    ),
     'tests/test_release_flow_cli.py::test_release_workflows_publish_only_verified_selected_npm_packages': (
         'covers release workflow Node manifest loading through the exact relative candidate paths; function=test_release_workflows_publish_only_verified_selected_npm_packages'
     ),
