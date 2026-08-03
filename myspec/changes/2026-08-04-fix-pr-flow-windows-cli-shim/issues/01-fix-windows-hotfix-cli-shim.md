@@ -17,7 +17,7 @@
 
 - 红灯：新增 Windows `.cmd` 解析测试在修复前失败，`shutil.which()` 未被调用。
 - 绿灯：`python -m pytest -q -p no:cacheprovider tests/test_pr_flow_cli.py -k hotfix_verify_command` → `5 passed`。
-- 受影响测试：PR Flow 相关测试 → `258 passed`。
+- 受影响测试：PR Flow 相关测试 → `259 passed`。
 - 真实冒烟：临时本地远端和 `.cmd` 垫片执行真实 `hotfix` 入口，输出 `status: hotfix_complete`，远端回读匹配。
 - 快速验证：`build-and-verify verify --project .` → `status: passed`。
-- 审查：待最终限定差异审查完成后补充。
+- 审查：规范审查无阻断发现；规格审查发现的相对路径风险已修复，针对性复核无阻断发现。
