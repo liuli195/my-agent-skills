@@ -83,3 +83,11 @@ _Avoid_: Orca runtime home
 **客户端迁移（Client Migration）**:
 The explicit convergence of a client from a Legacy MySpec Source（旧 MySpec 来源） to the current managed source while preserving unrelated client state.
 _Avoid_: silent refresh, automatic cleanup
+
+**Release Input（发布输入）**:
+The plugin content and release metadata that a release exposes to its consumers, regardless of whether the consumer receives it from the marketplace or an NPM package.
+_Avoid_: Source-only change, build-only change
+
+**Release Baseline（发布基线）**:
+The latest published representation of a plugin against which the next release determines content and version drift.
+_Avoid_: Working tree, latest source branch
