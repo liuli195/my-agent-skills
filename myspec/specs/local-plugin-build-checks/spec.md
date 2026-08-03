@@ -171,3 +171,13 @@ The repository SHALL（必须）provide a verify command initialized by the buil
 - **WHEN** build（构建检查）或 verify（验证）的子进程输出包含非法 UTF-8 字节并以非零状态退出
 - **THEN** 运行器 MUST 继续报告该检查的非零退出状态
 - **THEN** 运行器 MUST NOT 以 `UnicodeDecodeError`（解码异常）替代原检查结果
+### Requirement: Full Verify required check aggregates platform verification
+The repository's required `Full Verify`（完整验证）GitHub status check SHALL（必须）report success only when every required platform verification job in the Full Verify workflow succeeds.
+
+#### Scenario: All required platform jobs succeed
+- **WHEN** the Linux and Windows platform verification jobs for the current pull request commit both complete successfully
+- **THEN** the required `Full Verify` check MUST succeed
+
+#### Scenario: A required platform job does not succeed
+- **WHEN** either required platform verification job fails, is cancelled, or is skipped
+- **THEN** the required `Full Verify` check MUST fail or remain blocking
