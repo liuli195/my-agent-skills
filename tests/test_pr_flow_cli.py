@@ -4859,6 +4859,96 @@ def test_hotfix_verify_command_preserves_windows_backslash_executable_path(tmp_p
     ]
 
 
+def test_hotfix_verify_command_resolves_windows_cli_shim(tmp_path: Path, monkeypatch) -> None:
+    pr_flow = load_pr_flow_module()
+    calls = []
+    which_calls = []
+
+    def fake_run(command_args, **kwargs):
+        calls.append((command_args, kwargs))
+        return subprocess.CompletedProcess(command_args, 0, "", "")
+
+    def fake_which(command):
+        which_calls.append(command)
+        return r"C:\npm\build-and-verify.cmd"
+
+    monkeypatch.setattr(pr_flow.os, "name", "nt")
+    monkeypatch.setattr(pr_flow, "split_hotfix_verify_command", lambda _: ["build-and-verify", "verify"])
+    monkeypatch.setattr(pr_flow.shutil, "which", fake_which)
+    monkeypatch.setattr(pr_flow.subprocess, "run", fake_run)
+
+    result = pr_flow.run_hotfix_verify_command(tmp_path, "build-and-verify verify")
+
+    assert result.returncode == 0
+    assert which_calls == ["build-and-verify"]
+    assert calls == [
+        (
+            [r"C:\npm\build-and-verify.cmd", "verify"],
+            {
+                "cwd": tmp_path,
+                "check": False,
+                "text": True,
+                "capture_output": True,
+                "shell": False,
+            },
+        )
+    ]
+
+
+def test_hotfix_verify_command_preserves_windows_relative_executable_path(tmp_path: Path, monkeypatch) -> None:
+    pr_flow = load_pr_flow_module()
+    calls = []
+    which_calls = []
+    executable = r".venv\Scripts\python.exe"
+
+    def fake_run(command_args, **kwargs):
+        calls.append((command_args, kwargs))
+        return subprocess.CompletedProcess(command_args, 0, "", "")
+
+    def fake_which(command):
+        which_calls.append(command)
+        return r"C:\npm\unexpected-python.exe"
+
+    monkeypatch.setattr(pr_flow.os, "name", "nt")
+    monkeypatch.setattr(pr_flow, "split_hotfix_verify_command", lambda _: [executable, "-m", "pytest"])
+    monkeypatch.setattr(pr_flow.shutil, "which", fake_which)
+    monkeypatch.setattr(pr_flow.subprocess, "run", fake_run)
+
+    result = pr_flow.run_hotfix_verify_command(tmp_path, f"{executable} -m pytest")
+
+    assert result.returncode == 0
+    assert which_calls == []
+    assert calls[0][0][0] == executable
+
+
+def test_hotfix_verify_command_preserves_missing_command_error(tmp_path: Path, monkeypatch) -> None:
+    pr_flow = load_pr_flow_module()
+    calls = []
+    which_calls = []
+
+    def fake_run(command_args, **kwargs):
+        calls.append((command_args, kwargs))
+        raise FileNotFoundError(2, "missing command", command_args[0])
+
+    def fake_which(command):
+        which_calls.append(command)
+        return None
+
+    monkeypatch.setattr(pr_flow.os, "name", "nt")
+    monkeypatch.setattr(pr_flow, "split_hotfix_verify_command", lambda _: ["missing-command", "verify"])
+    monkeypatch.setattr(pr_flow.shutil, "which", fake_which)
+    monkeypatch.setattr(pr_flow.subprocess, "run", fake_run)
+
+    with pytest.raises(pr_flow.PrFlowError) as error:
+        pr_flow.run_hotfix_verify_command(tmp_path, "missing-command verify")
+
+    assert error.value.reason == "hotfix_verify_failed"
+    assert error.value.details["returncode"] == 127
+    assert which_calls == ["missing-command"]
+    assert calls[0][0] == ["missing-command", "verify"]
+    assert calls[0][1]["shell"] is False
+
+
 def test_hotfix_verify_command_uses_shlex_on_non_windows(tmp_path: Path, monkeypatch) -> None:
     pr_flow = load_pr_flow_module()
     calls = []
