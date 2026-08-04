@@ -601,3 +601,27 @@ complete（完整流程）和 tweak（小改）MUST 只使用当前源/目标提
 - **WHEN** 用户运行 tweak（小改）
 - **THEN** tweak（小改）MUST use the same latest-base、required-check and commit-revalidation（最新基线、必需检查和提交复核）rules as complete（完整流程）
 - **THEN** tweak（小改）MUST skip only review gate（审查门禁）
+### Requirement: PR Flow rejects a same-worktree development toolchain binding
+
+PR Flow（拉取请求流程）MUST 在开发工具的源码工作树与目标工作树相同时安全停止，避免工具链身份记录无法收敛。
+
+#### Scenario: Same-worktree toolchain binding stops before mutation
+
+- **WHEN** 用户运行 `init`（初始化）、`complete`（收尾）或 `tweak`（小改）
+- **AND** 当前开发工具的源码工作树与目标工作树相同
+- **THEN** PR Flow（拉取请求流程）MUST 在更新工具链记录、生成工具链工作流、创建或同步 PR（拉取请求）、推送或合并前停止
+- **THEN** 停止结果 MUST 使用 `toolchain_same_worktree_unsupported` 原因
+- **THEN** 停止详情 MUST 标识源码工作树和目标工作树
+- **THEN** 停止详情 MUST 提供使用隔离目标工作树或发布版工具的恢复动作
+
+#### Scenario: Toolchain binding uses the declared target project
+
+- **WHEN** 用户通过 `--project`（项目参数）指定目标项目
+- **AND** 调用进程的当前目录与目标项目目录不同
+- **THEN** PR Flow（拉取请求流程）MUST 根据目标项目判断开发工具源码绑定关系
+- **THEN** 不同源码工作树和目标工作树 MUST NOT 被误判为同一工作树
+
+#### Scenario: Isolated development toolchain binding remains usable
+
+- **WHEN** 开发工具的源码工作树与目标工作树不同
+- **THEN** `init`、`complete` 和 `tweak` MUST 保持现有工具链身份记录和 PR Flow 生命周期行为
