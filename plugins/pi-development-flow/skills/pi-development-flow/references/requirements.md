@@ -4,13 +4,15 @@
 
 Before presenting Gate 1 output, read [output-template](output-template.md) and use its exact titles, four blocks, and order.
 
-Before a new requirements discussion, read and use `codebase-design` in the current session to form an overall design proposal. Scale it to the Flow Level（流程等级）: for a lightweight change, state only the observable result, scope, and highest public test seam; identify Module（模块）, Interface（接口）, and Seam（接缝） only when the change has structural design.
+Before a new requirements discussion, read `pi-subagent-policy` and complete its pre-delegation check, then delegate the architecture analysis to an `Architect`（架构师）. The Architect task MUST require the subagent to load, read, and use `codebase-design` in read-only mode, inspect the bounded repository, and return source locations and uncertainties together with an overall design proposal scaled to the Flow Level（流程等级）: for a lightweight change, state only the observable result, scope, and highest public test seam; identify Module（模块）, Interface（接口）, and Seam（接缝） only when the change has structural design.
+
+Verify the Architect result as required by `pi-subagent-policy`. If verification fails, cannot verify the result, or finds the result erroneous, incomplete, unacceptable, or unsupported by its sources, stop and report the blocker instead of presenting or using the overall direction. Otherwise, use the accepted result as the design basis and evidence for the overall design proposal. The main agent MUST NOT substitute its own `codebase-design` analysis or present the overall direction before the Architect result is accepted.
 
 After the user confirms the overall direction, and before discussing any detail, read `grill-with-docs` in the current session, then read and use `domain-modeling` as required by that Skill（技能）. MUST NOT substitute ordinary `grilling` for `grill-with-docs`.
 
-Before invoking `to-spec` or `to-tickets`, read the exact Skill and confirm current-session tool-call evidence that `codebase-design`, `grill-with-docs`, and `domain-modeling` were read. Read `wayfinder` only when dependent decisions require its multi-session route. Do not replace this evidence with a self-reported flag or state file.
+Before invoking `to-spec` or `to-tickets`, read the exact Skill and confirm current-session evidence that `pi-subagent-policy` was followed, an `Architect` was delegated to read and use `codebase-design`, and the verified Architect result was used as the design basis. Also confirm current-session tool-call evidence that `grill-with-docs` and `domain-modeling` were read. Read `wayfinder` only when dependent decisions require its multi-session route. Do not replace this evidence with a self-reported flag or state file.
 
-If a required Skill is missing, unreadable, fails to load, or is replaced by another entry, stop and report the blocker, preserved requirement artifacts, and Gate 1 — Requirements Confirmation（需求确认） as the resume point.
+If a required Skill is missing, unreadable, fails to load, cannot be loaded by the effective `Architect` role, produces no verifiable result, or is replaced by another entry, stop and report the blocker, preserved requirement artifacts, and Gate 1 — Requirements Confirmation（需求确认） as the resume point.
 
 ## MUST — Gate（门禁）
 
@@ -61,10 +63,10 @@ Security, data integrity, migration, release, and other protected work stays hig
 
 ## Discussion route（讨论路径）
 
-1. Present the overall design proposal before detail discussion. It states the observable result, scope, out-of-scope work, highest public test seam, and any applicable Module（模块）, Interface（接口）, and Seam（接缝）.
+1. Present the overall design proposal based on the verified Architect analysis before detail discussion. It states the observable result, scope, out-of-scope work, highest public test seam, and any applicable Module（模块）, Interface（接口）, and Seam（接缝）.
 2. Let the user confirm or redirect that direction in normal conversation. Direction Confirmation（方向确认） is not a formal gate: it does not publish artifacts or authorize implementation or delivery.
 3. After Direction Confirmation（方向确认）, use `grill-with-docs` and `domain-modeling` to discuss only unresolved details, one decision at a time. Do not re-ask a detail already answered and confirmed in the current conversation.
-4. Return to the overall design proposal when an answer changes the scope, Module（模块）, Interface（接口）, Seam（接缝）, highest public test seam, or Flow Level（流程等级）; otherwise continue with the unresolved detail.
+4. Return to the overall design proposal when an answer changes the scope, Module（模块）, Interface（接口）, Seam（接缝）, highest public test seam, or Flow Level（流程等级）; delegate a fresh Architect analysis with `codebase-design` and verify it before presenting the revised overall proposal; otherwise continue with the unresolved detail.
 
 Choose the route after Direction Confirmation（方向确认）:
 
