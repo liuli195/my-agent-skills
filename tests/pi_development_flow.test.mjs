@@ -186,7 +186,7 @@ test("the three gates form the required stage state machine", async () => {
   assert.match(gate3, /Gate 3 passes only after[^]*delivery (?:finishes|completes|succeeds)/is);
   assert.match(gate3, /stop state.*Gate 3.*not final completion/is);
   assert.match(gate3, /Development Flow summary uses.*output-template/is);
-  assert.match(gate3, /complete formal specification difference[^]*exact delivery actions[^]*together/is);
+  assert.match(gate3, /formal specification (?:content )?summary[^]*change counts[^]*exact delivery actions[^]*together/is);
   assert.match(gate3, /one (?:single )?confirmation/is);
   assert.match(gate3, /same[^]*confirmation[^]*formal specification[^]*delivery/is);
   assert.match(gate3, /automatically.*(?:apply|execute)|apply.*execute.*automatically/is);
@@ -195,7 +195,7 @@ test("the three gates form the required stage state machine", async () => {
   assert.doesNotMatch(delivery, /Gate 4 —/);
   assert.match(
     formalSpec,
-    /普通[^。]*通过引用提供，?但 Gate 3[^。]*完整正式规格差异和准确交付动作[^。]*同一确认输出中直接展示/,
+    /普通的完整计划、差异和证据 MUST 通过引用提供；Gate 3 的核心摘要 MUST 展示正式规格内容摘要、规格变更数量[^。]*准确交付动作[^。]*MUST NOT 展开完整正式规格差异/,
   );
   const requirementsSpec = section(
     formalSpec,
@@ -234,10 +234,11 @@ test("gate outputs use one exact four-section template", async () => {
   assert.match(template, /Completion Check — 完成检查/);
   assert.match(template, /Gate 1：目标、范围、测试接缝、票据及阻塞关系、变更工作树/);
   assert.match(template, /Gate 2：票据顺序、并行组、执行隔离、验证、审查、风险和停止条件/);
-  assert.match(template, /Gate 3：正式规格差异、校验结果、已知风险和准确交付动作/);
-  assert.match(template, /Gate 3[^]*完整正式规格差异和交付动作[^]*同一确认输出/is);
+  assert.match(template, /Gate 3：正式规格内容摘要、规格变更数量[^]*校验结果、已知风险和准确交付动作/);
+  assert.match(template, /Gate 3[^]*规格内容摘要[^]*规格变更数量[^]*交付动作[^]*同一确认输出/is);
+  assert.doesNotMatch(template, /Gate 3[^]*完整正式规格差异[^]*同一确认输出/is);
   assert.match(template, /Completion Check：完成条件、实际状态和清理残留/);
-  assert.match(skill, /Ordinary long content[^]*Gate 3[^]*complete formal specification difference and exact delivery actions[^]*same output/is);
+  assert.match(skill, /Ordinary long content[^]*Gate 3[^]*formal-specification content summary[^]*change counts[^]*exact delivery actions[^]*same output/is);
   assert.match(skill, /references\/output-template\.md/);
 });
 
