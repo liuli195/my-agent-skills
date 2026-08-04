@@ -181,3 +181,12 @@ The repository's required `Full Verify`（完整验证）GitHub status check SHA
 #### Scenario: A required platform job does not succeed
 - **WHEN** either required platform verification job fails, is cancelled, or is skipped
 - **THEN** the required `Full Verify` check MUST fail or remain blocking
+### Requirement: Repository workflow artifact uploads use current action runtime
+
+The repository's active GitHub workflows MUST use a current artifact upload action runtime whenever they upload release candidates.
+
+#### Scenario: Active release candidate upload uses the current action
+
+- **WHEN** an active repository workflow uploads release candidates
+- **THEN** each `actions/upload-artifact` reference MUST use `actions/upload-artifact@v6`
+- **THEN** no active workflow MUST reference `actions/upload-artifact@v4` or `actions/upload-artifact@v5`

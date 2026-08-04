@@ -150,3 +150,18 @@
 
 - **WHEN** 用户对相同基线重复预览或应用同一 Delta（增量规格）
 - **THEN** 系统保持结果不变
+### Requirement: Delta application preserves non-target specification bytes
+
+MySpec（自有规格） MUST preserve unrelated specification files when applying a Delta（增量规格） that changes only one capability.
+
+#### Scenario: Preview preserves unrelated line endings
+
+- **WHEN** a user previews a Delta that changes one capability and other capability files use `LF` or `CRLF`
+- **THEN** unrelated specification files MUST retain their original bytes and line endings
+- **THEN** changed or newly created specification files MUST use `LF`
+
+#### Scenario: Final application preserves unrelated line endings
+
+- **WHEN** the user applies the same confirmed Delta to the main specification directory
+- **THEN** unrelated specification files MUST retain the same bytes as before application
+- **THEN** the resulting main specification MUST pass validation

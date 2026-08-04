@@ -413,3 +413,13 @@ Release Flow preflight（发布预检） MUST use the selected build-and-verify�
 - **AND** 该目标不在 `bumpPlugins`（提升插件列表）中
 - **THEN** preflight（发布前检查） MUST 拒绝继续
 - **THEN** 错误 MUST 指出该目标需要加入 `bumpPlugins`（提升插件列表）
+### Requirement: Release workflow artifact upload uses current action runtime
+
+The release workflow and its generated template MUST use an artifact upload action with a current Node.js runtime so release logs do not report the Node.js 20 deprecation warning.
+
+#### Scenario: Release candidate upload uses the current action
+
+- **WHEN** the release workflow or its generated template uploads release candidates
+- **THEN** it MUST use `actions/upload-artifact@v6`
+- **THEN** it MUST NOT use `actions/upload-artifact@v4` or `actions/upload-artifact@v5`
+- **THEN** it MUST preserve the existing candidate upload and release publication order
