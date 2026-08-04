@@ -1187,7 +1187,11 @@ def required_checks(project: Path, pr_number: Any) -> list[dict[str, Any]]:
     if not checks:
         raise_required_checks_error(result, pr_number, empty=True)
     if result.returncode != 0:
-        if has_pending_check(checks) or has_failing_check(checks):
+        if gh_auth_required(result) or gh_checks_unavailable(result) or gh_no_required_checks(result):
+            raise_required_checks_error(result, pr_number)
+        if result.returncode == GH_CHECKS_PENDING_EXIT_CODE and has_pending_check(checks):
+            return checks
+        if has_failing_check(checks) and not result.stderr.strip():
             return checks
         raise_required_checks_error(result, pr_number)
     return checks

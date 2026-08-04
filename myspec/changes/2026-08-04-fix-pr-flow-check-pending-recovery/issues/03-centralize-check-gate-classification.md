@@ -19,9 +19,9 @@
 ## Behavior evidence
 
 - Red: 新增 `diagnose` 公开入口回归在基线 `ef0341c2` 上将非必需失败检查误报为阻塞；新增必需检查为空和未知状态探针在实现前分别无法区分等待与检查状态不可用。
-- Green: 定向 PR Flow 测试 `python -m pytest -q -p no:cacheprovider tests/test_pr_flow_cli.py tests/test_pr_flow_plugin_package.py tests/test_pr_flow_pi_extension.py`，结果 `284 passed`。
-- Green: `build-and-verify verify --project .`，结果 `status: passed`；其中 PR Flow 检查结果为 `284 passed`。
-- Green: 审查修复新增查询错误与未知状态混合矩阵；8 个定向回归通过，网络/认证/格式错误不会被汇总等待或失败覆盖；非零退出码的未知空结果也不会回退汇总。
+- Green: 定向 PR Flow 测试 `python -m pytest -q -p no:cacheprovider tests/test_pr_flow_cli.py tests/test_pr_flow_plugin_package.py tests/test_pr_flow_pi_extension.py`，结果 `285 passed`。
+- Green: `build-and-verify verify --project .`，结果 `status: passed`；其中 PR Flow 检查结果为 `285 passed`。
+- Green: 审查修复新增查询错误、部分检查数据与未知状态混合矩阵；网络/认证/格式错误不会被汇总等待或失败覆盖；只有明确退出码 8 的等待数据或无错误的有效失败数据才继续分类。
 - Green: `complete`、`tweak` 和 `diagnose` 公开入口均覆盖检查状态不可用；`complete` 覆盖必需检查为空时按汇总等待/失败回退和未知状态安全停止，规则集重试路径继续通过同一检查门禁归类。
 - Green: 真实 PR #285 用户入口冒烟通过：检查聚合运行期间执行 `complete` 返回 `DISPATCH_REQUIRED / checks_pending`，记录 `no required checks reported` 并从 PR 汇总安全回退，输出可复制 `nextCommand`；同一 PR 的等待主路径在检查完成后继续通过检查门禁，随后仅因冒烟用的临时无效审查模式停止，未执行合并。
 - Green: 冒烟只临时备份并恢复 `.pr-flow/config.yaml`、`.pr-flow/toolchain.json` 以避免本地工具链记录前置条件阻断；前后哈希一致，未修改远端规则集，PR #285 保持打开。

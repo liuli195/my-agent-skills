@@ -3725,7 +3725,9 @@ def test_complete_reports_check_auth_failure_without_rollup_fallback(tmp_path: P
             review_decision="APPROVED",
             head_oid="b" * 40,
         ),
-        required_responses=[("", "gh: please run gh auth login\\n", 4)],
+        required_responses=[
+            (json.dumps([{"bucket": "pending", "name": "ci", "state": "QUEUED"}]), "gh: please run gh auth login\\n", 4),
+        ],
     )
 
     assert result.returncode == 1
@@ -3734,6 +3736,28 @@ def test_complete_reports_check_auth_failure_without_rollup_fallback(tmp_path: P
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["details"]["reason"] == "gh_auth_required"
     assert status["details"]["nextCommand"] == "gh auth status"
+
+
+def test_complete_rejects_partial_check_data_after_unknown_query_error(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
+            review_decision="APPROVED",
+            head_oid="b" * 40,
+        ),
+        required_responses=[
+            (json.dumps([{"bucket": "pending", "name": "ci", "state": "QUEUED"}]), "unexpected query failure\n", 1),
+        ],
+    )
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    assert "checks_unavailable" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "checks_unavailable"
+    assert status["details"]["checkQueryError"]["stderr"] == "unexpected query failure"
 
 
 def test_diagnose_outputs_exception_for_unknown_gh_failure(tmp_path: Path, monkeypatch) -> None:
