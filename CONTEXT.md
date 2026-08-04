@@ -76,6 +76,22 @@ _Avoid_: Tool version pin, installation source
 The Git-visible repository record of selected Toolchain Identities（工具链身份） used by PR Flow（拉取请求流程） CI（持续集成） synchronization.
 _Avoid_: Tool lockfile, CI configuration
 
+**源码工作树（Source Worktree）**:
+The Git worktree that supplies the source implementation for a machine-level MySpec development binding.
+_Avoid_: target worktree, current checkout
+
+**目标工作树（Target Worktree）**:
+The Git worktree whose specification directory is the intended target of a MySpec operation.
+_Avoid_: source worktree, active source
+
+**开发源码绑定（Development Source Binding）**:
+The machine-level association between the bare MySpec CLI（命令行程序） and one source worktree; it is single-valued and switches explicitly.
+_Avoid_: per-worktree binding, automatic source selection
+
+**绑定不一致（Binding Mismatch）**:
+The observable state in which the source worktree and target worktree differ, so MySpec write operations must stop before changing specifications.
+_Avoid_: source drift, stale checkout
+
 **Codex 配置目录（Codex Configuration Directory）**:
 The directory that a lifecycle command intentionally selects as the Codex client profile it reads and writes.
 _Avoid_: inherited Codex home
