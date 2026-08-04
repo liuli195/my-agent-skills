@@ -4729,7 +4729,7 @@ def test_build_and_verify_runner_reads_worktree_changed_files(tmp_path: Path) ->
     ]
 
 
-def test_build_and_verify_cli_baseline_uses_target_detached_worktree_only(
+def test_build_and_verify_cli_baseline_uses_verification_worktree_and_explicit_range(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "project"
@@ -4744,7 +4744,7 @@ def test_build_and_verify_cli_baseline_uses_target_detached_worktree_only(
     command = [
         sys.executable,
         "-c",
-        "from pathlib import Path; Path('run.log').open('a', encoding='utf-8').write('ran\\n')",
+        "from pathlib import Path; p=Path('.build-and-verify/runs/baseline.log'); p.parent.mkdir(parents=True, exist_ok=True); p.open('a', encoding='utf-8').write('ran\\n')",
     ]
     write_runner_config(
         project,
@@ -4791,4 +4791,62 @@ def test_build_and_verify_cli_baseline_uses_target_detached_worktree_only(
     assert verified.returncode == 0, verified.stdout + verified.stderr
     assert "checked: verify.src" in verified.stdout
     assert "status: passed" in verified.stdout
-    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == ["ran"]
+    assert (project / ".build-and-verify" / "runs" / "baseline.log").read_text(
+        encoding="utf-8"
+    ).splitlines() == ["ran"]
+
+    cached = run_build_and_verify_subprocess(
+        "verify",
+        "--project",
+        str(project),
+        "--base",
+        "baseline",
+    )
+    assert cached.returncode == 0, cached.stdout + cached.stderr
+    assert "cache-hit: verify.src" in cached.stdout
+    assert (project / ".build-and-verify" / "runs" / "baseline.log").read_text(
+        encoding="utf-8"
+    ).splitlines() == ["ran"]
+
+    empty_base = git(project, "rev-parse", "HEAD").stdout.strip()
+    empty = run_build_and_verify_subprocess(
+        "verify", "--project", str(project), "--base", empty_base
+    )
+    assert empty.returncode == 0, empty.stdout + empty.stderr
+    assert "status: skipped" in empty.stdout
+    assert "reason: no_changed_files" in empty.stdout
+
+    docs_base = empty_base
+    (project / "docs" / "post-merge.md").write_text("docs\n", encoding="utf-8")
+    assert git(project, "add", "docs/post-merge.md").returncode == 0
+    assert git(project, "commit", "-m", "docs-only").returncode == 0
+    unmatched = run_build_and_verify_subprocess(
+        "verify", "--project", str(project), "--base", docs_base
+    )
+    assert unmatched.returncode == 0, unmatched.stdout + unmatched.stderr
+    assert "status: skipped" in unmatched.stdout
+    assert "reason: no_matching_checks" in unmatched.stdout
+
+    invalid = run_build_and_verify_subprocess(
+        "verify", "--project", str(project), "--base", "does-not-exist"
+    )
+    assert invalid.returncode != 0
+    assert "invalid_baseline" in invalid.stderr
+    assert "status: failed" in invalid.stdout
+
+    full = run_build_and_verify_subprocess(
+        "verify", "--project", str(project), "--full", "--base", "baseline"
+    )
+    assert full.returncode != 0
+    assert "baseline_not_allowed_with_full" in full.stderr
+    assert "status: failed" in full.stdout
+
+    dirty_path = project / "dirty.txt"
+    dirty_path.write_text("dirty\n", encoding="utf-8")
+    dirty = run_build_and_verify_subprocess(
+        "verify", "--project", str(project), "--base", "baseline"
+    )
+    assert dirty.returncode != 0
+    assert "baseline_worktree_not_clean" in dirty.stderr
+    assert "status: failed" in dirty.stdout
+    dirty_path.unlink()

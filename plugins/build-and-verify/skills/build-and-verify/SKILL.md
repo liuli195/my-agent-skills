@@ -36,7 +36,7 @@ build-and-verify verify --project . --full --performance-report
 - 目标仓库只定义 `.build-and-verify/config.json` 的 `build.checks` 和 `verify.checks`。
 - 每个 check（检查项）必须有非空且同一分组内唯一的 `id`。
 - `verify.checks[].paths` 存在时，默认 verify（快速验证）只选择匹配 changed files（变更文件）的检查项。
-- `verify --base <commit-or-ref>`（验证基线）只用于快速验证；系统在目标工作树解析并固定该基线，要求工作树干净，再按固定基线与当前 HEAD（当前提交）的三点差异选择检查项。
+- `verify --base <commit-or-ref>`（验证基线）只用于快速验证；系统在验证工作树解析并固定该基线，要求工作树干净，再按固定基线与当前 HEAD（当前提交）的三点差异选择检查项。
 - 提供验证基线时不得同时使用 `--full`（完整验证）；无效基线、脏工作树或该组合必须失败，不得退回工作区变更选择。
 - `paths` 支持精确文件、目录前缀（如 `docs/`）、尾部递归前缀（如 `src/**`）和 Python fnmatch（通配匹配）模式。
 - 没有 `paths` 的 verify check（验证检查项）是 global check（全局检查项）：默认 verify（快速验证）在存在任意 changed file（变更文件）时选择它，干净工作区不选择它。
