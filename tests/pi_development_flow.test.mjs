@@ -303,6 +303,18 @@ test("implementation keeps direct work optional and delegated work ticket-scoped
   assert.match(implementation, /accepted before the next sequential ticket/i);
 });
 
+test("implementation requires fixed-baseline fast verification evidence", async () => {
+  const implementation = await readFile(
+    resolve(skillRoot, "references", "implementation.md"),
+    "utf8",
+  );
+
+  assert.match(implementation, /build-and-verify verify[^\n]*--base/);
+  assert.match(implementation, /status: passed[^\n]*checked/);
+  assert.match(implementation, /fixed verification baseline/);
+  assert.match(implementation, /empty `checked` value is not valid pass evidence/);
+});
+
 test("implementation requires tool-enforced cwd for writable delegation", async () => {
   const implementation = await readFile(
     resolve(skillRoot, "references", "implementation.md"),

@@ -243,6 +243,7 @@ def _build_parser() -> argparse.ArgumentParser:
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("--project", default=".")
     verify_parser.add_argument("--full", action="store_true")
+    verify_parser.add_argument("--base", dest="baseline")
     verify_parser.add_argument("--performance-report", action="store_true")
     return parser
 
@@ -279,6 +280,7 @@ def main(argv: list[str] | None = None) -> int:
             _runner().run_verify(
                 project,
                 full=args.full,
+                baseline=args.baseline,
                 performance_report=args.performance_report,
                 runtime_version=_runtime_metadata()["runtime_version"],
                 synthetic_changed_paths=(

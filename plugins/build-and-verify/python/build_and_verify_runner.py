@@ -359,6 +359,67 @@ def _changed_files(project: Path) -> list[str]:
     return _dedupe(names)
 
 
+def _git_result(project: Path, *args: str) -> subprocess.CompletedProcess[str] | None:
+    try:
+        return subprocess.run(
+            ["git", *args],
+            cwd=project,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except OSError:
+        return None
+
+
+def _resolve_commit(project: Path, ref: str) -> str | None:
+    result = _git_result(
+        project,
+        "rev-parse",
+        "--verify",
+        "--end-of-options",
+        f"{ref}^{{commit}}",
+    )
+    if result is None or result.returncode != 0:
+        return None
+    commit = result.stdout.strip()
+    return commit if commit and "\n" not in commit else None
+
+
+def _baseline_changed_files(
+    project: Path, baseline: str
+) -> tuple[list[str] | None, str | None]:
+    if not _is_non_empty_string(baseline):
+        return None, "invalid_baseline"
+    baseline_commit = _resolve_commit(project, baseline)
+    if baseline_commit is None:
+        return None, f"invalid_baseline: {baseline}"
+    head_commit = _resolve_commit(project, "HEAD")
+    if head_commit is None:
+        return None, "baseline_git_repository_required"
+    status = _git_result(
+        project,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+    )
+    if status is None or status.returncode != 0:
+        return None, "baseline_git_repository_required"
+    if status.stdout:
+        return None, "baseline_worktree_not_clean"
+    diff = _git_result(
+        project,
+        "diff",
+        "--name-only",
+        "-z",
+        f"{baseline_commit}...{head_commit}",
+    )
+    if diff is None or diff.returncode != 0:
+        return None, "baseline_diff_failed"
+    return _dedupe([path for path in diff.stdout.split("\0") if path]), None
+
+
 def _path_matches(pattern: str, changed_file: str) -> bool:
     raw_pattern = str(pattern).replace("\\", "/").strip()
     directory_pattern = raw_pattern.endswith("/")
@@ -765,6 +826,12 @@ def _config_error(error: ConfigError) -> int:
     return 1
 
 
+def _verify_error(message: str) -> int:
+    print(message, file=sys.stderr)
+    print("status: failed")
+    return 1
+
+
 def _run_scheduled_checks(
     project: Path,
     config: dict[str, Any],
@@ -885,6 +952,7 @@ def run_verify(
     runner: Runner = subprocess.run,
     *,
     full: bool = False,
+    baseline: str | None = None,
     performance_report: bool = False,
     runtime_version: str = "unknown",
     synthetic_changed_paths: list[str] | None = None,
@@ -893,16 +961,24 @@ def run_verify(
         print("missing_runtime_version", file=sys.stderr)
         print("status: failed")
         return 1
+    if baseline is not None and full:
+        return _verify_error("baseline_not_allowed_with_full")
+    if baseline is not None:
+        changed_files, baseline_error = _baseline_changed_files(project, baseline)
+        if baseline_error is not None:
+            return _verify_error(baseline_error)
+        assert changed_files is not None
+    else:
+        changed_files = (
+            _dedupe(synthetic_changed_paths)
+            if synthetic_changed_paths is not None
+            else _changed_files(project)
+        )
     try:
         config = _load_config(project)
     except ConfigError as error:
         return _config_error(error)
     checks = _checks(config, "verify")
-    changed_files = (
-        _dedupe(synthetic_changed_paths)
-        if synthetic_changed_paths is not None
-        else _changed_files(project)
-    )
     config_changed = ".build-and-verify/config.json" in changed_files
     selected = checks if full or config_changed else _selected_checks(checks, changed_files)
     if config_changed and not full:
@@ -982,6 +1058,13 @@ def run_verify(
             print("status: failed")
             return 1
         print("status: passed")
+        return 0
+    if not selected:
+        reason = "no_changed_files" if not changed_files else "no_matching_checks"
+        print(f"checked: {_check_ids(selected)}")
+        print(f"full-not-run: {str(not full).lower()}")
+        print("status: skipped")
+        print(f"reason: {reason}")
         return 0
     cache_misses: list[dict[str, Any]] = []
     for check in selected:

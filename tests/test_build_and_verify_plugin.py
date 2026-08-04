@@ -198,6 +198,7 @@ class FakeRunnerModule:
         project: Path,
         *,
         full: bool = False,
+        baseline: str | None = None,
         performance_report: bool = False,
         runtime_version: str = "unknown",
         synthetic_changed_paths: list[str] | None = None,
@@ -208,6 +209,7 @@ class FakeRunnerModule:
                     project,
                     runner=self.runner,
                     full=full,
+                    baseline=baseline,
                     performance_report=performance_report,
                     runtime_version=runtime_version,
                     synthetic_changed_paths=(self.changed_files if synthetic_changed_paths is None else synthetic_changed_paths),
@@ -231,12 +233,15 @@ def run_check(
     *args: str,
     runner: Callable[..., subprocess.CompletedProcess[Any]] | None = None,
     changed_files: list[str] | None = None,
+    baseline: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     module = load_build_and_verify_module()
     original_runner_module = module._RUNNER_MODULE
     runner = runner or FakeRunner()
     module._RUNNER_MODULE = FakeRunnerModule(module._runner(), runner, changed_files)
     argv = [*args, "--project", str(project)]
+    if baseline is not None:
+        argv.extend(["--base", baseline])
     stdout = io.StringIO()
     stderr = io.StringIO()
     try:
@@ -4722,3 +4727,58 @@ def test_build_and_verify_runner_reads_worktree_changed_files(tmp_path: Path) ->
         "unstaged-check",
         "untracked-check",
     ]
+
+
+def test_build_and_verify_cli_baseline_uses_target_detached_worktree_only(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert git(project, "init", "-q").returncode == 0
+    initialized = run_build_and_verify_subprocess("init", "--project", str(project))
+    assert initialized.returncode == 0, initialized.stdout + initialized.stderr
+    assert git(project, "config", "user.name", "Test").returncode == 0
+    assert git(project, "config", "user.email", "test@example.invalid").returncode == 0
+    (project / "src").mkdir()
+    (project / "src" / "app.py").write_text("base\n", encoding="utf-8")
+    command = [
+        sys.executable,
+        "-c",
+        "from pathlib import Path; Path('run.log').open('a', encoding='utf-8').write('ran\\n')",
+    ]
+    write_runner_config(
+        project,
+        verify_checks=[
+            {
+                "id": "verify.src",
+                "command": command,
+                "paths": ["src/**"],
+                "inputs": ["src/app.py"],
+            }
+        ],
+    )
+    assert git(project, "add", ".").returncode == 0
+    assert git(project, "commit", "-m", "base").returncode == 0
+    baseline = git(project, "rev-parse", "HEAD").stdout.strip()
+    assert baseline
+    assert git(project, "branch", "baseline", baseline).returncode == 0
+    other = tmp_path / "other-worktree"
+    assert git(project, "worktree", "add", str(other), "baseline").returncode == 0
+    (project / "src" / "app.py").write_text("committed change\n", encoding="utf-8")
+    assert git(project, "add", "src/app.py").returncode == 0
+    assert git(project, "commit", "-m", "change").returncode == 0
+    assert git(project, "checkout", "--detach", "HEAD").returncode == 0
+    (other / "unrelated.txt").write_text("other worktree\n", encoding="utf-8")
+
+    verified = run_build_and_verify_subprocess(
+        "verify",
+        "--project",
+        str(project),
+        "--base",
+        "baseline",
+    )
+
+    assert verified.returncode == 0, verified.stdout + verified.stderr
+    assert "checked: verify.src" in verified.stdout
+    assert "status: passed" in verified.stdout
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == ["ran"]
