@@ -570,7 +570,8 @@ def test_cleanup_handles_windows_long_paths_through_cli(tmp_path: Path, monkeypa
     git(controller, "commit", "-m", "feature")
     git(controller, "push", "-u", "origin", "feature/example")
     git(controller, "checkout", "main")
-    git(controller, "push", "origin", "feature/example:main")
+    git(controller, "merge", "--ff-only", "feature/example")
+    git(controller, "push", "origin", "main")
     git(controller, "worktree", "add", str(target), "feature/example")
 
     deep = target / ".local" / "spec-work"
@@ -581,6 +582,8 @@ def test_cleanup_handles_windows_long_paths_through_cli(tmp_path: Path, monkeypa
     artifact.write_text("{}\n", encoding="utf-8")
     assert len(str(artifact)) > 260
     remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
+    main_before = git(controller, "rev-parse", "HEAD")
+    assert main_before == remote_base
     module = load_pr_flow_module()
     monkeypatch.setattr(module, "find_orca_worktree_id", lambda *_: None)
 
@@ -590,7 +593,7 @@ def test_cleanup_handles_windows_long_paths_through_cli(tmp_path: Path, monkeypa
     assert not target.exists()
     assert "target" not in git(controller, "worktree", "list", "--porcelain")
     assert git(controller, "branch", "--show-current") == "main"
-    assert git(controller, "rev-parse", "HEAD") == remote_base
+    assert git(controller, "rev-parse", "HEAD") == main_before
     core_longpaths = subprocess.run(
         ["git", "config", "--local", "--get", "core.longpaths"],
         cwd=controller,
