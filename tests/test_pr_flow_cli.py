@@ -3716,6 +3716,51 @@ def test_public_entries_do_not_use_rollup_after_check_query_error(
     assert "status: merge_complete" not in result.stdout
 
 
+@pytest.mark.parametrize("command", ["complete", "tweak", "diagnose"])
+def test_public_entries_use_pending_rollup_when_required_checks_are_not_reported(
+    tmp_path: Path,
+    monkeypatch,
+    command: str,
+) -> None:
+    pending = pr_view_json(
+        checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
+        review_decision="APPROVED",
+        head_oid="b" * 40,
+    )
+    required_response = ("", "no checks reported on the 'branch'\\n", 1)
+    if command == "complete":
+        project, result = run_complete_in_process(
+            tmp_path,
+            monkeypatch,
+            pr_stdout=pending,
+            required_responses=[required_response],
+            wait_config={"timeoutSeconds": 0, "pollSeconds": 1},
+        )
+    elif command == "tweak":
+        project, result, _ = run_tweak_in_process(
+            tmp_path,
+            monkeypatch,
+            reason="small docs polish",
+            checks=json.loads(pending)["statusCheckRollup"],
+            required_response=required_response,
+        )
+    else:
+        project, result = run_diagnose_in_process(
+            tmp_path,
+            monkeypatch,
+            pr_stdout=pending,
+            required_response=required_response,
+        )
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["command"] == command
+    assert status["details"]["reason"] == "checks_pending"
+    assert status["details"]["checkQueryError"]["fallbackToSummary"] is True
+    assert "status: merge_complete" not in result.stdout
+
+
 def test_complete_reports_check_auth_failure_without_rollup_fallback(tmp_path: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
         tmp_path,

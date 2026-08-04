@@ -652,7 +652,7 @@ GH_CHECKS_UNAVAILABLE_MARKERS = (
     "could not resolve",
     "tls",
 )
-GH_NO_REQUIRED_CHECKS_MARKERS = ("no required checks reported",)
+GH_NO_REQUIRED_CHECKS_MARKERS = ("no required checks reported", "no checks reported")
 
 RECOVERABLE_NEXT_ACTIONS = {
     "gh_auth_required": {
