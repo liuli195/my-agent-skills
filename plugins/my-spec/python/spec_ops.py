@@ -11,7 +11,12 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from management import ManagementError, add_management_parsers, run_management
+from management import (
+    ManagementError,
+    add_management_parsers,
+    run_management,
+    validate_spec_write_binding,
+)
 
 
 REQUIREMENT = re.compile(r"^### Requirement: (\S.*)$")
@@ -342,6 +347,7 @@ def apply_delta(
     specs_fingerprint: str,
     input_fingerprint: str,
 ) -> None:
+    validate_spec_write_binding(specs_root)
     state = _load_state(work_root)
     _assert_fingerprints(state, specs_fingerprint, input_fingerprint)
     summary = _state_summary(state)
