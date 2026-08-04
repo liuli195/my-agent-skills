@@ -73,7 +73,7 @@ def stub_toolchain_identities(monkeypatch):
     monkeypatch.setattr(
         load_pr_flow_module(),
         "toolchain_identities",
-        lambda: {
+        lambda _project: {
             "myspec": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": MYSPEC_VERSION},
             "build-and-verify": {
                 "mode": "release",
@@ -908,21 +908,25 @@ def init_feature_branch(project: Path) -> None:
     git(project, "commit", "-m", "feature")
 
 
-def write_fake_gh(bin_dir: Path, *, stdout: str = "", stderr: str = "", exit_code: int = 0) -> Path:
-    bin_dir.mkdir()
+def write_fake_gh(
+    bin_dir: Path,
+    *,
+    stdout: str = "",
+    stderr: str = "",
+    exit_code: int = 0,
+    calls_path: Path | None = None,
+) -> Path:
+    bin_dir.mkdir(exist_ok=True)
     fake_script = bin_dir / "gh_fake.py"
-    fake_script.write_text(
-        "\n".join(
-            [
-                "import sys",
-                f"sys.stdout.write({stdout!r})",
-                f"sys.stderr.write({stderr!r})",
-                f"raise SystemExit({exit_code})",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    lines = [
+        "import sys",
+        f"sys.stdout.write({stdout!r})",
+        f"sys.stderr.write({stderr!r})",
+    ]
+    if calls_path is not None:
+        lines.append(f"open({str(calls_path)!r}, 'a', encoding='utf-8').close()")
+    lines.extend([f"raise SystemExit({exit_code})", ""])
+    fake_script.write_text("\n".join(lines), encoding="utf-8")
     if os.name == "nt":
         launcher = bin_dir / "gh.cmd"
         launcher.write_text(
@@ -1928,7 +1932,7 @@ def test_init_records_toolchain_and_managed_workflow(tmp_path: Path, monkeypatch
             "packageVersion": BUILD_AND_VERIFY_VERSION,
         },
     }
-    monkeypatch.setattr(module, "toolchain_identities", lambda: identities)
+    monkeypatch.setattr(module, "toolchain_identities", lambda _project: identities)
 
     result = invoke_pr_flow(["init", "--project", str(project), "--config", str(draft)], module=module)
 
@@ -6216,23 +6220,34 @@ def test_cleanup_rejects_current_branch_mismatch(tmp_path: Path, monkeypatch) ->
     assert_cleanup_exception(project, result, "current_branch_mismatch")
 
 
-def write_toolchain_cli(bin_dir: Path, reports: dict[str, dict[str, object]]) -> None:
-    bin_dir.mkdir()
+def write_toolchain_cli(
+    bin_dir: Path,
+    reports: dict[str, dict[str, object]],
+    *,
+    cwd_log: Path | None = None,
+) -> None:
+    bin_dir.mkdir(exist_ok=True)
     for command, report in reports.items():
         script = bin_dir / f"{command}.py"
-        script.write_text(
-            "\n".join((
-                "import json",
-                "from pathlib import Path",
-                f"reports = {report!r}",
-                "reports = reports if isinstance(reports, list) else [reports]",
-                "state = Path(__file__).with_suffix('.count')",
-                "index = int(state.read_text() if state.exists() else '0')",
-                "state.write_text(str(index + 1))",
-                "print(json.dumps(reports[min(index, len(reports) - 1)]))",
-            )) + "\n",
-            encoding="utf-8",
-        )
+        lines = [
+            "import json",
+            "from pathlib import Path",
+        ]
+        if cwd_log is not None:
+            lines.extend([
+                f"with Path({str(cwd_log)!r}).open('a', encoding='utf-8') as handle:",
+                "    handle.write(str(Path.cwd()) + '\\n')",
+            ])
+        lines.extend([
+            f"reports = {report!r}",
+            "reports = reports if isinstance(reports, list) else [reports]",
+            "state = Path(__file__).with_suffix('.count')",
+            "index = int(state.read_text() if state.exists() else '0')",
+            "state.write_text(str(index + 1))",
+            "print(json.dumps(reports[min(index, len(reports) - 1)]))",
+            "",
+        ])
+        script.write_text("\n".join(lines), encoding="utf-8")
         if os.name == "nt":
             (bin_dir / f"{command}.cmd").write_text(
                 f'@echo off\n"{sys.executable}" "%~dp0{command}.py" %*\n', encoding="utf-8"
@@ -6263,6 +6278,128 @@ def initialized_toolchain_project(tmp_path: Path, bin_dir: Path) -> Path:
 
 def sync_through_public_complete(bin_dir: Path, project: Path) -> subprocess.CompletedProcess[str]:
     return run_public_pr_flow(bin_dir, "complete", "--project", str(project), "--summary", "s", "--scope", "s")
+
+
+def dev_toolchain_reports(project: Path, *, worktree_match: bool, complete_identity: bool = True) -> dict[str, dict[str, object]]:
+    source_worktree = project if worktree_match else project.parent / "tool-source"
+    binding = {
+        "sourceWorktree": str(source_worktree),
+        "sourceCommit": "a" * 40,
+        "targetWorktree": str(project),
+        "targetCommit": "b" * 40,
+        "worktreeMatch": worktree_match,
+    }
+    reports: dict[str, dict[str, object]] = {}
+    for key, (_, package_name, package_directory) in load_pr_flow_module().TOOLCHAIN_TOOLS.items():
+        toolchain: dict[str, object] = {
+            "mode": "dev",
+            "packageName": package_name,
+        }
+        if complete_identity:
+            toolchain.update(
+                {
+                    "sourceRepository": "https://github.com/liuli195/my-agent-skills",
+                    "sourceCommit": "a" * 40,
+                    "packageDirectory": package_directory,
+                }
+            )
+        reports[key] = {"toolchain": toolchain, "binding": binding}
+    return reports
+
+
+def test_init_stops_before_writing_for_same_worktree_toolchain_binding(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    cwd_log = tmp_path / "doctor-cwd.log"
+    write_toolchain_cli(bin_dir, dev_toolchain_reports(project, worktree_match=True, complete_identity=False), cwd_log=cwd_log)
+    gh_calls = bin_dir / "gh.calls"
+    write_fake_gh(bin_dir, exit_code=99, calls_path=gh_calls)
+
+    result = run_public_pr_flow(bin_dir, "init", "--project", str(project), "--config", str(config))
+
+    assert result.returncode == 1
+    assert "status: toolchain_same_worktree_unsupported" in result.stdout
+    assert f"sourceWorktree: {project}" in result.stdout
+    assert f"targetWorktree: {project}" in result.stdout
+    assert "isolated" in result.stdout.lower()
+    assert not (project / ".pr-flow" / "toolchain.json").exists()
+    assert not (project / ".github" / "workflows" / "pr-flow-toolchain.yml").exists()
+    assert cwd_log.read_text(encoding="utf-8").splitlines() == [str(project.resolve())]
+    assert not gh_calls.exists()
+
+
+@pytest.mark.parametrize(
+    ("command", "extra"),
+    [
+        ("complete", ["--summary", "s", "--scope", "s"]),
+        ("tweak", ["--reason", "r", "--summary", "s", "--scope", "s"]),
+    ],
+)
+def test_lifecycle_stops_before_toolchain_commit_for_same_worktree_binding(
+    tmp_path: Path, command: str, extra: list[str]
+) -> None:
+    init_bin = tmp_path / "init-bin"
+    release_reports = {
+        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3"}},
+        "build-and-verify": {
+            "toolchain": {
+                "mode": "release",
+                "packageName": "@liuli195/build-and-verify",
+                "packageVersion": "1.2.3",
+            }
+        },
+    }
+    write_toolchain_cli(init_bin, release_reports)
+    project = initialized_toolchain_project(tmp_path, init_bin)
+    managed_paths = [
+        project / ".pr-flow" / "toolchain.json",
+        project / ".github" / "workflows" / "pr-flow-toolchain.yml",
+    ]
+    before_managed = {path: path.read_bytes() for path in managed_paths}
+    before_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=project, check=True, text=True, capture_output=True
+    ).stdout.strip()
+
+    run_bin = tmp_path / "run-bin"
+    cwd_log = tmp_path / "doctor-cwd.log"
+    write_toolchain_cli(run_bin, dev_toolchain_reports(project, worktree_match=True, complete_identity=False), cwd_log=cwd_log)
+    gh_calls = run_bin / "gh.calls"
+    write_fake_gh(run_bin, exit_code=99, calls_path=gh_calls)
+    result = run_public_pr_flow(run_bin, command, "--project", str(project), *extra)
+
+    assert result.returncode == 1
+    assert "toolchain_same_worktree_unsupported" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "toolchain_same_worktree_unsupported"
+    assert {path: path.read_bytes() for path in managed_paths} == before_managed
+    after_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=project, check=True, text=True, capture_output=True
+    ).stdout.strip()
+    assert after_head == before_head
+    assert subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=project, check=False).returncode == 0
+    assert cwd_log.read_text(encoding="utf-8").splitlines() == [str(project.resolve())]
+    assert not gh_calls.exists()
+
+
+def test_init_uses_target_project_as_toolchain_doctor_cwd(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    cwd_log = tmp_path / "doctor-cwd.log"
+    write_toolchain_cli(bin_dir, dev_toolchain_reports(project, worktree_match=False), cwd_log=cwd_log)
+
+    result = run_public_pr_flow(bin_dir, "init", "--project", str(project), "--config", str(config))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert cwd_log.read_text(encoding="utf-8").splitlines() == [str(project.resolve())] * 2
+    assert "checkout --detach " + "a" * 40 in (
+        project / ".github" / "workflows" / "pr-flow-toolchain.yml"
+    ).read_text(encoding="utf-8")
 
 
 def test_complete_commits_only_changed_managed_file_through_public_cli(tmp_path: Path) -> None:
