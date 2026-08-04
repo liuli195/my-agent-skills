@@ -444,6 +444,24 @@ def test_required_checks_use_required_flag_and_bucket_states(tmp_path: Path, mon
     assert module.has_pending_check(checks)
 
 
+def test_required_checks_accept_pending_exit_with_valid_check_data(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    module = load_pr_flow_module()
+    gh_stub = CommandStub()
+    payload = [{"bucket": "pending", "name": "ci", "state": "QUEUED"}]
+    gh_stub.add(
+        ["pr", "checks", "12", "--required", "--json", "bucket,name,state,workflow,link"],
+        stdout=json.dumps(payload),
+        returncode=8,
+    )
+    monkeypatch.setattr(module, "gh", gh_stub)
+
+    checks = module.required_checks(tmp_path, 12)
+
+    assert checks == payload
+
+
 def test_hotfix_stops_when_target_moves_during_verification(tmp_path: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
@@ -834,10 +852,11 @@ def allow_current_base(git_stub, source_oid: str) -> None:
     git_stub.add(["merge-base", "--is-ancestor", "a" * 40, source_oid])
 
 
-def allow_required_checks(gh_stub, bucket: str = "pass") -> None:
+def allow_required_checks(gh_stub, bucket: str = "pass", *, returncode: int = 0) -> None:
     gh_stub.add(
         ["pr", "checks", "12", "--required", "--json", "bucket,name,state,workflow,link"],
         stdout=json.dumps([{"bucket": bucket, "name": "ci", "state": bucket.upper()}]),
+        returncode=returncode,
     )
 
 
@@ -1564,6 +1583,8 @@ def run_complete_in_process(
     merge_returncode: int = 0,
     merge_stderr: str = "",
     required_buckets: tuple[str, ...] | None = None,
+    required_exit_codes: tuple[int, ...] | None = None,
+    wait_config: dict[str, int] | None = None,
 ) -> tuple[Path, subprocess.CompletedProcess[str]]:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
@@ -1572,6 +1593,11 @@ def run_complete_in_process(
     project = tmp_path / "project"
     project.mkdir()
     write_complete_pr_flow_config(project, review_mode=review_mode, merge_strategy=merge_strategy)
+    if wait_config is not None:
+        config_path = project / ".pr-flow" / "config.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        config["defaults"]["wait"] = wait_config
+        config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
     gh_stub = CommandStub(consume=pr_responses is not None)
     if pr_responses is None:
         assert pr_stdout is not None
@@ -1586,8 +1612,9 @@ def run_complete_in_process(
             rollup = json.loads(pr_stdout).get("statusCheckRollup", [])
             if any(check.get("status") in {"IN_PROGRESS", "QUEUED"} for check in rollup):
                 required_buckets = ("pending",)
-    for bucket in required_buckets:
-        allow_required_checks(gh_stub, bucket)
+    for index, bucket in enumerate(required_buckets):
+        returncode = required_exit_codes[index] if required_exit_codes is not None else 0
+        allow_required_checks(gh_stub, bucket, returncode=returncode)
     if cleanup_stdout is not None:
         gh_stub.add(
             ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
@@ -3766,6 +3793,38 @@ def test_diagnose_outputs_stop_state_matrix(
 
 
 @pytest.mark.parametrize(
+    ("checks", "expected_status", "expected_reason"),
+    [
+        (
+            [{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
+            "DISPATCH_REQUIRED",
+            "checks_pending",
+        ),
+        (
+            [{"name": "ci", "status": "COMPLETED", "conclusion": "CANCELLED"}],
+            "REPLY_OR_FIX_REQUIRED",
+            "checks_or_review_blocking",
+        ),
+    ],
+)
+def test_diagnose_stop_output_includes_recovery_action(
+    tmp_path: Path,
+    monkeypatch,
+    checks: list[dict[str, object]],
+    expected_status: str,
+    expected_reason: str,
+) -> None:
+    project, result = run_diagnose_in_process(tmp_path, monkeypatch, pr_stdout=pr_view_json(checks=checks))
+
+    assert result.returncode == 1
+    assert f"status: {expected_status}" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == expected_reason
+    action = status["details"]["nextAction"]
+    assert f"nextAction: {action}" in result.stdout
+
+
+@pytest.mark.parametrize(
     ("state", "is_active"),
     [("OPEN", True), ("MERGED", False), ("CLOSED", False)],
 )
@@ -4437,6 +4496,56 @@ def test_complete_returns_checks_pending_when_ruleset_recovery_wait_times_out(tm
     action = status["details"].get("nextAction") or status["details"].get("nextCommand")
     assert action is not None
     assert "checks" in action
+    assert f"nextAction: {action}" in result.stdout or f"nextCommand: {action}" in result.stdout
+
+
+def test_complete_waits_after_pending_exit_and_merges_when_checks_pass(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_pr_flow_module()
+    completed_pr = pr_view_json(
+        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        review_decision="APPROVED",
+        head_oid="b" * 40,
+    )
+
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(module, "run_cleanup", lambda _args: 0)
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_responses=[(completed_pr, "", 0)] * 4,
+        required_buckets=("pending", "pass"),
+        required_exit_codes=(8, 0),
+        wait_config={"timeoutSeconds": 30, "pollSeconds": 1},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: merge_complete" in result.stdout
+
+
+@pytest.mark.parametrize("bucket", ["fail", "cancel"])
+def test_complete_failed_or_cancelled_required_checks_are_not_waited(
+    tmp_path: Path, monkeypatch, bucket: str
+) -> None:
+    completed_pr = pr_view_json(
+        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        review_decision="APPROVED",
+        head_oid="b" * 40,
+    )
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=completed_pr,
+        cleanup_stdout=cleanup_pr_view_json(),
+        required_buckets=(bucket,),
+    )
+
+    assert result.returncode == 1
+    assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
+    assert "status: merge_complete" not in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "checks_or_review_blocking"
 
 
 def test_complete_waits_for_checks_after_ruleset_block_then_retries_merge(tmp_path: Path, monkeypatch) -> None:

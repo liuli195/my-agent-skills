@@ -29,6 +29,7 @@ PR_VIEW_FIELDS = "number,state,mergeStateStatus,reviewDecision,headRefName,baseR
 BLOCKING_REVIEW_DECISIONS = {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}
 SUPPORTED_REVIEW_GATE_MODES = {"github", "skip"}
 DEFAULT_GH_PR_VIEW_RETRIES = 3
+GH_CHECKS_PENDING_EXIT_CODE = 8
 REQUIRED_CHECK_FIELDS = "bucket,name,state,workflow,link"
 GH_PR_VIEW_RETRIES_ENV = "PR_FLOW_GH_PR_VIEW_RETRIES"
 PR_TEMPLATE = """## Summary
@@ -418,9 +419,14 @@ def write_status(project: Path, command: str, status: str, details: dict) -> Non
         (runs_dir / f"{stable_key(source_branch)}.json").write_text(text, encoding="utf-8")
 
 
-def print_stop(status: str, message: str) -> None:
+def print_stop(status: str, message: str, details: dict[str, Any] | None = None) -> None:
     print(f"status: {status}")
     print(message)
+    if details is not None:
+        for key in ("nextAction", "nextCommand"):
+            value = details.get(key)
+            if isinstance(value, str) and value:
+                print(f"{key}: {value}")
 
 
 def git(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -621,7 +627,7 @@ def active_lock_details(project: Path) -> dict[str, Any] | None:
 
 def stop(project: Path, command: str, status: str, message: str, details: dict[str, Any]) -> int:
     write_status(project, command, status, details)
-    print_stop(status, message)
+    print_stop(status, message, details)
     return 1
 
 
@@ -1107,14 +1113,14 @@ def required_checks(project: Path, pr_number: Any) -> list[dict[str, Any]]:
         "--json",
         REQUIRED_CHECK_FIELDS,
     )
-    if result.returncode != 0:
-        raise PrFlowError(
-            "checks_or_review_blocking",
-            command_failure_details("checks_or_review_blocking", result),
-        )
     try:
         checks = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
+        if result.returncode != 0:
+            raise PrFlowError(
+                "checks_or_review_blocking",
+                command_failure_details("checks_or_review_blocking", result),
+            ) from exc
         raise PrFlowError(
             "checks_or_review_blocking",
             {"reason": "checks_or_review_blocking", "error": str(exc)},
@@ -1123,6 +1129,15 @@ def required_checks(project: Path, pr_number: Any) -> list[dict[str, Any]]:
         raise PrFlowError(
             "checks_or_review_blocking",
             {"reason": "checks_or_review_blocking", "pr": pr_number},
+        )
+    if result.returncode != 0:
+        if result.returncode == GH_CHECKS_PENDING_EXIT_CODE and has_pending_check(checks):
+            return checks
+        if has_failing_check(checks):
+            return checks
+        raise PrFlowError(
+            "checks_or_review_blocking",
+            command_failure_details("checks_or_review_blocking", result),
         )
     return checks
 
@@ -1138,7 +1153,7 @@ def has_pending_check(checks: list[Any]) -> bool:
 
 
 def has_failing_check(checks: list[Any]) -> bool:
-    failing_values = {"FAILURE", "FAILED", "ERROR", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE"}
+    failing_values = {"FAILURE", "FAILED", "ERROR", "TIMED_OUT", "CANCELLED", "CANCELED", "STARTUP_FAILURE"}
     for check in checks:
         if not isinstance(check, dict):
             continue
