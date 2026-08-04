@@ -141,6 +141,10 @@ test("the three gates form the required stage state machine", async () => {
   const requirements = await readFile(resolve(skillRoot, "references", "requirements.md"), "utf8");
   const implementation = await readFile(resolve(skillRoot, "references", "implementation.md"), "utf8");
   const delivery = await readFile(resolve(skillRoot, "references", "delivery.md"), "utf8");
+  const formalSpec = await readFile(
+    resolve(repoRoot, "myspec", "specs", "pi-development-flow", "spec.md"),
+    "utf8",
+  );
   assert.match(
     section(requirements, /### Gate 1 — Requirements Confirmation/, /\n### Gate |\n## /),
     /Gate 2 — Implementation and Verification/,
@@ -171,6 +175,12 @@ test("the three gates form the required stage state machine", async () => {
   assert.doesNotMatch(gate3, /two scoped, sequential confirmations|without the second confirmation, do not/is);
   assert.doesNotMatch(gate3, /After Gate 3 .* passes, run `my-spec-add`/);
   assert.doesNotMatch(delivery, /Gate 4 —/);
+  assert.match(
+    formalSpec,
+    /普通[^。]*通过引用提供，?但 Gate 3[^。]*完整正式规格差异和准确交付动作[^。]*同一确认输出中直接展示/,
+  );
+  assert.match(formalSpec, /不改写正式规格差异内容、不重复提问/);
+  assert.match(formalSpec, /每个阶段开始前向用户展示阶段依赖和适用门禁/);
 });
 
 test("gate outputs use one exact four-section template", async () => {
@@ -197,6 +207,7 @@ test("gate outputs use one exact four-section template", async () => {
   assert.match(template, /Gate 3：正式规格差异、校验结果、已知风险和准确交付动作/);
   assert.match(template, /Gate 3[^]*完整正式规格差异和交付动作[^]*同一确认输出/is);
   assert.match(template, /Completion Check：完成条件、实际状态和清理残留/);
+  assert.match(skill, /Ordinary long content[^]*Gate 3[^]*complete formal specification difference and exact delivery actions[^]*same output/is);
   assert.match(skill, /references\/output-template\.md/);
 });
 

@@ -17,7 +17,7 @@ Orchestrate one GitHub-hosted repository change by composing the repository's ex
 
 ## Output Contract（输出契约）
 
-Every gate and completion result MUST use the fixed titles and exact four-block format in [output-template](references/output-template.md). Read that reference before presenting the result. Do not rename, reorder, merge, split, or add output blocks; put only the current gate's essential points in the summary and use citations for long content.
+Every gate and completion result MUST use the fixed titles and exact four-block format in [output-template](references/output-template.md). Read that reference before presenting the result. Do not rename, reorder, merge, split, or add output blocks; put only the current gate's essential points in the summary. Ordinary long content uses citations, but Gate 3's complete formal specification difference and exact delivery actions MUST be shown directly in the same output; citations only provide sources.
 
 ## Gates（门禁）
 

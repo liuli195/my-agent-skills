@@ -17,7 +17,7 @@
 ## Behavior evidence（行为证据）
 
 - Red（红灯）：契约检查在旧四门禁标题仍存在或新三门禁状态转移尚不存在时失败；测试曾按预期失败 3 项。
-- Green（绿灯）：`node --test tests/pi_development_flow.test.mjs` 通过，11 项测试全部通过，覆盖新标题、状态转移、输出模板、Gate 3 一次确认自动应用和交付、Completion Check。
-- Smoke（冒烟）：本地 Pi Package 资源加载入口发现 `pi-development-flow` Skill 及其全部参考文档；Build and Verify（构建与验证）快速验证通过，67 项契约检查和 11 项运行边界检查通过。
-- Review（审查）：以 `4017eef7` 为固定点完成 Standards（规范）与 Spec（规格）审查；发现的 Gate 2/Gate 3 状态语义问题已在 `121f6ac1` 修复，用户指出重复确认后已在 `3f919550` 和 `d3ea3f89` 统一为一次确认自动执行，并完成验证，无阻断项。
+- Green（绿灯）：`node --test tests/pi_development_flow.test.mjs` 通过，11 项测试全部通过；Build and Verify（构建与验证）中的本地包契约测试 13 项通过，覆盖新标题、状态转移、输出模板、Gate 3 一次确认自动应用和交付、Completion Check。
+- Smoke（冒烟）：本地 Pi Package 资源加载入口发现 `pi-development-flow` Skill 及其全部参考文档；Build and Verify（构建与验证）快速验证通过，67 项检查和 11 项运行边界检查通过，正式规格校验通过。
+- Review（审查）：Gate 2 重新开放后以 `02a551f5` 为固定点复核全部后续差异；先前发现的正式规格引用例外和根 Skill 输出契约冲突已修复，最终 Standards（规范）与 Spec（规格）复核无阻断项。
 - Unresolved risk（未解决风险）：正式主规格已应用；交付仍需在 Gate 3 的同一次确认后自动执行。

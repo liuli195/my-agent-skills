@@ -114,9 +114,32 @@
 
 - **WHEN** 某个已编号和命名的门禁因正式能力无法满足前置条件而进入初始化
 - **THEN** 系统记录来源门禁，展示缺失项、初始化能力、修改范围、验证方式和返回位置，并等待独立初始化授权；成功后返回同一门禁重新检查，而不把初始化授权视为该门禁已经通过
+### Requirement: 正式规格与 PR 交付闭环
+
+系统 MUST 在实施审查及验证通过后完成正式规格存档，并在 Gate 3 — Specification Archival and Delivery（规格存档并交付）的一次确认中同时授权正式规格应用和交付；随后完成交付检查、结果合并、目标结果同步和非强制安全清理。Development Flow（开发流程）MUST 默认排除本地安装、客户端同步、市场刷新和发布，除非用户明确请求某个具体动作。
+
+#### Scenario: 交付尚未实际完成
+
+- **WHEN** 交付已经开始但仍在等待检查、暂停或其他可恢复状态
+- **THEN** 系统报告可恢复暂停，不宣告 Development Flow 完成
+
+#### Scenario: 开发流程全部完成
+
+- **WHEN** 正式规格有效、交付已成功结束、目标结果已同步，且所有可安全移除的内容均已清理
+- **THEN** 系统报告本次 Development Flow 全部完成，不因未请求的本地安装、客户端同步、市场刷新或发布而阻塞
+
+#### Scenario: 用户未请求本地动作
+
+- **WHEN** 用户没有明确请求本地安装、客户端同步、市场刷新或发布
+- **THEN** 系统不询问、不列出、不执行这些动作，也不把它们记录为默认后续任务
+
+#### Scenario: 用户明确请求一个本地动作
+
+- **WHEN** 用户明确指定一个本地动作
+- **THEN** 系统只执行并验证该项，不从“继续收尾”等一般表达推断其他动作授权
 ### Requirement: 单项开发变更三阶段编排
 
-系统 MUST 把一项开发变更编排为 Requirements（需求）、Implementation（实施）和 Delivery（交付）三个阶段，并以三个固定编号和名称的门禁追踪阶段状态：Gate 1 — Requirements Confirmation（需求确认）、Gate 2 — Implementation and Verification（实施和验证）和 Gate 3 — Specification Archival and Delivery（规格存档并交付）。Requirements、Implementation 和 Delivery MUST 在执行入口先声明阶段依赖和适用门禁；每个门禁 MUST 声明使用条件、上一依赖门禁、检查清单、待用户确认内容清单和下一步门禁。
+系统 MUST 把一项开发变更编排为 Requirements（需求）、Implementation（实施）和 Delivery（交付）三个阶段，并以三个固定编号和名称的门禁追踪阶段状态：Gate 1 — Requirements Confirmation（需求确认）、Gate 2 — Implementation and Verification（实施和验证）和 Gate 3 — Specification Archival and Delivery（规格存档并交付）。Requirements、Implementation 和 Delivery MUST 在每个阶段开始前向用户展示阶段依赖和适用门禁；每个门禁 MUST 声明使用条件、上一依赖门禁、检查清单、待用户确认内容清单和下一步门禁。
 
 #### Scenario: 完成需求阶段
 
@@ -149,7 +172,7 @@
 - **THEN** 系统根据现有需求、行为证据和交付结果识别上一已通过门禁、当前未完成门禁及下一步门禁，按编号和名称展示证据，读取当前阶段及其依赖，并且不从“继续”或“恢复”推断授权
 ### Requirement: 结构化门禁输出与最终完成检查
 
-系统 MUST 为三个正式门禁和 Gate 3 之后的 Completion Check（完成检查）使用固定标题及以下四个固定区块，且顺序不可改变：`状态与待确认`、`核心内容摘要`、`引用`、`下一步`。核心摘要 MUST 只展示当前门禁的判断重点，完整计划、差异和证据 MUST 通过引用提供；Completion Check 不是第四个正式授权门禁。
+系统 MUST 为三个正式门禁和 Gate 3 之后的 Completion Check（完成检查）使用固定标题及以下四个固定区块，且顺序不可改变：`状态与待确认`、`核心内容摘要`、`引用`、`下一步`。核心摘要 MUST 只展示当前门禁的判断重点；普通的完整计划、差异和证据 MUST 通过引用提供，但 Gate 3 的完整正式规格差异和准确交付动作 MUST 在同一确认输出中直接展示，引用只提供来源；Completion Check 不是第四个正式授权门禁。
 
 #### Scenario: 输出门禁摘要
 
@@ -159,7 +182,7 @@
 #### Scenario: Gate 3 一次确认规格和交付
 
 - **WHEN** Gate 3 — Specification Archival and Delivery（规格存档并交付）需要确认正式规格差异和交付动作
-- **THEN** Development Flow（开发流程）在同一输出中展示完整正式规格差异和交付动作，并以一次确认同时授权两者；系统不重写、包裹或重复提问
+- **THEN** Development Flow（开发流程）在同一输出中展示完整正式规格差异和交付动作，并以一次确认同时授权两者；系统不改写正式规格差异内容、不重复提问
 
 #### Scenario: 交付后确认最终完成
 
@@ -175,26 +198,3 @@
 
 - **WHEN** 用户拒绝强制清理，或用户授权的受限清理已经结束
 - **THEN** 用户拒绝时系统保留残留并报告恢复位置；受限清理结束后系统重新执行 Completion Check
-### Requirement: 正式规格与 PR 交付闭环
-
-系统 MUST 在实施审查及验证通过后完成正式规格存档，并在 Gate 3 — Specification Archival and Delivery（规格存档并交付）的一次确认中同时授权正式规格应用和交付；随后完成交付检查、结果合并、目标结果同步和非强制安全清理。Development Flow（开发流程）MUST 默认排除本地安装、客户端同步、市场刷新和发布，除非用户明确请求某个具体动作。
-
-#### Scenario: 交付尚未实际完成
-
-- **WHEN** 交付已经开始但仍在等待检查、暂停或其他可恢复状态
-- **THEN** 系统报告可恢复暂停，不宣告 Development Flow 完成
-
-#### Scenario: 开发流程全部完成
-
-- **WHEN** 正式规格有效、交付已成功结束、目标结果已同步，且所有可安全移除的内容均已清理
-- **THEN** 系统报告本次 Development Flow 全部完成，不因未请求的本地安装、客户端同步、市场刷新或发布而阻塞
-
-#### Scenario: 用户未请求本地动作
-
-- **WHEN** 用户没有明确请求本地安装、客户端同步、市场刷新或发布
-- **THEN** 系统不询问、不列出、不执行这些动作，也不把它们记录为默认后续任务
-
-#### Scenario: 用户明确请求一个本地动作
-
-- **WHEN** 用户明确指定一个本地动作
-- **THEN** 系统只执行并验证该项，不从“继续收尾”等一般表达推断其他动作授权
