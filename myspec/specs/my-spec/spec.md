@@ -165,3 +165,23 @@ MySpec（自有规格） MUST preserve unrelated specification files when applyi
 - **WHEN** the user applies the same confirmed Delta to the main specification directory
 - **THEN** unrelated specification files MUST retain the same bytes as before application
 - **THEN** the resulting main specification MUST pass validation
+### Requirement: 开发源码绑定保护规格写入
+
+系统 MUST 在开发源码绑定与目标规格工作树不一致时，拒绝任何会生成预览或修改主规格的规格应用操作，并返回包含绑定不一致标识的可识别错误。
+
+#### Scenario: 开发源码绑定与目标工作树不一致
+
+- **WHEN** 用户在开发模式下从一个源码工作树绑定裸 `myspec` CLI（命令行程序），并对另一个目标工作树执行 `apply-delta`
+- **THEN** 系统 MUST 在创建预览、备份或替换主规格前返回包含 `dev_source_worktree_mismatch` 的非零结果
+- **THEN** 系统 MUST 保持目标规格、预览、备份和本次运行状态不变
+
+#### Scenario: 用户诊断开发源码绑定
+
+- **WHEN** 用户在目标工作树执行 `myspec doctor`
+- **THEN** 系统 MUST 报告源码工作树、源码提交、目标工作树、目标提交以及两者是否匹配
+
+#### Scenario: 用户显式切换目标工作树
+
+- **WHEN** 用户使用 `myspec init --dev --source <目标工作树>` 显式切换开发源码绑定，并在该目标工作树执行规格应用
+- **THEN** 系统 MUST 允许该目标工作树完成预览、原子应用和相同 Delta（增量规格）的稳定重复应用
+- **THEN** 系统 MUST NOT 将该绑定切换解释为支持多个开发工作树并行写入
