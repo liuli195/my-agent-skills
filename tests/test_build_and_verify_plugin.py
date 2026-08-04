@@ -4761,12 +4761,22 @@ def test_build_and_verify_cli_baseline_uses_target_detached_worktree_only(
     assert git(project, "commit", "-m", "base").returncode == 0
     baseline = git(project, "rev-parse", "HEAD").stdout.strip()
     assert baseline
+    main_branch = git(project, "branch", "--show-current").stdout.strip()
+    assert main_branch
     assert git(project, "branch", "baseline", baseline).returncode == 0
     other = tmp_path / "other-worktree"
     assert git(project, "worktree", "add", str(other), "baseline").returncode == 0
+    assert git(project, "branch", "side", baseline).returncode == 0
+    assert git(project, "checkout", "side").returncode == 0
+    (project / "docs").mkdir()
+    (project / "docs" / "side.md").write_text("side\n", encoding="utf-8")
+    assert git(project, "add", "docs/side.md").returncode == 0
+    assert git(project, "commit", "-m", "side").returncode == 0
+    assert git(project, "checkout", main_branch).returncode == 0
     (project / "src" / "app.py").write_text("committed change\n", encoding="utf-8")
     assert git(project, "add", "src/app.py").returncode == 0
     assert git(project, "commit", "-m", "change").returncode == 0
+    assert git(project, "merge", "--no-ff", "side", "-m", "merge").returncode == 0
     assert git(project, "checkout", "--detach", "HEAD").returncode == 0
     (other / "unrelated.txt").write_text("other worktree\n", encoding="utf-8")
 
