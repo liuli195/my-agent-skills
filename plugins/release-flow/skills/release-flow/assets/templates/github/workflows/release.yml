@@ -121,7 +121,7 @@ jobs:
           echo "BUILD_AND_VERIFY_INTEGRITY=$integrity" >> "$GITHUB_ENV"
 
       - name: Upload npm package candidates
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: npm-package-candidates
           path: ${{ runner.temp }}/npm-candidates/*.tgz

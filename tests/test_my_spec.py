@@ -338,6 +338,18 @@ def run_cli(
     )
 
 
+def run_public_spec_cli(*args: object) -> subprocess.CompletedProcess[str]:
+    node = shutil.which("node")
+    assert node is not None
+    return subprocess.run(
+        [node, str(PLUGIN_ROOT / "bin" / "myspec.js"), *(str(arg) for arg in args)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
 def install_fake_pi(root: Path) -> tuple[Path, Path]:
     bin_dir = root / "bin"
     bin_dir.mkdir(parents=True)
@@ -4500,6 +4512,125 @@ TO: 密码登录
     repeated_apply = apply_ready(SPEC_OPS, specs, delta, specs, repeated_work)
     assert repeated_apply.returncode == 0, repeated_apply.stderr
     assert (specs / "accounts" / "spec.md").read_bytes() == before_repeat
+
+
+def test_myspec_cli_preserves_untouched_lf_and_crlf_bytes_for_preview_and_apply(
+    tmp_path: Path,
+) -> None:
+    specs = tmp_path / "specs"
+    delta = tmp_path / "delta"
+    preview = tmp_path / "preview"
+    target = main_spec(
+        "Accounts",
+        requirement("登录", "允许登录"),
+        requirement("旧设置", "显示设置"),
+    )
+    untouched_lf = main_spec("Profiles", requirement("查看资料", "显示姓名"))
+    untouched_crlf = main_spec("Settings", requirement("修改设置", "保存设置"))
+    (specs / "accounts" / "spec.md").parent.mkdir(parents=True)
+    (specs / "accounts" / "spec.md").write_bytes(target.replace("\n", "\r\n").encode("utf-8"))
+    (specs / "profiles" / "spec.md").parent.mkdir(parents=True)
+    (specs / "profiles" / "spec.md").write_bytes(untouched_lf.encode("utf-8"))
+    (specs / "settings" / "spec.md").parent.mkdir(parents=True)
+    (specs / "settings" / "spec.md").write_bytes(untouched_crlf.replace("\n", "\r\n").encode("utf-8"))
+    original_lf = (specs / "profiles" / "spec.md").read_bytes()
+    original_crlf = (specs / "settings" / "spec.md").read_bytes()
+    write(
+        delta / "accounts" / "spec.md",
+        """## MODIFIED Requirements
+
+### Requirement: 登录
+
+系统 MUST 允许密码登录。
+
+#### Scenario: 密码正确
+
+- **WHEN** 用户提交正确密码
+- **THEN** 系统创建会话
+
+## REMOVED Requirements
+
+### Requirement: 旧设置
+""",
+    )
+
+    work = tmp_path / "state"
+    conflicts = tmp_path / "conflicts.json"
+    write(conflicts, "[]")
+    initialized = run_public_spec_cli(
+        "state-init", work, "add", "specs-fingerprint", "input-fingerprint"
+    )
+    assert initialized.returncode == 0, initialized.stderr
+    stored = run_public_spec_cli(
+        "state-set-conflicts", work, conflicts, "specs-fingerprint", "input-fingerprint"
+    )
+    assert stored.returncode == 0, stored.stderr
+    before_rejected_apply = {
+        relative: (specs / relative).read_bytes()
+        for relative in ("accounts/spec.md", "profiles/spec.md", "settings/spec.md")
+    }
+    rejected = run_public_spec_cli(
+        "apply-delta", specs, delta, preview, work, "stale-specs-fingerprint", "input-fingerprint"
+    )
+    assert rejected.returncode != 0
+    assert {
+        relative: (specs / relative).read_bytes()
+        for relative in before_rejected_apply
+    } == before_rejected_apply
+    assert run_public_spec_cli("validate-main", specs).returncode == 0
+    assert run_public_spec_cli("validate-delta", delta, specs).returncode == 0
+    previewed = run_public_spec_cli(
+        "apply-delta", specs, delta, preview, work, "specs-fingerprint", "input-fingerprint"
+    )
+    assert previewed.returncode == 0, previewed.stderr
+    assert run_public_spec_cli("validate-main", preview).returncode == 0
+    assert (preview / "profiles" / "spec.md").read_bytes() == original_lf
+    assert (preview / "settings" / "spec.md").read_bytes() == original_crlf
+    target_preview = (preview / "accounts" / "spec.md").read_bytes()
+    assert b"\r" not in target_preview
+    assert "系统 MUST 允许密码登录。".encode("utf-8") in target_preview
+    assert "旧设置".encode("utf-8") not in target_preview
+
+    applied = run_public_spec_cli(
+        "apply-delta", specs, delta, specs, work, "specs-fingerprint", "input-fingerprint"
+    )
+    assert applied.returncode == 0, applied.stderr
+    assert run_public_spec_cli("validate-main", specs).returncode == 0
+    assert (specs / "profiles" / "spec.md").read_bytes() == original_lf
+    assert (specs / "settings" / "spec.md").read_bytes() == original_crlf
+    assert (specs / "accounts" / "spec.md").read_bytes() == target_preview
+
+    repeated_work = tmp_path / "repeated-state"
+    repeated_conflicts = tmp_path / "repeated-conflicts.json"
+    write(repeated_conflicts, "[]")
+    assert run_public_spec_cli(
+        "state-init", repeated_work, "add", "specs-fingerprint", "input-fingerprint"
+    ).returncode == 0
+    assert run_public_spec_cli(
+        "state-set-conflicts",
+        repeated_work,
+        repeated_conflicts,
+        "specs-fingerprint",
+        "input-fingerprint",
+    ).returncode == 0
+    before_repeat = {
+        relative: (specs / relative).read_bytes()
+        for relative in ("accounts/spec.md", "profiles/spec.md", "settings/spec.md")
+    }
+    repeated = run_public_spec_cli(
+        "apply-delta",
+        specs,
+        delta,
+        specs,
+        repeated_work,
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert repeated.returncode == 0, repeated.stderr
+    assert {
+        relative: (specs / relative).read_bytes()
+        for relative in before_repeat
+    } == before_repeat
 
 
 def test_spec_ops_cli_rejects_invalid_specs_and_delta_references(tmp_path: Path) -> None:

@@ -281,12 +281,23 @@ def _render(spec: MainSpec) -> str:
     return f"# {spec.name}\n\n## Purpose\n\n{spec.purpose.strip()}\n\n## Requirements\n{suffix}"
 
 
-def _write_preview(specs: OrderedDict[str, MainSpec], output_root: Path) -> None:
+def _write_preview(
+    specs: OrderedDict[str, MainSpec], output_root: Path, source_root: Path
+) -> None:
     output_root.mkdir(parents=True, exist_ok=True)
     for capability, spec in specs.items():
         directory = output_root / capability
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / "spec.md").write_text(_render(spec), encoding="utf-8")
+        destination = directory / "spec.md"
+        source = source_root / capability / "spec.md"
+        try:
+            unchanged = source.is_file() and _parse_main(source) == spec
+        except SpecError:
+            unchanged = False
+        if unchanged:
+            shutil.copyfile(source, destination)
+        else:
+            destination.write_bytes(_render(spec).encode("utf-8"))
     validate_main(output_root)
 
 
@@ -340,7 +351,7 @@ def apply_delta(
     if output_root.resolve(strict=False) != specs_root.resolve(strict=False):
         if output_root.exists() and any(output_root.iterdir()):
             raise SpecError(f"output_not_empty: {output_root}")
-        _write_preview(specs, output_root)
+        _write_preview(specs, output_root, specs_root)
         return
 
     parent = specs_root.parent
@@ -349,7 +360,7 @@ def apply_delta(
     backup = parent / f".my-spec-backup-{nonce}"
     had_specs = specs_root.exists()
     try:
-        _write_preview(specs, preview)
+        _write_preview(specs, preview, specs_root)
         if had_specs:
             specs_root.rename(backup)
         preview.rename(specs_root)
