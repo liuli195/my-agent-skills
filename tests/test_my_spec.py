@@ -3339,6 +3339,236 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
     assert json.loads(explicit.stdout)["source"] == str(source)
 
 
+def test_packed_myspec_dev_binding_blocks_cross_worktree_apply_until_switch(
+    tmp_path: Path,
+) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = install_packed_myspec(installed)
+    prefix = npm_prefix_for(installed_package)
+    (tmp_path / "source-a").mkdir()
+    (tmp_path / "source-b").mkdir()
+    source_a = controlled_dev_source(tmp_path / "source-a")
+    source_b = controlled_dev_source(tmp_path / "source-b")
+
+    target = main_spec(
+        "Accounts",
+        requirement("登录", "允许登录"),
+        requirement("旧设置", "显示设置"),
+    )
+    delta_text = """## REMOVED Requirements
+
+### Requirement: 旧设置
+"""
+
+    def add_spec_fixture(source: Path) -> None:
+        write(source / "myspec" / "specs" / "accounts" / "spec.md", target)
+        write(source / "myspec" / "delta" / "accounts" / "spec.md", delta_text)
+        write(source / "myspec" / "specs" / "profiles" / "spec.md", main_spec("Profiles", requirement("查看资料", "显示姓名")))
+        settings = source / "myspec" / "specs" / "settings" / "spec.md"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_bytes(main_spec("Settings", requirement("修改设置", "保存设置")).replace("\n", "\r\n").encode("utf-8"))
+        subprocess.run(
+            ["git", "-C", str(source), "add", "myspec"],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(source),
+                "-c",
+                "user.name=MySpec Test",
+                "-c",
+                "user.email=myspec@example.invalid",
+                "commit",
+                "-m",
+                "spec fixture",
+            ],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        pushed = subprocess.run(
+            ["git", "-C", str(source), "push", "origin", "HEAD:refs/heads/main"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert pushed.returncode == 0, pushed.stderr
+
+    add_spec_fixture(source_a)
+    add_spec_fixture(source_b)
+
+    def head(source: Path) -> str:
+        return subprocess.run(
+            ["git", "-C", str(source), "rev-parse", "HEAD"],
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+
+    env = isolated_myspec_env(tmp_path, prefix)
+    env_a = controlled_dev_env(env, source_a)
+    env_b = controlled_dev_env(env, source_b)
+    entered = run_cli(executable, "init", "--dev", "--source", source_a, env=env_a, cwd=source_a)
+    assert entered.returncode == 0, entered.stderr
+
+    diagnosis = run_cli(executable, "doctor", env=env_a, cwd=source_b)
+    assert diagnosis.returncode == 0, diagnosis.stderr
+    report = json.loads(diagnosis.stdout)
+    assert report["binding"] == {
+        "sourceWorktree": str(source_a),
+        "sourceCommit": head(source_a),
+        "targetWorktree": str(source_b),
+        "targetCommit": head(source_b),
+        "worktreeMatch": False,
+    }
+
+    specs = source_b / "myspec" / "specs"
+    delta = source_b / "myspec" / "delta"
+    preview = source_b / ".local" / "spec-preview"
+    work = source_b / ".local" / "spec-work"
+    conflicts = tmp_path / "no-conflicts.json"
+    write(conflicts, "[]")
+    assert run_cli(
+        executable,
+        "state-init",
+        work,
+        "add",
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env_a,
+        cwd=source_b,
+    ).returncode == 0
+    assert run_cli(
+        executable,
+        "state-set-conflicts",
+        work,
+        conflicts,
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env_a,
+        cwd=source_b,
+    ).returncode == 0
+    before = {
+        relative: (specs / relative).read_bytes()
+        for relative in ("accounts/spec.md", "profiles/spec.md", "settings/spec.md")
+    }
+
+    blocked = run_cli(
+        executable,
+        "apply-delta",
+        specs,
+        delta,
+        preview,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env_a,
+        cwd=source_b,
+    )
+    assert blocked.returncode == 1
+    assert "error: dev_source_worktree_mismatch" in blocked.stderr
+    assert not preview.exists()
+    assert not list(specs.parent.glob(".my-spec-*"))
+    assert {relative: (specs / relative).read_bytes() for relative in before} == before
+    assert work.exists()
+
+    switched = run_cli(
+        executable,
+        "init",
+        "--dev",
+        "--source",
+        source_b,
+        env=env_b,
+        cwd=source_b,
+    )
+    assert switched.returncode == 0, switched.stderr
+    diagnosis = run_cli(executable, "doctor", env=env_b, cwd=source_b)
+    assert diagnosis.returncode == 0, diagnosis.stderr
+    assert json.loads(diagnosis.stdout)["binding"]["worktreeMatch"] is True
+
+    previewed = run_cli(
+        executable,
+        "apply-delta",
+        specs,
+        delta,
+        preview,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env_b,
+        cwd=source_b,
+    )
+    assert previewed.returncode == 0, previewed.stderr
+    assert (preview / "profiles" / "spec.md").read_bytes() == before["profiles/spec.md"]
+    assert (preview / "settings" / "spec.md").read_bytes() == before["settings/spec.md"]
+
+    applied = run_cli(
+        executable,
+        "apply-delta",
+        specs,
+        delta,
+        specs,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env_b,
+        cwd=source_b,
+    )
+    assert applied.returncode == 0, applied.stderr
+    assert (specs / "profiles" / "spec.md").read_bytes() == before["profiles/spec.md"]
+    assert (specs / "settings" / "spec.md").read_bytes() == before["settings/spec.md"]
+    assert "旧设置".encode("utf-8") not in (specs / "accounts" / "spec.md").read_bytes()
+    assert not work.exists()
+    after_first = {
+        relative: (specs / relative).read_bytes()
+        for relative in before
+    }
+
+    repeated_work = source_b / ".local" / "spec-work-repeat"
+    repeated_conflicts = tmp_path / "repeated-no-conflicts.json"
+    write(repeated_conflicts, "[]")
+    assert run_cli(
+        executable,
+        "state-init",
+        repeated_work,
+        "add",
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env_b,
+        cwd=source_b,
+    ).returncode == 0
+    assert run_cli(
+        executable,
+        "state-set-conflicts",
+        repeated_work,
+        repeated_conflicts,
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env_b,
+        cwd=source_b,
+    ).returncode == 0
+    repeated = run_cli(
+        executable,
+        "apply-delta",
+        specs,
+        delta,
+        specs,
+        repeated_work,
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env_b,
+        cwd=source_b,
+    )
+    assert repeated.returncode == 0, repeated.stderr
+    assert not repeated_work.exists()
+    assert {relative: (specs / relative).read_bytes() for relative in before} == after_first
+
+
 def test_packed_myspec_requires_release_registration_before_first_codex_dev_init(
     tmp_path: Path,
 ) -> None:

@@ -756,6 +756,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_packed_myspec_switches_pi_between_development_and_saved_release': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_switches_pi_between_development_and_saved_release'
     ),
+    'tests/test_my_spec.py::test_packed_myspec_dev_binding_blocks_cross_worktree_apply_until_switch': (
+        'covers the installed MySpec CLI binding guard and manual multi-worktree switch through two isolated git worktrees; function=test_packed_myspec_dev_binding_blocks_cross_worktree_apply_until_switch'
+    ),
     'tests/test_my_spec.py::test_packed_myspec_update_preflights_installed_clients_before_package_write': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_update_preflights_installed_clients_before_package_write'
     ),

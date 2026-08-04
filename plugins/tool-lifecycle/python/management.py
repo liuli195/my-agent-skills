@@ -1553,6 +1553,73 @@ def _tool_manifest_version(root: Path | None) -> str | None:
     return version if isinstance(version, str) else None
 
 
+def _worktree_identity(path: Path, label: str) -> tuple[Path, str]:
+    candidate = _absolute_path(path)
+    if not candidate.is_dir():
+        candidate = candidate.parent
+    while not candidate.is_dir() and candidate != candidate.parent:
+        candidate = candidate.parent
+    root = _run("git", "rev-parse", "--show-toplevel", cwd=candidate)
+    if root.returncode != 0 or not root.stdout.strip():
+        raise ManagementError(f"{label}_worktree_unavailable: {path}")
+    worktree = _absolute_path(root.stdout.strip())
+    commit = _run("git", "rev-parse", "HEAD", cwd=worktree)
+    value = commit.stdout.strip()
+    if commit.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        raise ManagementError(f"{label}_commit_unavailable: {worktree}")
+    return worktree, value
+
+
+def _binding_report(stable: Path, target: Path) -> dict[str, object]:
+    real = _absolute_path(Path(os.path.realpath(stable)))
+    if _same_path(stable, real):
+        return {
+            "sourceWorktree": None,
+            "sourceCommit": None,
+            "targetWorktree": None,
+            "targetCommit": None,
+            "worktreeMatch": None,
+        }
+
+    source = _absolute_path(real.parents[1])
+    try:
+        source, source_commit = _worktree_identity(source, "dev_source")
+    except ManagementError:
+        source_commit = None
+    try:
+        target_worktree, target_commit = _worktree_identity(target, "dev_target")
+    except ManagementError:
+        target_worktree, target_commit = None, None
+    return {
+        "sourceWorktree": str(source),
+        "sourceCommit": source_commit,
+        "targetWorktree": str(target_worktree) if target_worktree is not None else None,
+        "targetCommit": target_commit,
+        "worktreeMatch": target_worktree is not None and _same_path(source, target_worktree),
+    }
+
+
+def validate_spec_write_binding(specs_root: Path) -> None:
+    try:
+        stable = _stable_package_root()
+    except ManagementError:
+        return
+    real = _absolute_path(Path(os.path.realpath(stable)))
+    if not _same_path(_RUNNING_PACKAGE_ROOT, real) or _same_path(stable, real):
+        return
+
+    source, source_commit = _worktree_identity(real.parents[1], "dev_source")
+    target, target_commit = _worktree_identity(specs_root, "dev_target")
+    if _same_path(source, target):
+        return
+    raise ManagementError(
+        "dev_source_worktree_mismatch: "
+        f"sourceWorktree={source} sourceCommit={source_commit} "
+        f"targetWorktree={target} targetCommit={target_commit}; "
+        f"run {COMMAND_NAME} init --dev --source {target}"
+    )
+
+
 def _source_record(
     *,
     installed: bool,
@@ -1595,7 +1662,7 @@ def _doctor_package() -> dict[str, object]:
             )
     else:
         toolchain["packageVersion"] = cli_version
-    return {
+    report = {
         "cliVersion": cli_version,
         "mode": toolchain["mode"],
         "source": str(real if linked else stable),
@@ -1608,6 +1675,9 @@ def _doctor_package() -> dict[str, object]:
             "versionMismatch": _manifest_version(stable) != cli_version,
         },
     }
+    if linked:
+        report["binding"] = _binding_report(stable, Path.cwd())
+    return report
 
 
 def _pi_source_enabled(item: PiSource) -> bool:
