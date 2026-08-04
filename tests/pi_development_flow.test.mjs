@@ -156,16 +156,19 @@ test("the three gates form the required stage state machine", async () => {
   );
   assert.match(gate3, /Gate 2 — Implementation and Verification/);
   assert.match(gate3, /Completion Check — 完成检查/);
-  assert.match(gate3, /`my-spec-add`[^]*final confirmation/is);
+  assert.match(gate3, /single final confirmation[^]*formal specification/is);
   assert.match(
     gate3,
-    /Gate 3 passes only after[^]*appl(?:y|ies|ication)[^]*validat/is,
+    /Gate 3 passes only after[^]*appl(?:y|ies|ied|ication)[^]*validat/is,
   );
   assert.match(gate3, /Gate 3 passes only after[^]*delivery (?:finishes|completes|succeeds)/is);
   assert.match(gate3, /stop state.*Gate 3.*not final completion/is);
   assert.match(gate3, /Development Flow summary uses.*output-template/is);
-  assert.match(gate3, /detailed final confirmation.*exact.*output/is);
-  assert.match(gate3, /delivery authorization/is);
+  assert.match(gate3, /complete formal specification difference[^]*exact delivery actions[^]*together/is);
+  assert.match(gate3, /one (?:single )?confirmation/is);
+  assert.match(gate3, /same[^]*confirmation[^]*formal specification[^]*delivery/is);
+  assert.match(gate3, /automatically.*(?:apply|execute)|apply.*execute.*automatically/is);
+  assert.doesNotMatch(gate3, /two scoped, sequential confirmations|without the second confirmation, do not/is);
   assert.doesNotMatch(gate3, /After Gate 3 .* passes, run `my-spec-add`/);
   assert.doesNotMatch(delivery, /Gate 4 —/);
 });

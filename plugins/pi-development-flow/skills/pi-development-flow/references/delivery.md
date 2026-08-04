@@ -14,7 +14,7 @@ If an exact required Skill（技能） is missing, unreadable, fails to load, or
 
 #### Usage Condition（使用条件）
 
-Use this gate after implementation, proportional verification, fast verification, and the bounded overall review are complete, and when `my-spec-add`（新增自有规格） has generated and validated the complete formal MySpec（自有规格） preview difference and is waiting for its final confirmation, before any PR delivery action.
+Use this gate after implementation, proportional verification, fast verification, and the bounded overall review are complete, and when the complete formal specification preview difference and exact delivery actions are ready for one combined confirmation, before any specification application or delivery action.
 
 #### Previous Gate（上一依赖门禁）
 
@@ -28,28 +28,23 @@ Confirm that:
 - every acceptance criterion and ticket is complete;
 - proportional and fast verification pass;
 - the bounded overall review has no unresolved blocker;
-- `my-spec-add` has presented the complete preview difference and reached its final confirmation;
-- no PR（拉取请求） delivery action has started;
-- the exact push, PR creation or update, merge, and cleanup actions are identified.
+- the complete formal specification preview difference is ready;
+- no specification application or delivery action has started;
+- the exact delivery actions and expected results are identified.
 
-If an implementation check fails, preserve the artifacts and return to Implementation and Verification. If `my-spec-add` stops or requires a decision, preserve its artifacts and continue from that Skill（技能）'s reported recovery point.
+If an implementation check fails, preserve the artifacts and return to Implementation and Verification. If formal specification preparation stops or requires a decision, preserve its artifacts and continue from its reported recovery point.
 
 #### Confirmation Output（待用户确认内容清单）
 
-The Development Flow summary uses [output-template](output-template.md), while the detailed final confirmation required by `my-spec-add`（新增自有规格） remains that Skill（技能）'s exact output. Cite it without rewriting or wrapping it, and do not add a duplicate formal-spec confirmation.
+The Development Flow summary uses [output-template](output-template.md) and presents the complete formal specification difference, verification evidence, known risks, exact delivery actions, and expected results together.
 
-Gate 3 retains two scoped, sequential confirmations within one numbered gate:
+Gate 3 has one confirmation only. The same single final confirmation authorizes both the formal specification application and the exact delivery actions. After that confirmation, recheck the specification state, apply and validate the approved specification difference, and automatically execute the authorized delivery without asking for a second confirmation.
 
-1. The `my-spec-add` final confirmation authorizes only the atomic application and validation of the formal specification difference.
-2. After that difference is successfully applied and validated, Gate 3 presents the final diff, verification evidence, known risks, and exact PR delivery actions, then asks for explicit authorization for those delivery actions.
-
-Formal specification confirmation is not PR delivery authorization, and PR delivery authorization must not be inferred from implementation approval or passing checks. Without the first confirmation, do not apply the formal specification difference; without the second confirmation, do not perform any listed delivery action.
-
-Gate 3 passes only after `my-spec-add` atomically applies and validates the approved formal specification difference, the user explicitly authorizes the exact PR delivery actions, and the authorized delivery finishes successfully. Execute the authorized delivery after its explicit authorization; a PR Flow（拉取请求流程） stop state during that delivery leaves Gate 3 incomplete and is not final completion.
+Gate 3 passes only after the approved formal specification difference is applied and validated and the authorized delivery finishes successfully. A delivery stop state leaves Gate 3 incomplete and is not final completion.
 
 #### Next Gate（下一步门禁）
 
-Completion Check — 完成检查. Gate 3 includes formal specification application and delivery; it does not prove final completion.
+Completion Check — 完成检查. Gate 3 includes the single confirmation, formal specification application, and delivery; it does not prove final completion.
 
 ### Completion Check — 完成检查
 
@@ -85,15 +80,15 @@ There is no next gate. Report `最终完成` only after all checks pass; otherwi
 
 ## Formal specification（正式规格）
 
-After the bounded overall review and its fixes pass proportional verification, run `my-spec-add`（新增自有规格） against the verified external behavior. Let that Skill（技能） own its conflict decisions, complete difference, validation, final confirmation, application, and recovery. Its final confirmation and successful application are the first scoped confirmation within Gate 3 — Specification Archival and Delivery（规格存档并交付）. Formal specifications are not part of the earlier code-review scope. Run the relevant fast validation after the approved specification difference is applied and validated.
+After the bounded overall review and its fixes pass proportional verification, prepare the complete formal specification difference against the verified external behavior. Formal specification preparation owns its conflict decisions, complete difference, validation, application, and recovery. Its final confirmation is the single Gate 3 — Specification Archival and Delivery（规格存档并交付） confirmation, which also authorizes the exact delivery actions. Formal specifications are not part of the earlier code-review scope. Run the relevant fast validation after the approved specification difference is applied and validated.
 
 ## PR delivery（拉取请求交付）
 
-After both scoped Gate 3 — Specification Archival and Delivery（规格存档并交付） confirmations succeed, call the selected PR Flow（拉取请求流程） entry; Gate 3 remains incomplete until that delivery finishes successfully.
+After the single Gate 3 — Specification Archival and Delivery（规格存档并交付） confirmation succeeds and the specification is applied and validated, call the selected PR Flow（拉取请求流程） entry automatically; Gate 3 remains incomplete until that delivery finishes successfully.
 
 - Use `pr-flow-tweak` only for a non-bug lightweight change that meets its contract.
 - Use `pr-flow-complete` for standard and high-risk changes.
-- Treat every PR Flow stop state as a resumable pause rather than completion; preserve it as the current incomplete Gate 3 delivery state.
+- Treat every PR Flow stop state as a resumable pause rather than completion; preserve it as the current incomplete Gate 3 delivery state without requesting another Gate 3 confirmation.
 - When a merge or rebase conflict exists, use `resolving-merge-conflicts`. Resolve from the spec, tickets, commits, and tests; rerun affected checks. Ask the user when the sources permit incompatible observable behaviors rather than choosing a new behavior.
 
 ## Cleanup and completion（清理与完成）
@@ -106,4 +101,4 @@ By default, Development Flow excludes local installation, client synchronization
 
 Use the requested action's formal entry and verify its result. Never infer authorization for a required release when a requested synchronization depends on unpublished content; report that requested action separately. Unrequested or unavailable local delivery MUST NOT block completion or become a default follow-up task.
 
-Completion Check（完成检查） owns the final completion conclusion. Do not declare the Development Flow（开发流程） complete from a successful Gate 3 authorization or a partial cleanup result.
+Completion Check（完成检查） owns the final completion conclusion. Do not declare the Development Flow（开发流程） complete from a successful Gate 3 confirmation or a partial cleanup result.
