@@ -35,4 +35,4 @@ Every gate and completion result MUST use the fixed title and the four blocks be
 - Gate 3：正式规格差异、校验结果、已知风险和准确交付动作。
 - Completion Check：完成条件、实际状态和清理残留。
 
-长内容只通过“引用”提供入口；摘要保留作出当前判断所需的重点。
+普通长内容通过“引用”提供入口；Gate 3 的完整正式规格差异和交付动作必须在同一确认输出中完整展示，引用只提供来源；摘要保留作出当前判断所需的重点。

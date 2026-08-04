@@ -195,6 +195,7 @@ test("gate outputs use one exact four-section template", async () => {
   assert.match(template, /Gate 1：目标、范围、测试接缝、票据及阻塞关系、变更工作树/);
   assert.match(template, /Gate 2：票据顺序、并行组、执行隔离、验证、审查、风险和停止条件/);
   assert.match(template, /Gate 3：正式规格差异、校验结果、已知风险和准确交付动作/);
+  assert.match(template, /Gate 3[^]*完整正式规格差异和交付动作[^]*同一确认输出/is);
   assert.match(template, /Completion Check：完成条件、实际状态和清理残留/);
   assert.match(skill, /references\/output-template\.md/);
 });
