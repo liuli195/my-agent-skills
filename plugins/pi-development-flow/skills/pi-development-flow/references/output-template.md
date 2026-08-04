@@ -4,10 +4,9 @@ Every gate and completion result MUST use the fixed title and the four blocks be
 
 ## Canonical titles（固定标题）
 
-- `## Gate 1 — Complete Requirements（完成需求）`
-- `## Gate 2 — Enter Implementation（进入实施）`
-- `## Gate 3 — Enter Delivery（进入交付）`
-- `## Gate 4 — Authorize PR Delivery（授权 PR 交付）`
+- `## Gate 1 — Requirements Confirmation（需求确认）`
+- `## Gate 2 — Implementation and Verification（实施和验证）`
+- `## Gate 3 — Specification Archival and Delivery（规格存档并交付）`
 - `## Completion Check — 完成检查`
 
 ## Output shape（固定格式）
@@ -33,8 +32,7 @@ Every gate and completion result MUST use the fixed title and the four blocks be
 
 - Gate 1：目标、范围、测试接缝、票据及阻塞关系、变更工作树。
 - Gate 2：票据顺序、并行组、执行隔离、验证、审查、风险和停止条件。
-- Gate 3：正式规格差异和校验结果；确认沿用 `my-spec-add`。
-- Gate 4：最终差异、验证审查结果、已知风险和准确交付动作。
+- Gate 3：正式规格差异、校验结果、已知风险和准确交付动作。
 - Completion Check：完成条件、实际状态和清理残留。
 
-长内容只通过“引用”提供入口；摘要保留作出当前判断所需的重点。
+普通长内容通过“引用”提供入口；Gate 3 的完整正式规格差异和交付动作必须在同一确认输出中完整展示，引用只提供来源；摘要保留作出当前判断所需的重点。
