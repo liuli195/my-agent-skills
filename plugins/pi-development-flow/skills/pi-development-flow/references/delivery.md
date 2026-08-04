@@ -36,7 +36,7 @@ If an implementation check fails, preserve the artifacts and return to Implement
 
 #### Confirmation Output（待用户确认内容清单）
 
-The Development Flow summary uses [output-template](output-template.md) and presents the complete formal specification difference, verification evidence, known risks, exact delivery actions, and expected results together.
+The Development Flow summary uses [output-template](output-template.md) and presents a concise formal specification content summary, requirement-change counts (additions and removals, plus modifications or renames when present), verification evidence, known risks, exact delivery actions, and expected results together. It MUST NOT expand the complete formal specification difference; preserve that difference in the MySpec preview and provide it through citations.
 
 Gate 3 has one confirmation only. The same single final confirmation authorizes both the formal specification application and the exact delivery actions. After that confirmation, recheck the specification state, apply and validate the approved specification difference, and automatically execute the authorized delivery without asking for a second confirmation.
 

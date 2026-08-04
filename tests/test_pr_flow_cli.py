@@ -538,14 +538,72 @@ def test_remove_worktree_uses_native_non_forced_remove(tmp_path: Path, monkeypat
     git_stub = CommandStub(consume=True)
     git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
     git_stub.add(["status", "--short"], stdout="")
-    git_stub.add(["worktree", "remove", str(target.resolve())])
+    remove_args = ([] if os.name != "nt" else ["-c", "core.longpaths=true"])
+    remove_args += ["worktree", "remove", str(target.resolve())]
+    git_stub.add(remove_args)
     git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
     monkeypatch.setattr(module, "git", git_stub)
 
     module.remove_worktree(target, target)
 
-    assert ("worktree", "remove", str(target.resolve())) in git_stub.calls
+    assert tuple(remove_args) in git_stub.calls
     assert not any("--force" in call for call in git_stub.calls)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows long-path behavior")
+def test_cleanup_handles_windows_long_paths_through_cli(tmp_path: Path, monkeypatch) -> None:
+    controller = tmp_path / "controller"
+    remote = tmp_path / "remote.git"
+    target = tmp_path / "target"
+    init_repo(controller)
+    write_confirmed_pr_flow_config(controller)
+    (controller / ".gitignore").write_text(".local/\n", encoding="utf-8")
+    git(controller, "add", ".gitignore", ".pr-flow")
+    git(controller, "commit", "-m", "configure cleanup")
+    bare = subprocess.run(["git", "init", "--bare", str(remote)], check=False, text=True, capture_output=True)
+    assert bare.returncode == 0, bare.stdout + bare.stderr
+    git(controller, "remote", "add", "origin", str(remote))
+    git(controller, "push", "-u", "origin", "main")
+    git(controller, "checkout", "-b", "feature/example")
+    (controller / "README.md").write_text("feature\n", encoding="utf-8")
+    git(controller, "add", "README.md")
+    git(controller, "commit", "-m", "feature")
+    git(controller, "push", "-u", "origin", "feature/example")
+    git(controller, "checkout", "main")
+    git(controller, "merge", "--ff-only", "feature/example")
+    git(controller, "push", "origin", "main")
+    git(controller, "worktree", "add", str(target), "feature/example")
+
+    deep = target / ".local" / "spec-work"
+    for _ in range(20):
+        deep /= "segment-" + ("x" * 12)
+    deep.mkdir(parents=True)
+    artifact = deep / ("artifact-" + ("y" * 30) + ".json")
+    artifact.write_text("{}\n", encoding="utf-8")
+    assert len(str(artifact)) > 260
+    remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
+    main_before = git(controller, "rev-parse", "HEAD")
+    assert main_before == remote_base
+    module = load_pr_flow_module()
+    monkeypatch.setattr(module, "find_orca_worktree_id", lambda *_: None)
+
+    result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
+    assert not target.exists()
+    assert "target" not in git(controller, "worktree", "list", "--porcelain")
+    assert git(controller, "branch", "--show-current") == "main"
+    assert git(controller, "rev-parse", "HEAD") == main_before
+    core_longpaths = subprocess.run(
+        ["git", "config", "--local", "--get", "core.longpaths"],
+        cwd=controller,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert core_longpaths.returncode == 1
+    assert not core_longpaths.stdout.strip()
 
 
 def worktree_removal_records(main: Path, target: Path) -> tuple[str, str]:
@@ -614,7 +672,9 @@ def test_remove_worktree_falls_back_to_git_when_orca_is_unavailable_or_unmatched
     git_stub = CommandStub(consume=True)
     git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
     git_stub.add(["status", "--short"], stdout="")
-    git_stub.add(["worktree", "remove", str(target.resolve())])
+    remove_args = ([] if os.name != "nt" else ["-c", "core.longpaths=true"])
+    remove_args += ["worktree", "remove", str(target.resolve())]
+    git_stub.add(remove_args)
     git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
     orca_stub = CommandStub(consume=True)
     orca_stub.add(["worktree", "ps", "--json"], returncode=returncode, stdout=stdout, stderr=stderr)
@@ -623,7 +683,7 @@ def test_remove_worktree_falls_back_to_git_when_orca_is_unavailable_or_unmatched
 
     module.remove_worktree(target, target)
 
-    assert ("worktree", "remove", str(target.resolve())) in git_stub.calls
+    assert tuple(remove_args) in git_stub.calls
     assert not any(call[:2] == ("worktree", "rm") for call in orca_stub.calls)
 
 
@@ -5792,7 +5852,9 @@ def test_hotfix_pushes_head_to_target_and_writes_audit_record(tmp_path: Path, mo
     }
 
 
-def run_cleanup_with_real_git(project: Path, monkeypatch) -> subprocess.CompletedProcess[str]:
+def run_cleanup_with_real_git(
+    project: Path, monkeypatch, *, remove_worktree: bool = False
+) -> subprocess.CompletedProcess[str]:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
@@ -5803,7 +5865,10 @@ def run_cleanup_with_real_git(project: Path, monkeypatch) -> subprocess.Complete
         stdout=cleanup_pr_view_json(),
     )
     monkeypatch.setattr(module, "gh", gh_stub)
-    return invoke_pr_flow(["cleanup", "--project", str(project), "--pr", "12"], module=module)
+    args = ["cleanup", "--project", str(project), "--pr", "12"]
+    if remove_worktree:
+        args.append("--remove-worktree")
+    return invoke_pr_flow(args, module=module)
 
 
 def test_cleanup_returns_to_available_local_base_end_to_end(tmp_path: Path, monkeypatch) -> None:
