@@ -23,4 +23,6 @@
 - Green: `build-and-verify verify --project .`，结果 `status: passed`；其中 PR Flow 检查结果为 `284 passed`。
 - Green: 审查修复新增查询错误与未知状态混合矩阵；8 个定向回归通过，网络/认证/格式错误不会被汇总等待或失败覆盖；非零退出码的未知空结果也不会回退汇总。
 - Green: `complete`、`tweak` 和 `diagnose` 公开入口均覆盖检查状态不可用；`complete` 覆盖必需检查为空时按汇总等待/失败回退和未知状态安全停止，规则集重试路径继续通过同一检查门禁归类。
-- Risk: 未执行真实远端 PR 用户入口冒烟；本地 `.pr-flow/toolchain.json` 过期和远端规则集查询窗口仍需在真实 PR 环境单独验证，不影响本地公开入口证据。
+- Green: 真实 PR #285 用户入口冒烟通过：检查聚合运行期间执行 `complete` 返回 `DISPATCH_REQUIRED / checks_pending`，记录 `no required checks reported` 并从 PR 汇总安全回退，输出可复制 `nextCommand`；同一 PR 的等待主路径在检查完成后继续通过检查门禁，随后仅因冒烟用的临时无效审查模式停止，未执行合并。
+- Green: 冒烟只临时备份并恢复 `.pr-flow/config.yaml`、`.pr-flow/toolchain.json` 以避免本地工具链记录前置条件阻断；前后哈希一致，未修改远端规则集，PR #285 保持打开。
+- Risk: 冒烟使用了临时等待/审查配置和移除工具链记录的安全护栏，因此证明的是检查归类与等待主路径，不等于正式交付配置下的合并授权。
