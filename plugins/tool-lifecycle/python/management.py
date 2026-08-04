@@ -1599,10 +1599,22 @@ def _binding_report(stable: Path, target: Path) -> dict[str, object]:
     }
 
 
+def _running_package_is_source_worktree() -> bool:
+    package_root = _RUNNING_PACKAGE_ROOT
+    source_root = package_root.parent.parent
+    return (
+        package_root.parent.name == "plugins"
+        and (source_root / ".git").exists()
+        and _same_path(source_root / "plugins" / SOURCE_DIRECTORY, package_root)
+    )
+
+
 def validate_spec_write_binding(specs_root: Path) -> None:
     try:
         stable = _stable_package_root()
-    except ManagementError:
+    except ManagementError as exc:
+        if _running_package_is_source_worktree():
+            raise ManagementError(f"dev_source_binding_unavailable: {exc}") from exc
         return
     real = _absolute_path(Path(os.path.realpath(stable)))
     if not _same_path(_RUNNING_PACKAGE_ROOT, real) or _same_path(stable, real):

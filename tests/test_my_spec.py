@@ -759,6 +759,9 @@ with Path(os.environ["MYSPEC_NPM_LOG"]).open("a", encoding="utf-8") as log:
 if arguments == ["view", "@liuli195/myspec", "version", "--json"]:
     print(json.dumps(os.environ.get("MYSPEC_NPM_LATEST", os.environ["MYSPEC_PACKAGE_VERSION"])))
     raise SystemExit(0)
+if arguments == ["root", "--global"] and os.environ.get("MYSPEC_NPM_FAIL_ROOT") == "1":
+    print("simulated npm root failure", file=sys.stderr)
+    raise SystemExit(1)
 if arguments[:2] == ["install", "--global"]:
     if os.environ.get("MYSPEC_NPM_FAIL_INSTALL") == "1":
         print("simulated install failure", file=sys.stderr)
@@ -3347,9 +3350,32 @@ def test_packed_myspec_dev_binding_blocks_cross_worktree_apply_until_switch(
     executable, installed_package = install_packed_myspec(installed)
     prefix = npm_prefix_for(installed_package)
     (tmp_path / "source-a").mkdir()
-    (tmp_path / "source-b").mkdir()
     source_a = controlled_dev_source(tmp_path / "source-a")
-    source_b = controlled_dev_source(tmp_path / "source-b")
+    configured = subprocess.run(
+        ["git", "-C", str(source_a), "config", "core.autocrlf", "false"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert configured.returncode == 0, configured.stderr
+    source_b = tmp_path / "source-b"
+    worktree = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(source_a),
+            "worktree",
+            "add",
+            "-b",
+            "worktree-b",
+            str(source_b),
+            "HEAD",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert worktree.returncode == 0, worktree.stderr
 
     target = main_spec(
         "Accounts",
@@ -3361,7 +3387,7 @@ def test_packed_myspec_dev_binding_blocks_cross_worktree_apply_until_switch(
 ### Requirement: 旧设置
 """
 
-    def add_spec_fixture(source: Path) -> None:
+    def add_spec_fixture(source: Path, remote_branch: str) -> None:
         write(source / "myspec" / "specs" / "accounts" / "spec.md", target)
         write(source / "myspec" / "delta" / "accounts" / "spec.md", delta_text)
         write(source / "myspec" / "specs" / "profiles" / "spec.md", main_spec("Profiles", requirement("查看资料", "显示姓名")))
@@ -3392,15 +3418,15 @@ def test_packed_myspec_dev_binding_blocks_cross_worktree_apply_until_switch(
             check=True,
         )
         pushed = subprocess.run(
-            ["git", "-C", str(source), "push", "origin", "HEAD:refs/heads/main"],
+            ["git", "-C", str(source), "push", "origin", f"HEAD:refs/heads/{remote_branch}"],
             text=True,
             capture_output=True,
             check=False,
         )
         assert pushed.returncode == 0, pushed.stderr
 
-    add_spec_fixture(source_a)
-    add_spec_fixture(source_b)
+    add_spec_fixture(source_a, "main")
+    add_spec_fixture(source_b, "worktree-b")
 
     def head(source: Path) -> str:
         return subprocess.run(
@@ -3412,7 +3438,7 @@ def test_packed_myspec_dev_binding_blocks_cross_worktree_apply_until_switch(
 
     env = isolated_myspec_env(tmp_path, prefix)
     env_a = controlled_dev_env(env, source_a)
-    env_b = controlled_dev_env(env, source_b)
+    env_b = env_a
     entered = run_cli(executable, "init", "--dev", "--source", source_a, env=env_a, cwd=source_a)
     assert entered.returncode == 0, entered.stderr
 
@@ -3475,6 +3501,28 @@ def test_packed_myspec_dev_binding_blocks_cross_worktree_apply_until_switch(
     assert not preview.exists()
     assert not list(specs.parent.glob(".my-spec-*"))
     assert {relative: (specs / relative).read_bytes() for relative in before} == before
+    assert work.exists()
+
+    npm_bin, _ = install_fake_npm(tmp_path / "fake-npm", next((installed / "package").glob("*.tgz")))
+    root_failure = run_cli(
+        executable,
+        "apply-delta",
+        specs,
+        delta,
+        preview,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+        env={
+            **env_a,
+            "MYSPEC_NPM_FAIL_ROOT": "1",
+            "PATH": os.pathsep.join([str(npm_bin), env_a["PATH"]]),
+        },
+        cwd=source_b,
+    )
+    assert root_failure.returncode == 1
+    assert "error: dev_source_binding_unavailable" in root_failure.stderr
+    assert not preview.exists()
     assert work.exists()
 
     switched = run_cli(
