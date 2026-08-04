@@ -3671,17 +3671,19 @@ def test_complete_stops_when_unknown_state_is_mixed_with_pending_check(tmp_path:
 
 
 @pytest.mark.parametrize("command", ["complete", "tweak", "diagnose"])
+@pytest.mark.parametrize("stderr", ["network unavailable\\n", "unexpected query failure\\n"])
 def test_public_entries_do_not_use_rollup_after_check_query_error(
     tmp_path: Path,
     monkeypatch,
     command: str,
+    stderr: str,
 ) -> None:
     pending = pr_view_json(
         checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
         review_decision="APPROVED",
         head_oid="b" * 40,
     )
-    required_response = ("[]", "network unavailable\\n", 1)
+    required_response = ("[]", stderr, 1)
     if command == "complete":
         project, result = run_complete_in_process(
             tmp_path,

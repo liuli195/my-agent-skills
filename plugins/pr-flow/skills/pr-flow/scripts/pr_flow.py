@@ -1148,7 +1148,9 @@ def required_checks_error_details(
         details["reason"] = "gh_auth_required"
     else:
         details["reason"] = "checks_unavailable"
-        details["fallbackToSummary"] = (empty or gh_no_required_checks(result)) and not gh_checks_unavailable(result)
+        details["fallbackToSummary"] = (
+            (result.returncode == 0 and empty) or gh_no_required_checks(result)
+        ) and not gh_checks_unavailable(result)
     details["pr"] = pr_number
     return details
 
