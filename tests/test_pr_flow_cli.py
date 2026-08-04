@@ -3681,7 +3681,7 @@ def test_public_entries_do_not_use_rollup_after_check_query_error(
         review_decision="APPROVED",
         head_oid="b" * 40,
     )
-    required_response = ("", "network unavailable\\n", 1)
+    required_response = ("[]", "network unavailable\\n", 1)
     if command == "complete":
         project, result = run_complete_in_process(
             tmp_path,

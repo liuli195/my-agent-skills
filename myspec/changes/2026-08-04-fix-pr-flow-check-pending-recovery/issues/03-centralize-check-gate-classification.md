@@ -19,7 +19,8 @@
 ## Behavior evidence
 
 - Red: 新增 `diagnose` 公开入口回归在基线 `ef0341c2` 上将非必需失败检查误报为阻塞；新增必需检查为空和未知状态探针在实现前分别无法区分等待与检查状态不可用。
-- Green: 定向 PR Flow 测试 `python -m pytest -q -p no:cacheprovider tests/test_pr_flow_cli.py tests/test_pr_flow_plugin_package.py tests/test_pr_flow_pi_extension.py`，结果 `277 passed`。
-- Green: `build-and-verify verify --project .`，结果 `status: passed`；其中 PR Flow 检查结果为 `277 passed`。
+- Green: 定向 PR Flow 测试 `python -m pytest -q -p no:cacheprovider tests/test_pr_flow_cli.py tests/test_pr_flow_plugin_package.py tests/test_pr_flow_pi_extension.py`，结果 `281 passed`。
+- Green: `build-and-verify verify --project .`，结果 `status: passed`；其中 PR Flow 检查结果为 `281 passed`。
+- Green: 审查修复新增查询错误与未知状态混合矩阵；8 个定向回归通过，网络/认证/格式错误不会被汇总等待或失败覆盖。
 - Green: `complete`、`tweak` 和 `diagnose` 公开入口均覆盖检查状态不可用；`complete` 覆盖必需检查为空时按汇总等待/失败回退和未知状态安全停止，规则集重试路径继续通过同一检查门禁归类。
 - Risk: 未执行真实远端 PR 用户入口冒烟；本地 `.pr-flow/toolchain.json` 过期和远端规则集查询窗口仍需在真实 PR 环境单独验证，不影响本地公开入口证据。
