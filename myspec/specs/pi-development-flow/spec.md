@@ -153,13 +153,13 @@
 
 #### Scenario: 进入规格存档和交付阶段
 
-- **WHEN** Gate 2 — Implementation and Verification 的授权计划已完成，并且所有验收标准、行为证据和风险匹配验证达到实施完成条件，正式规格预览差异已经生成并等待最终确认
-- **THEN** 系统在 Gate 3 — Specification Archival and Delivery 中使用正式规格确认能力的最终确认，应用并校验正式规格差异后展示可验证的交付动作及预期结果，并等待独立交付授权；交付成功结束后才进入 Completion Check（完成检查），交付中断状态保留为 Gate 3 的未完成恢复位置
+- **WHEN** Gate 2 — Implementation and Verification 的授权计划已完成，并且所有验收标准、行为证据和风险匹配验证达到实施完成条件，正式规格预览差异和准确交付动作已经准备好
+- **THEN** 系统在 Gate 3 — Specification Archival and Delivery 中同时展示完整正式规格差异、验证证据、已知风险、准确交付动作和预期结果，并等待一次确认；该确认同时授权正式规格应用、校验和交付，确认后自动连续执行，交付成功结束后才进入 Completion Check（完成检查），交付中断状态保留为 Gate 3 的未完成恢复位置
 
-#### Scenario: 授权并执行交付
+#### Scenario: 一次确认并执行交付
 
-- **WHEN** Gate 3 — Specification Archival and Delivery 中的正式规格差异已经确认、应用且校验有效
-- **THEN** 系统展示可验证的交付动作、预期结果、验证证据和已知风险，并等待独立授权后才执行交付；只有交付成功结束后才转入 Completion Check
+- **WHEN** Gate 3 — Specification Archival and Delivery 已在同一输出中展示正式规格差异和交付动作
+- **THEN** 用户的一次确认同时授权两者；系统随后应用并校验正式规格差异，自动执行已确认的交付动作，不再请求第二次确认；只有交付成功结束后才转入 Completion Check
 
 #### Scenario: 阶段依赖不可用
 
@@ -179,10 +179,10 @@
 - **WHEN** 系统展示任一门禁或完成检查结果
 - **THEN** 系统使用固定标题和四个固定区块，不自行改名、调换、合并、拆分或增加区块，并按当前门禁展示需求、计划、规格差异、交付动作或完成状态的重点摘要
 
-#### Scenario: Gate 3 委托正式规格确认
+#### Scenario: Gate 3 一次确认规格和交付
 
-- **WHEN** Gate 3 — Specification Archival and Delivery（规格存档并交付）需要确认正式规格差异
-- **THEN** Development Flow（开发流程）摘要引用正式规格确认能力的结果，原始确认保持不变，系统不重写、包裹或重复提问
+- **WHEN** Gate 3 — Specification Archival and Delivery（规格存档并交付）需要确认正式规格差异和交付动作
+- **THEN** Development Flow（开发流程）在同一输出中展示完整正式规格差异和交付动作，并以一次确认同时授权两者；系统不重写、包裹或重复提问
 
 #### Scenario: 交付后确认最终完成
 
