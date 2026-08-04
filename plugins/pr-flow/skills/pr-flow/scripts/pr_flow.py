@@ -72,11 +72,17 @@ def write_text_if_missing(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def toolchain_identities() -> dict[str, dict[str, str]]:
+def toolchain_identities(project: Path) -> dict[str, dict[str, str]]:
     identities: dict[str, dict[str, str]] = {}
     for key, (command, package_name, package_directory) in TOOLCHAIN_TOOLS.items():
         try:
-            result = subprocess.run([shutil.which(command) or command, "doctor"], check=False, text=True, capture_output=True)
+            result = subprocess.run(
+                [shutil.which(command) or command, "doctor"],
+                cwd=project if project.is_dir() else project.parent,
+                check=False,
+                text=True,
+                capture_output=True,
+            )
             report = json.loads(result.stdout) if result.returncode == 0 else None
         except (FileNotFoundError, json.JSONDecodeError):
             report = None
@@ -84,6 +90,18 @@ def toolchain_identities() -> dict[str, dict[str, str]]:
         if not isinstance(toolchain, dict):
             raise PrFlowError("toolchain_doctor_failed", {"reason": "toolchain_doctor_failed", "tool": key})
         mode = toolchain.get("mode")
+        binding = report.get("binding") if isinstance(report, dict) else None
+        if mode == "dev" and isinstance(binding, dict) and binding.get("worktreeMatch") is True:
+            raise PrFlowError(
+                "toolchain_same_worktree_unsupported",
+                {
+                    "reason": "toolchain_same_worktree_unsupported",
+                    "tool": key,
+                    "sourceWorktree": binding.get("sourceWorktree"),
+                    "targetWorktree": binding.get("targetWorktree"),
+                    "nextAction": "Run PR Flow from an isolated target worktree or switch the tools to release mode.",
+                },
+            )
         identity = {"mode": mode, "packageName": toolchain.get("packageName")}
         if mode == "release":
             identity["packageVersion"] = toolchain.get("packageVersion")
@@ -223,7 +241,7 @@ def sync_toolchain(project: Path) -> bool:
         return False
     committed = False
     for _ in range(2):
-        identities = toolchain_identities()
+        identities = toolchain_identities(project)
         changes = toolchain_changes(project, identities)
         if not changes:
             return committed
@@ -231,7 +249,7 @@ def sync_toolchain(project: Path) -> bool:
             raise PrFlowError("toolchain_sync_dirty", {"reason": "toolchain_sync_dirty"})
         commit_toolchain_changes(project, changes)
         committed = True
-    if not toolchain_changes(project, toolchain_identities()):
+    if not toolchain_changes(project, toolchain_identities(project)):
         return committed
     raise PrFlowError("toolchain_identity_unstable", {"reason": "toolchain_identity_unstable"})
 
@@ -1997,9 +2015,14 @@ def run_init(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        identities = toolchain_identities()
+        identities = toolchain_identities(project)
     except PrFlowError as exc:
         print(f"status: {exc.reason}")
+        if exc.reason == "toolchain_same_worktree_unsupported":
+            for key in ("sourceWorktree", "targetWorktree", "nextAction"):
+                value = exc.details.get(key)
+                if isinstance(value, str) and value:
+                    print(f"{key}: {value}")
         return 1
 
     config_text = yaml.safe_dump(config, allow_unicode=True, sort_keys=False)

@@ -13,6 +13,7 @@ description: "初始化 PR Flow（拉取请求流程）本地配置、PR 模板�
 - 不运行 diagnose、complete、cleanup、hotfix 或 tweak（诊断、收尾、清理、热修复、小改）。
 - GitHub Rulesets（GitHub 规则集）只输出 remote tasks（远端待办）。
 - 禁止在当前对话未获得用户明确确认时修改 GitHub Rulesets（GitHub 规则集）、branch protection（分支保护）、workflow variables（工作流变量）或 repository settings（仓库设置）；未确认时只能输出 remote tasks（远端待办）。
+- 开发模式工具的源码工作树不得同时作为初始化目标工作树；检测到工具链工作树冲突时，在写入任何 PR Flow 文件前停止，并提示使用隔离目标工作树或切换到发布版工具。
 
 ## Closed Loop
 

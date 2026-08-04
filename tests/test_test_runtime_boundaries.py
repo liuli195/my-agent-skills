@@ -468,6 +468,15 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_pr_flow_cli.py::test_complete_rereads_the_new_baseline_with_bounded_toolchain_retries': (
         'covers the public complete CLI bounded toolchain identity retries from each new commit baseline; function=test_complete_rereads_the_new_baseline_with_bounded_toolchain_retries'
     ),
+    'tests/test_pr_flow_cli.py::test_init_stops_before_writing_for_same_worktree_toolchain_binding': (
+        'covers the public init CLI stopping before writes for a same-worktree toolchain binding; function=test_init_stops_before_writing_for_same_worktree_toolchain_binding'
+    ),
+    'tests/test_pr_flow_cli.py::test_lifecycle_stops_before_toolchain_commit_for_same_worktree_binding': (
+        'covers the public complete and tweak CLI stopping before toolchain commits for a same-worktree binding; function=test_lifecycle_stops_before_toolchain_commit_for_same_worktree_binding'
+    ),
+    'tests/test_pr_flow_cli.py::test_init_uses_target_project_as_toolchain_doctor_cwd': (
+        'covers the public init CLI running tool diagnostics in the target project directory; function=test_init_uses_target_project_as_toolchain_doctor_cwd'
+    ),
     'tests/test_pr_flow_cli.py::test_init_validates_release_and_dev_toolchain_identities_through_public_cli': (
         'covers the public init CLI accepting fixed release and trusted source toolchain identities; function=test_init_validates_release_and_dev_toolchain_identities_through_public_cli'
     ),
