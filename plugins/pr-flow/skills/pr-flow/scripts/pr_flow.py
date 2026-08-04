@@ -703,7 +703,12 @@ def classify_command_failure(reason: str, result: subprocess.CompletedProcess[st
 
 def add_recovery_action(details: dict[str, Any], next_command: str | None = None) -> dict[str, Any]:
     reason = str(details.get("reason") or "")
-    if next_command and reason in {"gh_pr_view_transient_failed", "checks_pending", "ruleset_merge_blocking"}:
+    if next_command and reason in {
+        "gh_pr_view_transient_failed",
+        "checks_pending",
+        "ruleset_merge_blocking",
+        "checks_or_review_blocking",
+    }:
         details.setdefault("nextCommand", next_command)
     for key, value in RECOVERABLE_NEXT_ACTIONS.get(reason, {}).items():
         details.setdefault(key, value)
@@ -1638,6 +1643,7 @@ def wait_for_checks(
     project: Path,
     pr: dict[str, Any],
     wait_config: dict[str, Any],
+    next_command: str | None = None,
 ) -> dict[str, Any] | None:
     timeout_seconds = int(wait_config.get("timeoutSeconds", 600))
     poll_seconds = int(wait_config.get("pollSeconds", 15))
@@ -1656,15 +1662,27 @@ def wait_for_checks(
         }
         if has_failing_check(checks):
             details["reason"] = "checks_or_review_blocking"
-            return stop_state("REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking", add_recovery_action(details))
+            return stop_state(
+                "REPLY_OR_FIX_REQUIRED",
+                "checks_or_review_blocking",
+                add_recovery_action(details, next_command),
+            )
         if not has_pending_check(checks):
             return None
         if timeout_seconds <= 0:
-            return stop_state("DISPATCH_REQUIRED", "checks_pending", add_recovery_action(details))
+            return stop_state(
+                "DISPATCH_REQUIRED",
+                "checks_pending",
+                add_recovery_action(details, next_command),
+            )
 
         remaining = timeout_seconds - (time.monotonic() - started_at)
         if remaining <= 0:
-            return stop_state("DISPATCH_REQUIRED", "checks_pending", add_recovery_action(details))
+            return stop_state(
+                "DISPATCH_REQUIRED",
+                "checks_pending",
+                add_recovery_action(details, next_command),
+            )
         time.sleep(min(max(poll_seconds, 1), remaining))
         updated = sync_pr(project, current)
         require_same_pr_commits(pr, updated)
@@ -1698,6 +1716,7 @@ def ruleset_retry_failure_details(
     original: dict[str, Any],
     retry: dict[str, Any],
     retry_attempts: int,
+    next_command: str | None = None,
 ) -> dict[str, Any]:
     details = dict(retry)
     details["reason"] = "ruleset_merge_blocking"
@@ -1706,7 +1725,7 @@ def ruleset_retry_failure_details(
     for key in ("returncode", "stdout", "stderr"):
         if key in original:
             details[key] = original[key]
-    return add_recovery_action(details)
+    return add_recovery_action(details, next_command)
 
 
 def retry_merge_after_ruleset_block(
@@ -1716,10 +1735,11 @@ def retry_merge_after_ruleset_block(
     merge_details: dict[str, Any],
     *,
     skip_review_gate: bool = False,
+    next_command: str | None = None,
 ) -> dict[str, Any] | None:
     current = sync_pr(project, pr)
     require_same_pr_commits(pr, current)
-    check_stop = wait_for_checks(project, current, wait_config_from_config(config))
+    check_stop = wait_for_checks(project, current, wait_config_from_config(config), next_command)
     if check_stop is not None:
         return check_stop
     if not skip_review_gate:
@@ -1734,19 +1754,22 @@ def retry_merge_after_ruleset_block(
         if exc.reason != "ruleset_merge_blocking":
             raise
         if not retry_with_auto and exc.details.get("autoMergeSuggested") is True:
+            refreshed = sync_pr(project, current)
+            require_same_pr_commits(pr, refreshed)
+            current = refreshed
             try:
                 merge_pr(project, config, current, auto=True)
             except PrFlowError as auto_exc:
                 if auto_exc.reason == "ruleset_merge_blocking":
                     raise PrFlowError(
                         "ruleset_merge_blocking",
-                        ruleset_retry_failure_details(merge_details, auto_exc.details, 2),
+                        ruleset_retry_failure_details(merge_details, auto_exc.details, 2, next_command),
                     ) from auto_exc
                 raise
             return None
         raise PrFlowError(
             "ruleset_merge_blocking",
-            ruleset_retry_failure_details(merge_details, exc.details, 1),
+            ruleset_retry_failure_details(merge_details, exc.details, 1, next_command),
         ) from exc
     return None
 
@@ -1968,7 +1991,13 @@ def run_diagnose(args: argparse.Namespace) -> int:
         )
     if has_failing_check(checks) or pr.get("reviewDecision") in {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}:
         gh_details["reason"] = "checks_or_review_blocking"
-        return stop(project, args.command, "REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking", add_recovery_action(gh_details))
+        return stop(
+            project,
+            args.command,
+            "REPLY_OR_FIX_REQUIRED",
+            "checks_or_review_blocking",
+            add_recovery_action(gh_details, command_next_command(args.command, project)),
+        )
     if pr.get("isDraft") is True:
         gh_details["reason"] = "pr_is_draft"
         gh_details["nextCommand"] = "gh pr ready"
@@ -2048,7 +2077,7 @@ def run_lifecycle(
         return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
 
     try:
-        check_stop = wait_for_checks(project, pr, wait_config_from_config(config))
+        check_stop = wait_for_checks(project, pr, wait_config_from_config(config), next_command)
     except PrFlowError as exc:
         return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
     if check_stop is not None:
@@ -2091,6 +2120,7 @@ def run_lifecycle(
                     pr,
                     exc.details,
                     skip_review_gate=skip_review_gate,
+                    next_command=next_command,
                 )
             except PrFlowError as recovery_exc:
                 return stop(

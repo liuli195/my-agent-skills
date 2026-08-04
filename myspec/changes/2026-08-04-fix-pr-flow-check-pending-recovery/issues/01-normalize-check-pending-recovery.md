@@ -6,7 +6,7 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
 - [x] 检查仍运行且 GitHub CLI 返回特殊待处理退出状态、同时返回有效检查数据时，`complete` 进入现有有界等待，而不是返回 `checks_or_review_blocking`。
 - [x] 检查等待后通过时，`complete` 在同一次运行中继续合并；等待超时返回 `DISPATCH_REQUIRED / checks_pending`。

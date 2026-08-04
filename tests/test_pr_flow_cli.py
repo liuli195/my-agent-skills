@@ -3831,6 +3831,9 @@ def test_diagnose_stop_output_includes_recovery_action(
     assert status["details"]["reason"] == expected_reason
     action = status["details"]["nextAction"]
     assert f"nextAction: {action}" in result.stdout
+    next_command = status["details"].get("nextCommand")
+    assert isinstance(next_command, str) and "diagnose" in next_command
+    assert f"nextCommand: {next_command}" in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -4506,6 +4509,9 @@ def test_complete_returns_checks_pending_when_ruleset_recovery_wait_times_out(tm
     assert action is not None
     assert "checks" in action
     assert f"nextAction: {action}" in result.stdout or f"nextCommand: {action}" in result.stdout
+    next_command = status["details"].get("nextCommand")
+    assert isinstance(next_command, str) and "complete" in next_command
+    assert f"nextCommand: {next_command}" in result.stdout
 
 
 def test_complete_waits_after_pending_exit_and_merges_when_checks_pass(
@@ -4662,6 +4668,46 @@ def test_complete_preserves_initial_ruleset_error_after_bounded_refresh_retry(
     assert status["details"]["retryAttempts"] == 1
 
 
+def test_ruleset_auto_retry_rechecks_commits_before_second_merge(tmp_path: Path, monkeypatch) -> None:
+    module = load_pr_flow_module()
+    original = json.loads(
+        pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision="APPROVED",
+            head_oid="b" * 40,
+            base_oid="a" * 40,
+        )
+    )
+    changed = {**original, "baseRefOid": "c" * 40}
+    snapshots = iter((original, original, changed))
+    merge_calls: list[bool] = []
+
+    monkeypatch.setattr(module, "sync_pr", lambda *_args: next(snapshots))
+    monkeypatch.setattr(module, "wait_for_checks", lambda *_args: None)
+
+    def fake_merge(*_args, auto: bool = False, **_kwargs):
+        merge_calls.append(auto)
+        if len(merge_calls) == 1:
+            raise module.PrFlowError(
+                "ruleset_merge_blocking",
+                {"reason": "ruleset_merge_blocking", "autoMergeSuggested": True},
+            )
+
+    monkeypatch.setattr(module, "merge_pr", fake_merge)
+
+    with pytest.raises(module.PrFlowError) as error:
+        module.retry_merge_after_ruleset_block(
+            tmp_path,
+            module.default_config("main"),
+            original,
+            {},
+            skip_review_gate=True,
+        )
+
+    assert error.value.reason == "base_outdated"
+    assert merge_calls == [False]
+
+
 def test_complete_uses_auto_merge_when_ruleset_suggests_auto_after_wait(tmp_path: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
@@ -4706,6 +4752,7 @@ def test_complete_uses_auto_merge_when_ruleset_suggests_auto_after_wait(tmp_path
         ),
         returncode=1,
     )
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid, "--auto"])
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
     git_stub = CommandStub(consume=True)
