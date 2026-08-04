@@ -140,6 +140,18 @@ _Avoid_: 检查等待、规则集阻塞
 Required Check 不再处于等待或失败状态，但合并仍被目标分支策略拒绝，需要处理规则、审查或权限条件。
 _Avoid_: 检查等待、检查阻塞
 
+**验证工作树（Verification Worktree）**:
+执行 Build and Verify（构建与验证）时作为当前项目来源的具体 Git（版本管理）工作树；本次验证只读取它自己的提交、HEAD（当前提交）和未提交状态。
+_Avoid_: 目标工作树
+
+**验证基线（Verification Baseline）**:
+提交范围验证使用的固定起始提交，在工作树开始本次变更前确定，验证期间不随分支引用移动。
+_Avoid_: HEAD^、可变分支基线
+
+**有效快速验证（Valid Fast Verification）**:
+至少选中一个检查且最终状态为 passed（通过）的快速验证；仅退出码为 0 或 checked（已检查）为空不足以证明验证通过。
+_Avoid_: 空检查通过
+
 **工具链工作树冲突（Toolchain Worktree Conflict）**:
 PR Flow 的目标工作树同时是开发工具的源码工作树；该状态不能安全地让工具链身份记录在同一工作树中收敛，流程必须要求隔离目标工作树。
 _Avoid_: 绑定不一致、源码版本漂移
