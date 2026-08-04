@@ -48,8 +48,8 @@ _Avoid_: filesystem isolation
 A non-gate user alignment with the overall design proposal before Requirements（需求）detail discussion. It neither publishes artifacts nor authorizes implementation or delivery.
 _Avoid_: Gate, implementation authorization
 
-**Gate 3 — Enter Delivery（进入交付）**:
-The final confirmation in `my-spec-add`（新增自有规格）that authorizes its validated atomic application of the formal MySpec（自有规格）difference; it passes only after that application succeeds.
+**Gate 3 — Specification Archival and Delivery（规格存档并交付）**:
+The third gate that combines formal MySpec（自有规格）archival and PR（拉取请求）delivery. It preserves the scoped `my-spec-add`（新增自有规格）confirmation and explicit delivery authorization, and passes into Completion Check（完成检查）only after the authorized delivery path finishes.
 _Avoid_: Delivery-plan confirmation
 
 **Flow Level（流程等级）**:
