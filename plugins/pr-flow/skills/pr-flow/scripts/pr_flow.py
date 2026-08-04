@@ -1645,7 +1645,15 @@ def remove_worktree(project: Path, target: Path) -> None:
                 command_failure_details("orca_worktree_remove_failed", result),
             )
     else:
-        require_git_success(controller, "git_worktree_remove_failed", "worktree", "remove", str(target.resolve()))
+        remove_options = ("-c", "core.longpaths=true") if os.name == "nt" else ()
+        require_git_success(
+            controller,
+            "git_worktree_remove_failed",
+            *remove_options,
+            "worktree",
+            "remove",
+            str(target.resolve()),
+        )
     if any(normalized_path(item["path"]) == target_key for item in list_worktrees(controller)):
         raise PrFlowError("git_worktree_remove_failed", {"reason": "git_worktree_remove_failed"})
 

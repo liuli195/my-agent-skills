@@ -538,14 +538,43 @@ def test_remove_worktree_uses_native_non_forced_remove(tmp_path: Path, monkeypat
     git_stub = CommandStub(consume=True)
     git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
     git_stub.add(["status", "--short"], stdout="")
-    git_stub.add(["worktree", "remove", str(target.resolve())])
+    remove_args = ([] if os.name != "nt" else ["-c", "core.longpaths=true"])
+    remove_args += ["worktree", "remove", str(target.resolve())]
+    git_stub.add(remove_args)
     git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
     monkeypatch.setattr(module, "git", git_stub)
 
     module.remove_worktree(target, target)
 
-    assert ("worktree", "remove", str(target.resolve())) in git_stub.calls
+    assert tuple(remove_args) in git_stub.calls
     assert not any("--force" in call for call in git_stub.calls)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows long-path behavior")
+def test_remove_worktree_handles_windows_long_paths(tmp_path: Path) -> None:
+    module = load_pr_flow_module()
+    main = tmp_path / "main"
+    target = tmp_path / "target"
+    init_repo(main)
+    (main / ".gitignore").write_text(".local/\n", encoding="utf-8")
+    git(main, "add", ".gitignore")
+    git(main, "commit", "-m", "ignore generated state")
+    git(main, "worktree", "add", "-b", "feature", str(target), "main")
+
+    deep = target / ".local" / "spec-work"
+    for _ in range(20):
+        deep /= "segment-" + ("x" * 12)
+    deep.mkdir(parents=True)
+    artifact = deep / ("artifact-" + ("y" * 30) + ".json")
+    artifact.write_text("{}\n", encoding="utf-8")
+    assert len(str(artifact)) > 260
+    before_config = (main / ".git" / "config").read_bytes()
+
+    module.remove_worktree(main, target)
+
+    assert not target.exists()
+    assert all(Path(item["path"]).resolve() != target.resolve() for item in module.list_worktrees(main))
+    assert (main / ".git" / "config").read_bytes() == before_config
 
 
 def worktree_removal_records(main: Path, target: Path) -> tuple[str, str]:
@@ -614,7 +643,9 @@ def test_remove_worktree_falls_back_to_git_when_orca_is_unavailable_or_unmatched
     git_stub = CommandStub(consume=True)
     git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
     git_stub.add(["status", "--short"], stdout="")
-    git_stub.add(["worktree", "remove", str(target.resolve())])
+    remove_args = ([] if os.name != "nt" else ["-c", "core.longpaths=true"])
+    remove_args += ["worktree", "remove", str(target.resolve())]
+    git_stub.add(remove_args)
     git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
     orca_stub = CommandStub(consume=True)
     orca_stub.add(["worktree", "ps", "--json"], returncode=returncode, stdout=stdout, stderr=stderr)
@@ -623,7 +654,7 @@ def test_remove_worktree_falls_back_to_git_when_orca_is_unavailable_or_unmatched
 
     module.remove_worktree(target, target)
 
-    assert ("worktree", "remove", str(target.resolve())) in git_stub.calls
+    assert tuple(remove_args) in git_stub.calls
     assert not any(call[:2] == ("worktree", "rm") for call in orca_stub.calls)
 
 
