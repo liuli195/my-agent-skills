@@ -1694,6 +1694,21 @@ def require_same_pr_commits(original: dict[str, Any], current: dict[str, Any]) -
         )
 
 
+def ruleset_retry_failure_details(
+    original: dict[str, Any],
+    retry: dict[str, Any],
+    retry_attempts: int,
+) -> dict[str, Any]:
+    details = dict(retry)
+    details["reason"] = "ruleset_merge_blocking"
+    details["retryDetails"] = dict(retry)
+    details["retryAttempts"] = retry_attempts
+    for key in ("returncode", "stdout", "stderr"):
+        if key in original:
+            details[key] = original[key]
+    return add_recovery_action(details)
+
+
 def retry_merge_after_ruleset_block(
     project: Path,
     config: dict[str, Any],
@@ -1712,13 +1727,27 @@ def retry_merge_after_ruleset_block(
         if review_stop is not None:
             return review_stop
     require_same_pr_commits(pr, sync_pr(project, current))
+    retry_with_auto = merge_details.get("autoMergeSuggested") is True
     try:
-        merge_pr(project, config, current, auto=merge_details.get("autoMergeSuggested") is True)
+        merge_pr(project, config, current, auto=retry_with_auto)
     except PrFlowError as exc:
-        if exc.reason == "ruleset_merge_blocking" and exc.details.get("autoMergeSuggested") is True:
-            merge_pr(project, config, current, auto=True)
+        if exc.reason != "ruleset_merge_blocking":
+            raise
+        if not retry_with_auto and exc.details.get("autoMergeSuggested") is True:
+            try:
+                merge_pr(project, config, current, auto=True)
+            except PrFlowError as auto_exc:
+                if auto_exc.reason == "ruleset_merge_blocking":
+                    raise PrFlowError(
+                        "ruleset_merge_blocking",
+                        ruleset_retry_failure_details(merge_details, auto_exc.details, 2),
+                    ) from auto_exc
+                raise
             return None
-        raise
+        raise PrFlowError(
+            "ruleset_merge_blocking",
+            ruleset_retry_failure_details(merge_details, exc.details, 1),
+        ) from exc
     return None
 
 

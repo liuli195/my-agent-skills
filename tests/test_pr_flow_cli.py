@@ -1582,6 +1582,7 @@ def run_complete_in_process(
     git_responses: list[tuple[list[str], str, int]] | None = None,
     merge_returncode: int = 0,
     merge_stderr: str = "",
+    merge_responses: list[tuple[str, int]] | None = None,
     required_buckets: tuple[str, ...] | None = None,
     required_exit_codes: tuple[int, ...] | None = None,
     wait_config: dict[str, int] | None = None,
@@ -1598,14 +1599,22 @@ def run_complete_in_process(
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         config["defaults"]["wait"] = wait_config
         config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    gh_stub = CommandStub(consume=pr_responses is not None)
+    gh_stub = CommandStub(consume=pr_responses is not None or merge_responses is not None)
     if pr_responses is None:
         assert pr_stdout is not None
         gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     else:
         for stdout, stderr, returncode in pr_responses:
             gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=stdout, stderr=stderr, returncode=returncode)
-    gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", "b" * 40], stderr=merge_stderr, returncode=merge_returncode)
+    if merge_responses is None:
+        gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", "b" * 40], stderr=merge_stderr, returncode=merge_returncode)
+    else:
+        for stderr, returncode in merge_responses:
+            gh_stub.add(
+                ["pr", "merge", "12", "--merge", "--match-head-commit", "b" * 40],
+                stderr=stderr,
+                returncode=returncode,
+            )
     if required_buckets is None:
         required_buckets = ("pass",)
         if pr_stdout is not None:
@@ -4618,6 +4627,39 @@ def test_complete_waits_for_checks_after_ruleset_block_then_retries_merge(tmp_pa
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: cleanup_complete" in result.stdout
     assert gh_stub.calls.count(("pr", "merge", "12", "--merge", "--match-head-commit", head_oid)) == 2
+
+
+def test_complete_preserves_initial_ruleset_error_after_bounded_refresh_retry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    completed_pr = pr_view_json(
+        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        review_decision="APPROVED",
+        head_oid="b" * 40,
+    )
+    initial_error = (
+        "initial ruleset response: base branch policy prohibits the merge\n"
+        "policy propagation is still pending\n"
+    )
+    refreshed_error = (
+        "refreshed ruleset response: base branch policy prohibits the merge\n"
+        "merge remains blocked\n"
+    )
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_responses=[(completed_pr, "", 0)] * 5,
+        merge_responses=[(initial_error, 1), (refreshed_error, 1)],
+        required_buckets=("pass", "pass"),
+    )
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "ruleset_merge_blocking"
+    assert status["details"]["stderr"] == initial_error.strip()
+    assert status["details"]["retryDetails"]["stderr"] == refreshed_error.strip()
+    assert status["details"]["retryAttempts"] == 1
 
 
 def test_complete_uses_auto_merge_when_ruleset_suggests_auto_after_wait(tmp_path: Path, monkeypatch) -> None:
