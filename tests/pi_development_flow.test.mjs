@@ -236,6 +236,7 @@ test("gate outputs use one exact four-section template", async () => {
   assert.match(template, /Gate 2：票据顺序、并行组、执行隔离、验证、审查、风险和停止条件/);
   assert.match(template, /Gate 3：正式规格内容摘要、规格变更数量[^]*校验结果、已知风险和准确交付动作/);
   assert.match(template, /Gate 3[^]*规格内容摘要[^]*规格变更数量（新增、删除；存在时列出修改、改名）[^]*交付动作[^]*同一确认输出/is);
+  assert.match(template, /核心摘要 MUST 展示正式规格内容摘要和规格变更数量（新增、删除；存在时列出修改、改名），不展开完整正式规格；完整差异通过引用提供/);
   assert.doesNotMatch(template, /Gate 3[^]*完整正式规格差异[^]*同一确认输出/is);
   assert.match(template, /Completion Check：完成条件、实际状态和清理残留/);
   assert.match(skill, /Ordinary long content[^]*Gate 3[^]*formal-specification content summary[^]*requirement-change counts \(additions and removals, plus modifications or renames when present\)[^]*exact delivery actions[^]*same output/is);
