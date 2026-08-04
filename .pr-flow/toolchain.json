@@ -5,14 +5,14 @@
       "mode": "dev",
       "packageName": "@liuli195/myspec",
       "sourceRepository": "https://github.com/liuli195/my-agent-skills",
-      "sourceCommit": "228323abaf7cfa81099fc20a48ab0fb3f297bdb2",
+      "sourceCommit": "88a491454bdd7b6eebe2a188358af9bb47f92cf9",
       "packageDirectory": "plugins/my-spec"
     },
     "build-and-verify": {
       "mode": "dev",
       "packageName": "@liuli195/build-and-verify",
       "sourceRepository": "https://github.com/liuli195/my-agent-skills",
-      "sourceCommit": "228323abaf7cfa81099fc20a48ab0fb3f297bdb2",
+      "sourceCommit": "88a491454bdd7b6eebe2a188358af9bb47f92cf9",
       "packageDirectory": "plugins/build-and-verify"
     }
   }

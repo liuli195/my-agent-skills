@@ -64,12 +64,24 @@ test("primary stages declare dependencies and their gate state before execution"
     documents["requirements.md"],
     /## MUST — Dependencies（依赖）/,
   );
+  assert.match(requirementsDependencies, /`pi-subagent-policy`/);
   assert.match(requirementsDependencies, /`codebase-design`/);
   assert.match(requirementsDependencies, /`grill-with-docs`/);
   assert.match(requirementsDependencies, /`domain-modeling`/);
   assert.match(requirementsDependencies, /`to-spec`/);
   assert.match(requirementsDependencies, /`to-tickets`/);
   assert.match(requirementsDependencies, /MUST NOT.*`grilling`/);
+  assert.match(requirementsDependencies, /delegate the architecture analysis to an `Architect`/i);
+  assert.match(requirementsDependencies, /Architect task MUST require.*load, read, and use `codebase-design`.*read-only/is);
+  assert.match(requirementsDependencies, /return.*source locations and uncertainties.*overall design proposal/is);
+  assert.match(requirementsDependencies, /Verify the Architect result.*design basis and evidence/is);
+  assert.match(requirementsDependencies, /If verification fails, cannot verify the result, or finds the result.*erroneous, incomplete, unacceptable, or unsupported by its sources.*stop.*instead of presenting/is);
+  assert.match(requirementsDependencies, /MUST NOT substitute its own `codebase-design` analysis/is);
+  assert.ok(
+    requirementsDependencies.indexOf("`pi-subagent-policy`")
+      < requirementsDependencies.indexOf("`codebase-design`"),
+    "requirements must validate delegation before architecture analysis",
+  );
   assert.ok(
     requirementsDependencies.indexOf("`codebase-design`")
       < requirementsDependencies.indexOf("`grill-with-docs`"),
@@ -77,7 +89,11 @@ test("primary stages declare dependencies and their gate state before execution"
   );
   assert.match(
     requirementsDependencies,
-    /Before invoking `to-spec` or `to-tickets`[^]*current-session tool-call evidence that `codebase-design`, `grill-with-docs`, and `domain-modeling` were read/,
+    /Before invoking `to-spec` or `to-tickets`[^]*current-session evidence that `pi-subagent-policy` was followed, an `Architect` was delegated to read and use `codebase-design`, and the verified Architect result was used as the design basis/is,
+  );
+  assert.doesNotMatch(
+    requirementsDependencies,
+    /read and use `codebase-design` in the current session/,
   );
 
   for (const text of Object.values(documents)) assert.match(text, /output-template\.md/);
@@ -88,9 +104,10 @@ test("primary stages declare dependencies and their gate state before execution"
     /Direction Confirmation.*not a formal gate[^]*does not publish artifacts or authorize implementation or delivery/is,
   );
   assert.match(requirements, /only.*unresolved.*detail/i);
+  assert.match(requirements, /based on the verified Architect analysis/i);
   assert.match(
     requirements,
-    /Return to the overall design proposal when an answer changes the scope, Module（模块）, Interface（接口）, Seam（接缝）, highest public test seam, or Flow Level（流程等级）; otherwise continue with the unresolved detail\./,
+    /Return to the overall design proposal when an answer changes the scope, Module（模块）, Interface（接口）, Seam（接缝）, highest public test seam, or Flow Level（流程等级）;[^]*delegate a fresh Architect analysis with `codebase-design` and verify it before presenting/is,
   );
 
   const implementationDependencies = section(
@@ -120,6 +137,7 @@ test("the three gates form the required stage state machine", async () => {
     "Gate 3 — Specification Archival and Delivery（规格存档并交付）",
     "Completion Check — 完成检查",
   ]) assert.match(skill, new RegExp(name));
+  assert.match(skill, /obtain and verify an Architect.*`codebase-design`.*evidence-backed basis/is);
   assert.doesNotMatch(skill, /Gate 4 —/);
 
   const ownership = [
@@ -179,6 +197,18 @@ test("the three gates form the required stage state machine", async () => {
     formalSpec,
     /普通[^。]*通过引用提供，?但 Gate 3[^。]*完整正式规格差异和准确交付动作[^。]*同一确认输出中直接展示/,
   );
+  const requirementsSpec = section(
+    formalSpec,
+    /### Requirement: 按决策规模确认开发需求/,
+    /\n### Requirement:|\n## /,
+  );
+  assert.match(requirementsSpec, /先完成与流程等级相称的只读架构分析/);
+  assert.doesNotMatch(requirementsSpec, /Architect（架构师）|`codebase-design`|`pi-subagent-policy`/);
+  assert.match(requirementsSpec, /错误、不完整、不可接受、无法验证或来源不支持.*停止并报告阻塞/is);
+  assert.match(requirementsSpec, /不确定性.*设计依据和证据/is);
+  assert.match(requirementsSpec, /重新完成只读架构分析，验证并接受结果后返回整体方案/);
+  assert.match(requirementsSpec, /才发布已确认的领域术语与需求产物/);
+  assert.doesNotMatch(requirementsSpec, /变更工作树|Git（版本管理）/);
   assert.match(formalSpec, /不改写正式规格差异内容、不重复提问/);
   assert.match(formalSpec, /每个阶段开始前向用户展示阶段依赖和适用门禁/);
 });
@@ -246,7 +276,8 @@ test("initialization and resume route through the three gates without MUST block
   const resume = await readFile(resolve(skillRoot, "references", "resume.md"), "utf8");
 
   assert.doesNotMatch(initialization, /^## MUST/m);
-  assert.match(initialization, /`codebase-design`/);
+  assert.match(initialization, /`codebase-design` Skill[^]*effective `Architect`[^]*role/is);
+  assert.match(initialization, /`pi-subagent-policy`/);
   assert.match(initialization, /`grilling`/);
   assert.match(initialization, /not a fourth.*gate/i);
   assert.match(initialization, /return.*same gate/i);
