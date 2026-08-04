@@ -453,6 +453,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_pr_flow_cli.py::test_linked_worktrees_complete_independently_through_cli': (
         'covers concurrent complete entrypoints across real linked worktrees; function=test_linked_worktrees_complete_independently_through_cli'
     ),
+    'tests/test_pr_flow_cli.py::test_cleanup_handles_windows_long_paths_through_cli': (
+        'covers the public cleanup CLI removing a real Windows long-path worktree with generated state; function=test_cleanup_handles_windows_long_paths_through_cli'
+    ),
     'tests/test_pr_flow_cli.py::test_write_status_keeps_compatibility_file_and_branch_run': (
         'covers per-worktree PR Flow status paths in a real git repository; function=test_write_status_keeps_compatibility_file_and_branch_run'
     ),

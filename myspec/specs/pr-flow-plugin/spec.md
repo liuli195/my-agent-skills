@@ -625,3 +625,14 @@ PR Flow（拉取请求流程）MUST 在开发工具的源码工作树与目标�
 
 - **WHEN** 开发工具的源码工作树与目标工作树不同
 - **THEN** `init`、`complete` 和 `tweak` MUST 保持现有工具链身份记录和 PR Flow 生命周期行为
+### Requirement: PR Flow handles safe Windows long-path worktree cleanup
+PR Flow（拉取请求流程）MUST 在 Windows（视窗系统）中支持安全关联工作树的非强制清理，即使被忽略的 `.local/spec-work`（本地规格运行状态）生成物产生超过默认路径限制的深层文件路径。
+
+#### Scenario: External caller removes a safe linked worktree with generated long paths
+- **WHEN** 调用方从其他工作树通过 `--project`（项目参数）执行已完成流程的 `cleanup`（清理）并传入 `--remove-worktree`（删除工作树参数）
+- **AND** 目标是 Git（版本管理）登记的非 main worktree（非主工作树）、工作区干净且不由 Orca（工作区管理器）负责删除
+- **AND** Windows（视窗系统）中的被忽略 `.local/spec-work`（本地规格运行状态）生成物产生超过默认路径限制的深层文件路径
+- **THEN** PR Flow（拉取请求流程）MUST 使用现有非强制清理边界完成目标工作树删除
+- **THEN** 目标实体目录 MUST 不再存在，Git 工作树清单 MUST 不再包含目标
+- **THEN** 目标分支同步和主工作树的既有安全行为 MUST 保持不变
+- **THEN** 清理 MUST NOT 要求持久写入仓库或用户 Git（版本管理）配置以支持该路径

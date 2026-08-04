@@ -17,7 +17,7 @@ Orchestrate one GitHub-hosted repository change by composing the repository's ex
 
 ## Output Contract（输出契约）
 
-Every gate and completion result MUST use the fixed titles and exact four-block format in [output-template](references/output-template.md). Read that reference before presenting the result. Do not rename, reorder, merge, split, or add output blocks; put only the current gate's essential points in the summary. Ordinary long content uses citations, but Gate 3's complete formal specification difference and exact delivery actions MUST be shown directly in the same output; citations only provide sources.
+Every gate and completion result MUST use the fixed titles and exact four-block format in [output-template](references/output-template.md). Read that reference before presenting the result. Do not rename, reorder, merge, split, or add output blocks; put only the current gate's essential points in the summary. Ordinary long content uses citations. Gate 3 MUST show a formal-specification content summary, requirement-change counts (additions and removals, plus modifications or renames when present), and exact delivery actions in the same output; the complete formal specification difference remains in the cited artifacts.
 
 ## Gates（门禁）
 
@@ -25,7 +25,7 @@ Keep three numbered and named decisions distinct:
 
 1. **Gate 1 — Requirements Confirmation（需求确认）.** Approve requirements, test seams, and tickets before publishing the change artifacts.
 2. **Gate 2 — Implementation and Verification（实施和验证）.** Approve the concrete implementation plan before code or behavior changes.
-3. **Gate 3 — Specification Archival and Delivery（规格存档并交付）.** After implementation, review, and verification complete, present the complete formal specification difference and exact PR delivery actions together, obtain one user confirmation, then apply and validate the specification and execute the authorized delivery automatically.
+3. **Gate 3 — Specification Archival and Delivery（规格存档并交付）.** After implementation, review, and verification complete, present the formal-specification content summary, requirement-change counts, and exact PR delivery actions together, obtain one user confirmation, then apply and validate the cited specification difference and execute the authorized delivery automatically.
 After Gate 3 delivery, run **Completion Check — 完成检查**: report whether final completion is proven, report cleanup residue, and request explicit force-cleanup authorization when needed. This is not a fourth numbered or authorization gate.
 
 At any failed gate or completion check, preserve the current artifacts and report the exact resume entry.
