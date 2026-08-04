@@ -4754,7 +4754,12 @@ def test_build_and_verify_cli_baseline_uses_verification_worktree_and_explicit_r
                 "command": command,
                 "paths": ["src/**"],
                 "inputs": ["src/app.py"],
-            }
+            },
+            {
+                "id": "verify.base",
+                "command": command,
+                "paths": ["base-only.txt"],
+            },
         ],
     )
     assert git(project, "add", ".").returncode == 0
@@ -4766,6 +4771,9 @@ def test_build_and_verify_cli_baseline_uses_verification_worktree_and_explicit_r
     assert git(project, "branch", "baseline", baseline).returncode == 0
     other = tmp_path / "other-worktree"
     assert git(project, "worktree", "add", str(other), "baseline").returncode == 0
+    (other / "base-only.txt").write_text("base-only\n", encoding="utf-8")
+    assert git(other, "add", "base-only.txt").returncode == 0
+    assert git(other, "commit", "-m", "base-only").returncode == 0
     assert git(project, "branch", "side", baseline).returncode == 0
     assert git(project, "checkout", "side").returncode == 0
     (project / "docs").mkdir()
@@ -4790,6 +4798,7 @@ def test_build_and_verify_cli_baseline_uses_verification_worktree_and_explicit_r
 
     assert verified.returncode == 0, verified.stdout + verified.stderr
     assert "checked: verify.src" in verified.stdout
+    assert "verify.base" not in verified.stdout
     assert "status: passed" in verified.stdout
     assert (project / ".build-and-verify" / "runs" / "baseline.log").read_text(
         encoding="utf-8"
@@ -4804,6 +4813,8 @@ def test_build_and_verify_cli_baseline_uses_verification_worktree_and_explicit_r
     )
     assert cached.returncode == 0, cached.stdout + cached.stderr
     assert "cache-hit: verify.src" in cached.stdout
+    assert "checked: verify.src" in cached.stdout
+    assert "status: passed" in cached.stdout
     assert (project / ".build-and-verify" / "runs" / "baseline.log").read_text(
         encoding="utf-8"
     ).splitlines() == ["ran"]
@@ -4815,6 +4826,7 @@ def test_build_and_verify_cli_baseline_uses_verification_worktree_and_explicit_r
     assert empty.returncode == 0, empty.stdout + empty.stderr
     assert "status: skipped" in empty.stdout
     assert "reason: no_changed_files" in empty.stdout
+    assert "status: passed" not in empty.stdout
 
     docs_base = empty_base
     (project / "docs" / "post-merge.md").write_text("docs\n", encoding="utf-8")
@@ -4826,6 +4838,7 @@ def test_build_and_verify_cli_baseline_uses_verification_worktree_and_explicit_r
     assert unmatched.returncode == 0, unmatched.stdout + unmatched.stderr
     assert "status: skipped" in unmatched.stdout
     assert "reason: no_matching_checks" in unmatched.stdout
+    assert "status: passed" not in unmatched.stdout
 
     invalid = run_build_and_verify_subprocess(
         "verify", "--project", str(project), "--base", "does-not-exist"
