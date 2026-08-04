@@ -590,6 +590,7 @@ def test_cleanup_handles_windows_long_paths_through_cli(tmp_path: Path, monkeypa
     result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
     assert not target.exists()
     assert "target" not in git(controller, "worktree", "list", "--porcelain")
     assert git(controller, "branch", "--show-current") == "main"
