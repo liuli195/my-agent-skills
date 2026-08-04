@@ -10,11 +10,11 @@ After the user confirms the overall direction, and before discussing any detail,
 
 Before invoking `to-spec` or `to-tickets`, read the exact Skill and confirm current-session tool-call evidence that `codebase-design`, `grill-with-docs`, and `domain-modeling` were read. Read `wayfinder` only when dependent decisions require its multi-session route. Do not replace this evidence with a self-reported flag or state file.
 
-If a required Skill is missing, unreadable, fails to load, or is replaced by another entry, stop and report the blocker, preserved requirement artifacts, and Gate 1 — Complete Requirements（完成需求） as the resume point.
+If a required Skill is missing, unreadable, fails to load, or is replaced by another entry, stop and report the blocker, preserved requirement artifacts, and Gate 1 — Requirements Confirmation（需求确认） as the resume point.
 
 ## MUST — Gate（门禁）
 
-### Gate 1 — Complete Requirements（完成需求）
+### Gate 1 — Requirements Confirmation（需求确认）
 
 #### Usage Condition（使用条件）
 
@@ -35,17 +35,17 @@ Confirm that:
 - the proposed change name, branch, and worktree layout are clear;
 - no requirement artifact has been published or committed without this confirmation.
 
-If any check fails, preserve the drafts and stop at Gate 1 — Complete Requirements（完成需求）.
+If any check fails, preserve the drafts and stop at Gate 1 — Requirements Confirmation（需求确认）.
 
 #### Confirmation Output（待用户确认内容清单）
 
-Present the complete specification, test seam, ticket breakdown and blocking edges, proposed change name, branch, and worktree. Explicitly ask whether the user approves completing Requirements and publishing those artifacts. Approval of one detail or a request to continue investigation is not approval of Gate 1 — Complete Requirements（完成需求）.
+Present the complete specification, test seam, ticket breakdown and blocking edges, proposed change name, branch, and worktree. Explicitly ask whether the user approves completing Requirements and publishing those artifacts. Approval of one detail or a request to continue investigation is not approval of Gate 1 — Requirements Confirmation（需求确认）.
 
-Without explicit confirmation, report the preserved drafts and Gate 1 — Complete Requirements（完成需求） as the resume point.
+Without explicit confirmation, report the preserved drafts and Gate 1 — Requirements Confirmation（需求确认） as the resume point.
 
 #### Next Gate（下一步门禁）
 
-Gate 2 — Enter Implementation（进入实施）. Gate 1 — Complete Requirements（完成需求） passes only after the approved requirement artifacts are published, committed, and the change worktree is clean.
+Gate 2 — Implementation and Verification（实施和验证）. Gate 1 — Requirements Confirmation（需求确认） passes only after the approved requirement artifacts are published, committed, and the change worktree is clean.
 
 ## Flow Level（流程等级）
 
@@ -78,7 +78,7 @@ During discussion, retain confirmed domain terms and decisions in the conversati
 
 1. Confirm the highest public test seam through `to-spec`.
 2. Use `to-tickets` to draft tracer-bullet vertical slices. Every ticket has an independently observable result, runnable verification, and only genuine blockers.
-3. After receiving the confirmation required by Gate 1 — Complete Requirements（完成需求）, create an ASCII-named change branch in `.worktrees/<change>/`, run the repository worktree initializer, and publish:
+3. After receiving the confirmation required by Gate 1 — Requirements Confirmation（需求确认）, create an ASCII-named change branch in `.worktrees/<change>/`, run the repository worktree initializer, and publish:
    - confirmed terms to the repository domain glossary;
    - the spec to `myspec/changes/<change>/spec.md`;
    - implementation tickets to `myspec/changes/<change>/issues/`.

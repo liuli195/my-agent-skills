@@ -112,21 +112,20 @@ test("primary stages declare dependencies and their gate state before execution"
   assert.match(deliveryDependencies, /`resolving-merge-conflicts`/);
 });
 
-test("the four gates form the required stage state machine", async () => {
+test("the three gates form the required stage state machine", async () => {
   const skill = await readFile(resolve(skillRoot, "SKILL.md"), "utf8");
   for (const name of [
-    "Gate 1 — Complete Requirements（完成需求）",
-    "Gate 2 — Enter Implementation（进入实施）",
-    "Gate 3 — Enter Delivery（进入交付）",
-    "Gate 4 — Authorize PR Delivery（授权 PR 交付）",
+    "Gate 1 — Requirements Confirmation（需求确认）",
+    "Gate 2 — Implementation and Verification（实施和验证）",
+    "Gate 3 — Specification Archival and Delivery（规格存档并交付）",
     "Completion Check — 完成检查",
   ]) assert.match(skill, new RegExp(name));
+  assert.doesNotMatch(skill, /Gate 4 —/);
 
   const ownership = [
-    ["requirements.md", 1, "Complete Requirements"],
-    ["implementation.md", 2, "Enter Implementation"],
-    ["delivery.md", 3, "Enter Delivery"],
-    ["delivery.md", 4, "Authorize PR Delivery"],
+    ["requirements.md", 1, "Requirements Confirmation"],
+    ["implementation.md", 2, "Implementation and Verification"],
+    ["delivery.md", 3, "Specification Archival and Delivery"],
   ];
 
   for (const [name, number, gateName] of ownership) {
@@ -142,32 +141,46 @@ test("the four gates form the required stage state machine", async () => {
   const requirements = await readFile(resolve(skillRoot, "references", "requirements.md"), "utf8");
   const implementation = await readFile(resolve(skillRoot, "references", "implementation.md"), "utf8");
   const delivery = await readFile(resolve(skillRoot, "references", "delivery.md"), "utf8");
-  assert.match(
-    section(requirements, /### Gate 1 — Complete Requirements/, /\n### Gate |\n## /),
-    /Gate 2 — Enter Implementation/,
+  const formalSpec = await readFile(
+    resolve(repoRoot, "myspec", "specs", "pi-development-flow", "spec.md"),
+    "utf8",
   );
   assert.match(
-    section(implementation, /### Gate 2 — Enter Implementation/, /\n### Gate |\n## /),
-    /Gate 1 — Complete Requirements[^]*Gate 3 — Enter Delivery/,
+    section(requirements, /### Gate 1 — Requirements Confirmation/, /\n### Gate |\n## /),
+    /Gate 2 — Implementation and Verification/,
+  );
+  assert.match(
+    section(implementation, /### Gate 2 — Implementation and Verification/, /\n### Gate |\n## /),
+    /Gate 1 — Requirements Confirmation[^]*Gate 3 — Specification Archival and Delivery/,
   );
   const gate3 = section(
     delivery,
-    /### Gate 3 — Enter Delivery/,
+    /### Gate 3 — Specification Archival and Delivery/,
     /\n### Gate |\n## /,
   );
-  assert.match(gate3, /Gate 2 — Enter Implementation[^]*Gate 4 — Authorize PR Delivery/);
-  assert.match(gate3, /`my-spec-add`[^]*final confirmation/is);
+  assert.match(gate3, /Gate 2 — Implementation and Verification/);
+  assert.match(gate3, /Completion Check — 完成检查/);
+  assert.match(gate3, /single final confirmation[^]*formal specification/is);
   assert.match(
     gate3,
-    /Gate 3 passes only after[^]*appl(?:y|ies|ication)[^]*validat/is,
+    /Gate 3 passes only after[^]*appl(?:y|ies|ied|ication)[^]*validat/is,
   );
+  assert.match(gate3, /Gate 3 passes only after[^]*delivery (?:finishes|completes|succeeds)/is);
+  assert.match(gate3, /stop state.*Gate 3.*not final completion/is);
   assert.match(gate3, /Development Flow summary uses.*output-template/is);
-  assert.match(gate3, /detailed final confirmation.*exact.*output/is);
-  assert.doesNotMatch(gate3, /After Gate 3 — Enter Delivery passes, run `my-spec-add`/);
+  assert.match(gate3, /complete formal specification difference[^]*exact delivery actions[^]*together/is);
+  assert.match(gate3, /one (?:single )?confirmation/is);
+  assert.match(gate3, /same[^]*confirmation[^]*formal specification[^]*delivery/is);
+  assert.match(gate3, /automatically.*(?:apply|execute)|apply.*execute.*automatically/is);
+  assert.doesNotMatch(gate3, /two scoped, sequential confirmations|without the second confirmation, do not/is);
+  assert.doesNotMatch(gate3, /After Gate 3 .* passes, run `my-spec-add`/);
+  assert.doesNotMatch(delivery, /Gate 4 —/);
   assert.match(
-    section(delivery, /### Gate 4 — Authorize PR Delivery/, /\n### Gate |\n## /),
-    /Completion Check — 完成检查/,
+    formalSpec,
+    /普通[^。]*通过引用提供，?但 Gate 3[^。]*完整正式规格差异和准确交付动作[^。]*同一确认输出中直接展示/,
   );
+  assert.match(formalSpec, /不改写正式规格差异内容、不重复提问/);
+  assert.match(formalSpec, /每个阶段开始前向用户展示阶段依赖和适用门禁/);
 });
 
 test("gate outputs use one exact four-section template", async () => {
@@ -184,16 +197,17 @@ test("gate outputs use one exact four-section template", async () => {
     headings,
   );
   for (const name of headings) assert.match(template, new RegExp(`^${name}$`, "m"));
-  assert.match(template, /Gate 1 — Complete Requirements（完成需求）/);
-  assert.match(template, /Gate 2 — Enter Implementation（进入实施）/);
-  assert.match(template, /Gate 3 — Enter Delivery（进入交付）/);
-  assert.match(template, /Gate 4 — Authorize PR Delivery（授权 PR 交付）/);
+  assert.match(template, /Gate 1 — Requirements Confirmation（需求确认）/);
+  assert.match(template, /Gate 2 — Implementation and Verification（实施和验证）/);
+  assert.match(template, /Gate 3 — Specification Archival and Delivery（规格存档并交付）/);
+  assert.doesNotMatch(template, /Gate 4 —/);
   assert.match(template, /Completion Check — 完成检查/);
   assert.match(template, /Gate 1：目标、范围、测试接缝、票据及阻塞关系、变更工作树/);
   assert.match(template, /Gate 2：票据顺序、并行组、执行隔离、验证、审查、风险和停止条件/);
-  assert.match(template, /Gate 3：正式规格差异和校验结果；确认沿用 `my-spec-add`/);
-  assert.match(template, /Gate 4：最终差异、验证审查结果、已知风险和准确交付动作/);
+  assert.match(template, /Gate 3：正式规格差异、校验结果、已知风险和准确交付动作/);
+  assert.match(template, /Gate 3[^]*完整正式规格差异和交付动作[^]*同一确认输出/is);
   assert.match(template, /Completion Check：完成条件、实际状态和清理残留/);
+  assert.match(skill, /Ordinary long content[^]*Gate 3[^]*complete formal specification difference and exact delivery actions[^]*same output/is);
   assert.match(skill, /references\/output-template\.md/);
 });
 
@@ -208,7 +222,7 @@ test("completion check distinguishes final completion from cleanup residue", asy
     /\n### Gate |\n## /,
   );
 
-  assert.match(completion, /Gate 4 — Authorize PR Delivery/);
+  assert.match(completion, /Gate 3 — Specification Archival and Delivery/);
   assert.match(completion, /final completion|最终完成/i);
   assert.match(completion, /cleanup residue|清理残留/i);
   assert.match(completion, /physical worktree directory|实体工作树目录/i);
@@ -219,12 +233,12 @@ test("completion check distinguishes final completion from cleanup residue", asy
   assert.match(completion, /explicit authorization|明确授权/i);
   assert.match(completion, /refusal.*residue.*recovery|拒绝.*残留.*恢复/is);
   assert.match(completion, /authorization.*check.*again|授权.*再次.*检查/is);
-  assert.match(completion, /not.*fifth.*gate|不新增第五个正式授权门禁/is);
+  assert.match(completion, /not.*fourth.*gate|不新增第四个正式授权门禁/is);
   assert.match(completion, /unrequested.*(?:not|does not).*block|未请求.*不.*阻塞/is);
   assert.match(completion, /output-template\.md/);
 });
 
-test("initialization and resume route through the four gates without MUST blocks", async () => {
+test("initialization and resume route through the three gates without MUST blocks", async () => {
   const initialization = await readFile(
     resolve(skillRoot, "references", "initialization.md"),
     "utf8",
@@ -234,7 +248,7 @@ test("initialization and resume route through the four gates without MUST blocks
   assert.doesNotMatch(initialization, /^## MUST/m);
   assert.match(initialization, /`codebase-design`/);
   assert.match(initialization, /`grilling`/);
-  assert.match(initialization, /not a fifth.*gate/i);
+  assert.match(initialization, /not a fourth.*gate/i);
   assert.match(initialization, /return.*same gate/i);
   assert.match(initialization, /formal entr/i);
 
