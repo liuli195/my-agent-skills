@@ -382,14 +382,6 @@ PR Flow init（拉取请求流程初始化）MUST separate local config writes�
 - **AND** the immediate post-create `gh pr view`（查看拉取请求） sync fails once with EOF（连接提前结束）
 - **AND** a retry succeeds
 - **THEN** PR Flow（拉取请求流程） MUST continue the lifecycle without printing an intermediate stop state（停止状态）
-### Requirement: Recoverable PR Flow failures expose recovery actions
-PR Flow（拉取请求流程） MUST classify known recoverable failures through a shared contract and MUST include a recovery action in stop-state details（停止状态详情）.
-
-#### Scenario: Recoverable reasons stay registered
-- **WHEN** PR Flow（拉取请求流程） adds or keeps a known recoverable reason（可恢复原因）
-- **AND** the reason（原因） is one of `gh_auth_required`, `gh_pr_view_transient_failed`, `checks_pending`, `ruleset_merge_blocking`, `checks_or_review_blocking`, `invalid_fixes`, `pr_missing` or `missing_upstream`
-- **THEN** that reason MUST NOT map to `EXCEPTION_REQUIRED`（需要异常处理）
-- **THEN** recovery details MUST include `nextAction`（下一步动作） or `nextCommand`（下一步命令）
 ### Requirement: PR Flow isolates linked worktree runs
 PR Flow（拉取请求流程）MUST 为每个 worktree（工作树）解析独立流程上下文和运行状态，并只互斥同一目标工作树与当前分支上的修改命令。
 
@@ -430,29 +422,6 @@ PR Flow（拉取请求流程）MUST 在 diagnose（诊断）、complete（完整
 - **THEN** stop-state details（停止状态详情） MUST provide a recovery command（恢复命令）
 - **THEN** PR Flow（拉取请求流程） MUST NOT automatically rebase（变基）、merge（合并） or resolve conflicts（解决冲突）
 - **THEN** 一个工作树的冲突 MUST NOT modify or block another worktree（工作树）
-### Requirement: PR gates belong to the current source and target commits
-complete（完整流程）和 tweak（小改）MUST 只使用当前源/目标提交上的非空 required checks（必需检查），并在合并前复核这两个提交。
-
-#### Scenario: Current required checks all pass
-- **WHEN** GitHub（代码托管平台）为当前 PR（拉取请求）返回非空 required checks（必需检查）集合
-- **AND** 每项必需检查都属于已记录的当前源提交且成功
-- **AND** review gate（审查门禁，如适用）完成后源/目标提交仍等于已验证快照
-- **THEN** complete（完整流程）或 tweak（小改） MAY continue to merge（合并）
-
-#### Scenario: Required checks are empty or incomplete
-- **WHEN** required checks（必需检查）集合为空，或任何必需检查缺失、等待中、失败或不属于当前源提交
-- **THEN** complete（完整流程）和 tweak（小改） MUST NOT merge（合并）
-- **THEN** stop-state details（停止状态详情） MUST identify the blocking checks（阻塞检查） and current source commit（当前源提交）
-
-#### Scenario: Source or target commit changes after gates
-- **WHEN** required checks（必需检查）或 review gate（审查门禁）完成后，PR（拉取请求）的源提交或目标提交发生变化
-- **THEN** 本轮 checks（检查）、review（审查）和 mergeability（可合并状态）结果 MUST be invalidated（失效）
-- **THEN** complete（完整流程）和 tweak（小改） MUST stop before merge（合并） and require a new run（重新运行）
-
-#### Scenario: Tweak skips only review gate
-- **WHEN** 用户运行 tweak（小改）
-- **THEN** tweak（小改） MUST use the same latest-base、required-check and commit-revalidation（最新基线、必需检查和提交复核） rules as complete（完整流程）
-- **THEN** tweak（小改） MUST skip only review gate（审查门禁）
 ### Requirement: Hotfix revalidates the remote target before push
 hotfix（热修复）MUST 使用独立工作树运行状态，并在验证与授权后、推送前复核远端目标提交。
 
@@ -571,3 +540,64 @@ PR Flow（拉取请求流程）MUST preserve the boundary between default fast v
 - **WHEN** PR Flow（拉取请求流程） consumes review gate（审查门禁） mode（模式） or check status（检查状态）
 - **THEN** PR Flow（拉取请求流程） MUST NOT infer that full verify（完整验证） has run unless an external check explicitly identifies the full command
 - **THEN** PR Flow（拉取请求流程） MUST keep fast verify（快速验证） and full verify（完整验证） results（结果） distinct
+### Requirement: Recoverable PR Flow failures expose recovery actions
+PR Flow（拉取请求流程）MUST classify known recoverable conditions consistently and MUST include a recovery action in stop-state details（停止状态详情）.
+
+#### Scenario: A recoverable condition exposes recovery
+- **WHEN** a PR Flow（拉取请求流程）run stops for one of `gh_auth_required`, `gh_pr_view_transient_failed`, `checks_pending`, `checks_unavailable`, `ruleset_merge_blocking`, `checks_or_review_blocking`, `invalid_fixes`, `pr_missing` or `missing_upstream`
+- **THEN** the stop state MUST NOT be `EXCEPTION_REQUIRED`（需要异常处理）
+- **THEN** recovery details MUST include `nextAction`（下一步动作）or `nextCommand`（下一步命令）
+
+#### Scenario: Required-check status cannot be established
+- **WHEN** the available external check evidence cannot establish whether the required checks（必需检查）for the current source commit（当前源提交）passed, are pending, or failed
+- **THEN** PR Flow（拉取请求流程）MUST output `DISPATCH_REQUIRED`（需要外部进展）with `reason: checks_unavailable`
+- **THEN** stop-state details（停止状态详情）MUST preserve user-actionable error information and the external check evidence that was observed
+- **THEN** recovery details MUST include a copyable command to rerun the same user-facing flow（用户可见流程）
+- **THEN** PR Flow（拉取请求流程）MUST NOT continue to review or merge
+### Requirement: PR gates belong to the current source and target commits
+complete（完整流程）和 tweak（小改）MUST 只使用当前源/目标提交上的非空 required checks（必需检查），并在合并前复核这两个提交；diagnose（诊断）MUST use the same check-state classification（检查状态分类）without entering merge（合并）.
+
+#### Scenario: Current required checks all pass
+- **WHEN** the external system reports a non-empty set of required checks（必需检查）for the current PR（拉取请求）
+- **AND** every required check belongs to the recorded current source commit and has passed
+- **AND** after the review gate（审查门禁）, the source and target commits still equal the validated snapshot
+- **THEN** complete（完整流程）or tweak（小改）MAY continue to merge（合并）
+
+#### Scenario: Required checks are empty or incomplete
+- **WHEN** the required-check evidence is empty, or any required check is missing, pending, failed, cancelled, or does not belong to the current source commit
+- **THEN** complete（完整流程）和 tweak（小改）MUST NOT merge（合并）
+- **THEN** stop-state details（停止状态详情）MUST identify the blocking checks（阻塞检查）and current source commit（当前源提交）
+
+#### Scenario: Required-check evidence is temporarily empty while the PR summary is pending or failing
+- **WHEN** required-check evidence for the current source commit is temporarily empty
+- **AND** the external PR check summary（拉取请求检查汇总）for that commit explicitly shows pending, failed, or cancelled
+- **THEN** complete（完整流程）、tweak（小改）和 diagnose（诊断）MUST classify the state consistently as `checks_pending` or `checks_or_review_blocking`
+- **THEN** complete（完整流程）和 tweak（小改）MUST NOT merge（合并）while that result is pending, failed, or cancelled
+- **THEN** stop-state details（停止状态详情）MUST preserve the external check evidence and the reason for the classification
+
+#### Scenario: Required-check evidence is empty but the PR summary is all green
+- **WHEN** required-check evidence for the current source commit is empty
+- **AND** the external PR check summary（拉取请求检查汇总）appears successful
+- **THEN** PR Flow（拉取请求流程）MUST classify the state as `checks_unavailable`
+- **THEN** complete（完整流程）和 tweak（小改）MUST NOT merge（合并）without proof of the required checks（必需检查）
+
+#### Scenario: A check state is not an allowed terminal or pending state
+- **WHEN** required-check evidence or the external PR check summary（拉取请求检查汇总）contains a state that is neither successful, pending, failed, nor cancelled
+- **THEN** PR Flow（拉取请求流程）MUST classify the state as `checks_unavailable`
+- **THEN** PR Flow（拉取请求流程）MUST NOT infer pending, failure, or success from the partial evidence
+
+#### Scenario: Required checks are explicitly pending
+- **WHEN** external check evidence for the current source commit explicitly shows that one or more required checks（必需检查）are pending
+- **THEN** complete（完整流程）、tweak（小改）和 diagnose（诊断）MUST classify the state as `checks_pending`
+- **THEN** complete（完整流程）和 tweak（小改）MUST wait for a later check result before any merge attempt
+- **THEN** if the configured wait limit is reached without a terminal result, complete（完整流程）和 tweak（小改）MUST stop without merging
+
+#### Scenario: Source or target commit changes after gates
+- **WHEN** required checks（必需检查）或 review gate（审查门禁）完成后，PR（拉取请求）的源提交或目标提交发生变化
+- **THEN** 本轮 checks（检查）、review（审查）和 mergeability（可合并状态）结果 MUST be invalidated（失效）
+- **THEN** complete（完整流程）和 tweak（小改）MUST stop before merge（合并）and require a new run（重新运行）
+
+#### Scenario: Tweak skips only review gate
+- **WHEN** 用户运行 tweak（小改）
+- **THEN** tweak（小改）MUST use the same latest-base、required-check and commit-revalidation（最新基线、必需检查和提交复核）rules as complete（完整流程）
+- **THEN** tweak（小改）MUST skip only review gate（审查门禁）

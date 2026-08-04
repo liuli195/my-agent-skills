@@ -29,7 +29,12 @@ PR_VIEW_FIELDS = "number,state,mergeStateStatus,reviewDecision,headRefName,baseR
 BLOCKING_REVIEW_DECISIONS = {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}
 SUPPORTED_REVIEW_GATE_MODES = {"github", "skip"}
 DEFAULT_GH_PR_VIEW_RETRIES = 3
+GH_CHECKS_PENDING_EXIT_CODE = 8
 REQUIRED_CHECK_FIELDS = "bucket,name,state,workflow,link"
+CHECK_GATE_PASSED = "passed"
+CHECK_GATE_PENDING = "pending"
+CHECK_GATE_FAILED = "failed"
+CHECK_GATE_UNAVAILABLE = "unavailable"
 GH_PR_VIEW_RETRIES_ENV = "PR_FLOW_GH_PR_VIEW_RETRIES"
 PR_TEMPLATE = """## Summary
 
@@ -418,9 +423,14 @@ def write_status(project: Path, command: str, status: str, details: dict) -> Non
         (runs_dir / f"{stable_key(source_branch)}.json").write_text(text, encoding="utf-8")
 
 
-def print_stop(status: str, message: str) -> None:
+def print_stop(status: str, message: str, details: dict[str, Any] | None = None) -> None:
     print(f"status: {status}")
     print(message)
+    if details is not None:
+        for key in ("nextAction", "nextCommand"):
+            value = details.get(key)
+            if isinstance(value, str) and value:
+                print(f"{key}: {value}")
 
 
 def git(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -621,7 +631,7 @@ def active_lock_details(project: Path) -> dict[str, Any] | None:
 
 def stop(project: Path, command: str, status: str, message: str, details: dict[str, Any]) -> int:
     write_status(project, command, status, details)
-    print_stop(status, message)
+    print_stop(status, message, details)
     return 1
 
 
@@ -633,6 +643,16 @@ GH_AUTH_REQUIRED_MARKERS = (
     "bad credentials",
     "http 401",
 )
+GH_CHECKS_UNAVAILABLE_MARKERS = (
+    "network",
+    "connection",
+    "timed out",
+    "timeout",
+    "eof",
+    "could not resolve",
+    "tls",
+)
+GH_NO_REQUIRED_CHECKS_MARKERS = ("no required checks reported", "no checks reported")
 
 RECOVERABLE_NEXT_ACTIONS = {
     "gh_auth_required": {
@@ -646,6 +666,9 @@ RECOVERABLE_NEXT_ACTIONS = {
     },
     "checks_or_review_blocking": {
         "nextAction": "Fix failing checks or requested changes, then rerun the same PR Flow command.",
+    },
+    "checks_unavailable": {
+        "nextAction": "Verify GitHub check access and status, then rerun the same PR Flow command.",
     },
     "ruleset_merge_blocking": {
         "nextAction": "Wait for ruleset requirements to pass or enable auto-merge, then rerun the same PR Flow command.",
@@ -669,6 +692,7 @@ RECOVERABLE_STOP_STATUSES = {
     "pr_missing": "DISPATCH_REQUIRED",
     "missing_upstream": "DISPATCH_REQUIRED",
     "checks_or_review_blocking": "REPLY_OR_FIX_REQUIRED",
+    "checks_unavailable": "DISPATCH_REQUIRED",
     "invalid_fixes": "REPLY_OR_FIX_REQUIRED",
 }
 
@@ -689,6 +713,16 @@ def gh_auth_required(result: subprocess.CompletedProcess[str]) -> bool:
     return any(marker in text for marker in GH_AUTH_REQUIRED_MARKERS)
 
 
+def gh_checks_unavailable(result: subprocess.CompletedProcess[str]) -> bool:
+    text = f"{result.stdout}\n{result.stderr}".lower()
+    return any(marker in text for marker in GH_CHECKS_UNAVAILABLE_MARKERS)
+
+
+def gh_no_required_checks(result: subprocess.CompletedProcess[str]) -> bool:
+    text = f"{result.stdout}\n{result.stderr}".lower()
+    return any(marker in text for marker in GH_NO_REQUIRED_CHECKS_MARKERS)
+
+
 def classify_command_failure(reason: str, result: subprocess.CompletedProcess[str]) -> str:
     if reason.startswith("gh_") and gh_auth_required(result):
         return "gh_auth_required"
@@ -697,7 +731,13 @@ def classify_command_failure(reason: str, result: subprocess.CompletedProcess[st
 
 def add_recovery_action(details: dict[str, Any], next_command: str | None = None) -> dict[str, Any]:
     reason = str(details.get("reason") or "")
-    if next_command and reason in {"gh_pr_view_transient_failed", "checks_pending", "ruleset_merge_blocking"}:
+    if next_command and reason in {
+        "gh_pr_view_transient_failed",
+        "checks_pending",
+        "ruleset_merge_blocking",
+        "checks_or_review_blocking",
+        "checks_unavailable",
+    }:
         details.setdefault("nextCommand", next_command)
     for key, value in RECOVERABLE_NEXT_ACTIONS.get(reason, {}).items():
         details.setdefault(key, value)
@@ -1097,6 +1137,37 @@ def pr_checks(pr: dict[str, Any]) -> list[Any]:
     return checks if isinstance(checks, list) else []
 
 
+def required_checks_error_details(
+    result: subprocess.CompletedProcess[str],
+    pr_number: Any,
+    *,
+    empty: bool = False,
+) -> dict[str, Any]:
+    details = command_failure_details("gh_pr_checks_failed", result)
+    if gh_auth_required(result):
+        details["reason"] = "gh_auth_required"
+    else:
+        details["reason"] = "checks_unavailable"
+        details["fallbackToSummary"] = (
+            (result.returncode == 0 and empty) or gh_no_required_checks(result)
+        ) and not gh_checks_unavailable(result)
+    details["pr"] = pr_number
+    return details
+
+
+def raise_required_checks_error(
+    result: subprocess.CompletedProcess[str],
+    pr_number: Any,
+    *,
+    empty: bool = False,
+    error: str | None = None,
+) -> NoReturn:
+    details = required_checks_error_details(result, pr_number, empty=empty)
+    if error is not None:
+        details["error"] = error
+    raise PrFlowError(str(details["reason"]), details)
+
+
 def required_checks(project: Path, pr_number: Any) -> list[dict[str, Any]]:
     result = gh(
         project,
@@ -1107,23 +1178,22 @@ def required_checks(project: Path, pr_number: Any) -> list[dict[str, Any]]:
         "--json",
         REQUIRED_CHECK_FIELDS,
     )
-    if result.returncode != 0:
-        raise PrFlowError(
-            "checks_or_review_blocking",
-            command_failure_details("checks_or_review_blocking", result),
-        )
     try:
         checks = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise PrFlowError(
-            "checks_or_review_blocking",
-            {"reason": "checks_or_review_blocking", "error": str(exc)},
-        ) from exc
-    if not isinstance(checks, list) or not checks or not all(isinstance(check, dict) for check in checks):
-        raise PrFlowError(
-            "checks_or_review_blocking",
-            {"reason": "checks_or_review_blocking", "pr": pr_number},
-        )
+        raise_required_checks_error(result, pr_number, error=str(exc))
+    if not isinstance(checks, list) or not all(isinstance(check, dict) for check in checks):
+        raise_required_checks_error(result, pr_number)
+    if not checks:
+        raise_required_checks_error(result, pr_number, empty=True)
+    if result.returncode != 0:
+        if gh_auth_required(result) or gh_checks_unavailable(result) or gh_no_required_checks(result):
+            raise_required_checks_error(result, pr_number)
+        if result.returncode == GH_CHECKS_PENDING_EXIT_CODE and has_pending_check(checks):
+            return checks
+        if has_failing_check(checks) and not result.stderr.strip():
+            return checks
+        raise_required_checks_error(result, pr_number)
     return checks
 
 
@@ -1138,7 +1208,7 @@ def has_pending_check(checks: list[Any]) -> bool:
 
 
 def has_failing_check(checks: list[Any]) -> bool:
-    failing_values = {"FAILURE", "FAILED", "ERROR", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE"}
+    failing_values = {"FAILURE", "FAILED", "ERROR", "TIMED_OUT", "CANCELLED", "CANCELED", "STARTUP_FAILURE"}
     for check in checks:
         if not isinstance(check, dict):
             continue
@@ -1151,6 +1221,141 @@ def has_failing_check(checks: list[Any]) -> bool:
         ):
             return True
     return False
+
+
+CHECK_SUCCESS_VALUES = {"PASS", "PASSED", "SUCCESS", "SKIPPED", "NEUTRAL"}
+CHECK_KNOWN_VALUES = CHECK_SUCCESS_VALUES | {
+    "PENDING",
+    "IN_PROGRESS",
+    "QUEUED",
+    "REQUESTED",
+    "WAITING",
+    "EXPECTED",
+    "FAIL",
+    "FAILURE",
+    "FAILED",
+    "ERROR",
+    "TIMED_OUT",
+    "CANCEL",
+    "CANCELLED",
+    "CANCELED",
+    "STARTUP_FAILURE",
+    "COMPLETED",
+}
+CHECK_BUCKET_VALUES = {"PASS", "PENDING", "FAIL", "CANCEL"}
+
+
+def check_item_is_known(check: dict[str, Any]) -> bool:
+    bucket = check_value(check, "bucket")
+    values = [
+        value
+        for value in (
+            bucket,
+            check_value(check, "status"),
+            check_value(check, "state"),
+            check_value(check, "conclusion"),
+        )
+        if value
+    ]
+    if not values or (bucket and bucket not in CHECK_BUCKET_VALUES):
+        return False
+    return all(value in CHECK_KNOWN_VALUES for value in values)
+
+
+def check_item_is_passed(check: dict[str, Any]) -> bool:
+    if not check_item_is_known(check):
+        return False
+    return any(
+        check_value(check, key) in CHECK_SUCCESS_VALUES for key in ("bucket", "status", "state", "conclusion")
+    ) and not has_pending_check([check]) and not has_failing_check([check])
+
+
+def classify_check_values(checks: Any) -> str:
+    if not isinstance(checks, list) or not checks or not all(isinstance(check, dict) for check in checks):
+        return CHECK_GATE_UNAVAILABLE
+    if not all(check_item_is_known(check) for check in checks):
+        return CHECK_GATE_UNAVAILABLE
+    if has_failing_check(checks):
+        return CHECK_GATE_FAILED
+    if has_pending_check(checks):
+        return CHECK_GATE_PENDING
+    if all(check_item_is_passed(check) for check in checks):
+        return CHECK_GATE_PASSED
+    return CHECK_GATE_UNAVAILABLE
+
+
+def classify_check_summary(summary: Any) -> str:
+    if not isinstance(summary, list) or not summary or not all(isinstance(check, dict) for check in summary):
+        return CHECK_GATE_UNAVAILABLE
+    if not all(check_item_is_known(check) for check in summary):
+        return CHECK_GATE_UNAVAILABLE
+    if has_failing_check(summary):
+        return CHECK_GATE_FAILED
+    if has_pending_check(summary):
+        return CHECK_GATE_PENDING
+    return CHECK_GATE_UNAVAILABLE
+
+
+def check_gate_details(
+    pr: dict[str, Any],
+    checks: list[dict[str, Any]] | None,
+    query_error: dict[str, Any] | None,
+    state: str,
+) -> dict[str, Any]:
+    summary = pr.get("statusCheckRollup")
+    details: dict[str, Any] = {
+        "reason": {
+            CHECK_GATE_PENDING: "checks_pending",
+            CHECK_GATE_FAILED: "checks_or_review_blocking",
+            CHECK_GATE_UNAVAILABLE: "checks_unavailable",
+        }.get(state, "pr_state"),
+        "checkGate": state,
+        "pr": pr.get("number"),
+        "headRefName": pr.get("headRefName"),
+        "baseRefName": pr.get("baseRefName"),
+        "headRefOid": pr.get("headRefOid"),
+        "baseRefOid": pr.get("baseRefOid"),
+        "requiredChecks": checks if checks is not None else [],
+        "checkSummary": summary,
+    }
+    if query_error is not None:
+        details["checkQueryError"] = query_error
+    return details
+
+
+def classify_check_gate(project: Path, pr: dict[str, Any]) -> dict[str, Any]:
+    try:
+        checks = required_checks(project, pr.get("number"))
+    except PrFlowError as exc:
+        checks = None
+        query_error = {"reason": exc.reason, **exc.details}
+    else:
+        query_error = None
+
+    state = classify_check_values(checks)
+    if checks is None and query_error and query_error.get("fallbackToSummary") is True:
+        summary_state = classify_check_summary(pr.get("statusCheckRollup"))
+        if summary_state in {CHECK_GATE_PENDING, CHECK_GATE_FAILED}:
+            state = summary_state
+    return {"state": state, "details": check_gate_details(pr, checks, query_error, state)}
+
+
+def check_gate_stop_state(gate: dict[str, Any], next_command: str | None = None) -> dict[str, Any] | None:
+    state = gate.get("state")
+    if state == CHECK_GATE_PASSED:
+        return None
+    reasons = {
+        CHECK_GATE_PENDING: ("DISPATCH_REQUIRED", "checks_pending"),
+        CHECK_GATE_FAILED: ("REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking"),
+        CHECK_GATE_UNAVAILABLE: ("DISPATCH_REQUIRED", "checks_unavailable"),
+    }
+    status, message = reasons.get(state, ("DISPATCH_REQUIRED", "checks_unavailable"))
+    details = dict(gate.get("details") or {})
+    query_reason = (details.get("checkQueryError") or {}).get("reason")
+    if state == CHECK_GATE_UNAVAILABLE and query_reason == "gh_auth_required":
+        status, message = "DISPATCH_REQUIRED", "gh_auth_required"
+    details["reason"] = message
+    return stop_state(status, message, add_recovery_action(details, next_command))
 
 
 def parse_pr_result(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
@@ -1623,6 +1828,7 @@ def wait_for_checks(
     project: Path,
     pr: dict[str, Any],
     wait_config: dict[str, Any],
+    next_command: str | None = None,
 ) -> dict[str, Any] | None:
     timeout_seconds = int(wait_config.get("timeoutSeconds", 600))
     poll_seconds = int(wait_config.get("pollSeconds", 15))
@@ -1630,26 +1836,24 @@ def wait_for_checks(
     current = pr
 
     while True:
-        checks = required_checks(project, current.get("number"))
-        details = {
-            "reason": "checks_pending",
-            "pr": current.get("number"),
-            "headRefName": current.get("headRefName"),
-            "baseRefName": current.get("baseRefName"),
-            "headRefOid": current.get("headRefOid"),
-            "baseRefOid": current.get("baseRefOid"),
-        }
-        if has_failing_check(checks):
-            details["reason"] = "checks_or_review_blocking"
-            return stop_state("REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking", add_recovery_action(details))
-        if not has_pending_check(checks):
-            return None
+        gate = classify_check_gate(project, current)
+        if gate.get("state") != CHECK_GATE_PENDING:
+            return check_gate_stop_state(gate, next_command)
+        details = gate["details"]
         if timeout_seconds <= 0:
-            return stop_state("DISPATCH_REQUIRED", "checks_pending", add_recovery_action(details))
+            return stop_state(
+                "DISPATCH_REQUIRED",
+                "checks_pending",
+                add_recovery_action(details, next_command),
+            )
 
         remaining = timeout_seconds - (time.monotonic() - started_at)
         if remaining <= 0:
-            return stop_state("DISPATCH_REQUIRED", "checks_pending", add_recovery_action(details))
+            return stop_state(
+                "DISPATCH_REQUIRED",
+                "checks_pending",
+                add_recovery_action(details, next_command),
+            )
         time.sleep(min(max(poll_seconds, 1), remaining))
         updated = sync_pr(project, current)
         require_same_pr_commits(pr, updated)
@@ -1679,6 +1883,22 @@ def require_same_pr_commits(original: dict[str, Any], current: dict[str, Any]) -
         )
 
 
+def ruleset_retry_failure_details(
+    original: dict[str, Any],
+    retry: dict[str, Any],
+    retry_attempts: int,
+    next_command: str | None = None,
+) -> dict[str, Any]:
+    details = dict(retry)
+    details["reason"] = "ruleset_merge_blocking"
+    details["retryDetails"] = dict(retry)
+    details["retryAttempts"] = retry_attempts
+    for key in ("returncode", "stdout", "stderr"):
+        if key in original:
+            details[key] = original[key]
+    return add_recovery_action(details, next_command)
+
+
 def retry_merge_after_ruleset_block(
     project: Path,
     config: dict[str, Any],
@@ -1686,10 +1906,11 @@ def retry_merge_after_ruleset_block(
     merge_details: dict[str, Any],
     *,
     skip_review_gate: bool = False,
+    next_command: str | None = None,
 ) -> dict[str, Any] | None:
     current = sync_pr(project, pr)
     require_same_pr_commits(pr, current)
-    check_stop = wait_for_checks(project, current, wait_config_from_config(config))
+    check_stop = wait_for_checks(project, current, wait_config_from_config(config), next_command)
     if check_stop is not None:
         return check_stop
     if not skip_review_gate:
@@ -1697,13 +1918,30 @@ def retry_merge_after_ruleset_block(
         if review_stop is not None:
             return review_stop
     require_same_pr_commits(pr, sync_pr(project, current))
+    retry_with_auto = merge_details.get("autoMergeSuggested") is True
     try:
-        merge_pr(project, config, current, auto=merge_details.get("autoMergeSuggested") is True)
+        merge_pr(project, config, current, auto=retry_with_auto)
     except PrFlowError as exc:
-        if exc.reason == "ruleset_merge_blocking" and exc.details.get("autoMergeSuggested") is True:
-            merge_pr(project, config, current, auto=True)
+        if exc.reason != "ruleset_merge_blocking":
+            raise
+        if not retry_with_auto and exc.details.get("autoMergeSuggested") is True:
+            refreshed = sync_pr(project, current)
+            require_same_pr_commits(pr, refreshed)
+            current = refreshed
+            try:
+                merge_pr(project, config, current, auto=True)
+            except PrFlowError as auto_exc:
+                if auto_exc.reason == "ruleset_merge_blocking":
+                    raise PrFlowError(
+                        "ruleset_merge_blocking",
+                        ruleset_retry_failure_details(merge_details, auto_exc.details, 2, next_command),
+                    ) from auto_exc
+                raise
             return None
-        raise
+        raise PrFlowError(
+            "ruleset_merge_blocking",
+            ruleset_retry_failure_details(merge_details, exc.details, 1, next_command),
+        ) from exc
     return None
 
 
@@ -1912,19 +2150,20 @@ def run_diagnose(args: argparse.Namespace) -> int:
         )
         gh_details["optionalFixesArg"] = "--fixes 98"
         return stop(project, args.command, "EXCEPTION_REQUIRED", "pr_body_required", gh_details)
-    checks = pr_checks(pr)
-    if has_pending_check(checks):
-        gh_details["reason"] = "checks_pending"
+    gate = classify_check_gate(project, pr)
+    gate_stop = check_gate_stop_state(gate, command_next_command(args.command, project))
+    if gate_stop is not None:
+        gate_stop["details"] = {**gh_details, **gate_stop["details"]}
+        return stop_from_state(project, args.command, gate_stop)
+    if pr.get("reviewDecision") in {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}:
+        gh_details["reason"] = "checks_or_review_blocking"
         return stop(
             project,
             args.command,
-            "DISPATCH_REQUIRED",
-            "checks_pending",
+            "REPLY_OR_FIX_REQUIRED",
+            "checks_or_review_blocking",
             add_recovery_action(gh_details, command_next_command(args.command, project)),
         )
-    if has_failing_check(checks) or pr.get("reviewDecision") in {"CHANGES_REQUESTED", "REVIEW_REQUIRED"}:
-        gh_details["reason"] = "checks_or_review_blocking"
-        return stop(project, args.command, "REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking", add_recovery_action(gh_details))
     if pr.get("isDraft") is True:
         gh_details["reason"] = "pr_is_draft"
         gh_details["nextCommand"] = "gh pr ready"
@@ -2004,7 +2243,7 @@ def run_lifecycle(
         return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
 
     try:
-        check_stop = wait_for_checks(project, pr, wait_config_from_config(config))
+        check_stop = wait_for_checks(project, pr, wait_config_from_config(config), next_command)
     except PrFlowError as exc:
         return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
     if check_stop is not None:
@@ -2047,6 +2286,7 @@ def run_lifecycle(
                     pr,
                     exc.details,
                     skip_review_gate=skip_review_gate,
+                    next_command=next_command,
                 )
             except PrFlowError as recovery_exc:
                 return stop(
