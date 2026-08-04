@@ -6,11 +6,18 @@
 
 **Blocked by（前置项）：** None — can start immediately（无，可立即开始）
 
-**Status（状态）：** ready-for-agent
+**Status（状态）：** completed
 
-- [ ] Delta 只修改一个能力时，非目标规格文件的原始字节完全不变。
-- [ ] 预览和最终原子应用使用相同的保持规则；目标和新增文件使用 `LF`（换行符）。
-- [ ] 回归案例覆盖原始 `LF` 与 `CRLF` 两种行尾，并通过主规格校验。
-- [ ] 目标语义变化、删除文件、重复应用和失败恢复继续符合现有行为。
-- [ ] 回归检查通过 Windows（视窗操作系统）真实公开入口验证。
-- [ ] Build and Verify（构建与验证）快速检查通过。
+- [x] Delta 只修改一个能力时，非目标规格文件的原始字节完全不变。
+- [x] 预览和最终原子应用使用相同的保持规则；目标和新增文件使用 `LF`（换行符）。
+- [x] 回归案例覆盖原始 `LF` 与 `CRLF` 两种行尾，并通过主规格校验。
+- [x] 目标语义变化、删除文件、重复应用和失败恢复继续符合现有行为。
+- [x] 回归检查通过 Windows（视窗操作系统）真实公开入口验证。
+- [x] Build and Verify（构建与验证）快速检查通过。
+
+## Behavior evidence（行为证据）
+
+- 红灯依据：基线预览写入器会重新渲染所有规格；新增混合 `LF`/`CRLF` 字节保持案例在基线上失败。
+- 绿灯：`python -m pytest -q -p no:cacheprovider tests/test_my_spec.py -k test_spec_ops_cli_preserves_untouched_lf_and_crlf_bytes_for_preview_and_apply`，1 项通过；相关 Delta 应用测试合计 7 项通过。
+- 公开入口冒烟：通过 `node plugins/my-spec/bin/myspec.js` 执行预览和最终 `apply-delta`，非目标文件字节保持、目标文件使用 `LF`，主规格校验通过。
+- 快速验证：`build-and-verify verify --project .`，MySpec、运行边界和构建验证检查通过。

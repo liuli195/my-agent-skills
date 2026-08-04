@@ -4502,6 +4502,58 @@ TO: 密码登录
     assert (specs / "accounts" / "spec.md").read_bytes() == before_repeat
 
 
+def test_spec_ops_cli_preserves_untouched_lf_and_crlf_bytes_for_preview_and_apply(
+    tmp_path: Path,
+) -> None:
+    specs = tmp_path / "specs"
+    delta = tmp_path / "delta"
+    preview = tmp_path / "preview"
+    target = main_spec("Accounts", requirement("登录", "允许登录"))
+    untouched_lf = main_spec("Profiles", requirement("查看资料", "显示姓名"))
+    untouched_crlf = main_spec("Settings", requirement("修改设置", "保存设置"))
+    (specs / "accounts" / "spec.md").parent.mkdir(parents=True)
+    (specs / "accounts" / "spec.md").write_bytes(target.replace("\n", "\r\n").encode("utf-8"))
+    (specs / "profiles" / "spec.md").parent.mkdir(parents=True)
+    (specs / "profiles" / "spec.md").write_bytes(untouched_lf.encode("utf-8"))
+    (specs / "settings" / "spec.md").parent.mkdir(parents=True)
+    (specs / "settings" / "spec.md").write_bytes(untouched_crlf.replace("\n", "\r\n").encode("utf-8"))
+    original_lf = (specs / "profiles" / "spec.md").read_bytes()
+    original_crlf = (specs / "settings" / "spec.md").read_bytes()
+    write(
+        delta / "accounts" / "spec.md",
+        """## MODIFIED Requirements
+
+### Requirement: 登录
+
+系统 MUST 允许密码登录。
+
+#### Scenario: 密码正确
+
+- **WHEN** 用户提交正确密码
+- **THEN** 系统创建会话
+""",
+    )
+
+    work = ready_state(SPEC_OPS, tmp_path / "state")
+    assert run_python(SPEC_OPS, "validate-main", specs).returncode == 0
+    assert run_python(SPEC_OPS, "validate-delta", delta, specs).returncode == 0
+    previewed = apply_ready(SPEC_OPS, specs, delta, preview, work)
+    assert previewed.returncode == 0, previewed.stderr
+    assert run_python(SPEC_OPS, "validate-main", preview).returncode == 0
+    assert (preview / "profiles" / "spec.md").read_bytes() == original_lf
+    assert (preview / "settings" / "spec.md").read_bytes() == original_crlf
+    target_preview = (preview / "accounts" / "spec.md").read_bytes()
+    assert b"\r" not in target_preview
+    assert "系统 MUST 允许密码登录。".encode("utf-8") in target_preview
+
+    applied = apply_ready(SPEC_OPS, specs, delta, specs, work)
+    assert applied.returncode == 0, applied.stderr
+    assert run_python(SPEC_OPS, "validate-main", specs).returncode == 0
+    assert (specs / "profiles" / "spec.md").read_bytes() == original_lf
+    assert (specs / "settings" / "spec.md").read_bytes() == original_crlf
+    assert (specs / "accounts" / "spec.md").read_bytes() == target_preview
+
+
 def test_spec_ops_cli_rejects_invalid_specs_and_delta_references(tmp_path: Path) -> None:
     specs = tmp_path / "specs"
     delta = tmp_path / "delta"

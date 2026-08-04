@@ -564,6 +564,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_spec_ops_cli_validates_applies_all_delta_operations_and_diffs': (
         'covers the packaged spec_ops CLI validation, all Delta operations, preview, and diff seam; function=test_spec_ops_cli_validates_applies_all_delta_operations_and_diffs'
     ),
+    'tests/test_my_spec.py::test_spec_ops_cli_preserves_untouched_lf_and_crlf_bytes_for_preview_and_apply': (
+        'covers the packaged spec_ops CLI preserving untouched LF and CRLF bytes across preview and atomic apply; function=test_spec_ops_cli_preserves_untouched_lf_and_crlf_bytes_for_preview_and_apply'
+    ),
     'tests/test_my_spec.py::test_spec_ops_cli_rejects_invalid_specs_and_delta_references': (
         'covers packaged spec_ops CLI trust-boundary failures without tracebacks; function=test_spec_ops_cli_rejects_invalid_specs_and_delta_references'
     ),
