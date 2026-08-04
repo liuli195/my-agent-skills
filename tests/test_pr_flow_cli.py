@@ -1585,6 +1585,7 @@ def run_complete_in_process(
     merge_responses: list[tuple[str, int]] | None = None,
     required_buckets: tuple[str, ...] | None = None,
     required_exit_codes: tuple[int, ...] | None = None,
+    required_responses: list[tuple[str, str, int]] | None = None,
     wait_config: dict[str, int] | None = None,
 ) -> tuple[Path, subprocess.CompletedProcess[str]]:
     from tests.support.command_stubs import CommandStub
@@ -1621,9 +1622,18 @@ def run_complete_in_process(
             rollup = json.loads(pr_stdout).get("statusCheckRollup", [])
             if any(check.get("status") in {"IN_PROGRESS", "QUEUED"} for check in rollup):
                 required_buckets = ("pending",)
-    for index, bucket in enumerate(required_buckets):
-        returncode = required_exit_codes[index] if required_exit_codes is not None else 0
-        allow_required_checks(gh_stub, bucket, returncode=returncode)
+    if required_responses is not None:
+        for stdout, stderr, returncode in required_responses:
+            gh_stub.add(
+                ["pr", "checks", "12", "--required", "--json", "bucket,name,state,workflow,link"],
+                stdout=stdout,
+                stderr=stderr,
+                returncode=returncode,
+            )
+    else:
+        for index, bucket in enumerate(required_buckets):
+            returncode = required_exit_codes[index] if required_exit_codes is not None else 0
+            allow_required_checks(gh_stub, bucket, returncode=returncode)
     if cleanup_stdout is not None:
         gh_stub.add(
             ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
@@ -1656,6 +1666,7 @@ def run_tweak_in_process(
     review_decision: str = "APPROVED",
     checks: list[dict[str, object]] | None = None,
     forbid_full_verify: bool = False,
+    required_response: tuple[str, str, int] | None = None,
 ) -> tuple[Path, subprocess.CompletedProcess[str], object]:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
@@ -1685,7 +1696,16 @@ def run_tweak_in_process(
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
-    allow_required_checks(gh_stub, "pending" if any(check.get("status") == "IN_PROGRESS" for check in (checks or [])) else "pass")
+    if required_response is None:
+        allow_required_checks(gh_stub, "pending" if any(check.get("status") == "IN_PROGRESS" for check in (checks or [])) else "pass")
+    else:
+        stdout, stderr, returncode = required_response
+        gh_stub.add(
+            ["pr", "checks", "12", "--required", "--json", "bucket,name,state,workflow,link"],
+            stdout=stdout,
+            stderr=stderr,
+            returncode=returncode,
+        )
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
 
     git_stub = CommandStub(consume=True)
@@ -1717,6 +1737,8 @@ def run_diagnose_in_process(
     pr_stdout: str,
     pr_stderr: str = "",
     pr_returncode: int = 0,
+    required_bucket: str | None = None,
+    required_response: tuple[str, str, int] | None = None,
 ) -> tuple[Path, subprocess.CompletedProcess[str]]:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
@@ -1738,6 +1760,27 @@ def run_diagnose_in_process(
         stderr=pr_stderr,
         returncode=pr_returncode,
     )
+    if required_bucket is None and pr_returncode == 0:
+        rollup = json.loads(pr_stdout).get("statusCheckRollup", [])
+        required_bucket = "fail" if any(
+            check.get("conclusion") in {"FAILURE", "CANCELLED", "CANCELED"}
+            for check in rollup
+            if isinstance(check, dict)
+        ) else "pending" if any(
+            check.get("status") in {"IN_PROGRESS", "QUEUED"}
+            for check in rollup
+            if isinstance(check, dict)
+        ) else "pass"
+    if required_response is not None:
+        stdout, stderr, returncode = required_response
+        gh_stub.add(
+            ["pr", "checks", "12", "--required", "--json", "bucket,name,state,workflow,link"],
+            stdout=stdout,
+            stderr=stderr,
+            returncode=returncode,
+        )
+    elif required_bucket is not None:
+        allow_required_checks(gh_stub, required_bucket)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
     result = invoke_pr_flow(["diagnose", "--project", str(project)], module=module)
@@ -3499,6 +3542,125 @@ def test_tweak_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path: P
     assert "checks" in action
 
 
+@pytest.mark.parametrize(
+    ("bucket", "state"),
+    [("fail", "FAILURE"), ("cancel", "CANCELLED")],
+)
+def test_tweak_stops_for_failed_or_cancelled_required_checks(
+    tmp_path: Path,
+    monkeypatch,
+    bucket: str,
+    state: str,
+) -> None:
+    project, result, _ = run_tweak_in_process(
+        tmp_path,
+        monkeypatch,
+        reason="small docs polish",
+        required_response=(
+            json.dumps([{"bucket": bucket, "name": "ci", "state": state}]),
+            "",
+            0,
+        ),
+    )
+
+    assert result.returncode == 1
+    assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["command"] == "tweak"
+    assert status["details"]["reason"] == "checks_or_review_blocking"
+    assert status["details"]["requiredChecks"][0]["bucket"] == bucket
+    assert "status: merge_complete" not in result.stdout
+
+
+def test_diagnose_uses_required_checks_instead_of_optional_rollup_failure(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_diagnose_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_view_json(
+            checks=[
+                {"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                {"name": "optional-lint", "status": "COMPLETED", "conclusion": "FAILURE"},
+            ],
+            review_decision="",
+        ),
+        required_bucket="pass",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: ready" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "ready_to_complete"
+
+
+@pytest.mark.parametrize("command", ["complete", "tweak", "diagnose"])
+def test_public_entries_stop_when_check_status_is_unavailable(
+    tmp_path: Path,
+    monkeypatch,
+    command: str,
+) -> None:
+    completed = pr_view_json(
+        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        review_decision="APPROVED",
+        head_oid="b" * 40,
+    )
+    required_response = ("[]", "network unavailable\n", 1)
+    if command == "complete":
+        project, result = run_complete_in_process(
+            tmp_path,
+            monkeypatch,
+            pr_stdout=completed,
+            required_responses=[required_response],
+        )
+    elif command == "tweak":
+        project, result, _ = run_tweak_in_process(
+            tmp_path,
+            monkeypatch,
+            reason="small docs polish",
+            checks=json.loads(completed)["statusCheckRollup"],
+            required_response=required_response,
+        )
+    else:
+        project, result = run_diagnose_in_process(
+            tmp_path,
+            monkeypatch,
+            pr_stdout=completed,
+            required_response=required_response,
+        )
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    assert "checks_unavailable" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["command"] == command
+    assert status["details"]["reason"] == "checks_unavailable"
+    assert status["details"]["checkQueryError"]["stderr"] == "network unavailable"
+    assert command in status["details"]["nextCommand"]
+    assert "status: merge_complete" not in result.stdout
+
+
+def test_complete_stops_on_unknown_required_check_state(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}],
+            review_decision="APPROVED",
+            head_oid="b" * 40,
+        ),
+        required_responses=[
+            (json.dumps([{"bucket": "pass", "name": "ci", "state": "NEW_STATE"}]), "", 0),
+        ],
+        wait_config={"timeoutSeconds": 0, "pollSeconds": 1},
+    )
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    assert "checks_unavailable" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "checks_unavailable"
+    assert status["details"]["requiredChecks"][0]["state"] == "NEW_STATE"
+
+
 def test_diagnose_outputs_exception_for_unknown_gh_failure(tmp_path: Path, monkeypatch) -> None:
     project, result = run_diagnose_in_process(
         tmp_path,
@@ -3537,6 +3699,7 @@ def test_diagnose_retries_transient_eof_without_repeated_stop_output(tmp_path: P
     gh_stub = CommandStub(consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr='Post "https://api.github.com/graphql": EOF\n', returncode=1)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
+    allow_required_checks(gh_stub)
     git_stub = CommandStub(consume=True)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
@@ -4512,6 +4675,49 @@ def test_complete_returns_checks_pending_when_ruleset_recovery_wait_times_out(tm
     next_command = status["details"].get("nextCommand")
     assert isinstance(next_command, str) and "complete" in next_command
     assert f"nextCommand: {next_command}" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("summary", "expected_status", "expected_reason"),
+    [
+        (
+            [{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
+            "DISPATCH_REQUIRED",
+            "checks_pending",
+        ),
+        (
+            [{"name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}],
+            "REPLY_OR_FIX_REQUIRED",
+            "checks_or_review_blocking",
+        ),
+        (
+            [{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            "DISPATCH_REQUIRED",
+            "checks_unavailable",
+        ),
+    ],
+)
+def test_complete_uses_summary_only_for_pending_or_failure_when_required_checks_are_empty(
+    tmp_path: Path,
+    monkeypatch,
+    summary: list[dict[str, object]],
+    expected_status: str,
+    expected_reason: str,
+) -> None:
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_view_json(checks=summary, review_decision="APPROVED", head_oid="b" * 40),
+        required_responses=[("[]", "", 0)],
+        wait_config={"timeoutSeconds": 0, "pollSeconds": 1},
+    )
+
+    assert result.returncode == 1
+    assert f"status: {expected_status}" in result.stdout
+    assert "status: merge_complete" not in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == expected_reason
+    assert status["details"]["requiredChecks"] == []
 
 
 def test_complete_waits_after_pending_exit_and_merges_when_checks_pass(
