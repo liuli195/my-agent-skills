@@ -17,5 +17,5 @@
 
 - 红灯依据：基线工作流仍为 `actions/upload-artifact@v4`；新增 `@v6` 契约断言在该基线上失败。
 - 绿灯：`python -m pytest -q -p no:cacheprovider tests/test_release_flow_cli.py -k "release_workflows_publish_only_verified_selected_npm_packages or workflows_use_current_low_risk_action_versions"`，2 项通过。
-- 快速验证：`build-and-verify verify --project .`，`verify.local-build-contract`、`verify.release-flow`、`verify.runtime-boundaries` 和 `verify.build-and-verify` 均缓存命中并通过。
+- 快速验证：`build-and-verify verify --project .` 实际执行 `verify.local-build-contract`（67 项）、`verify.release-flow`（76 项）、`verify.myspec`、`verify.my-spec`（95 项通过、2 项跳过）和 `verify.build-and-verify`，全部通过；未运行完整模式。
 - 保持不变：发布工作流触发器、权限、候选包上传顺序和发布输出未修改。

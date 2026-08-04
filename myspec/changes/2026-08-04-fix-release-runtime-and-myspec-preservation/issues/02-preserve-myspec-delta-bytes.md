@@ -20,4 +20,4 @@
 - 红灯依据：基线预览写入器会重新渲染所有规格；新增混合 `LF`/`CRLF` 字节保持案例在基线上失败。
 - 绿灯：`python -m pytest -q -p no:cacheprovider tests/test_my_spec.py -k test_spec_ops_cli_preserves_untouched_lf_and_crlf_bytes_for_preview_and_apply`，1 项通过；相关 Delta 应用测试合计 7 项通过。
 - 公开入口冒烟：通过 `node plugins/my-spec/bin/myspec.js` 执行预览和最终 `apply-delta`，非目标文件字节保持、目标文件使用 `LF`，主规格校验通过。
-- 快速验证：`build-and-verify verify --project .`，MySpec、运行边界和构建验证检查通过。
+- 快速验证：`build-and-verify verify --project .` 实际执行 `verify.myspec`、`verify.my-spec`（95 项通过、2 项跳过）、`verify.local-build-contract`、`verify.runtime-boundaries` 和 `verify.build-and-verify`，全部通过；未运行完整模式。
