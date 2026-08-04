@@ -652,6 +652,7 @@ GH_CHECKS_UNAVAILABLE_MARKERS = (
     "could not resolve",
     "tls",
 )
+GH_NO_REQUIRED_CHECKS_MARKERS = ("no required checks reported",)
 
 RECOVERABLE_NEXT_ACTIONS = {
     "gh_auth_required": {
@@ -715,6 +716,11 @@ def gh_auth_required(result: subprocess.CompletedProcess[str]) -> bool:
 def gh_checks_unavailable(result: subprocess.CompletedProcess[str]) -> bool:
     text = f"{result.stdout}\n{result.stderr}".lower()
     return any(marker in text for marker in GH_CHECKS_UNAVAILABLE_MARKERS)
+
+
+def gh_no_required_checks(result: subprocess.CompletedProcess[str]) -> bool:
+    text = f"{result.stdout}\n{result.stderr}".lower()
+    return any(marker in text for marker in GH_NO_REQUIRED_CHECKS_MARKERS)
 
 
 def classify_command_failure(reason: str, result: subprocess.CompletedProcess[str]) -> str:
@@ -1131,17 +1137,33 @@ def pr_checks(pr: dict[str, Any]) -> list[Any]:
     return checks if isinstance(checks, list) else []
 
 
-def required_checks_error_details(result: subprocess.CompletedProcess[str], pr_number: Any) -> dict[str, Any]:
-    if result.returncode != 0:
-        details = command_failure_details("gh_pr_checks_failed", result)
+def required_checks_error_details(
+    result: subprocess.CompletedProcess[str],
+    pr_number: Any,
+    *,
+    empty: bool = False,
+) -> dict[str, Any]:
+    details = command_failure_details("gh_pr_checks_failed", result)
+    if gh_auth_required(result):
+        details["reason"] = "gh_auth_required"
     else:
-        details = {
-            "reason": "checks_or_review_blocking",
-            "stdout": result.stdout.strip(),
-            "stderr": result.stderr.strip(),
-        }
+        details["reason"] = "checks_unavailable"
+        details["fallbackToSummary"] = empty or gh_no_required_checks(result)
     details["pr"] = pr_number
     return details
+
+
+def raise_required_checks_error(
+    result: subprocess.CompletedProcess[str],
+    pr_number: Any,
+    *,
+    empty: bool = False,
+    error: str | None = None,
+) -> NoReturn:
+    details = required_checks_error_details(result, pr_number, empty=empty)
+    if error is not None:
+        details["error"] = error
+    raise PrFlowError(str(details["reason"]), details)
 
 
 def required_checks(project: Path, pr_number: Any) -> list[dict[str, Any]]:
@@ -1157,28 +1179,15 @@ def required_checks(project: Path, pr_number: Any) -> list[dict[str, Any]]:
     try:
         checks = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        details = required_checks_error_details(result, pr_number)
-        details["error"] = str(exc)
-        raise PrFlowError("checks_or_review_blocking", details) from exc
-    if not isinstance(checks, list) or not checks or not all(isinstance(check, dict) for check in checks):
-        raise PrFlowError(
-            "checks_or_review_blocking",
-            required_checks_error_details(result, pr_number),
-        )
+        raise_required_checks_error(result, pr_number, error=str(exc))
+    if not isinstance(checks, list) or not all(isinstance(check, dict) for check in checks):
+        raise_required_checks_error(result, pr_number)
+    if not checks:
+        raise_required_checks_error(result, pr_number, empty=True)
     if result.returncode != 0:
-        if result.returncode == GH_CHECKS_PENDING_EXIT_CODE and has_pending_check(checks):
+        if has_pending_check(checks) or has_failing_check(checks):
             return checks
-        if gh_auth_required(result) or gh_checks_unavailable(result):
-            raise PrFlowError(
-                "gh_pr_checks_failed",
-                command_failure_details("gh_pr_checks_failed", result),
-            )
-        if has_failing_check(checks):
-            return checks
-        raise PrFlowError(
-            "checks_or_review_blocking",
-            command_failure_details("checks_or_review_blocking", result),
-        )
+        raise_required_checks_error(result, pr_number)
     return checks
 
 
@@ -1208,39 +1217,57 @@ def has_failing_check(checks: list[Any]) -> bool:
     return False
 
 
-def check_item_is_passed(check: dict[str, Any]) -> bool:
-    success_values = {"PASS", "PASSED", "SUCCESS", "SKIPPED", "NEUTRAL"}
-    known_values = success_values | {
-        "PENDING",
-        "IN_PROGRESS",
-        "QUEUED",
-        "REQUESTED",
-        "WAITING",
-        "EXPECTED",
-        "FAIL",
-        "FAILURE",
-        "FAILED",
-        "ERROR",
-        "TIMED_OUT",
-        "CANCEL",
-        "CANCELLED",
-        "CANCELED",
-        "STARTUP_FAILURE",
-        "COMPLETED",
-    }
+CHECK_SUCCESS_VALUES = {"PASS", "PASSED", "SUCCESS", "SKIPPED", "NEUTRAL"}
+CHECK_KNOWN_VALUES = CHECK_SUCCESS_VALUES | {
+    "PENDING",
+    "IN_PROGRESS",
+    "QUEUED",
+    "REQUESTED",
+    "WAITING",
+    "EXPECTED",
+    "FAIL",
+    "FAILURE",
+    "FAILED",
+    "ERROR",
+    "TIMED_OUT",
+    "CANCEL",
+    "CANCELLED",
+    "CANCELED",
+    "STARTUP_FAILURE",
+    "COMPLETED",
+}
+CHECK_BUCKET_VALUES = {"PASS", "PENDING", "FAIL", "CANCEL"}
+
+
+def check_item_is_known(check: dict[str, Any]) -> bool:
     bucket = check_value(check, "bucket")
-    state = check_value(check, "state")
-    conclusion = check_value(check, "conclusion")
-    if bucket and bucket not in {"PASS", "PENDING", "FAIL", "CANCEL"}:
+    values = [
+        value
+        for value in (
+            bucket,
+            check_value(check, "status"),
+            check_value(check, "state"),
+            check_value(check, "conclusion"),
+        )
+        if value
+    ]
+    if not values or (bucket and bucket not in CHECK_BUCKET_VALUES):
         return False
-    values = [value for value in (bucket, state, conclusion) if value]
-    if not values or any(value not in known_values for value in values):
+    return all(value in CHECK_KNOWN_VALUES for value in values)
+
+
+def check_item_is_passed(check: dict[str, Any]) -> bool:
+    if not check_item_is_known(check):
         return False
-    return any(value in success_values for value in values) and not has_pending_check([check]) and not has_failing_check([check])
+    return any(
+        check_value(check, key) in CHECK_SUCCESS_VALUES for key in ("bucket", "status", "state", "conclusion")
+    ) and not has_pending_check([check]) and not has_failing_check([check])
 
 
 def classify_check_values(checks: Any) -> str:
     if not isinstance(checks, list) or not checks or not all(isinstance(check, dict) for check in checks):
+        return CHECK_GATE_UNAVAILABLE
+    if not all(check_item_is_known(check) for check in checks):
         return CHECK_GATE_UNAVAILABLE
     if has_failing_check(checks):
         return CHECK_GATE_FAILED
@@ -1253,6 +1280,8 @@ def classify_check_values(checks: Any) -> str:
 
 def classify_check_summary(summary: Any) -> str:
     if not isinstance(summary, list) or not summary or not all(isinstance(check, dict) for check in summary):
+        return CHECK_GATE_UNAVAILABLE
+    if not all(check_item_is_known(check) for check in summary):
         return CHECK_GATE_UNAVAILABLE
     if has_failing_check(summary):
         return CHECK_GATE_FAILED
@@ -1298,7 +1327,7 @@ def classify_check_gate(project: Path, pr: dict[str, Any]) -> dict[str, Any]:
         query_error = None
 
     state = classify_check_values(checks)
-    if checks is None:
+    if checks is None and query_error and query_error.get("fallbackToSummary") is True:
         summary_state = classify_check_summary(pr.get("statusCheckRollup"))
         if summary_state in {CHECK_GATE_PENDING, CHECK_GATE_FAILED}:
             state = summary_state
@@ -1316,6 +1345,9 @@ def check_gate_stop_state(gate: dict[str, Any], next_command: str | None = None)
     }
     status, message = reasons.get(state, ("DISPATCH_REQUIRED", "checks_unavailable"))
     details = dict(gate.get("details") or {})
+    query_reason = (details.get("checkQueryError") or {}).get("reason")
+    if state == CHECK_GATE_UNAVAILABLE and query_reason == "gh_auth_required":
+        status, message = "DISPATCH_REQUIRED", "gh_auth_required"
     details["reason"] = message
     return stop_state(status, message, add_recovery_action(details, next_command))
 

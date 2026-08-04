@@ -407,7 +407,7 @@ def test_pr_view_fields_include_base_commit() -> None:
 
 @pytest.mark.parametrize(
     ("payload", "reason"),
-    [([], "checks_or_review_blocking"), ({"bucket": "pass"}, "checks_or_review_blocking")],
+    [([], "checks_unavailable"), ({"bucket": "pass"}, "checks_unavailable")],
 )
 def test_required_checks_reject_empty_or_non_list(tmp_path: Path, monkeypatch, payload, reason: str) -> None:
     from tests.support.command_stubs import CommandStub
@@ -3638,17 +3638,26 @@ def test_public_entries_stop_when_check_status_is_unavailable(
     assert "status: merge_complete" not in result.stdout
 
 
-def test_complete_stops_on_unknown_required_check_state(tmp_path: Path, monkeypatch) -> None:
+def test_complete_stops_when_unknown_state_is_mixed_with_pending_check(tmp_path: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
         tmp_path,
         monkeypatch,
         pr_stdout=pr_view_json(
-            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}],
+            checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
             review_decision="APPROVED",
             head_oid="b" * 40,
         ),
         required_responses=[
-            (json.dumps([{"bucket": "pass", "name": "ci", "state": "NEW_STATE"}]), "", 0),
+            (
+                json.dumps(
+                    [
+                        {"bucket": "pending", "name": "ci", "state": "QUEUED"},
+                        {"bucket": "pass", "name": "new-check", "state": "NEW_STATE"},
+                    ]
+                ),
+                "",
+                0,
+            ),
         ],
         wait_config={"timeoutSeconds": 0, "pollSeconds": 1},
     )
@@ -3658,7 +3667,71 @@ def test_complete_stops_on_unknown_required_check_state(tmp_path: Path, monkeypa
     assert "checks_unavailable" in result.stdout
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["details"]["reason"] == "checks_unavailable"
-    assert status["details"]["requiredChecks"][0]["state"] == "NEW_STATE"
+    assert status["details"]["requiredChecks"][1]["state"] == "NEW_STATE"
+
+
+@pytest.mark.parametrize("command", ["complete", "tweak", "diagnose"])
+def test_public_entries_do_not_use_rollup_after_check_query_error(
+    tmp_path: Path,
+    monkeypatch,
+    command: str,
+) -> None:
+    pending = pr_view_json(
+        checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
+        review_decision="APPROVED",
+        head_oid="b" * 40,
+    )
+    required_response = ("", "network unavailable\\n", 1)
+    if command == "complete":
+        project, result = run_complete_in_process(
+            tmp_path,
+            monkeypatch,
+            pr_stdout=pending,
+            required_responses=[required_response],
+        )
+    elif command == "tweak":
+        project, result, _ = run_tweak_in_process(
+            tmp_path,
+            monkeypatch,
+            reason="small docs polish",
+            checks=json.loads(pending)["statusCheckRollup"],
+            required_response=required_response,
+        )
+    else:
+        project, result = run_diagnose_in_process(
+            tmp_path,
+            monkeypatch,
+            pr_stdout=pending,
+            required_response=required_response,
+        )
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    assert "checks_unavailable" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["command"] == command
+    assert status["details"]["reason"] == "checks_unavailable"
+    assert "status: merge_complete" not in result.stdout
+
+
+def test_complete_reports_check_auth_failure_without_rollup_fallback(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
+            review_decision="APPROVED",
+            head_oid="b" * 40,
+        ),
+        required_responses=[("", "gh: please run gh auth login\\n", 4)],
+    )
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    assert "gh_auth_required" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "gh_auth_required"
+    assert status["details"]["nextCommand"] == "gh auth status"
 
 
 def test_diagnose_outputs_exception_for_unknown_gh_failure(tmp_path: Path, monkeypatch) -> None:
