@@ -24,7 +24,7 @@ Every gate and completion result MUST use the fixed titles and exact four-block 
 Keep three numbered and named decisions distinct:
 
 1. **Gate 1 — Requirements Confirmation（需求确认）.** Approve requirements, test seams, and tickets before publishing the change artifacts.
-2. **Gate 2 — Implementation and Verification（实施和验证）.** Approve the concrete implementation plan before code or behavior changes; the gate remains open until the planned implementation and verification are complete.
+2. **Gate 2 — Implementation and Verification（实施和验证）.** Approve the concrete implementation plan before code or behavior changes.
 3. **Gate 3 — Specification Archival and Delivery（规格存档并交付）.** After implementation, review, and verification complete, use the final `my-spec-add`（新增自有规格） confirmation to apply and validate the formal MySpec（自有规格） difference, then obtain explicit authorization for the exact PR delivery actions. The two scoped confirmations remain distinct within the same Gate 3.
 After Gate 3 delivery, run **Completion Check — 完成检查**: report whether final completion is proven, report cleanup residue, and request explicit force-cleanup authorization when needed. This is not a fourth numbered or authorization gate.
 

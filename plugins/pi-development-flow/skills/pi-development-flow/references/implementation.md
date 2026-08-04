@@ -40,7 +40,7 @@ Without explicit confirmation, state that implementation has not started and rep
 
 #### Next Gate（下一步门禁）
 
-Gate 3 — Specification Archival and Delivery（规格存档并交付）. Gate 2 — Implementation and Verification（实施和验证） permits implementation to start and remains incomplete until every ticket is integrated, behavior evidence is recorded, proportional and fast verification pass, and the bounded overall review has no unresolved blocker.
+Gate 3 — Specification Archival and Delivery（规格存档并交付）. Gate 2 — Implementation and Verification（实施和验证） only permits implementation to start. Gate 3 is not reached until every ticket is integrated, behavior evidence is recorded, proportional and fast verification pass, and the bounded overall review has no unresolved blocker.
 
 ## Shape the work（组织工作）
 

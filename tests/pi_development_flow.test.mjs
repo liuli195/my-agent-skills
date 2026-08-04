@@ -161,6 +161,8 @@ test("the three gates form the required stage state machine", async () => {
     gate3,
     /Gate 3 passes only after[^]*appl(?:y|ies|ication)[^]*validat/is,
   );
+  assert.match(gate3, /Gate 3 passes only after[^]*delivery (?:finishes|completes|succeeds)/is);
+  assert.match(gate3, /stop state.*Gate 3.*not final completion/is);
   assert.match(gate3, /Development Flow summary uses.*output-template/is);
   assert.match(gate3, /detailed final confirmation.*exact.*output/is);
   assert.match(gate3, /delivery authorization/is);

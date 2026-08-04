@@ -45,11 +45,11 @@ Gate 3 retains two scoped, sequential confirmations within one numbered gate:
 
 Formal specification confirmation is not PR delivery authorization, and PR delivery authorization must not be inferred from implementation approval or passing checks. Without the first confirmation, do not apply the formal specification difference; without the second confirmation, do not perform any listed delivery action.
 
-Gate 3 passes only after `my-spec-add` atomically applies and validates the approved formal specification difference and the user explicitly authorizes the exact PR delivery actions. Execute the authorized delivery before running Completion Check. A PR Flow（拉取请求流程） stop state during that delivery remains a recoverable Gate 3 delivery state and is not final completion.
+Gate 3 passes only after `my-spec-add` atomically applies and validates the approved formal specification difference, the user explicitly authorizes the exact PR delivery actions, and the authorized delivery finishes successfully. Execute the authorized delivery after its explicit authorization; a PR Flow（拉取请求流程） stop state during that delivery leaves Gate 3 incomplete and is not final completion.
 
 #### Next Gate（下一步门禁）
 
-Completion Check — 完成检查. Gate 3 authorizes formal specification application and delivery actions; it does not prove final completion.
+Completion Check — 完成检查. Gate 3 includes formal specification application and delivery; it does not prove final completion.
 
 ### Completion Check — 完成检查
 
@@ -59,7 +59,7 @@ Use this check after the authorized PR delivery has finished and the PR is merge
 
 #### Previous Gate（上一依赖门禁）
 
-Gate 3 — Specification Archival and Delivery（规格存档并交付）. Its authorized specification and delivery actions must be complete or have a preserved stop state.
+Gate 3 — Specification Archival and Delivery（规格存档并交付）. Its approved specification must be valid and its authorized delivery must have finished successfully. A PR Flow stop state remains a Gate 3 recovery state and does not enter Completion Check.
 
 #### Checks（检查清单）
 
@@ -89,11 +89,11 @@ After the bounded overall review and its fixes pass proportional verification, r
 
 ## PR delivery（拉取请求交付）
 
-Complete the Gate 3 — Specification Archival and Delivery（规格存档并交付） confirmation sequence before calling the selected PR Flow（拉取请求流程） entry.
+After both scoped Gate 3 — Specification Archival and Delivery（规格存档并交付） confirmations succeed, call the selected PR Flow（拉取请求流程） entry; Gate 3 remains incomplete until that delivery finishes successfully.
 
 - Use `pr-flow-tweak` only for a non-bug lightweight change that meets its contract.
 - Use `pr-flow-complete` for standard and high-risk changes.
-- Treat every PR Flow stop state as a resumable pause rather than completion; preserve it as the current Gate 3 delivery state.
+- Treat every PR Flow stop state as a resumable pause rather than completion; preserve it as the current incomplete Gate 3 delivery state.
 - When a merge or rebase conflict exists, use `resolving-merge-conflicts`. Resolve from the spec, tickets, commits, and tests; rerun affected checks. Ask the user when the sources permit incompatible observable behaviors rather than choosing a new behavior.
 
 ## Cleanup and completion（清理与完成）
