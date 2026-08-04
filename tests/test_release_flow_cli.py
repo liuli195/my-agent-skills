@@ -1358,7 +1358,9 @@ def test_release_workflows_publish_only_verified_selected_npm_packages(tmp_path:
         assert 'p.repository?.url !== "https://github.com/liuli195/my-agent-skills"' in workflow
         assert 'npm publish "$MYSPEC_TARBALL" --provenance --access public' in workflow
         assert 'npm publish "$BUILD_AND_VERIFY_TARBALL" --provenance --access public' in workflow
-        assert "actions/upload-artifact@v4" in workflow
+        assert "actions/upload-artifact@v6" in workflow
+        assert "actions/upload-artifact@v4" not in workflow
+        assert "actions/upload-artifact@v5" not in workflow
         assert "FIRST_PUBLISH_REQUIRED" in workflow
         assert "env.FIRST_PUBLISH_REQUIRED != 'true'" in workflow
         assert workflow.index("Upload npm package candidates") < workflow.index("Publish release channel")
