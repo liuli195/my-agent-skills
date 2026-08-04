@@ -63,57 +63,6 @@
 
 - **WHEN** 用户明确指定一个本地安装、客户端同步或市场刷新动作
 - **THEN** 系统只通过该动作的正式入口执行并验证该项，不从“继续收尾”等一般表达推断其他客户端修改或发布授权
-### Requirement: 开发流程初始化职责边界
-
-系统 MUST 只在用户明确请求初始化或正式入口报告前置条件缺失时检查初始化状态，并把缺失项委托给已有正式初始化入口；没有正式入口负责的缺失项 MUST 作为阻塞报告。初始化授权不是第五个正式门禁，也不能代替四个开发门禁。
-
-#### Scenario: 已初始化仓库开始新变更
-
-- **WHEN** 用户在已完成开发流程初始化的仓库开始或恢复变更
-- **THEN** 系统不重复运行完整预检，而由各正式入口在调用时校验自身条件
-
-#### Scenario: 缺少正式初始化入口
-
-- **WHEN** 仓库缺少 CI（持续集成）流程、工作树脚本或其他前置项且没有正式初始化入口负责补齐
-- **THEN** 系统报告阻塞并停止，不自行生成初始化实现
-
-#### Scenario: 从门禁进入初始化
-
-- **WHEN** 某个已编号和命名的门禁因正式入口报告前置条件缺失而进入 Initialization（初始化）
-- **THEN** 系统记录来源门禁，展示缺失项、正式初始化入口、修改范围、验证方式和返回位置，并等待独立初始化授权；成功后返回同一门禁重新检查，而不把初始化授权视为该门禁已经通过
-### Requirement: 单项开发变更三阶段编排
-
-系统 MUST 把一项开发变更编排为 Requirements（需求）、Implementation（实施）和 Delivery（交付）三个阶段，并以四个固定编号和名称的门禁追踪阶段状态：Gate 1 — Complete Requirements（完成需求）、Gate 2 — Enter Implementation（进入实施）、Gate 3 — Enter Delivery（进入交付）和 Gate 4 — Authorize PR Delivery（授权 PR 交付）。Requirements、Implementation 和 Delivery MUST 在执行入口先声明阶段依赖和适用门禁；每个门禁 MUST 声明使用条件、上一依赖门禁、检查清单、待用户确认内容清单和下一步门禁。
-
-#### Scenario: 完成需求阶段
-
-- **WHEN** 领域术语、最高公开测试接缝、规格和纵向票据已经形成，准备发布需求产物
-- **THEN** 系统通过 Gate 1 — Complete Requirements 展示完整待确认内容，并且只有在用户确认后发布、提交获批产物且工作树干净，才转入 Gate 2 — Enter Implementation
-
-#### Scenario: 进入实施阶段
-
-- **WHEN** Gate 1 — Complete Requirements 已通过，准备执行任何实施修改
-- **THEN** 系统通过 Gate 2 — Enter Implementation 展示包含顺序、隔离、执行者、检查、冒烟、审查、整合、清理、风险和停止条件的实施计划，并等待独立实施授权，不把“继续”、需求确认或草稿确认视为授权
-
-#### Scenario: 进入交付阶段
-
-- **WHEN** Gate 2 — Enter Implementation 已通过，并且所有票据、行为证据、风险匹配验证和整体审查达到实施完成条件，`my-spec-add`（新增自有规格）已生成并校验完整正式 MySpec（自有规格）预览差异且等待最终确认
-- **THEN** 系统把该技能的最终确认作为 Gate 3 — Enter Delivery，并且只在该技能原子应用和校验差异成功后才使 Gate 3 通过并进入 Gate 4
-
-#### Scenario: 授权 PR 交付
-
-- **WHEN** Gate 3 — Enter Delivery 已通过，并且正式 MySpec（自有规格）差异已经确认、应用且校验有效
-- **THEN** 系统通过 Gate 4 — Authorize PR Delivery 展示最终差异、验证证据、审查结果、已知风险及准确交付动作，并等待独立授权后才执行推送、PR（拉取请求）创建或更新、合并和最终清理
-
-#### Scenario: 阶段依赖不可用
-
-- **WHEN** 当前阶段要求的准确 Skill（技能）缺失、不可读、加载失败或被非正式入口替代
-- **THEN** 系统在阶段动作前停止，保留当前产物，并按编号和名称报告当前门禁及恢复位置
-
-#### Scenario: 恢复已有变更
-
-- **WHEN** 用户提供已有 MySpec（自有规格）变更目录
-- **THEN** 系统从规格、票据、行为证据、Git（版本管理）、工作树和 PR 状态识别上一已通过门禁、当前未完成门禁及下一步门禁，按编号和名称展示证据，读取当前阶段及其依赖，并且不从“继续”或“恢复”推断授权
 ### Requirement: 按决策规模确认开发需求
 
 系统 MUST 在需求讨论开始时先使用 `codebase-design`（代码架构）形成与流程等级相称的整体方案；用户确认整体方向后，才按待解决决策是否能在一个会话内厘清选择需求讨论方式，并在用户确认测试接缝、规格和纵向票据后，才把领域术语与需求产物写入隔离的变更工作树。整体方向确认不是新的正式门禁，且不发布产物或授权实施、交付。
@@ -170,9 +119,60 @@
 
 - **WHEN** 主 Agent 通过 `dispatch_implementer_in_worktree` 为一张已发布票据启动可写 Implementer
 - **THEN** 子代理运行在已验证的目标工作树，使用 Luna Max（最大思考）角色配置，加载 TDD（测试驱动开发）技能而不加载扩展资源，并在完成后正常释放生命周期；主工作区不产生本次派发的可见改动
+### Requirement: 开发流程初始化职责边界
+
+系统 MUST 只在用户明确请求初始化或正式能力报告前置条件缺失时检查初始化状态，并把缺失项委托给已有正式初始化能力；没有正式能力负责的缺失项 MUST 作为阻塞报告。初始化授权不是第四个正式门禁，也不能代替三个开发门禁。
+
+#### Scenario: 已初始化仓库开始新变更
+
+- **WHEN** 用户在已完成开发流程初始化的仓库开始或恢复变更
+- **THEN** 系统不重复运行完整预检，而由流程动作在使用时校验自身条件
+
+#### Scenario: 缺少正式初始化能力
+
+- **WHEN** 开发流程缺少必需前置条件且没有正式初始化能力负责补齐
+- **THEN** 系统报告阻塞并停止，不自行生成初始化实现
+
+#### Scenario: 从门禁进入初始化
+
+- **WHEN** 某个已编号和命名的门禁因正式能力无法满足前置条件而进入初始化
+- **THEN** 系统记录来源门禁，展示缺失项、初始化能力、修改范围、验证方式和返回位置，并等待独立初始化授权；成功后返回同一门禁重新检查，而不把初始化授权视为该门禁已经通过
+### Requirement: 单项开发变更三阶段编排
+
+系统 MUST 把一项开发变更编排为 Requirements（需求）、Implementation（实施）和 Delivery（交付）三个阶段，并以三个固定编号和名称的门禁追踪阶段状态：Gate 1 — Requirements Confirmation（需求确认）、Gate 2 — Implementation and Verification（实施和验证）和 Gate 3 — Specification Archival and Delivery（规格存档并交付）。Requirements、Implementation 和 Delivery MUST 在执行入口先声明阶段依赖和适用门禁；每个门禁 MUST 声明使用条件、上一依赖门禁、检查清单、待用户确认内容清单和下一步门禁。
+
+#### Scenario: 完成需求阶段
+
+- **WHEN** 变更目标、范围、规格和可验证验收标准已经确认，准备发布需求产物
+- **THEN** 系统通过 Gate 1 — Requirements Confirmation 展示完整待确认内容，并且只有在用户确认后发布需求产物且满足下一阶段条件，才转入 Gate 2 — Implementation and Verification
+
+#### Scenario: 进入实施阶段
+
+- **WHEN** Gate 1 — Requirements Confirmation 已通过，准备执行任何实施修改
+- **THEN** 系统通过 Gate 2 — Implementation and Verification 展示范围、预期行为、验证方式、风险和停止条件，并等待独立实施授权，不把“继续”、需求确认或草稿确认视为授权；完成授权计划的实施和验证后才进入 Gate 3
+
+#### Scenario: 进入规格存档和交付阶段
+
+- **WHEN** Gate 2 — Implementation and Verification 的授权计划已完成，并且所有验收标准、行为证据和风险匹配验证达到实施完成条件，正式规格预览差异已经生成并等待最终确认
+- **THEN** 系统在 Gate 3 — Specification Archival and Delivery 中使用正式规格确认能力的最终确认，应用并校验正式规格差异后展示可验证的交付动作及预期结果，并等待独立交付授权；交付成功结束后才进入 Completion Check（完成检查），交付中断状态保留为 Gate 3 的未完成恢复位置
+
+#### Scenario: 授权并执行交付
+
+- **WHEN** Gate 3 — Specification Archival and Delivery 中的正式规格差异已经确认、应用且校验有效
+- **THEN** 系统展示可验证的交付动作、预期结果、验证证据和已知风险，并等待独立授权后才执行交付；只有交付成功结束后才转入 Completion Check
+
+#### Scenario: 阶段依赖不可用
+
+- **WHEN** 当前阶段要求的正式能力不可用或无法完成其承诺行为
+- **THEN** 系统在阶段动作前停止，保留当前产物，并按编号和名称报告当前门禁及恢复位置
+
+#### Scenario: 恢复已有变更
+
+- **WHEN** 用户提供已有开发变更
+- **THEN** 系统根据现有需求、行为证据和交付结果识别上一已通过门禁、当前未完成门禁及下一步门禁，按编号和名称展示证据，读取当前阶段及其依赖，并且不从“继续”或“恢复”推断授权
 ### Requirement: 结构化门禁输出与最终完成检查
 
-系统 MUST 为四个正式门禁和 Gate 4 之后的 Completion Check（完成检查）使用固定标题及以下四个固定区块，且顺序不可改变：`状态与待确认`、`核心内容摘要`、`引用`、`下一步`。核心摘要 MUST 只展示当前门禁的判断重点，完整计划、差异和证据 MUST 通过引用提供；Completion Check 不是第五个正式授权门禁。
+系统 MUST 为三个正式门禁和 Gate 3 之后的 Completion Check（完成检查）使用固定标题及以下四个固定区块，且顺序不可改变：`状态与待确认`、`核心内容摘要`、`引用`、`下一步`。核心摘要 MUST 只展示当前门禁的判断重点，完整计划、差异和证据 MUST 通过引用提供；Completion Check 不是第四个正式授权门禁。
 
 #### Scenario: 输出门禁摘要
 
@@ -181,18 +181,18 @@
 
 #### Scenario: Gate 3 委托正式规格确认
 
-- **WHEN** Gate 3 — Enter Delivery（进入交付）需要确认正式 MySpec（自有规格）差异
-- **THEN** Development Flow（开发流程）摘要引用委托的正式规格确认结果，原始确认保持不变，系统不重写、包裹或重复提问
+- **WHEN** Gate 3 — Specification Archival and Delivery（规格存档并交付）需要确认正式规格差异
+- **THEN** Development Flow（开发流程）摘要引用正式规格确认能力的结果，原始确认保持不变，系统不重写、包裹或重复提问
 
 #### Scenario: 交付后确认最终完成
 
-- **WHEN** Gate 4 — Authorize PR Delivery（授权 PR 交付）授权的交付已结束，且验收、验证、正式规格、PR（拉取请求）合并、目标分支同步和安全清理均有证据
+- **WHEN** Gate 3 — Specification Archival and Delivery（规格存档并交付）授权的交付已成功结束，且验收、验证、正式规格、目标结果同步和安全清理均有证据
 - **THEN** Completion Check 报告 `最终完成`，并且不因未请求的本地安装、客户端同步、市场刷新或发布而阻塞
 
 #### Scenario: 发现清理残留
 
-- **WHEN** 逻辑清理已经完成，但实体工作树目录或临时产物仍存在
-- **THEN** Completion Check 报告 `未完成`、精确残留路径、残留原因和引用证据，并询问用户是否明确授权对该精确残留执行强制清理；系统不得自动强制删除，且在残留存在时不得报告 `最终完成`
+- **WHEN** 逻辑清理已经完成，但临时产物仍存在
+- **THEN** Completion Check 报告 `未完成`、具体残留项、残留原因和引用证据，并询问用户是否明确授权对该精确残留执行强制清理；系统不得自动强制删除，且在残留存在时不得报告 `最终完成`
 
 #### Scenario: 拒绝或完成强制清理
 
