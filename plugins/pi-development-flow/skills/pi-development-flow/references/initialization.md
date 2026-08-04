@@ -16,7 +16,7 @@ Inspect the bounded repository and confirm:
 
 Record the named gate whose formal entry reported the missing prerequisite. Before changing anything, read the exact formal entry responsible for each confirmed missing item. Present one structured initialization plan with the missing items, formal entries, change scope, verification, and the named gate to which the flow will return; then wait for explicit initialization authorization.
 
-Initialization authorization is not a fifth formal gate and does not satisfy Gate 1 — Complete Requirements（完成需求）, Gate 2 — Enter Implementation（进入实施）, Gate 3 — Enter Delivery（进入交付）, or Gate 4 — Authorize PR Delivery（授权 PR 交付）. After successful initialization, return to the same gate that reported the missing prerequisite and recheck it.
+Initialization authorization is not a fourth formal gate and does not satisfy Gate 1 — Requirements Confirmation（需求确认）, Gate 2 — Implementation and Verification（实施和验证）, or Gate 3 — Specification Archival and Delivery（规格存档并交付）. After successful initialization, return to the same gate that reported the missing prerequisite and recheck it.
 
 Delegate only to an existing formal entry, such as:
 

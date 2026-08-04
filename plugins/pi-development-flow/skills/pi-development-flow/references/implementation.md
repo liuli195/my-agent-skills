@@ -6,11 +6,11 @@ Before presenting Gate 2 output, read [output-template](output-template.md) and 
 
 Before changing feature, bug, or integration behavior, read and apply `tdd`（测试驱动开发）. Before verification, read `build-and-verify`（构建与验证） and use its formal entry. Before review, read `code-review`（代码审查）.
 
-Read `pi-subagent-policy`（Pi 子代理策略） only after deciding delegation is useful and before the first delegation. If a required Skill（技能） is missing, unreadable, fails to load, or is replaced by an informal entry, stop and report the current ticket, preserved evidence, and Gate 2 — Enter Implementation（进入实施） as the resume point. Do not replace Build and Verify with a new verification entry.
+Read `pi-subagent-policy`（Pi 子代理策略） only after deciding delegation is useful and before the first delegation. If a required Skill（技能） is missing, unreadable, fails to load, or is replaced by an informal entry, stop and report the current ticket, preserved evidence, and Gate 2 — Implementation and Verification（实施和验证） as the resume point. Do not replace Build and Verify with a new verification entry.
 
 ## MUST — Gate（门禁）
 
-### Gate 2 — Enter Implementation（进入实施）
+### Gate 2 — Implementation and Verification（实施和验证）
 
 #### Usage Condition（使用条件）
 
@@ -18,29 +18,29 @@ Use this entry gate after Requirements（需求） is complete and before any co
 
 #### Previous Gate（上一依赖门禁）
 
-Gate 1 — Complete Requirements（完成需求）. The approved requirement artifacts must be published and committed in a clean change worktree.
+Gate 1 — Requirements Confirmation（需求确认）. The approved requirement artifacts must be published and committed in a clean change worktree.
 
 #### Checks（检查清单）
 
 Confirm that:
 
-- Gate 1 — Complete Requirements（完成需求） passed with current-session evidence;
+- Gate 1 — Requirements Confirmation（需求确认） passed with current-session evidence;
 - the committed specification, test seam, and tickets match the approved drafts;
 - the concrete implementation plan covers ticket order and parallel groups, branch and worktree layout, executor, red and green checks, smoke checks, review gates, integration points, cleanup timing, risks, and stop conditions;
 - the user explicitly authorized that current plan after seeing it;
 - no implementation change occurred before that authorization.
 
-If any check fails, do not implement. Preserve the artifacts and stop at Gate 2 — Enter Implementation（进入实施）.
+If any check fails, do not implement. Preserve the artifacts and stop at Gate 2 — Implementation and Verification（实施和验证）.
 
 #### Confirmation Output（待用户确认内容清单）
 
 When authorization is missing, present the complete implementation plan and explicitly ask whether the user authorizes entering Implementation. “Continue”, requirement approval, or draft approval is not implementation authorization and cannot retroactively authorize an earlier change.
 
-Without explicit confirmation, state that implementation has not started and report the change path and Gate 2 — Enter Implementation（进入实施） as the resume point.
+Without explicit confirmation, state that implementation has not started and report the change path and Gate 2 — Implementation and Verification（实施和验证） as the resume point.
 
 #### Next Gate（下一步门禁）
 
-Gate 3 — Enter Delivery（进入交付）. Gate 2 — Enter Implementation（进入实施） only permits implementation to start. Gate 3 — Enter Delivery（进入交付） is not reached until every ticket is integrated, behavior evidence is recorded, proportional and fast verification pass, and the bounded overall review has no unresolved blocker.
+Gate 3 — Specification Archival and Delivery（规格存档并交付）. Gate 2 — Implementation and Verification（实施和验证） permits implementation to start and remains incomplete until every ticket is integrated, behavior evidence is recorded, proportional and fast verification pass, and the bounded overall review has no unresolved blocker.
 
 ## Shape the work（组织工作）
 
