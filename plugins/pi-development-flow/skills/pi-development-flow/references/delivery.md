@@ -14,7 +14,7 @@ If an exact required Skill（技能） is missing, unreadable, fails to load, or
 
 #### Usage Condition（使用条件）
 
-Use this gate after implementation, proportional verification, fast verification, and the bounded overall review are complete, and when the complete formal specification preview difference and exact delivery actions are ready for one combined confirmation, before any specification application or delivery action.
+Use this gate after implementation, proportional verification, fast verification, and the bounded overall review are complete, and when the complete formal specification preview difference and exact delivery actions are ready to be presented in Gate 3's own four-block result for one Gate 3 confirmation, before any specification application or delivery action.
 
 #### Previous Gate（上一依赖门禁）
 
@@ -36,9 +36,9 @@ If an implementation check fails, preserve the artifacts and return to Implement
 
 #### Confirmation Output（待用户确认内容清单）
 
-The Development Flow summary uses [output-template](output-template.md) and presents a concise formal specification content summary, requirement-change counts (additions and removals, plus modifications or renames when present), verification evidence, known risks, exact delivery actions, and expected results together. It MUST NOT expand the complete formal specification difference; preserve that difference in the MySpec preview and provide it through citations.
+The Gate 3 result uses [output-template](output-template.md) and presents a concise formal specification content summary, requirement-change counts (additions and removals, plus modifications or renames when present), verification evidence, known risks, exact delivery actions, and expected results within Gate 3's own four blocks. It MUST NOT expand the complete formal specification difference; preserve that difference in the MySpec preview and provide it through citations. Gate 3's result MUST NOT be combined with another gate or with Completion Check.
 
-Gate 3 has one confirmation only. The same single final confirmation authorizes both the formal specification application and the exact delivery actions. After that confirmation, recheck the specification state, apply and validate the approved specification difference, and automatically execute the authorized delivery without asking for a second confirmation.
+Gate 3 requests exactly one confirmation. That confirmation, requested in the Gate 3 result, authorizes both the formal specification application and the exact delivery actions. After that confirmation, recheck the specification state, apply and validate the approved specification difference, and automatically execute the authorized delivery without asking for a second confirmation.
 
 Gate 3 passes only after the approved formal specification difference is applied and validated and the authorized delivery finishes successfully. A delivery stop state leaves Gate 3 incomplete and is not final completion.
 
@@ -80,11 +80,11 @@ There is no next gate. Report `最终完成` only after all checks pass; otherwi
 
 ## Formal specification（正式规格）
 
-After the bounded overall review and its fixes pass proportional verification, prepare the complete formal specification difference against the verified external behavior. Formal specification preparation owns its conflict decisions, complete difference, validation, application, and recovery. Its final confirmation is the single Gate 3 — Specification Archival and Delivery（规格存档并交付） confirmation, which also authorizes the exact delivery actions. Formal specifications are not part of the earlier code-review scope. Run the relevant fast validation after the approved specification difference is applied and validated.
+After the bounded overall review and its fixes pass proportional verification, prepare the complete formal specification difference against the verified external behavior. Formal specification preparation owns its conflict decisions, complete difference, validation, application, and recovery. Its final confirmation is the single confirmation requested in the Gate 3 — Specification Archival and Delivery（规格存档并交付） result, which also authorizes the exact delivery actions. Formal specifications are not part of the earlier code-review scope. Run the relevant fast validation after the approved specification difference is applied and validated.
 
 ## PR delivery（拉取请求交付）
 
-After the single Gate 3 — Specification Archival and Delivery（规格存档并交付） confirmation succeeds and the specification is applied and validated, call the selected PR Flow（拉取请求流程） entry automatically; Gate 3 remains incomplete until that delivery finishes successfully.
+After the single confirmation requested in the Gate 3 — Specification Archival and Delivery（规格存档并交付） result succeeds and the specification is applied and validated, call the selected PR Flow（拉取请求流程） entry automatically; Gate 3 remains incomplete until that delivery finishes successfully.
 
 - Use `pr-flow-tweak` only for a non-bug lightweight change that meets its contract.
 - Use `pr-flow-complete` for standard and high-risk changes.
