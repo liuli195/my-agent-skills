@@ -3548,6 +3548,9 @@ def test_packed_myspec_requires_reconfirmation_when_implementation_changes_the_d
     assert changed.returncode != 0
     assert "preview_changed_requires_confirmation" in changed.stderr
     assert (specs / "accounts" / "spec.md").read_bytes() == before
+    redisplayed = run_cli(executable, "diff", specs, preview, env=env, cwd=source)
+    assert redisplayed.returncode == 0, redisplayed.stderr
+    assert redisplayed.stdout.strip()
 
     confirmed = run_cli(
         executable,
@@ -3705,6 +3708,21 @@ def test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_conte
         relative: (specs / relative).read_bytes()
         for relative in ("accounts/spec.md", "profiles/spec.md", "settings/spec.md")
     }
+    source_before = {
+        relative: (source_a / "myspec" / "specs" / relative).read_bytes()
+        for relative in before
+    }
+    status = run_cli(
+        executable,
+        "state-status",
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env_a,
+        cwd=source_b,
+    )
+    assert status.returncode == 0, status.stderr
+    assert json.loads(status.stdout) == {"status": "READY_TO_APPLY", "total": 0, "decided": 0, "remaining": 0}
 
     previewed = run_cli(
         executable,
@@ -3760,6 +3778,10 @@ def test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_conte
     assert (specs / "profiles" / "spec.md").read_bytes() == before["profiles/spec.md"]
     assert (specs / "settings" / "spec.md").read_bytes() == before["settings/spec.md"]
     assert "旧设置".encode("utf-8") not in (specs / "accounts" / "spec.md").read_bytes()
+    assert {
+        relative: (source_a / "myspec" / "specs" / relative).read_bytes()
+        for relative in source_before
+    } == source_before
     assert not work.exists()
     after_first = {
         relative: (specs / relative).read_bytes()

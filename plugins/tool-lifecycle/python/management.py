@@ -1679,12 +1679,6 @@ def _running_package_is_source_worktree() -> bool:
     )
 
 
-def validate_spec_write_binding(specs_root: Path) -> None:
-    # The development source is a machine-level code binding, not the data target.
-    # Target worktree safety is enforced by MySpec's persisted run context.
-    return
-
-
 def _source_record(
     *,
     installed: bool,

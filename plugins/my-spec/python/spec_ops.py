@@ -19,7 +19,6 @@ from management import (
     implementation_identity,
     resolve_worktree,
     run_management,
-    validate_spec_write_binding,
 )
 
 
@@ -520,7 +519,6 @@ def apply_delta(
     specs_fingerprint: str,
     input_fingerprint: str,
 ) -> None:
-    validate_spec_write_binding(specs_root)
     state = _load_state(work_root)
     _assert_fingerprints(state, specs_fingerprint, input_fingerprint)
     summary = _state_summary(state)
@@ -582,14 +580,14 @@ def apply_delta(
                 specs_root.rename(backup)
             temporary.rename(specs_root)
             validate_main(specs_root)
-            if backup.exists():
-                shutil.rmtree(backup)
             shutil.rmtree(work_root / "current")
             (work_root / "lock").unlink()
             try:
                 work_root.rmdir()
             except OSError:
                 pass
+            if backup.exists():
+                shutil.rmtree(backup)
         except Exception:
             if temporary.exists():
                 shutil.rmtree(temporary)
