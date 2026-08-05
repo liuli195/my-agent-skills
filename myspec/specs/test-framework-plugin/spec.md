@@ -482,3 +482,30 @@ Build and Verify MUST 让其 `doctor`、`init --codex`、`init --all` 和 `updat
 
 - **WHEN** 用户完成 `build-and-verify init --codex` 迁移后再次运行 `build-and-verify update`
 - **THEN** 命令 MUST 完成稳定来源刷新并返回成功诊断
+### Requirement: Build and Verify 支持固定验证基线快速验证
+Build and Verify（构建与验证）MUST allow a fast verification command to use an explicit fixed Git（版本管理） baseline and MUST report whether an applicable verification was actually selected.
+
+#### Scenario: Committed changes are selected from a fixed baseline
+- **WHEN** a user runs `build-and-verify verify --project <repo> --base <baseline>` in a clean verification worktree（验证工作树）
+- **THEN** the system MUST select checks affected by the three-dot difference between `<baseline>` and the current commit of that worktree
+- **THEN** commits and uncommitted changes in another worktree MUST NOT affect the selected checks
+
+#### Scenario: Baseline verification rejects an ambiguous input state
+- **WHEN** the baseline cannot be resolved, the verification worktree has uncommitted changes, or the user combines `--base` with `--full`
+- **THEN** the command MUST return a non-zero exit code and report `status: failed`
+- **THEN** the system MUST NOT fall back to worktree change detection or run a different verification mode
+
+#### Scenario: Fast verification reports an empty scope as skipped
+- **WHEN** a fixed baseline has no changed files for the current commit
+- **THEN** the command MUST report `status: skipped`, `reason: no_changed_files`, and `full-not-run: true`
+- **THEN** the command MUST NOT report `status: passed` or run a check
+
+#### Scenario: Fast verification reports unmatched changes as skipped
+- **WHEN** a fixed baseline has changed files but no configured check matches them
+- **THEN** the command MUST report `status: skipped`, `reason: no_matching_checks`, and `full-not-run: true`
+- **THEN** the command MUST NOT report `status: passed` or run full verification
+
+#### Scenario: Selected checks may pass through valid cache hits
+- **WHEN** at least one check is selected and every selected check has a valid passed-result cache（通过结果缓存）
+- **THEN** the command MUST report `status: passed`
+- **THEN** the command MUST report a non-empty `checked` value even when no check process runs
