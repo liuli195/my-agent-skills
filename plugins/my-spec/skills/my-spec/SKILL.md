@@ -19,7 +19,7 @@ description: 统一管理 MySpec（自有规格）。当用户调用统一入口
 
 ## 不可跳过的门禁
 
-1. 获取仓库级 `.local/spec-work/lock`；已有锁时停止，不按时间自动清理。
+1. 获取当前目标工作树的 `.local/spec-work/lock`；同一目标工作树已有锁时停止，不按时间自动清理。发布模式下不同目标工作树的锁互不阻塞；开发模式使用机器级单一开发源码绑定；源码工作树与目标工作树不一致时阻止写入，切换绑定后只能串行处理不同目标工作树。
 2. 调用 `myspec state-init`，在 `.local/spec-work/current/` 保存当前命令、输入与主规格指纹、完整 `conflicts`、`currentConflict` 和本次 `decisions`。
 3. 分析完成后必须在首次展示前调用 `myspec state-set-conflicts` 一次性保存全部冲突、删除和低可信候选；只保存数量或第一项无效。
 4. `WAITING_DECISION` 期间只调用 `myspec state-current`、`myspec state-decide` 和 `myspec state-status` 读取已保存清单，禁止重新扫描获取下一项；一次只展示一条，禁止批量接受。

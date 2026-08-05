@@ -97,34 +97,6 @@
 - **WHEN** my-spec 运行在逐项决定期间被中断后继续
 - **THEN** 系统 MUST 返回原清单中的同一当前项、稳定总数和既有决定
 - **THEN** 系统 MUST NOT 重新扫描以重建剩余候选
-### Requirement: 规格运行文件集中在本地目录
-
-系统 MUST 将 my-spec 的共享锁、当前命令状态、输入、主规格指纹、决定、Delta（增量规格）、预览和恢复材料保存在 `.local/spec-work/`，不得在仓库根目录创建 `.spec-work/`。同一仓库 MUST 同时只允许一个 my-spec 运行；已有锁不得只因超时而自动删除。继续或应用前 MUST 校验主规格和输入指纹，成功应用后 MUST 清理本次运行状态。
-
-#### Scenario: 规格入口创建运行文件
-
-- **WHEN** 任一 my-spec 入口开始处理规格任务
-- **THEN** 所有临时运行文件均位于 `.local/spec-work/`
-
-#### Scenario: 同一仓库已有规格运行
-
-- **WHEN** 新的 my-spec 入口发现共享锁已存在
-- **THEN** 系统 MUST 停止并报告已有运行
-- **THEN** 系统 MUST NOT 仅根据锁的时间自动删除它
-
-#### Scenario: 基线或证据在继续前变化
-
-- **WHEN** 当前主规格指纹或本次输入指纹与保存状态不一致
-- **THEN** 系统 MUST 拒绝继续使用旧决定、Delta 或预览
-- **THEN** 系统 MUST 要求重新分析
-
-#### Scenario: 原子应用完成或失败
-
-- **WHEN** 用户最终确认且预览校验通过
-- **THEN** 系统 MUST 只原子替换 `myspec/specs/`
-- **THEN** 最终校验成功后系统 MUST 清理本次锁、备份和工作状态
-- **WHEN** 替换后最终校验失败
-- **THEN** 系统 MUST 恢复原主规格且不得触碰规格目录之外的用户内容
 ### Requirement: MySpec 操作错误可见且重复执行稳定
 
 系统 MUST 通过 PATH（可执行文件搜索路径）中的裸 `myspec` CLI（命令行程序）执行状态、校验、预览、差异和应用操作，不得定位或解析包内脚本路径；系统 MUST 对无效主规格或 Delta（增量规格）返回非零结果和可识别错误，并确保相同输入的重复预览或应用不产生额外变化。主规格 MUST 包含 Purpose（目的）、Requirements（需求）、全局唯一的 Requirement 标题、`MUST` 或 `SHALL`，以及至少一个包含非空 `WHEN` 和 `THEN` 的 Scenario（场景）。Delta MUST 只支持 RENAMED、REMOVED、MODIFIED 和 ADDED，并按该顺序应用。
@@ -165,9 +137,43 @@ MySpec（自有规格） MUST preserve unrelated specification files when applyi
 - **WHEN** the user applies the same confirmed Delta to the main specification directory
 - **THEN** unrelated specification files MUST retain the same bytes as before application
 - **THEN** the resulting main specification MUST pass validation
+### Requirement: 规格运行文件集中在本地目录
+
+系统 MUST 将 my-spec 的共享锁、当前命令状态、输入、主规格指纹、决定、Delta（增量规格）、预览和恢复材料保存在当前目标工作树的 `.local/spec-work/`，不得在仓库根目录创建 `.spec-work/`。同一目标工作树 MUST 同时只允许一个 my-spec 运行；已有锁不得只因超时而自动删除。发布模式下，不同目标工作树的运行状态和锁 MUST 相互隔离且不得互相阻塞。继续或应用前 MUST 校验主规格和输入指纹，成功应用后 MUST 清理本次运行状态。
+
+#### Scenario: 规格入口创建运行文件
+
+- **WHEN** 任一 my-spec 入口开始在目标工作树处理规格任务
+- **THEN** 所有临时运行文件均位于该目标工作树的 `.local/spec-work/`
+
+#### Scenario: 同一目标工作树已有规格运行
+
+- **WHEN** 新的 my-spec 入口发现当前目标工作树的共享锁已存在
+- **THEN** 系统 MUST 停止并报告已有运行
+- **THEN** 系统 MUST NOT 仅根据锁的时间自动删除它
+
+#### Scenario: 发布模式不同目标工作树各自运行
+
+- **WHEN** 发布模式下两个关联目标工作树同时开始规格任务
+- **THEN** 每个目标工作树 MUST 只使用自己的 `.local/spec-work/` 运行状态和锁
+- **THEN** 任一目标工作树的锁 MUST NOT 阻塞另一个目标工作树的规格运行
+
+#### Scenario: 基线或证据在继续前变化
+
+- **WHEN** 当前主规格指纹或本次输入指纹与保存状态不一致
+- **THEN** 系统 MUST 拒绝继续使用旧决定、Delta 或预览
+- **THEN** 系统 MUST 要求重新分析
+
+#### Scenario: 原子应用完成或失败
+
+- **WHEN** 用户最终确认且预览校验通过
+- **THEN** 系统 MUST 只原子替换 `myspec/specs/`
+- **THEN** 最终校验成功后系统 MUST 清理本次锁、备份和工作状态
+- **WHEN** 替换后最终校验失败
+- **THEN** 系统 MUST 恢复原主规格且不得触碰规格目录之外的用户内容
 ### Requirement: 开发源码绑定保护规格写入
 
-系统 MUST 在开发源码绑定与目标规格工作树不一致时，拒绝任何会生成预览或修改主规格的规格应用操作，并返回包含绑定不一致标识的可识别错误。
+系统 MUST 在开发模式使用机器级单一开发源码绑定；当开发源码绑定与目标规格工作树不一致时，系统 MUST 拒绝任何会生成预览或修改主规格的规格应用操作，并返回包含绑定不一致标识的可识别错误。不同目标工作树必须通过显式切换绑定后串行处理，系统 MUST NOT 将单一绑定解释为支持多个开发工作树并行写入。
 
 #### Scenario: 开发源码绑定与目标工作树不一致
 
@@ -184,4 +190,5 @@ MySpec（自有规格） MUST preserve unrelated specification files when applyi
 
 - **WHEN** 用户使用 `myspec init --dev --source <目标工作树>` 显式切换开发源码绑定，并在该目标工作树执行规格应用
 - **THEN** 系统 MUST 允许该目标工作树完成预览、原子应用和相同 Delta（增量规格）的稳定重复应用
+- **THEN** 不同目标工作树的开发模式写入 MUST 通过显式切换绑定串行完成
 - **THEN** 系统 MUST NOT 将该绑定切换解释为支持多个开发工作树并行写入
