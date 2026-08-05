@@ -306,7 +306,7 @@ def test_runner_config_change_invalidates_old_cache_and_reuses_current_cache(
                 old_config,
                 check,
                 [".build-and-verify/config.json"],
-                runtime_version="test-runtime",
+                runtime_identity="test-runtime",
             ),
             check,
         )
