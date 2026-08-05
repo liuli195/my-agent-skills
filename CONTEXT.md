@@ -84,6 +84,18 @@ _Avoid_: target worktree, current checkout
 The Git worktree whose specification directory is the intended target of a MySpec operation.
 _Avoid_: source worktree, active source
 
+**工作树登记（Worktree Registration）**:
+The logical record that identifies a target worktree in Git or a worktree manager; its removal does not by itself prove that the physical directory is gone.
+_Avoid_: physical worktree directory, cleanup residue
+
+**实体工作树目录（Physical Worktree Directory）**:
+The filesystem directory occupied by a target worktree, including generated files and directory links owned by that worktree.
+_Avoid_: worktree registration, shared dependency target
+
+**工作树删除后置条件（Worktree Removal Postcondition）**:
+For an explicitly requested worktree removal, both the target worktree registration and its physical worktree directory are absent before the flow reports completion.
+_Avoid_: registration-only cleanup, cleanup residue
+
 **开发源码绑定（Development Source Binding）**:
 The machine-level association between the bare MySpec CLI（命令行程序） and one source worktree; it is single-valued and switches explicitly.
 _Avoid_: per-worktree binding, automatic source selection
