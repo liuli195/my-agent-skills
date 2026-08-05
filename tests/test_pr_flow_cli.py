@@ -6092,7 +6092,8 @@ def test_cleanup_physical_failure_persists_status_in_controller(tmp_path: Path, 
     assert status["details"]["registrationRemoved"] is True
     assert status["details"]["nextAction"]
     assert status["details"]["nextCommand"]
-    assert "rmdir" in status["details"]["nextCommand"]
+    expected_recovery_command = "rmdir" if os.name == "nt" else "rm -rf"
+    assert expected_recovery_command in status["details"]["nextCommand"]
     assert status["details"]["recovery"] == status["details"]["nextAction"]
 
 
