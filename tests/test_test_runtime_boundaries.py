@@ -423,6 +423,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_accepts_controlled_ssh_dev_source': (
         'covers the packaged Build and Verify development-mode entrypoint with an official SSH remote and published commit; function=test_packed_build_and_verify_accepts_controlled_ssh_dev_source'
     ),
+    'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_dev_identity_controls_public_verify_cache': (
+        'covers packaged Build and Verify doctor and fast/full verify cache invalidation for development identity changes; function=test_packed_build_and_verify_dev_identity_controls_public_verify_cache'
+    ),
     'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_migrates_recognized_runtime_after_fast_verify': (
         'covers the installed Build and Verify CLI fast-verify migration in a clean temporary git repository; function=test_packed_build_and_verify_migrates_recognized_runtime_after_fast_verify'
     ),

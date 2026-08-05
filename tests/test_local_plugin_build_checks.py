@@ -558,6 +558,52 @@ def test_runner_binds_cache_to_runtime_version_and_requires_version(
     assert capsys.readouterr().err.count("missing_runtime_version") == 2
 
 
+def test_runner_binds_cache_to_implementation_identity(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = load_check_module()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("changed\n", encoding="utf-8")
+    write_runner_config(
+        tmp_path,
+        verify_checks=[
+            {
+                "id": "implementation-cache",
+                "command": "run-implementation-cache",
+                "paths": ["src/**"],
+                "inputs": ["src/app.py"],
+            }
+        ],
+    )
+    monkeypatch.setattr(module, "_changed_files", lambda _root: ["src/app.py"])
+    calls: list[str] = []
+
+    def fake_run(command, cwd, check, text, encoding, errors, capture_output, shell=False, timeout=None):
+        calls.append(command)
+        return make_completed(command)
+
+    assert module.run_verify(
+        tmp_path,
+        runner=fake_run,
+        runtime_version="test-runtime",
+        implementation_identity="implementation-a",
+    ) == 0
+    assert module.run_verify(
+        tmp_path,
+        runner=fake_run,
+        runtime_version="test-runtime",
+        implementation_identity="implementation-a",
+    ) == 0
+    assert module.run_verify(
+        tmp_path,
+        runner=fake_run,
+        runtime_version="test-runtime",
+        implementation_identity="implementation-b",
+    ) == 0
+    assert calls == ["run-implementation-cache", "run-implementation-cache"]
+    assert capsys.readouterr().out.count("cache-hit: implementation-cache") == 1
+
+
 def test_runner_cache_key_changes_with_runtime_versions(
     tmp_path: Path, monkeypatch
 ) -> None:

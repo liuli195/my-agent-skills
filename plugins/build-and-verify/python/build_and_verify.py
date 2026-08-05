@@ -15,6 +15,7 @@ from types import ModuleType
 
 
 _RUNNER_MODULE: ModuleType | None = None
+_MANAGEMENT_MODULE: ModuleType | None = None
 RUNTIME_FILES = ("build_and_verify.py", "build_and_verify_runner.py")
 VERSION_FILE = "version.json"
 DEFAULT_CONFIG = {"version": 1, "build": {"checks": []}, "verify": {"checks": []}}
@@ -37,23 +38,47 @@ def _plugin_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _management() -> ModuleType:
+    global _MANAGEMENT_MODULE
+    if _MANAGEMENT_MODULE is not None:
+        return _MANAGEMENT_MODULE
+    management_path = Path(__file__).resolve().with_name("management.py")
+    spec = importlib.util.spec_from_file_location(
+        "build_and_verify_management", management_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"missing_management: {management_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    _MANAGEMENT_MODULE = module
+    return module
+
+
 def _runtime_metadata() -> dict[str, str]:
     manifest_path = _plugin_root() / ".codex-plugin" / "plugin.json"
-    if manifest_path.is_file():
-        try:
-            version = str(json.loads(manifest_path.read_text(encoding="utf-8")).get("version") or "unknown")
-            return {
-                "plugin": "build-and-verify",
-                "plugin_version": version,
-                "runtime_version": version,
-            }
-        except json.JSONDecodeError:
-            pass
-    return {
+    metadata = {
         "plugin": "build-and-verify",
         "plugin_version": "unknown",
         "runtime_version": "unknown",
     }
+    if manifest_path.is_file():
+        try:
+            version = str(
+                json.loads(manifest_path.read_text(encoding="utf-8")).get("version")
+                or "unknown"
+            )
+            metadata.update(plugin_version=version, runtime_version=version)
+        except json.JSONDecodeError:
+            pass
+    try:
+        identity = _management().implementation_identity()
+    except Exception as error:
+        raise RuntimeError(f"implementation_identity_unavailable: {error}") from error
+    if not isinstance(identity, str) or not identity.strip():
+        raise RuntimeError("implementation_identity_unavailable: empty identity")
+    metadata["implementation_identity"] = identity
+    return metadata
 
 
 def _load_config_file(path: Path) -> dict:
@@ -276,13 +301,20 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if legacy_runtime is not None and not _migration_ready(project):
             return 1
+        try:
+            metadata = _runtime_metadata()
+        except RuntimeError as error:
+            print(str(error), file=sys.stderr)
+            print("status: failed")
+            return 1
         result = int(
             _runner().run_verify(
                 project,
                 full=args.full,
                 baseline=args.baseline,
                 performance_report=args.performance_report,
-                runtime_version=_runtime_metadata()["runtime_version"],
+                runtime_version=metadata["runtime_version"],
+                implementation_identity=metadata["implementation_identity"],
                 synthetic_changed_paths=(
                     sorted(
                         path.relative_to(project).as_posix()

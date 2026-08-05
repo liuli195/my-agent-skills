@@ -592,6 +592,7 @@ def _cache_key(
     check: dict[str, Any],
     changed_files: list[str] | None = None,
     runtime_version: str = "unknown",
+    implementation_identity: str | None = None,
 ) -> str:
     if "inputs" in check and check.get("inputs") is not None:
         inputs = check.get("inputs") or []
@@ -606,6 +607,9 @@ def _cache_key(
         "framework_version": FRAMEWORK_VERSION,
         "python_version": platform.python_version(),
         "runtime_version": runtime_version,
+        "implementation_identity": (
+            runtime_version if implementation_identity is None else implementation_identity
+        ),
         "check_id": check.get("id"),
         "command": check.get("command"),
         "inputs": [_hash_input(project, item) for item in inputs],
@@ -705,10 +709,18 @@ def _run_check_result(
     changed_files: list[str],
     runner: Runner,
     runtime_version: str,
+    implementation_identity: str | None = None,
 ) -> CheckResult:
     started_at = time.monotonic()
     try:
-        key = _cache_key(project, config, check, changed_files, runtime_version)
+        key = _cache_key(
+            project,
+            config,
+            check,
+            changed_files,
+            runtime_version,
+            implementation_identity,
+        )
         timeout_seconds = _check_timeout_seconds(config, check)
     except ValueError as error:
         return CheckResult(
@@ -839,6 +851,7 @@ def _run_scheduled_checks(
     changed_files: list[str],
     runner: Runner,
     runtime_version: str,
+    implementation_identity: str | None = None,
 ) -> tuple[int, list[str], list[CheckResult]]:
     indexed_selected = list(enumerate(selected))
     parallel_checks = [(index, check) for index, check in indexed_selected if check.get("checkParallel") is True]
@@ -850,10 +863,17 @@ def _run_scheduled_checks(
         interrupted = False
         try:
             futures = {
-                executor.submit(_run_check_result, index, project, check, config, changed_files, runner, runtime_version): (
+                executor.submit(
+                    _run_check_result,
                     index,
+                    project,
                     check,
-                )
+                    config,
+                    changed_files,
+                    runner,
+                    runtime_version,
+                    implementation_identity,
+                ): (index, check)
                 for index, check in parallel_checks
             }
             for future in futures:
@@ -878,12 +898,30 @@ def _run_scheduled_checks(
             executor.shutdown(wait=not interrupted, cancel_futures=interrupted)
         if not interrupted:
             results.extend(
-                _run_check_result(index, project, check, config, changed_files, runner, runtime_version)
+                _run_check_result(
+                    index,
+                    project,
+                    check,
+                    config,
+                    changed_files,
+                    runner,
+                    runtime_version,
+                    implementation_identity,
+                )
                 for index, check in serial_checks
             )
     else:
         results.extend(
-            _run_check_result(index, project, check, config, changed_files, runner, runtime_version)
+            _run_check_result(
+                index,
+                project,
+                check,
+                config,
+                changed_files,
+                runner,
+                runtime_version,
+                implementation_identity,
+            )
             for index, check in serial_checks
         )
 
@@ -956,9 +994,19 @@ def run_verify(
     performance_report: bool = False,
     runtime_version: str = "unknown",
     synthetic_changed_paths: list[str] | None = None,
+    implementation_identity: str | None = None,
 ) -> int:
     if not _is_non_empty_string(runtime_version) or runtime_version == "unknown":
         print("missing_runtime_version", file=sys.stderr)
+        print("status: failed")
+        return 1
+    if implementation_identity is None:
+        implementation_identity = runtime_version
+    if (
+        not _is_non_empty_string(implementation_identity)
+        or implementation_identity == "unknown"
+    ):
+        print("missing_implementation_identity", file=sys.stderr)
         print("status: failed")
         return 1
     if baseline is not None and full:
@@ -1000,7 +1048,13 @@ def run_verify(
             )
         started_at = time.monotonic()
         failures, failed_ids, results = _run_scheduled_checks(
-            project, config, selected, changed_files, runner, runtime_version
+            project,
+            config,
+            selected,
+            changed_files,
+            runner,
+            runtime_version,
+            implementation_identity,
         )
         total_seconds = round(time.monotonic() - started_at, 2)
         if len(results) == len(selected):
@@ -1069,7 +1123,14 @@ def run_verify(
     cache_misses: list[dict[str, Any]] = []
     for check in selected:
         try:
-            key = _cache_key(project, config, check, changed_files, runtime_version)
+            key = _cache_key(
+                project,
+                config,
+                check,
+                changed_files,
+                runtime_version,
+                implementation_identity,
+            )
         except ValueError as error:
             print(str(error), file=sys.stderr)
             failures += 1
@@ -1079,7 +1140,13 @@ def run_verify(
             continue
         cache_misses.append(check)
     scheduled_failures, failed_ids, _ = _run_scheduled_checks(
-        project, config, cache_misses, changed_files, runner, runtime_version
+        project,
+        config,
+        cache_misses,
+        changed_files,
+        runner,
+        runtime_version,
+        implementation_identity,
     )
     failures += scheduled_failures
     if failed_ids:
