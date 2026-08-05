@@ -636,3 +636,38 @@ PR Flow（拉取请求流程）MUST 在 Windows（视窗系统）中支持安全
 - **THEN** 目标实体目录 MUST 不再存在，Git 工作树清单 MUST 不再包含目标
 - **THEN** 目标分支同步和主工作树的既有安全行为 MUST 保持不变
 - **THEN** 清理 MUST NOT 要求持久写入仓库或用户 Git（版本管理）配置以支持该路径
+### Requirement: PR Flow verifies physical linked worktree removal
+PR Flow（拉取请求流程）MUST 在用户显式请求删除关联工作树后，同时验证目标工作树登记和目标实体目录均已消失；目录链接指向的共享目录 MUST 保持不变。
+
+#### Scenario: Git-managed removal clears physical residuals
+- **WHEN** 调用方从其他工作树通过 `--project`（项目路径参数）执行已完成流程的 `cleanup`（清理）并传入 `--remove-worktree`（删除工作树参数）
+- **AND** 目标是 Git（版本管理）登记的非 main worktree（非主工作树）且工作区干净
+- **AND** Git（版本管理）删除后目标实体目录仍存在
+- **THEN** PR Flow（拉取请求流程）MUST remove the entire target physical directory（删除整个目标实体目录）
+- **THEN** PR Flow（拉取请求流程）MUST report cleanup completion（报告清理完成） only after the Git（版本管理）登记 and physical directory（实体目录） both disappear
+- **THEN** any shared directory-link targets and their contents MUST remain unchanged（保持不变）
+
+#### Scenario: Orca-managed removal clears physical residuals
+- **WHEN** 调用方从其他工作树通过 `--project`（项目路径参数）执行已完成流程的 `cleanup`（清理）并传入 `--remove-worktree`（删除工作树参数）
+- **AND** 目标是 Git（版本管理）登记的非 main worktree（非主工作树）且工作区干净
+- **AND** Orca（工作区管理器）按规范化绝对路径匹配并成功删除目标登记
+- **AND** 删除后目标实体目录仍存在
+- **THEN** PR Flow（拉取请求流程）MUST remove the entire target physical directory（删除整个目标实体目录）
+- **THEN** PR Flow（拉取请求流程）MUST report cleanup completion（报告清理完成） only after the Git（版本管理）登记 and physical directory（实体目录） both disappear
+- **THEN** any shared directory-link targets and their contents MUST remain unchanged（保持不变）
+
+#### Scenario: Registration remains after adapter removal
+- **WHEN** Git（版本管理）或 Orca（工作区管理器）删除命令返回成功
+- **AND** Git（版本管理）工作树清单仍包含目标登记
+- **THEN** PR Flow（拉取请求流程） MUST stop with `EXCEPTION_REQUIRED`（需要异常处理）
+- **THEN** PR Flow（拉取请求流程） MUST NOT remove the target physical directory（删除目标实体目录）
+- **THEN** PR Flow（拉取请求流程） MUST NOT report cleanup completion（报告清理完成）
+
+#### Scenario: Physical removal fails after registration removal
+- **WHEN** Git（版本管理）或 Orca（工作区管理器）删除命令成功
+- **AND** Git（版本管理）工作树清单不再包含目标登记
+- **AND** 目标实体目录删除失败或仍然存在
+- **THEN** PR Flow（拉取请求流程） MUST stop with `EXCEPTION_REQUIRED`（需要异常处理） and reason `physical_worktree_remove_failed`
+- **THEN** PR Flow（拉取请求流程） MUST NOT report cleanup completion（报告清理完成）
+- **THEN** 停止状态 MUST identify the target path（目标路径） and provide an executable recovery command（可执行恢复命令） from another worktree（其他工作树）
+- **THEN** PR Flow（拉取请求流程） MUST NOT recreate `.pr-flow` state（状态） inside the unregistered target worktree（已注销目标工作树）

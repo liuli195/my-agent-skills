@@ -550,6 +550,60 @@ def test_remove_worktree_uses_native_non_forced_remove(tmp_path: Path, monkeypat
     assert not any("--force" in call for call in git_stub.calls)
 
 
+def test_remove_worktree_deletes_physical_residue_after_registration_removal(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    module = load_pr_flow_module()
+    main = tmp_path / "main"
+    target = tmp_path / "feature one"
+    main.mkdir()
+    target.mkdir()
+    (target / "residue.txt").write_text("orphaned\n", encoding="utf-8")
+    before = f"worktree {main}\0HEAD aaaa\0branch refs/heads/main\0\0worktree {target}\0HEAD bbbb\0detached\0\0"
+    after = f"worktree {main}\0HEAD aaaa\0branch refs/heads/main\0\0"
+    git_stub = CommandStub(consume=True)
+    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
+    git_stub.add(["status", "--short"], stdout="")
+    remove_args = ([] if os.name != "nt" else ["-c", "core.longpaths=true"])
+    remove_args += ["worktree", "remove", str(target.resolve())]
+    git_stub.add(remove_args)
+    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "find_orca_worktree_id", lambda *_args: None)
+
+    module.remove_worktree(target, target)
+
+    assert not target.exists()
+
+
+def test_remove_worktree_does_not_delete_target_while_registration_remains(tmp_path: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    module = load_pr_flow_module()
+    main = tmp_path / "main"
+    target = tmp_path / "feature one"
+    main.mkdir()
+    target.mkdir()
+    (target / "residue.txt").write_text("keep\n", encoding="utf-8")
+    worktrees = f"worktree {main}\0HEAD aaaa\0branch refs/heads/main\0\0worktree {target}\0HEAD bbbb\0detached\0\0"
+    git_stub = CommandStub(consume=True)
+    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=worktrees)
+    git_stub.add(["status", "--short"], stdout="")
+    remove_args = ([] if os.name != "nt" else ["-c", "core.longpaths=true"])
+    remove_args += ["worktree", "remove", str(target.resolve())]
+    git_stub.add(remove_args)
+    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=worktrees)
+    monkeypatch.setattr(module, "git", git_stub)
+    monkeypatch.setattr(module, "find_orca_worktree_id", lambda *_args: None)
+    monkeypatch.setattr(module.shutil, "rmtree", lambda *_args: pytest.fail("physical deletion must wait"))
+
+    with pytest.raises(module.PrFlowError, match="git_worktree_remove_failed"):
+        module.remove_worktree(target, target)
+
+    assert target.exists()
+    assert (target / "residue.txt").exists()
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows long-path behavior")
 def test_cleanup_handles_windows_long_paths_through_cli(tmp_path: Path, monkeypatch) -> None:
     controller = tmp_path / "controller"
@@ -606,6 +660,61 @@ def test_cleanup_handles_windows_long_paths_through_cli(tmp_path: Path, monkeypa
     assert not core_longpaths.stdout.strip()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction behavior")
+def test_cleanup_removes_junction_residue_without_shared_targets(tmp_path: Path, monkeypatch) -> None:
+    controller = tmp_path / "controller"
+    remote = tmp_path / "remote.git"
+    target = tmp_path / "target"
+    init_repo(controller)
+    write_confirmed_pr_flow_config(controller)
+    (controller / ".gitignore").write_text("node_modules/\n.venv/\n", encoding="utf-8")
+    git(controller, "add", ".gitignore", ".pr-flow")
+    git(controller, "commit", "-m", "configure cleanup")
+    bare = subprocess.run(["git", "init", "--bare", str(remote)], check=False, text=True, capture_output=True)
+    assert bare.returncode == 0, bare.stdout + bare.stderr
+    git(controller, "remote", "add", "origin", str(remote))
+    git(controller, "push", "-u", "origin", "main")
+    git(controller, "checkout", "-b", "feature/example")
+    (controller / "README.md").write_text("feature\n", encoding="utf-8")
+    git(controller, "add", "README.md")
+    git(controller, "commit", "-m", "feature")
+    git(controller, "push", "-u", "origin", "feature/example")
+    git(controller, "checkout", "main")
+    git(controller, "merge", "--ff-only", "feature/example")
+    git(controller, "push", "origin", "main")
+    git(controller, "worktree", "add", str(target), "feature/example")
+
+    shared_node_modules = controller / "node_modules"
+    shared_venv = controller / ".venv"
+    shared_node_modules.mkdir()
+    shared_venv.mkdir()
+    node_sentinel = shared_node_modules / "shared-sentinel.txt"
+    venv_sentinel = shared_venv / "shared-sentinel.txt"
+    node_sentinel.write_text("keep\n", encoding="utf-8")
+    venv_sentinel.write_text("keep\n", encoding="utf-8")
+    powershell = shutil.which("powershell")
+    if not powershell:
+        pytest.skip("PowerShell is required to create junctions")
+    for link, shared in ((target / "node_modules", shared_node_modules), (target / ".venv", shared_venv)):
+        junction = subprocess.run(
+            [powershell, "-NoProfile", "-Command", f'New-Item -ItemType Junction -Path "{link}" -Target "{shared}"'],
+            check=False,
+            capture_output=True,
+        )
+        assert junction.returncode == 0, junction.stdout.decode(errors="replace") + junction.stderr.decode(errors="replace")
+
+    module = load_pr_flow_module()
+    monkeypatch.setattr(module, "find_orca_worktree_id", lambda *_args: None)
+    result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
+    assert not target.exists()
+    assert "target" not in git(controller, "worktree", "list", "--porcelain")
+    assert node_sentinel.read_text(encoding="utf-8") == "keep\n"
+    assert venv_sentinel.read_text(encoding="utf-8") == "keep\n"
+
+
 def worktree_removal_records(main: Path, target: Path) -> tuple[str, str]:
     before = (
         f"worktree {main}\0HEAD aaaa\0branch refs/heads/main\0\0"
@@ -627,6 +736,24 @@ def test_remove_worktree_prefers_matched_orca_worktree(tmp_path: Path, monkeypat
     target = tmp_path / "feature one"
     main.mkdir()
     target.mkdir()
+    (target / "residue.txt").write_text("orphaned\n", encoding="utf-8")
+    shared_sentinels: dict[str, Path] = {}
+    if os.name == "nt":
+        powershell = shutil.which("powershell")
+        if not powershell:
+            pytest.skip("PowerShell is required to create junctions")
+        for name in (".venv", "node_modules"):
+            shared = main / name
+            shared.mkdir()
+            sentinel = shared / "shared-sentinel.txt"
+            sentinel.write_text("keep\n", encoding="utf-8")
+            shared_sentinels[name] = sentinel
+            junction = subprocess.run(
+                [powershell, "-NoProfile", "-Command", f'New-Item -ItemType Junction -Path "{target / name}" -Target "{shared}"'],
+                check=False,
+                capture_output=True,
+            )
+            assert junction.returncode == 0, junction.stdout.decode(errors="replace") + junction.stderr.decode(errors="replace")
     before, after = worktree_removal_records(main, target)
     git_stub = CommandStub(consume=True)
     git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
@@ -648,6 +775,9 @@ def test_remove_worktree_prefers_matched_orca_worktree(tmp_path: Path, monkeypat
     assert ("worktree", "rm", "--worktree", "id:repo::target", "--json") in orca_stub.calls
     assert not any(call[:2] == ("worktree", "remove") for call in git_stub.calls)
     assert not any("--force" in call for call in orca_stub.calls)
+    assert not target.exists()
+    for sentinel in shared_sentinels.values():
+        assert sentinel.read_text(encoding="utf-8") == "keep\n"
 
 
 @pytest.mark.parametrize(
@@ -1422,6 +1552,7 @@ def run_cleanup_in_process(
     *,
     pr_stdout: str,
     git_responses: list[tuple[list[str], str, int]] | None = None,
+    remove_worktree: bool = False,
 ) -> tuple[Path, subprocess.CompletedProcess[str]]:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
@@ -1429,6 +1560,9 @@ def run_cleanup_in_process(
     module = load_pr_flow_module()
     project = tmp_path / "project"
     project.mkdir()
+    controller = tmp_path / "controller"
+    if remove_worktree:
+        controller.mkdir()
     write_minimal_pr_flow_config(project)
     gh_stub = CommandStub()
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=pr_stdout)
@@ -1440,7 +1574,12 @@ def run_cleanup_in_process(
     head_ref = pr.get("headRefName", "feature/example")
     base_oid = "a" * 40
     snapshot_ref = remote_snapshot_ref(project)
-    worktree_list = f"worktree {project}\0HEAD {'b' * 40}\0branch refs/heads/{head_ref}\0\0"
+    worktree_list = (
+        f"worktree {controller}\0HEAD {'a' * 40}\0branch refs/heads/controller\0\0"
+        f"worktree {project}\0HEAD {'b' * 40}\0branch refs/heads/{head_ref}\0\0"
+        if remove_worktree
+        else f"worktree {project}\0HEAD {'b' * 40}\0branch refs/heads/{head_ref}\0\0"
+    )
     git_stub.add(["status", "--short"], stdout="")
     git_stub.add(["fetch", "--no-write-fetch-head", "--refmap=", "origin", f"+refs/heads/{base_ref}:{snapshot_ref}"])
     git_stub.add(["rev-parse", snapshot_ref], stdout=base_oid + "\n")
@@ -1463,9 +1602,22 @@ def run_cleanup_in_process(
     git_stub.add(["rev-parse", f"refs/remotes/origin/{base_ref}"], stdout=base_oid + "\n")
     git_stub.add(["push", "origin", "--delete", head_ref])
     git_stub.add(["branch", "-d", head_ref])
+    if remove_worktree:
+        git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=worktree_list)
+        git_stub.add(["status", "--short"], stdout="")
+        remove_args = ([] if os.name != "nt" else ["-c", "core.longpaths=true"])
+        remove_args += ["worktree", "remove", str(project.resolve())]
+        git_stub.add(remove_args)
+        git_stub.add(
+            ["worktree", "list", "--porcelain", "-z"],
+            stdout=f"worktree {controller}\0HEAD {'a' * 40}\0branch refs/heads/controller\0\0",
+        )
     monkeypatch.setattr(module, "gh", gh_stub)
     monkeypatch.setattr(module, "git", git_stub)
-    result = invoke_pr_flow(["cleanup", "--project", str(project), "--pr", "12"], module=module)
+    args = ["cleanup", "--project", str(project), "--pr", "12"]
+    if remove_worktree:
+        args.append("--remove-worktree")
+    result = invoke_pr_flow(args, module=module)
     return project, result
 
 
@@ -1510,6 +1662,7 @@ def run_hotfix_in_process(
     include_branch: bool = True,
     git_responses: list[tuple[list[str], str, int]] | None = None,
     verify_returncode: int = 0,
+    remove_worktree: bool = False,
 ) -> tuple[Path, subprocess.CompletedProcess[str]]:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
@@ -1553,7 +1706,7 @@ def run_hotfix_in_process(
             "main",
             "--authorization-phrase",
             authorization_phrase,
-        ],
+        ] + (["--remove-worktree"] if remove_worktree else []),
         module=module,
     )
     return project, result
@@ -5786,6 +5939,51 @@ def test_hotfix_rejects_when_verify_command_fails(tmp_path: Path, monkeypatch) -
     assert status["details"]["returncode"] != 0
 
 
+def test_hotfix_remove_failure_does_not_report_completion_in_target(tmp_path: Path, monkeypatch) -> None:
+    controller = tmp_path / "controller"
+    controller.mkdir()
+    module = load_pr_flow_module()
+
+    def fail_remove(_project: Path, target: Path) -> None:
+        raise module.PrFlowError(
+            "physical_worktree_remove_failed",
+            {
+                "reason": "physical_worktree_remove_failed",
+                "targetPath": str(target),
+                "registrationRemoved": True,
+                "statusProject": str(controller),
+                "nextAction": "Remove the residual directory externally from the controller worktree.",
+            },
+        )
+
+    monkeypatch.setattr(module, "remove_worktree", fail_remove)
+    project, result = run_hotfix_in_process(
+        tmp_path,
+        monkeypatch,
+        remove_worktree=True,
+        git_responses=[
+            (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], "", 0),
+            (["rev-parse", "__snapshot_ref__"], "a" * 40 + "\n", 0),
+            (["rev-parse", "HEAD"], "b" * 40 + "\n", 0),
+            (["merge-base", "HEAD", "a" * 40], "a" * 40 + "\n", 0),
+            (["status", "--short"], "", 0),
+            (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], "", 0),
+            (["rev-parse", "__snapshot_ref__"], "a" * 40 + "\n", 0),
+            (["push", "origin", "HEAD:refs/heads/main"], "", 0),
+            (["fetch", "origin", "main"], "", 0),
+            (["rev-parse", "origin/main"], "b" * 40 + "\n", 0),
+            (["config", "--get", "user.name"], "Test User\n", 0),
+            (["config", "--get", "user.email"], "test@example.com\n", 0),
+        ],
+    )
+
+    assert result.returncode == 1
+    assert "hotfix_complete" not in result.stdout
+    assert not (project / ".pr-flow" / "last-status.json").exists()
+    status = json.loads((controller / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "physical_worktree_remove_failed"
+
+
 def test_hotfix_pushes_head_to_target_and_writes_audit_record(tmp_path: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
@@ -5869,6 +6067,34 @@ def run_cleanup_with_real_git(
     if remove_worktree:
         args.append("--remove-worktree")
     return invoke_pr_flow(args, module=module)
+
+
+def test_cleanup_physical_failure_persists_status_in_controller(tmp_path: Path, monkeypatch) -> None:
+    module = load_pr_flow_module()
+
+    def fail_rmtree(_target: Path) -> None:
+        raise OSError("directory is still in use")
+
+    monkeypatch.setattr(module, "find_orca_worktree_id", lambda *_args: None)
+    monkeypatch.setattr(module.shutil, "rmtree", fail_rmtree)
+    project, result = run_cleanup_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=cleanup_pr_view_json(),
+        remove_worktree=True,
+    )
+
+    assert result.returncode == 1
+    assert "cleanup_complete" not in result.stdout
+    assert not (project / ".pr-flow" / "last-status.json").exists()
+    status = json.loads((tmp_path / "controller" / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "physical_worktree_remove_failed"
+    assert status["details"]["registrationRemoved"] is True
+    assert status["details"]["nextAction"]
+    assert status["details"]["nextCommand"]
+    expected_recovery_command = "rmdir" if os.name == "nt" else "rm -rf"
+    assert expected_recovery_command in status["details"]["nextCommand"]
+    assert status["details"]["recovery"] == status["details"]["nextAction"]
 
 
 def test_cleanup_returns_to_available_local_base_end_to_end(tmp_path: Path, monkeypatch) -> None:
