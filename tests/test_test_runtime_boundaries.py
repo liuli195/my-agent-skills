@@ -618,6 +618,18 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_apply_delta_can_atomically_replace_main_after_final_confirmation': (
         'covers packaged spec_ops CLI final atomic replacement and idempotent no-op behavior; function=test_apply_delta_can_atomically_replace_main_after_final_confirmation'
     ),
+    'tests/test_my_spec.py::test_myspec_final_apply_requires_the_confirmed_preview': (
+        'covers MySpec final application refusing to replace a target without a confirmed preview; function=test_myspec_final_apply_requires_the_confirmed_preview'
+    ),
+    'tests/test_my_spec.py::test_myspec_final_apply_rejects_bound_content_drift_after_preview': (
+        'covers MySpec final application stopping on specification, input, or preview drift after confirmation; function=test_myspec_final_apply_rejects_bound_content_drift_after_preview'
+    ),
+    'tests/test_my_spec.py::test_myspec_final_apply_rejects_unconfirmed_implementation_identity': (
+        'covers MySpec final application stopping when the persisted implementation identity cannot be confirmed; function=test_myspec_final_apply_rejects_unconfirmed_implementation_identity'
+    ),
+    'tests/test_my_spec.py::test_myspec_final_apply_rejects_missing_bound_content_fingerprints': (
+        'covers MySpec final application stopping when persisted specification or input content fingerprints are missing; function=test_myspec_final_apply_rejects_missing_bound_content_fingerprints'
+    ),
     'tests/test_my_spec.py::test_myspec_launcher_forwards_sigterm_to_python': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_myspec_launcher_forwards_sigterm_to_python'
     ),
@@ -777,8 +789,17 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_packed_myspec_switches_pi_between_development_and_saved_release': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_switches_pi_between_development_and_saved_release'
     ),
-    'tests/test_my_spec.py::test_packed_myspec_dev_binding_blocks_cross_worktree_apply_until_switch': (
-        'covers the installed MySpec CLI binding guard and manual multi-worktree switch through two isolated git worktrees; function=test_packed_myspec_dev_binding_blocks_cross_worktree_apply_until_switch'
+    'tests/test_my_spec.py::test_packed_myspec_dev_doctor_identity_ignores_unrelated_files_and_tracks_closure': (
+        'covers the installed MySpec CLI reproducible development implementation identity through unrelated and packaged source changes; function=test_packed_myspec_dev_doctor_identity_ignores_unrelated_files_and_tracks_closure'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged': (
+        'covers the installed MySpec CLI reusing confirmation when a development implementation changes without changing the observable diff; function=test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_requires_reconfirmation_when_implementation_changes_the_diff': (
+        'covers the installed MySpec CLI requiring reconfirmation when a development implementation changes the observable diff; function=test_packed_myspec_requires_reconfirmation_when_implementation_changes_the_diff'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_context': (
+        'covers the installed MySpec CLI canonical development binding and target-worktree context through two isolated git worktrees; function=test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_context'
     ),
     'tests/test_my_spec.py::test_packed_myspec_update_preflights_installed_clients_before_package_write': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_update_preflights_installed_clients_before_package_write'

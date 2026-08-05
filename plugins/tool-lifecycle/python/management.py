@@ -168,6 +168,68 @@ def _package_version() -> str:
     return _RUNNING_PACKAGE_VERSION
 
 
+def _implementation_files(package_root: Path) -> list[tuple[str, bytes]]:
+    roots = (".agents", ".claude-plugin", ".codex-plugin", "bin", "skills")
+    files: dict[str, bytes] = {}
+    package = package_root / "package.json"
+    if not package.is_file():
+        raise ManagementError(f"implementation_identity_unavailable: missing {package}")
+    files["package.json"] = package.read_bytes()
+    for directory in roots:
+        root = package_root / directory
+        if not root.is_dir():
+            raise ManagementError(f"implementation_identity_unavailable: missing {root}")
+        for path in root.rglob("*"):
+            if not path.is_file() or "__pycache__" in path.parts or path.suffix == ".pyc":
+                continue
+            relative = path.relative_to(package_root).as_posix()
+            if directory == "skills":
+                parts = relative.split("/")
+                if len(parts) < 3 or parts[2] != "SKILL.md" and parts[2] not in {"references", "assets"}:
+                    continue
+            files[relative] = path.read_bytes()
+    python_root = package_root / "python"
+    for path in python_root.glob("*.py"):
+        files[path.relative_to(package_root).as_posix()] = path.read_bytes()
+    profile = python_root / "lifecycle_profile.json"
+    if not profile.is_file():
+        raise ManagementError(f"implementation_identity_unavailable: missing {profile}")
+    files["python/lifecycle_profile.json"] = profile.read_bytes()
+
+    lifecycle_root = package_root.parent.parent / "plugins" / "tool-lifecycle"
+    shared_management = lifecycle_root / "python" / "management.py"
+    packer = lifecycle_root / "pack.py"
+    for path in (shared_management, packer):
+        if not path.is_file():
+            raise ManagementError(f"implementation_identity_unavailable: missing {path}")
+    files["python/management.py"] = shared_management.read_bytes()
+    files["tool-lifecycle/pack.py"] = packer.read_bytes()
+    return sorted(files.items())
+
+
+def _implementation_identity_for_package(package_root: Path) -> str:
+    digest = hashlib.sha256()
+    for relative, content in _implementation_files(package_root):
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return "sha256:" + digest.hexdigest()
+
+
+def implementation_identity() -> str:
+    try:
+        stable = _stable_package_root()
+    except ManagementError as exc:
+        if _running_package_is_source_worktree():
+            return _implementation_identity_for_package(_RUNNING_PACKAGE_ROOT)
+        raise ManagementError(f"implementation_identity_unavailable: {exc}") from exc
+    real = _absolute_path(Path(os.path.realpath(stable)))
+    if not _same_path(stable, real):
+        return _implementation_identity_for_package(real)
+    return "release:" + _package_version()
+
+
 def _pi_agent_dir() -> Path:
     configured = os.environ.get("PI_CODING_AGENT_DIR")
     return Path(configured) if configured else Path.home() / ".pi" / "agent"
@@ -1570,6 +1632,14 @@ def _worktree_identity(path: Path, label: str) -> tuple[Path, str]:
     return worktree, value
 
 
+def resolve_worktree(path: Path) -> Path | None:
+    try:
+        worktree, _commit = _worktree_identity(path, "target")
+    except ManagementError:
+        return None
+    return worktree
+
+
 def _binding_report(stable: Path, target: Path) -> dict[str, object]:
     real = _absolute_path(Path(os.path.realpath(stable)))
     if _same_path(stable, real):
@@ -1610,26 +1680,9 @@ def _running_package_is_source_worktree() -> bool:
 
 
 def validate_spec_write_binding(specs_root: Path) -> None:
-    try:
-        stable = _stable_package_root()
-    except ManagementError as exc:
-        if _running_package_is_source_worktree():
-            raise ManagementError(f"dev_source_binding_unavailable: {exc}") from exc
-        return
-    real = _absolute_path(Path(os.path.realpath(stable)))
-    if not _same_path(_RUNNING_PACKAGE_ROOT, real) or _same_path(stable, real):
-        return
-
-    source, source_commit = _worktree_identity(real.parents[1], "dev_source")
-    target, target_commit = _worktree_identity(specs_root, "dev_target")
-    if _same_path(source, target):
-        return
-    raise ManagementError(
-        "dev_source_worktree_mismatch: "
-        f"sourceWorktree={source} sourceCommit={source_commit} "
-        f"targetWorktree={target} targetCommit={target_commit}; "
-        f"run {COMMAND_NAME} init --dev --source {target}"
-    )
+    # The development source is a machine-level code binding, not the data target.
+    # Target worktree safety is enforced by MySpec's persisted run context.
+    return
 
 
 def _source_record(
@@ -1662,6 +1715,7 @@ def _doctor_package() -> dict[str, object]:
         "packageName": PACKAGE_NAME,
     }
     if linked:
+        toolchain["implementationIdentity"] = _implementation_identity_for_package(real)
         try:
             _, _, commit = _validate_dev_source(real.parents[1])
         except ManagementError:

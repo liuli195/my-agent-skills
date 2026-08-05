@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
 import json
+import os
 import re
 import shutil
 import sys
@@ -14,6 +16,8 @@ from pathlib import Path
 from management import (
     ManagementError,
     add_management_parsers,
+    implementation_identity,
+    resolve_worktree,
     run_management,
     validate_spec_write_binding,
 )
@@ -27,6 +31,17 @@ OPERATION_HEADING = re.compile(r"^## (ADDED|MODIFIED|REMOVED|RENAMED) Requiremen
 RUN_STATUSES = ("ANALYZING", "WAITING_DECISION", "READY_TO_APPLY")
 DECISIONS = ("accept", "ignore", "accept-modified", "defer")
 CONFLICT_FIELDS = ("id", "candidate", "evidence", "reason", "recommendation")
+CONTEXT_FIELDS = (
+    "workRoot",
+    "targetWorktree",
+    "specsRoot",
+    "deltaRoot",
+    "previewRoot",
+    "specsContentFingerprint",
+    "deltaContentFingerprint",
+    "previewContentFingerprint",
+    "implementationIdentity",
+)
 
 
 class SpecError(ValueError):
@@ -339,6 +354,164 @@ def _merged_specs(specs_root: Path, delta_root: Path) -> OrderedDict[str, MainSp
     return specs
 
 
+def _canonical_path(path: Path) -> Path:
+    return Path(os.path.realpath(os.path.abspath(path.expanduser())))
+
+
+def _tree_fingerprint(root: Path) -> str:
+    if not root.exists():
+        return "missing"
+    if not root.is_dir():
+        raise SpecError(f"not_directory: {root}")
+    digest = hashlib.sha256()
+    for path in sorted((item for item in root.rglob("*") if item.is_file()), key=lambda item: item.relative_to(root).as_posix()):
+        relative = path.relative_to(root).as_posix()
+        content = path.read_bytes()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return "sha256:" + digest.hexdigest()
+
+
+def _same_tree(left: Path, right: Path) -> bool:
+    if not left.is_dir() or not right.is_dir():
+        return False
+    left_files = {path.relative_to(left).as_posix(): path for path in left.rglob("*") if path.is_file()}
+    right_files = {path.relative_to(right).as_posix(): path for path in right.rglob("*") if path.is_file()}
+    if left_files.keys() != right_files.keys():
+        return False
+    return all(left_files[relative].read_bytes() == right_files[relative].read_bytes() for relative in left_files)
+
+
+def _validate_context_document(state: dict[str, object]) -> None:
+    if any(field not in state for field in CONTEXT_FIELDS):
+        raise SpecError("invalid_state_context")
+    for field in CONTEXT_FIELDS:
+        value = state[field]
+        if field == "targetWorktree":
+            if value is not None and not isinstance(value, str):
+                raise SpecError("invalid_state_context")
+        elif field.endswith("Root"):
+            if value is not None and not isinstance(value, str):
+                raise SpecError("invalid_state_context")
+        elif field == "implementationIdentity":
+            if not isinstance(value, str) or not value.strip():
+                raise SpecError("invalid_state_context")
+        elif field.endswith("Fingerprint"):
+            if value is not None and not isinstance(value, str):
+                raise SpecError("invalid_state_context")
+
+
+def _state_path_context(
+    state: dict[str, object],
+    work_root: Path,
+    specs_root: Path,
+    delta_root: Path,
+    output_root: Path,
+) -> tuple[Path, Path, Path, Path]:
+    _validate_context_document(state)
+    work = _canonical_path(work_root)
+    specs = _canonical_path(specs_root)
+    delta = _canonical_path(delta_root)
+    output = _canonical_path(output_root)
+    if state["workRoot"] != str(work):
+        raise SpecError("work_root_changed")
+    target = state["targetWorktree"]
+    if isinstance(target, str):
+        target_path = _canonical_path(Path(target))
+        expected = os.path.normcase(os.path.abspath(str(target_path)))
+        paths = [("work", work), ("specs", specs), ("delta", delta), ("output", output)]
+        for field, value in (("specsRoot", state["specsRoot"]), ("deltaRoot", state["deltaRoot"]), ("previewRoot", state["previewRoot"])):
+            if isinstance(value, str):
+                paths.append((field, _canonical_path(Path(value))))
+        for label, path in paths:
+            resolved = resolve_worktree(path)
+            if resolved is None or os.path.normcase(os.path.abspath(str(resolved))) != expected:
+                raise SpecError(f"cross_worktree_path: {label}")
+    return work, specs, delta, output
+
+
+def _bind_preview_context(
+    state: dict[str, object],
+    work_root: Path,
+    specs_root: Path,
+    delta_root: Path,
+    preview_root: Path,
+) -> None:
+    work, specs, delta, preview = _state_path_context(
+        state, work_root, specs_root, delta_root, preview_root
+    )
+    if state["specsRoot"] is None:
+        state.update(
+            {
+                "workRoot": str(work),
+                "specsRoot": str(specs),
+                "deltaRoot": str(delta),
+                "previewRoot": str(preview),
+            }
+        )
+        return
+    if (state["specsRoot"], state["deltaRoot"], state["previewRoot"]) != (
+        str(specs),
+        str(delta),
+        str(preview),
+    ):
+        raise SpecError("spec_context_changed")
+
+
+def _assert_bound_content(state: dict[str, object], specs_root: Path, delta_root: Path) -> None:
+    expected_specs = state["specsContentFingerprint"]
+    expected_delta = state["deltaContentFingerprint"]
+    if not isinstance(expected_specs, str) or not expected_specs.strip():
+        raise SpecError("invalid_state_context")
+    if not isinstance(expected_delta, str) or not expected_delta.strip():
+        raise SpecError("invalid_state_context")
+    if _tree_fingerprint(specs_root) != expected_specs:
+        raise SpecError("specs_content_changed")
+    if _tree_fingerprint(delta_root) != expected_delta:
+        raise SpecError("input_content_changed")
+
+
+def _replace_directory(source: Path, destination: Path) -> None:
+    if destination.exists():
+        shutil.rmtree(destination)
+    source.rename(destination)
+
+
+def _refresh_preview(
+    state: dict[str, object],
+    specs: OrderedDict[str, MainSpec],
+    specs_root: Path,
+    preview_root: Path,
+    identity: str,
+) -> None:
+    if not preview_root.is_dir():
+        raise SpecError(f"preview_missing: {preview_root}")
+    validate_main(preview_root)
+    if state["previewContentFingerprint"] != _tree_fingerprint(preview_root):
+        raise SpecError("preview_content_changed")
+    if state["implementationIdentity"] == identity:
+        return
+
+    temporary = preview_root.parent / f".my-spec-preview-refresh-{uuid.uuid4().hex}"
+    try:
+        _write_preview(specs, temporary, specs_root)
+        if diff_dirs(specs_root, preview_root) != diff_dirs(specs_root, temporary):
+            _replace_directory(temporary, preview_root)
+            state["implementationIdentity"] = identity
+            state["previewContentFingerprint"] = _tree_fingerprint(preview_root)
+            _atomic_json(_state_path(Path(state["workRoot"])), state)
+            raise SpecError("preview_changed_requires_confirmation")
+        _replace_directory(temporary, preview_root)
+        state["implementationIdentity"] = identity
+        state["previewContentFingerprint"] = _tree_fingerprint(preview_root)
+        _atomic_json(_state_path(Path(state["workRoot"])), state)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+
+
 def apply_delta(
     specs_root: Path,
     delta_root: Path,
@@ -353,42 +526,83 @@ def apply_delta(
     summary = _state_summary(state)
     if summary["status"] != "READY_TO_APPLY" or summary["remaining"] != 0:
         raise SpecError("invalid_state: expected_READY_TO_APPLY")
+    identity = implementation_identity()
+    output_is_specs = _canonical_path(output_root) == _canonical_path(specs_root)
+    if output_is_specs and state.get("previewRoot") is None:
+        raise SpecError("preview_missing")
+
+    _state_path_context(state, work_root, specs_root, delta_root, output_root)
+    if state["specsRoot"] is not None:
+        expected_paths = (
+            state["specsRoot"],
+            state["deltaRoot"],
+            state["specsRoot"] if output_is_specs else state["previewRoot"],
+        )
+        actual_paths = (
+            str(_canonical_path(specs_root)),
+            str(_canonical_path(delta_root)),
+            str(_canonical_path(output_root)),
+        )
+        if actual_paths != expected_paths:
+            raise SpecError("spec_context_changed")
+        _assert_bound_content(state, specs_root, delta_root)
     specs = _merged_specs(specs_root, delta_root)
-    if output_root.resolve(strict=False) != specs_root.resolve(strict=False):
-        if output_root.exists() and any(output_root.iterdir()):
-            raise SpecError(f"output_not_empty: {output_root}")
-        _write_preview(specs, output_root, specs_root)
+
+    if not output_is_specs:
+        _bind_preview_context(state, work_root, specs_root, delta_root, output_root)
+        if state["previewContentFingerprint"] is None:
+            if output_root.exists() and any(output_root.iterdir()):
+                raise SpecError(f"output_not_empty: {output_root}")
+            _write_preview(specs, output_root, specs_root)
+            state["specsContentFingerprint"] = _tree_fingerprint(specs_root)
+            state["deltaContentFingerprint"] = _tree_fingerprint(delta_root)
+            state["previewContentFingerprint"] = _tree_fingerprint(output_root)
+            state["implementationIdentity"] = identity
+            _atomic_json(_state_path(work_root), state)
+            return
+        _refresh_preview(state, specs, specs_root, output_root, identity)
         return
 
-    parent = specs_root.parent
-    nonce = uuid.uuid4().hex
-    preview = parent / f".my-spec-preview-{nonce}"
-    backup = parent / f".my-spec-backup-{nonce}"
-    had_specs = specs_root.exists()
+    preview_root = Path(state["previewRoot"])
+    if not preview_root.is_dir():
+        raise SpecError(f"preview_missing: {preview_root}")
+    _assert_bound_content(state, specs_root, delta_root)
+    _refresh_preview(state, specs, specs_root, preview_root, identity)
+    temporary = specs_root.parent / f".my-spec-preview-{uuid.uuid4().hex}"
     try:
-        _write_preview(specs, preview, specs_root)
-        if had_specs:
-            specs_root.rename(backup)
-        preview.rename(specs_root)
-        validate_main(specs_root)
-        if backup.exists():
-            shutil.rmtree(backup)
-        shutil.rmtree(work_root / "current")
-        (work_root / "lock").unlink()
+        _write_preview(specs, temporary, specs_root)
+        if not _same_tree(temporary, preview_root):
+            raise SpecError("preview_content_mismatch")
+
+        parent = specs_root.parent
+        backup = parent / f".my-spec-backup-{uuid.uuid4().hex}"
+        had_specs = specs_root.exists()
         try:
-            work_root.rmdir()
-        except OSError:
-            pass
-    except Exception:
-        if preview.exists():
-            shutil.rmtree(preview)
-        if backup.exists():
-            if specs_root.exists():
+            if had_specs:
+                specs_root.rename(backup)
+            temporary.rename(specs_root)
+            validate_main(specs_root)
+            if backup.exists():
+                shutil.rmtree(backup)
+            shutil.rmtree(work_root / "current")
+            (work_root / "lock").unlink()
+            try:
+                work_root.rmdir()
+            except OSError:
+                pass
+        except Exception:
+            if temporary.exists():
+                shutil.rmtree(temporary)
+            if backup.exists():
+                if specs_root.exists():
+                    shutil.rmtree(specs_root)
+                backup.rename(specs_root)
+            elif not had_specs and specs_root.exists():
                 shutil.rmtree(specs_root)
-            backup.rename(specs_root)
-        elif not had_specs and specs_root.exists():
-            shutil.rmtree(specs_root)
-        raise
+            raise
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
 
 
 def _state_path(work_root: Path) -> Path:
@@ -417,6 +631,7 @@ def _load_state(work_root: Path) -> dict[str, object]:
     value = _read_json(_state_path(work_root))
     if not isinstance(value, dict):
         raise SpecError("invalid_state_document")
+    _validate_context_document(value)
     return value
 
 
@@ -460,6 +675,9 @@ def state_init(
         raise SpecError(f"invalid_state_command: {command}")
     if not specs_fingerprint or not input_fingerprint:
         raise SpecError("missing_state_fingerprint")
+    identity = implementation_identity()
+    target = resolve_worktree(work_root)
+    work_root = _canonical_path(work_root)
     work_root.mkdir(parents=True, exist_ok=True)
     lock = work_root / "lock"
     try:
@@ -481,6 +699,15 @@ def state_init(
                 "currentConflict": 0,
                 "conflicts": [],
                 "decisions": [],
+                "workRoot": str(work_root),
+                "targetWorktree": str(target) if target is not None else None,
+                "specsRoot": None,
+                "deltaRoot": None,
+                "previewRoot": None,
+                "specsContentFingerprint": None,
+                "deltaContentFingerprint": None,
+                "previewContentFingerprint": None,
+                "implementationIdentity": identity,
             },
         )
     except Exception:
@@ -601,6 +828,17 @@ def state_decide(
 
 
 def diff_dirs(old_root: Path, new_root: Path) -> str:
+    if not new_root.is_dir():
+        raise SpecError(f"preview_missing: {new_root}")
+    old_worktree = resolve_worktree(old_root)
+    new_worktree = resolve_worktree(new_root)
+    if (old_worktree is None) != (new_worktree is None) or (
+        old_worktree is not None
+        and new_worktree is not None
+        and os.path.normcase(os.path.abspath(str(old_worktree)))
+        != os.path.normcase(os.path.abspath(str(new_worktree)))
+    ):
+        raise SpecError("cross_worktree_path: diff")
     old_files = {path.relative_to(old_root).as_posix(): path for path in _spec_files(old_root)}
     new_files = {path.relative_to(new_root).as_posix(): path for path in _spec_files(new_root)}
     chunks: list[str] = []
