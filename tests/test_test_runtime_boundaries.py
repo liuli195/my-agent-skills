@@ -501,6 +501,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_glob_inputs_ignore_ignored_files_and_normalize_separators': (
         'covers glob cache behavior for ignored files, literal ignored inputs, and Windows separators in a real git repository; function=test_build_and_verify_runner_glob_inputs_ignore_ignored_files_and_normalize_separators'
     ),
+    'tests/test_build_and_verify_plugin.py::test_build_and_verify_cli_baseline_uses_verification_worktree_and_explicit_range': (
+        'covers the real Build and Verify fast-verify CLI using a fixed baseline and linked worktree isolation; function=test_build_and_verify_cli_baseline_uses_verification_worktree_and_explicit_range'
+    ),
     'tests/test_pr_flow_cli.py::test_cleanup_creates_missing_local_base_end_to_end': (
         'covers pr-flow real git cleanup creation of a missing local base; function=test_cleanup_creates_missing_local_base_end_to_end'
     ),
@@ -905,6 +908,7 @@ def test_build_and_verify_keeps_focused_real_entrypoint_coverage() -> None:
         "tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_directory_hash_uses_git_visible_files",
         "tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_glob_inputs_track_visible_matching_files",
         "tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_glob_inputs_ignore_ignored_files_and_normalize_separators",
+        "tests/test_build_and_verify_plugin.py::test_build_and_verify_cli_baseline_uses_verification_worktree_and_explicit_range",
     ]
     assert init_entries == []
     assert fast_verify_entries == []

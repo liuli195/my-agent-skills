@@ -24,6 +24,7 @@ Use this skill when this repository needs build（构建检查） or verify（�
 build-and-verify init --project .
 build-and-verify build --project .
 build-and-verify verify --project .
+build-and-verify verify --project . --base <fixed-commit-or-ref>
 build-and-verify verify --project . --full
 build-and-verify verify --project . --full --performance-report
 ```
@@ -35,9 +36,12 @@ build-and-verify verify --project . --full --performance-report
 - 目标仓库只定义 `.build-and-verify/config.json` 的 `build.checks` 和 `verify.checks`。
 - 每个 check（检查项）必须有非空且同一分组内唯一的 `id`。
 - `verify.checks[].paths` 存在时，默认 verify（快速验证）只选择匹配 changed files（变更文件）的检查项。
+- `verify --base <commit-or-ref>`（验证基线）只用于快速验证；系统在验证工作树解析并固定该基线，要求工作树干净，再按固定基线与当前 HEAD（当前提交）的三点差异选择检查项。
+- 提供验证基线时不得同时使用 `--full`（完整验证）；无效基线、脏工作树或该组合必须失败，不得退回工作区变更选择。
 - `paths` 支持精确文件、目录前缀（如 `docs/`）、尾部递归前缀（如 `src/**`）和 Python fnmatch（通配匹配）模式。
 - 没有 `paths` 的 verify check（验证检查项）是 global check（全局检查项）：默认 verify（快速验证）在存在任意 changed file（变更文件）时选择它，干净工作区不选择它。
 - 没有 `inputs` 的 global check（全局检查项）使用当前 changed files（变更文件）计算 cache key（缓存键）；需要更稳定缓存时，目标仓库应显式配置 `inputs`。
+- 快速验证没有变更时报告 `status: skipped` 和 `reason: no_changed_files`；有变更但没有匹配检查时报告 `status: skipped` 和 `reason: no_matching_checks`。至少选中一个检查时，实际通过或有效缓存命中才报告 `status: passed`，且 `checked`（已检查）必须非空。
 - 有 `paths` 但没有 `inputs` 的 verify check（验证检查项）会扫描目标仓库文件来计算 cache key（缓存键）；大型仓库应显式配置 `inputs` 降低默认 verify（快速验证）开销。
 - `verify --full`（完整验证）运行全部 `verify.checks`，不读取 cache（缓存）跳过检查；成功通过后会写入或刷新 passed-result cache（通过结果缓存）。
 - `verify.fullBudgetSeconds`（完整验证预算秒数）是可选正整数；缺省时不判断总耗时预算。

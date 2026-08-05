@@ -850,7 +850,8 @@ def test_runner_default_verify_empty_checks_returns_success(
     output = capsys.readouterr().out
     assert "checked:" in output
     assert "full-not-run: true" in output
-    assert "status: passed" in output
+    assert "status: skipped" in output
+    assert "reason: no_changed_files" in output
 
 
 @pytest.mark.parametrize("invalid_input", ["../outside.txt", "/outside.txt"])

@@ -198,3 +198,15 @@
 
 - **WHEN** 用户拒绝强制清理，或用户授权的受限清理已经结束
 - **THEN** 用户拒绝时系统保留残留并报告恢复位置；受限清理结束后系统重新执行 Completion Check
+### Requirement: 集成快速验证要求固定基线和有效结果
+Pi Development Flow（开发流程）MUST use a fixed verification baseline for committed integration changes and MUST reject a fast verification result that does not prove any check was selected.
+
+#### Scenario: Committed integration changes use a fixed baseline
+- **WHEN** a standard change has committed implementation changes in its verification worktree（验证工作树） and enters integration verification
+- **THEN** the flow MUST run the fast verification command with a baseline captured before those changes
+- **THEN** the flow MUST accept the result only when it reports `status: passed` and a non-empty `checked` value
+
+#### Scenario: Empty fast verification evidence stops integration
+- **WHEN** fast verification reports `status: skipped` or an empty `checked` value
+- **THEN** the flow MUST stop integration and require a fixed-baseline verification that selects at least one check
+- **THEN** the flow MUST NOT treat the result as passed evidence

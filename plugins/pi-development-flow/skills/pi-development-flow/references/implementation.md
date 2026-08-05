@@ -69,13 +69,13 @@ Record only behavior evidence in the ticket: checked acceptance criteria, red/gr
 | Point | Verification |
 | --- | --- |
 | Ticket | The smallest check at the agreed public seam that proves the ticket's observable result |
-| Integration | Build and Verify fast mode; rerun affected smoke only when conflict resolution or integration changed behavior |
+| Integration | After committed changes, run `build-and-verify verify --project <worktree> --base <fixed-baseline>`; require `status: passed` with non-empty `checked`, and rerun affected smoke only when conflict resolution or integration changed behavior |
 | Lightweight final | Relevant check plus a real target-behavior smoke when a user path changed |
 | Standard final | One real user-entry or published-form smoke through the changed main success path, plus fast verification |
 | High-risk final | Main success-path smoke plus affected security, data-integrity, failure, migration, or recovery paths, plus fast verification |
 | PR CI | The repository's full automated checks |
 
-An external client or system adapter receives its own smallest real smoke immediately after completion. Repository rules, the spec, and explicit user requirements may demand stronger verification. Internal unit tests do not replace a required user-entry smoke.
+For committed changes, Pi Development Flow MUST use a fixed verification baseline rather than infer `HEAD^` or read another worktree. A fast result with `status: skipped` or an empty `checked` value is not valid pass evidence and MUST stop integration until a fixed-baseline verification selects at least one check. An external client or system adapter receives its own smallest real smoke immediately after completion. Repository rules, the spec, and explicit user requirements may demand stronger verification. Internal unit tests do not replace a required user-entry smoke.
 
 ## Review within the diff（在差异内审查）
 
