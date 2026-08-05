@@ -173,7 +173,7 @@ MySpec（自有规格） MUST preserve unrelated specification files when applyi
 - **THEN** the resulting main specification MUST pass validation
 ### Requirement: 开发源码绑定保护规格写入
 
-系统 MUST 在开发源码绑定与目标规格工作树不一致时，拒绝任何会生成预览或修改主规格的规格应用操作，并返回包含绑定不一致标识的可识别错误。
+系统 MUST 在开发模式使用机器级单一开发源码绑定；当开发源码绑定与目标规格工作树不一致时，系统 MUST 拒绝任何会生成预览或修改主规格的规格应用操作，并返回包含绑定不一致标识的可识别错误。不同目标工作树必须通过显式切换绑定后串行处理，系统 MUST NOT 将单一绑定解释为支持多个开发工作树并行写入。
 
 #### Scenario: 开发源码绑定与目标工作树不一致
 
