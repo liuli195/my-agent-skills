@@ -737,6 +737,23 @@ def test_remove_worktree_prefers_matched_orca_worktree(tmp_path: Path, monkeypat
     main.mkdir()
     target.mkdir()
     (target / "residue.txt").write_text("orphaned\n", encoding="utf-8")
+    shared_sentinels: dict[str, Path] = {}
+    if os.name == "nt":
+        powershell = shutil.which("powershell")
+        if not powershell:
+            pytest.skip("PowerShell is required to create junctions")
+        for name in (".venv", "node_modules"):
+            shared = main / name
+            shared.mkdir()
+            sentinel = shared / "shared-sentinel.txt"
+            sentinel.write_text("keep\n", encoding="utf-8")
+            shared_sentinels[name] = sentinel
+            junction = subprocess.run(
+                [powershell, "-NoProfile", "-Command", f'New-Item -ItemType Junction -Path "{target / name}" -Target "{shared}"'],
+                check=False,
+                capture_output=True,
+            )
+            assert junction.returncode == 0, junction.stdout.decode(errors="replace") + junction.stderr.decode(errors="replace")
     before, after = worktree_removal_records(main, target)
     git_stub = CommandStub(consume=True)
     git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
@@ -759,6 +776,8 @@ def test_remove_worktree_prefers_matched_orca_worktree(tmp_path: Path, monkeypat
     assert not any(call[:2] == ("worktree", "remove") for call in git_stub.calls)
     assert not any("--force" in call for call in orca_stub.calls)
     assert not target.exists()
+    for sentinel in shared_sentinels.values():
+        assert sentinel.read_text(encoding="utf-8") == "keep\n"
 
 
 @pytest.mark.parametrize(
@@ -6072,6 +6091,8 @@ def test_cleanup_physical_failure_persists_status_in_controller(tmp_path: Path, 
     assert status["details"]["reason"] == "physical_worktree_remove_failed"
     assert status["details"]["registrationRemoved"] is True
     assert status["details"]["nextAction"]
+    assert status["details"]["nextCommand"]
+    assert "rmdir" in status["details"]["nextCommand"]
     assert status["details"]["recovery"] == status["details"]["nextAction"]
 
 

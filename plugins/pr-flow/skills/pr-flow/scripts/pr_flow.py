@@ -509,6 +509,33 @@ class PrFlowError(RuntimeError):
         self.details = details
 
 
+def status_project_for_error(project: Path, error: PrFlowError) -> Path:
+    status_project = error.details.get("statusProject")
+    return Path(status_project) if isinstance(status_project, str) else project
+
+
+def physical_worktree_remove_error(controller: Path, target: Path, error: str) -> PrFlowError:
+    if os.name == "nt":
+        recovery_command = f'cmd.exe /d /c rmdir /s /q "{target}"'
+    else:
+        recovery_command = shlex.join(["rm", "-rf", "--", str(target)])
+    return PrFlowError(
+        "physical_worktree_remove_failed",
+        {
+            "reason": "physical_worktree_remove_failed",
+            "targetPath": str(target),
+            "registrationRemoved": True,
+            "statusProject": str(controller),
+            "nextAction": (
+                f"From the controller worktree {controller}, run the recovery command; "
+                "Git registration is already removed."
+            ),
+            "nextCommand": recovery_command,
+            "error": error,
+        },
+    )
+
+
 def lock_file_path(project: Path) -> Path:
     context = worktree_context(project)
     return Path(context["commonGitDir"]) / "pr-flow-locks" / f"{context['worktreeKey']}.lock"
@@ -1679,35 +1706,9 @@ def remove_worktree(project: Path, target: Path) -> None:
     try:
         shutil.rmtree(target)
     except (OSError, shutil.Error) as exc:
-        raise PrFlowError(
-            "physical_worktree_remove_failed",
-            {
-                "reason": "physical_worktree_remove_failed",
-                "targetPath": str(target),
-                "registrationRemoved": True,
-                "statusProject": str(controller),
-                "nextAction": (
-                    f"From the controller worktree {controller}, remove the residual directory {target} "
-                    "with an external file manager or rmdir; Git registration is already removed."
-                ),
-                "error": str(exc),
-            },
-        ) from exc
+        raise physical_worktree_remove_error(controller, target, str(exc)) from exc
     if os.path.lexists(target):
-        raise PrFlowError(
-            "physical_worktree_remove_failed",
-            {
-                "reason": "physical_worktree_remove_failed",
-                "targetPath": str(target),
-                "registrationRemoved": True,
-                "statusProject": str(controller),
-                "nextAction": (
-                    f"From the controller worktree {controller}, remove the residual directory {target} "
-                    "with an external file manager or rmdir; Git registration is already removed."
-                ),
-                "error": "target directory still exists after removal",
-            },
-        )
+        raise physical_worktree_remove_error(controller, target, "target directory still exists after removal")
 
 
 def gh_with_body_file(project: Path, args: Sequence[str], body: str) -> subprocess.CompletedProcess[str]:
@@ -2688,9 +2689,7 @@ def run_hotfix(args: argparse.Namespace) -> int:
         details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
         return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
     except PrFlowError as exc:
-        status_project = exc.details.get("statusProject")
-        status_project = Path(status_project) if isinstance(status_project, str) else project
-        return stop(status_project, args.command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
+        return stop(status_project_for_error(project, exc), args.command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
 
 
 def run_cleanup(args: argparse.Namespace) -> int:
@@ -2949,10 +2948,8 @@ def run_cleanup(args: argparse.Namespace) -> int:
         details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
         return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
     except PrFlowError as exc:
-        status_project = exc.details.get("statusProject")
-        status_project = Path(status_project) if isinstance(status_project, str) else project
         return stop(
-            status_project,
+            status_project_for_error(project, exc),
             args.command,
             error_status(exc.reason),
             exc.reason,
