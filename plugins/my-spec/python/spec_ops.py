@@ -586,8 +586,6 @@ def apply_delta(
                 work_root.rmdir()
             except OSError:
                 pass
-            if backup.exists():
-                shutil.rmtree(backup)
         except Exception:
             if temporary.exists():
                 shutil.rmtree(temporary)
@@ -598,6 +596,11 @@ def apply_delta(
             elif not had_specs and specs_root.exists():
                 shutil.rmtree(specs_root)
             raise
+        if backup.exists():
+            try:
+                shutil.rmtree(backup)
+            except OSError as exc:
+                print(f"warning: backup_cleanup_failed: {backup}: {exc}", file=sys.stderr)
     finally:
         if temporary.exists():
             shutil.rmtree(temporary)
