@@ -509,6 +509,33 @@ class PrFlowError(RuntimeError):
         self.details = details
 
 
+def status_project_for_error(project: Path, error: PrFlowError) -> Path:
+    status_project = error.details.get("statusProject")
+    return Path(status_project) if isinstance(status_project, str) else project
+
+
+def physical_worktree_remove_error(controller: Path, target: Path, error: str) -> PrFlowError:
+    if os.name == "nt":
+        recovery_command = f'cmd.exe /d /c rmdir /s /q "{target}"'
+    else:
+        recovery_command = shlex.join(["rm", "-rf", "--", str(target)])
+    return PrFlowError(
+        "physical_worktree_remove_failed",
+        {
+            "reason": "physical_worktree_remove_failed",
+            "targetPath": str(target),
+            "registrationRemoved": True,
+            "statusProject": str(controller),
+            "nextAction": (
+                f"From the controller worktree {controller}, run the recovery command; "
+                "Git registration is already removed."
+            ),
+            "nextCommand": recovery_command,
+            "error": error,
+        },
+    )
+
+
 def lock_file_path(project: Path) -> Path:
     context = worktree_context(project)
     return Path(context["commonGitDir"]) / "pr-flow-locks" / f"{context['worktreeKey']}.lock"
@@ -1630,7 +1657,18 @@ def find_orca_worktree_id(project: Path, target: Path) -> str | None:
 def remove_worktree(project: Path, target: Path) -> None:
     worktrees = list_worktrees(project)
     target_key = normalized_path(target)
-    if not worktrees or normalized_path(worktrees[0]["path"]) == target_key:
+    if not worktrees:
+        raise PrFlowError("main_worktree_removal_forbidden", {"reason": "main_worktree_removal_forbidden"})
+    target_registration = next(
+        (item for item in worktrees if normalized_path(item["path"]) == target_key),
+        None,
+    )
+    if target_registration is None:
+        raise PrFlowError(
+            "worktree_not_registered",
+            {"reason": "worktree_not_registered", "targetPath": str(target)},
+        )
+    if normalized_path(worktrees[0]["path"]) == target_key:
         raise PrFlowError("main_worktree_removal_forbidden", {"reason": "main_worktree_removal_forbidden"})
     dirty = require_git_success(target, "git_status_failed", "status", "--short").stdout.strip()
     if dirty:
@@ -1655,7 +1693,22 @@ def remove_worktree(project: Path, target: Path) -> None:
             str(target.resolve()),
         )
     if any(normalized_path(item["path"]) == target_key for item in list_worktrees(controller)):
-        raise PrFlowError("git_worktree_remove_failed", {"reason": "git_worktree_remove_failed"})
+        raise PrFlowError(
+            "git_worktree_remove_failed",
+            {
+                "reason": "git_worktree_remove_failed",
+                "targetPath": str(target),
+                "registrationRemoved": False,
+            },
+        )
+    if not os.path.lexists(target):
+        return
+    try:
+        shutil.rmtree(target)
+    except (OSError, shutil.Error) as exc:
+        raise physical_worktree_remove_error(controller, target, str(exc)) from exc
+    if os.path.lexists(target):
+        raise physical_worktree_remove_error(controller, target, "target directory still exists after removal")
 
 
 def gh_with_body_file(project: Path, args: Sequence[str], body: str) -> subprocess.CompletedProcess[str]:
@@ -2344,6 +2397,9 @@ def run_lifecycle(
 
 
 def add_cleanup_recovery(details: dict[str, Any], pr_number: str | None = None) -> dict[str, Any]:
+    if details.get("reason") == "physical_worktree_remove_failed":
+        details.setdefault("recovery", details.get("nextAction", "Remove the residual directory externally."))
+        return details
     recovery_pr = str(details.get("pr") or pr_number or "<number>")
     details.setdefault(
         "recovery",
@@ -2608,24 +2664,32 @@ def run_hotfix(args: argparse.Namespace) -> int:
                 "remoteAfter": remote_after,
             }
         )
-        write_status(project, args.command, "hotfix_complete", details)
+        remove_requested = getattr(args, "remove_worktree", False)
+        remove_from_current = False
+        if remove_requested:
+            project_key = normalized_path(project)
+            cwd_key = normalized_path(Path.cwd())
+            remove_from_current = cwd_key == project_key or cwd_key.startswith(project_key + os.sep)
+            if remove_from_current:
+                write_status(project, args.command, "hotfix_complete", details)
+            else:
+                remove_worktree(project, project)
+        else:
+            write_status(project, args.command, "hotfix_complete", details)
         print("status: hotfix_complete")
         print(f"target: {target}")
         print(f"after: {current_head}")
-        if getattr(args, "remove_worktree", False):
-            project_key = normalized_path(project)
-            cwd_key = normalized_path(Path.cwd())
-            if cwd_key == project_key or cwd_key.startswith(project_key + os.sep):
+        if remove_requested:
+            if remove_from_current:
                 print(f"nextCommand: {command_next_command('hotfix', project, args)}")
             else:
-                remove_worktree(project, project)
                 print(f"removed: {project}")
         return 0
     except FileNotFoundError:
         details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
         return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
     except PrFlowError as exc:
-        return stop(project, args.command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
+        return stop(status_project_for_error(project, exc), args.command, "EXCEPTION_REQUIRED", exc.reason, exc.details)
 
 
 def run_cleanup(args: argparse.Namespace) -> int:
@@ -2884,7 +2948,13 @@ def run_cleanup(args: argparse.Namespace) -> int:
         details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
         return stop(project, args.command, "EXCEPTION_REQUIRED", "missing_config", details)
     except PrFlowError as exc:
-        return stop(project, args.command, error_status(exc.reason), exc.reason, add_cleanup_recovery(exc.details, str(args.pr)))
+        return stop(
+            status_project_for_error(project, exc),
+            args.command,
+            error_status(exc.reason),
+            exc.reason,
+            add_cleanup_recovery(exc.details, str(args.pr)),
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:

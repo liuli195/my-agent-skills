@@ -178,24 +178,25 @@ test("the three gates form the required stage state machine", async () => {
   );
   assert.match(gate3, /Gate 2 — Implementation and Verification/);
   assert.match(gate3, /Completion Check — 完成检查/);
-  assert.match(gate3, /single final confirmation[^]*formal specification/is);
+  assert.match(gate3, /Gate 3 requests exactly one confirmation[^]*formal specification/is);
   assert.match(
     gate3,
     /Gate 3 passes only after[^]*appl(?:y|ies|ied|ication)[^]*validat/is,
   );
   assert.match(gate3, /Gate 3 passes only after[^]*delivery (?:finishes|completes|succeeds)/is);
   assert.match(gate3, /stop state.*Gate 3.*not final completion/is);
-  assert.match(gate3, /Development Flow summary uses.*output-template/is);
-  assert.match(gate3, /formal specification (?:content )?summary[^]*change counts[^]*exact delivery actions[^]*together/is);
-  assert.match(gate3, /one (?:single )?confirmation/is);
-  assert.match(gate3, /same[^]*confirmation[^]*formal specification[^]*delivery/is);
+  assert.match(gate3, /The Gate 3 result uses.*output-template/is);
+  assert.match(gate3, /formal specification (?:content )?summary[^]*change counts[^]*exact delivery actions[^]*within Gate 3's own four blocks/is);
+  assert.match(gate3, /Gate 3 requests exactly one confirmation/is);
+  assert.match(gate3, /confirmation, requested in the Gate 3 result,[^]*formal specification[^]*delivery/is);
+  assert.match(gate3, /MUST NOT be combined with another gate or with Completion Check/is);
   assert.match(gate3, /automatically.*(?:apply|execute)|apply.*execute.*automatically/is);
   assert.doesNotMatch(gate3, /two scoped, sequential confirmations|without the second confirmation, do not/is);
   assert.doesNotMatch(gate3, /After Gate 3 .* passes, run `my-spec-add`/);
   assert.doesNotMatch(delivery, /Gate 4 —/);
   assert.match(
     formalSpec,
-    /普通的完整计划、差异和证据 MUST 通过引用提供；Gate 3 的核心摘要 MUST 展示正式规格内容摘要、规格变更数量（新增、删除；存在时列出修改、改名）和准确交付动作，但 MUST NOT 展开完整正式规格差异/,
+    /普通的完整计划、差异和证据 MUST 通过引用提供；Gate 3 自身结果的核心摘要 MUST 展示正式规格内容摘要、规格变更数量（新增、删除；存在时列出修改、改名）和准确交付动作，但 MUST NOT 展开完整正式规格差异/,
   );
   const requirementsSpec = section(
     formalSpec,
@@ -235,11 +236,11 @@ test("gate outputs use one exact four-section template", async () => {
   assert.match(template, /Gate 1：目标、范围、测试接缝、票据及阻塞关系、变更工作树/);
   assert.match(template, /Gate 2：票据顺序、并行组、执行隔离、验证、审查、风险和停止条件/);
   assert.match(template, /Gate 3：正式规格内容摘要、规格变更数量[^]*校验结果、已知风险和准确交付动作/);
-  assert.match(template, /Gate 3[^]*规格内容摘要[^]*规格变更数量（新增、删除；存在时列出修改、改名）[^]*交付动作[^]*同一确认输出/is);
-  assert.match(template, /核心摘要 MUST 展示正式规格内容摘要和规格变更数量（新增、删除；存在时列出修改、改名），不展开完整正式规格；完整差异通过引用提供/);
+  assert.match(template, /Gate 3[^]*自身的四块结果[^]*规格内容摘要[^]*规格变更数量（新增、删除；存在时列出修改、改名）[^]*交付动作[^]*Gate 3 自身/is);
+  assert.match(template, /核心内容摘要.*MUST 展示正式规格内容摘要和规格变更数量（新增、删除；存在时列出修改、改名），不展开完整正式规格。完整差异通过引用提供/is);
   assert.doesNotMatch(template, /Gate 3[^]*完整正式规格差异[^]*同一确认输出/is);
   assert.match(template, /Completion Check：完成条件、实际状态和清理残留/);
-  assert.match(skill, /Ordinary long content[^]*Gate 3[^]*formal-specification content summary[^]*requirement-change counts \(additions and removals, plus modifications or renames when present\)[^]*exact delivery actions[^]*same output/is);
+  assert.match(skill, /Ordinary long content[^]*Gate 3's own four-block result[^]*formal-specification content summary[^]*requirement-change counts \(additions and removals, plus modifications or renames when present\)[^]*exact delivery actions[^]*MUST NOT be combined with Gate 1, Gate 2, or Completion Check/is);
   assert.match(skill, /complete formal specification difference remains in the cited artifacts/);
   assert.match(
     await readFile(resolve(skillRoot, "references", "delivery.md"), "utf8"),
