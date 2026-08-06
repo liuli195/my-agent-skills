@@ -20,4 +20,5 @@
 - Green（绿灯）：工作流契约 3 passed，发布工作流契约 1 passed，虚拟环境启动器与打包 MySpec 入口 2 passed，运行边界 11 passed。
 - Integration（集成）：`build-and-verify verify --project . --base 727a58484b5a5b3bfde1d80378691567b2497532` 返回 `status: passed`、`full-not-run: true`，并检查全部 8 个非空 `checked` 项。
 - User-entry smoke（用户入口冒烟）：Windows 虚拟环境中已通过同一固定基线命令；真实 GitHub PR 任务留待交付阶段确认。
+- Review（审查）：最终 Standards（规范）与 Spec（规格）双轴审查发现的问题均已修复，针对性复核无阻断项。
 - Unresolved risk（未解决风险）：仅剩 GitHub 托管环境表达式和任务编排需要真实 PR CI（拉取请求持续集成）确认。

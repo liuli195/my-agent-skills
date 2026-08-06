@@ -18,6 +18,6 @@
 - Red（红灯）：Pi/PR Flow（拉取请求流程）环境稳定生成不存在的 `C:\Program Files\cmd\git.exe`，17 个打包 MySpec 测试报 `invalid_dev_source: git_root`；PowerShell 渲染把目标短语拆成多行后，原始子串断言失败。
 - Green（绿灯）：包含空格路径的 `.cmd` Git 替身已通过候选 Tarball（压缩包）安装后的裸 `myspec` 开发模式入口（1 passed）；真实工作树脚本测试在 `powershell` 和 `pwsh` 下通过（7 passed）；MySpec 检查输入契约通过（1 passed）。
 - User-entry smoke（用户入口冒烟）：候选 Tarball 安装后的裸 `myspec` 开发模式入口，以及两个真实 PowerShell `-File` 入口均已覆盖。
-- Review（审查）：初审发现的路径重写、命令转发覆盖和过大占位文件均已修复；命令转发已并入现有打包用户入口，运行边界检查 11 passed；Windows PR 工作流项属于后续票据 2。
+- Review（审查）：初审发现的路径重写、命令转发覆盖和过大占位文件均已修复；命令转发已并入现有打包用户入口，运行边界检查 11 passed；最终规范与规格复核均无阻断项。
 - Integration（集成）：固定基线快速验证检查全部 8 个非空检查项并返回 `status: passed`；无生产行为变化。
-- Unresolved risk（未解决风险）：仅剩最终双轴审查与真实 PR CI（拉取请求持续集成）。
+- Unresolved risk（未解决风险）：仅剩真实 PR CI（拉取请求持续集成）。
