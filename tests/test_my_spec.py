@@ -156,22 +156,23 @@ def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
 def controlled_dev_env(env: dict[str, str], source: Path) -> dict[str, str]:
     path_entries = [str(source.parent / "controlled-git"), env["PATH"]]
     if os.name == "nt":
-        for command in ("git-upload-pack", "git-receive-pack", "sh", "ssh"):
-            helper = shutil.which(command)
-            if helper is not None:
-                path_entries.append(str(Path(helper).parent))
+        # Git for Windows' mingw executable launches its bundled shell.
+        git_shell = shutil.which("sh")
+        if git_shell is not None:
+            path_entries.append(str(Path(git_shell).parent))
     return {**env, "PATH": os.pathsep.join(dict.fromkeys(path_entries))}
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows command shim behavior")
-def test_controlled_git_delegates_to_discovered_cmd_shim(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("suffix", [".cmd", ".bat"])
+def test_controlled_git_delegates_to_discovered_batch_shim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix: str
 ) -> None:
     real_git = shutil.which("git")
     assert real_git is not None
     shim_dir = tmp_path / "git shim"
     shim_dir.mkdir()
-    shim = shim_dir / "git.cmd"
+    shim = shim_dir / f"git{suffix}"
     write(shim, f'@echo off\n@"{real_git}" %*')
     original_which = shutil.which
     monkeypatch.setattr(
