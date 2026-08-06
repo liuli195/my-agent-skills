@@ -20,6 +20,7 @@ gitignore text eol=lf
 # Hooks and scripts must stay LF so Git for Windows can execute shebang scripts.
 .githooks/* text eol=lf
 plugins/build-and-verify/bin/*.js text eol=lf
+plugins/my-spec/bin/*.js text eol=lf
 
 # ========================
 # Git LFS — large file tracking

@@ -96,7 +96,8 @@ def write(path: Path, text: str) -> None:
 def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
     source = tmp_path / "source"
     source.mkdir()
-    shutil.copy2(REPO_ROOT / ".gitignore", source / ".gitignore")
+    for name in (".gitattributes", ".gitignore"):
+        shutil.copy2(REPO_ROOT / name, source / name)
     for relative in (".agents", ".claude-plugin", "plugins/my-spec", "plugins/tool-lifecycle"):
         shutil.copytree(
             REPO_ROOT / relative,
@@ -106,7 +107,6 @@ def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
     if marker is not None:
         write(source / "plugins" / "my-spec" / "skills" / "my-spec" / "dev-marker.txt", marker)
     launcher = source / "plugins" / "my-spec" / "bin" / "myspec.js"
-    launcher.write_bytes(launcher.read_bytes().replace(b"\r\n", b"\n"))
     launcher.chmod(launcher.stat().st_mode | 0o111)
     remote = tmp_path / "origin.git"
     for command in (
@@ -114,6 +114,7 @@ def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
         ["git", "init", source],
         ["git", "-C", source, "add", "."],
         ["git", "-C", source, "-c", "user.name=MySpec Test", "-c", "user.email=myspec@example.invalid", "commit", "-m", "development source"],
+        ["git", "-C", source, "checkout-index", "--force", "--", "plugins/my-spec/bin/myspec.js"],
         ["git", "-C", source, "remote", "add", "origin", "https://github.com/liuli195/my-agent-skills"],
         ["git", "-C", source, "config", f"url.{remote.as_uri()}.insteadOf", "https://github.com/liuli195/my-agent-skills"],
         ["git", "-C", source, "push", remote.as_uri(), "HEAD:refs/heads/main"],
@@ -3354,6 +3355,12 @@ def test_packed_myspec_dev_doctor_identity_ignores_unrelated_files_and_tracks_cl
 
     entered = run_cli(executable, "init", "--dev", "--source", source, env=env, cwd=source)
     assert entered.returncode == 0, entered.stderr
+    assert subprocess.run(["git", "config", "core.autocrlf", "true"], cwd=source, check=False).returncode == 0
+    text_file = source / "plugins" / "my-spec" / "skills" / "my-spec" / "SKILL.md"
+    text_file.write_bytes(text_file.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+    assert subprocess.run(
+        ["git", "diff", "--quiet", "--exit-code", "--", text_file], cwd=source, check=False
+    ).returncode == 0
 
     first = run_cli(executable, "doctor", env=env, cwd=source)
     assert first.returncode == 0, first.stderr
@@ -3393,9 +3400,24 @@ def test_packed_myspec_dev_doctor_identity_ignores_unrelated_files_and_tracks_cl
         cwd=source,
         check=False,
     ).returncode == 0
-    local_only = run_cli(executable, "doctor", env=env, cwd=source)
-    assert local_only.returncode == 0, local_only.stderr
-    assert "sourceCommit" not in json.loads(local_only.stdout)["toolchain"]
+    local_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source, check=True, text=True, capture_output=True
+    ).stdout.strip()
+    assert subprocess.run(
+        ["git", "push", "origin", "HEAD:refs/heads/tool-change"], cwd=source, check=False
+    ).returncode == 0
+    published = run_cli(executable, "doctor", env=env, cwd=source)
+    assert published.returncode == 0, published.stderr
+    assert json.loads(published.stdout)["toolchain"]["sourceCommit"] == local_commit
+    assert subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/stale", local_commit], cwd=source, check=False
+    ).returncode == 0
+    assert subprocess.run(
+        ["git", "push", "origin", "--delete", "tool-change"], cwd=source, check=False
+    ).returncode == 0
+    deleted_remote = run_cli(executable, "doctor", env=env, cwd=source)
+    assert deleted_remote.returncode == 0, deleted_remote.stderr
+    assert "sourceCommit" not in json.loads(deleted_remote.stdout)["toolchain"]
 
     packer = source / "plugins" / "tool-lifecycle" / "pack.py"
     write(packer, packer.read_text(encoding="utf-8") + "\n# shared packaging change")

@@ -46,7 +46,8 @@ def _isolated_env(tmp_path: Path, prefix: Path) -> dict[str, str]:
 def _controlled_dev_source(tmp_path: Path) -> tuple[Path, Path]:
     source = tmp_path / "source"
     source.mkdir()
-    shutil.copy2(REPO_ROOT / ".gitignore", source / ".gitignore")
+    for name in (".gitattributes", ".gitignore"):
+        shutil.copy2(REPO_ROOT / name, source / name)
     for relative in (".agents", ".claude-plugin", "plugins/build-and-verify", "plugins/tool-lifecycle"):
         shutil.copytree(
             REPO_ROOT / relative,

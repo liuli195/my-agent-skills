@@ -15,6 +15,13 @@ BUILD_AND_VERIFY_RUNNER = (
 )
 
 
+def test_node_cli_launchers_are_forced_to_lf() -> None:
+    attributes = (REPO_ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()
+
+    assert "plugins/build-and-verify/bin/*.js text eol=lf" in attributes
+    assert "plugins/my-spec/bin/*.js text eol=lf" in attributes
+
+
 def load_module(path: Path, name: str):
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None
