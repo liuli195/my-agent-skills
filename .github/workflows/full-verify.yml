@@ -101,6 +101,7 @@ jobs:
           BASELINE: ${{ github.event.pull_request.base.sha }}
         run: |
           . ./.venv/Scripts/Activate.ps1
+          $env:BUILD_AND_VERIFY_PYTHON = (Get-Command python).Source
           $output = & build-and-verify verify --project . --base $env:BASELINE 2>&1 | Out-String
           $exitCode = $LASTEXITCODE
           Write-Host $output
@@ -117,6 +118,7 @@ jobs:
         shell: pwsh
         run: |
           . ./.venv/Scripts/Activate.ps1
+          $env:BUILD_AND_VERIFY_PYTHON = (Get-Command python).Source
           node plugins/build-and-verify/bin/build-and-verify.js verify --project . --full
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE

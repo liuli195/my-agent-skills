@@ -16,8 +16,8 @@
 
 ## Evidence（证据）
 
-- Red（红灯）：原 Windows 任务没有固定基线验证步骤；首次集成验证暴露了手动完整验证入口与当前候选包契约冲突、虚拟环境中的 Python Launcher（Python 启动器）定位错误；首轮真实 PR CI 因先创建嵌套工作树而返回 `baseline_worktree_not_clean`，第二轮又因 Python 使用 `cp1252` 输出检查结果中的 Unicode（统一码）符号而失败。
-- Green（绿灯）：快速和手动验证已移到嵌套工作树创建之前，Windows 任务统一启用 Python UTF-8（统一字符编码）模式；工作流契约 3 passed，发布工作流契约 1 passed，虚拟环境启动器与打包 MySpec 入口 2 passed，运行边界 11 passed。
+- Red（红灯）：原 Windows 任务没有固定基线验证步骤；首次集成验证暴露了手动完整验证入口与当前候选包契约冲突、虚拟环境中的 Python Launcher（Python 启动器）定位错误；首轮真实 PR CI 因先创建嵌套工作树而返回 `baseline_worktree_not_clean`，第二轮因 Python 使用 `cp1252` 输出 Unicode（统一码）而失败，第三轮又因启动器优先选择系统 `python3.12`、看不到虚拟环境中的 `pytest-xdist` 而失败。
+- Green（绿灯）：快速和手动验证已移到嵌套工作树创建之前，Windows 任务统一启用 Python UTF-8（统一字符编码）模式，并将 Build and Verify 解释器固定为激活后的虚拟环境 Python；工作流契约 3 passed，发布工作流契约 1 passed，虚拟环境启动器与打包 MySpec 入口 2 passed，运行边界 11 passed。
 - Integration（集成）：`build-and-verify verify --project . --base 727a58484b5a5b3bfde1d80378691567b2497532` 返回 `status: passed`、`full-not-run: true`，并检查全部 8 个非空 `checked` 项。
 - User-entry smoke（用户入口冒烟）：Windows 虚拟环境中已通过同一固定基线命令；真实 GitHub PR 任务留待交付阶段确认。
 - Review（审查）：最终 Standards（规范）与 Spec（规格）双轴审查发现的问题均已修复，针对性复核无阻断项。

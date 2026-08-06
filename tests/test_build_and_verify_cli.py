@@ -173,13 +173,19 @@ def test_windows_pr_verification_uses_fixed_baseline_and_manual_full_mode() -> N
     assert fast["if"] == "${{ github.event_name == 'pull_request' }}"
     assert manual["if"] == "${{ github.event_name == 'workflow_dispatch' }}"
     assert ". ./.venv/Scripts/Activate.ps1" in fast_run
-    assert fast_run.index("Activate.ps1") < fast_run.index("build-and-verify verify")
+    assert "$env:BUILD_AND_VERIFY_PYTHON = (Get-Command python).Source" in fast_run
+    assert fast_run.index("Activate.ps1") < fast_run.index("BUILD_AND_VERIFY_PYTHON")
+    assert fast_run.index("BUILD_AND_VERIFY_PYTHON") < fast_run.index("build-and-verify verify")
     assert "build-and-verify verify --project . --base $env:BASELINE" in fast_run
     assert "checked:" in fast_run
     assert "status: passed" in fast_run
     assert "exit 1" in fast_run
     assert ". ./.venv/Scripts/Activate.ps1" in manual_run
-    assert manual_run.index("Activate.ps1") < manual_run.index("build-and-verify.js verify")
+    assert "$env:BUILD_AND_VERIFY_PYTHON = (Get-Command python).Source" in manual_run
+    assert manual_run.index("Activate.ps1") < manual_run.index("BUILD_AND_VERIFY_PYTHON")
+    assert manual_run.index("BUILD_AND_VERIFY_PYTHON") < manual_run.index(
+        "build-and-verify.js verify"
+    )
     assert "node plugins/build-and-verify/bin/build-and-verify.js verify --project . --full" in manual_run
     assert "pytest" not in fast_run
     assert "build_and_verify.py" not in fast_run
