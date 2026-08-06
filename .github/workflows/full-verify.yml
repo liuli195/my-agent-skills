@@ -63,6 +63,8 @@ jobs:
   windows-worktree-smoke:
     name: Windows worktree smoke
     runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v5

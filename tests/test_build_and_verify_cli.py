@@ -159,6 +159,7 @@ def test_windows_pr_verification_uses_fixed_baseline_and_manual_full_mode() -> N
     step_names = [step.get("name") for step in windows["steps"]]
 
     assert checkout["with"]["fetch-depth"] == 0
+    assert windows["env"]["PYTHONUTF8"] == "1"
     assert step_names.index("Run PR fast verification") < step_names.index(
         "Initialize linked worktree"
     )
