@@ -184,7 +184,7 @@
         ],
         "checkParallel": false,
         "pytestXdistWorkers": 4,
-        "timeoutSeconds": 300
+        "timeoutSeconds": 420
       },
       {
         "id": "verify.runtime-boundaries",

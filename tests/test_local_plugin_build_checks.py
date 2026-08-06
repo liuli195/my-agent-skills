@@ -1366,6 +1366,7 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
         "tests/test_my_spec.py",
         "tests/fixtures/myspec_source_cases.json",
     ]
+    assert my_spec["timeoutSeconds"] == 420
     assert my_spec["inputs"] == [
         ".agents/plugins/marketplace.json",
         ".claude-plugin/marketplace.json",
