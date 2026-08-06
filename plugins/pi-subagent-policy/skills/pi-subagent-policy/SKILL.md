@@ -16,7 +16,7 @@ Before the first delegation, check the effective persistent configuration once p
 | Explorer | Read-only investigator for delegated search, research, and evidence gathering. | `openai-codex/gpt-5.6-luna` | `low` | Read, search, read-only shell commands, and web search |
 | Implementer | Implements delegated code or documentation from confirmed requirements. | `openai-codex/gpt-5.6-luna` | `max` | Full implementation tools; no extensions; preloaded TDD |
 | Reviewer | Independently reviews delegated code or documentation against requirements and repository rules. | `openai-codex/gpt-5.6-sol` | `medium` | Read, search, and read-only shell commands |
-| Architect | Read-only investigator for architecture, architectural decision-making, and difficult bug diagnosis. | `openai-codex/gpt-5.6-sol` | `medium` | Read, search, and read-only shell commands |
+| Architect | Read-only investigator for architecture, architectural decision-making, and difficult bug diagnosis. | `openai-codex/gpt-5.6-sol` | `max` | Read, search, and read-only shell commands |
 
 Exactly these four roles are enabled. Every role uses `prompt_mode: append` and its matching prompt. Implementer additionally requires `extensions: false` and `skills: tdd` so non-isolated dispatch restores only the confirmed TDD skill.
 
