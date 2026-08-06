@@ -4,7 +4,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -160,7 +159,7 @@ def test_setup_worktree_script_links_shared_node_dependencies(
     assert "Shared Python environment is missing" in normalize_powershell_output(missing_python)
 
     shared_python.parent.mkdir(parents=True)
-    shutil.copy2(sys.executable, shared_python)
+    shared_python.touch()
     stale_python = setup()
     assert stale_python.returncode != 0
     assert not npm_marker.exists()
