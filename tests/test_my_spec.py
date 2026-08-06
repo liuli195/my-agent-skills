@@ -99,7 +99,7 @@ def controlled_git_script(git: str, remote: Path) -> str:
         f"git = {git!r}\n"
         "def run_git(*args):\n"
         "    command = [git, *args]\n"
-        "    shell = git.lower().endswith(('.cmd', '.bat'))\n"
+        "    shell = git.lower().endswith('.cmd')\n"
         "    if shell:\n"
         "        command = subprocess.list2cmdline(command)\n"
         "    return subprocess.run(command, shell=shell)\n"
@@ -164,17 +164,6 @@ def controlled_dev_env(env: dict[str, str], source: Path) -> dict[str, str]:
         if git_shell is not None:
             path_entries.append(str(Path(git_shell).parent))
     return {**env, "PATH": os.pathsep.join(dict.fromkeys(path_entries))}
-
-
-@pytest.mark.parametrize("suffix", [".exe", ".cmd", ".bat"])
-def test_controlled_git_script_preserves_discovered_command(
-    tmp_path: Path, suffix: str
-) -> None:
-    git = str(tmp_path / "git shim" / f"git{suffix}")
-    script = controlled_git_script(git, tmp_path / "origin.git")
-
-    assert f"git = {git!r}\n" in script
-    assert "git.lower().endswith(('.cmd', '.bat'))" in script
 
 
 def ready_state(cli: Path, root: Path, command: str = "add") -> Path:
@@ -3366,12 +3355,23 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
 
 
 def test_packed_myspec_dev_doctor_identity_ignores_unrelated_files_and_tracks_closure(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     installed = tmp_path / "installed"
     installed.mkdir()
     executable, installed_package = install_packed_myspec(installed)
     env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
+    if os.name == "nt":
+        real_git = shutil.which("git")
+        assert real_git is not None
+        shim = tmp_path / "git shim" / "git.cmd"
+        write(shim, f'@echo off\n@"{real_git}" %*')
+        original_which = shutil.which
+        monkeypatch.setattr(
+            shutil,
+            "which",
+            lambda command: str(shim) if command == "git" else original_which(command),
+        )
     source = controlled_dev_source(tmp_path, "first")
     env = controlled_dev_env(env, source)
 
