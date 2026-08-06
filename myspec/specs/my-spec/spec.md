@@ -139,7 +139,7 @@ MySpec（自有规格） MUST preserve unrelated specification files when applyi
 - **THEN** the resulting main specification MUST pass validation
 ### Requirement: 规格运行文件集中在本地目录
 
-系统 MUST 将 my-spec 的共享锁、当前命令状态、输入、主规格指纹、决定、Delta（增量规格）、预览和恢复材料保存在当前目标工作树的 `.local/spec-work/`，不得在仓库根目录创建 `.spec-work/`。同一目标工作树 MUST 同时只允许一个 my-spec 运行；已有锁不得只因超时而自动删除。发布模式下，不同目标工作树的运行状态和锁 MUST 相互隔离且不得互相阻塞。继续或应用前 MUST 校验主规格和输入指纹，成功应用后 MUST 清理本次运行状态。
+系统 MUST 将 my-spec 的共享锁、当前命令状态、输入、主规格指纹、决定、Delta（增量规格）、预览和恢复材料保存在当前目标工作树的 `.local/spec-work/`，不得在仓库根目录创建 `.spec-work/`。同一目标工作树 MUST 同时只允许一个 my-spec 运行；已有锁不得只因超时而自动删除。开发模式和发布模式下，不同目标工作树的运行状态和锁 MUST 相互隔离且不得互相阻塞。运行状态 MUST 记录精确目标工作树及本次主规格、输入和工具实现身份；继续或应用前 MUST 校验已保存身份，成功应用后 MUST 清理本次运行状态。
 
 #### Scenario: 规格入口创建运行文件
 
@@ -152,9 +152,9 @@ MySpec（自有规格） MUST preserve unrelated specification files when applyi
 - **THEN** 系统 MUST 停止并报告已有运行
 - **THEN** 系统 MUST NOT 仅根据锁的时间自动删除它
 
-#### Scenario: 发布模式不同目标工作树各自运行
+#### Scenario: 不同目标工作树各自运行
 
-- **WHEN** 发布模式下两个关联目标工作树同时开始规格任务
+- **WHEN** 两个关联目标工作树分别开始规格任务
 - **THEN** 每个目标工作树 MUST 只使用自己的 `.local/spec-work/` 运行状态和锁
 - **THEN** 任一目标工作树的锁 MUST NOT 阻塞另一个目标工作树的规格运行
 
@@ -173,22 +173,41 @@ MySpec（自有规格） MUST preserve unrelated specification files when applyi
 - **THEN** 系统 MUST 恢复原主规格且不得触碰规格目录之外的用户内容
 ### Requirement: 开发源码绑定保护规格写入
 
-系统 MUST 在开发模式使用机器级单一开发源码绑定；当开发源码绑定与目标规格工作树不一致时，系统 MUST 拒绝任何会生成预览或修改主规格的规格应用操作，并返回包含绑定不一致标识的可识别错误。不同目标工作树必须通过显式切换绑定后串行处理，系统 MUST NOT 将单一绑定解释为支持多个开发工作树并行写入。
+系统 MUST 在开发模式使用机器级单一开发源码绑定，并把该绑定只作为 MySpec（自有规格）实现来源；规格数据 MUST 来自运行状态记录的精确目标工作树。开发源码工作树与目标工作树可以相同或不同，`worktreeMatch`（工作树匹配）只提供诊断，不得决定规格写入权限。预览和最终应用 MUST 使用同一目标工作树、规格根、Delta（增量规格）根、预览根、规格与输入指纹及 MySpec 实现身份，最终结果 MUST 与用户确认的预览完全一致。
 
-#### Scenario: 开发源码绑定与目标工作树不一致
+#### Scenario: 开发源码与目标工作树不同
 
-- **WHEN** 用户在开发模式下从一个源码工作树绑定裸 `myspec` CLI（命令行程序），并对另一个目标工作树执行 `apply-delta`
-- **THEN** 系统 MUST 在创建预览、备份或替换主规格前返回包含 `dev_source_worktree_mismatch` 的非零结果
-- **THEN** 系统 MUST 保持目标规格、预览、备份和本次运行状态不变
+- **WHEN** 裸 `myspec` CLI（命令行程序）在开发模式绑定一个源码工作树，并从另一个目标工作树开始规格运行
+- **THEN** 系统 MUST 使用已绑定源码提供工具实现，并使用目标工作树提供运行状态、主规格、Delta 和预览
+- **THEN** 源码工作树与目标工作树不同 MUST NOT 阻止预览或最终应用
 
 #### Scenario: 用户诊断开发源码绑定
 
 - **WHEN** 用户在目标工作树执行 `myspec doctor`
 - **THEN** 系统 MUST 报告源码工作树、源码提交、目标工作树、目标提交以及两者是否匹配
+- **THEN** 工作树匹配结果 MUST NOT 被解释为规格路径或写入授权
 
-#### Scenario: 用户显式切换目标工作树
+#### Scenario: 规格运行混用工作树路径
 
-- **WHEN** 用户使用 `myspec init --dev --source <目标工作树>` 显式切换开发源码绑定，并在该目标工作树执行规格应用
-- **THEN** 系统 MUST 允许该目标工作树完成预览、原子应用和相同 Delta（增量规格）的稳定重复应用
-- **THEN** 不同目标工作树的开发模式写入 MUST 通过显式切换绑定串行完成
-- **THEN** 系统 MUST NOT 将该绑定切换解释为支持多个开发工作树并行写入
+- **WHEN** 状态目录、主规格、Delta 或预览中的任一路径不属于已记录的精确目标工作树，或后续调用改变已绑定路径
+- **THEN** 系统 MUST 在创建预览、备份或替换主规格前返回非零结果
+- **THEN** 系统 MUST 保持目标规格和既有预览不变
+
+#### Scenario: 已确认预览缺失或内容漂移
+
+- **WHEN** 最终应用找不到已绑定预览，或预览内容、主规格内容、Delta 内容、规格指纹或输入指纹与已保存状态不同
+- **THEN** 系统 MUST 在替换主规格前停止
+- **THEN** 系统 MUST NOT 把缺失预览解释为空规格目录
+
+#### Scenario: MySpec 实现变化后重新生成预览
+
+- **WHEN** 已保存预览使用的 MySpec 实现身份与当前实现身份不同
+- **THEN** 系统 MUST 使用当前实现重新生成并校验预览
+- **THEN** 如果重新生成后的可观察差异不变，系统 MAY 沿用既有最终确认
+- **THEN** 如果可观察差异改变，系统 MUST 保存新预览并要求重新展示和确认后才能修改主规格
+
+#### Scenario: 最终应用复核确认预览
+
+- **WHEN** 用户最终确认且所有运行上下文仍有效
+- **THEN** 系统 MUST 在原子替换前证明待写入结果与已确认预览完全相同
+- **THEN** 不同目标工作树的开发模式规格运行 MUST 继续使用各自独立的状态和锁

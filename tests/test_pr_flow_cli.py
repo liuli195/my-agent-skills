@@ -6592,34 +6592,31 @@ def dev_toolchain_reports(project: Path, *, worktree_match: bool, complete_ident
                     "sourceRepository": "https://github.com/liuli195/my-agent-skills",
                     "sourceCommit": "a" * 40,
                     "packageDirectory": package_directory,
+                    "implementationIdentity": "sha256:" + "0" * 64,
                 }
             )
         reports[key] = {"toolchain": toolchain, "binding": binding}
     return reports
 
 
-def test_init_stops_before_writing_for_same_worktree_toolchain_binding(tmp_path: Path) -> None:
+def test_init_accepts_same_worktree_with_stable_toolchain_identities(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
     config = tmp_path / "config.yaml"
     config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
     bin_dir = tmp_path / "bin"
-    cwd_log = tmp_path / "doctor-cwd.log"
-    write_toolchain_cli(bin_dir, dev_toolchain_reports(project, worktree_match=True, complete_identity=False), cwd_log=cwd_log)
-    gh_calls = bin_dir / "gh.calls"
-    write_fake_gh(bin_dir, exit_code=99, calls_path=gh_calls)
+    reports = dev_toolchain_reports(project, worktree_match=True)
+    for report in reports.values():
+        report["toolchain"]["implementationIdentity"] = "sha256:" + "1" * 64
+    write_toolchain_cli(bin_dir, reports)
 
     result = run_public_pr_flow(bin_dir, "init", "--project", str(project), "--config", str(config))
 
-    assert result.returncode == 1
-    assert "status: toolchain_same_worktree_unsupported" in result.stdout
-    assert f"sourceWorktree: {project}" in result.stdout
-    assert f"targetWorktree: {project}" in result.stdout
-    assert "isolated" in result.stdout.lower()
-    assert not (project / ".pr-flow" / "toolchain.json").exists()
-    assert not (project / ".github" / "workflows" / "pr-flow-toolchain.yml").exists()
-    assert cwd_log.read_text(encoding="utf-8").splitlines() == [str(project.resolve())]
-    assert not gh_calls.exists()
+    assert result.returncode == 0, result.stdout + result.stderr
+    tools = json.loads((project / ".pr-flow" / "toolchain.json").read_text(encoding="utf-8"))["tools"]
+    assert tools["myspec"]["sourceCommit"] == "a" * 40
+    assert tools["myspec"]["implementationIdentity"] == "sha256:" + "1" * 64
+    assert tools["build-and-verify"]["sourceCommit"] == "a" * 40
 
 
 @pytest.mark.parametrize(
@@ -6629,7 +6626,7 @@ def test_init_stops_before_writing_for_same_worktree_toolchain_binding(tmp_path:
         ("tweak", ["--reason", "r", "--summary", "s", "--scope", "s"]),
     ],
 )
-def test_lifecycle_stops_before_toolchain_commit_for_same_worktree_binding(
+def test_lifecycle_syncs_same_worktree_toolchain_before_remote_flow(
     tmp_path: Path, command: str, extra: list[str]
 ) -> None:
     init_bin = tmp_path / "init-bin"
@@ -6645,34 +6642,107 @@ def test_lifecycle_stops_before_toolchain_commit_for_same_worktree_binding(
     }
     write_toolchain_cli(init_bin, release_reports)
     project = initialized_toolchain_project(tmp_path, init_bin)
-    managed_paths = [
-        project / ".pr-flow" / "toolchain.json",
-        project / ".github" / "workflows" / "pr-flow-toolchain.yml",
-    ]
-    before_managed = {path: path.read_bytes() for path in managed_paths}
     before_head = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=project, check=True, text=True, capture_output=True
     ).stdout.strip()
 
     run_bin = tmp_path / "run-bin"
-    cwd_log = tmp_path / "doctor-cwd.log"
-    write_toolchain_cli(run_bin, dev_toolchain_reports(project, worktree_match=True, complete_identity=False), cwd_log=cwd_log)
-    gh_calls = run_bin / "gh.calls"
-    write_fake_gh(run_bin, exit_code=99, calls_path=gh_calls)
+    write_toolchain_cli(run_bin, dev_toolchain_reports(project, worktree_match=True))
+    write_fake_gh(run_bin, exit_code=99)
     result = run_public_pr_flow(run_bin, command, "--project", str(project), *extra)
 
     assert result.returncode == 1
-    assert "toolchain_same_worktree_unsupported" in result.stdout
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "toolchain_same_worktree_unsupported"
-    assert {path: path.read_bytes() for path in managed_paths} == before_managed
+    assert "toolchain_same_worktree_unsupported" not in result.stdout
+    assert "toolchain_source_commit_unavailable" not in result.stdout
     after_head = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=project, check=True, text=True, capture_output=True
     ).stdout.strip()
-    assert after_head == before_head
-    assert subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=project, check=False).returncode == 0
-    assert cwd_log.read_text(encoding="utf-8").splitlines() == [str(project.resolve())]
-    assert not gh_calls.exists()
+    assert after_head != before_head
+    tools = json.loads((project / ".pr-flow" / "toolchain.json").read_text(encoding="utf-8"))["tools"]
+    assert tools["myspec"]["implementationIdentity"] == "sha256:" + "0" * 64
+
+
+def test_init_fails_closed_when_dev_implementation_commit_is_unavailable(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    config = tmp_path / "config.yaml"
+    config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    reports = dev_toolchain_reports(project, worktree_match=True)
+    del reports["myspec"]["toolchain"]["sourceCommit"]
+    write_toolchain_cli(bin_dir, reports)
+
+    result = run_public_pr_flow(bin_dir, "init", "--project", str(project), "--config", str(config))
+
+    assert result.returncode == 1
+    assert "status: toolchain_source_commit_unavailable" in result.stdout
+    assert "Publish the exact implementation commit" in result.stdout
+    assert not (project / ".pr-flow" / "toolchain.json").exists()
+
+
+def test_toolchain_sync_converges_for_independent_and_shared_tool_changes(tmp_path: Path) -> None:
+    init_bin = tmp_path / "init-bin"
+    release_reports = {
+        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3"}},
+        "build-and-verify": {"toolchain": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "1.2.3"}},
+    }
+    write_toolchain_cli(init_bin, release_reports)
+    project = initialized_toolchain_project(tmp_path, init_bin)
+    baseline = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=project, check=True, text=True, capture_output=True
+    ).stdout.strip()
+
+    run_bin = tmp_path / "run-bin"
+    reports = dev_toolchain_reports(project, worktree_match=True)
+    write_toolchain_cli(run_bin, reports)
+    write_fake_gh(run_bin, exit_code=99)
+    first = sync_through_public_complete(run_bin, project)
+    assert first.returncode == 1
+    assert subprocess.run(
+        ["git", "rev-list", "--count", f"{baseline}..HEAD"], cwd=project, check=True, text=True, capture_output=True
+    ).stdout.strip() == "1"
+    first_record = json.loads((project / ".pr-flow/toolchain.json").read_text(encoding="utf-8"))
+    first_workflow = (project / ".github/workflows/pr-flow-toolchain.yml").read_bytes()
+
+    second = sync_through_public_complete(run_bin, project)
+    assert second.returncode == 1
+    assert subprocess.run(
+        ["git", "rev-list", "--count", f"{baseline}..HEAD"], cwd=project, check=True, text=True, capture_output=True
+    ).stdout.strip() == "1"
+    assert (project / ".github/workflows/pr-flow-toolchain.yml").read_bytes() == first_workflow
+
+    reports["myspec"]["toolchain"]["sourceCommit"] = "b" * 40
+    reports["myspec"]["toolchain"]["implementationIdentity"] = "sha256:" + "2" * 64
+    write_toolchain_cli(run_bin, reports)
+    third = sync_through_public_complete(run_bin, project)
+    assert third.returncode == 1
+    assert subprocess.run(
+        ["git", "rev-list", "--count", f"{baseline}..HEAD"], cwd=project, check=True, text=True, capture_output=True
+    ).stdout.strip() == "2"
+    updated = json.loads((project / ".pr-flow/toolchain.json").read_text(encoding="utf-8"))
+    assert updated["tools"]["myspec"]["implementationIdentity"] == "sha256:" + "2" * 64
+    assert updated["tools"]["build-and-verify"] == first_record["tools"]["build-and-verify"]
+    assert "checkout --detach " + "a" * 40 in (
+        project / ".github/workflows/pr-flow-toolchain.yml"
+    ).read_text(encoding="utf-8")
+
+    reports["myspec"]["toolchain"].update(
+        sourceCommit="c" * 40,
+        implementationIdentity="sha256:" + "3" * 64,
+    )
+    reports["build-and-verify"]["toolchain"].update(
+        sourceCommit="c" * 40,
+        implementationIdentity="sha256:" + "4" * 64,
+    )
+    write_toolchain_cli(run_bin, reports)
+    shared = sync_through_public_complete(run_bin, project)
+    assert shared.returncode == 1
+    assert subprocess.run(
+        ["git", "rev-list", "--count", f"{baseline}..HEAD"], cwd=project, check=True, text=True, capture_output=True
+    ).stdout.strip() == "3"
+    shared_record = json.loads((project / ".pr-flow/toolchain.json").read_text(encoding="utf-8"))
+    assert shared_record["tools"]["myspec"]["implementationIdentity"] == "sha256:" + "3" * 64
+    assert shared_record["tools"]["build-and-verify"]["implementationIdentity"] == "sha256:" + "4" * 64
 
 
 def test_init_uses_target_project_as_toolchain_doctor_cwd(tmp_path: Path) -> None:
@@ -6817,7 +6887,7 @@ def test_init_validates_release_and_dev_toolchain_identities_through_public_cli(
     config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
     reports = {
         "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3-rc.1+build.9"}},
-        "build-and-verify": {"toolchain": {"mode": "dev", "packageName": "@liuli195/build-and-verify", "sourceRepository": "https://github.com/liuli195/my-agent-skills", "sourceCommit": "a" * 40, "packageDirectory": "plugins/build-and-verify"}},
+        "build-and-verify": {"toolchain": {"mode": "dev", "packageName": "@liuli195/build-and-verify", "sourceRepository": "https://github.com/liuli195/my-agent-skills", "sourceCommit": "a" * 40, "packageDirectory": "plugins/build-and-verify", "implementationIdentity": "sha256:" + "0" * 64}},
     }
     bin_dir = tmp_path / "bin"
     write_toolchain_cli(bin_dir, reports)
@@ -6841,11 +6911,12 @@ def test_init_validates_release_and_dev_toolchain_identities_through_public_cli(
         for identity in (
             {"mode": "unknown", "packageName": package_name},
             {"mode": "release", "packageName": "other", "packageVersion": "1.2.3"},
-            {"mode": "dev", "packageName": package_name, "sourceRepository": "https://github.com/liuli195/my-agent-skills", "packageDirectory": package_directory},
-            {"mode": "dev", "packageName": package_name, "sourceRepository": "https://github.com/liuli195/my-agent-skills", "sourceCommit": "a" * 39, "packageDirectory": package_directory},
-            {"mode": "dev", "packageName": package_name, "sourceRepository": "https://example.invalid/repo", "sourceCommit": "a" * 40, "packageDirectory": package_directory},
-            {"mode": "dev", "packageName": package_name, "sourceRepository": "https://github.com/liuli195/my-agent-skills", "sourceCommit": "a" * 40, "packageDirectory": "other"},
-            {"mode": "dev", "packageName": "other", "sourceRepository": "https://github.com/liuli195/my-agent-skills", "sourceCommit": "a" * 40, "packageDirectory": package_directory},
+            {"mode": "dev", "packageName": package_name, "sourceRepository": "https://github.com/liuli195/my-agent-skills", "packageDirectory": package_directory, "implementationIdentity": "sha256:" + "0" * 64},
+            {"mode": "dev", "packageName": package_name, "sourceRepository": "https://github.com/liuli195/my-agent-skills", "sourceCommit": "a" * 39, "packageDirectory": package_directory, "implementationIdentity": "sha256:" + "0" * 64},
+            {"mode": "dev", "packageName": package_name, "sourceRepository": "https://example.invalid/repo", "sourceCommit": "a" * 40, "packageDirectory": package_directory, "implementationIdentity": "sha256:" + "0" * 64},
+            {"mode": "dev", "packageName": package_name, "sourceRepository": "https://github.com/liuli195/my-agent-skills", "sourceCommit": "a" * 40, "packageDirectory": "other", "implementationIdentity": "sha256:" + "0" * 64},
+            {"mode": "dev", "packageName": "other", "sourceRepository": "https://github.com/liuli195/my-agent-skills", "sourceCommit": "a" * 40, "packageDirectory": package_directory, "implementationIdentity": "sha256:" + "0" * 64},
+            {"mode": "dev", "packageName": package_name, "sourceRepository": "https://github.com/liuli195/my-agent-skills", "sourceCommit": "a" * 40, "packageDirectory": package_directory, "implementationIdentity": "not-a-digest"},
         )
     ],
 )
@@ -6865,7 +6936,13 @@ def test_init_rejects_untrusted_toolchain_identity_through_public_cli(
     result = run_public_pr_flow(bin_dir, "init", "--project", str(tmp_path / "project"), "--config", str(config))
 
     assert result.returncode == 1
-    assert "status: toolchain_identity_invalid" in result.stdout
+    source_commit = toolchain.get("sourceCommit")
+    expected_status = (
+        "toolchain_source_commit_unavailable"
+        if toolchain.get("mode") == "dev" and (not isinstance(source_commit, str) or len(source_commit) != 40)
+        else "toolchain_identity_invalid"
+    )
+    assert f"status: {expected_status}" in result.stdout
     assert not (tmp_path / "project" / ".pr-flow/toolchain.json").exists()
 
 

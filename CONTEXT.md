@@ -68,16 +68,20 @@ _Avoid_: Literal input, directory input
 A source record that registers a MySpec（自有规格）plugin from the former shared marketplace or a legacy source path. A shared marketplace registration without an installed MySpec plugin record is not a Legacy MySpec Source.
 _Avoid_: Legacy marketplace, duplicate marketplace
 
+**Tool Implementation Closure（工具实现闭包）**:
+The exact plugin and shared lifecycle inputs that determine one managed tool's runnable and controlled-package content. Each tool has its own closure; shared inputs may belong to more than one closure.
+_Avoid_: Entire repository, current HEAD
+
 **Toolchain Identity（工具链身份）**:
-The machine-readable identity of one managed tool: its mode and package version, or its official source repository, complete commit, and fixed package directory.
-_Avoid_: Tool version pin, installation source
+The machine-readable identity of one managed tool: its release package version, or its official source repository, reproducible implementation commit, fixed package directory, and Tool Implementation Closure identity.
+_Avoid_: Whole-worktree commit, installation source
 
 **Toolchain Record（工具链记录）**:
 The Git-visible repository record of selected Toolchain Identities（工具链身份） used by PR Flow（拉取请求流程） CI（持续集成） synchronization.
 _Avoid_: Tool lockfile, CI configuration
 
 **源码工作树（Source Worktree）**:
-The Git worktree that supplies the source implementation for a machine-level MySpec development binding.
+The Git worktree that supplies the canonical source implementation for a machine-level managed-tool development binding; it does not determine an operation's data target.
 _Avoid_: target worktree, current checkout
 
 **目标工作树（Target Worktree）**:
@@ -97,12 +101,8 @@ For an explicitly requested worktree removal, both the target worktree registrat
 _Avoid_: registration-only cleanup, cleanup residue
 
 **开发源码绑定（Development Source Binding）**:
-The machine-level association between the bare MySpec CLI（命令行程序） and one source worktree; it is single-valued and switches explicitly.
+The machine-level association between one bare managed-tool CLI（命令行程序） and its canonical source worktree; it is single-valued per tool, target-independent, and switches explicitly.
 _Avoid_: per-worktree binding, automatic source selection
-
-**绑定不一致（Binding Mismatch）**:
-The observable state in which the source worktree and target worktree differ, so MySpec write operations must stop before changing specifications.
-_Avoid_: source drift, stale checkout
 
 **Codex 配置目录（Codex Configuration Directory）**:
 The directory that a lifecycle command intentionally selects as the Codex client profile it reads and writes.
@@ -163,7 +163,3 @@ _Avoid_: HEAD^、可变分支基线
 **有效快速验证（Valid Fast Verification）**:
 至少选中一个检查且最终状态为 passed（通过）的快速验证；仅退出码为 0 或 checked（已检查）为空不足以证明验证通过。
 _Avoid_: 空检查通过
-
-**工具链工作树冲突（Toolchain Worktree Conflict）**:
-PR Flow 的目标工作树同时是开发工具的源码工作树；该状态不能安全地让工具链身份记录在同一工作树中收敛，流程必须要求隔离目标工作树。
-_Avoid_: 绑定不一致、源码版本漂移

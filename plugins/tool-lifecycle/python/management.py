@@ -168,6 +168,192 @@ def _package_version() -> str:
     return _RUNNING_PACKAGE_VERSION
 
 
+def _implementation_files(package_root: Path) -> list[tuple[str, bytes]]:
+    roots = (".agents", ".claude-plugin", ".codex-plugin", "bin", "skills")
+    files: dict[str, bytes] = {}
+    package = package_root / "package.json"
+    if not package.is_file():
+        raise ManagementError(f"implementation_identity_unavailable: missing {package}")
+    files["package.json"] = package.read_bytes()
+    for directory in roots:
+        root = package_root / directory
+        if not root.is_dir():
+            raise ManagementError(f"implementation_identity_unavailable: missing {root}")
+        for path in root.rglob("*"):
+            if not path.is_file() or "__pycache__" in path.parts or path.suffix == ".pyc":
+                continue
+            relative = path.relative_to(package_root).as_posix()
+            if directory == "skills":
+                parts = relative.split("/")
+                if len(parts) < 3 or parts[2] != "SKILL.md" and parts[2] not in {"references", "assets"}:
+                    continue
+            files[relative] = path.read_bytes()
+    python_root = package_root / "python"
+    for path in python_root.glob("*.py"):
+        files[path.relative_to(package_root).as_posix()] = path.read_bytes()
+    profile = python_root / "lifecycle_profile.json"
+    if not profile.is_file():
+        raise ManagementError(f"implementation_identity_unavailable: missing {profile}")
+    files["python/lifecycle_profile.json"] = profile.read_bytes()
+
+    lifecycle_root = package_root.parent.parent / "plugins" / "tool-lifecycle"
+    shared_management = lifecycle_root / "python" / "management.py"
+    packer = lifecycle_root / "pack.py"
+    for path in (shared_management, packer):
+        if not path.is_file():
+            raise ManagementError(f"implementation_identity_unavailable: missing {path}")
+    files["python/management.py"] = shared_management.read_bytes()
+    files["tool-lifecycle/pack.py"] = packer.read_bytes()
+    return sorted(files.items())
+
+
+def _implementation_identity_for_files(files: list[tuple[str, bytes]]) -> str:
+    digest = hashlib.sha256()
+    for relative, content in files:
+        if b"\0" not in content:
+            try:
+                content.decode("utf-8")
+            except UnicodeDecodeError:
+                pass
+            else:
+                content = content.replace(b"\r\n", b"\n")
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return "sha256:" + digest.hexdigest()
+
+
+def _implementation_identity_for_package(package_root: Path) -> str:
+    return _implementation_identity_for_files(_implementation_files(package_root))
+
+
+def _implementation_source_path(package_prefix: Path, relative: str) -> str:
+    if relative == "python/management.py":
+        return "plugins/tool-lifecycle/python/management.py"
+    if relative == "tool-lifecycle/pack.py":
+        return "plugins/tool-lifecycle/pack.py"
+    return (package_prefix / relative).as_posix()
+
+
+def _implementation_source_paths(package_root: Path) -> list[str]:
+    source_root = package_root.parents[1]
+    package_prefix = package_root.relative_to(source_root)
+    return sorted(
+        {
+            _implementation_source_path(package_prefix, relative)
+            for relative, _content in _implementation_files(package_root)
+        }
+    )
+
+
+def _git_paths_dirty(source_root: Path, paths: list[str] | None = None) -> bool | None:
+    pathspec = ["--", *(paths or [])] if paths else []
+    for command in (("diff", "--quiet", "--exit-code"), ("diff", "--cached", "--quiet", "--exit-code")):
+        result = _run("git", *command, *pathspec, cwd=source_root)
+        if result.returncode not in {0, 1}:
+            return None
+        if result.returncode == 1:
+            return True
+    untracked = _run("git", "ls-files", "--others", "--exclude-standard", *pathspec, cwd=source_root)
+    return None if untracked.returncode != 0 else bool(untracked.stdout.strip())
+
+
+def _source_commit_is_published(source_root: Path, commit: str) -> bool:
+    remote = _run("git", "ls-remote", "--heads", "origin", cwd=source_root)
+    if remote.returncode != 0:
+        return False
+    advertised = {
+        line.split("\t", 1)[0]
+        for line in remote.stdout.splitlines()
+        if "\t" in line
+    }
+    if commit in advertised:
+        return True
+    for tip in advertised:
+        known = _run("git", "cat-file", "-t", tip, cwd=source_root)
+        if known.returncode != 0 or known.stdout.strip() != "commit":
+            fetched = _run(
+                "git",
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                "--no-write-fetch-head",
+                "origin",
+                tip,
+                cwd=source_root,
+            )
+            if fetched.returncode != 0:
+                continue
+            known = _run("git", "cat-file", "-t", tip, cwd=source_root)
+        if known.returncode != 0 or known.stdout.strip() != "commit":
+            continue
+        if _run("git", "merge-base", "--is-ancestor", commit, tip, cwd=source_root).returncode == 0:
+            return True
+    return False
+
+
+def _git_blob(source_root: Path, spec: str) -> bytes | None:
+    executable = shutil.which("git") or "git"
+    command: list[str] | str = [executable, "show", spec]
+    shell = False
+    if os.name == "nt" and Path(executable).suffix.lower() in {".cmd", ".bat"}:
+        command = subprocess.list2cmdline(command)
+        shell = True
+    try:
+        result = subprocess.run(command, cwd=source_root, check=False, capture_output=True, shell=shell)
+    except FileNotFoundError:
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def _implementation_source_commit(package_root: Path, identity: str) -> str:
+    source_root = package_root.parents[1]
+    paths = _implementation_source_paths(package_root)
+    if _git_paths_dirty(source_root, paths) is not False:
+        raise ManagementError("implementation_commit_unavailable: dirty_closure")
+    remote = _run("git", "remote", "get-url", "origin", cwd=source_root)
+    if remote.returncode != 0 or _git_host_path(remote.stdout.strip()) != ("github.com", "liuli195/my-agent-skills"):
+        raise ManagementError("implementation_commit_unavailable: official_remote")
+    history = _run("git", "log", "--format=%H", "--all", "--", *paths, cwd=source_root)
+    if history.returncode != 0:
+        raise ManagementError("implementation_commit_unavailable: history")
+    current_files = _implementation_files(package_root)
+    package_prefix = package_root.relative_to(source_root)
+    for commit in history.stdout.splitlines():
+        if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+            continue
+        digest_files: list[tuple[str, bytes]] = []
+        available = True
+        for relative, _content in current_files:
+            path = _implementation_source_path(package_prefix, relative)
+            content = _git_blob(source_root, f"{commit}:{path}")
+            if content is None:
+                available = False
+                break
+            digest_files.append((relative, content))
+        if (
+            available
+            and _implementation_identity_for_files(digest_files) == identity
+            and _source_commit_is_published(source_root, commit)
+        ):
+            return commit
+    raise ManagementError("implementation_commit_unavailable: no_published_match")
+
+
+def implementation_identity() -> str:
+    try:
+        stable = _stable_package_root()
+    except ManagementError as exc:
+        if _running_package_is_source_worktree():
+            return _implementation_identity_for_package(_RUNNING_PACKAGE_ROOT)
+        raise ManagementError(f"implementation_identity_unavailable: {exc}") from exc
+    real = _absolute_path(Path(os.path.realpath(stable)))
+    if not _same_path(stable, real):
+        return _implementation_identity_for_package(real)
+    return "release:" + _package_version()
+
+
 def _pi_agent_dir() -> Path:
     configured = os.environ.get("PI_CODING_AGENT_DIR")
     return Path(configured) if configured else Path.home() / ".pi" / "agent"
@@ -1192,8 +1378,7 @@ def _validate_dev_source(raw_source: Path) -> tuple[Path, Path, str]:
     root = _run("git", "rev-parse", "--show-toplevel", cwd=source)
     if root.returncode != 0 or not _same_path(Path(root.stdout.strip()), source):
         raise ManagementError("invalid_dev_source: git_root")
-    status = _run("git", "status", "--porcelain", cwd=source)
-    if status.returncode != 0 or status.stdout.strip():
+    if _git_paths_dirty(source) is not False:
         raise ManagementError("invalid_dev_source: dirty_worktree")
     remote = _run("git", "remote", "get-url", "origin", cwd=source)
     if remote.returncode != 0 or _git_host_path(remote.stdout.strip()) != ("github.com", "liuli195/my-agent-skills"):
@@ -1462,6 +1647,18 @@ def _refresh_integrations() -> dict[str, object]:
     return result
 
 
+def _restore_linked_launcher(source: Path, package_root: Path) -> None:
+    launcher = package_root / "bin" / f"{COMMAND_NAME}.js"
+    relative = launcher.relative_to(source).as_posix()
+    if _git_paths_dirty(source, [relative]) is not False:
+        raise ManagementError("npm_link_modified_source")
+    restored = _run("git", "checkout-index", "--force", "--", relative, cwd=source)
+    refreshed = _run("git", "add", "--", relative, cwd=source)
+    staged = _run("git", "diff", "--cached", "--quiet", "--exit-code", "--", relative, cwd=source)
+    if restored.returncode != 0 or refreshed.returncode != 0 or staged.returncode != 0:
+        raise ManagementError("npm_link_source_restore_failed")
+
+
 def _switch_dev(raw_source: Path | None, token: str | None, operation_id: str) -> dict[str, object]:
     source, package_root, commit = _validate_dev_source(raw_source or Path.cwd())
     if token is not None:
@@ -1490,6 +1687,7 @@ def _switch_dev(raw_source: Path | None, token: str | None, operation_id: str) -
     linked = _run("npm", "link", cwd=package_root)
     if linked.returncode != 0:
         raise ManagementError(f"npm_link_failed: {linked.stderr.strip()}")
+    _restore_linked_launcher(source, package_root)
     return _resume_after_switch(["init", "--dev", "--source", str(source)], switch_token, operation_id)
 
 
@@ -1570,6 +1768,14 @@ def _worktree_identity(path: Path, label: str) -> tuple[Path, str]:
     return worktree, value
 
 
+def resolve_worktree(path: Path) -> Path | None:
+    try:
+        worktree, _commit = _worktree_identity(path, "target")
+    except ManagementError:
+        return None
+    return worktree
+
+
 def _binding_report(stable: Path, target: Path) -> dict[str, object]:
     real = _absolute_path(Path(os.path.realpath(stable)))
     if _same_path(stable, real):
@@ -1609,29 +1815,6 @@ def _running_package_is_source_worktree() -> bool:
     )
 
 
-def validate_spec_write_binding(specs_root: Path) -> None:
-    try:
-        stable = _stable_package_root()
-    except ManagementError as exc:
-        if _running_package_is_source_worktree():
-            raise ManagementError(f"dev_source_binding_unavailable: {exc}") from exc
-        return
-    real = _absolute_path(Path(os.path.realpath(stable)))
-    if not _same_path(_RUNNING_PACKAGE_ROOT, real) or _same_path(stable, real):
-        return
-
-    source, source_commit = _worktree_identity(real.parents[1], "dev_source")
-    target, target_commit = _worktree_identity(specs_root, "dev_target")
-    if _same_path(source, target):
-        return
-    raise ManagementError(
-        "dev_source_worktree_mismatch: "
-        f"sourceWorktree={source} sourceCommit={source_commit} "
-        f"targetWorktree={target} targetCommit={target_commit}; "
-        f"run {COMMAND_NAME} init --dev --source {target}"
-    )
-
-
 def _source_record(
     *,
     installed: bool,
@@ -1662,8 +1845,10 @@ def _doctor_package() -> dict[str, object]:
         "packageName": PACKAGE_NAME,
     }
     if linked:
+        implementation_identity = _implementation_identity_for_package(real)
+        toolchain["implementationIdentity"] = implementation_identity
         try:
-            _, _, commit = _validate_dev_source(real.parents[1])
+            commit = _implementation_source_commit(real, implementation_identity)
         except ManagementError:
             pass
         else:

@@ -96,7 +96,8 @@ def write(path: Path, text: str) -> None:
 def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
     source = tmp_path / "source"
     source.mkdir()
-    shutil.copy2(REPO_ROOT / ".gitignore", source / ".gitignore")
+    for name in (".gitattributes", ".gitignore"):
+        shutil.copy2(REPO_ROOT / name, source / name)
     for relative in (".agents", ".claude-plugin", "plugins/my-spec", "plugins/tool-lifecycle"):
         shutil.copytree(
             REPO_ROOT / relative,
@@ -106,7 +107,6 @@ def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
     if marker is not None:
         write(source / "plugins" / "my-spec" / "skills" / "my-spec" / "dev-marker.txt", marker)
     launcher = source / "plugins" / "my-spec" / "bin" / "myspec.js"
-    launcher.write_bytes(launcher.read_bytes().replace(b"\r\n", b"\n"))
     launcher.chmod(launcher.stat().st_mode | 0o111)
     remote = tmp_path / "origin.git"
     for command in (
@@ -114,6 +114,7 @@ def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
         ["git", "init", source],
         ["git", "-C", source, "add", "."],
         ["git", "-C", source, "-c", "user.name=MySpec Test", "-c", "user.email=myspec@example.invalid", "commit", "-m", "development source"],
+        ["git", "-C", source, "checkout-index", "--force", "--", "plugins/my-spec/bin/myspec.js"],
         ["git", "-C", source, "remote", "add", "origin", "https://github.com/liuli195/my-agent-skills"],
         ["git", "-C", source, "config", f"url.{remote.as_uri()}.insteadOf", "https://github.com/liuli195/my-agent-skills"],
         ["git", "-C", source, "push", remote.as_uri(), "HEAD:refs/heads/main"],
@@ -3342,7 +3343,331 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
     assert json.loads(explicit.stdout)["source"] == str(source)
 
 
-def test_packed_myspec_dev_binding_blocks_cross_worktree_apply_until_switch(
+def test_packed_myspec_dev_doctor_identity_ignores_unrelated_files_and_tracks_closure(
+    tmp_path: Path,
+) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = install_packed_myspec(installed)
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
+    source = controlled_dev_source(tmp_path, "first")
+    env = controlled_dev_env(env, source)
+
+    entered = run_cli(executable, "init", "--dev", "--source", source, env=env, cwd=source)
+    assert entered.returncode == 0, entered.stderr
+    assert subprocess.run(["git", "config", "core.autocrlf", "true"], cwd=source, check=False).returncode == 0
+    text_file = source / "plugins" / "my-spec" / "skills" / "my-spec" / "SKILL.md"
+    text_file.write_bytes(text_file.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+    assert subprocess.run(
+        ["git", "diff", "--quiet", "--exit-code", "--", text_file], cwd=source, check=False
+    ).returncode == 0
+
+    first = run_cli(executable, "doctor", env=env, cwd=source)
+    assert first.returncode == 0, first.stderr
+    first_report = json.loads(first.stdout)
+    first_identity = first_report["toolchain"]["implementationIdentity"]
+    assert first_report["toolchain"]["sourceCommit"] == subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source, check=True, text=True, capture_output=True
+    ).stdout.strip()
+
+    write(source / "unrelated.txt", "does not ship in the MySpec package")
+    unrelated = run_cli(executable, "doctor", env=env, cwd=source)
+    assert unrelated.returncode == 0, unrelated.stderr
+    unrelated_report = json.loads(unrelated.stdout)
+    assert unrelated_report["toolchain"]["implementationIdentity"] == first_identity
+    assert unrelated_report["toolchain"]["sourceCommit"] == first_report["toolchain"]["sourceCommit"]
+
+    skill = source / "plugins" / "my-spec" / "skills" / "my-spec" / "SKILL.md"
+    write(skill, skill.read_text(encoding="utf-8") + "\nsecond")
+    changed = run_cli(executable, "doctor", env=env, cwd=source)
+    assert changed.returncode == 0, changed.stderr
+    changed_report = json.loads(changed.stdout)
+    skill_identity = changed_report["toolchain"]["implementationIdentity"]
+    assert skill_identity != first_identity
+    assert "sourceCommit" not in changed_report["toolchain"]
+    assert subprocess.run(["git", "add", skill], cwd=source, check=False).returncode == 0
+    assert subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=MySpec Test",
+            "-c",
+            "user.email=myspec@example.invalid",
+            "commit",
+            "-m",
+            "local implementation",
+        ],
+        cwd=source,
+        check=False,
+    ).returncode == 0
+    local_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source, check=True, text=True, capture_output=True
+    ).stdout.strip()
+    assert subprocess.run(
+        ["git", "push", "origin", "HEAD:refs/heads/tool-change"], cwd=source, check=False
+    ).returncode == 0
+    published = run_cli(executable, "doctor", env=env, cwd=source)
+    assert published.returncode == 0, published.stderr
+    assert json.loads(published.stdout)["toolchain"]["sourceCommit"] == local_commit
+    assert subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/stale", local_commit], cwd=source, check=False
+    ).returncode == 0
+    assert subprocess.run(
+        ["git", "push", "origin", "--delete", "tool-change"], cwd=source, check=False
+    ).returncode == 0
+    deleted_remote = run_cli(executable, "doctor", env=env, cwd=source)
+    assert deleted_remote.returncode == 0, deleted_remote.stderr
+    assert "sourceCommit" not in json.loads(deleted_remote.stdout)["toolchain"]
+
+    packer = source / "plugins" / "tool-lifecycle" / "pack.py"
+    write(packer, packer.read_text(encoding="utf-8") + "\n# shared packaging change")
+    shared_changed = run_cli(executable, "doctor", env=env, cwd=source)
+    assert shared_changed.returncode == 0, shared_changed.stderr
+    assert json.loads(shared_changed.stdout)["toolchain"]["implementationIdentity"] != skill_identity
+
+
+def test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit(
+    tmp_path: Path,
+) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = install_packed_myspec(installed)
+    source = controlled_dev_source(tmp_path)
+    env = controlled_dev_env(isolated_myspec_env(tmp_path, npm_prefix_for(installed_package)), source)
+    assert run_cli(executable, "init", "--dev", "--source", source, env=env, cwd=source).returncode == 0
+
+    first = json.loads(run_cli(executable, "doctor", env=env, cwd=source).stdout)
+    published_commit = first["toolchain"]["sourceCommit"]
+    publisher = tmp_path / "publisher"
+    assert subprocess.run(
+        ["git", "clone", "--branch", "main", str(tmp_path / "origin.git"), publisher], check=False
+    ).returncode == 0
+    write(publisher / "unrelated.txt", "does not ship in the MySpec package")
+    assert subprocess.run(["git", "add", "unrelated.txt"], cwd=publisher, check=False).returncode == 0
+    assert subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=MySpec Test",
+            "-c",
+            "user.email=myspec@example.invalid",
+            "commit",
+            "-m",
+            "unrelated",
+        ],
+        cwd=publisher,
+        check=False,
+    ).returncode == 0
+    assert subprocess.run(["git", "push", "origin", "HEAD:main"], cwd=publisher, check=False).returncode == 0
+    remote_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=publisher, check=True, text=True, capture_output=True
+    ).stdout.strip()
+    assert subprocess.run(["git", "cat-file", "-e", remote_head], cwd=source, check=False).returncode != 0
+
+    diagnosed = run_cli(executable, "doctor", env=env, cwd=source)
+
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    assert json.loads(diagnosed.stdout)["toolchain"]["sourceCommit"] == published_commit
+    assert subprocess.run(["git", "cat-file", "-e", remote_head], cwd=source, check=False).returncode == 0
+    assert not subprocess.run(
+        ["git", "for-each-ref", "--format=%(refname)", "refs/remotes/origin"],
+        cwd=source,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+
+
+def test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged(
+    tmp_path: Path,
+) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = install_packed_myspec(installed)
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
+    source = controlled_dev_source(tmp_path, "first")
+    env = controlled_dev_env(env, source)
+    assert run_cli(executable, "init", "--dev", "--source", source, env=env, cwd=source).returncode == 0
+
+    specs = source / "myspec" / "specs"
+    delta = source / "myspec" / "delta"
+    preview = source / ".local" / "spec-preview"
+    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
+    write(
+        delta / "accounts" / "spec.md",
+        """## MODIFIED Requirements
+
+### Requirement: 登录
+
+系统 MUST 允许密码登录。
+
+#### Scenario: 密码正确
+
+- **WHEN** 用户提交正确密码
+- **THEN** 系统创建会话
+""",
+    )
+    work = source / ".local" / "spec-work"
+    conflicts = source / "no-conflicts.json"
+    write(conflicts, "[]")
+    assert run_cli(
+        executable,
+        "state-init",
+        work,
+        "add",
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env,
+        cwd=source,
+    ).returncode == 0
+    assert run_cli(
+        executable,
+        "state-set-conflicts",
+        work,
+        conflicts,
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env,
+        cwd=source,
+    ).returncode == 0
+    previewed = run_cli(
+        executable,
+        "apply-delta",
+        specs,
+        delta,
+        preview,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env,
+        cwd=source,
+    )
+    assert previewed.returncode == 0, previewed.stderr
+
+    skill = source / "plugins" / "my-spec" / "skills" / "my-spec" / "SKILL.md"
+    write(skill, skill.read_text(encoding="utf-8") + "\nimplementation-only change")
+    applied = run_cli(
+        executable,
+        "apply-delta",
+        specs,
+        delta,
+        specs,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env,
+        cwd=source,
+    )
+
+    assert applied.returncode == 0, applied.stderr
+    assert "系统 MUST 允许密码登录。" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
+
+
+def test_packed_myspec_requires_reconfirmation_when_implementation_changes_the_diff(
+    tmp_path: Path,
+) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = install_packed_myspec(installed)
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
+    source = controlled_dev_source(tmp_path, "first")
+    env = controlled_dev_env(env, source)
+    assert run_cli(executable, "init", "--dev", "--source", source, env=env, cwd=source).returncode == 0
+
+    specs = source / "myspec" / "specs"
+    delta = source / "myspec" / "delta"
+    preview = source / ".local" / "spec-preview"
+    write(
+        specs / "accounts" / "spec.md",
+        main_spec("Accounts", requirement("第一项", "允许第一项"), requirement("第二项", "允许第二项")),
+    )
+    write(
+        delta / "accounts" / "spec.md",
+        """## MODIFIED Requirements
+
+### Requirement: 第一项
+
+系统 MUST 允许更新第一项。
+
+#### Scenario: 更新第一项
+
+- **WHEN** 用户更新第一项
+- **THEN** 系统保存第一项
+""",
+    )
+    work = source / ".local" / "spec-work"
+    conflicts = source / "no-conflicts.json"
+    write(conflicts, "[]")
+    assert run_cli(
+        executable, "state-init", work, "add", "specs-fingerprint", "input-fingerprint", env=env, cwd=source
+    ).returncode == 0
+    assert run_cli(
+        executable,
+        "state-set-conflicts",
+        work,
+        conflicts,
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env,
+        cwd=source,
+    ).returncode == 0
+    previewed = run_cli(
+        executable,
+        "apply-delta",
+        specs,
+        delta,
+        preview,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env,
+        cwd=source,
+    )
+    assert previewed.returncode == 0, previewed.stderr
+    before = (specs / "accounts" / "spec.md").read_bytes()
+
+    implementation = source / "plugins" / "my-spec" / "python" / "spec_ops.py"
+    text = implementation.read_text(encoding="utf-8")
+    original = 'blocks = "\\n".join(block.rstrip() for block in spec.requirements.values())'
+    replacement = 'blocks = "\\n".join(block.rstrip() for block in reversed(spec.requirements.values()))'
+    assert original in text
+    write(implementation, text.replace(original, replacement, 1))
+
+    changed = run_cli(
+        executable,
+        "apply-delta",
+        specs,
+        delta,
+        specs,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env,
+        cwd=source,
+    )
+    assert changed.returncode != 0
+    assert "preview_changed_requires_confirmation" in changed.stderr
+    assert (specs / "accounts" / "spec.md").read_bytes() == before
+    redisplayed = run_cli(executable, "diff", specs, preview, env=env, cwd=source)
+    assert redisplayed.returncode == 0, redisplayed.stderr
+    assert redisplayed.stdout.strip()
+
+    confirmed = run_cli(
+        executable,
+        "apply-delta",
+        specs,
+        delta,
+        specs,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env,
+        cwd=source,
+    )
+    assert confirmed.returncode == 0, confirmed.stderr
+
+
+def test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_context(
     tmp_path: Path,
 ) -> None:
     installed = tmp_path / "installed"
@@ -3483,8 +3808,23 @@ def test_packed_myspec_dev_binding_blocks_cross_worktree_apply_until_switch(
         relative: (specs / relative).read_bytes()
         for relative in ("accounts/spec.md", "profiles/spec.md", "settings/spec.md")
     }
+    source_before = {
+        relative: (source_a / "myspec" / "specs" / relative).read_bytes()
+        for relative in before
+    }
+    status = run_cli(
+        executable,
+        "state-status",
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env_a,
+        cwd=source_b,
+    )
+    assert status.returncode == 0, status.stderr
+    assert json.loads(status.stdout) == {"status": "READY_TO_APPLY", "total": 0, "decided": 0, "remaining": 0}
 
-    blocked = run_cli(
+    previewed = run_cli(
         executable,
         "apply-delta",
         specs,
@@ -3496,64 +3836,31 @@ def test_packed_myspec_dev_binding_blocks_cross_worktree_apply_until_switch(
         env=env_a,
         cwd=source_b,
     )
-    assert blocked.returncode == 1
-    assert "error: dev_source_worktree_mismatch" in blocked.stderr
-    assert not preview.exists()
-    assert not list(specs.parent.glob(".my-spec-*"))
-    assert {relative: (specs / relative).read_bytes() for relative in before} == before
-    assert work.exists()
-
-    npm_bin, _ = install_fake_npm(tmp_path / "fake-npm", next((installed / "package").glob("*.tgz")))
-    root_failure = run_cli(
-        executable,
-        "apply-delta",
-        specs,
-        delta,
-        preview,
-        work,
-        "specs-fingerprint",
-        "input-fingerprint",
-        env={
-            **env_a,
-            "MYSPEC_NPM_FAIL_ROOT": "1",
-            "PATH": os.pathsep.join([str(npm_bin), env_a["PATH"]]),
-        },
-        cwd=source_b,
-    )
-    assert root_failure.returncode == 1
-    assert "error: dev_source_binding_unavailable" in root_failure.stderr
-    assert not preview.exists()
-    assert work.exists()
-
-    switched = run_cli(
-        executable,
-        "init",
-        "--dev",
-        "--source",
-        source_b,
-        env=env_b,
-        cwd=source_b,
-    )
-    assert switched.returncode == 0, switched.stderr
-    diagnosis = run_cli(executable, "doctor", env=env_b, cwd=source_b)
-    assert diagnosis.returncode == 0, diagnosis.stderr
-    assert json.loads(diagnosis.stdout)["binding"]["worktreeMatch"] is True
-
-    previewed = run_cli(
-        executable,
-        "apply-delta",
-        specs,
-        delta,
-        preview,
-        work,
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env_b,
-        cwd=source_b,
-    )
     assert previewed.returncode == 0, previewed.stderr
     assert (preview / "profiles" / "spec.md").read_bytes() == before["profiles/spec.md"]
     assert (preview / "settings" / "spec.md").read_bytes() == before["settings/spec.md"]
+    assert {relative: (specs / relative).read_bytes() for relative in before} == before
+    diffed = run_cli(executable, "diff", specs, preview, env=env_a, cwd=source_b)
+    assert diffed.returncode == 0, diffed.stderr
+    assert "旧设置" in diffed.stdout
+    wrong_diff = run_cli(executable, "diff", source_a / "myspec" / "specs", preview, env=env_a, cwd=source_b)
+    assert wrong_diff.returncode != 0
+    assert "cross_worktree_path" in wrong_diff.stderr
+    wrong_apply = run_cli(
+        executable,
+        "apply-delta",
+        source_a / "myspec" / "specs",
+        delta,
+        preview,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env_a,
+        cwd=source_b,
+    )
+    assert wrong_apply.returncode != 0
+    assert "cross_worktree_path" in wrong_apply.stderr
+    assert work.exists()
 
     applied = run_cli(
         executable,
@@ -3564,13 +3871,17 @@ def test_packed_myspec_dev_binding_blocks_cross_worktree_apply_until_switch(
         work,
         "specs-fingerprint",
         "input-fingerprint",
-        env=env_b,
+        env=env_a,
         cwd=source_b,
     )
     assert applied.returncode == 0, applied.stderr
     assert (specs / "profiles" / "spec.md").read_bytes() == before["profiles/spec.md"]
     assert (specs / "settings" / "spec.md").read_bytes() == before["settings/spec.md"]
     assert "旧设置".encode("utf-8") not in (specs / "accounts" / "spec.md").read_bytes()
+    assert {
+        relative: (source_a / "myspec" / "specs" / relative).read_bytes()
+        for relative in source_before
+    } == source_before
     assert not work.exists()
     after_first = {
         relative: (specs / relative).read_bytes()
@@ -3600,6 +3911,20 @@ def test_packed_myspec_dev_binding_blocks_cross_worktree_apply_until_switch(
         env=env_b,
         cwd=source_b,
     ).returncode == 0
+    shutil.rmtree(preview)
+    repeated_preview = run_cli(
+        executable,
+        "apply-delta",
+        specs,
+        delta,
+        preview,
+        repeated_work,
+        "specs-fingerprint",
+        "input-fingerprint",
+        env=env_b,
+        cwd=source_b,
+    )
+    assert repeated_preview.returncode == 0, repeated_preview.stderr
     repeated = run_cli(
         executable,
         "apply-delta",
@@ -4787,6 +5112,9 @@ TO: 密码登录
     repeated_validation = run_python(SPEC_OPS, "validate-delta", delta, specs)
     assert repeated_validation.returncode == 0, repeated_validation.stderr
     repeated_work = ready_state(SPEC_OPS, tmp_path / "repeated-state")
+    shutil.rmtree(preview)
+    repeated_preview = apply_ready(SPEC_OPS, specs, delta, preview, repeated_work)
+    assert repeated_preview.returncode == 0, repeated_preview.stderr
     repeated_apply = apply_ready(SPEC_OPS, specs, delta, specs, repeated_work)
     assert repeated_apply.returncode == 0, repeated_apply.stderr
     assert (specs / "accounts" / "spec.md").read_bytes() == before_repeat
@@ -4895,6 +5223,11 @@ def test_myspec_cli_preserves_untouched_lf_and_crlf_bytes_for_preview_and_apply(
         relative: (specs / relative).read_bytes()
         for relative in ("accounts/spec.md", "profiles/spec.md", "settings/spec.md")
     }
+    shutil.rmtree(preview)
+    repeated_preview = run_public_spec_cli(
+        "apply-delta", specs, delta, preview, repeated_work, "specs-fingerprint", "input-fingerprint"
+    )
+    assert repeated_preview.returncode == 0, repeated_preview.stderr
     repeated = run_public_spec_cli(
         "apply-delta",
         specs,
@@ -5468,6 +5801,7 @@ def test_my_spec_plugin_is_discoverable_by_pi_claude_and_codex() -> None:
 def test_apply_delta_can_atomically_replace_main_after_final_confirmation(tmp_path: Path) -> None:
     specs = tmp_path / "myspec" / "specs"
     delta = tmp_path / "delta"
+    preview = tmp_path / "preview"
     write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
     write(
         delta / "accounts" / "spec.md",
@@ -5485,6 +5819,8 @@ def test_apply_delta_can_atomically_replace_main_after_final_confirmation(tmp_pa
     )
 
     work = ready_state(SPEC_OPS, tmp_path / "state")
+    previewed = apply_ready(SPEC_OPS, specs, delta, preview, work)
+    assert previewed.returncode == 0, previewed.stderr
     applied = apply_ready(SPEC_OPS, specs, delta, specs, work)
     assert applied.returncode == 0, applied.stderr
     assert "系统 MUST 允许密码登录。" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
@@ -5496,8 +5832,156 @@ def test_apply_delta_can_atomically_replace_main_after_final_confirmation(tmp_pa
     repeated_validation = run_python(SPEC_OPS, "validate-delta", delta, specs)
     assert repeated_validation.returncode == 0, repeated_validation.stderr
     repeated_work = ready_state(SPEC_OPS, tmp_path / "repeated-state")
+    shutil.rmtree(preview)
+    repeated_preview = apply_ready(SPEC_OPS, specs, delta, preview, repeated_work)
+    assert repeated_preview.returncode == 0, repeated_preview.stderr
     repeated = apply_ready(SPEC_OPS, specs, delta, specs, repeated_work)
     assert repeated.returncode == 0, repeated.stderr
+    assert (specs / "accounts" / "spec.md").read_bytes() == before
+
+
+def test_myspec_final_apply_requires_the_confirmed_preview(tmp_path: Path) -> None:
+    specs = tmp_path / "specs"
+    delta = tmp_path / "delta"
+    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
+    write(
+        delta / "accounts" / "spec.md",
+        """## MODIFIED Requirements
+
+### Requirement: 登录
+
+系统 MUST 允许密码登录。
+
+#### Scenario: 密码正确
+
+- **WHEN** 用户提交正确密码
+- **THEN** 系统创建会话
+""",
+    )
+    work = ready_state(SPEC_OPS, tmp_path / "state")
+    before = (specs / "accounts" / "spec.md").read_bytes()
+
+    applied = apply_ready(SPEC_OPS, specs, delta, specs, work)
+
+    assert applied.returncode != 0
+    assert "preview_missing" in applied.stderr
+    assert (specs / "accounts" / "spec.md").read_bytes() == before
+
+
+def test_myspec_final_apply_rejects_bound_content_drift_after_preview(tmp_path: Path) -> None:
+    for changed, expected_error in (
+        ("specs", "specs_content_changed"),
+        ("delta", "input_content_changed"),
+        ("preview", "preview_content_changed"),
+    ):
+        root = tmp_path / changed
+        specs = root / "specs"
+        delta = root / "delta"
+        preview = root / "preview"
+        spec_path = specs / "accounts" / "spec.md"
+        delta_path = delta / "accounts" / "spec.md"
+        write(spec_path, main_spec("Accounts", requirement("登录", "允许登录")))
+        write(
+            delta_path,
+            """## MODIFIED Requirements
+
+### Requirement: 登录
+
+系统 MUST 允许密码登录。
+
+#### Scenario: 密码正确
+
+- **WHEN** 用户提交正确密码
+- **THEN** 系统创建会话
+""",
+        )
+        work = ready_state(SPEC_OPS, root / "state")
+        previewed = apply_ready(SPEC_OPS, specs, delta, preview, work)
+        assert previewed.returncode == 0, previewed.stderr
+        if changed == "specs":
+            write(spec_path, main_spec("Accounts", requirement("登录", "允许其他登录")))
+        elif changed == "delta":
+            write(delta_path, delta_path.read_text(encoding="utf-8").replace("密码登录", "其他登录", 1))
+        else:
+            preview_path = preview / "accounts" / "spec.md"
+            write(preview_path, preview_path.read_text(encoding="utf-8").replace("密码登录", "其他登录", 1))
+        expected_specs = spec_path.read_bytes()
+
+        applied = apply_ready(SPEC_OPS, specs, delta, specs, work)
+
+        assert applied.returncode != 0
+        assert expected_error in applied.stderr
+        assert spec_path.read_bytes() == expected_specs
+
+
+def test_myspec_final_apply_rejects_unconfirmed_implementation_identity(tmp_path: Path) -> None:
+    specs = tmp_path / "specs"
+    delta = tmp_path / "delta"
+    preview = tmp_path / "preview"
+    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
+    write(
+        delta / "accounts" / "spec.md",
+        """## MODIFIED Requirements
+
+### Requirement: 登录
+
+系统 MUST 允许密码登录。
+
+#### Scenario: 密码正确
+
+- **WHEN** 用户提交正确密码
+- **THEN** 系统创建会话
+""",
+    )
+    work = ready_state(SPEC_OPS, tmp_path / "state")
+    previewed = apply_ready(SPEC_OPS, specs, delta, preview, work)
+    assert previewed.returncode == 0, previewed.stderr
+    state_path = work / "current" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["implementationIdentity"] = None
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    before = (specs / "accounts" / "spec.md").read_bytes()
+
+    applied = apply_ready(SPEC_OPS, specs, delta, specs, work)
+
+    assert applied.returncode != 0
+    assert "invalid_state_context" in applied.stderr
+    assert (specs / "accounts" / "spec.md").read_bytes() == before
+
+
+def test_myspec_final_apply_rejects_missing_bound_content_fingerprints(tmp_path: Path) -> None:
+    specs = tmp_path / "specs"
+    delta = tmp_path / "delta"
+    preview = tmp_path / "preview"
+    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
+    write(
+        delta / "accounts" / "spec.md",
+        """## MODIFIED Requirements
+
+### Requirement: 登录
+
+系统 MUST 允许密码登录。
+
+#### Scenario: 密码正确
+
+- **WHEN** 用户提交正确密码
+- **THEN** 系统创建会话
+""",
+    )
+    work = ready_state(SPEC_OPS, tmp_path / "state")
+    previewed = apply_ready(SPEC_OPS, specs, delta, preview, work)
+    assert previewed.returncode == 0, previewed.stderr
+    state_path = work / "current" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["specsContentFingerprint"] = None
+    state["deltaContentFingerprint"] = None
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    before = (specs / "accounts" / "spec.md").read_bytes()
+
+    applied = apply_ready(SPEC_OPS, specs, delta, specs, work)
+
+    assert applied.returncode != 0
+    assert "invalid_state_context" in applied.stderr
     assert (specs / "accounts" / "spec.md").read_bytes() == before
 
 

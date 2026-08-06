@@ -202,6 +202,7 @@ class FakeRunnerModule:
         performance_report: bool = False,
         runtime_version: str = "unknown",
         synthetic_changed_paths: list[str] | None = None,
+        implementation_identity: str | None = None,
     ) -> int:
         def call_runner() -> int:
             return int(
@@ -213,6 +214,7 @@ class FakeRunnerModule:
                     performance_report=performance_report,
                     runtime_version=runtime_version,
                     synthetic_changed_paths=(self.changed_files if synthetic_changed_paths is None else synthetic_changed_paths),
+                    implementation_identity=implementation_identity,
                 )
             )
 

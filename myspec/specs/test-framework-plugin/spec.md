@@ -433,31 +433,6 @@ Build and Verify（构建与验证）配置指导 MUST 让动态扫描检查的�
 - **THEN** 系统 MUST NOT 复制运行时快照到目标仓库
 - **THEN** 系统 MUST NOT 在命令行 init（初始化）中执行对话式问答
 - **THEN** 系统 MUST NOT 在命令行 init（初始化）中自动生成仓库业务检查项
-### Requirement: Verification caches are bound to runtime version
-
-Build and Verify（构建与验证） MUST bind fast and full verification cache entries to the fixed CLI（命令行程序） runtime（运行时） version that produced them.
-
-#### Scenario: CLI runtime version changes
-
-- **WHEN** the installed CLI（命令行程序） runtime（运行时） is updated to a different runtime version
-- **THEN** fast verify（快速验证） MUST NOT reuse passed-result cache（通过结果缓存） entries from the earlier runtime version
-- **THEN** existing cache files MUST NOT require manual deletion
-
-#### Scenario: Runtime version remains unchanged
-
-- **WHEN** runtime version, configuration, command, and cache inputs remain unchanged
-- **THEN** fast verify（快速验证） MAY reuse the matching passed-result cache（通过结果缓存）
-
-#### Scenario: Full verification records current runtime identity
-
-- **WHEN** full verify（完整验证） writes passed-result cache（通过结果缓存） entries
-- **THEN** those entries MUST use the current fixed runtime version
-
-#### Scenario: Runtime version is missing
-
-- **WHEN** the fixed runtime version is absent
-- **THEN** fast verify（快速验证） and full verify（完整验证） MUST fail before running checks or reading or writing passed-result cache（通过结果缓存）
-- **THEN** build（构建检查） MUST remain available because it does not use verification cache
 ### Requirement: Build and Verify uses the installed CLI without repository runtime snapshots
 Build and Verify（构建与验证） build（构建） and verify（验证） commands MUST execute through the installed CLI（命令行程序） without copying a repository runtime（运行时） snapshot.
 
@@ -509,3 +484,35 @@ Build and Verify（构建与验证）MUST allow a fast verification command to u
 - **WHEN** at least one check is selected and every selected check has a valid passed-result cache（通过结果缓存）
 - **THEN** the command MUST report `status: passed`
 - **THEN** the command MUST report a non-empty `checked` value even when no check process runs
+### Requirement: Verification caches are bound to runtime version
+
+Build and Verify（构建与验证） MUST bind fast and full verification cache entries to the current CLI（命令行程序）runtime identity（运行时身份）. In release mode, that identity MUST include the fixed runtime version. In development mode, it MUST use the stable implementation identity exposed by the linked development implementation, so an implementation change invalidates old cache entries even when the package version is unchanged. Configuration, command and cache inputs MUST continue to participate independently in the cache key.
+
+#### Scenario: Released CLI runtime version changes
+
+- **WHEN** the installed released CLI（命令行程序）runtime（运行时）is updated to a different runtime version
+- **THEN** fast verify（快速验证） MUST NOT reuse passed-result cache（通过结果缓存） entries from the earlier runtime version
+- **THEN** existing cache files MUST NOT require manual deletion
+
+#### Scenario: Development implementation changes without a version change
+
+- **WHEN** the linked development implementation identity changes while its package version remains unchanged
+- **THEN** fast verify（快速验证） MUST NOT reuse passed-result cache（通过结果缓存） entries from the earlier implementation
+- **THEN** unrelated repository changes that do not affect the Build and Verify implementation MUST NOT change that implementation identity
+
+#### Scenario: Runtime identity remains unchanged
+
+- **WHEN** runtime identity, configuration, command, and cache inputs remain unchanged
+- **THEN** fast verify（快速验证） MAY reuse the matching passed-result cache（通过结果缓存）
+- **THEN** a configuration, command or input change MUST continue to invalidate cache independently of runtime identity
+
+#### Scenario: Full verification records current runtime identity
+
+- **WHEN** full verify（完整验证） writes passed-result cache（通过结果缓存） entries
+- **THEN** those entries MUST use the current released runtime version or development implementation identity
+
+#### Scenario: Runtime identity is missing
+
+- **WHEN** the current runtime identity is absent
+- **THEN** fast verify（快速验证） and full verify（完整验证） MUST fail before running checks or reading or writing passed-result cache（通过结果缓存）
+- **THEN** build（构建检查） MUST remain available because it does not use verification cache

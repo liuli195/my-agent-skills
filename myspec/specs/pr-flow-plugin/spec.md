@@ -601,30 +601,6 @@ complete（完整流程）和 tweak（小改）MUST 只使用当前源/目标提
 - **WHEN** 用户运行 tweak（小改）
 - **THEN** tweak（小改）MUST use the same latest-base、required-check and commit-revalidation（最新基线、必需检查和提交复核）rules as complete（完整流程）
 - **THEN** tweak（小改）MUST skip only review gate（审查门禁）
-### Requirement: PR Flow rejects a same-worktree development toolchain binding
-
-PR Flow（拉取请求流程）MUST 在开发工具的源码工作树与目标工作树相同时安全停止，避免工具链身份记录无法收敛。
-
-#### Scenario: Same-worktree toolchain binding stops before mutation
-
-- **WHEN** 用户运行 `init`（初始化）、`complete`（收尾）或 `tweak`（小改）
-- **AND** 当前开发工具的源码工作树与目标工作树相同
-- **THEN** PR Flow（拉取请求流程）MUST 在更新工具链记录、生成工具链工作流、创建或同步 PR（拉取请求）、推送或合并前停止
-- **THEN** 停止结果 MUST 使用 `toolchain_same_worktree_unsupported` 原因
-- **THEN** 停止详情 MUST 标识源码工作树和目标工作树
-- **THEN** 停止详情 MUST 提供使用隔离目标工作树或发布版工具的恢复动作
-
-#### Scenario: Toolchain binding uses the declared target project
-
-- **WHEN** 用户通过 `--project`（项目参数）指定目标项目
-- **AND** 调用进程的当前目录与目标项目目录不同
-- **THEN** PR Flow（拉取请求流程）MUST 根据目标项目判断开发工具源码绑定关系
-- **THEN** 不同源码工作树和目标工作树 MUST NOT 被误判为同一工作树
-
-#### Scenario: Isolated development toolchain binding remains usable
-
-- **WHEN** 开发工具的源码工作树与目标工作树不同
-- **THEN** `init`、`complete` 和 `tweak` MUST 保持现有工具链身份记录和 PR Flow 生命周期行为
 ### Requirement: PR Flow handles safe Windows long-path worktree cleanup
 PR Flow（拉取请求流程）MUST 在 Windows（视窗系统）中支持安全关联工作树的非强制清理，即使被忽略的 `.local/spec-work`（本地规格运行状态）生成物产生超过默认路径限制的深层文件路径。
 
@@ -671,3 +647,35 @@ PR Flow（拉取请求流程）MUST 在用户显式请求删除关联工作树�
 - **THEN** PR Flow（拉取请求流程） MUST NOT report cleanup completion（报告清理完成）
 - **THEN** 停止状态 MUST identify the target path（目标路径） and provide an executable recovery command（可执行恢复命令） from another worktree（其他工作树）
 - **THEN** PR Flow（拉取请求流程） MUST NOT recreate `.pr-flow` state（状态） inside the unregistered target worktree（已注销目标工作树）
+### Requirement: PR Flow 收敛可复现开发工具链身份
+
+PR Flow（拉取请求流程）MUST 分别消费 MySpec（自有规格）与 Build and Verify（构建与验证）公开诊断中的工具身份，并记录发布包版本或开发实现身份及其可复现源码信息。开发工具源码工作树与目标工作树相同或不同时，`init`（初始化）、`complete`（收尾）和 `tweak`（小改）均 MUST 使用同一收敛规则；工具链记录和生成工作流自身的变化 MUST NOT 改变工具实现身份。缺少可复现开发源码提交时，流程 MUST 在任何工具链文件或 PR（拉取请求）修改前停止。
+
+#### Scenario: 同工作树首次同步后稳定收敛
+
+- **WHEN** 开发工具源码工作树与 PR Flow 目标工作树相同，且两个工具都公开有效的开发实现身份和可复现源码提交
+- **THEN** PR Flow MUST 允许 `init`、`complete` 或 `tweak` 写入所需工具链记录和生成工作流
+- **THEN** 在工具实现未变化时再次运行同一入口 MUST 保持工具链文件无差异
+- **THEN** 流程 MUST NOT 返回 `toolchain_same_worktree_unsupported`
+
+#### Scenario: 两个工具身份独立变化
+
+- **WHEN** 只有 MySpec 的受控实现内容变化
+- **THEN** 工具链记录 MUST 只改变 MySpec 身份
+- **WHEN** 只有 Build and Verify 的受控实现内容变化
+- **THEN** 工具链记录 MUST 只改变 Build and Verify 身份
+- **WHEN** 两个工具共同使用的生命周期实现变化
+- **THEN** 工具链记录 MUST 同时改变两个工具身份
+
+#### Scenario: 开发工具链记录可由远端重建
+
+- **WHEN** PR Flow 接受一个开发工具身份并生成 CI（持续集成）安装步骤
+- **THEN** 记录的源码提交 MUST 能从当前官方远端分支检出
+- **THEN** 在该提交按记录的包目录执行受控打包 MUST 重建相同实现身份
+- **THEN** 普通规格、测试、仓库配置、工具链记录和生成工作流 MUST NOT 改变记录的工具实现身份
+
+#### Scenario: 可复现源码提交不可用
+
+- **WHEN** 任一开发工具诊断未提供有效实现身份或当前远端分支可检出的源码提交
+- **THEN** PR Flow MUST 在更新工具链记录、生成工作流、推送、创建或同步 PR 前返回非零停止结果
+- **THEN** 停止详情 MUST 标识受影响工具并提供先发布精确实现提交再重试的恢复动作

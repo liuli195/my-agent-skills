@@ -423,6 +423,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_accepts_controlled_ssh_dev_source': (
         'covers the packaged Build and Verify development-mode entrypoint with an official SSH remote and published commit; function=test_packed_build_and_verify_accepts_controlled_ssh_dev_source'
     ),
+    'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_dev_identity_controls_public_verify_cache': (
+        'covers packaged Build and Verify doctor and fast/full verify cache invalidation for development identity changes; function=test_packed_build_and_verify_dev_identity_controls_public_verify_cache'
+    ),
     'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_migrates_recognized_runtime_after_fast_verify': (
         'covers the installed Build and Verify CLI fast-verify migration in a clean temporary git repository; function=test_packed_build_and_verify_migrates_recognized_runtime_after_fast_verify'
     ),
@@ -477,11 +480,17 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_pr_flow_cli.py::test_complete_rereads_the_new_baseline_with_bounded_toolchain_retries': (
         'covers the public complete CLI bounded toolchain identity retries from each new commit baseline; function=test_complete_rereads_the_new_baseline_with_bounded_toolchain_retries'
     ),
-    'tests/test_pr_flow_cli.py::test_init_stops_before_writing_for_same_worktree_toolchain_binding': (
-        'covers the public init CLI stopping before writes for a same-worktree toolchain binding; function=test_init_stops_before_writing_for_same_worktree_toolchain_binding'
+    'tests/test_pr_flow_cli.py::test_init_accepts_same_worktree_with_stable_toolchain_identities': (
+        'covers the public init CLI accepting a same-worktree development binding with stable toolchain identities; function=test_init_accepts_same_worktree_with_stable_toolchain_identities'
     ),
-    'tests/test_pr_flow_cli.py::test_lifecycle_stops_before_toolchain_commit_for_same_worktree_binding': (
-        'covers the public complete and tweak CLI stopping before toolchain commits for a same-worktree binding; function=test_lifecycle_stops_before_toolchain_commit_for_same_worktree_binding'
+    'tests/test_pr_flow_cli.py::test_init_fails_closed_when_dev_implementation_commit_is_unavailable': (
+        'covers the public init CLI failing closed when no CI-reproducible development implementation commit is reported; function=test_init_fails_closed_when_dev_implementation_commit_is_unavailable'
+    ),
+    'tests/test_pr_flow_cli.py::test_lifecycle_syncs_same_worktree_toolchain_before_remote_flow': (
+        'covers public complete and tweak synchronization continuing from a same-worktree development binding; function=test_lifecycle_syncs_same_worktree_toolchain_before_remote_flow'
+    ),
+    'tests/test_pr_flow_cli.py::test_toolchain_sync_converges_for_independent_and_shared_tool_changes': (
+        'covers public PR Flow synchronization convergence for independent plugin and shared lifecycle identity updates; function=test_toolchain_sync_converges_for_independent_and_shared_tool_changes'
     ),
     'tests/test_pr_flow_cli.py::test_init_uses_target_project_as_toolchain_doctor_cwd': (
         'covers the public init CLI running tool diagnostics in the target project directory; function=test_init_uses_target_project_as_toolchain_doctor_cwd'
@@ -617,6 +626,18 @@ E2E_ALLOWLIST: dict[str, str] = {
     ),
     'tests/test_my_spec.py::test_apply_delta_can_atomically_replace_main_after_final_confirmation': (
         'covers packaged spec_ops CLI final atomic replacement and idempotent no-op behavior; function=test_apply_delta_can_atomically_replace_main_after_final_confirmation'
+    ),
+    'tests/test_my_spec.py::test_myspec_final_apply_requires_the_confirmed_preview': (
+        'covers MySpec final application refusing to replace a target without a confirmed preview; function=test_myspec_final_apply_requires_the_confirmed_preview'
+    ),
+    'tests/test_my_spec.py::test_myspec_final_apply_rejects_bound_content_drift_after_preview': (
+        'covers MySpec final application stopping on specification, input, or preview drift after confirmation; function=test_myspec_final_apply_rejects_bound_content_drift_after_preview'
+    ),
+    'tests/test_my_spec.py::test_myspec_final_apply_rejects_unconfirmed_implementation_identity': (
+        'covers MySpec final application stopping when the persisted implementation identity cannot be confirmed; function=test_myspec_final_apply_rejects_unconfirmed_implementation_identity'
+    ),
+    'tests/test_my_spec.py::test_myspec_final_apply_rejects_missing_bound_content_fingerprints': (
+        'covers MySpec final application stopping when persisted specification or input content fingerprints are missing; function=test_myspec_final_apply_rejects_missing_bound_content_fingerprints'
     ),
     'tests/test_my_spec.py::test_myspec_launcher_forwards_sigterm_to_python': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_myspec_launcher_forwards_sigterm_to_python'
@@ -777,8 +798,20 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_packed_myspec_switches_pi_between_development_and_saved_release': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_switches_pi_between_development_and_saved_release'
     ),
-    'tests/test_my_spec.py::test_packed_myspec_dev_binding_blocks_cross_worktree_apply_until_switch': (
-        'covers the installed MySpec CLI binding guard and manual multi-worktree switch through two isolated git worktrees; function=test_packed_myspec_dev_binding_blocks_cross_worktree_apply_until_switch'
+    'tests/test_my_spec.py::test_packed_myspec_dev_doctor_identity_ignores_unrelated_files_and_tracks_closure': (
+        'covers the installed MySpec CLI reproducible development implementation identity through unrelated and packaged source changes; function=test_packed_myspec_dev_doctor_identity_ignores_unrelated_files_and_tracks_closure'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged': (
+        'covers the installed MySpec CLI reusing confirmation when a development implementation changes without changing the observable diff; function=test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit': (
+        'covers the installed MySpec CLI retaining a CI-reproducible published ancestor after an unrelated source commit; function=test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_requires_reconfirmation_when_implementation_changes_the_diff': (
+        'covers the installed MySpec CLI requiring reconfirmation when a development implementation changes the observable diff; function=test_packed_myspec_requires_reconfirmation_when_implementation_changes_the_diff'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_context': (
+        'covers the installed MySpec CLI canonical development binding and target-worktree context through two isolated git worktrees; function=test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_context'
     ),
     'tests/test_my_spec.py::test_packed_myspec_update_preflights_installed_clients_before_package_write': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_update_preflights_installed_clients_before_package_write'
