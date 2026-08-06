@@ -66,6 +66,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -101,6 +103,34 @@ jobs:
         run: |
           . ./.worktrees/smoke/.venv/Scripts/Activate.ps1
           build-and-verify build --project .worktrees/smoke
+
+      - name: Run PR fast verification
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: pwsh
+        env:
+          BASELINE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          . ./.venv/Scripts/Activate.ps1
+          $output = & build-and-verify verify --project . --base $env:BASELINE 2>&1 | Out-String
+          $exitCode = $LASTEXITCODE
+          Write-Host $output
+          $lines = $output -split "\r?\n"
+          $checked = $lines | Where-Object { $_ -match "^checked:\s*\S" } | Select-Object -Last 1
+          $status = $lines | Where-Object { $_ -match "^status:\s*\S" } | Select-Object -Last 1
+          if ($exitCode -ne 0 -or -not $checked -or $status -notmatch "^status:\s*passed\s*$") {
+            Write-Error "Windows PR fast verification requires non-empty checked output and status: passed."
+            exit 1
+          }
+
+      - name: Run manual Windows full verification
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: pwsh
+        run: |
+          . ./.venv/Scripts/Activate.ps1
+          & build-and-verify verify --project . --full
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
 
   full-verify-gate:
     name: Full Verify
