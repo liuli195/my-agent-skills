@@ -4920,6 +4920,9 @@ def test_complete_reports_exception_when_gh_pr_merge_fails(tmp_path: Path, monke
 
 
 def test_complete_reports_dispatch_when_ruleset_blocks_merge(tmp_path: Path, monkeypatch) -> None:
+    module = load_pr_flow_module()
+    clock = iter([0.0, 0.0])
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(clock, 60.0))
     project, result = run_complete_in_process(
         tmp_path,
         monkeypatch,
@@ -4952,7 +4955,7 @@ def test_complete_reports_dispatch_when_ruleset_blocks_merge(tmp_path: Path, mon
     assert "ruleset" in action
 
 
-def test_complete_uses_auto_merge_when_ruleset_suggests_auto(tmp_path: Path, monkeypatch) -> None:
+def test_complete_retries_ordinary_merge_when_ruleset_suggests_auto(tmp_path: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
@@ -4980,7 +4983,7 @@ def test_complete_uses_auto_merge_when_ruleset_suggests_auto(tmp_path: Path, mon
         returncode=1,
     )
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
-    gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid, "--auto"])
+    gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
     git_stub = CommandStub(consume=True)
     for git_args, stdout in [
@@ -5012,7 +5015,8 @@ def test_complete_uses_auto_merge_when_ruleset_suggests_auto(tmp_path: Path, mon
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "status: cleanup_complete" in result.stdout
-    assert ("pr", "merge", "12", "--merge", "--match-head-commit", head_oid, "--auto") in gh_stub.calls
+    assert gh_stub.calls.count(("pr", "merge", "12", "--merge", "--match-head-commit", head_oid)) == 2
+    assert all("--auto" not in call for call in gh_stub.calls)
 
 
 def test_complete_returns_checks_pending_when_ruleset_recovery_wait_times_out(tmp_path: Path, monkeypatch) -> None:
@@ -5337,112 +5341,89 @@ def test_complete_failed_or_cancelled_required_checks_are_not_waited(
     assert status["details"]["reason"] == "checks_or_review_blocking"
 
 
-def test_complete_waits_for_checks_after_ruleset_block_then_retries_merge(tmp_path: Path, monkeypatch) -> None:
-    from tests.support.command_stubs import CommandStub
-    from tests.support.pr_flow_invocation import invoke_pr_flow
-
+def test_complete_retries_ordinary_merge_until_ruleset_converges(tmp_path: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
-    project = tmp_path / "project"
-    project.mkdir()
-    write_complete_pr_flow_config(project)
-    config_path = project / ".pr-flow" / "config.yaml"
-    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    config["defaults"]["wait"] = {"timeoutSeconds": 30, "pollSeconds": 15}
-    config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    head_oid = "b" * 40
-    completed_pr = pr_view_json(
-        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
-        review_decision="APPROVED",
-        head_oid=head_oid,
-    )
-    pending_pr = pr_view_json(
-        checks=[{"name": "ci", "status": "QUEUED", "conclusion": None}],
-        review_decision="APPROVED",
-        head_oid=head_oid,
-    )
-    gh_stub = CommandStub(consume=True)
-    allow_required_checks(gh_stub)
-    allow_required_checks(gh_stub, "pending")
-    allow_required_checks(gh_stub)
-    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
-    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
-    gh_stub.add(
-        ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid],
-        stderr="X Pull request owner/repo#90 is not mergeable: the base branch policy prohibits the merge.\n",
-        returncode=1,
-    )
-    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
-    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
-    gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
-    gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
-    git_stub = CommandStub(consume=True)
-    for git_args, stdout in [
-        (["branch", "--show-current"], "feature/example\n"),
-        (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
-        (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
-        (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
-        (["branch", "--show-current"], "feature/example\n"),
-        (["rev-parse", "HEAD"], head_oid + "\n"),
-        (["rev-parse", "HEAD"], head_oid + "\n"),
-        (["status", "--short"], ""),
-        (["branch", "--show-current"], "feature/example\n"),
-        (["push", "origin", "--delete", "feature/example"], ""),
-        (["ls-remote", "--heads", "origin", "feature/example"], ""),
-        (["checkout", "main"], ""),
-        (["pull", "--ff-only", "origin", "main"], ""),
-        (["branch", "-d", "feature/example"], ""),
-        (["branch", "--show-current"], "main\n"),
-    ]:
-        git_stub.add(git_args, stdout=stdout)
-    allow_current_base(git_stub, head_oid)
-    allow_cleanup(git_stub, project)
-    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
-    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
-    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(module, "gh", gh_stub)
-    monkeypatch.setattr(module, "git", git_stub)
+    now = 0.0
+    sleeps: list[float] = []
 
-    result = invoke_pr_flow(complete_args(project), module=module)
+    def monotonic() -> float:
+        return now
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-    assert gh_stub.calls.count(("pr", "merge", "12", "--merge", "--match-head-commit", head_oid)) == 2
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        sleeps.append(seconds)
+        now += seconds
 
-
-def test_complete_preserves_initial_ruleset_error_after_bounded_refresh_retry(
-    tmp_path: Path, monkeypatch
-) -> None:
+    monkeypatch.setattr(module.time, "monotonic", monotonic)
+    monkeypatch.setattr(module.time, "sleep", sleep)
+    cleanup_calls: list[argparse.Namespace] = []
+    monkeypatch.setattr(module, "run_cleanup", lambda args: cleanup_calls.append(args) or 0)
     completed_pr = pr_view_json(
         checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
         review_decision="APPROVED",
         head_oid="b" * 40,
     )
-    initial_error = (
-        "initial ruleset response: base branch policy prohibits the merge\n"
-        "policy propagation is still pending\n"
-    )
-    refreshed_error = (
-        "refreshed ruleset response: base branch policy prohibits the merge\n"
-        "merge remains blocked\n"
-    )
+    blocked = "X Pull request owner/repo#90 is not mergeable: the base branch policy prohibits the merge.\n"
     project, result = run_complete_in_process(
         tmp_path,
         monkeypatch,
-        pr_responses=[(completed_pr, "", 0)] * 5,
-        merge_responses=[(initial_error, 1), (refreshed_error, 1)],
-        required_buckets=("pass", "pass"),
+        pr_responses=[(completed_pr, "", 0)] * 7,
+        merge_responses=[(blocked, 1), (blocked, 1), ("", 0)],
+        required_buckets=("pass", "pass", "pass"),
+        wait_config={"timeoutSeconds": 0, "pollSeconds": 15},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: merge_complete" in result.stdout
+    assert sleeps == [15]
+    assert len(cleanup_calls) == 1
+
+def test_complete_preserves_initial_and_final_ruleset_errors_after_bounded_retries(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_pr_flow_module()
+    now = 0.0
+    sleeps: list[float] = []
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        sleeps.append(seconds)
+        now += seconds
+
+    monkeypatch.setattr(module.time, "monotonic", monotonic)
+    monkeypatch.setattr(module.time, "sleep", sleep)
+    completed_pr = pr_view_json(
+        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        review_decision="APPROVED",
+        head_oid="b" * 40,
+    )
+    errors = [
+        f"ruleset attempt {index}: base branch policy prohibits the merge\n"
+        for index in range(5)
+    ]
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_responses=[(completed_pr, "", 0)] * 11,
+        merge_responses=[(error, 1) for error in errors],
+        required_buckets=("pass",) * 5,
+        wait_config={"timeoutSeconds": 0, "pollSeconds": 15},
     )
 
     assert result.returncode == 1
     assert "status: DISPATCH_REQUIRED" in result.stdout
+    assert "status: merge_complete" not in result.stdout
+    assert sleeps == [15, 15, 15, 15]
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["details"]["reason"] == "ruleset_merge_blocking"
-    assert status["details"]["stderr"] == initial_error.strip()
-    assert status["details"]["retryDetails"]["stderr"] == refreshed_error.strip()
-    assert status["details"]["retryAttempts"] == 1
+    assert status["details"]["stderr"] == errors[0].strip()
+    assert status["details"]["retryDetails"]["stderr"] == errors[-1].strip()
+    assert status["details"]["retryAttempts"] == 4
 
-
-def test_ruleset_auto_retry_rechecks_commits_before_second_merge(tmp_path: Path, monkeypatch) -> None:
+def test_ruleset_retry_rechecks_commits_before_ordinary_merge(tmp_path: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     original = json.loads(
         pr_view_json(
@@ -5454,17 +5435,22 @@ def test_ruleset_auto_retry_rechecks_commits_before_second_merge(tmp_path: Path,
     )
     changed = {**original, "baseRefOid": "c" * 40}
     snapshots = iter((original, original, changed))
-    merge_calls: list[bool] = []
+    merge_calls: list[int] = []
 
     monkeypatch.setattr(module, "sync_pr", lambda *_args: next(snapshots))
-    monkeypatch.setattr(module, "wait_for_checks", lambda *_args: None)
+    monkeypatch.setattr(
+        module,
+        "required_checks",
+        lambda *_args: [{"bucket": "pass", "name": "ci", "state": "SUCCESS"}],
+    )
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
 
-    def fake_merge(*_args, auto: bool = False, **_kwargs):
-        merge_calls.append(auto)
+    def fake_merge(*_args, **_kwargs):
+        merge_calls.append(1)
         if len(merge_calls) == 1:
             raise module.PrFlowError(
                 "ruleset_merge_blocking",
-                {"reason": "ruleset_merge_blocking", "autoMergeSuggested": True},
+                {"reason": "ruleset_merge_blocking"},
             )
 
     monkeypatch.setattr(module, "merge_pr", fake_merge)
@@ -5479,21 +5465,11 @@ def test_ruleset_auto_retry_rechecks_commits_before_second_merge(tmp_path: Path,
         )
 
     assert error.value.reason == "base_outdated"
-    assert merge_calls == [False]
+    assert merge_calls == [1]
 
 
-def test_complete_uses_auto_merge_when_ruleset_suggests_auto_after_wait(tmp_path: Path, monkeypatch) -> None:
-    from tests.support.command_stubs import CommandStub
-    from tests.support.pr_flow_invocation import invoke_pr_flow
-
+def test_complete_stops_when_ruleset_retry_observes_pending_checks(tmp_path: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
-    project = tmp_path / "project"
-    project.mkdir()
-    write_complete_pr_flow_config(project)
-    config_path = project / ".pr-flow" / "config.yaml"
-    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    config["defaults"]["wait"] = {"timeoutSeconds": 30, "pollSeconds": 15}
-    config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
     head_oid = "b" * 40
     completed_pr = pr_view_json(
         checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -5505,63 +5481,49 @@ def test_complete_uses_auto_merge_when_ruleset_suggests_auto_after_wait(tmp_path
         review_decision="APPROVED",
         head_oid=head_oid,
     )
-    gh_stub = CommandStub(consume=True)
-    allow_required_checks(gh_stub)
-    allow_required_checks(gh_stub, "pending")
-    allow_required_checks(gh_stub)
-    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
-    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
-    gh_stub.add(
-        ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid],
-        stderr="X Pull request owner/repo#90 is not mergeable: the base branch policy prohibits the merge.\n",
-        returncode=1,
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: pytest.fail("pending checks must stop retry"))
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_responses=[(completed_pr, "", 0), (completed_pr, "", 0), (completed_pr, "", 0), (pending_pr, "", 0)],
+        merge_responses=[("X Pull request owner/repo#90 is not mergeable: the base branch policy prohibits the merge.\n", 1)],
+        required_buckets=("pass", "pending"),
     )
-    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
-    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
-    gh_stub.add(
-        ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid],
-        stderr=(
-            "X Pull request owner/repo#90 is not mergeable: the base branch policy prohibits the merge.\n"
-            "To have the pull request merged after all the requirements have been met, add the --auto flag.\n"
-        ),
-        returncode=1,
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    assert "checks_pending" in result.stdout
+    assert "status: merge_complete" not in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "checks_pending"
+
+
+def test_complete_stops_when_review_changes_during_ruleset_retry(tmp_path: Path, monkeypatch) -> None:
+    approved = pr_view_json(
+        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        review_decision="APPROVED",
+        head_oid="b" * 40,
     )
-    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
-    gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid, "--auto"])
-    gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
-    git_stub = CommandStub(consume=True)
-    for git_args, stdout in [
-        (["branch", "--show-current"], "feature/example\n"),
-        (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
-        (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
-        (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
-        (["branch", "--show-current"], "feature/example\n"),
-        (["rev-parse", "HEAD"], head_oid + "\n"),
-        (["rev-parse", "HEAD"], head_oid + "\n"),
-        (["rev-parse", "HEAD"], head_oid + "\n"),
-        (["status", "--short"], ""),
-        (["branch", "--show-current"], "feature/example\n"),
-        (["push", "origin", "--delete", "feature/example"], ""),
-        (["ls-remote", "--heads", "origin", "feature/example"], ""),
-        (["checkout", "main"], ""),
-        (["pull", "--ff-only", "origin", "main"], ""),
-        (["branch", "-d", "feature/example"], ""),
-        (["branch", "--show-current"], "main\n"),
-    ]:
-        git_stub.add(git_args, stdout=stdout)
-    allow_current_base(git_stub, head_oid)
-    allow_cleanup(git_stub, project)
-    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
-    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
-    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(module, "gh", gh_stub)
-    monkeypatch.setattr(module, "git", git_stub)
+    changes_requested = pr_view_json(
+        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        review_decision="CHANGES_REQUESTED",
+        head_oid="b" * 40,
+    )
+    blocked = "X Pull request owner/repo#90 is not mergeable: the base branch policy prohibits the merge.\n"
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_responses=[(approved, "", 0)] * 4 + [(changes_requested, "", 0)],
+        merge_responses=[(blocked, 1)],
+        required_buckets=("pass", "pass"),
+    )
 
-    result = invoke_pr_flow(complete_args(project), module=module)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-    assert ("pr", "merge", "12", "--merge", "--match-head-commit", head_oid, "--auto") in gh_stub.calls
+    assert result.returncode == 1
+    assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
+    assert "status: merge_complete" not in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "review_gate_blocking"
+    assert status["details"]["reviewDecision"] == "CHANGES_REQUESTED"
 
 
 def test_complete_rejects_unknown_merge_strategy(tmp_path: Path, monkeypatch) -> None:

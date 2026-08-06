@@ -39,6 +39,7 @@ CHECK_GATE_CANCELLED = "CANCELLED"
 CHECK_GATE_UNAVAILABLE = "UNAVAILABLE"
 INITIAL_CHECK_WINDOW_SECONDS = 60
 INITIAL_CHECK_POLL_SECONDS = 5
+RULESET_MERGE_WINDOW_SECONDS = 60
 CHECK_OBSERVATION_WAIT = "wait"
 CHECK_OBSERVATION_ONCE = "once"
 GH_PR_VIEW_RETRIES_ENV = "PR_FLOW_GH_PR_VIEW_RETRIES"
@@ -733,7 +734,7 @@ RECOVERABLE_NEXT_ACTIONS = {
         "nextAction": "Rerun the same PR Flow command against the current base commit.",
     },
     "ruleset_merge_blocking": {
-        "nextAction": "Wait for ruleset requirements to pass or enable auto-merge, then rerun the same PR Flow command.",
+        "nextAction": "Wait for ruleset requirements to pass, then rerun the same PR Flow command.",
     },
     "invalid_fixes": {
         "nextAction": "Fix the invalid issue references, then rerun the same PR Flow command.",
@@ -1446,11 +1447,6 @@ def gh_pr_merge_policy_blocked(result: subprocess.CompletedProcess[str]) -> bool
     return "base branch policy prohibits the merge" in text
 
 
-def gh_pr_merge_auto_suggested(result: subprocess.CompletedProcess[str]) -> bool:
-    text = f"{result.stdout}\n{result.stderr}".lower()
-    return "add the --auto flag" in text or "add --auto" in text
-
-
 def auto_push_current_branch_if_needed(
     project: Path,
     config: dict[str, Any],
@@ -1849,7 +1845,7 @@ def head_oid(project: Path) -> str:
     return require_git_success(project, "git_head_oid_failed", "rev-parse", "HEAD").stdout.strip()
 
 
-def merge_pr(project: Path, config: dict[str, Any], pr: dict[str, Any], *, auto: bool = False) -> dict[str, Any] | None:
+def merge_pr(project: Path, config: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any] | None:
     pr_number = pr.get("number")
     if isinstance(pr_number, bool) or not isinstance(pr_number, (int, str)) or str(pr_number) == "":
         raise PrFlowError(
@@ -1886,8 +1882,6 @@ def merge_pr(project: Path, config: dict[str, Any], pr: dict[str, Any], *, auto:
         )
 
     merge_args = ["pr", "merge", str(pr_number), strategy_flag, "--match-head-commit", current_head_oid]
-    if auto:
-        merge_args.append("--auto")
     result = gh(project, *merge_args)
     if result.returncode != 0:
         details = command_failure_details("gh_pr_merge_failed", result)
@@ -1901,7 +1895,6 @@ def merge_pr(project: Path, config: dict[str, Any], pr: dict[str, Any], *, auto:
         )
         if gh_pr_merge_policy_blocked(result):
             details["reason"] = "ruleset_merge_blocking"
-            details["autoMergeSuggested"] = gh_pr_merge_auto_suggested(result)
             raise PrFlowError("ruleset_merge_blocking", add_recovery_action(details))
         raise PrFlowError("gh_pr_merge_failed", details)
     return None
@@ -2033,41 +2026,54 @@ def retry_merge_after_ruleset_block(
     skip_review_gate: bool = False,
     next_command: str | None = None,
 ) -> dict[str, Any] | None:
-    current = sync_pr(project, pr)
-    require_same_pr_commits(pr, current)
-    check_stop = wait_for_checks(project, current, wait_config_from_config(config), next_command)
-    if check_stop is not None:
-        return check_stop
-    if not skip_review_gate:
-        review_stop = check_review_gate(project, config, current)
-        if review_stop is not None:
-            return review_stop
-    require_same_pr_commits(pr, sync_pr(project, current))
-    retry_with_auto = merge_details.get("autoMergeSuggested") is True
-    try:
-        merge_pr(project, config, current, auto=retry_with_auto)
-    except PrFlowError as exc:
-        if exc.reason != "ruleset_merge_blocking":
-            raise
-        if not retry_with_auto and exc.details.get("autoMergeSuggested") is True:
-            refreshed = sync_pr(project, current)
-            require_same_pr_commits(pr, refreshed)
-            current = refreshed
-            try:
-                merge_pr(project, config, current, auto=True)
-            except PrFlowError as auto_exc:
-                if auto_exc.reason == "ruleset_merge_blocking":
-                    raise PrFlowError(
-                        "ruleset_merge_blocking",
-                        ruleset_retry_failure_details(merge_details, auto_exc.details, 2, next_command),
-                    ) from auto_exc
+    started_at = time.monotonic()
+    retry_attempts = 0
+    last_merge_details = merge_details
+    wait_config = wait_config_from_config(config)
+    poll_seconds = max(int(wait_config.get("pollSeconds", 15)), 1)
+
+    while True:
+        if retry_attempts:
+            remaining = RULESET_MERGE_WINDOW_SECONDS - (time.monotonic() - started_at)
+            if remaining <= 0:
+                raise PrFlowError(
+                    "ruleset_merge_blocking",
+                    ruleset_retry_failure_details(merge_details, last_merge_details, retry_attempts, next_command),
+                )
+            time.sleep(min(poll_seconds, remaining))
+            if time.monotonic() - started_at >= RULESET_MERGE_WINDOW_SECONDS:
+                raise PrFlowError(
+                    "ruleset_merge_blocking",
+                    ruleset_retry_failure_details(merge_details, last_merge_details, retry_attempts, next_command),
+                )
+
+        current = sync_pr(project, pr)
+        require_same_pr_commits(pr, current)
+        gate = observe_check_gate(project, current, wait_config, CHECK_OBSERVATION_ONCE)
+        check_stop = check_gate_stop_state(gate, next_command)
+        if check_stop is not None:
+            return check_stop
+        current = sync_pr(project, current)
+        require_same_pr_commits(pr, current)
+        if not skip_review_gate:
+            review_stop = check_review_gate(project, config, current)
+            if review_stop is not None:
+                return review_stop
+
+        try:
+            merge_pr(project, config, current)
+        except PrFlowError as exc:
+            if exc.reason != "ruleset_merge_blocking":
                 raise
-            return None
-        raise PrFlowError(
-            "ruleset_merge_blocking",
-            ruleset_retry_failure_details(merge_details, exc.details, 1, next_command),
-        ) from exc
-    return None
+            retry_attempts += 1
+            last_merge_details = exc.details
+            if time.monotonic() - started_at >= RULESET_MERGE_WINDOW_SECONDS:
+                raise PrFlowError(
+                    "ruleset_merge_blocking",
+                    ruleset_retry_failure_details(merge_details, last_merge_details, retry_attempts, next_command),
+                ) from exc
+            continue
+        return None
 
 
 def review_gate_mode(config: dict[str, Any]) -> Any:
