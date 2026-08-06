@@ -450,6 +450,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_pr_flow_cli.py::test_diagnose_reports_active_lock_without_writing_status': (
         'covers PR Flow read-only diagnosis while a real operation lock is held; function=test_diagnose_reports_active_lock_without_writing_status'
     ),
+    'tests/test_pr_flow_cli.py::test_pi_tool_runs_packaged_complete_through_merge_and_cleanup': (
+        'covers the packaged Pi pr_flow tool through a real process, temporary git repository, merge, and cleanup; function=test_pi_tool_runs_packaged_complete_through_merge_and_cleanup'
+    ),
     'tests/test_pr_flow_cli.py::test_linked_worktrees_use_independent_process_locks_and_status': (
         'covers linked-worktree isolation across real PR Flow processes; function=test_linked_worktrees_use_independent_process_locks_and_status'
     ),
