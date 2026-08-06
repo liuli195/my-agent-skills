@@ -23,6 +23,6 @@ GitHub Issue（问题）#296
 - Red（红灯）：把同工作树公开初始化测试放回票据起始提交运行，旧实现返回 `toolchain_same_worktree_unsupported`。
 - Green（绿灯）：公开 PR Flow 测试覆盖同工作树初始化与交付、首次同步、二次无差异、单插件身份变化、共享生命周期同时变化、非法身份和不可复现提交。
 - 真实入口冒烟：隔离 Git（版本管理）仓库通过公开 `init`、`complete` 和 `tweak` 入口写入双工具记录；第二次运行不新增同步提交，缺少实现提交时在任何工具链写入前停止。
-- 工具身份回归：MySpec 保留无关提交之前的已发布实现提交，并拒绝脏或仅本地实现；Build and Verify 报告受控已发布实现提交。
+- 工具身份回归：MySpec 在 Windows 换行和本地尚无远端新 head 对象时仍保留无关提交之前的已发布实现提交，并拒绝脏、仅本地或远端已删除实现；Build and Verify 报告受控已发布实现提交。
 - 统一快速验证通过，`checked` 非空，包含 PR Flow、MySpec、Build and Verify、共享生命周期和运行时边界检查。
-- Review（审查）：待完成。
+- Review（审查）：最终双轴审查发现 Windows 换行会破坏提交匹配，以及陈旧或本地未知的远端 head 会造成错误身份判断；增加规范化、来源恢复和按当前远端 head 安全取证后完成针对性复核，Standards（规范）与 Spec（规格）均无剩余阻断。
