@@ -3357,25 +3357,96 @@ def test_packed_myspec_dev_doctor_identity_ignores_unrelated_files_and_tracks_cl
 
     first = run_cli(executable, "doctor", env=env, cwd=source)
     assert first.returncode == 0, first.stderr
-    first_identity = json.loads(first.stdout)["toolchain"]["implementationIdentity"]
+    first_report = json.loads(first.stdout)
+    first_identity = first_report["toolchain"]["implementationIdentity"]
+    assert first_report["toolchain"]["sourceCommit"] == subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source, check=True, text=True, capture_output=True
+    ).stdout.strip()
 
     write(source / "unrelated.txt", "does not ship in the MySpec package")
     unrelated = run_cli(executable, "doctor", env=env, cwd=source)
     assert unrelated.returncode == 0, unrelated.stderr
-    assert json.loads(unrelated.stdout)["toolchain"]["implementationIdentity"] == first_identity
+    unrelated_report = json.loads(unrelated.stdout)
+    assert unrelated_report["toolchain"]["implementationIdentity"] == first_identity
+    assert unrelated_report["toolchain"]["sourceCommit"] == first_report["toolchain"]["sourceCommit"]
 
     skill = source / "plugins" / "my-spec" / "skills" / "my-spec" / "SKILL.md"
     write(skill, skill.read_text(encoding="utf-8") + "\nsecond")
     changed = run_cli(executable, "doctor", env=env, cwd=source)
     assert changed.returncode == 0, changed.stderr
-    skill_identity = json.loads(changed.stdout)["toolchain"]["implementationIdentity"]
+    changed_report = json.loads(changed.stdout)
+    skill_identity = changed_report["toolchain"]["implementationIdentity"]
     assert skill_identity != first_identity
+    assert "sourceCommit" not in changed_report["toolchain"]
+    assert subprocess.run(["git", "add", skill], cwd=source, check=False).returncode == 0
+    assert subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=MySpec Test",
+            "-c",
+            "user.email=myspec@example.invalid",
+            "commit",
+            "-m",
+            "local implementation",
+        ],
+        cwd=source,
+        check=False,
+    ).returncode == 0
+    local_only = run_cli(executable, "doctor", env=env, cwd=source)
+    assert local_only.returncode == 0, local_only.stderr
+    assert "sourceCommit" not in json.loads(local_only.stdout)["toolchain"]
 
     packer = source / "plugins" / "tool-lifecycle" / "pack.py"
     write(packer, packer.read_text(encoding="utf-8") + "\n# shared packaging change")
     shared_changed = run_cli(executable, "doctor", env=env, cwd=source)
     assert shared_changed.returncode == 0, shared_changed.stderr
     assert json.loads(shared_changed.stdout)["toolchain"]["implementationIdentity"] != skill_identity
+
+
+def test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit(
+    tmp_path: Path,
+) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = install_packed_myspec(installed)
+    source = controlled_dev_source(tmp_path)
+    env = controlled_dev_env(isolated_myspec_env(tmp_path, npm_prefix_for(installed_package)), source)
+    assert run_cli(executable, "init", "--dev", "--source", source, env=env, cwd=source).returncode == 0
+
+    first = json.loads(run_cli(executable, "doctor", env=env, cwd=source).stdout)
+    published_commit = first["toolchain"]["sourceCommit"]
+    write(source / "unrelated.txt", "does not ship in the MySpec package")
+    assert subprocess.run(["git", "add", "unrelated.txt"], cwd=source, check=False).returncode == 0
+    assert subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=MySpec Test",
+            "-c",
+            "user.email=myspec@example.invalid",
+            "commit",
+            "-m",
+            "unrelated",
+        ],
+        cwd=source,
+        check=False,
+    ).returncode == 0
+    assert subprocess.run(["git", "push", "origin", "HEAD:refs/heads/main"], cwd=source, check=False).returncode == 0
+    assert subprocess.run(["git", "for-each-ref", "--format=%(refname)", "refs/remotes/origin"], cwd=source, check=True, text=True, capture_output=True).stdout
+    for ref in subprocess.run(
+        ["git", "for-each-ref", "--format=%(refname)", "refs/remotes/origin"],
+        cwd=source,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.splitlines():
+        assert subprocess.run(["git", "update-ref", "-d", ref], cwd=source, check=False).returncode == 0
+
+    diagnosed = run_cli(executable, "doctor", env=env, cwd=source)
+
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    assert json.loads(diagnosed.stdout)["toolchain"]["sourceCommit"] == published_commit
 
 
 def test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged(

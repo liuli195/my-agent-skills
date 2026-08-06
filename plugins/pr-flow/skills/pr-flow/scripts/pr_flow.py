@@ -90,18 +90,6 @@ def toolchain_identities(project: Path) -> dict[str, dict[str, str]]:
         if not isinstance(toolchain, dict):
             raise PrFlowError("toolchain_doctor_failed", {"reason": "toolchain_doctor_failed", "tool": key})
         mode = toolchain.get("mode")
-        binding = report.get("binding") if isinstance(report, dict) else None
-        if mode == "dev" and isinstance(binding, dict) and binding.get("worktreeMatch") is True:
-            raise PrFlowError(
-                "toolchain_same_worktree_unsupported",
-                {
-                    "reason": "toolchain_same_worktree_unsupported",
-                    "tool": key,
-                    "sourceWorktree": binding.get("sourceWorktree"),
-                    "targetWorktree": binding.get("targetWorktree"),
-                    "nextAction": "Run PR Flow from an isolated target worktree or switch the tools to release mode.",
-                },
-            )
         identity = {"mode": mode, "packageName": toolchain.get("packageName")}
         if mode == "release":
             identity["packageVersion"] = toolchain.get("packageVersion")
@@ -110,7 +98,18 @@ def toolchain_identities(project: Path) -> dict[str, dict[str, str]]:
                 "sourceRepository": toolchain.get("sourceRepository"),
                 "sourceCommit": toolchain.get("sourceCommit"),
                 "packageDirectory": toolchain.get("packageDirectory"),
+                "implementationIdentity": toolchain.get("implementationIdentity"),
             })
+            source_commit = identity.get("sourceCommit")
+            if not isinstance(source_commit, str) or re.fullmatch(r"[0-9a-f]{40}", source_commit) is None:
+                raise PrFlowError(
+                    "toolchain_source_commit_unavailable",
+                    {
+                        "reason": "toolchain_source_commit_unavailable",
+                        "tool": key,
+                        "nextAction": "Publish the exact implementation commit, then rerun PR Flow init.",
+                    },
+                )
         if identity.get("packageName") != package_name or not valid_toolchain_identity(identity, package_directory):
             raise PrFlowError("toolchain_identity_invalid", {"reason": "toolchain_identity_invalid", "tool": key})
         identities[key] = identity
@@ -136,12 +135,15 @@ def valid_toolchain_identity(identity: dict[str, Any], package_directory: str) -
     if identity.get("mode") == "release":
         version = identity.get("packageVersion")
         return isinstance(version, str) and valid_semver(version)
+    implementation_identity = identity.get("implementationIdentity")
     return (
         identity.get("mode") == "dev"
         and identity.get("sourceRepository") == OFFICIAL_TOOLCHAIN_REPOSITORY
         and isinstance(identity.get("sourceCommit"), str)
         and re.fullmatch(r"[0-9a-f]{40}", identity["sourceCommit"]) is not None
         and identity.get("packageDirectory") == package_directory
+        and isinstance(implementation_identity, str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", implementation_identity) is not None
     )
 
 
@@ -721,6 +723,9 @@ RECOVERABLE_NEXT_ACTIONS = {
     "invalid_fixes": {
         "nextAction": "Fix the invalid issue references, then rerun the same PR Flow command.",
     },
+    "toolchain_source_commit_unavailable": {
+        "nextAction": "Publish the exact implementation commit, then rerun PR Flow init.",
+    },
     "pr_missing": {
         "nextAction": "Run PR Flow complete with summary and scope to create the pull request.",
     },
@@ -739,6 +744,7 @@ RECOVERABLE_STOP_STATUSES = {
     "checks_or_review_blocking": "REPLY_OR_FIX_REQUIRED",
     "checks_unavailable": "DISPATCH_REQUIRED",
     "invalid_fixes": "REPLY_OR_FIX_REQUIRED",
+    "toolchain_source_commit_unavailable": "DISPATCH_REQUIRED",
 }
 
 
@@ -2079,11 +2085,9 @@ def run_init(args: argparse.Namespace) -> int:
         identities = toolchain_identities(project)
     except PrFlowError as exc:
         print(f"status: {exc.reason}")
-        if exc.reason == "toolchain_same_worktree_unsupported":
-            for key in ("sourceWorktree", "targetWorktree", "nextAction"):
-                value = exc.details.get(key)
-                if isinstance(value, str) and value:
-                    print(f"{key}: {value}")
+        next_action = exc.details.get("nextAction")
+        if isinstance(next_action, str) and next_action:
+            print(f"nextAction: {next_action}")
         return 1
 
     config_text = yaml.safe_dump(config, allow_unicode=True, sort_keys=False)

@@ -207,14 +207,113 @@ def _implementation_files(package_root: Path) -> list[tuple[str, bytes]]:
     return sorted(files.items())
 
 
-def _implementation_identity_for_package(package_root: Path) -> str:
+def _implementation_identity_for_files(files: list[tuple[str, bytes]]) -> str:
     digest = hashlib.sha256()
-    for relative, content in _implementation_files(package_root):
+    for relative, content in files:
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
         digest.update(len(content).to_bytes(8, "big"))
         digest.update(content)
     return "sha256:" + digest.hexdigest()
+
+
+def _implementation_identity_for_package(package_root: Path) -> str:
+    return _implementation_identity_for_files(_implementation_files(package_root))
+
+
+def _implementation_source_paths(package_root: Path) -> list[str]:
+    source_root = package_root.parents[1]
+    package_prefix = package_root.relative_to(source_root)
+    paths: list[str] = []
+    for relative, _content in _implementation_files(package_root):
+        if relative == "python/management.py":
+            path = source_root / "plugins" / "tool-lifecycle" / "python" / "management.py"
+        elif relative == "tool-lifecycle/pack.py":
+            path = source_root / "plugins" / "tool-lifecycle" / "pack.py"
+        else:
+            path = package_prefix / relative
+        paths.append(path.as_posix())
+    return sorted(set(paths))
+
+
+def _source_commit_is_published(source_root: Path, commit: str) -> bool:
+    remote = _run("git", "ls-remote", "origin", cwd=source_root)
+    if remote.returncode != 0:
+        return False
+    advertised = {
+        line.split("\t", 1)[0]
+        for line in remote.stdout.splitlines()
+        if "\t" in line
+    }
+    if commit in advertised:
+        return True
+    refs = _run(
+        "git",
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/remotes/origin",
+        cwd=source_root,
+    )
+    if refs.returncode != 0:
+        return False
+    for ref in refs.stdout.splitlines():
+        if _run("git", "merge-base", "--is-ancestor", commit, ref, cwd=source_root).returncode == 0:
+            return True
+    return _run("git", "fetch", "--dry-run", "--no-tags", "origin", commit, cwd=source_root).returncode == 0
+
+
+def _git_blob(source_root: Path, spec: str) -> bytes | None:
+    executable = shutil.which("git") or "git"
+    command: list[str] | str = [executable, "show", spec]
+    shell = False
+    if os.name == "nt" and Path(executable).suffix.lower() in {".cmd", ".bat"}:
+        command = subprocess.list2cmdline(command)
+        shell = True
+    try:
+        result = subprocess.run(command, cwd=source_root, check=False, capture_output=True, shell=shell)
+    except FileNotFoundError:
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def _implementation_source_commit(package_root: Path, identity: str) -> str:
+    source_root = package_root.parents[1]
+    paths = _implementation_source_paths(package_root)
+    status = _run("git", "status", "--porcelain", "--", *paths, cwd=source_root)
+    if status.returncode != 0 or status.stdout.strip():
+        raise ManagementError("implementation_commit_unavailable: dirty_closure")
+    remote = _run("git", "remote", "get-url", "origin", cwd=source_root)
+    if remote.returncode != 0 or _git_host_path(remote.stdout.strip()) != ("github.com", "liuli195/my-agent-skills"):
+        raise ManagementError("implementation_commit_unavailable: official_remote")
+    history = _run("git", "log", "--format=%H", "--all", "--", *paths, cwd=source_root)
+    if history.returncode != 0:
+        raise ManagementError("implementation_commit_unavailable: history")
+    current_files = _implementation_files(package_root)
+    package_prefix = package_root.relative_to(source_root)
+    for commit in history.stdout.splitlines():
+        if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+            continue
+        digest_files: list[tuple[str, bytes]] = []
+        available = True
+        for relative, _content in current_files:
+            if relative == "python/management.py":
+                path = "plugins/tool-lifecycle/python/management.py"
+            elif relative == "tool-lifecycle/pack.py":
+                path = "plugins/tool-lifecycle/pack.py"
+            else:
+                path = (package_prefix / relative).as_posix()
+            content = _git_blob(source_root, f"{commit}:{path}")
+            if content is None:
+                available = False
+                break
+            digest_files.append((relative, content))
+        if (
+            available
+            and _implementation_identity_for_files(digest_files) == identity
+            and _source_commit_is_published(source_root, commit)
+        ):
+            return commit
+    raise ManagementError("implementation_commit_unavailable: no_published_match")
 
 
 def implementation_identity() -> str:
@@ -1709,9 +1808,10 @@ def _doctor_package() -> dict[str, object]:
         "packageName": PACKAGE_NAME,
     }
     if linked:
-        toolchain["implementationIdentity"] = _implementation_identity_for_package(real)
+        implementation_identity = _implementation_identity_for_package(real)
+        toolchain["implementationIdentity"] = implementation_identity
         try:
-            _, _, commit = _validate_dev_source(real.parents[1])
+            commit = _implementation_source_commit(real, implementation_identity)
         except ManagementError:
             pass
         else:

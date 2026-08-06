@@ -480,11 +480,17 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_pr_flow_cli.py::test_complete_rereads_the_new_baseline_with_bounded_toolchain_retries': (
         'covers the public complete CLI bounded toolchain identity retries from each new commit baseline; function=test_complete_rereads_the_new_baseline_with_bounded_toolchain_retries'
     ),
-    'tests/test_pr_flow_cli.py::test_init_stops_before_writing_for_same_worktree_toolchain_binding': (
-        'covers the public init CLI stopping before writes for a same-worktree toolchain binding; function=test_init_stops_before_writing_for_same_worktree_toolchain_binding'
+    'tests/test_pr_flow_cli.py::test_init_accepts_same_worktree_with_stable_toolchain_identities': (
+        'covers the public init CLI accepting a same-worktree development binding with stable toolchain identities; function=test_init_accepts_same_worktree_with_stable_toolchain_identities'
     ),
-    'tests/test_pr_flow_cli.py::test_lifecycle_stops_before_toolchain_commit_for_same_worktree_binding': (
-        'covers the public complete and tweak CLI stopping before toolchain commits for a same-worktree binding; function=test_lifecycle_stops_before_toolchain_commit_for_same_worktree_binding'
+    'tests/test_pr_flow_cli.py::test_init_fails_closed_when_dev_implementation_commit_is_unavailable': (
+        'covers the public init CLI failing closed when no CI-reproducible development implementation commit is reported; function=test_init_fails_closed_when_dev_implementation_commit_is_unavailable'
+    ),
+    'tests/test_pr_flow_cli.py::test_lifecycle_syncs_same_worktree_toolchain_before_remote_flow': (
+        'covers public complete and tweak synchronization continuing from a same-worktree development binding; function=test_lifecycle_syncs_same_worktree_toolchain_before_remote_flow'
+    ),
+    'tests/test_pr_flow_cli.py::test_toolchain_sync_converges_for_independent_and_shared_tool_changes': (
+        'covers public PR Flow synchronization convergence for independent plugin and shared lifecycle identity updates; function=test_toolchain_sync_converges_for_independent_and_shared_tool_changes'
     ),
     'tests/test_pr_flow_cli.py::test_init_uses_target_project_as_toolchain_doctor_cwd': (
         'covers the public init CLI running tool diagnostics in the target project directory; function=test_init_uses_target_project_as_toolchain_doctor_cwd'
@@ -797,6 +803,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     ),
     'tests/test_my_spec.py::test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged': (
         'covers the installed MySpec CLI reusing confirmation when a development implementation changes without changing the observable diff; function=test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit': (
+        'covers the installed MySpec CLI retaining a CI-reproducible published ancestor after an unrelated source commit; function=test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit'
     ),
     'tests/test_my_spec.py::test_packed_myspec_requires_reconfirmation_when_implementation_changes_the_diff': (
         'covers the installed MySpec CLI requiring reconfirmation when a development implementation changes the observable diff; function=test_packed_myspec_requires_reconfirmation_when_implementation_changes_the_diff'

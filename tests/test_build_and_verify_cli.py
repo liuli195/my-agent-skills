@@ -834,6 +834,12 @@ def test_packed_build_and_verify_accepts_controlled_ssh_dev_source(tmp_path: Pat
     assert report["mode"] == "dev"
     assert report["source"] == str(source)
     assert _git(source, "status", "--porcelain").stdout == ""
+    diagnosed = subprocess.run(
+        [executable, "doctor"], cwd=source, text=True, capture_output=True, check=False, env=env
+    )
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    toolchain = json.loads(diagnosed.stdout)["toolchain"]
+    assert toolchain["sourceCommit"] == _git(source, "rev-parse", "HEAD").stdout.strip()
 
 
 def test_packed_build_and_verify_dev_identity_controls_public_verify_cache(
