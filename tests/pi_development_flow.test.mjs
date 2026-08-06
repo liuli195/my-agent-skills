@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -458,7 +458,7 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
     );
 
     assert.equal(spawnRequest.type, "Implementer");
-    assert.equal(spawnRequest.options.cwd, worktree);
+    assert.equal(await realpath(spawnRequest.options.cwd), await realpath(worktree));
     assert.equal(spawnRequest.options.isolated, false);
     assert.match(spawnRequest.prompt, /myspec[\\/]changes[\\/]smoke[\\/]issues[\\/]01-marker\.md/);
     assert.doesNotMatch(spawnRequest.prompt, /Implement ticket 03/);

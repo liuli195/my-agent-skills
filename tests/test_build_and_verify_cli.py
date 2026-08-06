@@ -114,6 +114,7 @@ def test_repository_automation_uses_build_and_verify_cli() -> None:
     assert all(".build-and-verify/runtime/build_and_verify.py" not in command for command in commands)
     assert all("scripts/build_and_verify.py" not in command for command in commands)
     assert "build-and-verify verify --project . --full" not in commands[0]
+    assert "node plugins/build-and-verify/bin/build-and-verify.js verify --project . --full" in commands[0]
     assert "build-and-verify verify --project source --full" not in commands[1]
 
 
@@ -137,6 +138,58 @@ def test_full_verify_is_the_cross_platform_required_gate() -> None:
     assert gate_step["env"]["WINDOWS_RESULT"] == "${{ needs.windows-worktree-smoke.result }}"
     assert 'if [ "$LINUX_RESULT" != "success" ] || [ "$WINDOWS_RESULT" != "success" ]; then' in gate_run
     assert "exit 1" in gate_run
+
+
+def test_windows_pr_verification_uses_fixed_baseline_and_manual_full_mode() -> None:
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github" / "workflows" / "full-verify.yml").read_text(encoding="utf-8")
+    )
+    windows = workflow["jobs"]["windows-worktree-smoke"]
+    checkout = next(step for step in windows["steps"] if step.get("name") == "Checkout")
+    fast = next(
+        step for step in windows["steps"] if step.get("name") == "Run PR fast verification"
+    )
+    manual = next(
+        step
+        for step in windows["steps"]
+        if step.get("name") == "Run manual Windows full verification"
+    )
+    fast_run = fast["run"]
+    manual_run = manual["run"]
+    step_names = [step.get("name") for step in windows["steps"]]
+
+    assert checkout["with"]["fetch-depth"] == 0
+    assert windows["env"]["PYTHONUTF8"] == "1"
+    assert step_names.index("Run PR fast verification") < step_names.index(
+        "Initialize linked worktree"
+    )
+    assert step_names.index("Run manual Windows full verification") < step_names.index(
+        "Initialize linked worktree"
+    )
+    assert step_names.index("Initialize linked worktree") < step_names.index(
+        "Build from linked worktree"
+    )
+    assert fast["env"]["BASELINE"] == "${{ github.event.pull_request.base.sha }}"
+    assert fast["if"] == "${{ github.event_name == 'pull_request' }}"
+    assert manual["if"] == "${{ github.event_name == 'workflow_dispatch' }}"
+    assert ". ./.venv/Scripts/Activate.ps1" in fast_run
+    assert "$env:BUILD_AND_VERIFY_PYTHON = (Get-Command python).Source" in fast_run
+    assert fast_run.index("Activate.ps1") < fast_run.index("BUILD_AND_VERIFY_PYTHON")
+    assert fast_run.index("BUILD_AND_VERIFY_PYTHON") < fast_run.index("build-and-verify verify")
+    assert "build-and-verify verify --project . --base $env:BASELINE" in fast_run
+    assert "checked:" in fast_run
+    assert "status: passed" in fast_run
+    assert "exit 1" in fast_run
+    assert ". ./.venv/Scripts/Activate.ps1" in manual_run
+    assert "$env:BUILD_AND_VERIFY_PYTHON = (Get-Command python).Source" in manual_run
+    assert manual_run.index("Activate.ps1") < manual_run.index("BUILD_AND_VERIFY_PYTHON")
+    assert manual_run.index("BUILD_AND_VERIFY_PYTHON") < manual_run.index(
+        "build-and-verify.js verify"
+    )
+    assert "node plugins/build-and-verify/bin/build-and-verify.js verify --project . --full" in manual_run
+    assert "pytest" not in fast_run
+    assert "build_and_verify.py" not in fast_run
+    assert "scripts/" not in fast_run
 
 
 def test_build_and_verify_package_excludes_legacy_skill_runtime() -> None:

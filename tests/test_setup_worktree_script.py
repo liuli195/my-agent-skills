@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -10,6 +11,25 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "setup-worktree.ps1"
+_ANSI_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])")
+
+
+def normalize_powershell_output(result: subprocess.CompletedProcess[str]) -> str:
+    output = "\n".join(part for part in (result.stdout, result.stderr) if part)
+    return " ".join(_ANSI_ESCAPE.sub("", output).split())
+
+
+def test_normalize_powershell_output_removes_host_ansi_and_whitespace() -> None:
+    result = subprocess.CompletedProcess(
+        ["powershell", "-File", str(SCRIPT)],
+        1,
+        "\x1b[31mShared Node.js dependencies are\n",
+        "\x1b[0mmissing. Run scripts\\setup-worktree.ps1\n",
+    )
+
+    assert normalize_powershell_output(result) == (
+        "Shared Node.js dependencies are missing. Run scripts\\setup-worktree.ps1"
+    )
 
 
 def test_repository_owns_shared_node_dependencies() -> None:
@@ -61,9 +81,8 @@ def test_setup_worktree_script_links_shared_node_dependencies(
     tmp_path: Path, shell_name: str
 ) -> None:
     shell = shutil.which(shell_name)
-    true = shutil.which("true")
-    if not shell or not true:
-        pytest.skip(f"{shell_name} and true executables are required")
+    if not shell:
+        pytest.skip(f"{shell_name} executable is required")
 
     project = tmp_path / "project"
     project.mkdir()
@@ -117,13 +136,16 @@ def test_setup_worktree_script_links_shared_node_dependencies(
 
     missing = setup()
     assert missing.returncode != 0
-    assert "Shared Node.js dependencies are missing" in missing.stdout + missing.stderr
     assert not npm_marker.exists()
+    assert not py_marker.exists()
+    assert "Shared Node.js dependencies are missing" in normalize_powershell_output(missing)
 
     shared_node_modules.mkdir()
     stale_node = setup()
     assert stale_node.returncode != 0
-    assert "Shared Node.js dependencies are stale" in stale_node.stdout + stale_node.stderr
+    assert not npm_marker.exists()
+    assert not py_marker.exists()
+    assert "Shared Node.js dependencies are stale" in normalize_powershell_output(stale_node)
 
     node_fingerprint = "\n".join(
         f"{hashlib.sha256((project / manifest).read_text(encoding='utf-8').replace(chr(13) + chr(10), chr(10)).encode()).hexdigest().upper()} {manifest}"
@@ -132,13 +154,17 @@ def test_setup_worktree_script_links_shared_node_dependencies(
     (shared_node_modules / ".package-lock.sha256").write_text(node_fingerprint + "\n", encoding="ascii")
     missing_python = setup()
     assert missing_python.returncode != 0
-    assert "Shared Python environment is missing" in missing_python.stdout + missing_python.stderr
+    assert not npm_marker.exists()
+    assert not py_marker.exists()
+    assert "Shared Python environment is missing" in normalize_powershell_output(missing_python)
 
     shared_python.parent.mkdir(parents=True)
-    shutil.copy2(true, shared_python)
+    shared_python.touch()
     stale_python = setup()
     assert stale_python.returncode != 0
-    assert "Shared Python environment is stale" in stale_python.stdout + stale_python.stderr
+    assert not npm_marker.exists()
+    assert not py_marker.exists()
+    assert "Shared Python environment is stale" in normalize_powershell_output(stale_python)
 
     (shared_venv / ".requirements.sha256").write_text(
         f"{fingerprint} requirements-dev.txt\n", encoding="ascii"
@@ -157,13 +183,16 @@ def test_setup_worktree_script_links_shared_node_dependencies(
     (worktree / "package.json").write_text("{}", encoding="utf-8")
     result = setup()
     assert result.returncode != 0
-    assert "do not match 'package.json'" in result.stdout + result.stderr
     assert not npm_marker.exists()
+    assert not py_marker.exists()
+    assert "do not match 'package.json'" in normalize_powershell_output(result)
 
     shutil.copy2(project / "package.json", worktree / "package.json")
     venv_link.rmdir()
     venv_link.mkdir()
     existing = setup()
     assert existing.returncode != 0
-    assert "already exists and does not link" in existing.stdout + existing.stderr
+    assert not npm_marker.exists()
+    assert not py_marker.exists()
     assert venv_link.is_dir() and not venv_link.is_junction()
+    assert "already exists and does not link" in normalize_powershell_output(existing)

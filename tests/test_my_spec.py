@@ -93,6 +93,26 @@ def write(path: Path, text: str) -> None:
     path.write_text(text.rstrip() + "\n", encoding="utf-8")
 
 
+def controlled_git_script(git: str, remote: Path) -> str:
+    return (
+        "import subprocess\nimport sys\n"
+        f"git = {git!r}\n"
+        "def run_git(*args):\n"
+        "    command = [git, *args]\n"
+        "    shell = git.lower().endswith('.cmd')\n"
+        "    if shell:\n"
+        "        command = subprocess.list2cmdline(command)\n"
+        "    return subprocess.run(command, shell=shell)\n"
+        "args = sys.argv[1:]\n"
+        "if args == ['remote', 'get-url', 'origin']:\n"
+        "    print('https://github.com/liuli195/my-agent-skills')\n"
+        "    raise SystemExit()\n"
+        "if args == ['ls-remote', 'origin']:\n"
+        f"    raise SystemExit(run_git('ls-remote', {remote.as_uri()!r}).returncode)\n"
+        "raise SystemExit(run_git(*args).returncode)"
+    )
+
+
 def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
     source = tmp_path / "source"
     source.mkdir()
@@ -123,23 +143,11 @@ def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
         assert result.returncode == 0, result.stderr
     git = shutil.which("git")
     assert git is not None
-    if os.name == "nt":
-        git = str(Path(git).parents[2] / "cmd" / "git.exe")
     bin_dir = tmp_path / "controlled-git"
     bin_dir.mkdir()
     if os.name == "nt":
         script = bin_dir / "git.py"
-        write(
-            script,
-            "import subprocess\nimport sys\n"
-            "args = sys.argv[1:]\n"
-            "if args == ['remote', 'get-url', 'origin']:\n"
-            "    print('https://github.com/liuli195/my-agent-skills')\n"
-            "    raise SystemExit()\n"
-            "if args == ['ls-remote', 'origin']:\n"
-            f"    raise SystemExit(subprocess.run([{git!r}, 'ls-remote', {remote.as_uri()!r}]).returncode)\n"
-            f"raise SystemExit(subprocess.run([{git!r}, *args]).returncode)",
-        )
+        write(script, controlled_git_script(git, remote))
         write(bin_dir / "git.cmd", f'@"{sys.executable}" "{script}" %*')
     else:
         wrapper = bin_dir / "git"
@@ -149,10 +157,13 @@ def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
 
 
 def controlled_dev_env(env: dict[str, str], source: Path) -> dict[str, str]:
-    return {
-        **env,
-        "PATH": os.pathsep.join([str(source.parent / "controlled-git"), env["PATH"]]),
-    }
+    path_entries = [str(source.parent / "controlled-git"), env["PATH"]]
+    if os.name == "nt":
+        # Git for Windows' mingw executable launches its bundled shell.
+        git_shell = shutil.which("sh")
+        if git_shell is not None:
+            path_entries.append(str(Path(git_shell).parent))
+    return {**env, "PATH": os.pathsep.join(dict.fromkeys(path_entries))}
 
 
 def ready_state(cli: Path, root: Path, command: str = "add") -> Path:
@@ -3344,12 +3355,23 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
 
 
 def test_packed_myspec_dev_doctor_identity_ignores_unrelated_files_and_tracks_closure(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     installed = tmp_path / "installed"
     installed.mkdir()
     executable, installed_package = install_packed_myspec(installed)
     env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
+    if os.name == "nt":
+        real_git = shutil.which("git")
+        assert real_git is not None
+        shim = tmp_path / "git shim" / "git.cmd"
+        write(shim, f'@echo off\n@"{real_git}" %*')
+        original_which = shutil.which
+        monkeypatch.setattr(
+            shutil,
+            "which",
+            lambda command: str(shim) if command == "git" else original_which(command),
+        )
     source = controlled_dev_source(tmp_path, "first")
     env = controlled_dev_env(env, source)
 
@@ -4627,8 +4649,9 @@ def test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_st
 
 
 def windows_py_launcher() -> Path:
+    base_executable = Path(getattr(sys, "_base_executable", sys.executable))
     candidates = (
-        Path(sys.executable).parent.parent / "Launcher" / "py.exe",
+        base_executable.parent.parent / "Launcher" / "py.exe",
         Path(os.environ.get("SystemRoot", "C:/Windows")) / "py.exe",
         Path(shutil.which("py") or ""),
     )
@@ -4640,6 +4663,20 @@ def windows_py_launcher() -> Path:
     return launcher
 
 
+def test_windows_py_launcher_uses_base_interpreter_from_venv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base_python = tmp_path / "Python312" / "python.exe"
+    base_python.parent.mkdir()
+    launcher = tmp_path / "Launcher" / "py.exe"
+    launcher.parent.mkdir()
+    launcher.touch()
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "venv" / "Scripts" / "python.exe"))
+    monkeypatch.setattr(sys, "_base_executable", str(base_python))
+
+    assert windows_py_launcher() == launcher
+
+
 def run_launcher_selection(
     executable: Path,
     root: Path,
@@ -4648,13 +4685,18 @@ def run_launcher_selection(
 ) -> tuple[subprocess.CompletedProcess[str], list[Path], dict[str, Path]]:
     candidates = root / "candidates"
     candidates.mkdir(parents=True)
+    python_source = Path(
+        getattr(sys, "_base_executable", sys.executable)
+        if sys.platform == "win32"
+        else sys.executable
+    )
     paths: dict[str, Path] = {}
     reported_versions: dict[str, str] = {}
     for name, version in versions.items():
         if name == "py":
             source = windows_py_launcher()
         else:
-            source = sys.executable
+            source = python_source
         path = candidates / (f"{name}.exe" if sys.platform == "win32" else name)
         shutil.copy2(source, path)
         paths[name] = path.resolve()
@@ -4667,7 +4709,7 @@ def run_launcher_selection(
             (
                 str(candidates),
                 str(Path(shutil.which("node") or "").parent),
-                str(Path(sys.executable).parent),
+                str(python_source.parent),
             )
         ),
         "PYTHONPATH": str(root),
@@ -4676,13 +4718,13 @@ def run_launcher_selection(
     env.pop("MYSPEC_PYTHON", None)
     if override_version is not None:
         override = root / ("override.exe" if sys.platform == "win32" else "override")
-        shutil.copy2(sys.executable, override)
+        shutil.copy2(python_source, override)
         env["MYSPEC_PYTHON"] = str(override)
         paths["MYSPEC_PYTHON"] = override.resolve()
         if override_version == "3.11":
             reported_versions[os.path.normcase(str(paths["MYSPEC_PYTHON"]))] = override_version
     if sys.platform == "win32" and versions.get("py") == "3.11":
-        reported_versions[os.path.normcase(str(Path(sys.executable).resolve()))] = "3.11"
+        reported_versions[os.path.normcase(str(python_source.resolve()))] = "3.11"
     env["MYSPEC_TEST_VERSIONS"] = json.dumps(reported_versions)
     write(
         root / "sitecustomize.py",

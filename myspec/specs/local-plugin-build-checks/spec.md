@@ -190,3 +190,21 @@ The repository's active GitHub workflows MUST use a current artifact upload acti
 - **WHEN** an active repository workflow uploads release candidates
 - **THEN** each `actions/upload-artifact` reference MUST use `actions/upload-artifact@v6`
 - **THEN** no active workflow MUST reference `actions/upload-artifact@v4` or `actions/upload-artifact@v5`
+### Requirement: Windows（视窗系统）PR（拉取请求）验证使用固定基线
+
+本仓库的 Windows 平台验证任务 MUST 在 PR 事件中通过 Build and Verify（构建与验证）对固定目标提交运行受影响检查，并在手动触发时保留当前检出的完整验证入口；现有工作树构建和跨平台汇总门禁 MUST 保持有效。
+
+#### Scenario: PR 运行受影响的 Windows 验证
+
+- **WHEN** `Full Verify`（完整验证）工作流为 PR 当前提交运行
+- **THEN** Windows 平台任务 MUST 检出足以解析该 PR 固定目标提交的 Git（版本管理）历史
+- **THEN** Windows 平台任务 MUST 通过 Build and Verify 使用该固定提交作为快速验证基线
+- **THEN** 只有验证命令成功、`checked`（已检查）非空且最终状态为 `passed`（通过）时，该步骤才能成功
+- **THEN** 现有链接工作树初始化、环境激活和构建主路径 MUST 继续运行
+
+#### Scenario: 手动触发 Windows 完整验证
+
+- **WHEN** 维护者手动触发 `Full Verify` 工作流
+- **THEN** Windows 平台任务 MUST 通过当前检出的 Build and Verify 入口运行完整验证
+- **THEN** 完整验证返回非零结果时，Windows 平台任务 MUST 失败
+- **THEN** 最终 `Full Verify` 跨平台汇总任务 MUST 继续要求 Linux（操作系统）与 Windows 平台任务全部成功
