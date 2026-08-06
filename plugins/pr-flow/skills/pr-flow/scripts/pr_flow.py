@@ -42,6 +42,13 @@ INITIAL_CHECK_POLL_SECONDS = 5
 RULESET_MERGE_WINDOW_SECONDS = 60
 CHECK_OBSERVATION_WAIT = "wait"
 CHECK_OBSERVATION_ONCE = "once"
+CHECK_GATE_STOP_REASONS = {
+    CHECK_GATE_NOT_REPORTED: ("DISPATCH_REQUIRED", "checks_not_reported"),
+    CHECK_GATE_PENDING: ("DISPATCH_REQUIRED", "checks_pending"),
+    CHECK_GATE_FAILED: ("REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking"),
+    CHECK_GATE_CANCELLED: ("REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking"),
+    CHECK_GATE_UNAVAILABLE: ("DISPATCH_REQUIRED", "checks_unavailable"),
+}
 GH_PR_VIEW_RETRIES_ENV = "PR_FLOW_GH_PR_VIEW_RETRIES"
 PR_TEMPLATE = """## Summary
 
@@ -1358,13 +1365,7 @@ def check_gate_details(
 ) -> dict[str, Any]:
     summary = pr.get("statusCheckRollup")
     details: dict[str, Any] = {
-        "reason": {
-            CHECK_GATE_NOT_REPORTED: "checks_not_reported",
-            CHECK_GATE_PENDING: "checks_pending",
-            CHECK_GATE_FAILED: "checks_or_review_blocking",
-            CHECK_GATE_CANCELLED: "checks_or_review_blocking",
-            CHECK_GATE_UNAVAILABLE: "checks_unavailable",
-        }.get(state, "pr_state"),
+        "reason": CHECK_GATE_STOP_REASONS.get(state, ("", "pr_state"))[1],
         "checkGate": state,
         "pr": pr.get("number"),
         "headRefName": pr.get("headRefName"),
@@ -1405,14 +1406,7 @@ def check_gate_stop_state(gate: dict[str, Any], next_command: str | None = None)
     state = gate.get("state")
     if state == CHECK_GATE_PASSED:
         return None
-    reasons = {
-        CHECK_GATE_NOT_REPORTED: ("DISPATCH_REQUIRED", "checks_not_reported"),
-        CHECK_GATE_PENDING: ("DISPATCH_REQUIRED", "checks_pending"),
-        CHECK_GATE_FAILED: ("REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking"),
-        CHECK_GATE_CANCELLED: ("REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking"),
-        CHECK_GATE_UNAVAILABLE: ("DISPATCH_REQUIRED", "checks_unavailable"),
-    }
-    status, message = reasons.get(state, ("DISPATCH_REQUIRED", "checks_unavailable"))
+    status, message = CHECK_GATE_STOP_REASONS.get(state, ("DISPATCH_REQUIRED", "checks_unavailable"))
     details = dict(gate.get("details") or {})
     query_reason = (details.get("checkQueryError") or {}).get("reason")
     if state == CHECK_GATE_UNAVAILABLE and query_reason == "gh_auth_required":
@@ -1945,18 +1939,18 @@ def observe_check_gate(
         gate = classify_check_gate(project, current)
         state = gate.get("state")
         if mode == CHECK_OBSERVATION_ONCE or state not in {CHECK_GATE_NOT_REPORTED, CHECK_GATE_PENDING}:
-            return gate
+            return {**gate, "prSnapshot": current}
 
         elapsed = time.monotonic() - started_at
         if state == CHECK_GATE_NOT_REPORTED:
             remaining = min(INITIAL_CHECK_WINDOW_SECONDS - elapsed, timeout_seconds - elapsed)
             if timeout_seconds <= 0 or remaining <= 0:
-                return gate
+                return {**gate, "prSnapshot": current}
             interval = min(max(poll_seconds, 1), INITIAL_CHECK_POLL_SECONDS, remaining)
         else:
             remaining = timeout_seconds - elapsed
             if timeout_seconds <= 0 or remaining <= 0:
-                return gate
+                return {**gate, "prSnapshot": current}
             interval = min(max(poll_seconds, 1), remaining)
 
         time.sleep(interval)
@@ -1966,16 +1960,6 @@ def observe_check_gate(
         except PrFlowError as exc:
             raise observation_commit_error(exc, initial_pr, updated) from exc
         current = updated
-
-
-def wait_for_checks(
-    project: Path,
-    pr: dict[str, Any],
-    wait_config: dict[str, Any],
-    next_command: str | None = None,
-) -> dict[str, Any] | None:
-    gate = observe_check_gate(project, pr, wait_config, CHECK_OBSERVATION_WAIT)
-    return check_gate_stop_state(gate, next_command)
 
 
 def require_same_pr_commits(original: dict[str, Any], current: dict[str, Any]) -> None:
@@ -2017,6 +2001,30 @@ def ruleset_retry_failure_details(
     return add_recovery_action(details, next_command)
 
 
+def revalidate_merge_gates(
+    project: Path,
+    config: dict[str, Any],
+    original_pr: dict[str, Any],
+    *,
+    skip_review_gate: bool,
+    next_command: str | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    current = sync_pr(project, original_pr)
+    require_same_pr_commits(original_pr, current)
+    gate = observe_check_gate(project, current, wait_config_from_config(config), CHECK_OBSERVATION_ONCE)
+    check_stop = check_gate_stop_state(gate, next_command)
+    current = gate["prSnapshot"]
+    if check_stop is not None:
+        return current, check_stop
+    current = sync_pr(project, current)
+    require_same_pr_commits(original_pr, current)
+    if not skip_review_gate:
+        review_stop = check_review_gate(project, config, current)
+        if review_stop is not None:
+            return current, review_stop
+    return current, None
+
+
 def retry_merge_after_ruleset_block(
     project: Path,
     config: dict[str, Any],
@@ -2047,18 +2055,15 @@ def retry_merge_after_ruleset_block(
                     ruleset_retry_failure_details(merge_details, last_merge_details, retry_attempts, next_command),
                 )
 
-        current = sync_pr(project, pr)
-        require_same_pr_commits(pr, current)
-        gate = observe_check_gate(project, current, wait_config, CHECK_OBSERVATION_ONCE)
-        check_stop = check_gate_stop_state(gate, next_command)
-        if check_stop is not None:
-            return check_stop
-        current = sync_pr(project, current)
-        require_same_pr_commits(pr, current)
-        if not skip_review_gate:
-            review_stop = check_review_gate(project, config, current)
-            if review_stop is not None:
-                return review_stop
+        current, gate_stop = revalidate_merge_gates(
+            project,
+            config,
+            pr,
+            skip_review_gate=skip_review_gate,
+            next_command=next_command,
+        )
+        if gate_stop is not None:
+            return gate_stop
 
         try:
             merge_pr(project, config, current)
@@ -2384,26 +2389,25 @@ def run_lifecycle(
         return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
 
     try:
-        check_stop = wait_for_checks(project, pr, wait_config_from_config(config), next_command)
+        gate = observe_check_gate(project, pr, wait_config_from_config(config), CHECK_OBSERVATION_WAIT)
     except PrFlowError as exc:
         return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
+    check_stop = check_gate_stop_state(gate, next_command)
     if check_stop is not None:
         return stop_from_state(project, command, check_stop)
 
-    if not skip_review_gate:
-        review_stop = check_review_gate(project, config, pr)
-        if review_stop is not None:
-            return stop_from_state(project, command, review_stop)
-
     try:
-        latest_pr = sync_pr(project, pr)
+        pr, gate_stop = revalidate_merge_gates(
+            project,
+            config,
+            pr,
+            skip_review_gate=skip_review_gate,
+            next_command=next_command,
+        )
     except PrFlowError as exc:
         return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
-    try:
-        require_same_pr_commits(pr, latest_pr)
-    except PrFlowError as exc:
-        return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
-    pr = latest_pr
+    if gate_stop is not None:
+        return stop_from_state(project, command, gate_stop)
 
     current_branch = require_git_success(project, "git_current_branch_failed", "branch", "--show-current").stdout.strip()
     head_ref = pr.get("headRefName")
