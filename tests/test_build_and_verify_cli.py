@@ -113,7 +113,7 @@ def test_repository_automation_uses_build_and_verify_cli() -> None:
     assert all("build-and-verify" in command for command in commands)
     assert all(".build-and-verify/runtime/build_and_verify.py" not in command for command in commands)
     assert all("scripts/build_and_verify.py" not in command for command in commands)
-    assert "build-and-verify verify --project . --full" in commands[0]
+    assert "build-and-verify verify --project . --full" not in commands[0]
     assert "node plugins/build-and-verify/bin/build-and-verify.js verify --project . --full" in commands[0]
     assert "build-and-verify verify --project source --full" not in commands[1]
 
@@ -168,8 +168,8 @@ def test_windows_pr_verification_uses_fixed_baseline_and_manual_full_mode() -> N
     assert "status: passed" in fast_run
     assert "exit 1" in fast_run
     assert ". ./.venv/Scripts/Activate.ps1" in manual_run
-    assert manual_run.index("Activate.ps1") < manual_run.index("build-and-verify verify")
-    assert "build-and-verify verify --project . --full" in manual_run
+    assert manual_run.index("Activate.ps1") < manual_run.index("build-and-verify.js verify")
+    assert "node plugins/build-and-verify/bin/build-and-verify.js verify --project . --full" in manual_run
     assert "pytest" not in fast_run
     assert "build_and_verify.py" not in fast_run
     assert "scripts/" not in fast_run

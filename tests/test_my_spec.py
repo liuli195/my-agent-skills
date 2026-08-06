@@ -4649,8 +4649,9 @@ def test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_st
 
 
 def windows_py_launcher() -> Path:
+    base_executable = Path(getattr(sys, "_base_executable", sys.executable))
     candidates = (
-        Path(sys.executable).parent.parent / "Launcher" / "py.exe",
+        base_executable.parent.parent / "Launcher" / "py.exe",
         Path(os.environ.get("SystemRoot", "C:/Windows")) / "py.exe",
         Path(shutil.which("py") or ""),
     )
@@ -4662,6 +4663,20 @@ def windows_py_launcher() -> Path:
     return launcher
 
 
+def test_windows_py_launcher_uses_base_interpreter_from_venv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base_python = tmp_path / "Python312" / "python.exe"
+    base_python.parent.mkdir()
+    launcher = tmp_path / "Launcher" / "py.exe"
+    launcher.parent.mkdir()
+    launcher.touch()
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "venv" / "Scripts" / "python.exe"))
+    monkeypatch.setattr(sys, "_base_executable", str(base_python))
+
+    assert windows_py_launcher() == launcher
+
+
 def run_launcher_selection(
     executable: Path,
     root: Path,
@@ -4670,13 +4685,18 @@ def run_launcher_selection(
 ) -> tuple[subprocess.CompletedProcess[str], list[Path], dict[str, Path]]:
     candidates = root / "candidates"
     candidates.mkdir(parents=True)
+    python_source = Path(
+        getattr(sys, "_base_executable", sys.executable)
+        if sys.platform == "win32"
+        else sys.executable
+    )
     paths: dict[str, Path] = {}
     reported_versions: dict[str, str] = {}
     for name, version in versions.items():
         if name == "py":
             source = windows_py_launcher()
         else:
-            source = sys.executable
+            source = python_source
         path = candidates / (f"{name}.exe" if sys.platform == "win32" else name)
         shutil.copy2(source, path)
         paths[name] = path.resolve()
@@ -4689,7 +4709,7 @@ def run_launcher_selection(
             (
                 str(candidates),
                 str(Path(shutil.which("node") or "").parent),
-                str(Path(sys.executable).parent),
+                str(python_source.parent),
             )
         ),
         "PYTHONPATH": str(root),
@@ -4698,13 +4718,13 @@ def run_launcher_selection(
     env.pop("MYSPEC_PYTHON", None)
     if override_version is not None:
         override = root / ("override.exe" if sys.platform == "win32" else "override")
-        shutil.copy2(sys.executable, override)
+        shutil.copy2(python_source, override)
         env["MYSPEC_PYTHON"] = str(override)
         paths["MYSPEC_PYTHON"] = override.resolve()
         if override_version == "3.11":
             reported_versions[os.path.normcase(str(paths["MYSPEC_PYTHON"]))] = override_version
     if sys.platform == "win32" and versions.get("py") == "3.11":
-        reported_versions[os.path.normcase(str(Path(sys.executable).resolve()))] = "3.11"
+        reported_versions[os.path.normcase(str(python_source.resolve()))] = "3.11"
     env["MYSPEC_TEST_VERSIONS"] = json.dumps(reported_versions)
     write(
         root / "sitecustomize.py",

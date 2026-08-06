@@ -127,7 +127,7 @@ jobs:
         shell: pwsh
         run: |
           . ./.venv/Scripts/Activate.ps1
-          & build-and-verify verify --project . --full
+          node plugins/build-and-verify/bin/build-and-verify.js verify --project . --full
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
