@@ -679,3 +679,63 @@ PR Flow（拉取请求流程）MUST 分别消费 MySpec（自有规格）与 Bui
 - **WHEN** 任一开发工具诊断未提供有效实现身份或当前远端分支可检出的源码提交
 - **THEN** PR Flow MUST 在更新工具链记录、生成工作流、推送、创建或同步 PR 前返回非零停止结果
 - **THEN** 停止详情 MUST 标识受影响工具并提供先发布精确实现提交再重试的恢复动作
+### Requirement: PR Flow observes check reporting before merge
+
+PR Flow（拉取请求流程）MUST distinguish checks（检查）that have not yet been reported from checks（检查）whose status cannot be read, and MUST observe the current source and target commits within bounded time before merge（合并）.
+
+#### Scenario: Complete waits for newly created PR checks to be reported
+
+- **WHEN** complete（收尾）or tweak（小改）observes no required checks（必需检查）and an empty PR check summary（拉取请求检查汇总）for the current source commit
+- **THEN** PR Flow（拉取请求流程）MUST classify the state as `checks_not_reported`
+- **THEN** PR Flow（拉取请求流程）MUST wait for checks（检查）to be reported for at most 60 seconds and no longer than the configured overall wait limit
+- **THEN** PR Flow（拉取请求流程）MUST NOT enter review（审查）or merge（合并）while checks（检查）remain unreported
+- **THEN** if required checks（必需检查）become pending and then pass within the wait limit, the same command MUST continue without requiring a rerun
+
+#### Scenario: Diagnose reports unreported checks without waiting
+
+- **WHEN** diagnose（诊断）observes no required checks（必需检查）and an empty PR check summary（拉取请求检查汇总）
+- **THEN** diagnose（诊断）MUST return immediately with `DISPATCH_REQUIRED`（需要外部进展）and `reason: checks_not_reported`
+- **THEN** the stop details MUST include a recovery action or command
+
+#### Scenario: Pending checks share the original wait deadline
+
+- **WHEN** checks（检查）are first unreported and later become pending during one complete（收尾）or tweak（小改）run
+- **THEN** the pending-check wait MUST reuse the original elapsed wait time rather than reset the overall deadline
+- **THEN** reaching the configured deadline MUST stop without merge（合并）
+
+#### Scenario: Failed cancelled and unavailable checks remain distinct
+
+- **WHEN** observed check evidence explicitly reports failure, cancellation, or cannot be established because of authentication, network, malformed, or unknown evidence
+- **THEN** PR Flow（拉取请求流程）MUST distinguish failure, cancellation, and unavailable evidence in stop-state details
+- **THEN** cancellation MUST provide a rerun-checks recovery action
+- **THEN** unavailable evidence MUST preserve the original query error
+- **THEN** none of these states MAY continue to merge（合并）
+
+#### Scenario: Merge gates use the latest unchanged PR snapshot
+
+- **WHEN** checks（检查）finish or a merge retry（合并重试）is about to run
+- **THEN** PR Flow（拉取请求流程）MUST reread the PR（拉取请求）and revalidate required checks（必需检查）、review（审查）、source commit（源提交）and target commit（目标提交）before ordinary merge（普通合并）
+- **THEN** a changed source or target commit MUST invalidate the observed gates and stop with a recovery command
+### Requirement: PR Flow completes synchronous merge after ruleset convergence
+
+PR Flow（拉取请求流程）MUST use ordinary synchronous merge（普通同步合并）as the final ruleset（规则集）decision and MUST bound retries caused by ruleset state propagation.
+
+#### Scenario: Ruleset propagation retries ordinary merge
+
+- **WHEN** required checks（必需检查）and review（审查）pass but ordinary merge（普通合并）is rejected by base branch policy（目标分支策略）
+- **THEN** PR Flow（拉取请求流程）MUST retry ordinary merge（普通合并）for at most 60 seconds
+- **THEN** every retry MUST reread and revalidate the current source commit、target commit、required checks and review decision
+- **THEN** PR Flow（拉取请求流程）MUST NOT use `--auto`（自动合并）、`--admin`（管理员绕过）or an empty commit（空提交）as recovery
+
+#### Scenario: Converged ruleset completes merge and cleanup
+
+- **WHEN** an ordinary merge retry（普通合并重试）succeeds within the bounded ruleset propagation window
+- **THEN** PR Flow（拉取请求流程）MUST report `merge_complete`
+- **THEN** PR Flow（拉取请求流程）MUST enter cleanup（清理）only after the ordinary merge command succeeds
+
+#### Scenario: Persistent ruleset rejection stops with evidence
+
+- **WHEN** base branch policy（目标分支策略）continues to reject ordinary merge（普通合并）until the bounded propagation window expires
+- **THEN** PR Flow（拉取请求流程）MUST output `DISPATCH_REQUIRED`（需要外部进展）with `reason: ruleset_merge_blocking`
+- **THEN** stop-state details MUST preserve the first and final platform errors、retry count and a recovery action or command
+- **THEN** PR Flow（拉取请求流程）MUST NOT report merge completion or run cleanup（清理）
