@@ -19,4 +19,5 @@
 - Green：强制优先解析 `C:\Program Files\Git\cmd\git.exe` 的打包 MySpec 开发模式测试通过；`.cmd` 与 `.bat` 转发及打包入口共 3 passed；真实工作树脚本测试在 `powershell` 和 `pwsh` 下通过（7 passed）；MySpec 检查输入契约通过（1 passed）。
 - User-entry smoke：候选 Tarball（压缩包）安装后的裸 `myspec` 开发模式入口，以及两个真实 PowerShell `-File` 入口均已覆盖。
 - Review：初审发现的路径重写、批处理转发覆盖和过大占位文件均已修复；批处理分支改为进程内覆盖且运行边界检查 11 passed；Windows PR 工作流项属于后续票据 2。
-- Unresolved risk：无生产行为变化；完整仓库验证和最终双轴审查仍在集成阶段执行。
+- Integration：固定基线快速验证检查全部 8 个非空检查项并返回 `status: passed`；无生产行为变化。
+- Unresolved risk：仅剩最终双轴审查与真实 PR CI（拉取请求持续集成）。
