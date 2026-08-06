@@ -140,9 +140,13 @@ _Avoid_: Workflow label, individual platform result
 A GitHub status result that a repository rule requires before a pull request may merge.
 _Avoid_: Any visible check, workflow conclusion
 
+**检查尚未报告**:
+当前提交的 Required Check 尚未被外部系统注册或观测到；它是可短暂等待的初始状态，不等同于检查查询不可用。
+_Avoid_: 检查不可用、检查等待、空检查通过
+
 **检查等待**:
-Required Check 尚未完成，流程可以等待其最终结果后继续或在等待期限结束时停止。
-_Avoid_: 检查失败、规则集阻塞
+Required Check 已被观测到但尚未完成，流程可以等待其最终结果后继续或在等待期限结束时停止。
+_Avoid_: 检查尚未报告、检查失败、规则集阻塞
 
 **检查阻塞**:
 Required Check 已失败或取消，流程必须提供修复或重新触发动作，而不是继续等待或尝试合并。
