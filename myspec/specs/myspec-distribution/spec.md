@@ -221,3 +221,31 @@
 
 - **WHEN** 项目级旧来源已按 `init --pi` 既有契约禁用且仍保留在项目配置中
 - **THEN** `myspec update` MUST NOT 再次阻断，且 MUST 保留该项目配置
+### Requirement: MySpec 开发工具身份限定于可复现实现
+
+MySpec（自有规格）MUST 在开发模式公开由实际受控运行与打包内容决定的稳定实现身份，并只在远端源码能够重建相同实现时公开可复现源码提交。普通规格、测试、工具链记录、生成工作流和仓库配置 MUST NOT 改变该实现身份；MySpec 插件实现或共享生命周期实现发生变化时 MUST 改变该身份。开发模式切换 MUST 在 npm Link（npm 本地链接）前拒绝脏源码或无法由当前远端分支重建的实现。
+
+#### Scenario: Doctor 报告开发实现身份
+
+- **WHEN** 用户在开发模式运行 `myspec doctor`
+- **THEN** `toolchain`（工具链）结果 MUST 报告 MySpec 的 `implementationIdentity`（实现身份）
+- **THEN** 当当前远端分支历史存在能够重建该实现的提交时，结果 MUST 报告对应的官方源码仓库、源码提交和包目录
+- **THEN** 无关提交位于该实现提交之后时，结果 MUST 保留最近一次实际改变实现的可复现提交
+
+#### Scenario: 无关仓库内容变化
+
+- **WHEN** 规格、测试、普通配置、工具链记录或生成工作流发生变化，但 MySpec 受控运行和打包内容不变
+- **THEN** MySpec 开发实现身份 MUST 保持不变
+
+#### Scenario: 插件或共享生命周期实现变化
+
+- **WHEN** MySpec 插件受控内容发生变化
+- **THEN** MySpec 开发实现身份 MUST 改变
+- **WHEN** MySpec 与其他工具共同使用的生命周期实现发生变化
+- **THEN** MySpec 开发实现身份 MUST 改变
+
+#### Scenario: 开发源码不能安全重建
+
+- **WHEN** 用户请求切换到包含未提交实现变化、仅本地实现提交或当前远端分支已无法到达的实现源码
+- **THEN** `myspec init --dev` MUST 在改变 npm Link 或客户端来源前返回非零结果
+- **THEN** 系统 MUST NOT 公开一个看似可复现的源码提交
