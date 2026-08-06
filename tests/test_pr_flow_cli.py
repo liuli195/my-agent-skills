@@ -3789,6 +3789,47 @@ def test_tweak_stops_for_failed_or_cancelled_required_checks(
     assert "status: merge_complete" not in result.stdout
 
 
+def test_diagnose_reports_unreported_checks_without_waiting(tmp_path: Path, monkeypatch) -> None:
+    module = load_pr_flow_module()
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: pytest.fail("diagnose must not sleep"))
+    project, result = run_diagnose_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_view_json(checks=[], review_decision="APPROVED", head_oid="b" * 40),
+        required_response=("[]", "", 0),
+    )
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "checks_not_reported"
+    assert status["details"]["checkGate"] == "NOT_REPORTED"
+
+
+def test_diagnose_distinguishes_cancelled_checks_and_requests_rerun(tmp_path: Path, monkeypatch) -> None:
+    project, result = run_diagnose_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "CANCELLED"}],
+            review_decision="APPROVED",
+            head_oid="b" * 40,
+        ),
+        required_response=(
+            json.dumps([{"bucket": "cancel", "name": "ci", "state": "CANCELLED"}]),
+            "",
+            0,
+        ),
+    )
+
+    assert result.returncode == 1
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["checkGate"] == "CANCELLED"
+    assert status["details"]["checkStateReason"] == "checks_cancelled"
+    assert "Re-run" in status["details"]["nextAction"]
+    assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
+
+
 def test_diagnose_uses_required_checks_instead_of_optional_rollup_failure(tmp_path: Path, monkeypatch) -> None:
     project, result = run_diagnose_in_process(
         tmp_path,
@@ -5079,6 +5120,170 @@ def test_complete_uses_summary_only_for_pending_or_failure_when_required_checks_
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["details"]["reason"] == expected_reason
     assert status["details"]["requiredChecks"] == []
+
+
+def test_complete_observes_unreported_checks_until_passed(tmp_path: Path, monkeypatch) -> None:
+    module = load_pr_flow_module()
+    empty = pr_view_json(checks=[], review_decision="APPROVED", head_oid="b" * 40)
+    pending = pr_view_json(
+        checks=[{"name": "ci", "status": "QUEUED", "conclusion": None}],
+        review_decision="APPROVED",
+        head_oid="b" * 40,
+    )
+    passed = pr_view_json(
+        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        review_decision="APPROVED",
+        head_oid="b" * 40,
+    )
+
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(module, "run_cleanup", lambda _args: 0)
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_responses=[(empty, "", 0), (empty, "", 0), (pending, "", 0), (passed, "", 0), (passed, "", 0)],
+        required_responses=[
+            ("[]", "", 0),
+            (json.dumps([{"bucket": "pending", "name": "ci", "state": "QUEUED"}]), "", 8),
+            (json.dumps([{"bucket": "pass", "name": "ci", "state": "SUCCESS"}]), "", 0),
+        ],
+        wait_config={"timeoutSeconds": 30, "pollSeconds": 1},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: merge_complete" in result.stdout
+
+
+def test_complete_reports_unreported_checks_after_bounded_window(tmp_path: Path, monkeypatch) -> None:
+    module = load_pr_flow_module()
+    empty = pr_view_json(checks=[], review_decision="APPROVED", head_oid="b" * 40)
+    clock = iter([0.0, 0.0, 61.0])
+    sleeps: list[float] = []
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(module.time, "sleep", sleeps.append)
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_responses=[(empty, "", 0), (empty, "", 0), (empty, "", 0)],
+        required_responses=[("[]", "", 0), ("[]", "", 0)],
+        wait_config={"timeoutSeconds": 600, "pollSeconds": 15},
+    )
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "checks_not_reported"
+    assert status["details"]["checkGate"] == "NOT_REPORTED"
+    assert status["details"]["requiredChecks"] == []
+    assert status["details"]["checkSummary"] == []
+    assert status["details"]["checkQueryError"]["reason"] == "checks_not_reported"
+    assert sleeps == [5]
+
+
+def test_complete_respects_zero_timeout_while_checks_are_unreported(tmp_path: Path, monkeypatch) -> None:
+    module = load_pr_flow_module()
+    empty = pr_view_json(checks=[], review_decision="APPROVED", head_oid="b" * 40)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: pytest.fail("zero timeout must not sleep"))
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_responses=[(empty, "", 0), (empty, "", 0)],
+        required_responses=[("[]", "", 0)],
+        wait_config={"timeoutSeconds": 0, "pollSeconds": 15},
+    )
+
+    assert result.returncode == 1
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "checks_not_reported"
+
+
+def test_complete_does_not_reset_timeout_after_unreported_window(tmp_path: Path, monkeypatch) -> None:
+    module = load_pr_flow_module()
+    empty = pr_view_json(checks=[], review_decision="APPROVED", head_oid="b" * 40)
+    pending = pr_view_json(
+        checks=[{"name": "ci", "status": "QUEUED", "conclusion": None}],
+        review_decision="APPROVED",
+        head_oid="b" * 40,
+    )
+    clock = iter([0.0, 0.0, 6.0])
+    sleeps: list[float] = []
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(module.time, "sleep", sleeps.append)
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_responses=[(empty, "", 0), (empty, "", 0), (pending, "", 0)],
+        required_responses=[
+            ("[]", "", 0),
+            (json.dumps([{"bucket": "pending", "name": "ci", "state": "QUEUED"}]), "", 8),
+        ],
+        wait_config={"timeoutSeconds": 6, "pollSeconds": 15},
+    )
+
+    assert result.returncode == 1
+    assert "status: DISPATCH_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "checks_pending"
+    assert sleeps == [5]
+
+
+def test_complete_stops_when_commits_change_during_unreported_observation(tmp_path: Path, monkeypatch) -> None:
+    module = load_pr_flow_module()
+    initial = pr_view_json(checks=[], review_decision="APPROVED", head_oid="b" * 40)
+    changed = pr_view_json(
+        checks=[{"name": "ci", "status": "QUEUED", "conclusion": None}],
+        review_decision="APPROVED",
+        head_oid="c" * 40,
+    )
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_responses=[(initial, "", 0), (initial, "", 0), (changed, "", 0)],
+        required_responses=[("[]", "", 0)],
+        wait_config={"timeoutSeconds": 30, "pollSeconds": 1},
+    )
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "head_moved"
+    assert status["details"]["headRefOid"] == "b" * 40
+    assert status["details"]["observedHeadRefOid"] == "c" * 40
+    assert "status: merge_complete" not in result.stdout
+
+
+def test_complete_rejects_commit_change_before_gate_observation(tmp_path: Path, monkeypatch) -> None:
+    module = load_pr_flow_module()
+    initial = pr_view_json(
+        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        review_decision="APPROVED",
+        head_oid="b" * 40,
+        base_oid="a" * 40,
+    )
+    refreshed = pr_view_json(
+        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        review_decision="APPROVED",
+        head_oid="b" * 40,
+        base_oid="c" * 40,
+    )
+    monkeypatch.setattr(module, "run_cleanup", lambda _args: 0)
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_responses=[(initial, "", 0), (refreshed, "", 0), (refreshed, "", 0)],
+        required_responses=[
+            (json.dumps([{"bucket": "pass", "name": "ci", "state": "SUCCESS"}]), "", 0),
+        ],
+    )
+
+    assert result.returncode == 1
+    assert "status: EXCEPTION_REQUIRED" in result.stdout
+    status = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "base_outdated"
+    assert status["details"]["baseRefOid"] == "a" * 40
+    assert status["details"]["observedBaseRefOid"] == "c" * 40
+    assert "status: merge_complete" not in result.stdout
 
 
 def test_complete_waits_after_pending_exit_and_merges_when_checks_pass(
