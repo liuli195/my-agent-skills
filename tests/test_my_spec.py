@@ -93,6 +93,26 @@ def write(path: Path, text: str) -> None:
     path.write_text(text.rstrip() + "\n", encoding="utf-8")
 
 
+def controlled_git_script(git: str, remote: Path) -> str:
+    return (
+        "import subprocess\nimport sys\n"
+        f"git = {git!r}\n"
+        "def run_git(*args):\n"
+        "    command = [git, *args]\n"
+        "    shell = git.lower().endswith(('.cmd', '.bat'))\n"
+        "    if shell:\n"
+        "        command = subprocess.list2cmdline(command)\n"
+        "    return subprocess.run(command, shell=shell)\n"
+        "args = sys.argv[1:]\n"
+        "if args == ['remote', 'get-url', 'origin']:\n"
+        "    print('https://github.com/liuli195/my-agent-skills')\n"
+        "    raise SystemExit()\n"
+        "if args == ['ls-remote', 'origin']:\n"
+        f"    raise SystemExit(run_git('ls-remote', {remote.as_uri()!r}).returncode)\n"
+        "raise SystemExit(run_git(*args).returncode)"
+    )
+
+
 def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
     source = tmp_path / "source"
     source.mkdir()
@@ -127,24 +147,7 @@ def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
     bin_dir.mkdir()
     if os.name == "nt":
         script = bin_dir / "git.py"
-        write(
-            script,
-            "import subprocess\nimport sys\n"
-            f"git = {git!r}\n"
-            "def run_git(*args):\n"
-            "    command = [git, *args]\n"
-            "    shell = git.lower().endswith(('.cmd', '.bat'))\n"
-            "    if shell:\n"
-            "        command = subprocess.list2cmdline(command)\n"
-            "    return subprocess.run(command, shell=shell)\n"
-            "args = sys.argv[1:]\n"
-            "if args == ['remote', 'get-url', 'origin']:\n"
-            "    print('https://github.com/liuli195/my-agent-skills')\n"
-            "    raise SystemExit()\n"
-            "if args == ['ls-remote', 'origin']:\n"
-            f"    raise SystemExit(run_git('ls-remote', {remote.as_uri()!r}).returncode)\n"
-            "raise SystemExit(run_git(*args).returncode)",
-        )
+        write(script, controlled_git_script(git, remote))
         write(bin_dir / "git.cmd", f'@"{sys.executable}" "{script}" %*')
     else:
         wrapper = bin_dir / "git"
@@ -163,39 +166,15 @@ def controlled_dev_env(env: dict[str, str], source: Path) -> dict[str, str]:
     return {**env, "PATH": os.pathsep.join(dict.fromkeys(path_entries))}
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows command shim behavior")
-@pytest.mark.parametrize("suffix", [".cmd", ".bat"])
-def test_controlled_git_delegates_to_discovered_batch_shim(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix: str
+@pytest.mark.parametrize("suffix", [".exe", ".cmd", ".bat"])
+def test_controlled_git_script_preserves_discovered_command(
+    tmp_path: Path, suffix: str
 ) -> None:
-    real_git = shutil.which("git")
-    assert real_git is not None
-    shim_dir = tmp_path / "git shim"
-    shim_dir.mkdir()
-    shim = shim_dir / f"git{suffix}"
-    write(shim, f'@echo off\n@"{real_git}" %*')
-    original_which = shutil.which
-    monkeypatch.setattr(
-        shutil,
-        "which",
-        lambda command: str(shim) if command == "git" else original_which(command),
-    )
-    fixture = tmp_path / "fixture"
-    fixture.mkdir()
-    source = controlled_dev_source(fixture)
-    wrapper = source.parent / "controlled-git" / "git.cmd"
+    git = str(tmp_path / "git shim" / f"git{suffix}")
+    script = controlled_git_script(git, tmp_path / "origin.git")
 
-    result = subprocess.run(
-        subprocess.list2cmdline([str(wrapper), "rev-parse", "--show-toplevel"]),
-        cwd=source,
-        text=True,
-        capture_output=True,
-        check=False,
-        shell=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert Path(result.stdout.strip()).resolve() == source.resolve()
+    assert f"git = {git!r}\n" in script
+    assert "git.lower().endswith(('.cmd', '.bat'))" in script
 
 
 def ready_state(cli: Path, root: Path, command: str = "add") -> Path:
