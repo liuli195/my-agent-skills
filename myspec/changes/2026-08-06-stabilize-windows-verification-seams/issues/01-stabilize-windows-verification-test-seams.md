@@ -6,9 +6,16 @@
 
 **Status:** ready-for-agent
 
-- [ ] 受控 Git 替身把系统解析出的精确命令路径原样转发，并在不同合法 Windows 路径形态下完成 MySpec 开发模式入口。
-- [ ] `powershell -File` 与 `pwsh -File` 的真实失败入口在 ANSI（终端控制码）和换行不同的情况下仍验证相同用户提示。
-- [ ] 提示断言失败不会遮蔽“不调用安装命令”和“不覆盖已有目录”等安全后置条件。
-- [ ] Windows 工作树测试不再依赖外部 `true` 命令且不会因此静默跳过。
-- [ ] MySpec 验证检查的触发路径与缓存输入包含测试实际读取的共享生命周期、仓库属性、忽略规则和正式规格。
-- [ ] 最小红灯能够分别复现错误 Git 转发和 PowerShell 原始子串断言失败，修复后同一检查转绿。
+- [x] 受控 Git 替身把系统解析出的精确命令路径原样转发，并在不同合法 Windows 路径形态下完成 MySpec 开发模式入口。
+- [x] `powershell -File` 与 `pwsh -File` 的真实失败入口在 ANSI（终端控制码）和换行不同的情况下仍验证相同用户提示。
+- [x] 提示断言失败不会遮蔽“不调用安装命令”和“不覆盖已有目录”等安全后置条件。
+- [x] Windows 工作树测试不再依赖外部 `true` 命令且不会因此静默跳过。
+- [x] MySpec 验证检查的触发路径与缓存输入包含测试实际读取的共享生命周期、仓库属性、忽略规则和正式规格。
+- [x] 最小红灯能够分别复现错误 Git 转发和 PowerShell 原始子串断言失败，修复后同一检查转绿。
+
+## Evidence
+
+- Red：Pi/PR Flow（拉取请求流程）环境稳定生成不存在的 `C:\Program Files\cmd\git.exe`，17 个打包 MySpec 测试报 `invalid_dev_source: git_root`；PowerShell 渲染把目标短语拆成多行后，原始子串断言失败。
+- Green：强制优先解析 `C:\Program Files\Git\cmd\git.exe` 的打包 MySpec 开发模式测试通过（1 passed）；真实工作树脚本测试在 `powershell` 和 `pwsh` 下通过（7 passed）；MySpec 检查输入契约通过（1 passed）。
+- User-entry smoke：候选 Tarball（压缩包）安装后的裸 `myspec` 开发模式入口，以及两个真实 PowerShell `-File` 入口均已覆盖。
+- Unresolved risk：无生产行为变化；完整仓库验证和最终双轴审查仍在集成阶段执行。

@@ -160,7 +160,11 @@
           ".claude-plugin/marketplace.json",
           ".release-flow/projection.yaml",
           ".build-and-verify/config.json",
+          ".gitattributes",
+          ".gitignore",
+          "myspec/specs/my-spec/spec.md",
           "plugins/my-spec/**",
+          "plugins/tool-lifecycle/**",
           "tests/test_my_spec.py",
           "tests/fixtures/myspec_source_cases.json"
         ],
@@ -170,7 +174,11 @@
           ".claude-plugin/marketplace.json",
           ".release-flow/projection.yaml",
           ".build-and-verify/config.json",
+          ".gitattributes",
+          ".gitignore",
+          "myspec/specs/my-spec/spec.md",
           "plugins/my-spec",
+          "plugins/tool-lifecycle",
           "tests/test_my_spec.py",
           "tests/fixtures/myspec_source_cases.json"
         ],

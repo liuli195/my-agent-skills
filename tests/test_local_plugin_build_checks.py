@@ -1352,6 +1352,34 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
         "node plugins/my-spec/bin/myspec.js validate-main myspec/specs"
     )
 
+    my_spec = check_by_id["verify.my-spec"]
+    assert my_spec["paths"] == [
+        ".agents/plugins/marketplace.json",
+        ".claude-plugin/marketplace.json",
+        ".release-flow/projection.yaml",
+        ".build-and-verify/config.json",
+        ".gitattributes",
+        ".gitignore",
+        "myspec/specs/my-spec/spec.md",
+        "plugins/my-spec/**",
+        "plugins/tool-lifecycle/**",
+        "tests/test_my_spec.py",
+        "tests/fixtures/myspec_source_cases.json",
+    ]
+    assert my_spec["inputs"] == [
+        ".agents/plugins/marketplace.json",
+        ".claude-plugin/marketplace.json",
+        ".release-flow/projection.yaml",
+        ".build-and-verify/config.json",
+        ".gitattributes",
+        ".gitignore",
+        "myspec/specs/my-spec/spec.md",
+        "plugins/my-spec",
+        "plugins/tool-lifecycle",
+        "tests/test_my_spec.py",
+        "tests/fixtures/myspec_source_cases.json",
+    ]
+
     local_build_contract = check_by_id["verify.local-build-contract"]
     assert ".comet/config.yaml" in local_build_contract["paths"]
     assert ".comet/config.yaml" in local_build_contract["inputs"]

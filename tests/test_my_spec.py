@@ -123,8 +123,7 @@ def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
         assert result.returncode == 0, result.stderr
     git = shutil.which("git")
     assert git is not None
-    if os.name == "nt":
-        git = str(Path(git).parents[2] / "cmd" / "git.exe")
+    git = str(Path(git).resolve())
     bin_dir = tmp_path / "controlled-git"
     bin_dir.mkdir()
     if os.name == "nt":
@@ -132,13 +131,20 @@ def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
         write(
             script,
             "import subprocess\nimport sys\n"
+            f"git = {git!r}\n"
+            "def run_git(*args):\n"
+            "    command = [git, *args]\n"
+            "    shell = git.lower().endswith(('.cmd', '.bat'))\n"
+            "    if shell:\n"
+            "        command = subprocess.list2cmdline(command)\n"
+            "    return subprocess.run(command, shell=shell)\n"
             "args = sys.argv[1:]\n"
             "if args == ['remote', 'get-url', 'origin']:\n"
             "    print('https://github.com/liuli195/my-agent-skills')\n"
             "    raise SystemExit()\n"
             "if args == ['ls-remote', 'origin']:\n"
-            f"    raise SystemExit(subprocess.run([{git!r}, 'ls-remote', {remote.as_uri()!r}]).returncode)\n"
-            f"raise SystemExit(subprocess.run([{git!r}, *args]).returncode)",
+            f"    raise SystemExit(run_git('ls-remote', {remote.as_uri()!r}).returncode)\n"
+            "raise SystemExit(run_git(*args).returncode)",
         )
         write(bin_dir / "git.cmd", f'@"{sys.executable}" "{script}" %*')
     else:
