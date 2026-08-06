@@ -16,7 +16,8 @@ _ANSI_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])")
 
 def normalize_powershell_output(result: subprocess.CompletedProcess[str]) -> str:
     output = "\n".join(part for part in (result.stdout, result.stderr) if part)
-    return " ".join(_ANSI_ESCAPE.sub("", output).split())
+    plain = _ANSI_ESCAPE.sub("", output)
+    return " ".join(re.sub(r"(?m)^[ \t]{4,}\|[ \t]?", "", plain).split())
 
 
 def test_normalize_powershell_output_removes_host_ansi_and_whitespace() -> None:
@@ -24,12 +25,14 @@ def test_normalize_powershell_output_removes_host_ansi_and_whitespace() -> None:
         ["powershell", "-File", str(SCRIPT)],
         1,
         "\x1b[31mShared Node.js dependencies are\n",
-        "\x1b[0mmissing. Run scripts\\setup-worktree.ps1\n",
+        "\x1b[0m     | missing. Run scripts\\setup-worktree.ps1\n",
     )
 
     assert normalize_powershell_output(result) == (
         "Shared Node.js dependencies are missing. Run scripts\\setup-worktree.ps1"
     )
+    literal = subprocess.CompletedProcess(["powershell"], 1, "| literal message\n", "")
+    assert normalize_powershell_output(literal) == "| literal message"
 
 
 def test_repository_owns_shared_node_dependencies() -> None:
