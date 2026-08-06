@@ -5250,6 +5250,7 @@ def test_complete_stops_when_commits_change_during_unreported_observation(tmp_pa
     assert status["details"]["reason"] == "head_moved"
     assert status["details"]["headRefOid"] == "b" * 40
     assert status["details"]["observedHeadRefOid"] == "c" * 40
+    assert "nextCommand" in status["details"]
     assert "status: merge_complete" not in result.stdout
 
 
@@ -5283,6 +5284,7 @@ def test_complete_rejects_commit_change_before_gate_observation(tmp_path: Path, 
     assert status["details"]["reason"] == "base_outdated"
     assert status["details"]["baseRefOid"] == "a" * 40
     assert status["details"]["observedBaseRefOid"] == "c" * 40
+    assert "nextCommand" in status["details"]
     assert "status: merge_complete" not in result.stdout
 
 

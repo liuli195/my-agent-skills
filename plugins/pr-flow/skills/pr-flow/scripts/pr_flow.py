@@ -726,6 +726,12 @@ RECOVERABLE_NEXT_ACTIONS = {
     "checks_unavailable": {
         "nextAction": "Verify GitHub check access and status, then rerun the same PR Flow command.",
     },
+    "head_moved": {
+        "nextAction": "Rerun the same PR Flow command for the current source commit.",
+    },
+    "base_outdated": {
+        "nextAction": "Rerun the same PR Flow command against the current base commit.",
+    },
     "ruleset_merge_blocking": {
         "nextAction": "Wait for ruleset requirements to pass or enable auto-merge, then rerun the same PR Flow command.",
     },
@@ -799,6 +805,8 @@ def add_recovery_action(details: dict[str, Any], next_command: str | None = None
         "ruleset_merge_blocking",
         "checks_or_review_blocking",
         "checks_unavailable",
+        "head_moved",
+        "base_outdated",
     }:
         details.setdefault("nextCommand", next_command)
     for key, value in RECOVERABLE_NEXT_ACTIONS.get(reason, {}).items():
@@ -1336,19 +1344,8 @@ def classify_check_values(checks: Any) -> str:
 
 
 def classify_check_summary(summary: Any) -> str:
-    if summary is None or not isinstance(summary, list) or not all(isinstance(check, dict) for check in summary):
-        return CHECK_GATE_UNAVAILABLE
-    if not summary:
-        return CHECK_GATE_NOT_REPORTED
-    if not all(check_item_is_known(check) for check in summary):
-        return CHECK_GATE_UNAVAILABLE
-    if has_failed_check(summary):
-        return CHECK_GATE_FAILED
-    if has_cancelled_check(summary):
-        return CHECK_GATE_CANCELLED
-    if has_pending_check(summary):
-        return CHECK_GATE_PENDING
-    return CHECK_GATE_UNAVAILABLE
+    state = classify_check_values(summary)
+    return CHECK_GATE_UNAVAILABLE if state == CHECK_GATE_PASSED else state
 
 
 def check_gate_details(

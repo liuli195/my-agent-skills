@@ -51,10 +51,10 @@
 - [x] 每轮刷新后复核源提交和目标提交，变化时当前观测失效并安全停止。
 - [x] 公开命令回归先证明当前实现对 `空 + 空 → pending → pass` 错误停止，再覆盖修复后的完整序列、永久未报告、失败、取消、查询错误和提交变化。
 
-## Behavior evidence
+## Behavior evidence（行为证据）
 
-- Red：零等待配置下，检查尚未报告仍调用休眠并失败；此前确定性复现也证明 `空 → pending → pass` 在第一次空观测即返回 `checks_unavailable`。
-- Green：公开命令定向回归覆盖检查尚未报告、等待、取消和提交变化，结果 `7 passed`。
-- Green：PR Flow 相关公开命令、插件包和 Pi 扩展测试结果 `310 passed`。
-- Smoke：完整发布形态与 GitHub 远端传播冒烟在票据 02 和 Gate 3 执行。
-- Risk：规则集传播和同步清理仍由票据 02 完成。
+- Red（失败）：零等待配置下，检查尚未报告仍调用休眠并失败；此前确定性复现也证明 `空 → pending → pass` 在第一次空观测即返回 `checks_unavailable`。
+- Green（通过）：公开命令定向回归覆盖检查尚未报告、等待、取消和提交变化，结果 `7 passed`。
+- Green（通过）：PR Flow 相关公开命令、插件包和 Pi 扩展测试结果 `310 passed`。
+- Smoke（冒烟）：完整发布形态与 GitHub 远端传播冒烟在票据 02 和 Gate 3 执行。
+- Risk（风险）：规则集传播和同步清理仍由票据 02 完成。
