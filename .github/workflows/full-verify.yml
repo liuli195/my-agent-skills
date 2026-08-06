@@ -83,12 +83,6 @@ jobs:
         shell: pwsh
         run: ./scripts/setup-worktree.ps1
 
-      - name: Initialize linked worktree
-        shell: pwsh
-        run: |
-          git worktree add --detach .worktrees/smoke HEAD
-          ./.worktrees/smoke/scripts/setup-worktree.ps1
-
       - name: Install current Build and Verify package
         shell: pwsh
         run: |
@@ -97,12 +91,6 @@ jobs:
           npm install --global --prefix $prefix --ignore-scripts --no-audit --no-fund $tarball
           $prefix >> $env:GITHUB_PATH
           & (Join-Path $prefix "build-and-verify.cmd") --help
-
-      - name: Build from linked worktree
-        shell: pwsh
-        run: |
-          . ./.worktrees/smoke/.venv/Scripts/Activate.ps1
-          build-and-verify build --project .worktrees/smoke
 
       - name: Run PR fast verification
         if: ${{ github.event_name == 'pull_request' }}
@@ -131,6 +119,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
+
+      - name: Initialize linked worktree
+        shell: pwsh
+        run: |
+          git worktree add --detach .worktrees/smoke HEAD
+          ./.worktrees/smoke/scripts/setup-worktree.ps1
+
+      - name: Build from linked worktree
+        shell: pwsh
+        run: |
+          . ./.worktrees/smoke/.venv/Scripts/Activate.ps1
+          build-and-verify build --project .worktrees/smoke
 
   full-verify-gate:
     name: Full Verify

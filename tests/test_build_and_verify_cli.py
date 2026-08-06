@@ -156,8 +156,15 @@ def test_windows_pr_verification_uses_fixed_baseline_and_manual_full_mode() -> N
     )
     fast_run = fast["run"]
     manual_run = manual["run"]
+    step_names = [step.get("name") for step in windows["steps"]]
 
     assert checkout["with"]["fetch-depth"] == 0
+    assert step_names.index("Run PR fast verification") < step_names.index(
+        "Initialize linked worktree"
+    )
+    assert step_names.index("Run manual Windows full verification") < step_names.index(
+        "Initialize linked worktree"
+    )
     assert fast["env"]["BASELINE"] == "${{ github.event.pull_request.base.sha }}"
     assert fast["if"] == "${{ github.event_name == 'pull_request' }}"
     assert manual["if"] == "${{ github.event_name == 'workflow_dispatch' }}"
