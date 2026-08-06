@@ -165,6 +165,9 @@ def test_windows_pr_verification_uses_fixed_baseline_and_manual_full_mode() -> N
     assert step_names.index("Run manual Windows full verification") < step_names.index(
         "Initialize linked worktree"
     )
+    assert step_names.index("Initialize linked worktree") < step_names.index(
+        "Build from linked worktree"
+    )
     assert fast["env"]["BASELINE"] == "${{ github.event.pull_request.base.sha }}"
     assert fast["if"] == "${{ github.event_name == 'pull_request' }}"
     assert manual["if"] == "${{ github.event_name == 'workflow_dispatch' }}"
