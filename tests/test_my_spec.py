@@ -3438,8 +3438,12 @@ def test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit(
 
     first = json.loads(run_cli(executable, "doctor", env=env, cwd=source).stdout)
     published_commit = first["toolchain"]["sourceCommit"]
-    write(source / "unrelated.txt", "does not ship in the MySpec package")
-    assert subprocess.run(["git", "add", "unrelated.txt"], cwd=source, check=False).returncode == 0
+    publisher = tmp_path / "publisher"
+    assert subprocess.run(
+        ["git", "clone", "--branch", "main", str(tmp_path / "origin.git"), publisher], check=False
+    ).returncode == 0
+    write(publisher / "unrelated.txt", "does not ship in the MySpec package")
+    assert subprocess.run(["git", "add", "unrelated.txt"], cwd=publisher, check=False).returncode == 0
     assert subprocess.run(
         [
             "git",
@@ -3451,24 +3455,27 @@ def test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit(
             "-m",
             "unrelated",
         ],
-        cwd=source,
+        cwd=publisher,
         check=False,
     ).returncode == 0
-    assert subprocess.run(["git", "push", "origin", "HEAD:refs/heads/main"], cwd=source, check=False).returncode == 0
-    assert subprocess.run(["git", "for-each-ref", "--format=%(refname)", "refs/remotes/origin"], cwd=source, check=True, text=True, capture_output=True).stdout
-    for ref in subprocess.run(
-        ["git", "for-each-ref", "--format=%(refname)", "refs/remotes/origin"],
-        cwd=source,
-        check=True,
-        text=True,
-        capture_output=True,
-    ).stdout.splitlines():
-        assert subprocess.run(["git", "update-ref", "-d", ref], cwd=source, check=False).returncode == 0
+    assert subprocess.run(["git", "push", "origin", "HEAD:main"], cwd=publisher, check=False).returncode == 0
+    remote_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=publisher, check=True, text=True, capture_output=True
+    ).stdout.strip()
+    assert subprocess.run(["git", "cat-file", "-e", remote_head], cwd=source, check=False).returncode != 0
 
     diagnosed = run_cli(executable, "doctor", env=env, cwd=source)
 
     assert diagnosed.returncode == 0, diagnosed.stderr
     assert json.loads(diagnosed.stdout)["toolchain"]["sourceCommit"] == published_commit
+    assert subprocess.run(["git", "cat-file", "-e", remote_head], cwd=source, check=False).returncode == 0
+    assert not subprocess.run(
+        ["git", "for-each-ref", "--format=%(refname)", "refs/remotes/origin"],
+        cwd=source,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
 
 
 def test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged(

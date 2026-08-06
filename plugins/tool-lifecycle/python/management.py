@@ -273,6 +273,20 @@ def _source_commit_is_published(source_root: Path, commit: str) -> bool:
     for tip in advertised:
         known = _run("git", "cat-file", "-t", tip, cwd=source_root)
         if known.returncode != 0 or known.stdout.strip() != "commit":
+            fetched = _run(
+                "git",
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                "--no-write-fetch-head",
+                "origin",
+                tip,
+                cwd=source_root,
+            )
+            if fetched.returncode != 0:
+                continue
+            known = _run("git", "cat-file", "-t", tip, cwd=source_root)
+        if known.returncode != 0 or known.stdout.strip() != "commit":
             continue
         if _run("git", "merge-base", "--is-ancestor", commit, tip, cwd=source_root).returncode == 0:
             return True
