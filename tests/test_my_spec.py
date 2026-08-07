@@ -269,6 +269,7 @@ def install_packed_myspec(tmp_path: Path) -> tuple[Path, Path]:
         tarball = Path(packed.stdout.strip())
 
     prefix = tmp_path / "npm-prefix"
+    assert not prefix.exists()
     installed = subprocess.run(
         [
             npm,
@@ -807,7 +808,8 @@ def isolated_myspec_env(
 ) -> dict[str, str]:
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
-    path_entries = [str(path) for path in extra_paths]
+    package_bin = prefix if os.name == "nt" else prefix / "bin"
+    path_entries = [str(package_bin), *(str(path) for path in extra_paths)]
     command_paths = [shutil.which(command) for command in ("node", "npm", "git")]
     if os.name == "nt":
         path_entries.extend(
@@ -1022,6 +1024,138 @@ def test_packed_myspec_clients_run_shared_source_cases(tmp_path: Path, client: s
                 "sourceMismatch": False,
             }
         ]
+
+
+@pytest.mark.parametrize(
+    ("platform", "relative_layout"),
+    [
+        ("linux", ("lib", "node_modules")),
+        ("windows", ("node_modules",)),
+    ],
+)
+def test_npm_prefix_for_supported_platform_layouts(
+    tmp_path: Path,
+    platform: str,
+    relative_layout: tuple[str, ...],
+) -> None:
+    prefix = tmp_path / platform / "npm-prefix"
+    installed_package = prefix.joinpath(*relative_layout, "@liuli195", "myspec")
+
+    assert npm_prefix_for(installed_package) == prefix
+
+
+def test_packed_myspec_bare_cli_uses_isolated_package_before_host_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = install_packed_myspec(installed)
+    prefix = npm_prefix_for(installed_package)
+    host_bin = tmp_path / "host-bin"
+    host_bin.mkdir()
+    host_markers = {}
+    host_commands = {}
+    for name in ("myspec", "pi", "claude", "codex"):
+        marker = tmp_path / f"host-{name}.used"
+        host_markers[name] = marker
+        script = tmp_path / f"host-{name}.py"
+        write(
+            script,
+            f"from pathlib import Path\nPath({str(marker)!r}).write_text('used', encoding='utf-8')\nraise SystemExit(99)",
+        )
+        command = host_bin / (f"{name}.cmd" if os.name == "nt" else name)
+        host_commands[name] = command
+        if os.name == "nt":
+            write(command, f'@"{sys.executable}" "{script}" %*')
+        else:
+            write(command, f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"')
+            command.chmod(0o755)
+
+    host_path = os.pathsep.join((str(host_bin), os.environ["PATH"]))
+    monkeypatch.setenv("PATH", host_path)
+    for name, command in host_commands.items():
+        resolved_host = shutil.which(name)
+        assert resolved_host is not None
+        assert Path(resolved_host).resolve() == command.resolve()
+
+    env = isolated_myspec_env(tmp_path, prefix)
+
+    resolved = shutil.which("myspec", path=env["PATH"])
+    assert resolved is not None
+    assert Path(resolved).resolve() == executable.resolve()
+    assert shutil.which("pi", path=env["PATH"]) is None
+    assert shutil.which("claude", path=env["PATH"]) is None
+    assert shutil.which("codex", path=env["PATH"]) is None
+
+    project = tmp_path / "consumer"
+    specs = project / "myspec" / "specs"
+    delta = project / "myspec" / "delta"
+    preview = project / ".local" / "spec-preview"
+    work = project / ".local" / "spec-work"
+    conflicts = project / "no-conflicts.json"
+    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
+    write(
+        delta / "accounts" / "spec.md",
+        """## MODIFIED Requirements
+
+### Requirement: 登录
+
+系统 MUST 允许密码登录。
+
+#### Scenario: 密码正确
+
+- **WHEN** 用户提交正确密码
+- **THEN** 系统创建会话
+""",
+    )
+    write(conflicts, "[]")
+
+    def run_bare(*args: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["myspec", *(str(arg) for arg in args)],
+            cwd=project,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+            shell=os.name == "nt",
+        )
+
+    for result in (
+        run_bare("validate-main", specs),
+        run_bare("state-init", work, "add", "specs-fingerprint", "input-fingerprint"),
+        run_bare("state-set-conflicts", work, conflicts, "specs-fingerprint", "input-fingerprint"),
+        run_bare("validate-delta", delta, specs),
+        run_bare(
+            "apply-delta",
+            specs,
+            delta,
+            preview,
+            work,
+            "specs-fingerprint",
+            "input-fingerprint",
+        ),
+    ):
+        assert result.returncode == 0, result.stderr
+
+    diff = run_bare("diff", specs, preview)
+    assert diff.returncode == 0, diff.stderr
+    assert "密码登录" in diff.stdout
+
+    applied = run_bare(
+        "apply-delta",
+        specs,
+        delta,
+        specs,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert applied.returncode == 0, applied.stderr
+    validated = run_bare("validate-main", specs)
+    assert validated.returncode == 0, validated.stderr
+    assert "系统 MUST 允许密码登录。" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
+    assert not any(marker.exists() for marker in host_markers.values())
 
 
 def test_packed_myspec_update_preflights_installed_clients_before_package_write(

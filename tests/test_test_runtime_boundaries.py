@@ -651,6 +651,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_packed_myspec_clients_run_shared_source_cases': (
         'covers all shared source-state cases through the installed MySpec npm package, native client substitutes, and public doctor CLI; function=test_packed_myspec_clients_run_shared_source_cases'
     ),
+    'tests/test_my_spec.py::test_packed_myspec_bare_cli_uses_isolated_package_before_host_commands': (
+        'covers the installed MySpec Tarball through a bare PATH CLI and a complete isolated specification workflow; function=test_packed_myspec_bare_cli_uses_isolated_package_before_host_commands'
+    ),
     'tests/test_my_spec.py::test_packed_myspec_codex_doctor_uses_user_home_when_orca_home_is_inherited': (
         'covers the installed MySpec CLI selecting the user Codex profile when Orca inherits a temporary profile; function=test_packed_myspec_codex_doctor_uses_user_home_when_orca_home_is_inherited'
     ),
