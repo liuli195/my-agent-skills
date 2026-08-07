@@ -5029,6 +5029,129 @@ def test_packed_myspec_installs_a_working_cli_with_agent_resources(tmp_path: Pat
         assert f"myspec {command}" in rules
 
 
+def test_packed_myspec_preserves_modified_requirement_order(tmp_path: Path) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, _ = install_packed_myspec(installed)
+    titles = ("首部", "中部", "尾部")
+
+    def preview_delta(root: Path, specs: Path, delta: Path) -> tuple[Path, Path]:
+        preview = root / "preview"
+        work = root / "work"
+        conflicts = root / "conflicts.json"
+        write(conflicts, "[]")
+        for result in (
+            run_cli(executable, "state-init", work, "add", "specs-fingerprint", "input-fingerprint"),
+            run_cli(executable, "state-set-conflicts", work, conflicts, "specs-fingerprint", "input-fingerprint"),
+            run_cli(executable, "validate-delta", delta, specs),
+            run_cli(executable, "apply-delta", specs, delta, preview, work, "specs-fingerprint", "input-fingerprint"),
+        ):
+            assert result.returncode == 0, result.stderr
+        return preview, work
+
+    for target in titles:
+        root = tmp_path / target
+        specs = root / "specs"
+        delta = root / "delta"
+        write(
+            specs / "accounts" / "spec.md",
+            main_spec("Accounts", *(requirement(title, f"保留{title}") for title in titles)),
+        )
+        write(
+            delta / "accounts" / "spec.md",
+            f"""## MODIFIED Requirements
+
+### Requirement: {target}
+
+系统 MUST 更新{target}。
+
+#### Scenario: 修改{target}
+
+- **WHEN** 用户修改{target}
+- **THEN** 系统保留需求顺序
+""",
+        )
+        preview, work = preview_delta(root, specs, delta)
+        preview_text = (preview / "accounts" / "spec.md").read_text(encoding="utf-8")
+        assert [
+            line.removeprefix("### Requirement: ")
+            for line in preview_text.splitlines()
+            if line.startswith("### Requirement: ")
+        ] == list(titles)
+        assert f"系统 MUST 更新{target}。" in preview_text
+        assert f"系统 MUST 保留{target}。" not in preview_text
+        diff = run_cli(executable, "diff", specs, preview)
+        assert diff.returncode == 0, diff.stderr
+        assert f"-### Requirement: {target}" not in diff.stdout
+        assert f"+### Requirement: {target}" not in diff.stdout
+        applied = run_cli(
+            executable,
+            "apply-delta",
+            specs,
+            delta,
+            specs,
+            work,
+            "specs-fingerprint",
+            "input-fingerprint",
+        )
+        assert applied.returncode == 0, applied.stderr
+        assert (specs / "accounts" / "spec.md").read_bytes() == (
+            preview / "accounts" / "spec.md"
+        ).read_bytes()
+        before_repeat = (specs / "accounts" / "spec.md").read_bytes()
+        repeated_preview, repeated_work = preview_delta(root / "repeat", specs, delta)
+        repeated = run_cli(
+            executable,
+            "apply-delta",
+            specs,
+            delta,
+            specs,
+            repeated_work,
+            "specs-fingerprint",
+            "input-fingerprint",
+        )
+        assert repeated.returncode == 0, repeated.stderr
+        assert (repeated_preview / "accounts" / "spec.md").read_bytes() == before_repeat
+        assert (specs / "accounts" / "spec.md").read_bytes() == before_repeat
+
+    root = tmp_path / "cross-capability"
+    specs = root / "specs"
+    delta = root / "delta"
+    write(specs / "source" / "spec.md", main_spec("Source", requirement("移动项", "留在来源")))
+    write(specs / "target" / "spec.md", main_spec("Target", requirement("现有项", "留在目标")))
+    write(
+        delta / "target" / "spec.md",
+        """## MODIFIED Requirements
+
+### Requirement: 移动项
+
+系统 MUST 移入目标能力。
+
+#### Scenario: 跨能力修改
+
+- **WHEN** 用户修改其他能力中的需求
+- **THEN** 系统把需求移入目标能力
+""",
+    )
+    preview, work = preview_delta(root, specs, delta)
+    assert "### Requirement: 移动项" not in (preview / "source" / "spec.md").read_text(encoding="utf-8")
+    target_text = (preview / "target" / "spec.md").read_text(encoding="utf-8")
+    assert target_text.index("### Requirement: 现有项") < target_text.index("### Requirement: 移动项")
+    applied = run_cli(
+        executable,
+        "apply-delta",
+        specs,
+        delta,
+        specs,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert applied.returncode == 0, applied.stderr
+    assert (specs / "source" / "spec.md").read_bytes() == (preview / "source" / "spec.md").read_bytes()
+    assert (specs / "target" / "spec.md").read_bytes() == (preview / "target" / "spec.md").read_bytes()
+
+
 def test_myspec_launcher_forwards_sigterm_to_python(tmp_path: Path) -> None:
     if sys.platform == "win32":
         pytest.skip("Windows cannot deliver a catchable SIGTERM to another process")

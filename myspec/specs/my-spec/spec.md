@@ -211,3 +211,19 @@ MySpec（自有规格） MUST preserve unrelated specification files when applyi
 - **WHEN** 用户最终确认且所有运行上下文仍有效
 - **THEN** 系统 MUST 在原子替换前证明待写入结果与已确认预览完全相同
 - **THEN** 不同目标工作树的开发模式规格运行 MUST 继续使用各自独立的状态和锁
+### Requirement: 同能力修改保持需求顺序
+
+MySpec（自有规格） MUST 在同一 capability（能力）内应用 `MODIFIED`（修改）Delta（增量规格）时原位替换已有 Requirement（需求）正文，并保持该 Requirement 在能力文件中的原有顺序。
+
+#### Scenario: 修改已有需求
+
+- **WHEN** 用户修改同一能力内首部、中部或尾部的已有 Requirement
+- **THEN** 预览和最终应用 MUST 保持全部 Requirement 的原有标题顺序
+- **THEN** `myspec diff`（规格差异） MUST 只展示正文的真实变化，不得包含纯位置移动造成的整块删除与新增
+
+#### Scenario: 保持其他操作和重复执行行为
+
+- **WHEN** 用户执行跨能力 `MODIFIED`、`ADDED`、`REMOVED` 或 `RENAMED`
+- **THEN** MySpec MUST 保持这些操作的既有移动、新增、删除和改名行为
+- **WHEN** 用户对相同结果重复预览或应用同一 Delta
+- **THEN** MySpec MUST 不产生额外变化
