@@ -347,6 +347,9 @@ def _merged_specs(specs_root: Path, delta_root: Path) -> OrderedDict[str, MainSp
                     source = specs[locations[title]].requirements[title]
                     if operation == "ADDED" or (locations[title] == delta.capability and source == block):
                         continue
+                    if operation == "MODIFIED" and locations[title] == delta.capability:
+                        specs[delta.capability].requirements[title] = block
+                        continue
                     del specs[locations[title]].requirements[title]
                 _target(specs, delta).requirements[title] = block
                 locations[title] = delta.capability

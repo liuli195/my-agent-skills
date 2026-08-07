@@ -594,6 +594,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_packed_myspec_installs_a_working_cli_with_agent_resources': (
         'covers npm Tarball packing, isolated installation, and the installed myspec CLI seam; function=test_packed_myspec_installs_a_working_cli_with_agent_resources'
     ),
+    'tests/test_my_spec.py::test_packed_myspec_preserves_modified_requirement_order': (
+        'covers the installed myspec CLI preserving same-capability Requirement order while retaining cross-capability moves; function=test_packed_myspec_preserves_modified_requirement_order'
+    ),
     'tests/test_my_spec.py::test_spec_ops_cli_validates_applies_all_delta_operations_and_diffs': (
         'covers the packaged spec_ops CLI validation, all Delta operations, preview, and diff seam; function=test_spec_ops_cli_validates_applies_all_delta_operations_and_diffs'
     ),
