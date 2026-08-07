@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import hashlib
 import importlib.util
 import json
@@ -9,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -32,6 +34,8 @@ SOURCE_FIELDS = (
     "sourceKind",
     "sourceMismatch",
 )
+_install_template_candidate: Path | None = None
+_install_template: tuple[Path, Path] | None = None
 
 
 def load_management_module():
@@ -247,6 +251,75 @@ def run_confirmed_workflow(
     return diff.stdout
 
 
+def _cleanup_myspec_install_template() -> None:
+    global _install_template_candidate, _install_template
+    if _install_template is not None:
+        shutil.rmtree(_install_template[0].parent, ignore_errors=True)
+    _install_template_candidate = None
+    _install_template = None
+
+
+atexit.register(_cleanup_myspec_install_template)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _cleanup_myspec_install_template_after_session():
+    try:
+        yield
+    finally:
+        _cleanup_myspec_install_template()
+
+
+def _install_myspec_template(candidate: Path, npm: str) -> tuple[Path, Path]:
+    global _install_template_candidate, _install_template
+    if (
+        _install_template_candidate == candidate
+        and _install_template is not None
+        and _install_template[0].is_dir()
+    ):
+        return _install_template
+
+    _cleanup_myspec_install_template()
+    template_root = Path(tempfile.mkdtemp(prefix="myspec-install-template-"))
+    try:
+        template_prefix = template_root / "npm-prefix"
+        installed = subprocess.run(
+            [
+                npm,
+                "install",
+                "--global",
+                "--prefix",
+                str(template_prefix),
+                "--ignore-scripts",
+                "--no-audit",
+                "--no-fund",
+                str(candidate),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert installed.returncode == 0, installed.stderr
+
+        executable = template_prefix / ("myspec.cmd" if sys.platform == "win32" else "bin/myspec")
+        assert executable.is_file()
+        npm_root = subprocess.run(
+            [npm, "root", "--global", "--prefix", str(template_prefix)],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        template_package = Path(npm_root.stdout.strip()) / "@liuli195" / "myspec"
+        assert template_package.is_dir()
+    except BaseException:
+        shutil.rmtree(template_root, ignore_errors=True)
+        raise
+
+    _install_template_candidate = candidate
+    _install_template = (template_prefix, template_package)
+    return _install_template
+
+
 def install_packed_myspec(tmp_path: Path) -> tuple[Path, Path]:
     npm = shutil.which("npm")
     assert npm is not None
@@ -258,15 +331,24 @@ def install_packed_myspec(tmp_path: Path) -> tuple[Path, Path]:
         assert source_tarball.is_file()
         tarball = package_dir / source_tarball.name
         shutil.copy2(source_tarball, tarball)
-    else:
-        packed = subprocess.run(
-            [sys.executable, str(PACK), "myspec", str(package_dir)],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert packed.returncode == 0, packed.stderr
-        tarball = Path(packed.stdout.strip())
+        template_prefix, template_package = _install_myspec_template(source_tarball, npm)
+        prefix = tmp_path / "npm-prefix"
+        assert not prefix.exists()
+        shutil.copytree(template_prefix, prefix, symlinks=True)
+        installed_package = prefix / template_package.relative_to(template_prefix)
+        executable = prefix / ("myspec.cmd" if sys.platform == "win32" else "bin/myspec")
+        assert executable.is_file()
+        assert installed_package.is_dir()
+        return executable, installed_package
+
+    packed = subprocess.run(
+        [sys.executable, str(PACK), "myspec", str(package_dir)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert packed.returncode == 0, packed.stderr
+    tarball = Path(packed.stdout.strip())
 
     prefix = tmp_path / "npm-prefix"
     assert not prefix.exists()

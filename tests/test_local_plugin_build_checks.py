@@ -68,6 +68,76 @@ def test_my_spec_candidate_setup_cleans_up_when_pack_cannot_start(
     assert not candidate_directory.exists()
 
 
+def test_my_spec_candidate_install_reuses_worker_template(tmp_path: Path, monkeypatch) -> None:
+    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_install_template")
+    candidate = tmp_path / "candidate.tgz"
+    candidate.write_bytes(b"candidate")
+    monkeypatch.setenv("MYSPEC_TEST_TARBALL", str(candidate))
+    calls: list[list[str]] = []
+
+    def fake_which(name: str) -> str | None:
+        return "npm" if name == "npm" else None
+
+    def fake_run(command, **kwargs):
+        del kwargs
+        calls.append(command)
+        prefix = Path(command[command.index("--prefix") + 1])
+        root = prefix / ("node_modules" if os.name == "nt" else "lib/node_modules")
+        package = root / "@liuli195" / "myspec"
+        package.mkdir(parents=True, exist_ok=True)
+        (package / "package.json").write_text("{}", encoding="utf-8")
+        executable = prefix / ("myspec.cmd" if os.name == "nt" else "bin/myspec")
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_text("#!/bin/sh\n", encoding="utf-8")
+        if command[1] == "root":
+            return subprocess.CompletedProcess(command, 0, f"{root}\n", "")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(module.shutil, "which", fake_which)
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+
+    _, first_package = module.install_packed_myspec(first)
+    _, second_package = module.install_packed_myspec(second)
+
+    assert first_package != second_package
+    assert len([command for command in calls if command[1] == "install"]) == 1
+
+
+def test_my_spec_candidate_install_cleans_template_on_install_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_install_error")
+    candidate = tmp_path / "candidate.tgz"
+    candidate.write_bytes(b"candidate")
+    monkeypatch.setenv("MYSPEC_TEST_TARBALL", str(candidate))
+    template_root = tmp_path / "template"
+
+    def make_template_root(**kwargs):
+        del kwargs
+        template_root.mkdir()
+        return str(template_root)
+
+    monkeypatch.setattr(module.tempfile, "mkdtemp", make_template_root)
+    monkeypatch.setattr(module.shutil, "which", lambda name: "npm" if name == "npm" else None)
+
+    def install_error(*args, **kwargs):
+        del args, kwargs
+        raise OSError("npm unavailable")
+
+    monkeypatch.setattr(module.subprocess, "run", install_error)
+    installed = tmp_path / "installed"
+    installed.mkdir()
+
+    with pytest.raises(OSError, match="npm unavailable"):
+        module.install_packed_myspec(installed)
+
+    assert not template_root.exists()
+
+
 def test_my_spec_candidate_setup_packs_once_before_workers(monkeypatch) -> None:
     module = load_module(REPO_ROOT / "tests" / "conftest.py", "test_my_spec_conftest_once")
     calls: list[list[str]] = []
@@ -96,18 +166,33 @@ def test_my_spec_candidate_setup_packs_once_before_workers(monkeypatch) -> None:
 def test_my_spec_candidate_path_reaches_real_xdist_workers(tmp_path: Path) -> None:
     report_dir = tmp_path / "worker-reports"
     report_dir.mkdir()
+    worker_temp_root = tmp_path / "worker-temp"
+    worker_temp_root.mkdir()
     probe = tmp_path / "test_my_spec.py"
     probe.write_text(
-        """import os
+        """import json
+import os
 from pathlib import Path
 
+import tests.test_my_spec as myspec
 
-def test_candidate_is_inherited():
+
+def test_candidate_is_inherited_and_installed_once(tmp_path):
     worker = os.environ["PYTEST_XDIST_WORKER"]
     candidate = Path(os.environ["MYSPEC_TEST_TARBALL"]).resolve()
     assert candidate.is_file()
-    (Path(os.environ["MYSPEC_WORKER_REPORT_DIR"]) / f"{worker}.txt").write_text(
-        str(candidate), encoding="utf-8"
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, package = myspec.install_packed_myspec(installed)
+    result = myspec.run_cli(executable, "--help")
+    assert result.returncode == 0, result.stderr
+    report = {
+        "candidate": str(candidate),
+        "prefix": str(myspec.npm_prefix_for(package).resolve()),
+        "package": str(package.resolve()),
+    }
+    (Path(os.environ["MYSPEC_WORKER_REPORT_DIR"]) / f"{worker}.json").write_text(
+        json.dumps(report), encoding="utf-8"
     )
 """,
         encoding="utf-8",
@@ -115,6 +200,8 @@ def test_candidate_is_inherited():
     env = os.environ.copy()
     env.pop("MYSPEC_TEST_TARBALL", None)
     env["MYSPEC_WORKER_REPORT_DIR"] = str(report_dir)
+    for variable in ("TMPDIR", "TEMP", "TMP"):
+        env[variable] = str(worker_temp_root)
     result = subprocess.run(
         [
             sys.executable,
@@ -137,12 +224,17 @@ def test_candidate_is_inherited():
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    reports = sorted(report_dir.glob("gw*.txt"))
+    reports = sorted(report_dir.glob("gw*.json"))
     assert [report.stem for report in reports] == ["gw0", "gw1", "gw2", "gw3"]
-    candidates = {Path(report.read_text(encoding="utf-8")).resolve() for report in reports}
+    payloads = [json.loads(report.read_text(encoding="utf-8")) for report in reports]
+    candidates = {Path(payload["candidate"]).resolve() for payload in payloads}
     assert len(candidates) == 1
     candidate = next(iter(candidates))
     assert candidate.is_absolute()
+    prefixes = {Path(payload["prefix"]).resolve() for payload in payloads}
+    assert len(prefixes) == 4
+    assert all(Path(payload["package"]).is_dir() for payload in payloads)
+    assert not list(worker_temp_root.glob("myspec-install-template-*"))
 
 
 def load_module(path: Path, name: str):
