@@ -31,10 +31,24 @@ SUPPORTED_REVIEW_GATE_MODES = {"github", "skip"}
 DEFAULT_GH_PR_VIEW_RETRIES = 3
 GH_CHECKS_PENDING_EXIT_CODE = 8
 REQUIRED_CHECK_FIELDS = "bucket,name,state,workflow,link"
-CHECK_GATE_PASSED = "passed"
-CHECK_GATE_PENDING = "pending"
-CHECK_GATE_FAILED = "failed"
-CHECK_GATE_UNAVAILABLE = "unavailable"
+CHECK_GATE_NOT_REPORTED = "NOT_REPORTED"
+CHECK_GATE_PENDING = "PENDING"
+CHECK_GATE_PASSED = "PASSED"
+CHECK_GATE_FAILED = "FAILED"
+CHECK_GATE_CANCELLED = "CANCELLED"
+CHECK_GATE_UNAVAILABLE = "UNAVAILABLE"
+INITIAL_CHECK_WINDOW_SECONDS = 60
+INITIAL_CHECK_POLL_SECONDS = 5
+RULESET_MERGE_WINDOW_SECONDS = 60
+CHECK_OBSERVATION_WAIT = "wait"
+CHECK_OBSERVATION_ONCE = "once"
+CHECK_GATE_STOP_REASONS = {
+    CHECK_GATE_NOT_REPORTED: ("DISPATCH_REQUIRED", "checks_not_reported"),
+    CHECK_GATE_PENDING: ("DISPATCH_REQUIRED", "checks_pending"),
+    CHECK_GATE_FAILED: ("REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking"),
+    CHECK_GATE_CANCELLED: ("REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking"),
+    CHECK_GATE_UNAVAILABLE: ("DISPATCH_REQUIRED", "checks_unavailable"),
+}
 GH_PR_VIEW_RETRIES_ENV = "PR_FLOW_GH_PR_VIEW_RETRIES"
 PR_TEMPLATE = """## Summary
 
@@ -708,6 +722,9 @@ RECOVERABLE_NEXT_ACTIONS = {
     "gh_pr_view_transient_failed": {
         "nextAction": "Wait briefly, then rerun the same PR Flow command.",
     },
+    "checks_not_reported": {
+        "nextAction": "Wait for GitHub required checks to be reported, then rerun the same PR Flow command.",
+    },
     "checks_pending": {
         "nextAction": "Wait for GitHub checks to finish, then rerun the same PR Flow command.",
     },
@@ -717,8 +734,14 @@ RECOVERABLE_NEXT_ACTIONS = {
     "checks_unavailable": {
         "nextAction": "Verify GitHub check access and status, then rerun the same PR Flow command.",
     },
+    "head_moved": {
+        "nextAction": "Rerun the same PR Flow command for the current source commit.",
+    },
+    "base_outdated": {
+        "nextAction": "Rerun the same PR Flow command against the current base commit.",
+    },
     "ruleset_merge_blocking": {
-        "nextAction": "Wait for ruleset requirements to pass or enable auto-merge, then rerun the same PR Flow command.",
+        "nextAction": "Wait for ruleset requirements to pass, then rerun the same PR Flow command.",
     },
     "invalid_fixes": {
         "nextAction": "Fix the invalid issue references, then rerun the same PR Flow command.",
@@ -737,6 +760,7 @@ RECOVERABLE_NEXT_ACTIONS = {
 RECOVERABLE_STOP_STATUSES = {
     "gh_auth_required": "DISPATCH_REQUIRED",
     "gh_pr_view_transient_failed": "DISPATCH_REQUIRED",
+    "checks_not_reported": "DISPATCH_REQUIRED",
     "checks_pending": "DISPATCH_REQUIRED",
     "ruleset_merge_blocking": "DISPATCH_REQUIRED",
     "pr_missing": "DISPATCH_REQUIRED",
@@ -784,10 +808,13 @@ def add_recovery_action(details: dict[str, Any], next_command: str | None = None
     reason = str(details.get("reason") or "")
     if next_command and reason in {
         "gh_pr_view_transient_failed",
+        "checks_not_reported",
         "checks_pending",
         "ruleset_merge_blocking",
         "checks_or_review_blocking",
         "checks_unavailable",
+        "head_moved",
+        "base_outdated",
     }:
         details.setdefault("nextCommand", next_command)
     for key, value in RECOVERABLE_NEXT_ACTIONS.get(reason, {}).items():
@@ -1212,8 +1239,11 @@ def raise_required_checks_error(
     *,
     empty: bool = False,
     error: str | None = None,
+    checks: Any = None,
 ) -> NoReturn:
     details = required_checks_error_details(result, pr_number, empty=empty)
+    if checks is not None:
+        details["requiredChecks"] = checks
     if error is not None:
         details["error"] = error
     raise PrFlowError(str(details["reason"]), details)
@@ -1234,66 +1264,48 @@ def required_checks(project: Path, pr_number: Any) -> list[dict[str, Any]]:
     except json.JSONDecodeError as exc:
         raise_required_checks_error(result, pr_number, error=str(exc))
     if not isinstance(checks, list) or not all(isinstance(check, dict) for check in checks):
-        raise_required_checks_error(result, pr_number)
+        raise_required_checks_error(result, pr_number, checks=checks)
     if not checks:
-        raise_required_checks_error(result, pr_number, empty=True)
+        raise_required_checks_error(result, pr_number, empty=True, checks=checks)
     if result.returncode != 0:
         if gh_auth_required(result) or gh_checks_unavailable(result) or gh_no_required_checks(result):
-            raise_required_checks_error(result, pr_number)
+            raise_required_checks_error(result, pr_number, checks=checks)
         if result.returncode == GH_CHECKS_PENDING_EXIT_CODE and has_pending_check(checks):
             return checks
         if has_failing_check(checks) and not result.stderr.strip():
             return checks
-        raise_required_checks_error(result, pr_number)
+        raise_required_checks_error(result, pr_number, checks=checks)
     return checks
 
 
-def has_pending_check(checks: list[Any]) -> bool:
-    pending_values = {"PENDING", "IN_PROGRESS", "QUEUED", "REQUESTED", "WAITING", "EXPECTED"}
-    for check in checks:
-        if not isinstance(check, dict):
-            continue
-        if check_value(check, "bucket") == "PENDING" or check_value(check, "status") in pending_values or check_value(check, "state") in pending_values:
-            return True
-    return False
-
-
-def has_failing_check(checks: list[Any]) -> bool:
-    failing_values = {"FAILURE", "FAILED", "ERROR", "TIMED_OUT", "CANCELLED", "CANCELED", "STARTUP_FAILURE"}
-    for check in checks:
-        if not isinstance(check, dict):
-            continue
-        if (
-            check_value(check, "bucket") in {"FAIL", "CANCEL"}
-            or
-            check_value(check, "conclusion") in failing_values
-            or check_value(check, "status") in failing_values
-            or check_value(check, "state") in failing_values
-        ):
-            return True
-    return False
-
-
 CHECK_SUCCESS_VALUES = {"PASS", "PASSED", "SUCCESS", "SKIPPED", "NEUTRAL"}
-CHECK_KNOWN_VALUES = CHECK_SUCCESS_VALUES | {
-    "PENDING",
-    "IN_PROGRESS",
-    "QUEUED",
-    "REQUESTED",
-    "WAITING",
-    "EXPECTED",
-    "FAIL",
-    "FAILURE",
-    "FAILED",
-    "ERROR",
-    "TIMED_OUT",
-    "CANCEL",
-    "CANCELLED",
-    "CANCELED",
-    "STARTUP_FAILURE",
+CHECK_PENDING_VALUES = {"PENDING", "IN_PROGRESS", "QUEUED", "REQUESTED", "WAITING", "EXPECTED"}
+CHECK_FAILED_VALUES = {"FAIL", "FAILURE", "FAILED", "ERROR", "TIMED_OUT", "STARTUP_FAILURE"}
+CHECK_CANCELLED_VALUES = {"CANCEL", "CANCELLED", "CANCELED"}
+CHECK_KNOWN_VALUES = CHECK_SUCCESS_VALUES | CHECK_PENDING_VALUES | CHECK_FAILED_VALUES | CHECK_CANCELLED_VALUES | {
     "COMPLETED",
 }
 CHECK_BUCKET_VALUES = {"PASS", "PENDING", "FAIL", "CANCEL"}
+
+
+def check_has_value(check: dict[str, Any], values: set[str]) -> bool:
+    return any(check_value(check, key) in values for key in ("bucket", "status", "state", "conclusion"))
+
+
+def has_pending_check(checks: list[Any]) -> bool:
+    return any(isinstance(check, dict) and check_has_value(check, CHECK_PENDING_VALUES) for check in checks)
+
+
+def has_cancelled_check(checks: list[Any]) -> bool:
+    return any(isinstance(check, dict) and check_has_value(check, CHECK_CANCELLED_VALUES) for check in checks)
+
+
+def has_failed_check(checks: list[Any]) -> bool:
+    return any(isinstance(check, dict) and check_has_value(check, CHECK_FAILED_VALUES) for check in checks)
+
+
+def has_failing_check(checks: list[Any]) -> bool:
+    return has_failed_check(checks) or has_cancelled_check(checks)
 
 
 def check_item_is_known(check: dict[str, Any]) -> bool:
@@ -1322,12 +1334,16 @@ def check_item_is_passed(check: dict[str, Any]) -> bool:
 
 
 def classify_check_values(checks: Any) -> str:
-    if not isinstance(checks, list) or not checks or not all(isinstance(check, dict) for check in checks):
+    if not isinstance(checks, list) or not all(isinstance(check, dict) for check in checks):
         return CHECK_GATE_UNAVAILABLE
+    if not checks:
+        return CHECK_GATE_NOT_REPORTED
     if not all(check_item_is_known(check) for check in checks):
         return CHECK_GATE_UNAVAILABLE
-    if has_failing_check(checks):
+    if has_failed_check(checks):
         return CHECK_GATE_FAILED
+    if has_cancelled_check(checks):
+        return CHECK_GATE_CANCELLED
     if has_pending_check(checks):
         return CHECK_GATE_PENDING
     if all(check_item_is_passed(check) for check in checks):
@@ -1336,15 +1352,8 @@ def classify_check_values(checks: Any) -> str:
 
 
 def classify_check_summary(summary: Any) -> str:
-    if not isinstance(summary, list) or not summary or not all(isinstance(check, dict) for check in summary):
-        return CHECK_GATE_UNAVAILABLE
-    if not all(check_item_is_known(check) for check in summary):
-        return CHECK_GATE_UNAVAILABLE
-    if has_failing_check(summary):
-        return CHECK_GATE_FAILED
-    if has_pending_check(summary):
-        return CHECK_GATE_PENDING
-    return CHECK_GATE_UNAVAILABLE
+    state = classify_check_values(summary)
+    return CHECK_GATE_UNAVAILABLE if state == CHECK_GATE_PASSED else state
 
 
 def check_gate_details(
@@ -1352,21 +1361,18 @@ def check_gate_details(
     checks: list[dict[str, Any]] | None,
     query_error: dict[str, Any] | None,
     state: str,
+    raw_checks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     summary = pr.get("statusCheckRollup")
     details: dict[str, Any] = {
-        "reason": {
-            CHECK_GATE_PENDING: "checks_pending",
-            CHECK_GATE_FAILED: "checks_or_review_blocking",
-            CHECK_GATE_UNAVAILABLE: "checks_unavailable",
-        }.get(state, "pr_state"),
+        "reason": CHECK_GATE_STOP_REASONS.get(state, ("", "pr_state"))[1],
         "checkGate": state,
         "pr": pr.get("number"),
         "headRefName": pr.get("headRefName"),
         "baseRefName": pr.get("baseRefName"),
         "headRefOid": pr.get("headRefOid"),
         "baseRefOid": pr.get("baseRefOid"),
-        "requiredChecks": checks if checks is not None else [],
+        "requiredChecks": checks if checks is not None else raw_checks or [],
         "checkSummary": summary,
     }
     if query_error is not None:
@@ -1383,28 +1389,31 @@ def classify_check_gate(project: Path, pr: dict[str, Any]) -> dict[str, Any]:
     else:
         query_error = None
 
+    raw_checks = query_error.get("requiredChecks") if query_error is not None else None
+    if not isinstance(raw_checks, list):
+        raw_checks = None
     state = classify_check_values(checks)
     if checks is None and query_error and query_error.get("fallbackToSummary") is True:
         summary_state = classify_check_summary(pr.get("statusCheckRollup"))
-        if summary_state in {CHECK_GATE_PENDING, CHECK_GATE_FAILED}:
+        if summary_state != CHECK_GATE_UNAVAILABLE:
             state = summary_state
-    return {"state": state, "details": check_gate_details(pr, checks, query_error, state)}
+    if state == CHECK_GATE_NOT_REPORTED and query_error is not None:
+        query_error = {**query_error, "reason": "checks_not_reported"}
+    return {"state": state, "details": check_gate_details(pr, checks, query_error, state, raw_checks)}
 
 
 def check_gate_stop_state(gate: dict[str, Any], next_command: str | None = None) -> dict[str, Any] | None:
     state = gate.get("state")
     if state == CHECK_GATE_PASSED:
         return None
-    reasons = {
-        CHECK_GATE_PENDING: ("DISPATCH_REQUIRED", "checks_pending"),
-        CHECK_GATE_FAILED: ("REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking"),
-        CHECK_GATE_UNAVAILABLE: ("DISPATCH_REQUIRED", "checks_unavailable"),
-    }
-    status, message = reasons.get(state, ("DISPATCH_REQUIRED", "checks_unavailable"))
+    status, message = CHECK_GATE_STOP_REASONS.get(state, ("DISPATCH_REQUIRED", "checks_unavailable"))
     details = dict(gate.get("details") or {})
     query_reason = (details.get("checkQueryError") or {}).get("reason")
     if state == CHECK_GATE_UNAVAILABLE and query_reason == "gh_auth_required":
         status, message = "DISPATCH_REQUIRED", "gh_auth_required"
+    if state == CHECK_GATE_CANCELLED:
+        details["checkStateReason"] = "checks_cancelled"
+        details["nextAction"] = "Re-run the cancelled GitHub checks, then rerun the same PR Flow command."
     details["reason"] = message
     return stop_state(status, message, add_recovery_action(details, next_command))
 
@@ -1430,11 +1439,6 @@ def gh_pr_not_found(result: subprocess.CompletedProcess[str]) -> bool:
 def gh_pr_merge_policy_blocked(result: subprocess.CompletedProcess[str]) -> bool:
     text = f"{result.stdout}\n{result.stderr}".lower()
     return "base branch policy prohibits the merge" in text
-
-
-def gh_pr_merge_auto_suggested(result: subprocess.CompletedProcess[str]) -> bool:
-    text = f"{result.stdout}\n{result.stderr}".lower()
-    return "add the --auto flag" in text or "add --auto" in text
 
 
 def auto_push_current_branch_if_needed(
@@ -1835,7 +1839,7 @@ def head_oid(project: Path) -> str:
     return require_git_success(project, "git_head_oid_failed", "rev-parse", "HEAD").stdout.strip()
 
 
-def merge_pr(project: Path, config: dict[str, Any], pr: dict[str, Any], *, auto: bool = False) -> dict[str, Any] | None:
+def merge_pr(project: Path, config: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any] | None:
     pr_number = pr.get("number")
     if isinstance(pr_number, bool) or not isinstance(pr_number, (int, str)) or str(pr_number) == "":
         raise PrFlowError(
@@ -1872,8 +1876,6 @@ def merge_pr(project: Path, config: dict[str, Any], pr: dict[str, Any], *, auto:
         )
 
     merge_args = ["pr", "merge", str(pr_number), strategy_flag, "--match-head-commit", current_head_oid]
-    if auto:
-        merge_args.append("--auto")
     result = gh(project, *merge_args)
     if result.returncode != 0:
         details = command_failure_details("gh_pr_merge_failed", result)
@@ -1887,7 +1889,6 @@ def merge_pr(project: Path, config: dict[str, Any], pr: dict[str, Any], *, auto:
         )
         if gh_pr_merge_policy_blocked(result):
             details["reason"] = "ruleset_merge_blocking"
-            details["autoMergeSuggested"] = gh_pr_merge_auto_suggested(result)
             raise PrFlowError("ruleset_merge_blocking", add_recovery_action(details))
         raise PrFlowError("gh_pr_merge_failed", details)
     return None
@@ -1909,39 +1910,55 @@ def require_cleanup_pr_fields(pr: dict[str, Any]) -> tuple[str, str]:
     return head_ref, base_ref
 
 
-def wait_for_checks(
+def observation_commit_error(error: PrFlowError, original: dict[str, Any], current: dict[str, Any]) -> PrFlowError:
+    details = dict(error.details)
+    details.setdefault("pr", original.get("number"))
+    details.setdefault("headRefName", current.get("headRefName"))
+    details.setdefault("baseRefName", current.get("baseRefName"))
+    details.setdefault("headRefOid", original.get("headRefOid"))
+    details.setdefault("baseRefOid", original.get("baseRefOid"))
+    details["observedHeadRefOid"] = current.get("headRefOid")
+    details["observedBaseRefOid"] = current.get("baseRefOid")
+    details["checkSummary"] = current.get("statusCheckRollup")
+    details.setdefault("requiredChecks", [])
+    return PrFlowError(error.reason, details)
+
+
+def observe_check_gate(
     project: Path,
-    pr: dict[str, Any],
+    initial_pr: dict[str, Any],
     wait_config: dict[str, Any],
-    next_command: str | None = None,
-) -> dict[str, Any] | None:
+    mode: str,
+) -> dict[str, Any]:
     timeout_seconds = int(wait_config.get("timeoutSeconds", 600))
     poll_seconds = int(wait_config.get("pollSeconds", 15))
     started_at = time.monotonic()
-    current = pr
+    current = initial_pr
 
     while True:
         gate = classify_check_gate(project, current)
-        if gate.get("state") != CHECK_GATE_PENDING:
-            return check_gate_stop_state(gate, next_command)
-        details = gate["details"]
-        if timeout_seconds <= 0:
-            return stop_state(
-                "DISPATCH_REQUIRED",
-                "checks_pending",
-                add_recovery_action(details, next_command),
-            )
+        state = gate.get("state")
+        if mode == CHECK_OBSERVATION_ONCE or state not in {CHECK_GATE_NOT_REPORTED, CHECK_GATE_PENDING}:
+            return {**gate, "prSnapshot": current}
 
-        remaining = timeout_seconds - (time.monotonic() - started_at)
-        if remaining <= 0:
-            return stop_state(
-                "DISPATCH_REQUIRED",
-                "checks_pending",
-                add_recovery_action(details, next_command),
-            )
-        time.sleep(min(max(poll_seconds, 1), remaining))
+        elapsed = time.monotonic() - started_at
+        if state == CHECK_GATE_NOT_REPORTED:
+            remaining = min(INITIAL_CHECK_WINDOW_SECONDS - elapsed, timeout_seconds - elapsed)
+            if timeout_seconds <= 0 or remaining <= 0:
+                return {**gate, "prSnapshot": current}
+            interval = min(max(poll_seconds, 1), INITIAL_CHECK_POLL_SECONDS, remaining)
+        else:
+            remaining = timeout_seconds - elapsed
+            if timeout_seconds <= 0 or remaining <= 0:
+                return {**gate, "prSnapshot": current}
+            interval = min(max(poll_seconds, 1), remaining)
+
+        time.sleep(interval)
         updated = sync_pr(project, current)
-        require_same_pr_commits(pr, updated)
+        try:
+            require_same_pr_commits(initial_pr, updated)
+        except PrFlowError as exc:
+            raise observation_commit_error(exc, initial_pr, updated) from exc
         current = updated
 
 
@@ -1984,6 +2001,30 @@ def ruleset_retry_failure_details(
     return add_recovery_action(details, next_command)
 
 
+def revalidate_merge_gates(
+    project: Path,
+    config: dict[str, Any],
+    original_pr: dict[str, Any],
+    *,
+    skip_review_gate: bool,
+    next_command: str | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    current = sync_pr(project, original_pr)
+    require_same_pr_commits(original_pr, current)
+    gate = observe_check_gate(project, current, wait_config_from_config(config), CHECK_OBSERVATION_ONCE)
+    check_stop = check_gate_stop_state(gate, next_command)
+    current = gate["prSnapshot"]
+    if check_stop is not None:
+        return current, check_stop
+    current = sync_pr(project, current)
+    require_same_pr_commits(original_pr, current)
+    if not skip_review_gate:
+        review_stop = check_review_gate(project, config, current)
+        if review_stop is not None:
+            return current, review_stop
+    return current, None
+
+
 def retry_merge_after_ruleset_block(
     project: Path,
     config: dict[str, Any],
@@ -1993,41 +2034,51 @@ def retry_merge_after_ruleset_block(
     skip_review_gate: bool = False,
     next_command: str | None = None,
 ) -> dict[str, Any] | None:
-    current = sync_pr(project, pr)
-    require_same_pr_commits(pr, current)
-    check_stop = wait_for_checks(project, current, wait_config_from_config(config), next_command)
-    if check_stop is not None:
-        return check_stop
-    if not skip_review_gate:
-        review_stop = check_review_gate(project, config, current)
-        if review_stop is not None:
-            return review_stop
-    require_same_pr_commits(pr, sync_pr(project, current))
-    retry_with_auto = merge_details.get("autoMergeSuggested") is True
-    try:
-        merge_pr(project, config, current, auto=retry_with_auto)
-    except PrFlowError as exc:
-        if exc.reason != "ruleset_merge_blocking":
-            raise
-        if not retry_with_auto and exc.details.get("autoMergeSuggested") is True:
-            refreshed = sync_pr(project, current)
-            require_same_pr_commits(pr, refreshed)
-            current = refreshed
-            try:
-                merge_pr(project, config, current, auto=True)
-            except PrFlowError as auto_exc:
-                if auto_exc.reason == "ruleset_merge_blocking":
-                    raise PrFlowError(
-                        "ruleset_merge_blocking",
-                        ruleset_retry_failure_details(merge_details, auto_exc.details, 2, next_command),
-                    ) from auto_exc
+    started_at = time.monotonic()
+    retry_attempts = 0
+    last_merge_details = merge_details
+    wait_config = wait_config_from_config(config)
+    poll_seconds = max(int(wait_config.get("pollSeconds", 15)), 1)
+
+    while True:
+        if retry_attempts:
+            remaining = RULESET_MERGE_WINDOW_SECONDS - (time.monotonic() - started_at)
+            if remaining <= 0:
+                raise PrFlowError(
+                    "ruleset_merge_blocking",
+                    ruleset_retry_failure_details(merge_details, last_merge_details, retry_attempts, next_command),
+                )
+            time.sleep(min(poll_seconds, remaining))
+            if time.monotonic() - started_at >= RULESET_MERGE_WINDOW_SECONDS:
+                raise PrFlowError(
+                    "ruleset_merge_blocking",
+                    ruleset_retry_failure_details(merge_details, last_merge_details, retry_attempts, next_command),
+                )
+
+        current, gate_stop = revalidate_merge_gates(
+            project,
+            config,
+            pr,
+            skip_review_gate=skip_review_gate,
+            next_command=next_command,
+        )
+        if gate_stop is not None:
+            return gate_stop
+
+        try:
+            merge_pr(project, config, current)
+        except PrFlowError as exc:
+            if exc.reason != "ruleset_merge_blocking":
                 raise
-            return None
-        raise PrFlowError(
-            "ruleset_merge_blocking",
-            ruleset_retry_failure_details(merge_details, exc.details, 1, next_command),
-        ) from exc
-    return None
+            retry_attempts += 1
+            last_merge_details = exc.details
+            if time.monotonic() - started_at >= RULESET_MERGE_WINDOW_SECONDS:
+                raise PrFlowError(
+                    "ruleset_merge_blocking",
+                    ruleset_retry_failure_details(merge_details, last_merge_details, retry_attempts, next_command),
+                ) from exc
+            continue
+        return None
 
 
 def review_gate_mode(config: dict[str, Any]) -> Any:
@@ -2238,7 +2289,8 @@ def run_diagnose(args: argparse.Namespace) -> int:
         )
         gh_details["optionalFixesArg"] = "--fixes 98"
         return stop(project, args.command, "EXCEPTION_REQUIRED", "pr_body_required", gh_details)
-    gate = classify_check_gate(project, pr)
+    gate = observe_check_gate(project, pr, {}, CHECK_OBSERVATION_ONCE)
+    gh_details.update(gate.get("details") or {})
     gate_stop = check_gate_stop_state(gate, command_next_command(args.command, project))
     if gate_stop is not None:
         gate_stop["details"] = {**gh_details, **gate_stop["details"]}
@@ -2322,7 +2374,13 @@ def run_lifecycle(
         check_base()
         if pr is None:
             pr = create_pr(project, config, pr_body, next_command)
-        pr = sync_pr(project, pr)
+        initial_pr = pr
+        refreshed_pr = sync_pr(project, initial_pr)
+        try:
+            require_same_pr_commits(initial_pr, refreshed_pr)
+        except PrFlowError as exc:
+            raise observation_commit_error(exc, initial_pr, refreshed_pr) from exc
+        pr = refreshed_pr
         if pr_body is not None and existing_pr:
             reconcile_existing_pr_body(project, pr, pr_body, fixes)
         if before_checks is not None:
@@ -2331,26 +2389,25 @@ def run_lifecycle(
         return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
 
     try:
-        check_stop = wait_for_checks(project, pr, wait_config_from_config(config), next_command)
+        gate = observe_check_gate(project, pr, wait_config_from_config(config), CHECK_OBSERVATION_WAIT)
     except PrFlowError as exc:
         return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
+    check_stop = check_gate_stop_state(gate, next_command)
     if check_stop is not None:
         return stop_from_state(project, command, check_stop)
 
-    if not skip_review_gate:
-        review_stop = check_review_gate(project, config, pr)
-        if review_stop is not None:
-            return stop_from_state(project, command, review_stop)
-
     try:
-        latest_pr = sync_pr(project, pr)
+        pr, gate_stop = revalidate_merge_gates(
+            project,
+            config,
+            pr,
+            skip_review_gate=skip_review_gate,
+            next_command=next_command,
+        )
     except PrFlowError as exc:
         return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
-    try:
-        require_same_pr_commits(pr, latest_pr)
-    except PrFlowError as exc:
-        return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
-    pr = latest_pr
+    if gate_stop is not None:
+        return stop_from_state(project, command, gate_stop)
 
     current_branch = require_git_success(project, "git_current_branch_failed", "branch", "--show-current").stdout.strip()
     head_ref = pr.get("headRefName")
