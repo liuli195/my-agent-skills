@@ -5078,6 +5078,8 @@ def test_packed_myspec_preserves_modified_requirement_order(tmp_path: Path) -> N
             for line in preview_text.splitlines()
             if line.startswith("### Requirement: ")
         ] == list(titles)
+        assert f"系统 MUST 更新{target}。" in preview_text
+        assert f"系统 MUST 保留{target}。" not in preview_text
         diff = run_cli(executable, "diff", specs, preview)
         assert diff.returncode == 0, diff.stderr
         assert f"-### Requirement: {target}" not in diff.stdout
@@ -5096,6 +5098,21 @@ def test_packed_myspec_preserves_modified_requirement_order(tmp_path: Path) -> N
         assert (specs / "accounts" / "spec.md").read_bytes() == (
             preview / "accounts" / "spec.md"
         ).read_bytes()
+        before_repeat = (specs / "accounts" / "spec.md").read_bytes()
+        repeated_preview, repeated_work = preview_delta(root / "repeat", specs, delta)
+        repeated = run_cli(
+            executable,
+            "apply-delta",
+            specs,
+            delta,
+            specs,
+            repeated_work,
+            "specs-fingerprint",
+            "input-fingerprint",
+        )
+        assert repeated.returncode == 0, repeated.stderr
+        assert (repeated_preview / "accounts" / "spec.md").read_bytes() == before_repeat
+        assert (specs / "accounts" / "spec.md").read_bytes() == before_repeat
 
     root = tmp_path / "cross-capability"
     specs = root / "specs"
@@ -5116,10 +5133,23 @@ def test_packed_myspec_preserves_modified_requirement_order(tmp_path: Path) -> N
 - **THEN** 系统把需求移入目标能力
 """,
     )
-    preview, _ = preview_delta(root, specs, delta)
+    preview, work = preview_delta(root, specs, delta)
     assert "### Requirement: 移动项" not in (preview / "source" / "spec.md").read_text(encoding="utf-8")
     target_text = (preview / "target" / "spec.md").read_text(encoding="utf-8")
     assert target_text.index("### Requirement: 现有项") < target_text.index("### Requirement: 移动项")
+    applied = run_cli(
+        executable,
+        "apply-delta",
+        specs,
+        delta,
+        specs,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert applied.returncode == 0, applied.stderr
+    assert (specs / "source" / "spec.md").read_bytes() == (preview / "source" / "spec.md").read_bytes()
+    assert (specs / "target" / "spec.md").read_bytes() == (preview / "target" / "spec.md").read_bytes()
 
 
 def test_myspec_launcher_forwards_sigterm_to_python(tmp_path: Path) -> None:
