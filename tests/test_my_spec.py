@@ -303,6 +303,27 @@ def npm_prefix_for(installed_package: Path) -> Path:
     return node_modules.parent.parent if node_modules.parent.name == "lib" else node_modules.parent
 
 
+def test_my_spec_candidate_tarball_is_shared_by_isolated_installs(tmp_path: Path) -> None:
+    candidate = Path(os.environ["MYSPEC_TEST_TARBALL"])
+    assert candidate.is_file()
+    candidate_bytes = candidate.read_bytes()
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    _, first_package = install_packed_myspec(first)
+    _, second_package = install_packed_myspec(second)
+
+    assert npm_prefix_for(first_package) != npm_prefix_for(second_package)
+    first_tarball = next((first / "package").glob("*.tgz"))
+    second_tarball = next((second / "package").glob("*.tgz"))
+    assert first_tarball.read_bytes() == candidate_bytes
+    assert second_tarball.read_bytes() == candidate_bytes
+    assert candidate.read_bytes() == candidate_bytes
+    assert candidate.resolve() not in {first_tarball.resolve(), second_tarball.resolve()}
+
+
 def pack_myspec_version(tmp_path: Path, version: str, marker: Path | None = None) -> Path:
     source = tmp_path / f"myspec-{version}"
     shutil.copytree(PLUGIN_ROOT, source)

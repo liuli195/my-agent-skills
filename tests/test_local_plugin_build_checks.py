@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +21,128 @@ def test_node_cli_launchers_are_forced_to_lf() -> None:
 
     assert "plugins/build-and-verify/bin/*.js text eol=lf" in attributes
     assert "plugins/my-spec/bin/*.js text eol=lf" in attributes
+
+
+def test_my_spec_candidate_setup_accepts_tests_directory_invocation() -> None:
+    module = load_module(REPO_ROOT / "tests" / "conftest.py", "test_my_spec_conftest")
+
+    config = type("Config", (), {"args": ["tests"]})()
+
+    assert module._runs_my_spec(config)
+
+
+def test_my_spec_candidate_setup_reuses_supplied_tarball(tmp_path: Path, monkeypatch) -> None:
+    module = load_module(REPO_ROOT / "tests" / "conftest.py", "test_my_spec_conftest_ci")
+    candidate = tmp_path / "candidate.tgz"
+    candidate.write_bytes(b"candidate")
+    monkeypatch.setenv(module.MYSPEC_TEST_TARBALL, str(candidate))
+
+    def unexpected_pack(*args, **kwargs):
+        raise AssertionError(f"unexpected pack: {args} {kwargs}")
+
+    monkeypatch.setattr(module.subprocess, "run", unexpected_pack)
+    config = type("Config", (), {"args": ["tests/test_my_spec.py"]})()
+
+    module.pytest_configure(config)
+
+
+def test_my_spec_candidate_setup_cleans_up_when_pack_cannot_start(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_module(REPO_ROOT / "tests" / "conftest.py", "test_my_spec_conftest_failure")
+    candidate_directory = tmp_path / "candidate"
+    candidate_directory.mkdir()
+    monkeypatch.setattr(module.tempfile, "mkdtemp", lambda **_: str(candidate_directory))
+    monkeypatch.delenv(module.MYSPEC_TEST_TARBALL, raising=False)
+
+    def pack_unavailable(*args, **kwargs):
+        raise OSError("pack unavailable")
+
+    monkeypatch.setattr(module.subprocess, "run", pack_unavailable)
+    config = type("Config", (), {"args": ["tests/test_my_spec.py"]})()
+
+    with pytest.raises(pytest.UsageError, match="failed to prepare MySpec test Tarball"):
+        module.pytest_configure(config)
+
+    assert module._candidate_directory is None
+    assert not candidate_directory.exists()
+
+
+def test_my_spec_candidate_setup_packs_once_before_workers(monkeypatch) -> None:
+    module = load_module(REPO_ROOT / "tests" / "conftest.py", "test_my_spec_conftest_once")
+    calls: list[list[str]] = []
+
+    def pack_once(command, **kwargs):
+        del kwargs
+        calls.append(command)
+        output = Path(command[-1]) / "candidate.tgz"
+        output.write_bytes(b"candidate")
+        return subprocess.CompletedProcess(command, 0, f"{output}\n", "")
+
+    monkeypatch.delenv(module.MYSPEC_TEST_TARBALL, raising=False)
+    monkeypatch.setattr(module.subprocess, "run", pack_once)
+    config = type("Config", (), {"args": ["tests/test_my_spec.py"]})()
+    module.pytest_configure(config)
+    module.pytest_configure(config)
+    controller_candidate = Path(os.environ[module.MYSPEC_TEST_TARBALL])
+    assert controller_candidate.is_absolute()
+
+    assert len(calls) == 1
+    assert calls[0][0:3] == [sys.executable, str(module.MYSPEC_PACK), "myspec"]
+    module.pytest_sessionfinish(type("Session", (), {"config": config})(), 0)
+    assert module._candidate_directory is None
+
+
+def test_my_spec_candidate_path_reaches_real_xdist_workers(tmp_path: Path) -> None:
+    report_dir = tmp_path / "worker-reports"
+    report_dir.mkdir()
+    probe = tmp_path / "test_my_spec.py"
+    probe.write_text(
+        """import os
+from pathlib import Path
+
+
+def test_candidate_is_inherited():
+    worker = os.environ["PYTEST_XDIST_WORKER"]
+    candidate = Path(os.environ["MYSPEC_TEST_TARBALL"]).resolve()
+    assert candidate.is_file()
+    (Path(os.environ["MYSPEC_WORKER_REPORT_DIR"]) / f"{worker}.txt").write_text(
+        str(candidate), encoding="utf-8"
+    )
+""",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.pop("MYSPEC_TEST_TARBALL", None)
+    env["MYSPEC_WORKER_REPORT_DIR"] = str(report_dir)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "tests.conftest",
+            "-n",
+            "4",
+            "--dist=each",
+            str(probe),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    reports = sorted(report_dir.glob("gw*.txt"))
+    assert [report.stem for report in reports] == ["gw0", "gw1", "gw2", "gw3"]
+    candidates = {Path(report.read_text(encoding="utf-8")).resolve() for report in reports}
+    assert len(candidates) == 1
+    candidate = next(iter(candidates))
+    assert candidate.is_absolute()
 
 
 def load_module(path: Path, name: str):
@@ -1363,10 +1486,13 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
         "myspec/specs/my-spec/spec.md",
         "plugins/my-spec/**",
         "plugins/tool-lifecycle/**",
+        "tests/conftest.py",
         "tests/test_my_spec.py",
         "tests/fixtures/myspec_source_cases.json",
     ]
     assert my_spec["timeoutSeconds"] == 420
+    assert my_spec["checkParallel"] is False
+    assert my_spec["pytestXdistWorkers"] == 4
     assert my_spec["inputs"] == [
         ".agents/plugins/marketplace.json",
         ".claude-plugin/marketplace.json",
@@ -1377,6 +1503,7 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
         "myspec/specs/my-spec/spec.md",
         "plugins/my-spec",
         "plugins/tool-lifecycle",
+        "tests/conftest.py",
         "tests/test_my_spec.py",
         "tests/fixtures/myspec_source_cases.json",
     ]
