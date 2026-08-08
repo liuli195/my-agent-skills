@@ -1,7 +1,11 @@
 import importlib.util
 import json
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -15,11 +19,472 @@ BUILD_AND_VERIFY_RUNNER = (
 )
 
 
+@pytest.fixture
+def worktree_local_tmp_path() -> Iterator[Path]:
+    local_root = REPO_ROOT / ".local"
+    local_root.mkdir(parents=True, exist_ok=True)
+    path = Path(tempfile.mkdtemp(prefix="nested-xdist-", dir=local_root))
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def test_node_cli_launchers_are_forced_to_lf() -> None:
     attributes = (REPO_ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()
 
     assert "plugins/build-and-verify/bin/*.js text eol=lf" in attributes
     assert "plugins/my-spec/bin/*.js text eol=lf" in attributes
+
+
+def test_my_spec_candidate_setup_accepts_tests_directory_invocation() -> None:
+    module = load_module(REPO_ROOT / "tests" / "conftest.py", "test_my_spec_conftest")
+
+    config = type("Config", (), {"args": ["tests"]})()
+
+    assert module._runs_my_spec(config)
+
+
+def test_my_spec_candidate_setup_reuses_supplied_tarball(tmp_path: Path, monkeypatch) -> None:
+    module = load_module(REPO_ROOT / "tests" / "conftest.py", "test_my_spec_conftest_ci")
+    candidate = tmp_path / "candidate.tgz"
+    candidate.write_bytes(b"candidate")
+    monkeypatch.setenv(module.MYSPEC_TEST_TARBALL, str(candidate))
+
+    def unexpected_pack(*args, **kwargs):
+        raise AssertionError(f"unexpected pack: {args} {kwargs}")
+
+    monkeypatch.setattr(module.subprocess, "run", unexpected_pack)
+    config = type("Config", (), {"args": ["tests/test_my_spec.py"]})()
+
+    module.pytest_configure(config)
+    module.pytest_sessionfinish(type("Session", (), {"config": config})(), 0)
+
+
+def test_my_spec_candidate_setup_restores_external_tarball_value(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_module(REPO_ROOT / "tests" / "conftest.py", "test_my_spec_conftest_restore")
+    candidate = tmp_path / "candidate.tgz"
+    candidate.write_bytes(b"candidate")
+    original = str(candidate).replace("\\", "/")
+    monkeypatch.setenv(module.MYSPEC_TEST_TARBALL, original)
+    monkeypatch.setenv(module.MYSPEC_TEST_IN_PROCESS, "outer")
+    config = type("Config", (), {"args": ["tests/test_my_spec.py"]})()
+
+    module.pytest_configure(config)
+    assert os.environ[module.MYSPEC_TEST_TARBALL] == str(candidate.resolve())
+    module.pytest_sessionfinish(type("Session", (), {"config": config})(), 0)
+
+    assert os.environ[module.MYSPEC_TEST_TARBALL] == original
+    assert os.environ[module.MYSPEC_TEST_IN_PROCESS] == "outer"
+
+
+def test_my_spec_candidate_setup_cleans_up_when_pack_cannot_start(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_module(REPO_ROOT / "tests" / "conftest.py", "test_my_spec_conftest_failure")
+    candidate_directory = tmp_path / "candidate"
+    candidate_directory.mkdir()
+    monkeypatch.setattr(module.tempfile, "mkdtemp", lambda **_: str(candidate_directory))
+    monkeypatch.delenv(module.MYSPEC_TEST_TARBALL, raising=False)
+
+    def pack_unavailable(*args, **kwargs):
+        raise OSError("pack unavailable")
+
+    monkeypatch.setattr(module.subprocess, "run", pack_unavailable)
+    config = type("Config", (), {"args": ["tests/test_my_spec.py"]})()
+
+    with pytest.raises(pytest.UsageError, match="failed to prepare MySpec test Tarball"):
+        module.pytest_configure(config)
+
+    assert module._candidate_directory is None
+    assert not candidate_directory.exists()
+
+
+def test_my_spec_candidate_install_keeps_real_installs_isolated(tmp_path: Path, monkeypatch) -> None:
+    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_real_install")
+    candidate = tmp_path / "candidate.tgz"
+    candidate.write_bytes(b"candidate")
+    monkeypatch.setenv("MYSPEC_TEST_TARBALL", str(candidate))
+    calls: list[list[str]] = []
+
+    def fake_which(name: str) -> str | None:
+        return "npm" if name == "npm" else None
+
+    def fake_run(command, **kwargs):
+        del kwargs
+        calls.append(command)
+        prefix = Path(command[command.index("--prefix") + 1])
+        root = prefix / ("node_modules" if os.name == "nt" else "lib/node_modules")
+        package = root / "@liuli195" / "myspec"
+        package.mkdir(parents=True, exist_ok=True)
+        (package / "package.json").write_text("{}", encoding="utf-8")
+        executable = prefix / ("myspec.cmd" if os.name == "nt" else "bin/myspec")
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_text("#!/bin/sh\n", encoding="utf-8")
+        if command[1] == "root":
+            return subprocess.CompletedProcess(command, 0, f"{root}\n", "")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(module.shutil, "which", fake_which)
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+
+    _, first_package = module.install_packed_myspec(first)
+    _, second_package = module.install_packed_myspec(second)
+
+    assert first_package != second_package
+    assert len([command for command in calls if command[1] == "install"]) == 2
+
+
+def test_my_spec_in_process_install_reuses_shared_lightweight_package(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_lightweight_install")
+    candidate = tmp_path / "candidate.tgz"
+    candidate.write_bytes(b"candidate")
+    monkeypatch.setenv("MYSPEC_TEST_TARBALL", str(candidate))
+    monkeypatch.setenv("MYSPEC_TEST_IN_PROCESS", "1")
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail(f"unexpected subprocess: {args} {kwargs}"),
+    )
+    copy_calls = []
+    copytree = module.shutil.copytree
+
+    def track_copytree(*args, **kwargs):
+        if Path(args[1]).name == "myspec":
+            copy_calls.append(args[1])
+        return copytree(*args, **kwargs)
+
+    monkeypatch.setattr(module.shutil, "copytree", track_copytree)
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+
+    first_executable, first_package = module.install_packed_myspec(first)
+    second_executable, second_package = module.install_packed_myspec(second)
+
+    assert first_executable.is_file()
+    assert second_executable.is_file()
+    assert first_package == second_package
+    assert module.npm_prefix_for(first_package) == module.npm_prefix_for(second_package)
+    assert len(copy_calls) == 1
+    assert (first_package / "python" / "spec_ops.py").is_file()
+    assert (first_package / "python" / "management.py").read_bytes() == (
+        REPO_ROOT / "plugins" / "tool-lifecycle" / "python" / "management.py"
+    ).read_bytes()
+
+
+def test_my_spec_in_process_shared_template_uses_worktree_local_and_cleans_up(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_local_template")
+    candidate = tmp_path / "candidate.tgz"
+    candidate.write_bytes(b"candidate")
+    monkeypatch.setenv("MYSPEC_TEST_TARBALL", str(candidate))
+    monkeypatch.setenv("MYSPEC_TEST_IN_PROCESS", "1")
+
+    executable, package = module.install_packed_myspec(tmp_path / "first")
+    template_root = next(
+        path for path in executable.parents if path.name.startswith("myspec-lightweight-")
+    )
+    assert package.is_dir()
+    module._cleanup_lightweight_install()
+
+    assert template_root.parent.resolve() == (REPO_ROOT / ".local").resolve()
+    assert not template_root.exists()
+
+
+def test_my_spec_in_process_fakes_reject_unhandled_commands() -> None:
+    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_fake_command_boundaries")
+
+    git_result = module._run_in_process_git(["git", "unsupported"], ["unsupported"])
+    npm_result = module._run_in_process_npm(
+        ["npm", "unsupported"], ["unsupported"], {"MYSPEC_PACKAGE_VERSION": "0.0.0"}
+    )
+
+    assert git_result.returncode != 0
+    assert npm_result.returncode != 0
+
+
+def test_my_spec_in_process_runner_uses_the_passed_installed_cli(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_installed_cli")
+    prefix = tmp_path / "prefix"
+    package = prefix / ("node_modules" if os.name == "nt" else "lib/node_modules") / "@liuli195" / "myspec"
+    (package / "python").mkdir(parents=True)
+    (package / "package.json").write_text(
+        (REPO_ROOT / "plugins" / "my-spec" / "package.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    shutil.copy2(
+        REPO_ROOT / "plugins" / "my-spec" / "python" / "lifecycle_profile.json",
+        package / "python" / "lifecycle_profile.json",
+    )
+    shutil.copy2(
+        REPO_ROOT / "plugins" / "tool-lifecycle" / "python" / "management.py",
+        package / "python" / "management.py",
+    )
+    (package / "python" / "spec_ops.py").write_text(
+        "def main(args):\n    print('installed-cli')\n    return 0\n",
+        encoding="utf-8",
+    )
+    executable = prefix / ("myspec.cmd" if os.name == "nt" else "bin/myspec")
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_text("", encoding="utf-8")
+    monkeypatch.setenv("MYSPEC_TEST_IN_PROCESS", "1")
+
+    result = module.run_cli(executable, "--help")
+
+    assert result.returncode == 0
+    assert result.stdout == "installed-cli\n"
+
+
+def test_my_spec_in_process_runner_handles_spec_ops_without_subprocess(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_in_process")
+    specs = tmp_path / "specs" / "accounts" / "spec.md"
+    specs.parent.mkdir(parents=True)
+    specs.write_text(
+        "# Accounts\n\n## Purpose\n\n描述账户行为。\n\n## Requirements\n\n"
+        "### Requirement: 登录\n\n系统 MUST 允许登录。\n\n#### Scenario: 正常\n\n"
+        "- **WHEN** 用户登录\n- **THEN** 系统创建会话\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MYSPEC_TEST_IN_PROCESS", "1")
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail(f"unexpected subprocess: {args} {kwargs}"),
+    )
+
+    result = module.run_python(module.SPEC_OPS, "validate-main", specs.parent.parent)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert result.stderr == ""
+
+
+def test_my_spec_in_process_runner_restores_subprocess_after_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_in_process_restore")
+    script = tmp_path / "spec_ops.py"
+    script.write_text("", encoding="utf-8")
+    original_run = module.subprocess.run
+
+    class BrokenSpecOps:
+        @staticmethod
+        def main(_args):
+            raise RuntimeError("simulated runner failure")
+
+    monkeypatch.setattr(module, "_load_in_process_spec_ops", lambda _path: BrokenSpecOps)
+
+    result = module._run_in_process(script)
+
+    assert result.returncode == 1
+    assert module.subprocess.run is original_run
+
+
+def test_my_spec_in_process_management_avoids_fake_client_subprocess(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_in_process_management")
+    candidate = tmp_path / "candidate.tgz"
+    candidate.write_bytes(b"candidate")
+    monkeypatch.setenv("MYSPEC_TEST_TARBALL", str(candidate))
+    monkeypatch.setenv("MYSPEC_TEST_IN_PROCESS", "1")
+
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = module.install_packed_myspec(installed)
+    client_bin, log = module.install_fake_pi(tmp_path / "fake-pi")
+    env = module.isolated_myspec_env(tmp_path, module.npm_prefix_for(installed_package), client_bin)
+    env["MYSPEC_PI_LOG"] = str(log)
+    module.write(
+        Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
+        json.dumps({"packages": [str(installed_package)]}),
+    )
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail(f"unexpected subprocess: {args} {kwargs}"),
+    )
+
+    result = module.run_cli(executable, "doctor", "--pi", env=env)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_my_spec_in_process_shared_package_rebuilds_after_mutation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_lightweight_integrity")
+    candidate = tmp_path / "candidate.tgz"
+    candidate.write_bytes(b"candidate")
+    monkeypatch.setenv("MYSPEC_TEST_TARBALL", str(candidate))
+    monkeypatch.setenv("MYSPEC_TEST_IN_PROCESS", "1")
+    first_executable, first_package = module.install_packed_myspec(tmp_path / "first")
+    del first_executable
+    lifecycle_root = first_package.parents[1] / "plugins" / "tool-lifecycle"
+    _private_executable, private_package = module._copy_lightweight_myspec(tmp_path / "private")
+    del _private_executable
+    private_lifecycle_root = private_package.parents[1] / "plugins" / "tool-lifecycle"
+    for root in (lifecycle_root, private_lifecycle_root):
+        assert (root / "python" / "management.py").read_bytes() == (
+            module.SHARED_MANAGEMENT
+        ).read_bytes()
+        assert (root / "pack.py").read_bytes() == module.PACK.read_bytes()
+    changed = lifecycle_root / "pack.py"
+    original = changed.read_bytes()
+    changed.write_bytes(original + b"\n")
+
+    _second_executable, second_package = module.install_packed_myspec(tmp_path / "second")
+
+    assert second_package != first_package
+    assert second_package.joinpath("package.json").read_bytes() == (
+        module.PLUGIN_ROOT / "package.json"
+    ).read_bytes()
+    assert (
+        second_package.parents[1] / "plugins" / "tool-lifecycle" / "pack.py"
+    ).read_bytes() == module.PACK.read_bytes()
+    changed = second_package / "package.json"
+    original = changed.read_bytes()
+    changed.write_bytes(original + b"\n")
+
+    _third_executable, third_package = module.install_packed_myspec(tmp_path / "third")
+
+    assert third_package != second_package
+    assert third_package.joinpath("package.json").read_bytes() == original
+
+
+def test_my_spec_candidate_setup_packs_once_before_workers(monkeypatch) -> None:
+    module = load_module(REPO_ROOT / "tests" / "conftest.py", "test_my_spec_conftest_once")
+    calls: list[list[str]] = []
+
+    def pack_once(command, **kwargs):
+        del kwargs
+        calls.append(command)
+        output = Path(command[-1]) / "candidate.tgz"
+        output.write_bytes(b"candidate")
+        return subprocess.CompletedProcess(command, 0, f"{output}\n", "")
+
+    monkeypatch.delenv(module.MYSPEC_TEST_TARBALL, raising=False)
+    monkeypatch.setattr(module.subprocess, "run", pack_once)
+    config = type("Config", (), {"args": ["tests/test_my_spec.py"]})()
+    module.pytest_configure(config)
+    module.pytest_configure(config)
+    controller_candidate = Path(os.environ[module.MYSPEC_TEST_TARBALL])
+    assert controller_candidate.is_absolute()
+
+    assert len(calls) == 1
+    assert calls[0][0:3] == [sys.executable, str(module.MYSPEC_PACK), "myspec"]
+    module.pytest_sessionfinish(type("Session", (), {"config": config})(), 0)
+    assert module._candidate_directory is None
+
+
+def test_my_spec_candidate_path_reaches_real_xdist_workers(
+    worktree_local_tmp_path: Path,
+) -> None:
+    report_dir = worktree_local_tmp_path / "worker-reports"
+    report_dir.mkdir()
+    worker_temp_root = worktree_local_tmp_path / "worker-temp"
+    worker_temp_root.mkdir()
+    probe = worktree_local_tmp_path / "test_my_spec.py"
+    probe.write_text(
+        """import json
+import os
+from pathlib import Path
+
+import tests.test_my_spec as myspec
+
+
+def test_candidate_is_inherited_and_installed_once(tmp_path):
+    worker = os.environ["PYTEST_XDIST_WORKER"]
+    candidate = Path(os.environ["MYSPEC_TEST_TARBALL"]).resolve()
+    assert candidate.is_file()
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, package = myspec.install_packed_myspec(installed)
+    prefix = myspec.npm_prefix_for(package)
+    client_bin, log = myspec.install_fake_pi(tmp_path / "fake-pi")
+    env = myspec.isolated_myspec_env(tmp_path, prefix, client_bin)
+    env["MYSPEC_PI_LOG"] = str(log)
+    state_root = Path(env["HOME"]) / ".myspec"
+    state_root.mkdir()
+    myspec.write(
+        Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
+        json.dumps({"packages": []}),
+    )
+    result = myspec.run_cli(executable, "doctor", "--pi", env=env)
+    assert result.returncode == 0, result.stderr
+    report = {
+        "candidate": str(candidate),
+        "home": str(Path(env["HOME"]).resolve()),
+        "logRoot": str(log.parent.resolve()),
+        "stateRoot": str(state_root.resolve()),
+        "prefix": str(prefix.resolve()),
+        "package": str(package.resolve()),
+        "packageExistsBeforeWorkerCleanup": package.is_dir(),
+    }
+    (Path(os.environ["MYSPEC_WORKER_REPORT_DIR"]) / f"{worker}.json").write_text(
+        json.dumps(report), encoding="utf-8"
+    )
+""",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.pop("MYSPEC_TEST_TARBALL", None)
+    env["MYSPEC_WORKER_REPORT_DIR"] = str(report_dir)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "tests.conftest",
+            "-n",
+            "4",
+            "--dist=each",
+            "--rootdir",
+            str(REPO_ROOT),
+            "--basetemp",
+            str(worker_temp_root),
+            str(probe),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    reports = sorted(report_dir.glob("gw*.json"))
+    assert [report.stem for report in reports] == ["gw0", "gw1", "gw2", "gw3"]
+    payloads = [json.loads(report.read_text(encoding="utf-8")) for report in reports]
+    candidates = {Path(payload["candidate"]).resolve() for payload in payloads}
+    assert len(candidates) == 1
+    candidate = next(iter(candidates))
+    assert candidate.is_absolute()
+    for field in ("home", "logRoot", "stateRoot", "prefix"):
+        values = {Path(payload[field]).resolve() for payload in payloads}
+        assert len(values) == 4, field
+    assert all(payload["packageExistsBeforeWorkerCleanup"] for payload in payloads)
+    assert all(Path(payload["logRoot"]).is_dir() for payload in payloads)
+    assert all(Path(payload["stateRoot"]).is_dir() for payload in payloads)
+    assert not list(worker_temp_root.glob("myspec-install-template-*"))
 
 
 def load_module(path: Path, name: str):
@@ -1363,10 +1828,13 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
         "myspec/specs/my-spec/spec.md",
         "plugins/my-spec/**",
         "plugins/tool-lifecycle/**",
+        "tests/conftest.py",
         "tests/test_my_spec.py",
         "tests/fixtures/myspec_source_cases.json",
     ]
     assert my_spec["timeoutSeconds"] == 420
+    assert my_spec["checkParallel"] is False
+    assert my_spec["pytestXdistWorkers"] == 4
     assert my_spec["inputs"] == [
         ".agents/plugins/marketplace.json",
         ".claude-plugin/marketplace.json",
@@ -1377,6 +1845,7 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
         "myspec/specs/my-spec/spec.md",
         "plugins/my-spec",
         "plugins/tool-lifecycle",
+        "tests/conftest.py",
         "tests/test_my_spec.py",
         "tests/fixtures/myspec_source_cases.json",
     ]

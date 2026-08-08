@@ -1,15 +1,23 @@
 from __future__ import annotations
 
+import atexit
+import contextlib
 import hashlib
+import io
 import importlib.util
 import json
 import os
+import re
 import signal
 import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
+import traceback
+import runpy
 from pathlib import Path
 
 import pytest
@@ -32,6 +40,361 @@ SOURCE_FIELDS = (
     "sourceKind",
     "sourceMismatch",
 )
+SHARED_MANAGEMENT = REPO_ROOT / "plugins" / "tool-lifecycle" / "python" / "management.py"
+_in_process_spec_ops: dict[Path, object] = {}
+_lightweight_install: tuple[Path, Path] | None = None
+_lightweight_install_fingerprint: str | None = None
+
+
+def _load_in_process_spec_ops(spec_ops_path: Path):
+    spec_ops_path = spec_ops_path.resolve()
+    cached = _in_process_spec_ops.get(spec_ops_path)
+    if cached is not None:
+        return cached
+
+    module_id = hashlib.sha256(str(spec_ops_path).encode()).hexdigest()[:16]
+    management_name = "management"
+    previous_management = sys.modules.get(management_name)
+    try:
+        management_spec = importlib.util.spec_from_file_location(
+            f"myspec_management_{module_id}", spec_ops_path.with_name("management.py")
+        )
+        assert management_spec is not None and management_spec.loader is not None
+        management = importlib.util.module_from_spec(management_spec)
+        sys.modules[management_spec.name] = management
+        sys.modules[management_name] = management
+        management_spec.loader.exec_module(management)
+
+        spec_ops_spec = importlib.util.spec_from_file_location(
+            f"myspec_spec_ops_{module_id}", spec_ops_path
+        )
+        assert spec_ops_spec is not None and spec_ops_spec.loader is not None
+        module = importlib.util.module_from_spec(spec_ops_spec)
+        sys.modules[spec_ops_spec.name] = module
+        spec_ops_spec.loader.exec_module(module)
+    finally:
+        if previous_management is None:
+            sys.modules.pop(management_name, None)
+        else:
+            sys.modules[management_name] = previous_management
+    _in_process_spec_ops[spec_ops_path] = module
+    return module
+
+
+def _command_parts(command: object) -> list[str]:
+    if isinstance(command, str):
+        parts = shlex.split(command, posix=os.name != "nt")
+        return [part.strip('"') for part in parts]
+    if isinstance(command, (list, tuple)):
+        return [str(part) for part in command]
+    return []
+
+
+def _launcher_script(executable: Path) -> Path | None:
+    if executable.suffix.lower() == ".py":
+        return executable
+    try:
+        text = executable.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+    candidates = re.findall(r"""[\"']([^\"']+\.py)[\"']""", text)
+    if not candidates:
+        candidates = re.findall(r"""(?:^|[\s\"'])([^\s\"']+\.py)(?:$|[\s\"'])""", text)
+    return Path(candidates[-1]).resolve() if candidates else None
+
+
+def _run_python_script(
+    command: object,
+    script: Path,
+    args: list[str],
+    *,
+    cwd: Path | None,
+    env: dict[str, str] | None,
+    text: bool = True,
+) -> subprocess.CompletedProcess:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    previous_environment = os.environ.copy()
+    previous_cwd = Path.cwd()
+    previous_argv = sys.argv[:]
+    effective_env = previous_environment if env is None else dict(env)
+    code: object = 1
+    try:
+        os.environ.clear()
+        os.environ.update(effective_env)
+        os.chdir(cwd or previous_cwd)
+        sys.argv = [str(script), *args]
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            try:
+                if script.name == "spec_ops.py":
+                    code = _load_in_process_spec_ops(script).main(args)
+                else:
+                    runpy.run_path(str(script), run_name="__main__")
+                    code = 0
+            except SystemExit as error:
+                code = error.code
+            except BaseException:
+                traceback.print_exc(file=stderr)
+                code = 1
+    finally:
+        sys.argv = previous_argv
+        os.chdir(previous_cwd)
+        os.environ.clear()
+        os.environ.update(previous_environment)
+    if code is None:
+        code = 0
+    if not isinstance(code, int):
+        code = 1
+    output = stdout.getvalue()
+    errors = stderr.getvalue()
+    if not text:
+        output = output.encode()
+        errors = errors.encode()
+    return subprocess.CompletedProcess(command, code, output, errors)
+
+
+def _npm_prefix(env: dict[str, str]) -> Path:
+    configured = env.get("NPM_CONFIG_PREFIX")
+    return Path(configured) if configured else Path(sys.prefix)
+
+
+def _npm_root(prefix: Path) -> Path:
+    return prefix / ("node_modules" if os.name == "nt" else "lib/node_modules")
+
+
+def _install_npm_tarball(prefix: Path, tarball: Path) -> None:
+    temporary = Path(tempfile.mkdtemp(prefix="myspec-npm-install-"))
+    try:
+        with tarfile.open(tarball, "r:gz") as archive:
+            archive.extractall(temporary)
+        source = temporary / "package"
+        target = _npm_root(prefix) / "@liuli195" / "myspec"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_symlink():
+            target.unlink()
+        elif target.exists():
+            shutil.rmtree(target)
+        cached_spec_ops = target / "python" / "spec_ops.py"
+        _in_process_spec_ops.pop(cached_spec_ops.resolve(), None)
+        shutil.copytree(source, target, symlinks=True)
+        executable = prefix / ("myspec.cmd" if os.name == "nt" else "bin/myspec")
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_text("@echo off\n" if os.name == "nt" else "#!/bin/sh\n", encoding="utf-8")
+        if os.name != "nt":
+            executable.chmod(0o755)
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
+
+
+_FAKE_GIT_COMMIT = "0" * 40
+_REAL_GIT_TESTS = {
+    "test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit",
+    "test_packed_myspec_dev_doctor_drops_commit_after_closure_branch_removed",
+}
+
+
+def _run_in_process_git(
+    command: object,
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    root = (cwd or Path.cwd()).resolve()
+    if args == ["rev-parse", "--show-toplevel"]:
+        while root != root.parent and not (root / ".git").exists():
+            root = root.parent
+        return subprocess.CompletedProcess(command, 0, str(root) + "\n", "")
+    if args == ["rev-parse", "HEAD"]:
+        return subprocess.CompletedProcess(command, 0, _FAKE_GIT_COMMIT + "\n", "")
+    if args == ["remote", "get-url", "origin"]:
+        return subprocess.CompletedProcess(
+            command, 0, "https://github.com/liuli195/my-agent-skills\n", ""
+        )
+    if args in (["ls-remote", "origin"], ["ls-remote", "--heads", "origin"]):
+        return subprocess.CompletedProcess(command, 0, f"{_FAKE_GIT_COMMIT}\trefs/heads/main\n", "")
+    if args == ["log", "--format=%H", "--all", "--", *args[4:]]:
+        return subprocess.CompletedProcess(command, 0, _FAKE_GIT_COMMIT + "\n", "")
+    if args[:2] == ["cat-file", "-t"]:
+        return subprocess.CompletedProcess(command, 0, "commit\n", "")
+    if args[:3] == ["merge-base", "--is-ancestor", _FAKE_GIT_COMMIT]:
+        return subprocess.CompletedProcess(command, 0, "", "")
+    if args[:1] == ["show"] and len(args) == 2 and ":" in args[1]:
+        relative = args[1].split(":", 1)[1]
+        path = root / relative
+        if path.is_file():
+            return subprocess.CompletedProcess(command, 0, path.read_bytes(), "")
+        return subprocess.CompletedProcess(command, 128, b"", b"missing object\n")
+    if args[:1] and args[0] in {"diff", "checkout-index", "add"}:
+        return subprocess.CompletedProcess(command, 0, "", "")
+    if args[:3] == ["ls-files", "--others", "--exclude-standard"]:
+        return subprocess.CompletedProcess(command, 0, "", "")
+    return subprocess.CompletedProcess(
+        command, 127, "", f"unsupported fake git command: {shlex.join(args)}\n"
+    )
+
+
+def _run_in_process_npm(
+    command: object,
+    args: list[str],
+    env: dict[str, str],
+    *,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    log_path = env.get("MYSPEC_NPM_LOG")
+    if log_path:
+        with Path(log_path).open("a", encoding="utf-8") as log:
+            log.write(json.dumps(args) + "\n")
+    prefix = _npm_prefix(env)
+    if args == ["view", "@liuli195/myspec", "version", "--json"]:
+        return subprocess.CompletedProcess(
+            command, 0, json.dumps(env.get("MYSPEC_NPM_LATEST", env["MYSPEC_PACKAGE_VERSION"])) + "\n", ""
+        )
+    if args == ["root", "--global"]:
+        if env.get("MYSPEC_NPM_FAIL_ROOT") == "1":
+            return subprocess.CompletedProcess(command, 1, "", "simulated npm root failure\n")
+        return subprocess.CompletedProcess(command, 0, str(_npm_root(prefix)) + "\n", "")
+    if args == ["prefix", "--global"]:
+        return subprocess.CompletedProcess(command, 0, str(prefix) + "\n", "")
+    if args == ["link"]:
+        if cwd is None:
+            return subprocess.CompletedProcess(command, 1, "", "npm link requires cwd\n")
+        target = _npm_root(prefix) / "@liuli195" / "myspec"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_symlink():
+            target.unlink()
+        elif target.exists():
+            shutil.rmtree(target)
+        target.symlink_to(cwd, target_is_directory=True)
+        return subprocess.CompletedProcess(command, 0, "", "")
+    if args[:2] == ["install", "--global"]:
+        if env.get("MYSPEC_NPM_FAIL_INSTALL") == "1":
+            return subprocess.CompletedProcess(command, 1, "", "simulated install failure\n")
+        tarball = Path(env.get("MYSPEC_RELEASE_TARBALL", args[-1])).resolve()
+        _install_npm_tarball(prefix, tarball)
+        marker = env.get("MYSPEC_REEXEC_MARKER")
+        launcher = _npm_root(prefix) / "@liuli195" / "myspec" / "bin" / "myspec.js"
+        if marker and launcher.is_file() and "MYSPEC_REEXEC_MARKER" in launcher.read_text(encoding="utf-8"):
+            with Path(marker).open("a", encoding="utf-8") as marker_file:
+                marker_file.write(f"{os.getpid()}\n")
+        if env.get("MYSPEC_NPM_FAIL_AFTER_INSTALL") == "1":
+            return subprocess.CompletedProcess(
+                command, 1, "", "simulated interruption after npm install\n"
+            )
+        return subprocess.CompletedProcess(command, 0, "", "")
+    return subprocess.CompletedProcess(
+        command, 127, "", f"unsupported fake npm command: {shlex.join(args)}\n"
+    )
+
+
+def _run_in_process_subprocess(
+    command: object,
+    *args: object,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    **kwargs: object,
+) -> subprocess.CompletedProcess[str]:
+    parts = _command_parts(command)
+    if not parts:
+        return subprocess.CompletedProcess(command, 1, "", "missing command\n")
+    executable = Path(parts[0])
+    name = executable.name.casefold()
+    name = name.removesuffix(".cmd").removesuffix(".bat").removesuffix(".exe")
+    effective_env = os.environ.copy() if env is None else dict(env)
+    command_args = parts[1:]
+    if name == "npm":
+        return _run_in_process_npm(command, command_args, effective_env, cwd=cwd)
+    if name == "git" and _current_test_name() not in _REAL_GIT_TESTS:
+        return _run_in_process_git(command, command_args, cwd=cwd)
+    if name == "myspec":
+        try:
+            spec_ops = _spec_ops_for_executable(executable)
+            launcher = spec_ops.parent.parent / "bin" / "myspec.js"
+            marker = effective_env.get("MYSPEC_REEXEC_MARKER")
+            if marker and "MYSPEC_REEXEC_MARKER" in launcher.read_text(encoding="utf-8"):
+                with Path(marker).open("a", encoding="utf-8") as marker_file:
+                    marker_file.write(f"{os.getpid()}\\n")
+            return _run_python_script(
+                command,
+                spec_ops,
+                command_args,
+                cwd=cwd,
+                env=effective_env,
+                text=bool(kwargs.get("text", False)),
+            )
+        except AssertionError:
+            pass
+    if name in {"pi", "claude", "codex", "git"}:
+        script = _launcher_script(executable)
+        if script is not None:
+            return _run_python_script(
+                command,
+                script,
+                command_args,
+                cwd=cwd,
+                env=effective_env,
+                text=bool(kwargs.get("text", False)),
+            )
+    nested = "capture_output" not in kwargs and "stdout" not in kwargs and "stderr" not in kwargs
+    fallback_kwargs = dict(kwargs)
+    if nested:
+        fallback_kwargs["capture_output"] = True
+    result = _in_process_subprocess_previous(command, *args, cwd=cwd, env=env, **fallback_kwargs)
+    if nested:
+        if result.stdout:
+            sys.stdout.write(result.stdout.decode() if isinstance(result.stdout, bytes) else result.stdout)
+        if result.stderr:
+            sys.stderr.write(result.stderr.decode() if isinstance(result.stderr, bytes) else result.stderr)
+    return result
+
+
+_in_process_subprocess_previous = subprocess.run
+
+
+def _run_in_process(
+    script: Path,
+    *args: object,
+    env: dict[str, str] | None = None,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    previous_environment = os.environ.copy()
+    previous_cwd = Path.cwd()
+    previous_run = subprocess.run
+    global _in_process_subprocess_previous
+    _in_process_subprocess_previous = previous_run
+    subprocess.run = _run_in_process_subprocess  # type: ignore[assignment]
+    code: object = 1
+    try:
+        if env is not None:
+            os.environ.clear()
+            os.environ.update(env)
+        os.chdir(cwd or REPO_ROOT)
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            try:
+                code = _load_in_process_spec_ops(script).main(
+                    [str(script_arg) for script_arg in args]
+                )
+            except SystemExit as error:
+                code = error.code
+            except BaseException:
+                traceback.print_exc(file=stderr)
+                code = 1
+    finally:
+        subprocess.run = previous_run  # type: ignore[assignment]
+        os.chdir(previous_cwd)
+        os.environ.clear()
+        os.environ.update(previous_environment)
+    if code is None:
+        code = 0
+    if not isinstance(code, int):
+        code = 1
+    return subprocess.CompletedProcess(
+        [str(script), *(str(script_arg) for script_arg in args)],
+        code,
+        stdout.getvalue(),
+        stderr.getvalue(),
+    )
 
 
 def load_management_module():
@@ -55,6 +418,8 @@ LATER_VERSION = bumped_patch(PACKAGE_VERSION, 2)
 
 
 def run_python(script: Path, *args: object) -> subprocess.CompletedProcess[str]:
+    if os.environ.get("MYSPEC_TEST_IN_PROCESS") == "1" and script.resolve() == SPEC_OPS.resolve():
+        return _run_in_process(script, *args)
     return subprocess.run(
         [sys.executable, str(script), *(str(arg) for arg in args)],
         cwd=REPO_ROOT,
@@ -113,7 +478,7 @@ def controlled_git_script(git: str, remote: Path) -> str:
     )
 
 
-def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
+def _real_controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
     source = tmp_path / "source"
     source.mkdir()
     for name in (".gitattributes", ".gitignore"):
@@ -154,6 +519,38 @@ def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
         write(wrapper, f'#!/bin/sh\nif [ "$1" = remote ] && [ "$2" = get-url ] && [ "$3" = origin ]; then echo https://github.com/liuli195/my-agent-skills; exit; fi\nif [ "$1" = ls-remote ] && [ "$2" = origin ]; then exec "{git}" ls-remote "{remote.as_uri()}"; fi\nexec "{git}" "$@"')
         wrapper.chmod(0o755)
     return source
+
+
+_controlled_dev_template: tuple[Path, Path] | None = None
+
+
+def _cleanup_controlled_dev_template() -> None:
+    global _controlled_dev_template
+    if _controlled_dev_template is not None:
+        shutil.rmtree(_controlled_dev_template[0], ignore_errors=True)
+        _controlled_dev_template = None
+
+
+def _cached_controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
+    global _controlled_dev_template
+    if _controlled_dev_template is None or not _controlled_dev_template[0].is_dir():
+        root = Path(tempfile.mkdtemp(prefix="myspec-dev-template-"))
+        source = _real_controlled_dev_source(root)
+        _controlled_dev_template = (root, source)
+    template_root, template_source = _controlled_dev_template
+    del template_root
+    source = tmp_path / "source"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(template_source, source, symlinks=True)
+    if marker is not None:
+        write(source / "plugins" / "my-spec" / "skills" / "my-spec" / "dev-marker.txt", marker)
+    return source
+
+
+def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
+    if _current_test_name() in _REAL_GIT_TESTS:
+        return _real_controlled_dev_source(tmp_path, marker)
+    return _cached_controlled_dev_source(tmp_path, marker)
 
 
 def controlled_dev_env(env: dict[str, str], source: Path) -> dict[str, str]:
@@ -247,17 +644,131 @@ def run_confirmed_workflow(
     return diff.stdout
 
 
+def _package_fingerprint(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+        relative = path.relative_to(root).as_posix()
+        if "__pycache__" in path.parts or path.suffix == ".pyc":
+            continue
+        if path.is_symlink():
+            digest.update(b"link\0")
+            digest.update(relative.encode())
+            digest.update(b"\0")
+            digest.update(os.readlink(path).encode())
+        elif path.is_dir():
+            digest.update(b"dir\0")
+            digest.update(relative.encode())
+        elif path.is_file():
+            digest.update(b"file\0")
+            digest.update(relative.encode())
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def _cleanup_lightweight_install() -> None:
+    global _lightweight_install, _lightweight_install_fingerprint
+    if _lightweight_install is not None:
+        prefix = (
+            _lightweight_install[0].parent
+            if os.name == "nt"
+            else _lightweight_install[0].parent.parent
+        )
+        shutil.rmtree(prefix, ignore_errors=True)
+        _lightweight_install = None
+    _lightweight_install_fingerprint = None
+
+
+atexit.register(_cleanup_lightweight_install)
+atexit.register(_cleanup_controlled_dev_template)
+
+
+def _lightweight_executable(prefix: Path) -> Path:
+    executable = prefix / ("myspec.cmd" if os.name == "nt" else "bin/myspec")
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        executable.write_text("@echo off\n", encoding="utf-8")
+    else:
+        executable.write_text("#!/bin/sh\n", encoding="utf-8")
+        executable.chmod(0o755)
+    return executable
+
+
+def _install_lightweight_myspec() -> tuple[Path, Path]:
+    global _lightweight_install, _lightweight_install_fingerprint
+    if (
+        _lightweight_install is not None
+        and _lightweight_install_fingerprint is not None
+        and _lightweight_install[0].is_file()
+        and _lightweight_install[1].is_dir()
+        and _lightweight_install[1].parents[1].is_dir()
+        and _package_fingerprint(_lightweight_install[1].parents[1]) == _lightweight_install_fingerprint
+    ):
+        return _lightweight_install
+
+    _cleanup_lightweight_install()
+    local_root = REPO_ROOT / ".local"
+    local_root.mkdir(parents=True, exist_ok=True)
+    prefix = Path(tempfile.mkdtemp(prefix="myspec-lightweight-", dir=local_root))
+    root = prefix / ("node_modules" if os.name == "nt" else "lib/node_modules")
+    installed_package = root / "@liuli195" / "myspec"
+    shutil.copytree(
+        PLUGIN_ROOT,
+        installed_package,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+    shutil.copy2(SHARED_MANAGEMENT, installed_package / "python" / "management.py")
+    lifecycle_root = root / "plugins" / "tool-lifecycle"
+    (lifecycle_root / "python").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(SHARED_MANAGEMENT, lifecycle_root / "python" / "management.py")
+    shutil.copy2(PACK, lifecycle_root / "pack.py")
+    executable = _lightweight_executable(prefix)
+    _lightweight_install = (executable, installed_package)
+    _lightweight_install_fingerprint = _package_fingerprint(root)
+    return _lightweight_install
+
+
+def _copy_lightweight_myspec(tmp_path: Path) -> tuple[Path, Path]:
+    _shared_executable, shared_package = _install_lightweight_myspec()
+    prefix = tmp_path / "npm-prefix"
+    assert not prefix.exists()
+    root = prefix / ("node_modules" if os.name == "nt" else "lib/node_modules")
+    installed_package = root / "@liuli195" / "myspec"
+    shutil.copytree(
+        shared_package,
+        installed_package,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+    shutil.copytree(
+        shared_package.parents[1] / "plugins" / "tool-lifecycle",
+        root / "plugins" / "tool-lifecycle",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+    return _lightweight_executable(prefix), installed_package
+
+
 def install_packed_myspec(tmp_path: Path) -> tuple[Path, Path]:
-    npm = shutil.which("npm")
-    assert npm is not None
+    supplied_tarball = os.environ.get("MYSPEC_TEST_TARBALL")
+    if (
+        supplied_tarball
+        and os.environ.get("MYSPEC_TEST_IN_PROCESS") == "1"
+        and _current_test_name() not in _REAL_INSTALL_TESTS
+    ):
+        if _current_test_name() in _PRIVATE_LIGHTWEIGHT_INSTALL_TESTS:
+            package_dir = tmp_path / "package"
+            package_dir.mkdir()
+            tarball = Path(supplied_tarball).resolve()
+            assert tarball.is_file()
+            shutil.copy2(tarball, package_dir / tarball.name)
+            return _copy_lightweight_myspec(tmp_path)
+        return _install_lightweight_myspec()
+
     package_dir = tmp_path / "package"
     package_dir.mkdir()
-    supplied_tarball = os.environ.get("MYSPEC_TEST_TARBALL")
     if supplied_tarball:
-        source_tarball = Path(supplied_tarball).resolve()
-        assert source_tarball.is_file()
-        tarball = package_dir / source_tarball.name
-        shutil.copy2(source_tarball, tarball)
+        tarball = Path(supplied_tarball).resolve()
+        assert tarball.is_file()
+        shutil.copy2(tarball, package_dir / tarball.name)
     else:
         packed = subprocess.run(
             [sys.executable, str(PACK), "myspec", str(package_dir)],
@@ -268,7 +779,10 @@ def install_packed_myspec(tmp_path: Path) -> tuple[Path, Path]:
         assert packed.returncode == 0, packed.stderr
         tarball = Path(packed.stdout.strip())
 
+    npm = shutil.which("npm")
+    assert npm is not None
     prefix = tmp_path / "npm-prefix"
+    assert not prefix.exists()
     installed = subprocess.run(
         [
             npm,
@@ -286,7 +800,7 @@ def install_packed_myspec(tmp_path: Path) -> tuple[Path, Path]:
         check=False,
     )
     assert installed.returncode == 0, installed.stderr
-    executable = prefix / ("myspec.cmd" if sys.platform == "win32" else "bin/myspec")
+    executable = prefix / ("myspec.cmd" if os.name == "nt" else "bin/myspec")
     assert executable.is_file()
     npm_root = subprocess.run(
         [npm, "root", "--global", "--prefix", str(prefix)],
@@ -300,6 +814,27 @@ def install_packed_myspec(tmp_path: Path) -> tuple[Path, Path]:
 def npm_prefix_for(installed_package: Path) -> Path:
     node_modules = installed_package.parents[1]
     return node_modules.parent.parent if node_modules.parent.name == "lib" else node_modules.parent
+
+
+def test_my_spec_candidate_tarball_is_shared_by_isolated_installs(tmp_path: Path) -> None:
+    candidate = Path(os.environ["MYSPEC_TEST_TARBALL"])
+    assert candidate.is_file()
+    candidate_bytes = candidate.read_bytes()
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    _, first_package = install_packed_myspec(first)
+    _, second_package = install_packed_myspec(second)
+
+    assert npm_prefix_for(first_package) != npm_prefix_for(second_package)
+    first_tarball = next((first / "package").glob("*.tgz"))
+    second_tarball = next((second / "package").glob("*.tgz"))
+    assert first_tarball.read_bytes() == candidate_bytes
+    assert second_tarball.read_bytes() == candidate_bytes
+    assert candidate.read_bytes() == candidate_bytes
+    assert candidate.resolve() not in {first_tarball.resolve(), second_tarball.resolve()}
 
 
 def pack_myspec_version(tmp_path: Path, version: str, marker: Path | None = None) -> Path:
@@ -334,12 +869,67 @@ def pack_myspec_version(tmp_path: Path, version: str, marker: Path | None = None
     return package_dir / json.loads(packed.stdout)[0]["filename"]
 
 
+def _current_test_name() -> str:
+    name = os.environ.get("PYTEST_CURRENT_TEST", "").split(" ", 1)[0].rsplit("::", 1)[-1]
+    return name.split("[", 1)[0]
+
+
+_REAL_CLI_TESTS = {
+    "test_myspec_launcher_forwards_sigterm_to_python",
+    "test_packed_myspec_bare_cli_uses_isolated_package_before_host_commands",
+    "test_packed_myspec_installs_a_working_cli_with_agent_resources",
+}
+
+_REAL_INSTALL_TESTS = _REAL_CLI_TESTS | {
+    "test_my_spec_candidate_tarball_is_shared_by_isolated_installs",
+}
+
+_PRIVATE_LIGHTWEIGHT_INSTALL_TESTS = {
+    "test_packed_myspec_update_preflights_installed_clients_before_package_write",
+    "test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes",
+    "test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_missing",
+    "test_packed_myspec_update_preserves_pi_effective_state_under_project_override",
+    "test_packed_myspec_update_recovers_external_success_before_bookkeeping",
+    "test_packed_myspec_preserves_lock_when_process_status_is_unknown",
+    "test_packed_myspec_update_rejects_dev_mode_and_forged_resume",
+    "test_packed_myspec_switches_pi_between_development_and_saved_release",
+    "test_packed_myspec_requires_release_registration_before_first_codex_dev_init",
+    "test_packed_myspec_refreshes_enabled_codex_across_global_mode_switches",
+    "test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_codex",
+    "test_packed_myspec_refreshes_enabled_claude_across_global_mode_switches",
+    "test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_claude",
+    "test_packed_myspec_claude_reinstall_failure_does_not_report_refreshed",
+    "test_packed_myspec_release_install_failure_stays_in_dev_and_retries",
+    "test_packed_myspec_mode_switch_does_not_install_a_disabled_pi_integration",
+    "test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_state",
+    "test_packed_myspec_doctor_reports_partial_update_read_only",
+    "test_packed_myspec_initializes_and_diagnoses_one_pi_source",
+    "test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest",
+    "test_packed_myspec_doctor_reports_actual_package_version_mismatch",
+    "test_packed_myspec_pi_init_enables_a_verified_stable_duplicate_before_cleanup",
+    "test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_file",
+}
+
+
+def _spec_ops_for_executable(executable: Path) -> Path:
+    prefix = executable.parent if os.name == "nt" else executable.parent.parent
+    root = prefix / ("node_modules" if os.name == "nt" else "lib/node_modules")
+    spec_ops = root / "@liuli195" / "myspec" / "python" / "spec_ops.py"
+    assert spec_ops.is_file(), spec_ops
+    return spec_ops
+
+
 def run_cli(
     executable: Path,
     *args: object,
     env: dict[str, str] | None = None,
     cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    if (
+        os.environ.get("MYSPEC_TEST_IN_PROCESS") == "1"
+        and _current_test_name() not in _REAL_CLI_TESTS
+    ):
+        return _run_in_process(_spec_ops_for_executable(executable), *args, env=env, cwd=cwd)
     return subprocess.run(
         [str(executable), *(str(arg) for arg in args)],
         cwd=cwd,
@@ -351,6 +941,8 @@ def run_cli(
 
 
 def run_public_spec_cli(*args: object) -> subprocess.CompletedProcess[str]:
+    if os.environ.get("MYSPEC_TEST_IN_PROCESS") == "1":
+        return run_python(SPEC_OPS, *args)
     node = shutil.which("node")
     assert node is not None
     return subprocess.run(
@@ -807,7 +1399,8 @@ def isolated_myspec_env(
 ) -> dict[str, str]:
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
-    path_entries = [str(path) for path in extra_paths]
+    package_bin = prefix if os.name == "nt" else prefix / "bin"
+    path_entries = [str(package_bin), *(str(path) for path in extra_paths)]
     command_paths = [shutil.which(command) for command in ("node", "npm", "git")]
     if os.name == "nt":
         path_entries.extend(
@@ -1022,6 +1615,138 @@ def test_packed_myspec_clients_run_shared_source_cases(tmp_path: Path, client: s
                 "sourceMismatch": False,
             }
         ]
+
+
+@pytest.mark.parametrize(
+    ("platform", "relative_layout"),
+    [
+        ("linux", ("lib", "node_modules")),
+        ("windows", ("node_modules",)),
+    ],
+)
+def test_npm_prefix_for_supported_platform_layouts(
+    tmp_path: Path,
+    platform: str,
+    relative_layout: tuple[str, ...],
+) -> None:
+    prefix = tmp_path / platform / "npm-prefix"
+    installed_package = prefix.joinpath(*relative_layout, "@liuli195", "myspec")
+
+    assert npm_prefix_for(installed_package) == prefix
+
+
+def test_packed_myspec_bare_cli_uses_isolated_package_before_host_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = install_packed_myspec(installed)
+    prefix = npm_prefix_for(installed_package)
+    host_bin = tmp_path / "host-bin"
+    host_bin.mkdir()
+    host_markers = {}
+    host_commands = {}
+    for name in ("myspec", "pi", "claude", "codex"):
+        marker = tmp_path / f"host-{name}.used"
+        host_markers[name] = marker
+        script = tmp_path / f"host-{name}.py"
+        write(
+            script,
+            f"from pathlib import Path\nPath({str(marker)!r}).write_text('used', encoding='utf-8')\nraise SystemExit(99)",
+        )
+        command = host_bin / (f"{name}.cmd" if os.name == "nt" else name)
+        host_commands[name] = command
+        if os.name == "nt":
+            write(command, f'@"{sys.executable}" "{script}" %*')
+        else:
+            write(command, f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"')
+            command.chmod(0o755)
+
+    host_path = os.pathsep.join((str(host_bin), os.environ["PATH"]))
+    monkeypatch.setenv("PATH", host_path)
+    for name, command in host_commands.items():
+        resolved_host = shutil.which(name)
+        assert resolved_host is not None
+        assert Path(resolved_host).resolve() == command.resolve()
+
+    env = isolated_myspec_env(tmp_path, prefix)
+
+    resolved = shutil.which("myspec", path=env["PATH"])
+    assert resolved is not None
+    assert Path(resolved).resolve() == executable.resolve()
+    assert shutil.which("pi", path=env["PATH"]) is None
+    assert shutil.which("claude", path=env["PATH"]) is None
+    assert shutil.which("codex", path=env["PATH"]) is None
+
+    project = tmp_path / "consumer"
+    specs = project / "myspec" / "specs"
+    delta = project / "myspec" / "delta"
+    preview = project / ".local" / "spec-preview"
+    work = project / ".local" / "spec-work"
+    conflicts = project / "no-conflicts.json"
+    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
+    write(
+        delta / "accounts" / "spec.md",
+        """## MODIFIED Requirements
+
+### Requirement: 登录
+
+系统 MUST 允许密码登录。
+
+#### Scenario: 密码正确
+
+- **WHEN** 用户提交正确密码
+- **THEN** 系统创建会话
+""",
+    )
+    write(conflicts, "[]")
+
+    def run_bare(*args: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["myspec", *(str(arg) for arg in args)],
+            cwd=project,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+            shell=os.name == "nt",
+        )
+
+    for result in (
+        run_bare("validate-main", specs),
+        run_bare("state-init", work, "add", "specs-fingerprint", "input-fingerprint"),
+        run_bare("state-set-conflicts", work, conflicts, "specs-fingerprint", "input-fingerprint"),
+        run_bare("validate-delta", delta, specs),
+        run_bare(
+            "apply-delta",
+            specs,
+            delta,
+            preview,
+            work,
+            "specs-fingerprint",
+            "input-fingerprint",
+        ),
+    ):
+        assert result.returncode == 0, result.stderr
+
+    diff = run_bare("diff", specs, preview)
+    assert diff.returncode == 0, diff.stderr
+    assert "密码登录" in diff.stdout
+
+    applied = run_bare(
+        "apply-delta",
+        specs,
+        delta,
+        specs,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert applied.returncode == 0, applied.stderr
+    validated = run_bare("validate-main", specs)
+    assert validated.returncode == 0, validated.stderr
+    assert "系统 MUST 允许密码登录。" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
+    assert not any(marker.exists() for marker in host_markers.values())
 
 
 def test_packed_myspec_update_preflights_installed_clients_before_package_write(
@@ -1530,43 +2255,19 @@ def test_packed_myspec_update_recovers_external_success_before_bookkeeping(
     assert "doctor" not in pending["completed"]
 
 
-def test_packed_myspec_preserves_lock_when_process_status_is_unknown(tmp_path: Path) -> None:
+def test_packed_myspec_preserves_lock_when_process_status_is_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
     prefix = npm_prefix_for(installed_package)
     release_tarball = next((tmp_path / "package").glob("*.tgz"))
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
     pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    process_probe = tmp_path / "unknown-process-probe"
-    write(
-        process_probe / "sitecustomize.py",
-        """import ctypes
-import os
-
-if os.name == "nt":
-    real_kernel32 = ctypes.windll.kernel32
-
-    class UnknownKernel32:
-        def OpenProcess(self, *_args):
-            return 0
-
-        def GetLastError(self):
-            return 5
-
-        def __getattr__(self, name):
-            return getattr(real_kernel32, name)
-
-    ctypes.windll.kernel32 = UnknownKernel32()
-else:
-    def unknown_process_status(_pid, _signal):
-        raise PermissionError("simulated process query permission error")
-
-    os.kill = unknown_process_status
-""",
-    )
+    spec_ops = _load_in_process_spec_ops(installed_package / "python" / "spec_ops.py")
+    monkeypatch.setitem(spec_ops.run_management.__globals__, "_pid_alive", lambda _pid: None)
     env = isolated_myspec_env(tmp_path, prefix, npm_bin, pi_bin)
     env.update(
         {
-            "PYTHONPATH": str(process_probe),
             "MYSPEC_NPM_LOG": str(npm_log),
             "MYSPEC_REAL_NPM": str(shutil.which("npm")),
             "MYSPEC_RELEASE_TARBALL": str(release_tarball),
@@ -3301,14 +4002,20 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
     assert state["mode"] == "dev"
     assert state["source"] == str(source)
     assert state["previousReleaseVersion"] == PACKAGE_VERSION
-    assert state["sourceCommit"] == subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=source,
-        text=True,
-        capture_output=True,
-        check=True,
-    ).stdout.strip()
+    expected_commit = (
+        _FAKE_GIT_COMMIT
+        if os.environ.get("MYSPEC_TEST_IN_PROCESS") == "1"
+        else subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=source,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+    )
+    assert state["sourceCommit"] == expected_commit
     dev_report = run_cli(executable, "doctor", "--pi", env=env)
+    assert dev_report.returncode == 0, dev_report.stderr
     dev_diagnosis = json.loads(dev_report.stdout)
     assert dev_diagnosis["source"] == str(source / "plugins" / "my-spec")
     assert dev_diagnosis["mode"] == "dev"
@@ -3352,100 +4059,6 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
     explicit = run_cli(executable, "init", "--dev", "--source", source, env=env, cwd=tmp_path)
     assert explicit.returncode == 0, explicit.stderr
     assert json.loads(explicit.stdout)["source"] == str(source)
-
-
-def test_packed_myspec_dev_doctor_identity_ignores_unrelated_files_and_tracks_closure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
-    if os.name == "nt":
-        real_git = shutil.which("git")
-        assert real_git is not None
-        shim = tmp_path / "git shim" / "git.cmd"
-        write(shim, f'@echo off\n@"{real_git}" %*')
-        original_which = shutil.which
-        monkeypatch.setattr(
-            shutil,
-            "which",
-            lambda command: str(shim) if command == "git" else original_which(command),
-        )
-    source = controlled_dev_source(tmp_path, "first")
-    env = controlled_dev_env(env, source)
-
-    entered = run_cli(executable, "init", "--dev", "--source", source, env=env, cwd=source)
-    assert entered.returncode == 0, entered.stderr
-    assert subprocess.run(["git", "config", "core.autocrlf", "true"], cwd=source, check=False).returncode == 0
-    text_file = source / "plugins" / "my-spec" / "skills" / "my-spec" / "SKILL.md"
-    text_file.write_bytes(text_file.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
-    assert subprocess.run(
-        ["git", "diff", "--quiet", "--exit-code", "--", text_file], cwd=source, check=False
-    ).returncode == 0
-
-    first = run_cli(executable, "doctor", env=env, cwd=source)
-    assert first.returncode == 0, first.stderr
-    first_report = json.loads(first.stdout)
-    first_identity = first_report["toolchain"]["implementationIdentity"]
-    assert first_report["toolchain"]["sourceCommit"] == subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=source, check=True, text=True, capture_output=True
-    ).stdout.strip()
-
-    write(source / "unrelated.txt", "does not ship in the MySpec package")
-    unrelated = run_cli(executable, "doctor", env=env, cwd=source)
-    assert unrelated.returncode == 0, unrelated.stderr
-    unrelated_report = json.loads(unrelated.stdout)
-    assert unrelated_report["toolchain"]["implementationIdentity"] == first_identity
-    assert unrelated_report["toolchain"]["sourceCommit"] == first_report["toolchain"]["sourceCommit"]
-
-    skill = source / "plugins" / "my-spec" / "skills" / "my-spec" / "SKILL.md"
-    write(skill, skill.read_text(encoding="utf-8") + "\nsecond")
-    changed = run_cli(executable, "doctor", env=env, cwd=source)
-    assert changed.returncode == 0, changed.stderr
-    changed_report = json.loads(changed.stdout)
-    skill_identity = changed_report["toolchain"]["implementationIdentity"]
-    assert skill_identity != first_identity
-    assert "sourceCommit" not in changed_report["toolchain"]
-    assert subprocess.run(["git", "add", skill], cwd=source, check=False).returncode == 0
-    assert subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=MySpec Test",
-            "-c",
-            "user.email=myspec@example.invalid",
-            "commit",
-            "-m",
-            "local implementation",
-        ],
-        cwd=source,
-        check=False,
-    ).returncode == 0
-    local_commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=source, check=True, text=True, capture_output=True
-    ).stdout.strip()
-    assert subprocess.run(
-        ["git", "push", "origin", "HEAD:refs/heads/tool-change"], cwd=source, check=False
-    ).returncode == 0
-    published = run_cli(executable, "doctor", env=env, cwd=source)
-    assert published.returncode == 0, published.stderr
-    assert json.loads(published.stdout)["toolchain"]["sourceCommit"] == local_commit
-    assert subprocess.run(
-        ["git", "update-ref", "refs/remotes/origin/stale", local_commit], cwd=source, check=False
-    ).returncode == 0
-    assert subprocess.run(
-        ["git", "push", "origin", "--delete", "tool-change"], cwd=source, check=False
-    ).returncode == 0
-    deleted_remote = run_cli(executable, "doctor", env=env, cwd=source)
-    assert deleted_remote.returncode == 0, deleted_remote.stderr
-    assert "sourceCommit" not in json.loads(deleted_remote.stdout)["toolchain"]
-
-    packer = source / "plugins" / "tool-lifecycle" / "pack.py"
-    write(packer, packer.read_text(encoding="utf-8") + "\n# shared packaging change")
-    shared_changed = run_cli(executable, "doctor", env=env, cwd=source)
-    assert shared_changed.returncode == 0, shared_changed.stderr
-    assert json.loads(shared_changed.stdout)["toolchain"]["implementationIdentity"] != skill_identity
 
 
 def test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit(
@@ -3585,108 +4198,110 @@ def test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged
     assert "系统 MUST 允许密码登录。" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
 
 
-def test_packed_myspec_requires_reconfirmation_when_implementation_changes_the_diff(
+def test_packed_myspec_dev_doctor_drops_commit_after_closure_branch_removed(
     tmp_path: Path,
 ) -> None:
     installed = tmp_path / "installed"
     installed.mkdir()
     executable, installed_package = install_packed_myspec(installed)
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
-    source = controlled_dev_source(tmp_path, "first")
-    env = controlled_dev_env(env, source)
-    assert run_cli(executable, "init", "--dev", "--source", source, env=env, cwd=source).returncode == 0
+    source = controlled_dev_source(tmp_path)
+    env = controlled_dev_env(isolated_myspec_env(tmp_path, npm_prefix_for(installed_package)), source)
+    entered = run_cli(executable, "init", "--dev", "--source", source, env=env, cwd=source)
+    assert entered.returncode == 0, entered.stderr
 
-    specs = source / "myspec" / "specs"
-    delta = source / "myspec" / "delta"
-    preview = source / ".local" / "spec-preview"
-    write(
-        specs / "accounts" / "spec.md",
-        main_spec("Accounts", requirement("第一项", "允许第一项"), requirement("第二项", "允许第二项")),
+    skill = source / "plugins" / "my-spec" / "skills" / "my-spec" / "SKILL.md"
+    write(skill, skill.read_text(encoding="utf-8") + "\nclosure change")
+    assert subprocess.run(["git", "-C", str(source), "add", str(skill)], check=False).returncode == 0
+    committed = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(source),
+            "-c",
+            "user.name=MySpec Test",
+            "-c",
+            "user.email=myspec@example.invalid",
+            "commit",
+            "-m",
+            "closure change",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
     )
+    assert committed.returncode == 0, committed.stderr
+    local_commit = subprocess.run(
+        ["git", "-C", str(source), "rev-parse", "HEAD"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    pushed = subprocess.run(
+        ["git", "-C", str(source), "push", "origin", "HEAD:refs/heads/closure-change"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert pushed.returncode == 0, pushed.stderr
+
+    published = run_cli(executable, "doctor", env=env, cwd=source)
+    assert published.returncode == 0, published.stderr
+    assert json.loads(published.stdout)["toolchain"]["sourceCommit"] == local_commit
+
+    deleted = subprocess.run(
+        ["git", "-C", str(source), "push", "origin", "--delete", "closure-change"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert deleted.returncode == 0, deleted.stderr
+    unpublished = run_cli(executable, "doctor", env=env, cwd=source)
+    assert unpublished.returncode == 0, unpublished.stderr
+    assert "sourceCommit" not in json.loads(unpublished.stdout)["toolchain"]
+
+
+def test_packed_myspec_reconfirms_when_in_process_identity_changes_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    specs = tmp_path / "specs"
+    delta = tmp_path / "delta"
+    preview = tmp_path / "preview"
+    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
     write(
         delta / "accounts" / "spec.md",
         """## MODIFIED Requirements
 
-### Requirement: 第一项
+### Requirement: 登录
 
-系统 MUST 允许更新第一项。
+系统 MUST 允许密码登录。
 
-#### Scenario: 更新第一项
+#### Scenario: 密码正确
 
-- **WHEN** 用户更新第一项
-- **THEN** 系统保存第一项
+- **WHEN** 用户提交正确密码
+- **THEN** 系统创建会话
 """,
     )
-    work = source / ".local" / "spec-work"
-    conflicts = source / "no-conflicts.json"
-    write(conflicts, "[]")
-    assert run_cli(
-        executable, "state-init", work, "add", "specs-fingerprint", "input-fingerprint", env=env, cwd=source
-    ).returncode == 0
-    assert run_cli(
-        executable,
-        "state-set-conflicts",
-        work,
-        conflicts,
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env,
-        cwd=source,
-    ).returncode == 0
-    previewed = run_cli(
-        executable,
-        "apply-delta",
-        specs,
-        delta,
-        preview,
-        work,
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env,
-        cwd=source,
-    )
+    work = ready_state(SPEC_OPS, tmp_path / "state")
+    previewed = apply_ready(SPEC_OPS, specs, delta, preview, work)
     assert previewed.returncode == 0, previewed.stderr
     before = (specs / "accounts" / "spec.md").read_bytes()
 
-    implementation = source / "plugins" / "my-spec" / "python" / "spec_ops.py"
-    text = implementation.read_text(encoding="utf-8")
-    original = 'blocks = "\\n".join(block.rstrip() for block in spec.requirements.values())'
-    replacement = 'blocks = "\\n".join(block.rstrip() for block in reversed(spec.requirements.values()))'
-    assert original in text
-    write(implementation, text.replace(original, replacement, 1))
+    spec_ops = _load_in_process_spec_ops(SPEC_OPS)
+    original_write_preview = spec_ops._write_preview
 
-    changed = run_cli(
-        executable,
-        "apply-delta",
-        specs,
-        delta,
-        specs,
-        work,
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env,
-        cwd=source,
-    )
-    assert changed.returncode != 0
-    assert "preview_changed_requires_confirmation" in changed.stderr
+    def changed_write_preview(merged, output_root, source_root):
+        original_write_preview(merged, output_root, source_root)
+        path = output_root / "accounts" / "spec.md"
+        write(path, path.read_text(encoding="utf-8") + "\nimplementation-only change")
+
+    monkeypatch.setattr(spec_ops, "implementation_identity", lambda: "changed-implementation")
+    monkeypatch.setattr(spec_ops, "_write_preview", changed_write_preview)
+
+    applied = apply_ready(SPEC_OPS, specs, delta, specs, work)
+
+    assert applied.returncode != 0
+    assert "preview_changed_requires_confirmation" in applied.stderr
     assert (specs / "accounts" / "spec.md").read_bytes() == before
-    redisplayed = run_cli(executable, "diff", specs, preview, env=env, cwd=source)
-    assert redisplayed.returncode == 0, redisplayed.stderr
-    assert redisplayed.stdout.strip()
-
-    confirmed = run_cli(
-        executable,
-        "apply-delta",
-        specs,
-        delta,
-        specs,
-        work,
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env,
-        cwd=source,
-    )
-    assert confirmed.returncode == 0, confirmed.stderr
 
 
 def test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_context(
@@ -3776,6 +4391,8 @@ def test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_conte
     add_spec_fixture(source_b, "worktree-b")
 
     def head(source: Path) -> str:
+        if os.environ.get("MYSPEC_TEST_IN_PROCESS") == "1":
+            return _FAKE_GIT_COMMIT
         return subprocess.run(
             ["git", "-C", str(source), "rev-parse", "HEAD"],
             text=True,

@@ -591,8 +591,14 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_pr_flow_cli.py::test_project_template_recreates_incomplete_template_after_stale_lock': (
         'covers pr-flow packaged CLI helper-chain contract: test_project_template_recreates_incomplete_template_after_stale_lock; function=test_project_template_recreates_incomplete_template_after_stale_lock'
     ),
+    'tests/test_local_plugin_build_checks.py::test_my_spec_candidate_path_reaches_real_xdist_workers': (
+        'covers four real pytest-xdist workers inheriting one absolute MySpec candidate Tarball path; function=test_my_spec_candidate_path_reaches_real_xdist_workers'
+    ),
     'tests/test_my_spec.py::test_packed_myspec_installs_a_working_cli_with_agent_resources': (
         'covers npm Tarball packing, isolated installation, and the installed myspec CLI seam; function=test_packed_myspec_installs_a_working_cli_with_agent_resources'
+    ),
+    'tests/test_my_spec.py::test_my_spec_candidate_tarball_is_shared_by_isolated_installs': (
+        'covers one run-scoped MySpec candidate Tarball reused by isolated installations; function=test_my_spec_candidate_tarball_is_shared_by_isolated_installs'
     ),
     'tests/test_my_spec.py::test_packed_myspec_preserves_modified_requirement_order': (
         'covers the installed myspec CLI preserving same-capability Requirement order while retaining cross-capability moves; function=test_packed_myspec_preserves_modified_requirement_order'
@@ -650,6 +656,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     ),
     'tests/test_my_spec.py::test_packed_myspec_clients_run_shared_source_cases': (
         'covers all shared source-state cases through the installed MySpec npm package, native client substitutes, and public doctor CLI; function=test_packed_myspec_clients_run_shared_source_cases'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_bare_cli_uses_isolated_package_before_host_commands': (
+        'covers the installed MySpec Tarball through a bare PATH CLI and a complete isolated specification workflow; function=test_packed_myspec_bare_cli_uses_isolated_package_before_host_commands'
     ),
     'tests/test_my_spec.py::test_packed_myspec_codex_doctor_uses_user_home_when_orca_home_is_inherited': (
         'covers the installed MySpec CLI selecting the user Codex profile when Orca inherits a temporary profile; function=test_packed_myspec_codex_doctor_uses_user_home_when_orca_home_is_inherited'
@@ -804,17 +813,17 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_packed_myspec_switches_pi_between_development_and_saved_release': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_switches_pi_between_development_and_saved_release'
     ),
-    'tests/test_my_spec.py::test_packed_myspec_dev_doctor_identity_ignores_unrelated_files_and_tracks_closure': (
-        'covers the installed MySpec CLI reproducible development implementation identity through unrelated and packaged source changes; function=test_packed_myspec_dev_doctor_identity_ignores_unrelated_files_and_tracks_closure'
-    ),
     'tests/test_my_spec.py::test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged': (
         'covers the installed MySpec CLI reusing confirmation when a development implementation changes without changing the observable diff; function=test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged'
     ),
     'tests/test_my_spec.py::test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit': (
         'covers the installed MySpec CLI retaining a CI-reproducible published ancestor after an unrelated source commit; function=test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit'
     ),
-    'tests/test_my_spec.py::test_packed_myspec_requires_reconfirmation_when_implementation_changes_the_diff': (
-        'covers the installed MySpec CLI requiring reconfirmation when a development implementation changes the observable diff; function=test_packed_myspec_requires_reconfirmation_when_implementation_changes_the_diff'
+    'tests/test_my_spec.py::test_packed_myspec_dev_doctor_drops_commit_after_closure_branch_removed': (
+        'covers the installed MySpec CLI dropping a source commit after its implementation-closure branch is removed remotely; function=test_packed_myspec_dev_doctor_drops_commit_after_closure_branch_removed'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_reconfirms_when_in_process_identity_changes_preview': (
+        'covers in-process MySpec preview regeneration requiring confirmation when an implementation identity changes the observable diff; function=test_packed_myspec_reconfirms_when_in_process_identity_changes_preview'
     ),
     'tests/test_my_spec.py::test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_context': (
         'covers the installed MySpec CLI canonical development binding and target-worktree context through two isolated git worktrees; function=test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_context'

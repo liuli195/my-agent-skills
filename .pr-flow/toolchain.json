@@ -5,9 +5,9 @@
       "mode": "dev",
       "packageName": "@liuli195/myspec",
       "sourceRepository": "https://github.com/liuli195/my-agent-skills",
-      "sourceCommit": "6c4f378028fce2036f545359f7c9410c7adde5f1",
+      "sourceCommit": "daef9081c7fbdf01fb868840df4ed8d9b6f6ea05",
       "packageDirectory": "plugins/my-spec",
-      "implementationIdentity": "sha256:30fd2b5997283db218329dd8ca50167f93a77a6b61651cf7c429980329dc123c"
+      "implementationIdentity": "sha256:3d91a65fcd3ceded80a5b44fe4909e5f6b1142b69dbdbbac66e76d2e23581ac5"
     },
     "build-and-verify": {
       "mode": "dev",

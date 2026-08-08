@@ -86,3 +86,24 @@ Full repository end-to-end verification SHALL（必须）complete in under 60 se
 - **WHEN** full repository verification is optimized
 - **THEN** the verification report MUST include before and after timing evidence
 - **THEN** the evidence MUST identify the largest remaining contributors if the command is still close to the target
+### Requirement: MySpec 快速验证复用候选发布包
+
+MySpec（自有规格）快速验证 MUST 在一次非缓存检查中最多生成一次当前检出的候选 Tarball（压缩包），让并行工作进程消费同一只读候选包，并把不需要证明发布形态的逻辑分支留在进程内测试 Seam（接缝）；该检查 MUST 保留完整真实发布形态覆盖，并在本地开发机器上稳定运行在约 30 秒。
+
+#### Scenario: 本地运行 MySpec 快速验证
+
+- **WHEN** 贡献者对当前检出的 MySpec 变更运行非缓存快速验证
+- **THEN** 当前候选 Tarball MUST 只生成一次并由全部并行工作进程共享
+- **THEN** 各测试的用户目录、日志、运行状态和需要写入的安装前缀 MUST 相互隔离
+- **THEN** `verify.my-spec` MUST 在本地开发机器上稳定运行在约 30 秒
+
+#### Scenario: 持续集成提供候选包
+
+- **WHEN** 持续集成已经提供当前检出的候选 Tarball
+- **THEN** MySpec 快速验证 MUST 复用该候选包且不得再次打包
+
+#### Scenario: 性能优化保留发布形态覆盖
+
+- **WHEN** 不需要证明安装或进程行为的 MySpec 测试通过进程内模拟运行
+- **THEN** 验证 MUST 继续保留至少一条官方打包、隔离安装、裸 `myspec` CLI（命令行程序）、校验、预览、差异和正式应用的完整路径
+- **THEN** Windows 与 Linux npm（包管理器）布局及宿主 PATH（可执行文件搜索路径）隔离 MUST 继续被验证
