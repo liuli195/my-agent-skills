@@ -540,6 +540,39 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_pr_flow_cli.py::test_cleanup_refuses_unsafe_stale_base_worktree_end_to_end': (
         'covers pr-flow real git cleanup protection of unsafe occupied stale local bases; function=test_cleanup_refuses_unsafe_stale_base_worktree_end_to_end'
     ),
+    'tests/test_release_flow_cli.py::test_ci_publish_rejects_metadata_before_candidate_release_tree_is_built': (
+        'covers release-flow CI publish stopping on selected npm metadata before building the candidate tree; function=test_ci_publish_rejects_metadata_before_candidate_release_tree_is_built'
+    ),
+    'tests/test_release_flow_cli.py::test_preflight_checks_repository_metadata_only_for_selected_npm_plugin': (
+        'covers release-flow preflight checking metadata only for the selected npm plugin; function=test_preflight_checks_repository_metadata_only_for_selected_npm_plugin'
+    ),
+    'tests/test_release_flow_cli.py::test_publish_accepts_valid_selected_npm_metadata_and_dispatches': (
+        'covers release-flow publish dispatching after selected npm metadata passes; function=test_publish_accepts_valid_selected_npm_metadata_and_dispatches'
+    ),
+    'tests/test_release_flow_cli.py::test_publish_rejects_metadata_before_triggering_remote_workflow': (
+        'covers release-flow publish stopping on invalid npm metadata before remote workflow dispatch; function=test_publish_rejects_metadata_before_triggering_remote_workflow'
+    ),
+    'tests/test_release_flow_cli.py::test_validate_accepts_supported_github_repository_urls': (
+        'covers release-flow validate parsing supported GitHub repository URL forms; function=test_validate_accepts_supported_github_repository_urls'
+    ),
+    'tests/test_release_flow_cli.py::test_validate_checks_all_existing_registered_npm_packages': (
+        'covers release-flow validate checking every existing registered npm package; function=test_validate_checks_all_existing_registered_npm_packages'
+    ),
+    'tests/test_release_flow_cli.py::test_validate_rejects_conflicting_github_actions_repository_identity': (
+        'covers release-flow validate failing closed on conflicting GitHub Actions identity sources; function=test_validate_rejects_conflicting_github_actions_repository_identity'
+    ),
+    'tests/test_release_flow_cli.py::test_validate_uses_origin_outside_github_actions': (
+        'covers release-flow validate ignoring an untrusted GitHub repository environment value outside Actions; function=test_validate_uses_origin_outside_github_actions'
+    ),
+    'tests/test_release_flow_cli.py::test_validate_rejects_missing_npm_repository_metadata': (
+        'covers release-flow validate reporting missing npm repository metadata and recovery; function=test_validate_rejects_missing_npm_repository_metadata'
+    ),
+    'tests/test_release_flow_cli.py::test_validate_reports_stable_npm_repository_errors': (
+        'covers release-flow validate reporting stable npm repository URL errors; function=test_validate_reports_stable_npm_repository_errors'
+    ),
+    'tests/test_release_flow_cli.py::test_validate_reports_wrong_existing_npm_repository_directory': (
+        'covers release-flow validate reporting an incorrect existing npm repository directory; function=test_validate_reports_wrong_existing_npm_repository_directory'
+    ),
     'tests/test_release_flow_cli.py::test_preflight_ignores_legacy_build_and_verify_runtime': (
         'covers release-flow preflight ignoring a legacy build-and-verify runtime; function=test_preflight_ignores_legacy_build_and_verify_runtime'
     ),

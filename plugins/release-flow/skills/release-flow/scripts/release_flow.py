@@ -485,15 +485,25 @@ def validate_project(project: Path) -> list[str]:
         projection = read_projection(project)
     except ValueError as exc:
         return [str(exc)]
-    return projection_errors(projection)
+    errors = projection_errors(projection)
+    if errors:
+        return errors
+    return npm_repository_metadata_errors(project)
+
+
+def print_project_errors(errors: list[str], command: str) -> None:
+    for error in errors:
+        print(f"error: {error}")
+        next_action = release_metadata_next_action(error, command)
+        if next_action:
+            print(f"nextAction: {next_action}")
 
 
 def run_validate(args: argparse.Namespace) -> int:
     errors = validate_project(args.project)
     if errors:
         print("status: issues")
-        for error in errors:
-            print(f"error: {error}")
+        print_project_errors(errors, "validate")
         return 1
     print("status: verified")
     return 0
@@ -605,8 +615,7 @@ def run_project(args: argparse.Namespace) -> int:
     errors = validate_project(args.project)
     if errors:
         print("status: issues")
-        for error in errors:
-            print(f"error: {error}")
+        print_project_errors(errors, "project")
         return 1
     try:
         projection = read_projection(args.project)
@@ -784,6 +793,202 @@ def plugin_release_shape(plugin_name: str) -> str:
     if shape not in {"marketplace", "npm"}:
         raise ValueError(f"plugin_release_shape_invalid: {plugin_name}")
     return str(shape)
+
+
+def github_repository_identity_from_url(value: str) -> str | None:
+    if not value or value != value.strip():
+        return None
+    path: str
+    if value.lower().startswith("git@"):
+        prefix, separator, path = value.partition(":")
+        if not separator or prefix.lower() != "git@github.com":
+            return None
+    else:
+        try:
+            parsed = urlparse(value)
+            hostname = parsed.hostname
+            port = parsed.port
+        except ValueError:
+            return None
+        if parsed.scheme not in {"https", "git+https", "ssh", "git+ssh"}:
+            return None
+        if hostname != "github.com" or port is not None or parsed.password:
+            return None
+        if parsed.query or parsed.fragment:
+            return None
+        if parsed.scheme in {"https", "git+https"} and parsed.username is not None:
+            return None
+        if parsed.scheme in {"ssh", "git+ssh"} and parsed.username not in {None, "git"}:
+            return None
+        path = parsed.path
+
+    parts = path.strip("/").split("/")
+    if len(parts) != 2 or not all(parts):
+        return None
+    owner, repository = parts
+    if repository.endswith(".git"):
+        repository = repository[:-4]
+    if not repository:
+        return None
+    return f"{owner}/{repository}"
+
+
+def github_repository_identity_from_environment(value: str) -> str | None:
+    if not value or value != value.strip():
+        return None
+    parts = value.split("/")
+    if len(parts) != 2 or not all(parts) or any(part in {".", ".."} for part in parts):
+        return None
+    return value
+
+
+def github_repository_identity(project: Path) -> str:
+    environment_value = (
+        os.environ.get("GITHUB_REPOSITORY")
+        if os.environ.get("GITHUB_ACTIONS") == "true"
+        else None
+    )
+    environment_identity = None
+    if environment_value is not None:
+        environment_identity = github_repository_identity_from_environment(environment_value)
+        if environment_identity is None:
+            actual = environment_value or "<missing>"
+            raise ValueError(
+                "npm_repository_identity_unavailable: GITHUB_REPOSITORY "
+                f"expected=owner/repository actual={actual}"
+            )
+
+    origin_value = origin_url(project)
+    origin_identity = github_repository_identity_from_url(origin_value)
+    if environment_identity and origin_identity and environment_identity != origin_identity:
+        raise ValueError(
+            "npm_repository_identity_conflict: repository identity "
+            f"expected={environment_identity} actual={origin_identity}"
+        )
+    if environment_identity:
+        return environment_identity
+    if origin_identity:
+        return origin_identity
+    actual = origin_value or "<missing>"
+    raise ValueError(
+        "npm_repository_identity_unavailable: origin "
+        f"expected=GitHub owner/repository actual={actual}"
+    )
+
+
+def npm_repository_metadata_errors(
+    project: Path, plugin_names: Iterable[str] | None = None
+) -> list[str]:
+    selected = set(plugin_names) if plugin_names is not None else None
+    manifests: list[tuple[str, Path, Path]] = []
+    errors: list[str] = []
+    for plugin_name in sorted(PLUGIN_REGISTRY):
+        if selected is not None and plugin_name not in selected:
+            continue
+        if plugin_release_shape(plugin_name) != "npm":
+            continue
+        release_inputs = plugin_release_inputs(plugin_name)
+        package_directory = Path(release_inputs[0])
+        manifest_relative = package_directory / "package.json"
+        try:
+            manifest_path = resolve_project_path(project, manifest_relative, "invalid_manifest_path")
+        except ValueError as exc:
+            errors.append(
+                "npm_package_manifest_invalid: "
+                f"{manifest_relative.as_posix()} expected=inside-project actual={exc}"
+            )
+            continue
+        if not manifest_path.is_file():
+            if selected is not None or (project / package_directory).exists():
+                errors.append(
+                    "npm_package_manifest_missing: "
+                    f"{manifest_relative.as_posix()} expected=package.json actual=<missing>"
+                )
+            continue
+        manifests.append((plugin_name, package_directory, manifest_path))
+
+    if not manifests:
+        return errors
+    try:
+        expected_repository = github_repository_identity(project)
+    except ValueError as exc:
+        prefix, detail = str(exc).split(": ", 1)
+        errors.extend(
+            f"{prefix}: {manifest_path.relative_to(project.resolve()).as_posix()} {detail}"
+            for _plugin_name, _package_directory, manifest_path in manifests
+        )
+        return errors
+
+    for _plugin_name, package_directory, manifest_path in manifests:
+        manifest_label = manifest_path.relative_to(project.resolve()).as_posix()
+        try:
+            package = read_json_mapping(manifest_path)
+        except ValueError as exc:
+            errors.append(
+                "npm_package_manifest_invalid: "
+                f"{manifest_label} expected=valid JSON actual={exc}"
+            )
+            continue
+
+        repository = package.get("repository")
+        if isinstance(repository, str):
+            repository_url: Any = repository
+            repository_directory: Any = None
+        elif isinstance(repository, dict):
+            repository_url = repository.get("url")
+            repository_directory = repository.get("directory")
+        else:
+            repository_url = None
+            repository_directory = None
+
+        if not isinstance(repository_url, str) or not repository_url:
+            errors.append(
+                "npm_repository_url_missing: "
+                f"{manifest_label} expected={expected_repository} actual=<missing>"
+            )
+        else:
+            actual_repository = github_repository_identity_from_url(repository_url)
+            if actual_repository is None:
+                errors.append(
+                    "npm_repository_url_invalid: "
+                    f"{manifest_label} expected={expected_repository} actual={repository_url}"
+                )
+            elif actual_repository != expected_repository:
+                errors.append(
+                    "npm_repository_url_mismatch: "
+                    f"{manifest_label} expected={expected_repository} actual={actual_repository}"
+                )
+
+        expected_directory = package_directory.as_posix()
+        if not isinstance(repository_directory, str) or not repository_directory:
+            errors.append(
+                "npm_repository_directory_missing: "
+                f"{manifest_label} expected={expected_directory} actual=<missing>"
+            )
+        elif repository_directory != expected_directory:
+            errors.append(
+                "npm_repository_directory_mismatch: "
+                f"{manifest_label} expected={expected_directory} actual={repository_directory}"
+            )
+    return errors
+
+
+def release_metadata_next_action(error: str, command: str) -> str:
+    if error.startswith("npm_repository_identity_unavailable:"):
+        return (
+            "configure a GitHub origin or trusted GITHUB_REPOSITORY, then rerun "
+            f"release-flow {command}"
+        )
+    if error.startswith("npm_repository_identity_conflict:"):
+        return (
+            "align the GitHub origin and GITHUB_REPOSITORY identity, then rerun "
+            f"release-flow {command}"
+        )
+    if error.startswith(("npm_",)):
+        detail = error.split(": ", 1)[1] if ": " in error else ""
+        manifest = detail.split(" ", 1)[0] if detail else "the package manifest"
+        return f"correct npm repository metadata in {manifest}, then rerun release-flow {command}"
+    return ""
 
 
 def manifest_version(project: Path, manifest_file: str) -> str:
@@ -1092,6 +1297,10 @@ def preflight_errors(
     expected_version = tag_version(tag)
     if version != expected_version:
         errors.append(f"release_version_mismatch: {tag}")
+    metadata_errors = npm_repository_metadata_errors(project, bump_plugins)
+    if metadata_errors:
+        errors.extend(metadata_errors)
+        return errors
 
     try:
         for branch in dict.fromkeys((config.release_channel_branch, config.release_source_ref)):
@@ -1178,6 +1387,9 @@ def preflight_errors(
 
 
 def preflight_next_action(error: str, project: Path | None = None) -> str:
+    metadata_action = release_metadata_next_action(error, "preflight")
+    if metadata_action:
+        return metadata_action
     if error.startswith("source_ref_requires_pr: "):
         return "create and merge the version bump through PR Flow, then rerun release-flow preflight"
     if error.startswith("plugin_version_not_bumped: "):
@@ -1381,6 +1593,12 @@ def run_publish(args: argparse.Namespace) -> int:
         print("status: issues")
         print("error: publish_requires_authorize_publish")
         return 2
+
+    metadata_errors = npm_repository_metadata_errors(args.project, bump_plugins)
+    if metadata_errors:
+        print("status: issues")
+        print_project_errors(metadata_errors, "publish")
+        return 1
 
     result = run_workflow_dispatch(args.project, workflow_dispatch_args(config, args.tag, args.version, bump_plugins))
     if result.stdout:
