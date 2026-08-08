@@ -445,6 +445,8 @@ def test_candidate_is_inherited_and_installed_once(tmp_path):
             "-n",
             "4",
             "--dist=each",
+            "--rootdir",
+            str(REPO_ROOT),
             str(probe),
         ],
         cwd=REPO_ROOT,
