@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1710,7 +1711,9 @@ def test_release_workflows_publish_only_verified_selected_npm_packages(tmp_path:
             assert f'plugins/{plugin}' in workflow
         assert '"$prefix/bin/myspec" doctor' in workflow
         assert '"$prefix/bin/build-and-verify" verify --project source' in workflow
-        assert 'p.repository?.url !== "https://github.com/liuli195/my-agent-skills"' in workflow
+        assert 'p.repository?.url !== "https://github.com/liuli195/my-agent-skills"' not in workflow
+        assert "p.repository?.url !== s.repository?.url" in workflow
+        assert "p.repository?.directory !== s.repository?.directory" in workflow
         assert 'npm publish "$MYSPEC_TARBALL" --provenance --access public' in workflow
         assert 'npm publish "$BUILD_AND_VERIFY_TARBALL" --provenance --access public' in workflow
         assert "actions/upload-artifact@v6" in workflow
@@ -1721,7 +1724,7 @@ def test_release_workflows_publish_only_verified_selected_npm_packages(tmp_path:
         assert workflow.index("Upload npm package candidates") < workflow.index("Publish release channel")
         for plugin in ("my-spec", "build-and-verify"):
             manifest = f"./source/plugins/{plugin}/package.json"
-            assert workflow.count(manifest) == 2
+            assert workflow.count(manifest) == 3
             path = tmp_path / manifest.removeprefix("./")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("{}", encoding="utf-8")
@@ -1733,6 +1736,65 @@ def test_release_workflows_publish_only_verified_selected_npm_packages(tmp_path:
                 check=False,
             )
             assert loaded.returncode == 0, loaded.stderr
+
+
+@pytest.mark.parametrize(
+    ("changed_field", "expected_returncode"),
+    [(None, 0), ("url", 1), ("directory", 1)],
+)
+def test_release_workflows_compare_packed_repository_metadata(
+    tmp_path: Path, changed_field: str | None, expected_returncode: int
+) -> None:
+    source = {
+        "name": "@liuli195/myspec",
+        "repository": {
+            "type": "git",
+            "url": "https://github.com/liuli195/my-agent-skills",
+            "directory": "plugins/my-spec",
+        },
+    }
+    packed = json.loads(json.dumps(source))
+    if changed_field:
+        packed["repository"][changed_field] = "changed"
+    source_path = tmp_path / "source.json"
+    packed_path = tmp_path / "packed.json"
+    write_json(source_path, source)
+    write_json(packed_path, packed)
+
+    for workflow_path in (
+        REPO_ROOT / ".github" / "workflows" / "release.yml",
+        REPO_ROOT
+        / "plugins"
+        / "release-flow"
+        / "skills"
+        / "release-flow"
+        / "assets"
+        / "templates"
+        / "github"
+        / "workflows"
+        / "release.yml",
+    ):
+        workflow = workflow_path.read_text(encoding="utf-8")
+        match = re.search(
+            r"node -e '([^']+)' \./source/plugins/my-spec/package.json "
+            r'"\$prefix/lib/node_modules/\$package_name/package.json" "\$package_name"',
+            workflow,
+        )
+        assert match is not None
+        result = subprocess.run(
+            [
+                "node",
+                "-e",
+                match.group(1),
+                str(source_path),
+                str(packed_path),
+                source["name"],
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == expected_returncode, result.stderr
 
 
 def test_release_workflows_reject_invalid_selection_before_package_steps() -> None:

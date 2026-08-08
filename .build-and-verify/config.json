@@ -24,6 +24,17 @@
           "plugins",
           "scripts/local_plugin_build.py"
         ]
+      },
+      {
+        "id": "build.release-metadata",
+        "command": "python plugins/release-flow/skills/release-flow/scripts/release_flow.py validate --project .",
+        "inputs": [
+          ".release-flow/config.yaml",
+          ".release-flow/projection.yaml",
+          "plugins/release-flow/skills/release-flow/scripts/release_flow.py",
+          "plugins/my-spec/package.json",
+          "plugins/build-and-verify/package.json"
+        ]
       }
     ]
   },
@@ -99,6 +110,8 @@
           ".github/workflows/release.yml",
           "requirements-dev.txt",
           "plugins/release-flow/**",
+          "plugins/my-spec/package.json",
+          "plugins/build-and-verify/package.json",
           "tests/test_release_flow*.py"
         ],
         "command": "python -m pytest -q -p no:cacheprovider tests/test_release_flow_cli.py tests/test_release_flow_plugin_package.py",
@@ -109,6 +122,8 @@
           ".github/workflows/release.yml",
           "requirements-dev.txt",
           "plugins/release-flow",
+          "plugins/my-spec/package.json",
+          "plugins/build-and-verify/package.json",
           "tests/test_release_flow_cli.py",
           "tests/test_release_flow_plugin_package.py"
         ],

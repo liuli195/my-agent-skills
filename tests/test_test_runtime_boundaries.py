@@ -552,6 +552,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_release_flow_cli.py::test_publish_rejects_metadata_before_triggering_remote_workflow': (
         'covers release-flow publish stopping on invalid npm metadata before remote workflow dispatch; function=test_publish_rejects_metadata_before_triggering_remote_workflow'
     ),
+    'tests/test_release_flow_cli.py::test_release_workflows_compare_packed_repository_metadata': (
+        'covers the release workflow command comparing source and packed npm repository metadata through Node; function=test_release_workflows_compare_packed_repository_metadata'
+    ),
     'tests/test_release_flow_cli.py::test_validate_accepts_supported_github_repository_urls': (
         'covers release-flow validate parsing supported GitHub repository URL forms; function=test_validate_accepts_supported_github_repository_urls'
     ),
