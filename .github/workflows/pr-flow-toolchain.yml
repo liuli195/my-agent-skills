@@ -20,7 +20,7 @@ jobs:
           python-version: '3.12'
       - run: |
           git clone --no-checkout https://github.com/liuli195/my-agent-skills $RUNNER_TEMP/myspec
-          git -C $RUNNER_TEMP/myspec checkout --detach 6c4f378028fce2036f545359f7c9410c7adde5f1
+          git -C $RUNNER_TEMP/myspec checkout --detach daef9081c7fbdf01fb868840df4ed8d9b6f6ea05
           tarball=$(python $RUNNER_TEMP/myspec/plugins/tool-lifecycle/pack.py myspec $RUNNER_TEMP)
           npm install --global --ignore-scripts --no-audit --no-fund "$tarball"
       - run: |
