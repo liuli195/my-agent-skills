@@ -43,6 +43,7 @@ SOURCE_FIELDS = (
 SHARED_MANAGEMENT = REPO_ROOT / "plugins" / "tool-lifecycle" / "python" / "management.py"
 _in_process_spec_ops: dict[Path, object] = {}
 _lightweight_install: tuple[Path, Path] | None = None
+_lightweight_install_fingerprint: str | None = None
 
 
 def _load_in_process_spec_ops(spec_ops_path: Path):
@@ -188,6 +189,7 @@ def _install_npm_tarball(prefix: Path, tarball: Path) -> None:
 _FAKE_GIT_COMMIT = "0" * 40
 _REAL_GIT_TESTS = {
     "test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit",
+    "test_packed_myspec_dev_doctor_drops_commit_after_closure_branch_removed",
 }
 
 
@@ -222,7 +224,13 @@ def _run_in_process_git(
         if path.is_file():
             return subprocess.CompletedProcess(command, 0, path.read_bytes(), "")
         return subprocess.CompletedProcess(command, 128, b"", b"missing object\n")
-    return subprocess.CompletedProcess(command, 0, "", "")
+    if args[:1] and args[0] in {"diff", "checkout-index", "add"}:
+        return subprocess.CompletedProcess(command, 0, "", "")
+    if args[:3] == ["ls-files", "--others", "--exclude-standard"]:
+        return subprocess.CompletedProcess(command, 0, "", "")
+    return subprocess.CompletedProcess(
+        command, 127, "", f"unsupported fake git command: {shlex.join(args)}\n"
+    )
 
 
 def _run_in_process_npm(
@@ -273,7 +281,9 @@ def _run_in_process_npm(
                 command, 1, "", "simulated interruption after npm install\n"
             )
         return subprocess.CompletedProcess(command, 0, "", "")
-    return subprocess.CompletedProcess(command, 0, "", "")
+    return subprocess.CompletedProcess(
+        command, 127, "", f"unsupported fake npm command: {shlex.join(args)}\n"
+    )
 
 
 def _run_in_process_subprocess(
@@ -634,11 +644,34 @@ def run_confirmed_workflow(
     return diff.stdout
 
 
+def _package_fingerprint(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+        relative = path.relative_to(root).as_posix()
+        if "__pycache__" in path.parts or path.suffix == ".pyc":
+            continue
+        if path.is_symlink():
+            digest.update(b"link\0")
+            digest.update(relative.encode())
+            digest.update(b"\0")
+            digest.update(os.readlink(path).encode())
+        elif path.is_dir():
+            digest.update(b"dir\0")
+            digest.update(relative.encode())
+        elif path.is_file():
+            digest.update(b"file\0")
+            digest.update(relative.encode())
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
 def _cleanup_lightweight_install() -> None:
-    global _lightweight_install
+    global _lightweight_install, _lightweight_install_fingerprint
     if _lightweight_install is not None:
         shutil.rmtree(_lightweight_install[0].parent, ignore_errors=True)
         _lightweight_install = None
+    _lightweight_install_fingerprint = None
 
 
 atexit.register(_cleanup_lightweight_install)
@@ -657,14 +690,13 @@ def _lightweight_executable(prefix: Path) -> Path:
 
 
 def _install_lightweight_myspec() -> tuple[Path, Path]:
-    global _lightweight_install
+    global _lightweight_install, _lightweight_install_fingerprint
     if (
         _lightweight_install is not None
+        and _lightweight_install_fingerprint is not None
         and _lightweight_install[0].is_file()
         and _lightweight_install[1].is_dir()
-        and (_lightweight_install[1] / "python" / "management.py").is_file()
-        and (_lightweight_install[1] / "python" / "management.py").read_bytes()
-        == SHARED_MANAGEMENT.read_bytes()
+        and _package_fingerprint(_lightweight_install[1]) == _lightweight_install_fingerprint
     ):
         return _lightweight_install
 
@@ -680,6 +712,7 @@ def _install_lightweight_myspec() -> tuple[Path, Path]:
     shutil.copy2(SHARED_MANAGEMENT, installed_package / "python" / "management.py")
     executable = _lightweight_executable(prefix)
     _lightweight_install = (executable, installed_package)
+    _lightweight_install_fingerprint = _package_fingerprint(installed_package)
     return _lightweight_install
 
 
@@ -4144,6 +4177,112 @@ def test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged
 
     assert applied.returncode == 0, applied.stderr
     assert "系统 MUST 允许密码登录。" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
+
+
+def test_packed_myspec_dev_doctor_drops_commit_after_closure_branch_removed(
+    tmp_path: Path,
+) -> None:
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    executable, installed_package = install_packed_myspec(installed)
+    source = controlled_dev_source(tmp_path)
+    env = controlled_dev_env(isolated_myspec_env(tmp_path, npm_prefix_for(installed_package)), source)
+    entered = run_cli(executable, "init", "--dev", "--source", source, env=env, cwd=source)
+    assert entered.returncode == 0, entered.stderr
+
+    skill = source / "plugins" / "my-spec" / "skills" / "my-spec" / "SKILL.md"
+    write(skill, skill.read_text(encoding="utf-8") + "\nclosure change")
+    assert subprocess.run(["git", "-C", str(source), "add", str(skill)], check=False).returncode == 0
+    committed = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(source),
+            "-c",
+            "user.name=MySpec Test",
+            "-c",
+            "user.email=myspec@example.invalid",
+            "commit",
+            "-m",
+            "closure change",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert committed.returncode == 0, committed.stderr
+    local_commit = subprocess.run(
+        ["git", "-C", str(source), "rev-parse", "HEAD"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    pushed = subprocess.run(
+        ["git", "-C", str(source), "push", "origin", "HEAD:refs/heads/closure-change"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert pushed.returncode == 0, pushed.stderr
+
+    published = run_cli(executable, "doctor", env=env, cwd=source)
+    assert published.returncode == 0, published.stderr
+    assert json.loads(published.stdout)["toolchain"]["sourceCommit"] == local_commit
+
+    deleted = subprocess.run(
+        ["git", "-C", str(source), "push", "origin", "--delete", "closure-change"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert deleted.returncode == 0, deleted.stderr
+    unpublished = run_cli(executable, "doctor", env=env, cwd=source)
+    assert unpublished.returncode == 0, unpublished.stderr
+    assert "sourceCommit" not in json.loads(unpublished.stdout)["toolchain"]
+
+
+def test_packed_myspec_reconfirms_when_in_process_identity_changes_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    specs = tmp_path / "specs"
+    delta = tmp_path / "delta"
+    preview = tmp_path / "preview"
+    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
+    write(
+        delta / "accounts" / "spec.md",
+        """## MODIFIED Requirements
+
+### Requirement: 登录
+
+系统 MUST 允许密码登录。
+
+#### Scenario: 密码正确
+
+- **WHEN** 用户提交正确密码
+- **THEN** 系统创建会话
+""",
+    )
+    work = ready_state(SPEC_OPS, tmp_path / "state")
+    previewed = apply_ready(SPEC_OPS, specs, delta, preview, work)
+    assert previewed.returncode == 0, previewed.stderr
+    before = (specs / "accounts" / "spec.md").read_bytes()
+
+    spec_ops = _load_in_process_spec_ops(SPEC_OPS)
+    original_write_preview = spec_ops._write_preview
+
+    def changed_write_preview(merged, output_root, source_root):
+        original_write_preview(merged, output_root, source_root)
+        path = output_root / "accounts" / "spec.md"
+        write(path, path.read_text(encoding="utf-8") + "\nimplementation-only change")
+
+    monkeypatch.setattr(spec_ops, "implementation_identity", lambda: "changed-implementation")
+    monkeypatch.setattr(spec_ops, "_write_preview", changed_write_preview)
+
+    applied = apply_ready(SPEC_OPS, specs, delta, specs, work)
+
+    assert applied.returncode != 0
+    assert "preview_changed_requires_confirmation" in applied.stderr
+    assert (specs / "accounts" / "spec.md").read_bytes() == before
 
 
 def test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_context(

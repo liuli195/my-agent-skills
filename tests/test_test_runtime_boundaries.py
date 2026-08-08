@@ -819,6 +819,12 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit': (
         'covers the installed MySpec CLI retaining a CI-reproducible published ancestor after an unrelated source commit; function=test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit'
     ),
+    'tests/test_my_spec.py::test_packed_myspec_dev_doctor_drops_commit_after_closure_branch_removed': (
+        'covers the installed MySpec CLI dropping a source commit after its implementation-closure branch is removed remotely; function=test_packed_myspec_dev_doctor_drops_commit_after_closure_branch_removed'
+    ),
+    'tests/test_my_spec.py::test_packed_myspec_reconfirms_when_in_process_identity_changes_preview': (
+        'covers in-process MySpec preview regeneration requiring confirmation when an implementation identity changes the observable diff; function=test_packed_myspec_reconfirms_when_in_process_identity_changes_preview'
+    ),
     'tests/test_my_spec.py::test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_context': (
         'covers the installed MySpec CLI canonical development binding and target-worktree context through two isolated git worktrees; function=test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_context'
     ),

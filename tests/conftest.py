@@ -19,6 +19,7 @@ MYSPEC_TEST_IN_PROCESS = "MYSPEC_TEST_IN_PROCESS"
 _candidate_directory: Path | None = None
 _previous_candidate: str | None = None
 _previous_in_process: str | None = None
+_candidate_environment_managed = False
 
 
 def _runs_my_spec(config: pytest.Config) -> bool:
@@ -52,12 +53,29 @@ def _restore_in_process_environment() -> None:
     _previous_in_process = None
 
 
+def _restore_candidate_environment() -> None:
+    global _previous_candidate, _candidate_environment_managed
+    if not _candidate_environment_managed:
+        return
+    if _previous_candidate is None:
+        os.environ.pop(MYSPEC_TEST_TARBALL, None)
+    else:
+        os.environ[MYSPEC_TEST_TARBALL] = _previous_candidate
+    _previous_candidate = None
+    _candidate_environment_managed = False
+
+
 def _prepare_my_spec_test_tarball() -> None:
     global _candidate_directory, _previous_candidate, _previous_in_process
+    global _candidate_environment_managed
+    if _candidate_environment_managed:
+        return
+    _previous_candidate = os.environ.get(MYSPEC_TEST_TARBALL)
     _previous_in_process = os.environ.get(MYSPEC_TEST_IN_PROCESS)
+    _candidate_environment_managed = True
     os.environ[MYSPEC_TEST_IN_PROCESS] = "1"
     try:
-        supplied = os.environ.get(MYSPEC_TEST_TARBALL)
+        supplied = _previous_candidate
         if supplied:
             candidate = Path(supplied).expanduser().resolve()
             if not candidate.is_file():
@@ -94,7 +112,7 @@ def _prepare_my_spec_test_tarball() -> None:
         os.environ[MYSPEC_TEST_TARBALL] = str(candidate)
     except BaseException:
         _cleanup_candidate_directory()
-        _previous_candidate = None
+        _restore_candidate_environment()
         _restore_in_process_environment()
         raise
 
@@ -106,20 +124,10 @@ def pytest_configure(config: pytest.Config) -> None:
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     del exitstatus
-    global _candidate_directory, _previous_candidate, _previous_in_process
     if not hasattr(session.config, "workerinput"):
-        if _candidate_directory is not None:
-            _cleanup_candidate_directory()
-            if _previous_candidate is None:
-                os.environ.pop(MYSPEC_TEST_TARBALL, None)
-            else:
-                os.environ[MYSPEC_TEST_TARBALL] = _previous_candidate
-            _previous_candidate = None
-        if _previous_in_process is None:
-            os.environ.pop(MYSPEC_TEST_IN_PROCESS, None)
-        else:
-            os.environ[MYSPEC_TEST_IN_PROCESS] = _previous_in_process
-        _previous_in_process = None
+        _cleanup_candidate_directory()
+        _restore_candidate_environment()
+        _restore_in_process_environment()
 
 
 @pytest.fixture(scope="session")
