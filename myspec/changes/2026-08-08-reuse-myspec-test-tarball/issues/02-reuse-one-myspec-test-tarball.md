@@ -31,7 +31,7 @@
 - Latest benchmark red（最新基准红灯）：共享轻量包树与少量私有副本已让测试通过，但 `--durations=40` 显示 `verify.my-spec` 仍约 214 秒；最大单项为 update 恢复 98 秒、源码身份 59 秒、update/模式切换 20–44 秒。剩余瓶颈是 fake client/git/npm 的真实子进程和重复 E2E（端到端）分支，不是包树复制。
 - Runtime budget（耗时预算）：保留票据 01 的真实 Tarball 裸 CLI 与完整工作流，二者合计约 20 秒；除此之外，标准检查中的测试不得再通过 fake client 子进程证明普通逻辑分支。删除重复 E2E 逻辑，或直接调用已加载的 management/spec_ops 进程内 Interface（接口）并模拟 `_run`/Git/npm/client 结果。优先处理所有超过 3 秒的测试，源码身份族只保留一条必要真实路径，update/mode-switch/doctor 分支不得保留十余条真实子进程组合。每轮使用 `--durations` 验证，直到整个检查约 30 秒。
 - Latest durations（最新耗时）：进程内 fake command runner 已将检查降至约 96–105 秒。剩余最大项是源码身份完整 E2E 约 51 秒和实现差异重新确认 E2E 约 21 秒；删除这两条重复 E2E：前者由较窄的 published-ancestor/closure 证据覆盖，后者由 `test_myspec_final_apply_rejects_unconfirmed_implementation_identity` 与未变化复用确认场景覆盖。同步删除对应 E2E allowlist（端到端白名单）和真实 CLI 名单项，再按耗时继续收窄。
-- Final performance（最终性能）：清空 Build and Verify（构建与验证）缓存后连续三次非缓存运行，`verify.my-spec` 分别为 32.55、33.41、32.62 秒，中位数 32.62 秒；每次 `checked` 非空且包含 `verify.my-spec`，`full-not-run: true`、`status: passed`。相对基线中位数 242 秒下降约 86.5%。
+- Final performance（最终性能）：最终代码连续三次非缓存执行检查命令分别为 33.46、33.11、33.70 秒，中位数 33.46 秒；固定基线 Build and Verify（构建与验证）报告 `duration: verify.my-spec seconds=35.83`、`checked` 非空且包含 `verify.my-spec`、`full-not-run: true`、`status: passed`。相对基线中位数 242 秒下降约 86.2%。
 - Final coverage（最终覆盖）：保留官方候选包一次打包、4 worker 继承、隔离裸 `myspec`、完整预览/差异/正式应用及真实安装资源检查；普通逻辑分支改为进程内模拟，并删除两条已有更窄接缝覆盖的重复 E2E（端到端）场景。
 - Overall review（整体审查）：fake Git/npm 未声明命令现返回非零；实现差异重新确认及实现闭包/远端删除均恢复窄覆盖；共享轻量包具备完整内容指纹守卫；外部候选环境、全局 `subprocess.run` 异常路径均恢复；4 worker 证明候选共享及 HOME、日志、状态和前缀隔离。Standards（规范）与 Spec（规格）定向复审均无阻断。
-- Unresolved risks（未解决风险）：进程内模块缓存和全局 `subprocess.run` 替换仅用于每个串行 worker 内的测试模拟，并由异常恢复检查保护；作为非阻断风险保留。提交后固定基线与最终三次非缓存性能验证仍待完成。
+- Unresolved risks（未解决风险）：进程内模块缓存和全局 `subprocess.run` 替换仅用于每个串行 worker 内的测试模拟，并由异常恢复检查保护；作为非阻断风险保留。固定基线、最终三次非缓存性能验证及定向复审均已完成，无剩余阻断。
