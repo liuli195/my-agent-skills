@@ -34,4 +34,5 @@
 - Final performance（最终性能）：最终代码连续三次非缓存执行检查命令分别为 33.46、33.11、33.70 秒，中位数 33.46 秒；固定基线 Build and Verify（构建与验证）报告 `duration: verify.my-spec seconds=35.83`、`checked` 非空且包含 `verify.my-spec`、`full-not-run: true`、`status: passed`。相对基线中位数 242 秒下降约 86.2%。
 - Final coverage（最终覆盖）：保留官方候选包一次打包、4 worker 继承、隔离裸 `myspec`、完整预览/差异/正式应用及真实安装资源检查；普通逻辑分支改为进程内模拟，并删除两条已有更窄接缝覆盖的重复 E2E（端到端）场景。
 - Overall review（整体审查）：fake Git/npm 未声明命令现返回非零；实现差异重新确认及实现闭包/远端删除均恢复窄覆盖；共享轻量包具备完整内容指纹守卫；外部候选环境、全局 `subprocess.run` 异常路径均恢复；4 worker 证明候选共享及 HOME、日志、状态和前缀隔离。Standards（规范）与 Spec（规格）定向复审均无阻断。
-- Unresolved risks（未解决风险）：进程内模块缓存和全局 `subprocess.run` 替换仅用于每个串行 worker 内的测试模拟，并由异常恢复检查保护；作为非阻断风险保留。固定基线、最终三次非缓存性能验证及定向复审均已完成，无剩余阻断。
+- Unresolved risks（未解决风险）：进程内模块缓存和全局 `subprocess.run` 替换仅用于每个串行 worker 内的测试模拟，并由异常恢复检查保护；作为非阻断风险保留。
+- PR CI blocker（拉取请求持续集成阻断）：PR #308 的 Windows worktree smoke（工作树冒烟）发现轻量安装布局缺少 `node_modules/plugins/tool-lifecycle/python/management.py` 与 `pack.py`；本机测试因进程内模块加载顺序偶然复用其他安装根而未暴露。修复 MUST 让共享模板和私有副本都包含管理代码计算实现身份所需的最小兄弟布局，并把该布局纳入不可变指纹；先新增独立于测试顺序的失败检查，再修复并在 Windows 真实快速验证通过后重跑同一 PR Flow（拉取请求流程）命令。

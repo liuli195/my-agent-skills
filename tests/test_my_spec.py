@@ -696,7 +696,8 @@ def _install_lightweight_myspec() -> tuple[Path, Path]:
         and _lightweight_install_fingerprint is not None
         and _lightweight_install[0].is_file()
         and _lightweight_install[1].is_dir()
-        and _package_fingerprint(_lightweight_install[1]) == _lightweight_install_fingerprint
+        and _lightweight_install[1].parents[1].is_dir()
+        and _package_fingerprint(_lightweight_install[1].parents[1]) == _lightweight_install_fingerprint
     ):
         return _lightweight_install
 
@@ -710,9 +711,13 @@ def _install_lightweight_myspec() -> tuple[Path, Path]:
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
     shutil.copy2(SHARED_MANAGEMENT, installed_package / "python" / "management.py")
+    lifecycle_root = root / "plugins" / "tool-lifecycle"
+    (lifecycle_root / "python").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(SHARED_MANAGEMENT, lifecycle_root / "python" / "management.py")
+    shutil.copy2(PACK, lifecycle_root / "pack.py")
     executable = _lightweight_executable(prefix)
     _lightweight_install = (executable, installed_package)
-    _lightweight_install_fingerprint = _package_fingerprint(installed_package)
+    _lightweight_install_fingerprint = _package_fingerprint(root)
     return _lightweight_install
 
 
@@ -725,6 +730,11 @@ def _copy_lightweight_myspec(tmp_path: Path) -> tuple[Path, Path]:
     shutil.copytree(
         shared_package,
         installed_package,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+    shutil.copytree(
+        shared_package.parents[1] / "plugins" / "tool-lifecycle",
+        root / "plugins" / "tool-lifecycle",
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
     return _lightweight_executable(prefix), installed_package

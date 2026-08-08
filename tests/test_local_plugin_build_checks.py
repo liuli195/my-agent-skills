@@ -302,14 +302,36 @@ def test_my_spec_in_process_shared_package_rebuilds_after_mutation(
     monkeypatch.setenv("MYSPEC_TEST_IN_PROCESS", "1")
     first_executable, first_package = module.install_packed_myspec(tmp_path / "first")
     del first_executable
-    changed = first_package / "package.json"
+    lifecycle_root = first_package.parents[1] / "plugins" / "tool-lifecycle"
+    _private_executable, private_package = module._copy_lightweight_myspec(tmp_path / "private")
+    del _private_executable
+    private_lifecycle_root = private_package.parents[1] / "plugins" / "tool-lifecycle"
+    for root in (lifecycle_root, private_lifecycle_root):
+        assert (root / "python" / "management.py").read_bytes() == (
+            module.SHARED_MANAGEMENT
+        ).read_bytes()
+        assert (root / "pack.py").read_bytes() == module.PACK.read_bytes()
+    changed = lifecycle_root / "pack.py"
     original = changed.read_bytes()
     changed.write_bytes(original + b"\n")
 
     _second_executable, second_package = module.install_packed_myspec(tmp_path / "second")
 
     assert second_package != first_package
-    assert second_package.joinpath("package.json").read_bytes() == original
+    assert second_package.joinpath("package.json").read_bytes() == (
+        module.PLUGIN_ROOT / "package.json"
+    ).read_bytes()
+    assert (
+        second_package.parents[1] / "plugins" / "tool-lifecycle" / "pack.py"
+    ).read_bytes() == module.PACK.read_bytes()
+    changed = second_package / "package.json"
+    original = changed.read_bytes()
+    changed.write_bytes(original + b"\n")
+
+    _third_executable, third_package = module.install_packed_myspec(tmp_path / "third")
+
+    assert third_package != second_package
+    assert third_package.joinpath("package.json").read_bytes() == original
 
 
 def test_my_spec_candidate_setup_packs_once_before_workers(monkeypatch) -> None:
