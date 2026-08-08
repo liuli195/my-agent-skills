@@ -1470,13 +1470,44 @@ def test_build_and_verify_root_build_checks_cover_plugins() -> None:
     config = read_json(REPO_ROOT / ".build-and-verify" / "config.json")
     check_by_id = {check["id"]: check for check in config["build"]["checks"]}
 
-    assert list(check_by_id) == ["build.pi-tool-display", "build.local-plugin-package"]
+    assert list(check_by_id) == [
+        "build.pi-tool-display",
+        "build.local-plugin-package",
+        "build.release-metadata",
+    ]
     assert check_by_id["build.pi-tool-display"]["command"] == (
         "npm run build --workspace pi-tool-display"
     )
     local_plugin_build = check_by_id["build.local-plugin-package"]
     assert local_plugin_build["command"] == "python scripts/local_plugin_build.py"
     assert "scripts/local_plugin_build.py" in local_plugin_build["inputs"]
+    release_metadata = check_by_id["build.release-metadata"]
+    assert release_metadata["command"] == (
+        "python plugins/release-flow/skills/release-flow/scripts/release_flow.py "
+        "validate --project ."
+    )
+    assert "plugins/my-spec/package.json" in release_metadata["inputs"]
+    assert "plugins/build-and-verify/package.json" in release_metadata["inputs"]
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [
+        "plugins/my-spec/package.json",
+        "plugins/build-and-verify/package.json",
+        "plugins/release-flow/skills/release-flow/scripts/release_flow.py",
+        ".github/workflows/release.yml",
+    ],
+)
+def test_root_fast_verification_selects_release_flow_for_release_metadata(
+    changed_path: str,
+) -> None:
+    config = read_json(REPO_ROOT / ".build-and-verify" / "config.json")
+    runner = load_build_and_verify_runner_module()
+
+    selected = runner._selected_checks(config["verify"]["checks"], [changed_path])
+
+    assert "verify.release-flow" in [check["id"] for check in selected]
 
 
 def test_build_and_verify_pytest_options_live_in_explicit_commands() -> None:

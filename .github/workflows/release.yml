@@ -77,9 +77,9 @@ jobs:
           tarball_path="$(python source/plugins/tool-lifecycle/pack.py "myspec" "$candidate_dir")"
           package_name="@liuli195/myspec"
           prefix="$candidate_dir/myspec-prefix"
-          node -e 'const p=require(process.argv[1]); if (p.name !== process.argv[2] || p.publishConfig?.access !== "public" || p.repository?.type !== "git" || p.repository?.url !== "https://github.com/liuli195/my-agent-skills" || p.repository?.directory !== "plugins/my-spec") process.exit(1)' ./source/plugins/my-spec/package.json "$package_name"
+          node -e 'const p=require(process.argv[1]); if (p.name !== process.argv[2] || p.publishConfig?.access !== "public" || p.repository?.type !== "git") process.exit(1)' ./source/plugins/my-spec/package.json "$package_name"
           npm install -g --prefix "$prefix" --ignore-scripts --no-audit --no-fund "$tarball_path"
-          node -e 'const p=require(process.argv[1]); if (p.name !== process.argv[2] || p.repository?.type !== "git" || p.repository?.url !== "https://github.com/liuli195/my-agent-skills" || p.repository?.directory !== "plugins/my-spec") process.exit(1)' "$prefix/lib/node_modules/$package_name/package.json" "$package_name"
+          node -e 'const s=require(process.argv[1]); const p=require(process.argv[2]); if (p.name !== process.argv[3] || p.repository?.type !== s.repository?.type || p.repository?.url !== s.repository?.url || p.repository?.directory !== s.repository?.directory) process.exit(1)' ./source/plugins/my-spec/package.json "$prefix/lib/node_modules/$package_name/package.json" "$package_name"
           "$prefix/bin/myspec" doctor
           integrity="$(node -e 'const {createHash}=require("node:crypto"); const {readFileSync}=require("node:fs"); console.log("sha512-" + createHash("sha512").update(readFileSync(process.argv[1])).digest("base64"))' "$tarball_path")"
           node -e 'const p=require(process.argv[1]); process.exit(p.version === process.argv[2] ? 0 : 1)' ./source/plugins/my-spec/package.json "$RELEASE_VERSION"
@@ -104,9 +104,9 @@ jobs:
           tarball_path="$(python source/plugins/tool-lifecycle/pack.py "build-and-verify" "$candidate_dir")"
           package_name="@liuli195/build-and-verify"
           prefix="$candidate_dir/build-and-verify-prefix"
-          node -e 'const p=require(process.argv[1]); if (p.name !== process.argv[2] || p.publishConfig?.access !== "public" || p.repository?.type !== "git" || p.repository?.url !== "https://github.com/liuli195/my-agent-skills" || p.repository?.directory !== "plugins/build-and-verify") process.exit(1)' ./source/plugins/build-and-verify/package.json "$package_name"
+          node -e 'const p=require(process.argv[1]); if (p.name !== process.argv[2] || p.publishConfig?.access !== "public" || p.repository?.type !== "git") process.exit(1)' ./source/plugins/build-and-verify/package.json "$package_name"
           npm install -g --prefix "$prefix" --ignore-scripts --no-audit --no-fund "$tarball_path"
-          node -e 'const p=require(process.argv[1]); if (p.name !== process.argv[2] || p.repository?.type !== "git" || p.repository?.url !== "https://github.com/liuli195/my-agent-skills" || p.repository?.directory !== "plugins/build-and-verify") process.exit(1)' "$prefix/lib/node_modules/$package_name/package.json" "$package_name"
+          node -e 'const s=require(process.argv[1]); const p=require(process.argv[2]); if (p.name !== process.argv[3] || p.repository?.type !== s.repository?.type || p.repository?.url !== s.repository?.url || p.repository?.directory !== s.repository?.directory) process.exit(1)' ./source/plugins/build-and-verify/package.json "$prefix/lib/node_modules/$package_name/package.json" "$package_name"
           "$prefix/bin/build-and-verify" verify --project source
           integrity="$(node -e 'const {createHash}=require("node:crypto"); const {readFileSync}=require("node:fs"); console.log("sha512-" + createHash("sha512").update(readFileSync(process.argv[1])).digest("base64"))' "$tarball_path")"
           node -e 'const p=require(process.argv[1]); process.exit(p.version === process.argv[2] ? 0 : 1)' ./source/plugins/build-and-verify/package.json "$RELEASE_VERSION"

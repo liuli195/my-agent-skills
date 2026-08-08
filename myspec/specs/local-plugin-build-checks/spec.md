@@ -208,3 +208,16 @@ The repository's active GitHub workflows MUST use a current artifact upload acti
 - **THEN** Windows 平台任务 MUST 通过当前检出的 Build and Verify 入口运行完整验证
 - **THEN** 完整验证返回非零结果时，Windows 平台任务 MUST 失败
 - **THEN** 最终 `Full Verify` 跨平台汇总任务 MUST 继续要求 Linux（操作系统）与 Windows 平台任务全部成功
+### Requirement: Build command validates NPM release metadata
+The repository build command MUST run the Release Flow（发布流程）project validation as a configured repository-owned check so every registered NPM（软件包管理器）package is checked before release work begins.
+
+#### Scenario: Build checks all registered NPM packages
+- **WHEN** a developer runs `build-and-verify build --project .`
+- **THEN** the command MUST run the configured release metadata check
+- **THEN** the check MUST validate every registered and existing NPM package
+- **THEN** the build MUST fail when any checked package cannot satisfy the provenance repository metadata contract
+
+#### Scenario: Fast verification selects release metadata coverage
+- **WHEN** either NPM package manifest, the Release Flow implementation, or the active release workflow changes
+- **THEN** `build-and-verify verify --project .` MUST select the Release Flow verification check
+- **THEN** successful verification MUST report a non-empty `checked` result containing that check

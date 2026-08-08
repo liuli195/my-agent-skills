@@ -423,3 +423,39 @@ The release workflow and its generated template MUST use an artifact upload acti
 - **THEN** it MUST use `actions/upload-artifact@v6`
 - **THEN** it MUST NOT use `actions/upload-artifact@v4` or `actions/upload-artifact@v5`
 - **THEN** it MUST preserve the existing candidate upload and release publication order
+### Requirement: NPM 来源证明仓库元数据门禁
+Release Flow（发布流程）MUST 在构建和发布入口验证已登记 NPM（软件包管理器）包的来源证明仓库元数据，并在远端发布开始前阻止无法满足当前 GitHub（代码托管平台）仓库身份和单仓多包目录要求的包。
+
+#### Scenario: 项目校验检查全部已登记 NPM 包
+- **WHEN** 维护者运行 Release Flow 项目校验
+- **THEN** 系统 MUST 检查全部已登记且实际存在的 NPM 包
+- **THEN** 每个包的 `repository.url` MUST 与当前 GitHub 仓库大小写敏感地匹配
+- **THEN** 每个包的 `repository.directory` MUST 精确指向包含该包清单的仓库相对目录
+
+#### Scenario: 发布前检查只检查本次选择的 NPM 包
+- **WHEN** 维护者为部分已登记 NPM 包运行发布前检查
+- **THEN** 系统 MUST 只对本次选择发布的 NPM 包执行来源证明仓库元数据门禁
+- **THEN** 未选择包的仓库元数据错误 MUST NOT 阻止本次其他插件发布
+
+#### Scenario: 本地与自动化任务使用受信任仓库身份
+- **WHEN** 校验在本地运行
+- **THEN** 系统 MUST 从 Git `origin`（远端）取得 GitHub 仓库身份
+- **WHEN** 校验在 GitHub Actions（GitHub 自动化任务）中运行
+- **THEN** 系统 MUST 从 `GITHUB_REPOSITORY` 取得仓库身份
+- **THEN** 缺少、无效或与 `origin` 冲突的自动化任务仓库身份 MUST 使校验失败
+
+#### Scenario: 仓库元数据错误提供恢复信息
+- **WHEN** 包清单缺少仓库地址、指向其他仓库、大小写不匹配或声明错误包目录
+- **THEN** 校验 MUST 失败
+- **THEN** 输出 MUST 包含稳定错误类型、包清单位置、期望值、实际值和可执行的下一步动作
+
+#### Scenario: 发布触发前执行同一门禁
+- **WHEN** 维护者运行已授权的 `publish`（发布）命令
+- **THEN** 系统 MUST 在触发远端工作流前检查本次选择的 NPM 包
+- **THEN** 元数据错误时系统 MUST NOT 触发远端工作流
+- **THEN** 远端发布计划 MUST 在候选包打包前执行同一发布前检查
+
+#### Scenario: 候选包保留已校验仓库元数据
+- **WHEN** 发布工作流完成候选 Tarball（npm 软件包）打包和隔离安装
+- **THEN** 安装后包清单的仓库类型、地址和目录 MUST 与已校验的源码包清单一致
+- **THEN** 比较 MUST NOT 写死特定仓库名称或包目录

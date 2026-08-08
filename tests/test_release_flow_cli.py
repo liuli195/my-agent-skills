@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -11,6 +12,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import pytest
 import yaml
 
 from tests.support.git_templates import copy_template
@@ -59,9 +61,13 @@ def run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedPr
 
 
 def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment.setdefault("GITHUB_ACTIONS", "true")
+    environment.setdefault("GITHUB_REPOSITORY", "liuli195/my-agent-skills")
     return subprocess.run(
         [sys.executable, str(SCRIPT), *args],
         cwd=REPO_ROOT,
+        env=environment,
         text=True,
         capture_output=True,
         check=False,
@@ -82,6 +88,27 @@ def write_plugin_manifests(project: Path, plugin: str, version: str) -> None:
     write_manifest(project / "plugins" / plugin / ".claude-plugin" / "plugin.json", version)
 
 
+def write_npm_package(
+    project: Path,
+    plugin: str,
+    *,
+    repository_url: str = "https://github.com/liuli195/my-agent-skills",
+    directory: str | None = None,
+    version: str = "1.0.0",
+) -> None:
+    write_json(
+        project / "plugins" / plugin / "package.json",
+        {
+            "version": version,
+            "repository": {
+                "type": "git",
+                "url": repository_url,
+                "directory": directory or f"plugins/{plugin}",
+            },
+        },
+    )
+
+
 def init_release_input_project(project: Path, remote: Path, version: str = "1.0.0") -> None:
     write_release_flow_files(project)
     for plugin in ("release-flow", "pr-flow", "build-and-verify", "my-spec"):
@@ -89,7 +116,7 @@ def init_release_input_project(project: Path, remote: Path, version: str = "1.0.
         (project / "plugins" / plugin / "content.txt").parent.mkdir(parents=True, exist_ok=True)
         (project / "plugins" / plugin / "content.txt").write_text("baseline\n", encoding="utf-8")
     for plugin in ("build-and-verify", "my-spec"):
-        write_json(project / "plugins" / plugin / "package.json", {"version": version})
+        write_npm_package(project, plugin, version=version)
     for path in (
         project / "plugins" / "tool-lifecycle" / "pack.py",
         project / "plugins" / "tool-lifecycle" / "python" / "management.py",
@@ -102,7 +129,7 @@ def init_release_input_project(project: Path, remote: Path, version: str = "1.0.
 def advance_plugin_version_on_source_ref(project: Path, plugin: str, version: str) -> None:
     write_plugin_manifests(project, plugin, version)
     if plugin in {"build-and-verify", "my-spec"}:
-        write_json(project / "plugins" / plugin / "package.json", {"version": version})
+        write_npm_package(project, plugin, version=version)
     assert git(project, "add", f"plugins/{plugin}").returncode == 0
     assert git(project, "commit", "-m", f"bump {plugin}").returncode == 0
     assert git(project, "push", "origin", "HEAD:refs/heads/main").returncode == 0
@@ -333,6 +360,281 @@ def test_github_plan_does_not_print_marketplace_identity_variables(tmp_path: Pat
         "RELEASE_FLOW_PLUGIN_REF",
     ]:
         assert variable not in result.stdout
+
+
+def test_validate_rejects_missing_npm_repository_metadata(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    write_release_flow_files(project)
+    write_json(project / "plugins" / "my-spec" / "package.json", {"version": "1.0.0"})
+    assert git(project, "init").returncode == 0
+    assert git(
+        project,
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/liuli195/my-agent-skills.git",
+    ).returncode == 0
+
+    result = run("validate", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "npm_repository_url_missing" in result.stdout
+    assert "plugins/my-spec/package.json" in result.stdout
+    assert "expected=liuli195/my-agent-skills" in result.stdout
+    assert "actual=<missing>" in result.stdout
+    assert "npm_repository_directory_missing" in result.stdout
+    assert "nextAction:" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "repository_url",
+    [
+        "https://github.com/liuli195/my-agent-skills",
+        "https://github.com/liuli195/my-agent-skills.git",
+        "git+https://github.com/liuli195/my-agent-skills.git",
+        "git@github.com:liuli195/my-agent-skills.git",
+        "ssh://git@github.com/liuli195/my-agent-skills.git",
+    ],
+)
+def test_validate_accepts_supported_github_repository_urls(
+    tmp_path: Path, repository_url: str
+) -> None:
+    project = tmp_path / "project"
+    write_release_flow_files(project)
+    write_npm_package(project, "my-spec", repository_url=repository_url)
+    assert git(project, "init").returncode == 0
+    assert git(
+        project,
+        "remote",
+        "add",
+        "origin",
+        "git+https://github.com/liuli195/my-agent-skills.git",
+    ).returncode == 0
+
+    result = run("validate", "--project", str(project))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: verified" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("repository_url", "expected_error", "actual"),
+    [
+        (
+            "https://github.com/other/repository.git",
+            "npm_repository_url_mismatch",
+            "other/repository",
+        ),
+        (
+            "https://github.com/liuli195/My-Agent-Skills.git",
+            "npm_repository_url_mismatch",
+            "liuli195/My-Agent-Skills",
+        ),
+        (
+            "https://example.com/liuli195/my-agent-skills.git",
+            "npm_repository_url_invalid",
+            "https://example.com/liuli195/my-agent-skills.git",
+        ),
+        (
+            "https://user@github.com/liuli195/my-agent-skills.git",
+            "npm_repository_url_invalid",
+            "https://user@github.com/liuli195/my-agent-skills.git",
+        ),
+        (
+            "https://github.com:443/liuli195/my-agent-skills.git",
+            "npm_repository_url_invalid",
+            "https://github.com:443/liuli195/my-agent-skills.git",
+        ),
+        (
+            "git@x@github.com:liuli195/my-agent-skills.git",
+            "npm_repository_url_invalid",
+            "git@x@github.com:liuli195/my-agent-skills.git",
+        ),
+        (
+            "https://[github.com/liuli195/my-agent-skills",
+            "npm_repository_url_invalid",
+            "https://[github.com/liuli195/my-agent-skills",
+        ),
+    ],
+)
+def test_validate_reports_stable_npm_repository_errors(
+    tmp_path: Path, repository_url: str, expected_error: str, actual: str
+) -> None:
+    project = tmp_path / "project"
+    write_release_flow_files(project)
+    write_npm_package(project, "my-spec", repository_url=repository_url)
+    assert git(project, "init").returncode == 0
+    assert git(
+        project,
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/liuli195/my-agent-skills.git",
+    ).returncode == 0
+
+    result = run("validate", "--project", str(project))
+
+    assert result.returncode == 1
+    assert expected_error in result.stdout
+    assert "plugins/my-spec/package.json" in result.stdout
+    assert "expected=liuli195/my-agent-skills" in result.stdout
+    assert f"actual={actual}" in result.stdout
+    assert "nextAction: correct npm repository metadata in plugins/my-spec/package.json" in result.stdout
+
+
+def test_validate_checks_all_existing_registered_npm_packages(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    write_release_flow_files(project)
+    write_npm_package(project, "my-spec")
+    write_npm_package(
+        project,
+        "build-and-verify",
+        repository_url="https://github.com/other/repository.git",
+    )
+    assert git(project, "init").returncode == 0
+    assert git(
+        project,
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/liuli195/my-agent-skills.git",
+    ).returncode == 0
+
+    result = run("validate", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "plugins/build-and-verify/package.json" in result.stdout
+    assert "plugins/my-spec/package.json" not in result.stdout
+
+
+def test_validate_reports_wrong_existing_npm_repository_directory(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    write_release_flow_files(project)
+    write_npm_package(project, "my-spec", directory="plugins/other")
+    (project / "plugins" / "other").mkdir(parents=True)
+    assert git(project, "init").returncode == 0
+    assert git(
+        project,
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/liuli195/my-agent-skills.git",
+    ).returncode == 0
+
+    result = run("validate", "--project", str(project))
+
+    assert result.returncode == 1
+    assert "npm_repository_directory_mismatch" in result.stdout
+    assert "plugins/my-spec/package.json" in result.stdout
+    assert "expected=plugins/my-spec" in result.stdout
+    assert "actual=plugins/other" in result.stdout
+
+
+def test_validate_fails_closed_when_github_repository_identity_is_unknown(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    write_release_flow_files(project)
+    write_npm_package(project, "my-spec")
+    environment = {
+        **{key: value for key, value in os.environ.items() if key != "GITHUB_REPOSITORY"},
+        "GITHUB_ACTIONS": "false",
+    }
+
+    result = run("validate", "--project", str(project), env=environment)
+
+    assert result.returncode == 1
+    assert "npm_repository_identity_unavailable" in result.stdout
+    assert "plugins/my-spec/package.json" in result.stdout
+    assert "expected=GitHub owner/repository" in result.stdout
+    assert "nextAction: configure a GitHub origin or trusted GITHUB_REPOSITORY" in result.stdout
+
+
+def test_validate_requires_repository_identity_in_github_actions(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    write_release_flow_files(project)
+    write_npm_package(project, "my-spec")
+    assert git(project, "init").returncode == 0
+    assert git(
+        project,
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/liuli195/my-agent-skills.git",
+    ).returncode == 0
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key != "GITHUB_REPOSITORY"
+    }
+    environment["GITHUB_ACTIONS"] = "true"
+
+    result = run("validate", "--project", str(project), env=environment)
+
+    assert result.returncode == 1
+    assert "npm_repository_identity_unavailable" in result.stdout
+    assert "plugins/my-spec/package.json" in result.stdout
+    assert "GITHUB_REPOSITORY" in result.stdout
+    assert "actual=<missing>" in result.stdout
+
+
+def test_validate_uses_origin_outside_github_actions(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    write_release_flow_files(project)
+    write_npm_package(project, "my-spec")
+    assert git(project, "init").returncode == 0
+    assert git(
+        project,
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/liuli195/my-agent-skills.git",
+    ).returncode == 0
+
+    result = run(
+        "validate",
+        "--project",
+        str(project),
+        env={
+            **os.environ,
+            "GITHUB_ACTIONS": "false",
+            "GITHUB_REPOSITORY": "other/repository",
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_validate_rejects_conflicting_github_actions_repository_identity(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    write_release_flow_files(project)
+    write_npm_package(project, "my-spec")
+    assert git(project, "init").returncode == 0
+    assert git(
+        project,
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/liuli195/my-agent-skills.git",
+    ).returncode == 0
+
+    result = run(
+        "validate",
+        "--project",
+        str(project),
+        env={
+            **os.environ,
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_REPOSITORY": "other/repository",
+        },
+    )
+
+    assert result.returncode == 1
+    assert "npm_repository_identity_conflict" in result.stdout
+    assert "plugins/my-spec/package.json" in result.stdout
+    assert "expected=other/repository" in result.stdout
+    assert "actual=liuli195/my-agent-skills" in result.stdout
+    assert "nextAction: align the GitHub origin and GITHUB_REPOSITORY identity" in result.stdout
 
 
 def test_current_repo_release_flow_files_are_valid() -> None:
@@ -931,7 +1233,7 @@ transforms:
 """,
     )
     write_plugin_manifests(project, "build-and-verify", "9.9.0")
-    write_json(project / "plugins" / "build-and-verify" / "package.json", {"version": "9.9.0"})
+    write_npm_package(project, "build-and-verify", version="9.9.0")
     write_json(
         project / ".build-and-verify" / "config.json",
         {"version": 1, "build": {"checks": []}, "verify": {"checks": []}},
@@ -958,6 +1260,11 @@ transforms:
         "9.9.0",
         "--bump-plugins",
         "build-and-verify",
+        env={
+            **os.environ,
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_REPOSITORY": "liuli195/my-agent-skills",
+        },
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -1175,6 +1482,86 @@ def test_publish_rejects_dry_run_argument(tmp_path: Path) -> None:
     assert "workflow_dispatch:" not in result.stdout
 
 
+def test_publish_rejects_metadata_before_triggering_remote_workflow(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    write_release_flow_files(project)
+    write_npm_package(
+        project,
+        "my-spec",
+        repository_url="https://github.com/other/repository.git",
+    )
+    assert git(project, "init").returncode == 0
+    assert git(
+        project,
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/liuli195/my-agent-skills.git",
+    ).returncode == 0
+    calls = tmp_path / "gh-calls.txt"
+    bin_dir = tmp_path / "bin"
+    fake_gh_for_publish(bin_dir, calls)
+    environment = os.environ.copy()
+    environment["PATH"] = str(bin_dir) + os.pathsep + environment.get("PATH", "")
+
+    result = run(
+        "publish",
+        "--project",
+        str(project),
+        "--tag",
+        "v1.0.0",
+        "--version",
+        "1.0.0",
+        "--bump-plugins",
+        "my-spec",
+        "--authorize-publish",
+        env=environment,
+    )
+
+    assert result.returncode == 1
+    assert "npm_repository_url_mismatch" in result.stdout
+    assert "then rerun release-flow publish" in result.stdout
+    assert not calls.exists()
+
+
+def test_publish_accepts_valid_selected_npm_metadata_and_dispatches(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    write_release_flow_files(project)
+    write_npm_package(project, "my-spec")
+    assert git(project, "init").returncode == 0
+    assert git(
+        project,
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/liuli195/my-agent-skills.git",
+    ).returncode == 0
+    calls = tmp_path / "gh-calls.txt"
+    bin_dir = tmp_path / "bin"
+    fake_gh_for_publish(bin_dir, calls)
+    environment = os.environ.copy()
+    environment["PATH"] = str(bin_dir) + os.pathsep + environment.get("PATH", "")
+
+    result = run(
+        "publish",
+        "--project",
+        str(project),
+        "--tag",
+        "v1.0.0",
+        "--version",
+        "1.0.0",
+        "--bump-plugins",
+        "my-spec",
+        "--authorize-publish",
+        env=environment,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert calls.read_text(encoding="utf-8").count("workflow run") == 2
+
+
 def test_publish_retries_workflow_run_eof_then_succeeds(tmp_path: Path) -> None:
     project = tmp_path / "project"
     write_release_flow_files(project)
@@ -1355,7 +1742,9 @@ def test_release_workflows_publish_only_verified_selected_npm_packages(tmp_path:
             assert f'plugins/{plugin}' in workflow
         assert '"$prefix/bin/myspec" doctor' in workflow
         assert '"$prefix/bin/build-and-verify" verify --project source' in workflow
-        assert 'p.repository?.url !== "https://github.com/liuli195/my-agent-skills"' in workflow
+        assert 'p.repository?.url !== "https://github.com/liuli195/my-agent-skills"' not in workflow
+        assert "p.repository?.url !== s.repository?.url" in workflow
+        assert "p.repository?.directory !== s.repository?.directory" in workflow
         assert 'npm publish "$MYSPEC_TARBALL" --provenance --access public' in workflow
         assert 'npm publish "$BUILD_AND_VERIFY_TARBALL" --provenance --access public' in workflow
         assert "actions/upload-artifact@v6" in workflow
@@ -1366,7 +1755,7 @@ def test_release_workflows_publish_only_verified_selected_npm_packages(tmp_path:
         assert workflow.index("Upload npm package candidates") < workflow.index("Publish release channel")
         for plugin in ("my-spec", "build-and-verify"):
             manifest = f"./source/plugins/{plugin}/package.json"
-            assert workflow.count(manifest) == 2
+            assert workflow.count(manifest) == 3
             path = tmp_path / manifest.removeprefix("./")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("{}", encoding="utf-8")
@@ -1378,6 +1767,65 @@ def test_release_workflows_publish_only_verified_selected_npm_packages(tmp_path:
                 check=False,
             )
             assert loaded.returncode == 0, loaded.stderr
+
+
+@pytest.mark.parametrize(
+    ("changed_field", "expected_returncode"),
+    [(None, 0), ("url", 1), ("directory", 1)],
+)
+def test_release_workflows_compare_packed_repository_metadata(
+    tmp_path: Path, changed_field: str | None, expected_returncode: int
+) -> None:
+    source = {
+        "name": "@liuli195/myspec",
+        "repository": {
+            "type": "git",
+            "url": "https://github.com/liuli195/my-agent-skills",
+            "directory": "plugins/my-spec",
+        },
+    }
+    packed = json.loads(json.dumps(source))
+    if changed_field:
+        packed["repository"][changed_field] = "changed"
+    source_path = tmp_path / "source.json"
+    packed_path = tmp_path / "packed.json"
+    write_json(source_path, source)
+    write_json(packed_path, packed)
+
+    for workflow_path in (
+        REPO_ROOT / ".github" / "workflows" / "release.yml",
+        REPO_ROOT
+        / "plugins"
+        / "release-flow"
+        / "skills"
+        / "release-flow"
+        / "assets"
+        / "templates"
+        / "github"
+        / "workflows"
+        / "release.yml",
+    ):
+        workflow = workflow_path.read_text(encoding="utf-8")
+        match = re.search(
+            r"node -e '([^']+)' \./source/plugins/my-spec/package.json "
+            r'"\$prefix/lib/node_modules/\$package_name/package.json" "\$package_name"',
+            workflow,
+        )
+        assert match is not None
+        result = subprocess.run(
+            [
+                "node",
+                "-e",
+                match.group(1),
+                str(source_path),
+                str(packed_path),
+                source["name"],
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == expected_returncode, result.stderr
 
 
 def test_release_workflows_reject_invalid_selection_before_package_steps() -> None:
@@ -1490,6 +1938,46 @@ def test_origin_is_github_uses_exact_host(tmp_path: Path, monkeypatch) -> None:
 
     monkeypatch.setattr(release_flow, "origin_url", lambda _project: "git@github.com:org/repo.git")
     assert release_flow.origin_is_github(project)
+
+
+def test_ci_publish_rejects_metadata_before_candidate_release_tree_is_built(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project = tmp_path / "project"
+    remote = tmp_path / "remote.git"
+    init_release_input_project(project, remote)
+    write_npm_package(
+        project,
+        "my-spec",
+        repository_url="https://github.com/other/repository.git",
+    )
+    release_flow = load_release_flow_module()
+    monkeypatch.setattr(
+        release_flow,
+        "run_ci_publish_remote",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("candidate tree must not be built")),
+    )
+
+    result = run(
+        "ci-publish",
+        "--project",
+        str(project),
+        "--tag",
+        "v1.0.0",
+        "--version",
+        "1.0.0",
+        "--bump-plugins",
+        "my-spec",
+        "--authorize-ci-publish",
+        env={
+            **os.environ,
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_REPOSITORY": "liuli195/my-agent-skills",
+        },
+    )
+
+    assert result.returncode == 1
+    assert "npm_repository_url_mismatch" in result.stdout
 
 
 def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: Path, monkeypatch) -> None:
@@ -1826,6 +2314,51 @@ def test_preflight_rejects_shared_npm_input_when_only_one_npm_plugin_is_selected
 
     assert result.returncode == 1
     assert "plugin_requires_bump: my-spec" in result.stdout
+
+
+def test_preflight_checks_repository_metadata_only_for_selected_npm_plugin(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    remote = tmp_path / "remote.git"
+    init_release_input_project(project, remote)
+    write_npm_package(
+        project,
+        "build-and-verify",
+        repository_url="https://github.com/other/repository.git",
+    )
+    assert git(project, "add", "plugins/build-and-verify/package.json").returncode == 0
+    assert git(project, "commit", "-m", "invalid build metadata baseline").returncode == 0
+    assert git(project, "push", "origin", "HEAD:refs/heads/main").returncode == 0
+    assert git(project, "push", "origin", "HEAD:refs/heads/marketplace").returncode == 0
+    assert git(project, "fetch", "origin", "main").returncode == 0
+    assert git(project, "fetch", "origin", "marketplace").returncode == 0
+
+    selected_other = run_cli(
+        "preflight",
+        "--project",
+        str(project),
+        "--tag",
+        "v1.0.0",
+        "--version",
+        "1.0.0",
+        "--bump-plugins",
+        "my-spec",
+    )
+    assert selected_other.returncode == 0, selected_other.stdout + selected_other.stderr
+
+    selected_invalid = run_cli(
+        "preflight",
+        "--project",
+        str(project),
+        "--tag",
+        "v1.0.0",
+        "--version",
+        "1.0.0",
+        "--bump-plugins",
+        "build-and-verify",
+    )
+    assert selected_invalid.returncode == 1
+    assert "npm_repository_url_mismatch" in selected_invalid.stdout
+    assert "plugins/build-and-verify/package.json" in selected_invalid.stdout
 
 
 def test_preflight_rejects_npm_metadata_drift_without_bump(tmp_path: Path) -> None:
