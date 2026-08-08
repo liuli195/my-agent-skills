@@ -35,4 +35,4 @@
 - Final coverage（最终覆盖）：保留官方候选包一次打包、4 worker 继承、隔离裸 `myspec`、完整预览/差异/正式应用及真实安装资源检查；普通逻辑分支改为进程内模拟，并删除两条已有更窄接缝覆盖的重复 E2E（端到端）场景。
 - Overall review（整体审查）：fake Git/npm 未声明命令现返回非零；实现差异重新确认及实现闭包/远端删除均恢复窄覆盖；共享轻量包具备完整内容指纹守卫；外部候选环境、全局 `subprocess.run` 异常路径均恢复；4 worker 证明候选共享及 HOME、日志、状态和前缀隔离。Standards（规范）与 Spec（规格）定向复审均无阻断。
 - Unresolved risks（未解决风险）：进程内模块缓存和全局 `subprocess.run` 替换仅用于每个串行 worker 内的测试模拟，并由异常恢复检查保护；作为非阻断风险保留。
-- PR CI blocker（拉取请求持续集成阻断）：PR #308 的 Windows worktree smoke（工作树冒烟）发现轻量安装布局缺少 `node_modules/plugins/tool-lifecycle/python/management.py` 与 `pack.py`；本机测试因进程内模块加载顺序偶然复用其他安装根而未暴露。修复 MUST 让共享模板和私有副本都包含管理代码计算实现身份所需的最小兄弟布局，并把该布局纳入不可变指纹；先新增独立于测试顺序的失败检查，再修复并在 Windows 真实快速验证通过后重跑同一 PR Flow（拉取请求流程）命令。
+- PR CI blocker（拉取请求持续集成阻断）：PR #308 首轮 Windows worktree smoke（工作树冒烟）发现轻量安装布局缺少 `node_modules/plugins/tool-lifecycle/python/management.py` 与 `pack.py`，已通过共享/私有兄弟布局和全布局指纹修复。第二轮暴露 Windows Runner（运行器）的系统临时目录使用 `RUNNER~1` 短路径，而 `realpath` 返回长路径，导致测试安装被误判为开发链接并有 8 项失败；Linux 与本机长路径均通过。测试 Seam（接缝）MUST 在目标工作树 `.local` 下创建并正常清理共享轻量模板，避免宿主临时目录路径别名；不得为测试问题修改产品路径判断。新增顺序无关检查后，重跑本地固定基线和同一 PR Flow（拉取请求流程）命令，以 Windows 真实快速验证为最终证据。

@@ -169,6 +169,26 @@ def test_my_spec_in_process_install_reuses_shared_lightweight_package(
     ).read_bytes()
 
 
+def test_my_spec_in_process_shared_template_uses_worktree_local_and_cleans_up(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_local_template")
+    candidate = tmp_path / "candidate.tgz"
+    candidate.write_bytes(b"candidate")
+    monkeypatch.setenv("MYSPEC_TEST_TARBALL", str(candidate))
+    monkeypatch.setenv("MYSPEC_TEST_IN_PROCESS", "1")
+
+    executable, package = module.install_packed_myspec(tmp_path / "first")
+    template_root = next(
+        path for path in executable.parents if path.name.startswith("myspec-lightweight-")
+    )
+    assert package.is_dir()
+    module._cleanup_lightweight_install()
+
+    assert template_root.parent.resolve() == (REPO_ROOT / ".local").resolve()
+    assert not template_root.exists()
+
+
 def test_my_spec_in_process_fakes_reject_unhandled_commands() -> None:
     module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_fake_command_boundaries")
 

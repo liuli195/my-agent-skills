@@ -669,7 +669,12 @@ def _package_fingerprint(root: Path) -> str:
 def _cleanup_lightweight_install() -> None:
     global _lightweight_install, _lightweight_install_fingerprint
     if _lightweight_install is not None:
-        shutil.rmtree(_lightweight_install[0].parent, ignore_errors=True)
+        prefix = (
+            _lightweight_install[0].parent
+            if os.name == "nt"
+            else _lightweight_install[0].parent.parent
+        )
+        shutil.rmtree(prefix, ignore_errors=True)
         _lightweight_install = None
     _lightweight_install_fingerprint = None
 
@@ -702,7 +707,9 @@ def _install_lightweight_myspec() -> tuple[Path, Path]:
         return _lightweight_install
 
     _cleanup_lightweight_install()
-    prefix = Path(tempfile.mkdtemp(prefix="myspec-lightweight-")) / "npm-prefix"
+    local_root = REPO_ROOT / ".local"
+    local_root.mkdir(parents=True, exist_ok=True)
+    prefix = Path(tempfile.mkdtemp(prefix="myspec-lightweight-", dir=local_root))
     root = prefix / ("node_modules" if os.name == "nt" else "lib/node_modules")
     installed_package = root / "@liuli195" / "myspec"
     shutil.copytree(
@@ -899,6 +906,8 @@ _PRIVATE_LIGHTWEIGHT_INSTALL_TESTS = {
     "test_packed_myspec_initializes_and_diagnoses_one_pi_source",
     "test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest",
     "test_packed_myspec_doctor_reports_actual_package_version_mismatch",
+    "test_packed_myspec_pi_init_enables_a_verified_stable_duplicate_before_cleanup",
+    "test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_file",
 }
 
 
