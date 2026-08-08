@@ -547,6 +547,34 @@ def test_validate_fails_closed_when_github_repository_identity_is_unknown(
     assert "nextAction: configure a GitHub origin or trusted GITHUB_REPOSITORY" in result.stdout
 
 
+def test_validate_requires_repository_identity_in_github_actions(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    write_release_flow_files(project)
+    write_npm_package(project, "my-spec")
+    assert git(project, "init").returncode == 0
+    assert git(
+        project,
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/liuli195/my-agent-skills.git",
+    ).returncode == 0
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key != "GITHUB_REPOSITORY"
+    }
+    environment["GITHUB_ACTIONS"] = "true"
+
+    result = run("validate", "--project", str(project), env=environment)
+
+    assert result.returncode == 1
+    assert "npm_repository_identity_unavailable" in result.stdout
+    assert "plugins/my-spec/package.json" in result.stdout
+    assert "GITHUB_REPOSITORY" in result.stdout
+    assert "actual=<missing>" in result.stdout
+
+
 def test_validate_uses_origin_outside_github_actions(tmp_path: Path) -> None:
     project = tmp_path / "project"
     write_release_flow_files(project)

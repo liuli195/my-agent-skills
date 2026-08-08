@@ -570,6 +570,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_release_flow_cli.py::test_validate_rejects_missing_npm_repository_metadata': (
         'covers release-flow validate reporting missing npm repository metadata and recovery; function=test_validate_rejects_missing_npm_repository_metadata'
     ),
+    'tests/test_release_flow_cli.py::test_validate_requires_repository_identity_in_github_actions': (
+        'covers release-flow validate failing closed when GitHub Actions omits its repository identity; function=test_validate_requires_repository_identity_in_github_actions'
+    ),
     'tests/test_release_flow_cli.py::test_validate_reports_stable_npm_repository_errors': (
         'covers release-flow validate reporting stable npm repository URL errors; function=test_validate_reports_stable_npm_repository_errors'
     ),

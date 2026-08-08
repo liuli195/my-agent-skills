@@ -843,13 +843,10 @@ def github_repository_identity_from_environment(value: str) -> str | None:
 
 
 def github_repository_identity(project: Path) -> str:
-    environment_value = (
-        os.environ.get("GITHUB_REPOSITORY")
-        if os.environ.get("GITHUB_ACTIONS") == "true"
-        else None
-    )
-    environment_identity = None
-    if environment_value is not None:
+    origin_value = origin_url(project)
+    origin_identity = github_repository_identity_from_url(origin_value)
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        environment_value = os.environ.get("GITHUB_REPOSITORY", "")
         environment_identity = github_repository_identity_from_environment(environment_value)
         if environment_identity is None:
             actual = environment_value or "<missing>"
@@ -857,16 +854,13 @@ def github_repository_identity(project: Path) -> str:
                 "npm_repository_identity_unavailable: GITHUB_REPOSITORY "
                 f"expected=owner/repository actual={actual}"
             )
-
-    origin_value = origin_url(project)
-    origin_identity = github_repository_identity_from_url(origin_value)
-    if environment_identity and origin_identity and environment_identity != origin_identity:
-        raise ValueError(
-            "npm_repository_identity_conflict: repository identity "
-            f"expected={environment_identity} actual={origin_identity}"
-        )
-    if environment_identity:
+        if origin_identity and environment_identity != origin_identity:
+            raise ValueError(
+                "npm_repository_identity_conflict: repository identity "
+                f"expected={environment_identity} actual={origin_identity}"
+            )
         return environment_identity
+
     if origin_identity:
         return origin_identity
     actual = origin_value or "<missing>"
