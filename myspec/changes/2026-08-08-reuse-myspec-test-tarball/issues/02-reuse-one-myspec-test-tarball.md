@@ -35,4 +35,4 @@
 - Final coverage（最终覆盖）：保留官方候选包一次打包、4 worker 继承、隔离裸 `myspec`、完整预览/差异/正式应用及真实安装资源检查；普通逻辑分支改为进程内模拟，并删除两条已有更窄接缝覆盖的重复 E2E（端到端）场景。
 - Overall review（整体审查）：fake Git/npm 未声明命令现返回非零；实现差异重新确认及实现闭包/远端删除均恢复窄覆盖；共享轻量包具备完整内容指纹守卫；外部候选环境、全局 `subprocess.run` 异常路径均恢复；4 worker 证明候选共享及 HOME、日志、状态和前缀隔离。Standards（规范）与 Spec（规格）定向复审均无阻断。
 - Unresolved risks（未解决风险）：进程内模块缓存和全局 `subprocess.run` 替换仅用于每个串行 worker 内的测试模拟，并由异常恢复检查保护；作为非阻断风险保留。
-- PR CI blocker（拉取请求持续集成阻断）：PR #308 首轮缺少轻量兄弟布局、第二轮系统临时目录 `RUNNER~1` 短路径误判均已修复；第三轮 `verify.my-spec` 已在 Windows 真实快速验证通过，但 `verify.local-build-contract` 的嵌套 xdist（分布式测试）探针位于 C 盘、工作目录位于 D 盘，pytest（测试工具）把根目录误判为 `C:\` 并扫描无权限的 `C:\Documents and Settings`。嵌套命令 MUST 显式固定 `--rootdir` 为目标仓库，保留跨盘探针与 4 worker 证据，不改产品代码；本地固定基线通过后重跑同一 PR Flow（拉取请求流程）命令，以 Windows 全部检查通过为最终证据。
+- PR CI blocker（拉取请求持续集成阻断）：PR #308 的轻量兄弟布局、`RUNNER~1` 短路径误判及 `verify.my-spec` 已修复并在 Windows 通过；`verify.local-build-contract` 的嵌套 xdist（分布式测试）探针仍因位于 C 盘而触发 pytest（测试工具）扫描无权限的 `C:\Documents and Settings`，单加 `--rootdir` 无效。探针、worker 临时根和报告 MUST 改由自动清理的目标工作树 `.local` 测试 fixture（夹具）提供，使嵌套命令与工作目录位于同一盘；保留 4 worker 继承与隔离证据，不改产品代码。以 Windows 全部检查通过为最终证据。

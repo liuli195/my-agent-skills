@@ -4,6 +4,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +17,17 @@ LOCAL_BUILD_SCRIPT = REPO_ROOT / "scripts" / "local_plugin_build.py"
 BUILD_AND_VERIFY_RUNNER = (
     REPO_ROOT / "plugins" / "build-and-verify" / "python" / "build_and_verify_runner.py"
 )
+
+
+@pytest.fixture
+def worktree_local_tmp_path() -> Iterator[Path]:
+    local_root = REPO_ROOT / ".local"
+    local_root.mkdir(parents=True, exist_ok=True)
+    path = Path(tempfile.mkdtemp(prefix="nested-xdist-", dir=local_root))
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def test_node_cli_launchers_are_forced_to_lf() -> None:
@@ -379,12 +392,14 @@ def test_my_spec_candidate_setup_packs_once_before_workers(monkeypatch) -> None:
     assert module._candidate_directory is None
 
 
-def test_my_spec_candidate_path_reaches_real_xdist_workers(tmp_path: Path) -> None:
-    report_dir = tmp_path / "worker-reports"
+def test_my_spec_candidate_path_reaches_real_xdist_workers(
+    worktree_local_tmp_path: Path,
+) -> None:
+    report_dir = worktree_local_tmp_path / "worker-reports"
     report_dir.mkdir()
-    worker_temp_root = tmp_path / "worker-temp"
+    worker_temp_root = worktree_local_tmp_path / "worker-temp"
     worker_temp_root.mkdir()
-    probe = tmp_path / "test_my_spec.py"
+    probe = worktree_local_tmp_path / "test_my_spec.py"
     probe.write_text(
         """import json
 import os
@@ -430,8 +445,6 @@ def test_candidate_is_inherited_and_installed_once(tmp_path):
     env = os.environ.copy()
     env.pop("MYSPEC_TEST_TARBALL", None)
     env["MYSPEC_WORKER_REPORT_DIR"] = str(report_dir)
-    for variable in ("TMPDIR", "TEMP", "TMP"):
-        env[variable] = str(worker_temp_root)
     result = subprocess.run(
         [
             sys.executable,
@@ -447,6 +460,8 @@ def test_candidate_is_inherited_and_installed_once(tmp_path):
             "--dist=each",
             "--rootdir",
             str(REPO_ROOT),
+            "--basetemp",
+            str(worker_temp_root),
             str(probe),
         ],
         cwd=REPO_ROOT,
