@@ -536,7 +536,10 @@ def test_validate_fails_closed_when_github_repository_identity_is_unknown(
     project = tmp_path / "project"
     write_release_flow_files(project)
     write_npm_package(project, "my-spec")
-    environment = {key: value for key, value in os.environ.items() if key != "GITHUB_REPOSITORY"}
+    environment = {
+        **{key: value for key, value in os.environ.items() if key != "GITHUB_REPOSITORY"},
+        "GITHUB_ACTIONS": "false",
+    }
 
     result = run("validate", "--project", str(project), env=environment)
 
