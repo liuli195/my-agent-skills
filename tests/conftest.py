@@ -15,8 +15,10 @@ from tests.support.git_templates import init_user, run_git
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MYSPEC_PACK = REPO_ROOT / "plugins" / "tool-lifecycle" / "pack.py"
 MYSPEC_TEST_TARBALL = "MYSPEC_TEST_TARBALL"
+MYSPEC_TEST_IN_PROCESS = "MYSPEC_TEST_IN_PROCESS"
 _candidate_directory: Path | None = None
 _previous_candidate: str | None = None
+_previous_in_process: str | None = None
 
 
 def _runs_my_spec(config: pytest.Config) -> bool:
@@ -41,43 +43,60 @@ def _cleanup_candidate_directory() -> None:
         _candidate_directory = None
 
 
+def _restore_in_process_environment() -> None:
+    global _previous_in_process
+    if _previous_in_process is None:
+        os.environ.pop(MYSPEC_TEST_IN_PROCESS, None)
+    else:
+        os.environ[MYSPEC_TEST_IN_PROCESS] = _previous_in_process
+    _previous_in_process = None
+
+
 def _prepare_my_spec_test_tarball() -> None:
-    global _candidate_directory, _previous_candidate
-    supplied = os.environ.get(MYSPEC_TEST_TARBALL)
-    if supplied:
-        candidate = Path(supplied).expanduser().resolve()
+    global _candidate_directory, _previous_candidate, _previous_in_process
+    _previous_in_process = os.environ.get(MYSPEC_TEST_IN_PROCESS)
+    os.environ[MYSPEC_TEST_IN_PROCESS] = "1"
+    try:
+        supplied = os.environ.get(MYSPEC_TEST_TARBALL)
+        if supplied:
+            candidate = Path(supplied).expanduser().resolve()
+            if not candidate.is_file():
+                raise pytest.UsageError(
+                    f"{MYSPEC_TEST_TARBALL} must point to an existing Tarball: {candidate}"
+                )
+            os.environ[MYSPEC_TEST_TARBALL] = str(candidate)
+            return
+
+        _previous_candidate = supplied
+        _candidate_directory = Path(tempfile.mkdtemp(prefix="myspec-test-tarball-"))
+        try:
+            packed = subprocess.run(
+                [sys.executable, str(MYSPEC_PACK), "myspec", str(_candidate_directory)],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except OSError as error:
+            _cleanup_candidate_directory()
+            raise pytest.UsageError(f"failed to prepare MySpec test Tarball: {error}") from error
+        if packed.returncode != 0:
+            detail = packed.stderr.strip() or f"exit code {packed.returncode}"
+            _cleanup_candidate_directory()
+            raise pytest.UsageError(f"failed to prepare MySpec test Tarball: {detail}")
+
+        candidate = Path(packed.stdout.strip()).resolve()
         if not candidate.is_file():
+            _cleanup_candidate_directory()
             raise pytest.UsageError(
-                f"{MYSPEC_TEST_TARBALL} must point to an existing Tarball: {candidate}"
+                f"MySpec pack Interface returned a missing Tarball: {candidate}"
             )
         os.environ[MYSPEC_TEST_TARBALL] = str(candidate)
-        return
-
-    _previous_candidate = supplied
-    _candidate_directory = Path(tempfile.mkdtemp(prefix="myspec-test-tarball-"))
-    try:
-        packed = subprocess.run(
-            [sys.executable, str(MYSPEC_PACK), "myspec", str(_candidate_directory)],
-            cwd=REPO_ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-    except OSError as error:
+    except BaseException:
         _cleanup_candidate_directory()
-        raise pytest.UsageError(f"failed to prepare MySpec test Tarball: {error}") from error
-    if packed.returncode != 0:
-        detail = packed.stderr.strip() or f"exit code {packed.returncode}"
-        _cleanup_candidate_directory()
-        raise pytest.UsageError(f"failed to prepare MySpec test Tarball: {detail}")
-
-    candidate = Path(packed.stdout.strip()).resolve()
-    if not candidate.is_file():
-        _cleanup_candidate_directory()
-        raise pytest.UsageError(
-            f"MySpec pack Interface returned a missing Tarball: {candidate}"
-        )
-    os.environ[MYSPEC_TEST_TARBALL] = str(candidate)
+        _previous_candidate = None
+        _restore_in_process_environment()
+        raise
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -87,14 +106,20 @@ def pytest_configure(config: pytest.Config) -> None:
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     del exitstatus
-    global _candidate_directory, _previous_candidate
-    if not hasattr(session.config, "workerinput") and _candidate_directory is not None:
-        _cleanup_candidate_directory()
-        if _previous_candidate is None:
-            os.environ.pop(MYSPEC_TEST_TARBALL, None)
+    global _candidate_directory, _previous_candidate, _previous_in_process
+    if not hasattr(session.config, "workerinput"):
+        if _candidate_directory is not None:
+            _cleanup_candidate_directory()
+            if _previous_candidate is None:
+                os.environ.pop(MYSPEC_TEST_TARBALL, None)
+            else:
+                os.environ[MYSPEC_TEST_TARBALL] = _previous_candidate
+            _previous_candidate = None
+        if _previous_in_process is None:
+            os.environ.pop(MYSPEC_TEST_IN_PROCESS, None)
         else:
-            os.environ[MYSPEC_TEST_TARBALL] = _previous_candidate
-        _previous_candidate = None
+            os.environ[MYSPEC_TEST_IN_PROCESS] = _previous_in_process
+        _previous_in_process = None
 
 
 @pytest.fixture(scope="session")

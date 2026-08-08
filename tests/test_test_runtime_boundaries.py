@@ -813,17 +813,11 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_packed_myspec_switches_pi_between_development_and_saved_release': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_switches_pi_between_development_and_saved_release'
     ),
-    'tests/test_my_spec.py::test_packed_myspec_dev_doctor_identity_ignores_unrelated_files_and_tracks_closure': (
-        'covers the installed MySpec CLI reproducible development implementation identity through unrelated and packaged source changes; function=test_packed_myspec_dev_doctor_identity_ignores_unrelated_files_and_tracks_closure'
-    ),
     'tests/test_my_spec.py::test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged': (
         'covers the installed MySpec CLI reusing confirmation when a development implementation changes without changing the observable diff; function=test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged'
     ),
     'tests/test_my_spec.py::test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit': (
         'covers the installed MySpec CLI retaining a CI-reproducible published ancestor after an unrelated source commit; function=test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit'
-    ),
-    'tests/test_my_spec.py::test_packed_myspec_requires_reconfirmation_when_implementation_changes_the_diff': (
-        'covers the installed MySpec CLI requiring reconfirmation when a development implementation changes the observable diff; function=test_packed_myspec_requires_reconfirmation_when_implementation_changes_the_diff'
     ),
     'tests/test_my_spec.py::test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_context': (
         'covers the installed MySpec CLI canonical development binding and target-worktree context through two isolated git worktrees; function=test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_context'

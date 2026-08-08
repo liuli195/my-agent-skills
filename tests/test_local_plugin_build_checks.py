@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -44,6 +45,7 @@ def test_my_spec_candidate_setup_reuses_supplied_tarball(tmp_path: Path, monkeyp
     config = type("Config", (), {"args": ["tests/test_my_spec.py"]})()
 
     module.pytest_configure(config)
+    module.pytest_sessionfinish(type("Session", (), {"config": config})(), 0)
 
 
 def test_my_spec_candidate_setup_cleans_up_when_pack_cannot_start(
@@ -68,8 +70,8 @@ def test_my_spec_candidate_setup_cleans_up_when_pack_cannot_start(
     assert not candidate_directory.exists()
 
 
-def test_my_spec_candidate_install_reuses_worker_template(tmp_path: Path, monkeypatch) -> None:
-    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_install_template")
+def test_my_spec_candidate_install_keeps_real_installs_isolated(tmp_path: Path, monkeypatch) -> None:
+    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_real_install")
     candidate = tmp_path / "candidate.tgz"
     candidate.write_bytes(b"candidate")
     monkeypatch.setenv("MYSPEC_TEST_TARBALL", str(candidate))
@@ -104,38 +106,138 @@ def test_my_spec_candidate_install_reuses_worker_template(tmp_path: Path, monkey
     _, second_package = module.install_packed_myspec(second)
 
     assert first_package != second_package
-    assert len([command for command in calls if command[1] == "install"]) == 1
+    assert len([command for command in calls if command[1] == "install"]) == 2
 
 
-def test_my_spec_candidate_install_cleans_template_on_install_error(
+def test_my_spec_in_process_install_reuses_shared_lightweight_package(
     tmp_path: Path, monkeypatch
 ) -> None:
-    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_install_error")
+    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_lightweight_install")
     candidate = tmp_path / "candidate.tgz"
     candidate.write_bytes(b"candidate")
     monkeypatch.setenv("MYSPEC_TEST_TARBALL", str(candidate))
-    template_root = tmp_path / "template"
+    monkeypatch.setenv("MYSPEC_TEST_IN_PROCESS", "1")
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail(f"unexpected subprocess: {args} {kwargs}"),
+    )
+    copy_calls = []
+    copytree = module.shutil.copytree
 
-    def make_template_root(**kwargs):
-        del kwargs
-        template_root.mkdir()
-        return str(template_root)
+    def track_copytree(*args, **kwargs):
+        if Path(args[1]).name == "myspec":
+            copy_calls.append(args[1])
+        return copytree(*args, **kwargs)
 
-    monkeypatch.setattr(module.tempfile, "mkdtemp", make_template_root)
-    monkeypatch.setattr(module.shutil, "which", lambda name: "npm" if name == "npm" else None)
+    monkeypatch.setattr(module.shutil, "copytree", track_copytree)
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
 
-    def install_error(*args, **kwargs):
-        del args, kwargs
-        raise OSError("npm unavailable")
+    first_executable, first_package = module.install_packed_myspec(first)
+    second_executable, second_package = module.install_packed_myspec(second)
 
-    monkeypatch.setattr(module.subprocess, "run", install_error)
+    assert first_executable.is_file()
+    assert second_executable.is_file()
+    assert first_package == second_package
+    assert module.npm_prefix_for(first_package) == module.npm_prefix_for(second_package)
+    assert len(copy_calls) == 1
+    assert (first_package / "python" / "spec_ops.py").is_file()
+    assert (first_package / "python" / "management.py").read_bytes() == (
+        REPO_ROOT / "plugins" / "tool-lifecycle" / "python" / "management.py"
+    ).read_bytes()
+
+
+def test_my_spec_in_process_runner_uses_the_passed_installed_cli(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_installed_cli")
+    prefix = tmp_path / "prefix"
+    package = prefix / ("node_modules" if os.name == "nt" else "lib/node_modules") / "@liuli195" / "myspec"
+    (package / "python").mkdir(parents=True)
+    (package / "package.json").write_text(
+        (REPO_ROOT / "plugins" / "my-spec" / "package.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    shutil.copy2(
+        REPO_ROOT / "plugins" / "my-spec" / "python" / "lifecycle_profile.json",
+        package / "python" / "lifecycle_profile.json",
+    )
+    shutil.copy2(
+        REPO_ROOT / "plugins" / "tool-lifecycle" / "python" / "management.py",
+        package / "python" / "management.py",
+    )
+    (package / "python" / "spec_ops.py").write_text(
+        "def main(args):\n    print('installed-cli')\n    return 0\n",
+        encoding="utf-8",
+    )
+    executable = prefix / ("myspec.cmd" if os.name == "nt" else "bin/myspec")
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_text("", encoding="utf-8")
+    monkeypatch.setenv("MYSPEC_TEST_IN_PROCESS", "1")
+
+    result = module.run_cli(executable, "--help")
+
+    assert result.returncode == 0
+    assert result.stdout == "installed-cli\n"
+
+
+def test_my_spec_in_process_runner_handles_spec_ops_without_subprocess(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_in_process")
+    specs = tmp_path / "specs" / "accounts" / "spec.md"
+    specs.parent.mkdir(parents=True)
+    specs.write_text(
+        "# Accounts\n\n## Purpose\n\n描述账户行为。\n\n## Requirements\n\n"
+        "### Requirement: 登录\n\n系统 MUST 允许登录。\n\n#### Scenario: 正常\n\n"
+        "- **WHEN** 用户登录\n- **THEN** 系统创建会话\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MYSPEC_TEST_IN_PROCESS", "1")
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail(f"unexpected subprocess: {args} {kwargs}"),
+    )
+
+    result = module.run_python(module.SPEC_OPS, "validate-main", specs.parent.parent)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert result.stderr == ""
+
+
+def test_my_spec_in_process_management_avoids_fake_client_subprocess(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_module(REPO_ROOT / "tests" / "test_my_spec.py", "test_my_spec_in_process_management")
+    candidate = tmp_path / "candidate.tgz"
+    candidate.write_bytes(b"candidate")
+    monkeypatch.setenv("MYSPEC_TEST_TARBALL", str(candidate))
+    monkeypatch.setenv("MYSPEC_TEST_IN_PROCESS", "1")
+
     installed = tmp_path / "installed"
     installed.mkdir()
+    executable, installed_package = module.install_packed_myspec(installed)
+    client_bin, log = module.install_fake_pi(tmp_path / "fake-pi")
+    env = module.isolated_myspec_env(tmp_path, module.npm_prefix_for(installed_package), client_bin)
+    env["MYSPEC_PI_LOG"] = str(log)
+    module.write(
+        Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
+        json.dumps({"packages": [str(installed_package)]}),
+    )
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail(f"unexpected subprocess: {args} {kwargs}"),
+    )
 
-    with pytest.raises(OSError, match="npm unavailable"):
-        module.install_packed_myspec(installed)
+    result = module.run_cli(executable, "doctor", "--pi", env=env)
 
-    assert not template_root.exists()
+    assert result.returncode == 0, result.stderr
 
 
 def test_my_spec_candidate_setup_packs_once_before_workers(monkeypatch) -> None:
@@ -190,6 +292,7 @@ def test_candidate_is_inherited_and_installed_once(tmp_path):
         "candidate": str(candidate),
         "prefix": str(myspec.npm_prefix_for(package).resolve()),
         "package": str(package.resolve()),
+        "packageExistsBeforeWorkerCleanup": package.is_dir(),
     }
     (Path(os.environ["MYSPEC_WORKER_REPORT_DIR"]) / f"{worker}.json").write_text(
         json.dumps(report), encoding="utf-8"
@@ -233,7 +336,7 @@ def test_candidate_is_inherited_and_installed_once(tmp_path):
     assert candidate.is_absolute()
     prefixes = {Path(payload["prefix"]).resolve() for payload in payloads}
     assert len(prefixes) == 4
-    assert all(Path(payload["package"]).is_dir() for payload in payloads)
+    assert all(payload["packageExistsBeforeWorkerCleanup"] for payload in payloads)
     assert not list(worker_temp_root.glob("myspec-install-template-*"))
 
 
