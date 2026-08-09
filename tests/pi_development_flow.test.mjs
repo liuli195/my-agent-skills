@@ -139,6 +139,10 @@ test("the three gates form the required stage state machine", async () => {
   ]) assert.match(skill, new RegExp(name));
   assert.match(skill, /obtain and verify an Architect.*`codebase-design`.*evidence-backed basis/is);
   assert.doesNotMatch(skill, /Gate 4 —/);
+  assert.match(
+    skill,
+    /Every Development Flow gate MUST request exactly one Gate Confirmation[^]*sticky through that gate's execution and recovery[^]*resume the failed action without presenting or requesting that gate again/is,
+  );
 
   const ownership = [
     ["requirements.md", 1, "Requirements Confirmation"],
@@ -312,7 +316,10 @@ test("implementation uses a single writer and explicit return states", async () 
   assert.match(implementation, /RETURNED[^]*not[^]*ACCEPTED/is);
   assert.match(implementation, /new[^]*self-contained prompt[^]*same[^]*dispatch_implementer_in_worktree/is);
   assert.match(implementation, /Reviewer[^]*only reports/is);
-  assert.match(implementation, /one[^]*confirmation[^]*recovery[^]*(?:without|not)[^]*again/is);
+  assert.match(
+    implementation,
+    /For Gate 2,[^]*apply the global Gate Confirmation invariant[^]*resume it after recovery without presenting or requesting Gate 2 again/is,
+  );
 });
 
 test("implementation requires fixed-baseline fast verification evidence", async () => {
@@ -335,7 +342,11 @@ test("implementation requires tool-enforced cwd for writable delegation", async 
 
   assert.match(implementation, /`dispatch_implementer_in_worktree`/);
   assert.match(implementation, /MUST NOT rely on a prompt to change directories/i);
-  assert.match(implementation, /stop before delegation.*handoff/i);
+  assert.match(
+    implementation,
+    /If tool-enforced binding is unavailable or validation fails, enter `BLOCKED`[^]*report the exact blocker[^]*recovery point[^]*do not provide a session handoff or offer a second writable route/is,
+  );
+  assert.doesNotMatch(implementation, /provide a handoff from the target worktree/i);
 });
 
 test("direct Agent dispatch blocks writable and unknown roles but allows read-only roles", async () => {
@@ -384,7 +395,6 @@ test("the controlled dispatch schema and implementation stay transparent", async
   assert.doesNotMatch(source, /ticket_path|verifyTicket|Implement exactly one published ticket/);
   assert.doesNotMatch(source, /completionTimeoutMs|Implementer completion timed out/);
   assert.match(source, /prompt: params\.prompt/);
-  assert.match(source, /description: params\.description/);
 });
 
 test("worktree dispatch binds Implementer to one verified non-primary worktree", async () => {
@@ -460,7 +470,6 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
         description,
         worktree_path: worktree,
         expected_branch: "feature",
-        ticket_path: join(worktree, "not-a-published-ticket.md"),
       },
       undefined,
       undefined,
@@ -469,7 +478,8 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
 
     assert.equal(spawnRequest.type, "Implementer");
     assert.equal(spawnRequest.prompt, prompt);
-    assert.equal(spawnRequest.description, description);
+    assert.equal(spawnRequest.options.description, description);
+    assert.equal(Object.hasOwn(spawnRequest, "description"), false);
     assert.equal(await realpath(spawnRequest.options.cwd), await realpath(worktree));
     assert.equal(Object.hasOwn(spawnRequest.options, "isolated"), false);
     assert.equal(result.details.branch, "feature");

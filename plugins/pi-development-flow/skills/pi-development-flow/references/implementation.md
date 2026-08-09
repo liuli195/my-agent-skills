@@ -48,7 +48,7 @@ Gate 2 uses **Single Writer（单写者）**. The main Agent（代理） constru
 
 The Approved Ticket is immutable throughout Gate 2. Do not write implementation evidence, progress, or revisions back into it. If an answer changes the requirement, scope, public seam, or observable acceptance, stop and return to Gate 1 — Requirements Confirmation（需求确认） instead of silently changing the ticket.
 
-A Gate Confirmation（门禁确认） is requested once for this gate. One confirmation covers execution and recovery; recovery does not request it again. If a later action fails, report the exact failed action and resume from that action after recovery. Request a new confirmation only for a separate dangerous action that was not covered by the original confirmation.
+For Gate 2, apply the global Gate Confirmation invariant: request one Gate Confirmation（门禁确认） for this gate. Keep that confirmation valid through Gate 2 execution and recovery; if a post-confirmation action fails, report the exact failed action and resume it after recovery without presenting or requesting Gate 2 again. Request a new confirmation only for a separate dangerous action not covered by the original confirmation.
 
 ## Ordered Gate 2 states（门禁二有序状态）
 
@@ -70,7 +70,7 @@ These are orchestration states, not a new runtime state machine. Follow them in 
 - the expected Git end state: focused commit, limited diff, clean assigned worktree, and no main-worktree change;
 - stop conditions: requirement conflict, uncertain ownership, unverified worktree, missing evidence, or a finding that must return to requirements.
 
-4. Call `dispatch_implementer_in_worktree` with exactly the caller-built `prompt`, `description`, absolute `worktree_path`, and `expected_branch`. The tool verifies and binds the existing non-primary worktree, starts the fixed Implementer role, and preserves the prompt and description; it does not interpret tickets, build prompts, or decide acceptance. Never rely on a prompt to change directories. If tool-enforced binding is unavailable or validation fails, stop before delegation and provide a handoff from the target worktree.
+4. Call `dispatch_implementer_in_worktree` with exactly the caller-built `prompt`, `description`, absolute `worktree_path`, and `expected_branch`. The tool verifies and binds the existing non-primary worktree, starts the fixed Implementer role, and preserves the prompt and description; it does not interpret tickets, build prompts, or decide acceptance. Never rely on a prompt to change directories. If tool-enforced binding is unavailable or validation fails, enter `BLOCKED`, report the exact blocker, preserved evidence, and recovery point, and do not provide a session handoff or offer a second writable route.
 
 READY is complete only when the target and branch have passed tool validation, the prompt and description are self-contained for one goal, and the Implementer has been dispatched through the controlled entry.
 

@@ -23,6 +23,10 @@ Every gate and completion result MUST use the fixed titles and exact four-block 
 
 ## Gates（门禁）
 
+### Global Gate Confirmation invariant（全局门禁确认不变量）
+
+Every Development Flow gate MUST request exactly one Gate Confirmation（门禁确认）. The confirmation is sticky through that gate's execution and recovery: after a confirmed gate action fails, recovery MUST resume the failed action without presenting or requesting that gate again. Request a new confirmation only for a separate dangerous action not covered by the original confirmation.
+
 Keep three numbered and named decisions distinct:
 
 1. **Gate 1 — Requirements Confirmation（需求确认）.** Approve requirements, test seams, and tickets before publishing the change artifacts.

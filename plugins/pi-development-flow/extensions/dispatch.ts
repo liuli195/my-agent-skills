@@ -184,8 +184,7 @@ export function registerWorktreeDispatch(
         {
           type: "Implementer",
           prompt: params.prompt,
-          description: params.description,
-          options: { cwd: target.worktree },
+          options: { cwd: target.worktree, description: params.description },
         },
         signal,
       );
