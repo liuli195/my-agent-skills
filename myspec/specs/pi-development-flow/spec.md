@@ -65,36 +65,55 @@
 - **THEN** 系统以确认方向作为决策地图目标，维护仅针对未决事项的决策票据，再从已解决决策生成独立的实施票据
 ### Requirement: 按真实并行性选择隔离拓扑
 
-系统 MUST 只在存在至少两张可安全并行的无阻塞票据时创建集成分支和独立票据工作树；其余变更 MUST 使用单一功能分支和单一工作树顺序实施。主 Agent（代理）MAY 逐票直接实施顺序任务；选择委派时，每次 Implementer（实施者）调用 MUST 只绑定一张已发布票据，并由工具把可写子代理强制绑定到目标工作树。
+系统 MUST 只在存在至少两张可安全并行的无阻塞票据时创建集成分支和独立票据工作树；其余变更 MUST 使用单一功能分支和单一工作树顺序实施。Gate 2 的 Git（版本管理）可见实施修改 MUST 只由绑定目标工作树的 Implementer（实施者）完成；主 Agent（代理）负责编排、正式验证和依据实际证据验收。受控派发入口 MUST 只验证并绑定目标工作树，固定启动 Implementer，并原样传递调用方提供的提示词和描述；票据、提示词内容、提交、测试、审查和验收规则 MUST 由 Development Flow（开发流程）Skill（技能）编排。
 
 #### Scenario: 所有票据均需顺序实施
 
 - **WHEN** 票据存在依赖、核心文件冲突或只有一张可实施票据
-- **THEN** 系统不创建集成分支；主 Agent 可在功能工作树逐票直接实施，也可逐票委派，但每张票据验收后才能开始下一张
+- **THEN** 系统不创建集成分支，并在同一功能工作树中依次派发 Implementer；每张票据通过实际证据验收后才能开始下一张
 
-#### Scenario: 顺序票据选择委派
+#### Scenario: 透明工作树派发
 
-- **WHEN** 主 Agent 决定把多张顺序票据交给 Implementer
-- **THEN** 每次调用只绑定一张 `ready-for-agent` 票据，所有调用复用同一功能工作树并在前一票验收后依次执行
+- **WHEN** Development Flow 使用调用方提供的提示词、描述、目标工作树和预期分支启动 Implementer
+- **THEN** 受控派发入口验证目标是已登记且分支匹配的非主工作树，把该工作树设为实际工作目录，并将提示词和描述原样传递给固定 Implementer 角色
+- **THEN** 受控派发入口不解析票据，不构造或检查提示词，也不判断提交、测试、审查、验收或流程状态
+
+#### Scenario: Implementer 返回后验收实际证据
+
+- **WHEN** 工作树绑定的 Implementer 生命周期返回
+- **THEN** 系统只把该结果视为已返回，并检查实际分支、提交、限定差异、工作区、固定基线验证、真实入口冒烟和必要审查后再决定是否接受票据
+- **THEN** Implementer 的完成报告本身不构成票据验收证据
+
+#### Scenario: 证据不足或审查要求返工
+
+- **WHEN** 实际证据不足、验证失败、工作区不干净或 Reviewer（审查者）报告阻断项
+- **THEN** 主 Agent 根据不可变票据和当前发现构造新的自包含提示词，并通过同一受控派发入口交给 Implementer
+- **THEN** 主 Agent 不直接接管实施修改，Reviewer 只报告并在修复后定向复审受影响差异和行为
+
+#### Scenario: 已批准票据保持不可变
+
+- **WHEN** Gate 2 已经开始实施或返工
+- **THEN** Implementer 和 Reviewer 使用 Gate 1 已批准并提交的票据作为验收基准，不向票据写回进度、实施证据或需求修订
+- **THEN** 需求、范围、公开接缝或可观察验收发生变化时，系统返回需求阶段而不静默扩大写入目标
 
 #### Scenario: 工具无法强制目标工作树
 
 - **WHEN** 目标工作树或分支无法验证，或者派发入口无法强制子代理的实际工作目录
-- **THEN** 系统在启动可写子代理前停止并提供从目标工作树交接 Pi（编码代理）会话的方法，不以提示中的目录切换代替
+- **THEN** 系统在启动可写子代理前进入阻塞状态，报告准确阻塞项、保留证据和恢复位置，不以提示中的目录切换、会话交接或第二可写入口代替
 
 #### Scenario: 存在真实并行前沿
 
 - **WHEN** 多张无阻塞票据能够在独立工作树安全实施
-- **THEN** 主 Agent 根据依赖、冲突、资源和整合成本决定并行数量，并要求每个受委派票据使用独立调用和对应工作树，所有 Subagent（子代理）遵循 Pi 子代理策略
+- **THEN** 主 Agent 根据依赖、冲突、资源和整合成本决定并行数量，并要求每个写入目标使用独立调用和对应工作树，所有 Subagent（子代理）遵循 Pi 子代理策略
 
 #### Scenario: 直接可写 Implementer 派发
 
 - **WHEN** 主 Agent 通过通用 `Agent` 入口请求 `Implementer`、未知或空角色，或者请求任意 `resume`（恢复）调用
-- **THEN** 系统在启动子代理前阻止调用，并指向 `dispatch_implementer_in_worktree`；通用入口仍允许 Explorer（探索）、Reviewer（审查）和 Architect（架构）等只读角色
+- **THEN** 系统在启动子代理前阻止调用，并指向 `dispatch_implementer_in_worktree`；通用入口仍允许 Explorer（探索者）、Reviewer 和 Architect（架构师）等只读角色
 
 #### Scenario: 受控 Implementer 的资源契约
 
-- **WHEN** 主 Agent 通过 `dispatch_implementer_in_worktree` 为一张已发布票据启动可写 Implementer
+- **WHEN** 主 Agent 通过 `dispatch_implementer_in_worktree` 启动可写 Implementer
 - **THEN** 子代理运行在已验证的目标工作树，使用 Luna Max（最大思考）角色配置，加载 TDD（测试驱动开发）技能而不加载扩展资源，并在完成后正常释放生命周期；主工作区不产生本次派发的可见改动
 ### Requirement: 开发流程初始化职责边界
 
@@ -210,3 +229,26 @@ Pi Development Flow（开发流程）MUST use a fixed verification baseline for 
 - **WHEN** fast verification reports `status: skipped` or an empty `checked` value
 - **THEN** the flow MUST stop integration and require a fixed-baseline verification that selects at least one check
 - **THEN** the flow MUST NOT treat the result as passed evidence
+### Requirement: 门禁确认在执行和恢复期间保持有效
+
+Development Flow（开发流程）MUST 为每个正式门禁只请求一次 Gate Confirmation（门禁确认），并在该门禁确认后的执行和恢复期间持续保留该确认。确认后动作失败时，系统 MUST 从失败动作恢复，不得重新展示或请求同一门禁确认。
+
+#### Scenario: 未确认门禁首次请求确认
+
+- **WHEN** 当前正式门禁尚未得到用户确认且已准备好完整待确认内容
+- **THEN** 系统展示该门禁的固定输出并请求一次确认
+
+#### Scenario: 确认后动作失败
+
+- **WHEN** 用户已经确认当前门禁，但该门禁授权的后续动作失败或缺少前置条件
+- **THEN** 系统保留已有门禁确认，报告准确失败动作、证据和恢复位置，不重新展示或请求该门禁
+
+#### Scenario: 恢复已确认门禁
+
+- **WHEN** 缺失前置条件得到处理，或者流程恢复一个已经确认但尚未完成的门禁
+- **THEN** 系统从先前失败动作继续，并在该门禁完成后自动进入下一门禁
+
+#### Scenario: 恢复需要独立危险操作
+
+- **WHEN** 恢复需要原门禁确认未覆盖的独立危险操作
+- **THEN** 系统只请求该精确操作的授权，不把该授权包装成原门禁的再次确认
