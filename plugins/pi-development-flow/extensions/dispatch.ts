@@ -160,11 +160,8 @@ export function registerWorktreeDispatch(
   pi.registerTool({
     name: "dispatch_implementer_in_worktree",
     label: "Dispatch Implementer in Worktree",
-    description: "Dispatch one Implementer with caller-provided prompt and description in an existing non-primary Git worktree.",
-    promptSnippet: "Dispatch an Implementer with caller-provided instructions in a bound worktree",
-    promptGuidelines: [
-      "Provide a self-contained prompt and description; the tool preserves both values unchanged.",
-    ],
+    description: "Pass through caller-provided prompt and description unchanged; bind one Implementer to a verified existing non-primary Git worktree.",
+    promptSnippet: "Pass through prompt and description; bind an Implementer to a verified worktree",
     parameters: parameters as never,
     async execute(_toolCallId, params, signal) {
       const target = await verifyWorktree(

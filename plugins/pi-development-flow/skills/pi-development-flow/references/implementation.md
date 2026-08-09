@@ -48,7 +48,7 @@ Gate 2 uses **Single Writer（单写者）**. The main Agent（代理） constru
 
 The Approved Ticket is immutable throughout Gate 2. Do not write implementation evidence, progress, or revisions back into it. If an answer changes the requirement, scope, public seam, or observable acceptance, stop and return to Gate 1 — Requirements Confirmation（需求确认） instead of silently changing the ticket.
 
-For Gate 2, apply the global Gate Confirmation invariant: request one Gate Confirmation（门禁确认） for this gate. Keep that confirmation valid through Gate 2 execution and recovery; if a post-confirmation action fails, report the exact failed action and resume it after recovery without presenting or requesting Gate 2 again. Request a new confirmation only for a separate dangerous action not covered by the original confirmation.
+For Gate 2, follow the global Gate Confirmation invariant（全局门禁确认不变量） defined by the top-level Skill（技能）; do not restate or override it.
 
 ## Ordered Gate 2 states（门禁二有序状态）
 
@@ -77,10 +77,9 @@ READY is complete only when the target and branch have passed tool validation, t
 ### RETURNED — 已返回
 
 1. Every Implementer invocation first enters `RETURNED`, regardless of its result text. A returned report is not acceptance.
-2. The main Agent inspects actual Git and verification evidence in the bound worktree rather than trusting the report: the expected branch and worktree, the commit made after the fixed baseline, focused and limited diff, clean worktree, affected checks, fixed-baseline verification with `status: passed` and non-empty `checked`, required real smoke, and any required review result.
-3. Confirm that the main worktree and unrelated paths have no Git-visible change from the dispatch. Preserve dirty, uncommitted, unowned, or unknown content; do not repair it directly.
+2. The main Agent inspects actual Git and verification evidence in the bound worktree against the canonical `ACCEPTED` criteria below rather than trusting the report. Preserve dirty, uncommitted, unowned, or unknown content, including any main-worktree or unrelated-path change; do not repair it directly.
 
-RETURNED is complete only when this evidence inspection has produced an explicit decision: all evidence satisfies the Approved Ticket, evidence is repairable by another Implementer invocation, or safe ownership cannot be established.
+RETURNED is complete only when this evidence inspection has produced an explicit decision: all canonical `ACCEPTED` criteria are satisfied, evidence is repairable by another Implementer invocation, or safe ownership cannot be established.
 
 ### REWORK_REQUIRED — 需要返工
 
@@ -108,7 +107,7 @@ Only after these checks pass may the flow accept this ticket and move to the nex
 
 Enter `BLOCKED` when the target worktree or branch cannot be verified, the controlled entry is unavailable, a required Skill（技能） or formal verification entry cannot load, ownership or Git state is unknown, a requirement conflicts with the immutable ticket, or recovery would require an unapproved dangerous action. Do not start or resume a writable child, and do not make a direct main-Agent edit.
 
-Report the exact blocker, preserved evidence, and recovery point. A requirement or acceptance conflict returns to Gate 1 — Requirements Confirmation（需求确认）. A missing implementation prerequisite remains at Gate 2 — Implementation and Verification（实施和验证）. A post-confirmation action failure resumes from that action without repeating Gate 2 confirmation.
+Report the exact blocker, preserved evidence, and recovery point. A requirement or acceptance conflict returns to Gate 1 — Requirements Confirmation（需求确认）. A missing implementation prerequisite remains at Gate 2 — Implementation and Verification（实施和验证）. Recovery follows the global Gate Confirmation invariant defined by the top-level Skill（技能）.
 
 ## Verify proportionally（按风险验证）
 

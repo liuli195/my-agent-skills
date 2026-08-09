@@ -143,6 +143,10 @@ test("the three gates form the required stage state machine", async () => {
     skill,
     /Every Development Flow gate MUST request exactly one Gate Confirmation[^]*sticky through that gate's execution and recovery[^]*resume the failed action without presenting or requesting that gate again/is,
   );
+  assert.match(
+    skill,
+    /This top-level Skill[^]*owns gate order and the global Gate Confirmation invariant[^]*points to the authoritative stage documents/is,
+  );
 
   const ownership = [
     ["requirements.md", 1, "Requirements Confirmation"],
@@ -299,6 +303,13 @@ test("initialization and resume route through the three gates without MUST block
   assert.match(resume, /previous passed gate/i);
   assert.match(resume, /current gate.*next gate/i);
   assert.match(resume, /stage document.*dependencies/i);
+  assert.match(resume, /derive.*same gate.*already confirmed.*session.*evidence/is);
+  assert.match(resume, /if unconfirmed[^]*present.*confirmation.*once/is);
+  assert.match(
+    resume,
+    /if confirmed.*action failed[^]*resume that exact action without presenting or requesting the gate again/is,
+  );
+  assert.match(resume, /separate dangerous action.*precise authorization/is);
   assert.match(resume, /continue.*resume.*not.*authoriz/is);
 });
 
@@ -318,7 +329,23 @@ test("implementation uses a single writer and explicit return states", async () 
   assert.match(implementation, /Reviewer[^]*only reports/is);
   assert.match(
     implementation,
-    /For Gate 2,[^]*apply the global Gate Confirmation invariant[^]*resume it after recovery without presenting or requesting Gate 2 again/is,
+    /For Gate 2, follow the global Gate Confirmation invariant[^]*defined by the top-level Skill/i,
+  );
+  assert.doesNotMatch(
+    implementation,
+    /request one Gate Confirmation[^]*sticky through Gate 2 execution and recovery[^]*resume.*without presenting or requesting Gate 2 again/is,
+  );
+
+  const returned = section(
+    implementation,
+    /### RETURNED — 已返回/,
+    /\n### /,
+  );
+  assert.match(returned, /canonical `ACCEPTED` criteria below/i);
+  assert.match(returned, /explicit decision/i);
+  assert.doesNotMatch(
+    returned,
+    /expected branch[^]*fixed-baseline verification[^]*real main-path smoke/is,
   );
 });
 
@@ -389,15 +416,20 @@ test("the controlled dispatch schema and implementation stay transparent", async
   for (const name of ["prompt", "description", "worktree_path", "expected_branch"]) {
     assert.match(schemaSource, new RegExp(`${name}: Type\\.String`));
   }
-  assert.doesNotMatch(schemaSource, /ticket_path/);
+  assert.doesNotMatch(schemaSource, /ticket_path|self-contained/i);
+  assert.match(schemaSource, /Prompt passed to Implementer unchanged/i);
+  assert.match(schemaSource, /Description passed to Implementer unchanged/i);
 
   const source = await readFile(resolve(pluginRoot, "extensions", "dispatch.ts"), "utf8");
   assert.doesNotMatch(source, /ticket_path|verifyTicket|Implement exactly one published ticket/);
   assert.doesNotMatch(source, /completionTimeoutMs|Implementer completion timed out/);
+  assert.doesNotMatch(source, /self-contained/i);
   assert.match(source, /prompt: params\.prompt/);
+  assert.match(source, /description: params\.description/);
+  assert.match(source, /caller-provided prompt and description.*existing non-primary Git worktree/is);
 });
 
-test("worktree dispatch binds Implementer to one verified non-primary worktree", async () => {
+test("worktree dispatch completes normally and cancels an incomplete Implementer", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-development-flow-dispatch-"));
   const worktree = join(root, "feature");
   try {
@@ -422,6 +454,12 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
       },
     };
     let spawnRequest;
+    let spawnCount = 0;
+    let stopRequest;
+    let resolveSecondSpawn;
+    const secondSpawn = new Promise((resolve) => {
+      resolveSecondSpawn = resolve;
+    });
     events.on("subagents:rpc:ping", ({ requestId }) => {
       events.emit(`subagents:rpc:ping:reply:${requestId}`, {
         success: true,
@@ -430,15 +468,23 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
     });
     events.on("subagents:rpc:spawn", (request) => {
       spawnRequest = request;
+      const agentId = `agent-${++spawnCount}`;
       events.emit(`subagents:rpc:spawn:reply:${request.requestId}`, {
         success: true,
-        data: { id: "agent-1" },
+        data: { id: agentId },
       });
-      setImmediate(() => events.emit("subagents:completed", {
-        id: "agent-1",
-        status: "completed",
-        result: "implemented",
-      }));
+      if (spawnCount === 2) resolveSecondSpawn();
+      if (spawnCount === 1) {
+        setImmediate(() => events.emit("subagents:completed", {
+          id: agentId,
+          status: "completed",
+          result: "implemented",
+        }));
+      }
+    });
+    events.on("subagents:rpc:stop", (request) => {
+      stopRequest = request;
+      events.emit(`subagents:rpc:stop:reply:${request.requestId}`, { success: true });
     });
 
     const pi = {
@@ -485,6 +531,23 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
     assert.equal(result.details.branch, "feature");
     assert.equal(result.details.result, "implemented");
     assert.equal(Object.hasOwn(result.details, "ticket"), false);
+
+    const controller = new AbortController();
+    const pending = tool.execute(
+      "call-cancel",
+      { prompt, description, worktree_path: worktree, expected_branch: "feature" },
+      controller.signal,
+      undefined,
+      { cwd: root },
+    );
+    await secondSpawn;
+    await new Promise((resolve) => setImmediate(resolve));
+    controller.abort();
+    await assert.rejects(pending, /cancelled/i);
+    assert.equal(stopRequest?.agentId, "agent-2");
+    assert.equal(listeners.get("subagents:completed")?.size ?? 0, 0);
+    assert.equal(listeners.get("subagents:failed")?.size ?? 0, 0);
+
     await assert.rejects(
       tool.execute(
         "call-2",

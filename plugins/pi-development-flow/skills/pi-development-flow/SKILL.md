@@ -9,7 +9,7 @@ Orchestrate one GitHub-hosted repository change by composing the repository's ex
 
 ## Run（运行）
 
-This top-level Skill（技能） only routes stages, preserves gate order, and points to the authoritative stage documents. Do not infer implementation, dispatch, evidence, or recovery rules from this summary; follow [implementation](references/implementation.md) for all Gate 2 behavior.
+This top-level Skill（技能） routes stages, owns gate order and the global Gate Confirmation invariant（全局门禁确认不变量）, and points to the authoritative stage documents. Do not infer implementation, dispatch, evidence, or recovery rules from this summary; follow the corresponding stage document for gate-specific behavior.
 
 1. **Choose the entry.** For an existing `myspec/changes/<change>/`, read [resume](references/resume.md) before acting. For a new change, continue to requirements. If the user explicitly requests repository initialization or a formal entry reports a missing prerequisite, read [initialization](references/initialization.md).
 2. **Confirm requirements.** Read and complete [requirements](references/requirements.md): obtain and verify an Architect（架构师） analysis produced with `codebase-design`, use it as the evidence-backed basis for the overall design, and confirm that direction before discussing only unresolved details. This phase is complete when the approved domain terms, spec, vertical tickets, and test seams are committed on the change branch.
