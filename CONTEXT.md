@@ -37,8 +37,28 @@ A main Agent call to the generic `Agent` tool without the controlled worktree di
 _Avoid_: direct implementation
 
 **Controlled Implementer dispatch（受控 Implementer 派发）**:
-The verified route that starts one writable Implementer for one published ticket in one existing non-primary Git worktree.
-_Avoid_: informal delegation
+The narrow adapter that starts a writable Implementer in one verified existing non-primary Git worktree while preserving the caller's prompt and description unchanged.
+_Avoid_: ticket executor, workflow engine
+
+**Approved Ticket（已批准票据）**:
+The immutable implementation specification confirmed at Gate 1 and used by Implementer and Reviewer as the acceptance baseline.
+_Avoid_: progress log, mutable evidence record
+
+**Single Writer（单写者）**:
+The Gate 2 rule that every Git-visible implementation change is made by a worktree-bound Implementer while the main Agent orchestrates and evaluates evidence.
+_Avoid_: main Agent implementation, shared writer
+
+**Returned（已返回）**:
+The state reached when an Implementer invocation ends; it requires evidence inspection and is not ticket acceptance.
+_Avoid_: completed, accepted
+
+**Accepted（已验收）**:
+The state reached only after the actual commit, diff, worktree, verification, smoke, and required review satisfy the Approved Ticket.
+_Avoid_: subagent reported success
+
+**Gate Confirmation（门禁确认）**:
+The one-time user authorization for one Development Flow gate. It remains valid through execution and recovery; a failed post-confirmation action resumes from that action instead of reopening the gate.
+_Avoid_: repeat confirmation, recovery authorization
 
 **Resource isolation（资源隔离）**:
 The execution setting that controls which extensions and skills a subagent can load; it is distinct from Git worktree isolation.

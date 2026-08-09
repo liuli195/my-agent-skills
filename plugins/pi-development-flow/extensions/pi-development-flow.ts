@@ -6,8 +6,9 @@ import { registerDirectAgentGuard, registerWorktreeDispatch } from "./dispatch.t
 export default function register(pi: ExtensionAPI) {
   registerDirectAgentGuard(pi);
   registerWorktreeDispatch(pi, Type.Object({
-    worktree_path: Type.String({ description: "Absolute path to the existing target worktree" }),
-    expected_branch: Type.String({ description: "Exact branch expected in the target worktree" }),
-    ticket_path: Type.String({ description: "Absolute path to exactly one published ticket in the target worktree" }),
+    prompt: Type.String({ description: "Prompt passed to Implementer unchanged" }),
+    description: Type.String({ description: "Description passed to Implementer unchanged" }),
+    worktree_path: Type.String({ description: "Absolute path to the verified existing non-primary Git worktree" }),
+    expected_branch: Type.String({ description: "Exact branch expected in the verified worktree" }),
   }));
 }

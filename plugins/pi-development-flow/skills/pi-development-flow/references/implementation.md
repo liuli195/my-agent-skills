@@ -40,29 +40,74 @@ Without explicit confirmation, state that implementation has not started and rep
 
 #### Next Gate（下一步门禁）
 
-Gate 3 — Specification Archival and Delivery（规格存档并交付）. Gate 2 — Implementation and Verification（实施和验证） only permits implementation to start. Gate 3 is not reached until every ticket is integrated, behavior evidence is recorded, proportional and fast verification pass, and the bounded overall review has no unresolved blocker.
+Gate 3 — Specification Archival and Delivery（规格存档并交付）. Gate 2 — Implementation and Verification（实施和验证） is complete only after every ticket is accepted, behavior evidence is recorded outside the immutable ticket, proportional and fixed-baseline fast verification pass, and the bounded overall review has no unresolved blocker.
 
-## Shape the work（组织工作）
+## Gate 2 ownership（门禁二职责）
 
-Use one feature branch and one `.worktrees/<change>/` worktree when all tickets are sequential. Create an integration branch only when at least two unblocked tickets can safely run in parallel. In that case, give each parallel ticket one ASCII-named branch, one `.worktrees/<change>-<ticket>/` worktree, and one Implementer（实施者）. Run the repository worktree initializer in every new worktree.
+Gate 2 uses **Single Writer（单写者）**. The main Agent（代理） constructs the plan and prompts, dispatches work, reads actual evidence, runs formal verification, and decides whether the immutable Approved Ticket（已批准票据） is satisfied. The bound Implementer（实施者） is the only writer of Git-visible implementation changes, including implementation, tests, required integration edits, and review fixes. A Reviewer（审查者） only reports findings and never edits the worktree. The main Agent MUST NOT directly take over an Implementer change.
 
-The main Agent（代理） decides whether delegation helps and how many parallel tickets the repository and machine can support. Before the first delegation, apply `pi-subagent-policy`; a policy mismatch stops delegation. Use Explorer（探索者） for independent investigation, Implementer for confirmed changes, and Reviewer（审查者） for review. Verify every delegated result before accepting it.
+The Approved Ticket is immutable throughout Gate 2. Do not write implementation evidence, progress, or revisions back into it. If an answer changes the requirement, scope, public seam, or observable acceptance, stop and return to Gate 1 — Requirements Confirmation（需求确认） instead of silently changing the ticket.
 
-## Implement tickets（实施票据）
+For Gate 2, follow the global Gate Confirmation invariant（全局门禁确认不变量） defined by the top-level Skill（技能）; do not restate or override it.
 
-The main Agent MAY implement sequential tickets directly in the feature worktree; sequential work does not require delegation. Whether work is direct or delegated, the current ticket must be implemented, verified, and accepted before the next sequential ticket begins.
+## Ordered Gate 2 states（门禁二有序状态）
 
-When the main Agent delegates, each Implementer invocation MUST bind exactly one published ticket and MUST NOT combine multiple published tickets. If a ticket cannot be implemented and verified independently, return to ticket design instead of widening the invocation. Sequential delegated tickets may reuse the feature worktree, but each gets a separate invocation after the previous ticket is accepted.
+These are orchestration states, not a new runtime state machine. Follow them in order for each ticket. Every state has a checkable completion condition.
 
-For writable delegation into an existing feature or ticket worktree, use `dispatch_implementer_in_worktree` with the absolute worktree path, expected branch, and exactly one published ticket path from that worktree. The tool constructs the Implementer prompt; it does not accept a free-form multi-ticket prompt. The flow MUST NOT rely on a prompt to change directories. If tool-enforced binding is unavailable or validation fails, stop before delegation and provide a handoff from the target worktree.
+### READY — 准备
 
-- Apply `tdd` to feature, bug, and integration behavior: one confirmed public seam, one failing check, the minimum passing implementation, then the next slice.
-- Documentation, formatting, and behavior-neutral configuration use the smallest relevant check without a ceremonial red/green loop.
-- Each delegated Implementer commits focused, verified work on its assigned branch. The main Agent verifies the diff and evidence before integration.
-- Integrate only tickets whose blockers are complete. Conflicting core-file work runs sequentially rather than pretending to be parallel.
-- After integration passes its checks, the main Agent non-forcibly removes the integrated ticket worktree and branch without another user prompt. Preserve anything unmerged, dirty, failed, or of unknown origin.
+1. Confirm the Gate 2 checks above, the current ticket's blockers, its fixed verification baseline, and the target branch and worktree. Choose one feature worktree for sequential tickets; create separate worktrees only for genuinely unblocked parallel tickets.
+2. Before the first delegation, apply `pi-subagent-policy` and stop if the effective Implementer or Reviewer configuration does not match the policy. Use the controlled dispatch tool for every writable delegation.
+3. Build one self-contained prompt from the short checklist below. It MUST describe one clear write goal, and a ticket implementation goal MUST correspond to exactly one published ticket. Do not ask the child to discover missing requirements from another ticket.
 
-Record only behavior evidence in the ticket: checked acceptance criteria, red/green result, user-entry smoke result, required review conclusion, and unresolved risk. Derive commits, branches, worktrees, and PR state from Git（版本管理） rather than copying them into the ticket.
+#### Self-contained prompt checklist（自包含提示词清单）
+
+- the one observable result and the exact immutable acceptance criteria;
+- the relevant source locations and direct context;
+- the confirmed public seam and the red/green check, or the smallest relevant check for documentation-only work;
+- the fixed verification baseline and required `build-and-verify` command;
+- the real user-entry smoke and any affected failure, recovery, security, data-integrity, or migration path;
+- the expected Git end state: focused commit, limited diff, clean assigned worktree, and no main-worktree change;
+- stop conditions: requirement conflict, uncertain ownership, unverified worktree, missing evidence, or a finding that must return to requirements.
+
+4. Call `dispatch_implementer_in_worktree` with exactly the caller-built `prompt`, `description`, absolute `worktree_path`, and `expected_branch`. The tool verifies and binds the existing non-primary worktree, starts the fixed Implementer role, and preserves the prompt and description; it does not interpret tickets, build prompts, or decide acceptance. Never rely on a prompt to change directories. If tool-enforced binding is unavailable or validation fails, enter `BLOCKED`, report the exact blocker, preserved evidence, and recovery point, and do not provide a session handoff or offer a second writable route.
+
+READY is complete only when the target and branch have passed tool validation, the prompt and description are self-contained for one goal, and the Implementer has been dispatched through the controlled entry.
+
+### RETURNED — 已返回
+
+1. Every Implementer invocation first enters `RETURNED`, regardless of its result text. A returned report is not acceptance.
+2. The main Agent inspects actual Git and verification evidence in the bound worktree against the canonical `ACCEPTED` criteria below rather than trusting the report. Preserve dirty, uncommitted, unowned, or unknown content, including any main-worktree or unrelated-path change; do not repair it directly.
+
+RETURNED is complete only when this evidence inspection has produced an explicit decision: all canonical `ACCEPTED` criteria are satisfied, evidence is repairable by another Implementer invocation, or safe ownership cannot be established.
+
+### REWORK_REQUIRED — 需要返工
+
+Enter `REWORK_REQUIRED` when evidence is missing or failing, the diff is not focused, the worktree is dirty, the fixed-baseline verification is invalid, the required smoke fails, or a Reviewer reports a blocking finding.
+
+The main Agent constructs a **new self-contained prompt** containing only the missing evidence or one repair goal, the relevant source and review finding, the immutable acceptance, fixed baseline, checks, smoke, expected Git end state, and stop conditions. Dispatch that prompt and description through the same `dispatch_implementer_in_worktree` entry. The main Agent MUST NOT edit the implementation or take over the repair. MUST NOT rely on a prompt to change directories. After a repair returns, start again at `RETURNED`; after a Reviewer fix, run only the targeted review of the fix diff and affected behavior.
+
+REWORK_REQUIRED is complete only when the new dispatch has returned and its evidence is ready for another `RETURNED` decision.
+
+### ACCEPTED — 已验收
+
+Enter `ACCEPTED` only when the actual evidence, not the Implementer's report, proves all of the following against the immutable Approved Ticket:
+
+- the assigned worktree and exact branch are correct;
+- a focused commit exists after the fixed baseline and the limited diff contains only the ticket's goal;
+- the assigned worktree is clean and the main worktree has no dispatch change;
+- the agreed red/green or smallest relevant check passes;
+- fixed-baseline Build and Verify passes with `status: passed` and non-empty `checked`;
+- the real main-path smoke and any required high-risk paths pass;
+- the required bounded review has no unresolved blocking finding, with Reviewer output treated as report-only evidence.
+
+Only after these checks pass may the flow accept this ticket and move to the next unblocked ticket. Do not write the evidence into the ticket; cite the actual commit, diff, worktree, check, smoke, and review outputs in the flow result.
+
+### BLOCKED — 已阻塞
+
+Enter `BLOCKED` when the target worktree or branch cannot be verified, the controlled entry is unavailable, a required Skill（技能） or formal verification entry cannot load, ownership or Git state is unknown, a requirement conflicts with the immutable ticket, or recovery would require an unapproved dangerous action. Do not start or resume a writable child, and do not make a direct main-Agent edit.
+
+Report the exact blocker, preserved evidence, and recovery point. A requirement or acceptance conflict returns to Gate 1 — Requirements Confirmation（需求确认）. A missing implementation prerequisite remains at Gate 2 — Implementation and Verification（实施和验证）. Recovery follows the global Gate Confirmation invariant defined by the top-level Skill（技能）.
 
 ## Verify proportionally（按风险验证）
 
@@ -83,7 +128,7 @@ Use `code-review` for its fixed-point, Standards（规范）, and Spec（规格�
 
 Add only these orchestration constraints:
 
-1. Trigger ticket review only for public contracts, shared behavior that blocks later tickets, security, data, migration, release, machine state, hard-to-reproduce shared bugs, high integration conflict, or explicit user request.
+1. Trigger ticket review for this public dispatch contract and for security, data, migration, release, machine state, hard-to-reproduce shared bugs, high integration conflict, or explicit user request.
 2. Read direct callers and contracts only as context needed to judge the changed diff; context is not extra review scope.
 3. Keep small patches within their actual diff and necessary context rather than expanding through an unchanged dependency tree.
 4. After fixes, review only the fix diff and affected behavior. One full review and one targeted follow-up is the default; recurring basic failures return to requirements and tickets.
@@ -91,4 +136,4 @@ Add only these orchestration constraints:
 
 Documented rule violations, missing or wrong specified behavior, scope growth, security, data integrity, and missing main-path acceptance block integration. Treat code smells as judgement calls and fix them only when they create present maintenance risk. If a single ticket is the whole change, one final review satisfies both critical-ticket and overall review gates.
 
-Completion requires all tickets integrated, final proportional verification passing, and the bounded overall review free of unresolved blockers.
+Completion requires all tickets accepted, final proportional verification passing, and the bounded overall review free of unresolved blockers.
