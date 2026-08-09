@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -298,17 +298,21 @@ test("initialization and resume route through the three gates without MUST block
   assert.match(resume, /continue.*resume.*not.*authoriz/is);
 });
 
-test("implementation keeps direct work optional and delegated work ticket-scoped", async () => {
+test("implementation uses a single writer and explicit return states", async () => {
   const implementation = await readFile(
     resolve(skillRoot, "references", "implementation.md"),
     "utf8",
   );
 
-  assert.match(implementation, /MAY implement sequential tickets directly/i);
-  assert.match(implementation, /does not require delegation/i);
-  assert.match(implementation, /each Implementer invocation MUST bind exactly one published ticket/i);
-  assert.match(implementation, /MUST NOT combine multiple published tickets/i);
-  assert.match(implementation, /accepted before the next sequential ticket/i);
+  assert.match(implementation, /Single Writer（单写者）/);
+  assert.doesNotMatch(implementation, /MAY implement sequential tickets directly/i);
+  for (const state of ["READY", "RETURNED", "REWORK_REQUIRED", "ACCEPTED", "BLOCKED"]) {
+    assert.match(implementation, new RegExp(`\\b${state}\\b`));
+  }
+  assert.match(implementation, /RETURNED[^]*not[^]*ACCEPTED/is);
+  assert.match(implementation, /new[^]*self-contained prompt[^]*same[^]*dispatch_implementer_in_worktree/is);
+  assert.match(implementation, /Reviewer[^]*only reports/is);
+  assert.match(implementation, /one[^]*confirmation[^]*recovery[^]*(?:without|not)[^]*again/is);
 });
 
 test("implementation requires fixed-baseline fast verification evidence", async () => {
@@ -366,6 +370,23 @@ test("direct Agent dispatch blocks writable and unknown roles but allows read-on
   assert.equal(await call({ subagent_type: "Implementer" }, "other_tool"), undefined);
 });
 
+test("the controlled dispatch schema and implementation stay transparent", async () => {
+  const schemaSource = await readFile(
+    resolve(pluginRoot, "extensions", "pi-development-flow.ts"),
+    "utf8",
+  );
+  for (const name of ["prompt", "description", "worktree_path", "expected_branch"]) {
+    assert.match(schemaSource, new RegExp(`${name}: Type\\.String`));
+  }
+  assert.doesNotMatch(schemaSource, /ticket_path/);
+
+  const source = await readFile(resolve(pluginRoot, "extensions", "dispatch.ts"), "utf8");
+  assert.doesNotMatch(source, /ticket_path|verifyTicket|Implement exactly one published ticket/);
+  assert.doesNotMatch(source, /completionTimeoutMs|Implementer completion timed out/);
+  assert.match(source, /prompt: params\.prompt/);
+  assert.match(source, /description: params\.description/);
+});
+
 test("worktree dispatch binds Implementer to one verified non-primary worktree", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-development-flow-dispatch-"));
   const worktree = join(root, "feature");
@@ -375,19 +396,8 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
     await execFileAsync("git", ["-C", root, "config", "user.name", "Test User"]);
     await execFileAsync("git", ["-C", root, "commit", "--allow-empty", "-m", "initial"]);
     await execFileAsync("git", ["-C", root, "worktree", "add", "-b", "feature", worktree]);
-    const ticketPath = join(
-      worktree,
-      "myspec",
-      "changes",
-      "smoke",
-      "issues",
-      "01-marker.md",
-    );
-    await mkdir(dirname(ticketPath), { recursive: true });
-    await writeFile(ticketPath, "# 01 Marker\n", "utf8");
-    const invalidTicketPath = join(worktree, "myspec", "changes", "smoke", "spec.md");
-    await writeFile(invalidTicketPath, "# Not a ticket\n", "utf8");
-
+    const unregistered = join(root, "not-a-worktree");
+    await mkdir(unregistered);
     const listeners = new Map();
     const tools = new Map();
     const events = {
@@ -402,8 +412,6 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
       },
     };
     let spawnRequest;
-    let stopRequest;
-    let completeSpawn = true;
     events.on("subagents:rpc:ping", ({ requestId }) => {
       events.emit(`subagents:rpc:ping:reply:${requestId}`, {
         success: true,
@@ -416,17 +424,11 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
         success: true,
         data: { id: "agent-1" },
       });
-      if (completeSpawn) {
-        setImmediate(() => events.emit("subagents:completed", {
-          id: "agent-1",
-          status: "completed",
-          result: "implemented",
-        }));
-      }
-    });
-    events.on("subagents:rpc:stop", (request) => {
-      stopRequest = request;
-      events.emit(`subagents:rpc:stop:reply:${request.requestId}`, { success: true });
+      setImmediate(() => events.emit("subagents:completed", {
+        id: "agent-1",
+        status: "completed",
+        result: "implemented",
+      }));
     });
 
     const pi = {
@@ -445,29 +447,43 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
       resolve(pluginRoot, "extensions", "dispatch.ts"),
     ).href;
     const { registerWorktreeDispatch } = await import(extensionUrl);
-    registerWorktreeDispatch(pi, {}, 10);
+    registerWorktreeDispatch(pi, {});
 
     const tool = tools.get("dispatch_implementer_in_worktree");
     assert.ok(tool, "missing worktree dispatch tool");
+    const prompt = "Fix the observed behavior without changing unrelated files.";
+    const description = "Focused worktree-bound repair";
     const result = await tool.execute(
       "call-1",
-      { worktree_path: worktree, expected_branch: "feature", ticket_path: ticketPath },
+      {
+        prompt,
+        description,
+        worktree_path: worktree,
+        expected_branch: "feature",
+        ticket_path: join(worktree, "not-a-published-ticket.md"),
+      },
       undefined,
       undefined,
       { cwd: root },
     );
 
     assert.equal(spawnRequest.type, "Implementer");
+    assert.equal(spawnRequest.prompt, prompt);
+    assert.equal(spawnRequest.description, description);
     assert.equal(await realpath(spawnRequest.options.cwd), await realpath(worktree));
-    assert.equal(spawnRequest.options.isolated, false);
-    assert.match(spawnRequest.prompt, /myspec[\\/]changes[\\/]smoke[\\/]issues[\\/]01-marker\.md/);
-    assert.doesNotMatch(spawnRequest.prompt, /Implement ticket 03/);
+    assert.equal(Object.hasOwn(spawnRequest.options, "isolated"), false);
     assert.equal(result.details.branch, "feature");
     assert.equal(result.details.result, "implemented");
+    assert.equal(Object.hasOwn(result.details, "ticket"), false);
     await assert.rejects(
       tool.execute(
         "call-2",
-        { worktree_path: worktree, expected_branch: "wrong", ticket_path: ticketPath },
+        {
+          prompt,
+          description,
+          worktree_path: worktree,
+          expected_branch: "wrong",
+        },
         undefined,
         undefined,
         { cwd: root },
@@ -477,7 +493,12 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
     await assert.rejects(
       tool.execute(
         "call-3",
-        { worktree_path: root, expected_branch: "main", ticket_path: ticketPath },
+        {
+          prompt,
+          description,
+          worktree_path: root,
+          expected_branch: "main",
+        },
         undefined,
         undefined,
         { cwd: root },
@@ -486,31 +507,19 @@ test("worktree dispatch binds Implementer to one verified non-primary worktree",
     );
     await assert.rejects(
       tool.execute(
-        "call-invalid-ticket",
+        "call-4",
         {
-          worktree_path: worktree,
+          prompt,
+          description,
+          worktree_path: unregistered,
           expected_branch: "feature",
-          ticket_path: invalidTicketPath,
         },
         undefined,
         undefined,
         { cwd: root },
       ),
-      /published ticket/i,
+      /worktree root|registered Git worktree/i,
     );
-
-    completeSpawn = false;
-    await assert.rejects(
-      tool.execute(
-        "call-4",
-        { worktree_path: worktree, expected_branch: "feature", ticket_path: ticketPath },
-        undefined,
-        undefined,
-        { cwd: root },
-      ),
-      /timed out/i,
-    );
-    assert.equal(stopRequest.agentId, "agent-1");
     assert.equal(listeners.get("subagents:completed")?.size ?? 0, 0);
     assert.equal(listeners.get("subagents:failed")?.size ?? 0, 0);
   } finally {

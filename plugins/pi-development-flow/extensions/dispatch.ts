@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 
 import {
   isToolCallEventType,
@@ -71,20 +71,14 @@ function rpc<T>(
 function waitForCompletion(
   pi: ExtensionAPI,
   agentId: string,
-  signal: AbortSignal | undefined,
-  timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<Completion> {
   return new Promise((resolveCompletion, reject) => {
     const offCompleted = pi.events.on("subagents:completed", onCompleted);
     const offFailed = pi.events.on("subagents:failed", onFailed);
-    const timer = setTimeout(
-      () => fail(new Error("Implementer completion timed out"), true),
-      timeoutMs,
-    );
     const onAbort = () => fail(new Error("Subagent dispatch cancelled"), true);
 
     function cleanup() {
-      clearTimeout(timer);
       offCompleted();
       offFailed();
       signal?.removeEventListener("abort", onAbort);
@@ -159,29 +153,17 @@ async function verifyWorktree(
   return { worktree, branch };
 }
 
-async function verifyTicket(worktree: string, path: string) {
-  if (!isAbsolute(path)) throw new Error("ticket_path must be absolute");
-
-  const ticket = await realpath(path);
-  const ticketRelative = relative(worktree, ticket);
-  if (!/^myspec[\\/]changes[\\/][^\\/]+[\\/]issues[\\/][^\\/]+\.md$/i.test(ticketRelative)) {
-    throw new Error("ticket_path must name one published ticket in the target worktree");
-  }
-  return ticketRelative;
-}
-
 export function registerWorktreeDispatch(
   pi: ExtensionAPI,
   parameters: object,
-  completionTimeoutMs = 30 * 60_000,
 ) {
   pi.registerTool({
     name: "dispatch_implementer_in_worktree",
     label: "Dispatch Implementer in Worktree",
-    description: "Dispatch one Implementer for one published ticket in an existing non-primary Git worktree, wait for completion, and return its result.",
-    promptSnippet: "Dispatch one ticket to an Implementer bound to an existing worktree",
+    description: "Dispatch one Implementer with caller-provided prompt and description in an existing non-primary Git worktree.",
+    promptSnippet: "Dispatch an Implementer with caller-provided instructions in a bound worktree",
     promptGuidelines: [
-      "Use dispatch_implementer_in_worktree only after deciding to delegate one published ticket; never combine multiple tickets in its prompt.",
+      "Provide a self-contained prompt and description; the tool preserves both values unchanged.",
     ],
     parameters: parameters as never,
     async execute(_toolCallId, params, signal) {
@@ -191,7 +173,6 @@ export function registerWorktreeDispatch(
         params.expected_branch,
         signal,
       );
-      const ticket = await verifyTicket(target.worktree, params.ticket_path);
       const ping = await rpc<{ version: number }>(pi, "subagents:rpc:ping", {}, signal);
       if (ping.version !== 2) {
         throw new Error(`Unsupported pi-subagents RPC protocol ${ping.version}`);
@@ -202,18 +183,13 @@ export function registerWorktreeDispatch(
         "subagents:rpc:spawn",
         {
           type: "Implementer",
-          prompt: `Implement exactly one published ticket: \`${ticket}\`. Read that ticket, follow the repository rules, and do not implement any other ticket.`,
-          // Implementer config disables extensions and preloads only the confirmed TDD skill.
-          options: { cwd: target.worktree, isolated: false },
+          prompt: params.prompt,
+          description: params.description,
+          options: { cwd: target.worktree },
         },
         signal,
       );
-      const completion = await waitForCompletion(
-        pi,
-        spawned.id,
-        signal,
-        completionTimeoutMs,
-      );
+      const completion = await waitForCompletion(pi, spawned.id, signal);
 
       return {
         content: [{ type: "text", text: completion.result || "Implementer completed without a text result." }],
@@ -221,7 +197,6 @@ export function registerWorktreeDispatch(
           agentId: spawned.id,
           worktree: target.worktree,
           branch: target.branch,
-          ticket,
           status: completion.status,
           result: completion.result,
         },

@@ -9,10 +9,12 @@ Orchestrate one GitHub-hosted repository change by composing the repository's ex
 
 ## Run（运行）
 
+This top-level Skill（技能） only routes stages, preserves gate order, and points to the authoritative stage documents. Do not infer implementation, dispatch, evidence, or recovery rules from this summary; follow [implementation](references/implementation.md) for all Gate 2 behavior.
+
 1. **Choose the entry.** For an existing `myspec/changes/<change>/`, read [resume](references/resume.md) before acting. For a new change, continue to requirements. If the user explicitly requests repository initialization or a formal entry reports a missing prerequisite, read [initialization](references/initialization.md).
 2. **Confirm requirements.** Read and complete [requirements](references/requirements.md): obtain and verify an Architect（架构师） analysis produced with `codebase-design`, use it as the evidence-backed basis for the overall design, and confirm that direction before discussing only unresolved details. This phase is complete when the approved domain terms, spec, vertical tickets, and test seams are committed on the change branch.
 3. **Request implementation and verification authorization.** Present the concrete implementation plan as a table covering ticket order and parallel groups, branch and worktree layout, executor, red/green checks, smoke checks, review gates, integration points, cleanup timing, risks, and stop conditions. Wait for explicit authorization; creating the change is not authorization to implement it.
-4. **Implement and verify.** After authorization, read and complete [implementation](references/implementation.md). This phase is complete when every ticket is integrated, its behavior evidence is recorded, the risk-matched final verification and fast verification pass, and the bounded overall review has no blocking finding.
+4. **Implement and verify.** After authorization, read and complete [implementation](references/implementation.md). Do not continue to delivery until that stage document's completion conditions are satisfied.
 5. **Archive the specification and deliver.** Read and complete [delivery](references/delivery.md), then run its Completion Check（完成检查）. The Development Flow（开发流程） is complete only when that check reports final completion. Local installation, client synchronization, marketplace refresh, and Release Flow（发布流程） remain outside this flow unless the user explicitly requests the exact action.
 
 ## Output Contract（输出契约）
