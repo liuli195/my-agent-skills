@@ -35,8 +35,7 @@ const contract = [
   "Independently review the delegated code or documentation scope against the provided requirements and repository rules; report actionable findings with severity and evidence.",
   "Investigate architecture, architectural decision-making, or difficult bug diagnosis in read-only mode.",
   "Only an exact match of every field permits selecting the corresponding host-native role.",
-  "If any field differs, cannot be proven, or the host has no verified adapter, stop before delegation.",
-  "Claude and Codex have no adapter in this package; stop before delegation.",
+  "If any field differs, cannot be proven, or the host has no verified host Adapter（适配器）, stop before delegation.",
   "The main agent must verify the subagent's actual result before relying on it or declaring the work complete.",
 ];
 
@@ -77,6 +76,8 @@ test("Pi discovers the independent subagent-policy skill package and its fixed c
 
     const content = await readFile(skillPath, "utf8");
     for (const text of contract) assert.match(content, new RegExp(escapeRegExp(text)));
+    assert.match(content, /## Route[^]*host has no verified host Adapter（适配器）[^]*stop before delegation/is);
+    assert.doesNotMatch(content, /\bClaude\b|\bCodex\b/);
   } finally {
     await rm(agentDir, { recursive: true, force: true });
   }

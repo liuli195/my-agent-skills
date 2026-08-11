@@ -5,7 +5,7 @@ description: Orchestrate one development change in the same Git worktree and non
 
 # Development Flow（开发流程）
 
-This is a pure Skill（技能） route. It depends on `subagent-policy` and composes the repository's existing Skills（技能） instead of copying their procedures.
+This is a pure Skill（技能） route. It has fixed dependencies on `subagent-policy`, `codebase-design`, `grill-with-docs`, `domain-modeling`, `to-spec`, `to-tickets`, `tdd`, `build-and-verify`, `code-review`, MySpec, and PR Flow（拉取请求流程）. It composes the repository's existing Skills（技能） instead of copying their procedures.
 
 ## Run（运行）
 
@@ -21,9 +21,10 @@ This is a pure Skill（技能） route. It depends on `subagent-policy` and comp
 - A confirmation is sticky through the confirmed action and its failure recovery; resume the failed action without asking for that confirmation again.
 - During development and verification, keep the invocation's Git worktree and feature branch unchanged. Do not create or switch a worktree or branch.
 - The Implementer is the only writer and writable calls are strictly serial. The main Agent（代理） orchestrates and accepts actual evidence; it does not write Git-visible implementation files. Read-only investigation may run in parallel only while the repository is stable.
-- Functional, bug, and integration behavior uses `tdd` red→green. Verification uses `build-and-verify`, requires `status: passed` and non-empty `checked`, and includes a real Pi entry smoke. Review is bounded by the fixed baseline and the actual diff.
+- Gate 1 binds each change to its target product, highest real user entry, observable success result, and risk-required failure or recovery paths; Red→Green, behavior acceptance, and the final smoke use that same entry.
+- Functional, bug, and integration behavior uses `tdd` red→green. Verification uses `build-and-verify`, requires `status: passed` and non-empty `checked`, and includes the Gate 1-bound real user entry smoke. Review is bounded by the fixed baseline and the actual diff.
 - Final delivery may use the complete PR Flow（拉取请求流程）; only that delivery phase may switch branches and perform safe cleanup.
-- Claude and Codex may discover this Skill（技能）, but without the host adapter supplied by `subagent-policy` the flow stops explicitly before delegation.
+- Without a host Adapter（适配器）validated by `subagent-policy`, the flow stops explicitly before delegation.
 
 ## Output（输出）
 

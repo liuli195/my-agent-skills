@@ -62,6 +62,10 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     );
 
     const content = await readFile(resolve(skillRoot, "SKILL.md"), "utf8");
+    const referenceContent = await Promise.all(
+      references.map((name) => readFile(resolve(skillRoot, "references", name), "utf8")),
+    );
+    const devFlowText = [content, ...referenceContent].join("\n");
     assert.match(content, /`subagent-policy`/);
     assert.match(content, /Gate 1 — Start Development（开始开发）/);
     assert.match(content, /Gate 2 — Specification and Delivery（规格与交付）/);
@@ -72,6 +76,18 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     assert.match(content, /### 核心摘要/);
     assert.match(content, /### 确认后进入的下一步/);
     assert.doesNotMatch(content, /Gate 3|Gate 4/);
+
+    assert.match(
+      referenceContent[0],
+      /Gate 1[^]*target product[^]*highest real user entry[^]*observable success result[^]*failure or recovery paths/is,
+    );
+    assert.match(
+      referenceContent[1],
+      /Red→Green[^]*final smoke[^]*behavior acceptance[^]*same entry/is,
+    );
+    assert.doesNotMatch(devFlowText, /real Pi entry smoke/i);
+    assert.doesNotMatch(devFlowText, /Claude and Codex/i);
+    assert.doesNotMatch(devFlowText, /\b(?:Pi|Claude|Codex)\b/i);
 
     for (const name of references) {
       await access(resolve(skillRoot, "references", name));

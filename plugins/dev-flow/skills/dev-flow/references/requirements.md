@@ -18,6 +18,6 @@ Load this reference only for the requirements route and `Gate 1 — Start Develo
 
 ## Gate 1 completion（门禁一完成标准）
 
-The result is ready only when the domain terms, observable scope, public test seam, vertical tickets, fixed baseline, worktree, branch, and blockers are explicit and supported by evidence. Present `Gate 1 — Start Development（开始开发）` with the two output blocks from the parent Skill（技能） and request exactly `开始开发`.
+The result is ready only when the domain terms, observable scope, target product, highest real user entry, observable success result, risk-required failure or recovery paths, public test seam, vertical tickets, fixed baseline, worktree, branch, and blockers are explicit and supported by evidence. Present `Gate 1 — Start Development（开始开发）` with the two output blocks from the parent Skill（技能） and request exactly `开始开发`.
 
 After confirmation, follow the parent Skill（技能）'s sticky-confirmation recovery rule; a changed requirement or seam is a blocker that returns to this route, not permission to silently broaden the ticket.

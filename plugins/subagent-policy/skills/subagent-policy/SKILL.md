@@ -40,7 +40,7 @@ For the Pi Implementer mapping, also prove `extensions: false` and `skills: tdd`
 
 Only an exact match of every field permits selecting the corresponding host-native role. When the check passes, select that role without temporary model, thinking, capability, or prompt overrides.
 
-If any field differs, cannot be proven, or the host has no verified adapter, stop before delegation. Claude and Codex have no adapter in this package; stop before delegation. Do not silently select a default, generic, unregistered, or fallback role.
+If any field differs, cannot be proven, or the host has no verified host Adapter（适配器）, stop before delegation. Do not silently select a default, generic, unregistered, or fallback role.
 
 ## Accept（验收）
 
