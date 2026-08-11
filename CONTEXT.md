@@ -8,6 +8,14 @@ This context defines the roles used to delegate work while developing and mainta
 A named responsibility selected for one delegated task after the main Agent（代理）has decided to delegate.
 _Avoid_: Profile, mode
 
+**Subagent Policy（子代理策略）**:
+The host-neutral Skill（技能） contract that validates fixed Subagent roles（子代理角色）, models, reasoning levels, capabilities, and prompts before selecting a host-native delegation route.
+_Avoid_: Pi Subagent Policy, Agent installer, runtime dispatcher
+
+**Policy-validated Agent dispatch（策略校验 Agent 派发）**:
+A host-native Subagent（子代理） call made in the current worktree only after the Subagent Policy（子代理策略） validates the selected role and host configuration.
+_Avoid_: Direct Agent dispatch, controlled worktree dispatch
+
 **Explorer（探索者）**:
 The Subagent role（子代理角色）that investigates existing information without changing it and returns evidence.
 _Avoid_: Scout, researcher
