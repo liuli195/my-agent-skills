@@ -4,9 +4,10 @@ Load this reference only for the requirements route and `Gate 1 — Start Develo
 
 ## Preconditions（前置条件）
 
-- Prove the current repository root, registered worktree, named branch, and clean starting state with read-only Git inspection. The branch must be a non-`main` feature branch and the worktree must remain the same for development and verification. A failed precondition stops before any write, writable dispatch, or formal confirmation.
-- Before the first delegation, read and use `subagent-policy`. Validate its effective configuration once per session: role, model, thinking level, capabilities, prompt mode, prompt, and host adapter must match. A difference or an unprovable field stops the flow before delegation. Pi uses the policy-validated native Agent mapping; Claude and Codex have no adapter in this delivery, so stop explicitly after discovery and before delegation.
-- Keep this route read-only until the first confirmation. Do not create or switch a worktree or branch, and do not publish a requirement change while the confirmation is pending.
+- Prove the current repository root, registered worktree, named non-`main` feature branch, and clean starting state with read-only Git inspection; failure stops before any write, writable dispatch, or formal confirmation. Keep this worktree and branch unchanged through development and verification under the parent Global invariants（全局不变量）.
+- If any Skill（技能）required by the current stage is missing or unreadable, stop.
+- Before the first delegation, apply `subagent-policy`; its role, host, and adapter validation are authoritative and are not duplicated here.
+- Keep this route read-only until the first confirmation; do not create or switch a worktree or branch or publish a requirement change while confirmation is pending.
 
 ## Route（路由）
 
@@ -19,4 +20,4 @@ Load this reference only for the requirements route and `Gate 1 — Start Develo
 
 The result is ready only when the domain terms, observable scope, public test seam, vertical tickets, fixed baseline, worktree, branch, and blockers are explicit and supported by evidence. Present `Gate 1 — Start Development（开始开发）` with the two output blocks from the parent Skill（技能） and request exactly `开始开发`.
 
-Once confirmed, the confirmation is sticky through requirement recovery and permits the confirmed implementation route. If the action fails, preserve the evidence and resume that action without asking for `开始开发` again. A changed requirement or seam is a requirements blocker, not permission to silently broaden the ticket.
+After confirmation, follow the parent Skill（技能）'s sticky-confirmation recovery rule; a changed requirement or seam is a blocker that returns to this route, not permission to silently broaden the ticket.

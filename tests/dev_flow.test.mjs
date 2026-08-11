@@ -77,9 +77,6 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
       await access(resolve(skillRoot, "references", name));
       assert.match(content, new RegExp(`references/${escapeRegExp(name)}`));
     }
-    assert.match(content, /requirements\.md/);
-    assert.match(content, /implementation\.md/);
-    assert.match(content, /delivery\.md/);
   } finally {
     await rm(agentDir, { recursive: true, force: true });
   }
