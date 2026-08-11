@@ -27,8 +27,6 @@ A missing value, an unprovable value, a project override, a model-resolution fai
 | Reviewer | Independently reviews delegated code or documentation against requirements and repository rules. | `openai-codex/gpt-5.6-sol` | `medium` | Read, search, and read-only shell commands |
 | Architect | Read-only investigator for architecture, architectural decision-making, and difficult bug diagnosis. | `openai-codex/gpt-5.6-sol` | `max` | Read, search, and read-only shell commands |
 
-The Pi mapping is fixed: Explorer=`openai-codex/gpt-5.6-luna`/`low`; Implementer=`openai-codex/gpt-5.6-luna`/`max`; Reviewer=`openai-codex/gpt-5.6-sol`/`medium`; Architect=`openai-codex/gpt-5.6-sol`/`max`.
-
 Every role uses `prompt_mode: append` and its matching prompt:
 
 - **Explorer:** Investigate the delegated question in read-only mode and return concise findings with evidence, source locations, and uncertainties.
