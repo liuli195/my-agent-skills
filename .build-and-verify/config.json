@@ -79,9 +79,11 @@
           "tests/pi_codex_usage_status.test.mjs",
           "tests/pi_cache_diagnostics.test.mjs",
           "tests/pi_subagent_policy.test.mjs",
-          "tests/pi_development_flow.test.mjs"
+          "tests/subagent_policy.test.mjs",
+          "tests/pi_development_flow.test.mjs",
+          "tests/dev_flow.test.mjs"
         ],
-        "command": "python -m pytest -q -p no:cacheprovider tests/test_local_plugin_build_checks.py tests/test_pi_codex_usage_status.py && node tests/pi_codex_usage_status.test.mjs && node tests/pi_cache_diagnostics.test.mjs && node --test tests/pi_subagent_policy.test.mjs tests/pi_development_flow.test.mjs",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_local_plugin_build_checks.py tests/test_pi_codex_usage_status.py && node tests/pi_codex_usage_status.test.mjs && node tests/pi_cache_diagnostics.test.mjs && node --test tests/pi_subagent_policy.test.mjs tests/subagent_policy.test.mjs tests/pi_development_flow.test.mjs tests/dev_flow.test.mjs",
         "inputs": [
           ".agents",
           ".claude-plugin",
@@ -96,7 +98,9 @@
           "tests/pi_codex_usage_status.test.mjs",
           "tests/pi_cache_diagnostics.test.mjs",
           "tests/pi_subagent_policy.test.mjs",
-          "tests/pi_development_flow.test.mjs"
+          "tests/subagent_policy.test.mjs",
+          "tests/pi_development_flow.test.mjs",
+          "tests/dev_flow.test.mjs"
         ],
         "checkParallel": false,
         "pytestXdistWorkers": 4
