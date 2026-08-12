@@ -13,7 +13,7 @@ description: "PR Flow（拉取请求流程）tweak（小改）路径，用于非
 
 只进入 PR Flow（拉取请求流程）tweak（小改）路径，不修改 MySpec（自有规格）任务。`--reason` 只说明为什么使用 tweak（小改）路径，不写入 PR body（拉取请求正文）。
 
-默认保留当前 worktree（工作树）。`--remove-worktree`（删除工作树参数）只在合并和安全 cleanup（清理）完成后生效；从待删除目录内运行时，按输出的外部重试命令完成删除，且永不强制删除。
+默认保留当前 worktree（工作树）。`--remove-worktree`（删除工作树参数）只在合并和安全 cleanup（清理）完成后生效；若当前 active Agent session（活跃代理会话）仍在待删除目标工作树内，cleanup（清理）会将其保留在目标分支最新提交的 detached HEAD（分离头），并以 `cleanup_complete`（清理完成）和 active-session retention（活跃会话保留）作为成功终态，不留下 `removeWorktreePending`（工作树删除待处理）或外部 `nextCommand`（下一命令）。从目标工作树外运行时按现有规则删除登记并核验实体目录，且永不强制删除。
 
 ## Pi 入口
 

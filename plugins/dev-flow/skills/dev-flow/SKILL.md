@@ -23,7 +23,7 @@ This is a pure Skill（技能） route. It has fixed dependencies on `subagent-p
 - The Implementer is the only writer and writable calls are strictly serial. The main Agent（代理） orchestrates and accepts actual evidence; it does not write Git-visible implementation files. Read-only investigation may run in parallel only while the repository is stable.
 - Gate 1 binds each change to its target product, highest real user entry, observable success result, and risk-required failure or recovery paths; Red→Green, behavior acceptance, and the final smoke use that same entry.
 - Functional, bug, and integration behavior uses `tdd` red→green. Verification uses `build-and-verify`, requires `status: passed` and non-empty `checked`, and includes the Gate 1-bound real user entry smoke. Review is bounded by the fixed baseline and the actual diff.
-- Final delivery may use the complete PR Flow（拉取请求流程）; only that delivery phase may switch branches and perform safe cleanup.
+- Final delivery may use the complete PR Flow（拉取请求流程）; only that delivery phase may switch branches and perform safe cleanup. When `--remove-worktree`（删除工作树参数） runs from the active target worktree, cleanup（清理） retains it at the latest target-branch commit in detached HEAD（分离头） as successful active-session retention（活跃会话保留）, without `removeWorktreePending`（工作树删除待处理） or external `nextCommand`（下一命令）.
 - Without a host Adapter（适配器）validated by `subagent-policy`, the flow stops explicitly before delegation.
 
 ## Output（输出）
@@ -36,4 +36,4 @@ State the current gate, the observable result, the evidence or blocker, and the 
 
 ### 确认后进入的下一步
 
-State the single next route. A confirmed gate resumes its failed action after recovery; Completion Check only reports final completion or the precise residue.
+State the single next route. A confirmed gate resumes its failed action after recovery; Completion Check reports final completion, including an explicitly evidenced active-session worktree retention, or the precise residue.

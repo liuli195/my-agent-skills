@@ -6540,9 +6540,407 @@ def test_cleanup_returns_to_available_local_base_end_to_end(tmp_path: Path, monk
     assert git(project, "branch", "--show-current") == "main"
     assert git(project, "rev-parse", "HEAD") == remote_base
     assert git(project, "rev-parse", "main") == remote_base
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    status = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
     assert status["details"]["currentBranch"] == "main"
     assert status["details"]["baseCheckout"] == {"status": "checked_out"}
+
+
+def test_cleanup_retains_active_worktree_detached_after_branch_cleanup(tmp_path: Path, monkeypatch) -> None:
+    project, remote = init_cleanup_project(tmp_path)
+    target = tmp_path / "target"
+    git(project, "checkout", "main")
+    git(project, "checkout", "-b", "controller")
+    git(project, "worktree", "add", str(target), "feature/example")
+    remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
+
+    with contextlib.chdir(target):
+        result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
+    assert target.exists()
+    assert git(target, "branch", "--show-current") == ""
+    assert git(target, "rev-parse", "HEAD") == remote_base
+    worktrees = load_pr_flow_module().parse_worktrees(git(target, "worktree", "list", "--porcelain", "-z"))
+    target_record = next(item for item in worktrees if Path(item["path"]).resolve() == target.resolve())
+    assert target_record["detached"] is True
+    assert subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", "refs/heads/feature/example"],
+        cwd=target,
+        check=False,
+    ).returncode == 1
+    assert subprocess.run(
+        ["git", "--git-dir", str(remote), "show-ref", "--verify", "--quiet", "refs/heads/feature/example"],
+        check=False,
+    ).returncode == 1
+    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "cleanup_complete"
+    assert status["details"]["worktreeRetention"] == {"status": "retained", "reason": "active_session"}
+    assert "removeWorktreePending" not in status["details"]
+    assert "nextCommand" not in status["details"]
+
+
+@pytest.mark.parametrize(
+    "cwd_relative",
+    [None, Path(".pr-flow")],
+    ids=["root", "subdirectory"],
+)
+def test_cleanup_retains_active_worktree_when_project_is_directory_alias(
+    tmp_path: Path, monkeypatch, cwd_relative: Path | None
+) -> None:
+    project, remote = init_cleanup_project(tmp_path)
+    git(project, "checkout", "main")
+    git(project, "checkout", "-b", "controller")
+    target = tmp_path / "target"
+    git(project, "worktree", "add", str(target), "feature/example")
+    alias = tmp_path / "target-alias"
+    if os.name == "nt":
+        powershell = shutil.which("powershell")
+        if not powershell:
+            pytest.skip("PowerShell is required to create a junction")
+        junction = subprocess.run(
+            [
+                powershell,
+                "-NoProfile",
+                "-Command",
+                f'New-Item -ItemType Junction -Path "{alias}" -Target "{target}"',
+            ],
+            check=False,
+            capture_output=True,
+        )
+        if junction.returncode != 0:
+            pytest.skip(
+                "Windows junction creation is unavailable: "
+                + junction.stderr.decode(errors="replace")
+            )
+    else:
+        try:
+            alias.symlink_to(target, target_is_directory=True)
+        except OSError as exc:
+            pytest.skip(f"directory symlink creation is unavailable: {exc}")
+
+    active_cwd = target if cwd_relative is None else target / cwd_relative
+    with contextlib.chdir(active_cwd):
+        result = run_cleanup_with_real_git(alias, monkeypatch, remove_worktree=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
+    assert target.is_dir()
+    assert alias.is_dir()
+    assert git(target, "branch", "--show-current") == ""
+    assert git(target, "rev-parse", "HEAD") == git_bare(remote, "rev-parse", "refs/heads/main")
+    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["worktreeRetention"] == {"status": "retained", "reason": "active_session"}
+
+
+def test_cleanup_retains_active_worktree_when_cwd_uses_directory_alias(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project, remote = init_cleanup_project(tmp_path)
+    git(project, "checkout", "main")
+    git(project, "checkout", "-b", "controller")
+    target = tmp_path / "target"
+    git(project, "worktree", "add", str(target), "feature/example")
+    alias = tmp_path / "target-alias"
+    if os.name == "nt":
+        powershell = shutil.which("powershell")
+        if not powershell:
+            pytest.skip("PowerShell is required to create a junction")
+        junction = subprocess.run(
+            [
+                powershell,
+                "-NoProfile",
+                "-Command",
+                f'New-Item -ItemType Junction -Path "{alias}" -Target "{target}"',
+            ],
+            check=False,
+            capture_output=True,
+        )
+        if junction.returncode != 0:
+            pytest.skip(
+                "Windows junction creation is unavailable: "
+                + junction.stderr.decode(errors="replace")
+            )
+    else:
+        try:
+            alias.symlink_to(target, target_is_directory=True)
+        except OSError as exc:
+            pytest.skip(f"directory symlink creation is unavailable: {exc}")
+
+    with contextlib.chdir(alias):
+        module = load_pr_flow_module()
+        cwd_key = module.lexical_path(Path.cwd())
+        alias_key = module.lexical_path(alias)
+        try:
+            cwd_uses_alias = os.path.commonpath([cwd_key, alias_key]) == alias_key
+        except ValueError:
+            cwd_uses_alias = False
+        if not cwd_uses_alias:
+            pytest.skip("platform resolves directory links in cwd")
+        result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
+    assert target.is_dir()
+    assert alias.is_dir()
+    assert git(target, "branch", "--show-current") == ""
+    assert git(target, "rev-parse", "HEAD") == git_bare(remote, "rev-parse", "refs/heads/main")
+    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["worktreeRetention"] == {"status": "retained", "reason": "active_session"}
+
+
+def test_cleanup_retains_active_worktree_with_ignored_cwd_after_branch_cleanup(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project, remote = init_cleanup_project(tmp_path)
+    (project / ".gitignore").write_text(".local/\n", encoding="utf-8")
+    git(project, "add", ".gitignore")
+    git(project, "commit", "-m", "ignore local worktree state")
+    git(project, "push", "origin", "feature/example")
+
+    integrator = tmp_path / "integrator"
+    clone_result = subprocess.run(
+        ["git", "clone", str(remote), str(integrator)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
+    git(integrator, "config", "user.email", "test@example.com")
+    git(integrator, "config", "user.name", "Test User")
+    git(integrator, "fetch", "origin", "feature/example")
+    git(integrator, "checkout", "-B", "main", "origin/main")
+    git(integrator, "merge", "--ff-only", "origin/feature/example")
+    git(integrator, "push", "origin", "main")
+
+    git(project, "checkout", "main")
+    git(project, "checkout", "-b", "controller")
+    target = tmp_path / "target"
+    git(project, "worktree", "add", str(target), "feature/example")
+    active_cwd = target / ".local" / "spec-work"
+    active_cwd.mkdir(parents=True)
+    ignored = subprocess.run(
+        ["git", "check-ignore", "--quiet", "--", ".local/spec-work"],
+        cwd=target,
+        check=False,
+    )
+    assert ignored.returncode == 0
+
+    with contextlib.chdir(active_cwd):
+        result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
+    assert target.is_dir()
+    assert active_cwd.is_dir()
+    assert git(target, "branch", "--show-current") == ""
+    assert git(target, "rev-parse", "HEAD") == git_bare(remote, "rev-parse", "refs/heads/main")
+    assert subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", "refs/heads/feature/example"],
+        cwd=target,
+        check=False,
+    ).returncode == 1
+    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode != 0
+    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "cleanup_complete"
+    assert status["details"]["worktreeRetention"] == {"status": "retained", "reason": "active_session"}
+
+
+def test_cleanup_retains_active_worktree_when_active_cwd_is_inside_ignored_directory_link(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project, remote = init_cleanup_project(tmp_path)
+    (project / ".gitignore").write_text(".local/\n", encoding="utf-8")
+    git(project, "add", ".gitignore")
+    git(project, "commit", "-m", "ignore linked runtime state")
+    git(project, "push", "origin", "feature/example")
+
+    integrator = tmp_path / "integrator"
+    clone_result = subprocess.run(
+        ["git", "clone", str(remote), str(integrator)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
+    git(integrator, "config", "user.email", "test@example.com")
+    git(integrator, "config", "user.name", "Test User")
+    git(integrator, "fetch", "origin", "feature/example")
+    git(integrator, "checkout", "-B", "main", "origin/main")
+    git(integrator, "merge", "--ff-only", "origin/feature/example")
+    git(integrator, "push", "origin", "main")
+
+    git(project, "checkout", "main")
+    git(project, "checkout", "-b", "controller")
+    target = tmp_path / "target"
+    git(project, "worktree", "add", str(target), "feature/example")
+
+    shared = tmp_path / "shared-runtime"
+    (shared / "nested").mkdir(parents=True)
+    sentinel = shared / "sentinel.txt"
+    sentinel.write_text("keep\n", encoding="utf-8")
+    link = target / ".local" / "spec-work"
+    link.parent.mkdir()
+    if os.name == "nt":
+        powershell = shutil.which("powershell")
+        if not powershell:
+            pytest.skip("PowerShell is required to create a junction")
+        junction = subprocess.run(
+            [
+                powershell,
+                "-NoProfile",
+                "-Command",
+                f'New-Item -ItemType Junction -Path "{link}" -Target "{shared}"',
+            ],
+            check=False,
+            capture_output=True,
+        )
+        if junction.returncode != 0:
+            pytest.skip(
+                "Windows junction creation is unavailable: "
+                + junction.stderr.decode(errors="replace")
+            )
+    else:
+        try:
+            link.symlink_to(shared, target_is_directory=True)
+        except OSError as exc:
+            pytest.skip(f"directory symlink creation is unavailable: {exc}")
+
+    active_cwd = link / "nested"
+    ignored = subprocess.run(
+        ["git", "check-ignore", "--quiet", "--", ".local/spec-work"],
+        cwd=target,
+        check=False,
+    )
+    assert ignored.returncode == 0
+
+    with contextlib.chdir(active_cwd):
+        cwd_key = os.path.normcase(os.path.abspath(os.fspath(Path.cwd())))
+        target_key = os.path.normcase(os.path.abspath(os.fspath(target)))
+        try:
+            logical_cwd_is_inside_target = os.path.commonpath([cwd_key, target_key]) == target_key
+        except ValueError:
+            logical_cwd_is_inside_target = False
+        if not logical_cwd_is_inside_target:
+            pytest.skip("platform resolves directory links in cwd and cannot preserve the logical path")
+        result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
+    assert target.is_dir()
+    assert active_cwd.is_dir()
+    assert sentinel.read_text(encoding="utf-8") == "keep\n"
+    assert git(target, "branch", "--show-current") == ""
+    assert git(target, "rev-parse", "HEAD") == git_bare(remote, "rev-parse", "refs/heads/main")
+    worktrees = load_pr_flow_module().parse_worktrees(git(target, "worktree", "list", "--porcelain", "-z"))
+    target_record = next(item for item in worktrees if Path(item["path"]).resolve() == target.resolve())
+    assert target_record["detached"] is True
+    assert subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", "refs/heads/feature/example"],
+        cwd=target,
+        check=False,
+    ).returncode == 1
+    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode != 0
+
+
+def test_cleanup_stops_before_detaching_when_active_cwd_is_untracked_and_not_ignored(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project, remote = init_cleanup_project(tmp_path)
+    integrator = tmp_path / "integrator"
+    clone_result = subprocess.run(
+        ["git", "clone", str(remote), str(integrator)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
+    git(integrator, "config", "user.email", "test@example.com")
+    git(integrator, "config", "user.name", "Test User")
+    git(integrator, "fetch", "origin", "feature/example")
+    git(integrator, "checkout", "-B", "main", "origin/main")
+    git(integrator, "merge", "--ff-only", "origin/feature/example")
+    git(integrator, "push", "origin", "main")
+
+    git(project, "checkout", "main")
+    git(project, "checkout", "-b", "controller")
+    target = tmp_path / "target"
+    git(project, "worktree", "add", str(target), "feature/example")
+    active_cwd = target / "untracked" / "nested"
+    active_cwd.mkdir(parents=True)
+    not_ignored = subprocess.run(
+        ["git", "check-ignore", "--quiet", "--", "untracked/nested"],
+        cwd=target,
+        check=False,
+    )
+    assert not_ignored.returncode != 0
+
+    with contextlib.chdir(active_cwd):
+        result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "cleanup_complete" not in result.stdout
+    assert target.is_dir()
+    assert active_cwd.is_dir()
+    assert git(target, "branch", "--show-current") == "feature/example"
+    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode == 0
+    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "active_cwd_would_disappear"
+
+
+def test_cleanup_stops_before_detaching_when_active_cwd_disappears_on_base_checkout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project, remote = init_cleanup_project(tmp_path)
+    source_only = project / "source-only" / "nested"
+    source_only.mkdir(parents=True)
+    (source_only / "sentinel.txt").write_text("source only\n", encoding="utf-8")
+    git(project, "add", "source-only")
+    git(project, "commit", "-m", "source-only directory")
+    source_head = git(project, "rev-parse", "HEAD")
+    git(project, "push", "origin", "feature/example")
+
+    integrator = tmp_path / "integrator"
+    clone_result = subprocess.run(
+        ["git", "clone", str(remote), str(integrator)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
+    git(integrator, "config", "user.email", "test@example.com")
+    git(integrator, "config", "user.name", "Test User")
+    git(integrator, "fetch", "origin", "feature/example")
+    git(integrator, "checkout", "-B", "main", "origin/main")
+    git(integrator, "merge", "--ff-only", "origin/feature/example")
+    shutil.rmtree(integrator / "source-only")
+    git(integrator, "add", "-u", "source-only")
+    git(integrator, "commit", "-m", "remove source-only directory from base")
+    git(integrator, "push", "origin", "main")
+    assert not (integrator / "source-only").exists()
+
+    git(project, "checkout", "main")
+    git(project, "checkout", "-b", "controller")
+    target = tmp_path / "target"
+    git(project, "worktree", "add", str(target), "feature/example")
+    active_cwd = target / "source-only" / "nested"
+    assert active_cwd.is_dir()
+    assert not (target / "source-only").exists() or source_head == git(target, "rev-parse", "HEAD")
+
+    with contextlib.chdir(active_cwd):
+        result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "cleanup_complete" not in result.stdout
+    assert target.is_dir()
+    assert active_cwd.is_dir()
+    assert git(target, "branch", "--show-current") == "feature/example"
+    assert git(target, "rev-parse", "HEAD") == source_head
+    assert git_bare(remote, "show-ref", "--verify", "refs/heads/feature/example")
+    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "EXCEPTION_REQUIRED"
+    assert status["details"]["reason"] == "active_cwd_would_disappear"
+    assert status["details"]["nextCommand"]
 
 
 def test_cleanup_keeps_detached_when_synced_base_is_checked_out_elsewhere(tmp_path: Path, monkeypatch) -> None:

@@ -528,6 +528,27 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_pr_flow_cli.py::test_cleanup_returns_to_available_local_base_end_to_end': (
         'covers pr-flow real git cleanup synchronization of a stale local base; function=test_cleanup_returns_to_available_local_base_end_to_end'
     ),
+    'tests/test_pr_flow_cli.py::test_cleanup_retains_active_worktree_detached_after_branch_cleanup': (
+        'covers pr-flow cleanup retaining the active target worktree detached after deleting source branches; function=test_cleanup_retains_active_worktree_detached_after_branch_cleanup'
+    ),
+    'tests/test_pr_flow_cli.py::test_cleanup_retains_active_worktree_when_project_is_directory_alias': (
+        'covers pr-flow cleanup retaining an active worktree when project uses a directory alias; function=test_cleanup_retains_active_worktree_when_project_is_directory_alias'
+    ),
+    'tests/test_pr_flow_cli.py::test_cleanup_retains_active_worktree_when_cwd_uses_directory_alias': (
+        'covers pr-flow cleanup retaining an active worktree when cwd uses a directory alias; function=test_cleanup_retains_active_worktree_when_cwd_uses_directory_alias'
+    ),
+    'tests/test_pr_flow_cli.py::test_cleanup_retains_active_worktree_with_ignored_cwd_after_branch_cleanup': (
+        'covers pr-flow cleanup preserving an ignored active cwd while retaining the worktree; function=test_cleanup_retains_active_worktree_with_ignored_cwd_after_branch_cleanup'
+    ),
+    'tests/test_pr_flow_cli.py::test_cleanup_retains_active_worktree_when_active_cwd_is_inside_ignored_directory_link': (
+        'covers pr-flow cleanup retaining an active worktree from a real directory link without deleting shared target contents; function=test_cleanup_retains_active_worktree_when_active_cwd_is_inside_ignored_directory_link'
+    ),
+    'tests/test_pr_flow_cli.py::test_cleanup_stops_before_detaching_when_active_cwd_is_untracked_and_not_ignored': (
+        'covers pr-flow cleanup refusing an untracked non-ignored active cwd before target checkout; function=test_cleanup_stops_before_detaching_when_active_cwd_is_untracked_and_not_ignored'
+    ),
+    'tests/test_pr_flow_cli.py::test_cleanup_stops_before_detaching_when_active_cwd_disappears_on_base_checkout': (
+        'covers pr-flow cleanup preserving an active source-only cwd before target checkout; function=test_cleanup_stops_before_detaching_when_active_cwd_disappears_on_base_checkout'
+    ),
     'tests/test_pr_flow_cli.py::test_cleanup_keeps_detached_when_synced_base_is_checked_out_elsewhere': (
         'covers pr-flow real git cleanup fallback for a synchronized occupied local base; function=test_cleanup_keeps_detached_when_synced_base_is_checked_out_elsewhere'
     ),
