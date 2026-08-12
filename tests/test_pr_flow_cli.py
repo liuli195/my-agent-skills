@@ -1901,6 +1901,8 @@ def run_complete_in_process(
     required_exit_codes: tuple[int, ...] | None = None,
     required_responses: list[tuple[str, str, int]] | None = None,
     wait_config: dict[str, int] | None = None,
+    fixes: tuple[str, ...] = (),
+    remove_worktree: bool = False,
 ) -> tuple[Path, subprocess.CompletedProcess[str]]:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
@@ -1966,7 +1968,10 @@ def run_complete_in_process(
     allow_cleanup(git_stub, project)
     monkeypatch.setattr(module, "gh", gh_stub)
     monkeypatch.setattr(module, "git", git_stub)
-    result = invoke_pr_flow(complete_args(project), module=module)
+    args = complete_args(project, fixes=fixes)
+    if remove_worktree:
+        args.append("--remove-worktree")
+    result = invoke_pr_flow(args, module=module)
     return project, result
 
 
@@ -4932,6 +4937,81 @@ def test_complete_rejects_when_head_moved_before_merge(tmp_path: Path, monkeypat
     assert status["status"] == "EXCEPTION_REQUIRED"
     assert status["command"] == "complete"
     assert status["details"]["reason"] == "head_moved"
+
+
+@pytest.mark.parametrize(
+    ("pr_stdout", "required_buckets", "git_responses", "expected_status", "expected_reason"),
+    [
+        (
+            pr_view_json(
+                checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                review_decision="APPROVED",
+                head_oid="0" * 40,
+                body=expected_pr_body(fixes=("310", "311")),
+            ),
+            ("pass",),
+            [
+                (["branch", "--show-current"], "feature/example\n", 0),
+                (["rev-parse", "HEAD"], "b" * 40 + "\n", 0),
+                (["merge-base", "--is-ancestor", "a" * 40, "0" * 40], "", 0),
+            ],
+            "EXCEPTION_REQUIRED",
+            "head_moved",
+        ),
+        (
+            pr_view_json(
+                checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
+                review_decision="APPROVED",
+                head_oid="b" * 40,
+                body=expected_pr_body(fixes=("310", "311")),
+            ),
+            ("pending",),
+            None,
+            "DISPATCH_REQUIRED",
+            "checks_pending",
+        ),
+        (
+            pr_view_json(
+                checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}],
+                review_decision="APPROVED",
+                head_oid="b" * 40,
+                body=expected_pr_body(fixes=("310", "311")),
+            ),
+            ("fail",),
+            None,
+            "REPLY_OR_FIX_REQUIRED",
+            "checks_or_review_blocking",
+        ),
+    ],
+)
+def test_complete_stop_preserves_recovery_command_arguments(
+    tmp_path: Path,
+    monkeypatch,
+    pr_stdout: str,
+    required_buckets: tuple[str, ...],
+    git_responses: list[tuple[list[str], str, int]] | None,
+    expected_status: str,
+    expected_reason: str,
+) -> None:
+    project, result = run_complete_in_process(
+        tmp_path,
+        monkeypatch,
+        pr_stdout=pr_stdout,
+        git_responses=git_responses,
+        required_buckets=required_buckets,
+        fixes=("310", "311"),
+        remove_worktree=True,
+    )
+
+    assert result.returncode == 1
+    assert f"status: {expected_status}" in result.stdout
+    status = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == expected_reason
+    next_command = status["details"].get("nextCommand")
+    assert isinstance(next_command, str)
+    assert "--remove-worktree" in next_command
+    assert next_command.count("--fixes") == 2
+    assert next_command.index("--fixes 310") < next_command.index("--fixes 311")
 
 
 def test_complete_rejects_when_base_moves_after_checks(tmp_path: Path, monkeypatch) -> None:

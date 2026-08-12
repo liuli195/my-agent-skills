@@ -922,6 +922,8 @@ def pr_body_next_command(command: str, project: Path, args: argparse.Namespace) 
     command_args.extend(["--scope", str(getattr(args, "scope", "") or "列出本次 PR 的影响范围")])
     for issue in getattr(args, "fixes", []) or []:
         command_args.extend(["--fixes", str(issue)])
+    if getattr(args, "remove_worktree", False):
+        command_args.append("--remove-worktree")
     return script_command(command_args)
 
 
@@ -2444,7 +2446,13 @@ def run_lifecycle(
             if recovery_stop is not None:
                 return stop_from_state(project, command, recovery_stop)
         else:
-            return stop(project, command, error_status(exc.reason), exc.reason, exc.details)
+            return stop(
+                project,
+                command,
+                error_status(exc.reason),
+                exc.reason,
+                add_default_next_command(exc.details, next_command),
+            )
 
     print("status: merge_complete")
     print(f"pr: {pr_number_for_command(pr)}")
