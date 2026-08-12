@@ -436,16 +436,30 @@ hotfix（热修复）MUST 使用独立工作树运行状态，并在验证与授
 - **THEN** hotfix（热修复） MUST NOT push（推送）
 - **THEN** stop-state details（停止状态详情） MUST require sync（同步） and full re-verification（重新完整验证）
 ### Requirement: PR Flow explicitly removes safe linked worktrees
-PR Flow（拉取请求流程）MUST 默认保留工作树，并只在用户显式传入 `--remove-worktree`（删除工作树参数）且安全条件全部满足时删除关联工作树；当调用会话位于目标工作树内时，PR Flow（拉取请求流程）MUST 安全保留该工作树并完成源分支清理。目标由 Orca（工作区管理器）登记时，PR Flow（拉取请求流程）MUST 优先使用 Orca（工作区管理器）删除；未登记或 Orca（工作区管理器）不可用时，PR Flow（拉取请求流程）MUST 使用非强制 Git（版本管理）删除。
+PR Flow（拉取请求流程）MUST 默认保留工作树，并只在用户显式传入 `--remove-worktree`（删除工作树参数）且安全条件全部满足时删除关联非主工作树。工作树身份 MUST 来自 Git（版本管理）工作树登记，而不是固定分支名、路径名或宿主；主工作树 MUST 永不被删除，并在安全收尾完成后检出实际目标分支的最新提交。目标由 Orca（工作区管理器）登记时，PR Flow（拉取请求流程）MUST 优先使用 Orca（工作区管理器）删除；未登记或 Orca（工作区管理器）不可用时，PR Flow（拉取请求流程）MUST 使用非强制 Git（版本管理）删除。
 
 #### Scenario: Cleanup keeps the linked worktree by default
 - **WHEN** cleanup（清理）、complete（完整流程）或 tweak（小改）完成且未传入 `--remove-worktree`
 - **THEN** 当前工作树 MUST remain at the latest remote base detached HEAD（最新远端目标提交的分离头）
 
+#### Scenario: Primary worktree remains on the actual target branch
+- **WHEN** cleanup（清理）目标是 Git（版本管理）工作树登记中的主工作树
+- **AND** 安全收尾可以完成
+- **THEN** PR Flow（拉取请求流程） MUST NOT remove the primary worktree（不得删除主工作树）
+- **THEN** 主工作树 MUST check out the actual PR target branch at its latest remote commit（检出实际拉取请求目标分支的最新远端提交）
+- **THEN** 工作树身份判定 MUST NOT depend on `main`（主分支名）、路径名或宿主
+
+#### Scenario: Primary worktree target branch is occupied
+- **WHEN** cleanup（清理）目标是主工作树
+- **AND** 实际目标分支被其他已登记工作树检出
+- **THEN** PR Flow（拉取请求流程） MUST stop before changing Git refs, HEAD, branches, or commits（在改变引用、当前提交、分支或提交前停止）
+- **THEN** stop-state details（停止状态详情） MUST identify `base_branch_checked_out` and the occupying worktree（标明基础分支已检出及占用工作树）
+- **THEN** 此行为 MUST be independent of `--remove-worktree`（不依赖删除工作树参数）
+
 #### Scenario: External caller removes a safe linked worktree
 - **WHEN** 调用方从其他工作树通过 `--project`（项目路径参数）指定已完成流程的关联工作树
 - **AND** 传入 `--remove-worktree`
-- **AND** 目标是 `git worktree list`（工作树清单）中登记的非 main worktree（非主工作树）且工作区干净
+- **AND** 目标是 `git worktree list`（工作树清单）中登记的关联非主工作树且工作区干净
 - **AND** 目标未由 Orca（工作区管理器）登记，或 Orca（工作区管理器）命令不可用、查询失败或返回无效工作树列表
 - **THEN** PR Flow（拉取请求流程） MUST remove the linked worktree without `--force`（不强制删除）
 - **THEN** PR Flow（拉取请求流程） MUST reread the worktree list（工作树清单） and confirm removal（确认删除）
@@ -453,7 +467,7 @@ PR Flow（拉取请求流程）MUST 默认保留工作树，并只在用户显�
 #### Scenario: External caller removes an Orca-managed linked worktree
 - **WHEN** 调用方从其他工作树通过 `--project`（项目路径参数）指定已完成流程的关联工作树
 - **AND** 传入 `--remove-worktree`
-- **AND** 目标是 `git worktree list`（工作树清单）中登记的非 main worktree（非主工作树）且工作区干净
+- **AND** 目标是 `git worktree list`（工作树清单）中登记的关联非主工作树且工作区干净
 - **AND** Orca（工作区管理器）工作树列表按规范化绝对路径匹配目标
 - **THEN** PR Flow（拉取请求流程） MUST remove the linked worktree through Orca（工作区管理器）using the matched worktree identifier（使用匹配的工作树标识）
 - **THEN** PR Flow（拉取请求流程） MUST NOT pass `--force`（强制参数） to Orca（工作区管理器）
@@ -467,8 +481,8 @@ PR Flow（拉取请求流程）MUST 默认保留工作树，并只在用户显�
 - **THEN** stop-state details（停止状态详情） MUST preserve the Orca（工作区管理器）command failure diagnostics（命令失败诊断）
 - **THEN** PR Flow（拉取请求流程） MUST NOT invoke `git worktree remove`（Git 工作树删除）
 
-#### Scenario: Active caller retains the worktree after branch cleanup
-- **WHEN** `--remove-worktree`（删除工作树参数）从待删除工作树内部运行
+#### Scenario: Active caller retains a linked non-primary worktree
+- **WHEN** `--remove-worktree`（删除工作树参数）从待删除的已登记关联非主工作树内部运行
 - **AND** 调用会话当前目录在目标提交中仍存在，或该目录由 Git（版本管理）忽略
 - **THEN** PR Flow（拉取请求流程） MUST complete safe branch cleanup（完成安全分支清理）without removing the current worktree（不删除当前工作树）
 - **THEN** 当前工作树 MUST remain registered and physically present at the latest remote base detached HEAD（保持登记和实体存在，并位于最新远端目标提交的分离头）
@@ -476,13 +490,21 @@ PR Flow（拉取请求流程）MUST 默认保留工作树，并只在用户显�
 - **THEN** completion status（完成状态） MUST identify active-session retention（活跃会话保留）without `removeWorktreePending`（工作树删除待处理）or an external `nextCommand`（外部下一命令）
 
 #### Scenario: Active caller directory would disappear
-- **WHEN** `--remove-worktree`（删除工作树参数）从待删除工作树内部运行
-- **AND** 调用会话当前目录在目标提交中不是目录且未被 Git（版本管理）忽略
+- **WHEN** cleanup（清理）需要切换任一工作树的提交
+- **AND** 调用会话当前目录位于该工作树内
+- **AND** 当前目录在目标提交中不是目录且未被该工作树的 Git（版本管理）规则忽略
 - **THEN** PR Flow（拉取请求流程） MUST stop before switching commits or deleting source branches（在切换提交或删除源分支前停止）
 - **THEN** stop-state details（停止状态详情） MUST identify that the active directory would disappear（标明活跃目录将消失）and provide a recovery action（恢复动作）
 
+#### Scenario: Linked target safely advances an occupied target branch
+- **WHEN** cleanup（清理）目标是关联非主工作树
+- **AND** 实际目标分支由另一个安全、干净且未执行 Git（版本管理）操作的工作树检出
+- **AND** 该工作树可以仅快进到最新远端目标提交且不会使活跃当前目录消失
+- **THEN** PR Flow（拉取请求流程） MAY fast-forward that occupied target worktree（可以仅快进该占用目标分支的工作树）
+- **THEN** PR Flow（拉取请求流程） MUST verify its branch, commit, clean state, operation state, and active directory safety before switching（切换前验证分支、提交、干净状态、操作状态和活跃目录安全）
+
 #### Scenario: Unsafe worktree removal is refused
-- **WHEN** 删除目标是 main worktree（主工作树）或工作区不干净
+- **WHEN** 删除目标是主工作树或工作区不干净
 - **THEN** PR Flow（拉取请求流程） MUST refuse removal（拒绝删除）
 - **THEN** PR Flow（拉取请求流程） MUST NOT use `--force`（强制参数）
 
