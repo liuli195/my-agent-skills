@@ -739,3 +739,23 @@ PR Flow（拉取请求流程）MUST use ordinary synchronous merge（普通同�
 - **THEN** PR Flow（拉取请求流程）MUST output `DISPATCH_REQUIRED`（需要外部进展）with `reason: ruleset_merge_blocking`
 - **THEN** stop-state details MUST preserve the first and final platform errors、retry count and a recovery action or command
 - **THEN** PR Flow（拉取请求流程）MUST NOT report merge completion or run cleanup（清理）
+### Requirement: PR Flow recovery commands preserve delivery intent
+
+PR Flow（拉取请求流程）MUST 在可恢复停止状态的 `nextCommand`（下一命令）中保留原始生命周期调用的交付意图，使恢复执行与用户已授权的操作一致。
+
+#### Scenario: Recovery preserves explicit worktree removal
+
+- **WHEN** `complete`（收尾）或 `tweak`（小改）调用包含 `--remove-worktree`（删除工作树参数）并进入可恢复停止状态
+- **THEN** `nextCommand`（下一命令） MUST include `--remove-worktree`
+- **THEN** 执行该恢复命令并成功完成生命周期后 MUST 继续执行已授权的工作树清理
+
+#### Scenario: Recovery preserves repeated closing references
+
+- **WHEN** 生命周期调用包含多个重复的 `--fixes`（修复问题编号）参数并进入可恢复停止状态
+- **THEN** `nextCommand`（下一命令） MUST preserve every `--fixes` value in its original relative order
+
+#### Scenario: Commit movement remains recoverable
+
+- **WHEN** PR（拉取请求）源提交在检查观测期间或合并前发生变化
+- **THEN** PR Flow（拉取请求流程） MUST stop with `reason: head_moved`
+- **THEN** stop-state details（停止状态详情） MUST include a `nextCommand`（下一命令） that preserves the original delivery intent
