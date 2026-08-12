@@ -1644,6 +1644,12 @@ def normalized_path(path: str | Path) -> str:
     return os.path.normcase(resolved) if os.name == "nt" else resolved
 
 
+def lexical_path(path: str | Path) -> str:
+    return os.path.normcase(
+        os.path.normpath(os.path.abspath(os.path.expanduser(os.fspath(path))))
+    )
+
+
 def find_orca_worktree_id(project: Path, target: Path) -> str | None:
     result = orca(project, "worktree", "ps", "--json")
     if result.returncode != 0:
@@ -2806,6 +2812,62 @@ def run_cleanup(args: argparse.Namespace) -> int:
             return stop(project, args.command, "EXCEPTION_REQUIRED", "current_branch_mismatch", add_cleanup_recovery(details, str(args.pr)))
 
         project_key = normalized_path(project)
+        remove_requested = getattr(args, "remove_worktree", False)
+        active_cwd = Path.cwd()
+        active_cwd_key = lexical_path(active_cwd)
+        candidate_roots: list[str] = []
+        for candidate in (args.project, project):
+            candidate_key = lexical_path(candidate)
+            if candidate_key not in candidate_roots:
+                candidate_roots.append(candidate_key)
+        active_cwd_root = None
+        active_cwd_relative_key = active_cwd_key
+        for candidate in candidate_roots:
+            try:
+                if os.path.commonpath([active_cwd_key, candidate]) == candidate:
+                    active_cwd_root = candidate
+                    break
+            except ValueError:
+                continue
+        if active_cwd_root is None:
+            resolved_cwd_key = normalized_path(active_cwd)
+            try:
+                if os.path.commonpath([resolved_cwd_key, project_key]) == project_key:
+                    active_cwd_root = project_key
+                    active_cwd_relative_key = resolved_cwd_key
+            except ValueError:
+                pass
+        retain_active_worktree = remove_requested and active_cwd_root is not None
+        if retain_active_worktree:
+            active_cwd_relative = Path(os.path.relpath(active_cwd_relative_key, active_cwd_root))
+            if active_cwd_relative != Path("."):
+                target_cwd = git(project, "cat-file", "-t", f"{base_oid}:{active_cwd_relative.as_posix()}")
+                target_cwd_ignored = git(project, "check-ignore", "--quiet", "--", active_cwd_relative.as_posix())
+                if (
+                    (target_cwd.returncode != 0 or target_cwd.stdout.strip() != "tree")
+                    and target_cwd_ignored.returncode != 0
+                ):
+                    details.update(
+                        {
+                            "reason": "active_cwd_would_disappear",
+                            "activeCwd": str(active_cwd),
+                            "activeCwdRelativePath": active_cwd_relative.as_posix(),
+                            "targetCommit": base_oid,
+                            "targetCwdEntryType": target_cwd.stdout.strip() or None,
+                            "nextAction": (
+                                "Change the invoking session cwd outside the target worktree, "
+                                "then rerun cleanup with --remove-worktree."
+                            ),
+                            "nextCommand": command_next_command("cleanup", project, args),
+                        }
+                    )
+                    return stop(
+                        project,
+                        args.command,
+                        "EXCEPTION_REQUIRED",
+                        "active_cwd_would_disappear",
+                        add_cleanup_recovery(details, str(args.pr)),
+                    )
         worktrees = list_worktrees(project)
         occupied = [
             item["path"]
@@ -2897,13 +2959,15 @@ def run_cleanup(args: argparse.Namespace) -> int:
                 require_git_success(occupied_project, "git_sync_occupied_base_failed", "merge", "--ff-only", base_oid)
                 local_base_oid = base_oid
 
-            if current_branch == head_ref:
+            if current_branch == head_ref or retain_active_worktree:
                 require_git_success(project, "git_detach_base_failed", "checkout", "--detach", base_oid)
             if local_base_oid != base_oid:
                 require_git_success(project, "git_sync_base_failed", "branch", "-f", base_ref, base_oid)
 
             base_checkout: dict[str, Any]
-            if occupied_base:
+            if retain_active_worktree:
+                base_checkout = {"status": "skipped", "reason": "active_session"}
+            elif occupied_base:
                 base_checkout = {
                     "status": "skipped",
                     "reason": "base_branch_occupied",
@@ -2948,7 +3012,7 @@ def run_cleanup(args: argparse.Namespace) -> int:
             ).stdout.strip()
             final_head_oid = head_oid(project)
             final_branch = require_git_success(project, "git_current_branch_failed", "branch", "--show-current").stdout.strip()
-            expected_branch = "" if occupied_base else base_ref
+            expected_branch = "" if occupied_base or retain_active_worktree else base_ref
             if final_base_oid != base_oid or final_head_oid != base_oid or final_branch != expected_branch:
                 raise PrFlowError(
                     "git_sync_base_mismatch",
@@ -2998,11 +3062,9 @@ def run_cleanup(args: argparse.Namespace) -> int:
         details["localBaseCommit"] = final_base_oid
         details["baseCheckout"] = base_checkout
         removed = False
-        if getattr(args, "remove_worktree", False):
-            cwd_key = normalized_path(Path.cwd())
-            if cwd_key == project_key or cwd_key.startswith(project_key + os.sep):
-                details["nextCommand"] = command_next_command("cleanup", project, args)
-                details["removeWorktreePending"] = True
+        if remove_requested:
+            if retain_active_worktree:
+                details["worktreeRetention"] = {"status": "retained", "reason": "active_session"}
             else:
                 remove_worktree(project, project)
                 details["worktreeRemoved"] = True
@@ -3012,6 +3074,8 @@ def run_cleanup(args: argparse.Namespace) -> int:
         print("status: cleanup_complete")
         print(f"head: {base_oid}")
         print(f"deleted: {head_ref}")
+        if retain_active_worktree:
+            print("worktree: retained (active session)")
         return 0
     except FileNotFoundError:
         details = {"reason": "missing_config", "path": ".pr-flow/config.yaml"}
