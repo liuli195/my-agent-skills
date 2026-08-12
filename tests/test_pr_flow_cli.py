@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1843,6 +1844,15 @@ def write_complete_pr_flow_config(
     )
 
 
+def split_next_command(command: str) -> list[str]:
+    parts = shlex.split(command, posix=os.name != "nt")
+    if os.name == "nt":
+        parts = [part.strip('"') for part in parts]
+    assert len(parts) >= 3
+    assert Path(parts[1]).resolve() == SCRIPT.resolve()
+    return parts[2:]
+
+
 def complete_args(project: Path, *, fixes: tuple[str, ...] = ()) -> list[str]:
     args = [
         "complete",
@@ -1903,13 +1913,15 @@ def run_complete_in_process(
     wait_config: dict[str, int] | None = None,
     fixes: tuple[str, ...] = (),
     remove_worktree: bool = False,
+    project: Path | None = None,
+    command_args: list[str] | None = None,
 ) -> tuple[Path, subprocess.CompletedProcess[str]]:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
-    project.mkdir()
+    project = project or tmp_path / "project"
+    project.mkdir(exist_ok=True)
     write_complete_pr_flow_config(project, review_mode=review_mode, merge_strategy=merge_strategy)
     if wait_config is not None:
         config_path = project / ".pr-flow" / "config.yaml"
@@ -1968,8 +1980,8 @@ def run_complete_in_process(
     allow_cleanup(git_stub, project)
     monkeypatch.setattr(module, "gh", gh_stub)
     monkeypatch.setattr(module, "git", git_stub)
-    args = complete_args(project, fixes=fixes)
-    if remove_worktree:
+    args = list(command_args) if command_args is not None else complete_args(project, fixes=fixes)
+    if command_args is None and remove_worktree:
         args.append("--remove-worktree")
     result = invoke_pr_flow(args, module=module)
     return project, result
@@ -5012,6 +5024,36 @@ def test_complete_stop_preserves_recovery_command_arguments(
     assert "--remove-worktree" in next_command
     assert next_command.count("--fixes") == 2
     assert next_command.index("--fixes 310") < next_command.index("--fixes 311")
+
+    replay_args = split_next_command(next_command)
+    module = load_pr_flow_module()
+    parsed = module.build_parser().parse_args(replay_args)
+    assert parsed.command == "complete"
+    assert parsed.fixes == ["310", "311"]
+    assert parsed.remove_worktree is True
+
+    if expected_reason == "checks_pending":
+        cleanup_calls: list[argparse.Namespace] = []
+        monkeypatch.setattr(module, "run_cleanup", lambda args: cleanup_calls.append(args) or 0)
+        replay_project, replay_result = run_complete_in_process(
+            tmp_path,
+            monkeypatch,
+            project=project,
+            command_args=replay_args,
+            pr_stdout=pr_view_json(
+                checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+                review_decision="APPROVED",
+                head_oid="b" * 40,
+                body=expected_pr_body(fixes=("310", "311")),
+            ),
+            required_buckets=("pass",),
+        )
+
+        assert replay_project == project
+        assert replay_result.returncode == 0, replay_result.stdout + replay_result.stderr
+        assert "status: merge_complete" in replay_result.stdout
+        assert len(cleanup_calls) == 1
+        assert cleanup_calls[0].remove_worktree is True
 
 
 def test_complete_rejects_when_base_moves_after_checks(tmp_path: Path, monkeypatch) -> None:
