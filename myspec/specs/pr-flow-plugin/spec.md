@@ -436,7 +436,7 @@ hotfix（热修复）MUST 使用独立工作树运行状态，并在验证与授
 - **THEN** hotfix（热修复） MUST NOT push（推送）
 - **THEN** stop-state details（停止状态详情） MUST require sync（同步） and full re-verification（重新完整验证）
 ### Requirement: PR Flow explicitly removes safe linked worktrees
-PR Flow（拉取请求流程）MUST 默认保留工作树，并只在用户显式传入 `--remove-worktree`（删除工作树参数）且安全条件全部满足时删除关联工作树。目标由 Orca（工作区管理器）登记时，PR Flow（拉取请求流程）MUST 优先使用 Orca（工作区管理器）删除；未登记或 Orca（工作区管理器）不可用时，PR Flow（拉取请求流程）MUST 使用非强制 Git（版本管理）删除。
+PR Flow（拉取请求流程）MUST 默认保留工作树，并只在用户显式传入 `--remove-worktree`（删除工作树参数）且安全条件全部满足时删除关联工作树；当调用会话位于目标工作树内时，PR Flow（拉取请求流程）MUST 安全保留该工作树并完成源分支清理。目标由 Orca（工作区管理器）登记时，PR Flow（拉取请求流程）MUST 优先使用 Orca（工作区管理器）删除；未登记或 Orca（工作区管理器）不可用时，PR Flow（拉取请求流程）MUST 使用非强制 Git（版本管理）删除。
 
 #### Scenario: Cleanup keeps the linked worktree by default
 - **WHEN** cleanup（清理）、complete（完整流程）或 tweak（小改）完成且未传入 `--remove-worktree`
@@ -467,10 +467,19 @@ PR Flow（拉取请求流程）MUST 默认保留工作树，并只在用户显�
 - **THEN** stop-state details（停止状态详情） MUST preserve the Orca（工作区管理器）command failure diagnostics（命令失败诊断）
 - **THEN** PR Flow（拉取请求流程） MUST NOT invoke `git worktree remove`（Git 工作树删除）
 
-#### Scenario: Caller runs inside the worktree to be removed
+#### Scenario: Active caller retains the worktree after branch cleanup
 - **WHEN** `--remove-worktree`（删除工作树参数）从待删除工作树内部运行
-- **THEN** PR Flow（拉取请求流程） MUST complete safe branch cleanup（安全分支清理） without removing the current directory（当前目录）
-- **THEN** output（输出） MUST include an executable command（可执行命令） to remove it from another worktree（其他工作树）
+- **AND** 调用会话当前目录在目标提交中仍存在，或该目录由 Git（版本管理）忽略
+- **THEN** PR Flow（拉取请求流程） MUST complete safe branch cleanup（完成安全分支清理）without removing the current worktree（不删除当前工作树）
+- **THEN** 当前工作树 MUST remain registered and physically present at the latest remote base detached HEAD（保持登记和实体存在，并位于最新远端目标提交的分离头）
+- **THEN** 本地和远端源分支 MUST be absent（不存在）
+- **THEN** completion status（完成状态） MUST identify active-session retention（活跃会话保留）without `removeWorktreePending`（工作树删除待处理）or an external `nextCommand`（外部下一命令）
+
+#### Scenario: Active caller directory would disappear
+- **WHEN** `--remove-worktree`（删除工作树参数）从待删除工作树内部运行
+- **AND** 调用会话当前目录在目标提交中不是目录且未被 Git（版本管理）忽略
+- **THEN** PR Flow（拉取请求流程） MUST stop before switching commits or deleting source branches（在切换提交或删除源分支前停止）
+- **THEN** stop-state details（停止状态详情） MUST identify that the active directory would disappear（标明活跃目录将消失）and provide a recovery action（恢复动作）
 
 #### Scenario: Unsafe worktree removal is refused
 - **WHEN** 删除目标是 main worktree（主工作树）或工作区不干净
