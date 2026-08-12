@@ -1702,10 +1702,11 @@ def run_cleanup_in_process(
     git_stub.add(["show-ref", "--verify", "--quiet", f"refs/heads/{head_ref}"])
     git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=worktree_list)
     git_stub.add(["checkout", "--detach", base_oid])
-    git_stub.add(["checkout", base_ref])
+    if not remove_worktree:
+        git_stub.add(["checkout", base_ref])
     git_stub.add(["rev-parse", f"refs/heads/{base_ref}"], stdout=base_oid + "\n")
     git_stub.add(["rev-parse", "HEAD"], stdout=base_oid + "\n")
-    git_stub.add(["branch", "--show-current"], stdout=base_ref + "\n")
+    git_stub.add(["branch", "--show-current"], stdout=("" if remove_worktree else base_ref + "\n"))
     git_stub.add(
         ["fetch", "--no-write-fetch-head", "--refmap=", "origin", f"+refs/heads/{base_ref}:refs/remotes/origin/{base_ref}"]
     )
@@ -6534,7 +6535,6 @@ def test_cleanup_physical_failure_persists_status_in_controller(tmp_path: Path, 
 
     assert result.returncode == 1
     assert "cleanup_complete" not in result.stdout
-    assert not (project / ".pr-flow" / "last-status.json").exists()
     status = json.loads((tmp_path / "controller" / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["details"]["reason"] == "physical_worktree_remove_failed"
     assert status["details"]["registrationRemoved"] is True

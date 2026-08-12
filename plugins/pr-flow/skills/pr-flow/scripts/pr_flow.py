@@ -3034,14 +3034,17 @@ def run_cleanup(args: argparse.Namespace) -> int:
                 require_git_success(occupied_project, "git_sync_occupied_base_failed", "merge", "--ff-only", base_oid)
                 local_base_oid = base_oid
 
-            if (current_branch == head_ref and not retain_primary_worktree) or retain_active_worktree:
+            if current_branch == head_ref and (target_is_linked_non_primary or not target_is_primary):
                 require_git_success(project, "git_detach_base_failed", "checkout", "--detach", base_oid)
             if local_base_oid != base_oid:
                 require_git_success(project, "git_sync_base_failed", "branch", "-f", base_ref, base_oid)
 
             base_checkout: dict[str, Any]
-            if retain_active_worktree:
-                base_checkout = {"status": "skipped", "reason": "active_session"}
+            if target_is_linked_non_primary:
+                base_checkout = {
+                    "status": "skipped",
+                    "reason": "active_session" if retain_active_worktree else "linked_worktree",
+                }
             elif occupied_base:
                 base_checkout = {
                     "status": "skipped",
@@ -3087,7 +3090,7 @@ def run_cleanup(args: argparse.Namespace) -> int:
             ).stdout.strip()
             final_head_oid = head_oid(project)
             final_branch = require_git_success(project, "git_current_branch_failed", "branch", "--show-current").stdout.strip()
-            expected_branch = "" if occupied_base or retain_active_worktree else base_ref
+            expected_branch = "" if target_is_linked_non_primary or occupied_base else base_ref
             if final_base_oid != base_oid or final_head_oid != base_oid or final_branch != expected_branch:
                 raise PrFlowError(
                     "git_sync_base_mismatch",
