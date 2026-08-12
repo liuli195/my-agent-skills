@@ -1494,11 +1494,22 @@ def test_project_template_recreates_incomplete_template_after_stale_lock(
     assert not lock_dir.exists()
 
 
-def init_cleanup_project(tmp_path: Path) -> tuple[Path, Path]:
-    return ensure_project_remote_template("cleanup", tmp_path, _create_cleanup_project)
+def init_cleanup_project(
+    tmp_path: Path, *, base_ref: str = "main", head_ref: str = "feature/example"
+) -> tuple[Path, Path]:
+    template_name = f"cleanup-{base_ref}-{head_ref}".replace("/", "_").replace("\\", "_").replace(":", "_")
+    return ensure_project_remote_template(
+        template_name,
+        tmp_path,
+        lambda template_dir: _create_cleanup_project(
+            template_dir, base_ref=base_ref, head_ref=head_ref
+        ),
+    )
 
 
-def _create_cleanup_project(tmp_path: Path) -> tuple[Path, Path]:
+def _create_cleanup_project(
+    tmp_path: Path, *, base_ref: str = "main", head_ref: str = "feature/example"
+) -> tuple[Path, Path]:
     remote = tmp_path / "remote.git"
     remote_init = subprocess.run(
         ["git", "init", "--bare", str(remote)],
@@ -1510,17 +1521,18 @@ def _create_cleanup_project(tmp_path: Path) -> tuple[Path, Path]:
 
     project = tmp_path / "project"
     assert init_repo(project) == "main"
-    write_confirmed_pr_flow_config(project)
+    git(project, "branch", "-M", base_ref)
+    write_confirmed_pr_flow_config(project, default_pr_flow_config_for_test(base_ref))
     git(project, "add", ".pr-flow")
     git(project, "commit", "-m", "configure pr flow")
     git(project, "remote", "add", "origin", str(remote))
-    git(project, "push", "-u", "origin", "main")
+    git(project, "push", "-u", "origin", base_ref)
 
-    git(project, "checkout", "-b", "feature/example")
+    git(project, "checkout", "-b", head_ref)
     (project / "README.md").write_text("# Test Project\n\nFeature change\n", encoding="utf-8")
     git(project, "add", "README.md")
     git(project, "commit", "-m", "feature")
-    git(project, "push", "-u", "origin", "feature/example")
+    git(project, "push", "-u", "origin", head_ref)
 
     integrator = tmp_path / "integrator"
     clone_result = subprocess.run(
@@ -1532,11 +1544,11 @@ def _create_cleanup_project(tmp_path: Path) -> tuple[Path, Path]:
     assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
     git(integrator, "config", "user.email", "test@example.com")
     git(integrator, "config", "user.name", "Test User")
-    git(integrator, "checkout", "-B", "main", "origin/main")
-    git(integrator, "merge", "--ff-only", "origin/feature/example")
-    git(integrator, "push", "origin", "main")
+    git(integrator, "checkout", "-B", base_ref, f"origin/{base_ref}")
+    git(integrator, "merge", "--ff-only", f"origin/{head_ref}")
+    git(integrator, "push", "origin", base_ref)
 
-    git(project, "checkout", "feature/example")
+    git(project, "checkout", head_ref)
     return project, remote
 
 
@@ -1690,10 +1702,11 @@ def run_cleanup_in_process(
     git_stub.add(["show-ref", "--verify", "--quiet", f"refs/heads/{head_ref}"])
     git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=worktree_list)
     git_stub.add(["checkout", "--detach", base_oid])
-    git_stub.add(["checkout", base_ref])
+    if not remove_worktree:
+        git_stub.add(["checkout", base_ref])
     git_stub.add(["rev-parse", f"refs/heads/{base_ref}"], stdout=base_oid + "\n")
     git_stub.add(["rev-parse", "HEAD"], stdout=base_oid + "\n")
-    git_stub.add(["branch", "--show-current"], stdout=base_ref + "\n")
+    git_stub.add(["branch", "--show-current"], stdout=("" if remove_worktree else base_ref + "\n"))
     git_stub.add(
         ["fetch", "--no-write-fetch-head", "--refmap=", "origin", f"+refs/heads/{base_ref}:refs/remotes/origin/{base_ref}"]
     )
@@ -6483,7 +6496,11 @@ def test_hotfix_pushes_head_to_target_and_writes_audit_record(tmp_path: Path, mo
 
 
 def run_cleanup_with_real_git(
-    project: Path, monkeypatch, *, remove_worktree: bool = False
+    project: Path,
+    monkeypatch,
+    *,
+    remove_worktree: bool = False,
+    pr_stdout: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
@@ -6492,7 +6509,7 @@ def run_cleanup_with_real_git(
     gh_stub = CommandStub()
     gh_stub.add(
         ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
-        stdout=cleanup_pr_view_json(),
+        stdout=pr_stdout or cleanup_pr_view_json(),
     )
     monkeypatch.setattr(module, "gh", gh_stub)
     args = ["cleanup", "--project", str(project), "--pr", "12"]
@@ -6518,7 +6535,6 @@ def test_cleanup_physical_failure_persists_status_in_controller(tmp_path: Path, 
 
     assert result.returncode == 1
     assert "cleanup_complete" not in result.stdout
-    assert not (project / ".pr-flow" / "last-status.json").exists()
     status = json.loads((tmp_path / "controller" / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
     assert status["details"]["reason"] == "physical_worktree_remove_failed"
     assert status["details"]["registrationRemoved"] is True
@@ -6545,13 +6561,258 @@ def test_cleanup_returns_to_available_local_base_end_to_end(tmp_path: Path, monk
     assert status["details"]["baseCheckout"] == {"status": "checked_out"}
 
 
+def test_cleanup_retains_primary_worktree_on_arbitrary_base_branch(tmp_path: Path, monkeypatch) -> None:
+    base_ref = "trunk"
+    head_ref = "topic/317"
+    project, remote = init_cleanup_project(tmp_path, base_ref=base_ref, head_ref=head_ref)
+    remote_base = git_bare(remote, "rev-parse", f"refs/heads/{base_ref}")
+
+    with contextlib.chdir(project):
+        result = run_cleanup_with_real_git(
+            project,
+            monkeypatch,
+            remove_worktree=True,
+            pr_stdout=cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref),
+        )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: cleanup_complete" in result.stdout
+    assert project.is_dir()
+    assert git(project, "branch", "--show-current") == base_ref
+    assert git(project, "rev-parse", "HEAD") == remote_base
+    assert git(project, "rev-parse", f"refs/heads/{base_ref}") == remote_base
+    assert subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{head_ref}"],
+        cwd=project,
+        check=False,
+    ).returncode == 1
+    assert git_bare_result(remote, "show-ref", "--verify", f"refs/heads/{head_ref}").returncode != 0
+    worktrees = load_pr_flow_module().parse_worktrees(git(project, "worktree", "list", "--porcelain", "-z"))
+    assert Path(worktrees[0]["path"]).resolve() == project.resolve()
+    assert worktrees[0]["branch"] == f"refs/heads/{base_ref}"
+    status = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["worktreeRetention"] == {"status": "retained", "reason": "primary_worktree"}
+    assert status["details"]["currentBranch"] == base_ref
+    assert "nextCommand" not in status["details"]
+
+
+def test_cleanup_stops_before_primary_checkout_when_active_cwd_would_disappear(
+    tmp_path: Path, monkeypatch
+) -> None:
+    base_ref = "trunk"
+    head_ref = "topic/317"
+    project, remote = init_cleanup_project(tmp_path, base_ref=base_ref, head_ref=head_ref)
+    source_only = project / "source-only" / "nested"
+    source_only.mkdir(parents=True)
+    (source_only / "sentinel.txt").write_text("source only\n", encoding="utf-8")
+    git(project, "add", "source-only")
+    git(project, "commit", "-m", "source-only directory")
+    git(project, "push", "origin", head_ref)
+
+    with contextlib.chdir(source_only):
+        result = run_cleanup_with_real_git(
+            project,
+            monkeypatch,
+            remove_worktree=True,
+            pr_stdout=cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref),
+        )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "active_cwd_would_disappear" in result.stdout
+    assert source_only.is_dir()
+    assert git(project, "branch", "--show-current") == head_ref
+    assert git_bare_result(remote, "show-ref", "--verify", f"refs/heads/{head_ref}").returncode == 0
+    worktrees = load_pr_flow_module().parse_worktrees(git(project, "worktree", "list", "--porcelain", "-z"))
+    assert Path(worktrees[0]["path"]).resolve() == project.resolve()
+    assert worktrees[0]["branch"] == f"refs/heads/{head_ref}"
+
+
+def test_cleanup_stops_before_checkout_when_active_cwd_would_disappear_without_remove_worktree(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project, remote = init_cleanup_project(tmp_path)
+    source_only = project / "source-only" / "nested"
+    source_only.mkdir(parents=True)
+    (source_only / "sentinel.txt").write_text("source only\n", encoding="utf-8")
+    git(project, "add", "source-only")
+    git(project, "commit", "-m", "source-only directory")
+    source_head = git(project, "rev-parse", "HEAD")
+    git(project, "push", "origin", "feature/example")
+
+    with contextlib.chdir(source_only):
+        result = run_cleanup_with_real_git(project, monkeypatch)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "active_cwd_would_disappear" in result.stdout
+    assert source_only.is_dir()
+    assert git(project, "branch", "--show-current") == "feature/example"
+    assert git(project, "rev-parse", "HEAD") == source_head
+    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode == 0
+    status = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "active_cwd_would_disappear"
+
+
+def test_cleanup_stops_primary_worktree_when_base_branch_is_occupied(
+    tmp_path: Path, monkeypatch
+) -> None:
+    base_ref = "trunk"
+    head_ref = "topic/317"
+    project, remote = init_cleanup_project(tmp_path, base_ref=base_ref, head_ref=head_ref)
+    occupied = tmp_path / "base-worktree"
+    git(project, "worktree", "add", str(occupied), base_ref)
+    before = (
+        git(project, "rev-parse", "HEAD"),
+        git(project, "branch", "--show-current"),
+        git(project, "show-ref"),
+    )
+
+    with contextlib.chdir(project):
+        result = run_cleanup_with_real_git(
+            project,
+            monkeypatch,
+            remove_worktree=True,
+            pr_stdout=cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref),
+        )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "base_branch_checked_out" in result.stdout
+    assert (
+        git(project, "rev-parse", "HEAD"),
+        git(project, "branch", "--show-current"),
+        git(project, "show-ref"),
+    ) == before
+    assert git(occupied, "branch", "--show-current") == base_ref
+    assert git_bare_result(remote, "show-ref", "--verify", f"refs/heads/{head_ref}").returncode == 0
+    status = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "base_branch_checked_out"
+    assert Path(occupied).resolve() in [
+        Path(path).resolve() for path in status["details"]["occupiedWorktrees"]
+    ]
+
+
+def test_cleanup_stops_primary_worktree_when_base_branch_is_occupied_without_remove_worktree(
+    tmp_path: Path, monkeypatch
+) -> None:
+    base_ref = "trunk"
+    head_ref = "topic/317"
+    project, remote = init_cleanup_project(tmp_path, base_ref=base_ref, head_ref=head_ref)
+    occupied = tmp_path / "base-worktree"
+    git(project, "worktree", "add", str(occupied), base_ref)
+    before = (
+        git(project, "rev-parse", "HEAD"),
+        git(project, "branch", "--show-current"),
+        git(project, "show-ref"),
+    )
+
+    with contextlib.chdir(project):
+        result = run_cleanup_with_real_git(
+            project,
+            monkeypatch,
+            pr_stdout=cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref),
+        )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "base_branch_checked_out" in result.stdout
+    assert (
+        git(project, "rev-parse", "HEAD"),
+        git(project, "branch", "--show-current"),
+        git(project, "show-ref"),
+    ) == before
+    assert git(occupied, "branch", "--show-current") == base_ref
+    assert git_bare_result(remote, "show-ref", "--verify", f"refs/heads/{head_ref}").returncode == 0
+
+
+def test_cleanup_stops_before_occupied_base_merge_when_active_cwd_would_disappear(
+    tmp_path: Path, monkeypatch
+) -> None:
+    base_ref = "trunk"
+    head_ref = "topic/317"
+    project, remote = init_cleanup_project(tmp_path, base_ref=base_ref, head_ref=head_ref)
+
+    git(project, "checkout", base_ref)
+    current_only = project / "current-only" / "nested"
+    current_only.mkdir(parents=True)
+    (current_only / "sentinel.txt").write_text("current only\n", encoding="utf-8")
+    git(project, "add", "current-only")
+    git(project, "commit", "-m", "base-only directory")
+    git(project, "push", "--force", "origin", base_ref)
+    git(project, "checkout", "-b", "controller")
+
+    occupied = tmp_path / "base-worktree"
+    git(project, "worktree", "add", str(occupied), base_ref)
+
+    integrator = tmp_path / "base-integrator"
+    clone_result = subprocess.run(
+        ["git", "clone", str(remote), str(integrator)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
+    git(integrator, "config", "user.email", "test@example.com")
+    git(integrator, "config", "user.name", "Test User")
+    git(integrator, "checkout", "-B", base_ref, f"origin/{base_ref}")
+    shutil.rmtree(integrator / "current-only")
+    git(integrator, "add", "-u", "current-only")
+    git(integrator, "commit", "-m", "remove base-only directory")
+    git(integrator, "push", "origin", base_ref)
+
+    git(project, "checkout", head_ref)
+    (project / ".gitignore").write_text("current-only/\n", encoding="utf-8")
+    git(project, "add", ".gitignore")
+    git(project, "commit", "-m", "ignore current-only on head")
+    git(project, "push", "origin", head_ref)
+    git(project, "checkout", "controller")
+
+    target = tmp_path / "target"
+    git(project, "worktree", "add", str(target), head_ref)
+    target_ignored = subprocess.run(
+        ["git", "check-ignore", "--quiet", "--", "current-only/nested"],
+        cwd=target,
+        check=False,
+    )
+    occupied_not_ignored = subprocess.run(
+        ["git", "check-ignore", "--quiet", "--", "current-only/nested"],
+        cwd=occupied,
+        check=False,
+    )
+    assert target_ignored.returncode == 0
+    assert occupied_not_ignored.returncode != 0
+    active_cwd = occupied / "current-only" / "nested"
+    assert active_cwd.is_dir()
+    before_target = (git(target, "rev-parse", "HEAD"), git(target, "branch", "--show-current"))
+    before_occupied = (git(occupied, "rev-parse", "HEAD"), git(occupied, "branch", "--show-current"))
+    before_local_head = git(target, "show-ref", "--verify", f"refs/heads/{head_ref}")
+    before_remote_head = git_bare(remote, "show-ref", "--verify", f"refs/heads/{head_ref}")
+
+    with contextlib.chdir(active_cwd):
+        result = run_cleanup_with_real_git(
+            target,
+            monkeypatch,
+            pr_stdout=cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref),
+        )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "active_cwd_would_disappear" in result.stdout
+    assert (git(target, "rev-parse", "HEAD"), git(target, "branch", "--show-current")) == before_target
+    assert (git(occupied, "rev-parse", "HEAD"), git(occupied, "branch", "--show-current")) == before_occupied
+    assert git(target, "show-ref", "--verify", f"refs/heads/{head_ref}") == before_local_head
+    assert git_bare(remote, "show-ref", "--verify", f"refs/heads/{head_ref}") == before_remote_head
+    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "active_cwd_would_disappear"
+
+
 def test_cleanup_retains_active_worktree_detached_after_branch_cleanup(tmp_path: Path, monkeypatch) -> None:
     project, remote = init_cleanup_project(tmp_path)
     target = tmp_path / "target"
     git(project, "checkout", "main")
+    stale_base = git(project, "rev-parse", "HEAD")
     git(project, "checkout", "-b", "controller")
+    other = tmp_path / "base-worktree"
+    git(project, "worktree", "add", str(other), "main")
     git(project, "worktree", "add", str(target), "feature/example")
     remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
+    assert stale_base != remote_base
 
     with contextlib.chdir(target):
         result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
@@ -6561,6 +6822,8 @@ def test_cleanup_retains_active_worktree_detached_after_branch_cleanup(tmp_path:
     assert target.exists()
     assert git(target, "branch", "--show-current") == ""
     assert git(target, "rev-parse", "HEAD") == remote_base
+    assert git(other, "branch", "--show-current") == "main"
+    assert git(other, "rev-parse", "HEAD") == remote_base
     worktrees = load_pr_flow_module().parse_worktrees(git(target, "worktree", "list", "--porcelain", "-z"))
     target_record = next(item for item in worktrees if Path(item["path"]).resolve() == target.resolve())
     assert target_record["detached"] is True
@@ -6860,6 +7123,9 @@ def test_cleanup_stops_before_detaching_when_active_cwd_is_untracked_and_not_ign
     git(integrator, "fetch", "origin", "feature/example")
     git(integrator, "checkout", "-B", "main", "origin/main")
     git(integrator, "merge", "--ff-only", "origin/feature/example")
+    (integrator / "BASE_ONLY.md").write_text("base only\n", encoding="utf-8")
+    git(integrator, "add", "BASE_ONLY.md")
+    git(integrator, "commit", "-m", "base-only change")
     git(integrator, "push", "origin", "main")
 
     git(project, "checkout", "main")
@@ -6949,19 +7215,28 @@ def test_cleanup_keeps_detached_when_synced_base_is_checked_out_elsewhere(tmp_pa
     git(project, "branch", "-f", "main", remote_base)
     other = tmp_path / "base-worktree"
     git(project, "worktree", "add", str(other), "main")
+    before = (
+        git(project, "rev-parse", "HEAD"),
+        git(project, "branch", "--show-current"),
+        git(project, "show-ref"),
+    )
+    before_remote_refs = git_bare(remote, "show-ref")
 
     result = run_cleanup_with_real_git(project, monkeypatch)
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert git(project, "branch", "--show-current") == ""
-    assert git(project, "rev-parse", "HEAD") == remote_base
-    assert git(project, "rev-parse", "main") == remote_base
-    assert git(project, "ls-remote", "--heads", "origin", "feature/example") == ""
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "base_branch_checked_out" in result.stdout
+    assert (
+        git(project, "rev-parse", "HEAD"),
+        git(project, "branch", "--show-current"),
+        git(project, "show-ref"),
+    ) == before
+    assert git(other, "branch", "--show-current") == "main"
+    assert git(other, "rev-parse", "HEAD") == remote_base
+    assert git_bare(remote, "show-ref") == before_remote_refs
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["currentBranch"] == ""
-    assert status["details"]["baseCheckout"]["status"] == "skipped"
-    assert status["details"]["baseCheckout"]["reason"] == "base_branch_occupied"
-    assert other.resolve() in [Path(path).resolve() for path in status["details"]["baseCheckout"]["occupiedWorktrees"]]
+    assert status["details"]["reason"] == "base_branch_checked_out"
+    assert other.resolve() in [Path(path).resolve() for path in status["details"]["occupiedWorktrees"]]
 
 
 def test_cleanup_detaches_when_base_becomes_occupied_during_checkout(tmp_path: Path, monkeypatch) -> None:
@@ -6996,19 +7271,7 @@ def test_cleanup_detaches_when_base_becomes_occupied_during_checkout(tmp_path: P
         (["rev-parse", "--verify", "--quiet", "refs/heads/main"], base_oid + "\n", 0),
         (["ls-remote", "--heads", "origin", "feature/example"], head_oid + "\trefs/heads/feature/example\n", 0),
         (["show-ref", "--verify", "--quiet", "refs/heads/feature/example"], "", 0),
-        (["worktree", "list", "--porcelain", "-z"], initial_worktrees, 0),
-        (["checkout", "--detach", base_oid], "", 0),
-        (["checkout", "main"], "", 1),
         (["worktree", "list", "--porcelain", "-z"], occupied_worktrees, 0),
-        (["rev-parse", "refs/heads/main"], base_oid + "\n", 0),
-        (["rev-parse", "refs/heads/main"], base_oid + "\n", 0),
-        (["rev-parse", "HEAD"], base_oid + "\n", 0),
-        (["branch", "--show-current"], "", 0),
-        (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "+refs/heads/main:refs/remotes/origin/main"], "", 0),
-        (["rev-parse", "refs/remotes/origin/main"], base_oid + "\n", 0),
-        (["push", "origin", "--delete", "feature/example"], "", 0),
-        (["ls-remote", "--heads", "origin", "feature/example"], "", 0),
-        (["branch", "-d", "feature/example"], "", 0),
     ]:
         git_stub.add(git_args, stdout=stdout, returncode=returncode)
     monkeypatch.setattr(module, "gh", gh_stub)
@@ -7016,13 +7279,15 @@ def test_cleanup_detaches_when_base_becomes_occupied_during_checkout(tmp_path: P
 
     result = invoke_pr_flow(["cleanup", "--project", str(project), "--pr", "12"], module=module)
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "base_branch_checked_out" in result.stdout
     status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["currentBranch"] == ""
-    assert status["details"]["baseCheckout"]["status"] == "skipped"
-    assert status["details"]["baseCheckout"]["reason"] == "base_branch_occupied"
-    assert status["details"]["baseCheckout"]["occupiedWorktrees"] == [str(other)]
-    assert git_stub.calls.index(("checkout", "main")) < git_stub.calls.index(("push", "origin", "--delete", "feature/example"))
+    assert status["details"]["reason"] == "base_branch_checked_out"
+    assert status["details"]["occupiedWorktrees"] == [str(other)]
+    assert not any(
+        call[0] in {"checkout", "merge", "push"} or call[:2] == ("branch", "-d")
+        for call in git_stub.calls
+    )
 
 
 def test_cleanup_retries_source_deletion_from_synced_base(tmp_path: Path, monkeypatch) -> None:
@@ -7118,21 +7383,29 @@ def test_cleanup_fast_forwards_stale_base_checked_out_elsewhere_end_to_end(tmp_p
     remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
     other = tmp_path / "base-worktree"
     git(project, "worktree", "add", str(other), "main")
+    before = (
+        git(project, "rev-parse", "HEAD"),
+        git(project, "branch", "--show-current"),
+        git(project, "show-ref"),
+    )
+    before_remote_refs = git_bare(remote, "show-ref")
 
     result = run_cleanup_with_real_git(project, monkeypatch)
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "base_branch_checked_out" in result.stdout
+    assert (
+        git(project, "rev-parse", "HEAD"),
+        git(project, "branch", "--show-current"),
+        git(project, "show-ref"),
+    ) == before
     assert git(other, "branch", "--show-current") == "main"
-    assert git(other, "rev-parse", "HEAD") == remote_base
-    assert git(project, "rev-parse", "refs/remotes/origin/main") == remote_base
-    assert git(project, "branch", "--show-current") == ""
-    assert git(project, "rev-parse", "HEAD") == remote_base
-    assert subprocess.run(
-        ["git", "show-ref", "--verify", "--quiet", "refs/heads/feature/example"], cwd=project
-    ).returncode == 1
-    assert subprocess.run(
-        ["git", "show-ref", "--verify", "--quiet", "refs/heads/feature/example"], cwd=remote
-    ).returncode == 1
+    assert git(other, "rev-parse", "HEAD") == git(project, "rev-parse", "main")
+    assert git(other, "rev-parse", "HEAD") != remote_base
+    assert git_bare(remote, "show-ref") == before_remote_refs
+    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
+    assert status["details"]["reason"] == "base_branch_checked_out"
+    assert other.resolve() in [Path(path).resolve() for path in status["details"]["occupiedWorktrees"]]
 
 
 @pytest.mark.parametrize("unsafe_state", ["dirty", "rebase"])

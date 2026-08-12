@@ -528,6 +528,24 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_pr_flow_cli.py::test_cleanup_returns_to_available_local_base_end_to_end': (
         'covers pr-flow real git cleanup synchronization of a stale local base; function=test_cleanup_returns_to_available_local_base_end_to_end'
     ),
+    'tests/test_pr_flow_cli.py::test_cleanup_retains_primary_worktree_on_arbitrary_base_branch': (
+        'covers primary-worktree cleanup on an arbitrary base branch through real git; function=test_cleanup_retains_primary_worktree_on_arbitrary_base_branch'
+    ),
+    'tests/test_pr_flow_cli.py::test_cleanup_stops_before_primary_checkout_when_active_cwd_would_disappear': (
+        'covers primary-worktree cleanup preserving a source-only active cwd before checkout; function=test_cleanup_stops_before_primary_checkout_when_active_cwd_would_disappear'
+    ),
+    'tests/test_pr_flow_cli.py::test_cleanup_stops_before_checkout_when_active_cwd_would_disappear_without_remove_worktree': (
+        'covers cleanup preserving a source-only active cwd before checkout without worktree removal; function=test_cleanup_stops_before_checkout_when_active_cwd_would_disappear_without_remove_worktree'
+    ),
+    'tests/test_pr_flow_cli.py::test_cleanup_stops_primary_worktree_when_base_branch_is_occupied': (
+        'covers primary-worktree cleanup stopping when an arbitrary base branch is occupied; function=test_cleanup_stops_primary_worktree_when_base_branch_is_occupied'
+    ),
+    'tests/test_pr_flow_cli.py::test_cleanup_stops_primary_worktree_when_base_branch_is_occupied_without_remove_worktree': (
+        'covers primary-worktree cleanup stopping before remote snapshot fetch without worktree removal; function=test_cleanup_stops_primary_worktree_when_base_branch_is_occupied_without_remove_worktree'
+    ),
+    'tests/test_pr_flow_cli.py::test_cleanup_stops_before_occupied_base_merge_when_active_cwd_would_disappear': (
+        'covers linked-target cleanup stopping before occupied-base fast-forward when its active cwd would disappear; function=test_cleanup_stops_before_occupied_base_merge_when_active_cwd_would_disappear'
+    ),
     'tests/test_pr_flow_cli.py::test_cleanup_retains_active_worktree_detached_after_branch_cleanup': (
         'covers pr-flow cleanup retaining the active target worktree detached after deleting source branches; function=test_cleanup_retains_active_worktree_detached_after_branch_cleanup'
     ),
