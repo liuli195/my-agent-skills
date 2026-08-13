@@ -37,6 +37,7 @@ CHECK_GATE_PASSED = "PASSED"
 CHECK_GATE_FAILED = "FAILED"
 CHECK_GATE_CANCELLED = "CANCELLED"
 CHECK_GATE_UNAVAILABLE = "UNAVAILABLE"
+CHECK_GATE_HEAD_NOT_CONVERGED = "HEAD_NOT_CONVERGED"
 INITIAL_CHECK_WINDOW_SECONDS = 60
 INITIAL_CHECK_POLL_SECONDS = 5
 RULESET_MERGE_WINDOW_SECONDS = 60
@@ -48,6 +49,7 @@ CHECK_GATE_STOP_REASONS = {
     CHECK_GATE_FAILED: ("REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking"),
     CHECK_GATE_CANCELLED: ("REPLY_OR_FIX_REQUIRED", "checks_or_review_blocking"),
     CHECK_GATE_UNAVAILABLE: ("DISPATCH_REQUIRED", "checks_unavailable"),
+    CHECK_GATE_HEAD_NOT_CONVERGED: ("DISPATCH_REQUIRED", "head_not_converged"),
 }
 GH_PR_VIEW_RETRIES_ENV = "PR_FLOW_GH_PR_VIEW_RETRIES"
 PR_TEMPLATE = """## Summary
@@ -737,6 +739,9 @@ RECOVERABLE_NEXT_ACTIONS = {
     "head_moved": {
         "nextAction": "Rerun the same PR Flow command for the current source commit.",
     },
+    "head_not_converged": {
+        "nextAction": "等待已推送源提交出现在 PR（拉取请求）中，然后重新运行同一 PR Flow（拉取请求流程）命令。",
+    },
     "base_outdated": {
         "nextAction": "Rerun the same PR Flow command against the current base commit.",
     },
@@ -767,6 +772,7 @@ RECOVERABLE_STOP_STATUSES = {
     "missing_upstream": "DISPATCH_REQUIRED",
     "checks_or_review_blocking": "REPLY_OR_FIX_REQUIRED",
     "checks_unavailable": "DISPATCH_REQUIRED",
+    "head_not_converged": "DISPATCH_REQUIRED",
     "invalid_fixes": "REPLY_OR_FIX_REQUIRED",
     "toolchain_source_commit_unavailable": "DISPATCH_REQUIRED",
 }
@@ -813,6 +819,7 @@ def add_recovery_action(details: dict[str, Any], next_command: str | None = None
         "ruleset_merge_blocking",
         "checks_or_review_blocking",
         "checks_unavailable",
+        "head_not_converged",
         "head_moved",
         "base_outdated",
     }:
@@ -1448,6 +1455,7 @@ def auto_push_current_branch_if_needed(
     config: dict[str, Any],
     next_command: str | None = None,
     before_push: Any | None = None,
+    after_push: Any | None = None,
 ) -> dict[str, Any] | None:
     base_branch = base_branch_from_config(config)
     branch_result = git(project, "branch", "--show-current")
@@ -1571,6 +1579,8 @@ def auto_push_current_branch_if_needed(
         push_details.update(details)
         push_details["reason"] = "git_push_failed"
         return stop_state("PUSH_REQUIRED", "push current branch before continuing", push_details)
+    if after_push is not None:
+        after_push()
     return None
 
 
@@ -1945,11 +1955,42 @@ def observation_commit_error(error: PrFlowError, original: dict[str, Any], curre
     return PrFlowError(error.reason, details)
 
 
+def classify_expected_check_gate(
+    project: Path,
+    pr: dict[str, Any],
+    expected_head_oid: str | None,
+) -> dict[str, Any]:
+    if expected_head_oid is None:
+        return classify_check_gate(project, pr)
+    if pr.get("headRefOid") != expected_head_oid:
+        details = check_gate_details(pr, None, None, CHECK_GATE_HEAD_NOT_CONVERGED)
+        details["observedHeadRefOid"] = pr.get("headRefOid")
+        details["headRefOid"] = expected_head_oid
+        details["expectedHeadOid"] = expected_head_oid
+        return {"state": CHECK_GATE_HEAD_NOT_CONVERGED, "details": details, "prSnapshot": pr}
+
+    gate = classify_check_gate(project, pr)
+    confirmed = sync_pr(project, pr)
+    require_same_pr_commits(pr, confirmed)
+    if confirmed.get("headRefOid") != expected_head_oid:
+        raise PrFlowError(
+            "head_moved",
+            {
+                "reason": "head_moved",
+                "pr": pr.get("number"),
+                "headRefOid": expected_head_oid,
+                "currentHeadOid": confirmed.get("headRefOid"),
+            },
+        )
+    return {**gate, "prSnapshot": confirmed}
+
+
 def observe_check_gate(
     project: Path,
     initial_pr: dict[str, Any],
     wait_config: dict[str, Any],
     mode: str,
+    expected_head_oid: str | None = None,
 ) -> dict[str, Any]:
     timeout_seconds = int(wait_config.get("timeoutSeconds", 600))
     poll_seconds = int(wait_config.get("pollSeconds", 15))
@@ -1957,13 +1998,23 @@ def observe_check_gate(
     current = initial_pr
 
     while True:
-        gate = classify_check_gate(project, current)
+        gate = classify_expected_check_gate(project, current, expected_head_oid)
+        current = gate.get("prSnapshot", current)
         state = gate.get("state")
-        if mode == CHECK_OBSERVATION_ONCE or state not in {CHECK_GATE_NOT_REPORTED, CHECK_GATE_PENDING}:
+        if mode == CHECK_OBSERVATION_ONCE or state not in {
+            CHECK_GATE_HEAD_NOT_CONVERGED,
+            CHECK_GATE_NOT_REPORTED,
+            CHECK_GATE_PENDING,
+        }:
             return {**gate, "prSnapshot": current}
 
         elapsed = time.monotonic() - started_at
-        if state == CHECK_GATE_NOT_REPORTED:
+        if state == CHECK_GATE_HEAD_NOT_CONVERGED:
+            remaining = timeout_seconds - elapsed
+            if timeout_seconds <= 0 or remaining <= 0:
+                return {**gate, "prSnapshot": current}
+            interval = min(max(poll_seconds, 1), INITIAL_CHECK_POLL_SECONDS, remaining)
+        elif state == CHECK_GATE_NOT_REPORTED:
             remaining = min(INITIAL_CHECK_WINDOW_SECONDS - elapsed, timeout_seconds - elapsed)
             if timeout_seconds <= 0 or remaining <= 0:
                 return {**gate, "prSnapshot": current}
@@ -1976,10 +2027,32 @@ def observe_check_gate(
 
         time.sleep(interval)
         updated = sync_pr(project, current)
-        try:
-            require_same_pr_commits(initial_pr, updated)
-        except PrFlowError as exc:
-            raise observation_commit_error(exc, initial_pr, updated) from exc
+        if expected_head_oid is None:
+            try:
+                require_same_pr_commits(initial_pr, updated)
+            except PrFlowError as exc:
+                raise observation_commit_error(exc, initial_pr, updated) from exc
+        else:
+            if updated.get("baseRefOid") != initial_pr.get("baseRefOid"):
+                try:
+                    require_same_pr_commits(initial_pr, updated)
+                except PrFlowError as exc:
+                    raise observation_commit_error(exc, initial_pr, updated) from exc
+            observed_head = updated.get("headRefOid")
+            if observed_head not in {initial_pr.get("headRefOid"), expected_head_oid}:
+                raise observation_commit_error(
+                    PrFlowError(
+                        "head_moved",
+                        {
+                            "reason": "head_moved",
+                            "pr": initial_pr.get("number"),
+                            "headRefOid": expected_head_oid,
+                            "currentHeadOid": observed_head,
+                        },
+                    ),
+                    initial_pr,
+                    updated,
+                )
         current = updated
 
 
@@ -2029,10 +2102,17 @@ def revalidate_merge_gates(
     *,
     skip_review_gate: bool,
     next_command: str | None,
+    expected_head_oid: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     current = sync_pr(project, original_pr)
     require_same_pr_commits(original_pr, current)
-    gate = observe_check_gate(project, current, wait_config_from_config(config), CHECK_OBSERVATION_ONCE)
+    gate = observe_check_gate(
+        project,
+        current,
+        wait_config_from_config(config),
+        CHECK_OBSERVATION_ONCE,
+        expected_head_oid,
+    )
     check_stop = check_gate_stop_state(gate, next_command)
     current = gate["prSnapshot"]
     if check_stop is not None:
@@ -2054,6 +2134,7 @@ def retry_merge_after_ruleset_block(
     *,
     skip_review_gate: bool = False,
     next_command: str | None = None,
+    expected_head_oid: str | None = None,
 ) -> dict[str, Any] | None:
     started_at = time.monotonic()
     retry_attempts = 0
@@ -2082,6 +2163,7 @@ def retry_merge_after_ruleset_block(
             pr,
             skip_review_gate=skip_review_gate,
             next_command=next_command,
+            expected_head_oid=expected_head_oid,
         )
         if gate_stop is not None:
             return gate_stop
@@ -2388,8 +2470,20 @@ def run_lifecycle(
                 next_command,
             )
 
+        expected_head_oid: str | None = None
+
+        def remember_pushed_head() -> None:
+            nonlocal expected_head_oid
+            expected_head_oid = head_oid(project)
+
         if command in {"complete", "tweak"}:
-            push_stop = auto_push_current_branch_if_needed(project, config, next_command, check_base)
+            push_stop = auto_push_current_branch_if_needed(
+                project,
+                config,
+                next_command,
+                check_base,
+                remember_pushed_head,
+            )
             if push_stop is not None:
                 return stop_from_state(project, command, push_stop)
         check_base()
@@ -2397,10 +2491,25 @@ def run_lifecycle(
             pr = create_pr(project, config, pr_body, next_command)
         initial_pr = pr
         refreshed_pr = sync_pr(project, initial_pr)
-        try:
-            require_same_pr_commits(initial_pr, refreshed_pr)
-        except PrFlowError as exc:
-            raise observation_commit_error(exc, initial_pr, refreshed_pr) from exc
+        if expected_head_oid is None:
+            try:
+                require_same_pr_commits(initial_pr, refreshed_pr)
+            except PrFlowError as exc:
+                raise observation_commit_error(exc, initial_pr, refreshed_pr) from exc
+        elif refreshed_pr.get("headRefOid") not in {initial_pr.get("headRefOid"), expected_head_oid}:
+            raise observation_commit_error(
+                PrFlowError(
+                    "head_moved",
+                    {
+                        "reason": "head_moved",
+                        "pr": initial_pr.get("number"),
+                        "headRefOid": expected_head_oid,
+                        "currentHeadOid": refreshed_pr.get("headRefOid"),
+                    },
+                ),
+                initial_pr,
+                refreshed_pr,
+            )
         pr = refreshed_pr
         if pr_body is not None and existing_pr:
             reconcile_existing_pr_body(project, pr, pr_body, fixes)
@@ -2410,12 +2519,19 @@ def run_lifecycle(
         return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
 
     try:
-        gate = observe_check_gate(project, pr, wait_config_from_config(config), CHECK_OBSERVATION_WAIT)
+        gate = observe_check_gate(
+            project,
+            pr,
+            wait_config_from_config(config),
+            CHECK_OBSERVATION_WAIT,
+            expected_head_oid,
+        )
     except PrFlowError as exc:
         return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
     check_stop = check_gate_stop_state(gate, next_command)
     if check_stop is not None:
         return stop_from_state(project, command, check_stop)
+    pr = gate["prSnapshot"]
 
     try:
         pr, gate_stop = revalidate_merge_gates(
@@ -2424,6 +2540,7 @@ def run_lifecycle(
             pr,
             skip_review_gate=skip_review_gate,
             next_command=next_command,
+            expected_head_oid=expected_head_oid,
         )
     except PrFlowError as exc:
         return stop(project, command, error_status(exc.reason), exc.reason, add_default_next_command(exc.details, next_command))
@@ -2453,6 +2570,7 @@ def run_lifecycle(
                     exc.details,
                     skip_review_gate=skip_review_gate,
                     next_command=next_command,
+                    expected_head_oid=expected_head_oid,
                 )
             except PrFlowError as recovery_exc:
                 return stop(

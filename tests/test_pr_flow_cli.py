@@ -3617,6 +3617,7 @@ def test_complete_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
     allow_required_checks(gh_stub, "pending")
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
 
@@ -3631,40 +3632,95 @@ def test_complete_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path
     assert status["details"]["reason"] == "checks_pending"
 
 
-def test_complete_auto_pushes_existing_pr_when_local_branch_is_ahead(tmp_path: Path, monkeypatch) -> None:
-    from tests.support.command_stubs import CommandStub
+def test_complete_waits_for_auto_pushed_head_before_using_old_required_check_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
     project = tmp_path / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    pending_pr = pr_view_json(checks=[{"name": "ci", "status": "QUEUED"}], head_oid="a" * 40)
-    gh_stub = CommandStub(consume=True)
-    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
-    allow_required_checks(gh_stub, "pending")
-    gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fexample", "--jq", "length"], stdout="0\n")
-    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
-    git_stub = CommandStub()
-    git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
-    git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
-    git_stub.add(["rev-list", "--count", "@{u}..HEAD"], stdout="1\n")
-    git_stub.add(["rev-list", "--count", "HEAD..@{u}"], stdout="0\n")
-    git_stub.add(["status", "--porcelain"], stdout="")
-    git_stub.add(["push"])
-    allow_current_base(git_stub, "a" * 40)
+    config_path = project / ".pr-flow" / "config.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["defaults"]["wait"] = {"timeoutSeconds": 30, "pollSeconds": 1}
+    config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    old_head = "a" * 40
+    expected_head = "b" * 40
+    old_pr = json.loads(
+        pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}],
+            review_decision="APPROVED",
+            head_oid=old_head,
+        )
+    )
+    expected_pr = json.loads(
+        pr_view_json(
+            checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+            review_decision="APPROVED",
+            head_oid=expected_head,
+        )
+    )
+    old_pr["id"] = expected_pr["id"] = "PR_kwDO_test"
+    snapshots = [old_pr, old_pr, expected_pr, expected_pr, expected_pr, expected_pr]
+    gh_calls: list[tuple[str, ...]] = []
+    current_head = old_head
+
+    def fake_gh(_project: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        nonlocal current_head
+        gh_calls.append(tuple(args))
+        if tuple(args) == ("pr", "view", "--json", module.PR_VIEW_FIELDS):
+            snapshot = snapshots.pop(0) if snapshots else expected_pr
+            current_head = snapshot["headRefOid"]
+            return subprocess.CompletedProcess(args, 0, json.dumps(snapshot) + "\n", "")
+        if tuple(args) == ("api", "repos/{owner}/{repo}/rules/branches/feature%2Fexample", "--jq", "length"):
+            return subprocess.CompletedProcess(args, 0, "0\n", "")
+        if args[:2] == ("pr", "checks"):
+            bucket, state = ("fail", "FAILURE") if current_head == old_head else ("pass", "SUCCESS")
+            checks = [{"bucket": bucket, "name": "ci", "state": state}]
+            return subprocess.CompletedProcess(args, 0, json.dumps(checks), "")
+        if args[:2] == ("pr", "merge"):
+            return subprocess.CompletedProcess(args, 0, "", "")
+        return subprocess.CompletedProcess(args, 1, "", "unexpected gh command")
+
+    from tests.support.command_stubs import CommandStub
+
+    git_stub = CommandStub(consume=True)
+    for args, stdout in [
+        (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
+        (["rev-list", "--count", "@{u}..HEAD"], "1\n"),
+        (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
+        (["status", "--porcelain"], ""),
+        (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
+        (["rev-parse", "__snapshot_ref__"], "a" * 40 + "\n"),
+        (["merge-base", "--is-ancestor", "a" * 40, old_head], ""),
+        (["push"], ""),
+        (["rev-parse", "HEAD"], expected_head + "\n"),
+        (["branch", "--show-current"], "feature/example\n"),
+        (["rev-parse", "HEAD"], expected_head + "\n"),
+    ]:
+        git_stub.add(args, stdout=stdout)
     monkeypatch.setattr(module, "git", git_stub)
-    monkeypatch.setattr(module, "gh", gh_stub)
+    monkeypatch.setattr(module, "gh", fake_gh)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    cleanup_calls: list[argparse.Namespace] = []
+
+    def fake_cleanup(args: argparse.Namespace) -> int:
+        cleanup_calls.append(args)
+        print("status: cleanup_complete")
+        return 0
+
+    monkeypatch.setattr(module, "run_cleanup", fake_cleanup)
 
     result = invoke_pr_flow(complete_args(project), module=module)
 
-    assert result.returncode == 1
-    assert "status: DISPATCH_REQUIRED" in result.stdout
-    assert ("push",) in git_stub.calls
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "DISPATCH_REQUIRED"
-    assert status["command"] == "complete"
-    assert status["details"]["reason"] == "checks_pending"
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "status: merge_complete" in result.stdout
+    assert "status: cleanup_complete" in result.stdout
+    assert ("pr", "merge", "12", "--merge", "--match-head-commit", expected_head) in gh_calls
+    assert len(cleanup_calls) == 1
 
 
 @pytest.mark.parametrize(
@@ -3877,6 +3933,7 @@ def test_tweak_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path: P
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
     allow_required_checks(gh_stub, "pending")
+    gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
 
@@ -4583,7 +4640,7 @@ def test_terminal_pr_starts_new_lifecycle_from_current_head(
     )
     gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fexample", "--jq", "length"], stdout="0\n")
     gh_stub.add(["pr", "create", "--base", "main", "--fill"], stdout="https://github.example/test/repo/pull/12\n")
-    for _ in range(4):
+    for _ in range(6):
         gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=active_pr)
     allow_required_checks(gh_stub)
     allow_required_checks(gh_stub)
@@ -4599,6 +4656,7 @@ def test_terminal_pr_starts_new_lifecycle_from_current_head(
         (["rev-parse", "__snapshot_ref__"], "a" * 40 + "\n"),
         (["merge-base", "--is-ancestor", "a" * 40, current_head], ""),
         (["push"], ""),
+        (["rev-parse", "HEAD"], current_head + "\n"),
         (["branch", "--show-current"], "feature/example\n"),
     ]:
         git_stub.add(args, stdout=stdout)

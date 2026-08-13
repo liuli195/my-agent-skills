@@ -790,3 +790,16 @@ PR Flow（拉取请求流程）MUST 在可恢复停止状态的 `nextCommand`（
 - **WHEN** PR（拉取请求）源提交在检查观测期间或合并前发生变化
 - **THEN** PR Flow（拉取请求流程） MUST stop with `reason: head_moved`
 - **THEN** stop-state details（停止状态详情） MUST include a `nextCommand`（下一命令） that preserves the original delivery intent
+### Requirement: PR Flow binds auto-pushed checks to the pushed source commit
+PR Flow（拉取请求流程）MUST 把 complete（收尾）或 tweak（小改）自动推送的本地提交记录为本轮当前源提交，并且只使用属于该提交的检查证据。
+
+#### Scenario: 自动推送后远端源提交暂未收敛
+- **WHEN** complete（收尾）或 tweak（小改）自动推送本地提交，而外部系统仍报告先前的 PR（拉取请求）源提交
+- **THEN** PR Flow（拉取请求流程）MUST 在现有配置期限内等待 PR（拉取请求）报告已推送提交，然后才归类检查
+- **THEN** 先前源提交所附检查 MUST NOT 被归类为已推送提交的检查
+- **THEN** 如果远端源提交未在期限内收敛，流程 MUST 在审查或合并前停止，记录预期提交和已观测提交，并提供可复制的恢复命令
+
+#### Scenario: 检查查询期间源提交保持稳定
+- **WHEN** PR（拉取请求）已经报告自动推送的当前源提交
+- **THEN** PR Flow（拉取请求流程）MUST 在读取必需检查后再次确认源提交和目标提交未变化
+- **THEN** 只有属于该稳定提交快照的检查证据 MAY 用于后续审查和合并门禁
