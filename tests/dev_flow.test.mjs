@@ -21,15 +21,14 @@ const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 test("Pi discovers the pure Development Flow package and its disclosed stage references", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "dev-flow-"));
   try {
-    const settingsManager = SettingsManager.inMemory(
-      { packages: [packageRoot] },
-      { projectTrusted: true },
-    );
+    const settingsManager = SettingsManager.inMemory({}, { projectTrusted: true });
     const loader = new DefaultResourceLoader({
       cwd: repoRoot,
       agentDir,
       settingsManager,
+      additionalSkillPaths: [packageRoot],
       noExtensions: false,
+      noSkills: true,
       noPromptTemplates: true,
       noThemes: true,
       noContextFiles: true,
@@ -39,8 +38,9 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     const result = loader.getSkills();
     const skill = result.skills.find(({ name }) => name === "dev-flow");
     assert.ok(skill, `missing dev-flow: ${JSON.stringify(result.diagnostics)}`);
-    assert.equal(skill.sourceInfo.origin, "package");
-    assert.equal(skill.sourceInfo.source, packageRoot);
+    assert.equal(skill.sourceInfo.origin, "top-level");
+    assert.equal(skill.sourceInfo.source, "local");
+    assert.equal(skill.filePath, resolve(skillRoot, "SKILL.md"));
     assert.equal(skill.disableModelInvocation, false);
     assert.match(skill.description, /same Git worktree|single worktree/i);
     assert.match(skill.description, /non-main|feature branch/i);
@@ -84,7 +84,8 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     assert.match(content, /Gate 2 — Specification and Delivery（规格与交付）/);
     assert.match(content, /Completion Check（完成检查）.*not.*third.*authorization/is);
     assert.match(content, /same Git worktree.*non-`main` feature branch/is);
-    assert.match(content, /Implementer.*only writer.*serial/is);
+    assert.match(content, /writable.*strictly serial|strictly serial.*writable/is);
+    assert.doesNotMatch(devFlowText, /Implementer.*only writer|through the Implementer|Give the Implementer|new serial Implementer call/is);
     assert.match(content, /confirmation.*sticky.*recovery/is);
     assert.match(content, /### 核心摘要/);
     assert.match(content, /### 确认后进入的下一步/);
@@ -94,10 +95,22 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
       referenceContent[0],
       /Gate 1[^]*target product[^]*highest real user entry[^]*observable success result[^]*failure or recovery paths/is,
     );
+    assert.match(referenceContent[0], /Flow Level[^]*Fast[^]*Full/is);
+    assert.match(
+      referenceContent[0],
+      /Fast[^]*(?:current session|current-session)[^]*(?:reproducible|replayable)[^]*(?:root cause|diagnosis)[^]*(?:public (?:test )?seam|highest real user entry)/is,
+    );
+    assert.match(referenceContent[0], /Full[^]*(?:default|otherwise)/is);
+    assert.match(
+      referenceContent[0],
+      /(?:scope expands|scope expansion|second independent slice)[^]*(?:security|permission)|(?:security|permission)[^]*(?:scope expands|scope expansion|second independent slice)/is,
+    );
+    assert.match(referenceContent[0], /Gate 1[^]*Flow Level[^]*evidence/is);
     assert.match(
       referenceContent[1],
       /Red→Green[^]*final smoke[^]*behavior acceptance[^]*same entry/is,
     );
+    assert.match(referenceContent[1], /independent review/i);
     assert.doesNotMatch(devFlowText, /real Pi entry smoke/i);
     assert.doesNotMatch(devFlowText, /Claude and Codex/i);
     assert.doesNotMatch(devFlowText, /\b(?:Pi|Claude|Codex)\b/i);

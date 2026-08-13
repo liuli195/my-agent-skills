@@ -53,8 +53,8 @@ The immutable implementation specification confirmed at Gate 1 and used by Imple
 _Avoid_: progress log, mutable evidence record
 
 **Single Writer（单写者）**:
-The Gate 2 rule that every Git-visible implementation change is made by a worktree-bound Implementer while the main Agent orchestrates and evaluates evidence.
-_Avoid_: main Agent implementation, shared writer
+The rule that writable actions in one development worktree are serial.
+_Avoid_: concurrent writers
 
 **Returned（已返回）**:
 The state reached when an Implementer invocation ends; it requires evidence inspection and is not ticket acceptance.
@@ -81,7 +81,7 @@ The third gate that combines formal MySpec（自有规格）archival and PR（�
 _Avoid_: Delivery-plan confirmation
 
 **Flow Level（流程等级）**:
-The risk-based classification that selects the cost and gates applied within a Development Flow（开发流程）.
+The evidence-and-risk classification that selects requirements legwork within a Development Flow（开发流程） while preserving its confirmations and acceptance checks.
 _Avoid_: Complexity level, task size
 
 **Future Input（未来输入）**:
