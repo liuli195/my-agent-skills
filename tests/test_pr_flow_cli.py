@@ -2017,6 +2017,7 @@ def run_complete_in_process(
     for args, stdout, returncode in git_responses or []:
         git_stub.add(args, stdout=stdout, returncode=returncode)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
+    git_stub.add(["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"])
     allow_cleanup(git_stub, project, add_current_head=True)
     monkeypatch.setattr(module, "gh", gh_stub)
     monkeypatch.setattr(module, "git", git_stub)
@@ -2086,6 +2087,7 @@ def run_tweak_in_process(
     git_stub = CommandStub(defaults=default_git_responses(), consume=True)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
+    git_stub.add(["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"])
     git_stub.add(["rev-parse", "HEAD"], stdout=head_oid + "\n")
     git_stub.add(["rev-parse", "HEAD"], stdout=head_oid + "\n")
     allow_cleanup(git_stub, project, add_current_head=bool(first_pr_returncode))

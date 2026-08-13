@@ -33,12 +33,6 @@ def matches(expected: tuple[str, ...], actual: tuple[str, ...]) -> bool:
             and ":refs/pr-flow/" in actual_item
             and actual_item.endswith("/base")
         )
-        or (
-            expected_item == "__snapshot_refspec_any__"
-            and actual_item.startswith("+refs/heads/")
-            and ":refs/pr-flow/" in actual_item
-            and actual_item.endswith("/base")
-        )
         for expected_item, actual_item in zip(expected, actual)
     )
 
@@ -58,15 +52,11 @@ def default_git_responses() -> list[tuple[tuple[str, ...], subprocess.CompletedP
         (("rev-list", "--count", "HEAD..@{u}"), completed(["rev-list", "--count", "HEAD..@{u}"], stdout="0\n")),
         (("status", "--porcelain"), completed(["status", "--porcelain"])),
         (("status", "--short"), completed(["status", "--short"])),
-        (
-            ("fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec_any__"),
-            completed(["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec_any__"]),
-        ),
         (("rev-parse", "HEAD"), completed(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")),
         (("rev-parse", "__snapshot_ref__"), completed(["rev-parse", "__snapshot_ref__"], stdout="a" * 40 + "\n")),
         (
-            ("merge-base", "--is-ancestor", "__placeholder__", "__placeholder__"),
-            completed(["merge-base", "--is-ancestor", "__placeholder__", "__placeholder__"]),
+            ("merge-base", "--is-ancestor", "a" * 40, "b" * 40),
+            completed(["merge-base", "--is-ancestor", "a" * 40, "b" * 40]),
         ),
     ]
 
