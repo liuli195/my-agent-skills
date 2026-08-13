@@ -20,15 +20,20 @@ const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 test("Pi discovers the pure Development Flow package and its disclosed stage references", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "dev-flow-"));
+  const originalHome = process.env.HOME;
+  const originalUserProfile = process.env.USERPROFILE;
+  process.env.HOME = agentDir;
+  process.env.USERPROFILE = agentDir;
   try {
-    const settingsManager = SettingsManager.inMemory({}, { projectTrusted: true });
+    const settingsManager = SettingsManager.inMemory(
+      { packages: [packageRoot] },
+      { projectTrusted: true },
+    );
     const loader = new DefaultResourceLoader({
       cwd: repoRoot,
       agentDir,
       settingsManager,
-      additionalSkillPaths: [packageRoot],
       noExtensions: false,
-      noSkills: true,
       noPromptTemplates: true,
       noThemes: true,
       noContextFiles: true,
@@ -38,9 +43,8 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     const result = loader.getSkills();
     const skill = result.skills.find(({ name }) => name === "dev-flow");
     assert.ok(skill, `missing dev-flow: ${JSON.stringify(result.diagnostics)}`);
-    assert.equal(skill.sourceInfo.origin, "top-level");
-    assert.equal(skill.sourceInfo.source, "local");
-    assert.equal(skill.filePath, resolve(skillRoot, "SKILL.md"));
+    assert.equal(skill.sourceInfo.origin, "package");
+    assert.equal(skill.sourceInfo.source, packageRoot);
     assert.equal(skill.disableModelInvocation, false);
     assert.match(skill.description, /same Git worktree|single worktree/i);
     assert.match(skill.description, /non-main|feature branch/i);
@@ -120,6 +124,10 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
       assert.match(content, new RegExp(`references/${escapeRegExp(name)}`));
     }
   } finally {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
     await rm(agentDir, { recursive: true, force: true });
   }
 });
