@@ -20,6 +20,10 @@ const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 test("Pi discovers the pure Development Flow package and its disclosed stage references", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "dev-flow-"));
+  const originalHome = process.env.HOME;
+  const originalUserProfile = process.env.USERPROFILE;
+  process.env.HOME = agentDir;
+  process.env.USERPROFILE = agentDir;
   try {
     const settingsManager = SettingsManager.inMemory(
       { packages: [packageRoot] },
@@ -84,7 +88,8 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     assert.match(content, /Gate 2 — Specification and Delivery（规格与交付）/);
     assert.match(content, /Completion Check（完成检查）.*not.*third.*authorization/is);
     assert.match(content, /same Git worktree.*non-`main` feature branch/is);
-    assert.match(content, /Implementer.*only writer.*serial/is);
+    assert.match(content, /writable.*strictly serial|strictly serial.*writable/is);
+    assert.doesNotMatch(devFlowText, /Implementer.*only writer|through the Implementer|Give the Implementer|new serial Implementer call/is);
     assert.match(content, /confirmation.*sticky.*recovery/is);
     assert.match(content, /### 核心摘要/);
     assert.match(content, /### 确认后进入的下一步/);
@@ -94,10 +99,22 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
       referenceContent[0],
       /Gate 1[^]*target product[^]*highest real user entry[^]*observable success result[^]*failure or recovery paths/is,
     );
+    assert.match(referenceContent[0], /Flow Level[^]*Fast[^]*Full/is);
+    assert.match(
+      referenceContent[0],
+      /Fast[^]*(?:current session|current-session)[^]*(?:reproducible|replayable)[^]*(?:root cause|diagnosis)[^]*(?:public (?:test )?seam|highest real user entry)/is,
+    );
+    assert.match(referenceContent[0], /Full[^]*(?:default|otherwise)/is);
+    assert.match(
+      referenceContent[0],
+      /(?:scope expands|scope expansion|second independent slice)[^]*(?:security|permission)|(?:security|permission)[^]*(?:scope expands|scope expansion|second independent slice)/is,
+    );
+    assert.match(referenceContent[0], /Gate 1[^]*Flow Level[^]*evidence/is);
     assert.match(
       referenceContent[1],
       /Red→Green[^]*final smoke[^]*behavior acceptance[^]*same entry/is,
     );
+    assert.match(referenceContent[1], /independent review/i);
     assert.doesNotMatch(devFlowText, /real Pi entry smoke/i);
     assert.doesNotMatch(devFlowText, /Claude and Codex/i);
     assert.doesNotMatch(devFlowText, /\b(?:Pi|Claude|Codex)\b/i);
@@ -107,6 +124,10 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
       assert.match(content, new RegExp(`references/${escapeRegExp(name)}`));
     }
   } finally {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
     await rm(agentDir, { recursive: true, force: true });
   }
 });
