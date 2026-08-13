@@ -623,6 +623,13 @@ complete（完整流程）和 tweak（小改）MUST 只使用当前源/目标提
 - **THEN** complete（完整流程）和 tweak（小改）MUST wait for a later check result before any merge attempt
 - **THEN** if the configured wait limit is reached without a terminal result, complete（完整流程）和 tweak（小改）MUST stop without merging
 
+#### Scenario: Auto-pushed source commit becomes the recorded current source
+- **WHEN** complete（完整流程）or tweak（小改）pushes a local source commit that is newer than the PR（拉取请求）head currently reported by the external system
+- **THEN** the pushed local commit MUST become the recorded current source commit for the remaining check、review and merge gates
+- **THEN** PR Flow（拉取请求流程）MUST wait within the existing configured deadline for the PR head to report that commit before classifying its checks
+- **THEN** checks attached to the previously reported PR head MUST NOT be classified as checks for the pushed commit
+- **THEN** if the PR head does not converge within the deadline, complete（完整流程）and tweak（小改）MUST stop without review or merge and provide a recovery command
+
 #### Scenario: Source or target commit changes after gates
 - **WHEN** required checks（必需检查）或 review gate（审查门禁）完成后，PR（拉取请求）的源提交或目标提交发生变化
 - **THEN** 本轮 checks（检查）、review（审查）和 mergeability（可合并状态）结果 MUST be invalidated（失效）
