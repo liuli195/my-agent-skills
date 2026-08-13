@@ -1,39 +1,39 @@
 ---
 name: dev-flow
-description: Orchestrate one development change in the same Git worktree and non-main feature branch; use when a change must run through requirements, serial implementation, verification, review, and PR delivery.
+description: 在同一个 Git（版本管理）工作树和非 main（主干）功能分支中编排一项开发变更；当变更必须依次经过需求、串行实施、验证、审查和 PR（拉取请求）交付时使用。
 ---
 
-# Development Flow（开发流程）
+# 开发流程
 
-This is a pure Skill（技能） route. It has fixed dependencies on `subagent-policy`, `codebase-design`, `grill-with-docs`, `domain-modeling`, `to-spec`, `to-tickets`, `tdd`, `build-and-verify`, `code-review`, MySpec, and PR Flow（拉取请求流程）. It composes the repository's existing Skills（技能） instead of copying their procedures.
+这是一个纯 Skill（技能）路由。它固定依赖 `subagent-policy`、`codebase-design`、`grill-with-docs`、`domain-modeling`、`to-spec`、`to-tickets`、`tdd`、`build-and-verify`、`code-review`、MySpec（自有规格）和 PR Flow（拉取请求流程）。它组合仓库已有的 Skill（技能），而不复制其流程。
 
-## Run（运行）
+## 运行
 
-1. Prove the invocation is in a registered Git worktree on a named, non-`main` feature branch. If the branch is `main`, detached, the worktree cannot be proven, or the effective role/model policy cannot be proven, stop before any write, writable dispatch, or formal confirmation.
-2. Read [requirements](references/requirements.md) for the requirements route and `Gate 1 — Start Development（开始开发）`.
-3. After the first confirmation, read [implementation](references/implementation.md) and complete implementation, verification, and review in the same worktree and branch.
-4. When implementation evidence is accepted, read [delivery](references/delivery.md) for `Gate 2 — Specification and Delivery（规格与交付）`, then apply the confirmed specification and run the authorized delivery.
-5. Run Completion Check（完成检查） as a final report. It is not a third authorization gate.
+1. 证明调用发生在已登记的 Git（版本管理）工作树中，并且位于有名称的非 `main` 功能分支上。如果分支是 `main`、处于 detached HEAD（分离头）状态、无法证明工作树身份，或者无法证明有效的角色/模型策略，则在任何写入、可写派发或正式确认之前停止。
+2. 阅读[需求](references/requirements.md)，执行需求路由和`门禁一——开始开发`。
+3. 第一次确认后，阅读[实施与验证](references/implementation.md)，在同一工作树和分支中完成实施、验证与审查。
+4. 实施证据验收通过后，阅读[规格与交付](references/delivery.md)，执行`门禁二——规格与交付`，然后应用已确认的规格并执行获授权的交付。
+5. 最后执行完成检查并报告结果。完成检查不是第三个授权门禁。
 
-## Global invariants（全局不变量）
+## 全局不变量
 
-- There are exactly two formal confirmations: `开始开发` and `规格与交付`.
-- A confirmation is sticky through the confirmed action and its failure recovery; resume the failed action without asking for that confirmation again.
-- During development and verification, keep the invocation's Git worktree and feature branch unchanged. Do not create or switch a worktree or branch.
-- Writable calls are strictly serial. Read-only investigation may run in parallel only while the repository is stable.
-- Gate 1 binds each change to its target product, highest real user entry, observable success result, and risk-required failure or recovery paths; Red→Green, behavior acceptance, and the final smoke use that same entry.
-- Functional, bug, and integration behavior uses `tdd` red→green. Verification uses `build-and-verify`, requires `status: passed` and non-empty `checked`, and includes the Gate 1-bound real user entry smoke. Review is bounded by the fixed baseline and the actual diff.
-- Final delivery may use the complete PR Flow（拉取请求流程）; only that delivery phase may switch branches and perform safe cleanup. Worktree identity comes from Git worktree registration（Git 工作树登记）, not the `main` name, path name, or host: with `--remove-worktree`（删除工作树参数）, the primary worktree（主工作树） is never removed and, after completion, checks out the actual target/base branch（目标/基础分支） at its latest commit; a registered linked non-primary worktree（已登记关联非主工作树） is retained at that commit in detached HEAD（分离头） only while the active Agent session（活跃代理会话） is inside it, and is still removed when invoked externally. If switching commits is required while the active cwd（活跃当前目录） does not exist in the target commit and is not ignored by Git（版本管理）, stop before switching, without `removeWorktreePending`（工作树删除待处理） or external `nextCommand`（下一命令）.
-- Without a host Adapter（适配器）validated by `subagent-policy`, the flow stops explicitly before delegation.
+- 正式确认恰好有两次：`开始开发`和`规格与交付`。
+- 确认在已确认动作及其失败恢复期间持续有效；恢复失败动作时，不得再次请求该确认。
+- 开发与验证期间，保持调用时的 Git（版本管理）工作树和功能分支不变。不得创建或切换工作树或分支。
+- 可写调用必须严格串行。只有仓库状态稳定时，只读调查才可以并行。
+- 门禁一把每项变更绑定到目标产品、最高层级的真实用户入口、可观察的成功结果，以及风险所要求的失败或恢复路径；Red→Green（红灯到绿灯）、行为验收和最终冒烟均使用同一入口。
+- 功能、缺陷和集成行为使用 `tdd`（测试驱动开发）执行红灯到绿灯。验证使用 `build-and-verify`（构建与验证），要求 `status: passed` 且 `checked` 非空，并包含门禁一所绑定的真实用户入口冒烟。审查范围限定为固定基线和实际差异。
+- 最终交付可以使用完整的 PR Flow（拉取请求流程）；只有该交付阶段可以切换分支并执行安全清理。工作树身份来自 Git worktree registration（Git 工作树登记），而不是 `main` 名称、路径名称或宿主：使用 `--remove-worktree`（删除工作树参数）时，primary worktree（主工作树）绝不会被删除，完成后会在实际 target/base branch（目标/基础分支）的最新提交上检出该分支；registered linked non-primary worktree（已登记关联非主工作树）只有当活跃 Agent（代理）会话位于其中时，才会在该提交上以 detached HEAD（分离头）状态保留，从外部调用时仍会被删除。如果切换提交时活跃 cwd（当前工作目录）在目标提交中不存在且未被 Git（版本管理）忽略，则在切换前停止，并且不得设置 `removeWorktreePending`（工作树删除待处理）或外部 `nextCommand`（下一命令）。
+- 没有经过 `subagent-policy`（子代理策略）验证的宿主 Adapter（适配器）时，流程必须在委派前明确停止。
 
-## Output（输出）
+## 输出
 
-Every formal confirmation and every recovery result has exactly these two blocks and no extra output blocks:
+每次正式确认和每次恢复结果都只能包含以下两个区块，不得增加其他输出区块：
 
 ### 核心摘要
 
-State the current gate, the observable result, the evidence or blocker, and the exact confirmation when one is required.
+说明当前门禁、可观察结果、证据或阻塞项；需要确认时，给出准确的确认用语。
 
 ### 确认后进入的下一步
 
-State the single next route. A confirmed gate resumes its failed action after recovery; Completion Check reports final completion, including an explicitly evidenced active-session worktree retention, or the precise residue.
+说明唯一的下一条路由。门禁确认后若发生失败，则恢复该失败动作；完成检查报告最终完成状态，包括有明确证据的活跃会话工作树保留状态，或准确的遗留项。

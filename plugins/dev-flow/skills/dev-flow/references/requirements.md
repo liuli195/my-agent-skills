@@ -1,32 +1,32 @@
-# Requirements（需求）
+# 需求
 
-Load this reference only for the requirements route and `Gate 1 — Start Development（开始开发）`.
+仅在执行需求路由和`门禁一——开始开发`时加载此参考文档。
 
-## Preconditions（前置条件）
+## 前置条件
 
-- Prove the current repository root, registered worktree, named non-`main` feature branch, and clean starting state with read-only Git inspection; failure stops before any write, writable dispatch, or formal confirmation. Keep this worktree and branch unchanged through development and verification under the parent Global invariants（全局不变量）.
-- If any Skill（技能）required by the current stage is missing or unreadable, stop.
-- Before the first delegation, apply `subagent-policy`; its role, host, and adapter validation are authoritative and are not duplicated here.
-- Keep this route read-only until the first confirmation; do not create or switch a worktree or branch or publish a requirement change while confirmation is pending.
+- 通过只读 Git（版本管理）检查，证明当前仓库根目录、已登记工作树、有名称的非 `main` 功能分支以及干净的起始状态；检查失败时，在任何写入、可写派发或正式确认之前停止。按照上级全局不变量，在开发和验证期间保持此工作树和分支不变。
+- 当前阶段所需的任一 Skill（技能）缺失或不可读时，停止。
+- 首次委派前应用 `subagent-policy`（子代理策略）；其角色、宿主和适配器验证具有权威性，此处不重复规定。
+- 第一次确认前，此路由必须保持只读；等待确认期间，不得创建或切换工作树或分支，也不得发布需求变更。
 
-## Flow Level（流程等级）
+## 流程等级
 
-Record one level and its evidence at Gate 1:
+在门禁一记录一个等级及其证据：
 
-- **Fast（快速）** applies only when the current session has a reproducible failing check, a verified root cause, one existing public test seam that is also the highest real user entry, one vertical slice, no unresolved requirement, and none of the Full risk categories below.
-- **Full（完整）** is the default otherwise. It also applies when Fast evidence becomes invalid, scope expands, a second independent slice appears, or the change involves security, permission, data, migration, release, machine state, cross-system, or destructive risk.
+- **Fast（快速）**仅适用于当前会话具备以下全部条件的情况：存在可复现的失败检查、已验证的根因、一个既是现有公开测试接缝又是最高层级真实用户入口的位置、一个纵向切片、没有未解决的需求，并且不涉及下述任何 Full（完整）风险类别。
+- **Full（完整）**是其他情况的默认等级。如果 Fast（快速）证据失效、范围扩大、出现第二个独立切片，或者变更涉及安全、权限、数据、迁移、发布、机器状态、跨系统或破坏性风险，也使用 Full（完整）。
 
-Both levels keep the same two confirmations, Red→Green（红灯到绿灯）, fixed-baseline non-empty Build and Verify（构建与验证）, real-entry smoke, and independent review. Flow Level changes only the requirements legwork: Fast reuses its verified current-session evidence; Full uses the complete route below.
+两个等级都保留相同的两次确认、Red→Green（红灯到绿灯）、基于固定基线且结果非空的 Build and Verify（构建与验证）、真实入口冒烟和独立审查。流程等级只改变需求调查量：Fast（快速）复用当前会话中已验证的证据；Full（完整）执行下述完整路由。
 
-## Route（路由）
+## 路由
 
-1. For Full, establish and verify evidence for source locations, uncertainties, the observable result, scope, and the highest public test seam; incomplete, unsupported, or unverifiable evidence stops the flow. For Fast, verify and reuse the evidence required by its definition.
-2. Resolve only the decisions and domain terms that remain open. Keep one decision at a time and return to the overall design if scope, seam, or risk changes.
-3. Use `to-spec` to fix the observable contract and highest public seam, then `to-tickets` to split independently observable vertical tickets when the confirmed request is not already one such ticket. Do not manufacture duplicate requirement artifacts.
-4. Record the fixed verification baseline, current worktree and branch, Flow Level and evidence, ticket order, and genuine blocking edges. Read-only investigation can be parallel only while the starting state remains stable.
+1. 对于 Full（完整），建立并验证以下证据：源码位置、不确定项、可观察结果、范围和最高层级的公开测试接缝；证据不完整、无依据或无法验证时，停止流程。对于 Fast（快速），验证并复用其定义所要求的证据。
+2. 只解决仍未确定的决策和领域术语。每次只处理一个决策；如果范围、接缝或风险发生变化，则回到整体设计。
+3. 使用 `to-spec`（转为规格）固定可观察契约和最高层级公开接缝；如果已确认的请求本身还不是一个可独立观察的纵向票据，则使用 `to-tickets`（转为票据）拆分。不得制造重复的需求产物。
+4. 记录固定验证基线、当前工作树和分支、流程等级及其证据、票据顺序以及真实的阻塞关系。只有起始状态保持稳定时，只读调查才可以并行。
 
-## Gate 1 completion（门禁一完成标准）
+## 门禁一完成标准
 
-The result is ready only when the Flow Level and evidence, domain terms, observable scope, target product, highest real user entry, observable success result, risk-required failure or recovery paths, public test seam, vertical tickets, fixed baseline, worktree, branch, and blockers are explicit and supported by evidence. Present `Gate 1 — Start Development（开始开发）` with the two output blocks from the parent Skill（技能） and request exactly `开始开发`.
+只有在流程等级及其证据、领域术语、可观察范围、目标产品、最高层级真实用户入口、可观察成功结果、风险所要求的失败或恢复路径、公开测试接缝、纵向票据、固定基线、工作树、分支和阻塞项均已明确且有证据支持时，结果才算就绪。使用上级 Skill（技能）规定的两个输出区块展示`门禁一——开始开发`，并且只请求`开始开发`。
 
-After confirmation, follow the parent Skill（技能）'s sticky-confirmation recovery rule; a changed requirement or seam is a blocker that returns to this route, not permission to silently broaden the ticket.
+确认后，遵循上级 Skill（技能）的确认持续有效规则；需求或接缝发生变化属于阻塞项，必须返回此路由，而不是静默扩大票据范围。

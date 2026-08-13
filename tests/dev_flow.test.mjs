@@ -46,8 +46,8 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     assert.equal(skill.sourceInfo.origin, "package");
     assert.equal(skill.sourceInfo.source, packageRoot);
     assert.equal(skill.disableModelInvocation, false);
-    assert.match(skill.description, /same Git worktree|single worktree/i);
-    assert.match(skill.description, /non-main|feature branch/i);
+    assert.match(skill.description, /同一个 Git（版本管理）工作树/);
+    assert.match(skill.description, /非 main（主干）功能分支/);
     assert.match(formatSkillsForPrompt([skill]), /<name>dev-flow<\/name>/);
 
     const packageExtensions = loader
@@ -71,50 +71,50 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     );
     const devFlowText = [content, ...referenceContent].join("\n");
     const evidenceRoute = referenceContent[1].match(
-      /## Evidence route[^]*?(?=\n## Completion)/i,
+      /## 证据路径[^]*?(?=\n## 完成标准)/,
     )?.[0];
-    const finalSmokeStep = evidenceRoute?.match(/\n4\.\s+[^]*?(?=\n5\.)/i)?.[0];
-    assert.ok(finalSmokeStep, "missing Evidence route final smoke step");
+    const finalSmokeStep = evidenceRoute?.match(/\n4\.\s+[^]*?(?=\n5\.)/)?.[0];
+    assert.ok(finalSmokeStep, "缺少证据路径中的最终冒烟步骤");
     assert.match(
       finalSmokeStep,
-      /Gate 1-bound target product entry[^]*primary success path[^]*risk-required failure or recovery paths[^]*confirmed by Gate 1/i,
+      /门禁一绑定的目标产品入口[^]*主要成功路径[^]*门禁一确认的风险所要求的失败或恢复路径/,
     );
     assert.doesNotMatch(
       finalSmokeStep,
-      /\bmain\b|\bdetached(?: state)?\b|unproven worktree|policy mismatch/i,
+      /`main`|detached HEAD（分离头）|无法证明工作树|策略不匹配/,
     );
     assert.match(content, /`subagent-policy`/);
-    assert.match(content, /Gate 1 — Start Development（开始开发）/);
-    assert.match(content, /Gate 2 — Specification and Delivery（规格与交付）/);
-    assert.match(content, /Completion Check（完成检查）.*not.*third.*authorization/is);
-    assert.match(content, /same Git worktree.*non-`main` feature branch/is);
-    assert.match(content, /writable.*strictly serial|strictly serial.*writable/is);
-    assert.doesNotMatch(devFlowText, /Implementer.*only writer|through the Implementer|Give the Implementer|new serial Implementer call/is);
-    assert.match(content, /confirmation.*sticky.*recovery/is);
+    assert.match(content, /门禁一——开始开发/);
+    assert.match(content, /门禁二——规格与交付/);
+    assert.match(content, /完成检查不是第三个授权门禁/);
+    assert.match(content, /同一工作树和分支/);
+    assert.match(content, /可写调用必须严格串行/);
+    assert.doesNotMatch(devFlowText, /Implementer（实施者）是唯一写入者|通过 Implementer（实施者）|交给 Implementer（实施者）|新的串行 Implementer（实施者）调用/);
+    assert.match(content, /确认在已确认动作及其失败恢复期间持续有效/);
     assert.match(content, /### 核心摘要/);
     assert.match(content, /### 确认后进入的下一步/);
     assert.doesNotMatch(content, /Gate 3|Gate 4/);
 
     assert.match(
       referenceContent[0],
-      /Gate 1[^]*target product[^]*highest real user entry[^]*observable success result[^]*failure or recovery paths/is,
+      /门禁一[^]*目标产品[^]*最高层级真实用户入口[^]*可观察成功结果[^]*失败或恢复路径/,
     );
-    assert.match(referenceContent[0], /Flow Level[^]*Fast[^]*Full/is);
+    assert.match(referenceContent[0], /流程等级[^]*Fast（快速）[^]*Full（完整）/);
     assert.match(
       referenceContent[0],
-      /Fast[^]*(?:current session|current-session)[^]*(?:reproducible|replayable)[^]*(?:root cause|diagnosis)[^]*(?:public (?:test )?seam|highest real user entry)/is,
+      /Fast（快速）[^]*当前会话[^]*可复现[^]*根因[^]*(?:公开测试接缝|最高层级真实用户入口)/,
     );
-    assert.match(referenceContent[0], /Full[^]*(?:default|otherwise)/is);
+    assert.match(referenceContent[0], /Full（完整）\*\*是其他情况的默认等级/);
     assert.match(
       referenceContent[0],
-      /(?:scope expands|scope expansion|second independent slice)[^]*(?:security|permission)|(?:security|permission)[^]*(?:scope expands|scope expansion|second independent slice)/is,
+      /(?:范围扩大|第二个独立切片)[^]*(?:安全|权限)|(?:安全|权限)[^]*(?:范围扩大|第二个独立切片)/,
     );
-    assert.match(referenceContent[0], /Gate 1[^]*Flow Level[^]*evidence/is);
+    assert.match(referenceContent[0], /门禁一[^]*流程等级[^]*证据/);
     assert.match(
       referenceContent[1],
-      /Red→Green[^]*final smoke[^]*behavior acceptance[^]*same entry/is,
+      /红灯到绿灯检查、最终冒烟和行为验收均使用同一入口/,
     );
-    assert.match(referenceContent[1], /independent review/i);
+    assert.match(referenceContent[1], /独立审查/);
     assert.doesNotMatch(devFlowText, /real Pi entry smoke/i);
     assert.doesNotMatch(devFlowText, /Claude and Codex/i);
     assert.doesNotMatch(devFlowText, /\b(?:Pi|Claude|Codex)\b/i);
