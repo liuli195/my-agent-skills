@@ -740,7 +740,7 @@ RECOVERABLE_NEXT_ACTIONS = {
         "nextAction": "Rerun the same PR Flow command for the current source commit.",
     },
     "head_not_converged": {
-        "nextAction": "Wait for the pushed source commit to reach the PR, then rerun the same PR Flow command.",
+        "nextAction": "等待已推送源提交出现在 PR（拉取请求）中，然后重新运行同一 PR Flow（拉取请求流程）命令。",
     },
     "base_outdated": {
         "nextAction": "Rerun the same PR Flow command against the current base commit.",
@@ -1964,6 +1964,8 @@ def classify_expected_check_gate(
         return classify_check_gate(project, pr)
     if pr.get("headRefOid") != expected_head_oid:
         details = check_gate_details(pr, None, None, CHECK_GATE_HEAD_NOT_CONVERGED)
+        details["observedHeadRefOid"] = pr.get("headRefOid")
+        details["headRefOid"] = expected_head_oid
         details["expectedHeadOid"] = expected_head_oid
         return {"state": CHECK_GATE_HEAD_NOT_CONVERGED, "details": details, "prSnapshot": pr}
 
