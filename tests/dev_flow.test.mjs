@@ -82,10 +82,15 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
       );
     }
     assert.match(referenceContent[0], /当前会话[^]*`grill-with-docs`[^]*`domain-modeling`[^]*`to-spec`[^]*`to-tickets`/);
-    assert.match(referenceContent[0], /当前门禁[^]*明确授权/);
-    assert.match(referenceContent[0], /不得要求固定回复措辞/);
-    assert.match(referenceContent[0], /沉默[^]*提问[^]*修改需求[^]*不能视为授权/);
-    assert.doesNotMatch(devFlowText, /只请求`开始开发`|只请求`规格与交付`|回复[^]*等于[^]*`开始开发`/);
+    assert.match(referenceContent[0], /完整展示当前门禁[^]*用户[^]*明确授权[^]*当前门禁动作/);
+    assert.doesNotMatch(
+      devFlowText,
+      /固定口令|固定回复措辞|逐字回复|不能视为授权|不得要求用户|“确认”“可以”“继续实施\/交付”/,
+    );
+    assert.doesNotMatch(content, /^### /m, "入口应保持薄路由，不展开阶段细节");
+    assert.doesNotMatch(content, /Red→Green|status: passed|checked|removeWorktreePending/);
+    assert.match(referenceContent[0], /门禁一授权前保持只读[^]*沿用当前工作树和分支/);
+    assert.match(referenceContent[2], /准确遗留项[^]*额外明确授权[^]*强制清理/);
     const implementationSteps = referenceContent[1].match(
       /## 流程编排[^]*$/,
     )?.[0];
@@ -99,16 +104,15 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
       finalSmokeStep,
       /`main`|detached HEAD（分离头）|无法证明工作树|策略不匹配/,
     );
-    assert.match(content, /`subagent-policy`/);
-    assert.match(content, /门禁一——开始开发/);
-    assert.match(content, /门禁二——规格与交付/);
-    assert.match(content, /完成检查不是第三个授权门禁/);
-    assert.match(content, /同一工作树和分支/);
-    assert.match(content, /可写调用必须严格串行/);
+    assert.match(referenceContent[0], /`subagent-policy`/);
+    assert.match(referenceContent[0], /门禁一——开始开发/);
+    assert.match(referenceContent[2], /门禁二——规格与交付/);
+    assert.match(referenceContent[2], /完成检查不是第三个授权门禁/);
+    assert.match(referenceContent[1], /同一 Git（版本管理）工作树[^]*同一非 `main` 分支/);
+    assert.match(referenceContent[1], /可写调用严格串行/);
     assert.doesNotMatch(devFlowText, /Implementer（实施者）是唯一写入者|通过 Implementer（实施者）|交给 Implementer（实施者）|新的串行 Implementer（实施者）调用/);
-    assert.match(content, /确认在已确认动作及其失败恢复期间持续有效/);
-    assert.match(content, /### 核心摘要/);
-    assert.match(content, /### 确认后进入的下一步/);
+    assert.match(content, /确认[^]*失败恢复[^]*持续有效/);
+    assert.match(content, /“核心摘要”[^]*“确认后进入的下一步”/);
     assert.doesNotMatch(content, /Gate 3|Gate 4/);
 
     assert.match(
