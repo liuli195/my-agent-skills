@@ -80,7 +80,13 @@ test("Pi discovers the independent subagent-policy skill package and its fixed c
 
     const content = await readFile(skillPath, "utf8");
     for (const text of contract) assert.match(content, new RegExp(escapeRegExp(text)));
-    assert.match(content, /## 路由[^]*宿主没有经过验证的 host Adapter（宿主适配器）[^]*在委派前停止/s);
+    const headings = [...content.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
+    assert.deepEqual(
+      headings,
+      ["MUST — 必须依赖", "流程编排"],
+      "必须且只能依次包含两个顶层编排模块",
+    );
+    assert.match(content, /## 流程编排[^]*宿主没有经过验证的 host Adapter（宿主适配器）[^]*在委派前停止/s);
     assert.doesNotMatch(content, /\bClaude\b|\bCodex\b/);
   } finally {
     if (originalHome === undefined) delete process.env.HOME;

@@ -70,11 +70,27 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
       references.map((name) => readFile(resolve(skillRoot, "references", name), "utf8")),
     );
     const devFlowText = [content, ...referenceContent].join("\n");
-    const evidenceRoute = referenceContent[1].match(
-      /## 证据路径[^]*?(?=\n## 完成标准)/,
+    for (const [name, text] of [
+      ["SKILL.md", content],
+      ...references.map((name, index) => [name, referenceContent[index]]),
+    ]) {
+      const headings = [...text.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
+      assert.deepEqual(
+        headings,
+        ["MUST — 必须依赖", "流程编排"],
+        `${name} 必须且只能依次包含两个顶层编排模块`,
+      );
+    }
+    assert.match(referenceContent[0], /当前会话[^]*`grill-with-docs`[^]*`domain-modeling`[^]*`to-spec`[^]*`to-tickets`/);
+    assert.match(referenceContent[0], /当前门禁[^]*明确授权/);
+    assert.match(referenceContent[0], /不得要求固定回复措辞/);
+    assert.match(referenceContent[0], /沉默[^]*提问[^]*修改需求[^]*不能视为授权/);
+    assert.doesNotMatch(devFlowText, /只请求`开始开发`|只请求`规格与交付`|回复[^]*等于[^]*`开始开发`/);
+    const implementationSteps = referenceContent[1].match(
+      /## 流程编排[^]*$/,
     )?.[0];
-    const finalSmokeStep = evidenceRoute?.match(/\n4\.\s+[^]*?(?=\n5\.)/)?.[0];
-    assert.ok(finalSmokeStep, "缺少证据路径中的最终冒烟步骤");
+    const finalSmokeStep = implementationSteps?.match(/\n5\.\s+[^]*?(?=\n6\.)/)?.[0];
+    assert.ok(finalSmokeStep, "缺少流程编排中的最终冒烟步骤");
     assert.match(
       finalSmokeStep,
       /门禁一绑定的目标产品入口[^]*主要成功路径[^]*门禁一确认的风险所要求的失败或恢复路径/,
