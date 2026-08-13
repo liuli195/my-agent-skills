@@ -131,6 +131,39 @@ def test_command_stub_records_gh_calls() -> None:
     assert stub.calls == [("gh", "pr", "view")]
 
 
+def test_command_stub_keeps_default_git_reads_available_without_allowing_writes(tmp_path: Path) -> None:
+    from tests.support.command_stubs import CommandStub, default_git_responses
+
+    stub = CommandStub(defaults=default_git_responses())
+
+    first = stub(tmp_path, "branch", "--show-current")
+    second = stub(tmp_path, "branch", "--show-current")
+    write = stub(tmp_path, "push", "origin", "feature/example")
+
+    assert first.stdout == second.stdout == "feature/example\n"
+    assert write.returncode == 1
+    assert "unexpected_command" in write.stderr
+
+
+def test_command_stub_explicit_git_reads_override_defaults_in_sequence(tmp_path: Path) -> None:
+    from tests.support.command_stubs import CommandStub, default_git_responses
+
+    stub = CommandStub(defaults=default_git_responses(), consume=True)
+    stub.add(["rev-parse", "HEAD"], stderr="query failed", returncode=1)
+    stub.add(["rev-parse", "HEAD"], stdout="")
+    stub.add(["rev-parse", "HEAD"], stdout="c" * 40 + "\n")
+
+    failed = stub(tmp_path, "rev-parse", "HEAD")
+    empty = stub(tmp_path, "rev-parse", "HEAD")
+    changed = stub(tmp_path, "rev-parse", "HEAD")
+    fallback = stub(tmp_path, "rev-parse", "HEAD")
+
+    assert (failed.returncode, failed.stderr) == (1, "query failed")
+    assert empty.stdout == ""
+    assert changed.stdout == "c" * 40 + "\n"
+    assert fallback.stdout == "b" * 40 + "\n"
+
+
 def test_command_stub_closes_body_file(monkeypatch, tmp_path: Path) -> None:
     from tests.support.command_stubs import CommandStub
 
@@ -1929,7 +1962,7 @@ def run_complete_in_process(
     project: Path | None = None,
     command_args: list[str] | None = None,
 ) -> tuple[Path, subprocess.CompletedProcess[str]]:
-    from tests.support.command_stubs import CommandStub
+    from tests.support.command_stubs import CommandStub, default_git_responses
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
@@ -1980,17 +2013,11 @@ def run_complete_in_process(
             ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
             stdout=cleanup_stdout,
         )
-    git_stub = CommandStub()
+    git_stub = CommandStub(defaults=default_git_responses())
     for args, stdout, returncode in git_responses or []:
         git_stub.add(args, stdout=stdout, returncode=returncode)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
-    git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
-    git_stub.add(["rev-list", "--count", "@{u}..HEAD"], stdout="0\n")
-    git_stub.add(["rev-list", "--count", "HEAD..@{u}"], stdout="0\n")
-    git_stub.add(["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"])
-    git_stub.add(["rev-parse", "__snapshot_ref__"], stdout="a" * 40 + "\n")
-    git_stub.add(["merge-base", "--is-ancestor", "a" * 40, "b" * 40])
-    allow_cleanup(git_stub, project)
+    allow_cleanup(git_stub, project, add_current_head=True)
     monkeypatch.setattr(module, "gh", gh_stub)
     monkeypatch.setattr(module, "git", git_stub)
     args = list(command_args) if command_args is not None else complete_args(project, fixes=fixes)
@@ -2012,7 +2039,7 @@ def run_tweak_in_process(
     forbid_full_verify: bool = False,
     required_response: tuple[str, str, int] | None = None,
 ) -> tuple[Path, subprocess.CompletedProcess[str], object]:
-    from tests.support.command_stubs import CommandStub
+    from tests.support.command_stubs import CommandStub, default_git_responses
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
@@ -2056,21 +2083,11 @@ def run_tweak_in_process(
         )
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
 
-    git_stub = CommandStub(consume=True)
-    for git_args, stdout in [
-        (["branch", "--show-current"], "feature/example\n"),
-        (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
-        (["rev-list", "--count", "@{u}..HEAD"], "0\n"),
-        (["rev-list", "--count", "HEAD..@{u}"], "0\n"),
-        (["rev-parse", "HEAD"], head_oid + "\n"),
-        (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
-        (["rev-parse", "__snapshot_ref__"], "a" * 40 + "\n"),
-        (["merge-base", "--is-ancestor", "a" * 40, head_oid], ""),
-        (["branch", "--show-current"], "feature/example\n"),
-        (["rev-parse", "HEAD"], head_oid + "\n"),
-        (["status", "--short"], ""),
-    ]:
-        git_stub.add(git_args, stdout=stdout)
+    git_stub = CommandStub(defaults=default_git_responses(), consume=True)
+    git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
+    git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
+    git_stub.add(["rev-parse", "HEAD"], stdout=head_oid + "\n")
+    git_stub.add(["rev-parse", "HEAD"], stdout=head_oid + "\n")
     allow_cleanup(git_stub, project, add_current_head=bool(first_pr_returncode))
     monkeypatch.setattr(module, "gh", gh_stub)
     monkeypatch.setattr(module, "git", git_stub)
