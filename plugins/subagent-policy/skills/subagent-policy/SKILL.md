@@ -1,47 +1,47 @@
 ---
 name: subagent-policy
-description: Host-neutral rules for validating fixed subagent role contracts before delegating any subagent; use when the main agent is about to delegate work.
+description: 委派任何子代理前，用于验证固定子代理角色契约的宿主中立规则；主代理即将委派工作时使用。
 ---
 
-# Subagent Policy（子代理策略）
+# 子代理策略
 
-This Skill（技能） defines the host-neutral contract for selecting a named Subagent role（子代理角色）. The main agent decides whether and when to delegate. This Skill does not decide whether delegation is useful, install configuration, or implement a runtime dispatcher.
+此 Skill（技能）定义选择具名 Subagent role（子代理角色）时使用的宿主中立契约。主代理决定是否委派以及何时委派。此 Skill（技能）不判断委派是否有用，不安装配置，也不实现运行时派发器。
 
-## Check（校验）
+## 校验
 
-Check the effective host configuration once per session before the first delegation. Prove all of the following before selecting a role:
+每个会话在首次委派前检查一次有效宿主配置。选择角色前，证明以下全部条件：
 
-1. Confirm default agents are disabled; exactly these four roles are enabled, with no unregistered roles.
-2. Every enabled role's description, model, thinking level, capabilities/resources, `prompt_mode`, and prompt exactly match this contract.
-3. Confirm each pinned model resolves in the host's active model registry (Pi's active model registry for the Pi mapping).
-4. The host has a verified native mapping for this contract. This package provides only the Pi mapping below.
+1. 确认默认代理已禁用；只启用下列四个角色，不存在未登记角色。
+2. 每个已启用角色的描述、模型、思考强度、能力/资源、`prompt_mode`（提示词模式）和提示词都与此契约完全一致。
+3. 确认每个固定模型都能在宿主的活跃模型注册表中解析；Pi（编码代理）映射使用 Pi（编码代理）的活跃模型注册表。
+4. 宿主具有经过验证、适用于此契约的原生映射。此包只提供下述 Pi（编码代理）映射。
 
-A missing value, an unprovable value, a project override, a model-resolution failure, or any other difference is a failed check. Do not repair, override, inherit, downgrade, or retry with another role.
+缺少值、无法证明某个值、存在项目覆盖、模型解析失败或任何其他差异，都表示校验失败。不得修复、覆盖、继承、降级，也不得改用其他角色重试。
 
-## Fixed role contract（固定角色契约）
+## 固定角色契约
 
-| Role | Description | Pi model | Thinking | Capabilities/resources |
+| 角色 | 描述 | Pi（编码代理）模型 | 思考强度 | 能力/资源 |
 | --- | --- | --- | --- | --- |
-| Explorer | Read-only investigator for delegated search, research, and evidence gathering. | `openai-codex/gpt-5.6-luna` | `low` | Read, search, read-only shell commands, and web search |
-| Implementer | Implements delegated code or documentation from confirmed requirements. | `openai-codex/gpt-5.6-luna` | `max` | Full implementation tools; no extensions; preloaded TDD |
-| Reviewer | Independently reviews delegated code or documentation against requirements and repository rules. | `openai-codex/gpt-5.6-sol` | `medium` | Read, search, and read-only shell commands |
-| Architect | Read-only investigator for architecture, architectural decision-making, and difficult bug diagnosis. | `openai-codex/gpt-5.6-sol` | `max` | Read, search, and read-only shell commands |
+| Explorer（调查者） | 以只读方式执行被委派的搜索、研究和证据收集。 | `openai-codex/gpt-5.6-luna` | `low`（低） | 读取、搜索、只读 Shell（命令行）命令和网页搜索 |
+| Implementer（实施者） | 根据已确认需求实施被委派的代码或文档。 | `openai-codex/gpt-5.6-luna` | `max`（最高） | 完整实施工具；禁用扩展；预加载 TDD（测试驱动开发） |
+| Reviewer（审查者） | 根据需求和仓库规则，独立审查被委派的代码或文档。 | `openai-codex/gpt-5.6-sol` | `medium`（中等） | 读取、搜索和只读 Shell（命令行）命令 |
+| Architect（架构师） | 以只读方式调查架构、架构决策和疑难缺陷诊断。 | `openai-codex/gpt-5.6-sol` | `max`（最高） | 读取、搜索和只读 Shell（命令行）命令 |
 
-Every role uses `prompt_mode: append` and its matching prompt:
+每个角色都使用 `prompt_mode: append`（追加提示词模式）以及与其对应的提示词：
 
-- **Explorer:** Investigate the delegated question in read-only mode and return concise findings with evidence, source locations, and uncertainties.
-- **Implementer:** Use `/skill:tdd` before implementing feature, bug, or integration behavior; follow the red-green loop, implement the delegated code or documentation task according to the provided requirements, repository rules, and existing patterns, verify the result, and report changes and unresolved issues.
-- **Reviewer:** Independently review the delegated code or documentation scope against the provided requirements and repository rules; report actionable findings with severity and evidence.
-- **Architect:** Investigate architecture, architectural decision-making, or difficult bug diagnosis in read-only mode.
+- **Explorer（调查者）：** 以只读方式调查被委派的问题，并返回简洁的发现、证据、来源位置和不确定项。
+- **Implementer（实施者）：** 实施功能、缺陷或集成行为前使用 `/skill:tdd`（测试驱动开发技能）；遵循红灯到绿灯循环，根据提供的需求、仓库规则和现有模式实施被委派的代码或文档任务，验证结果，并报告改动和未解决的问题。
+- **Reviewer（审查者）：** 根据提供的需求和仓库规则，独立审查被委派的代码或文档范围；报告包含严重程度和证据、可采取行动的发现。
+- **Architect（架构师）：** 以只读方式调查架构、架构决策或疑难缺陷诊断。
 
-For the Pi Implementer mapping, also prove `extensions: false` and `skills: tdd`. These are host resource settings, not resources provided by this package.
+对于 Pi（编码代理）的 Implementer（实施者）映射，还要证明 `extensions: false`（禁用扩展）和 `skills: tdd`（预加载测试驱动开发技能）。这些是宿主资源设置，并非由此包提供的资源。
 
-## Route（路由）
+## 路由
 
-Only an exact match of every field permits selecting the corresponding host-native role. When the check passes, select that role without temporary model, thinking, capability, or prompt overrides.
+只有每个字段都完全匹配时，才允许选择相应的宿主原生角色。校验通过后，选择该角色，不得临时覆盖模型、思考强度、能力或提示词。
 
-If any field differs, cannot be proven, or the host has no verified host Adapter（适配器）, stop before delegation. Do not silently select a default, generic, unregistered, or fallback role.
+如果任一字段不同、无法证明，或者宿主没有经过验证的 host Adapter（宿主适配器），则在委派前停止。不得静默选择默认、通用、未登记或后备角色。
 
-## Accept（验收）
+## 验收
 
-A returned report is not proof of completion. The main agent must verify the subagent's actual result before relying on it or declaring the work complete. Verify the observed host result and the task-specific evidence, such as the actual role and runtime metadata, files, branch, diff, and checks, before accepting the result.
+子代理返回的报告不能证明任务完成。主代理在依赖其结果或宣告工作完成前，必须验证子代理的实际结果。验收结果前，应验证观察到的宿主结果和任务特定证据，例如实际角色和运行时元数据、文件、分支、差异与检查结果。

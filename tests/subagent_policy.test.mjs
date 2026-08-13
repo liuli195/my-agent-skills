@@ -19,28 +19,32 @@ const skillPath = resolve(skillRoot, "SKILL.md");
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const contract = [
-  "The main agent decides whether and when to delegate.",
-  "Check the effective host configuration once per session before the first delegation.",
-  "exactly these four roles are enabled",
-  "active model registry",
-  "| Explorer | Read-only investigator for delegated search, research, and evidence gathering. | `openai-codex/gpt-5.6-luna` | `low` | Read, search, read-only shell commands, and web search |",
-  "| Implementer | Implements delegated code or documentation from confirmed requirements. | `openai-codex/gpt-5.6-luna` | `max` | Full implementation tools; no extensions; preloaded TDD |",
-  "| Reviewer | Independently reviews delegated code or documentation against requirements and repository rules. | `openai-codex/gpt-5.6-sol` | `medium` | Read, search, and read-only shell commands |",
-  "| Architect | Read-only investigator for architecture, architectural decision-making, and difficult bug diagnosis. | `openai-codex/gpt-5.6-sol` | `max` | Read, search, and read-only shell commands |",
+  "主代理决定是否委派以及何时委派。",
+  "每个会话在首次委派前检查一次有效宿主配置。",
+  "只启用下列四个角色",
+  "活跃模型注册表",
+  "| Explorer（调查者） | 以只读方式执行被委派的搜索、研究和证据收集。 | `openai-codex/gpt-5.6-luna` | `low`（低） | 读取、搜索、只读 Shell（命令行）命令和网页搜索 |",
+  "| Implementer（实施者） | 根据已确认需求实施被委派的代码或文档。 | `openai-codex/gpt-5.6-luna` | `max`（最高） | 完整实施工具；禁用扩展；预加载 TDD（测试驱动开发） |",
+  "| Reviewer（审查者） | 根据需求和仓库规则，独立审查被委派的代码或文档。 | `openai-codex/gpt-5.6-sol` | `medium`（中等） | 读取、搜索和只读 Shell（命令行）命令 |",
+  "| Architect（架构师） | 以只读方式调查架构、架构决策和疑难缺陷诊断。 | `openai-codex/gpt-5.6-sol` | `max`（最高） | 读取、搜索和只读 Shell（命令行）命令 |",
   "prompt_mode: append",
   "extensions: false",
   "skills: tdd",
-  "Use `/skill:tdd` before implementing feature, bug, or integration behavior; follow the red-green loop",
-  "Investigate the delegated question in read-only mode and return concise findings with evidence, source locations, and uncertainties.",
-  "Independently review the delegated code or documentation scope against the provided requirements and repository rules; report actionable findings with severity and evidence.",
-  "Investigate architecture, architectural decision-making, or difficult bug diagnosis in read-only mode.",
-  "Only an exact match of every field permits selecting the corresponding host-native role.",
-  "If any field differs, cannot be proven, or the host has no verified host Adapter（适配器）, stop before delegation.",
-  "The main agent must verify the subagent's actual result before relying on it or declaring the work complete.",
+  "实施功能、缺陷或集成行为前使用 `/skill:tdd`（测试驱动开发技能）；遵循红灯到绿灯循环",
+  "以只读方式调查被委派的问题，并返回简洁的发现、证据、来源位置和不确定项。",
+  "独立审查被委派的代码或文档范围；报告包含严重程度和证据、可采取行动的发现。",
+  "以只读方式调查架构、架构决策或疑难缺陷诊断。",
+  "只有每个字段都完全匹配时，才允许选择相应的宿主原生角色。",
+  "如果任一字段不同、无法证明，或者宿主没有经过验证的 host Adapter（宿主适配器），则在委派前停止。",
+  "主代理在依赖其结果或宣告工作完成前，必须验证子代理的实际结果。",
 ];
 
 test("Pi discovers the independent subagent-policy skill package and its fixed contract", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "subagent-policy-"));
+  const originalHome = process.env.HOME;
+  const originalUserProfile = process.env.USERPROFILE;
+  process.env.HOME = agentDir;
+  process.env.USERPROFILE = agentDir;
   try {
     const settingsManager = SettingsManager.inMemory(
       { packages: [packageRoot] },
@@ -63,7 +67,7 @@ test("Pi discovers the independent subagent-policy skill package and its fixed c
     assert.equal(skill.sourceInfo.origin, "package");
     assert.equal(skill.sourceInfo.source, packageRoot);
     assert.equal(skill.disableModelInvocation, false);
-    assert.match(skill.description, /before delegating any subagent/i);
+    assert.match(skill.description, /委派任何子代理前/);
     assert.match(formatSkillsForPrompt([skill]), /<name>subagent-policy<\/name>/);
 
     const packageExtensions = loader
@@ -76,9 +80,13 @@ test("Pi discovers the independent subagent-policy skill package and its fixed c
 
     const content = await readFile(skillPath, "utf8");
     for (const text of contract) assert.match(content, new RegExp(escapeRegExp(text)));
-    assert.match(content, /## Route[^]*host has no verified host Adapter（适配器）[^]*stop before delegation/is);
+    assert.match(content, /## 路由[^]*宿主没有经过验证的 host Adapter（宿主适配器）[^]*在委派前停止/s);
     assert.doesNotMatch(content, /\bClaude\b|\bCodex\b/);
   } finally {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
     await rm(agentDir, { recursive: true, force: true });
   }
 });

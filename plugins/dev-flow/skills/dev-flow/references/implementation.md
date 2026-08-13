@@ -1,33 +1,33 @@
-# Implementation and Verification（实施与验证）
+# 实施与验证
 
-Load this reference only after `Gate 1 — Start Development（开始开发）` is confirmed.
+仅在`门禁一——开始开发`获得确认后加载此参考文档。
 
-## Preconditions（前置条件）
+## 前置条件
 
-- Recheck the registered current worktree, named non-`main` branch, clean state, and fixed verification baseline before any write; failure stops. Keep the worktree and branch unchanged through this route under the parent Global invariants（全局不变量）.
-- Before each delegation, apply `subagent-policy`; its validated host-native role and adapter stop rules are authoritative.
-- Apply the parent Global invariants（全局不变量） for serial writable calls. Read-only investigation or review may run in parallel only while the worktree and branch are stable.
+- 在任何写入前，重新检查已登记的当前工作树、有名称的非 `main` 分支、干净状态和固定验证基线；检查失败时停止。按照上级全局不变量，在此路由期间保持工作树和分支不变。
+- 每次委派前应用 `subagent-policy`（子代理策略）；其已验证的宿主原生角色和适配器停止规则具有权威性。
+- 可写调用应遵循上级全局不变量，保持串行。只有工作树和分支状态稳定时，只读调查或审查才可以并行。
 
 ## Red→Green（红灯到绿灯）
 
-For every feature, bug, or integration slice, use `tdd` at the Gate 1-bound target product's highest real user entry. The Red→Green check, final smoke, and behavior acceptance all use that same entry:
+对于每个功能、缺陷或集成切片，在门禁一所绑定目标产品的最高层级真实用户入口使用 `tdd`（测试驱动开发）。红灯到绿灯检查、最终冒烟和行为验收均使用同一入口：
 
-1. Write and run the smallest failing check for the observable behavior.
-2. Make the minimum implementation change.
-3. Rerun the check green, then continue to the next vertical slice.
+1. 针对可观察行为，编写并运行最小的失败检查。
+2. 进行最小的实施修改。
+3. 重新运行检查并确认转绿，然后继续下一个纵向切片。
 
-Use the smallest relevant check for behavior-neutral documentation. Do not replace a failing public check with an implementation-only assertion. Keep the approved ticket immutable; a changed observable requirement returns to the requirements route.
+行为不变的文档修改使用最小的相关检查。不得用仅检查实施细节的断言替代失败的公开检查。已批准票据必须保持不变；可观察需求发生变化时，返回需求路由。
 
-## Evidence route（证据路径）
+## 证据路径
 
-1. Keep each change within the approved acceptance, public seam, fixed baseline, required checks, smoke path, expected clean Git state, and stop conditions.
-2. Inspect the worktree evidence: verify the focused diff and commit are after the fixed baseline, ownership is limited to the ticket, the worktree is clean, and the main worktree is unchanged.
-3. Read and use `build-and-verify` as the only formal verification entry. Run `build-and-verify verify --project <current-worktree> --base <fixed-baseline>` and accept only `status: passed` with a non-empty `checked` result. A skipped or empty result is not evidence of a pass.
-4. Run the final smoke through the Gate 1-bound target product entry: cover its primary success path and the risk-required failure or recovery paths confirmed by Gate 1. Save raw sanitized events, output, exit code, and Git before/after state outside the ticket. Internal tests do not replace this smoke.
-5. Use `code-review` at the fixed baseline for an independent review limited to the actual diff and necessary context. Resolve blocking findings, rerun the affected check and smoke, and review only the fix diff.
+1. 每项变更都必须限定在已批准的验收条件、公开接缝、固定基线、必需检查、冒烟路径、预期干净 Git（版本管理）状态和停止条件内。
+2. 检查工作树证据：确认聚焦差异和提交位于固定基线之后、改动归属仅限本票据、工作树干净，并且主工作树未发生变化。
+3. 阅读并使用 `build-and-verify`（构建与验证）作为唯一正式验证入口。运行 `build-and-verify verify --project <current-worktree> --base <fixed-baseline>`，并且只接受 `status: passed` 且 `checked` 非空的结果。跳过或空结果不构成通过证据。
+4. 通过门禁一绑定的目标产品入口执行最终冒烟：覆盖其主要成功路径，以及门禁一确认的风险所要求的失败或恢复路径。把原始且已脱敏的事件、输出、退出码和 Git（版本管理）前后状态保存在票据之外。内部测试不能替代该冒烟。
+5. 在固定基线上使用 `code-review`（代码审查）执行独立审查，范围仅限实际差异和必要上下文。解决阻塞性发现，重新运行受影响的检查和冒烟，并且只审查修复差异。
 
-## Completion（完成标准）
+## 完成标准
 
-Implementation is accepted only when the exact worktree and branch remain correct, the focused commit and clean diff contain only the approved ticket, every required red→green check passes, the fixed-baseline Build and Verify result is `passed` with non-empty `checked`, the Gate 1-bound real user entry smoke and behavior acceptance pass, and the bounded review has no unresolved blocker. Then load [delivery](delivery.md) for the single `Gate 2 — Specification and Delivery（规格与交付）` confirmation.
+只有满足以下全部条件时，实施才算验收通过：准确的工作树和分支保持正确；聚焦提交和干净差异仅包含已批准票据；所有必需的红灯到绿灯检查均通过；基于固定基线的 Build and Verify（构建与验证）结果为 `passed` 且 `checked` 非空；门禁一绑定的真实用户入口冒烟和行为验收通过；范围受控的审查不存在未解决的阻塞项。随后加载[规格与交付](delivery.md)，请求唯一的`门禁二——规格与交付`确认。
 
-The parent Skill（技能）'s sticky-confirmation recovery rule remains in force; do not ask for `开始开发` again after a failed check or review.
+上级 Skill（技能）的确认持续有效规则仍然适用；检查或审查失败后，不得再次请求`开始开发`。
