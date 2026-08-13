@@ -623,13 +623,6 @@ complete（完整流程）和 tweak（小改）MUST 只使用当前源/目标提
 - **THEN** complete（完整流程）和 tweak（小改）MUST wait for a later check result before any merge attempt
 - **THEN** if the configured wait limit is reached without a terminal result, complete（完整流程）和 tweak（小改）MUST stop without merging
 
-#### Scenario: 自动推送的源提交成为记录的当前源提交
-- **WHEN** complete（完整流程）或 tweak（小改）推送了比外部系统当前报告的 PR（拉取请求）源提交更新的本地提交
-- **THEN** 已推送的本地提交 MUST 成为后续检查、审查和合并门禁所记录的当前源提交
-- **THEN** PR Flow（拉取请求流程）MUST 在现有配置期限内等待 PR（拉取请求）报告该源提交，然后才归类其检查
-- **THEN** 先前报告的 PR（拉取请求）源提交所附检查 MUST NOT 被归类为已推送提交的检查
-- **THEN** 如果 PR（拉取请求）源提交未在期限内收敛，complete（完整流程）和 tweak（小改）MUST 在审查或合并前停止并提供恢复命令
-
 #### Scenario: Source or target commit changes after gates
 - **WHEN** required checks（必需检查）或 review gate（审查门禁）完成后，PR（拉取请求）的源提交或目标提交发生变化
 - **THEN** 本轮 checks（检查）、review（审查）和 mergeability（可合并状态）结果 MUST be invalidated（失效）
