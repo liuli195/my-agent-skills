@@ -142,6 +142,7 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
       /结果均为空[^]*加载\[规格与交付\]\(delivery\.md\)/,
     );
     assert.match(referenceContent[2], /预览[^]*明确授权[^]*门禁二授权后[^]*应用/);
+    assert.match(referenceContent[2], /完整差异[^]*引用[^]*不在门禁[^]*展开/);
 
     assert.match(referenceContent[0], /`subagent-policy`/);
     assert.match(referenceContent[0], /门禁一——开始开发/);
