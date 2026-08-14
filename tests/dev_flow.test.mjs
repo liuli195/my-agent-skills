@@ -15,8 +15,18 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageRoot = resolve(repoRoot, "plugins", "dev-flow");
 const skillRoot = resolve(packageRoot, "skills", "dev-flow");
 const references = ["requirements.md", "implementation.md", "delivery.md"];
+const changeName = "2026-08-14-enforce-dev-flow-dependency-artifacts";
 
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function assertInOrder(text, ...needles) {
+  let offset = -1;
+  for (const needle of needles) {
+    const next = text.indexOf(needle, offset + 1);
+    assert.ok(next > offset, `expected ${needle} after ${needles[needles.indexOf(needle) - 1] ?? "the start"}`);
+    offset = next;
+  }
+}
 
 test("Pi discovers the pure Development Flow package and its disclosed stage references", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "dev-flow-"));
@@ -89,6 +99,106 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     );
     assert.doesNotMatch(content, /^### /m, "入口应保持薄路由，不展开阶段细节");
     assert.doesNotMatch(content, /Red→Green|status: passed|checked|removeWorktreePending/);
+
+    const phaseDependencies = {
+      "requirements.md": [
+        "subagent-policy",
+        "codebase-design",
+        "grill-with-docs",
+        "grilling",
+        "domain-modeling",
+        "to-spec",
+        "to-tickets",
+      ],
+      "implementation.md": [
+        "subagent-policy",
+        "tdd",
+        "build-and-verify",
+        "code-review",
+      ],
+      "delivery.md": ["my-spec", "my-spec-add", "pr-flow-complete"],
+    };
+    for (const [name, dependencies] of Object.entries(phaseDependencies)) {
+      const text = referenceContent[references.indexOf(name)];
+      for (const dependency of dependencies) {
+        assert.match(text, new RegExp("`" + escapeRegExp(dependency) + "`"));
+      }
+      assert.match(text, /## MUST — 必须依赖/);
+      assert.match(text, /## 流程编排/);
+    }
+
+    assert.match(content, /宿主[^]*技能清单[^]*精确技能名[^]*唯一[^]*location/);
+    assert.match(content, /`~\/\.agents\/skills\/<skill-name>\/SKILL\.md`/);
+    assert.match(content, /本入口 `dev-flow` SKILL\.md 中的阶段参考链接[^]*当前 `dev-flow` SKILL\.md 目录/);
+    assert.match(content, /`docs\/`[^]*`myspec\/`[^]*仓库根目录/);
+    assert.match(
+      content,
+      /名称缺失[^]*路径不存在[^]*不可读[^]*name[^]*不匹配[^]*多个入口[^]*停止[^]*缺口[^]*恢复/,
+    );
+    assert.equal(/[A-Z]:[\\\\/]/.test(content), false);
+    assert.doesNotMatch(content, /[\\\\/]Users[\\\\/]/);
+
+    const requirements = referenceContent[0];
+    const implementation = referenceContent[1];
+    const delivery = referenceContent[2];
+    assert.match(requirements, /`subagent-policy`[^]*首次委派前/);
+    assert.match(requirements, /Architect[^]*`codebase-design`[^]*实际使用/);
+    assert.match(requirements, /`grill-with-docs`[^]*`grilling`[^]*`domain-modeling`/);
+    assert.match(requirements, /Full[^]*`to-spec`[^]*`to-tickets`/);
+    assert.match(requirements, /Fast[^]*`to-spec`[^]*`to-tickets`/);
+    assertInOrder(requirements, "`to-spec`", "`to-tickets`");
+    assert.match(implementation, /`subagent-policy`[^]*首次委派前/);
+    assert.match(implementation, /`tdd`[^]*每[^]*票据[^]*红灯[^]*绿灯/);
+    assert.match(implementation, /`build-and-verify`[^]*正式验证前/);
+    assert.match(implementation, /`code-review`[^]*独立审查前/);
+    assertInOrder(implementation, "`subagent-policy`", "`tdd`", "`build-and-verify`", "`code-review`");
+    assert.match(delivery, /官方 `my-spec`[^]*实际调用/);
+    assert.match(delivery, /需要规格变更[^]*`my-spec-add`[^]*实际调用/);
+    assert.match(delivery, /门禁二授权后[^]*`pr-flow-complete`/);
+    assert.match(delivery, /门禁二授权后[^]*需要规格变更[^]*`my-spec-add`[^]*`pr-flow-complete`/);
+    assertInOrder(delivery, "预览", "门禁二授权后", "`my-spec-add`", "`pr-flow-complete`");
+
+    assert.ok(requirements.includes("`myspec/changes/<change-name>/spec.md`"));
+    assert.ok(requirements.includes("`myspec/changes/<change-name>/issues/NN-<slug>.md`"));
+    assert.match(requirements, /同一 change 目录[^]*issue-tracker/);
+    for (const phrase of [
+      "门禁一",
+      "读取",
+      "`spec.md`",
+      "全部 `issues/*.md`",
+      "命名",
+      "状态",
+      "顺序",
+      "阻塞",
+      "可观察范围",
+      "测试接缝",
+    ]) assert.ok(requirements.includes(phrase), `requirements missing ${phrase}`);
+    assert.match(requirements, /缺失[^]*空白[^]*不一致[^]*停止/);
+    for (const phrase of [
+      "门禁二",
+      "重新读取",
+      "`spec.md`",
+      "`issues/*.md`",
+      "实际差异",
+      "验证证据",
+      "正式规格预览",
+      "不一致",
+      "停止",
+    ]) assert.ok(delivery.includes(phrase), `delivery missing ${phrase}`);
+
+    const changeRoot = resolve(repoRoot, "myspec", "changes", changeName);
+    const spec = await readFile(resolve(changeRoot, "spec.md"), "utf8");
+    const issueNames = (await readdir(resolve(changeRoot, "issues"))).sort();
+    assert.deepEqual(issueNames, ["01-enforce-dependency-loading-and-change-artifacts.md"]);
+    const issue = await readFile(resolve(changeRoot, "issues", issueNames[0]), "utf8");
+    assert.match(spec, /可观察契约/);
+    assert.match(spec, /MUST|必须/);
+    assert.match(issue, /Status.*ready-for-agent/);
+    assert.match(issue, /Blocked by.*None/);
+    assert.match(issue, /验收条件|Acceptance criteria/);
+    assert.ok(issue.includes("spec.md"));
+    assert.ok(issue.includes("issues/NN-<slug>.md"));
+
     assert.match(referenceContent[0], /门禁一授权前保持只读[^]*沿用当前工作树和分支/);
     assert.match(referenceContent[2], /准确遗留项[^]*额外明确授权[^]*强制清理/);
     const implementationSteps = referenceContent[1].match(
