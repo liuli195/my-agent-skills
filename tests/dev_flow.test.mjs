@@ -129,7 +129,7 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
 
     assert.match(content, /宿主[^]*技能清单[^]*精确技能名[^]*唯一[^]*location/);
     assert.match(content, /`~\/\.agents\/skills\/<skill-name>\/SKILL\.md`/);
-    assert.match(content, /阶段参考链接[^]*当前 `dev-flow` SKILL\.md 目录/);
+    assert.match(content, /本入口 `dev-flow` SKILL\.md 中的阶段参考链接[^]*当前 `dev-flow` SKILL\.md 目录/);
     assert.match(content, /`docs\/`[^]*`myspec\/`[^]*仓库根目录/);
     assert.match(
       content,

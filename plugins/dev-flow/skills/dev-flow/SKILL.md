@@ -11,7 +11,7 @@ description: 在同一个 Git（版本管理）工作树和非 main（主干）�
 
 - 按阶段加载并实际使用对应参考文档：需求使用 [requirements.md](references/requirements.md)，实施与验证使用 [implementation.md](references/implementation.md)，规格与交付使用 [delivery.md](references/delivery.md)。
 - 依赖发现统一使用宿主技能清单，按精确技能名解析唯一 `location`；共享但未列出的技能读取 `~/.agents/skills/<skill-name>/SKILL.md`，并对该入口执行同样校验。
-- 阶段参考链接相对当前 `dev-flow` SKILL.md 目录解析；以 `docs/` 或 `myspec/` 开头的项目文档路径相对仓库根目录解析，不根据调用目录或猜测的安装位置改写路径。
+- 本入口 `dev-flow` SKILL.md 中的阶段参考链接相对当前 `dev-flow` SKILL.md 目录解析；以 `docs/` 或 `myspec/` 开头的项目文档路径相对仓库根目录解析，不根据调用目录或猜测的安装位置改写路径。
 - 名称缺失、路径不存在、不可读、frontmatter `name` 不匹配或多个入口时立即停止，报告缺口、失败阶段和恢复阶段，并保留该恢复位置。
 
 ## 流程编排
