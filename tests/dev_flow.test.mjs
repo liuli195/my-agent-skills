@@ -111,29 +111,35 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     );
     assert.match(
       referenceContent[1],
-      /主代理验收每次实施返回的实际提交与差异时[^]*发现正式规格路径即判定 `REWORK_REQUIRED`[^]*不得接受票据/,
+      /主代理验收每次实施、返工或审查修复返回的实际提交与差异时[^]*发现正式规格路径即判定 `REWORK_REQUIRED`[^]*不得接受票据/,
     );
     const specificationGateStep = implementationSteps?.match(/\n7\.\s+[^]*$/)?.[0];
     assert.ok(specificationGateStep, "缺少准备门禁二前的正式规格差异检查");
     const specificationDiffCommand =
       "`git diff --name-only <fixed-baseline> -- myspec/specs/`";
+    const untrackedSpecificationCommand =
+      "`git ls-files --others --exclude-standard -- myspec/specs/`";
     const diffCheckIndex = specificationGateStep.indexOf(specificationDiffCommand);
+    const untrackedCheckIndex = specificationGateStep.indexOf(
+      untrackedSpecificationCommand,
+    );
     const deliveryLoadIndex = specificationGateStep.indexOf(
       "加载[规格与交付](delivery.md)",
     );
     assert.ok(diffCheckIndex >= 0, "缺少固定基线后的正式规格差异命令");
+    assert.ok(untrackedCheckIndex >= 0, "缺少未跟踪正式规格文件检查");
     assert.ok(
-      diffCheckIndex < deliveryLoadIndex,
-      "必须先检查正式规格差异再加载 delivery.md",
+      Math.max(diffCheckIndex, untrackedCheckIndex) < deliveryLoadIndex,
+      "必须先检查全部正式规格差异再加载 delivery.md",
     );
-    assert.match(specificationGateStep, /命令失败[^]*停止/);
+    assert.match(specificationGateStep, /任一命令失败[^]*停止/);
     assert.match(
       specificationGateStep,
       /非空[^]*逐项列出[^]*停留实施阶段[^]*不准备门禁二[^]*不自动创建回退提交/,
     );
     assert.match(
       specificationGateStep,
-      /结果为空[^]*加载\[规格与交付\]\(delivery\.md\)/,
+      /结果均为空[^]*加载\[规格与交付\]\(delivery\.md\)/,
     );
     assert.match(referenceContent[2], /预览[^]*明确授权[^]*门禁二授权后[^]*应用/);
 
