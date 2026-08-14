@@ -119,9 +119,7 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
       "delivery.md": ["my-spec", "my-spec-add", "pr-flow-complete"],
     };
     for (const [name, dependencies] of Object.entries(phaseDependencies)) {
-      const text = name === "SKILL.md"
-        ? content
-        : referenceContent[references.indexOf(name)];
+      const text = referenceContent[references.indexOf(name)];
       for (const dependency of dependencies) {
         assert.match(text, new RegExp("`" + escapeRegExp(dependency) + "`"));
       }
@@ -131,7 +129,8 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
 
     assert.match(content, /宿主[^]*技能清单[^]*精确技能名[^]*唯一[^]*location/);
     assert.match(content, /`~\/\.agents\/skills\/<skill-name>\/SKILL\.md`/);
-    assert.match(content, /阶段内相对文档[^]*当前 `dev-flow` SKILL\.md 目录/);
+    assert.match(content, /阶段参考链接[^]*当前 `dev-flow` SKILL\.md 目录/);
+    assert.match(content, /`docs\/`[^]*`myspec\/`[^]*仓库根目录/);
     assert.match(
       content,
       /名称缺失[^]*路径不存在[^]*不可读[^]*name[^]*不匹配[^]*多个入口[^]*停止[^]*缺口[^]*恢复/,
@@ -156,6 +155,7 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     assert.match(delivery, /官方 `my-spec`[^]*实际调用/);
     assert.match(delivery, /需要规格变更[^]*`my-spec-add`[^]*实际调用/);
     assert.match(delivery, /门禁二授权后[^]*`pr-flow-complete`/);
+    assert.match(delivery, /门禁二授权后[^]*需要规格变更[^]*`my-spec-add`[^]*`pr-flow-complete`/);
     assertInOrder(delivery, "预览", "门禁二授权后", "`my-spec-add`", "`pr-flow-complete`");
 
     assert.ok(requirements.includes("`myspec/changes/<change-name>/spec.md`"));
