@@ -162,8 +162,10 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     assert.match(delivery, /门禁二授权后[^]*`pr-flow-complete`/);
     assert.match(delivery, /门禁二授权后[^]*需要规格变更[^]*`my-spec-add`[^]*`pr-flow-complete`/);
     assertInOrder(delivery, "预览", "门禁二授权后", "`my-spec-add`", "`pr-flow-complete`");
+    const conflictRecoveryStep = delivery.match(/\n4\.\s+[^]*?(?=\n5\.)/)?.[0];
+    assert.ok(conflictRecoveryStep, "缺少交付阶段的冲突恢复步骤");
     assert.match(
-      delivery,
+      conflictRecoveryStep,
       /进行中的 Git（版本管理）合并或变基冲突[^]*加载、读取和实际使用 `resolving-merge-conflicts`[^]*受影响的检查[^]*原失败步骤恢复/,
     );
 
