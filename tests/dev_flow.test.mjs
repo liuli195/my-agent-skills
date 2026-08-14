@@ -111,7 +111,7 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     );
     assert.match(
       referenceContent[1],
-      /主代理验收每次实施、返工或审查修复返回的实际提交与差异时[^]*发现正式规格路径即判定 `REWORK_REQUIRED`[^]*不得接受票据/,
+      /主代理验收每次实施、返工或审查修复返回的实际文件、提交与差异时[^]*发现已跟踪或未跟踪的正式规格路径即判定 `REWORK_REQUIRED`[^]*不得接受票据/,
     );
     const specificationGateStep = implementationSteps?.match(/\n7\.\s+[^]*$/)?.[0];
     assert.ok(specificationGateStep, "缺少准备门禁二前的正式规格差异检查");
@@ -135,7 +135,7 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     assert.match(specificationGateStep, /任一命令失败[^]*停止/);
     assert.match(
       specificationGateStep,
-      /非空[^]*逐项列出[^]*停留实施阶段[^]*不准备门禁二[^]*不自动创建回退提交/,
+      /任一结果非空[^]*逐项列出[^]*停留实施阶段[^]*不准备门禁二[^]*不自动创建回退提交/,
     );
     assert.match(
       specificationGateStep,
