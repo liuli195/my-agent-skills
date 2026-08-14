@@ -116,7 +116,12 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
         "build-and-verify",
         "code-review",
       ],
-      "delivery.md": ["my-spec", "my-spec-add", "pr-flow-complete"],
+      "delivery.md": [
+        "my-spec",
+        "my-spec-add",
+        "pr-flow-complete",
+        "resolving-merge-conflicts",
+      ],
     };
     for (const [name, dependencies] of Object.entries(phaseDependencies)) {
       const text = referenceContent[references.indexOf(name)];
@@ -157,6 +162,10 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     assert.match(delivery, /门禁二授权后[^]*`pr-flow-complete`/);
     assert.match(delivery, /门禁二授权后[^]*需要规格变更[^]*`my-spec-add`[^]*`pr-flow-complete`/);
     assertInOrder(delivery, "预览", "门禁二授权后", "`my-spec-add`", "`pr-flow-complete`");
+    assert.match(
+      delivery,
+      /进行中的 Git（版本管理）合并或变基冲突[^]*加载、读取和实际使用 `resolving-merge-conflicts`[^]*受影响的检查[^]*原失败步骤恢复/,
+    );
 
     assert.ok(requirements.includes("`myspec/changes/<change-name>/spec.md`"));
     assert.ok(requirements.includes("`myspec/changes/<change-name>/issues/NN-<slug>.md`"));
