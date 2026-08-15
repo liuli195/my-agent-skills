@@ -1,15 +1,9 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 
-PLUGIN_SYNC_ROOT = Path(
-    os.environ.get(
-        "PLUGIN_SYNC_SKILL_ROOT",
-        Path(__file__).parent / "fixtures" / "plugin-sync",
-    )
-)
+PLUGIN_SYNC_ROOT = Path(__file__).resolve().parents[1] / "plugins" / "plugin-sync" / "skills" / "plugin-sync"
 
 
 def reference_text(name: str) -> str:
