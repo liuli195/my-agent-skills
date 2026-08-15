@@ -25,6 +25,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "my-spec"
+PLUGIN_SYNC_ROOT = REPO_ROOT / "plugins" / "plugin-sync" / "skills" / "plugin-sync"
 PACK = REPO_ROOT / "plugins" / "tool-lifecycle" / "pack.py"
 SPEC_OPS = PLUGIN_ROOT / "python" / "spec_ops.py"
 SKILL_NAMES = ("my-spec", "my-spec-add", "my-spec-review", "my-spec-audit")
@@ -6437,12 +6438,8 @@ def test_skill_entries_route_add_review_and_audit_with_safe_boundaries() -> None
     assert "--modified-content <完整候选正文>" in rules
 
 
-@pytest.mark.skipif(
-    "PLUGIN_SYNC_SKILL_ROOT" not in os.environ,
-    reason="external plugin-sync source is verified only when explicitly supplied",
-)
 def test_plugin_sync_delegates_all_myspec_lifecycle_work_to_myspec_cli() -> None:
-    root = Path(os.environ["PLUGIN_SYNC_SKILL_ROOT"])
+    root = PLUGIN_SYNC_ROOT
     skill = (root / "SKILL.md").read_text(encoding="utf-8")
     references = {
         path.name: path.read_text(encoding="utf-8")
