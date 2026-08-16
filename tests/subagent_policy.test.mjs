@@ -19,27 +19,20 @@ const skillPath = resolve(skillRoot, "SKILL.md");
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const contract = [
-  "主代理决定是否委派以及何时委派。",
-  "每个会话在首次委派前检查一次有效宿主配置。",
-  "只启用下列四个角色",
-  "活跃模型注册表",
-  "| Explorer（调查者） | 以只读方式执行被委派的搜索、研究和证据收集。 | `openai-codex/gpt-5.6-luna` | `low`（低） | 读取、搜索、只读 Shell（命令行）命令和网页搜索 |",
-  "| Implementer（实施者） | 根据已确认需求实施被委派的代码或文档。 | `openai-codex/gpt-5.6-luna` | `max`（最高） | 完整实施工具；禁用扩展；预加载 TDD（测试驱动开发） |",
-  "| Reviewer（审查者） | 根据需求和仓库规则，独立审查被委派的代码或文档。 | `openai-codex/gpt-5.6-sol` | `medium`（中等） | 读取、搜索和只读 Shell（命令行）命令 |",
-  "| Architect（架构师） | 以只读方式调查架构、架构决策和疑难缺陷诊断。 | `openai-codex/gpt-5.6-sol` | `max`（最高） | 读取、搜索和只读 Shell（命令行）命令 |",
-  "prompt_mode: append",
-  "extensions: false",
-  "skills: tdd",
-  "实施功能、缺陷或集成行为前使用 `/skill:tdd`（测试驱动开发技能）；遵循红灯到绿灯循环",
-  "以只读方式调查被委派的问题，并返回简洁的发现、证据、来源位置和不确定项。",
-  "独立审查被委派的代码或文档范围；报告包含严重程度和证据、可采取行动的发现。",
-  "以只读方式调查架构、架构决策或疑难缺陷诊断。",
-  "只有每个字段都完全匹配时，才允许选择相应的宿主原生角色。",
-  "如果任一字段不同、无法证明，或者宿主没有经过验证的 host Adapter（宿主适配器），则在委派前停止。",
-  "主代理在依赖其结果或宣告工作完成前，必须验证子代理的实际结果。",
+  "主 Agent（代理）决定是否委派、何时委派以及调用几个角色。",
+  "| Explorer（调查者） | 搜索、研究并收集证据。 | `gpt-5.6-luna` | `low`（低） | 只读 |",
+  "| Implementer（实施者） | 根据已确认需求修改代码或文档并验证结果。 | `gpt-5.6-luna` | `max`（最高） | 可写 |",
+  "| Reviewer（审查者） | 根据需求和仓库规则独立审查代码或文档。 | `gpt-5.6-sol` | `medium`（中等） | 只读 |",
+  "| Architect（架构师） | 调查架构、架构决策和疑难缺陷。 | `gpt-5.6-sol` | `max`（最高） | 只读 |",
+  "无法使用指定模型或思考强度时，不以其他配置冒充该角色",
+  "只有 Implementer（实施者）可以在明确授权范围内写入。",
+  "使用宿主现有的通用或具名子代理入口，不要求特定工具或配置格式。",
+  "每次提示词都写明角色、具体目标、范围与非目标、已有证据、读写边界和预期返回内容。",
+  "行为变更先使用可用的 TDD（测试驱动开发）Skill（技能）完成红灯到绿灯循环",
+  "主 Agent（代理）在依赖结果或宣告完成前，核验实际文件、差异、版本管理状态和检查结果",
 ];
 
-test("Pi discovers the independent subagent-policy skill package and its fixed contract", async () => {
+test("host discovers the independent subagent-policy skill package and its portable contract", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "subagent-policy-"));
   const originalHome = process.env.HOME;
   const originalUserProfile = process.env.USERPROFILE;
@@ -67,7 +60,7 @@ test("Pi discovers the independent subagent-policy skill package and its fixed c
     assert.equal(skill.sourceInfo.origin, "package");
     assert.equal(skill.sourceInfo.source, packageRoot);
     assert.equal(skill.disableModelInvocation, false);
-    assert.match(skill.description, /委派任何子代理前/);
+    assert.match(skill.description, /四个通用子代理角色/);
     assert.match(formatSkillsForPrompt([skill]), /<name>subagent-policy<\/name>/);
 
     const packageExtensions = loader
@@ -83,11 +76,11 @@ test("Pi discovers the independent subagent-policy skill package and its fixed c
     const headings = [...content.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
     assert.deepEqual(
       headings,
-      ["MUST — 必须依赖", "流程编排"],
-      "必须且只能依次包含两个顶层编排模块",
+      ["角色契约", "主代理决策", "委派提示词", "结果验收"],
+      "必须依次定义角色、决策、提示词和验收",
     );
-    assert.match(content, /## 流程编排[^]*宿主没有经过验证的 host Adapter（宿主适配器）[^]*在委派前停止/s);
-    assert.doesNotMatch(content, /\bClaude\b|\bCodex\b/);
+    assert.doesNotMatch(content, /prompt_mode|extensions: false|host Adapter|活跃模型注册表|默认代理已禁用/);
+    assert.doesNotMatch(content, /\bPi\b|\bClaude\b|\bCodex\b/);
   } finally {
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;

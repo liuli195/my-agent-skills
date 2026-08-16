@@ -9,11 +9,11 @@ A named responsibility selected for one delegated task after the main Agent（�
 _Avoid_: Profile, mode
 
 **Subagent Policy（子代理策略）**:
-The host-neutral Skill（技能） contract that validates fixed Subagent roles（子代理角色）, models, reasoning levels, capabilities, and prompts before selecting a host-native delegation route.
+The host-neutral Skill（技能） contract that defines four fixed Subagent roles（子代理角色）, their models, reasoning levels, read/write boundaries, and delegation prompts; the main Agent（代理） decides whether and when to delegate.
 _Avoid_: Pi Subagent Policy, Agent installer, runtime dispatcher
 
 **Policy-validated Agent dispatch（策略校验 Agent 派发）**:
-A host-native Subagent（子代理） call made in the current worktree only after the Subagent Policy（子代理策略） validates the selected role and host configuration.
+A host-native Subagent（子代理） call whose selected role, model, reasoning level, read/write boundary, and task prompt follow the Subagent Policy（子代理策略）.
 _Avoid_: Direct Agent dispatch, controlled worktree dispatch
 
 **Explorer（探索者）**:
@@ -41,8 +41,8 @@ A physical worktree or temporary artifact that remains after the traceable Git�
 _Avoid_: Successful cleanup, harmless leftover
 
 **Direct Agent dispatch（直接 Agent 派发）**:
-A main Agent call to the generic `Agent` tool without the controlled worktree dispatch interface; it is not a writable Implementer route.
-_Avoid_: direct implementation
+A main Agent（代理） call through a host's generic Subagent（子代理） entry. It can use any fixed role when the call supplies that role's model, reasoning level, read/write boundary, and task prompt.
+_Avoid_: uncontrolled dispatch
 
 **Controlled Implementer dispatch（受控 Implementer 派发）**:
 The narrow adapter that starts a writable Implementer in one verified existing non-primary Git worktree while preserving the caller's prompt and description unchanged.
