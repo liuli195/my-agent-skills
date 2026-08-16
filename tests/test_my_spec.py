@@ -5308,28 +5308,33 @@ def run_launcher_selection(
         if sys.platform == "win32"
         else sys.executable
     )
+    launcher = windows_py_launcher() if "py" in versions else None
     paths: dict[str, Path] = {}
     reported_versions: dict[str, str] = {}
     for name, version in versions.items():
         if name == "py":
-            source = windows_py_launcher()
-        else:
-            source = python_source
+            # Native Windows launchers are location-sensitive; do not copy them.
+            paths[name] = launcher.resolve()
+            continue
+        source = python_source
         path = candidates / (f"{name}.exe" if sys.platform == "win32" else name)
         shutil.copy2(source, path)
         paths[name] = path.resolve()
         if version == "3.11":
             reported_versions[os.path.normcase(str(paths[name]))] = version
 
+    path_entries = [str(candidates)]
+    if launcher is not None:
+        path_entries.append(str(launcher.parent))
+    path_entries.extend(
+        (
+            str(Path(shutil.which("node") or "").parent),
+            str(python_source.parent),
+        )
+    )
     env = {
         **os.environ,
-        "PATH": os.pathsep.join(
-            (
-                str(candidates),
-                str(Path(shutil.which("node") or "").parent),
-                str(python_source.parent),
-            )
-        ),
+        "PATH": os.pathsep.join(path_entries),
         "PYTHONPATH": str(root),
         "MYSPEC_TEST_MARKER": str(root / "selected.txt"),
     }
