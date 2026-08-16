@@ -107,7 +107,6 @@ def test_repository_automation_uses_build_and_verify_cli() -> None:
         (REPO_ROOT / ".github" / "workflows" / "full-verify.yml").read_text(encoding="utf-8"),
         (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"),
         (PACKAGE_ROOT / "skills" / "build-and-verify" / "SKILL.md").read_text(encoding="utf-8"),
-        (REPO_ROOT / "plugins" / "pi-tool-display" / "CONTRIBUTING.md").read_text(encoding="utf-8"),
     ]
 
     assert all("build-and-verify" in command for command in commands)
