@@ -39,9 +39,10 @@ def test_repository_owns_shared_node_dependencies() -> None:
     package = json.loads((REPO_ROOT / "package.json").read_text(encoding="utf-8"))
 
     assert package["private"] is True
-    assert package["workspaces"] == ["plugins/pi-tool-display"]
+    assert package["devDependencies"] == {
+        "@earendil-works/pi-coding-agent": "^0.84.1"
+    }
     assert (REPO_ROOT / "package-lock.json").is_file()
-    assert not (REPO_ROOT / "plugins/pi-tool-display/package-lock.json").exists()
 
 
 def test_setup_worktree_script_prepares_python_and_shared_node_dependencies() -> None:
@@ -90,7 +91,6 @@ def test_setup_worktree_script_links_shared_node_dependencies(
     project = tmp_path / "project"
     project.mkdir()
     shutil.copytree(REPO_ROOT / "scripts", project / "scripts")
-    shutil.copytree(REPO_ROOT / "plugins/pi-tool-display", project / "plugins/pi-tool-display")
     shutil.copy2(REPO_ROOT / "package.json", project / "package.json")
     shutil.copy2(REPO_ROOT / "package-lock.json", project / "package-lock.json")
     shutil.copy2(REPO_ROOT / "requirements-dev.txt", project / "requirements-dev.txt")
@@ -152,7 +152,7 @@ def test_setup_worktree_script_links_shared_node_dependencies(
 
     node_fingerprint = "\n".join(
         f"{hashlib.sha256((project / manifest).read_text(encoding='utf-8').replace(chr(13) + chr(10), chr(10)).encode()).hexdigest().upper()} {manifest}"
-        for manifest in ("package.json", "package-lock.json", "plugins\\pi-tool-display\\package.json")
+        for manifest in ("package.json", "package-lock.json")
     )
     (shared_node_modules / ".package-lock.sha256").write_text(node_fingerprint + "\n", encoding="ascii")
     missing_python = setup()

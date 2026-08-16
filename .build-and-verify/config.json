@@ -3,18 +3,6 @@
   "build": {
     "checks": [
       {
-        "id": "build.pi-tool-display",
-        "command": "npm run build --workspace pi-tool-display",
-        "inputs": [
-          "package.json",
-          "package-lock.json",
-          "plugins/pi-tool-display/package.json",
-          "plugins/pi-tool-display/tsconfig.json",
-          "plugins/pi-tool-display/extensions",
-          "plugins/pi-tool-display/src"
-        ]
-      },
-      {
         "id": "build.local-plugin-package",
         "command": "python scripts/local_plugin_build.py",
         "inputs": [
@@ -44,26 +32,6 @@
     "fullBudgetSeconds": 60,
     "checks": [
       {
-        "id": "verify.pi-tool-display",
-        "paths": [
-          "package.json",
-          "package-lock.json",
-          "plugins/pi-tool-display/**",
-          ".build-and-verify/config.json"
-        ],
-        "command": "npm run check --workspace pi-tool-display",
-        "inputs": [
-          "package.json",
-          "package-lock.json",
-          "plugins/pi-tool-display/package.json",
-          "plugins/pi-tool-display/tsconfig.json",
-          "plugins/pi-tool-display/extensions",
-          "plugins/pi-tool-display/src",
-          "plugins/pi-tool-display/tests"
-        ],
-        "checkParallel": true
-      },
-      {
         "id": "verify.local-build-contract",
         "paths": [
           ".agents/**",
@@ -75,16 +43,11 @@
           "plugins/**",
           "scripts/local_plugin_build.py",
           "tests/test_local_plugin_build_checks.py",
-          "tests/test_pi_codex_usage_status.py",
-          "tests/pi_codex_usage_status.test.mjs",
-          "tests/pi_cache_diagnostics.test.mjs",
-          "tests/pi_subagent_policy.test.mjs",
           "tests/subagent_policy.test.mjs",
-          "tests/pi_development_flow.test.mjs",
           "tests/dev_flow.test.mjs",
           "tests/shared_skills.test.mjs"
         ],
-        "command": "python -m pytest -q -p no:cacheprovider tests/test_local_plugin_build_checks.py tests/test_pi_codex_usage_status.py && node tests/pi_codex_usage_status.test.mjs && node tests/pi_cache_diagnostics.test.mjs && node --test tests/pi_subagent_policy.test.mjs tests/subagent_policy.test.mjs tests/pi_development_flow.test.mjs tests/dev_flow.test.mjs tests/shared_skills.test.mjs",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_local_plugin_build_checks.py && node --test tests/subagent_policy.test.mjs tests/dev_flow.test.mjs tests/shared_skills.test.mjs",
         "inputs": [
           ".agents",
           ".claude-plugin",
@@ -244,8 +207,6 @@
           "myspec/specs/test-framework-plugin/spec.md",
           "package.json",
           "package-lock.json",
-          "plugins/pi-tool-display/CONTRIBUTING.md",
-          "plugins/pi-tool-display/package.json",
           "plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py",
           "plugins/release-flow/skills/release-flow/scripts/release_flow.py",
           "plugins/tool-lifecycle/**",
@@ -271,8 +232,6 @@
           "myspec/specs/test-framework-plugin/spec.md",
           "package.json",
           "package-lock.json",
-          "plugins/pi-tool-display/CONTRIBUTING.md",
-          "plugins/pi-tool-display/package.json",
           "plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py",
           "plugins/release-flow/skills/release-flow/scripts/release_flow.py",
           "plugins/tool-lifecycle",

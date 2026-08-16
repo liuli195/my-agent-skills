@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $python = Join-Path $projectRoot '.venv\Scripts\python.exe'
 $pythonManifests = @('requirements-dev.txt')
-$nodeManifests = @('package.json', 'package-lock.json', 'plugins\pi-tool-display\package.json')
+$nodeManifests = @('package.json', 'package-lock.json')
 
 function Get-FileSha256([string]$path) {
     $text = [IO.File]::ReadAllText($path).Replace("`r`n", "`n")
