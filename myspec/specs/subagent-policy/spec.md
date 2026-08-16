@@ -8,35 +8,40 @@
 
 ### Requirement: 独立子代理策略入口与固定角色契约
 
-系统 MUST 通过独立的纯 Skill（技能）包提供 `subagent-policy`，固定 Explorer、Implementer、Reviewer 和 Architect 的角色描述、模型、思考强度、能力、提示模式及提示词，并在首次委派前根据当前宿主实际配置验证完整契约。
+系统 MUST 通过独立的纯 Skill（技能）包提供 `subagent-policy`，固定 Explorer（调查者）、Implementer（实施者）、Reviewer（审查者）和 Architect（架构师）的职责、模型、思考强度与读写边界，并 SHALL 让主 Agent（代理）决定是否委派、何时委派以及调用几个角色。Explorer 使用 `gpt-5.6-luna` 与 `low`（低），Implementer 使用 `gpt-5.6-luna` 与 `max`（最高），Reviewer 使用 `gpt-5.6-sol` 与 `medium`（中等），Architect 使用 `gpt-5.6-sol` 与 `max`（最高）；只有 Implementer 可以在明确授权范围内写入。
 
 #### Scenario: 当前宿主发现独立策略
 
-- **WHEN** 当前宿主从新策略 Package（包）加载 Skill（技能）资源
-- **THEN** 宿主发现 `subagent-policy`，且该 Package 不加载脚本或 Extension（扩展）
+- **WHEN** 当前宿主加载 `subagent-policy`
+- **THEN** 宿主发现不包含脚本或 Extension（扩展）的纯 Skill（技能），并读取四个固定角色契约
 
-#### Scenario: 固定角色契约完全匹配
+#### Scenario: 主代理按需选择角色
 
-- **WHEN** 当前宿主 Adapter（适配器）能够证明目标角色的全部配置与固定契约完全一致
-- **THEN** 策略允许主 Agent 选择该宿主原生角色，且不临时覆盖模型、思考强度、能力或提示词
+- **WHEN** 主 Agent（代理）判断一个任务适合委派
+- **THEN** 主 Agent（代理）根据任务性质选择最匹配的固定角色、模型、思考强度和读写边界；简单或无法独立拆分的任务可以不委派
 ### Requirement: 子代理策略在委派前安全停止与结果验收
 
-系统 MUST 在角色契约任一字段不匹配、无法证明或缺少已验证宿主 Adapter（适配器）时于委派前停止，并 SHALL 要求主 Agent 根据实际角色、运行元数据、文件、分支、差异及检查证据验收返回结果。
+系统 MUST 让主 Agent（代理）使用宿主现有的通用或具名子代理入口，并在每次委派提示词中写明角色、具体目标、范围与非目标、已有证据、读写边界、宿主相关资源和预期返回内容；宿主对工具、沙箱、Extension（扩展）或 Skill（技能）有不同表达时 SHALL 在提示词中说明，不要求专用 Adapter（适配器）或固定配置格式。指定模型或思考强度不可用时 SHALL 不以其他配置冒充该角色。主 Agent（代理）在依赖子代理结果前 MUST 验证实际文件、差异、版本管理状态和检查证据。
 
-#### Scenario: 宿主策略不能证明
+#### Scenario: 使用不同宿主的子代理入口
 
-- **WHEN** 角色字段不匹配、无法证明或当前宿主没有已验证 Adapter
-- **THEN** 策略在委派前明确停止，且不选择默认、通用、未登记或回退角色
+- **WHEN** 宿主提供通用调用、具名角色或其他原生子代理入口
+- **THEN** 主 Agent（代理）通过该入口传达同一角色契约和任务提示词，不因宿主配置格式不同而停止委派
+
+#### Scenario: 固定模型或思考强度不可用
+
+- **WHEN** 宿主无法使用所选角色规定的模型或思考强度
+- **THEN** 主 Agent（代理）自行完成任务或报告差异，不把其他配置报告为该固定角色
 
 #### Scenario: 子代理报告完成
 
 - **WHEN** 子代理返回完成报告
-- **THEN** 主 Agent 在依赖结果或宣告完成前验证实际任务证据，而不把报告本身视为完成证明
+- **THEN** 主 Agent（代理）把报告作为线索，验证实际结果和角色边界后再接受任务完成
 ### Requirement: 子代理策略按依赖与步骤组织代理指令
 
-系统 MUST 让 `subagent-policy` 先声明校验固定角色契约所需的宿主配置、模型注册表和原生 Adapter（适配器），再按执行顺序编排校验、选角和结果验收，并 SHALL 把停止条件与可核验完成条件放在触发它们的步骤中。
+系统 MUST 让 `subagent-policy` 依次提供角色契约、主代理决策、四类委派提示词和结果验收，并 SHALL 让每类提示词明确该角色的任务范围、读写边界和返回证据。多个可写任务 MUST 在共享工作区串行，独立只读任务 MAY 并行。
 
 #### Scenario: 代理加载子代理策略
 
 - **WHEN** Agent（代理）加载 `subagent-policy`
-- **THEN** 文档依次提供“必须依赖”和“流程编排”两个顶层编排模块，并在相应步骤核验角色契约、宿主 Adapter 和实际任务结果
+- **THEN** 文档依次说明四个固定角色、主 Agent（代理）的按需选择原则、宿主中立的提示词要求和实际结果验收
