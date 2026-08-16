@@ -40,7 +40,8 @@ def test_repository_owns_shared_node_dependencies() -> None:
 
     assert package["private"] is True
     assert package["devDependencies"] == {
-        "@earendil-works/pi-coding-agent": "^0.84.1"
+        "@earendil-works/pi-coding-agent": "^0.84.1",
+        "tsx": "4.22.4",
     }
     assert (REPO_ROOT / "package-lock.json").is_file()
 
