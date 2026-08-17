@@ -26,7 +26,7 @@
 - **THEN** 系统 SHALL NOT 读取通知私密值或发起网络请求
 ### Requirement: Orca ntfy 通知格式
 
-系统 MUST 向公共 `https://ntfy.sh` 发送带 Bearer（令牌）认证的 HTTPS POST（安全网页发布请求），标题固定为 `orca agent`，并按状态使用固定正文、优先级和标签。
+系统 MUST 向公共 `https://ntfy.sh` 匿名发送 HTTPS POST（安全网页发布请求），不得发送 `Authorization`（授权）请求头；标题固定为 `orca agent`，并按状态使用固定正文、优先级和标签。
 
 #### Scenario: 等待输入通知
 
@@ -44,20 +44,25 @@
 - **THEN** 系统 SHALL 发送正文“会话已经彻底完成”、普通优先级和 `done` 标签
 ### Requirement: Orca ntfy 私密信息保护
 
-系统 MUST 从 Orca `secrets`（私密存储）读取随机 ntfy 主题和专用令牌，不得将私密值写入源码、插件清单或日志，也不得在通知中包含完整工作区路径、终端标识、代理输出或其他敏感信息。
+系统 MUST 只从 Orca `secrets`（私密存储）读取随机、难猜且专用的 `ntfy-topic`（ntfy 主题），不得读取账户、密码、密钥文件或 `ntfy-token`（ntfy 令牌），也不得将主题或事件敏感信息写入源码、插件清单、日志或通知。
 
-#### Scenario: 私密值已配置
+#### Scenario: 随机主题已配置
 
 - **WHEN** 插件处理新的受支持状态
-- **THEN** 系统 SHALL 只通过 Orca 私密存储取得主题和令牌，并只发送固定通知内容
+- **THEN** 系统 SHALL 只读取 `ntfy-topic`，并只发送固定通知内容
 
-#### Scenario: 私密值缺失或发送失败
+#### Scenario: 旧令牌仍然存在
 
-- **WHEN** 主题、令牌缺失或网络请求失败
-- **THEN** 系统 SHALL NOT 在日志中输出主题、令牌、事件载荷或响应正文
+- **WHEN** Orca 私密存储中仍有旧的 `ntfy-token`
+- **THEN** 系统 SHALL 忽略且不读取或删除该值
+
+#### Scenario: 主题缺失或发送失败
+
+- **WHEN** 主题缺失或网络请求失败
+- **THEN** 系统 SHALL NOT 在日志中输出主题、完整路径、终端标识、代理输出、事件载荷或响应正文
 ### Requirement: Orca ntfy 网络失败恢复
 
-系统 MUST 对网络异常以及 HTTP 408、429 和 5xx 响应执行初次请求加最多三次重试，重试间隔依次为 1 秒、5 秒和 30 秒；最终失败后 MUST 保留已记录状态以抑制同一状态的重复发送。
+系统 MUST 对网络异常以及 HTTP 408、429 和 5xx（服务器错误）响应执行初次请求加最多三次重试，重试间隔依次为 1 秒、5 秒和 30 秒；最终失败后 MUST 保留已记录状态以抑制同一状态的重复发送。
 
 #### Scenario: 可重试网络失败后成功
 
@@ -71,13 +76,13 @@
 
 #### Scenario: 不可重试的客户端错误
 
-- **WHEN** ntfy 返回 408 和 429 之外的 4xx 响应
-- **THEN** 系统 SHALL NOT 重试该请求
+- **WHEN** ntfy 返回 408 和 429 之外的 4xx（客户端错误）响应
+- **THEN** 系统 SHALL NOT 重试，也 SHALL NOT 回退到认证发送
 ### Requirement: Orca ntfy 个人插件边界
 
-系统 MUST 将该能力限定为使用 Node.js（运行环境）直接网络请求的个人插件，并明确说明 Orca 尚无正式 `net:fetch`（网络请求能力）、只提供已接入状态钩子的代理事件且没有事件回放。
+系统 MUST 将该能力限定为固定使用公共 `ntfy.sh` 和 Node.js（运行环境）直接网络请求的个人插件，并明确说明 Orca 尚无正式 `net:fetch`（网络请求能力）、只提供已接入状态钩子的代理事件且没有事件回放。
 
 #### Scenario: 用户阅读插件限制
 
 - **WHEN** 用户查看插件说明
-- **THEN** 系统 SHALL 明确说明不支持自建 ntfy、本地中继、Orca 核心或 `app.asar`（应用资源包）修改，也不保证插件停机期间或未接入状态钩子的终端通知
+- **THEN** 系统 SHALL 明确说明不支持自建 ntfy、账户认证、本地中继、Orca 核心或 `app.asar`（应用资源包）修改，也不保证插件停机期间或未接入状态钩子的终端通知
