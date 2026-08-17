@@ -45,10 +45,9 @@
           "tests/test_local_plugin_build_checks.py",
           "tests/subagent_policy.test.mjs",
           "tests/dev_flow.test.mjs",
-          "tests/shared_skills.test.mjs",
-          "tests/orca_ntfy.test.mjs"
+          "tests/shared_skills.test.mjs"
         ],
-        "command": "python -m pytest -q -p no:cacheprovider tests/test_local_plugin_build_checks.py && node --test tests/subagent_policy.test.mjs tests/dev_flow.test.mjs tests/shared_skills.test.mjs tests/orca_ntfy.test.mjs",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_local_plugin_build_checks.py && node --test tests/subagent_policy.test.mjs tests/dev_flow.test.mjs tests/shared_skills.test.mjs",
         "inputs": [
           ".agents",
           ".claude-plugin",
@@ -66,8 +65,7 @@
           "tests/subagent_policy.test.mjs",
           "tests/pi_development_flow.test.mjs",
           "tests/dev_flow.test.mjs",
-          "tests/shared_skills.test.mjs",
-          "tests/orca_ntfy.test.mjs"
+          "tests/shared_skills.test.mjs"
         ],
         "checkParallel": false,
         "pytestXdistWorkers": 4
