@@ -1,0 +1,17 @@
+{
+  "manifestVersion": 1,
+  "id": "orca-ntfy",
+  "publisher": "liuli195",
+  "name": "Orca ntfy notifications",
+  "version": "1.0.0",
+  "description": "Sends selected Orca agent status notifications to ntfy.",
+  "engines": {
+    "orca": ">=1.4.0"
+  },
+  "main": "main.mjs",
+  "pluginApi": 1,
+  "contributes": {
+    "events": [{ "on": "agent.status.changed" }]
+  },
+  "capabilities": [{ "kind": "events:subscribe" }, { "kind": "secrets" }]
+}
