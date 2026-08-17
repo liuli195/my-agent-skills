@@ -3,7 +3,7 @@
   "id": "orca-ntfy",
   "publisher": "liuli195",
   "name": "Orca ntfy notifications",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Sends selected Orca agent status notifications to ntfy.",
   "engines": {
     "orca": ">=1.4.0"

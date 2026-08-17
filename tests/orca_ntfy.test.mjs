@@ -105,13 +105,31 @@ test("清单声明最小 Orca 事件与私密能力", async () => {
   assert.equal(manifest.id, "orca-ntfy");
   assert.equal(manifest.publisher, "liuli195");
   assert.equal(manifest.name, "Orca ntfy notifications");
-  assert.equal(manifest.version, "1.0.0");
+  assert.equal(manifest.version, "1.0.1");
   assert.equal(manifest.engines.orca, ">=1.4.0");
   assert.equal(manifest.pluginApi, 1);
   assert.equal(manifest.main, "main.mjs");
   assert.deepEqual(manifest.contributes.events, [{ on: "agent.status.changed" }]);
   assert.deepEqual(manifest.capabilities, [{ kind: "events:subscribe" }, { kind: "secrets" }]);
   assert.equal(manifest.capabilities.some(({ kind }) => kind === "net:fetch"), false);
+});
+
+test("公共匿名发布只读取主题且不发送授权请求头", async () => {
+  const activate = await loadActivate();
+  const harness = createOrca({ "ntfy-token": "legacy-token-present" });
+  const network = installNetwork([successfulResponse]);
+  try {
+    await activate(harness.orca);
+    await harness.emit(stateEvent("blocked"));
+
+    assert.deepEqual(
+      harness.secretCalls.map(({ name, args }) => ({ name, key: args.key })),
+      [{ name: "secrets.get", key: "ntfy-topic" }],
+    );
+    assert.equal(Object.hasOwn(network.requests[0].options.headers, "Authorization"), false);
+  } finally {
+    network.restore();
+  }
 });
 
 for (const [state, body, priority] of [
@@ -136,7 +154,6 @@ for (const [state, body, priority] of [
             Title: "orca agent",
             Priority: priority,
             Tags: state,
-            Authorization: "Bearer token-only-for-tests",
             "Content-Type": "text/plain",
           },
           body,
@@ -302,9 +319,9 @@ test("网络最终失败只输出固定错误且不泄露私密值或事件数�
   }
 });
 
-test("缺少私密令牌时不发送并保持日志无数据", async () => {
+test("缺少主题时不发送且不读取旧令牌", async () => {
   const activate = await loadActivate();
-  const harness = createOrca({ "ntfy-token": undefined });
+  const harness = createOrca({ "ntfy-topic": undefined, "ntfy-token": "legacy-token-present" });
   const network = installNetwork([successfulResponse]);
   try {
     await activate(harness.orca);
@@ -316,7 +333,6 @@ test("缺少私密令牌时不发送并保持日志无数据", async () => {
       harness.secretCalls.map(({ name, args }) => ({ name, key: args.key })),
       [
         { name: "secrets.get", key: "ntfy-topic" },
-        { name: "secrets.get", key: "ntfy-token" },
       ],
     );
     assert.doesNotMatch(logs.join("\n"), /random-topic-7f2c/);

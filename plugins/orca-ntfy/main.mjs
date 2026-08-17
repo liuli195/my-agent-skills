@@ -7,7 +7,7 @@ const retryDelays = [1000, 5000, 30000];
 
 const wait = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
 
-async function sendNotification(topic, token, state, notification) {
+async function sendNotification(topic, state, notification) {
   for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
     let response;
     try {
@@ -17,7 +17,6 @@ async function sendNotification(topic, token, state, notification) {
           Title: "orca agent",
           Priority: notification.priority,
           Tags: state,
-          Authorization: `Bearer ${token}`,
           "Content-Type": "text/plain",
         },
         body: notification.body,
@@ -52,9 +51,8 @@ export default function activate(orca) {
 
     try {
       const topic = (await orca.host.call("secrets.get", { key: "ntfy-topic" }))?.value;
-      const token = (await orca.host.call("secrets.get", { key: "ntfy-token" }))?.value;
-      if (!topic || !token) throw new Error("missing notification secret");
-      await sendNotification(topic, token, state, notification);
+      if (!topic) throw new Error("missing notification secret");
+      await sendNotification(topic, state, notification);
     } catch {
       console.error("orca ntfy notification failed");
     }
