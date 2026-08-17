@@ -6,11 +6,11 @@
 
 **Status:** ready-for-agent
 
-- [ ] 提供使用 `pluginApi: 1` 的 `orca-plugin.json`，主入口订阅 `agent.status.changed`，并声明 `events:subscribe` 与 `secrets` 能力。
-- [ ] 只处理 `blocked`、`waiting`、`done`；使用 `worktreeId + paneKey` 去重，状态变化才发送。
-- [ ] 未知 Agent 类型时标题固定为 `orca agent`；正文分别为“会话阻塞，等待处理”“会话已完成，等待回复”“会话已经彻底完成”。
-- [ ] `blocked` 和 `waiting` 使用高优先级，`done` 使用普通优先级，并发送对应标签。
-- [ ] 固定向公共 `https://ntfy.sh` 发送 HTTPS POST；令牌和随机主题只从 Orca `secrets` 读取，源码、清单和日志不出现私密值。
-- [ ] 网络失败按 1 秒、5 秒、30 秒至少重试三次；重复事件和最终失败行为符合规格。
-- [ ] 不发送完整路径、代理输出、分支或原始事件；文档说明无正式 `net:fetch`、无事件回放、未接入状态钩子的终端限制。
-- [ ] 添加清单检查、事件入口测试、去重测试、重试测试、私密值保护测试和最小真实入口冒烟测试，不新增运行时依赖。
+- [x] 提供使用 `pluginApi: 1` 的 `orca-plugin.json`，主入口订阅 `agent.status.changed`，并声明 `events:subscribe` 与 `secrets` 能力。
+- [x] 只处理 `blocked`、`waiting`、`done`；使用 `worktreeId + paneKey` 去重，状态变化才发送。
+- [x] 未知 Agent 类型时标题固定为 `orca agent`；正文分别为“会话阻塞，等待处理”“会话已完成，等待回复”“会话已经彻底完成”。
+- [x] `blocked` 和 `waiting` 使用高优先级，`done` 使用普通优先级，并发送对应标签。
+- [x] 固定向公共 `https://ntfy.sh` 发送 HTTPS POST；令牌和随机主题只从 Orca `secrets` 读取，源码、清单和日志不出现私密值。
+- [x] 网络失败按 1 秒、5 秒、30 秒至少重试三次；重复事件和最终失败行为符合规格。
+- [x] 不发送完整路径、代理输出、分支或原始事件；文档说明无正式 `net:fetch`、无事件回放、未接入状态钩子的终端限制。
+- [x] 添加清单检查、事件入口测试、去重测试、重试测试、私密值保护测试和最小真实入口冒烟测试，不新增运行时依赖。
