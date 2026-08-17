@@ -1,9 +1,9 @@
 {
   "manifestVersion": 1,
-  "id": "orca-ntfy",
+  "id": "ntfy-notifications",
   "publisher": "liuli195",
   "name": "Orca ntfy notifications",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Sends selected Orca agent status notifications to ntfy.",
   "engines": {
     "orca": ">=1.4.0"

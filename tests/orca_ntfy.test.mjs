@@ -102,10 +102,10 @@ test("清单声明最小 Orca 事件与私密能力", async () => {
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 
   assert.equal(manifest.manifestVersion, 1);
-  assert.equal(manifest.id, "orca-ntfy");
+  assert.equal(manifest.id, "ntfy-notifications");
   assert.equal(manifest.publisher, "liuli195");
   assert.equal(manifest.name, "Orca ntfy notifications");
-  assert.equal(manifest.version, "1.0.1");
+  assert.equal(manifest.version, "1.0.2");
   assert.equal(manifest.engines.orca, ">=1.4.0");
   assert.equal(manifest.pluginApi, 1);
   assert.equal(manifest.main, "main.mjs");
