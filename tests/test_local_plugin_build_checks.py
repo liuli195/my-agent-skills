@@ -1778,6 +1778,7 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
         "verify.my-spec",
         "verify.runtime-boundaries",
         "verify.build-and-verify",
+        "verify.build-and-verify-cli",
     ]
     assert "pytest.full" not in check_by_id
 
@@ -1832,7 +1833,7 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
         "tests/fixtures/myspec_source_cases.json",
     ]
     assert my_spec["timeoutSeconds"] == 420
-    assert my_spec["checkParallel"] is False
+    assert my_spec["checkParallel"] is True
     assert my_spec["pytestXdistWorkers"] == 4
     assert my_spec["inputs"] == [
         ".agents/plugins/marketplace.json",
@@ -1850,6 +1851,7 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
     ]
 
     local_build_contract = check_by_id["verify.local-build-contract"]
+    assert local_build_contract["checkParallel"] is True
     assert ".comet/config.yaml" in local_build_contract["paths"]
     assert ".comet/config.yaml" in local_build_contract["inputs"]
     assert ".comet.yaml" not in local_build_contract["paths"]

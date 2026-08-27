@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -14,6 +15,34 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = REPO_ROOT / "plugins" / "build-and-verify"
 PACK = REPO_ROOT / "plugins" / "tool-lifecycle" / "pack.py"
 PACKAGE_VERSION = json.loads((PACKAGE_ROOT / "package.json").read_text(encoding="utf-8"))["version"]
+_installed_template: tempfile.TemporaryDirectory[str] | None = None
+
+
+def _installed_build_and_verify(tmp_path: Path) -> tuple[str, Path, Path]:
+    global _installed_template
+    npm = shutil.which("npm")
+    assert npm is not None
+    if _installed_template is None:
+        _installed_template = tempfile.TemporaryDirectory(prefix="build-and-verify-test-")
+        root = Path(_installed_template.name)
+        packed = subprocess.run(
+            [sys.executable, str(PACK), "build-and-verify", str(root / "package")],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert packed.returncode == 0, packed.stderr
+        installed = subprocess.run(
+            [npm, "install", "--global", "--prefix", str(root / "prefix"), "--ignore-scripts", "--no-audit", "--no-fund", packed.stdout.strip()],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert installed.returncode == 0, installed.stderr
+    prefix = tmp_path / "prefix"
+    shutil.copytree(Path(_installed_template.name) / "prefix", prefix)
+    executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
+    return npm, prefix, executable
 
 
 def _tree_snapshot() -> dict[str, bytes]:
@@ -236,24 +265,7 @@ def test_controlled_pack_rejects_repository_output() -> None:
 
 
 def test_packed_build_and_verify_rejects_untrusted_dev_source(tmp_path: Path) -> None:
-    npm = shutil.which("npm")
-    assert npm is not None
-    package_dir = tmp_path / "package"
-    packed = subprocess.run(
-        [sys.executable, str(PACK), "build-and-verify", str(package_dir)],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert packed.returncode == 0, packed.stderr
-    prefix = tmp_path / "prefix"
-    installed = subprocess.run(
-        [npm, "install", "--global", "--prefix", str(prefix), "--ignore-scripts", "--no-audit", "--no-fund", packed.stdout.strip()],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert installed.returncode == 0, installed.stderr
+    _, prefix, executable = _installed_build_and_verify(tmp_path)
     source = tmp_path / "source"
     for relative in (".agents", ".claude-plugin", "plugins/build-and-verify", "plugins/tool-lifecycle"):
         shutil.copytree(REPO_ROOT / relative, source / relative)
@@ -275,7 +287,6 @@ def test_packed_build_and_verify_rejects_untrusted_dev_source(tmp_path: Path) ->
         check=False,
     )
     assert committed.returncode == 0, committed.stderr
-    executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
     env = _isolated_env(tmp_path, prefix)
 
     rejected = subprocess.run([executable, "init", "--dev", "--source", source], text=True, capture_output=True, check=False, env=env)
@@ -327,29 +338,14 @@ def test_packed_build_and_verify_doctor_reports_machine_readable_release_identit
 
 
 def test_packed_build_and_verify_update_blocks_legacy_codex_before_writes(tmp_path: Path) -> None:
-    npm = shutil.which("npm")
+    npm, prefix, executable = _installed_build_and_verify(tmp_path)
     node = shutil.which("node")
-    assert npm is not None and node is not None
+    assert node is not None
     latest = PACKAGE_VERSION
-    packed = subprocess.run(
-        [sys.executable, str(PACK), "build-and-verify", str(tmp_path / "package")],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert packed.returncode == 0, packed.stderr
-    prefix = tmp_path / "prefix"
-    installed = subprocess.run(
-        [npm, "install", "--global", "--prefix", str(prefix), "--ignore-scripts", "--no-audit", "--no-fund", packed.stdout.strip()],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert installed.returncode == 0, installed.stderr
-    executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     npm_log = tmp_path / "npm.log"
+    npm_log.touch()
     codex_log = tmp_path / "codex.log"
     codex_state = tmp_path / "codex-state.json"
     codex_failure_marker = tmp_path / "codex-failure-marker"
@@ -562,24 +558,7 @@ def _legacy_project(tmp_path: Path) -> Path:
 
 
 def test_packed_build_and_verify_migrates_recognized_runtime_after_fast_verify(tmp_path: Path) -> None:
-    npm = shutil.which("npm")
-    assert npm is not None
-    packed = subprocess.run(
-        [sys.executable, str(PACK), "build-and-verify", str(tmp_path / "package")],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert packed.returncode == 0, packed.stderr
-    prefix = tmp_path / "prefix"
-    installed = subprocess.run(
-        [npm, "install", "--global", "--prefix", str(prefix), "--ignore-scripts", "--no-audit", "--no-fund", packed.stdout.strip()],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert installed.returncode == 0, installed.stderr
-    executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
+    _, prefix, executable = _installed_build_and_verify(tmp_path)
     project = _legacy_project(tmp_path)
 
     migrated = subprocess.run(
@@ -602,13 +581,7 @@ def test_packed_build_and_verify_migrates_recognized_runtime_after_fast_verify(t
 
 
 def test_packed_build_and_verify_preserves_legacy_runtime_when_verify_fails(tmp_path: Path) -> None:
-    npm = shutil.which("npm")
-    assert npm is not None
-    packed = subprocess.run([sys.executable, str(PACK), "build-and-verify", str(tmp_path / "package")], text=True, capture_output=True, check=False)
-    assert packed.returncode == 0, packed.stderr
-    prefix = tmp_path / "prefix"
-    installed = subprocess.run([npm, "install", "--global", "--prefix", str(prefix), "--ignore-scripts", "--no-audit", "--no-fund", packed.stdout.strip()], text=True, capture_output=True, check=False)
-    assert installed.returncode == 0, installed.stderr
+    _, prefix, executable = _installed_build_and_verify(tmp_path)
     project = _legacy_project(tmp_path)
     (project / ".build-and-verify" / "config.json").write_text(
         json.dumps({"version": 1, "build": {"checks": []}, "verify": {"checks": [{"id": "fail", "command": [sys.executable, "-c", "raise SystemExit(1)"], "paths": [".build-and-verify/runtime/"]}]}}),
@@ -616,7 +589,6 @@ def test_packed_build_and_verify_preserves_legacy_runtime_when_verify_fails(tmp_
     )
     assert _git(project, "add", ".").returncode == 0
     assert _git(project, "commit", "-m", "failing verify").returncode == 0
-    executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
 
     verified = subprocess.run([executable, "verify", "--project", str(project)], cwd=project, text=True, capture_output=True, check=False, env=_isolated_env(tmp_path, prefix))
 
@@ -626,18 +598,11 @@ def test_packed_build_and_verify_preserves_legacy_runtime_when_verify_fails(tmp_
 
 
 def test_packed_build_and_verify_rejects_unrecognized_legacy_runtime(tmp_path: Path) -> None:
-    npm = shutil.which("npm")
-    assert npm is not None
-    packed = subprocess.run([sys.executable, str(PACK), "build-and-verify", str(tmp_path / "package")], text=True, capture_output=True, check=False)
-    assert packed.returncode == 0, packed.stderr
-    prefix = tmp_path / "prefix"
-    installed = subprocess.run([npm, "install", "--global", "--prefix", str(prefix), "--ignore-scripts", "--no-audit", "--no-fund", packed.stdout.strip()], text=True, capture_output=True, check=False)
-    assert installed.returncode == 0, installed.stderr
+    _, prefix, executable = _installed_build_and_verify(tmp_path)
     project = _legacy_project(tmp_path)
     (project / ".build-and-verify" / "runtime" / "unexpected.py").write_text("not legacy", encoding="utf-8")
     assert _git(project, "add", ".").returncode == 0
     assert _git(project, "commit", "-m", "unrecognized runtime").returncode == 0
-    executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
 
     verified = subprocess.run([executable, "verify", "--project", str(project)], cwd=project, text=True, capture_output=True, check=False, env=_isolated_env(tmp_path, prefix))
 
@@ -648,13 +613,7 @@ def test_packed_build_and_verify_rejects_unrecognized_legacy_runtime(tmp_path: P
 
 
 def test_packed_build_and_verify_preserves_runtime_when_fast_verify_stages_external_file(tmp_path: Path) -> None:
-    npm = shutil.which("npm")
-    assert npm is not None
-    packed = subprocess.run([sys.executable, str(PACK), "build-and-verify", str(tmp_path / "package")], text=True, capture_output=True, check=False)
-    assert packed.returncode == 0, packed.stderr
-    prefix = tmp_path / "prefix"
-    installed = subprocess.run([npm, "install", "--global", "--prefix", str(prefix), "--ignore-scripts", "--no-audit", "--no-fund", packed.stdout.strip()], text=True, capture_output=True, check=False)
-    assert installed.returncode == 0, installed.stderr
+    _, prefix, executable = _installed_build_and_verify(tmp_path)
     project = _legacy_project(tmp_path)
     write_and_stage = "from pathlib import Path; import subprocess; Path('external.txt').write_text('keep'); subprocess.check_call(['git', 'add', 'external.txt'])"
     (project / ".build-and-verify" / "config.json").write_text(
@@ -663,7 +622,6 @@ def test_packed_build_and_verify_preserves_runtime_when_fast_verify_stages_exter
     )
     assert _git(project, "add", ".").returncode == 0
     assert _git(project, "commit", "-m", "staging verify").returncode == 0
-    executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
 
     verified = subprocess.run([executable, "verify", "--project", str(project)], cwd=project, text=True, capture_output=True, check=False, env=_isolated_env(tmp_path, prefix))
 
@@ -674,18 +632,11 @@ def test_packed_build_and_verify_preserves_runtime_when_fast_verify_stages_exter
 
 
 def test_packed_build_and_verify_restores_runtime_when_migration_commit_fails(tmp_path: Path) -> None:
-    npm = shutil.which("npm")
-    assert npm is not None
-    packed = subprocess.run([sys.executable, str(PACK), "build-and-verify", str(tmp_path / "package")], text=True, capture_output=True, check=False)
-    assert packed.returncode == 0, packed.stderr
-    prefix = tmp_path / "prefix"
-    installed = subprocess.run([npm, "install", "--global", "--prefix", str(prefix), "--ignore-scripts", "--no-audit", "--no-fund", packed.stdout.strip()], text=True, capture_output=True, check=False)
-    assert installed.returncode == 0, installed.stderr
+    _, prefix, executable = _installed_build_and_verify(tmp_path)
     project = _legacy_project(tmp_path)
     hook = project / ".git" / "hooks" / "pre-commit"
     hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
     hook.chmod(0o755)
-    executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
 
     verified = subprocess.run([executable, "verify", "--project", str(project)], cwd=project, text=True, capture_output=True, check=False, env=_isolated_env(tmp_path, prefix))
 
@@ -698,33 +649,7 @@ def test_packed_build_and_verify_restores_runtime_when_migration_commit_fails(tm
 def test_packed_build_and_verify_codex_doctor_resolves_orca_and_explicit_homes(
     tmp_path: Path,
 ) -> None:
-    npm = shutil.which("npm")
-    assert npm is not None
-    packed = subprocess.run(
-        [sys.executable, str(PACK), "build-and-verify", str(tmp_path / "package")],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert packed.returncode == 0, packed.stderr
-    prefix = tmp_path / "prefix"
-    installed = subprocess.run(
-        [
-            npm,
-            "install",
-            "--global",
-            "--prefix",
-            str(prefix),
-            "--ignore-scripts",
-            "--no-audit",
-            "--no-fund",
-            packed.stdout.strip(),
-        ],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert installed.returncode == 0, installed.stderr
+    _, prefix, executable = _installed_build_and_verify(tmp_path)
     fake_bin = tmp_path / "fake-codex" / "bin"
     fake_bin.mkdir(parents=True)
     env_log = tmp_path / "codex-env.log"
@@ -752,7 +677,6 @@ def test_packed_build_and_verify_codex_doctor_resolves_orca_and_explicit_homes(
         launcher = fake_bin / "codex"
         launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{probe}" "$@"\n', encoding="utf-8")
         launcher.chmod(0o755)
-    executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
     env = _isolated_env(tmp_path, prefix)
     user_home = Path(env["USERPROFILE"]) / ".codex"
     orca_home = tmp_path / "orca-user-data" / "codex-runtime-home" / "home"
@@ -832,16 +756,9 @@ def test_packed_build_and_verify_codex_doctor_resolves_orca_and_explicit_homes(
 
 
 def test_packed_build_and_verify_rejects_dirty_legacy_migration(tmp_path: Path) -> None:
-    npm = shutil.which("npm")
-    assert npm is not None
-    packed = subprocess.run([sys.executable, str(PACK), "build-and-verify", str(tmp_path / "package")], text=True, capture_output=True, check=False)
-    assert packed.returncode == 0, packed.stderr
-    prefix = tmp_path / "prefix"
-    installed = subprocess.run([npm, "install", "--global", "--prefix", str(prefix), "--ignore-scripts", "--no-audit", "--no-fund", packed.stdout.strip()], text=True, capture_output=True, check=False)
-    assert installed.returncode == 0, installed.stderr
+    _, prefix, executable = _installed_build_and_verify(tmp_path)
     project = _legacy_project(tmp_path)
     (project / "unrelated.txt").write_text("keep", encoding="utf-8")
-    executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
 
     migrated = subprocess.run([executable, "verify", "--project", str(project)], cwd=project, text=True, capture_output=True, check=False, env=_isolated_env(tmp_path, prefix))
 
@@ -852,24 +769,7 @@ def test_packed_build_and_verify_rejects_dirty_legacy_migration(tmp_path: Path) 
 
 
 def test_packed_build_and_verify_accepts_controlled_ssh_dev_source(tmp_path: Path) -> None:
-    npm = shutil.which("npm")
-    assert npm is not None
-    packed = subprocess.run(
-        [sys.executable, str(PACK), "build-and-verify", str(tmp_path / "package")],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert packed.returncode == 0, packed.stderr
-    prefix = tmp_path / "prefix"
-    installed = subprocess.run(
-        [npm, "install", "--global", "--prefix", str(prefix), "--ignore-scripts", "--no-audit", "--no-fund", packed.stdout.strip()],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert installed.returncode == 0, installed.stderr
-    executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
+    _, prefix, executable = _installed_build_and_verify(tmp_path)
     source, ssh = _controlled_dev_source(tmp_path)
     env = _isolated_env(tmp_path, prefix)
     env["GIT_SSH_COMMAND"] = f'"{sys.executable}" "{ssh}"'
@@ -898,34 +798,7 @@ def test_packed_build_and_verify_accepts_controlled_ssh_dev_source(tmp_path: Pat
 def test_packed_build_and_verify_dev_identity_controls_public_verify_cache(
     tmp_path: Path,
 ) -> None:
-    npm = shutil.which("npm")
-    assert npm is not None
-    packed = subprocess.run(
-        [sys.executable, str(PACK), "build-and-verify", str(tmp_path / "package")],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert packed.returncode == 0, packed.stderr
-    prefix = tmp_path / "prefix"
-    installed = subprocess.run(
-        [
-            npm,
-            "install",
-            "--global",
-            "--prefix",
-            str(prefix),
-            "--ignore-scripts",
-            "--no-audit",
-            "--no-fund",
-            packed.stdout.strip(),
-        ],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert installed.returncode == 0, installed.stderr
-    executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
+    _, prefix, executable = _installed_build_and_verify(tmp_path)
     source, ssh = _controlled_dev_source(tmp_path)
     env = _isolated_env(tmp_path, prefix)
     env["GIT_SSH_COMMAND"] = f'"{sys.executable}" "{ssh}"'
