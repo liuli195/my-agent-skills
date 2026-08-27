@@ -1,6 +1,6 @@
 {
   "name": "@liuli195/myspec",
-  "version": "0.1.59",
+  "version": "2.0.0",
   "description": "Deterministic MySpec CLI and Agent skills",
   "keywords": [
     "myspec",
