@@ -5,17 +5,17 @@
       "mode": "dev",
       "packageName": "@liuli195/myspec",
       "sourceRepository": "https://github.com/liuli195/my-agent-skills",
-      "sourceCommit": "daef9081c7fbdf01fb868840df4ed8d9b6f6ea05",
+      "sourceCommit": "026f00a3cee5bf36538610eb4eb11aa14744caa6",
       "packageDirectory": "plugins/my-spec",
-      "implementationIdentity": "sha256:3d91a65fcd3ceded80a5b44fe4909e5f6b1142b69dbdbbac66e76d2e23581ac5"
+      "implementationIdentity": "sha256:6eb19df27fbd82edf02592099aba9fc6384914aae01e4e061a858b2b4f68884d"
     },
     "build-and-verify": {
       "mode": "dev",
       "packageName": "@liuli195/build-and-verify",
       "sourceRepository": "https://github.com/liuli195/my-agent-skills",
-      "sourceCommit": "6c4f378028fce2036f545359f7c9410c7adde5f1",
+      "sourceCommit": "026f00a3cee5bf36538610eb4eb11aa14744caa6",
       "packageDirectory": "plugins/build-and-verify",
-      "implementationIdentity": "sha256:74f6addda4b55837235b4de53b751e5d570baeef9c415e8c16d8231f7951cf72"
+      "implementationIdentity": "sha256:962ce2719ed92e3448465f4d411eb81d79df4f6862a4a5f4fad35fe870cefed6"
     }
   }
 }
