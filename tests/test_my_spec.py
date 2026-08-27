@@ -1348,6 +1348,7 @@ def install_fake_npm(root: Path, release_tarball: Path) -> tuple[Path, Path]:
     bin_dir.mkdir(parents=True)
     script = root / "fake_npm.py"
     log = root / "npm.log"
+    log.touch()
     npm = shutil.which("npm")
     assert npm is not None
     write(

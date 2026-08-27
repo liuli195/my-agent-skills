@@ -139,6 +139,13 @@ def _run(
 
 
 def _npm_path(argument: str, error_name: str) -> Path:
+    configured_prefix = os.environ.get("NPM_CONFIG_PREFIX") or os.environ.get("npm_config_prefix")
+    if configured_prefix:
+        prefix = Path(configured_prefix)
+        if argument == "prefix":
+            return prefix
+        if argument == "root":
+            return prefix / ("node_modules" if os.name == "nt" else "lib/node_modules")
     result = _run("npm", argument, "--global")
     if result.returncode != 0:
         raise ManagementError(f"{error_name}: {result.stderr.strip()}")
