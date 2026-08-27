@@ -40,7 +40,7 @@ def _installed_build_and_verify(tmp_path: Path) -> tuple[str, Path, Path]:
         )
         assert installed.returncode == 0, installed.stderr
     prefix = tmp_path / "prefix"
-    shutil.copytree(Path(_installed_template.name) / "prefix", prefix)
+    shutil.copytree(Path(_installed_template.name) / "prefix", prefix, symlinks=True)
     executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
     return npm, prefix, executable
 
