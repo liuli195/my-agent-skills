@@ -1,0 +1,69 @@
+{
+  "schema": "comet.native.verification-evidence.v1",
+  "change": "fix-codex-status-lifecycle",
+  "sourceRevision": 3,
+  "result": "pass",
+  "freshness": "complete",
+  "contractHash": "ba9d4fa6ae2cd22b753b2b3ceaef4d4f50972ccaba9a3119906c89f6a65f8b81",
+  "acceptanceCriteriaHash": "7f5eb6c76afa16951945a215026a29efa92375f273bd2f54cbac88367e639e75",
+  "implementationScopeRef": "runtime/evidence/scopes/b43c0d658267096e2029960ea67a54de36ca7f5486e7113e5c102910e2947d3e.json",
+  "implementationScopeHash": "b43c0d658267096e2029960ea67a54de36ca7f5486e7113e5c102910e2947d3e",
+  "reportRef": "verification.md",
+  "reportHash": "4e8b16db67541541fc54a9d8e123713727c149aa9e3c5a5a40384153937f2301",
+  "acceptanceTrace": {
+    "schema": "comet.native.acceptance-trace.v1",
+    "nativeRootRef": "docs/comet",
+    "criteriaHash": "7f5eb6c76afa16951945a215026a29efa92375f273bd2f54cbac88367e639e75",
+    "total": 4,
+    "evidenced": 4,
+    "skipped": 0,
+    "entries": [
+      {
+        "acceptanceId": "acceptance-486e9328dba7bb743fd38251a396b00c4506fccc56c46e9c5b157307abb333bc",
+        "kind": "brief-example",
+        "source": "brief.md",
+        "evidenceRefs": [
+          "plugins/pi-codex-usage-status/extensions/pi-codex-usage-status.ts",
+          "tests/pi_codex_usage_status.test.mjs"
+        ],
+        "skippedReason": null
+      },
+      {
+        "acceptanceId": "acceptance-6e599a596ae0c230063ec3b8c9fe8307a1c00518f98abdb46a9647d965236bce",
+        "kind": "brief-example",
+        "source": "brief.md",
+        "evidenceRefs": [
+          "plugins/pi-codex-usage-status/extensions/pi-codex-usage-status.ts",
+          "tests/pi_codex_usage_status.test.mjs"
+        ],
+        "skippedReason": null
+      },
+      {
+        "acceptanceId": "acceptance-86fcb886c9012ce2afd4b867f729b224ed7070d8efcd735fe27d2b5f0e39d335",
+        "kind": "brief-example",
+        "source": "brief.md",
+        "evidenceRefs": [
+          "plugins/pi-codex-usage-status/extensions/pi-codex-usage-status.ts",
+          "tests/pi_codex_usage_status.test.mjs"
+        ],
+        "skippedReason": null
+      },
+      {
+        "acceptanceId": "acceptance-acccfae9ce9228eaa438c1f8c0ba2e1ad429fde553e4dae8896c2f76196e028b",
+        "kind": "brief-example",
+        "source": "brief.md",
+        "evidenceRefs": [
+          "plugins/pi-codex-usage-status/extensions/pi-codex-usage-status.ts",
+          "tests/pi_codex_usage_status.test.mjs"
+        ],
+        "skippedReason": null
+      }
+    ],
+    "traceHash": "22685347f6c63a9e5220cc9284871ec44140ecafbb0ae5f59c0404ac8a11ce0d"
+  },
+  "partialAllowanceRef": null,
+  "partialAllowanceHash": null,
+  "receiptRef": "runtime/evidence/check-receipts/5ba21507f6cfbf98af2252a2576870c9be496be9b5584ace44afd2a86589c4c8.json",
+  "createdAt": "2026-07-25T04:11:05.995Z",
+  "envelopeHash": "61b41a6a7863cd714694512396cf0f7d84ad92706b71b474bba61277ffa64c96"
+}

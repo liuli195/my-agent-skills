@@ -1,0 +1,172 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag
+        required: true
+        type: string
+      version:
+        description: Release version
+        required: true
+        type: string
+      bumpPlugins:
+        description: Comma-separated plugins to bump; empty means catalog/projection only
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      BUMP_PLUGINS: ${{ inputs.bumpPlugins }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+        with:
+          path: source
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r source/requirements-dev.txt
+          npm install -g @earendil-works/pi-coding-agent@0.82.1
+          npm ci --prefix source
+
+      - name: Validate release plan
+        run: >
+          python source/plugins/release-flow/skills/release-flow/scripts/release_flow.py
+          preflight
+          --project source
+          --tag "$RELEASE_TAG"
+          --version "$RELEASE_VERSION"
+          --bump-plugins "$BUMP_PLUGINS"
+          --allow-existing-release
+
+      - name: Normalize selected npm packages
+        shell: bash
+        run: echo "NORMALIZED_BUMP_PLUGINS=${BUMP_PLUGINS//[[:space:]]/}" >> "$GITHUB_ENV"
+
+      - name: Prepare verified MySpec npm package
+        shell: bash
+        run: |
+          set -euo pipefail
+          normalized_plugins="$NORMALIZED_BUMP_PLUGINS"
+          [[ ",$normalized_plugins," == *",my-spec,"* ]] || exit 0
+          candidate_dir="$RUNNER_TEMP/npm-candidates"
+          mkdir -p "$candidate_dir"
+          tarball_path="$(python source/plugins/tool-lifecycle/pack.py "myspec" "$candidate_dir")"
+          package_name="@liuli195/myspec"
+          prefix="$candidate_dir/myspec-prefix"
+          node -e 'const p=require(process.argv[1]); if (p.name !== process.argv[2] || p.publishConfig?.access !== "public" || p.repository?.type !== "git") process.exit(1)' ./source/plugins/my-spec/package.json "$package_name"
+          npm install -g --prefix "$prefix" --ignore-scripts --no-audit --no-fund "$tarball_path"
+          node -e 'const s=require(process.argv[1]); const p=require(process.argv[2]); if (p.name !== process.argv[3] || p.repository?.type !== s.repository?.type || p.repository?.url !== s.repository?.url || p.repository?.directory !== s.repository?.directory) process.exit(1)' ./source/plugins/my-spec/package.json "$prefix/lib/node_modules/$package_name/package.json" "$package_name"
+          "$prefix/bin/myspec" doctor
+          integrity="$(node -e 'const {createHash}=require("node:crypto"); const {readFileSync}=require("node:fs"); console.log("sha512-" + createHash("sha512").update(readFileSync(process.argv[1])).digest("base64"))' "$tarball_path")"
+          node -e 'const p=require(process.argv[1]); process.exit(p.version === process.argv[2] ? 0 : 1)' ./source/plugins/my-spec/package.json "$RELEASE_VERSION"
+          if ! versions="$(npm view "$package_name" versions --json 2>"$candidate_dir/myspec-npm-view-error")"; then
+            grep -qiE 'E404|404 Not Found' "$candidate_dir/myspec-npm-view-error" || { cat "$candidate_dir/myspec-npm-view-error" >&2; exit 1; }
+            echo "FIRST_PUBLISH_REQUIRED=true" >> "$GITHUB_ENV"
+          elif node -e 'const versions=JSON.parse(process.argv[1]); process.exit((Array.isArray(versions) ? versions : [versions]).includes(process.argv[2]) ? 0 : 1)' "$versions" "$RELEASE_VERSION"; then
+            published_integrity="$(npm view "$package_name@$RELEASE_VERSION" dist.integrity)"
+            [[ "$published_integrity" == "$integrity" ]] || { echo "Published MySpec does not match the verified Tarball" >&2; exit 1; }
+          fi
+          echo "MYSPEC_TARBALL=$tarball_path" >> "$GITHUB_ENV"
+          echo "MYSPEC_INTEGRITY=$integrity" >> "$GITHUB_ENV"
+
+      - name: Prepare verified Build and Verify npm package
+        shell: bash
+        run: |
+          set -euo pipefail
+          normalized_plugins="$NORMALIZED_BUMP_PLUGINS"
+          [[ ",$normalized_plugins," == *",build-and-verify,"* ]] || exit 0
+          candidate_dir="$RUNNER_TEMP/npm-candidates"
+          mkdir -p "$candidate_dir"
+          tarball_path="$(python source/plugins/tool-lifecycle/pack.py "build-and-verify" "$candidate_dir")"
+          package_name="@liuli195/build-and-verify"
+          prefix="$candidate_dir/build-and-verify-prefix"
+          node -e 'const p=require(process.argv[1]); if (p.name !== process.argv[2] || p.publishConfig?.access !== "public" || p.repository?.type !== "git") process.exit(1)' ./source/plugins/build-and-verify/package.json "$package_name"
+          npm install -g --prefix "$prefix" --ignore-scripts --no-audit --no-fund "$tarball_path"
+          node -e 'const s=require(process.argv[1]); const p=require(process.argv[2]); if (p.name !== process.argv[3] || p.repository?.type !== s.repository?.type || p.repository?.url !== s.repository?.url || p.repository?.directory !== s.repository?.directory) process.exit(1)' ./source/plugins/build-and-verify/package.json "$prefix/lib/node_modules/$package_name/package.json" "$package_name"
+          "$prefix/bin/build-and-verify" verify --project source
+          integrity="$(node -e 'const {createHash}=require("node:crypto"); const {readFileSync}=require("node:fs"); console.log("sha512-" + createHash("sha512").update(readFileSync(process.argv[1])).digest("base64"))' "$tarball_path")"
+          node -e 'const p=require(process.argv[1]); process.exit(p.version === process.argv[2] ? 0 : 1)' ./source/plugins/build-and-verify/package.json "$RELEASE_VERSION"
+          if ! versions="$(npm view "$package_name" versions --json 2>"$candidate_dir/build-and-verify-npm-view-error")"; then
+            grep -qiE 'E404|404 Not Found' "$candidate_dir/build-and-verify-npm-view-error" || { cat "$candidate_dir/build-and-verify-npm-view-error" >&2; exit 1; }
+            echo "FIRST_PUBLISH_REQUIRED=true" >> "$GITHUB_ENV"
+          elif node -e 'const versions=JSON.parse(process.argv[1]); process.exit((Array.isArray(versions) ? versions : [versions]).includes(process.argv[2]) ? 0 : 1)' "$versions" "$RELEASE_VERSION"; then
+            published_integrity="$(npm view "$package_name@$RELEASE_VERSION" dist.integrity)"
+            [[ "$published_integrity" == "$integrity" ]] || { echo "Published Build and Verify does not match the verified Tarball" >&2; exit 1; }
+          fi
+          echo "BUILD_AND_VERIFY_TARBALL=$tarball_path" >> "$GITHUB_ENV"
+          echo "BUILD_AND_VERIFY_INTEGRITY=$integrity" >> "$GITHUB_ENV"
+
+      - name: Upload npm package candidates
+        uses: actions/upload-artifact@v6
+        with:
+          name: npm-package-candidates
+          path: ${{ runner.temp }}/npm-candidates/*.tgz
+
+      - name: Stop for first npm package publication preparation
+        if: env.FIRST_PUBLISH_REQUIRED == 'true'
+        run: echo "First npm publication needs npm login, two-factor authentication, and Trusted Publisher preparation; candidates were uploaded."
+
+      - name: Publish verified MySpec npm package
+        if: env.FIRST_PUBLISH_REQUIRED != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          normalized_plugins="$NORMALIZED_BUMP_PLUGINS"
+          [[ ",$normalized_plugins," == *",my-spec,"* ]] || exit 0
+          package_name="@liuli195/myspec"
+          if npm view "$package_name@$RELEASE_VERSION" dist.integrity >/dev/null 2>&1; then
+            [[ "$(npm view "$package_name@$RELEASE_VERSION" dist.integrity)" == "$MYSPEC_INTEGRITY" ]] || { echo "Published MySpec does not match the verified Tarball" >&2; exit 1; }
+          else
+            npm publish "$MYSPEC_TARBALL" --provenance --access public
+          fi
+
+      - name: Publish verified Build and Verify npm package
+        if: env.FIRST_PUBLISH_REQUIRED != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          normalized_plugins="$NORMALIZED_BUMP_PLUGINS"
+          [[ ",$normalized_plugins," == *",build-and-verify,"* ]] || exit 0
+          package_name="@liuli195/build-and-verify"
+          if npm view "$package_name@$RELEASE_VERSION" dist.integrity >/dev/null 2>&1; then
+            [[ "$(npm view "$package_name@$RELEASE_VERSION" dist.integrity)" == "$BUILD_AND_VERIFY_INTEGRITY" ]] || { echo "Published Build and Verify does not match the verified Tarball" >&2; exit 1; }
+          else
+            npm publish "$BUILD_AND_VERIFY_TARBALL" --provenance --access public
+          fi
+
+      - name: Publish release channel
+        if: env.FIRST_PUBLISH_REQUIRED != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          python source/plugins/release-flow/skills/release-flow/scripts/release_flow.py
+          ci-publish
+          --project source
+          --tag "$RELEASE_TAG"
+          --version "$RELEASE_VERSION"
+          --bump-plugins "$BUMP_PLUGINS"
+          --authorize-ci-publish

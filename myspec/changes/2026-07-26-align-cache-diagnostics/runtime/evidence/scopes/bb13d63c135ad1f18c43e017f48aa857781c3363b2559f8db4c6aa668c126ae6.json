@@ -1,0 +1,80 @@
+{
+  "schema": "comet.native.implementation-scope.v2",
+  "contractHash": "97f4fc9c4e074141ca7cf955688df3901a0f76fb562a5a1d99b392e1b555999f",
+  "baselineProjectionRef": "runtime/evidence/snapshots/9e6b8a7c1dc7ce428864948238299928556f7a3ae9c01b5f7ad51e03f6252c80.json",
+  "baselineProjectionHash": "9e6b8a7c1dc7ce428864948238299928556f7a3ae9c01b5f7ad51e03f6252c80",
+  "currentProjectionRef": "runtime/evidence/snapshots/abb4b927f6c741c978add3d5434869f00d3e54ef078e071f5f7e13e3ed2ae6da.json",
+  "currentProjectionHash": "abb4b927f6c741c978add3d5434869f00d3e54ef078e071f5f7e13e3ed2ae6da",
+  "complete": true,
+  "declaredArtifacts": [
+    {
+      "path": ".build-and-verify/config.json",
+      "kind": "file"
+    },
+    {
+      "path": "plugins/pi-cache-diagnostics/extensions/pi-cache-diagnostics.ts",
+      "kind": "file"
+    },
+    {
+      "path": "tests/pi_cache_diagnostics.test.mjs",
+      "kind": "file"
+    }
+  ],
+  "changes": [
+    {
+      "path": ".build-and-verify/config.json",
+      "kind": "modified",
+      "before": {
+        "hash": "f86ab1d77486e70abcf32d4989eb8f9fcaba072fb9efc95cb1d4a0be909c42fb",
+        "size": 7491
+      },
+      "after": {
+        "hash": "bee8a155dd38956ce2a9524ed15c555a80c48c444ce6d33da144c4dce3648e8e",
+        "size": 7633
+      },
+      "attributedTo": [
+        {
+          "path": ".build-and-verify/config.json",
+          "kind": "file"
+        }
+      ]
+    },
+    {
+      "path": "plugins/pi-cache-diagnostics/extensions/pi-cache-diagnostics.ts",
+      "kind": "modified",
+      "before": {
+        "hash": "2ce48091211f01d1f8924b9882e7bde0ae2c40904a0c1cd53a4fafe28b3c3d18",
+        "size": 10814
+      },
+      "after": {
+        "hash": "ddd7ed5a9724a678002b9ce79db2aec4be65395ad0087584ab6c0c7a155332d2",
+        "size": 12284
+      },
+      "attributedTo": [
+        {
+          "path": "plugins/pi-cache-diagnostics/extensions/pi-cache-diagnostics.ts",
+          "kind": "file"
+        }
+      ]
+    },
+    {
+      "path": "tests/pi_cache_diagnostics.test.mjs",
+      "kind": "added",
+      "before": null,
+      "after": {
+        "hash": "0f8b4402d59ada1d0f21fbc6b971101dde67b276d339e1295c61c9fbebc89d00",
+        "size": 5033
+      },
+      "attributedTo": [
+        {
+          "path": "tests/pi_cache_diagnostics.test.mjs",
+          "kind": "file"
+        }
+      ]
+    }
+  ],
+  "unattributed": [],
+  "unresolvedScopes": [],
+  "noCodeReason": null,
+  "scopeHash": "bb13d63c135ad1f18c43e017f48aa857781c3363b2559f8db4c6aa668c126ae6"
+}

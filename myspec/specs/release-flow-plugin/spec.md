@@ -1,0 +1,461 @@
+# release-flow-plugin Specification
+
+## Purpose
+
+TBD - created by archiving change standardize-agent-guard-release-flow. Update Purpose after archive.
+
+## Requirements
+
+### Requirement: 双端兼容发布流程插件
+
+系统 MUST 提供 `release-flow` Plugin（发布流程插件），用于在多个项目中复用一致的 release flow（发布流程），并同时兼容 Codex 和 Claude。
+
+#### Scenario: Codex 插件结构
+
+- **WHEN** 发布 `release-flow` Plugin
+- **THEN** 插件包 MUST 包含 `.codex-plugin/plugin.json`
+- **THEN** Codex manifest（清单）MUST 声明稳定 kebab-case（短横线命名）的插件 `name`、`version`、`description` 和 `skills`
+
+#### Scenario: Claude 插件结构
+
+- **WHEN** 发布 `release-flow` Plugin
+- **THEN** 插件包 MUST 包含 `.claude-plugin/plugin.json`
+- **THEN** Claude manifest（清单）MUST 声明插件 `name`、`version` 和 `description`
+
+#### Scenario: 共享技能脚本和模板
+
+- **WHEN** 发布 `release-flow` Plugin
+- **THEN** 插件包 MUST 包含 `skills/release-flow/SKILL.md`
+- **THEN** 插件包 MUST 包含 `skills/release-flow/scripts/` 中的确定性脚本
+- **THEN** 插件包 MUST 包含 `skills/release-flow/assets/templates/` 中的配置和 GitHub Workflow（工作流）模板
+
+#### Scenario: 跨项目复用
+
+- **WHEN** 一个项目安装或启用 `release-flow` Plugin
+- **THEN** 插件 MUST 通过该项目的 `.release-flow/config.yaml` 和 `.release-flow/projection.yaml` 解析发布模型
+- **THEN** 插件 MUST NOT 依赖 Agent Guard 专用路径或硬编码仓库名称
+### Requirement: 发布流程配置
+
+系统 MUST 使用 `.release-flow/config.yaml` 保存项目级发布流程配置，并将该文件纳入 Git 版本管理。
+
+#### Scenario: 声明发布通道
+
+- **WHEN** 项目配置声明 release（发布）信息
+- **THEN** 配置 MUST 声明 source ref（源引用）、channel branch（通道分支）和 branch mode（分支模式）
+- **THEN** branch mode MUST 支持 `remote-only`，表示本地不创建发布分支
+
+#### Scenario: 声明 workflow 触发方式
+
+- **WHEN** 项目配置声明 workflow（工作流）
+- **THEN** 配置 MUST 声明 GitHub Workflow 文件路径
+- **THEN** 配置 MUST 声明触发方式为 `workflow_dispatch`
+
+#### Scenario: 不声明本地发布记录目录
+
+- **WHEN** 项目配置声明 release-flow（发布流程）设置
+- **THEN** 配置 MUST NOT 声明本地 release record（发布记录）目录
+- **THEN** 发布流程 MUST NOT 依赖 `.release-flow/releases/<tag>/` 持久目录
+
+#### Scenario: 不声明 GitHub Rulesets 期望设置
+
+- **WHEN** 项目配置声明 GitHub 仓库设置
+- **THEN** 配置 MUST NOT 声明 GitHub Rulesets（GitHub 规则集）期望
+- **THEN** preflight（发布前检查）MUST NOT 检查 GitHub Rulesets（GitHub 规则集）
+### Requirement: 发布投影变量注册表
+
+系统 MUST 使用 `.release-flow/projection.yaml` 保存从 `main` 生成 latest channel（最新通道）的轻量发布投影规则，并将该文件纳入 Git 版本管理。
+
+#### Scenario: 注册变量
+
+- **WHEN** projection（发布投影）声明变量
+- **THEN** 每个变量 MUST 声明 source（来源）、required（是否必填）、sensitive（是否敏感）和 description（说明）
+- **THEN** source MUST 支持 `github-actions-variable`
+
+#### Scenario: 禁止保存变量值
+
+- **WHEN** projection 声明变量
+- **THEN** projection MUST NOT 保存变量值
+- **THEN** projection MAY 保存 `example` 或 `description` 这类非敏感说明字段
+
+#### Scenario: 声明 JSON 注入规则
+
+- **WHEN** projection 声明 transforms（转换）
+- **THEN** transform MUST 声明目标文件路径
+- **THEN** transform type MUST 支持 `json-env`
+- **THEN** transform MUST 使用 JSON Pointer（JSON 指针）声明字段路径到 projection identity（投影身份）引用的映射
+
+#### Scenario: 非敏感发布身份来自 projection
+
+- **WHEN** 发布流程需要 marketplace identity（市场身份）这类非敏感发布身份
+- **THEN** 变量值 MUST 从 `.release-flow/projection.yaml` 的 identity（身份）读取
+- **THEN** release-flow init/preflight MUST NOT 要求这些非敏感身份存在于 GitHub Actions Variables
+- **THEN** release-flow MUST NOT 要求用户为这些非敏感身份准备本地环境变量或变量文件
+- **THEN** projection MUST NOT 将 `CODEX_MARKETPLACE_CATALOG_NAME`、`CODEX_MARKETPLACE_DISPLAY_NAME`、`CLAUDE_MARKETPLACE_CATALOG_NAME`、`CLAUDE_MARKETPLACE_OWNER_NAME`、`RELEASE_FLOW_PLUGIN_REPOSITORY` 或 `RELEASE_FLOW_PLUGIN_REF` 声明为 GitHub Actions Variables
+
+#### Scenario: 应用投影不接收变量文件
+
+- **WHEN** 用户运行 `project`
+- **THEN** 系统 MUST NOT 接收 `--vars-file`
+- **THEN** 系统 MUST 直接从 `.release-flow/projection.yaml` 的 identity 读取非敏感发布身份
+### Requirement: 项目启用阶段
+系统 MUST 提供 project setup（项目启用）阶段，用于生成目标项目配置，并输出 GitHub Actions（GitHub 自动化任务）权限配置方案。首版 MUST NOT 在没有额外实现仓库上下文和认证回读前修改 GitHub 仓库设置。
+
+#### Scenario: Remote governance changes require current confirmation
+- **WHEN** Release Flow（发布流程） guidance mentions GitHub Rulesets（GitHub 规则集）、branch protection（分支保护）、workflow variables（工作流变量） or repository settings（仓库设置）
+- **THEN** Skill（技能） guidance MUST prohibit modifying those remote settings without explicit confirmation in the current conversation
+- **THEN** without confirmation, the Skill（技能） MUST only output remote tasks（远端待办）
+### Requirement: 发布前检查
+系统 MUST 提供 release-flow preflight（发布前检查）阶段，用于在发布前验证本地配置、发布输入、manifest（插件清单）、source ref（源引用）、发布投影和远端发布冲突。
+
+#### Scenario: 多个 preflight 问题输出汇总路径
+- **WHEN** preflight（发布前检查）同时发现多个错误
+- **AND** every emitted error（错误） is release（发布）冲突、manifest（清单）版本不匹配、source ref（源引用）未合入版本提升 or plugin（插件）需要一并提升版本
+- **THEN** preflight（发布前检查） MUST keep printing each underlying error（底层错误）
+- **THEN** preflight（发布前检查） MUST print exactly one summary next action（汇总下一步动作） for the multi-error set
+- **THEN** the summary MUST describe the current state and handling path（处理路径）, including that release（发布） conflicts require the user and agent（代理） to choose the release version（发布版本） before rerunning preflight（发布前检查）
+- **THEN** the summary MUST describe manifest（清单）、source ref（源引用） and plugin（插件） version issues as requiring the PR（拉取请求） path
+- **THEN** the summary MUST NOT infer or suggest a latest version（最新版本） or next version（下一版本）
+
+#### Scenario: 未跟踪 preflight 问题保留逐条恢复提示
+- **WHEN** preflight（发布前检查）同时发现多个错误
+- **AND** at least one error（错误） is not release（发布）冲突、manifest（清单）版本不匹配、source ref（源引用）未合入版本提升 or plugin（插件）需要一并提升版本
+- **THEN** preflight（发布前检查） MUST keep per-error nextAction（逐条下一步动作） output for errors（错误） that already have one
+### Requirement: 发布执行阶段
+
+系统 MUST 提供 release-flow publish（发布）阶段，通过 GitHub Workflow（GitHub 工作流）执行发布，本地不得执行发布 Git（版本管理）写操作。
+
+#### Scenario: 本地只触发 workflow
+
+- **WHEN** 用户执行 publish（发布）
+- **THEN** 本地系统 MUST 使用 `workflow_dispatch`（工作流触发）触发 GitHub Workflow（GitHub 工作流）
+- **THEN** 本地系统 MUST 只传递 `tag`（标签）、`version`（版本）和 `bumpPlugins`（提升插件列表）
+- **THEN** 本地系统 MUST NOT 创建发布分支
+- **THEN** 本地系统 MUST NOT 创建 tag（标签）
+- **THEN** 本地系统 MUST NOT push（推送）发布内容
+
+#### Scenario: publish 不支持 dry-run
+
+- **WHEN** 用户执行 `publish --dry-run`（发布试运行）
+- **THEN** CLI（命令行接口） MUST reject（拒绝） the argument
+- **THEN** 系统 MUST NOT print workflow dispatch（工作流触发） preview output（预览输出）
+
+#### Scenario: publish workflow trigger retries EOF
+
+- **WHEN** 用户执行 authorized publish（已授权发布）
+- **AND** `gh workflow run`（触发工作流） fails with EOF（连接提前结束）
+- **THEN** 本地系统 MUST retry（重试） the workflow trigger（工作流触发） with a bounded retry count
+- **THEN** retry attempts（重试尝试） MUST NOT create local branches（本地分支）、tags（标签） or pushes（推送）
+- **THEN** if a retry succeeds, publish（发布） MUST return success
+
+#### Scenario: publish workflow trigger reports exhausted EOF retry
+
+- **WHEN** 用户执行 authorized publish（已授权发布）
+- **AND** every bounded retry of `gh workflow run`（触发工作流） fails with EOF（连接提前结束）
+- **THEN** publish（发布） MUST return the final failure code
+- **THEN** publish（发布） MUST preserve the final GitHub CLI（GitHub 命令行） output for diagnosis（诊断）
+- **THEN** retry attempts（重试尝试） MUST NOT create local branches（本地分支）、tags（标签） or pushes（推送）
+
+#### Scenario: GitHub Workflow 执行发布
+
+- **WHEN** GitHub Workflow（GitHub 工作流）运行
+- **THEN** workflow（工作流）MUST checkout（检出）配置指定的 source ref（源引用）
+- **THEN** workflow（工作流）MUST 直接运行 source repo（源码仓库）内的 release-flow（发布流程）脚本
+- **THEN** workflow（工作流）MUST 读取 source repo（源码仓库）内的 `.release-flow/projection.yaml`（投影配置）
+- **THEN** workflow（工作流）MUST 在隔离发布树中应用 projection（投影）
+- **THEN** workflow（工作流）MUST 创建或更新远端 `marketplace`（市场分支）
+- **THEN** workflow（工作流）MUST 创建 tag（标签）
+- **THEN** workflow（工作流）MUST 创建 GitHub Release（GitHub 发布）
+- **THEN** `ci-publish`（持续集成发布）MUST NOT 提供 `--dry-run`（试运行）分支逻辑
+
+#### Scenario: CI 输出发布追溯字段
+
+- **WHEN** GitHub Workflow（GitHub 工作流）发布成功
+- **THEN** 输出 MUST 包含 release URL（发布链接）
+- **THEN** 输出 MUST 包含 marketplace commit（市场提交）
+- **THEN** 输出 MUST 包含 tag commit（标签提交）
+- **THEN** 输出 MUST 包含 workflow run URL（工作流运行链接）
+### Requirement: Marketplace identity 注册
+系统 MUST 在 `.release-flow/projection.yaml` 的 project projection（项目投影）语义中声明单一 marketplace identity（市场身份），并让 release-flow 的模板、配置方案和发布检查共同读取该 identity。
+
+#### Scenario: 声明正式 marketplace identity
+- **WHEN** 项目启用 release-flow
+- **THEN** 系统 MUST 声明 Codex marketplace catalog name（目录名）和 display name（显示名）
+- **THEN** 系统 MUST 声明 Claude marketplace catalog name（目录名）和 owner name（所有者名）
+- **THEN** 系统 MUST NOT 声明 release-flow plugin repository（插件仓库）或 ref（引用）作为 marketplace identity 字段
+- **THEN** 这些 identity 字段 MUST 位于 `.release-flow/projection.yaml`，而不是 `.release-flow/config.yaml`
+
+#### Scenario: 模板共享 identity
+- **WHEN** release-flow 生成 projection（发布投影）或 GitHub workflow（工作流）模板
+- **THEN** 生成内容 MUST 引用同一 marketplace identity
+- **THEN** 生成内容 MUST NOT 硬编码和 identity 不一致的旧 marketplace 名称
+### Requirement: 发布插件来源变量声明
+
+系统 MUST 不再要求 release-flow workflow 使用 GitHub Variables 声明 release-flow plugin source（插件来源）。
+
+#### Scenario: 初始化模板不声明插件来源变量
+
+- **WHEN** 生成 release-flow 初始化模板
+- **THEN** projection 模板 MUST NOT 声明 `RELEASE_FLOW_PLUGIN_REPOSITORY`
+- **THEN** projection 模板 MUST NOT 声明 `RELEASE_FLOW_PLUGIN_REF`
+- **THEN** 两个变量 MUST NOT 声明为 GitHub Actions Variables（仓库变量）
+
+#### Scenario: GitHub 配置方案不展示插件来源变量
+
+- **WHEN** 用户运行 `github-plan` 或 `configure-github --dry-run`
+- **THEN** 输出 MUST NOT 包含 `RELEASE_FLOW_PLUGIN_REPOSITORY`
+- **THEN** 输出 MUST NOT 包含 `RELEASE_FLOW_PLUGIN_REF`
+- **THEN** 输出 MUST NOT 包含 `CODEX_MARKETPLACE_CATALOG_NAME`
+- **THEN** 输出 MUST NOT 包含 `CODEX_MARKETPLACE_DISPLAY_NAME`
+- **THEN** 输出 MUST NOT 包含 `CLAUDE_MARKETPLACE_CATALOG_NAME`
+- **THEN** 输出 MUST NOT 包含 `CLAUDE_MARKETPLACE_OWNER_NAME`
+
+#### Scenario: 发布前检查不检查插件来源变量
+
+- **WHEN** 执行 `preflight`
+- **THEN** 系统 MUST NOT 检查 `RELEASE_FLOW_PLUGIN_REPOSITORY`
+- **THEN** 系统 MUST NOT 检查 `RELEASE_FLOW_PLUGIN_REF`
+### Requirement: Codex marketplace 由发布流程生成
+系统 MUST 允许 source branch（源分支）不持久保存 Codex repo-local marketplace（仓库本地市场）文件，并在 release channel（发布通道）生成正式 Codex marketplace catalog。
+
+#### Scenario: main 分支不保存 Codex repo-local marketplace
+- **WHEN** 仓库处于开发 source branch
+- **THEN** 仓库 MUST NOT 依赖 `.agents/plugins/marketplace.json` 作为持久 repo-local marketplace 文件
+- **THEN** Codex Desktop MUST NOT 因打开本仓库而额外发现一个同名本地 marketplace
+
+#### Scenario: 发布分支生成 Codex marketplace
+- **WHEN** release workflow 从 source branch 生成 `marketplace` 分支
+- **THEN** 系统 MUST 能在 source branch 缺少 `.agents/plugins/marketplace.json` 时生成该文件
+- **THEN** 生成的 catalog MUST 使用 marketplace identity 中的 Codex name 和 display name
+- **THEN** 生成的 catalog MUST 包含发布插件条目
+### Requirement: Marketplace identity 漂移检查
+
+系统 MUST 在发布前检查和发布投影中发现 marketplace identity 与生成产物不一致的漂移。
+
+#### Scenario: 拒绝旧名残留
+
+- **WHEN** 生成产物中存在和 marketplace identity 不一致的旧 marketplace name
+- **THEN** `preflight` MUST 拒绝继续
+- **THEN** 错误输出 MUST 指出不一致字段和期望 identity 值
+### Requirement: 插件发布清单单一注册表
+
+系统 MUST 使用单一 Plugin registry（插件注册表）描述可发布插件，并从该注册表推导 projection（投影）校验、Codex marketplace（Codex 市场）生成和 manifest（插件清单）路径。
+
+#### Scenario: 新增插件只需注册一次
+
+- **WHEN** 维护者把插件加入发布范围
+- **THEN** 系统 MUST 只要求在单一 Plugin registry（插件注册表）中声明该插件
+- **THEN** projection（投影）校验、marketplace（市场）生成和 manifest（插件清单）版本检查 MUST 使用同一声明
+
+#### Scenario: projection 插件未注册
+
+- **WHEN** `.release-flow/projection.yaml`（投影配置）引用未注册插件
+- **THEN** preflight（发布前检查）和 CI（持续集成）发布 MUST 拒绝继续
+- **THEN** 错误 MUST 指出未注册插件名
+### Requirement: 远端发布冲突检查
+
+系统 MUST 在发布前检查和 CI（持续集成）发布前检查远端 tag（标签）和 GitHub Release（GitHub 发布）是否已存在。
+
+#### Scenario: 远端 tag 已存在
+
+- **WHEN** 远端已存在本次发布 tag（标签）
+- **THEN** preflight（发布前检查）和 CI（持续集成）发布 MUST 拒绝继续
+- **THEN** 输出 MUST 明确报告 release already exists（发布已存在）
+
+#### Scenario: GitHub Release 已存在
+
+- **WHEN** GitHub Release（GitHub 发布）已存在本次发布 tag（标签）
+- **THEN** preflight（发布前检查）和 CI（持续集成）发布 MUST 拒绝继续
+- **THEN** 输出 MUST 明确报告 release already exists（发布已存在）
+### Requirement: 发布投影只在隔离发布环境执行
+
+系统 MUST NOT 要求维护者在源码分支运行正式 marketplace（市场）projection（投影）。
+
+#### Scenario: 本地源码分支保持 DEV 身份
+
+- **WHEN** 维护者在源码分支执行发布前检查
+- **THEN** preflight（发布前检查）MUST NOT 要求运行本地 `project`（投影）命令
+- **THEN** 源码分支中的 DEV（开发）marketplace（市场）配置 MUST 保持不变
+
+#### Scenario: CI 生成正式发布投影
+
+- **WHEN** GitHub Workflow（GitHub 工作流）执行发布
+- **THEN** CI（持续集成）MUST 在隔离发布树中应用正式 marketplace（市场）projection（投影）
+- **THEN** 正式 marketplace（市场）身份 MUST 只写入发布通道产物
+### Requirement: Release workflow template avoids deprecated Node action runtime
+The release-flow generated GitHub Workflow template MUST use current GitHub Action versions that avoid Node.js 20 deprecation warnings where current replacements exist.
+
+#### Scenario: Generated release workflow references are fully scanned
+- **WHEN** release-flow validates its GitHub Workflow template
+- **THEN** validation MUST inspect `uses:` action references and explicit Node runtime version declarations
+- **THEN** every reference with an available current non-deprecated replacement MUST be upgraded or explicitly covered by an exception scenario
+
+#### Scenario: Generated release workflow uses current checkout action
+- **WHEN** release-flow generates or validates the release workflow template
+- **THEN** the workflow MUST use `actions/checkout@v5`
+- **THEN** the workflow MUST NOT use `actions/checkout@v4`
+- **THEN** the workflow MUST keep the existing `workflow_dispatch` inputs and CI publish output contract
+### Requirement: Preflight failures expose ordered next actions
+Release Flow preflight（发布预检） MUST translate the three preflight（发布预检） errors listed in this change（变更） into ordered next actions without changing publish（发布） behavior.
+
+#### Scenario: Source ref missing version bump explains PR path
+- **WHEN** preflight（发布预检） fails because `sourceRef`（源引用） does not contain the requested manifest（清单） version bump（版本提升）
+- **THEN** output（输出） MUST identify that the version bump（版本提升） must first be merged through PR Flow（拉取请求流程）
+- **THEN** output（输出） MUST include the ordered next action to create, merge, and then rerun preflight（发布预检）
+
+#### Scenario: Manifest mismatch explains local correction
+- **WHEN** preflight（发布预检） fails because a requested plugin manifest（插件清单） does not match the requested release version（发布版本）
+- **THEN** output（输出） MUST identify the plugin（插件） and manifest（清单） path
+- **THEN** output（输出） MUST include the next action to correct the manifest（清单） before rerunning preflight（发布预检）
+
+#### Scenario: Existing release reports next version path
+- **WHEN** preflight（发布预检） finds that the requested tag（标签） or GitHub Release（GitHub 发布） already exists
+- **THEN** output（输出） MUST preserve `release already exists`（发布已存在）
+- **THEN** output（输出） MUST include a next action to choose a new release version（发布版本） and rerun preflight（发布预检）
+### Requirement: Preflight does not require a build-and-verify runtime snapshot
+Release Flow preflight（发布预检） MUST use the selected build-and-verify（构建与验证） package metadata and MUST NOT require a repository runtime（运行时） snapshot.
+
+#### Scenario: Build-and-verify is selected for release
+- **WHEN** preflight（发布预检） is run for a release（发布） that bumps the build-and-verify（构建与验证） plugin
+- **THEN** preflight（发布预检） MUST validate the selected package metadata
+- **THEN** preflight（发布预检） MUST NOT read or require `.build-and-verify/runtime/version.json`
+
+#### Scenario: Package preflight does not mutate files
+- **WHEN** preflight（发布预检） checks build-and-verify（构建与验证） package metadata
+- **THEN** preflight（发布预检） MUST NOT create or update `.build-and-verify/runtime/`
+- **THEN** preflight（发布预检） MUST NOT commit, push（推送）, or open PR（拉取请求）
+### Requirement: 发布输入选择提升插件
+
+系统 MUST 使用 `bumpPlugins`（提升插件列表）声明本次发布需要提升版本的插件，并以远端发布通道的最新内容作为 Release Baseline（发布基线）。
+
+系统 MUST 对每个实际发布目标检查其 Release Input（发布输入）与版本文件。Release Input（发布输入）包括消费者可获得的插件内容，以及会改变 NPM（Node 包管理器）候选包的打包输入。
+
+当发布输入相对 Release Baseline（发布基线）发生变化时，系统 MUST 要求该插件出现在 `bumpPlugins`（提升插件列表）中，并要求其所有公开版本文件相对基线严格递增且等于本次发布版本。
+
+#### Scenario: 只提升部分插件
+
+- **WHEN** `bumpPlugins`（提升插件列表）只包含部分插件
+- **AND** 未声明插件的 Release Input（发布输入）未发生变化
+- **THEN** preflight（发布前检查） MUST 允许未声明插件继续使用远端基线版本
+- **THEN** preflight（发布前检查） MUST 要求已声明插件的所有版本文件等于本次发布版本
+- **THEN** 已声明插件的版本 MUST 严格高于其远端基线版本
+
+#### Scenario: 市场插件源码发生同版本漂移
+
+- **WHEN** `release-flow` 或 `pr-flow` 的发布内容相对远端发布通道发生变化
+- **AND** 插件未出现在 `bumpPlugins`（提升插件列表）中
+- **THEN** preflight（发布前检查） MUST 拒绝继续
+- **THEN** 错误 MUST 指出该插件需要版本提升
+
+#### Scenario: NPM 插件源码或元数据发生同版本漂移
+
+- **WHEN** `build-and-verify` 或 `my-spec` 的插件内容、NPM 元数据或打包输入相对远端基线发生变化
+- **AND** 插件未出现在 `bumpPlugins`（提升插件列表）中
+- **THEN** preflight（发布前检查） MUST 拒绝继续
+- **THEN** 错误 MUST 指出该插件需要版本提升
+
+#### Scenario: 共享 NPM 打包输入发生变化
+
+- **WHEN** 同时影响多个 NPM 插件候选包的共享打包输入发生变化
+- **AND** 只有部分受影响插件出现在 `bumpPlugins`（提升插件列表）中
+- **THEN** preflight（发布前检查） MUST 拒绝继续
+- **THEN** 每个受影响插件 MUST 单独完成版本提升和选择
+
+#### Scenario: NPM 发布目标不在市场投影中
+
+- **WHEN** NPM 发布目标未出现在 marketplace projection（市场投影）中
+- **AND** 该目标存在于当前发布项目或远端发布基线
+- **THEN** preflight（发布前检查） MUST 继续检查该目标的发布输入和版本文件
+
+#### Scenario: 选中插件版本未递增
+
+- **WHEN** 插件出现在 `bumpPlugins`（提升插件列表）中
+- **AND** 其发布输入或版本文件相对远端基线发生变化
+- **AND** 至少一个版本文件没有严格高于远端基线
+- **THEN** preflight（发布前检查） MUST 拒绝继续
+- **THEN** 错误 MUST 指出该插件版本未提升
+
+#### Scenario: NPM 版本文件不一致
+
+- **WHEN** NPM 插件出现在 `bumpPlugins`（提升插件列表）中
+- **AND** 两个插件清单或 NPM 元数据中的任一版本文件不等于本次发布版本
+- **THEN** preflight（发布前检查） MUST 拒绝继续
+- **THEN** 错误 MUST 指出不一致的版本文件
+
+#### Scenario: 不提升插件
+
+- **WHEN** `bumpPlugins`（提升插件列表）为空列表
+- **AND** 所有实际发布目标的 Release Input（发布输入）和版本文件都与远端基线一致
+- **THEN** preflight（发布前检查） MUST 允许目录或投影变化
+- **THEN** preflight（发布前检查） MUST 不要求任何插件等于本次全局发布版本
+
+#### Scenario: 远端基线已更新
+
+- **WHEN** 本地保存的远端分支引用早于远端发布通道或源引用
+- **THEN** preflight（发布前检查） MUST 在比较发布输入和版本前刷新远端引用
+- **THEN** 比较结果 MUST 反映远端当前发布通道和源引用
+
+#### Scenario: CLI 重复声明提升插件
+
+- **WHEN** 用户重复传入 `--bump-plugins`（提升插件版本参数）
+- **THEN** preflight（发布前检查）、publish（发布）和 `ci-publish`（CI 发布） MUST NOT 静默丢弃前面的插件
+- **AND** 系统 MUST 将重复参数合并为同一个 `bumpPlugins`（提升插件列表）或输出明确错误
+
+#### Scenario: 未声明提升导致版本漂移
+
+- **WHEN** 某个插件版本文件不同于远端发布通道同路径版本
+- **AND** 插件不在 `bumpPlugins`（提升插件列表）中
+- **THEN** preflight（发布前检查） MUST 拒绝继续
+- **THEN** 错误 MUST 指出该插件需要加入 `bumpPlugins`（提升插件列表）或撤回版本变更
+
+#### Scenario: 未声明新插件
+
+- **WHEN** 某个实际发布目标在远端发布通道没有对应版本文件
+- **AND** 该目标不在 `bumpPlugins`（提升插件列表）中
+- **THEN** preflight（发布前检查） MUST 拒绝继续
+- **THEN** 错误 MUST 指出该目标需要加入 `bumpPlugins`（提升插件列表）
+### Requirement: Release workflow artifact upload uses current action runtime
+
+The release workflow and its generated template MUST use an artifact upload action with a current Node.js runtime so release logs do not report the Node.js 20 deprecation warning.
+
+#### Scenario: Release candidate upload uses the current action
+
+- **WHEN** the release workflow or its generated template uploads release candidates
+- **THEN** it MUST use `actions/upload-artifact@v6`
+- **THEN** it MUST NOT use `actions/upload-artifact@v4` or `actions/upload-artifact@v5`
+- **THEN** it MUST preserve the existing candidate upload and release publication order
+### Requirement: NPM 来源证明仓库元数据门禁
+Release Flow（发布流程）MUST 在构建和发布入口验证已登记 NPM（软件包管理器）包的来源证明仓库元数据，并在远端发布开始前阻止无法满足当前 GitHub（代码托管平台）仓库身份和单仓多包目录要求的包。
+
+#### Scenario: 项目校验检查全部已登记 NPM 包
+- **WHEN** 维护者运行 Release Flow 项目校验
+- **THEN** 系统 MUST 检查全部已登记且实际存在的 NPM 包
+- **THEN** 每个包的 `repository.url` MUST 与当前 GitHub 仓库大小写敏感地匹配
+- **THEN** 每个包的 `repository.directory` MUST 精确指向包含该包清单的仓库相对目录
+
+#### Scenario: 发布前检查只检查本次选择的 NPM 包
+- **WHEN** 维护者为部分已登记 NPM 包运行发布前检查
+- **THEN** 系统 MUST 只对本次选择发布的 NPM 包执行来源证明仓库元数据门禁
+- **THEN** 未选择包的仓库元数据错误 MUST NOT 阻止本次其他插件发布
+
+#### Scenario: 本地与自动化任务使用受信任仓库身份
+- **WHEN** 校验在本地运行
+- **THEN** 系统 MUST 从 Git `origin`（远端）取得 GitHub 仓库身份
+- **WHEN** 校验在 GitHub Actions（GitHub 自动化任务）中运行
+- **THEN** 系统 MUST 从 `GITHUB_REPOSITORY` 取得仓库身份
+- **THEN** 缺少、无效或与 `origin` 冲突的自动化任务仓库身份 MUST 使校验失败
+
+#### Scenario: 仓库元数据错误提供恢复信息
+- **WHEN** 包清单缺少仓库地址、指向其他仓库、大小写不匹配或声明错误包目录
+- **THEN** 校验 MUST 失败
+- **THEN** 输出 MUST 包含稳定错误类型、包清单位置、期望值、实际值和可执行的下一步动作
+
+#### Scenario: 发布触发前执行同一门禁
+- **WHEN** 维护者运行已授权的 `publish`（发布）命令
+- **THEN** 系统 MUST 在触发远端工作流前检查本次选择的 NPM 包
+- **THEN** 元数据错误时系统 MUST NOT 触发远端工作流
+- **THEN** 远端发布计划 MUST 在候选包打包前执行同一发布前检查
+
+#### Scenario: 候选包保留已校验仓库元数据
+- **WHEN** 发布工作流完成候选 Tarball（npm 软件包）打包和隔离安装
+- **THEN** 安装后包清单的仓库类型、地址和目录 MUST 与已校验的源码包清单一致
+- **THEN** 比较 MUST NOT 写死特定仓库名称或包目录
