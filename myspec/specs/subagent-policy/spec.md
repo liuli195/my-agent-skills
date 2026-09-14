@@ -8,7 +8,7 @@
 
 ### Requirement: 独立子代理策略入口与固定角色契约
 
-系统 MUST 通过独立的纯 Skill（技能）包提供 `subagent-policy`，固定 Explorer（调查者）、Implementer（实施者）、Reviewer（审查者）和 Architect（架构师）的职责、模型、思考强度与读写边界，并 SHALL 让主 Agent（代理）决定是否委派、何时委派以及调用几个角色。Explorer 使用 `gpt-5.6-luna` 与 `low`（低），Implementer 使用 `gpt-5.6-luna` 与 `max`（最高），Reviewer 使用 `gpt-5.6-sol` 与 `medium`（中等），Architect 使用 `gpt-5.6-sol` 与 `max`（最高）；只有 Implementer 可以在明确授权范围内写入。
+系统 MUST 通过独立的纯 Skill（技能）包提供 `subagent-policy`，固定 Explorer（调查者）、Implementer（实施者）、Reviewer（审查者）和 Architect（架构师）的职责、模型、思考强度与读写边界，并 SHALL 让主 Agent（代理）决定是否委派、何时委派以及调用几个角色。Explorer 使用 `gpt-5.6-luna` 与 `low`（低），Implementer 使用 `gpt-5.6-luna` 与 `max`（最高），Reviewer 使用 `gpt-5.6-sol` 与 `medium`（中等），Architect 使用 `gpt-6-astra` 与 `high`（高）；只有 Implementer 可以在明确授权范围内写入。
 
 #### Scenario: 当前宿主发现独立策略
 
