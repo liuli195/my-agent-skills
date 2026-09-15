@@ -13,7 +13,7 @@
 - [x] 技能正文保持宿主中立，不出现具体宿主名称；技能仍为单文件，顶层小节保持原样。
 - [x] 开发流程参考文档在提到固定模型与思考强度时，指向该技能的回退规则。
 - [x] 既有 `tests/subagent_policy.test.mjs` 与 `tests/dev_flow.test.mjs` 全部通过，不新增测试接缝。
-- [ ] 既有能力规格 `myspec/specs/subagent-policy/spec.md` 在**交付阶段**经 `my-spec-add` 更新为新回退语义，与技能不再矛盾。
-      （实施阶段不得修改或提交 `myspec/specs/`，故该条只能在门禁二授权后落地。）
+- [x] 既有能力规格 `myspec/specs/subagent-policy/spec.md` 在**交付阶段**经 `my-spec-add` 更新为新回退语义，与技能不再矛盾。
+      （门禁二授权后原子应用并校验通过；实施阶段全程未触碰 `myspec/specs/`。）
 
 **Spec reference:** `myspec/changes/2026-09-16-subagent-policy-host-fallback/spec.md`
