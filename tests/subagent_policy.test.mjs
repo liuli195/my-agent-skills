@@ -73,7 +73,40 @@ test("host discovers the independent subagent-policy skill package and its porta
 
     const content = await readFile(skillPath, "utf8");
     for (const text of contract) assert.match(content, new RegExp(escapeRegExp(text)));
-    const headings = [...content.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
+    assert.match(
+      content,
+      /无法使用指定模型或思考强度时[^]*承载同一角色/,
+      "模型或思考强度不可用时必须改用宿主默认配置承载同一角色，而不是放弃角色",
+    );
+    assert.match(
+      content,
+      /不得跳过角色或改用主 Agent（代理）自行完成/,
+      "回退不得削弱角色结构",
+    );
+    assert.doesNotMatch(
+      content,
+      /由主 Agent（代理）自行完成或报告差异/,
+      "旧的放弃子代理回退必须被替换",
+    );
+    const headingMatches = [...content.matchAll(/^## (.+)$/gm)];
+    const sectionBody = (title) => {
+      const index = headingMatches.findIndex((heading) => heading[1] === title);
+      assert.notEqual(index, -1, `缺少小节：${title}`);
+      const start = headingMatches[index].index + headingMatches[index][0].length;
+      const end = index + 1 < headingMatches.length ? headingMatches[index + 1].index : content.length;
+      return content.slice(start, end);
+    };
+    assert.match(
+      sectionBody("委派提示词"),
+      /回退/,
+      "委派提示词小节必须要求声明回退，否则主代理照清单执行不会带出它",
+    );
+    assert.match(
+      sectionBody("结果验收"),
+      /回退/,
+      "结果验收小节必须把未声明回退列为不予接受的情况",
+    );
+    const headings = headingMatches.map((match) => match[1]);
     assert.deepEqual(
       headings,
       ["角色契约", "主代理决策", "委派提示词", "结果验收"],
