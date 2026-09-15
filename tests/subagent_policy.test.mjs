@@ -88,6 +88,24 @@ test("host discovers the independent subagent-policy skill package and its porta
       /由主 Agent（代理）自行完成或报告差异/,
       "旧的放弃子代理回退必须被替换",
     );
+    const sectionBody = (title) => {
+      const headings = [...content.matchAll(/^## (.+)$/gm)];
+      const index = headings.findIndex((heading) => heading[1] === title);
+      if (index === -1) return "";
+      const start = headings[index].index + headings[index][0].length;
+      const end = index + 1 < headings.length ? headings[index + 1].index : content.length;
+      return content.slice(start, end);
+    };
+    assert.match(
+      sectionBody("委派提示词"),
+      /回退/,
+      "委派提示词小节必须要求声明回退，否则主代理照清单执行不会带出它",
+    );
+    assert.match(
+      sectionBody("结果验收"),
+      /回退/,
+      "结果验收小节必须把未声明回退列为不予接受的情况",
+    );
     const headings = [...content.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
     assert.deepEqual(
       headings,
