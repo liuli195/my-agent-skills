@@ -1,0 +1,7 @@
+{
+  "myspec_proposal": "myspec/changes/fix-build-and-verify-test-registration/proposal.md",
+  "myspec_design": "myspec/changes/fix-build-and-verify-test-registration/design.md",
+  "myspec_tasks": "myspec/changes/fix-build-and-verify-test-registration/tasks.md",
+  "myspec_delta_spec": "myspec/changes/fix-build-and-verify-test-registration/specs/test-framework-plugin/spec.md",
+  "archive_directory": "myspec/changes/archive/2026-07-22-fix-build-and-verify-test-registration"
+}

@@ -1,0 +1,98 @@
+{
+  "schema": "comet.native.verification-evidence.v1",
+  "change": "pi-cache-diagnostics-miss-audit",
+  "sourceRevision": 5,
+  "result": "pass",
+  "freshness": "complete",
+  "contractHash": "b7dfc535aacb1380689cbff568ea8c6853b25820ca826a8f0fbaa4b1016b5cc7",
+  "acceptanceCriteriaHash": "09302e4dc5787a110d833164c255581f7be158655ac9b3a91499733769d69c2f",
+  "implementationScopeRef": "runtime/evidence/scopes/972e237927e9aa7c9d16bcc307867a816688700edbd39db97d13a9b222251006.json",
+  "implementationScopeHash": "972e237927e9aa7c9d16bcc307867a816688700edbd39db97d13a9b222251006",
+  "reportRef": "verification.md",
+  "reportHash": "1d7def1dc0b81139bc20d7ceaee2791f934182574174fac5d6bb1c14aa6cc81f",
+  "acceptanceTrace": {
+    "schema": "comet.native.acceptance-trace.v1",
+    "nativeRootRef": "docs/comet",
+    "criteriaHash": "09302e4dc5787a110d833164c255581f7be158655ac9b3a91499733769d69c2f",
+    "total": 8,
+    "evidenced": 6,
+    "skipped": 2,
+    "entries": [
+      {
+        "acceptanceId": "acceptance-3b61020e0c9f53d7f1484ccb9c8bc1cc519b6b398ef295f0afceccd4c65ca1a8",
+        "kind": "brief-example",
+        "source": "brief.md",
+        "evidenceRefs": [
+          "tests/pi_cache_diagnostics.test.mjs"
+        ],
+        "skippedReason": null
+      },
+      {
+        "acceptanceId": "acceptance-4f8099384c07ee211ce891c1e82eb858254df49555f023e3bb2b4e3c2a1332b0",
+        "kind": "brief-example",
+        "source": "brief.md",
+        "evidenceRefs": [],
+        "skippedReason": "未能在不增加测试专用注入接口的情况下稳定触发 Gzip 压缩失败。"
+      },
+      {
+        "acceptanceId": "acceptance-7ff3475a656cb660c4e7c87df1673a2182e07fd0a3b767245289149ef1589d54",
+        "kind": "brief-example",
+        "source": "brief.md",
+        "evidenceRefs": [
+          "plugins/pi-cache-diagnostics/extensions/pi-cache-diagnostics.ts",
+          "tests/pi_cache_diagnostics.test.mjs"
+        ],
+        "skippedReason": null
+      },
+      {
+        "acceptanceId": "acceptance-9865400dd349ec0bd3276297bf7c819a8737516ef2e984ecf119c16eb7b10b2c",
+        "kind": "brief-example",
+        "source": "brief.md",
+        "evidenceRefs": [
+          "tests/pi_cache_diagnostics.test.mjs"
+        ],
+        "skippedReason": null
+      },
+      {
+        "acceptanceId": "acceptance-c239097fd5dc8620477b6d46b6a81ae9c834cacc125cbd2a083a75ae36f3c69d",
+        "kind": "brief-example",
+        "source": "brief.md",
+        "evidenceRefs": [
+          "tests/pi_cache_diagnostics.test.mjs"
+        ],
+        "skippedReason": null
+      },
+      {
+        "acceptanceId": "acceptance-cc4a402dca2c997694f3226bd272670b986451376659a07a7b2a01fe44906b60",
+        "kind": "brief-example",
+        "source": "brief.md",
+        "evidenceRefs": [
+          "tests/pi_cache_diagnostics.test.mjs"
+        ],
+        "skippedReason": null
+      },
+      {
+        "acceptanceId": "acceptance-d5f7dc554d1125985fae32a73e0e792149e55524a65aed4c626665528ca36ee1",
+        "kind": "brief-example",
+        "source": "brief.md",
+        "evidenceRefs": [],
+        "skippedReason": "OpenAI Codex 内部自动重试没有逐次公开事件，未进行真实网络故障注入。"
+      },
+      {
+        "acceptanceId": "acceptance-e967604ec239c98c1b3237553119fc8a35d9de23c6b5013162606b8f9203c76a",
+        "kind": "brief-example",
+        "source": "brief.md",
+        "evidenceRefs": [
+          "tests/pi_cache_diagnostics.test.mjs"
+        ],
+        "skippedReason": null
+      }
+    ],
+    "traceHash": "283b5a0f64daa4a167de49e24df1e736b3d54f63891126dcfa29a699998a105a"
+  },
+  "partialAllowanceRef": null,
+  "partialAllowanceHash": null,
+  "receiptRef": null,
+  "createdAt": "2026-07-26T15:19:48.914Z",
+  "envelopeHash": "ded9da6a6e2450c2d51853ce81622c7a5e99ef8bf87a2bcdc229a3735f3e5018"
+}

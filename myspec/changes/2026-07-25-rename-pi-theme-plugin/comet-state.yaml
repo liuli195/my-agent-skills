@@ -1,0 +1,22 @@
+schema: comet.native.v3
+minimum_runtime_version: 3
+revision: 5
+name: rename-pi-theme-plugin
+language: zh-CN
+phase: archive
+brief: brief.md
+approval: confirmed
+approved_contract_hash: f3d42e2570ff9b9a7422f1ba2c6ccb2ab5e848cc488b0578ac0067185cca8a93
+spec_changes:
+  - capability: pi-my-theme
+    operation: create
+    source: specs/pi-my-theme/spec.md
+    base_hash: null
+verification_result: pass
+verification_report: verification.md
+implementation_scope: runtime/evidence/scopes/df74c10b9c7bb15e4560946f0b8ccf022b2914d2d8d23e3326655b86e7fe90ac.json
+verification_evidence: runtime/evidence/verifications/7cf7d89b85cbce4a6550687dd6680467cf87e9a98e9f5c580f3afdb66ee221c5.json
+partial_allowance: null
+archived: true
+created_at: 2026-07-25
+run_id: f58e566c-c4b1-4e73-86b3-a70429d30f16
