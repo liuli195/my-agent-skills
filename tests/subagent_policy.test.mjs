@@ -73,6 +73,21 @@ test("host discovers the independent subagent-policy skill package and its porta
 
     const content = await readFile(skillPath, "utf8");
     for (const text of contract) assert.match(content, new RegExp(escapeRegExp(text)));
+    assert.match(
+      content,
+      /无法使用指定模型或思考强度时[^]*承载同一角色/,
+      "模型或思考强度不可用时必须改用宿主默认配置承载同一角色，而不是放弃角色",
+    );
+    assert.match(
+      content,
+      /不得跳过角色或改用主 Agent（代理）自行完成/,
+      "回退不得削弱角色结构",
+    );
+    assert.doesNotMatch(
+      content,
+      /由主 Agent（代理）自行完成或报告差异/,
+      "旧的放弃子代理回退必须被替换",
+    );
     const headings = [...content.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
     assert.deepEqual(
       headings,

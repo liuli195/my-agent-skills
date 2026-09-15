@@ -157,6 +157,16 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     assert.match(implementation, /`build-and-verify`[^]*正式验证前/);
     assert.match(implementation, /`code-review`[^]*独立审查前/);
     assertInOrder(implementation, "`subagent-policy`", "`tdd`", "`build-and-verify`", "`code-review`");
+    assert.match(
+      requirements,
+      /`subagent-policy`[^]*宿主无法提供指定模型或思考强度[^]*承载同一角色/,
+      "需求阶段提到固定模型时必须指向子代理策略的回退规则",
+    );
+    assert.match(
+      implementation,
+      /`subagent-policy`[^]*宿主无法提供指定模型或思考强度[^]*承载同一角色/,
+      "实施阶段提到固定模型时必须指向子代理策略的回退规则",
+    );
     assert.match(delivery, /官方 `my-spec`[^]*实际调用/);
     assert.match(delivery, /需要规格变更[^]*`my-spec-add`[^]*实际调用/);
     assert.match(delivery, /门禁二授权后[^]*`pr-flow-complete`/);
