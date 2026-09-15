@@ -159,7 +159,7 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     assertInOrder(implementation, "`subagent-policy`", "`tdd`", "`build-and-verify`", "`code-review`");
     assert.match(
       requirements,
-      /`subagent-policy`[^]*回退规则/,
+      /`subagent-policy`[^]*按该技能的回退规则处理/,
       "需求阶段提到固定模型时必须指向子代理策略的回退规则",
     );
     assert.doesNotMatch(
@@ -169,7 +169,7 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     );
     assert.match(
       implementation,
-      /`subagent-policy`[^]*回退规则/,
+      /`subagent-policy`[^]*按该技能的回退规则处理/,
       "实施阶段提到固定模型时必须指向子代理策略的回退规则",
     );
     assert.doesNotMatch(

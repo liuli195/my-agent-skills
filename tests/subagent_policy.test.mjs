@@ -88,12 +88,12 @@ test("host discovers the independent subagent-policy skill package and its porta
       /由主 Agent（代理）自行完成或报告差异/,
       "旧的放弃子代理回退必须被替换",
     );
+    const headingMatches = [...content.matchAll(/^## (.+)$/gm)];
     const sectionBody = (title) => {
-      const headings = [...content.matchAll(/^## (.+)$/gm)];
-      const index = headings.findIndex((heading) => heading[1] === title);
-      if (index === -1) return "";
-      const start = headings[index].index + headings[index][0].length;
-      const end = index + 1 < headings.length ? headings[index + 1].index : content.length;
+      const index = headingMatches.findIndex((heading) => heading[1] === title);
+      assert.notEqual(index, -1, `缺少小节：${title}`);
+      const start = headingMatches[index].index + headingMatches[index][0].length;
+      const end = index + 1 < headingMatches.length ? headingMatches[index + 1].index : content.length;
       return content.slice(start, end);
     };
     assert.match(
@@ -106,7 +106,7 @@ test("host discovers the independent subagent-policy skill package and its porta
       /回退/,
       "结果验收小节必须把未声明回退列为不予接受的情况",
     );
-    const headings = [...content.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
+    const headings = headingMatches.map((match) => match[1]);
     assert.deepEqual(
       headings,
       ["角色契约", "主代理决策", "委派提示词", "结果验收"],
