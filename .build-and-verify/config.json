@@ -209,7 +209,9 @@
           "plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py",
           "plugins/release-flow/skills/release-flow/scripts/release_flow.py",
           "plugins/tool-lifecycle/**",
-          "scripts/setup-worktree.ps1"
+          "scripts/setup-worktree.ps1",
+          "scripts/**",
+          ".codex/**"
         ],
         "command": "python -m pytest -q -p no:cacheprovider --dist worksteal tests/test_build_and_verify_plugin.py tests/test_plugin_sync_skill_contract.py tests/test_version_source_of_truth.py tests/test_setup_worktree_script.py",
         "inputs": [
@@ -234,7 +236,9 @@
           "plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py",
           "plugins/release-flow/skills/release-flow/scripts/release_flow.py",
           "plugins/tool-lifecycle",
-          "scripts/setup-worktree.ps1"
+          "scripts/setup-worktree.ps1",
+          "scripts",
+          ".codex"
         ],
         "checkParallel": true,
         "pytestXdistWorkers": 2
