@@ -68,6 +68,25 @@ This flow is read-only（只读）. It must not refresh（刷新）, update（�
 <marketplace-root>/plugins/<plugin>/.claude-plugin/plugin.json
 ```
 
+## Skill Root（技能根目录） Checks（检查）
+
+Junction（目录联接）形态的 Plugin（插件）不出现于市场命令的输出，必须单独列技能根目录核对。对每个客户端运行一次：
+
+```powershell
+Get-ChildItem "$env:USERPROFILE\.agents\skills" -Force | Select-Object Name, LinkType, @{n='Target';e={$_.Target -join ';'}}
+Get-ChildItem "$env:USERPROFILE\.claude\skills" -Force | Select-Object Name, LinkType, @{n='Target';e={$_.Target -join ';'}}
+```
+
+判定每条：
+
+- `LinkType` 为空的是第三方真实目录，不属于本仓库，跳过。
+- `Target` 等于 `<repo>/plugins/<plugin>/skills/<skill>` → `skill_link_current`。
+- `Target` 落在另一个技能根目录下 → `skill_link_chained`，报出中间那一跳。
+- 条目只在一个客户端出现 → `skill_link_missing`，报出缺失端。
+- 对每条 `skill_link_current`，确认 `<root>/<name>/SKILL.md` 可读，确认联接没有指向已被删除的目标。
+
+`realpath`（真实路径）会一路解析到仓库，看不出层级；只有客户端的链接视图（`LinkType` 与 `Target`）能给出真实跳数。
+
 ## Remote（远端） Check（检查）
 
 If a repository path is available and remote comparison is useful, prefer no-write remote checks:

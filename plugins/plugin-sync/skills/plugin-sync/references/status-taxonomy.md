@@ -17,6 +17,12 @@ Use these status（状态） names consistently.
 - `plugin_disabled`（插件未启用）: Plugin（插件） is installed but disabled（未启用）.
 - `restart_required`（需要重启）: update completed but client restart（客户端重启） or new session（新会话） is needed.
 
+## Skill Root（技能根目录）
+
+- `skill_link_missing`（技能联接缺失）: 条目在一个客户端的技能根目录里不存在。
+- `skill_link_chained`（技能联接成链）: 条目的 `Target`（目标）落在另一个技能根目录下，而不是直接落在仓库。
+- `skill_link_current`（技能联接已对齐）: 两个客户端都有直连仓库的一级 junction（目录联接）。
+
 ## Output Pattern（输出格式）
 
 Use compact lines:
@@ -27,6 +33,16 @@ target: codex build-and-verify@my-agent-skills-marketplace
 installed: 0.1.32
 snapshot: 0.1.33
 next: codex plugin add build-and-verify@my-agent-skills-marketplace --json
+```
+
+Junction（目录联接）形态用链接行报出跳数：
+
+```text
+status: skill_link_chained
+target: claude dev-flow
+link: C:\Users\<user>\.claude\skills\dev-flow
+resolves: C:\Users\<user>\.agents\skills\dev-flow -> <repo>\plugins\dev-flow\skills\dev-flow
+next: 拉直为一级 junction（目录联接）（需用户显式授权）
 ```
 
 For authorized updates:
