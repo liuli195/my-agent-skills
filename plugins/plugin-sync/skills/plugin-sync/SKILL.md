@@ -14,6 +14,7 @@ Typical requests:
 - Check whether Codex（代码代理） and Claude（代码代理） see the same Plugin（插件） versions.
 - Refresh marketplace snapshot（市场快照） and update installed Plugin（已安装插件） versions.
 - Diagnose stale cache（过期缓存）, missing subscription（缺少订阅）, disabled Plugin（未启用插件）, or restart（重启） needs.
+- Check whether every junction（目录联接） installed Skill（技能） appears in both clients' Skill Roots（技能根目录）.
 - Diagnose or update MySpec（自有规格） or Build and Verify（构建与验证） through their CLI（命令行程序）.
 
 ## Safety Contract（安全边界）
@@ -24,6 +25,7 @@ Typical requests:
 - Do not publish release（发布）, create tag（标签）, push（推送）, or modify release-flow（发布流程）.
 - Do not scan the whole disk. For repository runtime（仓库运行时） work, use only the current repository, user-provided paths, or a user-confirmed bounded root.
 - Claude（代码代理） Plugin（插件） updates for the same marketplace（插件市场） must run sequentially, not in parallel.
+- Junction（目录联接） entries live in the user environment（用户环境）, outside the repository. Checking them is read-only; creating, repointing, or flattening one（拉直联接） needs explicit user authorization.
 
 ## MySpec（自有规格）委托边界
 
@@ -63,12 +65,26 @@ Build and Verify（构建与验证）同样由 CLI（命令行程序）拥有其
 
 检查、刷新、更新和复查复用同一目标。客户端状态查询的输出是插件状态证据。
 
+## Skill Roots（技能根目录）
+
+本仓库的 Plugin（插件）有两种安装形态，检查时都要覆盖：
+
+- **marketplace（插件市场）形态**：带 `.claude-plugin/plugin.json` 与 `.codex-plugin/plugin.json`，走市场订阅和安装。
+- **junction（目录联接）形态**：不带 plugin.json，进不了市场，靠客户端技能根目录里的目录联接指向仓库源码。
+
+junction（目录联接）形态的根目录：
+
+- Codex（代码代理）：`~/.agents/skills`
+- Claude（代码代理）：`~/.claude/skills`
+
+不变式：源自本仓库的每个条目 MUST 是**一级** junction（目录联接），`Target`（目标）直接落在 `<repo>/plugins/<plugin>/skills/<skill>`。`Target` 落在另一个技能根目录下即为 chained（链式），必须拉直——链式把一次静默失效藏在两层之下，任何一层被删，技能就在客户端消失且不留痕迹，`subagent-policy` 就这样在 Claude 侧丢过一次。两个客户端 MUST 覆盖同一组技能条目。
+
 ## Workflow（工作流）
 
 1. If the request concerns MySpec（自有规格）, use the delegation commands above unless the current request satisfies the one-time explicit exception; for an exception, perform only its bounded native/manual action and verification.
 2. If the request only contains MySpec（自有规格） or Build and Verify（构建与验证）, delegate its requested CLI（命令行程序） command and stop this workflow.
 3. If the request has remaining non-MySpec（自有规格） scope, continue below only for that remaining scope.
-4. Read `references/check.md` to resolve the Client Target（客户端目标） and run the read-only check（只读检查） flow for other plugins.
+4. Read `references/check.md` to resolve the Client Target（客户端目标） and run the read-only check（只读检查） flow for other plugins and Skill Roots（技能根目录）.
 5. Classify findings using `references/status-taxonomy.md`.
 6. If the user explicitly authorizes Codex（代码代理） updates, read `references/update-codex.md`.
 7. If the user explicitly authorizes Claude（代码代理） updates, read `references/update-claude.md`.

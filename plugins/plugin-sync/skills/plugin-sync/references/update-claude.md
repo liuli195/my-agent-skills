@@ -41,6 +41,20 @@ Run this only after explicit user authorization.
 <claude-target> plugin list --json
 ```
 
+## Skill Root（技能根目录）
+
+Junction（目录联接）形态的条目不走市场命令。仅在用户显式授权后处理，逐条执行：
+
+1. 记录当前 `LinkType`（链接类型）与 `Target`（目标）。
+2. 用 `[System.IO.Directory]::Delete($path, $false)` 删除旧条目本身，只删链接，目标内容原样保留。
+3. 建立一级 junction（目录联接）:
+
+```powershell
+New-Item -ItemType Junction -Path "$env:USERPROFILE\.claude\skills\<name>" -Target "<repo>\plugins\<plugin>\skills\<skill>"
+```
+
+4. 复查 `Target`（目标）等于仓库路径，且该条目下的 `SKILL.md` 可读。
+
 ## Notes（注意）
 
 - Always use `plugin@marketplace`（插件@市场） for this marketplace（插件市场） to avoid ambiguous short names.
