@@ -3,7 +3,7 @@
   awehitch 本地改动的**自检 + 按需补齐**（幂等，可随时重跑）。
 
 .DESCRIPTION
-  本机为了让 awehitch 正常工作做了**四处**本地补丁，外加一处历史遗留清理。
+  本机为了让 awehitch 正常工作做了**五处**本地补丁，外加一处历史遗留清理。
   这些改动会在 `npm update -g awehitch` 之后全部丢失。
 
   补丁 4 之后，`awehitch up` 不再往 Codex 用户级配置写条目了，所以那处清理只对
@@ -243,6 +243,79 @@ if (-not (Test-Path $codexJs) -or -not (Test-Path $cliJs)) {
     Add-Row "补丁 4 不写用户级配置" "缺陷仍在" "**已补上**" "①不写用户级条目 ②状态认项目级配置 ③doctor 传入工作区"
   } else {
     Add-Row "补丁 4 不写用户级配置" "判不准" "**未打**" "四处锚点未能全部唯一命中——awehitch 可能改版，需人工处理"
+  }
+}
+
+# =========================================================================
+# 补丁 5：bridge 认得出「记录已死」
+#   缺陷：`findBridgeObservation`（dist/bridge/runtime.js）**先探端口、后查进程**。
+#         重启之后，旧运行记录里的端口往往已被**另一个工作区**占着 —— 默认端口
+#         48765 是全机共享的，被占时新实例会静默退到临时端口，而旧记录里存的很可能
+#         正是那条被邻居占着的 48765。于是它判为 `workspace_mismatch`（状态不明）
+#         → `ensureBridge`（dist/process/daemon.js）直接抛错拒绝启动
+#         → `up` / `connector-setup` 全被挡住，只有手工挪走记录才能解。
+#   修法：把「记录里的进程是否还在」提到端口探测**之前** —— 记录里的进程都不在了，
+#         那份记录就是废的，那个端口现在谁用着都无所谓。
+#   边界：**不修**「进程号被系统回收」那一支。修它必须把「状态不明」降级，而端口探测
+#         只是一次 HTTP 试探，服务短暂卡顿就会被误判成死亡，有误杀活体服务的风险。
+#   自检：runtime.js 里有没有本补丁的 PATCH(local) 标记
+# =========================================================================
+$runtimeJs = Join-Path $awehitchRoot "dist\bridge\runtime.js"
+$p5Marker = 'PATCH(local): a dead recorded pid makes the record stale'
+$aFind = @'
+export async function findBridgeObservation(workspaceId) {
+    const runtime = readRuntimeState(workspaceId);
+    if (!runtime)
+        return { state: "stopped", runtime: null, reason: "runtime_missing" };
+    const health = await probeBridge(runtime.port);
+    if (health && health.workspaceId === workspaceId) {
+        return { state: "healthy", runtime };
+    }
+    if (health) {
+        return { state: "unknown", runtime, reason: "workspace_mismatch" };
+    }
+    const pid = observePid(runtime.pid);
+    if (pid === "missing")
+        return { state: "stopped", runtime, reason: "pid_missing" };
+    return { state: "unknown", runtime, reason: pid === "unknown" ? "pid_unknown" : "probe_failed" };
+}
+'@
+$rFind = @'
+export async function findBridgeObservation(workspaceId) {
+    const runtime = readRuntimeState(workspaceId);
+    if (!runtime)
+        return { state: "stopped", runtime: null, reason: "runtime_missing" };
+    // PATCH(local): a dead recorded pid makes the record stale — whoever answers
+    // on that port is irrelevant. Check the pid BEFORE probing the port.
+    const pid = observePid(runtime.pid);
+    if (pid === "missing")
+        return { state: "stopped", runtime, reason: "pid_missing" };
+    const health = await probeBridge(runtime.port);
+    if (health && health.workspaceId === workspaceId) {
+        return { state: "healthy", runtime };
+    }
+    if (health) {
+        return { state: "unknown", runtime, reason: "workspace_mismatch" };
+    }
+    return { state: "unknown", runtime, reason: pid === "unknown" ? "pid_unknown" : "probe_failed" };
+}
+'@
+# 行尾规范化：本脚本被 .gitattributes 定为 CRLF，而被改文件是 LF
+$aFind = ($aFind -replace "`r`n", "`n").TrimEnd()
+$rFind = ($rFind -replace "`r`n", "`n").TrimEnd()
+
+if (-not (Test-Path $runtimeJs)) {
+  Add-Row "补丁 5 bridge 判断顺序" "找不到文件" "未动" "缺 bridge/runtime.js"
+} else {
+  $t = ReadUtf8 $runtimeJs
+  if ($t.Contains($p5Marker)) {
+    Add-Row "补丁 5 bridge 判断顺序" "已打" "跳过" "runtime.js 里有本补丁的 PATCH(local) 标记"
+  } elseif (([regex]::Matches($t, [regex]::Escape($aFind))).Count -eq 1) {
+    if (-not (Test-Path "$runtimeJs.orig")) { Copy-Item $runtimeJs "$runtimeJs.orig" -Force }
+    WriteUtf8 $runtimeJs $t.Replace($aFind, $rFind)
+    Add-Row "补丁 5 bridge 判断顺序" "缺陷仍在" "**已补上**" "整函数锚点唯一命中 → 判断顺序已调换"
+  } else {
+    Add-Row "补丁 5 bridge 判断顺序" "判不准" "**未打**" "整函数锚点未能唯一命中——awehitch 可能改版，需人工处理"
   }
 }
 

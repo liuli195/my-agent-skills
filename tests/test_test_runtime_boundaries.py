@@ -510,6 +510,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_setup_worktree_script.py::test_setup_worktree_script_links_shared_node_dependencies': (
         'covers the PowerShell setup entrypoint against a real linked worktree and Windows junction; function=test_setup_worktree_script_links_shared_node_dependencies'
     ),
+    'tests/test_awehitch_local_patches.py::test_status_treats_stale_record_as_not_running': (
+        'covers the awehitch bridge status CLI treating a stale runtime record as not running; function=test_status_treats_stale_record_as_not_running'
+    ),
     'tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_directory_hash_uses_git_visible_files': (
         'covers packaged cache behavior against tracked, visible untracked, and ignored files in a real git repository; function=test_build_and_verify_runner_directory_hash_uses_git_visible_files'
     ),
