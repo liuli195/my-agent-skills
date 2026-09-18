@@ -3,7 +3,7 @@
   awehitch 本地改动的**自检 + 按需补齐**（幂等，可随时重跑）。
 
 .DESCRIPTION
-  本机为了让 awehitch 正常工作做了**六处**本地补丁，外加一处历史遗留清理。
+  本机为了让 awehitch 正常工作做了**七处**本地补丁，外加一处历史遗留清理。
   这些改动会在 `npm update -g awehitch` 之后全部丢失。
 
   补丁 4 之后，`awehitch up` 不再往 Codex 用户级配置写条目了，所以那处清理只对
@@ -400,10 +400,132 @@ if (-not (Test-Path $tpl6)) {
 }
 
 # =========================================================================
+# 补丁 7：引导词与工作区校验词，压到能真的发出去
+#   缺陷：唯一能发任意文本的通道是 `awehitch_send_state`，它硬性要求**以 `[C2C]` 开头**
+#         且 **UTF-8 字节数 ≤ 1024**（dist/control-plane/server.js）。而模板里的引导词
+#         1361 字节、且不以 `[C2C]` 开头 —— 两条都踩，**永远发不出去**；每个 Agent（代理）
+#         只能临场自己压一版，压成什么样全凭运气。工作区校验词不超限，但也缺 `[C2C]` 头。
+#   修法：① 引导词只保留**能改变 ChatGPT 行为**的信息，删掉不改变任何决策的表述
+#            （"只检查需要的文件""避免不必要的重写""要有实质内容"），同类项合并；
+#            加 `[C2C]` + `STATE: BOOT` 头。1361 → 816 字节，余量 208
+#         ② 两处工作区校验词都加 `[C2C]` + `STATE: CONNECT_CHECK` 头
+#         ③ 重连那节的校验词原写作字面量 `<connectorName>`（补丁 6 引入）—— 改成渲染
+#            占位符，否则 Agent 可能把它原样发出去
+#   自检：模板里有没有本补丁的 PATCH(local) 标记
+#   注意：字节预算必须在**渲染后**断言（连接器名会被替换掉），不能在模板上断言。
+# =========================================================================
+$aBoot = @'
+```
+You are the planning and review layer of a coding session.
+
+The local agent owns execution.
+You own high-level reasoning, planning and review.
+
+You have access to the current local workspace through the
+"{{CONNECTOR_NAME}}" MCP connector.
+
+Rules:
+
+1. Do not ask the agent to paste files that are available through MCP.
+2. Inspect only the files needed for the task.
+3. Use MCP to inspect current code, git status and diff.
+4. Produce concise executable plans.
+5. The agent will execute your plan using its own harness.
+6. After the agent reports EXECUTED, independently inspect the diff.
+   If execution_output lists a readable item for this iteration, list
+   then read it. If status is restricted, ignore the body and review
+   from git.
+7. Do not assume an implementation succeeded just because the agent says so.
+8. Continue until the implementation satisfies the success criteria.
+9. Avoid unnecessary rewrites.
+10. Return C2C structured control messages.
+11. Be substantive. PLAN and review replies must carry rationale, per-file
+    natural-language suggestions, risks worth checking, and test advice.
+    Never reply with a bare one-liner. No 40-step epics either.
+12. If you receive a HANDOFF message, this conversation continues an
+    existing task. Trust the handoff brief, re-read code through MCP, and
+    resume from NEXT_EXPECTED_STEP.
+```
+'@
+$rBoot = @'
+```
+[C2C]
+STATE: BOOT
+You are the planning and review layer of this coding session.
+The local agent owns execution (editing, shell, git, tests); you own
+reasoning, planning and review.
+
+Read the workspace yourself through the "{{CONNECTOR_NAME}}" MCP connector.
+
+Rules:
+1. Never ask for file contents, diffs or logs - read them via MCP.
+2. Inspect current code, git status and diff yourself before planning.
+3. Reply with C2C control messages (STATE: PLAN / DONE / BLOCKED).
+4. After EXECUTED, verify against the real git diff. If execution_output
+   lists a readable item, read it; otherwise review from git.
+5. Do not trust "it works" claims - iterate until the success criteria hold.
+6. A HANDOFF message means this continues an existing task: re-read the
+   code via MCP and resume from NEXT_EXPECTED_STEP.
+```
+
+<!-- PATCH(local): compressed boot prompt -->
+'@
+$aCheckWorkflow = @'
+Use the "{{CONNECTOR_NAME}}" connector: call workspace_info and read hello-style top-level file. Reply with the workspace name.
+'@
+$rCheckWorkflow = @'
+[C2C]
+STATE: CONNECT_CHECK
+Use the "{{CONNECTOR_NAME}}" connector: call workspace_info and read
+hello-style top-level file. Reply with the workspace name.
+'@
+$aCheckReconnect = @'
+[C2C]
+STATE: CONNECT_CHECK
+Use the "<connectorName>" connector: call workspace_info and read a
+hello-style top-level file. Reply with the workspace name.
+'@
+$rCheckReconnect = @'
+[C2C]
+STATE: CONNECT_CHECK
+Use the "{{CONNECTOR_NAME}}" connector: call workspace_info and read a
+hello-style top-level file. Reply with the workspace name.
+'@
+
+$p7Marker = 'PATCH(local): compressed boot prompt'
+$aBoot = ($aBoot -replace "`r`n", "`n").TrimEnd()
+$rBoot = ($rBoot -replace "`r`n", "`n").TrimEnd()
+$aCheckWorkflow = ($aCheckWorkflow -replace "`r`n", "`n").TrimEnd()
+$rCheckWorkflow = ($rCheckWorkflow -replace "`r`n", "`n").TrimEnd()
+$aCheckReconnect = ($aCheckReconnect -replace "`r`n", "`n").TrimEnd()
+$rCheckReconnect = ($rCheckReconnect -replace "`r`n", "`n").TrimEnd()
+
+if (-not (Test-Path $tpl6)) {
+  Add-Row "补丁 7 引导词压缩" "找不到文件" "未动" "缺 skill/SKILL.md.template"
+} else {
+  $t = ReadUtf8 $tpl6
+  if ($t.Contains($p7Marker)) {
+    Add-Row "补丁 7 引导词压缩" "已打" "跳过" "模板里有本补丁的 PATCH(local) 标记"
+  } elseif ((([regex]::Matches($t, [regex]::Escape($aBoot))).Count -eq 1) -and
+            (([regex]::Matches($t, [regex]::Escape($aCheckWorkflow))).Count -eq 1) -and
+            (([regex]::Matches($t, [regex]::Escape($aCheckReconnect))).Count -eq 1)) {
+    $t = $t.Replace($aBoot, $rBoot)
+    $t = $t.Replace($aCheckWorkflow, $rCheckWorkflow)
+    $t = $t.Replace($aCheckReconnect, $rCheckReconnect)
+    WriteUtf8 $tpl6 $t
+    Add-Row "补丁 7 引导词压缩" "缺陷仍在" "**已补上**" "三处锚点各唯一命中 → 引导词已压缩并加 [C2C] 头"
+  } else {
+    Add-Row "补丁 7 引导词压缩" "判不准" "**未打**" "三处锚点未能各唯一命中——模板可能改版，需人工处理"
+  }
+}
+
+# =========================================================================
 # 由模板重新渲染两份技能
+#   **必须放在所有模板补丁之后** —— 否则单次运行里改完模板、技能却没跟着更新
+#   （实测踩过两次：补丁 6、补丁 7）。
 #   判据是「渲染结果与磁盘上那份不一致」，**不是**「某个补丁刚被打上」——
-#   后者依赖瞬时状态：该补丁已打过时走「跳过」分支，重渲染就永远不会发生
-#   （实测踩过：补丁 6 改完模板，两份技能却没跟着更新）。现在这样幂等、自愈。
+#   后者依赖瞬时状态：该补丁已打过时走「跳过」分支，重渲染就永远不会发生。
+#   现在这样幂等、自愈，重复跑不会产生多余写入。
 #   渲染时连接器名用占位符：真实名字每个工作区不同，由技能内说明引导 Agent 现取。
 # =========================================================================
 $tplText = ReadUtf8 $tpl

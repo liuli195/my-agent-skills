@@ -11,6 +11,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -24,6 +25,17 @@ SERVICE_NAME = "awehitch-bridge"
 # 本机实测：process.kill(<该值>, 0) 抛 ESRCH —— 确定不存在的进程号
 DEAD_PID = 4_194_304
 FOREIGN_WORKSPACE_ID = "deadbeef0000"
+
+# 唯一发送通道的硬限制（awehitch_send_state 的前缀校验与字节上限）
+C2C_PREFIX = "[C2C]"
+C2C_LIMIT = 1024
+# 引导词块与工作区校验块在渲染文本里的识别标记。
+# 门禁一 Q10 决定不给模板加可机读标记，所以只能按内容识别。
+BOOT_BLOCK_MARKER = "planning and review layer"
+CHECK_BLOCK_MARKER = "workspace_info"
+# 连接器名的最坏长度：名字直接吃字节预算，且不由本仓库控制
+# （渲染名上限 40 字符，而旧名字只做 trim 不截断）。
+WORST_CASE_CONNECTOR = "awehitch · " + "x" * 40
 
 
 def _awehitch_package() -> Path:
@@ -174,3 +186,24 @@ def test_rendered_skill_reconnect_flow_rebuilds_the_connector(tmp_path: Path) ->
 
     # 「本地不全绿就不开 ChatGPT」这道门禁已删除 —— 它既不亮也不准，实测误导。
     assert "do not open ChatGPT" not in text
+
+
+def _fenced_blocks(text: str) -> list[str]:
+    return re.findall(r"```[^\n]*\n(.*?)```", text, re.S)
+
+
+def test_rendered_skill_messages_fit_the_c2c_channel(tmp_path: Path) -> None:
+    """技能里声明为「要发出去」的文本块，必须真的能通过唯一的发送通道。"""
+    blocks = _fenced_blocks(_render_skill(WORST_CASE_CONNECTOR, tmp_path))
+
+    boot = [block for block in blocks if BOOT_BLOCK_MARKER in block]
+    assert len(boot) == 1, "应当恰好有一个引导词块"
+    assert boot[0].startswith(C2C_PREFIX), "引导词必须以 [C2C] 开头，否则发送通道会拒收"
+    size = len(boot[0].encode("utf-8"))
+    assert size <= C2C_LIMIT, f"引导词 {size} 字节，超过发送通道的 {C2C_LIMIT} 字节上限"
+    assert WORST_CASE_CONNECTOR in boot[0], "引导词里要保留连接器名，否则可能读错工作区"
+
+    checks = [block for block in blocks if CHECK_BLOCK_MARKER in block]
+    assert checks, "应当至少有一个工作区校验块"
+    for block in checks:
+        assert block.startswith(C2C_PREFIX), "工作区校验词同样必须以 [C2C] 开头"
