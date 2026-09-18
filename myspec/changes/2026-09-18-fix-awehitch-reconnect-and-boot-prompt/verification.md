@@ -80,3 +80,44 @@ Planning/review layer initialized. Send the task, HANDOFF, or EXECUTED message.
 当场暴露，现已删除该猜测。
 
 未阻塞的判断题（命名、重复代码、规格外改动）已记录，留待门禁二一并决定。
+
+## 五、修复阻塞项后的重跑（最终状态）
+
+修复后 `HEAD` = `a0a917ed`，`build-and-verify` 重跑：`status: passed`（209 passed，较修复前多 1
+项＝新增的那条测试）。
+
+**重跑真实入口冒烟**（任务标识 `smoke-after-review-fixes`）：
+
+发送：`{"ok": true, "sent": true, "url": "https://chatgpt.com/c/6aad3ae2-2acc-83ee-9846-be4aad8115a5"}`
+
+回复（原样）：
+
+```
+[C2C]
+STATE: PLAN
+
+WORKSPACE: my-agent-skills
+BRANCH: claude/awehitch-codex-config-fix
+HEAD: a0a917ed
+
+Git（版本管理）状态：
+工作区干净 / staged 0 / unstaged 0 / untracked 0 / conflicted 0
+当前分支相对 upstream：ahead 5 / behind 0
+HEAD diff（当前提交差异）：空
+
+已读取工作区顶层结构、AGENTS.md 和 CONTEXT.md，后续会按任务重新读取相关源码并基于真实 Git diff（差异）进行验证。
+
+NEXT_EXPECTED_STEP: 发送具体 TASK / HANDOFF。
+```
+
+报出的 `HEAD` 与本地一致，且它按引导词设定的角色与格式回话 —— 修复后仍然成立。
+
+## 六、完成检查（实施阶段收尾）
+
+```
+git diff --name-only 9fc5145b -- myspec/specs/            → 空
+git ls-files --others --exclude-standard -- myspec/specs/ → 空
+```
+
+两条均为空：实施全程**未触碰 `myspec/specs/`**，无提前写入的正式规格。
+
