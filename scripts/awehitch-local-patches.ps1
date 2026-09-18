@@ -3,7 +3,7 @@
   awehitch 本地改动的**自检 + 按需补齐**（幂等，可随时重跑）。
 
 .DESCRIPTION
-  本机为了让 awehitch 正常工作做了**五处**本地补丁，外加一处历史遗留清理。
+  本机为了让 awehitch 正常工作做了**六处**本地补丁，外加一处历史遗留清理。
   这些改动会在 `npm update -g awehitch` 之后全部丢失。
 
   补丁 4 之后，`awehitch up` 不再往 Codex 用户级配置写条目了，所以那处清理只对
@@ -95,7 +95,6 @@ $noteText = @'
 
 然后把下文出现的连接器名一律替换成该值。
 '@
-$tplRepatched = $false
 if (-not (Test-Path $tpl)) {
   Add-Row "补丁 2 技能模板" "找不到文件" "未动" "缺 SKILL.md.template"
 } else {
@@ -109,7 +108,6 @@ if (-not (Test-Path $tpl)) {
     if ($t.Contains($anchor)) {
       if (-not (Test-Path "$tpl.orig")) { Copy-Item $tpl "$tpl.orig" -Force }
       WriteUtf8 $tpl $t.Replace($anchor, $anchor + $noteText)
-      $tplRepatched = $true
       Add-Row "补丁 2 技能模板" "缺陷仍在" "**已补上**" "锚点匹配 → 说明已插入"
     } else {
       Add-Row "补丁 2 技能模板" "判不准" "**未打**" "找不到插入锚点——模板可能改版，需人工处理"
@@ -157,23 +155,6 @@ if (-not (Test-Path $composerJs)) {
       Add-Row "补丁 3 读回比对" "判不准" "**未打**" "找不到插入锚点——比对函数可能已重写，需人工处理"
     }
   }
-}
-
-# =========================================================================
-# 由模板重新渲染两份技能（仅在补丁 2 刚被补上时才需要）
-# =========================================================================
-if ($tplRepatched) {
-  $tplText = ReadUtf8 $tpl
-  foreach ($tg in @(
-      @{ path = Join-Path $env:USERPROFILE ".claude\skills\awehitch\SKILL.md"; harness = "Claude Code" },
-      @{ path = Join-Path $env:USERPROFILE ".codex\skills\awehitch\SKILL.md";  harness = "Codex" }
-    )) {
-    $dir = Split-Path $tg.path -Parent
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }
-    # 连接器名用占位符：真实名字每个工作区不同，由技能内说明引导 Agent 现取
-    WriteUtf8 $tg.path ($tplText.Replace("{{HARNESS}}", $tg.harness).Replace("{{CONNECTOR_NAME}}", "awehitch · <本工作区>"))
-  }
-  Add-Row "技能重渲染" "因补丁 2" "**已重渲染**" "两份技能已按新模板重写（连接器名用占位符）"
 }
 
 # =========================================================================
@@ -317,6 +298,133 @@ if (-not (Test-Path $runtimeJs)) {
   } else {
     Add-Row "补丁 5 bridge 判断顺序" "判不准" "**未打**" "整函数锚点未能唯一命中——awehitch 可能改版，需人工处理"
   }
+}
+
+# =========================================================================
+# 补丁 6：技能模板的重新连接流程
+#   缺陷：模板把重连的触发条件挂在 `chatgptSetup.needed` / `chatgptRepair.needed`
+#         上。重启之后这两个标志**不会亮** —— bridge 已死，doctor 无法确认状态，
+#         直接跳过整块连接器检查；而且真实链路还漏了**唯一真正重建连接**的那一步
+#         （`connector-setup`）。另有 doctor 门禁（"本地不全绿就不开 ChatGPT"），
+#         它既不亮也不准，实测误导。
+#   修法：① 重连那一节整节替换为实测三步：试一次最小 [C2C] 往返 → 报出本工作区名
+#           即已连上 → 不通则跑 `connector-setup` 再回到第一步
+#         ② 同一模板里另一处引用同一套标志的地方（doctor 门禁）**同步改** ——
+#            两处必须一起改，否则技能文本自相矛盾
+#         ③ 登录表述更正为**异常路径**：默认全自动（浏览器配置保留登录态），
+#            只有返回 needsLogin 时才需要人登录一次
+#   自检：模板里有没有本补丁的 PATCH(local) 标记
+# =========================================================================
+$tpl6 = Join-Path $awehitchRoot "skill\SKILL.md.template"
+$p6Marker = 'PATCH(local): reconnect flow'
+$aGate = @'
+0. `awehitch doctor -w <workspace> --json` (auto-repairs). Doctor gate: if
+   local is not green, do not open ChatGPT and do not send INIT. Follow its
+   `chatgptRepair` / `namedRepair` guidance first.
+'@
+$rGate = @'
+0. `awehitch doctor -w <workspace> --json` is **diagnostics only, never a
+   gate** — and never block on it. Its repair flags do not fire in the
+   reconnect case, so a green doctor does not mean the connection works.
+'@
+$aReconnect = @'
+## Workflow: reconnect after address reclaim
+
+When doctor reports `chatgptSetup.needed` or `chatgptRepair.needed`: tell the
+user its `userMessage`, then run `awehitch -w <workspace> --json`
+(or `chatgptSetup.command`). It deletes THIS workspace's connector and
+recreates it with the new address — it never clicks Reconnect, and never
+touches another workspace's connector. Then doctor again.
+
+If that command fails, fall back to the manual path in the first-time setup
+workflow: follow `manualFallback.steps` to delete and recreate
+`connectorName` with the new address. Never click Reconnect — the old
+address is dead and that page hangs on "This site cannot be reached".
+'@
+$rReconnect = @'
+## Workflow: reconnect（"重新连接" — after a reboot, or an address reclaim）
+
+<!-- PATCH(local): reconnect flow -->
+
+The only test that matters is **whether it works**. Never guess from doctor's
+flags: after a reboot they never light up — the bridge is dead, so doctor
+cannot confirm the state and skips the connector check entirely.
+
+1. **Try one minimal round-trip.** `awehitch_open_chat` for the task, then
+   `awehitch_send_state`:
+
+```
+[C2C]
+STATE: CONNECT_CHECK
+Use the "<connectorName>" connector: call workspace_info and read a
+hello-style top-level file. Reply with the workspace name.
+```
+
+   Then `awehitch_wait_reply`.
+2. **The reply names this workspace → connected.** Get on with the task.
+3. **Anything else → rebuild with one command:**
+
+   `awehitch connector-setup -w <workspace> --json`
+
+   It ensures the bridge, ensures a tunnel, deletes this workspace's old
+   connector, recreates it with the current address, and authorises it.
+   **This is fully automatic** — the browser profile keeps the ChatGPT login,
+   so no human step is needed. Only when it reports `needsLogin` do you ask
+   the user to log in (ONE action), then re-run the same command. Then go
+   back to step 1.
+4. If it still fails, fall back to `manualFallback.steps` as in first-time
+   setup. Never click Reconnect, and never touch another workspace's
+   connector — that page hangs on "This site cannot be reached".
+'@
+$aGate = ($aGate -replace "`r`n", "`n").TrimEnd()
+$rGate = ($rGate -replace "`r`n", "`n").TrimEnd()
+$aReconnect = ($aReconnect -replace "`r`n", "`n").TrimEnd()
+$rReconnect = ($rReconnect -replace "`r`n", "`n").TrimEnd()
+
+if (-not (Test-Path $tpl6)) {
+  Add-Row "补丁 6 重连流程" "找不到文件" "未动" "缺 skill/SKILL.md.template"
+} else {
+  $t = ReadUtf8 $tpl6
+  if ($t.Contains($p6Marker)) {
+    Add-Row "补丁 6 重连流程" "已打" "跳过" "模板里有本补丁的 PATCH(local) 标记"
+  } elseif ((([regex]::Matches($t, [regex]::Escape($aGate))).Count -eq 1) -and
+            (([regex]::Matches($t, [regex]::Escape($aReconnect))).Count -eq 1)) {
+    if (-not (Test-Path "$tpl6.orig")) { Copy-Item $tpl6 "$tpl6.orig" -Force }
+    $t = $t.Replace($aGate, $rGate)
+    $t = $t.Replace($aReconnect, $rReconnect)
+    WriteUtf8 $tpl6 $t
+    Add-Row "补丁 6 重连流程" "缺陷仍在" "**已补上**" "两处锚点各唯一命中 → 重连节与 doctor 门禁已改写"
+  } else {
+    Add-Row "补丁 6 重连流程" "判不准" "**未打**" "两处锚点未能各唯一命中——模板可能改版，需人工处理"
+  }
+}
+
+# =========================================================================
+# 由模板重新渲染两份技能
+#   判据是「渲染结果与磁盘上那份不一致」，**不是**「某个补丁刚被打上」——
+#   后者依赖瞬时状态：该补丁已打过时走「跳过」分支，重渲染就永远不会发生
+#   （实测踩过：补丁 6 改完模板，两份技能却没跟着更新）。现在这样幂等、自愈。
+#   渲染时连接器名用占位符：真实名字每个工作区不同，由技能内说明引导 Agent 现取。
+# =========================================================================
+$tplText = ReadUtf8 $tpl
+$rerendered = [System.Collections.Generic.List[string]]::new()
+foreach ($tg in @(
+    @{ path = Join-Path $env:USERPROFILE ".claude\skills\awehitch\SKILL.md"; harness = "Claude Code" },
+    @{ path = Join-Path $env:USERPROFILE ".codex\skills\awehitch\SKILL.md";  harness = "Codex" }
+  )) {
+  $dir = Split-Path $tg.path -Parent
+  if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }
+  $rendered = $tplText.Replace("{{HARNESS}}", $tg.harness).Replace("{{CONNECTOR_NAME}}", "awehitch · <本工作区>")
+  $current = if (Test-Path $tg.path) { ReadUtf8 $tg.path } else { "" }
+  if ($current -ne $rendered) {
+    WriteUtf8 $tg.path $rendered
+    $rerendered.Add($tg.harness)
+  }
+}
+if ($rerendered.Count -gt 0) {
+  Add-Row "技能重渲染" "与模板不一致" "**已重渲染**" ("两份技能已按新模板重写：" + ($rerendered -join "、"))
+} else {
+  Add-Row "技能重渲染" "与模板一致" "跳过" "两份技能已经是最新模板渲染的结果"
 }
 
 # =========================================================================

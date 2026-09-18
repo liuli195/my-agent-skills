@@ -26,14 +26,37 @@ DEAD_PID = 4_194_304
 FOREIGN_WORKSPACE_ID = "deadbeef0000"
 
 
-def _awehitch_cli() -> Path:
+def _awehitch_package() -> Path:
     appdata = os.environ.get("APPDATA")
     if not appdata:
         pytest.skip("APPDATA 不可用 —— 这些检查只在本机装有 awehitch 包时可运行")
-    cli = Path(appdata) / "npm" / "node_modules" / "awehitch" / "dist" / "cli" / "index.js"
+    package = Path(appdata) / "npm" / "node_modules" / "awehitch"
+    if not package.is_dir():
+        pytest.skip(f"未找到 awehitch 安装包（{package}）—— 这些检查只在本机装有该包时可运行")
+    return package
+
+
+def _awehitch_cli() -> Path:
+    cli = _awehitch_package() / "dist" / "cli" / "index.js"
     if not cli.is_file():
-        pytest.skip(f"未找到 awehitch 安装包（{cli}）—— 这些检查只在本机装有该包时可运行")
+        pytest.skip(f"未找到 awehitch 命令行入口（{cli}）—— 安装包结构可能已变")
     return cli
+
+
+def _render_skill(connector_name: str, workdir: Path, harness: str = "Codex") -> str:
+    """渲染技能文本 —— 就是产生该缺陷的那一步，两个客户端共用同一个渲染函数。"""
+    node = _node()
+    module = _awehitch_package() / "dist" / "adapters" / "skill-template.js"
+    runner = workdir / "render-skill.mjs"
+    runner.write_text(
+        "import { pathToFileURL } from \"node:url\";\n"
+        f"const mod = await import(pathToFileURL({json.dumps(module.as_posix())}).href);\n"
+        f"process.stdout.write(mod.renderSkill({json.dumps({'harness': harness, 'connectorName': connector_name})}));\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run([node, str(runner)], capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout
 
 
 def _node() -> str:
@@ -136,3 +159,18 @@ def test_status_treats_stale_record_as_not_running(tmp_path: Path) -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_rendered_skill_reconnect_flow_rebuilds_the_connector(tmp_path: Path) -> None:
+    """连不上时，技能必须指引 Agent（代理）跑唯一真正重建连接的那一步。"""
+    text = _render_skill("awehitch · my-agent-skills", tmp_path)
+
+    # 唯一真正重建连接的一步，必须在技能里给出。
+    assert "connector-setup" in text
+
+    # 不再把重连的触发条件挂在两个标志位上（模板里原有两处引用，都要清掉）。
+    assert "chatgptRepair" not in text
+    assert "chatgptSetup" not in text
+
+    # 「本地不全绿就不开 ChatGPT」这道门禁已删除 —— 它既不亮也不准，实测误导。
+    assert "do not open ChatGPT" not in text

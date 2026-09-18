@@ -513,6 +513,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_awehitch_local_patches.py::test_status_treats_stale_record_as_not_running': (
         'covers the awehitch bridge status CLI treating a stale runtime record as not running; function=test_status_treats_stale_record_as_not_running'
     ),
+    'tests/test_awehitch_local_patches.py::test_rendered_skill_reconnect_flow_rebuilds_the_connector': (
+        'covers the rendered awehitch skill guiding the agent to connector-setup when the connection is down; function=test_rendered_skill_reconnect_flow_rebuilds_the_connector'
+    ),
     'tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_directory_hash_uses_git_visible_files': (
         'covers packaged cache behavior against tracked, visible untracked, and ignored files in a real git repository; function=test_build_and_verify_runner_directory_hash_uses_git_visible_files'
     ),
