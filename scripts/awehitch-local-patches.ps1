@@ -84,6 +84,9 @@ if (-not (Test-Path $browserJs)) {
 #   自检：模板里是否已经有"按工作区取连接器名"的引导（找 connectorName 查询或等价措辞）。
 # =========================================================================
 $tpl = Join-Path $awehitchRoot "skill\SKILL.md.template"
+# 任一处模板补丁判「判不准」时置真 —— 重渲染**必须**据此停手：
+# 拿一份没打全补丁的模板去覆盖本机技能，等于把已经装好的能力静默降级。
+$tplUncertain = $false
 $noteText = @'
 
 **连接器名（重要）** — 每个工作区在 ChatGPT 里各有**一个专属连接器**，同一账号里可能
@@ -101,9 +104,13 @@ if (-not (Test-Path $tpl)) {
   $t = ReadUtf8 $tpl
   if ($t.Contains("连接器名（重要）")) {
     Add-Row "补丁 2 技能模板" "已打" "跳过" "模板里已有本工作区连接器说明"
-  } elseif ($t -match "connectorName|per.workspace|每个工作区|one connector per") {
-    Add-Row "补丁 2 技能模板" "上游已处理" "**未打**" "模板里已出现按工作区区分连接器的措辞，先不动——请人工确认"
   } else {
+    # 这里原本还有一条「上游已处理」的猜测（拿 connectorName / 每个工作区 等词当特征），
+    # **已删除**：上游**自己的文字**里就有 `connectorName`（manualFallback 那段），
+    # 于是它对**未打补丁的原始模板**也命中 → 本补丁被判「上游已处理」而永不重打，
+    # `npm update` 之后那段说明会**永久丢失**。2026-09-18 实测踩到：
+    # 从 .orig 还原模板后重跑，说明没被补回，两份技能也跟着丢了它。
+    # 猜错的代价是静默丢掉一个补丁，比重复插入一段说明糟得多——所以不再猜。
     $anchor = "ChatGPT thinks. {{HARNESS}} works."
     if ($t.Contains($anchor)) {
       if (-not (Test-Path "$tpl.orig")) { Copy-Item $tpl "$tpl.orig" -Force }
@@ -111,6 +118,7 @@ if (-not (Test-Path $tpl)) {
       Add-Row "补丁 2 技能模板" "缺陷仍在" "**已补上**" "锚点匹配 → 说明已插入"
     } else {
       Add-Row "补丁 2 技能模板" "判不准" "**未打**" "找不到插入锚点——模板可能改版，需人工处理"
+      $tplUncertain = $true
     }
   }
 }
@@ -303,10 +311,10 @@ if (-not (Test-Path $runtimeJs)) {
 # =========================================================================
 # 补丁 6：技能模板的重新连接流程
 #   缺陷：模板把重连的触发条件挂在 `chatgptSetup.needed` / `chatgptRepair.needed`
-#         上。重启之后这两个标志**不会亮** —— bridge 已死，doctor 无法确认状态，
-#         直接跳过整块连接器检查；而且真实链路还漏了**唯一真正重建连接**的那一步
-#         （`connector-setup`）。另有 doctor 门禁（"本地不全绿就不开 ChatGPT"），
-#         它既不亮也不准，实测误导。
+#         上。这两个标志**只在一次运行的窗口内有效**（该次运行找到新地址就立刻落盘，
+#         下一次比较新旧相等 → 判为无变化），而 bridge 状态为「状态不明」时**根本不会
+#         亮**；真实链路还漏了**唯一真正重建连接**的那一步（`connector-setup`）。
+#         另有 doctor 门禁（"本地不全绿就不开 ChatGPT"），它既不亮也不准，实测误导。
 #   修法：① 重连那一节整节替换为实测三步：试一次最小 [C2C] 往返 → 报出本工作区名
 #           即已连上 → 不通则跑 `connector-setup` 再回到第一步
 #         ② 同一模板里另一处引用同一套标志的地方（doctor 门禁）**同步改** ——
@@ -315,7 +323,6 @@ if (-not (Test-Path $runtimeJs)) {
 #            只有返回 needsLogin 时才需要人登录一次
 #   自检：模板里有没有本补丁的 PATCH(local) 标记
 # =========================================================================
-$tpl6 = Join-Path $awehitchRoot "skill\SKILL.md.template"
 $p6Marker = 'PATCH(local): reconnect flow'
 $aGate = @'
 0. `awehitch doctor -w <workspace> --json` (auto-repairs). Doctor gate: if
@@ -347,8 +354,9 @@ $rReconnect = @'
 <!-- PATCH(local): reconnect flow -->
 
 The only test that matters is **whether it works**. Never guess from doctor's
-flags: after a reboot they never light up — the bridge is dead, so doctor
-cannot confirm the state and skips the connector check entirely.
+flags: they only ever light up inside a single run's window (the run that finds
+the new address records it immediately, so the next run sees no change), and
+when the bridge state itself is `unknown` they never light up at all.
 
 1. **Try one minimal round-trip.** `awehitch_open_chat` for the task, then
    `awehitch_send_state`:
@@ -381,21 +389,22 @@ $rGate = ($rGate -replace "`r`n", "`n").TrimEnd()
 $aReconnect = ($aReconnect -replace "`r`n", "`n").TrimEnd()
 $rReconnect = ($rReconnect -replace "`r`n", "`n").TrimEnd()
 
-if (-not (Test-Path $tpl6)) {
+if (-not (Test-Path $tpl)) {
   Add-Row "补丁 6 重连流程" "找不到文件" "未动" "缺 skill/SKILL.md.template"
 } else {
-  $t = ReadUtf8 $tpl6
+  $t = ReadUtf8 $tpl
   if ($t.Contains($p6Marker)) {
     Add-Row "补丁 6 重连流程" "已打" "跳过" "模板里有本补丁的 PATCH(local) 标记"
   } elseif ((([regex]::Matches($t, [regex]::Escape($aGate))).Count -eq 1) -and
             (([regex]::Matches($t, [regex]::Escape($aReconnect))).Count -eq 1)) {
-    if (-not (Test-Path "$tpl6.orig")) { Copy-Item $tpl6 "$tpl6.orig" -Force }
+    if (-not (Test-Path "$tpl.orig")) { Copy-Item $tpl "$tpl.orig" -Force }
     $t = $t.Replace($aGate, $rGate)
     $t = $t.Replace($aReconnect, $rReconnect)
-    WriteUtf8 $tpl6 $t
+    WriteUtf8 $tpl $t
     Add-Row "补丁 6 重连流程" "缺陷仍在" "**已补上**" "两处锚点各唯一命中 → 重连节与 doctor 门禁已改写"
   } else {
     Add-Row "补丁 6 重连流程" "判不准" "**未打**" "两处锚点未能各唯一命中——模板可能改版，需人工处理"
+    $tplUncertain = $true
   }
 }
 
@@ -500,10 +509,10 @@ $rCheckWorkflow = ($rCheckWorkflow -replace "`r`n", "`n").TrimEnd()
 $aCheckReconnect = ($aCheckReconnect -replace "`r`n", "`n").TrimEnd()
 $rCheckReconnect = ($rCheckReconnect -replace "`r`n", "`n").TrimEnd()
 
-if (-not (Test-Path $tpl6)) {
+if (-not (Test-Path $tpl)) {
   Add-Row "补丁 7 引导词压缩" "找不到文件" "未动" "缺 skill/SKILL.md.template"
 } else {
-  $t = ReadUtf8 $tpl6
+  $t = ReadUtf8 $tpl
   if ($t.Contains($p7Marker)) {
     Add-Row "补丁 7 引导词压缩" "已打" "跳过" "模板里有本补丁的 PATCH(local) 标记"
   } elseif ((([regex]::Matches($t, [regex]::Escape($aBoot))).Count -eq 1) -and
@@ -512,10 +521,11 @@ if (-not (Test-Path $tpl6)) {
     $t = $t.Replace($aBoot, $rBoot)
     $t = $t.Replace($aCheckWorkflow, $rCheckWorkflow)
     $t = $t.Replace($aCheckReconnect, $rCheckReconnect)
-    WriteUtf8 $tpl6 $t
+    WriteUtf8 $tpl $t
     Add-Row "补丁 7 引导词压缩" "缺陷仍在" "**已补上**" "三处锚点各唯一命中 → 引导词已压缩并加 [C2C] 头"
   } else {
-    Add-Row "补丁 7 引导词压缩" "判不准" "**未打**" "三处锚点未能各唯一命中——模板可能改版，需人工处理"
+    Add-Row "补丁 7 引导词压缩" "判不准" "**未打**" "三处锚点未能各唯一命中——模板可能改版，或补丁 6 未生效（本补丁的锚点由补丁 6 写入）"
+    $tplUncertain = $true
   }
 }
 
@@ -528,25 +538,31 @@ if (-not (Test-Path $tpl6)) {
 #   现在这样幂等、自愈，重复跑不会产生多余写入。
 #   渲染时连接器名用占位符：真实名字每个工作区不同，由技能内说明引导 Agent 现取。
 # =========================================================================
-$tplText = ReadUtf8 $tpl
-$rerendered = [System.Collections.Generic.List[string]]::new()
-foreach ($tg in @(
-    @{ path = Join-Path $env:USERPROFILE ".claude\skills\awehitch\SKILL.md"; harness = "Claude Code" },
-    @{ path = Join-Path $env:USERPROFILE ".codex\skills\awehitch\SKILL.md";  harness = "Codex" }
-  )) {
-  $dir = Split-Path $tg.path -Parent
-  if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }
-  $rendered = $tplText.Replace("{{HARNESS}}", $tg.harness).Replace("{{CONNECTOR_NAME}}", "awehitch · <本工作区>")
-  $current = if (Test-Path $tg.path) { ReadUtf8 $tg.path } else { "" }
-  if ($current -ne $rendered) {
-    WriteUtf8 $tg.path $rendered
-    $rerendered.Add($tg.harness)
-  }
-}
-if ($rerendered.Count -gt 0) {
-  Add-Row "技能重渲染" "与模板不一致" "**已重渲染**" ("两份技能已按新模板重写：" + ($rerendered -join "、"))
+if (-not (Test-Path $tpl)) {
+  Add-Row "技能重渲染" "找不到文件" "未动" "缺 SKILL.md.template —— 不覆盖本机技能"
+} elseif ($tplUncertain) {
+  Add-Row "技能重渲染" "模板补丁判不准" "**未重渲染**" "模板可能没打全补丁，覆盖本机技能等于静默降级"
 } else {
-  Add-Row "技能重渲染" "与模板一致" "跳过" "两份技能已经是最新模板渲染的结果"
+  $tplText = ReadUtf8 $tpl
+  $rerendered = [System.Collections.Generic.List[string]]::new()
+  foreach ($tg in @(
+      @{ path = Join-Path $env:USERPROFILE ".claude\skills\awehitch\SKILL.md"; harness = "Claude Code" },
+      @{ path = Join-Path $env:USERPROFILE ".codex\skills\awehitch\SKILL.md";  harness = "Codex" }
+    )) {
+    $dir = Split-Path $tg.path -Parent
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }
+    $rendered = $tplText.Replace("{{HARNESS}}", $tg.harness).Replace("{{CONNECTOR_NAME}}", "awehitch · <本工作区>")
+    $current = if (Test-Path $tg.path) { ReadUtf8 $tg.path } else { "" }
+    if ($current -ne $rendered) {
+      WriteUtf8 $tg.path $rendered
+      $rerendered.Add($tg.harness)
+    }
+  }
+  if ($rerendered.Count -gt 0) {
+    Add-Row "技能重渲染" "与模板不一致" "**已重渲染**" ("两份技能已按新模板重写：" + ($rerendered -join "、"))
+  } else {
+    Add-Row "技能重渲染" "与模板一致" "跳过" "两份技能已经是最新模板渲染的结果"
+  }
 }
 
 # =========================================================================

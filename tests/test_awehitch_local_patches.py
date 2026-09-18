@@ -32,7 +32,18 @@ C2C_LIMIT = 1024
 # 引导词块与工作区校验块在渲染文本里的识别标记。
 # 门禁一 Q10 决定不给模板加可机读标记，所以只能按内容识别。
 BOOT_BLOCK_MARKER = "planning and review layer"
-CHECK_BLOCK_MARKER = "workspace_info"
+# 技能里**要发出去**的围栏文本块 —— 全部五块：引导词、两处工作区校验、INIT、EXECUTED。
+SENT_BLOCK_MARKERS = (
+    "planning and review layer",
+    "workspace_info",
+    "STATE: INIT",
+    "STATE: EXECUTED",
+)
+# 票 02 明写**禁止**的说法：把重连失败的成因笼统说成「重启之后标志永不亮」。
+# 准确的说法有两层：「状态不明」那一支才永不点亮；「已停止」那一支会亮，
+# 只是只在一次运行的窗口内有效。
+# 注意断言要精确到这个**笼统说法**——「…unknown 时永不为亮」是准确表述，不该被误伤。
+FORBIDDEN_UNACCURATE_CLAIM = "after a reboot they never light up"
 # 连接器名的最坏长度：名字直接吃字节预算，且不由本仓库控制
 # （渲染名上限 40 字符，而旧名字只做 trim 不截断）。
 WORST_CASE_CONNECTOR = "awehitch · " + "x" * 40
@@ -196,14 +207,25 @@ def test_rendered_skill_messages_fit_the_c2c_channel(tmp_path: Path) -> None:
     """技能里声明为「要发出去」的文本块，必须真的能通过唯一的发送通道。"""
     blocks = _fenced_blocks(_render_skill(WORST_CASE_CONNECTOR, tmp_path))
 
+    sent = [block for block in blocks if any(m in block for m in SENT_BLOCK_MARKERS)]
+    assert len(sent) == 5, f"应当有 5 个送出的文本块，实到 {len(sent)} 个"
+
+    for block in sent:
+        assert block.lstrip().startswith(C2C_PREFIX), (
+            f"送出的文本块必须以 [C2C] 开头，否则发送通道会拒收：{block.splitlines()[0][:40]!r}"
+        )
+        size = len(block.encode("utf-8"))
+        assert size <= C2C_LIMIT, f"送出的文本块 {size} 字节，超过发送通道的 {C2C_LIMIT} 字节上限"
+
     boot = [block for block in blocks if BOOT_BLOCK_MARKER in block]
     assert len(boot) == 1, "应当恰好有一个引导词块"
-    assert boot[0].startswith(C2C_PREFIX), "引导词必须以 [C2C] 开头，否则发送通道会拒收"
-    size = len(boot[0].encode("utf-8"))
-    assert size <= C2C_LIMIT, f"引导词 {size} 字节，超过发送通道的 {C2C_LIMIT} 字节上限"
     assert WORST_CASE_CONNECTOR in boot[0], "引导词里要保留连接器名，否则可能读错工作区"
 
-    checks = [block for block in blocks if CHECK_BLOCK_MARKER in block]
-    assert checks, "应当至少有一个工作区校验块"
-    for block in checks:
-        assert block.startswith(C2C_PREFIX), "工作区校验词同样必须以 [C2C] 开头"
+
+def test_rendered_skill_states_the_reconnect_reason_accurately(tmp_path: Path) -> None:
+    """票 02 明写：不得把成因笼统说成「重启后标志永不亮」——那是被证伪的说法。
+
+    散文的准确性本身只能靠人审；这里只钉住**那句被点名禁止的说法**不许回归。
+    """
+    text = _render_skill("awehitch · my-agent-skills", tmp_path)
+    assert FORBIDDEN_UNACCURATE_CLAIM not in text

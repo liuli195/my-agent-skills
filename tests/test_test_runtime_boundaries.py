@@ -519,6 +519,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_awehitch_local_patches.py::test_rendered_skill_messages_fit_the_c2c_channel': (
         'covers the rendered awehitch skill messages fitting the C2C send channel prefix and byte limit; function=test_rendered_skill_messages_fit_the_c2c_channel'
     ),
+    'tests/test_awehitch_local_patches.py::test_rendered_skill_states_the_reconnect_reason_accurately': (
+        'covers the rendered awehitch skill not regressing to the discredited reconnect-flag claim; function=test_rendered_skill_states_the_reconnect_reason_accurately'
+    ),
     'tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_directory_hash_uses_git_visible_files': (
         'covers packaged cache behavior against tracked, visible untracked, and ignored files in a real git repository; function=test_build_and_verify_runner_directory_hash_uses_git_visible_files'
     ),
