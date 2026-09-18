@@ -3,8 +3,11 @@
   awehitch 本地改动的**自检 + 按需补齐**（幂等，可随时重跑）。
 
 .DESCRIPTION
-  本机为了让 awehitch 正常工作做了三处本地补丁，外加一处配置调整。这些改动会在
-  `npm update -g awehitch` 之后全部丢失，而 `awehitch up` 会把配置调整又写回来。
+  本机为了让 awehitch 正常工作做了**四处**本地补丁，外加一处历史遗留清理。
+  这些改动会在 `npm update -g awehitch` 之后全部丢失。
+
+  补丁 4 之后，`awehitch up` 不再往 Codex 用户级配置写条目了，所以那处清理只对
+  存量有效（补丁 4 上之前留下的条目）；新写入不会再产生，也就不会再写坏。
 
   **本脚本不会盲目补丁。** 它对每一处先做自检，判断"这个缺陷现在还在不在"：
 
@@ -174,7 +177,79 @@ if ($tplRepatched) {
 }
 
 # =========================================================================
-# 配置调整（不是补丁）：清掉 Codex 用户级配置里的 awehitch 条目
+# 补丁 4：别再往 Codex 用户级配置写条目 —— 那个写入每次都会写坏配置
+#   缺陷：`setupCodexAdapter`（dist/adapters/codex.js）每次 up 都往用户级
+#         ~/.codex/config.toml 写 awehitch 条目。它覆盖**旧格式**条目时（旧格式自带
+#         [mcp_servers.awehitch.env] 子表）会同时踩两层：
+#           ① 替换用的 body 结尾没有换行 → 与遗留的子表头粘成一行
+#           ② 遗留的子表与新格式的内联表 env = { ... } 冲突（TOML 重复定义）
+#         两层叠加 → 配置无效 → Codex 起不来（failed to load bootstrap configuration）。
+#         根子在 findTableToml：它把**任何** [xxx] 表头都当块边界，认不出子表是自己的。
+#   修法：① 用户级条目干脆不写（设计上每个工作区各有项目级配置，用户级条目只可能指错）
+#         ② codexAdapterStatus 也接受项目级配置，免得 doctor 误报「未接入」
+#         ③ doctor 调用处把 workspace 传进去（② 靠它拿项目路径）
+#   自检：codex.js 里有没有本补丁的 PATCH(local) 标记
+# =========================================================================
+$codexJs = Join-Path $awehitchRoot "dist\adapters\codex.js"
+$cliJs = Join-Path $awehitchRoot "dist\cli\index.js"
+$p4Marker = 'PATCH(local): never write the user-level Codex entry'
+# 一律用**单行**锚点：多行锚点会踩行尾差异（同样内容可能一处 LF、一处 CRLF）
+$aWrite = '    const next = upsertCodexMcpEntry(previous, opts.cliEntry, opts.workspaceRoot);'
+$aSig = 'export function codexAdapterStatus() {'
+$aRet = '    return { skillInstalled: fs.existsSync(skillPath), mcpRegistered, sandboxAllowed, configPath };'
+$aCall = '            const status = impl.status();'
+
+if (-not (Test-Path $codexJs) -or -not (Test-Path $cliJs)) {
+  Add-Row "补丁 4 不写用户级配置" "找不到文件" "未动" "缺 codex.js 或 cli/index.js"
+} else {
+  $cx = ReadUtf8 $codexJs
+  $cl = ReadUtf8 $cliJs
+  if ($cx.Contains($p4Marker)) {
+    Add-Row "补丁 4 不写用户级配置" "已打" "跳过" "codex.js 里有本补丁的 PATCH(local) 标记"
+  } elseif ((([regex]::Matches($cx, [regex]::Escape($aWrite))).Count -eq 1) -and
+            (([regex]::Matches($cx, [regex]::Escape($aSig))).Count -eq 1) -and
+            (([regex]::Matches($cx, [regex]::Escape($aRet))).Count -eq 1) -and
+            (([regex]::Matches($cl, [regex]::Escape($aCall))).Count -eq 1)) {
+    # ① 不写用户级条目：让 next === previous，后面那个 if 就永远不会落盘
+    $cx = $cx.Replace($aWrite, '    const next = previous; // ' + $p4Marker + ' (docs/research/chatgpt-collaboration-setup.md)')
+    # ② 状态检查也认项目级配置
+    $cx = $cx.Replace($aSig, 'export function codexAdapterStatus(workspace) { // ' + $p4Marker)
+    $projCheck = @'
+    // PATCH(local): the entry lives in each workspace's project-level .codex/config.toml
+    // now; the user-level entry is never written any more.
+    if (!mcpRegistered && workspace && workspace.root) {
+        try {
+            const projectConfig = fs.readFileSync(path.join(workspace.root, ".codex", "config.toml"), "utf8");
+            mcpRegistered = /\[mcp_servers\.awehitch\]/.test(projectConfig);
+        }
+        catch {
+            // no project-level config for this workspace
+        }
+    }
+'@
+    # 行尾规范化：本脚本被 .gitattributes 定为 CRLF，而被改文件是 LF。
+    # 不规范化的话，全新检出后会把 CRLF 行插进 LF 文件（功能无害但不干净、不确定）。
+    $projCheck = ($projCheck -replace "`r`n", "`n").TrimEnd()
+    $cx = $cx.Replace($aRet, $projCheck + "`n" + $aRet)
+    # ③ doctor 调用处把 workspace 传进去（② 靠它拿项目路径）
+    $cl = $cl.Replace($aCall, '            const status = impl.status(workspace); // ' + $p4Marker)
+    foreach ($f in @(
+        @{ p = $codexJs; t = $cx },
+        @{ p = $cliJs;   t = $cl }
+      )) {
+      if (-not (Test-Path "$($f.p).orig")) { Copy-Item $f.p "$($f.p).orig" -Force }
+      WriteUtf8 $f.p $f.t
+    }
+    Add-Row "补丁 4 不写用户级配置" "缺陷仍在" "**已补上**" "①不写用户级条目 ②状态认项目级配置 ③doctor 传入工作区"
+  } else {
+    Add-Row "补丁 4 不写用户级配置" "判不准" "**未打**" "四处锚点未能全部唯一命中——awehitch 可能改版，需人工处理"
+  }
+}
+
+# =========================================================================
+# 历史遗留清理（不是补丁，补丁 4 之后已不再需要）：清掉 Codex 用户级配置里的 awehitch 条目
+#   补丁 4 之后 up 不再写这条了，所以这里只用来收拾**存量**——补丁 4 上之前留下的那条，
+#   以及被它写坏的粘行/遗留子表（整块删掉即可一并带走）。
 #   每个工作区各有项目级配置；用户级条目只可能指向某一个工作区，在别处会指错。
 # =========================================================================
 $codexCfg = Join-Path $env:USERPROFILE ".codex\config.toml"
@@ -183,12 +258,19 @@ if (Test-Path $codexCfg) {
   $block = [regex]::Match($t, '(?ms)^\[mcp_servers\.awehitch\]\r?\n.*?(?=^\[|\z)')
   if ($block.Success) {
     WriteUtf8 $codexCfg $t.Remove($block.Index, $block.Length)
-    Add-Row "配置 用户级条目" "存在即清理" "**已移除**" "Codex 用户级配置里的 awehitch 条目（项目级配置接管）"
+    # 兜底自检：整块删掉之后，配置里不该再有"粘行"（一行里出现两个表头）。
+    # 这正是补丁 4 要根治的那个损坏；真出现说明删除没删干净。
+    $left = ReadUtf8 $codexCfg
+    if ($left -match '(?m)\}[ \t]*\[') {
+      Add-Row "遗留 用户级条目" "删了但仍粘行" "**已移除**" "条目已删，配置里还有粘行——需人工检查 $codexCfg"
+    } else {
+      Add-Row "遗留 用户级条目" "存在即清理" "**已移除**" "补丁 4 之前留下的用户级条目（项目级配置接管）"
+    }
   } else {
-    Add-Row "配置 用户级条目" "本来就干净" "跳过" "Codex 用户级配置里没有 awehitch 条目"
+    Add-Row "遗留 用户级条目" "本来就干净" "跳过" "没有补丁 4 之前留下的用户级条目"
   }
 } else {
-  Add-Row "配置 用户级条目" "找不到文件" "未动" "没有 ~/.codex/config.toml"
+  Add-Row "遗留 用户级条目" "找不到文件" "未动" "没有 ~/.codex/config.toml"
 }
 
 # --- 汇总 -------------------------------------------------------------------

@@ -83,7 +83,7 @@
 - `~/.claude/skills/awehitch/SKILL.md`
 - `~/.codex/skills/awehitch/SKILL.md`
 
-### 5.3 三个补丁（改的是 awehitch 安装包，`npm update -g awehitch` 会全部冲掉）
+### 5.3 四个补丁（改的是 awehitch 安装包，`npm update -g awehitch` 会全部冲掉）
 
 > **重打用 `scripts/awehitch-local-patches.ps1`，不要手工改。**
 > 它会**先自检每个缺陷现在还在不在**，只在"确认仍存在"时才动手：
@@ -135,6 +135,24 @@
 - **注意**：awehitch 的报错文案是 "fragmented send"，**具有误导性——实际上并没有碎片化发送**。
   1 KB 的硬限制是真实的（`control-plane/server.js` 里 `byteLength > 1024` 时拒绝）
 
+#### 补丁 4：不再往 Codex 用户级配置写条目 — **写坏配置的根治**
+
+- **文件**：`dist/adapters/codex.js` 与 `dist/cli/index.js`（备份 `.orig` 同目录）
+- **改动（三处，四处锚点）**：
+  1. `setupCodexAdapter` 里 `const next = upsertCodexMcpEntry(...)` 改成 `const next = previous`
+     —— 后面那个 `if (next !== previous)` 就永远不落盘，**用户级条目干脆不写**
+  2. `codexAdapterStatus()` 加参数 `workspace`，并接受**项目级** `<仓库>/.codex/config.toml`
+  3. `dist/cli/index.js` 的 doctor 调用处改成 `impl.status(workspace)`（② 靠它拿项目路径）
+- **原因**：见下方「修复 4」。设计上每个工作区各有项目级配置，用户级条目只可能指向某一个
+  工作区、在别处必定指错——**不写才是对的**，顺带也就没有"写坏"这回事了
+- **副作用（已知并接受）**：没有项目级配置的仓库，Codex 里就没有 awehitch。新增仓库时
+  记得补一份 `.codex/config.toml`
+- **验证（2026-09-18 实测）**：
+  - `awehitch up` 前后，`~/.codex/config.toml` 的 sha256 **逐字节一致**（确认不再写入）
+  - `awehitch doctor` 仍报 `adapters.codex.installed: true`（确认改认项目级配置生效）
+  - 直接调用验证：有项目级配置 → `mcpRegistered: true`；无 → `false`；不传参 → `false`（不崩）
+- **重打**：四处单行锚点，任一处未能唯一命中即判「判不准」、不动手
+
 ### 5.4 两个修复
 
 #### 修复 3：选择器覆盖 — **在状态目录，升级不会冲掉**
@@ -145,15 +163,30 @@
   候选选择器里最后一条 `'登录'` 会**同时命中设置侧栏的「账户安全与登录」** → 匹配到 2 个 →
   **Playwright 严格模式拒绝点击 → 报错被 `.catch()` 静默吞掉 → 授权页永不出现**
 
-#### 修复 4：被 awehitch 写坏的 Codex 配置 — **会复发**
+#### 修复 4：awehitch 写坏 Codex 配置 — **已由补丁 4 从源头根治**
 
 - **文件**：`~/.codex/config.toml`（出问题时备份在 `config.toml.broken-<时间戳>`）
 - **症状**：Codex 完全起不来，报 `failed to load bootstrap configuration` / TOML 解析错误
-- **原因**：awehitch 写 TOML 时（`dist/adapters/codex.js` 的 `upsertCodexMcpEntry`），`body`
-  结尾没有换行，与紧随其后的下一个表名**粘成一行**；并留下一个重复的
-  `[sandbox_workspace_write]` 表
-- **修法**：拆开粘住的那行，删掉重复的表块
-- **注意**：**每次 `awehitch up` 都可能再次写坏**，升级或重连后如 Codex 起不来，先查这里
+- **根因（源码级，2026-09-18 确认）**：`setupCodexAdapter` 每次 `up` 都往用户级配置写 awehitch
+  条目。它覆盖**旧格式**条目时（旧格式自带 `[mcp_servers.awehitch.env]` 子表）**同时踩两层**：
+  1. `upsertCodexMcpEntry` 替换用的 `body` **结尾没有换行** → 与遗留的子表头**粘成一行**
+  2. `findTableToml` 把**任何** `[xxx]` 表头都当块边界，认不出子表是自己的 → 子表被**遗留**
+     下来，与新格式的内联表 `env = { ... }` 冲突（TOML 重复定义）
+
+  实测（Python `tomllib`）：
+
+  | 写法 | 结果 |
+  |---|---|
+  | 只拆开粘住的行（保留遗留子表） | ❌ `Cannot declare ('mcp_servers','awehitch','env') twice` |
+  | 拆开粘行 **+ 删掉遗留子表** | ✅ 通过 |
+  | 现状（粘行） | ❌ `Expected newline or end of document after a statement` |
+
+  **所以光"拆开粘行"不够** —— 是两层叠加。**触发条件是"覆盖旧格式条目"**，干净的配置不会踩到。
+- **现在的状态**：**补丁 4 之后不再写用户级条目，从源头消除**。上面的手工修法只对存量还有用
+- **存量清理**：补丁脚本的「遗留 用户级条目」那一步会把整块删掉（连粘行、遗留子表一起带走），
+  删完还会复查配置里有没有残留粘行
+- **历史说明**：本条目原先标注「**会复发**」、修法是「手工拆行」—— 那是补丁 4 之前的状态。
+  文档旧版还提到「重复的 `[sandbox_workspace_write]` 表」，2026-09-18 未复现（现只有一处、内容正常）
 
 ### 5.5 未跟踪文件（按仓库规则需走 PR）
 
@@ -173,13 +206,30 @@
 2. ~~**`awehitch_send_state` 常返回 `SEND_FAILED`**~~ —— **已由补丁 3 修复**。根因是长消息被
    折叠时「展开」按钮文字混进了读回比对，消息其实完整送达。若补丁丢失后重新出现该报错：
    **先看页面上那条消息是否完整**（完整就继续等回复，不要重发）。
-3. **重启电脑后隧道地址会变**，需要重跑 `awehitch up -w <仓库>`；地址一变，ChatGPT 那边的
-   连接器就需要重建。
+3. **重启电脑后隧道地址会变**，需要**重新连接**；地址一变，ChatGPT 那边的连接器就需要重建。
+   **2026-09-18 实测的真实链路如下 —— 技能里那一节写得不够、照它走会卡住：**
+   1. 本工作区残留的旧运行记录会让 `awehitch up` **直接拒绝**（
+      `refusing to start another bridge`）：旧记录里的端口已被**别的工作区**占用，于是判为
+      `workspace_mismatch`。文档旧版写的「`awehitch stop` 然后 `up`」**走不通** ——
+      `stop` 不清运行记录；**而且它有危险**：兜底分支是 `process.kill(记录里的 pid)`，
+      那个 pid 早已被系统回收，**一旦被复用就会误杀别的进程**
+   2. 解除办法：把本工作区那份**描述死进程的残留记录**挪走
+      （`%LOCALAPPDATA%\awehitch\runtime\<workspaceId>.json`）→ doctor 随即自动拉起新 bridge + 新隧道
+   3. **`awehitch up` 之后仍不会修连接器**（返回 `connectorUpdated: false`）—— 因为本地端点记录
+      已被刷新，它拿新地址和新地址比，判定"无变化"。**此时一切显示绿灯，而 ChatGPT 那边仍指向死地址**
+   4. 真正管用的是 `awehitch connector-setup -w <仓库>`：删旧建新 + 配对 + 授权
+   5. 另外 `chatgptSetup.needed` / `chatgptRepair.needed` **只在一瞬间为 true**，下一轮 doctor
+      就自己变回 false —— **不要依赖这两个标志位**判断连接是否需要重建
+
+   > **待办**：上面这 5 步应写进 awehitch 用户级技能（`~/.claude/skills/awehitch/SKILL.md`
+   > 与 `~/.codex/skills/awehitch/SKILL.md`，经由安装包模板 `skill/SKILL.md.template`）。
+   > 现在技能里那节把触发条件挂在 doctor 的两个标志位上，而那两位不会在真实场景里亮。
 4. **控制面浏览器是全机单例**（浏览器配置与锁都是全局一份），同一时刻只能服务一个工作区。
-5. **`npm update -g awehitch` 会冲掉补丁 1 和补丁 2**（修复 3 不受影响）。
-6. **Codex 的用户级配置里也有一条** awehitch 条目，指向最后一次 `up` 的仓库；在有
-   `.codex/config.toml` 的仓库里它会被项目级覆盖。在没有项目级配置的新仓库里，它会指向
-   那个过期的仓库——新增仓库时记得补一份项目级配置。
+5. **`npm update -g awehitch` 会冲掉补丁 1、补丁 2 和补丁 4**（修复 3 不受影响）。
+6. ~~**Codex 的用户级配置里也有一条** awehitch 条目，指向最后一次 `up` 的仓库……~~
+   **已由补丁 4 消除**：不再往用户级配置写条目了。每个工作区靠自己的
+   `<仓库>/.codex/config.toml`（项目级配置优先级更高）。**代价：没有项目级配置的仓库，
+   Codex 里就没有 awehitch** —— 新增仓库时记得补一份。**Codex 的项目级配置需要项目被标记为 trusted。**
 
 ## 7. 给后续 Agent 的说明
 
@@ -188,24 +238,33 @@
 - **长消息可以直接发**（1 KB 以内）。若见到 `SEND_FAILED`／"fragmented send"，那是补丁 3 丢失的
   信号，**不是真的碎片化**——先确认页面上那条消息是否完整，完整就继续，不要重发。
 - **控制面是全机单例**，别指望两个工作区同时用。
+- **重连不要凭直觉**。技能里「reconnect after address reclaim」那节**不够用**（触发条件不会亮、
+  且漏了必走的 `connector-setup`）—— 按本文档「已知限制 3」那 5 步走。
+  另外 `awehitch up` 返回 `ok: true` **不等于连接可用**。
 - **改任何东西前先读本文档第 5 节**，确认你要改的是不是已经有本地补丁/修复。
 - **用户对"能力宣称"很敏感**：把结论按证据层级说清楚（已实测 / 已读源码 / 我的推断），
   不要把推断说成已具备的能力。
 
 ## 8. 出问题时怎么办
 
-0. **先跑一次 `pwsh -File scripts/awehitch-local-patches.ps1`** —— 它会自检三处补丁与用户级
-   配置条目，缺什么补什么；有需要人工判断的会明确列出来。**升级 awehitch 或跑过
-   `awehitch up` 之后，这是第一步。**
+0. **先跑一次 `pwsh -File scripts/awehitch-local-patches.ps1`** —— 它会自检**四处补丁**与
+   历史遗留的用户级配置条目，缺什么补什么；有需要人工判断的会明确列出来。**升级 awehitch
+   或跑过 `awehitch up` 之后，这是第一步。**
 1. `awehitch doctor -w <仓库> --json`（它会自动修复服务与隧道）
-2. **Codex 起不来** → 查 `~/.codex/config.toml` 是不是又被写坏了（见修复 4）
-3. **点击没反应 / 授权页不出现** → 确认补丁 1 与修复 3 还在
-4. **技能里的连接器名不对** → 确认补丁 2 还在，必要时重新渲染技能
-5. **授权步骤失败**（连接器已建好、只是没授权）→ 跑
+2. **连不上 / 刚重启过** → 见「已知限制 3」那 5 步真实链路。
+   **注意：`up` 返回 `ok: true` 并不代表连接可用**，要用 `connector-setup` 才真正重建连接器
+3. **Codex 起不来** → 查 `~/.codex/config.toml`。补丁 4 之后不应再出现（不再写入）；若仍有，
+   跑补丁脚本的「遗留 用户级条目」清掉，见修复 4
+4. **点击没反应 / 授权页不出现** → 确认补丁 1 与修复 3 还在
+5. **技能里的连接器名不对** → 确认补丁 2 还在，必要时重新渲染技能
+6. **授权步骤失败**（连接器已建好、只是没授权）→ 跑
    `node scripts/awehitch-authorize.mjs "<仓库绝对路径>" "<连接器名>"`
-6. **确认是否已授权**：看 `%LOCALAPPDATA%\awehitch\auth\<workspaceId>.json` 里 `tokens` 的数量，
+7. **确认是否已授权**：看 `%LOCALAPPDATA%\awehitch\auth\<workspaceId>.json` 里 `tokens` 的数量，
    大于 0 即已授权
-7. 彻底重来：`awehitch stop -w <仓库>` 然后 `awehitch up -w <仓库>`
+8. ~~彻底重来：`awehitch stop -w <仓库>` 然后 `awehitch up -w <仓库>`~~
+   **不要把这条当重连手段**（2026-09-18 实测）：`stop` 不清运行记录，`up` 照样拒绝；
+   且 `stop` 的兜底分支会去 kill 记录里那个**已被系统回收、可能被复用**的 pid。
+   重连请走「已知限制 3」那 5 步
 
 ## 9. 来源
 
