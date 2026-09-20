@@ -26,9 +26,10 @@ const contract = [
   "| Architect（架构师） | 调查架构、架构决策和疑难缺陷。 | `gpt-5.6-sol` | `medium`（中） | 只读 |",
   "无法使用指定模型或思考强度时，改用宿主默认的模型和思考强度承载同一角色",
   "四个角色默认使用宿主已配置的具名代理；宿主不支持具名代理时，才显式回退到通用代理，并声明具名代理不可用、实际配置和同等读写边界",
+  "只读角色的具名代理若实际边界被宿主或父会话覆盖，仍使用该具名代理完成只读任务，并明确声明“只读边界回退”、实际权限和未执行的写入限制；这不是通用代理回退",
   "Architect（架构师）优先使用网页 ChatGPT",
   "宿主提供的 `awehitch` Skill（技能），入口文件为 `awehitch/SKILL.md`",
-  "不可用时回退到表中配置，并在结果中声明回退",
+  "不可用时回退到本地具名 Architect（架构师）；具名代理不可用时再按通用代理回退规则处理，并在结果中声明回退",
   "只有 Implementer（实施者）可以在明确授权范围内写入。",
   "使用宿主已配置的具名代理入口；回退按上述规则处理",
   "每次提示词都写明角色、具体目标、范围与非目标、已有证据、读写边界和预期返回内容。",
@@ -110,6 +111,8 @@ test("host discovers the independent subagent-policy skill package and its porta
       /回退/,
       "结果验收小节必须把未声明回退列为不予接受的情况",
     );
+    assert.match(content, /只读边界回退/);
+    assert.match(content, /这不是通用代理回退/);
     const headings = headingMatches.map((match) => match[1]);
     assert.deepEqual(
       headings,
