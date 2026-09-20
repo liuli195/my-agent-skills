@@ -510,17 +510,11 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_setup_worktree_script.py::test_setup_worktree_script_links_shared_node_dependencies': (
         'covers the PowerShell setup entrypoint against a real linked worktree and Windows junction; function=test_setup_worktree_script_links_shared_node_dependencies'
     ),
-    'tests/test_awehitch_local_patches.py::test_status_treats_stale_record_as_not_running': (
-        'covers the awehitch bridge status CLI treating a stale runtime record as not running; function=test_status_treats_stale_record_as_not_running'
+    'tests/test_awehitch_local_patches.py::test_fold_toggle_is_removed_by_the_real_compare_function': (
+        'covers the installed awehitch compare function stripping folded-message toggle labels; function=test_fold_toggle_is_removed_by_the_real_compare_function'
     ),
-    'tests/test_awehitch_local_patches.py::test_rendered_skill_reconnect_flow_rebuilds_the_connector': (
-        'covers the rendered awehitch skill guiding the agent to connector-setup when the connection is down; function=test_rendered_skill_reconnect_flow_rebuilds_the_connector'
-    ),
-    'tests/test_awehitch_local_patches.py::test_rendered_skill_messages_fit_the_c2c_channel': (
-        'covers the rendered awehitch skill messages fitting the C2C send channel prefix and byte limit; function=test_rendered_skill_messages_fit_the_c2c_channel'
-    ),
-    'tests/test_awehitch_local_patches.py::test_rendered_skill_states_the_reconnect_reason_accurately': (
-        'covers the rendered awehitch skill not regressing to the discredited reconnect-flag claim; function=test_rendered_skill_states_the_reconnect_reason_accurately'
+    'tests/test_awehitch_local_patches.py::test_rendered_messages_fit_the_real_c2c_channel': (
+        'covers the rendered awehitch messages fitting the C2C send channel prefix and byte limit; function=test_rendered_messages_fit_the_real_c2c_channel'
     ),
     'tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_directory_hash_uses_git_visible_files': (
         'covers packaged cache behavior against tracked, visible untracked, and ignored files in a real git repository; function=test_build_and_verify_runner_directory_hash_uses_git_visible_files'
