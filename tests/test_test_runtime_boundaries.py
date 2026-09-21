@@ -531,6 +531,9 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_awehitch_local_patches.py::test_local_patch_upgrades_the_exact_legacy_project_local_patch': (
         'covers the public PowerShell patch entrypoint upgrading the exact prior local patch; function=test_local_patch_upgrades_the_exact_legacy_project_local_patch'
     ),
+    'tests/test_awehitch_local_patches.py::test_local_patch_upgrades_the_exact_complete_validator_without_comment_safety': (
+        'covers the public PowerShell patch entrypoint upgrading the exact prior fixed-config validator; function=test_local_patch_upgrades_the_exact_complete_validator_without_comment_safety'
+    ),
     'tests/test_awehitch_local_patches.py::test_rendered_skill_uses_status_first_for_steady_state_workflows': (
         'covers the public PowerShell patch entrypoint and rendered installed skill through Node; function=test_rendered_skill_uses_status_first_for_steady_state_workflows'
     ),
