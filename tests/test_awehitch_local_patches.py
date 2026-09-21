@@ -298,7 +298,15 @@ def test_status_rejects_non_fixed_project_registration(
 
 
 def test_local_patch_is_idempotent_in_the_isolated_profile(tmp_path: Path) -> None:
-    package, environment, first = _run_local_patch(tmp_path)
+    package, environment = _isolated_package(tmp_path)
+    codex_home_config = Path(environment["CODEX_HOME"]) / "config.toml"
+    profile_config = Path(environment["USERPROFILE"]) / ".codex" / "config.toml"
+    sentinel = b'\xef\xbb\xbf# preserve these exact bytes\r\nmodel = "example"\r\n'
+    for config in (codex_home_config, profile_config):
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_bytes(sentinel)
+
+    first = _invoke_patch(environment)
     assert first.returncode == 0, first.stdout + first.stderr
     tracked = [
         package / "dist" / "adapters" / "codex.js",
@@ -313,6 +321,8 @@ def test_local_patch_is_idempotent_in_the_isolated_profile(tmp_path: Path) -> No
     assert second.returncode == 0, second.stdout + second.stderr
     assert "两个文件均有完整最终特征" in second.stdout
     assert before == {path: path.read_bytes() for path in tracked}
+    assert codex_home_config.read_bytes() == sentinel
+    assert profile_config.read_bytes() == sentinel
 
 
 def test_local_patch_upgrades_the_exact_legacy_project_local_patch(tmp_path: Path) -> None:
