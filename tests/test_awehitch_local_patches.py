@@ -387,6 +387,8 @@ def test_authorization_observer_covers_each_safe_stage(tmp_path: Path) -> None:
     observer_lines = "\n".join(
         line for line in connector.splitlines() if "AUTH-OBS" in line
     )
+    assert "const signInDeadline = signInStartedAt + 10_000;" in connector
+    assert "selector:" not in observer_lines
     assert "error.message" not in observer_lines
     assert "pairingCode" not in observer_lines
     assert "accessToken" not in observer_lines

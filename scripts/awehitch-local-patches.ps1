@@ -80,7 +80,8 @@ else {
 
 # 授权观测：记录每个安全阶段的结果，不记录网址、配对码、令牌或原始错误消息。
 $connectorFile = Join-Path $root "dist\control-plane\connector.js"
-$authMarker = 'PATCH(local): observe connector authorization safely'
+$authMarker = 'PATCH(local): observe connector authorization safely and wait for consent'
+$legacySafeAuthMarker = 'PATCH(local): observe connector authorization safely'
 $partialAuthMarker = 'PATCH(local): observe connector authorization clicks'
 $authImport = 'import { ControlPlaneBrowser } from "./browser.js";'
 $authSleep = 'const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));'
@@ -119,11 +120,17 @@ $observedFlow = @'
         authObserver.warn("[AUTH-OBS] connect-click", { count: connectCount, ok: false, errorType: "target-not-found" });
     }
     // The consent dialog ("Add <name> to ChatGPT") carries the real trigger.
-    const signInHit = await resolveConnectorTarget(ctx.page, ctx.site.connector, "signInButton");
+    const signInStartedAt = Date.now();
+    const signInDeadline = signInStartedAt + 10_000;
+    let signInHit = null;
+    while (!signInHit && Date.now() < signInDeadline) {
+        await sleep(500);
+        signInHit = await resolveConnectorTarget(ctx.page, ctx.site.connector, "signInButton");
+    }
     const signIn = signInHit ? ctx.page.locator(signInHit.selector).first() : null;
     const signInCount = signInHit?.count ?? 0;
     const signInVisible = signIn ? await signIn.isVisible().catch(() => false) : false;
-    authObserver.info("[AUTH-OBS] sign-in-state", { delayMs: 1200, count: signInCount, visible: signInVisible });
+    authObserver.info("[AUTH-OBS] sign-in-state", { waitMs: Date.now() - signInStartedAt, count: signInCount, visible: signInVisible });
     if (signIn && signInCount > 0) {
         try {
             await signIn.click();
@@ -138,6 +145,46 @@ $observedFlow = @'
     }
 '@
 $observedFlow = ($observedFlow -replace "`r`n","`n").TrimEnd()
+$legacyObservedFlow = @'
+    await match.rows[0].locator("button").first().click().catch(() => undefined);
+    await sleep(1_500);
+    const connectSelector = await targetSelector(ctx.page, ctx.site, "connectButton");
+    const connect = connectSelector ? ctx.page.locator(connectSelector).first() : null;
+    const connectCount = connect ? await connect.count().catch(() => 0) : 0;
+    if (connect && connectCount > 0) {
+        try {
+            await connect.click();
+            authObserver.info("[AUTH-OBS] connect-click", { selector: connectSelector, count: connectCount, ok: true });
+        }
+        catch (error) {
+            authObserver.warn("[AUTH-OBS] connect-click", { selector: connectSelector, count: connectCount, ok: false, error: authObservationError(error) });
+        }
+        await sleep(1_200);
+    }
+    else {
+        authObserver.warn("[AUTH-OBS] connect-click", { selector: connectSelector, count: connectCount, ok: false, error: "target-not-found" });
+    }
+    // The consent dialog ("Add <name> to ChatGPT") carries the real trigger.
+    const signInHit = await resolveConnectorTarget(ctx.page, ctx.site.connector, "signInButton");
+    const signIn = signInHit ? ctx.page.locator(signInHit.selector).first() : null;
+    const signInCount = signInHit?.count ?? 0;
+    const signInVisible = signIn ? await signIn.isVisible().catch(() => false) : false;
+    authObserver.info("[AUTH-OBS] sign-in-state", { delayMs: 1200, selector: signInHit?.selector ?? null, count: signInCount, visible: signInVisible });
+    if (signIn && signInCount > 0) {
+        try {
+            await signIn.click();
+            authObserver.info("[AUTH-OBS] sign-in-click", { selector: signInHit.selector, count: signInCount, visible: signInVisible, ok: true });
+        }
+        catch (error) {
+            authObserver.warn("[AUTH-OBS] sign-in-click", { selector: signInHit.selector, count: signInCount, visible: signInVisible, ok: false, error: authObservationError(error) });
+        }
+    }
+    else {
+        authObserver.warn("[AUTH-OBS] sign-in-click", { selector: signInHit?.selector ?? null, count: signInCount, visible: signInVisible, ok: false, error: "target-not-found" });
+    }
+'@
+$legacyObservedFlow = ($legacyObservedFlow -replace "`r`n","`n").TrimEnd()
+$legacyObservedFlowSafe = $legacyObservedFlow.Replace('authObservationError(error)','authObservationErrorType(error)').Replace('error: authObservationErrorType(error)','errorType: authObservationErrorType(error)').Replace('error: "target-not-found"','errorType: "target-not-found"')
 $setupAnchor = @'
 export async function runConnectorSetup(opts) {
     const site = opts.site ?? loadSiteSelectors().site;
@@ -178,15 +225,21 @@ $finalObserved = ($finalObserved -replace "`r`n","`n").TrimEnd()
 if (-not (Test-Path $connectorFile)) { Row "授权链路观测" "找不到文件" "未动" "缺 connector.js" }
 else {
   $text = ReadUtf8 $connectorFile
-  $complete = $text.Contains($authMarker) -and $text.Contains('[AUTH-OBS] selectors-loaded') -and $text.Contains('[AUTH-OBS] connect-click') -and $text.Contains('[AUTH-OBS] sign-in-state') -and $text.Contains('[AUTH-OBS] sign-in-click') -and $text.Contains('[AUTH-OBS] authorize-page') -and $text.Contains('[AUTH-OBS] authorization-verify') -and $text.Contains('authObservationErrorType')
+  $complete = $text.Contains($authMarker) -and $text.Contains('const signInDeadline = signInStartedAt + 10_000;') -and $text.Contains('[AUTH-OBS] selectors-loaded') -and $text.Contains('[AUTH-OBS] connect-click') -and $text.Contains('[AUTH-OBS] sign-in-state') -and $text.Contains('[AUTH-OBS] sign-in-click') -and $text.Contains('[AUTH-OBS] authorize-page') -and $text.Contains('[AUTH-OBS] authorization-verify') -and $text.Contains('authObservationErrorType')
   if ($complete) { Row "授权链路观测" "已处理" "跳过" "安全观测阶段齐全" }
   else {
     $canPatch = $true
-    if ($text.Contains($partialAuthMarker)) {
+    if ($text.Contains($partialAuthMarker) -or $text.Contains($legacySafeAuthMarker)) {
       $unsafeError = 'const authObservationError = (error) => error instanceof Error ? error.message : String(error);'
-      if (([regex]::Matches($text,[regex]::Escape($unsafeError))).Count -ne 1) { $canPatch = $false }
+      $safeError = 'const authObservationErrorType = (error) => error instanceof Error ? error.name : typeof error;'
+      $legacyFlow = if (([regex]::Matches($text,[regex]::Escape($legacyObservedFlow))).Count -eq 1) { $legacyObservedFlow } elseif (([regex]::Matches($text,[regex]::Escape($legacyObservedFlowSafe))).Count -eq 1) { $legacyObservedFlowSafe } else { $null }
+      $hasUnsafeError = ([regex]::Matches($text,[regex]::Escape($unsafeError))).Count -eq 1
+      $hasSafeError = ([regex]::Matches($text,[regex]::Escape($safeError))).Count -eq 1
+      if (-not $legacyFlow -or (-not $hasUnsafeError -and -not $hasSafeError)) { $canPatch = $false }
       else {
-        $text = $text.Replace($partialAuthMarker,$authMarker).Replace($unsafeError,'const authObservationErrorType = (error) => error instanceof Error ? error.name : typeof error;').Replace('authObservationError(error)','authObservationErrorType(error)').Replace('error: authObservationErrorType(error)','errorType: authObservationErrorType(error)').Replace('error: "target-not-found"','errorType: "target-not-found"')
+        $text = $text.Replace($partialAuthMarker,$authMarker).Replace($legacySafeAuthMarker,$authMarker).Replace($legacyFlow,$observedFlow)
+        if ($text.Contains($unsafeError)) { $text = $text.Replace($unsafeError,$safeError) }
+        $text = $text.Replace('authObservationError(error)','authObservationErrorType(error)').Replace('error: authObservationErrorType(error)','errorType: authObservationErrorType(error)').Replace('error: "target-not-found"','errorType: "target-not-found"')
         $text = $text.Replace('signInCandidates: site.connector.signInButton,','candidateCount: Array.isArray(site.connector.signInButton) ? site.connector.signInButton.length : 1,').Replace('problems: opts.site ? [] : loadedSelectors.problems,','problemCount: opts.site ? 0 : loadedSelectors.problems.length,')
       }
     }
@@ -205,7 +258,7 @@ else {
       if (([regex]::Matches($text,[regex]::Escape($pair[0]))).Count -ne 1) { $canPatch = $false; break }
       $text = $text.Replace($pair[0],$pair[1])
     }
-    $finalComplete = $text.Contains($authMarker) -and $text.Contains('[AUTH-OBS] selectors-loaded') -and $text.Contains('[AUTH-OBS] connect-click') -and $text.Contains('[AUTH-OBS] sign-in-state') -and $text.Contains('[AUTH-OBS] sign-in-click') -and $text.Contains('[AUTH-OBS] authorize-page') -and $text.Contains('[AUTH-OBS] authorization-verify') -and $text.Contains('authObservationErrorType') -and -not $text.Contains('authObservationError =')
+    $finalComplete = $text.Contains($authMarker) -and $text.Contains('const signInDeadline = signInStartedAt + 10_000;') -and $text.Contains('[AUTH-OBS] selectors-loaded') -and $text.Contains('[AUTH-OBS] connect-click') -and $text.Contains('[AUTH-OBS] sign-in-state') -and $text.Contains('[AUTH-OBS] sign-in-click') -and $text.Contains('[AUTH-OBS] authorize-page') -and $text.Contains('[AUTH-OBS] authorization-verify') -and $text.Contains('authObservationErrorType') -and -not $text.Contains('authObservationError =')
     if (-not $finalComplete) { $canPatch = $false }
     if ($canPatch) { BackupOnce $connectorFile; WriteUtf8 $connectorFile $text; Row "授权链路观测" "缺少完整观测" "已补上" "覆盖选择器、点击、授权页和最终桥接验证" }
     else { Row "授权链路观测" "判不准" "未动" "授权链路锚点不唯一或已有未知改动" }
