@@ -4,10 +4,10 @@
 
 **Blocked by:** 01: 固定项目配置并强化接入检查；02: 让正常使用流程先检查状态；03: 托管授权选择器与安全观测。
 
-**Status:** in-progress
+**Status:** done
 
 - [x] 三个仓库的真实 Codex 配置查询分别返回正确工作区、harness 和三槽环境值。
 - [x] 全机服务只启动一次后，三个仓库不再运行 `up` 也能分别完成消息往返。
 - [x] 三个同时存活的会话分别使用三个 `codex*` 槽位。
 - [x] 存活会话期间连接器重建使用 `default` 且不发生同锁竞争。
-- [ ] Build and Verify、独立 Review 和各仓库 PR 流程全部完成。
+- [x] Build and Verify（构建与验证）和独立 Review（审查）已通过；Quant PR #48 与 Wow Addons（魔兽插件）PR #24 已合并，当前仓库由本问题单所在的 PR Flow（拉取请求流程）完成最终交付。
