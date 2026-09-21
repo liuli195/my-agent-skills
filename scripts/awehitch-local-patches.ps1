@@ -282,7 +282,8 @@ else {
 
 # 补丁 4：awehitch up 实测改写 ~/.codex/config.toml；本仓库使用固定的项目级注册。
 $codex = Join-Path $root "dist\adapters\codex.js"; $cli = Join-Path $root "dist\cli\index.js"
-$marker = 'PATCH(local): keep Codex registration project-local and validate complete fixed project config'
+$marker = 'PATCH(local): keep Codex registration project-local and validate comment-safe fixed project config'
+$completeMarker = 'PATCH(local): keep Codex registration project-local and validate complete fixed project config'
 $previousMarker = 'PATCH(local): keep Codex registration project-local and validate fixed project config'
 $legacyMarker = 'PATCH(local): keep Codex registration project-local'
 $aWrite = '    const next = upsertCodexMcpEntry(previous, opts.cliEntry, opts.workspaceRoot);'
@@ -295,6 +296,9 @@ $legacyCall = '            const status = impl.status(workspace); // '+$legacyMa
 $previousWrite = '    const next = previous; // '+$previousMarker
 $previousSig = 'export function codexAdapterStatus(workspace) { // '+$previousMarker
 $previousCall = '            const status = impl.status(workspace); // '+$previousMarker
+$completeWrite = '    const next = previous; // '+$completeMarker
+$completeSig = 'export function codexAdapterStatus(workspace) { // '+$completeMarker
+$completeCall = '            const status = impl.status(workspace); // '+$completeMarker
 $legacyCheck = @'
     if (!mcpRegistered && workspace?.root) {
         try {
@@ -329,7 +333,7 @@ function hasValidProjectRegistration(content, workspaceRoot) { // PATCH(local): 
 }
 '@
 $previousValidator=($previousValidator -replace "`r`n","`n").TrimEnd()
-$validator = @'
+$completeValidator = @'
 function hasValidProjectRegistration(content, workspaceRoot) { // PATCH(local): validate complete fixed project registration
     const header = /^[ \t]*\[mcp_servers\.awehitch\][ \t]*$/m.exec(content);
     if (!header || !workspaceRoot)
@@ -356,11 +360,41 @@ function hasValidProjectRegistration(content, workspaceRoot) { // PATCH(local): 
     return normalize(configuredRoot) === normalize(workspaceRoot);
 }
 '@
+$completeValidator=($completeValidator -replace "`r`n","`n").TrimEnd()
+$validator = @'
+function hasValidProjectRegistration(content, workspaceRoot) { // PATCH(local): validate comment-safe fixed project registration
+    const header = /^[ \t]*\[mcp_servers\.awehitch\][ \t]*$/m.exec(content);
+    if (!header || !workspaceRoot)
+        return false;
+    const afterHeader = header.index + header[0].length;
+    const rest = content.slice(afterHeader);
+    const next = /^[ \t]*\[[^\]]+\][ \t]*$/m.exec(rest);
+    const table = content.slice(header.index, next ? afterHeader + next.index : content.length);
+    if (/^[ \t]*type[ \t]*=[ \t]*["']stdio["'][ \t]*$/m.test(table))
+        return false;
+    const argsLine = /^[ \t]*args[ \t]*=[ \t]*\[([^\r\n]*?)\][ \t]*(?:#.*)?$/m.exec(table);
+    const envLine = /^[ \t]*env[ \t]*=[ \t]*\{([^\r\n]*?)\}[ \t]*(?:#.*)?$/m.exec(table);
+    if (!argsLine || !envLine)
+        return false;
+    const workspaceMatch = /"--workspace"\s*,\s*"((?:\\.|[^"\\])*)"/.exec(argsLine[1]);
+    if (!workspaceMatch || !/"--harness"\s*,\s*"codex"/.test(argsLine[1]))
+        return false;
+    if (!/AWEHITCH_CONTROL_PLANE\s*=\s*["']1["']/.test(envLine[1]))
+        return false;
+    if (!/AWEHITCH_MAX_PARALLEL_SESSIONS\s*=\s*["']3["']/.test(envLine[1]))
+        return false;
+    const configuredRoot = workspaceMatch[1].replace(/\\\\/g, "\\").replace(/\\"/g, '"');
+    const normalize = value => path.resolve(String(value)).replace(/[\\/]+$/, "").toLowerCase();
+    return normalize(configuredRoot) === normalize(workspaceRoot);
+}
+'@
 if (-not (Test-Path $codex) -or -not (Test-Path $cli)) { Row "补丁 4 项目级配置" "找不到文件" "未动" "缺 Codex 适配器文件" }
 else {
   $cx=ReadUtf8 $codex; $cl=ReadUtf8 $cli
   $cxDone=$cx.Contains('const next = previous; // '+$marker) -and $cx.Contains('function hasValidProjectRegistration(content, workspaceRoot)') -and $cx.Contains('mcpRegistered = hasValidProjectRegistration(projectConfig, workspace.root);')
   $clDone=$cl.Contains('const status = impl.status(workspace); // '+$marker)
+  $cxComplete=(-not $cxDone) -and (([regex]::Matches($cx,[regex]::Escape($completeWrite))).Count -eq 1) -and (([regex]::Matches($cx,[regex]::Escape($completeValidator+"`n"+$completeSig))).Count -eq 1)
+  $clComplete=(-not $clDone) -and (([regex]::Matches($cl,[regex]::Escape($completeCall))).Count -eq 1)
   $cxPrevious=(-not $cxDone) -and (([regex]::Matches($cx,[regex]::Escape($previousWrite))).Count -eq 1) -and (([regex]::Matches($cx,[regex]::Escape($previousValidator+"`n"+$previousSig))).Count -eq 1)
   $clPrevious=(-not $clDone) -and (([regex]::Matches($cl,[regex]::Escape($previousCall))).Count -eq 1)
   $cxLegacy=(-not $cxDone) -and (([regex]::Matches($cx,[regex]::Escape($legacyWrite))).Count -eq 1) -and (([regex]::Matches($cx,[regex]::Escape($legacySig))).Count -eq 1) -and (([regex]::Matches($cx,[regex]::Escape($legacyCheck+"`n"+$aRet))).Count -eq 1)
@@ -368,10 +402,12 @@ else {
   if ($cxDone -and $clDone) { Row "补丁 4 项目级配置" "已处理" "跳过" "两个文件均有完整最终特征" }
   else {
     $canPatch=$true
-    if ($cxPrevious) { $cx=$cx.Replace($previousWrite,$aWrite).Replace($previousValidator+"`n"+$previousSig,$aSig) }
+    if ($cxComplete) { $cx=$cx.Replace($completeWrite,$aWrite).Replace($completeValidator+"`n"+$completeSig,$aSig) }
+    elseif ($cxPrevious) { $cx=$cx.Replace($previousWrite,$aWrite).Replace($previousValidator+"`n"+$previousSig,$aSig) }
     elseif ($cxLegacy) { $cx=$cx.Replace($legacyWrite,$aWrite).Replace($legacySig,$aSig).Replace($legacyCheck+"`n"+$aRet,$aRet) }
     elseif (-not $cxDone -and $cx.Contains($legacyMarker)) { $canPatch=$false }
-    if ($clPrevious) { $cl=$cl.Replace($previousCall,$aCall) }
+    if ($clComplete) { $cl=$cl.Replace($completeCall,$aCall) }
+    elseif ($clPrevious) { $cl=$cl.Replace($previousCall,$aCall) }
     elseif ($clLegacy) { $cl=$cl.Replace($legacyCall,$aCall) }
     elseif (-not $clDone -and $cl.Contains($legacyMarker)) { $canPatch=$false }
     if (-not $cxDone -and -not ((([regex]::Matches($cx,[regex]::Escape($aWrite))).Count -eq 1) -and (([regex]::Matches($cx,[regex]::Escape($aSig))).Count -eq 1) -and (([regex]::Matches($cx,[regex]::Escape($aRet))).Count -eq 1))) { $canPatch=$false }

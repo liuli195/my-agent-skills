@@ -174,8 +174,8 @@ Codex 会话时，池大小 3 只给新仓库留下 2 个空位；若想保留�
 本机证据：官方备份
 `C:\Users\liuli\AppData\Roaming\npm\node_modules\awehitch\dist\adapters\codex.js.orig:29,67`
 会更新用户级条目并写 `--harness codex`；本机补丁把写入改为 `const next = previous`，由三份
-项目配置承担工作区、harness（代理类型）和槽位。源码与隔离测试通过后，仍须用三个真实会话
-确认分别领取 `codex`、`codex-s1`、`codex-s2`，才能称为实机验收完成。
+项目配置承担工作区、harness（代理类型）和槽位。2026-09-21 的真实验收已确认三个会话分别
+领取 `codex`、`codex-s1`、`codex-s2`，并在连接器重建后完成三个工作区的消息往返。
 
 ## 5. 本机当前完整状态
 

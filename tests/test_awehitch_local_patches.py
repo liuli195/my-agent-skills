@@ -236,6 +236,7 @@ def test_local_patch_runs_in_isolated_profile_and_status_accepts_fixed_project_c
         "missing control plane",
         "legacy transport",
         "comment bait",
+        "inline comment bait",
     ],
 )
 def test_status_rejects_non_fixed_project_registration(
@@ -252,6 +253,8 @@ def test_status_rejects_non_fixed_project_registration(
     control_plane = 'AWEHITCH_CONTROL_PLANE = "1"'
     transport = ""
     comments = ""
+    args_suffix = ""
+    env_suffix = ""
     if change == "wrong workspace":
         configured_workspace = tmp_path / "other-workspace"
     elif change == "wrong harness":
@@ -270,13 +273,24 @@ def test_status_rejects_non_fixed_project_registration(
             f'# args = ["control-plane", "--workspace", {json.dumps(str(workspace))}, "--harness", "codex"]\n'
             '# env = { AWEHITCH_CONTROL_PLANE = "1", AWEHITCH_MAX_PARALLEL_SESSIONS = "3" }\n'
         )
+    elif change == "inline comment bait":
+        harness = '"--harness", "opencode"'
+        slots = 'AWEHITCH_MAX_PARALLEL_SESSIONS = "2"'
+        control_plane = 'AWEHITCH_CONTROL_PLANE = "0"'
+        args_suffix = (
+            f' # expected args = ["control-plane", "--workspace", {json.dumps(str(workspace))}, "--harness", "codex"]'
+        )
+        env_suffix = (
+            ' # expected env = { AWEHITCH_CONTROL_PLANE = "1", '
+            'AWEHITCH_MAX_PARALLEL_SESSIONS = "3" }'
+        )
     project_config = (
         "[mcp_servers.awehitch]\n"
         f"{comments}"
         f"{transport}"
         'command = "node"\n'
-        f'args = ["control-plane", "--workspace", {json.dumps(str(configured_workspace))}, {harness}]\n'
-        f'env = {{ {control_plane}, {slots} }}\n'
+        f'args = ["control-plane", "--workspace", {json.dumps(str(configured_workspace))}, {harness}]{args_suffix}\n'
+        f'env = {{ {control_plane}, {slots} }}{env_suffix}\n'
     )
     (workspace / ".codex" / "config.toml").write_text(project_config, encoding="utf-8")
     status = _status(package, workspace, environment, tmp_path)
@@ -309,8 +323,34 @@ def test_local_patch_upgrades_the_exact_legacy_project_local_patch(tmp_path: Pat
 
     assert result.returncode == 0, result.stdout + result.stderr
     codex = (package / "dist" / "adapters" / "codex.js").read_text(encoding="utf-8")
-    assert "validate complete fixed project config" in codex
+    assert "validate comment-safe fixed project config" in codex
     assert "function hasValidProjectRegistration(content, workspaceRoot)" in codex
+
+
+def test_local_patch_upgrades_the_exact_complete_validator_without_comment_safety(tmp_path: Path) -> None:
+    package, environment, first = _run_local_patch(tmp_path)
+    assert first.returncode == 0, first.stdout + first.stderr
+    codex_path = package / "dist" / "adapters" / "codex.js"
+    cli_path = package / "dist" / "cli" / "index.js"
+    final_marker = "validate comment-safe fixed project config"
+    previous_marker = "validate complete fixed project config"
+    codex = codex_path.read_text(encoding="utf-8").replace(final_marker, previous_marker)
+    codex = codex.replace("([^\\r\\n]*?)", "([^\\r\\n]*)")
+    codex = codex.replace(
+        "validate comment-safe fixed project registration",
+        "validate complete fixed project registration",
+    )
+    codex_path.write_bytes(codex.encode("utf-8"))
+    cli_path.write_bytes(
+        cli_path.read_text(encoding="utf-8").replace(final_marker, previous_marker).encode("utf-8")
+    )
+
+    result = _invoke_patch(environment)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    upgraded = codex_path.read_text(encoding="utf-8")
+    assert final_marker in upgraded
+    assert "([^\\r\\n]*?)" in upgraded
 
 
 def test_local_patch_does_not_touch_ambiguous_codex_adapter(tmp_path: Path) -> None:
@@ -436,7 +476,7 @@ def test_codex_adapter_keeps_registration_project_local(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     codex = (package / "dist" / "adapters" / "codex.js").read_text(encoding="utf-8")
     cli = (package / "dist" / "cli" / "index.js").read_text(encoding="utf-8")
-    assert "const next = previous; // PATCH(local): keep Codex registration project-local and validate complete fixed project config" in codex
+    assert "const next = previous; // PATCH(local): keep Codex registration project-local and validate comment-safe fixed project config" in codex
     assert 'path.join(workspace.root, ".codex", "config.toml")' in codex
     assert "function hasValidProjectRegistration(content, workspaceRoot)" in codex
     assert "mcpRegistered = hasValidProjectRegistration(projectConfig, workspace.root);" in codex
