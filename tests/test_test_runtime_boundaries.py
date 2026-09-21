@@ -513,8 +513,41 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_awehitch_local_patches.py::test_fold_toggle_is_removed_by_the_real_compare_function': (
         'covers the installed awehitch compare function stripping folded-message toggle labels; function=test_fold_toggle_is_removed_by_the_real_compare_function'
     ),
+    'tests/test_awehitch_local_patches.py::test_authorization_observer_covers_each_safe_stage': (
+        'covers the public PowerShell patch entrypoint in an isolated profile and checks the generated connector module with Node; function=test_authorization_observer_covers_each_safe_stage'
+    ),
+    'tests/test_awehitch_local_patches.py::test_codex_adapter_keeps_registration_project_local': (
+        'covers the public PowerShell patch entrypoint preserving fixed project registration semantics; function=test_codex_adapter_keeps_registration_project_local'
+    ),
+    'tests/test_awehitch_local_patches.py::test_local_patch_does_not_touch_ambiguous_codex_adapter': (
+        'covers the public PowerShell patch entrypoint refusing an ambiguous installed adapter; function=test_local_patch_does_not_touch_ambiguous_codex_adapter'
+    ),
+    'tests/test_awehitch_local_patches.py::test_local_patch_is_idempotent_in_the_isolated_profile': (
+        'covers two public PowerShell patch runs against one isolated installed package; function=test_local_patch_is_idempotent_in_the_isolated_profile'
+    ),
+    'tests/test_awehitch_local_patches.py::test_local_patch_runs_in_isolated_profile_and_status_accepts_fixed_project_config': (
+        'covers the public PowerShell patch entrypoint and generated adapter status through Node; function=test_local_patch_runs_in_isolated_profile_and_status_accepts_fixed_project_config'
+    ),
+    'tests/test_awehitch_local_patches.py::test_local_patch_upgrades_the_exact_legacy_project_local_patch': (
+        'covers the public PowerShell patch entrypoint upgrading the exact prior local patch; function=test_local_patch_upgrades_the_exact_legacy_project_local_patch'
+    ),
+    'tests/test_awehitch_local_patches.py::test_local_patch_upgrades_the_exact_complete_validator_without_comment_safety': (
+        'covers the public PowerShell patch entrypoint upgrading the exact prior fixed-config validator; function=test_local_patch_upgrades_the_exact_complete_validator_without_comment_safety'
+    ),
+    'tests/test_awehitch_local_patches.py::test_rendered_skill_uses_status_first_for_steady_state_workflows': (
+        'covers the public PowerShell patch entrypoint and rendered installed skill through Node; function=test_rendered_skill_uses_status_first_for_steady_state_workflows'
+    ),
     'tests/test_awehitch_local_patches.py::test_rendered_messages_fit_the_real_c2c_channel': (
         'covers the rendered awehitch messages fitting the C2C send channel prefix and byte limit; function=test_rendered_messages_fit_the_real_c2c_channel'
+    ),
+    'tests/test_awehitch_local_patches.py::test_selector_override_drift_or_invalid_json_is_not_overwritten': (
+        'covers the public PowerShell patch entrypoint refusing changed or invalid selector overrides; function=test_selector_override_drift_or_invalid_json_is_not_overwritten'
+    ),
+    'tests/test_awehitch_local_patches.py::test_selector_override_is_merged_without_losing_unknown_fields': (
+        'covers two public PowerShell patch runs preserving unknown selector fields; function=test_selector_override_is_merged_without_losing_unknown_fields'
+    ),
+    'tests/test_awehitch_local_patches.py::test_status_rejects_non_fixed_project_registration': (
+        'covers the public PowerShell patch entrypoint and generated negative adapter status cases through Node; function=test_status_rejects_non_fixed_project_registration'
     ),
     'tests/test_build_and_verify_plugin.py::test_build_and_verify_runner_directory_hash_uses_git_visible_files': (
         'covers packaged cache behavior against tracked, visible untracked, and ignored files in a real git repository; function=test_build_and_verify_runner_directory_hash_uses_git_visible_files'
