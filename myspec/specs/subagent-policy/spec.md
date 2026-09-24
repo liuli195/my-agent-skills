@@ -8,7 +8,7 @@
 
 ### Requirement: 独立子代理策略入口与固定角色契约
 
-系统 MUST 通过独立的纯 Skill（技能）包提供 `subagent-policy`，固定 Explorer（调查者）、Implementer（实施者）、Reviewer（审查者）和 Architect（架构师）的职责、模型、思考强度与读写边界，并 SHALL 让主 Agent（代理）决定是否委派、何时委派以及调用几个角色。Explorer 使用 `gpt-5.6-luna` 与 `low`（低），Implementer 使用 `gpt-5.6-luna` 与 `max`（最高），Reviewer 使用 `gpt-5.6-sol` 与 `medium`（中等），Architect 使用 `gpt-5.6-sol` 与 `medium`（中）；四个角色优先使用宿主已配置的具名代理；只有 Implementer 可以在明确授权范围内写入。
+系统 MUST 通过独立的纯 Skill（技能）包提供 `subagent-policy`，固定 Explorer（调查者）、Implementer（实施者）、Reviewer（审查者）和 Architect（架构师）的职责、模型、思考强度与读写边界，并 SHALL 让主 Agent（代理）决定是否委派、何时委派以及调用几个角色。Explorer 使用 `gpt-6-luna` 与 `low`（低），Implementer 使用 `gpt-6-luna` 与 `max`（最高），Reviewer 使用 `gpt-6-sol` 与 `high`（高），Architect 使用 `gpt-6-sol` 与 `high`（高）；四个角色优先使用宿主已配置的具名代理；子代理中只有 Implementer 可以在明确授权范围内写入。
 
 #### Scenario: 当前宿主发现独立策略
 
@@ -49,9 +49,14 @@
 - **THEN** 主 Agent（代理）把报告作为线索，验证实际结果和角色边界后再接受任务完成
 ### Requirement: 子代理策略按依赖与步骤组织代理指令
 
-系统 MUST 让 `subagent-policy` 依次提供角色契约、主代理决策、四类委派提示词和结果验收，并 SHALL 让每类提示词明确该角色的任务范围、读写边界和返回证据。多个可写任务 MUST 在共享工作区串行，独立只读任务 MAY 并行。
+系统 MUST 让 `subagent-policy` 依次提供角色契约、主代理决策、四类委派提示词和结果验收，并 SHALL 让每类提示词明确该角色的任务范围、读写边界和返回证据。主 Agent（代理）MUST 确认票据无依赖、改动范围和测试资源互不冲突后，才可在同一工作区并行委派可写 Implementer（实施者）；其他可写任务串行，共享 Git（版本管理）操作由主 Agent 串行执行，独立只读任务 MAY 并行。
 
 #### Scenario: 代理加载子代理策略
 
 - **WHEN** Agent（代理）加载 `subagent-policy`
 - **THEN** 文档依次说明四个固定角色、主 Agent（代理）的按需选择原则、宿主中立的提示词要求和实际结果验收
+
+#### Scenario: 独立票据并行实施
+
+- **WHEN** 主 Agent 证明多个票据无依赖、改动范围和测试资源互不冲突
+- **THEN** 可在同一工作区并行委派可写 Implementer，主 Agent 串行执行共享 Git 操作并逐票核验实际结果
