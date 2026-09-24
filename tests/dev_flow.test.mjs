@@ -300,6 +300,7 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     assert.match(referenceContent[1], /同一 Git（版本管理）工作树[^]*门禁一已确认的非 `main` 分支/);
     assert.match(referenceContent[1], /并行[^]*子代理[^]*票据[^]*无依赖[^]*改动范围[^]*测试资源/);
     assert.match(referenceContent[1], /`code-review`[^]*`awehitch`[^]*不可用[^]*停留审查/);
+    assert.match(referenceContent[1], /每票审查[^]*提交范围[^]*已提交差异[^]*审查结束前[^]*其他票/);
     assert.doesNotMatch(devFlowText, /Implementer（实施者）是唯一写入者|通过 Implementer（实施者）|交给 Implementer（实施者）|新的串行 Implementer（实施者）调用/);
     assert.match(content, /确认[^]*失败恢复[^]*持续有效/);
     assert.match(content, /“核心摘要”[^]*“确认后进入的下一步”/);
