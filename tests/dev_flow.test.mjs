@@ -87,12 +87,16 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
       const headings = [...text.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
       assert.deepEqual(
         headings,
-        ["MUST — 必须依赖", "流程编排"],
-        `${name} 必须且只能依次包含两个顶层编排模块`,
+        name === "SKILL.md"
+          ? ["绝对禁止", "MUST — 必须依赖", "流程编排"]
+          : ["MUST — 必须依赖", "流程编排"],
+        `${name} 的顶层模块必须按顺序排列`,
       );
     }
     assert.match(referenceContent[0], /当前会话[^]*`grill-with-docs`[^]*`domain-modeling`[^]*`to-spec`[^]*`to-tickets`/);
-    assert.match(referenceContent[0], /完整展示当前门禁[^]*用户[^]*明确授权[^]*当前门禁动作/);
+    assert.match(content, /显式展示当前门禁的完整内容[^]*显式确认[^]*此前对方案或启动流程的批准不能代替门禁确认/);
+    assert.match(content, /## 绝对禁止[^]*严格禁止跳过门禁[^]*再取得用户对该门禁的显式确认[^]*缺少任一步都必须停留在当前门禁/);
+    assert.match(referenceContent[0], /展示后必须取得用户对门禁一的显式确认[^]*此前的方案批准或“使用开发流程”指令不算门禁一确认/);
     assert.doesNotMatch(
       devFlowText,
       /固定口令|固定回复措辞|逐字回复|不能视为授权|不得要求用户|“确认”“可以”“继续实施\/交付”/,
