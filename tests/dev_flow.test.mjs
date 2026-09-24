@@ -234,7 +234,11 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     assert.ok(issue.includes("spec.md"));
     assert.ok(issue.includes("issues/NN-<slug>.md"));
 
-    assert.match(referenceContent[0], /门禁一授权前保持只读[^]*沿用当前工作树和分支/);
+    assert.match(referenceContent[0], /门禁一授权前[^]*只读[^]*当前工作树/);
+    assert.match(referenceContent[0], /推荐[^]*接受整套推荐[^]*逐项选择/);
+    assert.match(referenceContent[0], /功能分支[^]*完整名称[^]*串行[^]*并行[^]*主代理[^]*子代理[^]*每票[^]*全部完成后[^]*ChatGPT 网页/);
+    assert.match(referenceContent[0], /缺少任一确认[^]*门禁一[^]*不通过/);
+    assert.match(referenceContent[0], /新建功能分支[^]*门禁一[^]*授权后/);
     assert.match(referenceContent[2], /准确遗留项[^]*额外明确授权[^]*强制清理/);
     const implementationSteps = referenceContent[1].match(
       /## 流程编排[^]*$/,
@@ -293,8 +297,9 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
     assert.match(referenceContent[0], /门禁一——开始开发/);
     assert.match(referenceContent[2], /门禁二——规格与交付/);
     assert.match(referenceContent[2], /完成检查不是第三个授权门禁/);
-    assert.match(referenceContent[1], /同一 Git（版本管理）工作树[^]*同一非 `main` 分支/);
-    assert.match(referenceContent[1], /可写调用严格串行/);
+    assert.match(referenceContent[1], /同一 Git（版本管理）工作树[^]*门禁一已确认的非 `main` 分支/);
+    assert.match(referenceContent[1], /并行[^]*子代理[^]*票据[^]*无依赖[^]*改动范围[^]*测试资源/);
+    assert.match(referenceContent[1], /`code-review`[^]*`awehitch`[^]*不可用[^]*停留审查/);
     assert.doesNotMatch(devFlowText, /Implementer（实施者）是唯一写入者|通过 Implementer（实施者）|交给 Implementer（实施者）|新的串行 Implementer（实施者）调用/);
     assert.match(content, /确认[^]*失败恢复[^]*持续有效/);
     assert.match(content, /“核心摘要”[^]*“确认后进入的下一步”/);

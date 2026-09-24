@@ -52,9 +52,9 @@ _Avoid_: ticket executor, workflow engine
 The immutable implementation specification confirmed at Gate 1 and used by Implementer and Reviewer as the acceptance baseline.
 _Avoid_: progress log, mutable evidence record
 
-**Single Writer（单写者）**:
-The rule that writable actions in one development worktree are serial.
-_Avoid_: concurrent writers
+**Independent Writer（独立写入者）**:
+The rule that writable subagents may work in parallel in one development worktree only when the main agent confirms their tickets have no dependency, overlapping edits, or shared test resources; shared Git operations remain serial.
+_Avoid_: unrestricted concurrent writers
 
 **Returned（已返回）**:
 The state reached when an Implementer invocation ends; it requires evidence inspection and is not ticket acceptance.
