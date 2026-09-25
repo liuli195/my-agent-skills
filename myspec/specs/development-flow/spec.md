@@ -103,7 +103,7 @@
 #### Scenario: 实施阶段调用依赖
 
 - **WHEN** 门禁一授权后流程实施、验证和审查票据
-- **THEN** 流程在首次委派前调用 `subagent-policy`、每票红灯到绿灯前调用 `tdd`、正式验证前调用 `build-and-verify`、独立审查前按门禁一选择调用 `code-review` 或 `awehitch`
+- **THEN** 流程在首次委派前调用 `subagent-policy`、每票红灯到绿灯前调用 `tdd`、正式验证前调用 `build-and-verify`、独立审查前调用 `code-review`
 
 #### Scenario: 交付阶段调用依赖
 
