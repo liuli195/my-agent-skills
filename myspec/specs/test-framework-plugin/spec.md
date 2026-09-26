@@ -198,12 +198,12 @@ Build and Verify（构建与验证） MUST expand explicit glob inputs（通配�
 - **THEN** it MUST report that the literal path may contain a spelling error
 ### Requirement: Fast verification selects all checks for configuration changes
 
-Build and Verify（构建与验证） MUST select every current verification check when its repository configuration changes, while continuing to use cache entries created from that same current configuration.
+Build and Verify（构建与验证） MUST select every verification check executable in the current run scene when its repository configuration changes, while continuing to use cache entries created from that same current configuration. The default local scene includes all configured checks; the explicit PR（拉取请求）scene excludes checks with `pr: false`.
 
 #### Scenario: Configuration is the only changed file
 
 - **WHEN** the Build and Verify（构建与验证） configuration is the only changed file
-- **THEN** fast verify（快速验证） MUST select every current verification check
+- **THEN** fast verify（快速验证） MUST select every verification check executable in the current run scene
 - **THEN** output MUST report the overall configuration-change selection reason once
 
 #### Scenario: Current configuration cache remains reusable
@@ -220,7 +220,7 @@ Build and Verify（构建与验证） MUST select every current verification che
 #### Scenario: Ordinary source changes retain path selection
 
 - **WHEN** the configuration is unchanged and ordinary source files change
-- **THEN** fast verify（快速验证） MUST continue selecting checks through their configured paths（受影响路径）
+- **THEN** fast verify（快速验证） MUST continue selecting executable checks through their configured paths（受影响路径）
 ### Requirement: Guided initialization drafts generic repository checks
 `build-and-verify-init` Skill（构建与验证初始化技能） MUST 为通用仓库生成可审查的 build（构建检查）和 verify（验证）配置草案。
 
@@ -516,3 +516,48 @@ Build and Verify（构建与验证） MUST bind fast and full verification cache
 - **WHEN** the current runtime identity is absent
 - **THEN** fast verify（快速验证） and full verify（完整验证） MUST fail before running checks or reading or writing passed-result cache（通过结果缓存）
 - **THEN** build（构建检查） MUST remain available because it does not use verification cache
+### Requirement: Build and Verify selects checks by PR scene
+
+Build and Verify（构建与验证） MUST support an explicit `--pr` scene for build（构建） and verify（验证） commands. Each configured check MAY declare boolean `pr`; omission means `true`. Without `--pr`, the existing local selection behavior MUST remain unchanged. With `--pr`, checks with `pr: false` MUST be excluded before path selection, configuration-change selection, scheduling and cache lookup.
+
+#### Scenario: Build selects PR-executable checks
+
+- **WHEN** a user runs `build --pr` with checks marked `pr: false`
+- **THEN** the command MUST execute only checks not marked `pr: false`
+- **THEN** a build without `--pr` MUST still execute all configured build checks
+
+#### Scenario: Fast verification uses a fixed baseline in PR scene
+
+- **WHEN** a user runs `verify --pr --base <fixed-baseline>`
+- **THEN** the command MUST select checks from the PR-executable set using the changed paths from that baseline
+- **THEN** a configuration change MUST select all PR-executable checks and MUST NOT reselect `pr: false` checks
+
+#### Scenario: Full verification uses PR-executable checks
+
+- **WHEN** a user runs `verify --pr --full`
+- **THEN** the command MUST execute all PR-executable verification checks
+- **THEN** `verify --full` without `--pr` MUST still execute all configured verification checks
+
+#### Scenario: Scene and excluded checks are visible
+
+- **WHEN** a build or verify command chooses checks
+- **THEN** output MUST identify the run scene and selected checks
+- **THEN** PR scene output MUST identify checks excluded by `pr: false`
+
+#### Scenario: No PR check is selected
+
+- **WHEN** PR scene selection produces no checks
+- **THEN** the command MUST report `status: skipped` and MUST NOT report `status: passed`
+- **THEN** an empty `verify --pr --full` MUST NOT create or overwrite a performance report
+- **THEN** a valid passed-result cache hit for a selected check MAY still report `status: passed`
+
+#### Scenario: Invalid PR field stops before scheduling
+
+- **WHEN** any build or verify check declares a non-boolean `pr` value
+- **THEN** the command MUST report a configuration error before scheduling any check
+
+#### Scenario: Configuration guidance preserves PR assignment
+
+- **WHEN** initialization or configuration review handles existing checks
+- **THEN** it MUST preserve valid `pr` values and explain that omission means `true`
+- **THEN** it MUST identify non-boolean values as invalid and describe which checks run in each scene
