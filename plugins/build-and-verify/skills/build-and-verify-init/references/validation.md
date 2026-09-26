@@ -84,6 +84,7 @@ validation（校验）必须在 `build-and-verify-init`（构建与验证初始�
 - `paths`（受影响路径）和 `inputs`（缓存输入）如果存在，必须是 string list（字符串清单），允许为空 string list（字符串清单），但清单项里的纯空白字符串必须视为无效。
 - check（检查项）不得包含旧 `parallel`（旧并行字段）。
 - check（检查项）的 `checkParallel`（检查项间并行）如果存在，必须是 boolean（布尔值）。
+- check（检查项）的 `pr`（拉取请求场景可执行）如果存在，必须是 boolean（布尔值）。
 - check（检查项）的 `pytestXdistWorkers`（Pytest 工作进程数）如果存在，必须是 `"auto"`（自动）或正整数。
 - check（检查项）的 `timeoutSeconds`（超时秒数）如果存在，必须是大于 0 的 number（数字），不得是 boolean（布尔值）。
 - `verify.maxParallel`（最大并行检查数）如果存在，必须是非负整数。

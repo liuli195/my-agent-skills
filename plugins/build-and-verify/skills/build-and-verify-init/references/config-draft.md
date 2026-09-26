@@ -23,6 +23,7 @@
 - 必须同时支持 `build.checks`（构建检查项）和 `verify.checks`（验证检查项）。
 - check id（检查项标识）使用短横线风格，例如 `build.node`、`verify.node-tests`、`verify.python-tests`。
 - 同一分组内 check id（检查项标识）必须唯一。
+- `pr`（拉取请求场景可执行）是可选 boolean（布尔值），省略视为 `true`（可执行）；仅本地执行的检查可经用户确认后设置 `false`（不可执行）。不得根据命令耗时自行推断为 `false`。
 - command（命令）默认使用字符串形式，便于阅读和维护。
 - 列表形式 command（命令）只在用户明确要求更稳定参数边界时使用。
 - 高置信度候选可以默认建议纳入，但仍必须展示给用户确认。
@@ -32,7 +33,7 @@
 ## Existing Configuration（已有配置）
 
 - 已有 `.build-and-verify/config.json`（配置文件）候选尽量原样保留。
-- 保留 check id（检查项标识）、command（命令）、paths（受影响路径）、inputs（缓存输入）、checkParallel（检查项间并行）、pytestXdistWorkers（Pytest 工作进程数）和 timeoutSeconds（超时秒数），以及已有 `verify.fullBudgetSeconds`（完整验证预算秒数）。
+- 保留 check id（检查项标识）、command（命令）、paths（受影响路径）、inputs（缓存输入）、pr（拉取请求场景可执行）、checkParallel（检查项间并行）、pytestXdistWorkers（Pytest 工作进程数）和 timeoutSeconds（超时秒数），以及已有 `verify.fullBudgetSeconds`（完整验证预算秒数）。
 - 已有配置含旧 `parallel`（旧并行字段）时，必须提示用户迁移为 `checkParallel`（检查项间并行），不得写入新草案。
 - 覆盖前展示覆盖摘要、自动生成的备份路径和最终写入确认。
 

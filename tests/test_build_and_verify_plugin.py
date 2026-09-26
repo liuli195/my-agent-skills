@@ -190,13 +190,14 @@ class FakeRunnerModule:
     def __getattr__(self, name: str):
         return getattr(self.runner_module, name)
 
-    def run_build(self, project: Path) -> int:
-        return int(self.runner_module.run_build(project, runner=self.runner))
+    def run_build(self, project: Path, *, pr: bool = False) -> int:
+        return int(self.runner_module.run_build(project, runner=self.runner, pr=pr))
 
     def run_verify(
         self,
         project: Path,
         *,
+        pr: bool = False,
         full: bool = False,
         baseline: str | None = None,
         performance_report: bool = False,
@@ -209,6 +210,7 @@ class FakeRunnerModule:
                 self.runner_module.run_verify(
                     project,
                     runner=self.runner,
+                    pr=pr,
                     full=full,
                     baseline=baseline,
                     performance_report=performance_report,
@@ -2362,6 +2364,139 @@ def test_build_and_verify_init_template_validates_per_check_runtime_tuning(
     else:
         with pytest.raises(AssertionError):
             assert_init_wizard_config_structure(config)
+
+
+def test_build_pr_filters_checks_and_preserves_local_default(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(
+        project,
+        build_checks=[
+            {"id": "local", "command": [sys.executable, "-c", "from pathlib import Path; Path('local.txt').write_text('ran')"], "pr": False},
+            {"id": "remote", "command": [sys.executable, "-c", "from pathlib import Path; Path('remote.txt').write_text('ran')"]},
+        ],
+    )
+
+    pr_result = subprocess.run(
+        ["node", str(PLUGIN_ROOT / "bin" / "build-and-verify.js"), "build", "--project", str(project), "--pr"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert pr_result.returncode == 0
+    assert "scene: pr" in pr_result.stdout
+    assert "excluded-by-pr: local" in pr_result.stdout
+    assert "checked: remote" in pr_result.stdout
+    assert not (project / "local.txt").exists()
+    assert (project / "remote.txt").exists()
+
+    local_result = run_build_and_verify_subprocess("build", "--project", str(project))
+    assert local_result.returncode == 0
+    assert "checked: local, remote" in local_result.stdout
+    assert (project / "local.txt").exists()
+
+
+def test_verify_pr_filters_path_config_change_and_full_from_cli(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    assert git(project, "init", "-q").returncode == 0
+    assert run_build_and_verify_subprocess("init", "--project", str(project)).returncode == 0
+    assert git(project, "config", "user.name", "Test").returncode == 0
+    assert git(project, "config", "user.email", "test@example.invalid").returncode == 0
+    (project / "src").mkdir()
+    (project / "src" / "app.py").write_text("base\n", encoding="utf-8")
+    checks = [
+        {"id": name, "command": [sys.executable, "-c", "pass"], "paths": [path], "pr": pr}
+        for name, path, pr in [
+            ("source", "src/**", True),
+            ("docs", "docs/**", True),
+            ("local", "src/**", False),
+        ]
+    ]
+    write_runner_config(project, verify_checks=checks)
+    assert git(project, "add", ".").returncode == 0
+    assert git(project, "commit", "-m", "base").returncode == 0
+    base = git(project, "rev-parse", "HEAD").stdout.strip()
+    (project / "src" / "app.py").write_text("changed\n", encoding="utf-8")
+    assert git(project, "add", "src/app.py").returncode == 0
+    assert git(project, "commit", "-m", "source").returncode == 0
+
+    selected = subprocess.run(
+        ["node", str(PLUGIN_ROOT / "bin" / "build-and-verify.js"), "verify", "--project", str(project), "--pr", "--base", base],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert selected.returncode == 0, selected.stdout + selected.stderr
+    assert "scene: pr" in selected.stdout
+    assert "excluded-by-pr: local" in selected.stdout
+    assert "checked: source\n" in selected.stdout
+    assert "status: passed" in selected.stdout
+
+    config_commit = git(project, "rev-parse", "HEAD").stdout.strip()
+    config_path = project / ".build-and-verify" / "config.json"
+    config = read_json(config_path)
+    config["note"] = "changed"
+    write_json(config_path, config)
+    assert git(project, "add", ".build-and-verify/config.json").returncode == 0
+    assert git(project, "commit", "-m", "config").returncode == 0
+    config_selected = run_build_and_verify_subprocess("verify", "--project", str(project), "--pr", "--base", config_commit)
+    assert config_selected.returncode == 0, config_selected.stdout + config_selected.stderr
+    assert "selection-reason: config-changed" in config_selected.stdout
+    assert "checked: source, docs\n" in config_selected.stdout
+    assert "local" not in config_selected.stdout.split("checked: ", 1)[1]
+
+    pr_full = run_build_and_verify_subprocess("verify", "--project", str(project), "--pr", "--full")
+    assert pr_full.returncode == 0, pr_full.stdout + pr_full.stderr
+    assert "checked: source, docs\n" in pr_full.stdout
+    local_full = run_build_and_verify_subprocess("verify", "--project", str(project), "--full")
+    assert local_full.returncode == 0, local_full.stdout + local_full.stderr
+    assert "checked: source, docs, local\n" in local_full.stdout
+
+
+@pytest.mark.parametrize("section", ["build", "verify"])
+def test_pr_non_boolean_fails_before_any_check(tmp_path: Path, section: str) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    check = {"id": "invalid", "command": [sys.executable, "-c", "from pathlib import Path; Path('ran.txt').write_text('ran')"], "pr": "false"}
+    write_runner_config(project, build_checks=[check] if section == "build" else None, verify_checks=[check] if section == "verify" else None)
+    result = run_build_and_verify_subprocess(section, "--project", str(project), "--pr", *(["--full"] if section == "verify" else []))
+    assert result.returncode == 1
+    assert f"{section}.checks[0].pr must be boolean" in result.stderr
+    assert "status: failed" in result.stdout
+    assert not (project / "ran.txt").exists()
+
+
+def test_pr_empty_selection_is_skipped_for_build_and_full_verify(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    local = {"id": "local", "command": [sys.executable, "-c", "pass"], "pr": False}
+    write_runner_config(project, build_checks=[local], verify_checks=[local])
+    build = run_build_and_verify_subprocess("build", "--project", str(project), "--pr")
+    full = run_build_and_verify_subprocess("verify", "--project", str(project), "--pr", "--full", "--performance-report")
+    for result in (build, full):
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "excluded-by-pr: local" in result.stdout
+        assert "checked: \n" in result.stdout
+        assert "status: skipped" in result.stdout
+        assert "status: passed" not in result.stdout
+    assert not (project / ".build-and-verify" / "runs" / "performance-report.json").exists()
+
+
+def test_pr_empty_full_verify_still_rejects_invalid_budget(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(
+        project,
+        verify_checks=[{"id": "local", "command": [sys.executable, "-c", "pass"], "pr": False}],
+        verify_config={"fullBudgetSeconds": 0},
+    )
+    result = run_build_and_verify_subprocess("verify", "--project", str(project), "--pr", "--full")
+    assert result.returncode == 1
+    assert "verify.fullBudgetSeconds must be positive integer" in result.stderr
+    assert "status: failed" in result.stdout
 
 
 def test_build_and_verify_runner_build_verify_and_full_verify(tmp_path: Path) -> None:

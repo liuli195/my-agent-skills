@@ -210,6 +210,11 @@ def _load_config(project: Path) -> dict[str, Any]:
                     f"{section}.checks[{index}].id must be unique"
                 )
             seen_ids.add(check_id)
+            if "pr" in check and not isinstance(check["pr"], bool):
+                raise ConfigError(
+                    "invalid_config: .build-and-verify/config.json: "
+                    f"{section}.checks[{index}].pr must be boolean"
+                )
             command = check.get("command")
             if not (
                 _is_non_empty_string(command) or _is_non_empty_string_list(command)
@@ -945,12 +950,21 @@ def _write_performance_report(path: Path, payload: dict[str, Any]) -> bool:
     return True
 
 
-def run_build(project: Path, runner: Runner = subprocess.run) -> int:
+def run_build(project: Path, runner: Runner = subprocess.run, *, pr: bool = False) -> int:
     try:
         config = _load_config(project)
     except ConfigError as error:
         return _config_error(error)
-    checks = _checks(config, "build")
+    configured = _checks(config, "build")
+    checks = [check for check in configured if not pr or check.get("pr", True)]
+    print(f"scene: {'pr' if pr else 'local'}")
+    if pr:
+        print(f"excluded-by-pr: {_check_ids([check for check in configured if check.get('pr') is False])}")
+    if pr and not checks:
+        print("checked: ")
+        print("status: skipped")
+        print("reason: no_matching_checks")
+        return 0
     failures = 0
     for check in checks:
         try:
@@ -973,6 +987,7 @@ def run_verify(
     project: Path,
     runner: Runner = subprocess.run,
     *,
+    pr: bool = False,
     full: bool = False,
     baseline: str | None = None,
     performance_report: bool = False,
@@ -1006,12 +1021,13 @@ def run_verify(
         config = _load_config(project)
     except ConfigError as error:
         return _config_error(error)
-    checks = _checks(config, "verify")
+    configured = _checks(config, "verify")
+    checks = [check for check in configured if not pr or check.get("pr", True)]
+    print(f"scene: {'pr' if pr else 'local'}")
+    if pr:
+        print(f"excluded-by-pr: {_check_ids([check for check in configured if check.get('pr') is False])}")
     config_changed = ".build-and-verify/config.json" in changed_files
     selected = checks if full or config_changed else _selected_checks(checks, changed_files)
-    if config_changed and not full:
-        print("selection-reason: config-changed")
-    failures = 0
     if full:
         verify_config = config.get("verify", {})
         budget_seconds = verify_config.get("fullBudgetSeconds")
@@ -1026,6 +1042,18 @@ def run_verify(
                     "verify.fullBudgetSeconds must be positive integer"
                 )
             )
+    if pr and not selected:
+        if config_changed and not full:
+            print("selection-reason: config-changed")
+        print("checked: ")
+        print(f"full-not-run: {str(not full).lower()}")
+        print("status: skipped")
+        print(f"reason: {'no_changed_files' if not changed_files and not full else 'no_matching_checks'}")
+        return 0
+    if config_changed and not full:
+        print("selection-reason: config-changed")
+    failures = 0
+    if full:
         started_at = time.monotonic()
         failures, failed_ids, results = _run_scheduled_checks(
             project,

@@ -265,8 +265,10 @@ def _build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--overwrite", action="store_true")
     build_parser = subparsers.add_parser("build")
     build_parser.add_argument("--project", default=".")
+    build_parser.add_argument("--pr", action="store_true")
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("--project", default=".")
+    verify_parser.add_argument("--pr", action="store_true")
     verify_parser.add_argument("--full", action="store_true")
     verify_parser.add_argument("--base", dest="baseline")
     verify_parser.add_argument("--performance-report", action="store_true")
@@ -292,7 +294,7 @@ def main(argv: list[str] | None = None) -> int:
             overwrite=bool(args.overwrite),
         )
     if args.command == "build":
-        return int(_runner().run_build(Path(args.project).resolve()))
+        return int(_runner().run_build(Path(args.project).resolve(), pr=args.pr))
     if args.command == "verify":
         project = Path(args.project).resolve()
         legacy_runtime, recognized_legacy_runtime = _legacy_runtime(project)
@@ -310,6 +312,7 @@ def main(argv: list[str] | None = None) -> int:
         result = int(
             _runner().run_verify(
                 project,
+                pr=args.pr,
                 full=args.full,
                 baseline=args.baseline,
                 performance_report=args.performance_report,
