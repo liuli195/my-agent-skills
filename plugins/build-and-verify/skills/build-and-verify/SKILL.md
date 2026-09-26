@@ -23,9 +23,12 @@ Use this skill when this repository needs build（构建检查） or verify（�
 ```bash
 build-and-verify init --project .
 build-and-verify build --project .
+build-and-verify build --project . --pr
 build-and-verify verify --project .
 build-and-verify verify --project . --base <fixed-commit-or-ref>
+build-and-verify verify --project . --pr --base <fixed-commit-or-ref>
 build-and-verify verify --project . --full
+build-and-verify verify --project . --pr --full
 build-and-verify verify --project . --full --performance-report
 ```
 
@@ -35,6 +38,9 @@ build-and-verify verify --project . --full --performance-report
 
 - 目标仓库只定义 `.build-and-verify/config.json` 的 `build.checks` 和 `verify.checks`。
 - 每个 check（检查项）必须有非空且同一分组内唯一的 `id`。
+- `build.checks[]` 和 `verify.checks[]` 可设置布尔字段 `pr`（拉取请求场景可执行），省略时视为 `true`（可执行）。`pr: false` 仅在显式 `--pr`（拉取请求场景）时排除；本地不带 `--pr` 时仍按原规则运行。
+- `--pr` 在 paths（受影响路径）选择和配置变化全选之前过滤检查项，也适用于 `verify --full`（完整验证）。输出中的 `scene`（运行场景）、`checked`（已选检查项）和 `excluded-by-pr`（因拉取请求场景排除的检查项）说明本次范围。
+- 拉取请求场景没有选中检查项时报告 `status: skipped`（跳过）；空的拉取请求完整验证不生成 performance report（性能报告）。有效 cache hit（缓存命中）仍视为已检查。
 - `verify.checks[].paths` 存在时，默认 verify（快速验证）只选择匹配 changed files（变更文件）的检查项。
 - `verify --base <commit-or-ref>`（验证基线）只用于快速验证；系统在验证工作树解析并固定该基线，要求工作树干净，再按固定基线与当前 HEAD（当前提交）的三点差异选择检查项。
 - 提供验证基线时不得同时使用 `--full`（完整验证）；无效基线、脏工作树或该组合必须失败，不得退回工作区变更选择。
@@ -43,7 +49,7 @@ build-and-verify verify --project . --full --performance-report
 - 没有 `inputs` 的 global check（全局检查项）使用当前 changed files（变更文件）计算 cache key（缓存键）；需要更稳定缓存时，目标仓库应显式配置 `inputs`。
 - 快速验证没有变更时报告 `status: skipped` 和 `reason: no_changed_files`；有变更但没有匹配检查时报告 `status: skipped` 和 `reason: no_matching_checks`。至少选中一个检查时，实际通过或有效缓存命中才报告 `status: passed`，且 `checked`（已检查）必须非空。
 - 有 `paths` 但没有 `inputs` 的 verify check（验证检查项）会扫描目标仓库文件来计算 cache key（缓存键）；大型仓库应显式配置 `inputs` 降低默认 verify（快速验证）开销。
-- `verify --full`（完整验证）运行全部 `verify.checks`，不读取 cache（缓存）跳过检查；成功通过后会写入或刷新 passed-result cache（通过结果缓存）。
+- `verify --full`（完整验证）运行当前场景下全部可执行的 `verify.checks`，不读取 cache（缓存）跳过检查；成功通过后会写入或刷新 passed-result cache（通过结果缓存）。
 - `verify.fullBudgetSeconds`（完整验证预算秒数）是可选正整数；缺省时不判断总耗时预算。
 - 完整验证只在全部检查结束后判断预算。超预算会输出 `performance-warning`（性能警告）并自动写入 `.build-and-verify/runs/performance-report.json`（性能报告），但不改变功能验证退出状态。
 - `verify --full --performance-report`（完整验证性能报告）可在无预算或预算内时主动写入同一路径的固定报告。未触发报告时不创建、不覆盖也不删除已有报告。
