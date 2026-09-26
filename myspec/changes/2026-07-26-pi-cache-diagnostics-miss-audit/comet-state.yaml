@@ -1,0 +1,22 @@
+schema: comet.native.v3
+minimum_runtime_version: 3
+revision: 7
+name: pi-cache-diagnostics-miss-audit
+language: zh-CN
+phase: archive
+brief: brief.md
+approval: confirmed
+approved_contract_hash: b7dfc535aacb1380689cbff568ea8c6853b25820ca826a8f0fbaa4b1016b5cc7
+spec_changes:
+  - capability: pi-cache-diagnostics-miss-audit
+    operation: create
+    source: specs/pi-cache-diagnostics-miss-audit/spec.md
+    base_hash: null
+verification_result: pass
+verification_report: verification.md
+implementation_scope: runtime/evidence/scopes/972e237927e9aa7c9d16bcc307867a816688700edbd39db97d13a9b222251006.json
+verification_evidence: runtime/evidence/verifications/ded9da6a6e2450c2d51853ce81622c7a5e99ef8bf87a2bcdc229a3735f3e5018.json
+partial_allowance: null
+archived: true
+created_at: 2026-07-26
+run_id: 6ace4f2e-cd2c-4034-8b8a-7a1e91004964

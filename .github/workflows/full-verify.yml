@@ -1,0 +1,155 @@
+name: Full Verify
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-verify:
+    name: Linux Full Verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Node dependencies
+        run: npm install -g @earendil-works/pi-coding-agent@0.82.1
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+          npm ci
+
+      - name: Install current MySpec package
+        shell: bash
+        run: |
+          tarball="$(python plugins/tool-lifecycle/pack.py myspec "$RUNNER_TEMP")"
+          prefix="$RUNNER_TEMP/myspec-prefix"
+          npm install -g --prefix "$prefix" --ignore-scripts --no-audit --no-fund "$tarball"
+          echo "$prefix/bin" >> "$GITHUB_PATH"
+          echo "MYSPEC_TEST_TARBALL=$tarball" >> "$GITHUB_ENV"
+          "$prefix/bin/myspec" --help
+
+      - name: Install current Build and Verify package
+        shell: bash
+        run: |
+          tarball="$(python plugins/tool-lifecycle/pack.py build-and-verify "$RUNNER_TEMP")"
+          prefix="$RUNNER_TEMP/build-and-verify-prefix"
+          npm install -g --prefix "$prefix" --ignore-scripts --no-audit --no-fund "$tarball"
+          echo "$prefix/bin" >> "$GITHUB_PATH"
+          "$prefix/bin/build-and-verify" --help
+
+      - name: Run candidate quick verification
+        run: build-and-verify verify --project .
+
+      - name: Run full verification
+        run: node plugins/build-and-verify/bin/build-and-verify.js verify --project . --full
+
+  windows-worktree-smoke:
+    name: Windows worktree smoke
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Initialize main worktree
+        shell: pwsh
+        run: ./scripts/setup-worktree.ps1
+
+      - name: Install current Build and Verify package
+        shell: pwsh
+        run: |
+          $prefix = Join-Path $env:RUNNER_TEMP "build-and-verify-prefix"
+          $tarball = python plugins/tool-lifecycle/pack.py build-and-verify $env:RUNNER_TEMP
+          npm install --global --prefix $prefix --ignore-scripts --no-audit --no-fund $tarball
+          $prefix >> $env:GITHUB_PATH
+          & (Join-Path $prefix "build-and-verify.cmd") --help
+
+      - name: Run PR fast verification
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: pwsh
+        env:
+          BASELINE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          . ./.venv/Scripts/Activate.ps1
+          $env:BUILD_AND_VERIFY_PYTHON = (Get-Command python).Source
+          $output = & build-and-verify verify --project . --base $env:BASELINE 2>&1 | Out-String
+          $exitCode = $LASTEXITCODE
+          Write-Host $output
+          $lines = $output -split "\r?\n"
+          $checked = $lines | Where-Object { $_ -match "^checked:\s*\S" } | Select-Object -Last 1
+          $status = $lines | Where-Object { $_ -match "^status:\s*\S" } | Select-Object -Last 1
+          if ($exitCode -ne 0 -or -not $checked -or $status -notmatch "^status:\s*passed\s*$") {
+            Write-Error "Windows PR fast verification requires non-empty checked output and status: passed."
+            exit 1
+          }
+
+      - name: Run manual Windows full verification
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: pwsh
+        run: |
+          . ./.venv/Scripts/Activate.ps1
+          $env:BUILD_AND_VERIFY_PYTHON = (Get-Command python).Source
+          node plugins/build-and-verify/bin/build-and-verify.js verify --project . --full
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Initialize linked worktree
+        shell: pwsh
+        run: |
+          git worktree add --detach .worktrees/smoke HEAD
+          ./.worktrees/smoke/scripts/setup-worktree.ps1
+
+      - name: Build from linked worktree
+        shell: pwsh
+        run: |
+          . ./.worktrees/smoke/.venv/Scripts/Activate.ps1
+          build-and-verify build --project .worktrees/smoke
+
+  full-verify-gate:
+    name: Full Verify
+    if: ${{ always() }}
+    needs:
+      - full-verify
+      - windows-worktree-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all platform checks
+        env:
+          LINUX_RESULT: ${{ needs.full-verify.result }}
+          WINDOWS_RESULT: ${{ needs.windows-worktree-smoke.result }}
+        run: |
+          if [ "$LINUX_RESULT" != "success" ] || [ "$WINDOWS_RESULT" != "success" ]; then
+            echo "Linux=$LINUX_RESULT Windows=$WINDOWS_RESULT"
+            exit 1
+          fi

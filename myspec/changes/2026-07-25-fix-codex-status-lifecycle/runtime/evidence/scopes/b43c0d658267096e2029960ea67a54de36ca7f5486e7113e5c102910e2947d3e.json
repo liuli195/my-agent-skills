@@ -1,0 +1,61 @@
+{
+  "schema": "comet.native.implementation-scope.v2",
+  "contractHash": "ba9d4fa6ae2cd22b753b2b3ceaef4d4f50972ccaba9a3119906c89f6a65f8b81",
+  "baselineProjectionRef": "runtime/evidence/snapshots/de4a53e7f4371131ecbe8f5813e64ccd0279bbd44a365198fd8dbdb7c07af63d.json",
+  "baselineProjectionHash": "de4a53e7f4371131ecbe8f5813e64ccd0279bbd44a365198fd8dbdb7c07af63d",
+  "currentProjectionRef": "runtime/evidence/snapshots/2bf4120ed94e141397215d7f253fce2fef2ff8bd1d48a93e0d72b21b4df158da.json",
+  "currentProjectionHash": "2bf4120ed94e141397215d7f253fce2fef2ff8bd1d48a93e0d72b21b4df158da",
+  "complete": true,
+  "declaredArtifacts": [
+    {
+      "path": "plugins/pi-codex-usage-status/extensions/pi-codex-usage-status.ts",
+      "kind": "file"
+    },
+    {
+      "path": "tests/pi_codex_usage_status.test.mjs",
+      "kind": "file"
+    }
+  ],
+  "changes": [
+    {
+      "path": "plugins/pi-codex-usage-status/extensions/pi-codex-usage-status.ts",
+      "kind": "modified",
+      "before": {
+        "hash": "efe4e6931a7e15606e149e20489fb4abfe1d09938501d5d5d58afcd38d41cc1f",
+        "size": 3504
+      },
+      "after": {
+        "hash": "d8cd6f18cc76cf67452b738b776c682b4ff5f2221d050f9e9831c4d347288db0",
+        "size": 3809
+      },
+      "attributedTo": [
+        {
+          "path": "plugins/pi-codex-usage-status/extensions/pi-codex-usage-status.ts",
+          "kind": "file"
+        }
+      ]
+    },
+    {
+      "path": "tests/pi_codex_usage_status.test.mjs",
+      "kind": "modified",
+      "before": {
+        "hash": "062f1eb0e3bf017311d6bcedc0c7800d4e49f8911ca28f898e969b1abd388856",
+        "size": 16254
+      },
+      "after": {
+        "hash": "2ad2a4975f9e3691d8585cd0c2c7dc4c6fc988ef87eb82d664240541bc2efcd3",
+        "size": 16439
+      },
+      "attributedTo": [
+        {
+          "path": "tests/pi_codex_usage_status.test.mjs",
+          "kind": "file"
+        }
+      ]
+    }
+  ],
+  "unattributed": [],
+  "unresolvedScopes": [],
+  "noCodeReason": null,
+  "scopeHash": "b43c0d658267096e2029960ea67a54de36ca7f5486e7113e5c102910e2947d3e"
+}
