@@ -399,6 +399,12 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    'tests/test_codex_web_diagnostics.py::test_real_guard_differential_and_private_local_capture': (
+        'runs the original and patched JavaScript guard in Node to compare actual behavior and diagnostic persistence; function=test_real_guard_differential_and_private_local_capture'
+    ),
+    'tests/test_codex_web_diagnostics.py::test_public_cli_on_explicit_official_reference': (
+        'runs the public patch CLI on an explicitly supplied official bundle copy and checks its JavaScript syntax; function=test_public_cli_on_explicit_official_reference'
+    ),
     'tests/test_build_and_verify_cli.py::test_controlled_pack_rejects_unknown_package': (
         'covers the controlled package CLI rejecting an unknown package; function=test_controlled_pack_rejects_unknown_package'
     ),
