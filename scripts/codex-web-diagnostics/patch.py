@@ -12,18 +12,111 @@ import tempfile
 
 ORIGINAL_SHA256 = "3d0f23940ce651968a45538fc0afcea2260a8bbafd94f1244515e41085d1a656"
 ORIGINAL_MANIFEST_SHA256 = "668249153aa0af541afbc26b4b7930fad296ec61cfd9365f37ee6b76daaf1771"
+PREVIOUS_PATCH_SHA256 = "9fd465a3b4c957b37890962eaa06520f2092959d3ad0030a3dc1a2368bf3fbb6"
+SECOND_PATCH_SHA256 = "d405304507f61ef3e2cd3c65a770159526cb7f65e332a3e3eb2aa72b5f03fbf1"
+THIRD_PATCH_SHA256 = "0602eebd0ee1296f880bd733fc552449a35761c41cc40b9676cd2249c182e682"
+FOURTH_PATCH_SHA256 = "02fd9d4e79111afd6a7b42f6b7c0ecd389244288890844790a69de00fef1a8cb"
+FIFTH_PATCH_SHA256 = "de448563bbda99edc383dab5f1ab21298550fd54911a0b9ba766e806b1e76c96"
 PATCH_SOURCE = Path(__file__).with_name("conflict-diagnostic.js")
+LEGACY_PATCH_SOURCE = Path(__file__).with_name("conflict-diagnostic-v1.js")
 OLD_METHOD = 'changedCommittedBlockError(e,t,r){return new je("ChatGPT changed a completed text block that was already streamed to Codex",{reason:e,observedStart:t.sourceStart,observedEnd:t.sourceEnd,committedStart:r.sourceStart,committedEnd:r.sourceEnd,observedTextChars:t.text.length,committedTextChars:r.text.length})}'
 OLD_THROW = 'throw new k(f.message,{status:502,errorType:"server_error",code:"browser_stream_inconsistent",retryable:!1})'
 NEW_THROW = '{const diagnosticError=new k(f.message,{status:502,errorType:"server_error",code:"browser_stream_inconsistent",retryable:!1});diagnosticError.diagnostic=f.diagnostic;throw diagnosticError}'
 CAPTURE_ANCHOR = 'checkpoint:t,...r!==void 0?{error:ht(r instanceof Error?r.message:String(r))}:{},'
+COMPLETION_SHAPE = '''(()=>{
+  if (!["response-stalled-60s", "turn-failed", "turn-completed"].includes(diagnosticCheckpoint)) return;
+  const current = F.at(-1);
+  const currentRect = current?.getBoundingClientRect();
+  const shape = node => {
+    const part = element => ({tag:element.tagName.toLowerCase(),role:element.getAttribute("role"),
+      testId:element.getAttribute("data-testid"),classes:[...element.classList].slice(0,20),
+      classCount:element.classList.length,classesTruncated:element.classList.length>20});
+    const ancestors = [];
+    for (let parent=node.parentElement; parent && ancestors.length<5; parent=parent.parentElement) ancestors.push(part(parent));
+    const style = getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    const nearCurrent = Boolean(currentRect && Math.abs(rect.top-currentRect.bottom)<800
+      && Math.abs(rect.left-currentRect.left)<1000);
+    const uiAction = node.tagName==="BUTTON" && (Boolean(node.closest(".turn-action-controls"))
+      || node.matches(x) || Boolean(current?.parentElement?.contains(node) && !current.contains(node))
+      || Boolean(nearCurrent && !current?.contains(node)));
+    return {...part(node),type:node.getAttribute("type"),ancestors,
+      attributeNames:[...node.attributes].map(attribute=>attribute.name).slice(0,20),
+      withinCurrent:Boolean(current?.contains(node)),withinAssistant:Boolean(node.closest(y)),
+      nearCurrent,
+      visible:node.isConnected && style.display!=="none" && style.visibility!=="hidden"
+        && style.opacity!=="0" && node.getClientRects().length>0,
+      disabled:Boolean(node.disabled),ariaDisabled:node.getAttribute("aria-disabled"),
+      ariaHidden:node.getAttribute("aria-hidden"),uiAction,
+      ariaLabel:uiAction?node.getAttribute("aria-label"):null,
+      title:uiAction?node.getAttribute("title"):null,
+      selectorHits:{configured:node.matches(x),copyAction:node.matches('button[data-testid="copy-turn-action-button"]'),
+        actionContainer:Boolean(node.closest(".turn-action-controls"))},
+      ariaLabelChars:(node.getAttribute("aria-label")??"").length,
+      titleChars:(node.getAttribute("title")??"").length,textChars:(node.textContent??"").length};
+  };
+  const candidateNodes = current ? [...current.querySelectorAll('button,[role="button"],[aria-label],[data-testid*="action"],[data-testid*="copy"]')] : [];
+  const candidates = candidateNodes.slice(-80);
+  const all = [...document.querySelectorAll(x)];
+  const surroundingNodes = current?.parentElement
+    ? [...current.parentElement.querySelectorAll('button,[role="button"],[aria-label],[data-testid*="action"],[data-testid*="copy"]')]
+    : [];
+  const surrounding = surroundingNodes.slice(-80);
+  const currentMatches = current?.querySelectorAll(x).length??0;
+  const globalFallbackNodes = currentMatches===0
+    ? [...document.querySelectorAll('button,[role="button"],[aria-label],[data-testid*="action"],[data-testid*="copy"]')]
+    : [];
+  const globalFallback = currentRect
+    ? globalFallbackNodes.map(node=>({node,rect:node.getBoundingClientRect()}))
+      .sort((a,b)=>Math.abs(a.rect.top-currentRect.bottom)-Math.abs(b.rect.top-currentRect.bottom))
+      .slice(0,80).map(item=>item.node)
+    : globalFallbackNodes.slice(-80);
+  return {response:{textChars:(current?.textContent??"").length,htmlChars:current?.innerHTML.length??0,
+      visibleTextChars:(current?.innerText??"").length,rawAnswer:current?.innerText??"",
+      lastMutationAt:globalThis.__CODEX_WEB_GPT_RESPONSE_OBSERVERS__?.states?.get(current)?.lastMutationAt??null,
+      matchedActionCount:currentMatches,
+      descriptors:candidates.map(shape),surroundingControls:surrounding.map(shape)},
+    currentTurnOrdinal:F.length-1,perAssistantActionCounts:F.map(turn=>turn.querySelectorAll(x).length),
+    candidateCounts:{currentTotal:candidateNodes.length,currentRetained:candidates.length,
+      surroundingTotal:surroundingNodes.length,surroundingRetained:surrounding.length,
+      globalMatchedTotal:all.length,globalMatchedRetained:Math.min(all.length,80),
+      globalFallbackTotal:globalFallbackNodes.length,globalFallbackRetained:globalFallback.length},
+    globalActions:{total:all.length,visible:all.filter(_).length,
+      copySelector:document.querySelectorAll('button[data-testid="copy-turn-action-button"]').length,
+      actionContainerSelector:document.querySelectorAll('[data-turn-key] .turn-action-controls button').length},
+    globalMatchedControls:all.slice(-80).map(shape),
+    globalFallbackControls:globalFallback.map(shape),
+    overlays:[...document.querySelectorAll('[role="dialog"],[role="alert"],[role="status"]')].filter(_).slice(-20).map(shape)};
+})()'''
+STALL_CONTROLS_OLD = '''let i=o,a=[...i.querySelectorAll("[role], [data-testid], button, [aria-label]")].filter((s)=>{let c=getComputedStyle(s);return c.visibility!=="hidden"&&c.display!=="none"}).slice(-80).map((s)=>({tag:s.tagName.toLowerCase(),role:s.getAttribute("role"),testId:s.getAttribute("data-testid"),ariaLabelChars:s.getAttribute("aria-label")?.length??0,titleChars:s.getAttribute("title")?.length??0,textChars:(s.innerText??s.textContent??"").trim().length}));'''
+STALL_CONTROLS_NEW = '''let i=o,aNodes=[...i.querySelectorAll("[role], [data-testid], button, [aria-label]")],a=aNodes.slice(-80).map((s)=>{
+  let part=(node)=>({tag:node.tagName.toLowerCase(),role:node.getAttribute("role"),
+    testId:node.getAttribute("data-testid"),classes:[...node.classList].slice(0,20),
+    classCount:node.classList.length,classesTruncated:node.classList.length>20}),
+    parents=[],style=getComputedStyle(s);
+  for(let p=s.parentElement;p&&parents.length<5;p=p.parentElement)parents.push(part(p));
+  return {...part(s),type:s.getAttribute("type"),ancestors:parents,
+    attributeNames:[...s.attributes].map(attr=>attr.name).slice(0,20),
+    withinCurrent:true,withinAssistant:true,uiAction:Boolean(s.closest(".turn-action-controls")),
+    visible:s.isConnected&&style.display!=="none"&&style.visibility!=="hidden"
+      &&style.opacity!=="0"&&s.getClientRects().length>0,
+    disabled:Boolean(s.disabled),ariaDisabled:s.getAttribute("aria-disabled"),
+    ariaHidden:s.getAttribute("aria-hidden"),
+    selectorHits:{configured:s.matches(selectors.completion),
+      copyAction:s.matches('button[data-testid="copy-turn-action-button"]'),
+      actionContainer:Boolean(s.closest(".turn-action-controls"))},
+    ariaLabelChars:s.getAttribute("aria-label")?.length??0,
+    titleChars:s.getAttribute("title")?.length??0,
+    textChars:(s.innerText??s.textContent??"").trim().length};
+});'''
 
 
-def replacements() -> list[tuple[str, str]]:
+def replacements(*, legacy: bool = False) -> list[tuple[str, str]]:
     # Read normalized patch text so checkout line endings do not change the patch.
-    addition = PATCH_SOURCE.read_text(encoding="utf-8").replace("\r\n", "\n").rstrip() + "\n"
+    source = LEGACY_PATCH_SOURCE if legacy else PATCH_SOURCE
+    addition = source.read_text(encoding="utf-8").replace("\r\n", "\n").rstrip() + "\n"
     context = '{observed:e,pending:t,previousCommittedIndex:o}'
-    return [
+    edits = [
         ('class je extends Error', addition + 'class je extends Error'),
         (OLD_METHOD, 'changedCommittedBlockError(e,t,r,context){return codexWebConflictDiagnostic.call(this,e,t,r,context)}'),
         ('"text_changed",s,h)', '"text_changed",s,h,' + context + ')'),
@@ -32,11 +125,93 @@ def replacements() -> list[tuple[str, str]]:
         (OLD_THROW, NEW_THROW),
         (CAPTURE_ANCHOR, CAPTURE_ANCHOR + '...r?.diagnostic?.detail||r?.diagnostic?.detailCaptureFailed?{markdownConflict:r.diagnostic}:{},'),
     ]
+    if not legacy:
+        edits.extend([
+            ('async sendAttachedPrompt(e,t,r,n,o,i,a,s){let l=(await this.activeComposer(e)).locator("xpath=ancestor::form[1]").locator(Ar);await l.waitFor({state:"visible",timeout:ee.send}),await we();',
+             'async sendAttachedPrompt(e,t,r,n,o,i,a,s){codexWebSendStart(e,t.submittedText);let l=(await codexWebSendStep(e,"active_composer",()=>this.activeComposer(e))).locator("xpath=ancestor::form[1]").locator(Ar);await codexWebSendStep(e,"button_visible",()=>l.waitFor({state:"visible",timeout:ee.send})),await we();'),
+            ('if(await Ae(e),await ge(e),await l.isEnabled())break;',
+             'if(await codexWebSendStep(e,"button_session_check",()=>Ae(e)),await codexWebSendStep(e,"button_rate_limit_check",()=>ge(e)),await codexWebSendButtonCheck(e,()=>l.isEnabled()))break;'),
+            ('if(Date.now()>=h)throw await r?.("send-disabled"),Error("ChatGPT send button remained disabled after the complete prompt was attached");',
+             'if(Date.now()>=h)throw codexWebSendRecord(e,"button_disabled_timeout"),await r?.("send-disabled"),Error("ChatGPT send button remained disabled after the complete prompt was attached");'),
+            ('P=new Po,O=new ur,S=', 'P=new Po,O=codexWebBindReconciliation(new ur,w),S='),
+            ('reconcile(e){if(this.committed.length',
+             'reconcile(e){return codexWebReconcile(this,e,()=>this.codexWebOriginalReconcile(e))}codexWebOriginalReconcile(e){if(this.committed.length'),
+            ('committedIndex(e){let t=',
+             'committedIndex(e){return codexWebMatchDecision(this,e,this.codexWebOriginalCommittedIndex(e))}codexWebOriginalCommittedIndex(e){let t='),
+            ('matchesLatestPending(e){if(this.latest',
+             'matchesLatestPending(e){return codexWebMatchDecision(this,e,this.codexWebOriginalMatchesLatestPending(e),true)}codexWebOriginalMatchesLatestPending(e){if(this.latest'),
+            ('h,p,m,C=[],y=new xo;try{',
+             'h,p,m,C=[],y=new xo;codexWebJournalOpen(l,e.abortSignal);try{'),
+            ('async capture(e,t,r){try{',
+             'async capture(e,t,r){codexWebJournalBind(this,e);codexWebJournalTrace(this.traceId,"checkpoint_started",{checkpoint:t});try{'),
+            ('catch(b){if(!(b instanceof DOMException&&b.name==="AbortError")',
+             'catch(b){codexWebJournalTrace(e.traceId,"turn_catch",{kind:codexWebDiagnosticKind(b)});if(!(b instanceof DOMException&&b.name==="AbortError")'),
+            ('finally{if(y.dispose(),', 'finally{codexWebJournalClose(l);if(y.dispose(),'),
+            ('console.info(`[chatgpt-web] browser turn ${e} stage=${t} started`);',
+             'codexWebJournalTrace(e,"stage_started",{stage:t,budgetMs:r});console.info(`[chatgpt-web] browser turn ${e} stage=${t} started`);'),
+            ('h=!0,c.abort(),b(Error(`ChatGPT browser stage timed out: ${t}`))',
+             'h=!0,codexWebJournalTrace(e,"stage_timeout",{stage:t,budgetMs:r,elapsedMs:Math.round(performance.now()-a),suspendedMs:x}),c.abort(),b(Error(`ChatGPT browser stage timed out: ${t}`))'),
+            ('return console.info(`[chatgpt-web] browser turn ${e} stage=${t} completed',
+             'return codexWebJournalTrace(e,"stage_completed",{stage:t}),console.info(`[chatgpt-web] browser turn ${e} stage=${t} completed'),
+            ('catch(m){let C=m;if(h&&i&&p)',
+             'catch(m){codexWebJournalTrace(e,"stage_failed",{stage:t,kind:codexWebDiagnosticKind(m)});let C=m;if(h&&i&&p)'),
+            ('Mo=(e)=>{if(ko)return;ko=e,St()}',
+             'Mo=(e)=>{codexWebJournalAll("helper_transport_failed");if(ko)return;ko=e,St()}'),
+            ('let n=await Te(U(e.evaluate(', 'let n=await codexWebObserveSubmission(e,()=>Te(U(e.evaluate('),
+            ('),r)),o=n.snapshot??t?.snapshot', '),r))),o=n.snapshot??t?.snapshot'),
+            ('let a=n?.snapshot();if(a&&n&&i?.needs', 'let a=n?.snapshot();codexWebSendProgress(e,a);if(a&&n&&i?.needs'),
+            ('let c=await this.currentSubmissionAnswerText(e,t,r);',
+             'let c=await codexWebSendStep(e,"tool_answer_observation",()=>this.currentSubmissionAnswerText(e,t,r));'),
+            ('await n.acknowledgeToolBatch(a.lastToolBatchRevision)',
+             'await codexWebSendStep(e,"tool_batch_ack",()=>n.acknowledgeToolBatch(a.lastToolBatchRevision))'),
+            ('await Ae(e),await ge(e);',
+             'await codexWebSendStep(e,"session_check",()=>Ae(e)),await codexWebSendStep(e,"rate_limit_check",()=>ge(e));'),
+            ('let h=await U(Promise.race([',
+             'let h=await codexWebSendStep(e,"submission_race",()=>U(Promise.race(['),
+            (']),r);if(h.kind', ']),r));if(h.kind'),
+            ('if(a&&a.lastToolBatchRevision>o)return"mcp_tool_call";',
+             'if(a&&a.lastToolBatchRevision>o)return codexWebSendRecord(e,"tool_evidence"),"mcp_tool_call";'),
+            ('if(s)return s;await this.waitForTurnDomOrExternalProgress',
+             'if(s)return codexWebSendRecord(e,"dom_evidence",{kind:s}),s;await this.waitForTurnDomOrExternalProgress'),
+            ('await this.waitForTurnDomOrExternalProgress(e,a?.revision??0,n,r)',
+             'await codexWebSendStep(e,"external_wait",()=>this.waitForTurnDomOrExternalProgress(e,a?.revision??0,n,r))'),
+            ('if(l+=1,l>dt)throw Error(`ChatGPT submission DOM remained unresponsive after ${dt} same-page rebinds`,{cause:h});let p=await a(l,h,c,r);s=p.page,c=p.baseline',
+             'if(l+=1,codexWebSendRecord(s,"dom_rebind_attempt",{count:l}),l>dt)throw Error(`ChatGPT submission DOM remained unresponsive after ${dt} same-page rebinds`,{cause:h});let p=await a(l,h,c,r);codexWebSendMove(s,p.page);s=p.page,c=p.baseline'),
+            ('await r?.("send-ready");let p=o?.snapshot().lastToolBatchRevision??0;await i?.onSendActivated?.(),await l.press("Enter",{noWaitAfter:!0,signal:n,timeout:0});let m=await this.waitForSubmissionAcceptedWithRecovery(e,t,n,o,p,a,s);return await i?.onSubmitted?.(),m',
+             'await codexWebSendStep(e,"ready_capture",()=>r?.("send-ready"));codexWebSendRecord(e,"baseline",{userTurns:t.domCache?.snapshot?.userTurnCount??null,assistantTurns:t.domCache?.snapshot?.assistantTurnCount??null,composerChars:t.domCache?.snapshot?.composerChars??null});let p=o?.snapshot().lastToolBatchRevision??0;codexWebSendRecord(e,"activation_started");try{await i?.onSendActivated?.()}catch(error){codexWebSendRecord(e,"activation_failed",{kind:error?.name==="AbortError"?"aborted":"other"});throw error}codexWebSendRecord(e,"activation_completed");codexWebSendRecord(e,"press_started");try{await l.press("Enter",{noWaitAfter:!0,signal:n,timeout:0})}catch(error){codexWebSendRecord(e,"press_failed",{kind:error?.name==="AbortError"?"aborted":"other"});throw error}codexWebSendRecord(e,"press_completed");let m;try{m=await this.waitForSubmissionAcceptedWithRecovery(e,t,n,o,p,a,s)}catch(error){codexWebSendRecord(e,"submission_failed",{kind:error?.name==="AbortError"?"aborted":error?.name==="ChatGptBrowserObservationTimeoutError"?"dom_timeout":"other"});throw error}codexWebSendRecord(e,"submission_confirmed",{kind:m});return await i?.onSubmitted?.(),m'),
+            ('snapshot:{userTurnCount:y.length,assistantTurnCount:b.length,visibleStopButtonCount:',
+             'snapshot:{composerChars:(()=>{let q=document.querySelector(i.composerSelector);return(q instanceof HTMLTextAreaElement||q instanceof HTMLInputElement?q.value:q?.textContent??"").length})(),userTurnCount:y.length,assistantTurnCount:b.length,visibleStopButtonCount:'),
+            ('attributeFilter:[...Dr]}),r))', 'attributeFilter:[...Dr],composerSelector:Ve}),r))'),
+            ('return o}async currentSubmissionEvidence(',
+             'codexWebSendRecord(e,"dom_state",{userTurns:o.userTurnCount,assistantTurns:o.assistantTurnCount,composerChars:o.composerChars,visibleStopButtons:o.visibleStopButtonCount});return o}async currentSubmissionEvidence('),
+            (CAPTURE_ANCHOR + '...r?.diagnostic?.detail||r?.diagnostic?.detailCaptureFailed?{markdownConflict:r.diagnostic}:{},',
+             CAPTURE_ANCHOR + '...r?.diagnostic?.detail||r?.diagnostic?.detailCaptureFailed?{markdownConflict:r.diagnostic}:{},...codexWebSendCapture(e)&&["send-accepted","turn-failed","turn-completed"].includes(t)?{sendDiagnostic:codexWebSendCapture(e)}:{},...codexWebCompletionCapture(e)&&["response-stalled-60s","turn-failed","turn-completed"].includes(t)?{completionDiagnostic:codexWebCompletionCapture(e)}:{},'),
+            ('d.observer=new MutationObserver(()=>{d.revision+=1})',
+             'd.observer=new MutationObserver(()=>{d.revision+=1,d.lastMutationAt=Date.now()})'),
+            ('let r=await t.count()?await t.evaluate((o)=>{',
+             'let r=await t.count()?await t.evaluate((o,selectors)=>{'),
+            (STALL_CONTROLS_OLD, STALL_CONTROLS_NEW),
+            ('return{textChars:(i.innerText??i.textContent??"").trim().length,htmlChars:i.innerHTML.length,descriptors:a}}):{text:"",descriptors:[]}',
+             'return{textChars:(i.innerText??i.textContent??"").trim().length,htmlChars:i.innerHTML.length,descriptors:a,targetCandidateCounts:{total:aNodes.length,retained:a.length},rawAnswer:(i.innerText??i.textContent??"").trim(),lastMutationAt:globalThis.__CODEX_WEB_GPT_RESPONSE_OBSERVERS__?.states?.get(i)?.lastMutationAt??null,matchedActionCount:i.querySelectorAll(selectors.completion).length,targetTurnOrdinal:[...document.querySelectorAll(selectors.assistant)].indexOf(i),targetIsLastAssistant:[...document.querySelectorAll(selectors.assistant)].at(-1)===i}},{completion:Sr,assistant:ct}):{text:"",descriptors:[]}'),
+            ('return ht(JSON.stringify({response:r,overlays:n}))}async runExclusive(',
+             'let v=await e.locator(Sr).evaluateAll((controls)=>({total:controls.length,visible:controls.filter((item)=>{let style=getComputedStyle(item);return style.display!=="none"&&style.visibility!=="hidden"}).length})).catch(()=>null);if(r.rawAnswer!==void 0){r.answerFingerprint=Xe.createHmac("sha256",Xe.randomBytes(32)).update(r.rawAnswer).digest("hex");delete r.rawAnswer}return ht(JSON.stringify({response:r,overlays:n,globalActions:v}))}async runExclusive('),
+            ('d=!0,await l.capture(w,"response-stalled-60s");let re=await this.stalledTurnDiagnostic(w,me.locator).catch((j)=>JSON.stringify({diagnosticError:j instanceof Error?j.message:String(j)}));console.warn(',
+             'd=!0;let re=await this.stalledTurnDiagnostic(w,me.locator).catch((j)=>JSON.stringify({diagnosticError:j instanceof Error?j.message:String(j)}));codexWebStoreCompletion(w,re);await l.capture(w,"response-stalled-60s");console.warn('),
+            ('return{location:{origin:be.origin',
+             'return{__completionShape:' + COMPLETION_SHAPE + ',location:{origin:be.origin'),
+            ('completionActionSelector:x,appName:G})=>{',
+             'completionActionSelector:x,appName:G,checkpointName:diagnosticCheckpoint})=>{'),
+            ('completionActionSelector:Sr,appName:this.appName}))]),c=new Date().toISOString();',
+             'completionActionSelector:Sr,appName:this.appName,checkpointName:t}))]),c=new Date().toISOString();if(s.status==="fulfilled"&&s.value?.__completionShape){codexWebStoreCompletion(e,JSON.stringify(s.value.__completionShape));delete s.value.__completionShape}else if(["response-stalled-60s","turn-failed","turn-completed"].includes(t))codexWebStoreCompletion(e,JSON.stringify({diagnosticError:s.status==="rejected"&&s.reason?.name==="TimeoutError"?"timed out":"shape unavailable"}));'),
+        ])
+    if not legacy:
+        edits.append(('...r?.diagnostic?.detail||r?.diagnostic?.detailCaptureFailed?', '...r?.diagnostic?.detail||r?.diagnostic?.reconciliation||r?.diagnostic?.detailCaptureFailed?'))
+    return edits
 
 
-def transform(data: bytes, *, reverse: bool = False) -> bytes:
+def transform(data: bytes, *, reverse: bool = False, legacy: bool = False) -> bytes:
     text = data.decode("utf-8")
-    edits = replacements()
+    edits = replacements(legacy=legacy)
     for old, new in reversed(edits) if reverse else edits:
         before, after = (new, old) if reverse else (old, new)
         if text.count(before) != 1:
@@ -49,16 +224,21 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def inspect(data: bytes) -> tuple[str, bytes]:
+def inspect(data: bytes, original_hint: bytes | None = None) -> tuple[str, bytes]:
     if digest(data) == ORIGINAL_SHA256:
         return "original", data
-    try:
-        original = transform(data, reverse=True)
-    except (ValueError, UnicodeError):
-        raise ValueError("文件指纹不匹配：仅支持未经修改的 6.1.2 Windows x64 文件及本补丁。") from None
-    if digest(original) != ORIGINAL_SHA256:
-        raise ValueError("补丁之外的内容已发生变化；拒绝覆盖。")
-    return "patched", original
+    if digest(data) in (PREVIOUS_PATCH_SHA256, SECOND_PATCH_SHA256, THIRD_PATCH_SHA256, FOURTH_PATCH_SHA256, FIFTH_PATCH_SHA256):
+        if original_hint is not None and digest(original_hint) == ORIGINAL_SHA256:
+            return "previous_patch", original_hint
+        raise ValueError("上一版诊断补丁需要对应的官方原件备份；拒绝覆盖。")
+    for legacy, label in ((False, "patched"), (True, "legacy_patch")):
+        try:
+            original = transform(data, reverse=True, legacy=legacy)
+            if digest(original) == ORIGINAL_SHA256:
+                return label, original
+        except (ValueError, UnicodeError):
+            pass
+    raise ValueError("文件指纹不匹配：仅支持未经修改的 6.1.2 Windows x64 文件及本补丁。")
 
 
 def replace_file(target: Path, expected: bytes, content: bytes) -> None:
@@ -90,7 +270,7 @@ def operate(action: str, target: Path, backup: Path) -> str:
     if backup.is_relative_to(target.parent.parent):
         raise ValueError("备份必须放在版本目录之外，避免被启动器恢复程序时移除。")
     current = target.read_bytes()
-    state, original = inspect(current)
+    state, original = inspect(current, backup.read_bytes() if backup.is_file() else None)
     if backup.exists() and backup.read_bytes() != original:
         raise ValueError("已有备份不匹配；拒绝覆盖备份和目标。")
     if action == "check":
@@ -146,15 +326,15 @@ def operate_package(action: str, target: Path, backup: Path, manifest_path: Path
     if package.get("name") != "codex-chatgpt-web" or package.get("version") != "6.1.2":
         raise ValueError("目标软件名称或版本不匹配。")
     current_helper, current_manifest = target.read_bytes(), manifest_path.read_bytes()
-    helper_state, original_helper = inspect(current_helper)
+    helper_state, original_helper = inspect(current_helper, backup.read_bytes() if backup.is_file() else None)
     if digest(current_manifest) == ORIGINAL_MANIFEST_SHA256:
         manifest_state, original_manifest = "original", current_manifest
     elif manifest_backup.is_file() and digest(manifest_backup.read_bytes()) == ORIGINAL_MANIFEST_SHA256:
         original_manifest = manifest_backup.read_bytes()
-        manifest_state = "patched" if current_manifest == patched_manifest(original_manifest, transform(original_helper)) else "unknown"
+        manifest_state = "patched" if current_manifest == patched_manifest(original_manifest, current_helper) else "unknown"
     else:
         raise ValueError("清单不是官方原件或本补丁生成的清单；拒绝覆盖。")
-    if manifest_state == "unknown" or helper_state != manifest_state:
+    if manifest_state == "unknown" or (helper_state == "original") != (manifest_state == "original"):
         raise ValueError("程序文件与清单状态不一致；拒绝覆盖。")
     if backup.exists() and backup.read_bytes() != original_helper:
         raise ValueError("程序文件备份不匹配。")
