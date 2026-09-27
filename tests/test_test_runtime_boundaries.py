@@ -399,6 +399,21 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    'tests/test_codex_web_diagnostics.py::test_send_button_wait_records_disabled_state_without_writing_every_poll': (
+        'runs the real Node journal to verify disabled-button polling and bounded disk writes; function=test_send_button_wait_records_disabled_state_without_writing_every_poll'
+    ),
+    'tests/test_codex_web_diagnostics.py::test_reconciliation_history_and_anonymous_replay': (
+        'compares the real upstream matcher with anonymous replay and runs the offline replay CLI; function=test_reconciliation_history_and_anonymous_replay'
+    ),
+    'tests/test_codex_web_diagnostics.py::test_live_send_lifecycle_and_disk_failure_preserve_original_behavior': (
+        'exercises real Node file writes, lifecycle cleanup and failed atomic replacement; function=test_live_send_lifecycle_and_disk_failure_preserve_original_behavior'
+    ),
+    'tests/test_codex_web_diagnostics.py::test_official_stage_timeout_records_before_pending_operation_returns': (
+        'runs the patched official stage timeout while a send operation never settles; function=test_official_stage_timeout_records_before_pending_operation_returns'
+    ),
+    'tests/test_codex_web_diagnostics.py::test_send_and_completion_evidence_is_bounded_private_and_failure_safe': (
+        'runs bounded private send and completion evidence in Node, including a failed DOM read; function=test_send_and_completion_evidence_is_bounded_private_and_failure_safe'
+    ),
     'tests/test_codex_web_diagnostics.py::test_real_guard_differential_and_private_local_capture': (
         'runs the original and patched JavaScript guard in Node to compare actual behavior and diagnostic persistence; function=test_real_guard_differential_and_private_local_capture'
     ),
