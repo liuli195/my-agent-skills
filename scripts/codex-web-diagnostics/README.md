@@ -26,27 +26,31 @@
 
 ## 应用与撤回
 
-安装到用户环境需要另行授权。先启动工具，等初始化完成，确认没有运行中的任务，再执行；不要与启动、升级或另一份补丁脚本同时操作。脚本不会启停进程，也不能替用户确认任务空闲。
+先确认没有运行中的任务；不要与启动、升级或另一份补丁脚本同时操作。脚本不会启停进程，也不能替用户确认任务空闲。
 
-以下命令在本仓库根目录的 PowerShell（命令窗口）中执行。根据实际安装位置调整目标。
+持久应用时，应修改安装目录中的程序文件及同包的校验清单。以下命令在本仓库根目录的 PowerShell（命令窗口）中执行。根据实际安装位置调整目标。
 
 ```powershell
-$diagnosticTarget = "$env:USERPROFILE\.codex-chatgpt-web\versions\6.1.2-win32-x64\app\browser-helper.cjs"
-$diagnosticBackup = "$env:USERPROFILE\.codex-chatgpt-web\diagnostic-backups\6.1.2-browser-helper.original"
+$diagnosticRoot = "$env:LOCALAPPDATA\Programs\Codex Web GPT\resources\runtime"
+$diagnosticTarget = "$diagnosticRoot\app\browser-helper.cjs"
+$diagnosticManifest = "$diagnosticRoot\manifest.json"
+$diagnosticBackup = "$env:USERPROFILE\.codex-chatgpt-web\diagnostic-backups\6.1.2-package-browser-helper.original"
+$diagnosticManifestBackup = "$env:USERPROFILE\.codex-chatgpt-web\diagnostic-backups\6.1.2-package-manifest.original"
 
-python scripts/codex-web-diagnostics/patch.py check --target $diagnosticTarget --backup $diagnosticBackup
-python scripts/codex-web-diagnostics/patch.py apply --target $diagnosticTarget --backup $diagnosticBackup
-python scripts/codex-web-diagnostics/patch.py check --target $diagnosticTarget --backup $diagnosticBackup
+$diagnosticArgs = @('--target', $diagnosticTarget, '--backup', $diagnosticBackup, '--manifest', $diagnosticManifest, '--manifest-backup', $diagnosticManifestBackup)
+python scripts/codex-web-diagnostics/patch.py check @diagnosticArgs
+python scripts/codex-web-diagnostics/patch.py apply @diagnosticArgs
+python scripts/codex-web-diagnostics/patch.py check @diagnosticArgs
 
-# 撤回；保留备份，以便核对及再次应用。
-python scripts/codex-web-diagnostics/patch.py restore --target $diagnosticTarget --backup $diagnosticBackup
+# 撤回；保留两份备份，以便核对及再次应用。
+python scripts/codex-web-diagnostics/patch.py restore @diagnosticArgs
 ```
 
-检查不写文件；应用前保存原件，重复应用不叠加；撤回只接受原文件或本补丁产生的文件。若目标或备份有其他修改，脚本停止，避免覆盖。备份必须在版本目录外。
+检查不写文件；应用前保存原件和原始清单，重复应用不叠加；撤回同时恢复两份文件。若目标、清单或备份有其他修改，脚本停止。备份必须在运行包目录外。
 
-**启动器会在下次启动时校验版本目录，并恢复官方程序文件。**本补丁不修改校验清单或绕过校验。重新启动后须检查补丁状态，必要时在空闲时重新应用。升级后旧补丁不能直接使用。
+**启动器会在下次启动时校验安装目录和版本目录，并从安装目录同步运行包。**本补丁更新安装包清单里的目标文件指纹和包标识，使启动器的原生校验通过。软件升级后须重新核对版本；旧补丁不能直接套用新版本。
 
-补丁只能影响之后从磁盘加载的新浏览器处理进程；已经运行的进程不会自动更新。实际应用后必须通过下一次真实任务的诊断记录确认生效，不能只凭文件已修改认定生效。
+补丁只能影响之后从磁盘加载的新浏览器处理进程；已经运行的进程不会自动更新。应用后须在任务空闲时重启启动器，核对运行目录与实际进程，再通过下一次冲突的诊断记录确认生效。
 
 ## 收集证据
 
@@ -61,8 +65,8 @@ python scripts/codex-web-diagnostics/patch.py restore --target $diagnosticTarget
 统一通过仓库 Build and Verify（构建与验证）入口执行：
 
 ```powershell
-# 可选：明确提供官方文件，仅复制到临时目录测试，不修改安装文件。
-$env:CODEX_WEB_DIAGNOSTICS_REFERENCE = $diagnosticTarget
+# 可选：明确提供未修改的官方程序文件，且同目录有官方 package.json。
+$env:CODEX_WEB_DIAGNOSTICS_REFERENCE = '官方运行包\app\browser-helper.cjs'
 build-and-verify verify --project .
 Remove-Item Env:CODEX_WEB_DIAGNOSTICS_REFERENCE
 ```

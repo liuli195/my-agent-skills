@@ -177,3 +177,36 @@ def test_public_cli_on_explicit_official_reference(tmp_path):
             assert syntax.returncode == 0, syntax.stderr
     assert target.read_bytes() == original
     assert source.read_bytes() == original
+
+
+def test_package_manifest_apply_repeat_restore_and_mismatch(sample, tmp_path, monkeypatch):
+    target, backup, original = sample
+    manifest_path = target.parent.parent / "manifest.json"
+    manifest_backup = tmp_path / "backup/manifest.original"
+    files = [{"path": "app/browser-helper.cjs", "size": len(original), "sha256": patch.digest(original)}]
+    manifest = {"schemaVersion": 2, "appVersion": "6.1.2", "files": files}
+    bundle = __import__("hashlib").sha256()
+    for file in files:
+        for field in (file["path"], "\0", str(file["size"]), "\0", file["sha256"], "\0"):
+            bundle.update(field.encode())
+    manifest["bundleId"] = bundle.hexdigest()
+    official = (json.dumps(manifest, indent=2) + "\n").encode()
+    manifest_path.write_bytes(official)
+    monkeypatch.setattr(patch, "ORIGINAL_MANIFEST_SHA256", patch.digest(official))
+    args = (target, backup, manifest_path, manifest_backup)
+    assert patch.operate_package("check", *args) == "original"
+    assert patch.operate_package("apply", *args) == "applied"
+    assert patch.operate_package("apply", *args) == "already_patched"
+    assert patch.operate_package("check", *args) == "patched"
+    assert backup.read_bytes() == original
+    assert manifest_backup.read_bytes() == official
+    changed = json.loads(manifest_path.read_text())
+    assert changed["files"][0]["sha256"] == patch.digest(target.read_bytes())
+    assert changed["files"][0]["size"] == target.stat().st_size
+    manifest_path.write_bytes(official)
+    with pytest.raises(ValueError, match="状态不一致"):
+        patch.operate_package("apply", *args)
+    manifest_path.write_bytes(patch.patched_manifest(official, target.read_bytes()))
+    assert patch.operate_package("restore", *args) == "restored"
+    assert target.read_bytes() == original
+    assert manifest_path.read_bytes() == official
