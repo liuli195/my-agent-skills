@@ -1,4 +1,4 @@
-"""Apply/revert a diagnostic-only patch to an explicitly selected 6.1.2 helper."""
+"""Apply/revert a diagnostic-only patch to a verified 6.1.2 or 6.1.3 helper."""
 from __future__ import annotations
 
 import argparse
@@ -12,6 +12,8 @@ import tempfile
 
 ORIGINAL_SHA256 = "3d0f23940ce651968a45538fc0afcea2260a8bbafd94f1244515e41085d1a656"
 ORIGINAL_MANIFEST_SHA256 = "668249153aa0af541afbc26b4b7930fad296ec61cfd9365f37ee6b76daaf1771"
+ORIGINAL_613_SHA256 = "3110a8cd52821ae1a61e5001b8ff91097dc744ec2b13ee17f270a20e5cc25944"
+ORIGINAL_613_MANIFEST_SHA256 = "dd20c850a6c2604b61df70488d6359b1d0b8e50023917bc0ec2c9ffd53cbdaf3"
 PREVIOUS_PATCH_SHA256 = "9fd465a3b4c957b37890962eaa06520f2092959d3ad0030a3dc1a2368bf3fbb6"
 SECOND_PATCH_SHA256 = "d405304507f61ef3e2cd3c65a770159526cb7f65e332a3e3eb2aa72b5f03fbf1"
 THIRD_PATCH_SHA256 = "0602eebd0ee1296f880bd733fc552449a35761c41cc40b9676cd2249c182e682"
@@ -209,9 +211,44 @@ def replacements(*, legacy: bool = False) -> list[tuple[str, str]]:
     return edits
 
 
-def transform(data: bytes, *, reverse: bool = False, legacy: bool = False) -> bytes:
+def replacements_613() -> list[tuple[str, str]]:
+    """Adapt only the verified 6.1.3 bundle anchors; retain 6.1.2 behavior."""
+    edits = replacements()
+    edits[5] = (
+        'throw new S(g.message,{status:502,errorType:"server_error",code:"browser_stream_inconsistent",retryable:!1})',
+        '{const diagnosticError=new S(g.message,{status:502,errorType:"server_error",code:"browser_stream_inconsistent",retryable:!1});diagnosticError.diagnostic=g.diagnostic;throw diagnosticError}',
+    )
+    edits[7] = tuple(value.replace('ee.send', 'te.send').replace('await we()', 'await be()') for value in edits[7])
+    edits[8] = tuple(value.replace('Ae(e)', 'Se(e)').replace('ge(e)', 'we(e)') for value in edits[8])
+    edits[10] = ('L=new Po,H=new ur,C=', 'L=new Po,H=codexWebBindReconciliation(new ur,w),C=')
+    edits[14] = ('h,p,m,T=[],x=new xo;try{',
+                 'h,p,m,T=[],x=new xo;codexWebJournalOpen(l,e.abortSignal);try{')
+    edits[17] = ('finally{if(x.dispose(),', 'finally{codexWebJournalClose(l);if(x.dispose(),')
+    edits[21] = ('catch(m){let T=m;if(h&&i&&p)',
+                 'catch(m){codexWebJournalTrace(e,"stage_failed",{stage:t,kind:codexWebDiagnosticKind(m)});let T=m;if(h&&i&&p)')
+    edits[23] = tuple(value.replace('Te(U(e.evaluate(', 'xe(U(e.evaluate(') for value in edits[23])
+    edits[28] = tuple(value.replace('Ae(e)', 'Se(e)').replace('ge(e)', 'we(e)') for value in edits[28])
+    edits[36] = tuple(value.replace('userTurnCount:y.length', 'userTurnCount:x.length') for value in edits[36])
+    edits[45] = (
+        'd=!0,await l.capture(w,"response-stalled-60s");let oe=await this.stalledTurnDiagnostic(w,fe.locator).catch((K)=>JSON.stringify({diagnosticError:K instanceof Error?K.message:String(K)}));console.warn(',
+        'd=!0;let oe=await this.stalledTurnDiagnostic(w,fe.locator).catch((K)=>JSON.stringify({diagnosticError:K instanceof Error?K.message:String(K)}));codexWebStoreCompletion(w,oe);await l.capture(w,"response-stalled-60s");console.warn(',
+    )
+    shape = (COMPLETION_SHAPE.replace('node.matches(x)', 'node.matches(v)')
+             .replace('node.closest(y)', 'node.closest(x)')
+             .replace('querySelectorAll(x)', 'querySelectorAll(v)')
+             .replace('all.filter(_)', 'all.filter(E)')
+             .replace(".filter(_).slice(-20)", ".filter(E).slice(-20)"))
+    edits[46] = ('return{location:{origin:Ce.origin',
+                 'return{__completionShape:' + shape + ',location:{origin:Ce.origin')
+    edits[47] = ('completionActionSelector:v,appName:R})=>{',
+                 'completionActionSelector:v,appName:R,checkpointName:diagnosticCheckpoint})=>{')
+    return edits
+
+
+def transform(data: bytes, *, reverse: bool = False, legacy: bool = False,
+              version: str = "6.1.2") -> bytes:
     text = data.decode("utf-8")
-    edits = replacements(legacy=legacy)
+    edits = replacements_613() if version == "6.1.3" else replacements(legacy=legacy)
     for old, new in reversed(edits) if reverse else edits:
         before, after = (new, old) if reverse else (old, new)
         if text.count(before) != 1:
@@ -224,21 +261,27 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def inspect(data: bytes, original_hint: bytes | None = None) -> tuple[str, bytes]:
-    if digest(data) == ORIGINAL_SHA256:
+def inspect(data: bytes, original_hint: bytes | None = None,
+            version: str = "6.1.2") -> tuple[str, bytes]:
+    original_hash = ORIGINAL_613_SHA256 if version == "6.1.3" else ORIGINAL_SHA256
+    if digest(data) == original_hash:
         return "original", data
-    if digest(data) in (PREVIOUS_PATCH_SHA256, SECOND_PATCH_SHA256, THIRD_PATCH_SHA256, FOURTH_PATCH_SHA256, FIFTH_PATCH_SHA256):
-        if original_hint is not None and digest(original_hint) == ORIGINAL_SHA256:
+    if digest(data) in (ORIGINAL_SHA256, ORIGINAL_613_SHA256):
+        raise ValueError("目标软件版本与程序文件不匹配。")
+    if version == "6.1.2" and digest(data) in (PREVIOUS_PATCH_SHA256, SECOND_PATCH_SHA256,
+            THIRD_PATCH_SHA256, FOURTH_PATCH_SHA256, FIFTH_PATCH_SHA256):
+        if original_hint is not None and digest(original_hint) == original_hash:
             return "previous_patch", original_hint
         raise ValueError("上一版诊断补丁需要对应的官方原件备份；拒绝覆盖。")
-    for legacy, label in ((False, "patched"), (True, "legacy_patch")):
+    candidates = ((False, "patched"),) if version == "6.1.3" else ((False, "patched"), (True, "legacy_patch"))
+    for legacy, label in candidates:
         try:
-            original = transform(data, reverse=True, legacy=legacy)
-            if digest(original) == ORIGINAL_SHA256:
+            original = transform(data, reverse=True, legacy=legacy, version=version)
+            if digest(original) == original_hash:
                 return label, original
         except (ValueError, UnicodeError):
             pass
-    raise ValueError("文件指纹不匹配：仅支持未经修改的 6.1.2 Windows x64 文件及本补丁。")
+    raise ValueError(f"文件指纹不匹配：仅支持未经修改的 {version} Windows x64 文件及本补丁。")
 
 
 def replace_file(target: Path, expected: bytes, content: bytes) -> None:
@@ -265,18 +308,19 @@ def operate(action: str, target: Path, backup: Path) -> str:
     if target.name != "browser-helper.cjs":
         raise ValueError("目标必须是 browser-helper.cjs。")
     package = json.loads(target.with_name("package.json").read_text(encoding="utf-8"))
-    if package.get("name") != "codex-chatgpt-web" or package.get("version") != "6.1.2":
+    version = package.get("version")
+    if package.get("name") != "codex-chatgpt-web" or version not in ("6.1.2", "6.1.3"):
         raise ValueError("目标软件名称或版本不匹配。")
     if backup.is_relative_to(target.parent.parent):
         raise ValueError("备份必须放在版本目录之外，避免被启动器恢复程序时移除。")
     current = target.read_bytes()
-    state, original = inspect(current, backup.read_bytes() if backup.is_file() else None)
+    state, original = inspect(current, backup.read_bytes() if backup.is_file() else None, version)
     if backup.exists() and backup.read_bytes() != original:
         raise ValueError("已有备份不匹配；拒绝覆盖备份和目标。")
     if action == "check":
         return state
     if action == "apply":
-        patched = transform(original)
+        patched = transform(original, version=version)
         if not backup.exists():
             backup.parent.mkdir(parents=True, exist_ok=True)
             with backup.open("xb") as stream:
@@ -323,13 +367,15 @@ def operate_package(action: str, target: Path, backup: Path, manifest_path: Path
     if target.name != "browser-helper.cjs":
         raise ValueError("目标必须是 browser-helper.cjs。")
     package = json.loads(target.with_name("package.json").read_text(encoding="utf-8"))
-    if package.get("name") != "codex-chatgpt-web" or package.get("version") != "6.1.2":
+    version = package.get("version")
+    if package.get("name") != "codex-chatgpt-web" or version not in ("6.1.2", "6.1.3"):
         raise ValueError("目标软件名称或版本不匹配。")
     current_helper, current_manifest = target.read_bytes(), manifest_path.read_bytes()
-    helper_state, original_helper = inspect(current_helper, backup.read_bytes() if backup.is_file() else None)
-    if digest(current_manifest) == ORIGINAL_MANIFEST_SHA256:
+    helper_state, original_helper = inspect(current_helper, backup.read_bytes() if backup.is_file() else None, version)
+    original_manifest_hash = ORIGINAL_613_MANIFEST_SHA256 if version == "6.1.3" else ORIGINAL_MANIFEST_SHA256
+    if digest(current_manifest) == original_manifest_hash:
         manifest_state, original_manifest = "original", current_manifest
-    elif manifest_backup.is_file() and digest(manifest_backup.read_bytes()) == ORIGINAL_MANIFEST_SHA256:
+    elif manifest_backup.is_file() and digest(manifest_backup.read_bytes()) == original_manifest_hash:
         original_manifest = manifest_backup.read_bytes()
         manifest_state = "patched" if current_manifest == patched_manifest(original_manifest, current_helper) else "unknown"
     else:
@@ -353,7 +399,7 @@ def operate_package(action: str, target: Path, backup: Path, manifest_path: Path
                 stream.write(data)
                 stream.flush()
                 os.fsync(stream.fileno())
-    next_helper = transform(original_helper) if action == "apply" else original_helper
+    next_helper = transform(original_helper, version=version) if action == "apply" else original_helper
     next_manifest = patched_manifest(original_manifest, next_helper) if action == "apply" else original_manifest
     replace_file(target, current_helper, next_helper)
     try:

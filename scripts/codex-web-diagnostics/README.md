@@ -4,13 +4,13 @@
 
 ## 适用范围
 
-- `codex-chatgpt-web` 6.1.2，Windows x64（64 位系统）。
+- `codex-chatgpt-web` 6.1.2 或 6.1.3，Windows x64（64 位系统）。脚本按程序包版本选择精确补丁。
 - 目标：该版本的 `app/browser-helper.cjs`。
-- 原文件 SHA-256（文件指纹）：`3d0f23940ce651968a45538fc0afcea2260a8bbafd94f1244515e41085d1a656`。
+- 6.1.2 原文件 SHA-256（文件指纹）：`3d0f23940ce651968a45538fc0afcea2260a8bbafd94f1244515e41085d1a656`；6.1.3：`3110a8cd52821ae1a61e5001b8ff91097dc744ec2b13ee17f270a20e5cc25944`。
 - 需要 Python（脚本运行工具）3.10 或以上；不安装依赖。
 - 文件指纹不同、其他补丁已修改文件、软件名称或版本不匹配时停止，不能强行套用。
 
-`conflict-diagnostic.js` 保存诊断代码，`conflict-diagnostic-v1.js` 用于识别最早的单问题补丁，`patch.py` 通过固定文件指纹和原始备份识别上一版三问题补丁，并负责应用、检查和撤回。补丁仅面向上述已核对的打包文件。
+`conflict-diagnostic.js` 保存诊断代码，`conflict-diagnostic-v1.js` 用于识别 6.1.2 最早的单问题补丁，`patch.py` 通过固定文件指纹和原始备份识别各版本并负责应用、检查和撤回。6.1.3 保留上游对空块、代码块和写作卡片控件的修复；旧版本补丁不会直接套入新版本。补丁仅面向上述已核对的打包文件。
 
 ## 三类故障的取证位置和判断方法
 
@@ -31,7 +31,7 @@ node scripts/codex-web-diagnostics/replay.cjs '失败日志文件的绝对路径
 # 可选第三个参数：lastConsistent、firstConflict、finalConflict（默认）。
 ```
 
-重放运行仓库保存的 6.1.2 原始匹配代码，输出一致性、错误原因、待输出数量及对应表；拒绝缺失或截断的输入。匿名数据保留文字相同关系、空白判断及链接顺序，但不能重建回答。后续可据此对照候选修复，检查重复短句、真实移位、改写和标识变化。
+重放运行仓库保存的原始匹配代码（6.1.2 与 6.1.3 的匹配逻辑相同），输出一致性、错误原因、待输出数量及对应表；拒绝缺失或截断的输入。匿名数据保留文字相同关系、空白判断及链接顺序，但不能重建回答。后续可据此对照候选修复，检查重复短句、真实移位、改写和标识变化。
 
 ### #359：页面已有回答但没有完成信号
 
@@ -61,8 +61,8 @@ node scripts/codex-web-diagnostics/replay.cjs '失败日志文件的绝对路径
 $diagnosticRoot = "$env:LOCALAPPDATA\Programs\Codex Web GPT\resources\runtime"
 $diagnosticTarget = "$diagnosticRoot\app\browser-helper.cjs"
 $diagnosticManifest = "$diagnosticRoot\manifest.json"
-$diagnosticBackup = "$env:USERPROFILE\.codex-chatgpt-web\diagnostic-backups\6.1.2-package-browser-helper.original"
-$diagnosticManifestBackup = "$env:USERPROFILE\.codex-chatgpt-web\diagnostic-backups\6.1.2-package-manifest.original"
+$diagnosticBackup = "$env:USERPROFILE\.codex-chatgpt-web\diagnostic-backups\6.1.3-package-browser-helper.original"
+$diagnosticManifestBackup = "$env:USERPROFILE\.codex-chatgpt-web\diagnostic-backups\6.1.3-package-manifest.original"
 
 $diagnosticArgs = @('--target', $diagnosticTarget, '--backup', $diagnosticBackup, '--manifest', $diagnosticManifest, '--manifest-backup', $diagnosticManifestBackup)
 python scripts/codex-web-diagnostics/patch.py check @diagnosticArgs
@@ -94,12 +94,14 @@ python scripts/codex-web-diagnostics/patch.py restore @diagnosticArgs
 ```powershell
 # 可选：明确提供未修改的官方程序文件，且同目录有官方 package.json。
 $env:CODEX_WEB_DIAGNOSTICS_REFERENCE = '官方运行包\app\browser-helper.cjs'
+$env:CODEX_WEB_DIAGNOSTICS_REFERENCE_613 = '6.1.3 官方运行包\app\browser-helper.cjs'
 build-and-verify verify --project .
 Remove-Item Env:CODEX_WEB_DIAGNOSTICS_REFERENCE
+Remove-Item Env:CODEX_WEB_DIAGNOSTICS_REFERENCE_613
 ```
 
-检查项 `verify.codex-web-diagnostics` 覆盖应用、重复应用、从旧补丁升级、撤回、不兼容拒绝、备份保护、写入失败、原版与补丁版的判定对照、诊断故障隔离、隐私和记录条数边界。提供原文件时，还会从真实脚本入口对官方程序副本应用、升级和撤回，并检查完整程序语法。
+检查项 `verify.codex-web-diagnostics` 覆盖应用、重复应用、从旧补丁升级、撤回、不兼容拒绝、备份保护、写入失败、原版与补丁版的判定对照、诊断故障隔离、隐私和记录条数边界。提供两版原文件时，还会从真实脚本入口分别对官方程序副本应用和撤回，并检查完整程序语法。
 
 临时目录中的验证不等于客户端真实任务验证。安装与真实客户端验证须另行确认；未复现的网页现场原因仍然未知。
 
-上游参考：[6.1.2 发布记录](https://github.com/miuuyy/codex-chatgpt-web/releases/tag/v6.1.2)。
+上游参考：[6.1.2 发布记录](https://github.com/miuuyy/codex-chatgpt-web/releases/tag/v6.1.2)、[6.1.3 发布记录](https://github.com/miuuyy/codex-chatgpt-web/releases/tag/v6.1.3)。
