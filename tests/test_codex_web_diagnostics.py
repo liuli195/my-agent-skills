@@ -208,9 +208,12 @@ def test_public_cli_on_explicit_official_reference(tmp_path):
     previous_reference = os.environ.get("CODEX_WEB_DIAGNOSTICS_PREVIOUS")
     if previous_reference:
         previous = Path(previous_reference).read_bytes()
-        assert patch.digest(previous) in (patch.PREVIOUS_PATCH_SHA256, patch.SECOND_PATCH_SHA256, patch.THIRD_PATCH_SHA256, patch.FOURTH_PATCH_SHA256, patch.FIFTH_PATCH_SHA256)
+        previous_state, previous_original = patch.inspect(previous, original)
+        assert previous_state in ("previous_patch", "patched")
+        assert previous_original == original
         target.write_bytes(previous)
-        for action, expected in [("check", "previous_patch"), ("apply", "applied"),
+        for action, expected in [("check", previous_state),
+                                 ("apply", "already_patched" if previous_state == "patched" else "applied"),
                                  ("check", "patched"), ("restore", "restored")]:
             result = subprocess.run([sys.executable, str(SCRIPT), action, "--target", str(target),
                                      "--backup", str(backup)], capture_output=True, text=True, encoding="utf-8")
@@ -228,11 +231,12 @@ def test_public_cli_on_explicit_official_reference(tmp_path):
                      "--manifest", str(manifest_path), "--manifest-backup", str(manifest_backup)]
         prior_versions = [(patch.transform(original, legacy=True), "legacy_patch")]
         if previous_reference:
-            prior_versions.append((previous, "previous_patch"))
+            prior_versions.append((previous, previous_state))
         for old_helper, old_status in prior_versions:
             target.write_bytes(old_helper)
             manifest_path.write_bytes(patch.patched_manifest(original_manifest, old_helper))
-            for action, expected in [("check", old_status), ("apply", "applied"),
+            for action, expected in [("check", old_status),
+                                     ("apply", "already_patched" if old_status == "patched" else "applied"),
                                      ("check", "patched"), ("restore", "restored")]:
                 result = subprocess.run([sys.executable, str(SCRIPT), action, *arguments],
                                         capture_output=True, text=True, encoding="utf-8")
@@ -240,6 +244,130 @@ def test_public_cli_on_explicit_official_reference(tmp_path):
                 assert json.loads(result.stdout)["status"] == expected
             assert target.read_bytes() == original
             assert manifest_path.read_bytes() == original_manifest
+
+
+def test_public_cli_on_official_613_package_copy(tmp_path):
+    reference = os.environ.get("CODEX_WEB_DIAGNOSTICS_REFERENCE_613")
+    if not reference:
+        pytest.skip("Set CODEX_WEB_DIAGNOSTICS_REFERENCE_613 for the 6.1.3 package smoke test")
+    source = Path(reference)
+    original = source.read_bytes()
+    assert patch.digest(original) == patch.ORIGINAL_613_SHA256
+    official_manifest = source.parent.parent / "manifest.json"
+    original_manifest = official_manifest.read_bytes()
+    assert patch.digest(original_manifest) == patch.ORIGINAL_613_MANIFEST_SHA256
+    target = tmp_path / "version/app/browser-helper.cjs"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(original)
+    target.with_name("package.json").write_bytes(source.with_name("package.json").read_bytes())
+    manifest = target.parent.parent / "manifest.json"
+    manifest.write_bytes(original_manifest)
+    backup = tmp_path / "backup/helper.original"
+    manifest_backup = tmp_path / "backup/manifest.original"
+    arguments = ["--target", str(target), "--backup", str(backup),
+                 "--manifest", str(manifest), "--manifest-backup", str(manifest_backup)]
+    for action, expected in [("check", "original"), ("apply", "applied"),
+                             ("apply", "already_patched"), ("check", "patched")]:
+        result = subprocess.run([sys.executable, str(SCRIPT), action, *arguments],
+                                capture_output=True, text=True, encoding="utf-8")
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout)["status"] == expected
+    patched = target.read_bytes()
+    assert patched == patch.transform(original, version="6.1.3")
+    assert patch.transform(patched, reverse=True, version="6.1.3") == original
+    assert manifest.read_bytes() == patch.patched_manifest(original_manifest, patched)
+    assert b"codexWebSendStart" in patched and b"codexWebPersistReconciliation" in patched
+    assert b"codexWebStoreCompletion" in patched
+    syntax = subprocess.run(["node", "--check", str(target)], capture_output=True, text=True)
+    assert syntax.returncode == 0, syntax.stderr
+    target.write_bytes(patched + b"// unexpected change")
+    rejected = subprocess.run([sys.executable, str(SCRIPT), "restore", *arguments],
+                              capture_output=True, text=True, encoding="utf-8")
+    assert rejected.returncode != 0
+    assert target.read_bytes() == patched + b"// unexpected change"
+    target.write_bytes(patched)
+    restored = subprocess.run([sys.executable, str(SCRIPT), "restore", *arguments],
+                              capture_output=True, text=True, encoding="utf-8")
+    assert restored.returncode == 0, restored.stderr
+    assert json.loads(restored.stdout)["status"] == "restored"
+    assert target.read_bytes() == source.read_bytes() == backup.read_bytes()
+    assert manifest.read_bytes() == official_manifest.read_bytes() == manifest_backup.read_bytes()
+
+
+def test_official_613_matcher_keeps_original_verdicts_and_private_diagnostics(tmp_path):
+    reference = os.environ.get("CODEX_WEB_DIAGNOSTICS_REFERENCE_613")
+    if not reference:
+        pytest.skip("Set CODEX_WEB_DIAGNOSTICS_REFERENCE_613 for the 6.1.3 matcher check")
+    original = Path(reference).read_bytes()
+    patched = patch.transform(original, version="6.1.3")
+    patched_path = tmp_path / "patched.cjs"
+    patched_path.write_bytes(patched)
+    runner = r'''
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const [before,after]=process.argv.slice(1);
+const load=path=>{
+ const source=fs.readFileSync(path,'utf8');
+ const start=source.indexOf('// Diagnostic-only addition for codex-chatgpt-web');
+ const begin=start>=0?start:source.indexOf('class je extends Error');
+ const end=source.indexOf('}var Ke=',begin)+1;
+ assert(begin>=0&&end>begin);
+ return vm.runInNewContext(source.slice(begin,end)+';({Stream:ur})',
+   {require,process,performance,console}).Stream;
+};
+const Original=load(before),Patched=load(after);
+const a={key:'private-a',tag:'p',text:'alpha',html:'<p>alpha</p>'};
+const b={key:'private-b',tag:'p',text:'bravo',html:'<p>bravo</p>'};
+for(const [name,committed,observed,reason] of [
+ ['same',[a,b],[a,b],null],
+ ['reorder',[a,b],[b,a],'block_order_changed'],
+ ['rewrite',[a,b],[{...a,text:'secret changed'},b],'text_changed'],
+ ['link',[a,b],[{...a,linkTargets:['https://private.example/secret']},b],'link_target_changed'],
+ ['overlap',[{...a,sourceStart:0,sourceEnd:10}],
+   [{...b,sourceStart:5,sourceEnd:20}],'source_range_overlap'],
+]){
+ const old=new Original(),next=new Patched();
+ old.committed=committed;next.committed=committed;
+ const former=old.reconcile(observed),latter=next.reconcile(observed);
+ assert.equal(former instanceof Error,latter instanceof Error,name);
+ assert.equal(former.message,latter.message,name);
+ assert.equal(former.diagnostic?.reason??null,reason,name);
+ assert.equal(latter.diagnostic?.reason??null,reason,name);
+ if(reason){
+   assert.equal(latter.diagnostic.detail.schemaVersion,3,name);
+   assert(!JSON.stringify(latter.diagnostic).includes('private'),name);
+ }else assert.deepEqual(JSON.parse(JSON.stringify(former)),JSON.parse(JSON.stringify(latter)),name);
+}
+console.log('5 official 6.1.3 matcher cases retained their verdicts');
+'''
+    result = subprocess.run(["node", "-e", runner, reference, str(patched_path)],
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_613_completion_shape_uses_current_selector_bindings():
+    replacement = patch.replacements_613()[46][1]
+    expression = replacement.split("return{__completionShape:", 1)[1].split(",location:{origin:", 1)[0]
+    runner = r'''
+const vm=require('node:vm'),assert=require('node:assert/strict');
+const expression=process.argv[1],selector='.completed-action';
+const rect={top:10,bottom:20,left:10};
+const button={tagName:'BUTTON',classList:[],attributes:[],disabled:false,isConnected:true,
+  parentElement:null,getAttribute:()=>null,getBoundingClientRect:()=>rect,getClientRects:()=>[rect],
+  matches:value=>value===selector,closest:()=>null,textContent:'Copy'};
+const current={tagName:'DIV',classList:[],attributes:[],parentElement:null,innerHTML:'answer',
+  innerText:'answer',textContent:'answer',getBoundingClientRect:()=>rect,contains:node=>node===button,
+  querySelectorAll:value=>value===selector?[button]:[button]};
+const proof=vm.runInNewContext(expression,{F:[current],v:selector,x:'.assistant',
+  diagnosticCheckpoint:'turn-completed',E:()=>true,
+  document:{querySelectorAll:value=>value===selector?[button]:[]},
+  getComputedStyle:()=>({display:'block',visibility:'visible',opacity:'1'})});
+assert.equal(proof.response.matchedActionCount,1);
+assert.equal(proof.globalActions.total,1);
+assert.equal(proof.response.descriptors[0].selectorHits.configured,true);
+'''
+    result = subprocess.run(["node", "-e", runner, expression],
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_live_send_evidence_survives_killed_helper(tmp_path):
