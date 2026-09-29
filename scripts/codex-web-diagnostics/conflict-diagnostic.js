@@ -1,4 +1,4 @@
-// Diagnostic-only addition for codex-chatgpt-web 6.1.2 (Windows x64).
+// Diagnostic-only addition for codex-chatgpt-web 6.1.2/6.1.3 (Windows x64).
 const codexWebReconciliations = new WeakMap();
 const codexWebReconciliationPages = new WeakMap();
 function codexWebBindReconciliation(stream, page) {
@@ -209,6 +209,152 @@ function codexWebConflictDiagnostic(reason, observed, committed, context) {
 // killed helper; they do not promise durability across an OS crash/power loss.
 const codexWebJournals = new Map();
 const codexWebPageJournals = new WeakMap();
+const codexWebPageIds = new WeakMap();
+let codexWebNextPageId = 0;
+function codexWebPageId(page) {
+  if (!codexWebPageIds.has(page)) codexWebPageIds.set(page, ++codexWebNextPageId);
+  return `${process.pid}:${codexWebPageIds.get(page)}`;
+}
+function codexWebFingerprint(journal, value) {
+  if (value == null) return null;
+  return require("node:crypto").createHmac("sha256", journal.key)
+    .update(String(value)).digest("hex");
+}
+function codexWebBindingRecord(page, phase, baseline, bound, snapshot, rebound, newUsers, detail = {}) {
+  try {
+    const journal = codexWebPageJournals.get(page);
+    if (!journal) return;
+    const ids = values => ({ total: values?.length ?? 0, retained: (values ?? []).slice(0, 100)
+      .map(value => codexWebFingerprint(journal, value)), truncated: (values?.length ?? 0) > 100 });
+    const shape = value => ({ identity: codexWebFingerprint(journal, value.identity),
+      assistantIdentity: codexWebFingerprint(journal, value.assistantIdentity),
+      tag: /^[a-z][a-z0-9-]{0,20}$/.test(value.tag ?? "") ? value.tag : null,
+      attributeNames: (value.attributeNames ?? []).map(name =>
+        /^(?:data-|aria-)[a-z0-9-]{1,64}$|^(?:class|role|id)$/.test(name) ? name : null),
+      classes: (value.classes ?? []).map(name => codexWebFingerprint(journal, name)),
+      classCount: value.classCount ?? 0,
+      parentTag: /^[a-z][a-z0-9-]{0,20}$/.test(value.parentTag ?? "") ? value.parentTag : null,
+      userBubbles: value.userBubbles ?? 0, assistantRoles: value.assistantRoles ?? 0,
+      userSelector: Boolean(value.userSelector), assistantSelector: Boolean(value.assistantSelector) });
+    const structure = snapshot?.bindingShape;
+    const key = baseline?.domCache?.key;
+    const event = { phase, elapsedMs: Math.round(performance.now() - journal.started),
+      pageId: codexWebPageId(page), document: key ? codexWebFingerprint(journal, key.slice(0, key.lastIndexOf(":"))) : null,
+      domRevision: key ? codexWebFingerprint(journal, key) : null,
+      initial: ids(baseline?.initialTurnIdentities), accepted: ids(bound?.acceptedTurnIdentities),
+      acceptedUser: codexWebFingerprint(journal, baseline?.acceptedUserIdentity),
+      boundAssistant: codexWebFingerprint(journal, bound?.identity),
+      observedTurns: ids(snapshot?.turnIdentities), users: ids(snapshot?.userIdentities),
+      assistants: ids(snapshot?.responseIdentities), rebound: codexWebFingerprint(journal, rebound),
+      newUsers: ids(newUsers), stopButtons: snapshot?.visibleStopButtonCount ?? null,
+      structure: structure ? { standaloneTotal: structure.standaloneTotal,
+        groupTotal: structure.groupTotal,
+        standalone: structure.standalone.map(shape), groups: structure.groups.map(shape) } : null,
+      ...detail };
+    const binding = journal.binding ??= { schemaVersion: 1, events: [], eventCount: 0, firstLost: null,
+      lastAttached: null, captureFailed: false };
+    binding.eventCount += 1;
+    const wasDetached = binding.detached;
+    if (phase === "attached") { binding.lastAttached = event; binding.detached = false; }
+    if (phase === "lost") binding.detached = true;
+    if (phase === "lost" && !binding.firstLost) binding.firstLost = event;
+    if (phase !== "attached" || wasDetached || !binding.events.some(item => item.phase === "attached")) {
+      binding.events.push(event);
+      if (binding.events.length > 20) binding.events.shift();
+    }
+    codexWebJournalWrite(journal, "binding_evidence", { phase });
+  } catch {
+    try {
+      const journal = codexWebPageJournals.get(page);
+      if (journal) {
+        journal.binding ??= { schemaVersion: 1, events: [], eventCount: 0 };
+        journal.binding.captureFailed = true;
+        codexWebJournalWrite(journal, "binding_capture_failed");
+      }
+    } catch {}
+  }
+}
+function codexWebBindingBaseline(page, baseline, cache) {
+  codexWebBindingRecord(page, "baseline", { initialTurnIdentities: baseline.turnIdentities,
+    domCache: cache }, null, baseline);
+}
+function codexWebBindingInitial(page, baseline, snapshot, identity) {
+  codexWebBindingRecord(page, "assistant_bound", baseline, { identity, acceptedTurnIdentities: snapshot.turnIdentities }, snapshot);
+}
+function codexWebBindingAttached(page, baseline, bound) {
+  try {
+    const binding = codexWebPageJournals.get(page)?.binding;
+    if (!binding?.lastAttached || binding.detached)
+      codexWebBindingRecord(page, "attached", baseline, bound);
+  } catch {}
+}
+function codexWebBindingLost(page, baseline, bound) {
+  try {
+    if (!codexWebPageJournals.get(page)?.binding?.firstLost)
+      codexWebBindingRecord(page, "lost", baseline, bound);
+  } catch {}
+}
+function codexWebBindingDecision(page, baseline, bound, snapshot, rebound, newUsers, detail) {
+  codexWebBindingRecord(page, "decision", baseline, bound, snapshot, rebound, newUsers, detail);
+}
+async function codexWebBindingFailure(page, baseline, bound, snapshot, rebound, newUsers, detail) {
+  codexWebBindingRecord(page, "rejected", baseline, bound, snapshot, rebound, newUsers, detail);
+  if (!newUsers?.length) return;
+  try {
+    const result = await page.locator(Ze(newUsers[0])).evaluate(node => {
+      const bubbles = node.querySelectorAll("[data-user-message-bubble]");
+      const targets = bubbles.length === 1 ? bubbles[0].querySelectorAll("[data-search-result-target]") : [];
+      return { bubbleCount: bubbles.length, targetCount: targets.length,
+        text: targets.length === 1 ? targets[0].innerText : null };
+    }, undefined, { timeout: 1000 });
+    const journal = codexWebPageJournals.get(page);
+    const normalize = value => value.replace(/\r\n?/g, "\n");
+    const text = result?.text;
+    codexWebBindingRecord(page, "user_probe", baseline, bound, snapshot, rebound, newUsers, {
+      bubbleCount: result?.bubbleCount ?? null, targetCount: result?.targetCount ?? null,
+      textChars: text?.length ?? null, textFingerprint: typeof text === "string"
+        ? codexWebFingerprint(journal, normalize(text)) : null,
+      sameAsSubmitted: typeof text === "string" && typeof baseline?.submittedText === "string"
+        ? normalize(text) === normalize(baseline.submittedText) : null });
+  } catch (error) {
+    codexWebBindingRecord(page, "user_probe_failed", baseline, bound, snapshot, rebound, newUsers,
+      { kind: codexWebDiagnosticKind(error) });
+  }
+}
+function codexWebBindingCapture(page) {
+  try { return codexWebPageJournals.get(page)?.binding; } catch { return undefined; }
+}
+function codexWebResponseProgress(page, snapshot, cache) {
+  try {
+    const journal = codexWebPageJournals.get(page);
+    if (!journal) return;
+    const key = cache?.key;
+    const current = { elapsedMs: Math.round(performance.now() - journal.started),
+      document: key ? codexWebFingerprint(journal, key.slice(0, key.lastIndexOf(":"))) : null,
+      revision: key ? codexWebFingerprint(journal, key) : null,
+      present: Boolean(snapshot?.responsePresent), chars: snapshot?.visibleText?.length ?? 0,
+      text: codexWebFingerprint(journal, snapshot?.visibleText),
+      blocks: snapshot?.traceBlocks?.length ?? 0,
+      completionVisible: Boolean(snapshot?.completionActionVisible),
+      stoppedThinkingVisible: Boolean(snapshot?.stoppedThinkingVisible) };
+    const prior = journal.responseProgress;
+    if (prior?.revision === current.revision && prior?.text === current.text) return;
+    journal.responseProgress = current;
+    if (!journal.lastResponseWrite || performance.now() - journal.lastResponseWrite >= 1000
+      || prior?.present !== current.present) {
+      journal.lastResponseWrite = performance.now();
+      codexWebJournalWrite(journal, "response_progress");
+    }
+  } catch {}
+}
+function codexWebResponseReadFailure(page, error) {
+  try {
+    const journal = codexWebPageJournals.get(page);
+    if (!journal) return;
+    journal.responseReadFailures = (journal.responseReadFailures ?? 0) + 1;
+    codexWebJournalWrite(journal, "response_read_failed", { kind: codexWebDiagnosticKind(error) });
+  } catch {}
+}
 function codexWebDiagnosticKind(error) {
   if (error?.name === "AbortError") return "aborted";
   if (error?.name === "ChatGptBrowserObservationTimeoutError") return "dom_timeout";
@@ -223,7 +369,7 @@ function codexWebJournalWrite(journal, phase, detail = {}) {
     const fs = require("node:fs"), path = require("node:path");
     const event = { phase, elapsedMs: Math.round(performance.now() - journal.started), ...detail };
     // Keep turn lifecycle evidence separate from the high-frequency send ring.
-    if (phase !== "send_progress") {
+    if (phase !== "send_progress" && phase !== "response_progress") {
       journal.events.push(event);
       if (journal.events.length > 40) journal.events.shift();
     }
@@ -236,7 +382,9 @@ function codexWebJournalWrite(journal, phase, detail = {}) {
     fs.writeFileSync(temporary, JSON.stringify({ schemaVersion: 4, traceId: journal.traceId,
       pid: process.pid, capturedAt: new Date().toISOString(), sequence: journal.sequence,
       writeFailures: journal.writeFailures, phase, events: journal.events,
-      sendNumber: journal.sendNumber, sendDiagnostic: send }), { mode: 0o600 });
+      sendNumber: journal.sendNumber, sendDiagnostic: send,
+      bindingDiagnostic: journal.binding, responseProgress: journal.responseProgress,
+      responseReadFailures: journal.responseReadFailures ?? 0 }), { mode: 0o600 });
     fs.renameSync(temporary, target);
     temporary = undefined;
   } catch {
@@ -255,17 +403,19 @@ function codexWebJournalAll(phase) {
   for (const journal of codexWebJournals.values()) codexWebJournalWrite(journal, phase);
 }
 function codexWebJournalExit() { codexWebJournalAll("process_exit"); }
-function codexWebJournalOpen(capture, signal) {
+function codexWebJournalOpen(capture, signal, surfaceId) {
   try {
     const journal = { traceId: capture.traceId, directory: capture.directory,
       started: performance.now(), sequence: 0, sendNumber: 0, writeFailures: 0,
+      key: require("node:crypto").randomBytes(32),
       events: [], cleanup: [], pages: new WeakSet() };
     if (codexWebJournals.size === 0) process.on("exit", codexWebJournalExit);
     codexWebJournals.set(capture.traceId, journal);
     const abort = () => codexWebJournalWrite(journal, "turn_abort", { kind: codexWebDiagnosticKind(signal?.reason) });
     signal?.addEventListener("abort", abort, { once: true });
     journal.cleanup.push(() => signal?.removeEventListener("abort", abort));
-    codexWebJournalWrite(journal, "turn_started");
+    codexWebJournalWrite(journal, "turn_started", {
+      surface: codexWebFingerprint(journal, surfaceId) });
     if (signal?.aborted) abort();
   } catch { /* Diagnosis must not affect turn setup. */ }
 }
@@ -277,11 +427,20 @@ function codexWebJournalBind(capture, page) {
     journal.page = page;
     if (journal.pages.has(page)) return;
     journal.pages.add(page);
+    let url = null;
+    try { url = codexWebFingerprint(journal, page.url?.()); } catch {}
+    codexWebJournalWrite(journal, "page_bound", { pageId: codexWebPageId(page), url });
     for (const event of ["close", "crash"]) {
       const listener = () => codexWebJournalWrite(journal, `page_${event}`);
       page.on?.(event, listener);
       journal.cleanup.push(() => page.off?.(event, listener));
     }
+    const navigated = frame => {
+      try { if (frame === page.mainFrame?.()) codexWebJournalWrite(journal, "page_navigation", {
+        pageId: codexWebPageId(page), url: codexWebFingerprint(journal, frame.url?.()) }); } catch {}
+    };
+    page.on?.("framenavigated", navigated);
+    journal.cleanup.push(() => page.off?.("framenavigated", navigated));
     const browser = page.context?.().browser?.();
     if (browser && browser !== journal.browser) {
       journal.browser = browser;

@@ -14,6 +14,7 @@ ORIGINAL_SHA256 = "3d0f23940ce651968a45538fc0afcea2260a8bbafd94f1244515e41085d1a
 ORIGINAL_MANIFEST_SHA256 = "668249153aa0af541afbc26b4b7930fad296ec61cfd9365f37ee6b76daaf1771"
 ORIGINAL_613_SHA256 = "3110a8cd52821ae1a61e5001b8ff91097dc744ec2b13ee17f270a20e5cc25944"
 ORIGINAL_613_MANIFEST_SHA256 = "dd20c850a6c2604b61df70488d6359b1d0b8e50023917bc0ec2c9ffd53cbdaf3"
+PREVIOUS_613_PATCH_SHA256 = "645afc3820407551b7c6e0a0d1526c92ce49435d4ef45a3d6304256c574f4140"
 PREVIOUS_PATCH_SHA256 = "9fd465a3b4c957b37890962eaa06520f2092959d3ad0030a3dc1a2368bf3fbb6"
 SECOND_PATCH_SHA256 = "d405304507f61ef3e2cd3c65a770159526cb7f65e332a3e3eb2aa72b5f03fbf1"
 THIRD_PATCH_SHA256 = "0602eebd0ee1296f880bd733fc552449a35761c41cc40b9676cd2249c182e682"
@@ -25,6 +26,19 @@ OLD_METHOD = 'changedCommittedBlockError(e,t,r){return new je("ChatGPT changed a
 OLD_THROW = 'throw new k(f.message,{status:502,errorType:"server_error",code:"browser_stream_inconsistent",retryable:!1})'
 NEW_THROW = '{const diagnosticError=new k(f.message,{status:502,errorType:"server_error",code:"browser_stream_inconsistent",retryable:!1});diagnosticError.diagnostic=f.diagnostic;throw diagnosticError}'
 CAPTURE_ANCHOR = 'checkpoint:t,...r!==void 0?{error:ht(r instanceof Error?r.message:String(r))}:{},'
+BINDING_SHAPE = '''(()=>{let shape=(node,identity,assistantIdentity)=>({
+  identity,assistantIdentity,tag:node.tagName.toLowerCase(),
+  attributeNames:[...node.attributes].map(attr=>attr.name).slice(0,20),
+  classes:[...node.classList].slice(0,12),classCount:node.classList.length,
+  parentTag:node.parentElement?.tagName.toLowerCase()??null,
+  userBubbles:node.querySelectorAll("[data-user-message-bubble]").length,
+  assistantRoles:node.querySelectorAll('[data-conversation-role="assistant"], [data-chatgpt-agent-turn-start]').length,
+  userSelector:node.matches(i.userTurnSelector),assistantSelector:node.matches(i.assistantTurnSelector)}),
+  standalone=p.slice(-6).map((node,index)=>shape(node,m[p.length-Math.min(6,p.length)+index],null)),
+  groups=v.slice(-6).map((node,index)=>{let key=R[v.length-Math.min(6,v.length)+index];
+    return shape(node,`group:user:${key}`,`group:assistant:${key}`)});
+  return{standaloneTotal:p.length,groupTotal:v.length,standalone,groups}
+})()'''
 COMPLETION_SHAPE = '''(()=>{
   if (!["response-stalled-60s", "turn-failed", "turn-completed"].includes(diagnosticCheckpoint)) return;
   const current = F.at(-1);
@@ -222,7 +236,9 @@ def replacements_613() -> list[tuple[str, str]]:
     edits[8] = tuple(value.replace('Ae(e)', 'Se(e)').replace('ge(e)', 'we(e)') for value in edits[8])
     edits[10] = ('L=new Po,H=new ur,C=', 'L=new Po,H=codexWebBindReconciliation(new ur,w),C=')
     edits[14] = ('h,p,m,T=[],x=new xo;try{',
-                 'h,p,m,T=[],x=new xo;codexWebJournalOpen(l,e.abortSignal);try{')
+                 'h,p,m,T=[],x=new xo;codexWebJournalOpen(l,e.abortSignal,t);try{')
+    edits[36] = (edits[36][0], edits[36][1].replace('snapshot:{composerChars',
+        'snapshot:{bindingShape:' + BINDING_SHAPE + ',composerChars'))
     edits[17] = ('finally{if(x.dispose(),', 'finally{codexWebJournalClose(l);if(x.dispose(),')
     edits[21] = ('catch(m){let T=m;if(h&&i&&p)',
                  'catch(m){codexWebJournalTrace(e,"stage_failed",{stage:t,kind:codexWebDiagnosticKind(m)});let T=m;if(h&&i&&p)')
@@ -242,6 +258,24 @@ def replacements_613() -> list[tuple[str, str]]:
                  'return{__completionShape:' + shape + ',location:{origin:Ce.origin')
     edits[47] = ('completionActionSelector:v,appName:R})=>{',
                  'completionActionSelector:v,appName:R,checkpointName:diagnosticCheckpoint})=>{')
+    edits.extend([
+        ('i=await this.submissionDomState(e,o);return{userTurns:r',
+         'i=await this.submissionDomState(e,o);codexWebBindingBaseline(e,i,o);return{userTurns:r'),
+        ('if(x)return{identity:x,locator:c.locator(Ze(x)),acceptedTurnIdentities:T.turnIdentities};',
+         'if(x)return codexWebBindingInitial(c,l,T,x),{identity:x,locator:c.locator(Ze(x)),acceptedTurnIdentities:T.turnIdentities};'),
+        ('if(o===1)return r;if(o>1)throw Error(`ChatGPT exposed ${o} DOM nodes for the bound assistant turn`);',
+         'if(o===1)return codexWebBindingAttached(e,t,r),r;if(o>1)throw Error(`ChatGPT exposed ${o} DOM nodes for the bound assistant turn`);codexWebBindingLost(e,t,r);'),
+        ('c=i.userIdentities.filter((l)=>!a.has(l));if(c.length>0){',
+         'c=i.userIdentities.filter((l)=>!a.has(l));codexWebBindingDecision(e,t,r,i,s,c,{oldCount:o});if(c.length>0){'),
+        ('if(!p)throw Error("ChatGPT opened another user turn while the bound assistant response was detached")',
+         'if(!p){await codexWebBindingFailure(e,t,r,i,s,c,{oldCount:o,groupGuard:Boolean(h),singleNewUser:c.length===1,boundIsGroup:r.identity.startsWith("group:assistant:"),newUserIsGroup:l.startsWith("group:user:"),pairedCandidate:Boolean(s&&s===`group:assistant:${l.slice(11)}`),oldIdentityAbsent:!i.turnIdentities.includes(r.identity),onlyKnownOrPair:i.turnIdentities.every((m)=>a.has(m)||m===l||m===s),acceptedUserMatch:t.acceptedUserIdentity?l===t.acceptedUserIdentity:null,promptCheckUsed:Boolean(h&&!t.acceptedUserIdentity&&t.submittedText)});throw Error("ChatGPT opened another user turn while the bound assistant response was detached")}'),
+        ('...codexWebCompletionCapture(e)&&["response-stalled-60s","turn-failed","turn-completed"].includes(t)?{completionDiagnostic:codexWebCompletionCapture(e)}:{},',
+         '...codexWebCompletionCapture(e)&&["response-stalled-60s","turn-failed","turn-completed"].includes(t)?{completionDiagnostic:codexWebCompletionCapture(e)}:{},...codexWebBindingCapture(e)&&["turn-failed","turn-completed"].includes(t)?{bindingDiagnostic:codexWebBindingCapture(e)}:{},'),
+        (').catch(()=>{return});if(!r){if(e.page().isClosed())throw Ne();return ho()}',
+         ').catch((error)=>{codexWebResponseReadFailure(e.page(),error);return});if(!r){if(e.page().isClosed())throw Ne();codexWebResponseProgress(e.page(),ho(),t);return ho()}'),
+        ('return n.traceBlocks=n.traceBlocks.map(Ia).filter((o)=>o.text.length>0&&!Ra(o)),n}async stalledTurnDiagnostic(',
+         'return n.traceBlocks=n.traceBlocks.map(Ia).filter((o)=>o.text.length>0&&!Ra(o)),codexWebResponseProgress(e.page(),n,t),n}async stalledTurnDiagnostic('),
+    ])
     return edits
 
 
@@ -268,6 +302,10 @@ def inspect(data: bytes, original_hint: bytes | None = None,
         return "original", data
     if digest(data) in (ORIGINAL_SHA256, ORIGINAL_613_SHA256):
         raise ValueError("目标软件版本与程序文件不匹配。")
+    if version == "6.1.3" and digest(data) == PREVIOUS_613_PATCH_SHA256:
+        if original_hint is not None and digest(original_hint) == original_hash:
+            return "previous_patch", original_hint
+        raise ValueError("上一版诊断补丁需要对应的官方原件备份；拒绝覆盖。")
     if version == "6.1.2" and digest(data) in (PREVIOUS_PATCH_SHA256, SECOND_PATCH_SHA256,
             THIRD_PATCH_SHA256, FOURTH_PATCH_SHA256, FIFTH_PATCH_SHA256):
         if original_hint is not None and digest(original_hint) == original_hash:
