@@ -94,6 +94,18 @@ def test_previous_patch_requires_matching_official_backup(sample, monkeypatch):
     assert target.read_bytes() == original
 
 
+def test_previous_613_patch_requires_verified_official_backup(monkeypatch):
+    original = b"exact official 6.1.3 helper"
+    previous = b"exact previous 6.1.3 diagnostic patch"
+    monkeypatch.setattr(patch, "ORIGINAL_613_SHA256", patch.digest(original))
+    monkeypatch.setattr(patch, "PREVIOUS_613_PATCH_SHA256", patch.digest(previous))
+    with pytest.raises(ValueError, match="官方原件备份"):
+        patch.inspect(previous, version="6.1.3")
+    assert patch.inspect(previous, original, version="6.1.3") == ("previous_patch", original)
+    with pytest.raises(ValueError, match="文件指纹不匹配"):
+        patch.inspect(previous + b"tampered", original, version="6.1.3")
+
+
 def test_real_guard_differential_and_private_local_capture(sample):
     target, backup, original = sample
     patch.operate("apply", target, backup)
@@ -750,6 +762,89 @@ const api=vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8')+
 '''
     source = ROOT / "scripts/codex-web-diagnostics/conflict-diagnostic.js"
     result = subprocess.run(["node", "-e", runner, str(source), patch.COMPLETION_SHAPE],
+                            capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_binding_evidence_replays_detachment_without_exposing_identities(tmp_path):
+    runner = r'''
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const {EventEmitter}=require('node:events');
+let now=1000;
+const api=vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8')+
+  ';({open:codexWebJournalOpen,bind:codexWebJournalBind,close:codexWebJournalClose,'+
+  'baseline:codexWebBindingBaseline,initial:codexWebBindingInitial,'+
+  'attached:codexWebBindingAttached,lost:codexWebBindingLost,'+
+  'decision:codexWebBindingDecision,failure:codexWebBindingFailure,'+
+  'response:codexWebResponseProgress,readFailure:codexWebResponseReadFailure})',
+  {require,process,console,Ze:value=>value,performance:{now:()=>now}});
+class Page extends EventEmitter {
+  constructor(){super();this.frame={url:()=> 'https://secret.example/private-chat'};}
+  url(){return this.frame.url()}
+  mainFrame(){return this.frame}
+  context(){return {browser:()=>null}}
+  locator(){return {evaluate:async callback=>callback({querySelectorAll:()=>[{
+    querySelectorAll:()=>[{innerText:'private changed user'}]}]})}}
+}
+(async()=>{
+const page=new Page(),capture={traceId:'trace-test',directory:process.argv[2]},
+  signal=new AbortController().signal;
+api.open(capture,signal,'private-surface-id');api.bind(capture,page);
+const cache={key:'private-document:1:2'},
+  baseline={initialTurnIdentities:['private-old-user'],acceptedUserIdentity:'private-sent-user',
+    submittedText:'private sent user',domCache:cache},
+  first={turnIdentities:['private-old-user','private-sent-user','private-answer'],
+    userIdentities:['private-sent-user'],responseIdentities:['private-answer'],visibleStopButtonCount:1,
+    bindingShape:{standaloneTotal:0,groupTotal:1,standalone:[],groups:[{
+      identity:'private-sent-user',assistantIdentity:'private-answer',tag:'div',
+      attributeNames:['data-turn-key','secret-field'],classes:['private-class'],classCount:1,
+      parentTag:'section',userBubbles:1,assistantRoles:1,userSelector:false,assistantSelector:false}]}},
+  bound={identity:'private-answer',acceptedTurnIdentities:first.turnIdentities};
+api.baseline(page,{...first,turnIdentities:['private-old-user']},cache);
+api.initial(page,baseline,first,bound.identity);
+api.attached(page,baseline,bound);
+now+=300;api.response(page,{responsePresent:true,visibleText:'private answer',
+  traceBlocks:[{}],completionActionVisible:false},cache);
+api.lost(page,baseline,bound);
+cache.key='private-document:1:3';
+const changed={turnIdentities:['private-new-user'],userIdentities:['private-new-user'],
+  responseIdentities:[],visibleStopButtonCount:0,
+  bindingShape:{standaloneTotal:1,groupTotal:0,groups:[],standalone:[{
+    identity:'private-new-user',assistantIdentity:null,tag:'article',
+    attributeNames:['data-turn-id-container','data-new-turn'],classes:['private-new-class'],
+    classCount:1,parentTag:'main',userBubbles:1,assistantRoles:0,
+    userSelector:true,assistantSelector:false}]}};
+api.decision(page,baseline,bound,changed,null,changed.userIdentities,{oldCount:0});
+await api.failure(page,baseline,bound,changed,null,changed.userIdentities,
+  {oldCount:0,groupGuard:false,acceptedUserMatch:false});
+api.readFailure(page,Object.assign(Error('private page error'),{name:'TimeoutError'}));
+page.emit('framenavigated',page.frame);api.close(capture);
+const saved=JSON.parse(fs.readFileSync(process.argv[2]+'/turn-live.json','utf8'));
+const evidence=saved.bindingDiagnostic,events=evidence.events;
+assert.equal(evidence.schemaVersion,1);
+const rejected=events.find(event=>event.phase==='rejected');
+assert.equal(rejected.newUsers.total,1);
+assert.equal(rejected.oldCount,0);
+assert.equal(events[0].structure.groups[0].attributeNames[0],'data-turn-key');
+assert.equal(events[0].structure.groups[0].attributeNames[1],null);
+assert.equal(rejected.structure.standalone[0].tag,'article');
+assert.equal(rejected.structure.standalone[0].attributeNames[1],'data-new-turn');
+assert.equal(events.at(-1).phase,'user_probe');
+assert.equal(events.at(-1).sameAsSubmitted,false);
+assert.equal(events.at(-1).textChars,20);
+assert.equal(evidence.firstLost.phase,'lost');
+assert.equal(evidence.lastAttached.phase,'attached');
+assert.equal(rejected.document,events[0].document);
+assert.notEqual(rejected.domRevision,events[0].domRevision);
+assert.equal(saved.responseProgress.chars,14);
+assert.equal(saved.responseReadFailures,1);
+assert(saved.events.some(event=>event.phase==='page_navigation'));
+assert(!fs.readFileSync(process.argv[2]+'/turn-live.json','utf8').includes('private'));
+console.log('binding evidence is replayable and private');
+})().catch(error=>{console.error(error);process.exitCode=1});
+'''
+    source = ROOT / "scripts/codex-web-diagnostics/conflict-diagnostic.js"
+    result = subprocess.run(["node", "-e", runner, str(source), str(tmp_path)],
                             capture_output=True, text=True, encoding="utf-8")
     assert result.returncode == 0, result.stdout + result.stderr
 

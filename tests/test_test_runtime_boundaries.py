@@ -399,6 +399,9 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    'tests/test_codex_web_diagnostics.py::test_binding_evidence_replays_detachment_without_exposing_identities': (
+        'runs a detached-response sequence in Node and verifies durable private evidence; function=test_binding_evidence_replays_detachment_without_exposing_identities'
+    ),
     'tests/test_codex_web_diagnostics.py::test_613_completion_shape_uses_current_selector_bindings': (
         'executes the 6.1.3 completion capture against its renamed selector bindings; function=test_613_completion_shape_uses_current_selector_bindings'
     ),
