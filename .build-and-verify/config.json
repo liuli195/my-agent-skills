@@ -281,7 +281,7 @@
           "plugins/tool-lifecycle"
         ],
         "checkParallel": true,
-        "pytestXdistWorkers": 2
+        "pytestXdistWorkers": 4
       }
     ]
   }

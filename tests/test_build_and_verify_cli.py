@@ -374,7 +374,7 @@ def _delay_report(tmp_path: Path, monkeypatch, seconds: float, *, main_only: boo
 def test_review_report_crossing_deadline_cannot_pass(tmp_path: Path, monkeypatch) -> None:
     _delay_report(tmp_path, monkeypatch, 0.2, main_only=True, deadline_relative=True)
     started = time.monotonic()
-    result, project = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1},
+    result, project = _budget_run(tmp_path,
         extra=("--performance-report",), checks=[{"id": "quick", "command":
             [sys.executable, "-c", "import time; time.sleep(.05)"], "inputs": []}])
     assert "check-end: quick status=passed" in result.stdout, result.stdout + result.stderr
