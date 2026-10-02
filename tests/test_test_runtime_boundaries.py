@@ -399,39 +399,6 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
-    'tests/test_codex_web_diagnostics.py::test_binding_evidence_replays_detachment_without_exposing_identities': (
-        'runs a detached-response sequence in Node and verifies durable private evidence; function=test_binding_evidence_replays_detachment_without_exposing_identities'
-    ),
-    'tests/test_codex_web_diagnostics.py::test_613_completion_shape_uses_current_selector_bindings': (
-        'executes the 6.1.3 completion capture against its renamed selector bindings; function=test_613_completion_shape_uses_current_selector_bindings'
-    ),
-    'tests/test_codex_web_diagnostics.py::test_official_613_matcher_keeps_original_verdicts_and_private_diagnostics': (
-        'compares the original and patched official 6.1.3 matcher on identical failure cases; function=test_official_613_matcher_keeps_original_verdicts_and_private_diagnostics'
-    ),
-    'tests/test_codex_web_diagnostics.py::test_public_cli_on_official_613_package_copy': (
-        'runs the public CLI against a verified 6.1.3 package copy and checks apply, refusal and restore; function=test_public_cli_on_official_613_package_copy'
-    ),
-    'tests/test_codex_web_diagnostics.py::test_send_button_wait_records_disabled_state_without_writing_every_poll': (
-        'runs the real Node journal to verify disabled-button polling and bounded disk writes; function=test_send_button_wait_records_disabled_state_without_writing_every_poll'
-    ),
-    'tests/test_codex_web_diagnostics.py::test_reconciliation_history_and_anonymous_replay': (
-        'compares the real upstream matcher with anonymous replay and runs the offline replay CLI; function=test_reconciliation_history_and_anonymous_replay'
-    ),
-    'tests/test_codex_web_diagnostics.py::test_live_send_lifecycle_and_disk_failure_preserve_original_behavior': (
-        'exercises real Node file writes, lifecycle cleanup and failed atomic replacement; function=test_live_send_lifecycle_and_disk_failure_preserve_original_behavior'
-    ),
-    'tests/test_codex_web_diagnostics.py::test_official_stage_timeout_records_before_pending_operation_returns': (
-        'runs the patched official stage timeout while a send operation never settles; function=test_official_stage_timeout_records_before_pending_operation_returns'
-    ),
-    'tests/test_codex_web_diagnostics.py::test_send_and_completion_evidence_is_bounded_private_and_failure_safe': (
-        'runs bounded private send and completion evidence in Node, including a failed DOM read; function=test_send_and_completion_evidence_is_bounded_private_and_failure_safe'
-    ),
-    'tests/test_codex_web_diagnostics.py::test_real_guard_differential_and_private_local_capture': (
-        'runs the original and patched JavaScript guard in Node to compare actual behavior and diagnostic persistence; function=test_real_guard_differential_and_private_local_capture'
-    ),
-    'tests/test_codex_web_diagnostics.py::test_public_cli_on_explicit_official_reference': (
-        'runs the public patch CLI on an explicitly supplied official bundle copy and checks its JavaScript syntax; function=test_public_cli_on_explicit_official_reference'
-    ),
     'tests/test_build_and_verify_cli.py::test_controlled_pack_rejects_unknown_package': (
         'covers the controlled package CLI rejecting an unknown package; function=test_controlled_pack_rejects_unknown_package'
     ),

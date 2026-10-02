@@ -1779,7 +1779,6 @@ def test_root_verify_checks_are_split_by_repo_domains() -> None:
         "verify.runtime-boundaries",
         "verify.build-and-verify",
         "verify.build-and-verify-cli",
-        "verify.codex-web-diagnostics",
     ]
     assert "pytest.full" not in check_by_id
 

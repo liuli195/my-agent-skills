@@ -282,21 +282,6 @@
         ],
         "checkParallel": true,
         "pytestXdistWorkers": 2
-      },
-      {
-        "id": "verify.codex-web-diagnostics",
-        "paths": [
-          "scripts/codex-web-diagnostics/**",
-          "tests/test_codex_web_diagnostics.py",
-          "tests/fixtures/codex_web_markdown_6_1_2.cjs"
-        ],
-        "command": "python -m pytest -q -p no:cacheprovider --dist worksteal tests/test_codex_web_diagnostics.py",
-        "pytestXdistWorkers": 1,
-        "inputs": [
-          "scripts/codex-web-diagnostics",
-          "tests/test_codex_web_diagnostics.py",
-          "tests/fixtures/codex_web_markdown_6_1_2.cjs"
-        ]
       }
     ]
   }
