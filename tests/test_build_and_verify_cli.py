@@ -100,6 +100,8 @@ def test_public_verify_protocol_like_check_output_is_preserved(tmp_path: Path) -
     lines = [
         "build-and-verify-formal-result: ordinary-test-output",
         'build-and-verify-formal-result: {"status":"passed"}',
+        "build-and-verify-selected: ordinary-test-output",
+        'build-and-verify-selected: {"ids":"ordinary-test-output","runtimeVersion":"test"}',
     ]
     result, _ = _budget_run(tmp_path, checks=[{"id": "output", "inputs": [],
         "command": [sys.executable, "-c", f"print({chr(10).join(lines)!r})"]}])

@@ -2734,6 +2734,8 @@ def test_local_budget_warning_exemption_policy_matrix(
     write_runner_config(project, verify_config={"fullBudgetSeconds": 1, **settings},
         verify_checks=[{"id": name, "command": [name], "inputs": []} for name in ("slow", "later")])
     runner = FakeRunner({("later",): completed(["later"], stdout="LATER_STARTED\n")})
+    monkeypatch.setenv("CI", "false")
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
     monkeypatch.delenv("BUILD_AND_VERIFY_STARTED_MONOTONIC", raising=False)
     monkeypatch.setattr(load_build_and_verify_runner_module().time, "monotonic",
         lambda: 1.2 if len(runner.calls) >= 2 else 0.0)

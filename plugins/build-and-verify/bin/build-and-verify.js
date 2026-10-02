@@ -147,9 +147,11 @@ if (budget !== null) {
     while ((newline = pending.indexOf("\n")) >= 0) {
       const line = pending.slice(0, newline + 1);
       pending = pending.slice(newline + 1);
-      let result;
+      let result, plan;
       if (line.trim().startsWith("build-and-verify-formal-result:")) {
         try { result = JSON.parse(line.trim().slice("build-and-verify-formal-result:".length)); } catch {}
+      } else if (line.trim().startsWith("build-and-verify-selected:")) {
+        try { plan = JSON.parse(line.trim().slice("build-and-verify-selected:".length)); } catch {}
       }
       if (result && ["passed", "skipped", "failed"].includes(result.status)
           && Number.isInteger(result.code) && result.code >= 0
@@ -160,8 +162,8 @@ if (budget !== null) {
         startupGuard = setTimeout(() => { stopOwned(); startupTimeout(runtimePhase); }, Math.max(0, (budget - elapsed()) * 1000));
       } else if (line.trim().startsWith("build-and-verify-phase:")) {
         runtimePhase = line.trim().split(":")[1];
-      } else if (line.trim().startsWith("build-and-verify-selected:")) {
-        const plan = JSON.parse(line.trim().slice("build-and-verify-selected:".length));
+      } else if (plan && Array.isArray(plan.ids) && plan.ids.every((id) => typeof id === "string")
+          && typeof plan.runtimeVersion === "string") {
         selectedIds = plan.ids;
         runtimeVersion = plan.runtimeVersion;
         runtimePhase = "checks";
