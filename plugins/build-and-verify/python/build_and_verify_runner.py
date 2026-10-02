@@ -1354,7 +1354,7 @@ def run_verify(
     total = round(time.monotonic() - started, 2)
     timed_out = control.expired()
     failures = any(result.returncode != 0 for result in results) or timed_out
-    over = total > budget if budget is not None else None
+    over = (timed_out or total > budget) if budget is not None else None
     for result in results:
         if result.stdout:
             print(result.stdout, end="")

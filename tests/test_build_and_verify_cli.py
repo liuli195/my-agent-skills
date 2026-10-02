@@ -82,6 +82,7 @@ def test_public_verify_budget_applies_to_fast_and_full(tmp_path: Path, full: boo
     report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
     assert report["verificationStatus"] == "failed"
     assert report["reason"] == "total_budget_timeout"
+    assert report["overBudget"] is True
     assert report["notStarted"] == ["later"]
     assert report["checks"][0]["status"] == "timed_out"
     assert not list((project / ".build-and-verify/cache").glob("*.json"))
