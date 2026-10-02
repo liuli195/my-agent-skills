@@ -25,8 +25,8 @@ def test_public_verify_local_budget_stops_before_next_check(tmp_path: Path) -> N
     project = tmp_path / "budget-project"
     (project / ".build-and-verify").mkdir(parents=True)
     (project / ".build-and-verify" / "config.json").write_text(json.dumps({
-        "version": 1, "verify": {"fullBudgetSeconds": 1, "checks": [
-            {"id": "slow", "command": [sys.executable, "-c", "import time; time.sleep(3)"], "inputs": []},
+        "version": 1, "verify": {"fullBudgetSeconds": 3, "checks": [
+            {"id": "slow", "command": [sys.executable, "-c", "import time; time.sleep(6)"], "inputs": []},
             {"id": "later", "command": [sys.executable, "-c", "print('LATER_STARTED')"], "inputs": []},
         ]},
     }), encoding="utf-8")
@@ -43,7 +43,7 @@ def test_public_verify_local_budget_stops_before_next_check(tmp_path: Path) -> N
     assert "total_budget_timeout" in result.stdout + result.stderr
     assert "LATER_STARTED" not in result.stdout
     assert "not-started: later" in result.stdout
-    assert time.monotonic() - started < 3
+    assert time.monotonic() - started < 5
 
 
 def _budget_run(tmp_path: Path, *, settings: dict | None = None,
@@ -52,8 +52,9 @@ def _budget_run(tmp_path: Path, *, settings: dict | None = None,
                 before_run=None) -> tuple[subprocess.CompletedProcess, Path]:
     project = tmp_path / "project"
     (project / ".build-and-verify").mkdir(parents=True)
-    config = {"version": 1, "verify": {"fullBudgetSeconds": 1, "checks": checks or [
-        {"id": "slow", "command": [sys.executable, "-c", "import time; time.sleep(1.2)"], "inputs": []},
+    budget = (settings or {}).get("fullBudgetSeconds", 3)
+    config = {"version": 1, "verify": {"fullBudgetSeconds": budget, "checks": checks or [
+        {"id": "slow", "command": [sys.executable, "-c", f"import time; time.sleep({budget + 0.2})"], "inputs": []},
         {"id": "later", "command": [sys.executable, "-c", "print('LATER_STARTED')"], "inputs": []},
     ], **(settings or {})}}
     (project / ".build-and-verify" / "config.json").write_text(json.dumps(config), encoding="utf-8")
@@ -92,7 +93,7 @@ def test_public_verify_budget_applies_to_fast_and_full(tmp_path: Path, full: boo
 ])
 def test_public_verify_budget_warning_does_not_fail_exempt_runs(tmp_path: Path, settings: dict,
         context: str, extra: tuple[str, ...]) -> None:
-    result, _ = _budget_run(tmp_path, settings=settings, context=context, extra=extra)
+    result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1, **settings}, context=context, extra=extra)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "LATER_STARTED" in result.stdout
     assert "performance-warning:" in result.stdout
@@ -108,7 +109,7 @@ def test_public_verify_unknown_context_fails_before_launch(tmp_path: Path) -> No
 
 def test_public_verify_parallel_queue_shares_deadline(tmp_path: Path) -> None:
     checks = [
-        {"id": "slow", "command": [sys.executable, "-c", "import time; time.sleep(2)"], "inputs": [], "checkParallel": True},
+        {"id": "slow", "command": [sys.executable, "-c", "import time; time.sleep(6)"], "inputs": [], "checkParallel": True},
         {"id": "queued", "command": [sys.executable, "-c", "print('QUEUED_STARTED')"], "inputs": [], "checkParallel": True},
         {"id": "serial", "command": [sys.executable, "-c", "print('SERIAL_STARTED')"], "inputs": []},
     ]
@@ -121,11 +122,9 @@ def test_public_verify_parallel_queue_shares_deadline(tmp_path: Path) -> None:
 
 
 def test_public_verify_serial_checks_share_remaining_budget_and_cache_only_completed(tmp_path: Path) -> None:
-    checks = [
-        {"id": name, "command": [sys.executable, "-c", "import time; time.sleep(1.1)"], "inputs": []}
-        for name in ("first", "second", "third")
-    ]
-    result, project = _budget_run(tmp_path, settings={"fullBudgetSeconds": 2}, checks=checks)
+    checks = [{"id": name, "command": [sys.executable, "-c", f"import time; time.sleep({delay})"], "inputs": []}
+              for name, delay in (("first", 0.5), ("second", 4.7), ("third", 0.1))]
+    result, project = _budget_run(tmp_path, settings={"fullBudgetSeconds": 5}, checks=checks)
     assert result.returncode == 1, result.stdout + result.stderr
     report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
     assert [check["status"] for check in report["checks"]] == ["passed", "timed_out", "not_started"]
@@ -134,7 +133,7 @@ def test_public_verify_serial_checks_share_remaining_budget_and_cache_only_compl
 
 
 def test_public_verify_parallel_active_checks_share_cancellation(tmp_path: Path) -> None:
-    checks = [{"id": name, "command": [sys.executable, "-c", "import time; time.sleep(2)"],
+    checks = [{"id": name, "command": [sys.executable, "-c", "import time; time.sleep(6)"],
                "inputs": [], "checkParallel": True} for name in ("first", "second")]
     result, project = _budget_run(tmp_path, settings={"maxParallel": 2}, checks=checks)
     assert result.returncode == 1
@@ -169,7 +168,7 @@ def test_public_verify_rejects_non_boolean_budget_switch(tmp_path: Path, value) 
 
 
 def test_public_verify_diagnostic_is_not_formal_acceptance(tmp_path: Path) -> None:
-    result, project = _budget_run(tmp_path, extra=("--diagnostic",))
+    result, project = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1}, extra=("--diagnostic",))
     assert result.returncode == 0, result.stdout + result.stderr
     assert "LATER_STARTED" in result.stdout
     assert "check-start: slow" in result.stdout
@@ -258,7 +257,7 @@ def test_public_verify_budget_interrupts_blocked_preparation_and_its_descendants
     assert result.returncode != 0, result.stdout + result.stderr
     assert "bounded-cleanup-fallback" in result.stdout
     assert "check-start:" not in result.stdout
-    assert time.monotonic() - started < 4
+    assert time.monotonic() - started < 6
     assert pids.exists(), result.stdout + result.stderr
     for pid in json.loads(pids.read_text()):
         _assert_pid_terminated(pid)
