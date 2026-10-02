@@ -360,6 +360,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         if guard_timer is not None:
+            invocation_control.finished.set()
             guard_timer.cancel()
         if result != 0 or legacy_runtime is None:
             return result

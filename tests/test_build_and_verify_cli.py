@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,8 @@ def test_public_verify_local_budget_stops_before_next_check(tmp_path: Path) -> N
             {"id": "later", "command": [sys.executable, "-c", "print('LATER_STARTED')"], "inputs": []},
         ]},
     }), encoding="utf-8")
+    initialized = subprocess.run(["git", "init", str(project)], capture_output=True)
+    assert initialized.returncode == 0
     started = time.monotonic()
     result = subprocess.run([
         shutil.which("node"), str(PACKAGE_ROOT / "bin" / "build-and-verify.js"),
@@ -45,7 +48,8 @@ def test_public_verify_local_budget_stops_before_next_check(tmp_path: Path) -> N
 
 def _budget_run(tmp_path: Path, *, settings: dict | None = None,
                 context: str | None = "local", extra: tuple[str, ...] = (),
-                full: bool = True, checks: list[dict] | None = None) -> tuple[subprocess.CompletedProcess, Path]:
+                full: bool = True, checks: list[dict] | None = None,
+                before_run=None) -> tuple[subprocess.CompletedProcess, Path]:
     project = tmp_path / "project"
     (project / ".build-and-verify").mkdir(parents=True)
     config = {"version": 1, "verify": {"fullBudgetSeconds": 1, "checks": checks or [
@@ -53,9 +57,10 @@ def _budget_run(tmp_path: Path, *, settings: dict | None = None,
         {"id": "later", "command": [sys.executable, "-c", "print('LATER_STARTED')"], "inputs": []},
     ], **(settings or {})}}
     (project / ".build-and-verify" / "config.json").write_text(json.dumps(config), encoding="utf-8")
-    if not full:
-        initialized = subprocess.run(["git", "init", str(project)], capture_output=True)
-        assert initialized.returncode == 0
+    initialized = subprocess.run(["git", "init", str(project)], capture_output=True)
+    assert initialized.returncode == 0
+    if before_run is not None:
+        before_run(project)
     env = {**os.environ, "BUILD_AND_VERIFY_PYTHON": sys.executable,
            "GITHUB_ACTIONS": "false", "CI": "false", "CODEX_CI": "1"}
     env.pop("BUILD_AND_VERIFY_EXECUTION_CONTEXT", None)
@@ -201,27 +206,80 @@ def test_public_verify_budget_reaps_descendants_and_preserves_other_processes(tm
         assert result.returncode == 1, result.stdout + result.stderr
         assert pid_file.exists(), result.stdout + result.stderr
         assert unrelated.poll() is None
-        pid = int(pid_file.read_text())
-        if sys.platform == "win32":
-            import ctypes
-            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-            kernel.OpenProcess.restype = ctypes.c_void_p
-            kernel.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
-            kernel.CloseHandle.argtypes = [ctypes.c_void_p]
-            handle = kernel.OpenProcess(0x1000, False, pid)
-            if handle:
-                code = ctypes.c_ulong()
-                try:
-                    assert kernel.GetExitCodeProcess(handle, ctypes.byref(code))
-                    assert code.value != 259
-                finally:
-                    kernel.CloseHandle(handle)
-        else:
-            with pytest.raises(ProcessLookupError):
-                os.kill(pid, 0)
+        _assert_pid_terminated(int(pid_file.read_text()))
     finally:
         unrelated.terminate()
         unrelated.wait(timeout=2)
+
+
+def _assert_pid_terminated(pid: int) -> None:
+    if sys.platform == "win32":
+        import ctypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.restype = ctypes.c_void_p
+        kernel.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel.OpenProcess(0x1000, False, pid)
+        if not handle:
+            assert ctypes.get_last_error() == 87, "cannot prove owned descendant terminated"
+            return
+        code = ctypes.c_ulong()
+        try:
+            assert kernel.GetExitCodeProcess(handle, ctypes.byref(code))
+            assert code.value != 259, f"owned descendant {pid} is still running"
+        finally:
+            kernel.CloseHandle(handle)
+    else:
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+
+
+def test_public_verify_budget_interrupts_blocked_preparation_and_its_descendants(tmp_path: Path) -> None:
+    # A real Git filesystem monitor models a blocked external preparation read.
+    # This is confined to the synthetic repository, never the user's hooks.
+    pids = tmp_path / "preparation-pids.json"
+    monitor = tmp_path / "monitor.py"
+    monitor.write_text(
+        "import json,os,subprocess,sys,time\nfrom pathlib import Path\n"
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(10)'])\n"
+        f"Path({str(pids)!r}).write_text(json.dumps([os.getpid(),child.pid]))\n"
+        "time.sleep(10)\n", encoding="utf-8")
+    hook = tmp_path / "monitor.sh"
+    hook.write_text(f"#!/bin/sh\nexec {shlex.quote(Path(sys.executable).as_posix())} -B {shlex.quote(monitor.as_posix())}\n", encoding="utf-8")
+    hook.chmod(0o755)
+
+    def prepare(project: Path) -> None:
+        (project / "probe.txt").write_text("tracked", encoding="utf-8")
+        assert _git(project, "add", "probe.txt").returncode == 0
+        assert _git(project, "config", "core.fsmonitor", hook.as_posix()).returncode == 0
+
+    started = time.monotonic()
+    result, project = _budget_run(tmp_path, before_run=prepare)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "bounded-cleanup-fallback" in result.stdout
+    assert "check-start:" not in result.stdout
+    assert time.monotonic() - started < 4
+    assert pids.exists(), result.stdout + result.stderr
+    for pid in json.loads(pids.read_text()):
+        _assert_pid_terminated(pid)
+    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    assert report["verificationStatus"] == "failed"
+    assert report["reason"] == "total_budget_timeout"
+    assert report["notStarted"] == ["slow", "later"]
+
+
+def test_public_verify_does_not_swallow_cache_write_failure(tmp_path: Path) -> None:
+    def blocked_cache(project: Path) -> None:
+        (project / ".build-and-verify/cache").write_text("blocked", encoding="utf-8")
+
+    result, project = _budget_run(tmp_path, extra=("--performance-report",), before_run=blocked_cache,
+        checks=[{"id": "success", "command": [sys.executable, "-c", "print('CHECK_COMPLETED')"], "inputs": []}])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "CHECK_COMPLETED" in result.stdout
+    assert "cache_write_error" in result.stderr
+    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    assert report["verificationStatus"] == "failed"
+    assert report["checks"][0]["reason"] == "cache_write_error"
 
 
 def _installed_build_and_verify(tmp_path: Path) -> tuple[str, Path, Path]:

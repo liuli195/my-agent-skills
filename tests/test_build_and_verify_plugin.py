@@ -211,8 +211,19 @@ class FakeRunnerModule:
         invocation_control=None,
     ) -> int:
         def call_runner() -> int:
-            return int(
-                self.runner_module.run_verify(
+            original_git_files = self.runner_module._git_visible_files
+
+            def visible_files_for_test(project_path, relative):
+                # These in-process fixtures deliberately have no repository.
+                # Model the existing non-Git fallback without launching Git for
+                # every directory hash. Real Git fixtures keep the real adapter.
+                if not any((parent / ".git").exists() for parent in (project_path, *project_path.parents)):
+                    return None
+                return original_git_files(project_path, relative)
+
+            self.runner_module._git_visible_files = visible_files_for_test
+            try:
+                return int(self.runner_module.run_verify(
                     project,
                     runner=self.runner,
                     pr=pr,
@@ -226,8 +237,9 @@ class FakeRunnerModule:
                     diagnostic=diagnostic,
                     started_at=started_at,
                     invocation_control=invocation_control,
-                )
-            )
+                ))
+            finally:
+                self.runner_module._git_visible_files = original_git_files
 
         if synthetic_changed_paths is not None:
             return call_runner()

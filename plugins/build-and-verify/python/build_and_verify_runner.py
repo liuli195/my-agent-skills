@@ -60,7 +60,10 @@ class RunControl:
         self.selected: list[dict[str, Any]] = []
         self.results: dict[str, CheckResult] = {}
         self.active_checks: set[str] = set()
+        self.start_times: dict[str, float] = {}
         self.runtime_version = "unknown"
+        self.scheduling = False
+        self.finished = threading.Event()
 
     def expired(self) -> bool:
         if self.deadline is not None and time.monotonic() >= self.deadline:
@@ -209,6 +212,8 @@ def _invocation_guard(project: Path, *, context: str | None, pr: bool,
             os.setsid()
 
     def cutoff() -> None:
+        if control.finished.is_set():
+            return
         control.cancelled.set()
         elapsed = round(time.monotonic() - started_at, 2)
         active = list(control.processes.values())
@@ -229,21 +234,34 @@ def _invocation_guard(project: Path, *, context: str | None, pr: bool,
             "unfinished": unfinished, "notStarted": not_started,
             "checks": [{"id": check['id'], "status": completed[check['id']].status if check['id'] in completed
                 else ("timed_out" if check['id'] in unfinished else "not_started"),
-                "durationSeconds": round(completed[check['id']].duration_seconds, 2) if check['id'] in completed else 0}
+                "reason": completed[check['id']].reason if check['id'] in completed else "total_budget_timeout",
+                "durationSeconds": round(completed[check['id']].duration_seconds, 2) if check['id'] in completed
+                else round(max(0, time.monotonic() - control.start_times[check['id']]), 2)
+                if check['id'] in control.start_times else 0}
                 for check in control.selected]}
         _write_performance_report(project / ".build-and-verify/runs/performance-report.json", payload)
         print(f"total_budget_timeout: totalSeconds={elapsed:.2f} budgetSeconds={budget}; bounded-cleanup-fallback", flush=True)
         print(f"unfinished: {', '.join(unfinished)}", flush=True)
         print(f"not-started: {', '.join(not_started)}", flush=True)
         print("status: failed", flush=True)
-        if root_job is not None:
-            root_job[0].CloseHandle(root_job[1])
-        else:
+        if root_job is None:
             import signal
             os.killpg(os.getpid(), signal.SIGKILL)
+        # Exit this CLI nonzero before Windows closes its sole owning job handle.
+        # Closing it explicitly first would terminate this process with code 0.
+        # OS handle cleanup then terminates every owned descendant.
         os._exit(1)
 
-    timer = threading.Timer(max(0, started_at + budget + 0.75 - time.monotonic()), cutoff)
+    def deadline_reached() -> None:
+        control.cancelled.set()
+        if not control.scheduling:
+            cutoff()  # Blocked preparation has no scheduler to return a result.
+        else:
+            fallback = threading.Timer(0.75, cutoff)
+            fallback.daemon = True
+            fallback.start()
+
+    timer = threading.Timer(max(0, started_at + budget - time.monotonic()), deadline_reached)
     timer.daemon = True
     timer.start()
     # Keep the owning Windows handle alive after cancellation until CLI exit.
@@ -1280,7 +1298,7 @@ def run_verify(
             continue
         try:
             key = _cache_key(project, config, check, changed, identity)
-        except ValueError as error:
+        except (ValueError, OSError) as error:
             results.append(CheckResult(index, check, 1, stderr=f"{error}\n", status="failed"))
             continue
         if control.expired():
@@ -1297,17 +1315,25 @@ def run_verify(
         if control.expired():
             return CheckResult(index, check, 1, status="not_started", reason="total_budget_timeout")
         print(f"check-start: {check['id']}", flush=True)
+        control.start_times[check['id']] = time.monotonic()
         control.active_checks.add(check['id'])
         result = _run_check_result(index, project, check, config, changed, runner, identity, control)
         result.status = result.status or ("passed" if result.returncode == 0 else "failed")
         control.results[check['id']] = result
         control.active_checks.discard(check['id'])
-        print(f"check-end: {check['id']} status={result.status} seconds={result.duration_seconds:.2f}", flush=True)
         if result.returncode == 0 and result.cache_key is not None and not diagnostic:
-            _cache_store(project, result.cache_key, result.check)
+            try:
+                _cache_store(project, result.cache_key, result.check)
+            except Exception as error:
+                result.returncode = 1
+                result.status = "failed"
+                result.reason = "cache_write_error"
+                result.stderr += f"cache_write_error: {check['id']}: {type(error).__name__}: {error}\n"
+        print(f"check-end: {check['id']} status={result.status} seconds={result.duration_seconds:.2f}", flush=True)
         return result
 
     control.results.update({result.check['id']: result for result in results})
+    control.scheduling = True
 
     parallel = [item for item in pending if item[1].get("checkParallel") is True]
     serial = [item for item in pending if item[1].get("checkParallel") is not True]
