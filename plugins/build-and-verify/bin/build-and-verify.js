@@ -2,6 +2,7 @@
 
 const { spawn, spawnSync } = require("node:child_process");
 const path = require("node:path");
+const startedAt = process.hrtime.bigint();
 
 const candidates = process.env.BUILD_AND_VERIFY_PYTHON ? [[process.env.BUILD_AND_VERIFY_PYTHON, []]] : [];
 candidates.push(["python3.12", []], ["python3", []], ["python", []]);
@@ -20,7 +21,10 @@ const [python, prefix] = selected;
 const args = process.argv.slice(2);
 const lifecycle = ["doctor", "update"].includes(args[0]) || (args[0] === "init" && args.some((arg) => ["--pi", "--claude", "--codex", "--all", "--dev", "--release"].includes(arg)));
 const core = path.join(__dirname, "..", "python", lifecycle ? "management_cli.py" : "build_and_verify.py");
-const child = spawn(python, [...prefix, core, ...args], { stdio: "inherit", windowsHide: true });
+const child = spawn(python, [...prefix, core, ...args], {
+  stdio: "inherit", windowsHide: true,
+  env: { ...process.env, BUILD_AND_VERIFY_STARTUP_SECONDS: String(Number(process.hrtime.bigint() - startedAt) / 1e9) },
+});
 child.on("error", (error) => {
   console.error(`error: cannot start Python: ${error.message}`);
   process.exit(1);

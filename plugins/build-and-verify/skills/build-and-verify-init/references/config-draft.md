@@ -106,7 +106,8 @@
 
 - `verify.maxParallel`（最大并行检查数）只能在解释含义并获得用户确认后写入。
 - `verify.timeoutSeconds`（超时秒数）只能在解释含义并获得用户确认后写入。
-- `verify.fullBudgetSeconds`（完整验证预算秒数）只能在说明超预算只警告并记录报告后、用户确认正整数后写入；未启用时省略。
+- `verify.fullBudgetSeconds`（完整验证预算秒数）只能在说明本机快速及完整验证缺省硬截止、关闭强制开关仅警告以及云端豁免后，用户确认正整数后写入；未启用时省略，已有数值不得擅改。独立构建不纳入。
+- 保留已有 `verify.enforceLocalBudget`（本机预算强制开关）；缺省开启，必须为布尔值，仅用户确认后修改。执行地点由参数或宿主环境声明，不以操作系统或模型地点推断。
 - `checkParallel: true`（检查项间并行）只能在解释 runner（运行器）并行语义并获得用户确认后写入。
 - `pytestXdistWorkers`（Pytest 工作进程数）只能在 command（命令）是 pytest（Python 测试框架）命令、解释 pytest-xdist（Pytest 并行插件）依赖并获得用户确认后写入；值只能是 `"auto"`（自动）或正整数。
 - `parallel`（旧并行字段）不得写入新草案；已有配置含该字段时，必须提示用户重新确认并迁移为 `checkParallel`（检查项间并行）。

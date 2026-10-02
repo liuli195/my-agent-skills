@@ -6,9 +6,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import yaml
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +18,210 @@ PACKAGE_ROOT = REPO_ROOT / "plugins" / "build-and-verify"
 PACK = REPO_ROOT / "plugins" / "tool-lifecycle" / "pack.py"
 PACKAGE_VERSION = json.loads((PACKAGE_ROOT / "package.json").read_text(encoding="utf-8"))["version"]
 _installed_template: tempfile.TemporaryDirectory[str] | None = None
+
+
+def test_public_verify_local_budget_stops_before_next_check(tmp_path: Path) -> None:
+    project = tmp_path / "budget-project"
+    (project / ".build-and-verify").mkdir(parents=True)
+    (project / ".build-and-verify" / "config.json").write_text(json.dumps({
+        "version": 1, "verify": {"fullBudgetSeconds": 1, "checks": [
+            {"id": "slow", "command": [sys.executable, "-c", "import time; time.sleep(3)"], "inputs": []},
+            {"id": "later", "command": [sys.executable, "-c", "print('LATER_STARTED')"], "inputs": []},
+        ]},
+    }), encoding="utf-8")
+    started = time.monotonic()
+    result = subprocess.run([
+        shutil.which("node"), str(PACKAGE_ROOT / "bin" / "build-and-verify.js"),
+        "verify", "--project", str(project), "--full",
+    ], env={**os.environ, "BUILD_AND_VERIFY_PYTHON": sys.executable,
+            "BUILD_AND_VERIFY_EXECUTION_CONTEXT": "local", "GITHUB_ACTIONS": "false", "CI": "false"},
+        text=True, capture_output=True, timeout=8)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "total_budget_timeout" in result.stdout + result.stderr
+    assert "LATER_STARTED" not in result.stdout
+    assert "not-started: later" in result.stdout
+    assert time.monotonic() - started < 3
+
+
+def _budget_run(tmp_path: Path, *, settings: dict | None = None,
+                context: str | None = "local", extra: tuple[str, ...] = (),
+                full: bool = True, checks: list[dict] | None = None) -> tuple[subprocess.CompletedProcess, Path]:
+    project = tmp_path / "project"
+    (project / ".build-and-verify").mkdir(parents=True)
+    config = {"version": 1, "verify": {"fullBudgetSeconds": 1, "checks": checks or [
+        {"id": "slow", "command": [sys.executable, "-c", "import time; time.sleep(1.2)"], "inputs": []},
+        {"id": "later", "command": [sys.executable, "-c", "print('LATER_STARTED')"], "inputs": []},
+    ], **(settings or {})}}
+    (project / ".build-and-verify" / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    if not full:
+        initialized = subprocess.run(["git", "init", str(project)], capture_output=True)
+        assert initialized.returncode == 0
+    env = {**os.environ, "BUILD_AND_VERIFY_PYTHON": sys.executable,
+           "GITHUB_ACTIONS": "false", "CI": "false", "CODEX_CI": "1"}
+    env.pop("BUILD_AND_VERIFY_EXECUTION_CONTEXT", None)
+    if context is not None:
+        env["BUILD_AND_VERIFY_EXECUTION_CONTEXT"] = context
+    result = subprocess.run([shutil.which("node"), str(PACKAGE_ROOT / "bin" / "build-and-verify.js"),
+        "verify", "--project", str(project), *(('--full',) if full else ()), *extra],
+        env=env, capture_output=True, text=True, timeout=8)
+    return result, project
+
+
+@pytest.mark.parametrize("full", [False, True])
+def test_public_verify_budget_applies_to_fast_and_full(tmp_path: Path, full: bool) -> None:
+    result, project = _budget_run(tmp_path, full=full)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "total_budget_timeout" in result.stdout
+    assert "LATER_STARTED" not in result.stdout
+    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    assert report["verificationStatus"] == "failed"
+    assert report["reason"] == "total_budget_timeout"
+    assert report["notStarted"] == ["later"]
+    assert report["checks"][0]["status"] == "timed_out"
+    assert not list((project / ".build-and-verify/cache").glob("*.json"))
+
+
+@pytest.mark.parametrize("settings,context,extra", [
+    ({"enforceLocalBudget": False}, "local", ()),
+    ({}, "cloud", ()), ({}, "ci", ()), ({}, "local", ("--pr",)),
+])
+def test_public_verify_budget_warning_does_not_fail_exempt_runs(tmp_path: Path, settings: dict,
+        context: str, extra: tuple[str, ...]) -> None:
+    result, _ = _budget_run(tmp_path, settings=settings, context=context, extra=extra)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "LATER_STARTED" in result.stdout
+    assert "performance-warning:" in result.stdout
+
+
+def test_public_verify_unknown_context_fails_before_launch(tmp_path: Path) -> None:
+    result, _ = _budget_run(tmp_path, context=None)
+    assert result.returncode == 1
+    assert "execution-context-warning: unknown" in result.stdout
+    assert "execution_context_required_for_local_budget" in result.stderr
+    assert "check-start:" not in result.stdout
+
+
+def test_public_verify_parallel_queue_shares_deadline(tmp_path: Path) -> None:
+    checks = [
+        {"id": "slow", "command": [sys.executable, "-c", "import time; time.sleep(2)"], "inputs": [], "checkParallel": True},
+        {"id": "queued", "command": [sys.executable, "-c", "print('QUEUED_STARTED')"], "inputs": [], "checkParallel": True},
+        {"id": "serial", "command": [sys.executable, "-c", "print('SERIAL_STARTED')"], "inputs": []},
+    ]
+    result, project = _budget_run(tmp_path, settings={"maxParallel": 1}, checks=checks)
+    assert result.returncode == 1
+    assert "QUEUED_STARTED" not in result.stdout
+    assert "SERIAL_STARTED" not in result.stdout
+    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    assert report["notStarted"] == ["queued", "serial"]
+
+
+def test_public_verify_serial_checks_share_remaining_budget_and_cache_only_completed(tmp_path: Path) -> None:
+    checks = [
+        {"id": name, "command": [sys.executable, "-c", "import time; time.sleep(1.1)"], "inputs": []}
+        for name in ("first", "second", "third")
+    ]
+    result, project = _budget_run(tmp_path, settings={"fullBudgetSeconds": 2}, checks=checks)
+    assert result.returncode == 1, result.stdout + result.stderr
+    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    assert [check["status"] for check in report["checks"]] == ["passed", "timed_out", "not_started"]
+    caches = list((project / ".build-and-verify/cache").glob("*.json"))
+    assert len(caches) == 1
+
+
+def test_public_verify_parallel_active_checks_share_cancellation(tmp_path: Path) -> None:
+    checks = [{"id": name, "command": [sys.executable, "-c", "import time; time.sleep(2)"],
+               "inputs": [], "checkParallel": True} for name in ("first", "second")]
+    result, project = _budget_run(tmp_path, settings={"maxParallel": 2}, checks=checks)
+    assert result.returncode == 1
+    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    assert report["unfinished"] == ["first", "second"]
+    assert all(check["status"] == "timed_out" for check in report["checks"])
+
+
+@pytest.mark.parametrize("extra,settings", [
+    (("--diagnostic",), {}), ((), {"enforceLocalBudget": False}),
+])
+def test_public_verify_warning_and_diagnostic_preserve_real_errors(tmp_path: Path,
+        extra: tuple[str, ...], settings: dict) -> None:
+    result, _ = _budget_run(tmp_path, settings=settings, extra=extra, checks=[
+        {"id": "error", "command": [sys.executable, "-c", "assert False, 'REAL_ASSERTION'"], "inputs": []}])
+    assert result.returncode == 1
+    assert "REAL_ASSERTION" in result.stderr
+
+
+def test_public_verify_explicit_context_overrides_inherited_context(tmp_path: Path) -> None:
+    result, _ = _budget_run(tmp_path, context="cloud", extra=("--execution-context", "local"))
+    assert result.returncode == 1
+    assert "total_budget_timeout" in result.stdout
+
+
+@pytest.mark.parametrize("value", [0, 1, "true", None])
+def test_public_verify_rejects_non_boolean_budget_switch(tmp_path: Path, value) -> None:
+    result, _ = _budget_run(tmp_path, settings={"enforceLocalBudget": value})
+    assert result.returncode == 1
+    assert "verify.enforceLocalBudget must be boolean" in result.stderr
+    assert "check-start:" not in result.stdout
+
+
+def test_public_verify_diagnostic_is_not_formal_acceptance(tmp_path: Path) -> None:
+    result, project = _budget_run(tmp_path, extra=("--diagnostic",))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "LATER_STARTED" in result.stdout
+    assert "check-start: slow" in result.stdout
+    assert "check-end: slow status=passed" in result.stdout
+    assert "status: diagnostic" in result.stdout
+    assert "status: passed\n" not in result.stdout
+    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    assert report["verificationStatus"] == "diagnostic"
+    assert report["diagnostic"] is True
+    assert "enforceLocalBudget" not in json.loads((project / ".build-and-verify/config.json").read_text())["verify"]
+
+
+@pytest.mark.parametrize("extra,settings", [
+    (("--diagnostic",), {"timeoutSeconds": 0.2}),
+    ((), {"enforceLocalBudget": False, "timeoutSeconds": 0.2}),
+])
+def test_public_verify_diagnostic_and_warning_preserve_check_timeout(tmp_path: Path,
+        extra: tuple[str, ...], settings: dict) -> None:
+    result, _ = _budget_run(tmp_path, extra=extra, settings=settings)
+    assert result.returncode == 1
+    assert "check_timeout: slow" in result.stderr
+
+
+def test_public_verify_budget_reaps_descendants_and_preserves_other_processes(tmp_path: Path) -> None:
+    pid_file = tmp_path / "descendant.pid"
+    child_code = "import time; time.sleep(10)"
+    parent_code = ("import subprocess,sys,time,pathlib; "
+        f"child=subprocess.Popen([sys.executable,'-c',{child_code!r}]); "
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(child.pid)); time.sleep(10)")
+    unrelated = subprocess.Popen([sys.executable, "-c", child_code])
+    try:
+        result, _ = _budget_run(tmp_path, checks=[
+            {"id": "tree", "command": [sys.executable, "-c", parent_code], "inputs": []}])
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert pid_file.exists(), result.stdout + result.stderr
+        assert unrelated.poll() is None
+        pid = int(pid_file.read_text())
+        if sys.platform == "win32":
+            import ctypes
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel.OpenProcess.restype = ctypes.c_void_p
+            kernel.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+            kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+            handle = kernel.OpenProcess(0x1000, False, pid)
+            if handle:
+                code = ctypes.c_ulong()
+                try:
+                    assert kernel.GetExitCodeProcess(handle, ctypes.byref(code))
+                    assert code.value != 259
+                finally:
+                    kernel.CloseHandle(handle)
+        else:
+            with pytest.raises(ProcessLookupError):
+                os.kill(pid, 0)
+    finally:
+        unrelated.terminate()
+        unrelated.wait(timeout=2)
 
 
 def _installed_build_and_verify(tmp_path: Path) -> tuple[str, Path, Path]:

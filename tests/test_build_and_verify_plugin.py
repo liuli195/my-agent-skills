@@ -165,6 +165,7 @@ def load_build_and_verify_module():
 
     def run_verify_with_test_runtime(*args, **kwargs):
         kwargs.setdefault("runtime_version", "test-runtime")
+        kwargs.setdefault("execution_context", "cloud")
         return run_verify(*args, **kwargs)
 
     runner.run_verify = run_verify_with_test_runtime
@@ -204,6 +205,10 @@ class FakeRunnerModule:
         runtime_version: str = "unknown",
         synthetic_changed_paths: list[str] | None = None,
         implementation_identity: str | None = None,
+        execution_context: str | None = None,
+        diagnostic: bool = False,
+        started_at: float | None = None,
+        invocation_control=None,
     ) -> int:
         def call_runner() -> int:
             return int(
@@ -217,6 +222,10 @@ class FakeRunnerModule:
                     runtime_version=runtime_version,
                     synthetic_changed_paths=(self.changed_files if synthetic_changed_paths is None else synthetic_changed_paths),
                     implementation_identity=implementation_identity,
+                    execution_context=execution_context or "cloud",
+                    diagnostic=diagnostic,
+                    started_at=started_at,
+                    invocation_control=invocation_control,
                 )
             )
 

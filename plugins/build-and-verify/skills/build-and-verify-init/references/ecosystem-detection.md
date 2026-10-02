@@ -10,6 +10,8 @@
 
 ## Existing Configuration（已有配置）
 
+- 保留已有 `verify.enforceLocalBudget`（本机预算强制开关）及预算值，不自行启用、关闭或修改；缺省开关开启的说明与本机、云端执行地点边界保持一致。
+
 - 信号：`.build-and-verify/config.json`（配置文件）存在。
 - 读取已有 `build.checks`（构建检查项）和 `verify.checks`（验证检查项），逐项保留 check id（检查项标识）、command（命令）、paths（受影响路径）、inputs（缓存输入）、checkParallel（检查项间并行）、pytestXdistWorkers（Pytest 工作进程数）和 timeoutSeconds（超时秒数）；保留已有 `verify.fullBudgetSeconds`（完整验证预算秒数），但不得自行启用或修改。
 - 已有配置包含旧 `parallel`（旧并行字段）时，必须把它作为 migration needed（需要迁移）风险提示展示，并让用户确认迁移为 `checkParallel`（检查项间并行）。

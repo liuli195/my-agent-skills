@@ -399,6 +399,19 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    'tests/test_build_and_verify_cli.py::test_public_verify_local_budget_stops_before_next_check': 'covers real CLI hard deadline and prevention of later launches',
+    'tests/test_build_and_verify_cli.py::test_public_verify_budget_applies_to_fast_and_full': 'covers real fast/full CLI deadlines and failed-result cache/report behavior',
+    'tests/test_build_and_verify_cli.py::test_public_verify_budget_warning_does_not_fail_exempt_runs': 'covers real CLI warning mode and cloud/PR/CI compatibility',
+    'tests/test_build_and_verify_cli.py::test_public_verify_unknown_context_fails_before_launch': 'covers real CLI unknown-context preflight before any child launch',
+    'tests/test_build_and_verify_cli.py::test_public_verify_parallel_queue_shares_deadline': 'covers real CLI parallel queue cancellation and serial launch prevention',
+    'tests/test_build_and_verify_cli.py::test_public_verify_serial_checks_share_remaining_budget_and_cache_only_completed': 'covers real CLI cumulative deadline and completed-only cache writes',
+    'tests/test_build_and_verify_cli.py::test_public_verify_parallel_active_checks_share_cancellation': 'covers real CLI cancellation of concurrent managed children',
+    'tests/test_build_and_verify_cli.py::test_public_verify_warning_and_diagnostic_preserve_real_errors': 'covers real CLI assertion failures in warning and diagnostic modes',
+    'tests/test_build_and_verify_cli.py::test_public_verify_explicit_context_overrides_inherited_context': 'covers real CLI parameter precedence over inherited context',
+    'tests/test_build_and_verify_cli.py::test_public_verify_rejects_non_boolean_budget_switch': 'covers real CLI schema failure before child launch',
+    'tests/test_build_and_verify_cli.py::test_public_verify_diagnostic_is_not_formal_acceptance': 'covers real CLI diagnostic output and absence of formal acceptance',
+    'tests/test_build_and_verify_cli.py::test_public_verify_diagnostic_and_warning_preserve_check_timeout': 'covers real CLI per-check safety timeout independently of total enforcement',
+    'tests/test_build_and_verify_cli.py::test_public_verify_budget_reaps_descendants_and_preserves_other_processes': 'covers real CLI process-tree reclamation and unrelated-process survival',
     'tests/test_build_and_verify_cli.py::test_controlled_pack_rejects_unknown_package': (
         'covers the controlled package CLI rejecting an unknown package; function=test_controlled_pack_rejects_unknown_package'
     ),

@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from types import ModuleType
@@ -272,10 +273,24 @@ def _build_parser() -> argparse.ArgumentParser:
     verify_parser.add_argument("--full", action="store_true")
     verify_parser.add_argument("--base", dest="baseline")
     verify_parser.add_argument("--performance-report", action="store_true")
+    verify_parser.add_argument("--execution-context", choices=("local", "cloud", "ci"))
+    verify_parser.add_argument("--diagnostic", action="store_true")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    raw_args = sys.argv[1:] if argv is None else argv
+    started_at = time.monotonic() if (
+        "--execution-context" in raw_args or "--diagnostic" in raw_args
+        or os.environ.get("BUILD_AND_VERIFY_EXECUTION_CONTEXT") == "local"
+    ) else None
+    if started_at is not None:
+        try:
+            startup_seconds = float(os.environ.get("BUILD_AND_VERIFY_STARTUP_SECONDS", "0"))
+            if 0 <= startup_seconds < float("inf"):
+                started_at -= startup_seconds
+        except ValueError:
+            pass
     parser = _build_parser()
     try:
         args = parser.parse_args(sys.argv[1:] if argv is None else argv)
@@ -303,6 +318,18 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if legacy_runtime is not None and not _migration_ready(project):
             return 1
+        invocation_control, guard_timer = None, None
+        if argv is None:
+            try:
+                invocation_control, guard_timer = _runner()._invocation_guard(
+                    project, context=args.execution_context, pr=args.pr,
+                    diagnostic=args.diagnostic,
+                    started_at=started_at if started_at is not None else time.monotonic(),
+                )
+            except (OSError, _runner().ConfigError) as error:
+                print(str(error), file=sys.stderr)
+                print("status: failed")
+                return 1
         try:
             metadata = _runtime_metadata()
         except RuntimeError as error:
@@ -318,6 +345,10 @@ def main(argv: list[str] | None = None) -> int:
                 performance_report=args.performance_report,
                 runtime_version=metadata["runtime_version"],
                 implementation_identity=metadata["implementation_identity"],
+                execution_context=args.execution_context,
+                diagnostic=args.diagnostic,
+                started_at=started_at,
+                invocation_control=invocation_control,
                 synthetic_changed_paths=(
                     sorted(
                         path.relative_to(project).as_posix()
@@ -328,6 +359,8 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             )
         )
+        if guard_timer is not None:
+            guard_timer.cancel()
         if result != 0 or legacy_runtime is None:
             return result
         return _migrate_legacy_runtime(project, legacy_runtime)

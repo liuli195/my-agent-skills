@@ -90,3 +90,4 @@ validation（校验）必须在 `build-and-verify-init`（构建与验证初始�
 - `verify.maxParallel`（最大并行检查数）如果存在，必须是非负整数。
 - `verify.timeoutSeconds`（超时秒数）如果存在，必须是大于 0 的 number（数字）。
 - `verify.fullBudgetSeconds`（完整验证预算秒数）如果存在，必须是非布尔的正整数；未启用时省略。
+- `verify.enforceLocalBudget`（本机预算强制开关）如果存在，必须为布尔值，缺省为开启；不得自行修改预算或开关。核对本机快速及完整验证硬截止、关闭仅警告、云端豁免和执行地点未知预检失败的说明。
