@@ -270,8 +270,12 @@ def run_check(
     stdout = io.StringIO()
     stderr = io.StringIO()
     try:
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            returncode = int(module.main(argv))
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(module, "_runtime_metadata", lambda: {
+                "runtime_version": "test-runtime", "implementation_identity": "test-implementation",
+            })
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                returncode = int(module.main(argv))
     finally:
         module._RUNNER_MODULE = original_runner_module
     return subprocess.CompletedProcess(
