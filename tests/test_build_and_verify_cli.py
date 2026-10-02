@@ -1305,33 +1305,6 @@ def test_packed_build_and_verify_rejects_dirty_legacy_migration(tmp_path: Path) 
     assert _git(project, "status", "--porcelain").stdout == "?? unrelated.txt\n"
 
 
-def test_packed_build_and_verify_accepts_controlled_ssh_dev_source(tmp_path: Path) -> None:
-    _, prefix, executable = _installed_build_and_verify(tmp_path)
-    source, ssh = _controlled_dev_source(tmp_path)
-    env = _isolated_env(tmp_path, prefix)
-    env["GIT_SSH_COMMAND"] = f'"{sys.executable}" "{ssh}"'
-    entered = subprocess.run(
-        [executable, "init", "--dev", "--source", source],
-        cwd=tmp_path,
-        text=True,
-        capture_output=True,
-        check=False,
-        env=env,
-    )
-
-    assert entered.returncode == 0, entered.stderr
-    report = json.loads(entered.stdout)
-    assert report["mode"] == "dev"
-    assert report["source"] == str(source)
-    assert _git(source, "status", "--porcelain").stdout == ""
-    diagnosed = subprocess.run(
-        [executable, "doctor"], cwd=source, text=True, capture_output=True, check=False, env=env
-    )
-    assert diagnosed.returncode == 0, diagnosed.stderr
-    toolchain = json.loads(diagnosed.stdout)["toolchain"]
-    assert toolchain["sourceCommit"] == _git(source, "rev-parse", "HEAD").stdout.strip()
-
-
 def test_packed_build_and_verify_dev_identity_controls_public_verify_cache(
     tmp_path: Path,
 ) -> None:
@@ -1348,17 +1321,23 @@ def test_packed_build_and_verify_dev_identity_controls_public_verify_cache(
         env=env,
     )
     assert entered.returncode == 0, entered.stderr
+    report = json.loads(entered.stdout)
+    assert report["mode"] == "dev"
+    assert report["source"] == str(source)
+    assert _git(source, "status", "--porcelain").stdout == ""
 
     diagnosed = subprocess.run(
         [executable, "doctor"],
-        cwd=tmp_path,
+        cwd=source,
         text=True,
         capture_output=True,
         check=False,
         env=env,
     )
     assert diagnosed.returncode == 0, diagnosed.stderr
-    first_identity = json.loads(diagnosed.stdout)["toolchain"]["implementationIdentity"]
+    toolchain = json.loads(diagnosed.stdout)["toolchain"]
+    assert toolchain["sourceCommit"] == _git(source, "rev-parse", "HEAD").stdout.strip()
+    first_identity = toolchain["implementationIdentity"]
 
     project = tmp_path / "project"
     project.mkdir()
