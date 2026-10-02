@@ -257,7 +257,7 @@ def test_public_verify_budget_interrupts_blocked_preparation_and_its_descendants
     started = time.monotonic()
     result, project = _budget_run(tmp_path, before_run=prepare)
     assert result.returncode != 0, result.stdout + result.stderr
-    assert "bounded-cleanup-fallback" in result.stdout
+    assert "bounded-cleanup-fallback" in result.stdout + result.stderr
     assert "check-start:" not in result.stdout
     assert time.monotonic() - started < 6
     assert pids.exists(), result.stdout + result.stderr
