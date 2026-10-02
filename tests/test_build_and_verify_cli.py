@@ -67,7 +67,8 @@ def _budget_run(tmp_path: Path, *, settings: dict | None = None,
     env.pop("BUILD_AND_VERIFY_EXECUTION_CONTEXT", None)
     if context is not None:
         env["BUILD_AND_VERIFY_EXECUTION_CONTEXT"] = context
-    result = subprocess.run([shutil.which("node"), str(PACKAGE_ROOT / "bin" / "build-and-verify.js"),
+    package_root = Path(os.environ.get("BUILD_AND_VERIFY_TEST_PACKAGE", str(PACKAGE_ROOT)))
+    result = subprocess.run([shutil.which("node"), str(package_root / "bin" / "build-and-verify.js"),
         "verify", "--project", str(project), *(('--full',) if full else ()), *extra],
         env=env, capture_output=True, text=True, timeout=8)
     return result, project
@@ -280,6 +281,269 @@ def test_public_verify_does_not_swallow_cache_write_failure(tmp_path: Path) -> N
     report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
     assert report["verificationStatus"] == "failed"
     assert report["checks"][0]["reason"] == "cache_write_error"
+
+
+def test_review_python_startup_is_inside_total_budget(tmp_path: Path, monkeypatch) -> None:
+    startup = tmp_path / "startup"
+    startup.mkdir()
+    (startup / "sitecustomize.py").write_text(
+        "import sys,time\n"
+        "if sys.argv[0].endswith('build_and_verify.py'): time.sleep(2)\n",
+        encoding="utf-8")
+    monkeypatch.setenv("PYTHONPATH", str(startup))
+    started = time.monotonic()
+    result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1}, checks=[
+        {"id": "quick", "command": [sys.executable, "-c", "print('QUICK_STARTED')"], "inputs": []}])
+    elapsed = time.monotonic() - started
+    assert result.returncode == 1, f"elapsed={elapsed:.2f}\n{result.stdout}\n{result.stderr}"
+    assert elapsed < 1.8
+    assert "QUICK_STARTED" not in result.stdout
+
+
+def test_review_python_probe_is_bounded(tmp_path: Path, monkeypatch) -> None:
+    startup = tmp_path / "startup"
+    startup.mkdir()
+    (startup / "sitecustomize.py").write_text(
+        "import sys,time\nif sys.argv[0] == '-c': time.sleep(2)\n", encoding="utf-8")
+    monkeypatch.setenv("PYTHONPATH", str(startup))
+    started = time.monotonic()
+    result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1}, checks=[
+        {"id": "quick", "command": [sys.executable, "-c", "print('QUICK_STARTED')"], "inputs": []}])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert time.monotonic() - started < 1.8
+    assert "QUICK_STARTED" not in result.stdout
+
+
+def test_review_legacy_migration_is_inside_total_budget(tmp_path: Path) -> None:
+    project = _legacy_project(tmp_path)
+    config = project / ".build-and-verify/config.json"
+    config.write_text(json.dumps({"version": 1, "verify": {
+        "fullBudgetSeconds": 1, "checks": []}}), encoding="utf-8")
+    assert _git(project, "add", ".").returncode == 0
+    assert _git(project, "commit", "-m", "short budget").returncode == 0
+    hook = project / ".git/hooks/pre-commit"
+    hook.write_text(f"#!/bin/sh\nexec {shlex.quote(Path(sys.executable).as_posix())} -c 'import time; time.sleep(3)'\n", encoding="utf-8")
+    hook.chmod(0o755)
+    before = {"status": _git(project, "status", "--porcelain").stdout,
+              "head": _git(project, "rev-parse", "HEAD").stdout.strip()}
+    started = time.monotonic()
+    result = subprocess.run([shutil.which("node"), str(PACKAGE_ROOT / "bin/build-and-verify.js"),
+        "verify", "--project", str(project), "--execution-context", "local"],
+        env={**os.environ, "BUILD_AND_VERIFY_PYTHON": sys.executable, "CI": "false", "GITHUB_ACTIONS": "false"},
+        text=True, capture_output=True, timeout=7)
+    elapsed = time.monotonic() - started
+    after = {"status": _git(project, "status", "--porcelain").stdout,
+             "head": _git(project, "rev-parse", "HEAD").stdout.strip(),
+             "runtimeExists": (project / ".build-and-verify/runtime").exists()}
+    print(f"migration-state: before={before!r} after={after!r}")
+    assert result.returncode == 1, f"elapsed={elapsed:.2f}\n{result.stdout}\n{result.stderr}"
+    assert elapsed < 1.8
+    assert after["head"] == before["head"]
+    assert set(after["status"].splitlines()) == {
+        "D  .build-and-verify/runtime/build_and_verify.py",
+        "D  .build-and-verify/runtime/build_and_verify_runner.py",
+        "D  .build-and-verify/runtime/version.json",
+        "?? .build-and-verify/runs/"}
+
+
+def _delay_report(tmp_path: Path, monkeypatch, seconds: float, *, main_only: bool,
+                  deadline_relative: bool = False) -> None:
+    startup = tmp_path / "startup"
+    startup.mkdir()
+    (startup / "sitecustomize.py").write_text(
+        "import sys,threading,time\n"
+        "def profile(frame,event,arg):\n"
+        "    if event == 'call' and frame.f_code.co_name == '_write_performance_report'"
+        + (" and threading.current_thread() is threading.main_thread()" if main_only else "") + ":\n"
+        + (f"        time.sleep(max(0, frame.f_locals['payload']['budgetSeconds'] - frame.f_locals['payload']['totalSeconds'] + {seconds}))\n"
+           if deadline_relative else f"        time.sleep({seconds})\n") +
+        "if sys.argv[0].endswith('build_and_verify.py'):\n"
+        "    sys.setprofile(profile)\n    threading.setprofile(profile)\n", encoding="utf-8")
+    monkeypatch.setenv("PYTHONPATH", str(startup))
+
+
+def test_review_report_crossing_deadline_cannot_pass(tmp_path: Path, monkeypatch) -> None:
+    _delay_report(tmp_path, monkeypatch, 0.2, main_only=True, deadline_relative=True)
+    started = time.monotonic()
+    result, project = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1},
+        extra=("--performance-report",), checks=[{"id": "quick", "command":
+            [sys.executable, "-c", "import time; time.sleep(.05)"], "inputs": []}])
+    assert "check-end: quick status=passed" in result.stdout, result.stdout + result.stderr
+    assert result.returncode == 1, f"elapsed={time.monotonic()-started:.2f}\n{result.stdout}\n{result.stderr}"
+    assert "status: passed" not in result.stdout
+    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    assert report["verificationStatus"] == "failed"
+    assert report["reason"] == "total_budget_timeout"
+
+
+@pytest.mark.parametrize("blocked_io", ["report", "output"])
+def test_review_blocked_failure_report_cannot_delay_reaping(tmp_path: Path, monkeypatch, blocked_io: str) -> None:
+    if blocked_io == "report":
+        _delay_report(tmp_path, monkeypatch, 4, main_only=False)
+    else:
+        startup = tmp_path / "startup"
+        startup.mkdir()
+        (startup / "sitecustomize.py").write_text(
+            "import builtins,sys,time\noriginal=builtins.print\n"
+            "def delayed(*args,**kwargs):\n"
+            "    if args and str(args[0]).startswith(('check-end:', 'total_budget_timeout:')): time.sleep(4)\n"
+            "    return original(*args,**kwargs)\n"
+            "if sys.argv[0].endswith('build_and_verify.py'): builtins.print=delayed\n", encoding="utf-8")
+        monkeypatch.setenv("PYTHONPATH", str(startup))
+    pid_file = tmp_path / "descendant.pid"
+    parent_code = ("import subprocess,sys,time,pathlib; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(5)']); "
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(child.pid)); time.sleep(5)")
+    started = time.monotonic()
+    result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1}, checks=[
+        {"id": "tree", "command": [sys.executable, "-c", parent_code], "inputs": []}])
+    elapsed = time.monotonic() - started
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert elapsed < 2.5, f"cutoff was blocked by report I/O: {elapsed:.2f}s"
+    assert pid_file.exists(), result.stdout + result.stderr
+    _assert_pid_terminated(int(pid_file.read_text()))
+
+
+def test_review_output_crossing_deadline_cannot_pass(tmp_path: Path, monkeypatch) -> None:
+    startup = tmp_path / "startup"
+    startup.mkdir()
+    (startup / "sitecustomize.py").write_text(
+        "import builtins,sys,time\noriginal=builtins.print\nstarted=time.monotonic()\n"
+        "def delayed(*args,**kwargs):\n"
+        "    if args and str(args[0]).startswith('checked:'):\n"
+        "        time.sleep(max(0, started+.9-time.monotonic())+.3)\n"
+        "    return original(*args,**kwargs)\n"
+        "if sys.argv[0].endswith('build_and_verify.py'): builtins.print=delayed\n", encoding="utf-8")
+    monkeypatch.setenv("PYTHONPATH", str(startup))
+    result, project = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1},
+        extra=("--performance-report",), checks=[{"id": "quick", "command":
+            [sys.executable, "-c", "print('DONE')"], "inputs": []}])
+    assert "check-end: quick status=passed" in result.stdout, result.stdout + result.stderr
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "status: passed" not in result.stdout
+    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    assert report["verificationStatus"] == "failed"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows suspended-process ownership")
+def test_review_expired_windows_launch_is_never_resumed(tmp_path: Path, monkeypatch) -> None:
+    import importlib.util
+    package_root = Path(os.environ.get("BUILD_AND_VERIFY_TEST_PACKAGE", str(PACKAGE_ROOT)))
+    spec = importlib.util.spec_from_file_location("review_budget_runner", package_root / "python/build_and_verify_runner.py")
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    real_popen, real_job = subprocess.Popen, module._windows_job
+
+    def delayed_popen(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        time.sleep(0.15)
+        return process
+
+    def observed_job(*args, **kwargs):
+        job = real_job(*args, **kwargs)
+        time.sleep(0.15)  # If resumed, the real process has time to expose the bug.
+        return job
+
+    monkeypatch.setattr(module.subprocess, "Popen", delayed_popen)
+    monkeypatch.setattr(module, "_windows_job", observed_job)
+    marker = tmp_path / "resumed.txt"
+    control = module.RunControl(time.monotonic() + 0.05)
+    with pytest.raises(module.TotalBudgetTimeout):
+        module._managed_run([sys.executable, "-c",
+            f"from pathlib import Path; Path({str(marker)!r}).write_text('started')"], control,
+            text=True, timeout=3)
+    assert not marker.exists(), "expired suspended process was resumed"
+
+
+@pytest.mark.parametrize("phase", ["probe", "entry"])
+def test_review_startup_reaps_descendants_after_parent_exits(tmp_path: Path, monkeypatch, phase: str) -> None:
+    startup = tmp_path / "startup"
+    startup.mkdir()
+    pids = tmp_path / "startup-pids.txt"
+    condition = "sys.argv[0] == '-c'" if phase == "probe" else "sys.argv[0].endswith('build_and_verify.py')"
+    (startup / "sitecustomize.py").write_text(
+        "import subprocess,sys\nfrom pathlib import Path\n"
+        f"if {condition}:\n"
+        "    child=subprocess.Popen([sys.executable,'-S','-c','import time; time.sleep(3)'])\n"
+        f"    with Path({str(pids)!r}).open('a') as stream: stream.write(str(child.pid)+'\\n')\n"
+        + ("    raise SystemExit(1)\n" if phase == "entry" else ""), encoding="utf-8")
+    monkeypatch.setenv("PYTHONPATH", str(startup))
+    started = time.monotonic()
+    result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1}, checks=[
+        {"id": "quick", "command": [sys.executable, "-c", "print('DONE')"], "inputs": []}])
+    elapsed = time.monotonic() - started
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert elapsed < 1.8, f"startup descendant held the public entry open for {elapsed:.2f}s"
+    assert pids.exists(), result.stdout + result.stderr
+    owned_pids = [int(pid) for pid in pids.read_text().splitlines()]
+    try:
+        for pid in owned_pids:
+            _assert_pid_terminated(pid)
+    finally:
+        # Red runs let these known synthetic children finish naturally; never
+        # terminate a PID after its owning parent has exited and released it.
+        for pid in owned_pids:
+            until = time.monotonic() + 4
+            while time.monotonic() < until:
+                try:
+                    _assert_pid_terminated(pid)
+                    break
+                except AssertionError:
+                    time.sleep(0.02)
+
+
+def test_review_interpreter_exit_remains_inside_total_budget(tmp_path: Path, monkeypatch) -> None:
+    startup = tmp_path / "startup"
+    startup.mkdir()
+    (startup / "sitecustomize.py").write_text(
+        "import atexit,sys,time\n"
+        "if sys.argv[0].endswith('build_and_verify.py'): atexit.register(time.sleep,2)\n", encoding="utf-8")
+    monkeypatch.setenv("PYTHONPATH", str(startup))
+    started = time.monotonic()
+    result, project = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1}, extra=("--performance-report",), checks=[
+        {"id": "quick", "command": [sys.executable, "-c", "print('DONE')"], "inputs": []}])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert time.monotonic() - started < 1.8
+    assert "status: passed" not in result.stdout
+    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    assert report["verificationStatus"] == "failed"
+    assert report["phase"] == "finalization"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows background-process compatibility")
+def test_review_budget_off_preserves_background_dependency(tmp_path: Path) -> None:
+    pids = tmp_path / "background.pid"
+    first = ("import subprocess,sys,time; from pathlib import Path; time.sleep(1.1); "
+        "child=subprocess.Popen([sys.executable,'-S','-c','import time; time.sleep(.7)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
+        f"Path({str(pids)!r}).write_text(str(child.pid))")
+    second = ("import ctypes; from pathlib import Path\n"
+        f"pid=int(Path({str(pids)!r}).read_text())\n"
+        "kernel=ctypes.WinDLL('kernel32',use_last_error=True)\n"
+        "kernel.OpenProcess.restype=ctypes.c_void_p\n"
+        "kernel.GetExitCodeProcess.argtypes=[ctypes.c_void_p,ctypes.POINTER(ctypes.c_ulong)]\n"
+        "kernel.CloseHandle.argtypes=[ctypes.c_void_p]\n"
+        "handle=kernel.OpenProcess(0x1000,False,pid)\n"
+        "assert handle,'background dependency was terminated'\n"
+        "code=ctypes.c_ulong()\n"
+        "assert kernel.GetExitCodeProcess(handle,ctypes.byref(code))\n"
+        "kernel.CloseHandle(handle)\n"
+        "assert code.value==259,'background dependency was terminated'\n")
+    result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1, "enforceLocalBudget": False}, checks=[
+        {"id": "start", "command": [sys.executable, "-c", first], "inputs": []},
+        {"id": "use", "command": [sys.executable, "-c", second], "inputs": []}])
+    try:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "performance-warning:" in result.stdout
+    finally:
+        if pids.exists():
+            until = time.monotonic() + 2
+            while time.monotonic() < until:
+                try:
+                    _assert_pid_terminated(int(pids.read_text()))
+                    break
+                except AssertionError:
+                    time.sleep(0.02)
 
 
 def _installed_build_and_verify(tmp_path: Path) -> tuple[str, Path, Path]:

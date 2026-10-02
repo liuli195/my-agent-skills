@@ -399,6 +399,15 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    'tests/test_build_and_verify_cli.py::test_review_startup_reaps_descendants_after_parent_exits': 'covers real CLI startup ownership after probe or interpreter parent exit',
+    'tests/test_build_and_verify_cli.py::test_review_interpreter_exit_remains_inside_total_budget': 'covers real CLI deadline during interpreter exit without premature formal success',
+    'tests/test_build_and_verify_cli.py::test_review_budget_off_preserves_background_dependency': 'covers real CLI warning-only execution preserving a background dependency for the next check',
+    'tests/test_build_and_verify_cli.py::test_review_output_crossing_deadline_cannot_pass': 'covers real CLI output crossing the shared deadline without formal success or a passed report',
+    'tests/test_build_and_verify_cli.py::test_review_python_startup_is_inside_total_budget': 'covers real CLI cutoff before delayed Python startup finishes',
+    'tests/test_build_and_verify_cli.py::test_review_python_probe_is_bounded': 'covers real CLI deadline while interpreter discovery is blocked',
+    'tests/test_build_and_verify_cli.py::test_review_legacy_migration_is_inside_total_budget': 'covers real CLI migration cutoff and records staged deletions without an unintended commit',
+    'tests/test_build_and_verify_cli.py::test_review_report_crossing_deadline_cannot_pass': 'covers real CLI finalization crossing the shared deadline without emitting formal success',
+    'tests/test_build_and_verify_cli.py::test_review_blocked_failure_report_cannot_delay_reaping': 'covers real CLI process-tree termination even when deadline reporting is blocked',
     'tests/test_build_and_verify_cli.py::test_public_verify_does_not_swallow_cache_write_failure': 'covers real CLI nonzero failure and consistent report when successful child output cannot be cached',
     'tests/test_build_and_verify_cli.py::test_public_verify_budget_interrupts_blocked_preparation_and_its_descendants': 'covers real CLI cutoff during blocked preparation and termination of both preparation parent and descendant',
     'tests/test_build_and_verify_cli.py::test_public_verify_local_budget_stops_before_next_check': 'covers real CLI hard deadline and prevention of later launches',

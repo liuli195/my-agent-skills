@@ -115,6 +115,10 @@ def _runner() -> ModuleType:
     if _RUNNER_MODULE is not None:
         return _RUNNER_MODULE
     runner_path = Path(__file__).resolve().with_name("build_and_verify_runner.py")
+    bootstrap = sys.modules.get("build_and_verify_bootstrap_runner")
+    if bootstrap is not None and Path(bootstrap.__file__).resolve() == runner_path.resolve():
+        _RUNNER_MODULE = bootstrap
+        return bootstrap
     spec = importlib.util.spec_from_file_location("build_and_verify_runner", runner_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"missing_runner: {runner_path}")
@@ -287,9 +291,9 @@ def main(argv: list[str] | None = None) -> int:
     ) else None
     if started_at is not None:
         try:
-            startup_seconds = float(os.environ.get("BUILD_AND_VERIFY_STARTUP_SECONDS", "0"))
-            if 0 <= startup_seconds < float("inf"):
-                started_at -= startup_seconds
+            origin = float(os.environ.get("BUILD_AND_VERIFY_STARTED_MONOTONIC", "nan"))
+            if 0 <= origin < float("inf"):
+                started_at = origin
         except ValueError:
             pass
     parser = _build_parser()
@@ -360,12 +364,29 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             )
         )
-        if guard_timer is not None:
-            invocation_control.finished.set()
-            guard_timer.cancel()
-        if result != 0 or legacy_runtime is None:
+        try:
+            if result == 0 and legacy_runtime is not None:
+                if invocation_control is not None:
+                    invocation_control.scheduling = False
+                    invocation_control.phase = "migration"
+                    if os.environ.get("BUILD_AND_VERIFY_STARTUP_GUARD") == "1":
+                        print("build-and-verify-phase:migration", flush=True)
+                if invocation_control is None or not invocation_control.expired():
+                    result = _migrate_legacy_runtime(project, legacy_runtime)
+            if invocation_control is not None:
+                invocation_control.phase = "finalization"
+                result = _runner()._finish_verify(project, invocation_control, result, started_at)
+                status = (invocation_control.success_status or "passed") if result == 0 else "failed"
+                if os.environ.get("BUILD_AND_VERIFY_STARTUP_GUARD") == "1":
+                    print("build-and-verify-formal-result:" + json.dumps({"status": status,
+                        "code": result, "report": invocation_control.report_payload}), flush=True)
+                elif result == 0:
+                    print(f"status: {status}", flush=True)
             return result
-        return _migrate_legacy_runtime(project, legacy_runtime)
+        finally:
+            if guard_timer is not None:
+                invocation_control.finished.set()
+                guard_timer.cancel()
     parser.error(f"unsupported command: {args.command}")
     return 2
 

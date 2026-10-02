@@ -45,6 +45,9 @@ class CheckResult:
     reason: str | None = None
 
 
+_BOOTSTRAP_ROOT_JOB: tuple[Any, Any] | None = None
+
+
 class TotalBudgetTimeout(subprocess.TimeoutExpired):
     pass
 
@@ -64,6 +67,9 @@ class RunControl:
         self.runtime_version = "unknown"
         self.scheduling = False
         self.finished = threading.Event()
+        self.success_status: str | None = None
+        self.report_payload: dict[str, Any] | None = None
+        self.phase = "preparation"
 
     def expired(self) -> bool:
         if self.deadline is not None and time.monotonic() >= self.deadline:
@@ -71,7 +77,7 @@ class RunControl:
         return self.cancelled.is_set()
 
 
-def _windows_job(process: subprocess.Popen) -> tuple[Any, Any]:
+def _windows_job(process: subprocess.Popen, control: RunControl | None = None) -> tuple[Any, Any]:
     # Spawn suspended, assign before resuming: descendants cannot escape the job
     # in the gap between process creation and assignment.
     import ctypes
@@ -109,6 +115,8 @@ def _windows_job(process: subprocess.Popen) -> tuple[Any, Any]:
             raise ctypes.WinError(ctypes.get_last_error())
         if not kernel.AssignProcessToJobObject(job, wintypes.HANDLE(int(process._handle))):
             raise ctypes.WinError(ctypes.get_last_error())
+        if control is not None and control.expired():
+            raise TotalBudgetTimeout(process.args, 0)
         ntdll = ctypes.WinDLL("ntdll")
         ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
         ntdll.NtResumeProcess.restype = ctypes.c_long
@@ -118,6 +126,28 @@ def _windows_job(process: subprocess.Popen) -> tuple[Any, Any]:
     except BaseException:
         kernel.CloseHandle(job)
         raise
+
+
+def _bootstrap_cli() -> None:
+    """Own startup descendants before loading the interpreter's site hooks."""
+    import sys
+    global _BOOTSTRAP_ROOT_JOB
+    if os.name == "nt":
+        import ctypes
+        from types import SimpleNamespace
+        kernel = ctypes.WinDLL("kernel32")
+        kernel.GetCurrentProcess.restype = ctypes.c_void_p
+        _BOOTSTRAP_ROOT_JOB = _windows_job(SimpleNamespace(_handle=kernel.GetCurrentProcess()))
+    probe = sys.argv[2] == "--probe"
+    sys.argv = ["-c"] if probe else sys.argv[2:]
+    import site
+    site.main()
+    if probe:
+        print(f"{sys.version_info.major}.{sys.version_info.minor}")
+        print(time.monotonic())
+    else:
+        import runpy
+        runpy.run_path(sys.argv[0], run_name="__main__")
 
 
 def _managed_run(command: Any, control: RunControl, **kwargs: Any) -> subprocess.CompletedProcess:
@@ -141,7 +171,7 @@ def _managed_run(command: Any, control: RunControl, **kwargs: Any) -> subprocess
             process = subprocess.Popen(command, **kwargs)
             control.processes[process.pid] = process
             if os.name == "nt":
-                job = _windows_job(process)
+                job = _windows_job(process, control)
         single_deadline = time.monotonic() + timeout
         while True:
             remaining = single_deadline - time.monotonic()
@@ -198,8 +228,8 @@ def _invocation_guard(project: Path, *, context: str | None, pr: bool,
         return None, None
     control = RunControl(started_at + budget)
     control.selected = _checks(config, "verify")
-    root_job = None
-    if os.name == "nt":
+    root_job = _BOOTSTRAP_ROOT_JOB
+    if os.name == "nt" and root_job is None:
         # Keep this handle until process exit. Closing it terminates this CLI and
         # every descendant, even if preparation never reaches the scheduler.
         import ctypes
@@ -207,7 +237,7 @@ def _invocation_guard(project: Path, *, context: str | None, pr: bool,
         kernel = ctypes.WinDLL("kernel32")
         kernel.GetCurrentProcess.restype = ctypes.c_void_p
         root_job = _windows_job(SimpleNamespace(_handle=kernel.GetCurrentProcess()))
-    else:
+    elif os.name != "nt":
         if os.getsid(0) != os.getpid():
             os.setsid()
 
@@ -224,13 +254,20 @@ def _invocation_guard(project: Path, *, context: str | None, pr: bool,
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+        if os.environ.get("BUILD_AND_VERIFY_STARTUP_GUARD") == "1":
+            # The public parent reports only after OS cleanup has terminated
+            # this job. No deadline termination depends on Python output/I/O.
+            if root_job is None:
+                import signal
+                os.killpg(os.getpid(), signal.SIGKILL)
+            os._exit(124)
         completed = dict(control.results)
         unfinished = [check['id'] for check in control.selected if check['id'] in control.active_checks]
         not_started = [check['id'] for check in control.selected if check['id'] not in completed and check['id'] not in unfinished]
         payload = {"schemaVersion": 1, "runtimeVersion": control.runtime_version,
             "generatedAt": datetime.now(timezone.utc).isoformat(), "totalSeconds": elapsed,
             "budgetSeconds": budget, "overBudget": True, "verificationStatus": "failed",
-            "executionContext": "local", "diagnostic": False, "reason": "total_budget_timeout",
+            "executionContext": "local", "diagnostic": False, "reason": "total_budget_timeout", "phase": control.phase,
             "unfinished": unfinished, "notStarted": not_started,
             "checks": [{"id": check['id'], "status": completed[check['id']].status if check['id'] in completed
                 else ("timed_out" if check['id'] in unfinished else "not_started"),
@@ -239,18 +276,23 @@ def _invocation_guard(project: Path, *, context: str | None, pr: bool,
                 else round(max(0, time.monotonic() - control.start_times[check['id']]), 2)
                 if check['id'] in control.start_times else 0}
                 for check in control.selected]}
-        _write_performance_report(project / ".build-and-verify/runs/performance-report.json", payload)
-        print(f"total_budget_timeout: totalSeconds={elapsed:.2f} budgetSeconds={budget}; bounded-cleanup-fallback", flush=True)
-        print(f"unfinished: {', '.join(unfinished)}", flush=True)
-        print(f"not-started: {', '.join(not_started)}", flush=True)
-        print("status: failed", flush=True)
+        def publish_failure() -> None:
+            _write_performance_report(project / ".build-and-verify/runs/performance-report.json", payload)
+            print(f"total_budget_timeout: totalSeconds={elapsed:.2f} budgetSeconds={budget}; bounded-cleanup-fallback", flush=True)
+            print(f"unfinished: {', '.join(unfinished)}", flush=True)
+            print(f"not-started: {', '.join(not_started)}", flush=True)
+            print("status: failed", flush=True)
+
+        publisher = threading.Thread(target=publish_failure, daemon=True)
+        publisher.start()
+        publisher.join(timeout=0.1)
         if root_job is None:
             import signal
             os.killpg(os.getpid(), signal.SIGKILL)
         # Exit this CLI nonzero before Windows closes its sole owning job handle.
         # Closing it explicitly first would terminate this process with code 0.
         # OS handle cleanup then terminates every owned descendant.
-        os._exit(1)
+        os._exit(124)
 
     def deadline_reached() -> None:
         control.cancelled.set()
@@ -266,7 +308,32 @@ def _invocation_guard(project: Path, *, context: str | None, pr: bool,
     timer.start()
     # Keep the owning Windows handle alive after cancellation until CLI exit.
     timer.root_job = root_job
+    if os.environ.get("BUILD_AND_VERIFY_STARTUP_GUARD") == "1":
+        print("build-and-verify-startup-guard-ready", flush=True)
     return control, timer
+
+
+def _finish_verify(project: Path, control: RunControl, result: int, started_at: float) -> int:
+    """Commit the formal result only after preparation, checks and migration."""
+    payload = control.report_payload
+    if control.expired():
+        result = 1
+    if payload is not None:
+        payload.update(totalSeconds=round(time.monotonic() - started_at, 2),
+            verificationStatus="failed" if result else "running" if os.environ.get("BUILD_AND_VERIFY_STARTUP_GUARD") == "1"
+                else control.success_status or "passed")
+        if control.expired():
+            payload.update(overBudget=True, reason="total_budget_timeout")
+        _write_performance_report(project / ".build-and-verify/runs/performance-report.json", payload)
+    if control.expired():
+        result = 1
+        if payload is not None:
+            payload.update(totalSeconds=round(time.monotonic() - started_at, 2),
+                verificationStatus="failed", overBudget=True, reason="total_budget_timeout")
+            _write_performance_report(project / ".build-and-verify/runs/performance-report.json", payload)
+        print("total_budget_timeout: finalization", flush=True)
+        print("status: failed", flush=True)
+    return result
 
 
 def _is_non_empty_string(value: Any) -> bool:
@@ -1282,6 +1349,9 @@ def run_verify(
     config_changed = ".build-and-verify/config.json" in changed
     selected = checks if full or config_changed else _selected_checks(checks, changed)
     control.selected = selected
+    if invocation_control is not None and os.environ.get("BUILD_AND_VERIFY_STARTUP_GUARD") == "1":
+        print("build-and-verify-selected:" + json.dumps({"ids": [check['id'] for check in selected],
+            "runtimeVersion": runtime_version}), flush=True)
     print(f"scene: {'pr' if pr else 'local'}", flush=True)
     print(f"execution-context: {context}", flush=True)
     if diagnostic:
@@ -1317,7 +1387,8 @@ def run_verify(
         print(f"check-start: {check['id']}", flush=True)
         control.start_times[check['id']] = time.monotonic()
         control.active_checks.add(check['id'])
-        result = _run_check_result(index, project, check, config, changed, runner, identity, control)
+        result = _run_check_result(index, project, check, config, changed, runner, identity,
+            control if control.deadline is not None else None)
         result.status = result.status or ("passed" if result.returncode == 0 else "failed")
         control.results[check['id']] = result
         control.active_checks.discard(check['id'])
@@ -1334,6 +1405,7 @@ def run_verify(
 
     control.results.update({result.check['id']: result for result in results})
     control.scheduling = True
+    control.phase = "checks"
 
     parallel = [item for item in pending if item[1].get("checkParallel") is True]
     serial = [item for item in pending if item[1].get("checkParallel") is not True]
@@ -1374,26 +1446,37 @@ def run_verify(
         payload = {"schemaVersion": 1, "runtimeVersion": runtime_version,
             "generatedAt": datetime.now(timezone.utc).isoformat(), "totalSeconds": total,
             "budgetSeconds": budget, "overBudget": over,
-            "verificationStatus": "failed" if failures else ("diagnostic" if diagnostic else "passed"),
+            "verificationStatus": "failed" if failures else ("running" if invocation_control is not None else "diagnostic" if diagnostic else "passed"),
             "executionContext": context, "diagnostic": diagnostic,
             "reason": "total_budget_timeout" if timed_out else None,
             "unfinished": unfinished, "notStarted": unstarted,
             "checks": [{"id": result.check['id'], "status": result.status,
                         "reason": result.reason, "durationSeconds": round(result.duration_seconds, 2)} for result in results]}
+        control.report_payload = payload
         if _write_performance_report(report_path, payload):
             print("performance-report: .build-and-verify/runs/performance-report.json")
         else:
             print("performance-report-warning: .build-and-verify/runs/performance-report.json", file=sys.stderr)
     print(f"checked: {_check_ids([result.check for result in results if result.status != 'not_started'])}")
     print(f"full-not-run: {str(not full).lower()}")
+    if control.expired():
+        failures = True
+        if control.report_payload is not None:
+            control.report_payload.update(totalSeconds=round(time.monotonic() - started, 2),
+                verificationStatus="failed", overBudget=True, reason="total_budget_timeout")
+            _write_performance_report(project / ".build-and-verify/runs/performance-report.json", control.report_payload)
     if failures:
         print(f"failed: {_check_ids([result.check for result in results if result.returncode != 0])}")
         return _verify_error("verification_failed")
     if not selected:
-        print("status: skipped")
+        control.success_status = "skipped"
+        if invocation_control is None:
+            print("status: skipped")
         print(f"reason: {'no_changed_files' if not changed and not full else 'no_matching_checks'}")
     else:
-        print(f"status: {'diagnostic' if diagnostic else 'passed'}")
+        control.success_status = "diagnostic" if diagnostic else "passed"
+        if invocation_control is None:
+            print(f"status: {control.success_status}")
     return 0
 
 
