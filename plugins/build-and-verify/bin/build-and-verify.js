@@ -147,8 +147,13 @@ if (budget !== null) {
     while ((newline = pending.indexOf("\n")) >= 0) {
       const line = pending.slice(0, newline + 1);
       pending = pending.slice(newline + 1);
+      let result;
       if (line.trim().startsWith("build-and-verify-formal-result:")) {
-        const result = JSON.parse(line.trim().slice("build-and-verify-formal-result:".length));
+        try { result = JSON.parse(line.trim().slice("build-and-verify-formal-result:".length)); } catch {}
+      }
+      if (result && ["passed", "skipped", "failed"].includes(result.status)
+          && Number.isInteger(result.code) && result.code >= 0
+          && (result.report === null || (typeof result.report === "object" && !Array.isArray(result.report)))) {
         formalSuccess = result.code === 0 ? result.status : undefined;
         finalReport = result.report;
         runtimePhase = "finalization";

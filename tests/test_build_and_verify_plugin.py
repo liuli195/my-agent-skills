@@ -1293,6 +1293,7 @@ def test_build_and_verify_init_references_have_cross_file_flow_invariants() -> N
 
 def test_build_and_verify_init_documents_optional_full_budget() -> None:
     skill = (INIT_SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    assert "verify.enforceLocalBudget" in skill
     questionnaire = (INIT_REFERENCE_ROOT / "questionnaire.md").read_text(encoding="utf-8")
     ecosystem = (INIT_REFERENCE_ROOT / "ecosystem-detection.md").read_text(encoding="utf-8")
     config_draft = (INIT_REFERENCE_ROOT / "config-draft.md").read_text(encoding="utf-8")
@@ -1302,7 +1303,7 @@ def test_build_and_verify_init_documents_optional_full_budget() -> None:
         assert "verify.fullBudgetSeconds" in text
     assert "用户确认正整数后" in questionnaire + config_draft
     assert "未启用时省略" in questionnaire + config_draft
-    assert "只警告并记录报告" in skill + questionnaire
+    assert "关闭时仅警告" in skill
 
 
 def test_build_and_verify_init_skill_closes_interactive_validation_loop_inside_plugin() -> None:
@@ -2718,6 +2719,30 @@ def test_build_and_verify_full_performance_report_matrix(
         assert report["verificationStatus"] == (
             "failed" if functional_returncode else "passed"
         )
+
+
+@pytest.mark.parametrize("settings,context,extra", [
+    ({"enforceLocalBudget": False}, "local", ()),
+    ({}, "cloud", ()), ({}, "ci", ()), ({}, "local", ("--pr",)),
+])
+def test_local_budget_warning_exemption_policy_matrix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: dict,
+    context: str, extra: tuple[str, ...],
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(project, verify_config={"fullBudgetSeconds": 1, **settings},
+        verify_checks=[{"id": name, "command": [name], "inputs": []} for name in ("slow", "later")])
+    runner = FakeRunner({("later",): completed(["later"], stdout="LATER_STARTED\n")})
+    monkeypatch.delenv("BUILD_AND_VERIFY_STARTED_MONOTONIC", raising=False)
+    monkeypatch.setattr(load_build_and_verify_runner_module().time, "monotonic",
+        lambda: 1.2 if len(runner.calls) >= 2 else 0.0)
+    result = run_check(project, "verify", "--full", "--execution-context", context,
+        *extra, runner=runner, changed_files=[])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert runner.calls == [["slow"], ["later"]]
+    assert "LATER_STARTED" in result.stdout
+    assert "performance-warning:" in result.stdout
 
 
 def test_build_and_verify_performance_report_schema_is_exact(

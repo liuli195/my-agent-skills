@@ -399,6 +399,7 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    'tests/test_build_and_verify_cli.py::test_public_verify_protocol_like_check_output_is_preserved': 'covers real public entry preserving ordinary text that resembles the final-result protocol',
     'tests/test_build_and_verify_cli.py::test_review_startup_reaps_descendants_after_parent_exits': 'covers real CLI startup ownership after probe or interpreter parent exit',
     'tests/test_build_and_verify_cli.py::test_review_interpreter_exit_remains_inside_total_budget': 'covers real CLI deadline during interpreter exit without premature formal success',
     'tests/test_build_and_verify_cli.py::test_review_budget_off_preserves_background_dependency': 'covers real CLI warning-only execution preserving a background dependency for the next check',
@@ -412,7 +413,7 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_build_and_verify_cli.py::test_public_verify_budget_interrupts_blocked_preparation_and_its_descendants': 'covers real CLI cutoff during blocked preparation and termination of both preparation parent and descendant',
     'tests/test_build_and_verify_cli.py::test_public_verify_local_budget_stops_before_next_check': 'covers real CLI hard deadline and prevention of later launches',
     'tests/test_build_and_verify_cli.py::test_public_verify_budget_applies_to_fast_and_full': 'covers real fast/full CLI deadlines and failed-result cache/report behavior',
-    'tests/test_build_and_verify_cli.py::test_public_verify_budget_warning_does_not_fail_exempt_runs': 'covers real CLI warning mode and cloud/PR/CI compatibility',
+    'tests/test_build_and_verify_cli.py::test_public_verify_budget_warning_does_not_fail_exempt_runs': 'covers real CLI warning-only execution; cloud/PR/CI and switch policy use the fake-runner matrix',
     'tests/test_build_and_verify_cli.py::test_public_verify_unknown_context_fails_before_launch': 'covers real CLI unknown-context preflight before any child launch',
     'tests/test_build_and_verify_cli.py::test_public_verify_parallel_queue_shares_deadline': 'covers real CLI parallel queue cancellation and serial launch prevention',
     'tests/test_build_and_verify_cli.py::test_public_verify_serial_checks_share_remaining_budget_and_cache_only_completed': 'covers real CLI cumulative deadline and completed-only cache writes',

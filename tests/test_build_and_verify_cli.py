@@ -89,16 +89,23 @@ def test_public_verify_budget_applies_to_fast_and_full(tmp_path: Path, full: boo
     assert not list((project / ".build-and-verify/cache").glob("*.json"))
 
 
-@pytest.mark.parametrize("settings,context,extra", [
-    ({"enforceLocalBudget": False}, "local", ()),
-    ({}, "cloud", ()), ({}, "ci", ()), ({}, "local", ("--pr",)),
-])
-def test_public_verify_budget_warning_does_not_fail_exempt_runs(tmp_path: Path, settings: dict,
-        context: str, extra: tuple[str, ...]) -> None:
-    result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1, **settings}, context=context, extra=extra)
+def test_public_verify_budget_warning_does_not_fail_exempt_runs(tmp_path: Path) -> None:
+    result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1, "enforceLocalBudget": False})
     assert result.returncode == 0, result.stdout + result.stderr
     assert "LATER_STARTED" in result.stdout
     assert "performance-warning:" in result.stdout
+
+
+def test_public_verify_protocol_like_check_output_is_preserved(tmp_path: Path) -> None:
+    lines = [
+        "build-and-verify-formal-result: ordinary-test-output",
+        'build-and-verify-formal-result: {"status":"passed"}',
+    ]
+    result, _ = _budget_run(tmp_path, checks=[{"id": "output", "inputs": [],
+        "command": [sys.executable, "-c", f"print({chr(10).join(lines)!r})"]}])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert all(line in result.stdout for line in lines)
+    assert "status: passed" in result.stdout
 
 
 def test_public_verify_unknown_context_fails_before_launch(tmp_path: Path) -> None:
