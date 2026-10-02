@@ -2633,23 +2633,28 @@ def test_build_and_verify_runner_full_verify_allows_empty_checks(tmp_path: Path)
     )["checks"] == []
 
 
-@pytest.mark.parametrize("value", [True, 0, -1, 1.5, "1"])
-def test_build_and_verify_invalid_full_budget_rejects_before_checks(
-    tmp_path: Path, value: object
+@pytest.mark.parametrize("field,value", [
+    *(('fullBudgetSeconds', value) for value in [True, 0, -1, 1.5, "1"]),
+    *(('enforceLocalBudget', value) for value in [0, 1, "true", None]),
+])
+def test_build_and_verify_invalid_budget_config_rejects_before_checks(
+    tmp_path: Path, field: str, value: object
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
     write_runner_config(
         project,
         verify_checks=[{"id": "verify", "command": ["verify"], "inputs": []}],
-        verify_config={"fullBudgetSeconds": value},
+        verify_config={field: value},
     )
     runner = FakeRunner()
 
     result = run_check(project, "verify", "--full", runner=runner, changed_files=[])
 
     assert result.returncode == 1
-    assert "verify.fullBudgetSeconds must be positive integer" in result.stderr
+    expected = "positive integer" if field == "fullBudgetSeconds" else "boolean"
+    assert f"verify.{field} must be {expected}" in result.stderr
+    assert "check-start:" not in result.stdout
     assert runner.calls == []
 
 

@@ -21,31 +21,6 @@ PACKAGE_VERSION = json.loads((PACKAGE_ROOT / "package.json").read_text(encoding=
 _installed_template: tempfile.TemporaryDirectory[str] | None = None
 
 
-def test_public_verify_local_budget_stops_before_next_check(tmp_path: Path) -> None:
-    project = tmp_path / "budget-project"
-    (project / ".build-and-verify").mkdir(parents=True)
-    (project / ".build-and-verify" / "config.json").write_text(json.dumps({
-        "version": 1, "verify": {"fullBudgetSeconds": 3, "checks": [
-            {"id": "slow", "command": [sys.executable, "-c", "import time; time.sleep(6)"], "inputs": []},
-            {"id": "later", "command": [sys.executable, "-c", "print('LATER_STARTED')"], "inputs": []},
-        ]},
-    }), encoding="utf-8")
-    initialized = subprocess.run(["git", "init", str(project)], capture_output=True)
-    assert initialized.returncode == 0
-    started = time.monotonic()
-    result = subprocess.run([
-        shutil.which("node"), str(PACKAGE_ROOT / "bin" / "build-and-verify.js"),
-        "verify", "--project", str(project), "--full",
-    ], env={**os.environ, "BUILD_AND_VERIFY_PYTHON": sys.executable,
-            "BUILD_AND_VERIFY_EXECUTION_CONTEXT": "local", "GITHUB_ACTIONS": "false", "CI": "false"},
-        text=True, capture_output=True, timeout=8)
-    assert result.returncode != 0, result.stdout + result.stderr
-    assert "total_budget_timeout" in result.stdout + result.stderr
-    assert "LATER_STARTED" not in result.stdout
-    assert "not-started: later" in result.stdout
-    assert time.monotonic() - started < 5
-
-
 def _budget_run(tmp_path: Path, *, settings: dict | None = None,
                 context: str | None = "local", extra: tuple[str, ...] = (),
                 full: bool = True, checks: list[dict] | None = None,
@@ -76,10 +51,19 @@ def _budget_run(tmp_path: Path, *, settings: dict | None = None,
 
 @pytest.mark.parametrize("full", [False, True])
 def test_public_verify_budget_applies_to_fast_and_full(tmp_path: Path, full: bool) -> None:
-    result, project = _budget_run(tmp_path, full=full)
+    checks = [
+        {"id": "slow", "command": [sys.executable, "-c", "import time; time.sleep(6)"], "inputs": []},
+        {"id": "later", "command": [sys.executable, "-c", "print('LATER_STARTED')"], "inputs": []},
+    ]
+    started = time.monotonic()
+    result, project = _budget_run(tmp_path, full=full, checks=checks,
+        context="local" if full else "cloud",
+        extra=() if full else ("--execution-context=local",))
+    assert time.monotonic() - started < 5
     assert result.returncode == 1, result.stdout + result.stderr
     assert "total_budget_timeout" in result.stdout
     assert "LATER_STARTED" not in result.stdout
+    assert "not-started: later" in result.stdout
     report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
     assert report["verificationStatus"] == "failed"
     assert report["reason"] == "total_budget_timeout"
@@ -162,20 +146,6 @@ def test_public_verify_warning_and_diagnostic_preserve_real_errors(tmp_path: Pat
         {"id": "error", "command": [sys.executable, "-c", "assert False, 'REAL_ASSERTION'"], "inputs": []}])
     assert result.returncode == 1
     assert "REAL_ASSERTION" in result.stderr
-
-
-def test_public_verify_explicit_context_overrides_inherited_context(tmp_path: Path) -> None:
-    result, _ = _budget_run(tmp_path, context="cloud", extra=("--execution-context=local",))
-    assert result.returncode == 1
-    assert "total_budget_timeout" in result.stdout
-
-
-@pytest.mark.parametrize("value", [0, 1, "true", None])
-def test_public_verify_rejects_non_boolean_budget_switch(tmp_path: Path, value) -> None:
-    result, _ = _budget_run(tmp_path, settings={"enforceLocalBudget": value})
-    assert result.returncode == 1
-    assert "verify.enforceLocalBudget must be boolean" in result.stderr
-    assert "check-start:" not in result.stdout
 
 
 def test_public_verify_diagnostic_is_not_formal_acceptance(tmp_path: Path) -> None:
@@ -292,13 +262,13 @@ def test_public_verify_does_not_swallow_cache_write_failure(tmp_path: Path) -> N
     assert report["checks"][0]["reason"] == "cache_write_error"
 
 
-def test_review_python_startup_is_inside_total_budget(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("phase", ["entry", "probe"])
+def test_review_python_startup_and_probe_are_inside_total_budget(tmp_path: Path, monkeypatch, phase: str) -> None:
     startup = tmp_path / "startup"
     startup.mkdir()
+    condition = "sys.argv[0] == '-c'" if phase == "probe" else "sys.argv[0].endswith('build_and_verify.py')"
     (startup / "sitecustomize.py").write_text(
-        "import sys,time\n"
-        "if sys.argv[0].endswith('build_and_verify.py'): time.sleep(2)\n",
-        encoding="utf-8")
+        f"import sys,time\nif {condition}: time.sleep(2)\n", encoding="utf-8")
     monkeypatch.setenv("PYTHONPATH", str(startup))
     started = time.monotonic()
     result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1}, checks=[
@@ -309,38 +279,19 @@ def test_review_python_startup_is_inside_total_budget(tmp_path: Path, monkeypatc
     assert "QUICK_STARTED" not in result.stdout
 
 
-def test_review_python_probe_is_bounded(tmp_path: Path, monkeypatch) -> None:
+def _delay_report(tmp_path: Path, monkeypatch) -> None:
     startup = tmp_path / "startup"
     startup.mkdir()
     (startup / "sitecustomize.py").write_text(
-        "import sys,time\nif sys.argv[0] == '-c': time.sleep(2)\n", encoding="utf-8")
-    monkeypatch.setenv("PYTHONPATH", str(startup))
-    started = time.monotonic()
-    result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1}, checks=[
-        {"id": "quick", "command": [sys.executable, "-c", "print('QUICK_STARTED')"], "inputs": []}])
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert time.monotonic() - started < 1.8
-    assert "QUICK_STARTED" not in result.stdout
-
-
-def _delay_report(tmp_path: Path, monkeypatch, seconds: float, *, main_only: bool,
-                  deadline_relative: bool = False) -> None:
-    startup = tmp_path / "startup"
-    startup.mkdir()
-    (startup / "sitecustomize.py").write_text(
-        "import sys,threading,time\n"
+        "import sys,time\n"
         "def profile(frame,event,arg):\n"
-        "    if event == 'call' and frame.f_code.co_name == '_write_performance_report'"
-        + (" and threading.current_thread() is threading.main_thread()" if main_only else "") + ":\n"
-        + (f"        time.sleep(max(0, frame.f_locals['payload']['budgetSeconds'] - frame.f_locals['payload']['totalSeconds'] + {seconds}))\n"
-           if deadline_relative else f"        time.sleep({seconds})\n") +
-        "if sys.argv[0].endswith('build_and_verify.py'):\n"
-        "    sys.setprofile(profile)\n    threading.setprofile(profile)\n", encoding="utf-8")
+        "    if event == 'call' and frame.f_code.co_name == '_write_performance_report':\n"
+        "        time.sleep(max(0, frame.f_locals['payload']['budgetSeconds'] - frame.f_locals['payload']['totalSeconds'] + 0.2))\n"
+        "if sys.argv[0].endswith('build_and_verify.py'): sys.setprofile(profile)\n", encoding="utf-8")
     monkeypatch.setenv("PYTHONPATH", str(startup))
-
 
 def test_review_report_crossing_deadline_cannot_pass(tmp_path: Path, monkeypatch) -> None:
-    _delay_report(tmp_path, monkeypatch, 0.2, main_only=True, deadline_relative=True)
+    _delay_report(tmp_path, monkeypatch)
     started = time.monotonic()
     result, project = _budget_run(tmp_path,
         extra=("--performance-report",), checks=[{"id": "quick", "command":
