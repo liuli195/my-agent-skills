@@ -1366,9 +1366,9 @@ def test_packed_build_and_verify_dev_identity_controls_public_verify_cache(
     config_path.parent.mkdir(parents=True)
     config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
-    def verify(*extra: str) -> subprocess.CompletedProcess[str]:
+    def verify() -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [executable, "verify", "--project", project, *extra],
+            [executable, "verify", "--project", project],
             cwd=project,
             text=True,
             capture_output=True,
@@ -1378,16 +1378,11 @@ def test_packed_build_and_verify_dev_identity_controls_public_verify_cache(
 
     first = verify()
     second = verify()
-    full = verify("--full")
-    full_cached = verify()
     assert first.returncode == 0, first.stderr
     assert second.returncode == 0, second.stderr
-    assert full.returncode == 0, full.stderr
-    assert full_cached.returncode == 0, full_cached.stderr
     assert "cache-hit: public-cache" in second.stdout
-    assert "cache-hit:" not in full.stdout
-    assert "cache-hit: public-cache" in full_cached.stdout
-    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == ["ran", "ran"]
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == ["ran"]
+    # Full-cache refresh and config mutations use the runner's focused cache tests.
 
     (source / "plugins" / "my-spec").mkdir()
     (source / "plugins" / "my-spec" / "unrelated.txt").write_text("not Build and Verify\n", encoding="utf-8")
@@ -1442,24 +1437,7 @@ def test_packed_build_and_verify_dev_identity_controls_public_verify_cache(
     assert shared_invalidated.returncode == 0, shared_invalidated.stderr
     assert "cache-hit: public-cache" not in shared_invalidated.stdout
 
-    config["version"] = 2
-    config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-    config_diagnosed = subprocess.run(
-        [executable, "doctor"],
-        cwd=tmp_path,
-        text=True,
-        capture_output=True,
-        check=False,
-        env=env,
-    )
-    assert config_diagnosed.returncode == 0, config_diagnosed.stderr
-    assert json.loads(config_diagnosed.stdout)["toolchain"]["implementationIdentity"] == shared_identity
-    config_changed = verify()
-    assert config_changed.returncode == 0, config_changed.stderr
-    assert "cache-hit: public-cache" not in config_changed.stdout
     assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
-        "ran",
-        "ran",
         "ran",
         "ran",
         "ran",
