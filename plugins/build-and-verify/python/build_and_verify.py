@@ -281,7 +281,8 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     raw_args = sys.argv[1:] if argv is None else argv
     started_at = time.monotonic() if (
-        "--execution-context" in raw_args or "--diagnostic" in raw_args
+        argv is None or any(arg.startswith("--execution-context") for arg in raw_args)
+        or "--diagnostic" in raw_args
         or os.environ.get("BUILD_AND_VERIFY_EXECUTION_CONTEXT") == "local"
     ) else None
     if started_at is not None:
@@ -312,12 +313,6 @@ def main(argv: list[str] | None = None) -> int:
         return int(_runner().run_build(Path(args.project).resolve(), pr=args.pr))
     if args.command == "verify":
         project = Path(args.project).resolve()
-        legacy_runtime, recognized_legacy_runtime = _legacy_runtime(project)
-        if legacy_runtime is not None and not recognized_legacy_runtime:
-            print("legacy_runtime_not_migrated: unrecognized_runtime", file=sys.stderr)
-            return 1
-        if legacy_runtime is not None and not _migration_ready(project):
-            return 1
         invocation_control, guard_timer = None, None
         if argv is None:
             try:
@@ -330,6 +325,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(str(error), file=sys.stderr)
                 print("status: failed")
                 return 1
+        legacy_runtime, recognized_legacy_runtime = _legacy_runtime(project)
+        if legacy_runtime is not None and not recognized_legacy_runtime:
+            print("legacy_runtime_not_migrated: unrecognized_runtime", file=sys.stderr)
+            return 1
+        if legacy_runtime is not None and not _migration_ready(project):
+            return 1
         try:
             metadata = _runtime_metadata()
         except RuntimeError as error:

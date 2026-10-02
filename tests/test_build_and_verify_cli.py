@@ -154,7 +154,7 @@ def test_public_verify_warning_and_diagnostic_preserve_real_errors(tmp_path: Pat
 
 
 def test_public_verify_explicit_context_overrides_inherited_context(tmp_path: Path) -> None:
-    result, _ = _budget_run(tmp_path, context="cloud", extra=("--execution-context", "local"))
+    result, _ = _budget_run(tmp_path, context="cloud", extra=("--execution-context=local",))
     assert result.returncode == 1
     assert "total_budget_timeout" in result.stdout
 
