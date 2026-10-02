@@ -25,3 +25,12 @@
 - 未解决失败：准备阶段超时用例只在标准输出查找有限清理兜底标记；当前入口在标准错误输出该标记，断言失败。用例后续后代进程断言未执行，不记为通过。失败日志保留在本机.local/budget-evidence/original-coverage-final.log。
 - 当前修改尚未取得正式60秒验证结果；旧提交验收不替代当前修改。提交和功能分支推送仅保存完整仓库审查检查点，不表示结项。
 - 候选事项保持未完成；待修复上述输出兼容失败、完成原覆盖及正式预算验收，并由云端读取完整仓库独立审查。未应用正式规格、合并或安装。
+### 检查点正式预算验证结果（未通过）
+
+- 受测提交：cdb5858bf5284759ff985824a6829845ee72e58c。
+- 首次调用误带快速模式不支持的性能报告参数，退出2，未执行检查；记录formal-60-07保留。随后修正该参数执行一次正式验证，没有重复故障运行。
+- 实际命令：node plugins/build-and-verify/bin/build-and-verify.js verify --project . --base 1ee464d7a255d27ede3be29a1292ba98b9b5b737 --execution-context local。
+- 正式配置预算60秒，非诊断，退出1；外层墙钟60.1837156秒，报告总耗时60.0675572秒，原因total_budget_timeout。
+- 没有缓存命中。local-build-contract、pr-flow、runtime-boundaries实际通过；release-flow、my-spec、build-and-verify、build-and-verify-cli超时；myspec未启动。不得将被截止的检查标记为原覆盖通过。
+- 原始formal-60-08.log、metadata.json、report.json保留在本机.local/budget-evidence；此处记录事实供完整仓库独立审查。
+- 原命令行准备阶段输出通道兼容失败仍未修复，正式60秒验收未通过，候选事项保持未完成，不进入合并、正式规格应用或安装。
