@@ -2725,6 +2725,57 @@ def test_build_and_verify_full_performance_report_matrix(
         )
 
 
+def test_local_budget_keeps_guard_until_migration_and_finalization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from unittest.mock import Mock
+
+    module = load_build_and_verify_module()
+    runner = module._runner()
+    legacy = tmp_path / ".build-and-verify/runtime"
+    legacy.mkdir(parents=True)
+    clock = [0.9]
+    control = runner.RunControl(1.0)
+    timer = Mock()
+    events = []
+
+    def cancel() -> None:
+        assert control.finished.is_set()
+        assert control.phase == "finalization"
+        events.append("cancel")
+
+    def migrate(project: Path, runtime: Path) -> int:
+        assert project == tmp_path and runtime == legacy
+        timer.cancel.assert_not_called()
+        assert not control.finished.is_set()
+        assert control.phase == "migration"
+        events.append("migration")
+        clock[0] = 1.1
+        timer.cancel.assert_not_called()
+        return 0
+
+    timer.cancel.side_effect = cancel
+    monkeypatch.delenv("BUILD_AND_VERIFY_STARTED_MONOTONIC", raising=False)
+    monkeypatch.setattr(runner.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(runner, "_invocation_guard", lambda *args, **kwargs: (control, timer))
+    monkeypatch.setattr(runner, "run_verify", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(module, "_runtime_metadata", lambda: {
+        "runtime_version": "test-runtime", "implementation_identity": "test-implementation",
+    })
+    monkeypatch.setattr(module, "_legacy_runtime", lambda project: (legacy, True))
+    monkeypatch.setattr(module, "_migration_ready", lambda project: True)
+    monkeypatch.setattr(module, "_migrate_legacy_runtime", migrate)
+    monkeypatch.setattr(sys, "argv", [str(BUILD_AND_VERIFY_SCRIPT), "verify", "--project",
+        str(tmp_path), "--execution-context", "local"])
+
+    assert module.main() == 1
+    assert events == ["migration", "cancel"]
+    timer.cancel.assert_called_once()
+    assert control.cancelled.is_set()
+    output = capsys.readouterr().out
+    assert "status: failed" in output and "status: passed" not in output
+
+
 @pytest.mark.parametrize("settings,context,extra", [
     ({"enforceLocalBudget": False}, "local", ()),
     ({}, "cloud", ()), ({}, "ci", ()), ({}, "local", ("--pr",)),

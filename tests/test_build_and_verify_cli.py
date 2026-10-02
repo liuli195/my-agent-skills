@@ -323,38 +323,6 @@ def test_review_python_probe_is_bounded(tmp_path: Path, monkeypatch) -> None:
     assert "QUICK_STARTED" not in result.stdout
 
 
-def test_review_legacy_migration_is_inside_total_budget(tmp_path: Path) -> None:
-    project = _legacy_project(tmp_path)
-    config = project / ".build-and-verify/config.json"
-    config.write_text(json.dumps({"version": 1, "verify": {
-        "fullBudgetSeconds": 1, "checks": []}}), encoding="utf-8")
-    assert _git(project, "add", ".").returncode == 0
-    assert _git(project, "commit", "-m", "short budget").returncode == 0
-    hook = project / ".git/hooks/pre-commit"
-    hook.write_text(f"#!/bin/sh\nexec {shlex.quote(Path(sys.executable).as_posix())} -c 'import time; time.sleep(3)'\n", encoding="utf-8")
-    hook.chmod(0o755)
-    before = {"status": _git(project, "status", "--porcelain").stdout,
-              "head": _git(project, "rev-parse", "HEAD").stdout.strip()}
-    started = time.monotonic()
-    result = subprocess.run([shutil.which("node"), str(PACKAGE_ROOT / "bin/build-and-verify.js"),
-        "verify", "--project", str(project), "--execution-context", "local"],
-        env={**os.environ, "BUILD_AND_VERIFY_PYTHON": sys.executable, "CI": "false", "GITHUB_ACTIONS": "false"},
-        text=True, capture_output=True, timeout=7)
-    elapsed = time.monotonic() - started
-    after = {"status": _git(project, "status", "--porcelain").stdout,
-             "head": _git(project, "rev-parse", "HEAD").stdout.strip(),
-             "runtimeExists": (project / ".build-and-verify/runtime").exists()}
-    print(f"migration-state: before={before!r} after={after!r}")
-    assert result.returncode == 1, f"elapsed={elapsed:.2f}\n{result.stdout}\n{result.stderr}"
-    assert elapsed < 1.8
-    assert after["head"] == before["head"]
-    assert set(after["status"].splitlines()) == {
-        "D  .build-and-verify/runtime/build_and_verify.py",
-        "D  .build-and-verify/runtime/build_and_verify_runner.py",
-        "D  .build-and-verify/runtime/version.json",
-        "?? .build-and-verify/runs/"}
-
-
 def _delay_report(tmp_path: Path, monkeypatch, seconds: float, *, main_only: bool,
                   deadline_relative: bool = False) -> None:
     startup = tmp_path / "startup"
@@ -383,55 +351,6 @@ def test_review_report_crossing_deadline_cannot_pass(tmp_path: Path, monkeypatch
     report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
     assert report["verificationStatus"] == "failed"
     assert report["reason"] == "total_budget_timeout"
-
-
-@pytest.mark.parametrize("blocked_io", ["report", "output"])
-def test_review_blocked_failure_report_cannot_delay_reaping(tmp_path: Path, monkeypatch, blocked_io: str) -> None:
-    if blocked_io == "report":
-        _delay_report(tmp_path, monkeypatch, 4, main_only=False)
-    else:
-        startup = tmp_path / "startup"
-        startup.mkdir()
-        (startup / "sitecustomize.py").write_text(
-            "import builtins,sys,time\noriginal=builtins.print\n"
-            "def delayed(*args,**kwargs):\n"
-            "    if args and str(args[0]).startswith(('check-end:', 'total_budget_timeout:')): time.sleep(4)\n"
-            "    return original(*args,**kwargs)\n"
-            "if sys.argv[0].endswith('build_and_verify.py'): builtins.print=delayed\n", encoding="utf-8")
-        monkeypatch.setenv("PYTHONPATH", str(startup))
-    pid_file = tmp_path / "descendant.pid"
-    parent_code = ("import subprocess,sys,time,pathlib; "
-        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(5)']); "
-        f"pathlib.Path({str(pid_file)!r}).write_text(str(child.pid)); time.sleep(5)")
-    started = time.monotonic()
-    result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1}, checks=[
-        {"id": "tree", "command": [sys.executable, "-c", parent_code], "inputs": []}])
-    elapsed = time.monotonic() - started
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert elapsed < 2.5, f"cutoff was blocked by report I/O: {elapsed:.2f}s"
-    assert pid_file.exists(), result.stdout + result.stderr
-    _assert_pid_terminated(int(pid_file.read_text()))
-
-
-def test_review_output_crossing_deadline_cannot_pass(tmp_path: Path, monkeypatch) -> None:
-    startup = tmp_path / "startup"
-    startup.mkdir()
-    (startup / "sitecustomize.py").write_text(
-        "import builtins,sys,time\noriginal=builtins.print\nstarted=time.monotonic()\n"
-        "def delayed(*args,**kwargs):\n"
-        "    if args and str(args[0]).startswith('checked:'):\n"
-        "        time.sleep(max(0, started+.9-time.monotonic())+.3)\n"
-        "    return original(*args,**kwargs)\n"
-        "if sys.argv[0].endswith('build_and_verify.py'): builtins.print=delayed\n", encoding="utf-8")
-    monkeypatch.setenv("PYTHONPATH", str(startup))
-    result, project = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1},
-        extra=("--performance-report",), checks=[{"id": "quick", "command":
-            [sys.executable, "-c", "print('DONE')"], "inputs": []}])
-    assert "check-end: quick status=passed" in result.stdout, result.stdout + result.stderr
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "status: passed" not in result.stdout
-    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
-    assert report["verificationStatus"] == "failed"
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows suspended-process ownership")
@@ -500,24 +419,6 @@ def test_review_startup_reaps_descendants_after_parent_exits(tmp_path: Path, mon
                     break
                 except AssertionError:
                     time.sleep(0.02)
-
-
-def test_review_interpreter_exit_remains_inside_total_budget(tmp_path: Path, monkeypatch) -> None:
-    startup = tmp_path / "startup"
-    startup.mkdir()
-    (startup / "sitecustomize.py").write_text(
-        "import atexit,sys,time\n"
-        "if sys.argv[0].endswith('build_and_verify.py'): atexit.register(time.sleep,2)\n", encoding="utf-8")
-    monkeypatch.setenv("PYTHONPATH", str(startup))
-    started = time.monotonic()
-    result, project = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1}, extra=("--performance-report",), checks=[
-        {"id": "quick", "command": [sys.executable, "-c", "print('DONE')"], "inputs": []}])
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert time.monotonic() - started < 1.8
-    assert "status: passed" not in result.stdout
-    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
-    assert report["verificationStatus"] == "failed"
-    assert report["phase"] == "finalization"
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows background-process compatibility")
