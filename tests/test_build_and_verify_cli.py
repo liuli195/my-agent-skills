@@ -283,7 +283,7 @@ def test_review_python_startup_and_probe_are_inside_total_budget(tmp_path: Path,
         {"id": "quick", "command": [sys.executable, "-c", "print('QUICK_STARTED')"], "inputs": []}])
     elapsed = result.public_elapsed_seconds
     assert result.returncode == 1, f"elapsed={elapsed:.2f}\n{result.stdout}\n{result.stderr}"
-    assert elapsed < 1.8
+    assert elapsed < 1.8, f"publicElapsed={elapsed:.3f}\nstdout={result.stdout}\nstderr={result.stderr}"
     assert "QUICK_STARTED" not in result.stdout
 
 
