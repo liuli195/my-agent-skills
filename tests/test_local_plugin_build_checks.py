@@ -312,12 +312,13 @@ def test_my_spec_in_process_management_avoids_fake_client_subprocess(
     installed = tmp_path / "installed"
     installed.mkdir()
     executable, installed_package = module.install_packed_myspec(installed)
-    client_bin, log = module.install_fake_pi(tmp_path / "fake-pi")
+    client_bin, log, state = module.install_fake_claude(tmp_path / "fake-claude")
     env = module.isolated_myspec_env(tmp_path, module.npm_prefix_for(installed_package), client_bin)
-    env["MYSPEC_PI_LOG"] = str(log)
+    env["MYSPEC_CLAUDE_LOG"] = str(log)
+    env["MYSPEC_CLAUDE_STATE"] = str(state)
     module.write(
-        Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
-        json.dumps({"packages": [str(installed_package)]}),
+        state,
+        json.dumps({"marketplaces": [], "plugins": []}),
     )
     monkeypatch.setattr(
         module.subprocess,
@@ -325,7 +326,7 @@ def test_my_spec_in_process_management_avoids_fake_client_subprocess(
         lambda *args, **kwargs: pytest.fail(f"unexpected subprocess: {args} {kwargs}"),
     )
 
-    result = module.run_cli(executable, "doctor", "--pi", env=env)
+    result = module.run_cli(executable, "doctor", "--claude", env=env)
 
     assert result.returncode == 0, result.stderr
 
@@ -421,16 +422,17 @@ def test_candidate_is_inherited_and_installed_once(tmp_path):
     installed.mkdir()
     executable, package = myspec.install_packed_myspec(installed)
     prefix = myspec.npm_prefix_for(package)
-    client_bin, log = myspec.install_fake_pi(tmp_path / "fake-pi")
+    client_bin, log, state = myspec.install_fake_claude(tmp_path / "fake-claude")
     env = myspec.isolated_myspec_env(tmp_path, prefix, client_bin)
-    env["MYSPEC_PI_LOG"] = str(log)
+    env["MYSPEC_CLAUDE_LOG"] = str(log)
+    env["MYSPEC_CLAUDE_STATE"] = str(state)
     state_root = Path(env["HOME"]) / ".myspec"
     state_root.mkdir()
     myspec.write(
-        Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
-        json.dumps({"packages": []}),
+        state,
+        json.dumps({"marketplaces": [], "plugins": []}),
     )
-    result = myspec.run_cli(executable, "doctor", "--pi", env=env)
+    result = myspec.run_cli(executable, "doctor", "--claude", env=env)
     assert result.returncode == 0, result.stderr
     report = {
         "candidate": str(candidate),

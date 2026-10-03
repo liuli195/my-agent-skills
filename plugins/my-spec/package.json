@@ -3,8 +3,7 @@
   "version": "2.0.1",
   "description": "Deterministic MySpec CLI and Agent skills",
   "keywords": [
-    "myspec",
-    "pi-package"
+    "myspec"
   ],
   "bin": {
     "myspec": "./bin/myspec.js"
@@ -27,13 +26,5 @@
     "skills/*/SKILL.md",
     "skills/*/references/**",
     "skills/*/assets/**"
-  ],
-  "pi": {
-    "skills": [
-      "./skills/my-spec",
-      "./skills/my-spec-add",
-      "./skills/my-spec-review",
-      "./skills/my-spec-audit"
-    ]
-  }
+  ]
 }

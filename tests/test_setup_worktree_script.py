@@ -39,10 +39,10 @@ def test_repository_owns_shared_node_dependencies() -> None:
     package = json.loads((REPO_ROOT / "package.json").read_text(encoding="utf-8"))
 
     assert package["private"] is True
-    assert package["devDependencies"] == {
-        "@earendil-works/pi-coding-agent": "^0.84.1",
-        "tsx": "4.22.4",
-    }
+    assert not package.get("devDependencies")
+    lock = json.loads((REPO_ROOT / "package-lock.json").read_text(encoding="utf-8"))
+    assert set(lock["packages"]) == {""}
+    assert "overrides" not in package
     assert (REPO_ROOT / "package-lock.json").is_file()
 
 
@@ -57,6 +57,7 @@ def test_setup_worktree_script_prepares_python_and_shared_node_dependencies() ->
     assert "& $python -m pip install -r requirements-dev.txt" in text
     assert "git rev-parse --path-format=absolute --git-common-dir" in text
     assert "npm ci" in text
+    assert "New-Item -ItemType Directory -Path (Join-Path $projectRoot 'node_modules') -Force" in text
     assert "New-Item -ItemType Junction" in text
     assert "SHA256" in text
     assert "build_and_verify" not in text

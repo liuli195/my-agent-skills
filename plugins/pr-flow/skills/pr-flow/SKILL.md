@@ -15,17 +15,9 @@ description: "诊断 PR Flow（拉取请求流程）当前状态，并输出下�
 
 `pr-flow-init` 初始化 PR Flow（拉取请求流程）配置：agent（代理）问答、配置草案、只读 validate（校验）和用户确认后本地写入。
 
-## Pi 入口
-
-在 Pi（编码助手）中，调用 `pr_flow`（PR Flow 工具）：
-
-```json
-{"argv":["diagnose","--project","."]}
-```
-
 ## 命令
 
-源码仓库维护者或其他宿主继续使用：
+使用通用命令入口：
 
 ```bash
 python plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py diagnose --project .

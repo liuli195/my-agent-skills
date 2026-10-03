@@ -123,7 +123,7 @@ if (!selected) {
 }
 
 const [python, prefix] = selected;
-const lifecycle = ["doctor", "update"].includes(args[0]) || (args[0] === "init" && args.some((arg) => ["--pi", "--claude", "--codex", "--all", "--dev", "--release"].includes(arg)));
+const lifecycle = ["doctor", "update"].includes(args[0]) || (args[0] === "init" && args.some((arg) => ["--claude", "--codex", "--all", "--dev", "--release"].includes(arg)));
 const core = path.join(__dirname, "..", "python", lifecycle ? "management_cli.py" : "build_and_verify.py");
 const childArgs = budget === null ? [...prefix, core, ...args] : [...prefix, "-S", "-c", bootstrapCode, runtimePath, core, ...args];
 const child = spawn(python, childArgs, {

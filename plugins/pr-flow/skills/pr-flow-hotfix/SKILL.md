@@ -17,17 +17,9 @@ authorization phrase（授权短语）必须由用户在当前对话手动输入
 
 默认保留 worktree（工作树）。`--remove-worktree`（删除工作树参数）只在推送回读成功且当前提交等于远端目标提交后生效，不查询 PR（拉取请求）；从待删除目录内运行时按输出的外部重试命令删除，且永不强制删除。若目标工作树由 Orca（工作区管理器）登记，命令优先使用 Orca（工作区管理器）的非强制删除；Orca（工作区管理器）未登记或不可用时回退 Git（版本管理）删除。已登记目标的 Orca（工作区管理器）删除失败时停止并保留诊断，不回退 Git（版本管理）删除。
 
-## Pi 入口
-
-在 Pi（编码助手）中，调用 `pr_flow`（PR Flow 工具）：
-
-```json
-{"argv":["hotfix","--project",".","--target","main","--authorization-phrase","<phrase>"]}
-```
-
 ## 命令
 
-源码仓库维护者或其他宿主继续使用：
+使用通用命令入口：
 
 ```bash
 python plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py hotfix --project . --target main --authorization-phrase <phrase>
