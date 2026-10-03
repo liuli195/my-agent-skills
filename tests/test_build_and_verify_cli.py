@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import yaml
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +19,416 @@ PACKAGE_ROOT = REPO_ROOT / "plugins" / "build-and-verify"
 PACK = REPO_ROOT / "plugins" / "tool-lifecycle" / "pack.py"
 PACKAGE_VERSION = json.loads((PACKAGE_ROOT / "package.json").read_text(encoding="utf-8"))["version"]
 _installed_template: tempfile.TemporaryDirectory[str] | None = None
+
+
+def _budget_run(tmp_path: Path, *, settings: dict | None = None,
+                context: str | None = "local", extra: tuple[str, ...] = (),
+                full: bool = True, checks: list[dict] | None = None,
+                before_run=None) -> tuple[subprocess.CompletedProcess, Path]:
+    project = tmp_path / "project"
+    (project / ".build-and-verify").mkdir(parents=True)
+    budget = (settings or {}).get("fullBudgetSeconds", 3)
+    config = {"version": 1, "verify": {"fullBudgetSeconds": budget, "checks": checks or [
+        {"id": "slow", "command": [sys.executable, "-c", f"import time; time.sleep({budget + 0.2})"], "inputs": []},
+        {"id": "later", "command": [sys.executable, "-c", "print('LATER_STARTED')"], "inputs": []},
+    ], **(settings or {})}}
+    (project / ".build-and-verify" / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    initialized = subprocess.run(["git", "init", str(project)], capture_output=True)
+    assert initialized.returncode == 0
+    if before_run is not None:
+        before_run(project)
+    env = {**os.environ, "BUILD_AND_VERIFY_PYTHON": sys.executable,
+           "GITHUB_ACTIONS": "false", "CI": "false", "CODEX_CI": "1"}
+    env.pop("BUILD_AND_VERIFY_EXECUTION_CONTEXT", None)
+    if context is not None:
+        env["BUILD_AND_VERIFY_EXECUTION_CONTEXT"] = context
+    package_root = Path(os.environ.get("BUILD_AND_VERIFY_TEST_PACKAGE", str(PACKAGE_ROOT)))
+    public_started = time.monotonic()
+    result = subprocess.run([shutil.which("node"), str(package_root / "bin" / "build-and-verify.js"),
+        "verify", "--project", str(project), *(('--full',) if full else ()), *extra],
+        env=env, capture_output=True, text=True, timeout=8)
+    result.public_elapsed_seconds = time.monotonic() - public_started
+    return result, project
+
+
+@pytest.mark.parametrize("full", [False, True])
+def test_public_verify_budget_applies_to_fast_and_full(tmp_path: Path, full: bool) -> None:
+    checks = [
+        {"id": "slow", "command": [sys.executable, "-c", "import time; time.sleep(6)"], "inputs": []},
+        {"id": "later", "command": [sys.executable, "-c", "print('LATER_STARTED')"], "inputs": []},
+    ]
+    result, project = _budget_run(tmp_path, full=full, checks=checks,
+        context="local" if full else "cloud",
+        extra=() if full else ("--execution-context=local",))
+    assert result.public_elapsed_seconds < 5
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "total_budget_timeout" in result.stdout
+    assert "LATER_STARTED" not in result.stdout
+    assert "not-started: later" in result.stdout
+    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    assert report["verificationStatus"] == "failed"
+    assert report["reason"] == "total_budget_timeout"
+    assert report["overBudget"] is True
+    assert report["notStarted"] == ["later"]
+    assert report["checks"][0]["status"] == "timed_out"
+    assert not list((project / ".build-and-verify/cache").glob("*.json"))
+
+
+def test_public_verify_budget_warning_does_not_fail_exempt_runs(tmp_path: Path) -> None:
+    result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1, "enforceLocalBudget": False})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "LATER_STARTED" in result.stdout
+    assert "performance-warning:" in result.stdout
+
+
+def test_public_verify_timeout_report_failure_warns_without_changing_failure(tmp_path: Path) -> None:
+    def block_report(project: Path) -> None:
+        (project / ".build-and-verify/runs").write_text("blocked", encoding="utf-8")
+
+    result, _ = _budget_run(tmp_path, before_run=block_report)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert result.public_elapsed_seconds < 5
+    assert "total_budget_timeout" in result.stdout + result.stderr
+    assert "performance-report-warning:" in result.stderr
+    assert "LATER_STARTED" not in result.stdout
+    assert "status: passed" not in result.stdout
+
+
+def test_public_verify_protocol_like_check_output_is_preserved(tmp_path: Path) -> None:
+    lines = [
+        "build-and-verify-formal-result: ordinary-test-output",
+        'build-and-verify-formal-result: {"status":"passed"}',
+        "build-and-verify-selected: ordinary-test-output",
+        'build-and-verify-selected: {"ids":"ordinary-test-output","runtimeVersion":"test"}',
+    ]
+    result, _ = _budget_run(tmp_path, checks=[{"id": "output", "inputs": [],
+        "command": [sys.executable, "-c", f"print({chr(10).join(lines)!r})"]}])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert all(line in result.stdout for line in lines)
+    assert "status: passed" in result.stdout
+
+
+def test_public_verify_unknown_context_fails_before_launch(tmp_path: Path) -> None:
+    result, _ = _budget_run(tmp_path, context=None)
+    assert result.returncode == 1
+    assert "execution-context-warning: unknown" in result.stdout
+    assert "execution_context_required_for_local_budget" in result.stderr
+    assert "check-start:" not in result.stdout
+
+
+def test_public_verify_parallel_queue_shares_deadline(tmp_path: Path) -> None:
+    checks = [
+        {"id": "slow", "command": [sys.executable, "-c", "import time; time.sleep(6)"], "inputs": [], "checkParallel": True},
+        {"id": "queued", "command": [sys.executable, "-c", "print('QUEUED_STARTED')"], "inputs": [], "checkParallel": True},
+        {"id": "serial", "command": [sys.executable, "-c", "print('SERIAL_STARTED')"], "inputs": []},
+    ]
+    result, project = _budget_run(tmp_path, settings={"maxParallel": 1}, checks=checks)
+    assert result.returncode == 1
+    assert "QUEUED_STARTED" not in result.stdout
+    assert "SERIAL_STARTED" not in result.stdout
+    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    assert report["notStarted"] == ["queued", "serial"]
+
+
+def test_public_verify_serial_checks_share_remaining_budget_and_cache_only_completed(tmp_path: Path) -> None:
+    checks = [{"id": name, "command": [sys.executable, "-c", f"import time; time.sleep({delay})"], "inputs": []}
+              for name, delay in (("first", 0.5), ("second", 4.7), ("third", 0.1))]
+    result, project = _budget_run(tmp_path, settings={"fullBudgetSeconds": 5}, checks=checks)
+    assert result.returncode == 1, result.stdout + result.stderr
+    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    assert [check["status"] for check in report["checks"]] == ["passed", "timed_out", "not_started"]
+    caches = list((project / ".build-and-verify/cache").glob("*.json"))
+    assert len(caches) == 1
+
+
+def test_public_verify_parallel_active_checks_share_cancellation(tmp_path: Path) -> None:
+    checks = [{"id": name, "command": [sys.executable, "-c", "import time; time.sleep(6)"],
+               "inputs": [], "checkParallel": True} for name in ("first", "second")]
+    result, project = _budget_run(tmp_path, settings={"maxParallel": 2}, checks=checks)
+    assert result.returncode == 1
+    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    assert report["unfinished"] == ["first", "second"]
+    assert all(check["status"] == "timed_out" for check in report["checks"])
+
+
+@pytest.mark.parametrize("extra,settings", [
+    (("--diagnostic",), {}), ((), {"enforceLocalBudget": False}),
+])
+def test_public_verify_warning_and_diagnostic_preserve_real_errors(tmp_path: Path,
+        extra: tuple[str, ...], settings: dict) -> None:
+    result, _ = _budget_run(tmp_path, settings=settings, extra=extra, checks=[
+        {"id": "error", "command": [sys.executable, "-c", "assert False, 'REAL_ASSERTION'"], "inputs": []}])
+    assert result.returncode == 1
+    assert "REAL_ASSERTION" in result.stderr
+
+
+def test_public_verify_diagnostic_is_not_formal_acceptance(tmp_path: Path) -> None:
+    result, project = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1}, extra=("--diagnostic",))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "LATER_STARTED" in result.stdout
+    assert "check-start: slow" in result.stdout
+    assert "check-end: slow status=passed" in result.stdout
+    assert "status: diagnostic" in result.stdout
+    assert "status: passed\n" not in result.stdout
+    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    assert report["verificationStatus"] == "diagnostic"
+    assert report["diagnostic"] is True
+    assert "enforceLocalBudget" not in json.loads((project / ".build-and-verify/config.json").read_text())["verify"]
+
+
+@pytest.mark.parametrize("extra,settings", [
+    (("--diagnostic",), {"timeoutSeconds": 0.2}),
+    ((), {"enforceLocalBudget": False, "timeoutSeconds": 0.2}),
+])
+def test_public_verify_diagnostic_and_warning_preserve_check_timeout(tmp_path: Path,
+        extra: tuple[str, ...], settings: dict) -> None:
+    result, _ = _budget_run(tmp_path, extra=extra, settings=settings)
+    assert result.returncode == 1
+    assert "check_timeout: slow" in result.stderr
+
+
+def test_public_verify_budget_reaps_descendants_and_preserves_other_processes(tmp_path: Path) -> None:
+    pid_file = tmp_path / "descendant.pid"
+    child_code = "import time; time.sleep(10)"
+    parent_code = ("import subprocess,sys,time,pathlib; "
+        f"child=subprocess.Popen([sys.executable,'-S','-c',{child_code!r}]); "
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(child.pid)); time.sleep(10)")
+    unrelated = subprocess.Popen([sys.executable, "-S", "-c", child_code])
+    try:
+        result, _ = _budget_run(tmp_path, checks=[
+            {"id": "tree", "command": [sys.executable, "-S", "-c", parent_code], "inputs": []}])
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert result.public_elapsed_seconds < 5
+        assert pid_file.exists(), result.stdout + result.stderr
+        assert unrelated.poll() is None
+        _assert_pid_terminated(int(pid_file.read_text()))
+    finally:
+        unrelated.terminate()
+        unrelated.wait(timeout=2)
+
+
+def _assert_pid_terminated(pid: int) -> None:
+    if sys.platform == "win32":
+        import ctypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.restype = ctypes.c_void_p
+        kernel.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel.OpenProcess(0x1000, False, pid)
+        if not handle:
+            assert ctypes.get_last_error() == 87, "cannot prove owned descendant terminated"
+            return
+        code = ctypes.c_ulong()
+        try:
+            assert kernel.GetExitCodeProcess(handle, ctypes.byref(code))
+            assert code.value != 259, f"owned descendant {pid} is still running"
+        finally:
+            kernel.CloseHandle(handle)
+    else:
+        # Linux may retain a terminated orphan as a zombie until init reaps it.
+        stat = Path(f"/proc/{pid}/stat")
+        if sys.platform.startswith("linux") and stat.exists():
+            try:
+                if stat.read_text().rsplit(")", 1)[1].split()[0] == "Z":
+                    return
+            except FileNotFoundError:
+                return
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+
+
+def test_public_verify_budget_interrupts_blocked_preparation_and_its_descendants(tmp_path: Path) -> None:
+    # A real Git filesystem monitor models a blocked external preparation read.
+    # This is confined to the synthetic repository, never the user's hooks.
+    pids = tmp_path / "preparation-pids.json"
+    monitor = tmp_path / "monitor.py"
+    monitor.write_text(
+        "import json,os,subprocess,sys,time\nfrom pathlib import Path\n"
+        "child=subprocess.Popen([sys.executable,'-S','-c','import time; time.sleep(10)'])\n"
+        f"Path({str(pids)!r}).write_text(json.dumps([os.getpid(),child.pid]))\n"
+        "time.sleep(10)\n", encoding="utf-8")
+    hook = tmp_path / "monitor.sh"
+    hook.write_text(f"#!/bin/sh\nexec {shlex.quote(Path(sys.executable).as_posix())} -S -B {shlex.quote(monitor.as_posix())}\n", encoding="utf-8")
+    hook.chmod(0o755)
+
+    def prepare(project: Path) -> None:
+        (project / "probe.txt").write_text("tracked", encoding="utf-8")
+        assert _git(project, "add", "probe.txt").returncode == 0
+        assert _git(project, "config", "core.fsmonitor", hook.as_posix()).returncode == 0
+
+    started = time.monotonic()
+    result, project = _budget_run(tmp_path, before_run=prepare)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "bounded-cleanup-fallback" in result.stdout + result.stderr
+    assert "check-start:" not in result.stdout
+    assert time.monotonic() - started < 6
+    assert pids.exists(), result.stdout + result.stderr
+    for pid in json.loads(pids.read_text()):
+        _assert_pid_terminated(pid)
+    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    assert report["verificationStatus"] == "failed"
+    assert report["reason"] == "total_budget_timeout"
+    assert report["notStarted"] == ["slow", "later"]
+
+
+def test_public_verify_does_not_swallow_cache_write_failure(tmp_path: Path) -> None:
+    def blocked_cache(project: Path) -> None:
+        (project / ".build-and-verify/cache").write_text("blocked", encoding="utf-8")
+
+    result, project = _budget_run(tmp_path, extra=("--performance-report",), before_run=blocked_cache,
+        checks=[{"id": "success", "command": [sys.executable, "-c", "print('CHECK_COMPLETED')"], "inputs": []}])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "CHECK_COMPLETED" in result.stdout
+    assert "cache_write_error" in result.stderr
+    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    assert report["verificationStatus"] == "failed"
+    assert report["checks"][0]["reason"] == "cache_write_error"
+
+
+@pytest.mark.parametrize("phase", ["entry", "probe"])
+def test_review_python_startup_and_probe_are_inside_total_budget(tmp_path: Path, monkeypatch, phase: str) -> None:
+    startup = tmp_path / "startup"
+    startup.mkdir()
+    condition = "sys.argv[0] == '-c'" if phase == "probe" else "sys.argv[0].endswith('build_and_verify.py')"
+    (startup / "sitecustomize.py").write_text(
+        f"import sys,time\nif {condition}: time.sleep(2)\n", encoding="utf-8")
+    monkeypatch.setenv("PYTHONPATH", str(startup))
+    result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1}, checks=[
+        {"id": "quick", "command": [sys.executable, "-c", "print('QUICK_STARTED')"], "inputs": []}])
+    elapsed = result.public_elapsed_seconds
+    assert result.returncode == 1, f"elapsed={elapsed:.2f}\n{result.stdout}\n{result.stderr}"
+    assert elapsed < 1.8, f"publicElapsed={elapsed:.3f}\nstdout={result.stdout}\nstderr={result.stderr}"
+    assert "QUICK_STARTED" not in result.stdout
+
+
+def _delay_report(tmp_path: Path, monkeypatch) -> None:
+    startup = tmp_path / "startup"
+    startup.mkdir()
+    (startup / "sitecustomize.py").write_text(
+        "import sys,time\n"
+        "def profile(frame,event,arg):\n"
+        "    if event == 'call' and frame.f_code.co_name == '_write_performance_report':\n"
+        "        time.sleep(max(0, frame.f_locals['payload']['budgetSeconds'] - frame.f_locals['payload']['totalSeconds'] + 0.2))\n"
+        "if sys.argv[0].endswith('build_and_verify.py'): sys.setprofile(profile)\n", encoding="utf-8")
+    monkeypatch.setenv("PYTHONPATH", str(startup))
+
+def test_review_report_crossing_deadline_cannot_pass(tmp_path: Path, monkeypatch) -> None:
+    _delay_report(tmp_path, monkeypatch)
+    started = time.monotonic()
+    result, project = _budget_run(tmp_path,
+        extra=("--performance-report",), checks=[{"id": "quick", "command":
+            [sys.executable, "-c", "import time; time.sleep(.05)"], "inputs": []}])
+    assert "check-end: quick status=passed" in result.stdout, result.stdout + result.stderr
+    assert result.returncode == 1, f"elapsed={time.monotonic()-started:.2f}\n{result.stdout}\n{result.stderr}"
+    assert "status: passed" not in result.stdout
+    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    assert report["verificationStatus"] == "failed"
+    assert report["reason"] == "total_budget_timeout"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows suspended-process ownership")
+def test_review_expired_windows_launch_is_never_resumed(tmp_path: Path, monkeypatch) -> None:
+    import importlib.util
+    package_root = Path(os.environ.get("BUILD_AND_VERIFY_TEST_PACKAGE", str(PACKAGE_ROOT)))
+    spec = importlib.util.spec_from_file_location("review_budget_runner", package_root / "python/build_and_verify_runner.py")
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    real_popen, real_job = subprocess.Popen, module._windows_job
+
+    def delayed_popen(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        time.sleep(0.15)
+        return process
+
+    def observed_job(*args, **kwargs):
+        job = real_job(*args, **kwargs)
+        time.sleep(0.15)  # If resumed, the real process has time to expose the bug.
+        return job
+
+    monkeypatch.setattr(module.subprocess, "Popen", delayed_popen)
+    monkeypatch.setattr(module, "_windows_job", observed_job)
+    marker = tmp_path / "resumed.txt"
+    control = module.RunControl(time.monotonic() + 0.05)
+    with pytest.raises(module.TotalBudgetTimeout):
+        module._managed_run([sys.executable, "-c",
+            f"from pathlib import Path; Path({str(marker)!r}).write_text('started')"], control,
+            text=True, timeout=3)
+    assert not marker.exists(), "expired suspended process was resumed"
+
+
+@pytest.mark.parametrize("phase", ["probe", "entry"])
+def test_review_startup_reaps_descendants_after_parent_exits(tmp_path: Path, monkeypatch, phase: str) -> None:
+    budget = 3
+    descendant_sleep = 10
+    wall_limit = 5
+    startup = tmp_path / "startup"
+    startup.mkdir()
+    pids = tmp_path / "startup-pids.txt"
+    condition = "sys.argv[0] == '-c'" if phase == "probe" else "sys.argv[0].endswith('build_and_verify.py')"
+    (startup / "sitecustomize.py").write_text(
+        "import subprocess,sys\nfrom pathlib import Path\n"
+        f"if {condition}:\n"
+        f"    child=subprocess.Popen([sys.executable,'-S','-c','import time; time.sleep({descendant_sleep})'])\n"
+        f"    with Path({str(pids)!r}).open('a') as stream: stream.write(str(child.pid)+'\\n')\n"
+        + ("    raise SystemExit(1)\n" if phase == "entry" else ""), encoding="utf-8")
+    monkeypatch.setenv("PYTHONPATH", str(startup))
+    result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": budget}, checks=[
+        {"id": "quick", "command": [sys.executable, "-c", "print('DONE')"], "inputs": []}])
+    elapsed = result.public_elapsed_seconds
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert elapsed < wall_limit, f"startup descendant held the public entry open for {elapsed:.2f}s"
+    assert pids.exists(), result.stdout + result.stderr
+    owned_pids = [int(pid) for pid in pids.read_text().splitlines()]
+    try:
+        for pid in owned_pids:
+            _assert_pid_terminated(pid)
+    finally:
+        # Red runs let these known synthetic children finish naturally; never
+        # terminate a PID after its owning parent has exited and released it.
+        for pid in owned_pids:
+            until = time.monotonic() + descendant_sleep + 1
+            while time.monotonic() < until:
+                try:
+                    _assert_pid_terminated(pid)
+                    break
+                except AssertionError:
+                    time.sleep(0.02)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows background-process compatibility")
+def test_review_budget_off_preserves_background_dependency(tmp_path: Path) -> None:
+    pids = tmp_path / "background.pid"
+    first = ("import subprocess,sys,time; from pathlib import Path; time.sleep(1.1); "
+        "child=subprocess.Popen([sys.executable,'-S','-c','import time; time.sleep(.7)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
+        f"Path({str(pids)!r}).write_text(str(child.pid))")
+    second = ("import ctypes; from pathlib import Path\n"
+        f"pid=int(Path({str(pids)!r}).read_text())\n"
+        "kernel=ctypes.WinDLL('kernel32',use_last_error=True)\n"
+        "kernel.OpenProcess.restype=ctypes.c_void_p\n"
+        "kernel.GetExitCodeProcess.argtypes=[ctypes.c_void_p,ctypes.POINTER(ctypes.c_ulong)]\n"
+        "kernel.CloseHandle.argtypes=[ctypes.c_void_p]\n"
+        "handle=kernel.OpenProcess(0x1000,False,pid)\n"
+        "assert handle,'background dependency was terminated'\n"
+        "code=ctypes.c_ulong()\n"
+        "assert kernel.GetExitCodeProcess(handle,ctypes.byref(code))\n"
+        "kernel.CloseHandle(handle)\n"
+        "assert code.value==259,'background dependency was terminated'\n")
+    result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1, "enforceLocalBudget": False}, checks=[
+        {"id": "start", "command": [sys.executable, "-c", first], "inputs": []},
+        {"id": "use", "command": [sys.executable, "-c", second], "inputs": []}])
+    try:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "performance-warning:" in result.stdout
+    finally:
+        if pids.exists():
+            until = time.monotonic() + 2
+            while time.monotonic() < until:
+                try:
+                    _assert_pid_terminated(int(pids.read_text()))
+                    break
+                except AssertionError:
+                    time.sleep(0.02)
 
 
 def _installed_build_and_verify(tmp_path: Path) -> tuple[str, Path, Path]:
@@ -51,7 +464,7 @@ def _tree_snapshot() -> dict[str, bytes]:
         path.relative_to(REPO_ROOT).as_posix(): path.read_bytes()
         for root in roots
         for path in (REPO_ROOT / root).rglob("*")
-        if path.is_file()
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
     }
 
 
@@ -768,33 +1181,6 @@ def test_packed_build_and_verify_rejects_dirty_legacy_migration(tmp_path: Path) 
     assert _git(project, "status", "--porcelain").stdout == "?? unrelated.txt\n"
 
 
-def test_packed_build_and_verify_accepts_controlled_ssh_dev_source(tmp_path: Path) -> None:
-    _, prefix, executable = _installed_build_and_verify(tmp_path)
-    source, ssh = _controlled_dev_source(tmp_path)
-    env = _isolated_env(tmp_path, prefix)
-    env["GIT_SSH_COMMAND"] = f'"{sys.executable}" "{ssh}"'
-    entered = subprocess.run(
-        [executable, "init", "--dev", "--source", source],
-        cwd=tmp_path,
-        text=True,
-        capture_output=True,
-        check=False,
-        env=env,
-    )
-
-    assert entered.returncode == 0, entered.stderr
-    report = json.loads(entered.stdout)
-    assert report["mode"] == "dev"
-    assert report["source"] == str(source)
-    assert _git(source, "status", "--porcelain").stdout == ""
-    diagnosed = subprocess.run(
-        [executable, "doctor"], cwd=source, text=True, capture_output=True, check=False, env=env
-    )
-    assert diagnosed.returncode == 0, diagnosed.stderr
-    toolchain = json.loads(diagnosed.stdout)["toolchain"]
-    assert toolchain["sourceCommit"] == _git(source, "rev-parse", "HEAD").stdout.strip()
-
-
 def test_packed_build_and_verify_dev_identity_controls_public_verify_cache(
     tmp_path: Path,
 ) -> None:
@@ -811,17 +1197,23 @@ def test_packed_build_and_verify_dev_identity_controls_public_verify_cache(
         env=env,
     )
     assert entered.returncode == 0, entered.stderr
+    report = json.loads(entered.stdout)
+    assert report["mode"] == "dev"
+    assert report["source"] == str(source)
+    assert _git(source, "status", "--porcelain").stdout == ""
 
     diagnosed = subprocess.run(
         [executable, "doctor"],
-        cwd=tmp_path,
+        cwd=source,
         text=True,
         capture_output=True,
         check=False,
         env=env,
     )
     assert diagnosed.returncode == 0, diagnosed.stderr
-    first_identity = json.loads(diagnosed.stdout)["toolchain"]["implementationIdentity"]
+    toolchain = json.loads(diagnosed.stdout)["toolchain"]
+    assert toolchain["sourceCommit"] == _git(source, "rev-parse", "HEAD").stdout.strip()
+    first_identity = toolchain["implementationIdentity"]
 
     project = tmp_path / "project"
     project.mkdir()
@@ -850,9 +1242,9 @@ def test_packed_build_and_verify_dev_identity_controls_public_verify_cache(
     config_path.parent.mkdir(parents=True)
     config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
-    def verify(*extra: str) -> subprocess.CompletedProcess[str]:
+    def verify() -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [executable, "verify", "--project", project, *extra],
+            [executable, "verify", "--project", project],
             cwd=project,
             text=True,
             capture_output=True,
@@ -862,16 +1254,11 @@ def test_packed_build_and_verify_dev_identity_controls_public_verify_cache(
 
     first = verify()
     second = verify()
-    full = verify("--full")
-    full_cached = verify()
     assert first.returncode == 0, first.stderr
     assert second.returncode == 0, second.stderr
-    assert full.returncode == 0, full.stderr
-    assert full_cached.returncode == 0, full_cached.stderr
     assert "cache-hit: public-cache" in second.stdout
-    assert "cache-hit:" not in full.stdout
-    assert "cache-hit: public-cache" in full_cached.stdout
-    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == ["ran", "ran"]
+    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == ["ran"]
+    # Full-cache refresh and config mutations use the runner's focused cache tests.
 
     (source / "plugins" / "my-spec").mkdir()
     (source / "plugins" / "my-spec" / "unrelated.txt").write_text("not Build and Verify\n", encoding="utf-8")
@@ -926,24 +1313,7 @@ def test_packed_build_and_verify_dev_identity_controls_public_verify_cache(
     assert shared_invalidated.returncode == 0, shared_invalidated.stderr
     assert "cache-hit: public-cache" not in shared_invalidated.stdout
 
-    config["version"] = 2
-    config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-    config_diagnosed = subprocess.run(
-        [executable, "doctor"],
-        cwd=tmp_path,
-        text=True,
-        capture_output=True,
-        check=False,
-        env=env,
-    )
-    assert config_diagnosed.returncode == 0, config_diagnosed.stderr
-    assert json.loads(config_diagnosed.stdout)["toolchain"]["implementationIdentity"] == shared_identity
-    config_changed = verify()
-    assert config_changed.returncode == 0, config_changed.stderr
-    assert "cache-hit: public-cache" not in config_changed.stdout
     assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
-        "ran",
-        "ran",
         "ran",
         "ran",
         "ran",

@@ -41,6 +41,299 @@ class CheckResult:
     stderr: str = ""
     duration_seconds: float = 0.0
     cache_key: str | None = None
+    status: str | None = None
+    reason: str | None = None
+
+
+_BOOTSTRAP_ROOT_JOB: tuple[Any, Any] | None = None
+
+
+class TotalBudgetTimeout(subprocess.TimeoutExpired):
+    pass
+
+
+class RunControl:
+    """One invocation's clock and launch lock; never owns unrelated processes."""
+
+    def __init__(self, deadline: float | None):
+        self.deadline = deadline
+        self.lock = threading.Lock()
+        self.cancelled = threading.Event()
+        self.processes: dict[int, subprocess.Popen] = {}
+        self.selected: list[dict[str, Any]] = []
+        self.results: dict[str, CheckResult] = {}
+        self.active_checks: set[str] = set()
+        self.start_times: dict[str, float] = {}
+        self.runtime_version = "unknown"
+        self.scheduling = False
+        self.finished = threading.Event()
+        self.success_status: str | None = None
+        self.report_payload: dict[str, Any] | None = None
+        self.phase = "preparation"
+
+    def expired(self) -> bool:
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            self.cancelled.set()
+        return self.cancelled.is_set()
+
+
+def _windows_job(process: subprocess.Popen, control: RunControl | None = None) -> tuple[Any, Any]:
+    # Spawn suspended, assign before resuming: descendants cannot escape the job
+    # in the gap between process creation and assignment.
+    import ctypes
+    from ctypes import wintypes
+
+    class BasicLimits(ctypes.Structure):
+        _fields_ = [("processTime", ctypes.c_int64), ("jobTime", ctypes.c_int64),
+                    ("flags", wintypes.DWORD), ("minWorkingSet", ctypes.c_size_t),
+                    ("maxWorkingSet", ctypes.c_size_t), ("activeProcesses", wintypes.DWORD),
+                    ("affinity", ctypes.c_size_t), ("priority", wintypes.DWORD),
+                    ("scheduling", wintypes.DWORD)]
+
+    class IoCounters(ctypes.Structure):
+        _fields_ = [(name, ctypes.c_uint64) for name in
+                    ("readOps", "writeOps", "otherOps", "readBytes", "writeBytes", "otherBytes")]
+
+    class ExtendedLimits(ctypes.Structure):
+        _fields_ = [("basic", BasicLimits), ("io", IoCounters),
+                    ("processMemory", ctypes.c_size_t), ("jobMemory", ctypes.c_size_t),
+                    ("peakProcessMemory", ctypes.c_size_t), ("peakJobMemory", ctypes.c_size_t)]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    kernel.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    job = kernel.CreateJobObjectW(None, None)
+    if not job:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        limits = ExtendedLimits()
+        limits.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not kernel.SetInformationJobObject(job, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not kernel.AssignProcessToJobObject(job, wintypes.HANDLE(int(process._handle))):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if control is not None and control.expired():
+            raise TotalBudgetTimeout(process.args, 0)
+        ntdll = ctypes.WinDLL("ntdll")
+        ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+        ntdll.NtResumeProcess.restype = ctypes.c_long
+        if ntdll.NtResumeProcess(wintypes.HANDLE(int(process._handle))) != 0:
+            raise OSError("cannot_resume_owned_process")
+        return kernel, job
+    except BaseException:
+        kernel.CloseHandle(job)
+        raise
+
+
+def _bootstrap_cli() -> None:
+    """Own startup descendants before loading the interpreter's site hooks."""
+    import sys
+    global _BOOTSTRAP_ROOT_JOB
+    if os.name == "nt":
+        import ctypes
+        from types import SimpleNamespace
+        kernel = ctypes.WinDLL("kernel32")
+        kernel.GetCurrentProcess.restype = ctypes.c_void_p
+        _BOOTSTRAP_ROOT_JOB = _windows_job(SimpleNamespace(_handle=kernel.GetCurrentProcess()))
+    probe = sys.argv[2] == "--probe"
+    sys.argv = ["-c"] if probe else sys.argv[2:]
+    import site
+    site.main()
+    if probe:
+        print(f"{sys.version_info.major}.{sys.version_info.minor}")
+        print(time.monotonic())
+    else:
+        import runpy
+        runpy.run_path(sys.argv[0], run_name="__main__")
+
+
+def _managed_run(command: Any, control: RunControl, **kwargs: Any) -> subprocess.CompletedProcess:
+    import signal
+
+    timeout = kwargs.pop("timeout", DEFAULT_CHECK_TIMEOUT_SECONDS)
+    kwargs.pop("check", None)
+    kwargs.pop("capture_output", None)
+    kwargs.update(stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if os.name == "nt":
+        kwargs.update(creationflags=0x4, startupinfo=subprocess.STARTUPINFO())
+        kwargs["startupinfo"].dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    else:
+        kwargs["start_new_session"] = True
+    job = None
+    process = None
+    try:
+        with control.lock:
+            if control.expired():
+                raise TotalBudgetTimeout(command, 0)
+            process = subprocess.Popen(command, **kwargs)
+            control.processes[process.pid] = process
+            if os.name == "nt":
+                job = _windows_job(process, control)
+        single_deadline = time.monotonic() + timeout
+        while True:
+            remaining = single_deadline - time.monotonic()
+            if control.expired():
+                raise TotalBudgetTimeout(command, timeout)
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            wait = min(0.05, remaining)
+            if control.deadline is not None:
+                wait = min(wait, max(0.001, control.deadline - time.monotonic()))
+            try:
+                stdout, stderr = process.communicate(timeout=wait)
+                if control.expired():
+                    raise TotalBudgetTimeout(command, timeout, output=stdout, stderr=stderr)
+                return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+            except subprocess.TimeoutExpired as error:
+                if isinstance(error, TotalBudgetTimeout):
+                    raise
+    finally:
+        if process is not None:
+            if job is not None:
+                job[0].CloseHandle(job[1])
+            elif os.name != "nt":
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            elif process.poll() is None:
+                process.kill()
+            try:
+                process.communicate(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                # Close pipes instead of waiting indefinitely for an inherited handle.
+                for stream in (process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
+            with control.lock:
+                control.processes.pop(process.pid, None)
+
+
+def _invocation_guard(project: Path, *, context: str | None, pr: bool,
+                      diagnostic: bool, started_at: float) -> tuple[RunControl | None, Any]:
+    """CLI-only last resort for blocked preparation or bounded cleanup failure."""
+    context = context or os.environ.get("BUILD_AND_VERIFY_EXECUTION_CONTEXT")
+    if (context != "local" or pr or diagnostic or os.environ.get("GITHUB_ACTIONS") == "true"
+            or os.environ.get("CI", "").lower() == "true"):
+        return None, None
+    config = _load_config(project)
+    verify = config.get("verify", {})
+    budget = verify.get("fullBudgetSeconds")
+    if (verify.get("enforceLocalBudget", True) is not True or isinstance(budget, bool)
+            or not isinstance(budget, int) or budget <= 0):
+        return None, None
+    control = RunControl(started_at + budget)
+    control.selected = _checks(config, "verify")
+    root_job = _BOOTSTRAP_ROOT_JOB
+    if os.name == "nt" and root_job is None:
+        # Keep this handle until process exit. Closing it terminates this CLI and
+        # every descendant, even if preparation never reaches the scheduler.
+        import ctypes
+        from types import SimpleNamespace
+        kernel = ctypes.WinDLL("kernel32")
+        kernel.GetCurrentProcess.restype = ctypes.c_void_p
+        root_job = _windows_job(SimpleNamespace(_handle=kernel.GetCurrentProcess()))
+    elif os.name != "nt":
+        if os.getsid(0) != os.getpid():
+            os.setsid()
+
+    def cutoff() -> None:
+        if control.finished.is_set():
+            return
+        control.cancelled.set()
+        elapsed = round(time.monotonic() - started_at, 2)
+        active = list(control.processes.values())
+        for process in active:
+            if os.name != "nt":
+                import signal
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        if os.environ.get("BUILD_AND_VERIFY_STARTUP_GUARD") == "1":
+            # The public parent reports only after OS cleanup has terminated
+            # this job. No deadline termination depends on Python output/I/O.
+            if root_job is None:
+                import signal
+                os.killpg(os.getpid(), signal.SIGKILL)
+            os._exit(124)
+        completed = dict(control.results)
+        unfinished = [check['id'] for check in control.selected if check['id'] in control.active_checks]
+        not_started = [check['id'] for check in control.selected if check['id'] not in completed and check['id'] not in unfinished]
+        payload = {"schemaVersion": 1, "runtimeVersion": control.runtime_version,
+            "generatedAt": datetime.now(timezone.utc).isoformat(), "totalSeconds": elapsed,
+            "budgetSeconds": budget, "overBudget": True, "verificationStatus": "failed",
+            "executionContext": "local", "diagnostic": False, "reason": "total_budget_timeout", "phase": control.phase,
+            "unfinished": unfinished, "notStarted": not_started,
+            "checks": [{"id": check['id'], "status": completed[check['id']].status if check['id'] in completed
+                else ("timed_out" if check['id'] in unfinished else "not_started"),
+                "reason": completed[check['id']].reason if check['id'] in completed else "total_budget_timeout",
+                "durationSeconds": round(completed[check['id']].duration_seconds, 2) if check['id'] in completed
+                else round(max(0, time.monotonic() - control.start_times[check['id']]), 2)
+                if check['id'] in control.start_times else 0}
+                for check in control.selected]}
+        def publish_failure() -> None:
+            _write_performance_report(project / ".build-and-verify/runs/performance-report.json", payload)
+            print(f"total_budget_timeout: totalSeconds={elapsed:.2f} budgetSeconds={budget}; bounded-cleanup-fallback", flush=True)
+            print(f"unfinished: {', '.join(unfinished)}", flush=True)
+            print(f"not-started: {', '.join(not_started)}", flush=True)
+            print("status: failed", flush=True)
+
+        publisher = threading.Thread(target=publish_failure, daemon=True)
+        publisher.start()
+        publisher.join(timeout=0.1)
+        if root_job is None:
+            import signal
+            os.killpg(os.getpid(), signal.SIGKILL)
+        # Exit this CLI nonzero before Windows closes its sole owning job handle.
+        # Closing it explicitly first would terminate this process with code 0.
+        # OS handle cleanup then terminates every owned descendant.
+        os._exit(124)
+
+    def deadline_reached() -> None:
+        control.cancelled.set()
+        if not control.scheduling:
+            cutoff()  # Blocked preparation has no scheduler to return a result.
+        else:
+            fallback = threading.Timer(0.75, cutoff)
+            fallback.daemon = True
+            fallback.start()
+
+    timer = threading.Timer(max(0, started_at + budget - time.monotonic()), deadline_reached)
+    timer.daemon = True
+    timer.start()
+    # Keep the owning Windows handle alive after cancellation until CLI exit.
+    timer.root_job = root_job
+    if os.environ.get("BUILD_AND_VERIFY_STARTUP_GUARD") == "1":
+        print("build-and-verify-startup-guard-ready", flush=True)
+    return control, timer
+
+
+def _finish_verify(project: Path, control: RunControl, result: int, started_at: float) -> int:
+    """Commit the formal result only after preparation, checks and migration."""
+    payload = control.report_payload
+    if control.expired():
+        result = 1
+    if payload is not None:
+        payload.update(totalSeconds=round(time.monotonic() - started_at, 2),
+            verificationStatus="failed" if result else "running" if os.environ.get("BUILD_AND_VERIFY_STARTUP_GUARD") == "1"
+                else control.success_status or "passed")
+        if control.expired():
+            payload.update(overBudget=True, reason="total_budget_timeout")
+        _write_performance_report(project / ".build-and-verify/runs/performance-report.json", payload)
+    if control.expired():
+        result = 1
+        if payload is not None:
+            payload.update(totalSeconds=round(time.monotonic() - started_at, 2),
+                verificationStatus="failed", overBudget=True, reason="total_budget_timeout")
+            _write_performance_report(project / ".build-and-verify/runs/performance-report.json", payload)
+        print("total_budget_timeout: finalization", flush=True)
+        print("status: failed", flush=True)
+    return result
 
 
 def _is_non_empty_string(value: Any) -> bool:
@@ -710,9 +1003,12 @@ def _run_check_result(
     changed_files: list[str],
     runner: Runner,
     runtime_identity: str,
+    control: RunControl | None = None,
 ) -> CheckResult:
     started_at = time.monotonic()
     try:
+        if control is not None and control.expired():
+            return CheckResult(index, check, 1, status="not_started", reason="total_budget_timeout")
         key = _cache_key(project, config, check, changed_files, runtime_identity)
         timeout_seconds = _check_timeout_seconds(config, check)
     except ValueError as error:
@@ -762,7 +1058,17 @@ def _run_check_result(
     if timeout_seconds is not None:
         run_kwargs["timeout"] = timeout_seconds
     try:
-        result = runner(command, **run_kwargs)
+        if control is not None and runner is subprocess.run:
+            result = _managed_run(command, control, **run_kwargs)
+        else:
+            if control is not None and control.deadline is not None:
+                remaining = control.deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TotalBudgetTimeout(command, 0)
+                run_kwargs["timeout"] = min(timeout_seconds, remaining)
+            result = runner(command, **run_kwargs)
+            if control is not None and control.expired():
+                raise TotalBudgetTimeout(command, timeout_seconds)
     except FileNotFoundError:
         executable = command[0] if isinstance(command, list) else str(command)
         return CheckResult(
@@ -773,14 +1079,19 @@ def _run_check_result(
             duration_seconds=time.monotonic() - started_at,
             cache_key=key,
         )
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as error:
+        total_timeout = isinstance(error, TotalBudgetTimeout) or (control is not None and control.expired())
         return CheckResult(
             index,
             check,
             1,
-            stderr=f"check_timeout: {check.get('id')} exceeded {_format_seconds(timeout_seconds or 0)}s\n",
+            stderr=(f"{'total_budget_timeout' if total_timeout else 'check_timeout'}: {check.get('id')}\n"
+                    if control is not None else
+                    f"check_timeout: {check.get('id')} exceeded {_format_seconds(timeout_seconds or 0)}s\n"),
             duration_seconds=time.monotonic() - started_at,
             cache_key=key,
+            status="timed_out",
+            reason="total_budget_timeout" if total_timeout else "check_timeout",
         )
     except Exception as error:
         return CheckResult(
@@ -984,6 +1295,192 @@ def run_build(project: Path, runner: Runner = subprocess.run, *, pr: bool = Fals
 
 
 def run_verify(
+    project: Path, runner: Runner = subprocess.run, *, pr: bool = False,
+    full: bool = False, baseline: str | None = None, performance_report: bool = False,
+    runtime_version: str = "unknown", synthetic_changed_paths: list[str] | None = None,
+    implementation_identity: str | None = None, execution_context: str | None = None,
+    diagnostic: bool = False, started_at: float | None = None,
+    invocation_control: RunControl | None = None,
+) -> int:
+    context = execution_context or os.environ.get("BUILD_AND_VERIFY_EXECUTION_CONTEXT", "unknown")
+    if context not in {"local", "cloud", "ci", "unknown"}:
+        return _verify_error("invalid_execution_context")
+    # CODEX_CI describes the host shell and also occurs on desktop machines.
+    if pr or os.environ.get("GITHUB_ACTIONS") == "true" or os.environ.get("CI", "").lower() == "true":
+        context = "ci"
+    try:
+        config = _load_config(project)
+    except ConfigError as error:
+        return _config_error(error)
+    verify = config.get("verify", {})
+    enforce = verify.get("enforceLocalBudget", True)
+    if not isinstance(enforce, bool):
+        return _verify_error("verify.enforceLocalBudget must be boolean")
+    budget = verify.get("fullBudgetSeconds")
+    if context == "unknown":
+        print("execution-context-warning: unknown; declare --execution-context or BUILD_AND_VERIFY_EXECUTION_CONTEXT", flush=True)
+        if budget is not None and enforce and not diagnostic:
+            return _verify_error("execution_context_required_for_local_budget")
+    if context != "local" and not diagnostic:
+        return _run_verify_legacy(project, runner, pr=pr, full=full, baseline=baseline,
+            performance_report=performance_report, runtime_version=runtime_version,
+            synthetic_changed_paths=synthetic_changed_paths, implementation_identity=implementation_identity)
+    if budget is not None and (isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0):
+        return _verify_error("verify.fullBudgetSeconds must be positive integer")
+    if not _is_non_empty_string(runtime_version) or runtime_version == "unknown":
+        return _verify_error("missing_runtime_version")
+    identity = runtime_version if implementation_identity is None else implementation_identity
+    if not _is_non_empty_string(identity) or identity == "unknown":
+        return _verify_error("missing_implementation_identity")
+    if baseline is not None and full:
+        return _verify_error("baseline_not_allowed_with_full")
+    started = time.monotonic() if started_at is None else started_at
+    deadline = started + budget if context == "local" and enforce and budget is not None and not diagnostic else None
+    control = invocation_control or RunControl(deadline)
+    control.runtime_version = runtime_version
+    if baseline is not None:
+        changed, error = _baseline_changed_files(project, baseline)
+        if error is not None:
+            return _verify_error(error)
+    else:
+        changed = _dedupe(synthetic_changed_paths) if synthetic_changed_paths is not None else _changed_files(project)
+    configured = _checks(config, "verify")
+    checks = [check for check in configured if not pr or check.get("pr", True)]
+    config_changed = ".build-and-verify/config.json" in changed
+    selected = checks if full or config_changed else _selected_checks(checks, changed)
+    control.selected = selected
+    if invocation_control is not None and os.environ.get("BUILD_AND_VERIFY_STARTUP_GUARD") == "1":
+        print("build-and-verify-selected:" + json.dumps({"ids": [check['id'] for check in selected],
+            "runtimeVersion": runtime_version}), flush=True)
+    print(f"scene: {'pr' if pr else 'local'}", flush=True)
+    print(f"execution-context: {context}", flush=True)
+    if diagnostic:
+        print("diagnostic: true; formal-budget-acceptance: false", flush=True)
+    if pr:
+        print(f"excluded-by-pr: {_check_ids([check for check in configured if check.get('pr') is False])}")
+    if config_changed and not full:
+        print("selection-reason: config-changed")
+    results: list[CheckResult] = []
+    pending: list[tuple[int, dict[str, Any]]] = []
+    for index, check in enumerate(selected):
+        if control.expired():
+            results.append(CheckResult(index, check, 1, status="not_started", reason="total_budget_timeout"))
+            continue
+        try:
+            key = _cache_key(project, config, check, changed, identity)
+        except (ValueError, OSError) as error:
+            results.append(CheckResult(index, check, 1, stderr=f"{error}\n", status="failed"))
+            continue
+        if control.expired():
+            results.append(CheckResult(index, check, 1, status="not_started", reason="total_budget_timeout"))
+            continue
+        if not full and not diagnostic and _cache_load(project, key):
+            print(f"cache-hit: {check['id']}", flush=True)
+            results.append(CheckResult(index, check, 0, status="cached"))
+        else:
+            pending.append((index, check))
+
+    def execute(item: tuple[int, dict[str, Any]]) -> CheckResult:
+        index, check = item
+        if control.expired():
+            return CheckResult(index, check, 1, status="not_started", reason="total_budget_timeout")
+        print(f"check-start: {check['id']}", flush=True)
+        control.start_times[check['id']] = time.monotonic()
+        control.active_checks.add(check['id'])
+        result = _run_check_result(index, project, check, config, changed, runner, identity,
+            control if control.deadline is not None else None)
+        result.status = result.status or ("passed" if result.returncode == 0 else "failed")
+        control.results[check['id']] = result
+        control.active_checks.discard(check['id'])
+        if result.returncode == 0 and result.cache_key is not None and not diagnostic:
+            try:
+                _cache_store(project, result.cache_key, result.check)
+            except Exception as error:
+                result.returncode = 1
+                result.status = "failed"
+                result.reason = "cache_write_error"
+                result.stderr += f"cache_write_error: {check['id']}: {type(error).__name__}: {error}\n"
+        print(f"check-end: {check['id']} status={result.status} seconds={result.duration_seconds:.2f}", flush=True)
+        return result
+
+    control.results.update({result.check['id']: result for result in results})
+    control.scheduling = True
+    control.phase = "checks"
+
+    parallel = [item for item in pending if item[1].get("checkParallel") is True]
+    serial = [item for item in pending if item[1].get("checkParallel") is not True]
+    try:
+        if parallel:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=_max_parallel_checks(config, len(parallel))) as executor:
+                try:
+                    results.extend(executor.map(execute, parallel))
+                except BaseException:
+                    control.cancelled.set()
+                    raise
+        for item in serial:
+            results.append(execute(item))
+    except KeyboardInterrupt:
+        control.cancelled.set()
+        return _verify_error("verification_interrupted")
+    results.sort(key=lambda result: result.index)
+    total = round(time.monotonic() - started, 2)
+    timed_out = control.expired()
+    failures = any(result.returncode != 0 for result in results) or timed_out
+    over = (timed_out or total > budget) if budget is not None else None
+    for result in results:
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr)
+        print(f"duration: {result.check['id']} seconds={result.duration_seconds:.2f}")
+    unfinished = [result.check['id'] for result in results if result.status == "timed_out"]
+    unstarted = [result.check['id'] for result in results if result.status == "not_started"]
+    if timed_out:
+        print(f"total_budget_timeout: totalSeconds={total:.2f} budgetSeconds={budget}", flush=True)
+        print(f"unfinished: {', '.join(unfinished)}")
+        print(f"not-started: {', '.join(unstarted)}")
+    elif over:
+        print(f"performance-warning: totalSeconds={total:.2f} budgetSeconds={budget} exceededSeconds={total-budget:.2f}")
+    if performance_report or over or timed_out or diagnostic:
+        report_path = project / ".build-and-verify" / "runs" / "performance-report.json"
+        payload = {"schemaVersion": 1, "runtimeVersion": runtime_version,
+            "generatedAt": datetime.now(timezone.utc).isoformat(), "totalSeconds": total,
+            "budgetSeconds": budget, "overBudget": over,
+            "verificationStatus": "failed" if failures else ("running" if invocation_control is not None else "diagnostic" if diagnostic else "passed"),
+            "executionContext": context, "diagnostic": diagnostic,
+            "reason": "total_budget_timeout" if timed_out else None,
+            "unfinished": unfinished, "notStarted": unstarted,
+            "checks": [{"id": result.check['id'], "status": result.status,
+                        "reason": result.reason, "durationSeconds": round(result.duration_seconds, 2)} for result in results]}
+        control.report_payload = payload
+        if _write_performance_report(report_path, payload):
+            print("performance-report: .build-and-verify/runs/performance-report.json")
+        else:
+            print("performance-report-warning: .build-and-verify/runs/performance-report.json", file=sys.stderr)
+    print(f"checked: {_check_ids([result.check for result in results if result.status != 'not_started'])}")
+    print(f"full-not-run: {str(not full).lower()}")
+    if control.expired():
+        failures = True
+        if control.report_payload is not None:
+            control.report_payload.update(totalSeconds=round(time.monotonic() - started, 2),
+                verificationStatus="failed", overBudget=True, reason="total_budget_timeout")
+            _write_performance_report(project / ".build-and-verify/runs/performance-report.json", control.report_payload)
+    if failures:
+        print(f"failed: {_check_ids([result.check for result in results if result.returncode != 0])}")
+        return _verify_error("verification_failed")
+    if not selected:
+        control.success_status = "skipped"
+        if invocation_control is None:
+            print("status: skipped")
+        print(f"reason: {'no_changed_files' if not changed and not full else 'no_matching_checks'}")
+    else:
+        control.success_status = "diagnostic" if diagnostic else "passed"
+        if invocation_control is None:
+            print(f"status: {control.success_status}")
+    return 0
+
+
+def _run_verify_legacy(
     project: Path,
     runner: Runner = subprocess.run,
     *,

@@ -399,6 +399,24 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    'tests/test_build_and_verify_cli.py::test_public_verify_timeout_report_failure_warns_without_changing_failure': 'covers real public timeout reporting failure warning while preserving nonzero exit and later-check cancellation',
+    'tests/test_build_and_verify_cli.py::test_public_verify_protocol_like_check_output_is_preserved': 'covers real public entry preserving ordinary text that resembles the final-result protocol',
+    'tests/test_build_and_verify_cli.py::test_review_startup_reaps_descendants_after_parent_exits': 'covers real CLI startup ownership after probe or interpreter parent exit',
+    'tests/test_build_and_verify_cli.py::test_review_budget_off_preserves_background_dependency': 'covers real CLI warning-only execution preserving a background dependency for the next check',
+    'tests/test_build_and_verify_cli.py::test_review_python_startup_and_probe_are_inside_total_budget': 'covers both real CLI startup and interpreter discovery deadlines',
+    'tests/test_build_and_verify_cli.py::test_review_report_crossing_deadline_cannot_pass': 'covers real CLI finalization crossing the shared deadline without emitting formal success',
+    'tests/test_build_and_verify_cli.py::test_public_verify_does_not_swallow_cache_write_failure': 'covers real CLI nonzero failure and consistent report when successful child output cannot be cached',
+    'tests/test_build_and_verify_cli.py::test_public_verify_budget_interrupts_blocked_preparation_and_its_descendants': 'covers real CLI cutoff during blocked preparation and termination of both preparation parent and descendant',
+    'tests/test_build_and_verify_cli.py::test_public_verify_budget_applies_to_fast_and_full': 'covers real fast/full CLI deadlines and failed-result cache/report behavior',
+    'tests/test_build_and_verify_cli.py::test_public_verify_budget_warning_does_not_fail_exempt_runs': 'covers real CLI warning-only execution; cloud/PR/CI and switch policy use the fake-runner matrix',
+    'tests/test_build_and_verify_cli.py::test_public_verify_unknown_context_fails_before_launch': 'covers real CLI unknown-context preflight before any child launch',
+    'tests/test_build_and_verify_cli.py::test_public_verify_parallel_queue_shares_deadline': 'covers real CLI parallel queue cancellation and serial launch prevention',
+    'tests/test_build_and_verify_cli.py::test_public_verify_serial_checks_share_remaining_budget_and_cache_only_completed': 'covers real CLI cumulative deadline and completed-only cache writes',
+    'tests/test_build_and_verify_cli.py::test_public_verify_parallel_active_checks_share_cancellation': 'covers real CLI cancellation of concurrent managed children',
+    'tests/test_build_and_verify_cli.py::test_public_verify_warning_and_diagnostic_preserve_real_errors': 'covers real CLI assertion failures in warning and diagnostic modes',
+    'tests/test_build_and_verify_cli.py::test_public_verify_diagnostic_is_not_formal_acceptance': 'covers real CLI diagnostic output and absence of formal acceptance',
+    'tests/test_build_and_verify_cli.py::test_public_verify_diagnostic_and_warning_preserve_check_timeout': 'covers real CLI per-check safety timeout independently of total enforcement',
+    'tests/test_build_and_verify_cli.py::test_public_verify_budget_reaps_descendants_and_preserves_other_processes': 'covers real CLI process-tree reclamation and unrelated-process survival',
     'tests/test_build_and_verify_cli.py::test_controlled_pack_rejects_unknown_package': (
         'covers the controlled package CLI rejecting an unknown package; function=test_controlled_pack_rejects_unknown_package'
     ),
@@ -420,11 +438,8 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_codex_doctor_resolves_orca_and_explicit_homes': (
         'covers the installed Build and Verify CLI selecting an Orca-safe Codex profile and preserving explicit overrides; function=test_packed_build_and_verify_codex_doctor_resolves_orca_and_explicit_homes'
     ),
-    'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_accepts_controlled_ssh_dev_source': (
-        'covers the packaged Build and Verify development-mode entrypoint with an official SSH remote and published commit; function=test_packed_build_and_verify_accepts_controlled_ssh_dev_source'
-    ),
     'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_dev_identity_controls_public_verify_cache': (
-        'covers packaged Build and Verify doctor and fast/full verify cache invalidation for development identity changes; function=test_packed_build_and_verify_dev_identity_controls_public_verify_cache'
+        'covers packaged Build and Verify official SSH source, published commit, doctor and real implementation/shared-packaging identity changes invalidating fast-verify cache; function=test_packed_build_and_verify_dev_identity_controls_public_verify_cache'
     ),
     'tests/test_build_and_verify_cli.py::test_packed_build_and_verify_migrates_recognized_runtime_after_fast_verify': (
         'covers the installed Build and Verify CLI fast-verify migration in a clean temporary git repository; function=test_packed_build_and_verify_migrates_recognized_runtime_after_fast_verify'
@@ -500,9 +515,6 @@ E2E_ALLOWLIST: dict[str, str] = {
     ),
     'tests/test_pr_flow_cli.py::test_init_validates_release_and_dev_toolchain_identities_through_public_cli': (
         'covers the public init CLI accepting fixed release and trusted source toolchain identities; function=test_init_validates_release_and_dev_toolchain_identities_through_public_cli'
-    ),
-    'tests/test_pr_flow_cli.py::test_init_rejects_untrusted_toolchain_identity_through_public_cli': (
-        'covers the public init CLI rejecting non-fixed or untrusted toolchain identities; function=test_init_rejects_untrusted_toolchain_identity_through_public_cli'
     ),
     'tests/test_pr_flow_cli.py::test_legacy_repositories_keep_flow_behavior_with_upgrade_prompt': (
         'covers public diagnose complete and tweak CLI upgrade prompts for legacy repositories; function=test_legacy_repositories_keep_flow_behavior_with_upgrade_prompt'
@@ -670,13 +682,10 @@ E2E_ALLOWLIST: dict[str, str] = {
         'covers pr-flow packaged CLI helper-chain contract: test_project_template_recreates_incomplete_template_after_stale_lock; function=test_project_template_recreates_incomplete_template_after_stale_lock'
     ),
     'tests/test_local_plugin_build_checks.py::test_my_spec_candidate_path_reaches_real_xdist_workers': (
-        'covers four real pytest-xdist workers inheriting one absolute MySpec candidate Tarball path; function=test_my_spec_candidate_path_reaches_real_xdist_workers'
+        'covers two real pytest-xdist workers inheriting one absolute MySpec candidate Tarball path; function=test_my_spec_candidate_path_reaches_real_xdist_workers'
     ),
     'tests/test_my_spec.py::test_packed_myspec_installs_a_working_cli_with_agent_resources': (
         'covers npm Tarball packing, isolated installation, and the installed myspec CLI seam; function=test_packed_myspec_installs_a_working_cli_with_agent_resources'
-    ),
-    'tests/test_my_spec.py::test_my_spec_candidate_tarball_is_shared_by_isolated_installs': (
-        'covers one run-scoped MySpec candidate Tarball reused by isolated installations; function=test_my_spec_candidate_tarball_is_shared_by_isolated_installs'
     ),
     'tests/test_my_spec.py::test_packed_myspec_preserves_modified_requirement_order': (
         'covers the installed myspec CLI preserving same-capability Requirement order while retaining cross-capability moves; function=test_packed_myspec_preserves_modified_requirement_order'

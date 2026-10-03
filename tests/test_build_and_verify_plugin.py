@@ -165,6 +165,7 @@ def load_build_and_verify_module():
 
     def run_verify_with_test_runtime(*args, **kwargs):
         kwargs.setdefault("runtime_version", "test-runtime")
+        kwargs.setdefault("execution_context", "cloud")
         return run_verify(*args, **kwargs)
 
     runner.run_verify = run_verify_with_test_runtime
@@ -204,10 +205,25 @@ class FakeRunnerModule:
         runtime_version: str = "unknown",
         synthetic_changed_paths: list[str] | None = None,
         implementation_identity: str | None = None,
+        execution_context: str | None = None,
+        diagnostic: bool = False,
+        started_at: float | None = None,
+        invocation_control=None,
     ) -> int:
         def call_runner() -> int:
-            return int(
-                self.runner_module.run_verify(
+            original_git_files = self.runner_module._git_visible_files
+
+            def visible_files_for_test(project_path, relative):
+                # These in-process fixtures deliberately have no repository.
+                # Model the existing non-Git fallback without launching Git for
+                # every directory hash. Real Git fixtures keep the real adapter.
+                if not any((parent / ".git").exists() for parent in (project_path, *project_path.parents)):
+                    return None
+                return original_git_files(project_path, relative)
+
+            self.runner_module._git_visible_files = visible_files_for_test
+            try:
+                return int(self.runner_module.run_verify(
                     project,
                     runner=self.runner,
                     pr=pr,
@@ -217,8 +233,13 @@ class FakeRunnerModule:
                     runtime_version=runtime_version,
                     synthetic_changed_paths=(self.changed_files if synthetic_changed_paths is None else synthetic_changed_paths),
                     implementation_identity=implementation_identity,
-                )
-            )
+                    execution_context=execution_context or "cloud",
+                    diagnostic=diagnostic,
+                    started_at=started_at,
+                    invocation_control=invocation_control,
+                ))
+            finally:
+                self.runner_module._git_visible_files = original_git_files
 
         if synthetic_changed_paths is not None:
             return call_runner()
@@ -249,8 +270,12 @@ def run_check(
     stdout = io.StringIO()
     stderr = io.StringIO()
     try:
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            returncode = int(module.main(argv))
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(module, "_runtime_metadata", lambda: {
+                "runtime_version": "test-runtime", "implementation_identity": "test-implementation",
+            })
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                returncode = int(module.main(argv))
     finally:
         module._RUNNER_MODULE = original_runner_module
     return subprocess.CompletedProcess(
@@ -1272,6 +1297,7 @@ def test_build_and_verify_init_references_have_cross_file_flow_invariants() -> N
 
 def test_build_and_verify_init_documents_optional_full_budget() -> None:
     skill = (INIT_SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    assert "verify.enforceLocalBudget" in skill
     questionnaire = (INIT_REFERENCE_ROOT / "questionnaire.md").read_text(encoding="utf-8")
     ecosystem = (INIT_REFERENCE_ROOT / "ecosystem-detection.md").read_text(encoding="utf-8")
     config_draft = (INIT_REFERENCE_ROOT / "config-draft.md").read_text(encoding="utf-8")
@@ -1281,7 +1307,7 @@ def test_build_and_verify_init_documents_optional_full_budget() -> None:
         assert "verify.fullBudgetSeconds" in text
     assert "用户确认正整数后" in questionnaire + config_draft
     assert "未启用时省略" in questionnaire + config_draft
-    assert "只警告并记录报告" in skill + questionnaire
+    assert "关闭时仅警告" in skill
 
 
 def test_build_and_verify_init_skill_closes_interactive_validation_loop_inside_plugin() -> None:
@@ -2607,23 +2633,28 @@ def test_build_and_verify_runner_full_verify_allows_empty_checks(tmp_path: Path)
     )["checks"] == []
 
 
-@pytest.mark.parametrize("value", [True, 0, -1, 1.5, "1"])
-def test_build_and_verify_invalid_full_budget_rejects_before_checks(
-    tmp_path: Path, value: object
+@pytest.mark.parametrize("field,value", [
+    *(('fullBudgetSeconds', value) for value in [True, 0, -1, 1.5, "1"]),
+    *(('enforceLocalBudget', value) for value in [0, 1, "true", None]),
+])
+def test_build_and_verify_invalid_budget_config_rejects_before_checks(
+    tmp_path: Path, field: str, value: object
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
     write_runner_config(
         project,
         verify_checks=[{"id": "verify", "command": ["verify"], "inputs": []}],
-        verify_config={"fullBudgetSeconds": value},
+        verify_config={field: value},
     )
     runner = FakeRunner()
 
     result = run_check(project, "verify", "--full", runner=runner, changed_files=[])
 
     assert result.returncode == 1
-    assert "verify.fullBudgetSeconds must be positive integer" in result.stderr
+    expected = "positive integer" if field == "fullBudgetSeconds" else "boolean"
+    assert f"verify.{field} must be {expected}" in result.stderr
+    assert "check-start:" not in result.stdout
     assert runner.calls == []
 
 
@@ -2697,6 +2728,83 @@ def test_build_and_verify_full_performance_report_matrix(
         assert report["verificationStatus"] == (
             "failed" if functional_returncode else "passed"
         )
+
+
+def test_local_budget_keeps_guard_until_migration_and_finalization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from unittest.mock import Mock
+
+    module = load_build_and_verify_module()
+    runner = module._runner()
+    legacy = tmp_path / ".build-and-verify/runtime"
+    legacy.mkdir(parents=True)
+    clock = [0.9]
+    control = runner.RunControl(1.0)
+    timer = Mock()
+    events = []
+
+    def cancel() -> None:
+        assert control.finished.is_set()
+        assert control.phase == "finalization"
+        events.append("cancel")
+
+    def migrate(project: Path, runtime: Path) -> int:
+        assert project == tmp_path and runtime == legacy
+        timer.cancel.assert_not_called()
+        assert not control.finished.is_set()
+        assert control.phase == "migration"
+        events.append("migration")
+        clock[0] = 1.1
+        timer.cancel.assert_not_called()
+        return 0
+
+    timer.cancel.side_effect = cancel
+    monkeypatch.delenv("BUILD_AND_VERIFY_STARTED_MONOTONIC", raising=False)
+    monkeypatch.setattr(runner.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(runner, "_invocation_guard", lambda *args, **kwargs: (control, timer))
+    monkeypatch.setattr(runner, "run_verify", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(module, "_runtime_metadata", lambda: {
+        "runtime_version": "test-runtime", "implementation_identity": "test-implementation",
+    })
+    monkeypatch.setattr(module, "_legacy_runtime", lambda project: (legacy, True))
+    monkeypatch.setattr(module, "_migration_ready", lambda project: True)
+    monkeypatch.setattr(module, "_migrate_legacy_runtime", migrate)
+    monkeypatch.setattr(sys, "argv", [str(BUILD_AND_VERIFY_SCRIPT), "verify", "--project",
+        str(tmp_path), "--execution-context", "local"])
+
+    assert module.main() == 1
+    assert events == ["migration", "cancel"]
+    timer.cancel.assert_called_once()
+    assert control.cancelled.is_set()
+    output = capsys.readouterr().out
+    assert "status: failed" in output and "status: passed" not in output
+
+
+@pytest.mark.parametrize("settings,context,extra", [
+    ({"enforceLocalBudget": False}, "local", ()),
+    ({}, "cloud", ()), ({}, "ci", ()), ({}, "local", ("--pr",)),
+])
+def test_local_budget_warning_exemption_policy_matrix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: dict,
+    context: str, extra: tuple[str, ...],
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    write_runner_config(project, verify_config={"fullBudgetSeconds": 1, **settings},
+        verify_checks=[{"id": name, "command": [name], "inputs": []} for name in ("slow", "later")])
+    runner = FakeRunner({("later",): completed(["later"], stdout="LATER_STARTED\n")})
+    monkeypatch.setenv("CI", "false")
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
+    monkeypatch.delenv("BUILD_AND_VERIFY_STARTED_MONOTONIC", raising=False)
+    monkeypatch.setattr(load_build_and_verify_runner_module().time, "monotonic",
+        lambda: 1.2 if len(runner.calls) >= 2 else 0.0)
+    result = run_check(project, "verify", "--full", "--execution-context", context,
+        *extra, runner=runner, changed_files=[])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert runner.calls == [["slow"], ["later"]]
+    assert "LATER_STARTED" in result.stdout
+    assert "performance-warning:" in result.stdout
 
 
 def test_build_and_verify_performance_report_schema_is_exact(
@@ -3051,7 +3159,6 @@ def test_build_and_verify_runner_fast_verify_runs_check_parallel_cache_misses_co
     tmp_path: Path, capsys
 ) -> None:
     import threading
-    import time
 
     module = load_build_and_verify_module()
     project = tmp_path / "project"
@@ -3087,13 +3194,14 @@ def test_build_and_verify_runner_fast_verify_runs_check_parallel_cache_misses_co
     active = 0
     max_active = 0
     lock = threading.Lock()
+    barrier = threading.Barrier(2)
 
     def fake_runner(command, **_kwargs):
         nonlocal active, max_active
         with lock:
             active += 1
             max_active = max(max_active, active)
-        time.sleep(0.2)
+        barrier.wait(timeout=2)
         with lock:
             active -= 1
         return subprocess.CompletedProcess(command, 0, stdout=f"{command[0]}\n", stderr="")

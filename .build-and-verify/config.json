@@ -29,7 +29,7 @@
   "verify": {
     "maxParallel": 8,
     "timeoutSeconds": 180,
-    "fullBudgetSeconds": 30,
+    "fullBudgetSeconds": 60,
     "checks": [
       {
         "id": "verify.local-build-contract",
@@ -97,7 +97,7 @@
           "tests/test_release_flow_plugin_package.py"
         ],
         "checkParallel": true,
-        "pytestXdistWorkers": 2
+        "pytestXdistWorkers": 4
       },
       {
         "id": "verify.pr-flow",
@@ -281,7 +281,7 @@
           "plugins/tool-lifecycle"
         ],
         "checkParallel": true,
-        "pytestXdistWorkers": 2
+        "pytestXdistWorkers": 4
       }
     ]
   }

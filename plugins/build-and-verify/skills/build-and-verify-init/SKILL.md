@@ -38,5 +38,5 @@ Use this skill when the user asks to initialize（初始化）, generate（生�
 
 ## Output（输出）
 
-- 写入前输出候选 checks（检查项）、`paths`（受影响路径）、自动推导的 `inputs`（缓存输入）、运行参数、完整验证预算的最终值或未启用、覆盖摘要、默认备份路径、targeted dependency checks（定向依赖检查）结果和 environment checks（环境检查）结果。超预算只警告并记录报告，不阻断功能验证。
+- 写入前输出候选 checks（检查项）、`paths`（受影响路径）、自动推导的 `inputs`（缓存输入）、运行参数、完整验证预算的最终值或未启用、覆盖摘要、默认备份路径、targeted dependency checks（定向依赖检查）结果和 environment checks（环境检查）结果。本机 `verify.enforceLocalBudget`（预算强制开关）缺省开启，超预算中断并失败；关闭时仅警告，云端、拉取请求及持续集成保持原行为。
 - 写入后输出配置路径、备份路径和 config（配置）结构校验结果；依赖或环境问题只能在用户明确授权后处理。

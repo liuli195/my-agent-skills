@@ -50,91 +50,85 @@ This capability keeps the MySpec（自有规格） id `test-framework-plugin` to
 - **THEN** agent（代理） MUST 允许用户在存在依赖或环境问题时仍写入配置
 - **THEN** agent（代理） MUST 明确说明用户可以让 agent（代理）协助处理环境和外部依赖问题
 ### Requirement: Full verify provides non-blocking total performance warnings
-Build and Verify（构建与验证） MUST allow a target repository to declare an optional positive integer `verify.fullBudgetSeconds`（完整验证预算秒数） for full verification wall time, and the performance result MUST NOT replace or change functional verification status.
+Build and Verify（构建与验证） MUST 接受可选正整数 `verify.fullBudgetSeconds`（完整验证预算秒数）。明确本机执行时该值同时约束一次快速或完整验证；强制开关关闭，或云端、拉取请求及可靠持续集成场景时，预算告警 MUST NOT 替代真实功能结果。
 
 #### Scenario: Full verify finishes before budget
-- **WHEN** a user runs `verify --full`（完整验证） with a valid `verify.fullBudgetSeconds`
-- **AND** all configured checks finish within that budget
-- **THEN** the system MUST complete all configured checks
-- **THEN** the system MUST NOT output `performance-warning`（性能警告）
-- **THEN** the exit status MUST remain determined by functional verification results
+- **WHEN** 完整验证在配置预算内完成全部检查
+- **THEN** 系统 MUST NOT 输出 `performance-warning`（性能警告）
+- **THEN** 退出状态 MUST 由真实检查结果确定
 
 #### Scenario: Full verify exceeds budget
-- **WHEN** a user runs `verify --full`（完整验证） with a valid `verify.fullBudgetSeconds`
-- **AND** total full verification wall time exceeds that budget
-- **THEN** the system MUST complete all configured checks before evaluating the budget result
-- **THEN** the system MUST output `performance-warning`（性能警告） with total time, budget, exceeded time, and exceeded percentage
-- **THEN** the performance warning MUST NOT change the exit status determined by functional verification results
+- **WHEN** 本机强制开关关闭，或执行地点为云端、拉取请求或可靠持续集成
+- **AND** 完整验证超过配置预算
+- **THEN** 系统 MUST 完成配置检查后输出总耗时、预算和超出时长告警
+- **THEN** 告警 MUST NOT 改变功能检查确定的退出状态
+- **THEN** 云端、拉取请求及可靠持续集成 MUST 保留既有完整验证预算告警行为
 
 #### Scenario: Functional failure remains authoritative
-- **WHEN** one or more configured checks fail during full verification
-- **THEN** the system MUST report functional verification failure using its existing exit status
-- **THEN** an under-budget or over-budget result MUST NOT replace that functional result
+- **WHEN** 任一检查失败、异常或发生单项超时
+- **THEN** 系统 MUST 返回真实失败
+- **THEN** 开关关闭、预算内完成或仅有预算告警 MUST NOT 将真实失败变为通过
 
 #### Scenario: Invalid full budget is rejected
-- **WHEN** `.build-and-verify/config.json` declares `verify.fullBudgetSeconds`
-- **AND** the value is not a positive integer
-- **THEN** configuration validation MUST fail before configured checks run
-- **THEN** the system MUST report the invalid field
+- **WHEN** 配置预算不是正整数，或 `verify.enforceLocalBudget`（本机预算强制开关）不是布尔值
+- **THEN** 系统 MUST 在启动检查前明确拒绝并报告无效字段
 ### Requirement: Full verify records a fixed performance report on demand or over budget
-Build and Verify（构建与验证） MUST support `verify --full --performance-report`（完整验证性能报告） and MUST conditionally record one fixed-format report without coupling to repository business test output.
+Build and Verify（构建与验证） MUST 保留固定报告路径和既有核心计时字段，并兼容补充本机截止与诊断状态；报告 MUST NOT 依赖业务测试输出结构。
 
 #### Scenario: Explicit report is written within budget
-- **WHEN** a user runs `verify --full --performance-report`
-- **AND** full verification does not exceed its configured budget or has no configured budget
-- **THEN** the system MUST write `.build-and-verify/runs/performance-report.json`
-- **THEN** the exit status MUST remain determined by functional verification results
+- **WHEN** 用户运行 `verify --full --performance-report`（完整验证性能报告）
+- **THEN** 系统 MUST 写入 `.build-and-verify/runs/performance-report.json`（性能报告）
+- **THEN** 报告 MUST 与真实退出结果一致
 
 #### Scenario: Over-budget run writes report automatically
-- **WHEN** full verification exceeds `verify.fullBudgetSeconds`
-- **THEN** the system MUST write `.build-and-verify/runs/performance-report.json` whether or not `--performance-report` was provided
-- **THEN** the system MUST output the report path
+- **WHEN** 本机快速或完整验证超预算、发生总截止，或进入诊断模式
+- **THEN** 系统 MUST 自动记录报告并输出报告路径
+- **THEN** 总截止报告 MUST 包含失败原因、耗时、预算、未完成及未启动检查
+- **THEN** 未完成检查 MUST NOT 被报告为已通过
 
 #### Scenario: Unrequested under-budget run does not touch the fixed report
-- **WHEN** full verification does not exceed its configured budget or has no configured budget
-- **AND** `--performance-report` was not provided
-- **THEN** the system MUST NOT create or modify the fixed report for that run
+- **WHEN** 非诊断验证未超预算且未请求性能报告
+- **THEN** 系统 MUST NOT 创建、覆盖或删除已有固定报告
 
 #### Scenario: Report schema is stable
-- **WHEN** the system writes the performance report
-- **THEN** the report MUST contain exactly `schemaVersion`, `runtimeVersion`, `generatedAt`, `totalSeconds`, `budgetSeconds`, `overBudget`, `verificationStatus`, and `checks`
-- **THEN** `generatedAt` MUST use UTC（协调世界时）
-- **THEN** `budgetSeconds` and `overBudget` MUST be `null` when no budget is configured
-- **THEN** `checks` MUST record every configured check in configuration order with its id, status, and duration
+- **WHEN** 系统写入性能报告
+- **THEN** 报告 MUST 保留 `schemaVersion`（结构版本）、`runtimeVersion`（运行时版本）、`generatedAt`（生成时间）、`totalSeconds`（总秒数）、`budgetSeconds`（预算秒数）、`overBudget`（超预算状态）、`verificationStatus`（验证状态）和 `checks`（检查列表）核心字段
+- **THEN** 本机及诊断报告 MUST 兼容补充执行地点、诊断标记、原因、未完成及未启动信息
+- **THEN** 生成时间 MUST 使用协调世界时；无预算时预算及超预算字段 MUST 为 null（空值）
+- **THEN** 检查列表 MUST 按配置顺序记录检查编号、状态及耗时
 
 #### Scenario: Report failure does not block verification
-- **WHEN** the performance report cannot be written
-- **THEN** the system MUST output `performance-report-warning`（性能报告警告）
-- **THEN** the report failure MUST NOT change the exit status determined by functional verification results
+- **WHEN** 报告无法写入
+- **THEN** 系统 MUST 输出 `performance-report-warning`（性能报告警告）
+- **THEN** 报告错误 MUST NOT 将真实失败改为通过或取消本机总截止
 
 #### Scenario: Incomplete full verification does not produce performance output
-- **WHEN** full verification does not return a result for every selected check
-- **THEN** the system MUST NOT evaluate the performance budget or output `performance-warning`（性能警告）
-- **THEN** the system MUST NOT create or modify the fixed report
-- **THEN** the exit status MUST remain determined by the existing functional verification behavior
+- **WHEN** 豁免场景的既有完整验证未返回全部已选检查结果
+- **THEN** 系统 MUST 保留既有不计算完整预算及不覆盖固定报告的行为
+- **THEN** 本机总截止 MUST 仍记录未完成及未启动状态并返回失败
 
 #### Scenario: Fast verification does not touch performance reporting
-- **WHEN** a user runs verify（快速验证） without `--full`
-- **THEN** the system MUST NOT evaluate `verify.fullBudgetSeconds`
-- **THEN** the system MUST NOT output a performance warning or create, modify, or remove the fixed report
+- **WHEN** 非本机且非诊断的快速验证运行
+- **THEN** 系统 MUST 保留既有不评估完整预算、不改固定报告的行为
+- **THEN** 本机快速验证 MUST 使用相同总预算，超预算时 MUST 记录报告
 
 #### Scenario: Performance report requires full mode
-- **WHEN** a user provides `--performance-report` without `--full`
-- **THEN** argument validation MUST fail before configured checks run
-- **THEN** the system MUST explain that performance reporting requires full verification
+- **WHEN** 用户显式提供 `--performance-report`（性能报告参数）但未提供 `--full`（完整模式参数）
+- **THEN** 参数校验 MUST 在检查前失败并说明完整模式要求
+- **THEN** 此约束 MUST NOT 阻止本机截止或诊断自动记录报告
 ### Requirement: Guided initialization supports optional full verification budget
-Build and Verify Init（构建与验证初始化） MUST allow a user to opt into the generic full verification budget without supplying a repository-specific default.
+Build and Verify Init（构建与验证初始化） MUST 允许用户选择可选正整数预算，不替任何项目写死数值，且 MUST 准确说明本机强制开关缺省开启。
 
 #### Scenario: User enables full verification budget
-- **WHEN** a user chooses to configure a full verification budget during guided initialization
-- **THEN** the questionnaire MUST explain that exceeding the budget only warns and records a report
-- **THEN** the generated config MUST contain the user-confirmed positive integer `verify.fullBudgetSeconds`
-- **THEN** the final confirmation summary and post-write validation MUST show the configured value
+- **WHEN** 用户选择配置验证预算
+- **THEN** 问答及最终确认 MUST 展示用户确认数值，并说明该值用于本机单次快速与完整验证
+- **THEN** 问答 MUST 说明本机缺省到时终止并失败，关闭开关仅告警，豁免场景保留既有行为
+- **THEN** 生成配置 MUST 包含用户确认的预算数值，写后校验 MUST 检查预算与开关类型
 
 #### Scenario: User leaves full verification budget disabled
-- **WHEN** a user does not choose a full verification budget during guided initialization
-- **THEN** the generated config MUST omit `verify.fullBudgetSeconds`
-- **THEN** the plugin template MUST NOT impose a repository-specific performance target
+- **WHEN** 用户不选择配置预算
+- **THEN** 生成配置 MUST 省略预算字段
+- **THEN** 插件模板 MUST NOT 强加项目专属性能目标
 ### Requirement: Build and Verify tests minimize repeated real entrypoints
 Build and Verify（构建与验证） tests MUST keep real entrypoint coverage small and move repeated branch coverage to in-process（进程内） tests. Its 30-second target applies to the plugin's own test suite and is distinct from the repository-wide end-to-end full verification target.
 
@@ -561,3 +555,42 @@ Build and Verify（构建与验证） MUST support an explicit `--pr` scene for 
 - **WHEN** initialization or configuration review handles existing checks
 - **THEN** it MUST preserve valid `pr` values and explain that omission means `true`
 - **THEN** it MUST identify non-boolean values as invalid and describe which checks run in each scene
+### Requirement: Local verification shares one enforced invocation budget
+Build and Verify（构建与验证） MUST 在明确本机且配置预算的正式验证中缺省强制一次命令的总截止，快速与完整模式共用既有预算字段；独立构建及不同命令调用 MUST NOT 被累计纳入。
+
+#### Scenario: Local verification reaches its deadline
+- **WHEN** 明确本机的正式验证开启强制限制且达到总截止
+- **THEN** 准备、缓存选择、串行或并行检查、排队、收尾及迁移 MUST 共用该次预算
+- **THEN** 系统 MUST 停止后续检查，终止本次拥有的进程及后代，并有界回收
+- **THEN** 系统 MUST NOT 终止无关用户进程
+- **THEN** 系统 MUST 返回非零总预算超时失败，且单项等待 MUST 受剩余总预算及单项超时中较小值约束
+
+#### Scenario: Execution context is explicit or inherited
+- **WHEN** 用户声明 `--execution-context local|cloud|ci`（执行地点：本机、云端、持续集成）或继承 `BUILD_AND_VERIFY_EXECUTION_CONTEXT`（执行地点环境声明）
+- **THEN** 命令参数 MUST 优先于环境继承
+- **THEN** 拉取请求及可靠持续集成标识 MUST 优先豁免本机强制规则
+- **THEN** 系统 MUST NOT 根据模型地点、操作系统或仅有 `CODEX_CI=1`（宿主内部标记）推断持续集成
+
+#### Scenario: Unknown strict context is rejected
+- **WHEN** 正式验证执行地点未知且配置预算、强制开启
+- **THEN** 系统 MUST 在启动检查前明确拒绝
+- **THEN** 系统 MUST NOT 静默豁免或伪报本机
+
+#### Scenario: Passed cache remains truthful
+- **WHEN** 本机验证复用或更新通过缓存
+- **THEN** 快速模式 MUST 仅复用输入、配置、命令和运行身份匹配的成功结果
+- **THEN** 完整模式 MUST NOT 读取成功缓存跳过检查
+- **THEN** 超时、取消和未启动 MUST NOT 写成功缓存；截止前真实完成的成功检查 MAY（可以）缓存
+### Requirement: One-shot diagnostic preserves real failures without formal acceptance
+Build and Verify（构建与验证） MUST 提供 `--diagnostic`（一次性诊断），仅取消本次总截止，不改变项目配置或正式验收语义。
+
+#### Scenario: Diagnostic runs beyond the total budget
+- **WHEN** 用户启用一次性诊断
+- **THEN** 系统 MUST 保留单项防挂超时、真实检查失败及异常
+- **THEN** 系统 MUST 实时输出检查开始、结束、耗时及未完成状态
+- **THEN** 系统 MUST 明确标记诊断结果不构成正式预算通过，且 MUST NOT 写入正式成功缓存
+
+#### Scenario: Diagnostic observes individual test costs
+- **WHEN** 用户定位单项测试或子测试耗时
+- **THEN** 插件文档 MUST 引导使用测试框架原生选择及计时能力
+- **THEN** 插件 MUST NOT 宣称拥有新增检查选择器或可解析所有业务子测试
