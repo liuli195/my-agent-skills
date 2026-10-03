@@ -1,0 +1,3 @@
+- [x] 1.1 更新 `.build-and-verify/.gitignore`（忽略规则）模板，默认包含 `/cache/`、`/runs/` 和 `/backups/`。
+- [x] 1.2 更新 `build-and-verify-init`（构建与验证初始化）参考规则，要求写入配置时始终补齐默认忽略规则。
+- [x] 1.3 更新测试并运行 build-and-verify（构建与验证）相关验证。

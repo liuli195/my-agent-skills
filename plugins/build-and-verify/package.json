@@ -1,0 +1,31 @@
+{
+  "name": "@liuli195/build-and-verify",
+  "version": "2.2.0",
+  "description": "Repository Build and Verify Entry Point\uff08\u672c\u4ed3\u5e93\u6784\u5efa\u68c0\u67e5\u4e0e\u9a8c\u8bc1\u5165\u53e3\uff09",
+  "keywords": [
+    "build",
+    "verify"
+  ],
+  "bin": {
+    "build-and-verify": "./bin/build-and-verify.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/liuli195/my-agent-skills",
+    "directory": "plugins/build-and-verify"
+  },
+  "files": [
+    ".agents",
+    ".claude-plugin",
+    ".codex-plugin",
+    "bin",
+    "python/*.py",
+    "python/lifecycle_profile.json",
+    "skills/*/SKILL.md",
+    "skills/*/references/**",
+    "skills/*/assets/**"
+  ]
+}
