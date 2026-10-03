@@ -435,11 +435,11 @@ Build and Verify（构建与验证） build（构建） and verify（验证） c
 - **THEN** commands MUST NOT create, refresh or require `.build-and-verify/runtime/`
 ### Requirement: Build and Verify 生命周期遵守统一 Codex 目录和旧来源迁移契约
 
-Build and Verify MUST 让其 `doctor`、`init --codex`、`init --all` 和 `update` 复用共享生命周期规则：显式 `--codex-home` 优先，Orca 临时目录回退到用户默认目录，Codex 子进程和配置读写使用同一目录；`update` 发现用户级或仍启用的项目级 Legacy MySpec Source（旧 MySpec 来源）时 MUST 在任何软件包、待处理状态或客户端写入前以非零结果停止并报告精确的 `init` 命令。完成迁移后重新运行 `update` MUST 刷新稳定来源并返回只读诊断。
+Build and Verify MUST 让选择 Codex 的 `doctor --codex`、`doctor --all`、`init --codex`、`init --all` 和 `update` 复用共享生命周期规则：显式 `--codex-home` 优先，Orca 临时目录回退到用户默认目录，Codex 子进程和配置读写使用同一目录；`update` 发现 Claude/Codex（编码助手/代码代理）的旧插件记录时 MUST 在任何软件包、待处理状态或客户端写入前以非零结果停止并报告精确的 `init` 命令。完成迁移后重新运行 `update` MUST 刷新稳定来源并返回只读诊断。
 
 #### Scenario: Build and Verify 使用显式 Codex 目录
 
-- **WHEN** 用户运行打包后的 `build-and-verify doctor` 或 `init --codex` 并传入有效 `--codex-home`
+- **WHEN** 用户运行打包后的 `build-and-verify doctor --codex` 或 `init --codex` 并传入有效 `--codex-home`
 - **THEN** 命令 MUST 把同一目录用于 Codex 子进程和配置读写
 
 #### Scenario: Build and Verify 阻断旧来源
@@ -594,3 +594,24 @@ Build and Verify（构建与验证） MUST 提供 `--diagnostic`（一次性诊�
 - **WHEN** 用户定位单项测试或子测试耗时
 - **THEN** 插件文档 MUST 引导使用测试框架原生选择及计时能力
 - **THEN** 插件 MUST NOT 宣称拥有新增检查选择器或可解析所有业务子测试
+### Requirement: Build and Verify 生命周期只支持 Claude 和 Codex
+
+Build and Verify（构建与验证）MUST 保留 Claude/Codex（编码助手/代码代理）的初始化、来源诊断、更新、有效状态恢复和旧来源保护；生命周期命令 MUST 不安装或调用 Pi（编码助手），且 MUST 拒绝已撤除的 Pi 客户端选择参数。通用 Node.js（脚本运行时）和 Python（工具实现语言）构建验证能力 MUST 保持可用。
+
+#### Scenario: 默认诊断工具自身
+
+- **WHEN** 用户不带客户端选择参数运行 `build-and-verify doctor`
+- **THEN** 命令 MUST 只报告工具包、工具链身份和安装操作状态，且不得要求客户端配置目录可用
+- **THEN** 命令 MUST NOT 查询 Claude、Codex 或 Pi
+
+#### Scenario: 显式诊断全部受支持客户端
+
+- **WHEN** 用户运行 `build-and-verify doctor --all` 或 `init --all`
+- **THEN** 客户端结果 MUST 只包含 Claude 和 Codex，并保留不可用客户端的既有报告行为
+
+#### Scenario: Build and Verify 旧未完成记录包含 Pi
+
+- **WHEN** 已保存的未完成更新记录把 Pi 列为待刷新客户端
+- **THEN** `build-and-verify update` MUST 复用 `invalid_update_state`（更新状态无效）失败路径，在 npm（软件包管理器）安装和客户端刷新前停止
+- **THEN** 原更新记录和旧 Pi 配置 MUST 保持不变，不得重新安装 Pi、自动迁移或跳过未完成步骤
+- **THEN** `build-and-verify doctor` MUST 能只读展示该未完成记录
