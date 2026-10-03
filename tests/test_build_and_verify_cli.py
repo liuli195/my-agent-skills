@@ -43,9 +43,11 @@ def _budget_run(tmp_path: Path, *, settings: dict | None = None,
     if context is not None:
         env["BUILD_AND_VERIFY_EXECUTION_CONTEXT"] = context
     package_root = Path(os.environ.get("BUILD_AND_VERIFY_TEST_PACKAGE", str(PACKAGE_ROOT)))
+    public_started = time.monotonic()
     result = subprocess.run([shutil.which("node"), str(package_root / "bin" / "build-and-verify.js"),
         "verify", "--project", str(project), *(('--full',) if full else ()), *extra],
         env=env, capture_output=True, text=True, timeout=8)
+    result.public_elapsed_seconds = time.monotonic() - public_started
     return result, project
 
 
@@ -55,11 +57,10 @@ def test_public_verify_budget_applies_to_fast_and_full(tmp_path: Path, full: boo
         {"id": "slow", "command": [sys.executable, "-c", "import time; time.sleep(6)"], "inputs": []},
         {"id": "later", "command": [sys.executable, "-c", "print('LATER_STARTED')"], "inputs": []},
     ]
-    started = time.monotonic()
     result, project = _budget_run(tmp_path, full=full, checks=checks,
         context="local" if full else "cloud",
         extra=() if full else ("--execution-context=local",))
-    assert time.monotonic() - started < 5
+    assert result.public_elapsed_seconds < 5
     assert result.returncode == 1, result.stdout + result.stderr
     assert "total_budget_timeout" in result.stdout
     assert "LATER_STARTED" not in result.stdout
@@ -210,6 +211,14 @@ def _assert_pid_terminated(pid: int) -> None:
         finally:
             kernel.CloseHandle(handle)
     else:
+        # Linux may retain a terminated orphan as a zombie until init reaps it.
+        stat = Path(f"/proc/{pid}/stat")
+        if sys.platform.startswith("linux") and stat.exists():
+            try:
+                if stat.read_text().rsplit(")", 1)[1].split()[0] == "Z":
+                    return
+            except FileNotFoundError:
+                return
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
 
@@ -270,10 +279,9 @@ def test_review_python_startup_and_probe_are_inside_total_budget(tmp_path: Path,
     (startup / "sitecustomize.py").write_text(
         f"import sys,time\nif {condition}: time.sleep(2)\n", encoding="utf-8")
     monkeypatch.setenv("PYTHONPATH", str(startup))
-    started = time.monotonic()
     result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1}, checks=[
         {"id": "quick", "command": [sys.executable, "-c", "print('QUICK_STARTED')"], "inputs": []}])
-    elapsed = time.monotonic() - started
+    elapsed = result.public_elapsed_seconds
     assert result.returncode == 1, f"elapsed={elapsed:.2f}\n{result.stdout}\n{result.stderr}"
     assert elapsed < 1.8
     assert "QUICK_STARTED" not in result.stdout
@@ -348,10 +356,9 @@ def test_review_startup_reaps_descendants_after_parent_exits(tmp_path: Path, mon
         f"    with Path({str(pids)!r}).open('a') as stream: stream.write(str(child.pid)+'\\n')\n"
         + ("    raise SystemExit(1)\n" if phase == "entry" else ""), encoding="utf-8")
     monkeypatch.setenv("PYTHONPATH", str(startup))
-    started = time.monotonic()
     result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1}, checks=[
         {"id": "quick", "command": [sys.executable, "-c", "print('DONE')"], "inputs": []}])
-    elapsed = time.monotonic() - started
+    elapsed = result.public_elapsed_seconds
     assert result.returncode == 1, result.stdout + result.stderr
     assert elapsed < 1.8, f"startup descendant held the public entry open for {elapsed:.2f}s"
     assert pids.exists(), result.stdout + result.stderr
@@ -440,7 +447,7 @@ def _tree_snapshot() -> dict[str, bytes]:
         path.relative_to(REPO_ROOT).as_posix(): path.read_bytes()
         for root in roots
         for path in (REPO_ROOT / root).rglob("*")
-        if path.is_file()
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
     }
 
 

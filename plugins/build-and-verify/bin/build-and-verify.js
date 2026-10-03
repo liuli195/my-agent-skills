@@ -73,7 +73,8 @@ const bootstrapCode = "import importlib.util,sys; spec=importlib.util.spec_from_
 let ownedProcess;
 let startupGuard;
 const stopOwned = () => {
-  if (!ownedProcess?.pid || ownedProcess.exitCode !== null) return;
+  if (!ownedProcess?.pid) return;
+  if (process.platform === "win32" && ownedProcess.exitCode !== null) return;
   if (process.platform === "win32") {
     // The -S bootstrap installs the owning job before any site initialization.
     // Terminating the bootstrap closes its job and its descendants.
@@ -189,6 +190,12 @@ child.on("error", (error) => {
 child.on("close", (code, signal) => {
   if (startupGuard) clearTimeout(startupGuard);
   if (timeoutReported) return;
+  // POSIX cutoff kills its owning process group, so Node observes SIGKILL
+  // instead of Python's exit 124. Keep the original deadline for reporting.
+  if (budget !== null && signal === "SIGKILL" && runtimePhase !== "startup") {
+    startupGuard = setTimeout(() => startupTimeout(runtimePhase), Math.max(0, (budget - elapsed()) * 1000));
+    return;
+  }
   if (budget !== null && (code === 124 || elapsed() >= budget)) {
     startupTimeout(runtimePhase);
     return;
