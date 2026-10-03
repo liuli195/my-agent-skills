@@ -515,9 +515,6 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_pr_flow_cli.py::test_init_validates_release_and_dev_toolchain_identities_through_public_cli': (
         'covers the public init CLI accepting fixed release and trusted source toolchain identities; function=test_init_validates_release_and_dev_toolchain_identities_through_public_cli'
     ),
-    'tests/test_pr_flow_cli.py::test_init_rejects_untrusted_toolchain_identity_through_public_cli': (
-        'covers the public init CLI rejecting non-fixed or untrusted toolchain identities; function=test_init_rejects_untrusted_toolchain_identity_through_public_cli'
-    ),
     'tests/test_pr_flow_cli.py::test_legacy_repositories_keep_flow_behavior_with_upgrade_prompt': (
         'covers public diagnose complete and tweak CLI upgrade prompts for legacy repositories; function=test_legacy_repositories_keep_flow_behavior_with_upgrade_prompt'
     ),
@@ -688,9 +685,6 @@ E2E_ALLOWLIST: dict[str, str] = {
     ),
     'tests/test_my_spec.py::test_packed_myspec_installs_a_working_cli_with_agent_resources': (
         'covers npm Tarball packing, isolated installation, and the installed myspec CLI seam; function=test_packed_myspec_installs_a_working_cli_with_agent_resources'
-    ),
-    'tests/test_my_spec.py::test_my_spec_candidate_tarball_is_shared_by_isolated_installs': (
-        'covers one run-scoped MySpec candidate Tarball reused by isolated installations; function=test_my_spec_candidate_tarball_is_shared_by_isolated_installs'
     ),
     'tests/test_my_spec.py::test_packed_myspec_preserves_modified_requirement_order': (
         'covers the installed myspec CLI preserving same-capability Requirement order while retaining cross-capability moves; function=test_packed_myspec_preserves_modified_requirement_order'

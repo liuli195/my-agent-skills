@@ -8100,20 +8100,27 @@ def test_init_validates_release_and_dev_toolchain_identities_through_public_cli(
         )
     ],
 )
-def test_init_rejects_untrusted_toolchain_identity_through_public_cli(
-    tmp_path: Path, tool: str, toolchain: dict[str, object]
+def test_init_rejects_untrusted_toolchain_identity_in_process(
+    tmp_path: Path, monkeypatch, tool: str, toolchain: dict[str, object]
 ) -> None:
     config = tmp_path / "config.yaml"
     config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
-    bin_dir = tmp_path / "bin"
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow, load_pr_flow_module as fresh_module
+
     reports = {
         "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3"}},
         "build-and-verify": {"toolchain": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "1.2.3"}},
     }
     reports[tool] = {"toolchain": toolchain}
-    write_toolchain_cli(bin_dir, reports)
+    module = fresh_module()
+    doctor = CommandStub()
+    for command, report in reports.items():
+        doctor.add((command, "doctor"), stdout=json.dumps(report))
+    monkeypatch.setattr(module.shutil, "which", lambda command: command)
+    monkeypatch.setattr(module.subprocess, "run", lambda command, **kwargs: doctor(*command, **kwargs))
 
-    result = run_public_pr_flow(bin_dir, "init", "--project", str(tmp_path / "project"), "--config", str(config))
+    result = invoke_pr_flow(["init", "--project", str(tmp_path / "project"), "--config", str(config)], module=module)
 
     assert result.returncode == 1
     source_commit = toolchain.get("sourceCommit")
@@ -8124,6 +8131,9 @@ def test_init_rejects_untrusted_toolchain_identity_through_public_cli(
     )
     assert f"status: {expected_status}" in result.stdout
     assert not (tmp_path / "project" / ".pr-flow/toolchain.json").exists()
+
+    assert not (tmp_path / "project" / ".pr-flow/config.yaml").exists()
+    assert not (tmp_path / "project" / ".github/workflows/pr-flow-toolchain.yml").exists()
 
 
 @pytest.mark.parametrize("command, extra", [("diagnose", []), ("complete", ["--summary", "s", "--scope", "s"]), ("tweak", ["--reason", "r", "--summary", "s", "--scope", "s"])])

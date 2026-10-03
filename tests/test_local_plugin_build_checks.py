@@ -139,6 +139,11 @@ def test_my_spec_candidate_install_keeps_real_installs_isolated(tmp_path: Path, 
 
     assert first_package != second_package
     assert len([command for command in calls if command[1] == "install"]) == 2
+    assert module.npm_prefix_for(first_package) != module.npm_prefix_for(second_package)
+    first_tarball = next((first / "package").glob("*.tgz"))
+    second_tarball = next((second / "package").glob("*.tgz"))
+    assert first_tarball.read_bytes() == second_tarball.read_bytes() == candidate.read_bytes() == b"candidate"
+    assert candidate.resolve() not in {first_tarball.resolve(), second_tarball.resolve()}
 
 
 def test_my_spec_in_process_install_reuses_shared_lightweight_package(
@@ -456,7 +461,7 @@ def test_candidate_is_inherited_and_installed_once(tmp_path):
             "-p",
             "tests.conftest",
             "-n",
-            "4",
+            "2",
             "--dist=each",
             "--rootdir",
             str(REPO_ROOT),
@@ -472,7 +477,7 @@ def test_candidate_is_inherited_and_installed_once(tmp_path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     reports = sorted(report_dir.glob("gw*.json"))
-    assert [report.stem for report in reports] == ["gw0", "gw1", "gw2", "gw3"]
+    assert [report.stem for report in reports] == ["gw0", "gw1"]
     payloads = [json.loads(report.read_text(encoding="utf-8")) for report in reports]
     candidates = {Path(payload["candidate"]).resolve() for payload in payloads}
     assert len(candidates) == 1
@@ -480,7 +485,7 @@ def test_candidate_is_inherited_and_installed_once(tmp_path):
     assert candidate.is_absolute()
     for field in ("home", "logRoot", "stateRoot", "prefix"):
         values = {Path(payload[field]).resolve() for payload in payloads}
-        assert len(values) == 4, field
+        assert len(values) == 2, field
     assert all(payload["packageExistsBeforeWorkerCleanup"] for payload in payloads)
     assert all(Path(payload["logRoot"]).is_dir() for payload in payloads)
     assert all(Path(payload["stateRoot"]).is_dir() for payload in payloads)
