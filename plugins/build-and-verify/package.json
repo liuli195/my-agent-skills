@@ -1,6 +1,6 @@
 {
   "name": "@liuli195/build-and-verify",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Repository Build and Verify Entry Point\uff08\u672c\u4ed3\u5e93\u6784\u5efa\u68c0\u67e5\u4e0e\u9a8c\u8bc1\u5165\u53e3\uff09",
   "keywords": [
     "build",
