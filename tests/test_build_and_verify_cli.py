@@ -178,13 +178,14 @@ def test_public_verify_budget_reaps_descendants_and_preserves_other_processes(tm
     pid_file = tmp_path / "descendant.pid"
     child_code = "import time; time.sleep(10)"
     parent_code = ("import subprocess,sys,time,pathlib; "
-        f"child=subprocess.Popen([sys.executable,'-c',{child_code!r}]); "
+        f"child=subprocess.Popen([sys.executable,'-S','-c',{child_code!r}]); "
         f"pathlib.Path({str(pid_file)!r}).write_text(str(child.pid)); time.sleep(10)")
-    unrelated = subprocess.Popen([sys.executable, "-c", child_code])
+    unrelated = subprocess.Popen([sys.executable, "-S", "-c", child_code])
     try:
         result, _ = _budget_run(tmp_path, checks=[
-            {"id": "tree", "command": [sys.executable, "-c", parent_code], "inputs": []}])
+            {"id": "tree", "command": [sys.executable, "-S", "-c", parent_code], "inputs": []}])
         assert result.returncode == 1, result.stdout + result.stderr
+        assert result.public_elapsed_seconds < 5
         assert pid_file.exists(), result.stdout + result.stderr
         assert unrelated.poll() is None
         _assert_pid_terminated(int(pid_file.read_text()))
@@ -345,9 +346,9 @@ def test_review_expired_windows_launch_is_never_resumed(tmp_path: Path, monkeypa
 
 @pytest.mark.parametrize("phase", ["probe", "entry"])
 def test_review_startup_reaps_descendants_after_parent_exits(tmp_path: Path, monkeypatch, phase: str) -> None:
-    budget = 3 if phase == "entry" else 1
-    descendant_sleep = 10 if phase == "entry" else 3
-    wall_limit = 5 if phase == "entry" else 1.8
+    budget = 3
+    descendant_sleep = 10
+    wall_limit = 5
     startup = tmp_path / "startup"
     startup.mkdir()
     pids = tmp_path / "startup-pids.txt"

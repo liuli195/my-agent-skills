@@ -3159,7 +3159,6 @@ def test_build_and_verify_runner_fast_verify_runs_check_parallel_cache_misses_co
     tmp_path: Path, capsys
 ) -> None:
     import threading
-    import time
 
     module = load_build_and_verify_module()
     project = tmp_path / "project"
@@ -3195,13 +3194,14 @@ def test_build_and_verify_runner_fast_verify_runs_check_parallel_cache_misses_co
     active = 0
     max_active = 0
     lock = threading.Lock()
+    barrier = threading.Barrier(2)
 
     def fake_runner(command, **_kwargs):
         nonlocal active, max_active
         with lock:
             active += 1
             max_active = max(max_active, active)
-        time.sleep(0.2)
+        barrier.wait(timeout=2)
         with lock:
             active -= 1
         return subprocess.CompletedProcess(command, 0, stdout=f"{command[0]}\n", stderr="")
