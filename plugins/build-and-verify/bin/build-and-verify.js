@@ -159,6 +159,13 @@ if (budget !== null) {
           && (result.report === null || (typeof result.report === "object" && !Array.isArray(result.report)))) {
         formalSuccess = result.code === 0 ? result.status : undefined;
         finalReport = result.report;
+        // Preserve this invocation's failure reasons if final report I/O
+        // crosses the same deadline and the bounded fallback takes over.
+        if (Array.isArray(finalReport?.checks)) {
+          for (const check of finalReport.checks) {
+            if (check && typeof check.id === "string") observedChecks.set(check.id, { ...check });
+          }
+        }
         runtimePhase = "finalization";
         startupGuard = setTimeout(() => { stopOwned(); startupTimeout(runtimePhase); }, Math.max(0, (budget - elapsed()) * 1000));
       } else if (line.trim().startsWith("build-and-verify-phase:")) {

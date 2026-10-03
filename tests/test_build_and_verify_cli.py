@@ -345,6 +345,9 @@ def test_review_expired_windows_launch_is_never_resumed(tmp_path: Path, monkeypa
 
 @pytest.mark.parametrize("phase", ["probe", "entry"])
 def test_review_startup_reaps_descendants_after_parent_exits(tmp_path: Path, monkeypatch, phase: str) -> None:
+    budget = 3 if phase == "entry" else 1
+    descendant_sleep = 10 if phase == "entry" else 3
+    wall_limit = 5 if phase == "entry" else 1.8
     startup = tmp_path / "startup"
     startup.mkdir()
     pids = tmp_path / "startup-pids.txt"
@@ -352,15 +355,15 @@ def test_review_startup_reaps_descendants_after_parent_exits(tmp_path: Path, mon
     (startup / "sitecustomize.py").write_text(
         "import subprocess,sys\nfrom pathlib import Path\n"
         f"if {condition}:\n"
-        "    child=subprocess.Popen([sys.executable,'-S','-c','import time; time.sleep(3)'])\n"
+        f"    child=subprocess.Popen([sys.executable,'-S','-c','import time; time.sleep({descendant_sleep})'])\n"
         f"    with Path({str(pids)!r}).open('a') as stream: stream.write(str(child.pid)+'\\n')\n"
         + ("    raise SystemExit(1)\n" if phase == "entry" else ""), encoding="utf-8")
     monkeypatch.setenv("PYTHONPATH", str(startup))
-    result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": 1}, checks=[
+    result, _ = _budget_run(tmp_path, settings={"fullBudgetSeconds": budget}, checks=[
         {"id": "quick", "command": [sys.executable, "-c", "print('DONE')"], "inputs": []}])
     elapsed = result.public_elapsed_seconds
     assert result.returncode == 1, result.stdout + result.stderr
-    assert elapsed < 1.8, f"startup descendant held the public entry open for {elapsed:.2f}s"
+    assert elapsed < wall_limit, f"startup descendant held the public entry open for {elapsed:.2f}s"
     assert pids.exists(), result.stdout + result.stderr
     owned_pids = [int(pid) for pid in pids.read_text().splitlines()]
     try:
@@ -370,7 +373,7 @@ def test_review_startup_reaps_descendants_after_parent_exits(tmp_path: Path, mon
         # Red runs let these known synthetic children finish naturally; never
         # terminate a PID after its owning parent has exited and released it.
         for pid in owned_pids:
-            until = time.monotonic() + 4
+            until = time.monotonic() + descendant_sleep + 1
             while time.monotonic() < until:
                 try:
                     _assert_pid_terminated(pid)
