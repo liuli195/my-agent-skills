@@ -30,7 +30,6 @@ SCRIPT = (
     / "scripts"
     / "pr_flow.py"
 )
-PI_EXTENSION = REPO_ROOT / "plugins" / "pr-flow" / "extensions" / "pi-pr-flow.ts"
 MYSPEC_VERSION = json.loads((REPO_ROOT / "plugins" / "my-spec" / "package.json").read_text(encoding="utf-8"))["version"]
 BUILD_AND_VERIFY_VERSION = json.loads(
     (REPO_ROOT / "plugins" / "build-and-verify" / "package.json").read_text(encoding="utf-8")
@@ -924,99 +923,6 @@ def test_cleanup_retry_from_latest_detached_base_finishes(tmp_path: Path, monkey
 
     assert result.returncode == 0
     assert "cleanup_complete" in result.stdout
-
-
-def test_pi_tool_runs_packaged_complete_through_merge_and_cleanup(tmp_path: Path) -> None:
-    project, _remote = init_complete_project(tmp_path)
-    head_oid = git(project, "rev-parse", "HEAD")
-    base_oid = git(project, "rev-parse", "main")
-    pr_text = pr_view_json(
-        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
-        review_decision="APPROVED",
-        head_oid=head_oid,
-        base_oid=base_oid,
-    )
-    checks = {"stdout": json.dumps([{"bucket": "pass", "name": "ci", "state": "SUCCESS"}])}
-    cleanup = json.dumps(
-        {
-            "number": 12,
-            "state": "MERGED",
-            "headRefName": "feature/example",
-            "baseRefName": "main",
-            "headRepositoryOwner": {"login": "test-owner"},
-        }
-    ) + "\n"
-    fake_bin, calls_path = write_fake_gh_sequence(
-        tmp_path / "pi-tool-bin",
-        [
-            {"stdout": pr_text},
-            {"stdout": pr_text},
-            checks,
-            {"stdout": pr_text},
-            checks,
-            {"stdout": pr_text},
-            {},
-            {"stdout": cleanup},
-        ],
-    )
-    packaged_plugin = tmp_path / "packaged-pr-flow"
-    packaged_extension = packaged_plugin / "extensions" / "pi-pr-flow.ts"
-    packaged_script = packaged_plugin / "skills" / "pr-flow" / "scripts" / "pr_flow.py"
-    packaged_extension.parent.mkdir(parents=True)
-    packaged_script.parent.mkdir(parents=True)
-    shutil.copy2(PI_EXTENSION, packaged_extension)
-    shutil.copy2(SCRIPT, packaged_script)
-    runner = tmp_path / "invoke-pr-flow-tool.ts"
-    runner.write_text(
-        """
-async function main() {
-  const { default: extension } = await import(process.argv[2]);
-  let tool: any;
-  extension({ registerTool(value: any) { tool = value; } } as any);
-  const result = await tool.execute(
-    "test-call",
-    { argv: ["complete", "--project", process.argv[3], "--summary", "Pi tool smoke", "--scope", "PR Flow"] },
-    new AbortController().signal,
-    () => {},
-    { cwd: process.argv[3] },
-  );
-  console.log(JSON.stringify(result.details));
-}
-main().catch((error) => { console.error(error); process.exit(1); });
-""".strip(),
-        encoding="utf-8",
-    )
-    node_stubs = packaged_plugin / "node_modules" / "@earendil-works"
-    pi_ai = node_stubs / "pi-ai"
-    coding_agent = node_stubs / "pi-coding-agent"
-    pi_ai.mkdir(parents=True)
-    coding_agent.mkdir()
-    (pi_ai / "index.js").write_text(
-        "exports.Type = { Object: (value) => value, Array: (value) => value, String: (value) => value };\n",
-        encoding="utf-8",
-    )
-    (coding_agent / "index.js").write_text("exports.defineTool = (value) => value;\n", encoding="utf-8")
-    tsx = REPO_ROOT / "node_modules" / ".bin" / ("tsx.cmd" if os.name == "nt" else "tsx")
-    env = os.environ.copy()
-    env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
-
-    result = subprocess.run(
-        [str(tsx), str(runner), packaged_extension.as_uri(), str(project)],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-        timeout=60,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    details = json.loads(result.stdout.splitlines()[-1])
-    assert details["exitCode"] == 0, details
-    assert "status: merge_complete" in details["stdout"]
-    assert "status: cleanup_complete" in details["stdout"]
-    calls = json.loads(calls_path.read_text(encoding="utf-8"))
-    assert ["pr", "merge", "12", "--merge", "--match-head-commit", head_oid] in calls
-    assert all("--auto" not in call for call in calls)
 
 
 def test_linked_worktrees_use_independent_process_locks_and_status(tmp_path: Path) -> None:
@@ -3210,28 +3116,28 @@ def test_pr_flow_plugin_init_entrypoints_route_to_pr_flow_init() -> None:
         assert "只读 validate（校验）" in text
 
 
-def test_pr_flow_skill_shows_source_repo_diagnose_entrypoint() -> None:
+def test_pr_flow_skill_shows_installed_diagnose_entrypoint() -> None:
     skill_path = REPO_ROOT / "plugins" / "pr-flow" / "skills" / "pr-flow" / "SKILL.md"
     skill_text = skill_path.read_text(encoding="utf-8")
 
-    assert "python plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py diagnose --project ." in skill_text
+    assert 'python "<本技能安装目录>/scripts/pr_flow.py" diagnose --project "<目标项目目录>"' in skill_text
     assert "python scripts/pr_flow.py diagnose --project ." not in skill_text
 
 
 @pytest.mark.parametrize(
     ("skill_name", "command"),
     [
-        ("pr-flow-complete", 'complete --project . --summary "修复 PR Flow 创建空正文 PR" --scope "更新 complete、tweak、diagnose 和测试" --fixes 98'),
-        ("pr-flow-cleanup", "cleanup --project . --pr <number>"),
-        ("pr-flow-hotfix", "hotfix --project . --target main --authorization-phrase <phrase>"),
-        ("pr-flow-tweak", 'tweak --project . --reason "small docs polish" --summary "更新 PR Flow 文档措辞" --scope "只修改 PR Flow 文档" --fixes 98'),
+        ("pr-flow-complete", 'complete --project "<目标项目目录>" --summary "修复 PR Flow 创建空正文 PR" --scope "更新 complete、tweak、diagnose 和测试" --fixes 98'),
+        ("pr-flow-cleanup", 'cleanup --project "<目标项目目录>" --pr <number>'),
+        ("pr-flow-hotfix", 'hotfix --project "<目标项目目录>" --target main --authorization-phrase <phrase>'),
+        ("pr-flow-tweak", 'tweak --project "<目标项目目录>" --reason "small docs polish" --summary "更新 PR Flow 文档措辞" --scope "只修改 PR Flow 文档" --fixes 98'),
     ],
 )
-def test_pr_flow_command_skills_show_source_repo_script_entrypoint(skill_name: str, command: str) -> None:
+def test_pr_flow_command_skills_show_installed_script_entrypoint(skill_name: str, command: str) -> None:
     skill_path = REPO_ROOT / "plugins" / "pr-flow" / "skills" / skill_name / "SKILL.md"
     skill_text = skill_path.read_text(encoding="utf-8")
 
-    assert f"python plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py {command}" in skill_text
+    assert f'python "<本技能安装目录>/../pr-flow/scripts/pr_flow.py" {command}' in skill_text
     assert "python ../pr-flow/scripts/pr_flow.py" not in skill_text
 
 

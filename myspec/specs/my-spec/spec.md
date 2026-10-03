@@ -2,19 +2,13 @@
 
 ## Purpose
 
-本 capability（能力）定义 MySpec（自有规格）在 Pi、Claude 和 Codex 中的可发现入口、范围隔离、确认门禁与确定性操作行为。
+本 capability（能力）定义 MySpec（自有规格）在 Claude 和 Codex 中的可发现入口、范围隔离、确认门禁与确定性操作行为。
 
 ## Requirements
 
 ### Requirement: 规格技能使用宿主原生入口
 
-系统 MUST 让 Pi、Claude 和 Codex 通过各自原生 Skill（技能）机制调用四个 my-spec 技能，不得注册把技能名称重新包装成普通用户消息的代理命令。
-
-#### Scenario: Pi 调用规格技能
-
-- **WHEN** 用户在 Pi（编码代理）中显式调用 my-spec 技能
-- **THEN** 系统 MUST 使用 `/skill:my-spec`、`/skill:my-spec-add`、`/skill:my-spec-review` 或 `/skill:my-spec-audit`
-- **THEN** Pi MUST 通过原生 Skill（技能）展开处理参数和 `SKILL.md`
+系统 MUST 让 Claude 和 Codex 通过各自原生 Skill（技能）机制调用四个 my-spec 技能，不得注册把技能名称重新包装成普通用户消息的代理命令。
 
 #### Scenario: Claude 调用规格技能
 
@@ -25,21 +19,6 @@
 
 - **WHEN** 用户在 Codex（代码代理）中显式调用 my-spec 技能
 - **THEN** 系统 MUST 使用 `$my-spec`、`$my-spec-add`、`$my-spec-review` 或 `$my-spec-audit`
-
-#### Scenario: Pi 包不代理原生技能
-
-- **WHEN** Pi 加载 my-spec 包
-- **THEN** 包 MUST 只通过 `pi.skills` 公开技能资源
-- **THEN** 包 MUST NOT 注册 `/my-spec`、`/my-spec-add`、`/my-spec-review` 或 `/my-spec-audit` 扩展命令
-- **THEN** 包 MUST NOT 发送 `Use the <skill> skill` 形式的普通用户消息来模拟技能调用
-### Requirement: 规格插件在三类宿主中可发现
-
-系统 MUST 让 `my-spec` 同时可被 Pi、Claude 和 Codex 发现，并公开四个规格 Skill（技能）。
-
-#### Scenario: 宿主加载本地插件市场
-
-- **WHEN** Pi、Claude 或 Codex 加载本地插件市场
-- **THEN** 市场中出现 `my-spec`，且四个规格 Skill（技能）均可发现
 ### Requirement: 规格入口保持范围隔离
 
 系统 MUST 让 add 入口处理 Agent（代理）为当前请求选取的会话、文档、代码或其他相关证据且不要求指定文档，让 review 入口只读取 `myspec/specs/`，并让 audit 入口只读取 Git（版本管理）可见文件且排除主规格、`.local/spec-work/` 和二进制文件。Audit（审计）在主规格库不存在时 MUST 将其视为空库完成初始化；review（审查）只能依据规格库内部的明确证据判断重复、冲突或过期。
@@ -227,3 +206,11 @@ MySpec（自有规格） MUST 在同一 capability（能力）内应用 `MODIFIE
 - **THEN** MySpec MUST 保持这些操作的既有移动、新增、删除和改名行为
 - **WHEN** 用户对相同结果重复预览或应用同一 Delta
 - **THEN** MySpec MUST 不产生额外变化
+### Requirement: 规格插件在支持宿主中可发现
+
+系统 MUST 让 `my-spec` 同时可被 Claude 和 Codex 发现，并公开四个规格 Skill（技能）。
+
+#### Scenario: 宿主加载本地插件市场
+
+- **WHEN** Claude 或 Codex 加载本地插件市场
+- **THEN** 市场中出现 `my-spec`，且四个规格 Skill（技能）均可发现

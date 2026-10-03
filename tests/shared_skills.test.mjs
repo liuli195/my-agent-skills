@@ -1,15 +1,8 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, readFile, readdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-
-import {
-  DefaultResourceLoader,
-  formatSkillsForPrompt,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packages = [
@@ -39,89 +32,30 @@ function disclosedReferences(text) {
   return [...text.matchAll(/`references\/([^`]+)`/g)].map((match) => match[1]);
 }
 
-async function loadSkills() {
-  const agentDir = await mkdtemp(resolve(tmpdir(), "shared-skills-"));
-  const originalHome = process.env.HOME;
-  const originalUserProfile = process.env.USERPROFILE;
-  process.env.HOME = agentDir;
-  process.env.USERPROFILE = agentDir;
-  const settingsManager = SettingsManager.inMemory(
-    { packages: packages.map(({ root }) => root) },
-    { projectTrusted: true },
-  );
-  const loader = new DefaultResourceLoader({
-    cwd: repoRoot,
-    agentDir,
-    settingsManager,
-    noExtensions: false,
-    noPromptTemplates: true,
-    noThemes: true,
-    noContextFiles: true,
-  });
-  try {
-    await loader.reload();
-    return { agentDir, loader };
-  } catch (error) {
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
-    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = originalUserProfile;
-    await rm(agentDir, { recursive: true, force: true });
-    throw error;
-  }
-}
+test("repository-owned pure Skill packages keep their portable contracts", async () => {
+  for (const expected of packages) {
+    const frontmatter = (await readFile(resolve(expected.root, "skills", expected.name, "SKILL.md"), "utf8")).split("---")[1];
+    assert.match(frontmatter, new RegExp(`^name: ${expected.name}$`, "m"));
+    assert.doesNotMatch(frontmatter, /^disable-model-invocation: true$/m);
+    assert.match(frontmatter, expected.description);
+    assert.deepEqual(await readdir(expected.root), ["skills"]);
+    assert.deepEqual(await readdir(resolve(expected.root, "skills")), [expected.name]);
 
-async function closeSkills(agentDir) {
-  await rm(agentDir, { recursive: true, force: true });
-}
-
-test("Pi discovers both repository-owned pure Skill packages", async () => {
-  const originalHome = process.env.HOME;
-  const originalUserProfile = process.env.USERPROFILE;
-  const { agentDir, loader } = await loadSkills();
-  try {
-    const result = loader.getSkills();
-    for (const expected of packages) {
-      const skill = result.skills.find(({ name }) => name === expected.name);
-      assert.ok(skill, `missing ${expected.name}: ${JSON.stringify(result.diagnostics)}`);
-      assert.equal(skill.sourceInfo.origin, "package");
-      assert.equal(skill.sourceInfo.source, expected.root);
-      assert.equal(skill.disableModelInvocation, false);
-      assert.match(skill.description, expected.description);
-      assert.match(
-        formatSkillsForPrompt([skill]),
-        new RegExp(`<name>${expected.name}</name>`),
+    const skillRoot = resolve(expected.root, "skills", expected.name);
+    const entries = expected.references.length ? ["SKILL.md", "references"] : ["SKILL.md"];
+    assert.deepEqual((await readdir(skillRoot)).sort(), entries.sort());
+    if (expected.files.length) {
+      assert.deepEqual(
+        (await readdir(resolve(skillRoot, "references"))).sort(),
+        expected.files.sort(),
       );
-
-      const packageExtensions = loader
-        .getExtensions()
-        .extensions.filter(({ resolvedPath }) => resolvedPath.startsWith(expected.root));
-      assert.deepEqual(packageExtensions, []);
-      assert.deepEqual(await readdir(expected.root), ["skills"]);
-      assert.deepEqual(await readdir(resolve(expected.root, "skills")), [expected.name]);
-
-      const skillRoot = resolve(expected.root, "skills", expected.name);
-      const entries = expected.references.length ? ["SKILL.md", "references"] : ["SKILL.md"];
-      assert.deepEqual((await readdir(skillRoot)).sort(), entries.sort());
-      if (expected.files.length) {
-        assert.deepEqual(
-          (await readdir(resolve(skillRoot, "references"))).sort(),
-          expected.files.sort(),
-        );
-      }
-      const content = await readFile(resolve(skillRoot, "SKILL.md"), "utf8");
-      assert.deepEqual(disclosedReferences(content).sort(), expected.references.sort());
-      for (const reference of expected.references) {
-        await access(resolve(skillRoot, "references", reference));
-        assert.match(content, new RegExp(`references/${reference.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-      }
     }
-  } finally {
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
-    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = originalUserProfile;
-    await closeSkills(agentDir);
+    const content = await readFile(resolve(skillRoot, "SKILL.md"), "utf8");
+    assert.deepEqual(disclosedReferences(content).sort(), expected.references.sort());
+    for (const reference of expected.references) {
+      await access(resolve(skillRoot, "references", reference));
+      assert.match(content, new RegExp(`references/${reference.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    }
   }
 });
 

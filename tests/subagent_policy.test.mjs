@@ -1,15 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { readFile, readdir } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-
-import {
-  DefaultResourceLoader,
-  formatSkillsForPrompt,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageRoot = resolve(repoRoot, "plugins", "subagent-policy");
@@ -36,41 +29,11 @@ const contract = [
   "主 Agent（代理）在依赖结果或宣告完成前，核验实际文件、差异、版本管理状态和检查结果",
 ];
 
-test("host discovers the independent subagent-policy skill package and its portable contract", async () => {
-  const agentDir = await mkdtemp(join(tmpdir(), "subagent-policy-"));
-  const originalHome = process.env.HOME;
-  const originalUserProfile = process.env.USERPROFILE;
-  process.env.HOME = agentDir;
-  process.env.USERPROFILE = agentDir;
-  try {
-    const settingsManager = SettingsManager.inMemory(
-      { packages: [packageRoot] },
-      { projectTrusted: true },
-    );
-    const loader = new DefaultResourceLoader({
-      cwd: repoRoot,
-      agentDir,
-      settingsManager,
-      noExtensions: false,
-      noPromptTemplates: true,
-      noThemes: true,
-      noContextFiles: true,
-    });
-    await loader.reload();
-
-    const result = loader.getSkills();
-    const skill = result.skills.find(({ name }) => name === "subagent-policy");
-    assert.ok(skill, `missing subagent-policy: ${JSON.stringify(result.diagnostics)}`);
-    assert.equal(skill.sourceInfo.origin, "package");
-    assert.equal(skill.sourceInfo.source, packageRoot);
-    assert.equal(skill.disableModelInvocation, false);
-    assert.match(skill.description, /四个通用子代理角色/);
-    assert.match(formatSkillsForPrompt([skill]), /<name>subagent-policy<\/name>/);
-
-    const packageExtensions = loader
-      .getExtensions()
-      .extensions.filter(({ resolvedPath }) => resolvedPath.startsWith(packageRoot));
-    assert.deepEqual(packageExtensions, []);
+test("subagent-policy keeps its portable Skill contract and directory structure", async () => {
+    const frontmatter = (await readFile(resolve(skillRoot, "SKILL.md"), "utf8")).split("---")[1];
+    assert.match(frontmatter, /^name: subagent-policy$/m);
+    assert.doesNotMatch(frontmatter, /^disable-model-invocation: true$/m);
+    assert.match(frontmatter, /四个通用子代理角色/);
     assert.deepEqual(await readdir(packageRoot), ["skills"]);
     assert.deepEqual(await readdir(resolve(packageRoot, "skills")), ["subagent-policy"]);
     assert.deepEqual(await readdir(skillRoot), ["SKILL.md"]);
@@ -120,11 +83,4 @@ test("host discovers the independent subagent-policy skill package and its porta
     );
     assert.doesNotMatch(content, /prompt_mode|extensions: false|host Adapter|活跃模型注册表|默认代理已禁用/);
     assert.doesNotMatch(content, /\bPi\b|\bClaude\b|\bCodex\b/);
-  } finally {
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
-    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = originalUserProfile;
-    await rm(agentDir, { recursive: true, force: true });
-  }
 });

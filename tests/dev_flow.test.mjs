@@ -1,15 +1,8 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { access, readFile, readdir } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-
-import {
-  DefaultResourceLoader,
-  formatSkillsForPrompt,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageRoot = resolve(repoRoot, "plugins", "dev-flow");
@@ -28,42 +21,12 @@ function assertInOrder(text, ...needles) {
   }
 }
 
-test("Pi discovers the pure Development Flow package and its disclosed stage references", async () => {
-  const agentDir = await mkdtemp(join(tmpdir(), "dev-flow-"));
-  const originalHome = process.env.HOME;
-  const originalUserProfile = process.env.USERPROFILE;
-  process.env.HOME = agentDir;
-  process.env.USERPROFILE = agentDir;
-  try {
-    const settingsManager = SettingsManager.inMemory(
-      { packages: [packageRoot] },
-      { projectTrusted: true },
-    );
-    const loader = new DefaultResourceLoader({
-      cwd: repoRoot,
-      agentDir,
-      settingsManager,
-      noExtensions: false,
-      noPromptTemplates: true,
-      noThemes: true,
-      noContextFiles: true,
-    });
-    await loader.reload();
-
-    const result = loader.getSkills();
-    const skill = result.skills.find(({ name }) => name === "dev-flow");
-    assert.ok(skill, `missing dev-flow: ${JSON.stringify(result.diagnostics)}`);
-    assert.equal(skill.sourceInfo.origin, "package");
-    assert.equal(skill.sourceInfo.source, packageRoot);
-    assert.equal(skill.disableModelInvocation, false);
-    assert.match(skill.description, /同一个 Git（版本管理）工作树/);
-    assert.match(skill.description, /非 main（主干）功能分支/);
-    assert.match(formatSkillsForPrompt([skill]), /<name>dev-flow<\/name>/);
-
-    const packageExtensions = loader
-      .getExtensions()
-      .extensions.filter(({ resolvedPath }) => resolvedPath.startsWith(packageRoot));
-    assert.deepEqual(packageExtensions, []);
+test("dev-flow keeps its portable Skill contract and directory structure", async () => {
+    const frontmatter = (await readFile(resolve(skillRoot, "SKILL.md"), "utf8")).split("---")[1];
+    assert.match(frontmatter, /^name: dev-flow$/m);
+    assert.doesNotMatch(frontmatter, /^disable-model-invocation: true$/m);
+    assert.match(frontmatter, /同一个 Git（版本管理）工作树/);
+    assert.match(frontmatter, /非 main（主干）功能分支/);
     assert.deepEqual(await readdir(packageRoot), ["skills"]);
     assert.deepEqual(await readdir(resolve(packageRoot, "skills")), ["dev-flow"]);
     assert.deepEqual(
@@ -334,11 +297,4 @@ test("Pi discovers the pure Development Flow package and its disclosed stage ref
       await access(resolve(skillRoot, "references", name));
       assert.match(content, new RegExp(`references/${escapeRegExp(name)}`));
     }
-  } finally {
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
-    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = originalUserProfile;
-    await rm(agentDir, { recursive: true, force: true });
-  }
 });

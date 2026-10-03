@@ -31,9 +31,10 @@ Typical requests:
 
 MySpec（自有规格）的安装、模式、诊断和更新默认不使用本 Skill（技能）的通用市场流程。CLI（命令行程序）拥有其路径、市场、模式和版本规则；除下述一次性显式例外外，Plugin Sync（插件同步）只按用户请求委托以下命令，不自行推断或复制规则：
 
+- 诊断工具自身：`myspec doctor`
 - 诊断全部已支持 Agent（代理）：`myspec doctor --all`
-- 诊断单个 Agent（代理）：`myspec doctor --pi`、`myspec doctor --claude` 或 `myspec doctor --codex`
-- 初始化单个 Agent（代理）：`myspec init --pi`、`myspec init --claude` 或 `myspec init --codex`
+- 诊断单个 Agent（代理）：`myspec doctor --claude` 或 `myspec doctor --codex`
+- 初始化单个 Agent（代理）：`myspec init --claude` 或 `myspec init --codex`
 - 初始化全部已安装 Agent（代理）：`myspec init --all`
 - 切换开发模式：`myspec init --dev`
 - 切换发布模式：`myspec init --release`

@@ -58,12 +58,7 @@
           "plugins",
           "scripts/local_plugin_build.py",
           "tests/test_local_plugin_build_checks.py",
-          "tests/test_pi_codex_usage_status.py",
-          "tests/pi_codex_usage_status.test.mjs",
-          "tests/pi_cache_diagnostics.test.mjs",
-          "tests/pi_subagent_policy.test.mjs",
           "tests/subagent_policy.test.mjs",
-          "tests/pi_development_flow.test.mjs",
           "tests/dev_flow.test.mjs",
           "tests/shared_skills.test.mjs"
         ],
@@ -109,7 +104,7 @@
           "plugins/pr-flow/**",
           "tests/test_pr_flow*.py"
         ],
-        "command": "python -m pytest -q -p no:cacheprovider --dist worksteal tests/test_pr_flow_cli.py tests/test_pr_flow_plugin_package.py tests/test_pr_flow_pi_extension.py",
+        "command": "python -m pytest -q -p no:cacheprovider --dist worksteal tests/test_pr_flow_cli.py tests/test_pr_flow_plugin_package.py",
         "inputs": [
           ".agents",
           ".claude-plugin",
@@ -117,8 +112,7 @@
           "requirements-dev.txt",
           "plugins/pr-flow",
           "tests/test_pr_flow_cli.py",
-          "tests/test_pr_flow_plugin_package.py",
-          "tests/test_pr_flow_pi_extension.py"
+          "tests/test_pr_flow_plugin_package.py"
         ],
         "checkParallel": true,
         "pytestXdistWorkers": 8

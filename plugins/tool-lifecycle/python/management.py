@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import hashlib
 import json
 import os
@@ -14,7 +13,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import TextIO
 
 sys.dont_write_bytecode = True
@@ -361,44 +360,6 @@ def implementation_identity() -> str:
     return "release:" + _package_version()
 
 
-def _pi_agent_dir() -> Path:
-    configured = os.environ.get("PI_CODING_AGENT_DIR")
-    return Path(configured) if configured else Path.home() / ".pi" / "agent"
-
-
-def _pi_settings_paths(listed: list[dict[str, str]]) -> tuple[tuple[str, Path], ...]:
-    paths = [("user", _pi_agent_dir() / "settings.json")]
-    if any(record["scope"] == "project" for record in listed):
-        paths.append(("project", Path.cwd() / ".pi" / "settings.json"))
-    return tuple(paths)
-
-
-def _read_settings(path: Path) -> dict[str, object]:
-    if not path.exists():
-        return {}
-    value = _read_json(path)
-    if not isinstance(value, dict):
-        raise ManagementError(f"invalid_pi_settings: {path}")
-    return value
-
-
-def _package_source(item: object) -> str | None:
-    if isinstance(item, str):
-        return item
-    if isinstance(item, dict) and isinstance(item.get("source"), str):
-        return item["source"]
-    return None
-
-
-def _local_source_path(source: str, settings_path: Path) -> Path | None:
-    if source.lower().startswith(("npm:", "git:", "http://", "https://", "ssh://", "git://")):
-        return None
-    path = Path(source).expanduser()
-    if not path.is_absolute():
-        path = settings_path.parent / path
-    return Path(os.path.abspath(path))
-
-
 def _same_path(left: Path, right: Path) -> bool:
     return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
 
@@ -468,73 +429,6 @@ def _current_codex_home() -> CodexHomeSelection:
     return _CODEX_HOME_SELECTION
 
 
-@dataclass
-class PiSource:
-    scope: str
-    settings_path: Path
-    settings: dict[str, object]
-    index: int
-    item: object
-    source: str
-    local_path: Path | None
-    installed_path: Path | None
-    registered: bool
-
-    @property
-    def autoload_delta(self) -> bool:
-        return isinstance(self.item, dict) and self.item.get("autoload") is False
-
-    @property
-    def skill_filter(self) -> list[str] | None:
-        if not isinstance(self.item, dict) or "skills" not in self.item:
-            return None
-        value = self.item["skills"]
-        if not isinstance(value, list) or not all(isinstance(entry, str) for entry in value):
-            raise ManagementError(f"invalid_pi_skills_filter: {self.settings_path}")
-        return value
-
-
-def _pi_sources(listed: list[dict[str, str]]) -> list[PiSource]:
-    result: list[PiSource] = []
-    for scope, path in _pi_settings_paths(listed):
-        settings = _read_settings(path)
-        packages = settings.get("packages", [])
-        if not isinstance(packages, list):
-            raise ManagementError(f"invalid_pi_packages: {path}")
-        for index, item in enumerate(packages):
-            source = _package_source(item)
-            if source is None:
-                continue
-            local_path = _local_source_path(source, path)
-            registration = next(
-                (
-                    record
-                    for record in listed
-                    if record["scope"] == scope and record["source"] == source
-                ),
-                None,
-            )
-            installed_path = (
-                Path(registration["path"])
-                if registration is not None and "path" in registration
-                else None
-            )
-            result.append(
-                PiSource(
-                    scope,
-                    path,
-                    settings,
-                    index,
-                    item,
-                    source,
-                    local_path,
-                    installed_path,
-                    registration is not None,
-                )
-            )
-    return result
-
-
 def _git_host_path(source: str) -> tuple[str, str] | None:
     trimmed = source.strip()
     has_git_prefix = trimmed.startswith("git:")
@@ -570,142 +464,6 @@ def _git_host_path(source: str) -> tuple[str, str] | None:
     if host.startswith("/") or path.startswith("/") or ".." in path.split("/"):
         return None
     return host.lower(), path
-
-
-def _source_identity(item: PiSource) -> str:
-    normalized = item.source.replace("\\", "/").rstrip("/")
-    lowered = normalized.lower()
-    if item.local_path is not None:
-        return "local:" + os.path.normcase(os.path.abspath(item.local_path))
-    if lowered.startswith("npm:"):
-        spec = normalized[4:]
-        match = re.fullmatch(r"(@?[^@]+(?:/[^@]+)?)(?:@.+)?", spec)
-        return "npm:" + (match.group(1) if match else spec).lower()
-    git_source = _git_host_path(item.source)
-    return f"git:{git_source[0]}/{git_source[1]}" if git_source else "source:" + normalized
-
-
-def _effective_sources(sources: list[PiSource]) -> list[PiSource]:
-    ordered = [item for item in sources if item.scope == "project"] + [item for item in sources if item.scope == "user"]
-    result: list[PiSource] = []
-    positions: dict[str, int] = {}
-    for item in ordered:
-        identity = _source_identity(item)
-        index = positions.get(identity)
-        if index is None:
-            positions[identity] = len(result)
-            result.append(item)
-        elif result[index].scope == "project" and item.scope == "user":
-            if result[index].autoload_delta:
-                result.append(item)
-        elif item.scope == "project":
-            result[index] = item
-    return result
-
-
-def _tool_source_kind(item: PiSource, stable: Path) -> str | None:
-    if item.local_path is not None and _same_path(item.local_path, stable):
-        return "stable"
-    normalized = item.source.replace("\\", "/").lower().rstrip("/")
-    if re.fullmatch(rf"npm:(?:@liuli195/{re.escape(COMMAND_NAME)}|{re.escape(LEGACY_PI_PACKAGE)})(?:@[^/]+)?", normalized):
-        return "legacy"
-    local = item.local_path.as_posix().lower().rstrip("/") if item.local_path else ""
-    if local.endswith(f"/plugins/{SOURCE_DIRECTORY}") or local.endswith(f"/{LEGACY_PI_PACKAGE}"):
-        return "legacy"
-    if re.search(rf"(?:^|[/:]){re.escape(LEGACY_PI_PACKAGE)}(?:\.git)?(?:@[^/]+|#[^/]+)?$", normalized):
-        return "legacy"
-    return None
-
-
-def _set_disabled(item: PiSource, disabled: bool) -> None:
-    packages = item.settings["packages"]
-    assert isinstance(packages, list)
-    current = packages[item.index]
-    if isinstance(current, str):
-        if disabled:
-            packages[item.index] = {"source": current, "skills": []}
-        return
-    if disabled:
-        current["skills"] = []
-    else:
-        current.pop("skills", None)
-        current.pop("autoload", None)
-
-
-def _configure_pi_sources(stable: Path) -> tuple[list[str], list[str]]:
-    listed = _pi_list()
-    sources = _pi_sources(listed)
-    user_stable = [item for item in sources if item.scope == "user" and _tool_source_kind(item, stable) == "stable"]
-    if not user_stable:
-        installed = _run("pi", "install", str(stable))
-        if installed.returncode != 0:
-            raise ManagementError(f"pi_install_failed: {installed.stderr.strip()}")
-        listed = _pi_list()
-        sources = _pi_sources(listed)
-        user_stable = [item for item in sources if item.scope == "user" and _tool_source_kind(item, stable) == "stable"]
-    verified_user_stable = [
-        item
-        for item in user_stable
-        if item.installed_path is not None and not _pi_source_mismatch(item, stable)
-    ]
-    if not verified_user_stable:
-        raise ManagementError("pi_install_missing_source")
-    primary_stable = verified_user_stable[0]
-
-    removed_user_legacy_sources = list(dict.fromkeys(
-        item.source
-        for item in sources
-        if item.scope == "user" and _tool_source_kind(item, stable) == "legacy"
-    ))
-    disabled_project_legacy_sources: list[str] = []
-    touched: dict[Path, dict[str, object]] = {}
-    for item in user_stable:
-        _set_disabled(item, item is not primary_stable)
-        touched[item.settings_path] = item.settings
-    for item in sources:
-        if item.scope == "project" and _tool_source_kind(item, stable) == "legacy":
-            disabled_project_legacy_sources.append(item.source)
-            _set_disabled(item, True)
-            touched[item.settings_path] = item.settings
-    for path, settings in touched.items():
-        _atomic_json(path, settings)
-    for source in removed_user_legacy_sources:
-        result = _run("pi", "remove", source)
-        if result.returncode != 0:
-            raise ManagementError(f"pi_remove_failed: {result.stderr.strip()}")
-    listed = _pi_list()
-    current = _pi_sources(listed)
-    remaining = [
-        item.source
-        for item in current
-        if item.scope == "user" and _tool_source_kind(item, stable) == "legacy"
-    ]
-    if remaining:
-        raise ManagementError(f"pi_remove_incomplete: {remaining[0]}")
-    if not any(
-        item.scope == "user"
-        and _tool_source_kind(item, stable) == "stable"
-        and item.installed_path is not None
-        and not _pi_source_mismatch(item, stable)
-        and _pi_source_enabled(item)
-        for item in current
-    ):
-        raise ManagementError("pi_install_missing_source")
-    return removed_user_legacy_sources, disabled_project_legacy_sources
-
-
-def _init_pi() -> dict[str, object]:
-    if shutil.which("pi") is None:
-        raise ManagementError("missing_command: pi")
-    stable = _stable_package_root()
-    removed_user_legacy_sources, disabled_project_legacy_sources = _configure_pi_sources(stable)
-    return {
-        "pi": "initialized",
-        "source": str(stable),
-        "removedLegacySources": removed_user_legacy_sources,
-        "disabledProjectLegacySources": disabled_project_legacy_sources,
-        "reloadRequired": True,
-    }
 
 
 def _claude_json(arguments: tuple[str, ...], error_name: str) -> list[dict[str, object]]:
@@ -1013,8 +771,8 @@ def _init_codex() -> dict[str, object]:
 
 def _init_all() -> dict[str, object]:
     result: dict[str, object] = {}
-    initializers = {"pi": _init_pi, "claude": _init_claude, "codex": _init_codex}
-    for agent in ("pi", "claude", "codex"):
+    initializers = {"claude": _init_claude, "codex": _init_codex}
+    for agent in ("claude", "codex"):
         if shutil.which(agent) is None:
             result[agent] = {"status": "skipped", "reason": f"missing_command: {agent}"}
         else:
@@ -1359,8 +1117,6 @@ def _validate_dev_source(raw_source: Path) -> tuple[Path, Path, str]:
         or not isinstance(version, str)
         or not version
         or package.get("bin") != {COMMAND_NAME: f"./bin/{COMMAND_NAME}.js"}
-        or not isinstance(package.get("pi"), dict)
-        or package["pi"].get("skills") != list(SKILL_PATHS)
     ):
         raise ManagementError(f"invalid_dev_source: package_manifest {package_root}")
     missing_skill = next((package_root / path[2:] / "SKILL.md" for path in SKILL_PATHS if not (package_root / path[2:] / "SKILL.md").is_file()), None)
@@ -1449,129 +1205,6 @@ def _validated_pending(stage: str, token: str | None) -> dict[str, object]:
     return state
 
 
-def _pi_source_mismatch(item: PiSource, stable: Path) -> bool:
-    return (
-        _tool_source_kind(item, stable) == "stable"
-        and item.registered
-        and item.local_path is not None
-        and item.installed_path is not None
-        and not _same_path(item.local_path, item.installed_path)
-    )
-
-
-def _group_effective_tool(
-    stable: Path,
-    sources: list[PiSource],
-) -> list[tuple[str, str, list[PiSource]]]:
-    groups: list[tuple[str, str, list[PiSource]]] = []
-    by_identity: dict[str, int] = {}
-    for item in _effective_sources(sources):
-        kind = _tool_source_kind(item, stable)
-        if kind is None or _pi_source_mismatch(item, stable):
-            continue
-        identity = _source_identity(item)
-        if identity not in by_identity:
-            by_identity[identity] = len(groups)
-            groups.append((identity, kind, [item]))
-        else:
-            groups[by_identity[identity]][2].append(item)
-    return groups
-
-
-def _matches(path: str, name: str, pattern: str) -> bool:
-    normalized = pattern.replace("\\", "/").removeprefix("./")
-    parent = str(PurePosixPath(path).parent)
-    return any(
-        fnmatch.fnmatchcase(candidate, normalized) or PurePosixPath(candidate).match(normalized)
-        for candidate in (path, "SKILL.md", parent, name)
-    )
-
-
-def _exact_match(path: str, name: str, pattern: str) -> bool:
-    normalized = pattern.replace("\\", "/").removeprefix("./")
-    return normalized in {path, str(PurePosixPath(path).parent), name}
-
-
-def _manifest_skills(root: Path) -> dict[str, str]:
-    package = _read_json(root / "package.json")
-    pi = package.get("pi") if isinstance(package, dict) else None
-    entries = pi.get("skills") if isinstance(pi, dict) else None
-    if not isinstance(entries, list) or not all(isinstance(entry, str) for entry in entries):
-        return {}
-    skills: dict[str, str] = {}
-    for entry in entries:
-        if entry.startswith(("!", "+", "-")):
-            continue
-        target = root / entry.removeprefix("./")
-        candidates = [target] if target.is_file() else sorted(target.rglob("SKILL.md")) if target.is_dir() else []
-        for candidate in candidates:
-            if candidate.name == "SKILL.md":
-                skills[candidate.relative_to(root).as_posix()] = candidate.parent.name
-    overrides = [entry for entry in entries if entry.startswith(("!", "+", "-"))]
-    return {path: name for path, name in skills.items() if _pattern_enabled(path, name, overrides)}
-
-
-def _pattern_enabled(
-    path: str,
-    name: str,
-    patterns: list[str],
-    default_enabled: bool = True,
-) -> bool:
-    includes = [pattern for pattern in patterns if not pattern.startswith(("!", "+", "-"))]
-    enabled = default_enabled if not includes else any(_matches(path, name, pattern) for pattern in includes)
-    if any(_matches(path, name, pattern[1:]) for pattern in patterns if pattern.startswith("!")):
-        enabled = False
-    if any(_exact_match(path, name, pattern[1:]) for pattern in patterns if pattern.startswith("+")):
-        enabled = True
-    if any(_exact_match(path, name, pattern[1:]) for pattern in patterns if pattern.startswith("-")):
-        enabled = False
-    return enabled
-
-
-def _group_skills(group: list[PiSource]) -> list[str]:
-    states: dict[str, tuple[str, bool]] = {}
-    order: list[str] = []
-    for item in group:
-        root = item.installed_path
-        if root is None or not (root / "package.json").is_file():
-            continue
-        skills = _manifest_skills(root)
-        order.extend(path for path in skills if path not in order)
-        patterns = item.skill_filter
-        if item.autoload_delta:
-            updates: dict[str, tuple[str, bool]] = {}
-            for pattern in patterns or []:
-                marker = pattern[:1]
-                target = pattern[1:] if marker in {"!", "+", "-"} else pattern
-                enabled = marker not in {"!", "-"}
-                exact = marker in {"+", "-"}
-                for path, name in skills.items():
-                    if (exact and _exact_match(path, name, target)) or (not exact and _matches(path, name, target)):
-                        updates[path] = (name, enabled)
-            for path, value in updates.items():
-                states.setdefault(path, value)
-            continue
-        for path, name in skills.items():
-            enabled = patterns is None or (bool(patterns) and _pattern_enabled(path, name, patterns))
-            states.setdefault(path, (name, enabled))
-    return [states[path][0] for path in order if path in states and states[path][1]]
-
-
-def _pi_is_configured(listed: list[dict[str, str]]) -> bool:
-    stable = _stable_package_root()
-    sources = [item for item in _pi_sources(listed) if item.registered]
-    return any(
-        kind == "stable" and _group_skills(group)
-        for _, kind, group in _group_effective_tool(stable, sources)
-    )
-
-
-def _refresh_pi() -> str:
-    if shutil.which("pi") is None:
-        return "not-installed"
-    return "refreshed" if _pi_is_configured(_pi_list()) else "not-installed"
-
-
 def _refresh_claude() -> str:
     if shutil.which("claude") is None:
         return "not-installed"
@@ -1638,9 +1271,8 @@ def _refresh_codex() -> str:
 
 
 def _refresh_integrations() -> dict[str, object]:
-    pi_status = _refresh_pi()
-    result: dict[str, object] = {"pi": pi_status}
-    reload_required = pi_status == "refreshed"
+    result: dict[str, object] = {}
+    reload_required = False
     if shutil.which("claude") is not None:
         claude_status = _refresh_claude()
         result["claude"] = claude_status
@@ -1717,27 +1349,6 @@ def _switch_release(token: str | None, operation_id: str) -> dict[str, object]:
     if installed.returncode != 0:
         raise ManagementError(f"npm_install_failed: {installed.stderr.strip()}")
     return _resume_after_switch(["init", "--release"], switch_token, operation_id)
-
-
-def _pi_list() -> list[dict[str, str]]:
-    listed = _run("pi", "list")
-    if listed.returncode != 0:
-        raise ManagementError(f"pi_list_failed: {listed.stderr.strip()}")
-    result: list[dict[str, str]] = []
-    scope: str | None = None
-    pending: dict[str, str] | None = None
-    for line in listed.stdout.splitlines():
-        if line == "User packages:":
-            scope, pending = "user", None
-        elif line == "Project packages:":
-            scope, pending = "project", None
-        elif scope is not None and line.startswith("  ") and not line.startswith("    "):
-            pending = {"scope": scope, "source": line.strip().removesuffix(" (filtered)")}
-            result.append(pending)
-        elif pending is not None and line.startswith("    "):
-            pending["path"] = line.strip()
-            pending = None
-    return result
 
 
 def _manifest_version(root: Path) -> str | None:
@@ -1881,94 +1492,6 @@ def _doctor_package() -> dict[str, object]:
     }
     if linked:
         report["binding"] = _binding_report(stable, Path.cwd())
-    return report
-
-
-def _pi_source_enabled(item: PiSource) -> bool:
-    patterns = item.skill_filter
-    if patterns is None:
-        return not item.autoload_delta
-    if not patterns:
-        return False
-    return any(
-        _pattern_enabled(
-            f"{path.removeprefix('./')}/SKILL.md",
-            name,
-            patterns,
-            default_enabled=not item.autoload_delta,
-        )
-        for path, name in zip(SKILL_PATHS, SKILL_NAMES)
-    )
-
-
-def _doctor_pi() -> dict[str, object]:
-    stable = _stable_package_root()
-    report = _doctor_package()
-    available = shutil.which("pi") is not None
-    listed = _pi_list() if available else []
-    configured_sources = _pi_sources(listed)
-    registered_sources = [item for item in configured_sources if item.registered]
-    effective_sources = _effective_sources(registered_sources)
-    records: list[dict[str, object]] = []
-    stable_versions: list[str] = []
-    for item in configured_sources:
-        kind = _tool_source_kind(item, stable)
-        if kind is None:
-            continue
-        version = _tool_manifest_version(item.installed_path)
-        installed = version is not None
-        enabled = _pi_source_enabled(item)
-        mismatch = _pi_source_mismatch(item, stable)
-        effective = (
-            item in effective_sources
-            and item.registered
-            and installed
-            and enabled
-            and not mismatch
-        )
-        record = _source_record(
-            installed=installed,
-            registered=item.registered,
-            enabled=enabled,
-            source_kind=kind,
-            source_mismatch=mismatch,
-            scope=item.scope,
-            settings=str(item.settings_path),
-            source=item.source,
-            resolvedPath=str(item.installed_path) if item.installed_path is not None else None,
-            kind=kind,
-        )
-        record["effective"] = effective
-        records.append(record)
-        if kind == "stable" and version is not None:
-            stable_versions.append(version)
-    groups = _group_effective_tool(stable, registered_sources)
-    enabled_groups = [(kind, group, _group_skills(group)) for _, kind, group in groups]
-    stable_skills = next((skills for kind, _, skills in enabled_groups if kind == "stable"), [])
-    stable_version = stable_versions[0] if stable_versions else None
-    enabled_sources = list(dict.fromkeys(record["source"] for record in records if record["enabled"]))
-    disabled_sources = [
-        item.source
-        for item in registered_sources
-        if _tool_source_kind(item, stable) is not None and not _pi_source_enabled(item)
-    ]
-    report["pi"] = {
-        "available": available,
-        "registered": any(
-            record["sourceKind"] == "stable" and record["registered"] for record in records
-        ),
-        "installed": bool(stable_versions),
-        "version": stable_version,
-        "versionMismatch": not stable_versions or any(version != _package_version() for version in stable_versions),
-        "enabled": any(record["enabled"] for record in records),
-        "enabledSources": enabled_sources,
-        "disabledSources": disabled_sources,
-        "duplicateEnabledSources": len(enabled_sources) > 1,
-        "sources": records,
-        "listedSources": listed,
-        "skills": stable_skills,
-        "reloadRequired": bool(enabled_sources),
-    }
     return report
 
 
@@ -2165,14 +1688,6 @@ def _latest_version() -> str:
 
 def _legacy_migration_clients(stable: Path) -> list[str]:
     clients: list[str] = []
-    if shutil.which("pi") is not None:
-        sources = _pi_sources(_pi_list())
-        if any(
-            _tool_source_kind(item, stable) == "legacy"
-            and (item.scope == "user" or _pi_source_enabled(item))
-            for item in sources
-        ):
-            clients.append("pi")
     if shutil.which("claude") is not None:
         if any(item.get("id") == CLAUDE_LEGACY_PLUGIN for item in _claude_plugins()):
             clients.append("claude")
@@ -2202,16 +1717,6 @@ def _preflight_integrations() -> tuple[list[str], dict[str, str], dict[str, bool
     enabled: dict[str, bool] = {}
     stable = _stable_package_root()
     _require_legacy_migration(stable)
-    if shutil.which("pi") is not None:
-        listed = _pi_list()
-        sources = _pi_sources(listed)
-        configured = [item for item in sources if _tool_source_kind(item, stable) == "stable"]
-        installed = [item for item in configured if item.installed_path is not None]
-        if configured and not installed:
-            raise ManagementError("update_integration_unavailable: pi")
-        if installed:
-            integrations.append("pi")
-            enabled["pi"] = _stable_source_effective(_doctor_pi()["pi"])
     if shutil.which("claude") is not None:
         target = next((item for item in _claude_plugins() if item.get("id") == CLAUDE_PLUGIN), None)
         if target is not None:
@@ -2245,7 +1750,7 @@ def _update_pending(state: dict[str, object]) -> dict[str, object] | None:
     if not isinstance(pending.get("targetVersion"), str):
         raise ManagementError("invalid_update_state")
     if not isinstance(pending.get("integrations"), list) or not all(
-        item in {"pi", "claude", "codex"} for item in pending["integrations"]
+        item in {"claude", "codex"} for item in pending["integrations"]
     ):
         raise ManagementError("invalid_update_state")
     if not isinstance(pending.get("completed"), list) or not all(
@@ -2399,7 +1904,6 @@ def _resume_after_update(token: str, operation_id: str, target: str) -> dict[str
 
 def _doctor_all() -> dict[str, object]:
     report = _doctor_package()
-    report["pi"] = _doctor_pi()["pi"]
     report["claude"] = _doctor_claude()["claude"]
     report["codex"] = _doctor_codex()["codex"]
     return report
@@ -2407,7 +1911,7 @@ def _doctor_all() -> dict[str, object]:
 
 def _update_doctor(integrations: list[str]) -> dict[str, object]:
     report = _doctor_package()
-    doctors = {"pi": _doctor_pi, "claude": _doctor_claude, "codex": _doctor_codex}
+    doctors = {"claude": _doctor_claude, "codex": _doctor_codex}
     for integration in integrations:
         report[integration] = doctors[integration]()[integration]
     return report
@@ -2421,27 +1925,6 @@ def _stable_source_enabled(report: dict[str, object]) -> bool:
         and source.get("enabled") is True
         for source in sources
     )
-
-
-def _stable_source_effective(report: dict[str, object]) -> bool:
-    sources = report.get("sources")
-    return isinstance(sources, list) and any(
-        isinstance(source, dict)
-        and source.get("sourceKind") == "stable"
-        and source.get("effective") is True
-        for source in sources
-    )
-
-
-def _verify_pi_update(target: str, enabled: bool) -> None:
-    report = _doctor_pi()["pi"]
-    if (
-        report.get("available") is not True
-        or report.get("version") != target
-        or report.get("versionMismatch") is True
-        or _stable_source_effective(report) is not enabled
-    ):
-        raise ManagementError("pi_plugin_refresh_mismatch")
 
 
 def _validate_update_doctor(
@@ -2459,9 +1942,7 @@ def _validate_update_doctor(
     for integration in integrations:
         diagnosis = report.get(integration)
         restored = (
-            _stable_source_effective(diagnosis)
-            if integration == "pi" and isinstance(diagnosis, dict)
-            else _stable_source_enabled(diagnosis) if isinstance(diagnosis, dict) else False
+            _stable_source_enabled(diagnosis) if isinstance(diagnosis, dict) else False
         )
         if (
             not isinstance(diagnosis, dict)
@@ -2537,9 +2018,7 @@ def _run_update(token: str | None, operation_id: str) -> dict[str, object]:
         for integration in integrations:
             desired = enabled[integration]
             assert isinstance(desired, bool)
-            if integration == "pi":
-                _verify_pi_update(target, desired)
-            elif integration == "claude":
+            if integration == "claude":
                 _update_claude_steps(
                     state, pending, str(scopes.get("claude", "user")), target, desired
                 )
@@ -2547,7 +2026,7 @@ def _run_update(token: str | None, operation_id: str) -> dict[str, object]:
                 _update_codex_steps(state, pending, target, desired)
             _save_update_step(state, pending, integration)
             result[integration] = "refreshed"
-        result["reloadRequired"] = any(item in integrations for item in ("pi", "claude"))
+        result["reloadRequired"] = "claude" in integrations
         if "codex" in integrations:
             result["newSessionRequired"] = True
         report = _update_doctor(integrations)
@@ -2580,7 +2059,6 @@ def _doctor_operation(report: dict[str, object]) -> dict[str, object]:
 def add_management_parsers(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     init_parser = commands.add_parser("init")
     init_target = init_parser.add_mutually_exclusive_group(required=True)
-    init_target.add_argument("--pi", action="store_true")
     init_target.add_argument("--claude", action="store_true")
     init_target.add_argument("--codex", action="store_true")
     init_target.add_argument("--all", action="store_true")
@@ -2591,7 +2069,6 @@ def add_management_parsers(commands: argparse._SubParsersAction[argparse.Argumen
     init_parser.add_argument("--_switch-token", help=argparse.SUPPRESS)
     doctor_parser = commands.add_parser("doctor")
     doctor_target = doctor_parser.add_mutually_exclusive_group()
-    doctor_target.add_argument("--pi", action="store_true")
     doctor_target.add_argument("--claude", action="store_true")
     doctor_target.add_argument("--codex", action="store_true")
     doctor_target.add_argument("--all", action="store_true")
@@ -2605,7 +2082,7 @@ def _management_command(args: argparse.Namespace) -> str:
     if args.command == "update":
         return f"{COMMAND_NAME} update"
     target = next(
-        (name for name in ("pi", "claude", "codex", "all", "dev", "release") if getattr(args, name, False)),
+        (name for name in ("claude", "codex", "all", "dev", "release") if getattr(args, name, False)),
         "",
     )
     source = f" --source {args.source}" if args.source is not None else ""
@@ -2637,7 +2114,7 @@ def run_management(args: argparse.Namespace) -> dict[str, object]:
         elif args.claude:
             report = _doctor_claude()
         else:
-            report = _doctor_codex() if args.codex else _doctor_pi()
+            report = _doctor_codex() if args.codex else _doctor_package()
         return _doctor_operation(report)
 
     internal_token = args._update_token if args.command == "update" else args._switch_token
@@ -2672,6 +2149,6 @@ def run_management(args: argparse.Namespace) -> dict[str, object]:
             return _init_all()
         if args.claude:
             return _init_claude()
-        return _init_codex() if args.codex else _init_pi()
+        return _init_codex()
     finally:
         _release_install_lock(operation_id)

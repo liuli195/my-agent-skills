@@ -399,6 +399,25 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    'tests/test_pr_flow_plugin_package.py::test_pr_flow_installed_skill_command_runs_from_external_project': (
+        'covers the documented installed PR Flow Python entrypoint from an external target with no source checkout, preserving target selection and the five loaded-skill command contracts'
+    ),
+    'tests/test_build_and_verify_cli.py::test_packed_tools_supported_clients_initialize_and_resume_update': (
+        'covers both installed tools Claude/Codex initialization, diagnosis and recovery of valid pending updates through the real command entrypoints while ignoring a removed Pi command'
+    ),
+    'tests/test_build_and_verify_cli.py::test_packed_tools_bare_doctor_reports_only_package': (
+        'covers both installed tool packages default doctor and portable package metadata through their real command entrypoints; function=test_packed_tools_bare_doctor_reports_only_package'
+    ),
+    'tests/test_build_and_verify_cli.py::test_packed_tools_all_and_removed_pi_options': (
+        'covers both installed tool packages all-client selection and removed Pi option rejection through their real command entrypoints; function=test_packed_tools_all_and_removed_pi_options'
+    ),
+    'tests/test_build_and_verify_cli.py::test_packed_tools_reject_legacy_pi_pending_before_writes': (
+        'covers both installed tool packages rejecting legacy Pi update records before external writes while retaining read-only diagnosis; function=test_packed_tools_reject_legacy_pi_pending_before_writes'
+    ),
+    'tests/test_build_and_verify_cli.py::test_packed_myspec_update_ignores_removed_pi_client': (
+        'covers installed MySpec update ignoring removed Pi clients and their old configuration through the real command entrypoint; function=test_packed_myspec_update_ignores_removed_pi_client'
+    ),
+
     'tests/test_build_and_verify_cli.py::test_public_verify_timeout_report_failure_warns_without_changing_failure': 'covers real public timeout reporting failure warning while preserving nonzero exit and later-check cancellation',
     'tests/test_build_and_verify_cli.py::test_public_verify_protocol_like_check_output_is_preserved': 'covers real public entry preserving ordinary text that resembles the final-result protocol',
     'tests/test_build_and_verify_cli.py::test_review_startup_reaps_descendants_after_parent_exits': 'covers real CLI startup ownership after probe or interpreter parent exit',
@@ -464,9 +483,6 @@ E2E_ALLOWLIST: dict[str, str] = {
     ),
     'tests/test_pr_flow_cli.py::test_diagnose_reports_active_lock_without_writing_status': (
         'covers PR Flow read-only diagnosis while a real operation lock is held; function=test_diagnose_reports_active_lock_without_writing_status'
-    ),
-    'tests/test_pr_flow_cli.py::test_pi_tool_runs_packaged_complete_through_merge_and_cleanup': (
-        'covers the packaged Pi pr_flow tool through a real process, temporary git repository, merge, and cleanup; function=test_pi_tool_runs_packaged_complete_through_merge_and_cleanup'
     ),
     'tests/test_pr_flow_cli.py::test_linked_worktrees_use_independent_process_locks_and_status': (
         'covers linked-worktree isolation across real PR Flow processes; function=test_linked_worktrees_use_independent_process_locks_and_status'
@@ -777,50 +793,17 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_packed_myspec_init_all_removes_legacy_plugins_and_doctor_reports_stable_sources': (
         'covers packaged all-client cleanup and stable-only diagnosis through public CLI entrypoints; function=test_packed_myspec_init_all_removes_legacy_plugins_and_doctor_reports_stable_sources'
     ),
-    'tests/test_my_spec.py::test_packed_myspec_pi_init_enables_a_verified_stable_duplicate_before_cleanup': (
-        'covers packaged Pi cleanup selecting a verified stable duplicate before removal; function=test_packed_myspec_pi_init_enables_a_verified_stable_duplicate_before_cleanup'
-    ),
-    'tests/test_my_spec.py::test_packed_myspec_pi_init_keeps_legacy_source_when_stable_source_is_unresolved': (
-        'covers packaged Pi cleanup preserving legacy state when stable resolution fails; function=test_packed_myspec_pi_init_keeps_legacy_source_when_stable_source_is_unresolved'
-    ),
-    'tests/test_my_spec.py::test_packed_myspec_pi_init_retries_failed_legacy_removal': (
-        'covers packaged Pi cleanup converging after a failed removal; function=test_packed_myspec_pi_init_retries_failed_legacy_removal'
-    ),
-    'tests/test_my_spec.py::test_packed_myspec_pi_init_retries_incomplete_legacy_removal': (
-        'covers packaged Pi cleanup detecting incomplete removal and converging on retry; function=test_packed_myspec_pi_init_retries_incomplete_legacy_removal'
-    ),
     'tests/test_my_spec.py::test_packed_myspec_claude_reinstall_failure_does_not_report_refreshed': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_claude_reinstall_failure_does_not_report_refreshed'
     ),
     'tests/test_my_spec.py::test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_state': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_state'
     ),
-    'tests/test_my_spec.py::test_packed_myspec_removes_only_exact_user_legacy_pi_sources': (
-        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_removes_only_exact_user_legacy_pi_sources'
-    ),
-    'tests/test_my_spec.py::test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest': (
-        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest'
-    ),
-    'tests/test_my_spec.py::test_packed_myspec_doctor_does_not_enable_pi_source_for_unrelated_autoload_delta': (
-        'covers packaged Pi diagnosis excluding an unrelated autoload delta from enabled intent; function=test_packed_myspec_doctor_does_not_enable_pi_source_for_unrelated_autoload_delta'
-    ),
-    'tests/test_my_spec.py::test_packed_myspec_doctor_keeps_enabled_intent_for_missing_pi_source_with_exclusion': (
-        'covers packaged Pi diagnosis preserving enabled intent for a registered source with no installed path; function=test_packed_myspec_doctor_keeps_enabled_intent_for_missing_pi_source_with_exclusion'
-    ),
-    'tests/test_my_spec.py::test_packed_myspec_doctor_keeps_enabled_intent_for_settings_source_missing_from_pi_list': (
-        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_doctor_keeps_enabled_intent_for_settings_source_missing_from_pi_list'
-    ),
-    'tests/test_my_spec.py::test_packed_myspec_doctor_reads_legacy_git_and_npm_manifests_from_pi_list': (
-        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_doctor_reads_legacy_git_and_npm_manifests_from_pi_list'
-    ),
     'tests/test_my_spec.py::test_packed_myspec_doctor_reports_actual_package_version_mismatch': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_doctor_reports_actual_package_version_mismatch'
     ),
     'tests/test_my_spec.py::test_packed_myspec_doctor_reports_claude_marketplace_source_mismatch_read_only': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_doctor_reports_claude_marketplace_source_mismatch_read_only'
-    ),
-    'tests/test_my_spec.py::test_packed_myspec_doctor_reports_duplicate_enabled_pi_sources': (
-        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_doctor_reports_duplicate_enabled_pi_sources'
     ),
     'tests/test_my_spec.py::test_packed_myspec_doctor_reports_partial_update_read_only': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_doctor_reports_partial_update_read_only'
@@ -831,26 +814,11 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_packed_myspec_explicit_claude_init_refreshes_disabled_stale_plugin': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_explicit_claude_init_refreshes_disabled_stale_plugin'
     ),
-    'tests/test_my_spec.py::test_packed_myspec_follows_project_scope_reported_by_pi_list': (
-        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_follows_project_scope_reported_by_pi_list'
-    ),
-    'tests/test_my_spec.py::test_packed_myspec_ignores_project_settings_absent_from_pi_list': (
-        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_ignores_project_settings_absent_from_pi_list'
-    ),
     'tests/test_my_spec.py::test_packed_myspec_initializes_and_removes_claude_legacy_plugin': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_initializes_and_removes_claude_legacy_plugin'
     ),
     'tests/test_my_spec.py::test_packed_myspec_initializes_and_removes_codex_legacy_plugin': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_initializes_and_removes_codex_legacy_plugin'
-    ),
-    'tests/test_my_spec.py::test_packed_myspec_initializes_and_diagnoses_one_pi_source': (
-        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_initializes_and_diagnoses_one_pi_source'
-    ),
-    'tests/test_my_spec.py::test_packed_myspec_keeps_project_legacy_sources_without_installed_paths': (
-        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_keeps_project_legacy_sources_without_installed_paths'
-    ),
-    'tests/test_my_spec.py::test_packed_myspec_mode_switch_does_not_install_a_disabled_pi_integration': (
-        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_mode_switch_does_not_install_a_disabled_pi_integration'
     ),
     'tests/test_my_spec.py::test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_claude': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_claude'
@@ -860,9 +828,6 @@ E2E_ALLOWLIST: dict[str, str] = {
     ),
     'tests/test_my_spec.py::test_packed_myspec_package_contains_single_codex_marketplace_and_four_skills': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_package_contains_single_codex_marketplace_and_four_skills'
-    ),
-    'tests/test_my_spec.py::test_packed_myspec_pi_git_identity_matches_pi_host_path_semantics': (
-        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_pi_git_identity_matches_pi_host_path_semantics'
     ),
     'tests/test_my_spec.py::test_packed_myspec_preserves_lock_when_process_status_is_unknown': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_preserves_lock_when_process_status_is_unknown'
@@ -879,9 +844,6 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_packed_myspec_release_install_failure_stays_in_dev_and_retries': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_release_install_failure_stays_in_dev_and_retries'
     ),
-    'tests/test_my_spec.py::test_packed_myspec_reports_missing_pi_without_installing_it': (
-        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_reports_missing_pi_without_installing_it'
-    ),
     'tests/test_my_spec.py::test_packed_myspec_requires_explicit_claude_but_all_initializes_detected_claude': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_requires_explicit_claude_but_all_initializes_detected_claude'
     ),
@@ -891,14 +853,11 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_packed_myspec_requires_release_registration_before_first_codex_dev_init': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_requires_release_registration_before_first_codex_dev_init'
     ),
-    'tests/test_my_spec.py::test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_file': (
-        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_file'
-    ),
     'tests/test_my_spec.py::test_packed_myspec_serializes_init_and_reports_locks_without_mutating_them': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_serializes_init_and_reports_locks_without_mutating_them'
     ),
-    'tests/test_my_spec.py::test_packed_myspec_switches_pi_between_development_and_saved_release': (
-        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_switches_pi_between_development_and_saved_release'
+    'tests/test_my_spec.py::test_packed_myspec_switches_package_between_development_and_saved_release': (
+        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_switches_package_between_development_and_saved_release'
     ),
     'tests/test_my_spec.py::test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged': (
         'covers the installed MySpec CLI reusing confirmation when a development implementation changes without changing the observable diff; function=test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged'
@@ -921,9 +880,6 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_my_spec.py::test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes': (
         'covers the installed MySpec update CLI blocking all enabled legacy client sources before package, state, or client writes; function=test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes'
     ),
-    'tests/test_my_spec.py::test_packed_myspec_update_preserves_pi_effective_state_under_project_override': (
-        'covers packaged update and doctor preserving Pi effective state under a trusted project override; function=test_packed_myspec_update_preserves_pi_effective_state_under_project_override'
-    ),
     'tests/test_my_spec.py::test_packed_myspec_update_recovers_external_success_before_bookkeeping': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_update_recovers_external_success_before_bookkeeping'
     ),
@@ -932,9 +888,6 @@ E2E_ALLOWLIST: dict[str, str] = {
     ),
     'tests/test_my_spec.py::test_packed_myspec_update_rejects_dev_mode_and_forged_resume': (
         'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_update_rejects_dev_mode_and_forged_resume'
-    ),
-    'tests/test_my_spec.py::test_packed_myspec_uses_pi_list_project_scope_over_saved_trust': (
-        'covers the installed MySpec npm package through its public CLI and isolated client boundary; function=test_packed_myspec_uses_pi_list_project_scope_over_saved_trust'
     ),
 }
 
