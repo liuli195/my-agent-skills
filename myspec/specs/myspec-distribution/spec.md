@@ -2,19 +2,20 @@
 
 ## Purpose
 
-本 capability（能力）定义 MySpec（自有规格）统一 npm（软件包管理器）发行包、机器级模式、三类 Agent（代理）集成、诊断更新与发布验证行为。
+本 capability（能力）定义 MySpec（自有规格）统一 npm（软件包管理器）发行包、机器级模式、Claude/Codex（编码助手/代码代理）集成、诊断更新与发布验证行为。
 
 ## Requirements
 
 ### Requirement: MySpec 以单一 npm 包提供完整用户入口
 
-系统 MUST 通过 `@liuli195/myspec` 单一 npm（软件包管理器）包提供 `myspec` CLI（命令行程序）、四个 Skill（技能）以及 Pi、Claude 和 Codex 所需资源，并保持既有规格业务子命令、参数、标准流和退出码行为。
+系统 MUST 通过 `@liuli195/myspec` 单一 npm（软件包管理器）包提供 `myspec` CLI（命令行程序）、四个 Skill（技能）以及 Claude 和 Codex 所需资源，并保持既有规格业务子命令、参数、标准流和退出码行为。
 
 #### Scenario: 用户安装发布包
 
 - **WHEN** 用户安装 `@liuli195/myspec`
 - **THEN** 安装后的 `myspec` MUST 可运行全部既有规格业务子命令
-- **THEN** 同一包 MUST 包含 Pi、Claude 和 Codex 可发现的四个 MySpec Skill（技能）
+- **THEN** 同一包 MUST 包含 Claude 和 Codex 可发现的四个 MySpec Skill（技能）
+- **THEN** 安装和发布验证 MUST 不需要 Pi，且发布包 MUST NOT 宣告 Pi 资源发现元数据
 ### Requirement: MySpec 启动器确定性选择 Python
 
 系统 MUST 让启动器相对于已安装包定位唯一 Python（脚本语言）核心，依次尝试 `MYSPEC_PYTHON`、`python3.12`、`python3`、`python` 和 Windows `py -3.12`，只接受 Python 3.12 或更高版本，并完整转发参数、标准流、信号和退出码。
@@ -91,49 +92,24 @@
 
 #### Scenario: 更新保留客户端来源状态
 
-- **WHEN** 更新流程保存并验证 Pi、Claude 或 Codex 的来源状态
+- **WHEN** 更新流程保存并验证 Claude 或 Codex 的来源状态
 - **THEN** Claude 和 Codex MUST 按稳定来源的配置启用状态验证恢复结果
-- **THEN** Pi MUST 按考虑受信任项目覆盖后的稳定来源实际生效状态验证恢复结果
 - **THEN** 更新流程 MUST NOT 把汇总顶层启用状态误作单个稳定来源状态
-### Requirement: MySpec 初始化三类 Agent 的统一来源
+#### Scenario: 旧未完成更新记录包含 Pi
 
-系统 MUST 通过 `myspec init --pi`、`--claude`、`--codex` 或 `--all` 初始化对应 Agent（代理）；Pi MUST 登记全局 npm 包稳定目录，Claude 和 Codex MUST 登记包内自包含单插件市场。
-
-#### Scenario: 用户显式初始化一个不可用的 Agent
-
-- **WHEN** 用户显式选择的 Pi、Claude 或 Codex 不可用
-- **THEN** 初始化 MUST 失败且不得安装该 Agent
-
-#### Scenario: 用户初始化所有 Agent
-
-- **WHEN** 用户运行 `myspec init --all`
-- **THEN** `--all` MUST 只包含 Pi、Claude 和 Codex
-- **THEN** 系统 MUST 跳过并报告不可用客户端，且继续初始化其他可用客户端
-
-#### Scenario: 初始化发现旧 MySpec 来源
-
-- **WHEN** 新统一来源已启用并验证，且 Agent 中存在 Legacy MySpec Source（旧 MySpec 来源）
-- **THEN** 系统 MUST 精确移除用户级旧 MySpec 来源或旧插件记录
-- **THEN** Pi 项目级旧来源 MUST 保留并禁用，不得删除项目配置
-- **THEN** Claude MUST 在卸载旧插件时保留该插件的持久数据
-- **THEN** Codex MUST 删除旧插件记录及其对应缓存，并保留无关缓存
-- **THEN** 系统 MUST NOT 删除共享市场、市场订阅、无关插件、源码目录或用户文件
-
-#### Scenario: 初始化未发现旧 MySpec 来源
-
-- **WHEN** 对应 Agent 不存在 Legacy MySpec Source（旧 MySpec 来源）
-- **THEN** 初始化 MUST 成功且不得调用旧来源删除命令
-- **THEN** 重复初始化 MUST 保持幂等
-
-#### Scenario: 初始化报告旧来源处理结果
-
-- **WHEN** 单客户端初始化或 `myspec init --all` 完成
-- **THEN** Pi 结果 MUST 通过 `removedLegacySources` 和 `disabledProjectLegacySources` 分别报告已删除用户来源和已禁用项目来源
-- **THEN** Claude 和 Codex 结果 MUST 通过 `removedLegacyPlugins` 报告已删除旧插件
-- **THEN** 没有对应处理结果时字段 MUST 返回空数组
+- **WHEN** 已保存的未完成更新记录把 Pi 列为待刷新客户端
+- **THEN** `myspec update` MUST 复用 `invalid_update_state`（更新状态无效）失败路径，在 npm（软件包管理器）安装和客户端刷新前停止
+- **THEN** 系统 MUST 保留原更新记录和旧 Pi 配置，不得重新安装 Pi、自动迁移或跳过未完成步骤
+- **THEN** `myspec doctor` MUST 能只读展示该未完成记录
 ### Requirement: MySpec doctor 只读诊断真实安装状态
 
-系统 MUST 让 `myspec doctor` 从 npm（软件包管理器）和真实 Agent（代理）客户端查询模式、来源、版本、启用状态、重复来源、锁、部分操作和重新加载要求，且不得依赖平行保存的安装清单。Pi、Claude 和 Codex MUST 使用一致的来源状态语义，并在保留既有顶层字段的同时公开规范化来源记录。
+系统 MUST 让不带客户端选择参数的 `myspec doctor` 只报告工具包、工具链身份和安装操作状态，不查询客户端。显式选择 `--claude`、`--codex` 或 `--all` 时，系统 MUST 从真实受支持客户端查询来源、版本、启用状态、重复来源和重新加载要求，且不得依赖平行保存的安装清单。`--all` MUST 只报告 Claude 和 Codex；两者 MUST 使用一致的来源状态语义，并在保留既有顶层字段的同时公开规范化来源记录。
+
+#### Scenario: 用户只诊断工具自身
+
+- **WHEN** 用户不带客户端选择参数运行 `myspec doctor`
+- **THEN** 命令 MUST 报告实际工具包模式、来源、版本、工具链身份、锁和部分操作
+- **THEN** 命令 MUST NOT 查询 Claude、Codex 或 Pi，也不得要求客户端配置目录可用
 
 #### Scenario: 用户运行诊断
 
@@ -141,9 +117,9 @@
 - **THEN** 命令 MUST 报告实际安装状态和版本失配
 - **THEN** 命令 MUST NOT 修改插件、市场、模式、锁或用户文件
 
-#### Scenario: 三类客户端报告规范化来源
+#### Scenario: 受支持客户端报告规范化来源
 
-- **WHEN** Pi、Claude 或 Codex 报告一个 MySpec 来源
+- **WHEN** Claude 或 Codex 报告一个 MySpec 来源
 - **THEN** 每条来源记录 MUST 分别报告 `installed`、`registered`、`enabled`、`effective`、`sourceKind` 和 `sourceMismatch`
 - **THEN** `installed` MUST 只在宿主报告安装位置且该位置包含可识别 MySpec 包时为真
 - **THEN** `registered` MUST 只表示宿主已经识别并登记该来源，不得从安装或启用状态推导
@@ -172,13 +148,6 @@
 - **THEN** 诊断 MUST 保持 `registered` 和 `enabled` 为真
 - **THEN** 诊断 MUST 报告 `installed` 和 `effective` 为假
 
-#### Scenario: Pi 来源遵守过滤与项目优先级
-
-- **WHEN** Pi 用户配置或项目配置使用公开来源过滤规则
-- **THEN** 诊断 MUST 仅在规则允许至少一个 MySpec 技能时报告来源已启用
-- **THEN** 相对路径 MUST 以拥有该路径的设置文件为基准解析
-- **THEN** 受信任项目来源 MUST 按项目优先级决定实际生效状态
-
 #### Scenario: 顶层兼容字段与来源记录一致
 
 - **WHEN** 诊断同时返回既有顶层字段和规范化来源记录
@@ -186,7 +155,7 @@
 - **THEN** 顶层启用状态和启用来源投影 MUST NOT 与规范化来源记录矛盾
 ### Requirement: 生命周期命令选择 Codex 配置目录
 
-系统 MUST 让 `myspec doctor`、`myspec init --codex`、`myspec init --all` 和 `myspec update` 使用统一的 Codex 配置目录选择：显式 `--codex-home` 优先；继承的 Orca 临时目录 MUST 回退到用户默认 Codex 目录；非 Orca 自定义目录 MUST 保持有效；Codex 子进程和配置文件读写 MUST 使用同一解析结果；不可用的显式目录 MUST 返回非零且不得静默回退。诊断 MUST 报告实际目录和选择来源。
+系统 MUST 让选择 Codex 的 `myspec doctor --codex`、`myspec doctor --all`、`myspec init --codex`、`myspec init --all` 和 `myspec update` 使用统一的 Codex 配置目录选择：显式 `--codex-home` 优先；继承的 Orca 临时目录 MUST 回退到用户默认 Codex 目录；非 Orca 自定义目录 MUST 保持有效；Codex 子进程和配置文件读写 MUST 使用同一解析结果；不可用的显式目录 MUST 返回非零且不得静默回退。诊断 MUST 报告实际目录和选择来源。
 
 #### Scenario: Orca 临时目录回退
 
@@ -204,7 +173,7 @@
 - **THEN** 命令 MUST 返回非零、可操作错误，且 MUST NOT 改用其他目录
 ### Requirement: 更新阻断未迁移的旧来源
 
-系统 MUST 让 `myspec update` 在查询最新版本、创建待处理状态、安装软件包或写入客户端之前检查 Pi、Claude 和 Codex 的 MySpec 来源。用户级旧来源或仍启用的项目级旧来源存在时，`update` MUST 返回非零结果，报告实际受影响客户端及可直接执行的 `init` 迁移命令，并 MUST NOT 自动迁移。项目级旧来源经 `init --pi` 按既有契约禁用后，`update` MUST 放行；完成迁移后再次运行 `update` MUST 刷新稳定来源并运行只读诊断。
+系统 MUST 让 `myspec update` 在查询最新版本、创建待处理状态、安装软件包或写入客户端之前检查 Claude 和 Codex 的 MySpec 来源。受支持客户端的旧插件记录存在时，`update` MUST 返回非零结果，报告实际受影响客户端及可直接执行的 `init` 迁移命令，并 MUST NOT 自动迁移。完成迁移后再次运行 `update` MUST 刷新稳定来源并运行只读诊断。
 
 #### Scenario: 旧来源阻断且保持状态不变
 
@@ -216,11 +185,6 @@
 
 - **WHEN** 用户按提示完成 `init` 迁移并重新运行 `myspec update`
 - **THEN** 命令 MUST 刷新稳定来源并返回最终只读诊断结果
-
-#### Scenario: 项目级旧来源保护
-
-- **WHEN** 项目级旧来源已按 `init --pi` 既有契约禁用且仍保留在项目配置中
-- **THEN** `myspec update` MUST NOT 再次阻断，且 MUST 保留该项目配置
 ### Requirement: MySpec 开发工具身份限定于可复现实现
 
 MySpec（自有规格）MUST 在开发模式公开由实际受控运行与打包内容决定的稳定实现身份，并只在远端源码能够重建相同实现时公开可复现源码提交。普通规格、测试、工具链记录、生成工作流和仓库配置 MUST NOT 改变该实现身份；MySpec 插件实现或共享生命周期实现发生变化时 MUST 改变该身份。开发模式切换 MUST 在 npm Link（npm 本地链接）前拒绝脏源码或无法由当前远端分支重建的实现。
@@ -249,3 +213,37 @@ MySpec（自有规格）MUST 在开发模式公开由实际受控运行与打包
 - **WHEN** 用户请求切换到包含未提交实现变化、仅本地实现提交或当前远端分支已无法到达的实现源码
 - **THEN** `myspec init --dev` MUST 在改变 npm Link 或客户端来源前返回非零结果
 - **THEN** 系统 MUST NOT 公开一个看似可复现的源码提交
+### Requirement: MySpec 初始化受支持 Agent 的统一来源
+
+系统 MUST 通过 `myspec init --claude`、`--codex` 或 `--all` 初始化对应 Agent（代理）；Claude 和 Codex MUST 登记包内自包含单插件市场。Pi（编码助手）客户端选择不再受支持；系统 MUST 拒绝 `init --pi` 和 `doctor --pi`，且 MUST NOT 安装或调用 Pi。
+
+#### Scenario: 用户显式初始化一个不可用的 Agent
+
+- **WHEN** 用户显式选择的 Claude 或 Codex 不可用
+- **THEN** 初始化 MUST 失败且不得安装该 Agent
+
+#### Scenario: 用户初始化所有 Agent
+
+- **WHEN** 用户运行 `myspec init --all`
+- **THEN** `--all` MUST 只包含 Claude 和 Codex
+- **THEN** 系统 MUST 跳过并报告不可用客户端，且继续初始化其他可用客户端
+
+#### Scenario: 初始化发现旧 MySpec 来源
+
+- **WHEN** 新统一来源已启用并验证，且 Agent 中存在 Legacy MySpec Source（旧 MySpec 来源）
+- **THEN** 系统 MUST 精确移除用户级旧 MySpec 来源或旧插件记录
+- **THEN** Claude MUST 在卸载旧插件时保留该插件的持久数据
+- **THEN** Codex MUST 删除旧插件记录及其对应缓存，并保留无关缓存
+- **THEN** 系统 MUST NOT 删除共享市场、市场订阅、无关插件、源码目录或用户文件
+
+#### Scenario: 初始化未发现旧 MySpec 来源
+
+- **WHEN** 对应 Agent 不存在 Legacy MySpec Source（旧 MySpec 来源）
+- **THEN** 初始化 MUST 成功且不得调用旧来源删除命令
+- **THEN** 重复初始化 MUST 保持幂等
+
+#### Scenario: 初始化报告旧来源处理结果
+
+- **WHEN** 单客户端初始化或 `myspec init --all` 完成
+- **THEN** Claude 和 Codex 结果 MUST 通过 `removedLegacyPlugins` 报告已删除旧插件
+- **THEN** 没有对应处理结果时字段 MUST 返回空数组

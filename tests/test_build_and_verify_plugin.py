@@ -2695,6 +2695,7 @@ def test_build_and_verify_full_performance_report_matrix(
     writes_report: bool,
     warns: bool,
 ) -> None:
+    monkeypatch.setenv("BUILD_AND_VERIFY_EXECUTION_CONTEXT", "cloud")
     project = tmp_path / "project"
     project.mkdir()
     verify_config = {"fullBudgetSeconds": budget} if budget is not None else None
@@ -2810,6 +2811,7 @@ def test_local_budget_warning_exemption_policy_matrix(
 def test_build_and_verify_performance_report_schema_is_exact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("BUILD_AND_VERIFY_EXECUTION_CONTEXT", "cloud")
     project = tmp_path / "project"
     project.mkdir()
     write_runner_config(

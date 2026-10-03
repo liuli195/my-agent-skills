@@ -1318,3 +1318,159 @@ def test_packed_build_and_verify_dev_identity_controls_public_verify_cache(
         "ran",
         "ran",
     ]
+
+
+@pytest.mark.parametrize("tool", ("myspec", "build-and-verify"))
+def test_packed_tools_bare_doctor_reports_only_package(tmp_path: Path, tool: str) -> None:
+    import tests.test_my_spec as myspec
+
+    if tool == "myspec":
+        executable, package = myspec.install_packed_myspec(tmp_path)
+        prefix = myspec.npm_prefix_for(package)
+    else:
+        _, prefix, executable = _installed_build_and_verify(tmp_path)
+    pi_bin, pi_log = myspec.install_removed_pi_command(tmp_path / "removed-pi")
+    claude_bin, claude_log, claude_state = myspec.install_fake_claude(tmp_path / "fake-claude")
+    codex_bin, codex_log, codex_state = myspec.install_fake_codex(tmp_path / "fake-codex")
+    env = myspec.isolated_myspec_env(tmp_path, prefix, pi_bin, claude_bin, codex_bin)
+    invalid_home = tmp_path / "invalid-codex-home"
+    invalid_home.write_text("not a directory", encoding="utf-8")
+    env.update(CODEX_HOME=str(invalid_home), MYSPEC_PI_LOG=str(pi_log),
+               MYSPEC_CLAUDE_LOG=str(claude_log), MYSPEC_CLAUDE_STATE=str(claude_state),
+               MYSPEC_CODEX_LOG=str(codex_log), MYSPEC_CODEX_STATE=str(codex_state))
+    env["BUILD_AND_VERIFY_PYTHON"] = sys.executable
+    diagnosed = subprocess.run([str(executable), "doctor"], env=env, text=True, capture_output=True, check=False)
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    report = json.loads(diagnosed.stdout)
+    assert report["toolchain"]["mode"] == "release"
+    assert report["npm"]["versionMismatch"] is False
+    assert report["installation"]["pendingOperation"] is None
+    assert not {"pi", "claude", "codex"}.intersection(report)
+    assert not any(log.exists() for log in (pi_log, claude_log, codex_log))
+    installed_package = prefix / ("node_modules" if os.name == "nt" else "lib/node_modules") / "@liuli195" / tool
+    manifest = json.loads((installed_package / "package.json").read_text())
+    assert "pi" not in manifest and "pi-package" not in manifest.get("keywords", [])
+
+
+
+@pytest.mark.parametrize("tool", ("myspec", "build-and-verify"))
+def test_packed_tools_all_and_removed_pi_options(tmp_path: Path, tool: str) -> None:
+    import tests.test_my_spec as myspec
+
+    if tool == "myspec":
+        executable, package = myspec.install_packed_myspec(tmp_path)
+        prefix = myspec.npm_prefix_for(package)
+    else:
+        _, prefix, executable = _installed_build_and_verify(tmp_path)
+    env = myspec.isolated_myspec_env(tmp_path, prefix)
+    env["BUILD_AND_VERIFY_PYTHON"] = sys.executable
+    for command in ("doctor", "init"):
+        removed = subprocess.run([str(executable), command, "--pi"], env=env, text=True, capture_output=True, check=False)
+        assert removed.returncode == 2, removed.stdout + removed.stderr
+        assert "error:" in removed.stderr
+        selected = subprocess.run([str(executable), command, "--all"], env=env, text=True, capture_output=True, check=False)
+        assert selected.returncode == 0, selected.stderr
+        report = json.loads(selected.stdout)
+        assert "pi" not in report
+        assert {"claude", "codex"}.issubset(report)
+
+
+@pytest.mark.parametrize("tool", ("myspec", "build-and-verify"))
+def test_packed_tools_reject_legacy_pi_pending_before_writes(tmp_path: Path, tool: str) -> None:
+    import tests.test_my_spec as myspec
+
+    if tool == "myspec":
+        executable, package = myspec.install_packed_myspec(tmp_path)
+        prefix = myspec.npm_prefix_for(package)
+        release_tarball = next((tmp_path / "package").glob("*.tgz"))
+    else:
+        _, prefix, executable = _installed_build_and_verify(tmp_path)
+        package = prefix / ("node_modules" if os.name == "nt" else "lib/node_modules") / "@liuli195" / tool
+        release_tarball = next((Path(_installed_template.name) / "package").glob("*.tgz"))
+    npm_bin, npm_log = myspec.install_fake_npm(tmp_path / "fake-npm", release_tarball)
+    env = myspec.isolated_myspec_env(tmp_path, prefix, npm_bin)
+    env.update(BUILD_AND_VERIFY_PYTHON=sys.executable, MYSPEC_NPM_LOG=str(npm_log),
+               MYSPEC_NPM_FAIL_INSTALL="1", MYSPEC_RELEASE_TARBALL=str(release_tarball))
+    pending = {"command": "update", "targetVersion": "99.0.0", "integrations": ["pi", "claude"],
+               "completed": ["preflight"], "enabled": {"pi": True, "claude": False}, "scopes": {}}
+    state_path = Path(env["HOME"]) / f".{tool}" / "state.json"
+    pi_settings = Path(env["HOME"]) / ".pi" / "agent" / "settings.json"
+    myspec.write(state_path, json.dumps({"mode": "release", "pendingOperation": pending}, indent=2))
+    myspec.write(pi_settings, '{"packages": ["old-pi-source"], "other": "keep"}')
+    before = (state_path.read_bytes(), pi_settings.read_bytes(), (package / "package.json").read_bytes())
+    diagnosed = subprocess.run([str(executable), "doctor"], env=env, text=True, capture_output=True, check=False)
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    assert json.loads(diagnosed.stdout)["installation"]["pendingOperation"]["integrations"] == ["pi", "claude"]
+    rejected = subprocess.run([str(executable), "update"], env=env, text=True, capture_output=True, check=False)
+    assert rejected.returncode == 1
+    assert "error: invalid_update_state" in rejected.stderr
+    assert (state_path.read_bytes(), pi_settings.read_bytes(), (package / "package.json").read_bytes()) == before
+    assert not npm_log.exists() or npm_log.read_text() == ""
+
+
+def test_packed_myspec_update_ignores_removed_pi_client(tmp_path: Path) -> None:
+    import tests.test_my_spec as myspec
+
+    executable, package = myspec.install_packed_myspec(tmp_path)
+    tarball = next((tmp_path / "package").glob("*.tgz"))
+    npm_bin, npm_log = myspec.install_fake_npm(tmp_path / "fake-npm", tarball)
+    pi_bin, pi_log = myspec.install_removed_pi_command(tmp_path / "fake-pi")
+    env = myspec.isolated_myspec_env(tmp_path, myspec.npm_prefix_for(package), npm_bin, pi_bin)
+    env.update(MYSPEC_NPM_LOG=str(npm_log), MYSPEC_PI_LOG=str(pi_log), MYSPEC_REAL_NPM=str(shutil.which("npm")))
+    settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    myspec.write(settings, '{"packages": "unsupported-old-configuration"}')
+    before = settings.read_bytes()
+    updated = subprocess.run([str(executable), "update"], env=env, text=True, capture_output=True, check=False)
+    assert updated.returncode == 0, updated.stderr
+    report = json.loads(updated.stdout)
+    assert "pi" not in report and "pi" not in report["doctor"]
+    assert settings.read_bytes() == before
+    assert not pi_log.exists() or pi_log.read_text() == ""
+
+
+@pytest.mark.parametrize("tool", ("myspec", "build-and-verify"))
+def test_packed_tools_supported_clients_initialize_and_resume_update(tmp_path: Path, tool: str) -> None:
+    import tests.test_my_spec as myspec
+
+    if tool == "myspec":
+        executable, package = myspec.install_packed_myspec(tmp_path)
+        prefix = myspec.npm_prefix_for(package)
+    else:
+        _, prefix, executable = _installed_build_and_verify(tmp_path)
+        package = prefix / ("node_modules" if os.name == "nt" else "lib/node_modules") / "@liuli195" / tool
+    version = json.loads((package / "package.json").read_text())["version"]
+    claude_bin, claude_log, claude_state = myspec.install_fake_claude(tmp_path / "fake-claude")
+    codex_bin, codex_log, codex_state = myspec.install_fake_codex(tmp_path / "fake-codex")
+    pi_bin, pi_log = myspec.install_removed_pi_command(tmp_path / "removed-pi")
+    env = myspec.isolated_myspec_env(tmp_path, prefix, claude_bin, codex_bin, pi_bin)
+    codex_home = Path(env["HOME"]) / ".codex"
+    codex_home.mkdir()
+    env.update(BUILD_AND_VERIFY_PYTHON=sys.executable, MYSPEC_CLAUDE_LOG=str(claude_log),
+               MYSPEC_CLAUDE_STATE=str(claude_state), MYSPEC_CLAUDE_HOME=str(Path(env["HOME"]) / ".claude"),
+               MYSPEC_CODEX_LOG=str(codex_log), MYSPEC_CODEX_STATE=str(codex_state),
+               CODEX_HOME=str(codex_home), MYSPEC_PI_LOG=str(pi_log))
+    myspec.write(claude_state, '{"marketplaces": [], "plugins": []}')
+    myspec.write(codex_state, '{"marketplaces": [], "installed": [], "available": []}')
+    initialized = subprocess.run([str(executable), "init", "--all"], env=env, text=True, capture_output=True, check=False)
+    assert initialized.returncode == 0, initialized.stderr
+    assert set(json.loads(initialized.stdout)) == {"claude", "codex"}
+    diagnosed = subprocess.run([str(executable), "doctor", "--all"], env=env, text=True, capture_output=True, check=False)
+    assert diagnosed.returncode == 0, diagnosed.stderr
+    report = json.loads(diagnosed.stdout)
+    for client in ("claude", "codex"):
+        assert report[client]["version"] == version
+        assert report[client]["skills"]
+        assert report[client]["sources"][0]["effective"] is True
+    state_path = Path(env["HOME"]) / f".{tool}" / "state.json"
+    myspec.write(state_path, json.dumps({"mode": "release", "pendingOperation": {
+        "command": "update", "targetVersion": version, "integrations": ["claude", "codex"],
+        "completed": ["preflight", "npm"], "enabled": {"claude": False, "codex": False}, "scopes": {"claude": "user"}}}))
+    updated = subprocess.run([str(executable), "update"], env=env, text=True, capture_output=True, check=False)
+    assert updated.returncode == 0, updated.stderr
+    result = json.loads(updated.stdout)
+    assert result["claude"] == result["codex"] == "refreshed"
+    assert "pi" not in result and "pi" not in result["doctor"]
+    assert result["doctor"]["claude"]["enabled"] is False
+    assert result["doctor"]["codex"]["enabled"] is False
+    assert "pendingOperation" not in json.loads(state_path.read_text())
+    assert not pi_log.exists()

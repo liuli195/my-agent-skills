@@ -13,18 +13,12 @@ description: "清理已合并 PR 的 head branch（源分支），同步 base br
 
 cleanup 不查询 GitHub Branch Protection（GitHub 分支保护）或 Rulesets（规则集），也不自动配置远端保护规则；它只保证不删除 base branch。
 
-## Pi 入口
-
-在 Pi（编码助手）中，调用 `pr_flow`（PR Flow 工具）：
-
-```json
-{"argv":["cleanup","--project",".","--pr","<number>"]}
-```
-
 ## 命令
 
-源码仓库维护者或其他宿主继续使用：
+以本次加载的技能安装目录为基准，使用 `../pr-flow/scripts/pr_flow.py`，确认脚本存在。
+
+下方填入本技能安装目录和目标项目目录的绝对路径；`--project` 始终指向用户目标项目，不指向插件目录。不切换当前目录；无法确认路径或脚本不存在时，停止并报告。
 
 ```bash
-python plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py cleanup --project . --pr <number>
+python "<本技能安装目录>/../pr-flow/scripts/pr_flow.py" cleanup --project "<目标项目目录>" --pr <number>
 ```

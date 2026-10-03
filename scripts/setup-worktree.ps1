@@ -108,6 +108,7 @@ try {
 
     npm ci
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    New-Item -ItemType Directory -Path (Join-Path $projectRoot 'node_modules') -Force | Out-Null
     Get-DependencyFingerprint $projectRoot $nodeManifests | Set-Content (Join-Path $projectRoot 'node_modules\.package-lock.sha256') -Encoding ascii
 
     if (-not (Test-Path $python)) {

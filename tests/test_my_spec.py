@@ -324,7 +324,7 @@ def _run_in_process_subprocess(
             )
         except AssertionError:
             pass
-    if name in {"pi", "claude", "codex", "git"}:
+    if name in {"claude", "codex", "git"}:
         script = _launcher_script(executable)
         if script is not None:
             return _run_python_script(
@@ -866,11 +866,10 @@ _PRIVATE_LIGHTWEIGHT_INSTALL_TESTS = {
     "test_packed_myspec_update_preflights_installed_clients_before_package_write",
     "test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes",
     "test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_missing",
-    "test_packed_myspec_update_preserves_pi_effective_state_under_project_override",
     "test_packed_myspec_update_recovers_external_success_before_bookkeeping",
     "test_packed_myspec_preserves_lock_when_process_status_is_unknown",
     "test_packed_myspec_update_rejects_dev_mode_and_forged_resume",
-    "test_packed_myspec_switches_pi_between_development_and_saved_release",
+    "test_packed_myspec_switches_package_between_development_and_saved_release",
     "test_packed_myspec_requires_release_registration_before_first_codex_dev_init",
     "test_packed_myspec_refreshes_enabled_codex_across_global_mode_switches",
     "test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_codex",
@@ -878,14 +877,9 @@ _PRIVATE_LIGHTWEIGHT_INSTALL_TESTS = {
     "test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_claude",
     "test_packed_myspec_claude_reinstall_failure_does_not_report_refreshed",
     "test_packed_myspec_release_install_failure_stays_in_dev_and_retries",
-    "test_packed_myspec_mode_switch_does_not_install_a_disabled_pi_integration",
     "test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_state",
     "test_packed_myspec_doctor_reports_partial_update_read_only",
-    "test_packed_myspec_initializes_and_diagnoses_one_pi_source",
-    "test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest",
     "test_packed_myspec_doctor_reports_actual_package_version_mismatch",
-    "test_packed_myspec_pi_init_enables_a_verified_stable_duplicate_before_cleanup",
-    "test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_file",
 }
 
 
@@ -932,111 +926,18 @@ def run_public_spec_cli(*args: object) -> subprocess.CompletedProcess[str]:
     )
 
 
-def install_fake_pi(root: Path) -> tuple[Path, Path]:
+def install_removed_pi_command(root: Path) -> tuple[Path, Path]:
     bin_dir = root / "bin"
     bin_dir.mkdir(parents=True)
     script = root / "fake_pi.py"
     log = root / "pi.log"
-    write(
-        script,
-        """import json
-import os
-import sys
-from pathlib import Path
-
-agent_dir = Path(os.environ["PI_CODING_AGENT_DIR"])
-user_settings = agent_dir / "settings.json"
-project_settings = Path.cwd() / ".pi" / "settings.json"
-
-def load(path):
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-
-def canonical(path):
-    return Path(os.path.realpath(os.path.abspath(path)))
-
-def project_trusted():
-    override = os.environ.get("MYSPEC_PI_PROJECT_TRUST_OVERRIDE")
-    if override is not None:
-        return override == "true"
-    decisions = load(agent_dir / "trust.json")
-    current = canonical(Path.cwd())
-    while True:
-        decision = decisions.get(str(current))
-        if isinstance(decision, bool):
-            return decision
-        if current.parent == current:
-            break
-        current = current.parent
-    return load(user_settings).get("defaultProjectTrust") == "always"
-
-def source(item):
-    return item if isinstance(item, str) else item.get("source")
-
-def resolved(raw, settings_path):
-    mapped = json.loads(os.environ.get("MYSPEC_PI_INSTALLED_PATHS", "{}"))
-    if raw in mapped:
-        return Path(mapped[raw])
-    path = Path(raw).expanduser()
-    return Path(os.path.abspath(path if path.is_absolute() else settings_path.parent / path))
-
-with Path(os.environ["MYSPEC_PI_LOG"]).open("a", encoding="utf-8") as log:
-    log.write(json.dumps({"args": sys.argv[1:], "cwd": str(Path.cwd())}) + "\\n")
-if sys.argv[1:2] == ["install"]:
-    settings = load(user_settings)
-    packages = settings.setdefault("packages", [])
-    raw = sys.argv[2]
-    if not any(source(item) == raw for item in packages):
-        packages.append(raw)
-    user_settings.parent.mkdir(parents=True, exist_ok=True)
-    user_settings.write_text(json.dumps(settings, indent=2) + "\\n", encoding="utf-8")
-    raise SystemExit(0)
-if sys.argv[1:2] == ["remove"]:
-    if os.environ.get("MYSPEC_PI_REMOVE_FAIL") == "1":
-        print("simulated remove failure", file=sys.stderr)
-        raise SystemExit(1)
-    settings = load(user_settings)
-    raw = sys.argv[2]
-    if os.environ.get("MYSPEC_PI_REMOVE_NOOP") != "1":
-        settings["packages"] = [item for item in settings.get("packages", []) if source(item) != raw]
-        user_settings.write_text(json.dumps(settings, indent=2) + "\\n", encoding="utf-8")
-    raise SystemExit(0)
-if sys.argv[1:2] == ["list"]:
-    paths = [("User packages:", user_settings)]
-    if project_trusted():
-        paths.append(("Project packages:", project_settings))
-    shown = False
-    for label, path in paths:
-        packages = load(path).get("packages", [])
-        if not packages:
-            continue
-        if shown:
-            print()
-        print(label)
-        shown = True
-        for item in packages:
-            raw = source(item)
-            if not isinstance(raw, str):
-                continue
-            omitted = json.loads(os.environ.get("MYSPEC_PI_LIST_OMIT_SOURCES", "[]"))
-            if raw in omitted:
-                continue
-            package = resolved(raw, path)
-            print("  " + raw + (" (filtered)" if isinstance(item, dict) else ""))
-            source_only = json.loads(os.environ.get("MYSPEC_PI_LIST_SOURCE_ONLY", "[]"))
-            if raw not in source_only:
-                print("    " + str(package))
-    if not shown:
-        print("No packages installed.")
-    raise SystemExit(0)
-raise SystemExit(2)
-""",
-    )
-    if sys.platform == "win32":
-        launcher = bin_dir / "pi.cmd"
-        write(launcher, f'@"{sys.executable}" "{script}" %*')
-    else:
-        launcher = bin_dir / "pi"
-        write(launcher, f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"')
+    write(script, "import os, sys\nfrom pathlib import Path\n"
+          'Path(os.environ["MYSPEC_PI_LOG"]).write_text("unexpected Pi invocation", encoding="utf-8")\n'
+          "raise SystemExit(99)")
+    launcher = bin_dir / ("pi.cmd" if os.name == "nt" else "pi")
+    write(launcher, f'@"{sys.executable}" "{script}" %*' if os.name == "nt"
+          else f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"')
+    if os.name != "nt":
         launcher.chmod(0o755)
     return bin_dir, log
 
@@ -1426,24 +1327,7 @@ def source_case_report(
     if installed and scenario != "no-source":
         shutil.copytree(installed_package, source_root)
 
-    if client == "pi":
-        client_bin, log = install_fake_pi(root / "fake-pi")
-        env = isolated_myspec_env(root, prefix, client_bin)
-        env["MYSPEC_PI_LOG"] = str(log)
-        stable_source = str(installed_package)
-        raw_source = str(source_root) if legacy else stable_source
-        item: object = {"source": raw_source, "skills": []} if not enabled else raw_source
-        if scenario == "no-source":
-            item = str(root / "unrelated")
-        write(
-            Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
-            json.dumps({"packages": [item]}, indent=2),
-        )
-        if not installed and scenario != "no-source":
-            env["MYSPEC_PI_LIST_SOURCE_ONLY"] = json.dumps([raw_source])
-        if mismatch:
-            env["MYSPEC_PI_INSTALLED_PATHS"] = json.dumps({raw_source: str(source_root)})
-    elif client == "claude":
+    if client == "claude":
         client_bin, log, state_path = install_fake_claude(root / "fake-claude")
         env = isolated_myspec_env(root, prefix, client_bin)
         env.update(
@@ -1543,7 +1427,7 @@ def source_case_report(
     return json.loads(diagnosed.stdout)[client]
 
 
-@pytest.mark.parametrize("client", ("pi", "claude", "codex"))
+@pytest.mark.parametrize("client", ("claude", "codex"))
 def test_packed_myspec_clients_run_shared_source_cases(tmp_path: Path, client: str) -> None:
     installed = tmp_path / "installed"
     installed.mkdir()
@@ -1791,10 +1675,9 @@ def test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes(tmp_pa
     old_tarball = next((installed / "package").glob("*.tgz"))
     new_tarball = pack_myspec_version(tmp_path, NEXT_VERSION)
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", old_tarball)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
     codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, pi_bin, claude_bin, codex_bin)
+    env = isolated_myspec_env(tmp_path, prefix, npm_bin, claude_bin, codex_bin)
     codex_home = tmp_path / "codex home"
     codex_home.mkdir()
     env.update(
@@ -1803,7 +1686,6 @@ def test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes(tmp_pa
             "MYSPEC_REAL_NPM": str(shutil.which("npm")),
             "MYSPEC_RELEASE_TARBALL": str(new_tarball),
             "MYSPEC_NPM_LATEST": NEXT_VERSION,
-            "MYSPEC_PI_LOG": str(pi_log),
             "MYSPEC_CLAUDE_LOG": str(claude_log),
             "MYSPEC_CLAUDE_STATE": str(claude_state),
             "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
@@ -1813,8 +1695,6 @@ def test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes(tmp_pa
         }
     )
     legacy_source = str(PLUGIN_ROOT)
-    user_settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    write(user_settings, json.dumps({"packages": [str(installed_package), legacy_source]}, indent=2))
     write(
         claude_state,
         json.dumps(
@@ -1899,7 +1779,6 @@ def test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes(tmp_pa
         '[plugins."my-spec@my-agent-skills-marketplace"]\nenabled = true\n',
     )
     before = {
-        "pi": user_settings.read_bytes(),
         "claude": claude_state.read_bytes(),
         "codex": codex_state.read_bytes(),
         "config": codex_config.read_bytes(),
@@ -1909,7 +1788,6 @@ def test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes(tmp_pa
 
     assert blocked.returncode == 1
     assert "error: legacy_source_migration_required" in blocked.stderr
-    assert "pi: run myspec init --pi" in blocked.stderr
     assert "claude: run myspec init --claude" in blocked.stderr
     codex_command = (
         subprocess.list2cmdline(["myspec", "init", "--codex", "--codex-home", str(codex_home)])
@@ -1919,7 +1797,6 @@ def test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes(tmp_pa
     assert f"codex: run {codex_command}" in blocked.stderr
     assert not any(json.loads(line)[:2] == ["install", "--global"] for line in npm_log.read_text(encoding="utf-8").splitlines())
     assert not (Path(env["HOME"]) / ".myspec" / "state.json").exists()
-    assert user_settings.read_bytes() == before["pi"]
     assert claude_state.read_bytes() == before["claude"]
     assert codex_state.read_bytes() == before["codex"]
     assert codex_config.read_bytes() == before["config"]
@@ -1941,17 +1818,15 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
     old_tarball = next((installed / "package").glob("*.tgz"))
     new_tarball = pack_myspec_version(tmp_path, NEXT_VERSION)
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", old_tarball)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
     codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, pi_bin, claude_bin, codex_bin)
+    env = isolated_myspec_env(tmp_path, prefix, npm_bin, claude_bin, codex_bin)
     env.update(
         {
             "MYSPEC_NPM_LOG": str(npm_log),
             "MYSPEC_REAL_NPM": str(shutil.which("npm")),
             "MYSPEC_RELEASE_TARBALL": str(new_tarball),
             "MYSPEC_NPM_LATEST": NEXT_VERSION,
-            "MYSPEC_PI_LOG": str(pi_log),
             "MYSPEC_CLAUDE_LOG": str(claude_log),
             "MYSPEC_CLAUDE_STATE": str(claude_state),
             "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
@@ -1959,13 +1834,6 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
             "MYSPEC_CODEX_LOG": str(codex_log),
             "MYSPEC_CODEX_STATE": str(codex_state),
         }
-    )
-    write(
-        Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
-        json.dumps(
-            {"packages": [{"source": str(installed_package), "skills": []}]},
-            indent=2,
-        ),
     )
     write(
         claude_state,
@@ -2022,7 +1890,6 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
         Path(env["CODEX_HOME"]) / "config.toml",
         '[plugins."my-spec@myspec"]\nenabled = false\n',
     )
-    pi_before = (Path(env["PI_CODING_AGENT_DIR"]) / "settings.json").read_bytes()
 
     interrupted = run_cli(
         executable,
@@ -2037,13 +1904,11 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
     assert updated.returncode == 0, updated.stderr
     output = json.loads(updated.stdout)
     assert output["version"] == NEXT_VERSION
-    assert output["pi"] == "refreshed"
     assert output["claude"] == "refreshed"
     assert output["codex"] == "refreshed"
-    assert output["doctor"]["pi"]["enabled"] is False
     assert output["doctor"]["claude"]["enabled"] is False
     assert output["doctor"]["codex"]["enabled"] is False
-    for client in ("pi", "claude", "codex"):
+    for client in ("claude", "codex"):
         stable_source = next(
             source
             for source in output["doctor"][client]["sources"]
@@ -2052,7 +1917,6 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
         assert stable_source["enabled"] is False
     assert output["doctor"]["claude"]["version"] == NEXT_VERSION
     assert output["doctor"]["codex"]["version"] == NEXT_VERSION
-    assert (Path(env["PI_CODING_AGENT_DIR"]) / "settings.json").read_bytes() == pi_before
     claude_calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
     assert ["plugin", "uninstall", "my-spec@myspec", "--scope", "user", "--keep-data"] in claude_calls
     assert ["plugin", "install", "my-spec@myspec", "--scope", "user"] in claude_calls
@@ -2060,85 +1924,6 @@ def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_mis
     codex_calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
     assert ["plugin", "remove", "my-spec@myspec", "--json"] in codex_calls
     assert ["plugin", "add", "my-spec@myspec", "--json"] in codex_calls
-
-
-def test_packed_myspec_update_preserves_pi_effective_state_under_project_override(
-    tmp_path: Path,
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    prefix = npm_prefix_for(installed_package)
-    old_tarball = next((installed / "package").glob("*.tgz"))
-    new_tarball = pack_myspec_version(tmp_path, NEXT_VERSION)
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", old_tarball)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, pi_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(new_tarball),
-            "MYSPEC_NPM_LATEST": NEXT_VERSION,
-            "MYSPEC_PI_LOG": str(pi_log),
-            "MYSPEC_PI_PROJECT_TRUST_OVERRIDE": "true",
-        }
-    )
-    project = tmp_path / "consumer"
-    project.mkdir()
-    legacy_project = project / "plugins" / "my-spec"
-    shutil.copytree(PLUGIN_ROOT, legacy_project)
-    user_settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    project_settings = project / ".pi" / "settings.json"
-    write(user_settings, json.dumps({"packages": [str(installed_package)]}, indent=2))
-    write(
-        project_settings,
-        json.dumps(
-            {
-                "packages": [
-                    {"source": str(installed_package), "skills": []},
-                    str(legacy_project),
-                ]
-            },
-            indent=2,
-        ),
-    )
-    blocked = run_cli(executable, "update", env=env, cwd=project)
-    assert blocked.returncode == 1
-    assert "error: legacy_source_migration_required: pi: run myspec init --pi" in blocked.stderr
-
-    initialized = run_cli(executable, "init", "--pi", env=env, cwd=project)
-    assert initialized.returncode == 0, initialized.stderr
-    user_before = user_settings.read_bytes()
-    project_before = project_settings.read_bytes()
-
-    diagnosed = run_cli(executable, "doctor", "--pi", env=env, cwd=project)
-
-    assert diagnosed.returncode == 0, diagnosed.stderr
-    before = json.loads(diagnosed.stdout)["pi"]
-    assert before["enabled"] is True
-    assert before["skills"] == []
-    assert [
-        (source["scope"], source["enabled"], source["effective"])
-        for source in before["sources"]
-        if source["sourceKind"] == "stable"
-    ] == [("user", True, False), ("project", False, False)]
-
-    updated = run_cli(executable, "update", env=env, cwd=project)
-
-    assert updated.returncode == 0, updated.stderr
-    output = json.loads(updated.stdout)
-    assert output["pi"] == "refreshed"
-    after = output["doctor"]["pi"]
-    assert after["enabled"] is True
-    assert after["skills"] == []
-    assert [
-        (source["scope"], source["enabled"], source["effective"])
-        for source in after["sources"]
-        if source["sourceKind"] == "stable"
-    ] == [("user", True, False), ("project", False, False)]
-    assert user_settings.read_bytes() == user_before
-    assert project_settings.read_bytes() == project_before
 
 
 def test_packed_myspec_update_recovers_external_success_before_bookkeeping(
@@ -2152,10 +1937,9 @@ def test_packed_myspec_update_recovers_external_success_before_bookkeeping(
     marker = tmp_path / "new-cli.log"
     new_tarball = pack_myspec_version(tmp_path, NEXT_VERSION, marker)
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", old_tarball)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
     codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, pi_bin, claude_bin, codex_bin)
+    env = isolated_myspec_env(tmp_path, prefix, npm_bin, claude_bin, codex_bin)
     env.update(
         {
             "MYSPEC_NPM_LOG": str(npm_log),
@@ -2163,7 +1947,6 @@ def test_packed_myspec_update_recovers_external_success_before_bookkeeping(
             "MYSPEC_RELEASE_TARBALL": str(old_tarball),
             "MYSPEC_NPM_LATEST": NEXT_VERSION,
             "MYSPEC_REEXEC_MARKER": str(marker),
-            "MYSPEC_PI_LOG": str(pi_log),
             "MYSPEC_CLAUDE_LOG": str(claude_log),
             "MYSPEC_CLAUDE_STATE": str(claude_state),
             "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
@@ -2196,7 +1979,6 @@ def test_packed_myspec_update_recovers_external_success_before_bookkeeping(
     output = json.loads(retried.stdout)
     assert output["version"] == NEXT_VERSION
     assert output["doctor"]["cliVersion"] == NEXT_VERSION
-    assert output["doctor"]["pi"]["version"] == NEXT_VERSION
     assert output["doctor"]["claude"]["version"] == NEXT_VERSION
     assert output["doctor"]["codex"]["version"] == NEXT_VERSION
     assert marker.read_text(encoding="utf-8").strip()
@@ -2241,16 +2023,14 @@ def test_packed_myspec_preserves_lock_when_process_status_is_unknown(
     prefix = npm_prefix_for(installed_package)
     release_tarball = next((tmp_path / "package").glob("*.tgz"))
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     spec_ops = _load_in_process_spec_ops(installed_package / "python" / "spec_ops.py")
     monkeypatch.setitem(spec_ops.run_management.__globals__, "_pid_alive", lambda _pid: None)
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, pi_bin)
+    env = isolated_myspec_env(tmp_path, prefix, npm_bin)
     env.update(
         {
             "MYSPEC_NPM_LOG": str(npm_log),
             "MYSPEC_REAL_NPM": str(shutil.which("npm")),
             "MYSPEC_RELEASE_TARBALL": str(release_tarball),
-            "MYSPEC_PI_LOG": str(pi_log),
         }
     )
     lock_path = Path(env["HOME"]) / ".myspec" / "install.lock"
@@ -2261,11 +2041,10 @@ def test_packed_myspec_preserves_lock_when_process_status_is_unknown(
         "operationId": "unknown-process",
     }
 
-    for command in (("init", "--pi"), ("update",)):
+    for command in (("init", "--claude"), ("update",)):
         write(lock_path, json.dumps(lock, indent=2))
         before = lock_path.read_bytes()
         npm_log.write_text("", encoding="utf-8")
-        pi_log.write_text("", encoding="utf-8")
 
         rejected = run_cli(executable, *command, env=env)
 
@@ -2273,7 +2052,6 @@ def test_packed_myspec_preserves_lock_when_process_status_is_unknown(
         assert "error: install_lock_process_unknown: pid=424242" in rejected.stderr
         assert lock_path.read_bytes() == before
         assert npm_log.read_text(encoding="utf-8") == ""
-        assert pi_log.read_text(encoding="utf-8") == ""
 
 
 def test_packed_myspec_serializes_init_and_reports_locks_without_mutating_them(
@@ -2436,724 +2214,6 @@ def test_packed_myspec_update_rejects_dev_mode_and_forged_resume(tmp_path: Path)
     assert "error: invalid_update_token" in forged.stderr
     lock = json.loads((Path(env["HOME"]) / ".myspec" / "install.lock").read_text(encoding="utf-8"))
     assert lock["released"] is True
-
-
-def test_packed_myspec_initializes_and_diagnoses_one_pi_source(tmp_path: Path) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    legacy = str(REPO_ROOT / "plugins" / "my-spec")
-    unrelated = str(tmp_path / "unrelated")
-    write(
-        settings_path,
-        json.dumps(
-            {
-                "packages": [
-                    legacy,
-                    unrelated,
-                    {"source": str(installed_package), "skills": [], "autoload": False},
-                ]
-            },
-            indent=2,
-        ),
-    )
-
-    initialized = run_cli(executable, "init", "--pi", env=env)
-    assert initialized.returncode == 0, initialized.stderr
-    result = json.loads(initialized.stdout)
-    assert result == {
-        "pi": "initialized",
-        "source": str(installed_package),
-        "removedLegacySources": [legacy],
-        "disabledProjectLegacySources": [],
-        "reloadRequired": True,
-    }
-    settings = json.loads(settings_path.read_text(encoding="utf-8"))
-    assert settings["packages"] == [unrelated, {"source": str(installed_package)}]
-
-    settings_before = settings_path.read_bytes()
-    diagnosed = run_cli(executable, "doctor", "--pi", env=env)
-    assert diagnosed.returncode == 0, diagnosed.stderr
-    report = json.loads(diagnosed.stdout)
-    assert report["cliVersion"] == PACKAGE_VERSION
-    assert report["mode"] == "release"
-    assert report["source"] == str(installed_package)
-    assert report["npm"] == {
-        "stablePath": str(installed_package),
-        "realPath": str(installed_package),
-        "linked": False,
-        "packageVersion": PACKAGE_VERSION,
-        "versionMismatch": False,
-    }
-    assert report["pi"]["registered"] is True
-    assert report["pi"]["enabledSources"] == [str(installed_package)]
-    assert report["pi"]["disabledSources"] == []
-    assert report["pi"]["duplicateEnabledSources"] is False
-    assert report["pi"]["skills"] == list(SKILL_NAMES)
-    assert report["pi"]["listedSources"]
-    assert settings_path.read_bytes() == settings_before
-    assert [json.loads(line)["args"] for line in pi_log.read_text(encoding="utf-8").splitlines()] == [
-        ["list"],
-        ["remove", legacy],
-        ["list"],
-        ["list"],
-    ]
-
-    shutil.rmtree(installed_package / "skills" / "my-spec-audit")
-    broken = run_cli(executable, "doctor", "--pi", env=env)
-    assert broken.returncode == 0, broken.stderr
-    assert json.loads(broken.stdout)["pi"]["skills"] == list(SKILL_NAMES[:-1])
-
-    shutil.rmtree(installed_package / "skills")
-    incomplete = run_cli(executable, "doctor", "--pi", env=env)
-    assert incomplete.returncode == 0, incomplete.stderr
-    incomplete_report = json.loads(incomplete.stdout)["pi"]
-    assert incomplete_report["skills"] == []
-    stable_source = next(
-        source for source in incomplete_report["sources"] if source["sourceKind"] == "stable"
-    )
-    assert stable_source["enabled"] is True
-
-
-def test_packed_myspec_pi_init_keeps_legacy_source_when_stable_source_is_unresolved(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    env["MYSPEC_PI_LIST_SOURCE_ONLY"] = json.dumps([str(installed_package)])
-    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    legacy = str(REPO_ROOT / "plugins" / "my-spec")
-    write(settings_path, json.dumps({"packages": [str(installed_package), legacy]}, indent=2))
-
-    initialized = run_cli(executable, "init", "--pi", env=env)
-
-    assert initialized.returncode == 1
-    assert "error: pi_install_missing_source" in initialized.stderr
-    assert json.loads(settings_path.read_text(encoding="utf-8"))["packages"] == [
-        str(installed_package),
-        legacy,
-    ]
-    calls = [json.loads(line)["args"] for line in pi_log.read_text(encoding="utf-8").splitlines()]
-    assert ["remove", legacy] not in calls
-
-
-def test_packed_myspec_pi_init_enables_a_verified_stable_duplicate_before_cleanup(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    unresolved_stable = os.path.relpath(installed_package, settings_path.parent)
-    env["MYSPEC_PI_LIST_SOURCE_ONLY"] = json.dumps([unresolved_stable])
-    legacy = str(REPO_ROOT / "plugins" / "my-spec")
-    write(
-        settings_path,
-        json.dumps(
-            {"packages": [unresolved_stable, str(installed_package), legacy]},
-            indent=2,
-        ),
-    )
-
-    initialized = run_cli(executable, "init", "--pi", env=env)
-
-    assert initialized.returncode == 0, initialized.stderr
-    assert json.loads(settings_path.read_text(encoding="utf-8"))["packages"] == [
-        {"source": unresolved_stable, "skills": []},
-        str(installed_package),
-    ]
-    report = json.loads(run_cli(executable, "doctor", "--pi", env=env).stdout)["pi"]
-    stable_sources = [source for source in report["sources"] if source["sourceKind"] == "stable"]
-    assert any(source["installed"] and source["enabled"] for source in stable_sources)
-
-
-def test_packed_myspec_doctor_keeps_enabled_intent_for_settings_source_missing_from_pi_list(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    env["MYSPEC_PI_LIST_OMIT_SOURCES"] = json.dumps([str(installed_package)])
-    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    write(settings_path, json.dumps({"packages": [str(installed_package)]}, indent=2))
-
-    diagnosed = run_cli(executable, "doctor", "--pi", env=env)
-    assert diagnosed.returncode == 0, diagnosed.stderr
-    report = json.loads(diagnosed.stdout)["pi"]
-    assert report["registered"] is False
-    assert report["enabledSources"] == [str(installed_package)]
-    assert report["skills"] == []
-    assert report["reloadRequired"] is True
-    assert report["listedSources"] == []
-    assert len(report["sources"]) == 1
-    assert report["sources"][0]["source"] == str(installed_package)
-    assert report["sources"][0]["installed"] is False
-    assert report["sources"][0]["effective"] is False
-    assert report["sources"][0]["enabled"] is True
-    assert report["enabled"] is True
-
-
-def test_packed_myspec_doctor_keeps_enabled_intent_for_missing_pi_source_with_exclusion(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    env["MYSPEC_PI_LIST_SOURCE_ONLY"] = json.dumps([str(installed_package)])
-    write(
-        Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
-        json.dumps(
-            {"packages": [{"source": str(installed_package), "skills": ["!my-spec-audit"]}]},
-            indent=2,
-        ),
-    )
-
-    diagnosed = run_cli(executable, "doctor", "--pi", env=env)
-
-    assert diagnosed.returncode == 0, diagnosed.stderr
-    report = json.loads(diagnosed.stdout)["pi"]
-    assert report["enabled"] is True
-    assert {field: report["sources"][0][field] for field in SOURCE_FIELDS} == {
-        "installed": False,
-        "registered": True,
-        "enabled": True,
-        "effective": False,
-        "sourceKind": "stable",
-        "sourceMismatch": False,
-    }
-    assert report["enabledSources"] == [str(installed_package)]
-
-
-def test_packed_myspec_doctor_does_not_enable_pi_source_for_unrelated_autoload_delta(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    write(
-        Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
-        json.dumps(
-            {
-                "packages": [
-                    {
-                        "source": str(installed_package),
-                        "autoload": False,
-                        "skills": ["+unrelated"],
-                    }
-                ]
-            },
-            indent=2,
-        ),
-    )
-
-    diagnosed = run_cli(executable, "doctor", "--pi", env=env)
-
-    assert diagnosed.returncode == 0, diagnosed.stderr
-    report = json.loads(diagnosed.stdout)["pi"]
-    assert report["enabled"] is False
-    assert report["enabledSources"] == []
-    assert report["disabledSources"] == [str(installed_package)]
-    assert report["sources"][0]["enabled"] is False
-    assert report["reloadRequired"] is False
-
-
-@pytest.mark.parametrize(
-    ("trust", "default_trust", "expected_skills"),
-    [
-        ({}, "ask", SKILL_NAMES),
-        ({"project": True}, "ask", ()),
-        ({"parent": True}, "ask", ()),
-        ({"parent": True, "project": False}, "always", SKILL_NAMES),
-        ({}, "always", ()),
-    ],
-    ids=("untrusted", "trusted-project", "trusted-parent", "explicit-false", "default-always"),
-)
-def test_packed_myspec_follows_project_scope_reported_by_pi_list(
-    tmp_path: Path,
-    trust: dict[str, bool],
-    default_trust: str,
-    expected_skills: tuple[str, ...],
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    agent_dir = Path(env["PI_CODING_AGENT_DIR"])
-    project_parent = tmp_path / "consumer"
-    project = project_parent / "nested"
-    project.mkdir(parents=True)
-    user_settings = agent_dir / "settings.json"
-    project_settings = project / ".pi" / "settings.json"
-    trust_path = agent_dir / "trust.json"
-    write(
-        user_settings,
-        json.dumps(
-            {"defaultProjectTrust": default_trust, "packages": [str(installed_package)]},
-            indent=2,
-        ),
-    )
-    write(
-        project_settings,
-        json.dumps(
-            {"packages": [{"source": str(installed_package), "skills": []}]},
-            indent=2,
-        ),
-    )
-    decisions = {
-        str(Path(os.path.realpath(path))): decision
-        for name, decision in trust.items()
-        for path in (project if name == "project" else project_parent,)
-    }
-    write(trust_path, json.dumps(decisions, indent=2))
-
-    project_before = project_settings.read_bytes()
-    initialized = run_cli(executable, "init", "--pi", env=env, cwd=project)
-    assert initialized.returncode == 0, initialized.stderr
-    assert project_settings.read_bytes() == project_before
-    user_before = user_settings.read_bytes()
-    trust_before = trust_path.read_bytes()
-
-    diagnosed = run_cli(executable, "doctor", "--pi", env=env, cwd=project)
-    assert diagnosed.returncode == 0, diagnosed.stderr
-    report = json.loads(diagnosed.stdout)
-    assert report["pi"]["skills"] == list(expected_skills)
-    assert report["pi"]["registered"] is True
-    assert report["pi"]["listedSources"] == (
-        [
-            {"scope": "user", "source": str(installed_package), "path": str(installed_package)},
-            {"scope": "project", "source": str(installed_package), "path": str(installed_package)},
-        ]
-        if not expected_skills
-        else [{"scope": "user", "source": str(installed_package), "path": str(installed_package)}]
-    )
-    assert user_settings.read_bytes() == user_before
-    assert project_settings.read_bytes() == project_before
-    assert trust_path.read_bytes() == trust_before
-
-
-def test_packed_myspec_uses_pi_list_project_scope_over_saved_trust(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    env["MYSPEC_PI_PROJECT_TRUST_OVERRIDE"] = "true"
-    project = tmp_path / "consumer"
-    project.mkdir()
-    user_settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    project_settings = project / ".pi" / "settings.json"
-    write(user_settings, json.dumps({"packages": [str(installed_package)]}, indent=2))
-    write(
-        Path(env["PI_CODING_AGENT_DIR"]) / "trust.json",
-        json.dumps({str(Path(os.path.realpath(project))): False}, indent=2),
-    )
-    write(
-        project_settings,
-        json.dumps(
-            {"packages": [{"source": str(installed_package), "skills": []}]},
-            indent=2,
-        ),
-    )
-
-    report = json.loads(run_cli(executable, "doctor", "--pi", env=env, cwd=project).stdout)["pi"]
-    assert report["registered"] is True
-    assert report["skills"] == []
-    assert report["listedSources"] == [
-        {"scope": "user", "source": str(installed_package), "path": str(installed_package)},
-        {"scope": "project", "source": str(installed_package), "path": str(installed_package)},
-    ]
-
-
-def test_packed_myspec_ignores_project_settings_absent_from_pi_list(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    env["MYSPEC_PI_PROJECT_TRUST_OVERRIDE"] = "false"
-    project = tmp_path / "consumer"
-    project.mkdir()
-    user_settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    write(user_settings, json.dumps({"packages": [str(installed_package)]}, indent=2))
-    write(
-        Path(env["PI_CODING_AGENT_DIR"]) / "trust.json",
-        json.dumps({str(Path(os.path.realpath(project))): True}, indent=2),
-    )
-    write(
-        project / ".pi" / "settings.json",
-        json.dumps(
-            {"packages": [{"source": str(installed_package), "skills": []}]},
-            indent=2,
-        ),
-    )
-
-    report = json.loads(run_cli(executable, "doctor", "--pi", env=env, cwd=project).stdout)["pi"]
-    assert report["registered"] is True
-    assert report["skills"] == list(SKILL_NAMES)
-    assert report["listedSources"] == [
-        {"scope": "user", "source": str(installed_package), "path": str(installed_package)}
-    ]
-
-
-def test_packed_myspec_resolves_user_and_project_pi_sources_from_each_settings_file(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    project = tmp_path / "consumer"
-    user_settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    project_settings = project / ".pi" / "settings.json"
-    legacy_package = project / "vendor" / "plugins" / "my-spec"
-    shutil.copytree(PLUGIN_ROOT, legacy_package)
-    stable_relative = os.path.relpath(installed_package, user_settings.parent)
-    legacy_relative = os.path.relpath(legacy_package, project_settings.parent)
-    stable_project_relative = os.path.relpath(installed_package, project_settings.parent)
-    write(user_settings, json.dumps({"packages": [stable_relative]}, indent=2))
-    write(
-        Path(env["PI_CODING_AGENT_DIR"]) / "trust.json",
-        json.dumps({str(Path(os.path.realpath(project))): True}, indent=2),
-    )
-    write(
-        project_settings,
-        json.dumps(
-            {
-                "packages": [
-                    {"source": stable_project_relative, "skills": []},
-                    legacy_relative,
-                ]
-            },
-            indent=2,
-        ),
-    )
-
-    initialized = run_cli(executable, "init", "--pi", env=env, cwd=project)
-    assert initialized.returncode == 0, initialized.stderr
-    assert json.loads(initialized.stdout)["removedLegacySources"] == []
-    assert json.loads(initialized.stdout)["disabledProjectLegacySources"] == [legacy_relative]
-    assert json.loads(user_settings.read_text(encoding="utf-8"))["packages"] == [stable_relative]
-    assert json.loads(project_settings.read_text(encoding="utf-8"))["packages"] == [
-        {"source": stable_project_relative, "skills": []},
-        {"source": legacy_relative, "skills": []},
-    ]
-    calls = (
-        [json.loads(line)["args"] for line in pi_log.read_text(encoding="utf-8").splitlines()]
-        if pi_log.exists()
-        else []
-    )
-    assert not any(call[:1] == ["install"] for call in calls)
-    assert not any(call[:1] == ["remove"] for call in calls)
-
-    report = json.loads(run_cli(executable, "doctor", "--pi", env=env, cwd=project).stdout)
-    assert report["pi"]["registered"] is True
-    assert report["pi"]["duplicateEnabledSources"] is False
-    assert report["pi"]["skills"] == []
-
-    outside = json.loads(run_cli(executable, "doctor", "--pi", env=env, cwd=tmp_path).stdout)
-    assert outside["pi"]["registered"] is True
-    assert outside["pi"]["duplicateEnabledSources"] is False
-    assert outside["pi"]["skills"] == list(SKILL_NAMES)
-
-
-def test_packed_myspec_pi_git_identity_matches_pi_host_path_semantics(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    project = tmp_path / "consumer"
-    project.mkdir()
-    user_settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    project_settings = project / ".pi" / "settings.json"
-    user_https = "https://github.com/example/pi-my-spec.git@main"
-    different_host = "https://gitlab.com/example/pi-my-spec.git@main"
-    different_path = "https://github.com/other/pi-my-spec.git@main"
-    project_ssh = "git:git@github.com:example/pi-my-spec.git@feature"
-    env["MYSPEC_PI_INSTALLED_PATHS"] = json.dumps(
-        {
-            source: str(installed_package)
-            for source in (user_https, different_host, different_path, project_ssh)
-        }
-    )
-    write(
-        user_settings,
-        json.dumps(
-            {"packages": [user_https, different_host, different_path]}, indent=2
-        ),
-    )
-    write(
-        Path(env["PI_CODING_AGENT_DIR"]) / "trust.json",
-        json.dumps({str(Path(os.path.realpath(project))): True}, indent=2),
-    )
-    write(project_settings, json.dumps({"packages": [project_ssh]}, indent=2))
-
-    diagnosed = run_cli(executable, "doctor", "--pi", env=env, cwd=project)
-    assert diagnosed.returncode == 0, diagnosed.stderr
-    sources = {
-        source["source"]: source
-        for source in json.loads(diagnosed.stdout)["pi"]["sources"]
-    }
-    assert sources[user_https]["installed"] is True
-    assert sources[user_https]["effective"] is False
-    assert sources[project_ssh]["installed"] is True
-    assert sources[project_ssh]["effective"] is True
-    assert sources[different_host]["installed"] is True
-    assert sources[different_host]["effective"] is True
-    assert sources[different_path]["installed"] is True
-    assert sources[different_path]["effective"] is True
-
-
-def test_packed_myspec_doctor_applies_effective_pi_skill_filters_and_manifest(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    user_settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    project = tmp_path / "consumer"
-    project.mkdir()
-    project_settings = project / ".pi" / "settings.json"
-    write(user_settings, json.dumps({"packages": [str(installed_package)]}, indent=2))
-    write(
-        Path(env["PI_CODING_AGENT_DIR"]) / "trust.json",
-        json.dumps({str(Path(os.path.realpath(project))): True}, indent=2),
-    )
-
-    manifest_path = installed_package / "package.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["pi"]["skills"].append("./skills/my-spec-extra")
-    write(manifest_path, json.dumps(manifest, indent=2))
-    write(installed_package / "skills" / "my-spec-extra" / "SKILL.md", "# extra")
-
-    extra = json.loads(run_cli(executable, "doctor", "--pi", env=env, cwd=project).stdout)
-    assert extra["pi"]["registered"] is True
-    assert extra["pi"]["skills"] == [*SKILL_NAMES, "my-spec-extra"]
-
-    write(
-        project_settings,
-        json.dumps(
-            {
-                "packages": [
-                    {
-                        "source": str(installed_package),
-                        "autoload": False,
-                        "skills": [
-                            "!my-spec-audit",
-                            "+skills/my-spec-audit",
-                            "-skills/my-spec-review",
-                            "!my-spec-extra",
-                        ],
-                    }
-                ]
-            },
-            indent=2,
-        ),
-    )
-    filtered = json.loads(run_cli(executable, "doctor", "--pi", env=env, cwd=project).stdout)
-    assert filtered["pi"]["duplicateEnabledSources"] is False
-    assert filtered["pi"]["skills"] == ["my-spec", "my-spec-add", "my-spec-audit"]
-
-
-def test_packed_myspec_removes_only_exact_user_legacy_pi_sources(tmp_path: Path) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    sources = [
-        str(installed_package),
-        "npm:@liuli195/myspec-helper@latest",
-        f"npm:@liuli195/myspec@{PREVIOUS_VERSION}",
-        "npm:pi-my-spec@next",
-        f"git:github.com/example/pi-my-spec@v{PREVIOUS_VERSION}",
-        "https://github.com/example/pi-my-spec.git#abc123",
-        str(tmp_path / "plugins" / "myspec-helper"),
-    ]
-    write(settings_path, json.dumps({"packages": sources}, indent=2))
-
-    result = run_cli(executable, "init", "--pi", env=env)
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["removedLegacySources"] == sources[2:-1]
-    assert json.loads(settings_path.read_text(encoding="utf-8"))["packages"] == [
-        *sources[:2],
-        sources[-1],
-    ]
-
-
-def test_packed_myspec_pi_init_retries_incomplete_legacy_removal(tmp_path: Path) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    legacy = str(REPO_ROOT / "plugins" / "my-spec")
-    write(settings_path, json.dumps({"packages": [str(installed_package), legacy]}, indent=2))
-
-    incomplete = run_cli(
-        executable,
-        "init",
-        "--pi",
-        env={**env, "MYSPEC_PI_REMOVE_NOOP": "1"},
-    )
-    assert incomplete.returncode == 1
-    assert f"error: pi_remove_incomplete: {legacy}" in incomplete.stderr
-    assert legacy in json.loads(settings_path.read_text(encoding="utf-8"))["packages"]
-
-    retried = run_cli(executable, "init", "--pi", env=env)
-    assert retried.returncode == 0, retried.stderr
-    assert json.loads(retried.stdout)["removedLegacySources"] == [legacy]
-    assert json.loads(settings_path.read_text(encoding="utf-8"))["packages"] == [
-        str(installed_package)
-    ]
-
-
-def test_packed_myspec_pi_init_retries_failed_legacy_removal(tmp_path: Path) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    legacy = str(REPO_ROOT / "plugins" / "my-spec")
-    write(settings_path, json.dumps({"packages": [str(installed_package), legacy]}, indent=2))
-
-    failed = run_cli(
-        executable,
-        "init",
-        "--pi",
-        env={**env, "MYSPEC_PI_REMOVE_FAIL": "1"},
-    )
-    assert failed.returncode == 1
-    assert "error: pi_remove_failed: simulated remove failure" in failed.stderr
-    assert legacy in json.loads(settings_path.read_text(encoding="utf-8"))["packages"]
-
-    retried = run_cli(executable, "init", "--pi", env=env)
-    assert retried.returncode == 0, retried.stderr
-    assert json.loads(retried.stdout)["removedLegacySources"] == [legacy]
-
-
-def test_packed_myspec_doctor_reports_duplicate_enabled_pi_sources(tmp_path: Path) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    write(
-        settings_path,
-        json.dumps({"packages": [str(installed_package), str(PLUGIN_ROOT)]}, indent=2),
-    )
-
-    report = json.loads(run_cli(executable, "doctor", "--pi", env=env).stdout)
-    assert report["pi"]["duplicateEnabledSources"] is True
-    assert report["pi"]["enabledSources"] == [str(installed_package), str(PLUGIN_ROOT)]
-    assert [source["kind"] for source in report["pi"]["sources"]] == ["stable", "legacy"]
-
-
-def test_packed_myspec_doctor_reads_legacy_git_and_npm_manifests_from_pi_list(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    npm_source = f"npm:pi-my-spec@{PREVIOUS_VERSION}"
-    git_source = f"git:github.com/example/pi-my-spec@v{PREVIOUS_VERSION}"
-    npm_package = tmp_path / "pi-installs" / "npm" / "pi-my-spec"
-    git_package = tmp_path / "pi-installs" / "git" / "example" / "pi-my-spec"
-    shutil.copytree(PLUGIN_ROOT, npm_package)
-    shutil.copytree(PLUGIN_ROOT, git_package)
-    env["MYSPEC_PI_INSTALLED_PATHS"] = json.dumps(
-        {npm_source: str(npm_package), git_source: str(git_package)}
-    )
-    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    write(
-        settings_path,
-        json.dumps(
-            {"packages": [str(installed_package), npm_source, git_source]},
-            indent=2,
-        ),
-    )
-
-    report = json.loads(run_cli(executable, "doctor", "--pi", env=env).stdout)["pi"]
-    assert report["duplicateEnabledSources"] is True
-    assert report["enabledSources"] == [str(installed_package), npm_source, git_source]
-    legacy = [source for source in report["sources"] if source["kind"] == "legacy"]
-    assert [source["resolvedPath"] for source in legacy] == [str(npm_package), str(git_package)]
-    assert all(source["enabled"] for source in legacy)
-
-
-def test_packed_myspec_keeps_project_legacy_sources_without_installed_paths(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    project = tmp_path / "consumer"
-    project.mkdir()
-    npm_source = f"npm:pi-my-spec@{PREVIOUS_VERSION}"
-    git_source = f"git:github.com/example/pi-my-spec@v{PREVIOUS_VERSION}"
-    env["MYSPEC_PI_LIST_SOURCE_ONLY"] = json.dumps([npm_source, git_source])
-    user_settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    project_settings = project / ".pi" / "settings.json"
-    write(user_settings, json.dumps({"packages": [str(installed_package)]}, indent=2))
-    write(
-        Path(env["PI_CODING_AGENT_DIR"]) / "trust.json",
-        json.dumps({str(Path(os.path.realpath(project))): True}, indent=2),
-    )
-    write(
-        project_settings,
-        json.dumps({"packages": [npm_source, git_source]}, indent=2),
-    )
-
-    initialized = run_cli(executable, "init", "--pi", env=env, cwd=project)
-    assert initialized.returncode == 0, initialized.stderr
-    assert json.loads(project_settings.read_text(encoding="utf-8"))["packages"] == [
-        {"source": npm_source, "skills": []},
-        {"source": git_source, "skills": []},
-    ]
-    calls = [json.loads(line)["args"] for line in pi_log.read_text(encoding="utf-8").splitlines()]
-    assert not any(call[:1] == ["install"] for call in calls)
-
-    report = json.loads(run_cli(executable, "doctor", "--pi", env=env, cwd=project).stdout)["pi"]
-    assert report["listedSources"] == [
-        {"scope": "user", "source": str(installed_package), "path": str(installed_package)},
-        {"scope": "project", "source": npm_source},
-        {"scope": "project", "source": git_source},
-    ]
-    assert report["enabledSources"] == [str(installed_package)]
-    assert report["duplicateEnabledSources"] is False
-    sources = {source["source"]: source for source in report["sources"]}
-    for source in (npm_source, git_source):
-        assert sources[source]["scope"] == "project"
-        assert sources[source]["resolvedPath"] is None
-        assert sources[source]["installed"] is False
-        assert sources[source]["effective"] is False
-        assert sources[source]["enabled"] is False
 
 
 def test_packed_myspec_initializes_and_removes_claude_legacy_plugin(
@@ -3496,7 +2556,6 @@ def test_packed_myspec_requires_explicit_claude_but_all_initializes_detected_cla
     initialized = run_cli(executable, "init", "--all", env=env)
     assert initialized.returncode == 0, initialized.stderr
     assert json.loads(initialized.stdout) == {
-        "pi": {"status": "skipped", "reason": "missing_command: pi"},
         "claude": {
             "status": "initialized",
             "source": str(installed_package),
@@ -3789,7 +2848,6 @@ def test_packed_myspec_requires_explicit_codex_but_all_initializes_detected_code
     initialized = run_cli(executable, "init", "--all", env=env)
     assert initialized.returncode == 0, initialized.stderr
     assert json.loads(initialized.stdout) == {
-        "pi": {"status": "skipped", "reason": "missing_command: pi"},
         "claude": {"status": "skipped", "reason": "missing_command: claude"},
         "codex": {
             "status": "initialized",
@@ -3804,20 +2862,17 @@ def test_packed_myspec_init_all_removes_legacy_plugins_and_doctor_reports_stable
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
     codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
     env = isolated_myspec_env(
         tmp_path,
         npm_prefix_for(installed_package),
-        pi_bin,
         claude_bin,
         codex_bin,
     )
     legacy_id = "my-spec@my-agent-skills-marketplace"
     env.update(
         {
-            "MYSPEC_PI_LOG": str(pi_log),
             "MYSPEC_CLAUDE_LOG": str(claude_log),
             "MYSPEC_CLAUDE_STATE": str(claude_state),
             "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
@@ -3825,10 +2880,6 @@ def test_packed_myspec_init_all_removes_legacy_plugins_and_doctor_reports_stable
             "MYSPEC_CODEX_LOG": str(codex_log),
             "MYSPEC_CODEX_STATE": str(codex_state),
         }
-    )
-    write(
-        Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
-        json.dumps({"packages": [str(installed_package), str(PLUGIN_ROOT)]}, indent=2),
     )
     claude_legacy_market = {
         "name": "my-agent-skills-marketplace",
@@ -3885,15 +2936,13 @@ def test_packed_myspec_init_all_removes_legacy_plugins_and_doctor_reports_stable
 
     assert initialized.returncode == 0, initialized.stderr
     output = json.loads(initialized.stdout)
-    assert output["pi"]["removedLegacySources"] == [str(PLUGIN_ROOT)]
-    assert output["pi"]["disabledProjectLegacySources"] == []
     assert output["claude"]["removedLegacyPlugins"] == [legacy_id]
     assert output["codex"]["removedLegacyPlugins"] == [legacy_id]
     assert json.loads(claude_state.read_text(encoding="utf-8"))["marketplaces"][0] == claude_legacy_market
     assert json.loads(codex_state.read_text(encoding="utf-8"))["marketplaces"][0] == codex_legacy_market
 
     doctor = json.loads(run_cli(executable, "doctor", "--all", env=env).stdout)
-    for agent in ("pi", "claude", "codex"):
+    for agent in ("claude", "codex"):
         assert [source["sourceKind"] for source in doctor[agent]["sources"]] == ["stable"]
         assert doctor[agent]["disabledSources"] == []
 
@@ -3923,47 +2972,24 @@ def test_packed_myspec_package_contains_single_codex_marketplace_and_four_skills
     ] == sorted(SKILL_NAMES)
 
 
-def test_packed_myspec_reports_missing_pi_without_installing_it(tmp_path: Path) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    env = isolated_myspec_env(tmp_path, prefix)
-
-    explicit = run_cli(executable, "init", "--pi", env=env)
-    assert explicit.returncode == 1
-    assert explicit.stdout == ""
-    assert "error: missing_command: pi" in explicit.stderr
-
-    all_agents = run_cli(executable, "init", "--all", env=env)
-    assert all_agents.returncode == 0, all_agents.stderr
-    assert json.loads(all_agents.stdout) == {
-        "pi": {"status": "skipped", "reason": "missing_command: pi"},
-        "claude": {"status": "skipped", "reason": "missing_command: claude"},
-        "codex": {"status": "skipped", "reason": "missing_command: codex"},
-    }
-    assert not (Path(env["PI_CODING_AGENT_DIR"]) / "settings.json").exists()
-
-
-def test_packed_myspec_switches_pi_between_development_and_saved_release(
+def test_packed_myspec_switches_package_between_development_and_saved_release(
     tmp_path: Path,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
     prefix = npm_prefix_for(installed_package)
     release_tarball = next((tmp_path / "package").glob("*.tgz"))
     npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, pi_bin)
+    env = isolated_myspec_env(tmp_path, prefix, npm_bin)
     env.update(
         {
             "MYSPEC_NPM_LOG": str(npm_log),
             "MYSPEC_REAL_NPM": str(shutil.which("npm")),
             "MYSPEC_RELEASE_TARBALL": str(release_tarball),
-            "MYSPEC_PI_LOG": str(pi_log),
         }
     )
 
     source = controlled_dev_source(tmp_path)
     env = controlled_dev_env(env, source)
-    assert run_cli(executable, "init", "--pi", env=env).returncode == 0
     entered = run_cli(executable, "init", "--dev", env=env, cwd=source)
     assert entered.returncode == 0, entered.stderr
     assert subprocess.run(
@@ -3973,8 +2999,7 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
         "mode": "dev",
         "source": str(source),
         "previousReleaseVersion": PACKAGE_VERSION,
-        "pi": "refreshed",
-        "reloadRequired": True,
+        "reloadRequired": False,
     }
     state_path = Path(env["HOME"]) / ".myspec" / "state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -3993,44 +3018,25 @@ def test_packed_myspec_switches_pi_between_development_and_saved_release(
         ).stdout.strip()
     )
     assert state["sourceCommit"] == expected_commit
-    dev_report = run_cli(executable, "doctor", "--pi", env=env)
+    dev_report = run_cli(executable, "doctor", env=env)
     assert dev_report.returncode == 0, dev_report.stderr
     dev_diagnosis = json.loads(dev_report.stdout)
     assert dev_diagnosis["source"] == str(source / "plugins" / "my-spec")
     assert dev_diagnosis["mode"] == "dev"
-    assert dev_diagnosis["pi"]["skills"] == list(SKILL_NAMES)
-    assert dev_diagnosis["pi"]["registered"] is True
-    assert dev_diagnosis["pi"]["listedSources"] == [
-        {"scope": "user", "source": str(installed_package), "path": str(installed_package)}
-    ]
-    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    assert json.loads(settings_path.read_text(encoding="utf-8"))["packages"] == [
-        str(installed_package)
-    ]
-
     restored = run_cli(executable, "init", "--release", env=env)
     assert restored.returncode == 0, restored.stderr
     assert json.loads(restored.stdout) == {
         "mode": "release",
         "version": PACKAGE_VERSION,
-        "pi": "refreshed",
-        "reloadRequired": True,
+        "reloadRequired": False,
     }
     assert json.loads(state_path.read_text(encoding="utf-8"))["mode"] == "release"
-    report = json.loads(run_cli(executable, "doctor", "--pi", env=env).stdout)
+    report = json.loads(run_cli(executable, "doctor", env=env).stdout)
     assert report["mode"] == "release"
     assert report["source"] == str(installed_package)
-    assert report["pi"]["enabledSources"] == [str(installed_package)]
-    assert report["pi"]["skills"] == list(SKILL_NAMES)
-    assert report["pi"]["listedSources"] == [
-        {"scope": "user", "source": str(installed_package), "path": str(installed_package)}
-    ]
-
     npm_calls = [json.loads(line) for line in npm_log.read_text(encoding="utf-8").splitlines()]
     assert ["link"] in npm_calls
     assert ["install", "--global", "--ignore-scripts", "--no-audit", "--no-fund", f"@liuli195/myspec@{PACKAGE_VERSION}"] in npm_calls
-    pi_calls = [json.loads(line)["args"] for line in pi_log.read_text(encoding="utf-8").splitlines()]
-    assert pi_calls.count(["install", str(installed_package)]) == 1
     assert subprocess.run(
         ["git", "status", "--porcelain"], cwd=source, text=True, capture_output=True, check=True
     ).stdout == ""
@@ -4940,81 +3946,15 @@ def test_packed_myspec_release_install_failure_stays_in_dev_and_retries(
     assert json.loads(state_path.read_text(encoding="utf-8"))["mode"] == "release"
 
 
-def test_packed_myspec_mode_switch_does_not_install_a_disabled_pi_integration(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    release_tarball = next((tmp_path / "package").glob("*.tgz"))
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, pi_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
-            "MYSPEC_PI_LOG": str(pi_log),
-            "MYSPEC_SWITCH_STAGE": "dev",
-        }
-    )
-    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    write(
-        settings_path,
-        json.dumps({"packages": [{"source": str(installed_package), "skills": []}]}, indent=2),
-    )
-
-    source = controlled_dev_source(tmp_path)
-    env = controlled_dev_env(env, source)
-    forged = run_cli(
-        executable,
-        "init",
-        "--dev",
-        "--source",
-        source,
-        "--_switch-token",
-        "forged",
-        env=env,
-    )
-    assert forged.returncode == 1
-    assert "error: invalid_switch_token" in forged.stderr
-
-    entered = run_cli(executable, "init", "--dev", "--source", source, env=env)
-    assert entered.returncode == 0, entered.stderr
-    assert json.loads(entered.stdout)["pi"] == "not-installed"
-    restored = run_cli(executable, "init", "--release", env=env)
-    assert restored.returncode == 0, restored.stderr
-    assert json.loads(restored.stdout)["pi"] == "not-installed"
-    assert json.loads(settings_path.read_text(encoding="utf-8"))["packages"] == [
-        {"source": str(installed_package), "skills": []}
-    ]
-    pi_calls = (
-        [json.loads(line)["args"] for line in pi_log.read_text(encoding="utf-8").splitlines()]
-        if pi_log.exists()
-        else []
-    )
-    assert not any(call[:1] == ["install"] for call in pi_calls)
-    npm_calls = [json.loads(line) for line in npm_log.read_text(encoding="utf-8").splitlines()]
-    assert ["link"] in npm_calls
-    report = json.loads(run_cli(executable, "doctor", "--pi", env=env).stdout)
-    assert report["pi"]["registered"] is True
-    assert report["pi"]["skills"] == []
-
-
 def test_packed_myspec_doctor_uses_actual_installation_not_mode_state(tmp_path: Path) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
     prefix = npm_prefix_for(installed_package)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, prefix, pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    settings_path = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
-    write(settings_path, json.dumps({"packages": [str(installed_package)]}, indent=2))
+    env = isolated_myspec_env(tmp_path, prefix)
     write(
         Path(env["HOME"]) / ".myspec" / "state.json",
         json.dumps({"mode": "dev", "source": "C:/not-the-package", "previousReleaseVersion": "9.9.9"}),
     )
 
-    settings_before = settings_path.read_bytes()
     state_before = (Path(env["HOME"]) / ".myspec" / "state.json").read_bytes()
     diagnosed = run_cli(executable, "doctor", env=env)
     assert diagnosed.returncode == 0, diagnosed.stderr
@@ -5028,15 +3968,12 @@ def test_packed_myspec_doctor_uses_actual_installation_not_mode_state(tmp_path: 
     assert report["source"] == str(installed_package)
     assert report["npm"]["linked"] is False
     assert report["npm"]["versionMismatch"] is False
-    assert report["pi"]["listedSources"] == [
-        {"scope": "user", "source": str(installed_package), "path": str(installed_package)}
-    ]
-    assert settings_path.read_bytes() == settings_before
+    assert not {"pi", "claude", "codex"}.intersection(report)
     assert (Path(env["HOME"]) / ".myspec" / "state.json").read_bytes() == state_before
 
     all_agents = run_cli(executable, "doctor", "--all", env=env)
     assert all_agents.returncode == 0, all_agents.stderr
-    assert json.loads(all_agents.stdout)["pi"]["listedSources"] == report["pi"]["listedSources"]
+    assert "pi" not in json.loads(all_agents.stdout)
 
 
 def test_packed_myspec_doctor_reports_actual_package_version_mismatch(tmp_path: Path) -> None:
@@ -5050,15 +3987,9 @@ def test_packed_myspec_doctor_reports_actual_package_version_mismatch(tmp_path: 
     package = json.loads(package_path.read_text(encoding="utf-8"))
     package["version"] = NEXT_VERSION
     write(package_path, json.dumps(package, indent=2))
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), pi_bin)
-    env["MYSPEC_PI_LOG"] = str(pi_log)
-    write(
-        Path(env["PI_CODING_AGENT_DIR"]) / "settings.json",
-        json.dumps({"packages": [str(installed_package)]}, indent=2),
-    )
+    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
 
-    diagnosed = run_cli(executable, "doctor", "--pi", env=env)
+    diagnosed = run_cli(executable, "doctor", env=env)
     assert diagnosed.returncode == 0, diagnosed.stderr
     report = json.loads(diagnosed.stdout)
     assert report["cliVersion"] == PACKAGE_VERSION
@@ -5124,7 +4055,6 @@ def test_packed_myspec_rejects_invalid_mode_switches(tmp_path: Path) -> None:
         "bin-file",
         "python-entry",
         "management-entry",
-        "pi-skills",
         "skill-file",
         "codex-marketplace",
         "claude-marketplace",
@@ -5206,8 +4136,6 @@ def test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_st
         (source / "plugins" / "my-spec" / "python" / "spec_ops.py").unlink()
     elif case == "management-entry":
         (source / "plugins" / "my-spec" / "python" / "management.py").unlink()
-    elif case == "pi-skills":
-        package["pi"]["skills"].append("./skills/my-spec-extra")
     elif case == "skill-file":
         (source / "plugins" / "my-spec" / "skills" / "my-spec-audit" / "SKILL.md").unlink()
     elif case == "codex-marketplace":
@@ -6431,7 +5359,6 @@ def test_plugin_sync_delegates_all_myspec_lifecycle_work_to_myspec_cli() -> None
 
     for command in (
         "myspec doctor --all",
-        "myspec init --pi",
         "myspec init --claude",
         "myspec init --codex",
         "myspec init --all",
@@ -6448,7 +5375,7 @@ def test_plugin_sync_delegates_all_myspec_lifecycle_work_to_myspec_cli() -> None
     assert "spec_ops.py" not in skill + "\n".join(references.values())
 
 
-def test_plugin_uses_host_native_skill_paths_without_custom_pi_routing() -> None:
+def test_plugin_uses_host_native_skill_paths() -> None:
     assert not (PLUGIN_ROOT / "scripts").exists()
     assert not (PLUGIN_ROOT / "extensions").exists()
 
@@ -6461,7 +5388,7 @@ def test_plugin_uses_host_native_skill_paths_without_custom_pi_routing() -> None
         "url": "https://github.com/liuli195/my-agent-skills",
         "directory": "plugins/my-spec",
     }
-    assert package["pi"] == {"skills": [f"./skills/{name}" for name in SKILL_NAMES]}
+    assert "pi" not in package
     assert "peerDependencies" not in package
     assert "dependencies" not in package
 
@@ -6542,10 +5469,9 @@ def test_spec_audit_deterministic_post_analysis_flow_previews_diffs_and_applies(
     assert (specs / "notifications" / "spec.md").is_file()
 
 
-def test_my_spec_plugin_is_discoverable_by_pi_claude_and_codex() -> None:
+def test_my_spec_plugin_is_discoverable_by_claude_and_codex() -> None:
     package_version = json.loads((PLUGIN_ROOT / "package.json").read_text(encoding="utf-8"))["version"]
     spec = (REPO_ROOT / "myspec" / "specs" / "my-spec" / "spec.md").read_text(encoding="utf-8")
-    assert "/skill:my-spec-add" in spec
     assert "/my-spec:my-spec-add" in spec
     assert "$my-spec-add" in spec
     for host in (".claude-plugin", ".codex-plugin"):
@@ -6852,22 +5778,19 @@ def test_packed_myspec_bare_doctor_does_not_require_codex_home(
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
     prefix = npm_prefix_for(installed_package)
-    pi_bin, pi_log = install_fake_pi(tmp_path / "fake-pi")
     codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, prefix, pi_bin, codex_bin)
+    env = isolated_myspec_env(tmp_path, prefix, codex_bin)
     bad_codex_home = tmp_path / "invalid-codex-home"
     bad_codex_home.write_text("not a directory", encoding="utf-8")
     env.update(
         {
             "CODEX_HOME": str(bad_codex_home),
-            "MYSPEC_PI_LOG": str(pi_log),
             "MYSPEC_CODEX_LOG": str(codex_log),
             "MYSPEC_CODEX_STATE": str(codex_state),
         }
     )
     env.pop("ORCA_CODEX_HOME", None)
     env.pop("ORCA_USER_DATA_PATH", None)
-    write(Path(env["PI_CODING_AGENT_DIR"]) / "settings.json", json.dumps({"packages": []}))
     write(
         codex_state,
         json.dumps({"marketplaces": "broken", "installed": [], "available": []}),
@@ -6876,5 +5799,5 @@ def test_packed_myspec_bare_doctor_does_not_require_codex_home(
     diagnosed = run_cli(executable, "doctor", env=env)
 
     assert diagnosed.returncode == 0, diagnosed.stderr
-    assert json.loads(diagnosed.stdout)["pi"]["available"] is True
+    assert not {"pi", "claude", "codex"}.intersection(json.loads(diagnosed.stdout))
     assert not codex_log.exists()

@@ -514,12 +514,7 @@ PR Flow（拉取请求流程）MUST 默认保留工作树，并只在用户显�
 - **THEN** 当前提交 MUST equal the latest remote target commit（等于最新远端目标提交） before the linked worktree MAY be removed（删除）
 - **THEN** hotfix（热修复） MUST NOT query a PR or enter PR cleanup（查询拉取请求或进入拉取请求清理）
 ### Requirement: 已安装插件从自身位置执行 PR Flow
-PR Flow Plugin（拉取请求流程插件）MUST 为 Pi（编码助手）提供从已安装插件自身位置解析 `pr_flow.py`（PR Flow 脚本）的执行入口。脚本位置 MUST 与目标项目目录分离；目标项目仍由 `--project`（项目参数）解析。
-
-#### Scenario: Pi 在外部目标仓库运行
-- **WHEN** Pi（编码助手）在不包含 `plugins/pr-flow`（拉取请求流程源码路径）的目标仓库中从 PR Flow Skill（拉取请求流程技能）入口执行命令
-- **THEN** 入口 MUST 调用已安装插件内的 `pr_flow.py`（PR Flow 脚本）
-- **THEN** `--project .`（项目参数）MUST 继续指向目标仓库，而不是插件目录
+PR Flow Plugin（拉取请求流程插件）MUST 保留 Claude/Codex（编码助手/代码代理）和通用 Python（脚本语言）命令从已安装插件自身位置执行 `pr_flow.py`（PR Flow 脚本）的能力。脚本位置 MUST 与目标项目目录分离；目标项目仍由 `--project`（项目参数）解析。插件 MUST NOT 提供 Pi（编码助手）专属执行适配入口。
 
 #### Scenario: 恢复命令不依赖源码仓库布局
 - **WHEN** PR Flow（拉取请求流程）输出包含 `nextCommand`（下一命令）的可恢复停止状态
