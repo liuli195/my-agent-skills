@@ -681,7 +681,7 @@ E2E_ALLOWLIST: dict[str, str] = {
         'covers pr-flow packaged CLI helper-chain contract: test_project_template_recreates_incomplete_template_after_stale_lock; function=test_project_template_recreates_incomplete_template_after_stale_lock'
     ),
     'tests/test_local_plugin_build_checks.py::test_my_spec_candidate_path_reaches_real_xdist_workers': (
-        'covers four real pytest-xdist workers inheriting one absolute MySpec candidate Tarball path; function=test_my_spec_candidate_path_reaches_real_xdist_workers'
+        'covers two real pytest-xdist workers inheriting one absolute MySpec candidate Tarball path; function=test_my_spec_candidate_path_reaches_real_xdist_workers'
     ),
     'tests/test_my_spec.py::test_packed_myspec_installs_a_working_cli_with_agent_resources': (
         'covers npm Tarball packing, isolated installation, and the installed myspec CLI seam; function=test_packed_myspec_installs_a_working_cli_with_agent_resources'
