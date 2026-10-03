@@ -231,11 +231,11 @@ def test_public_verify_budget_interrupts_blocked_preparation_and_its_descendants
     monitor = tmp_path / "monitor.py"
     monitor.write_text(
         "import json,os,subprocess,sys,time\nfrom pathlib import Path\n"
-        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(10)'])\n"
+        "child=subprocess.Popen([sys.executable,'-S','-c','import time; time.sleep(10)'])\n"
         f"Path({str(pids)!r}).write_text(json.dumps([os.getpid(),child.pid]))\n"
         "time.sleep(10)\n", encoding="utf-8")
     hook = tmp_path / "monitor.sh"
-    hook.write_text(f"#!/bin/sh\nexec {shlex.quote(Path(sys.executable).as_posix())} -B {shlex.quote(monitor.as_posix())}\n", encoding="utf-8")
+    hook.write_text(f"#!/bin/sh\nexec {shlex.quote(Path(sys.executable).as_posix())} -S -B {shlex.quote(monitor.as_posix())}\n", encoding="utf-8")
     hook.chmod(0o755)
 
     def prepare(project: Path) -> None:
