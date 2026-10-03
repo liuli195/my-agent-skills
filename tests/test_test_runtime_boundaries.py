@@ -399,6 +399,9 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    'tests/test_pr_flow_plugin_package.py::test_pr_flow_installed_skill_command_runs_from_external_project': (
+        'covers the documented installed PR Flow Python entrypoint from an external target with no source checkout, preserving target selection and the five loaded-skill command contracts'
+    ),
     'tests/test_build_and_verify_cli.py::test_packed_tools_supported_clients_initialize_and_resume_update': (
         'covers both installed tools Claude/Codex initialization, diagnosis and recovery of valid pending updates through the real command entrypoints while ignoring a removed Pi command'
     ),

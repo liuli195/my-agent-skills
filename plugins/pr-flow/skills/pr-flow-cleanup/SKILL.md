@@ -15,8 +15,10 @@ cleanup 不查询 GitHub Branch Protection（GitHub 分支保护）或 Rulesets�
 
 ## 命令
 
-使用通用命令入口：
+以本次加载的技能安装目录为基准，使用 `../pr-flow/scripts/pr_flow.py`，确认脚本存在。
+
+下方填入本技能安装目录和目标项目目录的绝对路径；`--project` 始终指向用户目标项目，不指向插件目录。不切换当前目录；无法确认路径或脚本不存在时，停止并报告。
 
 ```bash
-python plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py cleanup --project . --pr <number>
+python "<本技能安装目录>/../pr-flow/scripts/pr_flow.py" cleanup --project "<目标项目目录>" --pr <number>
 ```

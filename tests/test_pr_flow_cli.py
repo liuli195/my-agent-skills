@@ -3116,28 +3116,28 @@ def test_pr_flow_plugin_init_entrypoints_route_to_pr_flow_init() -> None:
         assert "只读 validate（校验）" in text
 
 
-def test_pr_flow_skill_shows_source_repo_diagnose_entrypoint() -> None:
+def test_pr_flow_skill_shows_installed_diagnose_entrypoint() -> None:
     skill_path = REPO_ROOT / "plugins" / "pr-flow" / "skills" / "pr-flow" / "SKILL.md"
     skill_text = skill_path.read_text(encoding="utf-8")
 
-    assert "python plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py diagnose --project ." in skill_text
+    assert 'python "<本技能安装目录>/scripts/pr_flow.py" diagnose --project "<目标项目目录>"' in skill_text
     assert "python scripts/pr_flow.py diagnose --project ." not in skill_text
 
 
 @pytest.mark.parametrize(
     ("skill_name", "command"),
     [
-        ("pr-flow-complete", 'complete --project . --summary "修复 PR Flow 创建空正文 PR" --scope "更新 complete、tweak、diagnose 和测试" --fixes 98'),
-        ("pr-flow-cleanup", "cleanup --project . --pr <number>"),
-        ("pr-flow-hotfix", "hotfix --project . --target main --authorization-phrase <phrase>"),
-        ("pr-flow-tweak", 'tweak --project . --reason "small docs polish" --summary "更新 PR Flow 文档措辞" --scope "只修改 PR Flow 文档" --fixes 98'),
+        ("pr-flow-complete", 'complete --project "<目标项目目录>" --summary "修复 PR Flow 创建空正文 PR" --scope "更新 complete、tweak、diagnose 和测试" --fixes 98'),
+        ("pr-flow-cleanup", 'cleanup --project "<目标项目目录>" --pr <number>'),
+        ("pr-flow-hotfix", 'hotfix --project "<目标项目目录>" --target main --authorization-phrase <phrase>'),
+        ("pr-flow-tweak", 'tweak --project "<目标项目目录>" --reason "small docs polish" --summary "更新 PR Flow 文档措辞" --scope "只修改 PR Flow 文档" --fixes 98'),
     ],
 )
-def test_pr_flow_command_skills_show_source_repo_script_entrypoint(skill_name: str, command: str) -> None:
+def test_pr_flow_command_skills_show_installed_script_entrypoint(skill_name: str, command: str) -> None:
     skill_path = REPO_ROOT / "plugins" / "pr-flow" / "skills" / skill_name / "SKILL.md"
     skill_text = skill_path.read_text(encoding="utf-8")
 
-    assert f"python plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py {command}" in skill_text
+    assert f'python "<本技能安装目录>/../pr-flow/scripts/pr_flow.py" {command}' in skill_text
     assert "python ../pr-flow/scripts/pr_flow.py" not in skill_text
 
 
