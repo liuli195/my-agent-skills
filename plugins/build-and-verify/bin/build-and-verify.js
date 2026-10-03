@@ -49,20 +49,18 @@ const startupTimeout = (phase = "startup") => {
   console.error("status: failed");
   // Owned processes have already stopped. Reporting is best effort and bounded;
   // a blocked filesystem must not keep the public entry alive indefinitely.
-  const finish = () => process.exit(1);
-  setTimeout(finish, 100);
+  const finish = (error) => {
+    if (error) console.error("performance-report-warning: cannot finalize timeout report");
+    process.exit(1);
+  };
+  setTimeout(() => finish(true), 100);
   const reportPath = path.join(project, ".build-and-verify/runs/performance-report.json");
   fs.mkdir(path.dirname(reportPath), { recursive: true }, (mkdirError) => {
-    if (mkdirError) return finish();
-    fs.readFile(reportPath, "utf8", (readError, data) => {
-      let previous;
-      try { previous = readError ? null : JSON.parse(data); } catch {}
-      if (phase !== "startup" && previous && runtimeVersion === "unknown") failure.runtimeVersion = previous.runtimeVersion;
-      const temporary = `${reportPath}.startup.tmp`;
-      fs.writeFile(temporary, JSON.stringify(failure, null, 2) + "\n", (writeError) => {
-        if (writeError) return finish();
-        fs.rename(temporary, reportPath, finish);
-      });
+    if (mkdirError) return finish(mkdirError);
+    const temporary = `${reportPath}.startup.tmp`;
+    fs.writeFile(temporary, JSON.stringify(failure, null, 2) + "\n", (writeError) => {
+      if (writeError) return finish(writeError);
+      fs.rename(temporary, reportPath, finish);
     });
   });
 };

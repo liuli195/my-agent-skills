@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  PYTEST_ADDOPTS: "--maxprocesses=2"
+
 jobs:
   full-verify:
     name: Linux Full Verify

@@ -399,6 +399,7 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    'tests/test_build_and_verify_cli.py::test_public_verify_timeout_report_failure_warns_without_changing_failure': 'covers real public timeout reporting failure warning while preserving nonzero exit and later-check cancellation',
     'tests/test_build_and_verify_cli.py::test_public_verify_protocol_like_check_output_is_preserved': 'covers real public entry preserving ordinary text that resembles the final-result protocol',
     'tests/test_build_and_verify_cli.py::test_review_startup_reaps_descendants_after_parent_exits': 'covers real CLI startup ownership after probe or interpreter parent exit',
     'tests/test_build_and_verify_cli.py::test_review_budget_off_preserves_background_dependency': 'covers real CLI warning-only execution preserving a background dependency for the next check',

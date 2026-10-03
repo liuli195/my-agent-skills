@@ -81,6 +81,19 @@ def test_public_verify_budget_warning_does_not_fail_exempt_runs(tmp_path: Path) 
     assert "performance-warning:" in result.stdout
 
 
+def test_public_verify_timeout_report_failure_warns_without_changing_failure(tmp_path: Path) -> None:
+    def block_report(project: Path) -> None:
+        (project / ".build-and-verify/runs").write_text("blocked", encoding="utf-8")
+
+    result, _ = _budget_run(tmp_path, before_run=block_report)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert result.public_elapsed_seconds < 5
+    assert "total_budget_timeout" in result.stdout + result.stderr
+    assert "performance-report-warning:" in result.stderr
+    assert "LATER_STARTED" not in result.stdout
+    assert "status: passed" not in result.stdout
+
+
 def test_public_verify_protocol_like_check_output_is_preserved(tmp_path: Path) -> None:
     lines = [
         "build-and-verify-formal-result: ordinary-test-output",
