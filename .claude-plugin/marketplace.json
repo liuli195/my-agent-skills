@@ -23,6 +23,11 @@
       "name": "my-spec",
       "source": "./plugins/my-spec",
       "description": "MySpec audit, review, and document-to-delta Skill（开放规格审计、审查与文档增量技能）"
+    },
+    {
+      "name": "data-store",
+      "source": "./plugins/data-store",
+      "description": "Structured Parquet/Zstd storage and DuckDB queries（结构化列式数据存储、写入与查询）"
     }
   ]
 }

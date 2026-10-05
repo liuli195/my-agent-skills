@@ -276,6 +276,23 @@
         ],
         "checkParallel": true,
         "pytestXdistWorkers": 4
+      },
+      {
+        "id": "verify.data-store",
+        "paths": [
+          "plugins/data-store/**",
+          "tests/test_data_store.py",
+          "requirements-dev.txt",
+          ".build-and-verify/config.json"
+        ],
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_data_store.py",
+        "inputs": [
+          "plugins/data-store",
+          "tests/test_data_store.py",
+          "requirements-dev.txt",
+          ".build-and-verify/config.json"
+        ],
+        "checkParallel": true
       }
     ]
   }

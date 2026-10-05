@@ -27,6 +27,20 @@ SUPPORTED_TRANSFORM_TYPE = "json-env"
 SUPPORTED_GENERATOR_TYPE = "codex-marketplace"
 SUPPORTED_GENERATOR_IDENTITY = "codex"
 PLUGIN_REGISTRY: dict[str, dict[str, Any]] = {
+    "data-store": {
+        "releaseShape": "marketplace",
+        "releaseInputs": ["plugins/data-store"],
+        "versionFiles": [
+            "plugins/data-store/.codex-plugin/plugin.json",
+            "plugins/data-store/.claude-plugin/plugin.json",
+        ],
+        "codexMarketplace": {
+            "name": "data-store",
+            "source": {"source": "local", "path": "./plugins/data-store"},
+            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+            "category": "Developer Tools",
+        },
+    },
     "release-flow": {
         "releaseShape": "marketplace",
         "releaseInputs": ["plugins/release-flow"],
