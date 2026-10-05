@@ -33,6 +33,8 @@ Python 调用：`write(root, table, key, rows, schema=None)`；schema 是可选�
 
 Python 调用：`query(root, sql, parameters=None)` 返回 DuckDB 游标；使用 `fetchmany(1000)` 分批读取，并用上下文管理器或 `close()` 关闭。不要让业务调用者直接读取 Parquet 路径。结果在查询启动后按当次执行读取；跨键批量事务及并发同键写入协调由调用方负责，不属于本技能。
 
+查询仍准备并检查全部逻辑表。内部根据读取计划自动选择工作线程：预计不超过512行且能明确识别的复杂字段读取使用一个线程，其他读取使用引擎默认。最多记住128条配置选择；每次重新检查文件、建立连接并读取当次数据，不保存报告结果或常驻连接。调用者无需提供调优参数；无法明确识别时保持默认。
+
 ### 已知记录键的点读
 
 `python <skill>/scripts/data_store.py --root <data> read-key measurements batch_01 --batch-size 1000`
@@ -40,6 +42,14 @@ Python 调用：`query(root, sql, parameters=None)` 返回 DuckDB 游标；使�
 Python 调用：`read_key(root, table, key)`。表和键与 `write` 使用同一逻辑身份，返回该键的完整记录组游标，仍用 `fetchmany` 和上下文管理器关闭。只打开目标分片，不枚举其他表或历史分片；通用 `query` 的全表、多表语义不变。
 
 数据根存在但目标键不存在时抛出 `MissingKeyError`（继承 `FileNotFoundError`）；明确的 Parquet 文件头或页脚损坏抛出 `CorruptDataError`。整个数据根不可用、权限、锁、磁盘及无法确定为内容损坏的查询错误原样传播，调用方不能把所有读取失败当作无效数据而静默重算。点读不做完整哈希复核或第二次完整报告读取；业务身份与成绩核验仍由调用者负责。
+
+### 多个已知记录键与指定字段
+
+`python <skill>/scripts/data_store.py --root <data> read-keys measurements batch_01 batch_02 --columns '["label", "score"]' --batch-size 1000`
+
+Python（编程语言）调用：`read_keys(root, table, keys, columns=None)`；`columns` 是可选关键字参数，仅接受顶层字段名列表。省略时读取完整记录。一次连接只打开指定键；键按原有大小写规则去重，跨键返回顺序不作保证。指定字段直接由查询引擎读取，不先返回完整报告再取字段。
+
+空键列表、空字段列表、重复字段（包括仅大小写不同）和未知字段明确报错；字段名按名称处理，不能传查询表达式。目标缺失、明确损坏和暂时读取故障分别报告，不静默跳过失败目标。结果仍使用游标逐批读取并关闭，保留结构化类型和按字段名合并的规则。
 
 ## 边界
 

@@ -148,3 +148,101 @@ def test_key_read_distinguishes_missing_corrupt_and_unavailable(tmp_path, monkey
     monkeypatch.setattr(Path, "open", unavailable)
     with pytest.raises(PermissionError, match="storage unavailable"):
         store.read_key(tmp_path, "readings", "first")
+
+
+def test_installed_batch_reader_projects_fields_and_deduplicates_keys(tmp_path):
+    installed = tmp_path / "installed-skill"
+    shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
+    script = installed / "scripts/data_store.py"
+    root = tmp_path / "data"
+    for key, rows in [("one", [{"label": "001", "odd field": 4, "parts": [1, 2]},
+                              {"label": "002", "odd field": 5, "parts": [3]}]),
+                      ("two", [{"label": "003", "odd field": 6, "parts": [4]}])]:
+        written = subprocess.run(
+            [sys.executable, str(script), "--root", str(root), "write", "readings", key],
+            input=json.dumps(rows), text=True, capture_output=True, cwd=tmp_path,
+        )
+        assert written.returncode == 0, written.stderr
+    (root / "readings" / "unrelated.parquet").write_bytes(b"not parquet")
+    read = subprocess.run(
+        [sys.executable, str(script), "--root", str(root), "read-keys", "Readings",
+         "ONE", "two", "one", "--columns", '["label", "odd field"]', "--batch-size", "1"],
+        text=True, capture_output=True, cwd=tmp_path,
+    )
+    assert read.returncode == 0, read.stderr
+    assert sorted((json.loads(line) for line in read.stdout.splitlines()),
+                  key=lambda row: row["label"]) == [
+        {"label": "001", "odd field": 4}, {"label": "002", "odd field": 5},
+        {"label": "003", "odd field": 6},
+    ]
+
+
+def test_batch_reader_preserves_types_failures_and_current_data(tmp_path, monkeypatch):
+    store = load_store()
+    store.write(tmp_path, "readings", "one", [{"id": 1, "parts": [{"n": 2}]}])
+    store.write(tmp_path, "readings", "two", [{"id": 2, "parts": [{"n": 3}], "extra": True}])
+    with store.read_keys(tmp_path, "readings", ["one", "two"]) as cursor:
+        assert [str(column[1]) for column in cursor.description] == [
+            "UBIGINT", "STRUCT(n UBIGINT)[]", "BOOLEAN"]
+        assert sorted(cursor.fetchall()) == [(1, [{"n": 2}], None), (2, [{"n": 3}], True)]
+    for keys, columns in [([], None), ("one", None), (["one"], []),
+                          (["one"], ["id", "ID"]), (["one"], ["\x00"]),
+                          (["../one"], None)]:
+        with pytest.raises(ValueError):
+            store.read_keys(tmp_path, "readings", keys, columns=columns)
+    with pytest.raises(duckdb.BinderException):
+        store.read_keys(tmp_path, "readings", ["one"], columns=["not a column"])
+    with pytest.raises(store.MissingKeyError):
+        store.read_keys(tmp_path, "readings", ["one", "missing"])
+    target = tmp_path / "readings" / "two.parquet"
+    target.write_bytes(b"broken")
+    with pytest.raises(store.CorruptDataError):
+        store.read_keys(tmp_path, "readings", ["one", "two"])
+    store.write(tmp_path, "readings", "two", [{"id": 3}])
+    with store.read_keys(tmp_path, "readings", ["two"], columns=["id"]) as cursor:
+        assert cursor.fetchmany(1) == [(3,)]
+        assert cursor.fetchmany(1) == []
+    original = Path.open
+
+    def unavailable(path, *args, **kwargs):
+        if path == target:
+            raise PermissionError("storage unavailable")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", unavailable)
+    with pytest.raises(PermissionError, match="storage unavailable"):
+        store.read_keys(tmp_path, "readings", ["one", "two"])
+
+
+def test_queries_preserve_generic_tables_and_fresh_data(tmp_path):
+    store = load_store()
+    root = tmp_path / "data"
+    store.write(root, "select", "physical_one", [{"logical.identity": "business-1",
+                "report": {"parts": [{"n": 2}]}, "report.x": 7}])
+    store.write(root, "custom", "one", [{"id": "business-1", "amount": 4}])
+    (root / "select" / "physical_one.parquet").rename(root / "select" / "renamed.parquet")
+    sql = ('WITH chosen AS (SELECT * FROM "select" WHERE "logical.identity" = $id) '
+           'SELECT report.parts[1].n, "report.x", amount FROM chosen '
+           'JOIN custom ON "logical.identity" = id')
+    for _ in range(2):
+        with store.query(root, sql, {"id": "business-1"}) as cursor:
+            assert cursor.fetchall() == [(2, 7, 4)]
+    store.write(root, "custom", "one", [{"id": "business-1", "amount": 8}])
+    with store.query(root, sql, {"id": "business-1"}) as cursor:
+        assert cursor.fetchall() == [(2, 7, 8)]
+    store.write(root, "custom", "two", [{"id": "business-1", "amount": 9}])
+    with store.query(root, sql, {"id": "business-1"}) as cursor:
+        assert sorted(cursor.fetchall()) == [(2, 7, 8), (2, 7, 9)]
+    (root / "custom" / "two.parquet").unlink()
+    with store.query(root, sql, {"id": "business-1"}) as cursor:
+        assert cursor.fetchall() == [(2, 7, 8)]
+    (root / "custom" / "one.parquet").write_bytes(b"bad")
+    with pytest.raises(duckdb.Error):
+        store.query(root, 'SELECT * FROM "select"')
+
+
+def test_projected_fields_cannot_be_replaced_by_implicit_whole_rows(tmp_path):
+    store = load_store()
+    store.write(tmp_path, "custom", "one", [{"id": 1}])
+    with pytest.raises(duckdb.BinderException):
+        store.read_keys(tmp_path, "custom", ["one"], columns=["_records"])
