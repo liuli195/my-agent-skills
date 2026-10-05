@@ -19,6 +19,7 @@ generators:
       - pr-flow
       - build-and-verify
       - my-spec
+      - data-store
 
 transforms:
   - path: .agents/plugins/marketplace.json
