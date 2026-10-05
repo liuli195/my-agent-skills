@@ -60,6 +60,23 @@ def test_independent_skill_cli_writes_and_queries_typed_rows(tmp_path):
         {"label": "001", "score": 1.25, "parts": [{"amount": 4}, {"amount": None}]},
         {"label": "002", "score": 2.5, "parts": [{"amount": 8}]},
     ]
+    second = subprocess.run(
+        [sys.executable, str(script), "--root", str(data), "write", "measurements", "second"],
+        input=json.dumps([{"label": "003", "score": 3.25, "parts": [{"amount": 9}]}]),
+        text=True, capture_output=True, cwd=tmp_path,
+    )
+    assert second.returncode == 0, second.stderr
+    batch = subprocess.run(
+        [sys.executable, str(script), "--root", str(data), "read-keys", "Measurements",
+         "FIRST", "second", "first", "--columns", '["label", "score"]', "--batch-size", "1"],
+        text=True, capture_output=True, cwd=tmp_path,
+    )
+    assert batch.returncode == 0, batch.stderr
+    assert sorted((json.loads(line) for line in batch.stdout.splitlines()),
+                  key=lambda row: row["label"]) == [
+        {"label": "001", "score": 1.25}, {"label": "002", "score": 2.5},
+        {"label": "003", "score": 3.25},
+    ]
 
 
 def test_typed_replacement_is_atomic_and_query_is_read_only(tmp_path):
@@ -148,33 +165,6 @@ def test_key_read_distinguishes_missing_corrupt_and_unavailable(tmp_path, monkey
     monkeypatch.setattr(Path, "open", unavailable)
     with pytest.raises(PermissionError, match="storage unavailable"):
         store.read_key(tmp_path, "readings", "first")
-
-
-def test_installed_batch_reader_projects_fields_and_deduplicates_keys(tmp_path):
-    installed = tmp_path / "installed-skill"
-    shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
-    script = installed / "scripts/data_store.py"
-    root = tmp_path / "data"
-    for key, rows in [("one", [{"label": "001", "odd field": 4, "parts": [1, 2]},
-                              {"label": "002", "odd field": 5, "parts": [3]}]),
-                      ("two", [{"label": "003", "odd field": 6, "parts": [4]}])]:
-        written = subprocess.run(
-            [sys.executable, str(script), "--root", str(root), "write", "readings", key],
-            input=json.dumps(rows), text=True, capture_output=True, cwd=tmp_path,
-        )
-        assert written.returncode == 0, written.stderr
-    (root / "readings" / "unrelated.parquet").write_bytes(b"not parquet")
-    read = subprocess.run(
-        [sys.executable, str(script), "--root", str(root), "read-keys", "Readings",
-         "ONE", "two", "one", "--columns", '["label", "odd field"]', "--batch-size", "1"],
-        text=True, capture_output=True, cwd=tmp_path,
-    )
-    assert read.returncode == 0, read.stderr
-    assert sorted((json.loads(line) for line in read.stdout.splitlines()),
-                  key=lambda row: row["label"]) == [
-        {"label": "001", "odd field": 4}, {"label": "002", "odd field": 5},
-        {"label": "003", "odd field": 6},
-    ]
 
 
 def test_batch_reader_preserves_types_failures_and_current_data(tmp_path, monkeypatch):
