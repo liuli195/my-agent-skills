@@ -292,7 +292,8 @@
           "requirements-dev.txt",
           ".build-and-verify/config.json"
         ],
-        "checkParallel": true
+        "checkParallel": true,
+        "pytestXdistWorkers": 1
       }
     ]
   }
