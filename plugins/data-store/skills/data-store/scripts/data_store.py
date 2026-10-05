@@ -24,7 +24,7 @@ def _name(value, *, table=False):
     pattern = r"[A-Za-z_][A-Za-z0-9_]{0,127}" if table else r"[A-Za-z0-9_][A-Za-z0-9_-]{0,127}"
     if not isinstance(value, str) or not re.fullmatch(pattern, value):
         raise ValueError("逻辑表名或记录键无效；不可使用路径")
-    return value
+    return value.lower()
 
 
 def _opaque(structure):

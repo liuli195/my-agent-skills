@@ -83,6 +83,19 @@ def test_untyped_json_fallback_requires_caller_schema(tmp_path):
                 schema={"payload": "MAP(VARCHAR, VARCHAR)"})
     with store.query(tmp_path, "SELECT payload FROM custom") as cursor:
         assert cursor.fetchone() == ({},)
+    store.write(tmp_path, "measurements", "one", [{"score": 5, "metadata": {"label": "a"}}],
+                schema={"score": "DOUBLE", "metadata": "JSON"})
+    with store.query(tmp_path, "SELECT score, metadata->>'label' FROM measurements") as cursor:
+        assert cursor.fetchone() == (5.0, "a")
+
+
+def test_logical_names_share_duckdb_case_rules(tmp_path):
+    store = load_store()
+    store.write(tmp_path, "Readings", "First", [{"score": 1}])
+    store.write(tmp_path, "readings", "second", [{"score": 2}])
+    store.write(tmp_path, "READINGS", "FIRST", [{"score": 3}])
+    with store.query(tmp_path, "SELECT score FROM Readings ORDER BY score") as cursor:
+        assert cursor.fetchall() == [(2,), (3,)]
 
 
 def test_cli_reports_missing_dependency(tmp_path, monkeypatch, capsys):
