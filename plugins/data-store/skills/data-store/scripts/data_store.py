@@ -16,6 +16,10 @@ class CorruptDataError(ValueError):
     """The selected stored record group has an invalid Parquet envelope."""
 
 
+class MissingKeyError(FileNotFoundError):
+    """The data root exists, but the selected logical record group is absent."""
+
+
 def _duckdb():
     try:
         import duckdb
@@ -89,7 +93,11 @@ def read_key(root, table, key):
         raise ValueError("数据分片不能是符号链接")
     # Check only this file's envelope, not a hash or a second full report read.
     # OS errors stay OS errors; DuckDB uses IOException for both these and corruption.
-    with path.open("rb") as stream:
+    try:
+        stream = path.open("rb")
+    except FileNotFoundError as error:
+        raise MissingKeyError("目标记录键不存在") from error
+    with stream:
         header = stream.read(4)
         size = stream.seek(0, os.SEEK_END)
         if size < 12 or header != b"PAR1":

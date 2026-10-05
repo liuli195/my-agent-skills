@@ -39,7 +39,7 @@ Python 调用：`query(root, sql, parameters=None)` 返回 DuckDB 游标；使�
 
 Python 调用：`read_key(root, table, key)`。表和键与 `write` 使用同一逻辑身份，返回该键的完整记录组游标，仍用 `fetchmany` 和上下文管理器关闭。只打开目标分片，不枚举其他表或历史分片；通用 `query` 的全表、多表语义不变。
 
-目标不存在抛出 `FileNotFoundError`；明确的 Parquet 文件头或页脚损坏抛出 `CorruptDataError`。权限、锁、磁盘及无法确定为内容损坏的查询错误原样传播，调用方不能把所有读取失败当作无效数据而静默重算。点读不做完整哈希复核或第二次完整报告读取；业务身份与成绩核验仍由调用者负责。
+数据根存在但目标键不存在时抛出 `MissingKeyError`（继承 `FileNotFoundError`）；明确的 Parquet 文件头或页脚损坏抛出 `CorruptDataError`。整个数据根不可用、权限、锁、磁盘及无法确定为内容损坏的查询错误原样传播，调用方不能把所有读取失败当作无效数据而静默重算。点读不做完整哈希复核或第二次完整报告读取；业务身份与成绩核验仍由调用者负责。
 
 ## 边界
 

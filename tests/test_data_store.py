@@ -128,7 +128,7 @@ def test_cli_reports_missing_dependency(tmp_path, monkeypatch, capsys):
 def test_key_read_distinguishes_missing_corrupt_and_unavailable(tmp_path, monkeypatch):
     store = load_store()
     store.write(tmp_path, "readings", "first", [{"value": 7}])
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(store.MissingKeyError):
         store.read_key(tmp_path, "readings", "missing")
     target = tmp_path / "readings" / "first.parquet"
     target.write_bytes(b"not parquet")
