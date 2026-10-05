@@ -248,6 +248,10 @@ def read_keys(root, table, keys, *, columns=None):
     try:
         connection.execute("SET allowed_directories = ?", [[str(root) + os.sep]])
         connection.execute("SET enable_external_access = false")
+        if len(paths) == 1:
+            # Single-file reads already perform well; avoid planning/setup overhead.
+            connection.execute("SET lock_configuration = true")
+            return connection.execute(f"SELECT {projection} FROM read_parquet(?) AS _records", [str(paths[0])])
         _register(connection, "_records", paths)
         sql = f"SELECT {projection} FROM _records"
         _choose_read(connection, root, sql, [], [("_records", paths)])
