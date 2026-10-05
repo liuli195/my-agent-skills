@@ -53,18 +53,27 @@ def _choose_read(connection, root, sql, parameters, groups):
             parsed = json.loads(connection.execute("SELECT json_serialize_sql(?)", [sql]).fetchone()[0])
             if parsed.get("error"):
                 return
+            sources = set()
+            aliases = set()
             pending = [parsed]
             while pending:
                 item = pending.pop()
                 if isinstance(item, dict):
                     if item.get("type") == "TABLE_FUNCTION":
                         return  # Direct file/table functions are not registered logical sources.
+                    if item.get("type") == "BASE_TABLE":
+                        if item.get("catalog_name") or item.get("schema_name") not in ("", "main"):
+                            return
+                        sources.add(item["table_name"].lower())
+                    aliases.update(entry["key"].lower() for entry in item.get("cte_map", {}).get("map", []))
                     pending.extend(item.values())
                 elif isinstance(item, list):
                     pending.extend(item)
-            sources = {name.lower() for name in connection.get_table_names(sql)}
         except (ValueError, _duckdb().Error):
             return
+        if aliases & {table for table, _ in groups}:
+            return  # Shadowed logical names require scope resolution; keep the default.
+        sources -= aliases
         if not sources or not sources <= {table for table, _ in groups}:
             return
         types = {}

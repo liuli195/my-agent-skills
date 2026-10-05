@@ -270,3 +270,11 @@ def test_unregistered_file_scan_does_not_borrow_logical_table_types(tmp_path):
     for _ in range(2):
         with store.query(tmp_path, sql, [str(tmp_path / "loose.parquet")]) as cursor:
             assert cursor.fetchone() == ("plain", default)
+
+
+def test_small_complex_logical_read_automatically_uses_one_worker(tmp_path):
+    store = load_store()
+    store.write(tmp_path, "custom", "one", [{"report": {"parts": [1, 2]}}])
+    for _ in range(2):
+        with store.query(tmp_path, "SELECT report, current_setting('threads') FROM custom") as cursor:
+            assert cursor.fetchone() == ({"parts": [1, 2]}, 1)
