@@ -246,3 +246,27 @@ def test_projected_fields_cannot_be_replaced_by_implicit_whole_rows(tmp_path):
     store.write(tmp_path, "custom", "one", [{"id": 1}])
     with pytest.raises(duckdb.BinderException):
         store.read_keys(tmp_path, "custom", ["one"], columns=["_records"])
+
+
+def test_mixed_large_and_small_reads_keep_engine_default(tmp_path):
+    store = load_store()
+    with duckdb.connect() as connection:
+        default = connection.execute("SELECT current_setting('threads')").fetchone()[0]
+    store.write(tmp_path, "small", "one", [{"report": {"parts": [1, 2]}}])
+    store.write(tmp_path, "flat", "many", [{"id": i} for i in range(2048)])
+    sql = "SELECT report, current_setting('threads') FROM small CROSS JOIN flat LIMIT 1"
+    with store.query(tmp_path, sql) as cursor:
+        assert cursor.fetchone() == ({"parts": [1, 2]}, default)
+
+
+def test_unregistered_file_scan_does_not_borrow_logical_table_types(tmp_path):
+    store = load_store()
+    with duckdb.connect() as connection:
+        default = connection.execute("SELECT current_setting('threads')").fetchone()[0]
+        connection.execute("COPY (SELECT 'plain' AS payload) TO ? (FORMAT PARQUET)",
+                           [str(tmp_path / "loose.parquet")])
+    store.write(tmp_path, "custom", "one", [{"payload": {"nested": [1, 2]}}])
+    sql = "SELECT payload, current_setting('threads') FROM read_parquet(?)"
+    for _ in range(2):
+        with store.query(tmp_path, sql, [str(tmp_path / "loose.parquet")]) as cursor:
+            assert cursor.fetchone() == ("plain", default)

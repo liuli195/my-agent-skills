@@ -49,21 +49,50 @@ def _choose_read(connection, root, sql, parameters, groups):
         key = None  # Other valid DuckDB parameter types still work without memoization.
     decision = _READ_CHOICES.get(key) if key is not None else None
     if decision is None:
+        try:
+            parsed = json.loads(connection.execute("SELECT json_serialize_sql(?)", [sql]).fetchone()[0])
+            if parsed.get("error"):
+                return
+            pending = [parsed]
+            while pending:
+                item = pending.pop()
+                if isinstance(item, dict):
+                    if item.get("type") == "TABLE_FUNCTION":
+                        return  # Direct file/table functions are not registered logical sources.
+                    pending.extend(item.values())
+                elif isinstance(item, list):
+                    pending.extend(item)
+            sources = {name.lower() for name in connection.get_table_names(sql)}
+        except (ValueError, _duckdb().Error):
+            return
+        if not sources or not sources <= {table for table, _ in groups}:
+            return
         types = {}
         for table, _ in groups:
+            if table not in sources:
+                continue
             name = '"' + table.replace('"', '""') + '"'
             for column in connection.execute(f"DESCRIBE {name}").fetchall():
                 types.setdefault(column[0].lower(), []).append(column[1])
-        plan = json.loads(connection.execute("EXPLAIN (FORMAT JSON) " + sql, parameters).fetchone()[1])
+        try:
+            plan = json.loads(connection.execute("EXPLAIN (FORMAT JSON) " + sql, parameters).fetchone()[1])
+        except (ValueError, _duckdb().Error):
+            return  # Tuning is optional; execute the original query with its normal errors.
 
         def small_complex(nodes):
-            for node in nodes:
-                if node.get("name", "").strip() in ("READ_PARQUET", "PARQUET_SCAN"):
-                    info = node.get("extra_info", {})
+            pending = list(nodes)
+            complex_projection = False
+            while pending:
+                node = pending.pop()
+                name = node.get("name", "").strip()
+                info = node.get("extra_info", {})
+                if name in ("READ_PARQUET", "PARQUET_SCAN"):
                     try:
                         small = 0 <= int(info.get("Estimated Cardinality", -1)) <= 512
                     except (ValueError, TypeError):
                         small = False
+                    if not small:
+                        return False  # A small nested side must not serialize a large join.
                     columns = info.get("Projections", [])
                     if isinstance(columns, str):
                         columns = [columns]
@@ -73,10 +102,14 @@ def _choose_read(connection, root, sql, parameters, groups):
                                       if column.lower() == name or column.lower().startswith(name + ".")]
                         if small and len(candidates) == 1 and len(candidates[0]) == 1:
                             if any(marker in candidates[0][0] for marker in ("STRUCT(", "[]", "MAP(")):
-                                return True
-                if small_complex(node.get("children", [])):
-                    return True
-            return False
+                                complex_projection = True
+                        elif any(marker in value for values in candidates for value in values
+                                 for marker in ("STRUCT(", "[]", "MAP(")):
+                            return False
+                elif "SCAN" in name or info.get("Function"):
+                    return False  # Unknown source sizes and table functions keep the default.
+                pending.extend(node.get("children", []))
+            return complex_projection
 
         decision = small_complex(plan)
         if key is not None:
