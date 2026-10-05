@@ -192,6 +192,9 @@ def test_batch_reader_preserves_types_failures_and_current_data(tmp_path, monkey
     with store.read_keys(tmp_path, "readings", ["two"], columns=["id"]) as cursor:
         assert cursor.fetchmany(1) == [(3,)]
         assert cursor.fetchmany(1) == []
+    store.write(tmp_path, "names", "one", [{"odd field": 1, 'a"b': 2, "a.b": 3, "_records": 4}])
+    with store.read_keys(tmp_path, "names", ["one"], columns=["a.b", 'a"b', "odd field", "_records"]) as cursor:
+        assert cursor.fetchall() == [(3, 2, 1, 4)]
     original = Path.open
 
     def unavailable(path, *args, **kwargs):
