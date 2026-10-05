@@ -48,6 +48,35 @@ def test_independent_skill_cli_writes_and_queries_typed_rows(tmp_path):
         {"label": "001", "score": 1.25, "amount": 4, "missing_amount": None},
         {"label": "002", "score": 2.5, "amount": 8, "missing_amount": None},
     ]
+    # A known key remains readable even when an unrelated shard is damaged.
+    (data / "measurements" / "unrelated.parquet").write_bytes(b"not parquet")
+    pointed = subprocess.run(
+        [sys.executable, str(script), "--root", str(data), "read-key",
+         "Measurements", "FIRST", "--batch-size", "1"],
+        text=True, capture_output=True, cwd=tmp_path,
+    )
+    assert pointed.returncode == 0, pointed.stderr
+    assert [json.loads(line) for line in pointed.stdout.splitlines()] == [
+        {"label": "001", "score": 1.25, "parts": [{"amount": 4}, {"amount": None}]},
+        {"label": "002", "score": 2.5, "parts": [{"amount": 8}]},
+    ]
+    second = subprocess.run(
+        [sys.executable, str(script), "--root", str(data), "write", "measurements", "second"],
+        input=json.dumps([{"label": "003", "score": 3.25, "parts": [{"amount": 9}]}]),
+        text=True, capture_output=True, cwd=tmp_path,
+    )
+    assert second.returncode == 0, second.stderr
+    batch = subprocess.run(
+        [sys.executable, str(script), "--root", str(data), "read-keys", "Measurements",
+         "FIRST", "second", "first", "--columns", '["label", "score"]', "--batch-size", "1"],
+        text=True, capture_output=True, cwd=tmp_path,
+    )
+    assert batch.returncode == 0, batch.stderr
+    assert sorted((json.loads(line) for line in batch.stdout.splitlines()),
+                  key=lambda row: row["label"]) == [
+        {"label": "001", "score": 1.25}, {"label": "002", "score": 2.5},
+        {"label": "003", "score": 3.25},
+    ]
 
 
 def test_typed_replacement_is_atomic_and_query_is_read_only(tmp_path):
@@ -111,3 +140,134 @@ def test_cli_reports_missing_dependency(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(builtins, "__import__", without_duckdb)
     assert store.main(["--root", str(tmp_path), "query", "SELECT 1"]) == 2
     assert "缺少 DuckDB" in capsys.readouterr().err
+
+
+def test_key_read_distinguishes_missing_corrupt_and_unavailable(tmp_path, monkeypatch):
+    store = load_store()
+    store.write(tmp_path, "readings", "first", [{"value": 7}])
+    with pytest.raises(store.MissingKeyError):
+        store.read_key(tmp_path, "readings", "missing")
+    target = tmp_path / "readings" / "first.parquet"
+    target.write_bytes(b"not parquet")
+    with pytest.raises(store.CorruptDataError):
+        store.read_key(tmp_path, "readings", "first")
+    store.write(tmp_path, "readings", "first", [{"value": 8}])
+    with store.read_key(tmp_path, "READINGS", "FIRST") as cursor:
+        assert cursor.fetchmany(1) == [(8,)]
+        assert cursor.fetchmany(1) == []
+    original = Path.open
+
+    def unavailable(path, *args, **kwargs):
+        if path == target:
+            raise PermissionError("storage unavailable")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", unavailable)
+    with pytest.raises(PermissionError, match="storage unavailable"):
+        store.read_key(tmp_path, "readings", "first")
+
+
+def test_batch_reader_preserves_types_failures_and_current_data(tmp_path, monkeypatch):
+    store = load_store()
+    store.write(tmp_path, "readings", "one", [{"id": 1, "parts": [{"n": 2}]}])
+    store.write(tmp_path, "readings", "two", [{"id": 2, "parts": [{"n": 3}], "extra": True}])
+    with store.read_keys(tmp_path, "readings", ["one", "two"]) as cursor:
+        assert [str(column[1]) for column in cursor.description] == [
+            "UBIGINT", "STRUCT(n UBIGINT)[]", "BOOLEAN"]
+        assert sorted(cursor.fetchall()) == [(1, [{"n": 2}], None), (2, [{"n": 3}], True)]
+    for keys, columns in [([], None), ("one", None), (["one"], []),
+                          (["one"], ["id", "ID"]), (["one"], ["\x00"]),
+                          (["../one"], None)]:
+        with pytest.raises(ValueError):
+            store.read_keys(tmp_path, "readings", keys, columns=columns)
+    with pytest.raises(duckdb.BinderException):
+        store.read_keys(tmp_path, "readings", ["one"], columns=["not a column"])
+    with pytest.raises(store.MissingKeyError):
+        store.read_keys(tmp_path, "readings", ["one", "missing"])
+    target = tmp_path / "readings" / "two.parquet"
+    target.write_bytes(b"broken")
+    with pytest.raises(store.CorruptDataError):
+        store.read_keys(tmp_path, "readings", ["one", "two"])
+    store.write(tmp_path, "readings", "two", [{"id": 3}])
+    with store.read_keys(tmp_path, "readings", ["two"], columns=["id"]) as cursor:
+        assert cursor.fetchmany(1) == [(3,)]
+        assert cursor.fetchmany(1) == []
+    store.write(tmp_path, "names", "one", [{"odd field": 1, 'a"b': 2, "a.b": 3, "_records": 4}])
+    with store.read_keys(tmp_path, "names", ["one"], columns=["a.b", 'a"b', "odd field", "_records"]) as cursor:
+        assert cursor.fetchall() == [(3, 2, 1, 4)]
+    original = Path.open
+
+    def unavailable(path, *args, **kwargs):
+        if path == target:
+            raise PermissionError("storage unavailable")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", unavailable)
+    with pytest.raises(PermissionError, match="storage unavailable"):
+        store.read_keys(tmp_path, "readings", ["one", "two"])
+
+
+def test_queries_preserve_generic_tables_and_fresh_data(tmp_path):
+    store = load_store()
+    root = tmp_path / "data"
+    store.write(root, "select", "physical_one", [{"logical.identity": "business-1",
+                "report": {"parts": [{"n": 2}]}, "report.x": 7}])
+    store.write(root, "custom", "one", [{"id": "business-1", "amount": 4}])
+    (root / "select" / "physical_one.parquet").rename(root / "select" / "renamed.parquet")
+    sql = ('WITH chosen AS (SELECT * FROM "select" WHERE "logical.identity" = $id) '
+           'SELECT report.parts[1].n, "report.x", amount FROM chosen '
+           'JOIN custom ON "logical.identity" = id')
+    for _ in range(2):
+        with store.query(root, sql, {"id": "business-1"}) as cursor:
+            assert cursor.fetchall() == [(2, 7, 4)]
+    store.write(root, "custom", "one", [{"id": "business-1", "amount": 8}])
+    with store.query(root, sql, {"id": "business-1"}) as cursor:
+        assert cursor.fetchall() == [(2, 7, 8)]
+    store.write(root, "custom", "two", [{"id": "business-1", "amount": 9}])
+    with store.query(root, sql, {"id": "business-1"}) as cursor:
+        assert sorted(cursor.fetchall()) == [(2, 7, 8), (2, 7, 9)]
+    (root / "custom" / "two.parquet").unlink()
+    with store.query(root, sql, {"id": "business-1"}) as cursor:
+        assert cursor.fetchall() == [(2, 7, 8)]
+    (root / "custom" / "one.parquet").write_bytes(b"bad")
+    with pytest.raises(duckdb.Error):
+        store.query(root, 'SELECT * FROM "select"')
+
+
+def test_projected_fields_cannot_be_replaced_by_implicit_whole_rows(tmp_path):
+    store = load_store()
+    store.write(tmp_path, "custom", "one", [{"id": 1}])
+    with pytest.raises(duckdb.BinderException):
+        store.read_keys(tmp_path, "custom", ["one"], columns=["_records"])
+
+
+def test_mixed_large_and_small_reads_keep_engine_default(tmp_path):
+    store = load_store()
+    with duckdb.connect() as connection:
+        default = connection.execute("SELECT current_setting('threads')").fetchone()[0]
+    store.write(tmp_path, "small", "one", [{"report": {"parts": [1, 2]}}])
+    store.write(tmp_path, "flat", "many", [{"id": i} for i in range(2048)])
+    sql = "SELECT report, current_setting('threads') FROM small CROSS JOIN flat LIMIT 1"
+    with store.query(tmp_path, sql) as cursor:
+        assert cursor.fetchone() == ({"parts": [1, 2]}, default)
+
+
+def test_unregistered_file_scan_does_not_borrow_logical_table_types(tmp_path):
+    store = load_store()
+    with duckdb.connect() as connection:
+        default = connection.execute("SELECT current_setting('threads')").fetchone()[0]
+        connection.execute("COPY (SELECT 'plain' AS payload) TO ? (FORMAT PARQUET)",
+                           [str(tmp_path / "loose.parquet")])
+    store.write(tmp_path, "custom", "one", [{"payload": {"nested": [1, 2]}}])
+    sql = "SELECT payload, current_setting('threads') FROM read_parquet(?)"
+    for _ in range(2):
+        with store.query(tmp_path, sql, [str(tmp_path / "loose.parquet")]) as cursor:
+            assert cursor.fetchone() == ("plain", default)
+
+
+def test_small_complex_logical_read_automatically_uses_one_worker(tmp_path):
+    store = load_store()
+    store.write(tmp_path, "custom", "one", [{"report": {"parts": [1, 2]}}])
+    for _ in range(2):
+        with store.query(tmp_path, "SELECT report, current_setting('threads') FROM custom") as cursor:
+            assert cursor.fetchone() == ({"parts": [1, 2]}, 1)
