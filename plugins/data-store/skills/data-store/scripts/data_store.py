@@ -51,8 +51,9 @@ def write(root, table, key, rows, *, schema=None):
                      connection.execute("SELECT json_structure(?)", [payload]).fetchone()[0])
         if schema is None and _opaque(json.loads(structure)):
             raise ValueError("无法推断有类型的记录，请明确提供字段类型；不回退为不透明 JSON")
+        transform = "from_json_strict" if schema is not None else "from_json"
         records = connection.sql(
-            "SELECT record.* FROM (SELECT unnest(from_json_strict(?, ?)) AS record)",
+            f"SELECT record.* FROM (SELECT unnest({transform}(?, ?)) AS record)",
             params=[payload, structure],
         )
         directory.mkdir(parents=True, exist_ok=True)
