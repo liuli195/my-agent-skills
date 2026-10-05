@@ -29,7 +29,7 @@ def test_independent_skill_cli_writes_and_queries_typed_rows(tmp_path):
         shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
     script = installed / "scripts/data_store.py"
     data = tmp_path / "shared-data"
-    rows = [{"label": "001", "score": 1.25, "parts": [{"amount": 4}]},
+    rows = [{"label": "001", "score": 1.25, "parts": [{"amount": 4}, {}]},
             {"label": "002", "score": 2.5, "parts": [{"amount": 8}]}]
     written = subprocess.run(
         [sys.executable, str(script), "--root", str(data), "write", "measurements", "first"],
@@ -38,14 +38,15 @@ def test_independent_skill_cli_writes_and_queries_typed_rows(tmp_path):
     assert written.returncode == 0, written.stderr
     queried = subprocess.run(
         [sys.executable, str(script), "--root", str(data), "query",
-         "SELECT label, score, parts[1].amount AS amount FROM measurements WHERE score > ? ORDER BY label",
+         "SELECT label, score, parts[1].amount AS amount, parts[2].amount AS missing_amount "
+         "FROM measurements WHERE score > ? ORDER BY label",
          "--parameters", "[1]", "--batch-size", "1"],
         text=True, capture_output=True, cwd=tmp_path,
     )
     assert queried.returncode == 0, queried.stderr
     assert [json.loads(line) for line in queried.stdout.splitlines()] == [
-        {"label": "001", "score": 1.25, "amount": 4},
-        {"label": "002", "score": 2.5, "amount": 8},
+        {"label": "001", "score": 1.25, "amount": 4, "missing_amount": None},
+        {"label": "002", "score": 2.5, "amount": 8, "missing_amount": None},
     ]
 
 
