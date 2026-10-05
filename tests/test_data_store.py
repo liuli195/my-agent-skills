@@ -48,6 +48,18 @@ def test_independent_skill_cli_writes_and_queries_typed_rows(tmp_path):
         {"label": "001", "score": 1.25, "amount": 4, "missing_amount": None},
         {"label": "002", "score": 2.5, "amount": 8, "missing_amount": None},
     ]
+    # A known key remains readable even when an unrelated shard is damaged.
+    (data / "measurements" / "unrelated.parquet").write_bytes(b"not parquet")
+    pointed = subprocess.run(
+        [sys.executable, str(script), "--root", str(data), "read-key",
+         "Measurements", "FIRST", "--batch-size", "1"],
+        text=True, capture_output=True, cwd=tmp_path,
+    )
+    assert pointed.returncode == 0, pointed.stderr
+    assert [json.loads(line) for line in pointed.stdout.splitlines()] == [
+        {"label": "001", "score": 1.25, "parts": [{"amount": 4}, {"amount": None}]},
+        {"label": "002", "score": 2.5, "parts": [{"amount": 8}]},
+    ]
 
 
 def test_typed_replacement_is_atomic_and_query_is_read_only(tmp_path):
@@ -111,3 +123,28 @@ def test_cli_reports_missing_dependency(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(builtins, "__import__", without_duckdb)
     assert store.main(["--root", str(tmp_path), "query", "SELECT 1"]) == 2
     assert "缺少 DuckDB" in capsys.readouterr().err
+
+
+def test_key_read_distinguishes_missing_corrupt_and_unavailable(tmp_path, monkeypatch):
+    store = load_store()
+    store.write(tmp_path, "readings", "first", [{"value": 7}])
+    with pytest.raises(FileNotFoundError):
+        store.read_key(tmp_path, "readings", "missing")
+    target = tmp_path / "readings" / "first.parquet"
+    target.write_bytes(b"not parquet")
+    with pytest.raises(store.CorruptDataError):
+        store.read_key(tmp_path, "readings", "first")
+    store.write(tmp_path, "readings", "first", [{"value": 8}])
+    with store.read_key(tmp_path, "READINGS", "FIRST") as cursor:
+        assert cursor.fetchmany(1) == [(8,)]
+        assert cursor.fetchmany(1) == []
+    original = Path.open
+
+    def unavailable(path, *args, **kwargs):
+        if path == target:
+            raise PermissionError("storage unavailable")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", unavailable)
+    with pytest.raises(PermissionError, match="storage unavailable"):
+        store.read_key(tmp_path, "readings", "first")

@@ -33,6 +33,14 @@ Python 调用：`write(root, table, key, rows, schema=None)`；schema 是可选�
 
 Python 调用：`query(root, sql, parameters=None)` 返回 DuckDB 游标；使用 `fetchmany(1000)` 分批读取，并用上下文管理器或 `close()` 关闭。不要让业务调用者直接读取 Parquet 路径。结果在查询启动后按当次执行读取；跨键批量事务及并发同键写入协调由调用方负责，不属于本技能。
 
+### 已知记录键的点读
+
+`python <skill>/scripts/data_store.py --root <data> read-key measurements batch_01 --batch-size 1000`
+
+Python 调用：`read_key(root, table, key)`。表和键与 `write` 使用同一逻辑身份，返回该键的完整记录组游标，仍用 `fetchmany` 和上下文管理器关闭。只打开目标分片，不枚举其他表或历史分片；通用 `query` 的全表、多表语义不变。
+
+目标不存在抛出 `FileNotFoundError`；明确的 Parquet 文件头或页脚损坏抛出 `CorruptDataError`。权限、锁、磁盘及无法确定为内容损坏的查询错误原样传播，调用方不能把所有读取失败当作无效数据而静默重算。点读不做完整哈希复核或第二次完整报告读取；业务身份与成绩核验仍由调用者负责。
+
 ## 边界
 
 生成数据、缓存、开发临时文件和测试均不放进技能目录。没有归档、恢复、预览、保留期、清理、容量、训练或后端框架。

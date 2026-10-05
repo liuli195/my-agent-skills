@@ -12,6 +12,10 @@ import tempfile
 import time
 
 
+class CorruptDataError(ValueError):
+    """The selected stored record group has an invalid Parquet envelope."""
+
+
 def _duckdb():
     try:
         import duckdb
@@ -74,6 +78,39 @@ def write(root, table, key, rows, *, schema=None):
     return len(rows)
 
 
+def read_key(root, table, key):
+    """Read the complete record group written under one logical key."""
+    root = Path(root).resolve(strict=True)
+    directory = root / _name(table, table=True)
+    path = directory / f"{_name(key)}.parquet"
+    if directory.resolve().parent != root:
+        raise ValueError("逻辑表目录不能跳出数据根目录")
+    if path.is_symlink():
+        raise ValueError("数据分片不能是符号链接")
+    # Check only this file's envelope, not a hash or a second full report read.
+    # OS errors stay OS errors; DuckDB uses IOException for both these and corruption.
+    with path.open("rb") as stream:
+        header = stream.read(4)
+        size = stream.seek(0, os.SEEK_END)
+        if size < 12 or header != b"PAR1":
+            raise CorruptDataError("目标数据分片不是完整 Parquet 文件")
+        stream.seek(-8, os.SEEK_END)
+        footer = stream.read(8)
+        if footer[4:] != b"PAR1" or int.from_bytes(footer[:4], "little") > size - 12:
+            raise CorruptDataError("目标数据分片的 Parquet 页脚损坏")
+    connection = _duckdb().connect(":memory:", config={
+        "autoinstall_known_extensions": False, "autoload_known_extensions": False,
+    })
+    try:
+        connection.execute("SET allowed_directories = ?", [[str(root) + os.sep]])
+        connection.execute("SET enable_external_access = false")
+        connection.execute("SET lock_configuration = true")
+        return connection.execute("SELECT * FROM read_parquet(?)", [str(path)])
+    except BaseException:
+        connection.close()
+        raise
+
+
 def query(root, sql, parameters=None):
     """Return a DuckDB cursor. Consume with fetchmany(n), then close it."""
     root = Path(root).resolve(strict=True)
@@ -117,6 +154,10 @@ def main(argv=None):
     reader.add_argument("sql")
     reader.add_argument("--parameters", type=json.loads, default=[])
     reader.add_argument("--batch-size", type=int, default=1000)
+    point_reader = commands.add_parser("read-key")
+    point_reader.add_argument("table")
+    point_reader.add_argument("key")
+    point_reader.add_argument("--batch-size", type=int, default=1000)
     args = parser.parse_args(argv)
     try:
         if args.command == "write":
@@ -125,7 +166,9 @@ def main(argv=None):
         else:
             if args.batch_size < 1:
                 raise ValueError("batch-size 必须大于零")
-            with query(args.root, args.sql, args.parameters) as cursor:
+            cursor = (read_key(args.root, args.table, args.key) if args.command == "read-key"
+                      else query(args.root, args.sql, args.parameters))
+            with cursor:
                 names = [column[0] for column in cursor.description]
                 while rows := cursor.fetchmany(args.batch_size):
                     for row in rows:
