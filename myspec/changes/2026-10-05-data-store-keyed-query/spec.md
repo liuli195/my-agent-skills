@@ -1,6 +1,6 @@
 # 数据存储逻辑键点读
 
-Status: ready-for-agent
+Status: completed
 
 ## Problem Statement
 
@@ -112,3 +112,10 @@ Status: ready-for-agent
 - 用户在综合实测、方案表和解释之后明确授权：“OK，那就按这个方案优化”。沿用现有技能工作树和功能分支，由主代理串行实施，完成后统一独立审查；模型采用用户指定的 GPT-6.1 Sol（模型）、高思考强度。
 - 本次工作树：D:\\My Project\\my-agent-skills\\.local\\worktrees\\data-store-keyed-validation；分支 codex/data-store-keyed-query；固定全局基线与补充起点保持上述值不变。
 - 正式规格、安装、推送、合并保持后续交付边界。完成整体交付时先保留必要证据，再按用户要求清理本任务临时工作树。
+
+
+## 2026-10-06 完成记录
+
+用户已确认门禁二，实施、验证和独立审查完成，正式规格已应用并校验通过。历史未实施说明仅记录当时状态。
+
+验收证据保存在魔兽主目录 .local/manual-validation/cache-read-performance/：ac-fair-20261006/production-acceptance-report.md、final-overall-diagnostic-20261006/验收报告.md、fixed-work-main-20261006-v2/固定工作量对照报告.md。十三种读取及批量完整/指定字段均完成公平对照，值与类型一致，原始数据未变。固定工作量81次计算、14次缓存读取、8167样本，编译和导出一致；历史旧版684.271秒，新版73.900秒，减少89.20%。新版按工作量截止，观察开销计入，各一次未清系统缓存，不承诺稳定倍数；实际游戏验收未执行。审查模型为用户指定GPT-6.1 Sol、高思考强度，无遗留阻塞。
