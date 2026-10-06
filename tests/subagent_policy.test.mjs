@@ -34,7 +34,7 @@ test("subagent-policy keeps its portable Skill contract and directory structure"
     assert.match(frontmatter, /^name: subagent-policy$/m);
     assert.doesNotMatch(frontmatter, /^disable-model-invocation: true$/m);
     assert.match(frontmatter, /四个通用子代理角色/);
-    assert.deepEqual(await readdir(packageRoot), ["skills"]);
+    assert.deepEqual((await readdir(packageRoot)).sort(), [".claude-plugin", ".codex-plugin", "skills"]);
     assert.deepEqual(await readdir(resolve(packageRoot, "skills")), ["subagent-policy"]);
     assert.deepEqual(await readdir(skillRoot), ["SKILL.md"]);
 

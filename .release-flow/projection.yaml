@@ -17,8 +17,10 @@ generators:
     plugins:
       - release-flow
       - pr-flow
-      - build-and-verify
-      - my-spec
+      - dev-flow
+      - subagent-policy
+      - plugin-sync
+      - retro-to-issues
       - data-store
 
 transforms:

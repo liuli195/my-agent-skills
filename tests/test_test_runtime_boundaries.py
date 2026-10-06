@@ -399,6 +399,11 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    "tests/test_data_store_project_binding.py::test_installed_connection_serves_other_commands_and_is_repeatable": "Installed helper and independent command must traverse a real project directory link.",
+    "tests/test_data_store_project_binding.py::test_update_checks_old_source_and_preserves_sources_and_data": "Native installed-helper source update checks preserve real link targets and project data.",
+    "tests/test_data_store_project_binding.py::test_refuses_conflicts_without_removing_existing_content": "Installed helper rejects actual filesystem conflicts and redirected native parents.",
+    "tests/test_data_store_project_binding.py::test_project_connection_stays_out_of_git": "Real git inventory proves the native project link and temporary bindings cannot be committed.",
+    "tests/test_data_store_project_binding.py::test_update_restores_old_entry_when_filesystem_rename_fails": "Installed command fault injection proves real link rollback and retained recovery target.",
     "tests/test_data_store.py::test_installed_cli_filters_one_row_within_a_logical_group": "Independent installed-skill CLI smoke for typed row filtering inside a logical group.",
     "tests/test_data_store.py::test_independent_skill_cli_writes_and_queries_typed_rows": "Independent installed-skill write/query CLI smoke, with real Parquet and bounded output.",
     'tests/test_pr_flow_plugin_package.py::test_pr_flow_installed_skill_command_runs_from_external_project': (

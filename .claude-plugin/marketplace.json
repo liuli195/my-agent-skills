@@ -1,7 +1,7 @@
 {
-  "name": "my-agent-skills-marketplace",
+  "name": "my-agent-skills-marketplace-dev",
   "owner": {
-    "name": "My Agent Skills Marketplace"
+    "name": "My Agent Skills Marketplace DEV"
   },
   "plugins": [
     {
@@ -15,14 +15,24 @@
       "description": "PR Flow Plugin（拉取请求流程插件）。pr-flow-init 初始化 PR Flow（拉取请求流程）配置：agent（代理）问答、配置草案、只读 validate（校验）和用户确认后本地写入。"
     },
     {
-      "name": "build-and-verify",
-      "source": "./plugins/build-and-verify",
-      "description": "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）"
+      "name": "dev-flow",
+      "source": "./plugins/dev-flow",
+      "description": "Development flow（开发流程）"
     },
     {
-      "name": "my-spec",
-      "source": "./plugins/my-spec",
-      "description": "MySpec audit, review, and document-to-delta Skill（开放规格审计、审查与文档增量技能）"
+      "name": "subagent-policy",
+      "source": "./plugins/subagent-policy",
+      "description": "Subagent policy（子代理策略）"
+    },
+    {
+      "name": "plugin-sync",
+      "source": "./plugins/plugin-sync",
+      "description": "Plugin source and mode synchronization（插件来源与模式同步）"
+    },
+    {
+      "name": "retro-to-issues",
+      "source": "./plugins/retro-to-issues",
+      "description": "Session retrospective to tracked issues（会话复盘与任务跟踪）"
     },
     {
       "name": "data-store",

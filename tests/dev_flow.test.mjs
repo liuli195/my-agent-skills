@@ -27,7 +27,7 @@ test("dev-flow keeps its portable Skill contract and directory structure", async
     assert.doesNotMatch(frontmatter, /^disable-model-invocation: true$/m);
     assert.match(frontmatter, /同一个 Git（版本管理）工作树/);
     assert.match(frontmatter, /非 main（主干）功能分支/);
-    assert.deepEqual(await readdir(packageRoot), ["skills"]);
+    assert.deepEqual((await readdir(packageRoot)).sort(), [".claude-plugin", ".codex-plugin", "skills"]);
     assert.deepEqual(await readdir(resolve(packageRoot, "skills")), ["dev-flow"]);
     assert.deepEqual(
       (await readdir(skillRoot)).sort(),

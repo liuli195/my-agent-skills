@@ -1,0 +1,6 @@
+{
+  "name": "dev-flow",
+  "version": "2.3.0",
+  "description": "Development flow（开发流程）",
+  "skills": "./skills"
+}

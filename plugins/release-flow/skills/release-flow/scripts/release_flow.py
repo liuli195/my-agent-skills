@@ -27,6 +27,94 @@ SUPPORTED_TRANSFORM_TYPE = "json-env"
 SUPPORTED_GENERATOR_TYPE = "codex-marketplace"
 SUPPORTED_GENERATOR_IDENTITY = "codex"
 PLUGIN_REGISTRY: dict[str, dict[str, Any]] = {
+    "dev-flow": {
+        "releaseShape": "marketplace",
+        "releaseInputs": [
+            "plugins/dev-flow"
+        ],
+        "versionFiles": [
+            "plugins/dev-flow/.codex-plugin/plugin.json",
+            "plugins/dev-flow/.claude-plugin/plugin.json"
+        ],
+        "codexMarketplace": {
+            "name": "dev-flow",
+            "source": {
+                "source": "local",
+                "path": "./plugins/dev-flow"
+            },
+            "policy": {
+                "installation": "AVAILABLE",
+                "authentication": "ON_INSTALL"
+            },
+            "category": "Developer Tools"
+        }
+    },
+    "subagent-policy": {
+        "releaseShape": "marketplace",
+        "releaseInputs": [
+            "plugins/subagent-policy"
+        ],
+        "versionFiles": [
+            "plugins/subagent-policy/.codex-plugin/plugin.json",
+            "plugins/subagent-policy/.claude-plugin/plugin.json"
+        ],
+        "codexMarketplace": {
+            "name": "subagent-policy",
+            "source": {
+                "source": "local",
+                "path": "./plugins/subagent-policy"
+            },
+            "policy": {
+                "installation": "AVAILABLE",
+                "authentication": "ON_INSTALL"
+            },
+            "category": "Developer Tools"
+        }
+    },
+    "plugin-sync": {
+        "releaseShape": "marketplace",
+        "releaseInputs": [
+            "plugins/plugin-sync"
+        ],
+        "versionFiles": [
+            "plugins/plugin-sync/.codex-plugin/plugin.json",
+            "plugins/plugin-sync/.claude-plugin/plugin.json"
+        ],
+        "codexMarketplace": {
+            "name": "plugin-sync",
+            "source": {
+                "source": "local",
+                "path": "./plugins/plugin-sync"
+            },
+            "policy": {
+                "installation": "AVAILABLE",
+                "authentication": "ON_INSTALL"
+            },
+            "category": "Developer Tools"
+        }
+    },
+    "retro-to-issues": {
+        "releaseShape": "marketplace",
+        "releaseInputs": [
+            "plugins/retro-to-issues"
+        ],
+        "versionFiles": [
+            "plugins/retro-to-issues/.codex-plugin/plugin.json",
+            "plugins/retro-to-issues/.claude-plugin/plugin.json"
+        ],
+        "codexMarketplace": {
+            "name": "retro-to-issues",
+            "source": {
+                "source": "local",
+                "path": "./plugins/retro-to-issues"
+            },
+            "policy": {
+                "installation": "AVAILABLE",
+                "authentication": "ON_INSTALL"
+            },
+            "category": "Developer Tools"
+        }
+    },
     "data-store": {
         "releaseShape": "marketplace",
         "releaseInputs": ["plugins/data-store"],

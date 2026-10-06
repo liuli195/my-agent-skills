@@ -1034,18 +1034,6 @@ def _mode_state() -> dict[str, object]:
     return value
 
 
-def _marketplace_has_tool(path: Path, *, agents: bool) -> bool:
-    value = _read_json(path)
-    if not isinstance(value, dict) or not isinstance(value.get("name"), str) or not isinstance(value.get("plugins"), list):
-        return False
-    matches = [plugin for plugin in value["plugins"] if isinstance(plugin, dict) and plugin.get("name") == PLUGIN_NAME]
-    if len(matches) != 1:
-        return False
-    plugin_source = matches[0].get("source")
-    expected: object = {"source": "local", "path": f"./plugins/{SOURCE_DIRECTORY}"} if agents else f"./plugins/{SOURCE_DIRECTORY}"
-    return plugin_source == expected
-
-
 def _validate_self_claude_marketplace(path: Path) -> bool:
     value = _read_json(path)
     plugins = value.get("plugins") if isinstance(value, dict) else None
@@ -1122,10 +1110,6 @@ def _validate_dev_source(raw_source: Path) -> tuple[Path, Path, str]:
     missing_skill = next((package_root / path[2:] / "SKILL.md" for path in SKILL_PATHS if not (package_root / path[2:] / "SKILL.md").is_file()), None)
     if missing_skill is not None:
         raise ManagementError(f"invalid_dev_source: missing {missing_skill}")
-    if not _marketplace_has_tool(agents_market, agents=True):
-        raise ManagementError(f"invalid_dev_source: marketplace {agents_market}")
-    if not _marketplace_has_tool(claude_market, agents=False):
-        raise ManagementError(f"invalid_dev_source: marketplace {claude_market}")
     self_claude_market = package_root / ".claude-plugin" / "marketplace.json"
     if not _validate_self_claude_marketplace(self_claude_market):
         raise ManagementError(f"invalid_dev_source: marketplace {self_claude_market}")

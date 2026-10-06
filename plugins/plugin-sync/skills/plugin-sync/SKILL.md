@@ -68,10 +68,10 @@ Build and Verify（构建与验证）同样由 CLI（命令行程序）拥有其
 
 ## Skill Roots（技能根目录）
 
-本仓库的 Plugin（插件）有两种安装形态，检查时都要覆盖：
+共享市场提供 release-flow、pr-flow、dev-flow、subagent-policy、plugin-sync、retro-to-issues、data-store 七项插件。MySpec（自有规格）和 Build and Verify（构建与验证）只走各自 NPM（软件包管理器）入口及包内独立市场，不再放入共享市场。
 
-- **marketplace（插件市场）形态**：带 `.claude-plugin/plugin.json` 与 `.codex-plugin/plugin.json`，走市场订阅和安装。
-- **junction（目录联接）形态**：不带 plugin.json，进不了市场，靠客户端技能根目录里的目录联接指向仓库源码。
+- **marketplace（插件市场）形态**：七项插件均带两端登记文件，走市场订阅和安装。
+- **junction（目录联接）旧安装**：仅用于核对迁移遗留；不再为七项插件新增这种用户级安装。仓库内数据中心共用入口是独立的接入关系，不是第二份插件安装。
 
 junction（目录联接）形态的根目录：
 
@@ -90,6 +90,7 @@ junction（目录联接）形态的根目录：
 6. If the user explicitly authorizes Codex（代码代理） updates, read `references/update-codex.md`.
 7. If the user explicitly authorizes Claude（代码代理） updates, read `references/update-claude.md`.
 8. Re-run the relevant read-only check（只读检查） after any authorized update.
+9. 用户要求开发／正式来源切换时，读取 `references/switch-source.md`，逐插件操作；保留两个市场及其他插件。数据中心升级或切来源后还需按其随包说明检查、更新已接入项目，并明确哪些运行中的工具需要重启。
 
 ## Defaults（默认值）
 

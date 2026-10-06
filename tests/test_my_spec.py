@@ -2972,8 +2972,10 @@ def test_packed_myspec_package_contains_single_codex_marketplace_and_four_skills
     ] == sorted(SKILL_NAMES)
 
 
+@pytest.mark.parametrize("shared_marketplaces_include_tool", [True, False])
 def test_packed_myspec_switches_package_between_development_and_saved_release(
     tmp_path: Path,
+    shared_marketplaces_include_tool: bool,
 ) -> None:
     executable, installed_package = install_packed_myspec(tmp_path)
     prefix = npm_prefix_for(installed_package)
@@ -2989,6 +2991,16 @@ def test_packed_myspec_switches_package_between_development_and_saved_release(
     )
 
     source = controlled_dev_source(tmp_path)
+    if shared_marketplaces_include_tool:
+        for catalog, source_value in (
+            (source / ".agents/plugins/marketplace.json", {"source": "local", "path": "./plugins/my-spec"}),
+            (source / ".claude-plugin/marketplace.json", "./plugins/my-spec"),
+        ):
+            content = json.loads(catalog.read_text(encoding="utf-8"))
+            content["plugins"].append({"name": "my-spec", "source": source_value})
+            catalog.write_text(json.dumps(content), encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=source, check=True, capture_output=True)
+        subprocess.run(["git", "-c", "user.name=MySpec Test", "-c", "user.email=myspec@example.invalid", "commit", "-m", "legacy shared entries"], cwd=source, check=True, capture_output=True)
     env = controlled_dev_env(env, source)
     entered = run_cli(executable, "init", "--dev", env=env, cwd=source)
     assert entered.returncode == 0, entered.stderr
@@ -4023,7 +4035,7 @@ def test_packed_myspec_rejects_invalid_mode_switches(tmp_path: Path) -> None:
     shutil.copytree(REPO_ROOT / ".agents", malformed / ".agents")
     shutil.copytree(REPO_ROOT / ".claude-plugin", malformed / ".claude-plugin")
     shutil.copytree(PLUGIN_ROOT, malformed / "plugins" / "my-spec")
-    market_path = malformed / ".agents" / "plugins" / "marketplace.json"
+    market_path = malformed / "plugins" / "my-spec" / ".agents" / "plugins" / "marketplace.json"
     market = json.loads(market_path.read_text(encoding="utf-8"))
     next(plugin for plugin in market["plugins"] if plugin["name"] == "my-spec")["source"]["path"] = "../wrong"
     write(market_path, json.dumps(market, indent=2))
@@ -4031,7 +4043,7 @@ def test_packed_myspec_rejects_invalid_mode_switches(tmp_path: Path) -> None:
     assert malformed_result.returncode == 1
     assert "error: invalid_dev_source: marketplace" in malformed_result.stderr
 
-    next(plugin for plugin in market["plugins"] if plugin["name"] == "my-spec")["source"]["path"] = "./plugins/my-spec"
+    next(plugin for plugin in market["plugins"] if plugin["name"] == "my-spec")["source"]["path"] = "./"
     write(market_path, json.dumps(market, indent=2))
     package_path = malformed / "plugins" / "my-spec" / "package.json"
     package = json.loads(package_path.read_text(encoding="utf-8"))
@@ -4139,12 +4151,12 @@ def test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_st
     elif case == "skill-file":
         (source / "plugins" / "my-spec" / "skills" / "my-spec-audit" / "SKILL.md").unlink()
     elif case == "codex-marketplace":
-        market_path = source / ".agents" / "plugins" / "marketplace.json"
+        market_path = source / "plugins" / "my-spec" / ".agents" / "plugins" / "marketplace.json"
         market = json.loads(market_path.read_text(encoding="utf-8"))
         next(plugin for plugin in market["plugins"] if plugin["name"] == "my-spec")["source"]["path"] = "../wrong"
         write(market_path, json.dumps(market, indent=2))
     elif case == "claude-marketplace":
-        market_path = source / ".claude-plugin" / "marketplace.json"
+        market_path = source / "plugins" / "my-spec" / ".claude-plugin" / "marketplace.json"
         market = json.loads(market_path.read_text(encoding="utf-8"))
         next(plugin for plugin in market["plugins"] if plugin["name"] == "my-spec")["source"] = "../wrong"
         write(market_path, json.dumps(market, indent=2))
@@ -5482,8 +5494,8 @@ def test_my_spec_plugin_is_discoverable_by_claude_and_codex() -> None:
 
     claude_marketplace = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
     codex_marketplace = json.loads((REPO_ROOT / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8"))
-    assert any(plugin["name"] == "my-spec" for plugin in claude_marketplace["plugins"])
-    assert any(plugin["name"] == "my-spec" for plugin in codex_marketplace["plugins"])
+    assert all(plugin["name"] != "my-spec" for plugin in claude_marketplace["plugins"])
+    assert all(plugin["name"] != "my-spec" for plugin in codex_marketplace["plugins"])
 
 
 def test_apply_delta_can_atomically_replace_main_after_final_confirmation(tmp_path: Path) -> None:

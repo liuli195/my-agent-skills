@@ -13,6 +13,20 @@ description: 把已有结构化记录写入共享项目数据根目录，以 Par
 
 入口是本技能 `scripts/data_store.py`，按实际安装目录解析，不能固定指向开发源码。下面 `<skill>` 是安装后的技能目录，`<data>` 是共享数据根目录。
 
+## 接入项目
+
+安装插件后，由代理从本次加载的技能入口取得 `<skill>` 的实际目录，直接调用随包脚本；不要猜缓存路径，不要另写定位程序。
+
+`python <skill>/scripts/project_binding.py connect --project <repo>`
+
+脚本把仓库共用入口 `<repo>/.local/skills/data-store` 直接连接到自身所在技能目录。Windows（视窗系统）使用一级目录联接，其他系统使用符号链接；不复制源码、不移动数据、不安装第三方定位工具。所有接入该项目的工具和独立命令统一使用这个入口，数据根仍由调用方明确配置。首次接入时，代理修改现有调用方一次，使其使用共用入口；不能再固定用户目录或文件缓存版本。
+
+检查：`python <skill>/scripts/project_binding.py check --project <repo>`。
+
+切换来源或升级后，从新加载的技能目录执行：`python <skill>/scripts/project_binding.py update --project <repo> --from <old-skill>`。先记录旧入口的实际目标，`--from` 必须与它相符。新位置由脚本自身确定，不由调用方传入。普通目录、文件或重定向的父目录占位时拒绝操作并保留内容；切换失败恢复旧入口，无法恢复时明确给出保留位置。
+
+新机器、新工作树需要重新接入一次。接入后，正常调用不查询客户端安装状态，也不逐次启动定位进程；长时间运行的工具继续使用已经加载的实现，更新入口后重新启动该工具。独立命令直接使用 `<repo>/.local/skills/data-store/scripts/data_store.py`。该目录只保存本机接入关系，不提交到版本管理。
+
 ## 写入
 
 `python <skill>/scripts/data_store.py --root <data> write measurements batch_01`
