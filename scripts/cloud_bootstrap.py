@@ -168,7 +168,7 @@ def main(argv=None):
                     command.append('--npm')
             print(run(command, cwd=project))
         print(json.dumps({'status': 'ready', 'root': str(root), 'pending': state['pending'],
-                          'path': str(root/'npm/bin'), 'sources': state['sources'], 'npm': state['npm']}, ensure_ascii=False))
+                          'path': str(root/'npm/bin'), 'npm_prefix': str(root/'npm'), 'sources': state['sources'], 'npm': state['npm']}, ensure_ascii=False))
         return 0
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         if isinstance(error, subprocess.CalledProcessError) and error.stdout:

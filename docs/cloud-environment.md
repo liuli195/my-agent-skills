@@ -32,11 +32,12 @@ python scripts/cloud_bootstrap.py update --root /workspace/shared/cloud-skills/m
 
 ```sh
 python /path/to/my-agent-skills/scripts/cloud_bootstrap.py init --root /workspace/shared/cloud-skills/managed --project /path/to/Quant-Research-Lab
-export PATH="$PWD/.venv/bin:/workspace/shared/cloud-skills/managed/npm/bin:$PATH"
+export NPM_CONFIG_PREFIX=/workspace/shared/cloud-skills/managed/npm
+export PATH="$PWD/.venv/bin:$NPM_CONFIG_PREFIX/bin:$PATH"
 build-and-verify verify --project . --execution-context cloud
 ```
 
-PATH 只影响当前 shell，不写用户配置。公共安装和项目环境版本分别记录。
+这两个环境变量只影响当前 shell，不写用户配置。NPM_CONFIG_PREFIX 让工具的 doctor、更新和规格命令找到同一安装根，不能只设置 PATH。公共安装和项目环境版本分别记录。
 
 ## Git 工作区生命周期
 
