@@ -29,10 +29,10 @@
       "category": "Developer Tools"
     },
     {
-      "name": "build-and-verify",
+      "name": "dev-flow",
       "source": {
         "source": "local",
-        "path": "./plugins/build-and-verify"
+        "path": "./plugins/dev-flow"
       },
       "policy": {
         "installation": "AVAILABLE",
@@ -41,10 +41,34 @@
       "category": "Developer Tools"
     },
     {
-      "name": "my-spec",
+      "name": "subagent-policy",
       "source": {
         "source": "local",
-        "path": "./plugins/my-spec"
+        "path": "./plugins/subagent-policy"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
+      "name": "plugin-sync",
+      "source": {
+        "source": "local",
+        "path": "./plugins/plugin-sync"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
+      "name": "retro-to-issues",
+      "source": {
+        "source": "local",
+        "path": "./plugins/retro-to-issues"
       },
       "policy": {
         "installation": "AVAILABLE",

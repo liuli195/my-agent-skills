@@ -1417,32 +1417,16 @@ def test_build_and_verify_init_spec_targets_test_framework_plugin_capability() -
     assert "试运行）" not in text
 
 
-def test_build_and_verify_registered_in_marketplaces_and_projection() -> None:
-    claude_catalog = read_json(CLAUDE_REPO_MARKETPLACE)
-    codex_catalog = read_json(CODEX_REPO_MARKETPLACE)
-    claude_names = plugin_names(claude_catalog)
-    codex_names = plugin_names(codex_catalog)
-    projection_plugins = release_projection_plugins()
-
-    assert plugin_after(claude_names, "pr-flow") == PLUGIN_NAME
-    assert claude_catalog["plugins"][claude_names.index(PLUGIN_NAME)] == {
-        "name": PLUGIN_NAME,
-        "source": "./plugins/build-and-verify",
-        "description": PLUGIN_DESCRIPTION,
-    }
-    assert plugin_after(codex_names, "pr-flow") == PLUGIN_NAME
-    assert codex_catalog["plugins"][codex_names.index(PLUGIN_NAME)] == {
-        "name": PLUGIN_NAME,
-        "source": {"source": "local", "path": "./plugins/build-and-verify"},
-        "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
-        "category": "Developer Tools",
-    }
-    assert plugin_after(projection_plugins, "pr-flow") == PLUGIN_NAME
+def test_build_and_verify_registered_only_in_its_package_marketplaces() -> None:
+    for catalog_path in (CLAUDE_REPO_MARKETPLACE, CODEX_REPO_MARKETPLACE):
+        assert PLUGIN_NAME not in plugin_names(read_json(catalog_path))
+    assert PLUGIN_NAME not in release_projection_plugins()
+    for relative in (".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json"):
+        assert plugin_names(read_json(PLUGIN_ROOT / relative)) == [PLUGIN_NAME]
 
 
 def test_build_and_verify_registered_in_release_flow_sources() -> None:
     release_files = [
-        RELEASE_FLOW_PROJECTION,
         RELEASE_FLOW_SCRIPT,
     ]
 
@@ -1589,13 +1573,9 @@ def test_build_and_verify_release_projection_projects_real_catalogs(tmp_path: Pa
     assert "status: projected" in result.stdout
 
     codex_catalog = read_json(project / ".agents" / "plugins" / "marketplace.json")
-    codex_names = plugin_names(codex_catalog)
-    assert plugin_after(codex_names, "pr-flow") == PLUGIN_NAME
-    assert codex_catalog["plugins"][codex_names.index(PLUGIN_NAME)] == {
-        "name": PLUGIN_NAME,
-        "source": {"source": "local", "path": "./plugins/build-and-verify"},
-        "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
-        "category": "Developer Tools",
+    assert PLUGIN_NAME not in plugin_names(codex_catalog)
+    assert set(plugin_names(codex_catalog)) == {
+        "release-flow", "pr-flow", "dev-flow", "subagent-policy", "plugin-sync", "retro-to-issues", "data-store",
     }
 
 

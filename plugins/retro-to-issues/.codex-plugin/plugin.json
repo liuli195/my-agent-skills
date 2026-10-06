@@ -1,0 +1,6 @@
+{
+  "name": "retro-to-issues",
+  "version": "0.1.0",
+  "description": "Session retrospective to tracked issues（会话复盘与任务跟踪）",
+  "skills": "./skills"
+}

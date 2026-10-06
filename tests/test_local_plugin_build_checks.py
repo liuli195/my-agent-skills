@@ -13,6 +13,15 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_shared_marketplaces_offer_seven_skills_without_npm_tools() -> None:
+    expected = {"release-flow", "pr-flow", "dev-flow", "subagent-policy", "plugin-sync", "retro-to-issues", "data-store"}
+    for relative in (".agents/plugins/marketplace.json", ".claude-plugin/marketplace.json"):
+        catalog = json.loads((REPO_ROOT / relative).read_text(encoding="utf-8"))
+        assert catalog["name"] == "my-agent-skills-marketplace-dev"
+        assert {entry["name"] for entry in catalog["plugins"]} == expected
+
 LOCAL_BUILD_SCRIPT = REPO_ROOT / "scripts" / "local_plugin_build.py"
 BUILD_AND_VERIFY_RUNNER = (
     REPO_ROOT / "plugins" / "build-and-verify" / "python" / "build_and_verify_runner.py"
