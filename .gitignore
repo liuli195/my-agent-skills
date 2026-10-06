@@ -108,3 +108,7 @@ research_datasets/**/raw/
 # ========================
 .ipynb_checkpoints/
 *.ipynb_checkpoints
+
+# Linux worktree dependency symlinks (directory-only patterns do not match links)
+/.venv
+/node_modules
