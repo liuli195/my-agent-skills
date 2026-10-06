@@ -115,3 +115,26 @@ Data Store MUST 在内部选择合适的读取配置，不要求调用者提供�
 
 - **WHEN** 同键成功替换、增加记录键或删除分片之后，调用者再次发起读取
 - **THEN** 新读取看到当次可用数据，不复用旧结果；单键完整读取保持兼容，字段或来源无法明确识别时仍正常使用默认配置执行
+### Requirement: Data Store selects fields and matching rows within logical record groups
+
+Data Store（数据存储）MUST（必须）在按单个或多个逻辑记录键读取时，支持可选顶层字段和顶层字段标量等值条件，在查询中选择匹配记录而不要求调用者先接收完整组。条件支持字符串、数值、布尔值及空值，多个条件同时成立；字段名按名称处理，条件值按参数处理，不能作为查询表达式执行。调用者 MUST 不需要物理路径、业务专用字段或调优参数；保留字段类型、分批消费、关闭资源和既有错误含义，不另存完整结果或持久数据库。没有选择字段或筛选条件时，原有完整组读取语义 MUST 保持兼容。
+
+#### Scenario: Caller selects fields from one logical key
+
+- **WHEN** 调用者指定一个已有逻辑记录键和顶层字段名
+- **THEN** 只返回选定字段，保留数值及嵌套类型，不要求提供物理文件路径
+
+#### Scenario: Caller selects matching rows from one or several keys
+
+- **WHEN** 调用者读取一个或多个已有逻辑键并提供有效等值条件，包括空值条件
+- **THEN** 只返回同时满足条件的记录及选定字段，重复键不重复返回记录，仍可分批读取并关闭
+
+#### Scenario: Caller supplies an invalid filter
+
+- **WHEN** 调用者提供空条件、非标量条件值或不存在的顶层字段
+- **THEN** 读取明确报错，不执行字段名或条件值中的查询表达式，不返回部分成功冒充全部成功
+
+#### Scenario: Caller omits selection and filters
+
+- **WHEN** 调用者按原有逻辑表和键读取而未指定字段或条件
+- **THEN** 返回原有完整记录组，替换后的新读取看到最新数据，缺失、明确损坏或暂时不可用仍按原错误规则报告
