@@ -12,11 +12,12 @@ const packages = [
     files: [
       "check.md",
       "status-taxonomy.md",
+      "switch-source.md",
       "update-build-and-verify-runtime.md",
       "update-claude.md",
       "update-codex.md",
     ],
-    references: ["check.md", "status-taxonomy.md", "update-claude.md", "update-codex.md"],
+    references: ["check.md", "status-taxonomy.md", "update-claude.md", "update-codex.md", "switch-source.md"],
     description: /Synchronize local agent Plugin/,
   },
   {
@@ -38,7 +39,7 @@ test("repository-owned pure Skill packages keep their portable contracts", async
     assert.match(frontmatter, new RegExp(`^name: ${expected.name}$`, "m"));
     assert.doesNotMatch(frontmatter, /^disable-model-invocation: true$/m);
     assert.match(frontmatter, expected.description);
-    assert.deepEqual(await readdir(expected.root), ["skills"]);
+    assert.deepEqual((await readdir(expected.root)).sort(), [".claude-plugin", ".codex-plugin", "skills"]);
     assert.deepEqual(await readdir(resolve(expected.root, "skills")), [expected.name]);
 
     const skillRoot = resolve(expected.root, "skills", expected.name);
