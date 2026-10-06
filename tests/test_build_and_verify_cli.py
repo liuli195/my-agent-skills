@@ -500,6 +500,9 @@ def _controlled_dev_source(tmp_path: Path) -> tuple[Path, Path]:
     launcher.chmod(launcher.stat().st_mode | 0o111)
     initialized = subprocess.run(["git", "init"], cwd=source, text=True, capture_output=True, check=False)
     assert initialized.returncode == 0, initialized.stderr
+    # The isolated HOME must not lose Windows long-path support for this fixture.
+    configured = _git(source, "config", "core.longpaths", "true")
+    assert configured.returncode == 0, configured.stderr
     committed = subprocess.run(
         ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", "add", "."],
         cwd=source,

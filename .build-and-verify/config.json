@@ -296,6 +296,26 @@
         ],
         "checkParallel": true,
         "pytestXdistWorkers": 1
+      },
+      {
+        "id": "verify.cloud-bootstrap",
+        "paths": [
+          "scripts/cloud_bootstrap.py",
+          "scripts/cloud-environment.json",
+          "scripts/project_environment.py",
+          "tests/test_cloud_bootstrap.py",
+          "tests/test_project_environment.py"
+        ],
+        "inputs": [
+          "scripts/cloud_bootstrap.py",
+          "scripts/cloud-environment.json",
+          "scripts/project_environment.py",
+          "tests/test_cloud_bootstrap.py",
+          "tests/test_project_environment.py"
+        ],
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_cloud_bootstrap.py tests/test_project_environment.py",
+        "checkParallel": true,
+        "pytestXdistWorkers": 1
       }
     ]
   }
