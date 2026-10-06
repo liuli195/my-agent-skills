@@ -131,6 +131,8 @@ def main(argv=None):
     parser.add_argument('--skills-dir', type=Path, help='Approved user skill discovery directory')
     args = parser.parse_args(argv)
     try:
+        if sys.version_info[:2] != (3, 12):
+            raise ValueError('Python 3.12 is required before installing the environment')
         if args.latest and (args.action != 'update' or not args.only):
             raise ValueError('--latest requires update --only NAME; project dependencies are never auto-upgraded')
         manifest = json.loads(args.manifest.read_text(encoding='utf-8'))
@@ -140,6 +142,13 @@ def main(argv=None):
         root = args.root.expanduser().resolve()
         state = synchronize(manifest, root, args.latest, set(args.only))
         if args.skills_dir:
+            target_dir = args.skills_dir.expanduser()
+            if target_dir.exists():
+                obsolete = [str(path) for path in target_dir.iterdir()
+                            if path.is_symlink() and path.resolve().is_relative_to(root)
+                            and not (path/'SKILL.md').is_file()]
+                if obsolete:
+                    raise ValueError('Review obsolete user skill links before approved cleanup: ' + ', '.join(obsolete))
             for skill in (root / 'skills').iterdir():
                 link(args.skills_dir.expanduser() / skill.name, skill)
         if args.project:

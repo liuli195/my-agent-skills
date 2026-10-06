@@ -98,3 +98,25 @@ def test_obsolete_link_is_reported_without_deleting_it(tmp_path, capsys):
     assert app.main(['update','--manifest',str(config),'--root',str(root)]) == 1
     assert 'obsolete' in capsys.readouterr().err
     assert stale.is_symlink()
+
+def test_external_managed_stale_link_is_reported(tmp_path, capsys):
+    app=entry()
+    root=tmp_path/'managed'
+    discovery=tmp_path/'user-skills'
+    discovery.mkdir()
+    stale=discovery/'old-skill'
+    stale.symlink_to(root/'skills/old-skill')
+    config=tmp_path/'environment.json'
+    config.write_text('{"sources":[],"npm":[]}')
+    assert app.main(['update','--manifest',str(config),'--root',str(root),'--skills-dir',str(discovery)]) == 1
+    assert 'obsolete' in capsys.readouterr().err
+    assert stale.is_symlink()
+
+def test_public_entry_checks_python_before_installing(tmp_path, capsys):
+    app=entry()
+    config=tmp_path/'environment.json'
+    config.write_text('{"sources":[],"npm":[]}')
+    with patch.object(app.sys,'version_info',(3,11)):
+        assert app.main(['init','--root',str(tmp_path/'managed'),'--manifest',str(config)]) == 1
+    assert 'Python 3.12' in capsys.readouterr().err
+    assert not (tmp_path/'managed').exists()
