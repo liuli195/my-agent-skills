@@ -39,7 +39,7 @@ Python 调用：`query(root, sql, parameters=None)` 返回 DuckDB 游标；使�
 
 `python <skill>/scripts/data_store.py --root <data> read-key measurements batch_01 --batch-size 1000`
 
-Python 调用：`read_key(root, table, key)`。表和键与 `write` 使用同一逻辑身份，返回该键的完整记录组游标，仍用 `fetchmany` 和上下文管理器关闭。只打开目标分片，不枚举其他表或历史分片；通用 `query` 的全表、多表语义不变。
+Python 调用：`read_key(root, table, key, columns=None, filters=None)`。表和键与 `write` 使用同一逻辑身份，默认返回该键的完整记录组游标，仍用 `fetchmany` 和上下文管理器关闭。只打开目标分片，不枚举其他表或历史分片；通用 `query` 的全表、多表语义不变。
 
 数据根存在但目标键不存在时抛出 `MissingKeyError`（继承 `FileNotFoundError`）；明确的 Parquet 文件头或页脚损坏抛出 `CorruptDataError`。整个数据根不可用、权限、锁、磁盘及无法确定为内容损坏的查询错误原样传播，调用方不能把所有读取失败当作无效数据而静默重算。点读不做完整哈希复核或第二次完整报告读取；业务身份与成绩核验仍由调用者负责。
 
@@ -50,6 +50,8 @@ Python 调用：`read_key(root, table, key)`。表和键与 `write` 使用同一
 Python（编程语言）调用：`read_keys(root, table, keys, columns=None)`；`columns` 是可选关键字参数，仅接受顶层字段名列表。省略时读取完整记录。一次连接只打开指定键；键按原有大小写规则去重，跨键返回顺序不作保证。指定字段直接由查询引擎读取，不先返回完整报告再取字段。
 
 空键列表、空字段列表、重复字段（包括仅大小写不同）和未知字段明确报错；字段名按名称处理，不能传查询表达式。目标缺失、明确损坏和暂时读取故障分别报告，不静默跳过失败目标。结果仍使用游标逐批读取并关闭，保留结构化类型和按字段名合并的规则。
+
+两种点读都可使用 `filters={"label": "002"}`，命令行对应 `--filters '{"label":"002"}'`，由查询引擎在指定记录组中筛选。只接受非空的顶层字段与单个值的映射，多个条件同时满足才返回；值为 `None` 时匹配空值。字段按名称处理，值单独传入，不能传查询表达式。可以同时指定 `columns`，省略筛选时仍返回完整组。
 
 ## 边界
 

@@ -219,12 +219,12 @@ def _check_key(path):
             raise CorruptDataError("目标数据分片的 Parquet 页脚损坏")
 
 
-def read_key(root, table, key):
+def read_key(root, table, key, *, columns=None, filters=None):
     """Read the complete record group written under one logical key."""
-    return read_keys(root, table, [key])
+    return read_keys(root, table, [key], columns=columns, filters=filters)
 
 
-def read_keys(root, table, keys, *, columns=None):
+def read_keys(root, table, keys, *, columns=None, filters=None):
     """Read selected logical keys once, optionally projecting top-level columns."""
     root = Path(root).resolve(strict=True)
     directory = root / _name(table, table=True)
@@ -240,6 +240,19 @@ def read_keys(root, table, keys, *, columns=None):
                 or len({column.lower() for column in columns}) != len(columns)):
             raise ValueError("字段必须是非空、无重复的顶层字段名列表")
         projection = ", ".join('_records."' + column.replace('"', '""') + '"' for column in columns)
+    parameters = []
+    predicate = ""
+    if filters is not None:
+        if (not isinstance(filters, dict) or not filters
+                or any(not isinstance(field, str) or not field or "\x00" in field for field in filters)
+                or len({field.lower() for field in filters}) != len(filters)
+                or any(value is not None and not isinstance(value, (str, int, float, bool))
+                       for value in filters.values())):
+            raise ValueError("筛选必须是非空、无重复的顶层字段与单个值的映射")
+        predicate = " WHERE " + " AND ".join(
+            '_records."' + field.replace('"', '""') + '" IS NOT DISTINCT FROM ?'
+            for field in filters)
+        parameters = list(filters.values())
     for path in paths:
         _check_key(path)
     connection = _duckdb().connect(":memory:", config={
@@ -248,15 +261,15 @@ def read_keys(root, table, keys, *, columns=None):
     try:
         connection.execute("SET allowed_directories = ?", [[str(root) + os.sep]])
         connection.execute("SET enable_external_access = false")
-        if len(paths) == 1:
+        if len(paths) == 1 and filters is None:
             # Single-file reads already perform well; avoid planning/setup overhead.
             connection.execute("SET lock_configuration = true")
             return connection.execute(f"SELECT {projection} FROM read_parquet(?) AS _records", [str(paths[0])])
         _register(connection, "_records", paths)
-        sql = f"SELECT {projection} FROM _records"
-        _choose_read(connection, root, sql, [], [("_records", paths)])
+        sql = f"SELECT {projection} FROM _records{predicate}"
+        _choose_read(connection, root, sql, parameters, [("_records", paths)])
         connection.execute("SET lock_configuration = true")
-        return connection.execute(sql)
+        return connection.execute(sql, parameters)
     except BaseException:
         connection.close()
         raise
@@ -311,11 +324,14 @@ def main(argv=None):
     point_reader = commands.add_parser("read-key")
     point_reader.add_argument("table")
     point_reader.add_argument("key")
+    point_reader.add_argument("--columns", type=json.loads)
+    point_reader.add_argument("--filters", type=json.loads)
     point_reader.add_argument("--batch-size", type=int, default=1000)
     batch_reader = commands.add_parser("read-keys")
     batch_reader.add_argument("table")
     batch_reader.add_argument("keys", nargs="+")
     batch_reader.add_argument("--columns", type=json.loads)
+    batch_reader.add_argument("--filters", type=json.loads)
     batch_reader.add_argument("--batch-size", type=int, default=1000)
     args = parser.parse_args(argv)
     try:
@@ -326,9 +342,9 @@ def main(argv=None):
             if args.batch_size < 1:
                 raise ValueError("batch-size 必须大于零")
             if args.command == "read-key":
-                cursor = read_key(args.root, args.table, args.key)
+                cursor = read_key(args.root, args.table, args.key, columns=args.columns, filters=args.filters)
             elif args.command == "read-keys":
-                cursor = read_keys(args.root, args.table, args.keys, columns=args.columns)
+                cursor = read_keys(args.root, args.table, args.keys, columns=args.columns, filters=args.filters)
             else:
                 cursor = query(args.root, args.sql, args.parameters)
             with cursor:
