@@ -138,3 +138,30 @@ Data Store（数据存储）MUST（必须）在按单个或多个逻辑记录键
 
 - **WHEN** 调用者按原有逻辑表和键读取而未指定字段或条件
 - **THEN** 返回原有完整记录组，替换后的新读取看到最新数据，缺失、明确损坏或暂时不可用仍按原错误规则报告
+### Requirement: Data Store ships a ready-made project connection for all integrated consumers
+
+Data Store（数据中心）MUST 随市场技能提供现成的项目接入、检查与更新入口，由代理从实际已安装技能入口调用，依据自身安装位置建立一个项目共用连接。所有接入工具与独立命令 MUST 使用同一连接；正常运行不需要用户填路径、启动方传位置、第三方定位工具、客户端查询、缓存目录猜测或另装 NPM（软件包管理器）程序。项目数据根独立于安装位置，接入关系只保留本机，不复制实现或提交本机绝对位置。
+
+#### Scenario: An agent connects an installed skill to a project
+
+- **WHEN** 用户安装插件后让代理将数据中心接入目标仓库
+- **THEN** 代理直接调用随包接入入口，项目内所有已对接调用者共用实际安装实现
+- **THEN** 重复接入同一来源安全，独立命令和同进程调用均能写入、查询同一共享数据
+### Requirement: Data Store changes project connections safely and keeps running implementations explicit
+
+Data Store MUST 在更新项目连接前检查新安装可用与原来源相符；普通文件、目录或重定向父目录冲突时明确拒绝并保留内容。切换失败 MUST 恢复旧入口；恢复或清理也失败时分别保留原始错误和可恢复位置。只清理连接本身，不能删除安装目标或用户数据。新机器或工作树重新接入一次，已运行进程更新连接后重新启动，正常读写不重复定位。
+
+#### Scenario: A connection update succeeds or fails
+
+- **WHEN** 代理从新的已安装技能入口更新已核对旧来源的项目连接
+- **THEN** 成功后新命令使用新来源，已加载实现的进程在重启后切换
+- **THEN** 更新失败仍可恢复旧入口；连续失败明确保留错误与旧入口位置，不伪报成功
+### Requirement: Data Store connection changes preserve logical-table behavior and measured performance
+
+Data Store MUST 保持既有逻辑表、写入替换、只读查询、点读及批量指定字段的语义和类型；安装接入变化不能增加正常每次读写的进程启动或客户端查询。交付前 MUST 以相同真实数据、环境、线程策略及实际工作量交替比较既有读写、冷启动和独立命令，记录结果与测量波动；超过正常波动的稳定退化必须解决，不以其他场景收益抵消。
+
+#### Scenario: An integration change is validated for delivery
+
+- **WHEN** 数据中心接入实现准备交付
+- **THEN** 相同输入的写入、替换、单键、多键、字段筛选、嵌套报告、平坦事件、统计与多表查询返回一致内容及类型
+- **THEN** 首次加载与重复进程内读写分开测量，稳定退化未解决时不交付

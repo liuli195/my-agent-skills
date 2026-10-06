@@ -1,6 +1,6 @@
 {
   "name": "plugin-sync",
-  "version": "0.1.0",
+  "version": "2.3.0",
   "description": "Plugin source and mode synchronization（插件来源与模式同步）",
   "skills": "./skills"
 }

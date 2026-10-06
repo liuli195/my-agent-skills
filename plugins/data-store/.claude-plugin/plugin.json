@@ -1,6 +1,6 @@
 {
   "name": "data-store",
-  "version": "0.1.0",
+  "version": "2.3.0",
   "description": "Structured Parquet/Zstd storage and DuckDB queries（结构化列式数据存储、写入与查询）",
   "skills": "./skills"
 }
