@@ -96,6 +96,9 @@ def test_setup_worktree_script_links_shared_node_dependencies(
     shutil.copy2(REPO_ROOT / "package.json", project / "package.json")
     shutil.copy2(REPO_ROOT / "package-lock.json", project / "package-lock.json")
     shutil.copy2(REPO_ROOT / "requirements-dev.txt", project / "requirements-dev.txt")
+    nested = Path("plugins/data-store/skills/data-store/requirements.txt")
+    (project / nested).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(REPO_ROOT / nested, project / nested)
 
     def run(*args: str, cwd: Path = project) -> subprocess.CompletedProcess[str]:
         return subprocess.run(args, cwd=cwd, text=True, capture_output=True, check=True)
@@ -172,7 +175,7 @@ def test_setup_worktree_script_links_shared_node_dependencies(
     assert "Shared Python environment is stale" in normalize_powershell_output(stale_python)
 
     (shared_venv / ".requirements.sha256").write_text(
-        f"{fingerprint} requirements-dev.txt\n", encoding="ascii"
+        f"{fingerprint} requirements-dev.txt\n" + hashlib.sha256((project / nested).read_text().replace("\r\n", "\n").encode()).hexdigest().upper() + f" {nested.as_posix()}\n", encoding="ascii"
     )
     setup(check=True)
     setup(check=True)

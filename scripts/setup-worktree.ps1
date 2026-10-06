@@ -4,7 +4,7 @@ param()
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $python = Join-Path $projectRoot '.venv\Scripts\python.exe'
-$pythonManifests = @('requirements-dev.txt')
+$pythonManifests = @('requirements-dev.txt', 'plugins/data-store/skills/data-store/requirements.txt')
 $nodeManifests = @('package.json', 'package-lock.json')
 
 function Get-FileSha256([string]$path) {
