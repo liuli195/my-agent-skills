@@ -58,10 +58,7 @@ def synchronize(manifest, root, latest, selected):
         if not ref:
             ref = previous.get('ref') if not latest else None
             if not ref:
-                if item.get('channel', 'release') == 'release':
-                    ref = github(f'repos/{repo}/releases/latest')['tag_name']
-                else:
-                    ref = github(f'repos/{repo}/commits/HEAD')['sha']
+                ref = github(f'repos/{repo}/releases/latest')['tag_name']
         destination = root / 'sources' / name
         newly_cloned = not destination.exists()
         if newly_cloned:

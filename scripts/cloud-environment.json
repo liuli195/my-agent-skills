@@ -36,7 +36,6 @@
     {
       "name": "find-skills",
       "repo": "vercel-labs/skills",
-      "channel": "commit",
       "paths": [
         "skills/find-skills"
       ]

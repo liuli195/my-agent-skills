@@ -12,7 +12,7 @@ python scripts/cloud_bootstrap.py update --root /workspace/shared/cloud-skills/m
 python scripts/cloud_bootstrap.py update --root /workspace/shared/cloud-skills/managed --latest --only own-skills
 ```
 
-第三条仅更新已发布的自有技能；可以用 `--only mattpocock`、`--only find-skills` 或具体 npm 包名选择相应来源。首次使用解析最新正式发布版本，无正式发布渠道的 find-skills 记录具体提交。普通重跑使用已记录版本，清单中的显式版本始终优先，不修改项目锁文件。
+第三条仅更新已发布的自有技能；可以用 `--only mattpocock`、`--only find-skills` 或具体 npm 包名选择相应来源。首次使用解析最新正式发布版本，不回退到开发分支或源码 HEAD。普通重跑使用已记录版本，清单中的显式版本始终优先，不修改项目锁文件。
 
 声明文件为 `scripts/cloud-environment.json`。给源增加技能路径即可通过同一入口纳管，无需为 data-store 增加专用命令。data-store 尚未出现在正式版本时记录为待发布；未来更新 own-skills 后自动发现。安装范围按顶层目录计算，子技能发现链接不算另一套安装。
 
