@@ -96,19 +96,29 @@ def update_link(entry, target, expected):
             staged.rename(entry)
             if entry.resolve(strict=True) != target:
                 raise ValueError("切换后检查失败")
-        except (OSError, ValueError):
-            if os.path.lexists(entry):
-                remove_link(entry)
-            saved.rename(entry)
-            moved = False
+        except (OSError, ValueError) as switch_error:
+            try:
+                if os.path.lexists(entry):
+                    remove_link(entry)
+                saved.rename(entry)
+                moved = False
+            except (OSError, ValueError) as restore_error:
+                raise OSError(f"切换失败：{switch_error}；恢复失败：{restore_error}") from switch_error
             raise
         remove_link(saved)
         moved = False
     finally:
+        cleanup_error = None
         if os.path.lexists(staged):
-            remove_link(staged)
+            try:
+                remove_link(staged)
+            except (OSError, ValueError) as error:
+                cleanup_error = error
+                print(f"临时入口清理失败：{staged}：{error}", file=sys.stderr)
         if moved:
             print(f"旧入口保留在 {saved}，请核对后恢复", file=sys.stderr)
+        if cleanup_error is not None and sys.exc_info()[0] is None:
+            raise cleanup_error
 
 
 def main():

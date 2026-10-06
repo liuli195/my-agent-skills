@@ -116,7 +116,8 @@ def test_project_connection_stays_out_of_git(tmp_path):
     assert status.stdout == ""
 
 
-def test_update_restores_old_entry_when_filesystem_rename_fails(tmp_path):
+@pytest.mark.parametrize("restore_fails", [False, True])
+def test_update_restores_old_entry_when_filesystem_rename_fails(tmp_path, restore_fails):
     old = install(tmp_path, "old")
     new = install(tmp_path, "new")
     project = tmp_path / "project"
@@ -129,23 +130,29 @@ from unittest.mock import patch
 api = runpy.run_path(sys.argv[1])
 sys.argv = sys.argv[1:]
 original = Path.rename
-failed = False
+failures = 0
 def rename(source, target):
-    global failed
-    if Path(target).name == "data-store" and not failed:
-        failed = True
-        raise OSError("injected filesystem rename failure")
+    global failures
+    if Path(target).name == "data-store" and failures < FAIL_LIMIT:
+        failures += 1
+        raise OSError("injected filesystem rename failure " + str(failures))
     return original(source, target)
 with patch.object(Path, "rename", rename):
     raise SystemExit(api["main"]())
-''', encoding="utf-8")
+'''.replace("FAIL_LIMIT", "2" if restore_fails else "1"), encoding="utf-8")
     failed = subprocess.run(
         [sys.executable, str(runner), str(new / "scripts/project_binding.py"),
          "update", "--project", str(project), "--from", str(old)],
         text=True, capture_output=True,
     )
     assert failed.returncode != 0
-    assert "injected filesystem rename failure" in failed.stderr
-    assert invoke(old, project, "check").returncode == 0
+    assert "injected filesystem rename failure 1" in failed.stderr
+    if restore_fails:
+        assert "injected filesystem rename failure 2" in failed.stderr
+        assert "旧入口保留在" in failed.stderr
+        links = [p for p in (project / ".local/skills").iterdir() if p.is_dir()]
+        assert any(p.resolve() == old.resolve() for p in links)
+    else:
+        assert invoke(old, project, "check").returncode == 0
     assert (old / "scripts/data_store.py").is_file()
     assert (new / "scripts/data_store.py").is_file()
