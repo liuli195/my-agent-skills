@@ -1,6 +1,8 @@
 """Exercise the same public project setup entry as bootstrap, without downloads."""
 import importlib.util
 import json
+import os
+import pytest
 import subprocess
 import sys
 from pathlib import Path
@@ -8,6 +10,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux adapter; Windows uses the setup-worktree entry tests")
 def test_project_setup_reuses_environment_and_detects_nested_change(tmp_path, capsys):
     spec = importlib.util.spec_from_file_location('project_environment', ROOT/'scripts/project_environment.py')
     app = importlib.util.module_from_spec(spec)
