@@ -7,7 +7,8 @@
     {
       "name": "release-flow",
       "source": "./plugins/release-flow",
-      "description": "Release flow plugin for Codex and Claude agents"
+      "description": "Release flow plugin for Codex and Claude agents",
+      "version": "2.3.0"
     },
     {
       "name": "pr-flow",
@@ -17,27 +18,32 @@
     {
       "name": "dev-flow",
       "source": "./plugins/dev-flow",
-      "description": "Development flow（开发流程）"
+      "description": "Development flow（开发流程）",
+      "version": "2.3.0"
     },
     {
       "name": "subagent-policy",
       "source": "./plugins/subagent-policy",
-      "description": "Subagent policy（子代理策略）"
+      "description": "Subagent policy（子代理策略）",
+      "version": "2.3.0"
     },
     {
       "name": "plugin-sync",
       "source": "./plugins/plugin-sync",
-      "description": "Plugin source and mode synchronization（插件来源与模式同步）"
+      "description": "Plugin source and mode synchronization（插件来源与模式同步）",
+      "version": "2.3.0"
     },
     {
       "name": "retro-to-issues",
       "source": "./plugins/retro-to-issues",
-      "description": "Session retrospective to tracked issues（会话复盘与任务跟踪）"
+      "description": "Session retrospective to tracked issues（会话复盘与任务跟踪）",
+      "version": "2.3.0"
     },
     {
       "name": "data-store",
       "source": "./plugins/data-store",
-      "description": "Structured Parquet/Zstd storage and DuckDB queries（结构化列式数据存储、写入与查询）"
+      "description": "Structured Parquet/Zstd storage and DuckDB queries（结构化列式数据存储、写入与查询）",
+      "version": "2.3.0"
     }
   ]
 }
