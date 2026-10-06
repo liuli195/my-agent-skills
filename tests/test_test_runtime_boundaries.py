@@ -399,6 +399,7 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    "tests/test_data_store.py::test_installed_cli_filters_one_row_within_a_logical_group": "Independent installed-skill CLI smoke for typed row filtering inside a logical group.",
     "tests/test_data_store.py::test_independent_skill_cli_writes_and_queries_typed_rows": "Independent installed-skill write/query CLI smoke, with real Parquet and bounded output.",
     'tests/test_pr_flow_plugin_package.py::test_pr_flow_installed_skill_command_runs_from_external_project': (
         'covers the documented installed PR Flow Python entrypoint from an external target with no source checkout, preserving target selection and the five loaded-skill command contracts'
