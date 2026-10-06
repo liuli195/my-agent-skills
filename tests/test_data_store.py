@@ -16,6 +16,28 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILL = ROOT / "plugins/data-store/skills/data-store"
 
 
+def test_installed_cli_filters_one_row_within_a_logical_group(tmp_path):
+    script = tmp_path / "data_store.py"
+    shutil.copy2(SKILL / "scripts/data_store.py", script)
+    data = tmp_path / "data"
+    rows = [{"label": "001", "score": 1.25, "parts": [{"amount": 4}]},
+            {"label": "002", "score": 2.5, "parts": [{"amount": 8}]}]
+    written = subprocess.run(
+        [sys.executable, str(script), "--root", str(data), "write", "measurements", "group_01"],
+        input=json.dumps(rows), text=True, capture_output=True, cwd=tmp_path,
+    )
+    assert written.returncode == 0, written.stderr
+    selected = subprocess.run(
+        [sys.executable, str(script), "--root", str(data), "read-key", "measurements", "group_01",
+         "--filters", '{"label":"002"}', "--columns", '["label","parts"]', "--batch-size", "1"],
+        text=True, capture_output=True, cwd=tmp_path,
+    )
+    assert selected.returncode == 0, selected.stderr
+    assert [json.loads(line) for line in selected.stdout.splitlines()] == [
+        {"label": "002", "parts": [{"amount": 8}]},
+    ]
+
+
 def load_store():
     spec = importlib.util.spec_from_file_location("data_store", SKILL / "scripts/data_store.py")
     module = importlib.util.module_from_spec(spec)
