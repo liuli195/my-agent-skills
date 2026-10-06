@@ -32,3 +32,12 @@ def test_project_setup_reuses_environment_and_detects_nested_change(tmp_path, ca
         (tmp_path/'skill.txt').write_text('example==2\n')
         assert app.main(['--project',str(tmp_path),'--requirement','requirements.txt']) == 0
         assert capsys.readouterr().out.strip() == 'prepared'
+
+def test_unsupported_python_stops_before_environment_writes(tmp_path, capsys):
+    spec = importlib.util.spec_from_file_location('project_environment', ROOT/'scripts/project_environment.py')
+    app = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(app)
+    with patch.object(app.sys, 'version_info', (3, 11)):
+        assert app.main(['--project', str(tmp_path)]) == 1
+    assert 'Python 3.12' in capsys.readouterr().err
+    assert not (tmp_path/'.venv').exists()

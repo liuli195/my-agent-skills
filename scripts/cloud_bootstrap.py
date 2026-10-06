@@ -63,7 +63,8 @@ def synchronize(manifest, root, latest, selected):
                 else:
                     ref = github(f'repos/{repo}/commits/HEAD')['sha']
         destination = root / 'sources' / name
-        if not destination.exists():
+        newly_cloned = not destination.exists()
+        if newly_cloned:
             destination.parent.mkdir(parents=True, exist_ok=True)
             run(['git', 'clone', '--filter=blob:none', '--sparse', '--no-checkout',
                  f'https://github.com/{repo}.git', destination])
@@ -73,8 +74,9 @@ def synchronize(manifest, root, latest, selected):
             # A fresh no-checkout clone has tracked deletions until first checkout.
             if previous:
                 raise ValueError(f'Local changes in installation: {destination}')
-        if previous.get('ref') != ref or not (destination / '.git').exists():
-            run(['git', '-C', destination, 'fetch', '--depth', '1', 'origin', ref])
+        if newly_cloned or previous.get('ref') != ref:
+            revision = previous.get('commit', ref) if previous.get('ref') == ref else ref
+            run(['git', '-C', destination, 'fetch', '--depth', '1', 'origin', revision])
             run(['git', '-C', destination, 'checkout', '--detach', 'FETCH_HEAD'])
         paths = item.get('paths', [])
         if paths:
@@ -110,6 +112,9 @@ def synchronize(manifest, root, latest, selected):
             link(discovery / skill.parent.name, skill.parent)
         state['npm'][name] = version
         save(state_path, state)
+    obsolete = [str(path) for path in discovery.iterdir() if not (path/'SKILL.md').is_file()]
+    if obsolete:
+        raise ValueError('Review obsolete managed links before approved cleanup: ' + ', '.join(obsolete))
     state['pending'] = [name for name in manifest.get('optional_skills', []) if not (discovery/name/'SKILL.md').is_file()]
     save(state_path, state)
     return state

@@ -18,7 +18,7 @@ python scripts/cloud_bootstrap.py update --root /workspace/shared/cloud-skills/m
 
 `--skills-dir` 可指定已批准的用户技能发现目录。目标存在且不是相同链接时停止，不能覆盖用户安装。安装目录、发现目录和旧环境删除必须先得到具体授权。
 
-公共目录中的 `installed.json` 记录版本，`sources` 使用 Git 稀疏检出，`npm` 使用 npm 正式包；技能发现链接指向唯一运行来源。升级不会自动清理用户目录或旧迁移包。
+公共目录中的 `installed.json` 记录版本，`sources` 使用 Git 稀疏检出，`npm` 使用 npm 正式包；技能发现链接指向唯一运行来源。升级不会自动清理用户目录或旧迁移包。若升级后发现失效技能链接，入口列出路径并停止成功状态，待批准清理后重跑；不会擅自删除用户目录的链接。
 
 ## 项目接入
 

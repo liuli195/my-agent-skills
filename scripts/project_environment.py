@@ -90,6 +90,8 @@ def main(argv=None):
     parser.add_argument('--npm', action='store_true')
     args = parser.parse_args(argv)
     try:
+        if sys.version_info[:2] != (3, 12):
+            raise ValueError('Python 3.12 is required by the project setup contract')
         if os.name == 'nt':
             raise ValueError('Use the existing Windows setup recipe')
         root = args.project.resolve()

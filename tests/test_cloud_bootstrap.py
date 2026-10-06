@@ -62,3 +62,39 @@ def test_declared_version_sync_reuses_install_and_latest_is_explicit(tmp_path):
         config.write_text(json.dumps({'sources': [], 'npm':[{'name':'example'}]}))
         assert app.main(['update',*base,'--latest','--only','example']) == 0
         assert json.loads(package.read_text())['version'] == '3.0.0'
+
+def test_missing_source_restores_recorded_commit(tmp_path):
+    import subprocess
+    app = entry()
+    root = tmp_path/'managed'
+    root.mkdir()
+    (root/'installed.json').write_text(json.dumps({'sources':{'sample':{'repo':'owner/repo','ref':'v1','commit':'abc'}},'npm':{}}))
+    config=tmp_path/'environment.json'
+    config.write_text(json.dumps({'sources':[{'name':'sample','repo':'owner/repo','paths':['skill']}],'npm':[]}))
+    fetched=[]
+    def execute(args, **kwargs):
+        if 'clone' in args:
+            (root/'sources/sample/.git').mkdir(parents=True)
+        if 'fetch' in args:
+            fetched.append(args[-1])
+        if 'checkout' in args:
+            skill=root/'sources/sample/skill'
+            skill.mkdir()
+            (skill/'SKILL.md').write_text('skill')
+        output='https://github.com/owner/repo.git' if 'remote' in args else 'abc' if 'rev-parse' in args else ''
+        return subprocess.CompletedProcess(args,0,output)
+    with patch.object(app.subprocess,'run',side_effect=execute):
+        assert app.main(['init','--manifest',str(config),'--root',str(root)]) == 0
+    assert fetched == ['abc']
+
+def test_obsolete_link_is_reported_without_deleting_it(tmp_path, capsys):
+    app=entry()
+    root=tmp_path/'managed'
+    (root/'skills').mkdir(parents=True)
+    stale=root/'skills/old-skill'
+    stale.symlink_to(root/'missing')
+    config=tmp_path/'environment.json'
+    config.write_text('{"sources":[],"npm":[]}')
+    assert app.main(['update','--manifest',str(config),'--root',str(root)]) == 1
+    assert 'obsolete' in capsys.readouterr().err
+    assert stale.is_symlink()
