@@ -1,0 +1,61 @@
+{
+  "schema": "comet.native.implementation-scope.v2",
+  "contractHash": "87c27e10b22c69f1c089598bf01a877d8b368f5e83f09dc09ec55e8fd4e98ea9",
+  "baselineProjectionRef": "runtime/evidence/snapshots/8fc30c1e28cfd86095ea8c6ebd21de971e48dcd43efd8a76a47ea39dfeba07da.json",
+  "baselineProjectionHash": "8fc30c1e28cfd86095ea8c6ebd21de971e48dcd43efd8a76a47ea39dfeba07da",
+  "currentProjectionRef": "runtime/evidence/snapshots/848419350d3de57898fef17672d1ce8785a3b6434b8c1942edfd13008a38af1a.json",
+  "currentProjectionHash": "848419350d3de57898fef17672d1ce8785a3b6434b8c1942edfd13008a38af1a",
+  "complete": true,
+  "declaredArtifacts": [
+    {
+      "path": "plugins/pi-codex-usage-status/extensions/usage.ts",
+      "kind": "file"
+    },
+    {
+      "path": "tests/pi_codex_usage_status.test.mjs",
+      "kind": "file"
+    }
+  ],
+  "changes": [
+    {
+      "path": "plugins/pi-codex-usage-status/extensions/usage.ts",
+      "kind": "modified",
+      "before": {
+        "hash": "0c3f47b82e464f08ac4784b083fbeef73efa94266d105ca45cb406fcb8b8cd89",
+        "size": 1825
+      },
+      "after": {
+        "hash": "dd63912f0249b38a6a79172acad3b2e22697e5de16e7f0e369c86fae73dfcdec",
+        "size": 1949
+      },
+      "attributedTo": [
+        {
+          "path": "plugins/pi-codex-usage-status/extensions/usage.ts",
+          "kind": "file"
+        }
+      ]
+    },
+    {
+      "path": "tests/pi_codex_usage_status.test.mjs",
+      "kind": "modified",
+      "before": {
+        "hash": "25965372f05422f120d37cfef15bbb1608c465e7bbc473071c78965ae734a998",
+        "size": 1776
+      },
+      "after": {
+        "hash": "4fe18e4d892658f4eadf1a6d0b8524b0b0ceee9fd3916fcfe13b0664b6fa9f29",
+        "size": 2268
+      },
+      "attributedTo": [
+        {
+          "path": "tests/pi_codex_usage_status.test.mjs",
+          "kind": "file"
+        }
+      ]
+    }
+  ],
+  "unattributed": [],
+  "unresolvedScopes": [],
+  "noCodeReason": null,
+  "scopeHash": "f9d5f787081018fe060266b5e06e271304f125fc6da808d27187f7e726759021"
+}

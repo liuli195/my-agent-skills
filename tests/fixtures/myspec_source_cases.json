@@ -1,0 +1,77 @@
+[
+  {
+    "id": "no-source",
+    "scenario": "no-source",
+    "expectedSources": []
+  },
+  {
+    "id": "stable-enabled",
+    "scenario": "stable-enabled",
+    "expectedSources": [
+      {
+        "installed": true,
+        "registered": true,
+        "enabled": true,
+        "effective": true,
+        "sourceKind": "stable",
+        "sourceMismatch": false
+      }
+    ]
+  },
+  {
+    "id": "stable-disabled",
+    "scenario": "stable-disabled",
+    "expectedSources": [
+      {
+        "installed": true,
+        "registered": true,
+        "enabled": false,
+        "effective": false,
+        "sourceKind": "stable",
+        "sourceMismatch": false
+      }
+    ]
+  },
+  {
+    "id": "stable-missing-directory",
+    "scenario": "stable-missing-directory",
+    "expectedSources": [
+      {
+        "installed": false,
+        "registered": true,
+        "enabled": true,
+        "effective": false,
+        "sourceKind": "stable",
+        "sourceMismatch": false
+      }
+    ]
+  },
+  {
+    "id": "legacy-enabled",
+    "scenario": "legacy-enabled",
+    "expectedSources": [
+      {
+        "installed": true,
+        "registered": true,
+        "enabled": true,
+        "effective": true,
+        "sourceKind": "legacy",
+        "sourceMismatch": false
+      }
+    ]
+  },
+  {
+    "id": "stable-source-mismatch",
+    "scenario": "stable-source-mismatch",
+    "expectedSources": [
+      {
+        "installed": true,
+        "registered": true,
+        "enabled": true,
+        "effective": false,
+        "sourceKind": "stable",
+        "sourceMismatch": true
+      }
+    ]
+  }
+]

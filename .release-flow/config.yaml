@@ -1,0 +1,14 @@
+version: 1
+
+release:
+  sourceRef: main
+  channelBranch: marketplace
+  branchMode: remote-only
+
+workflow:
+  file: .github/workflows/release.yml
+  trigger: workflow_dispatch
+
+github:
+  actions:
+    workflowPermissions: read-and-write
