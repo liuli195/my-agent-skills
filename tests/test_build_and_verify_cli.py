@@ -436,22 +436,27 @@ def _installed_build_and_verify(tmp_path: Path) -> tuple[str, Path, Path]:
     npm = shutil.which("npm")
     assert npm is not None
     if _installed_template is None:
-        _installed_template = tempfile.TemporaryDirectory(prefix="build-and-verify-test-")
-        root = Path(_installed_template.name)
-        packed = subprocess.run(
-            [sys.executable, str(PACK), "build-and-verify", str(root / "package")],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert packed.returncode == 0, packed.stderr
-        installed = subprocess.run(
-            [npm, "install", "--global", "--prefix", str(root / "prefix"), "--ignore-scripts", "--no-audit", "--no-fund", packed.stdout.strip()],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert installed.returncode == 0, installed.stderr
+        candidate = tempfile.TemporaryDirectory(prefix="build-and-verify-test-")
+        root = Path(candidate.name)
+        try:
+            packed = subprocess.run(
+                [sys.executable, str(PACK), "build-and-verify", str(root / "package")],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert packed.returncode == 0, packed.stderr
+            installed = subprocess.run(
+                [npm, "install", "--global", "--prefix", str(root / "prefix"), "--ignore-scripts", "--no-audit", "--no-fund", packed.stdout.strip()],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert installed.returncode == 0, installed.stderr
+        except BaseException:
+            candidate.cleanup()
+            raise
+        _installed_template = candidate
     prefix = tmp_path / "prefix"
     shutil.copytree(Path(_installed_template.name) / "prefix", prefix, symlinks=True)
     executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
@@ -467,11 +472,11 @@ def test_install_template_retries_after_pack_failure(tmp_path: Path, monkeypatch
         return subprocess.CompletedProcess(command, 1, "", "pack_failed")
 
     monkeypatch.setattr(subprocess, "run", fail_pack)
-    prepare = _installed_build_and_verify
+    prepare_cached_install = _installed_build_and_verify
     try:
         for attempt in ("failed", "retried"):
             with pytest.raises(AssertionError, match="pack_failed"):
-                prepare(tmp_path / attempt)
+                prepare_cached_install(tmp_path / attempt)
     finally:
         if module._installed_template is not None:
             module._installed_template.cleanup()
