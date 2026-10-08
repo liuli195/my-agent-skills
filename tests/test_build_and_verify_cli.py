@@ -446,6 +446,8 @@ def _installed_build_and_verify(tmp_path: Path) -> tuple[str, Path, Path]:
                 check=False,
             )
             assert packed.returncode == 0, packed.stderr
+            tarball = Path(packed.stdout.strip())
+            assert tarball.is_file(), f"missing_test_tarball: {tarball}"
             installed = subprocess.run(
                 [npm, "install", "--global", "--prefix", str(root / "prefix"), "--ignore-scripts", "--no-audit", "--no-fund", packed.stdout.strip()],
                 text=True,
@@ -453,6 +455,11 @@ def _installed_build_and_verify(tmp_path: Path) -> tuple[str, Path, Path]:
                 check=False,
             )
             assert installed.returncode == 0, installed.stderr
+            entry = root / "prefix" / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
+            package_root = root / "prefix" / ("node_modules" if sys.platform == "win32" else "lib/node_modules")
+            manifest = package_root / "@liuli195/build-and-verify/package.json"
+            assert entry.is_file(), f"missing_test_entrypoint: {entry}"
+            assert manifest.is_file(), f"missing_test_package_manifest: {manifest}"
         except BaseException:
             candidate.cleanup()
             raise
