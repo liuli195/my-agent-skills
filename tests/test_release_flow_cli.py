@@ -246,6 +246,23 @@ def init_project_with_remote(project: Path, remote: Path) -> None:
     copy_project_remote_template(template_dir, project, remote)
 
 
+def test_copy_template_replaces_target_with_readonly_file(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "new.txt").write_text("new\n", encoding="utf-8")
+    target = tmp_path / "target"
+    target.mkdir()
+    old = target / "old-object"
+    old.write_text("old\n", encoding="utf-8")
+    old.chmod(0o444)
+
+    copy_template(source, target)
+
+    assert not old.exists()
+    assert (target / "new.txt").read_text(encoding="utf-8") == "new\n"
+
+
+
 def write_release_flow_files(project: Path, projection: str | None = None) -> None:
     release_flow = project / ".release-flow"
     release_flow.mkdir(parents=True, exist_ok=True)
