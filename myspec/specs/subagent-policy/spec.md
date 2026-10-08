@@ -8,7 +8,7 @@
 
 ### Requirement: 独立子代理策略入口与固定角色契约
 
-系统 MUST 通过独立的纯 Skill（技能）包提供 `subagent-policy`，固定 Explorer（调查者）、Implementer（实施者）、Reviewer（审查者）和 Architect（架构师）的职责、模型、思考强度与读写边界，并 SHALL 让主 Agent（代理）决定是否委派、何时委派以及调用几个角色。Explorer 使用 `gpt-6-luna` 与 `low`（低），Implementer 使用 `gpt-6-luna` 与 `max`（最高），Reviewer 使用 `gpt-6-sol` 与 `high`（高），Architect 使用 `gpt-6-sol` 与 `high`（高）；四个角色优先使用宿主已配置的具名代理；子代理中只有 Implementer 可以在明确授权范围内写入。
+系统 MUST 通过独立的纯 Skill（技能）包提供 `subagent-policy`，固定 Explorer（调查者）、Implementer（实施者）、Reviewer（审查者）和 Architect（架构师）的职责、模型、思考强度与读写边界，并 SHALL 让主 Agent（代理）决定是否委派、何时委派以及调用几个角色。Explorer 使用 `gpt-6-luna` 与 `low`（低），Implementer 使用 `gpt-6.1-sol` 与 `medium`（中），Reviewer 使用 `gpt-6.1-sol` 与 `high`（高），Architect 使用 `gpt-6-sol` 与 `xhigh`（超高）；四个角色优先使用宿主已配置的具名代理；子代理中只有 Implementer 可以在明确授权范围内写入。
 
 #### Scenario: 当前宿主发现独立策略
 
@@ -19,7 +19,6 @@
 
 - **WHEN** 主 Agent（代理）判断一个任务适合委派
 - **THEN** 主 Agent（代理）根据任务性质选择最匹配的固定角色、模型、思考强度和读写边界；简单或无法独立拆分的任务可以不委派
-
 ### Requirement: 子代理策略在委派前安全停止与结果验收
 
 系统 MUST 让主 Agent（代理）优先使用宿主现有的具名子代理入口；宿主不支持具名代理时 SHALL 回退到通用代理，并传达同一角色契约和读写边界。每次委派提示词 MUST 写明角色、具体目标、范围与非目标、已有证据、读写边界、宿主相关资源和预期返回内容；宿主对工具、沙箱、Extension（扩展）或 Skill（技能）有不同表达时 SHALL 在提示词中说明，不要求专用 Adapter（适配器）或固定配置格式。指定模型或思考强度不可用时 SHALL 改用宿主默认的模型和思考强度承载同一角色，并声明回退；角色职责与读写边界不因回退改变。具名只读代理的实际边界被宿主或父会话覆盖时，主 Agent（代理）仍可使用该具名代理完成只读任务，但 MUST 声明“只读边界回退”，并核对没有未授权的仓库写入。主 Agent（代理）在依赖子代理结果前 MUST 验证实际文件、差异、版本管理状态和检查证据。
