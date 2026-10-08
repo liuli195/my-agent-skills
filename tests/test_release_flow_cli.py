@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.support.git_templates import copy_template
+from tests.support.git_templates import copy_template, remove_template
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -234,7 +234,7 @@ def init_project_with_remote(project: Path, remote: Path) -> None:
     try:
         if not ready.exists():
             if template_dir.exists():
-                shutil.rmtree(template_dir)
+                remove_template(template_dir)
             template_dir.mkdir(parents=True, exist_ok=True)
             template_project = copy_template(project, template_dir / "project")
             template_remote = template_dir / "remote.git"
@@ -244,6 +244,112 @@ def init_project_with_remote(project: Path, remote: Path) -> None:
         remove_template_lock(lock_dir)
 
     copy_project_remote_template(template_dir, project, remote)
+
+
+def test_copy_template_replaces_target_with_readonly_file(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "new.txt").write_text("new\n", encoding="utf-8")
+    target = tmp_path / "target"
+    target.mkdir()
+    old = target / "old-object"
+    old.write_text("old\n", encoding="utf-8")
+    old.chmod(0o444)
+
+    copy_template(source, target)
+
+    assert not old.exists()
+    assert (target / "new.txt").read_text(encoding="utf-8") == "new\n"
+
+
+
+
+@pytest.mark.parametrize("failure", ["writable", "other-error", "directory"])
+def test_copy_template_preserves_unrelated_delete_errors(
+    tmp_path: Path, monkeypatch, failure: str
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+    old = target / "old-object"
+    old.write_text("old\n", encoding="utf-8")
+    if failure != "writable":
+        old.chmod(0o444)
+    error = OSError("storage failure") if failure == "other-error" else PermissionError("blocked")
+    operation = os.rmdir if failure == "directory" else os.unlink
+
+    def fail_rmtree(path, *, onerror=None):
+        if onerror is None:
+            raise error
+        onerror(operation, str(old), (type(error), error, None))
+
+    monkeypatch.setattr(shutil, "rmtree", fail_rmtree)
+    try:
+        with pytest.raises(type(error)) as caught:
+            copy_template(source, target)
+        assert caught.value is error
+    finally:
+        old.chmod(0o644)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows readonly-file deletion recovery")
+def test_copy_template_preserves_readonly_delete_retry_failure(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+    old = target / "old-object"
+    old.write_text("old\n", encoding="utf-8")
+    old.chmod(0o444)
+    original = PermissionError("readonly")
+    retry = PermissionError("retry blocked")
+
+    def fail_unlink(path):
+        raise retry
+
+    def fail_rmtree(path, *, onerror=None):
+        if onerror is None:
+            raise original
+        onerror(os.unlink, str(old), (type(original), original, None))
+
+    monkeypatch.setattr(os, "unlink", fail_unlink)
+    monkeypatch.setattr(shutil, "rmtree", fail_rmtree)
+    try:
+        with pytest.raises(PermissionError) as caught:
+            copy_template(source, target)
+        assert caught.value is retry
+    finally:
+        old.chmod(0o644)
+
+
+def test_release_template_recreates_incomplete_readonly_template(tmp_path: Path, monkeypatch) -> None:
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "TEMPLATE_ROOT", tmp_path / "templates")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "source.txt").write_text("source\n", encoding="utf-8")
+    remote = tmp_path / "remote.git"
+    template_dir = TEMPLATE_ROOT / project_tree_cache_key(project)
+    template_dir.mkdir(parents=True)
+    old = template_dir / "old-object"
+    old.write_text("old\n", encoding="utf-8")
+    old.chmod(0o444)
+
+    def fake_git_command(command, **kwargs):
+        if command[0] == "git" and command[1] == "init" and "--bare" in command:
+            Path(command[-1]).mkdir()
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_git_command)
+    initialize_release_template = init_project_with_remote
+    initialize_release_template(project, remote)
+
+    assert not old.exists()
+    assert (template_dir / ".ready").is_file()
+    assert (project / "source.txt").read_text(encoding="utf-8") == "source\n"
+    assert remote.is_dir()
+    assert not (TEMPLATE_ROOT / f"{template_dir.name}.lock").exists()
 
 
 def write_release_flow_files(project: Path, projection: str | None = None) -> None:

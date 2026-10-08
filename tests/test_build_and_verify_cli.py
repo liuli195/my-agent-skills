@@ -436,26 +436,106 @@ def _installed_build_and_verify(tmp_path: Path) -> tuple[str, Path, Path]:
     npm = shutil.which("npm")
     assert npm is not None
     if _installed_template is None:
-        _installed_template = tempfile.TemporaryDirectory(prefix="build-and-verify-test-")
-        root = Path(_installed_template.name)
-        packed = subprocess.run(
-            [sys.executable, str(PACK), "build-and-verify", str(root / "package")],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert packed.returncode == 0, packed.stderr
-        installed = subprocess.run(
-            [npm, "install", "--global", "--prefix", str(root / "prefix"), "--ignore-scripts", "--no-audit", "--no-fund", packed.stdout.strip()],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert installed.returncode == 0, installed.stderr
+        candidate = tempfile.TemporaryDirectory(prefix="build-and-verify-test-")
+        root = Path(candidate.name)
+        try:
+            packed = subprocess.run(
+                [sys.executable, str(PACK), "build-and-verify", str(root / "package")],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert packed.returncode == 0, packed.stderr
+            tarball = Path(packed.stdout.strip())
+            assert tarball.is_file(), f"missing_test_tarball: {tarball}"
+            installed = subprocess.run(
+                [npm, "install", "--global", "--prefix", str(root / "prefix"), "--ignore-scripts", "--no-audit", "--no-fund", packed.stdout.strip()],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert installed.returncode == 0, installed.stderr
+            entry = root / "prefix" / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
+            package_root = root / "prefix" / ("node_modules" if sys.platform == "win32" else "lib/node_modules")
+            manifest = package_root / "@liuli195/build-and-verify/package.json"
+            assert entry.is_file(), f"missing_test_entrypoint: {entry}"
+            assert manifest.is_file(), f"missing_test_package_manifest: {manifest}"
+        except BaseException:
+            candidate.cleanup()
+            raise
+        _installed_template = candidate
     prefix = tmp_path / "prefix"
     shutil.copytree(Path(_installed_template.name) / "prefix", prefix, symlinks=True)
     executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
     return npm, prefix, executable
+
+
+
+def test_install_template_retries_after_pack_failure(tmp_path: Path, monkeypatch) -> None:
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "_installed_template", None)
+
+    def fail_pack(command, **kwargs):
+        return subprocess.CompletedProcess(command, 1, "", "pack_failed")
+
+    monkeypatch.setattr(subprocess, "run", fail_pack)
+    prepare_cached_install = _installed_build_and_verify
+    try:
+        for attempt in ("failed", "retried"):
+            with pytest.raises(AssertionError, match="pack_failed"):
+                prepare_cached_install(tmp_path / attempt)
+    finally:
+        if module._installed_template is not None:
+            module._installed_template.cleanup()
+
+
+
+@pytest.mark.parametrize("missing", ["installation", "tarball", "executable", "manifest"])
+def test_install_template_recovers_incomplete_preparation(
+    tmp_path: Path, monkeypatch, missing: str
+) -> None:
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "_installed_template", None)
+    state = {"missing": missing, "reuse": False}
+
+    def fake_package_command(command, **kwargs):
+        if state["reuse"]:
+            return subprocess.CompletedProcess(command, 1, "", "preparation_repeated")
+        if command[1] == str(PACK):
+            output = Path(command[-1])
+            output.mkdir(parents=True)
+            tarball = output / "candidate.tgz"
+            if state["missing"] != "tarball":
+                tarball.write_bytes(b"test package")
+            return subprocess.CompletedProcess(command, 0, str(tarball) + "\n", "")
+        if state["missing"] == "installation":
+            return subprocess.CompletedProcess(command, 1, "", "install_failed")
+        prefix = Path(command[command.index("--prefix") + 1])
+        package = prefix / ("node_modules" if sys.platform == "win32" else "lib/node_modules")
+        package /= "@liuli195/build-and-verify"
+        package.mkdir(parents=True)
+        if state["missing"] != "manifest":
+            (package / "package.json").write_text("{}", encoding="utf-8")
+        executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        if state["missing"] != "executable":
+            executable.write_text("test command\n", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_package_command)
+    prepare_complete_install = _installed_build_and_verify
+    try:
+        with pytest.raises(AssertionError):
+            prepare_complete_install(tmp_path / "incomplete")
+        state["missing"] = None
+        _, _, executable = prepare_complete_install(tmp_path / "recovered")
+        assert executable.is_file()
+        state["reuse"] = True
+        _, _, reused = prepare_complete_install(tmp_path / "reused")
+        assert reused.is_file()
+    finally:
+        if module._installed_template is not None:
+            module._installed_template.cleanup()
 
 
 def _tree_snapshot() -> dict[str, bytes]:
