@@ -458,6 +458,25 @@ def _installed_build_and_verify(tmp_path: Path) -> tuple[str, Path, Path]:
     return npm, prefix, executable
 
 
+
+def test_install_template_retries_after_pack_failure(tmp_path: Path, monkeypatch) -> None:
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "_installed_template", None)
+
+    def fail_pack(command, **kwargs):
+        return subprocess.CompletedProcess(command, 1, "", "pack_failed")
+
+    monkeypatch.setattr(subprocess, "run", fail_pack)
+    prepare = _installed_build_and_verify
+    try:
+        for attempt in ("failed", "retried"):
+            with pytest.raises(AssertionError, match="pack_failed"):
+                prepare(tmp_path / attempt)
+    finally:
+        if module._installed_template is not None:
+            module._installed_template.cleanup()
+
+
 def _tree_snapshot() -> dict[str, bytes]:
     roots = ("plugins/my-spec", "plugins/build-and-verify", "plugins/tool-lifecycle")
     return {
