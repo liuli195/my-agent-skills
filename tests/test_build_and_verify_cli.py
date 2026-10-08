@@ -482,6 +482,55 @@ def test_install_template_retries_after_pack_failure(tmp_path: Path, monkeypatch
             module._installed_template.cleanup()
 
 
+
+@pytest.mark.parametrize("missing", ["installation", "tarball", "executable", "manifest"])
+def test_install_template_recovers_incomplete_preparation(
+    tmp_path: Path, monkeypatch, missing: str
+) -> None:
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "_installed_template", None)
+    state = {"missing": missing, "reuse": False}
+
+    def fake_package_command(command, **kwargs):
+        if state["reuse"]:
+            return subprocess.CompletedProcess(command, 1, "", "preparation_repeated")
+        if command[1] == str(PACK):
+            output = Path(command[-1])
+            output.mkdir(parents=True)
+            tarball = output / "candidate.tgz"
+            if state["missing"] != "tarball":
+                tarball.write_bytes(b"test package")
+            return subprocess.CompletedProcess(command, 0, str(tarball) + "\n", "")
+        if state["missing"] == "installation":
+            return subprocess.CompletedProcess(command, 1, "", "install_failed")
+        prefix = Path(command[command.index("--prefix") + 1])
+        package = prefix / ("node_modules" if sys.platform == "win32" else "lib/node_modules")
+        package /= "@liuli195/build-and-verify"
+        package.mkdir(parents=True)
+        if state["missing"] != "manifest":
+            (package / "package.json").write_text("{}", encoding="utf-8")
+        executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        if state["missing"] != "executable":
+            executable.write_text("test command\n", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_package_command)
+    prepare_complete_install = _installed_build_and_verify
+    try:
+        with pytest.raises(AssertionError):
+            prepare_complete_install(tmp_path / "incomplete")
+        state["missing"] = None
+        _, _, executable = prepare_complete_install(tmp_path / "recovered")
+        assert executable.is_file()
+        state["reuse"] = True
+        _, _, reused = prepare_complete_install(tmp_path / "reused")
+        assert reused.is_file()
+    finally:
+        if module._installed_template is not None:
+            module._installed_template.cleanup()
+
+
 def _tree_snapshot() -> dict[str, bytes]:
     roots = ("plugins/my-spec", "plugins/build-and-verify", "plugins/tool-lifecycle")
     return {
