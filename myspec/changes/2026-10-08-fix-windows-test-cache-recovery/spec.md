@@ -1,6 +1,6 @@
 # 修复本机测试缓存失败恢复
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
 ## Problem Statement
 
