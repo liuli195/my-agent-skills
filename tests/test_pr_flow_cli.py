@@ -17,7 +17,7 @@ from typing import Any
 import yaml
 import pytest
 
-from tests.support.git_templates import copy_template
+from tests.support.git_templates import copy_template, remove_template
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -1342,7 +1342,7 @@ def ensure_project_remote_template(template_name: str, tmp_path: Path, creator) 
     try:
         if not ready.exists():
             if template_dir.exists():
-                shutil.rmtree(template_dir)
+                remove_template(template_dir)
             template_dir.mkdir(parents=True, exist_ok=True)
             creator(template_dir)
             ready.write_text("ok\n", encoding="utf-8")

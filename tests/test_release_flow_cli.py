@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.support.git_templates import copy_template
+from tests.support.git_templates import copy_template, remove_template
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -234,7 +234,7 @@ def init_project_with_remote(project: Path, remote: Path) -> None:
     try:
         if not ready.exists():
             if template_dir.exists():
-                shutil.rmtree(template_dir)
+                remove_template(template_dir)
             template_dir.mkdir(parents=True, exist_ok=True)
             template_project = copy_template(project, template_dir / "project")
             template_remote = template_dir / "remote.git"
