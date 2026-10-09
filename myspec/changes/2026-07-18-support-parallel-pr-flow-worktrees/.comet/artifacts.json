@@ -1,0 +1,9 @@
+{
+  "myspec_proposal": "myspec/changes/support-parallel-pr-flow-worktrees/proposal.md",
+  "myspec_design": "myspec/changes/support-parallel-pr-flow-worktrees/design.md",
+  "myspec_tasks": "myspec/changes/support-parallel-pr-flow-worktrees/tasks.md",
+  "myspec_delta_spec": "myspec/changes/support-parallel-pr-flow-worktrees/specs/pr-flow-plugin/spec.md",
+  "handoff_context": "myspec/changes/support-parallel-pr-flow-worktrees/.comet/handoff/spec-context.json",
+  "handoff_markdown": "myspec/changes/support-parallel-pr-flow-worktrees/.comet/handoff/spec-context.md",
+  "archive_directory": "myspec/changes/archive/2026-07-18-support-parallel-pr-flow-worktrees"
+}

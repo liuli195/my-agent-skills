@@ -1,0 +1,22 @@
+schema: comet.native.v3
+minimum_runtime_version: 3
+revision: 5
+name: fix-codex-usage-subhour-display
+language: zh-CN
+phase: archive
+brief: brief.md
+approval: confirmed
+approved_contract_hash: 87c27e10b22c69f1c089598bf01a877d8b368f5e83f09dc09ec55e8fd4e98ea9
+spec_changes:
+  - capability: pi-codex-usage-status
+    operation: replace
+    source: specs/pi-codex-usage-status/spec.md
+    base_hash: 361dbec073e24d35eebd02393fe5a06591afb7d868409e46041e697921aaefe7
+verification_result: pass
+verification_report: verification.md
+implementation_scope: runtime/evidence/scopes/f9d5f787081018fe060266b5e06e271304f125fc6da808d27187f7e726759021.json
+verification_evidence: runtime/evidence/verifications/50d13c4fe53298196eb47c6b82c2ac6b6c2769fea84a718b466683bc4fa93f5f.json
+partial_allowance: null
+archived: true
+created_at: 2026-07-25
+run_id: 0cab8045-a53a-45bb-97ff-9a22f89e2880

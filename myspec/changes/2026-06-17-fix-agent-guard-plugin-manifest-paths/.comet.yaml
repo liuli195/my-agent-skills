@@ -1,0 +1,20 @@
+workflow: hotfix
+phase: archive
+context_compression: off
+build_mode: direct
+build_pause: null
+subagent_dispatch: null
+tdd_mode: direct
+isolation: branch
+verify_mode: light
+auto_transition: false
+base_ref: b62cad631b5c0475c17565d21a297322e633a695
+design_doc: null
+plan: null
+verify_result: pass
+verification_report: docs/superpowers/reports/2026-06-17-fix-agent-guard-plugin-manifest-paths-verify.md
+branch_status: handled
+created_at: 2026-06-17
+verified_at: 2026-06-17
+archived: true
+build_command: python -m pytest tests/ -q

@@ -1,0 +1,3 @@
+- [x] 添加 `complete` 缺少 `upstream` 的失败测试。
+- [x] 在 `complete` 创建 PR 前返回 `PUSH_REQUIRED`。
+- [x] 运行聚焦测试验证。
