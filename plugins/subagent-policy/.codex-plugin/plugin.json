@@ -1,6 +1,6 @@
 {
   "name": "subagent-policy",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "Subagent policy（子代理策略）",
   "skills": "./skills"
 }
