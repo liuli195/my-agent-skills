@@ -795,7 +795,11 @@ def _validate_check_inputs(project: Path, check: dict[str, Any]) -> None:
         _validate_project_relative_input(project, input_path)
 
 
-def _git_visible_files(project: Path, relative: str) -> list[Path] | None:
+def _git_visible_files(
+    project: Path, relative: str, memo: dict[str, list[Path]] | None = None,
+) -> list[Path] | None:
+    if memo is not None and relative in memo:
+        return memo[relative]
     try:
         result = subprocess.run(
             ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", relative],
@@ -808,17 +812,22 @@ def _git_visible_files(project: Path, relative: str) -> list[Path] | None:
         return None
     if result.returncode != 0:
         return None
-    return [project / name for name in result.stdout.split("\0") if name]
+    files = [project / name for name in result.stdout.split("\0") if name]
+    if memo is not None:
+        memo[relative] = files
+    return files
 
 
 def _is_glob_input(path: str) -> bool:
     return any(character in path for character in "*?[")
 
 
-def _hash_input(project: Path, input_path: str) -> dict[str, Any]:
+def _hash_input(
+    project: Path, input_path: str, git_files_memo: dict[str, list[Path]] | None = None,
+) -> dict[str, Any]:
     relative, path = _validate_project_relative_input(project, input_path)
     if _is_glob_input(relative):
-        git_files = _git_visible_files(project, ".")
+        git_files = _git_visible_files(project, ".", git_files_memo)
         candidates = (
             git_files
             if git_files is not None
@@ -840,7 +849,7 @@ def _hash_input(project: Path, input_path: str) -> dict[str, Any]:
         return {"path": relative, "type": "file", "sha256": _hash_file(path)}
     if path.is_dir():
         files: list[dict[str, str]] = []
-        git_files = _git_visible_files(project, relative)
+        git_files = _git_visible_files(project, relative, git_files_memo)
         if git_files is not None:
             for file_path in git_files:
                 if not file_path.is_file():
@@ -890,6 +899,8 @@ def _cache_key(
     check: dict[str, Any],
     changed_files: list[str] | None = None,
     runtime_identity: str = "unknown",
+    input_memo: dict[str, dict[str, Any]] | None = None,
+    git_files_memo: dict[str, list[Path]] | None = None,
 ) -> str:
     if "inputs" in check and check.get("inputs") is not None:
         inputs = check.get("inputs") or []
@@ -899,6 +910,15 @@ def _cache_key(
             inputs = _default_cache_inputs(project, paths)
         else:
             inputs = changed_files if changed_files is not None else _changed_files(project)
+    hashed_inputs = []
+    for item in inputs:
+        if input_memo is None:
+            hashed_inputs.append(_hash_input(project, item))
+            continue
+        relative, _ = _validate_project_relative_input(project, item)
+        if relative not in input_memo:
+            input_memo[relative] = _hash_input(project, item, git_files_memo)
+        hashed_inputs.append(input_memo[relative])
     payload = {
         "cache_version": CACHE_VERSION,
         "framework_version": FRAMEWORK_VERSION,
@@ -906,7 +926,7 @@ def _cache_key(
         "runtime_identity": runtime_identity,
         "check_id": check.get("id"),
         "command": check.get("command"),
-        "inputs": [_hash_input(project, item) for item in inputs],
+        "inputs": hashed_inputs,
         "config": hashlib.sha256(_stable_json(config).encode("utf-8")).hexdigest(),
     }
     return hashlib.sha256(_stable_json(payload).encode("utf-8")).hexdigest()
@@ -1362,12 +1382,16 @@ def run_verify(
         print("selection-reason: config-changed")
     results: list[CheckResult] = []
     pending: list[tuple[int, dict[str, Any]]] = []
+    # First-read snapshots are private to preparation; execution always rehashes.
+    input_memo: dict[str, dict[str, Any]] = {}
+    git_files_memo: dict[str, list[Path]] = {}
     for index, check in enumerate(selected):
         if control.expired():
             results.append(CheckResult(index, check, 1, status="not_started", reason="total_budget_timeout"))
             continue
         try:
-            key = _cache_key(project, config, check, changed, identity)
+            key = _cache_key(project, config, check, changed, identity,
+                input_memo, git_files_memo)
         except (ValueError, OSError) as error:
             results.append(CheckResult(index, check, 1, stderr=f"{error}\n", status="failed"))
             continue
@@ -1379,6 +1403,8 @@ def run_verify(
             results.append(CheckResult(index, check, 0, status="cached"))
         else:
             pending.append((index, check))
+    input_memo.clear()
+    git_files_memo.clear()
 
     def execute(item: tuple[int, dict[str, Any]]) -> CheckResult:
         index, check = item

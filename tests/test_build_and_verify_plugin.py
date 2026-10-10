@@ -2,6 +2,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import re
 import shutil
 import shlex
@@ -213,13 +214,13 @@ class FakeRunnerModule:
         def call_runner() -> int:
             original_git_files = self.runner_module._git_visible_files
 
-            def visible_files_for_test(project_path, relative):
+            def visible_files_for_test(project_path, relative, *args, **kwargs):
                 # These in-process fixtures deliberately have no repository.
                 # Model the existing non-Git fallback without launching Git for
                 # every directory hash. Real Git fixtures keep the real adapter.
                 if not any((parent / ".git").exists() for parent in (project_path, *project_path.parents)):
                     return None
-                return original_git_files(project_path, relative)
+                return original_git_files(project_path, relative, *args, **kwargs)
 
             self.runner_module._git_visible_files = visible_files_for_test
             try:
@@ -259,12 +260,15 @@ def run_check(
     runner: Callable[..., subprocess.CompletedProcess[Any]] | None = None,
     changed_files: list[str] | None = None,
     baseline: str | None = None,
+    execution_context: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     module = load_build_and_verify_module()
     original_runner_module = module._RUNNER_MODULE
     runner = runner or FakeRunner()
     module._RUNNER_MODULE = FakeRunnerModule(module._runner(), runner, changed_files)
     argv = [*args, "--project", str(project)]
+    if execution_context is not None:
+        argv.extend(["--execution-context", execution_context])
     if baseline is not None:
         argv.extend(["--base", baseline])
     stdout = io.StringIO()
@@ -4015,6 +4019,142 @@ def test_build_and_verify_runner_uses_passed_result_cache(tmp_path: Path) -> Non
     ]
 
 
+def test_build_and_verify_preparation_reuses_inputs_without_changing_cache_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".git").mkdir()  # Git output is supplied at the process boundary.
+    (project / "src").mkdir()
+    input_file = project / "src" / "input.txt"
+    input_file.write_text("stable", encoding="utf-8")
+    write_runner_config(project, verify_checks=[
+        {"id": "first", "command": ["first"], "inputs": ["src", "*.txt"]},
+        {"id": "second", "command": ["second"], "inputs": [r".\src", "**/*.txt"]},
+    ])
+    reads: list[Path] = []
+    git_queries: list[str] = []
+    cache_writes: list[Path] = []
+    cache_directory = project / ".build-and-verify/cache"
+    original_open = Path.open
+    original_replace = Path.replace
+
+    def read(path: Path, mode="r", *args, **kwargs):
+        if mode == "rb" and path == input_file:
+            reads.append(path)
+        return original_open(path, mode, *args, **kwargs)
+
+    def query(command, **kwargs):
+        assert command[:2] == ["git", "ls-files"] and kwargs["cwd"] == project
+        git_queries.append(command[-1])
+        return completed(command, stdout="src/input.txt\0")
+
+    def replace(path: Path, target):
+        if Path(target).parent == cache_directory:
+            cache_writes.append(Path(target))
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "open", read)
+    monkeypatch.setattr(Path, "replace", replace)
+    monkeypatch.setattr(subprocess, "run", query)
+    monkeypatch.setenv("CI", "false")
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
+    # The unchanged cloud path writes keys without preparation reuse.
+    original = run_check(project, "verify", "--execution-context", "cloud",
+        changed_files=["src/input.txt"])
+    assert original.returncode == 0, original.stdout + original.stderr
+    original_keys = list(cache_writes)
+    assert len(set(original_keys)) == 2
+    assert all(path.is_file() for path in original_keys)
+    reads.clear()
+    git_queries.clear()
+    runner = FakeRunner()
+    result = run_check(project, "verify", "--execution-context", "local",
+        runner=runner, changed_files=["src/input.txt"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    output = result.stdout
+    assert "cache-hit: first" in output and "cache-hit: second" in output
+    assert not runner.calls
+    assert cache_writes == original_keys
+    assert len(reads) == 3  # One shared directory, two distinct glob inputs.
+    assert git_queries == ["src", "."]
+
+
+def test_build_and_verify_preparation_snapshot_is_not_reused_for_execution_or_next_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    input_file = project / "input.txt"
+    input_file.write_text("first", encoding="utf-8")
+    original_stat = input_file.stat()
+    write_runner_config(project, verify_checks=[
+        {"id": "modify", "command": ["modify"], "inputs": []},
+        {"id": "target", "command": ["target"], "inputs": ["input.txt"]},
+    ])
+    monkeypatch.setenv("CI", "false")
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
+    commands = FakeRunner()
+
+    def execute(command, **kwargs):
+        if command == ["modify"]:
+            # All preparation finished before the first check runs.
+            input_file.write_text("other", encoding="utf-8")
+            os.utime(input_file, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+        return commands(command, **kwargs)
+
+    first = run_check(project, "verify", "--execution-context", "local",
+        runner=execute, changed_files=["input.txt"])
+    second = run_check(project, "verify", "--execution-context", "local",
+        runner=execute, changed_files=["input.txt"])
+    assert first.returncode == second.returncode == 0
+    assert commands.calls == [["modify"], ["target"]]
+    assert "cache-hit: target" in second.stdout
+
+    input_file.write_text("third", encoding="utf-8")
+    os.utime(input_file, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    third = run_check(project, "verify", "--execution-context", "local",
+        runner=execute, changed_files=["input.txt"])
+    assert third.returncode == 0, third.stdout + third.stderr
+    assert "cache-hit: target" not in third.stdout
+    assert commands.calls == [["modify"], ["target"], ["target"]]
+
+
+def test_build_and_verify_preparation_does_not_memoize_read_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    input_file = project / "input.txt"
+    input_file.write_text("input", encoding="utf-8")
+    write_runner_config(project, verify_checks=[
+        {"id": name, "command": [name], "inputs": ["input.txt"]}
+        for name in ("first", "second")
+    ])
+    original_open = Path.open
+    reads = []
+    cache_writes = []
+
+    def read(path: Path, mode="r", *args, **kwargs):
+        if mode == "w" and path.parent == project / ".build-and-verify/cache":
+            cache_writes.append(path)
+        if path == input_file and mode == "rb":
+            reads.append(path)
+            raise PermissionError("read denied")
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", read)
+    monkeypatch.setenv("CI", "false")
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
+    runner = FakeRunner()
+    result = run_check(project, "verify", "--execution-context", "local",
+        runner=runner, changed_files=["input.txt"])
+    assert result.returncode != 0
+    assert result.stderr.count("read denied") == 2
+    assert len(reads) == 2 and not runner.calls
+    assert not cache_writes
+
+
 def test_build_and_verify_runner_full_verify_ignores_existing_default_cache(
     tmp_path: Path,
 ) -> None:
@@ -4094,8 +4234,9 @@ def test_build_and_verify_runner_full_verify_refreshes_cache_for_default_verify(
     ]
 
 
+@pytest.mark.parametrize("execution_context", ["cloud", "local"])
 def test_build_and_verify_runner_cache_misses_when_input_is_deleted(
-    tmp_path: Path,
+    tmp_path: Path, execution_context: str,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -4121,9 +4262,9 @@ def test_build_and_verify_runner_cache_misses_when_input_is_deleted(
     )
 
     input_file.write_text("changed\n", encoding="utf-8")
-    first = run_check(project, "verify", changed_files=["src/input.txt"])
+    first = run_check(project, "verify", execution_context=execution_context, changed_files=["src/input.txt"])
     input_file.unlink()
-    second = run_check(project, "verify", changed_files=["src/input.txt"])
+    second = run_check(project, "verify", execution_context=execution_context, changed_files=["src/input.txt"])
 
     assert first.returncode == 0, first.stdout + first.stderr
     assert second.returncode == 0, second.stdout + second.stderr
@@ -4134,8 +4275,9 @@ def test_build_and_verify_runner_cache_misses_when_input_is_deleted(
     ]
 
 
+@pytest.mark.parametrize("execution_context", ["cloud", "local"])
 def test_build_and_verify_runner_glob_inputs_track_visible_matching_files(
-    tmp_path: Path,
+    tmp_path: Path, execution_context: str,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -4156,17 +4298,17 @@ def test_build_and_verify_runner_glob_inputs_track_visible_matching_files(
         ],
     )
 
-    first = run_check(project, "verify", changed_files=["requirements.txt"])
-    unchanged = run_check(project, "verify", changed_files=["requirements.txt"])
+    first = run_check(project, "verify", execution_context=execution_context, changed_files=["requirements.txt"])
+    unchanged = run_check(project, "verify", execution_context=execution_context, changed_files=["requirements.txt"])
     tracked.write_text("changed\n", encoding="utf-8")
-    changed = run_check(project, "verify", changed_files=["requirements.txt"])
+    changed = run_check(project, "verify", execution_context=execution_context, changed_files=["requirements.txt"])
     added = project / "requirements-dev.txt"
     added.write_text("dev\n", encoding="utf-8")
-    addition = run_check(project, "verify", changed_files=["requirements-dev.txt"])
+    addition = run_check(project, "verify", execution_context=execution_context, changed_files=["requirements-dev.txt"])
     tracked.write_text("changed-again\n", encoding="utf-8")
-    changed_with_addition = run_check(project, "verify", changed_files=["requirements.txt"])
+    changed_with_addition = run_check(project, "verify", execution_context=execution_context, changed_files=["requirements.txt"])
     added.unlink()
-    deletion = run_check(project, "verify", changed_files=["requirements.txt"])
+    deletion = run_check(project, "verify", execution_context=execution_context, changed_files=["requirements.txt"])
 
     assert all(
         result.returncode == 0
@@ -4219,8 +4361,9 @@ def test_build_and_verify_runner_accepts_future_glob_inputs(tmp_path: Path) -> N
     ]
 
 
+@pytest.mark.parametrize("execution_context", ["cloud", "local"])
 def test_build_and_verify_runner_glob_inputs_ignore_ignored_files_and_normalize_separators(
-    tmp_path: Path,
+    tmp_path: Path, execution_context: str,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -4242,16 +4385,16 @@ def test_build_and_verify_runner_glob_inputs_ignore_ignored_files_and_normalize_
     }
     write_runner_config(project, verify_checks=[check])
 
-    first = run_check(project, "verify", changed_files=["requirements.txt"])
+    first = run_check(project, "verify", execution_context=execution_context, changed_files=["requirements.txt"])
     ignored.write_text("ignored-v2\n", encoding="utf-8")
-    ignored_change = run_check(project, "verify", changed_files=["requirements.txt"])
+    ignored_change = run_check(project, "verify", execution_context=execution_context, changed_files=["requirements.txt"])
     visible.write_text("visible-v2\n", encoding="utf-8")
-    visible_change = run_check(project, "verify", changed_files=["requirements.txt"])
+    visible_change = run_check(project, "verify", execution_context=execution_context, changed_files=["requirements.txt"])
     check.update(id="literal-ignored", inputs=["requirements-ignored.txt"])
     write_runner_config(project, verify_checks=[check])
-    literal_first = run_check(project, "verify", changed_files=["requirements.txt"])
+    literal_first = run_check(project, "verify", execution_context=execution_context, changed_files=["requirements.txt"])
     ignored.write_text("ignored-v3\n", encoding="utf-8")
-    literal_change = run_check(project, "verify", changed_files=["requirements.txt"])
+    literal_change = run_check(project, "verify", execution_context=execution_context, changed_files=["requirements.txt"])
 
     assert all(
         result.returncode == 0
@@ -4498,8 +4641,9 @@ def test_build_and_verify_runner_ignores_nonmatching_external_glob_links(
     ]
 
 
+@pytest.mark.parametrize("execution_context", ["cloud", "local"])
 def test_build_and_verify_runner_rejects_glob_match_outside_project(
-    tmp_path: Path,
+    tmp_path: Path, execution_context: str,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -4522,7 +4666,7 @@ def test_build_and_verify_runner_rejects_glob_match_outside_project(
         ],
     )
 
-    result = run_check(project, "verify", changed_files=["src/app.txt"])
+    result = run_check(project, "verify", execution_context=execution_context, changed_files=["src/app.txt"])
 
     assert result.returncode != 0
     assert "invalid_input_path: *.txt" in result.stderr
@@ -4777,8 +4921,9 @@ def test_build_and_verify_runner_directory_hash_ignores_generated_paths(
     assert run_log.read_text(encoding="utf-8").splitlines() == ["directory-hash"]
 
 
+@pytest.mark.parametrize("execution_context", ["cloud", "local"])
 def test_build_and_verify_runner_directory_hash_uses_git_visible_files(
-    tmp_path: Path,
+    tmp_path: Path, execution_context: str,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -4811,22 +4956,22 @@ def test_build_and_verify_runner_directory_hash_uses_git_visible_files(
         },
     )
 
-    first = run_check(project, "verify", changed_files=["src/tracked.txt"])
+    first = run_check(project, "verify", execution_context=execution_context, changed_files=["src/tracked.txt"])
     ignored.write_text("ignored-v2\n", encoding="utf-8")
-    ignored_change = run_check(project, "verify", changed_files=["src/tracked.txt"])
+    ignored_change = run_check(project, "verify", execution_context=execution_context, changed_files=["src/tracked.txt"])
     visible.write_text("visible-v2\n", encoding="utf-8")
-    visible_change = run_check(project, "verify", changed_files=["src/tracked.txt"])
+    visible_change = run_check(project, "verify", execution_context=execution_context, changed_files=["src/tracked.txt"])
     tracked.write_text("tracked-v2\n", encoding="utf-8")
-    tracked_change = run_check(project, "verify", changed_files=["src/tracked.txt"])
+    tracked_change = run_check(project, "verify", execution_context=execution_context, changed_files=["src/tracked.txt"])
     config = read_json(project / ".build-and-verify" / "config.json")
     config["verify"]["checks"][0].update(
         id="explicit-ignored-file",
         inputs=["src/ignored/dependency.txt"],
     )
     write_json(project / ".build-and-verify" / "config.json", config)
-    explicit_first = run_check(project, "verify", changed_files=["src/tracked.txt"])
+    explicit_first = run_check(project, "verify", execution_context=execution_context, changed_files=["src/tracked.txt"])
     ignored.write_text("ignored-v3\n", encoding="utf-8")
-    explicit_change = run_check(project, "verify", changed_files=["src/tracked.txt"])
+    explicit_change = run_check(project, "verify", execution_context=execution_context, changed_files=["src/tracked.txt"])
 
     assert first.returncode == 0, first.stdout + first.stderr
     assert ignored_change.returncode == 0, ignored_change.stdout + ignored_change.stderr
