@@ -1,0 +1,109 @@
+{
+  "sources": [
+    {
+      "name": "mattpocock",
+      "repo": "mattpocock/skills",
+      "paths": [
+        "skills/engineering/ask-matt",
+        "skills/engineering/code-review",
+        "skills/engineering/codebase-design",
+        "skills/engineering/diagnosing-bugs",
+        "skills/engineering/domain-modeling",
+        "skills/productivity/grill-me",
+        "skills/engineering/grill-with-docs",
+        "skills/productivity/grilling",
+        "skills/productivity/handoff",
+        "skills/engineering/implement",
+        "skills/engineering/implement-spec",
+        "skills/engineering/improve-codebase-architecture",
+        "skills/engineering/pr",
+        "skills/engineering/prototype",
+        "skills/engineering/research",
+        "skills/engineering/retro",
+        "skills/engineering/setup-matt-pocock-skills",
+        "skills/engineering/tdd",
+        "skills/productivity/teach",
+        "skills/productivity/to-questionnaire",
+        "skills/engineering/to-spec",
+        "skills/engineering/to-tickets",
+        "skills/engineering/triage",
+        "skills/productivity/wait-what",
+        "skills/engineering/wayfinder",
+        "skills/engineering/wizard",
+        "skills/productivity/writing-for-agents"
+      ]
+    },
+    {
+      "name": "find-skills",
+      "repo": "vercel-labs/skills",
+      "paths": [
+        "skills/find-skills"
+      ]
+    },
+    {
+      "name": "own-skills",
+      "repo": "liuli195/my-agent-skills",
+      "paths": [
+        "plugins/dev-flow",
+        "plugins/plugin-sync",
+        "plugins/pr-flow",
+        "plugins/release-flow",
+        "plugins/retro-to-issues",
+        "plugins/subagent-policy",
+        "plugins/tool-lifecycle",
+        "plugins/data-store"
+      ]
+    }
+  ],
+  "npm": [
+    {
+      "name": "@liuli195/build-and-verify"
+    },
+    {
+      "name": "@liuli195/myspec"
+    }
+  ],
+  "optional_skills": [
+    "data-store"
+  ],
+  "projects": {
+    "liuli195/my-agent-skills": {
+      "requirements": [
+        "requirements-dev.txt"
+      ],
+      "npm": true,
+      "windows_setup": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/setup-worktree.ps1"
+      ]
+    },
+    "liuli195/Wow-Addons": {
+      "requirements": [
+        "scripts/dev/requirements.txt",
+        "projects/sim2gse/requirements.txt"
+      ],
+      "npm": true,
+      "windows_setup": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/dev/setup.ps1"
+      ]
+    },
+    "liuli195/Quant-Research-Lab": {
+      "requirements": [
+        "requirements.txt",
+        "requirements-dev.txt"
+      ],
+      "npm": false,
+      "windows_setup": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/setup-worktree.ps1"
+      ]
+    }
+  }
+}

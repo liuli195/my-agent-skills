@@ -1,0 +1,3 @@
+- [x] 1. 调整 PR Flow init（拉取请求流程初始化）问答顺序和 CodeQL（代码扫描工具）说明。
+- [x] 2. 更新测试覆盖新顺序和不开启 CodeQL security check（CodeQL 安全检查）时的跳转规则。
+- [x] 3. 同步当前仓库本地配置和 GitHub Rulesets（GitHub 规则集）远端配置，并完成验证。

@@ -1,0 +1,9 @@
+{
+  "myspec_proposal": "myspec/changes/fix-issue-174/proposal.md",
+  "myspec_design": "myspec/changes/fix-issue-174/design.md",
+  "myspec_tasks": "myspec/changes/fix-issue-174/tasks.md",
+  "myspec_delta_spec": "myspec/changes/fix-issue-174/specs/agent-guard-plugin-runtime/spec.md",
+  "handoff_context": "myspec/changes/fix-issue-174/.comet/handoff/spec-context.json",
+  "handoff_markdown": "myspec/changes/fix-issue-174/.comet/handoff/spec-context.md",
+  "archive_directory": "myspec/changes/archive/2026-07-21-fix-issue-174"
+}

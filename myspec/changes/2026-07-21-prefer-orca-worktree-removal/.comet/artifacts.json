@@ -1,0 +1,7 @@
+{
+  "myspec_proposal": "myspec/changes/prefer-orca-worktree-removal/proposal.md",
+  "myspec_design": "myspec/changes/prefer-orca-worktree-removal/design.md",
+  "myspec_tasks": "myspec/changes/prefer-orca-worktree-removal/tasks.md",
+  "myspec_delta_spec": "myspec/changes/prefer-orca-worktree-removal/specs/pr-flow-plugin/spec.md",
+  "archive_directory": "myspec/changes/archive/2026-07-21-prefer-orca-worktree-removal"
+}

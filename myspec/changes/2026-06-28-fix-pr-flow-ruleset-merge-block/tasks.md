@@ -1,0 +1,3 @@
+- [x] 添加 Rulesets 阻塞合并失败测试。
+- [x] 识别策略阻塞并返回 `DISPATCH_REQUIRED`。
+- [x] 运行聚焦测试验证。
