@@ -12,6 +12,9 @@ import tempfile
 import time
 
 
+DATA_STORE_API_VERSION = 2
+
+
 # Only tuning decisions survive a call, never connections, schemas or row data.
 _READ_CHOICES = {}
 
@@ -228,8 +231,8 @@ def read_keys(root, table, keys, *, columns=None, filters=None):
     """Read selected logical keys once, optionally projecting top-level columns."""
     root = Path(root).resolve(strict=True)
     directory = root / _name(table, table=True)
-    if directory.resolve().parent != root:
-        raise ValueError("逻辑表目录不能跳出数据根目录")
+    if directory.resolve() != directory:
+        raise ValueError("逻辑表目录不能重定向到其他位置")
     if not isinstance(keys, (list, tuple)) or not keys:
         raise ValueError("记录键必须是非空列表")
     paths = [directory / f"{key}.parquet" for key in dict.fromkeys(_name(key) for key in keys)]
@@ -259,7 +262,7 @@ def read_keys(root, table, keys, *, columns=None, filters=None):
         "autoinstall_known_extensions": False, "autoload_known_extensions": False,
     })
     try:
-        connection.execute("SET allowed_directories = ?", [[str(root) + os.sep]])
+        connection.execute("SET allowed_paths = ?", [[str(path) for path in paths]])
         connection.execute("SET enable_external_access = false")
         if len(paths) == 1 and filters is None:
             # Single-file reads already perform well; avoid planning/setup overhead.
@@ -275,32 +278,34 @@ def read_keys(root, table, keys, *, columns=None, filters=None):
         raise
 
 
-def query(root, sql, parameters=None):
-    """Return a DuckDB cursor. Consume with fetchmany(n), then close it."""
-    root = Path(root).resolve(strict=True)
+def query(root, sql, parameters=None, *, tables):
+    """Query explicitly declared logical tables; consume with fetchmany, then close."""
+    if not isinstance(tables, (list, tuple)) or not tables:
+        raise ValueError("tables 必须是非空逻辑表名列表")
+    tables = list(dict.fromkeys(_name(table, table=True) for table in tables))
     duckdb = _duckdb()
     connection = duckdb.connect(":memory:", config={
         "autoinstall_known_extensions": False, "autoload_known_extensions": False,
     })
     try:
-        connection.execute("SET allowed_directories = ?", [[str(root) + os.sep]])
-        connection.execute("SET enable_external_access = false")
+        statements = connection.extract_statements(sql)
+        if len(statements) != 1 or statements[0].type != duckdb.StatementType.SELECT:
+            raise ValueError("query 只接受一条只读 SELECT 查询")
+        root = Path(root).resolve(strict=True)
         groups = []
-        for directory in sorted(root.iterdir()):
-            if not directory.is_dir() or directory.name.startswith("."):
-                continue
-            table = _name(directory.name, table=True)
-            if directory.resolve().parent != root:
-                raise ValueError("逻辑表目录不能跳出数据根目录")
+        for table in tables:
+            directory = root / table
+            if directory.resolve() != directory:
+                raise ValueError("逻辑表目录不能重定向到其他位置")
             files = sorted(directory.glob("*.parquet"))
             if any(path.is_symlink() for path in files):
                 raise ValueError("数据分片不能是符号链接")
             if files:
-                _register(connection, table, files)
                 groups.append((table, files))
-        statements = connection.extract_statements(sql)
-        if len(statements) != 1 or statements[0].type != duckdb.StatementType.SELECT:
-            raise ValueError("query 只接受一条只读 SELECT 查询")
+        connection.execute("SET allowed_paths = ?", [[str(path) for _, files in groups for path in files]])
+        connection.execute("SET enable_external_access = false")
+        for table, files in groups:
+            _register(connection, table, files)
         _choose_read(connection, root, sql, parameters if parameters is not None else [], groups)
         connection.execute("SET lock_configuration = true")
         return connection.execute(sql, parameters if parameters is not None else [])
@@ -319,6 +324,7 @@ def main(argv=None):
     writer.add_argument("--schema", type=json.loads)
     reader = commands.add_parser("query")
     reader.add_argument("sql")
+    reader.add_argument("--tables", type=json.loads, required=True)
     reader.add_argument("--parameters", type=json.loads, default=[])
     reader.add_argument("--batch-size", type=int, default=1000)
     point_reader = commands.add_parser("read-key")
@@ -346,7 +352,7 @@ def main(argv=None):
             elif args.command == "read-keys":
                 cursor = read_keys(args.root, args.table, args.keys, columns=args.columns, filters=args.filters)
             else:
-                cursor = query(args.root, args.sql, args.parameters)
+                cursor = query(args.root, args.sql, args.parameters, tables=args.tables)
             with cursor:
                 names = [column[0] for column in cursor.description]
                 while rows := cursor.fetchmany(args.batch_size):

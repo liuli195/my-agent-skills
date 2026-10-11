@@ -42,7 +42,7 @@ def test_installed_connection_serves_other_commands_and_is_repeatable(tmp_path):
     )
     assert written.returncode == 0, written.stderr
     read = subprocess.run(
-        [sys.executable, str(entry), "--root", str(data), "query", "SELECT score FROM measurements"],
+        [sys.executable, str(entry), "--root", str(data), "query", "SELECT score FROM measurements", "--tables", '["measurements"]'],
         text=True, capture_output=True,
     )
     assert read.returncode == 0, read.stderr

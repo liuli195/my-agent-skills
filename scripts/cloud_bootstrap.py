@@ -164,6 +164,10 @@ def main(argv=None):
                 if recipe.get('npm'):
                     command.append('--npm')
             print(run(command, cwd=project))
+            if 'data-store' in recipe.get('skills', []) and 'data-store' not in state['pending']:
+                binding = root / 'skills/data-store/scripts/project_binding.py'
+                for action in ('connect', 'check'):
+                    print(run([sys.executable, binding, action, '--project', project], cwd=project))
         print(json.dumps({'status': 'ready', 'root': str(root), 'pending': state['pending'],
                           'path': str(root/'npm/bin'), 'npm_prefix': str(root/'npm'), 'sources': state['sources'], 'npm': state['npm']}, ensure_ascii=False))
         return 0

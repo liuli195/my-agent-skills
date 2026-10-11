@@ -80,6 +80,9 @@
       ]
     },
     "liuli195/Wow-Addons": {
+      "skills": [
+        "data-store"
+      ],
       "requirements": [
         "scripts/dev/requirements.txt",
         "projects/sim2gse/requirements.txt"
