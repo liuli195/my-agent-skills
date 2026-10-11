@@ -204,10 +204,12 @@ def test_query_locks_selected_files_and_preserves_engine_spill_exception(tmp_pat
     store.write(tmp_path, "selected", "one", [{"value": 7}])
     with store.query(tmp_path, "SELECT * FROM selected", tables=["selected"]) as cursor:
         assert cursor.fetchone() == (7,)
-        assert cursor.execute("SELECT current_setting('allowed_paths'), current_setting('allowed_directories'), "
-                              "current_setting('enable_external_access'), current_setting('autoinstall_known_extensions'), "
-                              "current_setting('autoload_known_extensions'), current_setting('temp_directory')").fetchone() == (
-                                  [str(tmp_path / "selected" / "one.parquet")], directories, False, False, False, temporary)
+        allowed_paths, *settings = cursor.execute(
+            "SELECT current_setting('allowed_paths'), current_setting('allowed_directories'), "
+            "current_setting('enable_external_access'), current_setting('autoinstall_known_extensions'), "
+            "current_setting('autoload_known_extensions'), current_setting('temp_directory')").fetchone()
+        assert [Path(path) for path in allowed_paths] == [tmp_path / "selected" / "one.parquet"]
+        assert settings == [directories, False, False, False, temporary]
         with pytest.raises(duckdb.InvalidInputException):
             cursor.execute("SET enable_external_access = true")
 
