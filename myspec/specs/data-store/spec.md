@@ -64,7 +64,7 @@ Data Store MUST 提供可供 Codex/Claude（代理客户端）使用的自包含
 - **THEN** 技能明确报告缺少依赖及准备方式，不自动修改用户环境或以其他存储方式伪装成功
 ### Requirement: Data Store reads known logical keys without scanning unrelated records
 
-Data Store（数据存储）MUST 提供按逻辑表名和写入记录键读取完整记录组的入口，沿用写入时的名称、大小写、类型及同键替换规则；调用者不需要物理路径。按键读取 MUST 只访问目标已完成分片，支持原生游标分批消费和关闭，不枚举无关历史，不改变通用多表只读查询。
+Data Store（数据存储）MUST 提供按逻辑表名和写入记录键读取完整记录组的入口，沿用写入时的名称、大小写、类型及同键替换规则；调用者不需要物理路径。按键读取 MUST 只访问目标已完成分片，支持原生游标分批消费和关闭，不枚举无关历史，保留通用入口显式声明表范围内的多表只读查询。
 
 #### Scenario: Caller reads a known key
 
@@ -109,7 +109,7 @@ Data Store MUST 在内部选择合适的读取配置，不要求调用者提供�
 #### Scenario: Caller uses generic logical-table queries
 
 - **WHEN** 调用者通过原有通用入口按逻辑表、字段和参数进行完整、嵌套、多表或统计读取
-- **THEN** 原有查询和类型继续有效，调用者无需另选读取配置；全部合法逻辑表仍准备检查，无关表损坏仍明确失败
+- **THEN** 原有查询和类型继续有效，调用者无需另选读取配置；只准备显式声明的逻辑表，无关表损坏不影响目标读取，目标表损坏仍明确失败
 
 #### Scenario: Caller reads after stored records change
 
@@ -165,3 +165,37 @@ Data Store MUST 保持既有逻辑表、写入替换、只读查询、点读及�
 - **WHEN** 数据中心接入实现准备交付
 - **THEN** 相同输入的写入、替换、单键、多键、字段筛选、嵌套报告、平坦事件、统计与多表查询返回一致内容及类型
 - **THEN** 首次加载与重复进程内读写分开测量，稳定退化未解决时不交付
+### Requirement: Data Store requires explicit logical tables for generic queries
+
+Data Store（数据存储）MUST（必须）提供 query(root, sql, parameters=None, *, tables)（显式表查询），tables 必须为非空列表或元组，沿用原逻辑名称和大小写去重规则。命令行查询 MUST 提供 --tables（表范围）。漏传、空值、空范围、非法名称与非单条只读语句 MUST 在枚举目标目录前失败；使用查询引擎原生语句类型检查，不自写查询解析器。查询 MUST 只枚举和登记声明表的已完成分片，不推测补表或回退全库；多表参数化查询、字段合并、嵌套类型及分批游标 MUST 保持。
+
+#### Scenario: Caller scopes a query around unrelated history
+
+- **WHEN** 调用者声明目标逻辑表并发起只读查询，其他表含损坏文件或非法目录
+- **THEN** 只准备目标表并返回对应结果，不枚举或读取无关业务数据
+
+#### Scenario: Caller declares absent or empty tables
+
+- **WHEN** 调用者声明不存在或没有已完成分片的表
+- **THEN** 系统表检查返回不存在，普通目标读取返回查询引擎缺表错误，不从其他表猜测结构
+### Requirement: Data Store restricts business files while preserving native temporary spilling
+
+Data Store MUST 仅把选定业务分片加入原生显式文件许可名单，关闭外部访问与自动扩展并锁定配置；未声明业务表及文件不得自动加入范围，表目录和分片不得通过链接重定向到其他表或数据根之外，已知键读取适用同一规则。引擎既有临时溢写目录和内存策略 MUST 保留；该目录是明确例外，不承诺阻止人工查询读取其中的文件，正常业务不得以其作为业务数据源。此入口不构成任意查询的绝对文件安全沙箱，不新增临时目录管理、清扫或查询解析器。
+
+#### Scenario: Caller attempts an undeclared business source
+
+- **WHEN** 调用者查询未声明业务表或直接请求其文件
+- **THEN** 原生引擎拒绝该业务源，查询不扩大范围或重试全库
+
+#### Scenario: Engine retains ordinary memory and spilling behavior
+
+- **WHEN** 调用者通过查询或点读入口读取声明的业务数据
+- **THEN** 选定文件许可和配置锁定生效，原有临时溢写目录保留，不通过关闭溢写改变大查询内存行为
+### Requirement: Data Store exposes an exact capability version at module load
+
+Data Store MUST 提供 DATA_STORE_API_VERSION = 2（接口能力版本二）；消费者 MUST 在加载实现时检查值确切为二，缺失或不匹配明确要求同步并重启，不静默接受旧能力或在每次查询时检查安装状态。能力常量不得冒用尚未发布的发行版本，开发验证不得更换全局安装。
+
+#### Scenario: Consumer loads a matching or mismatching implementation
+
+- **WHEN** 消费者加载项目共用入口中的实现
+- **THEN** 确切版本二可使用显式表查询；缺失或不匹配时停止正常读取并明确报告同步需求

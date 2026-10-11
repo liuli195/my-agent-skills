@@ -399,6 +399,14 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    "tests/test_cloud_bootstrap.py::test_public_bootstrap_connects_declared_data_store_and_reuses_it": "Public bootstrap must traverse recorded Git release metadata, real project setup and installed binding/query commands.",
+    "tests/test_cloud_bootstrap.py::test_public_bootstrap_leaves_undeclared_or_pending_data_store_unbound": "Public bootstrap smoke proves real project discovery does not bind undeclared or unreleased optional skills.",
+    "tests/test_cloud_bootstrap.py::test_public_bootstrap_preserves_existing_project_binding_conflicts": "Public bootstrap and installed helper must preserve real conflicting directories and source links after project setup.",
+    "tests/test_cloud_bootstrap.py::test_public_bootstrap_requires_installation_root": "Public bootstrap parser smoke rejects missing installation root before setup.",
+    "tests/test_data_store.py::test_installed_cli_query_prepares_only_declared_logical_tables": "Independent installed CLI smoke isolates declared logical tables from real damaged history and invalid directories.",
+    "tests/test_data_store.py::test_installed_cli_query_cannot_read_undeclared_parquet_or_sqlite": "Installed CLI smoke proves native refusal of undeclared business tables and genuine Parquet/SQLite files.",
+    "tests/test_data_store.py::test_installed_readers_reject_same_root_table_redirection": "Installed query and key-read commands must reject actual native cross-table directory links.",
+    "tests/test_data_store.py::test_query_requires_explicit_scope_and_read_only_sql_before_filesystem_access": "Public query parser smoke rejects omitted and invalid table declarations before touching an unavailable data root.",
     "tests/test_data_store_project_binding.py::test_installed_connection_serves_other_commands_and_is_repeatable": "Installed helper and independent command must traverse a real project directory link.",
     "tests/test_data_store_project_binding.py::test_update_checks_old_source_and_preserves_sources_and_data": "Native installed-helper source update checks preserve real link targets and project data.",
     "tests/test_data_store_project_binding.py::test_refuses_conflicts_without_removing_existing_content": "Installed helper rejects actual filesystem conflicts and redirected native parents.",

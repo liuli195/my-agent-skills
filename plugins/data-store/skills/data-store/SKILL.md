@@ -41,19 +41,23 @@ Python 调用：`write(root, table, key, rows, schema=None)`；schema 是可选�
 
 ## 查询
 
-`python <skill>/scripts/data_store.py --root <data> query 'SELECT label, score FROM measurements WHERE score > ?' --parameters '[10]' --batch-size 1000`
+`python <skill>/scripts/data_store.py --root <data> query 'SELECT label, score FROM measurements WHERE score > ?' --tables '["measurements"]' --parameters '[10]' --batch-size 1000`
 
-只接受一条 SELECT（只读查询），通过稳定逻辑表名访问所有已完成分片。命令按指定批量读取并逐行输出 JSON，不先生成完整结果列表。仅能读取配置的数据根目录，不自动安装扩展。
+只接受一条 SELECT（只读查询），必须通过 `--tables` 明确声明本次使用的非空逻辑表列表，只准备这些表的已完成分片。名称按原有大小写规则去重，不自动补表或回退全库。命令按指定批量读取并逐行输出 JSON，不先生成完整结果列表，不自动安装扩展。
 
-Python 调用：`query(root, sql, parameters=None)` 返回 DuckDB 游标；使用 `fetchmany(1000)` 分批读取，并用上下文管理器或 `close()` 关闭。不要让业务调用者直接读取 Parquet 路径。结果在查询启动后按当次执行读取；跨键批量事务及并发同键写入协调由调用方负责，不属于本技能。
+Python 调用：`query(root, sql, parameters=None, *, tables)`，`tables` 必须是非空 `list/tuple`（列表或元组），返回 DuckDB 游标；使用 `fetchmany(1000)` 分批读取，并用上下文管理器或 `close()` 关闭。漏传、空值、非法名称和非只读语句在枚举目标目录前失败。声明不存在或没有已完成分片的表不会登记视图，可以通过 `information_schema.tables`（系统表目录）检查不存在；普通目标查询返回引擎缺表错误。不要让业务调用者直接读取 Parquet 路径。结果在查询启动后按当次执行读取；跨键批量事务及并发同键写入协调由调用方负责，不属于本技能。
 
-查询仍准备并检查全部逻辑表。内部根据读取计划自动选择工作线程：预计不超过512行且能明确识别的复杂字段读取使用一个线程，其他读取使用引擎默认。最多记住128条配置选择；每次重新检查文件、建立连接并读取当次数据，不保存报告结果或常驻连接。调用者无需提供调优参数；无法明确识别时保持默认。
+调用方加载模块时必须确认 `DATA_STORE_API_VERSION == 2`（数据存储接口能力版本为二），缺少或不匹配时明确要求同步技能后重启，不能静默接受旧能力，也不在每次查询时检查安装状态。该能力常量不代替正式发行版本。
+
+查询和点读仅把选定业务分片加入显式文件白名单，关闭外部访问与自动扩展，并锁定配置。表目录和分片不能通过链接重定向到其他位置。保留 DuckDB 原有临时溢写目录及内存策略；引擎自动许可该目录，它是明确的临时文件例外，不是任意 SQL（查询语言）的绝对文件安全沙箱。人工查询仍可能读取该临时目录中的文件；正常业务调用不能把临时目录作为业务数据源。不新增目录管理、清扫或查询解析器。
+
+内部根据声明表的读取计划自动选择工作线程：预计不超过512行且能明确识别的复杂字段读取使用一个线程，其他读取使用引擎默认。最多记住128条配置选择；每次重新检查选定文件、建立连接并读取当次数据，不保存报告结果或常驻连接。调用者无需提供调优参数；无法明确识别时保持默认。
 
 ### 已知记录键的点读
 
 `python <skill>/scripts/data_store.py --root <data> read-key measurements batch_01 --batch-size 1000`
 
-Python 调用：`read_key(root, table, key, columns=None, filters=None)`。表和键与 `write` 使用同一逻辑身份，默认返回该键的完整记录组游标，仍用 `fetchmany` 和上下文管理器关闭。只打开目标分片，不枚举其他表或历史分片；通用 `query` 的全表、多表语义不变。
+Python 调用：`read_key(root, table, key, columns=None, filters=None)`。表和键与 `write` 使用同一逻辑身份，默认返回该键的完整记录组游标，仍用 `fetchmany` 和上下文管理器关闭。只打开目标分片，不枚举其他表或历史分片；通用 `query` 仍支持显式声明表范围内的多表读取。
 
 数据根存在但目标键不存在时抛出 `MissingKeyError`（继承 `FileNotFoundError`）；明确的 Parquet 文件头或页脚损坏抛出 `CorruptDataError`。整个数据根不可用、权限、锁、磁盘及无法确定为内容损坏的查询错误原样传播，调用方不能把所有读取失败当作无效数据而静默重算。点读不做完整哈希复核或第二次完整报告读取；业务身份与成绩核验仍由调用者负责。
 

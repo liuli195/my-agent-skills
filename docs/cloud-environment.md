@@ -22,7 +22,9 @@ python scripts/cloud_bootstrap.py update --root /workspace/shared/cloud-skills/m
 
 ## 项目接入
 
-公共清单的 projects 项只登记已支持仓库的既有准备入口、requirements 文件和是否使用 npm。实际包版本仍以目标仓库自己的依赖声明为准，不新增项目配置协议。
+公共清单的 projects 项登记已支持仓库的既有准备入口、requirements 文件、是否使用 npm，以及需要连接的技能。实际包版本仍以目标仓库自己的依赖声明为准，不新增项目配置协议。
+
+项目显式声明 `"skills": ["data-store"]` 时，现有准备完成后，统一入口从公共技能发现位置调用随包 `project_binding.py connect/check`（项目连接与检查），重跑复用同一来源。没有声明的项目不建立连接；可选技能尚未发布时保留待发布状态，不强制安装。现有入口冲突或来源不同会明确失败并保留内容，不自动切换来源。本清单目前只给已核实需要数据存储的 Wow-Addons（魔兽插件仓库）声明此能力。
 
 - Windows 调用既有 PowerShell 入口，保留其完整默认行为
 - Linux 使用公共助手准备 Python/npm，不冒充 Windows 完整工具链
