@@ -414,6 +414,7 @@ E2E_ALLOWLIST: dict[str, str] = {
     "tests/test_data_store_project_binding.py::test_update_restores_old_entry_when_filesystem_rename_fails": "Installed command fault injection proves real link rollback and retained recovery target.",
     "tests/test_data_store.py::test_installed_cli_filters_one_row_within_a_logical_group": "Independent installed-skill CLI smoke for typed row filtering inside a logical group.",
     "tests/test_data_store.py::test_independent_skill_cli_writes_and_queries_typed_rows": "Independent installed-skill write/query CLI smoke, with real Parquet and bounded output.",
+    "tests/test_data_store.py::test_independent_binary_cli_outputs_metadata_and_refuses_blob": "Independent installed Python binary write and real query/read-key/read-keys commands must preserve metadata output and clearly refuse direct BLOB output.",
     'tests/test_pr_flow_plugin_package.py::test_pr_flow_installed_skill_command_runs_from_external_project': (
         'covers the documented installed PR Flow Python entrypoint from an external target with no source checkout, preserving target selection and the five loaded-skill command contracts'
     ),

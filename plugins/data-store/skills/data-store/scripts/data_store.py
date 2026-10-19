@@ -13,6 +13,7 @@ import time
 
 
 DATA_STORE_API_VERSION = 2
+DATA_STORE_CAPABILITIES = frozenset({"binary-write-v1"})
 
 
 # Only tuning decisions survive a call, never connections, schemas or row data.
@@ -20,7 +21,7 @@ _READ_CHOICES = {}
 
 
 def _parameter_key(value):
-    if type(value) in (type(None), bool, int, float, str, bytes):
+    if type(value) in (type(None), bool, int, float, str):
         return (type(value).__name__, value)
     if type(value) in (list, tuple):
         return (type(value).__name__, tuple(_parameter_key(item) for item in value))
@@ -161,8 +162,40 @@ def _opaque(structure):
     return any(_opaque(value) for value in (structure.values() if isinstance(structure, dict) else structure))
 
 
-def write(root, table, key, rows, *, schema=None):
-    """Replace one complete logical key. Optional schema uses DuckDB field types."""
+def _binary_records(connection, rows, schema):
+    """Bind each row's metadata and opaque bytes together, without an order-based join."""
+    if (not isinstance(schema, dict) or not schema
+            or any(not isinstance(field, str) or not field or "\x00" in field for field in schema)
+            or len({field.lower() for field in schema}) != len(schema)
+            or any(set(row) != set(schema) for row in rows)):
+        raise ValueError("原生二进制写入必须提供非空、无冲突的字段类型，并逐行完整匹配字段")
+    blobs = [field for field, kind in schema.items()
+             if isinstance(kind, str) and kind.strip().upper() == "BLOB"]
+    metadata = {field: kind for field, kind in schema.items() if field not in blobs}
+    parameters = []
+    for row in rows:
+        if any(row[field] is not None and not isinstance(row[field], bytes) for field in blobs):
+            raise TypeError("原生 BLOB 字段只接受 bytes 或 None")
+        if metadata:
+            parameters.append(json.dumps({field: row[field] for field in metadata},
+                                         ensure_ascii=False, allow_nan=False))
+        parameters.extend(row[field] for field in blobs)
+    columns = (["_json"] if metadata else []) + [f"_blob{index}" for index in range(len(blobs))]
+    values = ", ".join("(" + ", ".join("?" for _ in columns) + ")" for _ in rows)
+    source = f"(VALUES {values}) AS _input({', '.join(columns)})"
+    if metadata:
+        source = f"(SELECT from_json_strict(_json, ?) AS _record, * FROM {source})"
+        parameters.insert(0, json.dumps(metadata))
+    projection = []
+    for field in schema:
+        name = '"' + field.replace('"', '""') + '"'
+        projection.append(f"_blob{blobs.index(field)}::BLOB AS {name}" if field in blobs
+                          else f"_record.{name}")
+    return connection.sql(f"SELECT {', '.join(projection)} FROM {source}", params=parameters)
+
+
+def write(root, table, key, rows, *, schema=None, binary=False):
+    """Replace one complete key; binary=True requires a schema and native top-level BLOBs."""
     root = Path(root).resolve()
     directory = root / _name(table, table=True)
     key = _name(key)
@@ -173,17 +206,20 @@ def write(root, table, key, rows, *, schema=None):
     if schema is not None and (not isinstance(schema, dict) or not schema
                                or any(set(row) - set(schema) for row in rows)):
         raise ValueError("记录包含未声明字段，或字段类型定义无效")
-    payload = json.dumps(rows, ensure_ascii=False, allow_nan=False)
+    payload = None if binary else json.dumps(rows, ensure_ascii=False, allow_nan=False)
     with _duckdb().connect(":memory:") as connection:
-        structure = (json.dumps([schema]) if schema is not None else
-                     connection.execute("SELECT json_structure(?)", [payload]).fetchone()[0])
-        if schema is None and _opaque(json.loads(structure)):
-            raise ValueError("无法推断有类型的记录，请明确提供字段类型；不回退为不透明 JSON")
-        transform = "from_json_strict" if schema is not None else "from_json"
-        records = connection.sql(
-            f"SELECT record.* FROM (SELECT unnest({transform}(?, ?)) AS record)",
-            params=[payload, structure],
-        )
+        if binary:
+            records = _binary_records(connection, rows, schema)
+        else:
+            structure = (json.dumps([schema]) if schema is not None else
+                         connection.execute("SELECT json_structure(?)", [payload]).fetchone()[0])
+            if schema is None and _opaque(json.loads(structure)):
+                raise ValueError("无法推断有类型的记录，请明确提供字段类型；不回退为不透明 JSON")
+            transform = "from_json_strict" if schema is not None else "from_json"
+            records = connection.sql(
+                f"SELECT record.* FROM (SELECT unnest({transform}(?, ?)) AS record)",
+                params=[payload, structure],
+            )
         directory.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=".write-", dir=directory) as temporary:
             source = Path(temporary) / "data.parquet"
@@ -314,6 +350,21 @@ def query(root, sql, parameters=None, *, tables):
         raise
 
 
+_CLI_BLOB_ERROR = "命令行不能直接输出 BLOB；请选择元数据字段，或在查询中显式编码"
+
+
+def _contains_blob(kind):
+    return kind.id == "blob" or (kind.id in {"list", "array", "map", "struct", "union"}
+                                 and any(_contains_blob(child) for _, child in kind.children
+                                         if isinstance(child, type(kind))))
+
+
+def _cli_json_value(value):
+    if isinstance(value, bytes):
+        raise ValueError(_CLI_BLOB_ERROR)
+    return str(value)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Parquet/Zstd 写入与 DuckDB 逻辑表查询")
     parser.add_argument("--root", required=True, type=Path)
@@ -354,10 +405,12 @@ def main(argv=None):
             else:
                 cursor = query(args.root, args.sql, args.parameters, tables=args.tables)
             with cursor:
+                if any(_contains_blob(column[1]) for column in cursor.description):
+                    raise ValueError(_CLI_BLOB_ERROR)
                 names = [column[0] for column in cursor.description]
                 while rows := cursor.fetchmany(args.batch_size):
                     for row in rows:
-                        print(json.dumps(dict(zip(names, row)), ensure_ascii=False, default=str))
+                        print(json.dumps(dict(zip(names, row)), ensure_ascii=False, default=_cli_json_value))
         return 0
     except Exception as error:
         print(str(error), file=sys.stderr)
