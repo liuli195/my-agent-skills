@@ -127,11 +127,218 @@ def test_installed_cli_filters_one_row_within_a_logical_group(tmp_path):
     ]
 
 
-def load_store():
-    spec = importlib.util.spec_from_file_location("data_store", SKILL / "scripts/data_store.py")
+def load_store(skill=SKILL):
+    spec = importlib.util.spec_from_file_location("data_store", skill / "scripts/data_store.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_independent_skill_python_binary_write_round_trips_bytes(tmp_path):
+    installed = tmp_path / "installed-skill"
+    shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
+    store = load_store(installed)
+    data = tmp_path / "shared-data"
+    assert store.write(data, "readings", "one", [{"payload": b"\x00\xff\x80"}],
+                       schema={"payload": "BLOB"}, binary=True) == 1
+    with store.read_key(data, "readings", "one") as cursor:
+        assert cursor.fetchall() == [(b"\x00\xff\x80",)]
+    assert store.DATA_STORE_API_VERSION == 2
+    assert "binary-write-v1" in store.DATA_STORE_CAPABILITIES
+
+
+@pytest.mark.parametrize("command", ["query", "read-key", "read-keys"])
+def test_independent_binary_cli_outputs_metadata_and_refuses_blob(tmp_path, command):
+    installed = tmp_path / "installed-skill"
+    shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
+    store = load_store(installed)
+    data = tmp_path / "shared-data"
+    store.write(data, "readings", "one", [
+        {"id": "1", "payload": b"\x00\xff", "other": b""},
+        {"id": 2, "payload": b"", "other": None},
+        {"id": 3, "payload": None, "other": b"third"},
+    ], schema={"payload": "BLOB", "id": "INTEGER", "other": "blob"}, binary=True)
+    with store.read_key(data, "readings", "one") as cursor:
+        assert cursor.fetchall() == [(b"\x00\xff", 1, b""), (b"", 2, None), (None, 3, b"third")]
+    with store.read_keys(data, "readings", ["one"], columns=["id", "other"], filters={"id": 3}) as cursor:
+        assert cursor.fetchall() == [(3, b"third")]
+    with store.query(data, "SELECT id, payload FROM readings WHERE id = ?", [2], tables=["readings"]) as cursor:
+        assert cursor.fetchall() == [(2, b"")]
+    script = installed / "scripts/data_store.py"
+    prefix = [sys.executable, str(script), "--root", str(data)]
+    metadata_args = (["query", "SELECT id FROM readings ORDER BY id", "--tables", '["readings"]']
+                     if command == "query" else [command, "readings", "one", "--columns", '["id"]'])
+    metadata = subprocess.run(prefix + metadata_args, text=True, capture_output=True, cwd=tmp_path)
+    assert metadata.returncode == 0, metadata.stderr
+    assert [json.loads(line) for line in metadata.stdout.splitlines()] == [{"id": 1}, {"id": 2}, {"id": 3}]
+    blob_args = (["query", "SELECT payload FROM readings", "--tables", '["readings"]']
+                 if command == "query" else [command, "readings", "one", "--columns", '["payload"]'])
+    refused = subprocess.run(prefix + blob_args, text=True, capture_output=True, cwd=tmp_path)
+    assert refused.returncode == 2
+    assert refused.stdout == ""
+    assert "BLOB" in refused.stderr and "元数据" in refused.stderr and "编码" in refused.stderr
+    if command == "query":
+        ordinary = subprocess.run(prefix + ["query", "SELECT [1, 2]::INTEGER[2] AS values", "--tables", '["readings"]'],
+                                  text=True, capture_output=True, cwd=tmp_path)
+        assert ordinary.returncode == 0, ordinary.stderr
+        assert json.loads(ordinary.stdout) == {"values": [1, 2]}
+        for projection in ("payload", "[payload]", "[payload]::BLOB[1]",
+                           "struct_pack(value := payload)", "map([payload], ['tag'])"):
+            sql = f"SELECT {projection} AS output FROM readings WHERE id = 1"
+            nested = subprocess.run(prefix + ["query", sql, "--tables", '["readings"]'],
+                                    text=True, capture_output=True, cwd=tmp_path)
+            assert nested.returncode == 2
+            assert nested.stdout == ""
+            assert "BLOB" in nested.stderr and "编码" in nested.stderr
+        encoded = subprocess.run(prefix + ["query", "SELECT hex(payload) AS text FROM readings WHERE id = 1",
+                                           "--tables", '["readings"]'],
+                                 text=True, capture_output=True, cwd=tmp_path)
+        assert encoded.returncode == 0, encoded.stderr
+        assert json.loads(encoded.stdout) == {"text": "00FF"}
+
+
+def test_binary_write_preserves_legacy_json_conversion_and_blob_strings(tmp_path):
+    store = load_store()
+    metadata = {"label": "VARCHAR", "count": "INTEGER", "enabled": "BOOLEAN",
+                "amount": "DECIMAL(12,2)", "parts": [{"n": "INTEGER"}], "detail": "JSON"}
+    row = {"label": 12, "count": "7", "enabled": "true", "amount": "12.50",
+           "parts": [{"n": "3"}], "detail": {"text": "value"}}
+    store.write(tmp_path, "readings", "legacy", [row], schema=metadata)
+    store.write(tmp_path, "readings", "binary", [dict(row, payload=b"\xff")],
+                schema=dict(metadata, payload="BLOB"), binary=True)
+    fields = ["label", "count", "enabled", "amount", "parts", "detail"]
+    with store.read_key(tmp_path, "readings", "legacy", columns=fields) as original:
+        with store.read_key(tmp_path, "readings", "binary", columns=fields) as current:
+            assert current.description == original.description
+            assert current.fetchall() == original.fetchall()
+    for binary in (False, True):
+        with pytest.raises(duckdb.Error, match="Failed to cast"):
+            store.write(tmp_path, "readings", "bad", [{"count": "invalid"}],
+                        schema={"count": "INTEGER"}, binary=binary)
+    store.write(tmp_path, "legacy_blobs", "one", [{"payload": "\\x00\\xFF"}], schema={"payload": "BLOB"})
+    with store.read_key(tmp_path, "legacy_blobs", "one") as cursor:
+        assert cursor.fetchall() == [(b"\\x00\\xFF",)]
+    with pytest.raises(TypeError):
+        store.write(tmp_path, "legacy_blobs", "one", [{"payload": b"new"}], schema={"payload": "BLOB"})
+    with store.read_key(tmp_path, "legacy_blobs", "one") as cursor:
+        assert cursor.fetchall() == [(b"\\x00\\xFF",)]
+
+
+@pytest.mark.parametrize("rows,schema,error", [
+    ([{"payload": b"new"}], None, ValueError),
+    ([{"payload": b"new"}], {}, ValueError),
+    ([{"payload": "text"}], {"payload": "BLOB"}, TypeError),
+    ([{"payload": bytearray(b"new")}], {"payload": "BLOB"}, TypeError),
+    ([{"payload": memoryview(b"new")}], {"payload": "BLOB"}, TypeError),
+    ([{"payload": [1, 2]}], {"payload": "BLOB"}, TypeError),
+    ([{"payload": b"new", "extra": 1}], {"payload": "BLOB"}, ValueError),
+    ([{"payload": b"new"}], {"payload": "BLOB", "id": "INTEGER"}, ValueError),
+    ([{"id": 1}], {"payload": "BLOB", "id": "INTEGER"}, ValueError),
+    ([{"payload": b"new", "PAYLOAD": b"other"}], {"payload": "BLOB", "PAYLOAD": "BLOB"}, ValueError),
+    ([{"": b"new"}], {"": "BLOB"}, ValueError),
+    ([{"\x00": b"new"}], {"\x00": "BLOB"}, ValueError),
+    ([{1: b"new"}], {1: "BLOB"}, ValueError),
+    ([{"payload": b"new", "nested": {"value": b"nested"}}],
+     {"payload": "BLOB", "nested": {"value": "BLOB"}}, TypeError),
+    ([{"payload": b"new", "nested": [b"nested"]}],
+     {"payload": "BLOB", "nested": ["BLOB"]}, TypeError),
+    ([{"payload": b"new", "id": float("nan")}], {"payload": "BLOB", "id": "DOUBLE"}, ValueError),
+    ([{"payload": b"new", "id": "bad"}], {"payload": "BLOB", "id": "INTEGER"}, duckdb.Error),
+    ([{"payload": b"new", "id": 1}], {"payload": "BLOB", "id": "INTEGER); DROP TABLE readings; --"}, duckdb.Error),
+])
+def test_binary_write_rejects_invalid_records_without_replacing_old_key(tmp_path, rows, schema, error):
+    store = load_store()
+    store.write(tmp_path, "readings", "one", [{"payload": b"old", "id": 1}],
+                schema={"payload": "BLOB", "id": "INTEGER"}, binary=True)
+    with pytest.raises(error):
+        store.write(tmp_path, "readings", "one", rows, schema=schema, binary=True)
+    with store.read_key(tmp_path, "readings", "one") as cursor:
+        assert cursor.fetchall() == [(b"old", 1)]
+    assert [path.name for path in (tmp_path / "readings").iterdir()] == ["one.parquet"]
+
+
+def test_binary_fields_use_names_and_keep_each_row_paired_with_its_metadata(tmp_path):
+    store = load_store()
+    blob_name, id_name = 'blob"; --', 'select'
+    rows = [{blob_name: b"second", id_name: 2, "another": None},
+            {blob_name: None, id_name: 1, "another": b"\x00\xff"},
+            {blob_name: b"", id_name: 3, "another": b"third"}]
+    schema = {blob_name: "BLOB", id_name: "INTEGER", "another": "BLOB"}
+    store.write(tmp_path, "readings", "one", rows, schema=schema, binary=True)
+    with store.read_key(tmp_path, "readings", "one", columns=[id_name, blob_name, "another"]) as cursor:
+        assert sorted(cursor.fetchall()) == [(1, None, b"\x00\xff"), (2, b"second", None), (3, b"", b"third")]
+    with pytest.raises(duckdb.BinderException):
+        store.read_key(tmp_path, "readings", "one", columns=["unknown"])
+    with duckdb.connect() as connection:
+        assert connection.execute("SELECT DISTINCT compression FROM parquet_metadata(?)",
+                                  [str(tmp_path / "readings/one.parquet")]).fetchall() == [("ZSTD",)]
+
+
+@pytest.mark.parametrize("failure", ["temporary-write", "publication"])
+def test_binary_write_failure_keeps_old_complete_key(tmp_path, monkeypatch, failure):
+    store = load_store()
+    schema = {"payload": "BLOB", "id": "INTEGER"}
+    store.write(tmp_path, "readings", "one", [{"payload": b"old", "id": 1}], schema=schema, binary=True)
+
+    def fail_write(relation, path, **kwargs):
+        Path(path).write_bytes(b"incomplete")
+        raise OSError("injected temporary write failure")
+
+    def fail_replace(source, target):
+        raise PermissionError("injected publication failure")
+
+    with monkeypatch.context() as patch:
+        if failure == "temporary-write":
+            patch.setattr(duckdb.DuckDBPyRelation, "write_parquet", fail_write)
+        else:
+            patch.setattr(store.os, "replace", fail_replace)
+            patch.setattr(store.time, "sleep", lambda delay: None)
+        with pytest.raises(OSError, match="injected"):
+            store.write(tmp_path, "readings", "one", [{"payload": b"new", "id": 2}], schema=schema, binary=True)
+    with store.read_key(tmp_path, "readings", "one") as cursor:
+        assert cursor.fetchall() == [(b"old", 1)]
+    assert [path.name for path in (tmp_path / "readings").iterdir()] == ["one.parquet"]
+
+
+def test_binary_write_retries_temporary_publication_lock_and_reads_fresh_data(tmp_path, monkeypatch):
+    store = load_store()
+    schema = {"payload": "BLOB"}
+    store.write(tmp_path, "readings", "one", [{"payload": b"old"}], schema=schema, binary=True)
+    store.write(tmp_path, "readings", "other", [{"payload": b"other"}], schema=schema, binary=True)
+    replace = store.os.replace
+    attempts = 0
+
+    def transient_lock(source, target):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise PermissionError("injected temporary lock")
+        return replace(source, target)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store.os, "replace", transient_lock)
+        patch.setattr(store.time, "sleep", lambda delay: None)
+        store.write(tmp_path, "readings", "one", [{"payload": b"new"}], schema=schema, binary=True)
+    with store.read_key(tmp_path, "readings", "one") as cursor:
+        assert cursor.fetchall() == [(b"new",)]
+    with store.read_keys(tmp_path, "readings", ["one", "other"]) as cursor:
+        assert sorted(cursor.fetchall()) == [(b"new",), (b"other",)]
+    with store.query(tmp_path, "SELECT payload FROM readings ORDER BY payload", tables=["readings"]) as cursor:
+        assert cursor.fetchall() == [(b"new",), (b"other",)]
+
+
+def test_binary_queries_accept_native_scalar_and_nested_parameters(tmp_path):
+    store = load_store()
+    store.write(tmp_path, "readings", "one", [{"payload": b"\x00\xff"}, {"payload": b""}, {"payload": None}],
+                schema={"payload": "BLOB"}, binary=True)
+    for sql, parameters in [
+        ("SELECT payload FROM readings WHERE payload = ?", [b"\x00\xff"]),
+        ("SELECT payload FROM readings WHERE payload = $value", {"value": b"\x00\xff"}),
+        ("SELECT payload FROM readings WHERE payload IN (SELECT unnest(?))", [[b"\x00\xff"]]),
+    ]:
+        for _ in range(2):
+            with store.query(tmp_path, sql, parameters, tables=["readings"]) as cursor:
+                assert cursor.fetchall() == [(b"\x00\xff",)]
 
 
 def test_query_requires_explicit_scope_and_read_only_sql_before_filesystem_access(tmp_path):

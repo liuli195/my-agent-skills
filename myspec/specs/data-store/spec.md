@@ -193,12 +193,18 @@ Data Store MUST 仅把选定业务分片加入原生显式文件许可名单，�
 - **THEN** 选定文件许可和配置锁定生效，原有临时溢写目录保留，不通过关闭溢写改变大查询内存行为
 ### Requirement: Data Store exposes an exact capability version at module load
 
-Data Store MUST 提供 DATA_STORE_API_VERSION = 2（接口能力版本二）；消费者 MUST 在加载实现时检查值确切为二，缺失或不匹配明确要求同步并重启，不静默接受旧能力或在每次查询时检查安装状态。能力常量不得冒用尚未发布的发行版本，开发验证不得更换全局安装。
+Data Store MUST 提供 DATA_STORE_API_VERSION = 2（接口能力版本二）；消费者 MUST 在加载实现时检查值确切为二，缺失或不匹配明确要求同步并重启，不静默接受旧能力或在每次查询时检查安装状态。Data Store MUST 通过 DATA_STORE_CAPABILITIES（接口能力集合）声明 binary-write-v1（原生二进制写入第一版）；需要此能力的新消费者 MUST 在实际加载的模块上核验其存在，缺失时停止并要求同步技能后重启，不静默降级编码。原有不使用此能力的消费者不需要新增能力要求。能力常量不得冒用尚未发布的发行版本，开发验证不得更换全局安装。
 
 #### Scenario: Consumer loads a matching or mismatching implementation
 
 - **WHEN** 消费者加载项目共用入口中的实现
 - **THEN** 确切版本二可使用显式表查询；缺失或不匹配时停止正常读取并明确报告同步需求
+
+#### Scenario: Consumer needs native binary writes
+
+- **WHEN** 消费者需要原生二进制写入并加载实际安装的实现
+- **THEN** 消费者在确切接口版本二之外核验 binary-write-v1 能力，缺失时明确停止并要求同步后重启
+- **THEN** 项目连接检查或发行版本名称不能替代实际能力检查，既有不使用二进制能力的调用不受新增能力要求影响
 ### Requirement: Data Store defines identity-aware caller reuse requirements
 
 Data Store（数据存储）MUST（必须）在接入说明中要求调用项目声明资料的完整业务身份、可变性、解释版本与复用有效范围。不可变资料在完整身份与解释版本相同时复用；可变资料按可信权威版本核验后复用。调用者必须优先使用适合其需要的既有按键、字段选择、筛选及批量读取能力，避免不必要的大对象转换、完整复制、重复扫描和多份等价完整结果。版本核验、失效、失败确认及恢复所需的重复访问允许保留，但项目须说明原因；本要求不新增存储接口或常驻缓存。
@@ -229,3 +235,35 @@ Data Store（数据存储）MUST（必须）要求调用项目从其现有真实
 - **WHEN** 维护者为存储能力或调用项目补充验证
 - **THEN** 存储自身的公开接口及安装形态测试留在技能源码仓库，业务身份、复用、恢复和实际规模测试留在调用项目仓库
 - **THEN** 业务数据根目录不存放测试代码或验证报告，安装后的技能目录不存放生成数据、缓存、临时产物或测试
+### Requirement: Data Store explicitly opts in to native top-level binary writes
+
+Data Store（数据存储）MUST（必须）在现有公开 write（写入）入口提供默认关闭的 binary（原生二进制方式）关键字。显式开启时 MUST 要求非空字段类型声明，仅顶层声明为 BLOB（二进制字段）的值接受 Python（编程语言）原生 bytes（字节串）或 None（空值），保留任意字节、空字节串与空值的区别。普通字段 MUST 沿用现有显式类型转换的合法转换及失败行为；多行、多二进制字段及纯二进制字段记录 MUST 保持每行完整对应，通过原有单份有类型压缩记录原子替换，不产生旁路副本。默认关闭时 MUST 保持原有导入、类型推断及旧 BLOB 字符串写入行为，不因字段类型声明而自动切换方式。既有公开读取入口 MUST 保留原生字节值、字段选择、筛选、错误区分与读取安全限制。存储层不解释字节内容，不规定业务矩阵或模型协议，完整业务结果不得整体退化为不透明二进制字段。
+
+#### Scenario: Caller writes native binary fields and typed metadata
+
+- **WHEN** 调用者显式开启原生二进制方式，并以完整字段类型声明写入多行普通元数据及一个或多个顶层二进制字段，或只含二进制字段的记录
+- **THEN** 既有公开读取入口返回对应的原生字节、空值及有类型元数据，行与字段不发生错配，空字节串不变为空值
+- **THEN** 同键替换仍只发布一个完整记录组，转换或临时发布失败不覆盖旧完整数据
+
+#### Scenario: Caller provides invalid native binary records
+
+- **WHEN** 调用者开启原生二进制方式却未提供有效字段类型、记录缺少或多出声明字段、字段名称冲突，或为二进制字段提供非字节非空值或嵌套原生字节
+- **THEN** 写入在发布前明确失败，不静默转换、创建部分成功记录或覆盖旧完整数据
+
+#### Scenario: Caller keeps the existing write mode
+
+- **WHEN** 调用者省略或关闭原生二进制方式，包括已有显式 BLOB 类型与字符串值的调用
+- **THEN** 原有类型推断、转换、接受与失败行为保持不变，不自动启用只接收原生字节的新方式
+### Requirement: Data Store rejects lossy binary command-line output
+
+Data Store MUST 保留命令行普通记录写入及元数据读取，不新增二进制输入协议。查询、单键读取和多键读取的结果字段类型直接或通过复合类型包含 BLOB 时，命令行 MUST 在输出记录前明确拒绝并提示选择普通元数据或在查询中显式编码，不能把字节串静默转为看似可恢复的字符串。Python 现有读取入口仍返回原生 bytes，命令行显式编码得到的普通文本结果继续正常输出。
+
+#### Scenario: Command-line caller selects metadata or encoded text
+
+- **WHEN** 调用者通过现有命令行读取普通元数据，或查询显式编码后的普通文本字段
+- **THEN** 读取继续正常输出原有结构化文本结果，无需取得完整二进制内容再由调用者删除
+
+#### Scenario: Command-line caller selects a binary result
+
+- **WHEN** 调用者通过查询、单键或多键命令直接读取类型含 BLOB 的结果，包括空结果、空值或嵌套二进制字段
+- **THEN** 命令在输出记录前明确失败并提供选择元数据或显式编码的提示，不输出有损二进制字符串冒充成功
