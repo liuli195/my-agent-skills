@@ -1,0 +1,7 @@
+{
+  "myspec_proposal": "myspec/changes/configure-build-and-verify-init-script/proposal.md",
+  "myspec_design": "myspec/changes/configure-build-and-verify-init-script/design.md",
+  "myspec_tasks": "myspec/changes/configure-build-and-verify-init-script/tasks.md",
+  "myspec_delta_spec": "myspec/changes/configure-build-and-verify-init-script/specs/worktree-environment-setup/spec.md",
+  "archive_directory": "myspec/changes/archive/2026-07-22-configure-build-and-verify-init-script"
+}
