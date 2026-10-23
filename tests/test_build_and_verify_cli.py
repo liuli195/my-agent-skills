@@ -248,7 +248,7 @@ def test_public_verify_budget_interrupts_blocked_preparation_and_its_descendants
         f"Path({str(pids)!r}).write_text(json.dumps([os.getpid(),child.pid]))\n"
         "time.sleep(10)\n", encoding="utf-8")
     hook = tmp_path / "monitor.sh"
-    hook.write_text(f"#!/bin/sh\nexec {shlex.quote(Path(sys.executable).as_posix())} -S -B {shlex.quote(monitor.as_posix())}\n", encoding="utf-8")
+    hook.write_text(f"#!/bin/sh\nexec {shlex.quote(Path(sys.executable).as_posix())} -S -B {shlex.quote(monitor.as_posix())}\n", encoding="utf-8", newline="\n")
     hook.chmod(0o755)
 
     def prepare(project: Path) -> None:
@@ -585,7 +585,13 @@ def test_packed_runtime_guard_initialization_and_explicit_migration(tmp_path: Pa
         assert fixture.execute("select value from values_for_reading").fetchall() == [(42,)]
     (project / "app.py").write_text("def answer(): return 42\n")
     (project / "tests").mkdir()
-    (project / "tests/test_app.py").write_text("from app import answer\ndef test_app(): assert answer() == 42\n")
+    (project / "tests/test_app.py").write_text(
+        "import os\nfrom app import answer\n"
+        "def test_app():\n"
+        " assert answer() == 42\n"
+        " with open(os.devnull, 'w') as sink: sink.write('discarded')\n"
+        " if os.name == 'nt':\n"
+        "  with open(r'\\\\.\\NuL', 'w') as sink: sink.write('discarded')\n")
     config_path.write_text(json.dumps({"version": 2, "verify": {"realChecks": [], "checks": [
         {"id": "app", "command": [sys.executable, "-m", "pytest", "-q", "tests/test_app.py"],
          "inputs": ["app.py", "tests/test_app.py"]}]}}))
@@ -594,10 +600,14 @@ def test_packed_runtime_guard_initialization_and_explicit_migration(tmp_path: Pa
     assert "1 passed" in app.stdout
     # Cross-platform event contract only, not a real Windows application launch.
     (project / "ordinary.py").write_text(
-        "import sys\n"
+        "import os, sys\n"
         "for event, args in [('os.startfile', ('never-open', 'open')), ('os.startfile/2', ('never-open', 'open', None, None, 1))]:\n"
         " try: sys.audit(event, *args)\n"
         " except PermissionError: pass\n"
+        "for path in [r'\\\\.\\nul-other', r'\\\\.\\nul\\effect', r'\\\\.\\C:', r'\\\\?\\nul']:\n"
+        " try: sys.audit('open', path, 'w', os.O_WRONLY | os.O_CREAT)\n"
+        " except PermissionError: pass\n"
+        " else: raise AssertionError('device path was allowed: ' + path)\n"
         "print('WINDOWS_EVENTS_HANDLED')\n")
     config_path.write_text(confirmed.read_text())
     windows_events = verify()
@@ -941,17 +951,35 @@ def test_packed_node_runtime_guard_mixed_commands_and_restarts(tmp_path: Path) -
     config["verify"]["checks"] = [{"id": "restart", "command": [shutil.which("node"), "--test", "--watch", "--require", "./watch-control.cjs",
         "--test-reporter=tap", "restart.test.cjs"], "timeoutSeconds": 3, "inputs": ["restart.test.cjs"]}]
     path.write_text(json.dumps(config))
+    watch_temp = tmp_path / "watch-temp"
+    watch_temp.mkdir()
+    env.update({key: str(watch_temp) for key in ("TMPDIR", "TMP", "TEMP")})
+    finished = threading.Event()
+    changed = threading.Event()
     def change_watched_file():
-        time.sleep(1)
-        watched.write_text("const fs=require('node:fs');try {fs.writeFileSync('restart-effect','bad');}catch {}\n"
-            "console.log('RESTART_IMPORT_PROTECTED');require('node:test')('after restart',()=>{});\n")
+        # The runner buffers test output. Observe its existing read-only evidence
+        # instead of racing startup or allowing ordinary tests a ready-file write.
+        while not finished.wait(0.01):
+            for evidence in watch_temp.glob("build-and-verify-guard-*/events.jsonl"):
+                try:
+                    records = [json.loads(line) for line in evidence.read_text().splitlines()]
+                except (FileNotFoundError, json.JSONDecodeError):
+                    continue  # Concurrent append or cleanup, never a ready signal.
+                workers = {item['unit'] for item in records if item['event'] == 'start' and item.get('role') == 'worker'}
+                if any(item['event'] == 'finish' and item['unit'] in workers for item in records):
+                    watched.write_text("const fs=require('node:fs');try {fs.writeFileSync('restart-effect','bad');}catch {}\n"
+                        "console.log('RESTART_IMPORT_PROTECTED');require('node:test')('after restart',()=>{});\n")
+                    changed.set()
+                    return
     updater = threading.Thread(target=change_watched_file)
     updater.start()
     try:
         restarted = verify()
     finally:
+        finished.set()
         updater.join()
     assert restarted.returncode == 1, restarted.stdout + restarted.stderr
+    assert changed.is_set(), restarted.stdout + restarted.stderr
     assert "before restart" in restarted.stdout, restarted.stdout + restarted.stderr
     assert "RESTART_IMPORT_PROTECTED" in restarted.stdout, restarted.stdout + restarted.stderr
     assert "check_timeout" in restarted.stderr

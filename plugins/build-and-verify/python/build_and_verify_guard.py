@@ -187,7 +187,9 @@ def _run(evidence: str, segment: str, platform_info: str, args: list[str]) -> in
             writing = flags & (os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC)
             # Character sink and existing standard/piped descriptors are not real
             # file mutation. execnet rebinds its standard streams through them.
-            if not writing or path == os.devnull or isinstance(path, int):
+            # Windows abspath(devnull) uses this exact, case-insensitive device.
+            if (not writing or path == os.devnull or isinstance(path, int)
+                    or (os.name == "nt" and isinstance(path, str) and path.lower() == r"\\.\nul")):
                 return
         elif event == "sqlite3.connect":
             if os.fsdecode(values[0]) == ":memory:" or getattr(launch, "sqlite_target", None) == values[0]:
