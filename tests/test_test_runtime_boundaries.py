@@ -399,6 +399,10 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    "tests/test_data_store.py::test_installed_delete_accepts_distinct_stable_fd_ctime": "Installed maintenance CLI verifies platform timestamp, durable recovery and plan encoding boundaries.",
+    "tests/test_data_store.py::test_installed_delete_resume_syncs_existing_receipt_directory_before_unlink": "Installed maintenance CLI verifies platform timestamp, durable recovery and plan encoding boundaries.",
+    "tests/test_data_store.py::test_installed_delete_rejects_source_local_ctime_drift": "Installed maintenance CLI verifies platform timestamp, durable recovery and plan encoding boundaries.",
+    "tests/test_data_store.py::test_installed_delete_plan_round_trips_chinese_root_through_cp936_stdout": "Installed maintenance CLI verifies platform timestamp, durable recovery and plan encoding boundaries.",
     "tests/test_data_store.py::test_installed_cli_plans_and_deletes_exact_record_groups": "Installed public maintenance CLI verifies exact-plan deletion and recovery against isolated real filesystem failures.",
     "tests/test_data_store.py::test_installed_delete_full_preflight_changes_nothing": "Installed public maintenance CLI verifies exact-plan deletion and recovery against isolated real filesystem failures.",
     "tests/test_data_store.py::test_installed_delete_partial_failure_resumes_only_original_unfinished_items": "Installed public maintenance CLI verifies exact-plan deletion and recovery against isolated real filesystem failures.",

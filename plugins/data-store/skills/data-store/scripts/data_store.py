@@ -408,11 +408,14 @@ def _delete_file_identity(root, target):
     signature = lambda value: [getattr(value, field) for field in fields]
     digest = hashlib.sha256()
     with path.open("rb") as stream:
-        if signature(os.fstat(stream.fileno())) != signature(before):
+        opened = signature(os.fstat(stream.fileno()))
+        # Some Windows Python versions expose creation time through path.stat,
+        # but ChangeTime through fstat. Compare ctime only within its own source.
+        if opened[:-1] != signature(before)[:-1]:
             raise _DeleteSafetyError("identity_changed", "分片在核验前发生变化")
         while block := stream.read(1024 * 1024):
             digest.update(block)
-        if (signature(os.fstat(stream.fileno())) != signature(before)
+        if (signature(os.fstat(stream.fileno())) != opened
                 or signature(path.stat()) != signature(before)):
             raise _DeleteSafetyError("identity_changed", "分片在核验中发生变化")
     return parent, dict(zip(("device", "inode", "size", "mtime_ns", "ctime_ns"), signature(before)),
@@ -497,8 +500,6 @@ def _write_delete_log(path, record, *, create=False):
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-    if create:
-        _sync_delete_directory(path.parent)
 
 
 def _read_delete_log(path, plan):
@@ -571,6 +572,9 @@ def execute_delete(root, plan, *, approve, offline=False, receipt_path):
         receipt = _read_delete_log(path, plan)
     if _finish_delete_receipt(receipt)["state"] == "uncertain":
         return receipt
+    # Also sync an existing log's directory: a previous attempt may have created
+    # and fsynced its header, then failed before this directory entry was durable.
+    _sync_delete_directory(path.parent)
 
     def check(target):
         actual_root, identity = _delete_root(root_path)
@@ -687,7 +691,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == "delete-plan":
-            print(json.dumps(plan_delete(args.root, args.targets), ensure_ascii=False))
+            print(json.dumps(plan_delete(args.root, args.targets), ensure_ascii=True))
         elif args.command == "delete-execute":
             plan = json.loads(args.plan.read_text(encoding="utf-8"))
             receipt = execute_delete(args.root, plan, approve=args.approve, offline=args.offline,

@@ -1,6 +1,7 @@
 """Public write/query contract; the isolated CLI test is the release-shape smoke."""
 
 import json
+import os
 import importlib.util
 import builtins
 from pathlib import Path
@@ -966,3 +967,117 @@ def test_installed_delete_disappearance_before_unlink_is_not_our_deletion(tmp_pa
     assert [item["status"] for item in receipt["items"]] == ["failed", "not_executed", "not_executed"]
     assert receipt["items"][0]["error"]["code"] == "missing"
     assert (data / "readings/1.parquet").is_file()
+
+
+@pytest.mark.parametrize("entrypoint", ["python", "cli"])
+def test_installed_delete_accepts_distinct_stable_fd_ctime(tmp_path, monkeypatch, entrypoint):
+    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path)
+    if entrypoint == "python":
+        original_fstat = store.os.fstat
+
+        class FdStat:
+            def __init__(self, actual):
+                self.actual = actual
+
+            def __getattr__(self, field):
+                value = getattr(self.actual, field)
+                return value + 123456 if field == "st_ctime_ns" else value
+
+        monkeypatch.setattr(store.os, "fstat", lambda descriptor: FdStat(original_fstat(descriptor)))
+        plan = store.plan_delete(data, {"readings": ["0", "1", "2"]})
+        result = store.execute_delete(data, plan, approve=plan["plan_id"], offline=True,
+                                      receipt_path=receipt_path)
+        assert result["state"] == "complete"
+    else:
+        fault = ("original_fstat = os.fstat\n"
+                 "class FdStat:\n"
+                 "    def __init__(self, actual):\n"
+                 "        self.actual = actual\n"
+                 "    def __getattr__(self, field):\n"
+                 "        value = getattr(self.actual, field)\n"
+                 "        return value + 123456 if field == 'st_ctime_ns' else value\n"
+                 "os.fstat = lambda descriptor: FdStat(original_fstat(descriptor))\n")
+        planned = _execute_delete_cli(tmp_path, arguments[:3] + ["delete-plan", "--targets",
+                                      '{"readings":["0","1","2"]}'], fault)
+        assert planned.returncode == 0, planned.stderr
+        plan_path.write_text(planned.stdout)
+        arguments[arguments.index("--approve") + 1] = json.loads(planned.stdout)["plan_id"]
+        executed = _execute_delete_cli(tmp_path, arguments, fault)
+        assert executed.returncode == 0, executed.stderr
+        assert json.loads(executed.stdout)["state"] == "complete"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="目录 fsync 只适用于支持该操作的平台")
+def test_installed_delete_resume_syncs_existing_receipt_directory_before_unlink(tmp_path):
+    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path)
+    fault = ("import stat\n"
+             "original_fsync = os.fsync\n"
+             "def fail_directory_sync(descriptor):\n"
+             "    if stat.S_ISDIR(os.fstat(descriptor).st_mode):\n"
+             "        raise OSError('injected receipt directory sync failure')\n"
+             "    return original_fsync(descriptor)\n"
+             "os.fsync = fail_directory_sync\n")
+    first = _execute_delete_cli(tmp_path, arguments, fault)
+    assert first.returncode == 2
+    assert receipt_path.exists()
+    header = receipt_path.read_bytes()
+    assert len(header.splitlines()) == 1
+    second = _execute_delete_cli(tmp_path, arguments, fault)
+    assert second.returncode == 2
+    assert receipt_path.read_bytes() == header
+    for index in range(3):
+        assert (data / "readings" / f"{index}.parquet").is_file()
+    resumed = _execute_delete_cli(tmp_path, arguments)
+    assert resumed.returncode == 0, resumed.stderr
+    assert json.loads(resumed.stdout)["state"] == "complete"
+
+
+@pytest.mark.parametrize("source", ["path", "fd"])
+def test_installed_delete_rejects_source_local_ctime_drift(tmp_path, source):
+    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path)
+    fault = ("class ChangedStat:\n"
+             "    def __init__(self, actual, change):\n"
+             "        self.actual, self.change = actual, change\n"
+             "    def __getattr__(self, field):\n"
+             "        value = getattr(self.actual, field)\n"
+             "        return value + self.change if field == 'st_ctime_ns' else value\n"
+             "calls = 0\n")
+    if source == "fd":
+        fault += ("original_fstat = os.fstat\n"
+                  "def changed_fstat(descriptor):\n"
+                  "    global calls\n"
+                  "    calls += 1\n"
+                  "    return ChangedStat(original_fstat(descriptor), calls)\n"
+                  "os.fstat = changed_fstat\n")
+    else:
+        fault += ("original_stat = Path.stat\n"
+                  "def changed_stat(path, *args, **kwargs):\n"
+                  "    global calls\n"
+                  "    actual = original_stat(path, *args, **kwargs)\n"
+                  "    if path.name == '0.parquet' and kwargs.get('follow_symlinks', True):\n"
+                  "        calls += 1\n"
+                  "        return ChangedStat(actual, calls)\n"
+                  "    return actual\n"
+                  "Path.stat = changed_stat\n")
+    executed = _execute_delete_cli(tmp_path, arguments, fault)
+    assert executed.returncode == 2, executed.stderr
+    receipt = json.loads(executed.stdout)
+    assert receipt["items"][0]["error"]["code"] == "identity_changed"
+    assert not any(item["status"] == "deleted" for item in receipt["items"])
+    assert all((data / "readings" / f"{index}.parquet").exists() for index in range(3))
+
+
+def test_installed_delete_plan_round_trips_chinese_root_through_cp936_stdout(tmp_path):
+    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path / "中文资料")
+    planned = subprocess.run([sys.executable, *arguments[:3], "delete-plan", "--targets",
+                              '{"readings":["0","1","2"]}'],
+                             capture_output=True, cwd=tmp_path,
+                             env={**os.environ, "PYTHONIOENCODING": "cp936"})
+    assert planned.returncode == 0, planned.stderr
+    # Preserve the exact bytes a shell pipeline/redirection would save.
+    plan_path.write_bytes(planned.stdout)
+    arguments[arguments.index("--approve") + 1] = json.loads(planned.stdout.decode("cp936"))["plan_id"]
+    executed = _execute_delete_cli(tmp_path, arguments)
+    assert executed.returncode == 0, executed.stderr
+    assert json.loads(executed.stdout)["state"] == "complete"
+    assert all(value < 128 for value in planned.stdout)
