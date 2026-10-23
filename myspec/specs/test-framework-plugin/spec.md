@@ -615,3 +615,140 @@ Build and Verify（构建与验证）MUST 保留 Claude/Codex（编码助手/代
 - **THEN** `build-and-verify update` MUST 复用 `invalid_update_state`（更新状态无效）失败路径，在 npm（软件包管理器）安装和客户端刷新前停止
 - **THEN** 原更新记录和旧 Pi 配置 MUST 保持不变，不得重新安装 Pi、自动迁移或跳过未完成步骤
 - **THEN** `build-and-verify doctor` MUST 能只读展示该未完成记录
+### Requirement: Build and Verify versions runtime policy and explicit real checks
+
+Build and Verify（构建与验证）MUST 兼容配置版本1并为新初始化默认生成版本2；版本2 MUST 显式声明 `verify.realChecks`（真实检查标识清单），未登记检查以普通守卫角色执行，已登记检查以真实未保护角色执行。
+
+#### Scenario: Existing configuration remains legacy
+
+- **WHEN** 升级后的命令运行已有版本1配置
+- **THEN** 系统 MUST 保持原命令与工具链行为，不自动改写配置或启用新限制
+- **THEN** 系统 MUST 明确显示 `legacy-unprotected`（旧模式未保护），不得把旧成功当作普通守卫通过
+
+#### Scenario: New initialization defaults to explicit guarded policy
+
+- **WHEN** 用户运行同一公开初始化命令且未提供已有配置
+- **THEN** 空模板 MUST 使用版本2并显式包含空真实检查清单
+- **THEN** 初始化 MUST 保留既有不自动生成业务检查项的行为
+
+#### Scenario: Explicit real-check list is validated before execution
+
+- **WHEN** 项目使用版本2
+- **THEN** 清单 MUST 可以为空、一项或多项，且每项必须唯一对应实际存在的验证检查
+- **THEN** 缺失清单、重复标识或不存在标识 MUST 在检查启动前明确失败
+- **THEN** 清单 MUST 只声明角色，不改变路径、固定基线、拉取请求场景、完整验证及手动／跳过项的既有选择语义
+### Requirement: Build and Verify explicitly migrates and restores test policy
+
+Build and Verify（构建与验证）MUST 通过既有初始化覆盖命令及备份机制执行用户明确选择的策略迁移或恢复，不得静默降级或自动迁移消费者。
+
+#### Scenario: Explicit migration protects previous configuration
+
+- **WHEN** 用户确认以版本2配置覆盖已有配置
+- **THEN** 同一公开命令 MUST 先校验完整候选及真实清单，再备份并写入配置
+- **THEN** 同秒重复备份 MUST 保留既有备份，不覆盖旧备份
+- **THEN** 无效候选 MUST 明确失败，且 MUST NOT 写坏原配置或静默回退报成功
+
+#### Scenario: Explicit restoration returns to truthful legacy reporting
+
+- **WHEN** 用户明确选择通过同一覆盖命令恢复版本1备份
+- **THEN** 原检查和命令 MUST 能按恢复后的旧策略运行
+- **THEN** 结果 MUST 继续标明旧模式未保护，不得冒称守卫通过
+### Requirement: Build and Verify guards supported Python and Node command segments
+
+版本2普通检查 MUST 在既有统一总入口中逐段保护受支持的 Python（编程语言）与 Node.js（节点运行时）命令；不能证明保护的命令段 MUST 明确未覆盖并失败，不得无保护执行、静默退回旧模式或自动登记整组真实检查。
+
+#### Scenario: Supported command forms retain their semantics
+
+- **WHEN** 普通检查使用 Python 直接脚本、模块、pytest（测试框架）及其 unittest（标准测试框架）收集，或 Node.js 直接脚本、原生测试命令
+- **THEN** 系统 MUST 保留受支持字符串／列表、成功续行、环境赋值、引号、路径、测试参数、退出码与短路语义
+- **THEN** 混合语言成功续行 MUST 逐段使用对应守卫；前段失败或被捕获的违规 MUST 阻止后段继续
+- **THEN** 关闭 Python 测试插件自动加载时 MUST 仍显式加载守卫，且 MUST 保留显式并行插件、工作进程参数与即时编译设置
+
+#### Scenario: Unknown wrappers fail closed
+
+- **WHEN** 版本2普通检查包含包管理或环境工具封装、未支持语言、未适配启动选项或不能证明保护的命令解释器语法
+- **THEN** 系统 MUST 明确输出保护未覆盖命令并失败
+- **THEN** 版本1相同命令 MUST 继续保持旧行为，不得由版本2拒绝规则连带限制
+### Requirement: Ordinary test runtime guards all supported lifecycle phases
+
+版本2普通检查 MUST 在项目代码加载前保护控制端与全部受支持工作进程，禁止业务启动外部进程、联网和真实文件变更，同时保留必要读取及内存计算。守卫 MUST NOT 被宣称为恶意代码或任意原生程序安全沙箱。
+
+#### Scenario: Lifecycle side effects are rejected
+
+- **WHEN** 普通检查在导入、准备、正文、清理、辅助函数或线程中尝试业务进程、网络或真实文件变更
+- **THEN** 守卫 MUST 拒绝并独立记录违规，即使目标是临时目录也不放权
+- **THEN** 捕获异常、返回成功或清理回调违规 MUST NOT 把检查变为通过
+
+#### Scenario: Workers start and restart under protection
+
+- **WHEN** Python 默认本地并行工作进程、Node.js 原生测试工作进程或业务工作线程启动或重新创建
+- **THEN** 支持的工作单元 MUST 在项目代码前加载保护并记录完整启动和完成
+- **THEN** 框架 MUST 只使用固定受限的内部启动与记账通道，不得放开整个控制端、调用栈、临时目录或业务公开启动函数
+- **THEN** 业务 MUST NOT 获得通用暂停、豁免或任意程序启动能力
+
+#### Scenario: Missing protection cannot succeed
+
+- **WHEN** 守卫未加载、工作进程失联或崩溃，或必要启动／完成／违规记录缺失或不完整
+- **THEN** 检查 MUST 明确失败，不得把普通性能报告警告语义用于忽略保护记录缺失
+### Requirement: Ordinary test native database boundary is explicit
+
+版本2普通检查 MUST 仅提供已适配的原生数据库窄边界；DuckDB（分析数据库）相关场景包括纯内存场景 MUST 由项目显式登记为聚焦的真实检查，继续真实运行并保留并行，但不享普通无副作用保证。
+
+#### Scenario: DuckDB ordinary use is uncovered
+
+- **WHEN** 未登记普通检查使用 DuckDB
+- **THEN** 系统 MUST 明确报告原生保护未覆盖并失败，即使业务捕获异常也不能通过
+- **THEN** 系统 MUST NOT 自动登记真实角色、放开整组测试或把真实角色报告为已保护
+
+#### Scenario: SQLite memory and static read-only use remain available
+
+- **WHEN** 普通检查使用 SQLite（标准数据库）内存计算，或受支持的静态非 WAL（预写日志）文件只读形式
+- **THEN** Python 与 Node.js MUST 保留相应计算和必要读取，且业务授权回调可以设置、替换或清除自己的部分而不能清除守卫
+- **THEN** Python MUST 仅接受明确启用数据库网址且唯一只读模式的受支持文件形式；Node.js MUST 使用只读连接并保护延迟打开及重新打开
+- **THEN** 临时存储 MUST 保持内存
+- **THEN** Python SQLite MUST 对已适配接口中的禁止行为拒绝并独立记账，包括禁止的文件数据库打开、附加或另存至真实文件、扩展加载、改回磁盘临时存储，以及官方授权回调覆盖的只读库 SQL（数据库查询语句）写入；吞对应违规异常仍失败。此保证 MUST NOT 扩展到未适配且不经该回调的原生备份方法
+- **THEN** Node.js SQLite MUST 拒绝并独立记账上述已覆盖的禁止行为及备份到真实文件，即使业务吞对应违规异常也不能通过
+- **THEN** Node.js 序列化返回字节及反序列化到内存 MUST 保留；运行时缺少必要原生授权接口时仅对应数据库普通场景 MUST 明确未覆盖
+
+#### Scenario: File-backed WAL requires an explicit real role
+
+- **WHEN** 两语言普通检查尝试打开文件型 WAL 数据库
+- **THEN** 系统 MUST 在原生打开前读取文件头，明确未覆盖并拒绝，吞异常仍失败
+- **THEN** 这类场景 MUST 由项目显式登记的真实检查读取，不得自动修改清单、日志模式或添加不可变选项
+- **THEN** 此静态文件边界 MUST NOT 被宣称为防止其它进程随后替换文件或切换模式的原子保证
+
+#### Scenario: Other native gaps are reported rather than silently allowed
+
+- **WHEN** 普通检查遇到未支持的 SQLite 工厂、网址形式或新发现的正常原生保护缺口
+- **THEN** 系统 MUST 明确未覆盖或报告准确缺口，不得静默转换、自动放行或据此宣称已覆盖全部原生行为
+### Requirement: Guarded and real checks retain both parallel layers and shared control
+
+版本2普通与多项真实检查 MUST 复用既有选择、调度、每项超时、取消、后代回收及一次调用的项目总预算，不得因真实项增多而另配预算、关闭已配置并行层或扩大普通测试权限。
+
+#### Scenario: Both parallel layers remain active
+
+- **WHEN** 项目配置检查间并行及 Python 或 Node.js 受支持的内层工作进程并行
+- **THEN** 守卫 MUST 保留两层实际并行，不得用串行化代替保护传播
+- **THEN** 真实检查与普通检查同时运行 MUST NOT 放宽普通检查的保护
+- **THEN** 显式串行检查 MUST 保留原语义
+
+#### Scenario: Failures retain real control outcomes
+
+- **WHEN** 检查违规、发生单项超时、达到适用总截止、取消或崩溃
+- **THEN** 统一总入口 MUST 返回真实失败并按原语义停止或回收本次拥有的后代进程
+- **THEN** 系统 MUST NOT 影响无关进程，不得缩减平台或必要覆盖来伪造通过
+### Requirement: Runtime guard evidence and successful cache are policy isolated
+
+Build and Verify（构建与验证）MUST 在输出与报告中区分普通守卫、真实未保护及旧模式未保护，并将成功缓存绑定新旧策略、守卫适配器、每项检查角色和真实清单身份。
+
+#### Scenario: Role or policy changes invalidate earlier successful evidence
+
+- **WHEN** 检查加入或移出真实清单，或配置策略、守卫适配器及清单身份改变
+- **THEN** 系统 MUST NOT 混用以前成功缓存，真实未保护或旧模式成功不得供普通守卫角色复用
+- **THEN** 配置、命令、输入与工具运行身份 MUST 继续独立参与缓存判断
+
+#### Scenario: Failed or incomplete guarded work is not cached as passed
+
+- **WHEN** 检查违规、保护缺失、超时、取消、未完成或本次运行属于诊断
+- **THEN** 结果 MUST NOT 写入正式成功缓存或复用旧模式成功掩盖失败
+- **THEN** 完整验证 MUST 继续不读成功缓存跳过配置检查
