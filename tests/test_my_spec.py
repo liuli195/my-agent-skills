@@ -5833,11 +5833,15 @@ def test_packed_myspec_bare_doctor_does_not_require_codex_home(
     assert not codex_log.exists()
 
 
+@pytest.fixture(scope="session")
+def recovery_package(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
+    # Recovery cases only mutate their own consumer data, not the installed package.
+    return install_packed_myspec(tmp_path_factory.mktemp("recovery-package"))
+
+
 @pytest.fixture
-def recovery_cli(tmp_path: Path):
-    installed = tmp_path / "recovery-package"
-    installed.mkdir()
-    executable, package = install_packed_myspec(installed)
+def recovery_cli(tmp_path: Path, recovery_package: tuple[Path, Path]):
+    executable, package = recovery_package
     environment = tmp_path / "recovery-environment"
     environment.mkdir()
     env = isolated_myspec_env(environment, npm_prefix_for(package))
