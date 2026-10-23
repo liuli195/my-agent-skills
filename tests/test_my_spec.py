@@ -855,6 +855,15 @@ def _current_test_name() -> str:
 
 
 _REAL_CLI_TESTS = {
+    "test_myspec_recovery_init_preserves_existing_current",
+    "test_myspec_recovery_aborts_legacy_preview_and_preserves_material",
+    "test_myspec_recovery_reimports_only_delta_and_restarts_confirmation",
+    "test_myspec_recovery_refuses_interrupted_or_failed_formal_application",
+    "test_myspec_recovery_rejects_insufficient_or_foreign_evidence",
+    "test_myspec_recovery_preserves_lock_until_archive_and_retries_safely",
+    "test_myspec_recovery_init_failure_removes_only_its_own_lock",
+    "test_myspec_recovery_preserves_failed_first_preview",
+    "test_myspec_recovery_rejects_foreign_or_unsafe_archive_import",
     "test_myspec_launcher_forwards_sigterm_to_python",
     "test_packed_myspec_bare_cli_uses_isolated_package_before_host_commands",
     "test_packed_myspec_installs_a_working_cli_with_agent_resources",
@@ -4254,6 +4263,7 @@ def run_launcher_selection(
         **os.environ,
         "PATH": os.pathsep.join(path_entries),
         "PYTHONPATH": str(root),
+        "PYTHONHOME": sys.base_prefix,
         "MYSPEC_TEST_MARKER": str(root / "selected.txt"),
     }
     env.pop("MYSPEC_PYTHON", None)
@@ -5062,10 +5072,16 @@ def test_spec_ops_cli_rejects_incomplete_or_out_of_order_conflict_state(tmp_path
     work = tmp_path / ".local" / "spec-work"
     stale_delta = work / "current" / "delta" / "stale" / "spec.md"
     write(stale_delta, "stale")
+    refused = run_python(
+        SPEC_OPS, "state-init", work, "audit", "specs-fingerprint", "input-fingerprint"
+    )
+    assert refused.returncode != 0
+    assert "current_not_empty" in refused.stderr
+    assert stale_delta.read_text(encoding="utf-8") == "stale\n"
+    work = tmp_path / "fresh-session" / ".local" / "spec-work"
     assert run_python(
         SPEC_OPS, "state-init", work, "audit", "specs-fingerprint", "input-fingerprint"
     ).returncode == 0
-    assert not stale_delta.exists()
 
     count_only = tmp_path / "count-only.json"
     write(count_only, '{"count": 13}')
@@ -5813,3 +5829,477 @@ def test_packed_myspec_bare_doctor_does_not_require_codex_home(
     assert diagnosed.returncode == 0, diagnosed.stderr
     assert not {"pi", "claude", "codex"}.intersection(json.loads(diagnosed.stdout))
     assert not codex_log.exists()
+
+
+@pytest.fixture
+def recovery_cli(tmp_path: Path):
+    installed = tmp_path / "recovery-package"
+    installed.mkdir()
+    executable, package = install_packed_myspec(installed)
+    environment = tmp_path / "recovery-environment"
+    environment.mkdir()
+    env = isolated_myspec_env(environment, npm_prefix_for(package))
+    assert Path(shutil.which("myspec", path=env["PATH"])).resolve() == executable.resolve()
+
+    def bare(*args: object, extra_env: dict[str, str] | None = None):
+        return subprocess.run(
+            ["myspec", *(str(arg) for arg in args)],
+            cwd=tmp_path,
+            env={**env, **(extra_env or {})},
+            text=True,
+            capture_output=True,
+            check=False,
+            shell=os.name == "nt",
+        )
+
+    return bare
+
+
+def test_myspec_recovery_init_preserves_existing_current(tmp_path: Path, recovery_cli) -> None:
+    work = tmp_path / "consumer" / ".local" / "spec-work"
+    draft = work / "current" / "delta" / "accounts" / "spec.md"
+    write(draft, "not yet analyzed draft\n")
+    initialized = recovery_cli("state-init", work, "add", "specs", "input")
+    assert initialized.returncode != 0
+    assert "current_not_empty" in initialized.stderr
+    assert draft.read_text(encoding="utf-8") == "not yet analyzed draft\n"
+    assert not (work / "lock").exists()
+
+
+@pytest.fixture
+def recovery_session(git_project: Path, recovery_cli):
+    work = git_project / ".local" / "spec-work"
+    specs = git_project / "myspec" / "specs"
+    delta = work / "current" / "delta"
+    preview = work / "current" / "preview"
+    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
+    initialized = recovery_cli("state-init", work, "add", "specs", "input")
+    assert initialized.returncode == 0, initialized.stderr
+    write(delta / "accounts" / "spec.md", "## MODIFIED Requirements\n\n" + requirement("登录", "允许密码登录"))
+    conflicts = git_project / "conflicts.json"
+    write(conflicts, json.dumps([{
+        "id": "login", "candidate": "密码登录", "evidence": ["request"],
+        "reason": "需要确认", "recommendation": "accept",
+    }]))
+    for result in (
+        recovery_cli("state-set-conflicts", work, conflicts, "specs", "input"),
+        recovery_cli("state-decide", work, "login", "accept", "specs", "input"),
+        recovery_cli("apply-delta", specs, delta, preview, work, "specs", "input"),
+    ):
+        assert result.returncode == 0, result.stderr
+    return git_project, work, specs, delta, preview
+
+
+def abort_arguments(session) -> list[object]:
+    target, work, specs, delta, preview = session
+    digest = hashlib.sha256((work / "current" / "state.json").read_bytes()).hexdigest()
+    return ["state-abort", work, target, specs, delta, preview, digest, "add", "--confirm-no-active-session"]
+
+
+def test_myspec_recovery_aborts_legacy_preview_and_preserves_material(
+    recovery_session, recovery_cli,
+) -> None:
+    target, work, specs, delta, preview = recovery_session
+    state_path = work / "current" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.pop("sessionId", None)
+    state.pop("applicationPhase", None)
+    write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+    write(work / "lock", "add\n")
+    delta_path = delta / "accounts" / "spec.md"
+    delta_path.write_text(delta_path.read_text(encoding="utf-8").replace("密码登录", "密码及验证码登录"), encoding="utf-8")
+    failed = recovery_cli("apply-delta", specs, delta, preview, work, "specs", "input")
+    assert failed.returncode != 0
+    assert "input_content_changed" in failed.stderr
+    write(work / "current" / "failure.txt", failed.stderr)
+    original = {path.relative_to(work / "current"): path.read_bytes() for path in (work / "current").rglob("*") if path.is_file()}
+    arguments = abort_arguments(recovery_session)
+    inspected = recovery_cli("state-status", work, "specs", "input", "--abort-identity")
+    assert inspected.returncode == 0, inspected.stderr
+    identity = json.loads(inspected.stdout)["abortIdentity"]
+    assert identity == {
+        "stateSha256": arguments[-3], "lockCommand": "add", "workRoot": str(work),
+        "targetWorktree": str(target), "specsRoot": str(specs), "deltaRoot": str(delta),
+        "previewRoot": str(preview), "sessionId": None, "applicationPhase": None,
+    }
+    aborted = recovery_cli(*arguments)
+    assert aborted.returncode == 0, aborted.stderr
+    result = json.loads(aborted.stdout)
+    archive = Path(result["archive"])
+    assert archive.parent == work / "aborted"
+    assert {path.relative_to(archive / "current"): path.read_bytes() for path in (archive / "current").rglob("*") if path.is_file()} == original
+    assert not (work / "lock").exists()
+    assert not (work / "current").exists()
+    assert "允许密码及验证码登录" not in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
+    repeated = recovery_cli(*arguments)
+    assert repeated.returncode == 0, repeated.stderr
+    assert json.loads(repeated.stdout)["archive"] == str(archive)
+    assert recovery_cli("state-init", work, "add", "new-specs", "new-input").returncode == 0
+    new_state = (work / "current" / "state.json").read_bytes()
+    new_lock = (work / "lock").read_bytes()
+    refused = recovery_cli(*arguments)
+    assert refused.returncode != 0
+    assert (work / "current" / "state.json").read_bytes() == new_state
+    assert (work / "lock").read_bytes() == new_lock
+
+
+def test_myspec_recovery_reimports_only_delta_and_restarts_confirmation(
+    recovery_session, recovery_cli,
+) -> None:
+    target, work, specs, delta, preview = recovery_session
+    old_state = json.loads((work / "current" / "state.json").read_text(encoding="utf-8"))
+    assert old_state["sessionId"]
+    old_delta = (delta / "accounts" / "spec.md").read_bytes()
+    original_specs = (specs / "accounts" / "spec.md").read_bytes()
+    started = time.perf_counter()
+    aborted = recovery_cli(*abort_arguments(recovery_session))
+    assert aborted.returncode == 0, aborted.stderr
+    archive_seconds = time.perf_counter() - started
+    archive = Path(json.loads(aborted.stdout)["archive"])
+    started = time.perf_counter()
+    initialized = recovery_cli("state-init", work, "add", "new-specs", "new-input", "--import-aborted", archive)
+    assert initialized.returncode == 0, initialized.stderr
+    state = json.loads((work / "current" / "state.json").read_text(encoding="utf-8"))
+    assert state["sessionId"] != old_state["sessionId"]
+    assert state["status"] == "ANALYZING"
+    assert state["decisions"] == state["conflicts"] == []
+    assert state["currentConflict"] == 0
+    assert state["previewRoot"] is None
+    assert not preview.exists()
+    assert (delta / "accounts" / "spec.md").read_bytes() == old_delta
+    blocked = recovery_cli("apply-delta", specs, delta, specs, work, "new-specs", "new-input")
+    assert blocked.returncode != 0
+    assert "expected_READY_TO_APPLY" in blocked.stderr
+    conflicts = target / "conflicts.json"
+    for result in (
+        recovery_cli("state-set-conflicts", work, conflicts, "new-specs", "new-input"),
+        recovery_cli("state-current", work, "new-specs", "new-input"),
+        recovery_cli("state-decide", work, "login", "accept", "new-specs", "new-input"),
+        recovery_cli("validate-delta", delta, specs),
+        recovery_cli("apply-delta", specs, delta, preview, work, "new-specs", "new-input"),
+    ):
+        assert result.returncode == 0, result.stderr
+    difference = recovery_cli("diff", specs, preview)
+    assert difference.returncode == 0, difference.stderr
+    assert "允许密码登录" in difference.stdout
+    assert (specs / "accounts" / "spec.md").read_bytes() == original_specs
+    rebuilt_seconds = time.perf_counter() - started
+    # This isolated consumer explicitly models the existing final-confirmation step.
+    applied = recovery_cli("apply-delta", specs, delta, specs, work, "new-specs", "new-input")
+    assert applied.returncode == 0, applied.stderr
+    assert "允许密码登录" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
+    assert (archive / "current" / "delta" / "accounts" / "spec.md").read_bytes() == old_delta
+    print(f"recovery sample: 1 capability; archive={archive_seconds:.3f}s; rebuild-and-preview={rebuilt_seconds:.3f}s")
+
+
+@pytest.mark.parametrize("fault", ["failure-before", "failure-after", "interrupt-before", "interrupt-after", "cleanup-lock", "cleanup-draft"])
+def test_myspec_recovery_refuses_interrupted_or_failed_formal_application(
+    tmp_path: Path, recovery_session, recovery_cli, fault: str,
+) -> None:
+    target, work, specs, delta, preview = recovery_session
+    original = (specs / "accounts" / "spec.md").read_bytes()
+    draft = (delta / "accounts" / "spec.md").read_bytes()
+    injection = tmp_path / "application-fault"
+    write(injection / "sitecustomize.py", '''import os
+import shutil
+from pathlib import Path
+original, original_unlink, original_rmtree = os.rename, os.unlink, shutil.rmtree
+
+def rename(source, destination, *args, **kwargs):
+    source, destination = Path(source), Path(destination)
+    specs = Path(os.environ["RECOVERY_FAULT_SPECS"])
+    fault = os.environ["RECOVERY_FAULT"]
+    before = source == specs and destination.name.startswith(".my-spec-backup-")
+    after = destination == specs and source.name.startswith(".my-spec-preview-")
+    if before and fault.endswith("before"):
+        if fault.startswith("interrupt"):
+            original(source, destination, *args, **kwargs)
+            os._exit(91)
+        raise OSError("injected failure before formal replacement")
+    result = original(source, destination, *args, **kwargs)
+    if after and fault.endswith("after"):
+        if fault.startswith("interrupt"):
+            os._exit(92)
+        raise OSError("injected failure after formal replacement")
+    return result
+
+os.rename = rename
+
+def unlink(path, *args, **kwargs):
+    if os.environ["RECOVERY_FAULT"] == "cleanup-lock" and Path(path) == Path(os.environ["RECOVERY_FAULT_WORK"]) / "lock":
+        raise PermissionError("injected final lock cleanup failure")
+    return original_unlink(path, *args, **kwargs)
+
+os.unlink = unlink
+
+def rmtree(path, *args, **kwargs):
+    if os.environ["RECOVERY_FAULT"] == "cleanup-draft" and Path(path) == Path(os.environ["RECOVERY_FAULT_WORK"]) / "current":
+        raise PermissionError("injected final draft cleanup failure")
+    return original_rmtree(path, *args, **kwargs)
+
+shutil.rmtree = rmtree
+''')
+    failed = recovery_cli("apply-delta", specs, delta, specs, work, "specs", "input", extra_env={
+        "PYTHONPATH": str(injection), "RECOVERY_FAULT_SPECS": str(specs), "RECOVERY_FAULT_WORK": str(work), "RECOVERY_FAULT": fault,
+    })
+    if fault == "cleanup-draft":
+        assert failed.returncode == 0, failed.stderr
+        assert "session_cleanup_failed" in failed.stderr
+        assert "允许密码登录" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
+        assert not (work / "lock").exists()
+        assert (delta / "accounts" / "spec.md").read_bytes() == draft
+        refused = recovery_cli(*abort_arguments(recovery_session))
+        assert refused.returncode != 0
+        assert "application_recovery_required" in refused.stderr
+        return
+    assert failed.returncode != 0
+    assert (work / "lock").exists()
+    assert (delta / "accounts" / "spec.md").read_bytes() == draft
+    if fault.startswith("failure") or fault == "cleanup-lock":
+        assert (specs / "accounts" / "spec.md").read_bytes() == original
+        assert not list(specs.parent.glob(".my-spec-backup-*"))
+    else:
+        backups = list(specs.parent.glob(".my-spec-backup-*"))
+        assert len(backups) == 1
+        assert (backups[0] / "accounts" / "spec.md").read_bytes() == original
+    refused = recovery_cli(*abort_arguments(recovery_session))
+    assert refused.returncode != 0
+    assert "application_recovery_required" in refused.stderr
+    assert (work / "lock").exists()
+    assert (work / "current" / "state.json").is_file()
+    assert (delta / "accounts" / "spec.md").read_bytes() == draft
+
+
+@pytest.mark.parametrize("evidence,error", [
+    ("no-confirmation", "no_active_session_confirmation_required"),
+    ("wrong-state", "abort_state_mismatch"),
+    ("foreign-lock", "abort_lock_mismatch"),
+    ("wrong-target", "abort_target_mismatch"),
+    ("cross-worktree", "cross_worktree_path"),
+    ("legacy-no-baseline", "abort_specs_baseline_mismatch"),
+    ("legacy-no-path", "invalid_state_context"),
+    ("legacy-changed-specs", "abort_specs_baseline_mismatch"),
+    ("legacy-backup", "application_recovery_required"),
+    ("legacy-pending-replacement", "application_recovery_required"),
+    ("legacy-unknown-status", "invalid_state_document"),
+    ("unknown-phase", "application_recovery_required"),
+    ("redirected-draft", "unsafe_recovery_entry"),
+])
+def test_myspec_recovery_rejects_insufficient_or_foreign_evidence(
+    tmp_path: Path, recovery_session, recovery_cli, evidence: str, error: str,
+) -> None:
+    target, work, specs, delta, preview = recovery_session
+    state_path = work / "current" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    if evidence.startswith("legacy-"):
+        state.pop("sessionId")
+        state.pop("applicationPhase")
+        write(work / "lock", "add\n")
+    if evidence == "legacy-no-baseline":
+        state["specsContentFingerprint"] = None
+    elif evidence == "legacy-no-path":
+        state.pop("previewRoot")
+    elif evidence == "legacy-changed-specs":
+        write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "已变化")))
+    elif evidence == "legacy-backup":
+        (specs.parent / ".my-spec-backup-preserved").mkdir()
+    elif evidence == "legacy-pending-replacement":
+        (specs.parent / ".my-spec-preview-preserved").mkdir()
+    elif evidence == "legacy-unknown-status":
+        state["status"] = "UNRECOGNIZED"
+    elif evidence == "unknown-phase":
+        state["applicationPhase"] = "UNRECOGNIZED"
+    elif evidence == "redirected-draft":
+        if os.name == "nt":
+            pytest.skip("symlink creation needs platform permission")
+        external = tmp_path / "external.txt"
+        write(external, "must not be touched")
+        (work / "current" / "redirected").symlink_to(external)
+    write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+    arguments = abort_arguments(recovery_session)
+    if evidence == "no-confirmation":
+        arguments.pop()
+    elif evidence == "wrong-state":
+        arguments[-3] = "0" * 64
+    elif evidence == "foreign-lock":
+        write(work / "lock", '{"command":"add","sessionId":"foreign","workRoot":"elsewhere"}\n')
+    elif evidence == "wrong-target":
+        arguments[2] = target.parent
+    elif evidence == "cross-worktree":
+        other = tmp_path / "other-worktree"
+        created = subprocess.run(["git", "worktree", "add", "--detach", str(other), "HEAD"], cwd=target, text=True, capture_output=True, check=False)
+        assert created.returncode == 0, created.stderr
+        arguments[4] = other / ".local" / "spec-work" / "current" / "delta"
+    state_bytes, lock_bytes = state_path.read_bytes(), (work / "lock").read_bytes()
+    draft = (delta / "accounts" / "spec.md").read_bytes()
+    refused = recovery_cli(*arguments)
+    assert refused.returncode != 0
+    assert error in refused.stderr
+    assert state_path.read_bytes() == state_bytes
+    assert (work / "lock").read_bytes() == lock_bytes
+    assert (delta / "accounts" / "spec.md").read_bytes() == draft
+    assert not (work / "aborted").exists()
+
+
+@pytest.mark.parametrize("fault", ["archive-directory", "archive-rename", "interrupt-after-archive", "unlock", "foreign-lock-after-archive"])
+def test_myspec_recovery_preserves_lock_until_archive_and_retries_safely(
+    tmp_path: Path, recovery_session, recovery_cli, fault: str,
+) -> None:
+    target, work, specs, delta, preview = recovery_session
+    arguments = abort_arguments(recovery_session)
+    original = {path.relative_to(work / "current"): path.read_bytes() for path in (work / "current").rglob("*") if path.is_file()}
+    lock_bytes = (work / "lock").read_bytes()
+    injection = tmp_path / "abort-fault"
+    write(injection / "sitecustomize.py", '''import os
+from pathlib import Path
+rename_original, unlink_original = os.rename, os.unlink
+work = Path(os.environ["RECOVERY_FAULT_WORK"])
+fault = os.environ["RECOVERY_FAULT"]
+
+def rename(source, destination, *args, **kwargs):
+    if Path(source) == work / "current":
+        if fault == "archive-rename":
+            raise OSError("injected archive rename failure")
+        result = rename_original(source, destination, *args, **kwargs)
+        if fault == "interrupt-after-archive":
+            os._exit(93)
+        if fault == "foreign-lock-after-archive":
+            (work / "lock").write_text("foreign session lock\\n", encoding="utf-8")
+        return result
+    return rename_original(source, destination, *args, **kwargs)
+
+def unlink(path, *args, **kwargs):
+    if Path(path) == work / "lock" and fault == "unlock":
+        raise PermissionError("injected lock removal failure")
+    return unlink_original(path, *args, **kwargs)
+
+os.rename, os.unlink = rename, unlink
+''')
+    if fault == "archive-directory":
+        write(work / "aborted", "not a directory")
+    failed = recovery_cli(*arguments, extra_env={
+        "PYTHONPATH": str(injection), "RECOVERY_FAULT_WORK": str(work), "RECOVERY_FAULT": fault,
+    })
+    assert failed.returncode != 0
+    assert (work / "lock").is_file()
+    before_archive = fault in {"archive-directory", "archive-rename"}
+    material = work / "current" if before_archive else next((work / "aborted").glob("*/current"))
+    assert {path.relative_to(material): path.read_bytes() for path in material.rglob("*") if path.is_file()} == original
+    if fault == "foreign-lock-after-archive":
+        assert (work / "lock").read_text(encoding="utf-8") == "foreign session lock\n"
+        refused = recovery_cli(*arguments)
+        assert refused.returncode != 0
+        assert (work / "lock").read_text(encoding="utf-8") == "foreign session lock\n"
+        return
+    assert (work / "lock").read_bytes() == lock_bytes
+    if fault == "archive-directory":
+        (work / "aborted").unlink()
+    retried = recovery_cli(*arguments)
+    assert retried.returncode == 0, retried.stderr
+    archive = Path(json.loads(retried.stdout)["archive"])
+    assert {path.relative_to(archive / "current"): path.read_bytes() for path in (archive / "current").rglob("*") if path.is_file()} == original
+    assert not (work / "lock").exists()
+
+
+@pytest.mark.parametrize("replace_lock", [False, True])
+def test_myspec_recovery_init_failure_removes_only_its_own_lock(
+    tmp_path: Path, recovery_cli, replace_lock: bool,
+) -> None:
+    work = tmp_path / "consumer" / ".local" / "spec-work"
+    injection = tmp_path / "initialization-fault"
+    write(injection / "sitecustomize.py", '''import os
+from pathlib import Path
+original = os.replace
+work = Path(os.environ["RECOVERY_FAULT_WORK"])
+
+def replace(source, destination, *args, **kwargs):
+    if Path(destination) == work / "current" / "state.json":
+        (work / "current" / "diagnostics.txt").write_text("preserved initialization material", encoding="utf-8")
+        if os.environ["RECOVERY_REPLACE_LOCK"] == "1":
+            (work / "lock").unlink()
+            (work / "lock").write_text("other session lock\\n", encoding="utf-8")
+        raise OSError("injected initialization state write failure")
+    return original(source, destination, *args, **kwargs)
+
+os.replace = replace
+''')
+    failed = recovery_cli("state-init", work, "add", "specs", "input", extra_env={
+        "PYTHONPATH": str(injection), "RECOVERY_FAULT_WORK": str(work), "RECOVERY_REPLACE_LOCK": str(int(replace_lock)),
+    })
+    assert failed.returncode != 0
+    assert (work / "current" / "diagnostics.txt").read_text(encoding="utf-8") == "preserved initialization material"
+    if replace_lock:
+        assert (work / "lock").read_text(encoding="utf-8") == "other session lock\n"
+    else:
+        assert not (work / "lock").exists()
+    refused = recovery_cli("state-init", work, "add", "specs", "input")
+    assert refused.returncode != 0
+    assert "current_not_empty" in refused.stderr
+
+
+@pytest.mark.parametrize("empty_specs", [False, True])
+def test_myspec_recovery_preserves_failed_first_preview(git_project: Path, recovery_cli, empty_specs: bool) -> None:
+    work = git_project / ".local" / "spec-work"
+    specs = git_project / "myspec" / "specs"
+    delta = work / "current" / "delta"
+    preview = work / "current" / "preview"
+    if not empty_specs:
+        write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
+    assert recovery_cli("state-init", work, "add", "specs", "input").returncode == 0
+    content = "# Accounts\n\n## Purpose\n\n账户能力。\n\n## ADDED Requirements\n\n" if empty_specs else "## MODIFIED Requirements\n\n"
+    write(delta / "accounts" / "spec.md", content + requirement("登录", "新登录方式"))
+    write(git_project / "empty.json", "[]")
+    assert recovery_cli("state-set-conflicts", work, git_project / "empty.json", "specs", "input").returncode == 0
+    write(preview / "failure.txt", "partial first preview, must be retained")
+    failed = recovery_cli("apply-delta", specs, delta, preview, work, "specs", "input")
+    assert failed.returncode != 0
+    assert "output_not_empty" in failed.stderr
+    result = recovery_cli(*abort_arguments((git_project, work, specs, delta, preview)))
+    assert result.returncode == 0, result.stderr
+    archive = Path(json.loads(result.stdout)["archive"])
+    assert (archive / "current" / "preview" / "failure.txt").read_text(encoding="utf-8") == "partial first preview, must be retained\n"
+    assert not (work / "lock").exists()
+
+
+@pytest.mark.parametrize("evidence,error", [
+    ("foreign", "foreign_abort_archive"),
+    ("changed-state", "invalid_abort_archive"),
+    ("traversal-delta", "invalid_abort_archive"),
+    ("redirected-delta", "unsafe_recovery_entry"),
+])
+def test_myspec_recovery_rejects_foreign_or_unsafe_archive_import(
+    tmp_path: Path, recovery_session, recovery_cli, evidence: str, error: str,
+) -> None:
+    target, work, specs, delta, preview = recovery_session
+    aborted = recovery_cli(*abort_arguments(recovery_session))
+    assert aborted.returncode == 0, aborted.stderr
+    archive = Path(json.loads(aborted.stdout)["archive"])
+    if evidence == "foreign":
+        copied = tmp_path / "foreign-archive"
+        shutil.copytree(archive, copied)
+        archive = copied
+    elif evidence == "changed-state":
+        state_path = archive / "current" / "state.json"
+        state_path.write_bytes(state_path.read_bytes() + b"\n")
+    elif evidence == "traversal-delta":
+        state_path = archive / "current" / "state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["deltaRoot"] = str(work / "current" / ".." / "outside-delta")
+        write(state_path, json.dumps(state))
+        receipt_path = archive / "abort.json"
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt["deltaRoot"] = state["deltaRoot"]
+        receipt["stateSha256"] = hashlib.sha256(state_path.read_bytes()).hexdigest()
+        write(receipt_path, json.dumps(receipt))
+        write(archive / "outside-delta" / "unrelated.txt", "must not be imported")
+    elif evidence == "redirected-delta":
+        if os.name == "nt":
+            pytest.skip("symlink creation needs platform permission")
+        external = tmp_path / "external.txt"
+        write(external, "must not be imported")
+        (archive / "current" / "delta" / "redirected").symlink_to(external)
+    refused = recovery_cli("state-init", work, "add", "new-specs", "new-input", "--import-aborted", archive)
+    assert refused.returncode != 0
+    assert error in refused.stderr
+    assert not (work / "lock").exists()
+    assert not (work / "current").exists()

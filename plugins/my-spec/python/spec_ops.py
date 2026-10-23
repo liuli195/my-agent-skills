@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import sys
 import uuid
 from collections import OrderedDict
@@ -523,6 +524,8 @@ def apply_delta(
     input_fingerprint: str,
 ) -> None:
     state = _load_state(work_root)
+    if state.get("applicationPhase") not in (None, "PREVIEW_ONLY"):
+        raise SpecError("application_recovery_required")
     _assert_fingerprints(state, specs_fingerprint, input_fingerprint)
     summary = _state_summary(state)
     if summary["status"] != "READY_TO_APPLY" or summary["remaining"] != 0:
@@ -547,6 +550,13 @@ def apply_delta(
         if actual_paths != expected_paths:
             raise SpecError("spec_context_changed")
         _assert_bound_content(state, specs_root, delta_root)
+    elif not output_is_specs:
+        # Record the original baseline before rendering can fail. A failed first
+        # preview must still have sufficient evidence for the safe abort path.
+        _bind_preview_context(state, work_root, specs_root, delta_root, output_root)
+        state["specsContentFingerprint"] = _tree_fingerprint(specs_root)
+        state["deltaContentFingerprint"] = _tree_fingerprint(delta_root)
+        _atomic_json(_state_path(work_root), state)
     specs = _merged_specs(specs_root, delta_root)
 
     if not output_is_specs:
@@ -578,17 +588,19 @@ def apply_delta(
         parent = specs_root.parent
         backup = parent / f".my-spec-backup-{uuid.uuid4().hex}"
         had_specs = specs_root.exists()
+        # Persist the boundary before the first formal-specification rename.
+        # Even a rolled-back or interrupted apply needs explicit transaction
+        # recovery, never the abandoned-preview abort path.
+        state["applicationPhase"] = "APPLYING"
+        _atomic_json(_state_path(work_root), state)
         try:
             if had_specs:
                 specs_root.rename(backup)
             temporary.rename(specs_root)
             validate_main(specs_root)
-            shutil.rmtree(work_root / "current")
+            state["applicationPhase"] = "APPLIED"
+            _atomic_json(_state_path(work_root), state)
             (work_root / "lock").unlink()
-            try:
-                work_root.rmdir()
-            except OSError:
-                pass
         except Exception:
             if temporary.exists():
                 shutil.rmtree(temporary)
@@ -599,11 +611,22 @@ def apply_delta(
             elif not had_specs and specs_root.exists():
                 shutil.rmtree(specs_root)
             raise
+        # Formal replacement is now validated and committed. Do not destroy
+        # recovery material before lock release can still fail and roll back;
+        # later draft cleanup must not roll back an already committed apply.
+        try:
+            shutil.rmtree(work_root / "current")
+        except OSError as exc:
+            print(f"warning: session_cleanup_failed: {work_root / 'current'}: {exc}", file=sys.stderr)
         if backup.exists():
             try:
                 shutil.rmtree(backup)
             except OSError as exc:
                 print(f"warning: backup_cleanup_failed: {backup}: {exc}", file=sys.stderr)
+        try:
+            work_root.rmdir()
+        except OSError:
+            pass
     finally:
         if temporary.exists():
             shutil.rmtree(temporary)
@@ -611,6 +634,143 @@ def apply_delta(
 
 def _state_path(work_root: Path) -> Path:
     return work_root / "current" / "state.json"
+
+
+def _plain_path(path: Path, *, tree: bool = False) -> Path:
+    absolute = Path(os.path.abspath(path.expanduser()))
+    for item in (absolute, *absolute.parents):
+        if item.is_symlink() or item.is_junction():
+            raise SpecError(f"redirected_recovery_path: {item}")
+    if tree and absolute.exists():
+        for item in absolute.rglob("*"):
+            if item.is_symlink() or item.is_junction() or not (item.is_dir() or item.is_file()):
+                raise SpecError(f"unsafe_recovery_entry: {item}")
+    return absolute
+
+
+def _file_identity(path: Path) -> dict[str, object]:
+    _plain_path(path)
+    before = path.stat()
+    if not stat.S_ISREG(before.st_mode):
+        raise SpecError(f"not_regular_file: {path}")
+    content = path.read_bytes()
+    after = path.stat()
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+        after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns
+    ):
+        raise SpecError(f"file_changed: {path}")
+    return {
+        "device": before.st_dev,
+        "inode": before.st_ino,
+        "size": before.st_size,
+        "modifiedNs": before.st_mtime_ns,
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+def _check_abort_state(
+    state: dict[str, object], work: Path, target: Path, specs: Path,
+    delta: Path, preview: Path, command: str,
+) -> None:
+    _validate_context_document(state)
+    _state_summary(state)
+    if state.get("command") != command or command not in {"add", "review", "audit"}:
+        raise SpecError("abort_command_mismatch")
+    if state.get("targetWorktree") != str(target) or resolve_worktree(target) != target:
+        raise SpecError("abort_target_mismatch")
+    _state_path_context(state, work, specs, delta, preview)
+    if (state["specsRoot"], state["deltaRoot"], state["previewRoot"]) != (str(specs), str(delta), str(preview)):
+        raise SpecError("abort_path_mismatch: bound preview paths required")
+    current = work / "current"
+    if (
+        not delta.is_relative_to(current) or delta == current
+        or not preview.is_relative_to(current) or preview == current
+        or delta.is_relative_to(preview) or preview.is_relative_to(delta)
+        or specs.is_relative_to(work) or work.is_relative_to(specs)
+    ):
+        raise SpecError("abort_path_mismatch: draft and preview must be inside current")
+    phase = state.get("applicationPhase")
+    if phase not in (None, "PREVIEW_ONLY") or (phase is None and "sessionId" in state):
+        raise SpecError("application_recovery_required")
+    if phase == "PREVIEW_ONLY" and (
+        not isinstance(state.get("sessionId"), str) or not re.fullmatch(r"[0-9a-f]{32}", state["sessionId"])
+    ):
+        raise SpecError("invalid_session_identity")
+    expected = state.get("specsContentFingerprint")
+    if not isinstance(expected, str) or _tree_fingerprint(specs) != expected:
+        raise SpecError("abort_specs_baseline_mismatch")
+    if specs.parent.exists() and any(item.name.startswith((".my-spec-backup-", ".my-spec-preview-")) for item in specs.parent.iterdir()):
+        raise SpecError("application_recovery_required: application artifacts exist")
+
+
+def state_abort(
+    work_root: Path, target_root: Path, specs_root: Path, delta_root: Path,
+    preview_root: Path, state_sha256: str, lock_command: str,
+    confirm_no_active_session: bool,
+) -> dict[str, object]:
+    if not confirm_no_active_session:
+        raise SpecError("no_active_session_confirmation_required")
+    if not re.fullmatch(r"[0-9a-f]{64}", state_sha256):
+        raise SpecError("invalid_state_sha256")
+    work, target, specs, delta, preview = (
+        _plain_path(path) for path in (work_root, target_root, specs_root, delta_root, preview_root)
+    )
+    _plain_path(specs, tree=True)
+    current = work / "current"
+    _plain_path(current, tree=True)
+    aborted = _plain_path(work / "aborted")
+    expected = {
+        "workRoot": str(work), "targetWorktree": str(target), "specsRoot": str(specs),
+        "deltaRoot": str(delta), "previewRoot": str(preview),
+        "stateSha256": state_sha256, "lockCommand": lock_command,
+    }
+    archive = None
+    receipt = None
+    if not current.exists() and aborted.is_dir():
+        for candidate in sorted(aborted.glob(f"{state_sha256}-*")):
+            _plain_path(candidate, tree=True)
+            if not (candidate / "current" / "state.json").is_file():
+                continue
+            value = _read_json(candidate / "abort.json")
+            if isinstance(value, dict) and all(value.get(key) == item for key, item in expected.items()):
+                if archive is not None:
+                    raise SpecError("ambiguous_abort_archive")
+                archive, receipt = candidate, value
+    state_path = (archive / "current" / "state.json") if archive else _state_path(work)
+    if _file_identity(state_path)["sha256"] != state_sha256:
+        raise SpecError("abort_state_mismatch")
+    state = _read_json(state_path)
+    if not isinstance(state, dict):
+        raise SpecError("invalid_state_document")
+    _check_abort_state(state, work, target, specs, delta, preview, lock_command)
+    lock = work / "lock"
+    if archive is not None and not lock.exists():
+        return {"status": "ABORTED", "archive": str(archive), "alreadyAborted": True}
+    lock_identity = _file_identity(lock)
+    lock_content = lock.read_bytes()
+    if "sessionId" in state:
+        expected_lock = {"command": lock_command, "sessionId": state["sessionId"], "workRoot": str(work)}
+        if _read_json(lock) != expected_lock:
+            raise SpecError("abort_lock_mismatch")
+    elif lock_content not in {(lock_command + "\n").encode(), (lock_command + "\r\n").encode()}:
+        raise SpecError("abort_lock_mismatch")
+    if receipt is not None:
+        if receipt.get("lockIdentity") != lock_identity:
+            raise SpecError("abort_lock_mismatch")
+    else:
+        # One same-filesystem rename preserves the entire draft before any unlock.
+        aborted.mkdir(exist_ok=True)
+        archive = aborted / f"{state_sha256}-{uuid.uuid4().hex}"
+        archive.mkdir()
+        receipt = {**expected, "lockIdentity": lock_identity}
+        _atomic_json(archive / "abort.json", receipt)
+        if _file_identity(_state_path(work))["sha256"] != state_sha256 or _file_identity(lock) != lock_identity:
+            raise SpecError("abort_identity_changed")
+        current.rename(archive / "current")
+    if _file_identity(lock) != lock_identity:
+        raise SpecError(f"abort_lock_changed: draft preserved at {archive}")
+    lock.unlink()
+    return {"status": "ABORTED", "archive": str(archive), "alreadyAborted": False}
 
 
 def _atomic_json(path: Path, value: object) -> None:
@@ -674,6 +834,7 @@ def state_init(
     command: str,
     specs_fingerprint: str,
     input_fingerprint: str,
+    import_aborted: Path | None = None,
 ) -> None:
     if command not in {"add", "review", "audit"}:
         raise SpecError(f"invalid_state_command: {command}")
@@ -681,22 +842,37 @@ def state_init(
         raise SpecError("missing_state_fingerprint")
     identity = implementation_identity()
     target = resolve_worktree(work_root)
-    work_root = _canonical_path(work_root)
+    work_root = _plain_path(work_root)
     work_root.mkdir(parents=True, exist_ok=True)
+    current = work_root / "current"
+    _plain_path(current)
+    if current.exists() and (not current.is_dir() or any(current.iterdir())):
+        raise SpecError(f"current_not_empty: preserve draft; inspect state-abort: {current}")
+    imported_delta = _archived_delta(work_root, import_aborted) if import_aborted is not None else None
+    session_id = uuid.uuid4().hex
+    lock_content = json.dumps({"command": command, "sessionId": session_id, "workRoot": str(work_root)}) + "\n"
     lock = work_root / "lock"
+    created_identity = None
     try:
-        with lock.open("x", encoding="utf-8") as handle:
-            handle.write(command + "\n")
+        handle = lock.open("x", encoding="utf-8", newline="\n")
     except FileExistsError as exc:
         raise SpecError(f"state_locked: {work_root}") from exc
     try:
-        current = work_root / "current"
-        if current.exists():
-            shutil.rmtree(current)
+        with handle:
+            created = os.fstat(handle.fileno())
+            created_identity = (created.st_dev, created.st_ino)
+            handle.write(lock_content)
+        if current.exists() and (not current.is_dir() or any(current.iterdir())):
+            raise SpecError(f"current_not_empty: preserve draft; inspect state-abort: {current}")
+        current.mkdir(exist_ok=True)
+        if imported_delta is not None:
+            shutil.copytree(imported_delta, current / "delta")
         _atomic_json(
             _state_path(work_root),
             {
                 "command": command,
+                "sessionId": session_id,
+                "applicationPhase": "PREVIEW_ONLY",
                 "status": "ANALYZING",
                 "specsFingerprint": specs_fingerprint,
                 "inputFingerprint": input_fingerprint,
@@ -715,8 +891,46 @@ def state_init(
             },
         )
     except Exception:
-        lock.unlink(missing_ok=True)
+        # A failed initializer may remove only the exact file it created, not a
+        # replacement lock, and never delete any draft or partial diagnostics.
+        try:
+            owned = lock.stat()
+            if (
+                not lock.is_symlink() and (owned.st_dev, owned.st_ino) == created_identity
+                and lock_content.encode().startswith(lock.read_bytes())
+            ):
+                lock.unlink()
+        except FileNotFoundError:
+            pass
         raise
+
+
+def _archived_delta(work_root: Path, archive_root: Path) -> Path:
+    archive = _plain_path(archive_root, tree=True)
+    if archive.parent != work_root / "aborted":
+        raise SpecError("foreign_abort_archive")
+    receipt = _read_json(archive / "abort.json")
+    state_path = archive / "current" / "state.json"
+    state = _read_json(state_path)
+    if (
+        not isinstance(receipt, dict) or not isinstance(state, dict)
+        or receipt.get("workRoot") != str(work_root) or state.get("workRoot") != str(work_root)
+        or receipt.get("stateSha256") != _file_identity(state_path)["sha256"]
+        or receipt.get("deltaRoot") != state.get("deltaRoot")
+        or not isinstance(state.get("deltaRoot"), str)
+    ):
+        raise SpecError("invalid_abort_archive")
+    original_delta = Path(state["deltaRoot"])
+    original_current = work_root / "current"
+    if (
+        not original_delta.is_absolute() or _plain_path(original_delta) != original_delta
+        or not original_delta.is_relative_to(original_current) or original_delta == original_current
+    ):
+        raise SpecError("invalid_abort_archive")
+    delta = archive / "current" / original_delta.relative_to(original_current)
+    if not delta.is_dir():
+        raise SpecError("archive_delta_missing")
+    return delta
 
 
 def _validate_conflicts(value: object) -> list[dict[str, object]]:
@@ -883,6 +1097,16 @@ def _parser() -> argparse.ArgumentParser:
     state_init_parser.add_argument("run_command")
     state_init_parser.add_argument("specs_fingerprint")
     state_init_parser.add_argument("input_fingerprint")
+    state_init_parser.add_argument("--import-aborted", type=Path, help="copy only an archived Delta as a new unanalyzed draft")
+    abort_parser = commands.add_parser("state-abort", help="archive an abandoned preview, then release only its matching lock")
+    abort_parser.add_argument("work_dir", type=Path)
+    abort_parser.add_argument("target_worktree", type=Path)
+    abort_parser.add_argument("specs_dir", type=Path)
+    abort_parser.add_argument("delta_dir", type=Path)
+    abort_parser.add_argument("preview_dir", type=Path)
+    abort_parser.add_argument("state_sha256", help="exact saved state.json SHA-256")
+    abort_parser.add_argument("lock_command", choices=("add", "review", "audit"))
+    abort_parser.add_argument("--confirm-no-active-session", action="store_true", help="external confirmation, never inferred from lock age or process exit")
     state_set_parser = commands.add_parser("state-set-conflicts")
     state_set_parser.add_argument("work_dir", type=Path)
     state_set_parser.add_argument("conflicts_file", type=Path)
@@ -903,6 +1127,7 @@ def _parser() -> argparse.ArgumentParser:
     state_status_parser.add_argument("work_dir", type=Path)
     state_status_parser.add_argument("specs_fingerprint")
     state_status_parser.add_argument("input_fingerprint")
+    state_status_parser.add_argument("--abort-identity", action="store_true", help="show exact saved recovery identity; does not confirm inactivity")
     add_management_parsers(commands)
     return parser
 
@@ -926,7 +1151,13 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "diff":
             sys.stdout.write(diff_dirs(args.old_dir, args.new_dir))
         elif args.command == "state-init":
-            state_init(args.work_dir, args.run_command, args.specs_fingerprint, args.input_fingerprint)
+            state_init(args.work_dir, args.run_command, args.specs_fingerprint, args.input_fingerprint, args.import_aborted)
+        elif args.command == "state-abort":
+            print(json.dumps(state_abort(
+                args.work_dir, args.target_worktree, args.specs_dir, args.delta_dir,
+                args.preview_dir, args.state_sha256, args.lock_command,
+                args.confirm_no_active_session,
+            ), ensure_ascii=False))
         elif args.command == "state-set-conflicts":
             print(
                 json.dumps(
@@ -963,7 +1194,17 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "state-status":
             state = _load_state(args.work_dir)
             _assert_fingerprints(state, args.specs_fingerprint, args.input_fingerprint)
-            print(json.dumps(_state_summary(state), ensure_ascii=False))
+            result = _state_summary(state)
+            if args.abort_identity:
+                result["abortIdentity"] = {
+                    "stateSha256": _file_identity(_state_path(args.work_dir))["sha256"],
+                    "lockCommand": state.get("command"),
+                    **{key: state.get(key) for key in (
+                        "workRoot", "targetWorktree", "specsRoot", "deltaRoot", "previewRoot",
+                        "sessionId", "applicationPhase",
+                    )},
+                }
+            print(json.dumps(result, ensure_ascii=False))
         elif args.command in {"init", "doctor", "update"}:
             print(json.dumps(run_management(args), ensure_ascii=False))
     except (SpecError, ManagementError) as exc:
