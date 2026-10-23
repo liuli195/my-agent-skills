@@ -399,6 +399,10 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    "tests/test_build_and_verify_cli.py::test_packed_runtime_guard_sqlite_native_file_boundaries": "Installed bare CLI checks narrow native SQLite memory, authorizer, readonly and file-effect boundaries.",
+    "tests/test_build_and_verify_cli.py::test_packed_node_runtime_guard_direct_script": "Installed bare CLI proves Node direct scripts, threads and exit cleanup reject caught side effects.",
+    "tests/test_build_and_verify_cli.py::test_packed_node_runtime_guard_native_parallel_and_control": "Installed bare CLI proves both Node parallel layers and protected controller callbacks.",
+    "tests/test_build_and_verify_cli.py::test_packed_node_runtime_guard_mixed_commands_and_restarts": "Installed bare CLI proves mixed-language short circuit and native watch restart protection with owned timeout cleanup.",
     "tests/test_my_spec.py::test_myspec_recovery_rejects_old_request_for_identical_new_legacy_session": "Installed bare CLI verifies legacy lock-instance authorization and non-UTF8 recovery output.",
     "tests/test_my_spec.py::test_myspec_recovery_outputs_ascii_json_for_non_utf8_stdout": "Installed bare CLI verifies legacy lock-instance authorization and non-UTF8 recovery output.",
     "tests/test_data_store.py::test_installed_delete_accepts_distinct_stable_fd_ctime": "Installed maintenance CLI verifies platform timestamp, durable recovery and plan encoding boundaries.",

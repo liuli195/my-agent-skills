@@ -178,6 +178,7 @@ def _managed_run(command: Any, control: RunControl, **kwargs: Any) -> subprocess
         kwargs["start_new_session"] = True
     job = None
     process = None
+    stdout = stderr = None
     try:
         with control.lock:
             if control.expired():
@@ -190,9 +191,9 @@ def _managed_run(command: Any, control: RunControl, **kwargs: Any) -> subprocess
         while True:
             remaining = single_deadline - time.monotonic()
             if control.expired():
-                raise TotalBudgetTimeout(command, timeout)
+                raise TotalBudgetTimeout(command, timeout, output=stdout, stderr=stderr)
             if remaining <= 0:
-                raise subprocess.TimeoutExpired(command, timeout)
+                raise subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
             wait = min(0.05, remaining)
             if control.deadline is not None:
                 wait = min(wait, max(0.001, control.deadline - time.monotonic()))
@@ -204,6 +205,7 @@ def _managed_run(command: Any, control: RunControl, **kwargs: Any) -> subprocess
             except subprocess.TimeoutExpired as error:
                 if isinstance(error, TotalBudgetTimeout):
                     raise
+                stdout, stderr = error.output, error.stderr
     finally:
         if process is not None:
             if job is not None:
@@ -1148,13 +1150,18 @@ def _run_check_result(
         )
     except subprocess.TimeoutExpired as error:
         total_timeout = isinstance(error, TotalBudgetTimeout) or (control is not None and control.expired())
+        def output(value):
+            return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
+        protection_error = _test_guard().evidence_error(evidence_path, segments) if evidence_path is not None else None
         return CheckResult(
             index,
             check,
             1,
-            stderr=(f"{'total_budget_timeout' if total_timeout else 'check_timeout'}: {check.get('id')}\n"
+            stdout=output(error.output),
+            stderr=output(error.stderr) + (f"{'total_budget_timeout' if total_timeout else 'check_timeout'}: {check.get('id')}\n"
                     if control is not None else
-                    f"check_timeout: {check.get('id')} exceeded {_format_seconds(timeout_seconds or 0)}s\n"),
+                    f"check_timeout: {check.get('id')} exceeded {_format_seconds(timeout_seconds or 0)}s\n")
+                    + (f"{protection_error}\n" if protection_error else ""),
             duration_seconds=time.monotonic() - started_at,
             cache_key=key,
             status="timed_out",

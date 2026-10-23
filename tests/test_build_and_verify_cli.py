@@ -763,6 +763,282 @@ def test_packed_runtime_guard_preserves_pytest_workers_and_control_hooks(tmp_pat
 
 
 
+def test_packed_node_runtime_guard_direct_script(tmp_path: Path) -> None:
+    _, prefix, executable = _installed_build_and_verify(tmp_path)
+    env = _isolated_env(tmp_path, prefix)
+    project = tmp_path / "project"
+    (project / ".build-and-verify").mkdir(parents=True)
+    script = project / "direct.cjs"
+    config = {"version": 2, "verify": {"realChecks": [], "checks": [
+        {"id": "node-memory", "command": [shutil.which("node"), "direct.cjs"], "inputs": ["direct.cjs"]}]}}
+    (project / ".build-and-verify/config.json").write_text(json.dumps(config))
+    script.write_text("const fs = require('node:fs');\n"
+        "try { fs.writeFileSync('node-effect', 'forbidden'); } catch {}\n"
+        "console.log('CAUGHT_AND_RETURNED_SUCCESS');\n")
+    blocked = subprocess.run([executable, "verify", "--project", str(project), "--execution-context", "cloud"],
+        env=env, text=True, capture_output=True, check=False, timeout=20)
+    assert blocked.returncode == 1, blocked.stdout + blocked.stderr
+    assert "CAUGHT_AND_RETURNED_SUCCESS" in blocked.stdout
+    assert "runtime_guard_violation" in blocked.stderr
+    assert not (project / "node-effect").exists()
+    assert not list((project / ".build-and-verify/cache").glob("*.json"))
+    config["verify"]["realChecks"] = ["node-memory"]
+    (project / ".build-and-verify/config.json").write_text(json.dumps(config))
+    real = subprocess.run([executable, "verify", "--project", str(project), "--execution-context", "cloud"],
+        env=env, text=True, capture_output=True, check=False, timeout=20)
+    assert real.returncode == 0, real.stdout + real.stderr
+    assert "real-unprotected" in real.stdout and (project / "node-effect").read_text() == "forbidden"
+    (project / "node-effect").unlink()
+    config["verify"]["realChecks"] = []
+    (project / ".build-and-verify/config.json").write_text(json.dumps(config))
+    (project / "data.txt").write_text("READABLE")
+    script.write_text("const assert = require('node:assert/strict');\n"
+        "const fs = require('node:fs'); const cp = require('node:child_process');\n"
+        "const net = require('node:net'); const {Worker} = require('node:worker_threads');\n"
+        "function denied(fn) { assert.throws(fn, {code:'ERR_TEST_RUNTIME_GUARD'}); }\n"
+        "assert.equal(fs.readFileSync('data.txt', 'utf8'), 'READABLE');\n"
+        "assert.equal([1,2,3].reduce((a,b)=>a+b), 6);\n"
+        "denied(() => cp.spawnSync(process.execPath, ['-e','0']));\n"
+        "denied(() => new cp.ChildProcess().spawn({file:process.execPath,args:[process.execPath,'-e','0']}));\n"
+        "denied(() => net.connect(9, '127.0.0.1'));\n"
+        "denied(() => fs.openSync('open-effect', 'w'));\n"
+        "denied(() => fs.mkdirSync('directory-effect'));\n"
+        "denied(() => fs.renameSync('data.txt', 'renamed-effect'));\n"
+        "(async () => {\n"
+        " await assert.rejects(async () => fs.promises.writeFile('promise-effect', 'bad'), {code:'ERR_TEST_RUNTIME_GUARD'});\n"
+        " const worker = new Worker(`const {parentPort}=require('node:worker_threads');\n"
+        " const fs=require('node:fs'); try { fs.writeFileSync('thread-effect','bad'); } catch {}\n"
+        " const db=new (require('node:sqlite').DatabaseSync)(':memory:');\n"
+        " require('node:assert/strict').equal(db.prepare('select 42 as v').get().v,42);\n"
+        " parentPort.postMessage(fs.readFileSync('data.txt','utf8'));`, {eval:true,execArgv:[],env:{}});\n"
+        " worker.on('message', (value) => assert.equal(value, 'READABLE'));\n"
+        " await new Promise((resolve,reject) => { worker.on('exit',resolve);worker.on('error',reject); });\n"
+        " console.log('DIRECT_READ_MEMORY_THREAD_OK');\n"
+        "})().catch(e => { console.error(e); process.exitCode=1; });\n")
+    effects = subprocess.run([executable, "verify", "--project", str(project), "--execution-context", "cloud"],
+        env=env, text=True, capture_output=True, check=False, timeout=20)
+    assert effects.returncode == 1, effects.stdout + effects.stderr
+    assert "DIRECT_READ_MEMORY_THREAD_OK" in effects.stdout, effects.stdout + effects.stderr
+    for operation in ("spawnSync", "ChildProcess", "net.connect", "fs.openSync", "fs.mkdirSync", "fs.renameSync", "fs.promises.writeFile"):
+        assert operation in effects.stderr
+    assert "thread-effect" in effects.stderr
+    for effect in ("open-effect", "directory-effect", "renamed-effect", "promise-effect", "thread-effect"):
+        assert not (project / effect).exists()
+    script.write_text("process.on('exit',()=>{\n"
+        " try {require('node:fs').writeFileSync('exit-effect','bad');}catch {}\n"
+        " console.log('EXIT_CLEANUP_CAUGHT');\n});\n")
+    cleanup = subprocess.run([executable, "verify", "--project", str(project), "--execution-context", "cloud"],
+        env=env, text=True, capture_output=True, check=False, timeout=20)
+    assert cleanup.returncode == 1, cleanup.stdout + cleanup.stderr
+    assert "EXIT_CLEANUP_CAUGHT" in cleanup.stdout
+    assert "exit-effect" in cleanup.stderr
+    assert not (project / "exit-effect").exists()
+
+
+def test_packed_node_runtime_guard_native_parallel_and_control(tmp_path: Path) -> None:
+    _, prefix, executable = _installed_build_and_verify(tmp_path)
+    env = _isolated_env(tmp_path, prefix)
+    project = tmp_path / "project"
+    (project / ".build-and-verify").mkdir(parents=True)
+    (project / "data.txt").write_text("READABLE")
+    for name in ("first", "second"):
+        (project / f"{name}.test.mjs").write_text(
+            "import test from 'node:test'; import assert from 'node:assert/strict';\n"
+            "import {readFileSync} from 'node:fs';\n"
+            "import {DatabaseSync} from 'node:sqlite';\n"
+            "test('memory', async () => {\n"
+            " const started=Number(process.hrtime.bigint())/1e9;\n"
+            " assert.equal(readFileSync('data.txt','utf8'), 'READABLE');\n"
+            " assert.equal(new DatabaseSync(':memory:').prepare('select 42 as v').get().v,42);\n"
+            " await new Promise(resolve=>setTimeout(resolve, 600));\n"
+            " console.log('NODE_INTERVAL:' + JSON.stringify({pid:process.pid,started,finished:Number(process.hrtime.bigint())/1e9}));\n"
+            "});\n")
+    (project / "memory-control.cjs").write_text(
+        "const {Worker,isMainThread}=require('node:worker_threads');\n"
+        "if(isMainThread && !process.env.NODE_TEST_CONTEXT) {\n"
+        " new Worker(`require('node:worker_threads').parentPort.postMessage(42)`,{eval:true,env:{}})\n"
+        " .on('message',value=>{require('node:assert/strict').equal(value,42);console.log('CONTROL_THREAD_OK');});}\n")
+    config = {"version": 2, "verify": {"realChecks": [], "maxParallel": 2, "checks": [
+        {"id": name, "command": [shutil.which("node"), "--test", "--test-concurrency=2", "--test-reporter=tap", "--require", "./memory-control.cjs",
+            "first.test.mjs", "second.test.mjs"], "checkParallel": True,
+         "inputs": ["first.test.mjs", "second.test.mjs", "data.txt", "memory-control.cjs"]} for name in ("node-a", "node-b")]}}
+    config_path = project / ".build-and-verify/config.json"
+    config_path.write_text(json.dumps(config))
+    def verify():
+        return subprocess.run([executable, "verify", "--project", str(project), "--execution-context", "cloud"],
+            env=env, text=True, capture_output=True, check=False, timeout=25)
+    allowed = verify()
+    assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+    assert allowed.stdout.count("CONTROL_THREAD_OK") == 2
+    intervals = [json.loads(line.split("NODE_INTERVAL:", 1)[1]) for line in allowed.stdout.splitlines()
+                 if "NODE_INTERVAL:" in line]
+    assert len(intervals) == 4 and len({item["pid"] for item in intervals}) == 4
+    assert max(item["started"] for item in intervals) < min(item["finished"] for item in intervals)
+    proofs = [json.loads(line.removeprefix("runtime-guard: ")) for line in allowed.stdout.splitlines()
+              if line.startswith("runtime-guard: ")]
+    assert len(proofs) == 2 and all(proof["workers"] == 3 for proof in proofs)
+    (project / "control.cjs").write_text(
+        "const assert=require('node:assert/strict'); const cp=require('node:child_process');\n"
+        "const fs=require('node:fs');\n"
+        "assert.throws(()=>cp.spawn(process.execPath,['-e','0']),{code:'ERR_TEST_RUNTIME_GUARD'});\n"
+        "try {fs.writeFileSync('control-effect','bad');} catch {}\n"
+        "console.log('CONTROL_CALLBACK_PROTECTED');\n")
+    config["verify"]["checks"] = [{"id": "node-control", "command": [shutil.which("node"), "--test",
+        "--require", "./control.cjs", "first.test.mjs"],
+        "inputs": ["control.cjs", "first.test.mjs"]}]
+    config_path.write_text(json.dumps(config))
+    blocked = verify()
+    assert blocked.returncode == 1, blocked.stdout + blocked.stderr
+    assert "CONTROL_CALLBACK_PROTECTED" in blocked.stdout
+    assert "child_process.spawn" in blocked.stderr and "control-effect" in blocked.stderr
+    assert not (project / "control-effect").exists()
+    (project / "control.cjs").write_text(
+        "const test=require('node:test');\n"
+        "try { test.run({files:['first.test.mjs']}); } catch {}\n"
+        "console.log('FRAMEWORK_CHANNEL_ATTEMPTED');\n")
+    escaped = verify()
+    assert escaped.returncode == 1, escaped.stdout + escaped.stderr
+    assert "FRAMEWORK_CHANNEL_ATTEMPTED" in escaped.stdout
+    assert "runtime_guard_uncovered_worker" in escaped.stderr
+    (project / "effects.cjs").write_text(
+        "const fs=require('node:fs');module.exports=(phase)=>{try {fs.writeFileSync(phase+'-effect','bad');}catch {}};\n"
+        "module.exports('import');\n")
+    (project / "first.test.mjs").write_text(
+        "import test,{beforeEach,afterEach} from 'node:test';import effect from './effects.cjs';\n"
+        "beforeEach(()=>effect('setup'));afterEach(()=>effect('teardown'));\n"
+        "test('effect handling',()=>{effect('body');console.log('ALL_PHASES_CAUGHT');});\n")
+    config["verify"]["checks"] = [{"id": "phases", "command": [shutil.which("node"), "--test", "first.test.mjs"],
+        "inputs": ["first.test.mjs", "effects.cjs"]}]
+    config_path.write_text(json.dumps(config))
+    phases = verify()
+    assert phases.returncode == 1, phases.stdout + phases.stderr
+    assert "ALL_PHASES_CAUGHT" in phases.stdout
+    for phase in ("import", "setup", "body", "teardown"):
+        assert phase + "-effect" in phases.stderr
+        assert not (project / (phase + "-effect")).exists()
+
+
+def test_packed_node_runtime_guard_mixed_commands_and_restarts(tmp_path: Path) -> None:
+    import threading
+    _, prefix, executable = _installed_build_and_verify(tmp_path)
+    env = _isolated_env(tmp_path, prefix)
+    project = tmp_path / "project with space"
+    (project / ".build-and-verify").mkdir(parents=True)
+    (project / "logic.py").write_text("import os,sys\nassert os.environ['MIXED_VALUE']=='two words'\n"
+        "assert sys.argv[1:] == ['argument with space']\nprint('PYTHON_SEGMENT_OK')\n")
+    (project / "direct script.mjs").write_text("import assert from 'node:assert/strict';\n"
+        "assert.equal(process.env.MIXED_VALUE, 'two words');\n"
+        "assert.deepEqual(process.argv.slice(2), ['argument with space']);console.log('NODE_SEGMENT_OK');\n")
+    assignment = 'set MIXED_VALUE=two words&&' if os.name == 'nt' else 'MIXED_VALUE="two words" '
+    python = f'{assignment}"{sys.executable}" logic.py "argument with space"'
+    node = f'{assignment}"{shutil.which("node")}" "direct script.mjs" "argument with space"'
+    config = {"version": 2, "verify": {"realChecks": [], "checks": [
+        {"id": "mixed", "command": python + '&&' + node, "inputs": ["logic.py", "direct script.mjs"]}]}}
+    path = project / ".build-and-verify/config.json"
+    path.write_text(json.dumps(config))
+    def verify():
+        return subprocess.run([executable, "verify", "--project", str(project), "--execution-context", "cloud"],
+            env=env, text=True, capture_output=True, check=False, timeout=15)
+    allowed = verify()
+    assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+    assert "PYTHON_SEGMENT_OK" in allowed.stdout and "NODE_SEGMENT_OK" in allowed.stdout
+    (project / "logic.py").write_text("from pathlib import Path\n"
+        "try: Path('mixed-effect').write_text('bad')\nexcept PermissionError: pass\nprint('FIRST_SEGMENT_CAUGHT')\n")
+    denied_first = verify()
+    assert denied_first.returncode == 1, denied_first.stdout + denied_first.stderr
+    assert "FIRST_SEGMENT_CAUGHT" in denied_first.stdout
+    assert "NODE_SEGMENT_OK" not in denied_first.stdout
+    assert not (project / "mixed-effect").exists()
+    (project / "logic.py").write_text("raise SystemExit(7)\n")
+    stopped = verify()
+    assert stopped.returncode == 1, stopped.stdout + stopped.stderr
+    assert "NODE_SEGMENT_OK" not in stopped.stdout
+    assert "runtime_guard_evidence_incomplete" in stopped.stderr
+    # Native watch restarts are driven externally, never by allowing test writes.
+    watched = project / "restart.test.cjs"
+    (project / "watch-control.cjs").write_text("console.log('WATCH_PID:'+process.pid);\n")
+    watched.write_text("require('node:test')('before restart',()=>{});\n")
+    config["verify"]["checks"] = [{"id": "restart", "command": [shutil.which("node"), "--test", "--watch", "--require", "./watch-control.cjs",
+        "--test-reporter=tap", "restart.test.cjs"], "timeoutSeconds": 3, "inputs": ["restart.test.cjs"]}]
+    path.write_text(json.dumps(config))
+    def change_watched_file():
+        time.sleep(1)
+        watched.write_text("const fs=require('node:fs');try {fs.writeFileSync('restart-effect','bad');}catch {}\n"
+            "console.log('RESTART_IMPORT_PROTECTED');require('node:test')('after restart',()=>{});\n")
+    updater = threading.Thread(target=change_watched_file)
+    updater.start()
+    try:
+        restarted = verify()
+    finally:
+        updater.join()
+    assert restarted.returncode == 1, restarted.stdout + restarted.stderr
+    assert "before restart" in restarted.stdout, restarted.stdout + restarted.stderr
+    assert "RESTART_IMPORT_PROTECTED" in restarted.stdout, restarted.stdout + restarted.stderr
+    assert "check_timeout" in restarted.stderr
+    assert not (project / "restart-effect").exists()
+    owned = {int(line.split('WATCH_PID:', 1)[1]) for line in restarted.stdout.splitlines() if 'WATCH_PID:' in line}
+    assert len(owned) >= 3, restarted.stdout
+    for pid in owned:
+        _assert_pid_terminated(pid)
+    assert not any(json.loads(item.read_text())["id"] == "restart" for item in (project / ".build-and-verify/cache").glob("*.json"))
+
+
+def test_packed_runtime_guard_sqlite_native_file_boundaries(tmp_path: Path) -> None:
+    import sqlite3
+    _, prefix, executable = _installed_build_and_verify(tmp_path)
+    env = _isolated_env(tmp_path, prefix)
+    project = tmp_path / "project"
+    (project / ".build-and-verify").mkdir(parents=True)
+    with sqlite3.connect(project / "readonly.db") as fixture:
+        fixture.execute("create table values_for_reading(value)")
+        fixture.execute("insert into values_for_reading values (42)")
+    script = project / "sqlite.mjs"
+    config = {"version": 2, "verify": {"realChecks": [], "checks": [
+        {"id": "sqlite-node", "command": [shutil.which("node"), "sqlite.mjs"],
+         "inputs": ["sqlite.mjs", "readonly.db"]}]}}
+    path = project / ".build-and-verify/config.json"
+    path.write_text(json.dumps(config))
+    def verify():
+        return subprocess.run([executable, "verify", "--project", str(project), "--execution-context", "cloud"],
+            env=env, text=True, capture_output=True, check=False, timeout=20)
+    script.write_text("import sqlite,{DatabaseSync} from 'node:sqlite';import assert from 'node:assert/strict';\n"
+        "assert.equal(sqlite.DatabaseSync,DatabaseSync);\n"
+        "const db=new DatabaseSync(':memory:',{open:false});db.open();\n"
+        "db.exec('create table t(value);insert into t values (42)');\n"
+        "let seen=0;db.setAuthorizer((action)=>{seen++;return action===sqlite.constants.SQLITE_SELECT?sqlite.constants.SQLITE_DENY:sqlite.constants.SQLITE_OK;});\n"
+        "assert.throws(()=>db.prepare('select value from t'));assert.ok(seen>0);db.setAuthorizer(null);\n"
+        "assert.equal(db.prepare('select value from t').get().value,42);\n"
+        "const bytes=db.serialize();const clone=new DatabaseSync(':memory:');\n"
+        "clone.setAuthorizer(action=>action===sqlite.constants.SQLITE_SELECT?sqlite.constants.SQLITE_DENY:sqlite.constants.SQLITE_OK);\n"
+        "clone.deserialize(bytes);assert.throws(()=>clone.prepare('select value from t'));clone.setAuthorizer(null);\n"
+        "assert.equal(clone.prepare('select value from t').get().value,42);\n"
+        "assert.equal(clone.prepare('pragma temp_store').get().temp_store,2);\n"
+        "db.close();db.open();assert.equal(db.prepare('select 7 as v').get().v,7);\n"
+        "const reader=new DatabaseSync('readonly.db',{readOnly:true,open:false});reader.open();\n"
+        "assert.equal(reader.prepare('select value from values_for_reading').get().value,42);reader.close();\n"
+        "console.log('NODE_SQLITE_MEMORY_CALLBACK_REOPEN_READ_OK');\n")
+    allowed = verify()
+    assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+    assert "NODE_SQLITE_MEMORY_CALLBACK_REOPEN_READ_OK" in allowed.stdout
+    script.write_text("import sqlite from 'node:sqlite';\n"
+        "const db=new sqlite.DatabaseSync(':memory:',{open:false});db.open();\n"
+        "for(const sql of [\"ATTACH DATABASE 'attach-effect' AS bad\",\"VACUUM INTO 'vacuum-effect'\",'PRAGMA temp_store=FILE']){try{db.exec(sql)}catch{}}\n"
+        "try{new sqlite.DatabaseSync('constructor-effect')}catch{}\n"
+        "const options={open:false};const lazy=new sqlite.DatabaseSync('lazy-effect',options);options.readOnly=true;try{lazy.open()}catch{}\n"
+        "try{db.loadExtension('extension-effect')}catch{}\n"
+        "try{await sqlite.backup(db,'backup-effect')}catch{}\n"
+        "db.setAuthorizer(null);try{db.exec(\"ATTACH DATABASE 'callback-effect' AS bad2\")}catch{}\n"
+        "db.close();db.open();try{db.exec(\"VACUUM INTO 'reopen-effect'\")}catch{}\n"
+        "const reader=new sqlite.DatabaseSync('readonly.db',{readOnly:true});try{reader.exec('insert into values_for_reading values (99)')}catch{}\n"
+        "console.log('NODE_SQLITE_CAUGHT_NATIVE_EFFECTS');\n")
+    blocked = verify()
+    assert blocked.returncode == 1, blocked.stdout + blocked.stderr
+    assert "NODE_SQLITE_CAUGHT_NATIVE_EFFECTS" in blocked.stdout
+    assert "sqlite" in blocked.stderr
+    for name in ("attach", "vacuum", "constructor", "lazy", "extension", "backup", "callback", "reopen"):
+        assert not (project / (name + "-effect")).exists()
+
+
 def test_install_template_retries_after_pack_failure(tmp_path: Path, monkeypatch) -> None:
     module = sys.modules[__name__]
     monkeypatch.setattr(module, "_installed_template", None)

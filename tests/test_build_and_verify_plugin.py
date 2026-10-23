@@ -1680,6 +1680,8 @@ def test_runtime_guard_missing_protection_evidence_cannot_cache_success(tmp_path
     'set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1&& set NUMBA_DISABLE_JIT=1&& ".\\.venv\\Scripts\\python.exe" -m pytest "tests/test_math.py::test_values[a b]" --ignore=tests/slow -k "not slow and math"',
     'set PYTEST_ADDOPTS=-n 4&& .\\.venv\\Scripts\\python.exe -m pytest -p xdist.plugin tests/test_tree.py',
     'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest "tests/test_math.py::test_values[a b]" -k "not slow" && python direct.py',
+    'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest "tests/test_math.py::test_values[a b]" -k "not slow" && node --test "tests/memory test.mjs"',
+    'set NODE_ENV=test&& "C:\\Program Files\\nodejs\\node.exe" "scripts\\direct script.js" --value="a b"',
     [sys.executable, "-m", "unittest", "tests.test_memory"],
 ])
 def test_runtime_guard_preserves_representative_python_commands(tmp_path: Path, command) -> None:
@@ -1696,10 +1698,16 @@ def test_runtime_guard_preserves_representative_python_commands(tmp_path: Path, 
     assert len(executor.calls) == 1
     adapted = executor.calls[0]
     if isinstance(command, str):
+        if 'node.exe' in command:
+            assert adapted.startswith('set NODE_ENV=test&&')
+            assert '"scripts\\direct script.js" --value="a b"' in adapted
+            return
         if command.startswith("set "):
             prefix = command[:command.rindex("&&") + 2]
             assert adapted.startswith(prefix)
-        assert command[command.index(" -m "):] in adapted or command.endswith('&& python direct.py')
+        assert command[command.index(" -m "):].split("&&", 1)[0].rstrip() in adapted
+        if "&& node --test" in command:
+            assert 'node --test "tests/memory test.mjs"' in adapted
         assert ("NUMBA_DISABLE_JIT" in adapted) == ("NUMBA_DISABLE_JIT" in command)
         assert ("-p xdist.plugin" in adapted) == ("-p xdist.plugin" in command)
     else:
@@ -1707,8 +1715,8 @@ def test_runtime_guard_preserves_representative_python_commands(tmp_path: Path, 
 
 
 @pytest.mark.parametrize("command", [
-    "python -m pytest tests/test_memory.py && node --test tests/memory.mjs",
-    "tox -e py", ["uv", "run", "python", "-m", "pytest"], "npm test",
+    "python -m pytest tests/test_memory.py && npm test",
+    "tox -e py", ["uv", "run", "python", "-m", "pytest"], "npm test", "pnpm test", "yarn test", "nox -s tests",
 ])
 def test_runtime_guard_unknown_segments_never_silently_fall_back(tmp_path: Path, command) -> None:
     project = tmp_path / "project"

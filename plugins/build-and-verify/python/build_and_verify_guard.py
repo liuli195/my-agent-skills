@@ -26,14 +26,14 @@ import threading
 import time
 
 
-ADAPTER_VERSION = "python-audit-v1"
+ADAPTER_VERSION = "python-audit-v1+node-preload-v1"
 
 
 def protected_command(command, evidence: Path):
-    """Adapt known Python segments only; unknown wrappers never run unguarded."""
+    """Adapt known runtime segments only; unknown wrappers never run unguarded."""
     guard = str(Path(__file__).resolve())
     if isinstance(command, list):
-        return _python_command(command, guard, str(evidence), "0"), 1
+        return _runtime_command(command, guard, str(evidence), "0"), 1
     # This is deliberately not a shell interpreter: only success chaining and
     # environment assignments are accepted. All other shell syntax fails closed.
     if "$(" in command or "`" in command:
@@ -72,7 +72,7 @@ def protected_command(command, evidence: Path):
         if match is None:
             raise ValueError("runtime_guard_uncovered_command: missing executable")
         executable = match[1].strip("\"'")
-        launch = _python_command([executable], guard, str(evidence), str(count))
+        launch = _runtime_command([executable], guard, str(evidence), str(count))
         encoded = __import__("subprocess").list2cmdline(launch) if os.name == "nt" else shlex.join(launch)
         adapted.append(prefix + encoded + match[2])
         count += 1
@@ -82,12 +82,25 @@ def protected_command(command, evidence: Path):
     return "&&".join(adapted), count
 
 
-def _python_command(tokens, guard, evidence, segment):
+def _runtime_command(tokens, guard, evidence, segment):
     executable = str(tokens[0])
     name = executable.replace("\\", "/").rsplit("/", 1)[-1]
+    if re.fullmatch(r"node(?:\.exe)?", name, re.I):
+        return [sys.executable, "-S", "-B", guard, evidence, segment, platform.platform(), "--node", *tokens]
     if not re.fullmatch(r"python(?:\d+(?:\.\d+)*)?(?:\.exe)?", name, re.I):
-        raise ValueError(f"runtime_guard_uncovered_command: {executable}; Python adapter required")
+        raise ValueError(f"runtime_guard_uncovered_command: {executable}; Python or Node adapter required")
     return [executable, "-S", "-B", guard, evidence, segment, platform.platform(), *tokens[1:]]
+
+
+def _run_node(evidence, segment, args):
+    # NODE_OPTIONS preloads precede command-line preloads. Put protection first,
+    # retaining the user's options and the native command/argument semantics.
+    import subprocess
+    preload = Path(__file__).resolve().parent.parent / "bin/build-and-verify-node-guard.cjs"
+    env = {**os.environ, "BUILD_AND_VERIFY_GUARD_EVIDENCE": evidence,
+           "BUILD_AND_VERIFY_GUARD_SEGMENT": segment}
+    env["NODE_OPTIONS"] = "--require=" + json.dumps(str(preload)) + " " + env.get("NODE_OPTIONS", "")
+    return subprocess.call(args, env=env)
 
 
 def evidence_error(path: Path, segments: int) -> str | None:
@@ -97,6 +110,8 @@ def evidence_error(path: Path, segments: int) -> str | None:
         return "runtime_guard_evidence_missing"
     if not all(isinstance(item, dict) and isinstance(item.get("pid"), int)
             and isinstance(item.get("time"), (int, float))
+            and ("unit" not in item or isinstance(item["unit"], str))
+            and ("childUnit" not in item or isinstance(item["childUnit"], str))
             and item.get("event") in {"start", "finish", "worker", "violation"}
             and (item.get("event") != "worker" or isinstance(item.get("child"), int))
             and (item.get("event") != "violation" or isinstance(item.get("operation"), str))
@@ -106,11 +121,13 @@ def evidence_error(path: Path, segments: int) -> str | None:
     errors = []
     if violations:
         errors.append("runtime_guard_violation: " + ", ".join(sorted({item["operation"] + " " + item.get("target", "") for item in violations})))
-    started = {item["pid"] for item in records if item.get("event") == "start"}
-    finished = {item["pid"] for item in records if item.get("event") == "finish"}
-    workers = {item["child"] for item in records if item.get("event") == "worker"}
+    started = {item.get("unit", str(item["pid"])) for item in records if item.get("event") == "start"}
+    finished = {item.get("unit", str(item["pid"])) for item in records if item.get("event") == "finish"}
+    workers = {item.get("childUnit", str(item["child"])) for item in records if item.get("event") == "worker"}
+    worker_starts = {item.get("unit", str(item["pid"])) for item in records
+                     if item.get("event") == "start" and item.get("role") == "worker"}
     roots = {item.get("segment") for item in records if item.get("event") == "start" and item.get("role") == "root"}
-    if not started or started != finished or not workers <= started or roots != {str(i) for i in range(segments)}:
+    if not started or started != finished or workers != worker_starts or roots != {str(i) for i in range(segments)}:
         errors.append("runtime_guard_evidence_incomplete")
     return "; ".join(errors) if errors else None
 
@@ -118,7 +135,7 @@ def evidence_error(path: Path, segments: int) -> str | None:
 def evidence_summary(path: Path):
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     return {"adapter": ADAPTER_VERSION,
-        "workers": len({item["pid"] for item in records if item.get("event") == "start" and item.get("role") == "worker"}),
+        "workers": len({item.get("unit", str(item["pid"])) for item in records if item.get("event") == "start" and item.get("role") == "worker"}),
         "started": min(item["time"] for item in records), "finished": max(item["time"] for item in records)}
 
 
@@ -129,12 +146,21 @@ def _run(evidence: str, segment: str, platform_info: str, args: list[str]) -> in
     write = os.write
     pid = os.getpid()
     role = "worker" if args == ["--worker"] else "root"
+    violated = False
     def record(event, **fields):
+        nonlocal violated
+        violated = violated or event == "violation"
         write(fd, (json.dumps({"event": event, "pid": pid, "time": time.monotonic(), **fields}) + "\n").encode())
     record("start", role=role, segment=segment, adapter=ADAPTER_VERSION)
     def finish():
         record("finish")
         os.close(fd)
+        if violated:
+            # The shell must not start a later && segment after a swallowed
+            # violation. atexit also handles a project's SystemExit(0).
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(1)
     atexit.register(finish)
     # xdist's informational platform string must not invoke `uname -p` from a
     # guarded worker. The parent has already resolved this same OS metadata.
@@ -367,7 +393,8 @@ def _adapt_pytest_files(launch, capture_fds, evidence):
 
 if __name__ == "__main__":
     try:
-        raise SystemExit(_run(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]))
+        raise SystemExit(_run_node(sys.argv[1], sys.argv[2], sys.argv[5:]) if sys.argv[4:5] == ["--node"]
+                         else _run(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]))
     except Exception as error:
         print(f"runtime_guard_error: {type(error).__name__}: {error}", file=sys.stderr)
         raise SystemExit(1)
