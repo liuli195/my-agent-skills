@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.git_templates import copy_template
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "my-spec"
@@ -5880,8 +5882,27 @@ def test_myspec_recovery_init_preserves_existing_current(tmp_path: Path, recover
     assert not (work / "lock").exists()
 
 
+@pytest.fixture(scope="session")
+def recovery_git_seed() -> dict[str, Path]:
+    return {}
+
+
 @pytest.fixture
-def recovery_session(git_project: Path, recovery_cli):
+def recovery_git_project(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory,
+                         request: pytest.FixtureRequest, recovery_git_seed: dict[str, Path]) -> Path:
+    if "path" not in recovery_git_seed:
+        project = request.getfixturevalue("git_project")
+        seed = tmp_path_factory.mktemp("recovery-git-seed") / "project"
+        copy_template(project, seed)
+        # Publish only a complete, pristine repository, before recovery state exists.
+        recovery_git_seed["path"] = seed
+        return project
+    return copy_template(recovery_git_seed["path"], tmp_path / "project")
+
+
+@pytest.fixture
+def recovery_session(recovery_git_project: Path, recovery_cli):
+    git_project = recovery_git_project
     work = git_project / ".local" / "spec-work"
     specs = git_project / "myspec" / "specs"
     delta = work / "current" / "delta"
@@ -6260,7 +6281,8 @@ os.replace = replace
 
 
 @pytest.mark.parametrize("empty_specs", [False, True])
-def test_myspec_recovery_preserves_failed_first_preview(git_project: Path, recovery_cli, empty_specs: bool) -> None:
+def test_myspec_recovery_preserves_failed_first_preview(recovery_git_project: Path, recovery_cli, empty_specs: bool) -> None:
+    git_project = recovery_git_project
     work = git_project / ".local" / "spec-work"
     specs = git_project / "myspec" / "specs"
     delta = work / "current" / "delta"
@@ -6380,8 +6402,9 @@ def test_myspec_recovery_rejects_old_request_for_identical_new_legacy_session(
 
 @pytest.mark.parametrize("command", ["inspect", "abort"])
 def test_myspec_recovery_outputs_ascii_json_for_non_utf8_stdout(
-    git_project: Path, recovery_cli, command: str,
+    recovery_git_project: Path, recovery_cli, command: str,
 ) -> None:
+    git_project = recovery_git_project
     work = git_project / ".local" / "中文会话"
     specs = git_project / "中文规格" / "specs"
     delta, preview = work / "current/delta", work / "current/preview"
