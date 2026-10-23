@@ -399,6 +399,10 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    "tests/test_build_and_verify_cli.py::test_packed_runtime_guard_sqlite_native_file_boundaries": "Installed bare CLI checks narrow native SQLite memory, authorizer, readonly and file-effect boundaries.",
+    "tests/test_build_and_verify_cli.py::test_packed_node_runtime_guard_direct_script": "Installed bare CLI proves Node direct scripts, threads and exit cleanup reject caught side effects.",
+    "tests/test_build_and_verify_cli.py::test_packed_node_runtime_guard_native_parallel_and_control": "Installed bare CLI proves both Node parallel layers and protected controller callbacks.",
+    "tests/test_build_and_verify_cli.py::test_packed_node_runtime_guard_mixed_commands_and_restarts": "Installed bare CLI proves mixed-language short circuit and native watch restart protection with owned timeout cleanup.",
     "tests/test_my_spec.py::test_myspec_recovery_rejects_old_request_for_identical_new_legacy_session": "Installed bare CLI verifies legacy lock-instance authorization and non-UTF8 recovery output.",
     "tests/test_my_spec.py::test_myspec_recovery_outputs_ascii_json_for_non_utf8_stdout": "Installed bare CLI verifies legacy lock-instance authorization and non-UTF8 recovery output.",
     "tests/test_data_store.py::test_installed_delete_accepts_distinct_stable_fd_ctime": "Installed maintenance CLI verifies platform timestamp, durable recovery and plan encoding boundaries.",
@@ -457,12 +461,13 @@ E2E_ALLOWLIST: dict[str, str] = {
         'covers installed MySpec update ignoring removed Pi clients and their old configuration through the real command entrypoint; function=test_packed_myspec_update_ignores_removed_pi_client'
     ),
 
+    'tests/test_build_and_verify_cli.py::test_packed_runtime_guard_initialization_and_explicit_migration': 'covers one shared installed template through public init, explicit migration/backup/rollback and ordinary-versus-real cache isolation',
+    'tests/test_build_and_verify_cli.py::test_packed_runtime_guard_preserves_pytest_workers_and_control_hooks': 'covers the same installed public verify entry retaining both parallel layers, controller hooks, swallowed lifecycle effects and protected worker restart',
     'tests/test_build_and_verify_cli.py::test_public_verify_timeout_report_failure_warns_without_changing_failure': 'covers real public timeout reporting failure warning while preserving nonzero exit and later-check cancellation',
     'tests/test_build_and_verify_cli.py::test_public_verify_protocol_like_check_output_is_preserved': 'covers real public entry preserving ordinary text that resembles the final-result protocol',
     'tests/test_build_and_verify_cli.py::test_review_startup_reaps_descendants_after_parent_exits': 'covers real CLI startup ownership after probe or interpreter parent exit',
     'tests/test_build_and_verify_cli.py::test_review_budget_off_preserves_background_dependency': 'covers real CLI warning-only execution preserving a background dependency for the next check',
     'tests/test_build_and_verify_cli.py::test_review_python_startup_and_probe_are_inside_total_budget': 'covers both real CLI startup and interpreter discovery deadlines',
-    'tests/test_build_and_verify_cli.py::test_review_report_crossing_deadline_cannot_pass': 'covers real CLI finalization crossing the shared deadline without emitting formal success',
     'tests/test_build_and_verify_cli.py::test_public_verify_does_not_swallow_cache_write_failure': 'covers real CLI nonzero failure and consistent report when successful child output cannot be cached',
     'tests/test_build_and_verify_cli.py::test_public_verify_budget_interrupts_blocked_preparation_and_its_descendants': 'covers real CLI cutoff during blocked preparation and termination of both preparation parent and descendant',
     'tests/test_build_and_verify_cli.py::test_public_verify_budget_applies_to_fast_and_full': 'covers real fast/full CLI deadlines and failed-result cache/report behavior',

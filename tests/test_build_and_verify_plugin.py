@@ -1596,9 +1596,9 @@ def test_build_and_verify_init_writes_config_gitignore_and_cache(tmp_path: Path)
     assert (project / ".build-and-verify" / "cache").is_dir()
     assert not (project / "scripts" / "check.py").exists()
     assert read_json(project / ".build-and-verify" / "config.json") == {
-        "version": 1,
+        "version": 2,
         "build": {"checks": []},
-        "verify": {"checks": []},
+        "verify": {"realChecks": [], "checks": []},
     }
     assert (project / ".build-and-verify" / ".gitignore").read_text(
         encoding="utf-8"
@@ -1609,6 +1609,174 @@ def test_build_and_verify_init_writes_config_gitignore_and_cache(tmp_path: Path)
     assert not (project / ".build-and-verify" / "backups").exists()
     assert read_json(project / ".build-and-verify" / "config.json")["build"]["checks"] == []
     assert read_json(project / ".build-and-verify" / "config.json")["verify"]["checks"] == []
+
+
+@pytest.mark.parametrize("real", [None, "sample", ["missing"], ["sample", "sample"]])
+def test_runtime_guard_invalid_real_check_lists_fail_before_execution(tmp_path: Path, real) -> None:
+    project = tmp_path / "project"
+    write_runner_config(project, verify_checks=[{"id": "sample", "command": ["unknown"], "inputs": []}])
+    path = project / ".build-and-verify/config.json"
+    config = read_json(path)
+    config["version"] = 2
+    if real is not None:
+        config["verify"]["realChecks"] = real
+    write_json(path, config)
+    executor = FakeRunner()
+    result = run_check(project, "verify", runner=executor, changed_files=["code.py"])
+    assert result.returncode == 1
+    assert "verify.realChecks" in result.stderr
+    assert executor.calls == []
+
+
+def test_runtime_guard_invalid_migration_keeps_existing_configuration(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    write_runner_config(project)
+    path = project / ".build-and-verify/config.json"
+    before = path.read_bytes()
+    draft = tmp_path / "draft.json"
+    write_json(draft, {"version": 2, "verify": {"checks": []}})
+    result = run_build_and_verify("init", "--project", str(project), "--config", str(draft), "--overwrite")
+    assert result.returncode == 1
+    assert "verify.realChecks" in result.stderr
+    assert path.read_bytes() == before
+    assert not (project / ".build-and-verify/backups").exists()
+
+
+@pytest.mark.parametrize("real", [[], ["first"], ["first", "second"]])
+def test_runtime_guard_real_roles_do_not_select_checks(tmp_path: Path, real) -> None:
+    project = tmp_path / "project"
+    write_runner_config(project, verify_checks=[{"id": name, "command": ["external"],
+        "paths": [f"{name}/**"], "inputs": []} for name in ("first", "second")])
+    path = project / ".build-and-verify/config.json"
+    config = read_json(path)
+    config.update(version=2)
+    config["verify"]["realChecks"] = real
+    write_json(path, config)
+    executor = FakeRunner()
+    result = run_check(project, "verify", runner=executor, changed_files=["unrelated.py"])
+    assert result.returncode == 0
+    assert "status: skipped" in result.stdout
+    assert executor.calls == []
+
+
+def test_runtime_guard_missing_protection_evidence_cannot_cache_success(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    write_runner_config(project, verify_checks=[{"id": "ordinary", "command": [sys.executable, "memory.py"], "inputs": []}])
+    path = project / ".build-and-verify/config.json"
+    config = read_json(path)
+    config.update(version=2)
+    config["verify"]["realChecks"] = []
+    write_json(path, config)
+    executor = FakeRunner()
+    result = run_check(project, "verify", runner=executor, changed_files=["memory.py"])
+    assert result.returncode == 1
+    assert "runtime_guard_evidence_missing" in result.stderr
+    repeated = run_check(project, "verify", runner=executor, changed_files=["memory.py"])
+    assert repeated.returncode == 1 and "cache-hit:" not in repeated.stdout
+    assert len(executor.calls) == 2
+
+
+@pytest.mark.parametrize("child_unit,finish,passed", [
+    ("worker-0", True, True), ("wrong-worker", True, False), ("worker-0", False, False),
+])
+def test_runtime_guard_matches_work_units_across_launcher_pids(child_unit, finish, passed) -> None:
+    records = [
+        {"event": "start", "pid": 100, "unit": "root", "role": "root", "segment": "0"},
+        {"event": "worker", "pid": 100, "unit": "root", "child": 200, "childUnit": child_unit},
+        {"event": "start", "pid": 300, "unit": "worker-0", "role": "worker", "segment": "0"},
+        {"event": "finish", "pid": 100, "unit": "root"},
+    ]
+    if finish:
+        records.append({"event": "finish", "pid": 300, "unit": "worker-0"})
+    class Evidence:
+        def read_text(self, **kwargs):
+            return "\n".join(json.dumps({"time": 1.0, **record}) for record in records)
+    error = load_build_and_verify_runner_module()._test_guard().evidence_error(Evidence(), 1)
+    assert (error is None) is passed
+    if not passed:
+        assert "runtime_guard_evidence_incomplete" in error
+
+
+@pytest.mark.parametrize("command", [
+    'set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1&& set NUMBA_DISABLE_JIT=1&& ".\\.venv\\Scripts\\python.exe" -m pytest "tests/test_math.py::test_values[a b]" --ignore=tests/slow -k "not slow and math"',
+    'set PYTEST_ADDOPTS=-n 4&& .\\.venv\\Scripts\\python.exe -m pytest -p xdist.plugin tests/test_tree.py',
+    'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest "tests/test_math.py::test_values[a b]" -k "not slow" && python direct.py',
+    'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest "tests/test_math.py::test_values[a b]" -k "not slow" && node --test "tests/memory test.mjs"',
+    'set NODE_ENV=test&& "C:\\Program Files\\nodejs\\node.exe" "scripts\\direct script.js" --value="a b"',
+    [sys.executable, "-m", "unittest", "tests.test_memory"],
+])
+def test_runtime_guard_preserves_representative_python_commands(tmp_path: Path, command) -> None:
+    project = tmp_path / "project"
+    write_runner_config(project, verify_checks=[{"id": "ordinary", "command": command, "inputs": []}])
+    path = project / ".build-and-verify/config.json"
+    config = read_json(path)
+    config.update(version=2)
+    config["verify"]["realChecks"] = []
+    write_json(path, config)
+    executor = FakeRunner()
+    result = run_check(project, "verify", runner=executor, changed_files=["memory.py"])
+    assert result.returncode == 1 and "runtime_guard_evidence_missing" in result.stderr
+    assert len(executor.calls) == 1
+    adapted = executor.calls[0]
+    if isinstance(command, str):
+        if 'node.exe' in command:
+            assert adapted.startswith('set NODE_ENV=test&&')
+            assert '"scripts\\direct script.js" --value="a b"' in adapted
+            return
+        if command.startswith("set "):
+            prefix = command[:command.rindex("&&") + 2]
+            assert adapted.startswith(prefix)
+        assert command[command.index(" -m "):].split("&&", 1)[0].rstrip() in adapted
+        if "&& node --test" in command:
+            assert 'node --test "tests/memory test.mjs"' in adapted
+        assert ("NUMBA_DISABLE_JIT" in adapted) == ("NUMBA_DISABLE_JIT" in command)
+        assert ("-p xdist.plugin" in adapted) == ("-p xdist.plugin" in command)
+    else:
+        assert adapted[-3:] == ["-m", "unittest", "tests.test_memory"]
+
+
+@pytest.mark.parametrize("command", [
+    "python -m pytest tests/test_memory.py && npm test",
+    "tox -e py", ["uv", "run", "python", "-m", "pytest"], "npm test", "pnpm test", "yarn test", "nox -s tests",
+])
+def test_runtime_guard_unknown_segments_never_silently_fall_back(tmp_path: Path, command) -> None:
+    project = tmp_path / "project"
+    write_runner_config(project, verify_checks=[{"id": "check", "command": command, "inputs": []}])
+    executor = FakeRunner()
+    legacy = run_check(project, "verify", runner=executor, changed_files=["memory.py"])
+    assert legacy.returncode == 0 and executor.calls == [command]
+    path = project / ".build-and-verify/config.json"
+    config = read_json(path)
+    config.update(version=2)
+    config["verify"]["realChecks"] = []
+    write_json(path, config)
+    executor = FakeRunner()
+    protected = run_check(project, "verify", runner=executor, changed_files=["memory.py"])
+    assert protected.returncode == 1
+    assert "runtime_guard_uncovered_command" in protected.stderr
+    assert executor.calls == []
+
+
+@pytest.mark.parametrize("real", [["first"], ["first", "second"]])
+def test_runtime_guard_multiple_real_checks_share_existing_scheduler(tmp_path: Path, real) -> None:
+    project = tmp_path / "project"
+    commands = [["external", name] for name in real]
+    write_runner_config(project, verify_checks=[{"id": name, "command": command, "checkParallel": True, "inputs": []}
+        for name, command in zip(real, commands)], verify_config={"maxParallel": 8, "fullBudgetSeconds": 60})
+    path = project / ".build-and-verify/config.json"
+    config = read_json(path)
+    config.update(version=2)
+    config["verify"]["realChecks"] = real
+    write_json(path, config)
+    executor = FakeRunner()
+    result = run_check(project, "verify", runner=executor, changed_files=["memory.py"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert sorted(executor.calls) == sorted(commands)
+    assert read_json(path) == config
+    report = run_check(project, "verify", "--full", "--performance-report", runner=FakeRunner(), changed_files=["memory.py"])
+    assert report.returncode == 0, report.stdout + report.stderr
+    payload = read_json(project / ".build-and-verify/runs/performance-report.json")
+    assert all(check["testRuntimeRole"] == "real-unprotected" for check in payload["checks"])
 
 
 def test_build_and_verify_init_writes_confirmed_config_with_overwrite(
@@ -2713,6 +2881,57 @@ def test_build_and_verify_full_performance_report_matrix(
         assert report["verificationStatus"] == (
             "failed" if functional_returncode else "passed"
         )
+
+
+def test_review_report_crossing_deadline_cannot_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from unittest.mock import Mock
+
+    module = load_build_and_verify_module()
+    runner = module._runner()
+    project = tmp_path / "project"
+    write_runner_config(project, verify_config={"fullBudgetSeconds": 1},
+        verify_checks=[{"id": "quick", "command": ["quick"], "inputs": []}])
+    executor = FakeRunner({("quick",): completed(["quick"], stdout="CHECK_COMPLETED\n")})
+    clock = [0.0]
+    control = runner.RunControl(1.0)
+    timer = Mock()
+    reports = []
+
+    def report_io(path: Path, payload: dict) -> bool:
+        assert path == project / ".build-and-verify/runs/performance-report.json"
+        reports.append(dict(payload))
+        if len(reports) == 1:
+            assert not control.expired()
+            assert payload["checks"][0]["status"] == "passed"
+            clock[0] = 1.1
+        return True
+
+    monkeypatch.delenv("BUILD_AND_VERIFY_STARTED_MONOTONIC", raising=False)
+    monkeypatch.delenv("BUILD_AND_VERIFY_STARTUP_GUARD", raising=False)
+    monkeypatch.setenv("CI", "false")
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
+    monkeypatch.setattr(runner.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(runner, "_invocation_guard", lambda *args, **kwargs: (control, timer))
+    monkeypatch.setattr(runner, "_write_performance_report", report_io)
+    monkeypatch.setattr(module, "_RUNNER_MODULE", FakeRunnerModule(runner, executor, ["code.py"]))
+    monkeypatch.setattr(module, "_runtime_metadata", lambda: {
+        "runtime_version": "test-runtime", "implementation_identity": "test-implementation",
+    })
+    monkeypatch.setattr(sys, "argv", [str(BUILD_AND_VERIFY_SCRIPT), "verify", "--project",
+        str(project), "--execution-context", "local", "--full", "--performance-report"])
+
+    assert module.main() == 1
+    assert executor.calls == [["quick"]]
+    assert reports[-1]["verificationStatus"] == "failed"
+    assert reports[-1]["reason"] == "total_budget_timeout"
+    assert control.finished.is_set() and control.phase == "finalization"
+    timer.cancel.assert_called_once()
+    output = capsys.readouterr().out
+    assert "check-end: quick status=passed" in output
+    assert "total_budget_timeout" in output and "status: failed" in output
+    assert "status: passed" not in output
 
 
 def test_local_budget_keeps_guard_until_migration_and_finalization(
@@ -4807,7 +5026,7 @@ def test_build_and_verify_runner_cache_key_changes_with_check_contract(
     elif mutation == "inputs":
         changed_config = config(inputs=["inputs/v2.txt"])
     elif mutation == "config":
-        changed_config = config(version=2)
+        changed_config["verify"]["maxParallel"] = 2
     else:
         raise AssertionError(f"unsupported mutation: {mutation}")
 
