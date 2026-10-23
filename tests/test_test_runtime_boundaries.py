@@ -468,7 +468,6 @@ E2E_ALLOWLIST: dict[str, str] = {
     'tests/test_build_and_verify_cli.py::test_review_startup_reaps_descendants_after_parent_exits': 'covers real CLI startup ownership after probe or interpreter parent exit',
     'tests/test_build_and_verify_cli.py::test_review_budget_off_preserves_background_dependency': 'covers real CLI warning-only execution preserving a background dependency for the next check',
     'tests/test_build_and_verify_cli.py::test_review_python_startup_and_probe_are_inside_total_budget': 'covers both real CLI startup and interpreter discovery deadlines',
-    'tests/test_build_and_verify_cli.py::test_review_report_crossing_deadline_cannot_pass': 'covers real CLI finalization crossing the shared deadline without emitting formal success',
     'tests/test_build_and_verify_cli.py::test_public_verify_does_not_swallow_cache_write_failure': 'covers real CLI nonzero failure and consistent report when successful child output cannot be cached',
     'tests/test_build_and_verify_cli.py::test_public_verify_budget_interrupts_blocked_preparation_and_its_descendants': 'covers real CLI cutoff during blocked preparation and termination of both preparation parent and descendant',
     'tests/test_build_and_verify_cli.py::test_public_verify_budget_applies_to_fast_and_full': 'covers real fast/full CLI deadlines and failed-result cache/report behavior',

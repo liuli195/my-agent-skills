@@ -2862,6 +2862,57 @@ def test_build_and_verify_full_performance_report_matrix(
         )
 
 
+def test_review_report_crossing_deadline_cannot_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from unittest.mock import Mock
+
+    module = load_build_and_verify_module()
+    runner = module._runner()
+    project = tmp_path / "project"
+    write_runner_config(project, verify_config={"fullBudgetSeconds": 1},
+        verify_checks=[{"id": "quick", "command": ["quick"], "inputs": []}])
+    executor = FakeRunner({("quick",): completed(["quick"], stdout="CHECK_COMPLETED\n")})
+    clock = [0.0]
+    control = runner.RunControl(1.0)
+    timer = Mock()
+    reports = []
+
+    def report_io(path: Path, payload: dict) -> bool:
+        assert path == project / ".build-and-verify/runs/performance-report.json"
+        reports.append(dict(payload))
+        if len(reports) == 1:
+            assert not control.expired()
+            assert payload["checks"][0]["status"] == "passed"
+            clock[0] = 1.1
+        return True
+
+    monkeypatch.delenv("BUILD_AND_VERIFY_STARTED_MONOTONIC", raising=False)
+    monkeypatch.delenv("BUILD_AND_VERIFY_STARTUP_GUARD", raising=False)
+    monkeypatch.setenv("CI", "false")
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
+    monkeypatch.setattr(runner.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(runner, "_invocation_guard", lambda *args, **kwargs: (control, timer))
+    monkeypatch.setattr(runner, "_write_performance_report", report_io)
+    monkeypatch.setattr(module, "_RUNNER_MODULE", FakeRunnerModule(runner, executor, ["code.py"]))
+    monkeypatch.setattr(module, "_runtime_metadata", lambda: {
+        "runtime_version": "test-runtime", "implementation_identity": "test-implementation",
+    })
+    monkeypatch.setattr(sys, "argv", [str(BUILD_AND_VERIFY_SCRIPT), "verify", "--project",
+        str(project), "--execution-context", "local", "--full", "--performance-report"])
+
+    assert module.main() == 1
+    assert executor.calls == [["quick"]]
+    assert reports[-1]["verificationStatus"] == "failed"
+    assert reports[-1]["reason"] == "total_budget_timeout"
+    assert control.finished.is_set() and control.phase == "finalization"
+    timer.cancel.assert_called_once()
+    output = capsys.readouterr().out
+    assert "check-end: quick status=passed" in output
+    assert "total_budget_timeout" in output and "status: failed" in output
+    assert "status: passed" not in output
+
+
 def test_local_budget_keeps_guard_until_migration_and_finalization(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
