@@ -1,0 +1,3 @@
+- [x] 添加 CodeQL 文档模板失败测试。
+- [x] 补充 questionnaire/config-draft/validation 的扫描结果来源说明。
+- [x] 运行聚焦测试验证。

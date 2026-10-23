@@ -1,0 +1,61 @@
+## 1. Test Coverage
+
+- [x] 1.1 Add tests for `scripts/check.py build` covering Claude validation command discovery, marketplace source validation, manifest name matching, Codex manifest path checks, projection registration consistency, and Guard Profile（守卫画像）template mirror checks.
+- [x] 1.2 Add tests for `scripts/check.py verify` proving it delegates to `python -m pytest` and uses repository pytest（Python 测试框架）configuration.
+- [x] 1.3 Add tests proving `.comet/config.yaml` does not duplicate `build_command` or `verify_command` wiring.
+
+## 2. Build And Verify Commands
+
+- [x] 2.1 Add `scripts/check.py` with `build` and `verify` subcommands.
+- [x] 2.2 Implement Claude（Claude 编码工具）plugin validation for the repository marketplace and every local plugin source.
+- [x] 2.3 Implement local marketplace and plugin manifest consistency checks for Claude and Codex（OpenAI 编码代理）surfaces.
+- [x] 2.4 Implement release-flow projection（发布流程投影）plugin registration consistency checks.
+- [x] 2.5 Implement Guard Profile template mirror consistency checks.
+- [x] 2.6 Add standard pytest configuration in `pyproject.toml`.
+
+## 3. Comet Integration
+
+- [x] 3.1 Keep `.comet/config.yaml` free of duplicate build and verify command wiring.
+- [x] 3.2 Remove or retire `.comet/build-check.sh` after confirming it is no longer referenced.
+
+## 4. Verification
+
+- [x] 4.1 Run focused tests for the new command behavior.
+- [x] 4.2 Run `python scripts/check.py build`.
+- [x] 4.3 Run `python scripts/check.py verify`.
+- [x] 4.4 Confirm no Comet（双星流程）source files or installed Comet scripts were modified.
+
+## 5. Agent Guard Hotfix
+
+- [x] 5.1 Reproduce the Global Command Guard（全局命令守卫）miss through direct hook（直接钩子）and standard event bridge（标准事件桥接）inputs.
+- [x] 5.2 Preserve top-level `command` fields when adapting PreToolUse（工具使用前）payloads.
+- [x] 5.3 Add regression tests for both `hook_router.py` and `run_guard_event.py` command-field paths.
+- [x] 5.4 Re-run Agent Guard runtime（运行时）tests and full repository verify（验证）.
+
+## 6. Cross-Agent Review Hotfix
+
+- [x] 6.1 Reproduce `Reviewer returned invalid findings` from structured reviewer output.
+- [x] 6.2 Normalize dict-shaped reviewer `findings` with `issues` or `gaps` without creating false CRITICAL（严重）findings.
+- [x] 6.3 Add regression tests for pass dict findings and gap dict findings.
+- [x] 6.4 Re-run cross-agent-review（跨代理审查）tests and full repository verify（验证）.
+
+## 7. Agent Guard Hook Blocking Hotfix
+
+- [x] 7.1 Reproduce that Global Command Guard（全局命令守卫）writes deny audit（拒绝审计） but the host still executes the Comet build transition.
+- [x] 7.2 Align stdin hook（标准输入钩子） deny/ask results with the host block exit code `2`.
+- [x] 7.3 Keep `--payload-file` debug semantics unchanged for runtime tests and standard event bridge（标准事件桥接） calls.
+- [x] 7.4 Add regression coverage for stdin hook blocking and re-run Agent Guard runtime（运行时） tests.
+
+## 8. Agent Guard Codex Hook Protocol Hotfix
+
+- [x] 8.1 Reproduce that Codex Plugin Hook（插件钩子） records `PreToolUse Failed` but still executes when Agent Guard only returns legacy `{status: "deny"}` plus exit `2`.
+- [x] 8.2 Emit Codex-native `hookSpecificOutput.permissionDecision: "deny"` with `permissionDecisionReason` for Codex stdin hooks（标准输入钩子）.
+- [x] 8.3 Preserve Claude stdin hook（标准输入钩子） blocking as exit `2` with stderr reason.
+- [x] 8.4 Add and validate a repo-local DEV Codex marketplace（开发市场） under `.agents/plugins/marketplace.json`.
+- [x] 8.5 Re-run focused hook protocol tests, package tests, build checks, and full verify（验证）.
+
+## 9. Cross-Agent Review Input Snapshot Optimization
+
+- [x] 9.1 Add a regression test proving cross-agent-review（跨代理审查） archives input files under the review output directory.
+- [x] 9.2 Copy review inputs into `inputs/` before reviewer dispatch and read reviewer prompts from those snapshots.
+- [x] 9.3 Update cross-agent-review skill instructions and delta spec（增量规格） for the input snapshot path.

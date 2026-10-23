@@ -1,0 +1,3 @@
+- [x] Add failing package test for the mandatory invocation boundary.
+- [x] Update `cross-agent-review` Skill documentation with the approved boundary text.
+- [x] Run focused and repository verification.

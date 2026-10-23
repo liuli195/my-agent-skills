@@ -1,0 +1,61 @@
+{
+  "schema": "comet.native.implementation-scope.v2",
+  "contractHash": "b7dfc535aacb1380689cbff568ea8c6853b25820ca826a8f0fbaa4b1016b5cc7",
+  "baselineProjectionRef": "runtime/evidence/snapshots/0560b48b58b5dd3470f71bda86d0b4abb30677573e10716b76a60e364f2fae40.json",
+  "baselineProjectionHash": "0560b48b58b5dd3470f71bda86d0b4abb30677573e10716b76a60e364f2fae40",
+  "currentProjectionRef": "runtime/evidence/snapshots/28172c56026bbfa1f68df15a5afaaa3096c3c785dfe1a5c398b9117fbe74affe.json",
+  "currentProjectionHash": "28172c56026bbfa1f68df15a5afaaa3096c3c785dfe1a5c398b9117fbe74affe",
+  "complete": true,
+  "declaredArtifacts": [
+    {
+      "path": "plugins/pi-cache-diagnostics/extensions/pi-cache-diagnostics.ts",
+      "kind": "file"
+    },
+    {
+      "path": "tests/pi_cache_diagnostics.test.mjs",
+      "kind": "file"
+    }
+  ],
+  "changes": [
+    {
+      "path": "plugins/pi-cache-diagnostics/extensions/pi-cache-diagnostics.ts",
+      "kind": "modified",
+      "before": {
+        "hash": "ddd7ed5a9724a678002b9ce79db2aec4be65395ad0087584ab6c0c7a155332d2",
+        "size": 12284
+      },
+      "after": {
+        "hash": "87e31e19ba5e8b97bfaaf279d451b09c86e40c73349d78e72145ba49e9af6f71",
+        "size": 13281
+      },
+      "attributedTo": [
+        {
+          "path": "plugins/pi-cache-diagnostics/extensions/pi-cache-diagnostics.ts",
+          "kind": "file"
+        }
+      ]
+    },
+    {
+      "path": "tests/pi_cache_diagnostics.test.mjs",
+      "kind": "modified",
+      "before": {
+        "hash": "e9a31713ea336a72fdab9da3fab2035af3c6b84d1cfc3be025e6eb6f81f564ce",
+        "size": 6384
+      },
+      "after": {
+        "hash": "bd59d56a237a686819db38c42f92fb029664edba607dce8fc36b3f621c6a0f0a",
+        "size": 5996
+      },
+      "attributedTo": [
+        {
+          "path": "tests/pi_cache_diagnostics.test.mjs",
+          "kind": "file"
+        }
+      ]
+    }
+  ],
+  "unattributed": [],
+  "unresolvedScopes": [],
+  "noCodeReason": null,
+  "scopeHash": "6f4dfcc4624e07bd76ae30ef91a798b5ed8c0a62e68baf6f0ce565426a0d2a29"
+}
