@@ -189,6 +189,16 @@ function adaptSQLite() {
       return blocked('runtime_guard_uncovered_native')('node:sqlite requires its native setAuthorizer interface');
     }
     if (path !== ':memory:' && options.readOnly !== true) return blocked('sqlite.open')(path);
+    if (path !== ':memory:') {
+      const descriptor = fs.openSync(path, 'r');
+      const header = Buffer.alloc(20);
+      try { fs.readSync(descriptor, header, 0, header.length, 0); }
+      finally { fs.closeSync(descriptor); }
+      if (header.subarray(0, 16).equals(Buffer.from('SQLite format 3\0')) &&
+          (header[18] === 2 || header[19] === 2)) {
+        return blocked('runtime_guard_uncovered_native')('SQLite WAL: ' + String(path));
+      }
+    }
     if (options.allowExtension === true) return blocked('sqlite.enableLoadExtension')(path);
   }
   function protect(db) {

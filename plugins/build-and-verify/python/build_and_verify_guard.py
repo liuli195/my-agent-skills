@@ -99,7 +99,7 @@ def _run_node(evidence, segment, args):
     preload = Path(__file__).resolve().parent.parent / "bin/build-and-verify-node-guard.cjs"
     env = {**os.environ, "BUILD_AND_VERIFY_GUARD_EVIDENCE": evidence,
            "BUILD_AND_VERIFY_GUARD_SEGMENT": segment}
-    env["NODE_OPTIONS"] = "--require=" + json.dumps(str(preload)) + " " + env.get("NODE_OPTIONS", "")
+    env["NODE_OPTIONS"] = "--require=" + json.dumps(str(preload), ensure_ascii=False) + " " + env.get("NODE_OPTIONS", "")
     return subprocess.call(args, env=env)
 
 
@@ -257,7 +257,7 @@ def _run(evidence: str, segment: str, platform_info: str, args: list[str]) -> in
 def _adapt_sqlite(record, launch):
     import sqlite3
     import sqlite3.dbapi2 as dbapi
-    from urllib.parse import parse_qs, urlsplit
+    from urllib.parse import parse_qs, unquote, urlsplit
     base = sqlite3.Connection
     connect = sqlite3.connect
     def reject(operation, target):
@@ -271,6 +271,18 @@ def _adapt_sqlite(record, launch):
     def readonly_uri(value):
         parsed = urlsplit(os.fsdecode(value))
         return parsed.scheme == "file" and parse_qs(parsed.query).get("mode") == ["ro"]
+    def reject_wal_uri(value):
+        path = urlsplit(os.fsdecode(value)).path
+        if os.name == "nt":
+            from nturl2path import url2pathname
+            path = url2pathname(path)
+        else:
+            path = unquote(path)
+        with open(path, "rb") as database:
+            header = database.read(20)
+        if header[:16] == b"SQLite format 3\x00" and 2 in header[18:20]:
+            reject("runtime_guard_uncovered_native", "SQLite WAL: " + os.fsdecode(value))
+            raise PermissionError("runtime_guard_uncovered_native: SQLite WAL requires an explicit real check")
     def authorize(connection, action, first, second, database, trigger):
         if ((action == sqlite3.SQLITE_ATTACH and first != ":memory:")
                 or (action == sqlite3.SQLITE_PRAGMA and first.lower() in {"temp_store", "temp_store_directory"}
@@ -287,6 +299,8 @@ def _adapt_sqlite(record, launch):
             target = args[0] if args else kwargs.get("database")
             uri = args[7] if len(args) > 7 else kwargs.get("uri", False)
             self._bav_readonly = bool(uri and readonly_uri(target))
+            if self._bav_readonly:
+                reject_wal_uri(target)
             launch.sqlite_target = target if self._bav_readonly else None
             try:
                 super().__init__(*args, **kwargs)

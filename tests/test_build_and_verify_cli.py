@@ -765,6 +765,10 @@ def test_packed_runtime_guard_preserves_pytest_workers_and_control_hooks(tmp_pat
 
 def test_packed_node_runtime_guard_direct_script(tmp_path: Path) -> None:
     _, prefix, executable = _installed_build_and_verify(tmp_path)
+    localized_prefix = tmp_path / "中文 安装目录"
+    shutil.copytree(prefix, localized_prefix, symlinks=True)
+    prefix = localized_prefix
+    executable = prefix / ("build-and-verify.cmd" if sys.platform == "win32" else "bin/build-and-verify")
     env = _isolated_env(tmp_path, prefix)
     project = tmp_path / "project"
     (project / ".build-and-verify").mkdir(parents=True)
@@ -1022,6 +1026,8 @@ def test_packed_runtime_guard_sqlite_native_file_boundaries(tmp_path: Path) -> N
     assert "NODE_SQLITE_MEMORY_CALLBACK_REOPEN_READ_OK" in allowed.stdout
     script.write_text("import sqlite from 'node:sqlite';\n"
         "const db=new sqlite.DatabaseSync(':memory:',{open:false});db.open();\n"
+        "db.exec('create table t(value)');const clone=new sqlite.DatabaseSync(':memory:');clone.deserialize(db.serialize());\n"
+        "try{clone.exec(\"ATTACH DATABASE 'x' AS after_deserialize\")}catch{}\n"
         "for(const sql of [\"ATTACH DATABASE 'attach-effect' AS bad\",\"VACUUM INTO 'vacuum-effect'\",'PRAGMA temp_store=FILE']){try{db.exec(sql)}catch{}}\n"
         "try{new sqlite.DatabaseSync('constructor-effect')}catch{}\n"
         "const options={open:false};const lazy=new sqlite.DatabaseSync('lazy-effect',options);options.readOnly=true;try{lazy.open()}catch{}\n"
@@ -1034,9 +1040,52 @@ def test_packed_runtime_guard_sqlite_native_file_boundaries(tmp_path: Path) -> N
     blocked = verify()
     assert blocked.returncode == 1, blocked.stdout + blocked.stderr
     assert "NODE_SQLITE_CAUGHT_NATIVE_EFFECTS" in blocked.stdout
-    assert "sqlite" in blocked.stderr
+    assert "sqlite.authorizer x" in blocked.stderr
+    assert not (project / "x").exists()
     for name in ("attach", "vacuum", "constructor", "lazy", "extension", "backup", "callback", "reopen"):
         assert not (project / (name + "-effect")).exists()
+    # A read-only WAL connection may create native -wal/-shm files. Ordinary
+    # checks reject it before native open; an explicit real role still runs it.
+    for language in ("python", "node"):
+        database = project / f"wal {language}.db"
+        fixture = sqlite3.connect(database)
+        fixture.execute("pragma journal_mode=wal")
+        fixture.execute("create table t(value)")
+        fixture.execute("insert into t values (42)")
+        fixture.commit()
+        fixture.close()
+        before = database.read_bytes()
+        assert not Path(str(database) + "-wal").exists()
+        assert not Path(str(database) + "-shm").exists()
+        if language == "python":
+            wal_script = project / "wal.py"
+            wal_script.write_text("import sqlite3\n"
+                "try:\n c=sqlite3.connect('file:wal%20python.db?mode=ro',uri=True)\n"
+                "except PermissionError: print('WAL_OPEN_CAUGHT')\n"
+                "else:\n assert c.execute('select value from t').fetchone()==(42,)\n c.close()\n print('WAL_READ_OK')\n")
+            command = [sys.executable, "wal.py"]
+        else:
+            wal_script = project / "wal.cjs"
+            wal_script.write_text("const {DatabaseSync}=require('node:sqlite');let c;\n"
+                "try{c=new DatabaseSync('wal node.db',{readOnly:true});}catch{console.log('WAL_OPEN_CAUGHT');}\n"
+                "if(c){require('node:assert/strict').equal(c.prepare('select value from t').get().value,42);c.close();console.log('WAL_READ_OK');}\n")
+            command = [shutil.which("node"), "wal.cjs"]
+        check_id = "wal-" + language
+        config["verify"] = {"realChecks": [], "checks": [{"id": check_id, "command": command,
+            "inputs": [wal_script.name, database.name]}]}
+        path.write_text(json.dumps(config))
+        ordinary = verify()
+        assert ordinary.returncode == 1, ordinary.stdout + ordinary.stderr
+        assert "runtime_guard_uncovered_native" in ordinary.stderr and "WAL" in ordinary.stderr
+        assert "WAL_OPEN_CAUGHT" in ordinary.stdout and "WAL_READ_OK" not in ordinary.stdout
+        assert database.read_bytes() == before
+        assert not Path(str(database) + "-wal").exists()
+        assert not Path(str(database) + "-shm").exists()
+        config["verify"]["realChecks"] = [check_id]
+        path.write_text(json.dumps(config))
+        real = verify()
+        assert real.returncode == 0, real.stdout + real.stderr
+        assert "real-unprotected" in real.stdout and "WAL_READ_OK" in real.stdout
 
 
 def test_install_template_retries_after_pack_failure(tmp_path: Path, monkeypatch) -> None:
