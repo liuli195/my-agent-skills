@@ -501,9 +501,10 @@ def _real_controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Pa
         ["git", "-C", source, "add", "."],
         ["git", "-C", source, "-c", "user.name=MySpec Test", "-c", "user.email=myspec@example.invalid", "commit", "-m", "development source"],
         ["git", "-C", source, "checkout-index", "--force", "--", "plugins/my-spec/bin/myspec.js"],
+        # Seed before registering origin so Git cannot create a tracking ref.
+        ["git", "-C", source, "push", remote.as_uri(), "HEAD:refs/heads/main"],
         ["git", "-C", source, "remote", "add", "origin", "https://github.com/liuli195/my-agent-skills"],
         ["git", "-C", source, "config", f"url.{remote.as_uri()}.insteadOf", "https://github.com/liuli195/my-agent-skills"],
-        ["git", "-C", source, "push", remote.as_uri(), "HEAD:refs/heads/main"],
     ):
         result = subprocess.run(command, text=True, capture_output=True, check=False)
         assert result.returncode == 0, result.stderr
@@ -3076,6 +3077,13 @@ def test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit(
     installed.mkdir()
     executable, installed_package = install_packed_myspec(installed)
     source = controlled_dev_source(tmp_path)
+    assert not subprocess.run(
+        ["git", "for-each-ref", "--format=%(refname)", "refs/remotes/origin"],
+        cwd=source,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
     env = controlled_dev_env(isolated_myspec_env(tmp_path, npm_prefix_for(installed_package)), source)
     assert run_cli(executable, "init", "--dev", "--source", source, env=env, cwd=source).returncode == 0
 
