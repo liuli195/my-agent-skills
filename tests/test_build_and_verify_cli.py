@@ -489,6 +489,13 @@ def test_packed_runtime_guard_initialization_and_explicit_migration(tmp_path: Pa
     assert json.loads(config_path.read_text()) == {
         "version": 2, "build": {"checks": []},
         "verify": {"realChecks": [], "checks": []}}
+    config_path.write_text(json.dumps({"version": 2, "build": {"checks": [
+        {"id": "build.memory", "command": [sys.executable, "-c", "print('PACKED_BUILD_OK')"], "inputs": []}]},
+        "verify": {"realChecks": [], "checks": []}}))
+    built = subprocess.run([executable, "build", "--project", str(project)],
+        env=env, text=True, capture_output=True, check=False)
+    assert built.returncode == 0, built.stdout + built.stderr
+    assert "checked: build.memory" in built.stdout and "PACKED_BUILD_OK" in built.stdout
     legacy = {"version": 1, "verify": {"checks": [
         {"id": "ordinary", "command": [sys.executable, "ordinary.py"], "inputs": ["ordinary.py"]}]}}
     config_path.write_text(json.dumps(legacy))
@@ -544,7 +551,6 @@ def test_packed_runtime_guard_initialization_and_explicit_migration(tmp_path: Pa
     unsupported_native = verify()
     assert unsupported_native.returncode == 1, unsupported_native.stdout + unsupported_native.stderr
     assert "runtime_guard_uncovered_native" in unsupported_native.stderr
-    pytest.importorskip("duckdb", reason="DuckDB live query is unverified without the existing development dependency")
     (project / "ordinary.py").write_text(
         "import duckdb\n"
         "connection=duckdb.connect(':memory:')\n"
