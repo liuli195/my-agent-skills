@@ -96,7 +96,7 @@ Python（编程语言）调用：`read_keys(root, table, keys, columns=None)`；
 
 预演：`python <skill>/scripts/data_store.py --root <data> delete-plan --targets '{"measurements":["batch_01","batch_02"]}' > <project>/delete-plan.json`
 
-只接受非空逻辑表与精确键列表的映射，沿用写入名称和大小写规范，重复目标只保留一次。预演只读取明确目标，不枚举无关历史；缺失、不可读或重定向目标不能生成有效计划。输出包含唯一 plan_id（计划身份）、精确数据根及其文件系统身份、规范化表和键、表目录身份、分片设备与文件身份、大小、纳秒修改／变更时间及 SHA-256（安全散列）。同名或同内容替换也须重新预演与授权，不以路径或键相同视为有效。计划输出使用 ASCII（基本字符集）转义保存非英文路径，可直接经不同本机文本编码的管道重定向，再由执行入口按 UTF-8（统一字符编码）读取。
+只接受非空逻辑表与精确键列表的映射，沿用写入名称和大小写规范，重复目标只保留一次。预演只读取明确目标，不枚举无关历史；缺失、不可读或重定向目标不能生成有效计划。输出包含唯一 plan_id（计划身份）、精确数据根及其文件系统身份、规范化表和键、表目录身份、分片设备与文件身份、大小、纳秒修改／变更时间及 SHA-256（安全散列）。同名或同内容替换也须重新预演与授权，不以路径或键相同视为有效。计划输出使用 ASCII（基本字符集）转义保存非英文路径，可经 ASCII 兼容编码的管道重定向，再由执行入口按 UTF-8（统一字符编码）读取；不要让外壳另行将计划文件转换为 UTF-16（另一种统一字符编码）。
 
 执行：`python <skill>/scripts/data_store.py --root <data> delete-execute --plan <project>/delete-plan.json --approve <plan-id> --offline --receipt <project>/delete-receipt.jsonl`
 
