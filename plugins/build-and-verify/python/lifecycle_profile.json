@@ -1,0 +1,17 @@
+{
+  "PACKAGE_NAME": "@liuli195/build-and-verify",
+  "CLAUDE_MARKETPLACE": "build-and-verify",
+  "CLAUDE_PLUGIN": "build-and-verify@build-and-verify",
+  "CLAUDE_LEGACY_PLUGIN": "build-and-verify@my-agent-skills-marketplace",
+  "CODEX_MARKETPLACE": "build-and-verify",
+  "CODEX_PLUGIN": "build-and-verify@build-and-verify",
+  "CODEX_LEGACY_PLUGIN": "build-and-verify@my-agent-skills-marketplace",
+  "SKILL_NAMES": ["build-and-verify", "build-and-verify-init", "build-and-verify-review"],
+  "NPM_DIRECTORY": "build-and-verify",
+  "SOURCE_DIRECTORY": "build-and-verify",
+  "COMMAND_NAME": "build-and-verify",
+  "PRIMARY_MODULE": "build_and_verify.py",
+  "LEGACY_PI_PACKAGE": "pi-build-and-verify",
+  "STATE_DIRECTORY": "build-and-verify",
+  "PLUGIN_NAME": "build-and-verify"
+}
