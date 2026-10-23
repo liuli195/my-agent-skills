@@ -399,6 +399,14 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    "tests/test_data_store.py::test_installed_cli_plans_and_deletes_exact_record_groups": "Installed public maintenance CLI verifies exact-plan deletion and recovery against isolated real filesystem failures.",
+    "tests/test_data_store.py::test_installed_delete_full_preflight_changes_nothing": "Installed public maintenance CLI verifies exact-plan deletion and recovery against isolated real filesystem failures.",
+    "tests/test_data_store.py::test_installed_delete_partial_failure_resumes_only_original_unfinished_items": "Installed public maintenance CLI verifies exact-plan deletion and recovery against isolated real filesystem failures.",
+    "tests/test_data_store.py::test_installed_delete_uncertain_outcome_never_blindly_retries": "Installed public maintenance CLI verifies exact-plan deletion and recovery against isolated real filesystem failures.",
+    "tests/test_data_store.py::test_installed_delete_rechecks_identity_after_full_preflight": "Installed public maintenance CLI verifies exact-plan deletion and recovery against isolated real filesystem failures.",
+    "tests/test_data_store.py::test_installed_delete_plan_rejects_nonexact_targets_before_root_access": "Installed public maintenance CLI verifies exact-plan deletion and recovery against isolated real filesystem failures.",
+    "tests/test_data_store.py::test_installed_delete_rejects_wrong_authority_and_receipt": "Installed public maintenance CLI verifies exact-plan deletion and recovery against isolated real filesystem failures.",
+    "tests/test_data_store.py::test_installed_delete_disappearance_before_unlink_is_not_our_deletion": "Installed public maintenance CLI verifies exact-plan deletion and recovery against isolated real filesystem failures.",
     "tests/test_cloud_bootstrap.py::test_public_bootstrap_connects_declared_data_store_and_reuses_it": "Public bootstrap must traverse recorded Git release metadata, real project setup and installed binding/query commands.",
     "tests/test_cloud_bootstrap.py::test_public_bootstrap_leaves_undeclared_or_pending_data_store_unbound": "Public bootstrap smoke proves real project discovery does not bind undeclared or unreleased optional skills.",
     "tests/test_cloud_bootstrap.py::test_public_bootstrap_preserves_existing_project_binding_conflicts": "Public bootstrap and installed helper must preserve real conflicting directories and source links after project setup.",

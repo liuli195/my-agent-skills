@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import argparse
+import errno
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import stat
 import sys
 import tempfile
 import time
+import uuid
 
 
 DATA_STORE_API_VERSION = 2
-DATA_STORE_CAPABILITIES = frozenset({"binary-write-v1"})
+DATA_STORE_CAPABILITIES = frozenset({"binary-write-v1", "exact-delete-v1"})
 
 
 # Only tuning decisions survive a call, never connections, schemas or row data.
@@ -350,6 +354,289 @@ def query(root, sql, parameters=None, *, tables):
         raise
 
 
+class _DeleteSafetyError(ValueError):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def _delete_error(error):
+    if isinstance(error, _DeleteSafetyError):
+        code = error.code
+    elif isinstance(error, FileNotFoundError):
+        code = "missing"
+    elif isinstance(error, PermissionError):
+        code = "permission_or_lock"
+    elif isinstance(error, OSError) and error.errno in (errno.EBUSY, errno.ETXTBSY):
+        code = "locked"
+    elif isinstance(error, OSError):
+        code = "storage_error"
+    else:
+        code = "unexpected_error"
+    return {"code": code, "type": type(error).__name__, "message": str(error)}
+
+
+def _directory_identity(path):
+    value = path.stat()
+    if not stat.S_ISDIR(value.st_mode):
+        raise _DeleteSafetyError("not_directory", "维护目标必须是目录")
+    return {"device": value.st_dev, "inode": value.st_ino}
+
+
+def _delete_root(root):
+    root = Path(os.path.abspath(root))
+    try:
+        if root.resolve(strict=True) != root:
+            raise _DeleteSafetyError("redirected", "维护数据根不能通过链接重定向")
+        return root, {"path": str(root), **_directory_identity(root)}
+    except FileNotFoundError as error:
+        raise _DeleteSafetyError("root_unavailable", "维护数据根不可用；不等于记录键缺失") from error
+
+
+def _delete_file_identity(root, target):
+    directory = root / target["table"]
+    if directory.resolve() != directory:
+        raise _DeleteSafetyError("redirected", "维护逻辑表目录不能重定向")
+    parent = _directory_identity(directory)
+    path = directory / (target["key"] + ".parquet")
+    if path.is_symlink() or path.resolve() != path:
+        raise _DeleteSafetyError("redirected", "维护分片不能通过链接重定向")
+    before = path.stat()
+    if not stat.S_ISREG(before.st_mode):
+        raise _DeleteSafetyError("not_regular_file", "维护目标必须是普通记录组文件")
+    fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    signature = lambda value: [getattr(value, field) for field in fields]
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        if signature(os.fstat(stream.fileno())) != signature(before):
+            raise _DeleteSafetyError("identity_changed", "分片在核验前发生变化")
+        while block := stream.read(1024 * 1024):
+            digest.update(block)
+        if (signature(os.fstat(stream.fileno())) != signature(before)
+                or signature(path.stat()) != signature(before)):
+            raise _DeleteSafetyError("identity_changed", "分片在核验中发生变化")
+    return parent, dict(zip(("device", "inode", "size", "mtime_ns", "ctime_ns"), signature(before)),
+                        sha256=digest.hexdigest())
+
+
+def _delete_plan_id(plan):
+    payload = {key: value for key, value in plan.items() if key != "plan_id"}
+    return "sha256:" + hashlib.sha256(json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")).hexdigest()
+
+
+def plan_delete(root, targets):
+    """Read-only exact-key preview. The caller saves and approves the returned plan."""
+    if not isinstance(targets, dict) or not targets:
+        raise ValueError("删除目标必须是非空的逻辑表与精确键列表映射")
+    normalized = []
+    for table, keys in targets.items():
+        table = _name(table, table=True)
+        if not isinstance(keys, (list, tuple)) or not keys:
+            raise ValueError("每个删除目标必须明确提供非空精确键列表")
+        normalized.extend((table, _name(key)) for key in keys)
+    normalized = list(dict.fromkeys(normalized))
+    root, identity = _delete_root(root)
+    plan = {"format": "data-store-delete-v1", "nonce": uuid.uuid4().hex,
+            "root": identity, "targets": []}
+    for table, key in normalized:
+        target = {"table": table, "key": key}
+        target["directory"], target["file"] = _delete_file_identity(root, target)
+        plan["targets"].append(target)
+    plan["plan_id"] = _delete_plan_id(plan)
+    return plan
+
+
+def _validate_delete_plan(plan):
+    if (not isinstance(plan, dict) or set(plan) != {"format", "nonce", "root", "targets", "plan_id"}
+            or plan["format"] != "data-store-delete-v1"
+            or not isinstance(plan["nonce"], str) or not plan["nonce"]
+            or not isinstance(plan["root"], dict) or set(plan["root"]) != {"path", "device", "inode"}
+            or not isinstance(plan["root"]["path"], str)
+            or not isinstance(plan["targets"], list) or not plan["targets"]):
+        raise ValueError("删除计划格式无效")
+    seen = set()
+    for target in plan["targets"]:
+        if not isinstance(target, dict) or set(target) != {"table", "key", "directory", "file"}:
+            raise ValueError("删除计划目标格式无效")
+        pair = (_name(target["table"], table=True), _name(target["key"]))
+        if pair != (target["table"], target["key"]) or pair in seen:
+            raise ValueError("删除计划必须使用规范化且无重复的精确目标")
+        seen.add(pair)
+        if (not isinstance(target["directory"], dict)
+                or set(target["directory"]) != {"device", "inode"}
+                or not isinstance(target["file"], dict)
+                or set(target["file"]) != {"device", "inode", "size", "mtime_ns", "ctime_ns", "sha256"}):
+            raise ValueError("删除计划缺少原文件身份")
+    if plan["plan_id"] != _delete_plan_id(plan):
+        raise ValueError("删除计划内容与计划身份不符；必须重新预演与授权")
+
+
+def _sync_delete_directory(path):
+    if os.name != "nt":
+        descriptor = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+def _write_delete_log(path, record, *, create=False):
+    """Write one bounded status record (or the initial identity header), then sync."""
+    payload = (json.dumps(record, ensure_ascii=False, sort_keys=True,
+                          separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+    flags = os.O_WRONLY | (os.O_CREAT | os.O_EXCL if create else os.O_APPEND)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        while payload:
+            written = os.write(descriptor, payload)
+            if written <= 0:
+                raise OSError("维护回执写入不完整")
+            payload = payload[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    if create:
+        _sync_delete_directory(path.parent)
+
+
+def _read_delete_log(path, plan):
+    with path.open("rb") as stream:
+        line = stream.readline()
+        header = json.loads(line)
+        if (not line.endswith(b"\n") or not isinstance(header, dict)
+                or set(header) != {"format", "plan_id", "atomic", "items"}
+                or header["format"] != "data-store-delete-log-v1"
+                or header["plan_id"] != plan["plan_id"] or header["atomic"] is not False
+                or not isinstance(header["items"], list)
+                or len(header["items"]) != len(plan["targets"])):
+            raise ValueError("回执头不属于此精确计划，或尚未完整写入；不能覆盖或另作恢复")
+        for item, target in zip(header["items"], plan["targets"]):
+            if (not isinstance(item, dict) or item != {**target, "status": "not_executed"}):
+                raise ValueError("回执头的原身份无效")
+        receipt = {**header, "format": "data-store-delete-receipt-v1"}
+        # Replay once. A torn/invalid tail is evidence to reconcile, never truncate
+        # or silently ignore it and risk repeating an uncertain unlink.
+        try:
+            for line in stream:
+                event = json.loads(line)
+                if (not line.endswith(b"\n") or not isinstance(event, dict)
+                        or not {"item", "status"} <= set(event)
+                        or set(event) - {"item", "status", "error", "unlink_returned"}
+                        or type(event["item"]) is not int
+                        or not 0 <= event["item"] < len(receipt["items"])
+                        or event["status"] not in {"deleted", "failed", "not_executed", "uncertain"}
+                        or ("unlink_returned" in event and event["unlink_returned"] is not True)):
+                    raise ValueError("逐项回执记录无效或不完整")
+                item = receipt["items"][event["item"]]
+                if item["status"] == "deleted":
+                    raise ValueError("回执不能重新执行已可靠完成项")
+                for field in ("error", "unlink_returned"):
+                    item.pop(field, None)
+                item.update({key: value for key, value in event.items() if key != "item"})
+        except Exception as error:
+            receipt["error"] = {**_delete_error(error), "code": (
+                "receipt_log_read_failed" if isinstance(error, OSError) else "receipt_log_invalid")}
+        return receipt
+
+
+def _finish_delete_receipt(receipt):
+    receipt["state"] = ("uncertain" if receipt.get("error") or any(
+        item["status"] == "uncertain" for item in receipt["items"])
+        else "complete" if all(item["status"] == "deleted" for item in receipt["items"])
+        else "incomplete")
+    return receipt
+
+
+def execute_delete(root, plan, *, approve, offline=False, receipt_path):
+    """Execute/resume one approved offline plan with a caller-owned durable log."""
+    _validate_delete_plan(plan)
+    if approve != plan["plan_id"] or offline is not True:
+        raise ValueError("必须明确授权精确计划身份，并确认无相关活动读写的离线维护状态")
+    root_path = Path(os.path.abspath(root))
+    if str(root_path) != plan["root"]["path"]:
+        raise ValueError("数据根与已授权计划不符")
+    path = Path(os.path.abspath(receipt_path))
+    if path == root_path or root_path in path.parents:
+        raise ValueError("维护回执须由调用项目保存在业务数据根之外")
+    if path.resolve() != path or not path.parent.is_dir():
+        raise ValueError("维护回执路径不能重定向，且父目录必须已存在")
+    receipt = {"format": "data-store-delete-receipt-v1", "plan_id": plan["plan_id"],
+               "atomic": False, "items": [{**target, "status": "not_executed"}
+                                          for target in plan["targets"]]}
+    try:
+        _write_delete_log(path, {**receipt, "format": "data-store-delete-log-v1"}, create=True)
+    except FileExistsError:
+        receipt = _read_delete_log(path, plan)
+    if _finish_delete_receipt(receipt)["state"] == "uncertain":
+        return receipt
+
+    def check(target):
+        actual_root, identity = _delete_root(root_path)
+        if identity != plan["root"]:
+            raise _DeleteSafetyError("root_identity_changed", "数据根身份已变化")
+        directory, file = _delete_file_identity(actual_root, target)
+        if directory != target["directory"] or file != target["file"]:
+            raise _DeleteSafetyError("identity_changed", "目标目录或分片身份已变化；旧计划不能授权新文件")
+
+    def persist(index, item):
+        event = {"item": index, **{key: item[key] for key in
+                 ("status", "error", "unlink_returned") if key in item}}
+        try:
+            _write_delete_log(path, event)
+        except Exception as error:
+            item.update(status="uncertain", error={**_delete_error(error), "code": "receipt_write_failed"})
+            return False
+        return True
+
+    # Full preflight of every unfinished target, with no business-data mutation.
+    for index, item in enumerate(receipt["items"]):
+        if item["status"] == "deleted":
+            continue
+        previous = (item["status"], item.get("error"))
+        item["status"] = "not_executed"
+        item.pop("error", None)
+        try:
+            check(item)
+        except Exception as error:
+            item.update(status="failed", error=_delete_error(error))
+        if previous != (item["status"], item.get("error")) and not persist(index, item):
+            return _finish_delete_receipt(receipt)
+    if any(item["status"] == "failed" for item in receipt["items"]):
+        return _finish_delete_receipt(receipt)
+    for index, item in enumerate(receipt["items"]):
+        if item["status"] == "deleted":
+            continue
+        # A crash from this durable intent until the result is durable is uncertain.
+        item["status"] = "uncertain"
+        if not persist(index, item):
+            return _finish_delete_receipt(receipt)
+        try:
+            check(item)
+        except Exception as error:
+            item.update(status="failed", error=_delete_error(error))
+            persist(index, item)
+            return _finish_delete_receipt(receipt)
+        try:
+            target = root_path / item["table"] / (item["key"] + ".parquet")
+            target.unlink()
+            item["unlink_returned"] = True
+            _sync_delete_directory(target.parent)
+        except Exception as error:
+            item["error"] = _delete_error(error)
+            # Only definite unlink failures are retryable; a later directory sync
+            # failure or unknown unlink outcome must retain the durable intent.
+            if not item.get("unlink_returned") and (isinstance(error, PermissionError) or (
+                    isinstance(error, OSError) and error.errno in (errno.EBUSY, errno.ETXTBSY, errno.EROFS))):
+                item["status"] = "failed"
+        else:
+            item["status"] = "deleted"
+        if not persist(index, item) or item["status"] != "deleted":
+            return _finish_delete_receipt(receipt)
+    return _finish_delete_receipt(receipt)
+
+
 _CLI_BLOB_ERROR = "命令行不能直接输出 BLOB；请选择元数据字段，或在查询中显式编码"
 
 
@@ -390,9 +677,24 @@ def main(argv=None):
     batch_reader.add_argument("--columns", type=json.loads)
     batch_reader.add_argument("--filters", type=json.loads)
     batch_reader.add_argument("--batch-size", type=int, default=1000)
+    planner = commands.add_parser("delete-plan", help="只读预演逻辑表与精确记录键")
+    planner.add_argument("--targets", type=json.loads, required=True)
+    executor = commands.add_parser("delete-execute", help="执行或沿同一回执恢复精确离线计划")
+    executor.add_argument("--plan", type=Path, required=True)
+    executor.add_argument("--approve", required=True)
+    executor.add_argument("--offline", action="store_true")
+    executor.add_argument("--receipt", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        if args.command == "write":
+        if args.command == "delete-plan":
+            print(json.dumps(plan_delete(args.root, args.targets), ensure_ascii=False))
+        elif args.command == "delete-execute":
+            plan = json.loads(args.plan.read_text(encoding="utf-8"))
+            receipt = execute_delete(args.root, plan, approve=args.approve, offline=args.offline,
+                                     receipt_path=args.receipt)
+            print(json.dumps(receipt, ensure_ascii=False))
+            return 0 if receipt["state"] == "complete" else 2
+        elif args.command == "write":
             count = write(args.root, args.table, args.key, json.load(sys.stdin), schema=args.schema)
             print(json.dumps({"rows": count}))
         else:

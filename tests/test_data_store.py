@@ -696,3 +696,273 @@ def test_small_complex_logical_read_automatically_uses_one_worker(tmp_path):
     for _ in range(2):
         with store.query(tmp_path, "SELECT report, current_setting('threads') FROM custom", tables=["custom"]) as cursor:
             assert cursor.fetchone() == ({"parts": [1, 2]}, 1)
+
+
+def test_installed_cli_plans_and_deletes_exact_record_groups(tmp_path):
+    installed = tmp_path / "installed-maintenance"
+    shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
+    store = load_store(installed)
+    data = tmp_path / "data"
+    for key in ("one", "two", "keep"):
+        store.write(data, "readings", key, [{"value": key}])
+    unrelated = data / "history"
+    unrelated.mkdir()
+    (unrelated / "broken.parquet").write_bytes(b"not parquet")
+    script = installed / "scripts/data_store.py"
+    prefix = [sys.executable, str(script), "--root", str(data)]
+    planned = subprocess.run(prefix + ["delete-plan", "--targets",
+                             '{"Readings":["ONE","two","one"]}'],
+                             text=True, capture_output=True, cwd=tmp_path)
+    assert planned.returncode == 0, planned.stderr
+    plan = json.loads(planned.stdout)
+    assert [(item["table"], item["key"]) for item in plan["targets"]] == [
+        ("readings", "one"), ("readings", "two")]
+    assert (data / "readings/one.parquet").is_file()
+    plan_path = tmp_path / "delete-plan.json"
+    plan_path.write_text(planned.stdout)
+    receipt_path = tmp_path / "delete-receipt.json"
+    denied = subprocess.run(prefix + ["delete-execute", "--plan", str(plan_path),
+                            "--approve", plan["plan_id"], "--receipt", str(receipt_path)],
+                            text=True, capture_output=True, cwd=tmp_path)
+    assert denied.returncode == 2
+    assert (data / "readings/one.parquet").is_file()
+    executed = subprocess.run(prefix + ["delete-execute", "--plan", str(plan_path),
+                              "--approve", plan["plan_id"], "--offline", "--receipt", str(receipt_path)],
+                              text=True, capture_output=True, cwd=tmp_path)
+    assert executed.returncode == 0, executed.stderr
+    receipt = json.loads(executed.stdout)
+    assert receipt["atomic"] is False
+    assert [item["status"] for item in receipt["items"]] == ["deleted", "deleted"]
+    records = [json.loads(line) for line in receipt_path.read_text().splitlines()]
+    assert records[0]["format"] == "data-store-delete-log-v1"
+    assert records[0]["plan_id"] == plan["plan_id"]
+    assert [(record["item"], record["status"]) for record in records[1:]] == [
+        (0, "uncertain"), (0, "deleted"), (1, "uncertain"), (1, "deleted")]
+    assert all("file" not in record and "items" not in record for record in records[1:])
+    assert (unrelated / "broken.parquet").read_bytes() == b"not parquet"
+    with store.read_key(data, "readings", "keep") as cursor:
+        assert cursor.fetchall() == [("keep",)]
+    store.write(data, "readings", "one", [{"value": "rebuilt"}])
+    resumed = subprocess.run(prefix + ["delete-execute", "--plan", str(plan_path),
+                             "--approve", plan["plan_id"], "--offline", "--receipt", str(receipt_path)],
+                             text=True, capture_output=True, cwd=tmp_path)
+    assert resumed.returncode == 0, resumed.stderr
+    with store.read_key(data, "readings", "one") as cursor:
+        assert cursor.fetchall() == [("rebuilt",)]
+
+
+def _delete_fixture(tmp_path, count=3):
+    installed = tmp_path / "installed-maintenance"
+    shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
+    store = load_store(installed)
+    data = tmp_path / "data"
+    for index in range(count):
+        store.write(data, "readings", str(index), [{"value": index}])
+    prefix = [sys.executable, str(installed / "scripts/data_store.py"), "--root", str(data)]
+    planned = subprocess.run(prefix + ["delete-plan", "--targets",
+                             json.dumps({"readings": [str(index) for index in range(count)]})],
+                             text=True, capture_output=True, cwd=tmp_path)
+    assert planned.returncode == 0, planned.stderr
+    plan = json.loads(planned.stdout)
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(planned.stdout)
+    receipt = tmp_path / "receipt.json"
+    arguments = prefix[1:] + ["delete-execute", "--plan", str(plan_path), "--approve", plan["plan_id"],
+                              "--offline", "--receipt", str(receipt)]
+    return store, data, plan_path, receipt, arguments
+
+
+def _execute_delete_cli(tmp_path, arguments, fault=""):
+    # Fault only an OS boundary in this isolated child, then run the real installed
+    # script and argument parser. No production-only test hooks or fake state machine.
+    source = "import errno, json, os, runpy, sys\nfrom pathlib import Path\n" + fault
+    source += "\nsys.argv = sys.argv[1:]\nrunpy.run_path(sys.argv[0], run_name='__main__')\n"
+    return subprocess.run([sys.executable, "-c", source, *arguments],
+                          text=True, capture_output=True, cwd=tmp_path)
+
+
+@pytest.mark.parametrize("change,code", [
+    ("replace", "identity_changed"), ("content", "identity_changed"), ("missing", "missing"),
+    ("redirect", "redirected"), ("permission", "permission_or_lock"), ("lock", "locked"),
+    ("root", "root_identity_changed"), ("root-missing", "root_unavailable"),
+])
+def test_installed_delete_full_preflight_changes_nothing(tmp_path, change, code):
+    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path)
+    first = data / "readings/0.parquet"
+    target = data / "readings/1.parquet"
+    original = first.read_bytes()
+    fault = ""
+    if change == "replace":
+        replacement = target.with_suffix(".new")
+        replacement.write_bytes(target.read_bytes())
+        replacement.replace(target)
+    elif change == "content":
+        payload = bytearray(target.read_bytes())
+        payload[4] ^= 1
+        target.write_bytes(payload)
+    elif change == "missing":
+        target.unlink()
+    elif change == "redirect":
+        target.unlink()
+        target.symlink_to(first)
+    elif change in ("permission", "lock"):
+        failure = 'PermissionError("injected permission")' if change == "permission" else 'OSError(errno.EBUSY, "injected lock")'
+        fault = ("original_open = Path.open\n"
+                 "def fail_open(path, *args, **kwargs):\n"
+                 "    if path.name == '1.parquet':\n"
+                 f"        raise {failure}\n"
+                 "    return original_open(path, *args, **kwargs)\n"
+                 "Path.open = fail_open\n")
+    else:
+        data.rename(tmp_path / "original-data")
+        if change == "root":
+            data.mkdir()
+            shutil.copytree(tmp_path / "original-data/readings", data / "readings")
+    executed = _execute_delete_cli(tmp_path, arguments, fault)
+    assert executed.returncode == 2, executed.stdout
+    receipt = json.loads(executed.stdout)
+    assert receipt["state"] == "incomplete"
+    assert not any(item["status"] == "deleted" for item in receipt["items"])
+    assert any(item.get("error", {}).get("code") == code for item in receipt["items"])
+    assert (tmp_path / "original-data/readings/0.parquet" if change.startswith("root") else first).read_bytes() == original
+
+
+def test_installed_delete_partial_failure_resumes_only_original_unfinished_items(tmp_path):
+    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path)
+    fault = ("original_unlink = Path.unlink\n"
+             "def fail_unlink(path, *args, **kwargs):\n"
+             "    if path.name == '1.parquet':\n"
+             "        raise PermissionError('injected delete lock')\n"
+             "    return original_unlink(path, *args, **kwargs)\n"
+             "Path.unlink = fail_unlink\n")
+    partial = _execute_delete_cli(tmp_path, arguments, fault)
+    assert partial.returncode == 2, partial.stderr
+    receipt = json.loads(partial.stdout)
+    assert [item["status"] for item in receipt["items"]] == ["deleted", "failed", "not_executed"]
+    assert receipt["items"][1]["error"]["code"] == "permission_or_lock"
+    assert not (data / "readings/0.parquet").exists()
+    store.write(data, "readings", "0", [{"value": "later rebuild"}])
+    resumed = _execute_delete_cli(tmp_path, arguments)
+    assert resumed.returncode == 0, resumed.stderr
+    assert [item["status"] for item in json.loads(resumed.stdout)["items"]] == ["deleted"] * 3
+    with store.read_key(data, "readings", "0") as cursor:
+        assert cursor.fetchall() == [("later rebuild",)]
+    assert not (data / "readings/1.parquet").exists()
+    assert not (data / "readings/2.parquet").exists()
+
+
+@pytest.mark.parametrize("failure", ["receipt", "unlink-outcome", "truncated-log"])
+def test_installed_delete_uncertain_outcome_never_blindly_retries(tmp_path, failure):
+    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path)
+    if failure in ("receipt", "truncated-log"):
+        partial_write = "original_write(descriptor, payload[:len(payload)//2])" if failure == "truncated-log" else "pass"
+        fault = ("original_write = os.write\n"
+                 "def fail_write(descriptor, payload):\n"
+                 "    if not Path('data/readings/0.parquet').exists():\n"
+                 f"        {partial_write}\n"
+                 "        raise OSError('injected receipt failure after unlink')\n"
+                 "    return original_write(descriptor, payload)\n"
+                 "os.write = fail_write\n")
+    else:
+        fault = ("original_unlink = Path.unlink\n"
+                 "def fail_unlink(path, *args, **kwargs):\n"
+                 "    result = original_unlink(path, *args, **kwargs)\n"
+                 "    if path.name == '0.parquet':\n"
+                 "        raise OSError('injected unknown unlink outcome')\n"
+                 "    return result\n"
+                 "Path.unlink = fail_unlink\n")
+    uncertain = _execute_delete_cli(tmp_path, arguments, fault)
+    assert uncertain.returncode == 2, uncertain.stderr
+    output = json.loads(uncertain.stdout)
+    assert output["state"] == "uncertain"
+    assert [item["status"] for item in output["items"]] == ["uncertain", "not_executed", "not_executed"]
+    lines = receipt_path.read_text().splitlines()
+    assert json.loads(lines[0])["format"] == "data-store-delete-log-v1"
+    assert json.loads(lines[1])["status"] == "uncertain"
+    if failure == "receipt":
+        assert output["items"][0]["error"]["code"] == "receipt_write_failed"
+    assert not (data / "readings/0.parquet").exists()
+    store.write(data, "readings", "0", [{"value": "later rebuild"}])
+    resumed = _execute_delete_cli(tmp_path, arguments)
+    assert resumed.returncode == 2
+    assert json.loads(resumed.stdout)["state"] == "uncertain"
+    with store.read_keys(data, "readings", ["0", "1", "2"]) as cursor:
+        assert len(cursor.fetchall()) == 3
+
+
+def test_installed_delete_rechecks_identity_after_full_preflight(tmp_path):
+    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path)
+    fault = ("original_unlink = Path.unlink\n"
+             "def change_after_first(path, *args, **kwargs):\n"
+             "    result = original_unlink(path, *args, **kwargs)\n"
+             "    if path.name == '0.parquet':\n"
+             "        target = path.with_name('1.parquet')\n"
+             "        replacement = target.with_suffix('.new')\n"
+             "        replacement.write_bytes(target.read_bytes())\n"
+             "        os.replace(replacement, target)\n"
+             "    return result\n"
+             "Path.unlink = change_after_first\n")
+    partial = _execute_delete_cli(tmp_path, arguments, fault)
+    assert partial.returncode == 2, partial.stderr
+    receipt = json.loads(partial.stdout)
+    assert [item["status"] for item in receipt["items"]] == ["deleted", "failed", "not_executed"]
+    assert receipt["items"][1]["error"]["code"] == "identity_changed"
+    assert (data / "readings/1.parquet").is_file()
+    assert (data / "readings/2.parquet").is_file()
+
+
+@pytest.mark.parametrize("targets", [None, {}, [], {"readings": []}, {"readings": "one"},
+                                      {"readings": [""]}, {"readings": ["*"]},
+                                      {"../outside": ["one"]}, {"readings": ["../one"]}])
+def test_installed_delete_plan_rejects_nonexact_targets_before_root_access(tmp_path, targets):
+    script = SKILL / "scripts/data_store.py"
+    planned = subprocess.run([sys.executable, str(script), "--root", str(tmp_path / "absent"),
+                              "delete-plan", "--targets", json.dumps(targets)],
+                             text=True, capture_output=True, cwd=tmp_path)
+    assert planned.returncode == 2
+    assert planned.stdout == ""
+    assert "数据根不可用" not in planned.stderr
+    assert "No such file" not in planned.stderr
+
+
+@pytest.mark.parametrize("change", ["approval", "plan", "root", "receipt-in-data", "receipt-other-plan"])
+def test_installed_delete_rejects_wrong_authority_and_receipt(tmp_path, change):
+    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path)
+    if change == "approval":
+        arguments[arguments.index("--approve") + 1] = "another-plan"
+    elif change == "plan":
+        plan = json.loads(plan_path.read_text())
+        plan["targets"][0]["key"] = "unapproved"
+        plan_path.write_text(json.dumps(plan))
+    elif change == "root":
+        arguments[arguments.index("--root") + 1] = str(tmp_path / "another-root")
+    elif change == "receipt-in-data":
+        arguments[arguments.index("--receipt") + 1] = str(data / "receipt.json")
+    else:
+        receipt_path.write_text('{"format":"unrelated","important":"keep me"}')
+    executed = _execute_delete_cli(tmp_path, arguments)
+    assert executed.returncode == 2
+    assert executed.stdout == ""
+    for index in range(3):
+        with store.read_key(data, "readings", str(index)) as cursor:
+            assert cursor.fetchall() == [(index,)]
+    if change == "receipt-other-plan":
+        assert json.loads(receipt_path.read_text())["important"] == "keep me"
+
+
+def test_installed_delete_disappearance_before_unlink_is_not_our_deletion(tmp_path):
+    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path)
+    fault = ("original_write = os.write\n"
+             "def remove_before_final_check(descriptor, payload):\n"
+             "    record = json.loads(payload)\n"
+             "    result = original_write(descriptor, payload)\n"
+             "    if record.get('item') == 0 and record.get('status') == 'uncertain':\n"
+             "        Path('data/readings/0.parquet').unlink()\n"
+             "    return result\n"
+             "os.write = remove_before_final_check\n")
+    partial = _execute_delete_cli(tmp_path, arguments, fault)
+    assert partial.returncode == 2, partial.stderr
+    receipt = json.loads(partial.stdout)
+    assert [item["status"] for item in receipt["items"]] == ["failed", "not_executed", "not_executed"]
+    assert receipt["items"][0]["error"]["code"] == "missing"
+    assert (data / "readings/1.parquet").is_file()
