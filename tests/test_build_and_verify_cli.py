@@ -260,12 +260,20 @@ def test_public_verify_budget_interrupts_blocked_preparation_and_its_descendants
     result, project = _budget_run(tmp_path, before_run=prepare)
     assert result.returncode != 0, result.stdout + result.stderr
     assert "bounded-cleanup-fallback" in result.stdout + result.stderr
+    assert "total_budget_timeout:" in result.stderr
+    assert "not-started: slow, later" in result.stderr
     assert "check-start:" not in result.stdout
     assert time.monotonic() - started < 6
+    assert result.public_elapsed_seconds < 5
     assert pids.exists(), result.stdout + result.stderr
     for pid in json.loads(pids.read_text()):
         _assert_pid_terminated(pid)
-    report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
+    report_path = project / ".build-and-verify/runs/performance-report.json"
+    if not report_path.exists():
+        # Bounded fallback report I/O is best effort, never silent on failure.
+        assert "performance-report-warning:" in result.stderr, result.stdout + result.stderr
+        return
+    report = json.loads(report_path.read_text())
     assert report["verificationStatus"] == "failed"
     assert report["reason"] == "total_budget_timeout"
     assert report["notStarted"] == ["slow", "later"]

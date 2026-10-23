@@ -214,3 +214,53 @@ MySpec（自有规格） MUST 在同一 capability（能力）内应用 `MODIFIE
 
 - **WHEN** Claude 或 Codex 加载本地插件市场
 - **THEN** 市场中出现 `my-spec`，且四个规格 Skill（技能）均可发现
+### Requirement: MySpec initializes sessions without discarding existing drafts
+
+MySpec（自有规格）MUST 在会话初始化时保留已有当前会话、Delta（增量规格）及用户草案；已有锁或非空当前目录时明确拒绝，不静默递归删除或覆盖。初始化失败只能撤回本次确实新建且仍匹配本次身份的锁，不得删除另一会话的锁或已有材料。所有操作仍限定在精确目标工作树的本地规格工作根，不改变源码工作树与目标工作树的隔离。
+
+#### Scenario: A draft exists before session initialization
+
+- **WHEN** 用户在当前会话目录保有 Delta、草案或已有状态后调用 state-init（会话初始化）
+- **THEN** 命令返回可识别失败并保留原内容，不创建一个已清空的替代会话，也不自动删除旧锁
+
+#### Scenario: Initialization fails after acquiring its own lock
+
+- **WHEN** 本次初始化已新建锁但后续创建或导入步骤失败
+- **THEN** 只撤回仍可证明属于本次的锁，保留既有用户内容；锁已被替换或归属不明时不删除该锁
+### Requirement: MySpec archives only an explicitly inactive verified preview session
+
+MySpec MUST 提供裸 state-abort（会话中止）命令，要求外部确认没有活动会话，并匹配用户本次读取的精确会话状态、目标路径与具体锁文件实例身份；锁时间或短命命令已退出不得替代该确认。同名锁被替换后，旧锁实例授权不得用于新锁。
+
+中止 MUST 仅接受可证明未修改正式规格的预览：当前正式规格须与保存的原基线一致，目标规格附近不存在备份或其他可能部分应用现场。支持旧版仅含命令文字及换行的锁，但仍须用其实际锁实例、完整旧状态、精确目标路径和原规格基线证明安全，不要求旧记录不存在的新版字段，也不补写历史身份。输入或失败预览变化本身不构成正式应用许可或强制解锁理由；跨工作树、必要身份缺失、未知状态、正式规格漂移、应用中或可能部分应用时明确拒绝并保留现场。
+
+安全中止 MUST 先把完整当前会话及 Delta、决定、预览和失败材料归档到同一工作根内唯一已中止目录，再释放仍匹配的本次锁。归档失败保留原会话与锁；归档已完成但解锁失败须保留归档并给出可核验恢复状态。重复调用只有在精确识别同一次已中止结果时才可稳定返回，不能误伤后来新会话。中止不修改正式规格，不替代正式应用事务恢复；归档中的旧决定只是追溯证据，不成为跨运行的有效确认。
+
+#### Scenario: An inactive legacy preview has sufficient original evidence
+
+- **WHEN** 调用方提供外部无活动确认和匹配的旧锁实例／旧状态，当前正式规格仍为原基线且没有可能部分应用现场
+- **THEN** 官方命令归档完整草案后释放该锁，返回归档位置；正式规格保持不变，不以手工删锁或改写指纹完成操作
+
+#### Scenario: A lock is recreated with the same command text
+
+- **WHEN** 旧授权读取后，锁已被替换为文字相同但文件实例不同的锁
+- **THEN** 中止拒绝使用旧锁身份，不归档或释放新会话
+
+#### Scenario: A preview cannot be proven safe to abandon
+
+- **WHEN** 缺少无活动确认、身份或原基线证明，或发现正式规格漂移、备份及可能部分应用状态
+- **THEN** 返回明确失败并保留锁、草案和恢复材料，不用普通或强制解锁掩盖事务风险
+### Requirement: MySpec imports preserved deltas into a fresh confirmation cycle
+
+MySpec MUST 允许新会话通过显式 import-aborted（导入已中止草案）选择同一工作根内受核验的归档，仅复制其中 Delta 内容，不复制旧会话身份、决定、预览、就绪状态或最终确认。归档及其内容不得通过链接或跨工作树路径扩大来源范围，原归档保持可读且不被覆盖。
+
+新会话 MUST 从当前输入和正式规格重新分析、保存完整待决清单、逐项决定、校验并生成完整预览，仍在本次最终确认前不应用正式规格。导入旧草案不证明其仍适用，也不把旧忽略或暂缓决定变成长久事实。
+
+#### Scenario: A preserved delta is explicitly imported
+
+- **WHEN** 用户在新的初始化调用中明确选择已核验归档
+- **THEN** 新会话仅获得 Delta，重新进入分析而非沿用旧就绪或确认状态；原归档、旧证据和正式规格不变
+
+#### Scenario: Import source is foreign or unsafe
+
+- **WHEN** 指定归档不属于本次工作根、身份不足或通过链接重定向
+- **THEN** 初始化明确拒绝，保留来源及已有目标内容，不在其他工作树创建或删除资料
