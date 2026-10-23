@@ -179,6 +179,7 @@ def _managed_run(command: Any, control: RunControl, **kwargs: Any) -> subprocess
     job = None
     process = None
     stdout = stderr = None
+    timeout_error = None
     try:
         with control.lock:
             if control.expired():
@@ -206,6 +207,9 @@ def _managed_run(command: Any, control: RunControl, **kwargs: Any) -> subprocess
                 if isinstance(error, TotalBudgetTimeout):
                     raise
                 stdout, stderr = error.output, error.stderr
+    except subprocess.TimeoutExpired as error:
+        timeout_error = error
+        raise
     finally:
         if process is not None:
             if job is not None:
@@ -218,7 +222,10 @@ def _managed_run(command: Any, control: RunControl, **kwargs: Any) -> subprocess
             elif process.poll() is None:
                 process.kill()
             try:
-                process.communicate(timeout=0.5)
+                stdout, stderr = process.communicate(timeout=0.5)
+                if timeout_error is not None:
+                    # Windows readers publish captured output only after EOF.
+                    timeout_error.output, timeout_error.stderr = stdout, stderr
             except subprocess.TimeoutExpired:
                 process.kill()
                 # Close pipes instead of waiting indefinitely for an inherited handle.

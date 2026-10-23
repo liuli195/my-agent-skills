@@ -247,14 +247,14 @@ def test_public_verify_budget_interrupts_blocked_preparation_and_its_descendants
         "child=subprocess.Popen([sys.executable,'-S','-c','import time; time.sleep(10)'])\n"
         f"Path({str(pids)!r}).write_text(json.dumps([os.getpid(),child.pid]))\n"
         "time.sleep(10)\n", encoding="utf-8")
-    hook = tmp_path / "monitor.sh"
+    hook = tmp_path / "monitor with space.sh"
     hook.write_text(f"#!/bin/sh\nexec {shlex.quote(Path(sys.executable).as_posix())} -S -B {shlex.quote(monitor.as_posix())}\n", encoding="utf-8", newline="\n")
     hook.chmod(0o755)
 
     def prepare(project: Path) -> None:
         (project / "probe.txt").write_text("tracked", encoding="utf-8")
         assert _git(project, "add", "probe.txt").returncode == 0
-        assert _git(project, "config", "core.fsmonitor", hook.as_posix()).returncode == 0
+        assert _git(project, "config", "core.fsmonitor", shlex.quote(hook.as_posix())).returncode == 0
 
     started = time.monotonic()
     result, project = _budget_run(tmp_path, before_run=prepare)

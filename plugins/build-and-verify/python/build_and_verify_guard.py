@@ -179,7 +179,7 @@ def _run(evidence: str, segment: str, platform_info: str, args: list[str]) -> in
             return
         if event == "subprocess.Popen":
             expected = getattr(launch, "command", None)
-            if expected is not None and list(values[1]) == expected:
+            if expected is not None and (values[1] if isinstance(values[1], str) else list(values[1])) == expected:
                 launch.command = None
                 return
         elif event == "open":
@@ -364,7 +364,8 @@ def _adapt_pytest(launch, record, evidence, segment):
         if not spec.popen or any(getattr(spec, key, None) for key in ("ssh", "socket", "via", "chdir", "env", "python")):
             raise ValueError("runtime_guard_uncovered_command: only local default xdist workers are supported")
         command = [sys.executable, "-S", "-B", "-u", str(Path(__file__).resolve()), evidence, segment, platform.platform(), "--worker"]
-        launch.command = command
+        # CPython audits argv as the serialized command line on Windows.
+        launch.command = execmodel.subprocess.list2cmdline(command) if os.name == "nt" else command
         try:
             io = gateway_io.Popen2IOMaster(command, execmodel)
             record("worker", child=io.popen.pid)
