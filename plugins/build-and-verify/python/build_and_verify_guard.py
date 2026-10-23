@@ -15,6 +15,7 @@ if __name__ == "__main__":
                    or p.startswith(sys.base_prefix + "\\")]
 
 import atexit
+import itertools
 import json
 import os
 import platform
@@ -145,12 +146,14 @@ def _run(evidence: str, segment: str, platform_info: str, args: list[str]) -> in
     fd = os.open(evidence, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
     write = os.write
     pid = os.getpid()
-    role = "worker" if args == ["--worker"] else "root"
+    role = "worker" if len(args) == 2 and args[0] == "--worker" else "root"
+    # Windows venv launchers and their interpreter children have different PIDs.
+    unit = args[1] if role == "worker" else str(pid)
     violated = False
     def record(event, **fields):
         nonlocal violated
         violated = violated or event == "violation"
-        write(fd, (json.dumps({"event": event, "pid": pid, "time": time.monotonic(), **fields}) + "\n").encode())
+        write(fd, (json.dumps({"event": event, "pid": pid, "unit": unit, "time": time.monotonic(), **fields}) + "\n").encode())
     record("start", role=role, segment=segment, adapter=ADAPTER_VERSION)
     def finish():
         record("finish")
@@ -345,6 +348,8 @@ def _adapt_pytest(launch, record, evidence, segment):
         from xdist.workermanage import NodeManager
     except ImportError:
         return
+    worker_units = itertools.count()
+    worker_lock = threading.Lock()
     setup = NodeManager.setup_node
     def setup_node(manager, spec, putevent):
         if not any(spec is registered for registered in manager.specs):
@@ -363,12 +368,14 @@ def _adapt_pytest(launch, record, evidence, segment):
         launch.spec = None
         if not spec.popen or any(getattr(spec, key, None) for key in ("ssh", "socket", "via", "chdir", "env", "python")):
             raise ValueError("runtime_guard_uncovered_command: only local default xdist workers are supported")
-        command = [sys.executable, "-S", "-B", "-u", str(Path(__file__).resolve()), evidence, segment, platform.platform(), "--worker"]
+        with worker_lock:
+            worker_unit = f"python:{segment}:{os.getpid()}:{next(worker_units)}"
+        command = [sys.executable, "-S", "-B", "-u", str(Path(__file__).resolve()), evidence, segment, platform.platform(), "--worker", worker_unit]
         # CPython audits argv as the serialized command line on Windows.
         launch.command = execmodel.subprocess.list2cmdline(command) if os.name == "nt" else command
         try:
             io = gateway_io.Popen2IOMaster(command, execmodel)
-            record("worker", child=io.popen.pid)
+            record("worker", child=io.popen.pid, childUnit=worker_unit)
             return io
         finally:
             launch.command = None

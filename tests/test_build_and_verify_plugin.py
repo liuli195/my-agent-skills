@@ -1676,6 +1676,27 @@ def test_runtime_guard_missing_protection_evidence_cannot_cache_success(tmp_path
     assert len(executor.calls) == 2
 
 
+@pytest.mark.parametrize("child_unit,finish,passed", [
+    ("worker-0", True, True), ("wrong-worker", True, False), ("worker-0", False, False),
+])
+def test_runtime_guard_matches_work_units_across_launcher_pids(child_unit, finish, passed) -> None:
+    records = [
+        {"event": "start", "pid": 100, "unit": "root", "role": "root", "segment": "0"},
+        {"event": "worker", "pid": 100, "unit": "root", "child": 200, "childUnit": child_unit},
+        {"event": "start", "pid": 300, "unit": "worker-0", "role": "worker", "segment": "0"},
+        {"event": "finish", "pid": 100, "unit": "root"},
+    ]
+    if finish:
+        records.append({"event": "finish", "pid": 300, "unit": "worker-0"})
+    class Evidence:
+        def read_text(self, **kwargs):
+            return "\n".join(json.dumps({"time": 1.0, **record}) for record in records)
+    error = load_build_and_verify_runner_module()._test_guard().evidence_error(Evidence(), 1)
+    assert (error is None) is passed
+    if not passed:
+        assert "runtime_guard_evidence_incomplete" in error
+
+
 @pytest.mark.parametrize("command", [
     'set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1&& set NUMBA_DISABLE_JIT=1&& ".\\.venv\\Scripts\\python.exe" -m pytest "tests/test_math.py::test_values[a b]" --ignore=tests/slow -k "not slow and math"',
     'set PYTEST_ADDOPTS=-n 4&& .\\.venv\\Scripts\\python.exe -m pytest -p xdist.plugin tests/test_tree.py',
