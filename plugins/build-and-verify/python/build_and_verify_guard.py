@@ -141,7 +141,7 @@ def _run(evidence: str, segment: str, platform_info: str, args: list[str]) -> in
     platform._platform_cache[False, False] = platform_info
     launch = threading.local()
     capture_fds = set()
-    denied = {"os.system", "os.fork", "os.forkpty", "os.posix_spawn", "os.exec",
+    denied = {"os.system", "os.startfile", "os.startfile/2", "os.fork", "os.forkpty", "os.posix_spawn", "os.exec",
               "os.spawn", "pty.spawn", "socket.__new__", "socket.connect", "socket.bind",
               "socket.getaddrinfo", "socket.gethostbyname", "socket.gethostbyaddr",
               "os.remove", "os.rename", "os.rmdir", "os.mkdir", "os.link", "os.symlink",
@@ -180,6 +180,15 @@ def _run(evidence: str, segment: str, platform_info: str, args: list[str]) -> in
         record("violation", operation=event, target=repr(values[0]) if values else "")
         raise PermissionError(f"runtime_guard_violation: {event}")
     sys.addaudithook(audit)
+    # CPython does not emit audit events for these public creation APIs.
+    def blocked_creation(operation):
+        def blocked(path, *args, **kwargs):
+            record("violation", operation=operation, target=repr(path))
+            raise PermissionError(f"runtime_guard_violation: {operation}")
+        return blocked
+    for name in ("mkfifo", "mknod"):
+        if hasattr(os, name):
+            setattr(os, name, blocked_creation("os." + name))
     sqlite_guard = _adapt_sqlite(record, launch)
     class UnsupportedNativeFinder:
         def find_spec(self, fullname, path=None, target=None):
@@ -200,12 +209,12 @@ def _run(evidence: str, segment: str, platform_info: str, args: list[str]) -> in
         # execnet's normal fixed stdin bootstrap, with protection already on.
         exec(eval(sys.stdin.readline()), {"__name__": "__main__"})
     else:
+        sys.path.insert(0, os.getcwd() if args[:1] == ["-m"] else str(Path(args[0]).resolve().parent))
         if args[:2] == ["-m", "pytest"]:
             _adapt_pytest(launch, record, evidence, segment)
             import pytest
             return int(pytest.main(["-p", "build_and_verify_guard", *args[2:]]))
         sys.argv = args[:]
-        sys.path.insert(0, os.getcwd() if args[:1] == ["-m"] else str(Path(args[0]).resolve().parent))
         if args[:1] == ["-m"] and len(args) >= 2:
             sys.argv = args[1:]
             runpy.run_module(args[1], run_name="__main__", alter_sys=True)

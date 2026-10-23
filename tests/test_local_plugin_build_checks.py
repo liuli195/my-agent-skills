@@ -818,7 +818,7 @@ def test_runner_config_change_invalidates_old_cache_and_reuses_current_cache(
 
     write_json(
         tmp_path / ".build-and-verify" / "config.json",
-        {"version": 2, "build": {"checks": []}, "verify": {"checks": checks}},
+        {"version": 1, "build": {"checks": []}, "verify": {"checks": checks, "maxParallel": 2}},
     )
     assert module.run_verify(tmp_path, runner=fake_run) == 0
     changed_output = capsys.readouterr().out

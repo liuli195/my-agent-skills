@@ -544,10 +544,18 @@ def test_packed_runtime_guard_initialization_and_explicit_migration(tmp_path: Pa
     unsupported_native = verify()
     assert unsupported_native.returncode == 1, unsupported_native.stdout + unsupported_native.stderr
     assert "runtime_guard_uncovered_native" in unsupported_native.stderr
+    pytest.importorskip("duckdb", reason="DuckDB live query is unverified without the existing development dependency")
+    (project / "ordinary.py").write_text(
+        "import duckdb\n"
+        "connection=duckdb.connect(':memory:')\n"
+        "assert connection.execute('select 42').fetchone() == (42,)\n"
+        "connection.close()\n"
+        "print('DUCKDB_QUERY_OK')\n")
     config_path.write_text(json.dumps(real_config))
     native_real = verify()
     assert native_real.returncode == 0, native_real.stdout + native_real.stderr
     assert "real-unprotected" in native_real.stdout
+    assert "DUCKDB_QUERY_OK" in native_real.stdout
     (project / "ordinary.py").write_text(
         "import sqlite3\n"
         "class Custom(sqlite3.Connection): pass\n"
@@ -593,6 +601,58 @@ def test_packed_runtime_guard_initialization_and_explicit_migration(tmp_path: Pa
     assert "sqlite3.authorizer" in readonly.stderr
     with sqlite3.connect(str(project / "readonly.db")) as fixture:
         assert fixture.execute("select value from values_for_reading").fetchall() == [(42,)]
+    (project / "app.py").write_text("def answer(): return 42\n")
+    (project / "tests").mkdir()
+    (project / "tests/test_app.py").write_text("from app import answer\ndef test_app(): assert answer() == 42\n")
+    config_path.write_text(json.dumps({"version": 2, "verify": {"realChecks": [], "checks": [
+        {"id": "app", "command": [sys.executable, "-m", "pytest", "-q", "tests/test_app.py"],
+         "inputs": ["app.py", "tests/test_app.py"]}]}}))
+    app = verify()
+    assert app.returncode == 0, app.stdout + app.stderr
+    assert "1 passed" in app.stdout
+    # Cross-platform event contract only, not a real Windows application launch.
+    (project / "ordinary.py").write_text(
+        "import sys\n"
+        "for event, args in [('os.startfile', ('never-open', 'open')), ('os.startfile/2', ('never-open', 'open', None, None, 1))]:\n"
+        " try: sys.audit(event, *args)\n"
+        " except PermissionError: pass\n"
+        "print('WINDOWS_EVENTS_HANDLED')\n")
+    config_path.write_text(confirmed.read_text())
+    windows_events = verify()
+    assert windows_events.returncode == 1, windows_events.stdout + windows_events.stderr
+    assert "WINDOWS_EVENTS_HANDLED" in windows_events.stdout
+    assert "os.startfile " in windows_events.stderr and "os.startfile/2 " in windows_events.stderr
+    if sys.platform == "linux":
+        (project / "ordinary.py").write_text(
+            "import os\n"
+            "for name in ('mkfifo', 'mknod'):\n"
+            " try: getattr(os, name)(name + '-effect')\n"
+            " except PermissionError: pass\n"
+            "print('UNIX_CREATION_HANDLED')\n")
+        unix_creation = verify()
+        assert unix_creation.returncode == 1, unix_creation.stdout + unix_creation.stderr
+        assert "UNIX_CREATION_HANDLED" in unix_creation.stdout
+        for name in ("mkfifo", "mknod"):
+            assert "os." + name in unix_creation.stderr
+            assert not (project / (name + "-effect")).exists()
+    (project / "mixed.py").write_text(
+        "import json, sys, time\nfrom pathlib import Path\n"
+        "role=sys.argv[1]; started=time.monotonic(); time.sleep(0.4)\n"
+        "try: Path(role + '-effect').write_text(role)\n"
+        "except PermissionError: pass\n"
+        "time.sleep(0.2)\n"
+        "print('MIXED:' + json.dumps({'role': role, 'started': started, 'finished': time.monotonic()}))\n")
+    config_path.write_text(json.dumps({"version": 2, "verify": {"realChecks": ["real"], "maxParallel": 2,
+        "checks": [{"id": role, "command": [sys.executable, "mixed.py", role],
+                    "checkParallel": True, "inputs": ["mixed.py"]} for role in ("real", "ordinary")]}}))
+    mixed = verify()
+    assert mixed.returncode == 1, mixed.stdout + mixed.stderr
+    assert (project / "real-effect").read_text() == "real"
+    assert not (project / "ordinary-effect").exists()
+    assert "runtime_guard_violation" in mixed.stderr
+    intervals = [json.loads(line.removeprefix("MIXED:")) for line in mixed.stdout.splitlines() if line.startswith("MIXED:")]
+    assert {interval["role"] for interval in intervals} == {"real", "ordinary"}
+    assert max(interval["started"] for interval in intervals) < min(interval["finished"] for interval in intervals)
 
 
 def test_packed_runtime_guard_preserves_pytest_workers_and_control_hooks(tmp_path: Path) -> None:

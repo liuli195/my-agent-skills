@@ -4946,7 +4946,7 @@ def test_build_and_verify_runner_cache_key_changes_with_check_contract(
     elif mutation == "inputs":
         changed_config = config(inputs=["inputs/v2.txt"])
     elif mutation == "config":
-        changed_config = config(version=2)
+        changed_config["verify"]["maxParallel"] = 2
     else:
         raise AssertionError(f"unsupported mutation: {mutation}")
 
