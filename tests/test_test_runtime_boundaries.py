@@ -399,6 +399,8 @@ def test_cache_scan():
 
 
 E2E_ALLOWLIST: dict[str, str] = {
+    "tests/test_my_spec.py::test_myspec_recovery_rejects_old_request_for_identical_new_legacy_session": "Installed bare CLI verifies legacy lock-instance authorization and non-UTF8 recovery output.",
+    "tests/test_my_spec.py::test_myspec_recovery_outputs_ascii_json_for_non_utf8_stdout": "Installed bare CLI verifies legacy lock-instance authorization and non-UTF8 recovery output.",
     "tests/test_data_store.py::test_installed_delete_accepts_distinct_stable_fd_ctime": "Installed maintenance CLI verifies platform timestamp, durable recovery and plan encoding boundaries.",
     "tests/test_data_store.py::test_installed_delete_resume_syncs_existing_receipt_directory_before_unlink": "Installed maintenance CLI verifies platform timestamp, durable recovery and plan encoding boundaries.",
     "tests/test_data_store.py::test_installed_delete_rejects_source_local_ctime_drift": "Installed maintenance CLI verifies platform timestamp, durable recovery and plan encoding boundaries.",

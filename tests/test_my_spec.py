@@ -855,6 +855,8 @@ def _current_test_name() -> str:
 
 
 _REAL_CLI_TESTS = {
+    "test_myspec_recovery_rejects_old_request_for_identical_new_legacy_session",
+    "test_myspec_recovery_outputs_ascii_json_for_non_utf8_stdout",
     "test_myspec_recovery_init_preserves_existing_current",
     "test_myspec_recovery_aborts_legacy_preview_and_preserves_material",
     "test_myspec_recovery_reimports_only_delta_and_restarts_confirmation",
@@ -5890,10 +5892,13 @@ def recovery_session(git_project: Path, recovery_cli):
     return git_project, work, specs, delta, preview
 
 
-def abort_arguments(session) -> list[object]:
+def abort_arguments(session, cli) -> list[object]:
     target, work, specs, delta, preview = session
     digest = hashlib.sha256((work / "current" / "state.json").read_bytes()).hexdigest()
-    return ["state-abort", work, target, specs, delta, preview, digest, "add", "--confirm-no-active-session"]
+    state = json.loads((work / "current" / "state.json").read_text(encoding="utf-8"))
+    inspected = cli("state-status", work, state["specsFingerprint"], state["inputFingerprint"], "--abort-identity")
+    lock_identity = json.loads(inspected.stdout)["abortIdentity"]["lockIdentitySha256"] if inspected.returncode == 0 else "0" * 64
+    return ["state-abort", work, target, specs, delta, preview, digest, "add", "--lock-identity", lock_identity, "--confirm-no-active-session"]
 
 
 def test_myspec_recovery_aborts_legacy_preview_and_preserves_material(
@@ -5913,12 +5918,12 @@ def test_myspec_recovery_aborts_legacy_preview_and_preserves_material(
     assert "input_content_changed" in failed.stderr
     write(work / "current" / "failure.txt", failed.stderr)
     original = {path.relative_to(work / "current"): path.read_bytes() for path in (work / "current").rglob("*") if path.is_file()}
-    arguments = abort_arguments(recovery_session)
+    arguments = abort_arguments(recovery_session, recovery_cli)
     inspected = recovery_cli("state-status", work, "specs", "input", "--abort-identity")
     assert inspected.returncode == 0, inspected.stderr
     identity = json.loads(inspected.stdout)["abortIdentity"]
     assert identity == {
-        "stateSha256": arguments[-3], "lockCommand": "add", "workRoot": str(work),
+        "stateSha256": arguments[6], "lockIdentitySha256": arguments[9], "lockCommand": "add", "workRoot": str(work),
         "targetWorktree": str(target), "specsRoot": str(specs), "deltaRoot": str(delta),
         "previewRoot": str(preview), "sessionId": None, "applicationPhase": None,
     }
@@ -5952,7 +5957,7 @@ def test_myspec_recovery_reimports_only_delta_and_restarts_confirmation(
     old_delta = (delta / "accounts" / "spec.md").read_bytes()
     original_specs = (specs / "accounts" / "spec.md").read_bytes()
     started = time.perf_counter()
-    aborted = recovery_cli(*abort_arguments(recovery_session))
+    aborted = recovery_cli(*abort_arguments(recovery_session, recovery_cli))
     assert aborted.returncode == 0, aborted.stderr
     archive_seconds = time.perf_counter() - started
     archive = Path(json.loads(aborted.stdout)["archive"])
@@ -6048,7 +6053,7 @@ shutil.rmtree = rmtree
         assert "允许密码登录" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
         assert not (work / "lock").exists()
         assert (delta / "accounts" / "spec.md").read_bytes() == draft
-        refused = recovery_cli(*abort_arguments(recovery_session))
+        refused = recovery_cli(*abort_arguments(recovery_session, recovery_cli))
         assert refused.returncode != 0
         assert "application_recovery_required" in refused.stderr
         return
@@ -6062,7 +6067,7 @@ shutil.rmtree = rmtree
         backups = list(specs.parent.glob(".my-spec-backup-*"))
         assert len(backups) == 1
         assert (backups[0] / "accounts" / "spec.md").read_bytes() == original
-    refused = recovery_cli(*abort_arguments(recovery_session))
+    refused = recovery_cli(*abort_arguments(recovery_session, recovery_cli))
     assert refused.returncode != 0
     assert "application_recovery_required" in refused.stderr
     assert (work / "lock").exists()
@@ -6073,7 +6078,8 @@ shutil.rmtree = rmtree
 @pytest.mark.parametrize("evidence,error", [
     ("no-confirmation", "no_active_session_confirmation_required"),
     ("wrong-state", "abort_state_mismatch"),
-    ("foreign-lock", "abort_lock_mismatch"),
+    ("foreign-lock", "abort_lock_identity_mismatch"),
+    ("replaced-same-lock", "abort_lock_identity_mismatch"),
     ("wrong-target", "abort_target_mismatch"),
     ("cross-worktree", "cross_worktree_path"),
     ("legacy-no-baseline", "abort_specs_baseline_mismatch"),
@@ -6116,13 +6122,17 @@ def test_myspec_recovery_rejects_insufficient_or_foreign_evidence(
         write(external, "must not be touched")
         (work / "current" / "redirected").symlink_to(external)
     write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
-    arguments = abort_arguments(recovery_session)
+    arguments = abort_arguments(recovery_session, recovery_cli)
     if evidence == "no-confirmation":
         arguments.pop()
     elif evidence == "wrong-state":
-        arguments[-3] = "0" * 64
+        arguments[6] = "0" * 64
     elif evidence == "foreign-lock":
         write(work / "lock", '{"command":"add","sessionId":"foreign","workRoot":"elsewhere"}\n')
+    elif evidence == "replaced-same-lock":
+        content = (work / "lock").read_bytes()
+        (work / "lock").unlink()
+        (work / "lock").write_bytes(content)
     elif evidence == "wrong-target":
         arguments[2] = target.parent
     elif evidence == "cross-worktree":
@@ -6146,7 +6156,7 @@ def test_myspec_recovery_preserves_lock_until_archive_and_retries_safely(
     tmp_path: Path, recovery_session, recovery_cli, fault: str,
 ) -> None:
     target, work, specs, delta, preview = recovery_session
-    arguments = abort_arguments(recovery_session)
+    arguments = abort_arguments(recovery_session, recovery_cli)
     original = {path.relative_to(work / "current"): path.read_bytes() for path in (work / "current").rglob("*") if path.is_file()}
     lock_bytes = (work / "lock").read_bytes()
     injection = tmp_path / "abort-fault"
@@ -6254,7 +6264,7 @@ def test_myspec_recovery_preserves_failed_first_preview(git_project: Path, recov
     failed = recovery_cli("apply-delta", specs, delta, preview, work, "specs", "input")
     assert failed.returncode != 0
     assert "output_not_empty" in failed.stderr
-    result = recovery_cli(*abort_arguments((git_project, work, specs, delta, preview)))
+    result = recovery_cli(*abort_arguments((git_project, work, specs, delta, preview), recovery_cli))
     assert result.returncode == 0, result.stderr
     archive = Path(json.loads(result.stdout)["archive"])
     assert (archive / "current" / "preview" / "failure.txt").read_text(encoding="utf-8") == "partial first preview, must be retained\n"
@@ -6271,7 +6281,7 @@ def test_myspec_recovery_rejects_foreign_or_unsafe_archive_import(
     tmp_path: Path, recovery_session, recovery_cli, evidence: str, error: str,
 ) -> None:
     target, work, specs, delta, preview = recovery_session
-    aborted = recovery_cli(*abort_arguments(recovery_session))
+    aborted = recovery_cli(*abort_arguments(recovery_session, recovery_cli))
     assert aborted.returncode == 0, aborted.stderr
     archive = Path(json.loads(aborted.stdout)["archive"])
     if evidence == "foreign":
@@ -6303,3 +6313,87 @@ def test_myspec_recovery_rejects_foreign_or_unsafe_archive_import(
     assert error in refused.stderr
     assert not (work / "lock").exists()
     assert not (work / "current").exists()
+
+
+def test_myspec_recovery_rejects_old_request_for_identical_new_legacy_session(
+    recovery_session, recovery_cli,
+) -> None:
+    target, work, specs, delta, preview = recovery_session
+    state_path = work / "current/state.json"
+    legacy = json.loads(state_path.read_text(encoding="utf-8"))
+    legacy.pop("sessionId")
+    legacy.pop("applicationPhase")
+    # Retain the existing legacy-state fixture shape without depending on Git
+    # history, a downloaded old release, or a mocked abort implementation.
+    write(state_path, json.dumps(legacy, ensure_ascii=False, indent=2))
+    (work / "lock").write_bytes(b"add\n")
+    first_state = state_path.read_bytes()
+    material = {path.relative_to(work / "current"): path.read_bytes() for path in (work / "current").rglob("*") if path.is_file()}
+    old_arguments = abort_arguments(recovery_session, recovery_cli)
+    first = recovery_cli(*old_arguments)
+    assert first.returncode == 0, first.stderr
+
+    initialized = recovery_cli("state-init", work, "add", "specs", "input")
+    assert initialized.returncode == 0, initialized.stderr
+    for relative, content in material.items():
+        destination = work / "current" / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+    (work / "lock").write_bytes(b"add\n")
+    assert state_path.read_bytes() == first_state
+    marker = work / "current/new-session-only.txt"
+    write(marker, "new session must survive old authorization")
+    new_lock = (work / "lock").read_bytes(), (work / "lock").stat()
+    replayed = recovery_cli(*old_arguments)
+    assert replayed.returncode != 0
+    assert "abort_request_already_completed" in replayed.stderr
+    assert marker.read_text(encoding="utf-8") == "new session must survive old authorization\n"
+    assert state_path.read_bytes() == first_state
+    assert (work / "lock").read_bytes() == new_lock[0]
+    assert (work / "lock").stat() == new_lock[1]
+    fresh_arguments = abort_arguments(recovery_session, recovery_cli)
+    assert fresh_arguments[6] == old_arguments[6]
+    assert fresh_arguments[9] != old_arguments[9]
+    fresh = recovery_cli(*fresh_arguments)
+    assert fresh.returncode == 0, fresh.stderr
+    assert json.loads(fresh.stdout)["archive"] != json.loads(first.stdout)["archive"]
+
+
+@pytest.mark.parametrize("command", ["inspect", "abort"])
+def test_myspec_recovery_outputs_ascii_json_for_non_utf8_stdout(
+    git_project: Path, recovery_cli, command: str,
+) -> None:
+    work = git_project / ".local" / "中文会话"
+    specs = git_project / "中文规格" / "specs"
+    delta, preview = work / "current/delta", work / "current/preview"
+    write(specs / "accounts/spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
+    initialized = recovery_cli("state-init", work, "add", "specs", "input")
+    assert initialized.returncode == 0, initialized.stderr
+    write(delta / "accounts/spec.md", "## MODIFIED Requirements\n\n" + requirement("登录", "允许密码登录"))
+    empty = git_project / "empty-conflicts.json"
+    write(empty, "[]")
+    for result in (
+        recovery_cli("state-set-conflicts", work, empty, "specs", "input"),
+        recovery_cli("apply-delta", specs, delta, preview, work, "specs", "input"),
+    ):
+        assert result.returncode == 0, result.stderr
+    environment = {"PYTHONIOENCODING": "cp1252:strict", "PYTHONUTF8": "0"}
+    if command == "inspect":
+        state_bytes = (work / "current/state.json").read_bytes()
+        lock_bytes = (work / "lock").read_bytes()
+        inspected = recovery_cli("state-status", work, "specs", "input", "--abort-identity", extra_env=environment)
+        assert inspected.returncode == 0, inspected.stderr
+        assert inspected.stdout.isascii()
+        assert json.loads(inspected.stdout)["abortIdentity"]["workRoot"] == str(work)
+        assert (work / "current/state.json").read_bytes() == state_bytes
+        assert (work / "lock").read_bytes() == lock_bytes
+    else:
+        arguments = abort_arguments((git_project, work, specs, delta, preview), recovery_cli)
+        aborted = recovery_cli(*arguments, extra_env=environment)
+        assert aborted.returncode == 0, aborted.stderr
+        assert aborted.stdout.isascii()
+        archive = Path(json.loads(aborted.stdout)["archive"])
+        assert archive.parent == work / "aborted"
+        assert (archive / "current/state.json").is_file()
+        assert not (work / "lock").exists()
+        assert not (work / "current").exists()

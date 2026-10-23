@@ -33,7 +33,7 @@ myspec state-decide <work-dir> <expected-conflict-id> <accept|ignore|defer> <spe
 myspec state-decide <work-dir> <expected-conflict-id> accept-modified <specs-fingerprint> <input-fingerprint> --modified-content <完整候选正文>
 myspec state-status <work-dir> <specs-fingerprint> <input-fingerprint>
 myspec state-status <work-dir> <saved-specs-fingerprint> <saved-input-fingerprint> --abort-identity
-myspec state-abort <work-dir> <target-worktree> <specs-dir> <delta-dir> <preview-dir> <state-sha256> <add|review|audit> --confirm-no-active-session
+myspec state-abort <work-dir> <target-worktree> <specs-dir> <delta-dir> <preview-dir> <state-sha256> <add|review|audit> --lock-identity <lock-identity-sha256> --confirm-no-active-session
 myspec validate-main <specs-dir>
 myspec validate-delta <delta-dir> <specs-dir>
 myspec apply-delta <specs-dir> <delta-dir> <preview-dir> <work-dir> <specs-fingerprint> <input-fingerprint>
@@ -45,10 +45,10 @@ myspec diff <specs-dir> <preview-dir>
 ## 会话恢复
 
 1. 初始化前保存内容不得放在会被覆盖的位置；`state-init`（会话初始化）发现已有 `current`（当前会话）内容时明确拒绝，不递归删除。初始化失败只撤回本次实际创建且仍匹配的锁，保留已有草案和诊断材料。
-2. 放弃失败预览前，使用保存的旧指纹运行 `state-status --abort-identity`（读取中止身份），展示目标工作树、工作根、规格根、Delta（增量规格）根、预览根、精确状态文件 SHA-256（安全散列）及锁命令。它只读身份，绝不判断会话是否仍活动。必须另外取得调用方明确的“无活动会话”确认，才可传入 `--confirm-no-active-session`（确认无活动会话）。
+2. 放弃失败预览前，使用保存的旧指纹运行 `state-status --abort-identity`（读取中止身份），展示目标工作树、工作根、规格根、Delta（增量规格）根、预览根、精确状态文件 SHA-256（安全散列）、锁命令和 `lockIdentitySha256`（具体锁文件实例身份摘要）。该摘要绑定原锁文件的设备、文件标识、修改／变更时间及内容，不只匹配命令文字；中止时必须以 `--lock-identity`（锁实例身份）原样提供。它只读身份，绝不判断会话是否仍活动。必须另外取得调用方明确的“无活动会话”确认，才可传入 `--confirm-no-active-session`（确认无活动会话）。新增身份及中止结果使用 ASCII（基本字符集）转义的 JSON（结构化数据）输出，非 UTF-8（统一字符编码）终端也能可靠解析中文路径。
 3. `state-abort`（会话中止）逐项匹配上述身份。Delta 和预览必须位于该工作根的 `current` 内；不接受重定向路径、其他工作树、未知状态、缺少基线或已进入正式应用的会话。当前主规格必须仍等于保存的原内容基线，规格父目录不得存在 `.my-spec-backup-*`（规格备份）或 `.my-spec-preview-*`（待替换规格）现场。输入或失败预览变化不阻止归档，不得修改旧指纹来假装仍有效。
 4. 旧版只有 `add`、`review` 或 `audit` 命令文字加单个换行的锁，可以使用相同命令恢复，但必须精确提供旧状态和全部路径，并通过原主规格基线及无部分应用现场核验。不得补写旧状态不存在的会话身份或应用阶段来伪造兼容。任一证据不足均保留原锁、状态及草案。
-5. 工具先将完整 `current` 原子移入工作根内唯一的 `aborted/<状态散列>-<唯一标识>/current`（已中止归档），保留决定、Delta、预览及失败文件，再删除仍精确匹配的锁。归档失败保留原会话和锁；归档后解锁失败时，归档与锁均保留，用相同参数重试只完成匹配的解锁。重复请求不得覆盖旧归档，也不得影响后来出现的新会话。
+5. 工具先将完整 `current` 原子移入工作根内唯一的 `aborted/<状态散列>-<唯一标识>/current`（已中止归档），保留决定、Delta、预览及失败文件，同时保存已授权的锁实例身份，再删除仍精确匹配的锁。归档失败保留原会话和锁；归档后解锁失败时，归档与锁均保留，用相同参数重试只完成匹配的解锁。重复请求优先识别原回执；后来出现新 `current` 时拒绝旧请求，绝不归档或解锁新会话。即使后续旧格式状态逐字节相同，也必须重新读取新锁实例并显式授权，才能中止新会话；不得覆盖旧归档。
 6. 使用返回的归档目录显式运行 `state-init ... --import-aborted <archive-dir>`（导入已中止草案）。只允许同工作根的完整归档，只复制 Delta 内容。新会话使用当前证据和主规格指纹、全新身份及 `ANALYZING`（分析中）状态，旧冲突、决定、就绪状态和最终确认均不继承。先重新分析并保存完整候选、逐项决定、校验 Delta、生成预览并展示完整差异，仍须等待新的最终确认才可正式应用。
 
 中止不恢复已进入正式应用的事务。正式替换前会记录应用阶段；异常或中断后即使已自动回滚，仍不能用预览中止释放该现场。保留材料并按受控事务恢复处理，不提供忽略身份的解锁或强制解锁。

@@ -664,8 +664,13 @@ def _file_identity(path: Path) -> dict[str, object]:
         "inode": before.st_ino,
         "size": before.st_size,
         "modifiedNs": before.st_mtime_ns,
+        "changedNs": before.st_ctime_ns,
         "sha256": hashlib.sha256(content).hexdigest(),
     }
+
+
+def _identity_sha256(identity: dict[str, object]) -> str:
+    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode("ascii")).hexdigest()
 
 
 def _check_abort_state(
@@ -705,28 +710,31 @@ def _check_abort_state(
 
 def state_abort(
     work_root: Path, target_root: Path, specs_root: Path, delta_root: Path,
-    preview_root: Path, state_sha256: str, lock_command: str,
+    preview_root: Path, state_sha256: str, lock_command: str, lock_identity_sha256: str,
     confirm_no_active_session: bool,
 ) -> dict[str, object]:
     if not confirm_no_active_session:
         raise SpecError("no_active_session_confirmation_required")
     if not re.fullmatch(r"[0-9a-f]{64}", state_sha256):
         raise SpecError("invalid_state_sha256")
+    if not re.fullmatch(r"[0-9a-f]{64}", lock_identity_sha256):
+        raise SpecError("invalid_lock_identity_sha256")
     work, target, specs, delta, preview = (
         _plain_path(path) for path in (work_root, target_root, specs_root, delta_root, preview_root)
     )
     _plain_path(specs, tree=True)
     current = work / "current"
-    _plain_path(current, tree=True)
+    _plain_path(current)
     aborted = _plain_path(work / "aborted")
     expected = {
         "workRoot": str(work), "targetWorktree": str(target), "specsRoot": str(specs),
         "deltaRoot": str(delta), "previewRoot": str(preview),
         "stateSha256": state_sha256, "lockCommand": lock_command,
+        "lockIdentitySha256": lock_identity_sha256,
     }
     archive = None
     receipt = None
-    if not current.exists() and aborted.is_dir():
+    if aborted.is_dir():
         for candidate in sorted(aborted.glob(f"{state_sha256}-*")):
             _plain_path(candidate, tree=True)
             if not (candidate / "current" / "state.json").is_file():
@@ -736,17 +744,23 @@ def state_abort(
                 if archive is not None:
                     raise SpecError("ambiguous_abort_archive")
                 archive, receipt = candidate, value
+    if archive is not None and current.exists():
+        raise SpecError("abort_request_already_completed: newer current must be preserved")
+    if archive is None:
+        _plain_path(current, tree=True)
     state_path = (archive / "current" / "state.json") if archive else _state_path(work)
     if _file_identity(state_path)["sha256"] != state_sha256:
         raise SpecError("abort_state_mismatch")
     state = _read_json(state_path)
     if not isinstance(state, dict):
         raise SpecError("invalid_state_document")
-    _check_abort_state(state, work, target, specs, delta, preview, lock_command)
     lock = work / "lock"
     if archive is not None and not lock.exists():
         return {"status": "ABORTED", "archive": str(archive), "alreadyAborted": True}
+    _check_abort_state(state, work, target, specs, delta, preview, lock_command)
     lock_identity = _file_identity(lock)
+    if _identity_sha256(lock_identity) != lock_identity_sha256:
+        raise SpecError("abort_lock_identity_mismatch")
     lock_content = lock.read_bytes()
     if "sessionId" in state:
         expected_lock = {"command": lock_command, "sessionId": state["sessionId"], "workRoot": str(work)}
@@ -1106,6 +1120,7 @@ def _parser() -> argparse.ArgumentParser:
     abort_parser.add_argument("preview_dir", type=Path)
     abort_parser.add_argument("state_sha256", help="exact saved state.json SHA-256")
     abort_parser.add_argument("lock_command", choices=("add", "review", "audit"))
+    abort_parser.add_argument("--lock-identity", required=True, help="exact lockIdentitySha256 from state-status --abort-identity")
     abort_parser.add_argument("--confirm-no-active-session", action="store_true", help="external confirmation, never inferred from lock age or process exit")
     state_set_parser = commands.add_parser("state-set-conflicts")
     state_set_parser.add_argument("work_dir", type=Path)
@@ -1155,9 +1170,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "state-abort":
             print(json.dumps(state_abort(
                 args.work_dir, args.target_worktree, args.specs_dir, args.delta_dir,
-                args.preview_dir, args.state_sha256, args.lock_command,
+                args.preview_dir, args.state_sha256, args.lock_command, args.lock_identity,
                 args.confirm_no_active_session,
-            ), ensure_ascii=False))
+            ), ensure_ascii=True))
         elif args.command == "state-set-conflicts":
             print(
                 json.dumps(
@@ -1198,13 +1213,14 @@ def main(argv: list[str] | None = None) -> int:
             if args.abort_identity:
                 result["abortIdentity"] = {
                     "stateSha256": _file_identity(_state_path(args.work_dir))["sha256"],
+                    "lockIdentitySha256": _identity_sha256(_file_identity(args.work_dir / "lock")),
                     "lockCommand": state.get("command"),
                     **{key: state.get(key) for key in (
                         "workRoot", "targetWorktree", "specsRoot", "deltaRoot", "previewRoot",
                         "sessionId", "applicationPhase",
                     )},
                 }
-            print(json.dumps(result, ensure_ascii=False))
+            print(json.dumps(result, ensure_ascii=args.abort_identity))
         elif args.command in {"init", "doctor", "update"}:
             print(json.dumps(run_management(args), ensure_ascii=False))
     except (SpecError, ManagementError) as exc:
