@@ -6347,14 +6347,21 @@ def test_myspec_recovery_rejects_old_request_for_identical_new_legacy_session(
     assert state_path.read_bytes() == first_state
     marker = work / "current/new-session-only.txt"
     write(marker, "new session must survive old authorization")
-    new_lock = (work / "lock").read_bytes(), (work / "lock").stat()
+    new_lock_bytes = (work / "lock").read_bytes()
+    new_lock_stat = (work / "lock").stat()
     replayed = recovery_cli(*old_arguments)
     assert replayed.returncode != 0
     assert "abort_request_already_completed" in replayed.stderr
     assert marker.read_text(encoding="utf-8") == "new session must survive old authorization\n"
     assert state_path.read_bytes() == first_state
-    assert (work / "lock").read_bytes() == new_lock[0]
-    assert (work / "lock").stat() == new_lock[1]
+    assert (work / "lock").read_bytes() == new_lock_bytes
+    current_lock_stat = (work / "lock").stat()
+    # Reading may advance atime; identity and modification metadata must not change.
+    for field in (
+        "st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid", "st_size",
+        "st_mtime_ns", "st_ctime_ns",
+    ):
+        assert getattr(current_lock_stat, field) == getattr(new_lock_stat, field), field
     fresh_arguments = abort_arguments(recovery_session, recovery_cli)
     assert fresh_arguments[6] == old_arguments[6]
     assert fresh_arguments[9] != old_arguments[9]
