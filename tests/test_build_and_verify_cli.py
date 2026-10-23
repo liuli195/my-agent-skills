@@ -478,6 +478,224 @@ def _installed_build_and_verify(tmp_path: Path) -> tuple[str, Path, Path]:
     return npm, prefix, executable
 
 
+def test_packed_runtime_guard_initialization_and_explicit_migration(tmp_path: Path) -> None:
+    _, prefix, executable = _installed_build_and_verify(tmp_path)
+    env = _isolated_env(tmp_path, prefix)
+    project = tmp_path / "project"
+    initialized = subprocess.run([executable, "init", "--project", str(project)],
+        env=env, text=True, capture_output=True, check=False)
+    assert initialized.returncode == 0, initialized.stdout + initialized.stderr
+    config_path = project / ".build-and-verify/config.json"
+    assert json.loads(config_path.read_text()) == {
+        "version": 2, "build": {"checks": []},
+        "verify": {"realChecks": [], "checks": []}}
+    legacy = {"version": 1, "verify": {"checks": [
+        {"id": "ordinary", "command": [sys.executable, "ordinary.py"], "inputs": ["ordinary.py"]}]}}
+    config_path.write_text(json.dumps(legacy))
+    (project / "ordinary.py").write_text("from pathlib import Path\nPath('effect').write_text('legacy')\n")
+    def verify():
+        return subprocess.run([executable, "verify", "--project", str(project),
+            "--execution-context", "cloud"], env=env, text=True, capture_output=True, check=False)
+    old = verify()
+    assert old.returncode == 0, old.stdout + old.stderr
+    assert "legacy-unprotected" in old.stdout
+    assert (project / "effect").read_text() == "legacy"
+    (project / "effect").unlink()
+    confirmed = tmp_path / "confirmed.json"
+    confirmed.write_text(json.dumps({**legacy, "version": 2,
+        "verify": {**legacy["verify"], "realChecks": []}}))
+    migrated = subprocess.run([executable, "init", "--project", str(project),
+        "--config", str(confirmed), "--overwrite"], env=env, text=True, capture_output=True, check=False)
+    assert migrated.returncode == 0, migrated.stdout + migrated.stderr
+    backups = list((project / ".build-and-verify/backups").glob("config-*.json"))
+    assert len(backups) == 1 and json.loads(backups[0].read_text()) == legacy
+    blocked = verify()
+    assert blocked.returncode != 0, blocked.stdout + blocked.stderr
+    assert "runtime_guard_violation" in blocked.stderr
+    assert not (project / "effect").exists()
+    # The same unprotected real success must never become ordinary evidence.
+    real_config = json.loads(confirmed.read_text())
+    real_config["verify"]["realChecks"] = ["ordinary"]
+    config_path.write_text(json.dumps(real_config))
+    real = verify()
+    assert real.returncode == 0, real.stdout + real.stderr
+    assert (project / "effect").read_text() == "legacy"
+    (project / "effect").unlink()
+    config_path.write_text(confirmed.read_text())
+    protected_again = verify()
+    assert protected_again.returncode == 1
+    assert "cache-hit:" not in protected_again.stdout
+    assert not (project / "effect").exists()
+    restored = subprocess.run([executable, "init", "--project", str(project),
+        "--config", str(backups[0]), "--overwrite"], env=env, text=True, capture_output=True, check=False)
+    assert restored.returncode == 0, restored.stdout + restored.stderr
+    assert json.loads(config_path.read_text()) == legacy
+    assert json.loads(backups[0].read_text()) == legacy
+    reverted = verify()
+    assert reverted.returncode == 0, reverted.stdout + reverted.stderr
+    assert "legacy-unprotected" in reverted.stdout
+    (project / "ordinary.py").write_text(
+        "import importlib\n"
+        "try:\n"
+        " db=importlib.import_module('duckdb')\n"
+        " assert db.connect(':memory:').execute('select 42').fetchone() == (42,)\n"
+        "except ImportError: pass\n")
+    config_path.write_text(confirmed.read_text())
+    unsupported_native = verify()
+    assert unsupported_native.returncode == 1, unsupported_native.stdout + unsupported_native.stderr
+    assert "runtime_guard_uncovered_native" in unsupported_native.stderr
+    config_path.write_text(json.dumps(real_config))
+    native_real = verify()
+    assert native_real.returncode == 0, native_real.stdout + native_real.stderr
+    assert "real-unprotected" in native_real.stdout
+    (project / "ordinary.py").write_text(
+        "import sqlite3\n"
+        "class Custom(sqlite3.Connection): pass\n"
+        "c=sqlite3.connect(':memory:', factory=Custom)\n"
+        "seen=[]\n"
+        "def authorize(action, *args):\n"
+        " seen.append(action)\n"
+        " return sqlite3.SQLITE_DENY if action == sqlite3.SQLITE_SELECT else sqlite3.SQLITE_OK\n"
+        "c.set_authorizer(authorize)\n"
+        "try: c.execute('select 1')\n"
+        "except sqlite3.DatabaseError: pass\n"
+        "else: raise AssertionError('business authorizer was lost')\n"
+        "assert sqlite3.SQLITE_SELECT in seen\n"
+        "c.set_authorizer(None)\n"
+        "assert c.execute('select 42').fetchone() == (42,)\n"
+        "assert c.execute('pragma temp_store').fetchone() == (2,)\n"
+        "for sql in [\"ATTACH DATABASE 'sqlite-effect' AS bad\", \"VACUUM INTO 'sqlite-vacuum'\", 'PRAGMA temp_store=FILE']:\n"
+        " try: c.execute(sql)\n"
+        " except sqlite3.DatabaseError: pass\n"
+        "print('SQLITE_CALLBACKS_OK')\n")
+    config_path.write_text(confirmed.read_text())
+    sqlite = verify()
+    assert sqlite.returncode == 1, sqlite.stdout + sqlite.stderr
+    assert "SQLITE_CALLBACKS_OK" in sqlite.stdout
+    assert "sqlite3.authorizer" in sqlite.stderr
+    assert not (project / "sqlite-effect").exists()
+    assert not (project / "sqlite-vacuum").exists()
+    import sqlite3
+    with sqlite3.connect(str(project / "readonly.db")) as fixture:
+        fixture.execute("create table values_for_reading(value)")
+        fixture.execute("insert into values_for_reading values (42)")
+    (project / "ordinary.py").write_text(
+        "import sqlite3\n"
+        "c=sqlite3.connect('file:readonly.db?mode=ro', uri=True)\n"
+        "assert c.execute('select value from values_for_reading').fetchall() == [(42,)]\n"
+        "assert c.execute('pragma table_info(values_for_reading)').fetchone()[1] == 'value'\n"
+        "try: c.execute('insert into values_for_reading values (99)')\n"
+        "except sqlite3.DatabaseError: pass\n"
+        "print('SQLITE_READONLY_OK')\n")
+    readonly = verify()
+    assert readonly.returncode == 1, readonly.stdout + readonly.stderr
+    assert "SQLITE_READONLY_OK" in readonly.stdout
+    assert "sqlite3.authorizer" in readonly.stderr
+    with sqlite3.connect(str(project / "readonly.db")) as fixture:
+        assert fixture.execute("select value from values_for_reading").fetchall() == [(42,)]
+
+
+def test_packed_runtime_guard_preserves_pytest_workers_and_control_hooks(tmp_path: Path) -> None:
+    _, prefix, executable = _installed_build_and_verify(tmp_path)
+    env = {**_isolated_env(tmp_path, prefix), "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "PYTEST_ADDOPTS": "-n 2"}
+    project = tmp_path / "project"
+    (project / ".build-and-verify").mkdir(parents=True)
+    (project / "test_memory.py").write_text(
+        "import sqlite3, unittest, time\n"
+        "class Memory(unittest.TestCase):\n"
+        " def test_read_and_memory(self):\n"
+        "  time.sleep(0.6)\n"
+        "  self.assertEqual(open('data.txt').read(), 'READABLE')\n"
+        "  self.assertEqual(sqlite3.connect(':memory:').execute('select 42').fetchone(), (42,))\n"
+        "def test_second():\n time.sleep(0.6)\n assert sum([1, 2, 3]) == 6\n")
+    (project / "conftest.py").write_text(
+        "import os, time, pytest\nintervals=[]\n"
+        "@pytest.hookimpl(hookwrapper=True)\n"
+        "def pytest_runtest_call(item):\n"
+        " start=time.monotonic(); yield\n"
+        " item.user_properties.append(('execution', (os.getpid(), start, time.monotonic())))\n"
+        "def pytest_runtest_logreport(report):\n"
+        " if report.when == 'call': intervals.extend(v for k,v in report.user_properties if k == 'execution')\n"
+        "def pytest_sessionfinish(session):\n"
+        " if not hasattr(session.config, 'workerinput'):\n"
+        "  assert len({x[0] for x in intervals}) == 2\n"
+        "  assert max(x[1] for x in intervals) < min(x[2] for x in intervals)\n")
+    (project / "data.txt").write_text("READABLE")
+    config = {"version": 2, "verify": {"realChecks": [], "maxParallel": 2, "checks": [
+        {"id": name, "command": [sys.executable, "-m", "pytest", "-q", "-p", "xdist.plugin", "test_memory.py"],
+         "checkParallel": True, "inputs": ["test_memory.py", "data.txt", "conftest.py"]}
+        for name in ("memory-a", "memory-b")]}}
+    config_path = project / ".build-and-verify/config.json"
+    config_path.write_text(json.dumps(config))
+    def verify():
+        return subprocess.run([executable, "verify", "--project", str(project), "--execution-context", "cloud"],
+            env=env, text=True, capture_output=True, check=False, timeout=25)
+    allowed = verify()
+    assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+    assert allowed.stdout.count("2 passed") == 2
+    proofs = [json.loads(line.removeprefix("runtime-guard: ")) for line in allowed.stdout.splitlines()
+              if line.startswith("runtime-guard: ")]
+    assert len(proofs) == 2 and all(proof["workers"] == 2 for proof in proofs)
+    assert max(proof["started"] for proof in proofs) < min(proof["finished"] for proof in proofs)
+    (project / "conftest.py").write_text(
+        "import os, subprocess, sys, threading, execnet\n"
+        "def attempt():\n"
+        " try: subprocess.run([sys.executable, '-c', 'print(123)'])\n"
+        " except PermissionError: pass\n"
+        "def pytest_configure(config):\n"
+        " if not hasattr(config, 'workerinput'):\n"
+        "  t=threading.Thread(target=attempt); t.start(); t.join()\n"
+        "  try:\n"
+        "   group=execnet.Group(); group.makegateway('popen'); group.terminate()\n"
+        "  except PermissionError: pass\n")
+    blocked = verify()
+    assert blocked.returncode != 0, blocked.stdout + blocked.stderr
+    assert "runtime_guard_violation:" in blocked.stderr and "subprocess.Popen" in blocked.stderr
+    assert "runtime_guard_uncovered_worker" in blocked.stderr
+    assert "cache-hit:" not in blocked.stdout
+    (project / "conftest.py").write_text("")
+    (project / "test_memory.py").write_text(
+        "from pathlib import Path\nimport pytest, socket, subprocess, sys, threading\n"
+        "def denied(action):\n"
+        " try: action()\n"
+        " except PermissionError: return\n"
+        " raise AssertionError('effect was not rejected')\n"
+        "def write(phase): denied(lambda: Path(phase).write_text('forbidden'))\n"
+        "write('import-effect')\n"
+        "@pytest.fixture(autouse=True)\n"
+        "def effects():\n"
+        " write('setup-effect'); denied(socket.socket)\n"
+        " yield\n"
+        " write('teardown-effect'); denied(lambda: subprocess.Popen([sys.executable, '-c', 'pass']))\n"
+        "def test_effects():\n"
+        " write('body-effect')\n"
+        " t=threading.Thread(target=lambda: write('thread-effect')); t.start(); t.join()\n")
+    effects = verify()
+    assert effects.returncode == 1, effects.stdout + effects.stderr
+    for phase in ("import", "setup", "body", "teardown", "thread"):
+        assert phase + "-effect" in effects.stderr
+        assert not (project / (phase + "-effect")).exists()
+    assert "socket.__new__" in effects.stderr
+    assert "subprocess.Popen" in effects.stderr
+    (project / "conftest.py").write_text(
+        "import os\nfrom pathlib import Path\n"
+        "if os.environ.get('PYTEST_XDIST_WORKER') not in (None, 'gw0', 'gw1'):\n"
+        " try: Path('restart-effect').write_text('forbidden')\n"
+        " except PermissionError: pass\n")
+    (project / "test_memory.py").write_text(
+        "import os\n"
+        "def run():\n"
+        " if os.environ.get('PYTEST_XDIST_WORKER') == 'gw0': os._exit(0)\n"
+        "def test_first(): run()\n"
+        "def test_second(): run()\n")
+    restarted = verify()
+    assert restarted.returncode == 1, restarted.stdout + restarted.stderr
+    assert "runtime_guard_evidence_incomplete" in restarted.stderr
+    assert "restart-effect" in restarted.stderr
+    assert not (project / "restart-effect").exists()
+
+
 
 def test_install_template_retries_after_pack_failure(tmp_path: Path, monkeypatch) -> None:
     module = sys.modules[__name__]

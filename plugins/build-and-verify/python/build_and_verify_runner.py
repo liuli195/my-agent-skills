@@ -13,6 +13,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,19 @@ DEFAULT_CHECK_TIMEOUT_SECONDS = 300
 PYTEST_XDIST_AUTO_WORKERS_ENV = "PYTEST_XDIST_AUTO_NUM_WORKERS"
 DEFAULT_PYTEST_XDIST_AUTO_NUM_WORKERS = "4"
 Runner = Callable[..., subprocess.CompletedProcess[Any]]
+_GUARD_MODULE = None
+
+
+def _test_guard():
+    global _GUARD_MODULE
+    if _GUARD_MODULE is None:
+        path = Path(__file__).with_name("build_and_verify_guard.py")
+        spec = importlib.util.spec_from_file_location("build_and_verify_guard", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        _GUARD_MODULE = module
+    return _GUARD_MODULE
 
 
 class ConfigError(Exception):
@@ -269,7 +283,7 @@ def _invocation_guard(project: Path, *, context: str | None, pr: bool,
             "budgetSeconds": budget, "overBudget": True, "verificationStatus": "failed",
             "executionContext": "local", "diagnostic": False, "reason": "total_budget_timeout", "phase": control.phase,
             "unfinished": unfinished, "notStarted": not_started,
-            "checks": [{"id": check['id'], "status": completed[check['id']].status if check['id'] in completed
+            "checks": [{"id": check['id'], **_test_role_details(config, check), "status": completed[check['id']].status if check['id'] in completed
                 else ("timed_out" if check['id'] in unfinished else "not_started"),
                 "reason": completed[check['id']].reason if check['id'] in completed else "total_budget_timeout",
                 "durationSeconds": round(completed[check['id']].duration_seconds, 2) if check['id'] in completed
@@ -458,6 +472,10 @@ def _load_config(project: Path) -> dict[str, Any]:
         raise ConfigError(
             f"invalid_config: .build-and-verify/config.json: {error.msg}"
         ) from None
+    return _validate_config(config)
+
+
+def _validate_config(config: Any) -> dict[str, Any]:
     if not isinstance(config, dict):
         raise ConfigError(
             "invalid_config: .build-and-verify/config.json: root must be object"
@@ -545,6 +563,16 @@ def _load_config(project: Path) -> dict[str, Any]:
                         "invalid_config: .build-and-verify/config.json: "
                         f"{section}.checks[{index}].{field} must be list of non-empty strings"
                     )
+    version = config.get("version", 1)
+    if isinstance(version, bool) or not isinstance(version, int) or version not in (1, 2):
+        raise ConfigError("invalid_config: version must be 1 or 2")
+    if version == 2:
+        real = config.get("verify", {}).get("realChecks")
+        if not _is_non_empty_string_list(real):
+            raise ConfigError("invalid_config: verify.realChecks must be an explicit list of check IDs")
+        ids = {check["id"] for check in config.get("verify", {}).get("checks", [])}
+        if len(real) != len(set(real)) or any(item not in ids for item in real):
+            raise ConfigError("invalid_config: verify.realChecks must contain unique existing verify check IDs")
     return config
 
 
@@ -924,6 +952,13 @@ def _cache_key(
         "framework_version": FRAMEWORK_VERSION,
         "python_version": platform.python_version(),
         "runtime_identity": runtime_identity,
+        "test_runtime_policy": {
+            "version": config.get("version", 1),
+            "adapter": _test_guard().ADAPTER_VERSION if config.get("version", 1) == 2 else None,
+            "role": ("real" if check.get("id") in config.get("verify", {}).get("realChecks", []) else "ordinary")
+                if config.get("version", 1) == 2 else "legacy-unprotected",
+            "realChecks": config.get("verify", {}).get("realChecks"),
+        },
         "check_id": check.get("id"),
         "command": check.get("command"),
         "inputs": hashed_inputs,
@@ -1062,6 +1097,18 @@ def _run_check_result(
         )
     workers = _pytest_xdist_workers(check.get("pytestXdistWorkers"))
     command = _command_with_pytest_xdist_workers(command, workers)
+    guarded = config.get("version", 1) == 2 and check["id"] not in config["verify"]["realChecks"]
+    evidence_directory = None
+    evidence_path = None
+    if guarded:
+        try:
+            evidence_directory = tempfile.TemporaryDirectory(prefix="build-and-verify-guard-")
+            evidence_path = Path(evidence_directory.name) / "events.jsonl"
+            command, segments = _test_guard().protected_command(command, evidence_path)
+        except (OSError, ValueError) as error:
+            if evidence_directory is not None:
+                evidence_directory.cleanup()
+            return CheckResult(index, check, 1, stderr=f"{error}\n", duration_seconds=time.monotonic() - started_at)
     use_shell = isinstance(command, str)
     run_kwargs = {
         "cwd": project,
@@ -1078,8 +1125,8 @@ def _run_check_result(
     if timeout_seconds is not None:
         run_kwargs["timeout"] = timeout_seconds
     try:
-        if control is not None and runner is subprocess.run:
-            result = _managed_run(command, control, **run_kwargs)
+        if (control is not None or guarded) and runner is subprocess.run:
+            result = _managed_run(command, control or RunControl(None), **run_kwargs)
         else:
             if control is not None and control.deadline is not None:
                 remaining = control.deadline - time.monotonic()
@@ -1125,12 +1172,23 @@ def _run_check_result(
             duration_seconds=time.monotonic() - started_at,
             cache_key=key,
         )
+    finally:
+        protection_summary = ""
+        if evidence_path is not None:
+            protection_error = _test_guard().evidence_error(evidence_path, segments)
+            if protection_error is None:
+                protection_summary = "runtime-guard: " + json.dumps({"id": check["id"], "role": "ordinary",
+                    **_test_guard().evidence_summary(evidence_path)}) + "\n"
+        else:
+            protection_error = None
+        if evidence_directory is not None:
+            evidence_directory.cleanup()
     return CheckResult(
         index,
         check,
-        int(result.returncode),
-        stdout=result.stdout or "",
-        stderr=result.stderr or "",
+        1 if protection_error else int(result.returncode),
+        stdout=(result.stdout or "") + protection_summary,
+        stderr=(result.stderr or "") + (f"{protection_error}: {check['id']}\n" if protection_error else ""),
         duration_seconds=time.monotonic() - started_at,
         cache_key=key,
     )
@@ -1138,6 +1196,19 @@ def _run_check_result(
 
 def _checks(config: dict[str, Any], section: str) -> list[dict[str, Any]]:
     return list(config.get(section, {}).get("checks", []))
+
+
+def _report_test_roles(config: dict[str, Any], selected: list[dict[str, Any]]) -> None:
+    if config.get("version", 1) == 2:
+        for check in selected:
+            role = _test_role_details(config, check)["testRuntimeRole"]
+            print(f"test-runtime-role: {check['id']} {role}", flush=True)
+
+
+def _test_role_details(config: dict[str, Any], check: dict[str, Any]) -> dict[str, str]:
+    if config.get("version", 1) != 2:
+        return {}
+    return {"testRuntimeRole": "real-unprotected" if check["id"] in config["verify"]["realChecks"] else "ordinary-guarded"}
 
 
 def _max_parallel_checks(config: dict[str, Any], parallel_count: int) -> int:
@@ -1177,6 +1248,7 @@ def _run_scheduled_checks(
     runtime_identity: str,
 ) -> tuple[int, list[str], list[CheckResult]]:
     indexed_selected = list(enumerate(selected))
+    control = RunControl(None) if config.get("version", 1) == 2 else None
     parallel_checks = [(index, check) for index, check in indexed_selected if check.get("checkParallel") is True]
     serial_checks = [(index, check) for index, check in indexed_selected if check.get("checkParallel") is not True]
     results: list[CheckResult] = []
@@ -1195,6 +1267,7 @@ def _run_scheduled_checks(
                     changed_files,
                     runner,
                     runtime_identity,
+                    control,
                 ): (index, check)
                 for index, check in parallel_checks
             }
@@ -1204,6 +1277,8 @@ def _run_scheduled_checks(
                     results.append(future.result())
                 except KeyboardInterrupt as error:
                     interrupted = True
+                    if control is not None:
+                        control.cancelled.set()
                     results.append(
                         CheckResult(
                             index,
@@ -1228,6 +1303,7 @@ def _run_scheduled_checks(
                     changed_files,
                     runner,
                     runtime_identity,
+                    control,
                 )
                 for index, check in serial_checks
             )
@@ -1241,6 +1317,7 @@ def _run_scheduled_checks(
                 changed_files,
                 runner,
                 runtime_identity,
+                control,
             )
             for index, check in serial_checks
         )
@@ -1333,6 +1410,7 @@ def run_verify(
     except ConfigError as error:
         return _config_error(error)
     verify = config.get("verify", {})
+    print("test-runtime-policy: " + ("guarded-v2" if config.get("version", 1) == 2 else "legacy-unprotected"), flush=True)
     enforce = verify.get("enforceLocalBudget", True)
     if not isinstance(enforce, bool):
         return _verify_error("verify.enforceLocalBudget must be boolean")
@@ -1368,6 +1446,7 @@ def run_verify(
     checks = [check for check in configured if not pr or check.get("pr", True)]
     config_changed = ".build-and-verify/config.json" in changed
     selected = checks if full or config_changed else _selected_checks(checks, changed)
+    _report_test_roles(config, selected)
     control.selected = selected
     if invocation_control is not None and os.environ.get("BUILD_AND_VERIFY_STARTUP_GUARD") == "1":
         print("build-and-verify-selected:" + json.dumps({"ids": [check['id'] for check in selected],
@@ -1476,7 +1555,7 @@ def run_verify(
             "executionContext": context, "diagnostic": diagnostic,
             "reason": "total_budget_timeout" if timed_out else None,
             "unfinished": unfinished, "notStarted": unstarted,
-            "checks": [{"id": result.check['id'], "status": result.status,
+            "checks": [{"id": result.check['id'], **_test_role_details(config, result.check), "status": result.status,
                         "reason": result.reason, "durationSeconds": round(result.duration_seconds, 2)} for result in results]}
         control.report_payload = payload
         if _write_performance_report(report_path, payload):
@@ -1551,6 +1630,7 @@ def _run_verify_legacy(
         print(f"excluded-by-pr: {_check_ids([check for check in configured if check.get('pr') is False])}")
     config_changed = ".build-and-verify/config.json" in changed_files
     selected = checks if full or config_changed else _selected_checks(checks, changed_files)
+    _report_test_roles(config, selected)
     if full:
         verify_config = config.get("verify", {})
         budget_seconds = verify_config.get("fullBudgetSeconds")
@@ -1610,6 +1690,7 @@ def _run_verify_legacy(
                     "checks": [
                         {
                             "id": str(result.check.get("id")),
+                            **_test_role_details(config, result.check),
                             "status": "passed" if result.returncode == 0 else "failed",
                             "durationSeconds": round(result.duration_seconds, 2),
                         }

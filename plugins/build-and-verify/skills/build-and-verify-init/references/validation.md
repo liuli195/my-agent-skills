@@ -78,6 +78,7 @@ validation（校验）必须在 `build-and-verify-init`（构建与验证初始�
 写入后必须确认 `.build-and-verify/config.json`（配置文件）符合 runner（运行器）契约：
 
 - 顶层是 object（对象）。
+- 配置版本为整数1或2；版本2必须显式包含 `verify.realChecks`（真实检查标识清单），可为空、一项或多项，每项对应现有验证检查且不能重复。无效清单在写入及检查启动前失败，不写坏旧配置或静默回退。
 - `build.checks`（构建检查项）和 `verify.checks`（验证检查项）是 list（清单）。
 - 每个 check（检查项）有非空且同分组唯一的 `id`（标识）；纯空白字符串必须视为无效。
 - 每个 check（检查项）有非空 string（字符串）或 string list（字符串清单）形式的 command（命令）；纯空白字符串必须视为无效。

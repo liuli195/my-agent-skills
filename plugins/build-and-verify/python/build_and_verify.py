@@ -19,7 +19,7 @@ _RUNNER_MODULE: ModuleType | None = None
 _MANAGEMENT_MODULE: ModuleType | None = None
 RUNTIME_FILES = ("build_and_verify.py", "build_and_verify_runner.py")
 VERSION_FILE = "version.json"
-DEFAULT_CONFIG = {"version": 1, "build": {"checks": []}, "verify": {"checks": []}}
+DEFAULT_CONFIG = {"version": 2, "build": {"checks": []}, "verify": {"realChecks": [], "checks": []}}
 DEFAULT_GITIGNORE = "/cache/\n/runs/\n/backups/\n"
 
 
@@ -106,6 +106,11 @@ def _backup_config(config_target: Path, project: Path) -> Path:
     backup_dir = project / ".build-and-verify" / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
     backup = backup_dir / f"config-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+    original = backup
+    suffix = 1
+    while backup.exists():
+        backup = original.with_stem(f"{original.stem}-{suffix}")
+        suffix += 1
     shutil.copy2(config_target, backup)
     return backup
 
@@ -139,7 +144,8 @@ def _init_project(
     gitignore_target = project / ".build-and-verify" / ".gitignore"
     try:
         confirmed_config = DEFAULT_CONFIG if config is None else _load_config_file(config)
-    except ValueError as error:
+        _runner()._validate_config(confirmed_config)
+    except (ValueError, _runner().ConfigError) as error:
         print(str(error), file=sys.stderr)
         return 1
 
@@ -162,6 +168,7 @@ def _init_project(
 
     if backup is not None:
         print(f"backup: {backup.relative_to(project).as_posix()}")
+    print("test-runtime-policy: " + ("guarded-v2" if confirmed_config.get("version", 1) == 2 else "legacy-unprotected"))
     print("status: initialized")
     return 0
 

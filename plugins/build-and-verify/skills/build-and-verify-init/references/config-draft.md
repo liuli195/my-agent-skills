@@ -8,11 +8,12 @@
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "build": {
     "checks": []
   },
   "verify": {
+    "realChecks": [],
     "checks": []
   }
 }
@@ -33,6 +34,8 @@
 ## Existing Configuration（已有配置）
 
 - 已有 `.build-and-verify/config.json`（配置文件）候选尽量原样保留。
+- 已有 `version: 1`（旧配置）不自动迁移，仍明确标明未保护；只有用户明确选择迁移，才改为 `version: 2`（新配置）并确认 `verify.realChecks`（真实检查标识清单）。该清单允许空、一项或多项，必须为现有验证检查的唯一标识，不可把未知整组命令自动登记为真实检查。
+- 新项目默认新配置。未登记检查默认保护；清单不改变检查选择、既有并行、超时或预算。不能证明保护的命令必须报告未覆盖，不能静默回退旧模式。
 - 保留 check id（检查项标识）、command（命令）、paths（受影响路径）、inputs（缓存输入）、pr（拉取请求场景可执行）、checkParallel（检查项间并行）、pytestXdistWorkers（Pytest 工作进程数）和 timeoutSeconds（超时秒数），以及已有 `verify.fullBudgetSeconds`（完整验证预算秒数）。
 - 已有配置含旧 `parallel`（旧并行字段）时，必须提示用户迁移为 `checkParallel`（检查项间并行），不得写入新草案。
 - 覆盖前展示覆盖摘要、自动生成的备份路径和最终写入确认。

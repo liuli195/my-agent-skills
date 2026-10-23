@@ -457,6 +457,8 @@ E2E_ALLOWLIST: dict[str, str] = {
         'covers installed MySpec update ignoring removed Pi clients and their old configuration through the real command entrypoint; function=test_packed_myspec_update_ignores_removed_pi_client'
     ),
 
+    'tests/test_build_and_verify_cli.py::test_packed_runtime_guard_initialization_and_explicit_migration': 'covers one shared installed template through public init, explicit migration/backup/rollback and ordinary-versus-real cache isolation',
+    'tests/test_build_and_verify_cli.py::test_packed_runtime_guard_preserves_pytest_workers_and_control_hooks': 'covers the same installed public verify entry retaining both parallel layers, controller hooks, swallowed lifecycle effects and protected worker restart',
     'tests/test_build_and_verify_cli.py::test_public_verify_timeout_report_failure_warns_without_changing_failure': 'covers real public timeout reporting failure warning while preserving nonzero exit and later-check cancellation',
     'tests/test_build_and_verify_cli.py::test_public_verify_protocol_like_check_output_is_preserved': 'covers real public entry preserving ordinary text that resembles the final-result protocol',
     'tests/test_build_and_verify_cli.py::test_review_startup_reaps_descendants_after_parent_exits': 'covers real CLI startup ownership after probe or interpreter parent exit',
