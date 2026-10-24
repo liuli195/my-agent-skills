@@ -379,8 +379,7 @@
           ".release-flow/projection.yaml",
           "tests/integration/conftest.py",
           "tests/conftest.py",
-          "requirements-dev.txt",
-          "tests/support/git_templates.py"
+          "requirements-dev.txt"
         ],
         "paths": [
           "plugins/my-spec/**",
@@ -396,8 +395,7 @@
           ".release-flow/projection.yaml",
           "tests/integration/conftest.py",
           "tests/conftest.py",
-          "requirements-dev.txt",
-          "tests/support/git_templates.py"
+          "requirements-dev.txt"
         ],
         "pytestXdistWorkers": 4,
         "timeoutSeconds": 420
@@ -445,7 +443,6 @@
         "inputs": [
           "plugins/pr-flow",
           "tests/integration/test_git_workflows.py",
-          "tests/support/git_templates.py",
           "tests/support/pr_flow_invocation.py",
           "tests/support/command_stubs.py",
           ".pr-flow",
@@ -460,7 +457,6 @@
         "paths": [
           "plugins/pr-flow/**",
           "tests/integration/test_git_workflows.py",
-          "tests/support/git_templates.py",
           "tests/support/pr_flow_invocation.py",
           "tests/support/command_stubs.py",
           ".pr-flow/**",
@@ -481,7 +477,6 @@
         "inputs": [
           "plugins/release-flow",
           "tests/integration/test_git_workflows.py",
-          "tests/support/git_templates.py",
           ".release-flow",
           ".agents/plugins/marketplace.json",
           ".claude-plugin/marketplace.json",
@@ -496,7 +491,6 @@
         "paths": [
           "plugins/release-flow/**",
           "tests/integration/test_git_workflows.py",
-          "tests/support/git_templates.py",
           ".release-flow/**",
           ".agents/plugins/marketplace.json",
           ".claude-plugin/marketplace.json",
@@ -519,7 +513,6 @@
           "scripts/local_plugin_build.py",
           "scripts/setup-worktree.ps1",
           "tests/integration/test_filesystem.py",
-          "tests/support/git_templates.py",
           "package.json",
           "package-lock.json",
           "plugins/data-store/skills/data-store/requirements.txt",
@@ -536,7 +529,6 @@
           "scripts/local_plugin_build.py",
           "scripts/setup-worktree.ps1",
           "tests/integration/test_filesystem.py",
-          "tests/support/git_templates.py",
           "package.json",
           "package-lock.json",
           "plugins/data-store/skills/data-store/requirements.txt",
