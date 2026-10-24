@@ -938,6 +938,11 @@ def test_spec_ops_preview_preserves_modified_requirement_order(spec_documents) -
         assert diff.returncode == 0, diff.stderr
         assert f'-### Requirement: {target}' not in diff.stdout
         assert f'+### Requirement: {target}' not in diff.stdout
+        repeated_preview, _ = preview_delta(root / 'repeat', preview, delta)
+        assert (repeated_preview / 'accounts' / 'spec.md').read_bytes() == (preview / 'accounts' / 'spec.md').read_bytes()
+        repeated_diff = run_python(SPEC_OPS, 'diff', preview, repeated_preview)
+        assert repeated_diff.returncode == 0, repeated_diff.stderr
+        assert repeated_diff.stdout == ''
     root = tmp_path / 'cross-capability'
     specs = root / 'specs'
     delta = root / 'delta'
@@ -976,7 +981,38 @@ def test_spec_ops_cli_validates_previews_all_delta_operations_and_diffs(spec_doc
     assert '-### Requirement: 旧登录' in diff.stdout
     assert '+### Requirement: 密码登录' in diff.stdout
     assert '旧导出' in diff.stdout
-    assert '注销' in diff.stdout
+    assert '+### Requirement: 注销' in diff.stdout
+    repeated_work = ready_state(SPEC_OPS, tmp_path / 'repeated-state')
+    repeated_preview = tmp_path / 'repeated-preview'
+    # The rendered result is the next merge's input; physical replacement and
+    # repeated final apply remain covered by TestMySpec.
+    repeated = apply_ready(SPEC_OPS, preview, delta, repeated_preview, repeated_work)
+    assert repeated.returncode == 0, repeated.stderr
+    assert (repeated_preview / 'accounts' / 'spec.md').read_bytes() == (preview / 'accounts' / 'spec.md').read_bytes()
+    repeated_diff = run_python(SPEC_OPS, 'diff', preview, repeated_preview)
+    assert repeated_diff.returncode == 0, repeated_diff.stderr
+    assert repeated_diff.stdout == ''
+
+
+def test_spec_add_deterministic_post_analysis_flow_previews_and_diffs(spec_documents) -> None:
+    documents = spec_documents
+    root = documents.root / 'add'
+    specs, delta, preview = root / 'specs', root / 'delta', root / 'preview'
+    login = requirement('登录', '允许用户登录')
+    documents.write(specs / 'accounts' / 'spec.md', main_spec('Accounts', login))
+    documents.write(delta / 'accounts' / 'spec.md', '## ADDED Requirements\n\n### Requirement: 注销\n\n系统 MUST 允许用户注销。\n\n#### Scenario: 主动注销\n\n- **WHEN** 用户选择注销\n- **THEN** 系统结束会话\n')
+    work = documents.ready_state(SPEC_OPS, root)
+    validated = run_python(SPEC_OPS, 'validate-delta', delta, specs)
+    assert validated.returncode == 0, validated.stderr
+    generated = documents.apply(SPEC_OPS, specs, delta, preview, work)
+    assert generated.returncode == 0, generated.stderr
+    assert run_python(SPEC_OPS, 'validate-main', preview).returncode == 0
+    diff = run_python(SPEC_OPS, 'diff', specs, preview)
+    assert diff.returncode == 0, diff.stderr
+    assert '+### Requirement: 注销' in diff.stdout
+    merged = (preview / 'accounts' / 'spec.md').read_text(encoding='utf-8')
+    assert '### Requirement: 注销' in merged
+    assert login.strip() in merged
 
 
 def test_spec_ops_cli_rejects_invalid_specs_and_delta_references(spec_documents) -> None:
@@ -1088,7 +1124,8 @@ def test_spec_ops_cli_initializes_a_new_capability_from_an_empty_spec_library(sp
     assert '### Requirement: 接收通知' in (preview / 'notifications' / 'spec.md').read_text(encoding='utf-8')
 
 
-def test_spec_ops_preview_auto_merges_identical_duplicate_requirements_but_main_validation_stays_strict(spec_documents) -> None:
+@pytest.mark.parametrize('duplicate_location', ('same-file', 'cross-file'))
+def test_spec_ops_preview_auto_merges_identical_duplicate_requirements_but_main_validation_stays_strict(spec_documents, duplicate_location: str) -> None:
     documents = spec_documents
     tmp_path = documents.root
     write, ready_state, apply_ready = documents.write, documents.ready_state, documents.apply
@@ -1096,12 +1133,14 @@ def test_spec_ops_preview_auto_merges_identical_duplicate_requirements_but_main_
     delta = tmp_path / 'delta'
     preview = tmp_path / 'preview'
     duplicate = requirement('登录', '允许用户登录')
-    write(specs / 'accounts' / 'spec.md', main_spec('Accounts', duplicate))
-    write(specs / 'sessions' / 'spec.md', main_spec('Sessions', duplicate))
+    write(specs / 'accounts' / 'spec.md', main_spec('Accounts', duplicate, *([duplicate] if duplicate_location == 'same-file' else [])))
+    if duplicate_location == 'cross-file':
+        write(specs / 'sessions' / 'spec.md', main_spec('Sessions', duplicate))
     delta.mkdir()
     strict = run_python(SPEC_OPS, 'validate-main', specs)
     assert strict.returncode != 0
-    assert 'duplicate_requirement_global: 登录' in strict.stderr
+    expected_error = 'duplicate_requirement: 登录' if duplicate_location == 'same-file' else 'duplicate_requirement_global: 登录'
+    assert expected_error in strict.stderr
     work = ready_state(SPEC_OPS, tmp_path / 'state', 'review')
     merged = apply_ready(SPEC_OPS, specs, delta, preview, work)
     assert merged.returncode == 0, merged.stderr
@@ -1110,6 +1149,72 @@ def test_spec_ops_preview_auto_merges_identical_duplicate_requirements_but_main_
     diff = run_python(SPEC_OPS, 'diff', specs, preview)
     assert diff.returncode == 0
     assert '-### Requirement: 登录' in diff.stdout
+
+
+@pytest.mark.parametrize('evidence,error', [
+    ('no-confirmation', 'no_active_session_confirmation_required'),
+    ('legacy-no-baseline', 'abort_specs_baseline_mismatch'),
+    ('legacy-no-path', 'invalid_state_context'),
+    ('legacy-unknown-status', 'invalid_state_document'),
+    ('unknown-phase', 'application_recovery_required'),
+])
+def test_myspec_recovery_rejects_incomplete_state_documents(spec_documents, monkeypatch, evidence: str, error: str) -> None:
+    documents = spec_documents
+    target = documents.root
+    work = documents.ready_state(SPEC_OPS, target)
+    specs = target / 'myspec' / 'specs'
+    delta = work / 'current' / 'delta'
+    preview = work / 'current' / 'preview'
+    documents.write(specs / 'accounts' / 'spec.md', main_spec('Accounts', requirement('登录', '允许登录')))
+    documents.write(delta / 'accounts' / 'spec.md', '## MODIFIED Requirements\n\n' + requirement('登录', '允许密码登录'))
+    previewed = documents.apply(SPEC_OPS, specs, delta, preview, work)
+    assert previewed.returncode == 0, previewed.stderr
+    state_path = work / 'current' / 'state.json'
+    state = json.loads(state_path.read_text(encoding='utf-8'))
+    state.update(targetWorktree=str(target), sessionId='a' * 32)
+    lock = work / 'lock'
+    documents.write(lock, json.dumps({'command': 'add', 'sessionId': state['sessionId'], 'workRoot': str(work)}))
+    if evidence.startswith('legacy-'):
+        state.pop('sessionId')
+        state.pop('applicationPhase')
+        documents.write(lock, 'add')
+    if evidence == 'legacy-no-baseline':
+        state['specsContentFingerprint'] = None
+    elif evidence == 'legacy-no-path':
+        state.pop('previewRoot')
+    elif evidence == 'legacy-unknown-status':
+        state['status'] = 'UNRECOGNIZED'
+    elif evidence == 'unknown-phase':
+        state['applicationPhase'] = 'UNRECOGNIZED'
+    documents.save_json(state_path, state)
+    for command, stdout in ((('git', 'rev-parse', '--show-toplevel'), str(target)),
+                            (('git', 'rev-parse', 'HEAD'), 'a' * 40)):
+        documents.stub.defaults.append((command, completed(command, stdout=stdout)))
+
+    def state_identity(path):
+        # Only the saved-state observation is reached by these refusals. Lock
+        # inode identity and archive/rename operations stay in TestMySpec.
+        assert path == state_path
+        return {'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+
+    monkeypatch.setattr(documents.module, '_file_identity', state_identity)
+    state_bytes, lock_bytes = state_path.read_bytes(), lock.read_bytes()
+    draft_path = delta / 'accounts' / 'spec.md'
+    draft = draft_path.read_bytes()
+    before, directories = dict(documents.texts), set(documents.directories)
+    arguments = ['state-abort', work, target, specs, delta, preview,
+                 hashlib.sha256(state_bytes).hexdigest(), 'add', '--lock-identity', '0' * 64]
+    if evidence != 'no-confirmation':
+        arguments.append('--confirm-no-active-session')
+    refused = run_python(SPEC_OPS, *arguments)
+    assert refused.returncode != 0
+    assert error in refused.stderr
+    assert state_path.read_bytes() == state_bytes
+    assert lock.read_bytes() == lock_bytes
+    assert draft_path.read_bytes() == draft
+    assert documents.texts == before
+    assert documents.directories == directories
+    assert not (work / 'aborted').exists()
 
 
 def test_skill_entries_route_add_review_and_audit_with_safe_boundaries() -> None:

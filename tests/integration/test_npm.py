@@ -3558,6 +3558,7 @@ def test_candidate_inheritance(tmp_path):
         installed = tmp_path / "installed"
         installed.mkdir()
         executable, installed_package = _myspec_install_packed_myspec(installed)
+        script = installed_package / "python" / "spec_ops.py"
         env = _myspec_isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
         source = _myspec_controlled_dev_source(tmp_path, "first")
         env = _myspec_controlled_dev_env(env, source)
@@ -3574,8 +3575,8 @@ def test_candidate_inheritance(tmp_path):
         work = source / ".local" / "spec-work"
         conflicts = source / "no-conflicts.json"
         _myspec_write(conflicts, "[]")
-        assert _myspec_run_cli(
-            executable,
+        assert _myspec_run_in_process(
+            script,
             "state-init",
             work,
             "add",
@@ -3584,8 +3585,8 @@ def test_candidate_inheritance(tmp_path):
             env=env,
             cwd=source,
         ).returncode == 0
-        assert _myspec_run_cli(
-            executable,
+        assert _myspec_run_in_process(
+            script,
             "state-set-conflicts",
             work,
             conflicts,
@@ -3594,8 +3595,8 @@ def test_candidate_inheritance(tmp_path):
             env=env,
             cwd=source,
         ).returncode == 0
-        previewed = _myspec_run_cli(
-            executable,
+        previewed = _myspec_run_in_process(
+            script,
             "apply-delta",
             specs,
             delta,
@@ -3695,6 +3696,7 @@ def test_candidate_inheritance(tmp_path):
         installed = tmp_path / "installed"
         installed.mkdir()
         executable, installed_package = _myspec_install_packed_myspec(installed)
+        script = installed_package / "python" / "spec_ops.py"
         prefix = npm_prefix_for(installed_package)
         (tmp_path / "source-a").mkdir()
         source_a = _myspec_controlled_dev_source(tmp_path / "source-a")
@@ -3803,8 +3805,8 @@ def test_candidate_inheritance(tmp_path):
         work = source_b / ".local" / "spec-work"
         conflicts = tmp_path / "no-conflicts.json"
         _myspec_write(conflicts, "[]")
-        assert _myspec_run_cli(
-            executable,
+        assert _myspec_run_in_process(
+            script,
             "state-init",
             work,
             "add",
@@ -3813,8 +3815,8 @@ def test_candidate_inheritance(tmp_path):
             env=env_a,
             cwd=source_b,
         ).returncode == 0
-        assert _myspec_run_cli(
-            executable,
+        assert _myspec_run_in_process(
+            script,
             "state-set-conflicts",
             work,
             conflicts,
@@ -3910,8 +3912,8 @@ def test_candidate_inheritance(tmp_path):
         repeated_work = source_b / ".local" / "spec-work-repeat"
         repeated_conflicts = tmp_path / "repeated-no-conflicts.json"
         _myspec_write(repeated_conflicts, "[]")
-        assert _myspec_run_cli(
-            executable,
+        assert _myspec_run_in_process(
+            script,
             "state-init",
             repeated_work,
             "add",
@@ -3920,8 +3922,8 @@ def test_candidate_inheritance(tmp_path):
             env=env_b,
             cwd=source_b,
         ).returncode == 0
-        assert _myspec_run_cli(
-            executable,
+        assert _myspec_run_in_process(
+            script,
             "state-set-conflicts",
             repeated_work,
             repeated_conflicts,
@@ -4763,19 +4765,14 @@ def test_candidate_inheritance(tmp_path):
 
 
     @pytest.mark.parametrize("evidence,error", [
-        ("no-confirmation", "no_active_session_confirmation_required"),
         ("wrong-state", "abort_state_mismatch"),
         ("foreign-lock", "abort_lock_identity_mismatch"),
         ("replaced-same-lock", "abort_lock_identity_mismatch"),
         ("wrong-target", "abort_target_mismatch"),
         ("cross-worktree", "cross_worktree_path"),
-        ("legacy-no-baseline", "abort_specs_baseline_mismatch"),
-        ("legacy-no-path", "invalid_state_context"),
         ("legacy-changed-specs", "abort_specs_baseline_mismatch"),
         ("legacy-backup", "application_recovery_required"),
         ("legacy-pending-replacement", "application_recovery_required"),
-        ("legacy-unknown-status", "invalid_state_document"),
-        ("unknown-phase", "application_recovery_required"),
         pytest.param("redirected-draft", "unsafe_recovery_entry", marks=pytest.mark.skipif(
             os.name == "nt", reason="symlink creation needs platform permission",
         )),
@@ -4790,29 +4787,19 @@ def test_candidate_inheritance(tmp_path):
             state.pop("sessionId")
             state.pop("applicationPhase")
             _myspec_write(work / "lock", "add\n")
-        if evidence == "legacy-no-baseline":
-            state["specsContentFingerprint"] = None
-        elif evidence == "legacy-no-path":
-            state.pop("previewRoot")
-        elif evidence == "legacy-changed-specs":
+        if evidence == "legacy-changed-specs":
             _myspec_write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "已变化")))
         elif evidence == "legacy-backup":
             (specs.parent / ".my-spec-backup-preserved").mkdir()
         elif evidence == "legacy-pending-replacement":
             (specs.parent / ".my-spec-preview-preserved").mkdir()
-        elif evidence == "legacy-unknown-status":
-            state["status"] = "UNRECOGNIZED"
-        elif evidence == "unknown-phase":
-            state["applicationPhase"] = "UNRECOGNIZED"
         elif evidence == "redirected-draft":
             external = tmp_path / "external.txt"
             _myspec_write(external, "must not be touched")
             (work / "current" / "redirected").symlink_to(external)
         _myspec_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
         arguments = _myspec_abort_arguments(_myspec_recovery_session, _myspec_recovery_cli)
-        if evidence == "no-confirmation":
-            arguments.pop()
-        elif evidence == "wrong-state":
+        if evidence == "wrong-state":
             arguments[6] = "0" * 64
         elif evidence == "foreign-lock":
             _myspec_write(work / "lock", '{"command":"add","sessionId":"foreign","workRoot":"elsewhere"}\n')
@@ -4896,7 +4883,8 @@ def test_candidate_inheritance(tmp_path):
 
 
     @pytest.mark.parametrize("empty_specs", [False, True])
-    def test_myspec_recovery_preserves_failed_first_preview(self, _myspec_recovery_git_project: Path, _myspec_recovery_cli, empty_specs: bool) -> None:
+    def test_myspec_recovery_preserves_failed_first_preview(self, _myspec_recovery_git_project: Path, _myspec_recovery_cli, _myspec_recovery_environment, empty_specs: bool) -> None:
+        script, env, cwd = _myspec_recovery_environment
         git_project = _myspec_recovery_git_project
         work = git_project / ".local" / "spec-work"
         specs = git_project / "myspec" / "specs"
@@ -4904,11 +4892,11 @@ def test_candidate_inheritance(tmp_path):
         preview = work / "current" / "preview"
         if not empty_specs:
             _myspec_write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
-        assert _myspec_recovery_cli("state-init", work, "add", "specs", "input").returncode == 0
+        assert _myspec_run_in_process(script, "state-init", work, "add", "specs", "input", env=env, cwd=cwd).returncode == 0
         content = "# Accounts\n\n## Purpose\n\n账户能力。\n\n## ADDED Requirements\n\n" if empty_specs else "## MODIFIED Requirements\n\n"
         _myspec_write(delta / "accounts" / "spec.md", content + requirement("登录", "新登录方式"))
         _myspec_write(git_project / "empty.json", "[]")
-        assert _myspec_recovery_cli("state-set-conflicts", work, git_project / "empty.json", "specs", "input").returncode == 0
+        assert _myspec_run_in_process(script, "state-set-conflicts", work, git_project / "empty.json", "specs", "input", env=env, cwd=cwd).returncode == 0
         _myspec_write(preview / "failure.txt", "partial first preview, must be retained")
         failed = _myspec_recovery_cli("apply-delta", specs, delta, preview, work, "specs", "input")
         assert failed.returncode != 0
@@ -5017,21 +5005,22 @@ def test_candidate_inheritance(tmp_path):
 
     @pytest.mark.parametrize("command", ["inspect", "abort"])
     def test_myspec_recovery_outputs_ascii_json_for_non_utf8_stdout(self,
-        _myspec_recovery_git_project: Path, _myspec_recovery_cli, command: str,
+        _myspec_recovery_git_project: Path, _myspec_recovery_cli, _myspec_recovery_environment, command: str,
     ) -> None:
+        script, env, cwd = _myspec_recovery_environment
         git_project = _myspec_recovery_git_project
         work = git_project / ".local" / "中文会话"
         specs = git_project / "中文规格" / "specs"
         delta, preview = work / "current/delta", work / "current/preview"
         _myspec_write(specs / "accounts/spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
-        initialized = _myspec_recovery_cli("state-init", work, "add", "specs", "input")
+        initialized = _myspec_run_in_process(script, "state-init", work, "add", "specs", "input", env=env, cwd=cwd)
         assert initialized.returncode == 0, initialized.stderr
         _myspec_write(delta / "accounts/spec.md", "## MODIFIED Requirements\n\n" + requirement("登录", "允许密码登录"))
         empty = git_project / "empty-conflicts.json"
         _myspec_write(empty, "[]")
         for result in (
-            _myspec_recovery_cli("state-set-conflicts", work, empty, "specs", "input"),
-            _myspec_recovery_cli("apply-delta", specs, delta, preview, work, "specs", "input"),
+            _myspec_run_in_process(script, "state-set-conflicts", work, empty, "specs", "input", env=env, cwd=cwd),
+            _myspec_run_in_process(script, "apply-delta", specs, delta, preview, work, "specs", "input", env=env, cwd=cwd),
         ):
             assert result.returncode == 0, result.stderr
         environment = {"PYTHONIOENCODING": "cp1252:strict", "PYTHONUTF8": "0"}
@@ -5197,119 +5186,6 @@ def test_candidate_inheritance(tmp_path):
         assert applied.returncode != 0
         assert 'preview_changed_requires_confirmation' in applied.stderr
         assert (specs / 'accounts' / 'spec.md').read_bytes() == before
-
-
-    def test_packed_myspec_preserves_modified_requirement_order(self, tmp_path: Path) -> None:
-        executable = _MYSPEC_SPEC_OPS
-        titles = ('首部', '中部', '尾部')
-
-        def preview_delta(root: Path, specs: Path, delta: Path) -> tuple[Path, Path]:
-            preview = root / 'preview'
-            work = root / 'work'
-            conflicts = root / 'conflicts.json'
-            _myspec_write(conflicts, '[]')
-            for result in (_myspec_run_in_process(executable, 'state-init', work, 'add', 'specs-fingerprint', 'input-fingerprint'), _myspec_run_in_process(executable, 'state-set-conflicts', work, conflicts, 'specs-fingerprint', 'input-fingerprint'), _myspec_run_in_process(executable, 'validate-delta', delta, specs), _myspec_run_in_process(executable, 'apply-delta', specs, delta, preview, work, 'specs-fingerprint', 'input-fingerprint')):
-                assert result.returncode == 0, result.stderr
-            return (preview, work)
-        for target in titles:
-            root = tmp_path / target
-            specs = root / 'specs'
-            delta = root / 'delta'
-            _myspec_write(specs / 'accounts' / 'spec.md', main_spec('Accounts', *(requirement(title, f'保留{title}') for title in titles)))
-            _myspec_write(delta / 'accounts' / 'spec.md', f'## MODIFIED Requirements\n\n### Requirement: {target}\n\n系统 MUST 更新{target}。\n\n#### Scenario: 修改{target}\n\n- **WHEN** 用户修改{target}\n- **THEN** 系统保留需求顺序\n')
-            preview, work = preview_delta(root, specs, delta)
-            preview_text = (preview / 'accounts' / 'spec.md').read_text(encoding='utf-8')
-            assert [line.removeprefix('### Requirement: ') for line in preview_text.splitlines() if line.startswith('### Requirement: ')] == list(titles)
-            assert f'系统 MUST 更新{target}。' in preview_text
-            assert f'系统 MUST 保留{target}。' not in preview_text
-            diff = _myspec_run_in_process(executable, 'diff', specs, preview)
-            assert diff.returncode == 0, diff.stderr
-            assert f'-### Requirement: {target}' not in diff.stdout
-            assert f'+### Requirement: {target}' not in diff.stdout
-            applied = _myspec_run_in_process(executable, 'apply-delta', specs, delta, specs, work, 'specs-fingerprint', 'input-fingerprint')
-            assert applied.returncode == 0, applied.stderr
-            assert (specs / 'accounts' / 'spec.md').read_bytes() == (preview / 'accounts' / 'spec.md').read_bytes()
-            before_repeat = (specs / 'accounts' / 'spec.md').read_bytes()
-            repeated_preview, repeated_work = preview_delta(root / 'repeat', specs, delta)
-            repeated = _myspec_run_in_process(executable, 'apply-delta', specs, delta, specs, repeated_work, 'specs-fingerprint', 'input-fingerprint')
-            assert repeated.returncode == 0, repeated.stderr
-            assert (repeated_preview / 'accounts' / 'spec.md').read_bytes() == before_repeat
-            assert (specs / 'accounts' / 'spec.md').read_bytes() == before_repeat
-        root = tmp_path / 'cross-capability'
-        specs = root / 'specs'
-        delta = root / 'delta'
-        _myspec_write(specs / 'source' / 'spec.md', main_spec('Source', requirement('移动项', '留在来源')))
-        _myspec_write(specs / 'target' / 'spec.md', main_spec('Target', requirement('现有项', '留在目标')))
-        _myspec_write(delta / 'target' / 'spec.md', '## MODIFIED Requirements\n\n### Requirement: 移动项\n\n系统 MUST 移入目标能力。\n\n#### Scenario: 跨能力修改\n\n- **WHEN** 用户修改其他能力中的需求\n- **THEN** 系统把需求移入目标能力\n')
-        preview, work = preview_delta(root, specs, delta)
-        assert '### Requirement: 移动项' not in (preview / 'source' / 'spec.md').read_text(encoding='utf-8')
-        target_text = (preview / 'target' / 'spec.md').read_text(encoding='utf-8')
-        assert target_text.index('### Requirement: 现有项') < target_text.index('### Requirement: 移动项')
-        applied = _myspec_run_in_process(executable, 'apply-delta', specs, delta, specs, work, 'specs-fingerprint', 'input-fingerprint')
-        assert applied.returncode == 0, applied.stderr
-        assert (specs / 'source' / 'spec.md').read_bytes() == (preview / 'source' / 'spec.md').read_bytes()
-        assert (specs / 'target' / 'spec.md').read_bytes() == (preview / 'target' / 'spec.md').read_bytes()
-
-
-    def test_spec_ops_cli_validates_applies_all_delta_operations_and_diffs(self, tmp_path: Path) -> None:
-        specs = tmp_path / 'specs'
-        delta = tmp_path / 'delta'
-        preview = tmp_path / 'preview'
-        _myspec_write(specs / 'accounts' / 'spec.md', main_spec('Accounts', requirement('旧登录', '允许登录'), requirement('旧导出', '允许导出'), requirement('个人资料', '显示姓名')))
-        _myspec_write(delta / 'accounts' / 'spec.md', '# Accounts\n\n## Purpose\n\n描述 Accounts 的外部行为。\n\n## RENAMED Requirements\n\nFROM: 旧登录\nTO: 密码登录\n\n## REMOVED Requirements\n\n### Requirement: 旧导出\n\n## MODIFIED Requirements\n\n### Requirement: 个人资料\n\n系统 SHALL 显示姓名和头像。\n\n#### Scenario: 查看资料\n\n- **WHEN** 用户打开个人资料\n- **THEN** 系统显示姓名和头像\n\n## ADDED Requirements\n\n### Requirement: 注销\n\n系统 MUST 允许用户注销。\n\n#### Scenario: 主动注销\n\n- **WHEN** 用户选择注销\n- **THEN** 系统结束会话\n')
-        work = _myspec_in_process_ready_state(_MYSPEC_SPEC_OPS, tmp_path / 'state')
-        assert _myspec_run_in_process(_MYSPEC_SPEC_OPS, 'validate-main', specs).returncode == 0
-        assert _myspec_run_in_process(_MYSPEC_SPEC_OPS, 'validate-delta', delta, specs).returncode == 0
-        applied = _myspec_in_process_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, preview, work)
-        assert applied.returncode == 0, applied.stderr
-        assert _myspec_run_in_process(_MYSPEC_SPEC_OPS, 'validate-main', preview).returncode == 0
-        merged = (preview / 'accounts' / 'spec.md').read_text(encoding='utf-8')
-        assert '### Requirement: 密码登录' in merged
-        assert '### Requirement: 旧登录' not in merged
-        assert '### Requirement: 旧导出' not in merged
-        assert '系统 SHALL 显示姓名和头像。' in merged
-        assert '### Requirement: 注销' in merged
-        diff = _myspec_run_in_process(_MYSPEC_SPEC_OPS, 'diff', specs, preview)
-        assert diff.returncode == 0
-        assert '-### Requirement: 旧登录' in diff.stdout
-        assert '+### Requirement: 密码登录' in diff.stdout
-        assert '旧导出' in diff.stdout
-        assert '注销' in diff.stdout
-        first_apply = _myspec_in_process_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, specs, work)
-        assert first_apply.returncode == 0, first_apply.stderr
-        before_repeat = (specs / 'accounts' / 'spec.md').read_bytes()
-        repeated_validation = _myspec_run_in_process(_MYSPEC_SPEC_OPS, 'validate-delta', delta, specs)
-        assert repeated_validation.returncode == 0, repeated_validation.stderr
-        repeated_work = _myspec_in_process_ready_state(_MYSPEC_SPEC_OPS, tmp_path / 'repeated-state')
-        shutil.rmtree(preview)
-        repeated_preview = _myspec_in_process_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, preview, repeated_work)
-        assert repeated_preview.returncode == 0, repeated_preview.stderr
-        repeated_apply = _myspec_in_process_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, specs, repeated_work)
-        assert repeated_apply.returncode == 0, repeated_apply.stderr
-        assert (specs / 'accounts' / 'spec.md').read_bytes() == before_repeat
-
-
-    def test_spec_add_deterministic_post_analysis_flow_previews_diffs_and_applies(self, tmp_path: Path) -> None:
-        cli = _MYSPEC_SPEC_OPS
-        specs = tmp_path / 'add' / 'specs'
-        delta = tmp_path / 'add' / 'delta'
-        preview = tmp_path / 'add' / 'preview'
-        _myspec_write(specs / 'accounts' / 'spec.md', main_spec('Accounts', requirement('登录', '允许用户登录')))
-        _myspec_write(delta / 'accounts' / 'spec.md', '## ADDED Requirements\n\n### Requirement: 注销\n\n系统 MUST 允许用户注销。\n\n#### Scenario: 主动注销\n\n- **WHEN** 用户选择注销\n- **THEN** 系统结束会话\n')
-        _myspec_in_process_confirmed_workflow(cli, specs, delta, preview, '+### Requirement: 注销')
-        assert '### Requirement: 注销' in (specs / 'accounts' / 'spec.md').read_text(encoding='utf-8')
-
-
-    def test_spec_review_deterministic_duplicate_flow_previews_diffs_and_applies(self, tmp_path: Path) -> None:
-        cli = _MYSPEC_SPEC_OPS
-        specs = tmp_path / 'review' / 'specs'
-        delta = tmp_path / 'review' / 'delta'
-        preview = tmp_path / 'review' / 'preview'
-        duplicate = requirement('登录', '允许用户登录')
-        _myspec_write(specs / 'accounts' / 'spec.md', main_spec('Accounts', duplicate, duplicate))
-        delta.mkdir(parents=True)
-        _myspec_in_process_confirmed_workflow(cli, specs, delta, preview, '-### Requirement: 登录')
-        assert (specs / 'accounts' / 'spec.md').read_text(encoding='utf-8').count('### Requirement: 登录') == 1
 
 
     def test_spec_audit_deterministic_post_analysis_flow_previews_diffs_and_applies(self, tmp_path: Path) -> None:
