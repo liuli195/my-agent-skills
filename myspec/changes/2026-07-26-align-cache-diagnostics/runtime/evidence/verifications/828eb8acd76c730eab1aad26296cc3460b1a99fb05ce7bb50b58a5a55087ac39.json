@@ -1,0 +1,86 @@
+{
+  "schema": "comet.native.verification-evidence.v1",
+  "change": "align-cache-diagnostics",
+  "sourceRevision": 3,
+  "result": "pass",
+  "freshness": "complete",
+  "contractHash": "97f4fc9c4e074141ca7cf955688df3901a0f76fb562a5a1d99b392e1b555999f",
+  "acceptanceCriteriaHash": "10c9f5c9119e5038da5db7a71fd3337213422516edcf0946ee3fa64ccaa1da7a",
+  "implementationScopeRef": "runtime/evidence/scopes/bb13d63c135ad1f18c43e017f48aa857781c3363b2559f8db4c6aa668c126ae6.json",
+  "implementationScopeHash": "bb13d63c135ad1f18c43e017f48aa857781c3363b2559f8db4c6aa668c126ae6",
+  "reportRef": "verification.md",
+  "reportHash": "5945372cdbe6ea7aedc7672ef7dc1fd9d649a3d36e6d87acce89700ecc88c945",
+  "acceptanceTrace": {
+    "schema": "comet.native.acceptance-trace.v1",
+    "nativeRootRef": "docs/comet",
+    "criteriaHash": "10c9f5c9119e5038da5db7a71fd3337213422516edcf0946ee3fa64ccaa1da7a",
+    "total": 6,
+    "evidenced": 6,
+    "skipped": 0,
+    "entries": [
+      {
+        "acceptanceId": "acceptance-049799171c6a467474da297a0351325a9e5273f3c72ac730cc1c98051c0616eb",
+        "kind": "brief-example",
+        "source": "brief.md",
+        "evidenceRefs": [
+          "tests/pi_cache_diagnostics.test.mjs"
+        ],
+        "skippedReason": null
+      },
+      {
+        "acceptanceId": "acceptance-488eb94f18e38c6cdf598d0313044e90963652a9110322c4e2f8f12379b484bf",
+        "kind": "brief-example",
+        "source": "brief.md",
+        "evidenceRefs": [
+          "plugins/pi-cache-diagnostics/extensions/pi-cache-diagnostics.ts",
+          "tests/pi_cache_diagnostics.test.mjs"
+        ],
+        "skippedReason": null
+      },
+      {
+        "acceptanceId": "acceptance-6454403d698eb119135fa4a3b5c1104f7567a354da3a33ad6eefeb8a3b41e00c",
+        "kind": "brief-example",
+        "source": "brief.md",
+        "evidenceRefs": [
+          "tests/pi_cache_diagnostics.test.mjs"
+        ],
+        "skippedReason": null
+      },
+      {
+        "acceptanceId": "acceptance-78ebb83a6affa1e14406c5a1453f967948aace3edb37b3bd3b59b8b8f1b9075e",
+        "kind": "brief-example",
+        "source": "brief.md",
+        "evidenceRefs": [
+          "plugins/pi-cache-diagnostics/extensions/pi-cache-diagnostics.ts",
+          "tests/pi_cache_diagnostics.test.mjs"
+        ],
+        "skippedReason": null
+      },
+      {
+        "acceptanceId": "acceptance-cf8ceedf096364540264fac0f02cd978fa16f57aa47b4f9677de11f786525260",
+        "kind": "brief-example",
+        "source": "brief.md",
+        "evidenceRefs": [
+          "plugins/pi-cache-diagnostics/extensions/pi-cache-diagnostics.ts",
+          "tests/pi_cache_diagnostics.test.mjs"
+        ],
+        "skippedReason": null
+      },
+      {
+        "acceptanceId": "acceptance-ea44b3eba0ea2eaa55c055637415d3b10fc27e41afe94643503bfdcd6c8202a4",
+        "kind": "brief-example",
+        "source": "brief.md",
+        "evidenceRefs": [
+          "tests/pi_cache_diagnostics.test.mjs"
+        ],
+        "skippedReason": null
+      }
+    ],
+    "traceHash": "a185d9081b1c11f4579afed34220b287e4f1d7d33837a7e44620fa227c14a8cc"
+  },
+  "partialAllowanceRef": null,
+  "partialAllowanceHash": null,
+  "receiptRef": null,
+  "createdAt": "2026-07-26T09:41:10.062Z",
+  "envelopeHash": "828eb8acd76c730eab1aad26296cc3460b1a99fb05ce7bb50b58a5a55087ac39"
+}

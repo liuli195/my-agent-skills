@@ -1,0 +1,1497 @@
+{
+  "schema": "comet.native.content-snapshot-projection.v1",
+  "origin": "explicit",
+  "capture": {
+    "provider": "git"
+  },
+  "complete": true,
+  "limits": {
+    "maxFiles": 10000,
+    "maxFileBytes": 268435456,
+    "maxTotalBytes": 268435456,
+    "maxManifestBytes": 1048576,
+    "maxDurationMs": 60000
+  },
+  "policy": {
+    "schema": "comet.native.snapshot-policy.v1",
+    "include": [
+      "**/*"
+    ],
+    "exclude": [],
+    "hash": "cc34dce5671bc1aefad09b658911a71d0434a26a1fbb4d8ba10de57b316f1f2f"
+  },
+  "entries": [
+    {
+      "path": ".agents/plugins/marketplace.json",
+      "hash": "47d8d6812588d39a6261c7b0761dda6450dfe82f710dffbdf603a1e125e65a66",
+      "size": 1532,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet-any/SKILL.md",
+      "hash": "49d907f2813e5912159022d0c58d5db9c43843f70f655b527cd4026cea924245",
+      "size": 7986,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet-any/reference/authored-zone-example.md",
+      "hash": "440f1e4ef3f9ba2404110ed0a220492b0c902e5f4ed8a0346be69eedaf2e6a08",
+      "size": 8362,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet-any/reference/authoring-subagents.md",
+      "hash": "6fbbee8ceb9c3fd7844e9d9f9336f8cbc1e3d79b7f318120498d23eb35512b11",
+      "size": 6534,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet-any/reference/bundle-authoring.md",
+      "hash": "5c3199221e608b20f70e4ebc06c44b1a82b848af3740c069aa1c8a29ee77e500",
+      "size": 6432,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet-any/reference/eval-provider.md",
+      "hash": "5998c9588c18dc52413f73a7b2ed50d28081e682f2a28b4ba44018c448d61e5b",
+      "size": 3218,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet-any/reference/subagents/pause-points-author.md",
+      "hash": "543a34062573b5e6f8c47e37650cb450cf81edde4c618ef346f4fc079a076f75",
+      "size": 4515,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet-any/reference/subagents/reference-author.md",
+      "hash": "6ded3e85ef29003236a78d82bed92100f851e1928857bc7ae29c2258ff7cc733",
+      "size": 3273,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet-any/reference/subagents/script-author.md",
+      "hash": "c54904e095445b02ba8ef0e6ca21253aa980193a7feaf7c715b1eea85550b4aa",
+      "size": 3785,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet-any/reference/subagents/skill-core-author.md",
+      "hash": "84ef68efec0e7b708f09ce5988575a087b63089b38849ef394c70ed3db66f895",
+      "size": 7302,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet-any/reference/subagents/skill-reviewer.md",
+      "hash": "9e3fd0743297f1bc8d196ffcdb1704c4bdfc6c08ff14b2a05b7340c6b1c7f013",
+      "size": 6777,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet-any/reference/subagents/workflow-entry-author.md",
+      "hash": "cef96c63ec69966719c7a3059abf39a358bd610ba75153b98978ab08fdc4083f",
+      "size": 6427,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet-native/SKILL.md",
+      "hash": "7182d95ab2ee74916fc9d666339f5d40b7027002130546334a77327361bfa87a",
+      "size": 23620,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet-native/reference/artifacts.md",
+      "hash": "3342cf0e73212a28408b193cb65fb0e3ea3604eea397ca2d38b3653f8244e079",
+      "size": 14312,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet-native/reference/commands.md",
+      "hash": "f54caf112db3203e1b98511c915036e961c7cc5107e18e72a0599516d43244e6",
+      "size": 8938,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet-native/reference/recovery.md",
+      "hash": "eeee898d3b8c6a32c1e9bb0ff4179015b28045f169c51c9d396ba7037720b641",
+      "size": 12069,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet-native/scripts/comet-native-hook-guard.mjs",
+      "hash": "819de5cb6b2e32e79e6978988b50083a3faf2247683ff09d57d335883752c19d",
+      "size": 145,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet-native/scripts/comet-native-runtime.mjs",
+      "hash": "ea4476965f04a81dc1c4d7868c90bae4ca91d98cebabf3d684d5ce0f3441649d",
+      "size": 1145894,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet/SKILL.md",
+      "hash": "7a7262b67bc15afcd14d246243db9e6e7713988bbc8be6bee06f6f610b549329",
+      "size": 1343,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet/scripts/comet-entry-runtime.mjs",
+      "hash": "d9f03607329ec1d58b668d86d5e175b589b401e92d294d68101aaf1afbb7b6c9",
+      "size": 289020,
+      "type": "file"
+    },
+    {
+      "path": ".agents/skills/comet/scripts/comet-hook-router.mjs",
+      "hash": "ef8f37e3267c8753bf095c1c95718e425a69102884f6cebefe066acd0d9b3d1b",
+      "size": 386166,
+      "type": "file"
+    },
+    {
+      "path": ".build-and-verify/.gitignore",
+      "hash": "768eabaadfa87a6cd8ff36b896c4445d32295941a7679ef26fa2f0dec03e73b1",
+      "size": 25,
+      "type": "file"
+    },
+    {
+      "path": ".build-and-verify/config.json",
+      "hash": "f86ab1d77486e70abcf32d4989eb8f9fcaba072fb9efc95cb1d4a0be909c42fb",
+      "size": 7491,
+      "type": "file"
+    },
+    {
+      "path": ".build-and-verify/runtime/build_and_verify.py",
+      "hash": "5420d33a50c2cc9cbde1a96b15714bb95acf153a2b21e423b6955ff4d96b9a9e",
+      "size": 10252,
+      "type": "file"
+    },
+    {
+      "path": ".build-and-verify/runtime/build_and_verify_runner.py",
+      "hash": "534dc5754ca112c3b356c99f4b74eca426930e57646693d5b47fceb5a40aa3cc",
+      "size": 33748,
+      "type": "file"
+    },
+    {
+      "path": ".build-and-verify/runtime/version.json",
+      "hash": "73d0a34a2765ba888a3d719cd07f1850896d1536146626a523ee23a3913c9445",
+      "size": 96,
+      "type": "file"
+    },
+    {
+      "path": ".claude-plugin/marketplace.json",
+      "hash": "12ac4784417680ac7a3fea9cdb284324dc84caf9c0aee565d2fab711341e59d6",
+      "size": 1117,
+      "type": "file"
+    },
+    {
+      "path": ".claude/rules/comet-workflow-guard.md",
+      "hash": "d670067cd1c1573b4c655de3ec553252f20126d3dba3d187a78717c2c87cb3c8",
+      "size": 2196,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet-any/SKILL.md",
+      "hash": "49d907f2813e5912159022d0c58d5db9c43843f70f655b527cd4026cea924245",
+      "size": 7986,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet-any/reference/authored-zone-example.md",
+      "hash": "440f1e4ef3f9ba2404110ed0a220492b0c902e5f4ed8a0346be69eedaf2e6a08",
+      "size": 8362,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet-any/reference/authoring-subagents.md",
+      "hash": "6fbbee8ceb9c3fd7844e9d9f9336f8cbc1e3d79b7f318120498d23eb35512b11",
+      "size": 6534,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet-any/reference/bundle-authoring.md",
+      "hash": "5c3199221e608b20f70e4ebc06c44b1a82b848af3740c069aa1c8a29ee77e500",
+      "size": 6432,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet-any/reference/eval-provider.md",
+      "hash": "5998c9588c18dc52413f73a7b2ed50d28081e682f2a28b4ba44018c448d61e5b",
+      "size": 3218,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet-any/reference/subagents/pause-points-author.md",
+      "hash": "543a34062573b5e6f8c47e37650cb450cf81edde4c618ef346f4fc079a076f75",
+      "size": 4515,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet-any/reference/subagents/reference-author.md",
+      "hash": "6ded3e85ef29003236a78d82bed92100f851e1928857bc7ae29c2258ff7cc733",
+      "size": 3273,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet-any/reference/subagents/script-author.md",
+      "hash": "c54904e095445b02ba8ef0e6ca21253aa980193a7feaf7c715b1eea85550b4aa",
+      "size": 3785,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet-any/reference/subagents/skill-core-author.md",
+      "hash": "84ef68efec0e7b708f09ce5988575a087b63089b38849ef394c70ed3db66f895",
+      "size": 7302,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet-any/reference/subagents/skill-reviewer.md",
+      "hash": "9e3fd0743297f1bc8d196ffcdb1704c4bdfc6c08ff14b2a05b7340c6b1c7f013",
+      "size": 6777,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet-any/reference/subagents/workflow-entry-author.md",
+      "hash": "cef96c63ec69966719c7a3059abf39a358bd610ba75153b98978ab08fdc4083f",
+      "size": 6427,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet-native/SKILL.md",
+      "hash": "7182d95ab2ee74916fc9d666339f5d40b7027002130546334a77327361bfa87a",
+      "size": 23620,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet-native/reference/artifacts.md",
+      "hash": "3342cf0e73212a28408b193cb65fb0e3ea3604eea397ca2d38b3653f8244e079",
+      "size": 14312,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet-native/reference/commands.md",
+      "hash": "f54caf112db3203e1b98511c915036e961c7cc5107e18e72a0599516d43244e6",
+      "size": 8938,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet-native/reference/recovery.md",
+      "hash": "eeee898d3b8c6a32c1e9bb0ff4179015b28045f169c51c9d396ba7037720b641",
+      "size": 12069,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet-native/scripts/comet-native-hook-guard.mjs",
+      "hash": "819de5cb6b2e32e79e6978988b50083a3faf2247683ff09d57d335883752c19d",
+      "size": 145,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet-native/scripts/comet-native-runtime.mjs",
+      "hash": "ea4476965f04a81dc1c4d7868c90bae4ca91d98cebabf3d684d5ce0f3441649d",
+      "size": 1145894,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet/SKILL.md",
+      "hash": "7a7262b67bc15afcd14d246243db9e6e7713988bbc8be6bee06f6f610b549329",
+      "size": 1343,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet/scripts/comet-entry-runtime.mjs",
+      "hash": "d9f03607329ec1d58b668d86d5e175b589b401e92d294d68101aaf1afbb7b6c9",
+      "size": 289020,
+      "type": "file"
+    },
+    {
+      "path": ".claude/skills/comet/scripts/comet-hook-router.mjs",
+      "hash": "ef8f37e3267c8753bf095c1c95718e425a69102884f6cebefe066acd0d9b3d1b",
+      "size": 386166,
+      "type": "file"
+    },
+    {
+      "path": ".codex/hooks.json",
+      "hash": "97f1ec6f917d3087086a34930cfb6059450aaadc3bf6863afb5ccb41db7c74ef",
+      "size": 365,
+      "type": "file"
+    },
+    {
+      "path": ".codex/rules/comet-workflow-guard.md",
+      "hash": "d670067cd1c1573b4c655de3ec553252f20126d3dba3d187a78717c2c87cb3c8",
+      "size": 2196,
+      "type": "file"
+    },
+    {
+      "path": ".gitattributes",
+      "hash": "c30b350accb626afd1cb5e64721a6df989a61eda14ba406fef69be738edb6a8f",
+      "size": 2648,
+      "type": "file"
+    },
+    {
+      "path": ".github/workflows/codeql.yml",
+      "hash": "d20878ce5f7df240a8525213c5e35bcdc30a873199288931c039bb5e5d2368fc",
+      "size": 524,
+      "type": "file"
+    },
+    {
+      "path": ".github/workflows/full-verify.yml",
+      "hash": "6c6bbf4000a6b8c8749a186af65cdf004607b0229b2ad34d63f3a42703740435",
+      "size": 840,
+      "type": "file"
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "hash": "c20cf0076ca61de36d3d76981bd8972720a06ba7245fb0956eab64ad4e17bb10",
+      "size": 1095,
+      "type": "file"
+    },
+    {
+      "path": ".gitignore",
+      "hash": "4c0738f4e9223fac6272e5c83e189cc8e0dfbeede150f986482f7111872c117a",
+      "size": 1592,
+      "type": "file"
+    },
+    {
+      "path": ".pi/extensions/comet-commands.ts",
+      "hash": "7345dac71954190f666399284eb770f08029b05cb7c52325592d4a75374f32a1",
+      "size": 449,
+      "type": "file"
+    },
+    {
+      "path": ".pi/settings.json",
+      "hash": "f7ed220533c9674c09372016d468b15a1687d749c4ccb35d6cac521cd6ea8cab",
+      "size": 153,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet-any/SKILL.md",
+      "hash": "49d907f2813e5912159022d0c58d5db9c43843f70f655b527cd4026cea924245",
+      "size": 7986,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet-any/reference/authored-zone-example.md",
+      "hash": "440f1e4ef3f9ba2404110ed0a220492b0c902e5f4ed8a0346be69eedaf2e6a08",
+      "size": 8362,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet-any/reference/authoring-subagents.md",
+      "hash": "6fbbee8ceb9c3fd7844e9d9f9336f8cbc1e3d79b7f318120498d23eb35512b11",
+      "size": 6534,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet-any/reference/bundle-authoring.md",
+      "hash": "5c3199221e608b20f70e4ebc06c44b1a82b848af3740c069aa1c8a29ee77e500",
+      "size": 6432,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet-any/reference/eval-provider.md",
+      "hash": "5998c9588c18dc52413f73a7b2ed50d28081e682f2a28b4ba44018c448d61e5b",
+      "size": 3218,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet-any/reference/subagents/pause-points-author.md",
+      "hash": "543a34062573b5e6f8c47e37650cb450cf81edde4c618ef346f4fc079a076f75",
+      "size": 4515,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet-any/reference/subagents/reference-author.md",
+      "hash": "6ded3e85ef29003236a78d82bed92100f851e1928857bc7ae29c2258ff7cc733",
+      "size": 3273,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet-any/reference/subagents/script-author.md",
+      "hash": "c54904e095445b02ba8ef0e6ca21253aa980193a7feaf7c715b1eea85550b4aa",
+      "size": 3785,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet-any/reference/subagents/skill-core-author.md",
+      "hash": "84ef68efec0e7b708f09ce5988575a087b63089b38849ef394c70ed3db66f895",
+      "size": 7302,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet-any/reference/subagents/skill-reviewer.md",
+      "hash": "9e3fd0743297f1bc8d196ffcdb1704c4bdfc6c08ff14b2a05b7340c6b1c7f013",
+      "size": 6777,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet-any/reference/subagents/workflow-entry-author.md",
+      "hash": "cef96c63ec69966719c7a3059abf39a358bd610ba75153b98978ab08fdc4083f",
+      "size": 6427,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet-native/SKILL.md",
+      "hash": "7182d95ab2ee74916fc9d666339f5d40b7027002130546334a77327361bfa87a",
+      "size": 23620,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet-native/reference/artifacts.md",
+      "hash": "3342cf0e73212a28408b193cb65fb0e3ea3604eea397ca2d38b3653f8244e079",
+      "size": 14312,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet-native/reference/commands.md",
+      "hash": "f54caf112db3203e1b98511c915036e961c7cc5107e18e72a0599516d43244e6",
+      "size": 8938,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet-native/reference/recovery.md",
+      "hash": "eeee898d3b8c6a32c1e9bb0ff4179015b28045f169c51c9d396ba7037720b641",
+      "size": 12069,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet-native/scripts/comet-native-hook-guard.mjs",
+      "hash": "819de5cb6b2e32e79e6978988b50083a3faf2247683ff09d57d335883752c19d",
+      "size": 145,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet-native/scripts/comet-native-runtime.mjs",
+      "hash": "ea4476965f04a81dc1c4d7868c90bae4ca91d98cebabf3d684d5ce0f3441649d",
+      "size": 1145894,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet/SKILL.md",
+      "hash": "7a7262b67bc15afcd14d246243db9e6e7713988bbc8be6bee06f6f610b549329",
+      "size": 1343,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet/scripts/comet-entry-runtime.mjs",
+      "hash": "d9f03607329ec1d58b668d86d5e175b589b401e92d294d68101aaf1afbb7b6c9",
+      "size": 289020,
+      "type": "file"
+    },
+    {
+      "path": ".pi/skills/comet/scripts/comet-hook-router.mjs",
+      "hash": "ef8f37e3267c8753bf095c1c95718e425a69102884f6cebefe066acd0d9b3d1b",
+      "size": 386166,
+      "type": "file"
+    },
+    {
+      "path": ".pr-flow/.gitignore",
+      "hash": "6e2fe749a7bdf8ff9df3d490c89aff3b379740da31ad5cc94047d5cb851855b2",
+      "size": 25,
+      "type": "file"
+    },
+    {
+      "path": ".pr-flow/config.yaml",
+      "hash": "2dc1397029e131d840890202b0eed43c648d838c13f7cb59bf1397f2c97b865d",
+      "size": 1361,
+      "type": "file"
+    },
+    {
+      "path": ".pr-flow/pr-template.md",
+      "hash": "53c029c63761ce4dc91114a862f5e05eb990bc57088599f508cf8dd78c2df3c0",
+      "size": 263,
+      "type": "file"
+    },
+    {
+      "path": ".release-flow/config.yaml",
+      "hash": "77d62aaa20914f1d65a8569016e4c9f881a8aee65bbaf4557fcae9bcf625f42a",
+      "size": 232,
+      "type": "file"
+    },
+    {
+      "path": ".release-flow/projection.yaml",
+      "hash": "5b9cab961a0a74274c463e4e5b35e814dbfa237fc302fbdb3c6f2de0a113e59b",
+      "size": 813,
+      "type": "file"
+    },
+    {
+      "path": "AGENTS.md",
+      "hash": "92b43484071f6a3d5f49d6b1be90771e2bed5ff3ecd663396876d5e71560492b",
+      "size": 3788,
+      "type": "file"
+    },
+    {
+      "path": "CLAUDE.md",
+      "hash": "14eaedc42cd9bcc88e9b88dd1d0d43361a42c145ffea9d371ed93c9521ffadaf",
+      "size": 9,
+      "type": "file"
+    },
+    {
+      "path": "docs/agents/domain.md",
+      "hash": "16abc4b6be38f5f5dfe0cdf61d64f9b6d98f4de33ef587c2be4b1919beda2715",
+      "size": 1189,
+      "type": "file"
+    },
+    {
+      "path": "docs/agents/issue-tracker.md",
+      "hash": "52e9f9f1ec0f6d47c6785ac500708ac0521f34abb4cc5475b5dc747165dab17e",
+      "size": 3745,
+      "type": "file"
+    },
+    {
+      "path": "docs/agents/triage-labels.md",
+      "hash": "75b001b423a9e17eaca190955fa4c318e0881da0705c5515a9a70eb1c93a80de",
+      "size": 472,
+      "type": "file"
+    },
+    {
+      "path": "docs/research/comet-agent-handoff.md",
+      "hash": "7a8af970e7aa1c98e6f11427055692c485c9e0908ca38b74ed1e7481ba8591d0",
+      "size": 26378,
+      "type": "file"
+    },
+    {
+      "path": "docs/research/pi-computer-use-stale-state.md",
+      "hash": "9621b219ccba8b82919601b3281a7a854bb5aebda9ecd32ae42044f4b5a21079",
+      "size": 7600,
+      "type": "file"
+    },
+    {
+      "path": "docs/research/pi-memory-setup.md",
+      "hash": "91bbd0b1ef3a9ba8c0f0df34c93cf58fb30b07d5e7a21ba5e7c66f70ee553602",
+      "size": 30019,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/.claude-plugin/plugin.json",
+      "hash": "8c35a11365489594bdac2fdd148d871509c316a9b3def1d3b3fb758b862e65dc",
+      "size": 160,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/.codex-plugin/plugin.json",
+      "hash": "1025c269c3fb66fe24856c5897df879bb228bc94c3b5836cf4e78afd3c678d7e",
+      "size": 193,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/assets/templates/README.md",
+      "hash": "9e8b64e8aba7f490d3f7c02f91afad6a4a56ef8e15b8dcbf0242c565a3062704",
+      "size": 208,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/assets/templates/guard-profile/.gitkeep",
+      "hash": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+      "size": 2,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/assets/templates/guard-profile/confirmed-notes.yaml",
+      "hash": "222a3be2d86ad574802f7a680f43c70648ae6f670b39ce35f190dfa0ce7269b8",
+      "size": 1102,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/assets/templates/guard-profile/minimal/GUARD-MANIFEST.yaml",
+      "hash": "20584c6bc5c5cfa10d3485b7f420acbd23b6d2cd1c7e51e31a6ed9967a430aa6",
+      "size": 530,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/assets/templates/guard-profile/minimal/activation-model.yaml",
+      "hash": "91d454276d3f764dbd46e9aae7bd458da3a648d8b730da3d971d934d91c054c8",
+      "size": 204,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/assets/templates/guard-profile/minimal/artifacts.yaml",
+      "hash": "87ad5ce77be384d3c4fdc9e504fdc4a40e67ad69d19ec258c30827ce0f4c43d3",
+      "size": 378,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/assets/templates/guard-profile/minimal/brief-template.md",
+      "hash": "ff519ff312efd0875672c2132b48992aa36fecdc32ae00c981fb6fc8ddfd0766",
+      "size": 541,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/assets/templates/guard-profile/minimal/execution-model.yaml",
+      "hash": "7e225f27b3fcded6825480fc7954510f0fed94ad4c175399d8ca8b411cd20c11",
+      "size": 669,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/assets/templates/guard-profile/minimal/global-command-guards.yaml",
+      "hash": "39b28a015e4e54517a21ffdd2c30cb3df4ab78edce753090c1babbfed39760e7",
+      "size": 26,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/assets/templates/guard-profile/minimal/guard-points.yaml",
+      "hash": "bc82c36fc8dc142becb63d6edf8cc96e8c402b9e54fdf1fac65818d26803b350",
+      "size": 609,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/assets/templates/guard-profile/minimal/observation-model.yaml",
+      "hash": "ffc7ceb61aabae32f644584234cae86bd56bc7616055de8f532daca350c4af08",
+      "size": 374,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/assets/templates/guard-profile/minimal/state-machine.yaml",
+      "hash": "5d5f3610bd519c18d35406db959a93d4858f54058dbfda2d4a8c1b5ad367c6f6",
+      "size": 469,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/assets/templates/guard-profile/minimal/target-model.yaml",
+      "hash": "311ec740788afaa6c96886e54f003ba323e376053b15b1f967c603e86f2ac02e",
+      "size": 479,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/assets/templates/guard-profile/minimal/validation-plan.md",
+      "hash": "223670bdef2f7d6e2ae6dbf7ccee9875f996b24aaae80caaa8e233a7dc8d06a1",
+      "size": 840,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/extensions/pi-agent-guard.ts",
+      "hash": "f727dc22e09e1f574cc11d7f097a2fc9c90eda8fecfb32db6c22872b0ef07451",
+      "size": 2516,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/hooks/hooks.json",
+      "hash": "ac8964be3911e17b74069d56d1cab0a203dba7929a3614050715682e5311e62c",
+      "size": 1102,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/scripts/guard_runtime/README.md",
+      "hash": "873fc2489657937e8412e06322ada123a7b922a58db99b59592bea143b3277b3",
+      "size": 2674,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/scripts/guard_runtime/__init__.py",
+      "hash": "9425ef4d6c223028c812090cfd9e0338324e5fd7af71703f60f9932e7bb310c2",
+      "size": 57,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/scripts/guard_runtime/cli.py",
+      "hash": "f29f127f3164bafc87e51b951da82d03da65a579264db9adbca606b0c5d8c221",
+      "size": 15832,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/scripts/guard_runtime/command_context.py",
+      "hash": "34bbb0fdc59c9afecc47f6138be15e93c52a8a34ee0e48921e377e243a1515e3",
+      "size": 940,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/scripts/guard_runtime/command_matcher.py",
+      "hash": "3b54abcecd41bb7db44d11004fbe38d7394454f2569deac223d7ffde4912e10a",
+      "size": 1720,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/scripts/guard_runtime/core.py",
+      "hash": "df27d0b1fccbed7c7e308429ae6ba339e7e7e70e1f21bad71f8adeebe2266fb8",
+      "size": 63188,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/scripts/guard_runtime/global_command_guards.py",
+      "hash": "e7143f57d57a46a4beaeb4ed452839984fec3423655572a807742eeae4ebba08",
+      "size": 22693,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/scripts/guard_runtime/json_checks.py",
+      "hash": "af2b0e8a558a09723a56b59fdd79c4ec3972b430660b317f0a6ec881bd0e923e",
+      "size": 2069,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/scripts/hook_router.py",
+      "hash": "b7dbbf94239d956ef11133d9f4f79805aa13abac3ecb556b1c74943c7b18da06",
+      "size": 3856,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard-init/SKILL.md",
+      "hash": "a6aa84344c25175f892f396aaa3c3cc1842cf168b1a1920960f7d8aa568678cc",
+      "size": 1463,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard-init/references/init-boundaries.md",
+      "hash": "f4445cd2a809aa3cc49050a67ee4c96195124b8a37a96260eee6f4c8d3afb63d",
+      "size": 1093,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard-init/references/init-flow.md",
+      "hash": "aa76858e424a4a757ff7b15b82dd8b7c10c4c1598a12c50e820cc97fb7528e9b",
+      "size": 1980,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard-install/SKILL.md",
+      "hash": "0ce5e17ca6cc5061c36ffa64cf2d9fc2cc660c66346c326480c592ed8a113898",
+      "size": 1468,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard-install/references/profile-draft.md",
+      "hash": "cf95ff474fa6d503528fcd23add6ed2e17ce8cdffdbac6f396b7a3610bcdafea",
+      "size": 2505,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard-install/references/research-and-extract.md",
+      "hash": "33a43acf915c1dd0dd808edb7d59e12f1b0c4030e3b023f848dc2e7b55ce9829",
+      "size": 2844,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard-run/SKILL.md",
+      "hash": "567e93190d22f9cac8620a036f116c3f8c711ca58bfcd545d13fca63ce92458e",
+      "size": 2389,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard-run/references/activate.md",
+      "hash": "3a6d6794e460b94f376925624e6e79dd7d526bb2d300ec057db7d10c780759be",
+      "size": 1550,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard-run/references/brief.md",
+      "hash": "fe2fd985a9bd6ba124369171b84677bd2eecd19ec2e7e8db9b32777c5c736dbf",
+      "size": 1954,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard-run/references/close.md",
+      "hash": "ee795440465c1b048c5539c2a6537087b2cae4652cd0f1cf473b0232bd425c33",
+      "size": 959,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard-run/references/events.md",
+      "hash": "68d49b7a7f3d96c2537c19cd37551ba36ac259942764d98695e929b561f74f4f",
+      "size": 6751,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard-update/SKILL.md",
+      "hash": "f4930c8ae99d41b750a0f02f70077bcfcac7bf5234064ac0154e5e72fd816284",
+      "size": 1771,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard-update/references/profile-sync.md",
+      "hash": "8cd70ac154744fd95cb4cd98b52d66925bae34d273cf13139b4574c0538cf92b",
+      "size": 1683,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard-update/references/runtime-update.md",
+      "hash": "8b53c8dd836b969b8eb53a15ce35f7cd1ce251040d71f0f92353b7bc7d2295d7",
+      "size": 2789,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/SKILL.md",
+      "hash": "6d9ff42419ae3df9c992b961311eeddbb70ffc489af9dc0367bb1d5acd1f3ac0",
+      "size": 1492,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/agents/openai.yaml",
+      "hash": "9962b23a414cbecdad25dbde34f92946dd8f807bae80ae9dde91116303bfa724",
+      "size": 322,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/codex-hooks/.gitkeep",
+      "hash": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+      "size": 2,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/git-hooks/.gitkeep",
+      "hash": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+      "size": 2,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/guard-brief/.gitkeep",
+      "hash": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+      "size": 2,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/.gitkeep",
+      "hash": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+      "size": 2,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/confirmed-notes.yaml",
+      "hash": "222a3be2d86ad574802f7a680f43c70648ae6f670b39ce35f190dfa0ce7269b8",
+      "size": 1102,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/minimal/GUARD-MANIFEST.yaml",
+      "hash": "20584c6bc5c5cfa10d3485b7f420acbd23b6d2cd1c7e51e31a6ed9967a430aa6",
+      "size": 530,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/minimal/activation-model.yaml",
+      "hash": "91d454276d3f764dbd46e9aae7bd458da3a648d8b730da3d971d934d91c054c8",
+      "size": 204,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/minimal/artifacts.yaml",
+      "hash": "87ad5ce77be384d3c4fdc9e504fdc4a40e67ad69d19ec258c30827ce0f4c43d3",
+      "size": 378,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/minimal/brief-template.md",
+      "hash": "ff519ff312efd0875672c2132b48992aa36fecdc32ae00c981fb6fc8ddfd0766",
+      "size": 541,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/minimal/execution-model.yaml",
+      "hash": "7e225f27b3fcded6825480fc7954510f0fed94ad4c175399d8ca8b411cd20c11",
+      "size": 669,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/minimal/global-command-guards.yaml",
+      "hash": "39b28a015e4e54517a21ffdd2c30cb3df4ab78edce753090c1babbfed39760e7",
+      "size": 26,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/minimal/guard-points.yaml",
+      "hash": "bc82c36fc8dc142becb63d6edf8cc96e8c402b9e54fdf1fac65818d26803b350",
+      "size": 609,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/minimal/observation-model.yaml",
+      "hash": "ffc7ceb61aabae32f644584234cae86bd56bc7616055de8f532daca350c4af08",
+      "size": 374,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/minimal/state-machine.yaml",
+      "hash": "5d5f3610bd519c18d35406db959a93d4858f54058dbfda2d4a8c1b5ad367c6f6",
+      "size": 469,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/minimal/target-model.yaml",
+      "hash": "311ec740788afaa6c96886e54f003ba323e376053b15b1f967c603e86f2ac02e",
+      "size": 479,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/guard-profile/minimal/validation-plan.md",
+      "hash": "223670bdef2f7d6e2ae6dbf7ccee9875f996b24aaae80caaa8e233a7dc8d06a1",
+      "size": 840,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/guard-runtime/.gitkeep",
+      "hash": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+      "size": 2,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/hook-bindings/.gitkeep",
+      "hash": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+      "size": 2,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/user-guard-profile/.gitkeep",
+      "hash": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+      "size": 2,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/assets/templates/validation-plan/.gitkeep",
+      "hash": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6",
+      "size": 2,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/references/architecture.md",
+      "hash": "42dc6f5235c03384912053229297294ec744c92b17700b19599c7a7134a8aad8",
+      "size": 1697,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/references/template-index.md",
+      "hash": "f0e0bf34995f4b640096592f0b290fd4a8288d6ae39541335432ce419885c57f",
+      "size": 3473,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/references/terminology.md",
+      "hash": "e51c63f4a7e9a0f7e477062b2211fffb5210e14103a82bf8198c9e581b5d90cc",
+      "size": 2632,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/scripts/activate_guard.py",
+      "hash": "6f1a1c26162cd337532492a759441e60c1672389e96647be4fb673a3ff6d9362",
+      "size": 3859,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/scripts/extract_guard_model.py",
+      "hash": "ae7a4474a04f25a62dd4f883bd26f0130ac0789ebed004b2357749879e1adffe",
+      "size": 16231,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/scripts/init_project_guard.py",
+      "hash": "a42e528bcf91b4f0041aefc490b1ffe5d26257a27a2d7ead8dadc9bf6e4379fe",
+      "size": 9523,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/scripts/init_user_guard.py",
+      "hash": "848e413c84bab6713e84a72eea0399ce9ab334096440d2b1662521363098438e",
+      "size": 8058,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/scripts/install_agent_guard_plugin.py",
+      "hash": "7c18ff3dbc6bcf4fde96041883c8fed80bfc7e2701b11060e56915e42dbfab54",
+      "size": 21846,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/scripts/render_guard_brief.py",
+      "hash": "427e3ae33d8528f252c34455e40d3ab9b9476830e35a098e920faf4230bbdb8e",
+      "size": 2971,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/scripts/run_guard_event.py",
+      "hash": "07fa27d62509906d725a6fd913abacf1239e79846dd09f95d0b2a916e63179c9",
+      "size": 5519,
+      "type": "file"
+    },
+    {
+      "path": "plugins/agent-guard/skills/agent-guard/scripts/validate_guard_profile.py",
+      "hash": "cc9c940c220fbd28f66dad9da9a387407be6ed666fe5c18a67b11a559c5d418f",
+      "size": 52235,
+      "type": "file"
+    },
+    {
+      "path": "plugins/build-and-verify/.claude-plugin/plugin.json",
+      "hash": "9cb9daeca400f484fed8650e14fdfe5065d1b38bb39cad22d008ef5a577da080",
+      "size": 182,
+      "type": "file"
+    },
+    {
+      "path": "plugins/build-and-verify/.codex-plugin/plugin.json",
+      "hash": "9cb9daeca400f484fed8650e14fdfe5065d1b38bb39cad22d008ef5a577da080",
+      "size": 182,
+      "type": "file"
+    },
+    {
+      "path": "plugins/build-and-verify/skills/build-and-verify-init/SKILL.md",
+      "hash": "2d9171518dc54746822e130941f6d9e025cfd7953d02e604b373af67fbe10f1e",
+      "size": 4324,
+      "type": "file"
+    },
+    {
+      "path": "plugins/build-and-verify/skills/build-and-verify-init/references/config-draft.md",
+      "hash": "962e553f6d996c48875a8e25b3c0c43523a7b3523832bafa013f15e82354be2b",
+      "size": 6237,
+      "type": "file"
+    },
+    {
+      "path": "plugins/build-and-verify/skills/build-and-verify-init/references/ecosystem-detection.md",
+      "hash": "498bd04d74973f0df496d13d48135aca0204e5bff2d848f6d526c0dda6c25510",
+      "size": 9433,
+      "type": "file"
+    },
+    {
+      "path": "plugins/build-and-verify/skills/build-and-verify-init/references/questionnaire.md",
+      "hash": "37c13dea0adbc5a5684a96b5cc250d521ae2d8878cc8753f48433250c6592d14",
+      "size": 6191,
+      "type": "file"
+    },
+    {
+      "path": "plugins/build-and-verify/skills/build-and-verify-init/references/validation.md",
+      "hash": "f26a3b41ca2bb08d36e3bb28c2a4ffaaf5afcc59f286b2c0547c3cc71297ea80",
+      "size": 6358,
+      "type": "file"
+    },
+    {
+      "path": "plugins/build-and-verify/skills/build-and-verify/SKILL.md",
+      "hash": "10d8476ca5f0399b2d6cf3b8c2ba0efe40d990e85b9e32b09ed2d469d87d50fd",
+      "size": 4430,
+      "type": "file"
+    },
+    {
+      "path": "plugins/build-and-verify/skills/build-and-verify/assets/templates/build-and-verify/config.json",
+      "hash": "8221ec79124a778d4879de4d0b0c4a016f8437ff57aa857d17d5b1fd4435cb76",
+      "size": 90,
+      "type": "file"
+    },
+    {
+      "path": "plugins/build-and-verify/skills/build-and-verify/assets/templates/build-and-verify/gitignore",
+      "hash": "768eabaadfa87a6cd8ff36b896c4445d32295941a7679ef26fa2f0dec03e73b1",
+      "size": 25,
+      "type": "file"
+    },
+    {
+      "path": "plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify.py",
+      "hash": "5420d33a50c2cc9cbde1a96b15714bb95acf153a2b21e423b6955ff4d96b9a9e",
+      "size": 10252,
+      "type": "file"
+    },
+    {
+      "path": "plugins/build-and-verify/skills/build-and-verify/scripts/build_and_verify_runner.py",
+      "hash": "534dc5754ca112c3b356c99f4b74eca426930e57646693d5b47fceb5a40aa3cc",
+      "size": 33748,
+      "type": "file"
+    },
+    {
+      "path": "plugins/cross-agent-review/.claude-plugin/plugin.json",
+      "hash": "55179380652db954ac69ff7956f638f5754ebb288fa0240b3dc8c3bb7f552733",
+      "size": 156,
+      "type": "file"
+    },
+    {
+      "path": "plugins/cross-agent-review/.codex-plugin/plugin.json",
+      "hash": "55179380652db954ac69ff7956f638f5754ebb288fa0240b3dc8c3bb7f552733",
+      "size": 156,
+      "type": "file"
+    },
+    {
+      "path": "plugins/cross-agent-review/skills/cross-agent-review/SKILL.md",
+      "hash": "b3983c5d5ec51218af50816c3883c8683d7f810c3bda8200ee1e856b7e59a487",
+      "size": 6993,
+      "type": "file"
+    },
+    {
+      "path": "plugins/cross-agent-review/skills/cross-agent-review/assets/templates/reviewer-prompt.md",
+      "hash": "2a62de401b2c6705d95fa97366392f30e5a2b90e847c749fe60c892808ce5806",
+      "size": 1020,
+      "type": "file"
+    },
+    {
+      "path": "plugins/cross-agent-review/skills/cross-agent-review/scripts/cross_agent_review.py",
+      "hash": "4c5a9fee01f426ea2c1b826ebbecaf9ed5a3372aaccc9058d313de7d49deeaf1",
+      "size": 65698,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pi-cache-diagnostics/extensions/pi-cache-diagnostics.ts",
+      "hash": "2ce48091211f01d1f8924b9882e7bde0ae2c40904a0c1cd53a4fafe28b3c3d18",
+      "size": 10814,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pi-codex-usage-status/extensions/pi-codex-usage-status.ts",
+      "hash": "d8cd6f18cc76cf67452b738b776c682b4ff5f2221d050f9e9831c4d347288db0",
+      "size": 3809,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pi-codex-usage-status/extensions/usage.ts",
+      "hash": "dd63912f0249b38a6a79172acad3b2e22697e5de16e7f0e369c86fae73dfcdec",
+      "size": 1949,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pi-codex-usage-status/package.json",
+      "hash": "9d465b140e1e29f135326fc305e391ae524216181fe5dd17d6f928f63d61aa4e",
+      "size": 276,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pi-my-theme/package.json",
+      "hash": "bc26837b7cc7319d97499521d681099324635f5dc847f8054b338afb621997b5",
+      "size": 217,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pi-my-theme/themes/blue-moch-new.json",
+      "hash": "4c3fe5bfeb0ebd4dcf436fa25f3853bd3162c9f832ffbfeade2aa4c675832d60",
+      "size": 2385,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pi-my-theme/themes/blue-nobkgd.json",
+      "hash": "87d34f467208c27a80e42eb9a442e06b777321cf9a09053d5011dc4d55e69f58",
+      "size": 2359,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pr-flow/.claude-plugin/plugin.json",
+      "hash": "75203c63f9c9946cf1fed95c580824202bccff7a7115819643cc20d3c809bfd5",
+      "size": 303,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pr-flow/.codex-plugin/plugin.json",
+      "hash": "75203c63f9c9946cf1fed95c580824202bccff7a7115819643cc20d3c809bfd5",
+      "size": 303,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pr-flow/extensions/pi-pr-flow.ts",
+      "hash": "447b3c6497bae896e2075c7b2d60674c2211c3f10ea79c31bcaeb11443bd18ba",
+      "size": 1618,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pr-flow/skills/pr-flow-cleanup/SKILL.md",
+      "hash": "cba606453cf1e78e56d5a8c670cdc74c7f6b345cde78d878e8dd3e21e590b36b",
+      "size": 2722,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pr-flow/skills/pr-flow-complete/SKILL.md",
+      "hash": "ac86e8fa8946cb58f7763dfe29246638222de0569f045f6313c7e7d96a29366a",
+      "size": 1683,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pr-flow/skills/pr-flow-hotfix/SKILL.md",
+      "hash": "e1056fc0cf0808284e2f6aae492aad2b5e66e981af7cb4504e60e094b9e8522c",
+      "size": 2139,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pr-flow/skills/pr-flow-init/SKILL.md",
+      "hash": "0f11a48e7a9649c78c20990f1df99b543ba4c346a309e69350940d2996a553ee",
+      "size": 2388,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pr-flow/skills/pr-flow-init/references/config-draft.md",
+      "hash": "997388ebd7648be7e5655b10aec749b95f789555f3a02d3080f365b10b9830f1",
+      "size": 4094,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pr-flow/skills/pr-flow-init/references/questionnaire.md",
+      "hash": "0e77ac68dd6cf3d5888c5879d7add62e15346f0e9826fd51aea115ff44a774a4",
+      "size": 10830,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pr-flow/skills/pr-flow-init/references/validation.md",
+      "hash": "137becfe7d50f5141b7204d877dc4c7e2c5b6dfc58f8c2b6c698264da88ef279",
+      "size": 3853,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pr-flow/skills/pr-flow-tweak/SKILL.md",
+      "hash": "ccbd42c227b0e0b924b0e8156078fd0f76d5677f275e86d368d6218309fae48b",
+      "size": 1430,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pr-flow/skills/pr-flow/SKILL.md",
+      "hash": "224805c0539348b2bd92f7deddb933b393003a5ce922e4c770a8bd2518d13d31",
+      "size": 998,
+      "type": "file"
+    },
+    {
+      "path": "plugins/pr-flow/skills/pr-flow/scripts/pr_flow.py",
+      "hash": "3d1a594400797e6bbb6ac0b1aea86dbbf019edb3c47456d338cb5de34d2b9efb",
+      "size": 100077,
+      "type": "file"
+    },
+    {
+      "path": "plugins/release-flow/.claude-plugin/plugin.json",
+      "hash": "65eb14e7da74f9383ae439ba580c8320f0dfb861d9f9be744109620b75a20628",
+      "size": 182,
+      "type": "file"
+    },
+    {
+      "path": "plugins/release-flow/.codex-plugin/plugin.json",
+      "hash": "65eb14e7da74f9383ae439ba580c8320f0dfb861d9f9be744109620b75a20628",
+      "size": 182,
+      "type": "file"
+    },
+    {
+      "path": "plugins/release-flow/skills/release-flow/SKILL.md",
+      "hash": "33069d4ab7dcde094628d6dbf9864ee356e13c48736ab7f36290fffa3613e6c0",
+      "size": 2313,
+      "type": "file"
+    },
+    {
+      "path": "plugins/release-flow/skills/release-flow/assets/templates/github/workflows/release.yml",
+      "hash": "c20cf0076ca61de36d3d76981bd8972720a06ba7245fb0956eab64ad4e17bb10",
+      "size": 1095,
+      "type": "file"
+    },
+    {
+      "path": "plugins/release-flow/skills/release-flow/assets/templates/release-flow/config.yaml",
+      "hash": "77d62aaa20914f1d65a8569016e4c9f881a8aee65bbaf4557fcae9bcf625f42a",
+      "size": 232,
+      "type": "file"
+    },
+    {
+      "path": "plugins/release-flow/skills/release-flow/assets/templates/release-flow/projection.yaml",
+      "hash": "dbbb3f7bdc766abcabdddc386e461ccc2a691ae2270e54da7fc9a047d60587d2",
+      "size": 745,
+      "type": "file"
+    },
+    {
+      "path": "plugins/release-flow/skills/release-flow/scripts/release_flow.py",
+      "hash": "714ca3fed9e078b316c060f42597ca89f20e42126dc67920188eaa236c4d5271",
+      "size": 53234,
+      "type": "file"
+    },
+    {
+      "path": "requirements-dev.txt",
+      "hash": "1a0509c177dbb35bf53573fc6abaf3ed8346124cb5c1e22e3adce0e38f150087",
+      "size": 57,
+      "type": "file"
+    },
+    {
+      "path": "scripts/local_plugin_build.py",
+      "hash": "c126e953ed776ce9489cc1db5acfa98df3717378c9676a016d062db28548d4d5",
+      "size": 12624,
+      "type": "file"
+    },
+    {
+      "path": "scripts/setup-worktree.ps1",
+      "hash": "9a86a28fc68218db54842e2d247288cc00f5f786de2c4a0b8512dca3926c5207",
+      "size": 594,
+      "type": "file"
+    },
+    {
+      "path": "tests/conftest.py",
+      "hash": "44fb7900e1c316cb5b1a95b26694d5e70714306b262270f234b9e61206cfbcf0",
+      "size": 1383,
+      "type": "file"
+    },
+    {
+      "path": "tests/fixtures/plugin-sync/references/status-taxonomy.md",
+      "hash": "ed3f2ee3098d9e1480e28254bdadeaad054b0b1f616ecf5dc6f911699d65c584",
+      "size": 511,
+      "type": "file"
+    },
+    {
+      "path": "tests/fixtures/plugin-sync/references/update-build-and-verify-runtime.md",
+      "hash": "1cd7032041ba875bd327dcb9cec78cf7c94c1e44491ac4d523a52f1aea7011b3",
+      "size": 666,
+      "type": "file"
+    },
+    {
+      "path": "tests/pi_codex_usage_status.test.mjs",
+      "hash": "eedaaf4e98e630724905e3671de0159f98d1df329cf5335ea9d31cb266ae978d",
+      "size": 16836,
+      "type": "file"
+    },
+    {
+      "path": "tests/support/command_stubs.py",
+      "hash": "d55b674ce86a036ec4289470fd64282ee3ffecc1d91e80d87be0431329ad8061",
+      "size": 3277,
+      "type": "file"
+    },
+    {
+      "path": "tests/support/git_templates.py",
+      "hash": "a47826ae19c8597c3820ae8361ba3ea9109553aba840ea210f7bc5f0fc050cd9",
+      "size": 761,
+      "type": "file"
+    },
+    {
+      "path": "tests/support/pr_flow_invocation.py",
+      "hash": "00118d6625e27846fb1f652adf4649ccf33f73b566ac3769feb64fffd310518a",
+      "size": 1153,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_agent_guard_pi_extension.py",
+      "hash": "5b51412fa4c04744686e981dc7c7a31f29518f20b3e2da500154a0b7185ac7a4",
+      "size": 1564,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_agent_guard_plugin_installer.py",
+      "hash": "634942e449b524908c4295187f1a2af47899b0fb4afbec3ce8a4c2bd49ee787f",
+      "size": 13612,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_agent_guard_plugin_package.py",
+      "hash": "e9b51fedd269673f356019df3cb8405c7a401f6bb5908c28bc91b4ecd1190069",
+      "size": 10744,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_agent_guard_plugin_runtime_e2e.py",
+      "hash": "e1639af6328ddb5004236830e2c17a728d64ae67e9b541fcc0d4a28c0c3000e3",
+      "size": 39145,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_agent_guard_prd_full_e2e.py",
+      "hash": "c34c2e9de6f2f8e57dadfc79663a10814bf6003f39b0aac18d4ceda20e4b5a56",
+      "size": 20777,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_agent_guard_runtime_brief.py",
+      "hash": "cf212ac64623a0e94c2d65bd917703b6526efbe27de712086d994d84fac03e24",
+      "size": 10627,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_agent_guard_runtime_router.py",
+      "hash": "25416f67fb29e1213dd804be320635a12b1b7d620625b41181f164dbedcfe9db",
+      "size": 139387,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_agent_guard_runtime_session_focus.py",
+      "hash": "4eb9fd39e637cf5279534400ef6bbbcf453f6ca4aca579c471da337e9b7a1f25",
+      "size": 12823,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_agent_guard_skill_entrypoints.py",
+      "hash": "16d86e6f88395d46893f3b2ad83911d0833f6edbd6acc0cdbe48ccd012a5a779",
+      "size": 8468,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_build_and_verify_plugin.py",
+      "hash": "0ffaab999f353d6470d4bbdeb2273a1da1b12a3eac87f807d3cc2e72b3cac298",
+      "size": 165216,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_cross_agent_review_cli.py",
+      "hash": "c85f801452366f34285bd7a98982bba55d1f9530c925510b3dc9d77a9324c7fc",
+      "size": 114016,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_cross_agent_review_plugin_package.py",
+      "hash": "f93c913272120b5e5e7f76925ef5b1f986bbdcc4f8a7d42d4d112186b9b0b223",
+      "size": 11966,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_extract_guard_model.py",
+      "hash": "9ebafa2591964e1baf2ca3709bf603add1bf5743a180d4c987daf526308b4c38",
+      "size": 12818,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_init_project_guard.py",
+      "hash": "13285d293b5ad37ed9d83c2934a9aa4a9c2c739ccecb9219ff22eebf00c33ebd",
+      "size": 7855,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_init_user_guard.py",
+      "hash": "96f954d01ef8c6bf771229ede108a9cba7e92eb432c8150c2d3382fd08770cc2",
+      "size": 5938,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_local_plugin_build_checks.py",
+      "hash": "9d30563366e33ceacb274249f18ae35a731af671929aea89a4e9cdd9122b4dd0",
+      "size": 42725,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_pi_codex_usage_status.py",
+      "hash": "1b970c77634f673b23993a86905a6c756e9c0b1a084f9a2ce287caf425392540",
+      "size": 904,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_plugin_sync_skill_contract.py",
+      "hash": "46dd0e386030080c9e997c9c33580f81e3a237cea644fbe5afba440f2556e8c6",
+      "size": 1487,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_pr_flow_cli.py",
+      "hash": "961aed7553984eceeab3c33f8b9a3818a21d44a916a8ebd5e669753f6a108795",
+      "size": 236917,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_pr_flow_pi_extension.py",
+      "hash": "cf7b4af4ab62b530ed096828e8d280c1edcfac7478bfc61e5b4b30648863074d",
+      "size": 882,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_pr_flow_plugin_package.py",
+      "hash": "efa75c12ff8221b6b519769a31d488f6dc3544bd4326033b6abbe2274656bd88",
+      "size": 10630,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_release_flow_cli.py",
+      "hash": "3af6b1ad5fea749ed01d8a2c29815e826d835fa509f3c181fb0bf6285e367942",
+      "size": 49736,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_release_flow_plugin_package.py",
+      "hash": "c0f66d965a10974eafe261d77d87d31a47961dba4bbe6dcec7624318506dd841",
+      "size": 4200,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_setup_worktree_script.py",
+      "hash": "095831b664db0556693402da999ba48df8bc8c6611a205a65ab1b55ac4bb9397",
+      "size": 876,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_test_runtime_boundaries.py",
+      "hash": "1dda207b8f00af87ae61466a61c6965eb18a9f80328e54c2af19269c21350d55",
+      "size": 72610,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_validate_guard_profile.py",
+      "hash": "584952f5972ed133211be8fcc5ce3bf060d59c518ef20c6ccb8d1877fe2429ce",
+      "size": 40919,
+      "type": "file"
+    },
+    {
+      "path": "tests/test_version_source_of_truth.py",
+      "hash": "994cfe9ac9382d2ffef8a9221f9f11fbac19dc8ab66a45497dec7b27f79fbf99",
+      "size": 971,
+      "type": "file"
+    }
+  ],
+  "omitted": [],
+  "omittedCount": 0
+}

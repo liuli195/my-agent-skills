@@ -1,0 +1,43 @@
+{
+  "name": "my-agent-skills-marketplace",
+  "owner": {
+    "name": "My Agent Skills Marketplace"
+  },
+  "plugins": [
+    {
+      "name": "release-flow",
+      "source": "./plugins/release-flow",
+      "description": "Release flow plugin for Codex and Claude agents"
+    },
+    {
+      "name": "pr-flow",
+      "source": "./plugins/pr-flow",
+      "description": "PR Flow Plugin（拉取请求流程插件）。pr-flow-init 初始化 PR Flow（拉取请求流程）配置：agent（代理）问答、配置草案、只读 validate（校验）和用户确认后本地写入。"
+    },
+    {
+      "name": "dev-flow",
+      "source": "./plugins/dev-flow",
+      "description": "Development flow（开发流程）"
+    },
+    {
+      "name": "subagent-policy",
+      "source": "./plugins/subagent-policy",
+      "description": "Subagent policy（子代理策略）"
+    },
+    {
+      "name": "plugin-sync",
+      "source": "./plugins/plugin-sync",
+      "description": "Plugin source and mode synchronization（插件来源与模式同步）"
+    },
+    {
+      "name": "retro-to-issues",
+      "source": "./plugins/retro-to-issues",
+      "description": "Session retrospective to tracked issues（会话复盘与任务跟踪）"
+    },
+    {
+      "name": "data-store",
+      "source": "./plugins/data-store",
+      "description": "Structured Parquet/Zstd storage and DuckDB queries（结构化列式数据存储、写入与查询）"
+    }
+  ]
+}
