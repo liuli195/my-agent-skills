@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "build": {
     "checks": [
       {
@@ -38,32 +38,39 @@
           ".claude-plugin/**",
           ".release-flow/**",
           ".build-and-verify/**",
-          ".comet/config.yaml",
           "requirements-dev.txt",
           "plugins/**",
           "scripts/local_plugin_build.py",
           "tests/test_local_plugin_build_checks.py",
           "tests/subagent_policy.test.mjs",
           "tests/dev_flow.test.mjs",
-          "tests/shared_skills.test.mjs"
+          "tests/shared_skills.test.mjs",
+          "myspec/changes/2026-08-14-enforce-dev-flow-dependency-artifacts/**",
+          "tests/support/command_stubs.py",
+          "tests/conftest.py",
+          ".gitattributes",
+          ".github/workflows/release.yml"
         ],
-        "command": "python -m pytest -q -p no:cacheprovider --dist worksteal tests/test_local_plugin_build_checks.py && node --test tests/subagent_policy.test.mjs tests/dev_flow.test.mjs tests/shared_skills.test.mjs",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_local_plugin_build_checks.py && node --test tests/subagent_policy.test.mjs tests/dev_flow.test.mjs tests/shared_skills.test.mjs",
         "inputs": [
           ".agents",
           ".claude-plugin",
           ".release-flow",
           ".build-and-verify/config.json",
-          ".comet/config.yaml",
           "requirements-dev.txt",
           "plugins",
           "scripts/local_plugin_build.py",
           "tests/test_local_plugin_build_checks.py",
           "tests/subagent_policy.test.mjs",
           "tests/dev_flow.test.mjs",
-          "tests/shared_skills.test.mjs"
+          "tests/shared_skills.test.mjs",
+          "myspec/changes/2026-08-14-enforce-dev-flow-dependency-artifacts",
+          "tests/support/command_stubs.py",
+          "tests/conftest.py",
+          ".gitattributes",
+          ".github/workflows/release.yml"
         ],
-        "checkParallel": true,
-        "pytestXdistWorkers": 2
+        "checkParallel": true
       },
       {
         "id": "verify.release-flow",
@@ -76,9 +83,11 @@
           "plugins/release-flow/**",
           "plugins/my-spec/package.json",
           "plugins/build-and-verify/package.json",
-          "tests/test_release_flow*.py"
+          "tests/test_release_flow*.py",
+          "tests/support/command_stubs.py",
+          "tests/conftest.py"
         ],
-        "command": "python -m pytest -q -p no:cacheprovider --dist worksteal tests/test_release_flow_cli.py tests/test_release_flow_plugin_package.py",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_release_flow_cli.py tests/test_release_flow_plugin_package.py",
         "inputs": [
           ".agents",
           ".claude-plugin",
@@ -89,10 +98,11 @@
           "plugins/my-spec/package.json",
           "plugins/build-and-verify/package.json",
           "tests/test_release_flow_cli.py",
-          "tests/test_release_flow_plugin_package.py"
+          "tests/test_release_flow_plugin_package.py",
+          "tests/support/command_stubs.py",
+          "tests/conftest.py"
         ],
-        "checkParallel": true,
-        "pytestXdistWorkers": 4
+        "checkParallel": true
       },
       {
         "id": "verify.pr-flow",
@@ -102,9 +112,14 @@
           ".release-flow/**",
           "requirements-dev.txt",
           "plugins/pr-flow/**",
-          "tests/test_pr_flow*.py"
+          "tests/test_pr_flow*.py",
+          "tests/support/pr_flow_invocation.py",
+          "tests/support/command_stubs.py",
+          "tests/conftest.py",
+          "plugins/my-spec/package.json",
+          "plugins/build-and-verify/package.json"
         ],
-        "command": "python -m pytest -q -p no:cacheprovider --dist worksteal tests/test_pr_flow_cli.py tests/test_pr_flow_plugin_package.py",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_pr_flow_cli.py tests/test_pr_flow_plugin_package.py",
         "inputs": [
           ".agents",
           ".claude-plugin",
@@ -112,23 +127,31 @@
           "requirements-dev.txt",
           "plugins/pr-flow",
           "tests/test_pr_flow_cli.py",
-          "tests/test_pr_flow_plugin_package.py"
+          "tests/test_pr_flow_plugin_package.py",
+          "tests/support/pr_flow_invocation.py",
+          "tests/support/command_stubs.py",
+          "tests/conftest.py",
+          "plugins/my-spec/package.json",
+          "plugins/build-and-verify/package.json"
         ],
-        "checkParallel": true,
-        "pytestXdistWorkers": 8
+        "checkParallel": true
       },
       {
         "id": "verify.myspec",
         "paths": [
           "myspec/specs/**",
           "plugins/my-spec/bin/myspec.js",
-          "plugins/my-spec/python/spec_ops.py"
+          "plugins/my-spec/python/spec_ops.py",
+          "plugins/my-spec/python/management.py",
+          "plugins/tool-lifecycle/python/management.py"
         ],
         "command": "node plugins/my-spec/bin/myspec.js validate-main myspec/specs",
         "inputs": [
           "myspec/specs",
           "plugins/my-spec/bin/myspec.js",
-          "plugins/my-spec/python/spec_ops.py"
+          "plugins/my-spec/python/spec_ops.py",
+          "plugins/my-spec/python/management.py",
+          "plugins/tool-lifecycle/python/management.py"
         ]
       },
       {
@@ -145,9 +168,12 @@
           "plugins/tool-lifecycle/**",
           "tests/conftest.py",
           "tests/test_my_spec.py",
-          "tests/fixtures/myspec_source_cases.json"
+          "tests/fixtures/myspec_source_cases.json",
+          "tests/support/myspec_cases.py",
+          "tests/support/command_stubs.py",
+          "plugins/plugin-sync/**"
         ],
-        "command": "python -m pytest -q -p no:cacheprovider --dist worksteal tests/test_my_spec.py",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_my_spec.py",
         "inputs": [
           ".agents/plugins/marketplace.json",
           ".claude-plugin/marketplace.json",
@@ -160,22 +186,30 @@
           "plugins/tool-lifecycle",
           "tests/conftest.py",
           "tests/test_my_spec.py",
-          "tests/fixtures/myspec_source_cases.json"
+          "tests/fixtures/myspec_source_cases.json",
+          "tests/support/myspec_cases.py",
+          "tests/support/command_stubs.py",
+          "plugins/plugin-sync"
         ],
         "checkParallel": true,
-        "pytestXdistWorkers": 4,
         "timeoutSeconds": 420
       },
       {
         "id": "verify.runtime-boundaries",
         "paths": [
           "requirements-dev.txt",
-          "tests/**"
+          "tests/**",
+          ".build-and-verify/config.json",
+          "tests/conftest.py",
+          "tests/test_runtime_guard_roles.py"
         ],
-        "command": "python -m pytest -q -p no:cacheprovider tests/test_test_runtime_boundaries.py",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_runtime_guard_roles.py tests/test_version_source_of_truth.py",
         "inputs": [
           "requirements-dev.txt",
-          "tests"
+          "tests",
+          ".build-and-verify/config.json",
+          "tests/conftest.py",
+          "tests/test_runtime_guard_roles.py"
         ],
         "checkParallel": true
       },
@@ -190,9 +224,7 @@
           "plugins/build-and-verify/**",
           "tests/test_build_and_verify_plugin.py",
           "tests/test_plugin_sync_skill_contract.py",
-          "tests/test_version_source_of_truth.py",
           "tests/test_setup_worktree_script.py",
-          ".comet/**",
           ".github/workflows/**",
           ".gitattributes",
           ".gitignore",
@@ -205,9 +237,12 @@
           "plugins/tool-lifecycle/**",
           "scripts/setup-worktree.ps1",
           "scripts/**",
-          ".codex/**"
+          "tests/support/command_stubs.py",
+          "tests/conftest.py",
+          "plugins/plugin-sync/skills/plugin-sync/references/update-build-and-verify-runtime.md",
+          ".comet/*.yaml"
         ],
-        "command": "python -m pytest -q -p no:cacheprovider --dist worksteal tests/test_build_and_verify_plugin.py tests/test_plugin_sync_skill_contract.py tests/test_version_source_of_truth.py tests/test_setup_worktree_script.py",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_build_and_verify_plugin.py tests/test_plugin_sync_skill_contract.py tests/test_setup_worktree_script.py",
         "inputs": [
           ".agents",
           ".claude-plugin",
@@ -217,9 +252,7 @@
           "plugins/build-and-verify",
           "tests/test_build_and_verify_plugin.py",
           "tests/test_plugin_sync_skill_contract.py",
-          "tests/test_version_source_of_truth.py",
           "tests/test_setup_worktree_script.py",
-          ".comet",
           ".github/workflows",
           ".gitattributes",
           ".gitignore",
@@ -232,10 +265,12 @@
           "plugins/tool-lifecycle",
           "scripts/setup-worktree.ps1",
           "scripts",
-          ".codex"
+          "tests/support/command_stubs.py",
+          "tests/conftest.py",
+          "plugins/plugin-sync/skills/plugin-sync/references/update-build-and-verify-runtime.md",
+          ".comet/*.yaml"
         ],
-        "checkParallel": true,
-        "pytestXdistWorkers": 2
+        "checkParallel": true
       },
       {
         "id": "verify.build-and-verify-cli",
@@ -247,16 +282,17 @@
           "requirements-dev.txt",
           "plugins/build-and-verify/**",
           "tests/test_build_and_verify_cli.py",
-          ".comet/**",
           ".github/workflows/**",
           ".gitattributes",
           ".gitignore",
           ".pr-flow/**",
           "package.json",
           "package-lock.json",
-          "plugins/tool-lifecycle/**"
+          "plugins/tool-lifecycle/**",
+          "tests/support/command_stubs.py",
+          "tests/conftest.py"
         ],
-        "command": "python -m pytest -q -p no:cacheprovider --dist worksteal tests/test_build_and_verify_cli.py",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_build_and_verify_cli.py",
         "inputs": [
           ".agents",
           ".claude-plugin",
@@ -265,17 +301,17 @@
           "requirements-dev.txt",
           "plugins/build-and-verify",
           "tests/test_build_and_verify_cli.py",
-          ".comet",
           ".github/workflows",
           ".gitattributes",
           ".gitignore",
           ".pr-flow",
           "package.json",
           "package-lock.json",
-          "plugins/tool-lifecycle"
+          "plugins/tool-lifecycle",
+          "tests/support/command_stubs.py",
+          "tests/conftest.py"
         ],
-        "checkParallel": true,
-        "pytestXdistWorkers": 4
+        "checkParallel": true
       },
       {
         "id": "verify.data-store",
@@ -284,7 +320,8 @@
           "tests/test_data_store.py",
           "tests/test_data_store_project_binding.py",
           "requirements-dev.txt",
-          ".build-and-verify/config.json"
+          ".build-and-verify/config.json",
+          "tests/conftest.py"
         ],
         "command": "python -m pytest -q -p no:cacheprovider tests/test_data_store.py tests/test_data_store_project_binding.py",
         "inputs": [
@@ -292,10 +329,10 @@
           "tests/test_data_store.py",
           "tests/test_data_store_project_binding.py",
           "requirements-dev.txt",
-          ".build-and-verify/config.json"
+          ".build-and-verify/config.json",
+          "tests/conftest.py"
         ],
-        "checkParallel": true,
-        "pytestXdistWorkers": 1
+        "checkParallel": true
       },
       {
         "id": "verify.cloud-bootstrap",
@@ -304,19 +341,263 @@
           "scripts/cloud-environment.json",
           "scripts/project_environment.py",
           "tests/test_cloud_bootstrap.py",
-          "tests/test_project_environment.py"
+          "tests/test_project_environment.py",
+          "tests/support/command_stubs.py",
+          "tests/conftest.py"
         ],
         "inputs": [
           "scripts/cloud_bootstrap.py",
           "scripts/cloud-environment.json",
           "scripts/project_environment.py",
           "tests/test_cloud_bootstrap.py",
-          "tests/test_project_environment.py"
+          "tests/test_project_environment.py",
+          "tests/support/command_stubs.py",
+          "tests/conftest.py"
         ],
         "command": "python -m pytest -q -p no:cacheprovider tests/test_cloud_bootstrap.py tests/test_project_environment.py",
+        "checkParallel": true
+      },
+      {
+        "id": "verify.real-my-spec",
+        "command": "python -m pytest -q -p no:cacheprovider --dist worksteal tests/integration/test_npm.py::TestMySpec",
+        "paths": [
+          "plugins/my-spec/**",
+          "tests/fixtures/myspec_source_cases.json",
+          "plugins/tool-lifecycle/**",
+          "tests/support/npm_candidates.py",
+          "tests/support/myspec_cases.py",
+          "tests/integration/test_npm.py",
+          ".gitattributes",
+          ".gitignore",
+          ".agents/plugins/marketplace.json",
+          ".claude-plugin/marketplace.json",
+          ".release-flow/projection.yaml",
+          "tests/integration/conftest.py",
+          "tests/conftest.py",
+          "requirements-dev.txt"
+        ],
+        "inputs": [
+          "plugins/my-spec",
+          "tests/fixtures/myspec_source_cases.json",
+          "plugins/tool-lifecycle",
+          "tests/support/npm_candidates.py",
+          "tests/support/myspec_cases.py",
+          "tests/integration/test_npm.py",
+          ".gitattributes",
+          ".gitignore",
+          ".agents/plugins/marketplace.json",
+          ".claude-plugin/marketplace.json",
+          ".release-flow/projection.yaml",
+          "tests/integration/conftest.py",
+          "tests/conftest.py",
+          "requirements-dev.txt"
+        ],
+        "checkParallel": true,
+        "pytestXdistWorkers": 4,
+        "timeoutSeconds": 420
+      },
+      {
+        "id": "verify.real-build-and-verify",
+        "command": "python -m pytest -q -p no:cacheprovider --dist worksteal tests/integration/test_npm.py::TestBuildAndVerify",
+        "paths": [
+          "plugins/build-and-verify/**",
+          "plugins/tool-lifecycle/**",
+          "tests/support/npm_candidates.py",
+          "tests/integration/test_npm.py",
+          ".gitattributes",
+          ".gitignore",
+          ".agents/plugins/marketplace.json",
+          ".claude-plugin/marketplace.json",
+          ".release-flow/projection.yaml",
+          "tests/integration/conftest.py",
+          "tests/conftest.py",
+          "requirements-dev.txt"
+        ],
+        "inputs": [
+          "plugins/build-and-verify",
+          "plugins/tool-lifecycle",
+          "tests/support/npm_candidates.py",
+          "tests/integration/test_npm.py",
+          ".gitattributes",
+          ".gitignore",
+          ".agents/plugins/marketplace.json",
+          ".claude-plugin/marketplace.json",
+          ".release-flow/projection.yaml",
+          "tests/integration/conftest.py",
+          "tests/conftest.py",
+          "requirements-dev.txt"
+        ],
+        "checkParallel": true,
+        "pytestXdistWorkers": 4
+      },
+      {
+        "id": "verify.real-pr-flow",
+        "command": "python -m pytest -q -p no:cacheprovider --dist worksteal tests/integration/test_git_workflows.py::TestPrFlow",
+        "paths": [
+          "plugins/pr-flow/**",
+          "tests/integration/test_git_workflows.py",
+          "tests/support/git_templates.py",
+          "tests/support/pr_flow_invocation.py",
+          "tests/support/command_stubs.py",
+          ".pr-flow/**",
+          "tests/integration/conftest.py",
+          "tests/conftest.py",
+          "requirements-dev.txt",
+          "plugins/my-spec/package.json",
+          "plugins/build-and-verify/package.json"
+        ],
+        "inputs": [
+          "plugins/pr-flow",
+          "tests/integration/test_git_workflows.py",
+          "tests/support/git_templates.py",
+          "tests/support/pr_flow_invocation.py",
+          "tests/support/command_stubs.py",
+          ".pr-flow",
+          "tests/integration/conftest.py",
+          "tests/conftest.py",
+          "requirements-dev.txt",
+          "plugins/my-spec/package.json",
+          "plugins/build-and-verify/package.json"
+        ],
+        "checkParallel": true,
+        "pytestXdistWorkers": 8
+      },
+      {
+        "id": "verify.real-release-flow",
+        "command": "python -m pytest -q -p no:cacheprovider --dist worksteal tests/integration/test_git_workflows.py::TestReleaseFlow",
+        "paths": [
+          "plugins/release-flow/**",
+          "tests/integration/test_git_workflows.py",
+          "tests/support/git_templates.py",
+          ".release-flow/**",
+          ".agents/plugins/marketplace.json",
+          ".claude-plugin/marketplace.json",
+          ".github/workflows/release.yml",
+          "plugins/my-spec/package.json",
+          "plugins/build-and-verify/package.json",
+          "tests/integration/conftest.py",
+          "tests/conftest.py",
+          "requirements-dev.txt"
+        ],
+        "inputs": [
+          "plugins/release-flow",
+          "tests/integration/test_git_workflows.py",
+          "tests/support/git_templates.py",
+          ".release-flow",
+          ".agents/plugins/marketplace.json",
+          ".claude-plugin/marketplace.json",
+          ".github/workflows/release.yml",
+          "plugins/my-spec/package.json",
+          "plugins/build-and-verify/package.json",
+          "tests/integration/conftest.py",
+          "tests/conftest.py",
+          "requirements-dev.txt"
+        ],
+        "checkParallel": true,
+        "pytestXdistWorkers": 4
+      },
+      {
+        "id": "verify.real-workspace",
+        "command": "python -m pytest -q -p no:cacheprovider --dist worksteal tests/integration/test_filesystem.py::TestWorkspace",
+        "paths": [
+          "plugins/build-and-verify/**",
+          "scripts/local_plugin_build.py",
+          "scripts/setup-worktree.ps1",
+          "tests/integration/test_filesystem.py",
+          "tests/support/git_templates.py",
+          "package.json",
+          "package-lock.json",
+          "plugins/data-store/skills/data-store/requirements.txt",
+          ".gitattributes",
+          ".gitignore",
+          "tests/integration/conftest.py",
+          "tests/conftest.py",
+          "requirements-dev.txt"
+        ],
+        "inputs": [
+          "plugins/build-and-verify",
+          "scripts/local_plugin_build.py",
+          "scripts/setup-worktree.ps1",
+          "tests/integration/test_filesystem.py",
+          "tests/support/git_templates.py",
+          "package.json",
+          "package-lock.json",
+          "plugins/data-store/skills/data-store/requirements.txt",
+          ".gitattributes",
+          ".gitignore",
+          "tests/integration/conftest.py",
+          "tests/conftest.py",
+          "requirements-dev.txt"
+        ],
+        "checkParallel": true,
+        "pytestXdistWorkers": 2
+      },
+      {
+        "id": "verify.real-data-store",
+        "command": "python -m pytest -q -p no:cacheprovider tests/integration/test_native_data.py::TestDataStore",
+        "paths": [
+          "plugins/data-store/**",
+          "tests/integration/test_native_data.py",
+          "scripts/cloud_bootstrap.py",
+          "scripts/project_environment.py",
+          "scripts/cloud-environment.json",
+          "tests/integration/conftest.py",
+          "tests/conftest.py",
+          "requirements-dev.txt",
+          "tests/integration/test_project_environment.py"
+        ],
+        "inputs": [
+          "plugins/data-store",
+          "tests/integration/test_native_data.py",
+          "scripts/cloud_bootstrap.py",
+          "scripts/project_environment.py",
+          "scripts/cloud-environment.json",
+          "tests/integration/conftest.py",
+          "tests/conftest.py",
+          "requirements-dev.txt",
+          "tests/integration/test_project_environment.py"
+        ],
+        "checkParallel": true,
+        "pytestXdistWorkers": 1
+      },
+      {
+        "id": "verify.real-cloud-bootstrap",
+        "command": "python -m pytest -q -p no:cacheprovider tests/integration/test_project_environment.py::TestBootstrap",
+        "paths": [
+          "scripts/cloud_bootstrap.py",
+          "scripts/project_environment.py",
+          "scripts/cloud-environment.json",
+          "tests/integration/test_project_environment.py",
+          "tests/support/command_stubs.py",
+          "tests/integration/conftest.py",
+          "tests/conftest.py",
+          "requirements-dev.txt",
+          "plugins/data-store/skills/data-store/**"
+        ],
+        "inputs": [
+          "scripts/cloud_bootstrap.py",
+          "scripts/project_environment.py",
+          "scripts/cloud-environment.json",
+          "tests/integration/test_project_environment.py",
+          "tests/support/command_stubs.py",
+          "tests/integration/conftest.py",
+          "tests/conftest.py",
+          "requirements-dev.txt",
+          "plugins/data-store/skills/data-store"
+        ],
         "checkParallel": true,
         "pytestXdistWorkers": 1
       }
+    ],
+    "realChecks": [
+      "verify.real-my-spec",
+      "verify.real-build-and-verify",
+      "verify.real-pr-flow",
+      "verify.real-release-flow",
+      "verify.real-workspace",
+      "verify.real-data-store",
+      "verify.real-cloud-bootstrap",
+      "verify.myspec"
     ]
   }
 }
