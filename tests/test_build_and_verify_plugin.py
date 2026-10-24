@@ -1,6 +1,4 @@
 import contextlib
-import fnmatch
-import hashlib
 import copy
 from types import SimpleNamespace
 
@@ -99,9 +97,6 @@ REQUIRED_INIT_REFERENCES = {
 
 
 PLUGIN_DESCRIPTION = "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）"
-
-
-DEFAULT_BUILD_AND_VERIFY_GITIGNORE = ["/cache/", "/runs/", "/backups/"]
 
 
 def read_json(path: Path) -> dict:
@@ -287,35 +282,21 @@ class FakeRunnerModule:
         invocation_control=None,
     ) -> int:
         def call_runner() -> int:
-            original_git_files = self.runner_module._git_visible_files
-
-            def visible_files_for_test(project_path, relative, *args, **kwargs):
-                # These in-process fixtures deliberately have no repository.
-                # Model the existing non-Git fallback without launching Git for
-                # every directory hash. Real Git fixtures keep the real adapter.
-                if not any((parent / ".git").exists() for parent in (project_path, *project_path.parents)):
-                    return None
-                return original_git_files(project_path, relative, *args, **kwargs)
-
-            self.runner_module._git_visible_files = visible_files_for_test
-            try:
-                return int(self.runner_module.run_verify(
-                    project,
-                    runner=self.runner,
-                    pr=pr,
-                    full=full,
-                    baseline=baseline,
-                    performance_report=performance_report,
-                    runtime_version=runtime_version,
-                    synthetic_changed_paths=(self.changed_files if synthetic_changed_paths is None else synthetic_changed_paths),
-                    implementation_identity=implementation_identity,
-                    execution_context=execution_context or "cloud",
-                    diagnostic=diagnostic,
-                    started_at=started_at,
-                    invocation_control=invocation_control,
-                ))
-            finally:
-                self.runner_module._git_visible_files = original_git_files
+            return int(self.runner_module.run_verify(
+                project,
+                runner=self.runner,
+                pr=pr,
+                full=full,
+                baseline=baseline,
+                performance_report=performance_report,
+                runtime_version=runtime_version,
+                synthetic_changed_paths=(self.changed_files if synthetic_changed_paths is None else synthetic_changed_paths),
+                implementation_identity=implementation_identity,
+                execution_context=execution_context or "cloud",
+                diagnostic=diagnostic,
+                started_at=started_at,
+                invocation_control=invocation_control,
+            ))
 
         if synthetic_changed_paths is not None:
             return call_runner()
@@ -618,202 +599,6 @@ def assert_init_wizard_config_structure(config: dict[str, Any]) -> None:
         and isinstance(timeout_seconds, (int, float))
         and timeout_seconds > 0
     )
-
-
-def ensure_init_wizard_gitignore(build_dir: Path) -> None:
-    gitignore = build_dir / ".gitignore"
-    lines = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
-    for entry in DEFAULT_BUILD_AND_VERIFY_GITIGNORE:
-        if entry not in lines:
-            lines.append(entry)
-    gitignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def init_wizard_can_create_directory(directory: Path, boundary: Path) -> bool:
-    created: list[Path] = []
-    current = directory
-    while not current.exists() and current != boundary and current != current.parent:
-        created.append(current)
-        current = current.parent
-    try:
-        directory.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return False
-    finally:
-        for path in created:
-            with contextlib.suppress(OSError):
-                path.rmdir()
-    return True
-
-
-def init_wizard_can_write_directory(directory: Path) -> bool:
-    probe = directory / ".init-write-check"
-    try:
-        probe.write_text("ok\n", encoding="utf-8")
-    except OSError:
-        return False
-    finally:
-        with contextlib.suppress(OSError):
-            probe.unlink()
-    return True
-
-
-def init_wizard_environment_issues(
-    project: Path,
-    *,
-    overwrite: bool,
-    backup_path: Path | None,
-) -> list[dict[str, str]]:
-    issues: list[dict[str, str]] = []
-    build_dir = project / ".build-and-verify"
-
-    if not project.exists():
-        issues.append(
-            init_wizard_issue(
-                f"目标仓库路径不存在：`{project}`",
-                "初始化写入会创建缺失目录；请确认目标路径是否正确。",
-                "确认目标仓库路径；如果需要准备环境，可以让 agent（代理）在授权后协助处理。",
-            )
-        )
-    elif not project.is_dir():
-        issues.append(
-            init_wizard_issue(
-                f"目标仓库路径不是目录：`{project}`",
-                "无法在该路径下写入 .build-and-verify（配置目录）。",
-                "选择一个目录作为目标仓库路径，或在授权后让 agent（代理）协助处理。",
-            )
-        )
-    elif build_dir.exists() and not build_dir.is_dir():
-        issues.append(
-            init_wizard_issue(
-                f"配置目录路径不是目录：`{build_dir}`",
-                "无法写入 .build-and-verify/config.json（配置文件）。",
-                "移动或删除同名文件；如果需要处理本地文件，可以让 agent（代理）在授权后协助处理。",
-            )
-        )
-    elif build_dir.exists() and not init_wizard_can_write_directory(build_dir):
-        issues.append(
-            init_wizard_issue(
-                f"配置目录不可写入：`{build_dir}`",
-                "无法可靠写入 .build-and-verify/config.json（配置文件）。",
-                "修复目录权限；如果需要准备环境，可以让 agent（代理）在授权后协助处理。",
-            )
-        )
-    elif not build_dir.exists() and not init_wizard_can_create_directory(build_dir, project):
-        issues.append(
-            init_wizard_issue(
-                f"配置目录不可创建：`{build_dir}`",
-                "无法创建 .build-and-verify（配置目录）。",
-                "修复目标仓库目录权限；如果需要准备环境，可以让 agent（代理）在授权后协助处理。",
-            )
-        )
-
-    if overwrite:
-        candidate = (
-            project / ".build-and-verify" / "backups"
-            if backup_path is None
-            else (backup_path if backup_path.is_absolute() else project / backup_path).parent
-        )
-        backup_inside_project = True
-        try:
-            candidate.resolve().relative_to(project.resolve())
-        except ValueError:
-            backup_inside_project = False
-            issues.append(
-                init_wizard_issue(
-                    f"备份目录不在目标仓库内：`{candidate}`",
-                    "覆盖已有配置时可能把备份写到仓库外部。",
-                    "选择目标仓库内的备份目录，或使用默认 backups（备份）目录。",
-                )
-            )
-        if backup_inside_project and candidate.exists() and not candidate.is_dir():
-            issues.append(
-                init_wizard_issue(
-                    f"备份目录路径不是目录：`{candidate}`",
-                    "覆盖已有配置时无法创建备份文件。",
-                    "移动或删除同名文件；如果需要处理本地文件，可以让 agent（代理）在授权后协助处理。",
-                )
-            )
-        elif backup_inside_project and project.exists() and project.is_dir():
-            if candidate.exists() and not init_wizard_can_write_directory(candidate):
-                issues.append(
-                    init_wizard_issue(
-                        f"备份目录不可写入：`{candidate}`",
-                        "覆盖已有配置时无法可靠创建备份文件。",
-                        "修复备份目录权限，或选择其他仓库内备份目录。",
-                    )
-                )
-            elif not candidate.exists() and not init_wizard_can_create_directory(candidate, project):
-                issues.append(
-                    init_wizard_issue(
-                        f"备份目录不可创建：`{candidate}`",
-                        "覆盖已有配置时无法创建备份目录。",
-                        "修复目标仓库目录权限，或使用其他仓库内备份目录。",
-                    )
-                )
-
-    return issues
-
-
-def init_wizard_backup_path(project: Path, backup_path: Path | None, timestamp: str) -> Path:
-    if backup_path is None:
-        return project / ".build-and-verify" / "backups" / f"config-{timestamp}.json"
-    candidate = backup_path if backup_path.is_absolute() else project / backup_path
-    try:
-        candidate.resolve().relative_to(project.resolve())
-    except ValueError as error:
-        raise AssertionError("backup_path must stay inside target repository") from error
-    assert not candidate.exists(), "backup_path must not overwrite existing file"
-    return candidate
-
-
-def simulate_init_wizard_write(
-    project: Path,
-    config: dict[str, Any],
-    *,
-    overwrite: bool,
-    backup_path: Path | None = None,
-    timestamp: str = "20260626-120000",
-    executable_resolver: Callable[[str], str | None] = shutil.which,
-    xdist_available: bool = True,
-) -> dict[str, Any]:
-    requested_backup_path = backup_path
-    dependency_issues = init_wizard_targeted_dependency_issues(
-        project,
-        config,
-        executable_resolver=executable_resolver,
-        xdist_available=xdist_available,
-    )
-    environment_issues = init_wizard_environment_issues(
-        project,
-        overwrite=overwrite,
-        backup_path=requested_backup_path,
-    )
-    build_dir = project / ".build-and-verify"
-    config_path = build_dir / "config.json"
-    reported_backup_path = None
-    build_dir.mkdir(parents=True, exist_ok=True)
-    ensure_init_wizard_gitignore(build_dir)
-
-    if config_path.exists():
-        assert overwrite
-        reported_backup_path = init_wizard_backup_path(
-            project,
-            requested_backup_path,
-            timestamp,
-        )
-        reported_backup_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(config_path, reported_backup_path)
-
-    write_json(config_path, config)
-    assert_init_wizard_config_structure(read_json(config_path))
-
-    return {
-        "backup_path": reported_backup_path,
-        "dependency_issues": dependency_issues,
-        "environment_issues": environment_issues,
-        "structure_valid": True,
-    }
 
 
 def test_build_and_verify_main_returns_error_without_command(capsys) -> None:
@@ -3080,28 +2865,65 @@ def memory_runtime(monkeypatch):
         config = {"version": 1, "build": {"checks": build_checks or []}, "verify": {"checks": verify_checks or []}}
         if verify_config: config["verify"].update(verify_config)
         config_write(project / ".build-and-verify/config.json", config)
-    def load_config(project):
-        path = project / ".build-and-verify/config.json"
-        if path not in state.documents: raise runner.ConfigError("missing_config: .build-and-verify/config.json")
-        try: data = json.loads(state.documents[path])
-        except json.JSONDecodeError as error: raise runner.ConfigError(f"invalid_config: .build-and-verify/config.json: {error.msg}") from None
-        return runner._validate_config(data)
-    def hash_input(project, item, memo=None):
-        relative, path = runner._validate_project_relative_input(project, item)
-        if path in state.inputs:
-            return {"path": relative, "type": "file", "sha256": hashlib.sha256(state.inputs[path]).hexdigest()}
-        children = [{"path": child.relative_to(project).as_posix(), "sha256": hashlib.sha256(value).hexdigest()}
-            for child, value in state.inputs.items() if child.is_relative_to(project) and
-            (child.is_relative_to(path) or fnmatch.fnmatch(child.relative_to(project).as_posix(), relative))]
-        if children or runner._is_glob_input(relative):
-            return {"path": relative, "type": "glob" if runner._is_glob_input(relative) else "directory", "files": sorted(children, key=lambda child: child["path"])}
-        return {"path": relative, "missing": True}
-    def all_files(project):
-        return sorted(path.relative_to(project).as_posix() for path in state.inputs if path.is_relative_to(project) and not runner._is_excluded_relative(path.relative_to(project).as_posix()))
+    # Replace only filesystem leaves inside this fixture's finite input root.
+    # Parsing, error classification, matching, sorting and hashing stay production code.
+    memory_root = Path("/memory/build-and-verify-tests").resolve()
+    original_read_text = Path.read_text
+    original_open = Path.open
+    original_exists = Path.exists
+    original_is_file = Path.is_file
+    original_is_dir = Path.is_dir
+    original_walk = os.walk
+    def memory_files():
+        return set(state.documents) | set(state.inputs) | set(state.logs)
+    def memory_read_text(path, *args, **kwargs):
+        if not path.is_relative_to(memory_root):
+            return original_read_text(path, *args, **kwargs)
+        if path.name == "config.json" and path.parent.name == ".build-and-verify" and path not in state.documents:
+            raise FileNotFoundError(path)
+        return _read_memory_text(path, *args, **kwargs)
+    def memory_open(path, mode="r", *args, **kwargs):
+        if not path.is_relative_to(memory_root):
+            return original_open(path, mode, *args, **kwargs)
+        assert mode == "rb", f"unexpected memory open: {path}, {mode}"
+        return io.BytesIO(_read_memory_bytes(path))
+    def memory_is_file(path, *args, **kwargs):
+        if not path.is_relative_to(memory_root):
+            return original_is_file(path, *args, **kwargs)
+        return path in memory_files()
+    def memory_is_dir(path, *args, **kwargs):
+        if not path.is_relative_to(memory_root):
+            return original_is_dir(path, *args, **kwargs)
+        return any(path in child.parents for child in memory_files())
+    def memory_exists(path, *args, **kwargs):
+        if not path.is_relative_to(memory_root):
+            return original_exists(path, *args, **kwargs)
+        return memory_is_file(path) or memory_is_dir(path)
+    def memory_walk(root, *args, **kwargs):
+        root = Path(root)
+        if not root.is_relative_to(memory_root):
+            return original_walk(root, *args, **kwargs)
+        assert not args and not kwargs, f"unexpected memory walk options: {args}, {kwargs}"
+        files = memory_files()
+        def entries(directory):
+            dirs = sorted({path.relative_to(directory).parts[0] for path in files
+                if directory in path.parents and path.parent != directory})
+            names = sorted(path.name for path in files if path.parent == directory)
+            yield str(directory), dirs, names
+            for name in dirs:
+                yield from entries(directory / name)
+        return entries(root)
     def git_process(command, **kwargs):
-        assert command == ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"], f"unexpected subprocess: {command!r}"
-        output = "".join(f" M {relative}\0" for relative in all_files(Path(kwargs["cwd"])))
-        return completed(command, stdout=output)
+        project = Path(kwargs["cwd"])
+        assert project.is_relative_to(memory_root), f"unexpected Git project: {project}"
+        if command == ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"]:
+            changed = sorted(path.relative_to(project).as_posix() for path in state.inputs if path.is_relative_to(project))
+            return completed(command, stdout="".join(f" M {relative}\0" for relative in changed))
+        if (isinstance(command, list) and len(command) == 8
+            and command[:7] == ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--"]):
+            assert command[7] == "." or memory_is_dir(project / command[7]), f"unexpected Git input: {command[7]}"
+            return completed(command, 128)
+        raise AssertionError(f"unexpected subprocess: {command!r}")
     def store(project, key, check):
         state.documents[runner._cache_path(project, key)] = json.dumps({"status": "passed", "id": check["id"]}).encode()
     def cache_load(project, key):
@@ -3119,14 +2941,16 @@ def memory_runtime(monkeypatch):
     monkeypatch.setattr(sys.modules[__name__], "write_json", config_write)
     monkeypatch.setattr(sys.modules[__name__], "read_json", config_read)
     monkeypatch.setattr(sys.modules[__name__], "write_runner_config", runner_config)
-    monkeypatch.setattr(runner, "_load_config", load_config)
-    monkeypatch.setattr(runner, "_hash_input", hash_input)
-    monkeypatch.setattr(runner, "_all_project_files", all_files)
-    monkeypatch.setattr(runner, "_git_visible_files", lambda *args, **kwargs: None)
+    monkeypatch.setattr(Path, "read_text", memory_read_text)
+    monkeypatch.setattr(Path, "open", memory_open)
+    monkeypatch.setattr(Path, "exists", memory_exists)
+    monkeypatch.setattr(Path, "is_file", memory_is_file)
+    monkeypatch.setattr(Path, "is_dir", memory_is_dir)
+    monkeypatch.setattr(os, "walk", memory_walk)
     monkeypatch.setattr(runner.subprocess, "run", git_process)
     monkeypatch.setattr(runner, "_cache_load", cache_load)
     monkeypatch.setattr(runner, "_cache_store", store)
     monkeypatch.setattr(runner, "_write_performance_report", report)
     monkeypatch.setattr(runner.tempfile, "TemporaryDirectory", EvidenceDirectory)
-    monkeypatch.setattr(sys.modules[__name__], "init_wizard_path_exists", lambda project, pattern: any(runner._path_matches(pattern, relative) for relative in all_files(project)))
+    monkeypatch.setattr(sys.modules[__name__], "init_wizard_path_exists", lambda project, pattern: any(runner._path_matches(pattern, relative) for relative in runner._all_project_files(project)))
     yield state

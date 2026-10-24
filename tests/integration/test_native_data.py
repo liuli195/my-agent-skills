@@ -1049,25 +1049,26 @@ class TestDataStore:
 
 
 
-    @pytest.mark.skipif(os.name == "nt", reason="Linux project entry; Windows uses its existing setup recipe")
-    def test_public_bootstrap_binding_serves_real_installed_data_commands(self, data_store_installation, tmp_path):
-        from tests.integration.test_project_environment import prepared_bootstrap_project, invoke
+    def test_installed_connection_serves_other_commands_and_is_repeatable(self, data_store_installation, tmp_path):
+        from tests.integration.test_project_environment import invoke
 
-        root, project, skill, arguments = prepared_bootstrap_project(tmp_path, installed_source=data_store_installation)
-        for _ in range(2):
-            result = subprocess.run(arguments, text=True, capture_output=True)
-            assert result.returncode == 0, result.stderr
-            checked = invoke(root / "skills/data-store", project, "check")
-            assert checked.returncode == 0, checked.stderr
-            assert Path(json.loads(checked.stdout)["target"]) == skill.resolve()
+        skill = data_store_installation
+        project = tmp_path / "project"
+        project.mkdir()
+        connected = invoke(skill, project)
+        assert connected.returncode == 0, connected.stderr
+        assert invoke(skill, project).returncode == 0
+        checked = invoke(skill, project, "check")
+        assert checked.returncode == 0, checked.stderr
+        assert Path(json.loads(checked.stdout)["target"]) == skill.resolve()
         script = project / ".local/skills/data-store/scripts/data_store.py"
         data = project / "data"
         written = subprocess.run([sys.executable, str(script), "--root", str(data),
-                                  "write", "readings", "one"], input='[{"value":7}]',
+                                  "write", "measurements", "one"], input='[{"score":7}]',
                                  text=True, capture_output=True)
         assert written.returncode == 0, written.stderr
         queried = subprocess.run([sys.executable, str(script), "--root", str(data),
-                                  "query", "SELECT value FROM readings", "--tables", '["readings"]'],
+                                  "query", "SELECT score FROM measurements", "--tables", '["measurements"]'],
                                  text=True, capture_output=True)
         assert queried.returncode == 0, queried.stderr
-        assert json.loads(queried.stdout) == {"value": 7}
+        assert json.loads(queried.stdout) == {"score": 7}

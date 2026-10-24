@@ -178,24 +178,34 @@ class TestBootstrap:
         spec.loader.exec_module(app)
         (tmp_path/'requirements.txt').write_text('-r skill.txt\n')
         (tmp_path/'skill.txt').write_text('example==1\n')
+        python = tmp_path / '.venv/bin/python'
+        pip_command = [str(python), '-m', 'pip', 'install', '--disable-pip-version-check',
+                       '--cache-dir', str(tmp_path / '.local/pip-cache'), '-r', 'requirements.txt']
+        pip_installs = []
         def execute(args, **kwargs):
-            if args[0] == 'git':
+            if args == ['git', 'rev-parse', '--path-format=absolute', '--git-common-dir']:
                 return subprocess.CompletedProcess(args,0,str(tmp_path/'.git')+'\n')
-            if '-c' in args:
+            if args == [str(python), '-c', 'import sys; print("%s.%s" % sys.version_info[:2])']:
                 return subprocess.CompletedProcess(args,0,f'{sys.version_info.major}.{sys.version_info.minor}\n')
-            if 'venv' in args:
-                python=tmp_path/'.venv/bin/python'
+            if args == [sys.executable, '-m', 'venv', str(tmp_path / '.venv')]:
                 python.parent.mkdir(parents=True)
                 python.touch()
-            return subprocess.CompletedProcess(args,0,'')
+                return subprocess.CompletedProcess(args,0,'')
+            if args == pip_command:
+                pip_installs.append(args)
+                return subprocess.CompletedProcess(args,0,'')
+            raise AssertionError(f'Unexpected project setup command: {args!r}')
         with patch.object(app.subprocess,'run',side_effect=execute):
             assert app.main(['--project',str(tmp_path),'--requirement','requirements.txt']) == 0
             assert capsys.readouterr().out.strip() == 'prepared'
+            assert pip_installs == [pip_command]
             assert app.main(['--project',str(tmp_path),'--requirement','requirements.txt']) == 0
             assert capsys.readouterr().out.strip() == 'reused'
+            assert pip_installs == [pip_command]
             (tmp_path/'skill.txt').write_text('example==2\n')
             assert app.main(['--project',str(tmp_path),'--requirement','requirements.txt']) == 0
             assert capsys.readouterr().out.strip() == 'prepared'
+            assert pip_installs == [pip_command, pip_command]
 
 
 
@@ -309,15 +319,3 @@ class TestBootstrap:
             assert invoke(old, project, "check").returncode == 0
         assert (old / "scripts/data_store.py").is_file()
         assert (new / "scripts/data_store.py").is_file()
-
-
-
-    def test_installed_connection_is_repeatable_and_checks_the_same_source(self, bootstrap_installation, tmp_path):
-        project = tmp_path / "project"
-        project.mkdir()
-        for _ in range(2):
-            connected = invoke(bootstrap_installation, project)
-            assert connected.returncode == 0, connected.stderr
-            checked = invoke(bootstrap_installation, project, "check")
-            assert checked.returncode == 0, checked.stderr
-            assert Path(json.loads(checked.stdout)["target"]) == bootstrap_installation.resolve()

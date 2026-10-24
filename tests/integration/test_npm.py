@@ -2870,7 +2870,7 @@ def _myspec_run_in_process(script: Path, *args: object, env=None, cwd=None) -> s
     return subprocess.CompletedProcess([str(script), *map(str, args)], code, stdout.getvalue(), stderr.getvalue())
 
 
-def _myspec_memory_migration_ready_state(cli, root, command="add"):
+def _myspec_in_process_ready_state(cli, root, command="add"):
     work = root / ".local" / "spec-work"
     conflicts = root / "no-conflicts.json"
     _myspec_write(conflicts, "[]")
@@ -2881,19 +2881,19 @@ def _myspec_memory_migration_ready_state(cli, root, command="add"):
     return work
 
 
-def _myspec_memory_migration_apply_ready(cli, specs, delta, output, work):
+def _myspec_in_process_apply_ready(cli, specs, delta, output, work):
     return _myspec_run_in_process(cli, "apply-delta", specs, delta, output, work,
                                   "specs-fingerprint", "input-fingerprint")
 
 
-def _myspec_memory_migration_confirmed_workflow(
+def _myspec_in_process_confirmed_workflow(
     cli: Path,
     specs: Path,
     delta: Path,
     preview: Path,
     *expected_diff: str,
 ) -> str:
-    work = _myspec_memory_migration_ready_state(cli, preview.parent)
+    work = _myspec_in_process_ready_state(cli, preview.parent)
     validated = _myspec_run_in_process(cli, "validate-delta", delta, specs)
     assert validated.returncode == 0, validated.stderr
     generated = _myspec_run_in_process(
@@ -2984,31 +2984,75 @@ class TestMySpec:
         assert os.environ[candidates.TARBALL_ENV["myspec"]] == str(supplied)
 
 
-    @pytest.mark.parametrize("failure", ["pack-start", "missing-resource"])
-    def test_candidate_failed_preparation_cleans_only_owned_partial_state(self, tmp_path, monkeypatch, npm_candidate, failure):
+    @pytest.mark.parametrize("failure,expected,message", [
+        ("pack-start", OSError, "candidate pack cannot start"),
+        ("installation", RuntimeError, "install_failed"),
+        ("tarball", FileNotFoundError, "supplied.tgz"),
+        ("executable", ValueError, "missing_npm_candidate_entrypoint"),
+        ("manifest", FileNotFoundError, "package.json"),
+        ("missing-resource", FileNotFoundError, "spec_ops.py"),
+    ])
+    def test_candidate_failed_preparation_cleans_only_owned_partial_state(self, tmp_path, monkeypatch, npm_candidate, failure, expected, message):
         from tests.support import npm_candidates as candidates
         supplied = tmp_path / "supplied.tgz"
         shutil.copy2(npm_candidate.tarball, supplied)
         before = supplied.read_bytes()
         owned = tmp_path / "owned-candidate"
+        prefix = owned / "prefix"
+        package = prefix / npm_candidate.installed_package.relative_to(npm_candidate.prefix)
+        executable = prefix / npm_candidate.executable.relative_to(npm_candidate.prefix)
+        tarball = None if failure in {"pack-start", "tarball"} else supplied
+        packed = owned / "package" / supplied.name
+        pack_command = [sys.executable, str(candidates.PACK), "myspec", str(owned / "package")]
+        install_command = [npm_candidate.npm, "install", "--global", "--prefix", str(prefix),
+            "--ignore-scripts", "--no-audit", "--no-fund", str(packed)]
+        calls = []
+        phase = "failure"
         def execute(command):
-            if failure == "pack-start":
-                assert command == [sys.executable, str(candidates.PACK), "myspec", str(owned / "package")]
-                raise OSError("candidate pack cannot start")
-            prefix = Path(command[command.index("--prefix") + 1])
-            assert command[0:3] == [npm_candidate.npm, "install", "--global"]
+            assert phase != "reuse", "preparation_repeated"
+            calls.append(command)
+            if command == pack_command:
+                if phase == "failure" and failure == "pack-start":
+                    raise OSError("candidate pack cannot start")
+                packed.parent.mkdir()
+                if phase != "failure" or failure != "tarball":
+                    shutil.copy2(supplied, packed)
+                return str(packed)
+            assert command == install_command
+            if phase == "failure" and failure == "installation":
+                raise RuntimeError("npm_candidate_preparation_failed: install_failed")
+            if phase == "failure" and failure == "tarball":
+                return ""
             shutil.copytree(npm_candidate.prefix, prefix)
             candidates._writable(prefix)
-            (prefix / npm_candidate.installed_package.relative_to(npm_candidate.prefix) / "python/spec_ops.py").unlink()
+            if phase == "failure":
+                missing = {"executable": executable, "manifest": package / "package.json",
+                    "missing-resource": package / "python/spec_ops.py"}
+                missing[failure].unlink()
             return ""
         monkeypatch.setattr(candidates, "_run", execute)
-        expected = OSError if failure == "pack-start" else FileNotFoundError
-        with pytest.raises(expected) as error:
-            candidates.prepare_candidate("myspec", owned, tarball=None if failure == "pack-start" else supplied)
-        if failure == "pack-start":
-            assert "candidate pack cannot start" in str(error.value)
+        original_environment = os.environ[candidates.CANDIDATES_ENV]
+        with pytest.raises(expected, match=message):
+            candidates.prepare_candidate("myspec", owned, tarball=tarball)
         assert not owned.exists() and supplied.read_bytes() == before
+        assert os.environ[candidates.CANDIDATES_ENV] == original_environment
+        assert not any(value.prefix == prefix for value in candidates._candidates.values())
+        assert not any(value.prefix == prefix for value in candidates._validated)
         assert npm_candidate.executable.is_file()
+        phase = "recovery"
+        recovered = candidates.prepare_candidate("myspec", owned, tarball=tarball)
+        assert calls.count(pack_command) == (2 if tarball is None else 0)
+        assert calls.count(install_command) == (1 if failure == "pack-start" else 2)
+        monkeypatch.setenv(candidates.CANDIDATES_ENV, candidates.candidate_environment({"myspec": recovered}))
+        phase = "reuse"
+        prepared_calls = calls.copy()
+        inherited = candidates.candidate_for("myspec")
+        first, first_package = candidates.copy_install(inherited, tmp_path / "first-install")
+        assert candidates.candidate_for("myspec") is inherited
+        second, second_package = candidates.copy_install(inherited, tmp_path / "second-install")
+        assert inherited == recovered and first.is_file() and second.is_file()
+        assert first != second and first_package != second_package
+        assert calls == prepared_calls and supplied.read_bytes() == before
 
 
     def test_candidate_baseline_reaches_two_real_workers_with_private_installs(self, tmp_path, npm_candidate):
@@ -5110,8 +5154,8 @@ def test_candidate_inheritance(tmp_path):
         preview = tmp_path / 'preview'
         _myspec_write(specs / 'accounts' / 'spec.md', main_spec('Accounts', requirement('登录', '允许登录')))
         _myspec_write(delta / 'accounts' / 'spec.md', '## MODIFIED Requirements\n\n### Requirement: 登录\n\n系统 MUST 允许密码登录。\n\n#### Scenario: 密码正确\n\n- **WHEN** 用户提交正确密码\n- **THEN** 系统创建会话\n')
-        work = _myspec_memory_migration_ready_state(_MYSPEC_SPEC_OPS, tmp_path / 'state')
-        previewed = _myspec_memory_migration_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, preview, work)
+        work = _myspec_in_process_ready_state(_MYSPEC_SPEC_OPS, tmp_path / 'state')
+        previewed = _myspec_in_process_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, preview, work)
         assert previewed.returncode == 0, previewed.stderr
         before = (specs / 'accounts' / 'spec.md').read_bytes()
         spec_ops = _myspec_load_in_process_spec_ops(_MYSPEC_SPEC_OPS)
@@ -5123,7 +5167,7 @@ def test_candidate_inheritance(tmp_path):
             _myspec_write(path, path.read_text(encoding='utf-8') + '\nimplementation-only change')
         monkeypatch.setattr(spec_ops, 'implementation_identity', lambda: 'changed-implementation')
         monkeypatch.setattr(spec_ops, '_write_preview', changed_write_preview)
-        applied = _myspec_memory_migration_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, specs, work)
+        applied = _myspec_in_process_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, specs, work)
         assert applied.returncode != 0
         assert 'preview_changed_requires_confirmation' in applied.stderr
         assert (specs / 'accounts' / 'spec.md').read_bytes() == before
@@ -5187,10 +5231,10 @@ def test_candidate_inheritance(tmp_path):
         preview = tmp_path / 'preview'
         _myspec_write(specs / 'accounts' / 'spec.md', main_spec('Accounts', requirement('旧登录', '允许登录'), requirement('旧导出', '允许导出'), requirement('个人资料', '显示姓名')))
         _myspec_write(delta / 'accounts' / 'spec.md', '# Accounts\n\n## Purpose\n\n描述 Accounts 的外部行为。\n\n## RENAMED Requirements\n\nFROM: 旧登录\nTO: 密码登录\n\n## REMOVED Requirements\n\n### Requirement: 旧导出\n\n## MODIFIED Requirements\n\n### Requirement: 个人资料\n\n系统 SHALL 显示姓名和头像。\n\n#### Scenario: 查看资料\n\n- **WHEN** 用户打开个人资料\n- **THEN** 系统显示姓名和头像\n\n## ADDED Requirements\n\n### Requirement: 注销\n\n系统 MUST 允许用户注销。\n\n#### Scenario: 主动注销\n\n- **WHEN** 用户选择注销\n- **THEN** 系统结束会话\n')
-        work = _myspec_memory_migration_ready_state(_MYSPEC_SPEC_OPS, tmp_path / 'state')
+        work = _myspec_in_process_ready_state(_MYSPEC_SPEC_OPS, tmp_path / 'state')
         assert _myspec_run_in_process(_MYSPEC_SPEC_OPS, 'validate-main', specs).returncode == 0
         assert _myspec_run_in_process(_MYSPEC_SPEC_OPS, 'validate-delta', delta, specs).returncode == 0
-        applied = _myspec_memory_migration_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, preview, work)
+        applied = _myspec_in_process_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, preview, work)
         assert applied.returncode == 0, applied.stderr
         assert _myspec_run_in_process(_MYSPEC_SPEC_OPS, 'validate-main', preview).returncode == 0
         merged = (preview / 'accounts' / 'spec.md').read_text(encoding='utf-8')
@@ -5205,16 +5249,16 @@ def test_candidate_inheritance(tmp_path):
         assert '+### Requirement: 密码登录' in diff.stdout
         assert '旧导出' in diff.stdout
         assert '注销' in diff.stdout
-        first_apply = _myspec_memory_migration_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, specs, work)
+        first_apply = _myspec_in_process_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, specs, work)
         assert first_apply.returncode == 0, first_apply.stderr
         before_repeat = (specs / 'accounts' / 'spec.md').read_bytes()
         repeated_validation = _myspec_run_in_process(_MYSPEC_SPEC_OPS, 'validate-delta', delta, specs)
         assert repeated_validation.returncode == 0, repeated_validation.stderr
-        repeated_work = _myspec_memory_migration_ready_state(_MYSPEC_SPEC_OPS, tmp_path / 'repeated-state')
+        repeated_work = _myspec_in_process_ready_state(_MYSPEC_SPEC_OPS, tmp_path / 'repeated-state')
         shutil.rmtree(preview)
-        repeated_preview = _myspec_memory_migration_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, preview, repeated_work)
+        repeated_preview = _myspec_in_process_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, preview, repeated_work)
         assert repeated_preview.returncode == 0, repeated_preview.stderr
-        repeated_apply = _myspec_memory_migration_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, specs, repeated_work)
+        repeated_apply = _myspec_in_process_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, specs, repeated_work)
         assert repeated_apply.returncode == 0, repeated_apply.stderr
         assert (specs / 'accounts' / 'spec.md').read_bytes() == before_repeat
 
@@ -5226,7 +5270,7 @@ def test_candidate_inheritance(tmp_path):
         preview = tmp_path / 'add' / 'preview'
         _myspec_write(specs / 'accounts' / 'spec.md', main_spec('Accounts', requirement('登录', '允许用户登录')))
         _myspec_write(delta / 'accounts' / 'spec.md', '## ADDED Requirements\n\n### Requirement: 注销\n\n系统 MUST 允许用户注销。\n\n#### Scenario: 主动注销\n\n- **WHEN** 用户选择注销\n- **THEN** 系统结束会话\n')
-        _myspec_memory_migration_confirmed_workflow(cli, specs, delta, preview, '+### Requirement: 注销')
+        _myspec_in_process_confirmed_workflow(cli, specs, delta, preview, '+### Requirement: 注销')
         assert '### Requirement: 注销' in (specs / 'accounts' / 'spec.md').read_text(encoding='utf-8')
 
 
@@ -5238,7 +5282,7 @@ def test_candidate_inheritance(tmp_path):
         duplicate = requirement('登录', '允许用户登录')
         _myspec_write(specs / 'accounts' / 'spec.md', main_spec('Accounts', duplicate, duplicate))
         delta.mkdir(parents=True)
-        _myspec_memory_migration_confirmed_workflow(cli, specs, delta, preview, '-### Requirement: 登录')
+        _myspec_in_process_confirmed_workflow(cli, specs, delta, preview, '-### Requirement: 登录')
         assert (specs / 'accounts' / 'spec.md').read_text(encoding='utf-8').count('### Requirement: 登录') == 1
 
 
@@ -5248,5 +5292,5 @@ def test_candidate_inheritance(tmp_path):
         delta = tmp_path / 'audit' / 'delta'
         preview = tmp_path / 'audit' / 'preview'
         _myspec_write(delta / 'notifications' / 'spec.md', '# Notifications\n\n## Purpose\n\n描述通知的外部行为。\n\n## ADDED Requirements\n\n### Requirement: 接收通知\n\n系统 MUST 向订阅用户发送通知。\n\n#### Scenario: 新消息\n\n- **WHEN** 新消息到达\n- **THEN** 系统发送通知\n')
-        _myspec_memory_migration_confirmed_workflow(cli, specs, delta, preview, '+### Requirement: 接收通知')
+        _myspec_in_process_confirmed_workflow(cli, specs, delta, preview, '+### Requirement: 接收通知')
         assert (specs / 'notifications' / 'spec.md').is_file()

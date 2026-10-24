@@ -46,11 +46,6 @@ def _pr_template_cache_key(*paths: Path) -> str:
         digest.update(b'\x00')
     return digest.hexdigest()[:12]
 
-def _pr_run_with_path(path: Path, *args: str, cwd: Path | None=None) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    env['PATH'] = str(path) + os.pathsep + env.get('PATH', '')
-    return _pr_cases().run(*args, cwd=cwd, env=env)
-
 def _pr_git(project: Path, *args: str) -> str:
     result = subprocess.run(['git', *args], cwd=project, check=False, text=True, capture_output=True)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -66,13 +61,6 @@ def _pr_init_repo(project: Path) -> str:
     _pr_git(project, 'add', 'README.md')
     _pr_git(project, 'commit', '-m', 'init')
     return _pr_git(project, 'branch', '--show-current')
-
-def _pr_init_feature_branch(project: Path) -> None:
-    assert _pr_init_repo(project) == 'main'
-    _pr_git(project, 'checkout', '-b', 'feature/example')
-    (project / 'README.md').write_text('# Test Project\n\nFeature change\n', encoding='utf-8')
-    _pr_git(project, 'add', 'README.md')
-    _pr_git(project, 'commit', '-m', 'feature')
 
 def _pr_write_fake_gh(bin_dir: Path, *, stdout: str='', stderr: str='', exit_code: int=0, calls_path: Path | None=None) -> Path:
     bin_dir.mkdir(exist_ok=True)
@@ -125,11 +113,18 @@ def _pr_copy_project_remote_template(template_dir: Path, tmp_path: Path) -> tupl
     return (project, remote)
 
 def _pr_remove_template_lock(lock_dir: Path) -> None:
+    last_error = None
     for _ in range(5):
-        shutil.rmtree(lock_dir, ignore_errors=True)
+        try:
+            shutil.rmtree(lock_dir)
+        except OSError as error:
+            last_error = error
         if not lock_dir.exists():
             return
         time.sleep(0.05)
+    if last_error is not None:
+        raise last_error
+    raise OSError(f'template_lock_cleanup_failed: {lock_dir}')
 
 def _pr_ensure_project_remote_template(template_name: str, tmp_path: Path, creator) -> tuple[Path, Path]:
     template_dir = _PR_TEMPLATE_ROOT / template_name
@@ -162,19 +157,15 @@ def _pr_ensure_project_remote_template(template_name: str, tmp_path: Path, creat
             template_dir.mkdir(parents=True, exist_ok=True)
             creator(template_dir)
             ready.write_text('ok\n', encoding='utf-8')
-    finally:
+    except BaseException as preparation_error:
+        try:
+            _pr_remove_template_lock(lock_dir)
+        except OSError as cleanup_error:
+            preparation_error.add_note(f'template_lock_cleanup_failed: {lock_dir}: {cleanup_error}')
+        raise
+    else:
         _pr_remove_template_lock(lock_dir)
     return _pr_copy_project_remote_template(template_dir, tmp_path)
-
-def _pr__create_minimal_project_remote_template(tmp_path: Path) -> tuple[Path, Path]:
-    remote = tmp_path / 'remote.git'
-    remote_init = subprocess.run(['git', 'init', '--bare', str(remote)], check=False, text=True, capture_output=True)
-    assert remote_init.returncode == 0, remote_init.stdout + remote_init.stderr
-    project = tmp_path / 'project'
-    assert _pr_init_repo(project) == 'main'
-    _pr_git(project, 'remote', 'add', 'origin', str(remote))
-    _pr_git(project, 'push', '-u', 'origin', 'main')
-    return (project, remote)
 
 def _pr_fake_project_remote_template(template_dir: Path) -> None:
     (template_dir / 'project').mkdir()
@@ -248,12 +239,6 @@ def _pr__create_complete_project(tmp_path: Path, *, review_mode: str='github', m
     _pr_git(project, 'checkout', 'feature/example')
     return (project, remote)
 
-def _pr_passing_pr_view_json(project: Path, *, review_decision: str='APPROVED') -> str:
-    return _pr_cases().pr_view_json(checks=[{'name': 'ci', 'status': 'COMPLETED', 'conclusion': 'SUCCESS'}], review_decision=review_decision, head_oid=_pr_git(project, 'rev-parse', 'HEAD'))
-
-def _pr_captured_body_files(fake_bin: Path) -> list[dict[str, str]]:
-    return json.loads((fake_bin / 'body_files.json').read_text(encoding='utf-8'))
-
 def _pr_configure_complete(project: Path, *, review_mode: str, merge_strategy: str='merge', evidence_path: str | None=None) -> None:
     _pr_cases().write_confirmed_pr_flow_config(project)
     config_path = project / '.pr-flow' / 'config.yaml'
@@ -264,43 +249,6 @@ def _pr_configure_complete(project: Path, *, review_mode: str, merge_strategy: s
     if evidence_path is not None:
         config['defaults']['reviewGate']['evidencePath'] = evidence_path
     config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding='utf-8')
-
-def _pr_configure_hotfix(project: Path, *, target: str='main', allow_hotfix: bool=True, verify_command: str='git rev-parse HEAD') -> None:
-    _pr_cases().write_confirmed_pr_flow_config(project)
-    config_path = project / '.pr-flow' / 'config.yaml'
-    config = yaml.safe_load(config_path.read_text(encoding='utf-8'))
-    config.setdefault('authorization', {})
-    config['authorization']['phraseHashAlgorithm'] = 'md5'
-    config['authorization']['phraseHash'] = hashlib.md5(_pr_cases().HOTFIX_PHRASE.encode('utf-8')).hexdigest()
-    config['defaults']['remote'] = 'origin'
-    config['defaults']['hotfix'] = {'verifyCommand': verify_command}
-    config.setdefault('branches', {}).setdefault(target, {})
-    config['branches'][target]['allowHotfixPush'] = allow_hotfix
-    config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding='utf-8')
-
-def _pr_init_hotfix_project(tmp_path: Path, *, allow_hotfix: bool=True, verify_command: str='git rev-parse HEAD') -> tuple[Path, Path, str]:
-    key = f'hotfix-{allow_hotfix}-{verify_command}'.replace(os.sep, '_').replace(':', '_').replace(' ', '_')
-    project, remote = _pr_ensure_project_remote_template(key, tmp_path, lambda template_dir: _pr__create_hotfix_project(template_dir, allow_hotfix=allow_hotfix, verify_command=verify_command))
-    before_commit = _pr_git_bare(remote, 'rev-parse', 'refs/heads/main')
-    return (project, remote, before_commit)
-
-def _pr__create_hotfix_project(tmp_path: Path, *, allow_hotfix: bool=True, verify_command: str='git rev-parse HEAD') -> tuple[Path, Path, str]:
-    remote = tmp_path / 'remote.git'
-    remote_init = subprocess.run(['git', 'init', '--bare', str(remote)], check=False, text=True, capture_output=True)
-    assert remote_init.returncode == 0, remote_init.stdout + remote_init.stderr
-    project = tmp_path / 'project'
-    assert _pr_init_repo(project) == 'main'
-    _pr_configure_hotfix(project, allow_hotfix=allow_hotfix, verify_command=verify_command)
-    _pr_git(project, 'add', '.pr-flow')
-    _pr_git(project, 'commit', '-m', 'configure pr flow')
-    _pr_git(project, 'remote', 'add', 'origin', str(remote))
-    _pr_git(project, 'push', '-u', 'origin', 'main')
-    before_commit = _pr_git_bare(remote, 'rev-parse', 'refs/heads/main')
-    _pr_git(project, 'checkout', '-b', 'hotfix/example', 'origin/main')
-    (project / 'README.md').write_text('# Test Project\n\nHotfix change\n', encoding='utf-8')
-    _pr_git(project, 'add', 'README.md')
-    _pr_git(project, 'commit', '-m', 'hotfix')
-    return (project, remote, before_commit)
 
 def _pr_write_toolchain_cli(bin_dir: Path, reports: dict[str, dict[str, object]], *, cwd_log: Path | None=None) -> None:
     bin_dir.mkdir(exist_ok=True)
@@ -784,6 +732,36 @@ class TestPrFlow:
         assert (template_dir / '.ready').is_file()
         assert not (template_dir / 'partial.txt').exists()
         assert not lock_dir.exists()
+
+    @pytest.mark.parametrize('preparation_fails', [False, True])
+    def test_project_template_lock_cleanup_failure_stops_copy(self, tmp_path: Path, monkeypatch, preparation_fails: bool) -> None:
+        module = sys.modules[__name__]
+        monkeypatch.setattr(module, '_PR_TEMPLATE_ROOT', tmp_path / 'templates')
+        lock_dir = _PR_TEMPLATE_ROOT / 'cleanup-failure.lock'
+        preparation_error = RuntimeError('template preparation failed')
+        cleanup_error = OSError('lock is still in use')
+        attempts = []
+
+        def creator(template_dir):
+            if preparation_fails:
+                raise preparation_error
+            _pr_fake_project_remote_template(template_dir)
+
+        def fail_rmtree(target):
+            assert target == lock_dir
+            attempts.append(target)
+            raise cleanup_error
+
+        monkeypatch.setattr(shutil, 'rmtree', fail_rmtree)
+        monkeypatch.setattr(time, 'sleep', lambda _seconds: None)
+        monkeypatch.setattr(module, '_pr_copy_project_remote_template', lambda *_args: pytest.fail('copied after lock cleanup failed'))
+        with pytest.raises(RuntimeError if preparation_fails else OSError) as caught:
+            _pr_ensure_project_remote_template('cleanup-failure', tmp_path, creator)
+        assert caught.value is (preparation_error if preparation_fails else cleanup_error)
+        assert len(attempts) == 5
+        assert lock_dir.is_dir()
+        if preparation_fails:
+            assert f'template_lock_cleanup_failed: {lock_dir}: {cleanup_error}' in preparation_error.__notes__
 
     def test_cleanup_returns_to_available_local_base_end_to_end(self, tmp_path: Path, monkeypatch) -> None:
         project, remote = _pr_init_cleanup_project(tmp_path)
@@ -1530,15 +1508,6 @@ def _release_init_release_input_project(project: Path, remote: Path, version: st
         path.write_text('baseline\n', encoding='utf-8')
     _release_init_project_with_remote(project, remote)
 
-def _release_advance_plugin_version_on_source_ref(project: Path, plugin: str, version: str) -> None:
-    _release_cases().write_plugin_manifests(project, plugin, version)
-    if plugin in {'build-and-verify', 'my-spec'}:
-        _release_cases().write_npm_package(project, plugin, version=version)
-    assert _release_git(project, 'add', f'plugins/{plugin}').returncode == 0
-    assert _release_git(project, 'commit', '-m', f'bump {plugin}').returncode == 0
-    assert _release_git(project, 'push', 'origin', 'HEAD:refs/heads/main').returncode == 0
-    assert _release_git(project, 'fetch', 'origin', 'main').returncode == 0
-
 def _release_git(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(['git', '-C', str(project), *args], check=False, text=True, capture_output=True)
 
@@ -1556,11 +1525,18 @@ def _release_project_tree_cache_key(project: Path) -> str:
     return digest.hexdigest()[:16]
 
 def _release_remove_template_lock(lock_dir: Path) -> None:
+    last_error = None
     for _ in range(5):
-        shutil.rmtree(lock_dir, ignore_errors=True)
+        try:
+            shutil.rmtree(lock_dir)
+        except OSError as error:
+            last_error = error
         if not lock_dir.exists():
             return
         time.sleep(0.05)
+    if last_error is not None:
+        raise last_error
+    raise OSError(f'template_lock_cleanup_failed: {lock_dir}')
 
 def _release_copy_project_remote_template(template_dir: Path, project: Path, remote: Path) -> None:
     copy_template(template_dir / 'remote.git', remote)
@@ -1613,27 +1589,38 @@ def _release_init_project_with_remote(project: Path, remote: Path) -> None:
             template_remote = template_dir / 'remote.git'
             _release__init_project_with_remote_uncached(template_project, template_remote)
             ready.write_text('ok\n', encoding='utf-8')
-    finally:
+    except BaseException as preparation_error:
+        try:
+            _release_remove_template_lock(lock_dir)
+        except OSError as cleanup_error:
+            preparation_error.add_note(f'template_lock_cleanup_failed: {lock_dir}: {cleanup_error}')
+        raise
+    else:
         _release_remove_template_lock(lock_dir)
     _release_copy_project_remote_template(template_dir, project, remote)
 
-def _release_fake_gh_for_publish(bin_dir: Path, calls: Path, *, always_eof: bool=False) -> Path:
+def _release_fake_gh_for_publish(bin_dir: Path, calls: Path) -> Path:
     bin_dir.mkdir()
     seen = calls.with_name('gh-seen.txt')
+    expected = 'workflow run .github/workflows/release.yml --ref main -f tag=v9.9.1 -f version=9.9.1 -f bumpPlugins=pr-flow'
     if os.name == 'nt':
         gh = bin_dir / 'gh.cmd'
         eof_line = 'echo Get ""https://api.github.com/repos/x/actions/workflows/release.yml"": EOF 1>&2'
-        if always_eof:
-            body = f'@echo off\r\necho %*>>"{calls}"\r\n{eof_line}\r\nexit /b 1\r\n'
-        else:
-            body = f'@echo off\r\necho %*>>"{calls}"\r\nif not exist "{seen}" (echo seen>"{seen}" & {eof_line} & exit /b 1)\r\nexit /b 0\r\n'
+        body = (
+            f'@echo off\r\necho %*>>"{calls}"\r\n'
+            f'if not "%*"=="{expected}" (echo unexpected gh call 1>&2 & exit /b 99)\r\n'
+            f'if not exist "{seen}" (echo seen>"{seen}" & {eof_line} & exit /b 1)\r\n'
+            'exit /b 0\r\n'
+        )
         gh.write_text(body, encoding='utf-8')
         return gh
     gh = bin_dir / 'gh'
-    if always_eof:
-        body = f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{calls}"\nprintf "%s\\n" "Get \\"https://api.github.com/repos/x/actions/workflows/release.yml\\": EOF" >&2\nexit 1\n'
-    else:
-        body = f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{calls}"\nif [ ! -f "{seen}" ]; then touch "{seen}"; printf "%s\\n" "Get \\"https://api.github.com/repos/x/actions/workflows/release.yml\\": EOF" >&2; exit 1; fi\nexit 0\n'
+    body = (
+        f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{calls}"\n'
+        f'if [ "$#" -ne 11 ] || [ "$*" != "{expected}" ]; then printf "%s\\n" "unexpected gh call" >&2; exit 99; fi\n'
+        f'if [ ! -f "{seen}" ]; then touch "{seen}"; printf "%s\\n" "Get \\"https://api.github.com/repos/x/actions/workflows/release.yml\\": EOF" >&2; exit 1; fi\n'
+        'exit 0\n'
+    )
     gh.write_text(body, encoding='utf-8')
     gh.chmod(493)
     return gh
@@ -1704,9 +1691,23 @@ class TestReleaseFlow:
         env['PATH'] = str(bin_dir) + os.pathsep + env.get('PATH', '')
         publish = _release_cases().run('publish', '--project', str(project), '--tag', 'v9.9.1', '--version', '9.9.1', '--bump-plugins', 'pr-flow', '--authorize-publish', env=env)
         assert publish.returncode == 0, publish.stdout + publish.stderr
-        assert calls.read_text(encoding='utf-8').count('workflow run') == 2
+        expected = 'workflow run .github/workflows/release.yml --ref main -f tag=v9.9.1 -f version=9.9.1 -f bumpPlugins=pr-flow'
+        assert calls.read_text(encoding='utf-8').splitlines() == [expected, expected]
         assert not (project / '.release-flow' / '.gitignore').exists()
         assert not (project / '.release-flow' / 'releases').exists()
+
+    @pytest.mark.parametrize('arguments', [
+        ['repo', 'view'],
+        ['workflow', 'run', '.github/workflows/release.yml', '--ref', 'other', '-f', 'tag=v9.9.1', '-f', 'version=9.9.1', '-f', 'bumpPlugins=pr-flow'],
+        ['workflow', 'run', '.github/workflows/release.yml', '--ref', 'main', '-f', 'tag=v9.9.1', '-f', 'version=9.9.1', '-f', 'bumpPlugins=pr-flow', '--repo', 'other/repository'],
+    ])
+    def test_publish_gh_rejects_unexpected_commands(self, tmp_path: Path, arguments: list[str]) -> None:
+        calls = tmp_path / 'gh-calls.txt'
+        gh = _release_fake_gh_for_publish(tmp_path / 'bin', calls)
+        rejected = subprocess.run([str(gh), *arguments], text=True, capture_output=True, check=False)
+        assert rejected.returncode == 99, rejected.stdout + rejected.stderr
+        assert 'unexpected gh call' in rejected.stderr
+        assert not calls.with_name('gh-seen.txt').exists()
 
     def test_preflight_refreshes_remote_baseline_before_comparing(self, tmp_path: Path) -> None:
         project = tmp_path / 'project'
@@ -1792,6 +1793,7 @@ class TestReleaseFlow:
             old.chmod(420)
 
     def test_release_template_recreates_incomplete_readonly_template(self, tmp_path: Path, monkeypatch) -> None:
+        from tests.support.command_stubs import CommandStub
         module = sys.modules[__name__]
         monkeypatch.setattr(module, '_RELEASE_TEMPLATE_ROOT', tmp_path / 'templates')
         project = tmp_path / 'project'
@@ -1803,11 +1805,26 @@ class TestReleaseFlow:
         old = template_dir / 'old-object'
         old.write_text('old\n', encoding='utf-8')
         old.chmod(292)
+        template_project = template_dir / 'project'
+        template_remote = template_dir / 'remote.git'
+        bare_init = ['git', 'init', '--bare', '--initial-branch=main', str(template_remote)]
+        commands = CommandStub(consume=True)
+        commands.add(bare_init)
+        for arguments in (
+            ['init'], ['config', 'user.email', 'test@example.com'],
+            ['config', 'user.name', 'Test'], ['add', '.'], ['commit', '-m', 'baseline'],
+            ['remote', 'add', 'origin', str(template_remote)],
+            ['push', 'origin', 'HEAD:refs/heads/main'],
+            ['push', 'origin', 'HEAD:refs/heads/marketplace'], ['fetch', 'origin', 'marketplace'],
+        ):
+            commands.add(['git', '-C', str(template_project), *arguments])
+        commands.add(['git', '-C', str(project), 'remote', 'set-url', 'origin', str(remote)])
 
         def fake_git_command(command, **kwargs):
-            if command[0] == 'git' and command[1] == 'init' and ('--bare' in command):
+            result = commands(*command)
+            if command == bare_init:
                 Path(command[-1]).mkdir()
-            return subprocess.CompletedProcess(command, 0, '', '')
+            return result
         monkeypatch.setattr(subprocess, 'run', fake_git_command)
         initialize_release_template = _release_init_project_with_remote
         initialize_release_template(project, remote)
@@ -1816,6 +1833,41 @@ class TestReleaseFlow:
         assert (project / 'source.txt').read_text(encoding='utf-8') == 'source\n'
         assert remote.is_dir()
         assert not (_RELEASE_TEMPLATE_ROOT / f'{template_dir.name}.lock').exists()
+        assert not commands.responses
+
+    @pytest.mark.parametrize('preparation_fails', [False, True])
+    def test_release_template_lock_cleanup_failure_stops_copy(self, tmp_path: Path, monkeypatch, preparation_fails: bool) -> None:
+        module = sys.modules[__name__]
+        monkeypatch.setattr(module, '_RELEASE_TEMPLATE_ROOT', tmp_path / 'templates')
+        project = tmp_path / 'project'
+        project.mkdir()
+        (project / 'source.txt').write_text('source\n', encoding='utf-8')
+        lock_dir = _RELEASE_TEMPLATE_ROOT / f'{_release_project_tree_cache_key(project)}.lock'
+        preparation_error = RuntimeError('template preparation failed')
+        cleanup_error = OSError('lock is still in use')
+        attempts = []
+
+        def initialize(_project, remote):
+            if preparation_fails:
+                raise preparation_error
+            remote.mkdir()
+
+        def fail_rmtree(target):
+            assert target == lock_dir
+            attempts.append(target)
+            raise cleanup_error
+
+        monkeypatch.setattr(module, '_release__init_project_with_remote_uncached', initialize)
+        monkeypatch.setattr(shutil, 'rmtree', fail_rmtree)
+        monkeypatch.setattr(time, 'sleep', lambda _seconds: None)
+        monkeypatch.setattr(module, '_release_copy_project_remote_template', lambda *_args: pytest.fail('copied after lock cleanup failed'))
+        with pytest.raises(RuntimeError if preparation_fails else OSError) as caught:
+            _release_init_project_with_remote(project, tmp_path / 'remote.git')
+        assert caught.value is (preparation_error if preparation_fails else cleanup_error)
+        assert len(attempts) == 5
+        assert lock_dir.is_dir()
+        if preparation_fails:
+            assert f'template_lock_cleanup_failed: {lock_dir}: {cleanup_error}' in preparation_error.__notes__
 
     @pytest.mark.parametrize(('changed_field', 'expected_returncode'), [(None, 0), ('url', 1), ('directory', 1)])
     def test_release_workflows_compare_packed_repository_metadata(self, tmp_path: Path, changed_field: str | None, expected_returncode: int) -> None:
@@ -1841,13 +1893,27 @@ class TestReleaseFlow:
         config = release_flow.read_config(project)
         projection = release_flow.read_projection(project)
         tree_ids = iter(['expected-tree', 'different-remote-tree'])
+        expected_commands = [
+            (['git', 'init'], 'expected'),
+            (['git', 'add', '-A'], 'expected'),
+            (['git', 'init'], 'remote'),
+            (['git', 'remote', 'add', 'origin', 'https://example.invalid/repo.git'], 'remote'),
+            (['git', 'fetch', '--depth=1', 'origin', 'same-commit'], 'remote'),
+        ]
+
+        def checked_git(command, cwd):
+            assert expected_commands, f'unexpected command: {command}'
+            assert (command, cwd.name) == expected_commands.pop(0)
+            return subprocess.CompletedProcess(command, 0, '', '')
+
         monkeypatch.setattr(release_flow, 'remote_ref_oid', lambda *_args: 'same-commit')
-        monkeypatch.setattr(release_flow, 'run_checked', lambda *_args: None)
+        monkeypatch.setattr(release_flow, 'run_checked', checked_git)
         monkeypatch.setattr(release_flow, 'copy_git_auth_config', lambda *_args: None)
         monkeypatch.setattr(release_flow, 'origin_url', lambda *_args: 'https://example.invalid/repo.git')
         monkeypatch.setattr(release_flow, 'git_output', lambda *_args: next(tree_ids))
         error = release_flow.existing_release_ref_error(project, config, projection, 'v9.9.1')
         assert error == 'release_projection_mismatch: v9.9.1'
+        assert not expected_commands
 
     def test_workflow_package_paths_are_loadable_in_node(self, tmp_path: Path) -> None:
         for workflow_path in (
