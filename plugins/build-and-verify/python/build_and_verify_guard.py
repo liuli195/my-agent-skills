@@ -27,7 +27,7 @@ import threading
 import time
 
 
-ADAPTER_VERSION = "python-audit-v1+node-preload-v1"
+ADAPTER_VERSION = "python-audit-v2+node-preload-v2"
 
 
 def protected_command(command, evidence: Path):
@@ -104,9 +104,16 @@ def _run_node(evidence, segment, args):
     return subprocess.call(args, env=env)
 
 
+def _evidence_records(path: Path):
+    files = sorted(path.parent.glob(path.name + ".unit-*.jsonl"))
+    if not files:
+        raise FileNotFoundError(path)
+    return [json.loads(line) for file in files for line in file.read_text(encoding="utf-8").splitlines()]
+
+
 def evidence_error(path: Path, segments: int) -> str | None:
     try:
-        records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        records = _evidence_records(path)
     except (OSError, ValueError):
         return "runtime_guard_evidence_missing"
     if not all(isinstance(item, dict) and isinstance(item.get("pid"), int)
@@ -129,31 +136,45 @@ def evidence_error(path: Path, segments: int) -> str | None:
                      if item.get("event") == "start" and item.get("role") == "worker"}
     roots = {item.get("segment") for item in records if item.get("event") == "start" and item.get("role") == "root"}
     if not started or started != finished or workers != worker_starts or roots != {str(i) for i in range(segments)}:
-        errors.append("runtime_guard_evidence_incomplete")
+        errors.append(f"runtime_guard_evidence_incomplete: starts={len(started)} finishes={len(finished)} "
+                      f"workers={len(workers)} worker_starts={len(worker_starts)} roots={len(roots)}/{segments}")
     return "; ".join(errors) if errors else None
 
 
 def evidence_summary(path: Path):
-    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    records = _evidence_records(path)
     return {"adapter": ADAPTER_VERSION,
         "workers": len({item.get("unit", str(item["pid"])) for item in records if item.get("event") == "start" and item.get("role") == "worker"}),
         "started": min(item["time"] for item in records), "finished": max(item["time"] for item in records)}
 
 
+def _write_evidence(write, fd, data):
+    while data:
+        written = write(fd, data)
+        if written <= 0:
+            raise OSError("runtime_guard_evidence_write_failed")
+        data = data[written:]
+
+
 def _run(evidence: str, segment: str, platform_info: str, args: list[str]) -> int:
-    # A pre-opened append-only stream is the sole framework bookkeeping write.
+    # Each process owns its evidence file; Windows append is not interprocess-atomic.
     # No project code has run yet. Do not expose a general pause/allow switch.
-    fd = os.open(evidence, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
-    write = os.write
     pid = os.getpid()
+    fd = os.open(f"{evidence}.unit-{segment}-python-{pid}.jsonl",
+                 os.O_APPEND | os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    write = os.write
+    write_evidence = _write_evidence
     role = "worker" if len(args) == 2 and args[0] == "--worker" else "root"
     # Windows venv launchers and their interpreter children have different PIDs.
     unit = args[1] if role == "worker" else str(pid)
     violated = False
+    record_lock = threading.Lock()
     def record(event, **fields):
         nonlocal violated
-        violated = violated or event == "violation"
-        write(fd, (json.dumps({"event": event, "pid": pid, "unit": unit, "time": time.monotonic(), **fields}) + "\n").encode())
+        data = (json.dumps({"event": event, "pid": pid, "unit": unit, "time": time.monotonic(), **fields}) + "\n").encode()
+        with record_lock:
+            violated = violated or event == "violation"
+            write_evidence(write, fd, data)
     record("start", role=role, segment=segment, adapter=ADAPTER_VERSION)
     def finish():
         record("finish")

@@ -1400,10 +1400,37 @@ def test_runtime_guard_missing_protection_evidence_cannot_cache_success(tmp_path
     assert len(executor.calls) == 2
 
 
+@pytest.fixture
+def guard_evidence(monkeypatch):
+    path = Path("/memory/guard-evidence/events.jsonl")
+    documents = {}
+    original_glob, original_read = Path.glob, Path.read_text
+    def glob(directory, pattern):
+        if directory != path.parent:
+            return original_glob(directory, pattern)
+        assert pattern == path.name + ".unit-*.jsonl"
+        return iter(file for file in documents if file.parent == directory
+                    and file.name.startswith(path.name + ".unit-") and file.name.endswith(".jsonl"))
+    def read(file, *args, **kwargs):
+        if file.parent != path.parent:
+            return original_read(file, *args, **kwargs)
+        value = documents[file]
+        if isinstance(value, BaseException):
+            raise value
+        return value
+    monkeypatch.setattr(Path, "glob", glob)
+    monkeypatch.setattr(Path, "read_text", read)
+    return SimpleNamespace(guard=load_build_and_verify_runner_module()._test_guard(), path=path, documents=documents)
+
+
+def _guard_record_text(records):
+    return "\n".join(json.dumps({"time": 1.0, **record}) for record in records)
+
+
 @pytest.mark.parametrize("child_unit,finish,passed", [
     ("worker-0", True, True), ("wrong-worker", True, False), ("worker-0", False, False),
 ])
-def test_runtime_guard_matches_work_units_across_launcher_pids(child_unit, finish, passed) -> None:
+def test_runtime_guard_matches_work_units_across_launcher_pids(guard_evidence, child_unit, finish, passed) -> None:
     records = [
         {"event": "start", "pid": 100, "unit": "root", "role": "root", "segment": "0"},
         {"event": "worker", "pid": 100, "unit": "root", "child": 200, "childUnit": child_unit},
@@ -1412,13 +1439,93 @@ def test_runtime_guard_matches_work_units_across_launcher_pids(child_unit, finis
     ]
     if finish:
         records.append({"event": "finish", "pid": 300, "unit": "worker-0"})
-    class Evidence:
-        def read_text(self, **kwargs):
-            return "\n".join(json.dumps({"time": 1.0, **record}) for record in records)
-    error = load_build_and_verify_runner_module()._test_guard().evidence_error(Evidence(), 1)
+    path = guard_evidence.path
+    for pid in (100, 300):
+        guard_evidence.documents[path.with_name(f"{path.name}.unit-0-python-{pid}.jsonl")] = _guard_record_text(
+            [record for record in records if record["pid"] == pid])
+    error = guard_evidence.guard.evidence_error(path, 1)
     assert (error is None) is passed
     if not passed:
         assert "runtime_guard_evidence_incomplete" in error
+
+
+def test_runtime_guard_aggregates_only_unit_evidence_for_python_and_node_threads(guard_evidence) -> None:
+    state = guard_evidence
+    records = {
+        "0-python-100": [
+            {"event": "start", "pid": 100, "unit": "100", "role": "root", "segment": "0"},
+            {"event": "worker", "pid": 100, "child": 300, "childUnit": "python-worker"},
+            {"event": "finish", "pid": 100, "unit": "100", "time": 9.0},
+        ],
+        "0-python-300": [
+            {"event": "start", "pid": 300, "unit": "python-worker", "role": "worker", "segment": "0"},
+            {"event": "finish", "pid": 300, "unit": "python-worker"},
+        ],
+        "1-node-400-0": [
+            {"event": "start", "pid": 400, "unit": "400:0", "role": "root", "segment": "1"},
+            {"event": "worker", "pid": 400, "child": 400, "childUnit": "400:1"},
+            {"event": "finish", "pid": 400, "unit": "400:0"},
+        ],
+        "1-node-400-1": [
+            {"event": "start", "pid": 400, "unit": "400:1", "role": "worker", "segment": "1"},
+            {"event": "finish", "pid": 400, "unit": "400:1"},
+        ],
+    }
+    state.documents.update({state.path.with_name(f"{state.path.name}.unit-{unit}.jsonl"): _guard_record_text(events)
+                            for unit, events in records.items()})
+    state.documents[state.path.with_name(state.path.name + ".capture-100-0")] = "not evidence"
+    state.documents[state.path] = "not a legacy evidence fallback"
+    assert state.guard.evidence_error(state.path, 2) is None
+    assert state.guard.evidence_summary(state.path) == {
+        "adapter": state.guard.ADAPTER_VERSION, "workers": 2, "started": 1.0, "finished": 9.0,
+    }
+    assert "runtime_guard_evidence_incomplete" in state.guard.evidence_error(state.path, 3)
+
+
+@pytest.mark.parametrize("failure", ["missing", "missing-worker", "json", "record", "read"])
+def test_runtime_guard_rejects_missing_or_damaged_unit_files(guard_evidence, failure) -> None:
+    state = guard_evidence
+    root = state.path.with_name(state.path.name + ".unit-0-python-100.jsonl")
+    worker = state.path.with_name(state.path.name + ".unit-0-python-200.jsonl")
+    state.documents[root] = _guard_record_text([
+        {"event": "start", "pid": 100, "role": "root", "segment": "0"},
+        {"event": "worker", "pid": 100, "child": 200},
+        {"event": "finish", "pid": 100},
+    ])
+    state.documents[worker] = _guard_record_text([
+        {"event": "start", "pid": 200, "role": "worker", "segment": "0"},
+        {"event": "finish", "pid": 200},
+    ])
+    if failure == "missing": state.documents.clear()
+    elif failure == "missing-worker": state.documents.pop(worker)
+    elif failure == "json": state.documents[worker] += "\n{"
+    elif failure == "record": state.documents[worker] += "\n{}"
+    elif failure == "read": state.documents[worker] = OSError("cannot read evidence")
+    error = state.guard.evidence_error(state.path, 1)
+    expected = "runtime_guard_evidence_incomplete" if failure in {"missing-worker", "record"} else "runtime_guard_evidence_missing"
+    assert expected in error
+
+
+@pytest.mark.parametrize("limit", [None, 7, 0])
+def test_runtime_guard_completes_short_evidence_writes_and_rejects_zero_progress(limit) -> None:
+    guard = load_build_and_verify_runner_module()._test_guard()
+    data = b'{"event":"start","pid":321}\n'
+    written = bytearray()
+    calls = []
+    def write(fd, data):
+        assert fd == 42
+        calls.append(data)
+        size = len(data) if limit is None else min(len(data), limit)
+        written.extend(data[:size])
+        return size
+    if limit == 0:
+        with pytest.raises(OSError, match="runtime_guard_evidence_write_failed"):
+            guard._write_evidence(write, 42, data)
+        assert written == b"" and calls == [data]
+    else:
+        guard._write_evidence(write, 42, data)
+        assert written == data
+        assert len(calls) == (1 if limit is None else (len(data) + limit - 1) // limit)
 
 
 @pytest.mark.parametrize('command', ['set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1&& set NUMBA_DISABLE_JIT=1&& ".\\.venv\\Scripts\\python.exe" -m pytest "tests/test_math.py::test_values[a b]" --ignore=tests/slow -k "not slow and math"', 'set PYTEST_ADDOPTS=-n 4&& .\\.venv\\Scripts\\python.exe -m pytest -p xdist.plugin tests/test_tree.py', 'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest "tests/test_math.py::test_values[a b]" -k "not slow" && python direct.py', 'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest "tests/test_math.py::test_values[a b]" -k "not slow" && node --test "tests/memory test.mjs"', 'set NODE_ENV=test&& "C:\\Program Files\\nodejs\\node.exe" "scripts\\direct script.js" --value="a b"', [sys.executable, '-m', 'unittest', 'tests.test_memory']])

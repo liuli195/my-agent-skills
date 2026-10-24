@@ -7,7 +7,8 @@ const threads = require('node:worker_threads');
 const unit = `${process.pid}:${threads.threadId}`;
 const evidence = process.env.BUILD_AND_VERIFY_GUARD_EVIDENCE;
 const segment = process.env.BUILD_AND_VERIFY_GUARD_SEGMENT;
-const fd = fs.openSync(process.env.BUILD_AND_VERIFY_GUARD_EVIDENCE, 'a', 0o600);
+// Worker threads share a PID, but never an evidence descriptor or pathname.
+const fd = fs.openSync(`${evidence}.unit-${segment}-node-${process.pid}-${threads.threadId}.jsonl`, 'ax', 0o600);
 const write = fs.writeSync;
 const close = fs.closeSync;
 let violated = false;
@@ -17,7 +18,7 @@ const record = (event, fields = {}) => {
     time: Number(process.hrtime.bigint()) / 1e9, ...fields }) + '\n');
 };
 const root = threads.isMainThread && !process.env.NODE_TEST_CONTEXT;
-record('start', { role: root ? 'root' : 'worker', segment, adapter: 'node-preload-v1' });
+record('start', { role: root ? 'root' : 'worker', segment, adapter: 'node-preload-v2' });
 // Finalize after every project exit callback, not as an earlier listener whose
 // closed evidence descriptor would lose a caught cleanup violation.
 const emit = process.emit;
