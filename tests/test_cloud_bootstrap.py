@@ -32,7 +32,7 @@ def installation(monkeypatch):
         app=app, root=root, manifest_path=manifest_path, destination=destination,
         manifest={"sources": [], "npm": []}, installed=None, version=None,
         source_exists=False, source_ready=False, skill_ready=False,
-        saved=[], commands=[], directories=[],
+        saved=[], commands=[], directories=[], managed_entries=[], absent_skills=[],
     )
     original_read = Path.read_text
     original_exists = Path.exists
@@ -66,6 +66,8 @@ def installation(monkeypatch):
         return original_exists(path)
 
     def is_file(path):
+        if path in state.absent_skills:
+            return False
         if path == discovery / "data-store/SKILL.md":
             return state.skill_ready
         assert not path.is_relative_to(root), f"unexpected installation file probe: {path}"
@@ -77,7 +79,7 @@ def installation(monkeypatch):
 
     def iterdir(path):
         if path == discovery:
-            return iter(())
+            return iter(state.managed_entries)
         assert not path.is_relative_to(root), f"unexpected installation enumeration: {path}"
         return original_iterdir(path)
 
@@ -257,3 +259,29 @@ def test_public_bootstrap_requires_installation_root(capsys):
         entry().main(["init"])
     assert error.value.code == 2
     assert "--root" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("location", ["managed", "external"])
+def test_obsolete_skill_links_are_reported_without_cleanup(installation, monkeypatch, capsys, location):
+    state = installation
+    managed = state.root / "skills/old-skill"
+    external = ROOT / ".unit-user-skills"
+    stale = managed if location == "managed" else external / "old-skill"
+    state.absent_skills.append(stale / "SKILL.md")
+    arguments = []
+    if location == "managed":
+        state.managed_entries.append(stale)
+    else:
+        original_exists, original_iterdir = Path.exists, Path.iterdir
+        original_symlink, original_resolve = Path.is_symlink, Path.resolve
+        monkeypatch.setattr(Path, "exists", lambda path:
+                            True if path == external else original_exists(path))
+        monkeypatch.setattr(Path, "iterdir", lambda path:
+                            iter([stale]) if path == external else original_iterdir(path))
+        monkeypatch.setattr(Path, "is_symlink", lambda path:
+                            True if path == stale else original_symlink(path))
+        monkeypatch.setattr(Path, "resolve", lambda path, *args, **kwargs:
+                            managed if path == stale else original_resolve(path, *args, **kwargs))
+        arguments = ["--skills-dir", str(external)]
+    assert state.app.main(["update", *state.arguments, *arguments]) == 1
+    assert "obsolete" in capsys.readouterr().err

@@ -1,10 +1,15 @@
-"""Pure data contracts; native database and storage behavior live in integration."""
+"""In-memory data contracts and maintenance decisions; native smoke is separate."""
 
 import builtins
 import copy
+import errno
+import io
+import json
 from decimal import Decimal
 import importlib.util
 from pathlib import Path
+import stat
+from types import SimpleNamespace
 
 import pytest
 
@@ -204,3 +209,334 @@ def test_cli_output_preserves_text_conversion_but_never_stringifies_binary():
     assert store._cli_json_value(Decimal("12.50")) == "12.50"
     with pytest.raises(ValueError, match="BLOB"):
         store._cli_json_value(b"\x00\xff")
+
+
+@pytest.fixture
+def delete_execution(monkeypatch):
+    """Only identity, journal bytes, sync and unlink are replaced, not the algorithm."""
+    store = load_store()
+    plan = known_delete_plan()
+    root, receipt = ROOT / ".unit-delete-data", ROOT / ".unit-delete-receipt"
+    plan["root"]["path"] = str(root)
+    second = copy.deepcopy(plan["targets"][0])
+    second["key"] = "two"
+    second["file"]["inode"] += 1
+    plan["targets"].append(second)
+    plan["plan_id"] = store._delete_plan_id(plan)
+    state = SimpleNamespace(store=store, plan=plan, root=root, receipt=receipt,
+                            records=[], unlinks=[], syncs=[])
+
+    def identity(actual_root, target):
+        assert actual_root == root
+        original = next(item for item in plan["targets"] if item["key"] == target["key"])
+        return copy.deepcopy(original["directory"]), copy.deepcopy(original["file"])
+
+    def write(path, record, *, create=False):
+        assert path == receipt
+        if create and state.records:
+            raise FileExistsError(path)
+        state.records.append((json.dumps(record) + "\n").encode())
+
+    original_open = Path.open
+
+    def read(path, mode="r", *args, **kwargs):
+        if path != receipt:
+            return original_open(path, mode, *args, **kwargs)
+        assert mode == "rb"
+        return io.BytesIO(b"".join(state.records))
+
+    def unlink(path, *args, **kwargs):
+        assert path.parent == root / "readings"
+        state.unlinks.append(path.name)
+
+    original_resolve = Path.resolve
+    monkeypatch.setattr(Path, "resolve", lambda path, *args, **kwargs:
+                        path if path == receipt else original_resolve(path, *args, **kwargs))
+    monkeypatch.setattr(Path, "open", read)
+    monkeypatch.setattr(Path, "unlink", unlink)
+    monkeypatch.setattr(store, "_delete_root", lambda path: (root, copy.deepcopy(plan["root"])))
+    monkeypatch.setattr(store, "_delete_file_identity", identity)
+    monkeypatch.setattr(store, "_write_delete_log", write)
+    monkeypatch.setattr(store, "_sync_delete_directory", state.syncs.append)
+    state.execute = lambda **changes: store.execute_delete(
+        changes.pop("root", root), changes.pop("plan", plan),
+        approve=changes.pop("approve", plan["plan_id"]),
+        offline=changes.pop("offline", True), receipt_path=changes.pop("receipt_path", receipt), **changes,
+    )
+    return state
+
+
+def test_delete_preview_normalizes_exact_targets_without_mutation(delete_execution):
+    state = delete_execution
+    plan = state.store.plan_delete(state.root, {"Readings": ["ONE", "two", "one"]})
+    assert [target["key"] for target in plan["targets"]] == ["one", "two"]
+    state.store._validate_delete_plan(plan)
+    assert state.records == state.unlinks == state.syncs == []
+
+
+@pytest.mark.parametrize("change,code", [
+    ("identity", "identity_changed"), ("missing", "missing"), ("redirect", "redirected"),
+    ("permission", "permission_or_lock"), ("lock", "locked"),
+    ("root", "root_identity_changed"), ("root-missing", "root_unavailable"),
+])
+def test_delete_preflight_failure_never_unlinks_any_item(delete_execution, monkeypatch, change, code):
+    state = delete_execution
+    store, original = state.store, state.store._delete_file_identity
+
+    def identity(root, target):
+        directory, file = original(root, target)
+        if target["key"] == "two":
+            if change == "identity":
+                file["inode"] += 100
+            elif change == "missing":
+                raise FileNotFoundError("missing target")
+            elif change == "redirect":
+                raise store._DeleteSafetyError("redirected", "redirected target")
+            elif change == "permission":
+                raise PermissionError("unavailable target")
+            elif change == "lock":
+                raise OSError(errno.EBUSY, "locked target")
+        return directory, file
+
+    monkeypatch.setattr(store, "_delete_file_identity", identity)
+    if change == "root":
+        monkeypatch.setattr(store, "_delete_root", lambda root:
+                            (root, dict(state.plan["root"], inode=999)))
+    elif change == "root-missing":
+        def missing_root(root):
+            raise store._DeleteSafetyError("root_unavailable", "unavailable root")
+        monkeypatch.setattr(store, "_delete_root", missing_root)
+    receipt = state.execute()
+    assert receipt["state"] == "incomplete"
+    assert not state.unlinks
+    assert any(item.get("error", {}).get("code") == code for item in receipt["items"])
+
+
+def test_delete_partial_failure_resumes_only_original_unfinished_item(delete_execution, monkeypatch):
+    state = delete_execution
+    unlink = Path.unlink
+
+    def locked(path, *args, **kwargs):
+        if path.name == "two.parquet":
+            raise PermissionError("locked")
+        return unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "unlink", locked)
+        receipt = state.execute()
+    assert [item["status"] for item in receipt["items"]] == ["deleted", "failed"]
+    original = state.store._delete_file_identity
+
+    def unfinished_only(root, target):
+        assert target["key"] == "two", "A rebuilt completed key must never be checked or removed"
+        return original(root, target)
+
+    monkeypatch.setattr(state.store, "_delete_file_identity", unfinished_only)
+    assert state.execute()["state"] == "complete"
+    assert state.unlinks == ["one.parquet", "two.parquet"]
+
+
+@pytest.mark.parametrize("failure", ["receipt-write", "unlink-outcome", "torn-log", "directory-sync"])
+def test_delete_uncertain_outcome_never_retries(delete_execution, monkeypatch, failure):
+    state = delete_execution
+    write, unlink = state.store._write_delete_log, Path.unlink
+
+    def failed_write(path, record, **kwargs):
+        if record.get("status") == "deleted":
+            if failure == "torn-log":
+                state.records.append(b'{"item":0,')
+            raise OSError("receipt result not durable")
+        return write(path, record, **kwargs)
+
+    def uncertain_unlink(path, *args, **kwargs):
+        unlink(path, *args, **kwargs)
+        raise OSError("unknown unlink outcome")
+
+    def failed_sync(path):
+        if path == state.root / "readings":
+            raise OSError("directory sync failed after unlink")
+
+    with monkeypatch.context() as patch:
+        if failure in ("receipt-write", "torn-log"):
+            patch.setattr(state.store, "_write_delete_log", failed_write)
+        elif failure == "unlink-outcome":
+            patch.setattr(Path, "unlink", uncertain_unlink)
+        else:
+            patch.setattr(state.store, "_sync_delete_directory", failed_sync)
+        assert state.execute()["state"] == "uncertain"
+    assert state.execute()["state"] == "uncertain"
+    assert state.unlinks == ["one.parquet"]
+
+
+@pytest.mark.parametrize("change", ["replacement", "disappearance"])
+def test_delete_rechecks_identity_after_preflight(delete_execution, monkeypatch, change):
+    state = delete_execution
+    original = state.store._delete_file_identity
+    calls = 0
+
+    def identity(root, target):
+        nonlocal calls
+        calls += 1
+        directory, file = original(root, target)
+        if calls == 3:  # Both preflight checks completed, no unlink yet.
+            if change == "disappearance":
+                raise FileNotFoundError("disappeared before unlink")
+            file["inode"] += 1
+        return directory, file
+
+    monkeypatch.setattr(state.store, "_delete_file_identity", identity)
+    result = state.execute()
+    assert result["state"] == "incomplete"
+    assert result["items"][0]["error"]["code"] == (
+        "missing" if change == "disappearance" else "identity_changed")
+    assert not state.unlinks
+
+
+@pytest.mark.parametrize("change", ["approval", "offline", "plan", "root", "receipt-in-data", "receipt-other-plan"])
+def test_delete_rejects_wrong_authority_without_mutation(delete_execution, change):
+    state = delete_execution
+    arguments = {}
+    if change == "approval":
+        arguments["approve"] = "another-plan"
+    elif change == "offline":
+        arguments["offline"] = False
+    elif change == "plan":
+        arguments["plan"] = copy.deepcopy(state.plan)
+        arguments["plan"]["targets"][0]["key"] = "unapproved"
+    elif change == "root":
+        arguments["root"] = ROOT / "other-root"
+    elif change == "receipt-in-data":
+        arguments["receipt_path"] = state.root / "receipt"
+    else:
+        state.records.append(b'{"format":"unrelated","important":"keep me"}\n')
+    before = list(state.records)
+    with pytest.raises(ValueError):
+        state.execute(**arguments)
+    assert not state.unlinks and state.records == before
+
+
+def test_resuming_delete_syncs_receipt_directory_before_any_unlink(delete_execution, monkeypatch):
+    state = delete_execution
+
+    def failed_sync(path):
+        assert path == state.receipt.parent
+        raise OSError("receipt directory sync failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(state.store, "_sync_delete_directory", failed_sync)
+        for _ in range(2):
+            with pytest.raises(OSError, match="receipt directory"):
+                state.execute()
+            assert len(state.records) == 1 and not state.unlinks
+    assert state.execute()["state"] == "complete"
+    assert state.syncs[0] == state.receipt.parent
+
+
+@pytest.mark.parametrize("change", [None, "path", "fd"])
+def test_delete_file_identity_compares_ctime_within_each_source(monkeypatch, change):
+    store = load_store()
+    root = ROOT / ".unit-delete-identity"
+    target = root / "readings/one.parquet"
+    counts = {"path": 0, "fd": 0}
+
+    def signature(source):
+        counts[source] += 1
+        return SimpleNamespace(st_mode=stat.S_IFREG, st_dev=7, st_ino=17, st_size=3,
+                               st_mtime_ns=23, st_ctime_ns=(29 if source == "path" else 999)
+                               + (counts[source] if source == change else 0))
+
+    class Stream(io.BytesIO):
+        def fileno(self):
+            return 123
+
+    original_resolve = Path.resolve
+    original_stat = Path.stat
+    original_is_symlink = Path.is_symlink
+    original_open, original_fstat = Path.open, store.os.fstat
+    monkeypatch.setattr(Path, "resolve", lambda path, *args, **kwargs:
+                        path if path in (target, target.parent) else original_resolve(path, *args, **kwargs))
+    monkeypatch.setattr(Path, "is_symlink", lambda path:
+                        False if path == target else original_is_symlink(path))
+    monkeypatch.setattr(Path, "stat", lambda path, *args, **kwargs:
+                        signature("path") if path == target else
+                        SimpleNamespace(st_mode=stat.S_IFDIR, st_dev=7, st_ino=13)
+                        if path == target.parent else original_stat(path, *args, **kwargs))
+    monkeypatch.setattr(Path, "open", lambda path, *args, **kwargs:
+                        Stream(b"abc") if path == target else original_open(path, *args, **kwargs))
+    monkeypatch.setattr(store.os, "fstat", lambda descriptor:
+                        signature("fd") if descriptor == 123 else original_fstat(descriptor))
+    if change:
+        with pytest.raises(store._DeleteSafetyError, match="核验中"):
+            store._delete_file_identity(root, {"table": "readings", "key": "one"})
+    else:
+        _, file = store._delete_file_identity(root, {"table": "readings", "key": "one"})
+        assert file["ctime_ns"] == 29
+
+
+@pytest.mark.parametrize("payload,error", [
+    (b"not parquet", "corrupt"), (b"PAR1" + b"\xff" * 4 + b"PAR1", "corrupt"),
+    (FileNotFoundError("absent"), "missing"), (PermissionError("storage unavailable"), "permission"),
+    (b"PAR1" + b"\x00" * 4 + b"PAR1", None),
+])
+def test_selected_key_envelope_preserves_missing_corrupt_and_storage_errors(monkeypatch, payload, error):
+    store = load_store()
+    target = ROOT / ".unit-selected.parquet"
+    original_open, original_symlink = Path.open, Path.is_symlink
+
+    def open_key(path, *args, **kwargs):
+        if path != target:
+            return original_open(path, *args, **kwargs)
+        if isinstance(payload, Exception):
+            raise payload
+        return io.BytesIO(payload)
+
+    monkeypatch.setattr(Path, "is_symlink", lambda path:
+                        False if path == target else original_symlink(path))
+    monkeypatch.setattr(Path, "open", open_key)
+    if error:
+        with pytest.raises({"corrupt": store.CorruptDataError,
+                            "missing": store.MissingKeyError, "permission": PermissionError}[error]):
+            store._check_key(target)
+    else:
+        store._check_key(target)
+
+
+@pytest.mark.parametrize("redirect", ["directory", "shard"])
+def test_key_reader_rejects_redirection_before_native_access(monkeypatch, redirect):
+    store = load_store()
+    directory, shard = ROOT / "readings", ROOT / "readings/one.parquet"
+    original_resolve, original_symlink = Path.resolve, Path.is_symlink
+    monkeypatch.setattr(Path, "resolve", lambda path, *args, **kwargs:
+                        ROOT / "other" if redirect == "directory" and path == directory
+                        else original_resolve(path, *args, **kwargs))
+    monkeypatch.setattr(Path, "is_symlink", lambda path:
+                        True if redirect == "shard" and path == shard else original_symlink(path))
+    monkeypatch.setattr(store, "_duckdb", lambda: pytest.fail("redirection reached native database"))
+    with pytest.raises(ValueError, match="目录|链接"):
+        store.read_key(ROOT, "readings", "one")
+
+
+@pytest.mark.parametrize("container", ["list", "array", "map", "struct", "union"])
+def test_cli_rejects_nested_binary_types_without_native_database(container):
+    store = load_store()
+    blob = SimpleNamespace(id="blob", children=[])
+    nested = SimpleNamespace(id=container, children=[("value", blob)])
+    assert store._contains_blob(nested)
+    nested.children = [("value", SimpleNamespace(id="integer", children=[]))]
+    assert not store._contains_blob(nested)
+
+
+@pytest.mark.parametrize("statements", [[], ["SELECT", "SELECT"], ["CREATE"], ["COPY"]])
+def test_query_accepts_only_one_readonly_statement_before_root_access(monkeypatch, statements):
+    store = load_store()
+    closed = []
+    connection = SimpleNamespace(
+        extract_statements=lambda sql: [SimpleNamespace(type=kind) for kind in statements],
+        close=lambda: closed.append(True),
+    )
+    engine = SimpleNamespace(connect=lambda *args, **kwargs: connection,
+                             StatementType=SimpleNamespace(SELECT="SELECT"))
+    monkeypatch.setattr(store, "_duckdb", lambda: engine)
+    with pytest.raises(ValueError, match="只读"):
+        store.query(ROOT / "unavailable", "SQL extracted by the native parser", tables=["readings"])
+    assert closed == [True]

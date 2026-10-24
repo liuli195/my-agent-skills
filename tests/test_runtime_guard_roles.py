@@ -61,6 +61,7 @@ def test_config_explicitly_assigns_all_guarded_and_real_check_roles() -> None:
     assert len(real_ids) == len(set(real_ids)) == 8
     assert set(real_ids) == {*REAL_SELECTORS, "verify.myspec"}
     assert set(ids) - set(real_ids) == ORDINARY_CHECKS
+    assert all(ids.index(ordinary) < ids.index(real) for ordinary in ORDINARY_CHECKS for real in REAL_SELECTORS)
     assert (verify["maxParallel"], verify["timeoutSeconds"], verify["fullBudgetSeconds"]) == (8, 180, 60)
     assert verify.get("enforceLocalBudget", True) is True
     for check in checks:

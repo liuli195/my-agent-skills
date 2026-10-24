@@ -5920,3 +5920,222 @@ def test_legacy_cleanup_and_hotfix_keep_behavior_with_upgrade_prompt(flow_root: 
     _, hotfix = run_hotfix_in_process(hotfix_root, monkeypatch, allow_hotfix=False)
     assert "upgrade available: rerun pr-flow-init to record the managed toolchain" in hotfix.stdout
     assert "hotfix_push_not_allowed" in hotfix.stdout
+
+
+def test_status_keeps_latest_and_branch_record_in_memory(flow_root: Path) -> None:
+    module = load_pr_flow_module()
+    project = flow_root / "project"
+    module.write_status(project, "complete", "ready", {"sourceBranch": "feature/example"})
+    latest = json.loads((project / ".pr-flow/last-status.json").read_text())
+    branch = project / ".pr-flow/runs" / f"{module.stable_key('feature/example')}.json"
+    assert json.loads(branch.read_text()) == latest
+    assert latest["details"]["worktreePath"] == str(project.resolve())
+    assert latest["details"]["commonGitDir"] == str(project / ".git")
+
+
+@pytest.mark.parametrize("command", ["cleanup", "diagnose"])
+def test_locked_commands_report_owner_without_rewriting_status(flow_root: Path, monkeypatch, command: str) -> None:
+    module = load_pr_flow_module()
+    project = flow_root / "project"
+    module.write_status(project, "complete", "ready", {"sourceBranch": "feature/example"})
+    before = (project / ".pr-flow/last-status.json").read_bytes()
+    owner = {"reason": "flow_locked", "actor": {"name": "Owner"}, "nextCommand": "retry after owner finishes"}
+
+    @contextlib.contextmanager
+    def locked(*_args):
+        raise module.PrFlowError("flow_locked", owner)
+        yield
+
+    monkeypatch.setattr(module, "operation_lock", locked)
+    monkeypatch.setattr(module, "active_lock_details", lambda _project: owner)
+    arguments = [command, "--project", str(project)] + (["--pr", "12"] if command == "cleanup" else [])
+    result = run(*arguments)
+    assert result.returncode == 1
+    assert "flow_locked" in result.stdout and "Owner" in result.stdout
+    assert "nextCommand" in result.stdout
+    assert (project / ".pr-flow/last-status.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("failure", [None, "dirty", "commit", "staged-scope"])
+def test_toolchain_sync_limits_staging_and_restores_failed_changes(flow_root: Path, monkeypatch, failure) -> None:
+    from tests.support.command_stubs import CommandStub, default_git_responses
+
+    module = load_pr_flow_module()
+    project = flow_root / "project"
+    record = project / module.TOOLCHAIN_PATH
+    workflow = project / module.TOOLCHAIN_WORKFLOW_PATH
+    record.write_text(module.toolchain_record(module.toolchain_identities(project)))
+    workflow.write_text("stale workflow\n")
+    commands = CommandStub(defaults=default_git_responses())
+    paths = [module.TOOLCHAIN_WORKFLOW_PATH.as_posix()]
+    commands.add(["status", "--porcelain"], stdout="?? unrelated.txt\n" if failure == "dirty" else "")
+    commands.add(["add", "--", *paths])
+    commands.add(["diff", "--cached", "--name-only"],
+                 stdout="\n".join(paths + (["unrelated.txt"] if failure == "staged-scope" else [])))
+    commands.add(["commit", "-m", "chore: sync PR Flow toolchain"],
+                 returncode=1 if failure == "commit" else 0, stderr="injected commit failure")
+    commands.add(["restore", "--staged", "--", *paths])
+    monkeypatch.setattr(module, "git", commands)
+    if failure is None:
+        assert module.sync_toolchain(project) is True
+        assert "@liuli195/myspec@" in workflow.read_text()
+        assert module.sync_toolchain(project) is False
+    else:
+        reason = {"dirty": "toolchain_sync_dirty", "commit": "git_toolchain_commit_failed",
+                  "staged-scope": "toolchain_sync_scope_invalid"}[failure]
+        with pytest.raises(module.PrFlowError, match=reason):
+            module.sync_toolchain(project)
+        assert workflow.read_text() == "stale workflow\n"
+        if failure != "dirty":
+            assert ("restore", "--staged", "--", *paths) in commands.calls
+    assert all(call[2:] == tuple(paths) for call in commands.calls if call[:2] == ("add", "--"))
+
+
+@pytest.mark.parametrize("stable", [True, False])
+def test_toolchain_sync_rereads_identity_and_bounds_retries(flow_root: Path, monkeypatch, stable: bool) -> None:
+    from tests.support.command_stubs import CommandStub, default_git_responses
+
+    module = load_pr_flow_module()
+    project = flow_root / "project"
+    original = module.toolchain_identities(project)
+    (project / module.TOOLCHAIN_PATH).write_text(module.toolchain_record(original))
+    (project / module.TOOLCHAIN_WORKFLOW_PATH).write_text(module.toolchain_workflow(original))
+    versions = iter(("2.0.0", "3.0.0", "3.0.0" if stable else "4.0.0"))
+
+    def identities(_project):
+        version = next(versions)
+        return {key: {**identity, "packageVersion": version} for key, identity in original.items()}
+
+    commands = CommandStub(defaults=default_git_responses())
+    paths = [module.TOOLCHAIN_PATH.as_posix(), module.TOOLCHAIN_WORKFLOW_PATH.as_posix()]
+    commands.add(["add", "--", *paths])
+    commands.add(["diff", "--cached", "--name-only"], stdout="\n".join(paths))
+    commands.add(["commit", "-m", "chore: sync PR Flow toolchain"])
+    monkeypatch.setattr(module, "git", commands)
+    monkeypatch.setattr(module, "toolchain_identities", identities)
+    if stable:
+        assert module.sync_toolchain(project) is True
+    else:
+        with pytest.raises(module.PrFlowError, match="toolchain_identity_unstable"):
+            module.sync_toolchain(project)
+    assert sum(call[:1] == ("commit",) for call in commands.calls) == 2
+    assert {identity["packageVersion"] for identity in json.loads(
+        (project / module.TOOLCHAIN_PATH).read_text())["tools"].values()} == {"3.0.0"}
+
+
+@pytest.mark.parametrize("route", ["native", "unavailable", "malformed", "orca", "orca-failed", "registered", "residue", "residue-failed"])
+def test_worktree_removal_uses_safe_route_and_checks_registration(flow_root: Path, monkeypatch, route: str) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    module = load_pr_flow_module()
+    controller, target = flow_root / "controller", flow_root / "project"
+    before, after = worktree_removal_records(controller, target)
+    commands = CommandStub(consume=True)
+    commands.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
+    commands.add(["status", "--short"])
+    remove = ([] if os.name != "nt" else ["-c", "core.longpaths=true"]) + ["worktree", "remove", str(target)]
+    commands.add(remove)
+    commands.add(["worktree", "list", "--porcelain", "-z"], stdout=before if route == "registered" else after)
+    orca = CommandStub()
+    payload = (orca_worktree_ps_json(target, "repo::target") if route.startswith("orca") else
+               "not-json" if route == "malformed" else '{"result":{"worktrees":[]}}')
+    orca.add(["worktree", "ps", "--json"], stdout=payload, returncode=127 if route == "unavailable" else 0)
+    orca.add(["worktree", "rm", "--worktree", "id:repo::target", "--json"],
+             returncode=1 if route == "orca-failed" else 0, stderr="denied")
+    present = {"target": route.startswith("residue")}
+    original_lexists = module.os.path.lexists
+    monkeypatch.setattr(module.os.path, "lexists", lambda path: (
+        present["target"] if Path(path) == target else original_lexists(path)))
+    removed = []
+
+    def remove_residue(path):
+        assert path == target
+        removed.append(path)
+        if route == "residue-failed":
+            raise OSError("directory is still in use")
+        present["target"] = False
+
+    monkeypatch.setattr(module.shutil, "rmtree", remove_residue)
+    monkeypatch.setattr(module, "git", commands)
+    monkeypatch.setattr(module, "orca", orca)
+    if route in {"orca-failed", "registered", "residue-failed"}:
+        reason = {"orca-failed": "orca_worktree_remove_failed", "registered": "git_worktree_remove_failed",
+                  "residue-failed": "physical_worktree_remove_failed"}[route]
+        with pytest.raises(module.PrFlowError, match=reason):
+            module.remove_worktree(target, target)
+    else:
+        module.remove_worktree(target, target)
+    assert not any("--force" in call for call in commands.calls + orca.calls)
+    assert (tuple(remove) in commands.calls) is (not route.startswith("orca"))
+    if route in {"registered", "orca-failed"}:
+        assert removed == []
+
+
+@pytest.mark.parametrize("guard", ["occupied", "diverged", "active-cwd"])
+def test_cleanup_guards_stop_before_mutating_source_refs(flow_root: Path, monkeypatch, guard: str) -> None:
+    project = flow_root / "project"
+    responses = []
+    if guard == "occupied":
+        records = (f"worktree {project}\0HEAD {'b' * 40}\0branch refs/heads/feature/example\0\0"
+                   f"worktree {flow_root / 'base-worktree'}\0HEAD {'a' * 40}\0branch refs/heads/main\0\0")
+        responses.append((["worktree", "list", "--porcelain", "-z"], records, 0))
+    elif guard == "diverged":
+        responses.extend([(["rev-parse", "--verify", "--quiet", "refs/heads/main"], "c" * 40, 0),
+                          (["merge-base", "--is-ancestor", "c" * 40, "a" * 40], "", 1)])
+    else:
+        monkeypatch.setattr(Path, "cwd", lambda: project / "source-only/nested")
+        responses.extend([(["cat-file", "-t", f"{'a' * 40}:source-only/nested"], "", 1),
+                          (["check-ignore", "--quiet", "--", "source-only/nested"], "", 1)])
+    project, result = run_cleanup_in_process(flow_root, monkeypatch, pr_stdout=cleanup_pr_view_json(), git_responses=responses)
+    reason = {"occupied": "base_branch_checked_out", "diverged": "local_base_not_fast_forward",
+              "active-cwd": "active_cwd_would_disappear"}[guard]
+    assert_cleanup_exception(project, result, reason)
+    assert not any(call[:1] in {("push",), ("checkout",)} or call[:2] in {("branch", "-d"), ("branch", "-D"), ("branch", "-f")}
+                   for call in load_pr_flow_module().git.calls)
+
+
+def test_physical_cleanup_error_keeps_recovery_status_in_controller(flow_root: Path, monkeypatch) -> None:
+    module = load_pr_flow_module()
+    target = flow_root / "project"
+    original_lexists = module.os.path.lexists
+    monkeypatch.setattr(module.os.path, "lexists", lambda path: (
+        True if Path(path) == target else original_lexists(path)))
+    monkeypatch.setattr(module, "find_orca_worktree_id", lambda *_args: None)
+
+    def locked_directory(_target):
+        raise OSError("directory is still in use")
+
+    monkeypatch.setattr(module.shutil, "rmtree", locked_directory)
+    _, result = run_cleanup_in_process(flow_root, monkeypatch, pr_stdout=cleanup_pr_view_json(), remove_worktree=True)
+    assert result.returncode == 1 and "cleanup_complete" not in result.stdout
+    status = json.loads((flow_root / "controller/.pr-flow/last-status.json").read_text())
+    assert status["details"]["reason"] == "physical_worktree_remove_failed"
+    assert status["details"]["registrationRemoved"] is True
+    assert status["details"]["nextAction"] and status["details"]["nextCommand"]
+
+
+def test_doctor_accepts_release_and_same_worktree_dev_identity_at_project_cwd(flow_root: Path, monkeypatch) -> None:
+    from tests.support.pr_flow_invocation import load_pr_flow_module as fresh_module
+    from tests.support.command_stubs import CommandStub
+
+    module = fresh_module()
+    project = flow_root / "project"
+    project.mkdir()
+    doctor = CommandStub()
+    reports = {
+        "myspec": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3-rc.1+build.9"},
+        "build-and-verify": {"mode": "dev", "packageName": "@liuli195/build-and-verify",
+            "sourceRepository": "https://github.com/liuli195/my-agent-skills", "sourceCommit": "a" * 40,
+            "packageDirectory": "plugins/build-and-verify", "implementationIdentity": "sha256:" + "0" * 64},
+    }
+    for command, identity in reports.items():
+        doctor.add([command, "doctor"], stdout=json.dumps({"toolchain": identity,
+            "binding": {"sourceWorktree": str(project), "targetWorktree": str(project), "worktreeMatch": True}}))
+
+    def execute(command, **kwargs):
+        assert kwargs["cwd"] == project
+        return doctor(*command)
+
+    monkeypatch.setattr(module.shutil, "which", lambda command: command)
+    monkeypatch.setattr(module.subprocess, "run", execute)
+    assert module.toolchain_identities(project) == reports

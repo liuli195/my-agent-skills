@@ -883,30 +883,8 @@ def test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_st
     assert runtime.writes == []
 
 
-def windows_py_launcher() -> Path:
-    base_executable = Path(getattr(sys, "_base_executable", sys.executable))
-    candidates = (
-        base_executable.parent.parent / "Launcher" / "py.exe",
-        Path(os.environ.get("SystemRoot", "C:/Windows")) / "py.exe",
-        Path(shutil.which("py") or ""),
-    )
-    launcher = next(
-        (path for path in candidates if path.is_file() and "WindowsApps" not in path.parts),
-        None,
-    )
-    assert launcher is not None
-    return launcher
 
 
-def test_windows_py_launcher_uses_base_interpreter_from_venv(monkeypatch: pytest.MonkeyPatch) -> None:
-    tmp_path = REPO_ROOT / '__myspec_documents__'
-    base_python = tmp_path / 'Python312' / 'python.exe'
-    launcher = tmp_path / 'Launcher' / 'py.exe'
-    original_is_file = Path.is_file
-    monkeypatch.setattr(Path, "is_file", lambda path: path == launcher or original_is_file(path))
-    monkeypatch.setattr(sys, 'executable', str(tmp_path / 'venv' / 'Scripts' / 'python.exe'))
-    monkeypatch.setattr(sys, '_base_executable', str(base_python))
-    assert windows_py_launcher() == launcher
 
 
 def test_spec_ops_preview_preserves_modified_requirement_order(spec_documents) -> None:
@@ -1616,3 +1594,49 @@ def test_lifecycle_source_commit_batches_complete_candidates_in_history_order(li
     assert published == [(root, commits[2]), (root, commits[3])]
     assert dirty_paths == [(root, sorted(paths))]
     assert commands.responses == []
+
+
+@pytest.mark.parametrize("arguments", [("doctor", "--pi"), ("init", "--pi"), ("state-init",)])
+def test_myspec_parser_rejects_removed_options_and_missing_arguments(management_documents, arguments):
+    runtime = management_documents
+    result = runtime.run(*arguments)
+    assert result.returncode == 2
+    assert "usage:" in result.stderr and "error:" in result.stderr
+    assert runtime.stub.calls == [] and runtime.writes == []
+
+
+def test_myspec_update_rejects_removed_pi_pending_before_writes(management_documents):
+    runtime = management_documents
+    runtime.documents[runtime.state_path] = {"mode": "release", "pendingOperation": {
+        "command": "update", "targetVersion": NEXT_VERSION, "integrations": ["pi", "claude"],
+        "completed": ["preflight"], "enabled": {"pi": True, "claude": False}, "scopes": {},
+    }}
+    before = json.loads(json.dumps(runtime.documents[runtime.state_path]))
+    result = runtime.run("update")
+    assert result.returncode == 1 and "invalid_update_state" in result.stderr
+    assert runtime.documents[runtime.state_path] == before
+    assert runtime.writes == [] and runtime.stub.calls == []
+
+
+def test_spec_ops_keeps_complete_conflicts_and_advances_the_saved_cursor(spec_documents):
+    documents = spec_documents
+    work = documents.root / "work"
+    documents.seed_state(work, "review")
+    conflicts = [{"id": f"conflict-{index:02d}", "candidate": f"候选{index}", "evidence": ["request"],
+        "reason": "需要决定", "recommendation": "accept"} for index in range(13)]
+    source = documents.root / "conflicts.json"
+    documents.write(source, json.dumps(conflicts, ensure_ascii=False))
+    stored = run_python(SPEC_OPS, "state-set-conflicts", work, source, "specs-fingerprint", "input-fingerprint")
+    assert stored.returncode == 0, stored.stderr
+    assert json.loads(stored.stdout) == {"status": "WAITING_DECISION", "total": 13, "remaining": 13}
+    assert json.loads((work / "current/state.json").read_text())["conflicts"] == conflicts
+    for index in range(2):
+        current = run_python(SPEC_OPS, "state-current", work, "specs-fingerprint", "input-fingerprint")
+        assert current.returncode == 0, current.stderr
+        assert json.loads(current.stdout) == {"index": index, "total": 13, "conflict": conflicts[index]}
+        decided = run_python(SPEC_OPS, "state-decide", work, conflicts[index]["id"], "accept",
+            "specs-fingerprint", "input-fingerprint")
+        assert decided.returncode == 0, decided.stderr
+    status = run_python(SPEC_OPS, "state-status", work, "specs-fingerprint", "input-fingerprint")
+    assert status.returncode == 0, status.stderr
+    assert json.loads(status.stdout) == {"status": "WAITING_DECISION", "total": 13, "decided": 2, "remaining": 11}

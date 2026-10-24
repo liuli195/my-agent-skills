@@ -2010,3 +2010,46 @@ def test_preflight_rejects_shared_npm_packer_input_when_only_one_npm_plugin_is_s
     result = preflight_result(project, 'build-and-verify', version='1.0.0')
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'plugin_requires_bump: my-spec' in result.stdout
+
+
+@pytest.mark.parametrize("matches", [True, False])
+def test_existing_release_checks_projection_tree_not_only_commit(flow_root: Path, monkeypatch, matches: bool) -> None:
+    module = load_release_flow_module()
+    project = flow_root / "project"
+    write_release_flow_files(project)
+    config, projection = module.read_config(project), module.read_projection(project)
+    expected = flow_root / "preflight/expected"
+    remote = flow_root / "preflight/remote"
+    mkdir = Path.mkdir
+
+    def memory_remote(path, *args, **kwargs):
+        if path != remote:
+            return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", memory_remote)
+    monkeypatch.setattr(module.tempfile, "TemporaryDirectory", lambda **kwargs: contextlib.nullcontext(str(expected.parent)))
+    monkeypatch.setattr(module, "remote_ref_oid", lambda *_args: "same-commit")
+    monkeypatch.setattr(module, "copy_git_auth_config", lambda *_args: None)
+    monkeypatch.setattr(module, "origin_url", lambda *_args: "https://example.invalid/repo.git")
+    commands = [(["git", "init"], expected), (["git", "add", "-A"], expected),
+                (["git", "init"], remote),
+                (["git", "remote", "add", "origin", "https://example.invalid/repo.git"], remote),
+                (["git", "fetch", "--depth=1", "origin", "same-commit"], remote)]
+
+    def execute(command, cwd):
+        assert (command, cwd) == commands.pop(0)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(module, "run_checked", execute)
+    trees = [(expected, ["write-tree"], "expected-tree"),
+             (remote, ["rev-parse", "FETCH_HEAD^{tree}"], "expected-tree" if matches else "different-tree")]
+
+    def tree_query(cwd, command):
+        expected_cwd, expected_command, value = trees.pop(0)
+        assert (cwd, command) == (expected_cwd, expected_command)
+        return value
+
+    monkeypatch.setattr(module, "git_output", tree_query)
+    result = module.existing_release_ref_error(project, config, projection, "v9.9.1")
+    assert result == (None if matches else "release_projection_mismatch: v9.9.1")
+    assert commands == [] and trees == []

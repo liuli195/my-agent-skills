@@ -2777,6 +2777,204 @@ def test_runner_git_fallback_combines_sources_and_filters_generated_inputs(tmp_p
     assert runner._changed_files(tmp_path) == ["src/app.py"]
 
 
+@pytest.mark.parametrize("kind", ["cache", "report"])
+@pytest.mark.parametrize("replace_fails", [False, True])
+def test_runner_atomic_outputs_write_only_a_temporary_leaf_before_replace(tmp_path, memory_runtime, monkeypatch, kind, replace_fails):
+    runner = load_build_and_verify_runner_module()
+    events = []
+    monkeypatch.setattr(Path, "mkdir", lambda path, **kwargs: events.append(("mkdir", path)))
+    monkeypatch.setattr(Path, "write_text", lambda path, value, **kwargs: events.append(("write", path, json.loads(value))))
+    def replace(path, destination):
+        events.append(("replace", path, destination))
+        if replace_fails:
+            raise OSError("replace denied")
+        return destination
+    monkeypatch.setattr(Path, "replace", replace)
+    monkeypatch.setattr(Path, "unlink", lambda path, **kwargs: events.append(("unlink", path)))
+    destination = (runner._cache_path(tmp_path, "cache-key") if kind == "cache"
+        else tmp_path / ".build-and-verify/runs/performance-report.json")
+    payload = {"status": "passed", "id": "check"} if kind == "cache" else {"verificationStatus": "passed"}
+    def write():
+        if kind == "cache":
+            return memory_runtime.cache_store(tmp_path, "cache-key", {"id": "check"})
+        return memory_runtime.report_writer(destination, payload)
+    if replace_fails and kind == "cache":
+        with pytest.raises(OSError, match="replace denied"):
+            write()
+    else:
+        result = write()
+        if kind == "report":
+            assert result is not replace_fails
+    temporary = events[1][1]
+    assert temporary.parent == destination.parent and temporary != destination
+    assert events[:3] == [("mkdir", destination.parent), ("write", temporary, payload), ("replace", temporary, destination)]
+    assert events[3:] == ([("unlink", temporary)] if replace_fails else [])
+
+
+def test_runner_preparation_shares_inputs_without_changing_cache_identity(tmp_path, monkeypatch):
+    runner = load_build_and_verify_runner_module()
+    path = tmp_path / "src/input.txt"
+    _remember_input(path, "stable")
+    checks = [{"id": "first", "command": ["first"], "inputs": ["src", "*.txt"]},
+              {"id": "second", "command": ["second"], "inputs": [r".\src", "**/*.txt"]}]
+    config = {"version": 1, "verify": {"checks": checks}}
+    queries, reads = [], []
+    original_open = Path.open
+    def read(path, mode="r", *args, **kwargs):
+        if mode == "rb":
+            reads.append(path)
+        return original_open(path, mode, *args, **kwargs)
+    def query(command, **kwargs):
+        assert command[:7] == ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--"]
+        assert kwargs["cwd"] == tmp_path
+        queries.append(command[-1])
+        return completed(command, stdout="src/input.txt\0")
+    monkeypatch.setattr(Path, "open", read)
+    monkeypatch.setattr(runner.subprocess, "run", query)
+    expected = [runner._cache_key(tmp_path, config, check, []) for check in checks]
+    queries.clear()
+    reads.clear()
+    inputs, files = {}, {}
+    actual = [runner._cache_key(tmp_path, config, check, [], input_memo=inputs, git_files_memo=files) for check in checks]
+    assert actual == expected
+    assert queries == ["src", "."] and reads == [path] * 3
+
+
+def test_runner_preparation_snapshot_ends_before_execution_and_next_invocation(tmp_path, memory_runtime, monkeypatch):
+    path = tmp_path / "input.txt"
+    _remember_input(path, "first")
+    write_runner_config(tmp_path, verify_checks=[
+        {"id": "modify", "command": ["modify"], "inputs": []},
+        {"id": "target", "command": ["target"], "inputs": ["input.txt"]}])
+    monkeypatch.setenv("CI", "false")
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
+    calls = []
+    def execute(command, **kwargs):
+        calls.append(command)
+        if command == ["modify"]:
+            memory_runtime.inputs[path] = b"other"
+        return completed(command)
+    first = run_check(tmp_path, "verify", runner=execute, changed_files=["input.txt"], execution_context="local")
+    second = run_check(tmp_path, "verify", runner=execute, changed_files=["input.txt"], execution_context="local")
+    assert first.returncode == second.returncode == 0
+    assert calls == [["modify"], ["target"]] and "cache-hit: target" in second.stdout
+    memory_runtime.inputs[path] = b"third"
+    third = run_check(tmp_path, "verify", runner=execute, changed_files=["input.txt"], execution_context="local")
+    assert third.returncode == 0 and "cache-hit: target" not in third.stdout
+    assert calls == [["modify"], ["target"], ["target"]]
+
+
+def test_runner_preparation_never_memoizes_failed_reads(tmp_path, monkeypatch):
+    path = tmp_path / "input.txt"
+    _remember_input(path, "input")
+    write_runner_config(tmp_path, verify_checks=[{"id": name, "command": [name], "inputs": ["input.txt"]}
+        for name in ("first", "second")])
+    original_open, reads = Path.open, []
+    def read(target, mode="r", *args, **kwargs):
+        if target == path and mode == "rb":
+            reads.append(target)
+            raise PermissionError("read denied")
+        return original_open(target, mode, *args, **kwargs)
+    monkeypatch.setattr(Path, "open", read)
+    monkeypatch.setenv("CI", "false")
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
+    executor = FakeRunner()
+    result = run_check(tmp_path, "verify", runner=executor, changed_files=["input.txt"], execution_context="local")
+    assert result.returncode == 1 and result.stderr.count("read denied") == 2
+    assert reads == [path, path] and executor.calls == []
+    assert _cache_files(tmp_path / ".build-and-verify/cache") == []
+
+
+@pytest.mark.parametrize("context", ["cloud", "local"])
+def test_runner_cache_tracks_content_and_deletion_for_explicit_and_default_inputs(tmp_path, context, monkeypatch):
+    monkeypatch.setenv("CI", "false")
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
+    path = tmp_path / "src/input.txt"
+    _remember_input(path, "first")
+    checks = [{"id": "literal", "command": ["literal"], "inputs": ["src/input.txt"]},
+              {"id": "glob", "command": ["glob"], "inputs": [r".\src\*.txt"]},
+              {"id": "default-glob", "command": ["default-glob"], "paths": ["src/**"]},
+              {"id": "pathless", "command": ["pathless"]}]
+    write_runner_config(tmp_path, verify_checks=checks)
+    executor = _declared_runner()
+    def verify():
+        return run_check(tmp_path, "verify", runner=executor, changed_files=["src/input.txt"], execution_context=context)
+    first, unchanged = verify(), verify()
+    assert first.returncode == unchanged.returncode == 0
+    assert len(executor.calls) == 4 and unchanged.stdout.count("cache-hit:") == 4
+    _remember_input(path, "other")
+    changed = verify()
+    assert changed.returncode == 0 and "cache-hit:" not in changed.stdout
+    _forget_memory_value(path)
+    deleted = verify()
+    assert deleted.returncode == 0 and "cache-hit:" not in deleted.stdout
+    assert len(executor.calls) == 12
+
+
+def test_runner_glob_inputs_follow_only_visible_matches_and_allow_future_files(tmp_path, monkeypatch):
+    runner = load_build_and_verify_runner_module()
+    visible, ignored = tmp_path / "requirements.txt", tmp_path / "requirements-ignored.txt"
+    _remember_input(visible, "visible")
+    _remember_input(ignored, "ignored")
+    names = ["requirements.txt"]
+    def query(command, **kwargs):
+        assert command == ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."]
+        return completed(command, stdout="\0".join(names) + "\0")
+    monkeypatch.setattr(runner.subprocess, "run", query)
+    first = runner._hash_input(tmp_path, r".\requirements*.txt")
+    assert first["path"] == "requirements*.txt" and len(first["files"]) == 1
+    _remember_input(ignored, "ignored-change")
+    assert runner._hash_input(tmp_path, "requirements*.txt") == first
+    literal = runner._hash_input(tmp_path, ignored.name)
+    _remember_input(ignored, "another-change")
+    assert runner._hash_input(tmp_path, ignored.name) != literal
+    assert runner._hash_input(tmp_path, "future-*.txt")["files"] == []
+    _remember_input(tmp_path / "future-config.txt", "future")
+    names.append("future-config.txt")
+    assert len(runner._hash_input(tmp_path, "future-*.txt")["files"]) == 1
+    _remember_input(visible, "visible-change")
+    assert runner._hash_input(tmp_path, "requirements*.txt") != first
+
+
+def test_runner_globs_reject_only_matching_resolved_external_entries(tmp_path, monkeypatch):
+    runner = load_build_and_verify_runner_module()
+    link = tmp_path / "outside-link.txt"
+    _remember_input(link, "outside")
+    original_resolve = Path.resolve
+    monkeypatch.setattr(Path, "resolve", lambda path, *args, **kwargs:
+        tmp_path.parent / "outside.txt" if path == link else original_resolve(path, *args, **kwargs))
+    monkeypatch.setattr(runner.subprocess, "run", lambda command, **kwargs: completed(command, stdout=link.name + "\0"))
+    assert runner._hash_input(tmp_path, "requirements*.txt")["files"] == []
+    with pytest.raises(ValueError, match=r"invalid_input_path: \*\.txt"):
+        runner._hash_input(tmp_path, "*.txt")
+
+
+@pytest.mark.parametrize("failure,error", [("base", "invalid_baseline: base"),
+    ("head", "baseline_git_repository_required"), ("status", "baseline_git_repository_required"),
+    ("dirty", "baseline_worktree_not_clean"), ("diff", "baseline_diff_failed")])
+def test_runner_baseline_errors_never_select_checks(tmp_path, monkeypatch, failure, error):
+    runner = load_build_and_verify_runner_module()
+    def query(command, **kwargs):
+        arguments = command[1:]
+        if arguments[:1] == ["rev-parse"]:
+            is_base = arguments[-1] == "base^{commit}"
+            return completed(command, int(failure == ("base" if is_base else "head")), stdout=("a" if is_base else "b") * 40)
+        if arguments[:1] == ["status"]:
+            return completed(command, int(failure == "status"), stdout=" M dirty.txt\0" if failure == "dirty" else "")
+        assert arguments[:3] == ["diff", "--name-only", "-z"]
+        return completed(command, int(failure == "diff"), stdout="src/app.py\0")
+    monkeypatch.setattr(runner.subprocess, "run", query)
+    assert runner._baseline_changed_files(tmp_path, "base") == (None, error)
+
+
+def test_runner_full_baseline_conflict_fails_before_external_commands(tmp_path):
+    write_runner_config(tmp_path, verify_checks=[{"id": "check", "command": ["check"], "inputs": []}])
+    executor = FakeRunner()
+    result = run_check(tmp_path, "verify", "--full", baseline="base", runner=executor, changed_files=[])
+    assert result.returncode == 1 and "baseline_not_allowed_with_full" in result.stderr
+    assert executor.calls == []
+
+
 @pytest.fixture
 def tmp_path():
     # Ordinary tests use a value, not pytest's disk-creating temporary directory.
@@ -2852,6 +3050,8 @@ def memory_runtime(monkeypatch):
     state = SimpleNamespace(documents={}, inputs={}, logs={})
     monkeypatch.setattr(sys.modules[__name__], "_MEMORY", state)
     runner = load_build_and_verify_runner_module()
+    state.cache_store = runner._cache_store
+    state.report_writer = runner._write_performance_report
     original_read_json = read_json
     def config_write(path, data):
         assert path.name in {"config.json", "confirmed.json", "draft.json"}, f"unexpected configuration output: {path}"

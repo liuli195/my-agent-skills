@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -78,46 +77,3 @@ def npm_candidate(request: pytest.FixtureRequest) -> NpmCandidate:
     from tests.support.npm_candidates import candidate_for
 
     return candidate_for(NPM_CLASSES[request.cls.__name__])
-
-
-@pytest.fixture(scope="session")
-def bare_remote_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    remote = tmp_path_factory.mktemp("git-template") / "remote.git"
-    result = subprocess.run(
-        ["git", "init", "--bare", str(remote)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    return remote
-
-
-@pytest.fixture
-def git_project(tmp_path: Path) -> Path:
-    from tests.support.git_templates import init_user, run_git
-
-    project = tmp_path / "project"
-    project.mkdir()
-    result = subprocess.run(
-        ["git", "init", "-b", "main"],
-        cwd=project,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    if result.returncode != 0:
-        result = subprocess.run(
-            ["git", "init"],
-            cwd=project,
-            check=False,
-            text=True,
-            capture_output=True,
-        )
-        assert result.returncode == 0, result.stdout + result.stderr
-        run_git(project, "checkout", "-b", "main")
-    init_user(project)
-    (project / "README.md").write_text("# Test Project\n", encoding="utf-8")
-    run_git(project, "add", "README.md")
-    run_git(project, "commit", "-m", "initial")
-    return project

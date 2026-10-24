@@ -57,3 +57,75 @@ def test_nested_dependency_cycles_are_visited_once(monkeypatch):
     assert set(app.dependency_identity(ROOT, ["requirements.txt"])) == {
         "requirements.txt", "nested.txt", "constraints.txt"}
     assert reads == ["requirements.txt", "nested.txt", "constraints.txt"]
+
+
+def test_preparation_reuses_environment_until_nested_dependency_changes(monkeypatch):
+    app = entry()
+    python = ROOT / ".venv/bin/python"
+    state_path = ROOT / ".local/project-environment.json"
+    contents = {ROOT / "requirements.txt": "-r skill.txt\n", ROOT / "skill.txt": "example==1\n"}
+    saved = None
+    python_ready = False
+    commands = []
+    original_exists, original_read = Path.exists, Path.read_text
+    original_symlink = Path.is_symlink
+
+    def exists(path):
+        if path == python:
+            return python_ready
+        if path == state_path:
+            return saved is not None
+        return original_exists(path)
+
+    def read(path, *args, **kwargs):
+        if path in contents:
+            return contents[path]
+        if path == state_path:
+            return saved
+        return original_read(path, *args, **kwargs)
+
+    def write(path, value, **kwargs):
+        nonlocal saved
+        assert path == state_path
+        saved = value
+
+    def unlink(path, *args, **kwargs):
+        nonlocal saved
+        assert path == state_path
+        saved = None
+
+    def run(command, root):
+        nonlocal python_ready
+        assert root == ROOT
+        commands.append(command)
+        if command == [app.sys.executable, "-m", "venv", ROOT / ".venv"]:
+            python_ready = True
+        else:
+            assert command[:4] == [python, "-m", "pip", "install"]
+            assert command[-2:] == ["-r", "requirements.txt"]
+
+    def output(command, **kwargs):
+        if command == ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"]:
+            return str(ROOT / ".git")
+        assert command == [str(python), "-c", 'import sys; print("%s.%s" % sys.version_info[:2])']
+        return f"{app.sys.version_info.major}.{app.sys.version_info.minor}"
+
+    monkeypatch.setattr(Path, "exists", exists)
+    monkeypatch.setattr(Path, "read_text", read)
+    monkeypatch.setattr(Path, "write_text", write)
+    monkeypatch.setattr(Path, "unlink", unlink)
+    def mkdir(path, **kwargs):
+        assert path == state_path.parent
+
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    monkeypatch.setattr(Path, "is_symlink", lambda path:
+                        False if path == ROOT / ".venv" else original_symlink(path))
+    monkeypatch.setattr(app, "run", run)
+    monkeypatch.setattr(app.subprocess, "check_output", output)
+    recipe = {"requirements": ["requirements.txt"]}
+    assert app.prepare(ROOT, recipe) == "prepared"
+    assert app.prepare(ROOT, recipe) == "reused"
+    assert len(commands) == 2
+    contents[ROOT / "skill.txt"] = "example==2\n"
+    assert app.prepare(ROOT, recipe) == "prepared"
+    assert len(commands) == 3

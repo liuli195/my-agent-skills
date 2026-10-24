@@ -107,3 +107,77 @@ def test_wrong_source_requires_explicit_matching_update(monkeypatch, capsys, com
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "--from" in captured.err if command == "update" else "入口来源不同" in captured.err
+
+
+@pytest.mark.parametrize("kind", [stat.S_IFREG, stat.S_IFDIR])
+def test_connect_preserves_entry_occupied_by_regular_content(monkeypatch, capsys, kind):
+    app = entry()
+    project_entry = ROOT / ".local/skills/data-store"
+    original_lstat, original_lexists = Path.lstat, app.os.path.lexists
+    monkeypatch.setattr(Path, "lstat", lambda path:
+                        SimpleNamespace(st_mode=kind) if path == project_entry else original_lstat(path))
+    monkeypatch.setattr(app.os.path, "lexists", lambda path:
+                        True if path == project_entry else original_lexists(path))
+    assert invoke(app, monkeypatch, "connect", "--project", ROOT) == 1
+    assert "保留原内容" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("parent,kind", [
+    (".local", stat.S_IFLNK), (".local/skills", stat.S_IFLNK),
+    (".local", stat.S_IFREG), (".local/skills", stat.S_IFREG),
+])
+def test_project_binding_rejects_redirected_or_file_parent(monkeypatch, parent, kind):
+    app = entry()
+    blocked = ROOT / parent
+    original_lstat, original_exists, original_is_dir = Path.lstat, Path.exists, Path.is_dir
+    monkeypatch.setattr(Path, "lstat", lambda path:
+                        SimpleNamespace(st_mode=kind) if path == blocked else original_lstat(path))
+    monkeypatch.setattr(Path, "exists", lambda path:
+                        True if path == blocked else original_exists(path))
+    monkeypatch.setattr(Path, "is_dir", lambda path:
+                        False if path == blocked else original_is_dir(path))
+    with pytest.raises(ValueError, match="父目录"):
+        app.project_entry(ROOT)
+
+
+@pytest.mark.parametrize("restore_fails", [False, True])
+def test_update_retains_old_link_when_switch_or_restore_fails(monkeypatch, capsys, restore_fails):
+    app = entry()
+    binding, old, new = ROOT / ".unit-binding", ROOT / "old-source", ROOT / "new-source"
+    links = {binding: old}  # Only the current, staged and saved link identities.
+    failures = 0
+    original_resolve = Path.resolve
+
+    def resolve(path, *args, **kwargs):
+        if path in links:
+            return links[path]
+        if path in (old, new):
+            return path
+        return original_resolve(path, *args, **kwargs)
+
+    def make_link(path, target):
+        assert path.name.startswith(".data-store-new-")
+        links[path] = target
+
+    def rename(path, target):
+        nonlocal failures
+        assert path in links
+        if target == binding and failures < (2 if restore_fails else 1):
+            failures += 1
+            raise OSError(f"injected rename failure {failures}")
+        links[target] = links.pop(path)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    monkeypatch.setattr(Path, "rename", rename)
+    monkeypatch.setattr(app, "is_link", lambda path: path in links)
+    monkeypatch.setattr(app, "make_link", make_link)
+    monkeypatch.setattr(app, "remove_link", links.pop)
+    monkeypatch.setattr(app.os.path, "lexists", lambda path: path in links)
+    with pytest.raises(OSError, match="injected rename failure 1"):
+        app.update_link(binding, new, old)
+    assert list(links.values()) == [old]
+    if restore_fails:
+        assert next(iter(links)).name.startswith(".data-store-old-")
+        assert "旧入口保留在" in capsys.readouterr().err
+    else:
+        assert links == {binding: old}
