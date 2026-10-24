@@ -69,6 +69,10 @@ def memory_cli(monkeypatch):
     monkeypatch.setenv("GITHUB_ACTIONS", "false")
     monkeypatch.setenv("CI", "false")
     monkeypatch.delenv("BUILD_AND_VERIFY_EXECUTION_CONTEXT", raising=False)
+    # This is a fresh CLI invocation, not the enclosing official check's start.
+    monkeypatch.delenv("BUILD_AND_VERIFY_STARTED_MONOTONIC", raising=False)
+    assert module.time is runner.time
+    assert module.time.monotonic() == runner.time.monotonic() == state.clock
     state.module = module
     return state
 
@@ -296,22 +300,3 @@ def test_windows_pr_verification_uses_fixed_baseline_and_manual_full_mode() -> N
     assert "pytest" not in fast_run
     assert "build_and_verify.py" not in fast_run
     assert "scripts/" not in fast_run
-
-
-def test_build_and_verify_package_excludes_legacy_skill_runtime() -> None:
-    npm = shutil.which("npm")
-    assert npm is not None
-
-    packed = subprocess.run(
-        [npm, "pack", "--dry-run", "--json"],
-        cwd=PACKAGE_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert packed.returncode == 0, packed.stderr
-    files = {entry["path"] for entry in json.loads(packed.stdout)[0]["files"]}
-    assert "python/build_and_verify.py" in files
-    assert "python/build_and_verify_runner.py" in files
-    assert not any(path.startswith("skills/build-and-verify/scripts/") for path in files)

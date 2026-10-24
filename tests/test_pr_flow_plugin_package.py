@@ -3,8 +3,6 @@ import contextlib
 import importlib.util
 import io
 import json
-import shlex
-import shutil
 import subprocess
 import sys
 from pathlib import Path

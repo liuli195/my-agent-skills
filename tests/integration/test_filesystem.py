@@ -176,7 +176,7 @@ class TestWorkspace:
             "verify",
             "--full",
             "--performance-report",
-            runner=FakeRunner(),
+            runner=FakeRunner({("verify",): completed(["verify"])}),
             changed_files=[],
         )
 
@@ -292,6 +292,7 @@ class TestWorkspace:
         monkeypatch.setenv("GITHUB_ACTIONS", "false")
         # The unchanged cloud path writes keys without preparation reuse.
         original = run_check(project, "verify", "--execution-context", "cloud",
+            runner=FakeRunner({("first",): completed(["first"]), ("second",): completed(["second"])}),
             changed_files=["src/input.txt"])
         assert original.returncode == 0, original.stdout + original.stderr
         original_keys = list(cache_writes)
@@ -325,7 +326,7 @@ class TestWorkspace:
         ])
         monkeypatch.setenv("CI", "false")
         monkeypatch.setenv("GITHUB_ACTIONS", "false")
-        commands = FakeRunner()
+        commands = FakeRunner({("modify",): completed(["modify"]), ("target",): completed(["target"])})
 
         def execute(command, **kwargs):
             if command == ["modify"]:

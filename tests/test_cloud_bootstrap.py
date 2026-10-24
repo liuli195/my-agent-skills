@@ -219,12 +219,15 @@ def test_missing_source_restores_recorded_commit(installation, monkeypatch):
 def test_project_binding_follows_only_declared_ready_skill(installation, monkeypatch, declared, ready):
     state = installation
     project = ROOT
-    recipe = {"requirements": [], "npm": False, "skills": ["data-store"] if declared else []}
+    recipe = {"requirements": [], "npm": False, "skills": ["data-store"] if declared else [],
+              "windows_setup": ["powershell", "-NoProfile", "-Command", "Write-Output reused"]}
     state.manifest.update(optional_skills=["data-store"], projects={"owner/project": recipe})
     state.skill_ready = ready
+    setup = (recipe["windows_setup"] if state.app.os.name == "nt" else
+             [state.app.sys.executable, ROOT / "scripts/project_environment.py", "--project", project])
     expected = [
         (["git", "-C", project, "remote", "get-url", "origin"], "https://github.com/owner/project.git"),
-        ([state.app.sys.executable, ROOT / "scripts/project_environment.py", "--project", project], "reused"),
+        (setup, "reused"),
     ]
     if declared and ready:
         expected.extend(([state.app.sys.executable, state.root / "skills/data-store/scripts/project_binding.py",

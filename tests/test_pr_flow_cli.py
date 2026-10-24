@@ -6,19 +6,13 @@ import io
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import sys
-import tempfile
-import time
 from pathlib import Path
 from typing import Any
 
 import yaml
 import pytest
-
-from tests.support.git_templates import copy_template, remove_template
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (
@@ -97,6 +91,14 @@ def pr_memory(monkeypatch, flow_root):
         raise AssertionError(f"unexpected_process: {command}")
 
     monkeypatch.setattr(module.subprocess, "run", unexpected_process)
+    clock = {"now": 0.0}
+
+    def advance_clock(seconds):
+        assert seconds >= 0
+        clock["now"] += seconds
+
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(module.time, "sleep", advance_clock)
     original_strftime = module.time.strftime
     monkeypatch.setattr(module.time, "strftime", lambda pattern, *args: (
         "20260101T000000Z" if pattern == "%Y%m%dT%H%M%SZ" else
@@ -2488,13 +2490,18 @@ def test_missing_config_reports_exception_required(flow_root: Path) -> None:
     assert "missing_config" in result.stdout
 
 
-def test_status_file_is_written_for_stop_state(flow_root: Path) -> None:
+def test_status_file_is_written_for_stop_state(flow_root: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
     project = flow_root / "project"
     project.mkdir()
     write_confirmed_pr_flow_config(project)
+    git_stub = CommandStub()
+    git_stub.add(["branch", "--show-current"], stderr="fatal: not a git repository\n", returncode=128)
+    git_stub.add(["rev-parse", "--git-common-dir"], stdout=".git\n")
+    monkeypatch.setattr(module, "git", git_stub)
     result = invoke_pr_flow(["diagnose", "--project", str(project)], module=module)
 
     assert result.returncode == 1
@@ -2502,6 +2509,11 @@ def test_status_file_is_written_for_stop_state(flow_root: Path) -> None:
     assert status["status"] == "EXCEPTION_REQUIRED"
     assert status["command"] == "diagnose"
     assert status["details"]["reason"] == "git_current_branch_failed"
+    assert git_stub.calls == [
+        ("branch", "--show-current"),
+        ("rev-parse", "--git-common-dir"),
+        ("branch", "--show-current"),
+    ]
 
 
 def test_diagnose_outputs_dispatch_required_without_upstream(flow_root: Path, monkeypatch) -> None:
@@ -5055,6 +5067,7 @@ def test_hotfix_verify_command_preserves_windows_backslash_executable_path(flow_
     calls = []
 
     def fake_run(command_args, **kwargs):
+        assert command_args == [r".venv\Scripts\python.exe", "-m", "pytest"]
         calls.append((command_args, kwargs))
         return subprocess.CompletedProcess(command_args, 0, "", "")
 
@@ -5083,6 +5096,7 @@ def test_hotfix_verify_command_resolves_windows_cli_shim(flow_root: Path, monkey
     which_calls = []
 
     def fake_run(command_args, **kwargs):
+        assert command_args == [r"C:\npm\build-and-verify.cmd", "verify"]
         calls.append((command_args, kwargs))
         return subprocess.CompletedProcess(command_args, 0, "", "")
 
@@ -5120,6 +5134,7 @@ def test_hotfix_verify_command_preserves_windows_relative_executable_path(flow_r
     executable = r".venv\Scripts\python.exe"
 
     def fake_run(command_args, **kwargs):
+        assert command_args == [executable, "-m", "pytest"]
         calls.append((command_args, kwargs))
         return subprocess.CompletedProcess(command_args, 0, "", "")
 
@@ -5145,6 +5160,7 @@ def test_hotfix_verify_command_preserves_missing_command_error(flow_root: Path, 
     which_calls = []
 
     def fake_run(command_args, **kwargs):
+        assert command_args == ["missing-command", "verify"]
         calls.append((command_args, kwargs))
         raise FileNotFoundError(2, "missing command", command_args[0])
 
@@ -5172,6 +5188,7 @@ def test_hotfix_verify_command_uses_shlex_on_non_windows(flow_root: Path, monkey
     calls = []
 
     def fake_run(command_args, **kwargs):
+        assert command_args == ["python", "-m", "pytest"]
         calls.append((command_args, kwargs))
         return subprocess.CompletedProcess(command_args, 0, "", "")
 

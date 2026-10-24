@@ -1,22 +1,14 @@
 import importlib.util
 import contextlib
-import hashlib
 import io
 import json
 import os
-import re
-import shutil
 import subprocess
 import sys
-import tempfile
-import time
 from pathlib import Path
 
 import pytest
 import yaml
-
-from tests.support.git_templates import copy_template, remove_template
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (
@@ -1558,6 +1550,8 @@ def test_workflows_are_thin_entrypoints() -> None:
 
 
 def test_myspec_source_ci_and_release_use_the_packed_current_checkout() -> None:
+    from tests.support.npm_candidates import TARBALL_ENV
+
     full_verify = (REPO_ROOT / ".github" / "workflows" / "full-verify.yml").read_text(encoding="utf-8")
     release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
@@ -1579,9 +1573,10 @@ def test_myspec_source_ci_and_release_use_the_packed_current_checkout() -> None:
     assert "id-token: write" in release
     assert "registry-url: https://registry.npmjs.org" in release
     assert 'npm publish "$MYSPEC_TARBALL" --provenance --access public' in release
-    assert "supplied_tarball = os.environ.get(\"MYSPEC_TEST_TARBALL\")" in (
-        REPO_ROOT / "tests" / "test_my_spec.py"
-    ).read_text(encoding="utf-8")
+    assert TARBALL_ENV["myspec"] == "MYSPEC_TEST_TARBALL"
+    candidate_setup = (REPO_ROOT / "tests/integration/conftest.py").read_text(encoding="utf-8")
+    assert "supplied = os.environ.get(TARBALL_ENV[name])" in candidate_setup
+    assert "prepare_candidate(name, root / name, tarball=Path(supplied) if supplied else None)" in candidate_setup
     assert release.count("${{ inputs.") == 3
     assert "BUMP_PLUGINS: ${{ inputs.bumpPlugins }}" in release
     assert 'NORMALIZED_BUMP_PLUGINS=${BUMP_PLUGINS//[[:space:]]/}' in release
@@ -1739,6 +1734,7 @@ def test_ci_publish_copies_checkout_git_auth_config_to_release_tree(flow_root: P
 def test_origin_is_github_uses_exact_host(flow_root: Path, monkeypatch) -> None:
     release_flow = load_release_flow_module()
     project = flow_root / "project"
+    project = flow_root / "project"
 
     monkeypatch.setattr(release_flow, "origin_url", lambda _project: "https://evilgithub.com/org/repo.git")
     assert not release_flow.origin_is_github(project)
@@ -1752,8 +1748,6 @@ def test_origin_is_github_uses_exact_host(flow_root: Path, monkeypatch) -> None:
 
 def test_ci_publish_rejects_metadata_before_candidate_release_tree_is_built(
     flow_root: Path, monkeypatch, release_memory) -> None:
-    project = flow_root / "project"
-    remote = flow_root / "remote.git"
     project = prepare_release_input_case(release_memory, flow_root)
     write_npm_package(
         project,

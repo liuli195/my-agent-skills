@@ -336,10 +336,12 @@ def run_check(
     changed_files: list[str] | None = None,
     baseline: str | None = None,
     execution_context: str | None = None,
+    runtime_version: str = "test-runtime",
+    implementation_identity: str = "test-implementation",
 ) -> subprocess.CompletedProcess[str]:
     module = load_build_and_verify_module()
     original_runner_module = module._RUNNER_MODULE
-    runner = runner or (_declared_runner() if _MEMORY is not None else FakeRunner())
+    runner = runner or _declared_runner(project)
     module._RUNNER_MODULE = FakeRunnerModule(module._runner(), runner, changed_files)
     argv = [*args, "--project", str(project)]
     if execution_context is not None:
@@ -351,7 +353,7 @@ def run_check(
     try:
         with pytest.MonkeyPatch.context() as patch:
             patch.setattr(module, "_runtime_metadata", lambda: {
-                "runtime_version": "test-runtime", "implementation_identity": "test-implementation",
+                "runtime_version": runtime_version, "implementation_identity": implementation_identity,
             })
             with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 returncode = int(module.main(argv))
@@ -382,33 +384,8 @@ def call_build_and_verify_main(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def load_release_flow_module():
-    spec = importlib.util.spec_from_file_location(
-        "release_flow_entrypoint", RELEASE_FLOW_SCRIPT
-    )
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
 
 
-def call_release_flow_main(
-    *args: str, cwd: Path = REPO_ROOT
-) -> subprocess.CompletedProcess[str]:
-    module = load_release_flow_module()
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    with contextlib.chdir(cwd):
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            returncode = int(module.main(list(args)))
-    return subprocess.CompletedProcess(
-        args=[str(RELEASE_FLOW_SCRIPT), *args],
-        returncode=returncode,
-        stdout=stdout.getvalue(),
-        stderr=stderr.getvalue(),
-    )
 
 
 def git(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -464,7 +441,8 @@ def init_wizard_node_package_manager_resolution(
         ("yarn.lock", "yarn"),
         ("package-lock.json", "npm"),
     ]
-    found = [manager for lockfile, manager in lockfiles if (project / lockfile).exists()]
+    found = [manager for lockfile, manager in lockfiles
+        if (_memory_contains(project / lockfile) if _MEMORY is not None else (project / lockfile).exists())]
     if len(found) > 1 and selected is None:
         return {
             "requires_user_choice": True,
@@ -897,33 +875,6 @@ def release_projection_plugins() -> list[str]:
     return plugins
 
 
-def write_release_projection_project(project: Path) -> None:
-    release_flow_dir = project / ".release-flow"
-    release_flow_dir.mkdir(parents=True)
-    (project / ".agents" / "plugins").mkdir(parents=True)
-    (project / ".claude-plugin").mkdir(parents=True)
-
-    (release_flow_dir / "config.yaml").write_text(
-        RELEASE_FLOW_CONFIG.read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-    (release_flow_dir / "projection.yaml").write_text(
-        RELEASE_FLOW_PROJECTION.read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-    (project / ".claude-plugin" / "marketplace.json").write_text(
-        json.dumps(
-            {
-                "name": "placeholder",
-                "owner": {"name": "placeholder"},
-                "plugins": [],
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
 
 
 def test_build_and_verify_plugin_has_dual_manifests() -> None:
@@ -1610,26 +1561,8 @@ def test_build_and_verify_pytest_options_live_in_explicit_commands() -> None:
             assert any(token.startswith("tests/") and token.split("::", 1)[0].endswith(".py") for token in tokens)
 
 
-def test_build_and_verify_release_projection_passes_real_validate() -> None:
-    result = call_release_flow_main("validate", "--project", ".")
-
-    assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_build_and_verify_release_projection_projects_real_catalogs(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    write_release_projection_project(project)
-
-    result = call_release_flow_main("project", "--project", str(project))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: projected" in result.stdout
-
-    codex_catalog = read_json(project / ".agents" / "plugins" / "marketplace.json")
-    assert PLUGIN_NAME not in plugin_names(codex_catalog)
-    assert set(plugin_names(codex_catalog)) == {
-        "release-flow", "pr-flow", "dev-flow", "subagent-policy", "plugin-sync", "retro-to-issues", "data-store",
-    }
 
 
 @pytest.mark.parametrize('real', [None, 'sample', ['missing'], ['sample', 'sample']])
@@ -2147,7 +2080,6 @@ def test_review_report_crossing_deadline_cannot_pass(tmp_path: Path, monkeypatch
             clock[0] = 1.1
         return True
     monkeypatch.delenv('BUILD_AND_VERIFY_STARTED_MONOTONIC', raising=False)
-    monkeypatch.delenv('BUILD_AND_VERIFY_STARTUP_GUARD', raising=False)
     monkeypatch.setenv('CI', 'false')
     monkeypatch.setenv('GITHUB_ACTIONS', 'false')
     monkeypatch.setattr(runner.time, 'monotonic', lambda: clock[0])
@@ -2173,6 +2105,13 @@ def test_local_budget_keeps_guard_until_migration_and_finalization(tmp_path: Pat
     module = load_build_and_verify_module()
     runner = module._runner()
     legacy = tmp_path / '.build-and-verify/runtime'
+    write_runner_config(tmp_path, verify_config={'fullBudgetSeconds': 1})
+    original_iterdir = Path.iterdir
+
+    def runtime_members(path):
+        if path == legacy:
+            return iter(legacy / name for name in (*module.RUNTIME_FILES, module.VERSION_FILE))
+        return original_iterdir(path)
     clock = [0.9]
     control = runner.RunControl(1.0)
     timer = Mock()
@@ -2194,9 +2133,11 @@ def test_local_budget_keeps_guard_until_migration_and_finalization(tmp_path: Pat
         return 0
     timer.cancel.side_effect = cancel
     monkeypatch.delenv('BUILD_AND_VERIFY_STARTED_MONOTONIC', raising=False)
+    monkeypatch.setenv('CI', 'false')
+    monkeypatch.setenv('GITHUB_ACTIONS', 'false')
+    monkeypatch.setattr(Path, 'iterdir', runtime_members)
     monkeypatch.setattr(runner.time, 'monotonic', lambda: clock[0])
     monkeypatch.setattr(runner, '_invocation_guard', lambda *args, **kwargs: (control, timer))
-    monkeypatch.setattr(runner, 'run_verify', lambda *args, **kwargs: 0)
     monkeypatch.setattr(module, '_runtime_metadata', lambda: {'runtime_version': 'test-runtime', 'implementation_identity': 'test-implementation'})
     monkeypatch.setattr(module, '_legacy_runtime', lambda project: (legacy, True))
     monkeypatch.setattr(module, '_migration_ready', lambda project: True)
@@ -2214,7 +2155,7 @@ def test_local_budget_keeps_guard_until_migration_and_finalization(tmp_path: Pat
 def test_local_budget_warning_exemption_policy_matrix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: dict, context: str, extra: tuple[str, ...]) -> None:
     project = tmp_path / 'project'
     write_runner_config(project, verify_config={'fullBudgetSeconds': 1, **settings}, verify_checks=[{'id': name, 'command': [name], 'inputs': []} for name in ('slow', 'later')])
-    runner = FakeRunner({('later',): completed(['later'], stdout='LATER_STARTED\n')})
+    runner = FakeRunner({('slow',): completed(['slow']), ('later',): completed(['later'], stdout='LATER_STARTED\n')})
     monkeypatch.setenv('CI', 'false')
     monkeypatch.setenv('GITHUB_ACTIONS', 'false')
     monkeypatch.delenv('BUILD_AND_VERIFY_STARTED_MONOTONIC', raising=False)
@@ -2280,14 +2221,11 @@ def test_build_and_verify_fast_verify_ignores_invalid_full_budget(tmp_path: Path
 def test_build_and_verify_report_write_failure_preserves_functional_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = tmp_path / 'project'
     write_runner_config(project, verify_checks=[{'id': 'verify', 'command': ['verify'], 'inputs': []}])
-    path_type = type(project)
-    original_write_text = path_type.write_text
-
-    def fail_report_temp(self, *args, **kwargs):
-        if self.name == '.performance-report.json.tmp':
-            raise OSError('write failed')
-        return original_write_text(self, *args, **kwargs)
-    monkeypatch.setattr(path_type, 'write_text', fail_report_temp)
+    def fail_report(path, payload):
+        assert path == project / '.build-and-verify/runs/performance-report.json'
+        assert payload['verificationStatus'] == 'passed'
+        return False
+    monkeypatch.setattr(load_build_and_verify_runner_module(), '_write_performance_report', fail_report)
     result = run_check(project, 'verify', '--full', '--performance-report', runner=_declared_runner(), changed_files=[])
     assert result.returncode == 0
     assert 'performance-report-warning:' in result.stderr
@@ -2843,6 +2781,9 @@ def test_build_and_verify_runner_cache_key_changes_with_check_contract(tmp_path:
     assert 'cache-hit:' not in changed.stdout
     assert f'checked: {expected_checked}' in changed.stdout
     assert _read_memory_text(project / 'run.log', encoding='utf-8').splitlines() == ['base', expected_log]
+    reused = run_check(project, 'verify', changed_files=['src/sample.py'])
+    assert reused.returncode == 0 and f'cache-hit: {expected_checked}' in reused.stdout
+    assert _read_memory_text(project / 'run.log', encoding='utf-8').splitlines() == ['base', expected_log]
 
 
 def test_build_and_verify_runner_cache_miss_does_not_fall_back_to_full(tmp_path: Path) -> None:
@@ -2888,10 +2829,173 @@ def test_build_and_verify_runner_no_check_does_not_fall_back_to_full(tmp_path: P
     assert 'full-not-run: true' in result.stdout
     assert not _memory_contains(project / 'run.log')
 
+@pytest.mark.parametrize("command", ["build", "verify"])
+@pytest.mark.parametrize("raw,error", [
+    (None, "missing_config: .build-and-verify/config.json"),
+    ("{not json\n", "invalid_config: .build-and-verify/config.json"),
+])
+def test_runner_configuration_read_errors_fail_without_execution(tmp_path, command, raw, error):
+    project = tmp_path / "project"
+    if raw is not None:
+        _remember_input(project / ".build-and-verify/config.json", raw)
+    executor = FakeRunner()
+    result = run_check(project, command, runner=executor)
+    assert result.returncode == 1
+    assert error in result.stderr and "Traceback" not in result.stdout + result.stderr
+    assert "status: failed" in result.stdout and executor.calls == []
+
+
+@pytest.mark.parametrize("config,error", [
+    ([], "root must be object"),
+    ({"build": "bad"}, "build must be object"),
+    ({"build": {"checks": "bad"}}, "build.checks must be list"),
+    ({"build": {"checks": ["bad"]}}, "build.checks[0] must be object"),
+    ({"build": {"checks": [{"id": "bad", "command": 123}]}}, "command must be non-empty string or list of non-empty strings"),
+    ({"build": {"checks": [{"id": "bad"}]}}, "command must be non-empty string or list of non-empty strings"),
+    ({"build": {"checks": [{"id": "bad", "command": ["ok", 123]}]}}, "command must be non-empty string or list of non-empty strings"),
+    ({"verify": {"checks": [{"id": "bad", "command": "ok", "paths": "src/**"}]}}, "verify.checks[0].paths must be list of non-empty strings"),
+    ({"verify": {"checks": [{"id": "bad", "command": "ok", "inputs": ["src", 123]}]}}, "verify.checks[0].inputs must be list of non-empty strings"),
+    ({"build": {"checks": [{"id": "", "command": "ok"}]}}, "build.checks[0].id must be non-empty string"),
+    ({"build": {"checks": [{"id": "same", "command": "ok"}, {"id": "same", "command": "ok"}]}}, "build.checks[1].id must be unique"),
+    ({"build": {"checks": [{"id": "bad", "command": ""}]}}, "command must be non-empty string or list of non-empty strings"),
+    ({"verify": {"checks": [{"id": "bad", "command": "ok", "paths": [""]}]}}, "verify.checks[0].paths must be list of non-empty strings"),
+])
+def test_runner_invalid_configuration_stops_before_scheduling(tmp_path, config, error):
+    project = tmp_path / "project"
+    write_json(project / ".build-and-verify/config.json", config)
+    executor = FakeRunner()
+    result = run_check(project, "build", runner=executor)
+    assert result.returncode == 1 and "invalid_config:" in result.stderr
+    assert error in result.stderr and "Traceback" not in result.stdout + result.stderr
+    assert executor.calls == []
+
+
+@pytest.mark.parametrize("as_string", [False, True])
+def test_runner_build_aggregates_exact_command_failure(tmp_path, as_string):
+    project = tmp_path / "project"
+    commands = ["first", "second"] if as_string else [["first"], ["second"]]
+    write_runner_config(project, build_checks=[{"id": name, "command": command}
+        for name, command in zip(("first", "second"), commands)])
+    calls = []
+    def execute(command, **kwargs):
+        assert command == commands[len(calls)]
+        assert kwargs["cwd"] == project and kwargs["shell"] is as_string
+        assert kwargs["encoding"] == "utf-8" and kwargs["errors"] == "replace"
+        calls.append(command)
+        return completed(command, 9 if len(calls) == 2 else 0, stderr="second failed\n" if len(calls) == 2 else "")
+    result = run_check(project, "build", runner=execute)
+    assert result.returncode == 1 and calls == commands
+    assert "checked: first, second" in result.stdout and "status: failed" in result.stdout
+    assert "second failed" in result.stderr
+
+
+@pytest.mark.parametrize("command,full", [("build", False), ("verify", False), ("verify", True)])
+@pytest.mark.parametrize("invalid_input", ["../outside.txt", "/outside.txt"])
+def test_runner_input_boundaries_reject_before_commands(tmp_path, command, full, invalid_input):
+    project = tmp_path / "project"
+    check = {"id": "outside", "command": ["must-not-start"], "inputs": [invalid_input]}
+    write_runner_config(project, build_checks=[check], verify_checks=[check])
+    executor = FakeRunner()
+    result = run_check(project, command, *(["--full"] if full else []), runner=executor, changed_files=["src/app.py"])
+    assert result.returncode == 1 and f"invalid_input_path: {invalid_input}" in result.stderr
+    assert executor.calls == [] and _cache_files(project / ".build-and-verify/cache") == []
+
+
+@pytest.mark.parametrize("pattern,changed,expected", [
+    ("src/[ab].py", "src/a.py", True), ("src/[ab].py", "src/c.py", False),
+    ("src/**/*.py", "src/sub/deep.py", True), ("docs/", "docs", True),
+    ("docs/", "docs/guide.md", True), ("/", "docs/guide.md", False),
+])
+def test_runner_path_patterns_keep_glob_and_directory_semantics(pattern, changed, expected):
+    assert load_build_and_verify_runner_module()._path_matches(pattern, changed) is expected
+
+
+def test_runner_pathless_checks_require_a_change_and_empty_checks_skip(tmp_path):
+    runner = load_build_and_verify_runner_module()
+    default = {"id": "default", "command": ["default"]}
+    scoped = {"id": "source", "command": ["source"], "paths": ["src/**"]}
+    assert runner._selected_checks([default, scoped], ["docs/guide.md"]) == [default]
+    assert runner._selected_checks([default], []) == []
+    project = tmp_path / "project"
+    write_runner_config(project)
+    executor = FakeRunner()
+    result = run_check(project, "verify", runner=executor, changed_files=[])
+    assert result.returncode == 0 and "status: skipped" in result.stdout
+    assert "reason: no_changed_files" in result.stdout and "full-not-run: true" in result.stdout
+    assert executor.calls == []
+
+
+def test_runner_cache_identity_tracks_runtime_and_rejects_missing_runtime(tmp_path, capsys):
+    project = tmp_path / "project"
+    write_runner_config(project, build_checks=[{"id": "build", "command": ["build"]}],
+        verify_checks=[{"id": "versioned", "command": ["versioned"], "inputs": []}])
+    runner = load_build_and_verify_runner_module()
+    executor = _declared_runner()
+    for version, full in [("1.0.0", False), ("1.0.0", False), ("2.0.0", False), ("3.0.0", True), ("3.0.0", False)]:
+        assert runner.run_verify(project, runner=executor, runtime_version=version, full=full, synthetic_changed_paths=["code.py"]) == 0
+    assert executor.calls == [["versioned"], ["versioned"], ["versioned"]]
+    assert capsys.readouterr().out.count("cache-hit: versioned") == 2
+    assert len(_cache_files(project / ".build-and-verify/cache")) == 3
+    executor.calls.clear()
+    for full in (False, True):
+        assert runner.run_verify(project, runner=executor, runtime_version="", full=full, synthetic_changed_paths=["code.py"]) == 1
+    assert executor.calls == [] and capsys.readouterr().err.count("missing_runtime_version") == 2
+    assert len(_cache_files(project / ".build-and-verify/cache")) == 3
+    assert runner.run_build(project, runner=executor) == 0 and executor.calls == [["build"]]
+
+
+def test_runner_cache_identity_changes_only_when_implementation_changes(tmp_path):
+    project = tmp_path / "project"
+    write_runner_config(project, verify_checks=[{"id": "identity", "command": ["identity"], "inputs": []}])
+    executor = _declared_runner()
+    results = [run_check(project, "verify", runner=executor, changed_files=["code.py"], implementation_identity=identity)
+        for identity in ("implementation-a", "implementation-a", "implementation-b")]
+    assert all(result.returncode == 0 for result in results)
+    assert "cache-hit: identity" in results[1].stdout
+    assert "cache-hit:" not in results[2].stdout and executor.calls == [["identity"], ["identity"]]
+
+
+@pytest.mark.parametrize("version_field", ["FRAMEWORK_VERSION", "CACHE_VERSION", "python_version"])
+def test_runner_cache_key_includes_framework_cache_and_interpreter(tmp_path, monkeypatch, version_field):
+    project = tmp_path / "project"
+    write_runner_config(project, verify_checks=[{"id": "identity", "command": ["identity"], "inputs": []}])
+    runner = load_build_and_verify_runner_module()
+    config = runner._load_config(project)
+    check = config["verify"]["checks"][0]
+    before = runner._cache_key(project, config, check, [])
+    if version_field == "python_version":
+        monkeypatch.setattr(runner.platform, version_field, lambda: "different-python")
+    else:
+        monkeypatch.setattr(runner, version_field, "different-version")
+    assert runner._cache_key(project, config, check, []) != before
+
+
+def test_runner_git_fallback_combines_sources_and_filters_generated_inputs(tmp_path, monkeypatch):
+    runner = load_build_and_verify_runner_module()
+    responses = {
+        ("status", "--porcelain=v1", "-z", "--untracked-files=all"): (1, ""),
+        ("diff", "--name-only", "--cached"): (0, "staged.py\n"),
+        ("diff", "--name-only"): (0, "unstaged.py\n"),
+        ("ls-files", "--others", "--exclude-standard"): (0, "untracked.py\n"),
+    }
+    def git_process(command, **kwargs):
+        assert command[0] == "git" and kwargs["cwd"] == tmp_path
+        code, output = responses[tuple(command[1:])]
+        return completed(command, code, stdout=output)
+    monkeypatch.setattr(runner.subprocess, "run", git_process)
+    assert runner._changed_files(tmp_path) == ["staged.py", "unstaged.py", "untracked.py"]
+    for key in responses:
+        responses[key] = (1, "")
+    _remember_input(tmp_path / "src/app.py", "source")
+    _remember_input(tmp_path / ".git/noise", "ignored")
+    _remember_input(tmp_path / ".build-and-verify/cache/hit.json", "ignored")
+    assert runner._changed_files(tmp_path) == ["src/app.py"]
+
+
 @pytest.fixture
 def tmp_path():
     # Ordinary tests use a value, not pytest's disk-creating temporary directory.
-    return Path("/memory/build-and-verify-tests")
+    return Path("/memory/build-and-verify-tests").resolve()
 
 
 def _remember_input(path, value, *args, **kwargs):
@@ -2930,11 +3034,14 @@ def _cache_files(directory):
     return sorted(path for path in _MEMORY.documents if path.parent == directory)
 
 
-def _declared_runner():
+def _declared_runner(project=None):
     """Exact responses only for this fixture's declared external commands."""
     responses = {}
     module = load_build_and_verify_runner_module()
-    for path, raw in _MEMORY.documents.items():
+    documents = _MEMORY.documents if _MEMORY is not None else {
+        project / ".build-and-verify/config.json": (project / ".build-and-verify/config.json").read_bytes(),
+    }
+    for path, raw in documents.items():
         if path.name != "config.json": continue
         try: config = json.loads(raw)
         except (ValueError, TypeError): continue
@@ -2966,6 +3073,7 @@ def memory_runtime(monkeypatch):
         state.documents[path] = (json.dumps(data, ensure_ascii=False) + "\n").encode()
     def config_read(path):
         if path in state.documents: return json.loads(state.documents[path])
+        if path in state.inputs: return json.loads(state.inputs[path])
         if path.is_relative_to(REPO_ROOT): return original_read_json(path)
         raise AssertionError(f"unexpected configuration read: {path}")
     def runner_config(project, *, build_checks=None, verify_checks=None, verify_config=None):
@@ -2990,6 +3098,10 @@ def memory_runtime(monkeypatch):
         return {"path": relative, "missing": True}
     def all_files(project):
         return sorted(path.relative_to(project).as_posix() for path in state.inputs if path.is_relative_to(project) and not runner._is_excluded_relative(path.relative_to(project).as_posix()))
+    def git_process(command, **kwargs):
+        assert command == ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"], f"unexpected subprocess: {command!r}"
+        output = "".join(f" M {relative}\0" for relative in all_files(Path(kwargs["cwd"])))
+        return completed(command, stdout=output)
     def store(project, key, check):
         state.documents[runner._cache_path(project, key)] = json.dumps({"status": "passed", "id": check["id"]}).encode()
     def cache_load(project, key):
@@ -3011,7 +3123,7 @@ def memory_runtime(monkeypatch):
     monkeypatch.setattr(runner, "_hash_input", hash_input)
     monkeypatch.setattr(runner, "_all_project_files", all_files)
     monkeypatch.setattr(runner, "_git_visible_files", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "_changed_files", all_files)
+    monkeypatch.setattr(runner.subprocess, "run", git_process)
     monkeypatch.setattr(runner, "_cache_load", cache_load)
     monkeypatch.setattr(runner, "_cache_store", store)
     monkeypatch.setattr(runner, "_write_performance_report", report)

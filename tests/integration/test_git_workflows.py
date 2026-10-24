@@ -1645,6 +1645,28 @@ class TestReleaseFlow:
         global _RELEASE_TEMPLATE_ROOT
         _RELEASE_TEMPLATE_ROOT = Path(tempfile.gettempdir()) / "release-flow-test-templates-v3"
 
+    def test_repository_projection_validates_and_generates_real_catalogs(self, tmp_path: Path) -> None:
+        cases = _release_cases()
+        project = tmp_path / "project"
+        for name in ("config.yaml", "projection.yaml"):
+            target = project / ".release-flow" / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((cases.REPO_ROOT / ".release-flow" / name).read_bytes())
+        cases.write_json(project / ".claude-plugin/marketplace.json", {
+            "name": "placeholder", "owner": {"name": "placeholder"}, "plugins": [],
+        })
+        validated = cases.run("validate", "--project", str(cases.REPO_ROOT))
+        assert validated.returncode == 0, validated.stdout + validated.stderr
+        projected = cases.run("project", "--project", str(project))
+        assert projected.returncode == 0, projected.stdout + projected.stderr
+        assert "status: projected" in projected.stdout
+        expected = {"release-flow", "pr-flow", "dev-flow", "subagent-policy", "plugin-sync", "retro-to-issues", "data-store"}
+        codex = json.loads((project / ".agents/plugins/marketplace.json").read_text(encoding="utf-8"))
+        claude = json.loads((project / ".claude-plugin/marketplace.json").read_text(encoding="utf-8"))
+        assert {plugin["name"] for plugin in codex["plugins"]} == expected
+        assert codex["name"] == claude["name"] == "my-agent-skills-marketplace"
+        assert codex["interface"]["displayName"] == claude["owner"]["name"] == "My Agent Skills Marketplace"
+
 
     def test_setup_authorized_writes_only_config_projection_gitignore_and_workflow(self, tmp_path: Path) -> None:
         project = tmp_path / 'project'

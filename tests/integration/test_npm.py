@@ -9,10 +9,13 @@ import os
 import re
 import shutil
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
+import tarfile
 import time
+import traceback
 from pathlib import Path
 from typing import Any, Callable
 
@@ -20,7 +23,6 @@ import yaml
 import pytest
 
 from tests.support.npm_candidates import candidate_for, copy_install
-from tests.test_build_and_verify_plugin import read_json, write_json, write_runner_config, command_that_logs
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "plugins" / "build-and-verify"
@@ -221,6 +223,14 @@ def _run_installed_bav(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 class TestBuildAndVerify:
+    def test_build_and_verify_package_excludes_legacy_skill_runtime(self, npm_candidate) -> None:
+        # Inspect the official candidate prepared once by this check's controller.
+        with tarfile.open(npm_candidate.tarball, "r:gz") as archive:
+            files = {name.removeprefix("package/") for name in archive.getnames()}
+        assert "python/build_and_verify.py" in files
+        assert "python/build_and_verify_runner.py" in files
+        assert not any(path.startswith("skills/build-and-verify/scripts/") for path in files)
+
     @pytest.mark.parametrize("full", [False, True])
     def test_public_verify_budget_applies_to_fast_and_full(self, tmp_path: Path, full: bool) -> None:
         checks = [
@@ -1264,7 +1274,7 @@ class TestBuildAndVerify:
             "    save()\n"
             "elif args == ['plugin', 'add', 'build-and-verify@build-and-verify', '--json']:\n"
             "    state['installed'] = [item for item in state['installed'] if item['pluginId'] != 'build-and-verify@build-and-verify']\n"
-            "    state['installed'].append({'pluginId': 'build-and-verify@build-and-verify', 'installed': True, 'version': os.environ['BUILD__package_version()'], 'source': {'source': 'local', 'path': os.environ['BUILD_STABLE']}})\n"
+            "    state['installed'].append({'pluginId': 'build-and-verify@build-and-verify', 'installed': True, 'version': os.environ['BUILD_PACKAGE_VERSION'], 'source': {'source': 'local', 'path': os.environ['BUILD_STABLE']}})\n"
             "    config_path = Path(os.environ['CODEX_HOME']) / 'config.toml'\n"
             "    config = config_path.read_text(encoding='utf-8') if config_path.exists() else ''\n"
             "    if '[plugins.\"build-and-verify@build-and-verify\"]' not in config:\n"
@@ -1294,7 +1304,7 @@ class TestBuildAndVerify:
             "BUILD_CODEX_LOG": str(codex_log),
             "BUILD_CODEX_STATE": str(codex_state),
             "BUILD_CODEX_FAIL_MARKER": str(codex_failure_marker),
-            "BUILD__package_version()": _package_version(),
+            "BUILD_PACKAGE_VERSION": _package_version(),
             "BUILD_STABLE": str(stable),
             "PATH": os.pathsep.join(
                 [str(fake_bin), str(Path(sys.executable).parent), str(Path(node).parent)]
@@ -1832,6 +1842,7 @@ class TestBuildAndVerify:
 
 
     def test_build_and_verify_init_writes_config_gitignore_and_cache(self, tmp_path: Path) -> None:
+        from tests.test_build_and_verify_plugin import read_json
         project = tmp_path / "project"
         project.mkdir()
 
@@ -1860,6 +1871,7 @@ class TestBuildAndVerify:
 
 
     def test_runtime_guard_invalid_migration_keeps_existing_configuration(self, tmp_path: Path) -> None:
+        from tests.test_build_and_verify_plugin import write_json, write_runner_config
         project = tmp_path / "project"
         write_runner_config(project)
         path = project / ".build-and-verify/config.json"
@@ -1876,6 +1888,7 @@ class TestBuildAndVerify:
     def test_build_and_verify_init_writes_confirmed_config_with_overwrite(self,
         tmp_path: Path,
     ) -> None:
+        from tests.test_build_and_verify_plugin import command_that_logs, read_json, write_json
         project = tmp_path / "project"
         project.mkdir()
         build_dir = project / ".build-and-verify"
@@ -1971,6 +1984,7 @@ class TestBuildAndVerify:
     def test_build_and_verify_runner_reports_failed_check_with_invalid_utf8_output(self,
         tmp_path: Path, action: str, failure_report: str
     ) -> None:
+        from tests.test_build_and_verify_plugin import write_runner_config
         project = tmp_path / "project"
         project.mkdir()
         check = {
@@ -1997,31 +2011,7 @@ class TestBuildAndVerify:
         assert "UnicodeDecodeError" not in result.stderr
 
 
-# MySpec package scenarios. This section is supplied by its domain owner.
-# MySpec integration fragment. Merge definitions into tests/integration/test_npm.py.
-
-import contextlib
-import hashlib
-import importlib.util
-import io
-import json
-import os
-import re
-import shlex
-import shutil
-import signal
-import subprocess
-import sys
-import time
-import traceback
-from pathlib import Path
-
-import pytest
-
-from tests.support.git_templates import copy_template
-from tests.support.myspec_cases import bumped_patch, main_spec, npm_prefix_for, requirement
-from tests.support.npm_candidates import candidate_for, copy_install
-
+# MySpec package scenarios. Product-specific helpers load only for selected MySpec cases.
 _MYSPEC_REPO_ROOT = Path(__file__).resolve().parents[2]
 _MYSPEC_PLUGIN_ROOT = _MYSPEC_REPO_ROOT / "plugins" / "my-spec"
 _MYSPEC_SPEC_OPS = _MYSPEC_PLUGIN_ROOT / "python" / "spec_ops.py"
@@ -2766,6 +2756,7 @@ def _myspec_recovery_git_seed() -> dict[str, Path]:
 @pytest.fixture
 def _myspec_recovery_git_project(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory,
                          request: pytest.FixtureRequest, _myspec_recovery_git_seed: dict[str, Path]) -> Path:
+    from tests.support.git_templates import copy_template
     if "path" not in _myspec_recovery_git_seed:
         project = request.getfixturevalue("git_project")
         seed = tmp_path_factory.mktemp("recovery-git-seed") / "project"
@@ -2859,9 +2850,192 @@ def _myspec_run_in_process(script: Path, *args: object, env=None, cwd=None) -> s
     return subprocess.CompletedProcess([str(script), *map(str, args)], code, stdout.getvalue(), stderr.getvalue())
 
 
+def _myspec_memory_migration_ready_state(cli, root, command="add"):
+    work = root / ".local" / "spec-work"
+    conflicts = root / "no-conflicts.json"
+    _myspec_write(conflicts, "[]")
+    for args in (("state-init", work, command, "specs-fingerprint", "input-fingerprint"),
+                 ("state-set-conflicts", work, conflicts, "specs-fingerprint", "input-fingerprint")):
+        result = _myspec_run_in_process(cli, *args)
+        assert result.returncode == 0, result.stderr
+    return work
+
+
+def _myspec_memory_migration_apply_ready(cli, specs, delta, output, work):
+    return _myspec_run_in_process(cli, "apply-delta", specs, delta, output, work,
+                                  "specs-fingerprint", "input-fingerprint")
+
+
+def _myspec_memory_migration_confirmed_workflow(
+    cli: Path,
+    specs: Path,
+    delta: Path,
+    preview: Path,
+    *expected_diff: str,
+) -> str:
+    work = _myspec_memory_migration_ready_state(cli, preview.parent)
+    validated = _myspec_run_in_process(cli, "validate-delta", delta, specs)
+    assert validated.returncode == 0, validated.stderr
+    generated = _myspec_run_in_process(
+        cli,
+        "apply-delta",
+        specs,
+        delta,
+        preview,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert generated.returncode == 0, generated.stderr
+    assert _myspec_run_in_process(cli, "validate-main", preview).returncode == 0
+    diff = _myspec_run_in_process(cli, "diff", specs, preview)
+    assert diff.returncode == 0, diff.stderr
+    for fragment in expected_diff:
+        assert fragment in diff.stdout
+    applied = _myspec_run_in_process(
+        cli,
+        "apply-delta",
+        specs,
+        delta,
+        specs,
+        work,
+        "specs-fingerprint",
+        "input-fingerprint",
+    )
+    assert applied.returncode == 0, applied.stderr
+    assert _myspec_run_in_process(cli, "validate-main", specs).returncode == 0
+    assert _myspec_run_in_process(cli, "diff", specs, preview).stdout == ""
+    return diff.stdout
+
+
 class TestMySpec:
+    def test_candidate_controller_prepares_once_and_preserves_supplied_tarball(self, tmp_path, monkeypatch, npm_candidate):
+        from types import SimpleNamespace
+        from tests.support import npm_candidates as candidates
+        spec = importlib.util.spec_from_file_location("myspec_candidate_controller", REPO_ROOT / "tests/integration/conftest.py")
+        assert spec is not None and spec.loader is not None
+        controller = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(controller)
+        supplied = tmp_path / "supplied.tgz"
+        shutil.copy2(npm_candidate.tarball, supplied)
+        original_bytes = supplied.read_bytes()
+        original_mkdtemp = tempfile.mkdtemp
+        monkeypatch.setattr(controller.tempfile, "mkdtemp", lambda **kwargs: original_mkdtemp(dir=tmp_path, **kwargs))
+        prepared = []
+        original_prepare = candidates.prepare_candidate
+        def prepare(name, root, *, tarball=None):
+            assert name == "myspec" and tarball == supplied
+            prepared.append(root)
+            return original_prepare(name, root, tarball=tarball)
+        def install(command):
+            prefix = Path(command[command.index("--prefix") + 1])
+            assert command == [npm_candidate.npm, "install", "--global", "--prefix", str(prefix),
+                "--ignore-scripts", "--no-audit", "--no-fund", str(prefix.parent / "package" / supplied.name)]
+            shutil.copytree(npm_candidate.prefix, prefix)
+            return ""
+        monkeypatch.setattr(candidates, "prepare_candidate", prepare)
+        monkeypatch.setattr(candidates, "_run", install)
+        monkeypatch.delenv(candidates.CANDIDATES_ENV, raising=False)
+        monkeypatch.setenv(candidates.TARBALL_ENV["myspec"], str(supplied))
+        cleanups = []
+        config = SimpleNamespace(args=[str(REPO_ROOT / "tests/integration/test_npm.py") + "::TestMySpec"],
+            invocation_params=SimpleNamespace(dir=REPO_ROOT), add_cleanup=cleanups.append)
+        try:
+            controller.pytest_configure(config)
+            controller.pytest_configure(config)
+            worker = SimpleNamespace(**vars(config), workerinput={})
+            controller.pytest_configure(worker)
+            inherited = candidates.candidate_for("myspec")
+            assert prepared == [inherited.prefix.parent]
+            assert inherited.tarball != supplied and inherited.tarball.read_bytes() == original_bytes
+            first, package = candidates.copy_install(inherited, tmp_path / "first-install")
+            second, other = candidates.copy_install(inherited, tmp_path / "second-install")
+            assert first != second and package != other
+            manifest = package / "package.json"
+            manifest.write_bytes(manifest.read_bytes() + b"\n")
+            assert other.joinpath("package.json").read_bytes() == inherited.installed_package.joinpath("package.json").read_bytes()
+            assert supplied.read_bytes() == original_bytes
+            assert os.environ[candidates.TARBALL_ENV["myspec"]] == str(supplied)
+        finally:
+            for cleanup in reversed(cleanups):
+                cleanup()
+        assert len(prepared) == 1 and not prepared[0].parent.exists()
+        assert supplied.read_bytes() == original_bytes
+        assert os.environ[candidates.TARBALL_ENV["myspec"]] == str(supplied)
+
+
+    @pytest.mark.parametrize("failure", ["pack-start", "missing-resource"])
+    def test_candidate_failed_preparation_cleans_only_owned_partial_state(self, tmp_path, monkeypatch, npm_candidate, failure):
+        from tests.support import npm_candidates as candidates
+        supplied = tmp_path / "supplied.tgz"
+        shutil.copy2(npm_candidate.tarball, supplied)
+        before = supplied.read_bytes()
+        owned = tmp_path / "owned-candidate"
+        def execute(command):
+            if failure == "pack-start":
+                assert command == [sys.executable, str(candidates.PACK), "myspec", str(owned / "package")]
+                raise OSError("candidate pack cannot start")
+            prefix = Path(command[command.index("--prefix") + 1])
+            assert command[0:3] == [npm_candidate.npm, "install", "--global"]
+            shutil.copytree(npm_candidate.prefix, prefix)
+            candidates._writable(prefix)
+            (prefix / npm_candidate.installed_package.relative_to(npm_candidate.prefix) / "python/spec_ops.py").unlink()
+            return ""
+        monkeypatch.setattr(candidates, "_run", execute)
+        expected = OSError if failure == "pack-start" else FileNotFoundError
+        with pytest.raises(expected) as error:
+            candidates.prepare_candidate("myspec", owned, tarball=None if failure == "pack-start" else supplied)
+        if failure == "pack-start":
+            assert "candidate pack cannot start" in str(error.value)
+        assert not owned.exists() and supplied.read_bytes() == before
+        assert npm_candidate.executable.is_file()
+
+
+    def test_candidate_baseline_reaches_two_real_workers_with_private_installs(self, tmp_path, npm_candidate):
+        reports = tmp_path / "reports"
+        reports.mkdir()
+        probe = tmp_path / "test_candidate_workers.py"
+        probe.write_text("""import json
+import os
+from pathlib import Path
+from tests.support.npm_candidates import candidate_for, copy_install
+
+
+def test_candidate_inheritance(tmp_path):
+    candidate = candidate_for("myspec")
+    executable, package = copy_install(candidate, tmp_path / "prefix")
+    home = tmp_path / "home"
+    home.mkdir()
+    assert executable.is_file()
+    manifest = package / "package.json"
+    original = manifest.read_bytes()
+    manifest.write_bytes(original + b"\\n")
+    assert candidate.installed_package.joinpath("package.json").read_bytes() == original
+    report = {"tarball": str(candidate.tarball), "baseline": str(candidate.prefix),
+        "prefix": str(executable), "home": str(home), "package": str(package)}
+    Path(os.environ["OWN_SKILLS_CANDIDATE_REPORTS"], os.environ["PYTEST_XDIST_WORKER"] + ".json").write_text(json.dumps(report))
+""", encoding="utf-8")
+        before = npm_candidate.installed_package.joinpath("package.json").read_bytes()
+        result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+            "-n", "2", "--dist=each", "--rootdir", str(REPO_ROOT), "--basetemp", str(tmp_path / "workers"), str(probe)],
+            cwd=REPO_ROOT, env={**os.environ, "OWN_SKILLS_CANDIDATE_REPORTS": str(reports),
+                "PYTHONPATH": os.pathsep.join(filter(None, [str(REPO_ROOT), os.environ.get("PYTHONPATH")]))},
+            text=True, capture_output=True, check=False, timeout=30)
+        assert result.returncode == 0, result.stdout + result.stderr
+        paths = sorted(reports.glob("gw*.json"))
+        assert [path.stem for path in paths] == ["gw0", "gw1"]
+        payloads = [json.loads(path.read_text()) for path in paths]
+        assert {item["tarball"] for item in payloads} == {str(npm_candidate.tarball)}
+        assert {item["baseline"] for item in payloads} == {str(npm_candidate.prefix)}
+        for field in ("prefix", "home", "package"):
+            assert len({item[field] for item in payloads}) == 2
+        assert npm_candidate.installed_package.joinpath("package.json").read_bytes() == before
+
+
     @pytest.fixture(autouse=True)
     def _package_versions(self, npm_candidate, monkeypatch):
+        global bumped_patch, main_spec, npm_prefix_for, requirement
+        from tests.support.myspec_cases import bumped_patch, main_spec, npm_prefix_for, requirement
         global _MYSPEC_PACKAGE_VERSION, _MYSPEC_PREVIOUS_VERSION, _MYSPEC_NEXT_VERSION, _MYSPEC_LATER_VERSION
         _MYSPEC_PACKAGE_VERSION = json.loads((npm_candidate.installed_package / "package.json").read_text(encoding="utf-8"))["version"]
         _MYSPEC_PREVIOUS_VERSION = bumped_patch(_MYSPEC_PACKAGE_VERSION, -1)
@@ -2922,17 +3096,7 @@ class TestMySpec:
         _myspec_write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
         _myspec_write(
             delta / "accounts" / "spec.md",
-            """## MODIFIED Requirements
-
-    ### Requirement: 登录
-
-    系统 MUST 允许密码登录。
-
-    #### Scenario: 密码正确
-
-    - **WHEN** 用户提交正确密码
-    - **THEN** 系统创建会话
-    """,
+            '## MODIFIED Requirements\n\n### Requirement: 登录\n\n系统 MUST 允许密码登录。\n\n#### Scenario: 密码正确\n\n- **WHEN** 用户提交正确密码\n- **THEN** 系统创建会话\n',
         )
         _myspec_write(conflicts, "[]")
 
@@ -3310,17 +3474,7 @@ class TestMySpec:
         _myspec_write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
         _myspec_write(
             delta / "accounts" / "spec.md",
-            """## MODIFIED Requirements
-
-    ### Requirement: 登录
-
-    系统 MUST 允许密码登录。
-
-    #### Scenario: 密码正确
-
-    - **WHEN** 用户提交正确密码
-    - **THEN** 系统创建会话
-    """,
+            '## MODIFIED Requirements\n\n### Requirement: 登录\n\n系统 MUST 允许密码登录。\n\n#### Scenario: 密码正确\n\n- **WHEN** 用户提交正确密码\n- **THEN** 系统创建会话\n',
         )
         work = source / ".local" / "spec-work"
         conflicts = source / "no-conflicts.json"
@@ -3480,10 +3634,7 @@ class TestMySpec:
             requirement("登录", "允许登录"),
             requirement("旧设置", "显示设置"),
         )
-        delta_text = """## REMOVED Requirements
-
-    ### Requirement: 旧设置
-    """
+        delta_text = '## REMOVED Requirements\n\n### Requirement: 旧设置\n'
 
         def add_spec_fixture(source: Path, remote_branch: str) -> None:
             _myspec_write(source / "myspec" / "specs" / "accounts" / "spec.md", target)
@@ -3955,17 +4106,7 @@ class TestMySpec:
         _myspec_write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
         _myspec_write(
             delta / "accounts" / "spec.md",
-            """## ADDED Requirements
-
-    ### Requirement: 注销
-
-    系统 MUST 允许用户注销。
-
-    #### Scenario: 主动注销
-
-    - **WHEN** 用户选择注销
-    - **THEN** 系统结束会话
-    """,
+            '## ADDED Requirements\n\n### Requirement: 注销\n\n系统 MUST 允许用户注销。\n\n#### Scenario: 主动注销\n\n- **WHEN** 用户选择注销\n- **THEN** 系统结束会话\n',
         )
         conflict = {
             "id": "conflict-1",
@@ -4144,25 +4285,7 @@ class TestMySpec:
         marker = tmp_path / "signal.txt"
         ready = tmp_path / "ready.txt"
         (installed_package / "python" / "spec_ops.py").write_text(
-            """import os
-    import signal
-    import sys
-    import time
-    from pathlib import Path
-
-    marker = Path(sys.argv[1])
-    ready = Path(sys.argv[2])
-    parent = os.getppid()
-
-    def stop(signum, _frame):
-        marker.write_text(str(signum), encoding="utf-8")
-        raise SystemExit(0)
-
-    signal.signal(signal.SIGTERM, stop)
-    ready.write_text("ready", encoding="utf-8")
-    while os.getppid() == parent:
-        time.sleep(0.01)
-    """,
+            'import os\nimport signal\nimport sys\nimport time\nfrom pathlib import Path\n\nmarker = Path(sys.argv[1])\nready = Path(sys.argv[2])\nparent = os.getppid()\n\ndef stop(signum, _frame):\n    marker.write_text(str(signum), encoding="utf-8")\n    raise SystemExit(0)\n\nsignal.signal(signal.SIGTERM, stop)\nready.write_text("ready", encoding="utf-8")\nwhile os.getppid() == parent:\n    time.sleep(0.01)\n',
             encoding="utf-8",
         )
         process = subprocess.Popen(
@@ -4204,21 +4327,7 @@ class TestMySpec:
         original_crlf = (specs / "settings" / "spec.md").read_bytes()
         _myspec_write(
             delta / "accounts" / "spec.md",
-            """## MODIFIED Requirements
-
-    ### Requirement: 登录
-
-    系统 MUST 允许密码登录。
-
-    #### Scenario: 密码正确
-
-    - **WHEN** 用户提交正确密码
-    - **THEN** 系统创建会话
-
-    ## REMOVED Requirements
-
-    ### Requirement: 旧设置
-    """,
+            '## MODIFIED Requirements\n\n### Requirement: 登录\n\n系统 MUST 允许密码登录。\n\n#### Scenario: 密码正确\n\n- **WHEN** 用户提交正确密码\n- **THEN** 系统创建会话\n\n## REMOVED Requirements\n\n### Requirement: 旧设置\n',
         )
 
         work = tmp_path / "state"
@@ -4386,17 +4495,7 @@ class TestMySpec:
         _myspec_write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
         _myspec_write(
             delta / "accounts" / "spec.md",
-            """## MODIFIED Requirements
-
-    ### Requirement: 登录
-
-    系统 MUST 允许密码登录。
-
-    #### Scenario: 密码正确
-
-    - **WHEN** 用户提交正确密码
-    - **THEN** 系统创建会话
-    """,
+            '## MODIFIED Requirements\n\n### Requirement: 登录\n\n系统 MUST 允许密码登录。\n\n#### Scenario: 密码正确\n\n- **WHEN** 用户提交正确密码\n- **THEN** 系统创建会话\n',
         )
 
         work = _myspec_ready_state(_MYSPEC_SPEC_OPS, tmp_path / "state")
@@ -4536,45 +4635,7 @@ class TestMySpec:
         original = (specs / "accounts" / "spec.md").read_bytes()
         draft = (delta / "accounts" / "spec.md").read_bytes()
         injection = tmp_path / "application-fault"
-        _myspec_write(injection / "sitecustomize.py", '''import os
-    import shutil
-    from pathlib import Path
-    original, original_unlink, original_rmtree = os.rename, os.unlink, shutil.rmtree
-
-    def rename(source, destination, *args, **kwargs):
-        source, destination = Path(source), Path(destination)
-        specs = Path(os.environ["RECOVERY_FAULT_SPECS"])
-        fault = os.environ["RECOVERY_FAULT"]
-        before = source == specs and destination.name.startswith(".my-spec-backup-")
-        after = destination == specs and source.name.startswith(".my-spec-preview-")
-        if before and fault.endswith("before"):
-            if fault.startswith("interrupt"):
-                original(source, destination, *args, **kwargs)
-                os._exit(91)
-            raise OSError("injected failure before formal replacement")
-        result = original(source, destination, *args, **kwargs)
-        if after and fault.endswith("after"):
-            if fault.startswith("interrupt"):
-                os._exit(92)
-            raise OSError("injected failure after formal replacement")
-        return result
-
-    os.rename = rename
-
-    def unlink(path, *args, **kwargs):
-        if os.environ["RECOVERY_FAULT"] == "cleanup-lock" and Path(path) == Path(os.environ["RECOVERY_FAULT_WORK"]) / "lock":
-            raise PermissionError("injected final lock cleanup failure")
-        return original_unlink(path, *args, **kwargs)
-
-    os.unlink = unlink
-
-    def rmtree(path, *args, **kwargs):
-        if os.environ["RECOVERY_FAULT"] == "cleanup-draft" and Path(path) == Path(os.environ["RECOVERY_FAULT_WORK"]) / "current":
-            raise PermissionError("injected final draft cleanup failure")
-        return original_rmtree(path, *args, **kwargs)
-
-    shutil.rmtree = rmtree
-    ''')
+        _myspec_write(injection / "sitecustomize.py", 'import os\nimport shutil\nfrom pathlib import Path\noriginal, original_unlink, original_rmtree = os.rename, os.unlink, shutil.rmtree\n\ndef rename(source, destination, *args, **kwargs):\n    source, destination = Path(source), Path(destination)\n    specs = Path(os.environ["RECOVERY_FAULT_SPECS"])\n    fault = os.environ["RECOVERY_FAULT"]\n    before = source == specs and destination.name.startswith(".my-spec-backup-")\n    after = destination == specs and source.name.startswith(".my-spec-preview-")\n    if before and fault.endswith("before"):\n        if fault.startswith("interrupt"):\n            original(source, destination, *args, **kwargs)\n            os._exit(91)\n        raise OSError("injected failure before formal replacement")\n    result = original(source, destination, *args, **kwargs)\n    if after and fault.endswith("after"):\n        if fault.startswith("interrupt"):\n            os._exit(92)\n        raise OSError("injected failure after formal replacement")\n    return result\n\nos.rename = rename\n\ndef unlink(path, *args, **kwargs):\n    if os.environ["RECOVERY_FAULT"] == "cleanup-lock" and Path(path) == Path(os.environ["RECOVERY_FAULT_WORK"]) / "lock":\n        raise PermissionError("injected final lock cleanup failure")\n    return original_unlink(path, *args, **kwargs)\n\nos.unlink = unlink\n\ndef rmtree(path, *args, **kwargs):\n    if os.environ["RECOVERY_FAULT"] == "cleanup-draft" and Path(path) == Path(os.environ["RECOVERY_FAULT_WORK"]) / "current":\n        raise PermissionError("injected final draft cleanup failure")\n    return original_rmtree(path, *args, **kwargs)\n\nshutil.rmtree = rmtree\n')
         failed = _myspec_recovery_cli("apply-delta", specs, delta, specs, work, "specs", "input", extra_env={
             "PYTHONPATH": str(injection), "RECOVERY_FAULT_SPECS": str(specs), "RECOVERY_FAULT_WORK": str(work), "RECOVERY_FAULT": fault,
         })
@@ -4691,31 +4752,7 @@ class TestMySpec:
         original = {path.relative_to(work / "current"): path.read_bytes() for path in (work / "current").rglob("*") if path.is_file()}
         lock_bytes = (work / "lock").read_bytes()
         injection = tmp_path / "abort-fault"
-        _myspec_write(injection / "sitecustomize.py", '''import os
-    from pathlib import Path
-    rename_original, unlink_original = os.rename, os.unlink
-    work = Path(os.environ["RECOVERY_FAULT_WORK"])
-    fault = os.environ["RECOVERY_FAULT"]
-
-    def rename(source, destination, *args, **kwargs):
-        if Path(source) == work / "current":
-            if fault == "archive-rename":
-                raise OSError("injected archive rename failure")
-            result = rename_original(source, destination, *args, **kwargs)
-            if fault == "interrupt-after-archive":
-                os._exit(93)
-            if fault == "foreign-lock-after-archive":
-                (work / "lock").write_text("foreign session lock\\n", encoding="utf-8")
-            return result
-        return rename_original(source, destination, *args, **kwargs)
-
-    def unlink(path, *args, **kwargs):
-        if Path(path) == work / "lock" and fault == "unlock":
-            raise PermissionError("injected lock removal failure")
-        return unlink_original(path, *args, **kwargs)
-
-    os.rename, os.unlink = rename, unlink
-    ''')
+        _myspec_write(injection / "sitecustomize.py", 'import os\nfrom pathlib import Path\nrename_original, unlink_original = os.rename, os.unlink\nwork = Path(os.environ["RECOVERY_FAULT_WORK"])\nfault = os.environ["RECOVERY_FAULT"]\n\ndef rename(source, destination, *args, **kwargs):\n    if Path(source) == work / "current":\n        if fault == "archive-rename":\n            raise OSError("injected archive rename failure")\n        result = rename_original(source, destination, *args, **kwargs)\n        if fault == "interrupt-after-archive":\n            os._exit(93)\n        if fault == "foreign-lock-after-archive":\n            (work / "lock").write_text("foreign session lock\\n", encoding="utf-8")\n        return result\n    return rename_original(source, destination, *args, **kwargs)\n\ndef unlink(path, *args, **kwargs):\n    if Path(path) == work / "lock" and fault == "unlock":\n        raise PermissionError("injected lock removal failure")\n    return unlink_original(path, *args, **kwargs)\n\nos.rename, os.unlink = rename, unlink\n')
         if fault == "archive-directory":
             _myspec_write(work / "aborted", "not a directory")
         failed = _myspec_recovery_cli(*arguments, extra_env={
@@ -4748,22 +4785,7 @@ class TestMySpec:
     ) -> None:
         work = tmp_path / "consumer" / ".local" / "spec-work"
         injection = tmp_path / "initialization-fault"
-        _myspec_write(injection / "sitecustomize.py", '''import os
-    from pathlib import Path
-    original = os.replace
-    work = Path(os.environ["RECOVERY_FAULT_WORK"])
-
-    def replace(source, destination, *args, **kwargs):
-        if Path(destination) == work / "current" / "state.json":
-            (work / "current" / "diagnostics.txt").write_text("preserved initialization material", encoding="utf-8")
-            if os.environ["RECOVERY_REPLACE_LOCK"] == "1":
-                (work / "lock").unlink()
-                (work / "lock").write_text("other session lock\\n", encoding="utf-8")
-            raise OSError("injected initialization state write failure")
-        return original(source, destination, *args, **kwargs)
-
-    os.replace = replace
-    ''')
+        _myspec_write(injection / "sitecustomize.py", 'import os\nfrom pathlib import Path\noriginal = os.replace\nwork = Path(os.environ["RECOVERY_FAULT_WORK"])\n\ndef replace(source, destination, *args, **kwargs):\n    if Path(destination) == work / "current" / "state.json":\n        (work / "current" / "diagnostics.txt").write_text("preserved initialization material", encoding="utf-8")\n        if os.environ["RECOVERY_REPLACE_LOCK"] == "1":\n            (work / "lock").unlink()\n            (work / "lock").write_text("other session lock\\n", encoding="utf-8")\n        raise OSError("injected initialization state write failure")\n    return original(source, destination, *args, **kwargs)\n\nos.replace = replace\n')
         failed = _myspec_recovery_cli("state-init", work, "add", "specs", "input", extra_env={
             "PYTHONPATH": str(injection), "RECOVERY_FAULT_WORK": str(work), "RECOVERY_REPLACE_LOCK": str(int(replace_lock)),
         })
@@ -5036,6 +5058,7 @@ class TestMySpec:
         _myspec_write(codex_state, '{"marketplaces": [], "installed": [], "available": []}')
         initialized = subprocess.run([str(executable), 'init', '--all'], env=env, text=True, capture_output=True, check=False)
         assert initialized.returncode == 0, initialized.stderr
+        assert (codex_home / 'config.toml').is_file()
         assert set(json.loads(initialized.stdout)) == {'claude', 'codex'}
         diagnosed = subprocess.run([str(executable), 'doctor', '--all'], env=env, text=True, capture_output=True, check=False)
         assert diagnosed.returncode == 0, diagnosed.stderr
@@ -5055,3 +5078,150 @@ class TestMySpec:
         assert result['doctor']['codex']['enabled'] is False
         assert 'pendingOperation' not in json.loads(state_path.read_text())
         assert not pi_log.exists()
+
+    def test_packed_myspec_reconfirms_when_in_process_identity_changes_preview(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        specs = tmp_path / 'specs'
+        delta = tmp_path / 'delta'
+        preview = tmp_path / 'preview'
+        _myspec_write(specs / 'accounts' / 'spec.md', main_spec('Accounts', requirement('登录', '允许登录')))
+        _myspec_write(delta / 'accounts' / 'spec.md', '## MODIFIED Requirements\n\n### Requirement: 登录\n\n系统 MUST 允许密码登录。\n\n#### Scenario: 密码正确\n\n- **WHEN** 用户提交正确密码\n- **THEN** 系统创建会话\n')
+        work = _myspec_memory_migration_ready_state(_MYSPEC_SPEC_OPS, tmp_path / 'state')
+        previewed = _myspec_memory_migration_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, preview, work)
+        assert previewed.returncode == 0, previewed.stderr
+        before = (specs / 'accounts' / 'spec.md').read_bytes()
+        spec_ops = _myspec_load_in_process_spec_ops(_MYSPEC_SPEC_OPS)
+        original_write_preview = spec_ops._write_preview
+
+        def changed_write_preview(merged, output_root, source_root):
+            original_write_preview(merged, output_root, source_root)
+            path = output_root / 'accounts' / 'spec.md'
+            _myspec_write(path, path.read_text(encoding='utf-8') + '\nimplementation-only change')
+        monkeypatch.setattr(spec_ops, 'implementation_identity', lambda: 'changed-implementation')
+        monkeypatch.setattr(spec_ops, '_write_preview', changed_write_preview)
+        applied = _myspec_memory_migration_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, specs, work)
+        assert applied.returncode != 0
+        assert 'preview_changed_requires_confirmation' in applied.stderr
+        assert (specs / 'accounts' / 'spec.md').read_bytes() == before
+
+
+    def test_packed_myspec_preserves_modified_requirement_order(self, tmp_path: Path) -> None:
+        executable = _MYSPEC_SPEC_OPS
+        titles = ('首部', '中部', '尾部')
+
+        def preview_delta(root: Path, specs: Path, delta: Path) -> tuple[Path, Path]:
+            preview = root / 'preview'
+            work = root / 'work'
+            conflicts = root / 'conflicts.json'
+            _myspec_write(conflicts, '[]')
+            for result in (_myspec_run_in_process(executable, 'state-init', work, 'add', 'specs-fingerprint', 'input-fingerprint'), _myspec_run_in_process(executable, 'state-set-conflicts', work, conflicts, 'specs-fingerprint', 'input-fingerprint'), _myspec_run_in_process(executable, 'validate-delta', delta, specs), _myspec_run_in_process(executable, 'apply-delta', specs, delta, preview, work, 'specs-fingerprint', 'input-fingerprint')):
+                assert result.returncode == 0, result.stderr
+            return (preview, work)
+        for target in titles:
+            root = tmp_path / target
+            specs = root / 'specs'
+            delta = root / 'delta'
+            _myspec_write(specs / 'accounts' / 'spec.md', main_spec('Accounts', *(requirement(title, f'保留{title}') for title in titles)))
+            _myspec_write(delta / 'accounts' / 'spec.md', f'## MODIFIED Requirements\n\n### Requirement: {target}\n\n系统 MUST 更新{target}。\n\n#### Scenario: 修改{target}\n\n- **WHEN** 用户修改{target}\n- **THEN** 系统保留需求顺序\n')
+            preview, work = preview_delta(root, specs, delta)
+            preview_text = (preview / 'accounts' / 'spec.md').read_text(encoding='utf-8')
+            assert [line.removeprefix('### Requirement: ') for line in preview_text.splitlines() if line.startswith('### Requirement: ')] == list(titles)
+            assert f'系统 MUST 更新{target}。' in preview_text
+            assert f'系统 MUST 保留{target}。' not in preview_text
+            diff = _myspec_run_in_process(executable, 'diff', specs, preview)
+            assert diff.returncode == 0, diff.stderr
+            assert f'-### Requirement: {target}' not in diff.stdout
+            assert f'+### Requirement: {target}' not in diff.stdout
+            applied = _myspec_run_in_process(executable, 'apply-delta', specs, delta, specs, work, 'specs-fingerprint', 'input-fingerprint')
+            assert applied.returncode == 0, applied.stderr
+            assert (specs / 'accounts' / 'spec.md').read_bytes() == (preview / 'accounts' / 'spec.md').read_bytes()
+            before_repeat = (specs / 'accounts' / 'spec.md').read_bytes()
+            repeated_preview, repeated_work = preview_delta(root / 'repeat', specs, delta)
+            repeated = _myspec_run_in_process(executable, 'apply-delta', specs, delta, specs, repeated_work, 'specs-fingerprint', 'input-fingerprint')
+            assert repeated.returncode == 0, repeated.stderr
+            assert (repeated_preview / 'accounts' / 'spec.md').read_bytes() == before_repeat
+            assert (specs / 'accounts' / 'spec.md').read_bytes() == before_repeat
+        root = tmp_path / 'cross-capability'
+        specs = root / 'specs'
+        delta = root / 'delta'
+        _myspec_write(specs / 'source' / 'spec.md', main_spec('Source', requirement('移动项', '留在来源')))
+        _myspec_write(specs / 'target' / 'spec.md', main_spec('Target', requirement('现有项', '留在目标')))
+        _myspec_write(delta / 'target' / 'spec.md', '## MODIFIED Requirements\n\n### Requirement: 移动项\n\n系统 MUST 移入目标能力。\n\n#### Scenario: 跨能力修改\n\n- **WHEN** 用户修改其他能力中的需求\n- **THEN** 系统把需求移入目标能力\n')
+        preview, work = preview_delta(root, specs, delta)
+        assert '### Requirement: 移动项' not in (preview / 'source' / 'spec.md').read_text(encoding='utf-8')
+        target_text = (preview / 'target' / 'spec.md').read_text(encoding='utf-8')
+        assert target_text.index('### Requirement: 现有项') < target_text.index('### Requirement: 移动项')
+        applied = _myspec_run_in_process(executable, 'apply-delta', specs, delta, specs, work, 'specs-fingerprint', 'input-fingerprint')
+        assert applied.returncode == 0, applied.stderr
+        assert (specs / 'source' / 'spec.md').read_bytes() == (preview / 'source' / 'spec.md').read_bytes()
+        assert (specs / 'target' / 'spec.md').read_bytes() == (preview / 'target' / 'spec.md').read_bytes()
+
+
+    def test_spec_ops_cli_validates_applies_all_delta_operations_and_diffs(self, tmp_path: Path) -> None:
+        specs = tmp_path / 'specs'
+        delta = tmp_path / 'delta'
+        preview = tmp_path / 'preview'
+        _myspec_write(specs / 'accounts' / 'spec.md', main_spec('Accounts', requirement('旧登录', '允许登录'), requirement('旧导出', '允许导出'), requirement('个人资料', '显示姓名')))
+        _myspec_write(delta / 'accounts' / 'spec.md', '# Accounts\n\n## Purpose\n\n描述 Accounts 的外部行为。\n\n## RENAMED Requirements\n\nFROM: 旧登录\nTO: 密码登录\n\n## REMOVED Requirements\n\n### Requirement: 旧导出\n\n## MODIFIED Requirements\n\n### Requirement: 个人资料\n\n系统 SHALL 显示姓名和头像。\n\n#### Scenario: 查看资料\n\n- **WHEN** 用户打开个人资料\n- **THEN** 系统显示姓名和头像\n\n## ADDED Requirements\n\n### Requirement: 注销\n\n系统 MUST 允许用户注销。\n\n#### Scenario: 主动注销\n\n- **WHEN** 用户选择注销\n- **THEN** 系统结束会话\n')
+        work = _myspec_memory_migration_ready_state(_MYSPEC_SPEC_OPS, tmp_path / 'state')
+        assert _myspec_run_in_process(_MYSPEC_SPEC_OPS, 'validate-main', specs).returncode == 0
+        assert _myspec_run_in_process(_MYSPEC_SPEC_OPS, 'validate-delta', delta, specs).returncode == 0
+        applied = _myspec_memory_migration_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, preview, work)
+        assert applied.returncode == 0, applied.stderr
+        assert _myspec_run_in_process(_MYSPEC_SPEC_OPS, 'validate-main', preview).returncode == 0
+        merged = (preview / 'accounts' / 'spec.md').read_text(encoding='utf-8')
+        assert '### Requirement: 密码登录' in merged
+        assert '### Requirement: 旧登录' not in merged
+        assert '### Requirement: 旧导出' not in merged
+        assert '系统 SHALL 显示姓名和头像。' in merged
+        assert '### Requirement: 注销' in merged
+        diff = _myspec_run_in_process(_MYSPEC_SPEC_OPS, 'diff', specs, preview)
+        assert diff.returncode == 0
+        assert '-### Requirement: 旧登录' in diff.stdout
+        assert '+### Requirement: 密码登录' in diff.stdout
+        assert '旧导出' in diff.stdout
+        assert '注销' in diff.stdout
+        first_apply = _myspec_memory_migration_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, specs, work)
+        assert first_apply.returncode == 0, first_apply.stderr
+        before_repeat = (specs / 'accounts' / 'spec.md').read_bytes()
+        repeated_validation = _myspec_run_in_process(_MYSPEC_SPEC_OPS, 'validate-delta', delta, specs)
+        assert repeated_validation.returncode == 0, repeated_validation.stderr
+        repeated_work = _myspec_memory_migration_ready_state(_MYSPEC_SPEC_OPS, tmp_path / 'repeated-state')
+        shutil.rmtree(preview)
+        repeated_preview = _myspec_memory_migration_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, preview, repeated_work)
+        assert repeated_preview.returncode == 0, repeated_preview.stderr
+        repeated_apply = _myspec_memory_migration_apply_ready(_MYSPEC_SPEC_OPS, specs, delta, specs, repeated_work)
+        assert repeated_apply.returncode == 0, repeated_apply.stderr
+        assert (specs / 'accounts' / 'spec.md').read_bytes() == before_repeat
+
+
+    def test_spec_add_deterministic_post_analysis_flow_previews_diffs_and_applies(self, tmp_path: Path) -> None:
+        cli = _MYSPEC_SPEC_OPS
+        specs = tmp_path / 'add' / 'specs'
+        delta = tmp_path / 'add' / 'delta'
+        preview = tmp_path / 'add' / 'preview'
+        _myspec_write(specs / 'accounts' / 'spec.md', main_spec('Accounts', requirement('登录', '允许用户登录')))
+        _myspec_write(delta / 'accounts' / 'spec.md', '## ADDED Requirements\n\n### Requirement: 注销\n\n系统 MUST 允许用户注销。\n\n#### Scenario: 主动注销\n\n- **WHEN** 用户选择注销\n- **THEN** 系统结束会话\n')
+        _myspec_memory_migration_confirmed_workflow(cli, specs, delta, preview, '+### Requirement: 注销')
+        assert '### Requirement: 注销' in (specs / 'accounts' / 'spec.md').read_text(encoding='utf-8')
+
+
+    def test_spec_review_deterministic_duplicate_flow_previews_diffs_and_applies(self, tmp_path: Path) -> None:
+        cli = _MYSPEC_SPEC_OPS
+        specs = tmp_path / 'review' / 'specs'
+        delta = tmp_path / 'review' / 'delta'
+        preview = tmp_path / 'review' / 'preview'
+        duplicate = requirement('登录', '允许用户登录')
+        _myspec_write(specs / 'accounts' / 'spec.md', main_spec('Accounts', duplicate, duplicate))
+        delta.mkdir(parents=True)
+        _myspec_memory_migration_confirmed_workflow(cli, specs, delta, preview, '-### Requirement: 登录')
+        assert (specs / 'accounts' / 'spec.md').read_text(encoding='utf-8').count('### Requirement: 登录') == 1
+
+
+    def test_spec_audit_deterministic_post_analysis_flow_previews_diffs_and_applies(self, tmp_path: Path) -> None:
+        cli = _MYSPEC_SPEC_OPS
+        specs = tmp_path / 'audit' / 'missing-specs'
+        delta = tmp_path / 'audit' / 'delta'
+        preview = tmp_path / 'audit' / 'preview'
+        _myspec_write(delta / 'notifications' / 'spec.md', '# Notifications\n\n## Purpose\n\n描述通知的外部行为。\n\n## ADDED Requirements\n\n### Requirement: 接收通知\n\n系统 MUST 向订阅用户发送通知。\n\n#### Scenario: 新消息\n\n- **WHEN** 新消息到达\n- **THEN** 系统发送通知\n')
+        _myspec_memory_migration_confirmed_workflow(cli, specs, delta, preview, '+### Requirement: 接收通知')
+        assert (specs / 'notifications' / 'spec.md').is_file()
