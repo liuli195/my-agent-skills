@@ -2725,17 +2725,23 @@ def _myspec_recovery_package(tmp_path_factory: pytest.TempPathFactory) -> tuple[
 
 
 @pytest.fixture
-def _myspec_recovery_cli(tmp_path: Path, _myspec_recovery_package: tuple[Path, Path]):
+def _myspec_recovery_environment(tmp_path: Path, _myspec_recovery_package: tuple[Path, Path]):
     executable, package = _myspec_recovery_package
     environment = tmp_path / "recovery-environment"
     environment.mkdir()
     env = _myspec_isolated_myspec_env(environment, npm_prefix_for(package))
     assert Path(shutil.which("myspec", path=env["PATH"])).resolve() == executable.resolve()
+    return package / "python" / "spec_ops.py", env, tmp_path
+
+
+@pytest.fixture
+def _myspec_recovery_cli(_myspec_recovery_environment):
+    _, env, cwd = _myspec_recovery_environment
 
     def bare(*args: object, extra_env: dict[str, str] | None = None):
         return subprocess.run(
             ["myspec", *(str(arg) for arg in args)],
-            cwd=tmp_path,
+            cwd=cwd,
             env={**env, **(extra_env or {})},
             text=True,
             capture_output=True,
@@ -2768,15 +2774,13 @@ def _myspec_recovery_git_project(tmp_path: Path, tmp_path_factory: pytest.TempPa
 
 
 
-@pytest.fixture
-def _myspec_recovery_session(_myspec_recovery_git_project: Path, _myspec_recovery_cli):
-    git_project = _myspec_recovery_git_project
+def _myspec_prepare_recovery_session(git_project: Path, run):
     work = git_project / ".local" / "spec-work"
     specs = git_project / "myspec" / "specs"
     delta = work / "current" / "delta"
     preview = work / "current" / "preview"
     _myspec_write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
-    initialized = _myspec_recovery_cli("state-init", work, "add", "specs", "input")
+    initialized = run("state-init", work, "add", "specs", "input")
     assert initialized.returncode == 0, initialized.stderr
     _myspec_write(delta / "accounts" / "spec.md", "## MODIFIED Requirements\n\n" + requirement("登录", "允许密码登录"))
     conflicts = git_project / "conflicts.json"
@@ -2785,12 +2789,27 @@ def _myspec_recovery_session(_myspec_recovery_git_project: Path, _myspec_recover
         "reason": "需要确认", "recommendation": "accept",
     }]))
     for result in (
-        _myspec_recovery_cli("state-set-conflicts", work, conflicts, "specs", "input"),
-        _myspec_recovery_cli("state-decide", work, "login", "accept", "specs", "input"),
-        _myspec_recovery_cli("apply-delta", specs, delta, preview, work, "specs", "input"),
+        run("state-set-conflicts", work, conflicts, "specs", "input"),
+        run("state-decide", work, "login", "accept", "specs", "input"),
+        run("apply-delta", specs, delta, preview, work, "specs", "input"),
     ):
         assert result.returncode == 0, result.stderr
     return git_project, work, specs, delta, preview
+
+
+@pytest.fixture
+def _myspec_recovery_session(_myspec_recovery_git_project: Path, _myspec_recovery_environment):
+    script, env, cwd = _myspec_recovery_environment
+
+    def prepare(*args: object):
+        return _myspec_run_in_process(script, *args, env=env, cwd=cwd)
+
+    return _myspec_prepare_recovery_session(_myspec_recovery_git_project, prepare)
+
+
+@pytest.fixture
+def _myspec_recovery_public_session(_myspec_recovery_git_project: Path, _myspec_recovery_cli):
+    return _myspec_prepare_recovery_session(_myspec_recovery_git_project, _myspec_recovery_cli)
 
 
 
@@ -2831,8 +2850,9 @@ def _myspec_run_public_spec_cli(*args: object) -> subprocess.CompletedProcess[st
 
 
 def _myspec_run_in_process(script: Path, *args: object, env=None, cwd=None) -> subprocess.CompletedProcess[str]:
-    # Only the unknown-process-status case needs a controlled OS-status leaf.
-    # The installed command still runs its actual main and physical lock I/O.
+    # Run the real main and physical I/O serially within each test worker.
+    # Recovery setup uses the same installed package, environment and cwd as bare CLI actions.
+    # Process-status control remains limited to the unknown-process-status case.
     stdout, stderr = io.StringIO(), io.StringIO()
     previous_cwd = Path.cwd()
     previous_environment = os.environ.copy()
@@ -4537,9 +4557,9 @@ def test_candidate_inheritance(tmp_path):
 
 
     def test_myspec_recovery_aborts_legacy_preview_and_preserves_material(self,
-        _myspec_recovery_session, _myspec_recovery_cli,
+        _myspec_recovery_public_session, _myspec_recovery_cli,
     ) -> None:
-        target, work, specs, delta, preview = _myspec_recovery_session
+        target, work, specs, delta, preview = _myspec_recovery_public_session
         state_path = work / "current" / "state.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
         state.pop("sessionId", None)
@@ -4553,7 +4573,7 @@ def test_candidate_inheritance(tmp_path):
         assert "input_content_changed" in failed.stderr
         _myspec_write(work / "current" / "failure.txt", failed.stderr)
         original = {path.relative_to(work / "current"): path.read_bytes() for path in (work / "current").rglob("*") if path.is_file()}
-        arguments = _myspec_abort_arguments(_myspec_recovery_session, _myspec_recovery_cli)
+        arguments = _myspec_abort_arguments(_myspec_recovery_public_session, _myspec_recovery_cli)
         inspected = _myspec_recovery_cli("state-status", work, "specs", "input", "--abort-identity")
         assert inspected.returncode == 0, inspected.stderr
         identity = json.loads(inspected.stdout)["abortIdentity"]
@@ -4584,15 +4604,15 @@ def test_candidate_inheritance(tmp_path):
 
 
     def test_myspec_recovery_reimports_only_delta_and_restarts_confirmation(self,
-        _myspec_recovery_session, _myspec_recovery_cli,
+        _myspec_recovery_public_session, _myspec_recovery_cli,
     ) -> None:
-        target, work, specs, delta, preview = _myspec_recovery_session
+        target, work, specs, delta, preview = _myspec_recovery_public_session
         old_state = json.loads((work / "current" / "state.json").read_text(encoding="utf-8"))
         assert old_state["sessionId"]
         old_delta = (delta / "accounts" / "spec.md").read_bytes()
         original_specs = (specs / "accounts" / "spec.md").read_bytes()
         started = time.perf_counter()
-        aborted = _myspec_recovery_cli(*_myspec_abort_arguments(_myspec_recovery_session, _myspec_recovery_cli))
+        aborted = _myspec_recovery_cli(*_myspec_abort_arguments(_myspec_recovery_public_session, _myspec_recovery_cli))
         assert aborted.returncode == 0, aborted.stderr
         archive_seconds = time.perf_counter() - started
         archive = Path(json.loads(aborted.stdout)["archive"])
@@ -4686,7 +4706,9 @@ def test_candidate_inheritance(tmp_path):
         ("legacy-pending-replacement", "application_recovery_required"),
         ("legacy-unknown-status", "invalid_state_document"),
         ("unknown-phase", "application_recovery_required"),
-        ("redirected-draft", "unsafe_recovery_entry"),
+        pytest.param("redirected-draft", "unsafe_recovery_entry", marks=pytest.mark.skipif(
+            os.name == "nt", reason="symlink creation needs platform permission",
+        )),
     ])
     def test_myspec_recovery_rejects_insufficient_or_foreign_evidence(self,
         tmp_path: Path, _myspec_recovery_session, _myspec_recovery_cli, evidence: str, error: str,
@@ -4713,8 +4735,6 @@ def test_candidate_inheritance(tmp_path):
         elif evidence == "unknown-phase":
             state["applicationPhase"] = "UNRECOGNIZED"
         elif evidence == "redirected-draft":
-            if os.name == "nt":
-                pytest.skip("symlink creation needs platform permission")
             external = tmp_path / "external.txt"
             _myspec_write(external, "must not be touched")
             (work / "current" / "redirected").symlink_to(external)
@@ -4834,7 +4854,9 @@ def test_candidate_inheritance(tmp_path):
         ("foreign", "foreign_abort_archive"),
         ("changed-state", "invalid_abort_archive"),
         ("traversal-delta", "invalid_abort_archive"),
-        ("redirected-delta", "unsafe_recovery_entry"),
+        pytest.param("redirected-delta", "unsafe_recovery_entry", marks=pytest.mark.skipif(
+            os.name == "nt", reason="symlink creation needs platform permission",
+        )),
     ])
     def test_myspec_recovery_rejects_foreign_or_unsafe_archive_import(self,
         tmp_path: Path, _myspec_recovery_session, _myspec_recovery_cli, evidence: str, error: str,
@@ -4862,8 +4884,6 @@ def test_candidate_inheritance(tmp_path):
             _myspec_write(receipt_path, json.dumps(receipt))
             _myspec_write(archive / "outside-delta" / "unrelated.txt", "must not be imported")
         elif evidence == "redirected-delta":
-            if os.name == "nt":
-                pytest.skip("symlink creation needs platform permission")
             external = tmp_path / "external.txt"
             _myspec_write(external, "must not be imported")
             (archive / "current" / "delta" / "redirected").symlink_to(external)
