@@ -313,6 +313,62 @@ def _git_blob(source_root: Path, spec: str) -> bytes | None:
     return result.stdout if result.returncode == 0 else None
 
 
+def _git_blobs(source_root: Path, specs: list[str]) -> list[bytes] | None:
+    # Default --batch preserves spaces, but old Git strips a trailing CR; use show for CR/LF paths.
+    batch_specs = [spec for spec in specs if "\n" not in spec and "\r" not in spec]
+    output = b""
+    if batch_specs:
+        request = "\n".join(batch_specs) + "\n"
+        try:
+            command = _command("git", "cat-file", "--batch")
+            result = subprocess.run(
+                command,
+                input=request.encode("utf-8") if os.name == "nt" else os.fsencode(request),
+                cwd=source_root,
+                check=False,
+                capture_output=True,
+                shell=isinstance(command, str),
+            )
+        except (FileNotFoundError, ManagementError):
+            return None
+        if result.returncode != 0:
+            return None
+        output = result.stdout
+
+    contents: list[bytes] = []
+    offset = 0
+    for spec in specs:
+        if "\n" in spec or "\r" in spec:
+            content = _git_blob(source_root, spec)
+        else:
+            end = output.find(b"\n", offset)
+            if end < 0:
+                return None
+            header = output[offset:end].split(b" ")
+            if (
+                len(header) != 3
+                or re.fullmatch(rb"[0-9a-f]{40}|[0-9a-f]{64}", header[0]) is None
+                or header[1] not in {b"blob", b"tree", b"commit", b"tag"}
+                or not header[2].isdigit()
+            ):
+                return None
+            try:
+                size = int(header[2])
+            except ValueError:
+                return None
+            offset = end + 1
+            end = offset + size
+            # Blob contents are binary, so only the declared byte count delimits them.
+            if output[end:end + 1] != b"\n":
+                return None
+            content = output[offset:end] if header[1] == b"blob" else _git_blob(source_root, spec)
+            offset = end + 1
+        if content is None:
+            return None
+        contents.append(content)
+    return contents if offset == len(output) else None
+
+
 def _implementation_source_commit(package_root: Path, identity: str) -> str:
     source_root = package_root.parents[1]
     paths = _implementation_source_paths(package_root)
@@ -329,18 +385,13 @@ def _implementation_source_commit(package_root: Path, identity: str) -> str:
     for commit in history.stdout.splitlines():
         if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
             continue
-        digest_files: list[tuple[str, bytes]] = []
-        available = True
-        for relative, _content in current_files:
-            path = _implementation_source_path(package_prefix, relative)
-            content = _git_blob(source_root, f"{commit}:{path}")
-            if content is None:
-                available = False
-                break
-            digest_files.append((relative, content))
+        contents = _git_blobs(source_root, [
+            f"{commit}:{_implementation_source_path(package_prefix, relative)}"
+            for relative, _content in current_files
+        ])
         if (
-            available
-            and _implementation_identity_for_files(digest_files) == identity
+            contents is not None
+            and _implementation_identity_for_files(list(zip((relative for relative, _content in current_files), contents))) == identity
             and _source_commit_is_published(source_root, commit)
         ):
             return commit

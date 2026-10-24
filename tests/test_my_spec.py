@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -1471,3 +1472,147 @@ def test_packed_myspec_bare_doctor_does_not_require_codex_home(management_docume
     assert not {"pi", "claude", "codex"}.intersection(json.loads(diagnosed.stdout))
     assert runtime.stub.calls == []
     assert runtime.writes == []
+
+
+@pytest.fixture
+def lifecycle_management(monkeypatch):
+    module = _load_in_process_spec_ops(SPEC_OPS)
+    management = sys.modules[module.run_management.__module__]
+    monkeypatch.setattr(management.shutil, "which", lambda command: command)
+    return management
+
+
+def _git_batch_object(content, kind=b"blob"):
+    return b"a" * 40 + b" " + kind + b" " + str(len(content)).encode() + b"\n" + content + b"\n"
+
+
+def test_lifecycle_git_batch_preserves_binary_bytes_and_whole_spaced_paths(lifecycle_management, monkeypatch):
+    management = lifecycle_management
+    root = REPO_ROOT / "__identity_source__"
+    specs = ["a" * 40 + ":" + path for path in ("a file", "tab\tfile", "空文件")]
+    contents = [b"text\r\nnext\n", b"\x00\xff\r\n", b""]
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, b"".join(_git_batch_object(content) for content in contents), b"")
+
+    monkeypatch.setattr(management.subprocess, "run", run)
+    assert management._git_blobs(root, specs) == contents
+    request = "\n".join(specs) + "\n"
+    assert calls == [(["git", "cat-file", "--batch"], {
+        "input": request.encode("utf-8") if os.name == "nt" else os.fsencode(request),
+        "cwd": root, "check": False, "capture_output": True, "shell": False,
+    })]
+
+
+def test_lifecycle_git_batch_uses_utf8_on_windows_even_with_legacy_filesystem_encoding(lifecycle_management, monkeypatch):
+    management = lifecycle_management
+    monkeypatch.setattr(management, "os", SimpleNamespace(
+        name="nt", fsencode=lambda _value: pytest.fail("Windows Git input must not use the legacy filesystem encoding"),
+    ))
+
+    def run(command, **kwargs):
+        assert command == ["git", "cat-file", "--batch"]
+        assert kwargs["input"] == b"a" * 40 + b":\xe7\xa9\xba\xe6\x96\x87\xe4\xbb\xb6\n"
+        return subprocess.CompletedProcess(command, 0, _git_batch_object(b"content"), b"")
+
+    monkeypatch.setattr(management.subprocess, "run", run)
+    assert management._git_blobs(REPO_ROOT, ["a" * 40 + ":空文件"]) == [b"content"]
+
+
+@pytest.mark.parametrize("output,code", [
+    (b"", 0),
+    (b"ref:path missing\n", 0),
+    (b"ref:path ambiguous\n", 0),
+    (b"invalid blob 1\nx\n", 0),
+    (b"a" * 40 + b" blob invalid\n", 0),
+    (b"a" * 40 + b" blob 4\nabc", 0),
+    (_git_batch_object(b"abc")[:-1], 0),
+    (_git_batch_object(b"abc")[:-1] + b"x", 0),
+    (_git_batch_object(b"abc") + b"unexpected\n", 0),
+    (_git_batch_object(b"abc"), 1),
+    (None, 0),
+])
+def test_lifecycle_git_batch_never_returns_a_partial_closure(lifecycle_management, monkeypatch, output, code):
+    management = lifecycle_management
+
+    def run(command, **kwargs):
+        if output is None:
+            raise FileNotFoundError("git")
+        return subprocess.CompletedProcess(command, code, _git_batch_object(b"first") + output, b"failed")
+
+    monkeypatch.setattr(management.subprocess, "run", run)
+    monkeypatch.setattr(management, "_git_blob", lambda *_args: pytest.fail("failed batches must not fall back or partially succeed"))
+    assert management._git_blobs(REPO_ROOT, ["a:first", "a:second"]) is None
+
+
+@pytest.mark.parametrize("special_path", ["line\nbreak", "trailing\r"])
+@pytest.mark.parametrize("failed_path", [None, "special", "tree"])
+def test_lifecycle_git_batch_keeps_git_show_for_cr_lf_and_non_blob_paths(lifecycle_management, monkeypatch, special_path, failed_path):
+    management = lifecycle_management
+    paths = ["a file", special_path, "tree"]
+    specs = ["a" * 40 + ":" + path for path in paths]
+    calls = []
+    fallback = {specs[1]: b"newline\x00\xff", specs[2]: b"tree listing\r\n"}
+
+    def run(command, **kwargs):
+        calls.append(command)
+        if command[1:] == ["cat-file", "--batch"]:
+            assert kwargs["input"] == os.fsencode(specs[0] + "\n" + specs[2] + "\n")
+            return subprocess.CompletedProcess(command, 0, _git_batch_object(b"normal") + _git_batch_object(b"raw tree", b"tree"), b"")
+        assert command[1] == "show" and command[2] in fallback
+        assert "input" not in kwargs
+        failed = (failed_path == "special" and command[2] == specs[1]) or (failed_path == "tree" and command[2] == specs[2])
+        return subprocess.CompletedProcess(command, int(failed), fallback[command[2]], b"")
+
+    monkeypatch.setattr(management.subprocess, "run", run)
+    result = management._git_blobs(REPO_ROOT, specs)
+    assert result == ([b"normal", fallback[specs[1]], fallback[specs[2]]] if failed_path is None else None)
+    expected = [["git", "cat-file", "--batch"], ["git", "show", specs[1]]]
+    if failed_path != "special":
+        expected.append(["git", "show", specs[2]])
+    assert calls == expected
+    if failed_path is None:
+        calls.clear()
+        assert management._git_blobs(REPO_ROOT, [specs[1]]) == [fallback[specs[1]]]
+        assert calls == [["git", "show", specs[1]]]
+
+
+def test_lifecycle_source_commit_batches_complete_candidates_in_history_order(lifecycle_management, monkeypatch):
+    management = lifecycle_management
+    root = REPO_ROOT / "__identity_source__"
+    package = root / "plugins/my-spec"
+    files = [("package.json", b"{}\r\n"), ("python/management.py", b"\x00\xff"), ("tool-lifecycle/pack.py", b"pack\n")]
+    commits = [letter * 40 for letter in "abcde"]
+    paths = [management._implementation_source_path(Path("plugins/my-spec"), relative) for relative, _content in files]
+    commands = CommandStub(consume=True)
+    commands.add(("git", "remote", "get-url", "origin"), stdout="https://github.com/liuli195/my-agent-skills.git\n")
+    commands.add(("git", "log", "--format=%H", "--all", "--", *sorted(paths)), stdout="invalid\n" + "\n".join(commits) + "\n")
+    batches, published, dirty_paths = [], [], []
+
+    def run(command, **kwargs):
+        assert command == ["git", "cat-file", "--batch"] and kwargs["cwd"] == root
+        commit = kwargs["input"][:40].decode()
+        assert kwargs["input"] == os.fsencode("".join(f"{commit}:{path}\n" for path in paths))
+        batches.append(commit)
+        contents = [content for _relative, content in files]
+        if commit == commits[0]:
+            output = _git_batch_object(contents[0]) + b"missing:path missing\n"
+        else:
+            if commit == commits[1]:
+                contents[0] = b"different"
+            output = b"".join(_git_batch_object(content) for content in contents)
+        return subprocess.CompletedProcess(command, 0, output, b"")
+
+    monkeypatch.setattr(management, "_implementation_files", lambda path: files if path == package else pytest.fail("unexpected package"))
+    monkeypatch.setattr(management, "_git_paths_dirty", lambda source, closure: dirty_paths.append((source, closure)) or False)
+    monkeypatch.setattr(management, "_run", commands)
+    monkeypatch.setattr(management, "_source_commit_is_published", lambda source, commit: published.append((source, commit)) or commit == commits[3])
+    monkeypatch.setattr(management.subprocess, "run", run)
+    identity = management._implementation_identity_for_files(files)
+    assert management._implementation_source_commit(package, identity) == commits[3]
+    assert batches == commits[:4]
+    assert published == [(root, commits[2]), (root, commits[3])]
+    assert dirty_paths == [(root, sorted(paths))]
+    assert commands.responses == []
