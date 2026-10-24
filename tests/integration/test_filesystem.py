@@ -17,15 +17,142 @@ from tests.test_build_and_verify_plugin import (
     load_build_and_verify_runner_module, load_build_and_verify_module,
     read_json, write_json, git, command_that_logs,
     run_build_and_verify, run_build_and_verify_subprocess,
-    BUILD_AND_VERIFY_SCRIPT, REPO_ROOT,
+    BUILD_AND_VERIFY_SCRIPT, REPO_ROOT, init_wizard_issue,
 )
 from tests.test_setup_worktree_script import normalize_powershell_output
 
 SCRIPT = REPO_ROOT / "scripts" / "setup-worktree.ps1"
 
 
+def init_wizard_can_create_directory(directory: Path, boundary: Path) -> bool:
+    created: list[Path] = []
+    current = directory
+    while not current.exists() and current != boundary and current != current.parent:
+        created.append(current)
+        current = current.parent
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    finally:
+        for path in created:
+            with contextlib.suppress(OSError):
+                path.rmdir()
+    return True
+
+
+def init_wizard_can_write_directory(directory: Path) -> bool:
+    probe = directory / ".init-write-check"
+    try:
+        probe.write_text("ok\n", encoding="utf-8")
+    except OSError:
+        return False
+    finally:
+        with contextlib.suppress(OSError):
+            probe.unlink()
+    return True
+
+
+def init_wizard_environment_issues(
+    project: Path,
+    *,
+    overwrite: bool,
+    backup_path: Path | None,
+) -> list[dict[str, str]]:
+    issues: list[dict[str, str]] = []
+    build_dir = project / ".build-and-verify"
+
+    if not project.exists():
+        issues.append(
+            init_wizard_issue(
+                f"目标仓库路径不存在：`{project}`",
+                "初始化写入会创建缺失目录；请确认目标路径是否正确。",
+                "确认目标仓库路径；如果需要准备环境，可以让 agent（代理）在授权后协助处理。",
+            )
+        )
+    elif not project.is_dir():
+        issues.append(
+            init_wizard_issue(
+                f"目标仓库路径不是目录：`{project}`",
+                "无法在该路径下写入 .build-and-verify（配置目录）。",
+                "选择一个目录作为目标仓库路径，或在授权后让 agent（代理）协助处理。",
+            )
+        )
+    elif build_dir.exists() and not build_dir.is_dir():
+        issues.append(
+            init_wizard_issue(
+                f"配置目录路径不是目录：`{build_dir}`",
+                "无法写入 .build-and-verify/config.json（配置文件）。",
+                "移动或删除同名文件；如果需要处理本地文件，可以让 agent（代理）在授权后协助处理。",
+            )
+        )
+    elif build_dir.exists() and not init_wizard_can_write_directory(build_dir):
+        issues.append(
+            init_wizard_issue(
+                f"配置目录不可写入：`{build_dir}`",
+                "无法可靠写入 .build-and-verify/config.json（配置文件）。",
+                "修复目录权限；如果需要准备环境，可以让 agent（代理）在授权后协助处理。",
+            )
+        )
+    elif not build_dir.exists() and not init_wizard_can_create_directory(build_dir, project):
+        issues.append(
+            init_wizard_issue(
+                f"配置目录不可创建：`{build_dir}`",
+                "无法创建 .build-and-verify（配置目录）。",
+                "修复目标仓库目录权限；如果需要准备环境，可以让 agent（代理）在授权后协助处理。",
+            )
+        )
+
+    if overwrite:
+        candidate = (
+            project / ".build-and-verify" / "backups"
+            if backup_path is None
+            else (backup_path if backup_path.is_absolute() else project / backup_path).parent
+        )
+        backup_inside_project = True
+        try:
+            candidate.resolve().relative_to(project.resolve())
+        except ValueError:
+            backup_inside_project = False
+            issues.append(
+                init_wizard_issue(
+                    f"备份目录不在目标仓库内：`{candidate}`",
+                    "覆盖已有配置时可能把备份写到仓库外部。",
+                    "选择目标仓库内的备份目录，或使用默认 backups（备份）目录。",
+                )
+            )
+        if backup_inside_project and candidate.exists() and not candidate.is_dir():
+            issues.append(
+                init_wizard_issue(
+                    f"备份目录路径不是目录：`{candidate}`",
+                    "覆盖已有配置时无法创建备份文件。",
+                    "移动或删除同名文件；如果需要处理本地文件，可以让 agent（代理）在授权后协助处理。",
+                )
+            )
+        elif backup_inside_project and project.exists() and project.is_dir():
+            if candidate.exists() and not init_wizard_can_write_directory(candidate):
+                issues.append(
+                    init_wizard_issue(
+                        f"备份目录不可写入：`{candidate}`",
+                        "覆盖已有配置时无法可靠创建备份文件。",
+                        "修复备份目录权限，或选择其他仓库内备份目录。",
+                    )
+                )
+            elif not candidate.exists() and not init_wizard_can_create_directory(candidate, project):
+                issues.append(
+                    init_wizard_issue(
+                        f"备份目录不可创建：`{candidate}`",
+                        "覆盖已有配置时无法创建备份目录。",
+                        "修复目标仓库目录权限，或使用其他仓库内备份目录。",
+                    )
+                )
+
+    return issues
+
+
+
 class TestWorkspace:
-    def test_build_and_verify_performance_report_replaces_atomically(self, 
+    def test_build_and_verify_performance_report_replaces_atomically(self,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         project = tmp_path / "project"
@@ -57,7 +184,7 @@ class TestWorkspace:
         assert (".performance-report.json.tmp", "performance-report.json") in replacements
 
 
-    def test_build_and_verify_cache_store_writes_temp_file_before_replace(self, 
+    def test_build_and_verify_cache_store_writes_temp_file_before_replace(self,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         module = load_build_and_verify_module()
@@ -79,7 +206,7 @@ class TestWorkspace:
         assert read_json(cache_dir / "cache-key.json") == {"status": "passed", "id": "cache-check"}
 
 
-    def test_build_and_verify_non_git_project_uses_filesystem_scan(self, 
+    def test_build_and_verify_non_git_project_uses_filesystem_scan(self,
         tmp_path: Path,
     ) -> None:
         project = tmp_path / "project"
@@ -123,7 +250,7 @@ class TestWorkspace:
         ]
 
 
-    def test_build_and_verify_preparation_reuses_inputs_without_changing_cache_keys(self, 
+    def test_build_and_verify_preparation_reuses_inputs_without_changing_cache_keys(self,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         project = tmp_path / "project"
@@ -184,7 +311,7 @@ class TestWorkspace:
         assert git_queries == ["src", "."]
 
 
-    def test_build_and_verify_preparation_snapshot_is_not_reused_for_execution_or_next_call(self, 
+    def test_build_and_verify_preparation_snapshot_is_not_reused_for_execution_or_next_call(self,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         project = tmp_path / "project"
@@ -224,7 +351,7 @@ class TestWorkspace:
         assert commands.calls == [["modify"], ["target"], ["target"]]
 
 
-    def test_build_and_verify_preparation_does_not_memoize_read_errors(self, 
+    def test_build_and_verify_preparation_does_not_memoize_read_errors(self,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         project = tmp_path / "project"
@@ -260,7 +387,7 @@ class TestWorkspace:
 
 
     @pytest.mark.parametrize("execution_context", ["cloud", "local"])
-    def test_build_and_verify_runner_cache_misses_when_input_is_deleted(self, 
+    def test_build_and_verify_runner_cache_misses_when_input_is_deleted(self,
         tmp_path: Path, execution_context: str,
     ) -> None:
         project = tmp_path / "project"
@@ -301,7 +428,7 @@ class TestWorkspace:
 
 
     @pytest.mark.parametrize("execution_context", ["cloud", "local"])
-    def test_build_and_verify_runner_glob_inputs_track_visible_matching_files(self, 
+    def test_build_and_verify_runner_glob_inputs_track_visible_matching_files(self,
         tmp_path: Path, execution_context: str,
     ) -> None:
         project = tmp_path / "project"
@@ -387,7 +514,7 @@ class TestWorkspace:
 
 
     @pytest.mark.parametrize("execution_context", ["cloud", "local"])
-    def test_build_and_verify_runner_glob_inputs_ignore_ignored_files_and_normalize_separators(self, 
+    def test_build_and_verify_runner_glob_inputs_ignore_ignored_files_and_normalize_separators(self,
         tmp_path: Path, execution_context: str,
     ) -> None:
         project = tmp_path / "project"
@@ -436,7 +563,7 @@ class TestWorkspace:
         ]
 
 
-    def test_build_and_verify_runner_default_cache_key_tracks_glob_path_contents(self, 
+    def test_build_and_verify_runner_default_cache_key_tracks_glob_path_contents(self,
         tmp_path: Path,
     ) -> None:
         project = tmp_path / "project"
@@ -475,7 +602,7 @@ class TestWorkspace:
         ]
 
 
-    def test_build_and_verify_pathless_check_skips_clean_git_worktree(self, 
+    def test_build_and_verify_pathless_check_skips_clean_git_worktree(self,
         tmp_path: Path,
     ) -> None:
         project = tmp_path / "project"
@@ -505,7 +632,7 @@ class TestWorkspace:
         assert not (project / "run.log").exists()
 
 
-    def test_build_and_verify_runner_default_check_cache_key_tracks_dirty_file_contents(self, 
+    def test_build_and_verify_runner_default_check_cache_key_tracks_dirty_file_contents(self,
         tmp_path: Path,
     ) -> None:
         project = tmp_path / "project"
@@ -543,7 +670,7 @@ class TestWorkspace:
         ]
 
 
-    def test_build_and_verify_runner_ignores_nonmatching_external_glob_links(self, 
+    def test_build_and_verify_runner_ignores_nonmatching_external_glob_links(self,
         tmp_path: Path,
     ) -> None:
         project = tmp_path / "project"
@@ -576,7 +703,7 @@ class TestWorkspace:
 
 
     @pytest.mark.parametrize("execution_context", ["cloud", "local"])
-    def test_build_and_verify_runner_rejects_glob_match_outside_project(self, 
+    def test_build_and_verify_runner_rejects_glob_match_outside_project(self,
         tmp_path: Path, execution_context: str,
     ) -> None:
         project = tmp_path / "project"
@@ -615,7 +742,7 @@ class TestWorkspace:
             Path("src/__pycache__/noise.pyc"),
         ],
     )
-    def test_build_and_verify_runner_directory_hash_ignores_generated_paths(self, 
+    def test_build_and_verify_runner_directory_hash_ignores_generated_paths(self,
         tmp_path: Path, excluded_relative: Path
     ) -> None:
         project = tmp_path / "project"
@@ -658,7 +785,7 @@ class TestWorkspace:
 
 
     @pytest.mark.parametrize("execution_context", ["cloud", "local"])
-    def test_build_and_verify_runner_directory_hash_uses_git_visible_files(self, 
+    def test_build_and_verify_runner_directory_hash_uses_git_visible_files(self,
         tmp_path: Path, execution_context: str,
     ) -> None:
         project = tmp_path / "project"
@@ -779,7 +906,7 @@ class TestWorkspace:
         ]
 
 
-    def test_build_and_verify_cli_baseline_uses_verification_worktree_and_explicit_range(self, 
+    def test_build_and_verify_cli_baseline_uses_verification_worktree_and_explicit_range(self,
         tmp_path: Path,
     ) -> None:
         project = tmp_path / "project"
@@ -926,7 +1053,7 @@ class TestWorkspace:
 
     @pytest.mark.skipif(os.name != "nt", reason="Windows junction behavior")
     @pytest.mark.parametrize("shell_name", ["powershell", "pwsh"])
-    def test_setup_worktree_script_links_shared_node_dependencies(self, 
+    def test_setup_worktree_script_links_shared_node_dependencies(self,
         tmp_path: Path, shell_name: str
     ) -> None:
         shell = shutil.which(shell_name)
@@ -1048,3 +1175,104 @@ class TestWorkspace:
         assert not py_marker.exists()
         assert venv_link.is_dir() and not venv_link.is_junction()
         assert "already exists and does not link" in normalize_powershell_output(existing)
+    def test_build_and_verify_init_template_environment_issues_report_unwritable_config_dir(self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / ".build-and-verify").mkdir()
+        original_write_text = Path.write_text
+
+        def deny_write_probe(path: Path, *args: Any, **kwargs: Any) -> int:
+            if path.name == ".init-write-check":
+                raise PermissionError("denied")
+            return original_write_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", deny_write_probe)
+
+        issues = init_wizard_environment_issues(
+            project,
+            overwrite=False,
+            backup_path=None,
+        )
+
+        assert any("配置目录不可写入" in issue["问题"] for issue in issues)
+        assert all(issue["是否阻止写入"] == "不阻止" for issue in issues)
+
+
+    @pytest.mark.parametrize(
+        ("scenario", "expected"),
+        [
+            ("project_is_file", "目标仓库路径不是目录"),
+            ("build_dir_is_file", "配置目录路径不是目录"),
+            ("backup_outside_repo", "备份目录不在目标仓库内"),
+            ("backup_dir_is_file", "备份目录路径不是目录"),
+            ("backup_dir_unwritable", "备份目录不可写入"),
+            ("backup_dir_cannot_create", "备份目录不可创建"),
+        ],
+    )
+    def test_build_and_verify_init_template_environment_issues_cover_edge_branches(self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        scenario: str,
+        expected: str,
+    ) -> None:
+        project = tmp_path / "project"
+        overwrite = False
+        backup_path = None
+
+        if scenario == "project_is_file":
+            project.write_text("not a directory\n", encoding="utf-8")
+        else:
+            project.mkdir()
+            build_dir = project / ".build-and-verify"
+            if scenario == "build_dir_is_file":
+                build_dir.write_text("not a directory\n", encoding="utf-8")
+            else:
+                build_dir.mkdir()
+            if scenario.startswith("backup_dir_"):
+                overwrite = True
+                backup_path = Path(".build-and-verify/backups/config.json")
+                backup_dir = project / ".build-and-verify" / "backups"
+                if scenario == "backup_dir_is_file":
+                    backup_dir.write_text("not a directory\n", encoding="utf-8")
+                elif scenario == "backup_dir_unwritable":
+                    backup_dir.mkdir()
+                    original_can_write = init_wizard_can_write_directory
+
+                    def fake_can_write(directory: Path) -> bool:
+                        if directory == backup_dir:
+                            return False
+                        return original_can_write(directory)
+
+                    monkeypatch.setattr(
+                        sys.modules[__name__],
+                        "init_wizard_can_write_directory",
+                        fake_can_write,
+                    )
+                elif scenario == "backup_dir_cannot_create":
+                    original_can_create = init_wizard_can_create_directory
+
+                    def fake_can_create(directory: Path, boundary: Path) -> bool:
+                        if directory == backup_dir:
+                            return False
+                        return original_can_create(directory, boundary)
+
+                    monkeypatch.setattr(
+                        sys.modules[__name__],
+                        "init_wizard_can_create_directory",
+                        fake_can_create,
+                    )
+            elif scenario == "backup_outside_repo":
+                overwrite = True
+                backup_path = tmp_path / "outside.json"
+
+        issues = init_wizard_environment_issues(
+            project,
+            overwrite=overwrite,
+            backup_path=backup_path,
+        )
+
+        assert any(expected in issue["问题"] for issue in issues)
+        assert all(issue["是否阻止写入"] == "不阻止" for issue in issues)

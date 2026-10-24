@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -12,10 +13,6 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from tests.test_build_and_verify_plugin import (
-    FakeRunnerModule, load_build_and_verify_module,
-)
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = REPO_ROOT / "plugins" / "build-and-verify"
 
@@ -23,7 +20,11 @@ PACKAGE_ROOT = REPO_ROOT / "plugins" / "build-and-verify"
 @pytest.fixture
 def memory_cli(monkeypatch):
     """Only configuration, cache, report I/O and the process/clock boundaries."""
-    module = load_build_and_verify_module()
+    spec = importlib.util.spec_from_file_location("ordinary_cli_entrypoint", PACKAGE_ROOT / "python/build_and_verify.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
     runner = module._runner()
     state = SimpleNamespace(config={}, cache={}, reports=[], clock=0.0,
         outcomes={}, calls=[], fail_report=False, fail_cache=False)
@@ -56,7 +57,15 @@ def memory_cli(monkeypatch):
     monkeypatch.setattr(module, "_runtime_metadata", lambda: {
         "runtime_version": "test-runtime", "implementation_identity": "test-implementation",
     })
-    monkeypatch.setattr(module, "_RUNNER_MODULE", FakeRunnerModule(runner, execute, ["code.py"]))
+    class ProcessBoundary:
+        def __init__(self):
+            self.runner = execute
+        def __getattr__(self, name):
+            return getattr(runner, name)
+        def run_verify(self, project, **kwargs):
+            return runner.run_verify(project, runner=self.runner, **kwargs)
+    monkeypatch.setattr(runner, "_changed_files", lambda project: ["code.py"])
+    monkeypatch.setattr(module, "_RUNNER_MODULE", ProcessBoundary())
     monkeypatch.setenv("GITHUB_ACTIONS", "false")
     monkeypatch.setenv("CI", "false")
     monkeypatch.delenv("BUILD_AND_VERIFY_EXECUTION_CONTEXT", raising=False)

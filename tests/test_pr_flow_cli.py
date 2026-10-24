@@ -37,12 +37,6 @@ BUILD_AND_VERIFY_VERSION = json.loads(
 _PR_FLOW_MODULE = None
 
 
-
-
-# The cache is content-keyed and intentionally left under the OS temp directory
-# between runs; stale locks and incomplete templates are recovered in-place.
-
-
 def load_pr_flow_module():
     global _PR_FLOW_MODULE
     if _PR_FLOW_MODULE is not None:
@@ -55,6 +49,74 @@ def load_pr_flow_module():
     spec.loader.exec_module(module)
     _PR_FLOW_MODULE = module
     return module
+
+
+def read_body_file(path: str) -> str:
+    return Path(path).read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def flow_root() -> Path:
+    # A path value only. No temporary-directory fixture or disk allocation.
+    return REPO_ROOT / "__pr_flow_memory__"
+
+
+@pytest.fixture(autouse=True)
+def pr_memory(monkeypatch, flow_root):
+    from tests.support.command_stubs import CommandStub, default_git_responses
+    from tests.support.pr_flow_invocation import fixed_text_file_io
+
+    module = load_pr_flow_module()
+    real_git = module.git
+    projects = [flow_root, flow_root / "project", flow_root / "controller", flow_root / "hotfix" / "project"]
+    files = {flow_root / name: None for name in (
+        "draft.yaml", "confirmed.yaml", "invalid.yaml", "config.yaml", "body.json", "body.md", "generated-body.md",
+        "project-confirmed-pr-flow.yaml",
+    )}
+    branch_names = ("feature/example", "feature/no-upstream", "feature/other", "feature/ready", "main", "controller")
+    for project in projects:
+        for relative in (
+            ".pr-flow/config.yaml", ".pr-flow/pr-template.md", ".pr-flow/.gitignore", ".pr-flow/toolchain.json",
+            ".pr-flow/last-status.json", ".github/workflows/pr-flow-toolchain.yml", ".github/workflows/codeql.yml",
+        ):
+            files[project / relative] = None
+        for branch in branch_names:
+            files[project / ".pr-flow/runs" / f"{hashlib.sha256(branch.encode('utf-8')).hexdigest()}.json"] = None
+        files[project / ".pr-flow/runs/hotfix-20260101T000000Z-bbbbbbbbbbbb.json"] = None
+    directories = {flow_root, flow_root / "hotfix", *(flow_root / name for name in ("merge", "squash", "rebase", "other", "base-worktree"))}
+    for path in files:
+        directories.update(parent for parent in path.parents if parent == flow_root or flow_root in parent.parents)
+    fixed_text_file_io(monkeypatch, root=flow_root, files=files, directories=directories)
+    monkeypatch.setattr(module, "operation_lock", lambda *_args: contextlib.nullcontext())
+    monkeypatch.setattr(module, "base_checkout_lock", lambda *_args: contextlib.nullcontext())
+    monkeypatch.setattr(module, "active_lock_details", lambda _project: None)
+    monkeypatch.setattr(module, "git", CommandStub(defaults=default_git_responses(), body_reader=read_body_file))
+    monkeypatch.setattr(module, "gh", CommandStub(body_reader=read_body_file))
+
+    def unexpected_process(command, **_kwargs):
+        raise AssertionError(f"unexpected_process: {command}")
+
+    monkeypatch.setattr(module.subprocess, "run", unexpected_process)
+    original_strftime = module.time.strftime
+    monkeypatch.setattr(module.time, "strftime", lambda pattern, *args: (
+        "20260101T000000Z" if pattern == "%Y%m%dT%H%M%SZ" else
+        "2026-01-01T00:00:00Z" if pattern == "%Y-%m-%dT%H:%M:%SZ" else original_strftime(pattern, *args)
+    ))
+
+    class BodyFile(io.StringIO):
+        name = str(flow_root / "generated-body.md")
+
+        def close(self):
+            if not self.closed:
+                files[Path(self.name)] = self.getvalue()
+            super().close()
+
+    def named_body_file(mode, *, encoding, suffix, delete):
+        assert (mode, encoding, suffix, delete) == ("w", "utf-8", ".md", False)
+        return BodyFile()
+
+    monkeypatch.setattr(module.tempfile, "NamedTemporaryFile", named_body_file)
+    return {"files": files, "git": real_git}
 
 
 @pytest.fixture(autouse=True)
@@ -99,12 +161,10 @@ def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) 
     )
 
 
-
-
 def test_command_stub_records_gh_calls() -> None:
     from tests.support.command_stubs import CommandStub
 
-    stub = CommandStub()
+    stub = CommandStub(body_reader=read_body_file)
     stub.add(["pr", "view"], stdout='{"number":1}\n', returncode=0)
 
     result = stub("gh", "pr", "view")
@@ -114,32 +174,32 @@ def test_command_stub_records_gh_calls() -> None:
     assert stub.calls == [("gh", "pr", "view")]
 
 
-def test_command_stub_keeps_default_git_reads_available_without_allowing_writes(tmp_path: Path) -> None:
+def test_command_stub_keeps_default_git_reads_available_without_allowing_writes(flow_root: Path) -> None:
     from tests.support.command_stubs import CommandStub, default_git_responses
 
-    stub = CommandStub(defaults=default_git_responses())
+    stub = CommandStub(body_reader=read_body_file, defaults=default_git_responses())
 
-    first = stub(tmp_path, "branch", "--show-current")
-    second = stub(tmp_path, "branch", "--show-current")
-    write = stub(tmp_path, "push", "origin", "feature/example")
+    first = stub(flow_root, "branch", "--show-current")
+    second = stub(flow_root, "branch", "--show-current")
+    write = stub(flow_root, "push", "origin", "feature/example")
 
     assert first.stdout == second.stdout == "feature/example\n"
     assert write.returncode == 1
     assert "unexpected_command" in write.stderr
 
 
-def test_command_stub_explicit_git_reads_override_defaults_in_sequence(tmp_path: Path) -> None:
+def test_command_stub_explicit_git_reads_override_defaults_in_sequence(flow_root: Path) -> None:
     from tests.support.command_stubs import CommandStub, default_git_responses
 
-    stub = CommandStub(defaults=default_git_responses(), consume=True)
+    stub = CommandStub(body_reader=read_body_file, defaults=default_git_responses(), consume=True)
     stub.add(["rev-parse", "HEAD"], stderr="query failed", returncode=1)
     stub.add(["rev-parse", "HEAD"], stdout="")
     stub.add(["rev-parse", "HEAD"], stdout="c" * 40 + "\n")
 
-    failed = stub(tmp_path, "rev-parse", "HEAD")
-    empty = stub(tmp_path, "rev-parse", "HEAD")
-    changed = stub(tmp_path, "rev-parse", "HEAD")
-    fallback = stub(tmp_path, "rev-parse", "HEAD")
+    failed = stub(flow_root, "rev-parse", "HEAD")
+    empty = stub(flow_root, "rev-parse", "HEAD")
+    changed = stub(flow_root, "rev-parse", "HEAD")
+    fallback = stub(flow_root, "rev-parse", "HEAD")
 
     assert (failed.returncode, failed.stderr) == (1, "query failed")
     assert empty.stdout == ""
@@ -147,10 +207,10 @@ def test_command_stub_explicit_git_reads_override_defaults_in_sequence(tmp_path:
     assert fallback.stdout == "b" * 40 + "\n"
 
 
-def test_command_stub_closes_body_file(monkeypatch, tmp_path: Path) -> None:
+def test_command_stub_closes_body_file(monkeypatch, flow_root: Path) -> None:
     from tests.support.command_stubs import CommandStub
 
-    body_file = tmp_path / "body.json"
+    body_file = flow_root / "body.json"
     body_file.write_text('{"ok":true}\n', encoding="utf-8")
 
     class TrackingFile:
@@ -182,8 +242,6 @@ def test_command_stub_closes_body_file(monkeypatch, tmp_path: Path) -> None:
     assert tracker.closed
 
 
-
-
 @pytest.mark.parametrize(
     ("args", "expected"),
     [
@@ -199,13 +257,13 @@ def test_pr_flow_cli_argparse_errors_cover_core_commands(args: list[str], expect
     assert expected in result.stderr
 
 
-def test_command_stub_accepts_project_argument_for_pr_flow_helpers(tmp_path: Path) -> None:
+def test_command_stub_accepts_project_argument_for_pr_flow_helpers(flow_root: Path) -> None:
     from tests.support.command_stubs import CommandStub
 
-    stub = CommandStub()
+    stub = CommandStub(body_reader=read_body_file)
     stub.add(["pr", "view"], stdout='{"number":1}\n', returncode=0)
 
-    result = stub(tmp_path, "pr", "view")
+    result = stub(flow_root, "pr", "view")
 
     assert result.returncode == 0
     assert result.stdout == '{"number":1}\n'
@@ -213,12 +271,12 @@ def test_command_stub_accepts_project_argument_for_pr_flow_helpers(tmp_path: Pat
     assert stub.calls == [("pr", "view")]
 
 
-def test_command_stub_can_consume_sequence_and_capture_body_file(tmp_path: Path) -> None:
+def test_command_stub_can_consume_sequence_and_capture_body_file(flow_root: Path) -> None:
     from tests.support.command_stubs import CommandStub
 
-    body_path = tmp_path / "body.md"
+    body_path = flow_root / "body.md"
     body_path.write_text("hello body\n", encoding="utf-8")
-    stub = CommandStub(consume=True)
+    stub = CommandStub(body_reader=read_body_file, consume=True)
     stub.add(["pr", "view"], stderr="not found\n", returncode=1)
     stub.add(["pr", "view"], stdout='{"number":1}\n')
     stub.add(["pr", "edit", "1", "--body-file", str(body_path)])
@@ -235,12 +293,12 @@ def test_command_stub_can_consume_sequence_and_capture_body_file(tmp_path: Path)
     ]
 
 
-def test_command_stub_placeholder_matches_body_file_path(tmp_path: Path) -> None:
+def test_command_stub_placeholder_matches_body_file_path(flow_root: Path) -> None:
     from tests.support.command_stubs import CommandStub
 
-    body_path = tmp_path / "body.md"
+    body_path = flow_root / "body.md"
     body_path.write_text("hello body\n", encoding="utf-8")
-    stub = CommandStub(consume=True)
+    stub = CommandStub(body_reader=read_body_file, consume=True)
     stub.add(["pr", "edit", "1", "--body-file", "__placeholder__"])
 
     result = stub("gh", "pr", "edit", "1", "--body-file", str(body_path))
@@ -252,40 +310,30 @@ def test_command_stub_placeholder_matches_body_file_path(tmp_path: Path) -> None
     ]
 
 
-def test_pr_flow_in_process_invocation_captures_output(tmp_path: Path) -> None:
+def test_pr_flow_in_process_invocation_captures_output(flow_root: Path) -> None:
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
-    draft = tmp_path / "confirmed.yaml"
+    draft = flow_root / "confirmed.yaml"
     draft.write_text(
         yaml.safe_dump(default_pr_flow_config_for_test(), allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
 
-    result = invoke_pr_flow(["init", "--project", str(tmp_path), "--config", str(draft)], module=load_pr_flow_module())
+    result = invoke_pr_flow(["init", "--project", str(flow_root), "--config", str(draft)], module=load_pr_flow_module())
 
     assert result.returncode == 0
     assert "status: initialized" in result.stdout
     assert result.stderr == ""
 
 
-
-
-
-
-
-
-
-
-
-
-def test_require_current_base_fetches_remote_and_rejects_stale_source(tmp_path: Path, monkeypatch) -> None:
+def test_require_current_base_fetches_remote_and_rejects_stale_source(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     snapshot_ref = remote_snapshot_ref(project)
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     git_stub.add(["fetch", "--no-write-fetch-head", "--refmap=", "origin", f"+refs/heads/main:{snapshot_ref}"])
     git_stub.add(["rev-parse", snapshot_ref], stdout="base-after\n")
     git_stub.add(["merge-base", "--is-ancestor", "base-after", "feature-head"], returncode=1)
@@ -310,7 +358,7 @@ def test_require_current_base_fetches_remote_and_rejects_stale_source(tmp_path: 
     ]
 
 
-def test_ruleset_retry_rejects_changed_base_before_reusing_gates(tmp_path: Path, monkeypatch) -> None:
+def test_ruleset_retry_rejects_changed_base_before_reusing_gates(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     original = json.loads(
         pr_view_json(
@@ -326,14 +374,14 @@ def test_ruleset_retry_rejects_changed_base_before_reusing_gates(tmp_path: Path,
     monkeypatch.setattr(module, "merge_pr", lambda *_args, **_kwargs: pytest.fail("must not merge"))
 
     with pytest.raises(module.PrFlowError) as error:
-        module.retry_merge_after_ruleset_block(tmp_path, {}, original, {})
+        module.retry_merge_after_ruleset_block(flow_root, {}, original, {})
 
     assert error.value.reason == "base_outdated"
     assert error.value.details["baseRefOid"] == "a" * 40
     assert error.value.details["currentBaseRefOid"] == "c" * 40
 
 
-def test_ruleset_retry_rechecks_commits_after_gates(tmp_path: Path, monkeypatch) -> None:
+def test_ruleset_retry_rechecks_commits_after_gates(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     original = json.loads(
         pr_view_json(
@@ -353,7 +401,7 @@ def test_ruleset_retry_rechecks_commits_after_gates(tmp_path: Path, monkeypatch)
     monkeypatch.setattr(module, "merge_pr", lambda *_args, **_kwargs: pytest.fail("must not merge"))
 
     with pytest.raises(module.PrFlowError) as error:
-        module.retry_merge_after_ruleset_block(tmp_path, module.default_config("main"), original, {})
+        module.retry_merge_after_ruleset_block(flow_root, module.default_config("main"), original, {})
 
     assert error.value.reason == "base_outdated"
 
@@ -365,11 +413,11 @@ def test_pr_view_fields_include_base_commit() -> None:
     ("payload", "reason"),
     [([], "checks_unavailable"), ({"bucket": "pass"}, "checks_unavailable")],
 )
-def test_required_checks_reject_empty_or_non_list(tmp_path: Path, monkeypatch, payload, reason: str) -> None:
+def test_required_checks_reject_empty_or_non_list(flow_root: Path, monkeypatch, payload, reason: str) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     gh_stub.add(
         ["pr", "checks", "12", "--required", "--json", "bucket,name,state,workflow,link"],
         stdout=json.dumps(payload),
@@ -377,16 +425,16 @@ def test_required_checks_reject_empty_or_non_list(tmp_path: Path, monkeypatch, p
     monkeypatch.setattr(module, "gh", gh_stub)
 
     with pytest.raises(module.PrFlowError) as error:
-        module.required_checks(tmp_path, 12)
+        module.required_checks(flow_root, 12)
 
     assert error.value.reason == reason
 
 
-def test_required_checks_use_required_flag_and_bucket_states(tmp_path: Path, monkeypatch) -> None:
+def test_required_checks_use_required_flag_and_bucket_states(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     payload = [{"bucket": "pending", "name": "ci", "state": "QUEUED"}]
     gh_stub.add(
         ["pr", "checks", "12", "--required", "--json", "bucket,name,state,workflow,link"],
@@ -394,17 +442,17 @@ def test_required_checks_use_required_flag_and_bucket_states(tmp_path: Path, mon
     )
     monkeypatch.setattr(module, "gh", gh_stub)
 
-    checks = module.required_checks(tmp_path, 12)
+    checks = module.required_checks(flow_root, 12)
 
     assert checks == payload
     assert module.has_pending_check(checks)
 
 
-def test_required_checks_accept_pending_exit_with_valid_check_data(tmp_path: Path, monkeypatch) -> None:
+def test_required_checks_accept_pending_exit_with_valid_check_data(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     payload = [{"bucket": "pending", "name": "ci", "state": "QUEUED"}]
     gh_stub.add(
         ["pr", "checks", "12", "--required", "--json", "bucket,name,state,workflow,link"],
@@ -413,24 +461,24 @@ def test_required_checks_accept_pending_exit_with_valid_check_data(tmp_path: Pat
     )
     monkeypatch.setattr(module, "gh", gh_stub)
 
-    checks = module.required_checks(tmp_path, 12)
+    checks = module.required_checks(flow_root, 12)
 
     assert checks == payload
 
 
-def test_hotfix_stops_when_target_moves_during_verification(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_stops_when_target_moves_during_verification(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_hotfix_pr_flow_config(project)
     before = "a" * 40
     head = "b" * 40
     snapshots = iter([before, "c" * 40])
     monkeypatch.setattr(module, "remote_branch_snapshot", lambda *_args: next(snapshots))
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     git_stub.add(["rev-parse", "HEAD"], stdout=head + "\n")
     git_stub.add(["merge-base", "HEAD", before], stdout=before + "\n")
     git_stub.add(["status", "--short"], stdout="")
@@ -465,9 +513,9 @@ def test_parse_worktrees_handles_spaces_and_detached_entries() -> None:
 
 
 @pytest.mark.parametrize("command", ["complete", "tweak", "cleanup", "hotfix"])
-def test_mutation_commands_accept_remove_worktree(command: str, tmp_path: Path) -> None:
+def test_mutation_commands_accept_remove_worktree(command: str, flow_root: Path) -> None:
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     base = [command, "--project", str(project), "--remove-worktree"]
     if command in {"complete", "tweak"}:
         base += ["--summary", "summary", "--scope", "scope"]
@@ -479,16 +527,6 @@ def test_mutation_commands_accept_remove_worktree(command: str, tmp_path: Path) 
         base += ["--target", "main", "--authorization-phrase", "phrase"]
 
     assert module.build_parser().parse_args(base).remove_worktree is True
-
-
-
-
-
-
-
-
-
-
 
 
 def worktree_removal_records(main: Path, target: Path) -> tuple[str, str]:
@@ -504,21 +542,15 @@ def orca_worktree_ps_json(target: Path, worktree_id: str) -> str:
     return json.dumps({"result": {"worktrees": [{"path": str(target), "worktreeId": worktree_id}]}})
 
 
-
-
-
-
-
-
-def test_cleanup_stops_before_deletion_when_source_checked_out_elsewhere(tmp_path: Path, monkeypatch) -> None:
-    project = tmp_path / "project"
-    other = tmp_path / "other"
+def test_cleanup_stops_before_deletion_when_source_checked_out_elsewhere(flow_root: Path, monkeypatch) -> None:
+    project = flow_root / "project"
+    other = flow_root / "other"
     worktrees = (
         f"worktree {project}\0HEAD {'b' * 40}\0branch refs/heads/feature/example\0\0"
         f"worktree {other}\0HEAD {'b' * 40}\0branch refs/heads/feature/example\0\0"
     )
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(),
         git_responses=[(["worktree", "list", "--porcelain", "-z"], worktrees, 0)],
@@ -530,12 +562,12 @@ def test_cleanup_stops_before_deletion_when_source_checked_out_elsewhere(tmp_pat
     assert other.resolve() in [Path(path).resolve() for path in status["details"]["occupiedWorktrees"]]
 
 
-def test_cleanup_retry_from_latest_detached_base_finishes(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_retry_from_latest_detached_base_finishes(flow_root: Path, monkeypatch) -> None:
     base_oid = "a" * 40
-    project = tmp_path / "project"
+    project = flow_root / "project"
     worktrees = f"worktree {project}\0HEAD {base_oid}\0detached\0\0"
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(),
         git_responses=[
@@ -551,10 +583,6 @@ def test_cleanup_retry_from_latest_detached_base_finishes(tmp_path: Path, monkey
 
     assert result.returncode == 0
     assert "cleanup_complete" in result.stdout
-
-
-
-
 
 
 def allow_current_base(git_stub, source_oid: str) -> None:
@@ -611,12 +639,6 @@ def allow_cleanup(
     git_stub.add(["branch", "-d", head_ref])
 
 
-
-
-
-
-
-
 def pr_view_json(
     *,
     checks: list[dict],
@@ -668,38 +690,6 @@ def cleanup_pr_view_json(
     )
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def assert_cleanup_exception(project: Path, result: subprocess.CompletedProcess[str], reason: str) -> None:
     assert result.returncode == 1
     assert "status: EXCEPTION_REQUIRED" in result.stdout
@@ -720,7 +710,7 @@ def write_minimal_pr_flow_config(project: Path) -> None:
 
 
 def run_cleanup_in_process(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     *,
     pr_stdout: str,
@@ -731,15 +721,15 @@ def run_cleanup_in_process(
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
-    controller = tmp_path / "controller"
+    controller = flow_root / "controller"
     if remove_worktree:
         controller.mkdir()
     write_minimal_pr_flow_config(project)
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=pr_stdout)
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for args, stdout, returncode in git_responses or []:
         git_stub.add(args, stdout=stdout, returncode=returncode)
     pr = json.loads(pr_stdout)
@@ -827,7 +817,7 @@ def write_hotfix_pr_flow_config(
 
 
 def run_hotfix_in_process(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     *,
     authorization_phrase: str = "ship-hotfix",
@@ -842,7 +832,7 @@ def run_hotfix_in_process(
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_hotfix_pr_flow_config(
         project,
@@ -850,7 +840,7 @@ def run_hotfix_in_process(
         include_authorization=include_authorization,
         include_branch=include_branch,
     )
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     default_responses = [
         (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], "", 0),
         (["rev-parse", "__snapshot_ref__"], "a" * 40 + "\n", 0),
@@ -971,7 +961,7 @@ def expected_pr_body(
 
 
 def run_complete_in_process(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     *,
     pr_stdout: str | None = None,
@@ -996,7 +986,7 @@ def run_complete_in_process(
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = project or tmp_path / "project"
+    project = project or flow_root / "project"
     project.mkdir(exist_ok=True)
     write_complete_pr_flow_config(project, review_mode=review_mode, merge_strategy=merge_strategy)
     if wait_config is not None:
@@ -1004,7 +994,7 @@ def run_complete_in_process(
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         config["defaults"]["wait"] = wait_config
         config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    gh_stub = CommandStub(consume=pr_responses is not None or merge_responses is not None)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=pr_responses is not None or merge_responses is not None)
     if pr_responses is None:
         assert pr_stdout is not None
         gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
@@ -1043,7 +1033,7 @@ def run_complete_in_process(
             ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
             stdout=cleanup_stdout,
         )
-    git_stub = CommandStub(defaults=default_git_responses())
+    git_stub = CommandStub(body_reader=read_body_file, defaults=default_git_responses())
     for args, stdout, returncode in git_responses or []:
         git_stub.add(args, stdout=stdout, returncode=returncode)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
@@ -1059,7 +1049,7 @@ def run_complete_in_process(
 
 
 def run_tweak_in_process(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     *,
     reason: str,
@@ -1074,7 +1064,7 @@ def run_tweak_in_process(
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     if forbid_full_verify:
@@ -1088,7 +1078,7 @@ def run_tweak_in_process(
         review_decision=review_decision,
         head_oid=head_oid,
     )
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     if first_pr_returncode:
         gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr=first_pr_stderr, returncode=first_pr_returncode)
         gh_stub.add(["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"], stdout="https://github.example/test/repo/pull/12\n")
@@ -1114,7 +1104,7 @@ def run_tweak_in_process(
         )
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
 
-    git_stub = CommandStub(defaults=default_git_responses(), consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, defaults=default_git_responses(), consume=True)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"])
@@ -1128,7 +1118,7 @@ def run_tweak_in_process(
 
 
 def run_diagnose_in_process(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     *,
     pr_stdout: str,
@@ -1141,16 +1131,16 @@ def run_diagnose_in_process(
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_minimal_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="main\n")
     git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
     allow_current_base(git_stub, "b" * 40)
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/main\n")
     git_stub.add(["status", "--short"], stdout="")
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     gh_stub.add(
         ["pr", "view", "--json", module.PR_VIEW_FIELDS],
         stdout=pr_stdout,
@@ -1217,24 +1207,16 @@ def write_confirmed_pr_flow_config(project: Path, config: dict | None = None) ->
     (project / ".github" / "workflows" / "pr-flow-toolchain.yml").unlink()
 
 
-
-
 HOTFIX_PHRASE = "ship-hotfix"
 
 
-
-
-
-
-
-
-def test_init_records_toolchain_and_managed_workflow(tmp_path: Path, monkeypatch) -> None:
+def test_init_records_toolchain_and_managed_workflow(flow_root: Path, monkeypatch) -> None:
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
-    draft = tmp_path / "confirmed.yaml"
+    draft = flow_root / "confirmed.yaml"
     draft.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
     identities = {
         "myspec": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": MYSPEC_VERSION},
@@ -1255,10 +1237,10 @@ def test_init_records_toolchain_and_managed_workflow(tmp_path: Path, monkeypatch
     assert f"@liuli195/build-and-verify@{BUILD_AND_VERIFY_VERSION}" in workflow
 
 
-def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_init_creates_config_template_and_gitignore(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
-    draft = tmp_path / "confirmed.yaml"
+    draft = flow_root / "confirmed.yaml"
     draft.write_text(
         yaml.safe_dump(default_pr_flow_config_for_test("main"), allow_unicode=True, sort_keys=False),
         encoding="utf-8",
@@ -1298,16 +1280,16 @@ def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
     assert (project / ".pr-flow" / ".gitignore").read_text(encoding="utf-8") == "/runs/\n/last-status.json\n"
 
 
-def test_complete_requires_summary_scope_before_auto_push_or_pr_create(tmp_path: Path, monkeypatch) -> None:
+def test_complete_requires_summary_scope_before_auto_push_or_pr_create(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
-    gh_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
+    gh_stub = CommandStub(body_reader=read_body_file)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
 
@@ -1326,19 +1308,19 @@ def test_complete_requires_summary_scope_before_auto_push_or_pr_create(tmp_path:
     assert "--scope" in status["details"]["nextCommand"]
 
 
-def test_complete_reports_dispatch_when_pr_create_requires_gh_auth(tmp_path: Path, monkeypatch) -> None:
+def test_complete_reports_dispatch_when_pr_create_requires_gh_auth(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="main\n")
     git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
     allow_current_base(git_stub, "b" * 40)
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull request found\n", returncode=1)
     gh_stub.add(
         ["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"],
@@ -1359,19 +1341,19 @@ def test_complete_reports_dispatch_when_pr_create_requires_gh_auth(tmp_path: Pat
     assert status["details"]["nextCommand"] == "gh auth status"
 
 
-def test_complete_reports_dispatch_when_created_pr_view_temporarily_fails(tmp_path: Path, monkeypatch) -> None:
+def test_complete_reports_dispatch_when_created_pr_view_temporarily_fails(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="main\n")
     git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
     allow_current_base(git_stub, "b" * 40)
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull request found\n", returncode=1)
     gh_stub.add(
         ["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"],
@@ -1399,20 +1381,20 @@ def test_complete_reports_dispatch_when_created_pr_view_temporarily_fails(tmp_pa
 
 
 def test_tweak_reports_dispatch_when_remote_branch_rules_lookup_requires_gh_auth(
-    tmp_path: Path, monkeypatch
+    flow_root: Path, monkeypatch
 ) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], returncode=1)
     git_stub.add(["status", "--porcelain"], stdout="")
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull request found\n", returncode=1)
     gh_stub.add(
         ["api", "repos/{owner}/{repo}/rules/branches/feature%2Fexample", "--jq", "length"],
@@ -1433,9 +1415,9 @@ def test_tweak_reports_dispatch_when_remote_branch_rules_lookup_requires_gh_auth
     assert status["details"]["nextCommand"] == "gh auth status"
 
 
-def test_complete_reports_dispatch_when_pr_merge_requires_gh_auth(tmp_path: Path, monkeypatch) -> None:
+def test_complete_reports_dispatch_when_pr_merge_requires_gh_auth(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -1466,17 +1448,17 @@ def test_complete_reports_dispatch_when_pr_merge_requires_gh_auth(tmp_path: Path
     ],
 )
 def test_pr_body_commands_reject_invalid_fixes_before_git_or_gh_calls(
-    tmp_path: Path, monkeypatch, bad_fix: str, command_args, command: str
+    flow_root: Path, monkeypatch, bad_fix: str, command_args, command: str
 ) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
-    gh_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
+    gh_stub = CommandStub(body_reader=read_body_file)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
 
@@ -1504,17 +1486,17 @@ def test_pr_body_commands_reject_invalid_fixes_before_git_or_gh_calls(
     ],
 )
 def test_pr_body_commands_reject_none_fixes_with_remove_guidance(
-    tmp_path: Path, monkeypatch, command_args, command: str
+    flow_root: Path, monkeypatch, command_args, command: str
 ) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
-    gh_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
+    gh_stub = CommandStub(body_reader=read_body_file)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
 
@@ -1532,16 +1514,16 @@ def test_pr_body_commands_reject_none_fixes_with_remove_guidance(
     assert status["details"]["nextAction"] == "Remove --fixes when there is no issue to close."
 
 
-def test_tweak_requires_summary_scope_before_pr_sync(tmp_path: Path, monkeypatch) -> None:
+def test_tweak_requires_summary_scope_before_pr_sync(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
-    gh_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
+    gh_stub = CommandStub(body_reader=read_body_file)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
 
@@ -1558,17 +1540,17 @@ def test_tweak_requires_summary_scope_before_pr_sync(tmp_path: Path, monkeypatch
     assert status["details"]["missingArgs"] == ["--summary", "--scope"]
 
 
-def test_complete_stops_when_body_template_is_missing_required_section(tmp_path: Path, monkeypatch) -> None:
+def test_complete_stops_when_body_template_is_missing_required_section(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     (project / ".pr-flow" / "pr-template.md").write_text("## Summary\n\n## Scope\n", encoding="utf-8")
-    git_stub = CommandStub()
-    gh_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
+    gh_stub = CommandStub(body_reader=read_body_file)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
 
@@ -1587,9 +1569,9 @@ def test_complete_stops_when_body_template_is_missing_required_section(tmp_path:
     assert "Closing References" in status["details"]["nextAction"]
 
 
-def test_complete_and_tweak_share_three_section_body_renderer(tmp_path: Path) -> None:
+def test_complete_and_tweak_share_three_section_body_renderer(flow_root: Path) -> None:
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     config = yaml.safe_load((project / ".pr-flow" / "config.yaml").read_text(encoding="utf-8"))
@@ -1601,14 +1583,14 @@ def test_complete_and_tweak_share_three_section_body_renderer(tmp_path: Path) ->
     assert tweak_body == expected_pr_body()
 
 
-def test_create_pr_uses_generated_body_file(tmp_path: Path, monkeypatch) -> None:
+def test_create_pr_uses_generated_body_file(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     body = expected_pr_body()
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"], stdout="https://github.example/test/repo/pull/12\n")
     gh_stub.add(
         ["pr", "view", "--json", module.PR_VIEW_FIELDS],
@@ -1628,15 +1610,15 @@ def test_create_pr_uses_generated_body_file(tmp_path: Path, monkeypatch) -> None
     assert gh_stub.body_files[0]["body"] == body
 
 
-def test_create_pr_retries_transient_eof_when_syncing_created_pr(tmp_path: Path, monkeypatch) -> None:
+def test_create_pr_retries_transient_eof_when_syncing_created_pr(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     body = expected_pr_body()
     monkeypatch.setenv("PR_FLOW_GH_PR_VIEW_RETRIES", "1")
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"], stdout="created\n")
     gh_stub.add(
         ["pr", "view", "--json", module.PR_VIEW_FIELDS],
@@ -1662,15 +1644,15 @@ def test_create_pr_retries_transient_eof_when_syncing_created_pr(tmp_path: Path,
 
 
 def test_create_pr_missing_after_success_does_not_report_create_output_as_view_failure(
-    tmp_path: Path, monkeypatch
+    flow_root: Path, monkeypatch
 ) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     body = expected_pr_body()
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"], stdout="created\n")
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull request found\n", returncode=1)
     monkeypatch.setattr(module, "gh", gh_stub)
@@ -1686,12 +1668,12 @@ def test_create_pr_missing_after_success_does_not_report_create_output_as_view_f
     assert "stderr" not in error.value.details
 
 
-def test_complete_fills_existing_empty_body_before_checks(tmp_path: Path, monkeypatch) -> None:
+def test_complete_fills_existing_empty_body_before_checks(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     head_oid = "b" * 40
@@ -1701,7 +1683,7 @@ def test_complete_fills_existing_empty_body_before_checks(tmp_path: Path, monkey
         head_oid=head_oid,
         body="<!-- template comment -->",
     )
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "edit", "12", "--body-file", "__placeholder__"])
@@ -1709,7 +1691,7 @@ def test_complete_fills_existing_empty_body_before_checks(tmp_path: Path, monkey
     allow_required_checks(gh_stub)
     allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -1742,12 +1724,12 @@ def test_complete_fills_existing_empty_body_before_checks(tmp_path: Path, monkey
     assert gh_stub.body_files[0]["body"] == expected_pr_body(fixes=())
 
 
-def test_complete_appends_repeated_fixes_to_existing_human_body(tmp_path: Path, monkeypatch) -> None:
+def test_complete_appends_repeated_fixes_to_existing_human_body(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     head_oid = "b" * 40
@@ -1757,7 +1739,7 @@ def test_complete_appends_repeated_fixes_to_existing_human_body(tmp_path: Path, 
         head_oid=head_oid,
         body="Human body",
     )
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "edit", "12", "--body-file", "__placeholder__"])
@@ -1765,7 +1747,7 @@ def test_complete_appends_repeated_fixes_to_existing_human_body(tmp_path: Path, 
     allow_required_checks(gh_stub)
     allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -1800,12 +1782,12 @@ def test_complete_appends_repeated_fixes_to_existing_human_body(tmp_path: Path, 
     assert gh_stub.body_files[0]["body"] == "Human body\n\n## Closing References\n\nFixes #98\nFixes #99\n"
 
 
-def test_complete_continues_when_existing_human_body_already_has_fixes(tmp_path: Path, monkeypatch) -> None:
+def test_complete_continues_when_existing_human_body_already_has_fixes(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     head_oid = "b" * 40
@@ -1815,13 +1797,13 @@ def test_complete_continues_when_existing_human_body_already_has_fixes(tmp_path:
         head_oid=head_oid,
         body="Human body\n\n## Closing References\n\nFixes #98\n",
     )
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
     allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -1859,12 +1841,12 @@ def test_closing_reference_match_does_not_treat_prefix_issue_as_present() -> Non
     assert module.has_closing_reference("Human body\n\nFixes #98\n", "98") is True
 
 
-def test_complete_keeps_existing_human_body_without_fixes(tmp_path: Path, monkeypatch) -> None:
+def test_complete_keeps_existing_human_body_without_fixes(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     pr_stdout = pr_view_json(
@@ -1873,11 +1855,11 @@ def test_complete_keeps_existing_human_body_without_fixes(tmp_path: Path, monkey
         head_oid="b" * 40,
         body="Human body",
     )
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     allow_required_checks(gh_stub, "pending")
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
     git_stub.add(["rev-list", "--count", "@{u}..HEAD"], stdout="0\n")
@@ -1897,8 +1879,8 @@ def test_complete_keeps_existing_human_body_without_fixes(tmp_path: Path, monkey
     assert status["details"]["targetOid"] == "a" * 40
 
 
-def test_init_without_confirmed_config_does_not_write_defaults(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_init_without_confirmed_config_does_not_write_defaults(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
 
     result = run("init", "--project", str(project), "--base-branch", "main")
@@ -1912,10 +1894,10 @@ def test_init_without_confirmed_config_does_not_write_defaults(tmp_path: Path) -
     assert not (project / ".pr-flow" / ".gitignore").exists()
 
 
-def test_init_validation_errors_block_all_writes(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_init_validation_errors_block_all_writes(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
-    draft = tmp_path / "invalid.yaml"
+    draft = flow_root / "invalid.yaml"
     draft.write_text(
         yaml.safe_dump({"defaults": {"reviewGate": {"mode": "local"}}}, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
@@ -1940,10 +1922,10 @@ def test_current_repo_hotfix_verify_command_uses_BUILD_AND_VERIFY_full() -> None
     )
 
 
-def test_init_does_not_call_gh_api(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_init_does_not_call_gh_api(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
-    draft = tmp_path / "confirmed.yaml"
+    draft = flow_root / "confirmed.yaml"
     draft.write_text(
         yaml.safe_dump(default_pr_flow_config_for_test(), allow_unicode=True, sort_keys=False),
         encoding="utf-8",
@@ -2184,7 +2166,7 @@ def test_pr_flow_command_skills_show_installed_script_entrypoint(skill_name: str
     assert "python ../pr-flow/scripts/pr_flow.py" not in skill_text
 
 
-def test_pr_flow_init_end_to_end_from_skill_to_confirmed_write(tmp_path: Path) -> None:
+def test_pr_flow_init_end_to_end_from_skill_to_confirmed_write(flow_root: Path) -> None:
     skill_dir = REPO_ROOT / "plugins" / "pr-flow" / "skills" / "pr-flow-init"
     skill_text = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
     questionnaire = (skill_dir / "references" / "questionnaire.md").read_text(encoding="utf-8")
@@ -2196,7 +2178,7 @@ def test_pr_flow_init_end_to_end_from_skill_to_confirmed_write(tmp_path: Path) -
     assert "setup.github" in config_draft
     assert "error（错误）" in validation
 
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     config = default_pr_flow_config_for_test("main")
     config["setup"] = {
@@ -2206,7 +2188,7 @@ def test_pr_flow_init_end_to_end_from_skill_to_confirmed_write(tmp_path: Path) -
             "codeScanning": {"tool": "CodeQL"},
         }
     }
-    draft = tmp_path / "confirmed.yaml"
+    draft = flow_root / "confirmed.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     validate_result = run("validate", "--project", str(project), "--config", str(draft))
@@ -2232,10 +2214,10 @@ def test_pr_flow_init_end_to_end_from_skill_to_confirmed_write(tmp_path: Path) -
         assert forbidden not in combined_output
 
 
-def test_validate_reads_only_provided_config_and_reports_suggestions(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_validate_reads_only_provided_config_and_reports_suggestions(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(
         yaml.safe_dump(
             {
@@ -2264,12 +2246,12 @@ def test_validate_reads_only_provided_config_and_reports_suggestions(tmp_path: P
     assert not (project / ".pr-flow" / "config.yaml").exists()
 
 
-def test_validate_reports_codeql_default_setup_tasks(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_validate_reports_codeql_default_setup_tasks(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
     config = default_pr_flow_config_for_test()
     config["setup"] = {"github": {"codeScanning": {"tool": "CodeQL"}}}
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("validate", "--project", str(project), "--config", str(draft))
@@ -2280,14 +2262,14 @@ def test_validate_reports_codeql_default_setup_tasks(tmp_path: Path) -> None:
     assert "CodeQL scan producer" not in result.stdout
 
 
-def test_validate_reports_codeql_default_setup_even_with_existing_codeql_workflow(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_validate_reports_codeql_default_setup_even_with_existing_codeql_workflow(flow_root: Path) -> None:
+    project = flow_root / "project"
     workflow = project / ".github" / "workflows" / "codeql.yml"
     workflow.parent.mkdir(parents=True)
     workflow.write_text("uses: github/codeql-action/analyze@v4\n", encoding="utf-8")
     config = default_pr_flow_config_for_test()
     config["setup"] = {"github": {"codeScanning": {"tool": "CodeQL"}}}
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("validate", "--project", str(project), "--config", str(draft))
@@ -2298,18 +2280,18 @@ def test_validate_reports_codeql_default_setup_even_with_existing_codeql_workflo
     assert "CodeQL scan producer" not in result.stdout
 
 
-def test_validate_does_not_call_gh_cli_or_github_api(tmp_path: Path, monkeypatch) -> None:
+def test_validate_does_not_call_gh_cli_or_github_api(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     config = default_pr_flow_config_for_test()
     config["setup"] = {"github": {"codeScanning": {"tool": "CodeQL"}}}
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
     module = load_pr_flow_module()
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     monkeypatch.setattr(module, "gh", gh_stub)
 
     result = invoke_pr_flow(["validate", "--project", str(project), "--config", str(draft)], module=module)
@@ -2320,10 +2302,10 @@ def test_validate_does_not_call_gh_cli_or_github_api(tmp_path: Path, monkeypatch
 
 
 @pytest.mark.parametrize("review_mode", ["github", "skip"])
-def test_validate_accepts_supported_review_gate_modes(tmp_path: Path, review_mode: str) -> None:
+def test_validate_accepts_supported_review_gate_modes(flow_root: Path, review_mode: str) -> None:
     config = default_pr_flow_config_for_test()
     config["defaults"]["reviewGate"] = {"mode": review_mode}
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("validate", "--config", str(draft))
@@ -2334,10 +2316,10 @@ def test_validate_accepts_supported_review_gate_modes(tmp_path: Path, review_mod
     assert "review-pass.json" not in result.stdout
 
 
-def test_validate_warns_when_supported_review_gate_keeps_deprecated_evidencePath(tmp_path: Path) -> None:
+def test_validate_warns_when_supported_review_gate_keeps_deprecated_evidencePath(flow_root: Path) -> None:
     config = default_pr_flow_config_for_test()
     config["defaults"]["reviewGate"] = {"mode": "github", "evidencePath": ".pr-flow/review-pass.json"}
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("validate", "--config", str(draft))
@@ -2348,10 +2330,10 @@ def test_validate_warns_when_supported_review_gate_keeps_deprecated_evidencePath
 
 
 @pytest.mark.parametrize("review_mode", ["local", "dual"])
-def test_validate_rejects_removed_review_gate_modes(tmp_path: Path, review_mode: str) -> None:
+def test_validate_rejects_removed_review_gate_modes(flow_root: Path, review_mode: str) -> None:
     config = default_pr_flow_config_for_test()
     config["defaults"]["reviewGate"] = {"mode": review_mode, "evidencePath": ".pr-flow/review-pass.json"}
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("validate", "--config", str(draft))
@@ -2364,10 +2346,10 @@ def test_validate_rejects_removed_review_gate_modes(tmp_path: Path, review_mode:
 
 
 @pytest.mark.parametrize("review_mode", [[], {}, None, 1, ""])
-def test_validate_rejects_invalid_review_gate_mode_values(tmp_path: Path, review_mode) -> None:
+def test_validate_rejects_invalid_review_gate_mode_values(flow_root: Path, review_mode) -> None:
     config = default_pr_flow_config_for_test()
     config["defaults"]["reviewGate"] = {"mode": review_mode}
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("validate", "--config", str(draft))
@@ -2378,12 +2360,12 @@ def test_validate_rejects_invalid_review_gate_mode_values(tmp_path: Path, review
     assert "remote task: configure GitHub required review" not in result.stdout
 
 
-def test_init_rejects_removed_review_gate_modes(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_init_rejects_removed_review_gate_modes(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
     config = default_pr_flow_config_for_test()
     config["defaults"]["reviewGate"] = {"mode": "local", "evidencePath": ".pr-flow/review-pass.json"}
-    draft = tmp_path / "confirmed.yaml"
+    draft = flow_root / "confirmed.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("init", "--project", str(project), "--config", str(draft))
@@ -2393,8 +2375,8 @@ def test_init_rejects_removed_review_gate_modes(tmp_path: Path) -> None:
     assert "error: defaults.reviewGate.mode unsupported: local" in result.stdout
 
 
-def test_validate_reports_errors_for_missing_core_shape(tmp_path: Path) -> None:
-    draft = tmp_path / "draft.yaml"
+def test_validate_reports_errors_for_missing_core_shape(flow_root: Path) -> None:
+    draft = flow_root / "draft.yaml"
     draft.write_text(
         yaml.safe_dump({"defaults": {"reviewGate": {"mode": "local"}}}, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
@@ -2409,10 +2391,10 @@ def test_validate_reports_errors_for_missing_core_shape(tmp_path: Path) -> None:
     assert "error: defaults.reviewGate.mode unsupported: local" in result.stdout
 
 
-def test_validate_reports_errors_for_invalid_wait_shape(tmp_path: Path) -> None:
+def test_validate_reports_errors_for_invalid_wait_shape(flow_root: Path) -> None:
     config = default_pr_flow_config_for_test()
     config["defaults"]["wait"] = "nope"
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("validate", "--config", str(draft))
@@ -2421,10 +2403,10 @@ def test_validate_reports_errors_for_invalid_wait_shape(tmp_path: Path) -> None:
     assert "error: defaults.wait must be a mapping" in result.stdout
 
 
-def test_validate_reports_errors_for_invalid_wait_values(tmp_path: Path) -> None:
+def test_validate_reports_errors_for_invalid_wait_values(flow_root: Path) -> None:
     config = default_pr_flow_config_for_test()
     config["defaults"]["wait"] = {"timeoutSeconds": "slow", "pollSeconds": 0}
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("validate", "--config", str(draft))
@@ -2434,8 +2416,8 @@ def test_validate_reports_errors_for_invalid_wait_values(tmp_path: Path) -> None
     assert "error: defaults.wait.pollSeconds must be a positive integer" in result.stdout
 
 
-def test_validate_reports_bad_yaml_as_structured_error(tmp_path: Path) -> None:
-    draft = tmp_path / "draft.yaml"
+def test_validate_reports_bad_yaml_as_structured_error(flow_root: Path) -> None:
+    draft = flow_root / "draft.yaml"
     draft.write_text("defaults: [\n", encoding="utf-8")
 
     result = run("validate", "--config", str(draft))
@@ -2473,7 +2455,7 @@ def test_validate_reports_bad_yaml_as_structured_error(tmp_path: Path) -> None:
         ),
     ],
 )
-def test_validate_dependency_matrix(tmp_path: Path, mutate, expected: str) -> None:
+def test_validate_dependency_matrix(flow_root: Path, mutate, expected: str) -> None:
     config = {
         "defaults": {
             "baseBranch": "main",
@@ -2487,7 +2469,7 @@ def test_validate_dependency_matrix(tmp_path: Path, mutate, expected: str) -> No
         "setup": {"github": {"requiredChecks": ["ci"]}},
     }
     mutate(config)
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("validate", "--config", str(draft))
@@ -2495,8 +2477,8 @@ def test_validate_dependency_matrix(tmp_path: Path, mutate, expected: str) -> No
     assert expected in result.stdout
 
 
-def test_missing_config_reports_exception_required(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_missing_config_reports_exception_required(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
 
     result = run("diagnose", "--project", str(project))
@@ -2506,11 +2488,11 @@ def test_missing_config_reports_exception_required(tmp_path: Path) -> None:
     assert "missing_config" in result.stdout
 
 
-def test_status_file_is_written_for_stop_state(tmp_path: Path) -> None:
+def test_status_file_is_written_for_stop_state(flow_root: Path) -> None:
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_confirmed_pr_flow_config(project)
     result = invoke_pr_flow(["diagnose", "--project", str(project)], module=module)
@@ -2522,15 +2504,15 @@ def test_status_file_is_written_for_stop_state(tmp_path: Path) -> None:
     assert status["details"]["reason"] == "git_current_branch_failed"
 
 
-def test_diagnose_outputs_dispatch_required_without_upstream(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_outputs_dispatch_required_without_upstream(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_minimal_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
     git_stub.add(
         ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
@@ -2541,7 +2523,7 @@ def test_diagnose_outputs_dispatch_required_without_upstream(tmp_path: Path, mon
     git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
     allow_current_base(git_stub, "b" * 40)
     monkeypatch.setattr(module, "git", git_stub)
-    monkeypatch.setattr(module, "gh", CommandStub())
+    monkeypatch.setattr(module, "gh", CommandStub(body_reader=read_body_file))
 
     result = invoke_pr_flow(["diagnose", "--project", str(project)], module=module)
 
@@ -2558,15 +2540,15 @@ def test_diagnose_outputs_dispatch_required_without_upstream(tmp_path: Path, mon
     assert "--scope" in status["details"]["nextCommand"]
 
 
-def test_complete_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path: Path, monkeypatch) -> None:
+def test_complete_auto_pushes_clean_unprotected_branch_without_upstream(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
     git_stub.add(
         ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
@@ -2577,7 +2559,7 @@ def test_complete_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path
     git_stub.add(["push", "-u", "origin", "feature/no-upstream"])
     git_stub.add(["rev-parse", "HEAD"], stdout="a" * 40 + "\n")
     allow_current_base(git_stub, "a" * 40)
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found for branch\n", returncode=1)
     gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fno-upstream", "--jq", "length"], stdout="0\n")
     gh_stub.add(["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"], stdout="https://github.example/test/repo/pull/12\n")
@@ -2601,12 +2583,12 @@ def test_complete_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path
 
 
 def test_complete_waits_for_auto_pushed_head_before_using_old_required_check_failure(
-    tmp_path: Path, monkeypatch
+    flow_root: Path, monkeypatch
 ) -> None:
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     config_path = project / ".pr-flow" / "config.yaml"
@@ -2654,7 +2636,7 @@ def test_complete_waits_for_auto_pushed_head_before_using_old_required_check_fai
 
     from tests.support.command_stubs import CommandStub
 
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -2699,7 +2681,7 @@ def test_complete_waits_for_auto_pushed_head_before_using_old_required_check_fai
     ],
 )
 def test_lifecycle_refuses_auto_push_when_upstream_has_new_commits(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     args_factory,
     command: str,
@@ -2708,14 +2690,14 @@ def test_lifecycle_refuses_auto_push_when_upstream_has_new_commits(
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     pending_pr = pr_view_json(checks=[{"name": "ci", "status": "QUEUED"}], head_oid="a" * 40)
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
     gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fexample", "--jq", "length"], stdout="0\n")
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
     git_stub.add(["rev-list", "--count", "@{u}..HEAD"], stdout="1\n")
@@ -2741,15 +2723,15 @@ def test_lifecycle_refuses_auto_push_when_upstream_has_new_commits(
     assert command in status["details"]["nextCommand"]
 
 
-def test_complete_refuses_auto_push_when_worktree_dirty(tmp_path: Path, monkeypatch) -> None:
+def test_complete_refuses_auto_push_when_worktree_dirty(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
     git_stub.add(
         ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
@@ -2757,7 +2739,7 @@ def test_complete_refuses_auto_push_when_worktree_dirty(tmp_path: Path, monkeypa
         returncode=128,
     )
     git_stub.add(["status", "--porcelain"], stdout=" M README.md\n")
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found for branch\n", returncode=1)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
@@ -2773,15 +2755,15 @@ def test_complete_refuses_auto_push_when_worktree_dirty(tmp_path: Path, monkeypa
     assert status["details"]["dirtyFiles"] == [" M README.md"]
 
 
-def test_complete_refuses_auto_push_when_remote_branch_has_active_rules(tmp_path: Path, monkeypatch) -> None:
+def test_complete_refuses_auto_push_when_remote_branch_has_active_rules(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
     git_stub.add(
         ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
@@ -2789,7 +2771,7 @@ def test_complete_refuses_auto_push_when_remote_branch_has_active_rules(tmp_path
         returncode=128,
     )
     git_stub.add(["status", "--porcelain"], stdout="")
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found for branch\n", returncode=1)
     gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fno-upstream", "--jq", "length"], stdout="1\n")
     monkeypatch.setattr(module, "git", git_stub)
@@ -2805,15 +2787,15 @@ def test_complete_refuses_auto_push_when_remote_branch_has_active_rules(tmp_path
     assert status["details"]["branch"] == "feature/no-upstream"
 
 
-def test_complete_refuses_auto_push_when_remote_rules_lookup_fails(tmp_path: Path, monkeypatch) -> None:
+def test_complete_refuses_auto_push_when_remote_rules_lookup_fails(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
     git_stub.add(
         ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
@@ -2821,7 +2803,7 @@ def test_complete_refuses_auto_push_when_remote_rules_lookup_fails(tmp_path: Pat
         returncode=128,
     )
     git_stub.add(["status", "--porcelain"], stdout="")
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found for branch\n", returncode=1)
     gh_stub.add(
         ["api", "repos/{owner}/{repo}/rules/branches/feature%2Fno-upstream", "--jq", "length"],
@@ -2840,15 +2822,15 @@ def test_complete_refuses_auto_push_when_remote_rules_lookup_fails(tmp_path: Pat
     assert status["details"]["reason"] == "remote_branch_rules_lookup_failed"
 
 
-def test_complete_outputs_push_required_when_auto_push_fails(tmp_path: Path, monkeypatch) -> None:
+def test_complete_outputs_push_required_when_auto_push_fails(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
     git_stub.add(
         ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
@@ -2859,7 +2841,7 @@ def test_complete_outputs_push_required_when_auto_push_fails(tmp_path: Path, mon
     git_stub.add(["push", "-u", "origin", "feature/no-upstream"], stderr="push failed\n", returncode=1)
     git_stub.add(["rev-parse", "HEAD"], stdout="a" * 40 + "\n")
     allow_current_base(git_stub, "a" * 40)
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found for branch\n", returncode=1)
     gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fno-upstream", "--jq", "length"], stdout="0\n")
     monkeypatch.setattr(module, "git", git_stub)
@@ -2874,15 +2856,15 @@ def test_complete_outputs_push_required_when_auto_push_fails(tmp_path: Path, mon
     assert status["details"]["nextCommand"] == "git push -u origin feature/no-upstream"
 
 
-def test_tweak_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path: Path, monkeypatch) -> None:
+def test_tweak_auto_pushes_clean_unprotected_branch_without_upstream(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
     git_stub.add(
         ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
@@ -2893,7 +2875,7 @@ def test_tweak_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path: P
     git_stub.add(["push", "-u", "origin", "feature/no-upstream"])
     git_stub.add(["rev-parse", "HEAD"], stdout="a" * 40 + "\n")
     allow_current_base(git_stub, "a" * 40)
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found for branch\n", returncode=1)
     gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fno-upstream", "--jq", "length"], stdout="0\n")
     gh_stub.add(["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"], stdout="https://github.example/test/repo/pull/12\n")
@@ -2924,13 +2906,13 @@ def test_tweak_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path: P
     [("fail", "FAILURE"), ("cancel", "CANCELLED")],
 )
 def test_tweak_stops_for_failed_or_cancelled_required_checks(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     bucket: str,
     state: str,
 ) -> None:
     project, result, _ = run_tweak_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         reason="small docs polish",
         required_response=(
@@ -2949,11 +2931,11 @@ def test_tweak_stops_for_failed_or_cancelled_required_checks(
     assert "status: merge_complete" not in result.stdout
 
 
-def test_diagnose_reports_unreported_checks_without_waiting(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_reports_unreported_checks_without_waiting(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: pytest.fail("diagnose must not sleep"))
     project, result = run_diagnose_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(checks=[], review_decision="APPROVED", head_oid="b" * 40),
         required_response=("[]", "", 0),
@@ -2966,9 +2948,9 @@ def test_diagnose_reports_unreported_checks_without_waiting(tmp_path: Path, monk
     assert status["details"]["checkGate"] == "NOT_REPORTED"
 
 
-def test_diagnose_distinguishes_cancelled_checks_and_requests_rerun(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_distinguishes_cancelled_checks_and_requests_rerun(flow_root: Path, monkeypatch) -> None:
     project, result = run_diagnose_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "CANCELLED"}],
@@ -2990,9 +2972,9 @@ def test_diagnose_distinguishes_cancelled_checks_and_requests_rerun(tmp_path: Pa
     assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
 
 
-def test_diagnose_uses_required_checks_instead_of_optional_rollup_failure(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_uses_required_checks_instead_of_optional_rollup_failure(flow_root: Path, monkeypatch) -> None:
     project, result = run_diagnose_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[
@@ -3012,7 +2994,7 @@ def test_diagnose_uses_required_checks_instead_of_optional_rollup_failure(tmp_pa
 
 @pytest.mark.parametrize("command", ["complete", "tweak", "diagnose"])
 def test_public_entries_stop_when_check_status_is_unavailable(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     command: str,
 ) -> None:
@@ -3024,14 +3006,14 @@ def test_public_entries_stop_when_check_status_is_unavailable(
     required_response = ("[]", "network unavailable\n", 1)
     if command == "complete":
         project, result = run_complete_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             pr_stdout=completed,
             required_responses=[required_response],
         )
     elif command == "tweak":
         project, result, _ = run_tweak_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             reason="small docs polish",
             checks=json.loads(completed)["statusCheckRollup"],
@@ -3039,7 +3021,7 @@ def test_public_entries_stop_when_check_status_is_unavailable(
         )
     else:
         project, result = run_diagnose_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             pr_stdout=completed,
             required_response=required_response,
@@ -3056,9 +3038,9 @@ def test_public_entries_stop_when_check_status_is_unavailable(
     assert "status: merge_complete" not in result.stdout
 
 
-def test_complete_stops_when_unknown_state_is_mixed_with_pending_check(tmp_path: Path, monkeypatch) -> None:
+def test_complete_stops_when_unknown_state_is_mixed_with_pending_check(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
@@ -3091,7 +3073,7 @@ def test_complete_stops_when_unknown_state_is_mixed_with_pending_check(tmp_path:
 @pytest.mark.parametrize("command", ["complete", "tweak", "diagnose"])
 @pytest.mark.parametrize("stderr", ["network unavailable\\n", "unexpected query failure\\n"])
 def test_public_entries_do_not_use_rollup_after_check_query_error(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     command: str,
     stderr: str,
@@ -3104,14 +3086,14 @@ def test_public_entries_do_not_use_rollup_after_check_query_error(
     required_response = ("[]", stderr, 1)
     if command == "complete":
         project, result = run_complete_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             pr_stdout=pending,
             required_responses=[required_response],
         )
     elif command == "tweak":
         project, result, _ = run_tweak_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             reason="small docs polish",
             checks=json.loads(pending)["statusCheckRollup"],
@@ -3119,7 +3101,7 @@ def test_public_entries_do_not_use_rollup_after_check_query_error(
         )
     else:
         project, result = run_diagnose_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             pr_stdout=pending,
             required_response=required_response,
@@ -3136,7 +3118,7 @@ def test_public_entries_do_not_use_rollup_after_check_query_error(
 
 @pytest.mark.parametrize("command", ["complete", "tweak", "diagnose"])
 def test_public_entries_use_pending_rollup_when_required_checks_are_not_reported(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     command: str,
 ) -> None:
@@ -3148,7 +3130,7 @@ def test_public_entries_use_pending_rollup_when_required_checks_are_not_reported
     required_response = ("", "no checks reported on the 'branch'\\n", 1)
     if command == "complete":
         project, result = run_complete_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             pr_stdout=pending,
             required_responses=[required_response],
@@ -3156,7 +3138,7 @@ def test_public_entries_use_pending_rollup_when_required_checks_are_not_reported
         )
     elif command == "tweak":
         project, result, _ = run_tweak_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             reason="small docs polish",
             checks=json.loads(pending)["statusCheckRollup"],
@@ -3164,7 +3146,7 @@ def test_public_entries_use_pending_rollup_when_required_checks_are_not_reported
         )
     else:
         project, result = run_diagnose_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             pr_stdout=pending,
             required_response=required_response,
@@ -3179,9 +3161,9 @@ def test_public_entries_use_pending_rollup_when_required_checks_are_not_reported
     assert "status: merge_complete" not in result.stdout
 
 
-def test_complete_reports_check_auth_failure_without_rollup_fallback(tmp_path: Path, monkeypatch) -> None:
+def test_complete_reports_check_auth_failure_without_rollup_fallback(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
@@ -3201,9 +3183,9 @@ def test_complete_reports_check_auth_failure_without_rollup_fallback(tmp_path: P
     assert status["details"]["nextCommand"] == "gh auth status"
 
 
-def test_complete_rejects_partial_check_data_after_unknown_query_error(tmp_path: Path, monkeypatch) -> None:
+def test_complete_rejects_partial_check_data_after_unknown_query_error(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
@@ -3223,9 +3205,9 @@ def test_complete_rejects_partial_check_data_after_unknown_query_error(tmp_path:
     assert status["details"]["checkQueryError"]["stderr"] == "unexpected query failure"
 
 
-def test_diagnose_outputs_exception_for_unknown_gh_failure(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_outputs_exception_for_unknown_gh_failure(flow_root: Path, monkeypatch) -> None:
     project, result = run_diagnose_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout="",
         pr_stderr="synthetic gh failure\n",
@@ -3243,12 +3225,12 @@ def test_diagnose_outputs_exception_for_unknown_gh_failure(tmp_path: Path, monke
     assert status["details"]["reason"] == "gh_pr_view_failed"
 
 
-def test_diagnose_retries_transient_eof_without_repeated_stop_output(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_retries_transient_eof_without_repeated_stop_output(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     monkeypatch.setenv("PR_FLOW_GH_PR_VIEW_RETRIES", "1")
@@ -3258,11 +3240,11 @@ def test_diagnose_retries_transient_eof_without_repeated_stop_output(tmp_path: P
         head_oid="b" * 40,
         body="Human body",
     )
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr='Post "https://api.github.com/graphql": EOF\n', returncode=1)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     allow_required_checks(gh_stub)
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
     git_stub.add(["status", "--short"], stdout="")
@@ -3279,19 +3261,19 @@ def test_diagnose_retries_transient_eof_without_repeated_stop_output(tmp_path: P
     assert gh_stub.calls.count(("pr", "view", "--json", module.PR_VIEW_FIELDS)) == 2
 
 
-def test_diagnose_reports_dispatch_when_transient_eof_retries_are_exhausted(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_reports_dispatch_when_transient_eof_retries_are_exhausted(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     monkeypatch.setenv("PR_FLOW_GH_PR_VIEW_RETRIES", "1")
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     for _ in range(2):
         gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr='Post "https://api.github.com/graphql": EOF\n', returncode=1)
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
     git_stub.add(["status", "--short"], stdout="")
@@ -3316,9 +3298,9 @@ def test_diagnose_reports_dispatch_when_transient_eof_retries_are_exhausted(tmp_
     assert str(project) in status["details"]["nextCommand"]
 
 
-def test_diagnose_reports_dispatch_for_gh_auth_failure(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_reports_dispatch_for_gh_auth_failure(flow_root: Path, monkeypatch) -> None:
     project, result = run_diagnose_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout="",
         pr_stderr="gh: To get started with GitHub CLI, please run: gh auth login\n",
@@ -3334,9 +3316,9 @@ def test_diagnose_reports_dispatch_for_gh_auth_failure(tmp_path: Path, monkeypat
     assert status["details"]["nextCommand"] == "gh auth status"
 
 
-def test_diagnose_on_base_branch_without_pr_reports_gh_pr_view_failed(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_on_base_branch_without_pr_reports_gh_pr_view_failed(flow_root: Path, monkeypatch) -> None:
     project, result = run_diagnose_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout="",
         pr_stderr="no pull requests found for branch\n",
@@ -3355,21 +3337,21 @@ def test_diagnose_on_base_branch_without_pr_reports_gh_pr_view_failed(tmp_path: 
     assert "no pull requests found" in status["details"]["stderr"]
 
 
-def test_diagnose_on_feature_branch_without_pr_reports_dispatch_required(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_on_feature_branch_without_pr_reports_dispatch_required(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_minimal_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/ready\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/ready\n")
     git_stub.add(["status", "--short"], stdout="")
     git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
     allow_current_base(git_stub, "b" * 40)
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     gh_stub.add(
         ["pr", "view", "--json", module.PR_VIEW_FIELDS],
         stderr="no pull requests found for branch\n",
@@ -3393,15 +3375,15 @@ def test_diagnose_on_feature_branch_without_pr_reports_dispatch_required(tmp_pat
     assert status["details"]["optionalFixesArg"] == "--fixes 98"
 
 
-def test_diagnose_rejects_stale_remote_base_before_pr_dispatch(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_rejects_stale_remote_base_before_pr_dispatch(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_minimal_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/ready\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/ready\n")
     git_stub.add(["status", "--short"], stdout="")
@@ -3409,7 +3391,7 @@ def test_diagnose_rejects_stale_remote_base_before_pr_dispatch(tmp_path: Path, m
     git_stub.add(["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"])
     git_stub.add(["rev-parse", "__snapshot_ref__"], stdout="c" * 40 + "\n")
     git_stub.add(["merge-base", "--is-ancestor", "c" * 40, "b" * 40], returncode=1)
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
 
@@ -3420,9 +3402,9 @@ def test_diagnose_rejects_stale_remote_base_before_pr_dispatch(tmp_path: Path, m
     assert gh_stub.calls == []
 
 
-def test_diagnose_existing_empty_body_reports_pr_body_required(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_existing_empty_body_reports_pr_body_required(flow_root: Path, monkeypatch) -> None:
     project, result = run_diagnose_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -3503,7 +3485,7 @@ def test_diagnose_existing_empty_body_reports_pr_body_required(tmp_path: Path, m
     ],
 )
 def test_diagnose_outputs_stop_state_matrix(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     pr_stdout: str,
     returncode: int,
@@ -3511,7 +3493,7 @@ def test_diagnose_outputs_stop_state_matrix(
     expected_reason: str,
     extra_detail: dict[str, str],
 ) -> None:
-    project, result = run_diagnose_in_process(tmp_path, monkeypatch, pr_stdout=pr_stdout)
+    project, result = run_diagnose_in_process(flow_root, monkeypatch, pr_stdout=pr_stdout)
 
     assert result.returncode == returncode
     assert f"status: {expected_status}" in result.stdout
@@ -3542,13 +3524,13 @@ def test_diagnose_outputs_stop_state_matrix(
     ],
 )
 def test_diagnose_stop_output_includes_recovery_action(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     checks: list[dict[str, object]],
     expected_status: str,
     expected_reason: str,
 ) -> None:
-    project, result = run_diagnose_in_process(tmp_path, monkeypatch, pr_stdout=pr_view_json(checks=checks))
+    project, result = run_diagnose_in_process(flow_root, monkeypatch, pr_stdout=pr_view_json(checks=checks))
 
     assert result.returncode == 1
     assert f"status: {expected_status}" in result.stdout
@@ -3565,13 +3547,13 @@ def test_diagnose_stop_output_includes_recovery_action(
     ("state", "is_active"),
     [("OPEN", True), ("MERGED", False), ("CLOSED", False)],
 )
-def test_find_pr_treats_only_open_pr_as_active(tmp_path: Path, monkeypatch, state: str, is_active: bool) -> None:
+def test_find_pr_treats_only_open_pr_as_active(flow_root: Path, monkeypatch, state: str, is_active: bool) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     gh_stub.add(
         ["pr", "view", "--json", module.PR_VIEW_FIELDS],
         stdout=pr_view_json(checks=[], state=state, head_oid="c" * 40),
@@ -3586,12 +3568,12 @@ def test_find_pr_treats_only_open_pr_as_active(tmp_path: Path, monkeypatch, stat
 @pytest.mark.parametrize("command", ["complete", "tweak"])
 @pytest.mark.parametrize("terminal_state", ["MERGED", "CLOSED"])
 def test_terminal_pr_starts_new_lifecycle_from_current_head(
-    tmp_path: Path, monkeypatch, command: str, terminal_state: str
+    flow_root: Path, monkeypatch, command: str, terminal_state: str
 ) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     current_head = "b" * 40
@@ -3601,7 +3583,7 @@ def test_terminal_pr_starts_new_lifecycle_from_current_head(
         review_decision="APPROVED",
         head_oid=current_head,
     )
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(
         ["pr", "view", "--json", module.PR_VIEW_FIELDS],
         stdout=pr_view_json(checks=[], state=terminal_state, head_oid=old_head),
@@ -3612,7 +3594,7 @@ def test_terminal_pr_starts_new_lifecycle_from_current_head(
         gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=active_pr)
     allow_required_checks(gh_stub)
     allow_required_checks(gh_stub)
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -3648,12 +3630,12 @@ def test_terminal_pr_starts_new_lifecycle_from_current_head(
     assert all(old_head not in call for call in git_stub.calls)
 
 
-def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path: Path, monkeypatch) -> None:
+def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     head_oid = "b" * 40
@@ -3662,7 +3644,7 @@ def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path
         review_decision="APPROVED",
         head_oid=head_oid,
     )
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     allow_required_checks(gh_stub)
     allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found\n", returncode=1)
@@ -3673,7 +3655,7 @@ def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -3711,12 +3693,12 @@ def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path
     assert gh_stub.body_files[0]["body"] == expected_pr_body(fixes=())
 
 
-def test_complete_full_flow_uses_configured_squash_strategy(tmp_path: Path, monkeypatch) -> None:
+def test_complete_full_flow_uses_configured_squash_strategy(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project, merge_strategy="squash")
     head_oid = "b" * 40
@@ -3725,13 +3707,13 @@ def test_complete_full_flow_uses_configured_squash_strategy(tmp_path: Path, monk
         review_decision="APPROVED",
         head_oid=head_oid,
     )
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     gh_stub.add(["pr", "merge", "12", "--squash", "--match-head-commit", head_oid])
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -3762,23 +3744,23 @@ def test_complete_full_flow_uses_configured_squash_strategy(tmp_path: Path, monk
     assert ("pr", "merge", "12", "--squash", "--match-head-commit", head_oid) in gh_stub.calls
 
 
-def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path, monkeypatch) -> None:
+def test_complete_merges_locked_head_then_runs_cleanup_in_order(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     head_oid = "b" * 40
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED", head_oid=head_oid))
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED", head_oid=head_oid))
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED", head_oid=head_oid))
     gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -3815,16 +3797,16 @@ def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path, 
     assert status["command"] == "cleanup"
 
 
-def test_complete_does_not_run_build_and_verify_full_verify(tmp_path: Path, monkeypatch) -> None:
+def test_complete_does_not_run_build_and_verify_full_verify(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     head_oid = "b" * 40
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     allow_required_checks(gh_stub)
     for command in [
         ["pr", "view", "--json", module.PR_VIEW_FIELDS],
@@ -3843,7 +3825,7 @@ def test_complete_does_not_run_build_and_verify_full_verify(tmp_path: Path, monk
         ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
         stdout=cleanup_pr_view_json(),
     )
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -3885,9 +3867,9 @@ def test_complete_does_not_run_build_and_verify_full_verify(tmp_path: Path, monk
     assert "status: cleanup_complete" in result.stdout
 
 
-def test_complete_returns_cleanup_stop_when_cleanup_fails_after_merge(tmp_path: Path, monkeypatch) -> None:
+def test_complete_returns_cleanup_stop_when_cleanup_fails_after_merge(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -3912,9 +3894,9 @@ def test_complete_returns_cleanup_stop_when_cleanup_fails_after_merge(tmp_path: 
     assert "pr-flow-cleanup" in status["details"]["recovery"]
 
 
-def test_complete_stops_when_pr_sync_fails_instead_of_using_stale_pr(tmp_path: Path, monkeypatch) -> None:
+def test_complete_stops_when_pr_sync_fails_instead_of_using_stale_pr(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[
             (
@@ -3940,17 +3922,17 @@ def test_complete_stops_when_pr_sync_fails_instead_of_using_stale_pr(tmp_path: P
     assert "rate limited" in status["details"]["stderr"]
 
 
-def test_complete_uses_configured_merge_strategy_flag(tmp_path: Path, monkeypatch) -> None:
+def test_complete_uses_configured_merge_strategy_flag(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
     for strategy, expected_flag in [("merge", "--merge"), ("squash", "--squash"), ("rebase", "--rebase")]:
-        project = tmp_path / strategy
+        project = flow_root / strategy
         project.mkdir()
         head_oid = f"{strategy:0<40}"[:40]
-        git_stub = CommandStub()
+        git_stub = CommandStub(body_reader=read_body_file)
         git_stub.add(["rev-parse", "HEAD"], stdout=f"{head_oid}\n")
-        gh_stub = CommandStub()
+        gh_stub = CommandStub(body_reader=read_body_file)
         gh_stub.add(["pr", "merge", "12", expected_flag, "--match-head-commit", head_oid])
         monkeypatch.setattr(module, "git", git_stub)
         monkeypatch.setattr(module, "gh", gh_stub)
@@ -3965,10 +3947,10 @@ def test_complete_uses_configured_merge_strategy_flag(tmp_path: Path, monkeypatc
         assert gh_stub.calls == [("pr", "merge", "12", expected_flag, "--match-head-commit", head_oid)]
 
 
-def test_complete_rejects_when_head_moved_before_merge(tmp_path: Path, monkeypatch) -> None:
+def test_complete_rejects_when_head_moved_before_merge(flow_root: Path, monkeypatch) -> None:
     moved_head_oid = "0" * 40
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -4036,7 +4018,7 @@ def test_complete_rejects_when_head_moved_before_merge(tmp_path: Path, monkeypat
     ],
 )
 def test_complete_stop_preserves_recovery_command_arguments(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     pr_stdout: str,
     required_buckets: tuple[str, ...],
@@ -4045,7 +4027,7 @@ def test_complete_stop_preserves_recovery_command_arguments(
     expected_reason: str,
 ) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_stdout,
         git_responses=git_responses,
@@ -4075,7 +4057,7 @@ def test_complete_stop_preserves_recovery_command_arguments(
         cleanup_calls: list[argparse.Namespace] = []
         monkeypatch.setattr(module, "run_cleanup", lambda args: cleanup_calls.append(args) or 0)
         replay_project, replay_result = run_complete_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             project=project,
             command_args=replay_args,
@@ -4095,7 +4077,7 @@ def test_complete_stop_preserves_recovery_command_arguments(
         assert cleanup_calls[0].remove_worktree is True
 
 
-def test_complete_rejects_when_base_moves_after_checks(tmp_path: Path, monkeypatch) -> None:
+def test_complete_rejects_when_base_moves_after_checks(flow_root: Path, monkeypatch) -> None:
     head_oid = "b" * 40
     before = pr_view_json(
         checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -4110,7 +4092,7 @@ def test_complete_rejects_when_base_moves_after_checks(tmp_path: Path, monkeypat
         base_oid="c" * 40,
     )
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(before, "", 0), (before, "", 0), (after, "", 0)],
     )
@@ -4120,9 +4102,9 @@ def test_complete_rejects_when_base_moves_after_checks(tmp_path: Path, monkeypat
     assert status["details"]["reason"] == "base_outdated"
 
 
-def test_complete_rejects_missing_head_ref_oid_without_merge(tmp_path: Path, monkeypatch) -> None:
+def test_complete_rejects_missing_head_ref_oid_without_merge(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -4139,9 +4121,9 @@ def test_complete_rejects_missing_head_ref_oid_without_merge(tmp_path: Path, mon
     assert status["details"]["reason"] == "missing_head_ref_oid"
 
 
-def test_complete_rejects_current_branch_that_does_not_match_pr_head(tmp_path: Path, monkeypatch) -> None:
+def test_complete_rejects_current_branch_that_does_not_match_pr_head(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -4161,9 +4143,9 @@ def test_complete_rejects_current_branch_that_does_not_match_pr_head(tmp_path: P
     assert status["details"]["headRefName"] == "feature/example"
 
 
-def test_complete_reports_exception_when_gh_pr_merge_fails(tmp_path: Path, monkeypatch) -> None:
+def test_complete_reports_exception_when_gh_pr_merge_fails(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -4188,13 +4170,13 @@ def test_complete_reports_exception_when_gh_pr_merge_fails(tmp_path: Path, monke
     assert status["details"]["stderr"] == "merge failed"
 
 
-def test_complete_reports_dispatch_when_ruleset_blocks_merge(tmp_path: Path, monkeypatch) -> None:
+def test_complete_reports_dispatch_when_ruleset_blocks_merge(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     clock = iter(range(0, 600, 60))
     monkeypatch.setattr(module.time, "monotonic", lambda: float(next(clock)))
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: pytest.fail("expired window must not sleep"))
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -4225,12 +4207,12 @@ def test_complete_reports_dispatch_when_ruleset_blocks_merge(tmp_path: Path, mon
     assert "ruleset" in action
 
 
-def test_complete_retries_ordinary_merge_when_ruleset_suggests_auto(tmp_path: Path, monkeypatch) -> None:
+def test_complete_retries_ordinary_merge_when_ruleset_suggests_auto(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     head_oid = "b" * 40
@@ -4239,7 +4221,7 @@ def test_complete_retries_ordinary_merge_when_ruleset_suggests_auto(tmp_path: Pa
         review_decision="APPROVED",
         head_oid=head_oid,
     )
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     allow_required_checks(gh_stub)
     allow_required_checks(gh_stub)
     allow_required_checks(gh_stub)
@@ -4256,7 +4238,7 @@ def test_complete_retries_ordinary_merge_when_ruleset_suggests_auto(tmp_path: Pa
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -4291,9 +4273,9 @@ def test_complete_retries_ordinary_merge_when_ruleset_suggests_auto(tmp_path: Pa
     assert all("--auto" not in call for call in gh_stub.calls)
 
 
-def test_complete_returns_checks_pending_when_ruleset_recovery_wait_times_out(tmp_path: Path, monkeypatch) -> None:
+def test_complete_returns_checks_pending_when_ruleset_recovery_wait_times_out(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[
             (
@@ -4376,14 +4358,14 @@ def test_complete_returns_checks_pending_when_ruleset_recovery_wait_times_out(tm
     ],
 )
 def test_complete_uses_summary_only_for_pending_or_failure_when_required_checks_are_empty(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     summary: list[dict[str, object]],
     expected_status: str,
     expected_reason: str,
 ) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(checks=summary, review_decision="APPROVED", head_oid="b" * 40),
         required_responses=[("[]", "", 0)],
@@ -4398,7 +4380,7 @@ def test_complete_uses_summary_only_for_pending_or_failure_when_required_checks_
     assert status["details"]["requiredChecks"] == []
 
 
-def test_complete_rechecks_review_after_pending_checks_pass(tmp_path: Path, monkeypatch) -> None:
+def test_complete_rechecks_review_after_pending_checks_pass(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     pending = pr_view_json(
         checks=[{"name": "ci", "status": "QUEUED", "conclusion": None}],
@@ -4412,7 +4394,7 @@ def test_complete_rechecks_review_after_pending_checks_pass(tmp_path: Path, monk
     )
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(pending, "", 0), (pending, "", 0)] + [(changes_requested, "", 0)] * 3,
         required_buckets=("pending", "pass", "pass"),
@@ -4427,7 +4409,7 @@ def test_complete_rechecks_review_after_pending_checks_pass(tmp_path: Path, monk
     assert status["details"]["reviewDecision"] == "CHANGES_REQUESTED"
 
 
-def test_complete_observes_unreported_checks_until_passed(tmp_path: Path, monkeypatch) -> None:
+def test_complete_observes_unreported_checks_until_passed(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     empty = pr_view_json(checks=[], review_decision="APPROVED", head_oid="b" * 40)
     pending = pr_view_json(
@@ -4444,7 +4426,7 @@ def test_complete_observes_unreported_checks_until_passed(tmp_path: Path, monkey
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(module, "run_cleanup", lambda _args: 0)
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(empty, "", 0), (empty, "", 0), (pending, "", 0)] + [(passed, "", 0)] * 3,
         required_responses=[
@@ -4460,7 +4442,7 @@ def test_complete_observes_unreported_checks_until_passed(tmp_path: Path, monkey
     assert "status: merge_complete" in result.stdout
 
 
-def test_complete_reports_unreported_checks_after_bounded_window(tmp_path: Path, monkeypatch) -> None:
+def test_complete_reports_unreported_checks_after_bounded_window(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     empty = pr_view_json(checks=[], review_decision="APPROVED", head_oid="b" * 40)
     clock = iter([0.0, 0.0, 61.0])
@@ -4468,7 +4450,7 @@ def test_complete_reports_unreported_checks_after_bounded_window(tmp_path: Path,
     monkeypatch.setattr(module.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(module.time, "sleep", sleeps.append)
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(empty, "", 0), (empty, "", 0), (empty, "", 0)],
         required_responses=[("[]", "", 0), ("[]", "", 0)],
@@ -4486,12 +4468,12 @@ def test_complete_reports_unreported_checks_after_bounded_window(tmp_path: Path,
     assert sleeps == [5]
 
 
-def test_complete_respects_zero_timeout_while_checks_are_unreported(tmp_path: Path, monkeypatch) -> None:
+def test_complete_respects_zero_timeout_while_checks_are_unreported(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     empty = pr_view_json(checks=[], review_decision="APPROVED", head_oid="b" * 40)
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: pytest.fail("zero timeout must not sleep"))
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(empty, "", 0), (empty, "", 0)],
         required_responses=[("[]", "", 0)],
@@ -4503,7 +4485,7 @@ def test_complete_respects_zero_timeout_while_checks_are_unreported(tmp_path: Pa
     assert status["details"]["reason"] == "checks_not_reported"
 
 
-def test_complete_does_not_reset_timeout_after_unreported_window(tmp_path: Path, monkeypatch) -> None:
+def test_complete_does_not_reset_timeout_after_unreported_window(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     empty = pr_view_json(checks=[], review_decision="APPROVED", head_oid="b" * 40)
     pending = pr_view_json(
@@ -4516,7 +4498,7 @@ def test_complete_does_not_reset_timeout_after_unreported_window(tmp_path: Path,
     monkeypatch.setattr(module.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(module.time, "sleep", sleeps.append)
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(empty, "", 0), (empty, "", 0), (pending, "", 0)],
         required_responses=[
@@ -4533,7 +4515,7 @@ def test_complete_does_not_reset_timeout_after_unreported_window(tmp_path: Path,
     assert sleeps == [5]
 
 
-def test_complete_stops_when_commits_change_during_unreported_observation(tmp_path: Path, monkeypatch) -> None:
+def test_complete_stops_when_commits_change_during_unreported_observation(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     initial = pr_view_json(checks=[], review_decision="APPROVED", head_oid="b" * 40)
     changed = pr_view_json(
@@ -4543,7 +4525,7 @@ def test_complete_stops_when_commits_change_during_unreported_observation(tmp_pa
     )
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(initial, "", 0), (initial, "", 0), (changed, "", 0)],
         required_responses=[("[]", "", 0)],
@@ -4560,7 +4542,7 @@ def test_complete_stops_when_commits_change_during_unreported_observation(tmp_pa
     assert "status: merge_complete" not in result.stdout
 
 
-def test_complete_rejects_commit_change_before_gate_observation(tmp_path: Path, monkeypatch) -> None:
+def test_complete_rejects_commit_change_before_gate_observation(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     initial = pr_view_json(
         checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -4576,7 +4558,7 @@ def test_complete_rejects_commit_change_before_gate_observation(tmp_path: Path, 
     )
     monkeypatch.setattr(module, "run_cleanup", lambda _args: 0)
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(initial, "", 0), (refreshed, "", 0), (refreshed, "", 0)],
         required_responses=[
@@ -4595,7 +4577,7 @@ def test_complete_rejects_commit_change_before_gate_observation(tmp_path: Path, 
 
 
 def test_complete_waits_after_pending_exit_and_merges_when_checks_pass(
-    tmp_path: Path, monkeypatch
+    flow_root: Path, monkeypatch
 ) -> None:
     module = load_pr_flow_module()
     completed_pr = pr_view_json(
@@ -4607,7 +4589,7 @@ def test_complete_waits_after_pending_exit_and_merges_when_checks_pass(
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(module, "run_cleanup", lambda _args: 0)
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(completed_pr, "", 0)] * 5,
         required_buckets=("pending", "pass", "pass"),
@@ -4621,7 +4603,7 @@ def test_complete_waits_after_pending_exit_and_merges_when_checks_pass(
 
 @pytest.mark.parametrize("bucket", ["fail", "cancel"])
 def test_complete_failed_or_cancelled_required_checks_are_not_waited(
-    tmp_path: Path, monkeypatch, bucket: str
+    flow_root: Path, monkeypatch, bucket: str
 ) -> None:
     completed_pr = pr_view_json(
         checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -4629,7 +4611,7 @@ def test_complete_failed_or_cancelled_required_checks_are_not_waited(
         head_oid="b" * 40,
     )
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=completed_pr,
         cleanup_stdout=cleanup_pr_view_json(),
@@ -4643,7 +4625,7 @@ def test_complete_failed_or_cancelled_required_checks_are_not_waited(
     assert status["details"]["reason"] == "checks_or_review_blocking"
 
 
-def test_complete_retries_ordinary_merge_until_ruleset_converges(tmp_path: Path, monkeypatch) -> None:
+def test_complete_retries_ordinary_merge_until_ruleset_converges(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     now = 0.0
     sleeps: list[float] = []
@@ -4667,7 +4649,7 @@ def test_complete_retries_ordinary_merge_until_ruleset_converges(tmp_path: Path,
     )
     blocked = "X Pull request owner/repo#90 is not mergeable: the base branch policy prohibits the merge.\n"
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(completed_pr, "", 0)] * 8,
         merge_responses=[(blocked, 1), (blocked, 1), ("", 0)],
@@ -4681,7 +4663,7 @@ def test_complete_retries_ordinary_merge_until_ruleset_converges(tmp_path: Path,
     assert len(cleanup_calls) == 1
 
 def test_complete_preserves_initial_and_final_ruleset_errors_after_bounded_retries(
-    tmp_path: Path, monkeypatch
+    flow_root: Path, monkeypatch
 ) -> None:
     module = load_pr_flow_module()
     now = 0.0
@@ -4707,7 +4689,7 @@ def test_complete_preserves_initial_and_final_ruleset_errors_after_bounded_retri
         for index in range(5)
     ]
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(completed_pr, "", 0)] * 12,
         merge_responses=[(error, 1) for error in errors],
@@ -4725,7 +4707,7 @@ def test_complete_preserves_initial_and_final_ruleset_errors_after_bounded_retri
     assert status["details"]["retryDetails"]["stderr"] == errors[-1].strip()
     assert status["details"]["retryAttempts"] == 4
 
-def test_ruleset_retry_rechecks_commits_before_ordinary_merge(tmp_path: Path, monkeypatch) -> None:
+def test_ruleset_retry_rechecks_commits_before_ordinary_merge(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     original = json.loads(
         pr_view_json(
@@ -4759,7 +4741,7 @@ def test_ruleset_retry_rechecks_commits_before_ordinary_merge(tmp_path: Path, mo
 
     with pytest.raises(module.PrFlowError) as error:
         module.retry_merge_after_ruleset_block(
-            tmp_path,
+            flow_root,
             module.default_config("main"),
             original,
             {},
@@ -4770,7 +4752,7 @@ def test_ruleset_retry_rechecks_commits_before_ordinary_merge(tmp_path: Path, mo
     assert merge_calls == [1]
 
 
-def test_complete_stops_when_ruleset_retry_observes_pending_checks(tmp_path: Path, monkeypatch) -> None:
+def test_complete_stops_when_ruleset_retry_observes_pending_checks(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     head_oid = "b" * 40
     completed_pr = pr_view_json(
@@ -4785,7 +4767,7 @@ def test_complete_stops_when_ruleset_retry_observes_pending_checks(tmp_path: Pat
     )
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: pytest.fail("pending checks must stop retry"))
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(completed_pr, "", 0)] * 4 + [(pending_pr, "", 0)],
         merge_responses=[("X Pull request owner/repo#90 is not mergeable: the base branch policy prohibits the merge.\n", 1)],
@@ -4800,7 +4782,7 @@ def test_complete_stops_when_ruleset_retry_observes_pending_checks(tmp_path: Pat
     assert status["details"]["reason"] == "checks_pending"
 
 
-def test_complete_stops_when_review_changes_during_ruleset_retry(tmp_path: Path, monkeypatch) -> None:
+def test_complete_stops_when_review_changes_during_ruleset_retry(flow_root: Path, monkeypatch) -> None:
     approved = pr_view_json(
         checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
         review_decision="APPROVED",
@@ -4813,7 +4795,7 @@ def test_complete_stops_when_review_changes_during_ruleset_retry(tmp_path: Path,
     )
     blocked = "X Pull request owner/repo#90 is not mergeable: the base branch policy prohibits the merge.\n"
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(approved, "", 0)] * 5 + [(changes_requested, "", 0)],
         merge_responses=[(blocked, 1)],
@@ -4828,9 +4810,9 @@ def test_complete_stops_when_review_changes_during_ruleset_retry(tmp_path: Path,
     assert status["details"]["reviewDecision"] == "CHANGES_REQUESTED"
 
 
-def test_complete_rejects_unknown_merge_strategy(tmp_path: Path, monkeypatch) -> None:
+def test_complete_rejects_unknown_merge_strategy(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -4847,11 +4829,11 @@ def test_complete_rejects_unknown_merge_strategy(tmp_path: Path, monkeypatch) ->
     assert status["details"]["reason"] == "unknown_merge_strategy"
 
 
-def test_complete_skip_review_gate_ignores_github_changes_requested(tmp_path: Path) -> None:
+def test_complete_skip_review_gate_ignores_github_changes_requested(flow_root: Path) -> None:
     module = load_pr_flow_module()
 
     result = module.check_review_gate(
-        tmp_path,
+        flow_root,
         review_gate_config_for_test("skip"),
         passing_review_pr(review_decision="CHANGES_REQUESTED"),
     )
@@ -4859,9 +4841,9 @@ def test_complete_skip_review_gate_ignores_github_changes_requested(tmp_path: Pa
     assert result is None
 
 
-def test_complete_github_review_gate_blocks_changes_requested(tmp_path: Path, monkeypatch) -> None:
+def test_complete_github_review_gate_blocks_changes_requested(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -4878,9 +4860,9 @@ def test_complete_github_review_gate_blocks_changes_requested(tmp_path: Path, mo
     assert status["details"]["reason"] == "review_gate_blocking"
 
 
-def test_complete_wait_timeout_zero_reports_pending_checks_without_sleep(tmp_path: Path, monkeypatch) -> None:
+def test_complete_wait_timeout_zero_reports_pending_checks_without_sleep(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
@@ -4898,10 +4880,10 @@ def test_complete_wait_timeout_zero_reports_pending_checks_without_sleep(tmp_pat
 
 
 @pytest.mark.parametrize("review_mode", ["local", "dual"])
-def test_complete_rejects_removed_review_gate_modes(tmp_path: Path, review_mode: str) -> None:
+def test_complete_rejects_removed_review_gate_modes(flow_root: Path, review_mode: str) -> None:
     module = load_pr_flow_module()
 
-    result = module.check_review_gate(tmp_path, review_gate_config_for_test(review_mode), passing_review_pr())
+    result = module.check_review_gate(flow_root, review_gate_config_for_test(review_mode), passing_review_pr())
 
     assert result is not None
     assert result["status"] == "EXCEPTION_REQUIRED"
@@ -4910,10 +4892,10 @@ def test_complete_rejects_removed_review_gate_modes(tmp_path: Path, review_mode:
 
 
 @pytest.mark.parametrize("review_mode", [[], {}, None, 1, ""])
-def test_complete_rejects_invalid_review_gate_mode_values(tmp_path: Path, review_mode) -> None:
+def test_complete_rejects_invalid_review_gate_mode_values(flow_root: Path, review_mode) -> None:
     module = load_pr_flow_module()
 
-    result = module.check_review_gate(tmp_path, review_gate_config_for_test(review_mode), passing_review_pr())
+    result = module.check_review_gate(flow_root, review_gate_config_for_test(review_mode), passing_review_pr())
 
     assert result is not None
     assert result["status"] == "EXCEPTION_REQUIRED"
@@ -4921,8 +4903,8 @@ def test_complete_rejects_invalid_review_gate_mode_values(tmp_path: Path, review
     assert result["details"]["reviewGateMode"] == review_mode
 
 
-def test_tweak_requires_reason(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_tweak_requires_reason(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
 
     result = run("tweak", "--project", str(project))
@@ -4941,10 +4923,10 @@ def test_bare_tweak_requires_project() -> None:
     assert "--project" in result.stderr
 
 
-def test_tweak_creates_pr_when_none_exists_and_writes_body(tmp_path: Path, monkeypatch) -> None:
+def test_tweak_creates_pr_when_none_exists_and_writes_body(flow_root: Path, monkeypatch) -> None:
     reason = "small docs polish"
     _project, result, gh_stub = run_tweak_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         reason=reason,
         first_pr_returncode=1,
@@ -4965,10 +4947,10 @@ def test_tweak_creates_pr_when_none_exists_and_writes_body(tmp_path: Path, monke
     assert body_records[0]["body"] == expected_pr_body(fixes=())
 
 
-def test_tweak_skips_review_gate_for_changes_requested_then_merges_and_cleans_up(tmp_path: Path, monkeypatch) -> None:
+def test_tweak_skips_review_gate_for_changes_requested_then_merges_and_cleans_up(flow_root: Path, monkeypatch) -> None:
     reason = "rename helper only"
     _project, result, gh_stub = run_tweak_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         reason=reason,
         review_decision="CHANGES_REQUESTED",
@@ -4982,9 +4964,9 @@ def test_tweak_skips_review_gate_for_changes_requested_then_merges_and_cleans_up
     assert ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"] in calls
 
 
-def test_tweak_does_not_run_build_and_verify_full_verify(tmp_path: Path, monkeypatch) -> None:
+def test_tweak_does_not_run_build_and_verify_full_verify(flow_root: Path, monkeypatch) -> None:
     _project, result, _gh_stub = run_tweak_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         reason="wording only",
         forbid_full_verify=True,
@@ -4994,10 +4976,10 @@ def test_tweak_does_not_run_build_and_verify_full_verify(tmp_path: Path, monkeyp
     assert "status: cleanup_complete" in result.stdout
 
 
-def test_tweak_pending_checks_report_dispatch_required(tmp_path: Path, monkeypatch) -> None:
+def test_tweak_pending_checks_report_dispatch_required(flow_root: Path, monkeypatch) -> None:
     reason = "format-only cleanup"
     project, result, gh_stub = run_tweak_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         reason=reason,
         review_decision="CHANGES_REQUESTED",
@@ -5016,11 +4998,11 @@ def test_tweak_pending_checks_report_dispatch_required(tmp_path: Path, monkeypat
     assert gh_stub.body_files == []
 
 
-def test_hotfix_rejects_authorization_phrase_mismatch_without_leaking_phrase(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_rejects_authorization_phrase_mismatch_without_leaking_phrase(flow_root: Path, monkeypatch) -> None:
     wrong_phrase = "wrong-secret"
 
     project, result = run_hotfix_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         authorization_phrase=wrong_phrase,
     )
@@ -5037,9 +5019,9 @@ def test_hotfix_rejects_authorization_phrase_mismatch_without_leaking_phrase(tmp
     assert status["details"]["reason"] == "authorization_phrase_mismatch"
 
 
-def test_hotfix_missing_authorization_config_does_not_run_verify_command(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_missing_authorization_config_does_not_run_verify_command(flow_root: Path, monkeypatch) -> None:
     project, result = run_hotfix_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         include_authorization=False,
     )
@@ -5050,9 +5032,9 @@ def test_hotfix_missing_authorization_config_does_not_run_verify_command(tmp_pat
     assert status["details"]["reason"] == "authorization_phrase_missing"
 
 
-def test_hotfix_runs_verify_command_before_authorization_phrase_check(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_runs_verify_command_before_authorization_phrase_check(flow_root: Path, monkeypatch) -> None:
     project, result = run_hotfix_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         authorization_phrase="wrong-secret",
         verify_returncode=1,
@@ -5068,7 +5050,7 @@ def test_hotfix_runs_verify_command_before_authorization_phrase_check(tmp_path: 
     assert status["details"]["reason"] == "hotfix_verify_failed"
 
 
-def test_hotfix_verify_command_preserves_windows_backslash_executable_path(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_verify_command_preserves_windows_backslash_executable_path(flow_root: Path, monkeypatch) -> None:
     pr_flow = load_pr_flow_module()
     calls = []
 
@@ -5078,14 +5060,14 @@ def test_hotfix_verify_command_preserves_windows_backslash_executable_path(tmp_p
 
     monkeypatch.setattr(pr_flow.subprocess, "run", fake_run)
 
-    result = pr_flow.run_hotfix_verify_command(tmp_path, r".venv\Scripts\python.exe -m pytest")
+    result = pr_flow.run_hotfix_verify_command(flow_root, r".venv\Scripts\python.exe -m pytest")
 
     assert result.returncode == 0
     assert calls == [
         (
             [r".venv\Scripts\python.exe", "-m", "pytest"],
             {
-                "cwd": tmp_path,
+                "cwd": flow_root,
                 "check": False,
                 "text": True,
                 "capture_output": True,
@@ -5095,7 +5077,7 @@ def test_hotfix_verify_command_preserves_windows_backslash_executable_path(tmp_p
     ]
 
 
-def test_hotfix_verify_command_resolves_windows_cli_shim(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_verify_command_resolves_windows_cli_shim(flow_root: Path, monkeypatch) -> None:
     pr_flow = load_pr_flow_module()
     calls = []
     which_calls = []
@@ -5113,7 +5095,7 @@ def test_hotfix_verify_command_resolves_windows_cli_shim(tmp_path: Path, monkeyp
     monkeypatch.setattr(pr_flow.shutil, "which", fake_which)
     monkeypatch.setattr(pr_flow.subprocess, "run", fake_run)
 
-    result = pr_flow.run_hotfix_verify_command(tmp_path, "build-and-verify verify")
+    result = pr_flow.run_hotfix_verify_command(flow_root, "build-and-verify verify")
 
     assert result.returncode == 0
     assert which_calls == ["build-and-verify"]
@@ -5121,7 +5103,7 @@ def test_hotfix_verify_command_resolves_windows_cli_shim(tmp_path: Path, monkeyp
         (
             [r"C:\npm\build-and-verify.cmd", "verify"],
             {
-                "cwd": tmp_path,
+                "cwd": flow_root,
                 "check": False,
                 "text": True,
                 "capture_output": True,
@@ -5131,7 +5113,7 @@ def test_hotfix_verify_command_resolves_windows_cli_shim(tmp_path: Path, monkeyp
     ]
 
 
-def test_hotfix_verify_command_preserves_windows_relative_executable_path(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_verify_command_preserves_windows_relative_executable_path(flow_root: Path, monkeypatch) -> None:
     pr_flow = load_pr_flow_module()
     calls = []
     which_calls = []
@@ -5150,14 +5132,14 @@ def test_hotfix_verify_command_preserves_windows_relative_executable_path(tmp_pa
     monkeypatch.setattr(pr_flow.shutil, "which", fake_which)
     monkeypatch.setattr(pr_flow.subprocess, "run", fake_run)
 
-    result = pr_flow.run_hotfix_verify_command(tmp_path, f"{executable} -m pytest")
+    result = pr_flow.run_hotfix_verify_command(flow_root, f"{executable} -m pytest")
 
     assert result.returncode == 0
     assert which_calls == []
     assert calls[0][0][0] == executable
 
 
-def test_hotfix_verify_command_preserves_missing_command_error(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_verify_command_preserves_missing_command_error(flow_root: Path, monkeypatch) -> None:
     pr_flow = load_pr_flow_module()
     calls = []
     which_calls = []
@@ -5176,7 +5158,7 @@ def test_hotfix_verify_command_preserves_missing_command_error(tmp_path: Path, m
     monkeypatch.setattr(pr_flow.subprocess, "run", fake_run)
 
     with pytest.raises(pr_flow.PrFlowError) as error:
-        pr_flow.run_hotfix_verify_command(tmp_path, "missing-command verify")
+        pr_flow.run_hotfix_verify_command(flow_root, "missing-command verify")
 
     assert error.value.reason == "hotfix_verify_failed"
     assert error.value.details["returncode"] == 127
@@ -5185,7 +5167,7 @@ def test_hotfix_verify_command_preserves_missing_command_error(tmp_path: Path, m
     assert calls[0][1]["shell"] is False
 
 
-def test_hotfix_verify_command_uses_shlex_on_non_windows(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_verify_command_uses_shlex_on_non_windows(flow_root: Path, monkeypatch) -> None:
     pr_flow = load_pr_flow_module()
     calls = []
 
@@ -5196,7 +5178,7 @@ def test_hotfix_verify_command_uses_shlex_on_non_windows(tmp_path: Path, monkeyp
     monkeypatch.setattr(pr_flow.os, "name", "posix")
     monkeypatch.setattr(pr_flow.subprocess, "run", fake_run)
 
-    result = pr_flow.run_hotfix_verify_command(tmp_path, "python -m pytest")
+    result = pr_flow.run_hotfix_verify_command(flow_root, "python -m pytest")
 
     assert result.returncode == 0
     assert calls[0][0] == ["python", "-m", "pytest"]
@@ -5212,8 +5194,8 @@ def test_hotfix_requires_target_for_bare_command() -> None:
     assert "--target" in result.stderr
 
 
-def test_hotfix_requires_target_when_project_and_authorization_are_supplied(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_hotfix_requires_target_when_project_and_authorization_are_supplied(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
 
     result = run(
@@ -5230,9 +5212,9 @@ def test_hotfix_requires_target_when_project_and_authorization_are_supplied(tmp_
     assert "--target" in result.stderr
 
 
-def test_hotfix_rejects_target_branch_without_allow_hotfix_push(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_rejects_target_branch_without_allow_hotfix_push(flow_root: Path, monkeypatch) -> None:
     project, result = run_hotfix_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         allow_hotfix=False,
     )
@@ -5244,9 +5226,9 @@ def test_hotfix_rejects_target_branch_without_allow_hotfix_push(tmp_path: Path, 
     assert status["details"]["reason"] == "hotfix_push_not_allowed"
 
 
-def test_hotfix_requires_explicit_target_branch_allow_hotfix_push(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_requires_explicit_target_branch_allow_hotfix_push(flow_root: Path, monkeypatch) -> None:
     project, result = run_hotfix_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         include_branch=False,
     )
@@ -5258,9 +5240,9 @@ def test_hotfix_requires_explicit_target_branch_allow_hotfix_push(tmp_path: Path
     assert status["details"]["reason"] == "hotfix_push_not_allowed"
 
 
-def test_hotfix_rejects_dirty_worktree_before_push(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_rejects_dirty_worktree_before_push(flow_root: Path, monkeypatch) -> None:
     project, result = run_hotfix_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         git_responses=[
             (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], "", 0),
@@ -5280,18 +5262,18 @@ def test_hotfix_rejects_dirty_worktree_before_push(tmp_path: Path, monkeypatch) 
     assert "dirty.txt" in status["details"]["dirty"]
 
 
-def test_hotfix_writes_audit_record_when_post_push_readback_mismatches(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_writes_audit_record_when_post_push_readback_mismatches(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     pr_flow = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_hotfix_pr_flow_config(project)
     before_commit = "a" * 40
     head_commit = "b" * 40
     remote_after = "0" * 40
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
         (["rev-parse", "__snapshot_ref__"], before_commit + "\n"),
@@ -5347,8 +5329,16 @@ def test_hotfix_writes_audit_record_when_post_push_readback_mismatches(tmp_path:
     }
 
 
-def test_hotfix_missing_git_is_not_reported_as_missing_config(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_hotfix_missing_git_is_not_reported_as_missing_config(flow_root: Path, monkeypatch, pr_memory) -> None:
+    module = load_pr_flow_module()
+    monkeypatch.setattr(module, "git", pr_memory["git"])
+
+    def missing_git(command, **_kwargs):
+        assert command[0] == "git"
+        raise FileNotFoundError("git executable is unavailable")
+
+    monkeypatch.setattr(module.subprocess, "run", missing_git)
+    project = flow_root / "project"
     project.mkdir()
     write_hotfix_pr_flow_config(project)
     env = os.environ.copy()
@@ -5374,10 +5364,10 @@ def test_hotfix_missing_git_is_not_reported_as_missing_config(tmp_path: Path) ->
     assert status["details"]["reason"] == "git_fetch_target_failed"
 
 
-def test_hotfix_rejects_when_head_is_not_based_on_latest_remote_target(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_rejects_when_head_is_not_based_on_latest_remote_target(flow_root: Path, monkeypatch) -> None:
     remote_head = "a" * 40
     project, result = run_hotfix_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         git_responses=[
             (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], "", 0),
@@ -5395,9 +5385,9 @@ def test_hotfix_rejects_when_head_is_not_based_on_latest_remote_target(tmp_path:
     assert status["details"]["remoteHead"] == remote_head
 
 
-def test_hotfix_rejects_when_verify_command_fails(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_rejects_when_verify_command_fails(flow_root: Path, monkeypatch) -> None:
     project, result = run_hotfix_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         verify_returncode=1,
     )
@@ -5410,8 +5400,8 @@ def test_hotfix_rejects_when_verify_command_fails(tmp_path: Path, monkeypatch) -
     assert status["details"]["returncode"] != 0
 
 
-def test_hotfix_remove_failure_does_not_report_completion_in_target(tmp_path: Path, monkeypatch) -> None:
-    controller = tmp_path / "controller"
+def test_hotfix_remove_failure_does_not_report_completion_in_target(flow_root: Path, monkeypatch) -> None:
+    controller = flow_root / "controller"
     controller.mkdir()
     module = load_pr_flow_module()
 
@@ -5429,7 +5419,7 @@ def test_hotfix_remove_failure_does_not_report_completion_in_target(tmp_path: Pa
 
     monkeypatch.setattr(module, "remove_worktree", fail_remove)
     project, result = run_hotfix_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         remove_worktree=True,
         git_responses=[
@@ -5455,17 +5445,17 @@ def test_hotfix_remove_failure_does_not_report_completion_in_target(tmp_path: Pa
     assert status["details"]["reason"] == "physical_worktree_remove_failed"
 
 
-def test_hotfix_pushes_head_to_target_and_writes_audit_record(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_pushes_head_to_target_and_writes_audit_record(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     pr_flow = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_hotfix_pr_flow_config(project)
     before_commit = "a" * 40
     head_commit = "b" * 40
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
         (["rev-parse", "__snapshot_ref__"], before_commit + "\n"),
@@ -5521,108 +5511,28 @@ def test_hotfix_pushes_head_to_target_and_writes_audit_record(tmp_path: Path, mo
     }
 
 
-def run_cleanup_with_real_git(
-    project: Path,
-    monkeypatch,
-    *,
-    remove_worktree: bool = False,
-    pr_stdout: str | None = None,
-) -> subprocess.CompletedProcess[str]:
+def test_cleanup_detaches_when_base_becomes_occupied_during_checkout(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    gh_stub = CommandStub()
-    gh_stub.add(
-        ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
-        stdout=pr_stdout or cleanup_pr_view_json(),
-    )
-    monkeypatch.setattr(module, "gh", gh_stub)
-    args = ["cleanup", "--project", str(project), "--pr", "12"]
-    if remove_worktree:
-        args.append("--remove-worktree")
-    return invoke_pr_flow(args, module=module)
-
-
-def test_cleanup_physical_failure_persists_status_in_controller(tmp_path: Path, monkeypatch) -> None:
-    module = load_pr_flow_module()
-
-    def fail_rmtree(_target: Path) -> None:
-        raise OSError("directory is still in use")
-
-    monkeypatch.setattr(module, "find_orca_worktree_id", lambda *_args: None)
-    monkeypatch.setattr(module.shutil, "rmtree", fail_rmtree)
-    project, result = run_cleanup_in_process(
-        tmp_path,
-        monkeypatch,
-        pr_stdout=cleanup_pr_view_json(),
-        remove_worktree=True,
-    )
-
-    assert result.returncode == 1
-    assert "cleanup_complete" not in result.stdout
-    status = json.loads((tmp_path / "controller" / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "physical_worktree_remove_failed"
-    assert status["details"]["registrationRemoved"] is True
-    assert status["details"]["nextAction"]
-    assert status["details"]["nextCommand"]
-    expected_recovery_command = "rmdir" if os.name == "nt" else "rm -rf"
-    assert expected_recovery_command in status["details"]["nextCommand"]
-    assert status["details"]["recovery"] == status["details"]["nextAction"]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def test_cleanup_detaches_when_base_becomes_occupied_during_checkout(tmp_path: Path, monkeypatch) -> None:
-    from tests.support.command_stubs import CommandStub
-    from tests.support.pr_flow_invocation import invoke_pr_flow
-
-    module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_minimal_pr_flow_config(project)
     base_oid = "a" * 40
     head_oid = "b" * 40
-    other = tmp_path / "base-worktree"
+    other = flow_root / "base-worktree"
     initial_worktrees = f"worktree {project}\0HEAD {head_oid}\0branch refs/heads/feature/example\0\0"
     occupied_worktrees = (
         f"worktree {project}\0HEAD {base_oid}\0detached\0\0"
         f"worktree {other}\0HEAD {base_oid}\0branch refs/heads/main\0\0"
     )
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(
         ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
         stdout=cleanup_pr_view_json(),
     )
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout, returncode in [
         (["status", "--short"], "", 0),
         (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], "", 0),
@@ -5652,23 +5562,23 @@ def test_cleanup_detaches_when_base_becomes_occupied_during_checkout(tmp_path: P
     )
 
 
-def test_cleanup_retries_source_deletion_from_synced_base(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_retries_source_deletion_from_synced_base(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_minimal_pr_flow_config(project)
     base_oid = "a" * 40
     head_oid = "b" * 40
     worktrees = f"worktree {project}\0HEAD {base_oid}\0branch refs/heads/main\0\0"
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(
         ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
         stdout=cleanup_pr_view_json(),
     )
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["status", "--short"], ""),
         (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
@@ -5702,17 +5612,9 @@ def test_cleanup_retries_source_deletion_from_synced_base(tmp_path: Path, monkey
     assert ("push", "origin", "--delete", "feature/example") in git_stub.calls
 
 
-
-
-
-
-
-
-
-
-def test_cleanup_returns_to_latest_base_and_deletes_source_branches(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_returns_to_latest_base_and_deletes_source_branches(flow_root: Path, monkeypatch) -> None:
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(),
     )
@@ -5727,16 +5629,16 @@ def test_cleanup_returns_to_latest_base_and_deletes_source_branches(tmp_path: Pa
     assert status["details"]["baseCheckout"] == {"status": "checked_out"}
 
 
-def test_cleanup_retries_transient_eof_pr_view_before_cleanup(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_retries_transient_eof_pr_view_before_cleanup(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_minimal_pr_flow_config(project)
     monkeypatch.setenv("PR_FLOW_GH_PR_VIEW_RETRIES", "1")
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(
         ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
         stderr='Post "https://api.github.com/graphql": EOF\n',
@@ -5746,7 +5648,7 @@ def test_cleanup_retries_transient_eof_pr_view_before_cleanup(tmp_path: Path, mo
         ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
         stdout=cleanup_pr_view_json(),
     )
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     base_oid = "a" * 40
     for git_args, stdout in [
         (["status", "--short"], ""),
@@ -5781,10 +5683,10 @@ def test_cleanup_retries_transient_eof_pr_view_before_cleanup(tmp_path: Path, mo
     assert gh_stub.calls.count(("pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner")) == 2
 
 
-def test_cleanup_refuses_remote_base_change_during_cleanup(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_refuses_remote_base_change_during_cleanup(flow_root: Path, monkeypatch) -> None:
     base_oid = "a" * 40
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(),
         git_responses=[
@@ -5799,9 +5701,9 @@ def test_cleanup_refuses_remote_base_change_during_cleanup(tmp_path: Path, monke
     assert status["details"]["remoteBaseCommit"] == "c" * 40
 
 
-def test_cleanup_uses_live_state_instead_of_completed_step_markers(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_uses_live_state_instead_of_completed_step_markers(flow_root: Path, monkeypatch) -> None:
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(base_ref="missing-base"),
         git_responses=[
@@ -5820,9 +5722,9 @@ def test_cleanup_uses_live_state_instead_of_completed_step_markers(tmp_path: Pat
     assert "completedCleanupSteps" not in status["details"]
 
 
-def test_cleanup_checks_out_but_does_not_pull_local_base_branch(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_checks_out_but_does_not_pull_local_base_branch(flow_root: Path, monkeypatch) -> None:
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(),
         git_responses=[
@@ -5843,9 +5745,9 @@ def test_cleanup_checks_out_but_does_not_pull_local_base_branch(tmp_path: Path, 
     assert status["details"]["baseCheckout"] == {"status": "checked_out"}
 
 
-def test_cleanup_rejects_pr_state_that_is_not_merged(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_rejects_pr_state_that_is_not_merged(flow_root: Path, monkeypatch) -> None:
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(state="OPEN"),
     )
@@ -5854,9 +5756,9 @@ def test_cleanup_rejects_pr_state_that_is_not_merged(tmp_path: Path, monkeypatch
     assert_cleanup_exception(project, result, "pr_not_merged")
 
 
-def test_cleanup_rejects_dirty_worktree(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_rejects_dirty_worktree(flow_root: Path, monkeypatch) -> None:
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(),
         git_responses=[(["status", "--short"], "dirty.txt\n", 0)],
@@ -5865,9 +5767,9 @@ def test_cleanup_rejects_dirty_worktree(tmp_path: Path, monkeypatch) -> None:
     assert_cleanup_exception(project, result, "dirty_worktree")
 
 
-def test_cleanup_rejects_head_branch_equal_to_base_branch(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_rejects_head_branch_equal_to_base_branch(flow_root: Path, monkeypatch) -> None:
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(head_ref="main", base_ref="main"),
         git_responses=[
@@ -5879,9 +5781,9 @@ def test_cleanup_rejects_head_branch_equal_to_base_branch(tmp_path: Path, monkey
     assert_cleanup_exception(project, result, "protected_base_branch")
 
 
-def test_cleanup_rejects_current_branch_mismatch(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_rejects_current_branch_mismatch(flow_root: Path, monkeypatch) -> None:
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(),
         git_responses=[
@@ -5891,34 +5793,6 @@ def test_cleanup_rejects_current_branch_mismatch(tmp_path: Path, monkeypatch) ->
     )
 
     assert_cleanup_exception(project, result, "current_branch_mismatch")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @pytest.mark.parametrize(
@@ -5959,8 +5833,6 @@ def test_valid_toolchain_identity_rejects_an_overlong_malicious_release_version(
     assert not load_pr_flow_module().valid_toolchain_identity(identity, "plugins/my-spec")
 
 
-
-
 @pytest.mark.parametrize(
     ("tool", "toolchain"),
     [
@@ -5982,9 +5854,9 @@ def test_valid_toolchain_identity_rejects_an_overlong_malicious_release_version(
     ],
 )
 def test_init_rejects_untrusted_toolchain_identity_in_process(
-    tmp_path: Path, monkeypatch, tool: str, toolchain: dict[str, object]
+    flow_root: Path, monkeypatch, tool: str, toolchain: dict[str, object]
 ) -> None:
-    config = tmp_path / "config.yaml"
+    config = flow_root / "config.yaml"
     config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow, load_pr_flow_module as fresh_module
@@ -5995,13 +5867,13 @@ def test_init_rejects_untrusted_toolchain_identity_in_process(
     }
     reports[tool] = {"toolchain": toolchain}
     module = fresh_module()
-    doctor = CommandStub()
+    doctor = CommandStub(body_reader=read_body_file)
     for command, report in reports.items():
         doctor.add((command, "doctor"), stdout=json.dumps(report))
     monkeypatch.setattr(module.shutil, "which", lambda command: command)
     monkeypatch.setattr(module.subprocess, "run", lambda command, **kwargs: doctor(*command, **kwargs))
 
-    result = invoke_pr_flow(["init", "--project", str(tmp_path / "project"), "--config", str(config)], module=module)
+    result = invoke_pr_flow(["init", "--project", str(flow_root / "project"), "--config", str(config)], module=module)
 
     assert result.returncode == 1
     source_commit = toolchain.get("sourceCommit")
@@ -6011,24 +5883,22 @@ def test_init_rejects_untrusted_toolchain_identity_in_process(
         else "toolchain_identity_invalid"
     )
     assert f"status: {expected_status}" in result.stdout
-    assert not (tmp_path / "project" / ".pr-flow/toolchain.json").exists()
+    assert not (flow_root / "project" / ".pr-flow/toolchain.json").exists()
 
-    assert not (tmp_path / "project" / ".pr-flow/config.yaml").exists()
-    assert not (tmp_path / "project" / ".github/workflows/pr-flow-toolchain.yml").exists()
-
-
+    assert not (flow_root / "project" / ".pr-flow/config.yaml").exists()
+    assert not (flow_root / "project" / ".github/workflows/pr-flow-toolchain.yml").exists()
 
 
-def test_legacy_cleanup_and_hotfix_keep_behavior_with_upgrade_prompt(tmp_path: Path, monkeypatch) -> None:
+def test_legacy_cleanup_and_hotfix_keep_behavior_with_upgrade_prompt(flow_root: Path, monkeypatch) -> None:
     project, cleanup = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=json.dumps({"number": 12, "state": "OPEN", "headRefName": "feature/example", "baseRefName": "main"}),
     )
     assert "upgrade available: rerun pr-flow-init to record the managed toolchain" in cleanup.stdout
     assert_cleanup_exception(project, cleanup, "pr_not_merged")
 
-    hotfix_root = tmp_path / "hotfix"
+    hotfix_root = flow_root / "hotfix"
     hotfix_root.mkdir()
     _, hotfix = run_hotfix_in_process(hotfix_root, monkeypatch, allow_hotfix=False)
     assert "upgrade available: rerun pr-flow-init to record the managed toolchain" in hotfix.stdout

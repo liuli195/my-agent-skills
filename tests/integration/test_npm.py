@@ -20,6 +20,7 @@ import yaml
 import pytest
 
 from tests.support.npm_candidates import candidate_for, copy_install
+from tests.test_build_and_verify_plugin import read_json, write_json, write_runner_config, command_that_logs
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "plugins" / "build-and-verify"
@@ -211,6 +212,12 @@ def _legacy_project(tmp_path: Path) -> Path:
     assert committed.returncode == 0, committed.stderr
     return project
 
+
+
+def _run_installed_bav(*args: str) -> subprocess.CompletedProcess[str]:
+    candidate = candidate_for("build-and-verify")
+    return subprocess.run([str(candidate.executable), *args], text=True, capture_output=True,
+        check=False, env={**os.environ, "BUILD_AND_VERIFY_PYTHON": sys.executable})
 
 
 class TestBuildAndVerify:
@@ -1438,7 +1445,7 @@ class TestBuildAndVerify:
         assert _git(project, "status", "--porcelain").stdout == ""
 
 
-    def test_packed_build_and_verify_codex_doctor_resolves_orca_and_explicit_homes(self, 
+    def test_packed_build_and_verify_codex_doctor_resolves_orca_and_explicit_homes(self,
         tmp_path: Path,
     ) -> None:
         _, prefix, executable = _installed_build_and_verify(tmp_path)
@@ -1560,7 +1567,7 @@ class TestBuildAndVerify:
         assert _git(project, "status", "--porcelain").stdout == "?? unrelated.txt\n"
 
 
-    def test_packed_build_and_verify_dev_identity_controls_public_verify_cache(self, 
+    def test_packed_build_and_verify_dev_identity_controls_public_verify_cache(self,
         tmp_path: Path,
     ) -> None:
         _, prefix, executable = _installed_build_and_verify(tmp_path)
@@ -1822,6 +1829,172 @@ class TestBuildAndVerify:
         report = json.loads((project / ".build-and-verify/runs/performance-report.json").read_text())
         assert report["unfinished"] == ["first", "second"]
         assert all(check["status"] == "timed_out" for check in report["checks"])
+
+
+    def test_build_and_verify_init_writes_config_gitignore_and_cache(self, tmp_path: Path) -> None:
+        project = tmp_path / "project"
+        project.mkdir()
+
+        result = _run_installed_bav("init", "--project", str(project))
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "status: initialized" in result.stdout
+        assert (project / ".build-and-verify" / "config.json").is_file()
+        assert (project / ".build-and-verify" / ".gitignore").is_file()
+        assert (project / ".build-and-verify" / "cache").is_dir()
+        assert not (project / "scripts" / "check.py").exists()
+        assert read_json(project / ".build-and-verify" / "config.json") == {
+            "version": 2,
+            "build": {"checks": []},
+            "verify": {"realChecks": [], "checks": []},
+        }
+        assert (project / ".build-and-verify" / ".gitignore").read_text(
+            encoding="utf-8"
+        ) == "/cache/\n/runs/\n/backups/\n"
+        assert "build-and-verify-init" not in result.stdout
+        assert "questionnaire" not in result.stdout.lower()
+        assert "questionnaire" not in result.stderr.lower()
+        assert not (project / ".build-and-verify" / "backups").exists()
+        assert read_json(project / ".build-and-verify" / "config.json")["build"]["checks"] == []
+        assert read_json(project / ".build-and-verify" / "config.json")["verify"]["checks"] == []
+
+
+    def test_runtime_guard_invalid_migration_keeps_existing_configuration(self, tmp_path: Path) -> None:
+        project = tmp_path / "project"
+        write_runner_config(project)
+        path = project / ".build-and-verify/config.json"
+        before = path.read_bytes()
+        draft = tmp_path / "draft.json"
+        write_json(draft, {"version": 2, "verify": {"checks": []}})
+        result = _run_installed_bav("init", "--project", str(project), "--config", str(draft), "--overwrite")
+        assert result.returncode == 1
+        assert "verify.realChecks" in result.stderr
+        assert path.read_bytes() == before
+        assert not (project / ".build-and-verify/backups").exists()
+
+
+    def test_build_and_verify_init_writes_confirmed_config_with_overwrite(self,
+        tmp_path: Path,
+    ) -> None:
+        project = tmp_path / "project"
+        project.mkdir()
+        build_dir = project / ".build-and-verify"
+        build_dir.mkdir()
+        old_config = {"version": 1, "build": {"checks": []}, "verify": {"checks": []}}
+        confirmed_config = {
+            "version": 1,
+            "build": {"checks": []},
+            "verify": {
+                "checks": [
+                    {
+                        "id": "verify.confirmed",
+                        "command": command_that_logs("confirmed"),
+                        "inputs": [],
+                    }
+                ]
+            },
+        }
+        write_json(build_dir / "config.json", old_config)
+        (build_dir / ".gitignore").write_text("/custom/\n/cache/\n", encoding="utf-8")
+        confirmed = tmp_path / "confirmed.json"
+        write_json(confirmed, confirmed_config)
+
+        result = _run_installed_bav(
+            "init",
+            "--project",
+            str(project),
+            "--config",
+            str(confirmed),
+            "--overwrite",
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert read_json(build_dir / "config.json") == confirmed_config
+        backups = list((build_dir / "backups").glob("config-*.json"))
+        assert len(backups) == 1
+        assert read_json(backups[0]) == old_config
+        assert set((build_dir / ".gitignore").read_text(encoding="utf-8").splitlines()) == {
+            "/custom/",
+            "/cache/",
+            "/runs/",
+            "/backups/",
+        }
+        assert not (build_dir / "runtime").exists()
+        assert (build_dir / "cache").is_dir()
+
+
+    @pytest.mark.parametrize(
+        "existing",
+        [
+            Path(".build-and-verify/config.json"),
+            Path(".build-and-verify/.gitignore"),
+        ],
+    )
+    def test_build_and_verify_init_refuses_existing_files_before_writes(self,
+        tmp_path: Path, existing: Path
+    ) -> None:
+        project = tmp_path / "project"
+        project.mkdir()
+        existing_path = project / existing
+        existing_path.parent.mkdir(parents=True, exist_ok=True)
+        if existing.suffix:
+            existing_path.write_text("keep me\n", encoding="utf-8")
+        else:
+            existing_path.mkdir()
+
+        result = _run_installed_bav("init", "--project", str(project))
+
+        assert result.returncode != 0
+        assert f"existing_file: {existing.as_posix()}" in result.stderr
+        if existing.suffix:
+            assert existing_path.read_text(encoding="utf-8") == "keep me\n"
+        else:
+            assert existing_path.is_dir()
+        generated_files = [
+            Path(".build-and-verify/config.json"),
+            Path(".build-and-verify/.gitignore"),
+        ]
+        for relative in generated_files:
+            path = project / relative
+            if path != existing_path:
+                assert not path.exists()
+        assert not (project / ".build-and-verify" / "cache").exists()
+
+
+    @pytest.mark.parametrize(
+        ("action", "failure_report"),
+        [
+            ("build", "checked: invalid-output"),
+            ("verify", "failed: invalid-output"),
+        ],
+    )
+    def test_build_and_verify_runner_reports_failed_check_with_invalid_utf8_output(self,
+        tmp_path: Path, action: str, failure_report: str
+    ) -> None:
+        project = tmp_path / "project"
+        project.mkdir()
+        check = {
+            "id": "invalid-output",
+            "command": [
+                sys.executable,
+                "-c",
+                "import os; os.write(2, b'invalid: \\xff\\n'); raise SystemExit(7)",
+            ],
+            "inputs": [],
+        }
+        write_runner_config(
+            project,
+            build_checks=[check] if action == "build" else None,
+            verify_checks=[check] if action == "verify" else None,
+        )
+
+        result = _run_installed_bav(action, "--project", str(project), *( ("--full",) if action == "verify" else ()))
+
+        assert result.returncode == 1
+        assert "invalid: \ufffd" in result.stderr
+        assert failure_report in result.stdout
+        assert "status: failed" in result.stdout
+        assert "UnicodeDecodeError" not in result.stderr
 
 
 # MySpec package scenarios. This section is supplied by its domain owner.
@@ -2697,7 +2870,7 @@ class TestMySpec:
         monkeypatch.setenv("MYSPEC_PACKAGE_VERSION", _MYSPEC_PACKAGE_VERSION)
 
 
-    def test_packed_myspec_bare_cli_uses_isolated_package_before_host_commands(self, 
+    def test_packed_myspec_bare_cli_uses_isolated_package_before_host_commands(self,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         installed = tmp_path / "installed"
@@ -2811,7 +2984,7 @@ class TestMySpec:
         assert not any(marker.exists() for marker in host_markers.values())
 
 
-    def test_packed_myspec_update_recovers_external_success_before_bookkeeping(self, 
+    def test_packed_myspec_update_recovers_external_success_before_bookkeeping(self,
         tmp_path: Path,
     ) -> None:
         installed = tmp_path / "installed"
@@ -2901,7 +3074,7 @@ class TestMySpec:
         assert "doctor" not in pending["completed"]
 
 
-    def test_packed_myspec_preserves_lock_when_process_status_is_unknown(self, 
+    def test_packed_myspec_preserves_lock_when_process_status_is_unknown(self,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         executable, installed_package = _myspec_install_packed_myspec(tmp_path)
@@ -2939,7 +3112,7 @@ class TestMySpec:
             assert npm_log.read_text(encoding="utf-8") == ""
 
 
-    def test_packed_myspec_serializes_init_and_reports_locks_without_mutating_them(self, 
+    def test_packed_myspec_serializes_init_and_reports_locks_without_mutating_them(self,
         tmp_path: Path,
     ) -> None:
         executable, installed_package = _myspec_install_packed_myspec(tmp_path)
@@ -2984,7 +3157,7 @@ class TestMySpec:
 
 
     @pytest.mark.parametrize("shared_marketplaces_include_tool", [True, False])
-    def test_packed_myspec_switches_package_between_development_and_saved_release(self, 
+    def test_packed_myspec_switches_package_between_development_and_saved_release(self,
         tmp_path: Path,
         shared_marketplaces_include_tool: bool,
     ) -> None:
@@ -3061,7 +3234,7 @@ class TestMySpec:
         assert json.loads(explicit.stdout)["source"] == str(source)
 
 
-    def test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit(self, 
+    def test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit(self,
         tmp_path: Path,
     ) -> None:
         installed = tmp_path / "installed"
@@ -3120,7 +3293,7 @@ class TestMySpec:
         ).stdout.strip()
 
 
-    def test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged(self, 
+    def test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged(self,
         tmp_path: Path,
     ) -> None:
         installed = tmp_path / "installed"
@@ -3205,7 +3378,7 @@ class TestMySpec:
         assert "系统 MUST 允许密码登录。" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
 
 
-    def test_packed_myspec_dev_doctor_drops_commit_after_closure_branch_removed(self, 
+    def test_packed_myspec_dev_doctor_drops_commit_after_closure_branch_removed(self,
         tmp_path: Path,
     ) -> None:
         installed = tmp_path / "installed"
@@ -3267,7 +3440,7 @@ class TestMySpec:
         assert "sourceCommit" not in json.loads(unpublished.stdout)["toolchain"]
 
 
-    def test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_context(self, 
+    def test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_context(self,
         tmp_path: Path,
     ) -> None:
         installed = tmp_path / "installed"
@@ -3542,7 +3715,7 @@ class TestMySpec:
         assert {relative: (specs / relative).read_bytes() for relative in before} == after_first
 
 
-    def test_packed_myspec_refreshes_enabled_codex_across_global_mode_switches(self, 
+    def test_packed_myspec_refreshes_enabled_codex_across_global_mode_switches(self,
         tmp_path: Path,
     ) -> None:
         installed = tmp_path / "installed"
@@ -3600,7 +3773,7 @@ class TestMySpec:
         assert not any(call[:3] == ["plugin", "marketplace", "upgrade"] for call in calls)
 
 
-    def test_packed_myspec_refreshes_enabled_claude_across_global_mode_switches(self, 
+    def test_packed_myspec_refreshes_enabled_claude_across_global_mode_switches(self,
         tmp_path: Path,
     ) -> None:
         installed = tmp_path / "installed"
@@ -3652,7 +3825,7 @@ class TestMySpec:
         assert not any(call[:2] == ["plugin", "update"] for call in calls)
 
 
-    def test_packed_myspec_release_install_failure_stays_in_dev_and_retries(self, 
+    def test_packed_myspec_release_install_failure_stays_in_dev_and_retries(self,
         tmp_path: Path,
     ) -> None:
         executable, installed_package = _myspec_install_packed_myspec(tmp_path)
@@ -3687,7 +3860,7 @@ class TestMySpec:
         assert json.loads(state_path.read_text(encoding="utf-8"))["mode"] == "release"
 
 
-    def test_atomic_management_write_retries_windows_sharing_violation(self, 
+    def test_atomic_management_write_retries_windows_sharing_violation(self,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         management = _myspec_load_management_module()
@@ -4008,7 +4181,7 @@ class TestMySpec:
         assert marker.read_text(encoding="utf-8") == str(signal.SIGTERM)
 
 
-    def test_myspec_cli_preserves_untouched_lf_and_crlf_bytes_for_preview_and_apply(self, 
+    def test_myspec_cli_preserves_untouched_lf_and_crlf_bytes_for_preview_and_apply(self,
         tmp_path: Path,
     ) -> None:
         specs = tmp_path / "specs"
@@ -4132,7 +4305,7 @@ class TestMySpec:
         } == before_repeat
 
 
-    def test_spec_ops_cli_persists_complete_conflicts_and_resumes_in_a_new_process(self, 
+    def test_spec_ops_cli_persists_complete_conflicts_and_resumes_in_a_new_process(self,
         tmp_path: Path,
     ) -> None:
         work = tmp_path / ".local" / "spec-work"
@@ -4259,7 +4432,7 @@ class TestMySpec:
         assert not (work / "lock").exists()
 
 
-    def test_myspec_recovery_aborts_legacy_preview_and_preserves_material(self, 
+    def test_myspec_recovery_aborts_legacy_preview_and_preserves_material(self,
         _myspec_recovery_session, _myspec_recovery_cli,
     ) -> None:
         target, work, specs, delta, preview = _myspec_recovery_session
@@ -4306,7 +4479,7 @@ class TestMySpec:
         assert (work / "lock").read_bytes() == new_lock
 
 
-    def test_myspec_recovery_reimports_only_delta_and_restarts_confirmation(self, 
+    def test_myspec_recovery_reimports_only_delta_and_restarts_confirmation(self,
         _myspec_recovery_session, _myspec_recovery_cli,
     ) -> None:
         target, work, specs, delta, preview = _myspec_recovery_session
@@ -4356,7 +4529,7 @@ class TestMySpec:
 
 
     @pytest.mark.parametrize("fault", ["failure-before", "failure-after", "interrupt-before", "interrupt-after", "cleanup-lock", "cleanup-draft"])
-    def test_myspec_recovery_refuses_interrupted_or_failed_formal_application(self, 
+    def test_myspec_recovery_refuses_interrupted_or_failed_formal_application(self,
         tmp_path: Path, _myspec_recovery_session, _myspec_recovery_cli, fault: str,
     ) -> None:
         target, work, specs, delta, preview = _myspec_recovery_session
@@ -4449,7 +4622,7 @@ class TestMySpec:
         ("unknown-phase", "application_recovery_required"),
         ("redirected-draft", "unsafe_recovery_entry"),
     ])
-    def test_myspec_recovery_rejects_insufficient_or_foreign_evidence(self, 
+    def test_myspec_recovery_rejects_insufficient_or_foreign_evidence(self,
         tmp_path: Path, _myspec_recovery_session, _myspec_recovery_cli, evidence: str, error: str,
     ) -> None:
         target, work, specs, delta, preview = _myspec_recovery_session
@@ -4510,7 +4683,7 @@ class TestMySpec:
 
 
     @pytest.mark.parametrize("fault", ["archive-directory", "archive-rename", "interrupt-after-archive", "unlock", "foreign-lock-after-archive"])
-    def test_myspec_recovery_preserves_lock_until_archive_and_retries_safely(self, 
+    def test_myspec_recovery_preserves_lock_until_archive_and_retries_safely(self,
         tmp_path: Path, _myspec_recovery_session, _myspec_recovery_cli, fault: str,
     ) -> None:
         target, work, specs, delta, preview = _myspec_recovery_session
@@ -4570,7 +4743,7 @@ class TestMySpec:
 
 
     @pytest.mark.parametrize("replace_lock", [False, True])
-    def test_myspec_recovery_init_failure_removes_only_its_own_lock(self, 
+    def test_myspec_recovery_init_failure_removes_only_its_own_lock(self,
         tmp_path: Path, _myspec_recovery_cli, replace_lock: bool,
     ) -> None:
         work = tmp_path / "consumer" / ".local" / "spec-work"
@@ -4636,7 +4809,7 @@ class TestMySpec:
         ("traversal-delta", "invalid_abort_archive"),
         ("redirected-delta", "unsafe_recovery_entry"),
     ])
-    def test_myspec_recovery_rejects_foreign_or_unsafe_archive_import(self, 
+    def test_myspec_recovery_rejects_foreign_or_unsafe_archive_import(self,
         tmp_path: Path, _myspec_recovery_session, _myspec_recovery_cli, evidence: str, error: str,
     ) -> None:
         target, work, specs, delta, preview = _myspec_recovery_session
@@ -4674,7 +4847,7 @@ class TestMySpec:
         assert not (work / "current").exists()
 
 
-    def test_myspec_recovery_rejects_old_request_for_identical_new_legacy_session(self, 
+    def test_myspec_recovery_rejects_old_request_for_identical_new_legacy_session(self,
         _myspec_recovery_session, _myspec_recovery_cli,
     ) -> None:
         target, work, specs, delta, preview = _myspec_recovery_session
@@ -4726,7 +4899,7 @@ class TestMySpec:
 
 
     @pytest.mark.parametrize("command", ["inspect", "abort"])
-    def test_myspec_recovery_outputs_ascii_json_for_non_utf8_stdout(self, 
+    def test_myspec_recovery_outputs_ascii_json_for_non_utf8_stdout(self,
         _myspec_recovery_git_project: Path, _myspec_recovery_cli, command: str,
     ) -> None:
         git_project = _myspec_recovery_git_project

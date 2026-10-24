@@ -37,6 +37,11 @@ ENTRYPOINT_COMMANDS = {
 }
 
 
+@pytest.fixture
+def flow_root() -> Path:
+    return REPO_ROOT / "__pr_flow_package_memory__"
+
+
 def read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -200,29 +205,29 @@ def test_recoverable_stop_states_have_recovery_actions() -> None:
         assert "nextAction" in details or "nextCommand" in details
 
 
-def test_pr_flow_recovery_commands_use_the_executing_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pr_flow_recovery_commands_use_the_executing_script(flow_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     module = pr_flow_module()
     expected_script = str(PR_FLOW_SCRIPT.resolve())
 
-    command = module.command_next_command("diagnose", tmp_path)
+    command = module.command_next_command("diagnose", flow_root)
     body_command = module.pr_body_next_command(
         "complete",
-        tmp_path,
+        flow_root,
         argparse.Namespace(summary="summary", scope="scope", fixes=["174"]),
     )
 
     assert expected_script in command
     assert expected_script in body_command
-    assert str(tmp_path) in command
-    assert str(tmp_path) in body_command
+    assert str(flow_root) in command
+    assert str(flow_root) in body_command
 
     with monkeypatch.context() as patch:
         patch.setattr(module.os, "name", "nt")
-        windows_command = module.script_command(["diagnose", "--project", str(tmp_path / "project with spaces")])
-        windows_hotfix = module.command_next_command("hotfix", tmp_path, argparse.Namespace(target="main"))
+        windows_command = module.script_command(["diagnose", "--project", str(flow_root / "project with spaces")])
+        windows_hotfix = module.command_next_command("hotfix", flow_root, argparse.Namespace(target="main"))
 
     assert windows_command == subprocess.list2cmdline(
-        [sys.executable, expected_script, "diagnose", "--project", str(tmp_path / "project with spaces")]
+        [sys.executable, expected_script, "diagnose", "--project", str(flow_root / "project with spaces")]
     )
     assert "'" not in windows_command
     assert '<authorization-phrase>' not in windows_hotfix
@@ -239,9 +244,6 @@ def test_pr_flow_skill_boundaries_prohibit_remote_governance_and_memory_phrase_r
 
 
 def test_pr_flow_package_passes_repo_build_checks() -> None:
-    if shutil.which("claude") is None:
-        pytest.skip("claude CLI is required for package validation")
-
     result = run_local_plugin_build()
 
     assert result.returncode == 0, result.stderr

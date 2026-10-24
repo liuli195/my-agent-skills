@@ -1,43 +1,106 @@
 import contextlib
+import fnmatch
+import hashlib
+import copy
+from types import SimpleNamespace
+
+
 import importlib.util
+
+
 import io
+
+
 import json
+
+
 import os
+
+
 import re
+
+
 import shutil
+
+
 import shlex
+
+
 import subprocess
+
+
 import sys
+
+
 from pathlib import Path
+
+
 from typing import Any, Callable
+
 
 import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "build-and-verify"
+
+
 CODEX_REPO_MARKETPLACE = REPO_ROOT / ".agents" / "plugins" / "marketplace.json"
+
+
 CLAUDE_REPO_MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
+
+
 RELEASE_FLOW_PROJECTION = REPO_ROOT / ".release-flow" / "projection.yaml"
+
+
 RELEASE_FLOW_CONFIG = REPO_ROOT / ".release-flow" / "config.yaml"
+
+
 RELEASE_FLOW_SCRIPT = REPO_ROOT / "plugins" / "release-flow" / "skills" / "release-flow" / "scripts" / "release_flow.py"
+
+
 BUILD_AND_VERIFY_SCRIPT = PLUGIN_ROOT / "python" / "build_and_verify.py"
+
+
 _BUILD_AND_VERIFY_MODULE = None
+_MEMORY = None
+
 
 PLUGIN_NAME = "build-and-verify"
+
+
 INIT_SKILL_NAME = "build-and-verify-init"
+
+
 INIT_SKILL_ROOT = PLUGIN_ROOT / "skills" / INIT_SKILL_NAME
+
+
 INIT_REFERENCE_ROOT = INIT_SKILL_ROOT / "references"
+
+
 REVIEW_SKILL_NAME = "build-and-verify-review"
+
+
 REVIEW_SKILL_ROOT = PLUGIN_ROOT / "skills" / REVIEW_SKILL_NAME
+
+
 REVIEW_REFERENCE_ROOT = REVIEW_SKILL_ROOT / "references"
+
+
 REQUIRED_INIT_REFERENCES = {
     "questionnaire.md",
     "ecosystem-detection.md",
     "config-draft.md",
     "validation.md",
 }
+
+
 PLUGIN_DESCRIPTION = "Repository Build and Verify Entry Point（本仓库构建检查与验证入口）"
+
+
 DEFAULT_BUILD_AND_VERIFY_GITIGNORE = ["/cache/", "/runs/", "/backups/"]
 
 
@@ -79,6 +142,8 @@ def completed(
 
 
 _LOG_COMMANDS: dict[tuple[Any, ...], tuple[str, str]] = {}
+
+
 _FAIL_ONCE_COMMANDS: dict[tuple[Any, ...], dict[str, Any]] = {}
 
 
@@ -95,6 +160,16 @@ def simulate_registered_command(
     if key is None:
         return None
     project = Path(cwd or ".")
+    if _MEMORY is not None and key in _LOG_COMMANDS:
+        label, log_name = _LOG_COMMANDS[key]
+        _MEMORY.logs.setdefault(project / log_name, []).append(label)
+        return completed(command)
+    if _MEMORY is not None and key in _FAIL_ONCE_COMMANDS:
+        state = _FAIL_ONCE_COMMANDS[key]
+        _MEMORY.logs.setdefault(project / "run.log", []).append(str(state["label"]))
+        code = 0 if state["failed"] else 7
+        state["failed"] = True
+        return completed(command, code)
     if key in _LOG_COMMANDS:
         label, log_name = _LOG_COMMANDS[key]
         log_path = project / log_name
@@ -129,7 +204,7 @@ class FakeRunner:
         if outcome is None:
             outcome = simulate_registered_command(command, kwargs.get("cwd"))
         if outcome is None:
-            outcome = completed(command)
+            raise AssertionError(f"unexpected command: {command!r}")
         if isinstance(outcome, BaseException):
             raise outcome
         return outcome
@@ -264,7 +339,7 @@ def run_check(
 ) -> subprocess.CompletedProcess[str]:
     module = load_build_and_verify_module()
     original_runner_module = module._RUNNER_MODULE
-    runner = runner or FakeRunner()
+    runner = runner or (_declared_runner() if _MEMORY is not None else FakeRunner())
     module._RUNNER_MODULE = FakeRunnerModule(module._runner(), runner, changed_files)
     argv = [*args, "--project", str(project)]
     if execution_context is not None:
@@ -1153,27 +1228,19 @@ def test_build_and_verify_init_references_limit_pyproject_to_detection_signal() 
     assert "pyproject.toml" not in references["validation.md"]
 
 
-def test_build_and_verify_init_template_node_lockfile_conflict_requires_user_choice(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "package.json").write_text(
-        json.dumps({"scripts": {"build": "vite build", "test": "vitest"}}, indent=2),
-        encoding="utf-8",
-    )
-    (project / "package-lock.json").write_text("{}", encoding="utf-8")
-    (project / "yarn.lock").write_text("", encoding="utf-8")
-
+def test_build_and_verify_init_template_node_lockfile_conflict_requires_user_choice(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    _remember_input(project / 'package.json', json.dumps({'scripts': {'build': 'vite build', 'test': 'vitest'}}, indent=2), encoding='utf-8')
+    _remember_input(project / 'package-lock.json', '{}', encoding='utf-8')
+    _remember_input(project / 'yarn.lock', '', encoding='utf-8')
     unresolved = init_wizard_node_package_manager_resolution(project)
-    resolved = init_wizard_node_package_manager_resolution(project, selected="yarn")
-
-    assert unresolved["requires_user_choice"] is True
-    assert unresolved["commands"] == []
-    assert resolved["requires_user_choice"] is False
-    assert resolved["package_manager"] == "yarn"
-    assert all(command.startswith("yarn ") for command in resolved["commands"])
-    assert all("npm run" not in command for command in resolved["commands"])
+    resolved = init_wizard_node_package_manager_resolution(project, selected='yarn')
+    assert unresolved['requires_user_choice'] is True
+    assert unresolved['commands'] == []
+    assert resolved['requires_user_choice'] is False
+    assert resolved['package_manager'] == 'yarn'
+    assert all((command.startswith('yarn ') for command in resolved['commands']))
+    assert all(('npm run' not in command for command in resolved['commands']))
 
 
 def test_build_and_verify_init_generic_candidate_rules_are_constrained() -> None:
@@ -1533,16 +1600,14 @@ def test_build_and_verify_pytest_options_live_in_explicit_commands() -> None:
             tokens = command.split()
             assert " -q " in f" {command} "
             assert "-n" not in tokens
-            if check["id"] == "verify.runtime-boundaries":
+            if not check["id"].startswith("verify.real-"):
                 assert "pytestXdistWorkers" not in check
             else:
                 assert check["pytestXdistWorkers"]
             assert "-p" in tokens
             assert "no:cacheprovider" in tokens
             assert " tests/" in f" {command} "
-            assert any(token.startswith("tests/") and token.endswith(".py") for token in tokens)
-
-
+            assert any(token.startswith("tests/") and token.split("::", 1)[0].endswith(".py") for token in tokens)
 
 
 def test_build_and_verify_release_projection_passes_real_validate() -> None:
@@ -1567,96 +1632,53 @@ def test_build_and_verify_release_projection_projects_real_catalogs(tmp_path: Pa
     }
 
 
-def test_build_and_verify_init_writes_config_gitignore_and_cache(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-
-    result = run_build_and_verify("init", "--project", str(project))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: initialized" in result.stdout
-    assert (project / ".build-and-verify" / "config.json").is_file()
-    assert (project / ".build-and-verify" / ".gitignore").is_file()
-    assert (project / ".build-and-verify" / "cache").is_dir()
-    assert not (project / "scripts" / "check.py").exists()
-    assert read_json(project / ".build-and-verify" / "config.json") == {
-        "version": 2,
-        "build": {"checks": []},
-        "verify": {"realChecks": [], "checks": []},
-    }
-    assert (project / ".build-and-verify" / ".gitignore").read_text(
-        encoding="utf-8"
-    ) == "/cache/\n/runs/\n/backups/\n"
-    assert "build-and-verify-init" not in result.stdout
-    assert "questionnaire" not in result.stdout.lower()
-    assert "questionnaire" not in result.stderr.lower()
-    assert not (project / ".build-and-verify" / "backups").exists()
-    assert read_json(project / ".build-and-verify" / "config.json")["build"]["checks"] == []
-    assert read_json(project / ".build-and-verify" / "config.json")["verify"]["checks"] == []
-
-
-@pytest.mark.parametrize("real", [None, "sample", ["missing"], ["sample", "sample"]])
+@pytest.mark.parametrize('real', [None, 'sample', ['missing'], ['sample', 'sample']])
 def test_runtime_guard_invalid_real_check_lists_fail_before_execution(tmp_path: Path, real) -> None:
-    project = tmp_path / "project"
-    write_runner_config(project, verify_checks=[{"id": "sample", "command": ["unknown"], "inputs": []}])
-    path = project / ".build-and-verify/config.json"
+    project = tmp_path / 'project'
+    write_runner_config(project, verify_checks=[{'id': 'sample', 'command': ['unknown'], 'inputs': []}])
+    path = project / '.build-and-verify/config.json'
     config = read_json(path)
-    config["version"] = 2
+    config['version'] = 2
     if real is not None:
-        config["verify"]["realChecks"] = real
+        config['verify']['realChecks'] = real
     write_json(path, config)
-    executor = FakeRunner()
-    result = run_check(project, "verify", runner=executor, changed_files=["code.py"])
+    executor = _declared_runner()
+    result = run_check(project, 'verify', runner=executor, changed_files=['code.py'])
     assert result.returncode == 1
-    assert "verify.realChecks" in result.stderr
+    assert 'verify.realChecks' in result.stderr
     assert executor.calls == []
 
 
-def test_runtime_guard_invalid_migration_keeps_existing_configuration(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    write_runner_config(project)
-    path = project / ".build-and-verify/config.json"
-    before = path.read_bytes()
-    draft = tmp_path / "draft.json"
-    write_json(draft, {"version": 2, "verify": {"checks": []}})
-    result = run_build_and_verify("init", "--project", str(project), "--config", str(draft), "--overwrite")
-    assert result.returncode == 1
-    assert "verify.realChecks" in result.stderr
-    assert path.read_bytes() == before
-    assert not (project / ".build-and-verify/backups").exists()
-
-
-@pytest.mark.parametrize("real", [[], ["first"], ["first", "second"]])
+@pytest.mark.parametrize('real', [[], ['first'], ['first', 'second']])
 def test_runtime_guard_real_roles_do_not_select_checks(tmp_path: Path, real) -> None:
-    project = tmp_path / "project"
-    write_runner_config(project, verify_checks=[{"id": name, "command": ["external"],
-        "paths": [f"{name}/**"], "inputs": []} for name in ("first", "second")])
-    path = project / ".build-and-verify/config.json"
+    project = tmp_path / 'project'
+    write_runner_config(project, verify_checks=[{'id': name, 'command': ['external'], 'paths': [f'{name}/**'], 'inputs': []} for name in ('first', 'second')])
+    path = project / '.build-and-verify/config.json'
     config = read_json(path)
     config.update(version=2)
-    config["verify"]["realChecks"] = real
+    config['verify']['realChecks'] = real
     write_json(path, config)
-    executor = FakeRunner()
-    result = run_check(project, "verify", runner=executor, changed_files=["unrelated.py"])
+    executor = _declared_runner()
+    result = run_check(project, 'verify', runner=executor, changed_files=['unrelated.py'])
     assert result.returncode == 0
-    assert "status: skipped" in result.stdout
+    assert 'status: skipped' in result.stdout
     assert executor.calls == []
 
 
 def test_runtime_guard_missing_protection_evidence_cannot_cache_success(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    write_runner_config(project, verify_checks=[{"id": "ordinary", "command": [sys.executable, "memory.py"], "inputs": []}])
-    path = project / ".build-and-verify/config.json"
+    project = tmp_path / 'project'
+    write_runner_config(project, verify_checks=[{'id': 'ordinary', 'command': [sys.executable, 'memory.py'], 'inputs': []}])
+    path = project / '.build-and-verify/config.json'
     config = read_json(path)
     config.update(version=2)
-    config["verify"]["realChecks"] = []
+    config['verify']['realChecks'] = []
     write_json(path, config)
-    executor = FakeRunner()
-    result = run_check(project, "verify", runner=executor, changed_files=["memory.py"])
+    executor = _declared_runner()
+    result = run_check(project, 'verify', runner=executor, changed_files=['memory.py'])
     assert result.returncode == 1
-    assert "runtime_guard_evidence_missing" in result.stderr
-    repeated = run_check(project, "verify", runner=executor, changed_files=["memory.py"])
-    assert repeated.returncode == 1 and "cache-hit:" not in repeated.stdout
+    assert 'runtime_guard_evidence_missing' in result.stderr
+    repeated = run_check(project, 'verify', runner=executor, changed_files=['memory.py'])
+    assert repeated.returncode == 1 and 'cache-hit:' not in repeated.stdout
     assert len(executor.calls) == 2
 
 
@@ -1681,25 +1703,18 @@ def test_runtime_guard_matches_work_units_across_launcher_pids(child_unit, finis
         assert "runtime_guard_evidence_incomplete" in error
 
 
-@pytest.mark.parametrize("command", [
-    'set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1&& set NUMBA_DISABLE_JIT=1&& ".\\.venv\\Scripts\\python.exe" -m pytest "tests/test_math.py::test_values[a b]" --ignore=tests/slow -k "not slow and math"',
-    'set PYTEST_ADDOPTS=-n 4&& .\\.venv\\Scripts\\python.exe -m pytest -p xdist.plugin tests/test_tree.py',
-    'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest "tests/test_math.py::test_values[a b]" -k "not slow" && python direct.py',
-    'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest "tests/test_math.py::test_values[a b]" -k "not slow" && node --test "tests/memory test.mjs"',
-    'set NODE_ENV=test&& "C:\\Program Files\\nodejs\\node.exe" "scripts\\direct script.js" --value="a b"',
-    [sys.executable, "-m", "unittest", "tests.test_memory"],
-])
+@pytest.mark.parametrize('command', ['set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1&& set NUMBA_DISABLE_JIT=1&& ".\\.venv\\Scripts\\python.exe" -m pytest "tests/test_math.py::test_values[a b]" --ignore=tests/slow -k "not slow and math"', 'set PYTEST_ADDOPTS=-n 4&& .\\.venv\\Scripts\\python.exe -m pytest -p xdist.plugin tests/test_tree.py', 'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest "tests/test_math.py::test_values[a b]" -k "not slow" && python direct.py', 'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest "tests/test_math.py::test_values[a b]" -k "not slow" && node --test "tests/memory test.mjs"', 'set NODE_ENV=test&& "C:\\Program Files\\nodejs\\node.exe" "scripts\\direct script.js" --value="a b"', [sys.executable, '-m', 'unittest', 'tests.test_memory']])
 def test_runtime_guard_preserves_representative_python_commands(tmp_path: Path, command) -> None:
-    project = tmp_path / "project"
-    write_runner_config(project, verify_checks=[{"id": "ordinary", "command": command, "inputs": []}])
-    path = project / ".build-and-verify/config.json"
+    project = tmp_path / 'project'
+    write_runner_config(project, verify_checks=[{'id': 'ordinary', 'command': command, 'inputs': []}])
+    path = project / '.build-and-verify/config.json'
     config = read_json(path)
     config.update(version=2)
-    config["verify"]["realChecks"] = []
+    config['verify']['realChecks'] = []
     write_json(path, config)
-    executor = FakeRunner()
-    result = run_check(project, "verify", runner=executor, changed_files=["memory.py"])
-    assert result.returncode == 1 and "runtime_guard_evidence_missing" in result.stderr
+    executor = _declared_runner()
+    result = run_check(project, 'verify', runner=executor, changed_files=['memory.py'])
+    assert result.returncode == 1 and 'runtime_guard_evidence_missing' in result.stderr
     assert len(executor.calls) == 1
     adapted = executor.calls[0]
     if isinstance(command, str):
@@ -1707,458 +1722,64 @@ def test_runtime_guard_preserves_representative_python_commands(tmp_path: Path, 
             assert adapted.startswith('set NODE_ENV=test&&')
             assert '"scripts\\direct script.js" --value="a b"' in adapted
             return
-        if command.startswith("set "):
-            prefix = command[:command.rindex("&&") + 2]
+        if command.startswith('set '):
+            prefix = command[:command.rindex('&&') + 2]
             assert adapted.startswith(prefix)
-        assert command[command.index(" -m "):].split("&&", 1)[0].rstrip() in adapted
-        if "&& node --test" in command:
+        assert command[command.index(' -m '):].split('&&', 1)[0].rstrip() in adapted
+        if '&& node --test' in command:
             assert 'node --test "tests/memory test.mjs"' in adapted
-        assert ("NUMBA_DISABLE_JIT" in adapted) == ("NUMBA_DISABLE_JIT" in command)
-        assert ("-p xdist.plugin" in adapted) == ("-p xdist.plugin" in command)
+        assert ('NUMBA_DISABLE_JIT' in adapted) == ('NUMBA_DISABLE_JIT' in command)
+        assert ('-p xdist.plugin' in adapted) == ('-p xdist.plugin' in command)
     else:
-        assert adapted[-3:] == ["-m", "unittest", "tests.test_memory"]
+        assert adapted[-3:] == ['-m', 'unittest', 'tests.test_memory']
 
 
-@pytest.mark.parametrize("command", [
-    "python -m pytest tests/test_memory.py && npm test",
-    "tox -e py", ["uv", "run", "python", "-m", "pytest"], "npm test", "pnpm test", "yarn test", "nox -s tests",
-])
+@pytest.mark.parametrize('command', ['python -m pytest tests/test_memory.py && npm test', 'tox -e py', ['uv', 'run', 'python', '-m', 'pytest'], 'npm test', 'pnpm test', 'yarn test', 'nox -s tests'])
 def test_runtime_guard_unknown_segments_never_silently_fall_back(tmp_path: Path, command) -> None:
-    project = tmp_path / "project"
-    write_runner_config(project, verify_checks=[{"id": "check", "command": command, "inputs": []}])
-    executor = FakeRunner()
-    legacy = run_check(project, "verify", runner=executor, changed_files=["memory.py"])
+    project = tmp_path / 'project'
+    write_runner_config(project, verify_checks=[{'id': 'check', 'command': command, 'inputs': []}])
+    executor = _declared_runner()
+    legacy = run_check(project, 'verify', runner=executor, changed_files=['memory.py'])
     assert legacy.returncode == 0 and executor.calls == [command]
-    path = project / ".build-and-verify/config.json"
+    path = project / '.build-and-verify/config.json'
     config = read_json(path)
     config.update(version=2)
-    config["verify"]["realChecks"] = []
+    config['verify']['realChecks'] = []
     write_json(path, config)
-    executor = FakeRunner()
-    protected = run_check(project, "verify", runner=executor, changed_files=["memory.py"])
+    executor = _declared_runner()
+    protected = run_check(project, 'verify', runner=executor, changed_files=['memory.py'])
     assert protected.returncode == 1
-    assert "runtime_guard_uncovered_command" in protected.stderr
+    assert 'runtime_guard_uncovered_command' in protected.stderr
     assert executor.calls == []
 
 
-@pytest.mark.parametrize("real", [["first"], ["first", "second"]])
+@pytest.mark.parametrize('real', [['first'], ['first', 'second']])
 def test_runtime_guard_multiple_real_checks_share_existing_scheduler(tmp_path: Path, real) -> None:
-    project = tmp_path / "project"
-    commands = [["external", name] for name in real]
-    write_runner_config(project, verify_checks=[{"id": name, "command": command, "checkParallel": True, "inputs": []}
-        for name, command in zip(real, commands)], verify_config={"maxParallel": 8, "fullBudgetSeconds": 60})
-    path = project / ".build-and-verify/config.json"
+    project = tmp_path / 'project'
+    commands = [['external', name] for name in real]
+    write_runner_config(project, verify_checks=[{'id': name, 'command': command, 'checkParallel': True, 'inputs': []} for name, command in zip(real, commands)], verify_config={'maxParallel': 8, 'fullBudgetSeconds': 60})
+    path = project / '.build-and-verify/config.json'
     config = read_json(path)
     config.update(version=2)
-    config["verify"]["realChecks"] = real
+    config['verify']['realChecks'] = real
     write_json(path, config)
-    executor = FakeRunner()
-    result = run_check(project, "verify", runner=executor, changed_files=["memory.py"])
+    executor = _declared_runner()
+    result = run_check(project, 'verify', runner=executor, changed_files=['memory.py'])
     assert result.returncode == 0, result.stdout + result.stderr
     assert sorted(executor.calls) == sorted(commands)
     assert read_json(path) == config
-    report = run_check(project, "verify", "--full", "--performance-report", runner=FakeRunner(), changed_files=["memory.py"])
+    report = run_check(project, 'verify', '--full', '--performance-report', runner=_declared_runner(), changed_files=['memory.py'])
     assert report.returncode == 0, report.stdout + report.stderr
-    payload = read_json(project / ".build-and-verify/runs/performance-report.json")
-    assert all(check["testRuntimeRole"] == "real-unprotected" for check in payload["checks"])
+    payload = read_json(project / '.build-and-verify/runs/performance-report.json')
+    assert all((check['testRuntimeRole'] == 'real-unprotected' for check in payload['checks']))
 
 
-def test_build_and_verify_init_writes_confirmed_config_with_overwrite(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    build_dir = project / ".build-and-verify"
-    build_dir.mkdir()
-    old_config = {"version": 1, "build": {"checks": []}, "verify": {"checks": []}}
-    confirmed_config = {
-        "version": 1,
-        "build": {"checks": []},
-        "verify": {
-            "checks": [
-                {
-                    "id": "verify.confirmed",
-                    "command": command_that_logs("confirmed"),
-                    "inputs": [],
-                }
-            ]
-        },
-    }
-    write_json(build_dir / "config.json", old_config)
-    (build_dir / ".gitignore").write_text("/custom/\n/cache/\n", encoding="utf-8")
-    confirmed = tmp_path / "confirmed.json"
-    write_json(confirmed, confirmed_config)
-
-    result = run_build_and_verify(
-        "init",
-        "--project",
-        str(project),
-        "--config",
-        str(confirmed),
-        "--overwrite",
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert read_json(build_dir / "config.json") == confirmed_config
-    backups = list((build_dir / "backups").glob("config-*.json"))
-    assert len(backups) == 1
-    assert read_json(backups[0]) == old_config
-    assert set((build_dir / ".gitignore").read_text(encoding="utf-8").splitlines()) == {
-        "/custom/",
-        "/cache/",
-        "/runs/",
-        "/backups/",
-    }
-    assert not (build_dir / "runtime").exists()
-    assert (build_dir / "cache").is_dir()
-
-
-@pytest.mark.parametrize(
-    "existing",
-    [
-        Path(".build-and-verify/config.json"),
-        Path(".build-and-verify/.gitignore"),
-    ],
-)
-def test_build_and_verify_init_refuses_existing_files_before_writes(
-    tmp_path: Path, existing: Path
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    existing_path = project / existing
-    existing_path.parent.mkdir(parents=True, exist_ok=True)
-    if existing.suffix:
-        existing_path.write_text("keep me\n", encoding="utf-8")
-    else:
-        existing_path.mkdir()
-
-    result = run_build_and_verify("init", "--project", str(project))
-
-    assert result.returncode != 0
-    assert f"existing_file: {existing.as_posix()}" in result.stderr
-    if existing.suffix:
-        assert existing_path.read_text(encoding="utf-8") == "keep me\n"
-    else:
-        assert existing_path.is_dir()
-    generated_files = [
-        Path(".build-and-verify/config.json"),
-        Path(".build-and-verify/.gitignore"),
-    ]
-    for relative in generated_files:
-        path = project / relative
-        if path != existing_path:
-            assert not path.exists()
-    assert not (project / ".build-and-verify" / "cache").exists()
-
-
-def test_build_and_verify_review_template_simulation_writes_backup_then_runs_full_verify(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "package.json").write_text(
-        json.dumps({"scripts": {"build": "vite build", "test": "pytest"}}),
-        encoding="utf-8",
-    )
-    build_dir = project / ".build-and-verify"
-    build_dir.mkdir()
-    original_config = {
-        "version": 1,
-        "build": {"checks": []},
-        "verify": {"checks": []},
-    }
-    write_json(build_dir / "config.json", original_config)
-
-    scripts = read_json(project / "package.json")["scripts"]
-    recommendations = [
-        {
-            "id": f"{section}.node{'-tests' if script == 'test' else ''}",
-            "command": f"npm {'test' if script == 'test' else 'run build'}",
-            "confidence": "High",
-        }
-        for script, section in [("build", "build"), ("test", "verify")]
-        if script in scripts
-    ]
-    assert [item["id"] for item in recommendations] == [
-        "build.node",
-        "verify.node-tests",
-    ]
-
-    selected = [item for item in recommendations if item["id"] == "verify.node-tests"]
-    assert read_json(build_dir / "config.json") == original_config
-    for overall_write_confirmed in [None, False]:
-        if overall_write_confirmed:
-            raise AssertionError("沉默或拒绝整体确认时不得进入写入流程")
-        assert read_json(build_dir / "config.json") == original_config
-
-    confirmed_config = {
-        "version": 1,
-        "build": {"checks": []},
-        "verify": {
-            "checks": [
-                {
-                    "id": "verify.node-tests",
-                    "command": selected[0]["command"],
-                    "paths": ["package.json"],
-                    "inputs": ["package.json"],
-                }
-            ]
-        },
-    }
-
-    assert read_json(build_dir / "config.json") == original_config
-    report = simulate_init_wizard_write(project, confirmed_config, overwrite=True)
-    runner = FakeRunner()
-    result = run_check(project, "verify", "--full", runner=runner)
-
-    assert read_json(report["backup_path"]) == original_config
-    assert read_json(build_dir / "config.json") == confirmed_config
-    assert runner.calls == [confirmed_config["verify"]["checks"][0]["command"]]
-    assert result.returncode == 0
-    assert "full-not-run: false" in result.stdout
-    assert "status: passed" in result.stdout
-
-
-def test_build_and_verify_init_template_simulation_writes_default_gitignore(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    draft_config = {
-        "version": 1,
-        "build": {"checks": []},
-        "verify": {"checks": []},
-    }
-
-    report = simulate_init_wizard_write(project, draft_config, overwrite=False)
-
-    gitignore = project / ".build-and-verify" / ".gitignore"
-    assert gitignore.read_text(encoding="utf-8").splitlines() == DEFAULT_BUILD_AND_VERIFY_GITIGNORE
-    assert report["backup_path"] is None
-    assert read_json(project / ".build-and-verify" / "config.json") == draft_config
-
-
-def test_build_and_verify_init_template_simulation_writes_backup_and_valid_config(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "src").mkdir()
-    (project / "tests").mkdir()
-    (project / "pyproject.toml").write_text("[tool.pytest.ini_options]\n", encoding="utf-8")
-    (project / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
-    build_dir = project / ".build-and-verify"
-    build_dir.mkdir()
-    old_config = {
-        "version": 1,
-        "build": {"checks": [{"id": "build.old", "command": command_that_logs("old")}]},
-        "verify": {"checks": []},
-    }
-    write_json(build_dir / "config.json", old_config)
-    (build_dir / ".gitignore").write_text("/cache/\n/runs/\n", encoding="utf-8")
-    draft_config = {
-        "version": 1,
-        "build": {
-            "checks": [
-                {
-                    "id": "build.local",
-                    "command": command_that_logs("build-ok"),
-                    "inputs": ["src"],
-                }
-            ]
-        },
-        "verify": {
-            "maxParallel": 2,
-            "timeoutSeconds": 60,
-            "checks": [
-                {
-                    "id": "verify.python-tests",
-                    "command": [sys.executable, "-m", "pytest", "--version"],
-                    "paths": ["src/**", "tests/**"],
-                    "inputs": ["pyproject.toml", "pytest.ini", "src", "tests"],
-                    "checkParallel": True,
-                    "timeoutSeconds": 30,
-                }
-            ],
-        },
-    }
-
-    report = simulate_init_wizard_write(
-        project,
-        draft_config,
-        overwrite=True,
-    )
-
-    backup_path = build_dir / "backups" / "config-20260626-120000.json"
-    assert report["backup_path"] == backup_path
-    assert read_json(backup_path) == old_config
-    assert "/backups/" in (build_dir / ".gitignore").read_text(encoding="utf-8").splitlines()
-    assert read_json(build_dir / "config.json") == draft_config
-    assert report["structure_valid"] is True
-    assert not (project / "run.log").exists()
-
-
-def test_build_and_verify_init_template_simulation_validates_custom_backup_path(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    build_dir = project / ".build-and-verify"
-    build_dir.mkdir()
-    old_config = {"version": 1, "build": {"checks": []}, "verify": {"checks": []}}
-    new_config = {
-        "version": 1,
-        "build": {"checks": []},
-        "verify": {"checks": []},
-    }
-    write_json(build_dir / "config.json", old_config)
-
-    report = simulate_init_wizard_write(
-        project,
-        new_config,
-        overwrite=True,
-        backup_path=Path(".build-and-verify/custom/config-custom.json"),
-    )
-
-    assert report["backup_path"] == project / ".build-and-verify/custom/config-custom.json"
-    assert read_json(report["backup_path"]) == old_config
-
-    write_json(build_dir / "config.json", old_config)
-    existing_backup = project / ".build-and-verify/custom/existing.json"
-    existing_backup.parent.mkdir(parents=True, exist_ok=True)
-    existing_backup.write_text("existing\n", encoding="utf-8")
-    with pytest.raises(AssertionError, match="must not overwrite existing file"):
-        simulate_init_wizard_write(
-            project,
-            new_config,
-            overwrite=True,
-            backup_path=existing_backup,
-        )
-
-    with pytest.raises(AssertionError, match="inside target repository"):
-        simulate_init_wizard_write(
-            project,
-            new_config,
-            overwrite=True,
-            backup_path=tmp_path / "outside.json",
-        )
-
-
-def test_build_and_verify_init_template_simulation_accepts_mixed_candidates(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "package.json").write_text(
-        json.dumps({"scripts": {"build": "vite build", "test": "vitest"}}, indent=2),
-        encoding="utf-8",
-    )
-    (project / "pyproject.toml").write_text("[tool.pytest.ini_options]\n", encoding="utf-8")
-    config = {
-        "version": 1,
-        "build": {
-            "checks": [
-                {"id": "build.node", "command": command_that_logs("node-build")}
-            ]
-        },
-        "verify": {
-            "checks": [
-                {"id": "verify.node-tests", "command": command_that_logs("node-tests")},
-                {
-                    "id": "verify.python-tests",
-                    "command": command_that_logs("python-tests"),
-                },
-            ]
-        },
-    }
-
-    report = simulate_init_wizard_write(
-        project,
-        config,
-        overwrite=False,
-    )
-
-    written = read_json(project / ".build-and-verify" / "config.json")
-    assert [check["id"] for check in written["build"]["checks"]] == ["build.node"]
-    assert [check["id"] for check in written["verify"]["checks"]] == [
-        "verify.node-tests",
-        "verify.python-tests",
-    ]
-    assert report["structure_valid"] is True
-    assert not (project / "run.log").exists()
-
-
-def test_build_and_verify_init_template_simulation_accepts_manual_fallback_config(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "README.md").write_text("# Manual Project\n", encoding="utf-8")
-    config = {
-        "version": 1,
-        "build": {
-            "checks": [
-                {
-                    "id": "build.manual",
-                    "command": [sys.executable, "-c", "print('manual build')"],
-                    "inputs": ["README.md"],
-                }
-            ]
-        },
-        "verify": {
-            "checks": [
-                {
-                    "id": "verify.manual",
-                    "command": [sys.executable, "-c", "print('manual verify')"],
-                    "inputs": ["README.md"],
-                }
-            ]
-        },
-    }
-
-    report = simulate_init_wizard_write(
-        project,
-        config,
-        overwrite=False,
-    )
-
-    assert not (project / "package.json").exists()
-    assert not (project / "pyproject.toml").exists()
-    assert read_json(project / ".build-and-verify" / "config.json") == config
-    assert report["dependency_issues"] == []
-    assert report["environment_issues"] == []
-    assert report["structure_valid"] is True
-
-
-def test_build_and_verify_init_template_detects_pytest_xdist_dependency(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    config = {
-        "version": 1,
-        "build": {"checks": []},
-        "verify": {
-            "checks": [
-                {
-                    "id": "verify.pytest-parallel",
-                    "command": "python -m pytest",
-                    "pytestXdistWorkers": "auto",
-                },
-                {"id": "verify.pytest-serial", "command": "python -m pytest"},
-            ]
-        },
-    }
-
-    issues = init_wizard_targeted_dependency_issues(
-        project,
-        config,
-        executable_resolver=lambda command: command if command in {"python", "pytest"} else None,
-        xdist_available=False,
-    )
-
-    assert len([issue for issue in issues if "pytest-xdist" in issue["问题"]]) == 1
-    assert all(issue["是否阻止写入"] == "不阻止" for issue in issues)
+def test_build_and_verify_init_template_detects_pytest_xdist_dependency(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    config = {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'verify.pytest-parallel', 'command': 'python -m pytest', 'pytestXdistWorkers': 'auto'}, {'id': 'verify.pytest-serial', 'command': 'python -m pytest'}]}}
+    issues = init_wizard_targeted_dependency_issues(project, config, executable_resolver=lambda command: command if command in {'python', 'pytest'} else None, xdist_available=False)
+    assert len([issue for issue in issues if 'pytest-xdist' in issue['问题']]) == 1
+    assert all((issue['是否阻止写入'] == '不阻止' for issue in issues))
 
 
 @pytest.mark.parametrize(
@@ -2181,32 +1802,12 @@ def test_build_and_verify_init_template_pytest_xdist_detection_matches_runner(
     assert init_wizard_uses_pytest_parallel(command) is runner.uses_pytest_xdist(command)
 
 
-def test_build_and_verify_init_template_detects_missing_executable(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    config = {
-        "version": 1,
-        "build": {
-            "checks": [
-                {"id": "build.missing-tool", "command": "missing-build-tool --version"}
-            ]
-        },
-        "verify": {"checks": []},
-    }
-
-    issues = init_wizard_targeted_dependency_issues(
-        project,
-        config,
-        executable_resolver=lambda _command: None,
-    )
-
-    assert any(
-        "可执行入口 `missing-build-tool` 不可找到" in issue["问题"]
-        for issue in issues
-    )
-    assert all(issue["是否阻止写入"] == "不阻止" for issue in issues)
+def test_build_and_verify_init_template_detects_missing_executable(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    config = {'version': 1, 'build': {'checks': [{'id': 'build.missing-tool', 'command': 'missing-build-tool --version'}]}, 'verify': {'checks': []}}
+    issues = init_wizard_targeted_dependency_issues(project, config, executable_resolver=lambda _command: None)
+    assert any(('可执行入口 `missing-build-tool` 不可找到' in issue['问题'] for issue in issues))
+    assert all((issue['是否阻止写入'] == '不阻止' for issue in issues))
 
 
 def test_build_and_verify_init_and_review_document_future_inputs_separately() -> None:
@@ -2223,192 +1824,13 @@ def test_build_and_verify_init_and_review_document_future_inputs_separately() ->
         assert "保持原有无匹配提示，不得称 Future Input（未来输入）" in text
 
 
-def test_build_and_verify_init_template_detects_missing_paths_and_inputs(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    config = {
-        "version": 1,
-        "build": {"checks": []},
-        "verify": {
-            "checks": [
-                {
-                    "id": "verify.missing-paths",
-                    "command": command_that_logs("unused"),
-                    "paths": ["missing-src/**"],
-                    "inputs": ["missing-config.toml"],
-                }
-            ]
-        },
-    }
-
+def test_build_and_verify_init_template_detects_missing_paths_and_inputs(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    config = {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'verify.missing-paths', 'command': command_that_logs('unused'), 'paths': ['missing-src/**'], 'inputs': ['missing-config.toml']}]}}
     issues = init_wizard_targeted_dependency_issues(project, config)
-
-    assert any("missing-src/**" in issue["问题"] for issue in issues)
-    assert any("missing-config.toml" in issue["问题"] for issue in issues)
-    assert all(issue["是否阻止写入"] == "不阻止" for issue in issues)
-
-
-def test_build_and_verify_init_template_dependency_issues_do_not_block_write(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    config = {
-        "version": 1,
-        "build": {"checks": []},
-        "verify": {
-            "checks": [
-                {
-                    "id": "verify.missing-tool",
-                    "command": "missing-verify-tool --version",
-                    "paths": ["future-src/**"],
-                    "inputs": [],
-                }
-            ]
-        },
-    }
-
-    report = simulate_init_wizard_write(
-        project,
-        config,
-        overwrite=False,
-        executable_resolver=lambda _command: None,
-    )
-
-    assert (project / ".build-and-verify" / "config.json").is_file()
-    assert report["dependency_issues"]
-    assert any("可执行入口 `missing-verify-tool` 不可找到" in issue["问题"] for issue in report["dependency_issues"])
-    assert any("future-src/**" in issue["问题"] for issue in report["dependency_issues"])
-    assert all(issue["是否阻止写入"] == "不阻止" for issue in report["dependency_issues"])
-    assert report["structure_valid"] is True
-
-
-def test_build_and_verify_init_template_environment_issues_do_not_block_write(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "missing-project"
-    config = {
-        "version": 1,
-        "build": {"checks": []},
-        "verify": {"checks": []},
-    }
-
-    report = simulate_init_wizard_write(
-        project,
-        config,
-        overwrite=False,
-    )
-
-    assert (project / ".build-and-verify" / "config.json").is_file()
-    assert report["environment_issues"]
-    assert any("目标仓库路径不存在" in issue["问题"] for issue in report["environment_issues"])
-    assert all(issue["是否阻止写入"] == "不阻止" for issue in report["environment_issues"])
-    assert report["structure_valid"] is True
-
-
-def test_build_and_verify_init_template_environment_issues_report_unwritable_config_dir(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    original_write_text = Path.write_text
-
-    def deny_write_probe(path: Path, *args: Any, **kwargs: Any) -> int:
-        if path.name == ".init-write-check":
-            raise PermissionError("denied")
-        return original_write_text(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "write_text", deny_write_probe)
-
-    issues = init_wizard_environment_issues(
-        project,
-        overwrite=False,
-        backup_path=None,
-    )
-
-    assert any("配置目录不可写入" in issue["问题"] for issue in issues)
-    assert all(issue["是否阻止写入"] == "不阻止" for issue in issues)
-
-
-@pytest.mark.parametrize(
-    ("scenario", "expected"),
-    [
-        ("project_is_file", "目标仓库路径不是目录"),
-        ("build_dir_is_file", "配置目录路径不是目录"),
-        ("backup_outside_repo", "备份目录不在目标仓库内"),
-        ("backup_dir_is_file", "备份目录路径不是目录"),
-        ("backup_dir_unwritable", "备份目录不可写入"),
-        ("backup_dir_cannot_create", "备份目录不可创建"),
-    ],
-)
-def test_build_and_verify_init_template_environment_issues_cover_edge_branches(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    scenario: str,
-    expected: str,
-) -> None:
-    project = tmp_path / "project"
-    overwrite = False
-    backup_path = None
-
-    if scenario == "project_is_file":
-        project.write_text("not a directory\n", encoding="utf-8")
-    else:
-        project.mkdir()
-        build_dir = project / ".build-and-verify"
-        if scenario == "build_dir_is_file":
-            build_dir.write_text("not a directory\n", encoding="utf-8")
-        else:
-            build_dir.mkdir()
-        if scenario.startswith("backup_dir_"):
-            overwrite = True
-            backup_path = Path(".build-and-verify/backups/config.json")
-            backup_dir = project / ".build-and-verify" / "backups"
-            if scenario == "backup_dir_is_file":
-                backup_dir.write_text("not a directory\n", encoding="utf-8")
-            elif scenario == "backup_dir_unwritable":
-                backup_dir.mkdir()
-                original_can_write = init_wizard_can_write_directory
-
-                def fake_can_write(directory: Path) -> bool:
-                    if directory == backup_dir:
-                        return False
-                    return original_can_write(directory)
-
-                monkeypatch.setattr(
-                    sys.modules[__name__],
-                    "init_wizard_can_write_directory",
-                    fake_can_write,
-                )
-            elif scenario == "backup_dir_cannot_create":
-                original_can_create = init_wizard_can_create_directory
-
-                def fake_can_create(directory: Path, boundary: Path) -> bool:
-                    if directory == backup_dir:
-                        return False
-                    return original_can_create(directory, boundary)
-
-                monkeypatch.setattr(
-                    sys.modules[__name__],
-                    "init_wizard_can_create_directory",
-                    fake_can_create,
-                )
-        elif scenario == "backup_outside_repo":
-            overwrite = True
-            backup_path = tmp_path / "outside.json"
-
-    issues = init_wizard_environment_issues(
-        project,
-        overwrite=overwrite,
-        backup_path=backup_path,
-    )
-
-    assert any(expected in issue["问题"] for issue in issues)
-    assert all(issue["是否阻止写入"] == "不阻止" for issue in issues)
+    assert any(('missing-src/**' in issue['问题'] for issue in issues))
+    assert any(('missing-config.toml' in issue['问题'] for issue in issues))
+    assert all((issue['是否阻止写入'] == '不阻止' for issue in issues))
 
 
 @pytest.mark.parametrize(
@@ -2529,404 +1951,228 @@ def test_build_and_verify_init_template_validates_per_check_runtime_tuning(
 
 
 def test_build_pr_filters_checks_and_preserves_local_default(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    local_command = ["local"]
-    remote_command = ["remote"]
-    write_runner_config(
-        project,
-        build_checks=[
-            {"id": "local", "command": local_command, "pr": False},
-            {"id": "remote", "command": remote_command},
-        ],
-    )
-    runner = FakeRunner()
-    pr_result = run_check(project, "build", "--pr", runner=runner)
+    project = tmp_path / 'project'
+    local_command = ['local']
+    remote_command = ['remote']
+    write_runner_config(project, build_checks=[{'id': 'local', 'command': local_command, 'pr': False}, {'id': 'remote', 'command': remote_command}])
+    runner = _declared_runner()
+    pr_result = run_check(project, 'build', '--pr', runner=runner)
     assert pr_result.returncode == 0
-    assert "scene: pr" in pr_result.stdout
-    assert "excluded-by-pr: local" in pr_result.stdout
-    assert "checked: remote" in pr_result.stdout
+    assert 'scene: pr' in pr_result.stdout
+    assert 'excluded-by-pr: local' in pr_result.stdout
+    assert 'checked: remote' in pr_result.stdout
     assert runner.calls == [remote_command]
-
     runner.calls.clear()
-    local_result = run_check(project, "build", runner=runner)
+    local_result = run_check(project, 'build', runner=runner)
     assert local_result.returncode == 0
-    assert "checked: local, remote" in local_result.stdout
+    assert 'checked: local, remote' in local_result.stdout
     assert runner.calls == [local_command, remote_command]
 
 
 def test_verify_pr_filters_path_config_change_and_full(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "src").mkdir()
-    (project / "src" / "app.py").write_text("changed\n", encoding="utf-8")
-    (project / "docs").mkdir()
-    (project / "docs" / "guide.md").write_text("guide\n", encoding="utf-8")
-    checks = [
-        {"id": name, "command": [name], "paths": [path], "pr": pr}
-        for name, path, pr in [
-            ("source", "src/**", True),
-            ("docs", "docs/**", True),
-            ("local", "src/**", False),
-        ]
-    ]
+    project = tmp_path / 'project'
+    _remember_input(project / 'src' / 'app.py', 'changed\n', encoding='utf-8')
+    _remember_input(project / 'docs' / 'guide.md', 'guide\n', encoding='utf-8')
+    checks = [{'id': name, 'command': [name], 'paths': [path], 'pr': pr} for name, path, pr in [('source', 'src/**', True), ('docs', 'docs/**', True), ('local', 'src/**', False)]]
     write_runner_config(project, verify_checks=checks)
-    runner = FakeRunner()
-    selected = run_check(project, "verify", "--pr", runner=runner, changed_files=["src/app.py"])
+    runner = _declared_runner()
+    selected = run_check(project, 'verify', '--pr', runner=runner, changed_files=['src/app.py'])
     assert selected.returncode == 0, selected.stdout + selected.stderr
-    assert "scene: pr" in selected.stdout
-    assert "excluded-by-pr: local" in selected.stdout
-    assert "checked: source\n" in selected.stdout
-    assert "status: passed" in selected.stdout
-    assert runner.calls == [["source"]]
-
-    config_path = project / ".build-and-verify" / "config.json"
+    assert 'scene: pr' in selected.stdout
+    assert 'excluded-by-pr: local' in selected.stdout
+    assert 'checked: source\n' in selected.stdout
+    assert 'status: passed' in selected.stdout
+    assert runner.calls == [['source']]
+    config_path = project / '.build-and-verify' / 'config.json'
     config = read_json(config_path)
-    config["note"] = "changed"
+    config['note'] = 'changed'
     write_json(config_path, config)
     runner.calls.clear()
-    config_selected = run_check(project, "verify", "--pr", runner=runner, changed_files=[".build-and-verify/config.json"])
+    config_selected = run_check(project, 'verify', '--pr', runner=runner, changed_files=['.build-and-verify/config.json'])
     assert config_selected.returncode == 0, config_selected.stdout + config_selected.stderr
-    assert "selection-reason: config-changed" in config_selected.stdout
-    assert "checked: source, docs\n" in config_selected.stdout
-    assert "local" not in config_selected.stdout.split("checked: ", 1)[1]
-    assert runner.calls == [["source"], ["docs"]]
-
+    assert 'selection-reason: config-changed' in config_selected.stdout
+    assert 'checked: source, docs\n' in config_selected.stdout
+    assert 'local' not in config_selected.stdout.split('checked: ', 1)[1]
+    assert runner.calls == [['source'], ['docs']]
     runner.calls.clear()
-    pr_full = run_check(project, "verify", "--pr", "--full", runner=runner)
+    pr_full = run_check(project, 'verify', '--pr', '--full', runner=runner)
     assert pr_full.returncode == 0, pr_full.stdout + pr_full.stderr
-    assert "checked: source, docs\n" in pr_full.stdout
-    assert runner.calls == [["source"], ["docs"]]
+    assert 'checked: source, docs\n' in pr_full.stdout
+    assert runner.calls == [['source'], ['docs']]
     runner.calls.clear()
-    local_full = run_check(project, "verify", "--full", runner=runner)
+    local_full = run_check(project, 'verify', '--full', runner=runner)
     assert local_full.returncode == 0, local_full.stdout + local_full.stderr
-    assert "checked: source, docs, local\n" in local_full.stdout
-    assert runner.calls == [["source"], ["docs"], ["local"]]
+    assert 'checked: source, docs, local\n' in local_full.stdout
+    assert runner.calls == [['source'], ['docs'], ['local']]
 
 
-@pytest.mark.parametrize("section", ["build", "verify"])
+@pytest.mark.parametrize('section', ['build', 'verify'])
 def test_pr_non_boolean_fails_before_any_check(tmp_path: Path, section: str) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    check = {"id": "invalid", "command": ["invalid"], "pr": "false"}
-    write_runner_config(project, build_checks=[check] if section == "build" else None, verify_checks=[check] if section == "verify" else None)
-    runner = FakeRunner()
-    result = run_check(project, section, "--pr", *(["--full"] if section == "verify" else []), runner=runner)
+    project = tmp_path / 'project'
+    check = {'id': 'invalid', 'command': ['invalid'], 'pr': 'false'}
+    write_runner_config(project, build_checks=[check] if section == 'build' else None, verify_checks=[check] if section == 'verify' else None)
+    runner = _declared_runner()
+    result = run_check(project, section, '--pr', *(['--full'] if section == 'verify' else []), runner=runner)
     assert result.returncode == 1
-    assert f"{section}.checks[0].pr must be boolean" in result.stderr
-    assert "status: failed" in result.stdout
+    assert f'{section}.checks[0].pr must be boolean' in result.stderr
+    assert 'status: failed' in result.stdout
     assert runner.calls == []
 
 
 def test_pr_empty_selection_is_skipped_for_build_and_full_verify(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    local = {"id": "local", "command": ["local"], "pr": False}
+    project = tmp_path / 'project'
+    local = {'id': 'local', 'command': ['local'], 'pr': False}
     write_runner_config(project, build_checks=[local], verify_checks=[local])
-    runner = FakeRunner()
-    build = run_check(project, "build", "--pr", runner=runner)
-    full = run_check(project, "verify", "--pr", "--full", "--performance-report", runner=runner)
+    runner = _declared_runner()
+    build = run_check(project, 'build', '--pr', runner=runner)
+    full = run_check(project, 'verify', '--pr', '--full', '--performance-report', runner=runner)
     for result in (build, full):
         assert result.returncode == 0, result.stdout + result.stderr
-        assert "excluded-by-pr: local" in result.stdout
-        assert "checked: \n" in result.stdout
-        assert "status: skipped" in result.stdout
-        assert "status: passed" not in result.stdout
-    assert not (project / ".build-and-verify" / "runs" / "performance-report.json").exists()
+        assert 'excluded-by-pr: local' in result.stdout
+        assert 'checked: \n' in result.stdout
+        assert 'status: skipped' in result.stdout
+        assert 'status: passed' not in result.stdout
+    assert not _memory_contains(project / '.build-and-verify' / 'runs' / 'performance-report.json')
     assert runner.calls == []
 
 
 def test_pr_empty_full_verify_still_rejects_invalid_budget(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    write_runner_config(
-        project,
-        verify_checks=[{"id": "local", "command": ["local"], "pr": False}],
-        verify_config={"fullBudgetSeconds": 0},
-    )
-    runner = FakeRunner()
-    result = run_check(project, "verify", "--pr", "--full", runner=runner)
+    project = tmp_path / 'project'
+    write_runner_config(project, verify_checks=[{'id': 'local', 'command': ['local'], 'pr': False}], verify_config={'fullBudgetSeconds': 0})
+    runner = _declared_runner()
+    result = run_check(project, 'verify', '--pr', '--full', runner=runner)
     assert result.returncode == 1
-    assert "verify.fullBudgetSeconds must be positive integer" in result.stderr
-    assert "status: failed" in result.stdout
+    assert 'verify.fullBudgetSeconds must be positive integer' in result.stderr
+    assert 'status: failed' in result.stdout
     assert runner.calls == []
 
 
 def test_build_and_verify_runner_build_verify_and_full_verify(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    (project / "src").mkdir()
-    (project / "docs").mkdir()
-    (project / "src" / "app.py").write_text("print('changed')\n", encoding="utf-8")
-    (project / "docs" / "guide.md").write_text("changed\n", encoding="utf-8")
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {
-                "checks": [
-                    {"id": "build-main", "command": command_that_logs("build-main")}
-                ]
-            },
-            "verify": {
-                "checks": [
-                    {
-                        "id": "verify-src",
-                        "command": command_that_logs("verify-src"),
-                        "paths": ["src/**"],
-                        "inputs": ["src"],
-                    },
-                    {
-                        "id": "verify-docs",
-                        "command": command_that_logs("verify-docs"),
-                        "paths": ["docs/**"],
-                        "inputs": ["docs"],
-                    },
-                ]
-            },
-        },
-    )
-
-    build = run_check(project, "build")
-    verify = run_check(project, "verify", changed_files=["src/app.py", "docs/guide.md"])
-    full_verify = run_check(
-        project, "verify", "--full", changed_files=["src/app.py", "docs/guide.md"]
-    )
-
+    project = tmp_path / 'project'
+    _remember_input(project / 'src' / 'app.py', "print('changed')\n", encoding='utf-8')
+    _remember_input(project / 'docs' / 'guide.md', 'changed\n', encoding='utf-8')
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': [{'id': 'build-main', 'command': command_that_logs('build-main')}]}, 'verify': {'checks': [{'id': 'verify-src', 'command': command_that_logs('verify-src'), 'paths': ['src/**'], 'inputs': ['src']}, {'id': 'verify-docs', 'command': command_that_logs('verify-docs'), 'paths': ['docs/**'], 'inputs': ['docs']}]}})
+    build = run_check(project, 'build')
+    verify = run_check(project, 'verify', changed_files=['src/app.py', 'docs/guide.md'])
+    full_verify = run_check(project, 'verify', '--full', changed_files=['src/app.py', 'docs/guide.md'])
     assert build.returncode == 0, build.stdout + build.stderr
-    assert "checked: build-main" in build.stdout
+    assert 'checked: build-main' in build.stdout
     assert verify.returncode == 0, verify.stdout + verify.stderr
-    assert "checked: verify-src, verify-docs" in verify.stdout
-    assert "full-not-run: true" in verify.stdout
+    assert 'checked: verify-src, verify-docs' in verify.stdout
+    assert 'full-not-run: true' in verify.stdout
     assert full_verify.returncode == 0, full_verify.stdout + full_verify.stderr
-    assert "checked: verify-src, verify-docs" in full_verify.stdout
-    assert "full-not-run: false" in full_verify.stdout
-    assert "cache-hit" not in full_verify.stdout
-    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
-        "build-main",
-        "verify-src",
-        "verify-docs",
-        "verify-src",
-        "verify-docs",
-    ]
-
-
-@pytest.mark.parametrize(
-    ("action", "failure_report"),
-    [
-        ("build", "checked: invalid-output"),
-        ("verify", "failed: invalid-output"),
-    ],
-)
-def test_build_and_verify_runner_reports_failed_check_with_invalid_utf8_output(
-    tmp_path: Path, action: str, failure_report: str
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    check = {
-        "id": "invalid-output",
-        "command": [
-            sys.executable,
-            "-c",
-            "import os; os.write(2, b'invalid: \\xff\\n'); raise SystemExit(7)",
-        ],
-        "inputs": [],
-    }
-    write_runner_config(
-        project,
-        build_checks=[check] if action == "build" else None,
-        verify_checks=[check] if action == "verify" else None,
-    )
-
-    result = run_check(
-        project,
-        action,
-        runner=subprocess.run,
-        changed_files=["changed.txt"],
-    )
-
-    assert result.returncode == 1
-    assert "invalid: \ufffd" in result.stderr
-    assert failure_report in result.stdout
-    assert "status: failed" in result.stdout
-    assert "UnicodeDecodeError" not in result.stderr
+    assert 'checked: verify-src, verify-docs' in full_verify.stdout
+    assert 'full-not-run: false' in full_verify.stdout
+    assert 'cache-hit' not in full_verify.stdout
+    assert _read_memory_text(project / 'run.log', encoding='utf-8').splitlines() == ['build-main', 'verify-src', 'verify-docs', 'verify-src', 'verify-docs']
 
 
 def test_build_and_verify_runner_full_verify_allows_empty_checks(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-
-    result = run_check(project, "verify", "--full", "--performance-report")
-
+    project = tmp_path / 'project'
+    write_runner_config(project)
+    result = run_check(project, 'verify', '--full', '--performance-report')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "checked:" in result.stdout
-    assert "full-not-run: false" in result.stdout
-    assert "status: passed" in result.stdout
-    assert read_json(
-        project / ".build-and-verify" / "runs" / "performance-report.json"
-    )["checks"] == []
+    assert 'checked:' in result.stdout
+    assert 'full-not-run: false' in result.stdout
+    assert 'status: passed' in result.stdout
+    assert read_json(project / '.build-and-verify' / 'runs' / 'performance-report.json')['checks'] == []
 
 
-@pytest.mark.parametrize("field,value", [
-    *(('fullBudgetSeconds', value) for value in [True, 0, -1, 1.5, "1"]),
-    *(('enforceLocalBudget', value) for value in [0, 1, "true", None]),
-])
-def test_build_and_verify_invalid_budget_config_rejects_before_checks(
-    tmp_path: Path, field: str, value: object
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    write_runner_config(
-        project,
-        verify_checks=[{"id": "verify", "command": ["verify"], "inputs": []}],
-        verify_config={field: value},
-    )
-    runner = FakeRunner()
-
-    result = run_check(project, "verify", "--full", runner=runner, changed_files=[])
-
+@pytest.mark.parametrize('field,value', [*(('fullBudgetSeconds', value) for value in [True, 0, -1, 1.5, '1']), *(('enforceLocalBudget', value) for value in [0, 1, 'true', None])])
+def test_build_and_verify_invalid_budget_config_rejects_before_checks(tmp_path: Path, field: str, value: object) -> None:
+    project = tmp_path / 'project'
+    write_runner_config(project, verify_checks=[{'id': 'verify', 'command': ['verify'], 'inputs': []}], verify_config={field: value})
+    runner = _declared_runner()
+    result = run_check(project, 'verify', '--full', runner=runner, changed_files=[])
     assert result.returncode == 1
-    expected = "positive integer" if field == "fullBudgetSeconds" else "boolean"
-    assert f"verify.{field} must be {expected}" in result.stderr
-    assert "check-start:" not in result.stdout
+    expected = 'positive integer' if field == 'fullBudgetSeconds' else 'boolean'
+    assert f'verify.{field} must be {expected}' in result.stderr
+    assert 'check-start:' not in result.stdout
     assert runner.calls == []
 
 
 def test_build_and_verify_performance_report_requires_full(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    write_runner_config(
-        project,
-        verify_checks=[{"id": "verify", "command": ["verify"], "inputs": []}],
-    )
-    runner = FakeRunner()
-
-    result = run_check(project, "verify", "--performance-report", runner=runner)
-
+    project = tmp_path / 'project'
+    write_runner_config(project, verify_checks=[{'id': 'verify', 'command': ['verify'], 'inputs': []}])
+    runner = _declared_runner()
+    result = run_check(project, 'verify', '--performance-report', runner=runner)
     assert result.returncode == 2
-    assert "--performance-report requires --full" in result.stderr
+    assert '--performance-report requires --full' in result.stderr
     assert runner.calls == []
 
 
-@pytest.mark.parametrize(
-    ("budget", "total", "explicit_report", "functional_returncode", "writes_report", "warns"),
-    [
-        (10, 9.00, False, 0, False, False),
-        (10, 9.00, True, 0, True, False),
-        (10, 10.004, False, 0, False, False),
-        (10, 11.00, False, 0, True, True),
-        (10, 11.00, True, 1, True, True),
-        (None, 9.00, True, 0, True, False),
-    ],
-)
-def test_build_and_verify_full_performance_report_matrix(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    budget: int | None,
-    total: float,
-    explicit_report: bool,
-    functional_returncode: int,
-    writes_report: bool,
-    warns: bool,
-) -> None:
-    monkeypatch.setenv("BUILD_AND_VERIFY_EXECUTION_CONTEXT", "cloud")
-    project = tmp_path / "project"
-    project.mkdir()
-    verify_config = {"fullBudgetSeconds": budget} if budget is not None else None
-    write_runner_config(
-        project,
-        verify_checks=[{"id": "verify", "command": ["verify"], "inputs": []}],
-        verify_config=verify_config,
-    )
-    runner = FakeRunner(
-        {("verify",): completed(["verify"], returncode=functional_returncode)}
-    )
+@pytest.mark.parametrize(('budget', 'total', 'explicit_report', 'functional_returncode', 'writes_report', 'warns'), [(10, 9.0, False, 0, False, False), (10, 9.0, True, 0, True, False), (10, 10.004, False, 0, False, False), (10, 11.0, False, 0, True, True), (10, 11.0, True, 1, True, True), (None, 9.0, True, 0, True, False)])
+def test_build_and_verify_full_performance_report_matrix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, budget: int | None, total: float, explicit_report: bool, functional_returncode: int, writes_report: bool, warns: bool) -> None:
+    monkeypatch.setenv('BUILD_AND_VERIFY_EXECUTION_CONTEXT', 'cloud')
+    project = tmp_path / 'project'
+    verify_config = {'fullBudgetSeconds': budget} if budget is not None else None
+    write_runner_config(project, verify_checks=[{'id': 'verify', 'command': ['verify'], 'inputs': []}], verify_config=verify_config)
+    runner = FakeRunner({('verify',): completed(['verify'], returncode=functional_returncode)})
     ticks = iter([0.0, 0.0, 0.0, total])
-    monkeypatch.setattr(
-        load_build_and_verify_runner_module().time, "monotonic", lambda: next(ticks)
-    )
-    args = ["verify", "--full"]
+    monkeypatch.setattr(load_build_and_verify_runner_module().time, 'monotonic', lambda: next(ticks))
+    args = ['verify', '--full']
     if explicit_report:
-        args.append("--performance-report")
-
+        args.append('--performance-report')
     result = run_check(project, *args, runner=runner, changed_files=[])
-
     assert result.returncode == (1 if functional_returncode else 0)
-    assert ("performance-warning:" in result.stdout) is warns
-    report_path = project / ".build-and-verify" / "runs" / "performance-report.json"
-    assert report_path.exists() is writes_report
+    assert ('performance-warning:' in result.stdout) is warns
+    report_path = project / '.build-and-verify' / 'runs' / 'performance-report.json'
+    assert _memory_contains(report_path) is writes_report
     if writes_report:
         report = read_json(report_path)
-        assert report["totalSeconds"] == round(total, 2)
-        assert report["budgetSeconds"] == budget
-        assert report["overBudget"] is (total > budget if budget is not None else None)
-        assert report["verificationStatus"] == (
-            "failed" if functional_returncode else "passed"
-        )
+        assert report['totalSeconds'] == round(total, 2)
+        assert report['budgetSeconds'] == budget
+        assert report['overBudget'] is (total > budget if budget is not None else None)
+        assert report['verificationStatus'] == ('failed' if functional_returncode else 'passed')
 
 
-def test_review_report_crossing_deadline_cannot_pass(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_review_report_crossing_deadline_cannot_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     from unittest.mock import Mock
-
     module = load_build_and_verify_module()
     runner = module._runner()
-    project = tmp_path / "project"
-    write_runner_config(project, verify_config={"fullBudgetSeconds": 1},
-        verify_checks=[{"id": "quick", "command": ["quick"], "inputs": []}])
-    executor = FakeRunner({("quick",): completed(["quick"], stdout="CHECK_COMPLETED\n")})
+    project = tmp_path / 'project'
+    write_runner_config(project, verify_config={'fullBudgetSeconds': 1}, verify_checks=[{'id': 'quick', 'command': ['quick'], 'inputs': []}])
+    executor = FakeRunner({('quick',): completed(['quick'], stdout='CHECK_COMPLETED\n')})
     clock = [0.0]
     control = runner.RunControl(1.0)
     timer = Mock()
     reports = []
 
     def report_io(path: Path, payload: dict) -> bool:
-        assert path == project / ".build-and-verify/runs/performance-report.json"
+        assert path == project / '.build-and-verify/runs/performance-report.json'
         reports.append(dict(payload))
         if len(reports) == 1:
             assert not control.expired()
-            assert payload["checks"][0]["status"] == "passed"
+            assert payload['checks'][0]['status'] == 'passed'
             clock[0] = 1.1
         return True
-
-    monkeypatch.delenv("BUILD_AND_VERIFY_STARTED_MONOTONIC", raising=False)
-    monkeypatch.delenv("BUILD_AND_VERIFY_STARTUP_GUARD", raising=False)
-    monkeypatch.setenv("CI", "false")
-    monkeypatch.setenv("GITHUB_ACTIONS", "false")
-    monkeypatch.setattr(runner.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(runner, "_invocation_guard", lambda *args, **kwargs: (control, timer))
-    monkeypatch.setattr(runner, "_write_performance_report", report_io)
-    monkeypatch.setattr(module, "_RUNNER_MODULE", FakeRunnerModule(runner, executor, ["code.py"]))
-    monkeypatch.setattr(module, "_runtime_metadata", lambda: {
-        "runtime_version": "test-runtime", "implementation_identity": "test-implementation",
-    })
-    monkeypatch.setattr(sys, "argv", [str(BUILD_AND_VERIFY_SCRIPT), "verify", "--project",
-        str(project), "--execution-context", "local", "--full", "--performance-report"])
-
+    monkeypatch.delenv('BUILD_AND_VERIFY_STARTED_MONOTONIC', raising=False)
+    monkeypatch.delenv('BUILD_AND_VERIFY_STARTUP_GUARD', raising=False)
+    monkeypatch.setenv('CI', 'false')
+    monkeypatch.setenv('GITHUB_ACTIONS', 'false')
+    monkeypatch.setattr(runner.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(runner, '_invocation_guard', lambda *args, **kwargs: (control, timer))
+    monkeypatch.setattr(runner, '_write_performance_report', report_io)
+    monkeypatch.setattr(module, '_RUNNER_MODULE', FakeRunnerModule(runner, executor, ['code.py']))
+    monkeypatch.setattr(module, '_runtime_metadata', lambda: {'runtime_version': 'test-runtime', 'implementation_identity': 'test-implementation'})
+    monkeypatch.setattr(sys, 'argv', [str(BUILD_AND_VERIFY_SCRIPT), 'verify', '--project', str(project), '--execution-context', 'local', '--full', '--performance-report'])
     assert module.main() == 1
-    assert executor.calls == [["quick"]]
-    assert reports[-1]["verificationStatus"] == "failed"
-    assert reports[-1]["reason"] == "total_budget_timeout"
-    assert control.finished.is_set() and control.phase == "finalization"
+    assert executor.calls == [['quick']]
+    assert reports[-1]['verificationStatus'] == 'failed'
+    assert reports[-1]['reason'] == 'total_budget_timeout'
+    assert control.finished.is_set() and control.phase == 'finalization'
     timer.cancel.assert_called_once()
     output = capsys.readouterr().out
-    assert "check-end: quick status=passed" in output
-    assert "total_budget_timeout" in output and "status: failed" in output
-    assert "status: passed" not in output
+    assert 'check-end: quick status=passed' in output
+    assert 'total_budget_timeout' in output and 'status: failed' in output
+    assert 'status: passed' not in output
 
 
-def test_local_budget_keeps_guard_until_migration_and_finalization(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_local_budget_keeps_guard_until_migration_and_finalization(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     from unittest.mock import Mock
-
     module = load_build_and_verify_module()
     runner = module._runner()
-    legacy = tmp_path / ".build-and-verify/runtime"
-    legacy.mkdir(parents=True)
+    legacy = tmp_path / '.build-and-verify/runtime'
     clock = [0.9]
     control = runner.RunControl(1.0)
     timer = Mock()
@@ -2934,360 +2180,151 @@ def test_local_budget_keeps_guard_until_migration_and_finalization(
 
     def cancel() -> None:
         assert control.finished.is_set()
-        assert control.phase == "finalization"
-        events.append("cancel")
+        assert control.phase == 'finalization'
+        events.append('cancel')
 
     def migrate(project: Path, runtime: Path) -> int:
         assert project == tmp_path and runtime == legacy
         timer.cancel.assert_not_called()
         assert not control.finished.is_set()
-        assert control.phase == "migration"
-        events.append("migration")
+        assert control.phase == 'migration'
+        events.append('migration')
         clock[0] = 1.1
         timer.cancel.assert_not_called()
         return 0
-
     timer.cancel.side_effect = cancel
-    monkeypatch.delenv("BUILD_AND_VERIFY_STARTED_MONOTONIC", raising=False)
-    monkeypatch.setattr(runner.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(runner, "_invocation_guard", lambda *args, **kwargs: (control, timer))
-    monkeypatch.setattr(runner, "run_verify", lambda *args, **kwargs: 0)
-    monkeypatch.setattr(module, "_runtime_metadata", lambda: {
-        "runtime_version": "test-runtime", "implementation_identity": "test-implementation",
-    })
-    monkeypatch.setattr(module, "_legacy_runtime", lambda project: (legacy, True))
-    monkeypatch.setattr(module, "_migration_ready", lambda project: True)
-    monkeypatch.setattr(module, "_migrate_legacy_runtime", migrate)
-    monkeypatch.setattr(sys, "argv", [str(BUILD_AND_VERIFY_SCRIPT), "verify", "--project",
-        str(tmp_path), "--execution-context", "local"])
-
+    monkeypatch.delenv('BUILD_AND_VERIFY_STARTED_MONOTONIC', raising=False)
+    monkeypatch.setattr(runner.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(runner, '_invocation_guard', lambda *args, **kwargs: (control, timer))
+    monkeypatch.setattr(runner, 'run_verify', lambda *args, **kwargs: 0)
+    monkeypatch.setattr(module, '_runtime_metadata', lambda: {'runtime_version': 'test-runtime', 'implementation_identity': 'test-implementation'})
+    monkeypatch.setattr(module, '_legacy_runtime', lambda project: (legacy, True))
+    monkeypatch.setattr(module, '_migration_ready', lambda project: True)
+    monkeypatch.setattr(module, '_migrate_legacy_runtime', migrate)
+    monkeypatch.setattr(sys, 'argv', [str(BUILD_AND_VERIFY_SCRIPT), 'verify', '--project', str(tmp_path), '--execution-context', 'local'])
     assert module.main() == 1
-    assert events == ["migration", "cancel"]
+    assert events == ['migration', 'cancel']
     timer.cancel.assert_called_once()
     assert control.cancelled.is_set()
     output = capsys.readouterr().out
-    assert "status: failed" in output and "status: passed" not in output
+    assert 'status: failed' in output and 'status: passed' not in output
 
 
-@pytest.mark.parametrize("settings,context,extra", [
-    ({"enforceLocalBudget": False}, "local", ()),
-    ({}, "cloud", ()), ({}, "ci", ()), ({}, "local", ("--pr",)),
-])
-def test_local_budget_warning_exemption_policy_matrix(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: dict,
-    context: str, extra: tuple[str, ...],
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    write_runner_config(project, verify_config={"fullBudgetSeconds": 1, **settings},
-        verify_checks=[{"id": name, "command": [name], "inputs": []} for name in ("slow", "later")])
-    runner = FakeRunner({("later",): completed(["later"], stdout="LATER_STARTED\n")})
-    monkeypatch.setenv("CI", "false")
-    monkeypatch.setenv("GITHUB_ACTIONS", "false")
-    monkeypatch.delenv("BUILD_AND_VERIFY_STARTED_MONOTONIC", raising=False)
-    monkeypatch.setattr(load_build_and_verify_runner_module().time, "monotonic",
-        lambda: 1.2 if len(runner.calls) >= 2 else 0.0)
-    result = run_check(project, "verify", "--full", "--execution-context", context,
-        *extra, runner=runner, changed_files=[])
+@pytest.mark.parametrize('settings,context,extra', [({'enforceLocalBudget': False}, 'local', ()), ({}, 'cloud', ()), ({}, 'ci', ()), ({}, 'local', ('--pr',))])
+def test_local_budget_warning_exemption_policy_matrix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: dict, context: str, extra: tuple[str, ...]) -> None:
+    project = tmp_path / 'project'
+    write_runner_config(project, verify_config={'fullBudgetSeconds': 1, **settings}, verify_checks=[{'id': name, 'command': [name], 'inputs': []} for name in ('slow', 'later')])
+    runner = FakeRunner({('later',): completed(['later'], stdout='LATER_STARTED\n')})
+    monkeypatch.setenv('CI', 'false')
+    monkeypatch.setenv('GITHUB_ACTIONS', 'false')
+    monkeypatch.delenv('BUILD_AND_VERIFY_STARTED_MONOTONIC', raising=False)
+    monkeypatch.setattr(load_build_and_verify_runner_module().time, 'monotonic', lambda: 1.2 if len(runner.calls) >= 2 else 0.0)
+    result = run_check(project, 'verify', '--full', '--execution-context', context, *extra, runner=runner, changed_files=[])
     assert result.returncode == 0, result.stdout + result.stderr
-    assert runner.calls == [["slow"], ["later"]]
-    assert "LATER_STARTED" in result.stdout
-    assert "performance-warning:" in result.stdout
+    assert runner.calls == [['slow'], ['later']]
+    assert 'LATER_STARTED' in result.stdout
+    assert 'performance-warning:' in result.stdout
 
 
-def test_build_and_verify_performance_report_schema_is_exact(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("BUILD_AND_VERIFY_EXECUTION_CONTEXT", "cloud")
-    project = tmp_path / "project"
-    project.mkdir()
-    write_runner_config(
-        project,
-        verify_checks=[
-            {"id": "first", "command": ["first"], "inputs": []},
-            {"id": "second", "command": ["second"], "inputs": []},
-        ],
-    )
-    runner = FakeRunner(
-        {
-            ("first",): completed(["first"]),
-            ("second",): completed(["second"], returncode=1),
-        }
-    )
+def test_build_and_verify_performance_report_schema_is_exact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('BUILD_AND_VERIFY_EXECUTION_CONTEXT', 'cloud')
+    project = tmp_path / 'project'
+    write_runner_config(project, verify_checks=[{'id': 'first', 'command': ['first'], 'inputs': []}, {'id': 'second', 'command': ['second'], 'inputs': []}])
+    runner = FakeRunner({('first',): completed(['first']), ('second',): completed(['second'], returncode=1)})
     ticks = iter([0.0, 0.0, 1.234, 2.0, 4.567, 10.0])
-    monkeypatch.setattr(
-        load_build_and_verify_runner_module().time, "monotonic", lambda: next(ticks)
-    )
-
-    result = run_check(
-        project,
-        "verify",
-        "--full",
-        "--performance-report",
-        runner=runner,
-        changed_files=[],
-    )
-
+    monkeypatch.setattr(load_build_and_verify_runner_module().time, 'monotonic', lambda: next(ticks))
+    result = run_check(project, 'verify', '--full', '--performance-report', runner=runner, changed_files=[])
     assert result.returncode == 1
-    report = read_json(
-        project / ".build-and-verify" / "runs" / "performance-report.json"
-    )
-    assert set(report) == {
-        "schemaVersion",
-        "runtimeVersion",
-        "generatedAt",
-        "totalSeconds",
-        "budgetSeconds",
-        "overBudget",
-        "verificationStatus",
-        "checks",
-    }
-    assert report["generatedAt"].endswith("Z")
-    assert report["checks"] == [
-        {"id": "first", "status": "passed", "durationSeconds": 1.23},
-        {"id": "second", "status": "failed", "durationSeconds": 2.57},
-    ]
+    report = read_json(project / '.build-and-verify' / 'runs' / 'performance-report.json')
+    assert set(report) == {'schemaVersion', 'runtimeVersion', 'generatedAt', 'totalSeconds', 'budgetSeconds', 'overBudget', 'verificationStatus', 'checks'}
+    assert report['generatedAt'].endswith('Z')
+    assert report['checks'] == [{'id': 'first', 'status': 'passed', 'durationSeconds': 1.23}, {'id': 'second', 'status': 'failed', 'durationSeconds': 2.57}]
 
 
 def test_build_and_verify_incomplete_full_results_skip_performance(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    write_runner_config(
-        project,
-        verify_checks=[
-            {
-                "id": "interrupted",
-                "command": ["interrupted"],
-                "checkParallel": True,
-                "inputs": [],
-            },
-            {
-                "id": "not-returned",
-                "command": ["not-returned"],
-                "checkParallel": True,
-                "inputs": [],
-            },
-        ],
-        verify_config={"fullBudgetSeconds": 1},
-    )
-    report_path = project / ".build-and-verify" / "runs" / "performance-report.json"
-    report_path.parent.mkdir(parents=True)
-    original = b"{\"previous\": true}\n"
-    report_path.write_bytes(original)
-    runner = FakeRunner({("interrupted",): KeyboardInterrupt("interrupted")})
-
-    result = run_check(
-        project,
-        "verify",
-        "--full",
-        "--performance-report",
-        runner=runner,
-        changed_files=[],
-    )
-
+    project = tmp_path / 'project'
+    write_runner_config(project, verify_checks=[{'id': 'interrupted', 'command': ['interrupted'], 'checkParallel': True, 'inputs': []}, {'id': 'not-returned', 'command': ['not-returned'], 'checkParallel': True, 'inputs': []}], verify_config={'fullBudgetSeconds': 1})
+    report_path = project / '.build-and-verify' / 'runs' / 'performance-report.json'
+    original = b'{"previous": true}\n'
+    _remember_input(report_path, original)
+    runner = FakeRunner({('interrupted',): KeyboardInterrupt('interrupted')})
+    result = run_check(project, 'verify', '--full', '--performance-report', runner=runner, changed_files=[])
     assert result.returncode == 1
-    assert "performance-warning:" not in result.stdout
-    assert "performance-report" not in result.stdout + result.stderr
-    assert report_path.read_bytes() == original
+    assert 'performance-warning:' not in result.stdout
+    assert 'performance-report' not in result.stdout + result.stderr
+    assert _read_memory_bytes(report_path) == original
 
 
-def test_build_and_verify_fast_verify_leaves_performance_report_unchanged(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    write_runner_config(
-        project,
-        verify_checks=[{"id": "fast", "command": ["fast"], "inputs": []}],
-        verify_config={"fullBudgetSeconds": 1},
-    )
-    report_path = project / ".build-and-verify" / "runs" / "performance-report.json"
-    report_path.parent.mkdir(parents=True)
-    original = b"{\"previous\": true}\n"
-    report_path.write_bytes(original)
-
-    result = run_check(
-        project,
-        "verify",
-        runner=FakeRunner(),
-        changed_files=["src/app.py"],
-    )
-
+def test_build_and_verify_fast_verify_leaves_performance_report_unchanged(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    write_runner_config(project, verify_checks=[{'id': 'fast', 'command': ['fast'], 'inputs': []}], verify_config={'fullBudgetSeconds': 1})
+    report_path = project / '.build-and-verify' / 'runs' / 'performance-report.json'
+    original = b'{"previous": true}\n'
+    _remember_input(report_path, original)
+    result = run_check(project, 'verify', runner=_declared_runner(), changed_files=['src/app.py'])
     assert result.returncode == 0
-    assert "performance" not in result.stdout + result.stderr
-    assert report_path.read_bytes() == original
+    assert 'performance' not in result.stdout + result.stderr
+    assert _read_memory_bytes(report_path) == original
 
 
-def test_build_and_verify_fast_verify_ignores_invalid_full_budget(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    write_runner_config(
-        project,
-        verify_checks=[{"id": "fast", "command": ["fast"], "inputs": []}],
-        verify_config={"fullBudgetSeconds": 0},
-    )
-    runner = FakeRunner()
-
-    result = run_check(
-        project,
-        "verify",
-        runner=runner,
-        changed_files=["src/app.py"],
-    )
-
+def test_build_and_verify_fast_verify_ignores_invalid_full_budget(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    write_runner_config(project, verify_checks=[{'id': 'fast', 'command': ['fast'], 'inputs': []}], verify_config={'fullBudgetSeconds': 0})
+    runner = _declared_runner()
+    result = run_check(project, 'verify', runner=runner, changed_files=['src/app.py'])
     assert result.returncode == 0, result.stdout + result.stderr
-    assert runner.calls == [["fast"]]
-    assert "fullBudgetSeconds" not in result.stdout + result.stderr
+    assert runner.calls == [['fast']]
+    assert 'fullBudgetSeconds' not in result.stdout + result.stderr
 
 
-def test_build_and_verify_report_write_failure_preserves_functional_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    write_runner_config(
-        project,
-        verify_checks=[{"id": "verify", "command": ["verify"], "inputs": []}],
-    )
+def test_build_and_verify_report_write_failure_preserves_functional_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = tmp_path / 'project'
+    write_runner_config(project, verify_checks=[{'id': 'verify', 'command': ['verify'], 'inputs': []}])
     path_type = type(project)
     original_write_text = path_type.write_text
 
     def fail_report_temp(self, *args, **kwargs):
-        if self.name == ".performance-report.json.tmp":
-            raise OSError("write failed")
+        if self.name == '.performance-report.json.tmp':
+            raise OSError('write failed')
         return original_write_text(self, *args, **kwargs)
-
-    monkeypatch.setattr(path_type, "write_text", fail_report_temp)
-
-    result = run_check(
-        project,
-        "verify",
-        "--full",
-        "--performance-report",
-        runner=FakeRunner(),
-        changed_files=[],
-    )
-
+    monkeypatch.setattr(path_type, 'write_text', fail_report_temp)
+    result = run_check(project, 'verify', '--full', '--performance-report', runner=_declared_runner(), changed_files=[])
     assert result.returncode == 0
-    assert "performance-report-warning:" in result.stderr
-
-
+    assert 'performance-report-warning:' in result.stderr
 
 
 def test_build_and_verify_runner_rejects_legacy_parallel_field(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "legacy-parallel",
-                        "command": command_that_logs("legacy-parallel"),
-                        "parallel": True,
-                        "inputs": [],
-                    }
-                ]
-            },
-        },
-    )
-
-    result = run_check(project, "verify", "--full")
-
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'legacy-parallel', 'command': command_that_logs('legacy-parallel'), 'parallel': True, 'inputs': []}]}})
+    result = run_check(project, 'verify', '--full')
     assert result.returncode == 1
-    assert "parallel is no longer supported; use checkParallel" in result.stderr
-    assert "status: failed" in result.stdout
+    assert 'parallel is no longer supported; use checkParallel' in result.stderr
+    assert 'status: failed' in result.stdout
 
 
-@pytest.mark.parametrize("value", [True, False])
-def test_build_and_verify_runner_accepts_check_parallel_bool(
-    tmp_path: Path, value: bool
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "check-parallel",
-                        "command": command_that_logs("check-parallel"),
-                        "checkParallel": value,
-                        "inputs": [],
-                    }
-                ]
-            },
-        },
-    )
-
-    result = run_check(project, "verify", "--full")
-
+@pytest.mark.parametrize('value', [True, False])
+def test_build_and_verify_runner_accepts_check_parallel_bool(tmp_path: Path, value: bool) -> None:
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'check-parallel', 'command': command_that_logs('check-parallel'), 'checkParallel': value, 'inputs': []}]}})
+    result = run_check(project, 'verify', '--full')
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("value", ["true", 1, 0, None])
-def test_build_and_verify_runner_rejects_invalid_check_parallel(
-    tmp_path: Path, value: object
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "bad-check-parallel",
-                        "command": command_that_logs("bad-check-parallel"),
-                        "checkParallel": value,
-                        "inputs": [],
-                    }
-                ]
-            },
-        },
-    )
-
-    result = run_check(project, "verify", "--full")
-
+@pytest.mark.parametrize('value', ['true', 1, 0, None])
+def test_build_and_verify_runner_rejects_invalid_check_parallel(tmp_path: Path, value: object) -> None:
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'bad-check-parallel', 'command': command_that_logs('bad-check-parallel'), 'checkParallel': value, 'inputs': []}]}})
+    result = run_check(project, 'verify', '--full')
     assert result.returncode == 1
-    assert "checkParallel must be boolean" in result.stderr
+    assert 'checkParallel must be boolean' in result.stderr
 
 
 def test_build_and_verify_runner_full_verify_runs_parallel_checks_concurrently(tmp_path: Path, capsys) -> None:
     import threading
     import time
-
     module = load_build_and_verify_module()
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {"id": "parallel-a", "command": ["parallel-a"], "checkParallel": True, "inputs": []},
-                    {"id": "parallel-b", "command": ["parallel-b"], "checkParallel": True, "inputs": []},
-                    {"id": "serial-c", "command": ["serial-c"], "checkParallel": False, "inputs": []},
-                ]
-            },
-        },
-    )
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'parallel-a', 'command': ['parallel-a'], 'checkParallel': True, 'inputs': []}, {'id': 'parallel-b', 'command': ['parallel-b'], 'checkParallel': True, 'inputs': []}, {'id': 'serial-c', 'command': ['serial-c'], 'checkParallel': False, 'inputs': []}]}})
     active = 0
     max_active = 0
     lock = threading.Lock()
@@ -3300,56 +2337,24 @@ def test_build_and_verify_runner_full_verify_runs_parallel_checks_concurrently(t
         time.sleep(0.2)
         with lock:
             active -= 1
-        return subprocess.CompletedProcess(command, 0, stdout=f"{command[0]}\n", stderr="")
-
+        return subprocess.CompletedProcess(command, 0, stdout=f'{command[0]}\n', stderr='')
     result = module._runner().run_verify(project, runner=fake_runner, full=True)
     captured = capsys.readouterr()
-
     assert result == 0
     assert max_active > 1
-    assert "serial-c" in captured.out
-    assert "duration: parallel-a seconds=" in captured.out
-    assert "duration: parallel-b seconds=" in captured.out
-    assert "duration: serial-c seconds=" in captured.out
-    assert "full-not-run: false" in captured.out
+    assert 'serial-c' in captured.out
+    assert 'duration: parallel-a seconds=' in captured.out
+    assert 'duration: parallel-b seconds=' in captured.out
+    assert 'duration: serial-c seconds=' in captured.out
+    assert 'full-not-run: false' in captured.out
 
 
-def test_build_and_verify_runner_fast_verify_runs_check_parallel_cache_misses_concurrently(
-    tmp_path: Path, capsys
-) -> None:
+def test_build_and_verify_runner_fast_verify_runs_check_parallel_cache_misses_concurrently(tmp_path: Path, capsys) -> None:
     import threading
-
     module = load_build_and_verify_module()
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    (project / "src").mkdir()
-    (project / "src" / "app.py").write_text("changed\n", encoding="utf-8")
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "fast-a",
-                        "command": ["fast-a"],
-                        "paths": ["src/**"],
-                        "inputs": ["src"],
-                        "checkParallel": True,
-                    },
-                    {
-                        "id": "fast-b",
-                        "command": ["fast-b"],
-                        "paths": ["src/**"],
-                        "inputs": ["src"],
-                        "checkParallel": True,
-                    },
-                ]
-            },
-        },
-    )
+    project = tmp_path / 'project'
+    _remember_input(project / 'src' / 'app.py', 'changed\n', encoding='utf-8')
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'fast-a', 'command': ['fast-a'], 'paths': ['src/**'], 'inputs': ['src'], 'checkParallel': True}, {'id': 'fast-b', 'command': ['fast-b'], 'paths': ['src/**'], 'inputs': ['src'], 'checkParallel': True}]}})
     active = 0
     max_active = 0
     lock = threading.Lock()
@@ -3363,40 +2368,21 @@ def test_build_and_verify_runner_fast_verify_runs_check_parallel_cache_misses_co
         barrier.wait(timeout=2)
         with lock:
             active -= 1
-        return subprocess.CompletedProcess(command, 0, stdout=f"{command[0]}\n", stderr="")
-
+        return subprocess.CompletedProcess(command, 0, stdout=f'{command[0]}\n', stderr='')
     result = module._runner().run_verify(project, runner=fake_runner, full=False)
     captured = capsys.readouterr()
-
     assert result == 0
     assert max_active > 1
-    assert "checked: fast-a, fast-b" in captured.out
-    assert "full-not-run: true" in captured.out
+    assert 'checked: fast-a, fast-b' in captured.out
+    assert 'full-not-run: true' in captured.out
 
 
 def test_build_and_verify_runner_full_verify_honors_max_parallel_checks(tmp_path: Path) -> None:
     import threading
     import time
-
     module = load_build_and_verify_module()
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "maxParallel": 2,
-                "checks": [
-                    {"id": "parallel-a", "command": ["parallel-a"], "checkParallel": True, "inputs": []},
-                    {"id": "parallel-b", "command": ["parallel-b"], "checkParallel": True, "inputs": []},
-                    {"id": "parallel-c", "command": ["parallel-c"], "checkParallel": True, "inputs": []},
-                ],
-            },
-        },
-    )
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'maxParallel': 2, 'checks': [{'id': 'parallel-a', 'command': ['parallel-a'], 'checkParallel': True, 'inputs': []}, {'id': 'parallel-b', 'command': ['parallel-b'], 'checkParallel': True, 'inputs': []}, {'id': 'parallel-c', 'command': ['parallel-c'], 'checkParallel': True, 'inputs': []}]}})
     active = 0
     max_active = 0
     lock = threading.Lock()
@@ -3409,40 +2395,19 @@ def test_build_and_verify_runner_full_verify_honors_max_parallel_checks(tmp_path
         time.sleep(0.1)
         with lock:
             active -= 1
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
+        return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
     result = module._runner().run_verify(project, runner=fake_runner, full=True)
-
     assert result == 0
     assert max_active == 2
 
 
-def test_build_and_verify_runner_full_verify_zero_max_parallel_means_unlimited(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_build_and_verify_runner_full_verify_zero_max_parallel_means_unlimited(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import threading
     import time
-
     module = load_build_and_verify_module()
-    monkeypatch.setattr(module._runner().os, "cpu_count", lambda: 2)
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "maxParallel": 0,
-                "checks": [
-                    {"id": "parallel-a", "command": ["parallel-a"], "checkParallel": True, "inputs": []},
-                    {"id": "parallel-b", "command": ["parallel-b"], "checkParallel": True, "inputs": []},
-                    {"id": "parallel-c", "command": ["parallel-c"], "checkParallel": True, "inputs": []},
-                ],
-            },
-        },
-    )
+    monkeypatch.setattr(module._runner().os, 'cpu_count', lambda: 2)
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'maxParallel': 0, 'checks': [{'id': 'parallel-a', 'command': ['parallel-a'], 'checkParallel': True, 'inputs': []}, {'id': 'parallel-b', 'command': ['parallel-b'], 'checkParallel': True, 'inputs': []}, {'id': 'parallel-c', 'command': ['parallel-c'], 'checkParallel': True, 'inputs': []}]}})
     active = 0
     max_active = 0
     lock = threading.Lock()
@@ -3458,1072 +2423,439 @@ def test_build_and_verify_runner_full_verify_zero_max_parallel_means_unlimited(
         finally:
             with lock:
                 active -= 1
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
+        return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
     result = module._runner().run_verify(project, runner=fake_runner, full=True)
-
     assert result == 0
     assert max_active == 3
 
 
 def test_build_and_verify_runner_rejects_negative_max_parallel(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "maxParallel": -1,
-                "checks": [
-                    {"id": "parallel-a", "command": ["parallel-a"], "checkParallel": True, "inputs": []},
-                ],
-            },
-        },
-    )
-
-    result = run_check(project, "verify", "--full")
-
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'maxParallel': -1, 'checks': [{'id': 'parallel-a', 'command': ['parallel-a'], 'checkParallel': True, 'inputs': []}]}})
+    result = run_check(project, 'verify', '--full')
     assert result.returncode == 1
-    assert "verify.maxParallel must be non-negative integer" in result.stderr
-    assert "status: failed" in result.stdout
+    assert 'verify.maxParallel must be non-negative integer' in result.stderr
+    assert 'status: failed' in result.stdout
 
 
-def test_build_and_verify_runner_reports_missing_xdist_before_running_pytest(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
-) -> None:
+def test_build_and_verify_runner_reports_missing_xdist_before_running_pytest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     module = load_build_and_verify_module()
     runner = module._runner()
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "pytest-parallel",
-                        "command": "python -m pytest -n 8 tests",
-                        "checkParallel": False,
-                        "inputs": [],
-                    },
-                ],
-            },
-        },
-    )
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'pytest-parallel', 'command': 'python -m pytest -n 8 tests', 'checkParallel': False, 'inputs': []}]}})
     calls = []
 
     def fake_runner(command, **_kwargs):
         calls.append(command)
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(runner.importlib.util, "find_spec", lambda _name: None)
-
+        return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
+    monkeypatch.setattr(runner.importlib.util, 'find_spec', lambda _name: None)
     result = runner.run_verify(project, runner=fake_runner, full=True)
     captured = capsys.readouterr()
-
     assert result == 1
     assert calls == []
-    assert "missing_dependency: pytest-parallel: pytest-xdist is required" in captured.err
-    assert "status: failed" in captured.out
+    assert 'missing_dependency: pytest-parallel: pytest-xdist is required' in captured.err
+    assert 'status: failed' in captured.out
 
 
-@pytest.mark.parametrize("workers", ["auto", 1, 8])
-def test_build_and_verify_runner_applies_pytest_xdist_workers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, workers: object
-) -> None:
+@pytest.mark.parametrize('workers', ['auto', 1, 8])
+def test_build_and_verify_runner_applies_pytest_xdist_workers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, workers: object) -> None:
     module = load_build_and_verify_module()
     runner = module._runner()
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "pytest-workers",
-                        "command": [sys.executable, "-m", "pytest", "tests"],
-                        "pytestXdistWorkers": workers,
-                        "inputs": [],
-                    }
-                ]
-            },
-        },
-    )
-    monkeypatch.delenv("PYTEST_XDIST_AUTO_NUM_WORKERS", raising=False)
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'pytest-workers', 'command': [sys.executable, '-m', 'pytest', 'tests'], 'pytestXdistWorkers': workers, 'inputs': []}]}})
+    monkeypatch.delenv('PYTEST_XDIST_AUTO_NUM_WORKERS', raising=False)
     calls = []
 
     def fake_runner(command, **kwargs):
-        calls.append((command, kwargs.get("env")))
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(
-        runner.importlib.util,
-        "find_spec",
-        lambda name: object() if name == "xdist" else None,
-    )
-
+        calls.append((command, kwargs.get('env')))
+        return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
+    monkeypatch.setattr(runner.importlib.util, 'find_spec', lambda name: object() if name == 'xdist' else None)
     result = runner.run_verify(project, runner=fake_runner, full=True)
-
     assert result == 0
-    assert calls[0][0] == [sys.executable, "-m", "pytest", "-n", str(workers), "tests"]
-    if workers == "auto":
-        assert calls[0][1]["PYTEST_XDIST_AUTO_NUM_WORKERS"] == "4"
+    assert calls[0][0] == [sys.executable, '-m', 'pytest', '-n', str(workers), 'tests']
+    if workers == 'auto':
+        assert calls[0][1]['PYTEST_XDIST_AUTO_NUM_WORKERS'] == '4'
     else:
         assert calls[0][1] is None
 
 
-def test_build_and_verify_runner_preserves_windows_shell_command_when_applying_xdist(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_build_and_verify_runner_preserves_windows_shell_command_when_applying_xdist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_build_and_verify_module()
     runner = module._runner()
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    command = (
-        r"set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1&& "
-        r".\.venv\Scripts\python.exe -m pytest tests\example.py"
-    )
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "pytest-workers",
-                        "command": command,
-                        "pytestXdistWorkers": 4,
-                        "inputs": [],
-                    }
-                ]
-            },
-        },
-    )
+    project = tmp_path / 'project'
+    command = 'set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1&& .\\.venv\\Scripts\\python.exe -m pytest tests\\example.py'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'pytest-workers', 'command': command, 'pytestXdistWorkers': 4, 'inputs': []}]}})
     calls = []
 
     def fake_runner(actual_command, **kwargs):
         calls.append(actual_command)
-        return subprocess.CompletedProcess(actual_command, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(
-        runner.importlib.util,
-        "find_spec",
-        lambda name: object() if name == "xdist" else None,
-    )
-
+        return subprocess.CompletedProcess(actual_command, 0, stdout='', stderr='')
+    monkeypatch.setattr(runner.importlib.util, 'find_spec', lambda name: object() if name == 'xdist' else None)
     result = runner.run_verify(project, runner=fake_runner, full=True)
-
     assert result == 0
-    assert calls == [command.replace("-m pytest", "-m pytest -n 4")]
+    assert calls == [command.replace('-m pytest', '-m pytest -n 4')]
 
 
-def test_build_and_verify_runner_keeps_existing_pytest_xdist_auto_worker_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_build_and_verify_runner_keeps_existing_pytest_xdist_auto_worker_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_build_and_verify_module()
     runner = module._runner()
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "pytest-workers",
-                        "command": [sys.executable, "-m", "pytest", "tests"],
-                        "pytestXdistWorkers": "auto",
-                        "inputs": [],
-                    }
-                ]
-            },
-        },
-    )
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'pytest-workers', 'command': [sys.executable, '-m', 'pytest', 'tests'], 'pytestXdistWorkers': 'auto', 'inputs': []}]}})
     calls = []
 
     def fake_runner(command, **kwargs):
-        calls.append((command, kwargs.get("env")))
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-    monkeypatch.setenv("PYTEST_XDIST_AUTO_NUM_WORKERS", "7")
-    monkeypatch.setattr(
-        runner.importlib.util,
-        "find_spec",
-        lambda name: object() if name == "xdist" else None,
-    )
-
+        calls.append((command, kwargs.get('env')))
+        return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
+    monkeypatch.setenv('PYTEST_XDIST_AUTO_NUM_WORKERS', '7')
+    monkeypatch.setattr(runner.importlib.util, 'find_spec', lambda name: object() if name == 'xdist' else None)
     result = runner.run_verify(project, runner=fake_runner, full=True)
-
     assert result == 0
-    assert calls == [([sys.executable, "-m", "pytest", "-n", "auto", "tests"], None)]
+    assert calls == [([sys.executable, '-m', 'pytest', '-n', 'auto', 'tests'], None)]
 
 
-@pytest.mark.parametrize("workers", [0, -1, True, "8", ""])
-def test_build_and_verify_runner_rejects_invalid_pytest_xdist_workers(
-    tmp_path: Path, workers: object
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "bad-workers",
-                        "command": [sys.executable, "-m", "pytest"],
-                        "pytestXdistWorkers": workers,
-                        "inputs": [],
-                    }
-                ]
-            },
-        },
-    )
-
-    result = run_check(project, "verify", "--full")
-
+@pytest.mark.parametrize('workers', [0, -1, True, '8', ''])
+def test_build_and_verify_runner_rejects_invalid_pytest_xdist_workers(tmp_path: Path, workers: object) -> None:
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'bad-workers', 'command': [sys.executable, '-m', 'pytest'], 'pytestXdistWorkers': workers, 'inputs': []}]}})
+    result = run_check(project, 'verify', '--full')
     assert result.returncode == 1
     assert 'pytestXdistWorkers must be "auto" or positive integer' in result.stderr
 
 
-def test_build_and_verify_runner_rejects_pytest_xdist_workers_on_non_pytest_command(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "not-pytest",
-                        "command": [sys.executable, "-m", "unittest"],
-                        "pytestXdistWorkers": 8,
-                        "inputs": [],
-                    }
-                ]
-            },
-        },
-    )
-
-    result = run_check(project, "verify", "--full")
-
+def test_build_and_verify_runner_rejects_pytest_xdist_workers_on_non_pytest_command(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'not-pytest', 'command': [sys.executable, '-m', 'unittest'], 'pytestXdistWorkers': 8, 'inputs': []}]}})
+    result = run_check(project, 'verify', '--full')
     assert result.returncode == 1
-    assert "pytestXdistWorkers requires pytest command" in result.stderr
+    assert 'pytestXdistWorkers requires pytest command' in result.stderr
 
 
-def test_build_and_verify_runner_requires_xdist_for_pytest_xdist_workers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
-) -> None:
+def test_build_and_verify_runner_requires_xdist_for_pytest_xdist_workers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     module = load_build_and_verify_module()
     runner = module._runner()
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "pytest-workers",
-                        "command": [sys.executable, "-m", "pytest"],
-                        "pytestXdistWorkers": "auto",
-                        "inputs": [],
-                    }
-                ]
-            },
-        },
-    )
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'pytest-workers', 'command': [sys.executable, '-m', 'pytest'], 'pytestXdistWorkers': 'auto', 'inputs': []}]}})
     calls = []
 
     def fake_runner(command, **_kwargs):
         calls.append(command)
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(runner.importlib.util, "find_spec", lambda _name: None)
-
+        return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
+    monkeypatch.setattr(runner.importlib.util, 'find_spec', lambda _name: None)
     result = runner.run_verify(project, runner=fake_runner, full=True)
     captured = capsys.readouterr()
-
     assert result == 1
     assert calls == []
-    assert "missing_dependency: pytest-workers: pytest-xdist is required" in captured.err
+    assert 'missing_dependency: pytest-workers: pytest-xdist is required' in captured.err
 
 
-def test_build_and_verify_runner_full_verify_aggregates_missing_xdist_failures(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
-) -> None:
+def test_build_and_verify_runner_full_verify_aggregates_missing_xdist_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     module = load_build_and_verify_module()
     runner = module._runner()
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "pytest-a",
-                        "command": "python -m pytest -n 8 tests/a",
-                        "checkParallel": True,
-                        "inputs": [],
-                    },
-                    {
-                        "id": "pytest-b",
-                        "command": [sys.executable, "-m", "pytest", "-n", "8", "tests/b"],
-                        "checkParallel": True,
-                        "inputs": [],
-                    },
-                ],
-            },
-        },
-    )
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'pytest-a', 'command': 'python -m pytest -n 8 tests/a', 'checkParallel': True, 'inputs': []}, {'id': 'pytest-b', 'command': [sys.executable, '-m', 'pytest', '-n', '8', 'tests/b'], 'checkParallel': True, 'inputs': []}]}})
     calls = []
 
     def fake_runner(command, **_kwargs):
         calls.append(command)
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(runner.importlib.util, "find_spec", lambda _name: None)
-
+        return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
+    monkeypatch.setattr(runner.importlib.util, 'find_spec', lambda _name: None)
     result = runner.run_verify(project, runner=fake_runner, full=True)
     captured = capsys.readouterr()
-
     assert result == 1
     assert calls == []
-    assert "missing_dependency: pytest-a: pytest-xdist is required" in captured.err
-    assert "missing_dependency: pytest-b: pytest-xdist is required" in captured.err
-    assert "failed: pytest-a, pytest-b" in captured.out
-    assert "status: failed" in captured.out
+    assert 'missing_dependency: pytest-a: pytest-xdist is required' in captured.err
+    assert 'missing_dependency: pytest-b: pytest-xdist is required' in captured.err
+    assert 'failed: pytest-a, pytest-b' in captured.out
+    assert 'status: failed' in captured.out
 
 
-@pytest.mark.parametrize("timeout_seconds", [0, -1, True])
-def test_build_and_verify_runner_rejects_invalid_check_timeout_seconds(
-    tmp_path: Path, timeout_seconds: object
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "invalid-timeout",
-                        "command": command_that_logs("invalid-timeout"),
-                        "timeoutSeconds": timeout_seconds,
-                        "checkParallel": False,
-                        "inputs": [],
-                    },
-                ],
-            },
-        },
-    )
-
-    result = run_check(project, "verify", "--full")
-
+@pytest.mark.parametrize('timeout_seconds', [0, -1, True])
+def test_build_and_verify_runner_rejects_invalid_check_timeout_seconds(tmp_path: Path, timeout_seconds: object) -> None:
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'invalid-timeout', 'command': command_that_logs('invalid-timeout'), 'timeoutSeconds': timeout_seconds, 'checkParallel': False, 'inputs': []}]}})
+    result = run_check(project, 'verify', '--full')
     assert result.returncode == 1
-    assert "invalid_timeoutSeconds: invalid-timeout" in result.stderr
-    assert "status: failed" in result.stdout
+    assert 'invalid_timeoutSeconds: invalid-timeout' in result.stderr
+    assert 'status: failed' in result.stdout
 
 
-def test_build_and_verify_runner_full_verify_reports_parallel_check_timeout(
-    tmp_path: Path, capsys
-) -> None:
+def test_build_and_verify_runner_full_verify_reports_parallel_check_timeout(tmp_path: Path, capsys) -> None:
     module = load_build_and_verify_module()
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "timeoutSeconds": 1,
-                "checks": [
-                    {"id": "parallel-a", "command": ["parallel-a"], "checkParallel": True, "inputs": []},
-                ],
-            },
-        },
-    )
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'timeoutSeconds': 1, 'checks': [{'id': 'parallel-a', 'command': ['parallel-a'], 'checkParallel': True, 'inputs': []}]}})
 
     def fake_runner(command, **kwargs):
-        raise subprocess.TimeoutExpired(command, kwargs.get("timeout"))
-
+        raise subprocess.TimeoutExpired(command, kwargs.get('timeout'))
     result = module._runner().run_verify(project, runner=fake_runner, full=True)
     captured = capsys.readouterr()
-
     assert result == 1
-    assert "check_timeout: parallel-a exceeded 1s" in captured.err
-    assert "failed: parallel-a" in captured.out
-    assert "status: failed" in captured.out
+    assert 'check_timeout: parallel-a exceeded 1s' in captured.err
+    assert 'failed: parallel-a' in captured.out
+    assert 'status: failed' in captured.out
 
 
-def test_build_and_verify_runner_full_verify_reports_parallel_check_exception(
-    tmp_path: Path, capsys
-) -> None:
+def test_build_and_verify_runner_full_verify_reports_parallel_check_exception(tmp_path: Path, capsys) -> None:
     module = load_build_and_verify_module()
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {"id": "parallel-a", "command": ["parallel-a"], "checkParallel": True, "inputs": []},
-                ],
-            },
-        },
-    )
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'parallel-a', 'command': ['parallel-a'], 'checkParallel': True, 'inputs': []}]}})
 
     def fake_runner(_command, **_kwargs):
-        raise RuntimeError("boom")
-
+        raise RuntimeError('boom')
     result = module._runner().run_verify(project, runner=fake_runner, full=True)
     captured = capsys.readouterr()
-
     assert result == 1
-    assert "parallel_check_exception: parallel-a: RuntimeError: boom" in captured.err
-    assert "failed: parallel-a" in captured.out
-    assert "status: failed" in captured.out
+    assert 'parallel_check_exception: parallel-a: RuntimeError: boom' in captured.err
+    assert 'failed: parallel-a' in captured.out
+    assert 'status: failed' in captured.out
 
 
-def test_build_and_verify_runner_full_verify_reports_keyboard_interrupt_from_parallel_check(
-    tmp_path: Path, capsys
-) -> None:
+def test_build_and_verify_runner_full_verify_reports_keyboard_interrupt_from_parallel_check(tmp_path: Path, capsys) -> None:
     module = load_build_and_verify_module()
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {"id": "parallel-a", "command": ["parallel-a"], "checkParallel": True, "inputs": []},
-                ],
-            },
-        },
-    )
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'parallel-a', 'command': ['parallel-a'], 'checkParallel': True, 'inputs': []}]}})
 
     def fake_runner(_command, **_kwargs):
-        raise KeyboardInterrupt("worker interrupted")
-
+        raise KeyboardInterrupt('worker interrupted')
     result = module._runner().run_verify(project, runner=fake_runner, full=True)
     captured = capsys.readouterr()
-
     assert result == 1
-    assert "parallel_check_interrupted: parallel-a: KeyboardInterrupt: worker interrupted" in captured.err
-    assert "failed: parallel-a" in captured.out
-    assert "status: failed" in captured.out
+    assert 'parallel_check_interrupted: parallel-a: KeyboardInterrupt: worker interrupted' in captured.err
+    assert 'failed: parallel-a' in captured.out
+    assert 'status: failed' in captured.out
 
 
-def test_build_and_verify_runner_full_verify_skips_serial_checks_after_parallel_interrupt(
-    tmp_path: Path, capsys
-) -> None:
+def test_build_and_verify_runner_full_verify_skips_serial_checks_after_parallel_interrupt(tmp_path: Path, capsys) -> None:
     module = load_build_and_verify_module()
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {"id": "parallel-a", "command": ["parallel-a"], "checkParallel": True, "inputs": []},
-                    {"id": "serial-after-interrupt", "command": ["serial-after-interrupt"], "checkParallel": False, "inputs": []},
-                ],
-            },
-        },
-    )
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'parallel-a', 'command': ['parallel-a'], 'checkParallel': True, 'inputs': []}, {'id': 'serial-after-interrupt', 'command': ['serial-after-interrupt'], 'checkParallel': False, 'inputs': []}]}})
     calls = []
 
     def fake_runner(command, **_kwargs):
         calls.append(command)
-        if command == ["parallel-a"]:
-            raise KeyboardInterrupt("worker interrupted")
-        return subprocess.CompletedProcess(command, 0, stdout="serial ran\n", stderr="")
-
+        if command == ['parallel-a']:
+            raise KeyboardInterrupt('worker interrupted')
+        return subprocess.CompletedProcess(command, 0, stdout='serial ran\n', stderr='')
     result = module._runner().run_verify(project, runner=fake_runner, full=True)
     captured = capsys.readouterr()
-
     assert result == 1
-    assert calls == [["parallel-a"]]
-    assert "serial ran" not in captured.out
-    assert "failed: parallel-a" in captured.out
-    assert "checked: parallel-a, serial-after-interrupt" in captured.out
-    assert "status: failed" in captured.out
+    assert calls == [['parallel-a']]
+    assert 'serial ran' not in captured.out
+    assert 'failed: parallel-a' in captured.out
+    assert 'checked: parallel-a, serial-after-interrupt' in captured.out
+    assert 'status: failed' in captured.out
 
 
-def test_build_and_verify_runner_full_verify_reports_serial_failure_after_parallel_pass(
-    tmp_path: Path, capsys
-) -> None:
+def test_build_and_verify_runner_full_verify_reports_serial_failure_after_parallel_pass(tmp_path: Path, capsys) -> None:
     module = load_build_and_verify_module()
-    project = tmp_path / "project"
-    project.mkdir()
-    cache_dir = project / ".build-and-verify" / "cache"
-    (project / ".build-and-verify").mkdir()
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {"id": "parallel-pass", "command": ["parallel-pass"], "checkParallel": True, "inputs": []},
-                    {"id": "serial-fail", "command": ["serial-fail"], "checkParallel": False, "inputs": []},
-                ],
-            },
-        },
-    )
+    project = tmp_path / 'project'
+    cache_dir = project / '.build-and-verify' / 'cache'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'parallel-pass', 'command': ['parallel-pass'], 'checkParallel': True, 'inputs': []}, {'id': 'serial-fail', 'command': ['serial-fail'], 'checkParallel': False, 'inputs': []}]}})
 
     def fake_runner(command, **_kwargs):
-        if command == ["serial-fail"]:
-            return subprocess.CompletedProcess(command, 1, stdout="", stderr="serial failed\n")
-        return subprocess.CompletedProcess(command, 0, stdout="parallel passed\n", stderr="")
-
+        if command == ['serial-fail']:
+            return subprocess.CompletedProcess(command, 1, stdout='', stderr='serial failed\n')
+        return subprocess.CompletedProcess(command, 0, stdout='parallel passed\n', stderr='')
     result = module._runner().run_verify(project, runner=fake_runner, full=True)
     captured = capsys.readouterr()
-    cache_files = list(cache_dir.glob("*.json"))
-
+    cache_files = list(_cache_files(cache_dir))
     assert result == 1
-    assert "parallel passed" in captured.out
-    assert "serial failed" in captured.err
-    assert "failed: serial-fail" in captured.out
-    assert "checked: parallel-pass, serial-fail" in captured.out
-    assert "status: failed" in captured.out
+    assert 'parallel passed' in captured.out
+    assert 'serial failed' in captured.err
+    assert 'failed: serial-fail' in captured.out
+    assert 'checked: parallel-pass, serial-fail' in captured.out
+    assert 'status: failed' in captured.out
     assert len(cache_files) == 1
-    assert read_json(cache_files[0]) == {"status": "passed", "id": "parallel-pass"}
+    assert read_json(cache_files[0]) == {'status': 'passed', 'id': 'parallel-pass'}
 
 
-
-
-def test_build_and_verify_runner_reads_changed_files_with_single_git_status(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_build_and_verify_runner_reads_changed_files_with_single_git_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_build_and_verify_module()
     runner = module._runner()
     calls = []
 
     def fake_run(command, **_kwargs):
         calls.append(command)
-        if command == ["git", "diff", "--name-only", "--cached"]:
-            return subprocess.CompletedProcess(command, 0, stdout="staged.txt\n", stderr="")
-        if command == ["git", "diff", "--name-only"]:
-            return subprocess.CompletedProcess(command, 0, stdout="unstaged.txt\n", stderr="")
-        if command == ["git", "ls-files", "--others", "--exclude-standard"]:
-            return subprocess.CompletedProcess(command, 0, stdout="untracked.txt\n", stderr="")
-        if command == ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"]:
-            return subprocess.CompletedProcess(
-                command,
-                0,
-                stdout="M  staged.txt\0 M unstaged.txt\0?? untracked.txt\0",
-                stderr="",
-            )
+        if command == ['git', 'diff', '--name-only', '--cached']:
+            return subprocess.CompletedProcess(command, 0, stdout='staged.txt\n', stderr='')
+        if command == ['git', 'diff', '--name-only']:
+            return subprocess.CompletedProcess(command, 0, stdout='unstaged.txt\n', stderr='')
+        if command == ['git', 'ls-files', '--others', '--exclude-standard']:
+            return subprocess.CompletedProcess(command, 0, stdout='untracked.txt\n', stderr='')
+        if command == ['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all']:
+            return subprocess.CompletedProcess(command, 0, stdout='M  staged.txt\x00 M unstaged.txt\x00?? untracked.txt\x00', stderr='')
         raise AssertionError(command)
-
-    monkeypatch.setattr(runner.subprocess, "run", fake_run)
-
+    monkeypatch.setattr(runner.subprocess, 'run', fake_run)
     changed = runner._changed_files(tmp_path)
+    assert changed == ['staged.txt', 'unstaged.txt', 'untracked.txt']
+    assert calls == [['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all']]
 
-    assert changed == ["staged.txt", "unstaged.txt", "untracked.txt"]
-    assert calls == [["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"]]
 
-
-def test_build_and_verify_runner_reads_git_status_rename_and_copy_destinations(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_build_and_verify_runner_reads_git_status_rename_and_copy_destinations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     module = load_build_and_verify_module()
     runner = module._runner()
 
     def fake_run(command, **_kwargs):
-        if command == ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"]:
-            return subprocess.CompletedProcess(
-                command,
-                0,
-                stdout="R  renamed.txt\0old-name.txt\0C  copied.txt\0source.txt\0",
-                stderr="",
-            )
+        if command == ['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all']:
+            return subprocess.CompletedProcess(command, 0, stdout='R  renamed.txt\x00old-name.txt\x00C  copied.txt\x00source.txt\x00', stderr='')
         raise AssertionError(command)
-
-    monkeypatch.setattr(runner.subprocess, "run", fake_run)
-
-    assert runner._git_status_names(tmp_path) == ["renamed.txt", "copied.txt"]
-
-
+    monkeypatch.setattr(runner.subprocess, 'run', fake_run)
+    assert runner._git_status_names(tmp_path) == ['renamed.txt', 'copied.txt']
 
 
 def test_build_and_verify_runner_uses_passed_result_cache(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    (project / "src").mkdir()
-    (project / "src" / "cached.py").write_text("changed\n", encoding="utf-8")
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "cache-check",
-                        "command": command_that_logs("cache-check"),
-                        "paths": ["src/cached.py"],
-                        "inputs": ["src/cached.py"],
-                    }
-                ]
-            },
-        },
-    )
-
-    first = run_check(project, "verify", changed_files=["src/cached.py"])
-    cache_files = list((project / ".build-and-verify" / "cache").glob("*.json"))
-    second = run_check(project, "verify", changed_files=["src/cached.py"])
-
+    project = tmp_path / 'project'
+    _remember_input(project / 'src' / 'cached.py', 'changed\n', encoding='utf-8')
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'cache-check', 'command': command_that_logs('cache-check'), 'paths': ['src/cached.py'], 'inputs': ['src/cached.py']}]}})
+    first = run_check(project, 'verify', changed_files=['src/cached.py'])
+    cache_files = list(_cache_files(project / '.build-and-verify' / 'cache'))
+    second = run_check(project, 'verify', changed_files=['src/cached.py'])
     assert first.returncode == 0, first.stdout + first.stderr
     assert len(cache_files) == 1
-    assert read_json(cache_files[0]) == {"status": "passed", "id": "cache-check"}
+    assert read_json(cache_files[0]) == {'status': 'passed', 'id': 'cache-check'}
     assert second.returncode == 0, second.stdout + second.stderr
-    assert "cache-hit: cache-check" in second.stdout
-    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
-        "cache-check"
-    ]
+    assert 'cache-hit: cache-check' in second.stdout
+    assert _read_memory_text(project / 'run.log', encoding='utf-8').splitlines() == ['cache-check']
 
 
-
-
-
-
-
-
-def test_build_and_verify_runner_full_verify_ignores_existing_default_cache(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify" / "cache").mkdir(parents=True)
-    (project / "src").mkdir()
-    (project / "src" / "cached.py").write_text("changed\n", encoding="utf-8")
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "full-ignores-fast-cache",
-                        "command": command_that_logs("full-ignores-fast-cache"),
-                        "paths": ["src/cached.py"],
-                        "inputs": ["src/cached.py"],
-                    }
-                ]
-            },
-        },
-    )
-
-    default = run_check(project, "verify", changed_files=["src/cached.py"])
-    cached_default = run_check(project, "verify", changed_files=["src/cached.py"])
-    full = run_check(project, "verify", "--full", changed_files=["src/cached.py"])
-
+def test_build_and_verify_runner_full_verify_ignores_existing_default_cache(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    _remember_input(project / 'src' / 'cached.py', 'changed\n', encoding='utf-8')
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'full-ignores-fast-cache', 'command': command_that_logs('full-ignores-fast-cache'), 'paths': ['src/cached.py'], 'inputs': ['src/cached.py']}]}})
+    default = run_check(project, 'verify', changed_files=['src/cached.py'])
+    cached_default = run_check(project, 'verify', changed_files=['src/cached.py'])
+    full = run_check(project, 'verify', '--full', changed_files=['src/cached.py'])
     assert default.returncode == 0, default.stdout + default.stderr
     assert cached_default.returncode == 0, cached_default.stdout + cached_default.stderr
     assert full.returncode == 0, full.stdout + full.stderr
-    assert "cache-hit: full-ignores-fast-cache" in cached_default.stdout
-    assert "cache-hit:" not in full.stdout
-    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
-        "full-ignores-fast-cache",
-        "full-ignores-fast-cache",
-    ]
+    assert 'cache-hit: full-ignores-fast-cache' in cached_default.stdout
+    assert 'cache-hit:' not in full.stdout
+    assert _read_memory_text(project / 'run.log', encoding='utf-8').splitlines() == ['full-ignores-fast-cache', 'full-ignores-fast-cache']
 
 
-def test_build_and_verify_runner_full_verify_refreshes_cache_for_default_verify(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify" / "cache").mkdir(parents=True)
-    (project / "src").mkdir()
-    (project / "src" / "cached.py").write_text("changed\n", encoding="utf-8")
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "full-primes-cache",
-                        "command": command_that_logs("full-primes-cache"),
-                        "paths": ["src/cached.py"],
-                        "inputs": ["src/cached.py"],
-                    }
-                ]
-            },
-        },
-    )
-
-    full = run_check(project, "verify", "--full", changed_files=["src/cached.py"])
-    default = run_check(project, "verify", changed_files=["src/cached.py"])
-
+def test_build_and_verify_runner_full_verify_refreshes_cache_for_default_verify(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    _remember_input(project / 'src' / 'cached.py', 'changed\n', encoding='utf-8')
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'full-primes-cache', 'command': command_that_logs('full-primes-cache'), 'paths': ['src/cached.py'], 'inputs': ['src/cached.py']}]}})
+    full = run_check(project, 'verify', '--full', changed_files=['src/cached.py'])
+    default = run_check(project, 'verify', changed_files=['src/cached.py'])
     assert full.returncode == 0, full.stdout + full.stderr
     assert default.returncode == 0, default.stdout + default.stderr
-    assert "cache-hit:" not in full.stdout
-    assert "cache-hit: full-primes-cache" in default.stdout
-    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
-        "full-primes-cache"
-    ]
+    assert 'cache-hit:' not in full.stdout
+    assert 'cache-hit: full-primes-cache' in default.stdout
+    assert _read_memory_text(project / 'run.log', encoding='utf-8').splitlines() == ['full-primes-cache']
 
 
-
-
-
-
-
-
-
-
-
-
-def test_build_and_verify_runner_default_check_cache_key_tracks_changed_files(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "default-check",
-                        "command": command_that_logs("default-check"),
-                    }
-                ]
-            },
-        },
-    )
-
-    (project / "a.txt").write_text("a\n", encoding="utf-8")
-    first = run_check(project, "verify", changed_files=["a.txt"])
-    (project / "b.txt").write_text("b\n", encoding="utf-8")
-    second = run_check(project, "verify", changed_files=["b.txt"])
-
+def test_build_and_verify_runner_default_check_cache_key_tracks_changed_files(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'default-check', 'command': command_that_logs('default-check')}]}})
+    _remember_input(project / 'a.txt', 'a\n', encoding='utf-8')
+    first = run_check(project, 'verify', changed_files=['a.txt'])
+    _remember_input(project / 'b.txt', 'b\n', encoding='utf-8')
+    second = run_check(project, 'verify', changed_files=['b.txt'])
     assert first.returncode == 0, first.stdout + first.stderr
     assert second.returncode == 0, second.stdout + second.stderr
-    assert "cache-hit: default-check" not in second.stdout
-    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
-        "default-check",
-        "default-check",
-    ]
+    assert 'cache-hit: default-check' not in second.stdout
+    assert _read_memory_text(project / 'run.log', encoding='utf-8').splitlines() == ['default-check', 'default-check']
 
 
-
-
-
-
-def test_build_and_verify_runner_reports_missing_list_command_without_traceback(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    (project / "src").mkdir()
-    (project / "src" / "app.txt").write_text("changed\n", encoding="utf-8")
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "missing-command",
-                        "command": ["missing-build-and-verify-executable"],
-                        "paths": ["src/app.txt"],
-                        "inputs": ["src/app.txt"],
-                    }
-                ]
-            },
-        },
-    )
-
-    result = run_check(
-        project,
-        "verify",
-        runner=FakeRunner({("missing-build-and-verify-executable",): FileNotFoundError()}),
-    )
+def test_build_and_verify_runner_reports_missing_list_command_without_traceback(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    _remember_input(project / 'src' / 'app.txt', 'changed\n', encoding='utf-8')
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'missing-command', 'command': ['missing-build-and-verify-executable'], 'paths': ['src/app.txt'], 'inputs': ['src/app.txt']}]}})
+    result = run_check(project, 'verify', runner=FakeRunner({('missing-build-and-verify-executable',): FileNotFoundError()}))
     output = result.stdout + result.stderr
-
     assert result.returncode != 0
-    assert "command_not_found: missing-command" in output
-    assert "Traceback" not in output
+    assert 'command_not_found: missing-command' in output
+    assert 'Traceback' not in output
 
 
-def test_build_and_verify_runner_verify_reports_missing_config_without_traceback(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    (project / ".build-and-verify" / "config.json").unlink()
-
-    result = run_check(project, "verify")
+def test_build_and_verify_runner_verify_reports_missing_config_without_traceback(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    _forget_memory_value(project / '.build-and-verify' / 'config.json')
+    result = run_check(project, 'verify')
     output = result.stdout + result.stderr
-
     assert result.returncode != 0
-    assert "missing_config: .build-and-verify/config.json" in output
-    assert "status: failed" in result.stdout
-    assert "Traceback" not in output
+    assert 'missing_config: .build-and-verify/config.json' in output
+    assert 'status: failed' in result.stdout
+    assert 'Traceback' not in output
 
 
-
-
-
-
-@pytest.mark.parametrize(
-    "invalid_input",
-    [
-        "../outside.txt",
-        "{outside}",
-    ],
-)
-def test_build_and_verify_runner_rejects_inputs_outside_project(
-    tmp_path: Path, invalid_input: str
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    outside = tmp_path / "outside.txt"
-    outside.write_text("outside\n", encoding="utf-8")
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    (project / "src").mkdir()
-    (project / "src" / "app.txt").write_text("changed\n", encoding="utf-8")
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "invalid-input",
-                        "command": command_that_logs("invalid-input"),
-                        "paths": ["src/**"],
-                        "inputs": [invalid_input.format(outside=outside)],
-                    }
-                ]
-            },
-        },
-    )
-
-    result = run_check(project, "verify")
-
+@pytest.mark.parametrize('invalid_input', ['../outside.txt', '{outside}'])
+def test_build_and_verify_runner_rejects_inputs_outside_project(tmp_path: Path, invalid_input: str) -> None:
+    project = tmp_path / 'project'
+    outside = tmp_path / 'outside.txt'
+    _remember_input(outside, 'outside\n', encoding='utf-8')
+    _remember_input(project / 'src' / 'app.txt', 'changed\n', encoding='utf-8')
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'invalid-input', 'command': command_that_logs('invalid-input'), 'paths': ['src/**'], 'inputs': [invalid_input.format(outside=outside)]}]}})
+    result = run_check(project, 'verify')
     assert result.returncode != 0
-    assert "invalid_input_path" in result.stderr
-    assert not (project / "run.log").exists()
+    assert 'invalid_input_path' in result.stderr
+    assert not _memory_contains(project / 'run.log')
 
 
-def test_build_and_verify_runner_full_verify_rejects_inputs_outside_project(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    (project / "src").mkdir()
-    (project / "src" / "app.txt").write_text("changed\n", encoding="utf-8")
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "invalid-input",
-                        "command": command_that_logs("invalid-input"),
-                        "paths": ["src/**"],
-                        "inputs": ["../outside.txt"],
-                    }
-                ]
-            },
-        },
-    )
-
-    result = run_check(project, "verify", "--full")
-
+def test_build_and_verify_runner_full_verify_rejects_inputs_outside_project(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    _remember_input(project / 'src' / 'app.txt', 'changed\n', encoding='utf-8')
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'invalid-input', 'command': command_that_logs('invalid-input'), 'paths': ['src/**'], 'inputs': ['../outside.txt']}]}})
+    result = run_check(project, 'verify', '--full')
     assert result.returncode != 0
-    assert "invalid_input_path: ../outside.txt" in result.stderr
-    assert not (project / "run.log").exists()
+    assert 'invalid_input_path: ../outside.txt' in result.stderr
+    assert not _memory_contains(project / 'run.log')
 
 
-@pytest.mark.parametrize("mutation", ["check_id", "command", "inputs", "config"])
-def test_build_and_verify_runner_cache_key_changes_with_check_contract(
-    tmp_path: Path, mutation: str
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / ".build-and-verify" / "cache").mkdir(parents=True)
-    (project / "src").mkdir()
-    (project / "inputs").mkdir()
-    (project / "src" / "sample.py").write_text("changed\n", encoding="utf-8")
-    (project / "inputs" / "v1.txt").write_text("v1\n", encoding="utf-8")
-    (project / "inputs" / "v2.txt").write_text("v2\n", encoding="utf-8")
+@pytest.mark.parametrize('mutation', ['check_id', 'command', 'inputs', 'config'])
+def test_build_and_verify_runner_cache_key_changes_with_check_contract(tmp_path: Path, mutation: str) -> None:
+    project = tmp_path / 'project'
+    _remember_input(project / 'src' / 'sample.py', 'changed\n', encoding='utf-8')
+    _remember_input(project / 'inputs' / 'v1.txt', 'v1\n', encoding='utf-8')
+    _remember_input(project / 'inputs' / 'v2.txt', 'v2\n', encoding='utf-8')
 
-    def config(
-        *,
-        version: int = 1,
-        check_id: str = "cache-contract",
-        command: list[str] | None = None,
-        inputs: list[str] | None = None,
-    ) -> dict:
-        return {
-            "version": version,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": check_id,
-                        "command": command or command_that_logs("base"),
-                        "paths": ["src/**"],
-                        "inputs": inputs or ["inputs/v1.txt"],
-                    }
-                ]
-            },
-        }
-
-    write_json(project / ".build-and-verify" / "config.json", config())
-    first = run_check(project, "verify", changed_files=["src/sample.py"])
-    cached = run_check(project, "verify", changed_files=["src/sample.py"])
-
+    def config(*, version: int=1, check_id: str='cache-contract', command: list[str] | None=None, inputs: list[str] | None=None) -> dict:
+        return {'version': version, 'build': {'checks': []}, 'verify': {'checks': [{'id': check_id, 'command': command or command_that_logs('base'), 'paths': ['src/**'], 'inputs': inputs or ['inputs/v1.txt']}]}}
+    write_json(project / '.build-and-verify' / 'config.json', config())
+    first = run_check(project, 'verify', changed_files=['src/sample.py'])
+    cached = run_check(project, 'verify', changed_files=['src/sample.py'])
     assert first.returncode == 0, first.stdout + first.stderr
-    cache_files = list((project / ".build-and-verify" / "cache").glob("*.json"))
+    cache_files = list(_cache_files(project / '.build-and-verify' / 'cache'))
     assert len(cache_files) == 1
-    assert read_json(cache_files[0])["status"] == "passed"
+    assert read_json(cache_files[0])['status'] == 'passed'
     assert cached.returncode == 0, cached.stdout + cached.stderr
-    assert "cache-hit: cache-contract" in cached.stdout
-    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == ["base"]
-
+    assert 'cache-hit: cache-contract' in cached.stdout
+    assert _read_memory_text(project / 'run.log', encoding='utf-8').splitlines() == ['base']
     changed_config = config()
-    expected_checked = "cache-contract"
-    expected_log = "base"
-    if mutation == "check_id":
-        changed_config = config(check_id="cache-contract-renamed")
-        expected_checked = "cache-contract-renamed"
-    elif mutation == "command":
-        changed_config = config(command=command_that_logs("changed-command"))
-        expected_log = "changed-command"
-    elif mutation == "inputs":
-        changed_config = config(inputs=["inputs/v2.txt"])
-    elif mutation == "config":
-        changed_config["verify"]["maxParallel"] = 2
+    expected_checked = 'cache-contract'
+    expected_log = 'base'
+    if mutation == 'check_id':
+        changed_config = config(check_id='cache-contract-renamed')
+        expected_checked = 'cache-contract-renamed'
+    elif mutation == 'command':
+        changed_config = config(command=command_that_logs('changed-command'))
+        expected_log = 'changed-command'
+    elif mutation == 'inputs':
+        changed_config = config(inputs=['inputs/v2.txt'])
+    elif mutation == 'config':
+        changed_config['verify']['maxParallel'] = 2
     else:
-        raise AssertionError(f"unsupported mutation: {mutation}")
-
-    write_json(project / ".build-and-verify" / "config.json", changed_config)
-    changed = run_check(project, "verify", changed_files=["src/sample.py"])
-
+        raise AssertionError(f'unsupported mutation: {mutation}')
+    write_json(project / '.build-and-verify' / 'config.json', changed_config)
+    changed = run_check(project, 'verify', changed_files=['src/sample.py'])
     assert changed.returncode == 0, changed.stdout + changed.stderr
-    assert "cache-hit:" not in changed.stdout
-    assert f"checked: {expected_checked}" in changed.stdout
-    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
-        "base",
-        expected_log,
-    ]
+    assert 'cache-hit:' not in changed.stdout
+    assert f'checked: {expected_checked}' in changed.stdout
+    assert _read_memory_text(project / 'run.log', encoding='utf-8').splitlines() == ['base', expected_log]
 
 
-def test_build_and_verify_runner_cache_miss_does_not_fall_back_to_full(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    (project / "src").mkdir()
-    (project / "src" / "sample.txt").write_text("changed\n", encoding="utf-8")
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "verify.sample",
-                        "command": command_that_logs(
-                            "verify.sample", "sample-count.txt"
-                        ),
-                        "paths": ["src/**"],
-                        "inputs": ["src/sample.txt"],
-                    },
-                    {
-                        "id": "verify.full-only",
-                        "command": command_that_logs(
-                            "verify.full-only", "full-ran.txt"
-                        ),
-                        "paths": ["other/**"],
-                        "inputs": ["other"],
-                    },
-                ]
-            },
-        },
-    )
-
-    result = run_check(project, "verify", changed_files=["src/sample.txt"])
-
+def test_build_and_verify_runner_cache_miss_does_not_fall_back_to_full(tmp_path: Path) -> None:
+    project = tmp_path / 'project'
+    _remember_input(project / 'src' / 'sample.txt', 'changed\n', encoding='utf-8')
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'verify.sample', 'command': command_that_logs('verify.sample', 'sample-count.txt'), 'paths': ['src/**'], 'inputs': ['src/sample.txt']}, {'id': 'verify.full-only', 'command': command_that_logs('verify.full-only', 'full-ran.txt'), 'paths': ['other/**'], 'inputs': ['other']}]}})
+    result = run_check(project, 'verify', changed_files=['src/sample.txt'])
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "cache-hit:" not in result.stdout
-    assert "checked: verify.sample" in result.stdout
-    assert "full-not-run: true" in result.stdout
-    assert (project / "sample-count.txt").read_text(encoding="utf-8").splitlines() == [
-        "verify.sample"
-    ]
-    assert not (project / "full-ran.txt").exists()
-
-
-
-
+    assert 'cache-hit:' not in result.stdout
+    assert 'checked: verify.sample' in result.stdout
+    assert 'full-not-run: true' in result.stdout
+    assert _read_memory_text(project / 'sample-count.txt', encoding='utf-8').splitlines() == ['verify.sample']
+    assert not _memory_contains(project / 'full-ran.txt')
 
 
 def test_build_and_verify_cache_key_covers_runtime_and_cache_versions() -> None:
@@ -4535,68 +2867,154 @@ def test_build_and_verify_cache_key_covers_runtime_and_cache_versions() -> None:
 
 
 def test_build_and_verify_runner_does_not_cache_failed_results(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    (project / "src").mkdir()
-    (project / "src" / "fails.py").write_text("changed\n", encoding="utf-8")
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "fail-once",
-                        "command": command_that_fails_once("fail-once"),
-                        "paths": ["src/fails.py"],
-                        "inputs": ["src/fails.py"],
-                    }
-                ]
-            },
-        },
-    )
-
-    first = run_check(project, "verify", changed_files=["src/fails.py"])
-    second = run_check(project, "verify", changed_files=["src/fails.py"])
-
+    project = tmp_path / 'project'
+    _remember_input(project / 'src' / 'fails.py', 'changed\n', encoding='utf-8')
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'fail-once', 'command': command_that_fails_once('fail-once'), 'paths': ['src/fails.py'], 'inputs': ['src/fails.py']}]}})
+    first = run_check(project, 'verify', changed_files=['src/fails.py'])
+    second = run_check(project, 'verify', changed_files=['src/fails.py'])
     assert first.returncode != 0
     assert second.returncode == 0, second.stdout + second.stderr
-    assert "cache-hit: fail-once" not in second.stdout
-    assert (project / "run.log").read_text(encoding="utf-8").splitlines() == [
-        "fail-once",
-        "fail-once",
-    ]
+    assert 'cache-hit: fail-once' not in second.stdout
+    assert _read_memory_text(project / 'run.log', encoding='utf-8').splitlines() == ['fail-once', 'fail-once']
 
 
 def test_build_and_verify_runner_no_check_does_not_fall_back_to_full(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    assert run_build_and_verify("init", "--project", str(project)).returncode == 0
-    (project / "docs").mkdir()
-    (project / "docs" / "guide.md").write_text("changed\n", encoding="utf-8")
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {
-            "version": 1,
-            "build": {"checks": []},
-            "verify": {
-                "checks": [
-                    {
-                        "id": "src-only",
-                        "command": command_that_logs("src-only"),
-                        "paths": ["src/**"],
-                        "inputs": ["src"],
-                    }
-                ]
-            },
-        },
-    )
-
-    result = run_check(project, "verify", changed_files=["docs/guide.md"])
-
+    project = tmp_path / 'project'
+    _remember_input(project / 'docs' / 'guide.md', 'changed\n', encoding='utf-8')
+    write_json(project / '.build-and-verify' / 'config.json', {'version': 1, 'build': {'checks': []}, 'verify': {'checks': [{'id': 'src-only', 'command': command_that_logs('src-only'), 'paths': ['src/**'], 'inputs': ['src']}]}})
+    result = run_check(project, 'verify', changed_files=['docs/guide.md'])
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "checked:" in result.stdout
-    assert "full-not-run: true" in result.stdout
-    assert not (project / "run.log").exists()
+    assert 'checked:' in result.stdout
+    assert 'full-not-run: true' in result.stdout
+    assert not _memory_contains(project / 'run.log')
+
+@pytest.fixture
+def tmp_path():
+    # Ordinary tests use a value, not pytest's disk-creating temporary directory.
+    return Path("/memory/build-and-verify-tests")
+
+
+def _remember_input(path, value, *args, **kwargs):
+    assert _MEMORY is not None
+    raw = value if isinstance(value, bytes) else value.encode("utf-8")
+    if path.name == "config.json":
+        _MEMORY.documents[path] = raw
+    else:
+        _MEMORY.inputs[path] = raw
+    return len(value)
+
+
+def _read_memory_bytes(path, *args, **kwargs):
+    assert _MEMORY is not None
+    if path in _MEMORY.documents: return _MEMORY.documents[path]
+    if path in _MEMORY.inputs: return _MEMORY.inputs[path]
+    if path in _MEMORY.logs: return ("\n".join(_MEMORY.logs[path]) + "\n").encode()
+    raise AssertionError(f"unexpected memory input: {path}")
+
+
+def _read_memory_text(path, *args, **kwargs):
+    return _read_memory_bytes(path).decode("utf-8")
+
+
+def _memory_contains(path):
+    return path in _MEMORY.documents or path in _MEMORY.inputs or path in _MEMORY.logs
+
+
+def _forget_memory_value(path, *args, **kwargs):
+    _MEMORY.documents.pop(path, None)
+    _MEMORY.inputs.pop(path, None)
+    _MEMORY.logs.pop(path, None)
+
+
+def _cache_files(directory):
+    return sorted(path for path in _MEMORY.documents if path.parent == directory)
+
+
+def _declared_runner():
+    """Exact responses only for this fixture's declared external commands."""
+    responses = {}
+    module = load_build_and_verify_runner_module()
+    for path, raw in _MEMORY.documents.items():
+        if path.name != "config.json": continue
+        try: config = json.loads(raw)
+        except (ValueError, TypeError): continue
+        if not isinstance(config, dict): continue
+        for section in ("build", "verify"):
+            group = config.get(section, {})
+            if not isinstance(group, dict): continue
+            for check in group.get("checks", []):
+                if not isinstance(check, dict) or "command" not in check: continue
+                command = check["command"]
+                if not isinstance(command, (str, list)): continue
+                if config.get("version", 1) == 2 and check.get("id") not in config.get("verify", {}).get("realChecks", []):
+                    try: command, _ = module._test_guard().protected_command(command, Path("/memory/evidence/events.jsonl"))
+                    except ValueError: continue
+                key = tuple(command) if isinstance(command, list) else command
+                if key not in _LOG_COMMANDS and key not in _FAIL_ONCE_COMMANDS:
+                    responses[key] = completed(command)
+    return FakeRunner(responses)
+
+
+@pytest.fixture(autouse=True)
+def memory_runtime(monkeypatch):
+    state = SimpleNamespace(documents={}, inputs={}, logs={})
+    monkeypatch.setattr(sys.modules[__name__], "_MEMORY", state)
+    runner = load_build_and_verify_runner_module()
+    original_read_json = read_json
+    def config_write(path, data):
+        assert path.name in {"config.json", "confirmed.json", "draft.json"}, f"unexpected configuration output: {path}"
+        state.documents[path] = (json.dumps(data, ensure_ascii=False) + "\n").encode()
+    def config_read(path):
+        if path in state.documents: return json.loads(state.documents[path])
+        if path.is_relative_to(REPO_ROOT): return original_read_json(path)
+        raise AssertionError(f"unexpected configuration read: {path}")
+    def runner_config(project, *, build_checks=None, verify_checks=None, verify_config=None):
+        config = {"version": 1, "build": {"checks": build_checks or []}, "verify": {"checks": verify_checks or []}}
+        if verify_config: config["verify"].update(verify_config)
+        config_write(project / ".build-and-verify/config.json", config)
+    def load_config(project):
+        path = project / ".build-and-verify/config.json"
+        if path not in state.documents: raise runner.ConfigError("missing_config: .build-and-verify/config.json")
+        try: data = json.loads(state.documents[path])
+        except json.JSONDecodeError as error: raise runner.ConfigError(f"invalid_config: .build-and-verify/config.json: {error.msg}") from None
+        return runner._validate_config(data)
+    def hash_input(project, item, memo=None):
+        relative, path = runner._validate_project_relative_input(project, item)
+        if path in state.inputs:
+            return {"path": relative, "type": "file", "sha256": hashlib.sha256(state.inputs[path]).hexdigest()}
+        children = [{"path": child.relative_to(project).as_posix(), "sha256": hashlib.sha256(value).hexdigest()}
+            for child, value in state.inputs.items() if child.is_relative_to(project) and
+            (child.is_relative_to(path) or fnmatch.fnmatch(child.relative_to(project).as_posix(), relative))]
+        if children or runner._is_glob_input(relative):
+            return {"path": relative, "type": "glob" if runner._is_glob_input(relative) else "directory", "files": sorted(children, key=lambda child: child["path"])}
+        return {"path": relative, "missing": True}
+    def all_files(project):
+        return sorted(path.relative_to(project).as_posix() for path in state.inputs if path.is_relative_to(project) and not runner._is_excluded_relative(path.relative_to(project).as_posix()))
+    def store(project, key, check):
+        state.documents[runner._cache_path(project, key)] = json.dumps({"status": "passed", "id": check["id"]}).encode()
+    def cache_load(project, key):
+        raw = state.documents.get(runner._cache_path(project, key))
+        if raw is None: return False
+        try: return json.loads(raw).get("status") == "passed"
+        except json.JSONDecodeError: return False
+    def report(path, payload):
+        state.documents[path] = json.dumps(payload).encode()
+        return True
+    class EvidenceDirectory:
+        name = "/memory/evidence"
+        def __init__(self, *args, **kwargs): pass
+        def cleanup(self): pass
+    monkeypatch.setattr(sys.modules[__name__], "write_json", config_write)
+    monkeypatch.setattr(sys.modules[__name__], "read_json", config_read)
+    monkeypatch.setattr(sys.modules[__name__], "write_runner_config", runner_config)
+    monkeypatch.setattr(runner, "_load_config", load_config)
+    monkeypatch.setattr(runner, "_hash_input", hash_input)
+    monkeypatch.setattr(runner, "_all_project_files", all_files)
+    monkeypatch.setattr(runner, "_git_visible_files", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "_changed_files", all_files)
+    monkeypatch.setattr(runner, "_cache_load", cache_load)
+    monkeypatch.setattr(runner, "_cache_store", store)
+    monkeypatch.setattr(runner, "_write_performance_report", report)
+    monkeypatch.setattr(runner.tempfile, "TemporaryDirectory", EvidenceDirectory)
+    monkeypatch.setattr(sys.modules[__name__], "init_wizard_path_exists", lambda project, pattern: any(runner._path_matches(pattern, relative) for relative in all_files(project)))
+    yield state

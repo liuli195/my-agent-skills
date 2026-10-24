@@ -14,9 +14,17 @@ except ImportError:
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def _path_exists(path: Path) -> bool:
+    return path.exists()
+
+
 def _load_json(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(_read_text(path))
     except FileNotFoundError:
         return None, f"missing_file: {path}"
     except json.JSONDecodeError as exc:
@@ -71,7 +79,7 @@ def _check_manifest(
             continue
         for raw_path in paths:
             candidate = plugin_dir / raw_path
-            if not _inside(candidate, plugin_dir) or not candidate.exists():
+            if not _inside(candidate, plugin_dir) or not _path_exists(candidate):
                 errors.append(f"missing_manifest_path: {manifest_path}: {field}: {raw_path}")
 
     return errors
@@ -148,7 +156,7 @@ def _projection_plugins(root: Path) -> tuple[list[str], list[str]]:
     if yaml is None:
         return [], ["missing_dependency: PyYAML"]
     try:
-        data = yaml.safe_load(projection_path.read_text(encoding="utf-8")) or {}
+        data = yaml.safe_load(_read_text(projection_path)) or {}
     except FileNotFoundError:
         return [], [f"missing_file: {projection_path}"]
     except yaml.YAMLError as exc:

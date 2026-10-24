@@ -32,10 +32,6 @@ def _release_cases():
 
 def _package_cases():
     return importlib.import_module('tests.test_pr_flow_plugin_package')
-
-
-
-# Real PR preparation, used only by TestPrFlow.
 _PR_TEMPLATE_ROOT = None
 _PR_TEMPLATE_CACHE_KEY = None
 _PR_TEMPLATE_LOCK_TIMEOUT_SECONDS = 30
@@ -352,6 +348,17 @@ def _pr_dev_toolchain_reports(project: Path, *, worktree_match: bool, complete_i
         reports[key] = {'toolchain': toolchain, 'binding': binding}
     return reports
 
+def _pr_run_cleanup_with_real_git(project: Path, monkeypatch, *, remove_worktree: bool=False, pr_stdout: str | None=None) -> subprocess.CompletedProcess[str]:
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow
+    module = _pr_cases().load_pr_flow_module()
+    gh_stub = CommandStub()
+    gh_stub.add(['pr', 'view', '12', '--json', 'number,state,headRefName,baseRefName,headRepositoryOwner'], stdout=pr_stdout or _pr_cases().cleanup_pr_view_json())
+    monkeypatch.setattr(module, 'gh', gh_stub)
+    args = ['cleanup', '--project', str(project), '--pr', '12']
+    if remove_worktree:
+        args.append('--remove-worktree')
+    return invoke_pr_flow(args, module=module)
 
 class TestPrFlow:
 
@@ -359,8 +366,8 @@ class TestPrFlow:
     def _toolchain_identities(self, monkeypatch):
         global _PR_TEMPLATE_ROOT, _PR_TEMPLATE_CACHE_KEY
         cases = _pr_cases()
-        _PR_TEMPLATE_CACHE_KEY = _pr_template_cache_key(Path(__file__), cases.SCRIPT)
-        _PR_TEMPLATE_ROOT = Path(tempfile.gettempdir()) / f"pr-flow-test-templates-{_PR_TEMPLATE_CACHE_KEY}"
+        _PR_TEMPLATE_CACHE_KEY = _pr_template_cache_key(Path(__file__), Path(cases.__file__), cases.SCRIPT)
+        _PR_TEMPLATE_ROOT = Path(tempfile.gettempdir()) / f'pr-flow-test-templates-{_PR_TEMPLATE_CACHE_KEY}'
         monkeypatch.setattr(cases.load_pr_flow_module(), 'toolchain_identities', lambda _project: {'myspec': {'mode': 'release', 'packageName': '@liuli195/myspec', 'packageVersion': cases.MYSPEC_VERSION}, 'build-and-verify': {'mode': 'release', 'packageName': '@liuli195/build-and-verify', 'packageVersion': cases.BUILD_AND_VERIFY_VERSION}})
 
     def test_write_status_keeps_compatibility_file_and_branch_run(self, tmp_path: Path) -> None:
@@ -494,9 +501,8 @@ class TestPrFlow:
             assert '--project "<目标项目目录>"' in text
             assert '本次加载的技能安装目录' in text and '停止并报告' in text
 
-
     def test_pr_flow_template_cache_key_includes_script_contents(self) -> None:
-        assert _PR_TEMPLATE_CACHE_KEY == _pr_template_cache_key(Path(__file__), _pr_cases().SCRIPT)
+        assert _PR_TEMPLATE_CACHE_KEY == _pr_template_cache_key(Path(__file__), Path(_pr_cases().__file__), _pr_cases().SCRIPT)
 
     def test_remove_worktree_uses_native_non_forced_remove(self, tmp_path: Path, monkeypatch) -> None:
         from tests.support.command_stubs import CommandStub
@@ -600,7 +606,7 @@ class TestPrFlow:
         assert main_before == remote_base
         module = _pr_cases().load_pr_flow_module()
         monkeypatch.setattr(module, 'find_orca_worktree_id', lambda *_: None)
-        result = _pr_cases().run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
+        result = _pr_run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
         assert result.returncode == 0, result.stdout + result.stderr
         assert 'status: cleanup_complete' in result.stdout
         assert not target.exists()
@@ -650,7 +656,7 @@ class TestPrFlow:
             assert junction.returncode == 0, junction.stdout.decode(errors='replace') + junction.stderr.decode(errors='replace')
         module = _pr_cases().load_pr_flow_module()
         monkeypatch.setattr(module, 'find_orca_worktree_id', lambda *_args: None)
-        result = _pr_cases().run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
+        result = _pr_run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
         assert result.returncode == 0, result.stdout + result.stderr
         assert 'status: cleanup_complete' in result.stdout
         assert not target.exists()
@@ -783,7 +789,7 @@ class TestPrFlow:
         project, remote = _pr_init_cleanup_project(tmp_path)
         remote_base = _pr_git_bare(remote, 'rev-parse', 'refs/heads/main')
         assert _pr_git(project, 'rev-parse', 'main') != remote_base
-        result = _pr_cases().run_cleanup_with_real_git(project, monkeypatch)
+        result = _pr_run_cleanup_with_real_git(project, monkeypatch)
         assert result.returncode == 0, result.stdout + result.stderr
         assert _pr_git(project, 'branch', '--show-current') == 'main'
         assert _pr_git(project, 'rev-parse', 'HEAD') == remote_base
@@ -798,7 +804,7 @@ class TestPrFlow:
         project, remote = _pr_init_cleanup_project(tmp_path, base_ref=base_ref, head_ref=head_ref)
         remote_base = _pr_git_bare(remote, 'rev-parse', f'refs/heads/{base_ref}')
         with contextlib.chdir(project):
-            result = _pr_cases().run_cleanup_with_real_git(project, monkeypatch, remove_worktree=True, pr_stdout=_pr_cases().cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref))
+            result = _pr_run_cleanup_with_real_git(project, monkeypatch, remove_worktree=True, pr_stdout=_pr_cases().cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref))
         assert result.returncode == 0, result.stdout + result.stderr
         assert 'status: cleanup_complete' in result.stdout
         assert project.is_dir()
@@ -826,7 +832,7 @@ class TestPrFlow:
         _pr_git(project, 'commit', '-m', 'source-only directory')
         _pr_git(project, 'push', 'origin', head_ref)
         with contextlib.chdir(source_only):
-            result = _pr_cases().run_cleanup_with_real_git(project, monkeypatch, remove_worktree=True, pr_stdout=_pr_cases().cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref))
+            result = _pr_run_cleanup_with_real_git(project, monkeypatch, remove_worktree=True, pr_stdout=_pr_cases().cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref))
         assert result.returncode == 1, result.stdout + result.stderr
         assert 'active_cwd_would_disappear' in result.stdout
         assert source_only.is_dir()
@@ -846,7 +852,7 @@ class TestPrFlow:
         source_head = _pr_git(project, 'rev-parse', 'HEAD')
         _pr_git(project, 'push', 'origin', 'feature/example')
         with contextlib.chdir(source_only):
-            result = _pr_cases().run_cleanup_with_real_git(project, monkeypatch)
+            result = _pr_run_cleanup_with_real_git(project, monkeypatch)
         assert result.returncode == 1, result.stdout + result.stderr
         assert 'active_cwd_would_disappear' in result.stdout
         assert source_only.is_dir()
@@ -864,7 +870,7 @@ class TestPrFlow:
         _pr_git(project, 'worktree', 'add', str(occupied), base_ref)
         before = (_pr_git(project, 'rev-parse', 'HEAD'), _pr_git(project, 'branch', '--show-current'), _pr_git(project, 'show-ref'))
         with contextlib.chdir(project):
-            result = _pr_cases().run_cleanup_with_real_git(project, monkeypatch, remove_worktree=True, pr_stdout=_pr_cases().cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref))
+            result = _pr_run_cleanup_with_real_git(project, monkeypatch, remove_worktree=True, pr_stdout=_pr_cases().cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref))
         assert result.returncode == 1, result.stdout + result.stderr
         assert 'base_branch_checked_out' in result.stdout
         assert (_pr_git(project, 'rev-parse', 'HEAD'), _pr_git(project, 'branch', '--show-current'), _pr_git(project, 'show-ref')) == before
@@ -882,7 +888,7 @@ class TestPrFlow:
         _pr_git(project, 'worktree', 'add', str(occupied), base_ref)
         before = (_pr_git(project, 'rev-parse', 'HEAD'), _pr_git(project, 'branch', '--show-current'), _pr_git(project, 'show-ref'))
         with contextlib.chdir(project):
-            result = _pr_cases().run_cleanup_with_real_git(project, monkeypatch, pr_stdout=_pr_cases().cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref))
+            result = _pr_run_cleanup_with_real_git(project, monkeypatch, pr_stdout=_pr_cases().cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref))
         assert result.returncode == 1, result.stdout + result.stderr
         assert 'base_branch_checked_out' in result.stdout
         assert (_pr_git(project, 'rev-parse', 'HEAD'), _pr_git(project, 'branch', '--show-current'), _pr_git(project, 'show-ref')) == before
@@ -932,7 +938,7 @@ class TestPrFlow:
         before_local_head = _pr_git(target, 'show-ref', '--verify', f'refs/heads/{head_ref}')
         before_remote_head = _pr_git_bare(remote, 'show-ref', '--verify', f'refs/heads/{head_ref}')
         with contextlib.chdir(active_cwd):
-            result = _pr_cases().run_cleanup_with_real_git(target, monkeypatch, pr_stdout=_pr_cases().cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref))
+            result = _pr_run_cleanup_with_real_git(target, monkeypatch, pr_stdout=_pr_cases().cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref))
         assert result.returncode == 1, result.stdout + result.stderr
         assert 'active_cwd_would_disappear' in result.stdout
         assert (_pr_git(target, 'rev-parse', 'HEAD'), _pr_git(target, 'branch', '--show-current')) == before_target
@@ -954,7 +960,7 @@ class TestPrFlow:
         remote_base = _pr_git_bare(remote, 'rev-parse', 'refs/heads/main')
         assert stale_base != remote_base
         with contextlib.chdir(target):
-            result = _pr_cases().run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
+            result = _pr_run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
         assert result.returncode == 0, result.stdout + result.stderr
         assert 'status: cleanup_complete' in result.stdout
         assert target.exists()
@@ -995,7 +1001,7 @@ class TestPrFlow:
                 pytest.skip(f'directory symlink creation is unavailable: {exc}')
         active_cwd = target if cwd_relative is None else target / cwd_relative
         with contextlib.chdir(active_cwd):
-            result = _pr_cases().run_cleanup_with_real_git(alias, monkeypatch, remove_worktree=True)
+            result = _pr_run_cleanup_with_real_git(alias, monkeypatch, remove_worktree=True)
         assert result.returncode == 0, result.stdout + result.stderr
         assert 'status: cleanup_complete' in result.stdout
         assert target.is_dir()
@@ -1034,7 +1040,7 @@ class TestPrFlow:
                 cwd_uses_alias = False
             if not cwd_uses_alias:
                 pytest.skip('platform resolves directory links in cwd')
-            result = _pr_cases().run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
+            result = _pr_run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
         assert result.returncode == 0, result.stdout + result.stderr
         assert 'status: cleanup_complete' in result.stdout
         assert target.is_dir()
@@ -1068,7 +1074,7 @@ class TestPrFlow:
         ignored = subprocess.run(['git', 'check-ignore', '--quiet', '--', '.local/spec-work'], cwd=target, check=False)
         assert ignored.returncode == 0
         with contextlib.chdir(active_cwd):
-            result = _pr_cases().run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
+            result = _pr_run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
         assert result.returncode == 0, result.stdout + result.stderr
         assert 'status: cleanup_complete' in result.stdout
         assert target.is_dir()
@@ -1130,7 +1136,7 @@ class TestPrFlow:
                 logical_cwd_is_inside_target = False
             if not logical_cwd_is_inside_target:
                 pytest.skip('platform resolves directory links in cwd and cannot preserve the logical path')
-            result = _pr_cases().run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
+            result = _pr_run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
         assert result.returncode == 0, result.stdout + result.stderr
         assert 'status: cleanup_complete' in result.stdout
         assert target.is_dir()
@@ -1167,7 +1173,7 @@ class TestPrFlow:
         not_ignored = subprocess.run(['git', 'check-ignore', '--quiet', '--', 'untracked/nested'], cwd=target, check=False)
         assert not_ignored.returncode != 0
         with contextlib.chdir(active_cwd):
-            result = _pr_cases().run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
+            result = _pr_run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
         assert result.returncode == 1, result.stdout + result.stderr
         assert 'cleanup_complete' not in result.stdout
         assert target.is_dir()
@@ -1207,7 +1213,7 @@ class TestPrFlow:
         assert active_cwd.is_dir()
         assert not (target / 'source-only').exists() or source_head == _pr_git(target, 'rev-parse', 'HEAD')
         with contextlib.chdir(active_cwd):
-            result = _pr_cases().run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
+            result = _pr_run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
         assert result.returncode == 1, result.stdout + result.stderr
         assert 'cleanup_complete' not in result.stdout
         assert target.is_dir()
@@ -1228,7 +1234,7 @@ class TestPrFlow:
         _pr_git(project, 'worktree', 'add', str(other), 'main')
         before = (_pr_git(project, 'rev-parse', 'HEAD'), _pr_git(project, 'branch', '--show-current'), _pr_git(project, 'show-ref'))
         before_remote_refs = _pr_git_bare(remote, 'show-ref')
-        result = _pr_cases().run_cleanup_with_real_git(project, monkeypatch)
+        result = _pr_run_cleanup_with_real_git(project, monkeypatch)
         assert result.returncode == 1, result.stdout + result.stderr
         assert 'base_branch_checked_out' in result.stdout
         assert (_pr_git(project, 'rev-parse', 'HEAD'), _pr_git(project, 'branch', '--show-current'), _pr_git(project, 'show-ref')) == before
@@ -1243,7 +1249,7 @@ class TestPrFlow:
         project, remote = _pr_init_cleanup_project(tmp_path)
         remote_base = _pr_git_bare(remote, 'rev-parse', 'refs/heads/main')
         _pr_git(project, 'branch', '-D', 'main')
-        result = _pr_cases().run_cleanup_with_real_git(project, monkeypatch)
+        result = _pr_run_cleanup_with_real_git(project, monkeypatch)
         local_base = subprocess.run(['git', 'rev-parse', 'main'], cwd=project, check=False, text=True, capture_output=True)
         assert result.returncode == 0, result.stdout + result.stderr
         assert local_base.returncode == 0, local_base.stdout + local_base.stderr
@@ -1259,7 +1265,7 @@ class TestPrFlow:
         _pr_git(project, 'add', 'LOCAL.md')
         _pr_git(project, 'commit', '-m', 'local only')
         _pr_git(project, 'checkout', 'feature/example')
-        result = _pr_cases().run_cleanup_with_real_git(project, monkeypatch)
+        result = _pr_run_cleanup_with_real_git(project, monkeypatch)
         assert result.returncode == 1
         status = json.loads((project / '.pr-flow' / 'last-status.json').read_text(encoding='utf-8'))
         assert status['details']['reason'] == 'local_base_not_fast_forward'
@@ -1272,7 +1278,7 @@ class TestPrFlow:
         _pr_git(project, 'worktree', 'add', str(other), 'main')
         before = (_pr_git(project, 'rev-parse', 'HEAD'), _pr_git(project, 'branch', '--show-current'), _pr_git(project, 'show-ref'))
         before_remote_refs = _pr_git_bare(remote, 'show-ref')
-        result = _pr_cases().run_cleanup_with_real_git(project, monkeypatch)
+        result = _pr_run_cleanup_with_real_git(project, monkeypatch)
         assert result.returncode == 1, result.stdout + result.stderr
         assert 'base_branch_checked_out' in result.stdout
         assert (_pr_git(project, 'rev-parse', 'HEAD'), _pr_git(project, 'branch', '--show-current'), _pr_git(project, 'show-ref')) == before
@@ -1295,7 +1301,7 @@ class TestPrFlow:
         else:
             git_path = Path(_pr_git(other, 'rev-parse', '--git-path', 'rebase-merge'))
             git_path.mkdir(parents=True)
-        result = _pr_cases().run_cleanup_with_real_git(project, monkeypatch)
+        result = _pr_run_cleanup_with_real_git(project, monkeypatch)
         assert result.returncode == 1
         assert _pr_git(other, 'rev-parse', 'HEAD') == stale_base
         assert _pr_git_bare(remote, 'show-ref', '--verify', 'refs/heads/feature/example')
@@ -1479,8 +1485,166 @@ class TestPrFlow:
         result = subprocess.run([sys.executable, str(_pr_cases().SCRIPT), command, '--project', str(project), *extra], check=False, text=True, capture_output=True)
         assert 'upgrade available: rerun pr-flow-init to record the managed toolchain' in result.stdout
 
+    def test_cleanup_physical_failure_persists_status_in_controller(self, tmp_path: Path, monkeypatch) -> None:
+        module = _pr_cases().load_pr_flow_module()
+
+        def fail_rmtree(_target: Path) -> None:
+            raise OSError('directory is still in use')
+        monkeypatch.setattr(module, 'find_orca_worktree_id', lambda *_args: None)
+        monkeypatch.setattr(module.shutil, 'rmtree', fail_rmtree)
+        project, result = _pr_cases().run_cleanup_in_process(tmp_path, monkeypatch, pr_stdout=_pr_cases().cleanup_pr_view_json(), remove_worktree=True)
+        assert result.returncode == 1
+        assert 'cleanup_complete' not in result.stdout
+        status = json.loads((tmp_path / 'controller' / '.pr-flow' / 'last-status.json').read_text(encoding='utf-8'))
+        assert status['details']['reason'] == 'physical_worktree_remove_failed'
+        assert status['details']['registrationRemoved'] is True
+        assert status['details']['nextAction']
+        assert status['details']['nextCommand']
+        expected_recovery_command = 'rmdir' if os.name == 'nt' else 'rm -rf'
+        assert expected_recovery_command in status['details']['nextCommand']
+        assert status['details']['recovery'] == status['details']['nextAction']
+
+
+
+# Real release preparation, loaded only by TestReleaseFlow.
+_RELEASE_TEMPLATE_ROOT = None
+_RELEASE_TEMPLATE_LOCK_TIMEOUT_SECONDS = 30
+_RELEASE_TEMPLATE_LOCK_STALE_SECONDS = 30
+
+def _release_run_cli(*args: str) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment.setdefault('GITHUB_ACTIONS', 'true')
+    environment.setdefault('GITHUB_REPOSITORY', 'liuli195/my-agent-skills')
+    return subprocess.run([sys.executable, str(_release_cases().SCRIPT), *args], cwd=_release_cases().REPO_ROOT, env=environment, text=True, capture_output=True, check=False)
+
+def _release_init_release_input_project(project: Path, remote: Path, version: str='1.0.0') -> None:
+    _release_cases().write_release_flow_files(project)
+    for plugin in ('release-flow', 'pr-flow', 'build-and-verify', 'my-spec'):
+        _release_cases().write_plugin_manifests(project, plugin, version)
+        (project / 'plugins' / plugin / 'content.txt').parent.mkdir(parents=True, exist_ok=True)
+        (project / 'plugins' / plugin / 'content.txt').write_text('baseline\n', encoding='utf-8')
+    for plugin in ('build-and-verify', 'my-spec'):
+        _release_cases().write_npm_package(project, plugin, version=version)
+    for path in (project / 'plugins' / 'tool-lifecycle' / 'pack.py', project / 'plugins' / 'tool-lifecycle' / 'python' / 'management.py'):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('baseline\n', encoding='utf-8')
+    _release_init_project_with_remote(project, remote)
+
+def _release_advance_plugin_version_on_source_ref(project: Path, plugin: str, version: str) -> None:
+    _release_cases().write_plugin_manifests(project, plugin, version)
+    if plugin in {'build-and-verify', 'my-spec'}:
+        _release_cases().write_npm_package(project, plugin, version=version)
+    assert _release_git(project, 'add', f'plugins/{plugin}').returncode == 0
+    assert _release_git(project, 'commit', '-m', f'bump {plugin}').returncode == 0
+    assert _release_git(project, 'push', 'origin', 'HEAD:refs/heads/main').returncode == 0
+    assert _release_git(project, 'fetch', 'origin', 'main').returncode == 0
+
+def _release_git(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(['git', '-C', str(project), *args], check=False, text=True, capture_output=True)
+
+def _release_project_tree_cache_key(project: Path) -> str:
+    digest = hashlib.sha256()
+    digest.update(Path(__file__).read_bytes())
+    digest.update(Path(_release_cases().__file__).read_bytes())
+    for path in sorted(project.rglob('*')):
+        if not path.is_file() or '.git' in path.parts:
+            continue
+        digest.update(path.relative_to(project).as_posix().encode('utf-8'))
+        digest.update(b'\x00')
+        digest.update(path.read_bytes())
+        digest.update(b'\x00')
+    return digest.hexdigest()[:16]
+
+def _release_remove_template_lock(lock_dir: Path) -> None:
+    for _ in range(5):
+        shutil.rmtree(lock_dir, ignore_errors=True)
+        if not lock_dir.exists():
+            return
+        time.sleep(0.05)
+
+def _release_copy_project_remote_template(template_dir: Path, project: Path, remote: Path) -> None:
+    copy_template(template_dir / 'remote.git', remote)
+    copy_template(template_dir / 'project', project)
+    assert _release_git(project, 'remote', 'set-url', 'origin', str(remote)).returncode == 0
+
+def _release__init_project_with_remote_uncached(project: Path, remote: Path) -> None:
+    subprocess.run(['git', 'init', '--bare', '--initial-branch=main', str(remote)], check=True, capture_output=True, text=True)
+    assert _release_git(project, 'init').returncode == 0
+    assert _release_git(project, 'config', 'user.email', 'test@example.com').returncode == 0
+    assert _release_git(project, 'config', 'user.name', 'Test').returncode == 0
+    assert _release_git(project, 'add', '.').returncode == 0
+    assert _release_git(project, 'commit', '-m', 'baseline').returncode == 0
+    assert _release_git(project, 'remote', 'add', 'origin', str(remote)).returncode == 0
+    assert _release_git(project, 'push', 'origin', 'HEAD:refs/heads/main').returncode == 0
+    assert _release_git(project, 'push', 'origin', 'HEAD:refs/heads/marketplace').returncode == 0
+    assert _release_git(project, 'fetch', 'origin', 'marketplace').returncode == 0
+
+def _release_init_project_with_remote(project: Path, remote: Path) -> None:
+    template_dir = _RELEASE_TEMPLATE_ROOT / _release_project_tree_cache_key(project)
+    ready = template_dir / '.ready'
+    lock_dir = _RELEASE_TEMPLATE_ROOT / f'{template_dir.name}.lock'
+    if ready.exists():
+        if lock_dir.exists():
+            _release_remove_template_lock(lock_dir)
+        _release_copy_project_remote_template(template_dir, project, remote)
+        return
+    deadline = time.monotonic() + _RELEASE_TEMPLATE_LOCK_TIMEOUT_SECONDS
+    while True:
+        try:
+            lock_dir.mkdir(parents=True)
+            break
+        except FileExistsError:
+            try:
+                lock_age = time.time() - lock_dir.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            if lock_age > _RELEASE_TEMPLATE_LOCK_STALE_SECONDS:
+                _release_remove_template_lock(lock_dir)
+                continue
+            if time.monotonic() > deadline:
+                raise TimeoutError(f'template_lock_timeout: {lock_dir}')
+            time.sleep(0.05)
+    try:
+        if not ready.exists():
+            if template_dir.exists():
+                remove_template(template_dir)
+            template_dir.mkdir(parents=True, exist_ok=True)
+            template_project = copy_template(project, template_dir / 'project')
+            template_remote = template_dir / 'remote.git'
+            _release__init_project_with_remote_uncached(template_project, template_remote)
+            ready.write_text('ok\n', encoding='utf-8')
+    finally:
+        _release_remove_template_lock(lock_dir)
+    _release_copy_project_remote_template(template_dir, project, remote)
+
+def _release_fake_gh_for_publish(bin_dir: Path, calls: Path, *, always_eof: bool=False) -> Path:
+    bin_dir.mkdir()
+    seen = calls.with_name('gh-seen.txt')
+    if os.name == 'nt':
+        gh = bin_dir / 'gh.cmd'
+        eof_line = 'echo Get ""https://api.github.com/repos/x/actions/workflows/release.yml"": EOF 1>&2'
+        if always_eof:
+            body = f'@echo off\r\necho %*>>"{calls}"\r\n{eof_line}\r\nexit /b 1\r\n'
+        else:
+            body = f'@echo off\r\necho %*>>"{calls}"\r\nif not exist "{seen}" (echo seen>"{seen}" & {eof_line} & exit /b 1)\r\nexit /b 0\r\n'
+        gh.write_text(body, encoding='utf-8')
+        return gh
+    gh = bin_dir / 'gh'
+    if always_eof:
+        body = f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{calls}"\nprintf "%s\\n" "Get \\"https://api.github.com/repos/x/actions/workflows/release.yml\\": EOF" >&2\nexit 1\n'
+    else:
+        body = f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{calls}"\nif [ ! -f "{seen}" ]; then touch "{seen}"; printf "%s\\n" "Get \\"https://api.github.com/repos/x/actions/workflows/release.yml\\": EOF" >&2; exit 1; fi\nexit 0\n'
+    gh.write_text(body, encoding='utf-8')
+    gh.chmod(493)
+    return gh
+
 
 class TestReleaseFlow:
+    @pytest.fixture(autouse=True)
+    def _real_release_preparation(self):
+        global _RELEASE_TEMPLATE_ROOT
+        _RELEASE_TEMPLATE_ROOT = Path(tempfile.gettempdir()) / "release-flow-test-templates-v3"
+
 
     def test_setup_authorized_writes_only_config_projection_gitignore_and_workflow(self, tmp_path: Path) -> None:
         project = tmp_path / 'project'
@@ -1513,7 +1677,7 @@ class TestReleaseFlow:
         assert preflight_calls == [(project.resolve(), 'v9.9.1', '9.9.1', ['pr-flow'], 'marketplace', project.resolve() / '.release-flow' / 'projection.yaml')]
         calls = tmp_path / 'gh-calls.txt'
         bin_dir = tmp_path / 'bin'
-        _release_cases().fake_gh_for_publish(bin_dir, calls)
+        _release_fake_gh_for_publish(bin_dir, calls)
         env = os.environ.copy()
         env['PATH'] = str(bin_dir) + os.pathsep + env.get('PATH', '')
         publish = _release_cases().run('publish', '--project', str(project), '--tag', 'v9.9.1', '--version', '9.9.1', '--bump-plugins', 'pr-flow', '--authorize-publish', env=env)
@@ -1525,16 +1689,155 @@ class TestReleaseFlow:
     def test_preflight_refreshes_remote_baseline_before_comparing(self, tmp_path: Path) -> None:
         project = tmp_path / 'project'
         remote = tmp_path / 'remote.git'
-        _release_cases().init_release_input_project(project, remote)
-        old_main = _release_cases().git(project, 'rev-parse', 'origin/main').stdout.strip()
-        old_marketplace = _release_cases().git(project, 'rev-parse', 'origin/marketplace').stdout.strip()
+        _release_init_release_input_project(project, remote)
+        old_main = _release_git(project, 'rev-parse', 'origin/main').stdout.strip()
+        old_marketplace = _release_git(project, 'rev-parse', 'origin/marketplace').stdout.strip()
         (project / 'plugins' / 'pr-flow' / 'content.txt').write_text('remote\n', encoding='utf-8')
-        assert _release_cases().git(project, 'add', 'plugins/pr-flow/content.txt').returncode == 0
-        assert _release_cases().git(project, 'commit', '-m', 'remote marketplace content').returncode == 0
-        assert _release_cases().git(project, 'push', 'origin', 'HEAD:refs/heads/main').returncode == 0
-        assert _release_cases().git(project, 'push', 'origin', 'HEAD:refs/heads/marketplace').returncode == 0
-        assert _release_cases().git(project, 'update-ref', 'refs/remotes/origin/main', old_main).returncode == 0
-        assert _release_cases().git(project, 'update-ref', 'refs/remotes/origin/marketplace', old_marketplace).returncode == 0
-        result = _release_cases().run_cli('preflight', '--project', str(project), '--tag', 'v1.0.0', '--version', '1.0.0', '--bump-plugins', '')
+        assert _release_git(project, 'add', 'plugins/pr-flow/content.txt').returncode == 0
+        assert _release_git(project, 'commit', '-m', 'remote marketplace content').returncode == 0
+        assert _release_git(project, 'push', 'origin', 'HEAD:refs/heads/main').returncode == 0
+        assert _release_git(project, 'push', 'origin', 'HEAD:refs/heads/marketplace').returncode == 0
+        assert _release_git(project, 'update-ref', 'refs/remotes/origin/main', old_main).returncode == 0
+        assert _release_git(project, 'update-ref', 'refs/remotes/origin/marketplace', old_marketplace).returncode == 0
+        result = _release_run_cli('preflight', '--project', str(project), '--tag', 'v1.0.0', '--version', '1.0.0', '--bump-plugins', '')
         assert result.returncode == 0, result.stdout + result.stderr
         assert 'status: preflight_passed' in result.stdout
+
+    def test_copy_template_replaces_target_with_readonly_file(self, tmp_path: Path) -> None:
+        source = tmp_path / 'source'
+        source.mkdir()
+        (source / 'new.txt').write_text('new\n', encoding='utf-8')
+        target = tmp_path / 'target'
+        target.mkdir()
+        old = target / 'old-object'
+        old.write_text('old\n', encoding='utf-8')
+        old.chmod(292)
+        copy_template(source, target)
+        assert not old.exists()
+        assert (target / 'new.txt').read_text(encoding='utf-8') == 'new\n'
+
+    @pytest.mark.parametrize('failure', ['writable', 'other-error', 'directory'])
+    def test_copy_template_preserves_unrelated_delete_errors(self, tmp_path: Path, monkeypatch, failure: str) -> None:
+        source = tmp_path / 'source'
+        source.mkdir()
+        target = tmp_path / 'target'
+        target.mkdir()
+        old = target / 'old-object'
+        old.write_text('old\n', encoding='utf-8')
+        if failure != 'writable':
+            old.chmod(292)
+        error = OSError('storage failure') if failure == 'other-error' else PermissionError('blocked')
+        operation = os.rmdir if failure == 'directory' else os.unlink
+
+        def fail_rmtree(path, *, onerror=None):
+            if onerror is None:
+                raise error
+            onerror(operation, str(old), (type(error), error, None))
+        monkeypatch.setattr(shutil, 'rmtree', fail_rmtree)
+        try:
+            with pytest.raises(type(error)) as caught:
+                copy_template(source, target)
+            assert caught.value is error
+        finally:
+            old.chmod(420)
+
+    @pytest.mark.skipif(sys.platform != 'win32', reason='Windows readonly-file deletion recovery')
+    def test_copy_template_preserves_readonly_delete_retry_failure(self, tmp_path: Path, monkeypatch) -> None:
+        source = tmp_path / 'source'
+        source.mkdir()
+        target = tmp_path / 'target'
+        target.mkdir()
+        old = target / 'old-object'
+        old.write_text('old\n', encoding='utf-8')
+        old.chmod(292)
+        original = PermissionError('readonly')
+        retry = PermissionError('retry blocked')
+
+        def fail_unlink(path):
+            raise retry
+
+        def fail_rmtree(path, *, onerror=None):
+            if onerror is None:
+                raise original
+            onerror(os.unlink, str(old), (type(original), original, None))
+        monkeypatch.setattr(os, 'unlink', fail_unlink)
+        monkeypatch.setattr(shutil, 'rmtree', fail_rmtree)
+        try:
+            with pytest.raises(PermissionError) as caught:
+                copy_template(source, target)
+            assert caught.value is retry
+        finally:
+            old.chmod(420)
+
+    def test_release_template_recreates_incomplete_readonly_template(self, tmp_path: Path, monkeypatch) -> None:
+        module = sys.modules[__name__]
+        monkeypatch.setattr(module, '_RELEASE_TEMPLATE_ROOT', tmp_path / 'templates')
+        project = tmp_path / 'project'
+        project.mkdir()
+        (project / 'source.txt').write_text('source\n', encoding='utf-8')
+        remote = tmp_path / 'remote.git'
+        template_dir = _RELEASE_TEMPLATE_ROOT / _release_project_tree_cache_key(project)
+        template_dir.mkdir(parents=True)
+        old = template_dir / 'old-object'
+        old.write_text('old\n', encoding='utf-8')
+        old.chmod(292)
+
+        def fake_git_command(command, **kwargs):
+            if command[0] == 'git' and command[1] == 'init' and ('--bare' in command):
+                Path(command[-1]).mkdir()
+            return subprocess.CompletedProcess(command, 0, '', '')
+        monkeypatch.setattr(subprocess, 'run', fake_git_command)
+        initialize_release_template = _release_init_project_with_remote
+        initialize_release_template(project, remote)
+        assert not old.exists()
+        assert (template_dir / '.ready').is_file()
+        assert (project / 'source.txt').read_text(encoding='utf-8') == 'source\n'
+        assert remote.is_dir()
+        assert not (_RELEASE_TEMPLATE_ROOT / f'{template_dir.name}.lock').exists()
+
+    @pytest.mark.parametrize(('changed_field', 'expected_returncode'), [(None, 0), ('url', 1), ('directory', 1)])
+    def test_release_workflows_compare_packed_repository_metadata(self, tmp_path: Path, changed_field: str | None, expected_returncode: int) -> None:
+        source = {'name': '@liuli195/myspec', 'repository': {'type': 'git', 'url': 'https://github.com/liuli195/my-agent-skills', 'directory': 'plugins/my-spec'}}
+        packed = json.loads(json.dumps(source))
+        if changed_field:
+            packed['repository'][changed_field] = 'changed'
+        source_path = tmp_path / 'source.json'
+        packed_path = tmp_path / 'packed.json'
+        _release_cases().write_json(source_path, source)
+        _release_cases().write_json(packed_path, packed)
+        for workflow_path in (_release_cases().REPO_ROOT / '.github' / 'workflows' / 'release.yml', _release_cases().REPO_ROOT / 'plugins' / 'release-flow' / 'skills' / 'release-flow' / 'assets' / 'templates' / 'github' / 'workflows' / 'release.yml'):
+            workflow = workflow_path.read_text(encoding='utf-8')
+            match = re.search('node -e \'([^\']+)\' \\./source/plugins/my-spec/package.json "\\$prefix/lib/node_modules/\\$package_name/package.json" "\\$package_name"', workflow)
+            assert match is not None
+            result = subprocess.run(['node', '-e', match.group(1), str(source_path), str(packed_path), source['name']], text=True, capture_output=True, check=False)
+            assert result.returncode == expected_returncode, result.stderr
+
+    def test_existing_release_must_match_the_current_projection_tree(self, tmp_path: Path, monkeypatch) -> None:
+        release_flow = _release_cases().load_release_flow_module()
+        project = tmp_path / 'project'
+        _release_cases().write_release_flow_files(project)
+        config = release_flow.read_config(project)
+        projection = release_flow.read_projection(project)
+        tree_ids = iter(['expected-tree', 'different-remote-tree'])
+        monkeypatch.setattr(release_flow, 'remote_ref_oid', lambda *_args: 'same-commit')
+        monkeypatch.setattr(release_flow, 'run_checked', lambda *_args: None)
+        monkeypatch.setattr(release_flow, 'copy_git_auth_config', lambda *_args: None)
+        monkeypatch.setattr(release_flow, 'origin_url', lambda *_args: 'https://example.invalid/repo.git')
+        monkeypatch.setattr(release_flow, 'git_output', lambda *_args: next(tree_ids))
+        error = release_flow.existing_release_ref_error(project, config, projection, 'v9.9.1')
+        assert error == 'release_projection_mismatch: v9.9.1'
+
+    def test_workflow_package_paths_are_loadable_in_node(self, tmp_path: Path) -> None:
+        for workflow_path in (
+            _release_cases().REPO_ROOT / ".github/workflows/release.yml",
+            _release_cases().REPO_ROOT / "plugins/release-flow/skills/release-flow/assets/templates/github/workflows/release.yml",
+        ):
+            workflow = workflow_path.read_text(encoding="utf-8")
+            for plugin in ("my-spec", "build-and-verify"):
+                manifest = f"./source/plugins/{plugin}/package.json"
+                assert workflow.count(manifest) == 3
+                path = tmp_path / manifest.removeprefix("./")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("{}", encoding="utf-8")
+                loaded = subprocess.run(["node", "-e", "require(process.argv[1])", manifest], cwd=tmp_path, text=True, capture_output=True, check=False)
+                assert loaded.returncode == 0, loaded.stderr
