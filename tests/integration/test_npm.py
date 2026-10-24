@@ -3349,6 +3349,11 @@ def test_candidate_inheritance(tmp_path):
                 catalog.write_text(json.dumps(content), encoding="utf-8")
             subprocess.run(["git", "add", "."], cwd=source, check=True, capture_output=True)
             subprocess.run(["git", "-c", "user.name=MySpec Test", "-c", "user.email=myspec@example.invalid", "commit", "-m", "legacy shared entries"], cwd=source, check=True, capture_output=True)
+            published = subprocess.run(
+                ["git", "push", (tmp_path / "origin.git").as_uri(), "HEAD:refs/heads/main"],
+                cwd=source, text=True, capture_output=True, check=False,
+            )
+            assert published.returncode == 0, published.stderr
         env = _myspec_controlled_dev_env(env, source)
         entered = _myspec_run_cli(executable, "init", "--dev", env=env, cwd=source)
         assert entered.returncode == 0, entered.stderr
