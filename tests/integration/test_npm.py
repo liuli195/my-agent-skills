@@ -2131,7 +2131,17 @@ def _myspec_real_controlled_dev_source(tmp_path: Path, marker: str | None = None
     if os.name == "nt":
         script = bin_dir / "git.py"
         _myspec_write(script, _myspec_controlled_git_script(git, remote))
-        _myspec_write(bin_dir / "git.cmd", f'@"{sys.executable}" "{script}" %*')
+        python_command = f'@"{sys.executable}" "{script}" %*'
+        command = python_command
+        if Path(git).suffix.lower() == ".exe":
+            command = (
+                '@echo off\nsetlocal DisableDelayedExpansion\n'
+                'if "%~1"=="remote" goto controlled\n'
+                'if "%~1"=="ls-remote" goto controlled\n'
+                f'"{Path(git).resolve()}" %*\nexit /b %ERRORLEVEL%\n'
+                f':controlled\n{python_command}\nexit /b %ERRORLEVEL%'
+            )
+        _myspec_write(bin_dir / "git.cmd", command)
     else:
         wrapper = bin_dir / "git"
         _myspec_write(wrapper, f'#!/bin/sh\nif [ "$1" = remote ] && [ "$2" = get-url ] && [ "$3" = origin ]; then echo https://github.com/liuli195/my-agent-skills; exit; fi\nif [ "$1" = ls-remote ] && [ "$2" = origin ]; then exec "{git}" ls-remote "{remote.as_uri()}"; fi\nexec "{git}" "$@"')
@@ -3403,6 +3413,22 @@ def test_candidate_inheritance(tmp_path):
         )
 
         source = _myspec_controlled_dev_source(tmp_path)
+        if os.name == "nt":
+            git = shutil.which("git")
+            assert git is not None
+            bin_dir = source.parent / "controlled-git"
+            python_command = f'@"{sys.executable}" "{bin_dir / "git.py"}" %*'
+            wrapper = (bin_dir / "git.cmd").read_text(encoding="utf-8")
+            if Path(git).suffix.lower() == ".exe":
+                assert wrapper.splitlines() == [
+                    "@echo off", "setlocal DisableDelayedExpansion",
+                    'if "%~1"=="remote" goto controlled',
+                    'if "%~1"=="ls-remote" goto controlled',
+                    f'"{Path(git).resolve()}" %*', "exit /b %ERRORLEVEL%",
+                    ":controlled", python_command, "exit /b %ERRORLEVEL%",
+                ]
+            else:
+                assert wrapper == python_command + "\n"
         if shared_marketplaces_include_tool:
             for catalog, source_value in (
                 (source / ".agents/plugins/marketplace.json", {"source": "local", "path": "./plugins/my-spec"}),
