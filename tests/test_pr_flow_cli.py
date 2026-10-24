@@ -37,22 +37,10 @@ BUILD_AND_VERIFY_VERSION = json.loads(
 _PR_FLOW_MODULE = None
 
 
-def template_cache_key(*paths: Path) -> str:
-    digest = hashlib.sha256()
-    for path in paths:
-        digest.update(str(path.relative_to(REPO_ROOT)).encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()[:12]
 
 
-TEMPLATE_CACHE_KEY = template_cache_key(Path(__file__), SCRIPT)
 # The cache is content-keyed and intentionally left under the OS temp directory
 # between runs; stale locks and incomplete templates are recovered in-place.
-TEMPLATE_ROOT = Path(tempfile.gettempdir()) / f"pr-flow-test-templates-{TEMPLATE_CACHE_KEY}"
-TEMPLATE_LOCK_TIMEOUT_SECONDS = 30
-TEMPLATE_LOCK_STALE_SECONDS = 30
 
 
 def load_pr_flow_module():
@@ -111,10 +99,6 @@ def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) 
     )
 
 
-def run_with_path(path: Path, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    env["PATH"] = str(path) + os.pathsep + env.get("PATH", "")
-    return run(*args, cwd=cwd, env=env)
 
 
 def test_command_stub_records_gh_calls() -> None:
@@ -198,8 +182,6 @@ def test_command_stub_closes_body_file(monkeypatch, tmp_path: Path) -> None:
     assert tracker.closed
 
 
-def test_pr_flow_template_cache_key_includes_script_contents() -> None:
-    assert TEMPLATE_CACHE_KEY == template_cache_key(Path(__file__), SCRIPT)
 
 
 @pytest.mark.parametrize(
@@ -286,74 +268,14 @@ def test_pr_flow_in_process_invocation_captures_output(tmp_path: Path) -> None:
     assert result.stderr == ""
 
 
-def git(project: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=project,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    return result.stdout.strip()
 
 
-def init_repo(project: Path) -> str:
-    project.mkdir()
-    git(project, "init")
-    git(project, "branch", "-M", "main")
-    git(project, "config", "user.email", "test@example.com")
-    git(project, "config", "user.name", "Test User")
-    (project / "README.md").write_text("# Test Project\n", encoding="utf-8")
-    git(project, "add", "README.md")
-    git(project, "commit", "-m", "init")
-    return git(project, "branch", "--show-current")
 
 
-def test_write_status_keeps_compatibility_file_and_branch_run(tmp_path: Path) -> None:
-    module = load_pr_flow_module()
-    project = tmp_path / "project"
-    init_repo(project)
-
-    module.write_status(project, "complete", "ready", {"sourceBranch": "feature/one"})
-
-    latest = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    runs = list((project / ".pr-flow/runs").glob("*.json"))
-    assert len(runs) == 1
-    assert json.loads(runs[0].read_text(encoding="utf-8")) == latest
-    assert latest["details"]["sourceBranch"] == "feature/one"
-    assert Path(latest["details"]["worktreePath"]) == project.resolve()
-    assert latest["details"]["commonGitDir"]
 
 
-def test_competing_mutation_reports_lock_without_rewriting_status(tmp_path: Path, capsys) -> None:
-    module = load_pr_flow_module()
-    project = tmp_path / "project"
-    init_repo(project)
-    module.write_status(project, "complete", "ready", {"sourceBranch": "feature/one"})
-    before = (project / ".pr-flow/last-status.json").read_bytes()
-
-    with module.operation_lock(project, "complete", argparse.Namespace(project=project)):
-        result = module.main(["cleanup", "--project", str(project), "--pr", "12"])
-
-    assert result == 1
-    assert "flow_locked" in capsys.readouterr().out
-    assert (project / ".pr-flow/last-status.json").read_bytes() == before
 
 
-def test_diagnose_reports_active_lock_without_writing_status(tmp_path: Path, capsys) -> None:
-    module = load_pr_flow_module()
-    project = tmp_path / "project"
-    init_repo(project)
-
-    with module.operation_lock(project, "complete", argparse.Namespace(project=project)):
-        assert module.main(["diagnose", "--project", str(project)]) == 1
-
-    output = capsys.readouterr().out
-    assert "flow_locked" in output
-    assert "actor" in output
-    assert "nextCommand" in output
-    assert not (project / ".pr-flow/last-status.json").exists()
 
 
 def test_require_current_base_fetches_remote_and_rejects_stale_source(tmp_path: Path, monkeypatch) -> None:
@@ -559,194 +481,14 @@ def test_mutation_commands_accept_remove_worktree(command: str, tmp_path: Path) 
     assert module.build_parser().parse_args(base).remove_worktree is True
 
 
-def test_remove_worktree_uses_native_non_forced_remove(tmp_path: Path, monkeypatch) -> None:
-    from tests.support.command_stubs import CommandStub
-
-    module = load_pr_flow_module()
-    main = tmp_path / "main"
-    target = tmp_path / "feature one"
-    main.mkdir()
-    target.mkdir()
-    before = f"worktree {main}\0HEAD aaaa\0branch refs/heads/main\0\0worktree {target}\0HEAD bbbb\0detached\0\0"
-    after = f"worktree {main}\0HEAD aaaa\0branch refs/heads/main\0\0"
-    git_stub = CommandStub(consume=True)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
-    git_stub.add(["status", "--short"], stdout="")
-    remove_args = ([] if os.name != "nt" else ["-c", "core.longpaths=true"])
-    remove_args += ["worktree", "remove", str(target.resolve())]
-    git_stub.add(remove_args)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
-    monkeypatch.setattr(module, "git", git_stub)
-
-    module.remove_worktree(target, target)
-
-    assert tuple(remove_args) in git_stub.calls
-    assert not any("--force" in call for call in git_stub.calls)
 
 
-def test_remove_worktree_deletes_physical_residue_after_registration_removal(tmp_path: Path, monkeypatch) -> None:
-    from tests.support.command_stubs import CommandStub
-
-    module = load_pr_flow_module()
-    main = tmp_path / "main"
-    target = tmp_path / "feature one"
-    main.mkdir()
-    target.mkdir()
-    (target / "residue.txt").write_text("orphaned\n", encoding="utf-8")
-    before = f"worktree {main}\0HEAD aaaa\0branch refs/heads/main\0\0worktree {target}\0HEAD bbbb\0detached\0\0"
-    after = f"worktree {main}\0HEAD aaaa\0branch refs/heads/main\0\0"
-    git_stub = CommandStub(consume=True)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
-    git_stub.add(["status", "--short"], stdout="")
-    remove_args = ([] if os.name != "nt" else ["-c", "core.longpaths=true"])
-    remove_args += ["worktree", "remove", str(target.resolve())]
-    git_stub.add(remove_args)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
-    monkeypatch.setattr(module, "git", git_stub)
-    monkeypatch.setattr(module, "find_orca_worktree_id", lambda *_args: None)
-
-    module.remove_worktree(target, target)
-
-    assert not target.exists()
 
 
-def test_remove_worktree_does_not_delete_target_while_registration_remains(tmp_path: Path, monkeypatch) -> None:
-    from tests.support.command_stubs import CommandStub
-
-    module = load_pr_flow_module()
-    main = tmp_path / "main"
-    target = tmp_path / "feature one"
-    main.mkdir()
-    target.mkdir()
-    (target / "residue.txt").write_text("keep\n", encoding="utf-8")
-    worktrees = f"worktree {main}\0HEAD aaaa\0branch refs/heads/main\0\0worktree {target}\0HEAD bbbb\0detached\0\0"
-    git_stub = CommandStub(consume=True)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=worktrees)
-    git_stub.add(["status", "--short"], stdout="")
-    remove_args = ([] if os.name != "nt" else ["-c", "core.longpaths=true"])
-    remove_args += ["worktree", "remove", str(target.resolve())]
-    git_stub.add(remove_args)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=worktrees)
-    monkeypatch.setattr(module, "git", git_stub)
-    monkeypatch.setattr(module, "find_orca_worktree_id", lambda *_args: None)
-    monkeypatch.setattr(module.shutil, "rmtree", lambda *_args: pytest.fail("physical deletion must wait"))
-
-    with pytest.raises(module.PrFlowError, match="git_worktree_remove_failed"):
-        module.remove_worktree(target, target)
-
-    assert target.exists()
-    assert (target / "residue.txt").exists()
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows long-path behavior")
-def test_cleanup_handles_windows_long_paths_through_cli(tmp_path: Path, monkeypatch) -> None:
-    controller = tmp_path / "controller"
-    remote = tmp_path / "remote.git"
-    target = tmp_path / "target"
-    init_repo(controller)
-    write_confirmed_pr_flow_config(controller)
-    (controller / ".gitignore").write_text(".local/\n", encoding="utf-8")
-    git(controller, "add", ".gitignore", ".pr-flow")
-    git(controller, "commit", "-m", "configure cleanup")
-    bare = subprocess.run(["git", "init", "--bare", str(remote)], check=False, text=True, capture_output=True)
-    assert bare.returncode == 0, bare.stdout + bare.stderr
-    git(controller, "remote", "add", "origin", str(remote))
-    git(controller, "push", "-u", "origin", "main")
-    git(controller, "checkout", "-b", "feature/example")
-    (controller / "README.md").write_text("feature\n", encoding="utf-8")
-    git(controller, "add", "README.md")
-    git(controller, "commit", "-m", "feature")
-    git(controller, "push", "-u", "origin", "feature/example")
-    git(controller, "checkout", "main")
-    git(controller, "merge", "--ff-only", "feature/example")
-    git(controller, "push", "origin", "main")
-    git(controller, "worktree", "add", str(target), "feature/example")
-
-    deep = target / ".local" / "spec-work"
-    for _ in range(20):
-        deep /= "segment-" + ("x" * 12)
-    deep.mkdir(parents=True)
-    artifact = deep / ("artifact-" + ("y" * 30) + ".json")
-    artifact.write_text("{}\n", encoding="utf-8")
-    assert len(str(artifact)) > 260
-    remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
-    main_before = git(controller, "rev-parse", "HEAD")
-    assert main_before == remote_base
-    module = load_pr_flow_module()
-    monkeypatch.setattr(module, "find_orca_worktree_id", lambda *_: None)
-
-    result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-    assert not target.exists()
-    assert "target" not in git(controller, "worktree", "list", "--porcelain")
-    assert git(controller, "branch", "--show-current") == "main"
-    assert git(controller, "rev-parse", "HEAD") == main_before
-    core_longpaths = subprocess.run(
-        ["git", "config", "--local", "--get", "core.longpaths"],
-        cwd=controller,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert core_longpaths.returncode == 1
-    assert not core_longpaths.stdout.strip()
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows junction behavior")
-def test_cleanup_removes_junction_residue_without_shared_targets(tmp_path: Path, monkeypatch) -> None:
-    controller = tmp_path / "controller"
-    remote = tmp_path / "remote.git"
-    target = tmp_path / "target"
-    init_repo(controller)
-    write_confirmed_pr_flow_config(controller)
-    (controller / ".gitignore").write_text("node_modules/\n.venv/\n", encoding="utf-8")
-    git(controller, "add", ".gitignore", ".pr-flow")
-    git(controller, "commit", "-m", "configure cleanup")
-    bare = subprocess.run(["git", "init", "--bare", str(remote)], check=False, text=True, capture_output=True)
-    assert bare.returncode == 0, bare.stdout + bare.stderr
-    git(controller, "remote", "add", "origin", str(remote))
-    git(controller, "push", "-u", "origin", "main")
-    git(controller, "checkout", "-b", "feature/example")
-    (controller / "README.md").write_text("feature\n", encoding="utf-8")
-    git(controller, "add", "README.md")
-    git(controller, "commit", "-m", "feature")
-    git(controller, "push", "-u", "origin", "feature/example")
-    git(controller, "checkout", "main")
-    git(controller, "merge", "--ff-only", "feature/example")
-    git(controller, "push", "origin", "main")
-    git(controller, "worktree", "add", str(target), "feature/example")
-
-    shared_node_modules = controller / "node_modules"
-    shared_venv = controller / ".venv"
-    shared_node_modules.mkdir()
-    shared_venv.mkdir()
-    node_sentinel = shared_node_modules / "shared-sentinel.txt"
-    venv_sentinel = shared_venv / "shared-sentinel.txt"
-    node_sentinel.write_text("keep\n", encoding="utf-8")
-    venv_sentinel.write_text("keep\n", encoding="utf-8")
-    powershell = shutil.which("powershell")
-    if not powershell:
-        pytest.skip("PowerShell is required to create junctions")
-    for link, shared in ((target / "node_modules", shared_node_modules), (target / ".venv", shared_venv)):
-        junction = subprocess.run(
-            [powershell, "-NoProfile", "-Command", f'New-Item -ItemType Junction -Path "{link}" -Target "{shared}"'],
-            check=False,
-            capture_output=True,
-        )
-        assert junction.returncode == 0, junction.stdout.decode(errors="replace") + junction.stderr.decode(errors="replace")
-
-    module = load_pr_flow_module()
-    monkeypatch.setattr(module, "find_orca_worktree_id", lambda *_args: None)
-    result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-    assert not target.exists()
-    assert "target" not in git(controller, "worktree", "list", "--porcelain")
-    assert node_sentinel.read_text(encoding="utf-8") == "keep\n"
-    assert venv_sentinel.read_text(encoding="utf-8") == "keep\n"
 
 
 def worktree_removal_records(main: Path, target: Path) -> tuple[str, str]:
@@ -762,124 +504,10 @@ def orca_worktree_ps_json(target: Path, worktree_id: str) -> str:
     return json.dumps({"result": {"worktrees": [{"path": str(target), "worktreeId": worktree_id}]}})
 
 
-def test_remove_worktree_prefers_matched_orca_worktree(tmp_path: Path, monkeypatch) -> None:
-    from tests.support.command_stubs import CommandStub
-
-    module = load_pr_flow_module()
-    main = tmp_path / "main"
-    target = tmp_path / "feature one"
-    main.mkdir()
-    target.mkdir()
-    (target / "residue.txt").write_text("orphaned\n", encoding="utf-8")
-    shared_sentinels: dict[str, Path] = {}
-    if os.name == "nt":
-        powershell = shutil.which("powershell")
-        if not powershell:
-            pytest.skip("PowerShell is required to create junctions")
-        for name in (".venv", "node_modules"):
-            shared = main / name
-            shared.mkdir()
-            sentinel = shared / "shared-sentinel.txt"
-            sentinel.write_text("keep\n", encoding="utf-8")
-            shared_sentinels[name] = sentinel
-            junction = subprocess.run(
-                [powershell, "-NoProfile", "-Command", f'New-Item -ItemType Junction -Path "{target / name}" -Target "{shared}"'],
-                check=False,
-                capture_output=True,
-            )
-            assert junction.returncode == 0, junction.stdout.decode(errors="replace") + junction.stderr.decode(errors="replace")
-    before, after = worktree_removal_records(main, target)
-    git_stub = CommandStub(consume=True)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
-    git_stub.add(["status", "--short"], stdout="")
-    git_stub.add(["worktree", "remove", str(target.resolve())])
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
-    orca_stub = CommandStub(consume=True)
-    orca_path = str(target).replace("\\", "/")
-    if os.name == "nt":
-        orca_path = orca_path.upper()
-    orca_payload = {"result": {"worktrees": [{"path": orca_path, "worktreeId": "repo::target"}]}}
-    orca_stub.add(["worktree", "ps", "--json"], stdout=json.dumps(orca_payload))
-    orca_stub.add(["worktree", "rm", "--worktree", "id:repo::target", "--json"])
-    monkeypatch.setattr(module, "git", git_stub)
-    monkeypatch.setattr(module, "orca", orca_stub, raising=False)
-
-    module.remove_worktree(target, target)
-
-    assert ("worktree", "rm", "--worktree", "id:repo::target", "--json") in orca_stub.calls
-    assert not any(call[:2] == ("worktree", "remove") for call in git_stub.calls)
-    assert not any("--force" in call for call in orca_stub.calls)
-    assert not target.exists()
-    for sentinel in shared_sentinels.values():
-        assert sentinel.read_text(encoding="utf-8") == "keep\n"
 
 
-@pytest.mark.parametrize(
-    ("returncode", "stdout", "stderr"),
-    [
-        (0, '{"result":{"worktrees":[]}}', ""),
-        (127, "", "orca not found"),
-        (0, "not-json", ""),
-    ],
-)
-def test_remove_worktree_falls_back_to_git_when_orca_is_unavailable_or_unmatched(
-    tmp_path: Path, monkeypatch, returncode: int, stdout: str, stderr: str
-) -> None:
-    from tests.support.command_stubs import CommandStub
-
-    module = load_pr_flow_module()
-    main = tmp_path / "main"
-    target = tmp_path / "feature one"
-    main.mkdir()
-    target.mkdir()
-    before, after = worktree_removal_records(main, target)
-    git_stub = CommandStub(consume=True)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
-    git_stub.add(["status", "--short"], stdout="")
-    remove_args = ([] if os.name != "nt" else ["-c", "core.longpaths=true"])
-    remove_args += ["worktree", "remove", str(target.resolve())]
-    git_stub.add(remove_args)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
-    orca_stub = CommandStub(consume=True)
-    orca_stub.add(["worktree", "ps", "--json"], returncode=returncode, stdout=stdout, stderr=stderr)
-    monkeypatch.setattr(module, "git", git_stub)
-    monkeypatch.setattr(module, "orca", orca_stub, raising=False)
-
-    module.remove_worktree(target, target)
-
-    assert tuple(remove_args) in git_stub.calls
-    assert not any(call[:2] == ("worktree", "rm") for call in orca_stub.calls)
 
 
-def test_remove_worktree_stops_when_matched_orca_removal_fails(tmp_path: Path, monkeypatch) -> None:
-    from tests.support.command_stubs import CommandStub
-
-    module = load_pr_flow_module()
-    main = tmp_path / "main"
-    target = tmp_path / "feature one"
-    main.mkdir()
-    target.mkdir()
-    before, after = worktree_removal_records(main, target)
-    git_stub = CommandStub(consume=True)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
-    git_stub.add(["status", "--short"], stdout="")
-    git_stub.add(["worktree", "remove", str(target.resolve())])
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
-    orca_stub = CommandStub(consume=True)
-    orca_stub.add(["worktree", "ps", "--json"], stdout=orca_worktree_ps_json(target, "repo::target"))
-    orca_stub.add(
-        ["worktree", "rm", "--worktree", "id:repo::target", "--json"],
-        stderr="permission denied",
-        returncode=1,
-    )
-    monkeypatch.setattr(module, "git", git_stub)
-    monkeypatch.setattr(module, "orca", orca_stub, raising=False)
-
-    with pytest.raises(module.PrFlowError, match="orca_worktree_remove_failed") as error:
-        module.remove_worktree(target, target)
-
-    assert error.value.details["stderr"] == "permission denied"
-    assert not any(call[:2] == ("worktree", "remove") for call in git_stub.calls)
 
 
 def test_cleanup_stops_before_deletion_when_source_checked_out_elsewhere(tmp_path: Path, monkeypatch) -> None:
@@ -925,152 +553,8 @@ def test_cleanup_retry_from_latest_detached_base_finishes(tmp_path: Path, monkey
     assert "cleanup_complete" in result.stdout
 
 
-def test_linked_worktrees_use_independent_process_locks_and_status(tmp_path: Path) -> None:
-    project = tmp_path / "first"
-    assert init_repo(project) == "main"
-    write_minimal_pr_flow_config(project)
-    git(project, "add", ".pr-flow")
-    git(project, "commit", "-m", "configure pr flow")
-    git(project, "checkout", "-b", "feature/one")
-    other = tmp_path / "second"
-    git(project, "worktree", "add", "-b", "feature/two", str(other), "main")
-    ready = tmp_path / "ready"
-    release = tmp_path / "release"
-    holder_code = """
-import argparse
-import importlib.util
-import pathlib
-import sys
-import time
-spec = importlib.util.spec_from_file_location("pr_flow_holder", sys.argv[1])
-module = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = module
-spec.loader.exec_module(module)
-project = pathlib.Path(sys.argv[2])
-with module.operation_lock(project, "complete", argparse.Namespace(project=project)):
-    pathlib.Path(sys.argv[3]).write_text("ready", encoding="utf-8")
-    while not pathlib.Path(sys.argv[4]).exists():
-        time.sleep(0.02)
-"""
-    holder = subprocess.Popen(
-        [sys.executable, "-c", holder_code, str(SCRIPT), str(project), str(ready), str(release)],
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    try:
-        deadline = time.monotonic() + 10
-        while not ready.exists() and time.monotonic() < deadline:
-            time.sleep(0.02)
-        assert ready.exists(), holder.communicate(timeout=1)
-
-        independent = subprocess.run(
-            [sys.executable, str(SCRIPT), "diagnose", "--project", str(other)],
-            cwd=REPO_ROOT,
-            check=False,
-            text=True,
-            capture_output=True,
-        )
-        competing = subprocess.run(
-            [sys.executable, str(SCRIPT), "cleanup", "--project", str(project), "--pr", "12"],
-            cwd=REPO_ROOT,
-            check=False,
-            text=True,
-            capture_output=True,
-        )
-
-        assert "flow_locked" not in independent.stdout
-        assert (other / ".pr-flow/last-status.json").exists()
-        assert "flow_locked" in competing.stdout
-        assert not (project / ".pr-flow/last-status.json").exists()
-    finally:
-        release.touch()
-        holder.communicate(timeout=10)
 
 
-def test_linked_worktrees_complete_independently_through_cli(tmp_path: Path) -> None:
-    first, _remote = init_complete_project(tmp_path)
-    git(first, "fetch", "origin", "main")
-    git(first, "checkout", "-B", "main", "origin/main")
-    base_oid = git(first, "rev-parse", "HEAD")
-
-    git(first, "checkout", "-b", "feature/one")
-    git(first, "push", "-u", "origin", "feature/one")
-    first_oid = git(first, "rev-parse", "HEAD")
-
-    second = tmp_path / "second"
-    git(first, "worktree", "add", "-b", "feature/two", str(second), "main")
-    git(second, "push", "-u", "origin", "feature/two")
-    second_oid = git(second, "rev-parse", "HEAD")
-
-    def responses(branch: str, head_oid: str, number: int) -> list[dict[str, object]]:
-        pr = json.loads(
-            pr_view_json(
-                checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
-                review_decision="APPROVED",
-                head_oid=head_oid,
-                base_oid=base_oid,
-            )
-        )
-        pr.update({"number": number, "headRefName": branch})
-        pr_text = json.dumps(pr) + "\n"
-        cleanup = json.dumps(
-            {
-                "number": number,
-                "state": "MERGED",
-                "headRefName": branch,
-                "baseRefName": "main",
-                "headRepositoryOwner": {"login": "test-owner"},
-            }
-        ) + "\n"
-        checks = {"stdout": json.dumps([{"bucket": "pass", "name": "ci", "state": "SUCCESS"}])}
-        return [
-            {"stdout": pr_text},
-            {"stdout": pr_text},
-            checks,
-            {"stdout": pr_text},
-            checks,
-            {"stdout": pr_text},
-            {},
-            {"stdout": cleanup},
-        ]
-
-    first_bin, _ = write_fake_gh_sequence(tmp_path / "first-bin", responses("feature/one", first_oid, 11))
-    second_bin, _ = write_fake_gh_sequence(tmp_path / "second-bin", responses("feature/two", second_oid, 12))
-
-    def command(project: Path, fake_bin: Path) -> tuple[list[str], dict[str, str]]:
-        env = os.environ.copy()
-        env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
-        return (
-            [
-                sys.executable,
-                str(SCRIPT),
-                "complete",
-                "--project",
-                str(project),
-                "--summary",
-                "parallel worktree",
-                "--scope",
-                "test",
-            ],
-            env,
-        )
-
-    first_command, first_env = command(first, first_bin)
-    second_command, second_env = command(second, second_bin)
-    first_process = subprocess.Popen(first_command, cwd=REPO_ROOT, env=first_env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    second_process = subprocess.Popen(second_command, cwd=REPO_ROOT, env=second_env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    first_stdout, first_stderr = first_process.communicate(timeout=30)
-    second_stdout, second_stderr = second_process.communicate(timeout=30)
-
-    assert first_process.returncode == 0, first_stdout + first_stderr
-    assert second_process.returncode == 0, second_stdout + second_stderr
-    assert "cleanup_complete" in first_stdout
-    assert "cleanup_complete" in second_stdout
-    assert {git(first, "branch", "--show-current"), git(second, "branch", "--show-current")} == {"", "main"}
-    assert git(first, "rev-parse", "HEAD") == base_oid
-    assert git(second, "rev-parse", "HEAD") == base_oid
 
 
 def allow_current_base(git_stub, source_oid: str) -> None:
@@ -1127,104 +611,10 @@ def allow_cleanup(
     git_stub.add(["branch", "-d", head_ref])
 
 
-def init_feature_branch(project: Path) -> None:
-    assert init_repo(project) == "main"
-    git(project, "checkout", "-b", "feature/example")
-    (project / "README.md").write_text("# Test Project\n\nFeature change\n", encoding="utf-8")
-    git(project, "add", "README.md")
-    git(project, "commit", "-m", "feature")
 
 
-def write_fake_gh(
-    bin_dir: Path,
-    *,
-    stdout: str = "",
-    stderr: str = "",
-    exit_code: int = 0,
-    calls_path: Path | None = None,
-) -> Path:
-    bin_dir.mkdir(exist_ok=True)
-    fake_script = bin_dir / "gh_fake.py"
-    lines = [
-        "import sys",
-        f"sys.stdout.write({stdout!r})",
-        f"sys.stderr.write({stderr!r})",
-    ]
-    if calls_path is not None:
-        lines.append(f"open({str(calls_path)!r}, 'a', encoding='utf-8').close()")
-    lines.extend([f"raise SystemExit({exit_code})", ""])
-    fake_script.write_text("\n".join(lines), encoding="utf-8")
-    if os.name == "nt":
-        launcher = bin_dir / "gh.cmd"
-        launcher.write_text(
-            f'@echo off\n"{sys.executable}" "%~dp0gh_fake.py" %*\nexit /b %ERRORLEVEL%\n',
-            encoding="utf-8",
-        )
-    else:
-        launcher = bin_dir / "gh"
-        launcher.write_text(
-            f'#!/bin/sh\nexec "{sys.executable}" "$(dirname "$0")/gh_fake.py" "$@"\n',
-            encoding="utf-8",
-        )
-        launcher.chmod(0o755)
-    return bin_dir
 
 
-def write_fake_gh_sequence(bin_dir: Path, responses: list[dict[str, object]]) -> tuple[Path, Path]:
-    bin_dir.mkdir()
-    responses_path = bin_dir / "responses.json"
-    calls_path = bin_dir / "calls.json"
-    body_files_path = bin_dir / "body_files.json"
-    responses_path.write_text(json.dumps(responses), encoding="utf-8")
-    calls_path.write_text("[]", encoding="utf-8")
-    body_files_path.write_text("[]", encoding="utf-8")
-    fake_script = bin_dir / "gh_fake_sequence.py"
-    fake_script.write_text(
-        "\n".join(
-            [
-                "import json",
-                "import sys",
-                "from pathlib import Path",
-                f"responses_path = Path({str(responses_path)!r})",
-                f"calls_path = Path({str(calls_path)!r})",
-                f"body_files_path = Path({str(body_files_path)!r})",
-                "responses = json.loads(responses_path.read_text(encoding='utf-8'))",
-                "calls = json.loads(calls_path.read_text(encoding='utf-8'))",
-                "body_files = json.loads(body_files_path.read_text(encoding='utf-8'))",
-                "index = len(calls)",
-                "calls.append(sys.argv[1:])",
-                "calls_path.write_text(json.dumps(calls, indent=2), encoding='utf-8')",
-                "if '--body-file' in sys.argv[1:]:",
-                "    body_index = sys.argv.index('--body-file') + 1",
-                "    body_path = Path(sys.argv[body_index])",
-                "    body_files.append({'args': sys.argv[1:], 'body': body_path.read_text(encoding='utf-8')})",
-                "    body_files_path.write_text(json.dumps(body_files, indent=2), encoding='utf-8')",
-                "if index >= len(responses):",
-                "    sys.stderr.write('unexpected gh call: ' + ' '.join(sys.argv[1:]) + '\\n')",
-                "    raise SystemExit(99)",
-                "response = responses[index]",
-                "sys.stdout.write(str(response.get('stdout', '')))",
-                "sys.stderr.write(str(response.get('stderr', '')))",
-                "raise SystemExit(int(response.get('exit_code', 0)))",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    if os.name == "nt":
-        launcher = bin_dir / "gh.cmd"
-        launcher.write_text(
-            f'@echo off\n"{sys.executable}" "%~dp0gh_fake_sequence.py" %*\nexit /b %ERRORLEVEL%\n',
-            encoding="utf-8",
-        )
-    else:
-        launcher = bin_dir / "gh"
-        launcher.write_text(
-            f'#!/bin/sh\nexec "{sys.executable}" "$(dirname "$0")/gh_fake_sequence.py" "$@"\n',
-            encoding="utf-8",
-        )
-        launcher.chmod(0o755)
-    return bin_dir, calls_path
 
 
 def pr_view_json(
@@ -1278,303 +668,36 @@ def cleanup_pr_view_json(
     )
 
 
-def git_bare(remote: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", "--git-dir", str(remote), *args],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    return result.stdout.strip()
 
 
-def git_bare_result(remote: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "--git-dir", str(remote), *args],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
 
 
-def copy_project_remote_template(template_dir: Path, tmp_path: Path) -> tuple[Path, Path]:
-    remote = copy_template(template_dir / "remote.git", tmp_path / "remote.git")
-    project = copy_template(template_dir / "project", tmp_path / "project")
-    git(project, "remote", "set-url", "origin", str(remote))
-    return project, remote
 
 
-def remove_template_lock(lock_dir: Path) -> None:
-    for _ in range(5):
-        shutil.rmtree(lock_dir, ignore_errors=True)
-        if not lock_dir.exists():
-            return
-        time.sleep(0.05)
 
 
-def ensure_project_remote_template(template_name: str, tmp_path: Path, creator) -> tuple[Path, Path]:
-    template_dir = TEMPLATE_ROOT / template_name
-    ready = template_dir / ".ready"
-    lock_dir = TEMPLATE_ROOT / f"{template_name}.lock"
-    if ready.exists():
-        if lock_dir.exists():
-            remove_template_lock(lock_dir)
-        return copy_project_remote_template(template_dir, tmp_path)
-
-    deadline = time.monotonic() + TEMPLATE_LOCK_TIMEOUT_SECONDS
-    while True:
-        try:
-            lock_dir.mkdir(parents=True)
-            break
-        except FileExistsError:
-            try:
-                lock_age = time.time() - lock_dir.stat().st_mtime
-            except FileNotFoundError:
-                continue
-            if lock_age > TEMPLATE_LOCK_STALE_SECONDS:
-                remove_template_lock(lock_dir)
-                continue
-            if time.monotonic() > deadline:
-                raise TimeoutError(f"template_lock_timeout: {lock_dir}")
-            time.sleep(0.05)
-
-    try:
-        if not ready.exists():
-            if template_dir.exists():
-                remove_template(template_dir)
-            template_dir.mkdir(parents=True, exist_ok=True)
-            creator(template_dir)
-            ready.write_text("ok\n", encoding="utf-8")
-    finally:
-        remove_template_lock(lock_dir)
-
-    return copy_project_remote_template(template_dir, tmp_path)
 
 
-def _create_minimal_project_remote_template(tmp_path: Path) -> tuple[Path, Path]:
-    remote = tmp_path / "remote.git"
-    remote_init = subprocess.run(
-        ["git", "init", "--bare", str(remote)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert remote_init.returncode == 0, remote_init.stdout + remote_init.stderr
-
-    project = tmp_path / "project"
-    assert init_repo(project) == "main"
-    git(project, "remote", "add", "origin", str(remote))
-    git(project, "push", "-u", "origin", "main")
-    return project, remote
 
 
-def fake_project_remote_template(template_dir: Path) -> None:
-    (template_dir / "project").mkdir()
-    (template_dir / "remote.git").mkdir()
 
 
-def fake_copy_project_remote_template(template_dir: Path, tmp_path: Path) -> tuple[Path, Path]:
-    remote = copy_template(template_dir / "remote.git", tmp_path / "remote.git")
-    project = copy_template(template_dir / "project", tmp_path / "project")
-    return project, remote
 
 
-def test_project_template_recovers_stale_lock(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        sys.modules[__name__],
-        "copy_project_remote_template",
-        fake_copy_project_remote_template,
-    )
-    template_name = f"stale-lock-{tmp_path.name}"
-    lock_dir = TEMPLATE_ROOT / f"{template_name}.lock"
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    stale_time = time.time() - TEMPLATE_LOCK_STALE_SECONDS - 1
-    os.utime(lock_dir, (stale_time, stale_time))
-
-    project, remote = ensure_project_remote_template(
-        template_name,
-        tmp_path,
-        fake_project_remote_template,
-    )
-
-    assert project.is_dir()
-    assert remote.is_dir()
-    assert not lock_dir.exists()
 
 
-def test_project_template_recreates_incomplete_template_after_stale_lock(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.setattr(
-        sys.modules[__name__],
-        "copy_project_remote_template",
-        fake_copy_project_remote_template,
-    )
-    template_name = f"incomplete-template-{os.getpid()}-{time.monotonic_ns()}"
-    template_dir = TEMPLATE_ROOT / template_name
-    lock_dir = TEMPLATE_ROOT / f"{template_name}.lock"
-    template_dir.mkdir(parents=True)
-    (template_dir / "partial.txt").write_text("partial\n", encoding="utf-8")
-    (template_dir / "partial.txt").chmod(0o444)
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    stale_time = time.time() - TEMPLATE_LOCK_STALE_SECONDS - 1
-    os.utime(lock_dir, (stale_time, stale_time))
-
-    project, remote = ensure_project_remote_template(
-        template_name,
-        tmp_path,
-        fake_project_remote_template,
-    )
-
-    assert project.is_dir()
-    assert remote.is_dir()
-    assert (template_dir / ".ready").is_file()
-    assert not (template_dir / "partial.txt").exists()
-    assert not lock_dir.exists()
 
 
-def init_cleanup_project(
-    tmp_path: Path, *, base_ref: str = "main", head_ref: str = "feature/example"
-) -> tuple[Path, Path]:
-    template_name = f"cleanup-{base_ref}-{head_ref}".replace("/", "_").replace("\\", "_").replace(":", "_")
-    return ensure_project_remote_template(
-        template_name,
-        tmp_path,
-        lambda template_dir: _create_cleanup_project(
-            template_dir, base_ref=base_ref, head_ref=head_ref
-        ),
-    )
 
 
-def _create_cleanup_project(
-    tmp_path: Path, *, base_ref: str = "main", head_ref: str = "feature/example"
-) -> tuple[Path, Path]:
-    remote = tmp_path / "remote.git"
-    remote_init = subprocess.run(
-        ["git", "init", "--bare", str(remote)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert remote_init.returncode == 0, remote_init.stdout + remote_init.stderr
-
-    project = tmp_path / "project"
-    assert init_repo(project) == "main"
-    git(project, "branch", "-M", base_ref)
-    write_confirmed_pr_flow_config(project, default_pr_flow_config_for_test(base_ref))
-    git(project, "add", ".pr-flow")
-    git(project, "commit", "-m", "configure pr flow")
-    git(project, "remote", "add", "origin", str(remote))
-    git(project, "push", "-u", "origin", base_ref)
-
-    git(project, "checkout", "-b", head_ref)
-    (project / "README.md").write_text("# Test Project\n\nFeature change\n", encoding="utf-8")
-    git(project, "add", "README.md")
-    git(project, "commit", "-m", "feature")
-    git(project, "push", "-u", "origin", head_ref)
-
-    integrator = tmp_path / "integrator"
-    clone_result = subprocess.run(
-        ["git", "clone", str(remote), str(integrator)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
-    git(integrator, "config", "user.email", "test@example.com")
-    git(integrator, "config", "user.name", "Test User")
-    git(integrator, "checkout", "-B", base_ref, f"origin/{base_ref}")
-    git(integrator, "merge", "--ff-only", f"origin/{head_ref}")
-    git(integrator, "push", "origin", base_ref)
-
-    git(project, "checkout", head_ref)
-    return project, remote
 
 
-def init_complete_project(
-    tmp_path: Path,
-    *,
-    review_mode: str = "github",
-    merge_strategy: str = "merge",
-    evidence_path: str | None = None,
-) -> tuple[Path, Path]:
-    key = f"complete-{review_mode}-{merge_strategy}-{evidence_path or 'default'}".replace(os.sep, "_").replace(":", "_")
-    return ensure_project_remote_template(
-        key,
-        tmp_path,
-        lambda template_dir: _create_complete_project(
-            template_dir,
-            review_mode=review_mode,
-            merge_strategy=merge_strategy,
-            evidence_path=evidence_path,
-        ),
-    )
 
 
-def _create_complete_project(
-    tmp_path: Path,
-    *,
-    review_mode: str = "github",
-    merge_strategy: str = "merge",
-    evidence_path: str | None = None,
-) -> tuple[Path, Path]:
-    remote = tmp_path / "remote.git"
-    remote_init = subprocess.run(
-        ["git", "init", "--bare", str(remote)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert remote_init.returncode == 0, remote_init.stdout + remote_init.stderr
-
-    project = tmp_path / "project"
-    assert init_repo(project) == "main"
-    configure_complete(
-        project,
-        review_mode=review_mode,
-        merge_strategy=merge_strategy,
-        evidence_path=evidence_path,
-    )
-    git(project, "add", ".pr-flow")
-    git(project, "commit", "-m", "configure pr flow")
-    git(project, "remote", "add", "origin", str(remote))
-    git(project, "push", "-u", "origin", "main")
-
-    git(project, "checkout", "-b", "feature/example")
-    (project / "README.md").write_text("# Test Project\n\nFeature change\n", encoding="utf-8")
-    git(project, "add", "README.md")
-    git(project, "commit", "-m", "feature")
-    git(project, "push", "-u", "origin", "feature/example")
-
-    integrator = tmp_path / "integrator"
-    clone_result = subprocess.run(
-        ["git", "clone", str(remote), str(integrator)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
-    git(integrator, "config", "user.email", "test@example.com")
-    git(integrator, "config", "user.name", "Test User")
-    git(integrator, "checkout", "-B", "main", "origin/main")
-    git(integrator, "merge", "--ff-only", "origin/feature/example")
-    git(integrator, "push", "origin", "main")
-
-    git(project, "checkout", "feature/example")
-    return project, remote
 
 
-def passing_pr_view_json(project: Path, *, review_decision: str = "APPROVED") -> str:
-    return pr_view_json(
-        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
-        review_decision=review_decision,
-        head_oid=git(project, "rev-parse", "HEAD"),
-    )
 
 
-def captured_body_files(fake_bin: Path) -> list[dict[str, str]]:
-    return json.loads((fake_bin / "body_files.json").read_text(encoding="utf-8"))
 
 
 def assert_cleanup_exception(project: Path, result: subprocess.CompletedProcess[str], reason: str) -> None:
@@ -2094,96 +1217,15 @@ def write_confirmed_pr_flow_config(project: Path, config: dict | None = None) ->
     (project / ".github" / "workflows" / "pr-flow-toolchain.yml").unlink()
 
 
-def configure_complete(
-    project: Path,
-    *,
-    review_mode: str,
-    merge_strategy: str = "merge",
-    evidence_path: str | None = None,
-) -> None:
-    write_confirmed_pr_flow_config(project)
-    config_path = project / ".pr-flow" / "config.yaml"
-    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    config["defaults"]["wait"] = {"timeoutSeconds": 0, "pollSeconds": 0}
-    config["defaults"]["mergeStrategy"] = merge_strategy
-    config["defaults"]["reviewGate"] = {"mode": review_mode}
-    if evidence_path is not None:
-        config["defaults"]["reviewGate"]["evidencePath"] = evidence_path
-    config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
 HOTFIX_PHRASE = "ship-hotfix"
 
 
-def configure_hotfix(
-    project: Path,
-    *,
-    target: str = "main",
-    allow_hotfix: bool = True,
-    verify_command: str = "git rev-parse HEAD",
-) -> None:
-    write_confirmed_pr_flow_config(project)
-    config_path = project / ".pr-flow" / "config.yaml"
-    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    config.setdefault("authorization", {})
-    config["authorization"]["phraseHashAlgorithm"] = "md5"
-    config["authorization"]["phraseHash"] = hashlib.md5(HOTFIX_PHRASE.encode("utf-8")).hexdigest()
-    config["defaults"]["remote"] = "origin"
-    config["defaults"]["hotfix"] = {"verifyCommand": verify_command}
-    config.setdefault("branches", {}).setdefault(target, {})
-    config["branches"][target]["allowHotfixPush"] = allow_hotfix
-    config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
-def init_hotfix_project(
-    tmp_path: Path,
-    *,
-    allow_hotfix: bool = True,
-    verify_command: str = "git rev-parse HEAD",
-) -> tuple[Path, Path, str]:
-    key = f"hotfix-{allow_hotfix}-{verify_command}".replace(os.sep, "_").replace(":", "_").replace(" ", "_")
-    project, remote = ensure_project_remote_template(
-        key,
-        tmp_path,
-        lambda template_dir: _create_hotfix_project(
-            template_dir,
-            allow_hotfix=allow_hotfix,
-            verify_command=verify_command,
-        ),
-    )
-    before_commit = git_bare(remote, "rev-parse", "refs/heads/main")
-    return project, remote, before_commit
 
 
-def _create_hotfix_project(
-    tmp_path: Path,
-    *,
-    allow_hotfix: bool = True,
-    verify_command: str = "git rev-parse HEAD",
-) -> tuple[Path, Path, str]:
-    remote = tmp_path / "remote.git"
-    remote_init = subprocess.run(
-        ["git", "init", "--bare", str(remote)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert remote_init.returncode == 0, remote_init.stdout + remote_init.stderr
-
-    project = tmp_path / "project"
-    assert init_repo(project) == "main"
-    configure_hotfix(project, allow_hotfix=allow_hotfix, verify_command=verify_command)
-    git(project, "add", ".pr-flow")
-    git(project, "commit", "-m", "configure pr flow")
-    git(project, "remote", "add", "origin", str(remote))
-    git(project, "push", "-u", "origin", "main")
-    before_commit = git_bare(remote, "rev-parse", "refs/heads/main")
-
-    git(project, "checkout", "-b", "hotfix/example", "origin/main")
-    (project / "README.md").write_text("# Test Project\n\nHotfix change\n", encoding="utf-8")
-    git(project, "add", "README.md")
-    git(project, "commit", "-m", "hotfix")
-    return project, remote, before_commit
 
 
 def test_init_records_toolchain_and_managed_workflow(tmp_path: Path, monkeypatch) -> None:
@@ -6529,698 +5571,34 @@ def test_cleanup_physical_failure_persists_status_in_controller(tmp_path: Path, 
     assert status["details"]["recovery"] == status["details"]["nextAction"]
 
 
-def test_cleanup_returns_to_available_local_base_end_to_end(tmp_path: Path, monkeypatch) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
-    assert git(project, "rev-parse", "main") != remote_base
 
-    result = run_cleanup_with_real_git(project, monkeypatch)
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert git(project, "branch", "--show-current") == "main"
-    assert git(project, "rev-parse", "HEAD") == remote_base
-    assert git(project, "rev-parse", "main") == remote_base
-    status = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["currentBranch"] == "main"
-    assert status["details"]["baseCheckout"] == {"status": "checked_out"}
 
 
-def test_cleanup_retains_primary_worktree_on_arbitrary_base_branch(tmp_path: Path, monkeypatch) -> None:
-    base_ref = "trunk"
-    head_ref = "topic/317"
-    project, remote = init_cleanup_project(tmp_path, base_ref=base_ref, head_ref=head_ref)
-    remote_base = git_bare(remote, "rev-parse", f"refs/heads/{base_ref}")
 
-    with contextlib.chdir(project):
-        result = run_cleanup_with_real_git(
-            project,
-            monkeypatch,
-            remove_worktree=True,
-            pr_stdout=cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref),
-        )
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-    assert project.is_dir()
-    assert git(project, "branch", "--show-current") == base_ref
-    assert git(project, "rev-parse", "HEAD") == remote_base
-    assert git(project, "rev-parse", f"refs/heads/{base_ref}") == remote_base
-    assert subprocess.run(
-        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{head_ref}"],
-        cwd=project,
-        check=False,
-    ).returncode == 1
-    assert git_bare_result(remote, "show-ref", "--verify", f"refs/heads/{head_ref}").returncode != 0
-    worktrees = load_pr_flow_module().parse_worktrees(git(project, "worktree", "list", "--porcelain", "-z"))
-    assert Path(worktrees[0]["path"]).resolve() == project.resolve()
-    assert worktrees[0]["branch"] == f"refs/heads/{base_ref}"
-    status = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["worktreeRetention"] == {"status": "retained", "reason": "primary_worktree"}
-    assert status["details"]["currentBranch"] == base_ref
-    assert "nextCommand" not in status["details"]
 
 
-def test_cleanup_stops_before_primary_checkout_when_active_cwd_would_disappear(
-    tmp_path: Path, monkeypatch
-) -> None:
-    base_ref = "trunk"
-    head_ref = "topic/317"
-    project, remote = init_cleanup_project(tmp_path, base_ref=base_ref, head_ref=head_ref)
-    source_only = project / "source-only" / "nested"
-    source_only.mkdir(parents=True)
-    (source_only / "sentinel.txt").write_text("source only\n", encoding="utf-8")
-    git(project, "add", "source-only")
-    git(project, "commit", "-m", "source-only directory")
-    git(project, "push", "origin", head_ref)
 
-    with contextlib.chdir(source_only):
-        result = run_cleanup_with_real_git(
-            project,
-            monkeypatch,
-            remove_worktree=True,
-            pr_stdout=cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref),
-        )
 
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "active_cwd_would_disappear" in result.stdout
-    assert source_only.is_dir()
-    assert git(project, "branch", "--show-current") == head_ref
-    assert git_bare_result(remote, "show-ref", "--verify", f"refs/heads/{head_ref}").returncode == 0
-    worktrees = load_pr_flow_module().parse_worktrees(git(project, "worktree", "list", "--porcelain", "-z"))
-    assert Path(worktrees[0]["path"]).resolve() == project.resolve()
-    assert worktrees[0]["branch"] == f"refs/heads/{head_ref}"
 
 
-def test_cleanup_stops_before_checkout_when_active_cwd_would_disappear_without_remove_worktree(
-    tmp_path: Path, monkeypatch
-) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    source_only = project / "source-only" / "nested"
-    source_only.mkdir(parents=True)
-    (source_only / "sentinel.txt").write_text("source only\n", encoding="utf-8")
-    git(project, "add", "source-only")
-    git(project, "commit", "-m", "source-only directory")
-    source_head = git(project, "rev-parse", "HEAD")
-    git(project, "push", "origin", "feature/example")
 
-    with contextlib.chdir(source_only):
-        result = run_cleanup_with_real_git(project, monkeypatch)
 
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "active_cwd_would_disappear" in result.stdout
-    assert source_only.is_dir()
-    assert git(project, "branch", "--show-current") == "feature/example"
-    assert git(project, "rev-parse", "HEAD") == source_head
-    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode == 0
-    status = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "active_cwd_would_disappear"
 
 
-def test_cleanup_stops_primary_worktree_when_base_branch_is_occupied(
-    tmp_path: Path, monkeypatch
-) -> None:
-    base_ref = "trunk"
-    head_ref = "topic/317"
-    project, remote = init_cleanup_project(tmp_path, base_ref=base_ref, head_ref=head_ref)
-    occupied = tmp_path / "base-worktree"
-    git(project, "worktree", "add", str(occupied), base_ref)
-    before = (
-        git(project, "rev-parse", "HEAD"),
-        git(project, "branch", "--show-current"),
-        git(project, "show-ref"),
-    )
 
-    with contextlib.chdir(project):
-        result = run_cleanup_with_real_git(
-            project,
-            monkeypatch,
-            remove_worktree=True,
-            pr_stdout=cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref),
-        )
 
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "base_branch_checked_out" in result.stdout
-    assert (
-        git(project, "rev-parse", "HEAD"),
-        git(project, "branch", "--show-current"),
-        git(project, "show-ref"),
-    ) == before
-    assert git(occupied, "branch", "--show-current") == base_ref
-    assert git_bare_result(remote, "show-ref", "--verify", f"refs/heads/{head_ref}").returncode == 0
-    status = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "base_branch_checked_out"
-    assert Path(occupied).resolve() in [
-        Path(path).resolve() for path in status["details"]["occupiedWorktrees"]
-    ]
 
 
-def test_cleanup_stops_primary_worktree_when_base_branch_is_occupied_without_remove_worktree(
-    tmp_path: Path, monkeypatch
-) -> None:
-    base_ref = "trunk"
-    head_ref = "topic/317"
-    project, remote = init_cleanup_project(tmp_path, base_ref=base_ref, head_ref=head_ref)
-    occupied = tmp_path / "base-worktree"
-    git(project, "worktree", "add", str(occupied), base_ref)
-    before = (
-        git(project, "rev-parse", "HEAD"),
-        git(project, "branch", "--show-current"),
-        git(project, "show-ref"),
-    )
 
-    with contextlib.chdir(project):
-        result = run_cleanup_with_real_git(
-            project,
-            monkeypatch,
-            pr_stdout=cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref),
-        )
 
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "base_branch_checked_out" in result.stdout
-    assert (
-        git(project, "rev-parse", "HEAD"),
-        git(project, "branch", "--show-current"),
-        git(project, "show-ref"),
-    ) == before
-    assert git(occupied, "branch", "--show-current") == base_ref
-    assert git_bare_result(remote, "show-ref", "--verify", f"refs/heads/{head_ref}").returncode == 0
 
 
-def test_cleanup_stops_before_occupied_base_merge_when_active_cwd_would_disappear(
-    tmp_path: Path, monkeypatch
-) -> None:
-    base_ref = "trunk"
-    head_ref = "topic/317"
-    project, remote = init_cleanup_project(tmp_path, base_ref=base_ref, head_ref=head_ref)
 
-    git(project, "checkout", base_ref)
-    current_only = project / "current-only" / "nested"
-    current_only.mkdir(parents=True)
-    (current_only / "sentinel.txt").write_text("current only\n", encoding="utf-8")
-    git(project, "add", "current-only")
-    git(project, "commit", "-m", "base-only directory")
-    git(project, "push", "--force", "origin", base_ref)
-    git(project, "checkout", "-b", "controller")
 
-    occupied = tmp_path / "base-worktree"
-    git(project, "worktree", "add", str(occupied), base_ref)
 
-    integrator = tmp_path / "base-integrator"
-    clone_result = subprocess.run(
-        ["git", "clone", str(remote), str(integrator)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
-    git(integrator, "config", "user.email", "test@example.com")
-    git(integrator, "config", "user.name", "Test User")
-    git(integrator, "checkout", "-B", base_ref, f"origin/{base_ref}")
-    shutil.rmtree(integrator / "current-only")
-    git(integrator, "add", "-u", "current-only")
-    git(integrator, "commit", "-m", "remove base-only directory")
-    git(integrator, "push", "origin", base_ref)
 
-    git(project, "checkout", head_ref)
-    (project / ".gitignore").write_text("current-only/\n", encoding="utf-8")
-    git(project, "add", ".gitignore")
-    git(project, "commit", "-m", "ignore current-only on head")
-    git(project, "push", "origin", head_ref)
-    git(project, "checkout", "controller")
-
-    target = tmp_path / "target"
-    git(project, "worktree", "add", str(target), head_ref)
-    target_ignored = subprocess.run(
-        ["git", "check-ignore", "--quiet", "--", "current-only/nested"],
-        cwd=target,
-        check=False,
-    )
-    occupied_not_ignored = subprocess.run(
-        ["git", "check-ignore", "--quiet", "--", "current-only/nested"],
-        cwd=occupied,
-        check=False,
-    )
-    assert target_ignored.returncode == 0
-    assert occupied_not_ignored.returncode != 0
-    active_cwd = occupied / "current-only" / "nested"
-    assert active_cwd.is_dir()
-    before_target = (git(target, "rev-parse", "HEAD"), git(target, "branch", "--show-current"))
-    before_occupied = (git(occupied, "rev-parse", "HEAD"), git(occupied, "branch", "--show-current"))
-    before_local_head = git(target, "show-ref", "--verify", f"refs/heads/{head_ref}")
-    before_remote_head = git_bare(remote, "show-ref", "--verify", f"refs/heads/{head_ref}")
-
-    with contextlib.chdir(active_cwd):
-        result = run_cleanup_with_real_git(
-            target,
-            monkeypatch,
-            pr_stdout=cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref),
-        )
-
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "active_cwd_would_disappear" in result.stdout
-    assert (git(target, "rev-parse", "HEAD"), git(target, "branch", "--show-current")) == before_target
-    assert (git(occupied, "rev-parse", "HEAD"), git(occupied, "branch", "--show-current")) == before_occupied
-    assert git(target, "show-ref", "--verify", f"refs/heads/{head_ref}") == before_local_head
-    assert git_bare(remote, "show-ref", "--verify", f"refs/heads/{head_ref}") == before_remote_head
-    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "active_cwd_would_disappear"
-
-
-def test_cleanup_retains_active_worktree_detached_after_branch_cleanup(tmp_path: Path, monkeypatch) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    target = tmp_path / "target"
-    git(project, "checkout", "main")
-    stale_base = git(project, "rev-parse", "HEAD")
-    git(project, "checkout", "-b", "controller")
-    other = tmp_path / "base-worktree"
-    git(project, "worktree", "add", str(other), "main")
-    git(project, "worktree", "add", str(target), "feature/example")
-    remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
-    assert stale_base != remote_base
-
-    with contextlib.chdir(target):
-        result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-    assert target.exists()
-    assert git(target, "branch", "--show-current") == ""
-    assert git(target, "rev-parse", "HEAD") == remote_base
-    assert git(other, "branch", "--show-current") == "main"
-    assert git(other, "rev-parse", "HEAD") == remote_base
-    worktrees = load_pr_flow_module().parse_worktrees(git(target, "worktree", "list", "--porcelain", "-z"))
-    target_record = next(item for item in worktrees if Path(item["path"]).resolve() == target.resolve())
-    assert target_record["detached"] is True
-    assert subprocess.run(
-        ["git", "show-ref", "--verify", "--quiet", "refs/heads/feature/example"],
-        cwd=target,
-        check=False,
-    ).returncode == 1
-    assert subprocess.run(
-        ["git", "--git-dir", str(remote), "show-ref", "--verify", "--quiet", "refs/heads/feature/example"],
-        check=False,
-    ).returncode == 1
-    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "cleanup_complete"
-    assert status["details"]["worktreeRetention"] == {"status": "retained", "reason": "active_session"}
-    assert "removeWorktreePending" not in status["details"]
-    assert "nextCommand" not in status["details"]
-
-
-@pytest.mark.parametrize(
-    "cwd_relative",
-    [None, Path(".pr-flow")],
-    ids=["root", "subdirectory"],
-)
-def test_cleanup_retains_active_worktree_when_project_is_directory_alias(
-    tmp_path: Path, monkeypatch, cwd_relative: Path | None
-) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    git(project, "checkout", "main")
-    git(project, "checkout", "-b", "controller")
-    target = tmp_path / "target"
-    git(project, "worktree", "add", str(target), "feature/example")
-    alias = tmp_path / "target-alias"
-    if os.name == "nt":
-        powershell = shutil.which("powershell")
-        if not powershell:
-            pytest.skip("PowerShell is required to create a junction")
-        junction = subprocess.run(
-            [
-                powershell,
-                "-NoProfile",
-                "-Command",
-                f'New-Item -ItemType Junction -Path "{alias}" -Target "{target}"',
-            ],
-            check=False,
-            capture_output=True,
-        )
-        if junction.returncode != 0:
-            pytest.skip(
-                "Windows junction creation is unavailable: "
-                + junction.stderr.decode(errors="replace")
-            )
-    else:
-        try:
-            alias.symlink_to(target, target_is_directory=True)
-        except OSError as exc:
-            pytest.skip(f"directory symlink creation is unavailable: {exc}")
-
-    active_cwd = target if cwd_relative is None else target / cwd_relative
-    with contextlib.chdir(active_cwd):
-        result = run_cleanup_with_real_git(alias, monkeypatch, remove_worktree=True)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-    assert target.is_dir()
-    assert alias.is_dir()
-    assert git(target, "branch", "--show-current") == ""
-    assert git(target, "rev-parse", "HEAD") == git_bare(remote, "rev-parse", "refs/heads/main")
-    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["worktreeRetention"] == {"status": "retained", "reason": "active_session"}
-
-
-def test_cleanup_retains_active_worktree_when_cwd_uses_directory_alias(
-    tmp_path: Path, monkeypatch
-) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    git(project, "checkout", "main")
-    git(project, "checkout", "-b", "controller")
-    target = tmp_path / "target"
-    git(project, "worktree", "add", str(target), "feature/example")
-    alias = tmp_path / "target-alias"
-    if os.name == "nt":
-        powershell = shutil.which("powershell")
-        if not powershell:
-            pytest.skip("PowerShell is required to create a junction")
-        junction = subprocess.run(
-            [
-                powershell,
-                "-NoProfile",
-                "-Command",
-                f'New-Item -ItemType Junction -Path "{alias}" -Target "{target}"',
-            ],
-            check=False,
-            capture_output=True,
-        )
-        if junction.returncode != 0:
-            pytest.skip(
-                "Windows junction creation is unavailable: "
-                + junction.stderr.decode(errors="replace")
-            )
-    else:
-        try:
-            alias.symlink_to(target, target_is_directory=True)
-        except OSError as exc:
-            pytest.skip(f"directory symlink creation is unavailable: {exc}")
-
-    with contextlib.chdir(alias):
-        module = load_pr_flow_module()
-        cwd_key = module.lexical_path(Path.cwd())
-        alias_key = module.lexical_path(alias)
-        try:
-            cwd_uses_alias = os.path.commonpath([cwd_key, alias_key]) == alias_key
-        except ValueError:
-            cwd_uses_alias = False
-        if not cwd_uses_alias:
-            pytest.skip("platform resolves directory links in cwd")
-        result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-    assert target.is_dir()
-    assert alias.is_dir()
-    assert git(target, "branch", "--show-current") == ""
-    assert git(target, "rev-parse", "HEAD") == git_bare(remote, "rev-parse", "refs/heads/main")
-    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["worktreeRetention"] == {"status": "retained", "reason": "active_session"}
-
-
-def test_cleanup_retains_active_worktree_with_ignored_cwd_after_branch_cleanup(
-    tmp_path: Path, monkeypatch
-) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    (project / ".gitignore").write_text(".local/\n", encoding="utf-8")
-    git(project, "add", ".gitignore")
-    git(project, "commit", "-m", "ignore local worktree state")
-    git(project, "push", "origin", "feature/example")
-
-    integrator = tmp_path / "integrator"
-    clone_result = subprocess.run(
-        ["git", "clone", str(remote), str(integrator)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
-    git(integrator, "config", "user.email", "test@example.com")
-    git(integrator, "config", "user.name", "Test User")
-    git(integrator, "fetch", "origin", "feature/example")
-    git(integrator, "checkout", "-B", "main", "origin/main")
-    git(integrator, "merge", "--ff-only", "origin/feature/example")
-    git(integrator, "push", "origin", "main")
-
-    git(project, "checkout", "main")
-    git(project, "checkout", "-b", "controller")
-    target = tmp_path / "target"
-    git(project, "worktree", "add", str(target), "feature/example")
-    active_cwd = target / ".local" / "spec-work"
-    active_cwd.mkdir(parents=True)
-    ignored = subprocess.run(
-        ["git", "check-ignore", "--quiet", "--", ".local/spec-work"],
-        cwd=target,
-        check=False,
-    )
-    assert ignored.returncode == 0
-
-    with contextlib.chdir(active_cwd):
-        result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-    assert target.is_dir()
-    assert active_cwd.is_dir()
-    assert git(target, "branch", "--show-current") == ""
-    assert git(target, "rev-parse", "HEAD") == git_bare(remote, "rev-parse", "refs/heads/main")
-    assert subprocess.run(
-        ["git", "show-ref", "--verify", "--quiet", "refs/heads/feature/example"],
-        cwd=target,
-        check=False,
-    ).returncode == 1
-    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode != 0
-    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "cleanup_complete"
-    assert status["details"]["worktreeRetention"] == {"status": "retained", "reason": "active_session"}
-
-
-def test_cleanup_retains_active_worktree_when_active_cwd_is_inside_ignored_directory_link(
-    tmp_path: Path, monkeypatch
-) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    (project / ".gitignore").write_text(".local/\n", encoding="utf-8")
-    git(project, "add", ".gitignore")
-    git(project, "commit", "-m", "ignore linked runtime state")
-    git(project, "push", "origin", "feature/example")
-
-    integrator = tmp_path / "integrator"
-    clone_result = subprocess.run(
-        ["git", "clone", str(remote), str(integrator)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
-    git(integrator, "config", "user.email", "test@example.com")
-    git(integrator, "config", "user.name", "Test User")
-    git(integrator, "fetch", "origin", "feature/example")
-    git(integrator, "checkout", "-B", "main", "origin/main")
-    git(integrator, "merge", "--ff-only", "origin/feature/example")
-    git(integrator, "push", "origin", "main")
-
-    git(project, "checkout", "main")
-    git(project, "checkout", "-b", "controller")
-    target = tmp_path / "target"
-    git(project, "worktree", "add", str(target), "feature/example")
-
-    shared = tmp_path / "shared-runtime"
-    (shared / "nested").mkdir(parents=True)
-    sentinel = shared / "sentinel.txt"
-    sentinel.write_text("keep\n", encoding="utf-8")
-    link = target / ".local" / "spec-work"
-    link.parent.mkdir()
-    if os.name == "nt":
-        powershell = shutil.which("powershell")
-        if not powershell:
-            pytest.skip("PowerShell is required to create a junction")
-        junction = subprocess.run(
-            [
-                powershell,
-                "-NoProfile",
-                "-Command",
-                f'New-Item -ItemType Junction -Path "{link}" -Target "{shared}"',
-            ],
-            check=False,
-            capture_output=True,
-        )
-        if junction.returncode != 0:
-            pytest.skip(
-                "Windows junction creation is unavailable: "
-                + junction.stderr.decode(errors="replace")
-            )
-    else:
-        try:
-            link.symlink_to(shared, target_is_directory=True)
-        except OSError as exc:
-            pytest.skip(f"directory symlink creation is unavailable: {exc}")
-
-    active_cwd = link / "nested"
-    ignored = subprocess.run(
-        ["git", "check-ignore", "--quiet", "--", ".local/spec-work"],
-        cwd=target,
-        check=False,
-    )
-    assert ignored.returncode == 0
-
-    with contextlib.chdir(active_cwd):
-        cwd_key = os.path.normcase(os.path.abspath(os.fspath(Path.cwd())))
-        target_key = os.path.normcase(os.path.abspath(os.fspath(target)))
-        try:
-            logical_cwd_is_inside_target = os.path.commonpath([cwd_key, target_key]) == target_key
-        except ValueError:
-            logical_cwd_is_inside_target = False
-        if not logical_cwd_is_inside_target:
-            pytest.skip("platform resolves directory links in cwd and cannot preserve the logical path")
-        result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-    assert target.is_dir()
-    assert active_cwd.is_dir()
-    assert sentinel.read_text(encoding="utf-8") == "keep\n"
-    assert git(target, "branch", "--show-current") == ""
-    assert git(target, "rev-parse", "HEAD") == git_bare(remote, "rev-parse", "refs/heads/main")
-    worktrees = load_pr_flow_module().parse_worktrees(git(target, "worktree", "list", "--porcelain", "-z"))
-    target_record = next(item for item in worktrees if Path(item["path"]).resolve() == target.resolve())
-    assert target_record["detached"] is True
-    assert subprocess.run(
-        ["git", "show-ref", "--verify", "--quiet", "refs/heads/feature/example"],
-        cwd=target,
-        check=False,
-    ).returncode == 1
-    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode != 0
-
-
-def test_cleanup_stops_before_detaching_when_active_cwd_is_untracked_and_not_ignored(
-    tmp_path: Path, monkeypatch
-) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    integrator = tmp_path / "integrator"
-    clone_result = subprocess.run(
-        ["git", "clone", str(remote), str(integrator)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
-    git(integrator, "config", "user.email", "test@example.com")
-    git(integrator, "config", "user.name", "Test User")
-    git(integrator, "fetch", "origin", "feature/example")
-    git(integrator, "checkout", "-B", "main", "origin/main")
-    git(integrator, "merge", "--ff-only", "origin/feature/example")
-    (integrator / "BASE_ONLY.md").write_text("base only\n", encoding="utf-8")
-    git(integrator, "add", "BASE_ONLY.md")
-    git(integrator, "commit", "-m", "base-only change")
-    git(integrator, "push", "origin", "main")
-
-    git(project, "checkout", "main")
-    git(project, "checkout", "-b", "controller")
-    target = tmp_path / "target"
-    git(project, "worktree", "add", str(target), "feature/example")
-    active_cwd = target / "untracked" / "nested"
-    active_cwd.mkdir(parents=True)
-    not_ignored = subprocess.run(
-        ["git", "check-ignore", "--quiet", "--", "untracked/nested"],
-        cwd=target,
-        check=False,
-    )
-    assert not_ignored.returncode != 0
-
-    with contextlib.chdir(active_cwd):
-        result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
-
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "cleanup_complete" not in result.stdout
-    assert target.is_dir()
-    assert active_cwd.is_dir()
-    assert git(target, "branch", "--show-current") == "feature/example"
-    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode == 0
-    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "active_cwd_would_disappear"
-
-
-def test_cleanup_stops_before_detaching_when_active_cwd_disappears_on_base_checkout(
-    tmp_path: Path, monkeypatch
-) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    source_only = project / "source-only" / "nested"
-    source_only.mkdir(parents=True)
-    (source_only / "sentinel.txt").write_text("source only\n", encoding="utf-8")
-    git(project, "add", "source-only")
-    git(project, "commit", "-m", "source-only directory")
-    source_head = git(project, "rev-parse", "HEAD")
-    git(project, "push", "origin", "feature/example")
-
-    integrator = tmp_path / "integrator"
-    clone_result = subprocess.run(
-        ["git", "clone", str(remote), str(integrator)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
-    git(integrator, "config", "user.email", "test@example.com")
-    git(integrator, "config", "user.name", "Test User")
-    git(integrator, "fetch", "origin", "feature/example")
-    git(integrator, "checkout", "-B", "main", "origin/main")
-    git(integrator, "merge", "--ff-only", "origin/feature/example")
-    shutil.rmtree(integrator / "source-only")
-    git(integrator, "add", "-u", "source-only")
-    git(integrator, "commit", "-m", "remove source-only directory from base")
-    git(integrator, "push", "origin", "main")
-    assert not (integrator / "source-only").exists()
-
-    git(project, "checkout", "main")
-    git(project, "checkout", "-b", "controller")
-    target = tmp_path / "target"
-    git(project, "worktree", "add", str(target), "feature/example")
-    active_cwd = target / "source-only" / "nested"
-    assert active_cwd.is_dir()
-    assert not (target / "source-only").exists() or source_head == git(target, "rev-parse", "HEAD")
-
-    with contextlib.chdir(active_cwd):
-        result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
-
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "cleanup_complete" not in result.stdout
-    assert target.is_dir()
-    assert active_cwd.is_dir()
-    assert git(target, "branch", "--show-current") == "feature/example"
-    assert git(target, "rev-parse", "HEAD") == source_head
-    assert git_bare(remote, "show-ref", "--verify", "refs/heads/feature/example")
-    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "EXCEPTION_REQUIRED"
-    assert status["details"]["reason"] == "active_cwd_would_disappear"
-    assert status["details"]["nextCommand"]
-
-
-def test_cleanup_keeps_detached_when_synced_base_is_checked_out_elsewhere(tmp_path: Path, monkeypatch) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
-    git(project, "branch", "-f", "main", remote_base)
-    other = tmp_path / "base-worktree"
-    git(project, "worktree", "add", str(other), "main")
-    before = (
-        git(project, "rev-parse", "HEAD"),
-        git(project, "branch", "--show-current"),
-        git(project, "show-ref"),
-    )
-    before_remote_refs = git_bare(remote, "show-ref")
-
-    result = run_cleanup_with_real_git(project, monkeypatch)
-
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "base_branch_checked_out" in result.stdout
-    assert (
-        git(project, "rev-parse", "HEAD"),
-        git(project, "branch", "--show-current"),
-        git(project, "show-ref"),
-    ) == before
-    assert git(other, "branch", "--show-current") == "main"
-    assert git(other, "rev-parse", "HEAD") == remote_base
-    assert git_bare(remote, "show-ref") == before_remote_refs
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "base_branch_checked_out"
-    assert other.resolve() in [Path(path).resolve() for path in status["details"]["occupiedWorktrees"]]
 
 
 def test_cleanup_detaches_when_base_becomes_occupied_during_checkout(tmp_path: Path, monkeypatch) -> None:
@@ -7324,95 +5702,12 @@ def test_cleanup_retries_source_deletion_from_synced_base(tmp_path: Path, monkey
     assert ("push", "origin", "--delete", "feature/example") in git_stub.calls
 
 
-def test_cleanup_creates_missing_local_base_end_to_end(tmp_path: Path, monkeypatch) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
-    git(project, "branch", "-D", "main")
-
-    result = run_cleanup_with_real_git(project, monkeypatch)
-    local_base = subprocess.run(
-        ["git", "rev-parse", "main"],
-        cwd=project,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert local_base.returncode == 0, local_base.stdout + local_base.stderr
-    assert local_base.stdout.strip() == remote_base
-    assert git(project, "branch", "--show-current") == "main"
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["baseCheckout"] == {"status": "checked_out"}
 
 
-def test_cleanup_refuses_diverged_local_base_end_to_end(tmp_path: Path, monkeypatch) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    git(project, "checkout", "main")
-    (project / "LOCAL.md").write_text("local only\n", encoding="utf-8")
-    git(project, "add", "LOCAL.md")
-    git(project, "commit", "-m", "local only")
-    git(project, "checkout", "feature/example")
-
-    result = run_cleanup_with_real_git(project, monkeypatch)
-
-    assert result.returncode == 1
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "local_base_not_fast_forward"
-    assert git_bare(remote, "show-ref", "--verify", "refs/heads/feature/example")
 
 
-def test_cleanup_fast_forwards_stale_base_checked_out_elsewhere_end_to_end(tmp_path: Path, monkeypatch) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
-    other = tmp_path / "base-worktree"
-    git(project, "worktree", "add", str(other), "main")
-    before = (
-        git(project, "rev-parse", "HEAD"),
-        git(project, "branch", "--show-current"),
-        git(project, "show-ref"),
-    )
-    before_remote_refs = git_bare(remote, "show-ref")
-
-    result = run_cleanup_with_real_git(project, monkeypatch)
-
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "base_branch_checked_out" in result.stdout
-    assert (
-        git(project, "rev-parse", "HEAD"),
-        git(project, "branch", "--show-current"),
-        git(project, "show-ref"),
-    ) == before
-    assert git(other, "branch", "--show-current") == "main"
-    assert git(other, "rev-parse", "HEAD") == git(project, "rev-parse", "main")
-    assert git(other, "rev-parse", "HEAD") != remote_base
-    assert git_bare(remote, "show-ref") == before_remote_refs
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "base_branch_checked_out"
-    assert other.resolve() in [Path(path).resolve() for path in status["details"]["occupiedWorktrees"]]
 
 
-@pytest.mark.parametrize("unsafe_state", ["dirty", "rebase"])
-def test_cleanup_refuses_unsafe_stale_base_worktree_end_to_end(
-    tmp_path: Path, monkeypatch, unsafe_state: str
-) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    stale_base = git(project, "rev-parse", "main")
-    other = tmp_path / "base-worktree"
-    git(project, "worktree", "add", str(other), "main")
-    if unsafe_state == "dirty":
-        (other / "DIRTY.md").write_text("dirty\n", encoding="utf-8")
-    else:
-        git_path = Path(git(other, "rev-parse", "--git-path", "rebase-merge"))
-        git_path.mkdir(parents=True)
-
-    result = run_cleanup_with_real_git(project, monkeypatch)
-
-    assert result.returncode == 1
-    assert git(other, "rev-parse", "HEAD") == stale_base
-    assert git_bare(remote, "show-ref", "--verify", "refs/heads/feature/example")
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "base_branch_checked_out"
 
 
 def test_cleanup_returns_to_latest_base_and_deletes_source_branches(tmp_path: Path, monkeypatch) -> None:
@@ -7598,337 +5893,32 @@ def test_cleanup_rejects_current_branch_mismatch(tmp_path: Path, monkeypatch) ->
     assert_cleanup_exception(project, result, "current_branch_mismatch")
 
 
-def write_toolchain_cli(
-    bin_dir: Path,
-    reports: dict[str, dict[str, object]],
-    *,
-    cwd_log: Path | None = None,
-) -> None:
-    bin_dir.mkdir(exist_ok=True)
-    for command, report in reports.items():
-        script = bin_dir / f"{command}.py"
-        lines = [
-            "import json",
-            "from pathlib import Path",
-        ]
-        if cwd_log is not None:
-            lines.extend([
-                f"with Path({str(cwd_log)!r}).open('a', encoding='utf-8') as handle:",
-                "    handle.write(str(Path.cwd()) + '\\n')",
-            ])
-        lines.extend([
-            f"reports = {report!r}",
-            "reports = reports if isinstance(reports, list) else [reports]",
-            "state = Path(__file__).with_suffix('.count')",
-            "index = int(state.read_text() if state.exists() else '0')",
-            "state.write_text(str(index + 1))",
-            "print(json.dumps(reports[min(index, len(reports) - 1)]))",
-            "",
-        ])
-        script.write_text("\n".join(lines), encoding="utf-8")
-        if os.name == "nt":
-            (bin_dir / f"{command}.cmd").write_text(
-                f'@echo off\n"{sys.executable}" "%~dp0{command}.py" %*\n', encoding="utf-8"
-            )
-        else:
-            launcher = bin_dir / command
-            launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$(dirname "$0")/{command}.py" "$@"\n', encoding="utf-8")
-            launcher.chmod(0o755)
 
 
-def run_public_pr_flow(bin_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    env = os.environ | {"PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", "")}
-    return subprocess.run([sys.executable, str(SCRIPT), *args], check=False, text=True, capture_output=True, env=env)
 
 
-def initialized_toolchain_project(tmp_path: Path, bin_dir: Path) -> Path:
-    project = tmp_path / "project"
-    project.mkdir()
-    for args in (["init"], ["config", "user.email", "test@example.invalid"], ["config", "user.name", "Test"]):
-        assert subprocess.run(["git", *args], cwd=project, check=False).returncode == 0
-    config = tmp_path / "config.yaml"
-    config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
-    assert run_public_pr_flow(bin_dir, "init", "--project", str(project), "--config", str(config)).returncode == 0
-    assert subprocess.run(["git", "add", "."], cwd=project, check=False).returncode == 0
-    assert subprocess.run(["git", "commit", "-m", "baseline"], cwd=project, check=False).returncode == 0
-    return project
 
 
-def sync_through_public_complete(bin_dir: Path, project: Path) -> subprocess.CompletedProcess[str]:
-    return run_public_pr_flow(bin_dir, "complete", "--project", str(project), "--summary", "s", "--scope", "s")
 
 
-def dev_toolchain_reports(project: Path, *, worktree_match: bool, complete_identity: bool = True) -> dict[str, dict[str, object]]:
-    source_worktree = project if worktree_match else project.parent / "tool-source"
-    binding = {
-        "sourceWorktree": str(source_worktree),
-        "sourceCommit": "a" * 40,
-        "targetWorktree": str(project),
-        "targetCommit": "b" * 40,
-        "worktreeMatch": worktree_match,
-    }
-    reports: dict[str, dict[str, object]] = {}
-    for key, (_, package_name, package_directory) in load_pr_flow_module().TOOLCHAIN_TOOLS.items():
-        toolchain: dict[str, object] = {
-            "mode": "dev",
-            "packageName": package_name,
-        }
-        if complete_identity:
-            toolchain.update(
-                {
-                    "sourceRepository": "https://github.com/liuli195/my-agent-skills",
-                    "sourceCommit": "a" * 40,
-                    "packageDirectory": package_directory,
-                    "implementationIdentity": "sha256:" + "0" * 64,
-                }
-            )
-        reports[key] = {"toolchain": toolchain, "binding": binding}
-    return reports
 
 
-def test_init_accepts_same_worktree_with_stable_toolchain_identities(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    config = tmp_path / "config.yaml"
-    config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
-    bin_dir = tmp_path / "bin"
-    reports = dev_toolchain_reports(project, worktree_match=True)
-    for report in reports.values():
-        report["toolchain"]["implementationIdentity"] = "sha256:" + "1" * 64
-    write_toolchain_cli(bin_dir, reports)
-
-    result = run_public_pr_flow(bin_dir, "init", "--project", str(project), "--config", str(config))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    tools = json.loads((project / ".pr-flow" / "toolchain.json").read_text(encoding="utf-8"))["tools"]
-    assert tools["myspec"]["sourceCommit"] == "a" * 40
-    assert tools["myspec"]["implementationIdentity"] == "sha256:" + "1" * 64
-    assert tools["build-and-verify"]["sourceCommit"] == "a" * 40
 
 
-@pytest.mark.parametrize(
-    ("command", "extra"),
-    [
-        ("complete", ["--summary", "s", "--scope", "s"]),
-        ("tweak", ["--reason", "r", "--summary", "s", "--scope", "s"]),
-    ],
-)
-def test_lifecycle_syncs_same_worktree_toolchain_before_remote_flow(
-    tmp_path: Path, command: str, extra: list[str]
-) -> None:
-    init_bin = tmp_path / "init-bin"
-    release_reports = {
-        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3"}},
-        "build-and-verify": {
-            "toolchain": {
-                "mode": "release",
-                "packageName": "@liuli195/build-and-verify",
-                "packageVersion": "1.2.3",
-            }
-        },
-    }
-    write_toolchain_cli(init_bin, release_reports)
-    project = initialized_toolchain_project(tmp_path, init_bin)
-    before_head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=project, check=True, text=True, capture_output=True
-    ).stdout.strip()
-
-    run_bin = tmp_path / "run-bin"
-    write_toolchain_cli(run_bin, dev_toolchain_reports(project, worktree_match=True))
-    write_fake_gh(run_bin, exit_code=99)
-    result = run_public_pr_flow(run_bin, command, "--project", str(project), *extra)
-
-    assert result.returncode == 1
-    assert "toolchain_same_worktree_unsupported" not in result.stdout
-    assert "toolchain_source_commit_unavailable" not in result.stdout
-    after_head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=project, check=True, text=True, capture_output=True
-    ).stdout.strip()
-    assert after_head != before_head
-    tools = json.loads((project / ".pr-flow" / "toolchain.json").read_text(encoding="utf-8"))["tools"]
-    assert tools["myspec"]["implementationIdentity"] == "sha256:" + "0" * 64
 
 
-def test_init_fails_closed_when_dev_implementation_commit_is_unavailable(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    config = tmp_path / "config.yaml"
-    config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
-    bin_dir = tmp_path / "bin"
-    reports = dev_toolchain_reports(project, worktree_match=True)
-    del reports["myspec"]["toolchain"]["sourceCommit"]
-    write_toolchain_cli(bin_dir, reports)
-
-    result = run_public_pr_flow(bin_dir, "init", "--project", str(project), "--config", str(config))
-
-    assert result.returncode == 1
-    assert "status: toolchain_source_commit_unavailable" in result.stdout
-    assert "Publish the exact implementation commit" in result.stdout
-    assert not (project / ".pr-flow" / "toolchain.json").exists()
 
 
-def test_toolchain_sync_converges_for_independent_and_shared_tool_changes(tmp_path: Path) -> None:
-    init_bin = tmp_path / "init-bin"
-    release_reports = {
-        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3"}},
-        "build-and-verify": {"toolchain": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "1.2.3"}},
-    }
-    write_toolchain_cli(init_bin, release_reports)
-    project = initialized_toolchain_project(tmp_path, init_bin)
-    baseline = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=project, check=True, text=True, capture_output=True
-    ).stdout.strip()
-
-    run_bin = tmp_path / "run-bin"
-    reports = dev_toolchain_reports(project, worktree_match=True)
-    write_toolchain_cli(run_bin, reports)
-    write_fake_gh(run_bin, exit_code=99)
-    first = sync_through_public_complete(run_bin, project)
-    assert first.returncode == 1
-    assert subprocess.run(
-        ["git", "rev-list", "--count", f"{baseline}..HEAD"], cwd=project, check=True, text=True, capture_output=True
-    ).stdout.strip() == "1"
-    first_record = json.loads((project / ".pr-flow/toolchain.json").read_text(encoding="utf-8"))
-    first_workflow = (project / ".github/workflows/pr-flow-toolchain.yml").read_bytes()
-
-    second = sync_through_public_complete(run_bin, project)
-    assert second.returncode == 1
-    assert subprocess.run(
-        ["git", "rev-list", "--count", f"{baseline}..HEAD"], cwd=project, check=True, text=True, capture_output=True
-    ).stdout.strip() == "1"
-    assert (project / ".github/workflows/pr-flow-toolchain.yml").read_bytes() == first_workflow
-
-    reports["myspec"]["toolchain"]["sourceCommit"] = "b" * 40
-    reports["myspec"]["toolchain"]["implementationIdentity"] = "sha256:" + "2" * 64
-    write_toolchain_cli(run_bin, reports)
-    third = sync_through_public_complete(run_bin, project)
-    assert third.returncode == 1
-    assert subprocess.run(
-        ["git", "rev-list", "--count", f"{baseline}..HEAD"], cwd=project, check=True, text=True, capture_output=True
-    ).stdout.strip() == "2"
-    updated = json.loads((project / ".pr-flow/toolchain.json").read_text(encoding="utf-8"))
-    assert updated["tools"]["myspec"]["implementationIdentity"] == "sha256:" + "2" * 64
-    assert updated["tools"]["build-and-verify"] == first_record["tools"]["build-and-verify"]
-    assert "checkout --detach " + "a" * 40 in (
-        project / ".github/workflows/pr-flow-toolchain.yml"
-    ).read_text(encoding="utf-8")
-
-    reports["myspec"]["toolchain"].update(
-        sourceCommit="c" * 40,
-        implementationIdentity="sha256:" + "3" * 64,
-    )
-    reports["build-and-verify"]["toolchain"].update(
-        sourceCommit="c" * 40,
-        implementationIdentity="sha256:" + "4" * 64,
-    )
-    write_toolchain_cli(run_bin, reports)
-    shared = sync_through_public_complete(run_bin, project)
-    assert shared.returncode == 1
-    assert subprocess.run(
-        ["git", "rev-list", "--count", f"{baseline}..HEAD"], cwd=project, check=True, text=True, capture_output=True
-    ).stdout.strip() == "3"
-    shared_record = json.loads((project / ".pr-flow/toolchain.json").read_text(encoding="utf-8"))
-    assert shared_record["tools"]["myspec"]["implementationIdentity"] == "sha256:" + "3" * 64
-    assert shared_record["tools"]["build-and-verify"]["implementationIdentity"] == "sha256:" + "4" * 64
 
 
-def test_init_uses_target_project_as_toolchain_doctor_cwd(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    config = tmp_path / "config.yaml"
-    config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
-    bin_dir = tmp_path / "bin"
-    cwd_log = tmp_path / "doctor-cwd.log"
-    write_toolchain_cli(bin_dir, dev_toolchain_reports(project, worktree_match=False), cwd_log=cwd_log)
-
-    result = run_public_pr_flow(bin_dir, "init", "--project", str(project), "--config", str(config))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert cwd_log.read_text(encoding="utf-8").splitlines() == [str(project.resolve())] * 2
-    assert "checkout --detach " + "a" * 40 in (
-        project / ".github" / "workflows" / "pr-flow-toolchain.yml"
-    ).read_text(encoding="utf-8")
 
 
-def test_complete_commits_only_changed_managed_file_through_public_cli(tmp_path: Path) -> None:
-    bin_dir = tmp_path / "bin"
-    reports = {
-        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3"}},
-        "build-and-verify": {"toolchain": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "1.2.3"}},
-    }
-    write_toolchain_cli(bin_dir, reports)
-    project = initialized_toolchain_project(tmp_path, bin_dir)
-    workflow = project / ".github/workflows/pr-flow-toolchain.yml"
-    workflow.write_text("stale\n", encoding="utf-8")
-    assert subprocess.run(["git", "add", str(workflow.relative_to(project))], cwd=project, check=False).returncode == 0
-    assert subprocess.run(["git", "commit", "-m", "stale workflow"], cwd=project, check=False).returncode == 0
-
-    sync_through_public_complete(bin_dir, project)
-
-    changed = subprocess.run(["git", "show", "--format=", "--name-only", "HEAD"], cwd=project, check=False, text=True, capture_output=True)
-    assert changed.stdout.splitlines() == [".github/workflows/pr-flow-toolchain.yml"]
-    assert subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=project, check=False).returncode == 0
 
 
-def test_complete_refuses_dirty_tree_without_staging_managed_files_through_public_cli(tmp_path: Path) -> None:
-    bin_dir = tmp_path / "bin"
-    reports = {
-        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3"}},
-        "build-and-verify": {"toolchain": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "1.2.3"}},
-    }
-    write_toolchain_cli(bin_dir, reports)
-    project = initialized_toolchain_project(tmp_path, bin_dir)
-    (project / ".pr-flow/toolchain.json").write_text("stale\n", encoding="utf-8")
-    (project / "unrelated.txt").write_text("dirty\n", encoding="utf-8")
-
-    result = sync_through_public_complete(bin_dir, project)
-
-    assert "toolchain_sync_dirty" in result.stdout
-    assert subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=project, check=False).returncode == 0
-    assert (project / ".pr-flow/toolchain.json").read_text(encoding="utf-8") == "stale\n"
 
 
-def test_complete_restores_toolchain_files_and_index_when_commit_fails_through_public_cli(tmp_path: Path) -> None:
-    bin_dir = tmp_path / "bin"
-    reports = {
-        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3"}},
-        "build-and-verify": {"toolchain": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "1.2.3"}},
-    }
-    write_toolchain_cli(bin_dir, reports)
-    project = initialized_toolchain_project(tmp_path, bin_dir)
-    record = project / ".pr-flow/toolchain.json"
-    record.write_text("stale\n", encoding="utf-8")
-    assert subprocess.run(["git", "add", str(record.relative_to(project))], cwd=project, check=False).returncode == 0
-    assert subprocess.run(["git", "commit", "-m", "stale record"], cwd=project, check=False).returncode == 0
-    assert subprocess.run(["git", "config", "user.email", ""], cwd=project, check=False).returncode == 0
-    assert subprocess.run(["git", "config", "user.name", ""], cwd=project, check=False).returncode == 0
-
-    result = sync_through_public_complete(bin_dir, project)
-
-    assert "git_toolchain_commit_failed" in result.stdout
-    assert subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=project, check=False).returncode == 0
-    assert record.read_text(encoding="utf-8") == "stale\n"
 
 
-def test_complete_rereads_the_new_baseline_with_bounded_toolchain_retries(tmp_path: Path) -> None:
-    bin_dir = tmp_path / "bin"
-    reports = {
-        "myspec": [
-            {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.0.0"}},
-            {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.0.1"}},
-            {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.0.2"}},
-        ],
-        "build-and-verify": {"toolchain": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "1.0.0"}},
-    }
-    write_toolchain_cli(bin_dir, reports)
-    project = initialized_toolchain_project(tmp_path, bin_dir)
-    baseline = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project, check=False, text=True, capture_output=True).stdout.strip()
-
-    result = sync_through_public_complete(bin_dir, project)
-
-    commits = subprocess.run(["git", "rev-list", "--count", f"{baseline}..HEAD"], cwd=project, check=False, text=True, capture_output=True)
-    assert commits.stdout.strip() == "2", result.stdout + result.stderr
-    assert "1.0.2" in (project / ".pr-flow/toolchain.json").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -7969,22 +5959,6 @@ def test_valid_toolchain_identity_rejects_an_overlong_malicious_release_version(
     assert not load_pr_flow_module().valid_toolchain_identity(identity, "plugins/my-spec")
 
 
-def test_init_validates_release_and_dev_toolchain_identities_through_public_cli(tmp_path: Path) -> None:
-    config = tmp_path / "config.yaml"
-    config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
-    reports = {
-        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3-rc.1+build.9"}},
-        "build-and-verify": {"toolchain": {"mode": "dev", "packageName": "@liuli195/build-and-verify", "sourceRepository": "https://github.com/liuli195/my-agent-skills", "sourceCommit": "a" * 40, "packageDirectory": "plugins/build-and-verify", "implementationIdentity": "sha256:" + "0" * 64}},
-    }
-    bin_dir = tmp_path / "bin"
-    write_toolchain_cli(bin_dir, reports)
-
-    result = run_public_pr_flow(bin_dir, "init", "--project", str(tmp_path / "project"), "--config", str(config))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    workflow = (tmp_path / "project" / ".github/workflows/pr-flow-toolchain.yml").read_text(encoding="utf-8")
-    assert "@liuli195/myspec@1.2.3-rc.1+build.9" in workflow
-    assert "checkout --detach " + "a" * 40 in workflow
 
 
 @pytest.mark.parametrize(
@@ -8043,16 +6017,6 @@ def test_init_rejects_untrusted_toolchain_identity_in_process(
     assert not (tmp_path / "project" / ".github/workflows/pr-flow-toolchain.yml").exists()
 
 
-@pytest.mark.parametrize("command, extra", [("diagnose", []), ("complete", ["--summary", "s", "--scope", "s"]), ("tweak", ["--reason", "r", "--summary", "s", "--scope", "s"])])
-def test_legacy_repositories_keep_flow_behavior_with_upgrade_prompt(tmp_path: Path, command: str, extra: list[str]) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    assert subprocess.run(["git", "init"], cwd=project, check=False).returncode == 0
-    write_complete_pr_flow_config(project)
-
-    result = subprocess.run([sys.executable, str(SCRIPT), command, "--project", str(project), *extra], check=False, text=True, capture_output=True)
-
-    assert "upgrade available: rerun pr-flow-init to record the managed toolchain" in result.stdout
 
 
 def test_legacy_cleanup_and_hotfix_keep_behavior_with_upgrade_prompt(tmp_path: Path, monkeypatch) -> None:

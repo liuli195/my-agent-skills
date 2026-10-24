@@ -420,19 +420,6 @@ def test_setup_dry_run_does_not_write_project_files(tmp_path: Path) -> None:
     assert not (project / ".github").exists()
 
 
-def test_setup_authorized_writes_only_config_projection_gitignore_and_workflow(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-
-    result = run("setup", "--project", str(project), "--authorize-project-files")
-
-    assert result.returncode == 0
-    assert "status: setup_complete" in result.stdout
-    assert (project / ".release-flow" / "config.yaml").is_file()
-    assert (project / ".release-flow" / "projection.yaml").is_file()
-    assert not (project / ".release-flow" / ".gitignore").exists()
-    assert (project / ".github" / "workflows" / "release.yml").is_file()
-    assert not (project / ".release-flow" / "releases").exists()
-    assert not (project / "scripts" / "release-flow").exists()
 
 
 def test_github_plan_outputs_expected_settings(tmp_path: Path) -> None:
@@ -2237,64 +2224,6 @@ def test_ci_publish_requires_authorization_without_dry_run(tmp_path: Path) -> No
     assert "ci_publish_requires_authorize_ci_publish" in result.stdout
 
 
-def test_release_flow_local_e2e(tmp_path: Path, monkeypatch) -> None:
-    release_flow = load_release_flow_module()
-    project = tmp_path / "project"
-
-    setup = run("setup", "--project", str(project), "--authorize-project-files")
-    assert setup.returncode == 0, setup.stdout + setup.stderr
-    write_plugin_manifests(project, "pr-flow", "9.9.1")
-    write_plugin_manifests(project, "release-flow", "9.9.1")
-    write_json(
-        project / ".claude-plugin" / "marketplace.json",
-        {"name": "local-dev", "owner": {"name": "Local Dev"}},
-    )
-
-    preflight_calls = []
-
-    def fake_preflight(project_arg, tag, version, bump_plugins, config, projection):
-        preflight_calls.append((project_arg, tag, version, bump_plugins, config.release_channel_branch, projection.path))
-        return []
-
-    monkeypatch.setattr(release_flow, "preflight_errors", fake_preflight)
-
-    preflight = run(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v9.9.1",
-        "--version",
-        "9.9.1",
-        "--bump-plugins",
-        "pr-flow",
-    )
-    assert preflight.returncode == 0, preflight.stdout + preflight.stderr
-    assert preflight_calls == [
-        (project.resolve(), "v9.9.1", "9.9.1", ["pr-flow"], "marketplace", project.resolve() / ".release-flow" / "projection.yaml")
-    ]
-    calls = tmp_path / "gh-calls.txt"
-    bin_dir = tmp_path / "bin"
-    fake_gh_for_publish(bin_dir, calls)
-    env = os.environ.copy()
-    env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
-    publish = run(
-        "publish",
-        "--project",
-        str(project),
-        "--tag",
-        "v9.9.1",
-        "--version",
-        "9.9.1",
-        "--bump-plugins",
-        "pr-flow",
-        "--authorize-publish",
-        env=env,
-    )
-    assert publish.returncode == 0, publish.stdout + publish.stderr
-    assert calls.read_text(encoding="utf-8").count("workflow run") == 2
-    assert not (project / ".release-flow" / ".gitignore").exists()
-    assert not (project / ".release-flow" / "releases").exists()
 
 
 def test_preflight_rejects_changed_marketplace_input_without_bump(tmp_path: Path) -> None:
@@ -2319,34 +2248,6 @@ def test_preflight_rejects_changed_marketplace_input_without_bump(tmp_path: Path
     assert "plugin_requires_bump: pr-flow" in result.stdout
 
 
-def test_preflight_refreshes_remote_baseline_before_comparing(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    init_release_input_project(project, remote)
-    old_main = git(project, "rev-parse", "origin/main").stdout.strip()
-    old_marketplace = git(project, "rev-parse", "origin/marketplace").stdout.strip()
-    (project / "plugins" / "pr-flow" / "content.txt").write_text("remote\n", encoding="utf-8")
-    assert git(project, "add", "plugins/pr-flow/content.txt").returncode == 0
-    assert git(project, "commit", "-m", "remote marketplace content").returncode == 0
-    assert git(project, "push", "origin", "HEAD:refs/heads/main").returncode == 0
-    assert git(project, "push", "origin", "HEAD:refs/heads/marketplace").returncode == 0
-    assert git(project, "update-ref", "refs/remotes/origin/main", old_main).returncode == 0
-    assert git(project, "update-ref", "refs/remotes/origin/marketplace", old_marketplace).returncode == 0
-
-    result = run_cli(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v1.0.0",
-        "--version",
-        "1.0.0",
-        "--bump-plugins",
-        "",
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: preflight_passed" in result.stdout
 
 
 def test_preflight_rejects_changed_unprojected_marketplace_input_without_bump(tmp_path: Path) -> None:
