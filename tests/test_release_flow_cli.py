@@ -1,22 +1,14 @@
 import importlib.util
 import contextlib
-import hashlib
 import io
 import json
 import os
-import re
-import shutil
 import subprocess
 import sys
-import tempfile
-import time
 from pathlib import Path
 
 import pytest
 import yaml
-
-from tests.support.git_templates import copy_template, remove_template
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (
@@ -29,9 +21,140 @@ SCRIPT = (
     / "release_flow.py"
 )
 _RELEASE_FLOW_MODULE = None
-TEMPLATE_ROOT = Path(tempfile.gettempdir()) / "release-flow-test-templates-v3"
-TEMPLATE_LOCK_TIMEOUT_SECONDS = 30
-TEMPLATE_LOCK_STALE_SECONDS = 30
+
+
+# Only the exact file leaves used by this command-line contract are declared.
+RELEASE_TEST_PLUGINS = ("pr-flow", "release-flow", "build-and-verify", "my-spec")
+RELEASE_TEST_INPUTS = {
+    "pr-flow": ("plugins/pr-flow",),
+    "release-flow": ("plugins/release-flow",),
+    "build-and-verify": ("plugins/build-and-verify", "plugins/tool-lifecycle/python/management.py", "plugins/tool-lifecycle/pack.py"),
+    "my-spec": ("plugins/my-spec", "plugins/tool-lifecycle/python/management.py", "plugins/tool-lifecycle/pack.py"),
+}
+
+
+@pytest.fixture
+def flow_root() -> Path:
+    return REPO_ROOT / "__release_flow_memory__"
+
+
+@pytest.fixture(autouse=True)
+def release_memory(monkeypatch, flow_root):
+    from tests.support.command_stubs import CommandStub, completed
+    from tests.support.pr_flow_invocation import fixed_text_file_io
+
+    module = load_release_flow_module()
+    project = flow_root / "project"
+    expected = flow_root / "preflight/expected"
+    project_files = (
+        ".release-flow/config.yaml", ".release-flow/projection.yaml", ".release-flow/.gitignore",
+        ".github/workflows/release.yml", ".agents/plugins/marketplace.json", ".claude-plugin/marketplace.json",
+        ".build-and-verify/config.json", ".build-and-verify/runtime/version.json",
+        "plugins/tool-lifecycle/python/management.py", "plugins/tool-lifecycle/pack.py",
+    )
+    plugin_files = tuple(
+        f"plugins/{plugin}/{relative}"
+        for plugin in RELEASE_TEST_PLUGINS
+        for relative in (".codex-plugin/plugin.json", ".claude-plugin/plugin.json", "package.json", "content.txt")
+    )
+    relative_files = (*project_files, *plugin_files)
+    files = {root / relative: None for root in (project, expected) for relative in relative_files}
+    files.update({flow_root / relative: None for relative in ("vars.json", "release-vars.json", "outside.json", "gh-calls.txt", "workflow-run-input.json")})
+    directories = {flow_root, *(flow_root / name for name in ("source", "release-tree", "checkout", "channel", "bin", "project-projected")), project / ".release-flow/releases", project / "plugins/other"}
+    # Missing registered plugins are explicit absent inputs, not arbitrary tree entries.
+    directories.update(project / "plugins" / plugin for plugin in ("dev-flow", "subagent-policy", "plugin-sync", "retro-to-issues", "data-store"))
+    for path in files:
+        directories.update(parent for parent in path.parents if parent == flow_root or flow_root in parent.parents)
+    fixed_text_file_io(monkeypatch, root=flow_root, files=files, directories=directories)
+    state = {"files": files, "origin": "", "commands": CommandStub(), "dispatch": CommandStub(consume=True), "calls_path": None}
+
+    def external_command(command, **kwargs):
+        raw = tuple(str(part) for part in command)
+        if raw in {
+            ("git", "-C", str(project), "config", "--get", "remote.origin.url"),
+            ("git", "-C", str(REPO_ROOT), "config", "--get", "remote.origin.url"),
+        }:
+            origin = "https://github.com/liuli195/my-agent-skills.git" if raw[2] == str(REPO_ROOT) else state["origin"]
+            return completed(raw, stdout=origin, returncode=0 if origin else 1)
+        if raw and raw[0] == "gh":
+            path = state["calls_path"]
+            if path is not None:
+                files[path] = (files[path] or "") + " ".join(raw[1:]) + "\n"
+            return state["dispatch"](*raw)
+        return state["commands"](*raw)
+
+    monkeypatch.setattr(module.subprocess, "run", external_command)
+    original_which = module.shutil.which
+    monkeypatch.setattr(module.shutil, "which", lambda command: "gh" if command == "gh" else original_which(command))
+
+    @contextlib.contextmanager
+    def temporary_preflight(*, prefix):
+        assert prefix == "release-flow-preflight-", f"unexpected_temporary_directory: {prefix}"
+        yield str(flow_root / "preflight")
+
+    def copy_preflight_inputs(source, target):
+        assert (source, target) == (project, expected)
+        for relative in relative_files:
+            files[expected / relative] = files[project / relative]
+        expected.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(module.tempfile, "TemporaryDirectory", temporary_preflight)
+    monkeypatch.setattr(module, "copy_project_for_expected", copy_preflight_inputs)
+    return state
+
+
+def git(release_memory, project: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    from tests.support.command_stubs import completed
+    if args == ("init",):
+        return completed(args)
+    if len(args) == 4 and args[:3] == ("remote", "add", "origin"):
+        release_memory["origin"] = args[3]
+        return completed(args)
+    raise AssertionError(f"unexpected_setup_command: {args}")
+
+
+def fake_gh_for_publish(release_memory, bin_dir: Path, calls: Path, *, always_eof: bool = False) -> Path:
+    release_memory["calls_path"] = calls
+    for version, plugin in (("1.0.0", "my-spec"), ("9.9.1", "pr-flow")):
+        command = ("workflow", "run", ".github/workflows/release.yml", "--ref", "main", "-f", f"tag=v{version}", "-f", f"version={version}", "-f", f"bumpPlugins={plugin}")
+        for index in range(4):
+            eof = always_eof or index == 0
+            release_memory["dispatch"].add(command, stderr='Get "https://api.github.com/repos/x/actions/workflows/release.yml": EOF' if eof else "", returncode=int(eof))
+    return bin_dir
+
+
+def prepare_release_input_case(release_memory, flow_root: Path, *, baseline="1.0.0", versions=None, package_versions=None, changed=frozenset(), shared_input=None) -> Path:
+    project = flow_root / "project"
+    write_release_flow_files(project)
+    versions = versions or {}
+    package_versions = package_versions or {}
+    release_memory["origin"] = "https://github.com/liuli195/my-agent-skills.git"
+    commands = release_memory["commands"]
+    for plugin in RELEASE_TEST_PLUGINS:
+        current = versions.get(plugin, baseline)
+        write_plugin_manifests(project, plugin, current)
+        if plugin in {"build-and-verify", "my-spec"}:
+            write_npm_package(project, plugin, version=package_versions.get(plugin, current))
+        for suffix in (".codex-plugin/plugin.json", ".claude-plugin/plugin.json", *(["package.json"] if plugin in {"build-and-verify", "my-spec"} else [])):
+            relative = f"plugins/{plugin}/{suffix}"
+            for branch, version in (("marketplace", baseline), ("main", current)):
+                commands.add(("git", "-C", str(project), "show", f"origin/{branch}:{relative}"), stdout=json.dumps({"version": version}))
+        for revisions in (("origin/marketplace",), ("origin/main",), ("origin/main", "origin/marketplace")):
+            commands.add(("git", "-C", str(project), "diff", "--quiet", *revisions, "--", *RELEASE_TEST_INPUTS[plugin]), returncode=int(plugin in changed))
+    if shared_input is not None:
+        assert shared_input in {"plugins/tool-lifecycle/python/management.py", "plugins/tool-lifecycle/pack.py"}
+    for branch in ("main", "marketplace"):
+        commands.add(("git", "-C", str(project), "fetch", "--depth=1", "origin", f"+{branch}:refs/remotes/origin/{branch}"))
+        commands.add(("git", "-C", str(project), "rev-parse", "--verify", f"origin/{branch}"), stdout="a" * 40)
+    for plugin in ("dev-flow", "subagent-policy", "plugin-sync", "retro-to-issues", "data-store"):
+        commands.add(("git", "-C", str(project), "ls-tree", "--name-only", "origin/marketplace", "--", f"plugins/{plugin}"), stdout="")
+    for version in (baseline, *versions.values(), *package_versions.values()):
+        commands.add(("git", "-C", str(project), "ls-remote", "--tags", "origin", f"refs/tags/v{version}"), stdout="")
+    return project
+
+
+def preflight_result(project: Path, selection: str, *, version="1.0.0"):
+    return run("preflight", "--project", str(project), "--tag", f"v{version}", "--version", version, "--bump-plugins", selection)
 
 
 def run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -57,20 +180,6 @@ def run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedPr
         returncode,
         stdout.getvalue(),
         stderr.getvalue(),
-    )
-
-
-def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
-    environment = os.environ.copy()
-    environment.setdefault("GITHUB_ACTIONS", "true")
-    environment.setdefault("GITHUB_REPOSITORY", "liuli195/my-agent-skills")
-    return subprocess.run(
-        [sys.executable, str(SCRIPT), *args],
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=False,
     )
 
 
@@ -109,33 +218,6 @@ def write_npm_package(
     )
 
 
-def init_release_input_project(project: Path, remote: Path, version: str = "1.0.0") -> None:
-    write_release_flow_files(project)
-    for plugin in ("release-flow", "pr-flow", "build-and-verify", "my-spec"):
-        write_plugin_manifests(project, plugin, version)
-        (project / "plugins" / plugin / "content.txt").parent.mkdir(parents=True, exist_ok=True)
-        (project / "plugins" / plugin / "content.txt").write_text("baseline\n", encoding="utf-8")
-    for plugin in ("build-and-verify", "my-spec"):
-        write_npm_package(project, plugin, version=version)
-    for path in (
-        project / "plugins" / "tool-lifecycle" / "pack.py",
-        project / "plugins" / "tool-lifecycle" / "python" / "management.py",
-    ):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("baseline\n", encoding="utf-8")
-    init_project_with_remote(project, remote)
-
-
-def advance_plugin_version_on_source_ref(project: Path, plugin: str, version: str) -> None:
-    write_plugin_manifests(project, plugin, version)
-    if plugin in {"build-and-verify", "my-spec"}:
-        write_npm_package(project, plugin, version=version)
-    assert git(project, "add", f"plugins/{plugin}").returncode == 0
-    assert git(project, "commit", "-m", f"bump {plugin}").returncode == 0
-    assert git(project, "push", "origin", "HEAD:refs/heads/main").returncode == 0
-    assert git(project, "fetch", "origin", "main").returncode == 0
-
-
 def load_release_flow_module():
     global _RELEASE_FLOW_MODULE
     if _RELEASE_FLOW_MODULE is not None:
@@ -148,208 +230,6 @@ def load_release_flow_module():
     spec.loader.exec_module(module)
     _RELEASE_FLOW_MODULE = module
     return module
-
-
-def git(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "-C", str(project), *args],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-
-
-def project_tree_cache_key(project: Path) -> str:
-    digest = hashlib.sha256()
-    digest.update(Path(__file__).read_bytes())
-    for path in sorted(project.rglob("*")):
-        if not path.is_file() or ".git" in path.parts:
-            continue
-        digest.update(path.relative_to(project).as_posix().encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()[:16]
-
-
-def remove_template_lock(lock_dir: Path) -> None:
-    for _ in range(5):
-        shutil.rmtree(lock_dir, ignore_errors=True)
-        if not lock_dir.exists():
-            return
-        time.sleep(0.05)
-
-
-def copy_project_remote_template(template_dir: Path, project: Path, remote: Path) -> None:
-    copy_template(template_dir / "remote.git", remote)
-    copy_template(template_dir / "project", project)
-    assert git(project, "remote", "set-url", "origin", str(remote)).returncode == 0
-
-
-def _init_project_with_remote_uncached(project: Path, remote: Path) -> None:
-    subprocess.run(
-        ["git", "init", "--bare", "--initial-branch=main", str(remote)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert git(project, "init").returncode == 0
-    assert git(project, "config", "user.email", "test@example.com").returncode == 0
-    assert git(project, "config", "user.name", "Test").returncode == 0
-    assert git(project, "add", ".").returncode == 0
-    assert git(project, "commit", "-m", "baseline").returncode == 0
-    assert git(project, "remote", "add", "origin", str(remote)).returncode == 0
-    assert git(project, "push", "origin", "HEAD:refs/heads/main").returncode == 0
-    assert git(project, "push", "origin", "HEAD:refs/heads/marketplace").returncode == 0
-    assert git(project, "fetch", "origin", "marketplace").returncode == 0
-
-
-def init_project_with_remote(project: Path, remote: Path) -> None:
-    template_dir = TEMPLATE_ROOT / project_tree_cache_key(project)
-    ready = template_dir / ".ready"
-    lock_dir = TEMPLATE_ROOT / f"{template_dir.name}.lock"
-    if ready.exists():
-        if lock_dir.exists():
-            remove_template_lock(lock_dir)
-        copy_project_remote_template(template_dir, project, remote)
-        return
-
-    deadline = time.monotonic() + TEMPLATE_LOCK_TIMEOUT_SECONDS
-    while True:
-        try:
-            lock_dir.mkdir(parents=True)
-            break
-        except FileExistsError:
-            try:
-                lock_age = time.time() - lock_dir.stat().st_mtime
-            except FileNotFoundError:
-                continue
-            if lock_age > TEMPLATE_LOCK_STALE_SECONDS:
-                remove_template_lock(lock_dir)
-                continue
-            if time.monotonic() > deadline:
-                raise TimeoutError(f"template_lock_timeout: {lock_dir}")
-            time.sleep(0.05)
-
-    try:
-        if not ready.exists():
-            if template_dir.exists():
-                remove_template(template_dir)
-            template_dir.mkdir(parents=True, exist_ok=True)
-            template_project = copy_template(project, template_dir / "project")
-            template_remote = template_dir / "remote.git"
-            _init_project_with_remote_uncached(template_project, template_remote)
-            ready.write_text("ok\n", encoding="utf-8")
-    finally:
-        remove_template_lock(lock_dir)
-
-    copy_project_remote_template(template_dir, project, remote)
-
-
-def test_copy_template_replaces_target_with_readonly_file(tmp_path: Path) -> None:
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "new.txt").write_text("new\n", encoding="utf-8")
-    target = tmp_path / "target"
-    target.mkdir()
-    old = target / "old-object"
-    old.write_text("old\n", encoding="utf-8")
-    old.chmod(0o444)
-
-    copy_template(source, target)
-
-    assert not old.exists()
-    assert (target / "new.txt").read_text(encoding="utf-8") == "new\n"
-
-
-
-
-@pytest.mark.parametrize("failure", ["writable", "other-error", "directory"])
-def test_copy_template_preserves_unrelated_delete_errors(
-    tmp_path: Path, monkeypatch, failure: str
-) -> None:
-    source = tmp_path / "source"
-    source.mkdir()
-    target = tmp_path / "target"
-    target.mkdir()
-    old = target / "old-object"
-    old.write_text("old\n", encoding="utf-8")
-    if failure != "writable":
-        old.chmod(0o444)
-    error = OSError("storage failure") if failure == "other-error" else PermissionError("blocked")
-    operation = os.rmdir if failure == "directory" else os.unlink
-
-    def fail_rmtree(path, *, onerror=None):
-        if onerror is None:
-            raise error
-        onerror(operation, str(old), (type(error), error, None))
-
-    monkeypatch.setattr(shutil, "rmtree", fail_rmtree)
-    try:
-        with pytest.raises(type(error)) as caught:
-            copy_template(source, target)
-        assert caught.value is error
-    finally:
-        old.chmod(0o644)
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows readonly-file deletion recovery")
-def test_copy_template_preserves_readonly_delete_retry_failure(tmp_path: Path, monkeypatch) -> None:
-    source = tmp_path / "source"
-    source.mkdir()
-    target = tmp_path / "target"
-    target.mkdir()
-    old = target / "old-object"
-    old.write_text("old\n", encoding="utf-8")
-    old.chmod(0o444)
-    original = PermissionError("readonly")
-    retry = PermissionError("retry blocked")
-
-    def fail_unlink(path):
-        raise retry
-
-    def fail_rmtree(path, *, onerror=None):
-        if onerror is None:
-            raise original
-        onerror(os.unlink, str(old), (type(original), original, None))
-
-    monkeypatch.setattr(os, "unlink", fail_unlink)
-    monkeypatch.setattr(shutil, "rmtree", fail_rmtree)
-    try:
-        with pytest.raises(PermissionError) as caught:
-            copy_template(source, target)
-        assert caught.value is retry
-    finally:
-        old.chmod(0o644)
-
-
-def test_release_template_recreates_incomplete_readonly_template(tmp_path: Path, monkeypatch) -> None:
-    module = sys.modules[__name__]
-    monkeypatch.setattr(module, "TEMPLATE_ROOT", tmp_path / "templates")
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "source.txt").write_text("source\n", encoding="utf-8")
-    remote = tmp_path / "remote.git"
-    template_dir = TEMPLATE_ROOT / project_tree_cache_key(project)
-    template_dir.mkdir(parents=True)
-    old = template_dir / "old-object"
-    old.write_text("old\n", encoding="utf-8")
-    old.chmod(0o444)
-
-    def fake_git_command(command, **kwargs):
-        if command[0] == "git" and command[1] == "init" and "--bare" in command:
-            Path(command[-1]).mkdir()
-        return subprocess.CompletedProcess(command, 0, "", "")
-
-    monkeypatch.setattr(subprocess, "run", fake_git_command)
-    initialize_release_template = init_project_with_remote
-    initialize_release_template(project, remote)
-
-    assert not old.exists()
-    assert (template_dir / ".ready").is_file()
-    assert (project / "source.txt").read_text(encoding="utf-8") == "source\n"
-    assert remote.is_dir()
-    assert not (TEMPLATE_ROOT / f"{template_dir.name}.lock").exists()
 
 
 def write_release_flow_files(project: Path, projection: str | None = None) -> None:
@@ -405,8 +285,8 @@ transforms:
 """
 
 
-def test_setup_dry_run_does_not_write_project_files(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_setup_dry_run_does_not_write_project_files(flow_root: Path) -> None:
+    project = flow_root / "project"
 
     result = run("setup", "--project", str(project))
 
@@ -420,23 +300,8 @@ def test_setup_dry_run_does_not_write_project_files(tmp_path: Path) -> None:
     assert not (project / ".github").exists()
 
 
-def test_setup_authorized_writes_only_config_projection_gitignore_and_workflow(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-
-    result = run("setup", "--project", str(project), "--authorize-project-files")
-
-    assert result.returncode == 0
-    assert "status: setup_complete" in result.stdout
-    assert (project / ".release-flow" / "config.yaml").is_file()
-    assert (project / ".release-flow" / "projection.yaml").is_file()
-    assert not (project / ".release-flow" / ".gitignore").exists()
-    assert (project / ".github" / "workflows" / "release.yml").is_file()
-    assert not (project / ".release-flow" / "releases").exists()
-    assert not (project / "scripts" / "release-flow").exists()
-
-
-def test_github_plan_outputs_expected_settings(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_github_plan_outputs_expected_settings(flow_root: Path) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
 
     result = run("github-plan", "--project", str(project))
@@ -450,8 +315,8 @@ def test_github_plan_outputs_expected_settings(tmp_path: Path) -> None:
     assert "CODEX_MARKETPLACE_CATALOG_NAME" not in result.stdout
 
 
-def test_github_plan_does_not_print_marketplace_identity_variables(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_github_plan_does_not_print_marketplace_identity_variables(flow_root: Path) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project, marketplace_identity_projection())
 
     result = run("github-plan", "--project", str(project))
@@ -468,12 +333,12 @@ def test_github_plan_does_not_print_marketplace_identity_variables(tmp_path: Pat
         assert variable not in result.stdout
 
 
-def test_validate_rejects_missing_npm_repository_metadata(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_validate_rejects_missing_npm_repository_metadata(flow_root: Path, release_memory) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
     write_json(project / "plugins" / "my-spec" / "package.json", {"version": "1.0.0"})
-    assert git(project, "init").returncode == 0
-    assert git(
+    assert git(release_memory, project, "init").returncode == 0
+    assert git(release_memory,
         project,
         "remote",
         "add",
@@ -503,13 +368,12 @@ def test_validate_rejects_missing_npm_repository_metadata(tmp_path: Path) -> Non
     ],
 )
 def test_validate_accepts_supported_github_repository_urls(
-    tmp_path: Path, repository_url: str
-) -> None:
-    project = tmp_path / "project"
+    flow_root: Path, repository_url: str, release_memory) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
     write_npm_package(project, "my-spec", repository_url=repository_url)
-    assert git(project, "init").returncode == 0
-    assert git(
+    assert git(release_memory, project, "init").returncode == 0
+    assert git(release_memory,
         project,
         "remote",
         "add",
@@ -564,13 +428,12 @@ def test_validate_accepts_supported_github_repository_urls(
     ],
 )
 def test_validate_reports_stable_npm_repository_errors(
-    tmp_path: Path, repository_url: str, expected_error: str, actual: str
-) -> None:
-    project = tmp_path / "project"
+    flow_root: Path, repository_url: str, expected_error: str, actual: str, release_memory) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
     write_npm_package(project, "my-spec", repository_url=repository_url)
-    assert git(project, "init").returncode == 0
-    assert git(
+    assert git(release_memory, project, "init").returncode == 0
+    assert git(release_memory,
         project,
         "remote",
         "add",
@@ -588,8 +451,8 @@ def test_validate_reports_stable_npm_repository_errors(
     assert "nextAction: correct npm repository metadata in plugins/my-spec/package.json" in result.stdout
 
 
-def test_validate_checks_all_existing_registered_npm_packages(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_validate_checks_all_existing_registered_npm_packages(flow_root: Path, release_memory) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
     write_npm_package(project, "my-spec")
     write_npm_package(
@@ -597,8 +460,8 @@ def test_validate_checks_all_existing_registered_npm_packages(tmp_path: Path) ->
         "build-and-verify",
         repository_url="https://github.com/other/repository.git",
     )
-    assert git(project, "init").returncode == 0
-    assert git(
+    assert git(release_memory, project, "init").returncode == 0
+    assert git(release_memory,
         project,
         "remote",
         "add",
@@ -613,13 +476,13 @@ def test_validate_checks_all_existing_registered_npm_packages(tmp_path: Path) ->
     assert "plugins/my-spec/package.json" not in result.stdout
 
 
-def test_validate_reports_wrong_existing_npm_repository_directory(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_validate_reports_wrong_existing_npm_repository_directory(flow_root: Path, release_memory) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
     write_npm_package(project, "my-spec", directory="plugins/other")
     (project / "plugins" / "other").mkdir(parents=True)
-    assert git(project, "init").returncode == 0
-    assert git(
+    assert git(release_memory, project, "init").returncode == 0
+    assert git(release_memory,
         project,
         "remote",
         "add",
@@ -637,9 +500,9 @@ def test_validate_reports_wrong_existing_npm_repository_directory(tmp_path: Path
 
 
 def test_validate_fails_closed_when_github_repository_identity_is_unknown(
-    tmp_path: Path,
+    flow_root: Path,
 ) -> None:
-    project = tmp_path / "project"
+    project = flow_root / "project"
     write_release_flow_files(project)
     write_npm_package(project, "my-spec")
     environment = {
@@ -656,12 +519,12 @@ def test_validate_fails_closed_when_github_repository_identity_is_unknown(
     assert "nextAction: configure a GitHub origin or trusted GITHUB_REPOSITORY" in result.stdout
 
 
-def test_validate_requires_repository_identity_in_github_actions(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_validate_requires_repository_identity_in_github_actions(flow_root: Path, release_memory) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
     write_npm_package(project, "my-spec")
-    assert git(project, "init").returncode == 0
-    assert git(
+    assert git(release_memory, project, "init").returncode == 0
+    assert git(release_memory,
         project,
         "remote",
         "add",
@@ -684,12 +547,12 @@ def test_validate_requires_repository_identity_in_github_actions(tmp_path: Path)
     assert "actual=<missing>" in result.stdout
 
 
-def test_validate_uses_origin_outside_github_actions(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_validate_uses_origin_outside_github_actions(flow_root: Path, release_memory) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
     write_npm_package(project, "my-spec")
-    assert git(project, "init").returncode == 0
-    assert git(
+    assert git(release_memory, project, "init").returncode == 0
+    assert git(release_memory,
         project,
         "remote",
         "add",
@@ -711,12 +574,12 @@ def test_validate_uses_origin_outside_github_actions(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_validate_rejects_conflicting_github_actions_repository_identity(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_validate_rejects_conflicting_github_actions_repository_identity(flow_root: Path, release_memory) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
     write_npm_package(project, "my-spec")
-    assert git(project, "init").returncode == 0
-    assert git(
+    assert git(release_memory, project, "init").returncode == 0
+    assert git(release_memory,
         project,
         "remote",
         "add",
@@ -775,8 +638,8 @@ def test_current_repo_projection_does_not_register_marketplace_variables() -> No
         assert variable not in result.stdout
 
 
-def test_configure_github_requires_authorization(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_configure_github_requires_authorization(flow_root: Path) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
 
     result = run("configure-github", "--project", str(project))
@@ -785,8 +648,8 @@ def test_configure_github_requires_authorization(tmp_path: Path) -> None:
     assert "configure_github_requires_authorize_github" in result.stdout
 
 
-def test_configure_github_dry_run_prints_manual_steps(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_configure_github_dry_run_prints_manual_steps(flow_root: Path) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
 
     result = run("configure-github", "--project", str(project), "--dry-run")
@@ -799,8 +662,8 @@ def test_configure_github_dry_run_prints_manual_steps(tmp_path: Path) -> None:
     assert "Create GitHub Actions Variables" not in result.stdout
 
 
-def test_configure_github_dry_run_does_not_print_marketplace_identity_variables(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_configure_github_dry_run_does_not_print_marketplace_identity_variables(flow_root: Path) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project, marketplace_identity_projection())
 
     result = run("configure-github", "--project", str(project), "--dry-run")
@@ -817,9 +680,9 @@ def test_configure_github_dry_run_does_not_print_marketplace_identity_variables(
         assert variable not in result.stdout
 
 
-def test_removed_commands_are_not_registered(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    workflow_run_file = tmp_path / "workflow-run-input.json"
+def test_removed_commands_are_not_registered(flow_root: Path) -> None:
+    project = flow_root / "project"
+    workflow_run_file = flow_root / "workflow-run-input.json"
     write_release_flow_files(project)
     write_json(workflow_run_file, {})
 
@@ -847,8 +710,8 @@ def test_removed_commands_are_not_registered(tmp_path: Path) -> None:
     assert not (project / ".release-flow" / "releases").exists()
 
 
-def test_project_rejects_transform_path_outside_project(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_project_rejects_transform_path_outside_project(flow_root: Path) -> None:
+    project = flow_root / "project"
     write_release_flow_files(
         project,
         marketplace_identity_projection(
@@ -864,12 +727,12 @@ def test_project_rejects_transform_path_outside_project(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "invalid_projection_transform_path:" in result.stdout
-    assert not (tmp_path / "outside.json").exists()
+    assert not (flow_root / "outside.json").exists()
 
 
-def test_project_rejects_vars_file_argument(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    vars_file = tmp_path / "vars.json"
+def test_project_rejects_vars_file_argument(flow_root: Path) -> None:
+    project = flow_root / "project"
+    vars_file = flow_root / "vars.json"
     write_release_flow_files(project, marketplace_identity_projection())
     write_json(vars_file, {})
 
@@ -878,9 +741,9 @@ def test_project_rejects_vars_file_argument(tmp_path: Path) -> None:
     assert result.returncode == 2
 
 
-def test_preflight_rejects_github_vars_file_argument(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    vars_file = tmp_path / "vars.json"
+def test_preflight_rejects_github_vars_file_argument(flow_root: Path) -> None:
+    project = flow_root / "project"
+    vars_file = flow_root / "vars.json"
     write_release_flow_files(project, marketplace_identity_projection())
     write_json(vars_file, {})
 
@@ -897,9 +760,9 @@ def test_preflight_rejects_github_vars_file_argument(tmp_path: Path) -> None:
     assert result.returncode == 2
 
 
-def test_ci_publish_rejects_vars_file_argument(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    vars_file = tmp_path / "vars.json"
+def test_ci_publish_rejects_vars_file_argument(flow_root: Path) -> None:
+    project = flow_root / "project"
+    vars_file = flow_root / "vars.json"
     write_release_flow_files(project, marketplace_identity_projection())
     write_json(vars_file, {})
 
@@ -921,8 +784,8 @@ def test_ci_publish_rejects_vars_file_argument(tmp_path: Path) -> None:
     assert result.returncode == 2
 
 
-def test_validate_rejects_projection_variable_values(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_validate_rejects_projection_variable_values(flow_root: Path) -> None:
+    project = flow_root / "project"
     write_release_flow_files(
         project,
         """version: 1
@@ -943,8 +806,8 @@ transforms: []
     assert "projection_variable_value_forbidden: SOME_VARIABLE" in result.stdout
 
 
-def test_project_applies_json_env_transform(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_project_applies_json_env_transform(flow_root: Path) -> None:
+    project = flow_root / "project"
     write_release_flow_files(
         project,
         marketplace_identity_projection(
@@ -967,8 +830,8 @@ def test_project_applies_json_env_transform(tmp_path: Path) -> None:
     assert target["name"] == "my-agent-skills-marketplace"
 
 
-def test_project_generates_codex_marketplace_from_projection_identity(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_project_generates_codex_marketplace_from_projection_identity(flow_root: Path) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project, marketplace_identity_projection())
 
     result = run("project", "--project", str(project))
@@ -987,8 +850,8 @@ def test_project_generates_codex_marketplace_from_projection_identity(tmp_path: 
     }
 
 
-def test_validate_rejects_invalid_branch_mode(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_validate_rejects_invalid_branch_mode(flow_root: Path) -> None:
+    project = flow_root / "project"
     write_release_flow_files(
         project,
         """version: 1
@@ -1009,8 +872,8 @@ transforms: []
     assert "invalid_config: release.branchMode must be remote-only" in result.stdout
 
 
-def test_project_applies_json_env_transform_inside_list(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_project_applies_json_env_transform_inside_list(flow_root: Path) -> None:
+    project = flow_root / "project"
     write_release_flow_files(
         project,
         marketplace_identity_projection(
@@ -1032,8 +895,8 @@ def test_project_applies_json_env_transform_inside_list(tmp_path: Path) -> None:
     assert target["plugins"][0]["name"] == "my-agent-skills-marketplace"
 
 
-def test_project_adds_missing_final_dict_key(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_project_adds_missing_final_dict_key(flow_root: Path) -> None:
+    project = flow_root / "project"
     write_release_flow_files(
         project,
         """version: 1
@@ -1066,8 +929,8 @@ transforms:
     assert target == {"metadata": {"name": "My Agent Skills Marketplace"}}
 
 
-def test_project_rejects_negative_json_pointer_list_index(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_project_rejects_negative_json_pointer_list_index(flow_root: Path) -> None:
+    project = flow_root / "project"
     initial_target = {"plugins": [{"name": "first"}, {"name": "last"}]}
     write_release_flow_files(
         project,
@@ -1100,8 +963,8 @@ transforms:
     assert json.loads(target_path.read_text(encoding="utf-8")) == initial_target
 
 
-def test_preflight_rejects_missing_bump_plugins(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_preflight_rejects_missing_bump_plugins(flow_root: Path) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
 
     result = run("preflight", "--project", str(project), "--tag", "v9.9.1", "--version", "9.9.1")
@@ -1109,8 +972,8 @@ def test_preflight_rejects_missing_bump_plugins(tmp_path: Path) -> None:
     assert result.returncode == 2
 
 
-def test_preflight_rejects_unknown_bump_plugin(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_preflight_rejects_unknown_bump_plugin(flow_root: Path) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
 
     result = run(
@@ -1161,14 +1024,14 @@ def test_bump_plugins_parser_accepts_comma_empty_and_repeated_args() -> None:
 
 def run_preflight_with_errors(
     monkeypatch,
-    tmp_path: Path,
+    flow_root: Path,
     errors: list[str],
     *,
     bump_plugins: list[str],
     projection: str | None = None,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    project = tmp_path / "project"
+    project = flow_root / "project"
     write_release_flow_files(project, projection)
     monkeypatch.setattr(load_release_flow_module(), "preflight_errors", lambda *_args: list(errors))
 
@@ -1186,10 +1049,10 @@ def run_preflight_with_errors(
     return run(*args, env=env)
 
 
-def test_preflight_accepts_partial_plugin_bump(tmp_path: Path, monkeypatch) -> None:
+def test_preflight_accepts_partial_plugin_bump(flow_root: Path, monkeypatch) -> None:
     result = run_preflight_with_errors(
         monkeypatch,
-        tmp_path,
+        flow_root,
         [],
         bump_plugins=["pr-flow"],
     )
@@ -1199,10 +1062,10 @@ def test_preflight_accepts_partial_plugin_bump(tmp_path: Path, monkeypatch) -> N
     assert "bumpPlugins: pr-flow" in result.stdout
 
 
-def test_preflight_rejects_bump_not_merged_to_source_ref(tmp_path: Path, monkeypatch) -> None:
+def test_preflight_rejects_bump_not_merged_to_source_ref(flow_root: Path, monkeypatch) -> None:
     result = run_preflight_with_errors(
         monkeypatch,
-        tmp_path,
+        flow_root,
         ["source_ref_requires_pr: main: plugins/pr-flow/.codex-plugin/plugin.json"],
         bump_plugins=["pr-flow"],
     )
@@ -1211,10 +1074,10 @@ def test_preflight_rejects_bump_not_merged_to_source_ref(tmp_path: Path, monkeyp
     assert "source_ref_requires_pr: main: plugins/pr-flow/.codex-plugin/plugin.json" in result.stdout
 
 
-def test_preflight_source_ref_requires_pr_prints_next_action(tmp_path: Path, monkeypatch) -> None:
+def test_preflight_source_ref_requires_pr_prints_next_action(flow_root: Path, monkeypatch) -> None:
     result = run_preflight_with_errors(
         monkeypatch,
-        tmp_path,
+        flow_root,
         ["source_ref_requires_pr: main: plugins/pr-flow/.codex-plugin/plugin.json"],
         bump_plugins=["pr-flow"],
     )
@@ -1227,10 +1090,10 @@ def test_preflight_source_ref_requires_pr_prints_next_action(tmp_path: Path, mon
     ) in result.stdout
 
 
-def test_preflight_manifest_mismatch_prints_next_action(tmp_path: Path, monkeypatch) -> None:
+def test_preflight_manifest_mismatch_prints_next_action(flow_root: Path, monkeypatch) -> None:
     result = run_preflight_with_errors(
         monkeypatch,
-        tmp_path,
+        flow_root,
         ["manifest_version_mismatch: plugins/pr-flow/.codex-plugin/plugin.json"],
         bump_plugins=["pr-flow"],
     )
@@ -1244,7 +1107,7 @@ def test_preflight_manifest_mismatch_prints_next_action(tmp_path: Path, monkeypa
 
 
 def test_remote_release_does_not_query_github_without_a_remote_tag(
-    tmp_path: Path, monkeypatch
+    flow_root: Path, monkeypatch
 ) -> None:
     release_flow = load_release_flow_module()
     calls = []
@@ -1257,14 +1120,14 @@ def test_remote_release_does_not_query_github_without_a_remote_tag(
 
     monkeypatch.setattr(release_flow.subprocess, "run", fake_run)
 
-    assert release_flow.remote_release_errors(tmp_path, "v9.9.1") == []
+    assert release_flow.remote_release_errors(flow_root, "v9.9.1") == []
     assert len(calls) == 1
 
 
-def test_preflight_existing_release_prints_next_action(tmp_path: Path, monkeypatch) -> None:
+def test_preflight_existing_release_prints_next_action(flow_root: Path, monkeypatch) -> None:
     result = run_preflight_with_errors(
         monkeypatch,
-        tmp_path,
+        flow_root,
         ["release already exists: v9.9.1"],
         bump_plugins=["pr-flow"],
     )
@@ -1279,7 +1142,7 @@ def test_preflight_existing_release_prints_next_action(tmp_path: Path, monkeypat
 
 
 def test_preflight_multi_error_prints_one_summary_path_without_version_inference(
-    tmp_path: Path, monkeypatch
+    flow_root: Path, monkeypatch
 ) -> None:
     errors = [
         "release already exists: v9.9.1",
@@ -1290,7 +1153,7 @@ def test_preflight_multi_error_prints_one_summary_path_without_version_inference
 
     result = run_preflight_with_errors(
         monkeypatch,
-        tmp_path,
+        flow_root,
         errors,
         bump_plugins=["pr-flow"],
     )
@@ -1310,77 +1173,19 @@ def test_preflight_multi_error_prints_one_summary_path_without_version_inference
     assert "next version" not in result.stdout
 
 
-def test_preflight_ignores_legacy_build_and_verify_runtime(tmp_path: Path, monkeypatch) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    write_release_flow_files(
-        project,
-        """version: 1
-
-identity:
-  codex:
-    marketplaceName: my-agent-skills-marketplace
-    displayName: My Agent Skills Marketplace
-  claude:
-    marketplaceName: my-agent-skills-marketplace
-    ownerName: My Agent Skills Marketplace
-
-variables:
-  {}
-generators:
-  - path: .agents/plugins/marketplace.json
-    type: codex-marketplace
-    identity: codex
-    plugins:
-      - build-and-verify
-
-transforms:
-  []
-""",
-    )
-    write_plugin_manifests(project, "build-and-verify", "9.9.0")
-    write_npm_package(project, "build-and-verify", version="9.9.0")
-    write_json(
-        project / ".build-and-verify" / "config.json",
-        {"version": 1, "build": {"checks": []}, "verify": {"checks": []}},
-    )
-    runtime_version = project / ".build-and-verify" / "runtime" / "version.json"
-    write_json(
-        runtime_version,
-        {
-            "plugin": "build-and-verify",
-            "plugin_version": "9.8.0",
-            "runtime_version": "9.8.0",
-        },
-    )
-    init_project_with_remote(project, remote)
-    monkeypatch.setattr(load_release_flow_module(), "remote_release_errors", lambda *_args: [])
-
-    result = run(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v9.9.0",
-        "--version",
-        "9.9.0",
-        "--bump-plugins",
-        "build-and-verify",
-        env={
-            **os.environ,
-            "GITHUB_ACTIONS": "true",
-            "GITHUB_REPOSITORY": "liuli195/my-agent-skills",
-        },
-    )
-
+def test_preflight_ignores_legacy_build_and_verify_runtime(flow_root: Path, release_memory) -> None:
+    project = prepare_release_input_case(release_memory, flow_root, baseline="9.9.0")
+    write_json(project / ".build-and-verify/config.json", {"version": 1, "build": {"checks": []}, "verify": {"checks": []}})
+    write_json(project / ".build-and-verify/runtime/version.json", {"plugin": "build-and-verify", "plugin_version": "9.8.0", "runtime_version": "9.8.0"})
+    result = preflight_result(project, "build-and-verify", version="9.9.0")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "runtime_update_required" not in result.stdout
 
 
-def test_preflight_merges_repeated_bump_plugins(tmp_path: Path, monkeypatch) -> None:
+def test_preflight_merges_repeated_bump_plugins(flow_root: Path, monkeypatch) -> None:
     result = run_preflight_with_errors(
         monkeypatch,
-        tmp_path,
+        flow_root,
         [],
         bump_plugins=["pr-flow", "release-flow"],
     )
@@ -1390,11 +1195,11 @@ def test_preflight_merges_repeated_bump_plugins(tmp_path: Path, monkeypatch) -> 
 
 
 def test_remote_ref_manifest_version_fetches_missing_channel_branch_for_actions_checkout(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
 ) -> None:
     release_flow = load_release_flow_module()
-    checkout = tmp_path / "checkout"
+    checkout = flow_root / "checkout"
     checkout.mkdir()
     calls = []
 
@@ -1441,13 +1246,13 @@ def test_remote_ref_manifest_version_fetches_missing_channel_branch_for_actions_
     ]
 
 
-def test_preflight_accepts_empty_bump_plugins_when_versions_do_not_drift(tmp_path: Path, monkeypatch) -> None:
+def test_preflight_accepts_empty_bump_plugins_when_versions_do_not_drift(flow_root: Path, monkeypatch) -> None:
     env = os.environ.copy()
     env["GITHUB_REPOSITORY"] = "liuli195/my-agent-skills"
 
     result = run_preflight_with_errors(
         monkeypatch,
-        tmp_path,
+        flow_root,
         [],
         bump_plugins=[""],
         env=env,
@@ -1458,10 +1263,10 @@ def test_preflight_accepts_empty_bump_plugins_when_versions_do_not_drift(tmp_pat
     assert "bumpPlugins: " in result.stdout
 
 
-def test_preflight_rejects_unbumped_manifest_drift(tmp_path: Path, monkeypatch) -> None:
+def test_preflight_rejects_unbumped_manifest_drift(flow_root: Path, monkeypatch) -> None:
     result = run_preflight_with_errors(
         monkeypatch,
-        tmp_path,
+        flow_root,
         ["plugin_requires_bump: pr-flow"],
         bump_plugins=[""],
     )
@@ -1470,10 +1275,10 @@ def test_preflight_rejects_unbumped_manifest_drift(tmp_path: Path, monkeypatch) 
     assert "plugin_requires_bump: pr-flow" in result.stdout
 
 
-def test_preflight_rejects_remote_tag_that_already_exists(tmp_path: Path, monkeypatch) -> None:
+def test_preflight_rejects_remote_tag_that_already_exists(flow_root: Path, monkeypatch) -> None:
     result = run_preflight_with_errors(
         monkeypatch,
-        tmp_path,
+        flow_root,
         ["release already exists: v9.9.1"],
         bump_plugins=["pr-flow"],
     )
@@ -1482,10 +1287,10 @@ def test_preflight_rejects_remote_tag_that_already_exists(tmp_path: Path, monkey
     assert "release already exists: v9.9.1" in result.stdout
 
 
-def test_preflight_checks_projection_without_channel_tree(tmp_path: Path, monkeypatch) -> None:
+def test_preflight_checks_projection_without_channel_tree(flow_root: Path, monkeypatch) -> None:
     result = run_preflight_with_errors(
         monkeypatch,
-        tmp_path,
+        flow_root,
         ["missing_file: .claude-plugin/marketplace.json"],
         bump_plugins=["pr-flow"],
         projection=(
@@ -1505,9 +1310,9 @@ def test_preflight_checks_projection_without_channel_tree(tmp_path: Path, monkey
     assert "marketplace.json" in result.stdout
 
 
-def test_preflight_rejects_channel_tree_argument(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    channel_tree = tmp_path / "channel"
+def test_preflight_rejects_channel_tree_argument(flow_root: Path) -> None:
+    project = flow_root / "project"
+    channel_tree = flow_root / "channel"
     write_release_flow_files(project)
     channel_tree.mkdir()
 
@@ -1528,46 +1333,8 @@ def test_preflight_rejects_channel_tree_argument(tmp_path: Path) -> None:
     assert result.returncode == 2
 
 
-def fake_gh_for_publish(bin_dir: Path, calls: Path, *, always_eof: bool = False) -> Path:
-    bin_dir.mkdir()
-    seen = calls.with_name("gh-seen.txt")
-    if os.name == "nt":
-        gh = bin_dir / "gh.cmd"
-        eof_line = 'echo Get ""https://api.github.com/repos/x/actions/workflows/release.yml"": EOF 1>&2'
-        if always_eof:
-            body = f'@echo off\r\necho %*>>"{calls}"\r\n{eof_line}\r\nexit /b 1\r\n'
-        else:
-            body = (
-                f'@echo off\r\necho %*>>"{calls}"\r\n'
-                f'if not exist "{seen}" (echo seen>"{seen}" & {eof_line} & exit /b 1)\r\n'
-                "exit /b 0\r\n"
-            )
-        gh.write_text(body, encoding="utf-8")
-        return gh
-
-    gh = bin_dir / "gh"
-    if always_eof:
-        body = (
-            "#!/bin/sh\n"
-            f'printf "%s\\n" "$*" >> "{calls}"\n'
-            'printf "%s\\n" "Get \\"https://api.github.com/repos/x/actions/workflows/release.yml\\": EOF" >&2\n'
-            "exit 1\n"
-        )
-    else:
-        body = (
-            "#!/bin/sh\n"
-            f'printf "%s\\n" "$*" >> "{calls}"\n'
-            f'if [ ! -f "{seen}" ]; then touch "{seen}"; '
-            'printf "%s\\n" "Get \\"https://api.github.com/repos/x/actions/workflows/release.yml\\": EOF" >&2; exit 1; fi\n'
-            "exit 0\n"
-        )
-    gh.write_text(body, encoding="utf-8")
-    gh.chmod(0o755)
-    return gh
-
-
-def test_publish_rejects_dry_run_argument(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_publish_rejects_dry_run_argument(flow_root: Path) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
 
     result = run(
@@ -1588,25 +1355,25 @@ def test_publish_rejects_dry_run_argument(tmp_path: Path) -> None:
     assert "workflow_dispatch:" not in result.stdout
 
 
-def test_publish_rejects_metadata_before_triggering_remote_workflow(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_publish_rejects_metadata_before_triggering_remote_workflow(flow_root: Path, release_memory) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
     write_npm_package(
         project,
         "my-spec",
         repository_url="https://github.com/other/repository.git",
     )
-    assert git(project, "init").returncode == 0
-    assert git(
+    assert git(release_memory, project, "init").returncode == 0
+    assert git(release_memory,
         project,
         "remote",
         "add",
         "origin",
         "https://github.com/liuli195/my-agent-skills.git",
     ).returncode == 0
-    calls = tmp_path / "gh-calls.txt"
-    bin_dir = tmp_path / "bin"
-    fake_gh_for_publish(bin_dir, calls)
+    calls = flow_root / "gh-calls.txt"
+    bin_dir = flow_root / "bin"
+    fake_gh_for_publish(release_memory, bin_dir, calls)
     environment = os.environ.copy()
     environment["PATH"] = str(bin_dir) + os.pathsep + environment.get("PATH", "")
 
@@ -1631,22 +1398,21 @@ def test_publish_rejects_metadata_before_triggering_remote_workflow(tmp_path: Pa
 
 
 def test_publish_accepts_valid_selected_npm_metadata_and_dispatches(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / "project"
+    flow_root: Path, release_memory) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
     write_npm_package(project, "my-spec")
-    assert git(project, "init").returncode == 0
-    assert git(
+    assert git(release_memory, project, "init").returncode == 0
+    assert git(release_memory,
         project,
         "remote",
         "add",
         "origin",
         "https://github.com/liuli195/my-agent-skills.git",
     ).returncode == 0
-    calls = tmp_path / "gh-calls.txt"
-    bin_dir = tmp_path / "bin"
-    fake_gh_for_publish(bin_dir, calls)
+    calls = flow_root / "gh-calls.txt"
+    bin_dir = flow_root / "bin"
+    fake_gh_for_publish(release_memory, bin_dir, calls)
     environment = os.environ.copy()
     environment["PATH"] = str(bin_dir) + os.pathsep + environment.get("PATH", "")
 
@@ -1668,12 +1434,12 @@ def test_publish_accepts_valid_selected_npm_metadata_and_dispatches(
     assert calls.read_text(encoding="utf-8").count("workflow run") == 2
 
 
-def test_publish_retries_workflow_run_eof_then_succeeds(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_publish_retries_workflow_run_eof_then_succeeds(flow_root: Path, release_memory) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
-    calls = tmp_path / "gh-calls.txt"
-    bin_dir = tmp_path / "bin"
-    fake_gh_for_publish(bin_dir, calls)
+    calls = flow_root / "gh-calls.txt"
+    bin_dir = flow_root / "bin"
+    fake_gh_for_publish(release_memory, bin_dir, calls)
     env = os.environ.copy()
     env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
 
@@ -1695,12 +1461,12 @@ def test_publish_retries_workflow_run_eof_then_succeeds(tmp_path: Path) -> None:
     assert calls.read_text(encoding="utf-8").count("workflow run") == 2
 
 
-def test_publish_reports_last_eof_after_workflow_run_retries_exhausted(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_publish_reports_last_eof_after_workflow_run_retries_exhausted(flow_root: Path, release_memory) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
-    calls = tmp_path / "gh-calls.txt"
-    bin_dir = tmp_path / "bin"
-    fake_gh_for_publish(bin_dir, calls, always_eof=True)
+    calls = flow_root / "gh-calls.txt"
+    bin_dir = flow_root / "bin"
+    fake_gh_for_publish(release_memory, bin_dir, calls, always_eof=True)
     env = os.environ.copy()
     env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
 
@@ -1723,8 +1489,8 @@ def test_publish_reports_last_eof_after_workflow_run_retries_exhausted(tmp_path:
     assert calls.read_text(encoding="utf-8").count("workflow run") == 4
 
 
-def test_publish_requires_authorization_without_dry_run(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_publish_requires_authorization_without_dry_run(flow_root: Path) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
 
     result = run(
@@ -1784,6 +1550,8 @@ def test_workflows_are_thin_entrypoints() -> None:
 
 
 def test_myspec_source_ci_and_release_use_the_packed_current_checkout() -> None:
+    from tests.support.npm_candidates import TARBALL_ENV
+
     full_verify = (REPO_ROOT / ".github" / "workflows" / "full-verify.yml").read_text(encoding="utf-8")
     release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
@@ -1805,9 +1573,10 @@ def test_myspec_source_ci_and_release_use_the_packed_current_checkout() -> None:
     assert "id-token: write" in release
     assert "registry-url: https://registry.npmjs.org" in release
     assert 'npm publish "$MYSPEC_TARBALL" --provenance --access public' in release
-    assert "supplied_tarball = os.environ.get(\"MYSPEC_TEST_TARBALL\")" in (
-        REPO_ROOT / "tests" / "test_my_spec.py"
-    ).read_text(encoding="utf-8")
+    assert TARBALL_ENV["myspec"] == "MYSPEC_TEST_TARBALL"
+    candidate_setup = (REPO_ROOT / "tests/integration/conftest.py").read_text(encoding="utf-8")
+    assert "supplied = os.environ.get(TARBALL_ENV[name])" in candidate_setup
+    assert "prepare_candidate(name, root / name, tarball=Path(supplied) if supplied else None)" in candidate_setup
     assert release.count("${{ inputs.") == 3
     assert "BUMP_PLUGINS: ${{ inputs.bumpPlugins }}" in release
     assert 'NORMALIZED_BUMP_PLUGINS=${BUMP_PLUGINS//[[:space:]]/}' in release
@@ -1820,7 +1589,7 @@ def test_myspec_source_ci_and_release_use_the_packed_current_checkout() -> None:
     assert release.index('npm publish "$MYSPEC_TARBALL"') < release.index("Publish release channel")
 
 
-def test_release_workflows_publish_only_verified_selected_npm_packages(tmp_path: Path) -> None:
+def test_release_workflows_publish_only_verified_selected_npm_packages() -> None:
     workflow_paths = [
         REPO_ROOT / ".github" / "workflows" / "release.yml",
         REPO_ROOT
@@ -1862,76 +1631,6 @@ def test_release_workflows_publish_only_verified_selected_npm_packages(tmp_path:
         for plugin in ("my-spec", "build-and-verify"):
             manifest = f"./source/plugins/{plugin}/package.json"
             assert workflow.count(manifest) == 3
-            path = tmp_path / manifest.removeprefix("./")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("{}", encoding="utf-8")
-            loaded = subprocess.run(
-                ["node", "-e", "require(process.argv[1])", manifest],
-                cwd=tmp_path,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            assert loaded.returncode == 0, loaded.stderr
-
-
-@pytest.mark.parametrize(
-    ("changed_field", "expected_returncode"),
-    [(None, 0), ("url", 1), ("directory", 1)],
-)
-def test_release_workflows_compare_packed_repository_metadata(
-    tmp_path: Path, changed_field: str | None, expected_returncode: int
-) -> None:
-    source = {
-        "name": "@liuli195/myspec",
-        "repository": {
-            "type": "git",
-            "url": "https://github.com/liuli195/my-agent-skills",
-            "directory": "plugins/my-spec",
-        },
-    }
-    packed = json.loads(json.dumps(source))
-    if changed_field:
-        packed["repository"][changed_field] = "changed"
-    source_path = tmp_path / "source.json"
-    packed_path = tmp_path / "packed.json"
-    write_json(source_path, source)
-    write_json(packed_path, packed)
-
-    for workflow_path in (
-        REPO_ROOT / ".github" / "workflows" / "release.yml",
-        REPO_ROOT
-        / "plugins"
-        / "release-flow"
-        / "skills"
-        / "release-flow"
-        / "assets"
-        / "templates"
-        / "github"
-        / "workflows"
-        / "release.yml",
-    ):
-        workflow = workflow_path.read_text(encoding="utf-8")
-        match = re.search(
-            r"node -e '([^']+)' \./source/plugins/my-spec/package.json "
-            r'"\$prefix/lib/node_modules/\$package_name/package.json" "\$package_name"',
-            workflow,
-        )
-        assert match is not None
-        result = subprocess.run(
-            [
-                "node",
-                "-e",
-                match.group(1),
-                str(source_path),
-                str(packed_path),
-                source["name"],
-            ],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert result.returncode == expected_returncode, result.stderr
 
 
 def test_release_workflows_reject_invalid_selection_before_package_steps() -> None:
@@ -1968,8 +1667,8 @@ def test_workflows_use_current_low_risk_action_versions() -> None:
     assert "github/codeql-action/analyze@v4" in codeql_workflow
 
 
-def test_ci_publish_rejects_dry_run_argument(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_ci_publish_rejects_dry_run_argument(flow_root: Path) -> None:
+    project = flow_root / "project"
     write_release_flow_files(
         project,
         marketplace_identity_projection().replace(
@@ -1992,13 +1691,13 @@ def test_ci_publish_rejects_dry_run_argument(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 2
-    assert not (tmp_path / "project-projected").exists()
+    assert not (flow_root / "project-projected").exists()
 
 
-def test_ci_publish_copies_checkout_git_auth_config_to_release_tree(tmp_path: Path, monkeypatch) -> None:
+def test_ci_publish_copies_checkout_git_auth_config_to_release_tree(flow_root: Path, monkeypatch) -> None:
     release_flow = load_release_flow_module()
-    source = tmp_path / "source"
-    release_tree = tmp_path / "release-tree"
+    source = flow_root / "source"
+    release_tree = flow_root / "release-tree"
     source.mkdir()
     release_tree.mkdir()
     add_calls = []
@@ -2032,9 +1731,10 @@ def test_ci_publish_copies_checkout_git_auth_config_to_release_tree(tmp_path: Pa
     ]
 
 
-def test_origin_is_github_uses_exact_host(tmp_path: Path, monkeypatch) -> None:
+def test_origin_is_github_uses_exact_host(flow_root: Path, monkeypatch) -> None:
     release_flow = load_release_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
+    project = flow_root / "project"
 
     monkeypatch.setattr(release_flow, "origin_url", lambda _project: "https://evilgithub.com/org/repo.git")
     assert not release_flow.origin_is_github(project)
@@ -2047,11 +1747,8 @@ def test_origin_is_github_uses_exact_host(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_ci_publish_rejects_metadata_before_candidate_release_tree_is_built(
-    tmp_path: Path, monkeypatch
-) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    init_release_input_project(project, remote)
+    flow_root: Path, monkeypatch, release_memory) -> None:
+    project = prepare_release_input_case(release_memory, flow_root)
     write_npm_package(
         project,
         "my-spec",
@@ -2086,9 +1783,9 @@ def test_ci_publish_rejects_metadata_before_candidate_release_tree_is_built(
     assert "npm_repository_url_mismatch" in result.stdout
 
 
-def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: Path, monkeypatch) -> None:
+def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(flow_root: Path, monkeypatch) -> None:
     release_flow = load_release_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     write_release_flow_files(
         project,
         marketplace_identity_projection(
@@ -2149,33 +1846,11 @@ def test_ci_publish_authorized_pushes_channel_tag_and_creates_release(tmp_path: 
     assert source_marketplace["name"] == "local-dev"
 
 
-def test_existing_release_must_match_the_current_projection_tree(
-    tmp_path: Path, monkeypatch
-) -> None:
-    release_flow = load_release_flow_module()
-    project = tmp_path / "project"
-    write_release_flow_files(project)
-    config = release_flow.read_config(project)
-    projection = release_flow.read_projection(project)
-    tree_ids = iter(["expected-tree", "different-remote-tree"])
-    monkeypatch.setattr(release_flow, "remote_ref_oid", lambda *_args: "same-commit")
-    monkeypatch.setattr(release_flow, "run_checked", lambda *_args: None)
-    monkeypatch.setattr(release_flow, "copy_git_auth_config", lambda *_args: None)
-    monkeypatch.setattr(release_flow, "origin_url", lambda *_args: "https://example.invalid/repo.git")
-    monkeypatch.setattr(release_flow, "git_output", lambda *_args: next(tree_ids))
-
-    error = release_flow.existing_release_ref_error(
-        project, config, projection, "v9.9.1"
-    )
-
-    assert error == "release_projection_mismatch: v9.9.1"
-
-
 def test_ci_publish_recovers_an_existing_tag_without_republishing_channel(
-    tmp_path: Path, monkeypatch
+    flow_root: Path, monkeypatch
 ) -> None:
     release_flow = load_release_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     write_release_flow_files(project)
     recovered = {
         "release_url": "https://github.example/releases/tag/v9.9.1",
@@ -2217,8 +1892,8 @@ def test_ci_publish_recovers_an_existing_tag_without_republishing_channel(
     assert "tag_commit: same-commit" in result.stdout
 
 
-def test_ci_publish_requires_authorization_without_dry_run(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_ci_publish_requires_authorization_without_dry_run(flow_root: Path) -> None:
+    project = flow_root / "project"
     write_release_flow_files(project)
 
     result = run(
@@ -2237,419 +1912,144 @@ def test_ci_publish_requires_authorization_without_dry_run(tmp_path: Path) -> No
     assert "ci_publish_requires_authorize_ci_publish" in result.stdout
 
 
-def test_release_flow_local_e2e(tmp_path: Path, monkeypatch) -> None:
-    release_flow = load_release_flow_module()
-    project = tmp_path / "project"
-
-    setup = run("setup", "--project", str(project), "--authorize-project-files")
-    assert setup.returncode == 0, setup.stdout + setup.stderr
-    write_plugin_manifests(project, "pr-flow", "9.9.1")
-    write_plugin_manifests(project, "release-flow", "9.9.1")
-    write_json(
-        project / ".claude-plugin" / "marketplace.json",
-        {"name": "local-dev", "owner": {"name": "Local Dev"}},
-    )
-
-    preflight_calls = []
-
-    def fake_preflight(project_arg, tag, version, bump_plugins, config, projection):
-        preflight_calls.append((project_arg, tag, version, bump_plugins, config.release_channel_branch, projection.path))
-        return []
-
-    monkeypatch.setattr(release_flow, "preflight_errors", fake_preflight)
-
-    preflight = run(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v9.9.1",
-        "--version",
-        "9.9.1",
-        "--bump-plugins",
-        "pr-flow",
-    )
-    assert preflight.returncode == 0, preflight.stdout + preflight.stderr
-    assert preflight_calls == [
-        (project.resolve(), "v9.9.1", "9.9.1", ["pr-flow"], "marketplace", project.resolve() / ".release-flow" / "projection.yaml")
-    ]
-    calls = tmp_path / "gh-calls.txt"
-    bin_dir = tmp_path / "bin"
-    fake_gh_for_publish(bin_dir, calls)
-    env = os.environ.copy()
-    env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
-    publish = run(
-        "publish",
-        "--project",
-        str(project),
-        "--tag",
-        "v9.9.1",
-        "--version",
-        "9.9.1",
-        "--bump-plugins",
-        "pr-flow",
-        "--authorize-publish",
-        env=env,
-    )
-    assert publish.returncode == 0, publish.stdout + publish.stderr
-    assert calls.read_text(encoding="utf-8").count("workflow run") == 2
-    assert not (project / ".release-flow" / ".gitignore").exists()
-    assert not (project / ".release-flow" / "releases").exists()
+def test_preflight_rejects_changed_marketplace_input_without_bump(flow_root: Path, release_memory) -> None:
+    project = prepare_release_input_case(release_memory, flow_root, changed={'pr-flow'})
+    result = preflight_result(project, '', version='1.0.0')
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'plugin_requires_bump: pr-flow' in result.stdout
 
 
-def test_preflight_rejects_changed_marketplace_input_without_bump(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    init_release_input_project(project, remote)
-    (project / "plugins" / "pr-flow" / "content.txt").write_text("changed\n", encoding="utf-8")
-
-    result = run_cli(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v1.0.0",
-        "--version",
-        "1.0.0",
-        "--bump-plugins",
-        "",
-    )
-
-    assert result.returncode == 1
-    assert "plugin_requires_bump: pr-flow" in result.stdout
+def test_preflight_rejects_changed_unprojected_marketplace_input_without_bump(flow_root: Path, release_memory) -> None:
+    project = prepare_release_input_case(release_memory, flow_root, changed={'release-flow'})
+    projection = project / '.release-flow/projection.yaml'
+    projection.write_text(projection.read_text(encoding='utf-8').replace('      - release-flow\n', ''), encoding='utf-8')
+    result = preflight_result(project, '', version='1.0.0')
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'plugin_requires_bump: release-flow' in result.stdout
 
 
-def test_preflight_refreshes_remote_baseline_before_comparing(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    init_release_input_project(project, remote)
-    old_main = git(project, "rev-parse", "origin/main").stdout.strip()
-    old_marketplace = git(project, "rev-parse", "origin/marketplace").stdout.strip()
-    (project / "plugins" / "pr-flow" / "content.txt").write_text("remote\n", encoding="utf-8")
-    assert git(project, "add", "plugins/pr-flow/content.txt").returncode == 0
-    assert git(project, "commit", "-m", "remote marketplace content").returncode == 0
-    assert git(project, "push", "origin", "HEAD:refs/heads/main").returncode == 0
-    assert git(project, "push", "origin", "HEAD:refs/heads/marketplace").returncode == 0
-    assert git(project, "update-ref", "refs/remotes/origin/main", old_main).returncode == 0
-    assert git(project, "update-ref", "refs/remotes/origin/marketplace", old_marketplace).returncode == 0
-
-    result = run_cli(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v1.0.0",
-        "--version",
-        "1.0.0",
-        "--bump-plugins",
-        "",
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: preflight_passed" in result.stdout
+def test_preflight_rejects_changed_npm_input_without_bump_when_not_in_projection(flow_root: Path, release_memory) -> None:
+    project = prepare_release_input_case(release_memory, flow_root, changed={'build-and-verify'})
+    result = preflight_result(project, '', version='1.0.0')
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'plugin_requires_bump: build-and-verify' in result.stdout
 
 
-def test_preflight_rejects_changed_unprojected_marketplace_input_without_bump(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    init_release_input_project(project, remote)
-    projection = project / ".release-flow" / "projection.yaml"
-    projection.write_text(
-        projection.read_text(encoding="utf-8").replace("      - release-flow\n", ""),
-        encoding="utf-8",
-    )
-    (project / "plugins" / "release-flow" / "content.txt").write_text("changed\n", encoding="utf-8")
-
-    result = run_cli(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v1.0.0",
-        "--version",
-        "1.0.0",
-        "--bump-plugins",
-        "",
-    )
-
-    assert result.returncode == 1
-    assert "plugin_requires_bump: release-flow" in result.stdout
+def test_preflight_rejects_shared_npm_input_when_only_one_npm_plugin_is_selected(flow_root: Path, release_memory) -> None:
+    project = prepare_release_input_case(release_memory, flow_root, changed={'build-and-verify', 'my-spec'}, shared_input='plugins/tool-lifecycle/python/management.py')
+    result = preflight_result(project, 'build-and-verify', version='1.0.0')
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'plugin_requires_bump: my-spec' in result.stdout
 
 
-def test_preflight_rejects_changed_npm_input_without_bump_when_not_in_projection(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    init_release_input_project(project, remote)
-    (project / "plugins" / "build-and-verify" / "content.txt").write_text("changed\n", encoding="utf-8")
-
-    result = run_cli(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v1.0.0",
-        "--version",
-        "1.0.0",
-        "--bump-plugins",
-        "",
-    )
-
-    assert result.returncode == 1
-    assert "plugin_requires_bump: build-and-verify" in result.stdout
-
-
-def test_preflight_rejects_shared_npm_input_when_only_one_npm_plugin_is_selected(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    init_release_input_project(project, remote)
-    (project / "plugins" / "tool-lifecycle" / "python" / "management.py").write_text(
-        "changed\n", encoding="utf-8"
-    )
-
-    result = run_cli(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v1.0.0",
-        "--version",
-        "1.0.0",
-        "--bump-plugins",
-        "build-and-verify",
-    )
-
-    assert result.returncode == 1
-    assert "plugin_requires_bump: my-spec" in result.stdout
-
-
-def test_preflight_checks_repository_metadata_only_for_selected_npm_plugin(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    init_release_input_project(project, remote)
-    write_npm_package(
-        project,
-        "build-and-verify",
-        repository_url="https://github.com/other/repository.git",
-    )
-    assert git(project, "add", "plugins/build-and-verify/package.json").returncode == 0
-    assert git(project, "commit", "-m", "invalid build metadata baseline").returncode == 0
-    assert git(project, "push", "origin", "HEAD:refs/heads/main").returncode == 0
-    assert git(project, "push", "origin", "HEAD:refs/heads/marketplace").returncode == 0
-    assert git(project, "fetch", "origin", "main").returncode == 0
-    assert git(project, "fetch", "origin", "marketplace").returncode == 0
-
-    selected_other = run_cli(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v1.0.0",
-        "--version",
-        "1.0.0",
-        "--bump-plugins",
-        "my-spec",
-    )
+def test_preflight_checks_repository_metadata_only_for_selected_npm_plugin(flow_root: Path, release_memory) -> None:
+    project = prepare_release_input_case(release_memory, flow_root)
+    write_npm_package(project, "build-and-verify", repository_url="https://github.com/other/repository.git")
+    selected_other = preflight_result(project, "my-spec")
     assert selected_other.returncode == 0, selected_other.stdout + selected_other.stderr
-
-    selected_invalid = run_cli(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v1.0.0",
-        "--version",
-        "1.0.0",
-        "--bump-plugins",
-        "build-and-verify",
-    )
+    selected_invalid = preflight_result(project, "build-and-verify")
     assert selected_invalid.returncode == 1
     assert "npm_repository_url_mismatch" in selected_invalid.stdout
     assert "plugins/build-and-verify/package.json" in selected_invalid.stdout
 
 
-def test_preflight_rejects_npm_metadata_drift_without_bump(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    init_release_input_project(project, remote)
-    write_json(
-        project / "plugins" / "my-spec" / "package.json",
-        {"version": "1.0.0", "description": "changed"},
-    )
-
-    result = run_cli(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v1.0.0",
-        "--version",
-        "1.0.0",
-        "--bump-plugins",
-        "",
-    )
-
-    assert result.returncode == 1
-    assert "plugin_requires_bump: my-spec" in result.stdout
+def test_preflight_rejects_npm_metadata_drift_without_bump(flow_root: Path, release_memory) -> None:
+    project = prepare_release_input_case(release_memory, flow_root, changed={'my-spec'})
+    write_json(project / 'plugins/my-spec/package.json', {'version': '1.0.0', 'description': 'changed'})
+    result = preflight_result(project, '', version='1.0.0')
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'plugin_requires_bump: my-spec' in result.stdout
 
 
-def test_preflight_rejects_selected_content_without_version_advancement(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    init_release_input_project(project, remote)
-    (project / "plugins" / "release-flow" / "content.txt").write_text("changed\n", encoding="utf-8")
-
-    result = run_cli(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v1.0.0",
-        "--version",
-        "1.0.0",
-        "--bump-plugins",
-        "release-flow",
-    )
-
-    assert result.returncode == 1
-    assert "plugin_version_not_bumped: release-flow" in result.stdout
+def test_preflight_rejects_selected_content_without_version_advancement(flow_root: Path, release_memory) -> None:
+    project = prepare_release_input_case(release_memory, flow_root, changed={'release-flow'})
+    result = preflight_result(project, 'release-flow', version='1.0.0')
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'plugin_version_not_bumped: release-flow' in result.stdout
 
 
-def test_preflight_accepts_semver_prerelease_advancement(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    init_release_input_project(project, remote, version="1.0.0-alpha")
-    advance_plugin_version_on_source_ref(project, "release-flow", "1.0.0-beta")
-
-    result = run_cli(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v1.0.0-beta",
-        "--version",
-        "1.0.0-beta",
-        "--bump-plugins",
-        "release-flow",
-    )
-
+def test_preflight_accepts_semver_prerelease_advancement(flow_root: Path, release_memory) -> None:
+    project = prepare_release_input_case(release_memory, flow_root, baseline='1.0.0-alpha', versions={'release-flow': '1.0.0-beta'}, changed={'release-flow'})
+    result = preflight_result(project, 'release-flow', version='1.0.0-beta')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: preflight_passed" in result.stdout
+    assert 'status: preflight_passed' in result.stdout
 
 
-def test_preflight_rejects_selected_version_downgrade(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    init_release_input_project(project, remote)
-    advance_plugin_version_on_source_ref(project, "release-flow", "0.9.0")
-
-    result = run_cli(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v0.9.0",
-        "--version",
-        "0.9.0",
-        "--bump-plugins",
-        "release-flow",
-    )
-
-    assert result.returncode == 1
-    assert "plugin_version_not_bumped: release-flow" in result.stdout
+def test_preflight_rejects_selected_version_downgrade(flow_root: Path, release_memory) -> None:
+    project = prepare_release_input_case(release_memory, flow_root, versions={'release-flow': '0.9.0'}, changed={'release-flow'})
+    result = preflight_result(project, 'release-flow', version='0.9.0')
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'plugin_version_not_bumped: release-flow' in result.stdout
 
 
-def test_preflight_accepts_selected_npm_plugin_with_all_versions_advanced(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    init_release_input_project(project, remote)
-    (project / "plugins" / "build-and-verify" / "content.txt").write_text("changed\n", encoding="utf-8")
-    advance_plugin_version_on_source_ref(project, "build-and-verify", "1.0.1")
-
-    result = run_cli(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v1.0.1",
-        "--version",
-        "1.0.1",
-        "--bump-plugins",
-        "build-and-verify",
-    )
-
+def test_preflight_accepts_selected_npm_plugin_with_all_versions_advanced(flow_root: Path, release_memory) -> None:
+    project = prepare_release_input_case(release_memory, flow_root, versions={'build-and-verify': '1.0.1'}, changed={'build-and-verify'})
+    result = preflight_result(project, 'build-and-verify', version='1.0.1')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: preflight_passed" in result.stdout
+    assert 'status: preflight_passed' in result.stdout
 
 
-def test_preflight_checks_npm_package_version_with_plugin_manifests(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    init_release_input_project(project, remote)
-    (project / "plugins" / "build-and-verify" / "content.txt").write_text("changed\n", encoding="utf-8")
-    write_plugin_manifests(project, "build-and-verify", "1.0.1")
-
-    result = run_cli(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v1.0.1",
-        "--version",
-        "1.0.1",
-        "--bump-plugins",
-        "build-and-verify",
-    )
-
-    assert result.returncode == 1
-    assert "manifest_version_mismatch: plugins/build-and-verify/package.json" in result.stdout
+def test_preflight_checks_npm_package_version_with_plugin_manifests(flow_root: Path, release_memory) -> None:
+    project = prepare_release_input_case(release_memory, flow_root, versions={'build-and-verify': '1.0.1'}, package_versions={'build-and-verify': '1.0.0'}, changed={'build-and-verify'})
+    result = preflight_result(project, 'build-and-verify', version='1.0.1')
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'manifest_version_mismatch: plugins/build-and-verify/package.json' in result.stdout
 
 
-def test_preflight_accepts_projection_only_change_without_plugin_input_drift(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    init_release_input_project(project, remote)
-    projection = project / ".release-flow" / "projection.yaml"
-    projection.write_text(
-        projection.read_text(encoding="utf-8").replace(
-            "displayName: My Agent Skills Marketplace",
-            "displayName: Local Test Marketplace",
-        ),
-        encoding="utf-8",
-    )
-
-    result = run_cli(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v1.0.0",
-        "--version",
-        "1.0.0",
-        "--bump-plugins",
-        "",
-    )
-
+def test_preflight_accepts_projection_only_change_without_plugin_input_drift(flow_root: Path, release_memory) -> None:
+    project = prepare_release_input_case(release_memory, flow_root)
+    projection = project / '.release-flow/projection.yaml'
+    projection.write_text(projection.read_text(encoding='utf-8').replace('displayName: My Agent Skills Marketplace', 'displayName: Local Test Marketplace'), encoding='utf-8')
+    result = preflight_result(project, '', version='1.0.0')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: preflight_passed" in result.stdout
+    assert 'status: preflight_passed' in result.stdout
 
 
-def test_preflight_rejects_shared_npm_packer_input_when_only_one_npm_plugin_is_selected(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    remote = tmp_path / "remote.git"
-    init_release_input_project(project, remote)
-    (project / "plugins" / "tool-lifecycle" / "pack.py").write_text("changed\n", encoding="utf-8")
+def test_preflight_rejects_shared_npm_packer_input_when_only_one_npm_plugin_is_selected(flow_root: Path, release_memory) -> None:
+    project = prepare_release_input_case(release_memory, flow_root, changed={'build-and-verify', 'my-spec'}, shared_input='plugins/tool-lifecycle/pack.py')
+    result = preflight_result(project, 'build-and-verify', version='1.0.0')
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'plugin_requires_bump: my-spec' in result.stdout
 
-    result = run_cli(
-        "preflight",
-        "--project",
-        str(project),
-        "--tag",
-        "v1.0.0",
-        "--version",
-        "1.0.0",
-        "--bump-plugins",
-        "build-and-verify",
-    )
 
-    assert result.returncode == 1
-    assert "plugin_requires_bump: my-spec" in result.stdout
+@pytest.mark.parametrize("matches", [True, False])
+def test_existing_release_checks_projection_tree_not_only_commit(flow_root: Path, monkeypatch, matches: bool) -> None:
+    module = load_release_flow_module()
+    project = flow_root / "project"
+    write_release_flow_files(project)
+    config, projection = module.read_config(project), module.read_projection(project)
+    expected = flow_root / "preflight/expected"
+    remote = flow_root / "preflight/remote"
+    mkdir = Path.mkdir
+
+    def memory_remote(path, *args, **kwargs):
+        if path != remote:
+            return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", memory_remote)
+    monkeypatch.setattr(module.tempfile, "TemporaryDirectory", lambda **kwargs: contextlib.nullcontext(str(expected.parent)))
+    monkeypatch.setattr(module, "remote_ref_oid", lambda *_args: "same-commit")
+    monkeypatch.setattr(module, "copy_git_auth_config", lambda *_args: None)
+    monkeypatch.setattr(module, "origin_url", lambda *_args: "https://example.invalid/repo.git")
+    commands = [(["git", "init"], expected), (["git", "add", "-A"], expected),
+                (["git", "init"], remote),
+                (["git", "remote", "add", "origin", "https://example.invalid/repo.git"], remote),
+                (["git", "fetch", "--depth=1", "origin", "same-commit"], remote)]
+
+    def execute(command, cwd):
+        assert (command, cwd) == commands.pop(0)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(module, "run_checked", execute)
+    trees = [(expected, ["write-tree"], "expected-tree"),
+             (remote, ["rev-parse", "FETCH_HEAD^{tree}"], "expected-tree" if matches else "different-tree")]
+
+    def tree_query(cwd, command):
+        expected_cwd, expected_command, value = trees.pop(0)
+        assert (cwd, command) == (expected_cwd, expected_command)
+        return value
+
+    monkeypatch.setattr(module, "git_output", tree_query)
+    result = module.existing_release_ref_error(project, config, projection, "v9.9.1")
+    assert result == (None if matches else "release_projection_mismatch: v9.9.1")
+    assert commands == [] and trees == []

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -68,6 +68,7 @@ class CommandStub:
     calls: list[tuple[str, ...]] = field(default_factory=list)
     body_files: list[dict[str, object]] = field(default_factory=list)
     consume: bool = False
+    body_reader: Callable[[str], str] | None = None
 
     def add(
         self,
@@ -87,8 +88,12 @@ class CommandStub:
         if "--body-file" in call:
             body_index = call.index("--body-file") + 1
             body_path = call[body_index]
-            with open(body_path, encoding="utf-8") as body:
-                self.body_files.append({"args": call, "body": body.read()})
+            if self.body_reader is None:
+                with open(body_path, encoding="utf-8") as body:
+                    content = body.read()
+            else:
+                content = self.body_reader(body_path)
+            self.body_files.append({"args": call, "body": content})
         normalized = call[1:] if call and call[0] == "gh" else call
         match_index = next(
             (

@@ -1,228 +1,61 @@
-"""Public write/query contract; the isolated CLI test is the release-shape smoke."""
+"""In-memory data contracts and maintenance decisions; native smoke is separate."""
 
-import json
-import os
-import importlib.util
 import builtins
+import copy
+import errno
+import io
+import json
+from decimal import Decimal
+import importlib.util
 from pathlib import Path
-import shutil
-import sqlite3
-import subprocess
-import sys
+import stat
+from types import SimpleNamespace
 
-import duckdb
 import pytest
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL = ROOT / "plugins/data-store/skills/data-store"
 
 
-def test_installed_cli_query_prepares_only_declared_logical_tables(tmp_path):
-    installed = tmp_path / "installed"
-    shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
-    script = installed / "scripts/data_store.py"
-    data = tmp_path / "data"
-    written = subprocess.run(
-        [sys.executable, str(script), "--root", str(data), "write", "measurements", "one"],
-        input='[{"score":7}]', text=True, capture_output=True, cwd=tmp_path,
-    )
-    assert written.returncode == 0, written.stderr
-    (data / "history").mkdir()
-    (data / "history" / "broken.parquet").write_bytes(b"not parquet")
-    (data / "invalid-table-name").mkdir()
-    selected = subprocess.run(
-        [sys.executable, str(script), "--root", str(data), "query", "SELECT score FROM measurements",
-         "--tables", '["Measurements","measurements"]', "--batch-size", "1"],
-        text=True, capture_output=True, cwd=tmp_path,
-    )
-    assert selected.returncode == 0, selected.stderr
-    assert [json.loads(line) for line in selected.stdout.splitlines()] == [{"score": 7}]
-
-
-def test_installed_cli_query_cannot_read_undeclared_parquet_or_sqlite(tmp_path):
-    installed = tmp_path / "installed"
-    shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
-    script = installed / "scripts/data_store.py"
-    data = tmp_path / "data"
-    for table in ("selected", "private"):
-        written = subprocess.run(
-            [sys.executable, str(script), "--root", str(data), "write", table, "one"],
-            input='[{"value":7}]', text=True, capture_output=True, cwd=tmp_path,
-        )
-        assert written.returncode == 0, written.stderr
-    database = data / "private.sqlite"
-    with sqlite3.connect(database) as connection:
-        connection.execute("CREATE TABLE secret(value)")
-        connection.execute("INSERT INTO secret VALUES (99)")
-    for sql, parameters in [
-        ("SELECT * FROM private", []),
-        ("SELECT * FROM read_parquet(?)", [str(data / "private" / "one.parquet")]),
-        ("SELECT * FROM read_blob(?)", [str(database)]),
-    ]:
-        denied = subprocess.run(
-            [sys.executable, str(script), "--root", str(data), "query", sql,
-             "--tables", '["selected"]', "--parameters", json.dumps(parameters)],
-            text=True, capture_output=True, cwd=tmp_path,
-        )
-        assert denied.returncode == 2, denied.stdout
-        assert denied.stdout == ""
-
-
-@pytest.mark.parametrize("batch", [False, True])
-def test_key_cursors_allow_only_selected_files_and_lock_configuration(tmp_path, batch):
-    store = load_store()
-    store.write(tmp_path, "readings", "one", [{"value": 7}])
-    store.write(tmp_path, "readings", "private", [{"value": 99}])
-    reader = store.read_keys(tmp_path, "readings", ["one"]) if batch else store.read_key(tmp_path, "readings", "one")
-    with reader as cursor:
-        assert cursor.fetchone() == (7,)
-        with pytest.raises(duckdb.PermissionException):
-            cursor.execute("SELECT * FROM read_parquet(?)", [str(tmp_path / "readings" / "private.parquet")])
-        with pytest.raises(duckdb.InvalidInputException):
-            cursor.execute("SET allowed_paths = []")
-
-
-@pytest.mark.parametrize("command", ["query", "read-key"])
-def test_installed_readers_reject_same_root_table_redirection(tmp_path, command):
-    installed = tmp_path / "installed"
-    shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
-    script = installed / "scripts/data_store.py"
-    data = tmp_path / "data"
-    written = subprocess.run(
-        [sys.executable, str(script), "--root", str(data), "write", "private", "one"],
-        input='[{"value":99}]', text=True, capture_output=True, cwd=tmp_path,
-    )
-    assert written.returncode == 0, written.stderr
-    (data / "selected").symlink_to(data / "private", target_is_directory=True)
-    arguments = (["query", "SELECT * FROM selected", "--tables", '["selected"]']
-                 if command == "query" else ["read-key", "selected", "one"])
-    denied = subprocess.run(
-        [sys.executable, str(script), "--root", str(data), *arguments],
-        text=True, capture_output=True, cwd=tmp_path,
-    )
-    assert denied.returncode == 2, denied.stdout
-    assert "目录" in denied.stderr
-    assert denied.stdout == ""
-
-
-def test_installed_cli_filters_one_row_within_a_logical_group(tmp_path):
-    script = tmp_path / "data_store.py"
-    shutil.copy2(SKILL / "scripts/data_store.py", script)
-    data = tmp_path / "data"
-    rows = [{"label": "001", "score": 1.25, "parts": [{"amount": 4}]},
-            {"label": "002", "score": 2.5, "parts": [{"amount": 8}]}]
-    written = subprocess.run(
-        [sys.executable, str(script), "--root", str(data), "write", "measurements", "group_01"],
-        input=json.dumps(rows), text=True, capture_output=True, cwd=tmp_path,
-    )
-    assert written.returncode == 0, written.stderr
-    selected = subprocess.run(
-        [sys.executable, str(script), "--root", str(data), "read-key", "measurements", "group_01",
-         "--filters", '{"label":"002"}', "--columns", '["label","parts"]', "--batch-size", "1"],
-        text=True, capture_output=True, cwd=tmp_path,
-    )
-    assert selected.returncode == 0, selected.stderr
-    assert [json.loads(line) for line in selected.stdout.splitlines()] == [
-        {"label": "002", "parts": [{"amount": 8}]},
-    ]
-
-
-def load_store(skill=SKILL):
-    spec = importlib.util.spec_from_file_location("data_store", skill / "scripts/data_store.py")
+def load_store():
+    spec = importlib.util.spec_from_file_location("data_store", SKILL / "scripts/data_store.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def test_independent_skill_python_binary_write_round_trips_bytes(tmp_path):
-    installed = tmp_path / "installed-skill"
-    shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
-    store = load_store(installed)
-    data = tmp_path / "shared-data"
-    assert store.write(data, "readings", "one", [{"payload": b"\x00\xff\x80"}],
-                       schema={"payload": "BLOB"}, binary=True) == 1
-    with store.read_key(data, "readings", "one") as cursor:
-        assert cursor.fetchall() == [(b"\x00\xff\x80",)]
-    assert store.DATA_STORE_API_VERSION == 2
-    assert "binary-write-v1" in store.DATA_STORE_CAPABILITIES
+@pytest.mark.parametrize("name,table,expected", [
+    ("Readings", True, "readings"), ("_table", True, "_table"),
+    ("GROUP-01", False, "group-01"), ("001", False, "001"),
+])
+def test_logical_names_are_normalized_without_accessing_storage(name, table, expected):
+    assert load_store()._name(name, table=table) == expected
 
 
-@pytest.mark.parametrize("command", ["query", "read-key", "read-keys"])
-def test_independent_binary_cli_outputs_metadata_and_refuses_blob(tmp_path, command):
-    installed = tmp_path / "installed-skill"
-    shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
-    store = load_store(installed)
-    data = tmp_path / "shared-data"
-    store.write(data, "readings", "one", [
-        {"id": "1", "payload": b"\x00\xff", "other": b""},
-        {"id": 2, "payload": b"", "other": None},
-        {"id": 3, "payload": None, "other": b"third"},
-    ], schema={"payload": "BLOB", "id": "INTEGER", "other": "blob"}, binary=True)
-    with store.read_key(data, "readings", "one") as cursor:
-        assert cursor.fetchall() == [(b"\x00\xff", 1, b""), (b"", 2, None), (None, 3, b"third")]
-    with store.read_keys(data, "readings", ["one"], columns=["id", "other"], filters={"id": 3}) as cursor:
-        assert cursor.fetchall() == [(3, b"third")]
-    with store.query(data, "SELECT id, payload FROM readings WHERE id = ?", [2], tables=["readings"]) as cursor:
-        assert cursor.fetchall() == [(2, b"")]
-    script = installed / "scripts/data_store.py"
-    prefix = [sys.executable, str(script), "--root", str(data)]
-    metadata_args = (["query", "SELECT id FROM readings ORDER BY id", "--tables", '["readings"]']
-                     if command == "query" else [command, "readings", "one", "--columns", '["id"]'])
-    metadata = subprocess.run(prefix + metadata_args, text=True, capture_output=True, cwd=tmp_path)
-    assert metadata.returncode == 0, metadata.stderr
-    assert [json.loads(line) for line in metadata.stdout.splitlines()] == [{"id": 1}, {"id": 2}, {"id": 3}]
-    blob_args = (["query", "SELECT payload FROM readings", "--tables", '["readings"]']
-                 if command == "query" else [command, "readings", "one", "--columns", '["payload"]'])
-    refused = subprocess.run(prefix + blob_args, text=True, capture_output=True, cwd=tmp_path)
-    assert refused.returncode == 2
-    assert refused.stdout == ""
-    assert "BLOB" in refused.stderr and "元数据" in refused.stderr and "编码" in refused.stderr
-    if command == "query":
-        ordinary = subprocess.run(prefix + ["query", "SELECT [1, 2]::INTEGER[2] AS values", "--tables", '["readings"]'],
-                                  text=True, capture_output=True, cwd=tmp_path)
-        assert ordinary.returncode == 0, ordinary.stderr
-        assert json.loads(ordinary.stdout) == {"values": [1, 2]}
-        for projection in ("payload", "[payload]", "[payload]::BLOB[1]",
-                           "struct_pack(value := payload)", "map([payload], ['tag'])"):
-            sql = f"SELECT {projection} AS output FROM readings WHERE id = 1"
-            nested = subprocess.run(prefix + ["query", sql, "--tables", '["readings"]'],
-                                    text=True, capture_output=True, cwd=tmp_path)
-            assert nested.returncode == 2
-            assert nested.stdout == ""
-            assert "BLOB" in nested.stderr and "编码" in nested.stderr
-        encoded = subprocess.run(prefix + ["query", "SELECT hex(payload) AS text FROM readings WHERE id = 1",
-                                           "--tables", '["readings"]'],
-                                 text=True, capture_output=True, cwd=tmp_path)
-        assert encoded.returncode == 0, encoded.stderr
-        assert json.loads(encoded.stdout) == {"text": "00FF"}
+@pytest.mark.parametrize("name,table", [
+    (None, False), (1, False), ("", False), ("*", False), ("../one", False),
+    ("a/b", False), ("a\\b", False), ("x" * 129, False),
+    ("1table", True), ("table-name", True), ("a\x00b", True),
+])
+def test_logical_names_reject_paths_and_unbounded_names(name, table):
+    with pytest.raises(ValueError, match="路径"):
+        load_store()._name(name, table=table)
 
 
-def test_binary_write_preserves_legacy_json_conversion_and_blob_strings(tmp_path):
-    store = load_store()
-    metadata = {"label": "VARCHAR", "count": "INTEGER", "enabled": "BOOLEAN",
-                "amount": "DECIMAL(12,2)", "parts": [{"n": "INTEGER"}], "detail": "JSON"}
-    row = {"label": 12, "count": "7", "enabled": "true", "amount": "12.50",
-           "parts": [{"n": "3"}], "detail": {"text": "value"}}
-    store.write(tmp_path, "readings", "legacy", [row], schema=metadata)
-    store.write(tmp_path, "readings", "binary", [dict(row, payload=b"\xff")],
-                schema=dict(metadata, payload="BLOB"), binary=True)
-    fields = ["label", "count", "enabled", "amount", "parts", "detail"]
-    with store.read_key(tmp_path, "readings", "legacy", columns=fields) as original:
-        with store.read_key(tmp_path, "readings", "binary", columns=fields) as current:
-            assert current.description == original.description
-            assert current.fetchall() == original.fetchall()
-    for binary in (False, True):
-        with pytest.raises(duckdb.Error, match="Failed to cast"):
-            store.write(tmp_path, "readings", "bad", [{"count": "invalid"}],
-                        schema={"count": "INTEGER"}, binary=binary)
-    store.write(tmp_path, "legacy_blobs", "one", [{"payload": "\\x00\\xFF"}], schema={"payload": "BLOB"})
-    with store.read_key(tmp_path, "legacy_blobs", "one") as cursor:
-        assert cursor.fetchall() == [(b"\\x00\\xFF",)]
-    with pytest.raises(TypeError):
-        store.write(tmp_path, "legacy_blobs", "one", [{"payload": b"new"}], schema={"payload": "BLOB"})
-    with store.read_key(tmp_path, "legacy_blobs", "one") as cursor:
-        assert cursor.fetchall() == [(b"\\x00\\xFF",)]
+@pytest.mark.parametrize("parameters,expected", [
+    (None, ("NoneType", None)), (True, ("bool", True)), (1, ("int", 1)),
+    ([1, {"b": False, "a": "value"}],
+     ("list", (("int", 1), ("dict", (("a", ("str", "value")), ("b", ("bool", False))))))),
+    ((1, 2), ("tuple", (("int", 1), ("int", 2)))),
+])
+def test_parameter_identity_preserves_types_and_normalizes_mapping_order(parameters, expected):
+    assert load_store()._parameter_key(parameters) == expected
+
+
+@pytest.mark.parametrize("parameters", [b"binary", {1: "non-string key"}, {"set"}, Decimal("1.25")])
+def test_native_parameters_without_stable_identity_do_not_claim_cache_support(parameters):
+    with pytest.raises(TypeError, match="缓存"):
+        load_store()._parameter_key(parameters)
 
 
 @pytest.mark.parametrize("rows,schema,error", [
@@ -244,290 +77,65 @@ def test_binary_write_preserves_legacy_json_conversion_and_blob_strings(tmp_path
     ([{"payload": b"new", "nested": [b"nested"]}],
      {"payload": "BLOB", "nested": ["BLOB"]}, TypeError),
     ([{"payload": b"new", "id": float("nan")}], {"payload": "BLOB", "id": "DOUBLE"}, ValueError),
-    ([{"payload": b"new", "id": "bad"}], {"payload": "BLOB", "id": "INTEGER"}, duckdb.Error),
-    ([{"payload": b"new", "id": 1}], {"payload": "BLOB", "id": "INTEGER); DROP TABLE readings; --"}, duckdb.Error),
 ])
-def test_binary_write_rejects_invalid_records_without_replacing_old_key(tmp_path, rows, schema, error):
-    store = load_store()
-    store.write(tmp_path, "readings", "one", [{"payload": b"old", "id": 1}],
-                schema={"payload": "BLOB", "id": "INTEGER"}, binary=True)
+def test_binary_fields_are_rejected_before_native_conversion(rows, schema, error):
+    # No connection exists: invalid fields must fail before the database leaf.
     with pytest.raises(error):
-        store.write(tmp_path, "readings", "one", rows, schema=schema, binary=True)
-    with store.read_key(tmp_path, "readings", "one") as cursor:
-        assert cursor.fetchall() == [(b"old", 1)]
-    assert [path.name for path in (tmp_path / "readings").iterdir()] == ["one.parquet"]
+        load_store()._binary_records(None, rows, schema)
 
 
-def test_binary_fields_use_names_and_keep_each_row_paired_with_its_metadata(tmp_path):
-    store = load_store()
-    blob_name, id_name = 'blob"; --', 'select'
-    rows = [{blob_name: b"second", id_name: 2, "another": None},
-            {blob_name: None, id_name: 1, "another": b"\x00\xff"},
-            {blob_name: b"", id_name: 3, "another": b"third"}]
-    schema = {blob_name: "BLOB", id_name: "INTEGER", "another": "BLOB"}
-    store.write(tmp_path, "readings", "one", rows, schema=schema, binary=True)
-    with store.read_key(tmp_path, "readings", "one", columns=[id_name, blob_name, "another"]) as cursor:
-        assert sorted(cursor.fetchall()) == [(1, None, b"\x00\xff"), (2, b"second", None), (3, b"", b"third")]
-    with pytest.raises(duckdb.BinderException):
-        store.read_key(tmp_path, "readings", "one", columns=["unknown"])
-    with duckdb.connect() as connection:
-        assert connection.execute("SELECT DISTINCT compression FROM parquet_metadata(?)",
-                                  [str(tmp_path / "readings/one.parquet")]).fetchall() == [("ZSTD",)]
+@pytest.mark.parametrize("tables", [None, [], (), "readings", {"readings"}, ["../readings"], ["readings", None]])
+def test_query_requires_explicit_valid_scope_before_native_access(tables):
+    with pytest.raises(ValueError):
+        load_store().query(ROOT / "unavailable-data-root", "SELECT 1", tables=tables)
 
 
-@pytest.mark.parametrize("failure", ["temporary-write", "publication"])
-def test_binary_write_failure_keeps_old_complete_key(tmp_path, monkeypatch, failure):
-    store = load_store()
-    schema = {"payload": "BLOB", "id": "INTEGER"}
-    store.write(tmp_path, "readings", "one", [{"payload": b"old", "id": 1}], schema=schema, binary=True)
-
-    def fail_write(relation, path, **kwargs):
-        Path(path).write_bytes(b"incomplete")
-        raise OSError("injected temporary write failure")
-
-    def fail_replace(source, target):
-        raise PermissionError("injected publication failure")
-
-    with monkeypatch.context() as patch:
-        if failure == "temporary-write":
-            patch.setattr(duckdb.DuckDBPyRelation, "write_parquet", fail_write)
-        else:
-            patch.setattr(store.os, "replace", fail_replace)
-            patch.setattr(store.time, "sleep", lambda delay: None)
-        with pytest.raises(OSError, match="injected"):
-            store.write(tmp_path, "readings", "one", [{"payload": b"new", "id": 2}], schema=schema, binary=True)
-    with store.read_key(tmp_path, "readings", "one") as cursor:
-        assert cursor.fetchall() == [(b"old", 1)]
-    assert [path.name for path in (tmp_path / "readings").iterdir()] == ["one.parquet"]
-
-
-def test_binary_write_retries_temporary_publication_lock_and_reads_fresh_data(tmp_path, monkeypatch):
-    store = load_store()
-    schema = {"payload": "BLOB"}
-    store.write(tmp_path, "readings", "one", [{"payload": b"old"}], schema=schema, binary=True)
-    store.write(tmp_path, "readings", "other", [{"payload": b"other"}], schema=schema, binary=True)
-    replace = store.os.replace
-    attempts = 0
-
-    def transient_lock(source, target):
-        nonlocal attempts
-        attempts += 1
-        if attempts < 3:
-            raise PermissionError("injected temporary lock")
-        return replace(source, target)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(store.os, "replace", transient_lock)
-        patch.setattr(store.time, "sleep", lambda delay: None)
-        store.write(tmp_path, "readings", "one", [{"payload": b"new"}], schema=schema, binary=True)
-    with store.read_key(tmp_path, "readings", "one") as cursor:
-        assert cursor.fetchall() == [(b"new",)]
-    with store.read_keys(tmp_path, "readings", ["one", "other"]) as cursor:
-        assert sorted(cursor.fetchall()) == [(b"new",), (b"other",)]
-    with store.query(tmp_path, "SELECT payload FROM readings ORDER BY payload", tables=["readings"]) as cursor:
-        assert cursor.fetchall() == [(b"new",), (b"other",)]
-
-
-def test_binary_queries_accept_native_scalar_and_nested_parameters(tmp_path):
-    store = load_store()
-    store.write(tmp_path, "readings", "one", [{"payload": b"\x00\xff"}, {"payload": b""}, {"payload": None}],
-                schema={"payload": "BLOB"}, binary=True)
-    for sql, parameters in [
-        ("SELECT payload FROM readings WHERE payload = ?", [b"\x00\xff"]),
-        ("SELECT payload FROM readings WHERE payload = $value", {"value": b"\x00\xff"}),
-        ("SELECT payload FROM readings WHERE payload IN (SELECT unnest(?))", [[b"\x00\xff"]]),
-    ]:
-        for _ in range(2):
-            with store.query(tmp_path, sql, parameters, tables=["readings"]) as cursor:
-                assert cursor.fetchall() == [(b"\x00\xff",)]
-
-
-def test_query_requires_explicit_scope_and_read_only_sql_before_filesystem_access(tmp_path):
-    store = load_store()
-    assert store.DATA_STORE_API_VERSION == 2
-    unavailable = tmp_path / "unavailable-root"
+def test_query_requires_scope_argument():
     with pytest.raises(TypeError, match="tables"):
-        store.query(unavailable, "SELECT 1")
-    for tables in (None, [], (), "readings", {"readings"}, ["../readings"], ["readings", None]):
-        with pytest.raises(ValueError):
-            store.query(unavailable, "SELECT 1", tables=tables)
-    for sql in ("", "CREATE TABLE x AS SELECT 1", "SELECT 1; SELECT 2"):
-        with pytest.raises(ValueError, match="只读"):
-            store.query(unavailable, sql, tables=["readings"])
-    with pytest.raises(duckdb.ParserException):
-        store.query(unavailable, "SELECT FROM", tables=["readings"])
-    script = SKILL / "scripts/data_store.py"
-    missing_scope = subprocess.run(
-        [sys.executable, str(script), "--root", str(unavailable), "query", "SELECT 1"],
-        text=True, capture_output=True,
-    )
-    assert missing_scope.returncode == 2
-    assert "--tables" in missing_scope.stderr
-    for invalid in ("[]", "null", '"readings"', '["../readings"]'):
-        rejected = subprocess.run(
-            [sys.executable, str(script), "--root", str(unavailable), "query", "SELECT 1", "--tables", invalid],
-            text=True, capture_output=True,
-        )
-        assert rejected.returncode == 2
-        assert "tables" in rejected.stderr or "路径" in rejected.stderr
-        assert rejected.stdout == ""
+        load_store().query(ROOT / "unavailable-data-root", "SELECT 1")
 
 
-def test_absent_and_empty_declared_tables_are_absent_in_catalog(tmp_path):
-    store = load_store()
-    (tmp_path / "empty").mkdir()
-    (tmp_path / "empty" / ".unfinished").write_bytes(b"incomplete write")
-    for table in ("missing", "empty"):
-        with store.query(tmp_path, "SELECT table_name FROM information_schema.tables WHERE table_name = ?",
-                         [table], tables=[table]) as cursor:
-            assert cursor.fetchall() == []
-        with pytest.raises(duckdb.CatalogException):
-            store.query(tmp_path, f"SELECT * FROM {table}", tables=[table])
-
-
-@pytest.mark.parametrize("redirect", ["directory", "shard"])
-def test_readers_reject_links_outside_declared_table(tmp_path, redirect):
-    store = load_store()
-    root = tmp_path / "data"
-    outside = tmp_path / "outside"
-    store.write(outside, "private", "one", [{"value": 99}])
-    root.mkdir()
-    if redirect == "directory":
-        (root / "selected").symlink_to(outside / "private", target_is_directory=True)
-    else:
-        (root / "selected").mkdir()
-        (root / "selected" / "one.parquet").symlink_to(outside / "private" / "one.parquet")
+@pytest.mark.parametrize("keys,columns", [
+    ([], None), ("one", None), (["one"], []),
+    (["one"], ["id", "ID"]), (["one"], ["\x00"]), (["../one"], None),
+])
+def test_selected_key_and_column_validation_precedes_file_reads(keys, columns):
     with pytest.raises(ValueError):
-        store.query(root, "SELECT * FROM selected", tables=("selected",))
-    with pytest.raises(ValueError):
-        store.read_keys(root, "selected", ["one"])
+        load_store().read_keys(ROOT, "readings", keys, columns=columns)
 
 
-def test_query_locks_selected_files_and_preserves_engine_spill_exception(tmp_path):
-    store = load_store()
-    with duckdb.connect(":memory:") as original:
-        original.execute("SET enable_external_access = false")
-        directories, temporary = original.execute(
-            "SELECT current_setting('allowed_directories'), current_setting('temp_directory')").fetchone()
-    store.write(tmp_path, "selected", "one", [{"value": 7}])
-    with store.query(tmp_path, "SELECT * FROM selected", tables=["selected"]) as cursor:
-        assert cursor.fetchone() == (7,)
-        allowed_paths, *settings = cursor.execute(
-            "SELECT current_setting('allowed_paths'), current_setting('allowed_directories'), "
-            "current_setting('enable_external_access'), current_setting('autoinstall_known_extensions'), "
-            "current_setting('autoload_known_extensions'), current_setting('temp_directory')").fetchone()
-        assert [Path(path) for path in allowed_paths] == [tmp_path / "selected" / "one.parquet"]
-        assert settings == [directories, False, False, False, temporary]
-        with pytest.raises(duckdb.InvalidInputException):
-            cursor.execute("SET enable_external_access = true")
+@pytest.mark.parametrize("filters", [{}, {"label": []}, {"label": "002", "LABEL": "002"}])
+def test_scalar_filter_validation_precedes_file_reads(filters):
+    with pytest.raises(ValueError, match="筛选"):
+        load_store().read_key(ROOT, "readings", "one", filters=filters)
 
 
-def test_independent_skill_cli_writes_and_queries_typed_rows(tmp_path):
-    installed = tmp_path / "installed-skill"
-    if SKILL.exists():
-        shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
-    script = installed / "scripts/data_store.py"
-    data = tmp_path / "shared-data"
-    rows = [{"label": "001", "score": 1.25, "parts": [{"amount": 4}, {}]},
-            {"label": "002", "score": 2.5, "parts": [{"amount": 8}]}]
-    written = subprocess.run(
-        [sys.executable, str(script), "--root", str(data), "write", "measurements", "first"],
-        input=json.dumps(rows), text=True, capture_output=True, cwd=tmp_path,
-    )
-    assert written.returncode == 0, written.stderr
-    queried = subprocess.run(
-        [sys.executable, str(script), "--root", str(data), "query",
-         "SELECT label, score, parts[1].amount AS amount, parts[2].amount AS missing_amount "
-         "FROM measurements WHERE score > ? ORDER BY label",
-         "--tables", '["measurements"]', "--parameters", "[1]", "--batch-size", "1"],
-        text=True, capture_output=True, cwd=tmp_path,
-    )
-    assert queried.returncode == 0, queried.stderr
-    assert [json.loads(line) for line in queried.stdout.splitlines()] == [
-        {"label": "001", "score": 1.25, "amount": 4, "missing_amount": None},
-        {"label": "002", "score": 2.5, "amount": 8, "missing_amount": None},
-    ]
-    # A known key remains readable even when an unrelated shard is damaged.
-    (data / "measurements" / "unrelated.parquet").write_bytes(b"not parquet")
-    pointed = subprocess.run(
-        [sys.executable, str(script), "--root", str(data), "read-key",
-         "Measurements", "FIRST", "--batch-size", "1"],
-        text=True, capture_output=True, cwd=tmp_path,
-    )
-    assert pointed.returncode == 0, pointed.stderr
-    assert [json.loads(line) for line in pointed.stdout.splitlines()] == [
-        {"label": "001", "score": 1.25, "parts": [{"amount": 4}, {"amount": None}]},
-        {"label": "002", "score": 2.5, "parts": [{"amount": 8}]},
-    ]
-    second = subprocess.run(
-        [sys.executable, str(script), "--root", str(data), "write", "measurements", "second"],
-        input=json.dumps([{"label": "003", "score": 3.25, "parts": [{"amount": 9}]}]),
-        text=True, capture_output=True, cwd=tmp_path,
-    )
-    assert second.returncode == 0, second.stderr
-    batch = subprocess.run(
-        [sys.executable, str(script), "--root", str(data), "read-keys", "Measurements",
-         "FIRST", "second", "first", "--columns", '["label", "score"]', "--batch-size", "1"],
-        text=True, capture_output=True, cwd=tmp_path,
-    )
-    assert batch.returncode == 0, batch.stderr
-    assert sorted((json.loads(line) for line in batch.stdout.splitlines()),
-                  key=lambda row: row["label"]) == [
-        {"label": "001", "score": 1.25}, {"label": "002", "score": 2.5},
-        {"label": "003", "score": 3.25},
-    ]
+@pytest.mark.parametrize("tables", ["[]", "null", '"readings"', '["../readings"]'])
+def test_cli_rejects_invalid_scope_without_launching_a_child(tables, capsys):
+    assert load_store().main(["--root", str(ROOT / "unavailable-data-root"),
+                              "query", "SELECT 1", "--tables", tables]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "tables" in captured.err or "路径" in captured.err
 
 
-def test_typed_replacement_is_atomic_and_query_is_read_only(tmp_path):
-    store = load_store()
-    root = tmp_path / "data"
-    store.write(root, "custom", "one", [{"amount": "12.50", "valid": True}],
-                schema={"amount": "DECIMAL(12,2)", "valid": "BOOLEAN"})
-    with pytest.raises(duckdb.Error):
-        store.write(root, "custom", "one", [{"amount": "bad", "valid": True}],
-                    schema={"amount": "DECIMAL(12,2)", "valid": "BOOLEAN"})
-    with store.query(root, "SELECT amount::VARCHAR, valid FROM custom", tables=["custom"]) as cursor:
-        assert cursor.fetchmany(1) == [("12.50", True)]
-        assert cursor.fetchmany(1) == []
-    with pytest.raises(ValueError, match="只读"):
-        store.query(root, "COPY custom TO 'copy.csv'", tables=["custom"])
-    with pytest.raises(ValueError, match="只读"):
-        store.query(root, "SELECT * FROM custom; DELETE FROM custom", tables=["custom"])
-    with pytest.raises(ValueError, match="路径"):
-        store.write(root, "../outside", "one", [{"x": 1}])
-    with pytest.raises(ValueError, match="字段"):
-        store.write(root, "custom", "one", [{"amount": 1, "unexpected": 2}],
-                    schema={"amount": "INTEGER"})
-    files = list(root.rglob("*.parquet"))
-    with duckdb.connect() as connection:
-        assert connection.execute("SELECT DISTINCT compression FROM parquet_metadata(?)", [str(files[0])]).fetchall() == [("ZSTD",)]
-    assert len(files) == 1
+def test_cli_requires_scope_before_loading_native_database(capsys):
+    with pytest.raises(SystemExit) as error:
+        load_store().main(["--root", str(ROOT), "query", "SELECT 1"])
+    assert error.value.code == 2
+    assert "--tables" in capsys.readouterr().err
 
 
-def test_untyped_json_fallback_requires_caller_schema(tmp_path):
-    store = load_store()
-    with pytest.raises(ValueError, match="类型"):
-        store.write(tmp_path, "custom", "one", [{"payload": {}}])
-    store.write(tmp_path, "custom", "one", [{"payload": {}}],
-                schema={"payload": "MAP(VARCHAR, VARCHAR)"})
-    with store.query(tmp_path, "SELECT payload FROM custom", tables=["custom"]) as cursor:
-        assert cursor.fetchone() == ({},)
-    store.write(tmp_path, "measurements", "one", [{"score": 5, "metadata": {"label": "a"}}],
-                schema={"score": "DOUBLE", "metadata": "JSON"})
-    with store.query(tmp_path, "SELECT score, metadata->>'label' FROM measurements", tables=["measurements"]) as cursor:
-        assert cursor.fetchone() == (5.0, "a")
+@pytest.mark.parametrize("command", [
+    ["query", "SELECT 1", "--tables", '["readings"]'],
+    ["read-key", "readings", "one"], ["read-keys", "readings", "one"],
+])
+def test_cli_rejects_invalid_batch_size_before_storage_access(command, capsys):
+    assert load_store().main(["--root", str(ROOT), *command, "--batch-size", "0"]) == 2
+    assert "batch-size" in capsys.readouterr().err
 
 
-def test_logical_names_share_duckdb_case_rules(tmp_path):
-    store = load_store()
-    store.write(tmp_path, "Readings", "First", [{"score": 1}])
-    store.write(tmp_path, "readings", "second", [{"score": 2}])
-    store.write(tmp_path, "READINGS", "FIRST", [{"score": 3}])
-    with store.query(tmp_path, "SELECT score FROM Readings ORDER BY score", tables=["Readings"]) as cursor:
-        assert cursor.fetchall() == [(2,), (3,)]
-
-
-def test_cli_reports_missing_dependency(tmp_path, monkeypatch, capsys):
+def test_cli_reports_missing_dependency(monkeypatch, capsys):
     store = load_store()
     original = builtins.__import__
 
@@ -537,547 +145,398 @@ def test_cli_reports_missing_dependency(tmp_path, monkeypatch, capsys):
         return original(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", without_duckdb)
-    assert store.main(["--root", str(tmp_path), "query", "SELECT 1", "--tables", '["readings"]']) == 2
+    assert store.main(["--root", str(ROOT), "query", "SELECT 1", "--tables", '["readings"]']) == 2
     assert "缺少 DuckDB" in capsys.readouterr().err
-
-
-def test_key_read_distinguishes_missing_corrupt_and_unavailable(tmp_path, monkeypatch):
-    store = load_store()
-    store.write(tmp_path, "readings", "first", [{"value": 7}])
-    with pytest.raises(store.MissingKeyError):
-        store.read_key(tmp_path, "readings", "missing")
-    target = tmp_path / "readings" / "first.parquet"
-    target.write_bytes(b"not parquet")
-    with pytest.raises(store.CorruptDataError):
-        store.read_key(tmp_path, "readings", "first")
-    store.write(tmp_path, "readings", "first", [{"value": 8}])
-    with store.read_key(tmp_path, "READINGS", "FIRST") as cursor:
-        assert cursor.fetchmany(1) == [(8,)]
-        assert cursor.fetchmany(1) == []
-    original = Path.open
-
-    def unavailable(path, *args, **kwargs):
-        if path == target:
-            raise PermissionError("storage unavailable")
-        return original(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "open", unavailable)
-    with pytest.raises(PermissionError, match="storage unavailable"):
-        store.read_key(tmp_path, "readings", "first")
-
-
-def test_batch_reader_preserves_types_failures_and_current_data(tmp_path, monkeypatch):
-    store = load_store()
-    store.write(tmp_path, "readings", "one", [{"id": 1, "parts": [{"n": 2}]}])
-    store.write(tmp_path, "readings", "two", [{"id": 2, "parts": [{"n": 3}], "extra": True}])
-    with store.read_keys(tmp_path, "readings", ["one", "two"]) as cursor:
-        assert [str(column[1]) for column in cursor.description] == [
-            "UBIGINT", "STRUCT(n UBIGINT)[]", "BOOLEAN"]
-        assert sorted(cursor.fetchall()) == [(1, [{"n": 2}], None), (2, [{"n": 3}], True)]
-    for keys, columns in [([], None), ("one", None), (["one"], []),
-                          (["one"], ["id", "ID"]), (["one"], ["\x00"]),
-                          (["../one"], None)]:
-        with pytest.raises(ValueError):
-            store.read_keys(tmp_path, "readings", keys, columns=columns)
-    with pytest.raises(duckdb.BinderException):
-        store.read_keys(tmp_path, "readings", ["one"], columns=["not a column"])
-    with pytest.raises(store.MissingKeyError):
-        store.read_keys(tmp_path, "readings", ["one", "missing"])
-    target = tmp_path / "readings" / "two.parquet"
-    target.write_bytes(b"broken")
-    with pytest.raises(store.CorruptDataError):
-        store.read_keys(tmp_path, "readings", ["one", "two"])
-    store.write(tmp_path, "readings", "two", [{"id": 3}])
-    with store.read_keys(tmp_path, "readings", ["two"], columns=["id"]) as cursor:
-        assert cursor.fetchmany(1) == [(3,)]
-        assert cursor.fetchmany(1) == []
-    store.write(tmp_path, "names", "one", [{"odd field": 1, 'a"b': 2, "a.b": 3, "_records": 4}])
-    with store.read_keys(tmp_path, "names", ["one"], columns=["a.b", 'a"b', "odd field", "_records"]) as cursor:
-        assert cursor.fetchall() == [(3, 2, 1, 4)]
-    original = Path.open
-
-    def unavailable(path, *args, **kwargs):
-        if path == target:
-            raise PermissionError("storage unavailable")
-        return original(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "open", unavailable)
-    with pytest.raises(PermissionError, match="storage unavailable"):
-        store.read_keys(tmp_path, "readings", ["one", "two"])
-
-
-def test_key_readers_keep_projected_fields_and_scalar_filters(tmp_path):
-    store = load_store()
-    store.write(tmp_path, "readings", "one", [
-        {"label": "002", "score": 7, "active": True, "optional": None, "parts": [{"n": 2}]},
-        {"label": "001", "score": 3, "active": False, "optional": "set", "parts": [{"n": 1}]},
-    ])
-    store.write(tmp_path, "readings", "two", [
-        {"label": "002", "score": 7, "active": True, "optional": None, "parts": [{"n": 4}]},
-    ])
-    filters = {"label": "002", "score": 7, "active": True, "optional": None}
-    with store.read_key(tmp_path, "readings", "one", columns=["label", "parts"], filters=filters) as cursor:
-        assert cursor.fetchmany(1) == [("002", [{"n": 2}])]
-        assert cursor.fetchmany(1) == []
-    with store.read_keys(tmp_path, "readings", ["one", "TWO", "two"],
-                         columns=["parts"], filters=filters) as cursor:
-        assert sorted(cursor.fetchall(), key=lambda row: row[0][0]["n"]) == [([{"n": 2}],), ([{"n": 4}],)]
-    for invalid in ({}, {"label": []}, {"label": "002", "LABEL": "002"}):
-        with pytest.raises(ValueError, match="筛选"):
-            store.read_key(tmp_path, "readings", "one", filters=invalid)
-    with pytest.raises(duckdb.BinderException):
-        store.read_keys(tmp_path, "readings", ["one"], filters={"unknown": 1})
-
-
-def test_queries_preserve_generic_tables_and_fresh_data(tmp_path):
-    store = load_store()
-    root = tmp_path / "data"
-    store.write(root, "select", "physical_one", [{"logical.identity": "business-1",
-                "report": {"parts": [{"n": 2}]}, "report.x": 7}])
-    store.write(root, "custom", "one", [{"id": "business-1", "amount": 4}])
-    (root / "select" / "physical_one.parquet").rename(root / "select" / "renamed.parquet")
-    sql = ('WITH chosen AS (SELECT * FROM "select" WHERE "logical.identity" = $id) '
-           'SELECT report.parts[1].n, "report.x", amount FROM chosen '
-           'JOIN custom ON "logical.identity" = id')
-    for _ in range(2):
-        with store.query(root, sql, {"id": "business-1"}, tables=["select", "custom"]) as cursor:
-            assert cursor.fetchall() == [(2, 7, 4)]
-    store.write(root, "custom", "one", [{"id": "business-1", "amount": 8}])
-    with store.query(root, sql, {"id": "business-1"}, tables=["select", "custom"]) as cursor:
-        assert cursor.fetchall() == [(2, 7, 8)]
-    store.write(root, "custom", "two", [{"id": "business-1", "amount": 9}])
-    with store.query(root, sql, {"id": "business-1"}, tables=["select", "custom"]) as cursor:
-        assert sorted(cursor.fetchall()) == [(2, 7, 8), (2, 7, 9)]
-    (root / "custom" / "two.parquet").unlink()
-    with store.query(root, sql, {"id": "business-1"}, tables=["select", "custom"]) as cursor:
-        assert cursor.fetchall() == [(2, 7, 8)]
-    (root / "custom" / "one.parquet").write_bytes(b"bad")
-    with store.query(root, 'SELECT * FROM "select"', tables=["select"]) as cursor:
-        assert cursor.fetchone() == ("business-1", {"parts": [{"n": 2}]}, 7)
-    with pytest.raises(duckdb.Error):
-        store.query(root, 'SELECT * FROM custom', tables=["custom"])
-
-
-def test_projected_fields_cannot_be_replaced_by_implicit_whole_rows(tmp_path):
-    store = load_store()
-    store.write(tmp_path, "custom", "one", [{"id": 1}])
-    with pytest.raises(duckdb.BinderException):
-        store.read_keys(tmp_path, "custom", ["one"], columns=["_records"])
-
-
-def test_mixed_large_and_small_reads_keep_engine_default(tmp_path):
-    store = load_store()
-    with duckdb.connect() as connection:
-        default = connection.execute("SELECT current_setting('threads')").fetchone()[0]
-    store.write(tmp_path, "small", "one", [{"report": {"parts": [1, 2]}}])
-    store.write(tmp_path, "flat", "many", [{"id": i} for i in range(2048)])
-    sql = "SELECT report, current_setting('threads') FROM small CROSS JOIN flat LIMIT 1"
-    with store.query(tmp_path, sql, tables=["small", "flat"]) as cursor:
-        assert cursor.fetchone() == ({"parts": [1, 2]}, default)
-
-
-def test_unregistered_file_scan_does_not_borrow_logical_table_types(tmp_path):
-    store = load_store()
-    with duckdb.connect() as connection:
-        default = connection.execute("SELECT current_setting('threads')").fetchone()[0]
-        connection.execute("COPY (SELECT 'plain' AS payload) TO ? (FORMAT PARQUET)",
-                           [str(tmp_path / "loose.parquet")])
-    store.write(tmp_path, "custom", "one", [{"payload": {"nested": [1, 2]}}])
-    sql = "SELECT payload, current_setting('threads') FROM read_parquet(?)"
-    for _ in range(2):
-        with pytest.raises(duckdb.PermissionException):
-            store.query(tmp_path, sql, [str(tmp_path / "loose.parquet")], tables=["custom"])
-        with store.query(tmp_path, sql, [str(tmp_path / "custom" / "one.parquet")], tables=["custom"]) as cursor:
-            assert cursor.fetchone() == ({"nested": [1, 2]}, default)
-
-
-def test_small_complex_logical_read_automatically_uses_one_worker(tmp_path):
-    store = load_store()
-    store.write(tmp_path, "custom", "one", [{"report": {"parts": [1, 2]}}])
-    for _ in range(2):
-        with store.query(tmp_path, "SELECT report, current_setting('threads') FROM custom", tables=["custom"]) as cursor:
-            assert cursor.fetchone() == ({"parts": [1, 2]}, 1)
-
-
-def test_installed_cli_plans_and_deletes_exact_record_groups(tmp_path):
-    installed = tmp_path / "installed-maintenance"
-    shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
-    store = load_store(installed)
-    data = tmp_path / "data"
-    for key in ("one", "two", "keep"):
-        store.write(data, "readings", key, [{"value": key}])
-    unrelated = data / "history"
-    unrelated.mkdir()
-    (unrelated / "broken.parquet").write_bytes(b"not parquet")
-    script = installed / "scripts/data_store.py"
-    prefix = [sys.executable, str(script), "--root", str(data)]
-    planned = subprocess.run(prefix + ["delete-plan", "--targets",
-                             '{"Readings":["ONE","two","one"]}'],
-                             text=True, capture_output=True, cwd=tmp_path)
-    assert planned.returncode == 0, planned.stderr
-    plan = json.loads(planned.stdout)
-    assert [(item["table"], item["key"]) for item in plan["targets"]] == [
-        ("readings", "one"), ("readings", "two")]
-    assert (data / "readings/one.parquet").is_file()
-    plan_path = tmp_path / "delete-plan.json"
-    plan_path.write_text(planned.stdout)
-    receipt_path = tmp_path / "delete-receipt.json"
-    denied = subprocess.run(prefix + ["delete-execute", "--plan", str(plan_path),
-                            "--approve", plan["plan_id"], "--receipt", str(receipt_path)],
-                            text=True, capture_output=True, cwd=tmp_path)
-    assert denied.returncode == 2
-    assert (data / "readings/one.parquet").is_file()
-    executed = subprocess.run(prefix + ["delete-execute", "--plan", str(plan_path),
-                              "--approve", plan["plan_id"], "--offline", "--receipt", str(receipt_path)],
-                              text=True, capture_output=True, cwd=tmp_path)
-    assert executed.returncode == 0, executed.stderr
-    receipt = json.loads(executed.stdout)
-    assert receipt["atomic"] is False
-    assert [item["status"] for item in receipt["items"]] == ["deleted", "deleted"]
-    records = [json.loads(line) for line in receipt_path.read_text().splitlines()]
-    assert records[0]["format"] == "data-store-delete-log-v1"
-    assert records[0]["plan_id"] == plan["plan_id"]
-    assert [(record["item"], record["status"]) for record in records[1:]] == [
-        (0, "uncertain"), (0, "deleted"), (1, "uncertain"), (1, "deleted")]
-    assert all("file" not in record and "items" not in record for record in records[1:])
-    assert (unrelated / "broken.parquet").read_bytes() == b"not parquet"
-    with store.read_key(data, "readings", "keep") as cursor:
-        assert cursor.fetchall() == [("keep",)]
-    store.write(data, "readings", "one", [{"value": "rebuilt"}])
-    resumed = subprocess.run(prefix + ["delete-execute", "--plan", str(plan_path),
-                             "--approve", plan["plan_id"], "--offline", "--receipt", str(receipt_path)],
-                             text=True, capture_output=True, cwd=tmp_path)
-    assert resumed.returncode == 0, resumed.stderr
-    with store.read_key(data, "readings", "one") as cursor:
-        assert cursor.fetchall() == [("rebuilt",)]
-
-
-def _delete_fixture(tmp_path, count=3):
-    installed = tmp_path / "installed-maintenance"
-    shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
-    store = load_store(installed)
-    data = tmp_path / "data"
-    for index in range(count):
-        store.write(data, "readings", str(index), [{"value": index}])
-    prefix = [sys.executable, str(installed / "scripts/data_store.py"), "--root", str(data)]
-    planned = subprocess.run(prefix + ["delete-plan", "--targets",
-                             json.dumps({"readings": [str(index) for index in range(count)]})],
-                             text=True, capture_output=True, cwd=tmp_path)
-    assert planned.returncode == 0, planned.stderr
-    plan = json.loads(planned.stdout)
-    plan_path = tmp_path / "plan.json"
-    plan_path.write_text(planned.stdout)
-    receipt = tmp_path / "receipt.json"
-    arguments = prefix[1:] + ["delete-execute", "--plan", str(plan_path), "--approve", plan["plan_id"],
-                              "--offline", "--receipt", str(receipt)]
-    return store, data, plan_path, receipt, arguments
-
-
-def _execute_delete_cli(tmp_path, arguments, fault=""):
-    # Fault only an OS boundary in this isolated child, then run the real installed
-    # script and argument parser. No production-only test hooks or fake state machine.
-    source = "import errno, json, os, runpy, sys\nfrom pathlib import Path\n" + fault
-    source += "\nsys.argv = sys.argv[1:]\nrunpy.run_path(sys.argv[0], run_name='__main__')\n"
-    return subprocess.run([sys.executable, "-c", source, *arguments],
-                          text=True, capture_output=True, cwd=tmp_path)
-
-
-@pytest.mark.parametrize("change,code", [
-    ("replace", "identity_changed"), ("content", "identity_changed"), ("missing", "missing"),
-    ("redirect", "redirected"), ("permission", "permission_or_lock"), ("lock", "locked"),
-    ("root", "root_identity_changed"), ("root-missing", "root_unavailable"),
-])
-def test_installed_delete_full_preflight_changes_nothing(tmp_path, change, code):
-    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path)
-    first = data / "readings/0.parquet"
-    target = data / "readings/1.parquet"
-    original = first.read_bytes()
-    fault = ""
-    if change == "replace":
-        replacement = target.with_suffix(".new")
-        replacement.write_bytes(target.read_bytes())
-        replacement.replace(target)
-    elif change == "content":
-        payload = bytearray(target.read_bytes())
-        payload[4] ^= 1
-        target.write_bytes(payload)
-    elif change == "missing":
-        target.unlink()
-    elif change == "redirect":
-        target.unlink()
-        target.symlink_to(first)
-    elif change in ("permission", "lock"):
-        failure = 'PermissionError("injected permission")' if change == "permission" else 'OSError(errno.EBUSY, "injected lock")'
-        fault = ("original_open = Path.open\n"
-                 "def fail_open(path, *args, **kwargs):\n"
-                 "    if path.name == '1.parquet':\n"
-                 f"        raise {failure}\n"
-                 "    return original_open(path, *args, **kwargs)\n"
-                 "Path.open = fail_open\n")
-    else:
-        data.rename(tmp_path / "original-data")
-        if change == "root":
-            data.mkdir()
-            shutil.copytree(tmp_path / "original-data/readings", data / "readings")
-    executed = _execute_delete_cli(tmp_path, arguments, fault)
-    assert executed.returncode == 2, executed.stdout
-    receipt = json.loads(executed.stdout)
-    assert receipt["state"] == "incomplete"
-    assert not any(item["status"] == "deleted" for item in receipt["items"])
-    assert any(item.get("error", {}).get("code") == code for item in receipt["items"])
-    assert (tmp_path / "original-data/readings/0.parquet" if change.startswith("root") else first).read_bytes() == original
-
-
-def test_installed_delete_partial_failure_resumes_only_original_unfinished_items(tmp_path):
-    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path)
-    fault = ("original_unlink = Path.unlink\n"
-             "def fail_unlink(path, *args, **kwargs):\n"
-             "    if path.name == '1.parquet':\n"
-             "        raise PermissionError('injected delete lock')\n"
-             "    return original_unlink(path, *args, **kwargs)\n"
-             "Path.unlink = fail_unlink\n")
-    partial = _execute_delete_cli(tmp_path, arguments, fault)
-    assert partial.returncode == 2, partial.stderr
-    receipt = json.loads(partial.stdout)
-    assert [item["status"] for item in receipt["items"]] == ["deleted", "failed", "not_executed"]
-    assert receipt["items"][1]["error"]["code"] == "permission_or_lock"
-    assert not (data / "readings/0.parquet").exists()
-    store.write(data, "readings", "0", [{"value": "later rebuild"}])
-    resumed = _execute_delete_cli(tmp_path, arguments)
-    assert resumed.returncode == 0, resumed.stderr
-    assert [item["status"] for item in json.loads(resumed.stdout)["items"]] == ["deleted"] * 3
-    with store.read_key(data, "readings", "0") as cursor:
-        assert cursor.fetchall() == [("later rebuild",)]
-    assert not (data / "readings/1.parquet").exists()
-    assert not (data / "readings/2.parquet").exists()
-
-
-@pytest.mark.parametrize("failure", ["receipt", "unlink-outcome", "truncated-log"])
-def test_installed_delete_uncertain_outcome_never_blindly_retries(tmp_path, failure):
-    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path)
-    if failure in ("receipt", "truncated-log"):
-        partial_write = "original_write(descriptor, payload[:len(payload)//2])" if failure == "truncated-log" else "pass"
-        fault = ("original_write = os.write\n"
-                 "def fail_write(descriptor, payload):\n"
-                 "    if not Path('data/readings/0.parquet').exists():\n"
-                 f"        {partial_write}\n"
-                 "        raise OSError('injected receipt failure after unlink')\n"
-                 "    return original_write(descriptor, payload)\n"
-                 "os.write = fail_write\n")
-    else:
-        fault = ("original_unlink = Path.unlink\n"
-                 "def fail_unlink(path, *args, **kwargs):\n"
-                 "    result = original_unlink(path, *args, **kwargs)\n"
-                 "    if path.name == '0.parquet':\n"
-                 "        raise OSError('injected unknown unlink outcome')\n"
-                 "    return result\n"
-                 "Path.unlink = fail_unlink\n")
-    uncertain = _execute_delete_cli(tmp_path, arguments, fault)
-    assert uncertain.returncode == 2, uncertain.stderr
-    output = json.loads(uncertain.stdout)
-    assert output["state"] == "uncertain"
-    assert [item["status"] for item in output["items"]] == ["uncertain", "not_executed", "not_executed"]
-    lines = receipt_path.read_text().splitlines()
-    assert json.loads(lines[0])["format"] == "data-store-delete-log-v1"
-    assert json.loads(lines[1])["status"] == "uncertain"
-    if failure == "receipt":
-        assert output["items"][0]["error"]["code"] == "receipt_write_failed"
-    assert not (data / "readings/0.parquet").exists()
-    store.write(data, "readings", "0", [{"value": "later rebuild"}])
-    resumed = _execute_delete_cli(tmp_path, arguments)
-    assert resumed.returncode == 2
-    assert json.loads(resumed.stdout)["state"] == "uncertain"
-    with store.read_keys(data, "readings", ["0", "1", "2"]) as cursor:
-        assert len(cursor.fetchall()) == 3
-
-
-def test_installed_delete_rechecks_identity_after_full_preflight(tmp_path):
-    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path)
-    fault = ("original_unlink = Path.unlink\n"
-             "def change_after_first(path, *args, **kwargs):\n"
-             "    result = original_unlink(path, *args, **kwargs)\n"
-             "    if path.name == '0.parquet':\n"
-             "        target = path.with_name('1.parquet')\n"
-             "        replacement = target.with_suffix('.new')\n"
-             "        replacement.write_bytes(target.read_bytes())\n"
-             "        os.replace(replacement, target)\n"
-             "    return result\n"
-             "Path.unlink = change_after_first\n")
-    partial = _execute_delete_cli(tmp_path, arguments, fault)
-    assert partial.returncode == 2, partial.stderr
-    receipt = json.loads(partial.stdout)
-    assert [item["status"] for item in receipt["items"]] == ["deleted", "failed", "not_executed"]
-    assert receipt["items"][1]["error"]["code"] == "identity_changed"
-    assert (data / "readings/1.parquet").is_file()
-    assert (data / "readings/2.parquet").is_file()
 
 
 @pytest.mark.parametrize("targets", [None, {}, [], {"readings": []}, {"readings": "one"},
                                       {"readings": [""]}, {"readings": ["*"]},
                                       {"../outside": ["one"]}, {"readings": ["../one"]}])
-def test_installed_delete_plan_rejects_nonexact_targets_before_root_access(tmp_path, targets):
-    script = SKILL / "scripts/data_store.py"
-    planned = subprocess.run([sys.executable, str(script), "--root", str(tmp_path / "absent"),
-                              "delete-plan", "--targets", json.dumps(targets)],
-                             text=True, capture_output=True, cwd=tmp_path)
-    assert planned.returncode == 2
-    assert planned.stdout == ""
-    assert "数据根不可用" not in planned.stderr
-    assert "No such file" not in planned.stderr
+def test_delete_plan_rejects_nonexact_targets_before_root_access(targets, capsys):
+    import json
+    assert load_store().main(["--root", str(ROOT / "absent"), "delete-plan",
+                              "--targets", json.dumps(targets)]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "数据根不可用" not in captured.err
+    assert "No such file" not in captured.err
 
 
-@pytest.mark.parametrize("change", ["approval", "plan", "root", "receipt-in-data", "receipt-other-plan"])
-def test_installed_delete_rejects_wrong_authority_and_receipt(tmp_path, change):
-    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path)
-    if change == "approval":
-        arguments[arguments.index("--approve") + 1] = "another-plan"
-    elif change == "plan":
-        plan = json.loads(plan_path.read_text())
-        plan["targets"][0]["key"] = "unapproved"
-        plan_path.write_text(json.dumps(plan))
+def known_delete_plan():
+    return {"format": "data-store-delete-v1", "nonce": "known-plan",
+            "root": {"path": "/project/data", "device": 7, "inode": 11},
+            "targets": [{"table": "readings", "key": "one", "directory": {"device": 7, "inode": 13},
+                         "file": {"device": 7, "inode": 17, "size": 19, "mtime_ns": 23,
+                                  "ctime_ns": 29, "sha256": "abc123"}}],
+            "plan_id": "sha256:c7a00804fcd660a38029d3223300b141ce80b4177b41eb6c03b3fa43bf9d7075"}
+
+
+def test_plan_identity_uses_the_complete_canonical_content():
+    store = load_store()
+    plan = known_delete_plan()
+    assert store._delete_plan_id(plan) == plan["plan_id"]
+    store._validate_delete_plan(plan)
+    changed = copy.deepcopy(plan)
+    changed["targets"][0]["file"]["inode"] = 18
+    with pytest.raises(ValueError, match="计划身份"):
+        store._validate_delete_plan(changed)
+
+
+@pytest.mark.parametrize("change", ["format", "nonce", "root", "targets", "duplicate", "case", "file"])
+def test_delete_plan_rejects_incomplete_or_noncanonical_data(change):
+    store = load_store()
+    plan = known_delete_plan()
+    if change == "format":
+        plan["format"] = "unknown"
+    elif change == "nonce":
+        plan["nonce"] = ""
     elif change == "root":
-        arguments[arguments.index("--root") + 1] = str(tmp_path / "another-root")
+        del plan["root"]["inode"]
+    elif change == "targets":
+        plan["targets"] = []
+    elif change == "duplicate":
+        plan["targets"].append(copy.deepcopy(plan["targets"][0]))
+    elif change == "case":
+        plan["targets"][0]["table"] = "Readings"
+    else:
+        del plan["targets"][0]["file"]["sha256"]
+    with pytest.raises(ValueError):
+        store._validate_delete_plan(plan)
+
+
+def test_cli_output_preserves_text_conversion_but_never_stringifies_binary():
+    store = load_store()
+    assert store._cli_json_value(Decimal("12.50")) == "12.50"
+    with pytest.raises(ValueError, match="BLOB"):
+        store._cli_json_value(b"\x00\xff")
+
+
+@pytest.fixture
+def delete_execution(monkeypatch):
+    """Only identity, journal bytes, sync and unlink are replaced, not the algorithm."""
+    store = load_store()
+    plan = known_delete_plan()
+    root, receipt = ROOT / ".unit-delete-data", ROOT / ".unit-delete-receipt"
+    plan["root"]["path"] = str(root)
+    second = copy.deepcopy(plan["targets"][0])
+    second["key"] = "two"
+    second["file"]["inode"] += 1
+    plan["targets"].append(second)
+    plan["plan_id"] = store._delete_plan_id(plan)
+    state = SimpleNamespace(store=store, plan=plan, root=root, receipt=receipt,
+                            records=[], unlinks=[], syncs=[])
+
+    def identity(actual_root, target):
+        assert actual_root == root
+        original = next(item for item in plan["targets"] if item["key"] == target["key"])
+        return copy.deepcopy(original["directory"]), copy.deepcopy(original["file"])
+
+    def write(path, record, *, create=False):
+        assert path == receipt
+        if create and state.records:
+            raise FileExistsError(path)
+        state.records.append((json.dumps(record) + "\n").encode())
+
+    original_open = Path.open
+
+    def read(path, mode="r", *args, **kwargs):
+        if path != receipt:
+            return original_open(path, mode, *args, **kwargs)
+        assert mode == "rb"
+        return io.BytesIO(b"".join(state.records))
+
+    def unlink(path, *args, **kwargs):
+        assert path.parent == root / "readings"
+        state.unlinks.append(path.name)
+
+    original_resolve = Path.resolve
+    monkeypatch.setattr(Path, "resolve", lambda path, *args, **kwargs:
+                        path if path == receipt else original_resolve(path, *args, **kwargs))
+    monkeypatch.setattr(Path, "open", read)
+    monkeypatch.setattr(Path, "unlink", unlink)
+    monkeypatch.setattr(store, "_delete_root", lambda path: (root, copy.deepcopy(plan["root"])))
+    monkeypatch.setattr(store, "_delete_file_identity", identity)
+    monkeypatch.setattr(store, "_write_delete_log", write)
+    monkeypatch.setattr(store, "_sync_delete_directory", state.syncs.append)
+    state.execute = lambda **changes: store.execute_delete(
+        changes.pop("root", root), changes.pop("plan", plan),
+        approve=changes.pop("approve", plan["plan_id"]),
+        offline=changes.pop("offline", True), receipt_path=changes.pop("receipt_path", receipt), **changes,
+    )
+    return state
+
+
+def test_delete_preview_normalizes_exact_targets_without_mutation(delete_execution):
+    state = delete_execution
+    plan = state.store.plan_delete(state.root, {"Readings": ["ONE", "two", "one"]})
+    assert [target["key"] for target in plan["targets"]] == ["one", "two"]
+    state.store._validate_delete_plan(plan)
+    assert state.records == state.unlinks == state.syncs == []
+
+
+@pytest.mark.parametrize("change,code", [
+    ("identity", "identity_changed"), ("missing", "missing"), ("redirect", "redirected"),
+    ("permission", "permission_or_lock"), ("lock", "locked"),
+    ("root", "root_identity_changed"), ("root-missing", "root_unavailable"),
+])
+def test_delete_preflight_failure_never_unlinks_any_item(delete_execution, monkeypatch, change, code):
+    state = delete_execution
+    store, original = state.store, state.store._delete_file_identity
+
+    def identity(root, target):
+        directory, file = original(root, target)
+        if target["key"] == "two":
+            if change == "identity":
+                file["inode"] += 100
+            elif change == "missing":
+                raise FileNotFoundError("missing target")
+            elif change == "redirect":
+                raise store._DeleteSafetyError("redirected", "redirected target")
+            elif change == "permission":
+                raise PermissionError("unavailable target")
+            elif change == "lock":
+                raise OSError(errno.EBUSY, "locked target")
+        return directory, file
+
+    monkeypatch.setattr(store, "_delete_file_identity", identity)
+    if change == "root":
+        monkeypatch.setattr(store, "_delete_root", lambda root:
+                            (root, dict(state.plan["root"], inode=999)))
+    elif change == "root-missing":
+        def missing_root(root):
+            raise store._DeleteSafetyError("root_unavailable", "unavailable root")
+        monkeypatch.setattr(store, "_delete_root", missing_root)
+    receipt = state.execute()
+    assert receipt["state"] == "incomplete"
+    assert not state.unlinks
+    assert any(item.get("error", {}).get("code") == code for item in receipt["items"])
+
+
+def test_delete_partial_failure_resumes_only_original_unfinished_item(delete_execution, monkeypatch):
+    state = delete_execution
+    unlink = Path.unlink
+
+    def locked(path, *args, **kwargs):
+        if path.name == "two.parquet":
+            raise PermissionError("locked")
+        return unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "unlink", locked)
+        receipt = state.execute()
+    assert [item["status"] for item in receipt["items"]] == ["deleted", "failed"]
+    original = state.store._delete_file_identity
+
+    def unfinished_only(root, target):
+        assert target["key"] == "two", "A rebuilt completed key must never be checked or removed"
+        return original(root, target)
+
+    monkeypatch.setattr(state.store, "_delete_file_identity", unfinished_only)
+    assert state.execute()["state"] == "complete"
+    assert state.unlinks == ["one.parquet", "two.parquet"]
+
+
+@pytest.mark.parametrize("failure", ["receipt-write", "unlink-outcome", "torn-log", "directory-sync"])
+def test_delete_uncertain_outcome_never_retries(delete_execution, monkeypatch, failure):
+    state = delete_execution
+    write, unlink = state.store._write_delete_log, Path.unlink
+
+    def failed_write(path, record, **kwargs):
+        if record.get("status") == "deleted":
+            if failure == "torn-log":
+                state.records.append(b'{"item":0,')
+            raise OSError("receipt result not durable")
+        return write(path, record, **kwargs)
+
+    def uncertain_unlink(path, *args, **kwargs):
+        unlink(path, *args, **kwargs)
+        raise OSError("unknown unlink outcome")
+
+    def failed_sync(path):
+        if path == state.root / "readings":
+            raise OSError("directory sync failed after unlink")
+
+    with monkeypatch.context() as patch:
+        if failure in ("receipt-write", "torn-log"):
+            patch.setattr(state.store, "_write_delete_log", failed_write)
+        elif failure == "unlink-outcome":
+            patch.setattr(Path, "unlink", uncertain_unlink)
+        else:
+            patch.setattr(state.store, "_sync_delete_directory", failed_sync)
+        assert state.execute()["state"] == "uncertain"
+    assert state.execute()["state"] == "uncertain"
+    assert state.unlinks == ["one.parquet"]
+
+
+@pytest.mark.parametrize("change", ["replacement", "disappearance"])
+def test_delete_rechecks_identity_after_preflight(delete_execution, monkeypatch, change):
+    state = delete_execution
+    original = state.store._delete_file_identity
+    calls = 0
+
+    def identity(root, target):
+        nonlocal calls
+        calls += 1
+        directory, file = original(root, target)
+        if calls == 3:  # Both preflight checks completed, no unlink yet.
+            if change == "disappearance":
+                raise FileNotFoundError("disappeared before unlink")
+            file["inode"] += 1
+        return directory, file
+
+    monkeypatch.setattr(state.store, "_delete_file_identity", identity)
+    result = state.execute()
+    assert result["state"] == "incomplete"
+    assert result["items"][0]["error"]["code"] == (
+        "missing" if change == "disappearance" else "identity_changed")
+    assert not state.unlinks
+
+
+@pytest.mark.parametrize("change", ["approval", "offline", "plan", "root", "receipt-in-data", "receipt-other-plan"])
+def test_delete_rejects_wrong_authority_without_mutation(delete_execution, change):
+    state = delete_execution
+    arguments = {}
+    if change == "approval":
+        arguments["approve"] = "another-plan"
+    elif change == "offline":
+        arguments["offline"] = False
+    elif change == "plan":
+        arguments["plan"] = copy.deepcopy(state.plan)
+        arguments["plan"]["targets"][0]["key"] = "unapproved"
+    elif change == "root":
+        arguments["root"] = ROOT / "other-root"
     elif change == "receipt-in-data":
-        arguments[arguments.index("--receipt") + 1] = str(data / "receipt.json")
+        arguments["receipt_path"] = state.root / "receipt"
     else:
-        receipt_path.write_text('{"format":"unrelated","important":"keep me"}')
-    executed = _execute_delete_cli(tmp_path, arguments)
-    assert executed.returncode == 2
-    assert executed.stdout == ""
-    for index in range(3):
-        with store.read_key(data, "readings", str(index)) as cursor:
-            assert cursor.fetchall() == [(index,)]
-    if change == "receipt-other-plan":
-        assert json.loads(receipt_path.read_text())["important"] == "keep me"
+        state.records.append(b'{"format":"unrelated","important":"keep me"}\n')
+    before = list(state.records)
+    with pytest.raises(ValueError):
+        state.execute(**arguments)
+    assert not state.unlinks and state.records == before
 
 
-def test_installed_delete_disappearance_before_unlink_is_not_our_deletion(tmp_path):
-    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path)
-    fault = ("original_write = os.write\n"
-             "def remove_before_final_check(descriptor, payload):\n"
-             "    record = json.loads(payload)\n"
-             "    result = original_write(descriptor, payload)\n"
-             "    if record.get('item') == 0 and record.get('status') == 'uncertain':\n"
-             "        Path('data/readings/0.parquet').unlink()\n"
-             "    return result\n"
-             "os.write = remove_before_final_check\n")
-    partial = _execute_delete_cli(tmp_path, arguments, fault)
-    assert partial.returncode == 2, partial.stderr
-    receipt = json.loads(partial.stdout)
-    assert [item["status"] for item in receipt["items"]] == ["failed", "not_executed", "not_executed"]
-    assert receipt["items"][0]["error"]["code"] == "missing"
-    assert (data / "readings/1.parquet").is_file()
+def test_resuming_delete_syncs_receipt_directory_before_any_unlink(delete_execution, monkeypatch):
+    state = delete_execution
+
+    def failed_sync(path):
+        assert path == state.receipt.parent
+        raise OSError("receipt directory sync failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(state.store, "_sync_delete_directory", failed_sync)
+        for _ in range(2):
+            with pytest.raises(OSError, match="receipt directory"):
+                state.execute()
+            assert len(state.records) == 1 and not state.unlinks
+    assert state.execute()["state"] == "complete"
+    assert state.syncs[0] == state.receipt.parent
 
 
-@pytest.mark.parametrize("entrypoint", ["python", "cli"])
-def test_installed_delete_accepts_distinct_stable_fd_ctime(tmp_path, monkeypatch, entrypoint):
-    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path)
-    if entrypoint == "python":
-        original_fstat = store.os.fstat
+@pytest.mark.parametrize("change", [None, "path", "fd"])
+def test_delete_file_identity_compares_ctime_within_each_source(monkeypatch, change):
+    store = load_store()
+    root = ROOT / ".unit-delete-identity"
+    target = root / "readings/one.parquet"
+    counts = {"path": 0, "fd": 0}
 
-        class FdStat:
-            def __init__(self, actual):
-                self.actual = actual
+    def signature(source):
+        counts[source] += 1
+        return SimpleNamespace(st_mode=stat.S_IFREG, st_dev=7, st_ino=17, st_size=3,
+                               st_mtime_ns=23, st_ctime_ns=(29 if source == "path" else 999)
+                               + (counts[source] if source == change else 0))
 
-            def __getattr__(self, field):
-                value = getattr(self.actual, field)
-                return value + 123456 if field == "st_ctime_ns" else value
+    class Stream(io.BytesIO):
+        def fileno(self):
+            return 123
 
-        monkeypatch.setattr(store.os, "fstat", lambda descriptor: FdStat(original_fstat(descriptor)))
-        plan = store.plan_delete(data, {"readings": ["0", "1", "2"]})
-        result = store.execute_delete(data, plan, approve=plan["plan_id"], offline=True,
-                                      receipt_path=receipt_path)
-        assert result["state"] == "complete"
+    original_resolve = Path.resolve
+    original_stat = Path.stat
+    original_is_symlink = Path.is_symlink
+    original_open, original_fstat = Path.open, store.os.fstat
+    monkeypatch.setattr(Path, "resolve", lambda path, *args, **kwargs:
+                        path if path in (target, target.parent) else original_resolve(path, *args, **kwargs))
+    monkeypatch.setattr(Path, "is_symlink", lambda path:
+                        False if path == target else original_is_symlink(path))
+    monkeypatch.setattr(Path, "stat", lambda path, *args, **kwargs:
+                        signature("path") if path == target else
+                        SimpleNamespace(st_mode=stat.S_IFDIR, st_dev=7, st_ino=13)
+                        if path == target.parent else original_stat(path, *args, **kwargs))
+    monkeypatch.setattr(Path, "open", lambda path, *args, **kwargs:
+                        Stream(b"abc") if path == target else original_open(path, *args, **kwargs))
+    monkeypatch.setattr(store.os, "fstat", lambda descriptor:
+                        signature("fd") if descriptor == 123 else original_fstat(descriptor))
+    if change:
+        with pytest.raises(store._DeleteSafetyError, match="核验中"):
+            store._delete_file_identity(root, {"table": "readings", "key": "one"})
     else:
-        fault = ("original_fstat = os.fstat\n"
-                 "class FdStat:\n"
-                 "    def __init__(self, actual):\n"
-                 "        self.actual = actual\n"
-                 "    def __getattr__(self, field):\n"
-                 "        value = getattr(self.actual, field)\n"
-                 "        return value + 123456 if field == 'st_ctime_ns' else value\n"
-                 "os.fstat = lambda descriptor: FdStat(original_fstat(descriptor))\n")
-        planned = _execute_delete_cli(tmp_path, arguments[:3] + ["delete-plan", "--targets",
-                                      '{"readings":["0","1","2"]}'], fault)
-        assert planned.returncode == 0, planned.stderr
-        plan_path.write_text(planned.stdout)
-        arguments[arguments.index("--approve") + 1] = json.loads(planned.stdout)["plan_id"]
-        executed = _execute_delete_cli(tmp_path, arguments, fault)
-        assert executed.returncode == 0, executed.stderr
-        assert json.loads(executed.stdout)["state"] == "complete"
+        _, file = store._delete_file_identity(root, {"table": "readings", "key": "one"})
+        assert file["ctime_ns"] == 29
 
 
-@pytest.mark.skipif(os.name == "nt", reason="目录 fsync 只适用于支持该操作的平台")
-def test_installed_delete_resume_syncs_existing_receipt_directory_before_unlink(tmp_path):
-    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path)
-    fault = ("import stat\n"
-             "original_fsync = os.fsync\n"
-             "def fail_directory_sync(descriptor):\n"
-             "    if stat.S_ISDIR(os.fstat(descriptor).st_mode):\n"
-             "        raise OSError('injected receipt directory sync failure')\n"
-             "    return original_fsync(descriptor)\n"
-             "os.fsync = fail_directory_sync\n")
-    first = _execute_delete_cli(tmp_path, arguments, fault)
-    assert first.returncode == 2
-    assert receipt_path.exists()
-    header = receipt_path.read_bytes()
-    assert len(header.splitlines()) == 1
-    second = _execute_delete_cli(tmp_path, arguments, fault)
-    assert second.returncode == 2
-    assert receipt_path.read_bytes() == header
-    for index in range(3):
-        assert (data / "readings" / f"{index}.parquet").is_file()
-    resumed = _execute_delete_cli(tmp_path, arguments)
-    assert resumed.returncode == 0, resumed.stderr
-    assert json.loads(resumed.stdout)["state"] == "complete"
+@pytest.mark.parametrize("payload,error", [
+    (b"not parquet", "corrupt"), (b"PAR1" + b"\xff" * 4 + b"PAR1", "corrupt"),
+    (FileNotFoundError("absent"), "missing"), (PermissionError("storage unavailable"), "permission"),
+    (b"PAR1" + b"\x00" * 4 + b"PAR1", None),
+])
+def test_selected_key_envelope_preserves_missing_corrupt_and_storage_errors(monkeypatch, payload, error):
+    store = load_store()
+    target = ROOT / ".unit-selected.parquet"
+    original_open, original_symlink = Path.open, Path.is_symlink
 
+    def open_key(path, *args, **kwargs):
+        if path != target:
+            return original_open(path, *args, **kwargs)
+        if isinstance(payload, Exception):
+            raise payload
+        return io.BytesIO(payload)
 
-@pytest.mark.parametrize("source", ["path", "fd"])
-def test_installed_delete_rejects_source_local_ctime_drift(tmp_path, source):
-    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path)
-    fault = ("class ChangedStat:\n"
-             "    def __init__(self, actual, change):\n"
-             "        self.actual, self.change = actual, change\n"
-             "    def __getattr__(self, field):\n"
-             "        value = getattr(self.actual, field)\n"
-             "        return value + self.change if field == 'st_ctime_ns' else value\n"
-             "calls = 0\n")
-    if source == "fd":
-        fault += ("original_fstat = os.fstat\n"
-                  "def changed_fstat(descriptor):\n"
-                  "    global calls\n"
-                  "    calls += 1\n"
-                  "    return ChangedStat(original_fstat(descriptor), calls)\n"
-                  "os.fstat = changed_fstat\n")
+    monkeypatch.setattr(Path, "is_symlink", lambda path:
+                        False if path == target else original_symlink(path))
+    monkeypatch.setattr(Path, "open", open_key)
+    if error:
+        with pytest.raises({"corrupt": store.CorruptDataError,
+                            "missing": store.MissingKeyError, "permission": PermissionError}[error]):
+            store._check_key(target)
     else:
-        fault += ("original_stat = Path.stat\n"
-                  "def changed_stat(path, *args, **kwargs):\n"
-                  "    global calls\n"
-                  "    actual = original_stat(path, *args, **kwargs)\n"
-                  "    if path.name == '0.parquet' and kwargs.get('follow_symlinks', True):\n"
-                  "        calls += 1\n"
-                  "        return ChangedStat(actual, calls)\n"
-                  "    return actual\n"
-                  "Path.stat = changed_stat\n")
-    executed = _execute_delete_cli(tmp_path, arguments, fault)
-    assert executed.returncode == 2, executed.stderr
-    receipt = json.loads(executed.stdout)
-    assert receipt["items"][0]["error"]["code"] == "identity_changed"
-    assert not any(item["status"] == "deleted" for item in receipt["items"])
-    assert all((data / "readings" / f"{index}.parquet").exists() for index in range(3))
+        store._check_key(target)
 
 
-def test_installed_delete_plan_round_trips_chinese_root_through_cp936_stdout(tmp_path):
-    store, data, plan_path, receipt_path, arguments = _delete_fixture(tmp_path / "中文资料")
-    planned = subprocess.run([sys.executable, *arguments[:3], "delete-plan", "--targets",
-                              '{"readings":["0","1","2"]}'],
-                             capture_output=True, cwd=tmp_path,
-                             env={**os.environ, "PYTHONIOENCODING": "cp936"})
-    assert planned.returncode == 0, planned.stderr
-    # Preserve the exact bytes a shell pipeline/redirection would save.
-    plan_path.write_bytes(planned.stdout)
-    arguments[arguments.index("--approve") + 1] = json.loads(planned.stdout.decode("cp936"))["plan_id"]
-    executed = _execute_delete_cli(tmp_path, arguments)
-    assert executed.returncode == 0, executed.stderr
-    assert json.loads(executed.stdout)["state"] == "complete"
-    assert all(value < 128 for value in planned.stdout)
+@pytest.mark.parametrize("redirect", ["directory", "shard"])
+def test_key_reader_rejects_redirection_before_native_access(monkeypatch, redirect):
+    store = load_store()
+    directory, shard = ROOT / "readings", ROOT / "readings/one.parquet"
+    original_resolve, original_symlink = Path.resolve, Path.is_symlink
+    monkeypatch.setattr(Path, "resolve", lambda path, *args, **kwargs:
+                        ROOT / "other" if redirect == "directory" and path == directory
+                        else original_resolve(path, *args, **kwargs))
+    monkeypatch.setattr(Path, "is_symlink", lambda path:
+                        True if redirect == "shard" and path == shard else original_symlink(path))
+    monkeypatch.setattr(store, "_duckdb", lambda: pytest.fail("redirection reached native database"))
+    with pytest.raises(ValueError, match="目录|链接"):
+        store.read_key(ROOT, "readings", "one")
+
+
+@pytest.mark.parametrize("container", ["list", "array", "map", "struct", "union"])
+def test_cli_rejects_nested_binary_types_without_native_database(container):
+    store = load_store()
+    blob = SimpleNamespace(id="blob", children=[])
+    nested = SimpleNamespace(id=container, children=[("value", blob)])
+    assert store._contains_blob(nested)
+    nested.children = [("value", SimpleNamespace(id="integer", children=[]))]
+    assert not store._contains_blob(nested)
+
+
+@pytest.mark.parametrize("statements", [[], ["SELECT", "SELECT"], ["CREATE"], ["COPY"]])
+def test_query_accepts_only_one_readonly_statement_before_root_access(monkeypatch, statements):
+    store = load_store()
+    closed = []
+    connection = SimpleNamespace(
+        extract_statements=lambda sql: [SimpleNamespace(type=kind) for kind in statements],
+        close=lambda: closed.append(True),
+    )
+    engine = SimpleNamespace(connect=lambda *args, **kwargs: connection,
+                             StatementType=SimpleNamespace(SELECT="SELECT"))
+    monkeypatch.setattr(store, "_duckdb", lambda: engine)
+    with pytest.raises(ValueError, match="只读"):
+        store.query(ROOT / "unavailable", "SQL extracted by the native parser", tables=["readings"])
+    assert closed == [True]

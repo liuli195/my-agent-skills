@@ -3,8 +3,6 @@ import contextlib
 import importlib.util
 import io
 import json
-import shlex
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -35,6 +33,11 @@ ENTRYPOINT_COMMANDS = {
     "pr-flow-hotfix": "hotfix",
     "pr-flow-tweak": "tweak",
 }
+
+
+@pytest.fixture
+def flow_root() -> Path:
+    return REPO_ROOT / "__pr_flow_package_memory__"
 
 
 def read_json(path: Path) -> dict:
@@ -200,29 +203,29 @@ def test_recoverable_stop_states_have_recovery_actions() -> None:
         assert "nextAction" in details or "nextCommand" in details
 
 
-def test_pr_flow_recovery_commands_use_the_executing_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pr_flow_recovery_commands_use_the_executing_script(flow_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     module = pr_flow_module()
     expected_script = str(PR_FLOW_SCRIPT.resolve())
 
-    command = module.command_next_command("diagnose", tmp_path)
+    command = module.command_next_command("diagnose", flow_root)
     body_command = module.pr_body_next_command(
         "complete",
-        tmp_path,
+        flow_root,
         argparse.Namespace(summary="summary", scope="scope", fixes=["174"]),
     )
 
     assert expected_script in command
     assert expected_script in body_command
-    assert str(tmp_path) in command
-    assert str(tmp_path) in body_command
+    assert str(flow_root) in command
+    assert str(flow_root) in body_command
 
     with monkeypatch.context() as patch:
         patch.setattr(module.os, "name", "nt")
-        windows_command = module.script_command(["diagnose", "--project", str(tmp_path / "project with spaces")])
-        windows_hotfix = module.command_next_command("hotfix", tmp_path, argparse.Namespace(target="main"))
+        windows_command = module.script_command(["diagnose", "--project", str(flow_root / "project with spaces")])
+        windows_hotfix = module.command_next_command("hotfix", flow_root, argparse.Namespace(target="main"))
 
     assert windows_command == subprocess.list2cmdline(
-        [sys.executable, expected_script, "diagnose", "--project", str(tmp_path / "project with spaces")]
+        [sys.executable, expected_script, "diagnose", "--project", str(flow_root / "project with spaces")]
     )
     assert "'" not in windows_command
     assert '<authorization-phrase>' not in windows_hotfix
@@ -239,9 +242,6 @@ def test_pr_flow_skill_boundaries_prohibit_remote_governance_and_memory_phrase_r
 
 
 def test_pr_flow_package_passes_repo_build_checks() -> None:
-    if shutil.which("claude") is None:
-        pytest.skip("claude CLI is required for package validation")
-
     result = run_local_plugin_build()
 
     assert result.returncode == 0, result.stderr
@@ -277,31 +277,3 @@ def test_release_projection_appends_pr_flow_after_release_flow() -> None:
     plugins = release_projection_plugins()
 
     assert plugin_after(plugins, "release-flow") == PLUGIN_NAME
-
-
-def test_pr_flow_installed_skill_command_runs_from_external_project(tmp_path: Path) -> None:
-    installed = tmp_path / "installed cache" / "pr-flow"
-    shutil.copytree(PLUGIN_ROOT, installed)
-    target = tmp_path / "external project"
-    target.mkdir()
-    skill_path = installed / "skills" / "pr-flow" / "SKILL.md"
-    skill_text = skill_path.read_text(encoding="utf-8")
-    command_text = skill_text.split("```bash\n", 1)[1].split("\n```", 1)[0]
-    command = shlex.split(command_text.replace("<本技能安装目录>", str(skill_path.parent))
-                          .replace("<目标项目目录>", str(target)))
-    command[0] = sys.executable
-    result = subprocess.run(command, cwd=target, text=True, capture_output=True, check=False)
-
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "EXCEPTION_REQUIRED" in result.stdout and "missing_config" in result.stdout
-    assert (target / ".pr-flow" / "last-status.json").is_file()
-    assert not (installed / ".pr-flow").exists()
-    assert not (target / "plugins" / "pr-flow").exists()
-    for name, subcommand in ENTRYPOINT_COMMANDS.items():
-        if name == "pr-flow-init":
-            continue
-        text = (installed / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
-        resource = "scripts/pr_flow.py" if name == "pr-flow" else "../pr-flow/scripts/pr_flow.py"
-        assert f'python "<本技能安装目录>/{resource}" {subcommand}' in text
-        assert '--project "<目标项目目录>"' in text
-        assert "本次加载的技能安装目录" in text and "停止并报告" in text

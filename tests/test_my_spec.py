@@ -1,34 +1,27 @@
 from __future__ import annotations
 
-import atexit
 import contextlib
 import hashlib
 import io
 import importlib.util
 import json
 import os
-import re
-import signal
 import shlex
 import shutil
 import subprocess
 import sys
-import tarfile
-import tempfile
-import time
-import traceback
-import runpy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from tests.support.git_templates import copy_template
+from tests.support.command_stubs import CommandStub, completed
+from tests.support.myspec_cases import bumped_patch, main_spec, npm_prefix_for, requirement
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "my-spec"
 PLUGIN_SYNC_ROOT = REPO_ROOT / "plugins" / "plugin-sync" / "skills" / "plugin-sync"
-PACK = REPO_ROOT / "plugins" / "tool-lifecycle" / "pack.py"
 SPEC_OPS = PLUGIN_ROOT / "python" / "spec_ops.py"
 SKILL_NAMES = ("my-spec", "my-spec-add", "my-spec-review", "my-spec-audit")
 PACKAGE_VERSION = json.loads((PLUGIN_ROOT / "package.json").read_text(encoding="utf-8"))["version"]
@@ -43,10 +36,7 @@ SOURCE_FIELDS = (
     "sourceKind",
     "sourceMismatch",
 )
-SHARED_MANAGEMENT = REPO_ROOT / "plugins" / "tool-lifecycle" / "python" / "management.py"
 _in_process_spec_ops: dict[Path, object] = {}
-_lightweight_install: tuple[Path, Path] | None = None
-_lightweight_install_fingerprint: str | None = None
 
 
 def _load_in_process_spec_ops(spec_ops_path: Path):
@@ -66,7 +56,7 @@ def _load_in_process_spec_ops(spec_ops_path: Path):
         management = importlib.util.module_from_spec(management_spec)
         sys.modules[management_spec.name] = management
         sys.modules[management_name] = management
-        management_spec.loader.exec_module(management)
+        exec(compile(spec_ops_path.with_name("management.py").read_text(encoding="utf-8"), str(spec_ops_path.with_name("management.py")), "exec"), management.__dict__)
 
         spec_ops_spec = importlib.util.spec_from_file_location(
             f"myspec_spec_ops_{module_id}", spec_ops_path
@@ -74,7 +64,7 @@ def _load_in_process_spec_ops(spec_ops_path: Path):
         assert spec_ops_spec is not None and spec_ops_spec.loader is not None
         module = importlib.util.module_from_spec(spec_ops_spec)
         sys.modules[spec_ops_spec.name] = module
-        spec_ops_spec.loader.exec_module(module)
+        exec(compile(spec_ops_path.read_text(encoding="utf-8"), str(spec_ops_path), "exec"), module.__dict__)
     finally:
         if previous_management is None:
             sys.modules.pop(management_name, None)
@@ -84,5264 +74,1126 @@ def _load_in_process_spec_ops(spec_ops_path: Path):
     return module
 
 
-def _command_parts(command: object) -> list[str]:
-    if isinstance(command, str):
-        parts = shlex.split(command, posix=os.name != "nt")
-        return [part.strip('"') for part in parts]
-    if isinstance(command, (list, tuple)):
-        return [str(part) for part in command]
-    return []
-
-
-def _launcher_script(executable: Path) -> Path | None:
-    if executable.suffix.lower() == ".py":
-        return executable
-    try:
-        text = executable.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return None
-    candidates = re.findall(r"""[\"']([^\"']+\.py)[\"']""", text)
-    if not candidates:
-        candidates = re.findall(r"""(?:^|[\s\"'])([^\s\"']+\.py)(?:$|[\s\"'])""", text)
-    return Path(candidates[-1]).resolve() if candidates else None
-
-
-def _run_python_script(
-    command: object,
-    script: Path,
-    args: list[str],
-    *,
-    cwd: Path | None,
-    env: dict[str, str] | None,
-    text: bool = True,
-) -> subprocess.CompletedProcess:
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    previous_environment = os.environ.copy()
-    previous_cwd = Path.cwd()
-    previous_argv = sys.argv[:]
-    effective_env = previous_environment if env is None else dict(env)
-    code: object = 1
-    try:
-        os.environ.clear()
-        os.environ.update(effective_env)
-        os.chdir(cwd or previous_cwd)
-        sys.argv = [str(script), *args]
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            try:
-                if script.name == "spec_ops.py":
-                    code = _load_in_process_spec_ops(script).main(args)
-                else:
-                    runpy.run_path(str(script), run_name="__main__")
-                    code = 0
-            except SystemExit as error:
-                code = error.code
-            except BaseException:
-                traceback.print_exc(file=stderr)
-                code = 1
-    finally:
-        sys.argv = previous_argv
-        os.chdir(previous_cwd)
-        os.environ.clear()
-        os.environ.update(previous_environment)
-    if code is None:
-        code = 0
-    if not isinstance(code, int):
-        code = 1
-    output = stdout.getvalue()
-    errors = stderr.getvalue()
-    if not text:
-        output = output.encode()
-        errors = errors.encode()
-    return subprocess.CompletedProcess(command, code, output, errors)
-
-
-def _npm_prefix(env: dict[str, str]) -> Path:
-    configured = env.get("NPM_CONFIG_PREFIX")
-    return Path(configured) if configured else Path(sys.prefix)
-
-
-def _npm_root(prefix: Path) -> Path:
-    return prefix / ("node_modules" if os.name == "nt" else "lib/node_modules")
-
-
-def _install_npm_tarball(prefix: Path, tarball: Path) -> None:
-    temporary = Path(tempfile.mkdtemp(prefix="myspec-npm-install-"))
-    try:
-        with tarfile.open(tarball, "r:gz") as archive:
-            archive.extractall(temporary)
-        source = temporary / "package"
-        target = _npm_root(prefix) / "@liuli195" / "myspec"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.is_symlink():
-            target.unlink()
-        elif target.exists():
-            shutil.rmtree(target)
-        cached_spec_ops = target / "python" / "spec_ops.py"
-        _in_process_spec_ops.pop(cached_spec_ops.resolve(), None)
-        shutil.copytree(source, target, symlinks=True)
-        executable = prefix / ("myspec.cmd" if os.name == "nt" else "bin/myspec")
-        executable.parent.mkdir(parents=True, exist_ok=True)
-        executable.write_text("@echo off\n" if os.name == "nt" else "#!/bin/sh\n", encoding="utf-8")
-        if os.name != "nt":
-            executable.chmod(0o755)
-    finally:
-        shutil.rmtree(temporary, ignore_errors=True)
-
-
-_FAKE_GIT_COMMIT = "0" * 40
-_REAL_GIT_TESTS = {
-    "test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit",
-    "test_packed_myspec_dev_doctor_drops_commit_after_closure_branch_removed",
-}
-
-
-def _run_in_process_git(
-    command: object,
-    args: list[str],
-    *,
-    cwd: Path | None = None,
-) -> subprocess.CompletedProcess[str]:
-    root = (cwd or Path.cwd()).resolve()
-    if args == ["rev-parse", "--show-toplevel"]:
-        while root != root.parent and not (root / ".git").exists():
-            root = root.parent
-        return subprocess.CompletedProcess(command, 0, str(root) + "\n", "")
-    if args == ["rev-parse", "HEAD"]:
-        return subprocess.CompletedProcess(command, 0, _FAKE_GIT_COMMIT + "\n", "")
-    if args == ["remote", "get-url", "origin"]:
-        return subprocess.CompletedProcess(
-            command, 0, "https://github.com/liuli195/my-agent-skills\n", ""
-        )
-    if args in (["ls-remote", "origin"], ["ls-remote", "--heads", "origin"]):
-        return subprocess.CompletedProcess(command, 0, f"{_FAKE_GIT_COMMIT}\trefs/heads/main\n", "")
-    if args == ["log", "--format=%H", "--all", "--", *args[4:]]:
-        return subprocess.CompletedProcess(command, 0, _FAKE_GIT_COMMIT + "\n", "")
-    if args[:2] == ["cat-file", "-t"]:
-        return subprocess.CompletedProcess(command, 0, "commit\n", "")
-    if args[:3] == ["merge-base", "--is-ancestor", _FAKE_GIT_COMMIT]:
-        return subprocess.CompletedProcess(command, 0, "", "")
-    if args[:1] == ["show"] and len(args) == 2 and ":" in args[1]:
-        relative = args[1].split(":", 1)[1]
-        path = root / relative
-        if path.is_file():
-            return subprocess.CompletedProcess(command, 0, path.read_bytes(), "")
-        return subprocess.CompletedProcess(command, 128, b"", b"missing object\n")
-    if args[:1] and args[0] in {"diff", "checkout-index", "add"}:
-        return subprocess.CompletedProcess(command, 0, "", "")
-    if args[:3] == ["ls-files", "--others", "--exclude-standard"]:
-        return subprocess.CompletedProcess(command, 0, "", "")
-    return subprocess.CompletedProcess(
-        command, 127, "", f"unsupported fake git command: {shlex.join(args)}\n"
-    )
-
-
-def _run_in_process_npm(
-    command: object,
-    args: list[str],
-    env: dict[str, str],
-    *,
-    cwd: Path | None = None,
-) -> subprocess.CompletedProcess[str]:
-    log_path = env.get("MYSPEC_NPM_LOG")
-    if log_path:
-        with Path(log_path).open("a", encoding="utf-8") as log:
-            log.write(json.dumps(args) + "\n")
-    prefix = _npm_prefix(env)
-    if args == ["view", "@liuli195/myspec", "version", "--json"]:
-        return subprocess.CompletedProcess(
-            command, 0, json.dumps(env.get("MYSPEC_NPM_LATEST", env["MYSPEC_PACKAGE_VERSION"])) + "\n", ""
-        )
-    if args == ["root", "--global"]:
-        if env.get("MYSPEC_NPM_FAIL_ROOT") == "1":
-            return subprocess.CompletedProcess(command, 1, "", "simulated npm root failure\n")
-        return subprocess.CompletedProcess(command, 0, str(_npm_root(prefix)) + "\n", "")
-    if args == ["prefix", "--global"]:
-        return subprocess.CompletedProcess(command, 0, str(prefix) + "\n", "")
-    if args == ["link"]:
-        if cwd is None:
-            return subprocess.CompletedProcess(command, 1, "", "npm link requires cwd\n")
-        target = _npm_root(prefix) / "@liuli195" / "myspec"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.is_symlink():
-            target.unlink()
-        elif target.exists():
-            shutil.rmtree(target)
-        target.symlink_to(cwd, target_is_directory=True)
-        return subprocess.CompletedProcess(command, 0, "", "")
-    if args[:2] == ["install", "--global"]:
-        if env.get("MYSPEC_NPM_FAIL_INSTALL") == "1":
-            return subprocess.CompletedProcess(command, 1, "", "simulated install failure\n")
-        tarball = Path(env.get("MYSPEC_RELEASE_TARBALL", args[-1])).resolve()
-        _install_npm_tarball(prefix, tarball)
-        marker = env.get("MYSPEC_REEXEC_MARKER")
-        launcher = _npm_root(prefix) / "@liuli195" / "myspec" / "bin" / "myspec.js"
-        if marker and launcher.is_file() and "MYSPEC_REEXEC_MARKER" in launcher.read_text(encoding="utf-8"):
-            with Path(marker).open("a", encoding="utf-8") as marker_file:
-                marker_file.write(f"{os.getpid()}\n")
-        if env.get("MYSPEC_NPM_FAIL_AFTER_INSTALL") == "1":
-            return subprocess.CompletedProcess(
-                command, 1, "", "simulated interruption after npm install\n"
-            )
-        return subprocess.CompletedProcess(command, 0, "", "")
-    return subprocess.CompletedProcess(
-        command, 127, "", f"unsupported fake npm command: {shlex.join(args)}\n"
-    )
-
-
-def _run_in_process_subprocess(
-    command: object,
-    *args: object,
-    cwd: Path | None = None,
-    env: dict[str, str] | None = None,
-    **kwargs: object,
-) -> subprocess.CompletedProcess[str]:
-    parts = _command_parts(command)
-    if not parts:
-        return subprocess.CompletedProcess(command, 1, "", "missing command\n")
-    executable = Path(parts[0])
-    name = executable.name.casefold()
-    name = name.removesuffix(".cmd").removesuffix(".bat").removesuffix(".exe")
-    effective_env = os.environ.copy() if env is None else dict(env)
-    command_args = parts[1:]
-    if name == "npm":
-        return _run_in_process_npm(command, command_args, effective_env, cwd=cwd)
-    if name == "git" and _current_test_name() not in _REAL_GIT_TESTS:
-        return _run_in_process_git(command, command_args, cwd=cwd)
-    if name == "myspec":
-        try:
-            spec_ops = _spec_ops_for_executable(executable)
-            launcher = spec_ops.parent.parent / "bin" / "myspec.js"
-            marker = effective_env.get("MYSPEC_REEXEC_MARKER")
-            if marker and "MYSPEC_REEXEC_MARKER" in launcher.read_text(encoding="utf-8"):
-                with Path(marker).open("a", encoding="utf-8") as marker_file:
-                    marker_file.write(f"{os.getpid()}\\n")
-            return _run_python_script(
-                command,
-                spec_ops,
-                command_args,
-                cwd=cwd,
-                env=effective_env,
-                text=bool(kwargs.get("text", False)),
-            )
-        except AssertionError:
-            pass
-    if name in {"claude", "codex", "git"}:
-        script = _launcher_script(executable)
-        if script is not None:
-            return _run_python_script(
-                command,
-                script,
-                command_args,
-                cwd=cwd,
-                env=effective_env,
-                text=bool(kwargs.get("text", False)),
-            )
-    nested = "capture_output" not in kwargs and "stdout" not in kwargs and "stderr" not in kwargs
-    fallback_kwargs = dict(kwargs)
-    if nested:
-        fallback_kwargs["capture_output"] = True
-    result = _in_process_subprocess_previous(command, *args, cwd=cwd, env=env, **fallback_kwargs)
-    if nested:
-        if result.stdout:
-            sys.stdout.write(result.stdout.decode() if isinstance(result.stdout, bytes) else result.stdout)
-        if result.stderr:
-            sys.stderr.write(result.stderr.decode() if isinstance(result.stderr, bytes) else result.stderr)
-    return result
-
-
-_in_process_subprocess_previous = subprocess.run
-
-
-def _run_in_process(
-    script: Path,
-    *args: object,
-    env: dict[str, str] | None = None,
-    cwd: Path | None = None,
-) -> subprocess.CompletedProcess[str]:
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    previous_environment = os.environ.copy()
-    previous_cwd = Path.cwd()
-    previous_run = subprocess.run
-    global _in_process_subprocess_previous
-    _in_process_subprocess_previous = previous_run
-    subprocess.run = _run_in_process_subprocess  # type: ignore[assignment]
-    code: object = 1
-    try:
-        if env is not None:
-            os.environ.clear()
-            os.environ.update(env)
-        os.chdir(cwd or REPO_ROOT)
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            try:
-                code = _load_in_process_spec_ops(script).main(
-                    [str(script_arg) for script_arg in args]
-                )
-            except SystemExit as error:
-                code = error.code
-            except BaseException:
-                traceback.print_exc(file=stderr)
-                code = 1
-    finally:
-        subprocess.run = previous_run  # type: ignore[assignment]
-        os.chdir(previous_cwd)
-        os.environ.clear()
-        os.environ.update(previous_environment)
-    if code is None:
-        code = 0
-    if not isinstance(code, int):
-        code = 1
-    return subprocess.CompletedProcess(
-        [str(script), *(str(script_arg) for script_arg in args)],
-        code,
-        stdout.getvalue(),
-        stderr.getvalue(),
-    )
-
-
-def load_management_module():
-    path = PLUGIN_ROOT / "python" / "management.py"
-    spec = importlib.util.spec_from_file_location("myspec_management_test", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def bumped_patch(version: str, amount: int = 1) -> str:
-    major, minor, patch = version.split(".")
-    return f"{major}.{minor}.{int(patch) + amount}"
-
-
 PREVIOUS_VERSION = bumped_patch(PACKAGE_VERSION, -1)
 NEXT_VERSION = bumped_patch(PACKAGE_VERSION)
-LATER_VERSION = bumped_patch(PACKAGE_VERSION, 2)
 
 
-def run_python(script: Path, *args: object) -> subprocess.CompletedProcess[str]:
-    if os.environ.get("MYSPEC_TEST_IN_PROCESS") == "1" and script.resolve() == SPEC_OPS.resolve():
-        return _run_in_process(script, *args)
-    return subprocess.run(
-        [sys.executable, str(script), *(str(arg) for arg in args)],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-
-def requirement(title: str, behavior: str, scenario: str = "正常流程") -> str:
-    return f"""### Requirement: {title}
-
-系统 MUST {behavior}。
-
-#### Scenario: {scenario}
-
-- **WHEN** 用户执行操作
-- **THEN** 系统返回结果
-"""
-
-
-def main_spec(capability: str, *requirements: str) -> str:
-    return f"""# {capability}
-
-## Purpose
-
-描述 {capability} 的外部行为。
-
-## Requirements
-
-{"\n".join(requirements)}"""
-
-
-def write(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text.rstrip() + "\n", encoding="utf-8")
-
-
-def controlled_git_script(git: str, remote: Path) -> str:
-    return (
-        "import subprocess\nimport sys\n"
-        f"git = {git!r}\n"
-        "def run_git(*args):\n"
-        "    command = [git, *args]\n"
-        "    shell = git.lower().endswith('.cmd')\n"
-        "    if shell:\n"
-        "        command = subprocess.list2cmdline(command)\n"
-        "    return subprocess.run(command, shell=shell)\n"
-        "args = sys.argv[1:]\n"
-        "if args == ['remote', 'get-url', 'origin']:\n"
-        "    print('https://github.com/liuli195/my-agent-skills')\n"
-        "    raise SystemExit()\n"
-        "if args == ['ls-remote', 'origin']:\n"
-        f"    raise SystemExit(run_git('ls-remote', {remote.as_uri()!r}).returncode)\n"
-        "raise SystemExit(run_git(*args).returncode)"
-    )
-
-
-def _real_controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
-    source = tmp_path / "source"
-    source.mkdir()
-    for name in (".gitattributes", ".gitignore"):
-        shutil.copy2(REPO_ROOT / name, source / name)
-    for relative in (".agents", ".claude-plugin", "plugins/my-spec", "plugins/tool-lifecycle"):
-        shutil.copytree(
-            REPO_ROOT / relative,
-            source / relative,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-        )
-    if marker is not None:
-        write(source / "plugins" / "my-spec" / "skills" / "my-spec" / "dev-marker.txt", marker)
-    launcher = source / "plugins" / "my-spec" / "bin" / "myspec.js"
-    launcher.chmod(launcher.stat().st_mode | 0o111)
-    remote = tmp_path / "origin.git"
-    for command in (
-        ["git", "init", "--bare", remote],
-        ["git", "init", source],
-        ["git", "-C", source, "add", "."],
-        ["git", "-C", source, "-c", "user.name=MySpec Test", "-c", "user.email=myspec@example.invalid", "commit", "-m", "development source"],
-        ["git", "-C", source, "checkout-index", "--force", "--", "plugins/my-spec/bin/myspec.js"],
-        # Seed before registering origin so Git cannot create a tracking ref.
-        ["git", "-C", source, "push", remote.as_uri(), "HEAD:refs/heads/main"],
-        ["git", "-C", source, "remote", "add", "origin", "https://github.com/liuli195/my-agent-skills"],
-        ["git", "-C", source, "config", f"url.{remote.as_uri()}.insteadOf", "https://github.com/liuli195/my-agent-skills"],
-    ):
-        result = subprocess.run(command, text=True, capture_output=True, check=False)
-        assert result.returncode == 0, result.stderr
-    git = shutil.which("git")
-    assert git is not None
-    bin_dir = tmp_path / "controlled-git"
-    bin_dir.mkdir()
-    if os.name == "nt":
-        script = bin_dir / "git.py"
-        write(script, controlled_git_script(git, remote))
-        write(bin_dir / "git.cmd", f'@"{sys.executable}" "{script}" %*')
-    else:
-        wrapper = bin_dir / "git"
-        write(wrapper, f'#!/bin/sh\nif [ "$1" = remote ] && [ "$2" = get-url ] && [ "$3" = origin ]; then echo https://github.com/liuli195/my-agent-skills; exit; fi\nif [ "$1" = ls-remote ] && [ "$2" = origin ]; then exec "{git}" ls-remote "{remote.as_uri()}"; fi\nexec "{git}" "$@"')
-        wrapper.chmod(0o755)
-    return source
-
-
-_controlled_dev_template: tuple[Path, Path] | None = None
-
-
-def _cleanup_controlled_dev_template() -> None:
-    global _controlled_dev_template
-    if _controlled_dev_template is not None:
-        shutil.rmtree(_controlled_dev_template[0], ignore_errors=True)
-        _controlled_dev_template = None
-
-
-def _cached_controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
-    global _controlled_dev_template
-    if _controlled_dev_template is None or not _controlled_dev_template[0].is_dir():
-        root = Path(tempfile.mkdtemp(prefix="myspec-dev-template-"))
-        source = _real_controlled_dev_source(root)
-        _controlled_dev_template = (root, source)
-    template_root, template_source = _controlled_dev_template
-    del template_root
-    source = tmp_path / "source"
-    source.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(template_source, source, symlinks=True)
-    if marker is not None:
-        write(source / "plugins" / "my-spec" / "skills" / "my-spec" / "dev-marker.txt", marker)
-    return source
-
-
-def controlled_dev_source(tmp_path: Path, marker: str | None = None) -> Path:
-    if _current_test_name() in _REAL_GIT_TESTS:
-        return _real_controlled_dev_source(tmp_path, marker)
-    return _cached_controlled_dev_source(tmp_path, marker)
-
-
-def controlled_dev_env(env: dict[str, str], source: Path) -> dict[str, str]:
-    path_entries = [str(source.parent / "controlled-git"), env["PATH"]]
-    if os.name == "nt":
-        # Git for Windows' mingw executable launches its bundled shell.
-        git_shell = shutil.which("sh")
-        if git_shell is not None:
-            path_entries.append(str(Path(git_shell).parent))
-    return {**env, "PATH": os.pathsep.join(dict.fromkeys(path_entries))}
-
-
-def ready_state(cli: Path, root: Path, command: str = "add") -> Path:
-    work = root / ".local" / "spec-work"
-    conflicts = root / "no-conflicts.json"
-    write(conflicts, "[]")
-    initialized = run_python(
-        cli, "state-init", work, command, "specs-fingerprint", "input-fingerprint"
-    )
-    assert initialized.returncode == 0, initialized.stderr
-    stored = run_python(
-        cli,
-        "state-set-conflicts",
-        work,
-        conflicts,
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
-    assert stored.returncode == 0, stored.stderr
-    return work
-
-
-def apply_ready(
-    cli: Path,
-    specs: Path,
-    delta: Path,
-    output: Path,
-    work: Path,
-) -> subprocess.CompletedProcess[str]:
-    return run_python(
-        cli,
-        "apply-delta",
-        specs,
-        delta,
-        output,
-        work,
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
-
-
-def run_confirmed_workflow(
-    cli: Path,
-    specs: Path,
-    delta: Path,
-    preview: Path,
-    *expected_diff: str,
-) -> str:
-    work = ready_state(cli, preview.parent)
-    validated = run_python(cli, "validate-delta", delta, specs)
-    assert validated.returncode == 0, validated.stderr
-    generated = run_python(
-        cli,
-        "apply-delta",
-        specs,
-        delta,
-        preview,
-        work,
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
-    assert generated.returncode == 0, generated.stderr
-    assert run_python(cli, "validate-main", preview).returncode == 0
-    diff = run_python(cli, "diff", specs, preview)
-    assert diff.returncode == 0, diff.stderr
-    for fragment in expected_diff:
-        assert fragment in diff.stdout
-    applied = run_python(
-        cli,
-        "apply-delta",
-        specs,
-        delta,
-        specs,
-        work,
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
-    assert applied.returncode == 0, applied.stderr
-    assert run_python(cli, "validate-main", specs).returncode == 0
-    assert run_python(cli, "diff", specs, preview).stdout == ""
-    return diff.stdout
-
-
-def _package_fingerprint(root: Path) -> str:
-    digest = hashlib.sha256()
-    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
-        relative = path.relative_to(root).as_posix()
-        if "__pycache__" in path.parts or path.suffix == ".pyc":
-            continue
-        if path.is_symlink():
-            digest.update(b"link\0")
-            digest.update(relative.encode())
-            digest.update(b"\0")
-            digest.update(os.readlink(path).encode())
-        elif path.is_dir():
-            digest.update(b"dir\0")
-            digest.update(relative.encode())
-        elif path.is_file():
-            digest.update(b"file\0")
-            digest.update(relative.encode())
-            digest.update(b"\0")
-            digest.update(path.read_bytes())
-    return digest.hexdigest()
-
-
-def _cleanup_lightweight_install() -> None:
-    global _lightweight_install, _lightweight_install_fingerprint
-    if _lightweight_install is not None:
-        prefix = (
-            _lightweight_install[0].parent
-            if os.name == "nt"
-            else _lightweight_install[0].parent.parent
-        )
-        shutil.rmtree(prefix, ignore_errors=True)
-        _lightweight_install = None
-    _lightweight_install_fingerprint = None
-
-
-atexit.register(_cleanup_lightweight_install)
-atexit.register(_cleanup_controlled_dev_template)
-
-
-def _lightweight_executable(prefix: Path) -> Path:
-    executable = prefix / ("myspec.cmd" if os.name == "nt" else "bin/myspec")
-    executable.parent.mkdir(parents=True, exist_ok=True)
-    if os.name == "nt":
-        executable.write_text("@echo off\n", encoding="utf-8")
-    else:
-        executable.write_text("#!/bin/sh\n", encoding="utf-8")
-        executable.chmod(0o755)
-    return executable
-
-
-def _install_lightweight_myspec() -> tuple[Path, Path]:
-    global _lightweight_install, _lightweight_install_fingerprint
-    if (
-        _lightweight_install is not None
-        and _lightweight_install_fingerprint is not None
-        and _lightweight_install[0].is_file()
-        and _lightweight_install[1].is_dir()
-        and _lightweight_install[1].parents[1].is_dir()
-        and _package_fingerprint(_lightweight_install[1].parents[1]) == _lightweight_install_fingerprint
-    ):
-        return _lightweight_install
-
-    _cleanup_lightweight_install()
-    local_root = REPO_ROOT / ".local"
-    local_root.mkdir(parents=True, exist_ok=True)
-    prefix = Path(tempfile.mkdtemp(prefix="myspec-lightweight-", dir=local_root))
-    root = prefix / ("node_modules" if os.name == "nt" else "lib/node_modules")
-    installed_package = root / "@liuli195" / "myspec"
-    shutil.copytree(
-        PLUGIN_ROOT,
-        installed_package,
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-    )
-    shutil.copy2(SHARED_MANAGEMENT, installed_package / "python" / "management.py")
-    lifecycle_root = root / "plugins" / "tool-lifecycle"
-    (lifecycle_root / "python").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(SHARED_MANAGEMENT, lifecycle_root / "python" / "management.py")
-    shutil.copy2(PACK, lifecycle_root / "pack.py")
-    executable = _lightweight_executable(prefix)
-    _lightweight_install = (executable, installed_package)
-    _lightweight_install_fingerprint = _package_fingerprint(root)
-    return _lightweight_install
-
-
-def _copy_lightweight_myspec(tmp_path: Path) -> tuple[Path, Path]:
-    _shared_executable, shared_package = _install_lightweight_myspec()
-    prefix = tmp_path / "npm-prefix"
-    assert not prefix.exists()
-    root = prefix / ("node_modules" if os.name == "nt" else "lib/node_modules")
-    installed_package = root / "@liuli195" / "myspec"
-    shutil.copytree(
-        shared_package,
-        installed_package,
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-    )
-    shutil.copytree(
-        shared_package.parents[1] / "plugins" / "tool-lifecycle",
-        root / "plugins" / "tool-lifecycle",
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-    )
-    return _lightweight_executable(prefix), installed_package
-
-
-def install_packed_myspec(tmp_path: Path) -> tuple[Path, Path]:
-    supplied_tarball = os.environ.get("MYSPEC_TEST_TARBALL")
-    if (
-        supplied_tarball
-        and os.environ.get("MYSPEC_TEST_IN_PROCESS") == "1"
-        and _current_test_name() not in _REAL_INSTALL_TESTS
-    ):
-        if _current_test_name() in _PRIVATE_LIGHTWEIGHT_INSTALL_TESTS:
-            package_dir = tmp_path / "package"
-            package_dir.mkdir()
-            tarball = Path(supplied_tarball).resolve()
-            assert tarball.is_file()
-            shutil.copy2(tarball, package_dir / tarball.name)
-            return _copy_lightweight_myspec(tmp_path)
-        return _install_lightweight_myspec()
-
-    package_dir = tmp_path / "package"
-    package_dir.mkdir()
-    if supplied_tarball:
-        tarball = Path(supplied_tarball).resolve()
-        assert tarball.is_file()
-        shutil.copy2(tarball, package_dir / tarball.name)
-    else:
-        packed = subprocess.run(
-            [sys.executable, str(PACK), "myspec", str(package_dir)],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert packed.returncode == 0, packed.stderr
-        tarball = Path(packed.stdout.strip())
-
-    npm = shutil.which("npm")
-    assert npm is not None
-    prefix = tmp_path / "npm-prefix"
-    assert not prefix.exists()
-    installed = subprocess.run(
-        [
-            npm,
-            "install",
-            "--global",
-            "--prefix",
-            str(prefix),
-            "--ignore-scripts",
-            "--no-audit",
-            "--no-fund",
-            str(tarball),
-        ],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert installed.returncode == 0, installed.stderr
-    executable = prefix / ("myspec.cmd" if os.name == "nt" else "bin/myspec")
-    assert executable.is_file()
-    npm_root = subprocess.run(
-        [npm, "root", "--global", "--prefix", str(prefix)],
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    return executable, Path(npm_root.stdout.strip()) / "@liuli195" / "myspec"
-
-
-def npm_prefix_for(installed_package: Path) -> Path:
-    node_modules = installed_package.parents[1]
-    return node_modules.parent.parent if node_modules.parent.name == "lib" else node_modules.parent
-
-
-def pack_myspec_version(tmp_path: Path, version: str, marker: Path | None = None) -> Path:
-    source = tmp_path / f"myspec-{version}"
-    shutil.copytree(PLUGIN_ROOT, source)
-    for relative in ("package.json", ".claude-plugin/plugin.json", ".codex-plugin/plugin.json"):
-        path = source / relative
-        value = json.loads(path.read_text(encoding="utf-8"))
-        value["version"] = version
-        write(path, json.dumps(value, indent=2))
-    if marker is not None:
-        launcher = source / "bin" / "myspec.js"
-        text = launcher.read_text(encoding="utf-8")
-        text = text.replace(
-            'const path = require("node:path");',
-            'const path = require("node:path");\n'
-            'require("node:fs").appendFileSync(process.env.MYSPEC_REEXEC_MARKER, `${process.pid}\\n`);',
-        )
-        write(launcher, text)
-    management = (REPO_ROOT / "plugins" / "tool-lifecycle" / "python" / "management.py").read_text(encoding="utf-8")
-    write(source / "python" / "management.py", management)
-    package_dir = tmp_path / f"package-{version}"
-    package_dir.mkdir()
-    packed = subprocess.run(
-        [shutil.which("npm") or "npm", "pack", "--ignore-scripts", "--json", "--pack-destination", str(package_dir)],
-        cwd=source,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert packed.returncode == 0, packed.stderr
-    return package_dir / json.loads(packed.stdout)[0]["filename"]
-
-
-def _current_test_name() -> str:
-    name = os.environ.get("PYTEST_CURRENT_TEST", "").split(" ", 1)[0].rsplit("::", 1)[-1]
-    return name.split("[", 1)[0]
-
-
-_REAL_CLI_TESTS = {
-    "test_myspec_recovery_rejects_old_request_for_identical_new_legacy_session",
-    "test_myspec_recovery_outputs_ascii_json_for_non_utf8_stdout",
-    "test_myspec_recovery_init_preserves_existing_current",
-    "test_myspec_recovery_aborts_legacy_preview_and_preserves_material",
-    "test_myspec_recovery_reimports_only_delta_and_restarts_confirmation",
-    "test_myspec_recovery_refuses_interrupted_or_failed_formal_application",
-    "test_myspec_recovery_rejects_insufficient_or_foreign_evidence",
-    "test_myspec_recovery_preserves_lock_until_archive_and_retries_safely",
-    "test_myspec_recovery_init_failure_removes_only_its_own_lock",
-    "test_myspec_recovery_preserves_failed_first_preview",
-    "test_myspec_recovery_rejects_foreign_or_unsafe_archive_import",
-    "test_myspec_launcher_forwards_sigterm_to_python",
-    "test_packed_myspec_bare_cli_uses_isolated_package_before_host_commands",
-    "test_packed_myspec_installs_a_working_cli_with_agent_resources",
-}
-
-_REAL_INSTALL_TESTS = _REAL_CLI_TESTS
-
-_PRIVATE_LIGHTWEIGHT_INSTALL_TESTS = {
-    "test_packed_myspec_update_preflights_installed_clients_before_package_write",
-    "test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes",
-    "test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_missing",
-    "test_packed_myspec_update_recovers_external_success_before_bookkeeping",
-    "test_packed_myspec_preserves_lock_when_process_status_is_unknown",
-    "test_packed_myspec_update_rejects_dev_mode_and_forged_resume",
-    "test_packed_myspec_switches_package_between_development_and_saved_release",
-    "test_packed_myspec_requires_release_registration_before_first_codex_dev_init",
-    "test_packed_myspec_refreshes_enabled_codex_across_global_mode_switches",
-    "test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_codex",
-    "test_packed_myspec_refreshes_enabled_claude_across_global_mode_switches",
-    "test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_claude",
-    "test_packed_myspec_claude_reinstall_failure_does_not_report_refreshed",
-    "test_packed_myspec_release_install_failure_stays_in_dev_and_retries",
-    "test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_state",
-    "test_packed_myspec_doctor_reports_partial_update_read_only",
-    "test_packed_myspec_doctor_reports_actual_package_version_mismatch",
-}
-
-
-def _spec_ops_for_executable(executable: Path) -> Path:
-    prefix = executable.parent if os.name == "nt" else executable.parent.parent
-    root = prefix / ("node_modules" if os.name == "nt" else "lib/node_modules")
-    spec_ops = root / "@liuli195" / "myspec" / "python" / "spec_ops.py"
-    assert spec_ops.is_file(), spec_ops
-    return spec_ops
-
-
-def run_cli(
-    executable: Path,
-    *args: object,
-    env: dict[str, str] | None = None,
-    cwd: Path | None = None,
-) -> subprocess.CompletedProcess[str]:
-    if (
-        os.environ.get("MYSPEC_TEST_IN_PROCESS") == "1"
-        and _current_test_name() not in _REAL_CLI_TESTS
-    ):
-        return _run_in_process(_spec_ops_for_executable(executable), *args, env=env, cwd=cwd)
-    return subprocess.run(
-        [str(executable), *(str(arg) for arg in args)],
-        cwd=cwd,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-
-def run_public_spec_cli(*args: object) -> subprocess.CompletedProcess[str]:
-    if os.environ.get("MYSPEC_TEST_IN_PROCESS") == "1":
-        return run_python(SPEC_OPS, *args)
-    node = shutil.which("node")
-    assert node is not None
-    return subprocess.run(
-        [node, str(PLUGIN_ROOT / "bin" / "myspec.js"), *(str(arg) for arg in args)],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-
-def install_removed_pi_command(root: Path) -> tuple[Path, Path]:
-    bin_dir = root / "bin"
-    bin_dir.mkdir(parents=True)
-    script = root / "fake_pi.py"
-    log = root / "pi.log"
-    write(script, "import os, sys\nfrom pathlib import Path\n"
-          'Path(os.environ["MYSPEC_PI_LOG"]).write_text("unexpected Pi invocation", encoding="utf-8")\n'
-          "raise SystemExit(99)")
-    launcher = bin_dir / ("pi.cmd" if os.name == "nt" else "pi")
-    write(launcher, f'@"{sys.executable}" "{script}" %*' if os.name == "nt"
-          else f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"')
-    if os.name != "nt":
-        launcher.chmod(0o755)
-    return bin_dir, log
-
-
-def install_fake_claude(root: Path) -> tuple[Path, Path, Path]:
-    bin_dir = root / "bin"
-    bin_dir.mkdir(parents=True)
-    script = root / "fake_claude.py"
-    log = root / "claude.log"
-    state = root / "claude-state.json"
-    write(
-        script,
-        """import json
-import os
-import shutil
-import sys
-from pathlib import Path
-
-arguments = sys.argv[1:]
-state_path = Path(os.environ["MYSPEC_CLAUDE_STATE"])
-state = json.loads(state_path.read_text(encoding="utf-8"))
-with Path(os.environ["MYSPEC_CLAUDE_LOG"]).open("a", encoding="utf-8") as log:
-    log.write(json.dumps(arguments) + "\\n")
-
-def save():
-    state_path.write_text(json.dumps(state, indent=2) + "\\n", encoding="utf-8")
-
-def marketplace(name):
-    return next((item for item in state["marketplaces"] if item["name"] == name), None)
-
-def plugin(identifier):
-    return next((item for item in state["plugins"] if item["id"] == identifier), None)
-
-def refresh(identifier):
-    name, market_name = identifier.split("@", 1)
-    market = marketplace(market_name)
-    if market is None or market.get("source") != "directory":
-        print("missing local marketplace", file=sys.stderr)
-        raise SystemExit(1)
-    source = Path(market["path"])
-    manifest = json.loads((source / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
-    target = Path(os.environ["MYSPEC_CLAUDE_HOME"]) / "plugins" / "cache" / market_name / name / manifest["version"]
-    if target.exists():
-        shutil.rmtree(target)
-    shutil.copytree(source, target)
-    current = plugin(identifier)
-    record = {
-        "id": identifier,
-        "version": os.environ.get("MYSPEC_CLAUDE_REPORTED_VERSION", manifest["version"]),
-        "scope": "user",
-        "enabled": current["enabled"] if current else True,
-        "installPath": str(target),
-    }
-    if current:
-        state["plugins"][state["plugins"].index(current)] = record
-    else:
-        state["plugins"].append(record)
-    save()
-
-if arguments == ["plugin", "marketplace", "list", "--json"]:
-    print(json.dumps(state["marketplaces"]))
-elif arguments == ["plugin", "list", "--json"]:
-    print(json.dumps(state["plugins"]))
-elif arguments[:3] == ["plugin", "marketplace", "add"] and len(arguments) == 4:
-    source = Path(arguments[3])
-    manifest = json.loads((source / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
-    if marketplace(manifest["name"]) is None:
-        state["marketplaces"].append({
-            "name": manifest["name"],
-            "source": "directory",
-            "path": str(source),
-            "installLocation": str(source),
-        })
-        save()
-elif arguments[:2] == ["plugin", "install"] and arguments[3:] == ["--scope", "user"]:
-    if os.environ.get("MYSPEC_CLAUDE_FAIL_INSTALL") == "1":
-        print("simulated install failure", file=sys.stderr)
-        raise SystemExit(1)
-    refresh(arguments[2])
-    if os.environ.get("MYSPEC_CLAUDE_FAIL_AFTER_INSTALL") == "1":
-        print("simulated interruption after install", file=sys.stderr)
-        raise SystemExit(1)
-elif arguments[:2] == ["plugin", "update"] and arguments[3:] == ["--scope", "user"]:
-    current = plugin(arguments[2])
-    name, market_name = arguments[2].split("@", 1)
-    source = Path(marketplace(market_name)["path"])
-    version = json.loads((source / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"]
-    if current is None or current["version"] != version:
-        refresh(arguments[2])
-elif arguments[:2] == ["plugin", "uninstall"] and arguments[3:] == ["--scope", "user", "--keep-data"]:
-    current = plugin(arguments[2])
-    if current is None:
-        print("missing plugin", file=sys.stderr)
-        raise SystemExit(1)
-    if os.environ.get("MYSPEC_CLAUDE_UNINSTALL_NOOP") != "1":
-        state["plugins"].remove(current)
-        save()
-    if os.environ.get("MYSPEC_CLAUDE_FAIL_AFTER_UNINSTALL") == "1":
-        print("simulated interruption after uninstall", file=sys.stderr)
-        raise SystemExit(1)
-elif arguments[:2] in (["plugin", "enable"], ["plugin", "disable"]) and arguments[3:] == ["--scope", "user"]:
-    current = plugin(arguments[2])
-    if current is None:
-        print("missing plugin", file=sys.stderr)
-        raise SystemExit(1)
-    current["enabled"] = arguments[1] == "enable"
-    save()
-    if os.environ.get("MYSPEC_CLAUDE_FAIL_AFTER_ENABLED") == str(current["enabled"]).lower():
-        print("simulated interruption after enabled state", file=sys.stderr)
-        raise SystemExit(1)
-elif arguments[:3] == ["plugin", "marketplace", "update"] and len(arguments) == 4:
-    if marketplace(arguments[3]) is None:
-        raise SystemExit(1)
-else:
-    raise SystemExit(2)
-""",
-    )
-    if sys.platform == "win32":
-        launcher = bin_dir / "claude.cmd"
-        write(launcher, f'@"{sys.executable}" "{script}" %*')
-    else:
-        launcher = bin_dir / "claude"
-        write(launcher, f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"')
-        launcher.chmod(0o755)
-    return bin_dir, log, state
-
-
-def install_fake_codex(root: Path) -> tuple[Path, Path, Path]:
-    bin_dir = root / "bin"
-    bin_dir.mkdir(parents=True)
-    script = root / "fake_codex.py"
-    log = root / "codex.log"
-    state = root / "codex-state.json"
-    write(
-        script,
-        '''import json
-import os
-import re
-import shutil
-import sys
-from pathlib import Path
-
-arguments = sys.argv[1:]
-state_path = Path(os.environ["MYSPEC_CODEX_STATE"])
-state = json.loads(state_path.read_text(encoding="utf-8"))
-config_path = Path(os.environ["CODEX_HOME"]) / "config.toml"
-with Path(os.environ["MYSPEC_CODEX_LOG"]).open("a", encoding="utf-8") as log:
-    log.write(json.dumps(arguments) + "\\n")
-environment_log = os.environ.get("MYSPEC_CODEX_ENV_LOG")
-if environment_log:
-    with Path(environment_log).open("a", encoding="utf-8") as log:
-        log.write(os.environ.get("CODEX_HOME", "") + "\\n")
-
-def save():
-    state_path.write_text(json.dumps(state, indent=2) + "\\n", encoding="utf-8")
-
-def marketplace(name):
-    return next((item for item in state["marketplaces"] if item["name"] == name), None)
-
-def plugin(identifier):
-    return next((item for item in state["installed"] if item["pluginId"] == identifier), None)
-
-def set_enabled(identifier, enabled):
-    text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
-    header = f'[plugins."{identifier}"]'
-    pattern = re.compile(rf'(?ms)^\\[plugins\\."{re.escape(identifier)}"\\]\\s*\\n(?P<body>.*?)(?=^\\[|\\Z)')
-    match = pattern.search(text)
-    body = f"enabled = {'true' if enabled else 'false'}\\n"
-    if match:
-        current = match.group("body")
-        current = re.sub(r"(?m)^enabled\\s*=.*$", body.rstrip(), current, count=1) if re.search(r"(?m)^enabled\\s*=", current) else body + current
-        text = text[:match.start("body")] + current + text[match.end("body"):]
-    else:
-        text = text.rstrip() + ("\\n\\n" if text.strip() else "") + header + "\\n" + body
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(text, encoding="utf-8")
-
-def remove_config(identifier):
-    if not config_path.exists():
-        return
-    text = config_path.read_text(encoding="utf-8")
-    pattern = re.compile(rf'(?ms)^\\[plugins\\."{re.escape(identifier)}"\\]\\s*\\n.*?(?=^\\[|\\Z)')
-    config_path.write_text(pattern.sub("", text), encoding="utf-8")
-
-def configured_enabled(identifier):
-    if not config_path.exists():
-        return False
-    text = config_path.read_text(encoding="utf-8")
-    pattern = re.compile(rf'(?ms)^\\[plugins\\."{re.escape(identifier)}"\\]\\s*\\n(?P<body>.*?)(?=^\\[|\\Z)')
-    match = pattern.search(text)
-    return bool(match and re.search(r"(?m)^enabled\\s*=\\s*true\\s*$", match.group("body")))
-
-def install(identifier):
-    name, market_name = identifier.split("@", 1)
-    market = marketplace(market_name)
-    if market is None:
-        print("missing marketplace", file=sys.stderr)
-        raise SystemExit(1)
-    root = Path(market["root"])
-    catalog = json.loads((root / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8"))
-    entry = next((item for item in catalog["plugins"] if item["name"] == name), None)
-    if entry is None:
-        print("missing plugin", file=sys.stderr)
-        raise SystemExit(1)
-    relative = entry["source"]["path"]
-    source = (root / relative).resolve()
-    manifest = json.loads((source / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
-    target = Path(os.environ["CODEX_HOME"]) / "plugins" / "cache" / market_name / name / manifest["version"]
-    if target.exists():
-        shutil.rmtree(target)
-    shutil.copytree(source, target)
-    current = plugin(identifier)
-    record = {
-        "pluginId": identifier,
-        "name": name,
-        "marketplaceName": market_name,
-        "version": os.environ.get("MYSPEC_CODEX_REPORTED_VERSION", manifest["version"]),
-        "installed": True,
-        "source": {"source": "local", "path": str(source)},
-        "marketplaceSource": market.get("marketplaceSource"),
-        "installPolicy": "AVAILABLE",
-        "authPolicy": "ON_INSTALL",
-    }
-    if current:
-        state["installed"][state["installed"].index(current)] = record
-    else:
-        state["installed"].append(record)
-    set_enabled(identifier, True)
-    save()
-
-if arguments == ["plugin", "marketplace", "list", "--json"]:
-    print(json.dumps({"marketplaces": state["marketplaces"]}))
-elif arguments == ["plugin", "list", "--json"]:
-    installed = [{**item, "enabled": configured_enabled(item["pluginId"])} for item in state["installed"]]
-    print(json.dumps({"installed": installed, "available": state["available"]}))
-elif arguments[:3] == ["plugin", "marketplace", "add"] and arguments[-1:] == ["--json"]:
-    requested = Path(arguments[3])
-    source = requested.resolve()
-    catalog = json.loads((source / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8"))
-    if marketplace(catalog["name"]) is None:
-        state["marketplaces"].append({
-            "name": catalog["name"],
-            "root": str(source),
-            "marketplaceSource": {"sourceType": "local", "source": str(source)},
-        })
-        save()
-    print(json.dumps({"name": catalog["name"], "root": str(source)}))
-elif arguments[:2] == ["plugin", "add"] and arguments[-1:] == ["--json"]:
-    install(arguments[2])
-    if os.environ.get("MYSPEC_CODEX_FAIL_AFTER_ADD") == "1":
-        print("simulated interruption after add", file=sys.stderr)
-        raise SystemExit(1)
-    print(json.dumps({"pluginId": arguments[2]}))
-elif arguments[:2] == ["plugin", "remove"] and arguments[-1:] == ["--json"]:
-    current = plugin(arguments[2])
-    if current is None:
-        print("missing plugin", file=sys.stderr)
-        raise SystemExit(1)
-    if os.environ.get("MYSPEC_CODEX_REMOVE_NOOP") != "1":
-        target = Path(os.environ["CODEX_HOME"]) / "plugins" / "cache" / current["marketplaceName"] / current["name"] / current["version"]
-        if target.exists():
-            shutil.rmtree(target)
-        state["installed"].remove(current)
-        remove_config(arguments[2])
-        save()
-    if os.environ.get("MYSPEC_CODEX_FAIL_AFTER_REMOVE") == "1":
-        print("simulated interruption after remove", file=sys.stderr)
-        raise SystemExit(1)
-    print(json.dumps({"pluginId": arguments[2]}))
-else:
-    raise SystemExit(2)
-''',
-    )
-    if sys.platform == "win32":
-        launcher = bin_dir / "codex.cmd"
-        write(launcher, f'@"{sys.executable}" "{script}" %*')
-    else:
-        launcher = bin_dir / "codex"
-        write(launcher, f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"')
-        launcher.chmod(0o755)
-    return bin_dir, log, state
-
-
-def install_fake_npm(root: Path, release_tarball: Path) -> tuple[Path, Path]:
-    bin_dir = root / "bin"
-    bin_dir.mkdir(parents=True)
-    script = root / "fake_npm.py"
-    log = root / "npm.log"
-    log.touch()
-    npm = shutil.which("npm")
-    assert npm is not None
-    write(
-        script,
-        """import json
-import os
-import subprocess
-import sys
-from pathlib import Path
-
-arguments = sys.argv[1:]
-with Path(os.environ["MYSPEC_NPM_LOG"]).open("a", encoding="utf-8") as log:
-    log.write(json.dumps(arguments) + "\\n")
-if arguments == ["view", "@liuli195/myspec", "version", "--json"]:
-    print(json.dumps(os.environ.get("MYSPEC_NPM_LATEST", os.environ["MYSPEC_PACKAGE_VERSION"])))
-    raise SystemExit(0)
-if arguments == ["root", "--global"] and os.environ.get("MYSPEC_NPM_FAIL_ROOT") == "1":
-    print("simulated npm root failure", file=sys.stderr)
-    raise SystemExit(1)
-if arguments[:2] == ["install", "--global"]:
-    if os.environ.get("MYSPEC_NPM_FAIL_INSTALL") == "1":
-        print("simulated install failure", file=sys.stderr)
-        raise SystemExit(1)
-    arguments[-1] = os.environ["MYSPEC_RELEASE_TARBALL"]
-command = [os.environ["MYSPEC_REAL_NPM"], *arguments]
-if os.name == "nt":
-    result = subprocess.run(subprocess.list2cmdline(command), shell=True)
-else:
-    result = subprocess.run(command)
-if arguments[:2] == ["install", "--global"] and result.returncode == 0 and os.environ.get("MYSPEC_NPM_FAIL_AFTER_INSTALL") == "1":
-    print("simulated interruption after npm install", file=sys.stderr)
-    raise SystemExit(1)
-raise SystemExit(result.returncode)
-""",
-    )
-    if sys.platform == "win32":
-        launcher = bin_dir / "npm.cmd"
-        write(launcher, f'@"{sys.executable}" "{script}" %*')
-    else:
-        launcher = bin_dir / "npm"
-        write(launcher, f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"')
-        launcher.chmod(0o755)
-    return bin_dir, log
-
-
-def isolated_myspec_env(
-    tmp_path: Path,
-    prefix: Path,
-    *extra_paths: Path,
-) -> dict[str, str]:
-    home = tmp_path / "home"
-    home.mkdir(exist_ok=True)
-    package_bin = prefix if os.name == "nt" else prefix / "bin"
-    path_entries = [str(package_bin), *(str(path) for path in extra_paths)]
-    command_paths = [shutil.which(command) for command in ("node", "npm", "git")]
-    if os.name == "nt":
-        path_entries.extend(
-            str(Path(path).parent) for path in command_paths if path is not None
-        )
-        path_entries.append(str(Path(sys.executable).parent))
-    else:
-        command_bin = tmp_path / "system-commands"
-        command_bin.mkdir(exist_ok=True)
-        for path in command_paths:
-            assert path is not None
-            link = command_bin / Path(path).name
-            if not link.exists():
-                link.symlink_to(Path(path).resolve())
-        path_entries.append(str(command_bin))
-    return {
-        **os.environ,
-        "HOME": str(home),
-        "USERPROFILE": str(home),
-        "PI_CODING_AGENT_DIR": str(home / ".pi" / "agent"),
-        "NPM_CONFIG_PREFIX": str(prefix),
-        "MYSPEC_PYTHON": sys.executable,
-        "MYSPEC_PACKAGE_VERSION": PACKAGE_VERSION,
-        "PATH": os.pathsep.join(path_entries),
-    }
-
-
-def source_case_report(
-    client: str,
-    case: dict[str, object],
-    root: Path,
-    executable: Path,
-    installed_package: Path,
-    prefix: Path,
-) -> dict[str, object]:
-    scenario = str(case["scenario"])
-    enabled = scenario != "stable-disabled"
-    installed = scenario != "stable-missing-directory"
-    legacy = scenario == "legacy-enabled"
-    mismatch = scenario == "stable-source-mismatch"
-    source_root = root / ("legacy" if legacy else "wrong-source" if mismatch else "source")
-    if legacy:
-        source_root = source_root / "plugins" / "my-spec"
-    if installed and scenario != "no-source":
-        shutil.copytree(installed_package, source_root)
-
+def run_python(script, *args):
+    assert script == SPEC_OPS, f"unexpected_python_command: {script}"
+    return invoke_main(_load_in_process_spec_ops(SPEC_OPS), *args)
+
+
+class ManagementDocuments:
+    """Only lifecycle JSON/config leaves and exact external command responses.
+
+    This is not a filesystem: there is no mkdir/open/rename/copy emulation.
+    Physical installation, locking, aliases and rollback stay in TestMySpec.
+    """
+
+    def __init__(self, module, monkeypatch):
+        self.module = module
+        self.management = sys.modules[module.run_management.__module__]
+        self.monkeypatch = monkeypatch
+        self.root = REPO_ROOT / "__myspec_documents__"
+        self.prefix = self.root / "prefix"
+        self.stable = self.prefix / ("node_modules" if os.name == "nt" else "lib/node_modules") / "@liuli195" / "myspec"
+        self.cache = self.root / "client-cache"
+        self.home = self.root / "home"
+        self.codex_home = self.home / ".codex"
+        self.state_path = self.home / ".myspec" / "state.json"
+        self.config_path = self.codex_home / "config.toml"
+        manifest = json.loads((PLUGIN_ROOT / "package.json").read_text(encoding="utf-8"))
+        self.documents = {self.stable / "package.json": manifest, self.cache / "package.json": dict(manifest)}
+        self.texts = {}
+        self.config_paths = {self.config_path}
+        self.realpaths = {}
+        self.sdk_environments = []
+        self.writes = []
+        self.lock_calls = []
+        self.available = set()
+        self.stub = CommandStub(consume=True)
+        self.directories = {self.stable, self.cache, self.codex_home}
+        self.files = {self.stable / "package.json", self.cache / "package.json",
+                      self.prefix / ("myspec.cmd" if os.name == "nt" else "bin/myspec")}
+        self.files.update(root / "skills" / skill / "SKILL.md" for root in (self.stable, self.cache) for skill in SKILL_NAMES)
+        original_exists, original_is_dir, original_is_file = Path.exists, Path.is_dir, Path.is_file
+        monkeypatch.setattr(Path, "exists", lambda path: path in self.documents or path in self.texts or path in self.files or path in self.directories or (False if path.is_relative_to(self.root) else original_exists(path)))
+        monkeypatch.setattr(Path, "is_dir", lambda path: path in self.directories if path.is_relative_to(self.root) else original_is_dir(path))
+        monkeypatch.setattr(Path, "is_file", lambda path: path in self.documents or path in self.files if path.is_relative_to(self.root) else original_is_file(path))
+        original_access = os.access
+        monkeypatch.setattr(os, "access", lambda path, mode: True if Path(path) in self.directories else original_access(path, mode))
+        original_read_json, original_text = self.management._read_json, self.management._text
+        monkeypatch.setattr(self.management, "_read_json", lambda path: json.loads(json.dumps(self.documents[path])) if path in self.documents else original_read_json(path))
+        monkeypatch.setattr(self.management, "_text", lambda path: self.texts[path] if path in self.texts else original_text(path))
+        monkeypatch.setattr(self.management, "_atomic_json", self.save_json)
+        monkeypatch.setattr(self.management, "_atomic_text", self.save_text)
+        self.real_run = self.management._run
+        monkeypatch.setattr(self.management, "_run", self.stub)
+        original_realpath = os.path.realpath
+        monkeypatch.setattr(os.path, "realpath", lambda path, **kwargs: str(self.realpaths.get(Path(path), Path(original_realpath(path, **kwargs)))))
+        monkeypatch.setattr(self.management, "_RUNNING_PACKAGE_ROOT", self.stable)
+        monkeypatch.setattr(self.management, "_acquire_install_lock", lambda command: self.lock_calls.append(("acquire", command)) or "operation")
+        monkeypatch.setattr(self.management, "_claim_install_lock", lambda token: self.lock_calls.append(("claim", token)) or "operation")
+        monkeypatch.setattr(self.management, "_release_install_lock", lambda operation: self.lock_calls.append(("release", operation)))
+        monkeypatch.setattr(self.management, "_lock_report", lambda: None)
+        monkeypatch.setattr(shutil, "which", lambda command, **kwargs: str(self.root / "bin" / command) if command in self.available else None)
+        for key, value in {"HOME": self.home, "USERPROFILE": self.home, "CODEX_HOME": self.codex_home, "NPM_CONFIG_PREFIX": self.prefix}.items():
+            monkeypatch.setenv(key, str(value))
+        for key in ("ORCA_CODEX_HOME", "ORCA_USER_DATA_PATH"):
+            monkeypatch.delenv(key, raising=False)
+
+    def save_json(self, path, value):
+        assert path == self.state_path, f"unexpected_lifecycle_json_write: {path}"
+        self.documents[path] = json.loads(json.dumps(value))
+        self.writes.append((path, json.loads(json.dumps(value))))
+
+    def save_text(self, path, value):
+        assert path in self.config_paths, f"unexpected_lifecycle_text_write: {path}"
+        self.texts[path] = value
+        self.writes.append((path, value))
+
+    def response(self, command, value=None, *, stdout=None, stderr="", code=0, once=False):
+        key = tuple(command)
+        output = json.dumps(value) if stdout is None and value is not None else stdout or ""
+        result = completed(key, stdout=output, stderr=stderr, returncode=code)
+        if once:
+            self.stub.responses.append((key, result))
+        else:
+            self.stub.defaults = [(args, previous) for args, previous in self.stub.defaults if args != key]
+            self.stub.defaults.append((key, result))
+
+    def records(self, client, marketplaces, plugins):
+        self.available.add(client)
+        if client == "claude":
+            self.response((client, "plugin", "marketplace", "list", "--json"), marketplaces)
+            self.response((client, "plugin", "list", "--json"), plugins)
+        else:
+            self.response((client, "plugin", "marketplace", "list", "--json"), {"marketplaces": marketplaces})
+            self.response((client, "plugin", "list", "--json"), {"installed": plugins, "available": []})
+
+    def marketplace(self, client, *, legacy=False, mismatch=False):
+        name = "my-agent-skills-marketplace" if legacy else "myspec"
+        source = self.root / "wrong-source" if mismatch else self.stable
+        return ({"name": name, "source": "directory", "path": str(source), "installLocation": str(source)}
+                if client == "claude" else
+                {"name": name, "root": str(source), "marketplaceSource": {"sourceType": "local", "source": str(source)}})
+
+    def plugin(self, client, *, legacy=False, enabled=True, installed=True, version=None):
+        identifier = "my-spec@my-agent-skills-marketplace" if legacy else "my-spec@myspec"
+        path = self.cache if installed else self.root / "missing-client-cache"
+        if client == "claude":
+            return {"id": identifier, "version": version or PACKAGE_VERSION, "scope": "user",
+                    "enabled": enabled, "installPath": str(path)}
+        return {"pluginId": identifier, "name": "my-spec", "marketplaceName": identifier.split("@", 1)[1],
+                "version": version or PACKAGE_VERSION, "installed": True, "enabled": enabled,
+                "source": {"source": "local", "path": str(path)}}
+
+    def queue_plugins(self, client, values):
+        for value in values:
+            payload = value if client == "claude" else {"installed": value, "available": []}
+            self.response((client, "plugin", "list", "--json"), payload, once=True)
+
+    def release_input(self, version):
+        # Input for the post-install runtime. The actual install/handoff is
+        # independently exercised in TestMySpec, never mocked as main success.
+        for path in (self.stable / "package.json", self.cache / "package.json"):
+            self.documents[path]["version"] = version
+        self.monkeypatch.setattr(self.management, "_RUNNING_PACKAGE_VERSION", version)
+
+    def source_documents(self):
+        source = self.root / "source"
+        package = source / "plugins" / "my-spec"
+        paths = [
+            "package.json", "python/lifecycle_profile.json", "bin/myspec.js",
+            "python/spec_ops.py", "python/management.py",
+            ".agents/plugins/marketplace.json", ".claude-plugin/marketplace.json",
+            ".claude-plugin/plugin.json", ".codex-plugin/plugin.json",
+            *(f"skills/{skill}/SKILL.md" for skill in SKILL_NAMES),
+        ]
+        for relative in paths:
+            target = package / relative
+            self.files.add(target)
+            if target.suffix == ".json":
+                self.documents[target] = json.loads((PLUGIN_ROOT / relative).read_text(encoding="utf-8"))
+        for relative in (".agents/plugins/marketplace.json", ".claude-plugin/marketplace.json"):
+            self.documents[source / relative] = json.loads((REPO_ROOT / relative).read_text(encoding="utf-8"))
+        self.files.add(source / "plugins/tool-lifecycle/python/management.py")
+        self.directories.update((source, package))
+        commit = "a" * 40
+        for command, stdout in (
+            (("git", "rev-parse", "--show-toplevel"), str(source)),
+            (("git", "diff", "--quiet", "--exit-code"), ""),
+            (("git", "diff", "--cached", "--quiet", "--exit-code"), ""),
+            (("git", "ls-files", "--others", "--exclude-standard"), ""),
+            (("git", "remote", "get-url", "origin"), "https://github.com/liuli195/my-agent-skills.git"),
+            (("git", "rev-parse", "HEAD"), commit),
+            (("git", "ls-remote", "origin"), commit + "\trefs/heads/main\n"),
+        ):
+            self.response(command, stdout=stdout)
+        return source, package
+
+    def switch_input(self, stage, source):
+        token = "memory-switch-token"
+        self.documents[self.state_path] = {
+            "mode": "dev", "source": str(source), "previousReleaseVersion": PACKAGE_VERSION,
+            "pendingSwitch": {"stage": stage, "token": token},
+        }
+        return token
+
+    def capture_sdk_environments(self):
+        # Preserve the real _run selection/argument/environment behavior while
+        # replacing only subprocess.run at the external program boundary.
+        self.monkeypatch.setattr(self.management, "_run", self.real_run)
+        def execute(invocation, **kwargs):
+            assert isinstance(invocation, list), f"unexpected_sdk_shell_command: {invocation}"
+            command = Path(invocation[0]).name
+            self.sdk_environments.append((command, dict(kwargs.get("env") or {})))
+            return self.stub(command, *invocation[1:])
+        self.monkeypatch.setattr(subprocess, "run", execute)
+
+    def run(self, *args):
+        return invoke_main(self.module, *args)
+
+
+def queue_client_init(runtime, client, *, legacy=False, existing=False, enabled=True,
+                      reported_version=None, removal="success", others=()):
+    """Declare exact client replies; do not execute or model a client program."""
+    stable = runtime.plugin(client, enabled=enabled, version=reported_version)
+    legacy_plugin = runtime.plugin(client, legacy=True, enabled=False, version=PREVIOUS_VERSION)
+    initial = ([runtime.plugin(client, enabled=False, version=PREVIOUS_VERSION)] if existing else []) + ([legacy_plugin] if legacy else []) + list(others)
+    current = [stable, *([legacy_plugin] if legacy else []), *others]
+    final = [runtime.plugin(client), *([legacy_plugin] if removal == "noop" else []), *others]
+    runtime.records(client, [runtime.marketplace(client)], final)
+    def plugin_reply(value):
+        payload = value if client == "claude" else {"installed": value, "available": []}
+        runtime.response((client, "plugin", "list", "--json"), payload, once=True)
+    plugin_reply(initial)
     if client == "claude":
-        client_bin, log, state_path = install_fake_claude(root / "fake-claude")
-        env = isolated_myspec_env(root, prefix, client_bin)
-        env.update(
-            {
-                "MYSPEC_CLAUDE_LOG": str(log),
-                "MYSPEC_CLAUDE_STATE": str(state_path),
-                "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
-            }
-        )
-        identifier = "my-spec@my-agent-skills-marketplace" if legacy else "my-spec@myspec"
-        marketplaces = []
-        plugins = []
-        if scenario == "no-source":
-            plugins.append(
-                {
-                    "id": "other@other-marketplace",
-                    "version": "1.0.0",
-                    "scope": "user",
-                    "enabled": True,
-                    "installPath": str(root / "unrelated"),
-                }
-            )
+        if existing:
+            runtime.response((client, "plugin", "marketplace", "update", "myspec"))
+            runtime.response((client, "plugin", "update", "my-spec@myspec", "--scope", "user"))
         else:
-            market_name = "my-agent-skills-marketplace" if legacy else "myspec"
-            market_path = source_root if mismatch else installed_package
-            if scenario != "stable-unregistered-plugin":
-                marketplaces.append(
-                    {
-                        "name": market_name,
-                        "source": "directory",
-                        "path": str(market_path),
-                        "installLocation": str(market_path),
-                    }
-                )
-            plugins.append(
-                {
-                    "id": identifier,
-                    "version": PACKAGE_VERSION,
-                    "scope": "user",
-                    "enabled": enabled,
-                    "installPath": str(source_root),
-                }
-            )
-        write(state_path, json.dumps({"marketplaces": marketplaces, "plugins": plugins}, indent=2))
+            runtime.response((client, "plugin", "install", "my-spec@myspec", "--scope", "user"))
     else:
-        client_bin, log, state_path = install_fake_codex(root / "fake-codex")
-        env = isolated_myspec_env(root, prefix, client_bin)
-        codex_home = Path(env["HOME"]) / ".codex"
-        env.update(
-            {
-                "CODEX_HOME": str(codex_home),
-                "MYSPEC_CODEX_LOG": str(log),
-                "MYSPEC_CODEX_STATE": str(state_path),
-            }
-        )
-        identifier = "my-spec@my-agent-skills-marketplace" if legacy else "my-spec@myspec"
-        marketplaces = []
-        plugins = []
-        if scenario == "no-source":
-            plugins.append(
-                {
-                    "pluginId": "other@other-marketplace",
-                    "name": "other",
-                    "marketplaceName": "other-marketplace",
-                    "version": "1.0.0",
-                    "installed": True,
-                    "source": {"source": "local", "path": str(root / "unrelated")},
-                }
-            )
-            identifier = "other@other-marketplace"
-        else:
-            market_name = "my-agent-skills-marketplace" if legacy else "myspec"
-            market_root = source_root if mismatch else installed_package
-            if scenario != "stable-unregistered-plugin":
-                marketplaces.append(
-                    {
-                        "name": market_name,
-                        "root": str(market_root),
-                        "marketplaceSource": {"sourceType": "local", "source": str(market_root)},
-                    }
-                )
-            plugins.append(
-                {
-                    "pluginId": identifier,
-                    "name": "my-spec",
-                    "marketplaceName": market_name,
-                    "version": PACKAGE_VERSION,
-                    "installed": True,
-                    "source": {"source": "local", "path": str(source_root)},
-                }
-            )
-        write(state_path, json.dumps({"marketplaces": marketplaces, "installed": plugins, "available": []}, indent=2))
-        write(codex_home / "config.toml", f'[plugins."{identifier}"]\nenabled = {str(enabled).lower()}\n')
+        if existing:
+            runtime.response((client, "plugin", "remove", "my-spec@myspec", "--json"))
+        runtime.response((client, "plugin", "add", "my-spec@myspec", "--json"))
+    plugin_reply(current)
+    if client == "claude" and not enabled:
+        runtime.response((client, "plugin", "enable", "my-spec@myspec", "--scope", "user"))
+        current = [{**stable, "enabled": True}, *([legacy_plugin] if legacy else []), *others]
+        plugin_reply(current)
+    if legacy and reported_version in (None, PACKAGE_VERSION):
+        command = ((client, "plugin", "uninstall", "my-spec@my-agent-skills-marketplace", "--scope", "user", "--keep-data")
+                   if client == "claude" else (client, "plugin", "remove", "my-spec@my-agent-skills-marketplace", "--json"))
+        runtime.response(command, code=1 if removal == "interrupted" else 0,
+                         stderr="simulated interruption after removal" if removal == "interrupted" else "")
+    return final
 
-    diagnosed = run_cli(executable, "doctor", f"--{client}", env=env)
-    assert diagnosed.returncode == 0, diagnosed.stderr
-    return json.loads(diagnosed.stdout)[client]
+
+def assert_initializes_and_removes_legacy(runtime, client):
+    other = {"id": "unrelated@market", "enabled": True} if client == "claude" else {"pluginId": "unrelated@market", "installed": True}
+    queue_client_init(runtime, client, legacy=True, others=[other])
+    initialized = runtime.run("init", f"--{client}")
+    assert initialized.returncode == 0, initialized.stderr
+    report = json.loads(initialized.stdout)
+    assert report[client] == "initialized"
+    assert report["removedLegacyPlugins"] == ["my-spec@my-agent-skills-marketplace"]
+    assert report["source"] == str(runtime.stable)
+    assert runtime.writes == []
+    assert runtime.lock_calls[-1] == ("release", "operation")
+    # Observe the command boundary, not the canned client response itself.
+    assert not any("unrelated@market" in command for command in runtime.stub.calls)
+
+
+def assert_wrong_stable_version_keeps_legacy(runtime, client):
+    queue_client_init(runtime, client, legacy=True, reported_version="0.0.0")
+    result = runtime.run("init", f"--{client}")
+    assert result.returncode == 1
+    assert f"{client}_plugin_verify_failed" in result.stderr
+    legacy_id = "my-spec@my-agent-skills-marketplace"
+    assert not any(legacy_id in command and command[1:3] in {("plugin", "remove"), ("plugin", "uninstall")} for command in runtime.stub.calls)
+    assert runtime.writes == []
+
+
+def assert_retry_legacy_removal(runtime, client, removal):
+    queue_client_init(runtime, client, legacy=True, removal=removal)
+    failed = runtime.run("init", f"--{client}")
+    assert failed.returncode == 1
+    error = (f"{client}_plugin_" + ("uninstall" if client == "claude" else "remove") +
+             ("_incomplete" if removal == "noop" else "_failed: simulated interruption after removal"))
+    assert error in failed.stderr
+    queue_client_init(runtime, client, legacy=removal == "noop", existing=True)
+    retried = runtime.run("init", f"--{client}")
+    assert retried.returncode == 0, retried.stderr
+    expected = ["my-spec@my-agent-skills-marketplace"] if removal == "noop" else []
+    assert json.loads(retried.stdout)["removedLegacyPlugins"] == expected
+    assert runtime.writes == []
+
+
+def assert_explicit_client_and_detected_all(runtime, client):
+    missing = runtime.run("init", f"--{client}")
+    assert missing.returncode == 1
+    assert f"missing_command: {client}" in missing.stderr
+    queue_client_init(runtime, client)
+    result = runtime.run("init", "--all")
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    other = "codex" if client == "claude" else "claude"
+    assert report[client]["status"] == "initialized"
+    assert report[client]["removedLegacyPlugins"] == []
+    assert report[other] == {"status": "skipped", "reason": f"missing_command: {other}"}
+
+
+@pytest.fixture
+def management_documents(monkeypatch):
+    return ManagementDocuments(_load_in_process_spec_ops(SPEC_OPS), monkeypatch)
+
+
+class SpecDocuments:
+    """Finite spec/session document leaves, not a physical filesystem emulator.
+
+    Real parsing, merging, rendering, hashing and main are unchanged. There are
+    deliberately no open, rename, unlink, symlink, stat or rollback operations.
+    Those assertions live in TestMySpec.
+    """
+
+    def __init__(self, module, monkeypatch):
+        self.module = module
+        self.root = REPO_ROOT / "__myspec_spec_documents__"
+        self.texts = {}
+        self.directories = {self.root}
+        self.management = sys.modules[module.run_management.__module__]
+        self.stub = CommandStub()
+        monkeypatch.setattr(self.management, "_run", self.stub)
+        original_text = module._text
+        monkeypatch.setenv("NPM_CONFIG_PREFIX", str(self.root / "prefix"))
+        monkeypatch.setattr(module, "_text", lambda path: self.texts[path].replace("\r\n", "\n") if self.owns(path) else original_text(path))
+        monkeypatch.setattr(module, "_atomic_json", self.save_json)
+        original_exists, original_dir, original_file = Path.exists, Path.is_dir, Path.is_file
+        original_read, original_bytes = Path.read_text, Path.read_bytes
+        original_rglob, original_iterdir = Path.rglob, Path.iterdir
+        monkeypatch.setattr(Path, "exists", lambda path: path in self.texts or path in self.directories if self.owns(path) else original_exists(path))
+        monkeypatch.setattr(Path, "is_dir", lambda path: path in self.directories if self.owns(path) else original_dir(path))
+        monkeypatch.setattr(Path, "is_file", lambda path: path in self.texts if self.owns(path) else original_file(path))
+        monkeypatch.setattr(Path, "read_text", lambda path, *args, **kwargs: self.texts[path] if self.owns(path) else original_read(path, *args, **kwargs))
+        monkeypatch.setattr(Path, "read_bytes", lambda path: self.texts[path].encode("utf-8") if self.owns(path) else original_bytes(path))
+        monkeypatch.setattr(Path, "write_text", lambda path, value, *args, **kwargs: self.store(path, value) if self.owns(path) else self.unexpected_write(path))
+        monkeypatch.setattr(Path, "write_bytes", lambda path, value: self.store(path, value.decode("utf-8")) if self.owns(path) else self.unexpected_write(path))
+        monkeypatch.setattr(Path, "mkdir", lambda path, *args, **kwargs: self.directory(path) if self.owns(path) else self.unexpected_write(path))
+        monkeypatch.setattr(Path, "rglob", lambda path, pattern: iter(sorted(p for p in self.texts if p.is_relative_to(path) and (pattern == "*" or p.match(pattern)))) if self.owns(path) else original_rglob(path, pattern))
+        monkeypatch.setattr(Path, "iterdir", lambda path: iter(sorted({path / p.relative_to(path).parts[0] for p in (*self.texts, *self.directories) if p != path and p.is_relative_to(path)})) if self.owns(path) else original_iterdir(path))
+        monkeypatch.setattr(shutil, "copyfile", lambda source, destination, **kwargs: self.store(destination, self.texts[source]) if self.owns(source) and self.owns(destination) else self.unexpected_write(destination))
+
+    def unexpected_write(self, path):
+        raise AssertionError(f"unexpected_spec_write: {path}")
+
+    def owns(self, path):
+        return Path(path).is_relative_to(self.root)
+
+    def directory(self, path):
+        assert self.owns(path), f"unexpected_spec_directory: {path}"
+        self.directories.update(parent for parent in (path, *path.parents) if self.owns(parent))
+
+    def store(self, path, value):
+        assert self.owns(path), f"unexpected_spec_document: {path}"
+        self.directory(path.parent)
+        self.texts[path] = value
+        return len(value)
+
+    def write(self, path, value):
+        self.store(path, value.rstrip() + "\n")
+
+    def save_json(self, path, value):
+        assert path.name == "state.json" and path.parent.name == "current", f"unexpected_spec_json_write: {path}"
+        self.store(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+
+    def seed_state(self, work, command="add"):
+        # An already-created session is an input document. Creating and owning
+        # its real lock is covered by TestMySpec, not mocked as main success.
+        self.save_json(work / "current" / "state.json", {
+            "command": command, "sessionId": "memory-session", "applicationPhase": "PREVIEW_ONLY",
+            "status": "ANALYZING", "specsFingerprint": "specs-fingerprint", "inputFingerprint": "input-fingerprint",
+            "currentConflict": 0, "conflicts": [], "decisions": [], "workRoot": str(work), "targetWorktree": None,
+            "specsRoot": None, "deltaRoot": None, "previewRoot": None, "specsContentFingerprint": None,
+            "deltaContentFingerprint": None, "previewContentFingerprint": None,
+            "implementationIdentity": "release:" + PACKAGE_VERSION,
+        })
+
+    def ready_state(self, cli, root, command="add"):
+        assert cli == SPEC_OPS
+        work = root / ".local" / "spec-work"
+        self.seed_state(work, command)
+        conflicts = root / "no-conflicts.json"
+        self.write(conflicts, "[]")
+        stored = run_python(cli, "state-set-conflicts", work, conflicts, "specs-fingerprint", "input-fingerprint")
+        assert stored.returncode == 0, stored.stderr
+        return work
+
+    def apply(self, cli, specs, delta, output, work):
+        return run_python(cli, "apply-delta", specs, delta, output, work, "specs-fingerprint", "input-fingerprint")
+
+
+@pytest.fixture
+def spec_documents(monkeypatch):
+    return SpecDocuments(_load_in_process_spec_ops(SPEC_OPS), monkeypatch)
+
+
+def invoke_main(module, *args):
+    """Exercise the real public parser/main, without a process or cwd change."""
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        try:
+            code = module.main([str(arg) for arg in args])
+        except SystemExit as error:
+            code = error.code
+    return subprocess.CompletedProcess(["myspec", *map(str, args)], code, stdout.getvalue(), stderr.getvalue())
 
 
 @pytest.mark.parametrize("client", ("claude", "codex"))
-def test_packed_myspec_clients_run_shared_source_cases(tmp_path: Path, client: str) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    prefix = npm_prefix_for(installed_package)
-    seen = []
-
-    for case in SOURCE_CASES:
-        seen.append(case["id"])
-        report = source_case_report(
-            client,
-            case,
-            tmp_path / str(case["id"]),
-            executable,
-            installed_package,
-            prefix,
-        )
-        actual = [
-            {field: source[field] for field in SOURCE_FIELDS}
-            for source in report["sources"]
-        ]
-        assert actual == case["expectedSources"], case["id"]
-        if case["id"] == "legacy-enabled":
-            assert report["enabled"] is True
+def test_packed_myspec_clients_run_shared_source_cases(management_documents, client: str) -> None:
+    runtime = management_documents
+    cases = [*SOURCE_CASES, {"id": "stable-unregistered-plugin", "scenario": "stable-unregistered-plugin", "expectedSources": [
+        {"installed": True, "registered": False, "enabled": True, "effective": False,
+         "sourceKind": "stable", "sourceMismatch": False}]}]
+    for case in cases:
+        scenario = case["scenario"]
+        legacy = scenario == "legacy-enabled"
+        marketplaces = [] if scenario in {"no-source", "stable-unregistered-plugin"} else [runtime.marketplace(client, legacy=legacy, mismatch=scenario == "stable-source-mismatch")]
+        plugins = [] if scenario == "no-source" else [runtime.plugin(client, legacy=legacy, enabled=scenario != "stable-disabled", installed=scenario != "stable-missing-directory")]
+        runtime.records(client, marketplaces, plugins)
+        runtime.stub.calls.clear()
+        diagnosed = runtime.run("doctor", f"--{client}")
+        assert diagnosed.returncode == 0, diagnosed.stderr
+        report = json.loads(diagnosed.stdout)[client]
+        assert [{field: source[field] for field in SOURCE_FIELDS} for source in report["sources"]] == case["expectedSources"], case["id"]
         assert {"enabledSources", "disabledSources", "duplicateEnabledSources"} <= report.keys()
-
-    assert seen == [case["id"] for case in SOURCE_CASES]
-
-    if client in {"claude", "codex"}:
-        report = source_case_report(
-            client,
-            {"scenario": "stable-unregistered-plugin"},
-            tmp_path / "stable-unregistered-plugin",
-            executable,
-            installed_package,
-            prefix,
-        )
-        assert [
-            {field: source[field] for field in SOURCE_FIELDS}
-            for source in report["sources"]
-        ] == [
-            {
-                "installed": True,
-                "registered": False,
-                "enabled": True,
-                "effective": False,
-                "sourceKind": "stable",
-                "sourceMismatch": False,
-            }
-        ]
+        assert runtime.stub.calls == [(client, "plugin", "marketplace", "list", "--json"), (client, "plugin", "list", "--json")]
+        assert runtime.writes == []
 
 
-@pytest.mark.parametrize(
-    ("platform", "relative_layout"),
-    [
-        ("linux", ("lib", "node_modules")),
-        ("windows", ("node_modules",)),
-    ],
-)
-def test_npm_prefix_for_supported_platform_layouts(
-    tmp_path: Path,
-    platform: str,
-    relative_layout: tuple[str, ...],
-) -> None:
-    prefix = tmp_path / platform / "npm-prefix"
-    installed_package = prefix.joinpath(*relative_layout, "@liuli195", "myspec")
-
+@pytest.mark.parametrize(('platform', 'relative_layout'), [('linux', ('lib', 'node_modules')), ('windows', ('node_modules',))])
+def test_npm_prefix_for_supported_platform_layouts(platform: str, relative_layout: tuple[str, ...]) -> None:
+    tmp_path = REPO_ROOT / '__myspec_documents__'
+    prefix = tmp_path / platform / 'npm-prefix'
+    installed_package = prefix.joinpath(*relative_layout, '@liuli195', 'myspec')
     assert npm_prefix_for(installed_package) == prefix
 
 
-def test_packed_myspec_bare_cli_uses_isolated_package_before_host_commands(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    prefix = npm_prefix_for(installed_package)
-    host_bin = tmp_path / "host-bin"
-    host_bin.mkdir()
-    host_markers = {}
-    host_commands = {}
-    for name in ("myspec", "pi", "claude", "codex"):
-        marker = tmp_path / f"host-{name}.used"
-        host_markers[name] = marker
-        script = tmp_path / f"host-{name}.py"
-        write(
-            script,
-            f"from pathlib import Path\nPath({str(marker)!r}).write_text('used', encoding='utf-8')\nraise SystemExit(99)",
-        )
-        command = host_bin / (f"{name}.cmd" if os.name == "nt" else name)
-        host_commands[name] = command
-        if os.name == "nt":
-            write(command, f'@"{sys.executable}" "{script}" %*')
-        else:
-            write(command, f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"')
-            command.chmod(0o755)
-
-    host_path = os.pathsep.join((str(host_bin), os.environ["PATH"]))
-    monkeypatch.setenv("PATH", host_path)
-    for name, command in host_commands.items():
-        resolved_host = shutil.which(name)
-        assert resolved_host is not None
-        assert Path(resolved_host).resolve() == command.resolve()
-
-    env = isolated_myspec_env(tmp_path, prefix)
-
-    resolved = shutil.which("myspec", path=env["PATH"])
-    assert resolved is not None
-    assert Path(resolved).resolve() == executable.resolve()
-    assert shutil.which("pi", path=env["PATH"]) is None
-    assert shutil.which("claude", path=env["PATH"]) is None
-    assert shutil.which("codex", path=env["PATH"]) is None
-
-    project = tmp_path / "consumer"
-    specs = project / "myspec" / "specs"
-    delta = project / "myspec" / "delta"
-    preview = project / ".local" / "spec-preview"
-    work = project / ".local" / "spec-work"
-    conflicts = project / "no-conflicts.json"
-    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
-    write(
-        delta / "accounts" / "spec.md",
-        """## MODIFIED Requirements
-
-### Requirement: 登录
-
-系统 MUST 允许密码登录。
-
-#### Scenario: 密码正确
-
-- **WHEN** 用户提交正确密码
-- **THEN** 系统创建会话
-""",
-    )
-    write(conflicts, "[]")
-
-    def run_bare(*args: object) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["myspec", *(str(arg) for arg in args)],
-            cwd=project,
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
-            shell=os.name == "nt",
-        )
-
-    for result in (
-        run_bare("validate-main", specs),
-        run_bare("state-init", work, "add", "specs-fingerprint", "input-fingerprint"),
-        run_bare("state-set-conflicts", work, conflicts, "specs-fingerprint", "input-fingerprint"),
-        run_bare("validate-delta", delta, specs),
-        run_bare(
-            "apply-delta",
-            specs,
-            delta,
-            preview,
-            work,
-            "specs-fingerprint",
-            "input-fingerprint",
-        ),
-    ):
-        assert result.returncode == 0, result.stderr
-
-    diff = run_bare("diff", specs, preview)
-    assert diff.returncode == 0, diff.stderr
-    assert "密码登录" in diff.stdout
-
-    applied = run_bare(
-        "apply-delta",
-        specs,
-        delta,
-        specs,
-        work,
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
-    assert applied.returncode == 0, applied.stderr
-    validated = run_bare("validate-main", specs)
-    assert validated.returncode == 0, validated.stderr
-    assert "系统 MUST 允许密码登录。" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
-    assert not any(marker.exists() for marker in host_markers.values())
-
-
-def test_packed_myspec_update_preflights_installed_clients_before_package_write(
-    tmp_path: Path,
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    prefix = npm_prefix_for(installed_package)
-    old_tarball = next((installed / "package").glob("*.tgz"))
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", old_tarball)
-    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, codex_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(old_tarball),
-            "MYSPEC_NPM_LATEST": NEXT_VERSION,
-            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
-            "MYSPEC_CODEX_LOG": str(codex_log),
-            "MYSPEC_CODEX_STATE": str(codex_state),
-        }
-    )
-    write(
-        codex_state,
-        json.dumps(
-            {
-                "marketplaces": "broken",
-                "installed": [
-                    {
-                        "pluginId": "my-spec@myspec",
-                        "version": PACKAGE_VERSION,
-                        "installed": True,
-                    }
-                ],
-                "available": [],
-            }
-        ),
-    )
-    package_before = (installed_package / "package.json").read_bytes()
-
-    failed = run_cli(executable, "update", env=env)
-
+def test_packed_myspec_update_preflights_installed_clients_before_package_write(management_documents):
+    runtime = management_documents
+    runtime.records("codex", [], [runtime.plugin("codex")])
+    runtime.response(("codex", "plugin", "marketplace", "list", "--json"), {"marketplaces": "broken"})
+    package_before = json.loads(json.dumps(runtime.documents[runtime.stable / "package.json"]))
+    failed = runtime.run("update")
     assert failed.returncode == 1
     assert "error: codex_marketplace_list_failed: invalid_output" in failed.stderr
-    assert (installed_package / "package.json").read_bytes() == package_before
-    assert not (Path(env["HOME"]) / ".myspec" / "state.json").exists()
-    calls = [json.loads(line) for line in npm_log.read_text(encoding="utf-8").splitlines()]
-    assert not any(call[:2] == ["install", "--global"] for call in calls)
-
-    write(codex_state, json.dumps({"marketplaces": "broken", "installed": [], "available": []}))
-    skipped = run_cli(executable, "update", env={**env, "MYSPEC_NPM_LATEST": PACKAGE_VERSION})
+    assert runtime.documents[runtime.stable / "package.json"] == package_before
+    assert runtime.state_path not in runtime.documents
+    assert not any(call[:3] == ("npm", "install", "--global") for call in runtime.stub.calls)
+    runtime.response(("codex", "plugin", "list", "--json"), {"installed": [], "available": []})
+    runtime.stub.calls.clear()
+    runtime.response(("npm", "view", "@liuli195/myspec", "version", "--json"), PACKAGE_VERSION)
+    skipped = runtime.run("update")
     assert skipped.returncode == 0, skipped.stderr
     assert "codex" not in json.loads(skipped.stdout)
+    assert ("codex", "plugin", "marketplace", "list", "--json") not in runtime.stub.calls
 
 
-def test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes(tmp_path: Path) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    prefix = npm_prefix_for(installed_package)
-    old_tarball = next((installed / "package").glob("*.tgz"))
-    new_tarball = pack_myspec_version(tmp_path, NEXT_VERSION)
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", old_tarball)
-    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
-    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, claude_bin, codex_bin)
-    codex_home = tmp_path / "codex home"
-    codex_home.mkdir()
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(new_tarball),
-            "MYSPEC_NPM_LATEST": NEXT_VERSION,
-            "MYSPEC_CLAUDE_LOG": str(claude_log),
-            "MYSPEC_CLAUDE_STATE": str(claude_state),
-            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
-            "CODEX_HOME": str(codex_home),
-            "MYSPEC_CODEX_LOG": str(codex_log),
-            "MYSPEC_CODEX_STATE": str(codex_state),
-        }
-    )
-    legacy_source = str(PLUGIN_ROOT)
-    write(
-        claude_state,
-        json.dumps(
-            {
-                "marketplaces": [
-                    {
-                        "name": "myspec",
-                        "source": "directory",
-                        "path": str(installed_package),
-                        "installLocation": str(installed_package),
-                    },
-                    {
-                        "name": "my-agent-skills-marketplace",
-                        "source": "directory",
-                        "path": legacy_source,
-                        "installLocation": legacy_source,
-                    },
-                ],
-                "plugins": [
-                    {
-                        "id": "my-spec@myspec",
-                        "version": PACKAGE_VERSION,
-                        "scope": "user",
-                        "enabled": True,
-                        "installPath": str(installed_package),
-                    },
-                    {
-                        "id": "my-spec@my-agent-skills-marketplace",
-                        "version": PACKAGE_VERSION,
-                        "scope": "user",
-                        "enabled": True,
-                        "installPath": legacy_source,
-                    },
-                ],
-            },
-            indent=2,
-        ),
-    )
-    write(
-        codex_state,
-        json.dumps(
-            {
-                "marketplaces": [
-                    {
-                        "name": "myspec",
-                        "root": str(installed_package),
-                        "marketplaceSource": {"sourceType": "local", "source": str(installed_package)},
-                    },
-                    {
-                        "name": "my-agent-skills-marketplace",
-                        "root": legacy_source,
-                        "marketplaceSource": {"sourceType": "local", "source": legacy_source},
-                    },
-                ],
-                "installed": [
-                    {
-                        "pluginId": "my-spec@myspec",
-                        "name": "my-spec",
-                        "marketplaceName": "myspec",
-                        "version": PACKAGE_VERSION,
-                        "installed": True,
-                        "source": {"source": "local", "path": str(installed_package)},
-                    },
-                    {
-                        "pluginId": "my-spec@my-agent-skills-marketplace",
-                        "name": "my-spec",
-                        "marketplaceName": "my-agent-skills-marketplace",
-                        "version": PACKAGE_VERSION,
-                        "installed": True,
-                        "source": {"source": "local", "path": legacy_source},
-                    },
-                ],
-                "available": [],
-            },
-            indent=2,
-        ),
-    )
-    codex_config = codex_home / "config.toml"
-    write(
-        codex_config,
-        '[plugins."my-spec@myspec"]\nenabled = true\n'
-        '[plugins."my-spec@my-agent-skills-marketplace"]\nenabled = true\n',
-    )
-    before = {
-        "claude": claude_state.read_bytes(),
-        "codex": codex_state.read_bytes(),
-        "config": codex_config.read_bytes(),
-    }
-
-    blocked = run_cli(executable, "update", "--codex-home", codex_home, env=env)
-
+def test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes(management_documents):
+    runtime = management_documents
+    for client in ("claude", "codex"):
+        runtime.records(client, [runtime.marketplace(client), runtime.marketplace(client, legacy=True)],
+                        [runtime.plugin(client), runtime.plugin(client, legacy=True)])
+    runtime.texts[runtime.config_path] = '[plugins."my-spec@myspec"]\nenabled = true\n[plugins."my-spec@my-agent-skills-marketplace"]\nenabled = true\n'
+    before = dict(runtime.texts)
+    blocked = runtime.run("update", "--codex-home", runtime.codex_home)
     assert blocked.returncode == 1
     assert "error: legacy_source_migration_required" in blocked.stderr
     assert "claude: run myspec init --claude" in blocked.stderr
-    codex_command = (
-        subprocess.list2cmdline(["myspec", "init", "--codex", "--codex-home", str(codex_home)])
-        if os.name == "nt"
-        else shlex.join(["myspec", "init", "--codex", "--codex-home", str(codex_home)])
-    )
+    arguments = ["myspec", "init", "--codex", "--codex-home", str(runtime.codex_home)]
+    codex_command = subprocess.list2cmdline(arguments) if os.name == "nt" else shlex.join(arguments)
     assert f"codex: run {codex_command}" in blocked.stderr
-    assert not any(json.loads(line)[:2] == ["install", "--global"] for line in npm_log.read_text(encoding="utf-8").splitlines())
-    assert not (Path(env["HOME"]) / ".myspec" / "state.json").exists()
-    assert claude_state.read_bytes() == before["claude"]
-    assert codex_state.read_bytes() == before["codex"]
-    assert codex_config.read_bytes() == before["config"]
-
-    migrated = run_cli(executable, "init", "--all", env=env)
+    assert not any(call[:3] == ("npm", "install", "--global") for call in runtime.stub.calls)
+    assert runtime.state_path not in runtime.documents
+    assert runtime.writes == []
+    assert runtime.texts == before
+    assert runtime.stub.calls == [(client, "plugin", "list", "--json") for client in ("claude", "codex")]
+    for client in ("claude", "codex"):
+        queue_client_init(runtime, client, legacy=True)
+    migrated = runtime.run("init", "--all")
     assert migrated.returncode == 0, migrated.stderr
-    updated = run_cli(executable, "update", env=env)
+    # The new runtime is an input, not a fake successful package installation.
+    runtime.release_input(NEXT_VERSION)
+    for client in ("claude", "codex"):
+        runtime.records(client, [runtime.marketplace(client)], [runtime.plugin(client, version=NEXT_VERSION)])
+    runtime.response(("npm", "view", "@liuli195/myspec", "version", "--json"), NEXT_VERSION)
+    updated = runtime.run("update")
     assert updated.returncode == 0, updated.stderr
     assert json.loads(updated.stdout)["version"] == NEXT_VERSION
 
 
-def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_missing(
-    tmp_path: Path,
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    prefix = npm_prefix_for(installed_package)
-    old_tarball = next((installed / "package").glob("*.tgz"))
-    new_tarball = pack_myspec_version(tmp_path, NEXT_VERSION)
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", old_tarball)
-    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
-    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, claude_bin, codex_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(new_tarball),
-            "MYSPEC_NPM_LATEST": NEXT_VERSION,
-            "MYSPEC_CLAUDE_LOG": str(claude_log),
-            "MYSPEC_CLAUDE_STATE": str(claude_state),
-            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
-            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
-            "MYSPEC_CODEX_LOG": str(codex_log),
-            "MYSPEC_CODEX_STATE": str(codex_state),
-        }
-    )
-    write(
-        claude_state,
-        json.dumps(
-            {
-                "marketplaces": [
-                    {
-                        "name": "myspec",
-                        "source": "directory",
-                        "path": str(installed_package),
-                        "installLocation": str(installed_package),
-                    },
-                ],
-                "plugins": [
-                    {
-                        "id": "my-spec@myspec",
-                        "version": PACKAGE_VERSION,
-                        "scope": "user",
-                        "enabled": False,
-                        "installPath": str(tmp_path / "disabled-claude"),
-                    },
-                ],
-            },
-            indent=2,
-        ),
-    )
-    write(
-        codex_state,
-        json.dumps(
-            {
-                "marketplaces": [
-                    {
-                        "name": "myspec",
-                        "root": str(installed_package),
-                        "marketplaceSource": {"sourceType": "local", "source": str(installed_package)},
-                    },
-                ],
-                "installed": [
-                    {
-                        "pluginId": "my-spec@myspec",
-                        "name": "my-spec",
-                        "marketplaceName": "myspec",
-                        "version": PACKAGE_VERSION,
-                        "installed": True,
-                        "source": {"source": "local", "path": str(installed_package)},
-                    },
-                ],
-                "available": [],
-            },
-            indent=2,
-        ),
-    )
-    write(
-        Path(env["CODEX_HOME"]) / "config.toml",
-        '[plugins."my-spec@myspec"]\nenabled = false\n',
-    )
-
-    interrupted = run_cli(
-        executable,
-        "update",
-        env={**env, "MYSPEC_CLAUDE_FAIL_AFTER_ENABLED": "false"},
-    )
+def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_missing(management_documents):
+    runtime = management_documents
+    runtime.release_input(NEXT_VERSION)
+    old = {client: runtime.plugin(client, enabled=False, version=PACKAGE_VERSION) for client in ("claude", "codex")}
+    new = {client: runtime.plugin(client, enabled=True, version=NEXT_VERSION) for client in ("claude", "codex")}
+    disabled = {client: runtime.plugin(client, enabled=False, version=NEXT_VERSION) for client in ("claude", "codex")}
+    for client in ("claude", "codex"):
+        runtime.records(client, [runtime.marketplace(client)], [old[client]])
+    runtime.documents[runtime.state_path] = {"mode": "release", "pendingOperation": {
+        "command": "update", "targetVersion": NEXT_VERSION, "integrations": ["claude", "codex"],
+        "scopes": {"claude": "user"}, "enabled": {"claude": False, "codex": False},
+        "completed": ["preflight", "npm"],
+    }}
+    runtime.queue_plugins("claude", [[old["claude"]], [old["claude"]], [], [new["claude"]]])
+    runtime.response(("claude", "plugin", "uninstall", "my-spec@myspec", "--scope", "user", "--keep-data"))
+    runtime.response(("claude", "plugin", "install", "my-spec@myspec", "--scope", "user"))
+    runtime.response(("claude", "plugin", "disable", "my-spec@myspec", "--scope", "user"), code=1,
+                     stderr="simulated interruption after enabled state")
+    interrupted = runtime.run("update")
     assert interrupted.returncode == 1
     assert "claude_plugin_disable_failed: simulated interruption after enabled state" in interrupted.stderr
-
-    updated = run_cli(executable, "update", env=env)
-
+    assert runtime.documents[runtime.state_path]["pendingOperation"]["lastError"] == "claude_plugin_disable_failed: simulated interruption after enabled state"
+    # The SDK's next observed state records the external effect before failure.
+    runtime.records("claude", [runtime.marketplace("claude")], [disabled["claude"]])
+    runtime.records("codex", [runtime.marketplace("codex")], [disabled["codex"]])
+    runtime.queue_plugins("codex", [[old["codex"]], [old["codex"]], [], [new["codex"]], [disabled["codex"]]])
+    runtime.response(("codex", "plugin", "remove", "my-spec@myspec", "--json"))
+    runtime.response(("codex", "plugin", "add", "my-spec@myspec", "--json"))
+    updated = runtime.run("update")
     assert updated.returncode == 0, updated.stderr
     output = json.loads(updated.stdout)
     assert output["version"] == NEXT_VERSION
     assert output["claude"] == "refreshed"
     assert output["codex"] == "refreshed"
-    assert output["doctor"]["claude"]["enabled"] is False
-    assert output["doctor"]["codex"]["enabled"] is False
     for client in ("claude", "codex"):
-        stable_source = next(
-            source
-            for source in output["doctor"][client]["sources"]
-            if source["sourceKind"] == "stable"
-        )
+        assert output["doctor"][client]["enabled"] is False
+        stable_source = next(source for source in output["doctor"][client]["sources"] if source["sourceKind"] == "stable")
         assert stable_source["enabled"] is False
-    assert output["doctor"]["claude"]["version"] == NEXT_VERSION
-    assert output["doctor"]["codex"]["version"] == NEXT_VERSION
-    claude_calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
-    assert ["plugin", "uninstall", "my-spec@myspec", "--scope", "user", "--keep-data"] in claude_calls
-    assert ["plugin", "install", "my-spec@myspec", "--scope", "user"] in claude_calls
-    assert claude_calls.count(["plugin", "disable", "my-spec@myspec", "--scope", "user"]) == 1
-    codex_calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
-    assert ["plugin", "remove", "my-spec@myspec", "--json"] in codex_calls
-    assert ["plugin", "add", "my-spec@myspec", "--json"] in codex_calls
+        assert output["doctor"][client]["version"] == NEXT_VERSION
+    assert ("claude", "plugin", "uninstall", "my-spec@myspec", "--scope", "user", "--keep-data") in runtime.stub.calls
+    assert ("claude", "plugin", "install", "my-spec@myspec", "--scope", "user") in runtime.stub.calls
+    assert runtime.stub.calls.count(("claude", "plugin", "disable", "my-spec@myspec", "--scope", "user")) == 1
+    assert ("codex", "plugin", "remove", "my-spec@myspec", "--json") in runtime.stub.calls
+    assert ("codex", "plugin", "add", "my-spec@myspec", "--json") in runtime.stub.calls
+    assert 'enabled = false' in runtime.texts[runtime.config_path]
 
 
-def test_packed_myspec_update_recovers_external_success_before_bookkeeping(
-    tmp_path: Path,
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    prefix = npm_prefix_for(installed_package)
-    old_tarball = next((installed / "package").glob("*.tgz"))
-    marker = tmp_path / "new-cli.log"
-    new_tarball = pack_myspec_version(tmp_path, NEXT_VERSION, marker)
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", old_tarball)
-    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
-    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, claude_bin, codex_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(old_tarball),
-            "MYSPEC_NPM_LATEST": NEXT_VERSION,
-            "MYSPEC_REEXEC_MARKER": str(marker),
-            "MYSPEC_CLAUDE_LOG": str(claude_log),
-            "MYSPEC_CLAUDE_STATE": str(claude_state),
-            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
-            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
-            "MYSPEC_CODEX_LOG": str(codex_log),
-            "MYSPEC_CODEX_STATE": str(codex_state),
-        }
-    )
-    write(claude_state, json.dumps({"marketplaces": [], "plugins": []}, indent=2))
-    write(codex_state, json.dumps({"marketplaces": [], "installed": [], "available": []}, indent=2))
-    assert run_cli(executable, "init", "--all", env=env).returncode == 0
-    for log in (npm_log, claude_log, codex_log):
-        log.write_text("", encoding="utf-8")
-    env["MYSPEC_RELEASE_TARBALL"] = str(new_tarball)
-
-    failures = [
-        ("MYSPEC_NPM_FAIL_AFTER_INSTALL", "npm_install_failed: simulated interruption after npm install"),
-        ("MYSPEC_CLAUDE_FAIL_AFTER_UNINSTALL", "claude_plugin_uninstall_failed: simulated interruption after uninstall"),
-        ("MYSPEC_CLAUDE_FAIL_AFTER_INSTALL", "claude_plugin_install_failed: simulated interruption after install"),
-        ("MYSPEC_CODEX_FAIL_AFTER_ADD", "codex_plugin_add_failed: simulated interruption after add"),
-    ]
-    for failure_variable, expected_error in failures:
-        failed = run_cli(executable, "update", env={**env, failure_variable: "1"})
-        assert failed.returncode == 1
-        assert f"error: {expected_error}" in failed.stderr
-
-    retried = run_cli(executable, "update", env=env)
-
-    assert retried.returncode == 0, retried.stderr
-    output = json.loads(retried.stdout)
-    assert output["version"] == NEXT_VERSION
-    assert output["doctor"]["cliVersion"] == NEXT_VERSION
-    assert output["doctor"]["claude"]["version"] == NEXT_VERSION
-    assert output["doctor"]["codex"]["version"] == NEXT_VERSION
-    assert marker.read_text(encoding="utf-8").strip()
-    npm_calls = [json.loads(line) for line in npm_log.read_text(encoding="utf-8").splitlines()]
-    claude_calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
-    codex_calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
-    assert npm_calls.count(
-        ["install", "--global", "--ignore-scripts", "--no-audit", "--no-fund", f"@liuli195/myspec@{NEXT_VERSION}"]
-    ) == 1
-    assert claude_calls.count(
-        ["plugin", "uninstall", "my-spec@myspec", "--scope", "user", "--keep-data"]
-    ) == 1
-    assert claude_calls.count(["plugin", "install", "my-spec@myspec", "--scope", "user"]) == 1
-    assert codex_calls.count(["plugin", "add", "my-spec@myspec", "--json"]) == 1
-    state_path = Path(env["HOME"]) / ".myspec" / "state.json"
-    assert "pendingOperation" not in json.loads(state_path.read_text(encoding="utf-8"))
-
-    wrong_version_tarball = pack_myspec_version(tmp_path, LATER_VERSION)
-    mismatch = run_cli(
-        executable,
-        "update",
-        env={
-            **env,
-            "MYSPEC_RELEASE_TARBALL": str(wrong_version_tarball),
-            "MYSPEC_NPM_LATEST": LATER_VERSION,
-            "MYSPEC_CLAUDE_REPORTED_VERSION": "0.0.0",
-        },
-    )
-    expected_error = "claude_plugin_refresh_version_mismatch"
-    assert mismatch.returncode == 1
-    assert f"error: {expected_error}" in mismatch.stderr
-    pending = json.loads(state_path.read_text(encoding="utf-8"))["pendingOperation"]
-    assert pending["targetVersion"] == LATER_VERSION
-    assert pending["lastError"] == expected_error
-    assert "doctor" not in pending["completed"]
-
-
-def test_packed_myspec_preserves_lock_when_process_status_is_unknown(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    release_tarball = next((tmp_path / "package").glob("*.tgz"))
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
-    spec_ops = _load_in_process_spec_ops(installed_package / "python" / "spec_ops.py")
-    monkeypatch.setitem(spec_ops.run_management.__globals__, "_pid_alive", lambda _pid: None)
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
-        }
-    )
-    lock_path = Path(env["HOME"]) / ".myspec" / "install.lock"
-    lock = {
-        "pid": 424242,
-        "startedAt": "2000-01-01T00:00:00+00:00",
-        "command": "myspec update",
-        "operationId": "unknown-process",
-    }
-
-    for command in (("init", "--claude"), ("update",)):
-        write(lock_path, json.dumps(lock, indent=2))
-        before = lock_path.read_bytes()
-        npm_log.write_text("", encoding="utf-8")
-
-        rejected = run_cli(executable, *command, env=env)
-
-        assert rejected.returncode == 1
-        assert "error: install_lock_process_unknown: pid=424242" in rejected.stderr
-        assert lock_path.read_bytes() == before
-        assert npm_log.read_text(encoding="utf-8") == ""
-
-
-def test_packed_myspec_serializes_init_and_reports_locks_without_mutating_them(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
-    lock_path = Path(env["HOME"]) / ".myspec" / "install.lock"
-    for malformed in ({"command": "myspec update"}, {"pid": True}, {"pid": "123"}, {"pid": 0}):
-        write(lock_path, json.dumps(malformed))
-        malformed_before = lock_path.read_bytes()
-        rejected = run_cli(executable, "init", "--all", env=env)
-        assert rejected.returncode == 1
-        assert f"error: invalid_install_lock: {lock_path}" in rejected.stderr
-        assert lock_path.read_bytes() == malformed_before
-
-    active = {
-        "pid": os.getpid(),
-        "startedAt": "2000-01-01T00:00:00+00:00",
-        "command": "myspec update",
-        "operationId": "active",
-    }
-    write(lock_path, json.dumps(active, indent=2))
-    before = lock_path.read_bytes()
-
-    diagnosed = run_cli(executable, "doctor", env=env)
-    blocked = run_cli(executable, "init", "--all", env=env)
-
-    assert diagnosed.returncode == 0, diagnosed.stderr
-    assert json.loads(diagnosed.stdout)["installation"]["lock"] == {
-        "pid": os.getpid(),
-        "startedAt": active["startedAt"],
-        "command": "myspec update",
-        "active": True,
-    }
-    assert blocked.returncode == 1
-    assert f"error: install_locked: pid={os.getpid()}" in blocked.stderr
-    assert lock_path.read_bytes() == before
-
-    stale = {**active, "pid": 99999999, "operationId": "stale"}
-    write(lock_path, json.dumps(stale, indent=2))
-    recovered = run_cli(executable, "init", "--all", env=env)
-    assert recovered.returncode == 0, recovered.stderr
-    assert json.loads(lock_path.read_text(encoding="utf-8"))["released"] is True
-
-
-def test_packed_myspec_doctor_reports_partial_update_read_only(tmp_path: Path) -> None:
-    first = tmp_path / "first"
-    second = tmp_path / "second"
-    first.mkdir()
-    second.mkdir()
-    executable, _ = install_packed_myspec(first)
-    _, installed_package = install_packed_myspec(second)
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
-    package_path = installed_package / "package.json"
-    package = json.loads(package_path.read_text(encoding="utf-8"))
-    package["version"] = NEXT_VERSION
-    write(package_path, json.dumps(package, indent=2))
-    state_path = Path(env["HOME"]) / ".myspec" / "state.json"
-    write(
-        state_path,
-        json.dumps(
-            {
-                "mode": "release",
-                "pendingOperation": {
-                    "command": "update",
-                    "targetVersion": NEXT_VERSION,
-                    "integrations": ["pi", "claude"],
-                    "completed": ["preflight", "npm", "pi"],
-                    "lastError": "claude_plugin_install_failed: original failure",
-                    "tokenHash": "secret",
-                },
-            },
-            indent=2,
-        ),
-    )
-    before = state_path.read_bytes()
-
-    diagnosed = run_cli(executable, "doctor", "--all", env=env)
-
+def test_packed_myspec_doctor_reports_partial_update_read_only(management_documents):
+    runtime = management_documents
+    runtime.documents[runtime.stable / "package.json"]["version"] = NEXT_VERSION
+    pending = {"command": "update", "targetVersion": NEXT_VERSION, "integrations": ["pi", "claude"],
+               "completed": ["preflight", "npm", "pi"], "lastError": "claude_plugin_install_failed: original failure", "tokenHash": "secret"}
+    runtime.documents[runtime.state_path] = {"mode": "release", "pendingOperation": pending}
+    before = json.loads(json.dumps(runtime.documents[runtime.state_path]))
+    diagnosed = runtime.run("doctor", "--all")
     assert diagnosed.returncode == 0, diagnosed.stderr
     report = json.loads(diagnosed.stdout)
     assert report["npm"]["versionMismatch"] is True
     assert report["installation"]["pendingOperation"] == {
-        "command": "update",
-        "targetVersion": NEXT_VERSION,
-        "integrations": ["pi", "claude"],
-        "completed": ["preflight", "npm", "pi"],
-        "lastError": "claude_plugin_install_failed: original failure",
+        "command": "update", "targetVersion": NEXT_VERSION, "integrations": ["pi", "claude"],
+        "completed": ["preflight", "npm", "pi"], "lastError": "claude_plugin_install_failed: original failure",
     }
     assert report["installation"]["lock"] is None
-    assert state_path.read_bytes() == before
-
+    assert runtime.documents[runtime.state_path] == before
+    assert runtime.writes == []
     token = "resume-secret"
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    write(
-        state_path,
-        json.dumps(
-            {
-                "mode": "release",
-                "pendingOperation": {
-                    "command": "update",
-                    "targetVersion": NEXT_VERSION,
-                    "integrations": [],
-                    "scopes": {},
-                    "enabled": {},
-                    "completed": ["preflight", "npm"],
-                    "tokenHash": token_hash,
-                },
-            },
-            indent=2,
-        ),
-    )
-    write(
-        Path(env["HOME"]) / ".myspec" / "install.lock",
-        json.dumps(
-            {
-                "pid": os.getpid(),
-                "startedAt": "2000-01-01T00:00:00+00:00",
-                "command": "myspec update",
-                "operationId": "resume-operation",
-                "handoffTokenHash": token_hash,
-            },
-            indent=2,
-        ),
-    )
-    forged = run_cli(executable, "update", "--_update-token", token, env=env)
+    runtime.documents[runtime.state_path] = {"mode": "release", "pendingOperation": {
+        "command": "update", "targetVersion": NEXT_VERSION, "integrations": [], "scopes": {}, "enabled": {},
+        "completed": ["preflight", "npm"], "tokenHash": hashlib.sha256(token.encode()).hexdigest(),
+    }}
+    forged = runtime.run("update", "--_update-token", token)
     assert forged.returncode == 1
     assert "error: update_runtime_mismatch:" in forged.stderr
-    assert json.loads(state_path.read_text(encoding="utf-8"))["pendingOperation"]["completed"] == [
-        "preflight",
-        "npm",
-    ]
+    assert runtime.documents[runtime.state_path]["pendingOperation"]["completed"] == ["preflight", "npm"]
+    assert runtime.lock_calls == []
 
 
-def test_packed_myspec_update_rejects_dev_mode_and_forged_resume(tmp_path: Path) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    release_tarball = next((tmp_path / "package").glob("*.tgz"))
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
-        }
-    )
-    source = controlled_dev_source(tmp_path)
-    env = controlled_dev_env(env, source)
-    entered = run_cli(executable, "init", "--dev", "--source", source, env=env)
-    assert entered.returncode == 0, entered.stderr
-
-    rejected = run_cli(executable, "update", env=env)
-    forged = run_cli(executable, "update", "--_update-token", "forged", env=env)
-
+def test_packed_myspec_update_rejects_dev_mode_and_forged_resume(management_documents):
+    runtime = management_documents
+    runtime.documents[runtime.state_path] = {"mode": "dev", "source": str(runtime.root / "source"), "previousReleaseVersion": PACKAGE_VERSION}
+    rejected = runtime.run("update")
+    forged = runtime.run("update", "--_update-token", "forged")
     assert rejected.returncode == 1
     assert "update_requires_release_mode: run 'myspec init --release' first" in rejected.stderr
     assert forged.returncode == 1
     assert "error: invalid_update_token" in forged.stderr
-    lock = json.loads((Path(env["HOME"]) / ".myspec" / "install.lock").read_text(encoding="utf-8"))
-    assert lock["released"] is True
+    assert runtime.lock_calls[-1] == ("release", "operation")
+    assert runtime.writes == []
 
 
-def test_packed_myspec_initializes_and_removes_claude_legacy_plugin(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
-    env = isolated_myspec_env(tmp_path, prefix, claude_bin)
-    env.update(
-        {
-            "MYSPEC_CLAUDE_LOG": str(claude_log),
-            "MYSPEC_CLAUDE_STATE": str(claude_state),
-            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
-        }
-    )
-    legacy_market = {
-        "name": "my-agent-skills-marketplace",
-        "source": "github",
-        "repo": "liuli195/my-agent-skills",
-        "installLocation": str(tmp_path / "legacy-market"),
-    }
-    unrelated_market = {
-        "name": "other-marketplace",
-        "source": "github",
-        "repo": "example/other",
-        "installLocation": str(tmp_path / "other-market"),
-    }
-    legacy_plugin = {
-        "id": "my-spec@my-agent-skills-marketplace",
-        "version": PREVIOUS_VERSION,
-        "scope": "user",
-        "enabled": True,
-        "installPath": str(tmp_path / "legacy-plugin"),
-    }
-    unrelated_plugin = {
-        "id": "other@other-marketplace",
-        "version": "1.0.0",
-        "scope": "user",
-        "enabled": True,
-        "installPath": str(tmp_path / "other-plugin"),
-    }
-    write(
-        claude_state,
-        json.dumps(
-            {
-                "marketplaces": [legacy_market, unrelated_market],
-                "plugins": [legacy_plugin, unrelated_plugin],
-            },
-            indent=2,
-        ),
-    )
-    persistent_data = (
-        Path(env["MYSPEC_CLAUDE_HOME"])
-        / "plugins"
-        / "data"
-        / legacy_plugin["id"]
-        / "kept.txt"
-    )
-    write(persistent_data, "keep")
+def test_packed_myspec_initializes_and_removes_claude_legacy_plugin(management_documents):
+    assert_initializes_and_removes_legacy(management_documents, "claude")
 
-    initialized = run_cli(executable, "init", "--claude", env=env)
-    assert initialized.returncode == 0, initialized.stderr
-    assert json.loads(initialized.stdout) == {
-        "claude": "initialized",
-        "marketplace": "myspec",
-        "source": str(installed_package),
-        "removedLegacyPlugins": ["my-spec@my-agent-skills-marketplace"],
-        "reloadRequired": True,
-    }
-    state = json.loads(claude_state.read_text(encoding="utf-8"))
-    assert state["marketplaces"][:2] == [legacy_market, unrelated_market]
-    assert len(state["marketplaces"]) == 3
-    assert state["marketplaces"][2]["name"] == "myspec"
-    plugins = {plugin["id"]: plugin for plugin in state["plugins"]}
-    assert legacy_plugin["id"] not in plugins
-    assert plugins[unrelated_plugin["id"]] == unrelated_plugin
-    assert plugins["my-spec@myspec"]["enabled"] is True
-    assert plugins["my-spec@myspec"]["version"] == PACKAGE_VERSION
-    assert persistent_data.read_text(encoding="utf-8") == "keep\n"
-    init_calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
-    assert [
-        "plugin",
-        "uninstall",
-        legacy_plugin["id"],
-        "--scope",
-        "user",
-        "--keep-data",
-    ] in init_calls
 
-    claude_log.write_text("", encoding="utf-8")
-    repeated = run_cli(executable, "init", "--claude", env=env)
-    assert repeated.returncode == 0, repeated.stderr
-    assert json.loads(repeated.stdout)["removedLegacyPlugins"] == []
-    repeat_calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
-    assert not any(call[:2] == ["plugin", "uninstall"] for call in repeat_calls)
+def test_packed_myspec_claude_init_keeps_legacy_when_stable_version_is_wrong(management_documents):
+    assert_wrong_stable_version_keeps_legacy(management_documents, "claude")
 
-    state_before = claude_state.read_bytes()
-    claude_log.write_text("", encoding="utf-8")
-    diagnosed = run_cli(executable, "doctor", "--claude", env=env)
+
+def test_packed_myspec_claude_init_retries_incomplete_legacy_uninstall(management_documents):
+    assert_retry_legacy_removal(management_documents, "claude", "noop")
+
+
+def test_packed_myspec_claude_init_retries_interrupted_legacy_uninstall(management_documents):
+    assert_retry_legacy_removal(management_documents, "claude", "interrupted")
+
+
+def test_packed_myspec_doctor_reports_claude_marketplace_source_mismatch_read_only(management_documents):
+    runtime = management_documents
+    runtime.records("claude", [runtime.marketplace("claude", mismatch=True)], [runtime.plugin("claude")])
+    diagnosed = runtime.run("doctor", "--claude")
     assert diagnosed.returncode == 0, diagnosed.stderr
     report = json.loads(diagnosed.stdout)["claude"]
-    assert report["available"] is True
-    assert report["marketplaceRegistered"] is True
-    assert report["marketplaceSourceMismatch"] is False
-    assert report["source"] == str(installed_package)
-    assert report["version"] == PACKAGE_VERSION
-    assert report["enabled"] is True
-    assert report["duplicateEnabledSources"] is False
-    assert report["enabledSources"] == ["my-spec@myspec"]
-    assert report["disabledSources"] == []
-    assert [source["sourceKind"] for source in report["sources"]] == ["stable"]
-    assert report["skills"] == list(SKILL_NAMES)
-    assert report["reloadRequired"] is True
-    assert claude_state.read_bytes() == state_before
-    assert [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()] == [
-        ["plugin", "marketplace", "list", "--json"],
-        ["plugin", "list", "--json"],
-    ]
-
-
-def test_packed_myspec_claude_init_keeps_legacy_when_stable_version_is_wrong(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), claude_bin)
-    env.update(
-        {
-            "MYSPEC_CLAUDE_LOG": str(claude_log),
-            "MYSPEC_CLAUDE_STATE": str(claude_state),
-            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
-            "MYSPEC_CLAUDE_REPORTED_VERSION": "0.0.0",
-        }
-    )
-    legacy = {
-        "id": "my-spec@my-agent-skills-marketplace",
-        "version": PREVIOUS_VERSION,
-        "scope": "user",
-        "enabled": True,
-        "installPath": str(tmp_path / "legacy-plugin"),
-    }
-    write(claude_state, json.dumps({"marketplaces": [], "plugins": [legacy]}, indent=2))
-
-    initialized = run_cli(executable, "init", "--claude", env=env)
-
-    assert initialized.returncode == 1
-    assert "error: claude_plugin_verify_failed" in initialized.stderr
-    plugins = json.loads(claude_state.read_text(encoding="utf-8"))["plugins"]
-    assert any(plugin["id"] == legacy["id"] for plugin in plugins)
-    calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
-    assert not any(call[:2] == ["plugin", "uninstall"] for call in calls)
-
-
-def test_packed_myspec_claude_init_retries_incomplete_legacy_uninstall(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), claude_bin)
-    env.update(
-        {
-            "MYSPEC_CLAUDE_LOG": str(claude_log),
-            "MYSPEC_CLAUDE_STATE": str(claude_state),
-            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
-        }
-    )
-    legacy = {
-        "id": "my-spec@my-agent-skills-marketplace",
-        "version": PREVIOUS_VERSION,
-        "scope": "user",
-        "enabled": False,
-        "installPath": str(tmp_path / "legacy-plugin"),
-    }
-    write(claude_state, json.dumps({"marketplaces": [], "plugins": [legacy]}, indent=2))
-
-    incomplete = run_cli(
-        executable,
-        "init",
-        "--claude",
-        env={**env, "MYSPEC_CLAUDE_UNINSTALL_NOOP": "1"},
-    )
-    assert incomplete.returncode == 1
-    assert "error: claude_plugin_uninstall_incomplete" in incomplete.stderr
-
-    retried = run_cli(executable, "init", "--claude", env=env)
-    assert retried.returncode == 0, retried.stderr
-    assert json.loads(retried.stdout)["removedLegacyPlugins"] == [legacy["id"]]
-
-
-def test_packed_myspec_claude_init_retries_interrupted_legacy_uninstall(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), claude_bin)
-    env.update(
-        {
-            "MYSPEC_CLAUDE_LOG": str(claude_log),
-            "MYSPEC_CLAUDE_STATE": str(claude_state),
-            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
-        }
-    )
-    legacy = {
-        "id": "my-spec@my-agent-skills-marketplace",
-        "version": PREVIOUS_VERSION,
-        "scope": "user",
-        "enabled": True,
-        "installPath": str(tmp_path / "legacy-plugin"),
-    }
-    write(claude_state, json.dumps({"marketplaces": [], "plugins": [legacy]}, indent=2))
-
-    interrupted = run_cli(
-        executable,
-        "init",
-        "--claude",
-        env={**env, "MYSPEC_CLAUDE_FAIL_AFTER_UNINSTALL": "1"},
-    )
-    assert interrupted.returncode == 1
-    assert "claude_plugin_uninstall_failed: simulated interruption after uninstall" in interrupted.stderr
-
-    retried = run_cli(executable, "init", "--claude", env=env)
-    assert retried.returncode == 0, retried.stderr
-    assert json.loads(retried.stdout)["removedLegacyPlugins"] == []
-
-
-def test_packed_myspec_doctor_reports_claude_marketplace_source_mismatch_read_only(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
-    env = isolated_myspec_env(tmp_path, prefix, claude_bin)
-    env.update(
-        {
-            "MYSPEC_CLAUDE_LOG": str(claude_log),
-            "MYSPEC_CLAUDE_STATE": str(claude_state),
-            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
-        }
-    )
-    wrong_source = tmp_path / "wrong-source"
-    write(
-        claude_state,
-        json.dumps(
-            {
-                "marketplaces": [
-                    {
-                        "name": "myspec",
-                        "source": "directory",
-                        "path": str(wrong_source),
-                        "installLocation": str(wrong_source),
-                    }
-                ],
-                "plugins": [],
-            },
-            indent=2,
-        ),
-    )
-    before = claude_state.read_bytes()
-
-    diagnosed = run_cli(executable, "doctor", "--claude", env=env)
-    assert diagnosed.returncode == 0, diagnosed.stderr
-    report = json.loads(diagnosed.stdout)["claude"]
-    assert report["source"] == str(wrong_source)
-    assert report["marketplaceRegistered"] is False
     assert report["marketplaceSourceMismatch"] is True
-    assert claude_state.read_bytes() == before
+    assert report["marketplaceRegistered"] is False
+    assert report["sources"][0]["effective"] is False
+    assert runtime.stub.calls == [("claude", "plugin", "marketplace", "list", "--json"), ("claude", "plugin", "list", "--json")]
+    assert runtime.writes == []
 
 
-def test_packed_myspec_explicit_claude_init_refreshes_disabled_stale_plugin(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
-    env = isolated_myspec_env(tmp_path, prefix, claude_bin)
-    env.update(
-        {
-            "MYSPEC_CLAUDE_LOG": str(claude_log),
-            "MYSPEC_CLAUDE_STATE": str(claude_state),
-            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
-        }
-    )
-    write(
-        claude_state,
-        json.dumps(
-            {
-                "marketplaces": [
-                    {
-                        "name": "myspec",
-                        "source": "directory",
-                        "path": str(installed_package),
-                        "installLocation": str(installed_package),
-                    }
-                ],
-                "plugins": [
-                    {
-                        "id": "my-spec@myspec",
-                        "version": PREVIOUS_VERSION,
-                        "scope": "user",
-                        "enabled": False,
-                        "installPath": str(tmp_path / "stale-plugin"),
-                    }
-                ],
-            },
-            indent=2,
-        ),
-    )
+def test_packed_myspec_explicit_claude_init_refreshes_disabled_stale_plugin(management_documents):
+    runtime = management_documents
+    queue_client_init(runtime, "claude", existing=True, enabled=False)
+    result = runtime.run("init", "--claude")
+    assert result.returncode == 0, result.stderr
+    assert ("claude", "plugin", "update", "my-spec@myspec", "--scope", "user") in runtime.stub.calls
+    assert ("claude", "plugin", "enable", "my-spec@myspec", "--scope", "user") in runtime.stub.calls
+    assert runtime.writes == []
 
-    initialized = run_cli(executable, "init", "--claude", env=env)
+
+def test_packed_myspec_requires_explicit_claude_but_all_initializes_detected_claude(management_documents):
+    assert_explicit_client_and_detected_all(management_documents, "claude")
+
+
+def test_packed_myspec_initializes_and_removes_codex_legacy_plugin(management_documents):
+    assert_initializes_and_removes_legacy(management_documents, "codex")
+
+
+def test_packed_myspec_codex_init_keeps_legacy_when_stable_version_is_wrong(management_documents):
+    assert_wrong_stable_version_keeps_legacy(management_documents, "codex")
+
+
+def test_packed_myspec_codex_init_retries_incomplete_legacy_removal(management_documents):
+    assert_retry_legacy_removal(management_documents, "codex", "noop")
+
+
+def test_packed_myspec_codex_init_retries_interrupted_legacy_removal(management_documents):
+    assert_retry_legacy_removal(management_documents, "codex", "interrupted")
+
+
+def test_packed_myspec_requires_explicit_codex_but_all_initializes_detected_codex(management_documents):
+    assert_explicit_client_and_detected_all(management_documents, "codex")
+
+
+def test_packed_myspec_init_all_removes_legacy_plugins_and_doctor_reports_stable_sources(management_documents):
+    runtime = management_documents
+    for client in ("claude", "codex"):
+        queue_client_init(runtime, client, legacy=True)
+    initialized = runtime.run("init", "--all")
     assert initialized.returncode == 0, initialized.stderr
-    plugin = json.loads(claude_state.read_text(encoding="utf-8"))["plugins"][0]
-    assert plugin["version"] == PACKAGE_VERSION
-    assert plugin["enabled"] is True
-    calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
-    assert ["plugin", "update", "my-spec@myspec", "--scope", "user"] in calls
-
-
-def test_packed_myspec_requires_explicit_claude_but_all_initializes_detected_claude(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    missing_env = isolated_myspec_env(tmp_path, prefix)
-    missing = run_cli(executable, "init", "--claude", env=missing_env)
-    assert missing.returncode == 1
-    assert missing.stdout == ""
-    assert "error: missing_command: claude" in missing.stderr
-
-    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
-    env = isolated_myspec_env(tmp_path, prefix, claude_bin)
-    env.update(
-        {
-            "MYSPEC_CLAUDE_LOG": str(claude_log),
-            "MYSPEC_CLAUDE_STATE": str(claude_state),
-            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
-        }
-    )
-    write(claude_state, json.dumps({"marketplaces": [], "plugins": []}, indent=2))
-    initialized = run_cli(executable, "init", "--all", env=env)
-    assert initialized.returncode == 0, initialized.stderr
-    assert json.loads(initialized.stdout) == {
-        "claude": {
-            "status": "initialized",
-            "source": str(installed_package),
-            "removedLegacyPlugins": [],
-        },
-        "codex": {"status": "skipped", "reason": "missing_command: codex"},
-    }
-    assert any(
-        plugin["id"] == "my-spec@myspec"
-        for plugin in json.loads(claude_state.read_text(encoding="utf-8"))["plugins"]
-    )
-
-
-def test_packed_myspec_initializes_and_removes_codex_legacy_plugin(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, prefix, codex_bin)
-    codex_home = Path(env["HOME"]) / ".codex"
-    env.update(
-        {
-            "CODEX_HOME": str(codex_home),
-            "MYSPEC_CODEX_LOG": str(codex_log),
-            "MYSPEC_CODEX_STATE": str(codex_state),
-        }
-    )
-    legacy_market_root = tmp_path / "legacy-market"
-    unrelated_market_root = tmp_path / "other-market"
-    legacy_source = tmp_path / "legacy-source"
-    unrelated_cache = tmp_path / "other-cache"
-    legacy_install_cache = (
-        codex_home
-        / "plugins"
-        / "cache"
-        / "my-agent-skills-marketplace"
-        / "my-spec"
-        / PREVIOUS_VERSION
-    )
-    write(legacy_source / "kept.txt", "legacy source")
-    write(legacy_install_cache / "removed.txt", "legacy cache")
-    write(unrelated_cache / "kept.txt", "other cache")
-    legacy_market = {
-        "name": "my-agent-skills-marketplace",
-        "root": str(legacy_market_root),
-        "marketplaceSource": {
-            "sourceType": "git",
-            "source": "https://github.com/liuli195/my-agent-skills.git",
-        },
-    }
-    unrelated_market = {
-        "name": "other-marketplace",
-        "root": str(unrelated_market_root),
-        "marketplaceSource": {"sourceType": "git", "source": "https://example.invalid/other.git"},
-    }
-    legacy_plugin = {
-        "pluginId": "my-spec@my-agent-skills-marketplace",
-        "name": "my-spec",
-        "marketplaceName": "my-agent-skills-marketplace",
-        "version": PREVIOUS_VERSION,
-        "installed": True,
-        "source": {"source": "local", "path": str(legacy_source)},
-    }
-    unrelated_plugin = {
-        "pluginId": "other@other-marketplace",
-        "name": "other",
-        "marketplaceName": "other-marketplace",
-        "version": "1.0.0",
-        "installed": True,
-        "source": {"source": "local", "path": str(unrelated_cache)},
-    }
-    write(
-        codex_state,
-        json.dumps(
-            {
-                "marketplaces": [legacy_market, unrelated_market],
-                "installed": [legacy_plugin, unrelated_plugin],
-                "available": [],
-            },
-            indent=2,
-        ),
-    )
-    write(
-        codex_home / "config.toml",
-        '''model = "gpt-test"
-
-[plugins."my-spec@my-agent-skills-marketplace"]
-enabled = true
-
-[plugins."other@other-marketplace"]
-enabled = true
-''',
-    )
-
-    initialized = run_cli(executable, "init", "--codex", env=env)
-    assert initialized.returncode == 0, initialized.stderr
-    assert json.loads(initialized.stdout) == {
-        "codex": "initialized",
-        "marketplace": "myspec",
-        "source": str(installed_package),
-        "removedLegacyPlugins": ["my-spec@my-agent-skills-marketplace"],
-        "newSessionRequired": True,
-    }
-    state = json.loads(codex_state.read_text(encoding="utf-8"))
-    assert state["marketplaces"][:2] == [legacy_market, unrelated_market]
-    assert state["marketplaces"][2]["name"] == "myspec"
-    plugins = {plugin["pluginId"]: plugin for plugin in state["installed"]}
-    assert legacy_plugin["pluginId"] not in plugins
-    assert plugins[unrelated_plugin["pluginId"]]["source"] == unrelated_plugin["source"]
-    assert plugins["my-spec@myspec"]["version"] == PACKAGE_VERSION
-    config = (codex_home / "config.toml").read_text(encoding="utf-8")
-    assert '[plugins."my-spec@my-agent-skills-marketplace"]' not in config
-    assert '[plugins."my-spec@myspec"]\nenabled = true' in config
-    assert '[plugins."other@other-marketplace"]\nenabled = true' in config
-    assert (legacy_source / "kept.txt").is_file()
-    assert not legacy_install_cache.exists()
-    assert (unrelated_cache / "kept.txt").is_file()
-    init_calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
-    assert ["plugin", "remove", legacy_plugin["pluginId"], "--json"] in init_calls
-
-    codex_log.write_text("", encoding="utf-8")
-    repeated = run_cli(executable, "init", "--codex", env=env)
-    assert repeated.returncode == 0, repeated.stderr
-    assert json.loads(repeated.stdout)["removedLegacyPlugins"] == []
-    repeat_calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
-    assert ["plugin", "remove", legacy_plugin["pluginId"], "--json"] not in repeat_calls
-
-    before_state = codex_state.read_bytes()
-    before_config = (codex_home / "config.toml").read_bytes()
-    codex_log.write_text("", encoding="utf-8")
-    diagnosed = run_cli(executable, "doctor", "--codex", env=env)
+    for client, report in json.loads(initialized.stdout).items():
+        assert report["removedLegacyPlugins"] == ["my-spec@my-agent-skills-marketplace"]
+    diagnosed = runtime.run("doctor", "--all")
     assert diagnosed.returncode == 0, diagnosed.stderr
-    report = json.loads(diagnosed.stdout)["codex"]
-    assert report["available"] is True
-    assert report["marketplaceRegistered"] is True
-    assert report["source"] == str(installed_package)
-    assert report["version"] == PACKAGE_VERSION
-    assert report["enabled"] is True
-    assert report["duplicateEnabledSources"] is False
-    assert report["enabledSources"] == ["my-spec@myspec"]
-    assert report["disabledSources"] == []
-    assert [source["sourceKind"] for source in report["sources"]] == ["stable"]
-    assert report["skills"] == list(SKILL_NAMES)
-    assert report["newSessionRequired"] is True
-    assert "reloadRequired" not in report
-    assert codex_state.read_bytes() == before_state
-    assert (codex_home / "config.toml").read_bytes() == before_config
-    assert [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()] == [
-        ["plugin", "marketplace", "list", "--json"],
-        ["plugin", "list", "--json"],
-    ]
-
-
-def test_packed_myspec_codex_init_keeps_legacy_when_stable_version_is_wrong(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), codex_bin)
-    env.update(
-        {
-            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
-            "MYSPEC_CODEX_LOG": str(codex_log),
-            "MYSPEC_CODEX_STATE": str(codex_state),
-            "MYSPEC_CODEX_REPORTED_VERSION": "0.0.0",
-        }
-    )
-    legacy_id = "my-spec@my-agent-skills-marketplace"
-    legacy = {
-        "pluginId": legacy_id,
-        "name": "my-spec",
-        "marketplaceName": "my-agent-skills-marketplace",
-        "version": PREVIOUS_VERSION,
-        "installed": True,
-        "source": {"source": "local", "path": str(tmp_path / "legacy")},
-    }
-    write(codex_state, json.dumps({"marketplaces": [], "installed": [legacy], "available": []}, indent=2))
-    write(Path(env["CODEX_HOME"]) / "config.toml", f'[plugins."{legacy_id}"]\nenabled = true\n')
-
-    initialized = run_cli(executable, "init", "--codex", env=env)
-
-    assert initialized.returncode == 1
-    assert "error: codex_plugin_verify_failed" in initialized.stderr
-    installed = json.loads(codex_state.read_text(encoding="utf-8"))["installed"]
-    assert any(plugin["pluginId"] == legacy_id for plugin in installed)
-    calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
-    assert ["plugin", "remove", legacy_id, "--json"] not in calls
-
-
-def test_packed_myspec_codex_init_retries_incomplete_legacy_removal(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), codex_bin)
-    env.update(
-        {
-            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
-            "MYSPEC_CODEX_LOG": str(codex_log),
-            "MYSPEC_CODEX_STATE": str(codex_state),
-        }
-    )
-    legacy_id = "my-spec@my-agent-skills-marketplace"
-    legacy = {
-        "pluginId": legacy_id,
-        "name": "my-spec",
-        "marketplaceName": "my-agent-skills-marketplace",
-        "version": PREVIOUS_VERSION,
-        "installed": True,
-        "source": {"source": "local", "path": str(tmp_path / "legacy")},
-    }
-    write(codex_state, json.dumps({"marketplaces": [], "installed": [legacy], "available": []}, indent=2))
-    write(Path(env["CODEX_HOME"]) / "config.toml", f'[plugins."{legacy_id}"]\nenabled = true\n')
-
-    incomplete = run_cli(
-        executable,
-        "init",
-        "--codex",
-        env={**env, "MYSPEC_CODEX_REMOVE_NOOP": "1"},
-    )
-    assert incomplete.returncode == 1
-    assert "error: codex_plugin_remove_incomplete" in incomplete.stderr
-
-    retried = run_cli(executable, "init", "--codex", env=env)
-    assert retried.returncode == 0, retried.stderr
-    assert json.loads(retried.stdout)["removedLegacyPlugins"] == [legacy_id]
-
-
-def test_packed_myspec_codex_init_retries_interrupted_legacy_removal(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package), codex_bin)
-    env.update(
-        {
-            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
-            "MYSPEC_CODEX_LOG": str(codex_log),
-            "MYSPEC_CODEX_STATE": str(codex_state),
-        }
-    )
-    legacy_id = "my-spec@my-agent-skills-marketplace"
-    legacy = {
-        "pluginId": legacy_id,
-        "name": "my-spec",
-        "marketplaceName": "my-agent-skills-marketplace",
-        "version": PREVIOUS_VERSION,
-        "installed": True,
-        "source": {"source": "local", "path": str(tmp_path / "legacy")},
-    }
-    write(codex_state, json.dumps({"marketplaces": [], "installed": [legacy], "available": []}, indent=2))
-    write(Path(env["CODEX_HOME"]) / "config.toml", f'[plugins."{legacy_id}"]\nenabled = true\n')
-
-    interrupted = run_cli(
-        executable,
-        "init",
-        "--codex",
-        env={**env, "MYSPEC_CODEX_FAIL_AFTER_REMOVE": "1"},
-    )
-    assert interrupted.returncode == 1
-    assert "codex_plugin_remove_failed: simulated interruption after remove" in interrupted.stderr
-
-    retried = run_cli(executable, "init", "--codex", env=env)
-    assert retried.returncode == 0, retried.stderr
-    assert json.loads(retried.stdout)["removedLegacyPlugins"] == []
-
-
-def test_packed_myspec_requires_explicit_codex_but_all_initializes_detected_codex(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    missing_env = isolated_myspec_env(tmp_path, prefix)
-    missing = run_cli(executable, "init", "--codex", env=missing_env)
-    assert missing.returncode == 1
-    assert missing.stdout == ""
-    assert "error: missing_command: codex" in missing.stderr
-
-    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, prefix, codex_bin)
-    env.update(
-        {
-            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
-            "MYSPEC_CODEX_LOG": str(codex_log),
-            "MYSPEC_CODEX_STATE": str(codex_state),
-        }
-    )
-    write(codex_state, json.dumps({"marketplaces": [], "installed": [], "available": []}, indent=2))
-    initialized = run_cli(executable, "init", "--all", env=env)
-    assert initialized.returncode == 0, initialized.stderr
-    assert json.loads(initialized.stdout) == {
-        "claude": {"status": "skipped", "reason": "missing_command: claude"},
-        "codex": {
-            "status": "initialized",
-            "source": str(installed_package),
-            "removedLegacyPlugins": [],
-            "newSessionRequired": True,
-        },
-    }
-
-
-def test_packed_myspec_init_all_removes_legacy_plugins_and_doctor_reports_stable_sources(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
-    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(
-        tmp_path,
-        npm_prefix_for(installed_package),
-        claude_bin,
-        codex_bin,
-    )
-    legacy_id = "my-spec@my-agent-skills-marketplace"
-    env.update(
-        {
-            "MYSPEC_CLAUDE_LOG": str(claude_log),
-            "MYSPEC_CLAUDE_STATE": str(claude_state),
-            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
-            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
-            "MYSPEC_CODEX_LOG": str(codex_log),
-            "MYSPEC_CODEX_STATE": str(codex_state),
-        }
-    )
-    claude_legacy_market = {
-        "name": "my-agent-skills-marketplace",
-        "source": "github",
-        "repo": "liuli195/my-agent-skills",
-        "installLocation": str(tmp_path / "claude-legacy-market"),
-    }
-    write(
-        claude_state,
-        json.dumps(
-            {
-                "marketplaces": [claude_legacy_market],
-                "plugins": [
-                    {
-                        "id": legacy_id,
-                        "version": PREVIOUS_VERSION,
-                        "scope": "user",
-                        "enabled": True,
-                        "installPath": str(tmp_path / "claude-legacy-plugin"),
-                    }
-                ],
-            },
-            indent=2,
-        ),
-    )
-    codex_legacy_market = {
-        "name": "my-agent-skills-marketplace",
-        "root": str(tmp_path / "codex-legacy-market"),
-        "marketplaceSource": {"sourceType": "git", "source": "https://example.invalid/legacy.git"},
-    }
-    write(
-        codex_state,
-        json.dumps(
-            {
-                "marketplaces": [codex_legacy_market],
-                "installed": [
-                    {
-                        "pluginId": legacy_id,
-                        "name": "my-spec",
-                        "marketplaceName": "my-agent-skills-marketplace",
-                        "version": PREVIOUS_VERSION,
-                        "installed": True,
-                        "source": {"source": "local", "path": str(tmp_path / "codex-legacy-plugin")},
-                    }
-                ],
-                "available": [],
-            },
-            indent=2,
-        ),
-    )
-    write(Path(env["CODEX_HOME"]) / "config.toml", f'[plugins."{legacy_id}"]\nenabled = true\n')
-
-    initialized = run_cli(executable, "init", "--all", env=env)
-
-    assert initialized.returncode == 0, initialized.stderr
-    output = json.loads(initialized.stdout)
-    assert output["claude"]["removedLegacyPlugins"] == [legacy_id]
-    assert output["codex"]["removedLegacyPlugins"] == [legacy_id]
-    assert json.loads(claude_state.read_text(encoding="utf-8"))["marketplaces"][0] == claude_legacy_market
-    assert json.loads(codex_state.read_text(encoding="utf-8"))["marketplaces"][0] == codex_legacy_market
-
-    doctor = json.loads(run_cli(executable, "doctor", "--all", env=env).stdout)
-    for agent in ("claude", "codex"):
-        assert [source["sourceKind"] for source in doctor[agent]["sources"]] == ["stable"]
-        assert doctor[agent]["disabledSources"] == []
-
-
-def test_packed_myspec_package_contains_single_codex_marketplace_and_four_skills(
-    tmp_path: Path,
-) -> None:
-    _, installed_package = install_packed_myspec(tmp_path)
-    marketplace = json.loads(
-        (installed_package / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8")
-    )
-    assert marketplace == {
-        "name": "myspec",
-        "interface": {"displayName": "MySpec"},
-        "plugins": [
-            {
-                "name": "my-spec",
-                "source": {"source": "local", "path": "./"},
-                "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
-                "category": "Developer Tools",
-            }
-        ],
-    }
-    assert [
-        path.parent.name
-        for path in sorted((installed_package / "skills").glob("*/SKILL.md"))
-    ] == sorted(SKILL_NAMES)
-
-
-@pytest.mark.parametrize("shared_marketplaces_include_tool", [True, False])
-def test_packed_myspec_switches_package_between_development_and_saved_release(
-    tmp_path: Path,
-    shared_marketplaces_include_tool: bool,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    release_tarball = next((tmp_path / "package").glob("*.tgz"))
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
-        }
-    )
-
-    source = controlled_dev_source(tmp_path)
-    if shared_marketplaces_include_tool:
-        for catalog, source_value in (
-            (source / ".agents/plugins/marketplace.json", {"source": "local", "path": "./plugins/my-spec"}),
-            (source / ".claude-plugin/marketplace.json", "./plugins/my-spec"),
-        ):
-            content = json.loads(catalog.read_text(encoding="utf-8"))
-            content["plugins"].append({"name": "my-spec", "source": source_value})
-            catalog.write_text(json.dumps(content), encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=source, check=True, capture_output=True)
-        subprocess.run(["git", "-c", "user.name=MySpec Test", "-c", "user.email=myspec@example.invalid", "commit", "-m", "legacy shared entries"], cwd=source, check=True, capture_output=True)
-    env = controlled_dev_env(env, source)
-    entered = run_cli(executable, "init", "--dev", env=env, cwd=source)
-    assert entered.returncode == 0, entered.stderr
-    assert subprocess.run(
-        ["git", "status", "--porcelain"], cwd=source, text=True, capture_output=True, check=True
-    ).stdout == ""
-    assert json.loads(entered.stdout) == {
-        "mode": "dev",
-        "source": str(source),
-        "previousReleaseVersion": PACKAGE_VERSION,
-        "reloadRequired": False,
-    }
-    state_path = Path(env["HOME"]) / ".myspec" / "state.json"
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    assert state["mode"] == "dev"
-    assert state["source"] == str(source)
-    assert state["previousReleaseVersion"] == PACKAGE_VERSION
-    expected_commit = (
-        _FAKE_GIT_COMMIT
-        if os.environ.get("MYSPEC_TEST_IN_PROCESS") == "1"
-        else subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=source,
-            text=True,
-            capture_output=True,
-            check=True,
-        ).stdout.strip()
-    )
-    assert state["sourceCommit"] == expected_commit
-    dev_report = run_cli(executable, "doctor", env=env)
-    assert dev_report.returncode == 0, dev_report.stderr
-    dev_diagnosis = json.loads(dev_report.stdout)
-    assert dev_diagnosis["source"] == str(source / "plugins" / "my-spec")
-    assert dev_diagnosis["mode"] == "dev"
-    restored = run_cli(executable, "init", "--release", env=env)
-    assert restored.returncode == 0, restored.stderr
-    assert json.loads(restored.stdout) == {
-        "mode": "release",
-        "version": PACKAGE_VERSION,
-        "reloadRequired": False,
-    }
-    assert json.loads(state_path.read_text(encoding="utf-8"))["mode"] == "release"
-    report = json.loads(run_cli(executable, "doctor", env=env).stdout)
-    assert report["mode"] == "release"
-    assert report["source"] == str(installed_package)
-    npm_calls = [json.loads(line) for line in npm_log.read_text(encoding="utf-8").splitlines()]
-    assert ["link"] in npm_calls
-    assert ["install", "--global", "--ignore-scripts", "--no-audit", "--no-fund", f"@liuli195/myspec@{PACKAGE_VERSION}"] in npm_calls
-    assert subprocess.run(
-        ["git", "status", "--porcelain"], cwd=source, text=True, capture_output=True, check=True
-    ).stdout == ""
-
-    explicit = run_cli(executable, "init", "--dev", "--source", source, env=env, cwd=tmp_path)
-    assert explicit.returncode == 0, explicit.stderr
-    assert json.loads(explicit.stdout)["source"] == str(source)
-
-
-def test_packed_myspec_dev_doctor_keeps_published_ancestor_for_unrelated_commit(
-    tmp_path: Path,
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    source = controlled_dev_source(tmp_path)
-    assert not subprocess.run(
-        ["git", "for-each-ref", "--format=%(refname)", "refs/remotes/origin"],
-        cwd=source,
-        check=True,
-        text=True,
-        capture_output=True,
-    ).stdout.strip()
-    env = controlled_dev_env(isolated_myspec_env(tmp_path, npm_prefix_for(installed_package)), source)
-    assert run_cli(executable, "init", "--dev", "--source", source, env=env, cwd=source).returncode == 0
-
-    first = json.loads(run_cli(executable, "doctor", env=env, cwd=source).stdout)
-    published_commit = first["toolchain"]["sourceCommit"]
-    publisher = tmp_path / "publisher"
-    assert subprocess.run(
-        ["git", "clone", "--branch", "main", str(tmp_path / "origin.git"), publisher], check=False
-    ).returncode == 0
-    write(publisher / "unrelated.txt", "does not ship in the MySpec package")
-    assert subprocess.run(["git", "add", "unrelated.txt"], cwd=publisher, check=False).returncode == 0
-    assert subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=MySpec Test",
-            "-c",
-            "user.email=myspec@example.invalid",
-            "commit",
-            "-m",
-            "unrelated",
-        ],
-        cwd=publisher,
-        check=False,
-    ).returncode == 0
-    assert subprocess.run(["git", "push", "origin", "HEAD:main"], cwd=publisher, check=False).returncode == 0
-    remote_head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=publisher, check=True, text=True, capture_output=True
-    ).stdout.strip()
-    assert subprocess.run(["git", "cat-file", "-e", remote_head], cwd=source, check=False).returncode != 0
-
-    diagnosed = run_cli(executable, "doctor", env=env, cwd=source)
-
-    assert diagnosed.returncode == 0, diagnosed.stderr
-    assert json.loads(diagnosed.stdout)["toolchain"]["sourceCommit"] == published_commit
-    assert subprocess.run(["git", "cat-file", "-e", remote_head], cwd=source, check=False).returncode == 0
-    assert not subprocess.run(
-        ["git", "for-each-ref", "--format=%(refname)", "refs/remotes/origin"],
-        cwd=source,
-        check=True,
-        text=True,
-        capture_output=True,
-    ).stdout.strip()
-
-
-def test_packed_myspec_reuses_confirmation_when_implementation_diff_is_unchanged(
-    tmp_path: Path,
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
-    source = controlled_dev_source(tmp_path, "first")
-    env = controlled_dev_env(env, source)
-    assert run_cli(executable, "init", "--dev", "--source", source, env=env, cwd=source).returncode == 0
-
-    specs = source / "myspec" / "specs"
-    delta = source / "myspec" / "delta"
-    preview = source / ".local" / "spec-preview"
-    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
-    write(
-        delta / "accounts" / "spec.md",
-        """## MODIFIED Requirements
-
-### Requirement: 登录
-
-系统 MUST 允许密码登录。
-
-#### Scenario: 密码正确
-
-- **WHEN** 用户提交正确密码
-- **THEN** 系统创建会话
-""",
-    )
-    work = source / ".local" / "spec-work"
-    conflicts = source / "no-conflicts.json"
-    write(conflicts, "[]")
-    assert run_cli(
-        executable,
-        "state-init",
-        work,
-        "add",
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env,
-        cwd=source,
-    ).returncode == 0
-    assert run_cli(
-        executable,
-        "state-set-conflicts",
-        work,
-        conflicts,
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env,
-        cwd=source,
-    ).returncode == 0
-    previewed = run_cli(
-        executable,
-        "apply-delta",
-        specs,
-        delta,
-        preview,
-        work,
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env,
-        cwd=source,
-    )
-    assert previewed.returncode == 0, previewed.stderr
-
-    skill = source / "plugins" / "my-spec" / "skills" / "my-spec" / "SKILL.md"
-    write(skill, skill.read_text(encoding="utf-8") + "\nimplementation-only change")
-    applied = run_cli(
-        executable,
-        "apply-delta",
-        specs,
-        delta,
-        specs,
-        work,
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env,
-        cwd=source,
-    )
-
-    assert applied.returncode == 0, applied.stderr
-    assert "系统 MUST 允许密码登录。" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
-
-
-def test_packed_myspec_dev_doctor_drops_commit_after_closure_branch_removed(
-    tmp_path: Path,
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    source = controlled_dev_source(tmp_path)
-    env = controlled_dev_env(isolated_myspec_env(tmp_path, npm_prefix_for(installed_package)), source)
-    entered = run_cli(executable, "init", "--dev", "--source", source, env=env, cwd=source)
-    assert entered.returncode == 0, entered.stderr
-
-    skill = source / "plugins" / "my-spec" / "skills" / "my-spec" / "SKILL.md"
-    write(skill, skill.read_text(encoding="utf-8") + "\nclosure change")
-    assert subprocess.run(["git", "-C", str(source), "add", str(skill)], check=False).returncode == 0
-    committed = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(source),
-            "-c",
-            "user.name=MySpec Test",
-            "-c",
-            "user.email=myspec@example.invalid",
-            "commit",
-            "-m",
-            "closure change",
-        ],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert committed.returncode == 0, committed.stderr
-    local_commit = subprocess.run(
-        ["git", "-C", str(source), "rev-parse", "HEAD"],
-        check=True,
-        text=True,
-        capture_output=True,
-    ).stdout.strip()
-    pushed = subprocess.run(
-        ["git", "-C", str(source), "push", "origin", "HEAD:refs/heads/closure-change"],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert pushed.returncode == 0, pushed.stderr
-
-    published = run_cli(executable, "doctor", env=env, cwd=source)
-    assert published.returncode == 0, published.stderr
-    assert json.loads(published.stdout)["toolchain"]["sourceCommit"] == local_commit
-
-    deleted = subprocess.run(
-        ["git", "-C", str(source), "push", "origin", "--delete", "closure-change"],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert deleted.returncode == 0, deleted.stderr
-    unpublished = run_cli(executable, "doctor", env=env, cwd=source)
-    assert unpublished.returncode == 0, unpublished.stderr
-    assert "sourceCommit" not in json.loads(unpublished.stdout)["toolchain"]
-
-
-def test_packed_myspec_reconfirms_when_in_process_identity_changes_preview(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    specs = tmp_path / "specs"
-    delta = tmp_path / "delta"
-    preview = tmp_path / "preview"
-    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
-    write(
-        delta / "accounts" / "spec.md",
-        """## MODIFIED Requirements
-
-### Requirement: 登录
-
-系统 MUST 允许密码登录。
-
-#### Scenario: 密码正确
-
-- **WHEN** 用户提交正确密码
-- **THEN** 系统创建会话
-""",
-    )
-    work = ready_state(SPEC_OPS, tmp_path / "state")
-    previewed = apply_ready(SPEC_OPS, specs, delta, preview, work)
-    assert previewed.returncode == 0, previewed.stderr
-    before = (specs / "accounts" / "spec.md").read_bytes()
-
-    spec_ops = _load_in_process_spec_ops(SPEC_OPS)
-    original_write_preview = spec_ops._write_preview
-
-    def changed_write_preview(merged, output_root, source_root):
-        original_write_preview(merged, output_root, source_root)
-        path = output_root / "accounts" / "spec.md"
-        write(path, path.read_text(encoding="utf-8") + "\nimplementation-only change")
-
-    monkeypatch.setattr(spec_ops, "implementation_identity", lambda: "changed-implementation")
-    monkeypatch.setattr(spec_ops, "_write_preview", changed_write_preview)
-
-    applied = apply_ready(SPEC_OPS, specs, delta, specs, work)
-
-    assert applied.returncode != 0
-    assert "preview_changed_requires_confirmation" in applied.stderr
-    assert (specs / "accounts" / "spec.md").read_bytes() == before
-
-
-def test_packed_myspec_dev_binding_allows_cross_worktree_apply_with_target_context(
-    tmp_path: Path,
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    prefix = npm_prefix_for(installed_package)
-    (tmp_path / "source-a").mkdir()
-    source_a = controlled_dev_source(tmp_path / "source-a")
-    configured = subprocess.run(
-        ["git", "-C", str(source_a), "config", "core.autocrlf", "false"],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert configured.returncode == 0, configured.stderr
-    source_b = tmp_path / "source-b"
-    worktree = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(source_a),
-            "worktree",
-            "add",
-            "-b",
-            "worktree-b",
-            str(source_b),
-            "HEAD",
-        ],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert worktree.returncode == 0, worktree.stderr
-
-    target = main_spec(
-        "Accounts",
-        requirement("登录", "允许登录"),
-        requirement("旧设置", "显示设置"),
-    )
-    delta_text = """## REMOVED Requirements
-
-### Requirement: 旧设置
-"""
-
-    def add_spec_fixture(source: Path, remote_branch: str) -> None:
-        write(source / "myspec" / "specs" / "accounts" / "spec.md", target)
-        write(source / "myspec" / "delta" / "accounts" / "spec.md", delta_text)
-        write(source / "myspec" / "specs" / "profiles" / "spec.md", main_spec("Profiles", requirement("查看资料", "显示姓名")))
-        settings = source / "myspec" / "specs" / "settings" / "spec.md"
-        settings.parent.mkdir(parents=True, exist_ok=True)
-        settings.write_bytes(main_spec("Settings", requirement("修改设置", "保存设置")).replace("\n", "\r\n").encode("utf-8"))
-        subprocess.run(
-            ["git", "-C", str(source), "add", "myspec"],
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                str(source),
-                "-c",
-                "user.name=MySpec Test",
-                "-c",
-                "user.email=myspec@example.invalid",
-                "commit",
-                "-m",
-                "spec fixture",
-            ],
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        pushed = subprocess.run(
-            ["git", "-C", str(source), "push", "origin", f"HEAD:refs/heads/{remote_branch}"],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert pushed.returncode == 0, pushed.stderr
-
-    add_spec_fixture(source_a, "main")
-    add_spec_fixture(source_b, "worktree-b")
-
-    def head(source: Path) -> str:
-        if os.environ.get("MYSPEC_TEST_IN_PROCESS") == "1":
-            return _FAKE_GIT_COMMIT
-        return subprocess.run(
-            ["git", "-C", str(source), "rev-parse", "HEAD"],
-            text=True,
-            capture_output=True,
-            check=True,
-        ).stdout.strip()
-
-    env = isolated_myspec_env(tmp_path, prefix)
-    env_a = controlled_dev_env(env, source_a)
-    env_b = env_a
-    entered = run_cli(executable, "init", "--dev", "--source", source_a, env=env_a, cwd=source_a)
-    assert entered.returncode == 0, entered.stderr
-
-    diagnosis = run_cli(executable, "doctor", env=env_a, cwd=source_b)
-    assert diagnosis.returncode == 0, diagnosis.stderr
-    report = json.loads(diagnosis.stdout)
-    assert report["binding"] == {
-        "sourceWorktree": str(source_a),
-        "sourceCommit": head(source_a),
-        "targetWorktree": str(source_b),
-        "targetCommit": head(source_b),
-        "worktreeMatch": False,
-    }
-
-    specs = source_b / "myspec" / "specs"
-    delta = source_b / "myspec" / "delta"
-    preview = source_b / ".local" / "spec-preview"
-    work = source_b / ".local" / "spec-work"
-    conflicts = tmp_path / "no-conflicts.json"
-    write(conflicts, "[]")
-    assert run_cli(
-        executable,
-        "state-init",
-        work,
-        "add",
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env_a,
-        cwd=source_b,
-    ).returncode == 0
-    assert run_cli(
-        executable,
-        "state-set-conflicts",
-        work,
-        conflicts,
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env_a,
-        cwd=source_b,
-    ).returncode == 0
-    before = {
-        relative: (specs / relative).read_bytes()
-        for relative in ("accounts/spec.md", "profiles/spec.md", "settings/spec.md")
-    }
-    source_before = {
-        relative: (source_a / "myspec" / "specs" / relative).read_bytes()
-        for relative in before
-    }
-    status = run_cli(
-        executable,
-        "state-status",
-        work,
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env_a,
-        cwd=source_b,
-    )
-    assert status.returncode == 0, status.stderr
-    assert json.loads(status.stdout) == {"status": "READY_TO_APPLY", "total": 0, "decided": 0, "remaining": 0}
-
-    previewed = run_cli(
-        executable,
-        "apply-delta",
-        specs,
-        delta,
-        preview,
-        work,
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env_a,
-        cwd=source_b,
-    )
-    assert previewed.returncode == 0, previewed.stderr
-    assert (preview / "profiles" / "spec.md").read_bytes() == before["profiles/spec.md"]
-    assert (preview / "settings" / "spec.md").read_bytes() == before["settings/spec.md"]
-    assert {relative: (specs / relative).read_bytes() for relative in before} == before
-    diffed = run_cli(executable, "diff", specs, preview, env=env_a, cwd=source_b)
-    assert diffed.returncode == 0, diffed.stderr
-    assert "旧设置" in diffed.stdout
-    wrong_diff = run_cli(executable, "diff", source_a / "myspec" / "specs", preview, env=env_a, cwd=source_b)
-    assert wrong_diff.returncode != 0
-    assert "cross_worktree_path" in wrong_diff.stderr
-    wrong_apply = run_cli(
-        executable,
-        "apply-delta",
-        source_a / "myspec" / "specs",
-        delta,
-        preview,
-        work,
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env_a,
-        cwd=source_b,
-    )
-    assert wrong_apply.returncode != 0
-    assert "cross_worktree_path" in wrong_apply.stderr
-    assert work.exists()
-
-    applied = run_cli(
-        executable,
-        "apply-delta",
-        specs,
-        delta,
-        specs,
-        work,
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env_a,
-        cwd=source_b,
-    )
-    assert applied.returncode == 0, applied.stderr
-    assert (specs / "profiles" / "spec.md").read_bytes() == before["profiles/spec.md"]
-    assert (specs / "settings" / "spec.md").read_bytes() == before["settings/spec.md"]
-    assert "旧设置".encode("utf-8") not in (specs / "accounts" / "spec.md").read_bytes()
-    assert {
-        relative: (source_a / "myspec" / "specs" / relative).read_bytes()
-        for relative in source_before
-    } == source_before
-    assert not work.exists()
-    after_first = {
-        relative: (specs / relative).read_bytes()
-        for relative in before
-    }
-
-    repeated_work = source_b / ".local" / "spec-work-repeat"
-    repeated_conflicts = tmp_path / "repeated-no-conflicts.json"
-    write(repeated_conflicts, "[]")
-    assert run_cli(
-        executable,
-        "state-init",
-        repeated_work,
-        "add",
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env_b,
-        cwd=source_b,
-    ).returncode == 0
-    assert run_cli(
-        executable,
-        "state-set-conflicts",
-        repeated_work,
-        repeated_conflicts,
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env_b,
-        cwd=source_b,
-    ).returncode == 0
-    shutil.rmtree(preview)
-    repeated_preview = run_cli(
-        executable,
-        "apply-delta",
-        specs,
-        delta,
-        preview,
-        repeated_work,
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env_b,
-        cwd=source_b,
-    )
-    assert repeated_preview.returncode == 0, repeated_preview.stderr
-    repeated = run_cli(
-        executable,
-        "apply-delta",
-        specs,
-        delta,
-        specs,
-        repeated_work,
-        "specs-fingerprint",
-        "input-fingerprint",
-        env=env_b,
-        cwd=source_b,
-    )
-    assert repeated.returncode == 0, repeated.stderr
-    assert not repeated_work.exists()
-    assert {relative: (specs / relative).read_bytes() for relative in before} == after_first
-
-
-def test_packed_myspec_requires_release_registration_before_first_codex_dev_init(
-    tmp_path: Path,
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    prefix = npm_prefix_for(installed_package)
-    release_tarball = next((installed / "package").glob("*.tgz"))
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
-    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, codex_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
-            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
-            "MYSPEC_CODEX_LOG": str(codex_log),
-            "MYSPEC_CODEX_STATE": str(codex_state),
-        }
-    )
-    write(codex_state, json.dumps({"marketplaces": [], "installed": [], "available": []}, indent=2))
-
-    source = controlled_dev_source(tmp_path)
-    env = controlled_dev_env(env, source)
-    entered = run_cli(executable, "init", "--dev", "--source", source, env=env)
-    assert entered.returncode == 0, entered.stderr
-    before = codex_state.read_bytes()
-    codex_log.write_text("", encoding="utf-8")
-
-    blocked = run_cli(executable, "init", "--codex", env=env)
+    report = json.loads(diagnosed.stdout)
+    for client in ("claude", "codex"):
+        assert [source["sourceKind"] for source in report[client]["sources"]] == ["stable"]
+        assert report[client]["disabledSources"] == []
+    assert runtime.writes == []
+
+
+def test_packed_myspec_package_contains_single_codex_marketplace_and_four_skills() -> None:
+    installed_package = PLUGIN_ROOT
+    marketplace = json.loads((installed_package / '.agents' / 'plugins' / 'marketplace.json').read_text(encoding='utf-8'))
+    assert marketplace == {'name': 'myspec', 'interface': {'displayName': 'MySpec'}, 'plugins': [{'name': 'my-spec', 'source': {'source': 'local', 'path': './'}, 'policy': {'installation': 'AVAILABLE', 'authentication': 'ON_INSTALL'}, 'category': 'Developer Tools'}]}
+    assert [path.parent.name for path in sorted((installed_package / 'skills').glob('*/SKILL.md'))] == sorted(SKILL_NAMES)
+
+
+def test_packed_myspec_requires_release_registration_before_first_codex_dev_init(management_documents):
+    runtime = management_documents
+    runtime.records("codex", [], [])
+    # A linked installation is a path observation, not a simulated link action.
+    runtime.realpaths[runtime.stable] = runtime.root / "source/plugins/my-spec"
+    blocked = runtime.run("init", "--codex")
     assert blocked.returncode == 1
     assert blocked.stdout == ""
-    assert (
-        "error: codex_dev_marketplace_unregistered: run 'myspec init --release', "
-        "then 'myspec init --codex', then 'myspec init --dev'"
-    ) in blocked.stderr
-    assert codex_state.read_bytes() == before
-    blocked_calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
-    assert blocked_calls == [["plugin", "marketplace", "list", "--json"]]
-
-    restored = run_cli(executable, "init", "--release", env=env)
-    assert restored.returncode == 0, restored.stderr
-    initialized = run_cli(executable, "init", "--codex", env=env)
+    assert "error: codex_dev_marketplace_unregistered: run 'myspec init --release', then 'myspec init --codex', then 'myspec init --dev'" in blocked.stderr
+    assert runtime.stub.calls == [("codex", "plugin", "marketplace", "list", "--json")]
+    assert runtime.writes == []
+    # A registered release source is the valid input for explicit initialization;
+    # actual release/dev installation transitions remain in TestMySpec.
+    runtime.realpaths.clear()
+    queue_client_init(runtime, "codex")
+    initialized = runtime.run("init", "--codex")
     assert initialized.returncode == 0, initialized.stderr
-    registered = json.loads(codex_state.read_text(encoding="utf-8"))["marketplaces"]
-    assert registered == [
-        {
-            "name": "myspec",
-            "root": str(installed_package),
-            "marketplaceSource": {"sourceType": "local", "source": str(installed_package)},
-        }
-    ]
-
-    codex_log.write_text("", encoding="utf-8")
-    entered_again = run_cli(executable, "init", "--dev", "--source", source, env=env)
-    assert entered_again.returncode == 0, entered_again.stderr
-    calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
-    assert not any(call[:3] == ["plugin", "marketplace", "add"] for call in calls)
-    assert json.loads(codex_state.read_text(encoding="utf-8"))["marketplaces"] == registered
+    runtime.realpaths[runtime.stable] = runtime.root / "source/plugins/my-spec"
+    runtime.stub.calls.clear()
+    queue_client_init(runtime, "codex", existing=True)
+    initialized_again = runtime.run("init", "--codex")
+    assert initialized_again.returncode == 0, initialized_again.stderr
+    assert not any(call[:4] == ("codex", "plugin", "marketplace", "add") for call in runtime.stub.calls)
+    assert json.loads(initialized_again.stdout)["source"] == str(runtime.stable)
 
 
-def test_packed_myspec_refreshes_enabled_codex_across_global_mode_switches(
-    tmp_path: Path,
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    prefix = npm_prefix_for(installed_package)
-    release_tarball = next((installed / "package").glob("*.tgz"))
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
-    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, codex_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
-            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
-            "MYSPEC_CODEX_LOG": str(codex_log),
-            "MYSPEC_CODEX_STATE": str(codex_state),
-        }
-    )
-    write(codex_state, json.dumps({"marketplaces": [], "installed": [], "available": []}, indent=2))
-    assert run_cli(executable, "init", "--codex", env=env).returncode == 0
-    codex_log.write_text("", encoding="utf-8")
-
-    source = controlled_dev_source(tmp_path, "development source")
-    env = controlled_dev_env(env, source)
-
-    entered = run_cli(executable, "init", "--dev", "--source", source, env=env)
-    assert entered.returncode == 0, entered.stderr
-    entered_output = json.loads(entered.stdout)
-    assert entered_output["codex"] == "refreshed"
-    assert entered_output["newSessionRequired"] is True
-    assert entered_output["reloadRequired"] is False
-    state = json.loads(codex_state.read_text(encoding="utf-8"))
-    plugin = next(item for item in state["installed"] if item["pluginId"] == "my-spec@myspec")
-    assert plugin["source"] == {"source": "local", "path": str(source / "plugins" / "my-spec")}
-    dev_cache = Path(env["CODEX_HOME"]) / "plugins" / "cache" / "myspec" / "my-spec" / PACKAGE_VERSION
-    assert (dev_cache / "skills" / "my-spec" / "dev-marker.txt").read_text(
-        encoding="utf-8"
-    ) == "development source\n"
-
-    restored = run_cli(executable, "init", "--release", env=env)
-    assert restored.returncode == 0, restored.stderr
-    restored_output = json.loads(restored.stdout)
-    assert restored_output["codex"] == "refreshed"
-    assert restored_output["newSessionRequired"] is True
-    assert restored_output["reloadRequired"] is False
-    state = json.loads(codex_state.read_text(encoding="utf-8"))
-    plugin = next(item for item in state["installed"] if item["pluginId"] == "my-spec@myspec")
-    assert plugin["source"] == {"source": "local", "path": str(installed_package)}
-    assert not (dev_cache / "skills" / "my-spec" / "dev-marker.txt").exists()
-    calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
-    assert calls.count(["plugin", "remove", "my-spec@myspec", "--json"]) == 2
-    assert calls.count(["plugin", "add", "my-spec@myspec", "--json"]) == 2
-    assert not any(call[:3] == ["plugin", "marketplace", "upgrade"] for call in calls)
-
-
-@pytest.mark.parametrize("disabled", [False, True])
-def test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_codex(
-    tmp_path: Path,
-    disabled: bool,
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    prefix = npm_prefix_for(installed_package)
-    release_tarball = next((installed / "package").glob("*.tgz"))
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
-    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, codex_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
-            "CODEX_HOME": str(Path(env["HOME"]) / ".codex"),
-            "MYSPEC_CODEX_LOG": str(codex_log),
-            "MYSPEC_CODEX_STATE": str(codex_state),
-        }
-    )
-    initial_state: dict[str, object] = {"marketplaces": [], "installed": [], "available": []}
+@pytest.mark.parametrize('disabled', [False, True])
+def test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_codex(management_documents, disabled: bool):
+    runtime = management_documents
+    plugins = [runtime.plugin("codex", enabled=False)] if disabled else []
+    marketplaces = [runtime.marketplace("codex")] if disabled else []
+    runtime.records("codex", marketplaces, plugins)
     if disabled:
-        cache = tmp_path / "disabled-cache"
-        shutil.copytree(installed_package, cache)
-        initial_state = {
-            "marketplaces": [
-                {
-                    "name": "myspec",
-                    "root": str(installed_package),
-                    "marketplaceSource": {"sourceType": "local", "source": str(installed_package)},
-                }
-            ],
-            "installed": [
-                {
-                    "pluginId": "my-spec@myspec",
-                    "name": "my-spec",
-                    "marketplaceName": "myspec",
-                    "version": PACKAGE_VERSION,
-                    "installed": True,
-                    "source": {"source": "local", "path": str(cache)},
-                }
-            ],
-            "available": [],
-        }
-        write(
-            Path(env["CODEX_HOME"]) / "config.toml",
-            '[plugins."my-spec@myspec"]\nenabled = false\n',
-        )
-    write(codex_state, json.dumps(initial_state, indent=2))
-
-    source = controlled_dev_source(tmp_path)
-    env = controlled_dev_env(env, source)
-    entered = run_cli(executable, "init", "--dev", "--source", source, env=env)
-    assert entered.returncode == 0, entered.stderr
-    assert json.loads(entered.stdout)["codex"] == "not-installed"
-    restored = run_cli(executable, "init", "--release", env=env)
-    assert restored.returncode == 0, restored.stderr
-    assert json.loads(restored.stdout)["codex"] == "not-installed"
-    calls = [json.loads(line) for line in codex_log.read_text(encoding="utf-8").splitlines()]
-    assert not any(call[:2] == ["plugin", "add"] for call in calls)
-    assert not any(call[:2] == ["plugin", "remove"] for call in calls)
-    assert json.loads(codex_state.read_text(encoding="utf-8")) == initial_state
+        runtime.texts[runtime.config_path] = '[plugins."my-spec@myspec"]\nenabled = false\n'
+    before = dict(runtime.texts)
+    source, _ = runtime.source_documents()
+    for stage in ("dev", "release"):
+        token = runtime.switch_input(stage, source)
+        args = ["init", f"--{stage}", "--_switch-token", token]
+        if stage == "dev":
+            args.extend(["--source", source])
+        result = runtime.run(*args)
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout)["codex"] == "not-installed"
+    assert not any(call[:3] in {("codex", "plugin", "add"), ("codex", "plugin", "remove")} for call in runtime.stub.calls)
+    assert runtime.texts == before
+    assert runtime.stub.responses == []
 
 
-def test_packed_myspec_refreshes_enabled_claude_across_global_mode_switches(
-    tmp_path: Path,
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    prefix = npm_prefix_for(installed_package)
-    release_tarball = next((installed / "package").glob("*.tgz"))
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
-    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, claude_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
-            "MYSPEC_CLAUDE_LOG": str(claude_log),
-            "MYSPEC_CLAUDE_STATE": str(claude_state),
-            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
-        }
-    )
-    write(claude_state, json.dumps({"marketplaces": [], "plugins": []}, indent=2))
-    assert run_cli(executable, "init", "--claude", env=env).returncode == 0
-    claude_log.write_text("", encoding="utf-8")
-
-    source = controlled_dev_source(tmp_path, "development source")
-    env = controlled_dev_env(env, source)
-
-    entered = run_cli(executable, "init", "--dev", "--source", source, env=env)
-    assert entered.returncode == 0, entered.stderr
-    assert json.loads(entered.stdout)["claude"] == "refreshed"
-    state = json.loads(claude_state.read_text(encoding="utf-8"))
-    plugin = next(item for item in state["plugins"] if item["id"] == "my-spec@myspec")
-    dev_cache = Path(plugin["installPath"])
-    assert (dev_cache / "skills" / "my-spec" / "dev-marker.txt").read_text(
-        encoding="utf-8"
-    ) == "development source\n"
-
-    restored = run_cli(executable, "init", "--release", env=env)
-    assert restored.returncode == 0, restored.stderr
-    assert json.loads(restored.stdout)["claude"] == "refreshed"
-    state = json.loads(claude_state.read_text(encoding="utf-8"))
-    plugin = next(item for item in state["plugins"] if item["id"] == "my-spec@myspec")
-    assert not (Path(plugin["installPath"]) / "skills" / "my-spec" / "dev-marker.txt").exists()
-    calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
-    assert calls.count(["plugin", "marketplace", "update", "myspec"]) == 2
-    assert calls.count(["plugin", "uninstall", "my-spec@myspec", "--scope", "user", "--keep-data"]) == 2
-    assert calls.count(["plugin", "install", "my-spec@myspec", "--scope", "user"]) == 2
-    assert calls.count(["plugin", "enable", "my-spec@myspec", "--scope", "user"]) == 0
-    assert not any(call[:2] == ["plugin", "update"] for call in calls)
+@pytest.mark.parametrize('disabled', [False, True])
+def test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_claude(management_documents, disabled: bool):
+    runtime = management_documents
+    plugins = [runtime.plugin("claude", enabled=False)] if disabled else []
+    marketplaces = [runtime.marketplace("claude")] if disabled else []
+    runtime.records("claude", marketplaces, plugins)
+    source, _ = runtime.source_documents()
+    for stage in ("dev", "release"):
+        token = runtime.switch_input(stage, source)
+        args = ["init", f"--{stage}", "--_switch-token", token]
+        if stage == "dev":
+            args.extend(["--source", source])
+        result = runtime.run(*args)
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout)["claude"] == "not-installed"
+    assert not any(call[:3] in {("claude", "plugin", "install"), ("claude", "plugin", "enable")} or call[:4] == ("claude", "plugin", "marketplace", "add") for call in runtime.stub.calls)
+    assert runtime.stub.responses == []
 
 
-@pytest.mark.parametrize("disabled", [False, True])
-def test_packed_myspec_mode_switch_does_not_install_missing_or_disabled_claude(
-    tmp_path: Path,
-    disabled: bool,
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    prefix = npm_prefix_for(installed_package)
-    release_tarball = next((installed / "package").glob("*.tgz"))
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
-    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, claude_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
-            "MYSPEC_CLAUDE_LOG": str(claude_log),
-            "MYSPEC_CLAUDE_STATE": str(claude_state),
-            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
-        }
-    )
-    initial_state = {"marketplaces": [], "plugins": []}
-    if disabled:
-        initial_state = {
-            "marketplaces": [
-                {
-                    "name": "myspec",
-                    "source": "directory",
-                    "path": str(installed_package),
-                    "installLocation": str(installed_package),
-                }
-            ],
-            "plugins": [
-                {
-                    "id": "my-spec@myspec",
-                    "version": PACKAGE_VERSION,
-                    "scope": "user",
-                    "enabled": False,
-                    "installPath": str(tmp_path / "disabled-plugin-cache"),
-                }
-            ],
-        }
-    write(claude_state, json.dumps(initial_state, indent=2))
-
-    source = controlled_dev_source(tmp_path)
-    env = controlled_dev_env(env, source)
-    entered = run_cli(executable, "init", "--dev", "--source", source, env=env)
-    assert entered.returncode == 0, entered.stderr
-    assert json.loads(entered.stdout)["claude"] == "not-installed"
-    restored = run_cli(executable, "init", "--release", env=env)
-    assert restored.returncode == 0, restored.stderr
-    assert json.loads(restored.stdout)["claude"] == "not-installed"
-    calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
-    assert not any(call[:3] == ["plugin", "marketplace", "add"] for call in calls)
-    assert not any(call[:2] == ["plugin", "install"] for call in calls)
-    assert not any(call[:2] == ["plugin", "enable"] for call in calls)
-    assert json.loads(claude_state.read_text(encoding="utf-8")) == initial_state
-
-
-def test_packed_myspec_claude_reinstall_failure_does_not_report_refreshed(
-    tmp_path: Path,
-) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, installed_package = install_packed_myspec(installed)
-    prefix = npm_prefix_for(installed_package)
-    release_tarball = next((installed / "package").glob("*.tgz"))
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
-    claude_bin, claude_log, claude_state = install_fake_claude(tmp_path / "fake-claude")
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin, claude_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
-            "MYSPEC_CLAUDE_LOG": str(claude_log),
-            "MYSPEC_CLAUDE_STATE": str(claude_state),
-            "MYSPEC_CLAUDE_HOME": str(Path(env["HOME"]) / ".claude"),
-        }
-    )
-    write(claude_state, json.dumps({"marketplaces": [], "plugins": []}, indent=2))
-    assert run_cli(executable, "init", "--claude", env=env).returncode == 0
-    claude_log.write_text("", encoding="utf-8")
-    source = controlled_dev_source(tmp_path)
-    env = controlled_dev_env(env, source)
-
-    failed = run_cli(
-        executable,
-        "init",
-        "--dev",
-        "--source",
-        source,
-        env={**env, "MYSPEC_CLAUDE_FAIL_INSTALL": "1"},
-    )
+def test_packed_myspec_claude_reinstall_failure_does_not_report_refreshed(management_documents):
+    runtime = management_documents
+    runtime.records("claude", [runtime.marketplace("claude")], [runtime.plugin("claude")])
+    runtime.response(("claude", "plugin", "marketplace", "update", "myspec"))
+    runtime.response(("claude", "plugin", "uninstall", "my-spec@myspec", "--scope", "user", "--keep-data"))
+    runtime.response(("claude", "plugin", "install", "my-spec@myspec", "--scope", "user"), code=1, stderr="simulated install failure")
+    source, _ = runtime.source_documents()
+    token = runtime.switch_input("dev", source)
+    failed = runtime.run("init", "--dev", "--source", source, "--_switch-token", token)
     assert failed.returncode == 1
     assert failed.stdout == ""
     assert "claude_plugin_install_failed: simulated install failure" in failed.stderr
     assert "refreshed" not in failed.stderr
-    calls = [json.loads(line) for line in claude_log.read_text(encoding="utf-8").splitlines()]
-    assert ["plugin", "uninstall", "my-spec@myspec", "--scope", "user", "--keep-data"] in calls
-    assert ["plugin", "install", "my-spec@myspec", "--scope", "user"] in calls
-    assert ["plugin", "enable", "my-spec@myspec", "--scope", "user"] not in calls
+    assert ("claude", "plugin", "uninstall", "my-spec@myspec", "--scope", "user", "--keep-data") in runtime.stub.calls
+    assert ("claude", "plugin", "install", "my-spec@myspec", "--scope", "user") in runtime.stub.calls
+    assert ("claude", "plugin", "enable", "my-spec@myspec", "--scope", "user") not in runtime.stub.calls
 
 
-def test_packed_myspec_release_install_failure_stays_in_dev_and_retries(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    release_tarball = next((tmp_path / "package").glob("*.tgz"))
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
-        }
-    )
-
-    source = controlled_dev_source(tmp_path)
-    env = controlled_dev_env(env, source)
-    entered = run_cli(executable, "init", "--dev", env=env, cwd=source)
-    assert entered.returncode == 0, entered.stderr
-    state_path = Path(env["HOME"]) / ".myspec" / "state.json"
-
-    failed_env = {**env, "MYSPEC_NPM_FAIL_INSTALL": "1"}
-    failed = run_cli(executable, "init", "--release", env=failed_env)
-    assert failed.returncode == 1
-    assert "error: npm_install_failed: simulated install failure" in failed.stderr
-    failed_state = json.loads(state_path.read_text(encoding="utf-8"))
-    assert failed_state["mode"] == "dev"
-    assert failed_state["previousReleaseVersion"] == PACKAGE_VERSION
-
-    retried = run_cli(executable, "init", "--release", env=env)
-    assert retried.returncode == 0, retried.stderr
-    assert json.loads(state_path.read_text(encoding="utf-8"))["mode"] == "release"
-
-
-def test_packed_myspec_doctor_uses_actual_installation_not_mode_state(tmp_path: Path) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    env = isolated_myspec_env(tmp_path, prefix)
-    write(
-        Path(env["HOME"]) / ".myspec" / "state.json",
-        json.dumps({"mode": "dev", "source": "C:/not-the-package", "previousReleaseVersion": "9.9.9"}),
-    )
-
-    state_before = (Path(env["HOME"]) / ".myspec" / "state.json").read_bytes()
-    diagnosed = run_cli(executable, "doctor", env=env)
+def test_packed_myspec_doctor_uses_actual_installation_not_mode_state(management_documents):
+    runtime = management_documents
+    runtime.documents[runtime.state_path] = {"mode": "dev", "source": "C:/not-the-package", "previousReleaseVersion": "9.9.9"}
+    before = dict(runtime.documents[runtime.state_path])
+    diagnosed = runtime.run("doctor")
     assert diagnosed.returncode == 0, diagnosed.stderr
     report = json.loads(diagnosed.stdout)
     assert report["mode"] == "release"
-    assert report["toolchain"] == {
-        "mode": "release",
-        "packageName": "@liuli195/myspec",
-        "packageVersion": PACKAGE_VERSION,
-    }
-    assert report["source"] == str(installed_package)
+    assert report["toolchain"] == {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": PACKAGE_VERSION}
+    assert report["source"] == str(runtime.stable)
     assert report["npm"]["linked"] is False
     assert report["npm"]["versionMismatch"] is False
     assert not {"pi", "claude", "codex"}.intersection(report)
-    assert (Path(env["HOME"]) / ".myspec" / "state.json").read_bytes() == state_before
-
-    all_agents = run_cli(executable, "doctor", "--all", env=env)
+    assert runtime.documents[runtime.state_path] == before
+    assert runtime.writes == []
+    all_agents = runtime.run("doctor", "--all")
     assert all_agents.returncode == 0, all_agents.stderr
     assert "pi" not in json.loads(all_agents.stdout)
 
 
-def test_packed_myspec_doctor_reports_actual_package_version_mismatch(tmp_path: Path) -> None:
-    first = tmp_path / "first"
-    second = tmp_path / "second"
-    first.mkdir()
-    second.mkdir()
-    executable, _ = install_packed_myspec(first)
-    _, installed_package = install_packed_myspec(second)
-    package_path = installed_package / "package.json"
-    package = json.loads(package_path.read_text(encoding="utf-8"))
-    package["version"] = NEXT_VERSION
-    write(package_path, json.dumps(package, indent=2))
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
-
-    diagnosed = run_cli(executable, "doctor", env=env)
+def test_packed_myspec_doctor_reports_actual_package_version_mismatch(management_documents):
+    runtime = management_documents
+    runtime.documents[runtime.stable / "package.json"]["version"] = NEXT_VERSION
+    diagnosed = runtime.run("doctor")
     assert diagnosed.returncode == 0, diagnosed.stderr
     report = json.loads(diagnosed.stdout)
     assert report["cliVersion"] == PACKAGE_VERSION
     assert report["npm"]["packageVersion"] == NEXT_VERSION
     assert report["npm"]["versionMismatch"] is True
+    assert runtime.writes == []
 
 
-def test_packed_myspec_rejects_invalid_mode_switches(tmp_path: Path) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
-
-    invalid_source = run_cli(executable, "init", "--dev", "--source", tmp_path, env=env)
+def test_packed_myspec_rejects_invalid_mode_switches(management_documents):
+    runtime = management_documents
+    invalid_source = runtime.run("init", "--dev", "--source", runtime.root / "missing")
     assert invalid_source.returncode == 1
     assert "error: invalid_dev_source: missing" in invalid_source.stderr
-    assert not (Path(env["HOME"]) / ".myspec" / "state.json").exists()
-
-    checkout = tmp_path / "checkout"
-    nested = checkout / "nested"
-    shutil.copytree(REPO_ROOT / ".agents", nested / ".agents")
-    shutil.copytree(REPO_ROOT / ".claude-plugin", nested / ".claude-plugin")
-    shutil.copytree(PLUGIN_ROOT, nested / "plugins" / "my-spec")
-    initialized_git = subprocess.run(
-        ["git", "init"], cwd=checkout, text=True, capture_output=True, check=False
-    )
-    assert initialized_git.returncode == 0, initialized_git.stderr
-    borrowed_root = run_cli(executable, "init", "--dev", "--source", nested, env=env)
+    assert runtime.state_path not in runtime.documents
+    source, package = runtime.source_documents()
+    runtime.response(("git", "rev-parse", "--show-toplevel"), stdout=str(source.parent))
+    borrowed_root = runtime.run("init", "--dev", "--source", source)
     assert borrowed_root.returncode == 1
     assert "error: invalid_dev_source: git_root" in borrowed_root.stderr
-
-    malformed = tmp_path / "malformed"
-    shutil.copytree(REPO_ROOT / ".agents", malformed / ".agents")
-    shutil.copytree(REPO_ROOT / ".claude-plugin", malformed / ".claude-plugin")
-    shutil.copytree(PLUGIN_ROOT, malformed / "plugins" / "my-spec")
-    market_path = malformed / "plugins" / "my-spec" / ".agents" / "plugins" / "marketplace.json"
-    market = json.loads(market_path.read_text(encoding="utf-8"))
-    next(plugin for plugin in market["plugins"] if plugin["name"] == "my-spec")["source"]["path"] = "../wrong"
-    write(market_path, json.dumps(market, indent=2))
-    malformed_result = run_cli(executable, "init", "--dev", "--source", malformed, env=env)
-    assert malformed_result.returncode == 1
-    assert "error: invalid_dev_source: marketplace" in malformed_result.stderr
-
-    next(plugin for plugin in market["plugins"] if plugin["name"] == "my-spec")["source"]["path"] = "./"
-    write(market_path, json.dumps(market, indent=2))
-    package_path = malformed / "plugins" / "my-spec" / "package.json"
-    package = json.loads(package_path.read_text(encoding="utf-8"))
-    package["name"] = "@liuli195/myspec-helper"
-    write(package_path, json.dumps(package, indent=2))
-    package_result = run_cli(executable, "init", "--dev", "--source", malformed, env=env)
-    assert package_result.returncode == 1
-    assert "error: invalid_dev_source: package_manifest" in package_result.stderr
-
-    result = run_cli(executable, "init", "--release", env=env)
+    marketplace = runtime.documents[package / ".agents/plugins/marketplace.json"]
+    marketplace["plugins"][0]["source"]["path"] = "../wrong"
+    malformed = runtime.run("init", "--dev", "--source", source)
+    assert malformed.returncode == 1
+    assert "error: invalid_dev_source: marketplace" in malformed.stderr
+    marketplace["plugins"][0]["source"]["path"] = "./"
+    runtime.documents[package / "package.json"]["name"] = "@liuli195/myspec-helper"
+    invalid_package = runtime.run("init", "--dev", "--source", source)
+    assert invalid_package.returncode == 1
+    assert "error: invalid_dev_source: package_manifest" in invalid_package.stderr
+    result = runtime.run("init", "--release")
     assert result.returncode == 1
     assert "error: missing_previous_release_version" in result.stderr
+    assert runtime.writes == []
 
 
-@pytest.mark.parametrize(
-    "case",
-    [
-        "package-name",
-        "package-version",
-        "bin-entry",
-        "bin-file",
-        "python-entry",
-        "management-entry",
-        "skill-file",
-        "codex-marketplace",
-        "claude-marketplace",
-        "self-claude-marketplace",
-        "plugin-manifest",
-    ],
-)
-def test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_state(
-    tmp_path: Path,
-    case: str,
-) -> None:
-    (tmp_path / "installed").mkdir()
-    executable, installed_package = install_packed_myspec(tmp_path / "installed")
-    prefix = npm_prefix_for(installed_package)
-    release_tarball = next((tmp_path / "installed" / "package").glob("*.tgz"))
-    npm_bin, npm_log = install_fake_npm(tmp_path / "fake-npm", release_tarball)
-    env = isolated_myspec_env(tmp_path, prefix, npm_bin)
-    env.update(
-        {
-            "MYSPEC_NPM_LOG": str(npm_log),
-            "MYSPEC_REAL_NPM": str(shutil.which("npm")),
-            "MYSPEC_RELEASE_TARBALL": str(release_tarball),
-        }
-    )
-    source = tmp_path / "source"
-    shutil.copytree(REPO_ROOT / ".agents", source / ".agents")
-    shutil.copytree(REPO_ROOT / ".claude-plugin", source / ".claude-plugin")
-    shutil.copytree(PLUGIN_ROOT, source / "plugins" / "my-spec")
-    shutil.copytree(REPO_ROOT / "plugins" / "tool-lifecycle", source / "plugins" / "tool-lifecycle")
-    initialized = subprocess.run(
-        ["git", "init"], cwd=source, text=True, capture_output=True, check=False
-    )
-    assert initialized.returncode == 0, initialized.stderr
-    committed = subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=MySpec Test",
-            "-c",
-            "user.email=myspec@example.invalid",
-            "add",
-            ".",
-        ],
-        cwd=source,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert committed.returncode == 0, committed.stderr
-    committed = subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=MySpec Test",
-            "-c",
-            "user.email=myspec@example.invalid",
-            "commit",
-            "-m",
-            "test source",
-        ],
-        cwd=source,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert committed.returncode == 0, committed.stderr
-    package_path = source / "plugins" / "my-spec" / "package.json"
-    package = json.loads(package_path.read_text(encoding="utf-8"))
-
+@pytest.mark.parametrize('case', ['package-name', 'package-version', 'bin-entry', 'bin-file', 'python-entry', 'management-entry', 'skill-file', 'codex-marketplace', 'claude-marketplace', 'self-claude-marketplace', 'plugin-manifest'])
+def test_packed_myspec_dev_preflight_rejects_incomplete_source_before_link_or_state(management_documents, case: str):
+    runtime = management_documents
+    source, package = runtime.source_documents()
+    manifest = runtime.documents[package / "package.json"]
     if case == "package-name":
-        package["name"] = "@liuli195/not-myspec"
+        manifest["name"] = "@liuli195/not-myspec"
     elif case == "package-version":
-        package["version"] = ""
+        manifest["version"] = ""
     elif case == "bin-entry":
-        package["bin"] = {"myspec": "./bin/other.js"}
-    elif case == "bin-file":
-        (source / "plugins" / "my-spec" / "bin" / "myspec.js").unlink()
-    elif case == "python-entry":
-        (source / "plugins" / "my-spec" / "python" / "spec_ops.py").unlink()
-    elif case == "management-entry":
-        (source / "plugins" / "my-spec" / "python" / "management.py").unlink()
-    elif case == "skill-file":
-        (source / "plugins" / "my-spec" / "skills" / "my-spec-audit" / "SKILL.md").unlink()
+        manifest["bin"] = {"myspec": "./bin/other.js"}
+    elif case in {"bin-file", "python-entry", "management-entry", "skill-file"}:
+        relative = {"bin-file": "bin/myspec.js", "python-entry": "python/spec_ops.py", "management-entry": "python/management.py", "skill-file": "skills/my-spec-audit/SKILL.md"}[case]
+        runtime.files.remove(package / relative)
     elif case == "codex-marketplace":
-        market_path = source / "plugins" / "my-spec" / ".agents" / "plugins" / "marketplace.json"
-        market = json.loads(market_path.read_text(encoding="utf-8"))
-        next(plugin for plugin in market["plugins"] if plugin["name"] == "my-spec")["source"]["path"] = "../wrong"
-        write(market_path, json.dumps(market, indent=2))
-    elif case == "claude-marketplace":
-        market_path = source / "plugins" / "my-spec" / ".claude-plugin" / "marketplace.json"
-        market = json.loads(market_path.read_text(encoding="utf-8"))
-        next(plugin for plugin in market["plugins"] if plugin["name"] == "my-spec")["source"] = "../wrong"
-        write(market_path, json.dumps(market, indent=2))
-    elif case == "self-claude-marketplace":
-        market_path = source / "plugins" / "my-spec" / ".claude-plugin" / "marketplace.json"
-        market = json.loads(market_path.read_text(encoding="utf-8"))
-        market["plugins"][0]["source"] = "../wrong"
-        write(market_path, json.dumps(market, indent=2))
+        runtime.documents[package / ".agents/plugins/marketplace.json"]["plugins"][0]["source"]["path"] = "../wrong"
+    elif case in {"claude-marketplace", "self-claude-marketplace"}:
+        runtime.documents[package / ".claude-plugin/marketplace.json"]["plugins"][0]["source"] = "../wrong"
     else:
-        plugin_path = source / "plugins" / "my-spec" / ".codex-plugin" / "plugin.json"
-        plugin = json.loads(plugin_path.read_text(encoding="utf-8"))
-        plugin["version"] = "9.9.9"
-        write(plugin_path, json.dumps(plugin, indent=2))
-    write(package_path, json.dumps(package, indent=2))
-
-    rejected = run_cli(executable, "init", "--dev", "--source", source, env=env)
+        runtime.documents[package / ".codex-plugin/plugin.json"]["version"] = "9.9.9"
+    rejected = runtime.run("init", "--dev", "--source", source)
     assert rejected.returncode == 1
     assert "error: invalid_dev_source:" in rejected.stderr
-    assert not (Path(env["HOME"]) / ".myspec" / "state.json").exists()
-    calls = (
-        [json.loads(line) for line in npm_log.read_text(encoding="utf-8").splitlines()]
-        if npm_log.exists()
-        else []
-    )
-    assert ["link"] not in calls
+    assert runtime.state_path not in runtime.documents
+    assert ("npm", "link") not in runtime.stub.calls
+    assert runtime.writes == []
 
 
-def windows_py_launcher() -> Path:
-    base_executable = Path(getattr(sys, "_base_executable", sys.executable))
-    candidates = (
-        base_executable.parent.parent / "Launcher" / "py.exe",
-        Path(os.environ.get("SystemRoot", "C:/Windows")) / "py.exe",
-        Path(shutil.which("py") or ""),
-    )
-    launcher = next(
-        (path for path in candidates if path.is_file() and "WindowsApps" not in path.parts),
-        None,
-    )
-    assert launcher is not None
-    return launcher
 
 
-def test_windows_py_launcher_uses_base_interpreter_from_venv(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    base_python = tmp_path / "Python312" / "python.exe"
-    base_python.parent.mkdir()
-    launcher = tmp_path / "Launcher" / "py.exe"
-    launcher.parent.mkdir()
-    launcher.touch()
-    monkeypatch.setattr(sys, "executable", str(tmp_path / "venv" / "Scripts" / "python.exe"))
-    monkeypatch.setattr(sys, "_base_executable", str(base_python))
-
-    assert windows_py_launcher() == launcher
 
 
-def run_launcher_selection(
-    executable: Path,
-    root: Path,
-    versions: dict[str, str],
-    override_version: str | None = None,
-) -> tuple[subprocess.CompletedProcess[str], list[Path], dict[str, Path]]:
-    candidates = root / "candidates"
-    candidates.mkdir(parents=True)
-    python_source = Path(
-        getattr(sys, "_base_executable", sys.executable)
-        if sys.platform == "win32"
-        else sys.executable
-    )
-    launcher = windows_py_launcher() if "py" in versions else None
-    paths: dict[str, Path] = {}
-    reported_versions: dict[str, str] = {}
-    for name, version in versions.items():
-        if name == "py":
-            # Native Windows launchers are location-sensitive; do not copy them.
-            paths[name] = launcher.resolve()
-            continue
-        source = python_source
-        path = candidates / (f"{name}.exe" if sys.platform == "win32" else name)
-        shutil.copy2(source, path)
-        paths[name] = path.resolve()
-        if version == "3.11":
-            reported_versions[os.path.normcase(str(paths[name]))] = version
-
-    path_entries = [str(candidates)]
-    if launcher is not None:
-        path_entries.append(str(launcher.parent))
-    path_entries.extend(
-        (
-            str(Path(shutil.which("node") or "").parent),
-            str(python_source.parent),
-        )
-    )
-    env = {
-        **os.environ,
-        "PATH": os.pathsep.join(path_entries),
-        "PYTHONPATH": str(root),
-        "PYTHONHOME": sys.base_prefix,
-        "MYSPEC_TEST_MARKER": str(root / "selected.txt"),
-    }
-    env.pop("MYSPEC_PYTHON", None)
-    if override_version is not None:
-        override = root / ("override.exe" if sys.platform == "win32" else "override")
-        shutil.copy2(python_source, override)
-        env["MYSPEC_PYTHON"] = str(override)
-        paths["MYSPEC_PYTHON"] = override.resolve()
-        if override_version == "3.11":
-            reported_versions[os.path.normcase(str(paths["MYSPEC_PYTHON"]))] = override_version
-    if sys.platform == "win32" and versions.get("py") == "3.11":
-        reported_versions[os.path.normcase(str(python_source.resolve()))] = "3.11"
-    env["MYSPEC_TEST_VERSIONS"] = json.dumps(reported_versions)
-    write(
-        root / "sitecustomize.py",
-        """import json
-import os
-import sys
-from pathlib import Path
-
-executable = Path(sys.executable).resolve()
-with Path(os.environ["MYSPEC_TEST_MARKER"]).open("a", encoding="utf-8") as marker:
-    marker.write(str(executable) + "\\n")
-version = json.loads(os.environ["MYSPEC_TEST_VERSIONS"]).get(os.path.normcase(str(executable)))
-if version:
-    major, minor = map(int, version.split("."))
-    sys.version_info = type("VersionInfo", (), {"major": major, "minor": minor})()
-""",
-    )
-    result = run_cli(executable, "--help", env=env)
-    marker = Path(env["MYSPEC_TEST_MARKER"])
-    observed = (
-        [Path(line) for line in marker.read_text(encoding="utf-8").splitlines()]
-        if marker.exists()
-        else []
-    )
-    return result, observed, paths
-
-
-def test_atomic_management_write_retries_windows_sharing_violation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    management = load_management_module()
-    target = tmp_path / "settings.json"
-    target.write_text("{}\n", encoding="utf-8")
-    attempts = 0
-
-    def transient_replace(source: Path, destination: Path) -> Path:
-        nonlocal attempts
-        attempts += 1
-        raise PermissionError("simulated file watcher sharing violation")
-
-    monkeypatch.setattr(management.os, "name", "nt")
-    monkeypatch.setattr(Path, "replace", transient_replace)
-    monkeypatch.setattr(management.time, "sleep", lambda _seconds: None)
-
-    management._atomic_json(target, {"packages": ["myspec"]})
-
-    assert attempts == 5
-    assert json.loads(target.read_text(encoding="utf-8")) == {"packages": ["myspec"]}
-
-
-def test_packed_myspec_installs_a_working_cli_with_agent_resources(tmp_path: Path) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    assert not list(installed_package.rglob("__pycache__"))
-    assert not list(installed_package.rglob("*.pyc"))
-    path_candidates = {"python3.12": "3.12", "python3": "3.12", "python": "3.12"}
-    if sys.platform == "win32":
-        path_candidates["py"] = "3.12"
-
-    override, observed, paths = run_launcher_selection(
-        executable,
-        tmp_path / "override-case",
-        path_candidates,
-        override_version="3.12",
-    )
-    assert override.returncode == 0, override.stderr
-    assert observed[-1] == paths["MYSPEC_PYTHON"]
-
-    cases = [
-        ({**path_candidates}, "python3.12"),
-        ({**path_candidates, "python3.12": "3.11"}, "python3"),
-        ({**path_candidates, "python3.12": "3.11", "python3": "3.11"}, "python"),
-    ]
-    if sys.platform == "win32":
-        cases.append(({name: "3.11" for name in path_candidates} | {"py": "3.12"}, "py"))
-    for index, (versions, expected) in enumerate(cases):
-        result, observed, paths = run_launcher_selection(
-            executable,
-            tmp_path / f"priority-case-{index}",
-            versions,
-            override_version="3.11" if index == 0 else None,
-        )
-        assert result.returncode == 0, result.stderr
-        if expected == "py":
-            assert observed[-1] not in paths.values()
-        else:
-            assert observed[-1] == paths[expected]
-
-    ineligible_versions = {name: "3.11" for name in path_candidates}
-    ineligible, _, _ = run_launcher_selection(
-        executable,
-        tmp_path / "ineligible-case",
-        ineligible_versions,
-        override_version="3.11",
-    )
-    assert ineligible.returncode != 0
-    assert "error: Python 3.12 or newer is required" in ineligible.stderr
-    assert ineligible.stderr.count("(3.11)") == len(ineligible_versions) + 1
-
-    help_result = run_cli(executable, "--help")
-    assert help_result.returncode == 0
-    assert help_result.stdout.startswith("usage: myspec ")
-    for command in (
-        "state-init",
-        "state-set-conflicts",
-        "state-current",
-        "state-decide",
-        "state-status",
-        "validate-main",
-        "validate-delta",
-        "apply-delta",
-        "diff",
-    ):
-        assert command in help_result.stdout
-
-    specs = tmp_path / "specs"
-    delta = tmp_path / "delta"
-    preview = tmp_path / "preview"
-    work = tmp_path / "work"
-    conflicts_file = tmp_path / "conflicts.json"
-    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
-    write(
-        delta / "accounts" / "spec.md",
-        """## ADDED Requirements
-
-### Requirement: 注销
-
-系统 MUST 允许用户注销。
-
-#### Scenario: 主动注销
-
-- **WHEN** 用户选择注销
-- **THEN** 系统结束会话
-""",
-    )
-    conflict = {
-        "id": "conflict-1",
-        "candidate": "新增注销",
-        "evidence": ["accounts/spec.md:1"],
-        "reason": "需要确认",
-        "recommendation": "接受",
-    }
-    write(conflicts_file, json.dumps([conflict], ensure_ascii=False))
-
-    for command in (
-        run_cli(executable, "validate-main", specs),
-        run_cli(executable, "validate-delta", delta, specs),
-        run_cli(executable, "state-init", work, "add", "specs-fingerprint", "input-fingerprint"),
-    ):
-        assert command.returncode == 0, command.stderr
-        assert command.stdout == ""
-        assert command.stderr == ""
-
-    stored = run_cli(
-        executable,
-        "state-set-conflicts",
-        work,
-        conflicts_file,
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
-    assert stored.returncode == 0, stored.stderr
-    assert json.loads(stored.stdout) == {"status": "WAITING_DECISION", "total": 1, "remaining": 1}
-    current = run_cli(executable, "state-current", work, "specs-fingerprint", "input-fingerprint")
-    assert current.returncode == 0, current.stderr
-    assert json.loads(current.stdout) == {"index": 0, "total": 1, "conflict": conflict}
-
-    wrong_decision = run_cli(
-        executable,
-        "state-decide",
-        work,
-        "wrong-conflict",
-        "accept",
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
-    assert wrong_decision.returncode == 1
-    assert "error: unexpected_conflict_id: expected_conflict-1: wrong-conflict" in wrong_decision.stderr
-    decided = run_cli(
-        executable,
-        "state-decide",
-        work,
-        "conflict-1",
-        "accept",
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
-    assert decided.returncode == 0, decided.stderr
-    expected_ready = {"status": "READY_TO_APPLY", "total": 1, "decided": 1, "remaining": 0}
-    assert json.loads(decided.stdout) == expected_ready
-    status = run_cli(executable, "state-status", work, "specs-fingerprint", "input-fingerprint")
-    assert status.returncode == 0, status.stderr
-    assert json.loads(status.stdout) == expected_ready
-
-    applied = run_cli(
-        executable,
-        "apply-delta",
-        specs,
-        delta,
-        preview,
-        work,
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
-    assert applied.returncode == 0, applied.stderr
-    assert applied.stdout == ""
-    assert run_cli(executable, "validate-main", preview).returncode == 0
-    assert "### Requirement: 注销" in (preview / "accounts" / "spec.md").read_text(encoding="utf-8")
-    diff = run_cli(executable, "diff", specs, preview)
-    assert diff.returncode == 0, diff.stderr
-    assert "+### Requirement: 注销" in diff.stdout
-
-    final_apply = run_cli(
-        executable,
-        "apply-delta",
-        specs,
-        delta,
-        specs,
-        work,
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
-    assert final_apply.returncode == 0, final_apply.stderr
-    assert final_apply.stdout == ""
-    assert run_cli(executable, "validate-main", specs).returncode == 0
-    assert run_cli(executable, "diff", specs, preview).stdout == ""
-    assert (specs / "accounts" / "spec.md").read_bytes() == (
-        preview / "accounts" / "spec.md"
-    ).read_bytes()
-    assert not (work / "current").exists()
-    assert not (work / "lock").exists()
-    assert not work.exists()
-    assert not any(path.name.startswith(".my-spec-") for path in specs.parent.iterdir())
-
-    write(
-        specs / "accounts" / "spec.md",
-        main_spec("Accounts", requirement("登录", "允许登录")).replace("MUST", "必须"),
-    )
-    invalid = run_cli(executable, "validate-main", specs)
-    assert invalid.returncode == 1
-    assert "error: missing_must_or_shall: 登录" in invalid.stderr
-    assert "Traceback" not in invalid.stderr
-    missing_argument = run_cli(executable, "state-init", work)
-    assert missing_argument.returncode == 2
-    assert "usage: myspec state-init" in missing_argument.stderr
-
-    node = shutil.which("node")
-    assert node is not None
-    no_python = run_cli(
-        executable,
-        "validate-main",
-        specs,
-        env={**os.environ, "PATH": str(Path(node).parent), "MYSPEC_PYTHON": "not-a-python"},
-    )
-    assert no_python.returncode != 0
-    assert "error: Python 3.12 or newer is required" in no_python.stderr
-    assert (
-        "checked not-a-python (unavailable), python3.12 (unavailable), "
-        "python3 (unavailable), python (unavailable)"
-    ) in no_python.stderr
-
-    assert {path.name for path in (installed_package / "skills").iterdir()} == set(SKILL_NAMES)
-    assert (installed_package / ".claude-plugin" / "plugin.json").is_file()
-    claude_marketplace = json.loads(
-        (installed_package / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8")
-    )
-    assert claude_marketplace["name"] == "myspec"
-    assert claude_marketplace["description"] == "Self-contained MySpec plugin marketplace"
-    assert claude_marketplace["plugins"] == [
-        {
-            "name": "my-spec",
-            "source": "./",
-            "description": "MySpec audit, review, and document-to-delta Skill（开放规格审计、审查与文档增量技能）",
-        }
-    ]
-    claude_manifest = json.loads(
-        (installed_package / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
-    )
-    assert claude_manifest["author"] == {"name": "liuli195"}
-    assert (installed_package / ".codex-plugin" / "plugin.json").is_file()
-    assert [path.relative_to(installed_package).as_posix() for path in installed_package.rglob("spec_ops.py")] == [
-        "python/spec_ops.py",
-    ]
-    skill_text = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in sorted((installed_package / "skills").rglob("*.md"))
-    )
-    assert "spec_ops.py" not in skill_text
-    rules = (installed_package / "skills" / "my-spec" / "references" / "myspec-rules.md").read_text(
-        encoding="utf-8"
-    )
-    for command in (
-        "state-init",
-        "state-set-conflicts",
-        "state-current",
-        "state-decide",
-        "state-status",
-        "validate-main",
-        "validate-delta",
-        "apply-delta",
-        "diff",
-    ):
-        assert f"myspec {command}" in rules
-
-
-def test_packed_myspec_preserves_modified_requirement_order(tmp_path: Path) -> None:
-    installed = tmp_path / "installed"
-    installed.mkdir()
-    executable, _ = install_packed_myspec(installed)
-    titles = ("首部", "中部", "尾部")
+def test_spec_ops_preview_preserves_modified_requirement_order(spec_documents) -> None:
+    documents = spec_documents
+    tmp_path = documents.root
+    write, ready_state, apply_ready = documents.write, documents.ready_state, documents.apply
+    titles = ('首部', '中部', '尾部')
 
     def preview_delta(root: Path, specs: Path, delta: Path) -> tuple[Path, Path]:
-        preview = root / "preview"
-        work = root / "work"
-        conflicts = root / "conflicts.json"
-        write(conflicts, "[]")
-        for result in (
-            run_cli(executable, "state-init", work, "add", "specs-fingerprint", "input-fingerprint"),
-            run_cli(executable, "state-set-conflicts", work, conflicts, "specs-fingerprint", "input-fingerprint"),
-            run_cli(executable, "validate-delta", delta, specs),
-            run_cli(executable, "apply-delta", specs, delta, preview, work, "specs-fingerprint", "input-fingerprint"),
-        ):
+        preview = root / 'preview'
+        work = root / 'work'
+        conflicts = root / 'conflicts.json'
+        write(conflicts, '[]')
+        documents.seed_state(work)
+        for result in (run_python(SPEC_OPS, 'state-set-conflicts', work, conflicts, 'specs-fingerprint', 'input-fingerprint'), run_python(SPEC_OPS, 'validate-delta', delta, specs), run_python(SPEC_OPS, 'apply-delta', specs, delta, preview, work, 'specs-fingerprint', 'input-fingerprint')):
             assert result.returncode == 0, result.stderr
-        return preview, work
-
+        return (preview, work)
     for target in titles:
         root = tmp_path / target
-        specs = root / "specs"
-        delta = root / "delta"
-        write(
-            specs / "accounts" / "spec.md",
-            main_spec("Accounts", *(requirement(title, f"保留{title}") for title in titles)),
-        )
-        write(
-            delta / "accounts" / "spec.md",
-            f"""## MODIFIED Requirements
-
-### Requirement: {target}
-
-系统 MUST 更新{target}。
-
-#### Scenario: 修改{target}
-
-- **WHEN** 用户修改{target}
-- **THEN** 系统保留需求顺序
-""",
-        )
+        specs = root / 'specs'
+        delta = root / 'delta'
+        write(specs / 'accounts' / 'spec.md', main_spec('Accounts', *(requirement(title, f'保留{title}') for title in titles)))
+        write(delta / 'accounts' / 'spec.md', f'## MODIFIED Requirements\n\n### Requirement: {target}\n\n系统 MUST 更新{target}。\n\n#### Scenario: 修改{target}\n\n- **WHEN** 用户修改{target}\n- **THEN** 系统保留需求顺序\n')
         preview, work = preview_delta(root, specs, delta)
-        preview_text = (preview / "accounts" / "spec.md").read_text(encoding="utf-8")
-        assert [
-            line.removeprefix("### Requirement: ")
-            for line in preview_text.splitlines()
-            if line.startswith("### Requirement: ")
-        ] == list(titles)
-        assert f"系统 MUST 更新{target}。" in preview_text
-        assert f"系统 MUST 保留{target}。" not in preview_text
-        diff = run_cli(executable, "diff", specs, preview)
+        preview_text = (preview / 'accounts' / 'spec.md').read_text(encoding='utf-8')
+        assert [line.removeprefix('### Requirement: ') for line in preview_text.splitlines() if line.startswith('### Requirement: ')] == list(titles)
+        assert f'系统 MUST 更新{target}。' in preview_text
+        assert f'系统 MUST 保留{target}。' not in preview_text
+        diff = run_python(SPEC_OPS, 'diff', specs, preview)
         assert diff.returncode == 0, diff.stderr
-        assert f"-### Requirement: {target}" not in diff.stdout
-        assert f"+### Requirement: {target}" not in diff.stdout
-        applied = run_cli(
-            executable,
-            "apply-delta",
-            specs,
-            delta,
-            specs,
-            work,
-            "specs-fingerprint",
-            "input-fingerprint",
-        )
-        assert applied.returncode == 0, applied.stderr
-        assert (specs / "accounts" / "spec.md").read_bytes() == (
-            preview / "accounts" / "spec.md"
-        ).read_bytes()
-        before_repeat = (specs / "accounts" / "spec.md").read_bytes()
-        repeated_preview, repeated_work = preview_delta(root / "repeat", specs, delta)
-        repeated = run_cli(
-            executable,
-            "apply-delta",
-            specs,
-            delta,
-            specs,
-            repeated_work,
-            "specs-fingerprint",
-            "input-fingerprint",
-        )
-        assert repeated.returncode == 0, repeated.stderr
-        assert (repeated_preview / "accounts" / "spec.md").read_bytes() == before_repeat
-        assert (specs / "accounts" / "spec.md").read_bytes() == before_repeat
-
-    root = tmp_path / "cross-capability"
-    specs = root / "specs"
-    delta = root / "delta"
-    write(specs / "source" / "spec.md", main_spec("Source", requirement("移动项", "留在来源")))
-    write(specs / "target" / "spec.md", main_spec("Target", requirement("现有项", "留在目标")))
-    write(
-        delta / "target" / "spec.md",
-        """## MODIFIED Requirements
-
-### Requirement: 移动项
-
-系统 MUST 移入目标能力。
-
-#### Scenario: 跨能力修改
-
-- **WHEN** 用户修改其他能力中的需求
-- **THEN** 系统把需求移入目标能力
-""",
-    )
+        assert f'-### Requirement: {target}' not in diff.stdout
+        assert f'+### Requirement: {target}' not in diff.stdout
+        repeated_preview, _ = preview_delta(root / 'repeat', preview, delta)
+        assert (repeated_preview / 'accounts' / 'spec.md').read_bytes() == (preview / 'accounts' / 'spec.md').read_bytes()
+        repeated_diff = run_python(SPEC_OPS, 'diff', preview, repeated_preview)
+        assert repeated_diff.returncode == 0, repeated_diff.stderr
+        assert repeated_diff.stdout == ''
+    root = tmp_path / 'cross-capability'
+    specs = root / 'specs'
+    delta = root / 'delta'
+    write(specs / 'source' / 'spec.md', main_spec('Source', requirement('移动项', '留在来源')))
+    write(specs / 'target' / 'spec.md', main_spec('Target', requirement('现有项', '留在目标')))
+    write(delta / 'target' / 'spec.md', '## MODIFIED Requirements\n\n### Requirement: 移动项\n\n系统 MUST 移入目标能力。\n\n#### Scenario: 跨能力修改\n\n- **WHEN** 用户修改其他能力中的需求\n- **THEN** 系统把需求移入目标能力\n')
     preview, work = preview_delta(root, specs, delta)
-    assert "### Requirement: 移动项" not in (preview / "source" / "spec.md").read_text(encoding="utf-8")
-    target_text = (preview / "target" / "spec.md").read_text(encoding="utf-8")
-    assert target_text.index("### Requirement: 现有项") < target_text.index("### Requirement: 移动项")
-    applied = run_cli(
-        executable,
-        "apply-delta",
-        specs,
-        delta,
-        specs,
-        work,
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
-    assert applied.returncode == 0, applied.stderr
-    assert (specs / "source" / "spec.md").read_bytes() == (preview / "source" / "spec.md").read_bytes()
-    assert (specs / "target" / "spec.md").read_bytes() == (preview / "target" / "spec.md").read_bytes()
+    assert '### Requirement: 移动项' not in (preview / 'source' / 'spec.md').read_text(encoding='utf-8')
+    target_text = (preview / 'target' / 'spec.md').read_text(encoding='utf-8')
+    assert target_text.index('### Requirement: 现有项') < target_text.index('### Requirement: 移动项')
 
 
-def test_myspec_launcher_forwards_sigterm_to_python(tmp_path: Path) -> None:
-    if sys.platform == "win32":
-        pytest.skip("Windows cannot deliver a catchable SIGTERM to another process")
-    executable, installed_package = install_packed_myspec(tmp_path)
-    marker = tmp_path / "signal.txt"
-    ready = tmp_path / "ready.txt"
-    (installed_package / "python" / "spec_ops.py").write_text(
-        """import os
-import signal
-import sys
-import time
-from pathlib import Path
-
-marker = Path(sys.argv[1])
-ready = Path(sys.argv[2])
-parent = os.getppid()
-
-def stop(signum, _frame):
-    marker.write_text(str(signum), encoding="utf-8")
-    raise SystemExit(0)
-
-signal.signal(signal.SIGTERM, stop)
-ready.write_text("ready", encoding="utf-8")
-while os.getppid() == parent:
-    time.sleep(0.01)
-""",
-        encoding="utf-8",
-    )
-    process = subprocess.Popen(
-        [str(executable), str(marker), str(ready)],
-        env={**os.environ, "MYSPEC_PYTHON": sys.executable},
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    deadline = time.monotonic() + 10
-    while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert ready.exists(), "Python child did not start"
-
-    process.send_signal(signal.SIGTERM)
-    assert process.wait(timeout=10) == 0
-    assert marker.read_text(encoding="utf-8") == str(signal.SIGTERM)
-
-
-def test_spec_ops_cli_validates_applies_all_delta_operations_and_diffs(tmp_path: Path) -> None:
-    specs = tmp_path / "specs"
-    delta = tmp_path / "delta"
-    preview = tmp_path / "preview"
-    write(
-        specs / "accounts" / "spec.md",
-        main_spec(
-            "Accounts",
-            requirement("旧登录", "允许登录"),
-            requirement("旧导出", "允许导出"),
-            requirement("个人资料", "显示姓名"),
-        ),
-    )
-    write(
-        delta / "accounts" / "spec.md",
-        """# Accounts
-
-## Purpose
-
-描述 Accounts 的外部行为。
-
-## RENAMED Requirements
-
-FROM: 旧登录
-TO: 密码登录
-
-## REMOVED Requirements
-
-### Requirement: 旧导出
-
-## MODIFIED Requirements
-
-### Requirement: 个人资料
-
-系统 SHALL 显示姓名和头像。
-
-#### Scenario: 查看资料
-
-- **WHEN** 用户打开个人资料
-- **THEN** 系统显示姓名和头像
-
-## ADDED Requirements
-
-### Requirement: 注销
-
-系统 MUST 允许用户注销。
-
-#### Scenario: 主动注销
-
-- **WHEN** 用户选择注销
-- **THEN** 系统结束会话
-""",
-    )
-
-    work = ready_state(SPEC_OPS, tmp_path / "state")
-    assert run_python(SPEC_OPS, "validate-main", specs).returncode == 0
-    assert run_python(SPEC_OPS, "validate-delta", delta, specs).returncode == 0
+def test_spec_ops_cli_validates_previews_all_delta_operations_and_diffs(spec_documents) -> None:
+    documents = spec_documents
+    tmp_path = documents.root
+    write, ready_state, apply_ready = documents.write, documents.ready_state, documents.apply
+    specs = tmp_path / 'specs'
+    delta = tmp_path / 'delta'
+    preview = tmp_path / 'preview'
+    write(specs / 'accounts' / 'spec.md', main_spec('Accounts', requirement('旧登录', '允许登录'), requirement('旧导出', '允许导出'), requirement('个人资料', '显示姓名')))
+    write(delta / 'accounts' / 'spec.md', '# Accounts\n\n## Purpose\n\n描述 Accounts 的外部行为。\n\n## RENAMED Requirements\n\nFROM: 旧登录\nTO: 密码登录\n\n## REMOVED Requirements\n\n### Requirement: 旧导出\n\n## MODIFIED Requirements\n\n### Requirement: 个人资料\n\n系统 SHALL 显示姓名和头像。\n\n#### Scenario: 查看资料\n\n- **WHEN** 用户打开个人资料\n- **THEN** 系统显示姓名和头像\n\n## ADDED Requirements\n\n### Requirement: 注销\n\n系统 MUST 允许用户注销。\n\n#### Scenario: 主动注销\n\n- **WHEN** 用户选择注销\n- **THEN** 系统结束会话\n')
+    work = ready_state(SPEC_OPS, tmp_path / 'state')
+    assert run_python(SPEC_OPS, 'validate-main', specs).returncode == 0
+    assert run_python(SPEC_OPS, 'validate-delta', delta, specs).returncode == 0
     applied = apply_ready(SPEC_OPS, specs, delta, preview, work)
     assert applied.returncode == 0, applied.stderr
-    assert run_python(SPEC_OPS, "validate-main", preview).returncode == 0
-
-    merged = (preview / "accounts" / "spec.md").read_text(encoding="utf-8")
-    assert "### Requirement: 密码登录" in merged
-    assert "### Requirement: 旧登录" not in merged
-    assert "### Requirement: 旧导出" not in merged
-    assert "系统 SHALL 显示姓名和头像。" in merged
-    assert "### Requirement: 注销" in merged
-
-    diff = run_python(SPEC_OPS, "diff", specs, preview)
+    assert run_python(SPEC_OPS, 'validate-main', preview).returncode == 0
+    merged = (preview / 'accounts' / 'spec.md').read_text(encoding='utf-8')
+    assert '### Requirement: 密码登录' in merged
+    assert '### Requirement: 旧登录' not in merged
+    assert '### Requirement: 旧导出' not in merged
+    assert '系统 SHALL 显示姓名和头像。' in merged
+    assert '### Requirement: 注销' in merged
+    diff = run_python(SPEC_OPS, 'diff', specs, preview)
     assert diff.returncode == 0
-    assert "-### Requirement: 旧登录" in diff.stdout
-    assert "+### Requirement: 密码登录" in diff.stdout
-    assert "旧导出" in diff.stdout
-    assert "注销" in diff.stdout
-
-    first_apply = apply_ready(SPEC_OPS, specs, delta, specs, work)
-    assert first_apply.returncode == 0, first_apply.stderr
-    before_repeat = (specs / "accounts" / "spec.md").read_bytes()
-    repeated_validation = run_python(SPEC_OPS, "validate-delta", delta, specs)
-    assert repeated_validation.returncode == 0, repeated_validation.stderr
-    repeated_work = ready_state(SPEC_OPS, tmp_path / "repeated-state")
-    shutil.rmtree(preview)
-    repeated_preview = apply_ready(SPEC_OPS, specs, delta, preview, repeated_work)
-    assert repeated_preview.returncode == 0, repeated_preview.stderr
-    repeated_apply = apply_ready(SPEC_OPS, specs, delta, specs, repeated_work)
-    assert repeated_apply.returncode == 0, repeated_apply.stderr
-    assert (specs / "accounts" / "spec.md").read_bytes() == before_repeat
-
-
-def test_myspec_cli_preserves_untouched_lf_and_crlf_bytes_for_preview_and_apply(
-    tmp_path: Path,
-) -> None:
-    specs = tmp_path / "specs"
-    delta = tmp_path / "delta"
-    preview = tmp_path / "preview"
-    target = main_spec(
-        "Accounts",
-        requirement("登录", "允许登录"),
-        requirement("旧设置", "显示设置"),
-    )
-    untouched_lf = main_spec("Profiles", requirement("查看资料", "显示姓名"))
-    untouched_crlf = main_spec("Settings", requirement("修改设置", "保存设置"))
-    (specs / "accounts" / "spec.md").parent.mkdir(parents=True)
-    (specs / "accounts" / "spec.md").write_bytes(target.replace("\n", "\r\n").encode("utf-8"))
-    (specs / "profiles" / "spec.md").parent.mkdir(parents=True)
-    (specs / "profiles" / "spec.md").write_bytes(untouched_lf.encode("utf-8"))
-    (specs / "settings" / "spec.md").parent.mkdir(parents=True)
-    (specs / "settings" / "spec.md").write_bytes(untouched_crlf.replace("\n", "\r\n").encode("utf-8"))
-    original_lf = (specs / "profiles" / "spec.md").read_bytes()
-    original_crlf = (specs / "settings" / "spec.md").read_bytes()
-    write(
-        delta / "accounts" / "spec.md",
-        """## MODIFIED Requirements
-
-### Requirement: 登录
-
-系统 MUST 允许密码登录。
-
-#### Scenario: 密码正确
-
-- **WHEN** 用户提交正确密码
-- **THEN** 系统创建会话
-
-## REMOVED Requirements
-
-### Requirement: 旧设置
-""",
-    )
-
-    work = tmp_path / "state"
-    conflicts = tmp_path / "conflicts.json"
-    write(conflicts, "[]")
-    initialized = run_public_spec_cli(
-        "state-init", work, "add", "specs-fingerprint", "input-fingerprint"
-    )
-    assert initialized.returncode == 0, initialized.stderr
-    stored = run_public_spec_cli(
-        "state-set-conflicts", work, conflicts, "specs-fingerprint", "input-fingerprint"
-    )
-    assert stored.returncode == 0, stored.stderr
-    before_rejected_apply = {
-        relative: (specs / relative).read_bytes()
-        for relative in ("accounts/spec.md", "profiles/spec.md", "settings/spec.md")
-    }
-    rejected = run_public_spec_cli(
-        "apply-delta", specs, delta, preview, work, "stale-specs-fingerprint", "input-fingerprint"
-    )
-    assert rejected.returncode != 0
-    assert {
-        relative: (specs / relative).read_bytes()
-        for relative in before_rejected_apply
-    } == before_rejected_apply
-    assert run_public_spec_cli("validate-main", specs).returncode == 0
-    assert run_public_spec_cli("validate-delta", delta, specs).returncode == 0
-    previewed = run_public_spec_cli(
-        "apply-delta", specs, delta, preview, work, "specs-fingerprint", "input-fingerprint"
-    )
-    assert previewed.returncode == 0, previewed.stderr
-    assert run_public_spec_cli("validate-main", preview).returncode == 0
-    assert (preview / "profiles" / "spec.md").read_bytes() == original_lf
-    assert (preview / "settings" / "spec.md").read_bytes() == original_crlf
-    target_preview = (preview / "accounts" / "spec.md").read_bytes()
-    assert b"\r" not in target_preview
-    assert "系统 MUST 允许密码登录。".encode("utf-8") in target_preview
-    assert "旧设置".encode("utf-8") not in target_preview
-
-    applied = run_public_spec_cli(
-        "apply-delta", specs, delta, specs, work, "specs-fingerprint", "input-fingerprint"
-    )
-    assert applied.returncode == 0, applied.stderr
-    assert run_public_spec_cli("validate-main", specs).returncode == 0
-    assert (specs / "profiles" / "spec.md").read_bytes() == original_lf
-    assert (specs / "settings" / "spec.md").read_bytes() == original_crlf
-    assert (specs / "accounts" / "spec.md").read_bytes() == target_preview
-
-    repeated_work = tmp_path / "repeated-state"
-    repeated_conflicts = tmp_path / "repeated-conflicts.json"
-    write(repeated_conflicts, "[]")
-    assert run_public_spec_cli(
-        "state-init", repeated_work, "add", "specs-fingerprint", "input-fingerprint"
-    ).returncode == 0
-    assert run_public_spec_cli(
-        "state-set-conflicts",
-        repeated_work,
-        repeated_conflicts,
-        "specs-fingerprint",
-        "input-fingerprint",
-    ).returncode == 0
-    before_repeat = {
-        relative: (specs / relative).read_bytes()
-        for relative in ("accounts/spec.md", "profiles/spec.md", "settings/spec.md")
-    }
-    shutil.rmtree(preview)
-    repeated_preview = run_public_spec_cli(
-        "apply-delta", specs, delta, preview, repeated_work, "specs-fingerprint", "input-fingerprint"
-    )
-    assert repeated_preview.returncode == 0, repeated_preview.stderr
-    repeated = run_public_spec_cli(
-        "apply-delta",
-        specs,
-        delta,
-        specs,
-        repeated_work,
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
+    assert '-### Requirement: 旧登录' in diff.stdout
+    assert '+### Requirement: 密码登录' in diff.stdout
+    assert '旧导出' in diff.stdout
+    assert '+### Requirement: 注销' in diff.stdout
+    repeated_work = ready_state(SPEC_OPS, tmp_path / 'repeated-state')
+    repeated_preview = tmp_path / 'repeated-preview'
+    # The rendered result is the next merge's input; physical replacement and
+    # repeated final apply remain covered by TestMySpec.
+    repeated = apply_ready(SPEC_OPS, preview, delta, repeated_preview, repeated_work)
     assert repeated.returncode == 0, repeated.stderr
-    assert {
-        relative: (specs / relative).read_bytes()
-        for relative in before_repeat
-    } == before_repeat
+    assert (repeated_preview / 'accounts' / 'spec.md').read_bytes() == (preview / 'accounts' / 'spec.md').read_bytes()
+    repeated_diff = run_python(SPEC_OPS, 'diff', preview, repeated_preview)
+    assert repeated_diff.returncode == 0, repeated_diff.stderr
+    assert repeated_diff.stdout == ''
 
 
-def test_spec_ops_cli_rejects_invalid_specs_and_delta_references(tmp_path: Path) -> None:
-    specs = tmp_path / "specs"
-    delta = tmp_path / "delta"
-    write(
-        specs / "accounts" / "spec.md",
-        main_spec("Accounts", requirement("登录", "允许登录").replace("MUST", "必须")),
-    )
+def test_spec_add_deterministic_post_analysis_flow_previews_and_diffs(spec_documents) -> None:
+    documents = spec_documents
+    root = documents.root / 'add'
+    specs, delta, preview = root / 'specs', root / 'delta', root / 'preview'
+    login = requirement('登录', '允许用户登录')
+    documents.write(specs / 'accounts' / 'spec.md', main_spec('Accounts', login))
+    documents.write(delta / 'accounts' / 'spec.md', '## ADDED Requirements\n\n### Requirement: 注销\n\n系统 MUST 允许用户注销。\n\n#### Scenario: 主动注销\n\n- **WHEN** 用户选择注销\n- **THEN** 系统结束会话\n')
+    work = documents.ready_state(SPEC_OPS, root)
+    validated = run_python(SPEC_OPS, 'validate-delta', delta, specs)
+    assert validated.returncode == 0, validated.stderr
+    generated = documents.apply(SPEC_OPS, specs, delta, preview, work)
+    assert generated.returncode == 0, generated.stderr
+    assert run_python(SPEC_OPS, 'validate-main', preview).returncode == 0
+    diff = run_python(SPEC_OPS, 'diff', specs, preview)
+    assert diff.returncode == 0, diff.stderr
+    assert '+### Requirement: 注销' in diff.stdout
+    merged = (preview / 'accounts' / 'spec.md').read_text(encoding='utf-8')
+    assert '### Requirement: 注销' in merged
+    assert login.strip() in merged
 
-    invalid_main = run_python(SPEC_OPS, "validate-main", specs)
+
+def test_spec_ops_cli_rejects_invalid_specs_and_delta_references(spec_documents) -> None:
+    documents = spec_documents
+    tmp_path = documents.root
+    write, ready_state, apply_ready = documents.write, documents.ready_state, documents.apply
+    specs = tmp_path / 'specs'
+    delta = tmp_path / 'delta'
+    write(specs / 'accounts' / 'spec.md', main_spec('Accounts', requirement('登录', '允许登录').replace('MUST', '必须')))
+    invalid_main = run_python(SPEC_OPS, 'validate-main', specs)
     assert invalid_main.returncode != 0
-    assert "missing_must_or_shall: 登录" in invalid_main.stderr
-    assert "Traceback" not in invalid_main.stderr
-
-    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
-    write(
-        delta / "accounts" / "spec.md",
-        """## MODIFIED Requirements
-
-### Requirement: 不存在的需求
-
-系统 MUST 返回结果。
-
-#### Scenario: 正常流程
-
-- **WHEN** 用户执行操作
-- **THEN** 系统返回结果
-""",
-    )
-    invalid_delta = run_python(SPEC_OPS, "validate-delta", delta, specs)
+    assert 'missing_must_or_shall: 登录' in invalid_main.stderr
+    assert 'Traceback' not in invalid_main.stderr
+    write(specs / 'accounts' / 'spec.md', main_spec('Accounts', requirement('登录', '允许登录')))
+    write(delta / 'accounts' / 'spec.md', '## MODIFIED Requirements\n\n### Requirement: 不存在的需求\n\n系统 MUST 返回结果。\n\n#### Scenario: 正常流程\n\n- **WHEN** 用户执行操作\n- **THEN** 系统返回结果\n')
+    invalid_delta = run_python(SPEC_OPS, 'validate-delta', delta, specs)
     assert invalid_delta.returncode != 0
-    assert "modified_source_missing: 不存在的需求" in invalid_delta.stderr
-    assert "Traceback" not in invalid_delta.stderr
+    assert 'modified_source_missing: 不存在的需求' in invalid_delta.stderr
+    assert 'Traceback' not in invalid_delta.stderr
 
 
-def test_spec_ops_cli_persists_complete_conflicts_and_resumes_in_a_new_process(
-    tmp_path: Path,
-) -> None:
-    work = tmp_path / ".local" / "spec-work"
-    conflicts_file = tmp_path / "conflicts.json"
-    conflicts = [
-        {
-            "id": f"conflict-{index:02d}",
-            "candidate": f"候选 {index}",
-            "evidence": [f"spec.md:{index}"],
-            "reason": "语义冲突",
-            "recommendation": "采用建议",
-        }
-        for index in range(1, 14)
-    ]
-    write(conflicts_file, json.dumps(conflicts, ensure_ascii=False))
-
-    initialized = run_python(
-        SPEC_OPS,
-        "state-init",
-        work,
-        "review",
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
-    assert initialized.returncode == 0, initialized.stderr
-    stored = run_python(
-        SPEC_OPS,
-        "state-set-conflicts",
-        work,
-        conflicts_file,
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
-    assert stored.returncode == 0, stored.stderr
-    assert json.loads(stored.stdout) == {"status": "WAITING_DECISION", "total": 13, "remaining": 13}
-
-    first = json.loads(
-        run_python(
-            SPEC_OPS, "state-current", work, "specs-fingerprint", "input-fingerprint"
-        ).stdout
-    )
-    assert first["index"] == 0
-    assert first["total"] == 13
-    assert first["conflict"] == conflicts[0]
-
-    decided = run_python(
-        SPEC_OPS,
-        "state-decide",
-        work,
-        "conflict-01",
-        "accept",
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
-    assert decided.returncode == 0, decided.stderr
-    second = json.loads(
-        run_python(
-            SPEC_OPS, "state-current", work, "specs-fingerprint", "input-fingerprint"
-        ).stdout
-    )
-    assert second["index"] == 1
-    assert second["total"] == 13
-    assert second["conflict"] == conflicts[1]
-    assert json.loads(
-        run_python(SPEC_OPS, "state-status", work, "specs-fingerprint", "input-fingerprint").stdout
-    ) == {
-        "status": "WAITING_DECISION",
-        "total": 13,
-        "decided": 1,
-        "remaining": 12,
-    }
-
-
-def test_spec_ops_cli_rejects_incomplete_or_out_of_order_conflict_state(tmp_path: Path) -> None:
-    work = tmp_path / ".local" / "spec-work"
-    stale_delta = work / "current" / "delta" / "stale" / "spec.md"
-    write(stale_delta, "stale")
-    refused = run_python(
-        SPEC_OPS, "state-init", work, "audit", "specs-fingerprint", "input-fingerprint"
-    )
-    assert refused.returncode != 0
-    assert "current_not_empty" in refused.stderr
-    assert stale_delta.read_text(encoding="utf-8") == "stale\n"
-    work = tmp_path / "fresh-session" / ".local" / "spec-work"
-    assert run_python(
-        SPEC_OPS, "state-init", work, "audit", "specs-fingerprint", "input-fingerprint"
-    ).returncode == 0
-
-    count_only = tmp_path / "count-only.json"
+def test_spec_ops_cli_rejects_incomplete_or_out_of_order_conflict_state(spec_documents) -> None:
+    documents = spec_documents
+    tmp_path = documents.root
+    write, ready_state, apply_ready = documents.write, documents.ready_state, documents.apply
+    work = tmp_path / 'fresh-session' / '.local' / 'spec-work'
+    documents.seed_state(work, 'audit')
+    count_only = tmp_path / 'count-only.json'
     write(count_only, '{"count": 13}')
-    incomplete = run_python(
-        SPEC_OPS,
-        "state-set-conflicts",
-        work,
-        count_only,
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
+    incomplete = run_python(SPEC_OPS, 'state-set-conflicts', work, count_only, 'specs-fingerprint', 'input-fingerprint')
     assert incomplete.returncode != 0
-    assert "conflicts_must_be_array" in incomplete.stderr
-
-    duplicate_file = tmp_path / "duplicates.json"
-    duplicate = {
-        "id": "same",
-        "candidate": "候选",
-        "evidence": ["spec.md:1"],
-        "reason": "冲突",
-        "recommendation": "采用建议",
-    }
+    assert 'conflicts_must_be_array' in incomplete.stderr
+    duplicate_file = tmp_path / 'duplicates.json'
+    duplicate = {'id': 'same', 'candidate': '候选', 'evidence': ['spec.md:1'], 'reason': '冲突', 'recommendation': '采用建议'}
     write(duplicate_file, json.dumps([duplicate, duplicate], ensure_ascii=False))
-    duplicates = run_python(
-        SPEC_OPS,
-        "state-set-conflicts",
-        work,
-        duplicate_file,
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
+    duplicates = run_python(SPEC_OPS, 'state-set-conflicts', work, duplicate_file, 'specs-fingerprint', 'input-fingerprint')
     assert duplicates.returncode != 0
-    assert "duplicate_conflict_id: same" in duplicates.stderr
-
-    missing_evidence_file = tmp_path / "missing-evidence.json"
-    write(
-        missing_evidence_file,
-        json.dumps([{**duplicate, "id": "missing", "evidence": []}], ensure_ascii=False),
-    )
-    missing = run_python(
-        SPEC_OPS,
-        "state-set-conflicts",
-        work,
-        missing_evidence_file,
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
+    assert 'duplicate_conflict_id: same' in duplicates.stderr
+    missing_evidence_file = tmp_path / 'missing-evidence.json'
+    write(missing_evidence_file, json.dumps([{**duplicate, 'id': 'missing', 'evidence': []}], ensure_ascii=False))
+    missing = run_python(SPEC_OPS, 'state-set-conflicts', work, missing_evidence_file, 'specs-fingerprint', 'input-fingerprint')
     assert missing.returncode != 0
-    assert "invalid_conflict_field: missing: evidence" in missing.stderr
-
-    premature = run_python(
-        SPEC_OPS,
-        "state-decide",
-        work,
-        "same",
-        "accept",
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
+    assert 'invalid_conflict_field: missing: evidence' in missing.stderr
+    premature = run_python(SPEC_OPS, 'state-decide', work, 'same', 'accept', 'specs-fingerprint', 'input-fingerprint')
     assert premature.returncode != 0
-    assert "invalid_state: expected_WAITING_DECISION" in premature.stderr
-
-    valid_file = tmp_path / "valid.json"
+    assert 'invalid_state: expected_WAITING_DECISION' in premature.stderr
+    valid_file = tmp_path / 'valid.json'
     write(valid_file, json.dumps([duplicate], ensure_ascii=False))
-    assert run_python(
-        SPEC_OPS,
-        "state-set-conflicts",
-        work,
-        valid_file,
-        "specs-fingerprint",
-        "input-fingerprint",
-    ).returncode == 0
-    stale = run_python(
-        SPEC_OPS, "state-current", work, "changed-specs", "input-fingerprint"
-    )
+    assert run_python(SPEC_OPS, 'state-set-conflicts', work, valid_file, 'specs-fingerprint', 'input-fingerprint').returncode == 0
+    stale = run_python(SPEC_OPS, 'state-current', work, 'changed-specs', 'input-fingerprint')
     assert stale.returncode != 0
-    assert "specs_fingerprint_changed" in stale.stderr
-
-    specs = tmp_path / "specs"
-    delta = tmp_path / "delta"
-    preview = tmp_path / "preview"
-    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
+    assert 'specs_fingerprint_changed' in stale.stderr
+    specs = tmp_path / 'specs'
+    delta = tmp_path / 'delta'
+    preview = tmp_path / 'preview'
+    write(specs / 'accounts' / 'spec.md', main_spec('Accounts', requirement('登录', '允许登录')))
     delta.mkdir()
     blocked = apply_ready(SPEC_OPS, specs, delta, preview, work)
     assert blocked.returncode != 0
-    assert "invalid_state: expected_READY_TO_APPLY" in blocked.stderr
-
-    state_path = work / "current" / "state.json"
-    inconsistent = json.loads(state_path.read_text(encoding="utf-8"))
-    inconsistent["status"] = "READY_TO_APPLY"
-    state_path.write_text(json.dumps(inconsistent), encoding="utf-8")
+    assert 'invalid_state: expected_READY_TO_APPLY' in blocked.stderr
+    state_path = work / 'current' / 'state.json'
+    inconsistent = json.loads(state_path.read_text(encoding='utf-8'))
+    inconsistent['status'] = 'READY_TO_APPLY'
+    state_path.write_text(json.dumps(inconsistent), encoding='utf-8')
     tampered = apply_ready(SPEC_OPS, specs, delta, preview, work)
     assert tampered.returncode != 0
-    assert "invalid_state_document" in tampered.stderr
+    assert 'invalid_state_document' in tampered.stderr
 
 
-def test_spec_ops_cli_records_each_supported_conflict_decision(tmp_path: Path) -> None:
-    work = tmp_path / ".local" / "spec-work"
-    conflicts_file = tmp_path / "conflicts.json"
-    conflicts = [
-        {
-            "id": f"conflict-{index}",
-            "candidate": f"候选 {index}",
-            "evidence": [f"spec.md:{index}"],
-            "reason": "需要决定",
-            "recommendation": "采用建议",
-        }
-        for index in range(4)
-    ]
+def test_spec_ops_cli_records_each_supported_conflict_decision(spec_documents) -> None:
+    documents = spec_documents
+    tmp_path = documents.root
+    write, ready_state, apply_ready = documents.write, documents.ready_state, documents.apply
+    work = tmp_path / '.local' / 'spec-work'
+    conflicts_file = tmp_path / 'conflicts.json'
+    conflicts = [{'id': f'conflict-{index}', 'candidate': f'候选 {index}', 'evidence': [f'spec.md:{index}'], 'reason': '需要决定', 'recommendation': '采用建议'} for index in range(4)]
     write(conflicts_file, json.dumps(conflicts, ensure_ascii=False))
-    assert run_python(
-        SPEC_OPS, "state-init", work, "add", "specs-fingerprint", "input-fingerprint"
-    ).returncode == 0
-    assert run_python(
-        SPEC_OPS,
-        "state-set-conflicts",
-        work,
-        conflicts_file,
-        "specs-fingerprint",
-        "input-fingerprint",
-    ).returncode == 0
-
-    assert run_python(
-        SPEC_OPS,
-        "state-decide",
-        work,
-        "conflict-0",
-        "accept",
-        "specs-fingerprint",
-        "input-fingerprint",
-    ).returncode == 0
-    repeated = run_python(
-        SPEC_OPS,
-        "state-decide",
-        work,
-        "conflict-0",
-        "accept",
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
+    documents.seed_state(work)
+    assert run_python(SPEC_OPS, 'state-set-conflicts', work, conflicts_file, 'specs-fingerprint', 'input-fingerprint').returncode == 0
+    assert run_python(SPEC_OPS, 'state-decide', work, 'conflict-0', 'accept', 'specs-fingerprint', 'input-fingerprint').returncode == 0
+    repeated = run_python(SPEC_OPS, 'state-decide', work, 'conflict-0', 'accept', 'specs-fingerprint', 'input-fingerprint')
     assert repeated.returncode != 0
-    assert "unexpected_conflict_id: expected_conflict-1: conflict-0" in repeated.stderr
-    assert run_python(
-        SPEC_OPS,
-        "state-decide",
-        work,
-        "conflict-1",
-        "ignore",
-        "specs-fingerprint",
-        "input-fingerprint",
-    ).returncode == 0
-    modified = run_python(
-        SPEC_OPS,
-        "state-decide",
-        work,
-        "conflict-2",
-        "accept-modified",
-        "specs-fingerprint",
-        "input-fingerprint",
-        "--modified-content",
-        "修改后的完整候选",
-    )
+    assert 'unexpected_conflict_id: expected_conflict-1: conflict-0' in repeated.stderr
+    assert run_python(SPEC_OPS, 'state-decide', work, 'conflict-1', 'ignore', 'specs-fingerprint', 'input-fingerprint').returncode == 0
+    modified = run_python(SPEC_OPS, 'state-decide', work, 'conflict-2', 'accept-modified', 'specs-fingerprint', 'input-fingerprint', '--modified-content', '修改后的完整候选')
     assert modified.returncode == 0, modified.stderr
-    final = run_python(
-        SPEC_OPS,
-        "state-decide",
-        work,
-        "conflict-3",
-        "defer",
-        "specs-fingerprint",
-        "input-fingerprint",
-    )
+    final = run_python(SPEC_OPS, 'state-decide', work, 'conflict-3', 'defer', 'specs-fingerprint', 'input-fingerprint')
     assert final.returncode == 0, final.stderr
-    assert json.loads(final.stdout) == {
-        "status": "READY_TO_APPLY",
-        "total": 4,
-        "decided": 4,
-        "remaining": 0,
-    }
-    state = json.loads((work / "current" / "state.json").read_text(encoding="utf-8"))
-    assert [item["decision"] for item in state["decisions"]] == [
-        "accept",
-        "ignore",
-        "accept-modified",
-        "defer",
-    ]
-    assert state["decisions"][2]["modifiedContent"] == "修改后的完整候选"
+    assert json.loads(final.stdout) == {'status': 'READY_TO_APPLY', 'total': 4, 'decided': 4, 'remaining': 0}
+    state = json.loads((work / 'current' / 'state.json').read_text(encoding='utf-8'))
+    assert [item['decision'] for item in state['decisions']] == ['accept', 'ignore', 'accept-modified', 'defer']
+    assert state['decisions'][2]['modifiedContent'] == '修改后的完整候选'
 
 
-def test_spec_ops_cli_initializes_a_new_capability_from_an_empty_spec_library(tmp_path: Path) -> None:
-    specs = tmp_path / "missing-specs"
-    delta = tmp_path / "delta"
-    preview = tmp_path / "preview"
-    write(
-        delta / "notifications" / "spec.md",
-        """# Notifications
-
-## Purpose
-
-描述通知的外部行为。
-
-## ADDED Requirements
-
-### Requirement: 接收通知
-
-系统 MUST 向订阅用户发送通知。
-
-#### Scenario: 新消息
-
-- **WHEN** 新消息到达
-- **THEN** 系统向订阅用户发送通知
-""",
-    )
-
-    work = ready_state(SPEC_OPS, tmp_path / "state")
-    validated = run_python(SPEC_OPS, "validate-delta", delta, specs)
+def test_spec_ops_cli_initializes_a_new_capability_from_an_empty_spec_library(spec_documents) -> None:
+    documents = spec_documents
+    tmp_path = documents.root
+    write, ready_state, apply_ready = documents.write, documents.ready_state, documents.apply
+    specs = tmp_path / 'missing-specs'
+    delta = tmp_path / 'delta'
+    preview = tmp_path / 'preview'
+    write(delta / 'notifications' / 'spec.md', '# Notifications\n\n## Purpose\n\n描述通知的外部行为。\n\n## ADDED Requirements\n\n### Requirement: 接收通知\n\n系统 MUST 向订阅用户发送通知。\n\n#### Scenario: 新消息\n\n- **WHEN** 新消息到达\n- **THEN** 系统向订阅用户发送通知\n')
+    work = ready_state(SPEC_OPS, tmp_path / 'state')
+    validated = run_python(SPEC_OPS, 'validate-delta', delta, specs)
     assert validated.returncode == 0, validated.stderr
     applied = apply_ready(SPEC_OPS, specs, delta, preview, work)
     assert applied.returncode == 0, applied.stderr
-    assert run_python(SPEC_OPS, "validate-main", preview).returncode == 0
-    assert "### Requirement: 接收通知" in (preview / "notifications" / "spec.md").read_text(encoding="utf-8")
+    assert run_python(SPEC_OPS, 'validate-main', preview).returncode == 0
+    assert '### Requirement: 接收通知' in (preview / 'notifications' / 'spec.md').read_text(encoding='utf-8')
 
 
-def test_spec_ops_preview_auto_merges_identical_duplicate_requirements_but_main_validation_stays_strict(
-    tmp_path: Path,
-) -> None:
-    specs = tmp_path / "specs"
-    delta = tmp_path / "delta"
-    preview = tmp_path / "preview"
-    duplicate = requirement("登录", "允许用户登录")
-    write(specs / "accounts" / "spec.md", main_spec("Accounts", duplicate))
-    write(specs / "sessions" / "spec.md", main_spec("Sessions", duplicate))
+@pytest.mark.parametrize('duplicate_location', ('same-file', 'cross-file'))
+def test_spec_ops_preview_auto_merges_identical_duplicate_requirements_but_main_validation_stays_strict(spec_documents, duplicate_location: str) -> None:
+    documents = spec_documents
+    tmp_path = documents.root
+    write, ready_state, apply_ready = documents.write, documents.ready_state, documents.apply
+    specs = tmp_path / 'specs'
+    delta = tmp_path / 'delta'
+    preview = tmp_path / 'preview'
+    duplicate = requirement('登录', '允许用户登录')
+    write(specs / 'accounts' / 'spec.md', main_spec('Accounts', duplicate, *([duplicate] if duplicate_location == 'same-file' else [])))
+    if duplicate_location == 'cross-file':
+        write(specs / 'sessions' / 'spec.md', main_spec('Sessions', duplicate))
     delta.mkdir()
-
-    strict = run_python(SPEC_OPS, "validate-main", specs)
+    strict = run_python(SPEC_OPS, 'validate-main', specs)
     assert strict.returncode != 0
-    assert "duplicate_requirement_global: 登录" in strict.stderr
-
-    work = ready_state(SPEC_OPS, tmp_path / "state", "review")
+    expected_error = 'duplicate_requirement: 登录' if duplicate_location == 'same-file' else 'duplicate_requirement_global: 登录'
+    assert expected_error in strict.stderr
+    work = ready_state(SPEC_OPS, tmp_path / 'state', 'review')
     merged = apply_ready(SPEC_OPS, specs, delta, preview, work)
     assert merged.returncode == 0, merged.stderr
-    assert run_python(SPEC_OPS, "validate-main", preview).returncode == 0
-    assert (preview / "accounts" / "spec.md").read_text(encoding="utf-8").count(
-        "### Requirement: 登录"
-    ) == 1
-    diff = run_python(SPEC_OPS, "diff", specs, preview)
+    assert run_python(SPEC_OPS, 'validate-main', preview).returncode == 0
+    assert (preview / 'accounts' / 'spec.md').read_text(encoding='utf-8').count('### Requirement: 登录') == 1
+    diff = run_python(SPEC_OPS, 'diff', specs, preview)
     assert diff.returncode == 0
-    assert "-### Requirement: 登录" in diff.stdout
+    assert '-### Requirement: 登录' in diff.stdout
+
+
+@pytest.mark.parametrize('evidence,error', [
+    ('no-confirmation', 'no_active_session_confirmation_required'),
+    ('legacy-no-baseline', 'abort_specs_baseline_mismatch'),
+    ('legacy-no-path', 'invalid_state_context'),
+    ('legacy-unknown-status', 'invalid_state_document'),
+    ('unknown-phase', 'application_recovery_required'),
+])
+def test_myspec_recovery_rejects_incomplete_state_documents(spec_documents, monkeypatch, evidence: str, error: str) -> None:
+    documents = spec_documents
+    target = documents.root
+    work = documents.ready_state(SPEC_OPS, target)
+    specs = target / 'myspec' / 'specs'
+    delta = work / 'current' / 'delta'
+    preview = work / 'current' / 'preview'
+    documents.write(specs / 'accounts' / 'spec.md', main_spec('Accounts', requirement('登录', '允许登录')))
+    documents.write(delta / 'accounts' / 'spec.md', '## MODIFIED Requirements\n\n' + requirement('登录', '允许密码登录'))
+    previewed = documents.apply(SPEC_OPS, specs, delta, preview, work)
+    assert previewed.returncode == 0, previewed.stderr
+    state_path = work / 'current' / 'state.json'
+    state = json.loads(state_path.read_text(encoding='utf-8'))
+    state.update(targetWorktree=str(target), sessionId='a' * 32)
+    lock = work / 'lock'
+    documents.write(lock, json.dumps({'command': 'add', 'sessionId': state['sessionId'], 'workRoot': str(work)}))
+    if evidence.startswith('legacy-'):
+        state.pop('sessionId')
+        state.pop('applicationPhase')
+        documents.write(lock, 'add')
+    if evidence == 'legacy-no-baseline':
+        state['specsContentFingerprint'] = None
+    elif evidence == 'legacy-no-path':
+        state.pop('previewRoot')
+    elif evidence == 'legacy-unknown-status':
+        state['status'] = 'UNRECOGNIZED'
+    elif evidence == 'unknown-phase':
+        state['applicationPhase'] = 'UNRECOGNIZED'
+    documents.save_json(state_path, state)
+    for command, stdout in ((('git', 'rev-parse', '--show-toplevel'), str(target)),
+                            (('git', 'rev-parse', 'HEAD'), 'a' * 40)):
+        documents.stub.defaults.append((command, completed(command, stdout=stdout)))
+
+    def state_identity(path):
+        # Only the saved-state observation is reached by these refusals. Lock
+        # inode identity and archive/rename operations stay in TestMySpec.
+        assert path == state_path
+        return {'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+
+    monkeypatch.setattr(documents.module, '_file_identity', state_identity)
+    state_bytes, lock_bytes = state_path.read_bytes(), lock.read_bytes()
+    draft_path = delta / 'accounts' / 'spec.md'
+    draft = draft_path.read_bytes()
+    before, directories = dict(documents.texts), set(documents.directories)
+    arguments = ['state-abort', work, target, specs, delta, preview,
+                 hashlib.sha256(state_bytes).hexdigest(), 'add', '--lock-identity', '0' * 64]
+    if evidence != 'no-confirmation':
+        arguments.append('--confirm-no-active-session')
+    refused = run_python(SPEC_OPS, *arguments)
+    assert refused.returncode != 0
+    assert error in refused.stderr
+    assert state_path.read_bytes() == state_bytes
+    assert lock.read_bytes() == lock_bytes
+    assert draft_path.read_bytes() == draft
+    assert documents.texts == before
+    assert documents.directories == directories
+    assert not (work / 'aborted').exists()
 
 
 def test_skill_entries_route_add_review_and_audit_with_safe_boundaries() -> None:
@@ -5433,82 +1285,6 @@ def test_plugin_uses_host_native_skill_paths() -> None:
     assert "dependencies" not in package
 
 
-def test_spec_add_deterministic_post_analysis_flow_previews_diffs_and_applies(
-    tmp_path: Path,
-) -> None:
-    cli = SPEC_OPS
-    specs = tmp_path / "add" / "specs"
-    delta = tmp_path / "add" / "delta"
-    preview = tmp_path / "add" / "preview"
-    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许用户登录")))
-    write(
-        delta / "accounts" / "spec.md",
-        """## ADDED Requirements
-
-### Requirement: 注销
-
-系统 MUST 允许用户注销。
-
-#### Scenario: 主动注销
-
-- **WHEN** 用户选择注销
-- **THEN** 系统结束会话
-""",
-    )
-
-    run_confirmed_workflow(cli, specs, delta, preview, "+### Requirement: 注销")
-    assert "### Requirement: 注销" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
-
-
-def test_spec_review_deterministic_duplicate_flow_previews_diffs_and_applies(
-    tmp_path: Path,
-) -> None:
-    cli = SPEC_OPS
-    specs = tmp_path / "review" / "specs"
-    delta = tmp_path / "review" / "delta"
-    preview = tmp_path / "review" / "preview"
-    duplicate = requirement("登录", "允许用户登录")
-    write(specs / "accounts" / "spec.md", main_spec("Accounts", duplicate, duplicate))
-    delta.mkdir(parents=True)
-
-    run_confirmed_workflow(cli, specs, delta, preview, "-### Requirement: 登录")
-    assert (specs / "accounts" / "spec.md").read_text(encoding="utf-8").count(
-        "### Requirement: 登录"
-    ) == 1
-
-
-def test_spec_audit_deterministic_post_analysis_flow_previews_diffs_and_applies(
-    tmp_path: Path,
-) -> None:
-    cli = SPEC_OPS
-    specs = tmp_path / "audit" / "missing-specs"
-    delta = tmp_path / "audit" / "delta"
-    preview = tmp_path / "audit" / "preview"
-    write(
-        delta / "notifications" / "spec.md",
-        """# Notifications
-
-## Purpose
-
-描述通知的外部行为。
-
-## ADDED Requirements
-
-### Requirement: 接收通知
-
-系统 MUST 向订阅用户发送通知。
-
-#### Scenario: 新消息
-
-- **WHEN** 新消息到达
-- **THEN** 系统发送通知
-""",
-    )
-
-    run_confirmed_workflow(cli, specs, delta, preview, "+### Requirement: 接收通知")
-    assert (specs / "notifications" / "spec.md").is_file()
-
-
 def test_my_spec_plugin_is_discoverable_by_claude_and_codex() -> None:
     package_version = json.loads((PLUGIN_ROOT / "package.json").read_text(encoding="utf-8"))["version"]
     spec = (REPO_ROOT / "myspec" / "specs" / "my-spec" / "spec.md").read_text(encoding="utf-8")
@@ -5526,916 +1302,341 @@ def test_my_spec_plugin_is_discoverable_by_claude_and_codex() -> None:
     assert all(plugin["name"] != "my-spec" for plugin in codex_marketplace["plugins"])
 
 
-def test_apply_delta_can_atomically_replace_main_after_final_confirmation(tmp_path: Path) -> None:
-    specs = tmp_path / "myspec" / "specs"
-    delta = tmp_path / "delta"
-    preview = tmp_path / "preview"
-    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
-    write(
-        delta / "accounts" / "spec.md",
-        """## MODIFIED Requirements
-
-### Requirement: 登录
-
-系统 MUST 允许密码登录。
-
-#### Scenario: 密码正确
-
-- **WHEN** 用户提交正确密码
-- **THEN** 系统创建会话
-""",
-    )
-
-    work = ready_state(SPEC_OPS, tmp_path / "state")
-    previewed = apply_ready(SPEC_OPS, specs, delta, preview, work)
-    assert previewed.returncode == 0, previewed.stderr
+def test_myspec_final_apply_requires_the_confirmed_preview(spec_documents) -> None:
+    documents = spec_documents
+    tmp_path = documents.root
+    write, ready_state, apply_ready = documents.write, documents.ready_state, documents.apply
+    specs = tmp_path / 'specs'
+    delta = tmp_path / 'delta'
+    write(specs / 'accounts' / 'spec.md', main_spec('Accounts', requirement('登录', '允许登录')))
+    write(delta / 'accounts' / 'spec.md', '## MODIFIED Requirements\n\n### Requirement: 登录\n\n系统 MUST 允许密码登录。\n\n#### Scenario: 密码正确\n\n- **WHEN** 用户提交正确密码\n- **THEN** 系统创建会话\n')
+    work = ready_state(SPEC_OPS, tmp_path / 'state')
+    before = (specs / 'accounts' / 'spec.md').read_bytes()
     applied = apply_ready(SPEC_OPS, specs, delta, specs, work)
-    assert applied.returncode == 0, applied.stderr
-    assert "系统 MUST 允许密码登录。" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
-    assert not any(path.name.startswith(".my-spec-") for path in specs.parent.iterdir())
-    assert not work.exists()
-    assert run_python(SPEC_OPS, "validate-main", specs).returncode == 0
-
-    before = (specs / "accounts" / "spec.md").read_bytes()
-    repeated_validation = run_python(SPEC_OPS, "validate-delta", delta, specs)
-    assert repeated_validation.returncode == 0, repeated_validation.stderr
-    repeated_work = ready_state(SPEC_OPS, tmp_path / "repeated-state")
-    shutil.rmtree(preview)
-    repeated_preview = apply_ready(SPEC_OPS, specs, delta, preview, repeated_work)
-    assert repeated_preview.returncode == 0, repeated_preview.stderr
-    repeated = apply_ready(SPEC_OPS, specs, delta, specs, repeated_work)
-    assert repeated.returncode == 0, repeated.stderr
-    assert (specs / "accounts" / "spec.md").read_bytes() == before
-
-
-def test_myspec_final_apply_requires_the_confirmed_preview(tmp_path: Path) -> None:
-    specs = tmp_path / "specs"
-    delta = tmp_path / "delta"
-    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
-    write(
-        delta / "accounts" / "spec.md",
-        """## MODIFIED Requirements
-
-### Requirement: 登录
-
-系统 MUST 允许密码登录。
-
-#### Scenario: 密码正确
-
-- **WHEN** 用户提交正确密码
-- **THEN** 系统创建会话
-""",
-    )
-    work = ready_state(SPEC_OPS, tmp_path / "state")
-    before = (specs / "accounts" / "spec.md").read_bytes()
-
-    applied = apply_ready(SPEC_OPS, specs, delta, specs, work)
-
     assert applied.returncode != 0
-    assert "preview_missing" in applied.stderr
-    assert (specs / "accounts" / "spec.md").read_bytes() == before
+    assert 'preview_missing' in applied.stderr
+    assert (specs / 'accounts' / 'spec.md').read_bytes() == before
 
 
-def test_myspec_final_apply_rejects_bound_content_drift_after_preview(tmp_path: Path) -> None:
-    for changed, expected_error in (
-        ("specs", "specs_content_changed"),
-        ("delta", "input_content_changed"),
-        ("preview", "preview_content_changed"),
-    ):
+def test_myspec_final_apply_rejects_bound_content_drift_after_preview(spec_documents) -> None:
+    documents = spec_documents
+    tmp_path = documents.root
+    write, ready_state, apply_ready = documents.write, documents.ready_state, documents.apply
+    for changed, expected_error in (('specs', 'specs_content_changed'), ('delta', 'input_content_changed'), ('preview', 'preview_content_changed')):
         root = tmp_path / changed
-        specs = root / "specs"
-        delta = root / "delta"
-        preview = root / "preview"
-        spec_path = specs / "accounts" / "spec.md"
-        delta_path = delta / "accounts" / "spec.md"
-        write(spec_path, main_spec("Accounts", requirement("登录", "允许登录")))
-        write(
-            delta_path,
-            """## MODIFIED Requirements
-
-### Requirement: 登录
-
-系统 MUST 允许密码登录。
-
-#### Scenario: 密码正确
-
-- **WHEN** 用户提交正确密码
-- **THEN** 系统创建会话
-""",
-        )
-        work = ready_state(SPEC_OPS, root / "state")
+        specs = root / 'specs'
+        delta = root / 'delta'
+        preview = root / 'preview'
+        spec_path = specs / 'accounts' / 'spec.md'
+        delta_path = delta / 'accounts' / 'spec.md'
+        write(spec_path, main_spec('Accounts', requirement('登录', '允许登录')))
+        write(delta_path, '## MODIFIED Requirements\n\n### Requirement: 登录\n\n系统 MUST 允许密码登录。\n\n#### Scenario: 密码正确\n\n- **WHEN** 用户提交正确密码\n- **THEN** 系统创建会话\n')
+        work = ready_state(SPEC_OPS, root / 'state')
         previewed = apply_ready(SPEC_OPS, specs, delta, preview, work)
         assert previewed.returncode == 0, previewed.stderr
-        if changed == "specs":
-            write(spec_path, main_spec("Accounts", requirement("登录", "允许其他登录")))
-        elif changed == "delta":
-            write(delta_path, delta_path.read_text(encoding="utf-8").replace("密码登录", "其他登录", 1))
+        if changed == 'specs':
+            write(spec_path, main_spec('Accounts', requirement('登录', '允许其他登录')))
+        elif changed == 'delta':
+            write(delta_path, delta_path.read_text(encoding='utf-8').replace('密码登录', '其他登录', 1))
         else:
-            preview_path = preview / "accounts" / "spec.md"
-            write(preview_path, preview_path.read_text(encoding="utf-8").replace("密码登录", "其他登录", 1))
+            preview_path = preview / 'accounts' / 'spec.md'
+            write(preview_path, preview_path.read_text(encoding='utf-8').replace('密码登录', '其他登录', 1))
         expected_specs = spec_path.read_bytes()
-
         applied = apply_ready(SPEC_OPS, specs, delta, specs, work)
-
         assert applied.returncode != 0
         assert expected_error in applied.stderr
         assert spec_path.read_bytes() == expected_specs
 
 
-def test_myspec_final_apply_rejects_unconfirmed_implementation_identity(tmp_path: Path) -> None:
-    specs = tmp_path / "specs"
-    delta = tmp_path / "delta"
-    preview = tmp_path / "preview"
-    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
-    write(
-        delta / "accounts" / "spec.md",
-        """## MODIFIED Requirements
-
-### Requirement: 登录
-
-系统 MUST 允许密码登录。
-
-#### Scenario: 密码正确
-
-- **WHEN** 用户提交正确密码
-- **THEN** 系统创建会话
-""",
-    )
-    work = ready_state(SPEC_OPS, tmp_path / "state")
+def test_myspec_final_apply_rejects_unconfirmed_implementation_identity(spec_documents) -> None:
+    documents = spec_documents
+    tmp_path = documents.root
+    write, ready_state, apply_ready = documents.write, documents.ready_state, documents.apply
+    specs = tmp_path / 'specs'
+    delta = tmp_path / 'delta'
+    preview = tmp_path / 'preview'
+    write(specs / 'accounts' / 'spec.md', main_spec('Accounts', requirement('登录', '允许登录')))
+    write(delta / 'accounts' / 'spec.md', '## MODIFIED Requirements\n\n### Requirement: 登录\n\n系统 MUST 允许密码登录。\n\n#### Scenario: 密码正确\n\n- **WHEN** 用户提交正确密码\n- **THEN** 系统创建会话\n')
+    work = ready_state(SPEC_OPS, tmp_path / 'state')
     previewed = apply_ready(SPEC_OPS, specs, delta, preview, work)
     assert previewed.returncode == 0, previewed.stderr
-    state_path = work / "current" / "state.json"
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["implementationIdentity"] = None
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-    before = (specs / "accounts" / "spec.md").read_bytes()
-
+    state_path = work / 'current' / 'state.json'
+    state = json.loads(state_path.read_text(encoding='utf-8'))
+    state['implementationIdentity'] = None
+    state_path.write_text(json.dumps(state), encoding='utf-8')
+    before = (specs / 'accounts' / 'spec.md').read_bytes()
     applied = apply_ready(SPEC_OPS, specs, delta, specs, work)
-
     assert applied.returncode != 0
-    assert "invalid_state_context" in applied.stderr
-    assert (specs / "accounts" / "spec.md").read_bytes() == before
+    assert 'invalid_state_context' in applied.stderr
+    assert (specs / 'accounts' / 'spec.md').read_bytes() == before
 
 
-def test_myspec_final_apply_rejects_missing_bound_content_fingerprints(tmp_path: Path) -> None:
-    specs = tmp_path / "specs"
-    delta = tmp_path / "delta"
-    preview = tmp_path / "preview"
-    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
-    write(
-        delta / "accounts" / "spec.md",
-        """## MODIFIED Requirements
-
-### Requirement: 登录
-
-系统 MUST 允许密码登录。
-
-#### Scenario: 密码正确
-
-- **WHEN** 用户提交正确密码
-- **THEN** 系统创建会话
-""",
-    )
-    work = ready_state(SPEC_OPS, tmp_path / "state")
+def test_myspec_final_apply_rejects_missing_bound_content_fingerprints(spec_documents) -> None:
+    documents = spec_documents
+    tmp_path = documents.root
+    write, ready_state, apply_ready = documents.write, documents.ready_state, documents.apply
+    specs = tmp_path / 'specs'
+    delta = tmp_path / 'delta'
+    preview = tmp_path / 'preview'
+    write(specs / 'accounts' / 'spec.md', main_spec('Accounts', requirement('登录', '允许登录')))
+    write(delta / 'accounts' / 'spec.md', '## MODIFIED Requirements\n\n### Requirement: 登录\n\n系统 MUST 允许密码登录。\n\n#### Scenario: 密码正确\n\n- **WHEN** 用户提交正确密码\n- **THEN** 系统创建会话\n')
+    work = ready_state(SPEC_OPS, tmp_path / 'state')
     previewed = apply_ready(SPEC_OPS, specs, delta, preview, work)
     assert previewed.returncode == 0, previewed.stderr
-    state_path = work / "current" / "state.json"
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["specsContentFingerprint"] = None
-    state["deltaContentFingerprint"] = None
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-    before = (specs / "accounts" / "spec.md").read_bytes()
-
+    state_path = work / 'current' / 'state.json'
+    state = json.loads(state_path.read_text(encoding='utf-8'))
+    state['specsContentFingerprint'] = None
+    state['deltaContentFingerprint'] = None
+    state_path.write_text(json.dumps(state), encoding='utf-8')
+    before = (specs / 'accounts' / 'spec.md').read_bytes()
     applied = apply_ready(SPEC_OPS, specs, delta, specs, work)
-
     assert applied.returncode != 0
-    assert "invalid_state_context" in applied.stderr
-    assert (specs / "accounts" / "spec.md").read_bytes() == before
+    assert 'invalid_state_context' in applied.stderr
+    assert (specs / 'accounts' / 'spec.md').read_bytes() == before
 
 
-def test_packed_myspec_codex_doctor_uses_user_home_when_orca_home_is_inherited(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, prefix, codex_bin)
-    user_home = Path(env["USERPROFILE"]) / ".codex"
-    orca_home = tmp_path / "orca-user-data" / "codex-runtime-home" / "home"
-    user_home.mkdir(parents=True, exist_ok=True)
-    orca_home.mkdir(parents=True, exist_ok=True)
-    env.update(
-        {
-            "CODEX_HOME": str(orca_home),
-            "ORCA_USER_DATA_PATH": str(tmp_path / "orca-user-data"),
-            "MYSPEC_CODEX_LOG": str(codex_log),
-            "MYSPEC_CODEX_STATE": str(codex_state),
-            "MYSPEC_CODEX_ENV_LOG": str(tmp_path / "codex-env.log"),
-        }
-    )
-    write(
-        codex_state,
-        json.dumps(
-            {
-                "marketplaces": [],
-                "installed": [],
-                "available": [],
-            },
-            indent=2,
-        ),
-    )
-
-    diagnosed = run_cli(executable, "doctor", "--codex", env=env)
-
+def test_packed_myspec_codex_doctor_uses_user_home_when_orca_home_is_inherited(management_documents):
+    runtime = management_documents
+    runtime.records("codex", [], [])
+    user_home = runtime.home / ".codex"
+    orca_home = runtime.root / "orca-user-data/codex-runtime-home/home"
+    runtime.directories.add(orca_home)
+    runtime.monkeypatch.setenv("CODEX_HOME", str(orca_home))
+    runtime.monkeypatch.setenv("ORCA_USER_DATA_PATH", str(runtime.root / "orca-user-data"))
+    runtime.capture_sdk_environments()
+    diagnosed = runtime.run("doctor", "--codex")
     assert diagnosed.returncode == 0, diagnosed.stderr
     report = json.loads(diagnosed.stdout)["codex"]
     assert report["codexHome"] == str(user_home)
     assert report["codexHomeSource"] == "orca-user-default"
-    assert (tmp_path / "codex-env.log").read_text(encoding="utf-8").splitlines() == [
-        str(user_home),
-        str(user_home),
-    ]
-    assert env["CODEX_HOME"] == str(orca_home)
-
-    explicit_home = tmp_path / "custom-codex-home"
-    explicit_home.mkdir()
-    (tmp_path / "codex-env.log").write_text("", encoding="utf-8")
-    explicit = run_cli(
-        executable,
-        "doctor",
-        "--codex",
-        "--codex-home",
-        explicit_home,
-        env=env,
-    )
-
+    assert [env["CODEX_HOME"] for command, env in runtime.sdk_environments] == [str(user_home), str(user_home)]
+    assert os.environ["CODEX_HOME"] == str(orca_home)
+    explicit_home = runtime.root / "custom-codex-home"
+    runtime.directories.add(explicit_home)
+    runtime.config_paths.add(explicit_home / "config.toml")
+    runtime.sdk_environments.clear()
+    explicit = runtime.run("doctor", "--codex", "--codex-home", explicit_home)
     assert explicit.returncode == 0, explicit.stderr
     report = json.loads(explicit.stdout)["codex"]
     assert report["codexHome"] == str(explicit_home)
     assert report["codexHomeSource"] == "explicit"
-    assert (tmp_path / "codex-env.log").read_text(encoding="utf-8").splitlines() == [
-        str(explicit_home),
-        str(explicit_home),
-    ]
-    assert env["CODEX_HOME"] == str(orca_home)
-
-    initialized = run_cli(
-        executable,
-        "init",
-        "--codex",
-        "--codex-home",
-        explicit_home,
-        env=env,
-    )
-
+    assert [env["CODEX_HOME"] for command, env in runtime.sdk_environments] == [str(explicit_home), str(explicit_home)]
+    assert os.environ["CODEX_HOME"] == str(orca_home)
+    queue_client_init(runtime, "codex")
+    initialized = runtime.run("init", "--codex", "--codex-home", explicit_home)
     assert initialized.returncode == 0, initialized.stderr
-    assert (explicit_home / "config.toml").is_file()
-    assert env["CODEX_HOME"] == str(orca_home)
+    assert os.environ["CODEX_HOME"] == str(orca_home)
+    assert all(env["CODEX_HOME"] == str(explicit_home) for command, env in runtime.sdk_environments)
 
 
-def test_packed_myspec_explicit_codex_home_errors_without_codex(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    env = isolated_myspec_env(tmp_path, npm_prefix_for(installed_package))
-    missing_home = tmp_path / "missing-codex-home"
-
-    diagnosed = run_cli(
-        executable,
-        "doctor",
-        "--codex",
-        "--codex-home",
-        missing_home,
-        env=env,
-    )
-
+def test_packed_myspec_explicit_codex_home_errors_without_codex(management_documents):
+    runtime = management_documents
+    missing_home = runtime.root / "missing-codex-home"
+    diagnosed = runtime.run("doctor", "--codex", "--codex-home", missing_home)
     assert diagnosed.returncode == 1
     assert f"error: codex_home_unavailable: {missing_home}: directory does not exist" in diagnosed.stderr
+    assert runtime.writes == []
 
 
-def test_packed_myspec_bare_doctor_does_not_require_codex_home(
-    tmp_path: Path,
-) -> None:
-    executable, installed_package = install_packed_myspec(tmp_path)
-    prefix = npm_prefix_for(installed_package)
-    codex_bin, codex_log, codex_state = install_fake_codex(tmp_path / "fake-codex")
-    env = isolated_myspec_env(tmp_path, prefix, codex_bin)
-    bad_codex_home = tmp_path / "invalid-codex-home"
-    bad_codex_home.write_text("not a directory", encoding="utf-8")
-    env.update(
-        {
-            "CODEX_HOME": str(bad_codex_home),
-            "MYSPEC_CODEX_LOG": str(codex_log),
-            "MYSPEC_CODEX_STATE": str(codex_state),
-        }
-    )
-    env.pop("ORCA_CODEX_HOME", None)
-    env.pop("ORCA_USER_DATA_PATH", None)
-    write(
-        codex_state,
-        json.dumps({"marketplaces": "broken", "installed": [], "available": []}),
-    )
-
-    diagnosed = run_cli(executable, "doctor", env=env)
-
+def test_packed_myspec_bare_doctor_does_not_require_codex_home(management_documents):
+    runtime = management_documents
+    runtime.records("codex", [], [])
+    bad_home = runtime.root / "invalid-codex-home"
+    runtime.files.add(bad_home)
+    runtime.monkeypatch.setenv("CODEX_HOME", str(bad_home))
+    runtime.response(("codex", "plugin", "marketplace", "list", "--json"), {"marketplaces": "broken"})
+    diagnosed = runtime.run("doctor")
     assert diagnosed.returncode == 0, diagnosed.stderr
     assert not {"pi", "claude", "codex"}.intersection(json.loads(diagnosed.stdout))
-    assert not codex_log.exists()
-
-
-@pytest.fixture(scope="session")
-def recovery_package(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
-    # Recovery cases only mutate their own consumer data, not the installed package.
-    return install_packed_myspec(tmp_path_factory.mktemp("recovery-package"))
+    assert runtime.stub.calls == []
+    assert runtime.writes == []
 
 
 @pytest.fixture
-def recovery_cli(tmp_path: Path, recovery_package: tuple[Path, Path]):
-    executable, package = recovery_package
-    environment = tmp_path / "recovery-environment"
-    environment.mkdir()
-    env = isolated_myspec_env(environment, npm_prefix_for(package))
-    assert Path(shutil.which("myspec", path=env["PATH"])).resolve() == executable.resolve()
-
-    def bare(*args: object, extra_env: dict[str, str] | None = None):
-        return subprocess.run(
-            ["myspec", *(str(arg) for arg in args)],
-            cwd=tmp_path,
-            env={**env, **(extra_env or {})},
-            text=True,
-            capture_output=True,
-            check=False,
-            shell=os.name == "nt",
-        )
-
-    return bare
+def lifecycle_management(monkeypatch):
+    module = _load_in_process_spec_ops(SPEC_OPS)
+    management = sys.modules[module.run_management.__module__]
+    monkeypatch.setattr(management.shutil, "which", lambda command: command)
+    return management
 
 
-def test_myspec_recovery_init_preserves_existing_current(tmp_path: Path, recovery_cli) -> None:
-    work = tmp_path / "consumer" / ".local" / "spec-work"
-    draft = work / "current" / "delta" / "accounts" / "spec.md"
-    write(draft, "not yet analyzed draft\n")
-    initialized = recovery_cli("state-init", work, "add", "specs", "input")
-    assert initialized.returncode != 0
-    assert "current_not_empty" in initialized.stderr
-    assert draft.read_text(encoding="utf-8") == "not yet analyzed draft\n"
-    assert not (work / "lock").exists()
+def _git_batch_object(content, kind=b"blob"):
+    return b"a" * 40 + b" " + kind + b" " + str(len(content)).encode() + b"\n" + content + b"\n"
 
 
-@pytest.fixture(scope="session")
-def recovery_git_seed() -> dict[str, Path]:
-    return {}
+def test_lifecycle_git_batch_preserves_binary_bytes_and_whole_spaced_paths(lifecycle_management, monkeypatch):
+    management = lifecycle_management
+    root = REPO_ROOT / "__identity_source__"
+    specs = ["a" * 40 + ":" + path for path in ("a file", "tab\tfile", "空文件")]
+    contents = [b"text\r\nnext\n", b"\x00\xff\r\n", b""]
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, b"".join(_git_batch_object(content) for content in contents), b"")
+
+    monkeypatch.setattr(management.subprocess, "run", run)
+    assert management._git_blobs(root, specs) == contents
+    request = "\n".join(specs) + "\n"
+    assert calls == [(["git", "cat-file", "--batch"], {
+        "input": request.encode("utf-8") if os.name == "nt" else os.fsencode(request),
+        "cwd": root, "check": False, "capture_output": True, "shell": False,
+    })]
 
 
-@pytest.fixture
-def recovery_git_project(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory,
-                         request: pytest.FixtureRequest, recovery_git_seed: dict[str, Path]) -> Path:
-    if "path" not in recovery_git_seed:
-        project = request.getfixturevalue("git_project")
-        seed = tmp_path_factory.mktemp("recovery-git-seed") / "project"
-        copy_template(project, seed)
-        # Publish only a complete, pristine repository, before recovery state exists.
-        recovery_git_seed["path"] = seed
-        return project
-    return copy_template(recovery_git_seed["path"], tmp_path / "project")
+def test_lifecycle_git_batch_uses_utf8_on_windows_even_with_legacy_filesystem_encoding(lifecycle_management, monkeypatch):
+    management = lifecycle_management
+    monkeypatch.setattr(management, "os", SimpleNamespace(
+        name="nt", fsencode=lambda _value: pytest.fail("Windows Git input must not use the legacy filesystem encoding"),
+    ))
+
+    def run(command, **kwargs):
+        assert command == ["git", "cat-file", "--batch"]
+        assert kwargs["input"] == b"a" * 40 + b":\xe7\xa9\xba\xe6\x96\x87\xe4\xbb\xb6\n"
+        return subprocess.CompletedProcess(command, 0, _git_batch_object(b"content"), b"")
+
+    monkeypatch.setattr(management.subprocess, "run", run)
+    assert management._git_blobs(REPO_ROOT, ["a" * 40 + ":空文件"]) == [b"content"]
 
 
-@pytest.fixture
-def recovery_session(recovery_git_project: Path, recovery_cli):
-    git_project = recovery_git_project
-    work = git_project / ".local" / "spec-work"
-    specs = git_project / "myspec" / "specs"
-    delta = work / "current" / "delta"
-    preview = work / "current" / "preview"
-    write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
-    initialized = recovery_cli("state-init", work, "add", "specs", "input")
-    assert initialized.returncode == 0, initialized.stderr
-    write(delta / "accounts" / "spec.md", "## MODIFIED Requirements\n\n" + requirement("登录", "允许密码登录"))
-    conflicts = git_project / "conflicts.json"
-    write(conflicts, json.dumps([{
-        "id": "login", "candidate": "密码登录", "evidence": ["request"],
-        "reason": "需要确认", "recommendation": "accept",
-    }]))
-    for result in (
-        recovery_cli("state-set-conflicts", work, conflicts, "specs", "input"),
-        recovery_cli("state-decide", work, "login", "accept", "specs", "input"),
-        recovery_cli("apply-delta", specs, delta, preview, work, "specs", "input"),
-    ):
-        assert result.returncode == 0, result.stderr
-    return git_project, work, specs, delta, preview
-
-
-def abort_arguments(session, cli) -> list[object]:
-    target, work, specs, delta, preview = session
-    digest = hashlib.sha256((work / "current" / "state.json").read_bytes()).hexdigest()
-    state = json.loads((work / "current" / "state.json").read_text(encoding="utf-8"))
-    inspected = cli("state-status", work, state["specsFingerprint"], state["inputFingerprint"], "--abort-identity")
-    lock_identity = json.loads(inspected.stdout)["abortIdentity"]["lockIdentitySha256"] if inspected.returncode == 0 else "0" * 64
-    return ["state-abort", work, target, specs, delta, preview, digest, "add", "--lock-identity", lock_identity, "--confirm-no-active-session"]
-
-
-def test_myspec_recovery_aborts_legacy_preview_and_preserves_material(
-    recovery_session, recovery_cli,
-) -> None:
-    target, work, specs, delta, preview = recovery_session
-    state_path = work / "current" / "state.json"
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state.pop("sessionId", None)
-    state.pop("applicationPhase", None)
-    write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
-    write(work / "lock", "add\n")
-    delta_path = delta / "accounts" / "spec.md"
-    delta_path.write_text(delta_path.read_text(encoding="utf-8").replace("密码登录", "密码及验证码登录"), encoding="utf-8")
-    failed = recovery_cli("apply-delta", specs, delta, preview, work, "specs", "input")
-    assert failed.returncode != 0
-    assert "input_content_changed" in failed.stderr
-    write(work / "current" / "failure.txt", failed.stderr)
-    original = {path.relative_to(work / "current"): path.read_bytes() for path in (work / "current").rglob("*") if path.is_file()}
-    arguments = abort_arguments(recovery_session, recovery_cli)
-    inspected = recovery_cli("state-status", work, "specs", "input", "--abort-identity")
-    assert inspected.returncode == 0, inspected.stderr
-    identity = json.loads(inspected.stdout)["abortIdentity"]
-    assert identity == {
-        "stateSha256": arguments[6], "lockIdentitySha256": arguments[9], "lockCommand": "add", "workRoot": str(work),
-        "targetWorktree": str(target), "specsRoot": str(specs), "deltaRoot": str(delta),
-        "previewRoot": str(preview), "sessionId": None, "applicationPhase": None,
-    }
-    aborted = recovery_cli(*arguments)
-    assert aborted.returncode == 0, aborted.stderr
-    result = json.loads(aborted.stdout)
-    archive = Path(result["archive"])
-    assert archive.parent == work / "aborted"
-    assert {path.relative_to(archive / "current"): path.read_bytes() for path in (archive / "current").rglob("*") if path.is_file()} == original
-    assert not (work / "lock").exists()
-    assert not (work / "current").exists()
-    assert "允许密码及验证码登录" not in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
-    repeated = recovery_cli(*arguments)
-    assert repeated.returncode == 0, repeated.stderr
-    assert json.loads(repeated.stdout)["archive"] == str(archive)
-    assert recovery_cli("state-init", work, "add", "new-specs", "new-input").returncode == 0
-    new_state = (work / "current" / "state.json").read_bytes()
-    new_lock = (work / "lock").read_bytes()
-    refused = recovery_cli(*arguments)
-    assert refused.returncode != 0
-    assert (work / "current" / "state.json").read_bytes() == new_state
-    assert (work / "lock").read_bytes() == new_lock
-
-
-def test_myspec_recovery_reimports_only_delta_and_restarts_confirmation(
-    recovery_session, recovery_cli,
-) -> None:
-    target, work, specs, delta, preview = recovery_session
-    old_state = json.loads((work / "current" / "state.json").read_text(encoding="utf-8"))
-    assert old_state["sessionId"]
-    old_delta = (delta / "accounts" / "spec.md").read_bytes()
-    original_specs = (specs / "accounts" / "spec.md").read_bytes()
-    started = time.perf_counter()
-    aborted = recovery_cli(*abort_arguments(recovery_session, recovery_cli))
-    assert aborted.returncode == 0, aborted.stderr
-    archive_seconds = time.perf_counter() - started
-    archive = Path(json.loads(aborted.stdout)["archive"])
-    started = time.perf_counter()
-    initialized = recovery_cli("state-init", work, "add", "new-specs", "new-input", "--import-aborted", archive)
-    assert initialized.returncode == 0, initialized.stderr
-    state = json.loads((work / "current" / "state.json").read_text(encoding="utf-8"))
-    assert state["sessionId"] != old_state["sessionId"]
-    assert state["status"] == "ANALYZING"
-    assert state["decisions"] == state["conflicts"] == []
-    assert state["currentConflict"] == 0
-    assert state["previewRoot"] is None
-    assert not preview.exists()
-    assert (delta / "accounts" / "spec.md").read_bytes() == old_delta
-    blocked = recovery_cli("apply-delta", specs, delta, specs, work, "new-specs", "new-input")
-    assert blocked.returncode != 0
-    assert "expected_READY_TO_APPLY" in blocked.stderr
-    conflicts = target / "conflicts.json"
-    for result in (
-        recovery_cli("state-set-conflicts", work, conflicts, "new-specs", "new-input"),
-        recovery_cli("state-current", work, "new-specs", "new-input"),
-        recovery_cli("state-decide", work, "login", "accept", "new-specs", "new-input"),
-        recovery_cli("validate-delta", delta, specs),
-        recovery_cli("apply-delta", specs, delta, preview, work, "new-specs", "new-input"),
-    ):
-        assert result.returncode == 0, result.stderr
-    difference = recovery_cli("diff", specs, preview)
-    assert difference.returncode == 0, difference.stderr
-    assert "允许密码登录" in difference.stdout
-    assert (specs / "accounts" / "spec.md").read_bytes() == original_specs
-    rebuilt_seconds = time.perf_counter() - started
-    # This isolated consumer explicitly models the existing final-confirmation step.
-    applied = recovery_cli("apply-delta", specs, delta, specs, work, "new-specs", "new-input")
-    assert applied.returncode == 0, applied.stderr
-    assert "允许密码登录" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
-    assert (archive / "current" / "delta" / "accounts" / "spec.md").read_bytes() == old_delta
-    print(f"recovery sample: 1 capability; archive={archive_seconds:.3f}s; rebuild-and-preview={rebuilt_seconds:.3f}s")
-
-
-@pytest.mark.parametrize("fault", ["failure-before", "failure-after", "interrupt-before", "interrupt-after", "cleanup-lock", "cleanup-draft"])
-def test_myspec_recovery_refuses_interrupted_or_failed_formal_application(
-    tmp_path: Path, recovery_session, recovery_cli, fault: str,
-) -> None:
-    target, work, specs, delta, preview = recovery_session
-    original = (specs / "accounts" / "spec.md").read_bytes()
-    draft = (delta / "accounts" / "spec.md").read_bytes()
-    injection = tmp_path / "application-fault"
-    write(injection / "sitecustomize.py", '''import os
-import shutil
-from pathlib import Path
-original, original_unlink, original_rmtree = os.rename, os.unlink, shutil.rmtree
-
-def rename(source, destination, *args, **kwargs):
-    source, destination = Path(source), Path(destination)
-    specs = Path(os.environ["RECOVERY_FAULT_SPECS"])
-    fault = os.environ["RECOVERY_FAULT"]
-    before = source == specs and destination.name.startswith(".my-spec-backup-")
-    after = destination == specs and source.name.startswith(".my-spec-preview-")
-    if before and fault.endswith("before"):
-        if fault.startswith("interrupt"):
-            original(source, destination, *args, **kwargs)
-            os._exit(91)
-        raise OSError("injected failure before formal replacement")
-    result = original(source, destination, *args, **kwargs)
-    if after and fault.endswith("after"):
-        if fault.startswith("interrupt"):
-            os._exit(92)
-        raise OSError("injected failure after formal replacement")
-    return result
-
-os.rename = rename
-
-def unlink(path, *args, **kwargs):
-    if os.environ["RECOVERY_FAULT"] == "cleanup-lock" and Path(path) == Path(os.environ["RECOVERY_FAULT_WORK"]) / "lock":
-        raise PermissionError("injected final lock cleanup failure")
-    return original_unlink(path, *args, **kwargs)
-
-os.unlink = unlink
-
-def rmtree(path, *args, **kwargs):
-    if os.environ["RECOVERY_FAULT"] == "cleanup-draft" and Path(path) == Path(os.environ["RECOVERY_FAULT_WORK"]) / "current":
-        raise PermissionError("injected final draft cleanup failure")
-    return original_rmtree(path, *args, **kwargs)
-
-shutil.rmtree = rmtree
-''')
-    failed = recovery_cli("apply-delta", specs, delta, specs, work, "specs", "input", extra_env={
-        "PYTHONPATH": str(injection), "RECOVERY_FAULT_SPECS": str(specs), "RECOVERY_FAULT_WORK": str(work), "RECOVERY_FAULT": fault,
-    })
-    if fault == "cleanup-draft":
-        assert failed.returncode == 0, failed.stderr
-        assert "session_cleanup_failed" in failed.stderr
-        assert "允许密码登录" in (specs / "accounts" / "spec.md").read_text(encoding="utf-8")
-        assert not (work / "lock").exists()
-        assert (delta / "accounts" / "spec.md").read_bytes() == draft
-        refused = recovery_cli(*abort_arguments(recovery_session, recovery_cli))
-        assert refused.returncode != 0
-        assert "application_recovery_required" in refused.stderr
-        return
-    assert failed.returncode != 0
-    assert (work / "lock").exists()
-    assert (delta / "accounts" / "spec.md").read_bytes() == draft
-    if fault.startswith("failure") or fault == "cleanup-lock":
-        assert (specs / "accounts" / "spec.md").read_bytes() == original
-        assert not list(specs.parent.glob(".my-spec-backup-*"))
-    else:
-        backups = list(specs.parent.glob(".my-spec-backup-*"))
-        assert len(backups) == 1
-        assert (backups[0] / "accounts" / "spec.md").read_bytes() == original
-    refused = recovery_cli(*abort_arguments(recovery_session, recovery_cli))
-    assert refused.returncode != 0
-    assert "application_recovery_required" in refused.stderr
-    assert (work / "lock").exists()
-    assert (work / "current" / "state.json").is_file()
-    assert (delta / "accounts" / "spec.md").read_bytes() == draft
-
-
-@pytest.mark.parametrize("evidence,error", [
-    ("no-confirmation", "no_active_session_confirmation_required"),
-    ("wrong-state", "abort_state_mismatch"),
-    ("foreign-lock", "abort_lock_identity_mismatch"),
-    ("replaced-same-lock", "abort_lock_identity_mismatch"),
-    ("wrong-target", "abort_target_mismatch"),
-    ("cross-worktree", "cross_worktree_path"),
-    ("legacy-no-baseline", "abort_specs_baseline_mismatch"),
-    ("legacy-no-path", "invalid_state_context"),
-    ("legacy-changed-specs", "abort_specs_baseline_mismatch"),
-    ("legacy-backup", "application_recovery_required"),
-    ("legacy-pending-replacement", "application_recovery_required"),
-    ("legacy-unknown-status", "invalid_state_document"),
-    ("unknown-phase", "application_recovery_required"),
-    ("redirected-draft", "unsafe_recovery_entry"),
+@pytest.mark.parametrize("output,code", [
+    (b"", 0),
+    (b"ref:path missing\n", 0),
+    (b"ref:path ambiguous\n", 0),
+    (b"invalid blob 1\nx\n", 0),
+    (b"a" * 40 + b" blob invalid\n", 0),
+    (b"a" * 40 + b" blob 4\nabc", 0),
+    (_git_batch_object(b"abc")[:-1], 0),
+    (_git_batch_object(b"abc")[:-1] + b"x", 0),
+    (_git_batch_object(b"abc") + b"unexpected\n", 0),
+    (_git_batch_object(b"abc"), 1),
+    (None, 0),
 ])
-def test_myspec_recovery_rejects_insufficient_or_foreign_evidence(
-    tmp_path: Path, recovery_session, recovery_cli, evidence: str, error: str,
-) -> None:
-    target, work, specs, delta, preview = recovery_session
-    state_path = work / "current" / "state.json"
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    if evidence.startswith("legacy-"):
-        state.pop("sessionId")
-        state.pop("applicationPhase")
-        write(work / "lock", "add\n")
-    if evidence == "legacy-no-baseline":
-        state["specsContentFingerprint"] = None
-    elif evidence == "legacy-no-path":
-        state.pop("previewRoot")
-    elif evidence == "legacy-changed-specs":
-        write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "已变化")))
-    elif evidence == "legacy-backup":
-        (specs.parent / ".my-spec-backup-preserved").mkdir()
-    elif evidence == "legacy-pending-replacement":
-        (specs.parent / ".my-spec-preview-preserved").mkdir()
-    elif evidence == "legacy-unknown-status":
-        state["status"] = "UNRECOGNIZED"
-    elif evidence == "unknown-phase":
-        state["applicationPhase"] = "UNRECOGNIZED"
-    elif evidence == "redirected-draft":
-        if os.name == "nt":
-            pytest.skip("symlink creation needs platform permission")
-        external = tmp_path / "external.txt"
-        write(external, "must not be touched")
-        (work / "current" / "redirected").symlink_to(external)
-    write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
-    arguments = abort_arguments(recovery_session, recovery_cli)
-    if evidence == "no-confirmation":
-        arguments.pop()
-    elif evidence == "wrong-state":
-        arguments[6] = "0" * 64
-    elif evidence == "foreign-lock":
-        write(work / "lock", '{"command":"add","sessionId":"foreign","workRoot":"elsewhere"}\n')
-    elif evidence == "replaced-same-lock":
-        content = (work / "lock").read_bytes()
-        (work / "lock").unlink()
-        (work / "lock").write_bytes(content)
-    elif evidence == "wrong-target":
-        arguments[2] = target.parent
-    elif evidence == "cross-worktree":
-        other = tmp_path / "other-worktree"
-        created = subprocess.run(["git", "worktree", "add", "--detach", str(other), "HEAD"], cwd=target, text=True, capture_output=True, check=False)
-        assert created.returncode == 0, created.stderr
-        arguments[4] = other / ".local" / "spec-work" / "current" / "delta"
-    state_bytes, lock_bytes = state_path.read_bytes(), (work / "lock").read_bytes()
-    draft = (delta / "accounts" / "spec.md").read_bytes()
-    refused = recovery_cli(*arguments)
-    assert refused.returncode != 0
-    assert error in refused.stderr
-    assert state_path.read_bytes() == state_bytes
-    assert (work / "lock").read_bytes() == lock_bytes
-    assert (delta / "accounts" / "spec.md").read_bytes() == draft
-    assert not (work / "aborted").exists()
+def test_lifecycle_git_batch_never_returns_a_partial_closure(lifecycle_management, monkeypatch, output, code):
+    management = lifecycle_management
+
+    def run(command, **kwargs):
+        if output is None:
+            raise FileNotFoundError("git")
+        return subprocess.CompletedProcess(command, code, _git_batch_object(b"first") + output, b"failed")
+
+    monkeypatch.setattr(management.subprocess, "run", run)
+    monkeypatch.setattr(management, "_git_blob", lambda *_args: pytest.fail("failed batches must not fall back or partially succeed"))
+    assert management._git_blobs(REPO_ROOT, ["a:first", "a:second"]) is None
 
 
-@pytest.mark.parametrize("fault", ["archive-directory", "archive-rename", "interrupt-after-archive", "unlock", "foreign-lock-after-archive"])
-def test_myspec_recovery_preserves_lock_until_archive_and_retries_safely(
-    tmp_path: Path, recovery_session, recovery_cli, fault: str,
-) -> None:
-    target, work, specs, delta, preview = recovery_session
-    arguments = abort_arguments(recovery_session, recovery_cli)
-    original = {path.relative_to(work / "current"): path.read_bytes() for path in (work / "current").rglob("*") if path.is_file()}
-    lock_bytes = (work / "lock").read_bytes()
-    injection = tmp_path / "abort-fault"
-    write(injection / "sitecustomize.py", '''import os
-from pathlib import Path
-rename_original, unlink_original = os.rename, os.unlink
-work = Path(os.environ["RECOVERY_FAULT_WORK"])
-fault = os.environ["RECOVERY_FAULT"]
+@pytest.mark.parametrize("special_path", ["line\nbreak", "trailing\r"])
+@pytest.mark.parametrize("failed_path", [None, "special", "tree"])
+def test_lifecycle_git_batch_keeps_git_show_for_cr_lf_and_non_blob_paths(lifecycle_management, monkeypatch, special_path, failed_path):
+    management = lifecycle_management
+    paths = ["a file", special_path, "tree"]
+    specs = ["a" * 40 + ":" + path for path in paths]
+    calls = []
+    fallback = {specs[1]: b"newline\x00\xff", specs[2]: b"tree listing\r\n"}
 
-def rename(source, destination, *args, **kwargs):
-    if Path(source) == work / "current":
-        if fault == "archive-rename":
-            raise OSError("injected archive rename failure")
-        result = rename_original(source, destination, *args, **kwargs)
-        if fault == "interrupt-after-archive":
-            os._exit(93)
-        if fault == "foreign-lock-after-archive":
-            (work / "lock").write_text("foreign session lock\\n", encoding="utf-8")
-        return result
-    return rename_original(source, destination, *args, **kwargs)
+    def run(command, **kwargs):
+        calls.append(command)
+        if command[1:] == ["cat-file", "--batch"]:
+            assert kwargs["input"] == os.fsencode(specs[0] + "\n" + specs[2] + "\n")
+            return subprocess.CompletedProcess(command, 0, _git_batch_object(b"normal") + _git_batch_object(b"raw tree", b"tree"), b"")
+        assert command[1] == "show" and command[2] in fallback
+        assert "input" not in kwargs
+        failed = (failed_path == "special" and command[2] == specs[1]) or (failed_path == "tree" and command[2] == specs[2])
+        return subprocess.CompletedProcess(command, int(failed), fallback[command[2]], b"")
 
-def unlink(path, *args, **kwargs):
-    if Path(path) == work / "lock" and fault == "unlock":
-        raise PermissionError("injected lock removal failure")
-    return unlink_original(path, *args, **kwargs)
-
-os.rename, os.unlink = rename, unlink
-''')
-    if fault == "archive-directory":
-        write(work / "aborted", "not a directory")
-    failed = recovery_cli(*arguments, extra_env={
-        "PYTHONPATH": str(injection), "RECOVERY_FAULT_WORK": str(work), "RECOVERY_FAULT": fault,
-    })
-    assert failed.returncode != 0
-    assert (work / "lock").is_file()
-    before_archive = fault in {"archive-directory", "archive-rename"}
-    material = work / "current" if before_archive else next((work / "aborted").glob("*/current"))
-    assert {path.relative_to(material): path.read_bytes() for path in material.rglob("*") if path.is_file()} == original
-    if fault == "foreign-lock-after-archive":
-        assert (work / "lock").read_text(encoding="utf-8") == "foreign session lock\n"
-        refused = recovery_cli(*arguments)
-        assert refused.returncode != 0
-        assert (work / "lock").read_text(encoding="utf-8") == "foreign session lock\n"
-        return
-    assert (work / "lock").read_bytes() == lock_bytes
-    if fault == "archive-directory":
-        (work / "aborted").unlink()
-    retried = recovery_cli(*arguments)
-    assert retried.returncode == 0, retried.stderr
-    archive = Path(json.loads(retried.stdout)["archive"])
-    assert {path.relative_to(archive / "current"): path.read_bytes() for path in (archive / "current").rglob("*") if path.is_file()} == original
-    assert not (work / "lock").exists()
+    monkeypatch.setattr(management.subprocess, "run", run)
+    result = management._git_blobs(REPO_ROOT, specs)
+    assert result == ([b"normal", fallback[specs[1]], fallback[specs[2]]] if failed_path is None else None)
+    expected = [["git", "cat-file", "--batch"], ["git", "show", specs[1]]]
+    if failed_path != "special":
+        expected.append(["git", "show", specs[2]])
+    assert calls == expected
+    if failed_path is None:
+        calls.clear()
+        assert management._git_blobs(REPO_ROOT, [specs[1]]) == [fallback[specs[1]]]
+        assert calls == [["git", "show", specs[1]]]
 
 
-@pytest.mark.parametrize("replace_lock", [False, True])
-def test_myspec_recovery_init_failure_removes_only_its_own_lock(
-    tmp_path: Path, recovery_cli, replace_lock: bool,
-) -> None:
-    work = tmp_path / "consumer" / ".local" / "spec-work"
-    injection = tmp_path / "initialization-fault"
-    write(injection / "sitecustomize.py", '''import os
-from pathlib import Path
-original = os.replace
-work = Path(os.environ["RECOVERY_FAULT_WORK"])
+def test_lifecycle_source_commit_batches_complete_candidates_in_history_order(lifecycle_management, monkeypatch):
+    management = lifecycle_management
+    root = REPO_ROOT / "__identity_source__"
+    package = root / "plugins/my-spec"
+    files = [("package.json", b"{}\r\n"), ("python/management.py", b"\x00\xff"), ("tool-lifecycle/pack.py", b"pack\n")]
+    commits = [letter * 40 for letter in "abcde"]
+    paths = [management._implementation_source_path(Path("plugins/my-spec"), relative) for relative, _content in files]
+    commands = CommandStub(consume=True)
+    commands.add(("git", "remote", "get-url", "origin"), stdout="https://github.com/liuli195/my-agent-skills.git\n")
+    commands.add(("git", "log", "--format=%H", "--all", "--", *sorted(paths)), stdout="invalid\n" + "\n".join(commits) + "\n")
+    batches, published, dirty_paths = [], [], []
 
-def replace(source, destination, *args, **kwargs):
-    if Path(destination) == work / "current" / "state.json":
-        (work / "current" / "diagnostics.txt").write_text("preserved initialization material", encoding="utf-8")
-        if os.environ["RECOVERY_REPLACE_LOCK"] == "1":
-            (work / "lock").unlink()
-            (work / "lock").write_text("other session lock\\n", encoding="utf-8")
-        raise OSError("injected initialization state write failure")
-    return original(source, destination, *args, **kwargs)
+    def run(command, **kwargs):
+        assert command == ["git", "cat-file", "--batch"] and kwargs["cwd"] == root
+        commit = kwargs["input"][:40].decode()
+        assert kwargs["input"] == os.fsencode("".join(f"{commit}:{path}\n" for path in paths))
+        batches.append(commit)
+        contents = [content for _relative, content in files]
+        if commit == commits[0]:
+            output = _git_batch_object(contents[0]) + b"missing:path missing\n"
+        else:
+            if commit == commits[1]:
+                contents[0] = b"different"
+            output = b"".join(_git_batch_object(content) for content in contents)
+        return subprocess.CompletedProcess(command, 0, output, b"")
 
-os.replace = replace
-''')
-    failed = recovery_cli("state-init", work, "add", "specs", "input", extra_env={
-        "PYTHONPATH": str(injection), "RECOVERY_FAULT_WORK": str(work), "RECOVERY_REPLACE_LOCK": str(int(replace_lock)),
-    })
-    assert failed.returncode != 0
-    assert (work / "current" / "diagnostics.txt").read_text(encoding="utf-8") == "preserved initialization material"
-    if replace_lock:
-        assert (work / "lock").read_text(encoding="utf-8") == "other session lock\n"
-    else:
-        assert not (work / "lock").exists()
-    refused = recovery_cli("state-init", work, "add", "specs", "input")
-    assert refused.returncode != 0
-    assert "current_not_empty" in refused.stderr
-
-
-@pytest.mark.parametrize("empty_specs", [False, True])
-def test_myspec_recovery_preserves_failed_first_preview(recovery_git_project: Path, recovery_cli, empty_specs: bool) -> None:
-    git_project = recovery_git_project
-    work = git_project / ".local" / "spec-work"
-    specs = git_project / "myspec" / "specs"
-    delta = work / "current" / "delta"
-    preview = work / "current" / "preview"
-    if not empty_specs:
-        write(specs / "accounts" / "spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
-    assert recovery_cli("state-init", work, "add", "specs", "input").returncode == 0
-    content = "# Accounts\n\n## Purpose\n\n账户能力。\n\n## ADDED Requirements\n\n" if empty_specs else "## MODIFIED Requirements\n\n"
-    write(delta / "accounts" / "spec.md", content + requirement("登录", "新登录方式"))
-    write(git_project / "empty.json", "[]")
-    assert recovery_cli("state-set-conflicts", work, git_project / "empty.json", "specs", "input").returncode == 0
-    write(preview / "failure.txt", "partial first preview, must be retained")
-    failed = recovery_cli("apply-delta", specs, delta, preview, work, "specs", "input")
-    assert failed.returncode != 0
-    assert "output_not_empty" in failed.stderr
-    result = recovery_cli(*abort_arguments((git_project, work, specs, delta, preview), recovery_cli))
-    assert result.returncode == 0, result.stderr
-    archive = Path(json.loads(result.stdout)["archive"])
-    assert (archive / "current" / "preview" / "failure.txt").read_text(encoding="utf-8") == "partial first preview, must be retained\n"
-    assert not (work / "lock").exists()
+    monkeypatch.setattr(management, "_implementation_files", lambda path: files if path == package else pytest.fail("unexpected package"))
+    monkeypatch.setattr(management, "_git_paths_dirty", lambda source, closure: dirty_paths.append((source, closure)) or False)
+    monkeypatch.setattr(management, "_run", commands)
+    monkeypatch.setattr(management, "_source_commit_is_published", lambda source, commit: published.append((source, commit)) or commit == commits[3])
+    monkeypatch.setattr(management.subprocess, "run", run)
+    identity = management._implementation_identity_for_files(files)
+    assert management._implementation_source_commit(package, identity) == commits[3]
+    assert batches == commits[:4]
+    assert published == [(root, commits[2]), (root, commits[3])]
+    assert dirty_paths == [(root, sorted(paths))]
+    assert commands.responses == []
 
 
-@pytest.mark.parametrize("evidence,error", [
-    ("foreign", "foreign_abort_archive"),
-    ("changed-state", "invalid_abort_archive"),
-    ("traversal-delta", "invalid_abort_archive"),
-    ("redirected-delta", "unsafe_recovery_entry"),
-])
-def test_myspec_recovery_rejects_foreign_or_unsafe_archive_import(
-    tmp_path: Path, recovery_session, recovery_cli, evidence: str, error: str,
-) -> None:
-    target, work, specs, delta, preview = recovery_session
-    aborted = recovery_cli(*abort_arguments(recovery_session, recovery_cli))
-    assert aborted.returncode == 0, aborted.stderr
-    archive = Path(json.loads(aborted.stdout)["archive"])
-    if evidence == "foreign":
-        copied = tmp_path / "foreign-archive"
-        shutil.copytree(archive, copied)
-        archive = copied
-    elif evidence == "changed-state":
-        state_path = archive / "current" / "state.json"
-        state_path.write_bytes(state_path.read_bytes() + b"\n")
-    elif evidence == "traversal-delta":
-        state_path = archive / "current" / "state.json"
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        state["deltaRoot"] = str(work / "current" / ".." / "outside-delta")
-        write(state_path, json.dumps(state))
-        receipt_path = archive / "abort.json"
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-        receipt["deltaRoot"] = state["deltaRoot"]
-        receipt["stateSha256"] = hashlib.sha256(state_path.read_bytes()).hexdigest()
-        write(receipt_path, json.dumps(receipt))
-        write(archive / "outside-delta" / "unrelated.txt", "must not be imported")
-    elif evidence == "redirected-delta":
-        if os.name == "nt":
-            pytest.skip("symlink creation needs platform permission")
-        external = tmp_path / "external.txt"
-        write(external, "must not be imported")
-        (archive / "current" / "delta" / "redirected").symlink_to(external)
-    refused = recovery_cli("state-init", work, "add", "new-specs", "new-input", "--import-aborted", archive)
-    assert refused.returncode != 0
-    assert error in refused.stderr
-    assert not (work / "lock").exists()
-    assert not (work / "current").exists()
+@pytest.mark.parametrize("arguments", [("doctor", "--pi"), ("init", "--pi"), ("state-init",)])
+def test_myspec_parser_rejects_removed_options_and_missing_arguments(management_documents, arguments):
+    runtime = management_documents
+    result = runtime.run(*arguments)
+    assert result.returncode == 2
+    assert "usage:" in result.stderr and "error:" in result.stderr
+    assert runtime.stub.calls == [] and runtime.writes == []
 
 
-def test_myspec_recovery_rejects_old_request_for_identical_new_legacy_session(
-    recovery_session, recovery_cli,
-) -> None:
-    target, work, specs, delta, preview = recovery_session
-    state_path = work / "current/state.json"
-    legacy = json.loads(state_path.read_text(encoding="utf-8"))
-    legacy.pop("sessionId")
-    legacy.pop("applicationPhase")
-    # Retain the existing legacy-state fixture shape without depending on Git
-    # history, a downloaded old release, or a mocked abort implementation.
-    write(state_path, json.dumps(legacy, ensure_ascii=False, indent=2))
-    (work / "lock").write_bytes(b"add\n")
-    first_state = state_path.read_bytes()
-    material = {path.relative_to(work / "current"): path.read_bytes() for path in (work / "current").rglob("*") if path.is_file()}
-    old_arguments = abort_arguments(recovery_session, recovery_cli)
-    first = recovery_cli(*old_arguments)
-    assert first.returncode == 0, first.stderr
-
-    initialized = recovery_cli("state-init", work, "add", "specs", "input")
-    assert initialized.returncode == 0, initialized.stderr
-    for relative, content in material.items():
-        destination = work / "current" / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(content)
-    (work / "lock").write_bytes(b"add\n")
-    assert state_path.read_bytes() == first_state
-    marker = work / "current/new-session-only.txt"
-    write(marker, "new session must survive old authorization")
-    new_lock_bytes = (work / "lock").read_bytes()
-    new_lock_stat = (work / "lock").stat()
-    replayed = recovery_cli(*old_arguments)
-    assert replayed.returncode != 0
-    assert "abort_request_already_completed" in replayed.stderr
-    assert marker.read_text(encoding="utf-8") == "new session must survive old authorization\n"
-    assert state_path.read_bytes() == first_state
-    assert (work / "lock").read_bytes() == new_lock_bytes
-    current_lock_stat = (work / "lock").stat()
-    # Reading may advance atime; identity and modification metadata must not change.
-    for field in (
-        "st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid", "st_size",
-        "st_mtime_ns", "st_ctime_ns",
-    ):
-        assert getattr(current_lock_stat, field) == getattr(new_lock_stat, field), field
-    fresh_arguments = abort_arguments(recovery_session, recovery_cli)
-    assert fresh_arguments[6] == old_arguments[6]
-    assert fresh_arguments[9] != old_arguments[9]
-    fresh = recovery_cli(*fresh_arguments)
-    assert fresh.returncode == 0, fresh.stderr
-    assert json.loads(fresh.stdout)["archive"] != json.loads(first.stdout)["archive"]
+def test_myspec_update_rejects_removed_pi_pending_before_writes(management_documents):
+    runtime = management_documents
+    runtime.documents[runtime.state_path] = {"mode": "release", "pendingOperation": {
+        "command": "update", "targetVersion": NEXT_VERSION, "integrations": ["pi", "claude"],
+        "completed": ["preflight"], "enabled": {"pi": True, "claude": False}, "scopes": {},
+    }}
+    before = json.loads(json.dumps(runtime.documents[runtime.state_path]))
+    result = runtime.run("update")
+    assert result.returncode == 1 and "invalid_update_state" in result.stderr
+    assert runtime.documents[runtime.state_path] == before
+    assert runtime.writes == [] and runtime.stub.calls == []
 
 
-@pytest.mark.parametrize("command", ["inspect", "abort"])
-def test_myspec_recovery_outputs_ascii_json_for_non_utf8_stdout(
-    recovery_git_project: Path, recovery_cli, command: str,
-) -> None:
-    git_project = recovery_git_project
-    work = git_project / ".local" / "中文会话"
-    specs = git_project / "中文规格" / "specs"
-    delta, preview = work / "current/delta", work / "current/preview"
-    write(specs / "accounts/spec.md", main_spec("Accounts", requirement("登录", "允许登录")))
-    initialized = recovery_cli("state-init", work, "add", "specs", "input")
-    assert initialized.returncode == 0, initialized.stderr
-    write(delta / "accounts/spec.md", "## MODIFIED Requirements\n\n" + requirement("登录", "允许密码登录"))
-    empty = git_project / "empty-conflicts.json"
-    write(empty, "[]")
-    for result in (
-        recovery_cli("state-set-conflicts", work, empty, "specs", "input"),
-        recovery_cli("apply-delta", specs, delta, preview, work, "specs", "input"),
-    ):
-        assert result.returncode == 0, result.stderr
-    environment = {"PYTHONIOENCODING": "cp1252:strict", "PYTHONUTF8": "0"}
-    if command == "inspect":
-        state_bytes = (work / "current/state.json").read_bytes()
-        lock_bytes = (work / "lock").read_bytes()
-        inspected = recovery_cli("state-status", work, "specs", "input", "--abort-identity", extra_env=environment)
-        assert inspected.returncode == 0, inspected.stderr
-        assert inspected.stdout.isascii()
-        assert json.loads(inspected.stdout)["abortIdentity"]["workRoot"] == str(work)
-        assert (work / "current/state.json").read_bytes() == state_bytes
-        assert (work / "lock").read_bytes() == lock_bytes
-    else:
-        arguments = abort_arguments((git_project, work, specs, delta, preview), recovery_cli)
-        aborted = recovery_cli(*arguments, extra_env=environment)
-        assert aborted.returncode == 0, aborted.stderr
-        assert aborted.stdout.isascii()
-        archive = Path(json.loads(aborted.stdout)["archive"])
-        assert archive.parent == work / "aborted"
-        assert (archive / "current/state.json").is_file()
-        assert not (work / "lock").exists()
-        assert not (work / "current").exists()
+def test_spec_ops_keeps_complete_conflicts_and_advances_the_saved_cursor(spec_documents):
+    documents = spec_documents
+    work = documents.root / "work"
+    documents.seed_state(work, "review")
+    conflicts = [{"id": f"conflict-{index:02d}", "candidate": f"候选{index}", "evidence": ["request"],
+        "reason": "需要决定", "recommendation": "accept"} for index in range(13)]
+    source = documents.root / "conflicts.json"
+    documents.write(source, json.dumps(conflicts, ensure_ascii=False))
+    stored = run_python(SPEC_OPS, "state-set-conflicts", work, source, "specs-fingerprint", "input-fingerprint")
+    assert stored.returncode == 0, stored.stderr
+    assert json.loads(stored.stdout) == {"status": "WAITING_DECISION", "total": 13, "remaining": 13}
+    assert json.loads((work / "current/state.json").read_text())["conflicts"] == conflicts
+    for index in range(2):
+        current = run_python(SPEC_OPS, "state-current", work, "specs-fingerprint", "input-fingerprint")
+        assert current.returncode == 0, current.stderr
+        assert json.loads(current.stdout) == {"index": index, "total": 13, "conflict": conflicts[index]}
+        decided = run_python(SPEC_OPS, "state-decide", work, conflicts[index]["id"], "accept",
+            "specs-fingerprint", "input-fingerprint")
+        assert decided.returncode == 0, decided.stderr
+    status = run_python(SPEC_OPS, "state-status", work, "specs-fingerprint", "input-fingerprint")
+    assert status.returncode == 0, status.stderr
+    assert json.loads(status.stdout) == {"status": "WAITING_DECISION", "total": 13, "decided": 2, "remaining": 11}

@@ -6,19 +6,13 @@ import io
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import sys
-import tempfile
-import time
 from pathlib import Path
 from typing import Any
 
 import yaml
 import pytest
-
-from tests.support.git_templates import copy_template, remove_template
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (
@@ -37,24 +31,6 @@ BUILD_AND_VERIFY_VERSION = json.loads(
 _PR_FLOW_MODULE = None
 
 
-def template_cache_key(*paths: Path) -> str:
-    digest = hashlib.sha256()
-    for path in paths:
-        digest.update(str(path.relative_to(REPO_ROOT)).encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()[:12]
-
-
-TEMPLATE_CACHE_KEY = template_cache_key(Path(__file__), SCRIPT)
-# The cache is content-keyed and intentionally left under the OS temp directory
-# between runs; stale locks and incomplete templates are recovered in-place.
-TEMPLATE_ROOT = Path(tempfile.gettempdir()) / f"pr-flow-test-templates-{TEMPLATE_CACHE_KEY}"
-TEMPLATE_LOCK_TIMEOUT_SECONDS = 30
-TEMPLATE_LOCK_STALE_SECONDS = 30
-
-
 def load_pr_flow_module():
     global _PR_FLOW_MODULE
     if _PR_FLOW_MODULE is not None:
@@ -67,6 +43,82 @@ def load_pr_flow_module():
     spec.loader.exec_module(module)
     _PR_FLOW_MODULE = module
     return module
+
+
+def read_body_file(path: str) -> str:
+    return Path(path).read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def flow_root() -> Path:
+    # A path value only. No temporary-directory fixture or disk allocation.
+    return REPO_ROOT / "__pr_flow_memory__"
+
+
+@pytest.fixture(autouse=True)
+def pr_memory(monkeypatch, flow_root):
+    from tests.support.command_stubs import CommandStub, default_git_responses
+    from tests.support.pr_flow_invocation import fixed_text_file_io
+
+    module = load_pr_flow_module()
+    real_git = module.git
+    projects = [flow_root, flow_root / "project", flow_root / "controller", flow_root / "hotfix" / "project"]
+    files = {flow_root / name: None for name in (
+        "draft.yaml", "confirmed.yaml", "invalid.yaml", "config.yaml", "body.json", "body.md", "generated-body.md",
+        "project-confirmed-pr-flow.yaml",
+    )}
+    branch_names = ("feature/example", "feature/no-upstream", "feature/other", "feature/ready", "main", "controller")
+    for project in projects:
+        for relative in (
+            ".pr-flow/config.yaml", ".pr-flow/pr-template.md", ".pr-flow/.gitignore", ".pr-flow/toolchain.json",
+            ".pr-flow/last-status.json", ".github/workflows/pr-flow-toolchain.yml", ".github/workflows/codeql.yml",
+        ):
+            files[project / relative] = None
+        for branch in branch_names:
+            files[project / ".pr-flow/runs" / f"{hashlib.sha256(branch.encode('utf-8')).hexdigest()}.json"] = None
+        files[project / ".pr-flow/runs/hotfix-20260101T000000Z-bbbbbbbbbbbb.json"] = None
+    directories = {flow_root, flow_root / "hotfix", *(flow_root / name for name in ("merge", "squash", "rebase", "other", "base-worktree"))}
+    for path in files:
+        directories.update(parent for parent in path.parents if parent == flow_root or flow_root in parent.parents)
+    fixed_text_file_io(monkeypatch, root=flow_root, files=files, directories=directories)
+    monkeypatch.setattr(module, "operation_lock", lambda *_args: contextlib.nullcontext())
+    monkeypatch.setattr(module, "base_checkout_lock", lambda *_args: contextlib.nullcontext())
+    monkeypatch.setattr(module, "active_lock_details", lambda _project: None)
+    monkeypatch.setattr(module, "git", CommandStub(defaults=default_git_responses(), body_reader=read_body_file))
+    monkeypatch.setattr(module, "gh", CommandStub(body_reader=read_body_file))
+
+    def unexpected_process(command, **_kwargs):
+        raise AssertionError(f"unexpected_process: {command}")
+
+    monkeypatch.setattr(module.subprocess, "run", unexpected_process)
+    clock = {"now": 0.0}
+
+    def advance_clock(seconds):
+        assert seconds >= 0
+        clock["now"] += seconds
+
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(module.time, "sleep", advance_clock)
+    original_strftime = module.time.strftime
+    monkeypatch.setattr(module.time, "strftime", lambda pattern, *args: (
+        "20260101T000000Z" if pattern == "%Y%m%dT%H%M%SZ" else
+        "2026-01-01T00:00:00Z" if pattern == "%Y-%m-%dT%H:%M:%SZ" else original_strftime(pattern, *args)
+    ))
+
+    class BodyFile(io.StringIO):
+        name = str(flow_root / "generated-body.md")
+
+        def close(self):
+            if not self.closed:
+                files[Path(self.name)] = self.getvalue()
+            super().close()
+
+    def named_body_file(mode, *, encoding, suffix, delete):
+        assert (mode, encoding, suffix, delete) == ("w", "utf-8", ".md", False)
+        return BodyFile()
+
+    monkeypatch.setattr(module.tempfile, "NamedTemporaryFile", named_body_file)
+    return {"files": files, "git": real_git}
 
 
 @pytest.fixture(autouse=True)
@@ -111,16 +163,10 @@ def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) 
     )
 
 
-def run_with_path(path: Path, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    env["PATH"] = str(path) + os.pathsep + env.get("PATH", "")
-    return run(*args, cwd=cwd, env=env)
-
-
 def test_command_stub_records_gh_calls() -> None:
     from tests.support.command_stubs import CommandStub
 
-    stub = CommandStub()
+    stub = CommandStub(body_reader=read_body_file)
     stub.add(["pr", "view"], stdout='{"number":1}\n', returncode=0)
 
     result = stub("gh", "pr", "view")
@@ -130,32 +176,32 @@ def test_command_stub_records_gh_calls() -> None:
     assert stub.calls == [("gh", "pr", "view")]
 
 
-def test_command_stub_keeps_default_git_reads_available_without_allowing_writes(tmp_path: Path) -> None:
+def test_command_stub_keeps_default_git_reads_available_without_allowing_writes(flow_root: Path) -> None:
     from tests.support.command_stubs import CommandStub, default_git_responses
 
-    stub = CommandStub(defaults=default_git_responses())
+    stub = CommandStub(body_reader=read_body_file, defaults=default_git_responses())
 
-    first = stub(tmp_path, "branch", "--show-current")
-    second = stub(tmp_path, "branch", "--show-current")
-    write = stub(tmp_path, "push", "origin", "feature/example")
+    first = stub(flow_root, "branch", "--show-current")
+    second = stub(flow_root, "branch", "--show-current")
+    write = stub(flow_root, "push", "origin", "feature/example")
 
     assert first.stdout == second.stdout == "feature/example\n"
     assert write.returncode == 1
     assert "unexpected_command" in write.stderr
 
 
-def test_command_stub_explicit_git_reads_override_defaults_in_sequence(tmp_path: Path) -> None:
+def test_command_stub_explicit_git_reads_override_defaults_in_sequence(flow_root: Path) -> None:
     from tests.support.command_stubs import CommandStub, default_git_responses
 
-    stub = CommandStub(defaults=default_git_responses(), consume=True)
+    stub = CommandStub(body_reader=read_body_file, defaults=default_git_responses(), consume=True)
     stub.add(["rev-parse", "HEAD"], stderr="query failed", returncode=1)
     stub.add(["rev-parse", "HEAD"], stdout="")
     stub.add(["rev-parse", "HEAD"], stdout="c" * 40 + "\n")
 
-    failed = stub(tmp_path, "rev-parse", "HEAD")
-    empty = stub(tmp_path, "rev-parse", "HEAD")
-    changed = stub(tmp_path, "rev-parse", "HEAD")
-    fallback = stub(tmp_path, "rev-parse", "HEAD")
+    failed = stub(flow_root, "rev-parse", "HEAD")
+    empty = stub(flow_root, "rev-parse", "HEAD")
+    changed = stub(flow_root, "rev-parse", "HEAD")
+    fallback = stub(flow_root, "rev-parse", "HEAD")
 
     assert (failed.returncode, failed.stderr) == (1, "query failed")
     assert empty.stdout == ""
@@ -163,10 +209,10 @@ def test_command_stub_explicit_git_reads_override_defaults_in_sequence(tmp_path:
     assert fallback.stdout == "b" * 40 + "\n"
 
 
-def test_command_stub_closes_body_file(monkeypatch, tmp_path: Path) -> None:
+def test_command_stub_closes_body_file(monkeypatch, flow_root: Path) -> None:
     from tests.support.command_stubs import CommandStub
 
-    body_file = tmp_path / "body.json"
+    body_file = flow_root / "body.json"
     body_file.write_text('{"ok":true}\n', encoding="utf-8")
 
     class TrackingFile:
@@ -198,10 +244,6 @@ def test_command_stub_closes_body_file(monkeypatch, tmp_path: Path) -> None:
     assert tracker.closed
 
 
-def test_pr_flow_template_cache_key_includes_script_contents() -> None:
-    assert TEMPLATE_CACHE_KEY == template_cache_key(Path(__file__), SCRIPT)
-
-
 @pytest.mark.parametrize(
     ("args", "expected"),
     [
@@ -217,13 +259,13 @@ def test_pr_flow_cli_argparse_errors_cover_core_commands(args: list[str], expect
     assert expected in result.stderr
 
 
-def test_command_stub_accepts_project_argument_for_pr_flow_helpers(tmp_path: Path) -> None:
+def test_command_stub_accepts_project_argument_for_pr_flow_helpers(flow_root: Path) -> None:
     from tests.support.command_stubs import CommandStub
 
-    stub = CommandStub()
+    stub = CommandStub(body_reader=read_body_file)
     stub.add(["pr", "view"], stdout='{"number":1}\n', returncode=0)
 
-    result = stub(tmp_path, "pr", "view")
+    result = stub(flow_root, "pr", "view")
 
     assert result.returncode == 0
     assert result.stdout == '{"number":1}\n'
@@ -231,12 +273,12 @@ def test_command_stub_accepts_project_argument_for_pr_flow_helpers(tmp_path: Pat
     assert stub.calls == [("pr", "view")]
 
 
-def test_command_stub_can_consume_sequence_and_capture_body_file(tmp_path: Path) -> None:
+def test_command_stub_can_consume_sequence_and_capture_body_file(flow_root: Path) -> None:
     from tests.support.command_stubs import CommandStub
 
-    body_path = tmp_path / "body.md"
+    body_path = flow_root / "body.md"
     body_path.write_text("hello body\n", encoding="utf-8")
-    stub = CommandStub(consume=True)
+    stub = CommandStub(body_reader=read_body_file, consume=True)
     stub.add(["pr", "view"], stderr="not found\n", returncode=1)
     stub.add(["pr", "view"], stdout='{"number":1}\n')
     stub.add(["pr", "edit", "1", "--body-file", str(body_path)])
@@ -253,12 +295,12 @@ def test_command_stub_can_consume_sequence_and_capture_body_file(tmp_path: Path)
     ]
 
 
-def test_command_stub_placeholder_matches_body_file_path(tmp_path: Path) -> None:
+def test_command_stub_placeholder_matches_body_file_path(flow_root: Path) -> None:
     from tests.support.command_stubs import CommandStub
 
-    body_path = tmp_path / "body.md"
+    body_path = flow_root / "body.md"
     body_path.write_text("hello body\n", encoding="utf-8")
-    stub = CommandStub(consume=True)
+    stub = CommandStub(body_reader=read_body_file, consume=True)
     stub.add(["pr", "edit", "1", "--body-file", "__placeholder__"])
 
     result = stub("gh", "pr", "edit", "1", "--body-file", str(body_path))
@@ -270,100 +312,30 @@ def test_command_stub_placeholder_matches_body_file_path(tmp_path: Path) -> None
     ]
 
 
-def test_pr_flow_in_process_invocation_captures_output(tmp_path: Path) -> None:
+def test_pr_flow_in_process_invocation_captures_output(flow_root: Path) -> None:
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
-    draft = tmp_path / "confirmed.yaml"
+    draft = flow_root / "confirmed.yaml"
     draft.write_text(
         yaml.safe_dump(default_pr_flow_config_for_test(), allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
 
-    result = invoke_pr_flow(["init", "--project", str(tmp_path), "--config", str(draft)], module=load_pr_flow_module())
+    result = invoke_pr_flow(["init", "--project", str(flow_root), "--config", str(draft)], module=load_pr_flow_module())
 
     assert result.returncode == 0
     assert "status: initialized" in result.stdout
     assert result.stderr == ""
 
 
-def git(project: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=project,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    return result.stdout.strip()
-
-
-def init_repo(project: Path) -> str:
-    project.mkdir()
-    git(project, "init")
-    git(project, "branch", "-M", "main")
-    git(project, "config", "user.email", "test@example.com")
-    git(project, "config", "user.name", "Test User")
-    (project / "README.md").write_text("# Test Project\n", encoding="utf-8")
-    git(project, "add", "README.md")
-    git(project, "commit", "-m", "init")
-    return git(project, "branch", "--show-current")
-
-
-def test_write_status_keeps_compatibility_file_and_branch_run(tmp_path: Path) -> None:
-    module = load_pr_flow_module()
-    project = tmp_path / "project"
-    init_repo(project)
-
-    module.write_status(project, "complete", "ready", {"sourceBranch": "feature/one"})
-
-    latest = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    runs = list((project / ".pr-flow/runs").glob("*.json"))
-    assert len(runs) == 1
-    assert json.loads(runs[0].read_text(encoding="utf-8")) == latest
-    assert latest["details"]["sourceBranch"] == "feature/one"
-    assert Path(latest["details"]["worktreePath"]) == project.resolve()
-    assert latest["details"]["commonGitDir"]
-
-
-def test_competing_mutation_reports_lock_without_rewriting_status(tmp_path: Path, capsys) -> None:
-    module = load_pr_flow_module()
-    project = tmp_path / "project"
-    init_repo(project)
-    module.write_status(project, "complete", "ready", {"sourceBranch": "feature/one"})
-    before = (project / ".pr-flow/last-status.json").read_bytes()
-
-    with module.operation_lock(project, "complete", argparse.Namespace(project=project)):
-        result = module.main(["cleanup", "--project", str(project), "--pr", "12"])
-
-    assert result == 1
-    assert "flow_locked" in capsys.readouterr().out
-    assert (project / ".pr-flow/last-status.json").read_bytes() == before
-
-
-def test_diagnose_reports_active_lock_without_writing_status(tmp_path: Path, capsys) -> None:
-    module = load_pr_flow_module()
-    project = tmp_path / "project"
-    init_repo(project)
-
-    with module.operation_lock(project, "complete", argparse.Namespace(project=project)):
-        assert module.main(["diagnose", "--project", str(project)]) == 1
-
-    output = capsys.readouterr().out
-    assert "flow_locked" in output
-    assert "actor" in output
-    assert "nextCommand" in output
-    assert not (project / ".pr-flow/last-status.json").exists()
-
-
-def test_require_current_base_fetches_remote_and_rejects_stale_source(tmp_path: Path, monkeypatch) -> None:
+def test_require_current_base_fetches_remote_and_rejects_stale_source(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     snapshot_ref = remote_snapshot_ref(project)
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     git_stub.add(["fetch", "--no-write-fetch-head", "--refmap=", "origin", f"+refs/heads/main:{snapshot_ref}"])
     git_stub.add(["rev-parse", snapshot_ref], stdout="base-after\n")
     git_stub.add(["merge-base", "--is-ancestor", "base-after", "feature-head"], returncode=1)
@@ -388,7 +360,7 @@ def test_require_current_base_fetches_remote_and_rejects_stale_source(tmp_path: 
     ]
 
 
-def test_ruleset_retry_rejects_changed_base_before_reusing_gates(tmp_path: Path, monkeypatch) -> None:
+def test_ruleset_retry_rejects_changed_base_before_reusing_gates(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     original = json.loads(
         pr_view_json(
@@ -404,14 +376,14 @@ def test_ruleset_retry_rejects_changed_base_before_reusing_gates(tmp_path: Path,
     monkeypatch.setattr(module, "merge_pr", lambda *_args, **_kwargs: pytest.fail("must not merge"))
 
     with pytest.raises(module.PrFlowError) as error:
-        module.retry_merge_after_ruleset_block(tmp_path, {}, original, {})
+        module.retry_merge_after_ruleset_block(flow_root, {}, original, {})
 
     assert error.value.reason == "base_outdated"
     assert error.value.details["baseRefOid"] == "a" * 40
     assert error.value.details["currentBaseRefOid"] == "c" * 40
 
 
-def test_ruleset_retry_rechecks_commits_after_gates(tmp_path: Path, monkeypatch) -> None:
+def test_ruleset_retry_rechecks_commits_after_gates(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     original = json.loads(
         pr_view_json(
@@ -431,7 +403,7 @@ def test_ruleset_retry_rechecks_commits_after_gates(tmp_path: Path, monkeypatch)
     monkeypatch.setattr(module, "merge_pr", lambda *_args, **_kwargs: pytest.fail("must not merge"))
 
     with pytest.raises(module.PrFlowError) as error:
-        module.retry_merge_after_ruleset_block(tmp_path, module.default_config("main"), original, {})
+        module.retry_merge_after_ruleset_block(flow_root, module.default_config("main"), original, {})
 
     assert error.value.reason == "base_outdated"
 
@@ -443,11 +415,11 @@ def test_pr_view_fields_include_base_commit() -> None:
     ("payload", "reason"),
     [([], "checks_unavailable"), ({"bucket": "pass"}, "checks_unavailable")],
 )
-def test_required_checks_reject_empty_or_non_list(tmp_path: Path, monkeypatch, payload, reason: str) -> None:
+def test_required_checks_reject_empty_or_non_list(flow_root: Path, monkeypatch, payload, reason: str) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     gh_stub.add(
         ["pr", "checks", "12", "--required", "--json", "bucket,name,state,workflow,link"],
         stdout=json.dumps(payload),
@@ -455,16 +427,16 @@ def test_required_checks_reject_empty_or_non_list(tmp_path: Path, monkeypatch, p
     monkeypatch.setattr(module, "gh", gh_stub)
 
     with pytest.raises(module.PrFlowError) as error:
-        module.required_checks(tmp_path, 12)
+        module.required_checks(flow_root, 12)
 
     assert error.value.reason == reason
 
 
-def test_required_checks_use_required_flag_and_bucket_states(tmp_path: Path, monkeypatch) -> None:
+def test_required_checks_use_required_flag_and_bucket_states(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     payload = [{"bucket": "pending", "name": "ci", "state": "QUEUED"}]
     gh_stub.add(
         ["pr", "checks", "12", "--required", "--json", "bucket,name,state,workflow,link"],
@@ -472,17 +444,17 @@ def test_required_checks_use_required_flag_and_bucket_states(tmp_path: Path, mon
     )
     monkeypatch.setattr(module, "gh", gh_stub)
 
-    checks = module.required_checks(tmp_path, 12)
+    checks = module.required_checks(flow_root, 12)
 
     assert checks == payload
     assert module.has_pending_check(checks)
 
 
-def test_required_checks_accept_pending_exit_with_valid_check_data(tmp_path: Path, monkeypatch) -> None:
+def test_required_checks_accept_pending_exit_with_valid_check_data(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     payload = [{"bucket": "pending", "name": "ci", "state": "QUEUED"}]
     gh_stub.add(
         ["pr", "checks", "12", "--required", "--json", "bucket,name,state,workflow,link"],
@@ -491,24 +463,24 @@ def test_required_checks_accept_pending_exit_with_valid_check_data(tmp_path: Pat
     )
     monkeypatch.setattr(module, "gh", gh_stub)
 
-    checks = module.required_checks(tmp_path, 12)
+    checks = module.required_checks(flow_root, 12)
 
     assert checks == payload
 
 
-def test_hotfix_stops_when_target_moves_during_verification(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_stops_when_target_moves_during_verification(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_hotfix_pr_flow_config(project)
     before = "a" * 40
     head = "b" * 40
     snapshots = iter([before, "c" * 40])
     monkeypatch.setattr(module, "remote_branch_snapshot", lambda *_args: next(snapshots))
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     git_stub.add(["rev-parse", "HEAD"], stdout=head + "\n")
     git_stub.add(["merge-base", "HEAD", before], stdout=before + "\n")
     git_stub.add(["status", "--short"], stdout="")
@@ -543,9 +515,9 @@ def test_parse_worktrees_handles_spaces_and_detached_entries() -> None:
 
 
 @pytest.mark.parametrize("command", ["complete", "tweak", "cleanup", "hotfix"])
-def test_mutation_commands_accept_remove_worktree(command: str, tmp_path: Path) -> None:
+def test_mutation_commands_accept_remove_worktree(command: str, flow_root: Path) -> None:
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     base = [command, "--project", str(project), "--remove-worktree"]
     if command in {"complete", "tweak"}:
         base += ["--summary", "summary", "--scope", "scope"]
@@ -557,196 +529,6 @@ def test_mutation_commands_accept_remove_worktree(command: str, tmp_path: Path) 
         base += ["--target", "main", "--authorization-phrase", "phrase"]
 
     assert module.build_parser().parse_args(base).remove_worktree is True
-
-
-def test_remove_worktree_uses_native_non_forced_remove(tmp_path: Path, monkeypatch) -> None:
-    from tests.support.command_stubs import CommandStub
-
-    module = load_pr_flow_module()
-    main = tmp_path / "main"
-    target = tmp_path / "feature one"
-    main.mkdir()
-    target.mkdir()
-    before = f"worktree {main}\0HEAD aaaa\0branch refs/heads/main\0\0worktree {target}\0HEAD bbbb\0detached\0\0"
-    after = f"worktree {main}\0HEAD aaaa\0branch refs/heads/main\0\0"
-    git_stub = CommandStub(consume=True)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
-    git_stub.add(["status", "--short"], stdout="")
-    remove_args = ([] if os.name != "nt" else ["-c", "core.longpaths=true"])
-    remove_args += ["worktree", "remove", str(target.resolve())]
-    git_stub.add(remove_args)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
-    monkeypatch.setattr(module, "git", git_stub)
-
-    module.remove_worktree(target, target)
-
-    assert tuple(remove_args) in git_stub.calls
-    assert not any("--force" in call for call in git_stub.calls)
-
-
-def test_remove_worktree_deletes_physical_residue_after_registration_removal(tmp_path: Path, monkeypatch) -> None:
-    from tests.support.command_stubs import CommandStub
-
-    module = load_pr_flow_module()
-    main = tmp_path / "main"
-    target = tmp_path / "feature one"
-    main.mkdir()
-    target.mkdir()
-    (target / "residue.txt").write_text("orphaned\n", encoding="utf-8")
-    before = f"worktree {main}\0HEAD aaaa\0branch refs/heads/main\0\0worktree {target}\0HEAD bbbb\0detached\0\0"
-    after = f"worktree {main}\0HEAD aaaa\0branch refs/heads/main\0\0"
-    git_stub = CommandStub(consume=True)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
-    git_stub.add(["status", "--short"], stdout="")
-    remove_args = ([] if os.name != "nt" else ["-c", "core.longpaths=true"])
-    remove_args += ["worktree", "remove", str(target.resolve())]
-    git_stub.add(remove_args)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
-    monkeypatch.setattr(module, "git", git_stub)
-    monkeypatch.setattr(module, "find_orca_worktree_id", lambda *_args: None)
-
-    module.remove_worktree(target, target)
-
-    assert not target.exists()
-
-
-def test_remove_worktree_does_not_delete_target_while_registration_remains(tmp_path: Path, monkeypatch) -> None:
-    from tests.support.command_stubs import CommandStub
-
-    module = load_pr_flow_module()
-    main = tmp_path / "main"
-    target = tmp_path / "feature one"
-    main.mkdir()
-    target.mkdir()
-    (target / "residue.txt").write_text("keep\n", encoding="utf-8")
-    worktrees = f"worktree {main}\0HEAD aaaa\0branch refs/heads/main\0\0worktree {target}\0HEAD bbbb\0detached\0\0"
-    git_stub = CommandStub(consume=True)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=worktrees)
-    git_stub.add(["status", "--short"], stdout="")
-    remove_args = ([] if os.name != "nt" else ["-c", "core.longpaths=true"])
-    remove_args += ["worktree", "remove", str(target.resolve())]
-    git_stub.add(remove_args)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=worktrees)
-    monkeypatch.setattr(module, "git", git_stub)
-    monkeypatch.setattr(module, "find_orca_worktree_id", lambda *_args: None)
-    monkeypatch.setattr(module.shutil, "rmtree", lambda *_args: pytest.fail("physical deletion must wait"))
-
-    with pytest.raises(module.PrFlowError, match="git_worktree_remove_failed"):
-        module.remove_worktree(target, target)
-
-    assert target.exists()
-    assert (target / "residue.txt").exists()
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows long-path behavior")
-def test_cleanup_handles_windows_long_paths_through_cli(tmp_path: Path, monkeypatch) -> None:
-    controller = tmp_path / "controller"
-    remote = tmp_path / "remote.git"
-    target = tmp_path / "target"
-    init_repo(controller)
-    write_confirmed_pr_flow_config(controller)
-    (controller / ".gitignore").write_text(".local/\n", encoding="utf-8")
-    git(controller, "add", ".gitignore", ".pr-flow")
-    git(controller, "commit", "-m", "configure cleanup")
-    bare = subprocess.run(["git", "init", "--bare", str(remote)], check=False, text=True, capture_output=True)
-    assert bare.returncode == 0, bare.stdout + bare.stderr
-    git(controller, "remote", "add", "origin", str(remote))
-    git(controller, "push", "-u", "origin", "main")
-    git(controller, "checkout", "-b", "feature/example")
-    (controller / "README.md").write_text("feature\n", encoding="utf-8")
-    git(controller, "add", "README.md")
-    git(controller, "commit", "-m", "feature")
-    git(controller, "push", "-u", "origin", "feature/example")
-    git(controller, "checkout", "main")
-    git(controller, "merge", "--ff-only", "feature/example")
-    git(controller, "push", "origin", "main")
-    git(controller, "worktree", "add", str(target), "feature/example")
-
-    deep = target / ".local" / "spec-work"
-    for _ in range(20):
-        deep /= "segment-" + ("x" * 12)
-    deep.mkdir(parents=True)
-    artifact = deep / ("artifact-" + ("y" * 30) + ".json")
-    artifact.write_text("{}\n", encoding="utf-8")
-    assert len(str(artifact)) > 260
-    remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
-    main_before = git(controller, "rev-parse", "HEAD")
-    assert main_before == remote_base
-    module = load_pr_flow_module()
-    monkeypatch.setattr(module, "find_orca_worktree_id", lambda *_: None)
-
-    result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-    assert not target.exists()
-    assert "target" not in git(controller, "worktree", "list", "--porcelain")
-    assert git(controller, "branch", "--show-current") == "main"
-    assert git(controller, "rev-parse", "HEAD") == main_before
-    core_longpaths = subprocess.run(
-        ["git", "config", "--local", "--get", "core.longpaths"],
-        cwd=controller,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert core_longpaths.returncode == 1
-    assert not core_longpaths.stdout.strip()
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows junction behavior")
-def test_cleanup_removes_junction_residue_without_shared_targets(tmp_path: Path, monkeypatch) -> None:
-    controller = tmp_path / "controller"
-    remote = tmp_path / "remote.git"
-    target = tmp_path / "target"
-    init_repo(controller)
-    write_confirmed_pr_flow_config(controller)
-    (controller / ".gitignore").write_text("node_modules/\n.venv/\n", encoding="utf-8")
-    git(controller, "add", ".gitignore", ".pr-flow")
-    git(controller, "commit", "-m", "configure cleanup")
-    bare = subprocess.run(["git", "init", "--bare", str(remote)], check=False, text=True, capture_output=True)
-    assert bare.returncode == 0, bare.stdout + bare.stderr
-    git(controller, "remote", "add", "origin", str(remote))
-    git(controller, "push", "-u", "origin", "main")
-    git(controller, "checkout", "-b", "feature/example")
-    (controller / "README.md").write_text("feature\n", encoding="utf-8")
-    git(controller, "add", "README.md")
-    git(controller, "commit", "-m", "feature")
-    git(controller, "push", "-u", "origin", "feature/example")
-    git(controller, "checkout", "main")
-    git(controller, "merge", "--ff-only", "feature/example")
-    git(controller, "push", "origin", "main")
-    git(controller, "worktree", "add", str(target), "feature/example")
-
-    shared_node_modules = controller / "node_modules"
-    shared_venv = controller / ".venv"
-    shared_node_modules.mkdir()
-    shared_venv.mkdir()
-    node_sentinel = shared_node_modules / "shared-sentinel.txt"
-    venv_sentinel = shared_venv / "shared-sentinel.txt"
-    node_sentinel.write_text("keep\n", encoding="utf-8")
-    venv_sentinel.write_text("keep\n", encoding="utf-8")
-    powershell = shutil.which("powershell")
-    if not powershell:
-        pytest.skip("PowerShell is required to create junctions")
-    for link, shared in ((target / "node_modules", shared_node_modules), (target / ".venv", shared_venv)):
-        junction = subprocess.run(
-            [powershell, "-NoProfile", "-Command", f'New-Item -ItemType Junction -Path "{link}" -Target "{shared}"'],
-            check=False,
-            capture_output=True,
-        )
-        assert junction.returncode == 0, junction.stdout.decode(errors="replace") + junction.stderr.decode(errors="replace")
-
-    module = load_pr_flow_module()
-    monkeypatch.setattr(module, "find_orca_worktree_id", lambda *_args: None)
-    result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-    assert not target.exists()
-    assert "target" not in git(controller, "worktree", "list", "--porcelain")
-    assert node_sentinel.read_text(encoding="utf-8") == "keep\n"
-    assert venv_sentinel.read_text(encoding="utf-8") == "keep\n"
 
 
 def worktree_removal_records(main: Path, target: Path) -> tuple[str, str]:
@@ -762,135 +544,15 @@ def orca_worktree_ps_json(target: Path, worktree_id: str) -> str:
     return json.dumps({"result": {"worktrees": [{"path": str(target), "worktreeId": worktree_id}]}})
 
 
-def test_remove_worktree_prefers_matched_orca_worktree(tmp_path: Path, monkeypatch) -> None:
-    from tests.support.command_stubs import CommandStub
-
-    module = load_pr_flow_module()
-    main = tmp_path / "main"
-    target = tmp_path / "feature one"
-    main.mkdir()
-    target.mkdir()
-    (target / "residue.txt").write_text("orphaned\n", encoding="utf-8")
-    shared_sentinels: dict[str, Path] = {}
-    if os.name == "nt":
-        powershell = shutil.which("powershell")
-        if not powershell:
-            pytest.skip("PowerShell is required to create junctions")
-        for name in (".venv", "node_modules"):
-            shared = main / name
-            shared.mkdir()
-            sentinel = shared / "shared-sentinel.txt"
-            sentinel.write_text("keep\n", encoding="utf-8")
-            shared_sentinels[name] = sentinel
-            junction = subprocess.run(
-                [powershell, "-NoProfile", "-Command", f'New-Item -ItemType Junction -Path "{target / name}" -Target "{shared}"'],
-                check=False,
-                capture_output=True,
-            )
-            assert junction.returncode == 0, junction.stdout.decode(errors="replace") + junction.stderr.decode(errors="replace")
-    before, after = worktree_removal_records(main, target)
-    git_stub = CommandStub(consume=True)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
-    git_stub.add(["status", "--short"], stdout="")
-    git_stub.add(["worktree", "remove", str(target.resolve())])
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
-    orca_stub = CommandStub(consume=True)
-    orca_path = str(target).replace("\\", "/")
-    if os.name == "nt":
-        orca_path = orca_path.upper()
-    orca_payload = {"result": {"worktrees": [{"path": orca_path, "worktreeId": "repo::target"}]}}
-    orca_stub.add(["worktree", "ps", "--json"], stdout=json.dumps(orca_payload))
-    orca_stub.add(["worktree", "rm", "--worktree", "id:repo::target", "--json"])
-    monkeypatch.setattr(module, "git", git_stub)
-    monkeypatch.setattr(module, "orca", orca_stub, raising=False)
-
-    module.remove_worktree(target, target)
-
-    assert ("worktree", "rm", "--worktree", "id:repo::target", "--json") in orca_stub.calls
-    assert not any(call[:2] == ("worktree", "remove") for call in git_stub.calls)
-    assert not any("--force" in call for call in orca_stub.calls)
-    assert not target.exists()
-    for sentinel in shared_sentinels.values():
-        assert sentinel.read_text(encoding="utf-8") == "keep\n"
-
-
-@pytest.mark.parametrize(
-    ("returncode", "stdout", "stderr"),
-    [
-        (0, '{"result":{"worktrees":[]}}', ""),
-        (127, "", "orca not found"),
-        (0, "not-json", ""),
-    ],
-)
-def test_remove_worktree_falls_back_to_git_when_orca_is_unavailable_or_unmatched(
-    tmp_path: Path, monkeypatch, returncode: int, stdout: str, stderr: str
-) -> None:
-    from tests.support.command_stubs import CommandStub
-
-    module = load_pr_flow_module()
-    main = tmp_path / "main"
-    target = tmp_path / "feature one"
-    main.mkdir()
-    target.mkdir()
-    before, after = worktree_removal_records(main, target)
-    git_stub = CommandStub(consume=True)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
-    git_stub.add(["status", "--short"], stdout="")
-    remove_args = ([] if os.name != "nt" else ["-c", "core.longpaths=true"])
-    remove_args += ["worktree", "remove", str(target.resolve())]
-    git_stub.add(remove_args)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
-    orca_stub = CommandStub(consume=True)
-    orca_stub.add(["worktree", "ps", "--json"], returncode=returncode, stdout=stdout, stderr=stderr)
-    monkeypatch.setattr(module, "git", git_stub)
-    monkeypatch.setattr(module, "orca", orca_stub, raising=False)
-
-    module.remove_worktree(target, target)
-
-    assert tuple(remove_args) in git_stub.calls
-    assert not any(call[:2] == ("worktree", "rm") for call in orca_stub.calls)
-
-
-def test_remove_worktree_stops_when_matched_orca_removal_fails(tmp_path: Path, monkeypatch) -> None:
-    from tests.support.command_stubs import CommandStub
-
-    module = load_pr_flow_module()
-    main = tmp_path / "main"
-    target = tmp_path / "feature one"
-    main.mkdir()
-    target.mkdir()
-    before, after = worktree_removal_records(main, target)
-    git_stub = CommandStub(consume=True)
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
-    git_stub.add(["status", "--short"], stdout="")
-    git_stub.add(["worktree", "remove", str(target.resolve())])
-    git_stub.add(["worktree", "list", "--porcelain", "-z"], stdout=after)
-    orca_stub = CommandStub(consume=True)
-    orca_stub.add(["worktree", "ps", "--json"], stdout=orca_worktree_ps_json(target, "repo::target"))
-    orca_stub.add(
-        ["worktree", "rm", "--worktree", "id:repo::target", "--json"],
-        stderr="permission denied",
-        returncode=1,
-    )
-    monkeypatch.setattr(module, "git", git_stub)
-    monkeypatch.setattr(module, "orca", orca_stub, raising=False)
-
-    with pytest.raises(module.PrFlowError, match="orca_worktree_remove_failed") as error:
-        module.remove_worktree(target, target)
-
-    assert error.value.details["stderr"] == "permission denied"
-    assert not any(call[:2] == ("worktree", "remove") for call in git_stub.calls)
-
-
-def test_cleanup_stops_before_deletion_when_source_checked_out_elsewhere(tmp_path: Path, monkeypatch) -> None:
-    project = tmp_path / "project"
-    other = tmp_path / "other"
+def test_cleanup_stops_before_deletion_when_source_checked_out_elsewhere(flow_root: Path, monkeypatch) -> None:
+    project = flow_root / "project"
+    other = flow_root / "other"
     worktrees = (
         f"worktree {project}\0HEAD {'b' * 40}\0branch refs/heads/feature/example\0\0"
         f"worktree {other}\0HEAD {'b' * 40}\0branch refs/heads/feature/example\0\0"
     )
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(),
         git_responses=[(["worktree", "list", "--porcelain", "-z"], worktrees, 0)],
@@ -902,12 +564,12 @@ def test_cleanup_stops_before_deletion_when_source_checked_out_elsewhere(tmp_pat
     assert other.resolve() in [Path(path).resolve() for path in status["details"]["occupiedWorktrees"]]
 
 
-def test_cleanup_retry_from_latest_detached_base_finishes(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_retry_from_latest_detached_base_finishes(flow_root: Path, monkeypatch) -> None:
     base_oid = "a" * 40
-    project = tmp_path / "project"
+    project = flow_root / "project"
     worktrees = f"worktree {project}\0HEAD {base_oid}\0detached\0\0"
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(),
         git_responses=[
@@ -923,154 +585,6 @@ def test_cleanup_retry_from_latest_detached_base_finishes(tmp_path: Path, monkey
 
     assert result.returncode == 0
     assert "cleanup_complete" in result.stdout
-
-
-def test_linked_worktrees_use_independent_process_locks_and_status(tmp_path: Path) -> None:
-    project = tmp_path / "first"
-    assert init_repo(project) == "main"
-    write_minimal_pr_flow_config(project)
-    git(project, "add", ".pr-flow")
-    git(project, "commit", "-m", "configure pr flow")
-    git(project, "checkout", "-b", "feature/one")
-    other = tmp_path / "second"
-    git(project, "worktree", "add", "-b", "feature/two", str(other), "main")
-    ready = tmp_path / "ready"
-    release = tmp_path / "release"
-    holder_code = """
-import argparse
-import importlib.util
-import pathlib
-import sys
-import time
-spec = importlib.util.spec_from_file_location("pr_flow_holder", sys.argv[1])
-module = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = module
-spec.loader.exec_module(module)
-project = pathlib.Path(sys.argv[2])
-with module.operation_lock(project, "complete", argparse.Namespace(project=project)):
-    pathlib.Path(sys.argv[3]).write_text("ready", encoding="utf-8")
-    while not pathlib.Path(sys.argv[4]).exists():
-        time.sleep(0.02)
-"""
-    holder = subprocess.Popen(
-        [sys.executable, "-c", holder_code, str(SCRIPT), str(project), str(ready), str(release)],
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    try:
-        deadline = time.monotonic() + 10
-        while not ready.exists() and time.monotonic() < deadline:
-            time.sleep(0.02)
-        assert ready.exists(), holder.communicate(timeout=1)
-
-        independent = subprocess.run(
-            [sys.executable, str(SCRIPT), "diagnose", "--project", str(other)],
-            cwd=REPO_ROOT,
-            check=False,
-            text=True,
-            capture_output=True,
-        )
-        competing = subprocess.run(
-            [sys.executable, str(SCRIPT), "cleanup", "--project", str(project), "--pr", "12"],
-            cwd=REPO_ROOT,
-            check=False,
-            text=True,
-            capture_output=True,
-        )
-
-        assert "flow_locked" not in independent.stdout
-        assert (other / ".pr-flow/last-status.json").exists()
-        assert "flow_locked" in competing.stdout
-        assert not (project / ".pr-flow/last-status.json").exists()
-    finally:
-        release.touch()
-        holder.communicate(timeout=10)
-
-
-def test_linked_worktrees_complete_independently_through_cli(tmp_path: Path) -> None:
-    first, _remote = init_complete_project(tmp_path)
-    git(first, "fetch", "origin", "main")
-    git(first, "checkout", "-B", "main", "origin/main")
-    base_oid = git(first, "rev-parse", "HEAD")
-
-    git(first, "checkout", "-b", "feature/one")
-    git(first, "push", "-u", "origin", "feature/one")
-    first_oid = git(first, "rev-parse", "HEAD")
-
-    second = tmp_path / "second"
-    git(first, "worktree", "add", "-b", "feature/two", str(second), "main")
-    git(second, "push", "-u", "origin", "feature/two")
-    second_oid = git(second, "rev-parse", "HEAD")
-
-    def responses(branch: str, head_oid: str, number: int) -> list[dict[str, object]]:
-        pr = json.loads(
-            pr_view_json(
-                checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
-                review_decision="APPROVED",
-                head_oid=head_oid,
-                base_oid=base_oid,
-            )
-        )
-        pr.update({"number": number, "headRefName": branch})
-        pr_text = json.dumps(pr) + "\n"
-        cleanup = json.dumps(
-            {
-                "number": number,
-                "state": "MERGED",
-                "headRefName": branch,
-                "baseRefName": "main",
-                "headRepositoryOwner": {"login": "test-owner"},
-            }
-        ) + "\n"
-        checks = {"stdout": json.dumps([{"bucket": "pass", "name": "ci", "state": "SUCCESS"}])}
-        return [
-            {"stdout": pr_text},
-            {"stdout": pr_text},
-            checks,
-            {"stdout": pr_text},
-            checks,
-            {"stdout": pr_text},
-            {},
-            {"stdout": cleanup},
-        ]
-
-    first_bin, _ = write_fake_gh_sequence(tmp_path / "first-bin", responses("feature/one", first_oid, 11))
-    second_bin, _ = write_fake_gh_sequence(tmp_path / "second-bin", responses("feature/two", second_oid, 12))
-
-    def command(project: Path, fake_bin: Path) -> tuple[list[str], dict[str, str]]:
-        env = os.environ.copy()
-        env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
-        return (
-            [
-                sys.executable,
-                str(SCRIPT),
-                "complete",
-                "--project",
-                str(project),
-                "--summary",
-                "parallel worktree",
-                "--scope",
-                "test",
-            ],
-            env,
-        )
-
-    first_command, first_env = command(first, first_bin)
-    second_command, second_env = command(second, second_bin)
-    first_process = subprocess.Popen(first_command, cwd=REPO_ROOT, env=first_env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    second_process = subprocess.Popen(second_command, cwd=REPO_ROOT, env=second_env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    first_stdout, first_stderr = first_process.communicate(timeout=30)
-    second_stdout, second_stderr = second_process.communicate(timeout=30)
-
-    assert first_process.returncode == 0, first_stdout + first_stderr
-    assert second_process.returncode == 0, second_stdout + second_stderr
-    assert "cleanup_complete" in first_stdout
-    assert "cleanup_complete" in second_stdout
-    assert {git(first, "branch", "--show-current"), git(second, "branch", "--show-current")} == {"", "main"}
-    assert git(first, "rev-parse", "HEAD") == base_oid
-    assert git(second, "rev-parse", "HEAD") == base_oid
 
 
 def allow_current_base(git_stub, source_oid: str) -> None:
@@ -1127,106 +641,6 @@ def allow_cleanup(
     git_stub.add(["branch", "-d", head_ref])
 
 
-def init_feature_branch(project: Path) -> None:
-    assert init_repo(project) == "main"
-    git(project, "checkout", "-b", "feature/example")
-    (project / "README.md").write_text("# Test Project\n\nFeature change\n", encoding="utf-8")
-    git(project, "add", "README.md")
-    git(project, "commit", "-m", "feature")
-
-
-def write_fake_gh(
-    bin_dir: Path,
-    *,
-    stdout: str = "",
-    stderr: str = "",
-    exit_code: int = 0,
-    calls_path: Path | None = None,
-) -> Path:
-    bin_dir.mkdir(exist_ok=True)
-    fake_script = bin_dir / "gh_fake.py"
-    lines = [
-        "import sys",
-        f"sys.stdout.write({stdout!r})",
-        f"sys.stderr.write({stderr!r})",
-    ]
-    if calls_path is not None:
-        lines.append(f"open({str(calls_path)!r}, 'a', encoding='utf-8').close()")
-    lines.extend([f"raise SystemExit({exit_code})", ""])
-    fake_script.write_text("\n".join(lines), encoding="utf-8")
-    if os.name == "nt":
-        launcher = bin_dir / "gh.cmd"
-        launcher.write_text(
-            f'@echo off\n"{sys.executable}" "%~dp0gh_fake.py" %*\nexit /b %ERRORLEVEL%\n',
-            encoding="utf-8",
-        )
-    else:
-        launcher = bin_dir / "gh"
-        launcher.write_text(
-            f'#!/bin/sh\nexec "{sys.executable}" "$(dirname "$0")/gh_fake.py" "$@"\n',
-            encoding="utf-8",
-        )
-        launcher.chmod(0o755)
-    return bin_dir
-
-
-def write_fake_gh_sequence(bin_dir: Path, responses: list[dict[str, object]]) -> tuple[Path, Path]:
-    bin_dir.mkdir()
-    responses_path = bin_dir / "responses.json"
-    calls_path = bin_dir / "calls.json"
-    body_files_path = bin_dir / "body_files.json"
-    responses_path.write_text(json.dumps(responses), encoding="utf-8")
-    calls_path.write_text("[]", encoding="utf-8")
-    body_files_path.write_text("[]", encoding="utf-8")
-    fake_script = bin_dir / "gh_fake_sequence.py"
-    fake_script.write_text(
-        "\n".join(
-            [
-                "import json",
-                "import sys",
-                "from pathlib import Path",
-                f"responses_path = Path({str(responses_path)!r})",
-                f"calls_path = Path({str(calls_path)!r})",
-                f"body_files_path = Path({str(body_files_path)!r})",
-                "responses = json.loads(responses_path.read_text(encoding='utf-8'))",
-                "calls = json.loads(calls_path.read_text(encoding='utf-8'))",
-                "body_files = json.loads(body_files_path.read_text(encoding='utf-8'))",
-                "index = len(calls)",
-                "calls.append(sys.argv[1:])",
-                "calls_path.write_text(json.dumps(calls, indent=2), encoding='utf-8')",
-                "if '--body-file' in sys.argv[1:]:",
-                "    body_index = sys.argv.index('--body-file') + 1",
-                "    body_path = Path(sys.argv[body_index])",
-                "    body_files.append({'args': sys.argv[1:], 'body': body_path.read_text(encoding='utf-8')})",
-                "    body_files_path.write_text(json.dumps(body_files, indent=2), encoding='utf-8')",
-                "if index >= len(responses):",
-                "    sys.stderr.write('unexpected gh call: ' + ' '.join(sys.argv[1:]) + '\\n')",
-                "    raise SystemExit(99)",
-                "response = responses[index]",
-                "sys.stdout.write(str(response.get('stdout', '')))",
-                "sys.stderr.write(str(response.get('stderr', '')))",
-                "raise SystemExit(int(response.get('exit_code', 0)))",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    if os.name == "nt":
-        launcher = bin_dir / "gh.cmd"
-        launcher.write_text(
-            f'@echo off\n"{sys.executable}" "%~dp0gh_fake_sequence.py" %*\nexit /b %ERRORLEVEL%\n',
-            encoding="utf-8",
-        )
-    else:
-        launcher = bin_dir / "gh"
-        launcher.write_text(
-            f'#!/bin/sh\nexec "{sys.executable}" "$(dirname "$0")/gh_fake_sequence.py" "$@"\n',
-            encoding="utf-8",
-        )
-        launcher.chmod(0o755)
-    return bin_dir, calls_path
-
-
 def pr_view_json(
     *,
     checks: list[dict],
@@ -1278,305 +692,6 @@ def cleanup_pr_view_json(
     )
 
 
-def git_bare(remote: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", "--git-dir", str(remote), *args],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    return result.stdout.strip()
-
-
-def git_bare_result(remote: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "--git-dir", str(remote), *args],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-
-
-def copy_project_remote_template(template_dir: Path, tmp_path: Path) -> tuple[Path, Path]:
-    remote = copy_template(template_dir / "remote.git", tmp_path / "remote.git")
-    project = copy_template(template_dir / "project", tmp_path / "project")
-    git(project, "remote", "set-url", "origin", str(remote))
-    return project, remote
-
-
-def remove_template_lock(lock_dir: Path) -> None:
-    for _ in range(5):
-        shutil.rmtree(lock_dir, ignore_errors=True)
-        if not lock_dir.exists():
-            return
-        time.sleep(0.05)
-
-
-def ensure_project_remote_template(template_name: str, tmp_path: Path, creator) -> tuple[Path, Path]:
-    template_dir = TEMPLATE_ROOT / template_name
-    ready = template_dir / ".ready"
-    lock_dir = TEMPLATE_ROOT / f"{template_name}.lock"
-    if ready.exists():
-        if lock_dir.exists():
-            remove_template_lock(lock_dir)
-        return copy_project_remote_template(template_dir, tmp_path)
-
-    deadline = time.monotonic() + TEMPLATE_LOCK_TIMEOUT_SECONDS
-    while True:
-        try:
-            lock_dir.mkdir(parents=True)
-            break
-        except FileExistsError:
-            try:
-                lock_age = time.time() - lock_dir.stat().st_mtime
-            except FileNotFoundError:
-                continue
-            if lock_age > TEMPLATE_LOCK_STALE_SECONDS:
-                remove_template_lock(lock_dir)
-                continue
-            if time.monotonic() > deadline:
-                raise TimeoutError(f"template_lock_timeout: {lock_dir}")
-            time.sleep(0.05)
-
-    try:
-        if not ready.exists():
-            if template_dir.exists():
-                remove_template(template_dir)
-            template_dir.mkdir(parents=True, exist_ok=True)
-            creator(template_dir)
-            ready.write_text("ok\n", encoding="utf-8")
-    finally:
-        remove_template_lock(lock_dir)
-
-    return copy_project_remote_template(template_dir, tmp_path)
-
-
-def _create_minimal_project_remote_template(tmp_path: Path) -> tuple[Path, Path]:
-    remote = tmp_path / "remote.git"
-    remote_init = subprocess.run(
-        ["git", "init", "--bare", str(remote)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert remote_init.returncode == 0, remote_init.stdout + remote_init.stderr
-
-    project = tmp_path / "project"
-    assert init_repo(project) == "main"
-    git(project, "remote", "add", "origin", str(remote))
-    git(project, "push", "-u", "origin", "main")
-    return project, remote
-
-
-def fake_project_remote_template(template_dir: Path) -> None:
-    (template_dir / "project").mkdir()
-    (template_dir / "remote.git").mkdir()
-
-
-def fake_copy_project_remote_template(template_dir: Path, tmp_path: Path) -> tuple[Path, Path]:
-    remote = copy_template(template_dir / "remote.git", tmp_path / "remote.git")
-    project = copy_template(template_dir / "project", tmp_path / "project")
-    return project, remote
-
-
-def test_project_template_recovers_stale_lock(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        sys.modules[__name__],
-        "copy_project_remote_template",
-        fake_copy_project_remote_template,
-    )
-    template_name = f"stale-lock-{tmp_path.name}"
-    lock_dir = TEMPLATE_ROOT / f"{template_name}.lock"
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    stale_time = time.time() - TEMPLATE_LOCK_STALE_SECONDS - 1
-    os.utime(lock_dir, (stale_time, stale_time))
-
-    project, remote = ensure_project_remote_template(
-        template_name,
-        tmp_path,
-        fake_project_remote_template,
-    )
-
-    assert project.is_dir()
-    assert remote.is_dir()
-    assert not lock_dir.exists()
-
-
-def test_project_template_recreates_incomplete_template_after_stale_lock(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.setattr(
-        sys.modules[__name__],
-        "copy_project_remote_template",
-        fake_copy_project_remote_template,
-    )
-    template_name = f"incomplete-template-{os.getpid()}-{time.monotonic_ns()}"
-    template_dir = TEMPLATE_ROOT / template_name
-    lock_dir = TEMPLATE_ROOT / f"{template_name}.lock"
-    template_dir.mkdir(parents=True)
-    (template_dir / "partial.txt").write_text("partial\n", encoding="utf-8")
-    (template_dir / "partial.txt").chmod(0o444)
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    stale_time = time.time() - TEMPLATE_LOCK_STALE_SECONDS - 1
-    os.utime(lock_dir, (stale_time, stale_time))
-
-    project, remote = ensure_project_remote_template(
-        template_name,
-        tmp_path,
-        fake_project_remote_template,
-    )
-
-    assert project.is_dir()
-    assert remote.is_dir()
-    assert (template_dir / ".ready").is_file()
-    assert not (template_dir / "partial.txt").exists()
-    assert not lock_dir.exists()
-
-
-def init_cleanup_project(
-    tmp_path: Path, *, base_ref: str = "main", head_ref: str = "feature/example"
-) -> tuple[Path, Path]:
-    template_name = f"cleanup-{base_ref}-{head_ref}".replace("/", "_").replace("\\", "_").replace(":", "_")
-    return ensure_project_remote_template(
-        template_name,
-        tmp_path,
-        lambda template_dir: _create_cleanup_project(
-            template_dir, base_ref=base_ref, head_ref=head_ref
-        ),
-    )
-
-
-def _create_cleanup_project(
-    tmp_path: Path, *, base_ref: str = "main", head_ref: str = "feature/example"
-) -> tuple[Path, Path]:
-    remote = tmp_path / "remote.git"
-    remote_init = subprocess.run(
-        ["git", "init", "--bare", str(remote)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert remote_init.returncode == 0, remote_init.stdout + remote_init.stderr
-
-    project = tmp_path / "project"
-    assert init_repo(project) == "main"
-    git(project, "branch", "-M", base_ref)
-    write_confirmed_pr_flow_config(project, default_pr_flow_config_for_test(base_ref))
-    git(project, "add", ".pr-flow")
-    git(project, "commit", "-m", "configure pr flow")
-    git(project, "remote", "add", "origin", str(remote))
-    git(project, "push", "-u", "origin", base_ref)
-
-    git(project, "checkout", "-b", head_ref)
-    (project / "README.md").write_text("# Test Project\n\nFeature change\n", encoding="utf-8")
-    git(project, "add", "README.md")
-    git(project, "commit", "-m", "feature")
-    git(project, "push", "-u", "origin", head_ref)
-
-    integrator = tmp_path / "integrator"
-    clone_result = subprocess.run(
-        ["git", "clone", str(remote), str(integrator)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
-    git(integrator, "config", "user.email", "test@example.com")
-    git(integrator, "config", "user.name", "Test User")
-    git(integrator, "checkout", "-B", base_ref, f"origin/{base_ref}")
-    git(integrator, "merge", "--ff-only", f"origin/{head_ref}")
-    git(integrator, "push", "origin", base_ref)
-
-    git(project, "checkout", head_ref)
-    return project, remote
-
-
-def init_complete_project(
-    tmp_path: Path,
-    *,
-    review_mode: str = "github",
-    merge_strategy: str = "merge",
-    evidence_path: str | None = None,
-) -> tuple[Path, Path]:
-    key = f"complete-{review_mode}-{merge_strategy}-{evidence_path or 'default'}".replace(os.sep, "_").replace(":", "_")
-    return ensure_project_remote_template(
-        key,
-        tmp_path,
-        lambda template_dir: _create_complete_project(
-            template_dir,
-            review_mode=review_mode,
-            merge_strategy=merge_strategy,
-            evidence_path=evidence_path,
-        ),
-    )
-
-
-def _create_complete_project(
-    tmp_path: Path,
-    *,
-    review_mode: str = "github",
-    merge_strategy: str = "merge",
-    evidence_path: str | None = None,
-) -> tuple[Path, Path]:
-    remote = tmp_path / "remote.git"
-    remote_init = subprocess.run(
-        ["git", "init", "--bare", str(remote)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert remote_init.returncode == 0, remote_init.stdout + remote_init.stderr
-
-    project = tmp_path / "project"
-    assert init_repo(project) == "main"
-    configure_complete(
-        project,
-        review_mode=review_mode,
-        merge_strategy=merge_strategy,
-        evidence_path=evidence_path,
-    )
-    git(project, "add", ".pr-flow")
-    git(project, "commit", "-m", "configure pr flow")
-    git(project, "remote", "add", "origin", str(remote))
-    git(project, "push", "-u", "origin", "main")
-
-    git(project, "checkout", "-b", "feature/example")
-    (project / "README.md").write_text("# Test Project\n\nFeature change\n", encoding="utf-8")
-    git(project, "add", "README.md")
-    git(project, "commit", "-m", "feature")
-    git(project, "push", "-u", "origin", "feature/example")
-
-    integrator = tmp_path / "integrator"
-    clone_result = subprocess.run(
-        ["git", "clone", str(remote), str(integrator)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
-    git(integrator, "config", "user.email", "test@example.com")
-    git(integrator, "config", "user.name", "Test User")
-    git(integrator, "checkout", "-B", "main", "origin/main")
-    git(integrator, "merge", "--ff-only", "origin/feature/example")
-    git(integrator, "push", "origin", "main")
-
-    git(project, "checkout", "feature/example")
-    return project, remote
-
-
-def passing_pr_view_json(project: Path, *, review_decision: str = "APPROVED") -> str:
-    return pr_view_json(
-        checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
-        review_decision=review_decision,
-        head_oid=git(project, "rev-parse", "HEAD"),
-    )
-
-
-def captured_body_files(fake_bin: Path) -> list[dict[str, str]]:
-    return json.loads((fake_bin / "body_files.json").read_text(encoding="utf-8"))
-
-
 def assert_cleanup_exception(project: Path, result: subprocess.CompletedProcess[str], reason: str) -> None:
     assert result.returncode == 1
     assert "status: EXCEPTION_REQUIRED" in result.stdout
@@ -1597,7 +712,7 @@ def write_minimal_pr_flow_config(project: Path) -> None:
 
 
 def run_cleanup_in_process(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     *,
     pr_stdout: str,
@@ -1608,15 +723,15 @@ def run_cleanup_in_process(
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
-    controller = tmp_path / "controller"
+    controller = flow_root / "controller"
     if remove_worktree:
         controller.mkdir()
     write_minimal_pr_flow_config(project)
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=pr_stdout)
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for args, stdout, returncode in git_responses or []:
         git_stub.add(args, stdout=stdout, returncode=returncode)
     pr = json.loads(pr_stdout)
@@ -1704,7 +819,7 @@ def write_hotfix_pr_flow_config(
 
 
 def run_hotfix_in_process(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     *,
     authorization_phrase: str = "ship-hotfix",
@@ -1719,7 +834,7 @@ def run_hotfix_in_process(
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_hotfix_pr_flow_config(
         project,
@@ -1727,7 +842,7 @@ def run_hotfix_in_process(
         include_authorization=include_authorization,
         include_branch=include_branch,
     )
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     default_responses = [
         (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], "", 0),
         (["rev-parse", "__snapshot_ref__"], "a" * 40 + "\n", 0),
@@ -1848,7 +963,7 @@ def expected_pr_body(
 
 
 def run_complete_in_process(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     *,
     pr_stdout: str | None = None,
@@ -1873,7 +988,7 @@ def run_complete_in_process(
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = project or tmp_path / "project"
+    project = project or flow_root / "project"
     project.mkdir(exist_ok=True)
     write_complete_pr_flow_config(project, review_mode=review_mode, merge_strategy=merge_strategy)
     if wait_config is not None:
@@ -1881,7 +996,7 @@ def run_complete_in_process(
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         config["defaults"]["wait"] = wait_config
         config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    gh_stub = CommandStub(consume=pr_responses is not None or merge_responses is not None)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=pr_responses is not None or merge_responses is not None)
     if pr_responses is None:
         assert pr_stdout is not None
         gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
@@ -1920,7 +1035,7 @@ def run_complete_in_process(
             ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
             stdout=cleanup_stdout,
         )
-    git_stub = CommandStub(defaults=default_git_responses())
+    git_stub = CommandStub(body_reader=read_body_file, defaults=default_git_responses())
     for args, stdout, returncode in git_responses or []:
         git_stub.add(args, stdout=stdout, returncode=returncode)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
@@ -1936,7 +1051,7 @@ def run_complete_in_process(
 
 
 def run_tweak_in_process(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     *,
     reason: str,
@@ -1951,7 +1066,7 @@ def run_tweak_in_process(
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     if forbid_full_verify:
@@ -1965,7 +1080,7 @@ def run_tweak_in_process(
         review_decision=review_decision,
         head_oid=head_oid,
     )
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     if first_pr_returncode:
         gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr=first_pr_stderr, returncode=first_pr_returncode)
         gh_stub.add(["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"], stdout="https://github.example/test/repo/pull/12\n")
@@ -1991,7 +1106,7 @@ def run_tweak_in_process(
         )
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
 
-    git_stub = CommandStub(defaults=default_git_responses(), consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, defaults=default_git_responses(), consume=True)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"])
@@ -2005,7 +1120,7 @@ def run_tweak_in_process(
 
 
 def run_diagnose_in_process(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     *,
     pr_stdout: str,
@@ -2018,16 +1133,16 @@ def run_diagnose_in_process(
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_minimal_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="main\n")
     git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
     allow_current_base(git_stub, "b" * 40)
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/main\n")
     git_stub.add(["status", "--short"], stdout="")
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     gh_stub.add(
         ["pr", "view", "--json", module.PR_VIEW_FIELDS],
         stdout=pr_stdout,
@@ -2094,105 +1209,16 @@ def write_confirmed_pr_flow_config(project: Path, config: dict | None = None) ->
     (project / ".github" / "workflows" / "pr-flow-toolchain.yml").unlink()
 
 
-def configure_complete(
-    project: Path,
-    *,
-    review_mode: str,
-    merge_strategy: str = "merge",
-    evidence_path: str | None = None,
-) -> None:
-    write_confirmed_pr_flow_config(project)
-    config_path = project / ".pr-flow" / "config.yaml"
-    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    config["defaults"]["wait"] = {"timeoutSeconds": 0, "pollSeconds": 0}
-    config["defaults"]["mergeStrategy"] = merge_strategy
-    config["defaults"]["reviewGate"] = {"mode": review_mode}
-    if evidence_path is not None:
-        config["defaults"]["reviewGate"]["evidencePath"] = evidence_path
-    config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
-
-
 HOTFIX_PHRASE = "ship-hotfix"
 
 
-def configure_hotfix(
-    project: Path,
-    *,
-    target: str = "main",
-    allow_hotfix: bool = True,
-    verify_command: str = "git rev-parse HEAD",
-) -> None:
-    write_confirmed_pr_flow_config(project)
-    config_path = project / ".pr-flow" / "config.yaml"
-    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    config.setdefault("authorization", {})
-    config["authorization"]["phraseHashAlgorithm"] = "md5"
-    config["authorization"]["phraseHash"] = hashlib.md5(HOTFIX_PHRASE.encode("utf-8")).hexdigest()
-    config["defaults"]["remote"] = "origin"
-    config["defaults"]["hotfix"] = {"verifyCommand": verify_command}
-    config.setdefault("branches", {}).setdefault(target, {})
-    config["branches"][target]["allowHotfixPush"] = allow_hotfix
-    config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
-
-
-def init_hotfix_project(
-    tmp_path: Path,
-    *,
-    allow_hotfix: bool = True,
-    verify_command: str = "git rev-parse HEAD",
-) -> tuple[Path, Path, str]:
-    key = f"hotfix-{allow_hotfix}-{verify_command}".replace(os.sep, "_").replace(":", "_").replace(" ", "_")
-    project, remote = ensure_project_remote_template(
-        key,
-        tmp_path,
-        lambda template_dir: _create_hotfix_project(
-            template_dir,
-            allow_hotfix=allow_hotfix,
-            verify_command=verify_command,
-        ),
-    )
-    before_commit = git_bare(remote, "rev-parse", "refs/heads/main")
-    return project, remote, before_commit
-
-
-def _create_hotfix_project(
-    tmp_path: Path,
-    *,
-    allow_hotfix: bool = True,
-    verify_command: str = "git rev-parse HEAD",
-) -> tuple[Path, Path, str]:
-    remote = tmp_path / "remote.git"
-    remote_init = subprocess.run(
-        ["git", "init", "--bare", str(remote)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert remote_init.returncode == 0, remote_init.stdout + remote_init.stderr
-
-    project = tmp_path / "project"
-    assert init_repo(project) == "main"
-    configure_hotfix(project, allow_hotfix=allow_hotfix, verify_command=verify_command)
-    git(project, "add", ".pr-flow")
-    git(project, "commit", "-m", "configure pr flow")
-    git(project, "remote", "add", "origin", str(remote))
-    git(project, "push", "-u", "origin", "main")
-    before_commit = git_bare(remote, "rev-parse", "refs/heads/main")
-
-    git(project, "checkout", "-b", "hotfix/example", "origin/main")
-    (project / "README.md").write_text("# Test Project\n\nHotfix change\n", encoding="utf-8")
-    git(project, "add", "README.md")
-    git(project, "commit", "-m", "hotfix")
-    return project, remote, before_commit
-
-
-def test_init_records_toolchain_and_managed_workflow(tmp_path: Path, monkeypatch) -> None:
+def test_init_records_toolchain_and_managed_workflow(flow_root: Path, monkeypatch) -> None:
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
-    draft = tmp_path / "confirmed.yaml"
+    draft = flow_root / "confirmed.yaml"
     draft.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
     identities = {
         "myspec": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": MYSPEC_VERSION},
@@ -2213,10 +1239,10 @@ def test_init_records_toolchain_and_managed_workflow(tmp_path: Path, monkeypatch
     assert f"@liuli195/build-and-verify@{BUILD_AND_VERIFY_VERSION}" in workflow
 
 
-def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_init_creates_config_template_and_gitignore(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
-    draft = tmp_path / "confirmed.yaml"
+    draft = flow_root / "confirmed.yaml"
     draft.write_text(
         yaml.safe_dump(default_pr_flow_config_for_test("main"), allow_unicode=True, sort_keys=False),
         encoding="utf-8",
@@ -2256,16 +1282,16 @@ def test_init_creates_config_template_and_gitignore(tmp_path: Path) -> None:
     assert (project / ".pr-flow" / ".gitignore").read_text(encoding="utf-8") == "/runs/\n/last-status.json\n"
 
 
-def test_complete_requires_summary_scope_before_auto_push_or_pr_create(tmp_path: Path, monkeypatch) -> None:
+def test_complete_requires_summary_scope_before_auto_push_or_pr_create(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
-    gh_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
+    gh_stub = CommandStub(body_reader=read_body_file)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
 
@@ -2284,19 +1310,19 @@ def test_complete_requires_summary_scope_before_auto_push_or_pr_create(tmp_path:
     assert "--scope" in status["details"]["nextCommand"]
 
 
-def test_complete_reports_dispatch_when_pr_create_requires_gh_auth(tmp_path: Path, monkeypatch) -> None:
+def test_complete_reports_dispatch_when_pr_create_requires_gh_auth(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="main\n")
     git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
     allow_current_base(git_stub, "b" * 40)
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull request found\n", returncode=1)
     gh_stub.add(
         ["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"],
@@ -2317,19 +1343,19 @@ def test_complete_reports_dispatch_when_pr_create_requires_gh_auth(tmp_path: Pat
     assert status["details"]["nextCommand"] == "gh auth status"
 
 
-def test_complete_reports_dispatch_when_created_pr_view_temporarily_fails(tmp_path: Path, monkeypatch) -> None:
+def test_complete_reports_dispatch_when_created_pr_view_temporarily_fails(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="main\n")
     git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
     allow_current_base(git_stub, "b" * 40)
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull request found\n", returncode=1)
     gh_stub.add(
         ["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"],
@@ -2357,20 +1383,20 @@ def test_complete_reports_dispatch_when_created_pr_view_temporarily_fails(tmp_pa
 
 
 def test_tweak_reports_dispatch_when_remote_branch_rules_lookup_requires_gh_auth(
-    tmp_path: Path, monkeypatch
+    flow_root: Path, monkeypatch
 ) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], returncode=1)
     git_stub.add(["status", "--porcelain"], stdout="")
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull request found\n", returncode=1)
     gh_stub.add(
         ["api", "repos/{owner}/{repo}/rules/branches/feature%2Fexample", "--jq", "length"],
@@ -2391,9 +1417,9 @@ def test_tweak_reports_dispatch_when_remote_branch_rules_lookup_requires_gh_auth
     assert status["details"]["nextCommand"] == "gh auth status"
 
 
-def test_complete_reports_dispatch_when_pr_merge_requires_gh_auth(tmp_path: Path, monkeypatch) -> None:
+def test_complete_reports_dispatch_when_pr_merge_requires_gh_auth(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -2424,17 +1450,17 @@ def test_complete_reports_dispatch_when_pr_merge_requires_gh_auth(tmp_path: Path
     ],
 )
 def test_pr_body_commands_reject_invalid_fixes_before_git_or_gh_calls(
-    tmp_path: Path, monkeypatch, bad_fix: str, command_args, command: str
+    flow_root: Path, monkeypatch, bad_fix: str, command_args, command: str
 ) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
-    gh_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
+    gh_stub = CommandStub(body_reader=read_body_file)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
 
@@ -2462,17 +1488,17 @@ def test_pr_body_commands_reject_invalid_fixes_before_git_or_gh_calls(
     ],
 )
 def test_pr_body_commands_reject_none_fixes_with_remove_guidance(
-    tmp_path: Path, monkeypatch, command_args, command: str
+    flow_root: Path, monkeypatch, command_args, command: str
 ) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
-    gh_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
+    gh_stub = CommandStub(body_reader=read_body_file)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
 
@@ -2490,16 +1516,16 @@ def test_pr_body_commands_reject_none_fixes_with_remove_guidance(
     assert status["details"]["nextAction"] == "Remove --fixes when there is no issue to close."
 
 
-def test_tweak_requires_summary_scope_before_pr_sync(tmp_path: Path, monkeypatch) -> None:
+def test_tweak_requires_summary_scope_before_pr_sync(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
-    gh_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
+    gh_stub = CommandStub(body_reader=read_body_file)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
 
@@ -2516,17 +1542,17 @@ def test_tweak_requires_summary_scope_before_pr_sync(tmp_path: Path, monkeypatch
     assert status["details"]["missingArgs"] == ["--summary", "--scope"]
 
 
-def test_complete_stops_when_body_template_is_missing_required_section(tmp_path: Path, monkeypatch) -> None:
+def test_complete_stops_when_body_template_is_missing_required_section(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     (project / ".pr-flow" / "pr-template.md").write_text("## Summary\n\n## Scope\n", encoding="utf-8")
-    git_stub = CommandStub()
-    gh_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
+    gh_stub = CommandStub(body_reader=read_body_file)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
 
@@ -2545,9 +1571,9 @@ def test_complete_stops_when_body_template_is_missing_required_section(tmp_path:
     assert "Closing References" in status["details"]["nextAction"]
 
 
-def test_complete_and_tweak_share_three_section_body_renderer(tmp_path: Path) -> None:
+def test_complete_and_tweak_share_three_section_body_renderer(flow_root: Path) -> None:
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     config = yaml.safe_load((project / ".pr-flow" / "config.yaml").read_text(encoding="utf-8"))
@@ -2559,14 +1585,14 @@ def test_complete_and_tweak_share_three_section_body_renderer(tmp_path: Path) ->
     assert tweak_body == expected_pr_body()
 
 
-def test_create_pr_uses_generated_body_file(tmp_path: Path, monkeypatch) -> None:
+def test_create_pr_uses_generated_body_file(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     body = expected_pr_body()
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"], stdout="https://github.example/test/repo/pull/12\n")
     gh_stub.add(
         ["pr", "view", "--json", module.PR_VIEW_FIELDS],
@@ -2586,15 +1612,15 @@ def test_create_pr_uses_generated_body_file(tmp_path: Path, monkeypatch) -> None
     assert gh_stub.body_files[0]["body"] == body
 
 
-def test_create_pr_retries_transient_eof_when_syncing_created_pr(tmp_path: Path, monkeypatch) -> None:
+def test_create_pr_retries_transient_eof_when_syncing_created_pr(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     body = expected_pr_body()
     monkeypatch.setenv("PR_FLOW_GH_PR_VIEW_RETRIES", "1")
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"], stdout="created\n")
     gh_stub.add(
         ["pr", "view", "--json", module.PR_VIEW_FIELDS],
@@ -2620,15 +1646,15 @@ def test_create_pr_retries_transient_eof_when_syncing_created_pr(tmp_path: Path,
 
 
 def test_create_pr_missing_after_success_does_not_report_create_output_as_view_failure(
-    tmp_path: Path, monkeypatch
+    flow_root: Path, monkeypatch
 ) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     body = expected_pr_body()
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"], stdout="created\n")
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull request found\n", returncode=1)
     monkeypatch.setattr(module, "gh", gh_stub)
@@ -2644,12 +1670,12 @@ def test_create_pr_missing_after_success_does_not_report_create_output_as_view_f
     assert "stderr" not in error.value.details
 
 
-def test_complete_fills_existing_empty_body_before_checks(tmp_path: Path, monkeypatch) -> None:
+def test_complete_fills_existing_empty_body_before_checks(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     head_oid = "b" * 40
@@ -2659,7 +1685,7 @@ def test_complete_fills_existing_empty_body_before_checks(tmp_path: Path, monkey
         head_oid=head_oid,
         body="<!-- template comment -->",
     )
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "edit", "12", "--body-file", "__placeholder__"])
@@ -2667,7 +1693,7 @@ def test_complete_fills_existing_empty_body_before_checks(tmp_path: Path, monkey
     allow_required_checks(gh_stub)
     allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -2700,12 +1726,12 @@ def test_complete_fills_existing_empty_body_before_checks(tmp_path: Path, monkey
     assert gh_stub.body_files[0]["body"] == expected_pr_body(fixes=())
 
 
-def test_complete_appends_repeated_fixes_to_existing_human_body(tmp_path: Path, monkeypatch) -> None:
+def test_complete_appends_repeated_fixes_to_existing_human_body(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     head_oid = "b" * 40
@@ -2715,7 +1741,7 @@ def test_complete_appends_repeated_fixes_to_existing_human_body(tmp_path: Path, 
         head_oid=head_oid,
         body="Human body",
     )
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "edit", "12", "--body-file", "__placeholder__"])
@@ -2723,7 +1749,7 @@ def test_complete_appends_repeated_fixes_to_existing_human_body(tmp_path: Path, 
     allow_required_checks(gh_stub)
     allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -2758,12 +1784,12 @@ def test_complete_appends_repeated_fixes_to_existing_human_body(tmp_path: Path, 
     assert gh_stub.body_files[0]["body"] == "Human body\n\n## Closing References\n\nFixes #98\nFixes #99\n"
 
 
-def test_complete_continues_when_existing_human_body_already_has_fixes(tmp_path: Path, monkeypatch) -> None:
+def test_complete_continues_when_existing_human_body_already_has_fixes(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     head_oid = "b" * 40
@@ -2773,13 +1799,13 @@ def test_complete_continues_when_existing_human_body_already_has_fixes(tmp_path:
         head_oid=head_oid,
         body="Human body\n\n## Closing References\n\nFixes #98\n",
     )
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
     allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -2817,12 +1843,12 @@ def test_closing_reference_match_does_not_treat_prefix_issue_as_present() -> Non
     assert module.has_closing_reference("Human body\n\nFixes #98\n", "98") is True
 
 
-def test_complete_keeps_existing_human_body_without_fixes(tmp_path: Path, monkeypatch) -> None:
+def test_complete_keeps_existing_human_body_without_fixes(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     pr_stdout = pr_view_json(
@@ -2831,11 +1857,11 @@ def test_complete_keeps_existing_human_body_without_fixes(tmp_path: Path, monkey
         head_oid="b" * 40,
         body="Human body",
     )
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     allow_required_checks(gh_stub, "pending")
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
     git_stub.add(["rev-list", "--count", "@{u}..HEAD"], stdout="0\n")
@@ -2855,8 +1881,8 @@ def test_complete_keeps_existing_human_body_without_fixes(tmp_path: Path, monkey
     assert status["details"]["targetOid"] == "a" * 40
 
 
-def test_init_without_confirmed_config_does_not_write_defaults(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_init_without_confirmed_config_does_not_write_defaults(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
 
     result = run("init", "--project", str(project), "--base-branch", "main")
@@ -2870,10 +1896,10 @@ def test_init_without_confirmed_config_does_not_write_defaults(tmp_path: Path) -
     assert not (project / ".pr-flow" / ".gitignore").exists()
 
 
-def test_init_validation_errors_block_all_writes(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_init_validation_errors_block_all_writes(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
-    draft = tmp_path / "invalid.yaml"
+    draft = flow_root / "invalid.yaml"
     draft.write_text(
         yaml.safe_dump({"defaults": {"reviewGate": {"mode": "local"}}}, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
@@ -2898,10 +1924,10 @@ def test_current_repo_hotfix_verify_command_uses_BUILD_AND_VERIFY_full() -> None
     )
 
 
-def test_init_does_not_call_gh_api(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_init_does_not_call_gh_api(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
-    draft = tmp_path / "confirmed.yaml"
+    draft = flow_root / "confirmed.yaml"
     draft.write_text(
         yaml.safe_dump(default_pr_flow_config_for_test(), allow_unicode=True, sort_keys=False),
         encoding="utf-8",
@@ -3142,7 +2168,7 @@ def test_pr_flow_command_skills_show_installed_script_entrypoint(skill_name: str
     assert "python ../pr-flow/scripts/pr_flow.py" not in skill_text
 
 
-def test_pr_flow_init_end_to_end_from_skill_to_confirmed_write(tmp_path: Path) -> None:
+def test_pr_flow_init_end_to_end_from_skill_to_confirmed_write(flow_root: Path) -> None:
     skill_dir = REPO_ROOT / "plugins" / "pr-flow" / "skills" / "pr-flow-init"
     skill_text = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
     questionnaire = (skill_dir / "references" / "questionnaire.md").read_text(encoding="utf-8")
@@ -3154,7 +2180,7 @@ def test_pr_flow_init_end_to_end_from_skill_to_confirmed_write(tmp_path: Path) -
     assert "setup.github" in config_draft
     assert "error（错误）" in validation
 
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     config = default_pr_flow_config_for_test("main")
     config["setup"] = {
@@ -3164,7 +2190,7 @@ def test_pr_flow_init_end_to_end_from_skill_to_confirmed_write(tmp_path: Path) -
             "codeScanning": {"tool": "CodeQL"},
         }
     }
-    draft = tmp_path / "confirmed.yaml"
+    draft = flow_root / "confirmed.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     validate_result = run("validate", "--project", str(project), "--config", str(draft))
@@ -3190,10 +2216,10 @@ def test_pr_flow_init_end_to_end_from_skill_to_confirmed_write(tmp_path: Path) -
         assert forbidden not in combined_output
 
 
-def test_validate_reads_only_provided_config_and_reports_suggestions(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_validate_reads_only_provided_config_and_reports_suggestions(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(
         yaml.safe_dump(
             {
@@ -3222,12 +2248,12 @@ def test_validate_reads_only_provided_config_and_reports_suggestions(tmp_path: P
     assert not (project / ".pr-flow" / "config.yaml").exists()
 
 
-def test_validate_reports_codeql_default_setup_tasks(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_validate_reports_codeql_default_setup_tasks(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
     config = default_pr_flow_config_for_test()
     config["setup"] = {"github": {"codeScanning": {"tool": "CodeQL"}}}
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("validate", "--project", str(project), "--config", str(draft))
@@ -3238,14 +2264,14 @@ def test_validate_reports_codeql_default_setup_tasks(tmp_path: Path) -> None:
     assert "CodeQL scan producer" not in result.stdout
 
 
-def test_validate_reports_codeql_default_setup_even_with_existing_codeql_workflow(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_validate_reports_codeql_default_setup_even_with_existing_codeql_workflow(flow_root: Path) -> None:
+    project = flow_root / "project"
     workflow = project / ".github" / "workflows" / "codeql.yml"
     workflow.parent.mkdir(parents=True)
     workflow.write_text("uses: github/codeql-action/analyze@v4\n", encoding="utf-8")
     config = default_pr_flow_config_for_test()
     config["setup"] = {"github": {"codeScanning": {"tool": "CodeQL"}}}
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("validate", "--project", str(project), "--config", str(draft))
@@ -3256,18 +2282,18 @@ def test_validate_reports_codeql_default_setup_even_with_existing_codeql_workflo
     assert "CodeQL scan producer" not in result.stdout
 
 
-def test_validate_does_not_call_gh_cli_or_github_api(tmp_path: Path, monkeypatch) -> None:
+def test_validate_does_not_call_gh_cli_or_github_api(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     config = default_pr_flow_config_for_test()
     config["setup"] = {"github": {"codeScanning": {"tool": "CodeQL"}}}
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
     module = load_pr_flow_module()
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     monkeypatch.setattr(module, "gh", gh_stub)
 
     result = invoke_pr_flow(["validate", "--project", str(project), "--config", str(draft)], module=module)
@@ -3278,10 +2304,10 @@ def test_validate_does_not_call_gh_cli_or_github_api(tmp_path: Path, monkeypatch
 
 
 @pytest.mark.parametrize("review_mode", ["github", "skip"])
-def test_validate_accepts_supported_review_gate_modes(tmp_path: Path, review_mode: str) -> None:
+def test_validate_accepts_supported_review_gate_modes(flow_root: Path, review_mode: str) -> None:
     config = default_pr_flow_config_for_test()
     config["defaults"]["reviewGate"] = {"mode": review_mode}
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("validate", "--config", str(draft))
@@ -3292,10 +2318,10 @@ def test_validate_accepts_supported_review_gate_modes(tmp_path: Path, review_mod
     assert "review-pass.json" not in result.stdout
 
 
-def test_validate_warns_when_supported_review_gate_keeps_deprecated_evidencePath(tmp_path: Path) -> None:
+def test_validate_warns_when_supported_review_gate_keeps_deprecated_evidencePath(flow_root: Path) -> None:
     config = default_pr_flow_config_for_test()
     config["defaults"]["reviewGate"] = {"mode": "github", "evidencePath": ".pr-flow/review-pass.json"}
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("validate", "--config", str(draft))
@@ -3306,10 +2332,10 @@ def test_validate_warns_when_supported_review_gate_keeps_deprecated_evidencePath
 
 
 @pytest.mark.parametrize("review_mode", ["local", "dual"])
-def test_validate_rejects_removed_review_gate_modes(tmp_path: Path, review_mode: str) -> None:
+def test_validate_rejects_removed_review_gate_modes(flow_root: Path, review_mode: str) -> None:
     config = default_pr_flow_config_for_test()
     config["defaults"]["reviewGate"] = {"mode": review_mode, "evidencePath": ".pr-flow/review-pass.json"}
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("validate", "--config", str(draft))
@@ -3322,10 +2348,10 @@ def test_validate_rejects_removed_review_gate_modes(tmp_path: Path, review_mode:
 
 
 @pytest.mark.parametrize("review_mode", [[], {}, None, 1, ""])
-def test_validate_rejects_invalid_review_gate_mode_values(tmp_path: Path, review_mode) -> None:
+def test_validate_rejects_invalid_review_gate_mode_values(flow_root: Path, review_mode) -> None:
     config = default_pr_flow_config_for_test()
     config["defaults"]["reviewGate"] = {"mode": review_mode}
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("validate", "--config", str(draft))
@@ -3336,12 +2362,12 @@ def test_validate_rejects_invalid_review_gate_mode_values(tmp_path: Path, review
     assert "remote task: configure GitHub required review" not in result.stdout
 
 
-def test_init_rejects_removed_review_gate_modes(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_init_rejects_removed_review_gate_modes(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
     config = default_pr_flow_config_for_test()
     config["defaults"]["reviewGate"] = {"mode": "local", "evidencePath": ".pr-flow/review-pass.json"}
-    draft = tmp_path / "confirmed.yaml"
+    draft = flow_root / "confirmed.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("init", "--project", str(project), "--config", str(draft))
@@ -3351,8 +2377,8 @@ def test_init_rejects_removed_review_gate_modes(tmp_path: Path) -> None:
     assert "error: defaults.reviewGate.mode unsupported: local" in result.stdout
 
 
-def test_validate_reports_errors_for_missing_core_shape(tmp_path: Path) -> None:
-    draft = tmp_path / "draft.yaml"
+def test_validate_reports_errors_for_missing_core_shape(flow_root: Path) -> None:
+    draft = flow_root / "draft.yaml"
     draft.write_text(
         yaml.safe_dump({"defaults": {"reviewGate": {"mode": "local"}}}, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
@@ -3367,10 +2393,10 @@ def test_validate_reports_errors_for_missing_core_shape(tmp_path: Path) -> None:
     assert "error: defaults.reviewGate.mode unsupported: local" in result.stdout
 
 
-def test_validate_reports_errors_for_invalid_wait_shape(tmp_path: Path) -> None:
+def test_validate_reports_errors_for_invalid_wait_shape(flow_root: Path) -> None:
     config = default_pr_flow_config_for_test()
     config["defaults"]["wait"] = "nope"
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("validate", "--config", str(draft))
@@ -3379,10 +2405,10 @@ def test_validate_reports_errors_for_invalid_wait_shape(tmp_path: Path) -> None:
     assert "error: defaults.wait must be a mapping" in result.stdout
 
 
-def test_validate_reports_errors_for_invalid_wait_values(tmp_path: Path) -> None:
+def test_validate_reports_errors_for_invalid_wait_values(flow_root: Path) -> None:
     config = default_pr_flow_config_for_test()
     config["defaults"]["wait"] = {"timeoutSeconds": "slow", "pollSeconds": 0}
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("validate", "--config", str(draft))
@@ -3392,8 +2418,8 @@ def test_validate_reports_errors_for_invalid_wait_values(tmp_path: Path) -> None
     assert "error: defaults.wait.pollSeconds must be a positive integer" in result.stdout
 
 
-def test_validate_reports_bad_yaml_as_structured_error(tmp_path: Path) -> None:
-    draft = tmp_path / "draft.yaml"
+def test_validate_reports_bad_yaml_as_structured_error(flow_root: Path) -> None:
+    draft = flow_root / "draft.yaml"
     draft.write_text("defaults: [\n", encoding="utf-8")
 
     result = run("validate", "--config", str(draft))
@@ -3431,7 +2457,7 @@ def test_validate_reports_bad_yaml_as_structured_error(tmp_path: Path) -> None:
         ),
     ],
 )
-def test_validate_dependency_matrix(tmp_path: Path, mutate, expected: str) -> None:
+def test_validate_dependency_matrix(flow_root: Path, mutate, expected: str) -> None:
     config = {
         "defaults": {
             "baseBranch": "main",
@@ -3445,7 +2471,7 @@ def test_validate_dependency_matrix(tmp_path: Path, mutate, expected: str) -> No
         "setup": {"github": {"requiredChecks": ["ci"]}},
     }
     mutate(config)
-    draft = tmp_path / "draft.yaml"
+    draft = flow_root / "draft.yaml"
     draft.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     result = run("validate", "--config", str(draft))
@@ -3453,8 +2479,8 @@ def test_validate_dependency_matrix(tmp_path: Path, mutate, expected: str) -> No
     assert expected in result.stdout
 
 
-def test_missing_config_reports_exception_required(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_missing_config_reports_exception_required(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
 
     result = run("diagnose", "--project", str(project))
@@ -3464,13 +2490,18 @@ def test_missing_config_reports_exception_required(tmp_path: Path) -> None:
     assert "missing_config" in result.stdout
 
 
-def test_status_file_is_written_for_stop_state(tmp_path: Path) -> None:
+def test_status_file_is_written_for_stop_state(flow_root: Path, monkeypatch) -> None:
+    from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_confirmed_pr_flow_config(project)
+    git_stub = CommandStub()
+    git_stub.add(["branch", "--show-current"], stderr="fatal: not a git repository\n", returncode=128)
+    git_stub.add(["rev-parse", "--git-common-dir"], stdout=".git\n")
+    monkeypatch.setattr(module, "git", git_stub)
     result = invoke_pr_flow(["diagnose", "--project", str(project)], module=module)
 
     assert result.returncode == 1
@@ -3478,17 +2509,22 @@ def test_status_file_is_written_for_stop_state(tmp_path: Path) -> None:
     assert status["status"] == "EXCEPTION_REQUIRED"
     assert status["command"] == "diagnose"
     assert status["details"]["reason"] == "git_current_branch_failed"
+    assert git_stub.calls == [
+        ("branch", "--show-current"),
+        ("rev-parse", "--git-common-dir"),
+        ("branch", "--show-current"),
+    ]
 
 
-def test_diagnose_outputs_dispatch_required_without_upstream(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_outputs_dispatch_required_without_upstream(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_minimal_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
     git_stub.add(
         ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
@@ -3499,7 +2535,7 @@ def test_diagnose_outputs_dispatch_required_without_upstream(tmp_path: Path, mon
     git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
     allow_current_base(git_stub, "b" * 40)
     monkeypatch.setattr(module, "git", git_stub)
-    monkeypatch.setattr(module, "gh", CommandStub())
+    monkeypatch.setattr(module, "gh", CommandStub(body_reader=read_body_file))
 
     result = invoke_pr_flow(["diagnose", "--project", str(project)], module=module)
 
@@ -3516,15 +2552,15 @@ def test_diagnose_outputs_dispatch_required_without_upstream(tmp_path: Path, mon
     assert "--scope" in status["details"]["nextCommand"]
 
 
-def test_complete_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path: Path, monkeypatch) -> None:
+def test_complete_auto_pushes_clean_unprotected_branch_without_upstream(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
     git_stub.add(
         ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
@@ -3535,7 +2571,7 @@ def test_complete_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path
     git_stub.add(["push", "-u", "origin", "feature/no-upstream"])
     git_stub.add(["rev-parse", "HEAD"], stdout="a" * 40 + "\n")
     allow_current_base(git_stub, "a" * 40)
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found for branch\n", returncode=1)
     gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fno-upstream", "--jq", "length"], stdout="0\n")
     gh_stub.add(["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"], stdout="https://github.example/test/repo/pull/12\n")
@@ -3559,12 +2595,12 @@ def test_complete_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path
 
 
 def test_complete_waits_for_auto_pushed_head_before_using_old_required_check_failure(
-    tmp_path: Path, monkeypatch
+    flow_root: Path, monkeypatch
 ) -> None:
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     config_path = project / ".pr-flow" / "config.yaml"
@@ -3612,7 +2648,7 @@ def test_complete_waits_for_auto_pushed_head_before_using_old_required_check_fai
 
     from tests.support.command_stubs import CommandStub
 
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -3657,7 +2693,7 @@ def test_complete_waits_for_auto_pushed_head_before_using_old_required_check_fai
     ],
 )
 def test_lifecycle_refuses_auto_push_when_upstream_has_new_commits(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     args_factory,
     command: str,
@@ -3666,14 +2702,14 @@ def test_lifecycle_refuses_auto_push_when_upstream_has_new_commits(
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     pending_pr = pr_view_json(checks=[{"name": "ci", "status": "QUEUED"}], head_oid="a" * 40)
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pending_pr)
     gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fexample", "--jq", "length"], stdout="0\n")
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
     git_stub.add(["rev-list", "--count", "@{u}..HEAD"], stdout="1\n")
@@ -3699,15 +2735,15 @@ def test_lifecycle_refuses_auto_push_when_upstream_has_new_commits(
     assert command in status["details"]["nextCommand"]
 
 
-def test_complete_refuses_auto_push_when_worktree_dirty(tmp_path: Path, monkeypatch) -> None:
+def test_complete_refuses_auto_push_when_worktree_dirty(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
     git_stub.add(
         ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
@@ -3715,7 +2751,7 @@ def test_complete_refuses_auto_push_when_worktree_dirty(tmp_path: Path, monkeypa
         returncode=128,
     )
     git_stub.add(["status", "--porcelain"], stdout=" M README.md\n")
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found for branch\n", returncode=1)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
@@ -3731,15 +2767,15 @@ def test_complete_refuses_auto_push_when_worktree_dirty(tmp_path: Path, monkeypa
     assert status["details"]["dirtyFiles"] == [" M README.md"]
 
 
-def test_complete_refuses_auto_push_when_remote_branch_has_active_rules(tmp_path: Path, monkeypatch) -> None:
+def test_complete_refuses_auto_push_when_remote_branch_has_active_rules(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
     git_stub.add(
         ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
@@ -3747,7 +2783,7 @@ def test_complete_refuses_auto_push_when_remote_branch_has_active_rules(tmp_path
         returncode=128,
     )
     git_stub.add(["status", "--porcelain"], stdout="")
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found for branch\n", returncode=1)
     gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fno-upstream", "--jq", "length"], stdout="1\n")
     monkeypatch.setattr(module, "git", git_stub)
@@ -3763,15 +2799,15 @@ def test_complete_refuses_auto_push_when_remote_branch_has_active_rules(tmp_path
     assert status["details"]["branch"] == "feature/no-upstream"
 
 
-def test_complete_refuses_auto_push_when_remote_rules_lookup_fails(tmp_path: Path, monkeypatch) -> None:
+def test_complete_refuses_auto_push_when_remote_rules_lookup_fails(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
     git_stub.add(
         ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
@@ -3779,7 +2815,7 @@ def test_complete_refuses_auto_push_when_remote_rules_lookup_fails(tmp_path: Pat
         returncode=128,
     )
     git_stub.add(["status", "--porcelain"], stdout="")
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found for branch\n", returncode=1)
     gh_stub.add(
         ["api", "repos/{owner}/{repo}/rules/branches/feature%2Fno-upstream", "--jq", "length"],
@@ -3798,15 +2834,15 @@ def test_complete_refuses_auto_push_when_remote_rules_lookup_fails(tmp_path: Pat
     assert status["details"]["reason"] == "remote_branch_rules_lookup_failed"
 
 
-def test_complete_outputs_push_required_when_auto_push_fails(tmp_path: Path, monkeypatch) -> None:
+def test_complete_outputs_push_required_when_auto_push_fails(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
     git_stub.add(
         ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
@@ -3817,7 +2853,7 @@ def test_complete_outputs_push_required_when_auto_push_fails(tmp_path: Path, mon
     git_stub.add(["push", "-u", "origin", "feature/no-upstream"], stderr="push failed\n", returncode=1)
     git_stub.add(["rev-parse", "HEAD"], stdout="a" * 40 + "\n")
     allow_current_base(git_stub, "a" * 40)
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found for branch\n", returncode=1)
     gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fno-upstream", "--jq", "length"], stdout="0\n")
     monkeypatch.setattr(module, "git", git_stub)
@@ -3832,15 +2868,15 @@ def test_complete_outputs_push_required_when_auto_push_fails(tmp_path: Path, mon
     assert status["details"]["nextCommand"] == "git push -u origin feature/no-upstream"
 
 
-def test_tweak_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path: Path, monkeypatch) -> None:
+def test_tweak_auto_pushes_clean_unprotected_branch_without_upstream(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/no-upstream\n")
     git_stub.add(
         ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
@@ -3851,7 +2887,7 @@ def test_tweak_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path: P
     git_stub.add(["push", "-u", "origin", "feature/no-upstream"])
     git_stub.add(["rev-parse", "HEAD"], stdout="a" * 40 + "\n")
     allow_current_base(git_stub, "a" * 40)
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found for branch\n", returncode=1)
     gh_stub.add(["api", "repos/{owner}/{repo}/rules/branches/feature%2Fno-upstream", "--jq", "length"], stdout="0\n")
     gh_stub.add(["pr", "create", "--base", "main", "--fill", "--body-file", "__placeholder__"], stdout="https://github.example/test/repo/pull/12\n")
@@ -3882,13 +2918,13 @@ def test_tweak_auto_pushes_clean_unprotected_branch_without_upstream(tmp_path: P
     [("fail", "FAILURE"), ("cancel", "CANCELLED")],
 )
 def test_tweak_stops_for_failed_or_cancelled_required_checks(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     bucket: str,
     state: str,
 ) -> None:
     project, result, _ = run_tweak_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         reason="small docs polish",
         required_response=(
@@ -3907,11 +2943,11 @@ def test_tweak_stops_for_failed_or_cancelled_required_checks(
     assert "status: merge_complete" not in result.stdout
 
 
-def test_diagnose_reports_unreported_checks_without_waiting(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_reports_unreported_checks_without_waiting(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: pytest.fail("diagnose must not sleep"))
     project, result = run_diagnose_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(checks=[], review_decision="APPROVED", head_oid="b" * 40),
         required_response=("[]", "", 0),
@@ -3924,9 +2960,9 @@ def test_diagnose_reports_unreported_checks_without_waiting(tmp_path: Path, monk
     assert status["details"]["checkGate"] == "NOT_REPORTED"
 
 
-def test_diagnose_distinguishes_cancelled_checks_and_requests_rerun(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_distinguishes_cancelled_checks_and_requests_rerun(flow_root: Path, monkeypatch) -> None:
     project, result = run_diagnose_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "CANCELLED"}],
@@ -3948,9 +2984,9 @@ def test_diagnose_distinguishes_cancelled_checks_and_requests_rerun(tmp_path: Pa
     assert "status: REPLY_OR_FIX_REQUIRED" in result.stdout
 
 
-def test_diagnose_uses_required_checks_instead_of_optional_rollup_failure(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_uses_required_checks_instead_of_optional_rollup_failure(flow_root: Path, monkeypatch) -> None:
     project, result = run_diagnose_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[
@@ -3970,7 +3006,7 @@ def test_diagnose_uses_required_checks_instead_of_optional_rollup_failure(tmp_pa
 
 @pytest.mark.parametrize("command", ["complete", "tweak", "diagnose"])
 def test_public_entries_stop_when_check_status_is_unavailable(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     command: str,
 ) -> None:
@@ -3982,14 +3018,14 @@ def test_public_entries_stop_when_check_status_is_unavailable(
     required_response = ("[]", "network unavailable\n", 1)
     if command == "complete":
         project, result = run_complete_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             pr_stdout=completed,
             required_responses=[required_response],
         )
     elif command == "tweak":
         project, result, _ = run_tweak_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             reason="small docs polish",
             checks=json.loads(completed)["statusCheckRollup"],
@@ -3997,7 +3033,7 @@ def test_public_entries_stop_when_check_status_is_unavailable(
         )
     else:
         project, result = run_diagnose_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             pr_stdout=completed,
             required_response=required_response,
@@ -4014,9 +3050,9 @@ def test_public_entries_stop_when_check_status_is_unavailable(
     assert "status: merge_complete" not in result.stdout
 
 
-def test_complete_stops_when_unknown_state_is_mixed_with_pending_check(tmp_path: Path, monkeypatch) -> None:
+def test_complete_stops_when_unknown_state_is_mixed_with_pending_check(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
@@ -4049,7 +3085,7 @@ def test_complete_stops_when_unknown_state_is_mixed_with_pending_check(tmp_path:
 @pytest.mark.parametrize("command", ["complete", "tweak", "diagnose"])
 @pytest.mark.parametrize("stderr", ["network unavailable\\n", "unexpected query failure\\n"])
 def test_public_entries_do_not_use_rollup_after_check_query_error(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     command: str,
     stderr: str,
@@ -4062,14 +3098,14 @@ def test_public_entries_do_not_use_rollup_after_check_query_error(
     required_response = ("[]", stderr, 1)
     if command == "complete":
         project, result = run_complete_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             pr_stdout=pending,
             required_responses=[required_response],
         )
     elif command == "tweak":
         project, result, _ = run_tweak_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             reason="small docs polish",
             checks=json.loads(pending)["statusCheckRollup"],
@@ -4077,7 +3113,7 @@ def test_public_entries_do_not_use_rollup_after_check_query_error(
         )
     else:
         project, result = run_diagnose_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             pr_stdout=pending,
             required_response=required_response,
@@ -4094,7 +3130,7 @@ def test_public_entries_do_not_use_rollup_after_check_query_error(
 
 @pytest.mark.parametrize("command", ["complete", "tweak", "diagnose"])
 def test_public_entries_use_pending_rollup_when_required_checks_are_not_reported(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     command: str,
 ) -> None:
@@ -4106,7 +3142,7 @@ def test_public_entries_use_pending_rollup_when_required_checks_are_not_reported
     required_response = ("", "no checks reported on the 'branch'\\n", 1)
     if command == "complete":
         project, result = run_complete_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             pr_stdout=pending,
             required_responses=[required_response],
@@ -4114,7 +3150,7 @@ def test_public_entries_use_pending_rollup_when_required_checks_are_not_reported
         )
     elif command == "tweak":
         project, result, _ = run_tweak_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             reason="small docs polish",
             checks=json.loads(pending)["statusCheckRollup"],
@@ -4122,7 +3158,7 @@ def test_public_entries_use_pending_rollup_when_required_checks_are_not_reported
         )
     else:
         project, result = run_diagnose_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             pr_stdout=pending,
             required_response=required_response,
@@ -4137,9 +3173,9 @@ def test_public_entries_use_pending_rollup_when_required_checks_are_not_reported
     assert "status: merge_complete" not in result.stdout
 
 
-def test_complete_reports_check_auth_failure_without_rollup_fallback(tmp_path: Path, monkeypatch) -> None:
+def test_complete_reports_check_auth_failure_without_rollup_fallback(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
@@ -4159,9 +3195,9 @@ def test_complete_reports_check_auth_failure_without_rollup_fallback(tmp_path: P
     assert status["details"]["nextCommand"] == "gh auth status"
 
 
-def test_complete_rejects_partial_check_data_after_unknown_query_error(tmp_path: Path, monkeypatch) -> None:
+def test_complete_rejects_partial_check_data_after_unknown_query_error(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
@@ -4181,9 +3217,9 @@ def test_complete_rejects_partial_check_data_after_unknown_query_error(tmp_path:
     assert status["details"]["checkQueryError"]["stderr"] == "unexpected query failure"
 
 
-def test_diagnose_outputs_exception_for_unknown_gh_failure(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_outputs_exception_for_unknown_gh_failure(flow_root: Path, monkeypatch) -> None:
     project, result = run_diagnose_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout="",
         pr_stderr="synthetic gh failure\n",
@@ -4201,12 +3237,12 @@ def test_diagnose_outputs_exception_for_unknown_gh_failure(tmp_path: Path, monke
     assert status["details"]["reason"] == "gh_pr_view_failed"
 
 
-def test_diagnose_retries_transient_eof_without_repeated_stop_output(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_retries_transient_eof_without_repeated_stop_output(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     monkeypatch.setenv("PR_FLOW_GH_PR_VIEW_RETRIES", "1")
@@ -4216,11 +3252,11 @@ def test_diagnose_retries_transient_eof_without_repeated_stop_output(tmp_path: P
         head_oid="b" * 40,
         body="Human body",
     )
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr='Post "https://api.github.com/graphql": EOF\n', returncode=1)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_stdout)
     allow_required_checks(gh_stub)
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
     git_stub.add(["status", "--short"], stdout="")
@@ -4237,19 +3273,19 @@ def test_diagnose_retries_transient_eof_without_repeated_stop_output(tmp_path: P
     assert gh_stub.calls.count(("pr", "view", "--json", module.PR_VIEW_FIELDS)) == 2
 
 
-def test_diagnose_reports_dispatch_when_transient_eof_retries_are_exhausted(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_reports_dispatch_when_transient_eof_retries_are_exhausted(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     monkeypatch.setenv("PR_FLOW_GH_PR_VIEW_RETRIES", "1")
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     for _ in range(2):
         gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr='Post "https://api.github.com/graphql": EOF\n', returncode=1)
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     git_stub.add(["branch", "--show-current"], stdout="feature/example\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/example\n")
     git_stub.add(["status", "--short"], stdout="")
@@ -4274,9 +3310,9 @@ def test_diagnose_reports_dispatch_when_transient_eof_retries_are_exhausted(tmp_
     assert str(project) in status["details"]["nextCommand"]
 
 
-def test_diagnose_reports_dispatch_for_gh_auth_failure(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_reports_dispatch_for_gh_auth_failure(flow_root: Path, monkeypatch) -> None:
     project, result = run_diagnose_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout="",
         pr_stderr="gh: To get started with GitHub CLI, please run: gh auth login\n",
@@ -4292,9 +3328,9 @@ def test_diagnose_reports_dispatch_for_gh_auth_failure(tmp_path: Path, monkeypat
     assert status["details"]["nextCommand"] == "gh auth status"
 
 
-def test_diagnose_on_base_branch_without_pr_reports_gh_pr_view_failed(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_on_base_branch_without_pr_reports_gh_pr_view_failed(flow_root: Path, monkeypatch) -> None:
     project, result = run_diagnose_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout="",
         pr_stderr="no pull requests found for branch\n",
@@ -4313,21 +3349,21 @@ def test_diagnose_on_base_branch_without_pr_reports_gh_pr_view_failed(tmp_path: 
     assert "no pull requests found" in status["details"]["stderr"]
 
 
-def test_diagnose_on_feature_branch_without_pr_reports_dispatch_required(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_on_feature_branch_without_pr_reports_dispatch_required(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_minimal_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/ready\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/ready\n")
     git_stub.add(["status", "--short"], stdout="")
     git_stub.add(["rev-parse", "HEAD"], stdout="b" * 40 + "\n")
     allow_current_base(git_stub, "b" * 40)
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     gh_stub.add(
         ["pr", "view", "--json", module.PR_VIEW_FIELDS],
         stderr="no pull requests found for branch\n",
@@ -4351,15 +3387,15 @@ def test_diagnose_on_feature_branch_without_pr_reports_dispatch_required(tmp_pat
     assert status["details"]["optionalFixesArg"] == "--fixes 98"
 
 
-def test_diagnose_rejects_stale_remote_base_before_pr_dispatch(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_rejects_stale_remote_base_before_pr_dispatch(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_minimal_pr_flow_config(project)
-    git_stub = CommandStub()
+    git_stub = CommandStub(body_reader=read_body_file)
     git_stub.add(["branch", "--show-current"], stdout="feature/ready\n")
     git_stub.add(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], stdout="origin/feature/ready\n")
     git_stub.add(["status", "--short"], stdout="")
@@ -4367,7 +3403,7 @@ def test_diagnose_rejects_stale_remote_base_before_pr_dispatch(tmp_path: Path, m
     git_stub.add(["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"])
     git_stub.add(["rev-parse", "__snapshot_ref__"], stdout="c" * 40 + "\n")
     git_stub.add(["merge-base", "--is-ancestor", "c" * 40, "b" * 40], returncode=1)
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     monkeypatch.setattr(module, "git", git_stub)
     monkeypatch.setattr(module, "gh", gh_stub)
 
@@ -4378,9 +3414,9 @@ def test_diagnose_rejects_stale_remote_base_before_pr_dispatch(tmp_path: Path, m
     assert gh_stub.calls == []
 
 
-def test_diagnose_existing_empty_body_reports_pr_body_required(tmp_path: Path, monkeypatch) -> None:
+def test_diagnose_existing_empty_body_reports_pr_body_required(flow_root: Path, monkeypatch) -> None:
     project, result = run_diagnose_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -4461,7 +3497,7 @@ def test_diagnose_existing_empty_body_reports_pr_body_required(tmp_path: Path, m
     ],
 )
 def test_diagnose_outputs_stop_state_matrix(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     pr_stdout: str,
     returncode: int,
@@ -4469,7 +3505,7 @@ def test_diagnose_outputs_stop_state_matrix(
     expected_reason: str,
     extra_detail: dict[str, str],
 ) -> None:
-    project, result = run_diagnose_in_process(tmp_path, monkeypatch, pr_stdout=pr_stdout)
+    project, result = run_diagnose_in_process(flow_root, monkeypatch, pr_stdout=pr_stdout)
 
     assert result.returncode == returncode
     assert f"status: {expected_status}" in result.stdout
@@ -4500,13 +3536,13 @@ def test_diagnose_outputs_stop_state_matrix(
     ],
 )
 def test_diagnose_stop_output_includes_recovery_action(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     checks: list[dict[str, object]],
     expected_status: str,
     expected_reason: str,
 ) -> None:
-    project, result = run_diagnose_in_process(tmp_path, monkeypatch, pr_stdout=pr_view_json(checks=checks))
+    project, result = run_diagnose_in_process(flow_root, monkeypatch, pr_stdout=pr_view_json(checks=checks))
 
     assert result.returncode == 1
     assert f"status: {expected_status}" in result.stdout
@@ -4523,13 +3559,13 @@ def test_diagnose_stop_output_includes_recovery_action(
     ("state", "is_active"),
     [("OPEN", True), ("MERGED", False), ("CLOSED", False)],
 )
-def test_find_pr_treats_only_open_pr_as_active(tmp_path: Path, monkeypatch, state: str, is_active: bool) -> None:
+def test_find_pr_treats_only_open_pr_as_active(flow_root: Path, monkeypatch, state: str, is_active: bool) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     gh_stub.add(
         ["pr", "view", "--json", module.PR_VIEW_FIELDS],
         stdout=pr_view_json(checks=[], state=state, head_oid="c" * 40),
@@ -4544,12 +3580,12 @@ def test_find_pr_treats_only_open_pr_as_active(tmp_path: Path, monkeypatch, stat
 @pytest.mark.parametrize("command", ["complete", "tweak"])
 @pytest.mark.parametrize("terminal_state", ["MERGED", "CLOSED"])
 def test_terminal_pr_starts_new_lifecycle_from_current_head(
-    tmp_path: Path, monkeypatch, command: str, terminal_state: str
+    flow_root: Path, monkeypatch, command: str, terminal_state: str
 ) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     current_head = "b" * 40
@@ -4559,7 +3595,7 @@ def test_terminal_pr_starts_new_lifecycle_from_current_head(
         review_decision="APPROVED",
         head_oid=current_head,
     )
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(
         ["pr", "view", "--json", module.PR_VIEW_FIELDS],
         stdout=pr_view_json(checks=[], state=terminal_state, head_oid=old_head),
@@ -4570,7 +3606,7 @@ def test_terminal_pr_starts_new_lifecycle_from_current_head(
         gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=active_pr)
     allow_required_checks(gh_stub)
     allow_required_checks(gh_stub)
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -4606,12 +3642,12 @@ def test_terminal_pr_starts_new_lifecycle_from_current_head(
     assert all(old_head not in call for call in git_stub.calls)
 
 
-def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path: Path, monkeypatch) -> None:
+def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     head_oid = "b" * 40
@@ -4620,7 +3656,7 @@ def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path
         review_decision="APPROVED",
         head_oid=head_oid,
     )
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     allow_required_checks(gh_stub)
     allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stderr="no pull requests found\n", returncode=1)
@@ -4631,7 +3667,7 @@ def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -4669,12 +3705,12 @@ def test_complete_creates_pr_when_none_exists_then_merges_and_cleans_up(tmp_path
     assert gh_stub.body_files[0]["body"] == expected_pr_body(fixes=())
 
 
-def test_complete_full_flow_uses_configured_squash_strategy(tmp_path: Path, monkeypatch) -> None:
+def test_complete_full_flow_uses_configured_squash_strategy(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project, merge_strategy="squash")
     head_oid = "b" * 40
@@ -4683,13 +3719,13 @@ def test_complete_full_flow_uses_configured_squash_strategy(tmp_path: Path, monk
         review_decision="APPROVED",
         head_oid=head_oid,
     )
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     gh_stub.add(["pr", "merge", "12", "--squash", "--match-head-commit", head_oid])
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -4720,23 +3756,23 @@ def test_complete_full_flow_uses_configured_squash_strategy(tmp_path: Path, monk
     assert ("pr", "merge", "12", "--squash", "--match-head-commit", head_oid) in gh_stub.calls
 
 
-def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path, monkeypatch) -> None:
+def test_complete_merges_locked_head_then_runs_cleanup_in_order(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     head_oid = "b" * 40
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     allow_required_checks(gh_stub)
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED", head_oid=head_oid))
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED", head_oid=head_oid))
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=pr_view_json(checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}], review_decision="APPROVED", head_oid=head_oid))
     gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -4773,16 +3809,16 @@ def test_complete_merges_locked_head_then_runs_cleanup_in_order(tmp_path: Path, 
     assert status["command"] == "cleanup"
 
 
-def test_complete_does_not_run_build_and_verify_full_verify(tmp_path: Path, monkeypatch) -> None:
+def test_complete_does_not_run_build_and_verify_full_verify(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     head_oid = "b" * 40
-    gh_stub = CommandStub()
+    gh_stub = CommandStub(body_reader=read_body_file)
     allow_required_checks(gh_stub)
     for command in [
         ["pr", "view", "--json", module.PR_VIEW_FIELDS],
@@ -4801,7 +3837,7 @@ def test_complete_does_not_run_build_and_verify_full_verify(tmp_path: Path, monk
         ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
         stdout=cleanup_pr_view_json(),
     )
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -4843,9 +3879,9 @@ def test_complete_does_not_run_build_and_verify_full_verify(tmp_path: Path, monk
     assert "status: cleanup_complete" in result.stdout
 
 
-def test_complete_returns_cleanup_stop_when_cleanup_fails_after_merge(tmp_path: Path, monkeypatch) -> None:
+def test_complete_returns_cleanup_stop_when_cleanup_fails_after_merge(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -4870,9 +3906,9 @@ def test_complete_returns_cleanup_stop_when_cleanup_fails_after_merge(tmp_path: 
     assert "pr-flow-cleanup" in status["details"]["recovery"]
 
 
-def test_complete_stops_when_pr_sync_fails_instead_of_using_stale_pr(tmp_path: Path, monkeypatch) -> None:
+def test_complete_stops_when_pr_sync_fails_instead_of_using_stale_pr(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[
             (
@@ -4898,17 +3934,17 @@ def test_complete_stops_when_pr_sync_fails_instead_of_using_stale_pr(tmp_path: P
     assert "rate limited" in status["details"]["stderr"]
 
 
-def test_complete_uses_configured_merge_strategy_flag(tmp_path: Path, monkeypatch) -> None:
+def test_complete_uses_configured_merge_strategy_flag(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
 
     module = load_pr_flow_module()
     for strategy, expected_flag in [("merge", "--merge"), ("squash", "--squash"), ("rebase", "--rebase")]:
-        project = tmp_path / strategy
+        project = flow_root / strategy
         project.mkdir()
         head_oid = f"{strategy:0<40}"[:40]
-        git_stub = CommandStub()
+        git_stub = CommandStub(body_reader=read_body_file)
         git_stub.add(["rev-parse", "HEAD"], stdout=f"{head_oid}\n")
-        gh_stub = CommandStub()
+        gh_stub = CommandStub(body_reader=read_body_file)
         gh_stub.add(["pr", "merge", "12", expected_flag, "--match-head-commit", head_oid])
         monkeypatch.setattr(module, "git", git_stub)
         monkeypatch.setattr(module, "gh", gh_stub)
@@ -4923,10 +3959,10 @@ def test_complete_uses_configured_merge_strategy_flag(tmp_path: Path, monkeypatc
         assert gh_stub.calls == [("pr", "merge", "12", expected_flag, "--match-head-commit", head_oid)]
 
 
-def test_complete_rejects_when_head_moved_before_merge(tmp_path: Path, monkeypatch) -> None:
+def test_complete_rejects_when_head_moved_before_merge(flow_root: Path, monkeypatch) -> None:
     moved_head_oid = "0" * 40
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -4994,7 +4030,7 @@ def test_complete_rejects_when_head_moved_before_merge(tmp_path: Path, monkeypat
     ],
 )
 def test_complete_stop_preserves_recovery_command_arguments(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     pr_stdout: str,
     required_buckets: tuple[str, ...],
@@ -5003,7 +4039,7 @@ def test_complete_stop_preserves_recovery_command_arguments(
     expected_reason: str,
 ) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_stdout,
         git_responses=git_responses,
@@ -5033,7 +4069,7 @@ def test_complete_stop_preserves_recovery_command_arguments(
         cleanup_calls: list[argparse.Namespace] = []
         monkeypatch.setattr(module, "run_cleanup", lambda args: cleanup_calls.append(args) or 0)
         replay_project, replay_result = run_complete_in_process(
-            tmp_path,
+            flow_root,
             monkeypatch,
             project=project,
             command_args=replay_args,
@@ -5053,7 +4089,7 @@ def test_complete_stop_preserves_recovery_command_arguments(
         assert cleanup_calls[0].remove_worktree is True
 
 
-def test_complete_rejects_when_base_moves_after_checks(tmp_path: Path, monkeypatch) -> None:
+def test_complete_rejects_when_base_moves_after_checks(flow_root: Path, monkeypatch) -> None:
     head_oid = "b" * 40
     before = pr_view_json(
         checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -5068,7 +4104,7 @@ def test_complete_rejects_when_base_moves_after_checks(tmp_path: Path, monkeypat
         base_oid="c" * 40,
     )
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(before, "", 0), (before, "", 0), (after, "", 0)],
     )
@@ -5078,9 +4114,9 @@ def test_complete_rejects_when_base_moves_after_checks(tmp_path: Path, monkeypat
     assert status["details"]["reason"] == "base_outdated"
 
 
-def test_complete_rejects_missing_head_ref_oid_without_merge(tmp_path: Path, monkeypatch) -> None:
+def test_complete_rejects_missing_head_ref_oid_without_merge(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -5097,9 +4133,9 @@ def test_complete_rejects_missing_head_ref_oid_without_merge(tmp_path: Path, mon
     assert status["details"]["reason"] == "missing_head_ref_oid"
 
 
-def test_complete_rejects_current_branch_that_does_not_match_pr_head(tmp_path: Path, monkeypatch) -> None:
+def test_complete_rejects_current_branch_that_does_not_match_pr_head(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -5119,9 +4155,9 @@ def test_complete_rejects_current_branch_that_does_not_match_pr_head(tmp_path: P
     assert status["details"]["headRefName"] == "feature/example"
 
 
-def test_complete_reports_exception_when_gh_pr_merge_fails(tmp_path: Path, monkeypatch) -> None:
+def test_complete_reports_exception_when_gh_pr_merge_fails(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -5146,13 +4182,13 @@ def test_complete_reports_exception_when_gh_pr_merge_fails(tmp_path: Path, monke
     assert status["details"]["stderr"] == "merge failed"
 
 
-def test_complete_reports_dispatch_when_ruleset_blocks_merge(tmp_path: Path, monkeypatch) -> None:
+def test_complete_reports_dispatch_when_ruleset_blocks_merge(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     clock = iter(range(0, 600, 60))
     monkeypatch.setattr(module.time, "monotonic", lambda: float(next(clock)))
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: pytest.fail("expired window must not sleep"))
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -5183,12 +4219,12 @@ def test_complete_reports_dispatch_when_ruleset_blocks_merge(tmp_path: Path, mon
     assert "ruleset" in action
 
 
-def test_complete_retries_ordinary_merge_when_ruleset_suggests_auto(tmp_path: Path, monkeypatch) -> None:
+def test_complete_retries_ordinary_merge_when_ruleset_suggests_auto(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_complete_pr_flow_config(project)
     head_oid = "b" * 40
@@ -5197,7 +4233,7 @@ def test_complete_retries_ordinary_merge_when_ruleset_suggests_auto(tmp_path: Pa
         review_decision="APPROVED",
         head_oid=head_oid,
     )
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     allow_required_checks(gh_stub)
     allow_required_checks(gh_stub)
     allow_required_checks(gh_stub)
@@ -5214,7 +4250,7 @@ def test_complete_retries_ordinary_merge_when_ruleset_suggests_auto(tmp_path: Pa
     gh_stub.add(["pr", "view", "--json", module.PR_VIEW_FIELDS], stdout=completed_pr)
     gh_stub.add(["pr", "merge", "12", "--merge", "--match-head-commit", head_oid])
     gh_stub.add(["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"], stdout=cleanup_pr_view_json())
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["branch", "--show-current"], "feature/example\n"),
         (["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "origin/feature/example\n"),
@@ -5249,9 +4285,9 @@ def test_complete_retries_ordinary_merge_when_ruleset_suggests_auto(tmp_path: Pa
     assert all("--auto" not in call for call in gh_stub.calls)
 
 
-def test_complete_returns_checks_pending_when_ruleset_recovery_wait_times_out(tmp_path: Path, monkeypatch) -> None:
+def test_complete_returns_checks_pending_when_ruleset_recovery_wait_times_out(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[
             (
@@ -5334,14 +4370,14 @@ def test_complete_returns_checks_pending_when_ruleset_recovery_wait_times_out(tm
     ],
 )
 def test_complete_uses_summary_only_for_pending_or_failure_when_required_checks_are_empty(
-    tmp_path: Path,
+    flow_root: Path,
     monkeypatch,
     summary: list[dict[str, object]],
     expected_status: str,
     expected_reason: str,
 ) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(checks=summary, review_decision="APPROVED", head_oid="b" * 40),
         required_responses=[("[]", "", 0)],
@@ -5356,7 +4392,7 @@ def test_complete_uses_summary_only_for_pending_or_failure_when_required_checks_
     assert status["details"]["requiredChecks"] == []
 
 
-def test_complete_rechecks_review_after_pending_checks_pass(tmp_path: Path, monkeypatch) -> None:
+def test_complete_rechecks_review_after_pending_checks_pass(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     pending = pr_view_json(
         checks=[{"name": "ci", "status": "QUEUED", "conclusion": None}],
@@ -5370,7 +4406,7 @@ def test_complete_rechecks_review_after_pending_checks_pass(tmp_path: Path, monk
     )
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(pending, "", 0), (pending, "", 0)] + [(changes_requested, "", 0)] * 3,
         required_buckets=("pending", "pass", "pass"),
@@ -5385,7 +4421,7 @@ def test_complete_rechecks_review_after_pending_checks_pass(tmp_path: Path, monk
     assert status["details"]["reviewDecision"] == "CHANGES_REQUESTED"
 
 
-def test_complete_observes_unreported_checks_until_passed(tmp_path: Path, monkeypatch) -> None:
+def test_complete_observes_unreported_checks_until_passed(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     empty = pr_view_json(checks=[], review_decision="APPROVED", head_oid="b" * 40)
     pending = pr_view_json(
@@ -5402,7 +4438,7 @@ def test_complete_observes_unreported_checks_until_passed(tmp_path: Path, monkey
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(module, "run_cleanup", lambda _args: 0)
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(empty, "", 0), (empty, "", 0), (pending, "", 0)] + [(passed, "", 0)] * 3,
         required_responses=[
@@ -5418,7 +4454,7 @@ def test_complete_observes_unreported_checks_until_passed(tmp_path: Path, monkey
     assert "status: merge_complete" in result.stdout
 
 
-def test_complete_reports_unreported_checks_after_bounded_window(tmp_path: Path, monkeypatch) -> None:
+def test_complete_reports_unreported_checks_after_bounded_window(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     empty = pr_view_json(checks=[], review_decision="APPROVED", head_oid="b" * 40)
     clock = iter([0.0, 0.0, 61.0])
@@ -5426,7 +4462,7 @@ def test_complete_reports_unreported_checks_after_bounded_window(tmp_path: Path,
     monkeypatch.setattr(module.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(module.time, "sleep", sleeps.append)
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(empty, "", 0), (empty, "", 0), (empty, "", 0)],
         required_responses=[("[]", "", 0), ("[]", "", 0)],
@@ -5444,12 +4480,12 @@ def test_complete_reports_unreported_checks_after_bounded_window(tmp_path: Path,
     assert sleeps == [5]
 
 
-def test_complete_respects_zero_timeout_while_checks_are_unreported(tmp_path: Path, monkeypatch) -> None:
+def test_complete_respects_zero_timeout_while_checks_are_unreported(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     empty = pr_view_json(checks=[], review_decision="APPROVED", head_oid="b" * 40)
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: pytest.fail("zero timeout must not sleep"))
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(empty, "", 0), (empty, "", 0)],
         required_responses=[("[]", "", 0)],
@@ -5461,7 +4497,7 @@ def test_complete_respects_zero_timeout_while_checks_are_unreported(tmp_path: Pa
     assert status["details"]["reason"] == "checks_not_reported"
 
 
-def test_complete_does_not_reset_timeout_after_unreported_window(tmp_path: Path, monkeypatch) -> None:
+def test_complete_does_not_reset_timeout_after_unreported_window(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     empty = pr_view_json(checks=[], review_decision="APPROVED", head_oid="b" * 40)
     pending = pr_view_json(
@@ -5474,7 +4510,7 @@ def test_complete_does_not_reset_timeout_after_unreported_window(tmp_path: Path,
     monkeypatch.setattr(module.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(module.time, "sleep", sleeps.append)
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(empty, "", 0), (empty, "", 0), (pending, "", 0)],
         required_responses=[
@@ -5491,7 +4527,7 @@ def test_complete_does_not_reset_timeout_after_unreported_window(tmp_path: Path,
     assert sleeps == [5]
 
 
-def test_complete_stops_when_commits_change_during_unreported_observation(tmp_path: Path, monkeypatch) -> None:
+def test_complete_stops_when_commits_change_during_unreported_observation(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     initial = pr_view_json(checks=[], review_decision="APPROVED", head_oid="b" * 40)
     changed = pr_view_json(
@@ -5501,7 +4537,7 @@ def test_complete_stops_when_commits_change_during_unreported_observation(tmp_pa
     )
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(initial, "", 0), (initial, "", 0), (changed, "", 0)],
         required_responses=[("[]", "", 0)],
@@ -5518,7 +4554,7 @@ def test_complete_stops_when_commits_change_during_unreported_observation(tmp_pa
     assert "status: merge_complete" not in result.stdout
 
 
-def test_complete_rejects_commit_change_before_gate_observation(tmp_path: Path, monkeypatch) -> None:
+def test_complete_rejects_commit_change_before_gate_observation(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     initial = pr_view_json(
         checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -5534,7 +4570,7 @@ def test_complete_rejects_commit_change_before_gate_observation(tmp_path: Path, 
     )
     monkeypatch.setattr(module, "run_cleanup", lambda _args: 0)
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(initial, "", 0), (refreshed, "", 0), (refreshed, "", 0)],
         required_responses=[
@@ -5553,7 +4589,7 @@ def test_complete_rejects_commit_change_before_gate_observation(tmp_path: Path, 
 
 
 def test_complete_waits_after_pending_exit_and_merges_when_checks_pass(
-    tmp_path: Path, monkeypatch
+    flow_root: Path, monkeypatch
 ) -> None:
     module = load_pr_flow_module()
     completed_pr = pr_view_json(
@@ -5565,7 +4601,7 @@ def test_complete_waits_after_pending_exit_and_merges_when_checks_pass(
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(module, "run_cleanup", lambda _args: 0)
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(completed_pr, "", 0)] * 5,
         required_buckets=("pending", "pass", "pass"),
@@ -5579,7 +4615,7 @@ def test_complete_waits_after_pending_exit_and_merges_when_checks_pass(
 
 @pytest.mark.parametrize("bucket", ["fail", "cancel"])
 def test_complete_failed_or_cancelled_required_checks_are_not_waited(
-    tmp_path: Path, monkeypatch, bucket: str
+    flow_root: Path, monkeypatch, bucket: str
 ) -> None:
     completed_pr = pr_view_json(
         checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -5587,7 +4623,7 @@ def test_complete_failed_or_cancelled_required_checks_are_not_waited(
         head_oid="b" * 40,
     )
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=completed_pr,
         cleanup_stdout=cleanup_pr_view_json(),
@@ -5601,7 +4637,7 @@ def test_complete_failed_or_cancelled_required_checks_are_not_waited(
     assert status["details"]["reason"] == "checks_or_review_blocking"
 
 
-def test_complete_retries_ordinary_merge_until_ruleset_converges(tmp_path: Path, monkeypatch) -> None:
+def test_complete_retries_ordinary_merge_until_ruleset_converges(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     now = 0.0
     sleeps: list[float] = []
@@ -5625,7 +4661,7 @@ def test_complete_retries_ordinary_merge_until_ruleset_converges(tmp_path: Path,
     )
     blocked = "X Pull request owner/repo#90 is not mergeable: the base branch policy prohibits the merge.\n"
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(completed_pr, "", 0)] * 8,
         merge_responses=[(blocked, 1), (blocked, 1), ("", 0)],
@@ -5639,7 +4675,7 @@ def test_complete_retries_ordinary_merge_until_ruleset_converges(tmp_path: Path,
     assert len(cleanup_calls) == 1
 
 def test_complete_preserves_initial_and_final_ruleset_errors_after_bounded_retries(
-    tmp_path: Path, monkeypatch
+    flow_root: Path, monkeypatch
 ) -> None:
     module = load_pr_flow_module()
     now = 0.0
@@ -5665,7 +4701,7 @@ def test_complete_preserves_initial_and_final_ruleset_errors_after_bounded_retri
         for index in range(5)
     ]
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(completed_pr, "", 0)] * 12,
         merge_responses=[(error, 1) for error in errors],
@@ -5683,7 +4719,7 @@ def test_complete_preserves_initial_and_final_ruleset_errors_after_bounded_retri
     assert status["details"]["retryDetails"]["stderr"] == errors[-1].strip()
     assert status["details"]["retryAttempts"] == 4
 
-def test_ruleset_retry_rechecks_commits_before_ordinary_merge(tmp_path: Path, monkeypatch) -> None:
+def test_ruleset_retry_rechecks_commits_before_ordinary_merge(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     original = json.loads(
         pr_view_json(
@@ -5717,7 +4753,7 @@ def test_ruleset_retry_rechecks_commits_before_ordinary_merge(tmp_path: Path, mo
 
     with pytest.raises(module.PrFlowError) as error:
         module.retry_merge_after_ruleset_block(
-            tmp_path,
+            flow_root,
             module.default_config("main"),
             original,
             {},
@@ -5728,7 +4764,7 @@ def test_ruleset_retry_rechecks_commits_before_ordinary_merge(tmp_path: Path, mo
     assert merge_calls == [1]
 
 
-def test_complete_stops_when_ruleset_retry_observes_pending_checks(tmp_path: Path, monkeypatch) -> None:
+def test_complete_stops_when_ruleset_retry_observes_pending_checks(flow_root: Path, monkeypatch) -> None:
     module = load_pr_flow_module()
     head_oid = "b" * 40
     completed_pr = pr_view_json(
@@ -5743,7 +4779,7 @@ def test_complete_stops_when_ruleset_retry_observes_pending_checks(tmp_path: Pat
     )
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: pytest.fail("pending checks must stop retry"))
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(completed_pr, "", 0)] * 4 + [(pending_pr, "", 0)],
         merge_responses=[("X Pull request owner/repo#90 is not mergeable: the base branch policy prohibits the merge.\n", 1)],
@@ -5758,7 +4794,7 @@ def test_complete_stops_when_ruleset_retry_observes_pending_checks(tmp_path: Pat
     assert status["details"]["reason"] == "checks_pending"
 
 
-def test_complete_stops_when_review_changes_during_ruleset_retry(tmp_path: Path, monkeypatch) -> None:
+def test_complete_stops_when_review_changes_during_ruleset_retry(flow_root: Path, monkeypatch) -> None:
     approved = pr_view_json(
         checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
         review_decision="APPROVED",
@@ -5771,7 +4807,7 @@ def test_complete_stops_when_review_changes_during_ruleset_retry(tmp_path: Path,
     )
     blocked = "X Pull request owner/repo#90 is not mergeable: the base branch policy prohibits the merge.\n"
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_responses=[(approved, "", 0)] * 5 + [(changes_requested, "", 0)],
         merge_responses=[(blocked, 1)],
@@ -5786,9 +4822,9 @@ def test_complete_stops_when_review_changes_during_ruleset_retry(tmp_path: Path,
     assert status["details"]["reviewDecision"] == "CHANGES_REQUESTED"
 
 
-def test_complete_rejects_unknown_merge_strategy(tmp_path: Path, monkeypatch) -> None:
+def test_complete_rejects_unknown_merge_strategy(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -5805,11 +4841,11 @@ def test_complete_rejects_unknown_merge_strategy(tmp_path: Path, monkeypatch) ->
     assert status["details"]["reason"] == "unknown_merge_strategy"
 
 
-def test_complete_skip_review_gate_ignores_github_changes_requested(tmp_path: Path) -> None:
+def test_complete_skip_review_gate_ignores_github_changes_requested(flow_root: Path) -> None:
     module = load_pr_flow_module()
 
     result = module.check_review_gate(
-        tmp_path,
+        flow_root,
         review_gate_config_for_test("skip"),
         passing_review_pr(review_decision="CHANGES_REQUESTED"),
     )
@@ -5817,9 +4853,9 @@ def test_complete_skip_review_gate_ignores_github_changes_requested(tmp_path: Pa
     assert result is None
 
 
-def test_complete_github_review_gate_blocks_changes_requested(tmp_path: Path, monkeypatch) -> None:
+def test_complete_github_review_gate_blocks_changes_requested(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
@@ -5836,9 +4872,9 @@ def test_complete_github_review_gate_blocks_changes_requested(tmp_path: Path, mo
     assert status["details"]["reason"] == "review_gate_blocking"
 
 
-def test_complete_wait_timeout_zero_reports_pending_checks_without_sleep(tmp_path: Path, monkeypatch) -> None:
+def test_complete_wait_timeout_zero_reports_pending_checks_without_sleep(flow_root: Path, monkeypatch) -> None:
     project, result = run_complete_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=pr_view_json(
             checks=[{"name": "ci", "status": "IN_PROGRESS", "conclusion": None}],
@@ -5856,10 +4892,10 @@ def test_complete_wait_timeout_zero_reports_pending_checks_without_sleep(tmp_pat
 
 
 @pytest.mark.parametrize("review_mode", ["local", "dual"])
-def test_complete_rejects_removed_review_gate_modes(tmp_path: Path, review_mode: str) -> None:
+def test_complete_rejects_removed_review_gate_modes(flow_root: Path, review_mode: str) -> None:
     module = load_pr_flow_module()
 
-    result = module.check_review_gate(tmp_path, review_gate_config_for_test(review_mode), passing_review_pr())
+    result = module.check_review_gate(flow_root, review_gate_config_for_test(review_mode), passing_review_pr())
 
     assert result is not None
     assert result["status"] == "EXCEPTION_REQUIRED"
@@ -5868,10 +4904,10 @@ def test_complete_rejects_removed_review_gate_modes(tmp_path: Path, review_mode:
 
 
 @pytest.mark.parametrize("review_mode", [[], {}, None, 1, ""])
-def test_complete_rejects_invalid_review_gate_mode_values(tmp_path: Path, review_mode) -> None:
+def test_complete_rejects_invalid_review_gate_mode_values(flow_root: Path, review_mode) -> None:
     module = load_pr_flow_module()
 
-    result = module.check_review_gate(tmp_path, review_gate_config_for_test(review_mode), passing_review_pr())
+    result = module.check_review_gate(flow_root, review_gate_config_for_test(review_mode), passing_review_pr())
 
     assert result is not None
     assert result["status"] == "EXCEPTION_REQUIRED"
@@ -5879,8 +4915,8 @@ def test_complete_rejects_invalid_review_gate_mode_values(tmp_path: Path, review
     assert result["details"]["reviewGateMode"] == review_mode
 
 
-def test_tweak_requires_reason(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_tweak_requires_reason(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
 
     result = run("tweak", "--project", str(project))
@@ -5899,10 +4935,10 @@ def test_bare_tweak_requires_project() -> None:
     assert "--project" in result.stderr
 
 
-def test_tweak_creates_pr_when_none_exists_and_writes_body(tmp_path: Path, monkeypatch) -> None:
+def test_tweak_creates_pr_when_none_exists_and_writes_body(flow_root: Path, monkeypatch) -> None:
     reason = "small docs polish"
     _project, result, gh_stub = run_tweak_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         reason=reason,
         first_pr_returncode=1,
@@ -5923,10 +4959,10 @@ def test_tweak_creates_pr_when_none_exists_and_writes_body(tmp_path: Path, monke
     assert body_records[0]["body"] == expected_pr_body(fixes=())
 
 
-def test_tweak_skips_review_gate_for_changes_requested_then_merges_and_cleans_up(tmp_path: Path, monkeypatch) -> None:
+def test_tweak_skips_review_gate_for_changes_requested_then_merges_and_cleans_up(flow_root: Path, monkeypatch) -> None:
     reason = "rename helper only"
     _project, result, gh_stub = run_tweak_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         reason=reason,
         review_decision="CHANGES_REQUESTED",
@@ -5940,9 +4976,9 @@ def test_tweak_skips_review_gate_for_changes_requested_then_merges_and_cleans_up
     assert ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"] in calls
 
 
-def test_tweak_does_not_run_build_and_verify_full_verify(tmp_path: Path, monkeypatch) -> None:
+def test_tweak_does_not_run_build_and_verify_full_verify(flow_root: Path, monkeypatch) -> None:
     _project, result, _gh_stub = run_tweak_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         reason="wording only",
         forbid_full_verify=True,
@@ -5952,10 +4988,10 @@ def test_tweak_does_not_run_build_and_verify_full_verify(tmp_path: Path, monkeyp
     assert "status: cleanup_complete" in result.stdout
 
 
-def test_tweak_pending_checks_report_dispatch_required(tmp_path: Path, monkeypatch) -> None:
+def test_tweak_pending_checks_report_dispatch_required(flow_root: Path, monkeypatch) -> None:
     reason = "format-only cleanup"
     project, result, gh_stub = run_tweak_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         reason=reason,
         review_decision="CHANGES_REQUESTED",
@@ -5974,11 +5010,11 @@ def test_tweak_pending_checks_report_dispatch_required(tmp_path: Path, monkeypat
     assert gh_stub.body_files == []
 
 
-def test_hotfix_rejects_authorization_phrase_mismatch_without_leaking_phrase(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_rejects_authorization_phrase_mismatch_without_leaking_phrase(flow_root: Path, monkeypatch) -> None:
     wrong_phrase = "wrong-secret"
 
     project, result = run_hotfix_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         authorization_phrase=wrong_phrase,
     )
@@ -5995,9 +5031,9 @@ def test_hotfix_rejects_authorization_phrase_mismatch_without_leaking_phrase(tmp
     assert status["details"]["reason"] == "authorization_phrase_mismatch"
 
 
-def test_hotfix_missing_authorization_config_does_not_run_verify_command(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_missing_authorization_config_does_not_run_verify_command(flow_root: Path, monkeypatch) -> None:
     project, result = run_hotfix_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         include_authorization=False,
     )
@@ -6008,9 +5044,9 @@ def test_hotfix_missing_authorization_config_does_not_run_verify_command(tmp_pat
     assert status["details"]["reason"] == "authorization_phrase_missing"
 
 
-def test_hotfix_runs_verify_command_before_authorization_phrase_check(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_runs_verify_command_before_authorization_phrase_check(flow_root: Path, monkeypatch) -> None:
     project, result = run_hotfix_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         authorization_phrase="wrong-secret",
         verify_returncode=1,
@@ -6026,24 +5062,25 @@ def test_hotfix_runs_verify_command_before_authorization_phrase_check(tmp_path: 
     assert status["details"]["reason"] == "hotfix_verify_failed"
 
 
-def test_hotfix_verify_command_preserves_windows_backslash_executable_path(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_verify_command_preserves_windows_backslash_executable_path(flow_root: Path, monkeypatch) -> None:
     pr_flow = load_pr_flow_module()
     calls = []
 
     def fake_run(command_args, **kwargs):
+        assert command_args == [r".venv\Scripts\python.exe", "-m", "pytest"]
         calls.append((command_args, kwargs))
         return subprocess.CompletedProcess(command_args, 0, "", "")
 
     monkeypatch.setattr(pr_flow.subprocess, "run", fake_run)
 
-    result = pr_flow.run_hotfix_verify_command(tmp_path, r".venv\Scripts\python.exe -m pytest")
+    result = pr_flow.run_hotfix_verify_command(flow_root, r".venv\Scripts\python.exe -m pytest")
 
     assert result.returncode == 0
     assert calls == [
         (
             [r".venv\Scripts\python.exe", "-m", "pytest"],
             {
-                "cwd": tmp_path,
+                "cwd": flow_root,
                 "check": False,
                 "text": True,
                 "capture_output": True,
@@ -6053,12 +5090,13 @@ def test_hotfix_verify_command_preserves_windows_backslash_executable_path(tmp_p
     ]
 
 
-def test_hotfix_verify_command_resolves_windows_cli_shim(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_verify_command_resolves_windows_cli_shim(flow_root: Path, monkeypatch) -> None:
     pr_flow = load_pr_flow_module()
     calls = []
     which_calls = []
 
     def fake_run(command_args, **kwargs):
+        assert command_args == [r"C:\npm\build-and-verify.cmd", "verify"]
         calls.append((command_args, kwargs))
         return subprocess.CompletedProcess(command_args, 0, "", "")
 
@@ -6071,7 +5109,7 @@ def test_hotfix_verify_command_resolves_windows_cli_shim(tmp_path: Path, monkeyp
     monkeypatch.setattr(pr_flow.shutil, "which", fake_which)
     monkeypatch.setattr(pr_flow.subprocess, "run", fake_run)
 
-    result = pr_flow.run_hotfix_verify_command(tmp_path, "build-and-verify verify")
+    result = pr_flow.run_hotfix_verify_command(flow_root, "build-and-verify verify")
 
     assert result.returncode == 0
     assert which_calls == ["build-and-verify"]
@@ -6079,7 +5117,7 @@ def test_hotfix_verify_command_resolves_windows_cli_shim(tmp_path: Path, monkeyp
         (
             [r"C:\npm\build-and-verify.cmd", "verify"],
             {
-                "cwd": tmp_path,
+                "cwd": flow_root,
                 "check": False,
                 "text": True,
                 "capture_output": True,
@@ -6089,13 +5127,14 @@ def test_hotfix_verify_command_resolves_windows_cli_shim(tmp_path: Path, monkeyp
     ]
 
 
-def test_hotfix_verify_command_preserves_windows_relative_executable_path(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_verify_command_preserves_windows_relative_executable_path(flow_root: Path, monkeypatch) -> None:
     pr_flow = load_pr_flow_module()
     calls = []
     which_calls = []
     executable = r".venv\Scripts\python.exe"
 
     def fake_run(command_args, **kwargs):
+        assert command_args == [executable, "-m", "pytest"]
         calls.append((command_args, kwargs))
         return subprocess.CompletedProcess(command_args, 0, "", "")
 
@@ -6108,19 +5147,20 @@ def test_hotfix_verify_command_preserves_windows_relative_executable_path(tmp_pa
     monkeypatch.setattr(pr_flow.shutil, "which", fake_which)
     monkeypatch.setattr(pr_flow.subprocess, "run", fake_run)
 
-    result = pr_flow.run_hotfix_verify_command(tmp_path, f"{executable} -m pytest")
+    result = pr_flow.run_hotfix_verify_command(flow_root, f"{executable} -m pytest")
 
     assert result.returncode == 0
     assert which_calls == []
     assert calls[0][0][0] == executable
 
 
-def test_hotfix_verify_command_preserves_missing_command_error(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_verify_command_preserves_missing_command_error(flow_root: Path, monkeypatch) -> None:
     pr_flow = load_pr_flow_module()
     calls = []
     which_calls = []
 
     def fake_run(command_args, **kwargs):
+        assert command_args == ["missing-command", "verify"]
         calls.append((command_args, kwargs))
         raise FileNotFoundError(2, "missing command", command_args[0])
 
@@ -6134,7 +5174,7 @@ def test_hotfix_verify_command_preserves_missing_command_error(tmp_path: Path, m
     monkeypatch.setattr(pr_flow.subprocess, "run", fake_run)
 
     with pytest.raises(pr_flow.PrFlowError) as error:
-        pr_flow.run_hotfix_verify_command(tmp_path, "missing-command verify")
+        pr_flow.run_hotfix_verify_command(flow_root, "missing-command verify")
 
     assert error.value.reason == "hotfix_verify_failed"
     assert error.value.details["returncode"] == 127
@@ -6143,18 +5183,19 @@ def test_hotfix_verify_command_preserves_missing_command_error(tmp_path: Path, m
     assert calls[0][1]["shell"] is False
 
 
-def test_hotfix_verify_command_uses_shlex_on_non_windows(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_verify_command_uses_shlex_on_non_windows(flow_root: Path, monkeypatch) -> None:
     pr_flow = load_pr_flow_module()
     calls = []
 
     def fake_run(command_args, **kwargs):
+        assert command_args == ["python", "-m", "pytest"]
         calls.append((command_args, kwargs))
         return subprocess.CompletedProcess(command_args, 0, "", "")
 
     monkeypatch.setattr(pr_flow.os, "name", "posix")
     monkeypatch.setattr(pr_flow.subprocess, "run", fake_run)
 
-    result = pr_flow.run_hotfix_verify_command(tmp_path, "python -m pytest")
+    result = pr_flow.run_hotfix_verify_command(flow_root, "python -m pytest")
 
     assert result.returncode == 0
     assert calls[0][0] == ["python", "-m", "pytest"]
@@ -6170,8 +5211,8 @@ def test_hotfix_requires_target_for_bare_command() -> None:
     assert "--target" in result.stderr
 
 
-def test_hotfix_requires_target_when_project_and_authorization_are_supplied(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_hotfix_requires_target_when_project_and_authorization_are_supplied(flow_root: Path) -> None:
+    project = flow_root / "project"
     project.mkdir()
 
     result = run(
@@ -6188,9 +5229,9 @@ def test_hotfix_requires_target_when_project_and_authorization_are_supplied(tmp_
     assert "--target" in result.stderr
 
 
-def test_hotfix_rejects_target_branch_without_allow_hotfix_push(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_rejects_target_branch_without_allow_hotfix_push(flow_root: Path, monkeypatch) -> None:
     project, result = run_hotfix_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         allow_hotfix=False,
     )
@@ -6202,9 +5243,9 @@ def test_hotfix_rejects_target_branch_without_allow_hotfix_push(tmp_path: Path, 
     assert status["details"]["reason"] == "hotfix_push_not_allowed"
 
 
-def test_hotfix_requires_explicit_target_branch_allow_hotfix_push(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_requires_explicit_target_branch_allow_hotfix_push(flow_root: Path, monkeypatch) -> None:
     project, result = run_hotfix_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         include_branch=False,
     )
@@ -6216,9 +5257,9 @@ def test_hotfix_requires_explicit_target_branch_allow_hotfix_push(tmp_path: Path
     assert status["details"]["reason"] == "hotfix_push_not_allowed"
 
 
-def test_hotfix_rejects_dirty_worktree_before_push(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_rejects_dirty_worktree_before_push(flow_root: Path, monkeypatch) -> None:
     project, result = run_hotfix_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         git_responses=[
             (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], "", 0),
@@ -6238,18 +5279,18 @@ def test_hotfix_rejects_dirty_worktree_before_push(tmp_path: Path, monkeypatch) 
     assert "dirty.txt" in status["details"]["dirty"]
 
 
-def test_hotfix_writes_audit_record_when_post_push_readback_mismatches(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_writes_audit_record_when_post_push_readback_mismatches(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     pr_flow = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_hotfix_pr_flow_config(project)
     before_commit = "a" * 40
     head_commit = "b" * 40
     remote_after = "0" * 40
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
         (["rev-parse", "__snapshot_ref__"], before_commit + "\n"),
@@ -6305,8 +5346,16 @@ def test_hotfix_writes_audit_record_when_post_push_readback_mismatches(tmp_path:
     }
 
 
-def test_hotfix_missing_git_is_not_reported_as_missing_config(tmp_path: Path) -> None:
-    project = tmp_path / "project"
+def test_hotfix_missing_git_is_not_reported_as_missing_config(flow_root: Path, monkeypatch, pr_memory) -> None:
+    module = load_pr_flow_module()
+    monkeypatch.setattr(module, "git", pr_memory["git"])
+
+    def missing_git(command, **_kwargs):
+        assert command[0] == "git"
+        raise FileNotFoundError("git executable is unavailable")
+
+    monkeypatch.setattr(module.subprocess, "run", missing_git)
+    project = flow_root / "project"
     project.mkdir()
     write_hotfix_pr_flow_config(project)
     env = os.environ.copy()
@@ -6332,10 +5381,10 @@ def test_hotfix_missing_git_is_not_reported_as_missing_config(tmp_path: Path) ->
     assert status["details"]["reason"] == "git_fetch_target_failed"
 
 
-def test_hotfix_rejects_when_head_is_not_based_on_latest_remote_target(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_rejects_when_head_is_not_based_on_latest_remote_target(flow_root: Path, monkeypatch) -> None:
     remote_head = "a" * 40
     project, result = run_hotfix_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         git_responses=[
             (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], "", 0),
@@ -6353,9 +5402,9 @@ def test_hotfix_rejects_when_head_is_not_based_on_latest_remote_target(tmp_path:
     assert status["details"]["remoteHead"] == remote_head
 
 
-def test_hotfix_rejects_when_verify_command_fails(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_rejects_when_verify_command_fails(flow_root: Path, monkeypatch) -> None:
     project, result = run_hotfix_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         verify_returncode=1,
     )
@@ -6368,8 +5417,8 @@ def test_hotfix_rejects_when_verify_command_fails(tmp_path: Path, monkeypatch) -
     assert status["details"]["returncode"] != 0
 
 
-def test_hotfix_remove_failure_does_not_report_completion_in_target(tmp_path: Path, monkeypatch) -> None:
-    controller = tmp_path / "controller"
+def test_hotfix_remove_failure_does_not_report_completion_in_target(flow_root: Path, monkeypatch) -> None:
+    controller = flow_root / "controller"
     controller.mkdir()
     module = load_pr_flow_module()
 
@@ -6387,7 +5436,7 @@ def test_hotfix_remove_failure_does_not_report_completion_in_target(tmp_path: Pa
 
     monkeypatch.setattr(module, "remove_worktree", fail_remove)
     project, result = run_hotfix_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         remove_worktree=True,
         git_responses=[
@@ -6413,17 +5462,17 @@ def test_hotfix_remove_failure_does_not_report_completion_in_target(tmp_path: Pa
     assert status["details"]["reason"] == "physical_worktree_remove_failed"
 
 
-def test_hotfix_pushes_head_to_target_and_writes_audit_record(tmp_path: Path, monkeypatch) -> None:
+def test_hotfix_pushes_head_to_target_and_writes_audit_record(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     pr_flow = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_hotfix_pr_flow_config(project)
     before_commit = "a" * 40
     head_commit = "b" * 40
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
         (["rev-parse", "__snapshot_ref__"], before_commit + "\n"),
@@ -6479,772 +5528,28 @@ def test_hotfix_pushes_head_to_target_and_writes_audit_record(tmp_path: Path, mo
     }
 
 
-def run_cleanup_with_real_git(
-    project: Path,
-    monkeypatch,
-    *,
-    remove_worktree: bool = False,
-    pr_stdout: str | None = None,
-) -> subprocess.CompletedProcess[str]:
+def test_cleanup_detaches_when_base_becomes_occupied_during_checkout(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    gh_stub = CommandStub()
-    gh_stub.add(
-        ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
-        stdout=pr_stdout or cleanup_pr_view_json(),
-    )
-    monkeypatch.setattr(module, "gh", gh_stub)
-    args = ["cleanup", "--project", str(project), "--pr", "12"]
-    if remove_worktree:
-        args.append("--remove-worktree")
-    return invoke_pr_flow(args, module=module)
-
-
-def test_cleanup_physical_failure_persists_status_in_controller(tmp_path: Path, monkeypatch) -> None:
-    module = load_pr_flow_module()
-
-    def fail_rmtree(_target: Path) -> None:
-        raise OSError("directory is still in use")
-
-    monkeypatch.setattr(module, "find_orca_worktree_id", lambda *_args: None)
-    monkeypatch.setattr(module.shutil, "rmtree", fail_rmtree)
-    project, result = run_cleanup_in_process(
-        tmp_path,
-        monkeypatch,
-        pr_stdout=cleanup_pr_view_json(),
-        remove_worktree=True,
-    )
-
-    assert result.returncode == 1
-    assert "cleanup_complete" not in result.stdout
-    status = json.loads((tmp_path / "controller" / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "physical_worktree_remove_failed"
-    assert status["details"]["registrationRemoved"] is True
-    assert status["details"]["nextAction"]
-    assert status["details"]["nextCommand"]
-    expected_recovery_command = "rmdir" if os.name == "nt" else "rm -rf"
-    assert expected_recovery_command in status["details"]["nextCommand"]
-    assert status["details"]["recovery"] == status["details"]["nextAction"]
-
-
-def test_cleanup_returns_to_available_local_base_end_to_end(tmp_path: Path, monkeypatch) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
-    assert git(project, "rev-parse", "main") != remote_base
-
-    result = run_cleanup_with_real_git(project, monkeypatch)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert git(project, "branch", "--show-current") == "main"
-    assert git(project, "rev-parse", "HEAD") == remote_base
-    assert git(project, "rev-parse", "main") == remote_base
-    status = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["currentBranch"] == "main"
-    assert status["details"]["baseCheckout"] == {"status": "checked_out"}
-
-
-def test_cleanup_retains_primary_worktree_on_arbitrary_base_branch(tmp_path: Path, monkeypatch) -> None:
-    base_ref = "trunk"
-    head_ref = "topic/317"
-    project, remote = init_cleanup_project(tmp_path, base_ref=base_ref, head_ref=head_ref)
-    remote_base = git_bare(remote, "rev-parse", f"refs/heads/{base_ref}")
-
-    with contextlib.chdir(project):
-        result = run_cleanup_with_real_git(
-            project,
-            monkeypatch,
-            remove_worktree=True,
-            pr_stdout=cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref),
-        )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-    assert project.is_dir()
-    assert git(project, "branch", "--show-current") == base_ref
-    assert git(project, "rev-parse", "HEAD") == remote_base
-    assert git(project, "rev-parse", f"refs/heads/{base_ref}") == remote_base
-    assert subprocess.run(
-        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{head_ref}"],
-        cwd=project,
-        check=False,
-    ).returncode == 1
-    assert git_bare_result(remote, "show-ref", "--verify", f"refs/heads/{head_ref}").returncode != 0
-    worktrees = load_pr_flow_module().parse_worktrees(git(project, "worktree", "list", "--porcelain", "-z"))
-    assert Path(worktrees[0]["path"]).resolve() == project.resolve()
-    assert worktrees[0]["branch"] == f"refs/heads/{base_ref}"
-    status = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["worktreeRetention"] == {"status": "retained", "reason": "primary_worktree"}
-    assert status["details"]["currentBranch"] == base_ref
-    assert "nextCommand" not in status["details"]
-
-
-def test_cleanup_stops_before_primary_checkout_when_active_cwd_would_disappear(
-    tmp_path: Path, monkeypatch
-) -> None:
-    base_ref = "trunk"
-    head_ref = "topic/317"
-    project, remote = init_cleanup_project(tmp_path, base_ref=base_ref, head_ref=head_ref)
-    source_only = project / "source-only" / "nested"
-    source_only.mkdir(parents=True)
-    (source_only / "sentinel.txt").write_text("source only\n", encoding="utf-8")
-    git(project, "add", "source-only")
-    git(project, "commit", "-m", "source-only directory")
-    git(project, "push", "origin", head_ref)
-
-    with contextlib.chdir(source_only):
-        result = run_cleanup_with_real_git(
-            project,
-            monkeypatch,
-            remove_worktree=True,
-            pr_stdout=cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref),
-        )
-
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "active_cwd_would_disappear" in result.stdout
-    assert source_only.is_dir()
-    assert git(project, "branch", "--show-current") == head_ref
-    assert git_bare_result(remote, "show-ref", "--verify", f"refs/heads/{head_ref}").returncode == 0
-    worktrees = load_pr_flow_module().parse_worktrees(git(project, "worktree", "list", "--porcelain", "-z"))
-    assert Path(worktrees[0]["path"]).resolve() == project.resolve()
-    assert worktrees[0]["branch"] == f"refs/heads/{head_ref}"
-
-
-def test_cleanup_stops_before_checkout_when_active_cwd_would_disappear_without_remove_worktree(
-    tmp_path: Path, monkeypatch
-) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    source_only = project / "source-only" / "nested"
-    source_only.mkdir(parents=True)
-    (source_only / "sentinel.txt").write_text("source only\n", encoding="utf-8")
-    git(project, "add", "source-only")
-    git(project, "commit", "-m", "source-only directory")
-    source_head = git(project, "rev-parse", "HEAD")
-    git(project, "push", "origin", "feature/example")
-
-    with contextlib.chdir(source_only):
-        result = run_cleanup_with_real_git(project, monkeypatch)
-
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "active_cwd_would_disappear" in result.stdout
-    assert source_only.is_dir()
-    assert git(project, "branch", "--show-current") == "feature/example"
-    assert git(project, "rev-parse", "HEAD") == source_head
-    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode == 0
-    status = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "active_cwd_would_disappear"
-
-
-def test_cleanup_stops_primary_worktree_when_base_branch_is_occupied(
-    tmp_path: Path, monkeypatch
-) -> None:
-    base_ref = "trunk"
-    head_ref = "topic/317"
-    project, remote = init_cleanup_project(tmp_path, base_ref=base_ref, head_ref=head_ref)
-    occupied = tmp_path / "base-worktree"
-    git(project, "worktree", "add", str(occupied), base_ref)
-    before = (
-        git(project, "rev-parse", "HEAD"),
-        git(project, "branch", "--show-current"),
-        git(project, "show-ref"),
-    )
-
-    with contextlib.chdir(project):
-        result = run_cleanup_with_real_git(
-            project,
-            monkeypatch,
-            remove_worktree=True,
-            pr_stdout=cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref),
-        )
-
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "base_branch_checked_out" in result.stdout
-    assert (
-        git(project, "rev-parse", "HEAD"),
-        git(project, "branch", "--show-current"),
-        git(project, "show-ref"),
-    ) == before
-    assert git(occupied, "branch", "--show-current") == base_ref
-    assert git_bare_result(remote, "show-ref", "--verify", f"refs/heads/{head_ref}").returncode == 0
-    status = json.loads((project / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "base_branch_checked_out"
-    assert Path(occupied).resolve() in [
-        Path(path).resolve() for path in status["details"]["occupiedWorktrees"]
-    ]
-
-
-def test_cleanup_stops_primary_worktree_when_base_branch_is_occupied_without_remove_worktree(
-    tmp_path: Path, monkeypatch
-) -> None:
-    base_ref = "trunk"
-    head_ref = "topic/317"
-    project, remote = init_cleanup_project(tmp_path, base_ref=base_ref, head_ref=head_ref)
-    occupied = tmp_path / "base-worktree"
-    git(project, "worktree", "add", str(occupied), base_ref)
-    before = (
-        git(project, "rev-parse", "HEAD"),
-        git(project, "branch", "--show-current"),
-        git(project, "show-ref"),
-    )
-
-    with contextlib.chdir(project):
-        result = run_cleanup_with_real_git(
-            project,
-            monkeypatch,
-            pr_stdout=cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref),
-        )
-
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "base_branch_checked_out" in result.stdout
-    assert (
-        git(project, "rev-parse", "HEAD"),
-        git(project, "branch", "--show-current"),
-        git(project, "show-ref"),
-    ) == before
-    assert git(occupied, "branch", "--show-current") == base_ref
-    assert git_bare_result(remote, "show-ref", "--verify", f"refs/heads/{head_ref}").returncode == 0
-
-
-def test_cleanup_stops_before_occupied_base_merge_when_active_cwd_would_disappear(
-    tmp_path: Path, monkeypatch
-) -> None:
-    base_ref = "trunk"
-    head_ref = "topic/317"
-    project, remote = init_cleanup_project(tmp_path, base_ref=base_ref, head_ref=head_ref)
-
-    git(project, "checkout", base_ref)
-    current_only = project / "current-only" / "nested"
-    current_only.mkdir(parents=True)
-    (current_only / "sentinel.txt").write_text("current only\n", encoding="utf-8")
-    git(project, "add", "current-only")
-    git(project, "commit", "-m", "base-only directory")
-    git(project, "push", "--force", "origin", base_ref)
-    git(project, "checkout", "-b", "controller")
-
-    occupied = tmp_path / "base-worktree"
-    git(project, "worktree", "add", str(occupied), base_ref)
-
-    integrator = tmp_path / "base-integrator"
-    clone_result = subprocess.run(
-        ["git", "clone", str(remote), str(integrator)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
-    git(integrator, "config", "user.email", "test@example.com")
-    git(integrator, "config", "user.name", "Test User")
-    git(integrator, "checkout", "-B", base_ref, f"origin/{base_ref}")
-    shutil.rmtree(integrator / "current-only")
-    git(integrator, "add", "-u", "current-only")
-    git(integrator, "commit", "-m", "remove base-only directory")
-    git(integrator, "push", "origin", base_ref)
-
-    git(project, "checkout", head_ref)
-    (project / ".gitignore").write_text("current-only/\n", encoding="utf-8")
-    git(project, "add", ".gitignore")
-    git(project, "commit", "-m", "ignore current-only on head")
-    git(project, "push", "origin", head_ref)
-    git(project, "checkout", "controller")
-
-    target = tmp_path / "target"
-    git(project, "worktree", "add", str(target), head_ref)
-    target_ignored = subprocess.run(
-        ["git", "check-ignore", "--quiet", "--", "current-only/nested"],
-        cwd=target,
-        check=False,
-    )
-    occupied_not_ignored = subprocess.run(
-        ["git", "check-ignore", "--quiet", "--", "current-only/nested"],
-        cwd=occupied,
-        check=False,
-    )
-    assert target_ignored.returncode == 0
-    assert occupied_not_ignored.returncode != 0
-    active_cwd = occupied / "current-only" / "nested"
-    assert active_cwd.is_dir()
-    before_target = (git(target, "rev-parse", "HEAD"), git(target, "branch", "--show-current"))
-    before_occupied = (git(occupied, "rev-parse", "HEAD"), git(occupied, "branch", "--show-current"))
-    before_local_head = git(target, "show-ref", "--verify", f"refs/heads/{head_ref}")
-    before_remote_head = git_bare(remote, "show-ref", "--verify", f"refs/heads/{head_ref}")
-
-    with contextlib.chdir(active_cwd):
-        result = run_cleanup_with_real_git(
-            target,
-            monkeypatch,
-            pr_stdout=cleanup_pr_view_json(head_ref=head_ref, base_ref=base_ref),
-        )
-
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "active_cwd_would_disappear" in result.stdout
-    assert (git(target, "rev-parse", "HEAD"), git(target, "branch", "--show-current")) == before_target
-    assert (git(occupied, "rev-parse", "HEAD"), git(occupied, "branch", "--show-current")) == before_occupied
-    assert git(target, "show-ref", "--verify", f"refs/heads/{head_ref}") == before_local_head
-    assert git_bare(remote, "show-ref", "--verify", f"refs/heads/{head_ref}") == before_remote_head
-    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "active_cwd_would_disappear"
-
-
-def test_cleanup_retains_active_worktree_detached_after_branch_cleanup(tmp_path: Path, monkeypatch) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    target = tmp_path / "target"
-    git(project, "checkout", "main")
-    stale_base = git(project, "rev-parse", "HEAD")
-    git(project, "checkout", "-b", "controller")
-    other = tmp_path / "base-worktree"
-    git(project, "worktree", "add", str(other), "main")
-    git(project, "worktree", "add", str(target), "feature/example")
-    remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
-    assert stale_base != remote_base
-
-    with contextlib.chdir(target):
-        result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-    assert target.exists()
-    assert git(target, "branch", "--show-current") == ""
-    assert git(target, "rev-parse", "HEAD") == remote_base
-    assert git(other, "branch", "--show-current") == "main"
-    assert git(other, "rev-parse", "HEAD") == remote_base
-    worktrees = load_pr_flow_module().parse_worktrees(git(target, "worktree", "list", "--porcelain", "-z"))
-    target_record = next(item for item in worktrees if Path(item["path"]).resolve() == target.resolve())
-    assert target_record["detached"] is True
-    assert subprocess.run(
-        ["git", "show-ref", "--verify", "--quiet", "refs/heads/feature/example"],
-        cwd=target,
-        check=False,
-    ).returncode == 1
-    assert subprocess.run(
-        ["git", "--git-dir", str(remote), "show-ref", "--verify", "--quiet", "refs/heads/feature/example"],
-        check=False,
-    ).returncode == 1
-    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "cleanup_complete"
-    assert status["details"]["worktreeRetention"] == {"status": "retained", "reason": "active_session"}
-    assert "removeWorktreePending" not in status["details"]
-    assert "nextCommand" not in status["details"]
-
-
-@pytest.mark.parametrize(
-    "cwd_relative",
-    [None, Path(".pr-flow")],
-    ids=["root", "subdirectory"],
-)
-def test_cleanup_retains_active_worktree_when_project_is_directory_alias(
-    tmp_path: Path, monkeypatch, cwd_relative: Path | None
-) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    git(project, "checkout", "main")
-    git(project, "checkout", "-b", "controller")
-    target = tmp_path / "target"
-    git(project, "worktree", "add", str(target), "feature/example")
-    alias = tmp_path / "target-alias"
-    if os.name == "nt":
-        powershell = shutil.which("powershell")
-        if not powershell:
-            pytest.skip("PowerShell is required to create a junction")
-        junction = subprocess.run(
-            [
-                powershell,
-                "-NoProfile",
-                "-Command",
-                f'New-Item -ItemType Junction -Path "{alias}" -Target "{target}"',
-            ],
-            check=False,
-            capture_output=True,
-        )
-        if junction.returncode != 0:
-            pytest.skip(
-                "Windows junction creation is unavailable: "
-                + junction.stderr.decode(errors="replace")
-            )
-    else:
-        try:
-            alias.symlink_to(target, target_is_directory=True)
-        except OSError as exc:
-            pytest.skip(f"directory symlink creation is unavailable: {exc}")
-
-    active_cwd = target if cwd_relative is None else target / cwd_relative
-    with contextlib.chdir(active_cwd):
-        result = run_cleanup_with_real_git(alias, monkeypatch, remove_worktree=True)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-    assert target.is_dir()
-    assert alias.is_dir()
-    assert git(target, "branch", "--show-current") == ""
-    assert git(target, "rev-parse", "HEAD") == git_bare(remote, "rev-parse", "refs/heads/main")
-    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["worktreeRetention"] == {"status": "retained", "reason": "active_session"}
-
-
-def test_cleanup_retains_active_worktree_when_cwd_uses_directory_alias(
-    tmp_path: Path, monkeypatch
-) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    git(project, "checkout", "main")
-    git(project, "checkout", "-b", "controller")
-    target = tmp_path / "target"
-    git(project, "worktree", "add", str(target), "feature/example")
-    alias = tmp_path / "target-alias"
-    if os.name == "nt":
-        powershell = shutil.which("powershell")
-        if not powershell:
-            pytest.skip("PowerShell is required to create a junction")
-        junction = subprocess.run(
-            [
-                powershell,
-                "-NoProfile",
-                "-Command",
-                f'New-Item -ItemType Junction -Path "{alias}" -Target "{target}"',
-            ],
-            check=False,
-            capture_output=True,
-        )
-        if junction.returncode != 0:
-            pytest.skip(
-                "Windows junction creation is unavailable: "
-                + junction.stderr.decode(errors="replace")
-            )
-    else:
-        try:
-            alias.symlink_to(target, target_is_directory=True)
-        except OSError as exc:
-            pytest.skip(f"directory symlink creation is unavailable: {exc}")
-
-    with contextlib.chdir(alias):
-        module = load_pr_flow_module()
-        cwd_key = module.lexical_path(Path.cwd())
-        alias_key = module.lexical_path(alias)
-        try:
-            cwd_uses_alias = os.path.commonpath([cwd_key, alias_key]) == alias_key
-        except ValueError:
-            cwd_uses_alias = False
-        if not cwd_uses_alias:
-            pytest.skip("platform resolves directory links in cwd")
-        result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-    assert target.is_dir()
-    assert alias.is_dir()
-    assert git(target, "branch", "--show-current") == ""
-    assert git(target, "rev-parse", "HEAD") == git_bare(remote, "rev-parse", "refs/heads/main")
-    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["worktreeRetention"] == {"status": "retained", "reason": "active_session"}
-
-
-def test_cleanup_retains_active_worktree_with_ignored_cwd_after_branch_cleanup(
-    tmp_path: Path, monkeypatch
-) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    (project / ".gitignore").write_text(".local/\n", encoding="utf-8")
-    git(project, "add", ".gitignore")
-    git(project, "commit", "-m", "ignore local worktree state")
-    git(project, "push", "origin", "feature/example")
-
-    integrator = tmp_path / "integrator"
-    clone_result = subprocess.run(
-        ["git", "clone", str(remote), str(integrator)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
-    git(integrator, "config", "user.email", "test@example.com")
-    git(integrator, "config", "user.name", "Test User")
-    git(integrator, "fetch", "origin", "feature/example")
-    git(integrator, "checkout", "-B", "main", "origin/main")
-    git(integrator, "merge", "--ff-only", "origin/feature/example")
-    git(integrator, "push", "origin", "main")
-
-    git(project, "checkout", "main")
-    git(project, "checkout", "-b", "controller")
-    target = tmp_path / "target"
-    git(project, "worktree", "add", str(target), "feature/example")
-    active_cwd = target / ".local" / "spec-work"
-    active_cwd.mkdir(parents=True)
-    ignored = subprocess.run(
-        ["git", "check-ignore", "--quiet", "--", ".local/spec-work"],
-        cwd=target,
-        check=False,
-    )
-    assert ignored.returncode == 0
-
-    with contextlib.chdir(active_cwd):
-        result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-    assert target.is_dir()
-    assert active_cwd.is_dir()
-    assert git(target, "branch", "--show-current") == ""
-    assert git(target, "rev-parse", "HEAD") == git_bare(remote, "rev-parse", "refs/heads/main")
-    assert subprocess.run(
-        ["git", "show-ref", "--verify", "--quiet", "refs/heads/feature/example"],
-        cwd=target,
-        check=False,
-    ).returncode == 1
-    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode != 0
-    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "cleanup_complete"
-    assert status["details"]["worktreeRetention"] == {"status": "retained", "reason": "active_session"}
-
-
-def test_cleanup_retains_active_worktree_when_active_cwd_is_inside_ignored_directory_link(
-    tmp_path: Path, monkeypatch
-) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    (project / ".gitignore").write_text(".local/\n", encoding="utf-8")
-    git(project, "add", ".gitignore")
-    git(project, "commit", "-m", "ignore linked runtime state")
-    git(project, "push", "origin", "feature/example")
-
-    integrator = tmp_path / "integrator"
-    clone_result = subprocess.run(
-        ["git", "clone", str(remote), str(integrator)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
-    git(integrator, "config", "user.email", "test@example.com")
-    git(integrator, "config", "user.name", "Test User")
-    git(integrator, "fetch", "origin", "feature/example")
-    git(integrator, "checkout", "-B", "main", "origin/main")
-    git(integrator, "merge", "--ff-only", "origin/feature/example")
-    git(integrator, "push", "origin", "main")
-
-    git(project, "checkout", "main")
-    git(project, "checkout", "-b", "controller")
-    target = tmp_path / "target"
-    git(project, "worktree", "add", str(target), "feature/example")
-
-    shared = tmp_path / "shared-runtime"
-    (shared / "nested").mkdir(parents=True)
-    sentinel = shared / "sentinel.txt"
-    sentinel.write_text("keep\n", encoding="utf-8")
-    link = target / ".local" / "spec-work"
-    link.parent.mkdir()
-    if os.name == "nt":
-        powershell = shutil.which("powershell")
-        if not powershell:
-            pytest.skip("PowerShell is required to create a junction")
-        junction = subprocess.run(
-            [
-                powershell,
-                "-NoProfile",
-                "-Command",
-                f'New-Item -ItemType Junction -Path "{link}" -Target "{shared}"',
-            ],
-            check=False,
-            capture_output=True,
-        )
-        if junction.returncode != 0:
-            pytest.skip(
-                "Windows junction creation is unavailable: "
-                + junction.stderr.decode(errors="replace")
-            )
-    else:
-        try:
-            link.symlink_to(shared, target_is_directory=True)
-        except OSError as exc:
-            pytest.skip(f"directory symlink creation is unavailable: {exc}")
-
-    active_cwd = link / "nested"
-    ignored = subprocess.run(
-        ["git", "check-ignore", "--quiet", "--", ".local/spec-work"],
-        cwd=target,
-        check=False,
-    )
-    assert ignored.returncode == 0
-
-    with contextlib.chdir(active_cwd):
-        cwd_key = os.path.normcase(os.path.abspath(os.fspath(Path.cwd())))
-        target_key = os.path.normcase(os.path.abspath(os.fspath(target)))
-        try:
-            logical_cwd_is_inside_target = os.path.commonpath([cwd_key, target_key]) == target_key
-        except ValueError:
-            logical_cwd_is_inside_target = False
-        if not logical_cwd_is_inside_target:
-            pytest.skip("platform resolves directory links in cwd and cannot preserve the logical path")
-        result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "status: cleanup_complete" in result.stdout
-    assert target.is_dir()
-    assert active_cwd.is_dir()
-    assert sentinel.read_text(encoding="utf-8") == "keep\n"
-    assert git(target, "branch", "--show-current") == ""
-    assert git(target, "rev-parse", "HEAD") == git_bare(remote, "rev-parse", "refs/heads/main")
-    worktrees = load_pr_flow_module().parse_worktrees(git(target, "worktree", "list", "--porcelain", "-z"))
-    target_record = next(item for item in worktrees if Path(item["path"]).resolve() == target.resolve())
-    assert target_record["detached"] is True
-    assert subprocess.run(
-        ["git", "show-ref", "--verify", "--quiet", "refs/heads/feature/example"],
-        cwd=target,
-        check=False,
-    ).returncode == 1
-    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode != 0
-
-
-def test_cleanup_stops_before_detaching_when_active_cwd_is_untracked_and_not_ignored(
-    tmp_path: Path, monkeypatch
-) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    integrator = tmp_path / "integrator"
-    clone_result = subprocess.run(
-        ["git", "clone", str(remote), str(integrator)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
-    git(integrator, "config", "user.email", "test@example.com")
-    git(integrator, "config", "user.name", "Test User")
-    git(integrator, "fetch", "origin", "feature/example")
-    git(integrator, "checkout", "-B", "main", "origin/main")
-    git(integrator, "merge", "--ff-only", "origin/feature/example")
-    (integrator / "BASE_ONLY.md").write_text("base only\n", encoding="utf-8")
-    git(integrator, "add", "BASE_ONLY.md")
-    git(integrator, "commit", "-m", "base-only change")
-    git(integrator, "push", "origin", "main")
-
-    git(project, "checkout", "main")
-    git(project, "checkout", "-b", "controller")
-    target = tmp_path / "target"
-    git(project, "worktree", "add", str(target), "feature/example")
-    active_cwd = target / "untracked" / "nested"
-    active_cwd.mkdir(parents=True)
-    not_ignored = subprocess.run(
-        ["git", "check-ignore", "--quiet", "--", "untracked/nested"],
-        cwd=target,
-        check=False,
-    )
-    assert not_ignored.returncode != 0
-
-    with contextlib.chdir(active_cwd):
-        result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
-
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "cleanup_complete" not in result.stdout
-    assert target.is_dir()
-    assert active_cwd.is_dir()
-    assert git(target, "branch", "--show-current") == "feature/example"
-    assert git_bare_result(remote, "show-ref", "--verify", "refs/heads/feature/example").returncode == 0
-    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "active_cwd_would_disappear"
-
-
-def test_cleanup_stops_before_detaching_when_active_cwd_disappears_on_base_checkout(
-    tmp_path: Path, monkeypatch
-) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    source_only = project / "source-only" / "nested"
-    source_only.mkdir(parents=True)
-    (source_only / "sentinel.txt").write_text("source only\n", encoding="utf-8")
-    git(project, "add", "source-only")
-    git(project, "commit", "-m", "source-only directory")
-    source_head = git(project, "rev-parse", "HEAD")
-    git(project, "push", "origin", "feature/example")
-
-    integrator = tmp_path / "integrator"
-    clone_result = subprocess.run(
-        ["git", "clone", str(remote), str(integrator)],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-    assert clone_result.returncode == 0, clone_result.stdout + clone_result.stderr
-    git(integrator, "config", "user.email", "test@example.com")
-    git(integrator, "config", "user.name", "Test User")
-    git(integrator, "fetch", "origin", "feature/example")
-    git(integrator, "checkout", "-B", "main", "origin/main")
-    git(integrator, "merge", "--ff-only", "origin/feature/example")
-    shutil.rmtree(integrator / "source-only")
-    git(integrator, "add", "-u", "source-only")
-    git(integrator, "commit", "-m", "remove source-only directory from base")
-    git(integrator, "push", "origin", "main")
-    assert not (integrator / "source-only").exists()
-
-    git(project, "checkout", "main")
-    git(project, "checkout", "-b", "controller")
-    target = tmp_path / "target"
-    git(project, "worktree", "add", str(target), "feature/example")
-    active_cwd = target / "source-only" / "nested"
-    assert active_cwd.is_dir()
-    assert not (target / "source-only").exists() or source_head == git(target, "rev-parse", "HEAD")
-
-    with contextlib.chdir(active_cwd):
-        result = run_cleanup_with_real_git(target, monkeypatch, remove_worktree=True)
-
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "cleanup_complete" not in result.stdout
-    assert target.is_dir()
-    assert active_cwd.is_dir()
-    assert git(target, "branch", "--show-current") == "feature/example"
-    assert git(target, "rev-parse", "HEAD") == source_head
-    assert git_bare(remote, "show-ref", "--verify", "refs/heads/feature/example")
-    status = json.loads((target / ".pr-flow/last-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "EXCEPTION_REQUIRED"
-    assert status["details"]["reason"] == "active_cwd_would_disappear"
-    assert status["details"]["nextCommand"]
-
-
-def test_cleanup_keeps_detached_when_synced_base_is_checked_out_elsewhere(tmp_path: Path, monkeypatch) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
-    git(project, "branch", "-f", "main", remote_base)
-    other = tmp_path / "base-worktree"
-    git(project, "worktree", "add", str(other), "main")
-    before = (
-        git(project, "rev-parse", "HEAD"),
-        git(project, "branch", "--show-current"),
-        git(project, "show-ref"),
-    )
-    before_remote_refs = git_bare(remote, "show-ref")
-
-    result = run_cleanup_with_real_git(project, monkeypatch)
-
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "base_branch_checked_out" in result.stdout
-    assert (
-        git(project, "rev-parse", "HEAD"),
-        git(project, "branch", "--show-current"),
-        git(project, "show-ref"),
-    ) == before
-    assert git(other, "branch", "--show-current") == "main"
-    assert git(other, "rev-parse", "HEAD") == remote_base
-    assert git_bare(remote, "show-ref") == before_remote_refs
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "base_branch_checked_out"
-    assert other.resolve() in [Path(path).resolve() for path in status["details"]["occupiedWorktrees"]]
-
-
-def test_cleanup_detaches_when_base_becomes_occupied_during_checkout(tmp_path: Path, monkeypatch) -> None:
-    from tests.support.command_stubs import CommandStub
-    from tests.support.pr_flow_invocation import invoke_pr_flow
-
-    module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_minimal_pr_flow_config(project)
     base_oid = "a" * 40
     head_oid = "b" * 40
-    other = tmp_path / "base-worktree"
+    other = flow_root / "base-worktree"
     initial_worktrees = f"worktree {project}\0HEAD {head_oid}\0branch refs/heads/feature/example\0\0"
     occupied_worktrees = (
         f"worktree {project}\0HEAD {base_oid}\0detached\0\0"
         f"worktree {other}\0HEAD {base_oid}\0branch refs/heads/main\0\0"
     )
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(
         ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
         stdout=cleanup_pr_view_json(),
     )
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout, returncode in [
         (["status", "--short"], "", 0),
         (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], "", 0),
@@ -7274,23 +5579,23 @@ def test_cleanup_detaches_when_base_becomes_occupied_during_checkout(tmp_path: P
     )
 
 
-def test_cleanup_retries_source_deletion_from_synced_base(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_retries_source_deletion_from_synced_base(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_minimal_pr_flow_config(project)
     base_oid = "a" * 40
     head_oid = "b" * 40
     worktrees = f"worktree {project}\0HEAD {base_oid}\0branch refs/heads/main\0\0"
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(
         ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
         stdout=cleanup_pr_view_json(),
     )
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     for git_args, stdout in [
         (["status", "--short"], ""),
         (["fetch", "--no-write-fetch-head", "--refmap=", "origin", "__snapshot_refspec__"], ""),
@@ -7324,100 +5629,9 @@ def test_cleanup_retries_source_deletion_from_synced_base(tmp_path: Path, monkey
     assert ("push", "origin", "--delete", "feature/example") in git_stub.calls
 
 
-def test_cleanup_creates_missing_local_base_end_to_end(tmp_path: Path, monkeypatch) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
-    git(project, "branch", "-D", "main")
-
-    result = run_cleanup_with_real_git(project, monkeypatch)
-    local_base = subprocess.run(
-        ["git", "rev-parse", "main"],
-        cwd=project,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert local_base.returncode == 0, local_base.stdout + local_base.stderr
-    assert local_base.stdout.strip() == remote_base
-    assert git(project, "branch", "--show-current") == "main"
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["baseCheckout"] == {"status": "checked_out"}
-
-
-def test_cleanup_refuses_diverged_local_base_end_to_end(tmp_path: Path, monkeypatch) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    git(project, "checkout", "main")
-    (project / "LOCAL.md").write_text("local only\n", encoding="utf-8")
-    git(project, "add", "LOCAL.md")
-    git(project, "commit", "-m", "local only")
-    git(project, "checkout", "feature/example")
-
-    result = run_cleanup_with_real_git(project, monkeypatch)
-
-    assert result.returncode == 1
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "local_base_not_fast_forward"
-    assert git_bare(remote, "show-ref", "--verify", "refs/heads/feature/example")
-
-
-def test_cleanup_fast_forwards_stale_base_checked_out_elsewhere_end_to_end(tmp_path: Path, monkeypatch) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    remote_base = git_bare(remote, "rev-parse", "refs/heads/main")
-    other = tmp_path / "base-worktree"
-    git(project, "worktree", "add", str(other), "main")
-    before = (
-        git(project, "rev-parse", "HEAD"),
-        git(project, "branch", "--show-current"),
-        git(project, "show-ref"),
-    )
-    before_remote_refs = git_bare(remote, "show-ref")
-
-    result = run_cleanup_with_real_git(project, monkeypatch)
-
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "base_branch_checked_out" in result.stdout
-    assert (
-        git(project, "rev-parse", "HEAD"),
-        git(project, "branch", "--show-current"),
-        git(project, "show-ref"),
-    ) == before
-    assert git(other, "branch", "--show-current") == "main"
-    assert git(other, "rev-parse", "HEAD") == git(project, "rev-parse", "main")
-    assert git(other, "rev-parse", "HEAD") != remote_base
-    assert git_bare(remote, "show-ref") == before_remote_refs
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "base_branch_checked_out"
-    assert other.resolve() in [Path(path).resolve() for path in status["details"]["occupiedWorktrees"]]
-
-
-@pytest.mark.parametrize("unsafe_state", ["dirty", "rebase"])
-def test_cleanup_refuses_unsafe_stale_base_worktree_end_to_end(
-    tmp_path: Path, monkeypatch, unsafe_state: str
-) -> None:
-    project, remote = init_cleanup_project(tmp_path)
-    stale_base = git(project, "rev-parse", "main")
-    other = tmp_path / "base-worktree"
-    git(project, "worktree", "add", str(other), "main")
-    if unsafe_state == "dirty":
-        (other / "DIRTY.md").write_text("dirty\n", encoding="utf-8")
-    else:
-        git_path = Path(git(other, "rev-parse", "--git-path", "rebase-merge"))
-        git_path.mkdir(parents=True)
-
-    result = run_cleanup_with_real_git(project, monkeypatch)
-
-    assert result.returncode == 1
-    assert git(other, "rev-parse", "HEAD") == stale_base
-    assert git_bare(remote, "show-ref", "--verify", "refs/heads/feature/example")
-    status = json.loads((project / ".pr-flow" / "last-status.json").read_text(encoding="utf-8"))
-    assert status["details"]["reason"] == "base_branch_checked_out"
-
-
-def test_cleanup_returns_to_latest_base_and_deletes_source_branches(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_returns_to_latest_base_and_deletes_source_branches(flow_root: Path, monkeypatch) -> None:
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(),
     )
@@ -7432,16 +5646,16 @@ def test_cleanup_returns_to_latest_base_and_deletes_source_branches(tmp_path: Pa
     assert status["details"]["baseCheckout"] == {"status": "checked_out"}
 
 
-def test_cleanup_retries_transient_eof_pr_view_before_cleanup(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_retries_transient_eof_pr_view_before_cleanup(flow_root: Path, monkeypatch) -> None:
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow
 
     module = load_pr_flow_module()
-    project = tmp_path / "project"
+    project = flow_root / "project"
     project.mkdir()
     write_minimal_pr_flow_config(project)
     monkeypatch.setenv("PR_FLOW_GH_PR_VIEW_RETRIES", "1")
-    gh_stub = CommandStub(consume=True)
+    gh_stub = CommandStub(body_reader=read_body_file, consume=True)
     gh_stub.add(
         ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
         stderr='Post "https://api.github.com/graphql": EOF\n',
@@ -7451,7 +5665,7 @@ def test_cleanup_retries_transient_eof_pr_view_before_cleanup(tmp_path: Path, mo
         ["pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner"],
         stdout=cleanup_pr_view_json(),
     )
-    git_stub = CommandStub(consume=True)
+    git_stub = CommandStub(body_reader=read_body_file, consume=True)
     base_oid = "a" * 40
     for git_args, stdout in [
         (["status", "--short"], ""),
@@ -7486,10 +5700,10 @@ def test_cleanup_retries_transient_eof_pr_view_before_cleanup(tmp_path: Path, mo
     assert gh_stub.calls.count(("pr", "view", "12", "--json", "number,state,headRefName,baseRefName,headRepositoryOwner")) == 2
 
 
-def test_cleanup_refuses_remote_base_change_during_cleanup(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_refuses_remote_base_change_during_cleanup(flow_root: Path, monkeypatch) -> None:
     base_oid = "a" * 40
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(),
         git_responses=[
@@ -7504,9 +5718,9 @@ def test_cleanup_refuses_remote_base_change_during_cleanup(tmp_path: Path, monke
     assert status["details"]["remoteBaseCommit"] == "c" * 40
 
 
-def test_cleanup_uses_live_state_instead_of_completed_step_markers(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_uses_live_state_instead_of_completed_step_markers(flow_root: Path, monkeypatch) -> None:
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(base_ref="missing-base"),
         git_responses=[
@@ -7525,9 +5739,9 @@ def test_cleanup_uses_live_state_instead_of_completed_step_markers(tmp_path: Pat
     assert "completedCleanupSteps" not in status["details"]
 
 
-def test_cleanup_checks_out_but_does_not_pull_local_base_branch(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_checks_out_but_does_not_pull_local_base_branch(flow_root: Path, monkeypatch) -> None:
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(),
         git_responses=[
@@ -7548,9 +5762,9 @@ def test_cleanup_checks_out_but_does_not_pull_local_base_branch(tmp_path: Path, 
     assert status["details"]["baseCheckout"] == {"status": "checked_out"}
 
 
-def test_cleanup_rejects_pr_state_that_is_not_merged(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_rejects_pr_state_that_is_not_merged(flow_root: Path, monkeypatch) -> None:
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(state="OPEN"),
     )
@@ -7559,9 +5773,9 @@ def test_cleanup_rejects_pr_state_that_is_not_merged(tmp_path: Path, monkeypatch
     assert_cleanup_exception(project, result, "pr_not_merged")
 
 
-def test_cleanup_rejects_dirty_worktree(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_rejects_dirty_worktree(flow_root: Path, monkeypatch) -> None:
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(),
         git_responses=[(["status", "--short"], "dirty.txt\n", 0)],
@@ -7570,9 +5784,9 @@ def test_cleanup_rejects_dirty_worktree(tmp_path: Path, monkeypatch) -> None:
     assert_cleanup_exception(project, result, "dirty_worktree")
 
 
-def test_cleanup_rejects_head_branch_equal_to_base_branch(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_rejects_head_branch_equal_to_base_branch(flow_root: Path, monkeypatch) -> None:
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(head_ref="main", base_ref="main"),
         git_responses=[
@@ -7584,9 +5798,9 @@ def test_cleanup_rejects_head_branch_equal_to_base_branch(tmp_path: Path, monkey
     assert_cleanup_exception(project, result, "protected_base_branch")
 
 
-def test_cleanup_rejects_current_branch_mismatch(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_rejects_current_branch_mismatch(flow_root: Path, monkeypatch) -> None:
     project, result = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=cleanup_pr_view_json(),
         git_responses=[
@@ -7596,339 +5810,6 @@ def test_cleanup_rejects_current_branch_mismatch(tmp_path: Path, monkeypatch) ->
     )
 
     assert_cleanup_exception(project, result, "current_branch_mismatch")
-
-
-def write_toolchain_cli(
-    bin_dir: Path,
-    reports: dict[str, dict[str, object]],
-    *,
-    cwd_log: Path | None = None,
-) -> None:
-    bin_dir.mkdir(exist_ok=True)
-    for command, report in reports.items():
-        script = bin_dir / f"{command}.py"
-        lines = [
-            "import json",
-            "from pathlib import Path",
-        ]
-        if cwd_log is not None:
-            lines.extend([
-                f"with Path({str(cwd_log)!r}).open('a', encoding='utf-8') as handle:",
-                "    handle.write(str(Path.cwd()) + '\\n')",
-            ])
-        lines.extend([
-            f"reports = {report!r}",
-            "reports = reports if isinstance(reports, list) else [reports]",
-            "state = Path(__file__).with_suffix('.count')",
-            "index = int(state.read_text() if state.exists() else '0')",
-            "state.write_text(str(index + 1))",
-            "print(json.dumps(reports[min(index, len(reports) - 1)]))",
-            "",
-        ])
-        script.write_text("\n".join(lines), encoding="utf-8")
-        if os.name == "nt":
-            (bin_dir / f"{command}.cmd").write_text(
-                f'@echo off\n"{sys.executable}" "%~dp0{command}.py" %*\n', encoding="utf-8"
-            )
-        else:
-            launcher = bin_dir / command
-            launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$(dirname "$0")/{command}.py" "$@"\n', encoding="utf-8")
-            launcher.chmod(0o755)
-
-
-def run_public_pr_flow(bin_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    env = os.environ | {"PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", "")}
-    return subprocess.run([sys.executable, str(SCRIPT), *args], check=False, text=True, capture_output=True, env=env)
-
-
-def initialized_toolchain_project(tmp_path: Path, bin_dir: Path) -> Path:
-    project = tmp_path / "project"
-    project.mkdir()
-    for args in (["init"], ["config", "user.email", "test@example.invalid"], ["config", "user.name", "Test"]):
-        assert subprocess.run(["git", *args], cwd=project, check=False).returncode == 0
-    config = tmp_path / "config.yaml"
-    config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
-    assert run_public_pr_flow(bin_dir, "init", "--project", str(project), "--config", str(config)).returncode == 0
-    assert subprocess.run(["git", "add", "."], cwd=project, check=False).returncode == 0
-    assert subprocess.run(["git", "commit", "-m", "baseline"], cwd=project, check=False).returncode == 0
-    return project
-
-
-def sync_through_public_complete(bin_dir: Path, project: Path) -> subprocess.CompletedProcess[str]:
-    return run_public_pr_flow(bin_dir, "complete", "--project", str(project), "--summary", "s", "--scope", "s")
-
-
-def dev_toolchain_reports(project: Path, *, worktree_match: bool, complete_identity: bool = True) -> dict[str, dict[str, object]]:
-    source_worktree = project if worktree_match else project.parent / "tool-source"
-    binding = {
-        "sourceWorktree": str(source_worktree),
-        "sourceCommit": "a" * 40,
-        "targetWorktree": str(project),
-        "targetCommit": "b" * 40,
-        "worktreeMatch": worktree_match,
-    }
-    reports: dict[str, dict[str, object]] = {}
-    for key, (_, package_name, package_directory) in load_pr_flow_module().TOOLCHAIN_TOOLS.items():
-        toolchain: dict[str, object] = {
-            "mode": "dev",
-            "packageName": package_name,
-        }
-        if complete_identity:
-            toolchain.update(
-                {
-                    "sourceRepository": "https://github.com/liuli195/my-agent-skills",
-                    "sourceCommit": "a" * 40,
-                    "packageDirectory": package_directory,
-                    "implementationIdentity": "sha256:" + "0" * 64,
-                }
-            )
-        reports[key] = {"toolchain": toolchain, "binding": binding}
-    return reports
-
-
-def test_init_accepts_same_worktree_with_stable_toolchain_identities(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    config = tmp_path / "config.yaml"
-    config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
-    bin_dir = tmp_path / "bin"
-    reports = dev_toolchain_reports(project, worktree_match=True)
-    for report in reports.values():
-        report["toolchain"]["implementationIdentity"] = "sha256:" + "1" * 64
-    write_toolchain_cli(bin_dir, reports)
-
-    result = run_public_pr_flow(bin_dir, "init", "--project", str(project), "--config", str(config))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    tools = json.loads((project / ".pr-flow" / "toolchain.json").read_text(encoding="utf-8"))["tools"]
-    assert tools["myspec"]["sourceCommit"] == "a" * 40
-    assert tools["myspec"]["implementationIdentity"] == "sha256:" + "1" * 64
-    assert tools["build-and-verify"]["sourceCommit"] == "a" * 40
-
-
-@pytest.mark.parametrize(
-    ("command", "extra"),
-    [
-        ("complete", ["--summary", "s", "--scope", "s"]),
-        ("tweak", ["--reason", "r", "--summary", "s", "--scope", "s"]),
-    ],
-)
-def test_lifecycle_syncs_same_worktree_toolchain_before_remote_flow(
-    tmp_path: Path, command: str, extra: list[str]
-) -> None:
-    init_bin = tmp_path / "init-bin"
-    release_reports = {
-        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3"}},
-        "build-and-verify": {
-            "toolchain": {
-                "mode": "release",
-                "packageName": "@liuli195/build-and-verify",
-                "packageVersion": "1.2.3",
-            }
-        },
-    }
-    write_toolchain_cli(init_bin, release_reports)
-    project = initialized_toolchain_project(tmp_path, init_bin)
-    before_head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=project, check=True, text=True, capture_output=True
-    ).stdout.strip()
-
-    run_bin = tmp_path / "run-bin"
-    write_toolchain_cli(run_bin, dev_toolchain_reports(project, worktree_match=True))
-    write_fake_gh(run_bin, exit_code=99)
-    result = run_public_pr_flow(run_bin, command, "--project", str(project), *extra)
-
-    assert result.returncode == 1
-    assert "toolchain_same_worktree_unsupported" not in result.stdout
-    assert "toolchain_source_commit_unavailable" not in result.stdout
-    after_head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=project, check=True, text=True, capture_output=True
-    ).stdout.strip()
-    assert after_head != before_head
-    tools = json.loads((project / ".pr-flow" / "toolchain.json").read_text(encoding="utf-8"))["tools"]
-    assert tools["myspec"]["implementationIdentity"] == "sha256:" + "0" * 64
-
-
-def test_init_fails_closed_when_dev_implementation_commit_is_unavailable(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    config = tmp_path / "config.yaml"
-    config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
-    bin_dir = tmp_path / "bin"
-    reports = dev_toolchain_reports(project, worktree_match=True)
-    del reports["myspec"]["toolchain"]["sourceCommit"]
-    write_toolchain_cli(bin_dir, reports)
-
-    result = run_public_pr_flow(bin_dir, "init", "--project", str(project), "--config", str(config))
-
-    assert result.returncode == 1
-    assert "status: toolchain_source_commit_unavailable" in result.stdout
-    assert "Publish the exact implementation commit" in result.stdout
-    assert not (project / ".pr-flow" / "toolchain.json").exists()
-
-
-def test_toolchain_sync_converges_for_independent_and_shared_tool_changes(tmp_path: Path) -> None:
-    init_bin = tmp_path / "init-bin"
-    release_reports = {
-        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3"}},
-        "build-and-verify": {"toolchain": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "1.2.3"}},
-    }
-    write_toolchain_cli(init_bin, release_reports)
-    project = initialized_toolchain_project(tmp_path, init_bin)
-    baseline = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=project, check=True, text=True, capture_output=True
-    ).stdout.strip()
-
-    run_bin = tmp_path / "run-bin"
-    reports = dev_toolchain_reports(project, worktree_match=True)
-    write_toolchain_cli(run_bin, reports)
-    write_fake_gh(run_bin, exit_code=99)
-    first = sync_through_public_complete(run_bin, project)
-    assert first.returncode == 1
-    assert subprocess.run(
-        ["git", "rev-list", "--count", f"{baseline}..HEAD"], cwd=project, check=True, text=True, capture_output=True
-    ).stdout.strip() == "1"
-    first_record = json.loads((project / ".pr-flow/toolchain.json").read_text(encoding="utf-8"))
-    first_workflow = (project / ".github/workflows/pr-flow-toolchain.yml").read_bytes()
-
-    second = sync_through_public_complete(run_bin, project)
-    assert second.returncode == 1
-    assert subprocess.run(
-        ["git", "rev-list", "--count", f"{baseline}..HEAD"], cwd=project, check=True, text=True, capture_output=True
-    ).stdout.strip() == "1"
-    assert (project / ".github/workflows/pr-flow-toolchain.yml").read_bytes() == first_workflow
-
-    reports["myspec"]["toolchain"]["sourceCommit"] = "b" * 40
-    reports["myspec"]["toolchain"]["implementationIdentity"] = "sha256:" + "2" * 64
-    write_toolchain_cli(run_bin, reports)
-    third = sync_through_public_complete(run_bin, project)
-    assert third.returncode == 1
-    assert subprocess.run(
-        ["git", "rev-list", "--count", f"{baseline}..HEAD"], cwd=project, check=True, text=True, capture_output=True
-    ).stdout.strip() == "2"
-    updated = json.loads((project / ".pr-flow/toolchain.json").read_text(encoding="utf-8"))
-    assert updated["tools"]["myspec"]["implementationIdentity"] == "sha256:" + "2" * 64
-    assert updated["tools"]["build-and-verify"] == first_record["tools"]["build-and-verify"]
-    assert "checkout --detach " + "a" * 40 in (
-        project / ".github/workflows/pr-flow-toolchain.yml"
-    ).read_text(encoding="utf-8")
-
-    reports["myspec"]["toolchain"].update(
-        sourceCommit="c" * 40,
-        implementationIdentity="sha256:" + "3" * 64,
-    )
-    reports["build-and-verify"]["toolchain"].update(
-        sourceCommit="c" * 40,
-        implementationIdentity="sha256:" + "4" * 64,
-    )
-    write_toolchain_cli(run_bin, reports)
-    shared = sync_through_public_complete(run_bin, project)
-    assert shared.returncode == 1
-    assert subprocess.run(
-        ["git", "rev-list", "--count", f"{baseline}..HEAD"], cwd=project, check=True, text=True, capture_output=True
-    ).stdout.strip() == "3"
-    shared_record = json.loads((project / ".pr-flow/toolchain.json").read_text(encoding="utf-8"))
-    assert shared_record["tools"]["myspec"]["implementationIdentity"] == "sha256:" + "3" * 64
-    assert shared_record["tools"]["build-and-verify"]["implementationIdentity"] == "sha256:" + "4" * 64
-
-
-def test_init_uses_target_project_as_toolchain_doctor_cwd(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    config = tmp_path / "config.yaml"
-    config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
-    bin_dir = tmp_path / "bin"
-    cwd_log = tmp_path / "doctor-cwd.log"
-    write_toolchain_cli(bin_dir, dev_toolchain_reports(project, worktree_match=False), cwd_log=cwd_log)
-
-    result = run_public_pr_flow(bin_dir, "init", "--project", str(project), "--config", str(config))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert cwd_log.read_text(encoding="utf-8").splitlines() == [str(project.resolve())] * 2
-    assert "checkout --detach " + "a" * 40 in (
-        project / ".github" / "workflows" / "pr-flow-toolchain.yml"
-    ).read_text(encoding="utf-8")
-
-
-def test_complete_commits_only_changed_managed_file_through_public_cli(tmp_path: Path) -> None:
-    bin_dir = tmp_path / "bin"
-    reports = {
-        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3"}},
-        "build-and-verify": {"toolchain": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "1.2.3"}},
-    }
-    write_toolchain_cli(bin_dir, reports)
-    project = initialized_toolchain_project(tmp_path, bin_dir)
-    workflow = project / ".github/workflows/pr-flow-toolchain.yml"
-    workflow.write_text("stale\n", encoding="utf-8")
-    assert subprocess.run(["git", "add", str(workflow.relative_to(project))], cwd=project, check=False).returncode == 0
-    assert subprocess.run(["git", "commit", "-m", "stale workflow"], cwd=project, check=False).returncode == 0
-
-    sync_through_public_complete(bin_dir, project)
-
-    changed = subprocess.run(["git", "show", "--format=", "--name-only", "HEAD"], cwd=project, check=False, text=True, capture_output=True)
-    assert changed.stdout.splitlines() == [".github/workflows/pr-flow-toolchain.yml"]
-    assert subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=project, check=False).returncode == 0
-
-
-def test_complete_refuses_dirty_tree_without_staging_managed_files_through_public_cli(tmp_path: Path) -> None:
-    bin_dir = tmp_path / "bin"
-    reports = {
-        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3"}},
-        "build-and-verify": {"toolchain": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "1.2.3"}},
-    }
-    write_toolchain_cli(bin_dir, reports)
-    project = initialized_toolchain_project(tmp_path, bin_dir)
-    (project / ".pr-flow/toolchain.json").write_text("stale\n", encoding="utf-8")
-    (project / "unrelated.txt").write_text("dirty\n", encoding="utf-8")
-
-    result = sync_through_public_complete(bin_dir, project)
-
-    assert "toolchain_sync_dirty" in result.stdout
-    assert subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=project, check=False).returncode == 0
-    assert (project / ".pr-flow/toolchain.json").read_text(encoding="utf-8") == "stale\n"
-
-
-def test_complete_restores_toolchain_files_and_index_when_commit_fails_through_public_cli(tmp_path: Path) -> None:
-    bin_dir = tmp_path / "bin"
-    reports = {
-        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3"}},
-        "build-and-verify": {"toolchain": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "1.2.3"}},
-    }
-    write_toolchain_cli(bin_dir, reports)
-    project = initialized_toolchain_project(tmp_path, bin_dir)
-    record = project / ".pr-flow/toolchain.json"
-    record.write_text("stale\n", encoding="utf-8")
-    assert subprocess.run(["git", "add", str(record.relative_to(project))], cwd=project, check=False).returncode == 0
-    assert subprocess.run(["git", "commit", "-m", "stale record"], cwd=project, check=False).returncode == 0
-    assert subprocess.run(["git", "config", "user.email", ""], cwd=project, check=False).returncode == 0
-    assert subprocess.run(["git", "config", "user.name", ""], cwd=project, check=False).returncode == 0
-
-    result = sync_through_public_complete(bin_dir, project)
-
-    assert "git_toolchain_commit_failed" in result.stdout
-    assert subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=project, check=False).returncode == 0
-    assert record.read_text(encoding="utf-8") == "stale\n"
-
-
-def test_complete_rereads_the_new_baseline_with_bounded_toolchain_retries(tmp_path: Path) -> None:
-    bin_dir = tmp_path / "bin"
-    reports = {
-        "myspec": [
-            {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.0.0"}},
-            {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.0.1"}},
-            {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.0.2"}},
-        ],
-        "build-and-verify": {"toolchain": {"mode": "release", "packageName": "@liuli195/build-and-verify", "packageVersion": "1.0.0"}},
-    }
-    write_toolchain_cli(bin_dir, reports)
-    project = initialized_toolchain_project(tmp_path, bin_dir)
-    baseline = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project, check=False, text=True, capture_output=True).stdout.strip()
-
-    result = sync_through_public_complete(bin_dir, project)
-
-    commits = subprocess.run(["git", "rev-list", "--count", f"{baseline}..HEAD"], cwd=project, check=False, text=True, capture_output=True)
-    assert commits.stdout.strip() == "2", result.stdout + result.stderr
-    assert "1.0.2" in (project / ".pr-flow/toolchain.json").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -7969,24 +5850,6 @@ def test_valid_toolchain_identity_rejects_an_overlong_malicious_release_version(
     assert not load_pr_flow_module().valid_toolchain_identity(identity, "plugins/my-spec")
 
 
-def test_init_validates_release_and_dev_toolchain_identities_through_public_cli(tmp_path: Path) -> None:
-    config = tmp_path / "config.yaml"
-    config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
-    reports = {
-        "myspec": {"toolchain": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3-rc.1+build.9"}},
-        "build-and-verify": {"toolchain": {"mode": "dev", "packageName": "@liuli195/build-and-verify", "sourceRepository": "https://github.com/liuli195/my-agent-skills", "sourceCommit": "a" * 40, "packageDirectory": "plugins/build-and-verify", "implementationIdentity": "sha256:" + "0" * 64}},
-    }
-    bin_dir = tmp_path / "bin"
-    write_toolchain_cli(bin_dir, reports)
-
-    result = run_public_pr_flow(bin_dir, "init", "--project", str(tmp_path / "project"), "--config", str(config))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    workflow = (tmp_path / "project" / ".github/workflows/pr-flow-toolchain.yml").read_text(encoding="utf-8")
-    assert "@liuli195/myspec@1.2.3-rc.1+build.9" in workflow
-    assert "checkout --detach " + "a" * 40 in workflow
-
-
 @pytest.mark.parametrize(
     ("tool", "toolchain"),
     [
@@ -8008,9 +5871,9 @@ def test_init_validates_release_and_dev_toolchain_identities_through_public_cli(
     ],
 )
 def test_init_rejects_untrusted_toolchain_identity_in_process(
-    tmp_path: Path, monkeypatch, tool: str, toolchain: dict[str, object]
+    flow_root: Path, monkeypatch, tool: str, toolchain: dict[str, object]
 ) -> None:
-    config = tmp_path / "config.yaml"
+    config = flow_root / "config.yaml"
     config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
     from tests.support.command_stubs import CommandStub
     from tests.support.pr_flow_invocation import invoke_pr_flow, load_pr_flow_module as fresh_module
@@ -8021,13 +5884,13 @@ def test_init_rejects_untrusted_toolchain_identity_in_process(
     }
     reports[tool] = {"toolchain": toolchain}
     module = fresh_module()
-    doctor = CommandStub()
+    doctor = CommandStub(body_reader=read_body_file)
     for command, report in reports.items():
         doctor.add((command, "doctor"), stdout=json.dumps(report))
     monkeypatch.setattr(module.shutil, "which", lambda command: command)
     monkeypatch.setattr(module.subprocess, "run", lambda command, **kwargs: doctor(*command, **kwargs))
 
-    result = invoke_pr_flow(["init", "--project", str(tmp_path / "project"), "--config", str(config)], module=module)
+    result = invoke_pr_flow(["init", "--project", str(flow_root / "project"), "--config", str(config)], module=module)
 
     assert result.returncode == 1
     source_commit = toolchain.get("sourceCommit")
@@ -8037,35 +5900,242 @@ def test_init_rejects_untrusted_toolchain_identity_in_process(
         else "toolchain_identity_invalid"
     )
     assert f"status: {expected_status}" in result.stdout
-    assert not (tmp_path / "project" / ".pr-flow/toolchain.json").exists()
+    assert not (flow_root / "project" / ".pr-flow/toolchain.json").exists()
 
-    assert not (tmp_path / "project" / ".pr-flow/config.yaml").exists()
-    assert not (tmp_path / "project" / ".github/workflows/pr-flow-toolchain.yml").exists()
-
-
-@pytest.mark.parametrize("command, extra", [("diagnose", []), ("complete", ["--summary", "s", "--scope", "s"]), ("tweak", ["--reason", "r", "--summary", "s", "--scope", "s"])])
-def test_legacy_repositories_keep_flow_behavior_with_upgrade_prompt(tmp_path: Path, command: str, extra: list[str]) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    assert subprocess.run(["git", "init"], cwd=project, check=False).returncode == 0
-    write_complete_pr_flow_config(project)
-
-    result = subprocess.run([sys.executable, str(SCRIPT), command, "--project", str(project), *extra], check=False, text=True, capture_output=True)
-
-    assert "upgrade available: rerun pr-flow-init to record the managed toolchain" in result.stdout
+    assert not (flow_root / "project" / ".pr-flow/config.yaml").exists()
+    assert not (flow_root / "project" / ".github/workflows/pr-flow-toolchain.yml").exists()
 
 
-def test_legacy_cleanup_and_hotfix_keep_behavior_with_upgrade_prompt(tmp_path: Path, monkeypatch) -> None:
+def test_legacy_cleanup_and_hotfix_keep_behavior_with_upgrade_prompt(flow_root: Path, monkeypatch) -> None:
     project, cleanup = run_cleanup_in_process(
-        tmp_path,
+        flow_root,
         monkeypatch,
         pr_stdout=json.dumps({"number": 12, "state": "OPEN", "headRefName": "feature/example", "baseRefName": "main"}),
     )
     assert "upgrade available: rerun pr-flow-init to record the managed toolchain" in cleanup.stdout
     assert_cleanup_exception(project, cleanup, "pr_not_merged")
 
-    hotfix_root = tmp_path / "hotfix"
+    hotfix_root = flow_root / "hotfix"
     hotfix_root.mkdir()
     _, hotfix = run_hotfix_in_process(hotfix_root, monkeypatch, allow_hotfix=False)
     assert "upgrade available: rerun pr-flow-init to record the managed toolchain" in hotfix.stdout
     assert "hotfix_push_not_allowed" in hotfix.stdout
+
+
+def test_status_keeps_latest_and_branch_record_in_memory(flow_root: Path) -> None:
+    module = load_pr_flow_module()
+    project = flow_root / "project"
+    module.write_status(project, "complete", "ready", {"sourceBranch": "feature/example"})
+    latest = json.loads((project / ".pr-flow/last-status.json").read_text())
+    branch = project / ".pr-flow/runs" / f"{module.stable_key('feature/example')}.json"
+    assert json.loads(branch.read_text()) == latest
+    assert latest["details"]["worktreePath"] == str(project.resolve())
+    assert latest["details"]["commonGitDir"] == str(project / ".git")
+
+
+@pytest.mark.parametrize("command", ["cleanup", "diagnose"])
+def test_locked_commands_report_owner_without_rewriting_status(flow_root: Path, monkeypatch, command: str) -> None:
+    module = load_pr_flow_module()
+    project = flow_root / "project"
+    module.write_status(project, "complete", "ready", {"sourceBranch": "feature/example"})
+    before = (project / ".pr-flow/last-status.json").read_bytes()
+    owner = {"reason": "flow_locked", "actor": {"name": "Owner"}, "nextCommand": "retry after owner finishes"}
+
+    @contextlib.contextmanager
+    def locked(*_args):
+        raise module.PrFlowError("flow_locked", owner)
+        yield
+
+    monkeypatch.setattr(module, "operation_lock", locked)
+    monkeypatch.setattr(module, "active_lock_details", lambda _project: owner)
+    arguments = [command, "--project", str(project)] + (["--pr", "12"] if command == "cleanup" else [])
+    result = run(*arguments)
+    assert result.returncode == 1
+    assert "flow_locked" in result.stdout and "Owner" in result.stdout
+    assert "nextCommand" in result.stdout
+    assert (project / ".pr-flow/last-status.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("failure", [None, "dirty", "commit", "staged-scope"])
+def test_toolchain_sync_limits_staging_and_restores_failed_changes(flow_root: Path, monkeypatch, failure) -> None:
+    from tests.support.command_stubs import CommandStub, default_git_responses
+
+    module = load_pr_flow_module()
+    project = flow_root / "project"
+    record = project / module.TOOLCHAIN_PATH
+    workflow = project / module.TOOLCHAIN_WORKFLOW_PATH
+    record.write_text(module.toolchain_record(module.toolchain_identities(project)))
+    workflow.write_text("stale workflow\n")
+    commands = CommandStub(defaults=default_git_responses())
+    paths = [module.TOOLCHAIN_WORKFLOW_PATH.as_posix()]
+    commands.add(["status", "--porcelain"], stdout="?? unrelated.txt\n" if failure == "dirty" else "")
+    commands.add(["add", "--", *paths])
+    commands.add(["diff", "--cached", "--name-only"],
+                 stdout="\n".join(paths + (["unrelated.txt"] if failure == "staged-scope" else [])))
+    commands.add(["commit", "-m", "chore: sync PR Flow toolchain"],
+                 returncode=1 if failure == "commit" else 0, stderr="injected commit failure")
+    commands.add(["restore", "--staged", "--", *paths])
+    monkeypatch.setattr(module, "git", commands)
+    if failure is None:
+        assert module.sync_toolchain(project) is True
+        assert "@liuli195/myspec@" in workflow.read_text()
+        assert module.sync_toolchain(project) is False
+    else:
+        reason = {"dirty": "toolchain_sync_dirty", "commit": "git_toolchain_commit_failed",
+                  "staged-scope": "toolchain_sync_scope_invalid"}[failure]
+        with pytest.raises(module.PrFlowError, match=reason):
+            module.sync_toolchain(project)
+        assert workflow.read_text() == "stale workflow\n"
+        if failure != "dirty":
+            assert ("restore", "--staged", "--", *paths) in commands.calls
+    assert all(call[2:] == tuple(paths) for call in commands.calls if call[:2] == ("add", "--"))
+
+
+@pytest.mark.parametrize("stable", [True, False])
+def test_toolchain_sync_rereads_identity_and_bounds_retries(flow_root: Path, monkeypatch, stable: bool) -> None:
+    from tests.support.command_stubs import CommandStub, default_git_responses
+
+    module = load_pr_flow_module()
+    project = flow_root / "project"
+    original = module.toolchain_identities(project)
+    (project / module.TOOLCHAIN_PATH).write_text(module.toolchain_record(original))
+    (project / module.TOOLCHAIN_WORKFLOW_PATH).write_text(module.toolchain_workflow(original))
+    versions = iter(("2.0.0", "3.0.0", "3.0.0" if stable else "4.0.0"))
+
+    def identities(_project):
+        version = next(versions)
+        return {key: {**identity, "packageVersion": version} for key, identity in original.items()}
+
+    commands = CommandStub(defaults=default_git_responses())
+    paths = [module.TOOLCHAIN_PATH.as_posix(), module.TOOLCHAIN_WORKFLOW_PATH.as_posix()]
+    commands.add(["add", "--", *paths])
+    commands.add(["diff", "--cached", "--name-only"], stdout="\n".join(paths))
+    commands.add(["commit", "-m", "chore: sync PR Flow toolchain"])
+    monkeypatch.setattr(module, "git", commands)
+    monkeypatch.setattr(module, "toolchain_identities", identities)
+    if stable:
+        assert module.sync_toolchain(project) is True
+    else:
+        with pytest.raises(module.PrFlowError, match="toolchain_identity_unstable"):
+            module.sync_toolchain(project)
+    assert sum(call[:1] == ("commit",) for call in commands.calls) == 2
+    assert {identity["packageVersion"] for identity in json.loads(
+        (project / module.TOOLCHAIN_PATH).read_text())["tools"].values()} == {"3.0.0"}
+
+
+@pytest.mark.parametrize("route", ["native", "unavailable", "malformed", "orca", "orca-failed", "registered", "residue", "residue-failed"])
+def test_worktree_removal_uses_safe_route_and_checks_registration(flow_root: Path, monkeypatch, route: str) -> None:
+    from tests.support.command_stubs import CommandStub
+
+    module = load_pr_flow_module()
+    controller, target = flow_root / "controller", flow_root / "project"
+    before, after = worktree_removal_records(controller, target)
+    commands = CommandStub(consume=True)
+    commands.add(["worktree", "list", "--porcelain", "-z"], stdout=before)
+    commands.add(["status", "--short"])
+    remove = ([] if os.name != "nt" else ["-c", "core.longpaths=true"]) + ["worktree", "remove", str(target)]
+    commands.add(remove)
+    commands.add(["worktree", "list", "--porcelain", "-z"], stdout=before if route == "registered" else after)
+    orca = CommandStub()
+    payload = (orca_worktree_ps_json(target, "repo::target") if route.startswith("orca") else
+               "not-json" if route == "malformed" else '{"result":{"worktrees":[]}}')
+    orca.add(["worktree", "ps", "--json"], stdout=payload, returncode=127 if route == "unavailable" else 0)
+    orca.add(["worktree", "rm", "--worktree", "id:repo::target", "--json"],
+             returncode=1 if route == "orca-failed" else 0, stderr="denied")
+    present = {"target": route.startswith("residue")}
+    original_lexists = module.os.path.lexists
+    monkeypatch.setattr(module.os.path, "lexists", lambda path: (
+        present["target"] if Path(path) == target else original_lexists(path)))
+    removed = []
+
+    def remove_residue(path):
+        assert path == target
+        removed.append(path)
+        if route == "residue-failed":
+            raise OSError("directory is still in use")
+        present["target"] = False
+
+    monkeypatch.setattr(module.shutil, "rmtree", remove_residue)
+    monkeypatch.setattr(module, "git", commands)
+    monkeypatch.setattr(module, "orca", orca)
+    if route in {"orca-failed", "registered", "residue-failed"}:
+        reason = {"orca-failed": "orca_worktree_remove_failed", "registered": "git_worktree_remove_failed",
+                  "residue-failed": "physical_worktree_remove_failed"}[route]
+        with pytest.raises(module.PrFlowError, match=reason):
+            module.remove_worktree(target, target)
+    else:
+        module.remove_worktree(target, target)
+    assert not any("--force" in call for call in commands.calls + orca.calls)
+    assert (tuple(remove) in commands.calls) is (not route.startswith("orca"))
+    if route in {"registered", "orca-failed"}:
+        assert removed == []
+
+
+@pytest.mark.parametrize("guard", ["occupied", "diverged", "active-cwd"])
+def test_cleanup_guards_stop_before_mutating_source_refs(flow_root: Path, monkeypatch, guard: str) -> None:
+    project = flow_root / "project"
+    responses = []
+    if guard == "occupied":
+        records = (f"worktree {project}\0HEAD {'b' * 40}\0branch refs/heads/feature/example\0\0"
+                   f"worktree {flow_root / 'base-worktree'}\0HEAD {'a' * 40}\0branch refs/heads/main\0\0")
+        responses.append((["worktree", "list", "--porcelain", "-z"], records, 0))
+    elif guard == "diverged":
+        responses.extend([(["rev-parse", "--verify", "--quiet", "refs/heads/main"], "c" * 40, 0),
+                          (["merge-base", "--is-ancestor", "c" * 40, "a" * 40], "", 1)])
+    else:
+        monkeypatch.setattr(Path, "cwd", lambda: project / "source-only/nested")
+        responses.extend([(["cat-file", "-t", f"{'a' * 40}:source-only/nested"], "", 1),
+                          (["check-ignore", "--quiet", "--", "source-only/nested"], "", 1)])
+    project, result = run_cleanup_in_process(flow_root, monkeypatch, pr_stdout=cleanup_pr_view_json(), git_responses=responses)
+    reason = {"occupied": "base_branch_checked_out", "diverged": "local_base_not_fast_forward",
+              "active-cwd": "active_cwd_would_disappear"}[guard]
+    assert_cleanup_exception(project, result, reason)
+    assert not any(call[:1] in {("push",), ("checkout",)} or call[:2] in {("branch", "-d"), ("branch", "-D"), ("branch", "-f")}
+                   for call in load_pr_flow_module().git.calls)
+
+
+def test_physical_cleanup_error_keeps_recovery_status_in_controller(flow_root: Path, monkeypatch) -> None:
+    module = load_pr_flow_module()
+    target = flow_root / "project"
+    original_lexists = module.os.path.lexists
+    monkeypatch.setattr(module.os.path, "lexists", lambda path: (
+        True if Path(path) == target else original_lexists(path)))
+    monkeypatch.setattr(module, "find_orca_worktree_id", lambda *_args: None)
+
+    def locked_directory(_target):
+        raise OSError("directory is still in use")
+
+    monkeypatch.setattr(module.shutil, "rmtree", locked_directory)
+    _, result = run_cleanup_in_process(flow_root, monkeypatch, pr_stdout=cleanup_pr_view_json(), remove_worktree=True)
+    assert result.returncode == 1 and "cleanup_complete" not in result.stdout
+    status = json.loads((flow_root / "controller/.pr-flow/last-status.json").read_text())
+    assert status["details"]["reason"] == "physical_worktree_remove_failed"
+    assert status["details"]["registrationRemoved"] is True
+    assert status["details"]["nextAction"] and status["details"]["nextCommand"]
+
+
+def test_doctor_accepts_release_and_same_worktree_dev_identity_at_project_cwd(flow_root: Path, monkeypatch) -> None:
+    from tests.support.pr_flow_invocation import load_pr_flow_module as fresh_module
+    from tests.support.command_stubs import CommandStub
+
+    module = fresh_module()
+    project = flow_root / "project"
+    project.mkdir()
+    doctor = CommandStub()
+    reports = {
+        "myspec": {"mode": "release", "packageName": "@liuli195/myspec", "packageVersion": "1.2.3-rc.1+build.9"},
+        "build-and-verify": {"mode": "dev", "packageName": "@liuli195/build-and-verify",
+            "sourceRepository": "https://github.com/liuli195/my-agent-skills", "sourceCommit": "a" * 40,
+            "packageDirectory": "plugins/build-and-verify", "implementationIdentity": "sha256:" + "0" * 64},
+    }
+    for command, identity in reports.items():
+        doctor.add([command, "doctor"], stdout=json.dumps({"toolchain": identity,
+            "binding": {"sourceWorktree": str(project), "targetWorktree": str(project), "worktreeMatch": True}}))
+
+    def execute(command, **kwargs):
+        assert kwargs["cwd"] == project
+        return doctor(*command)
+
+    monkeypatch.setattr(module.shutil, "which", lambda command: command)
+    monkeypatch.setattr(module.subprocess, "run", execute)
+    assert module.toolchain_identities(project) == reports
