@@ -16,13 +16,13 @@ ORDINARY_CHECKS = {
     "verify.build-and-verify-cli", "verify.data-store", "verify.cloud-bootstrap",
 }
 REAL_SELECTORS = {
-    "verify.real-my-spec": ("tests/integration/test_npm.py::TestMySpec", 4),
-    "verify.real-build-and-verify": ("tests/integration/test_npm.py::TestBuildAndVerify", 4),
-    "verify.real-pr-flow": ("tests/integration/test_git_workflows.py::TestPrFlow", 8),
-    "verify.real-release-flow": ("tests/integration/test_git_workflows.py::TestReleaseFlow", 4),
+    "verify.real-my-spec": ("tests/integration/test_npm.py::TestMySpec", 2),
+    "verify.real-build-and-verify": ("tests/integration/test_npm.py::TestBuildAndVerify", 2),
+    "verify.real-pr-flow": ("tests/integration/test_git_workflows.py::TestPrFlow", 2),
+    "verify.real-release-flow": ("tests/integration/test_git_workflows.py::TestReleaseFlow", 2),
     "verify.real-workspace": ("tests/integration/test_filesystem.py::TestWorkspace", 2),
-    "verify.real-data-store": ("tests/integration/test_native_data.py::TestDataStore", 1),
-    "verify.real-cloud-bootstrap": ("tests/integration/test_project_environment.py::TestBootstrap", 1),
+    "verify.real-data-store": ("tests/integration/test_native_data.py::TestDataStore", 2),
+    "verify.real-cloud-bootstrap": ("tests/integration/test_project_environment.py::TestBootstrap", 2),
 }
 
 
@@ -61,16 +61,15 @@ def test_config_explicitly_assigns_all_guarded_and_real_check_roles() -> None:
     assert len(real_ids) == len(set(real_ids)) == 8
     assert set(real_ids) == {*REAL_SELECTORS, "verify.myspec"}
     assert set(ids) - set(real_ids) == ORDINARY_CHECKS
-    assert all(ids.index(ordinary) < ids.index(real) for ordinary in ORDINARY_CHECKS for real in REAL_SELECTORS)
+    assert all(ids.index(real) < ids.index(ordinary) for real in real_ids for ordinary in ORDINARY_CHECKS)
     assert (verify["maxParallel"], verify["timeoutSeconds"], verify["fullBudgetSeconds"]) == (8, 180, 60)
     assert verify.get("enforceLocalBudget", True) is True
     for check in checks:
         assert check.get("pr", True) is True
         if check["id"] in ORDINARY_CHECKS:
-            assert "pytestXdistWorkers" not in check
+            assert check["pytestXdistWorkers"] == 2
             assert "--dist" not in check["command"]
-        if check["id"] != "verify.myspec":
-            assert check["checkParallel"] is True
+        assert check["checkParallel"] is True
     by_id = {check["id"]: check for check in checks}
     assert by_id["verify.my-spec"]["timeoutSeconds"] == 420
     assert by_id["verify.real-my-spec"]["timeoutSeconds"] == 420
