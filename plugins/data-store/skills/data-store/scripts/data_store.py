@@ -149,7 +149,9 @@ def _duckdb():
     try:
         import duckdb
     except ImportError as error:
-        raise RuntimeError("缺少 DuckDB，请使用技能 requirements.txt 准备当前 Python 环境") from error
+        requirement = Path(__file__).resolve().parents[1] / "requirements.txt"
+        raise RuntimeError(f"缺少 DuckDB（查询引擎）；当前解释器：{sys.executable}；"
+                           f"依赖声明：{requirement}。未自动安装，请由用户决定补装。") from error
     return duckdb
 
 

@@ -194,7 +194,7 @@
         "command": "python -m pytest -q -p no:cacheprovider --dist worksteal tests/integration/test_filesystem.py::TestWorkspace",
         "id": "verify.real-workspace",
         "inputs": [
-          "plugins/build-and-verify",
+          "plugins",
           "scripts/local_plugin_build.py",
           "scripts/setup-worktree.ps1",
           "tests/integration/test_filesystem.py",
@@ -210,7 +210,7 @@
           "tests/test_setup_worktree_script.py"
         ],
         "paths": [
-          "plugins/build-and-verify/**",
+          "plugins/**",
           "scripts/local_plugin_build.py",
           "scripts/setup-worktree.ps1",
           "tests/integration/test_filesystem.py",

@@ -14,7 +14,14 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
-import yaml
+try:
+    import yaml
+except ModuleNotFoundError as error:
+    if error.name != "yaml":
+        raise
+    requirement = Path(__file__).resolve().parents[1] / "requirements.txt"
+    raise SystemExit(f"missing_dependency: PyYAML（配置解析库）；当前解释器：{sys.executable}；"
+                     f"依赖声明：{requirement}。未自动安装，请由用户决定补装。") from error
 
 
 SCRIPT_PATH = Path(__file__).resolve()

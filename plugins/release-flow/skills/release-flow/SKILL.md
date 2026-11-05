@@ -14,6 +14,12 @@ Use this skill when the user wants to:
 - trigger a GitHub workflow release,
 - inspect CI release trace fields from workflow output.
 
+## 运行前提
+
+脚本需要 Python（编程语言）及本技能 `requirements.txt` 声明的 PyYAML（配置解析库）。复用现有环境，确认本次实际解释器；缺库时由原入口报告解释器和声明位置，只报告缺失，由用户决定是否安装。
+
+Git（版本管理工具）、gh（代码托管命令工具）及认证只在相应仓库检查、远端查询或发布功能实际需要时核对；本地模板生成及配置校验不设置统一远端工具门槛。发布流水线中构建软件包所需 Node.js（节点运行时）和 npm（软件包管理器）继续由既有流水线准备，不扩大为全部技能调用的前置条件。
+
 ## Boundaries
 
 - Project setup writes only `.release-flow/config.yaml`, `.release-flow/projection.yaml`, and a thin GitHub Workflow entry after explicit authorization.

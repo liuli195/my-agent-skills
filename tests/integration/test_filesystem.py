@@ -1,10 +1,13 @@
 """Minimal real-workspace smoke, plus the Windows junction adapter."""
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
+import zipfile
 
 import pytest
 
@@ -15,9 +18,269 @@ from tests.test_build_and_verify_plugin import (
 from tests.test_setup_worktree_script import normalize_powershell_output
 
 SCRIPT = REPO_ROOT / "scripts/setup-worktree.ps1"
+PACK = REPO_ROOT / "plugins/tool-lifecycle/pack.py"
+
+
+def snapshot_source(tmp_path):
+    project = tmp_path / "source"
+    shutil.copytree(REPO_ROOT / "plugins", project / "plugins",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    for arguments in (("init", "-q"), ("add", "plugins"),
+                      ("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                       "commit", "-qm", "snapshot source")):
+        subprocess.run(["git", "-C", str(project), *arguments], check=True, capture_output=True)
+    origin = subprocess.run(["git", "-C", str(REPO_ROOT), "remote", "get-url", "origin"],
+                            check=True, text=True, capture_output=True).stdout.strip()
+    subprocess.run(["git", "-C", str(project), "remote", "add", "origin", origin],
+                   check=True, capture_output=True)
+    return project
+
+
+def run_snapshots(project, output):
+    return subprocess.run([sys.executable, str(PACK), "snapshots", str(output),
+                           "--project", str(project)], text=True, capture_output=True)
 
 
 class TestWorkspace:
+    @pytest.mark.parametrize("plugin", ["release-flow", "pr-flow"])
+    def test_python_plugin_entry_reports_its_actual_interpreter_and_missing_pyyaml(self, plugin):
+        skill = REPO_ROOT / "plugins" / plugin / "skills" / plugin
+        result = subprocess.run([sys.executable, "-S", "-B", str(skill / "scripts" / f"{plugin.replace('-', '_')}.py"),
+                                 "--help"], text=True, capture_output=True)
+        assert result.returncode != 0
+        assert "missing_dependency: PyYAML" in result.stderr
+        assert sys.executable in result.stderr
+        assert str(skill / "requirements.txt") in result.stderr
+        assert "Traceback" not in result.stderr
+        assert (skill / "requirements.txt").read_text().strip() == "PyYAML>=6.0,<7.0"
+
+    def test_plugin_snapshots_prepare_native_upload_directories_with_valid_cloud_metadata(self, tmp_path):
+        project = snapshot_source(tmp_path)
+        output = tmp_path / "snapshots"
+        result = run_snapshots(project, output)
+        assert result.returncode == 0, result.stdout + result.stderr
+        manifest = json.loads((output / "snapshots.json").read_text())
+        for name, record in manifest["plugins"].items():
+            with zipfile.ZipFile(output / record["artifact"]) as archive:
+                cloud = json.loads(archive.read(".codex-plugin/plugin.json"))
+            assert cloud["author"] == {"name": "liuli195"}
+            interface = cloud["interface"]
+            assert interface["displayName"] == name
+            assert interface["shortDescription"] == " ".join(cloud["description"].splitlines())
+            assert interface["longDescription"] == cloud["description"]
+            assert interface["developerName"] == "liuli195"
+            assert interface["category"] == "Developer Tools"
+            assert interface["capabilities"] == []
+            directory = Path(record["pluginPath"])
+            assert directory.is_dir() and directory.parent == output
+            assert json.loads((directory / ".codex-plugin/plugin.json").read_text()) == cloud
+        # Metadata is generated in the build result, not fabricated in source.
+        assert "author" not in json.loads((project / "plugins/dev-flow/.codex-plugin/plugin.json").read_text())
+
+    def test_plugin_snapshots_preserve_declared_metadata_and_record_its_source(self, tmp_path):
+        project = snapshot_source(tmp_path)
+        path = project / "plugins/dev-flow/.codex-plugin/plugin.json"
+        source = json.loads(path.read_text())
+        source.update({"author": {"name": "Declared source maintainer"},
+                       "interface": {"category": "Productivity", "capabilities": ["Declared label"]}})
+        path.write_text(json.dumps(source))
+        output = tmp_path / "snapshots"
+        result = run_snapshots(project, output)
+        assert result.returncode == 0, result.stdout + result.stderr
+        record = json.loads((output / "snapshots.json").read_text())["plugins"]["dev-flow"]
+        cloud = json.loads((Path(record["pluginPath"]) / ".codex-plugin/plugin.json").read_text())
+        assert cloud["author"] == source["author"]
+        assert cloud["interface"]["developerName"] == source["author"]["name"]
+        assert cloud["interface"]["category"] == "Productivity"
+        assert cloud["interface"]["capabilities"] == ["Declared label"]
+        assert record["metadataSource"]["category"] == ".codex-plugin/plugin.json"
+        assert record["metadataSource"]["capabilities"] == ".codex-plugin/plugin.json"
+
+    @pytest.mark.parametrize("metadata", [
+        {"author": {"name": ""}},
+        {"interface": []},
+        {"interface": {"displayName": "x" * 81}},
+        {"interface": {"shortDescription": "two\nlines"}},
+        {"interface": {"category": "not a category"}},
+        {"interface": {"capabilities": ["x" * 121]}},
+    ])
+    def test_plugin_snapshots_reject_invalid_cloud_metadata_before_exposing_artifacts(self, tmp_path, metadata):
+        project = snapshot_source(tmp_path)
+        path = project / "plugins/dev-flow/.codex-plugin/plugin.json"
+        source = json.loads(path.read_text())
+        path.write_text(json.dumps(source | metadata))
+        output = tmp_path / "snapshots"
+        failed = run_snapshots(project, output)
+        assert failed.returncode != 0
+        assert json.loads(failed.stderr)["status"] == "failed"
+        assert not list(output.glob("*.zip"))
+        assert not (output / "snapshots.json").exists()
+
+    def test_plugin_snapshots_build_complete_packages_from_the_shared_registry(self, tmp_path):
+        project = snapshot_source(tmp_path)
+        output = tmp_path / "snapshots"
+        result = run_snapshots(project, output)
+        assert result.returncode == 0, result.stdout + result.stderr
+        report = json.loads(result.stdout)
+        assert set(report["built"]) == {
+            "release-flow", "pr-flow", "dev-flow", "subagent-policy", "plugin-sync",
+            "retro-to-issues", "data-store", "my-spec", "build-and-verify",
+        }
+        assert report["reused"] == []
+        manifest = json.loads((output / "snapshots.json").read_text())
+        shared = (project / "plugins/tool-lifecycle/python/management.py").read_bytes()
+        for name, record in manifest["plugins"].items():
+            artifact = output / record["artifact"]
+            assert record["sizeBytes"] == artifact.stat().st_size > 0
+            assert record["sha256"] == hashlib.sha256(artifact.read_bytes()).hexdigest()
+            assert record["buildSeconds"] >= 0
+            assert record["sourceCommit"]
+            with zipfile.ZipFile(artifact) as archive:
+                assert json.loads(archive.read(".codex-plugin/plugin.json"))["name"] == name
+                assert json.loads(archive.read(".claude-plugin/plugin.json"))["version"] == record["version"]
+                assert any(path.endswith("/SKILL.md") for path in archive.namelist())
+                assert not any("__pycache__" in path or path.endswith(".pyc") for path in archive.namelist())
+                if name in {"my-spec", "build-and-verify"}:
+                    assert archive.read("python/management.py") == shared
+                if name in {"release-flow", "pr-flow"}:
+                    assert archive.read(f"skills/{name}/requirements.txt") == b"PyYAML>=6.0,<7.0\n"
+        with zipfile.ZipFile(output / manifest["plugins"]["data-store"]["artifact"]) as archive:
+            assert "skills/data-store/requirements.txt" in archive.namelist()
+            assert "skills/data-store/scripts/data_store.py" in archive.namelist()
+        for name, command in {
+            "plugin-sync": [sys.executable, "skills/plugin-sync/scripts/plugin_sync.py", "--help"],
+            "release-flow": [sys.executable, "skills/release-flow/scripts/release_flow.py", "--help"],
+            "pr-flow": [sys.executable, "skills/pr-flow/scripts/pr_flow.py", "--help"],
+            "data-store": [sys.executable, "skills/data-store/scripts/data_store.py", "--help"],
+            "my-spec": ["node", "bin/myspec.js", "--help"],
+            "build-and-verify": ["node", "bin/build-and-verify.js", "--help"],
+        }.items():
+            extracted = tmp_path / "installed" / name
+            with zipfile.ZipFile(output / manifest["plugins"][name]["artifact"]) as archive:
+                archive.extractall(extracted)
+            smoke = subprocess.run(command, cwd=extracted, text=True, capture_output=True)
+            assert smoke.returncode == 0, smoke.stdout + smoke.stderr
+            assert "usage:" in smoke.stdout.lower()
+        # Use the existing test interpreter explicitly. This is not a claim
+        # about the interpreter selected by a future installed client.
+        release = tmp_path / "installed/release-flow/skills/release-flow/scripts/release_flow.py"
+        target = tmp_path / "runtime-project"
+        for arguments in (("setup", "--authorize-project-files"), ("validate",)):
+            runtime = subprocess.run([sys.executable, str(release), *arguments, "--project", str(target)],
+                                     text=True, capture_output=True)
+            assert runtime.returncode == 0, f"{sys.executable}: {runtime.stdout}{runtime.stderr}"
+        assert (target / ".release-flow/config.yaml").is_file()
+        store = tmp_path / "installed/data-store/skills/data-store/scripts/data_store.py"
+        command = [sys.executable, str(store), "--root", str(tmp_path / "runtime-data")]
+        written = subprocess.run([*command, "write", "snapshot_probe", "sample_01"],
+                                 input='[{"value": 42}]', text=True, capture_output=True)
+        assert written.returncode == 0, f"{sys.executable}: {written.stdout}{written.stderr}"
+        assert json.loads(written.stdout) == {"rows": 1}
+        read = subprocess.run([*command, "read-key", "snapshot_probe", "sample_01"],
+                              text=True, capture_output=True)
+        assert read.returncode == 0, read.stdout + read.stderr
+        assert json.loads(read.stdout) == {"value": 42}
+
+    def test_plugin_snapshots_reuse_unchanged_artifacts_and_rebuild_complete_affected_plugins(self, tmp_path):
+        project = snapshot_source(tmp_path)
+        output = tmp_path / "snapshots"
+        assert run_snapshots(project, output).returncode == 0
+        original = json.loads((output / "snapshots.json").read_text())["plugins"]
+        repeated = run_snapshots(project, output)
+        assert repeated.returncode == 0, repeated.stdout + repeated.stderr
+        assert json.loads(repeated.stdout)["built"] == []
+        assert set(json.loads(repeated.stdout)["reused"]) == set(original)
+        assert json.loads((output / "snapshots.json").read_text())["plugins"] == original
+
+        shared = project / "plugins/tool-lifecycle/python/management.py"
+        shared.write_text(shared.read_text() + "\n# shared snapshot update\n")
+        affected = run_snapshots(project, output)
+        assert affected.returncode == 0, affected.stdout + affected.stderr
+        assert set(json.loads(affected.stdout)["built"]) == {"my-spec", "build-and-verify"}
+        updated = json.loads((output / "snapshots.json").read_text())["plugins"]
+        for name in ("my-spec", "build-and-verify"):
+            assert updated[name]["inputVersion"] != original[name]["inputVersion"]
+            assert updated[name]["sourceDirty"] is True
+            with zipfile.ZipFile(output / updated[name]["artifact"]) as archive:
+                assert archive.read("python/management.py") == shared.read_bytes()
+
+        skill = project / "plugins/data-store/skills/data-store/SKILL.md"
+        skill.write_text(skill.read_text() + "\nSnapshot update\n")
+        changed = run_snapshots(project, output)
+        assert changed.returncode == 0, changed.stdout + changed.stderr
+        assert json.loads(changed.stdout)["built"] == ["data-store"]
+        final = json.loads((output / "snapshots.json").read_text())["plugins"]
+        assert final["pr-flow"] == original["pr-flow"]
+        with zipfile.ZipFile(output / final["data-store"]["artifact"]) as archive:
+            assert archive.read("skills/data-store/SKILL.md").endswith(b"Snapshot update\n")
+            assert "skills/data-store/scripts/data_store.py" in archive.namelist()
+            assert "skills/data-store/requirements.txt" in archive.namelist()
+
+    def test_plugin_snapshot_failure_keeps_previous_complete_manifest_and_artifacts(self, tmp_path):
+        project = snapshot_source(tmp_path)
+        output = tmp_path / "snapshots"
+        assert run_snapshots(project, output).returncode == 0
+        original = {path.relative_to(output): path.read_bytes() for path in output.rglob("*") if path.is_file()}
+        (project / "plugins/dev-flow/skills/dev-flow/SKILL.md").unlink()
+        failed = run_snapshots(project, output)
+        assert failed.returncode != 0
+        assert json.loads(failed.stderr)["status"] == "failed"
+        assert {path.relative_to(output): path.read_bytes() for path in output.rglob("*") if path.is_file()} == original
+
+    @pytest.mark.parametrize("relative", [
+        "plugins/pr-flow/skills/pr-flow-tweak/SKILL.md",
+        "plugins/build-and-verify/skills/build-and-verify-review/SKILL.md",
+        "plugins/my-spec/skills/my-spec-add/SKILL.md",
+    ])
+    def test_plugin_snapshots_refuse_a_missing_registered_skill_in_a_multiskill_plugin(self, tmp_path, relative):
+        project = snapshot_source(tmp_path)
+        (project / relative).unlink()
+        output = tmp_path / "snapshots"
+        failed = run_snapshots(project, output)
+        assert failed.returncode != 0
+        assert "snapshot_skill_input_missing" in failed.stderr
+        assert not output.exists()
+
+    def test_plugin_snapshots_refuse_corrupt_reuse_and_output_inside_inputs(self, tmp_path):
+        project = snapshot_source(tmp_path)
+        output = tmp_path / "snapshots"
+        assert run_snapshots(project, output).returncode == 0
+        manifest_bytes = (output / "snapshots.json").read_bytes()
+        manifest = json.loads(manifest_bytes)
+        skill = Path(manifest["plugins"]["dev-flow"]["pluginPath"]) / "skills/dev-flow/SKILL.md"
+        skill_bytes = skill.read_bytes()
+        skill.write_bytes(b"changed local directory")
+        failed_directory = run_snapshots(project, output)
+        assert failed_directory.returncode != 0
+        assert "snapshot_previous_artifact_invalid: dev-flow" in failed_directory.stderr
+        assert (output / "snapshots.json").read_bytes() == manifest_bytes
+        skill.write_bytes(skill_bytes)
+        artifact = output / manifest["plugins"]["dev-flow"]["artifact"]
+        artifact.write_bytes(b"not a complete snapshot")
+        failed = run_snapshots(project, output)
+        assert failed.returncode != 0
+        assert "snapshot_previous_artifact_invalid: dev-flow" in failed.stderr
+        assert (output / "snapshots.json").read_bytes() == manifest_bytes
+        nested = run_snapshots(project, project / "plugins/dev-flow/output")
+        assert nested.returncode != 0
+        assert not (project / "plugins/dev-flow/output").exists()
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX executable permissions")
+    def test_plugin_snapshot_reuse_rejects_changed_executable_permissions(self, tmp_path):
+        project = snapshot_source(tmp_path)
+        output = tmp_path / "snapshots"
+        assert run_snapshots(project, output).returncode == 0
+        manifest_bytes = (output / "snapshots.json").read_bytes()
+        record = json.loads(manifest_bytes)["plugins"]["build-and-verify"]
+        script = Path(record["pluginPath"]) / "bin/build-and-verify.js"
+        mode = script.stat().st_mode
+        assert mode & 0o111
+        script.chmod(mode & ~0o111)
+        failed = run_snapshots(project, output)
+        assert failed.returncode != 0
+        assert "snapshot_previous_artifact_invalid: build-and-verify" in failed.stderr
+        assert (output / "snapshots.json").read_bytes() == manifest_bytes
+
     def test_public_baseline_execution_cache_and_git_visible_inputs(self, tmp_path):
         primary = tmp_path / "primary"
         primary.mkdir()
