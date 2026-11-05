@@ -90,7 +90,7 @@ junction（目录联接）形态的根目录：
 6. If the user explicitly authorizes Codex（代码代理） updates, read `references/update-codex.md`.
 7. If the user explicitly authorizes Claude（代码代理） updates, read `references/update-claude.md`.
 8. Re-run the relevant read-only check（只读检查） after any authorized update.
-9. 用户要求开发／正式来源切换时，读取 `references/switch-source.md`，逐插件操作；保留两个市场及其他插件。数据中心升级或切来源后还需按其随包说明检查、更新已接入项目，并明确哪些运行中的工具需要重启。
+9. 用户要求开发／正式来源切换时，读取 `references/switch-source.md`。账号双对象与 Claude（代码助手）双市场的联合切换使用其中统一脚本入口；仅处理本次授权的清单项，不根据插件名称分支。保留两个市场及其他插件。数据中心升级或切来源后还需按其随包说明检查、更新已接入项目，并明确哪些运行中的工具需要重启。
 
 ## Defaults（默认值）
 

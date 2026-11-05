@@ -488,7 +488,7 @@
           "scripts",
           "tests/support/command_stubs.py",
           "tests/conftest.py",
-          "plugins/plugin-sync/skills/plugin-sync/references/update-build-and-verify-runtime.md",
+          "plugins/plugin-sync",
           ".comet/*.yaml"
         ],
         "paths": [
@@ -515,7 +515,7 @@
           "scripts/**",
           "tests/support/command_stubs.py",
           "tests/conftest.py",
-          "plugins/plugin-sync/skills/plugin-sync/references/update-build-and-verify-runtime.md",
+          "plugins/plugin-sync/**",
           ".comet/*.yaml"
         ],
         "pytestXdistWorkers": 2
