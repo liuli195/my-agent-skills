@@ -129,8 +129,12 @@ def test_npm_candidates_are_selected_only_by_integration_scope(argument, expecte
     config = SimpleNamespace(args=[argument], invocation_params=SimpleNamespace(dir=REPO_ROOT))
     assert module._selected_npm_packages(config) == expected
 
-def test_shared_marketplaces_offer_seven_skills_without_npm_tools() -> None:
-    expected = {"release-flow", "pr-flow", "dev-flow", "subagent-policy", "plugin-sync", "retro-to-issues", "data-store"}
+def test_shared_marketplaces_offer_all_nine_owned_plugins() -> None:
+    expected = {"release-flow", "pr-flow", "dev-flow", "subagent-policy", "plugin-sync", "retro-to-issues", "data-store", "my-spec", "build-and-verify"}
+    registry = load_module(REPO_ROOT / "plugins/release-flow/skills/release-flow/scripts/release_flow.py", "unified_release_registry").PLUGIN_REGISTRY
+    assert set(registry) == expected
+    for item in registry.values():
+        assert item["releaseInputs"] and item["versionFiles"]
     for relative in (".agents/plugins/marketplace.json", ".claude-plugin/marketplace.json"):
         catalog = json.loads((REPO_ROOT / relative).read_text(encoding="utf-8"))
         assert catalog["name"] == "my-agent-skills-marketplace-dev"

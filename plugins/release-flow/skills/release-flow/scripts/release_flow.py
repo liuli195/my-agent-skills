@@ -159,6 +159,7 @@ PLUGIN_REGISTRY: dict[str, dict[str, Any]] = {
     },
     "build-and-verify": {
         "releaseShape": "npm",
+        "commandTool": {"package": "@liuli195/build-and-verify", "command": "build-and-verify"},
         "releaseInputs": [
             "plugins/build-and-verify",
             "plugins/tool-lifecycle/python/management.py",
@@ -178,6 +179,7 @@ PLUGIN_REGISTRY: dict[str, dict[str, Any]] = {
     },
     "my-spec": {
         "releaseShape": "npm",
+        "commandTool": {"package": "@liuli195/myspec", "command": "myspec"},
         "releaseInputs": [
             "plugins/my-spec",
             "plugins/tool-lifecycle/python/management.py",
@@ -196,7 +198,6 @@ PLUGIN_REGISTRY: dict[str, dict[str, Any]] = {
         },
     },
 }
-BUILD_AND_VERIFY_PLUGIN = "build-and-verify"
 SETUP_TARGETS = [
     ("release-flow/config.yaml", ".release-flow/config.yaml"),
     ("release-flow/projection.yaml", ".release-flow/projection.yaml"),

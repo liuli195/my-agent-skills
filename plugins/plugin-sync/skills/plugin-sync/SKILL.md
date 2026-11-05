@@ -1,109 +1,37 @@
 ---
 name: plugin-sync
-description: Synchronize local agent Plugin（插件） state for Codex（代码代理） and Claude（代码代理）. Delegate MySpec（自有规格） and Build and Verify（构建与验证） lifecycle（生命周期） requests to their CLI（命令行程序）. Use when the user asks to check, refresh, update, install, enable, or sync local Plugin（插件）, marketplace（插件市场）, cache（缓存）, MySpec（自有规格）, or Build and Verify（构建与验证） state.
+description: 检查、安装、更新和切换插件来源。使用同一清单同步云端助手与 Codex（代码代理），并让 Claude（代码助手）原生市场状态跟随；不执行正式发布。
 ---
 
-# Plugin Sync（插件同步）
+# 插件同步
 
-## Use When（使用场景）
+## 安全边界
 
-Use this Skill（技能） for local consumption-side Plugin（插件） state, not for release（发布） work.
+- 默认只读检查。安装、更新、卸载、启停和来源切换须有用户对具体对象与动作的明确授权。
+- 不正式发布、不创建标签、不推送，不修改未纳入请求的第三方插件。
+- 同一市场的 Claude（代码助手）修改串行执行。
+- 只使用当前仓库、用户提供的路径或已确认的有限目录。用户级发现链接的新增、改指或清理须单独核对授权。
+- 操作前记录实际来源、对象、版本和启用状态；部分失败停止扩展并恢复本次变更。恢复结果或状态未知须明确报告，不宣称三端原子切换。
 
-Typical requests:
+## 同一清单与入口
 
-- Check whether Codex（代码代理） and Claude（代码代理） see the same Plugin（插件） versions.
-- Refresh marketplace snapshot（市场快照） and update installed Plugin（已安装插件） versions.
-- Diagnose stale cache（过期缓存）, missing subscription（缺少订阅）, disabled Plugin（未启用插件）, or restart（重启） needs.
-- Check whether every junction（目录联接） installed Skill（技能） appears in both clients' Skill Roots（技能根目录）.
-- Diagnose or update MySpec（自有规格） or Build and Verify（构建与验证） through their CLI（命令行程序）.
+仓库的两端市场和发布投影覆盖九项自有插件。发布登记 `release-flow`（发布流程）的 `scripts/release_flow.py` 中 `PLUGIN_REGISTRY`（插件清单）维护身份、来源、发布输入及共享依赖。安装和同步按清单项及客户端能力处理，不根据插件名称分流；两个命令工具也使用同一市场流程。包管理命令继续服务于独立命令工具安装和自举，不拥有统一市场插件的启停或卸载权。
 
-## Safety Contract（安全边界）
+逐插件来源映射提供 DEV（开发）与 RELEASE（发布）两个稳定对象的实际标识、版本、技能和资源校验信息。不能伪造未创建或未验证的对象标识。新增清单项不需要新增名称条件分支。
 
-- Default to read-only check（只读检查）.
-- Do not update, install, enable, remove, or delete anything without explicit user authorization.
-- Never run uninstall/remove（卸载/移除） unless the user names the exact Plugin（插件） and asks for it.
-- Do not publish release（发布）, create tag（标签）, push（推送）, or modify release-flow（发布流程）.
-- Do not scan the whole disk. For repository runtime（仓库运行时） work, use only the current repository, user-provided paths, or a user-confirmed bounded root.
-- Claude（代码代理） Plugin（插件） updates for the same marketplace（插件市场） must run sequentially, not in parallel.
-- Junction（目录联接） entries live in the user environment（用户环境）, outside the repository. Checking them is read-only; creating, repointing, or flattening one（拉直联接） needs explicit user authorization.
+## 工作流
 
-## MySpec（自有规格）委托边界
+1. 定位客户端：优先使用用户指定路径，其次从 `PATH`（程序搜索路径）定位；关联状态不可用时只读核对客户端默认目录 `~/.codex` 或 `~/.claude`。整次检查与修改复用同一目标。
+2. 读取 `references/check.md`，核对用户选择市场的全部请求插件，不排除任何命令工具插件；用 `references/status-taxonomy.md` 分类。
+3. 用户授权安装或更新 Codex（代码代理）市场插件时，读取 `references/update-codex.md`。用户授权 Claude（代码助手）市场插件安装或更新时，读取 `references/update-claude.md`。只修改授权目标，保留其他市场和插件。
+4. 用户请求开发／发布来源切换时，读取 `references/switch-source.md`，使用其中同一脚本入口逐项串行处理清单。该入口不上传、不发布或创建云端对象；缺少目标对象或预安装来源时先报告，再按相应客户端原生安装流程处理授权目标。
+5. 用户仅请求独立命令工具自身安装、诊断或更新时，读取 `references/update-build-and-verify-runtime.md`，使用清单提供的包管理与命令能力。这不代替插件同步，也不改变统一市场安装。
+6. 修改后重跑相关只读检查；核对唯一启用来源和实际资源。云端助手与 Codex（代码代理）需要新会话发现证据；Claude（代码助手）按用户要求仅核对原生市场安装、启停、来源和文件读取，不擅自运行模型会话。
 
-MySpec（自有规格）的安装、模式、诊断和更新默认不使用本 Skill（技能）的通用市场流程。CLI（命令行程序）拥有其路径、市场、模式和版本规则；除下述一次性显式例外外，Plugin Sync（插件同步）只按用户请求委托以下命令，不自行推断或复制规则：
+## 技能发现与报告
 
-- 诊断工具自身：`myspec doctor`
-- 诊断全部已支持 Agent（代理）：`myspec doctor --all`
-- 诊断单个 Agent（代理）：`myspec doctor --claude` 或 `myspec doctor --codex`
-- 初始化单个 Agent（代理）：`myspec init --claude` 或 `myspec init --codex`
-- 初始化全部已安装 Agent（代理）：`myspec init --all`
-- 切换开发模式：`myspec init --dev`
-- 切换发布模式：`myspec init --release`
-- 在发布模式统一更新：`myspec update`
+统一市场是插件发现入口；旧用户级链接只用于核对迁移残留，不新建重复安装。对现有链接检查两端技能集和直接目标，不在依赖可用性验证前清理。运行依赖、第三方技能或没有替代入口的开发技能须逐项报告，不静默跳过。
 
-修改性命令仍需用户显式授权。命令完成后只根据 CLI（命令行程序）的输出报告结果，不再检查或修正 MySpec（自有规格）的市场、安装目录、模式状态或版本。
+默认市场为 `my-agent-skills-marketplace`，开发市场为 `my-agent-skills-marketplace-dev`；用户可指定别的市场。默认范围是选定市场的请求插件，不按插件名称例外处理。
 
-一次性显式例外只在用户于当前对话中明确要求绕过 MySpec CLI（命令行程序），并点名客户端、MySpec 插件或来源及具体修改动作时成立。执行时：
-
-- 只处理用户点名的精确对象和动作，不扩展到市场、其他插件、模式切换、更新或发布；
-- 优先使用客户端原生安装管理命令；只有客户端没有精确操作入口时才允许定向编辑配置；
-- 操作前保存目标状态和待修改文件，操作后运行 `myspec doctor --all`；失败或结果超出授权范围时只恢复本次保存的内容；
-- “继续”“清理一下”或历史授权不构成例外，每次绕过都必须重新明确授权。
-
-## Build and Verify（构建与验证）委托边界
-
-Build and Verify（构建与验证）同样由 CLI（命令行程序）拥有其 Agent（代理）资源、模式和版本规则。只按用户请求委托：`build-and-verify doctor`、`build-and-verify init` 或 `build-and-verify update`，并且修改性命令仍需用户显式授权。不得检查、刷新、删除、提交或报告任何仓库 `.build-and-verify/runtime/` 快照。
-
-## Client Target（客户端目标）
-
-按以下顺序定位要操作的客户端及其关联插件状态：
-
-1. 用户指定路径：直接使用。
-2. 用户未指定：从 Windows（视窗系统）系统环境变量 `PATH`（可执行文件搜索路径）解析客户端，并使用客户端确认关联插件目录。
-3. 无法获得可用关联状态时，回退客户端默认目录：
-   - Codex（代码代理）：`~/.codex`
-   - Claude（代码代理）：`~/.claude`
-4. 默认目录也不存在时，使用当前进程／会话路径作为最后回退。
-
-检查、刷新、更新和复查复用同一目标。客户端状态查询的输出是插件状态证据。
-
-## Skill Roots（技能根目录）
-
-共享市场提供 release-flow、pr-flow、dev-flow、subagent-policy、plugin-sync、retro-to-issues、data-store 七项插件。MySpec（自有规格）和 Build and Verify（构建与验证）只走各自 NPM（软件包管理器）入口及包内独立市场，不再放入共享市场。
-
-- **marketplace（插件市场）形态**：七项插件均带两端登记文件，走市场订阅和安装。
-- **junction（目录联接）旧安装**：仅用于核对迁移遗留；不再为七项插件新增这种用户级安装。仓库内数据中心共用入口是独立的接入关系，不是第二份插件安装。
-
-junction（目录联接）形态的根目录：
-
-- Codex（代码代理）：`~/.agents/skills`
-- Claude（代码代理）：`~/.claude/skills`
-
-不变式：源自本仓库的每个条目 MUST 是**一级** junction（目录联接），`Target`（目标）直接落在 `<repo>/plugins/<plugin>/skills/<skill>`。`Target` 落在另一个技能根目录下即为 chained（链式），必须拉直——链式把一次静默失效藏在两层之下，任何一层被删，技能就在客户端消失且不留痕迹，`subagent-policy` 就这样在 Claude 侧丢过一次。两个客户端 MUST 覆盖同一组技能条目。
-
-## Workflow（工作流）
-
-1. If the request concerns MySpec（自有规格）, use the delegation commands above unless the current request satisfies the one-time explicit exception; for an exception, perform only its bounded native/manual action and verification.
-2. If the request only contains MySpec（自有规格） or Build and Verify（构建与验证）, delegate its requested CLI（命令行程序） command and stop this workflow.
-3. If the request has remaining non-MySpec（自有规格） scope, continue below only for that remaining scope.
-4. Read `references/check.md` to resolve the Client Target（客户端目标） and run the read-only check（只读检查） flow for other plugins and Skill Roots（技能根目录）.
-5. Classify findings using `references/status-taxonomy.md`.
-6. If the user explicitly authorizes Codex（代码代理） updates, read `references/update-codex.md`.
-7. If the user explicitly authorizes Claude（代码代理） updates, read `references/update-claude.md`.
-8. Re-run the relevant read-only check（只读检查） after any authorized update.
-9. 用户要求开发／正式来源切换时，读取 `references/switch-source.md`。账号双对象与 Claude（代码助手）双市场的联合切换使用其中统一脚本入口；仅处理本次授权的清单项，不根据插件名称分支。保留两个市场及其他插件。数据中心升级或切来源后还需按其随包说明检查、更新已接入项目，并明确哪些运行中的工具需要重启。
-
-## Defaults（默认值）
-
-- marketplace（插件市场）: `my-agent-skills-marketplace` unless the user names another one.
-- Plugin（插件） scope: plugins from the selected marketplace（插件市场） unless the user names specific plugins; MySpec（自有规格）默认只走委托边界，一次性显式例外按该区块收窄执行。
-
-## Output（输出）
-
-Keep output concise. Report:
-
-- current status（当前状态）
-- exact evidence（证据）
-- action taken（已执行动作）, if any
-- remaining next step（下一步）, if any
-
-Do not present local Plugin（插件） update status as release（发布） completion status.
+简洁报告当前状态、实际证据、已执行动作、未验证项和下一步。不要把上传、安装、配置或命令工具更新成功写成新会话加载或正式发布成功。

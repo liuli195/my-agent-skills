@@ -285,3 +285,25 @@ def test_obsolete_skill_links_are_reported_without_cleanup(installation, monkeyp
         arguments = ["--skills-dir", str(external)]
     assert state.app.main(["update", *state.arguments, *arguments]) == 1
     assert "obsolete" in capsys.readouterr().err
+
+
+def test_verified_native_discovery_is_persisted_and_never_rebuilds_legacy_link(installation, monkeypatch):
+    state = installation
+    native = ROOT / ".unit-native-skill/SKILL.md"
+    state.manifest["discovery"] = {"skill": {"path": str(native), "resources": []}}
+    state.manifest["sources"] = [{"name": "sample", "repo": "owner/repo", "ref": "v1", "paths": ["skill"]}]
+    state.source_exists = state.source_ready = True
+    original_read, original_is_file = Path.read_text, Path.is_file
+    monkeypatch.setattr(Path, "read_text", lambda path, *args, **kwargs:
+                        "---\nname: skill\n---\nNative skill" if path == native else original_read(path, *args, **kwargs))
+    monkeypatch.setattr(Path, "is_file", lambda path: True if path == native else original_is_file(path))
+    monkeypatch.setattr(state.app, "link", lambda *args: pytest.fail("must not rebuild retired discovery link"))
+    monkeypatch.setattr(state.app, "run", lambda command, **kwargs:
+                        "https://github.com/owner/repo.git" if command[-3:] == ["get-url", "origin"] else
+                        "https://github.com/owner/repo.git" if command[-2:] == ["get-url", "origin"] else
+                        "abc" if command[-1] == "HEAD" else "")
+    assert state.app.main(["init", *state.arguments]) == 0
+    assert state.installed["discovery"] == state.manifest["discovery"]
+    state.manifest.pop("discovery")
+    assert state.app.main(["init", *state.arguments]) == 0
+    assert state.installed["discovery"]["skill"]["path"] == str(native)

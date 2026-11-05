@@ -560,7 +560,65 @@ def _myspec_install_packed_myspec(tmp_path: Path) -> tuple[Path, Path]:
     return copy_install(candidate_for("myspec"), tmp_path / "npm-prefix")
 
 
+def _assert_unified_lifecycle_keeps_native_installations(tmp_path, candidate):
+    executable, package = copy_install(candidate, tmp_path / "prefix")
+    profile = json.loads((package / "python/lifecycle_profile.json").read_text())
+    version = json.loads((package / "package.json").read_text())["version"]
+    env = _isolated_env(tmp_path, tmp_path / "prefix")
+    env.update(MYSPEC_PYTHON=sys.executable, BUILD_AND_VERIFY_PYTHON=sys.executable)
+    host = tmp_path / "host"
+    host.mkdir()
+    log = tmp_path / "native-queries.jsonl"
+    market_root = tmp_path / "native-marketplace"
+    market_root.mkdir()
+    for arguments in (["init", "-q"], ["remote", "add", "origin", "https://github.com/liuli195/my-agent-skills.git"]):
+        initialized = subprocess.run(["git", "-C", str(market_root), *arguments], text=True, capture_output=True)
+        assert initialized.returncode == 0, initialized.stderr
+    for client in ("claude", "codex", "npm"):
+        market = {"name": "my-agent-skills-marketplace-dev", "path": str(market_root), "root": str(market_root)}
+        identifier = profile["PLUGIN_NAME"] + "@" + market["name"]
+        plugin = {"id": identifier, "pluginId": identifier, "installed": True, "enabled": True,
+                  "scope": "user", "version": version, "installPath": str(package),
+                  "source": {"path": str(package)}}
+        script = host / (client + ".py")
+        script.write_text(
+            "import json,sys\nfrom pathlib import Path\n"
+            f"client={client!r}; market={market!r}; plugin={plugin!r}\n"
+            f"with Path({str(log)!r}).open('a') as stream: stream.write(json.dumps([client,*sys.argv[1:]])+'\\n')\n"
+            "args=sys.argv[1:]\n"
+            "if args==['plugin','marketplace','list','--json']:\n"
+            " print(json.dumps([market] if client=='claude' else {'marketplaces':[market]}))\n"
+            "elif args==['plugin','list','--json']:\n"
+            " print(json.dumps([plugin] if client=='claude' else {'installed':[plugin],'available':[]}))\n"
+            f"elif client=='npm' and args==['view',{profile['PACKAGE_NAME']!r},'version','--json']: print(json.dumps({version!r}))\n"
+            "else: raise SystemExit('unexpected native mutation: '+repr(args))\n",
+            encoding="utf-8")
+        launcher = host / (client + (".cmd" if os.name == "nt" else ""))
+        launcher.write_text(f'@"{sys.executable}" "{script}" %*' if os.name == "nt" else
+                            f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
+        launcher.chmod(0o755)
+    env["PATH"] = str(host) + os.pathsep + env["PATH"]
+    node = shutil.which("node")
+    command = [node, str(package / "bin" / (profile["COMMAND_NAME"] + ".js"))]
+    for arguments in (["init", "--all"], ["doctor", "--all"], ["update"]):
+        result = subprocess.run([*command, *arguments], env=env, text=True, capture_output=True, timeout=30)
+        assert result.returncode == 0, result.stdout + result.stderr
+        report = json.loads(result.stdout)
+        if arguments[0] == "init":
+            assert all(report[client]["managedBy"] == "plugin-sync" for client in ("claude", "codex"))
+        if arguments[0] == "doctor":
+            assert all(report[client]["sources"][0]["sourceKind"] == "unified" for client in ("claude", "codex"))
+            assert all(report[client]["version"] == version and not report[client]["versionMismatch"] for client in ("claude", "codex"))
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert all(call[1:] in (["plugin", "marketplace", "list", "--json"], ["plugin", "list", "--json"],
+                           ["view", profile["PACKAGE_NAME"], "version", "--json"]) for call in calls)
+    assert executable.is_file()
+
+
 class TestBuildAndVerify:
+    def test_unified_lifecycle_keeps_native_installations(self, tmp_path, npm_candidate):
+        _assert_unified_lifecycle_keeps_native_installations(tmp_path, npm_candidate)
+
     def test_packed_public_init_build_and_python_parallel_protection(self, tmp_path: Path) -> None:
         prefix, executable = _installed_build_and_verify(tmp_path)
         env = {**_isolated_env(tmp_path, prefix), "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
@@ -714,6 +772,9 @@ class TestBuildAndVerify:
 
 
 class TestMySpec:
+    def test_unified_lifecycle_keeps_native_installations(self, tmp_path, npm_candidate):
+        _assert_unified_lifecycle_keeps_native_installations(tmp_path, npm_candidate)
+
     @pytest.fixture(autouse=True)
     def _package_version(self, npm_candidate, monkeypatch):
         version = json.loads((npm_candidate.installed_package / "package.json").read_text())["version"]

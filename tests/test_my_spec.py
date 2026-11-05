@@ -112,6 +112,7 @@ class ManagementDocuments:
         self.lock_calls = []
         self.available = set()
         self.stub = CommandStub(consume=True)
+        self.response(("git", "remote", "get-url", "origin"), stdout="https://github.com/liuli195/my-agent-skills.git")
         self.directories = {self.stable, self.cache, self.codex_home}
         self.files = {self.stable / "package.json", self.cache / "package.json",
                       self.prefix / ("myspec.cmd" if os.name == "nt" else "bin/myspec")}
@@ -291,44 +292,20 @@ def queue_client_init(runtime, client, *, legacy=False, existing=False, enabled=
     return final
 
 
-def assert_initializes_and_removes_legacy(runtime, client):
-    other = {"id": "unrelated@market", "enabled": True} if client == "claude" else {"pluginId": "unrelated@market", "installed": True}
-    queue_client_init(runtime, client, legacy=True, others=[other])
-    initialized = runtime.run("init", f"--{client}")
-    assert initialized.returncode == 0, initialized.stderr
-    report = json.loads(initialized.stdout)
-    assert report[client] == "initialized"
-    assert report["removedLegacyPlugins"] == ["my-spec@my-agent-skills-marketplace"]
-    assert report["source"] == str(runtime.stable)
-    assert runtime.writes == []
-    assert runtime.lock_calls[-1] == ("release", "operation")
-    # Observe the command boundary, not the canned client response itself.
-    assert not any("unrelated@market" in command for command in runtime.stub.calls)
-
-
-def assert_wrong_stable_version_keeps_legacy(runtime, client):
-    queue_client_init(runtime, client, legacy=True, reported_version="0.0.0")
+def assert_preserves_shared(runtime, client, *, invalid=False, duplicate=False):
+    plugin = runtime.plugin(client, legacy=True)
+    if invalid:
+        plugin["version"] = "0.0.0"
+    records = [plugin, *([runtime.plugin(client)] if duplicate else [])]
+    runtime.records(client, [runtime.marketplace(client, legacy=True)], records)
     result = runtime.run("init", f"--{client}")
-    assert result.returncode == 1
-    assert f"{client}_plugin_verify_failed" in result.stderr
-    legacy_id = "my-spec@my-agent-skills-marketplace"
-    assert not any(legacy_id in command and command[1:3] in {("plugin", "remove"), ("plugin", "uninstall")} for command in runtime.stub.calls)
+    assert result.returncode == (1 if invalid or duplicate else 0), result.stderr
+    if invalid or duplicate:
+        assert ("unified_source_invalid" if invalid else "duplicate_enabled_sources") in result.stderr
+    else:
+        assert json.loads(result.stdout)["managedBy"] == "plugin-sync"
     assert runtime.writes == []
-
-
-def assert_retry_legacy_removal(runtime, client, removal):
-    queue_client_init(runtime, client, legacy=True, removal=removal)
-    failed = runtime.run("init", f"--{client}")
-    assert failed.returncode == 1
-    error = (f"{client}_plugin_" + ("uninstall" if client == "claude" else "remove") +
-             ("_incomplete" if removal == "noop" else "_failed: simulated interruption after removal"))
-    assert error in failed.stderr
-    queue_client_init(runtime, client, legacy=removal == "noop", existing=True)
-    retried = runtime.run("init", f"--{client}")
-    assert retried.returncode == 0, retried.stderr
-    expected = ["my-spec@my-agent-skills-marketplace"] if removal == "noop" else []
-    assert json.loads(retried.stdout)["removedLegacyPlugins"] == expected
-    assert runtime.writes == []
+    assert not any(command[1:3] in {("plugin", "remove"), ("plugin", "uninstall"), ("plugin", "install"), ("plugin", "add")} for command in runtime.stub.calls)
 
 
 def assert_explicit_client_and_detected_all(runtime, client):
@@ -468,7 +445,7 @@ def test_packed_myspec_clients_run_shared_source_cases(management_documents, cli
         report = json.loads(diagnosed.stdout)[client]
         assert [{field: source[field] for field in SOURCE_FIELDS} for source in report["sources"]] == case["expectedSources"], case["id"]
         assert {"enabledSources", "disabledSources", "duplicateEnabledSources"} <= report.keys()
-        assert runtime.stub.calls == [(client, "plugin", "marketplace", "list", "--json"), (client, "plugin", "list", "--json")]
+        assert runtime.stub.calls == [(client, "plugin", "marketplace", "list", "--json"), (client, "plugin", "list", "--json"), *([("git", "remote", "get-url", "origin")] if legacy else [])]
         assert runtime.writes == []
 
 
@@ -500,37 +477,16 @@ def test_packed_myspec_update_preflights_installed_clients_before_package_write(
     assert ("codex", "plugin", "marketplace", "list", "--json") not in runtime.stub.calls
 
 
-def test_packed_myspec_update_blocks_enabled_legacy_sources_before_writes(management_documents):
+def test_packed_myspec_update_blocks_duplicate_enabled_sources_before_writes(management_documents):
     runtime = management_documents
-    for client in ("claude", "codex"):
-        runtime.records(client, [runtime.marketplace(client), runtime.marketplace(client, legacy=True)],
-                        [runtime.plugin(client), runtime.plugin(client, legacy=True)])
-    runtime.texts[runtime.config_path] = '[plugins."my-spec@myspec"]\nenabled = true\n[plugins."my-spec@my-agent-skills-marketplace"]\nenabled = true\n'
-    before = dict(runtime.texts)
-    blocked = runtime.run("update", "--codex-home", runtime.codex_home)
+    runtime.records("claude", [runtime.marketplace("claude"), runtime.marketplace("claude", legacy=True)],
+                    [runtime.plugin("claude"), runtime.plugin("claude", legacy=True)])
+    blocked = runtime.run("update")
     assert blocked.returncode == 1
-    assert "error: legacy_source_migration_required" in blocked.stderr
-    assert "claude: run myspec init --claude" in blocked.stderr
-    arguments = ["myspec", "init", "--codex", "--codex-home", str(runtime.codex_home)]
-    codex_command = subprocess.list2cmdline(arguments) if os.name == "nt" else shlex.join(arguments)
-    assert f"codex: run {codex_command}" in blocked.stderr
+    assert "claude_duplicate_enabled_sources" in blocked.stderr
     assert not any(call[:3] == ("npm", "install", "--global") for call in runtime.stub.calls)
     assert runtime.state_path not in runtime.documents
     assert runtime.writes == []
-    assert runtime.texts == before
-    assert runtime.stub.calls == [(client, "plugin", "list", "--json") for client in ("claude", "codex")]
-    for client in ("claude", "codex"):
-        queue_client_init(runtime, client, legacy=True)
-    migrated = runtime.run("init", "--all")
-    assert migrated.returncode == 0, migrated.stderr
-    # The new runtime is an input, not a fake successful package installation.
-    runtime.release_input(NEXT_VERSION)
-    for client in ("claude", "codex"):
-        runtime.records(client, [runtime.marketplace(client)], [runtime.plugin(client, version=NEXT_VERSION)])
-    runtime.response(("npm", "view", "@liuli195/myspec", "version", "--json"), NEXT_VERSION)
-    updated = runtime.run("update")
-    assert updated.returncode == 0, updated.stderr
-    assert json.loads(updated.stdout)["version"] == NEXT_VERSION
 
 
 def test_packed_myspec_update_refreshes_disabled_integrations_and_skips_only_missing(management_documents):
@@ -623,20 +579,20 @@ def test_packed_myspec_update_rejects_dev_mode_and_forged_resume(management_docu
     assert runtime.writes == []
 
 
-def test_packed_myspec_initializes_and_removes_claude_legacy_plugin(management_documents):
-    assert_initializes_and_removes_legacy(management_documents, "claude")
+def test_packed_myspec_preserves_claude_unified_plugin(management_documents):
+    assert_preserves_shared(management_documents, "claude")
 
 
-def test_packed_myspec_claude_init_keeps_legacy_when_stable_version_is_wrong(management_documents):
-    assert_wrong_stable_version_keeps_legacy(management_documents, "claude")
+def test_packed_myspec_claude_init_blocks_invalid_unified_version(management_documents):
+    assert_preserves_shared(management_documents, "claude", invalid=True)
 
 
-def test_packed_myspec_claude_init_retries_incomplete_legacy_uninstall(management_documents):
-    assert_retry_legacy_removal(management_documents, "claude", "noop")
+def test_packed_myspec_claude_init_blocks_duplicate_enabled_sources(management_documents):
+    assert_preserves_shared(management_documents, "claude", duplicate=True)
 
 
-def test_packed_myspec_claude_init_retries_interrupted_legacy_uninstall(management_documents):
-    assert_retry_legacy_removal(management_documents, "claude", "interrupted")
+def test_packed_myspec_claude_init_preserves_invalid_source_without_uninstalling(management_documents):
+    assert_preserves_shared(management_documents, "claude", invalid=True)
 
 
 def test_packed_myspec_doctor_reports_claude_marketplace_source_mismatch_read_only(management_documents):
@@ -666,40 +622,41 @@ def test_packed_myspec_requires_explicit_claude_but_all_initializes_detected_cla
     assert_explicit_client_and_detected_all(management_documents, "claude")
 
 
-def test_packed_myspec_initializes_and_removes_codex_legacy_plugin(management_documents):
-    assert_initializes_and_removes_legacy(management_documents, "codex")
+def test_packed_myspec_preserves_codex_unified_plugin(management_documents):
+    assert_preserves_shared(management_documents, "codex")
 
 
-def test_packed_myspec_codex_init_keeps_legacy_when_stable_version_is_wrong(management_documents):
-    assert_wrong_stable_version_keeps_legacy(management_documents, "codex")
+def test_packed_myspec_codex_init_blocks_invalid_unified_version(management_documents):
+    assert_preserves_shared(management_documents, "codex", invalid=True)
 
 
-def test_packed_myspec_codex_init_retries_incomplete_legacy_removal(management_documents):
-    assert_retry_legacy_removal(management_documents, "codex", "noop")
+def test_packed_myspec_codex_init_blocks_duplicate_enabled_sources(management_documents):
+    assert_preserves_shared(management_documents, "codex", duplicate=True)
 
 
-def test_packed_myspec_codex_init_retries_interrupted_legacy_removal(management_documents):
-    assert_retry_legacy_removal(management_documents, "codex", "interrupted")
+def test_packed_myspec_codex_init_preserves_invalid_source_without_uninstalling(management_documents):
+    assert_preserves_shared(management_documents, "codex", invalid=True)
 
 
 def test_packed_myspec_requires_explicit_codex_but_all_initializes_detected_codex(management_documents):
     assert_explicit_client_and_detected_all(management_documents, "codex")
 
 
-def test_packed_myspec_init_all_removes_legacy_plugins_and_doctor_reports_stable_sources(management_documents):
+def test_packed_myspec_init_all_preserves_shared_sources_and_doctor_reports_them(management_documents):
     runtime = management_documents
     for client in ("claude", "codex"):
-        queue_client_init(runtime, client, legacy=True)
+        runtime.records(client, [runtime.marketplace(client, legacy=True)], [runtime.plugin(client, legacy=True)])
     initialized = runtime.run("init", "--all")
     assert initialized.returncode == 0, initialized.stderr
     for client, report in json.loads(initialized.stdout).items():
-        assert report["removedLegacyPlugins"] == ["my-spec@my-agent-skills-marketplace"]
+        assert report["managedBy"] == "plugin-sync"
+        assert report["removedLegacyPlugins"] == []
     diagnosed = runtime.run("doctor", "--all")
     assert diagnosed.returncode == 0, diagnosed.stderr
     report = json.loads(diagnosed.stdout)
     for client in ("claude", "codex"):
-        assert [source["sourceKind"] for source in report[client]["sources"]] == ["stable"]
-        assert report[client]["disabledSources"] == []
+        assert [source["sourceKind"] for source in report[client]["sources"]] == ["unified"]
+        assert report[client]["duplicateEnabledSources"] is False
     assert runtime.writes == []
 
 
@@ -719,7 +676,7 @@ def test_packed_myspec_requires_release_registration_before_first_codex_dev_init
     assert blocked.returncode == 1
     assert blocked.stdout == ""
     assert "error: codex_dev_marketplace_unregistered: run 'myspec init --release', then 'myspec init --codex', then 'myspec init --dev'" in blocked.stderr
-    assert runtime.stub.calls == [("codex", "plugin", "marketplace", "list", "--json")]
+    assert runtime.stub.calls == [("codex", "plugin", "marketplace", "list", "--json"), ("codex", "plugin", "list", "--json")]
     assert runtime.writes == []
     # A registered release source is the valid input for explicit initialization;
     # actual release/dev installation transitions remain in TestMySpec.
@@ -1241,30 +1198,15 @@ def test_skill_entries_route_add_review_and_audit_with_safe_boundaries() -> None
     assert "--modified-content <完整候选正文>" in rules
 
 
-def test_plugin_sync_delegates_all_myspec_lifecycle_work_to_myspec_cli() -> None:
-    root = PLUGIN_SYNC_ROOT
-    skill = (root / "SKILL.md").read_text(encoding="utf-8")
-    references = {
-        path.name: path.read_text(encoding="utf-8")
-        for path in sorted((root / "references").glob("*.md"))
-    }
-
-    for command in (
-        "myspec doctor --all",
-        "myspec init --claude",
-        "myspec init --codex",
-        "myspec init --all",
-        "myspec init --dev",
-        "myspec init --release",
-        "myspec update",
-    ):
-        assert f"`{command}`" in skill
-    assert "CLI（命令行程序）拥有" in skill
-    assert "If the request only contains MySpec（自有规格）" in skill
-    assert "remaining non-MySpec（自有规格） scope" in skill
+def test_plugin_sync_uses_the_same_marketplace_workflow_for_all_plugins() -> None:
+    skill = (PLUGIN_SYNC_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    assert "不根据插件名称分流" in skill
+    assert "PLUGIN_REGISTRY" in skill
     for name in ("check.md", "update-claude.md", "update-codex.md"):
-        assert "MySpec（自有规格）不适用" in references[name]
-    assert "spec_ops.py" not in skill + "\n".join(references.values())
+        text = (PLUGIN_SYNC_ROOT / "references" / name).read_text(encoding="utf-8")
+        assert "MySpec（自有规格）不适用" not in text
+        assert "不按插件名称排除" in text
+    assert "myspec init" not in skill
 
 
 def test_plugin_uses_host_native_skill_paths() -> None:
@@ -1298,8 +1240,8 @@ def test_my_spec_plugin_is_discoverable_by_claude_and_codex() -> None:
 
     claude_marketplace = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
     codex_marketplace = json.loads((REPO_ROOT / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8"))
-    assert all(plugin["name"] != "my-spec" for plugin in claude_marketplace["plugins"])
-    assert all(plugin["name"] != "my-spec" for plugin in codex_marketplace["plugins"])
+    assert any(plugin["name"] == "my-spec" for plugin in claude_marketplace["plugins"])
+    assert any(plugin["name"] == "my-spec" for plugin in codex_marketplace["plugins"])
 
 
 def test_myspec_final_apply_requires_the_confirmed_preview(spec_documents) -> None:
@@ -1640,3 +1582,75 @@ def test_spec_ops_keeps_complete_conflicts_and_advances_the_saved_cursor(spec_do
     status = run_python(SPEC_OPS, "state-status", work, "specs-fingerprint", "input-fingerprint")
     assert status.returncode == 0, status.stderr
     assert json.loads(status.stdout) == {"status": "WAITING_DECISION", "total": 13, "decided": 2, "remaining": 11}
+
+
+@pytest.mark.parametrize(("client", "installation_only"), [("claude", False), ("claude", True), ("codex", False)])
+@pytest.mark.parametrize("mode", ["DEV", "RELEASE"])
+def test_lifecycle_init_preserves_unified_marketplace_without_creating_another_source(management_documents, client, mode, installation_only):
+    runtime = management_documents
+    market = runtime.marketplace(client, legacy=True)
+    plugin = runtime.plugin(client, legacy=True)
+    if client == "claude" and installation_only:
+        market.pop("path")
+        market["source"] = "github"
+    if mode == "DEV":
+        market["name"] += "-dev"
+        field = "id" if client == "claude" else "pluginId"
+        plugin[field] += "-dev"
+    runtime.records(client, [market], [plugin])
+    result = runtime.run("init", f"--{client}")
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["managedBy"] == "plugin-sync"
+    assert report["removedLegacyPlugins"] == []
+    assert runtime.stub.calls == [(client, "plugin", "marketplace", "list", "--json"),
+                                  (client, "plugin", "list", "--json"),
+                                  ("git", "remote", "get-url", "origin")]
+    assert runtime.writes == []
+
+
+@pytest.mark.parametrize("client", ["claude", "codex"])
+@pytest.mark.parametrize("resume", [False, True])
+def test_package_update_leaves_unified_and_disabled_independent_plugin_versions_alone(management_documents, client, resume):
+    runtime = management_documents
+    runtime.release_input(NEXT_VERSION)
+    unified = runtime.plugin(client, legacy=True, version=PACKAGE_VERSION)
+    standalone = runtime.plugin(client, enabled=False, version=PACKAGE_VERSION)
+    # The unified plugin has its own content version; updating the CLI must not
+    # refresh its disabled independent installation or compare the two versions.
+    runtime.documents[runtime.cache / "package.json"]["version"] = PACKAGE_VERSION
+    runtime.records(client, [runtime.marketplace(client), runtime.marketplace(client, legacy=True)], [unified, standalone])
+    runtime.response(("npm", "view", "@liuli195/myspec", "version", "--json"), NEXT_VERSION)
+    if resume:
+        runtime.documents[runtime.state_path] = {"mode": "release", "pendingOperation": {
+            "command": "update", "targetVersion": NEXT_VERSION, "integrations": [client],
+            "scopes": {client: "user"}, "enabled": {client: False},
+            "completed": ["preflight", "npm"], "lastError": f"update_doctor_mismatch: {client}",
+        }}
+    updated = runtime.run("update")
+    assert updated.returncode == 0, updated.stderr
+    assert json.loads(updated.stdout)["doctor"]["cliVersion"] == NEXT_VERSION
+    assert "pendingOperation" not in runtime.documents[runtime.state_path]
+    assert not any(call[0] == client and call[1:3] not in {("plugin", "list"), ("plugin", "marketplace")} for call in runtime.stub.calls)
+
+
+@pytest.mark.parametrize("client", ["claude", "codex"])
+@pytest.mark.parametrize("operation", ["init", "update"])
+@pytest.mark.parametrize("root_problem", ["redirected", "missing", "inaccessible"])
+def test_unified_marketplace_source_identity_is_checked_before_lifecycle_writes(management_documents, client, operation, root_problem):
+    runtime = management_documents
+    runtime.records(client, [runtime.marketplace(client, legacy=True, mismatch=root_problem != "redirected")], [runtime.plugin(client, legacy=True)])
+    if root_problem == "redirected":
+        runtime.response(("git", "remote", "get-url", "origin"), stdout="https://github.com/other/redirected.git")
+    elif root_problem == "inaccessible":
+        original_is_dir = Path.is_dir
+        def inaccessible(path):
+            if path == runtime.root / "wrong-source":
+                raise PermissionError("marketplace directory denied")
+            return original_is_dir(path)
+        runtime.monkeypatch.setattr(Path, "is_dir", inaccessible)
+    rejected = runtime.run("init", f"--{client}") if operation == "init" else runtime.run("update")
+    assert rejected.returncode == 1
+    assert "unified_source_invalid" in rejected.stderr
+    assert runtime.writes == []
+    assert not any(call[1:3] in {("plugin", "remove"), ("plugin", "install"), ("plugin", "uninstall")} for call in runtime.stub.calls)

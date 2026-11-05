@@ -17,8 +17,8 @@ const packages = [
       "update-claude.md",
       "update-codex.md",
     ],
-    references: ["check.md", "status-taxonomy.md", "update-claude.md", "update-codex.md", "switch-source.md"],
-    description: /Synchronize local agent Plugin/,
+    references: ["check.md", "status-taxonomy.md", "update-claude.md", "update-codex.md", "switch-source.md", "update-build-and-verify-runtime.md"],
+    description: /检查、安装、更新和切换插件来源/,
     scripts: ["plugin_sync.py"],
   },
   {

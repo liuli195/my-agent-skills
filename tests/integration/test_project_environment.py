@@ -1,6 +1,7 @@
 """One public bootstrap/binding smoke, without dependency downloads."""
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -80,4 +81,26 @@ class TestBootstrap:
         assert (installed / "scripts/data_store.py").is_file()
         assert (replacement / "scripts/data_store.py").is_file()
         assert data.read_text(encoding="utf-8") == "existing business data"
+        configuration = json.loads(manifest.read_text())
+        resource = replacement / "scripts/project_binding.py"
+        configuration["discovery"] = {"data-store": {"path": str(replacement / "SKILL.md"),
+            "resources": [{"path": "scripts/project_binding.py", "sha256": hashlib.sha256(resource.read_bytes()).hexdigest()}]}}
+        manifest.write_text(json.dumps(configuration))
+        validated = subprocess.run(arguments, text=True, capture_output=True)
+        assert validated.returncode == 0, validated.stdout + validated.stderr
+        (root / "skills/data-store").unlink()
+        for _ in range(2):
+            result = subprocess.run(arguments, text=True, capture_output=True)
+            assert result.returncode == 0, result.stdout + result.stderr
+            assert not (root / "skills/data-store").exists()
+            assert binding.resolve() == replacement.resolve()
+            assert data.read_text(encoding="utf-8") == "existing business data"
+        saved_resource = resource.read_bytes()
+        resource.write_bytes(saved_resource + b"\n# changed resource\n")
+        rejected = subprocess.run(arguments, text=True, capture_output=True)
+        assert rejected.returncode == 1
+        assert "Native skill resource changed" in rejected.stderr
+        assert not (root / "skills/data-store").exists()
+        assert data.read_text(encoding="utf-8") == "existing business data"
+        resource.write_bytes(saved_resource)
         assert git(project, "status", "--porcelain") == ""
