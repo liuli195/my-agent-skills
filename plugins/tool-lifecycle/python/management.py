@@ -1489,10 +1489,10 @@ def _doctor_package(*, running: bool = False) -> dict[str, object]:
         "packageName": PACKAGE_NAME,
     }
     if linked:
-        implementation_identity = _implementation_identity_for_package(real)
-        toolchain["implementationIdentity"] = implementation_identity
+        source_identity = _implementation_identity_for_package(real)
+        toolchain["implementationIdentity"] = source_identity
         try:
-            commit = _implementation_source_commit(real, implementation_identity)
+            commit = _implementation_source_commit(real, source_identity)
         except ManagementError:
             pass
         else:

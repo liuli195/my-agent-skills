@@ -110,6 +110,15 @@ class TestWorkspace:
         assert node
         runtime_env = {**os.environ, "NPM_CONFIG_PREFIX": str(tmp_path / "no-global-tools"),
                        "MYSPEC_PYTHON": sys.executable, "BUILD_AND_VERIFY_PYTHON": sys.executable}
+        for key, binary in (("my-spec", "myspec"), ("build-and-verify", "build-and-verify")):
+            package = Path(snapshots[key]["pluginPath"])
+            diagnosed = subprocess.run([node, str(package / "bin" / (binary + ".js")), "doctor", "--running"],
+                                      env=runtime_env, text=True, capture_output=True)
+            assert diagnosed.returncode == 0, diagnosed.stdout + diagnosed.stderr
+            report = json.loads(diagnosed.stdout)
+            assert Path(report["runtime"]["packageRoot"]).resolve() == package.resolve()
+            assert report["runtime"]["implementationIdentity"].startswith("sha256:")
+            assert "npm" not in report
         tool_work = tmp_path / "package-spec-state"
         selected = Path(snapshots["my-spec"]["pluginPath"]) / "bin/myspec.js"
         initialized = subprocess.run([node, str(selected), "state-init", str(tool_work), "add", "specs", "input"],
