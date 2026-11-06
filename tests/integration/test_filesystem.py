@@ -97,7 +97,7 @@ class TestWorkspace:
                     self.objects.append({"remotePluginId": remote_id, "name": cloud["name"], "version": cloud["version"],
                                          "id": cloud["name"] + "@created-by-me-remote", "installed": False, "enabled": False,
                                          "shareContext": {"remotePluginId": remote_id, "discoverability": "PRIVATE", "sharePrincipals": []}})
-                    return {"remotePluginId": remote_id, "shareUrl": "https://example.test/private"}
+                    return {"remotePluginId": remote_id, "shareUrl": ""}
             native = Native()
             entry = runpy.run_path(str(REPO_ROOT / "plugins/plugin-sync/skills/plugin-sync/scripts/plugin_sync.py"))["main"]
             def invoke(mode, *, apply=True, action="save-account", timeout="1"):

@@ -438,7 +438,7 @@ def save_account(args: argparse.Namespace) -> int:
             raise SwitchError("save returned an unexpected account object; original mapping was not replaced")
         source.update(remotePluginId=returned, version=snapshot["version"], packageName=package_name)
         persist()
-        if not isinstance(result.get("shareUrl"), str) or not result["shareUrl"]:
+        if not isinstance(result.get("shareUrl"), str):
             raise SwitchError("save response is incomplete; object recorded but not verified")
         shares, catalog = account_inventory(server)
         report["after"] = private_account_object(shares, catalog, returned, package_name, snapshot["version"])

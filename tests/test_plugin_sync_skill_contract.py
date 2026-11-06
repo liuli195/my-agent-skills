@@ -591,6 +591,41 @@ class PluginAccountSaveEntryTests(unittest.TestCase):
         invoke_save(native, apply=True, store=store)
         self.assertEqual(len(native.writes), 1)
 
+    def test_private_save_accepts_empty_share_url_for_create_and_update(self):
+        for update in (False, True):
+            with self.subTest(update=update):
+                native = NativeSaveClients()
+                native.save_result["shareUrl"] = ""
+                store = None
+                if update:
+                    native.objects = [save_object(version="0.0.1")]
+                    mapping = {"plugins": {"example": {"account": {"DEV": {"remotePluginId": "Remote_created", "version": "0.0.1"}}}}}
+                    store = {"content": json.dumps(mapping).encode()}
+                code, events, store = invoke_save(native, apply=True, store=store)
+                self.assertEqual(code, 0)
+                self.assertEqual(events[-1]["status"], "saved")
+                source = json.loads(store["content"])["plugins"]["example"]["account"]["DEV"]
+                self.assertEqual(source["remotePluginId"], "Remote_created")
+                self.assertEqual(source["saveState"]["status"], "verified")
+                self.assertEqual(len(native.writes), 1)
+
+    def test_private_save_rejects_missing_or_nonstring_share_url_without_retry(self):
+        for value in (None, 0, False, []):
+            with self.subTest(value=value):
+                native = NativeSaveClients()
+                if value is None:
+                    native.save_result.pop("shareUrl")
+                else:
+                    native.save_result["shareUrl"] = value
+                code, events, store = invoke_save(native, apply=True)
+                self.assertEqual(code, 1)
+                self.assertEqual(events[-1]["status"], "unverified")
+                source = json.loads(store["content"])["plugins"]["example"]["account"]["DEV"]
+                self.assertEqual(source["remotePluginId"], "Remote_created")
+                self.assertEqual(source["saveState"]["status"], "unverified")
+                invoke_save(native, apply=True, store=store)
+                self.assertEqual(len(native.writes), 1)
+
     def test_malformed_save_response_does_not_invent_id_or_retry(self):
         native = NativeSaveClients()
         native.save_result = {}
