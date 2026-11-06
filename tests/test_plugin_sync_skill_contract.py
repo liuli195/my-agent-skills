@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import contextlib
+import copy
 import io
 import json
 import queue
@@ -9,6 +10,8 @@ import runpy
 import subprocess
 import threading
 import unittest
+import zipfile
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -48,6 +51,28 @@ class PluginSwitchEntryTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(json.loads(output.getvalue())["status"], "blocked")
         client.assert_not_called()
+
+    def test_pending_save_for_another_plugin_blocks_source_switch(self) -> None:
+        native = NativeSwitchClients()
+        manifest = switch_manifest()
+        manifest["plugins"]["other"] = {"account": {"DEV": {"saveState": {"status": "pending"}}}}
+        code, events = invoke_switch(native, apply=True, manifest=manifest)
+        self.assertEqual(code, 1)
+        self.assertIn("unresolved", events[-1]["error"])
+        self.assertEqual(native.starts, 0)
+        self.assertEqual(native.writes, [])
+
+    def test_switch_and_save_use_the_same_mapping_lock(self) -> None:
+        entry = runpy.run_path(str(PLUGIN_SYNC_ROOT / "scripts" / "plugin_sync.py"))["main"]
+        for action in ("switch", "save-account"):
+            output = io.StringIO()
+            with patch.object(Path, "open", side_effect=FileExistsError("mapping.json.lock exists")) as lock, \
+                    patch("subprocess.Popen") as client, contextlib.redirect_stdout(output):
+                code = entry(["--action", action, "--manifest", "/mapping.json", "--plugin", "example", "--mode", "DEV", "--apply"])
+            self.assertEqual(code, 1)
+            self.assertEqual(json.loads(output.getvalue())["status"], "blocked")
+            self.assertEqual(lock.call_args.args, ("x",))
+            client.assert_not_called()
 
     def test_waits_for_native_skill_identity_then_switches_claude(self) -> None:
         native = NativeSwitchClients()
@@ -260,6 +285,7 @@ def invoke_switch(native, *, apply=False, extra=(), manifest=None):
     if apply:
         args.append("--apply")
     with patch.object(Path, "read_text", return_value=json.dumps(manifest or switch_manifest())), \
+            patch.object(Path, "open", side_effect=lambda *args, **kwargs: io.StringIO()), patch.object(Path, "unlink"), \
             patch("subprocess.Popen", side_effect=native.start), \
             patch("subprocess.run", side_effect=native.claude), contextlib.redirect_stdout(output):
         code = entry(args)
@@ -335,6 +361,8 @@ class NativeSwitchClients:
                     response = {"id": request["id"], "result": result}
                 except RuntimeError as error:
                     response = {"id": request["id"], "error": {"message": str(error)}}
+                if getattr(owner, "lose_save_response", False) and request["method"] == "plugin/share/save":
+                    return
                 messages.put(json.dumps(response) + "\n")
             def flush(self):
                 pass
@@ -408,3 +436,267 @@ class NativeSwitchClients:
         elif not ((self.disable_without_effect and mode == "RELEASE") or (self.dev_disable_without_effect and mode == "DEV")):
             self.enabled_modes.discard(mode)
         return subprocess.CompletedProcess(command, 0, "Successfully updated", "")
+
+
+class NativeSaveClients(NativeSwitchClients):
+    def __init__(self):
+        super().__init__()
+        self.objects = []
+        self.save_result = {"remotePluginId": "Remote_created", "shareUrl": "https://example.test/private"}
+        self.lose_save_response = False
+        self.save_error = False
+        self.post_collision = False
+        self.post_hidden = False
+        self.last_params = None
+
+    def request(self, method, params):
+        if method == "initialize":
+            return {}
+        if method == "plugin/share/list":
+            return {"data": [{"plugin": copy.deepcopy(item)} for item in self.objects]}
+        if method == "plugin/list":
+            values = copy.deepcopy(self.objects)
+            if self.writes and self.post_collision:
+                values.append({**values[0], "remotePluginId": "Unrelated"})
+            return {"marketplaces": [{"plugins": [] if self.writes and self.post_hidden else values}]}
+        if method == "plugin/share/save":
+            self.last_params = params
+            self.writes.append((method, params.get("remotePluginId")))
+            remote_id = params.get("remotePluginId", "Remote_created")
+            self.objects = [item for item in self.objects if item["remotePluginId"] != remote_id]
+            self.objects.append(save_object(remote_id))
+            if self.save_error:
+                raise RuntimeError("save failed after effect")
+            return self.save_result
+        raise AssertionError(method)
+
+
+def save_object(remote_id="Remote_created", version="0.0.2"):
+    return {"remotePluginId": remote_id, "id": "example-dev@created-by-me-remote", "name": "example-dev",
+            "version": version, "installed": False, "enabled": False, "localVersion": None,
+            "shareContext": {"remotePluginId": remote_id, "discoverability": "PRIVATE", "sharePrincipals": []}}
+
+
+def invoke_save(native, *, apply=False, store=None, extra=(), snapshot_error=None):
+    entry = runpy.run_path(str(PLUGIN_SYNC_ROOT / "scripts" / "plugin_sync.py"))["main"]
+    store = store if store is not None else {"content": json.dumps({"plugins": {"example": {"account": {"DEV": {}}}}}).encode()}
+    output = io.StringIO()
+    snapshot = {"sha256": "a" * 64, "inputVersion": "b" * 64, "version": "0.0.2",
+                "sourceCommit": "c" * 40, "sourceDirty": True, "metadataSource": {"repository": "owner/repo"},
+                "pluginPath": "/snapshots/example", "packageName": "example-dev", "accountMode": "DEV"}
+    class Temporary(io.BytesIO):
+        name = "/mapping-temp"
+        def fileno(self):
+            return 0
+        def close(self):
+            store["temporary"] = self.getvalue()
+            super().close()
+    def replace(_path, _target):
+        store["content"] = store["temporary"]
+    args = ["--action", "save-account", "--manifest", "/mapping.json", "--snapshots", "/snapshots.json",
+            "--expected-sha256", "a" * 64, "--plugin", "example", "--mode", "DEV", "--timeout", "0.1" if native.lose_save_response else "1", *extra]
+    if apply:
+        args.append("--apply")
+    with patch.object(Path, "read_bytes", side_effect=lambda: store["content"]), \
+            patch.object(Path, "open", side_effect=lambda *args, **kwargs: io.StringIO()), \
+            patch.object(Path, "replace", replace), patch.object(Path, "exists", return_value=False), \
+            patch.object(Path, "unlink"), patch("os.fsync"), \
+            patch("tempfile.NamedTemporaryFile", side_effect=lambda **kwargs: Temporary()), \
+            patch.dict(entry.__globals__, {"verified_snapshot": lambda *args: snapshot if not snapshot_error else (_ for _ in ()).throw(ValueError(snapshot_error))}), \
+            patch("subprocess.Popen", side_effect=native.start), patch("subprocess.run") as claude, \
+            contextlib.redirect_stdout(output):
+        code = entry(args)
+    claude.assert_not_called()
+    return code, [json.loads(line) for line in output.getvalue().splitlines()], store
+
+
+class PluginAccountSaveEntryTests(unittest.TestCase):
+    def test_first_save_does_not_require_other_object_or_installed_source(self):
+        native = NativeSaveClients()
+        code, events, store = invoke_save(native, apply=True)
+        self.assertEqual(code, 0)
+        self.assertEqual(events[0]["event"], "before_account_save")
+        self.assertEqual(events[-1]["status"], "saved")
+        self.assertEqual(native.last_params, {"pluginPath": "/snapshots/example", "discoverability": "PRIVATE", "shareTargets": []})
+        source = json.loads(store["content"])["plugins"]["example"]["account"]["DEV"]
+        self.assertEqual(source["remotePluginId"], "Remote_created")
+        self.assertEqual(source["saveState"]["status"], "verified")
+        self.assertFalse(native.objects[0]["installed"])
+
+    def test_check_is_read_only_and_does_not_modify_mapping(self):
+        native = NativeSaveClients()
+        code, events, store = invoke_save(native)
+        self.assertEqual(code, 0)
+        self.assertEqual(events[-1]["status"], "checked")
+        self.assertEqual(native.writes, [])
+        self.assertNotIn("temporary", store)
+
+    def test_update_uses_only_exact_existing_id_and_path(self):
+        native = NativeSaveClients()
+        native.objects = [save_object(version="0.0.1")]
+        mapping = {"plugins": {"example": {"account": {"DEV": {"remotePluginId": "Remote_created", "version": "0.0.1"}}}}}
+        code, events, _ = invoke_save(native, apply=True, store={"content": json.dumps(mapping).encode()})
+        self.assertEqual(code, 0)
+        self.assertEqual(native.last_params, {"pluginPath": "/snapshots/example", "remotePluginId": "Remote_created"})
+        self.assertEqual(events[-1]["operation"], "update")
+
+    def test_same_name_existing_object_blocks_creation_without_guessing_id(self):
+        native = NativeSaveClients()
+        native.objects = [save_object()]
+        code, events, _ = invoke_save(native, apply=True)
+        self.assertEqual(code, 1)
+        self.assertIn("already exists", events[-1]["error"])
+        self.assertEqual(native.writes, [])
+
+    def test_response_timeout_persists_pending_and_repeated_invocation_never_retries(self):
+        native = NativeSaveClients()
+        native.lose_save_response = True
+        code, events, store = invoke_save(native, apply=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(events[-1]["status"], "unknown")
+        self.assertEqual(events[-1]["saveState"]["status"], "pending")
+        code, events, _ = invoke_save(native, apply=True, store=store)
+        self.assertEqual(code, 1)
+        self.assertEqual(len(native.writes), 1)
+        self.assertIn("previous account save", events[-1]["error"])
+
+    def test_terminal_error_after_effect_is_not_retried(self):
+        native = NativeSaveClients()
+        native.save_error = True
+        code, _, store = invoke_save(native, apply=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(len(native.objects), 1)
+        invoke_save(native, apply=True, store=store)
+        self.assertEqual(len(native.writes), 1)
+
+    def test_collision_after_save_retains_real_id_and_blocks_further_writes(self):
+        native = NativeSaveClients()
+        native.post_collision = True
+        code, events, store = invoke_save(native, apply=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(events[-1]["status"], "unverified")
+        self.assertIn("conflicts", events[-1]["error"])
+        source = json.loads(store["content"])["plugins"]["example"]["account"]["DEV"]
+        self.assertEqual(source["remotePluginId"], "Remote_created")
+        self.assertEqual(source["saveState"]["responseRemotePluginId"], "Remote_created")
+        invoke_save(native, apply=True, store=store)
+        self.assertEqual(len(native.writes), 1)
+
+    def test_missing_list_item_after_save_is_not_success_or_permission_to_retry(self):
+        native = NativeSaveClients()
+        native.post_hidden = True
+        code, events, store = invoke_save(native, apply=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(events[-1]["status"], "unverified")
+        invoke_save(native, apply=True, store=store)
+        self.assertEqual(len(native.writes), 1)
+
+    def test_malformed_save_response_does_not_invent_id_or_retry(self):
+        native = NativeSaveClients()
+        native.save_result = {}
+        code, events, store = invoke_save(native, apply=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(events[-1]["status"], "unknown")
+        source = json.loads(store["content"])["plugins"]["example"]["account"]["DEV"]
+        self.assertNotIn("remotePluginId", source)
+        invoke_save(native, apply=True, store=store)
+        self.assertEqual(len(native.writes), 1)
+
+    def test_nonprivate_existing_object_blocks_update_without_changing_sharing(self):
+        for context in ({"discoverability": "UNLISTED"}, {"sharePrincipals": [{"role": "reader", "principalType": "user"}]}):
+            with self.subTest(context=context):
+                native = NativeSaveClients()
+                item = save_object(version="0.0.1")
+                item["shareContext"].update(context)
+                native.objects = [item]
+                mapping = {"plugins": {"example": {"account": {"DEV": {"remotePluginId": "Remote_created", "version": "0.0.1"}}}}}
+                code, events, _ = invoke_save(native, apply=True, store={"content": json.dumps(mapping).encode()})
+                self.assertEqual(code, 1)
+                self.assertIn("private and owner-only", events[-1]["error"])
+                self.assertEqual(native.writes, [])
+
+    def test_wrong_update_response_id_is_recorded_without_replacing_mapping(self):
+        native = NativeSaveClients()
+        native.objects = [save_object(version="0.0.1")]
+        native.save_result = {"remotePluginId": "Unexpected", "shareUrl": "https://example.test/private"}
+        mapping = {"plugins": {"example": {"account": {"DEV": {"remotePluginId": "Remote_created", "version": "0.0.1"}}}}}
+        code, events, store = invoke_save(native, apply=True, store={"content": json.dumps(mapping).encode()})
+        self.assertEqual(code, 1)
+        source = json.loads(store["content"])["plugins"]["example"]["account"]["DEV"]
+        self.assertEqual(source["remotePluginId"], "Remote_created")
+        self.assertEqual(source["saveState"]["responseRemotePluginId"], "Unexpected")
+        self.assertEqual(events[-1]["status"], "unverified")
+
+    def test_save_preserves_other_plugin_and_source_mapping(self):
+        native = NativeSaveClients()
+        other = {"remotePluginId": "Other", "version": "1", "skills": ["other:entry"]}
+        mapping = {"plugins": {"example": {"account": {"DEV": {}, "RELEASE": copy.deepcopy(other)}, "claude": {"kept": True}},
+                               "other": {"account": {"DEV": copy.deepcopy(other)}}}, "kept": [1, 2]}
+        code, _, store = invoke_save(native, apply=True, store={"content": json.dumps(mapping).encode()})
+        self.assertEqual(code, 0)
+        result = json.loads(store["content"])
+        self.assertEqual(result["plugins"]["example"]["account"]["RELEASE"], other)
+        self.assertEqual(result["plugins"]["other"], mapping["plugins"]["other"])
+        self.assertEqual(result["plugins"]["example"]["claude"], {"kept": True})
+        self.assertEqual(result["kept"], [1, 2])
+
+    def test_unverified_snapshot_stops_before_starting_account_client(self):
+        native = NativeSaveClients()
+        code, events, _ = invoke_save(native, apply=True, snapshot_error="snapshot archive digest mismatch")
+        self.assertEqual(code, 1)
+        self.assertIn("digest mismatch", events[-1]["error"])
+        self.assertEqual(native.starts, 0)
+
+
+class SnapshotSaveValidationTests(unittest.TestCase):
+    def validate(self, *, corrupt=False, dirty=True, mode="DEV", link=False, expected=None):
+        entry = runpy.run_path(str(PLUGIN_SYNC_ROOT / "scripts" / "plugin_sync.py"))["verified_snapshot"]
+        package_name = "example-dev" if mode == "DEV" else "example"
+        metadata = json.dumps({"name": package_name, "version": "0.0.2"})
+        contents = {".codex-plugin/plugin.json": metadata.encode(), "skills/entry/SKILL.md": b"entry", "skills/entry/scripts/tool.py": b"print(1)"}
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            for name, content in contents.items():
+                archive.writestr(name, content)
+        archive_bytes = buffer.getvalue()
+        digest = __import__("hashlib").sha256(archive_bytes).hexdigest()
+        snapshot = {"sha256": digest, "inputVersion": "b" * 64, "sourceCommit": "c" * 40,
+                    "sourceDirty": dirty, "metadataSource": {"repository": "owner/repo"}, "version": "0.0.2",
+                    "artifact": "example.zip", "sizeBytes": len(archive_bytes), "pluginPath": "/snapshots/example", "packageName": package_name, "accountMode": mode}
+        manifest = json.dumps({"version": 1, "plugins": {"example": snapshot}})
+        directory = Path("/snapshots/example")
+        files = [directory / name for name in contents]
+        def read(path):
+            if path.name == "example.zip":
+                return archive_bytes
+            return b"changed" if corrupt else contents[path.relative_to(directory).as_posix()]
+        def stat(path):
+            return SimpleNamespace(st_mode=0o644, st_size=len(archive_bytes) if path.name == "example.zip" else len(contents[path.relative_to(directory).as_posix()]))
+        original_zip = zipfile.ZipFile
+        with patch.object(Path, "resolve", lambda path: path), \
+                patch.object(Path, "read_text", lambda path, **kwargs: metadata if path.name == "plugin.json" else manifest), \
+                patch.object(Path, "read_bytes", read), patch.object(Path, "is_file", return_value=True), \
+                patch.object(Path, "is_dir", return_value=True), patch.object(Path, "is_symlink", lambda path: link and path.name == "tool.py"), \
+                patch.object(Path, "rglob", return_value=files), patch.object(Path, "stat", stat), \
+                patch("zipfile.ZipFile", side_effect=lambda path: original_zip(io.BytesIO(archive_bytes))):
+            return entry("/snapshots/snapshots.json", "example", expected or digest, mode, __import__("time").monotonic() + 30)
+
+    def test_accepts_complete_reviewed_archive_and_matching_directory(self):
+        self.assertEqual(self.validate()["pluginPath"], "/snapshots/example")
+
+    def test_rejects_changed_directory_content(self):
+        with self.assertRaisesRegex(Exception, "content or executable mode mismatch"):
+            self.validate(corrupt=True)
+
+    def test_rejects_symlink_inside_snapshot(self):
+        with self.assertRaisesRegex(Exception, "complete archive"):
+            self.validate(link=True)
+
+    def test_rejects_unreviewed_digest(self):
+        with self.assertRaisesRegex(Exception, "provenance"):
+            self.validate(expected="0" * 64)
+
+    def test_dirty_snapshot_cannot_update_release(self):
+        with self.assertRaisesRegex(Exception, "development snapshot"):
+            self.validate(mode="RELEASE")
+        self.assertFalse(self.validate(mode="RELEASE", dirty=False)["sourceDirty"])
