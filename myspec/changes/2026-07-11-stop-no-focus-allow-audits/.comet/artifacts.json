@@ -1,0 +1,7 @@
+{
+  "myspec_proposal": "myspec/changes/stop-no-focus-allow-audits/proposal.md",
+  "myspec_design": "myspec/changes/stop-no-focus-allow-audits/design.md",
+  "myspec_tasks": "myspec/changes/stop-no-focus-allow-audits/tasks.md",
+  "myspec_delta_spec": "myspec/changes/stop-no-focus-allow-audits/specs/agent-guard-plugin-runtime/spec.md",
+  "archive_directory": "myspec/changes/archive/2026-07-11-stop-no-focus-allow-audits"
+}
