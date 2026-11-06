@@ -1,3 +1,6 @@
+
+> 随包命令约定：本文件的 `build-and-verify <参数>` 均指本次实际加载插件的 `node <verified-plugin-root>/bin/build-and-verify.js <参数>` 参数数组，不是PATH中的裸命令。包根从当前官方技能/安装记录核实；没有真实路径时只取得本任务同版本官方完整资源，保留目录关系，缺失即停止，不猜缓存或回退旧全局npm。一次会话固定同一实现，不改变业务目标工作树。
+
 # Config Draft（配置草案）
 
 定义 `.build-and-verify/config.json`（配置文件）草案规则。草案必须可审查，写入前必须展示给用户确认。

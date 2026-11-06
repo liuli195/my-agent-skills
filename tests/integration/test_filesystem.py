@@ -105,6 +105,17 @@ class TestWorkspace:
             runtime = subprocess.run([sys.executable, str(release), *arguments, "--project", str(target)],
                                      text=True, capture_output=True)
             assert runtime.returncode == 0, runtime.stdout + runtime.stderr
+        # Ordinary operations run their selected complete package, even without a global tool install.
+        node = shutil.which("node")
+        assert node
+        runtime_env = {**os.environ, "NPM_CONFIG_PREFIX": str(tmp_path / "no-global-tools"),
+                       "MYSPEC_PYTHON": sys.executable, "BUILD_AND_VERIFY_PYTHON": sys.executable}
+        tool_work = tmp_path / "package-spec-state"
+        selected = Path(snapshots["my-spec"]["pluginPath"]) / "bin/myspec.js"
+        initialized = subprocess.run([node, str(selected), "state-init", str(tool_work), "add", "specs", "input"],
+                                     env=runtime_env, text=True, capture_output=True)
+        assert initialized.returncode == 0, initialized.stdout + initialized.stderr
+        assert json.loads((tool_work / "current/state.json").read_text())["implementationIdentity"].startswith("sha256:")
         # Keep one real source-provenance rejection, without rebuilding another fixture.
         note = project / "dirty-note.txt"
         note.write_text("uncommitted source")

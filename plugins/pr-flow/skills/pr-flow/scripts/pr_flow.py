@@ -95,12 +95,30 @@ def write_text_if_missing(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def tool_command(key: str) -> list[str]:
+    """A host supplies exact current-package argv for this process, not a machine binding."""
+    supplied = os.environ.get("PR_FLOW_TOOL_COMMANDS")
+    if supplied is None:
+        command = TOOLCHAIN_TOOLS[key][0]
+        return [shutil.which(command) or command]
+    try:
+        commands = json.loads(supplied)
+        if not isinstance(commands, dict) or set(commands) != set(TOOLCHAIN_TOOLS):
+            raise ValueError("provide every required tool")
+        argv = commands[key]
+        if not isinstance(argv, list) or not argv or any(not isinstance(x, str) or not x for x in argv):
+            raise ValueError("tool command must be an argv array")
+        return argv
+    except (ValueError, KeyError, TypeError) as error:
+        raise PrFlowError("toolchain_command_invalid", {"reason": "toolchain_command_invalid", "tool": key}) from error
+
+
 def toolchain_identities(project: Path) -> dict[str, dict[str, str]]:
     identities: dict[str, dict[str, str]] = {}
     for key, (command, package_name, package_directory) in TOOLCHAIN_TOOLS.items():
         try:
             result = subprocess.run(
-                [shutil.which(command) or command, "doctor"],
+                [*tool_command(key), "doctor", *(["--running"] if "PR_FLOW_TOOL_COMMANDS" in os.environ else [])],
                 cwd=project if project.is_dir() else project.parent,
                 check=False,
                 text=True,
@@ -2681,6 +2699,8 @@ def run_hotfix_verify_command(project: Path, command: str) -> subprocess.Complet
         ) from exc
     if not command_args:
         raise PrFlowError("hotfix_verify_command_missing", {"reason": "hotfix_verify_command_missing"})
+    if command_args[0] in TOOLCHAIN_TOOLS and "PR_FLOW_TOOL_COMMANDS" in os.environ:
+        command_args = [*tool_command(command_args[0]), *command_args[1:]]
     if os.name == "nt" and not ntpath.dirname(command_args[0]):
         command_args[0] = shutil.which(command_args[0]) or command_args[0]
 
