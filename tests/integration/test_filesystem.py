@@ -88,8 +88,9 @@ class TestWorkspace:
                     if method != "plugin/share/save":
                         return super().request(method, params)
                     assert lock.exists()
-                    stored = json.loads(mapping.read_text())["plugins"]["plugin-sync"]["account"]
-                    assert any(item.get("saveState", {}).get("status") == "pending" for item in stored.values())
+                    stored = json.loads(mapping.read_text())["plugins"]
+                    assert any(item.get("saveState", {}).get("status") == "pending"
+                               for plugin in stored.values() for item in plugin["account"].values())
                     cloud = json.loads((Path(params["pluginPath"]) / ".codex-plugin/plugin.json").read_text())
                     remote_id = params.get("remotePluginId", "Remote_" + cloud["name"])
                     self.writes.append((method, dict(params)))
@@ -100,10 +101,10 @@ class TestWorkspace:
                     return {"remotePluginId": remote_id, "shareUrl": ""}
             native = Native()
             entry = runpy.run_path(str(REPO_ROOT / "plugins/plugin-sync/skills/plugin-sync/scripts/plugin_sync.py"))["main"]
-            def invoke(mode, *, apply=True, action="save-account", timeout="1"):
+            def invoke(mode, *, apply=True, action="save-account", timeout="1", plugin="plugin-sync"):
                 output = io.StringIO()
-                args = ["--action", action, "--manifest", str(mapping), "--plugin", "plugin-sync", "--mode", mode,
-                        "--snapshots", str(root / mode / "snapshots.json"), "--expected-sha256", snapshots[mode]["plugin-sync"]["sha256"],
+                args = ["--action", action, "--manifest", str(mapping), "--plugin", plugin, "--mode", mode,
+                        "--snapshots", str(root / mode / "snapshots.json"), "--expected-sha256", snapshots[mode][plugin]["sha256"],
                         "--cwd", str(project), "--timeout", timeout]
                 with patch("subprocess.Popen", side_effect=native.start), contextlib.redirect_stdout(output):
                     code = entry(args + (["--apply"] if apply else []))
@@ -118,20 +119,48 @@ class TestWorkspace:
             assert stored["plugins"]["plugin-sync"]["account"]["DEV"]["packageName"] == "plugin-sync-dev"
             assert stored["plugins"]["plugin-sync"]["account"]["RELEASE"]["packageName"] == "plugin-sync"
             assert len(native.objects) == 2 and all(not item["installed"] for item in native.objects)
-            assert invoke("DEV")[0] == 0
-            assert set(native.writes[-1][1]) == {"pluginPath", "remotePluginId"}
+            original = mapping.read_bytes()
+            count = len(native.writes)
+            native.personal = False
+            native.catalog_metadata = {"scope": "WORKSPACE"}
+            code, events = invoke("DEV")
+            assert code == 1 and "not personal USER" in events[-1]["error"]
+            assert mapping.read_bytes() == original and len(native.writes) == count
             assert len(native.objects) == 2
+            native.personal = True
+            native.catalog_metadata = {}
+            legacy = json.loads(mapping.read_text())
+            state = legacy["plugins"]["plugin-sync"]["account"]["DEV"]["saveState"]
+            state["status"] = "unverified"
+            state.pop("privateCreationRequest", None)
+            state.pop("responseSchemaVerified")
+            mapping.write_text(json.dumps(legacy))
+            original = mapping.read_bytes()
+            count = len(native.writes)
+            assert invoke("DEV", action="reconcile-account", apply=False)[0] == 0
+            assert mapping.read_bytes() == original
+            code, events = invoke("DEV", action="reconcile-account")
+            assert code == 0 and events[-1]["status"] == "reconciled"
+            assert events[-1]["after"]["permissions"]["status"] == "not_available"
+            assert events[-1]["privateCreationRequest"] == {"status": "not_recorded"}
+            assert json.loads(mapping.read_text())["plugins"]["plugin-sync"]["account"]["DEV"]["saveState"]["status"] == "verified"
+            assert len(native.writes) == count
+            assert invoke("DEV")[0] == 1  # Personal permissions remain unavailable for a new update.
             lock.write_text("another invocation")
             assert invoke("DEV", action="switch")[0] == 1
             assert invoke("DEV")[0] == 1
             lock.unlink()
+            fresh = json.loads(mapping.read_text())
+            fresh["plugins"]["dev-flow"] = {"account": {"DEV": {}}}
+            mapping.write_text(json.dumps(fresh))
             native.lose_save_response = True
-            code, events = invoke("DEV", timeout="0.1")
+            code, events = invoke("DEV", plugin="dev-flow", timeout="0.1")
             assert code == 1 and events[-1]["status"] == "unknown"
-            assert json.loads(mapping.read_text())["plugins"]["plugin-sync"]["account"]["DEV"]["saveState"]["status"] == "pending"
+            assert json.loads(mapping.read_text())["plugins"]["dev-flow"]["account"]["DEV"]["saveState"]["status"] == "pending"
             count = len(native.writes)
             assert invoke("RELEASE")[0] == 1
             assert invoke("RELEASE", action="switch")[0] == 1
+            assert invoke("DEV", plugin="dev-flow", action="reconcile-account")[0] == 1
             assert len(native.writes) == count
             assert not lock.exists() and not list(root.glob(".plugin-sync-*"))
 

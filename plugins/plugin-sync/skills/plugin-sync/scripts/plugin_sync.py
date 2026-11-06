@@ -318,40 +318,74 @@ def verified_snapshot(path: str, plugin: str, expected: str, mode: str, deadline
     return snapshot
 
 
-def account_inventory(server: AppServer) -> tuple[list[dict], list[dict]]:
-    shares = [item["plugin"] for item in server.call("plugin/share/list", {})["data"]]
+def account_inventory(server: AppServer) -> list[dict]:
     response = server.call("plugin/list", {"marketplaceKinds": ["created-by-me-remote"], "forceRefetch": True})
     if response.get("marketplaceLoadErrors"):
         raise SwitchError("account inventory is incomplete; marketplace loading failed")
-    catalog = [item for market in response["marketplaces"] for item in market["plugins"]]
-    return shares, catalog
+    return [item for market in response["marketplaces"] for item in market["plugins"]]
 
 
-def private_account_object(shares: list[dict], catalog: list[dict], remote_id: str, plugin: str, version: str) -> dict:
-    matches = [item for item in shares if item.get("remotePluginId") == remote_id]
+def account_object(catalog: list[dict], remote_id: str, plugin: str, version: str) -> dict:
     found = [item for item in catalog if item.get("remotePluginId") == remote_id]
-    if len(matches) != 1 or len(found) != 1:
-        raise SwitchError("expected exactly one owned account object in both native inventories")
-    item, discovered = matches[0], found[0]
-    context = item.get("shareContext") or {}
-    principals = context.get("sharePrincipals")
-    if (context.get("remotePluginId") != remote_id or context.get("discoverability") != "PRIVATE"
-            or not isinstance(principals, list) or len(principals) > 1
-            or any(value.get("role") != "owner" or value.get("principalType") != "user" for value in principals)):
-        raise SwitchError("account object is not verified private and owner-only; sharing was not changed")
-    if any(value.get("name") != plugin or value.get("version") != version for value in (item, discovered)):
+    if len(found) != 1:
+        raise SwitchError("expected exactly one owned account object in the personal marketplace")
+    discovered = found[0]
+    if discovered.get("name") != plugin or discovered.get("version") != version:
         raise SwitchError("account object identity or version does not match the explicit mapping")
     identity = discovered.get("id")
     if not isinstance(identity, str) or not identity or any(
             value.get("id") == identity and value.get("remotePluginId") != remote_id for value in catalog):
         raise SwitchError("account discovery identity is missing or conflicts; no rename was attempted")
+    # USER plugins intentionally have no shareContext. The workspace-only share/list
+    # cannot verify their permissions and is not a prerequisite for request completion.
+    context = discovered.get("shareContext")
+    scope = discovered.get("scope")
+    if scope not in (None, "USER"):
+        raise SwitchError("account scope is not personal USER; workspace objects are not supported")
+    if discovered.get("discoverability") not in (None, "PRIVATE"):
+        raise SwitchError("account object has explicitly non-private discoverability")
+    if context is not None:
+        raise SwitchError("workspace sharing metadata conflicts with the personal account path; sharing was not changed")
+    permissions = {"status": "not_available", "evidence": "personal marketplace; no shareContext",
+                   "scope": scope, "creatorApiQueried": False}
     return {key: discovered.get(key) for key in
-            ("id", "remotePluginId", "name", "version", "installed", "enabled", "localVersion")}
+            ("id", "remotePluginId", "name", "version", "installed", "enabled", "localVersion")} | {"permissions": permissions}
+
+
+def write_mapping(path: Path, manifest: dict, original: bytes) -> bytes:
+    if path.read_bytes() != original:
+        raise SwitchError("mapping changed concurrently; no further writes are allowed")
+    payload = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".plugin-sync-", delete=False) as output:
+            temporary = Path(output.name)
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        temporary.replace(path)
+        return payload
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
+def reconcile_state(source: dict) -> dict:
+    state = source.get("saveState", {})
+    remote_id = state.get("responseRemotePluginId")
+    snapshot = state.get("snapshot", {})
+    if (state.get("status") != "unverified" or state.get("operation") not in ("create", "update")
+            or not isinstance(remote_id, str) or not remote_id or source.get("remotePluginId") != remote_id
+            or state.get("responseSchemaVerified") is False
+            or not source.get("packageName") or source.get("packageName") != snapshot.get("packageName")
+            or not source.get("version") or source.get("version") != snapshot.get("version")):
+        raise SwitchError("reconciliation requires an unverified successful save response with its exact recorded ID, package and version; pending or unknown writes remain blocked")
+    return state
 
 
 def save_account(args: argparse.Namespace) -> int:
     """One private object per invocation, with a durable no-retry marker before saving."""
-    report = {"plugin": args.plugin, "target": args.mode, "action": "save-account", "status": "blocked"}
+    report = {"plugin": args.plugin, "target": args.mode, "action": args.action, "status": "blocked"}
     server = None
     deadline = time.monotonic() + 600
     try:
@@ -363,18 +397,26 @@ def save_account(args: argparse.Namespace) -> int:
         mapping = manifest["plugins"][args.plugin]
         sources = mapping["account"]
         source = sources[args.mode]
-        # Stop expansion as well as retries after an unresolved or unverified save.
-        pending = unresolved_account_save(manifest)
-        if pending:
-            report["saveState"] = pending
-            raise SwitchError("previous account save is unresolved or unverified; inspect native state before any retry")
-        snapshot = verified_snapshot(args.snapshots, args.plugin, args.expected_sha256, args.mode, deadline)
-        package_name = snapshot["packageName"]
-        if source.get("packageName", package_name) != package_name:
-            raise SwitchError("snapshot packageName differs from the authorized account mapping; no rename was attempted")
-        remote_id = source.get("remotePluginId")
-        if remote_id is not None and (not isinstance(remote_id, str) or not remote_id):
-            raise SwitchError("remotePluginId must be a verified nonempty string or absent for first creation")
+        reconciling = args.action == "reconcile-account"
+        if reconciling:
+            report["saveState"] = source.get("saveState", {})
+            state = reconcile_state(source)
+            snapshot = state["snapshot"]
+            package_name = source["packageName"]
+            remote_id = state["responseRemotePluginId"]
+        else:
+            # Stop expansion as well as retries after an unresolved or unverified save.
+            pending = unresolved_account_save(manifest)
+            if pending:
+                report["saveState"] = pending
+                raise SwitchError("previous account save is unresolved or unverified; inspect native state before any retry")
+            snapshot = verified_snapshot(args.snapshots, args.plugin, args.expected_sha256, args.mode, deadline)
+            package_name = snapshot["packageName"]
+            if source.get("packageName", package_name) != package_name:
+                raise SwitchError("snapshot packageName differs from the authorized account mapping; no rename was attempted")
+            remote_id = source.get("remotePluginId")
+            if remote_id is not None and (not isinstance(remote_id, str) or not remote_id):
+                raise SwitchError("remotePluginId must be a verified nonempty string or absent for first creation")
         if remote_id and any(value.get("remotePluginId") == remote_id for mode, value in sources.items() if mode != args.mode):
             raise SwitchError("DEV and RELEASE cannot share an account object")
         server = AppServer(manifest.get("codexCommand", ["codex", "app-server", "--stdio"]),
@@ -382,10 +424,23 @@ def save_account(args: argparse.Namespace) -> int:
         server.call("initialize", {"clientInfo": {"name": "plugin-sync", "version": "1"},
                                    "capabilities": {"experimentalApi": True}})
         server.notify("initialized")
-        shares, catalog = account_inventory(server)
+        catalog = account_inventory(server)
+        if reconciling:
+            report["after"] = account_object(catalog, remote_id, package_name, source["version"])
+            report["privateCreationRequest"] = state.get("privateCreationRequest", {"status": "not_recorded"})
+            report["status"] = "checked"
+            if args.apply:
+                state.update(status="verified", reconciled=True, permissions=report["after"]["permissions"],
+                             privateCreationRequest=report["privateCreationRequest"])
+                original = write_mapping(path, manifest, original)
+                report["status"] = "reconciled"
+            report["accountWrites"] = 0
+            return 0
         if remote_id:
-            report["before"] = private_account_object(shares, catalog, remote_id, package_name, source["version"])
-        elif any(item.get("name") == package_name for item in shares + catalog):
+            report["before"] = account_object(catalog, remote_id, package_name, source["version"])
+            if report["before"]["permissions"]["status"] != "verified":
+                raise SwitchError("existing personal account permissions are not available in this client; update blocked until independently verified")
+        elif any(item.get("name") == package_name for item in catalog):
             raise SwitchError("an account object with this package name already exists; verify and map its real ID before creation")
         report["operation"] = "update" if remote_id else "create"
         report["snapshot"] = {key: snapshot[key] for key in
@@ -395,28 +450,12 @@ def save_account(args: argparse.Namespace) -> int:
             report["next"] = "review source contents and authorize this exact private save before --apply"
             return 0
 
-        def persist() -> None:
-            nonlocal original
-            if path.read_bytes() != original:
-                raise SwitchError("mapping changed concurrently; no further account writes are allowed")
-            payload = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-            temporary = None
-            try:
-                with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".plugin-sync-", delete=False) as output:
-                    temporary = Path(output.name)
-                    output.write(payload)
-                    output.flush()
-                    os.fsync(output.fileno())
-                temporary.replace(path)
-                original = payload
-            finally:
-                if temporary is not None and temporary.exists():
-                    temporary.unlink()
-
         state = {"status": "pending", "operationId": str(uuid.uuid4()), "operation": report["operation"],
                  "remotePluginId": remote_id, "snapshot": report["snapshot"]}
+        if not remote_id:
+            state["privateCreationRequest"] = {"discoverability": "PRIVATE", "shareTargets": []}
         source["saveState"] = state
-        persist()  # A crash after this point blocks repeats even across invocations.
+        original = write_mapping(path, manifest, original)  # A crash after this point blocks repeats even across invocations.
         report["saveState"] = state
         print(json.dumps({"event": "before_account_save", **report}, ensure_ascii=False), flush=True)
         # Recheck the reviewed artifact immediately before transmitting any bytes.
@@ -431,19 +470,20 @@ def save_account(args: argparse.Namespace) -> int:
         returned = result.get("remotePluginId")
         if not isinstance(returned, str) or not returned:
             raise SwitchError("save response has no verified remotePluginId; no retry is allowed")
-        state.update(status="unverified", responseRemotePluginId=returned)
-        persist()  # Retain the real response ID even if the next check fails.
+        state.update(status="unverified", responseRemotePluginId=returned,
+                     responseSchemaVerified=isinstance(result.get("shareUrl"), str))
+        original = write_mapping(path, manifest, original)  # Retain the real response ID even if the next check fails.
         if ((remote_id and returned != remote_id) or (not remote_id and any(
-                item.get("remotePluginId") == returned for item in shares + catalog))):
+                item.get("remotePluginId") == returned for item in catalog))):
             raise SwitchError("save returned an unexpected account object; original mapping was not replaced")
         source.update(remotePluginId=returned, version=snapshot["version"], packageName=package_name)
-        persist()
+        original = write_mapping(path, manifest, original)
         if not isinstance(result.get("shareUrl"), str):
             raise SwitchError("save response is incomplete; object recorded but not verified")
-        shares, catalog = account_inventory(server)
-        report["after"] = private_account_object(shares, catalog, returned, package_name, snapshot["version"])
-        state["status"] = "verified"
-        persist()
+        catalog = account_inventory(server)
+        report["after"] = account_object(catalog, returned, package_name, snapshot["version"])
+        state.update(status="verified", permissions=report["after"]["permissions"])
+        original = write_mapping(path, manifest, original)
         report["status"] = "saved"
         report["runtimeVerification"] = "not installed or loaded; source switching and fresh-session checks remain separate"
         return 0
@@ -465,7 +505,7 @@ def save_account(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--action", choices=("switch", "save-account"), default="switch")
+    parser.add_argument("--action", choices=("switch", "save-account", "reconcile-account"), default="switch")
     parser.add_argument("--snapshots", help="complete snapshot manifest for save-account")
     parser.add_argument("--expected-sha256", help="explicitly reviewed snapshot archive digest")
     parser.add_argument("--manifest", required=True)
@@ -483,7 +523,7 @@ def main(argv: list[str] | None = None) -> int:
             path = Path(args.manifest).resolve()
             lock_path = path.with_name(path.name + ".lock")
             lock = lock_path.open("x", encoding="utf-8")
-        return save_account(args) if args.action == "save-account" else switch_sources(args)
+        return switch_sources(args) if args.action == "switch" else save_account(args)
     except OSError as error:
         print(json.dumps({"plugin": args.plugin, "target": args.mode, "action": args.action,
                           "status": "blocked", "error": str(error)}, ensure_ascii=False), flush=True)
