@@ -13,5 +13,37 @@ def test_plugin_sync_delegates_build_and_verify_lifecycle() -> None:
         assert forbidden not in text
 
 
-def test_plugin_sync_has_no_cloud_account_delivery_script() -> None:
-    assert not (PLUGIN_SYNC_ROOT / "scripts/plugin_sync.py").exists()
+def test_plugin_sync_prepares_one_creator_update_without_a_network_client():
+    import runpy
+    import pytest
+    api = runpy.run_path(str(PLUGIN_SYNC_ROOT / "scripts/plugin_sync.py"))
+    snapshot = {"packageName": "example", "version": "1.1.0", "sha256": "a" * 64,
+                "artifact": "example.zip", "pluginPath": "/prepared/example"}
+    current = {"plugin_id": "plugins_existing", "name": "example", "version": "1.0.0",
+               "scope": "USER", "discoverability": "PRIVATE", "current_release_id": "release_old"}
+    remote = {"skills/entry/SKILL.md": "b" * 64, "obsolete.txt": "c" * 64}
+    target = {"skills/entry/SKILL.md": "a" * 64}
+    plan = api["prepare_plan"](snapshot, current, remote, target, managed_files=list(remote), inventory_complete=True)
+    assert plan["tool"] == "update_plugin"
+    assert plan["params"] == {"archive": str(Path("/prepared/example.zip")), "plugin_id": "plugins_existing",
+                              "expected_release_id": "release_old", "delete_paths": ["obsolete.txt"]}
+    assert plan["accountWrites"] == 0
+    with pytest.raises(ValueError, match="same version"):
+        api["prepare_plan"]({**snapshot, "version": "1.0.0"}, current, remote, target,
+                            managed_files=list(remote), inventory_complete=True)
+
+
+    state = {}
+    api["transition"](state, plan)
+    with pytest.raises(ValueError, match="unresolved"):
+        api["transition"](state, plan)
+    receipt = {"status": "updated", "plugin_id": "plugins_existing", "version": "1.1.0",
+               "scope": "USER", "discoverability": "PRIVATE", "release_id": "release_new"}
+    after = {"complete": True, "plugin_id": "plugins_existing", "version": "1.1.0", "scope": "USER",
+             "discoverability": "PRIVATE", "current_release_id": "release_new", "files": target,
+             "name": "example"}
+    api["transition"](state, plan, receipt={"status": "unknown"})
+    assert state["operations"][plan["operationId"]]["status"] == "unknown"
+    api["transition"](state, plan, readback=after)
+    assert state["operations"][plan["operationId"]]["status"] == "verified"
+    assert state["operations"][plan["operationId"]]["installed"] == "not_verified"
