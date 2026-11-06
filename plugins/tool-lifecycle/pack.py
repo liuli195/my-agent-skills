@@ -224,21 +224,30 @@ def _same_directory(directory: Path, artifact: Path) -> bool:
         )
 
 
-def snapshots(project: Path, output: Path, account_mode: str | None = None) -> dict:
+def snapshots(project: Path, output: Path, account_mode: str | None = None, release_ref: str | None = None) -> dict:
     """Build complete, local-only plugin archives; never publish or install."""
-    if account_mode not in (None, "DEV", "RELEASE"):
+    if account_mode not in (None, "RELEASE"):
         raise ValueError("snapshot_account_mode_invalid")
     project, output = project.resolve(), output.resolve()
     flow = _release_flow(project)
+    commit = _git(project, "rev-parse", "HEAD").strip()
+    dirty = bool(_git(project, "status", "--porcelain"))
+    if account_mode == "RELEASE":
+        if not release_ref:
+            raise ValueError("snapshot_release_ref_required")
+        tag = flow.validate_release_tag(release_ref.removeprefix("refs/tags/"))
+        release_ref = "refs/tags/" + tag
+        if dirty or _git(project, "rev-parse", "--verify", release_ref + "^{commit}").strip() != commit:
+            raise ValueError("snapshot_release_source_unverified")
+    elif release_ref is not None:
+        raise ValueError("snapshot_release_ref_requires_account_release")
     repository = flow.github_repository_identity(project)
     registry = {name: record | {"snapshotRepository": repository} for name, record in flow.PLUGIN_REGISTRY.items()}
     if account_mode is not None:
-        registry = {name: record | {"snapshotAccountMode": account_mode} for name, record in registry.items()}
+        registry = {name: record | {"snapshotAccountMode": account_mode, "snapshotReleaseRef": release_ref} for name, record in registry.items()}
     inputs = {name: _snapshot_inputs(project, name, record) for name, record in registry.items()}
     if any(output.is_relative_to(project / root) for root, _files, _digest in inputs.values()):
         raise ValueError("snapshot_output_inside_release_input")
-    commit = _git(project, "rev-parse", "HEAD").strip()
-    dirty = bool(_git(project, "status", "--porcelain"))
     output.mkdir(parents=True, exist_ok=True)
     previous_path = output / "snapshots.json"
     previous = json.loads(previous_path.read_text(encoding="utf-8")) if previous_path.exists() else {}
@@ -253,7 +262,8 @@ def snapshots(project: Path, output: Path, account_mode: str | None = None) -> d
             root, files, digest = inputs[name]
             saved = previous.get("plugins", {}).get(name, {})
             if (saved.get("inputVersion") == digest
-                    and not (account_mode == "RELEASE" and saved.get("sourceDirty") and not dirty)):
+                    and (account_mode != "RELEASE" or (saved.get("sourceCommit") == commit
+                         and saved.get("releaseRef") == release_ref and saved.get("sourceDirty") is False))):
                 artifact = output / saved["artifact"]
                 if (artifact.parent != output or artifact.is_symlink() or not artifact.is_file()
                         or hashlib.sha256(artifact.read_bytes()).hexdigest() != saved["sha256"]
@@ -280,14 +290,6 @@ def snapshots(project: Path, output: Path, account_mode: str | None = None) -> d
                                    project / MANAGEMENT.relative_to(ROOT))
             metadata_sources = _cloud_metadata(package, name, record)
             version = _snapshot_version(package, name)
-            package_name = name + "-dev" if account_mode == "DEV" else name
-            if account_mode == "DEV":
-                cloud_path = package / ".codex-plugin/plugin.json"
-                cloud = json.loads(cloud_path.read_text(encoding="utf-8"))
-                cloud["name"] = package_name
-                cloud["interface"]["displayName"] += "-dev"
-                _validate_cloud_metadata(cloud)
-                cloud_path.write_text(json.dumps(cloud, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             filename = f"{name}-{digest[:20]}.zip"
             artifact = temporary / filename
             with zipfile.ZipFile(artifact, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -303,12 +305,16 @@ def snapshots(project: Path, output: Path, account_mode: str | None = None) -> d
                                    **metadata_sources},
             }
             if account_mode is not None:
-                manifest["plugins"][name].update(accountMode=account_mode, packageName=package_name)
+                manifest["plugins"][name].update(accountMode=account_mode, packageName=name, releaseRef=release_ref)
             built.append(name)
         # A concurrent source edit must not publish a manifest for mixed inputs.
         if any(_snapshot_inputs(project, name, record)[2] != inputs[name][2]
                for name, record in registry.items()):
             raise ValueError("snapshot_inputs_changed_during_build")
+        if account_mode == "RELEASE" and (_git(project, "rev-parse", "HEAD").strip() != commit
+                                          or _git(project, "rev-parse", "--verify", release_ref + "^{commit}").strip() != commit
+                                          or _git(project, "status", "--porcelain")):
+            raise ValueError("snapshot_release_source_changed_during_build")
         for name in built:
             filename = manifest["plugins"][name]["artifact"]
             directory = Path(manifest["plugins"][name]["pluginPath"])
@@ -332,10 +338,11 @@ def main() -> int:
         parser = argparse.ArgumentParser(description="Build local complete plugin snapshots without account writes")
         parser.add_argument("output", type=Path)
         parser.add_argument("--project", type=Path, default=ROOT)
-        parser.add_argument("--account-mode", choices=("DEV", "RELEASE"), help="explicit cloud account package identity projection")
+        parser.add_argument("--account-mode", choices=("RELEASE",), help="explicit cloud release account package")
+        parser.add_argument("--release-ref", help="existing published release tag for the supplied clean source tree")
         args = parser.parse_args(sys.argv[2:])
         try:
-            print(json.dumps(snapshots(args.project, args.output, args.account_mode), ensure_ascii=False))
+            print(json.dumps(snapshots(args.project, args.output, args.account_mode, args.release_ref), ensure_ascii=False))
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
             parser.exit(1, json.dumps({"status": "failed", "error": str(error)}, ensure_ascii=False) + "\n")
         return 0

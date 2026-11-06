@@ -329,7 +329,7 @@
       },
       {
         "checkParallel": true,
-        "command": "python -m pytest -q -p no:cacheprovider tests/test_release_flow_cli.py tests/test_release_flow_plugin_package.py",
+        "command": "python -m pytest -q -p no:cacheprovider tests/test_release_flow_cli.py tests/test_release_flow_plugin_package.py tests/test_release_flow_account_delivery.py",
         "id": "verify.release-flow",
         "inputs": [
           ".agents",
@@ -342,6 +342,7 @@
           "plugins/build-and-verify/package.json",
           "tests/test_release_flow_cli.py",
           "tests/test_release_flow_plugin_package.py",
+          "tests/test_release_flow_account_delivery.py",
           "tests/support/command_stubs.py",
           "tests/conftest.py",
           "tests/support/pr_flow_invocation.py",

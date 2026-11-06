@@ -18,8 +18,8 @@ const packages = [
       "update-codex.md",
     ],
     references: ["check.md", "status-taxonomy.md", "update-claude.md", "update-codex.md", "switch-source.md", "update-build-and-verify-runtime.md"],
-    description: /检查、安装、更新和切换插件来源/,
-    scripts: ["plugin_sync.py"],
+    description: /检查、安装、更新和切换本机插件市场来源/,
+    scripts: [],
   },
   {
     name: "retro-to-issues",

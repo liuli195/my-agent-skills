@@ -169,3 +169,22 @@ jobs:
           --version "$RELEASE_VERSION"
           --bump-plugins "$BUMP_PLUGINS"
           --authorize-ci-publish
+
+      - name: Build complete dot release packages
+        if: env.FIRST_PUBLISH_REQUIRED != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C source fetch --no-tags origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          git -C source checkout --detach "refs/tags/$RELEASE_TAG"
+          python source/plugins/tool-lifecycle/pack.py snapshots "$RUNNER_TEMP/dot-release-packages" \
+            --project source --account-mode RELEASE --release-ref "$RELEASE_TAG"
+          tar -cf "$RUNNER_TEMP/dot-release-packages.tar" -C "$RUNNER_TEMP/dot-release-packages" .
+
+      - name: Upload complete dot release packages
+        if: env.FIRST_PUBLISH_REQUIRED != 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: dot-release-packages
+          path: ${{ runner.temp }}/dot-release-packages.tar
+          if-no-files-found: error

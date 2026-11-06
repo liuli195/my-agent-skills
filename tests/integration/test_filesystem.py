@@ -11,6 +11,7 @@ import runpy
 import tempfile
 import subprocess
 import sys
+import tarfile
 import zipfile
 from unittest.mock import patch
 
@@ -26,7 +27,7 @@ SCRIPT = REPO_ROOT / "scripts/setup-worktree.ps1"
 PACK = REPO_ROOT / "plugins/tool-lifecycle/pack.py"
 
 
-def snapshot_source(tmp_path, *, legacy_registry=False):
+def snapshot_source(tmp_path, *, legacy_registry=False, release_ref=None, executable_probe=None):
     project = tmp_path / "source"
     shutil.copytree(REPO_ROOT / "plugins", project / "plugins",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -37,10 +38,15 @@ def snapshot_source(tmp_path, *, legacy_registry=False):
     # Detect accidental injection from the packer's own checkout instead of --project.
     shared = project / "plugins/tool-lifecycle/python/management.py"
     shared.write_text(shared.read_text() + "\n# Isolated snapshot source\n")
+    if executable_probe:
+        (project / executable_probe).chmod(0o755)
     for arguments in (("init", "-q"), ("add", "plugins"),
                       ("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
                        "commit", "-qm", "snapshot source")):
         subprocess.run(["git", "-C", str(project), *arguments], check=True, capture_output=True)
+    if release_ref:
+        # Fixture-only tag: this does not verify a real hosted release.
+        subprocess.run(["git", "-C", str(project), "tag", release_ref], check=True, capture_output=True)
     origin = subprocess.run(["git", "-C", str(REPO_ROOT), "remote", "get-url", "origin"],
                             check=True, text=True, capture_output=True).stdout.strip()
     subprocess.run(["git", "-C", str(project), "remote", "add", "origin", origin],
@@ -54,44 +60,62 @@ def run_snapshots(project, output, *arguments):
 
 
 class TestWorkspace:
-    def test_account_mode_snapshots_save_through_real_mapping_and_shared_lock(self, tmp_path):
-        from tests.test_plugin_sync_skill_contract import NativeSaveClients
+    def test_release_snapshots_save_through_real_mapping_and_shared_lock(self, tmp_path):
+        from tests.test_release_flow_account_delivery import NativeSaveClients, PublishedReleaseCommands
         with tempfile.TemporaryDirectory(dir=tmp_path) as temporary:
             root = Path(temporary)
-            project = snapshot_source(root)
-            snapshots = {}
-            for mode in ("DEV", "RELEASE"):
-                output = root / mode
-                result = run_snapshots(project, output, "--account-mode", mode)
-                assert result.returncode == 0, result.stdout + result.stderr
-                snapshots[mode] = json.loads((output / "snapshots.json").read_text())["plugins"]
-                for name, record in snapshots[mode].items():
-                    package = Path(record["pluginPath"])
-                    assert record["accountMode"] == mode
-                    assert record["packageName"] == name + ("-dev" if mode == "DEV" else "")
-                    cloud = json.loads((package / ".codex-plugin/plugin.json").read_text())
-                    assert cloud["name"] == record["packageName"]
-                    assert cloud["interface"]["displayName"] == name + ("-dev" if mode == "DEV" else "")
-                    assert json.loads((package / ".claude-plugin/plugin.json").read_text())["name"] == name
-                    assert json.loads((project / "plugins" / name / ".codex-plugin/plugin.json").read_text())["name"] == name
-                    if (package / "package.json").exists():
-                        assert json.loads((package / "package.json").read_text())["name"] == json.loads((project / "plugins" / name / "package.json").read_text())["name"]
-            assert snapshots["DEV"]["plugin-sync"]["inputVersion"] != snapshots["RELEASE"]["plugin-sync"]["inputVersion"]
-            reused = run_snapshots(project, root / "DEV", "--account-mode", "DEV")
+            probe = "skills/plugin-sync/references/check.md"
+            project = snapshot_source(root, release_ref="v1.0.0", executable_probe="plugins/plugin-sync/" + probe)
+            output = root / "RELEASE"
+            result = run_snapshots(project, output, "--account-mode", "RELEASE", "--release-ref", "v1.0.0")
+            assert result.returncode == 0, result.stdout + result.stderr
+            snapshots = json.loads((output / "snapshots.json").read_text())["plugins"]
+            commit = subprocess.run(["git", "-C", str(project), "rev-parse", "refs/tags/v1.0.0^{commit}"],
+                                    check=True, text=True, capture_output=True).stdout.strip()
+            for name, record in snapshots.items():
+                package = Path(record["pluginPath"])
+                assert record["accountMode"] == "RELEASE"
+                assert record["packageName"] == name
+                assert record["releaseRef"] == "refs/tags/v1.0.0"
+                assert record["sourceCommit"] == commit and record["sourceDirty"] is False
+                cloud = json.loads((package / ".codex-plugin/plugin.json").read_text())
+                assert cloud["name"] == name and cloud["interface"]["displayName"] == name
+                assert json.loads((package / ".claude-plugin/plugin.json").read_text())["name"] == name
+                assert json.loads((project / "plugins" / name / ".codex-plugin/plugin.json").read_text())["name"] == name
+                if (package / "package.json").exists():
+                    assert json.loads((package / "package.json").read_text())["name"] == json.loads((project / "plugins" / name / "package.json").read_text())["name"]
+            reused = run_snapshots(project, output, "--account-mode", "RELEASE", "--release-ref", "refs/tags/v1.0.0")
             assert reused.returncode == 0, reused.stderr
             assert json.loads(reused.stdout)["built"] == []
+            # One tar transports hidden metadata and executable modes without repairing ZIP contents.
+            bundle = root / "dot-release-packages.tar"
+            with tarfile.open(bundle, "w") as transport:
+                transport.add(output, arcname=".")
+            bundle.chmod(0o644)  # Simulate the outer CI artifact's ordinary file permissions.
+            shutil.rmtree(output)
+            delivery = root / "deliveries"
+            delivery.mkdir()
+            historical = {"remotePluginId": "Remote_plugin-sync-dev", "packageName": "plugin-sync-dev", "version": "0.0.1"}
+            historical_object = {**historical, "name": "plugin-sync-dev", "id": "plugin-sync-dev@created-by-me-remote",
+                                 "installed": False, "enabled": False, "shareContext": None}
             mapping = root / "mapping.json"
-            mapping.write_text(json.dumps({"plugins": {"plugin-sync": {"account": {"DEV": {}, "RELEASE": {}}}}, "preserved": [1, 2]}))
+            mapping.write_text(json.dumps({"plugins": {"plugin-sync": {"account": {"DEV": historical, "RELEASE": {}}}}, "preserved": [1, 2]}))
             lock = root / "mapping.json.lock"
             class Native(NativeSaveClients):
                 def request(self, method, params):
                     if method != "plugin/share/save":
                         return super().request(method, params)
+                    self.methods.append(method)
                     assert lock.exists()
                     stored = json.loads(mapping.read_text())["plugins"]
                     assert any(item.get("saveState", {}).get("status") == "pending"
                                for plugin in stored.values() for item in plugin["account"].values())
-                    cloud = json.loads((Path(params["pluginPath"]) / ".codex-plugin/plugin.json").read_text())
+                    package = Path(params["pluginPath"])
+                    assert package.parent.parent == delivery
+                    assert package.parent.stat().st_mode & 0o077 == 0
+                    if package.name == Path(snapshots["plugin-sync"]["artifact"]).stem:
+                        assert (package / probe).stat().st_mode & 0o111 == 0o111
+                    cloud = json.loads((package / ".codex-plugin/plugin.json").read_text())
                     remote_id = params.get("remotePluginId", "Remote_" + cloud["name"])
                     self.writes.append((method, dict(params)))
                     self.objects = [item for item in self.objects if item["remotePluginId"] != remote_id]
@@ -100,97 +124,165 @@ class TestWorkspace:
                                          "shareContext": {"remotePluginId": remote_id, "discoverability": "PRIVATE", "sharePrincipals": []}})
                     return {"remotePluginId": remote_id, "shareUrl": ""}
             native = Native()
-            entry = runpy.run_path(str(REPO_ROOT / "plugins/plugin-sync/skills/plugin-sync/scripts/plugin_sync.py"))["main"]
-            def invoke(mode, *, apply=True, action="save-account", timeout="1", plugin="plugin-sync"):
-                output = io.StringIO()
-                args = ["--action", action, "--manifest", str(mapping), "--plugin", plugin, "--mode", mode,
-                        "--snapshots", str(root / mode / "snapshots.json"), "--expected-sha256", snapshots[mode][plugin]["sha256"],
-                        "--cwd", str(project), "--timeout", timeout]
-                with patch("subprocess.Popen", side_effect=native.start), contextlib.redirect_stdout(output):
-                    code = entry(args + (["--apply"] if apply else []))
-                return code, [json.loads(line) for line in output.getvalue().splitlines()]
+            native.objects = [historical_object]
+            published = PublishedReleaseCommands(project=project,
+                                                 repository=snapshots["plugin-sync"]["metadataSource"]["repository"],
+                                                 source_commit=commit, local_run=subprocess.run)
+            entry = runpy.run_path(str(REPO_ROOT / "plugins/release-flow/skills/release-flow/scripts/release_flow.py"))["main"]
+            process = subprocess.Popen
+            def owned_process(command, *args, **kwargs):
+                if command == ["codex", "app-server", "--stdio"]:
+                    return native.start(command, *args, **kwargs)
+                assert command == ["git", "-C", str(project), "config", "--get", "remote.origin.url"]
+                return process(command, *args, **kwargs)
+            def invoke(mode="RELEASE", *, apply=True, action="save-account", timeout="1", plugin="plugin-sync", umask=None, bundle_path=None):
+                report = io.StringIO()
+                command = "deliver-account" if action == "save-account" else "reconcile-account"
+                args = [command, "--project", str(project), "--manifest", str(mapping), "--plugin", plugin, "--timeout", timeout]
+                if action == "save-account":
+                    args.extend(["--bundle", str(bundle_path or bundle), "--delivery-dir", str(delivery), "--expected-sha256", snapshots[plugin]["sha256"]])
+                if action == "reconcile-account":
+                    args.extend(["--mode", mode])
+                elif mode != "RELEASE":
+                    args.extend(["--mode", mode])
+                previous_umask = os.umask(umask) if os.name != "nt" and umask is not None else None
+                try:
+                    with patch("subprocess.Popen", side_effect=owned_process), patch("subprocess.run", side_effect=published), \
+                            contextlib.redirect_stdout(report):
+                        code = entry(args + (["--apply"] if apply else []))
+                finally:
+                    if previous_umask is not None:
+                        os.umask(previous_umask)
+                assert set(native.methods) <= {"initialize", "plugin/list", "plugin/share/save"}
+                return code, [json.loads(line) for line in report.getvalue().splitlines()]
             original = mapping.read_bytes()
-            assert invoke("RELEASE", apply=False)[0] == 0
+            for member_name, member_type in (("../escaped.txt", tarfile.REGTYPE), ("linked", tarfile.SYMTYPE)):
+                unsafe = root / "unsafe.tar"
+                member = tarfile.TarInfo(member_name)
+                member.type = member_type
+                member.linkname = "../escaped.txt"
+                with tarfile.open(unsafe, "w") as transport:
+                    transport.addfile(member)
+                code, events = invoke(bundle_path=unsafe)
+                assert code == 1 and events[-1]["status"] == "blocked"
+                assert "unsafe path or file type" in events[-1]["error"]
+                assert native.starts == 0 and not native.writes
+                assert mapping.read_bytes() == original and not (root / "escaped.txt").exists()
+                assert not list(delivery.iterdir()) and not lock.exists()
+            assert invoke(apply=False)[0] == 0
             assert mapping.read_bytes() == original
-            assert invoke("RELEASE")[0] == 0
-            assert invoke("DEV")[0] == 0
+            assert not list(delivery.iterdir())
+            assert invoke(umask=0o077)[0] == 0
+            assert not list(delivery.iterdir())
             stored = json.loads(mapping.read_text())
             assert stored["preserved"] == [1, 2]
-            assert stored["plugins"]["plugin-sync"]["account"]["DEV"]["packageName"] == "plugin-sync-dev"
+            assert stored["plugins"]["plugin-sync"]["account"]["DEV"] == historical
             assert stored["plugins"]["plugin-sync"]["account"]["RELEASE"]["packageName"] == "plugin-sync"
             assert len(native.objects) == 2 and all(not item["installed"] for item in native.objects)
-            code, events = invoke("DEV")
+            assert native.objects[0] == historical_object
+            code, events = invoke(umask=0o027)
             assert code == 0 and events[-1]["operation"] == "update"
-            assert native.writes[-1][1] == {"pluginPath": snapshots["DEV"]["plugin-sync"]["pluginPath"], "remotePluginId": "Remote_plugin-sync-dev"}
-            updated = json.loads(mapping.read_text())["plugins"]["plugin-sync"]["account"]["DEV"]["saveState"]
+            request = native.writes[-1][1]
+            assert set(request) == {"pluginPath", "remotePluginId"} and request["remotePluginId"] == "Remote_plugin-sync"
+            assert Path(request["pluginPath"]).name == Path(snapshots["plugin-sync"]["artifact"]).stem
+            assert not Path(request["pluginPath"]).exists() and not list(delivery.iterdir())
+            updated = json.loads(mapping.read_text())["plugins"]["plugin-sync"]["account"]["RELEASE"]["saveState"]
             assert updated["privateCreationRequest"] == {"discoverability": "PRIVATE", "shareTargets": []}
             assert updated["permissions"]["status"] == "not_available"
+            assert updated["snapshot"]["releaseRef"] == "refs/tags/v1.0.0"
             original = mapping.read_bytes()
             count = len(native.writes)
+            with pytest.raises(SystemExit) as error, contextlib.redirect_stderr(io.StringIO()):
+                invoke("DEV")
+            assert error.value.code == 2
+            assert mapping.read_bytes() == original and len(native.writes) == count
             native.personal = False
             native.catalog_metadata = {"scope": "WORKSPACE"}
-            code, events = invoke("DEV")
+            code, events = invoke()
             assert code == 1 and "not personal USER" in events[-1]["error"]
             assert mapping.read_bytes() == original and len(native.writes) == count
             assert len(native.objects) == 2
             native.personal = True
             native.catalog_metadata = {}
             legacy = json.loads(mapping.read_text())
-            state = legacy["plugins"]["plugin-sync"]["account"]["DEV"]["saveState"]
+            state = legacy["plugins"]["plugin-sync"]["account"]["RELEASE"]["saveState"]
             state["status"] = "unverified"
             state.pop("privateCreationRequest", None)
             state.pop("responseSchemaVerified")
+            state["snapshot"].pop("releaseRef")
             mapping.write_text(json.dumps(legacy))
             original = mapping.read_bytes()
             count = len(native.writes)
-            assert invoke("DEV", action="reconcile-account", apply=False)[0] == 0
+            assert invoke(action="reconcile-account", apply=False)[0] == 0
             assert mapping.read_bytes() == original
-            code, events = invoke("DEV", action="reconcile-account")
+            code, events = invoke(action="reconcile-account")
             assert code == 0 and events[-1]["status"] == "reconciled"
             assert events[-1]["after"]["permissions"]["status"] == "not_available"
             assert events[-1]["privateCreationRequest"] == {"status": "not_recorded"}
-            assert json.loads(mapping.read_text())["plugins"]["plugin-sync"]["account"]["DEV"]["saveState"]["status"] == "verified"
+            assert json.loads(mapping.read_text())["plugins"]["plugin-sync"]["account"]["RELEASE"]["saveState"]["status"] == "verified"
             assert len(native.writes) == count
-            assert invoke("DEV")[0] == 1  # A legacy record without creation evidence is not auto-upgraded.
+            assert invoke()[0] == 1  # Missing historical creation evidence is not invented.
             lock.write_text("another invocation")
-            assert invoke("DEV", action="switch")[0] == 1
-            assert invoke("DEV")[0] == 1
+            assert invoke(action="reconcile-account")[0] == 1
+            assert invoke()[0] == 1
             lock.unlink()
             fresh = json.loads(mapping.read_text())
-            fresh["plugins"]["dev-flow"] = {"account": {"DEV": {}}}
+            fresh["plugins"]["dev-flow"] = {"account": {"RELEASE": {}}}
             mapping.write_text(json.dumps(fresh))
             native.lose_save_response = True
-            code, events = invoke("DEV", plugin="dev-flow", timeout="0.1")
+            code, events = invoke(plugin="dev-flow", timeout="0.1")
             assert code == 1 and events[-1]["status"] == "unknown"
-            assert json.loads(mapping.read_text())["plugins"]["dev-flow"]["account"]["DEV"]["saveState"]["status"] == "pending"
+            retained = Path(events[-1]["retainedDirectory"])
+            assert retained.parent == delivery and retained.is_dir()
+            assert (retained / "snapshots.json").is_file()
+            assert Path(native.writes[-1][1]["pluginPath"]).is_dir()
+            assert json.loads(mapping.read_text())["plugins"]["dev-flow"]["account"]["RELEASE"]["saveState"]["status"] == "pending"
             count = len(native.writes)
-            assert invoke("RELEASE")[0] == 1
-            assert invoke("RELEASE", action="switch")[0] == 1
-            assert invoke("DEV", plugin="dev-flow", action="reconcile-account")[0] == 1
+            assert invoke()[0] == 1
+            assert invoke(plugin="dev-flow", action="reconcile-account")[0] == 1
             assert len(native.writes) == count
+            assert json.loads(mapping.read_text())["plugins"]["plugin-sync"]["account"]["DEV"] == historical
+            assert native.objects[0] == historical_object
             assert not lock.exists() and not list(root.glob(".plugin-sync-*"))
 
-    def test_release_account_snapshot_rebuilds_after_dirty_source_becomes_clean(self, tmp_path):
+    def test_release_account_snapshots_require_a_clean_matching_tag(self, tmp_path):
         with tempfile.TemporaryDirectory(dir=tmp_path) as temporary:
             root = Path(temporary)
-            project = snapshot_source(root)
+            project = snapshot_source(root, release_ref="v1.0.0")
+            output = root / "release"
+            for arguments in (("--account-mode", "RELEASE"),
+                              ("--account-mode", "RELEASE", "--release-ref", "missing"),
+                              ("--account-mode", "RELEASE", "--release-ref", "refs/heads/master"),
+                              ("--release-ref", "v1.0.0"), ("--account-mode", "DEV")):
+                failed = run_snapshots(project, output, *arguments)
+                assert failed.returncode != 0, failed.stdout + failed.stderr
+                assert not list(output.glob("*.zip")) and not (output / "snapshots.json").exists()
             note = project / "dirty-note.txt"
             note.write_text("same plugin inputs; initially uncommitted source state")
-            output = root / "release"
-            first = run_snapshots(project, output, "--account-mode", "RELEASE")
-            assert first.returncode == 0, first.stdout + first.stderr
-            before = json.loads((output / "snapshots.json").read_text())["plugins"]
-            assert all(item["sourceDirty"] for item in before.values())
+            dirty = run_snapshots(project, output, "--account-mode", "RELEASE", "--release-ref", "v1.0.0")
+            assert dirty.returncode != 0 and "snapshot_release_source_unverified" in dirty.stderr
+            assert not list(output.glob("*.zip")) and not (output / "snapshots.json").exists()
             for arguments in (("add", "dirty-note.txt"),
                               ("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "clean source")):
                 subprocess.run(["git", "-C", str(project), *arguments], check=True, capture_output=True)
-            second = run_snapshots(project, output, "--account-mode", "RELEASE")
-            assert second.returncode == 0, second.stdout + second.stderr
+            stale = run_snapshots(project, output, "--account-mode", "RELEASE", "--release-ref", "v1.0.0")
+            assert stale.returncode != 0 and "snapshot_release_source_unverified" in stale.stderr
+            subprocess.run(["git", "-C", str(project), "tag", "v1.0.1"], check=True, capture_output=True)
+            clean = run_snapshots(project, output, "--account-mode", "RELEASE", "--release-ref", "refs/tags/v1.0.1")
+            assert clean.returncode == 0, clean.stdout + clean.stderr
             after = json.loads((output / "snapshots.json").read_text())["plugins"]
-            assert set(json.loads(second.stdout)["built"]) == set(before)
             commit = subprocess.run(["git", "-C", str(project), "rev-parse", "HEAD"], check=True, text=True, capture_output=True).stdout.strip()
             assert all(not item["sourceDirty"] and item["sourceCommit"] == commit for item in after.values())
-            assert all(item["inputVersion"] == before[name]["inputVersion"] for name, item in after.items())
+            assert all(item["releaseRef"] == "refs/tags/v1.0.1" for item in after.values())
+            # An older published source stays valid when that clean tree is explicitly selected.
+            subprocess.run(["git", "-C", str(project), "checkout", "--detach", "refs/tags/v1.0.0"],
+                           check=True, capture_output=True)
+            older_output = root / "older-release"
+            older = run_snapshots(project, older_output, "--account-mode", "RELEASE", "--release-ref", "v1.0.0")
+            assert older.returncode == 0, older.stdout + older.stderr
+            records = json.loads((older_output / "snapshots.json").read_text())["plugins"]
+            assert all(item["releaseRef"] == "refs/tags/v1.0.0" and item["sourceCommit"] != commit
+                       and not item["sourceDirty"] for item in records.values())
 
     @pytest.mark.parametrize("plugin", ["release-flow", "pr-flow"])
     def test_python_plugin_entry_reports_its_actual_interpreter_and_missing_pyyaml(self, plugin):
@@ -300,7 +392,6 @@ class TestWorkspace:
             assert "skills/data-store/requirements.txt" in archive.namelist()
             assert "skills/data-store/scripts/data_store.py" in archive.namelist()
         for name, command in {
-            "plugin-sync": [sys.executable, "skills/plugin-sync/scripts/plugin_sync.py", "--help"],
             "release-flow": [sys.executable, "skills/release-flow/scripts/release_flow.py", "--help"],
             "pr-flow": [sys.executable, "skills/pr-flow/scripts/pr_flow.py", "--help"],
             "data-store": [sys.executable, "skills/data-store/scripts/data_store.py", "--help"],

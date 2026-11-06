@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import zipfile
+import uuid
+import time
+import threading
+import queue
+import hashlib
 from dataclasses import dataclass
 import json
 import os
@@ -10,7 +16,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
+import tarfile
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
@@ -1933,6 +1940,486 @@ def run_ci_publish(args: argparse.Namespace) -> int:
     return 0
 
 
+
+class SwitchError(Exception):
+    pass
+
+
+def remaining_timeout(limit: float, deadline: float) -> float:
+    remaining = min(limit, deadline - time.monotonic())
+    if remaining <= 0:
+        raise SwitchError("operation budget exhausted; no further client writes are allowed")
+    return remaining
+
+
+def unresolved_account_save(manifest: dict) -> dict | None:
+    for mapping in manifest["plugins"].values():
+        for source in mapping.get("account", {}).values():
+            state = source.get("saveState", {})
+            if state.get("status") not in (None, "verified"):
+                return state
+    return None
+
+
+class AppServer:
+    """One owned stdio process for account preflight, save and readback."""
+
+    def __init__(self, command: list[str], cwd: str, timeout: float, deadline: float):
+        self.timeout = timeout
+        self.deadline = deadline
+        self.sequence = 0
+        self.pending_writes: dict[int, dict] = {}
+        self.messages: queue.Queue = queue.Queue()
+        self.process = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE, stderr=None,
+                                        text=True, encoding="utf-8", bufsize=1)
+        def read() -> None:
+            try:
+                for line in self.process.stdout:
+                    self.messages.put(json.loads(line))
+            except (ValueError, OSError) as error:
+                self.messages.put(error)
+            finally:
+                self.messages.put(None)
+        threading.Thread(target=read, daemon=True).start()
+
+    def notify(self, method: str, params: dict | None = None) -> None:
+        value = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            value["params"] = params
+        self.process.stdin.write(json.dumps(value) + "\n")
+        self.process.stdin.flush()
+
+    def call(self, method: str, params: dict, timeout: float | None = None) -> dict:
+        deadline = time.monotonic() + remaining_timeout(min(self.timeout, timeout or self.timeout), self.deadline)
+        mutating = method == "plugin/share/save"
+        if mutating and self.pending_writes:
+            raise SwitchError("unresolved account write; no further writes or compensation are allowed")
+        self.sequence += 1
+        request_id = self.sequence
+        if mutating:
+            self.pending_writes[request_id] = {"requestId": request_id, "method": method, "params": params}
+        self.process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": request_id,
+                                             "method": method, "params": params}) + "\n")
+        self.process.stdin.flush()
+        while True:
+            try:
+                value = self.messages.get(timeout=max(0, deadline - time.monotonic()))
+            except queue.Empty as error:
+                raise SwitchError(f"app-server timeout: {method}; " +
+                                  ("write outcome unresolved; compensation stopped" if mutating else "response unavailable")) from error
+            if value is None or isinstance(value, Exception):
+                raise SwitchError(f"app-server unavailable: {method}; outcome unknown")
+            if "method" in value and "id" in value:
+                raise SwitchError("unexpected server request; no authentication or approval was accepted")
+            if isinstance(value.get("result"), dict) or "error" in value:
+                self.pending_writes.pop(value.get("id"), None)
+            if value.get("id") != request_id:
+                continue
+            if "error" in value:
+                raise SwitchError(f"{method}: {value['error']}")
+            if not isinstance(value.get("result"), dict):
+                raise SwitchError(f"invalid app-server result: {method}")
+            return value["result"]
+
+    def close(self) -> None:
+        try:
+            self.process.stdin.close()
+        except OSError:
+            pass
+        try:
+            self.process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=2)
+
+
+def verified_snapshot(path: str, plugin: str, expected: str, mode: str, deadline: float) -> dict:
+    """Validate the existing pack.py manifest and exact directory without rebuilding."""
+    if not path or not expected or len(expected) != 64:
+        raise SwitchError("save-account requires --snapshots and the reviewed --expected-sha256")
+    manifest_path = Path(path).resolve()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("version") != 1:
+        raise SwitchError("unsupported snapshot manifest version")
+    snapshot = manifest["plugins"][plugin]
+    package_name = snapshot.get("packageName")
+    if mode != "RELEASE" or snapshot.get("accountMode") != "RELEASE" or package_name != plugin:
+        raise SwitchError("save-account requires an explicitly packaged matching account mode and packageName")
+    hashes = ((snapshot["sha256"], 64), (snapshot["inputVersion"], 64), (snapshot["sourceCommit"], 40))
+    if (snapshot["sha256"] != expected or any(not isinstance(value, str) or len(value) != size
+            or any(character not in "0123456789abcdef" for character in value) for value, size in hashes)
+            or not isinstance(snapshot["sourceDirty"], bool)
+            or not snapshot.get("metadataSource", {}).get("repository")):
+        raise SwitchError("snapshot digest or recorded source provenance is not verified")
+    if snapshot["sourceDirty"]:
+        raise SwitchError("a dirty development snapshot cannot overwrite a RELEASE object")
+    release_ref = snapshot.get("releaseRef")
+    if not isinstance(release_ref, str) or not release_ref.startswith("refs/tags/") or not release_ref.removeprefix("refs/tags/"):
+        raise SwitchError("RELEASE snapshots require the reviewed existing release tag reference")
+    root = manifest_path.parent
+    artifact = root / snapshot["artifact"]
+    recorded_path = snapshot.get("pluginPath")
+    if (not isinstance(recorded_path, str) or ".." in recorded_path.replace("\\", "/").split("/")
+            or recorded_path.replace("\\", "/").rsplit("/", 1)[-1] != artifact.stem):
+        raise SwitchError("snapshot pluginPath is not the recorded archive directory")
+    # CI paths are machine-local. Only the verified sibling directory is transmitted.
+    directory = root / artifact.stem
+    if (artifact.parent != root or artifact.suffix != ".zip" or artifact.is_symlink() or not artifact.is_file()
+            or directory.is_symlink() or not directory.is_dir()
+            or artifact.stat().st_size != snapshot["sizeBytes"]):
+        raise SwitchError("snapshot archive or pluginPath is not a verified sibling artifact")
+    snapshot = {**snapshot, "pluginPath": str(directory)}
+    # Bound compressed and expanded input together below the user's disk budget.
+    with zipfile.ZipFile(artifact) as archive:
+        if artifact.stat().st_size + sum(item.file_size for item in archive.infolist()) > 500_000_000:
+            raise SwitchError("snapshot exceeds the bounded save budget; request user approval")
+        if hashlib.sha256(artifact.read_bytes()).hexdigest() != expected:
+            raise SwitchError("snapshot archive digest mismatch")
+        entries = archive.namelist()
+        paths = list(directory.rglob("*"))
+        files = {item.relative_to(directory).as_posix(): item for item in paths if item.is_file()}
+        if (len(entries) != len(set(entries)) or set(files) != set(entries)
+                or any(item.is_symlink() for item in paths)):
+            raise SwitchError("snapshot directory does not match the complete archive")
+        for name, item in files.items():
+            remaining_timeout(120, deadline)
+            if (item.stat().st_size != archive.getinfo(name).file_size
+                    or item.read_bytes() != archive.read(name)
+                    or (os.name != "nt" and archive.getinfo(name).create_system == 3
+                        and (item.stat().st_mode & 0o111) != ((archive.getinfo(name).external_attr >> 16) & 0o111))):
+                raise SwitchError("snapshot directory content or executable mode mismatch")
+    metadata = json.loads((directory / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
+    if metadata.get("name") != package_name or metadata.get("version") != snapshot["version"]:
+        raise SwitchError("snapshot plugin identity or version mismatch")
+    return snapshot
+
+
+def account_inventory(server: AppServer, timeout: float | None = None) -> list[dict]:
+    response = server.call("plugin/list", {"marketplaceKinds": ["created-by-me-remote"], "forceRefetch": True}, timeout=timeout)
+    if response.get("marketplaceLoadErrors"):
+        raise SwitchError("account inventory is incomplete; marketplace loading failed")
+    return [item for market in response["marketplaces"] for item in market["plugins"]]
+
+
+def account_object(catalog: list[dict], remote_id: str, plugin: str, version: str) -> dict:
+    found = [item for item in catalog if item.get("remotePluginId") == remote_id]
+    if len(found) != 1:
+        raise SwitchError("expected exactly one owned account object in the personal marketplace")
+    discovered = found[0]
+    if discovered.get("name") != plugin or discovered.get("version") != version:
+        raise SwitchError("account object identity or version does not match the explicit mapping")
+    identity = discovered.get("id")
+    if not isinstance(identity, str) or not identity or any(
+            value.get("id") == identity and value.get("remotePluginId") != remote_id for value in catalog):
+        raise SwitchError("account discovery identity is missing or conflicts; no rename was attempted")
+    # USER plugins intentionally have no shareContext. The workspace-only share/list
+    # cannot verify their permissions and is not a prerequisite for request completion.
+    context = discovered.get("shareContext")
+    scope = discovered.get("scope")
+    if scope not in (None, "USER"):
+        raise SwitchError("account scope is not personal USER; workspace objects are not supported")
+    if discovered.get("discoverability") not in (None, "PRIVATE"):
+        raise SwitchError("account object has explicitly non-private discoverability")
+    if context is not None:
+        raise SwitchError("workspace sharing metadata conflicts with the personal account path; sharing was not changed")
+    permissions = {"status": "not_available", "evidence": "personal marketplace; no shareContext",
+                   "scope": scope, "creatorApiQueried": False}
+    return {key: discovered.get(key) for key in
+            ("id", "remotePluginId", "name", "version", "installed", "enabled", "localVersion")} | {"permissions": permissions}
+
+
+def write_mapping(path: Path, manifest: dict, original: bytes) -> bytes:
+    if path.read_bytes() != original:
+        raise SwitchError("mapping changed concurrently; no further writes are allowed")
+    payload = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".release-account-", delete=False) as output:
+            temporary = Path(output.name)
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        temporary.replace(path)
+        return payload
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
+def reconcile_state(source: dict) -> dict:
+    state = source.get("saveState", {})
+    remote_id = state.get("responseRemotePluginId")
+    snapshot = state.get("snapshot", {})
+    if (state.get("status") != "unverified" or state.get("operation") not in ("create", "update")
+            or not isinstance(remote_id, str) or not remote_id or source.get("remotePluginId") != remote_id
+            or state.get("responseSchemaVerified") is False
+            or not source.get("packageName") or source.get("packageName") != snapshot.get("packageName")
+            or not source.get("version") or source.get("version") != snapshot.get("version")):
+        raise SwitchError("reconciliation requires an unverified successful save response with its exact recorded ID, package and version; pending or unknown writes remain blocked")
+    return state
+
+
+def save_account(args: argparse.Namespace) -> int:
+    """One private object per invocation, with a durable no-retry marker before saving."""
+    report = {"plugin": args.plugin, "target": args.mode, "action": args.action, "status": "blocked"}
+    args.delivery_report = report
+    server = None
+    deadline = args.deadline
+    try:
+        if args.action == "save-account" and args.mode != "RELEASE":
+            raise SwitchError("cloud DEV saves are retired; use the existing local development marketplace")
+        if not 0 < args.timeout <= 120 or not 0 < args.ready_timeout <= 300 or not 0 < args.poll_interval <= 10:
+            raise SwitchError("timeouts must be positive and bounded (request <=120s, readiness <=300s, poll <=10s)")
+        path = Path(args.manifest).resolve()
+        original = path.read_bytes()
+        manifest = json.loads(original)
+        mapping = manifest["plugins"][args.plugin]
+        sources = mapping["account"]
+        source = sources[args.mode]
+        reconciling = args.action == "reconcile-account"
+        if reconciling:
+            report["saveState"] = source.get("saveState", {})
+            state = reconcile_state(source)
+            snapshot = state["snapshot"]
+            package_name = source["packageName"]
+            remote_id = state["responseRemotePluginId"]
+        else:
+            # Stop expansion as well as retries after an unresolved or unverified save.
+            pending = unresolved_account_save(manifest)
+            if pending:
+                report["saveState"] = pending
+                raise SwitchError("previous account save is unresolved or unverified; inspect native state before any retry")
+            snapshot = verified_snapshot(args.snapshots, args.plugin, args.expected_sha256, args.mode, deadline)
+            package_name = snapshot["packageName"]
+            if source.get("packageName", package_name) != package_name:
+                raise SwitchError("snapshot packageName differs from the authorized account mapping; no rename was attempted")
+            remote_id = source.get("remotePluginId")
+            if remote_id is not None and (not isinstance(remote_id, str) or not remote_id):
+                raise SwitchError("remotePluginId must be a verified nonempty string or absent for first creation")
+            report["release"] = published_account_release(args.project, snapshot, deadline)
+            report["publicationStatus"] = "published"
+        if remote_id and any(value.get("remotePluginId") == remote_id for mode, value in sources.items() if mode != args.mode):
+            raise SwitchError("DEV and RELEASE cannot share an account object")
+        server = AppServer(manifest.get("codexCommand", ["codex", "app-server", "--stdio"]),
+                           args.cwd, args.timeout, deadline)
+        server.call("initialize", {"clientInfo": {"name": "release-flow", "version": "1"},
+                                   "capabilities": {"experimentalApi": True}})
+        server.notify("initialized")
+        catalog = account_inventory(server)
+        if reconciling:
+            report["after"] = account_object(catalog, remote_id, package_name, source["version"])
+            report["privateCreationRequest"] = state.get("privateCreationRequest", {"status": "not_recorded"})
+            report["status"] = "checked"
+            if args.apply:
+                state.update(status="verified", reconciled=True, permissions=report["after"]["permissions"],
+                             privateCreationRequest=report["privateCreationRequest"])
+                original = write_mapping(path, manifest, original)
+                report["status"] = "reconciled"
+            report["accountWrites"] = 0
+            return 0
+        if remote_id:
+            report["before"] = account_object(catalog, remote_id, package_name, source["version"])
+            previous = source.get("saveState", {})
+            if (previous.get("status") != "verified" or previous.get("operation") not in ("create", "update")
+                    or previous.get("responseRemotePluginId") != remote_id or previous.get("responseSchemaVerified") is False
+                    or previous.get("privateCreationRequest") != {"discoverability": "PRIVATE", "shareTargets": []}
+                    or previous.get("snapshot", {}).get("packageName") != package_name
+                    or previous.get("snapshot", {}).get("version") != source["version"]):
+                raise SwitchError("update requires this object's verified private creation record; unknown provenance remains blocked")
+        elif any(item.get("name") == package_name for item in catalog):
+            raise SwitchError("an account object with this package name already exists; verify and map its real ID before creation")
+        report["operation"] = "update" if remote_id else "create"
+        report["snapshot"] = {key: snapshot[key] for key in
+                              ("sha256", "version", "sourceCommit", "sourceDirty", "inputVersion", "metadataSource", "accountMode", "packageName", "releaseRef")}
+        if not args.apply:
+            report["status"] = "checked"
+            report["next"] = "review source contents and authorize this exact private save before --apply"
+            return 0
+
+        state = {"status": "pending", "operationId": str(uuid.uuid4()), "operation": report["operation"],
+                 "remotePluginId": remote_id, "snapshot": report["snapshot"]}
+        if getattr(args, "delivery_directory", None):
+            state["deliveryDirectory"] = str(args.delivery_directory)
+        # Preserve actual creation request evidence, not a claim about the object's current audience.
+        state["privateCreationRequest"] = previous["privateCreationRequest"] if remote_id else {"discoverability": "PRIVATE", "shareTargets": []}
+        source["saveState"] = state
+        original = write_mapping(path, manifest, original)  # A crash after this point blocks repeats even across invocations.
+        report["saveState"] = state
+        print(json.dumps({"event": "before_account_save", **report}, ensure_ascii=False), flush=True)
+        # Recheck the reviewed artifact immediately before transmitting any bytes.
+        if verified_snapshot(args.snapshots, args.plugin, args.expected_sha256, args.mode, deadline) != snapshot:
+            raise SwitchError("snapshot manifest changed after preflight; account save was not sent")
+        params = {"pluginPath": snapshot["pluginPath"]}
+        if remote_id:
+            params["remotePluginId"] = remote_id
+        else:
+            params.update(discoverability="PRIVATE", shareTargets=[])
+        result = server.call("plugin/share/save", params)
+        returned = result.get("remotePluginId")
+        if not isinstance(returned, str) or not returned:
+            raise SwitchError("save response has no verified remotePluginId; no retry is allowed")
+        state.update(status="unverified", responseRemotePluginId=returned,
+                     responseSchemaVerified=isinstance(result.get("shareUrl"), str))
+        original = write_mapping(path, manifest, original)  # Retain the real response ID even if the next check fails.
+        if ((remote_id and returned != remote_id) or (not remote_id and any(
+                item.get("remotePluginId") == returned for item in catalog))):
+            raise SwitchError("save returned an unexpected account object; original mapping was not replaced")
+        source.update(remotePluginId=returned, version=snapshot["version"], packageName=package_name)
+        original = write_mapping(path, manifest, original)
+        if not isinstance(result.get("shareUrl"), str):
+            raise SwitchError("save response is incomplete; object recorded but not verified")
+        visibility_deadline = min(deadline, time.monotonic() + min(args.ready_timeout, 10))
+        report["directoryReads"] = 0
+        while True:
+            remaining = visibility_deadline - time.monotonic()
+            if remaining <= 0:
+                raise SwitchError("account directory visibility timeout; response ID retained and no save retry is allowed")
+            report["directoryReads"] += 1
+            catalog = account_inventory(server, timeout=remaining)
+            if any(item.get("remotePluginId") == returned for item in catalog):
+                # Only absence can be transient. Identity, version or permission conflicts stop immediately.
+                report["after"] = account_object(catalog, returned, package_name, snapshot["version"])
+                break
+            remaining = visibility_deadline - time.monotonic()
+            if remaining <= 0:
+                raise SwitchError("account directory visibility timeout; response ID retained and no save retry is allowed")
+            time.sleep(min(args.poll_interval, remaining))
+        state.update(status="verified", permissions=report["after"]["permissions"])
+        original = write_mapping(path, manifest, original)
+        report["status"] = "saved"
+        report["runtimeVerification"] = "not installed or loaded; dot discovery remains a separate verification"
+        return 0
+    except (SwitchError, OSError, ValueError, KeyError, TypeError, AttributeError, zipfile.BadZipFile, subprocess.SubprocessError) as error:
+        report["error"] = str(error)
+        if report.get("saveState"):
+            report["status"] = "unknown" if report["saveState"]["status"] == "pending" else "unverified"
+        if report.get("publicationStatus") == "published":
+            report["partialSuccess"] = True
+        return 1
+    finally:
+        try:
+            if server:
+                server.close()
+        except (OSError, subprocess.SubprocessError) as error:
+            report["cleanupError"] = str(error)
+        if report["status"] in ("unknown", "unverified") and report.get("operation") and getattr(args, "delivery_directory", None):
+            report["retainedDirectory"] = str(args.delivery_directory)
+        print(json.dumps(report, ensure_ascii=False), flush=True)
+        if report.get("cleanupError"):
+            return 1
+
+
+def published_account_release(project: Path, snapshot: dict, deadline: float) -> dict:
+    """Read published facts; local tags alone are not publication proof."""
+    repository = github_repository_identity(project)
+    if repository != snapshot["metadataSource"]["repository"]:
+        raise SwitchError("account artifact repository differs from the target release repository")
+    ref = snapshot["releaseRef"]
+    tag = validate_release_tag(ref.removeprefix("refs/tags/"))
+    release = subprocess.run(
+        [shutil.which("gh") or "gh", "release", "view", tag, "--repo", repository,
+         "--json", "tagName,isDraft,isPrerelease,publishedAt,url"],
+        cwd=project, check=False, text=True, capture_output=True, timeout=remaining_timeout(30, deadline),
+    )
+    if release.returncode:
+        raise SwitchError("published GitHub Release is unavailable; account delivery was not sent")
+    metadata = json.loads(release.stdout)
+    if (metadata.get("tagName") != tag or metadata.get("isDraft") is not False
+            or metadata.get("isPrerelease") is not False or not metadata.get("publishedAt")):
+        raise SwitchError("account delivery requires the exact published non-prerelease GitHub Release")
+    remote = subprocess.run(
+        ["git", "-C", str(project), "ls-remote", "--tags", "origin", ref, ref + "^{}"],
+        check=False, text=True, capture_output=True, timeout=remaining_timeout(30, deadline),
+    )
+    if remote.returncode:
+        raise SwitchError("published release tag lookup failed; account delivery was not sent")
+    references = dict(reversed(line.split()) for line in remote.stdout.splitlines() if len(line.split()) == 2)
+    commit = references.get(ref + "^{}", references.get(ref))
+    if commit != snapshot["sourceCommit"]:
+        raise SwitchError("published tag commit differs from the reviewed release artifact")
+    return {"tag": tag, "tagCommit": commit, "url": metadata.get("url"), "publishedAt": metadata["publishedAt"],
+            "ciVerification": "release workflow success must be confirmed through the existing publish flow"}
+
+
+def unpack_delivery_bundle(bundle: Path, destination: Path, deadline: float) -> Path:
+    """Unpack one transport container into a newly owned directory, never into user contents."""
+    if bundle.is_symlink() or not bundle.is_file() or bundle.stat().st_size > 500_000_000:
+        raise SwitchError("delivery bundle is not a bounded regular file")
+    with tarfile.open(bundle, "r:") as archive:
+        members = archive.getmembers()
+        total = bundle.stat().st_size
+        seen = set()
+        for member in members:
+            remaining_timeout(120, deadline)
+            relative = PurePosixPath(member.name)
+            name = relative.as_posix()
+            if (relative.is_absolute() or ".." in relative.parts or "\\" in member.name or ":" in member.name
+                    or name in seen or member.size < 0 or not (member.isfile() or member.isdir())):
+                raise SwitchError("delivery bundle contains an unsafe path or file type")
+            seen.add(name)
+            total += member.size
+            if total > 500_000_000:
+                raise SwitchError("delivery bundle exceeds the bounded extraction budget")
+        def bounded_data_filter(member: tarfile.TarInfo, target: str) -> tarfile.TarInfo | None:
+            remaining_timeout(120, deadline)
+            return tarfile.data_filter(member, target)
+        archive.extractall(destination, members=members, filter=bounded_data_filter)
+        remaining_timeout(120, deadline)
+    manifest = destination / "snapshots.json"
+    if not manifest.is_file() or manifest.is_symlink():
+        raise SwitchError("delivery bundle has no regular snapshots.json")
+    return manifest
+
+
+def run_account_delivery(args: argparse.Namespace) -> int:
+    args.deadline = time.monotonic() + 600
+    args.cwd = str(args.project)
+    lock = None
+    staging = None
+    try:
+        if args.action == "save-account":
+            root = Path(args.delivery_dir)
+            if root.is_symlink():
+                raise SwitchError("delivery directory must not be a symbolic link")
+            root.mkdir(exist_ok=True)
+            staging = Path(tempfile.mkdtemp(prefix=".release-account-", dir=root.resolve()))
+            args.delivery_directory = staging
+            args.snapshots = str(unpack_delivery_bundle(Path(args.bundle), staging, args.deadline))
+        if args.apply:
+            path = Path(args.manifest).resolve()
+            lock_path = path.with_name(path.name + ".lock")
+            lock = lock_path.open("x", encoding="utf-8")
+        return save_account(args)
+    except (SwitchError, OSError, ValueError, OverflowError, tarfile.TarError) as error:
+        print(json.dumps({"plugin": args.plugin, "target": args.mode, "action": args.action,
+                          "status": "blocked", "error": str(error)}, ensure_ascii=False), flush=True)
+        return 1
+    finally:
+        cleanup_failed = False
+        if lock:
+            try:
+                lock.close()
+                lock_path.unlink()
+            except OSError as error:
+                print(json.dumps({"event": "mapping_lock_cleanup_failed", "status": "failed", "error": str(error)}), flush=True)
+                cleanup_failed = True
+        report = getattr(args, "delivery_report", {})
+        retain = report.get("status") in ("unknown", "unverified") and report.get("operation")
+        if staging is not None and not retain:
+            try:
+                shutil.rmtree(staging)
+            except OSError as error:
+                print(json.dumps({"event": "delivery_directory_cleanup_failed", "status": "failed", "error": str(error)}), flush=True)
+                cleanup_failed = True
+        if cleanup_failed:
+            return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Release Flow Plugin（发布流程插件）。")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1971,6 +2458,22 @@ def build_parser() -> argparse.ArgumentParser:
     ci_publish.add_argument("--version", required=True, help="发布版本。")
     ci_publish.add_argument("--bump-plugins", action="append", required=True, help="逗号分隔插件名；空字符串表示不提升插件。")
     ci_publish.add_argument("--authorize-ci-publish", action="store_true", help="授权 CI 远端写入。")
+    for name in ("deliver-account", "reconcile-account"):
+        account = subparsers.add_parser(name, help="在已登录环境交付正式账号内容或只读核对已有回执。")
+        account.set_defaults(action="save-account" if name == "deliver-account" else "reconcile-account", mode="RELEASE")
+        account.add_argument("--project", type=Path, default=Path.cwd())
+        account.add_argument("--manifest", required=True)
+        account.add_argument("--plugin", required=True)
+        account.add_argument("--apply", action="store_true", help="应用已明确授权的精确交付或本地对账状态修正。")
+        account.add_argument("--timeout", type=float, default=30)
+        account.add_argument("--ready-timeout", type=float, default=60)
+        account.add_argument("--poll-interval", type=float, default=1)
+        if name == "deliver-account":
+            account.add_argument("--bundle", required=True, help="正式流水线的单一 tar 交付产物。")
+            account.add_argument("--delivery-dir", required=True, help="明确授权解包的本机目录。")
+            account.add_argument("--expected-sha256", required=True)
+        else:
+            account.add_argument("--mode", choices=("DEV", "RELEASE"), default="RELEASE", help="DEV 只用于历史回执恢复。")
     return parser
 
 
@@ -1993,6 +2496,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         return run_publish(args)
     if args.command == "ci-publish":
         return run_ci_publish(args)
+    if args.command in ("deliver-account", "reconcile-account"):
+        return run_account_delivery(args)
     parser.error(f"unsupported command: {args.command}")
     return 2
 
