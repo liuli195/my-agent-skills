@@ -596,6 +596,8 @@ class DeliveryBundleValidationTests(unittest.TestCase):
                 self.unpack([member])
 
 
+# The fabricated repository must also own its trusted GitHub Actions identity.
+@patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "owner/repo"})
 class PublishedAccountReleaseTests(unittest.TestCase):
     def test_missing_or_unpublished_release_never_starts_an_account_client(self):
         for options in ({"failure": "missing"}, {"release": {"isDraft": True}}):
@@ -630,7 +632,7 @@ class PublishedAccountReleaseTests(unittest.TestCase):
             native = NativeSaveClients()
             commands = PublishedReleaseCommands(annotated=True)
             code, events, _ = invoke_save(native, apply=True, release_commands=commands)
-            self.assertEqual(code, 0)
+            self.assertEqual(code, 0, events)
             self.assertEqual(events[-1]["status"], "saved")
             self.assertEqual(events[-1]["publicationStatus"], "published")
             self.assertNotIn("partialSuccess", events[-1])
