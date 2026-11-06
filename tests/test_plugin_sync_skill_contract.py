@@ -71,8 +71,8 @@ def test_plugin_sync_prepares_one_creator_update_without_a_network_client():
     old = {"status": "unverified", "operation": "create", "responseRemotePluginId": "plugins_existing",
            "snapshot": {"packageName": "example", "version": "1.1.0", "sha256": "a" * 64}}
     history = {"plugins": {"example": {"account": {"RELEASE": {"remotePluginId": "plugins_existing", "version": "1.1.0", "saveState": old}}}}}
-    api["reconcile_legacy"](history, "example", "RELEASE", receipt, {**after, "artifactSha256": "a" * 64})
+    api["reconcile_legacy"](history, "example", "RELEASE", {"remotePluginId": "plugins_existing", "shareUrl": ""}, {**after, "artifactSha256": "a" * 64})
     assert old["status"] == "unverified" and old["resolution"]["status"] == "verified"
     old["status"] = "pending"
     with pytest.raises(ValueError, match="not proven"):
-        api["reconcile_legacy"](history, "example", "RELEASE", receipt, {**after, "artifactSha256": "a" * 64})
+        api["reconcile_legacy"](history, "example", "RELEASE", {"remotePluginId": "plugins_existing", "shareUrl": ""}, {**after, "artifactSha256": "a" * 64})

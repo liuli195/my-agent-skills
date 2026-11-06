@@ -215,7 +215,7 @@ def reconcile_legacy(state, plugin, mode, success, readback):
     if (old.get("status") != "unverified" or old.get("operation") not in ("create", "update")
             or not remote_id or source.get("remotePluginId") != remote_id
             or success.get("plugin_id", success.get("remotePluginId")) != remote_id
-            or success.get("version") != snapshot.get("version")
+            or success.get("version", snapshot.get("version")) != snapshot.get("version")
             or not snapshot.get("sha256") or readback.get("artifactSha256") != snapshot["sha256"]
             or not readback.get("complete") or not readback.get("files")
             or readback.get("plugin_id") != remote_id or readback.get("name") != snapshot.get("packageName")

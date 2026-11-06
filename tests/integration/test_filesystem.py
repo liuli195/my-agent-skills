@@ -124,6 +124,29 @@ class TestWorkspace:
                                             "RELEASE", __import__("time").monotonic() + 30)
         assert checked["packageName"] == "plugin-sync" and checked["sourceCommit"] == commit
         assert Path(checked["pluginPath"]).is_dir()
+        # Exercise the shipped offline CLI, without calling a real account tool.
+        evidence = tmp_path / "official-read-fixture.json"
+        evidence.write_text(json.dumps({"release": {"repository": checked["metadataSource"]["repository"],
+            "tagName": "v1.0.0", "tagCommit": commit, "publishedAt": "2026-11-06T00:00:00Z",
+            "isDraft": False, "isPrerelease": False}, "owned": {"plugins": [], "next_cursor": None},
+            "current": None, "complete": True}))
+        plan = tmp_path / "creator-plan.json"
+        sync = REPO_ROOT / "plugins/plugin-sync/skills/plugin-sync/scripts/plugin_sync.py"
+        prepared = subprocess.run([sys.executable, str(sync), "prepare", "--bundle", str(bundle),
+            "--delivery-dir", str(tmp_path / "prepared"), "--plugin", "plugin-sync",
+            "--expected-sha256", checked["sha256"], "--evidence", str(evidence), "--output", str(plan)],
+            text=True, capture_output=True)
+        assert prepared.returncode == 0, prepared.stdout + prepared.stderr
+        planned = json.loads(plan.read_text())
+        assert planned["tool"] == "create_plugin" and planned["accountWrites"] == 0
+        state = tmp_path / "creator-state.json"
+        args = [sys.executable, str(sync), "record", "--state", str(state), "--plan", str(plan)]
+        started = subprocess.run(args, text=True, capture_output=True)
+        assert started.returncode == 0, started.stdout + started.stderr
+        repeated = subprocess.run(args, text=True, capture_output=True)
+        assert repeated.returncode != 0 and "already exists" in repeated.stdout
+        assert json.loads(state.read_text())["operations"][planned["operationId"]]["status"] == "pending"
+        assert not state.with_name(state.name + ".lock").exists()
 
     def test_public_baseline_execution_cache_and_git_visible_inputs(self, tmp_path):
         primary = tmp_path / "primary"
