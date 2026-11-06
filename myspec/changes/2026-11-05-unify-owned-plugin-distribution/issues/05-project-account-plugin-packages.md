@@ -2,7 +2,7 @@
 
 **状态：** ready-for-agent
 **前置票据：** 03、04的代码及v2.8.0发布证据；不要求九项旧部署完成才修复已复现阻断。
-**流程：** Fast（用户明确指定）；当前主工作树 main 83a894def5788bb1e98cb7729823c2cddf5957fb，拟分支 fix/cloud-account-package-projection，固定验证基线为该主干提交。用户已明确要求按快速流程实施；沿用同一分支与单票据。
+**流程：** Fast（用户明确指定）；当前主工作树 main 83a894def5788bb1e98cb7729823c2cddf5957fb，分支 fix/cloud-account-package-projection，固定验证基线为该主干提交。用户已明确要求按快速流程实施；沿用同一分支与单票据。
 
 ## 可观察交付
 
@@ -24,5 +24,5 @@
 
 ## 当前事实与未知
 
-build-and-verify上传是明确HTTP400拒绝，非结果未知；my-spec同类包尚未尝试。市场描述与识别错误高度相关，但需真实成功上传确认。架构调查按codebase-design、gpt-6-sol/xhigh只读执行；报告由主代理核验。现阶段只写需求，未实施或提交。
+build-and-verify上传是明确HTTP400拒绝，非结果未知；my-spec同类包尚未尝试。市场描述与识别错误高度相关，但需真实成功上传确认。架构调查按codebase-design、gpt-6-sol/xhigh只读执行；报告由主代理核验。需求准备阶段只写需求；当前修复已提交，红绿检查及双轴复审通过，真实上传仍待新正式版本发布后验收。
 修复版本由用户指定为2.8.1，仅my-spec与build-and-verify的六个版本文件提升；其他插件不变。正式发布仍另行确认。
