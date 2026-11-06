@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import contextlib
 import copy
 import io
 import json
+import os
 import queue
 import runpy
 import subprocess
@@ -48,7 +49,7 @@ class PublishedReleaseCommands:
                 return self.local_run(command, **kwargs)
             return subprocess.CompletedProcess(command, 0, f"https://github.com/{self.origin_repository}.git\n", "")
         assert 0 < kwargs["timeout"] <= 30
-        if Path(command[0]).name == "gh":
+        if PureWindowsPath(command[0]).name.casefold() in {"gh", "gh.exe"}:
             assert kwargs["cwd"] == self.project
             assert command[1:] == ["release", "view", "v1.0.0", "--repo", self.repository,
                                    "--json", "tagName,isDraft,isPrerelease,publishedAt,url"]
@@ -162,7 +163,7 @@ def invoke_save(native, *, apply=False, store=None, extra=(), snapshot_error=Non
     output = io.StringIO()
     snapshot = {"sha256": "a" * 64, "inputVersion": "b" * 64, "version": version,
                 "sourceCommit": "c" * 40, "sourceDirty": False, "metadataSource": {"repository": "owner/repo"},
-                "pluginPath": "/snapshots/example", "packageName": "example", "accountMode": "RELEASE",
+                "pluginPath": str(Path("/snapshots/example")), "packageName": "example", "accountMode": "RELEASE",
                 "releaseRef": "refs/tags/v1.0.0"}
     class Temporary(io.BytesIO):
         name = "/mapping-temp"
@@ -213,7 +214,7 @@ def invoke_save(native, *, apply=False, store=None, extra=(), snapshot_error=Non
             patch.object(Path, "replace", replace), patch.object(Path, "exists", return_value=False), \
             patch.object(Path, "unlink"), patch("os.fsync"), \
             patch("tempfile.NamedTemporaryFile", side_effect=lambda **kwargs: Temporary()), \
-            patch("tempfile.mkdtemp", return_value="/delivery/.release-account-test"), \
+            patch("tempfile.mkdtemp", return_value=str(Path("/delivery/.release-account-test"))), \
             patch.object(Path, "mkdir"), patch.object(Path, "is_dir", return_value=True), \
             patch("shutil.rmtree", side_effect=lambda path: store.setdefault("deliveryRemoved", []).append(str(path))), \
             patch.dict(entry.__globals__, replacements), \
@@ -248,7 +249,7 @@ class PluginAccountEntryTests(unittest.TestCase):
             with self.subTest(action=action), \
                     patch.object(Path, "open", side_effect=FileExistsError("mapping.json.lock exists")) as lock, \
                     patch("subprocess.Popen") as client, patch.object(Path, "mkdir"), \
-                    patch("tempfile.mkdtemp", return_value="/delivery/.release-account-test"), \
+                    patch("tempfile.mkdtemp", return_value=str(Path("/delivery/.release-account-test"))), \
                     patch("shutil.rmtree"), \
                     patch.dict(entry.__globals__, {"unpack_delivery_bundle": lambda *args: Path("/snapshots.json")}), \
                     contextlib.redirect_stdout(output):
@@ -279,7 +280,7 @@ class PluginAccountSaveEntryTests(unittest.TestCase):
         native = NativeSaveClients()
         code, events, store = invoke_save(native, apply=True)
         self.assertEqual(code, 0)
-        self.assertEqual(store["deliveryRemoved"], ["/delivery/.release-account-test"])
+        self.assertEqual(store["deliveryRemoved"], [str(Path("/delivery/.release-account-test"))])
         self.assertNotIn("retainedDirectory", events[-1])
 
     def test_unpack_and_save_share_the_original_deadline_without_resetting_it(self):
@@ -295,7 +296,7 @@ class PluginAccountSaveEntryTests(unittest.TestCase):
         self.assertEqual(store["unpackDeadline"], 1600.0)
         self.assertEqual(store["snapshotDeadlines"], [1600.0, 1600.0])
         self.assertEqual(len(native.writes), 1)
-        self.assertEqual(store["deliveryRemoved"], ["/delivery/.release-account-test"])
+        self.assertEqual(store["deliveryRemoved"], [str(Path("/delivery/.release-account-test"))])
 
     def test_expired_extraction_filter_stops_before_account_calls_and_cleans_up(self):
         native = NativeSaveClients()
@@ -319,7 +320,7 @@ class PluginAccountSaveEntryTests(unittest.TestCase):
         self.assertIn("budget exhausted", events[-1]["error"])
         self.assertEqual(native.starts, 0)
         self.assertEqual(native.writes, [])
-        self.assertEqual(store["deliveryRemoved"], ["/delivery/.release-account-test"])
+        self.assertEqual(store["deliveryRemoved"], [str(Path("/delivery/.release-account-test"))])
         self.assertNotIn("retainedDirectory", events[-1])
         data_filter.assert_not_called()
 
@@ -330,7 +331,7 @@ class PluginAccountSaveEntryTests(unittest.TestCase):
                 code, events, store = invoke_save(native, apply=True, **options)
                 self.assertEqual(code, 1)
                 self.assertEqual(native.writes, [])
-                self.assertEqual(store["deliveryRemoved"], ["/delivery/.release-account-test"])
+                self.assertEqual(store["deliveryRemoved"], [str(Path("/delivery/.release-account-test"))])
                 self.assertNotIn("retainedDirectory", events[-1])
 
     def test_unknown_or_unverified_delivery_retains_the_exact_temporary_directory(self):
@@ -341,7 +342,7 @@ class PluginAccountSaveEntryTests(unittest.TestCase):
                 code, events, store = invoke_save(native, apply=True)
                 self.assertEqual(code, 1)
                 self.assertIn(events[-1]["status"], {"unknown", "unverified"})
-                self.assertEqual(events[-1]["retainedDirectory"], "/delivery/.release-account-test")
+                self.assertEqual(Path(events[-1]["retainedDirectory"]), Path("/delivery/.release-account-test"))
                 self.assertNotIn("deliveryRemoved", store)
                 self.assertEqual(len(native.writes), 1)
 
@@ -363,7 +364,7 @@ class PluginAccountSaveEntryTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(events[0]["event"], "before_account_save")
         self.assertEqual(events[-1]["status"], "saved")
-        self.assertEqual(native.last_params, {"pluginPath": "/snapshots/example", "discoverability": "PRIVATE", "shareTargets": []})
+        self.assertEqual(native.last_params, {"pluginPath": str(Path("/snapshots/example")), "discoverability": "PRIVATE", "shareTargets": []})
         source = json.loads(store["content"])["plugins"]["example"]["account"]["RELEASE"]
         self.assertEqual(source["remotePluginId"], "Remote_created")
         self.assertEqual(source["saveState"]["status"], "verified")
@@ -429,7 +430,7 @@ class PluginAccountSaveEntryTests(unittest.TestCase):
             code, events, store = invoke_save(native, apply=True, store=store, version=version)
             self.assertEqual(code, 0)
             self.assertEqual(events[-1]["operation"], "update")
-            self.assertEqual(native.last_params, {"pluginPath": "/snapshots/example", "remotePluginId": "Remote_created"})
+            self.assertEqual(native.last_params, {"pluginPath": str(Path("/snapshots/example")), "remotePluginId": "Remote_created"})
             self.assertEqual(events[-1]["before"]["permissions"]["status"], "not_available")
             self.assertEqual(events[-1]["after"]["permissions"]["status"], "not_available")
             source = json.loads(store["content"])["plugins"]["example"]["account"]["RELEASE"]
@@ -449,7 +450,7 @@ class PluginAccountSaveEntryTests(unittest.TestCase):
         code, events, _ = invoke_save(native, apply=True, store=store, version="0.0.3")
         self.assertEqual(code, 0)
         self.assertEqual(events[-1]["operation"], "update")
-        self.assertEqual(native.last_params, {"pluginPath": "/snapshots/example", "remotePluginId": "Remote_created"})
+        self.assertEqual(native.last_params, {"pluginPath": str(Path("/snapshots/example")), "remotePluginId": "Remote_created"})
         source = json.loads(store["content"])["plugins"]["example"]["account"]["RELEASE"]
         self.assertEqual(source["version"], "0.0.3")
         self.assertEqual(source["saveState"]["snapshot"]["releaseRef"], "refs/tags/v1.0.0")
@@ -877,13 +878,13 @@ class SnapshotSaveValidationTests(unittest.TestCase):
             return entry("/snapshots/snapshots.json", "example", expected or digest, mode, __import__("time").monotonic() + 30)
 
     def test_accepts_complete_reviewed_archive_and_matching_directory(self):
-        self.assertEqual(self.validate()["pluginPath"], "/snapshots/example")
+        self.assertEqual(Path(self.validate()["pluginPath"]), Path("/snapshots/example"))
 
     def test_relocates_unchanged_windows_or_unix_bundle_paths(self):
         for recorded_path in ("/previous-machine/build/example", r"C:\runner\build\example"):
             with self.subTest(recorded_path=recorded_path):
                 snapshot = self.validate(recorded_path=recorded_path)
-                self.assertEqual(snapshot["pluginPath"], "/snapshots/example")
+                self.assertEqual(Path(snapshot["pluginPath"]), Path("/snapshots/example"))
                 self.assertEqual(snapshot["releaseRef"], "refs/tags/v1.0.0")
                 self.assertEqual(snapshot["sourceCommit"], "c" * 40)
 
@@ -905,6 +906,7 @@ class SnapshotSaveValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "content or executable mode mismatch"):
             self.validate(corrupt=True)
 
+    @unittest.skipIf(os.name == "nt", "Windows does not expose POSIX executable bits")
     def test_rejects_lost_executable_modes_without_repairing_them(self):
         with patch.object(Path, "chmod") as chmod:
             with self.assertRaisesRegex(Exception, "content or executable mode mismatch"):
@@ -1037,8 +1039,8 @@ class PublishedAccountReleaseTests(unittest.TestCase):
                 self.assertNotIn("temporary", store)
 
     def test_published_lightweight_or_peeled_tag_can_deliver_without_a_ci_run_id(self):
-        for annotated in (False, True):
-            with self.subTest(annotated=annotated):
+        for annotated, executable in ((False, "gh"), (True, "gh"), (False, r"C:\Program Files\GitHub CLI\gh.EXE")):
+            with self.subTest(annotated=annotated, executable=executable), patch("shutil.which", return_value=executable):
                 native = NativeSaveClients()
                 commands = PublishedReleaseCommands(annotated=annotated)
                 code, events, _ = invoke_save(native, apply=True, release_commands=commands)

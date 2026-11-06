@@ -38,7 +38,7 @@ def snapshot_source(tmp_path, *, legacy_registry=False, release_ref=None, execut
     # Detect accidental injection from the packer's own checkout instead of --project.
     shared = project / "plugins/tool-lifecycle/python/management.py"
     shared.write_text(shared.read_text() + "\n# Isolated snapshot source\n")
-    if executable_probe:
+    if executable_probe and os.name != "nt":
         (project / executable_probe).chmod(0o755)
     for arguments in (("init", "-q"), ("add", "plugins"),
                       ("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
@@ -112,9 +112,10 @@ class TestWorkspace:
                                for plugin in stored.values() for item in plugin["account"].values())
                     package = Path(params["pluginPath"])
                     assert package.parent.parent == delivery
-                    assert package.parent.stat().st_mode & 0o077 == 0
-                    if package.name == Path(snapshots["plugin-sync"]["artifact"]).stem:
-                        assert (package / probe).stat().st_mode & 0o111 == 0o111
+                    if os.name != "nt":
+                        assert package.parent.stat().st_mode & 0o077 == 0
+                        if package.name == Path(snapshots["plugin-sync"]["artifact"]).stem:
+                            assert (package / probe).stat().st_mode & 0o111 == 0o111
                     cloud = json.loads((package / ".codex-plugin/plugin.json").read_text())
                     remote_id = params.get("remotePluginId", "Remote_" + cloud["name"])
                     self.writes.append((method, dict(params)))
@@ -456,7 +457,7 @@ class TestWorkspace:
         final = json.loads((output / "snapshots.json").read_text())["plugins"]
         assert final["pr-flow"] == original["pr-flow"]
         with zipfile.ZipFile(output / final["data-store"]["artifact"]) as archive:
-            assert archive.read("skills/data-store/SKILL.md").endswith(b"Snapshot update\n")
+            assert archive.read("skills/data-store/SKILL.md") == skill.read_bytes()
             assert "skills/data-store/scripts/data_store.py" in archive.namelist()
             assert "skills/data-store/requirements.txt" in archive.namelist()
 
