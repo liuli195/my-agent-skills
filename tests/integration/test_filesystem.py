@@ -119,6 +119,12 @@ class TestWorkspace:
             assert stored["plugins"]["plugin-sync"]["account"]["DEV"]["packageName"] == "plugin-sync-dev"
             assert stored["plugins"]["plugin-sync"]["account"]["RELEASE"]["packageName"] == "plugin-sync"
             assert len(native.objects) == 2 and all(not item["installed"] for item in native.objects)
+            code, events = invoke("DEV")
+            assert code == 0 and events[-1]["operation"] == "update"
+            assert native.writes[-1][1] == {"pluginPath": snapshots["DEV"]["plugin-sync"]["pluginPath"], "remotePluginId": "Remote_plugin-sync-dev"}
+            updated = json.loads(mapping.read_text())["plugins"]["plugin-sync"]["account"]["DEV"]["saveState"]
+            assert updated["privateCreationRequest"] == {"discoverability": "PRIVATE", "shareTargets": []}
+            assert updated["permissions"]["status"] == "not_available"
             original = mapping.read_bytes()
             count = len(native.writes)
             native.personal = False
@@ -145,7 +151,7 @@ class TestWorkspace:
             assert events[-1]["privateCreationRequest"] == {"status": "not_recorded"}
             assert json.loads(mapping.read_text())["plugins"]["plugin-sync"]["account"]["DEV"]["saveState"]["status"] == "verified"
             assert len(native.writes) == count
-            assert invoke("DEV")[0] == 1  # Personal permissions remain unavailable for a new update.
+            assert invoke("DEV")[0] == 1  # A legacy record without creation evidence is not auto-upgraded.
             lock.write_text("another invocation")
             assert invoke("DEV", action="switch")[0] == 1
             assert invoke("DEV")[0] == 1

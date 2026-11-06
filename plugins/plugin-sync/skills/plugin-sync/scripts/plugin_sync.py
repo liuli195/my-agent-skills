@@ -438,8 +438,13 @@ def save_account(args: argparse.Namespace) -> int:
             return 0
         if remote_id:
             report["before"] = account_object(catalog, remote_id, package_name, source["version"])
-            if report["before"]["permissions"]["status"] != "verified":
-                raise SwitchError("existing personal account permissions are not available in this client; update blocked until independently verified")
+            previous = source.get("saveState", {})
+            if (previous.get("status") != "verified" or previous.get("operation") not in ("create", "update")
+                    or previous.get("responseRemotePluginId") != remote_id or previous.get("responseSchemaVerified") is False
+                    or previous.get("privateCreationRequest") != {"discoverability": "PRIVATE", "shareTargets": []}
+                    or previous.get("snapshot", {}).get("packageName") != package_name
+                    or previous.get("snapshot", {}).get("version") != source["version"]):
+                raise SwitchError("update requires this object's verified private creation record; unknown provenance remains blocked")
         elif any(item.get("name") == package_name for item in catalog):
             raise SwitchError("an account object with this package name already exists; verify and map its real ID before creation")
         report["operation"] = "update" if remote_id else "create"
@@ -452,8 +457,8 @@ def save_account(args: argparse.Namespace) -> int:
 
         state = {"status": "pending", "operationId": str(uuid.uuid4()), "operation": report["operation"],
                  "remotePluginId": remote_id, "snapshot": report["snapshot"]}
-        if not remote_id:
-            state["privateCreationRequest"] = {"discoverability": "PRIVATE", "shareTargets": []}
+        # Preserve actual creation request evidence, not a claim about the object's current audience.
+        state["privateCreationRequest"] = previous["privateCreationRequest"] if remote_id else {"discoverability": "PRIVATE", "shareTargets": []}
         source["saveState"] = state
         original = write_mapping(path, manifest, original)  # A crash after this point blocks repeats even across invocations.
         report["saveState"] = state

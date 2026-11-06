@@ -445,6 +445,7 @@ class NativeSaveClients(NativeSwitchClients):
         super().__init__()
         self.objects = []
         self.save_result = {"remotePluginId": "Remote_created", "shareUrl": "https://example.test/private"}
+        self.save_version = "0.0.2"
         self.lose_save_response = False
         self.save_error = False
         self.post_collision = False
@@ -483,7 +484,7 @@ class NativeSaveClients(NativeSwitchClients):
             self.writes.append((method, params.get("remotePluginId")))
             remote_id = params.get("remotePluginId", "Remote_created")
             self.objects = [item for item in self.objects if item["remotePluginId"] != remote_id]
-            self.objects.append(save_object(remote_id))
+            self.objects.append(save_object(remote_id, version=self.save_version))
             if self.save_error:
                 raise RuntimeError("save failed after effect")
             return self.save_result
@@ -496,11 +497,11 @@ def save_object(remote_id="Remote_created", version="0.0.2"):
             "shareContext": {"remotePluginId": remote_id, "discoverability": "PRIVATE", "sharePrincipals": []}}
 
 
-def invoke_save(native, *, apply=False, store=None, extra=(), snapshot_error=None, action="save-account"):
+def invoke_save(native, *, apply=False, store=None, extra=(), snapshot_error=None, action="save-account", version="0.0.2"):
     entry = runpy.run_path(str(PLUGIN_SYNC_ROOT / "scripts" / "plugin_sync.py"))["main"]
     store = store if store is not None else {"content": json.dumps({"plugins": {"example": {"account": {"DEV": {}}}}}).encode()}
     output = io.StringIO()
-    snapshot = {"sha256": "a" * 64, "inputVersion": "b" * 64, "version": "0.0.2",
+    snapshot = {"sha256": "a" * 64, "inputVersion": "b" * 64, "version": version,
                 "sourceCommit": "c" * 40, "sourceDirty": True, "metadataSource": {"repository": "owner/repo"},
                 "pluginPath": "/snapshots/example", "packageName": "example-dev", "accountMode": "DEV"}
     class Temporary(io.BytesIO):
@@ -583,15 +584,92 @@ class PluginAccountSaveEntryTests(unittest.TestCase):
         self.assertEqual(permissions["scope"], "USER")
         self.assertEqual(permissions["status"], "not_available")
 
-    def test_personal_update_with_unavailable_permissions_remains_blocked(self):
+    def test_personal_update_without_private_creation_record_remains_blocked(self):
         native = NativeSaveClients()
         native.personal = True
         native.objects = [save_object(version="0.0.1")]
         mapping = {"plugins": {"example": {"account": {"DEV": {"remotePluginId": "Remote_created", "version": "0.0.1"}}}}}
         code, events, _ = invoke_save(native, apply=True, store={"content": json.dumps(mapping).encode()})
         self.assertEqual(code, 1)
-        self.assertIn("update blocked", events[-1]["error"])
+        self.assertIn("private creation record", events[-1]["error"])
         self.assertEqual(native.writes, [])
+
+    def test_recorded_personal_creation_can_update_without_faking_audience_verification(self):
+        native = NativeSaveClients()
+        code, _, store = invoke_save(native, apply=True)
+        self.assertEqual(code, 0)
+        for version in ("0.0.3", "0.0.4"):
+            native.save_version = version
+            code, events, store = invoke_save(native, apply=True, store=store, version=version)
+            self.assertEqual(code, 0)
+            self.assertEqual(events[-1]["operation"], "update")
+            self.assertEqual(native.last_params, {"pluginPath": "/snapshots/example", "remotePluginId": "Remote_created"})
+            self.assertEqual(events[-1]["before"]["permissions"]["status"], "not_available")
+            self.assertEqual(events[-1]["after"]["permissions"]["status"], "not_available")
+            source = json.loads(store["content"])["plugins"]["example"]["account"]["DEV"]
+            self.assertEqual(source["version"], version)
+            self.assertEqual(source["saveState"]["privateCreationRequest"], {"discoverability": "PRIVATE", "shareTargets": []})
+            self.assertEqual(source["saveState"]["status"], "verified")
+        self.assertEqual(len(native.writes), 3)
+        self.assertFalse(any(method in native.methods for method in ("plugin/read", "plugin/share/list", "mcpServer/tool/call")))
+
+    def test_private_creation_record_does_not_override_identity_or_permission_conflicts(self):
+        native = NativeSaveClients()
+        _, _, store = invoke_save(native, apply=True)
+        original = store["content"]
+        for metadata in ({"remotePluginId": "Wrong"}, {"name": "wrong"}, {"version": "wrong"},
+                         {"scope": "WORKSPACE"}, {"discoverability": "UNLISTED"}, {"shareContext": {}}):
+            with self.subTest(metadata=metadata):
+                native.catalog_metadata = metadata
+                code, _, _ = invoke_save(native, apply=True, store=store)
+                self.assertEqual(code, 1)
+                self.assertEqual(store["content"], original)
+                self.assertEqual(len(native.writes), 1)
+
+    def test_update_rejects_missing_mismatched_or_nonprivate_creation_record(self):
+        native = NativeSaveClients()
+        _, _, store = invoke_save(native, apply=True)
+        baseline = json.loads(store["content"])
+        for field, value in (("privateCreationRequest", None), ("privateCreationRequest", {"status": "not_recorded"}),
+                             ("privateCreationRequest", {"discoverability": "UNLISTED", "shareTargets": []}),
+                             ("privateCreationRequest", {"discoverability": "PRIVATE", "shareTargets": ["reader"]}),
+                             ("responseRemotePluginId", "Wrong"), ("responseSchemaVerified", False)):
+            with self.subTest(field=field, value=value):
+                mapping = copy.deepcopy(baseline)
+                mapping["plugins"]["example"]["account"]["DEV"]["saveState"][field] = value
+                case = {"content": json.dumps(mapping).encode()}
+                original = case["content"]
+                code, _, _ = invoke_save(native, apply=True, store=case)
+                self.assertEqual(code, 1)
+                self.assertEqual(case["content"], original)
+                self.assertEqual(len(native.writes), 1)
+
+    def test_update_response_id_conflict_retains_mapping_and_blocks_repeated_save(self):
+        native = NativeSaveClients()
+        _, _, store = invoke_save(native, apply=True)
+        native.save_result["remotePluginId"] = "Unexpected"
+        code, events, store = invoke_save(native, apply=True, store=store)
+        self.assertEqual(code, 1)
+        self.assertEqual(events[-1]["status"], "unverified")
+        source = json.loads(store["content"])["plugins"]["example"]["account"]["DEV"]
+        self.assertEqual(source["remotePluginId"], "Remote_created")
+        self.assertEqual(source["saveState"]["responseRemotePluginId"], "Unexpected")
+        invoke_save(native, apply=True, store=store)
+        self.assertEqual(len(native.writes), 2)
+
+    def test_update_response_timeout_keeps_creation_evidence_and_blocks_repeated_save(self):
+        native = NativeSaveClients()
+        _, _, store = invoke_save(native, apply=True)
+        native.lose_save_response = True
+        code, events, store = invoke_save(native, apply=True, store=store)
+        self.assertEqual(code, 1)
+        self.assertEqual(events[-1]["status"], "unknown")
+        source = json.loads(store["content"])["plugins"]["example"]["account"]["DEV"]
+        self.assertEqual(source["remotePluginId"], "Remote_created")
+        self.assertEqual(source["saveState"]["status"], "pending")
+        self.assertEqual(source["saveState"]["privateCreationRequest"], {"discoverability": "PRIVATE", "shareTargets": []})
+        invoke_save(native, apply=True, store=store)
+        self.assertEqual(len(native.writes), 2)
 
     def test_personal_null_context_does_not_override_explicit_nonprivate_or_scope_conflicts(self):
         for metadata in ({"discoverability": "UNLISTED"}, {"scope": "WORKSPACE"}):
