@@ -318,8 +318,8 @@ def verified_snapshot(path: str, plugin: str, expected: str, mode: str, deadline
     return snapshot
 
 
-def account_inventory(server: AppServer) -> list[dict]:
-    response = server.call("plugin/list", {"marketplaceKinds": ["created-by-me-remote"], "forceRefetch": True})
+def account_inventory(server: AppServer, timeout: float | None = None) -> list[dict]:
+    response = server.call("plugin/list", {"marketplaceKinds": ["created-by-me-remote"], "forceRefetch": True}, timeout=timeout)
     if response.get("marketplaceLoadErrors"):
         raise SwitchError("account inventory is incomplete; marketplace loading failed")
     return [item for market in response["marketplaces"] for item in market["plugins"]]
@@ -389,8 +389,8 @@ def save_account(args: argparse.Namespace) -> int:
     server = None
     deadline = time.monotonic() + 600
     try:
-        if not 0 < args.timeout <= 120:
-            raise SwitchError("request timeout must be positive and <=120s")
+        if not 0 < args.timeout <= 120 or not 0 < args.ready_timeout <= 300 or not 0 < args.poll_interval <= 10:
+            raise SwitchError("timeouts must be positive and bounded (request <=120s, readiness <=300s, poll <=10s)")
         path = Path(args.manifest).resolve()
         original = path.read_bytes()
         manifest = json.loads(original)
@@ -480,8 +480,22 @@ def save_account(args: argparse.Namespace) -> int:
         original = write_mapping(path, manifest, original)
         if not isinstance(result.get("shareUrl"), str):
             raise SwitchError("save response is incomplete; object recorded but not verified")
-        catalog = account_inventory(server)
-        report["after"] = account_object(catalog, returned, package_name, snapshot["version"])
+        visibility_deadline = min(deadline, time.monotonic() + min(args.ready_timeout, 10))
+        report["directoryReads"] = 0
+        while True:
+            remaining = visibility_deadline - time.monotonic()
+            if remaining <= 0:
+                raise SwitchError("account directory visibility timeout; response ID retained and no save retry is allowed")
+            report["directoryReads"] += 1
+            catalog = account_inventory(server, timeout=remaining)
+            if any(item.get("remotePluginId") == returned for item in catalog):
+                # Only absence can be transient. Identity, version or permission conflicts stop immediately.
+                report["after"] = account_object(catalog, returned, package_name, snapshot["version"])
+                break
+            remaining = visibility_deadline - time.monotonic()
+            if remaining <= 0:
+                raise SwitchError("account directory visibility timeout; response ID retained and no save retry is allowed")
+            time.sleep(min(args.poll_interval, remaining))
         state.update(status="verified", permissions=report["after"]["permissions"])
         original = write_mapping(path, manifest, original)
         report["status"] = "saved"

@@ -363,6 +363,8 @@ class NativeSwitchClients:
                     response = {"id": request["id"], "error": {"message": str(error)}}
                 if getattr(owner, "lose_save_response", False) and request["method"] == "plugin/share/save":
                     return
+                if getattr(owner, "lose_post_list_response", False) and owner.writes and request["method"] == "plugin/list":
+                    return
                 messages.put(json.dumps(response) + "\n")
             def flush(self):
                 pass
@@ -447,6 +449,10 @@ class NativeSaveClients(NativeSwitchClients):
         self.save_error = False
         self.post_collision = False
         self.post_hidden = False
+        self.post_missing_reads = 0
+        self.post_reads = 0
+        self.post_read_error = False
+        self.lose_post_list_response = False
         self.last_params = None
         self.personal = True
         self.catalog_metadata = {}
@@ -459,6 +465,10 @@ class NativeSaveClients(NativeSwitchClients):
         if method == "plugin/share/list":
             return {"data": [{"plugin": copy.deepcopy(item)} for item in self.objects]}
         if method == "plugin/list":
+            if self.writes:
+                self.post_reads += 1
+                if self.post_read_error:
+                    raise RuntimeError("catalog query failed")
             values = copy.deepcopy(self.objects)
             for item in values:
                 if self.personal:
@@ -466,7 +476,8 @@ class NativeSaveClients(NativeSwitchClients):
                 item.update(self.catalog_metadata)
             if self.writes and self.post_collision:
                 values.append({**values[0], "remotePluginId": "Unrelated"})
-            return {"marketplaces": [{"plugins": [] if self.writes and self.post_hidden else values}]}
+            hidden = self.writes and (self.post_hidden or self.post_reads <= self.post_missing_reads)
+            return {"marketplaces": [{"plugins": [] if hidden else values}]}
         if method == "plugin/share/save":
             self.last_params = params
             self.writes.append((method, params.get("remotePluginId")))
@@ -502,7 +513,8 @@ def invoke_save(native, *, apply=False, store=None, extra=(), snapshot_error=Non
     def replace(_path, _target):
         store["content"] = store["temporary"]
     args = ["--action", action, "--manifest", "/mapping.json", "--snapshots", "/snapshots.json",
-            "--expected-sha256", "a" * 64, "--plugin", "example", "--mode", "DEV", "--timeout", "0.1" if native.lose_save_response else "1", *extra]
+            "--expected-sha256", "a" * 64, "--plugin", "example", "--mode", "DEV", "--timeout", "0.1" if native.lose_save_response else "1",
+            "--ready-timeout", "0.02", "--poll-interval", "0.001", *extra]
     if apply:
         args.append("--apply")
     with patch.object(Path, "read_bytes", side_effect=lambda: store["content"]), \
@@ -591,6 +603,7 @@ class PluginAccountSaveEntryTests(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertEqual(events[-1]["status"], "unverified")
                 self.assertEqual(len(native.writes), 1)
+                self.assertEqual(native.post_reads, 1)
 
     def test_reconcile_known_personal_success_reads_only_and_can_update_local_state(self):
         native = NativeSaveClients()
@@ -719,6 +732,7 @@ class PluginAccountSaveEntryTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(events[-1]["status"], "unverified")
         self.assertIn("conflicts", events[-1]["error"])
+        self.assertEqual(native.post_reads, 1)
         source = json.loads(store["content"])["plugins"]["example"]["account"]["DEV"]
         self.assertEqual(source["remotePluginId"], "Remote_created")
         self.assertEqual(source["saveState"]["responseRemotePluginId"], "Remote_created")
@@ -731,6 +745,49 @@ class PluginAccountSaveEntryTests(unittest.TestCase):
         code, events, store = invoke_save(native, apply=True)
         self.assertEqual(code, 1)
         self.assertEqual(events[-1]["status"], "unverified")
+        self.assertGreater(native.post_reads, 1)
+        source = json.loads(store["content"])["plugins"]["example"]["account"]["DEV"]
+        self.assertEqual(source["remotePluginId"], "Remote_created")
+        self.assertEqual(source["saveState"]["status"], "unverified")
+        invoke_save(native, apply=True, store=store)
+        self.assertEqual(len(native.writes), 1)
+
+    def test_save_waits_only_for_missing_directory_item_without_repeating_the_write(self):
+        native = NativeSaveClients()
+        native.post_missing_reads = 2
+        code, events, store = invoke_save(native, apply=True)
+        self.assertEqual(code, 0)
+        self.assertEqual(events[-1]["status"], "saved")
+        self.assertEqual(events[-1]["directoryReads"], 3)
+        self.assertEqual(native.post_reads, 3)
+        self.assertEqual(len(native.writes), 1)
+        source = json.loads(store["content"])["plugins"]["example"]["account"]["DEV"]
+        self.assertEqual(source["remotePluginId"], "Remote_created")
+        self.assertEqual(source["saveState"]["status"], "verified")
+
+    def test_post_save_query_failure_stops_and_keeps_unverified_id(self):
+        native = NativeSaveClients()
+        native.post_read_error = True
+        code, events, store = invoke_save(native, apply=True)
+        self.assertEqual(code, 1)
+        self.assertIn("catalog query failed", events[-1]["error"])
+        self.assertEqual(native.post_reads, 1)
+        source = json.loads(store["content"])["plugins"]["example"]["account"]["DEV"]
+        self.assertEqual(source["remotePluginId"], "Remote_created")
+        self.assertEqual(source["saveState"]["status"], "unverified")
+        invoke_save(native, apply=True, store=store)
+        self.assertEqual(len(native.writes), 1)
+
+    def test_post_save_query_timeout_is_bounded_and_never_retries_the_write(self):
+        native = NativeSaveClients()
+        native.lose_post_list_response = True
+        code, events, store = invoke_save(native, apply=True)
+        self.assertEqual(code, 1)
+        self.assertIn("timeout: plugin/list", events[-1]["error"])
+        self.assertEqual(native.post_reads, 1)
+        source = json.loads(store["content"])["plugins"]["example"]["account"]["DEV"]
+        self.assertEqual(source["remotePluginId"], "Remote_created")
+        self.assertEqual(source["saveState"]["status"], "unverified")
         invoke_save(native, apply=True, store=store)
         self.assertEqual(len(native.writes), 1)
 
