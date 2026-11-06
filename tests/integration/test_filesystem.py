@@ -451,6 +451,11 @@ class TestWorkspace:
 
         skill = project / "plugins/data-store/skills/data-store/SKILL.md"
         skill.write_text(skill.read_text() + "\nSnapshot update\n")
+        added = skill.with_name("snapshot-added.txt")
+        added.write_bytes(b"untracked plugin input\n")
+        (project / "unrelated.txt").write_bytes(b"outside every release input\n")
+        (project / ".git/info/exclude").write_text("*.ignored\n")
+        skill.with_name("snapshot.ignored").write_bytes(b"ignored plugin input\n")
         changed = run_snapshots(project, output)
         assert changed.returncode == 0, changed.stdout + changed.stderr
         assert json.loads(changed.stdout)["built"] == ["data-store"]
@@ -458,6 +463,9 @@ class TestWorkspace:
         assert final["pr-flow"] == original["pr-flow"]
         with zipfile.ZipFile(output / final["data-store"]["artifact"]) as archive:
             assert archive.read("skills/data-store/SKILL.md") == skill.read_bytes()
+            assert archive.read("skills/data-store/snapshot-added.txt") == added.read_bytes()
+            assert "unrelated.txt" not in archive.namelist()
+            assert "skills/data-store/snapshot.ignored" not in archive.namelist()
             assert "skills/data-store/scripts/data_store.py" in archive.namelist()
             assert "skills/data-store/requirements.txt" in archive.namelist()
 

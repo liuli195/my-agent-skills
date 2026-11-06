@@ -109,7 +109,13 @@ def _git(project: Path, *arguments: str) -> str:
     return result.stdout
 
 
-def _snapshot_inputs(project: Path, name: str, record: dict) -> tuple[Path, list[Path], str]:
+def _snapshot_files(project: Path, registry: dict) -> list[str]:
+    paths = sorted({path for record in registry.values() for path in record["releaseInputs"]})
+    return sorted(set(_git(project, "ls-files", "-z", "--cached", "--others",
+                           "--exclude-standard", "--", *paths).split("\0")) - {""})
+
+
+def _snapshot_inputs(project: Path, name: str, record: dict, source_files: list[str]) -> tuple[Path, list[Path], str]:
     paths = record["releaseInputs"]
     for raw in paths:
         relative = Path(raw)
@@ -121,9 +127,10 @@ def _snapshot_inputs(project: Path, name: str, record: dict) -> tuple[Path, list
     files = []
     digest = hashlib.sha256(json.dumps(record, sort_keys=True).encode())
     digest.update(Path(__file__).read_bytes())
-    for raw in sorted(set(_git(project, "ls-files", "-z", "--cached", "--others",
-                               "--exclude-standard", "--", *paths).split("\0")) - {""}):
+    for raw in source_files:
         relative = Path(raw)
+        if not any(relative.is_relative_to(Path(source)) for source in paths):
+            continue
         path = project / relative
         if not path.resolve().is_relative_to(project) or path.is_symlink():
             raise ValueError(f"snapshot_input_link: {raw}")
@@ -245,7 +252,8 @@ def snapshots(project: Path, output: Path, account_mode: str | None = None, rele
     registry = {name: record | {"snapshotRepository": repository} for name, record in flow.PLUGIN_REGISTRY.items()}
     if account_mode is not None:
         registry = {name: record | {"snapshotAccountMode": account_mode, "snapshotReleaseRef": release_ref} for name, record in registry.items()}
-    inputs = {name: _snapshot_inputs(project, name, record) for name, record in registry.items()}
+    source_files = _snapshot_files(project, registry)
+    inputs = {name: _snapshot_inputs(project, name, record, source_files) for name, record in registry.items()}
     if any(output.is_relative_to(project / root) for root, _files, _digest in inputs.values()):
         raise ValueError("snapshot_output_inside_release_input")
     output.mkdir(parents=True, exist_ok=True)
@@ -308,7 +316,8 @@ def snapshots(project: Path, output: Path, account_mode: str | None = None, rele
                 manifest["plugins"][name].update(accountMode=account_mode, packageName=name, releaseRef=release_ref)
             built.append(name)
         # A concurrent source edit must not publish a manifest for mixed inputs.
-        if any(_snapshot_inputs(project, name, record)[2] != inputs[name][2]
+        source_files = _snapshot_files(project, registry)
+        if any(_snapshot_inputs(project, name, record, source_files)[2] != inputs[name][2]
                for name, record in registry.items()):
             raise ValueError("snapshot_inputs_changed_during_build")
         if account_mode == "RELEASE" and (_git(project, "rev-parse", "HEAD").strip() != commit
