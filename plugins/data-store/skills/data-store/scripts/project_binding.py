@@ -17,8 +17,8 @@ def is_link(path):
     return stat.S_ISLNK(info.st_mode) or getattr(info, "st_reparse_tag", 0) == 0xA0000003
 
 
-def skill_root():
-    root = Path(__file__).resolve().parents[1]
+def skill_root(runtime=None):
+    root = Path(runtime).resolve(strict=True) if runtime is not None else Path(__file__).resolve().parents[1]
     for relative in ("SKILL.md", "scripts/data_store.py", "requirements.txt"):
         if not (root / relative).is_file():
             raise ValueError(f"安装不完整：{root / relative}")
@@ -123,13 +123,24 @@ def update_link(entry, target, expected):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("connect", "check", "update"))
-    parser.add_argument("--project", required=True, type=Path)
+    parser.add_argument("command", choices=("connect", "check", "update", "resolve"))
+    parser.add_argument("--project", type=Path)
+    parser.add_argument("--runtime", type=Path)
     parser.add_argument("--from", dest="expected", type=Path)
     args = parser.parse_args()
     if (args.command == "update") != (args.expected is not None):
         parser.error("仅 update 必须提供 --from 原来源")
+    if args.command == "resolve":
+        if (args.project is None) == (args.runtime is None):
+            parser.error("resolve requires exactly one of --project or --runtime")
+    elif args.project is None or args.runtime is not None:
+        parser.error("--project is required; --runtime is only valid for resolve")
     try:
+        if args.command == "resolve":
+            runtime = args.runtime if args.runtime is not None else project_entry(args.project)
+            target = skill_root(runtime)
+            print(json.dumps({"skillRoot": str(target), "script": str(target / "scripts/data_store.py")}, ensure_ascii=False))
+            return 0
         target = skill_root()
         entry = project_entry(args.project)
         if args.command == "update":
