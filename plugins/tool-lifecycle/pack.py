@@ -285,7 +285,13 @@ def snapshots(project: Path, output: Path, account_mode: str | None = None, rele
             package = temporary / name
             for relative in files:
                 if relative.is_relative_to(root):
-                    destination = package / relative.relative_to(root)
+                    package_relative = relative.relative_to(root)
+                    # Account uploads contain one plugin; npm packages retain their local markets.
+                    if (account_mode == "RELEASE" and record.get("releaseShape") == "npm"
+                            and package_relative.as_posix() in (
+                                ".agents/plugins/marketplace.json", ".claude-plugin/marketplace.json")):
+                        continue
+                    destination = package / package_relative
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(project / relative, destination)
             if record.get("commandTool") or record.get("releaseShape") == "npm":

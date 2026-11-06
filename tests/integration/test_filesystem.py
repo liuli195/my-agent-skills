@@ -81,6 +81,10 @@ class TestWorkspace:
                 assert any(path.endswith("/SKILL.md") for path in archive.namelist())
                 if (package / "package.json").exists():
                     assert archive.read("python/management.py") == shared
+                    for marketplace in (".agents/plugins/marketplace.json", ".claude-plugin/marketplace.json"):
+                        assert (project / "plugins" / name / marketplace).is_file()
+                        assert marketplace not in archive.namelist()
+                        assert not (package / marketplace).exists()
         # The one packaged runtime route exercises its included templates, not source assets.
         release = Path(snapshots["release-flow"]["pluginPath"]) / "skills/release-flow/scripts/release_flow.py"
         target = tmp_path / "runtime-project"
