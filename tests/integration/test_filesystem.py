@@ -79,8 +79,26 @@ class TestWorkspace:
                 assert cloud["name"] == name and cloud["interface"]["displayName"] == name
                 assert json.loads(archive.read(".claude-plugin/plugin.json"))["version"] == record["version"]
                 assert any(path.endswith("/SKILL.md") for path in archive.namelist())
+                source = project / "plugins" / name
+                expected = {path.relative_to(source).as_posix(): path for path in source.rglob("*")
+                            if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"}
+                if name in {"my-spec", "build-and-verify"}:
+                    for marketplace in (".agents/plugins/marketplace.json", ".claude-plugin/marketplace.json"):
+                        expected.pop(marketplace)
+                assert set(archive.namelist()) == set(expected)
+                directory = {path.relative_to(package).as_posix(): path for path in package.rglob("*") if path.is_file()}
+                assert set(directory) == set(expected)
+                for relative, original in expected.items():
+                    assert archive.read(relative) == directory[relative].read_bytes()
+                    if relative != ".codex-plugin/plugin.json" and not (
+                            name in {"my-spec", "build-and-verify"} and relative == "python/management.py"):
+                        assert archive.read(relative) == original.read_bytes()
                 if (package / "package.json").exists():
                     assert archive.read("python/management.py") == shared
+                    for marketplace in (".agents/plugins/marketplace.json", ".claude-plugin/marketplace.json"):
+                        assert (project / "plugins" / name / marketplace).is_file()
+                        assert marketplace not in archive.namelist()
+                        assert not (package / marketplace).exists()
         # The one packaged runtime route exercises its included templates, not source assets.
         release = Path(snapshots["release-flow"]["pluginPath"]) / "skills/release-flow/scripts/release_flow.py"
         target = tmp_path / "runtime-project"
