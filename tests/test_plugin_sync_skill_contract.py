@@ -33,9 +33,9 @@ def test_plugin_sync_prepares_one_creator_update_without_a_network_client():
                             managed_files=list(remote), inventory_complete=True)
 
 
-    state = {}
+    state = {"plugins": {"example": {"account": {"DEV": {"kept": True}}, "clientSource": "unchanged"}}}
     api["transition"](state, plan)
-    with pytest.raises(ValueError, match="unresolved"):
+    with pytest.raises(ValueError, match="already exists"):
         api["transition"](state, plan)
     receipt = {"status": "updated", "plugin_id": "plugins_existing", "version": "1.1.0",
                "scope": "USER", "discoverability": "PRIVATE", "release_id": "release_new"}
@@ -47,3 +47,32 @@ def test_plugin_sync_prepares_one_creator_update_without_a_network_client():
     api["transition"](state, plan, readback=after)
     assert state["operations"][plan["operationId"]]["status"] == "verified"
     assert state["operations"][plan["operationId"]]["installed"] == "not_verified"
+
+    assert state["plugins"]["example"]["account"]["DEV"] == {"kept": True}
+    assert state["plugins"]["example"]["clientSource"] == "unchanged"
+    before = repr(state)
+    with pytest.raises(ValueError, match="already exists"):
+        api["transition"](state, plan)
+    assert repr(state) == before
+
+    import hashlib
+    import json
+    another = api["prepare_plan"](snapshot, current, remote, target, managed_files=list(remote), inventory_complete=True)
+    pending = {}
+    api["transition"](pending, another)
+    error = {"isError": True, "message": "The expected release changed; no update was applied."}
+    proof = {"operationId": another["operationId"], "planSha256": another["planSha256"],
+             "tool": "update_plugin", "remotePluginId": "plugins_existing", "classification": "explicit_not_applied",
+             "officialError": error, "officialErrorSha256": hashlib.sha256(json.dumps(error, sort_keys=True, ensure_ascii=False).encode()).hexdigest(),
+             "notAppliedQuote": "no update was applied", "readAt": pending["operations"][another["operationId"]]["recordedAt"], "currentReadback": current}
+    api["transition"](pending, another, rejection=proof)
+    assert pending["operations"][another["operationId"]]["status"] == "rejected"
+    api["transition"](pending, plan)
+    old = {"status": "unverified", "operation": "create", "responseRemotePluginId": "plugins_existing",
+           "snapshot": {"packageName": "example", "version": "1.1.0", "sha256": "a" * 64}}
+    history = {"plugins": {"example": {"account": {"RELEASE": {"remotePluginId": "plugins_existing", "version": "1.1.0", "saveState": old}}}}}
+    api["reconcile_legacy"](history, "example", "RELEASE", receipt, {**after, "artifactSha256": "a" * 64})
+    assert old["status"] == "unverified" and old["resolution"]["status"] == "verified"
+    old["status"] = "pending"
+    with pytest.raises(ValueError, match="not proven"):
+        api["reconcile_legacy"](history, "example", "RELEASE", receipt, {**after, "artifactSha256": "a" * 64})

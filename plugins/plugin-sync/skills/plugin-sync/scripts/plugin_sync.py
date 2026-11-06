@@ -1,6 +1,7 @@
 """Offline preparation and receipts; Creator calls belong to the host skill."""
 from __future__ import annotations
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -180,23 +181,80 @@ def plan_digest(plan):
                                     sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def transition(state, plan, *, receipt=None, readback=None):
+def rejection_record(proof, operation_id, digest, tool, remote_id, recorded_at):
+    """Validate host-normalized evidence; never invent Creator error codes."""
+    error = proof.get("officialError", {})
+    raw = json.dumps(error, sort_keys=True, ensure_ascii=False)
+    quote = proof.get("notAppliedQuote")
+    try:
+        fresh = (datetime.fromisoformat(proof.get("readAt", "").replace("Z", "+00:00"))
+                 >= datetime.fromisoformat(recorded_at))
+    except (ValueError, TypeError):
+        fresh = False
+    current = proof.get("currentReadback", {})
+    if (proof.get("operationId") != operation_id or proof.get("planSha256") != digest
+            or proof.get("tool") != tool or proof.get("remotePluginId") != remote_id
+            or proof.get("classification") != "explicit_not_applied"
+            or not isinstance(error, dict) or error.get("isError") is not True
+            or proof.get("officialErrorSha256") != hashlib.sha256(raw.encode()).hexdigest()
+            or not isinstance(quote, str) or len(quote) < 10 or quote not in raw
+            or not fresh or not isinstance(current, dict)
+            or (remote_id and (current.get("plugin_id") != remote_id
+                or current.get("scope") != "USER" or current.get("discoverability") != "PRIVATE"
+                or not current.get("current_release_id")))):
+        raise ValueError("explicit official rejection evidence is incomplete; unknown remains blocked")
+    # The host must interpret this verbatim quote; a generic isError/timeout is not proof.
+    return {"status": "rejected", "evidence": proof}
+
+
+def reconcile_legacy(state, plugin, mode, success, readback):
+    source = state["plugins"][plugin]["account"][mode]
+    old = source["saveState"]
+    snapshot = old.get("snapshot", {})
+    remote_id = old.get("responseRemotePluginId")
+    if (old.get("status") != "unverified" or old.get("operation") not in ("create", "update")
+            or not remote_id or source.get("remotePluginId") != remote_id
+            or success.get("plugin_id", success.get("remotePluginId")) != remote_id
+            or success.get("version") != snapshot.get("version")
+            or not snapshot.get("sha256") or readback.get("artifactSha256") != snapshot["sha256"]
+            or not readback.get("complete") or not readback.get("files")
+            or readback.get("plugin_id") != remote_id or readback.get("name") != snapshot.get("packageName")
+            or source.get("version") != snapshot.get("version")
+            or readback.get("version") != snapshot.get("version")
+            or readback.get("scope") != "USER" or readback.get("discoverability") != "PRIVATE"
+            or not readback.get("current_release_id")):
+        raise ValueError("historical success and exact official content are not proven; record retained")
+    safe_files(readback["files"])
+    old["resolution"] = {"status": "verified", "officialSuccess": success, "readback": readback}
+    return state
+
+
+def transition(state, plan, *, receipt=None, readback=None, rejection=None):
     """Mark before host sends; only exact official readback can resolve a sent plan."""
     if plan.get("planSha256") != plan_digest(plan) or not plan.get("tool"):
         raise ValueError("plan changed or does not require a save")
     for mapping in state.get("plugins", {}).values():
         for source in mapping.get("account", {}).values():
-            if source.get("saveState", {}).get("status") not in (None, "verified"):
+            saved = source.get("saveState", {})
+            if (saved.get("status") not in (None, "verified")
+                    and saved.get("resolution", {}).get("status") not in ("verified", "rejected")):
                 raise ValueError("legacy unresolved save must be reconciled before another send")
     operations = state.setdefault("operations", {})
     operation = operations.get(plan["operationId"])
-    if receipt is None and readback is None:
+    if receipt is None and readback is None and rejection is None:
+        if operation is not None:
+            raise ValueError("operation already exists; never resend a recorded plan")
         if any(item.get("status") in ("pending", "unknown", "unverified") for item in operations.values()):
             raise ValueError("unresolved save; read back before any new send")
-        operations[plan["operationId"]] = {"status": "pending", "plan": plan}
+        operations[plan["operationId"]] = {"status": "pending", "plan": plan, "recordedAt": datetime.now(timezone.utc).isoformat()}
         return state
     if not operation or operation.get("plan") != plan or operation.get("status") not in ("pending", "unknown", "unverified"):
         raise ValueError("no matching unresolved operation")
+    if rejection is not None:
+        operation["resolution"] = rejection_record(rejection, plan["operationId"], plan["planSha256"],
+                                                    plan["tool"], plan["params"].get("plugin_id"), operation["recordedAt"])
+        operation["status"] = "rejected"
+        return state
     if receipt is not None:
         operation["receipt"] = receipt
     operation["readback"] = readback
@@ -232,9 +290,9 @@ def transition(state, plan, *, receipt=None, readback=None):
         return state
     operation.update(status="verified", currentReleaseId=release_id, reconciledFromReadback=not successful_receipt, installed="not_verified",
                      discovered="not_verified", runtime="not_verified")
-    state.setdefault("plugins", {})[plan["packageName"]] = {"remotePluginId": remote_id,
+    state.setdefault("plugins", {}).setdefault(plan["packageName"], {}).update({"remotePluginId": remote_id,
         "version": plan["version"], "currentReleaseId": release_id,
-        "sha256": plan["sha256"], "managedFiles": plan["files"]}
+        "sha256": plan["sha256"], "managedFiles": plan["files"]})
     return state
 
 
@@ -275,6 +333,11 @@ def main(argv=None):
         record.add_argument("--" + name, required=True)
     record.add_argument("--receipt")
     record.add_argument("--readback")
+    record.add_argument("--rejection-evidence")
+    legacy = commands.add_parser("reconcile-legacy")
+    for name in ("state", "plugin", "mode", "success", "readback"):
+        legacy.add_argument("--" + name, required=True)
+    legacy.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
     staging = None
     try:
@@ -307,17 +370,28 @@ def main(argv=None):
                 personal_context=personal, owned_plugins=owned.get("plugins", []))
             atomic_json(args.output, plan)
             print(json.dumps(plan, ensure_ascii=False))
+        elif args.action == "reconcile-legacy":
+            path = Path(args.state)
+            original = path.read_bytes()
+            state = reconcile_legacy(json.loads(original), args.plugin, args.mode,
+                                     read_json(args.success), read_json(args.readback))
+            if args.apply:
+                atomic_json(path, state, original)
+            print(json.dumps({"status": "reconciled" if args.apply else "checked", "accountWrites": 0}, ensure_ascii=False))
         else:
+            if args.rejection_evidence and (args.receipt or args.readback):
+                raise ValueError("rejection evidence and success/readback modes are exclusive")
             plan = read_json(args.plan)
             path = Path(args.state)
             original = path.read_bytes() if path.exists() else None
             state = json.loads(original) if original else {}
-            if not args.receipt and not args.readback:
+            if not args.receipt and not args.readback and not args.rejection_evidence:
                 archive = Path(plan["params"]["archive"])
                 if hashlib.sha256(archive.read_bytes()).hexdigest() != plan["sha256"]:
                     raise ValueError("reviewed archive changed; do not send")
             transition(state, plan, receipt=read_json(args.receipt) if args.receipt else None,
-                       readback=read_json(args.readback) if args.readback else None)
+                       readback=read_json(args.readback) if args.readback else None,
+                       rejection=read_json(args.rejection_evidence) if args.rejection_evidence else None)
             atomic_json(path, state, original)
             print(json.dumps(state, ensure_ascii=False))
         return 0

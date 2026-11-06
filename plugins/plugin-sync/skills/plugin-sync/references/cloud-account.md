@@ -34,3 +34,10 @@ Creator不提供客户端安装/卸载工具。Codex使用其已核实官方客�
 保存、安装、发现、运行四栏独立记录。已有对象更新失败不重建；未知先查、不盲重试。安装失败按原完整来源恢复，不以重新保存补偿。同步技能自身最后更新，预先保留计划/回执与旧入口，结束旧会话，由新会话确认新指令和来源后续接，不在旧上下文宣称已加载。
 
 当前开发授权只覆盖离线代码和检查。真实账号保存、客户端变更、任务运行迁移及精确清理须按后续明确授权逐项执行，不在开发期勾完。
+
+
+## 明确拒绝与历史记录收尾
+
+record可用--rejection-evidence处理与成功回执模式互斥的明确未应用证据。此JSON是宿主规范化记录，不是虚构的Creator错误格式：绑定operationId、planSha256、tool、remotePluginId，附完整officialError（isError）、按排序JSON计算的officialErrorSha256、从原文提取的notAppliedQuote、classification=explicit_not_applied及新读取时间readAt/currentReadback。宿主必须确认原文明确说明未应用；普通isError、超时、空列表或版本未变都不够，不能为解锁而填写证明。证据不明确就保留unknown；证据明确仅把该次操作记为rejected，不改对象版本或安装状态。后续重新读取并以新operationId准备，不能重发旧计划。
+
+reconcile-legacy --state <记录> --plugin <精确键> --mode <历史来源键> --success <原成功回执> --readback <新官方完整读取> 默认只核对，--apply仅追加本地resolution，不重写原saveState或历史回执。只有原unverified成功响应真实ID、旧目标版本及产物摘要/完整内容、个人私有和当前release均精确对应才可记verified；不要求补造私人创建参数。pending/unknown且没有明确结果继续停止，不靠同名、对象不存在或更高版本猜成功。历史明确拒绝需完整官方原文证据按同一规则单独核对，不能手动清空状态。全部账号写入仍为零。
