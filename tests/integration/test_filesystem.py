@@ -21,10 +21,17 @@ SCRIPT = REPO_ROOT / "scripts/setup-worktree.ps1"
 PACK = REPO_ROOT / "plugins/tool-lifecycle/pack.py"
 
 
-def snapshot_source(tmp_path):
+def snapshot_source(tmp_path, *, legacy_registry=False):
     project = tmp_path / "source"
     shutil.copytree(REPO_ROOT / "plugins", project / "plugins",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    if legacy_registry:
+        registry = project / "plugins/release-flow/skills/release-flow/scripts/release_flow.py"
+        registry.write_text("".join(line for line in registry.read_text().splitlines(keepends=True)
+                                    if '"commandTool":' not in line))
+    # Detect accidental injection from the packer's own checkout instead of --project.
+    shared = project / "plugins/tool-lifecycle/python/management.py"
+    shared.write_text(shared.read_text() + "\n# Isolated snapshot source\n")
     for arguments in (("init", "-q"), ("add", "plugins"),
                       ("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
                        "commit", "-qm", "snapshot source")):
@@ -116,8 +123,9 @@ class TestWorkspace:
         assert not list(output.glob("*.zip"))
         assert not (output / "snapshots.json").exists()
 
-    def test_plugin_snapshots_build_complete_packages_from_the_shared_registry(self, tmp_path):
-        project = snapshot_source(tmp_path)
+    @pytest.mark.parametrize("legacy_registry", [False, True], ids=["current", "legacy"])
+    def test_plugin_snapshots_build_complete_packages_from_the_shared_registry(self, tmp_path, legacy_registry):
+        project = snapshot_source(tmp_path, legacy_registry=legacy_registry)
         output = tmp_path / "snapshots"
         result = run_snapshots(project, output)
         assert result.returncode == 0, result.stdout + result.stderr
@@ -135,6 +143,7 @@ class TestWorkspace:
             assert record["sha256"] == hashlib.sha256(artifact.read_bytes()).hexdigest()
             assert record["buildSeconds"] >= 0
             assert record["sourceCommit"]
+            assert record["sourceDirty"] is False
             with zipfile.ZipFile(artifact) as archive:
                 assert json.loads(archive.read(".codex-plugin/plugin.json"))["name"] == name
                 assert json.loads(archive.read(".claude-plugin/plugin.json"))["version"] == record["version"]
@@ -152,8 +161,8 @@ class TestWorkspace:
             "release-flow": [sys.executable, "skills/release-flow/scripts/release_flow.py", "--help"],
             "pr-flow": [sys.executable, "skills/pr-flow/scripts/pr_flow.py", "--help"],
             "data-store": [sys.executable, "skills/data-store/scripts/data_store.py", "--help"],
-            "my-spec": ["node", "bin/myspec.js", "--help"],
-            "build-and-verify": ["node", "bin/build-and-verify.js", "--help"],
+            "my-spec": ["node", "bin/myspec.js", "init", "--help"],
+            "build-and-verify": ["node", "bin/build-and-verify.js", "init", "--help"],
         }.items():
             extracted = tmp_path / "installed" / name
             with zipfile.ZipFile(output / manifest["plugins"][name]["artifact"]) as archive:
@@ -181,8 +190,9 @@ class TestWorkspace:
         assert read.returncode == 0, read.stdout + read.stderr
         assert json.loads(read.stdout) == {"value": 42}
 
-    def test_plugin_snapshots_reuse_unchanged_artifacts_and_rebuild_complete_affected_plugins(self, tmp_path):
-        project = snapshot_source(tmp_path)
+    @pytest.mark.parametrize("legacy_registry", [False, True], ids=["current", "legacy"])
+    def test_plugin_snapshots_reuse_unchanged_artifacts_and_rebuild_complete_affected_plugins(self, tmp_path, legacy_registry):
+        project = snapshot_source(tmp_path, legacy_registry=legacy_registry)
         output = tmp_path / "snapshots"
         assert run_snapshots(project, output).returncode == 0
         original = json.loads((output / "snapshots.json").read_text())["plugins"]

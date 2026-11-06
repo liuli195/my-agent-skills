@@ -265,8 +265,13 @@ def snapshots(project: Path, output: Path) -> dict:
                     destination = package / relative.relative_to(root)
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(project / relative, destination)
-            if record.get("commandTool"):
-                _inject_management(package, record["commandTool"]["package"],
+            if record.get("commandTool") or record.get("releaseShape") == "npm":
+                # Older release registries identify these packages by shape only.
+                package_name = (record["commandTool"]["package"] if record.get("commandTool")
+                                else json.loads((package / "package.json").read_text(encoding="utf-8"))["name"])
+                if not isinstance(package_name, str) or not package_name.strip():
+                    raise ValueError(f"invalid_package_name: {package}")
+                _inject_management(package, package_name,
                                    project / MANAGEMENT.relative_to(ROOT))
             metadata_sources = _cloud_metadata(package, name, record)
             version = _snapshot_version(package, name)
