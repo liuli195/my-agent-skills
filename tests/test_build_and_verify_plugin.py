@@ -1224,10 +1224,10 @@ def test_build_and_verify_init_spec_targets_test_framework_plugin_capability() -
     assert "试运行）" not in text
 
 
-def test_build_and_verify_registered_only_in_its_package_marketplaces() -> None:
+def test_build_and_verify_registered_in_shared_and_package_marketplaces() -> None:
     for catalog_path in (CLAUDE_REPO_MARKETPLACE, CODEX_REPO_MARKETPLACE):
-        assert PLUGIN_NAME not in plugin_names(read_json(catalog_path))
-    assert PLUGIN_NAME not in release_projection_plugins()
+        assert PLUGIN_NAME in plugin_names(read_json(catalog_path))
+    assert PLUGIN_NAME in release_projection_plugins()
     for relative in (".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json"):
         assert plugin_names(read_json(PLUGIN_ROOT / relative)) == [PLUGIN_NAME]
 

@@ -1,10 +1,18 @@
 """Minimal real-workspace smoke, plus the Windows junction adapter."""
 
+import contextlib
 import hashlib
+import io
+import json
 import os
 from pathlib import Path
 import shutil
+import runpy
 import subprocess
+import sys
+import tarfile
+import zipfile
+from unittest.mock import patch
 
 import pytest
 
@@ -15,9 +23,149 @@ from tests.test_build_and_verify_plugin import (
 from tests.test_setup_worktree_script import normalize_powershell_output
 
 SCRIPT = REPO_ROOT / "scripts/setup-worktree.ps1"
+PACK = REPO_ROOT / "plugins/tool-lifecycle/pack.py"
+
+
+def snapshot_source(tmp_path, *, release_ref=None, executable_probe=None):
+    project = tmp_path / "source"
+    shutil.copytree(REPO_ROOT / "plugins", project / "plugins",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    # Detect accidental injection from the packer's own checkout instead of --project.
+    shared = project / "plugins/tool-lifecycle/python/management.py"
+    shared.write_text(shared.read_text() + "\n# Isolated snapshot source\n")
+    if executable_probe and os.name != "nt":
+        (project / executable_probe).chmod(0o755)
+    for arguments in (("init", "-q"), ("add", "plugins"),
+                      ("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                       "commit", "-qm", "snapshot source")):
+        subprocess.run(["git", "-C", str(project), *arguments], check=True, capture_output=True)
+    if release_ref:
+        # Fixture-only tag: this does not verify a real hosted release.
+        subprocess.run(["git", "-C", str(project), "tag", release_ref], check=True, capture_output=True)
+    origin = subprocess.run(["git", "-C", str(REPO_ROOT), "remote", "get-url", "origin"],
+                            check=True, text=True, capture_output=True).stdout.strip()
+    subprocess.run(["git", "-C", str(project), "remote", "add", "origin", origin],
+                   check=True, capture_output=True)
+    return project
+
+
+def run_snapshots(project, output, *arguments):
+    return subprocess.run([sys.executable, str(PACK), "snapshots", str(output),
+                           "--project", str(project), *arguments], text=True, capture_output=True)
 
 
 class TestWorkspace:
+    def test_release_snapshots_save_through_real_mapping_and_shared_lock(self, tmp_path):
+        from tests.test_release_flow_account_delivery import NativeSaveClients, PublishedReleaseCommands
+        probe = "skills/plugin-sync/references/check.md"
+        project = snapshot_source(tmp_path, release_ref="v1.0.0", executable_probe="plugins/plugin-sync/" + probe)
+        output = tmp_path / "RELEASE"
+        result = run_snapshots(project, output, "--account-mode", "RELEASE", "--release-ref", "v1.0.0")
+        assert result.returncode == 0, result.stdout + result.stderr
+        snapshots = json.loads((output / "snapshots.json").read_text())["plugins"]
+        assert len(snapshots) == 9
+        commit = subprocess.run(["git", "-C", str(project), "rev-parse", "refs/tags/v1.0.0^{commit}"],
+                                check=True, text=True, capture_output=True).stdout.strip()
+        shared = (project / "plugins/tool-lifecycle/python/management.py").read_bytes()
+        for name, record in snapshots.items():
+            package = Path(record["pluginPath"])
+            assert record["accountMode"] == "RELEASE" and record["packageName"] == name
+            assert record["releaseRef"] == "refs/tags/v1.0.0"
+            assert record["sourceCommit"] == commit and record["sourceDirty"] is False
+            artifact = output / record["artifact"]
+            assert hashlib.sha256(artifact.read_bytes()).hexdigest() == record["sha256"]
+            with zipfile.ZipFile(artifact) as archive:
+                cloud = json.loads(archive.read(".codex-plugin/plugin.json"))
+                assert cloud["name"] == name and cloud["interface"]["displayName"] == name
+                assert json.loads(archive.read(".claude-plugin/plugin.json"))["version"] == record["version"]
+                assert any(path.endswith("/SKILL.md") for path in archive.namelist())
+                if (package / "package.json").exists():
+                    assert archive.read("python/management.py") == shared
+        # The one packaged runtime route exercises its included templates, not source assets.
+        release = Path(snapshots["release-flow"]["pluginPath"]) / "skills/release-flow/scripts/release_flow.py"
+        target = tmp_path / "runtime-project"
+        for arguments in (("setup", "--authorize-project-files"), ("validate",)):
+            runtime = subprocess.run([sys.executable, str(release), *arguments, "--project", str(target)],
+                                     text=True, capture_output=True)
+            assert runtime.returncode == 0, runtime.stdout + runtime.stderr
+        # Keep one real source-provenance rejection, without rebuilding another fixture.
+        note = project / "dirty-note.txt"
+        note.write_text("uncommitted source")
+        rejected = run_snapshots(project, output, "--account-mode", "RELEASE", "--release-ref", "v1.0.0")
+        assert rejected.returncode != 0 and "snapshot_release_source_unverified" in rejected.stderr
+        note.unlink()
+        bundle = tmp_path / "dot-release-packages.tar"
+        with tarfile.open(bundle, "w") as transport:
+            transport.add(output, arcname=".")
+        bundle.chmod(0o644)
+        shutil.rmtree(output)
+        delivery = tmp_path / "deliveries"
+        delivery.mkdir()
+        historical = {"remotePluginId": "Remote_plugin-sync-dev", "packageName": "plugin-sync-dev", "version": "0.0.1"}
+        mapping = tmp_path / "mapping.json"
+        mapping.write_text(json.dumps({"plugins": {"plugin-sync": {"account": {"DEV": historical, "RELEASE": {}}}}, "preserved": [1, 2]}))
+        lock = mapping.with_name(mapping.name + ".lock")
+        class Native(NativeSaveClients):
+            def request(self, method, params):
+                if method != "plugin/share/save":
+                    return super().request(method, params)
+                self.methods.append(method)
+                assert lock.exists()
+                source = json.loads(mapping.read_text())["plugins"]["plugin-sync"]["account"]["RELEASE"]
+                assert source["saveState"]["status"] == "pending"
+                package = Path(params["pluginPath"])
+                assert package.parent.parent == delivery
+                if os.name != "nt":
+                    assert package.parent.stat().st_mode & 0o077 == 0
+                    assert (package / probe).stat().st_mode & 0o111 == 0o111
+                cloud = json.loads((package / ".codex-plugin/plugin.json").read_text())
+                remote_id = params.get("remotePluginId", "Remote_" + cloud["name"])
+                self.writes.append((method, dict(params)))
+                self.objects = [{"remotePluginId": remote_id, "name": cloud["name"], "version": cloud["version"],
+                                 "id": cloud["name"] + "@created-by-me-remote", "installed": False, "enabled": False,
+                                 "shareContext": None}]
+                return {"remotePluginId": remote_id, "shareUrl": ""}
+        native = Native()
+        published = PublishedReleaseCommands(project=project,
+                                             repository=snapshots["plugin-sync"]["metadataSource"]["repository"],
+                                             source_commit=commit, local_run=subprocess.run)
+        entry = runpy.run_path(str(REPO_ROOT / "plugins/release-flow/skills/release-flow/scripts/release_flow.py"))["main"]
+        process = subprocess.Popen
+        def owned_process(command, *args, **kwargs):
+            if command == ["codex", "app-server", "--stdio"]:
+                return native.start(command, *args, **kwargs)
+            assert command == ["git", "-C", str(project), "config", "--get", "remote.origin.url"]
+            return process(command, *args, **kwargs)
+        def invoke(umask):
+            report = io.StringIO()
+            args = ["deliver-account", "--project", str(project), "--manifest", str(mapping), "--plugin", "plugin-sync",
+                    "--bundle", str(bundle), "--delivery-dir", str(delivery), "--expected-sha256", snapshots["plugin-sync"]["sha256"], "--apply"]
+            previous_umask = os.umask(umask) if os.name != "nt" else None
+            try:
+                with patch("subprocess.Popen", side_effect=owned_process), patch("subprocess.run", side_effect=published), \
+                        contextlib.redirect_stdout(report):
+                    code = entry(args)
+            finally:
+                if previous_umask is not None:
+                    os.umask(previous_umask)
+            assert code == 0, report.getvalue()
+            assert not lock.exists() and not list(delivery.iterdir())
+            return json.loads(report.getvalue().splitlines()[-1])
+        assert invoke(0o077)["operation"] == "create"
+        assert native.writes[0][1]["discoverability"] == "PRIVATE" and native.writes[0][1]["shareTargets"] == []
+        assert invoke(0o027)["operation"] == "update"
+        assert native.writes[-1][1].keys() == {"pluginPath", "remotePluginId"}
+        assert native.writes[-1][1]["remotePluginId"] == "Remote_plugin-sync"
+        stored = json.loads(mapping.read_text())
+        assert stored["preserved"] == [1, 2]
+        assert stored["plugins"]["plugin-sync"]["account"]["DEV"] == historical
+        source = stored["plugins"]["plugin-sync"]["account"]["RELEASE"]
+        assert source["remotePluginId"] == "Remote_plugin-sync" and source["saveState"]["status"] == "verified"
+        assert source["saveState"]["privateCreationRequest"] == {"discoverability": "PRIVATE", "shareTargets": []}
+        assert source["saveState"]["permissions"]["status"] == "not_available"
+        assert len(native.writes) == 2 and not native.objects[0]["installed"]
+        assert set(native.methods) <= {"initialize", "plugin/list", "plugin/share/save"}
+
     def test_public_baseline_execution_cache_and_git_visible_inputs(self, tmp_path):
         primary = tmp_path / "primary"
         primary.mkdir()

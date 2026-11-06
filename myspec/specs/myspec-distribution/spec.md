@@ -215,7 +215,7 @@ MySpec（自有规格）MUST 在开发模式公开由实际受控运行与打包
 - **THEN** 系统 MUST NOT 公开一个看似可复现的源码提交
 ### Requirement: MySpec 初始化受支持 Agent 的统一来源
 
-系统 MUST 通过 `myspec init --claude`、`--codex` 或 `--all` 初始化对应 Agent（代理）；Claude 和 Codex MUST 登记包内自包含单插件市场。Pi（编码助手）客户端选择不再受支持；系统 MUST 拒绝 `init --pi` 和 `doctor --pi`，且 MUST NOT 安装或调用 Pi。
+系统 MUST 通过 myspec init --claude、--codex 或 --all 初始化对应 Agent，并继续拒绝 Pi 参数及安装。唯一有效官方共享市场安装存在时 MUST 保留其来源、版本与启用状态，报告 managedBy=plugin-sync 和 removedLegacyPlugins=[]；不存在有效共享安装时保留包内自包含单插件市场兼容入口。重复启用、来源不匹配或登记冲突 MUST 停止，不误卸载共享安装。
 
 #### Scenario: 用户显式初始化一个不可用的 Agent
 
@@ -230,7 +230,7 @@ MySpec（自有规格）MUST 在开发模式公开由实际受控运行与打包
 
 #### Scenario: 初始化发现旧 MySpec 来源
 
-- **WHEN** 新统一来源已启用并验证，且 Agent 中存在 Legacy MySpec Source（旧 MySpec 来源）
+- **WHEN** 新统一来源已启用并验证，且 Agent 中存在不属于有效统一市场安装的 Legacy MySpec Source（旧 MySpec 来源）
 - **THEN** 系统 MUST 精确移除用户级旧 MySpec 来源或旧插件记录
 - **THEN** Claude MUST 在卸载旧插件时保留该插件的持久数据
 - **THEN** Codex MUST 删除旧插件记录及其对应缓存，并保留无关缓存
@@ -247,3 +247,11 @@ MySpec（自有规格）MUST 在开发模式公开由实际受控运行与打包
 - **WHEN** 单客户端初始化或 `myspec init --all` 完成
 - **THEN** Claude 和 Codex 结果 MUST 通过 `removedLegacyPlugins` 报告已删除旧插件
 - **THEN** 没有对应处理结果时字段 MUST 返回空数组
+### Requirement: MySpec 更新保留插件同步管理的共享安装
+
+MySpec MUST 在初始化、诊断及更新时识别有效共享市场来源，保留该安装；工具 CLI 与插件技能的版本事实分别报告，不把安装成功等同新会话已加载。
+
+#### Scenario: 共享安装由插件同步管理
+
+- **WHEN** 用户更新工具且存在有效共享市场安装
+- **THEN** 更新 MUST 保留共享安装、启用状态及来源，跳过对它的独立市场刷新，并报告实际诊断结果。

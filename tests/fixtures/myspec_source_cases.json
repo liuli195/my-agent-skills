@@ -55,7 +55,7 @@
         "registered": true,
         "enabled": true,
         "effective": true,
-        "sourceKind": "legacy",
+        "sourceKind": "unified",
         "sourceMismatch": false
       }
     ]

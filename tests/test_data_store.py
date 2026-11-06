@@ -9,6 +9,7 @@ from decimal import Decimal
 import importlib.util
 from pathlib import Path
 import stat
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -146,7 +147,10 @@ def test_cli_reports_missing_dependency(monkeypatch, capsys):
 
     monkeypatch.setattr(builtins, "__import__", without_duckdb)
     assert store.main(["--root", str(ROOT), "query", "SELECT 1", "--tables", '["readings"]']) == 2
-    assert "缺少 DuckDB" in capsys.readouterr().err
+    error = capsys.readouterr().err
+    assert "缺少 DuckDB" in error
+    assert sys.executable in error
+    assert str(SKILL / "requirements.txt") in error
 
 
 @pytest.mark.parametrize("targets", [None, {}, [], {"readings": []}, {"readings": "one"},

@@ -6,15 +6,6 @@
 
 ## Requirements
 
-### Requirement: Shared marketplaces provide seven skills while command tools keep package distribution
-
-系统 MUST 在 Codex（代码代理）和 Claude Code（代码助手）的共享市场中提供 release-flow（发布流程）、pr-flow（拉取请求流程）、dev-flow（开发流程）、subagent-policy（子代理策略）、plugin-sync（插件同步）、retro-to-issues（复盘转任务）、data-store（数据中心）七项插件。MySpec（自有规格）及 Build and Verify（构建与验证）MUST 保留既有 NPM（软件包管理器）命令、包内单插件市场和自举检查，退出两个共享市场但不失去发布资格。
-
-#### Scenario: A user installs skills through either client
-
-- **WHEN** 用户在任一客户端浏览共享市场或安装七项技能
-- **THEN** 两端提供相同七项，安装后技能正文与随包资源可发现
-- **THEN** 两项命令工具通过自身软件包使用，不出现共享市场重复版本
 ### Requirement: Shared development and release marketplaces remain independently visible
 
 系统 MUST 同时保留正式市场 my-agent-skills-marketplace 与开发市场 my-agent-skills-marketplace-dev；开发显示名称明确含 DEV（开发）。插件名保持一致，用户能选择单个插件来源，其他插件保持原选择。
@@ -33,3 +24,11 @@
 - **WHEN** 用户通过工具自身入口切换有效开发源码或恢复已保存正式版本
 - **THEN** 工具不要求共享市场包含自身，并继续检查包内单一来源与有效源码
 - **THEN** 无效来源仍明确拒绝，发布前仍检查两项工具及共享实现变更
+### Requirement: Shared marketplaces provide nine owned plugins while preserving command tool distribution
+
+系统 MUST 在 Codex 和 Claude Code 的共享开发与正式市场中提供 release-flow、pr-flow、dev-flow、subagent-policy、plugin-sync、retro-to-issues、data-store、my-spec、build-and-verify 九项插件。MySpec 和 Build and Verify MUST 保留既有 npm 命令、包内单插件市场兼容入口、构建发布与自举检查；共享市场成员身份不得成为误卸载有效安装的理由。
+
+#### Scenario: 用户通过任一客户端选择共享市场插件
+
+- **WHEN** 用户浏览共享市场或安装九项自有插件
+- **THEN** 两端 MUST 提供相同九项，目标技能、脚本和资源可发现；每项仅启用所选完整来源，两项 npm 命令仍可用。

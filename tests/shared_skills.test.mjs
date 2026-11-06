@@ -17,8 +17,9 @@ const packages = [
       "update-claude.md",
       "update-codex.md",
     ],
-    references: ["check.md", "status-taxonomy.md", "update-claude.md", "update-codex.md", "switch-source.md"],
-    description: /Synchronize local agent Plugin/,
+    references: ["check.md", "status-taxonomy.md", "update-claude.md", "update-codex.md", "switch-source.md", "update-build-and-verify-runtime.md"],
+    description: /检查、安装、更新和切换本机插件市场来源/,
+    scripts: [],
   },
   {
     name: "retro-to-issues",
@@ -33,7 +34,7 @@ function disclosedReferences(text) {
   return [...text.matchAll(/`references\/([^`]+)`/g)].map((match) => match[1]);
 }
 
-test("repository-owned pure Skill packages keep their portable contracts", async () => {
+test("repository-owned Skill packages keep their portable contracts", async () => {
   for (const expected of packages) {
     const frontmatter = (await readFile(resolve(expected.root, "skills", expected.name, "SKILL.md"), "utf8")).split("---")[1];
     assert.match(frontmatter, new RegExp(`^name: ${expected.name}$`, "m"));
@@ -44,6 +45,7 @@ test("repository-owned pure Skill packages keep their portable contracts", async
 
     const skillRoot = resolve(expected.root, "skills", expected.name);
     const entries = expected.references.length ? ["SKILL.md", "references"] : ["SKILL.md"];
+    if (expected.scripts?.length) entries.push("scripts");
     assert.deepEqual((await readdir(skillRoot)).sort(), entries.sort());
     if (expected.files.length) {
       assert.deepEqual(
@@ -56,6 +58,9 @@ test("repository-owned pure Skill packages keep their portable contracts", async
     for (const reference of expected.references) {
       await access(resolve(skillRoot, "references", reference));
       assert.match(content, new RegExp(`references/${reference.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    }
+    for (const script of expected.scripts || []) {
+      await access(resolve(skillRoot, "scripts", script));
     }
   }
 });

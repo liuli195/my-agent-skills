@@ -7,8 +7,10 @@ can approve the writable root before running installation.
 """
 from __future__ import annotations
 import argparse
+import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -42,10 +44,40 @@ def link(path, target):
     path.symlink_to(target.resolve(), target_is_directory=target.is_dir())
 
 
+def native_discovery(manifest, state, root):
+    """Keep approved native roots across init/update; never silently fall back."""
+    replacements = {**state.get('discovery', {}), **manifest.get('discovery', {})}
+    for name, item in replacements.items():
+        path = Path(item['path']).expanduser()
+        if path.name != 'SKILL.md' or not path.is_absolute() or path.resolve().is_relative_to((root / 'skills').resolve()):
+            raise ValueError(f'Native skill must not use the retired managed discovery root: {name}')
+        body = path.read_text(encoding='utf-8')
+        frontmatter = body.split('---', 2)
+        if len(frontmatter) != 3 or frontmatter[0].strip() or not re.search(
+                r'^name:\s*[\'"]?' + re.escape(name) + r'[\'"]?\s*$', frontmatter[1], re.MULTILINE):
+            raise ValueError(f'Native discovery identity is not verified: {name}: {path}')
+        for resource in item['resources']:
+            relative = Path(resource['path'])
+            target = path.parent / relative
+            if relative.is_absolute() or not target.resolve().is_relative_to(path.parent.resolve()):
+                raise ValueError(f'Native skill resource escapes its root: {name}')
+            if hashlib.sha256(target.read_bytes()).hexdigest() != resource['sha256']:
+                raise ValueError(f'Native skill resource changed: {name}: {relative}')
+    if replacements:
+        state['discovery'] = replacements
+    return replacements
+
+
+def skill_path(root, state, name):
+    item = state.get('discovery', {}).get(name)
+    return Path(item['path']).expanduser().parent if item else root / 'skills' / name
+
+
 def synchronize(manifest, root, latest, selected):
     root.mkdir(parents=True, exist_ok=True)
     state_path = root / 'installed.json'
     state = json.loads(state_path.read_text()) if state_path.exists() else {'sources': {}, 'npm': {}}
+    replacements = native_discovery(manifest, state, root)
     state['pending'] = list(manifest.get('optional_skills', []))
     discovery = root / 'skills'
     discovery.mkdir(exist_ok=True)
@@ -87,7 +119,8 @@ def synchronize(manifest, root, latest, selected):
         for skill in destination.rglob('SKILL.md'):
             if '.git' in skill.parts:
                 continue
-            link(discovery / skill.parent.name, skill.parent)
+            if skill.parent.name not in replacements:
+                link(discovery / skill.parent.name, skill.parent)
             if skill.parent.name in state['pending']:
                 state['pending'].remove(skill.parent.name)
         state['sources'][name] = {'repo': repo, 'ref': ref, 'commit': commit}
@@ -106,13 +139,15 @@ def synchronize(manifest, root, latest, selected):
             run(['npm', 'install', '--global', '--prefix', prefix, '--cache', root / 'cache/npm',
                  '--ignore-scripts', '--no-audit', '--no-fund', f'{name}@{version}'])
         for skill in (package / 'skills').glob('*/SKILL.md'):
-            link(discovery / skill.parent.name, skill.parent)
+            if skill.parent.name not in replacements:
+                link(discovery / skill.parent.name, skill.parent)
         state['npm'][name] = version
         save(state_path, state)
     obsolete = [str(path) for path in discovery.iterdir() if not (path/'SKILL.md').is_file()]
     if obsolete:
         raise ValueError('Review obsolete managed links before approved cleanup: ' + ', '.join(obsolete))
-    state['pending'] = [name for name in manifest.get('optional_skills', []) if not (discovery/name/'SKILL.md').is_file()]
+    state['pending'] = [name for name in manifest.get('optional_skills', [])
+                        if not (skill_path(root, state, name) / 'SKILL.md').is_file()]
     save(state_path, state)
     return state
 
@@ -147,7 +182,8 @@ def main(argv=None):
                 if obsolete:
                     raise ValueError('Review obsolete user skill links before approved cleanup: ' + ', '.join(obsolete))
             for skill in (root / 'skills').iterdir():
-                link(args.skills_dir.expanduser() / skill.name, skill)
+                if skill.name not in state.get('discovery', {}):
+                    link(args.skills_dir.expanduser() / skill.name, skill)
         if args.project:
             project = args.project.resolve()
             remote = run(['git', '-C', project, 'remote', 'get-url', 'origin'])
@@ -165,13 +201,14 @@ def main(argv=None):
                     command.append('--npm')
             print(run(command, cwd=project))
             if 'data-store' in recipe.get('skills', []) and 'data-store' not in state['pending']:
-                binding = root / 'skills/data-store/scripts/project_binding.py'
+                binding = skill_path(root, state, 'data-store') / 'scripts/project_binding.py'
                 for action in ('connect', 'check'):
                     print(run([sys.executable, binding, action, '--project', project], cwd=project))
         print(json.dumps({'status': 'ready', 'root': str(root), 'pending': state['pending'],
-                          'path': str(root/'npm/bin'), 'npm_prefix': str(root/'npm'), 'sources': state['sources'], 'npm': state['npm']}, ensure_ascii=False))
+                          'path': str(root/'npm/bin'), 'npm_prefix': str(root/'npm'), 'sources': state['sources'], 'npm': state['npm'],
+                          'discovery': state.get('discovery', {})}, ensure_ascii=False))
         return 0
-    except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
         if isinstance(error, subprocess.CalledProcessError) and error.stdout:
             print(error.stdout, file=sys.stderr)
         print(f'Initialization failed: {error}', file=sys.stderr)

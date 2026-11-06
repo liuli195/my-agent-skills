@@ -1,6 +1,6 @@
 # Claude Update（Claude 更新）
 
-MySpec（自有规格）不适用本通用更新；只有满足主 Skill（技能）的一次性显式例外时，才可执行用户点名的精确原生操作。
+本通用更新覆盖选定市场的全部请求插件，包括附带命令工具的插件，不按插件名称排除。
 
 Run this only after explicit user authorization.
 

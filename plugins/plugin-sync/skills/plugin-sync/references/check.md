@@ -1,6 +1,6 @@
 # Check Flow（检查流程）
 
-MySpec（自有规格）不适用本通用检查；除主 Skill（技能）的一次性显式例外要求保存和复查精确目标状态外，只委托 `myspec doctor --all` 或对应单 Agent（代理）命令。
+本检查对选定市场的所有请求插件使用同一流程，包括附带独立命令工具的插件；不按插件名称排除。
 
 This flow is read-only（只读）. It must not refresh（刷新）, update（更新）, install（安装）, enable（启用）, remove（移除）, or delete（删除） anything.
 

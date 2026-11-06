@@ -24,10 +24,8 @@ _PROFILE = json.loads((Path(__file__).with_name("lifecycle_profile.json")).read_
 PACKAGE_NAME = _PROFILE["PACKAGE_NAME"]
 CLAUDE_MARKETPLACE = _PROFILE["CLAUDE_MARKETPLACE"]
 CLAUDE_PLUGIN = _PROFILE["CLAUDE_PLUGIN"]
-CLAUDE_LEGACY_PLUGIN = _PROFILE["CLAUDE_LEGACY_PLUGIN"]
 CODEX_MARKETPLACE = _PROFILE["CODEX_MARKETPLACE"]
 CODEX_PLUGIN = _PROFILE["CODEX_PLUGIN"]
-CODEX_LEGACY_PLUGIN = _PROFILE["CODEX_LEGACY_PLUGIN"]
 SKILL_NAMES = tuple(_PROFILE["SKILL_NAMES"])
 NPM_DIRECTORY = _PROFILE["NPM_DIRECTORY"]
 SOURCE_DIRECTORY = _PROFILE["SOURCE_DIRECTORY"]
@@ -36,6 +34,7 @@ PRIMARY_MODULE = _PROFILE["PRIMARY_MODULE"]
 LEGACY_PI_PACKAGE = _PROFILE["LEGACY_PI_PACKAGE"]
 STATE_DIRECTORY = _PROFILE["STATE_DIRECTORY"]
 PLUGIN_NAME = _PROFILE["PLUGIN_NAME"]
+SHARED_MARKETPLACES = tuple(_PROFILE["SHARED_MARKETPLACES"])
 SKILL_PATHS = tuple(f"./skills/{name}" for name in SKILL_NAMES)
 
 
@@ -543,6 +542,7 @@ def _claude_marketplace_path(item: dict[str, object]) -> Path | None:
     candidates = [item.get("path")]
     if isinstance(source, dict):
         candidates.append(source.get("path"))
+    candidates.append(item.get("installLocation"))
     return next((Path(value) for value in candidates if isinstance(value, str) and value), None)
 
 
@@ -580,12 +580,16 @@ def _init_claude() -> dict[str, object]:
     if shutil.which("claude") is None:
         raise ManagementError("missing_command: claude")
     stable = _stable_package_root()
-    if _claude_marketplace(stable, _claude_marketplaces()) is None:
+    marketplaces = _claude_marketplaces()
+    plugins = _claude_plugins()
+    shared = _preserve_shared("claude", marketplaces, plugins)
+    if shared is not None:
+        return shared
+    if _claude_marketplace(stable, marketplaces) is None:
         _run_claude("claude_marketplace_add_failed", "plugin", "marketplace", "add", str(stable))
         if _claude_marketplace(stable, _claude_marketplaces()) is None:
             raise ManagementError("claude_marketplace_add_missing")
 
-    plugins = _claude_plugins()
     target = next((item for item in plugins if item.get("id") == CLAUDE_PLUGIN), None)
     if target is None:
         _run_claude("claude_plugin_install_failed", "plugin", "install", CLAUDE_PLUGIN, "--scope", "user")
@@ -624,30 +628,11 @@ def _init_claude() -> dict[str, object]:
     ):
         raise ManagementError("claude_plugin_verify_failed")
 
-    removed_legacy_plugins: list[str] = []
-    for item in current_plugins:
-        if item.get("id") == CLAUDE_LEGACY_PLUGIN:
-            scope = item.get("scope") if isinstance(item.get("scope"), str) else "user"
-            _run_claude(
-                "claude_plugin_uninstall_failed",
-                "plugin",
-                "uninstall",
-                CLAUDE_LEGACY_PLUGIN,
-                "--scope",
-                scope,
-                "--keep-data",
-            )
-            if CLAUDE_LEGACY_PLUGIN not in removed_legacy_plugins:
-                removed_legacy_plugins.append(CLAUDE_LEGACY_PLUGIN)
-    if removed_legacy_plugins and any(
-        item.get("id") == CLAUDE_LEGACY_PLUGIN for item in _claude_plugins()
-    ):
-        raise ManagementError("claude_plugin_uninstall_incomplete")
     return {
         "claude": "initialized",
         "marketplace": CLAUDE_MARKETPLACE,
         "source": str(stable),
-        "removedLegacyPlugins": removed_legacy_plugins,
+        "removedLegacyPlugins": [],
         "reloadRequired": True,
     }
 
@@ -740,8 +725,9 @@ def _set_codex_plugin_enabled(identifier: str, enabled: bool) -> None:
     _atomic_text(path, updated)
 
 
-def _refresh_codex_plugin() -> None:
-    plugins = _codex_plugins()
+def _refresh_codex_plugin(plugins: list[dict[str, object]] | None = None) -> None:
+    if plugins is None:
+        plugins = _codex_plugins()
     if any(item.get("pluginId") == CODEX_PLUGIN and item.get("installed") is True for item in plugins):
         _run_codex("codex_plugin_remove_failed", "plugin", "remove", CODEX_PLUGIN, "--json")
     _run_codex("codex_plugin_add_failed", "plugin", "add", CODEX_PLUGIN, "--json")
@@ -772,6 +758,10 @@ def _init_codex() -> dict[str, object]:
         raise ManagementError("missing_command: codex")
     stable = _stable_package_root()
     marketplaces = _codex_marketplaces()
+    plugins = _codex_plugins()
+    shared = _preserve_shared("codex", marketplaces, plugins)
+    if shared is not None:
+        return shared
     marketplace = _named_codex_marketplace(marketplaces)
     root = marketplace.get("root") if marketplace is not None else None
     linked = not _same_path(stable, Path(os.path.realpath(stable)))
@@ -785,7 +775,7 @@ def _init_codex() -> dict[str, object]:
         _run_codex("codex_marketplace_add_failed", "plugin", "marketplace", "add", str(source), "--json")
         if _codex_marketplace(stable, _codex_marketplaces()) is None:
             raise ManagementError("codex_marketplace_add_missing")
-    _refresh_codex_plugin()
+    _refresh_codex_plugin(plugins)
     plugins = _codex_plugins()
     target = next((item for item in plugins if item.get("pluginId") == CODEX_PLUGIN), None)
     target_source = target.get("source") if isinstance(target, dict) else None
@@ -802,20 +792,11 @@ def _init_codex() -> dict[str, object]:
         or _tool_manifest_version(install_path) != _package_version()
     ):
         raise ManagementError("codex_plugin_verify_failed")
-    removed_legacy_plugins: list[str] = []
-    legacy = next((item for item in plugins if item.get("pluginId") == CODEX_LEGACY_PLUGIN), None)
-    if legacy is not None:
-        _run_codex("codex_plugin_remove_failed", "plugin", "remove", CODEX_LEGACY_PLUGIN, "--json")
-        removed_legacy_plugins.append(CODEX_LEGACY_PLUGIN)
-    if removed_legacy_plugins and any(
-        item.get("pluginId") == CODEX_LEGACY_PLUGIN for item in _codex_plugins()
-    ):
-        raise ManagementError("codex_plugin_remove_incomplete")
     return {
         "codex": "initialized",
         "marketplace": CODEX_MARKETPLACE,
         "source": str(stable),
-        "removedLegacyPlugins": removed_legacy_plugins,
+        "removedLegacyPlugins": [],
         "newSessionRequired": True,
     }
 
@@ -828,8 +809,10 @@ def _init_all() -> dict[str, object]:
             result[agent] = {"status": "skipped", "reason": f"missing_command: {agent}"}
         else:
             initialized = initializers[agent]()
-            result[agent] = {"status": "initialized", "source": initialized["source"]}
+            result[agent] = {"status": initialized[agent], "source": initialized.get("source")}
             for key in (
+                "managedBy",
+                "sources",
                 "removedLegacySources",
                 "disabledProjectLegacySources",
                 "removedLegacyPlugins",
@@ -1244,7 +1227,10 @@ def _refresh_claude() -> str:
     if shutil.which("claude") is None:
         return "not-installed"
     stable = _stable_package_root()
-    marketplace = _claude_marketplace(stable, _claude_marketplaces())
+    marketplaces = _claude_marketplaces()
+    if _preserve_shared("claude", marketplaces, _claude_plugins()) is not None:
+        return "managed-by-plugin-sync"
+    marketplace = _claude_marketplace(stable, marketplaces)
     plugins = _claude_plugins()
     target = next((item for item in plugins if item.get("id") == CLAUDE_PLUGIN), None)
     if marketplace is None or target is None or target.get("enabled") is not True:
@@ -1294,7 +1280,10 @@ def _refresh_codex() -> str:
     if shutil.which("codex") is None:
         return "not-installed"
     stable = _stable_package_root()
-    marketplace = _codex_marketplace(stable, _codex_marketplaces())
+    marketplaces = _codex_marketplaces()
+    if _preserve_shared("codex", marketplaces, _codex_plugins()) is not None:
+        return "managed-by-plugin-sync"
+    marketplace = _codex_marketplace(stable, marketplaces)
     target = next((item for item in _codex_plugins() if item.get("pluginId") == CODEX_PLUGIN), None)
     if marketplace is None or target is None or target.get("installed") is not True or target.get("enabled") is not True:
         return "not-installed"
@@ -1536,6 +1525,82 @@ def _plugin_skills(root: Path | None) -> list[str]:
     return [name for name in SKILL_NAMES if (root / "skills" / name / "SKILL.md").is_file()]
 
 
+def _shared_marketplace_matches(client: str, registration: dict[str, object]) -> bool:
+    if client == "claude":
+        root = _claude_marketplace_path(registration)
+    else:
+        value = registration.get("root")
+        root = Path(value) if isinstance(value, str) and value else None
+    if root is None or not root.is_absolute():
+        return False
+    try:
+        if not root.is_dir():
+            return False
+        origin = _run("git", "remote", "get-url", "origin", cwd=root)
+    except (ManagementError, OSError):
+        return False
+    return (origin.returncode == 0
+            and _git_host_path(origin.stdout.strip()) == _git_host_path(_PROFILE["SHARED_REPOSITORY"]))
+
+
+def _shared_sources(client: str, marketplaces: list[dict[str, object]], plugins: list[dict[str, object]]) -> list[dict[str, object]]:
+    field = "id" if client == "claude" else "pluginId"
+    sources = []
+    for item in plugins:
+        identifier = item.get(field)
+        if identifier not in {f"{PLUGIN_NAME}@{market}" for market in SHARED_MARKETPLACES}:
+            continue
+        market = str(identifier).split("@", 1)[1]
+        registrations = [entry for entry in marketplaces if entry.get("name") == market]
+        source = item.get("source")
+        if client == "claude":
+            raw_path = item.get("readFromFolder") or item.get("installPath")
+        else:
+            raw_path = source.get("path") if isinstance(source, dict) else None
+        path = Path(raw_path) if isinstance(raw_path, str) else None
+        version = _tool_manifest_version(path)
+        skills = _plugin_skills(path)
+        source_matches = len(registrations) == 1 and _shared_marketplace_matches(client, registrations[0])
+        valid = (source_matches and isinstance(item.get("version"), str) and version == (item.get("folderVersion") or item.get("version"))
+                 and len(skills) == len(SKILL_NAMES) and not item.get("errors"))
+        sources.append(_source_record(
+            installed=(client == "claude" or item.get("installed") is True) and valid,
+            registered=len(registrations) == 1,
+            enabled=item.get("enabled") is True,
+            source_kind="unified", source_mismatch=not valid,
+            **{field: identifier, "version": item.get("version"), "installPath": raw_path,
+               "source": market, "skills": skills},
+        ))
+    return sources
+
+
+def _preserve_shared(client: str, marketplaces: list[dict[str, object]], plugins: list[dict[str, object]]) -> dict[str, object] | None:
+    shared = _shared_sources(client, marketplaces, plugins)
+    if not shared:
+        return None
+    field = "id" if client == "claude" else "pluginId"
+    relevant = [item for item in plugins if isinstance(item.get(field), str) and str(item[field]).startswith(f"{PLUGIN_NAME}@")]
+    if sum(item.get("enabled") is True for item in relevant) > 1:
+        raise ManagementError(f"{client}_duplicate_enabled_sources: use plugin-sync")
+    if any(not item["registered"] or not item["installed"] or item["sourceMismatch"] for item in shared):
+        raise ManagementError(f"{client}_unified_source_invalid: use plugin-sync")
+    return {client: "preserved", "managedBy": "plugin-sync", "sources": shared,
+            "removedLegacyPlugins": [], "reloadRequired": False}
+
+
+def _report_shared(client_report: dict[str, object], shared: list[dict[str, object]]) -> None:
+    if not shared:
+        return
+    selected = next((item for item in shared if item["enabled"]), shared[0])
+    client_report.update(
+        marketplaceRegistered=all(item["registered"] for item in shared),
+        marketplaceSourceMismatch=any(item["sourceMismatch"] for item in shared),
+        source=selected["installPath"], version=selected["version"],
+        versionMismatch=any(item["sourceMismatch"] for item in shared),
+        skills=selected["skills"],
+    )
+
+
 def _doctor_claude() -> dict[str, object]:
     report = _doctor_package()
     stable = _stable_package_root()
@@ -1543,10 +1608,6 @@ def _doctor_claude() -> dict[str, object]:
     marketplaces = _claude_marketplaces() if available else []
     plugins = _claude_plugins() if available else []
     marketplace = _named_claude_marketplace(marketplaces) if available else None
-    legacy_marketplace = next(
-        (item for item in marketplaces if item.get("name") == "my-agent-skills-marketplace"),
-        None,
-    )
     marketplace_path = _claude_marketplace_path(marketplace) if marketplace is not None else None
     marketplace_registered = marketplace_path is not None and _same_path(marketplace_path, stable)
     relevant = [
@@ -1555,7 +1616,6 @@ def _doctor_claude() -> dict[str, object]:
         if isinstance(item.get("id"), str) and str(item["id"]).startswith(f"{PLUGIN_NAME}@")
     ]
     target = next((item for item in relevant if item.get("id") == CLAUDE_PLUGIN), None)
-    legacy = next((item for item in relevant if item.get("id") == CLAUDE_LEGACY_PLUGIN), None)
     enabled_sources = [str(item["id"]) for item in relevant if item.get("enabled") is True]
     disabled_sources = [str(item["id"]) for item in relevant if item.get("enabled") is False]
     install_path = Path(target["installPath"]) if isinstance(target, dict) and isinstance(target.get("installPath"), str) else None
@@ -1574,29 +1634,8 @@ def _doctor_claude() -> dict[str, object]:
                 installPath=str(install_path) if install_path is not None else None,
             )
         )
-    if legacy is not None:
-        legacy_path = (
-            Path(legacy["installPath"])
-            if isinstance(legacy, dict) and isinstance(legacy.get("installPath"), str)
-            else None
-        )
-        records.append(
-            _source_record(
-                installed=_tool_manifest_version(legacy_path) is not None,
-                registered=legacy_marketplace is not None,
-                enabled=isinstance(legacy, dict) and legacy.get("enabled") is True,
-                source_kind="legacy",
-                source_mismatch=False,
-                id=CLAUDE_LEGACY_PLUGIN,
-                source=(
-                    str(_claude_marketplace_path(legacy_marketplace))
-                    if legacy_marketplace is not None
-                    and _claude_marketplace_path(legacy_marketplace) is not None
-                    else None
-                ),
-                installPath=str(legacy_path) if legacy_path is not None else None,
-            )
-        )
+    shared = _shared_sources("claude", marketplaces, plugins)
+    records.extend(shared)
     report["claude"] = {
         "available": available,
         "marketplace": marketplace,
@@ -1611,9 +1650,11 @@ def _doctor_claude() -> dict[str, object]:
         "duplicateEnabledSources": len(enabled_sources) > 1,
         "sources": records,
         "plugins": relevant,
-        "skills": _plugin_skills(install_path),
+        "skills": _plugin_skills(install_path) if target is not None else [name for name in SKILL_NAMES if any(name in item["skills"] for item in shared)],
+        "managedBy": "plugin-sync" if shared else COMMAND_NAME,
         "reloadRequired": bool(enabled_sources),
     }
+    _report_shared(report["claude"], shared)
     return report
 
 
@@ -1625,15 +1666,10 @@ def _doctor_codex() -> dict[str, object]:
     marketplaces = _codex_marketplaces() if available else []
     plugins = _codex_plugins() if available else []
     marketplace = _named_codex_marketplace(marketplaces) if available else None
-    legacy_marketplace = next(
-        (item for item in marketplaces if item.get("name") == "my-agent-skills-marketplace"),
-        None,
-    )
     root = Path(marketplace["root"]) if isinstance(marketplace, dict) and isinstance(marketplace.get("root"), str) else None
     marketplace_registered = root is not None and _same_path(root, stable)
     relevant = [item for item in plugins if isinstance(item.get("pluginId"), str) and str(item["pluginId"]).startswith(f"{PLUGIN_NAME}@")]
     target = next((item for item in relevant if item.get("pluginId") == CODEX_PLUGIN), None)
-    legacy = next((item for item in relevant if item.get("pluginId") == CODEX_LEGACY_PLUGIN), None)
     enabled_sources = [str(item["pluginId"]) for item in relevant if item.get("enabled") is True]
     disabled_sources = [str(item["pluginId"]) for item in relevant if item.get("enabled") is False]
     source = target.get("source") if isinstance(target, dict) else None
@@ -1657,35 +1693,8 @@ def _doctor_codex() -> dict[str, object]:
                 installPath=str(install_path) if install_path is not None else None,
             )
         )
-    if legacy is not None:
-        legacy_source = legacy.get("source") if isinstance(legacy, dict) else None
-        legacy_path = (
-            Path(legacy_source["path"])
-            if isinstance(legacy_source, dict) and isinstance(legacy_source.get("path"), str)
-            else None
-        )
-        legacy_root = (
-            Path(legacy_marketplace["root"])
-            if isinstance(legacy_marketplace, dict)
-            and isinstance(legacy_marketplace.get("root"), str)
-            else None
-        )
-        records.append(
-            _source_record(
-                installed=(
-                    isinstance(legacy, dict)
-                    and legacy.get("installed") is True
-                    and _tool_manifest_version(legacy_path) is not None
-                ),
-                registered=legacy_marketplace is not None,
-                enabled=isinstance(legacy, dict) and legacy.get("enabled") is True,
-                source_kind="legacy",
-                source_mismatch=False,
-                pluginId=CODEX_LEGACY_PLUGIN,
-                source=str(legacy_root) if legacy_root is not None else None,
-                installPath=str(legacy_path) if legacy_path is not None else None,
-            )
-        )
+    shared = _shared_sources("codex", marketplaces, plugins)
+    records.extend(shared)
     report["codex"] = {
         "codexHome": str(selection.path) if selection is not None else None,
         "codexHomeSource": selection.source if selection is not None else None,
@@ -1702,9 +1711,11 @@ def _doctor_codex() -> dict[str, object]:
         "duplicateEnabledSources": len(enabled_sources) > 1,
         "sources": records,
         "plugins": relevant,
-        "skills": _plugin_skills(install_path),
+        "skills": _plugin_skills(install_path) if target is not None else [name for name in SKILL_NAMES if any(name in item["skills"] for item in shared)],
+        "managedBy": "plugin-sync" if shared else COMMAND_NAME,
         "newSessionRequired": bool(enabled_sources),
     }
+    _report_shared(report["codex"], shared)
     return report
 
 
@@ -1721,29 +1732,19 @@ def _latest_version() -> str:
     return value
 
 
-def _legacy_migration_clients(stable: Path) -> list[str]:
-    clients: list[str] = []
-    if shutil.which("claude") is not None:
-        if any(item.get("id") == CLAUDE_LEGACY_PLUGIN for item in _claude_plugins()):
-            clients.append("claude")
-    if shutil.which("codex") is not None:
-        if any(item.get("pluginId") == CODEX_LEGACY_PLUGIN for item in _codex_plugins()):
-            clients.append("codex")
-    return clients
-
-
-def _migration_command(client: str) -> str:
-    arguments = [COMMAND_NAME, "init", f"--{client}"]
-    if client == "codex" and _CODEX_HOME_SELECTION is not None and _CODEX_HOME_SELECTION.explicit:
-        arguments.extend(["--codex-home", str(_CODEX_HOME_SELECTION.path)])
-    return subprocess.list2cmdline(arguments) if os.name == "nt" else shlex.join(arguments)
-
-
-def _require_legacy_migration(stable: Path) -> None:
-    clients = _legacy_migration_clients(stable)
-    if clients:
-        commands = "; ".join(f"{client}: run {_migration_command(client)}" for client in clients)
-        raise ManagementError(f"legacy_source_migration_required: {commands}")
+def _validate_unified_integrations() -> set[str]:
+    # The shared market is current, not a migration source. Invalid or duplicate
+    # installations block npm writes and are repaired by the unified sync entry.
+    managed = set()
+    for client in ("claude", "codex"):
+        if shutil.which(client) is not None:
+            plugins = _claude_plugins() if client == "claude" else _codex_plugins()
+            field = "id" if client == "claude" else "pluginId"
+            if any(item.get(field) in {f"{PLUGIN_NAME}@{market}" for market in SHARED_MARKETPLACES} for item in plugins):
+                marketplaces = _claude_marketplaces() if client == "claude" else _codex_marketplaces()
+                _preserve_shared(client, marketplaces, plugins)
+                managed.add(client)
+    return managed
 
 
 def _preflight_integrations() -> tuple[list[str], dict[str, str], dict[str, bool]]:
@@ -1751,8 +1752,8 @@ def _preflight_integrations() -> tuple[list[str], dict[str, str], dict[str, bool
     scopes: dict[str, str] = {}
     enabled: dict[str, bool] = {}
     stable = _stable_package_root()
-    _require_legacy_migration(stable)
-    if shutil.which("claude") is not None:
+    managed = _validate_unified_integrations()
+    if "claude" not in managed and shutil.which("claude") is not None:
         target = next((item for item in _claude_plugins() if item.get("id") == CLAUDE_PLUGIN), None)
         if target is not None:
             marketplaces = _claude_marketplaces()
@@ -1763,7 +1764,7 @@ def _preflight_integrations() -> tuple[list[str], dict[str, str], dict[str, bool
             integrations.append("claude")
             enabled["claude"] = target["enabled"]
             scopes["claude"] = target.get("scope") if isinstance(target.get("scope"), str) else "user"
-    if shutil.which("codex") is not None:
+    if "codex" not in managed and shutil.which("codex") is not None:
         target = next((item for item in _codex_plugins() if item.get("pluginId") == CODEX_PLUGIN), None)
         if target is not None and target.get("installed") is True:
             marketplaces = _codex_marketplaces()
@@ -1997,7 +1998,14 @@ def _run_update(token: str | None, operation_id: str) -> dict[str, object]:
         if pending is None or pending.get("tokenHash") != _token_hash(token):
             raise ManagementError("invalid_update_token")
     if pending is not None:
-        _require_legacy_migration(_stable_package_root())
+        managed = _validate_unified_integrations()
+        if managed.intersection(pending["integrations"]):
+            pending["integrations"] = [client for client in pending["integrations"] if client not in managed]
+            for field in ("scopes", "enabled"):
+                values = pending.get(field)
+                if isinstance(values, dict):
+                    pending[field] = {client: value for client, value in values.items() if client in pending["integrations"]}
+            _atomic_json(_mode_state_path(), state)
     else:
         integrations, scopes, enabled = _preflight_integrations()
         target = _latest_version()

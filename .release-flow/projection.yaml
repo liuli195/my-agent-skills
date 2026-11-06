@@ -22,6 +22,8 @@ generators:
       - plugin-sync
       - retro-to-issues
       - data-store
+      - build-and-verify
+      - my-spec
 
 transforms:
   - path: .agents/plugins/marketplace.json
