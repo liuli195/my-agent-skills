@@ -15,6 +15,7 @@ import subprocess
 import sys
 
 import yaml
+import pytest
 
 
 def _git(project: Path, *arguments: str) -> str:
@@ -149,7 +150,8 @@ class TestPrFlow:
 
 
 class TestReleaseFlow:
-    def test_projects_refreshes_remote_preflight_and_dispatches_release(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("external_link", [False, True])
+    def test_projects_refreshes_remote_preflight_and_dispatches_release(self, tmp_path: Path, external_link) -> None:
         cases = importlib.import_module("tests.test_release_flow_cli")
         project = tmp_path / "project"
         environment = os.environ | {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "liuli195/my-agent-skills"}
@@ -172,6 +174,12 @@ class TestReleaseFlow:
         _git(project, "init", "--initial-branch=main")
         _git(project, "config", "user.email", "test@example.invalid")
         _git(project, "config", "user.name", "Test")
+        if external_link:
+            if os.name == "nt":
+                pytest.skip("file symlinks require explicit Windows host privileges")
+            outside = tmp_path / "external-content.txt"
+            outside.write_text("existing ordinary project content\n", encoding="utf-8")
+            (project / "linked.txt").symlink_to(outside)
         _git(project, "add", ".")
         _git(project, "commit", "-m", "baseline")
         baseline = _git(project, "rev-parse", "HEAD")
@@ -193,7 +201,7 @@ class TestReleaseFlow:
         assert "preflight_passed" in preflight.stdout
         for branch in ("main", "marketplace"):
             assert _git(project, "rev-parse", f"origin/{branch}") == current
-        bin_dir, calls_path = _pr_write_fake_gh_sequence(tmp_path / "publish-bin", [{}])
+        bin_dir, calls_path = _pr_write_fake_gh_sequence(tmp_path / "publish-bin", [{}, {}])
         published = invoke("publish", "--tag", "v9.9.1", "--version", "9.9.1", "--bump-plugins", "pr-flow",
                            "--authorize-publish", env=environment | {
                                "PATH": str(bin_dir) + os.pathsep + environment.get("PATH", "")})
@@ -202,3 +210,239 @@ class TestReleaseFlow:
             "workflow", "run", ".github/workflows/release.yml", "--ref", "main",
             "-f", "tag=v9.9.1", "-f", "version=9.9.1", "-f", "bumpPlugins=pr-flow"]]
         assert not (project / ".release-flow/releases").exists()
+
+        published_ci = invoke("ci-publish", "--tag", "v9.9.1", "--version", "9.9.1", "--bump-plugins", "",
+                              "--authorize-ci-publish", env=environment | {
+                                  "PATH": str(bin_dir) + os.pathsep + environment.get("PATH", "")})
+        assert published_ci.returncode == 0, published_ci.stdout + published_ci.stderr
+        assert "status: ci_published" in published_ci.stdout
+        if external_link:
+            checkout = tmp_path / "ordinary-checkout"
+            _git(tmp_path, "clone", "--branch", "marketplace", str(remote), str(checkout))
+            assert (checkout / "linked.txt").read_text(encoding="utf-8") == "existing ordinary project content\n"
+
+    @pytest.mark.parametrize("fault", [None, "missing-shared", "wrong-package", "escaped-shared", "escaped-target"])
+    def test_formal_marketplace_command_tools_run_without_sibling_plugins(self, tmp_path: Path, monkeypatch, fault) -> None:
+        cases = importlib.import_module("tests.test_release_flow_cli")
+        project = tmp_path / "source"
+        cases.write_release_flow_files(project, cases.marketplace_identity_projection().replace("      - pr-flow\n      - release-flow", "      - my-spec\n      - build-and-verify"))
+        for plugin in ("my-spec", "build-and-verify", "tool-lifecycle"):
+            shutil.copytree(cases.REPO_ROOT / "plugins" / plugin, project / "plugins" / plugin,
+                            ignore=shutil.ignore_patterns("__pycache__"))
+        _git(project, "init", "--initial-branch=main")
+        _git(project, "config", "user.email", "test@example.invalid")
+        _git(project, "config", "user.name", "Test")
+        _git(project, "add", ".")
+        _git(project, "commit", "-m", "source")
+        # Public projection remains safe to run in-place: source wrappers stay wrappers.
+        wrappers = {name: (project / "plugins" / name / "python/management.py").read_bytes()
+                    for name in ("my-spec", "build-and-verify")}
+        projected = subprocess.run([sys.executable, str(cases.SCRIPT), "project", "--project", str(project)],
+                                   env=os.environ | {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "liuli195/my-agent-skills"},
+                                   text=True, capture_output=True)
+        assert projected.returncode == 0, projected.stdout + projected.stderr
+        assert all((project / "plugins" / name / "python/management.py").read_bytes() == content
+                   for name, content in wrappers.items())
+        _git(project, "add", ".")
+        _git(project, "commit", "-m", "project metadata")
+        remote = tmp_path / "remote.git"
+        _git(tmp_path, "init", "--bare", str(remote))
+        _git(project, "remote", "add", "origin", str(remote))
+        _git(project, "push", "origin", "HEAD:refs/heads/marketplace")
+        for plugin in ("my-spec", "build-and-verify"):
+            for relative in ("package.json", ".codex-plugin/plugin.json", ".claude-plugin/plugin.json"):
+                manifest = project / "plugins" / plugin / relative
+                metadata = json.loads(manifest.read_text(encoding="utf-8"))
+                metadata["version"] = "2.9.2"
+                manifest.write_text(json.dumps(metadata), encoding="utf-8")
+        _git(project, "add", ".")
+        _git(project, "commit", "-m", "advance selected tools")
+        _git(project, "push", "origin", "HEAD:refs/heads/main")
+        before = _git(project, "status", "--porcelain")
+        bin_dir, _calls = _pr_write_fake_gh_sequence(tmp_path / "gh-bin", [
+            {"stdout": "https://example.invalid/release/v2.9.2\n"},
+            {"stdout": "https://example.invalid/release/v2.9.2\n"}])
+        monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
+        environment = os.environ | {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "liuli195/my-agent-skills"}
+        command = [sys.executable, str(cases.SCRIPT), "ci-publish", "--project", str(project),
+                   "--tag", "v2.9.2", "--version", "2.9.2", "--bump-plugins", "my-spec,build-and-verify",
+                   "--authorize-ci-publish"]
+        if fault:
+            if fault == "missing-shared":
+                (project / "plugins/tool-lifecycle/python/management.py").unlink()
+            elif fault == "wrong-package":
+                path = project / "plugins/my-spec/package.json"
+                value = json.loads(path.read_text(encoding="utf-8"))
+                value["name"] = "@other/incorrect"
+                path.write_text(json.dumps(value), encoding="utf-8")
+            else:
+                if os.name == "nt":
+                    pytest.skip("directory symlinks require explicit Windows host privileges")
+                outside = tmp_path / "outside.py"
+                outside.write_text("# outside source\n", encoding="utf-8")
+                path = project / ("plugins/tool-lifecycle/python/management.py" if fault == "escaped-shared"
+                                  else "plugins/my-spec/python/management.py")
+                path.unlink()
+                path.symlink_to(outside)
+            channel = _git(project, "ls-remote", "origin", "refs/heads/marketplace")
+            refused = subprocess.run(command, env=environment, text=True, capture_output=True)
+            assert refused.returncode == 1, refused.stdout + refused.stderr
+            assert _git(project, "ls-remote", "origin", "refs/heads/marketplace") == channel
+            assert not _git(project, "ls-remote", "origin", "refs/tags/v2.9.2")
+            assert json.loads(_calls.read_text(encoding="utf-8")) == []
+            return
+        for _attempt in range(2):
+            published = subprocess.run(command, env=environment, text=True, capture_output=True)
+            assert published.returncode == 0, published.stdout + published.stderr
+            assert "status: ci_published" in published.stdout
+        checkout = tmp_path / "checkout"
+        _git(tmp_path, "clone", "--branch", "marketplace", str(remote), str(checkout))
+        for plugin, command in (("my-spec", "myspec"), ("build-and-verify", "build-and-verify")):
+            isolated = tmp_path / plugin
+            shutil.copytree(checkout / "plugins" / plugin, isolated)
+            result = subprocess.run(["node", str(isolated / "bin" / f"{command}.js"), "--help"],
+                                    cwd=tmp_path, text=True, capture_output=True)
+            assert result.returncode == 0, result.stdout + result.stderr
+            home = tmp_path / "home"
+            home.mkdir(exist_ok=True)
+            environment = os.environ | {"HOME": str(home), "USERPROFILE": str(home),
+                "MYSPEC_PYTHON": sys.executable, "BUILD_AND_VERIFY_PYTHON": sys.executable}
+            cli = ["node", str(isolated / "bin" / f"{command}.js")]
+            diagnosed = subprocess.run([*cli, "doctor", "--running"], cwd=tmp_path, env=environment,
+                                       text=True, capture_output=True)
+            assert diagnosed.returncode == 0, diagnosed.stdout + diagnosed.stderr
+            report = json.loads(diagnosed.stdout)
+            assert report["mode"] == "release"
+            assert report["runtime"]["packageRoot"] == str(isolated)
+            consumer = tmp_path / (plugin + "-consumer")
+            if plugin == "my-spec":
+                from tests.support.myspec_cases import main_spec, requirement
+                specs = consumer / "specs/accounts"
+                specs.mkdir(parents=True)
+                (specs / "spec.md").write_text(main_spec("accounts", requirement("Login", "allow login")), encoding="utf-8")
+                validated = subprocess.run([*cli, "validate-main", str(specs.parent)], cwd=tmp_path,
+                                           env=environment, text=True, capture_output=True)
+                assert validated.returncode == 0, validated.stdout + validated.stderr
+            else:
+                initialized = subprocess.run([*cli, "init", "--project", str(consumer)], cwd=tmp_path,
+                                             env=environment, text=True, capture_output=True)
+                assert initialized.returncode == 0, initialized.stdout + initialized.stderr
+                config = consumer / ".build-and-verify/config.json"
+                config.write_text(json.dumps({"version": 2, "build": {"checks": [
+                    {"id": "formal-build", "command": [sys.executable, "-c", "print('FORMAL_BUILD_OK')"]}]},
+                    "verify": {"checks": [], "realChecks": []}}), encoding="utf-8")
+                built = subprocess.run([*cli, "build", "--project", str(consumer)], cwd=tmp_path,
+                                       env=environment, text=True, capture_output=True)
+                assert built.returncode == 0, built.stdout + built.stderr
+                assert "FORMAL_BUILD_OK" in built.stdout and "checked: formal-build" in built.stdout
+        assert _git(project, "status", "--porcelain") == before
+
+    def test_preflight_requires_bump_for_legacy_unassembled_command_tool(self, tmp_path: Path) -> None:
+        cases = importlib.import_module("tests.test_release_flow_cli")
+        project = tmp_path / "source"
+        cases.write_release_flow_files(project, cases.marketplace_identity_projection().replace("      - pr-flow\n      - release-flow", "      - my-spec\n      - build-and-verify"))
+        for plugin in ("my-spec", "build-and-verify", "tool-lifecycle"):
+            shutil.copytree(cases.REPO_ROOT / "plugins" / plugin, project / "plugins" / plugin,
+                            ignore=shutil.ignore_patterns("__pycache__"))
+        (project / ".gitattributes").write_text("*.py text eol=lf\n", encoding="utf-8")
+        _git(project, "init", "--initial-branch=main")
+        _git(project, "config", "user.email", "test@example.invalid")
+        _git(project, "config", "user.name", "Test")
+        _git(project, "add", ".")
+        _git(project, "commit", "-m", "legacy marketplace")
+        remote = tmp_path / "remote.git"
+        _git(tmp_path, "init", "--bare", str(remote))
+        _git(project, "remote", "add", "origin", str(remote))
+        for branch in ("main", "marketplace"):
+            _git(project, "push", "origin", f"HEAD:refs/heads/{branch}")
+        result = subprocess.run([sys.executable, str(cases.SCRIPT), "preflight", "--project", str(project),
+                                 "--tag", "v9.9.1", "--version", "9.9.1", "--bump-plugins", ""],
+                                text=True, capture_output=True)
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "plugin_requires_bump: my-spec" in result.stdout
+        assert "plugin_requires_bump: build-and-verify" in result.stdout
+        # A real assembled orphan channel is the baseline, not a reassembled channel.
+        flow = cases.load_release_flow_module()
+        released = tmp_path / "released"
+        shutil.copytree(project, released, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        flow.prepare_formal_release_tree(released, flow.read_projection(released))
+        _git(released, "init", "--initial-branch=marketplace")
+        _git(released, "config", "user.email", "test@example.invalid")
+        _git(released, "config", "user.name", "Test")
+        _git(released, "add", ".")
+        _git(released, "commit", "-m", "assembled marketplace")
+        _git(released, "remote", "add", "origin", str(remote))
+        _git(released, "push", "--force", "origin", "HEAD:refs/heads/marketplace")
+
+        def preflight():
+            return subprocess.run([sys.executable, str(cases.SCRIPT), "preflight", "--project", str(project),
+                                   "--tag", "v9.9.1", "--version", "9.9.1", "--bump-plugins", ""],
+                                  text=True, capture_output=True)
+
+        healthy = preflight()
+        assert healthy.returncode == 0, healthy.stdout + healthy.stderr
+        shared = project / "plugins/tool-lifecycle/python/management.py"
+        original = shared.read_bytes()
+        shared.write_bytes(original.replace(b"\n", b"\r\n"))
+        normalized = preflight()
+        assert normalized.returncode == 0, normalized.stdout + normalized.stderr
+
+        # Real source changes and wrapper drift cannot hide behind the injection rule.
+        shared.write_bytes(original + b"\n# changed implementation\n")
+        changed = preflight()
+        assert "plugin_requires_bump: my-spec" in changed.stdout
+        shared.write_bytes(original)
+        wrapper = project / "plugins/my-spec/python/management.py"
+        wrapper_bytes = wrapper.read_bytes()
+        wrapper.write_bytes(wrapper_bytes + b"\n# source drift\n")
+        changed = preflight()
+        assert "plugin_requires_bump: my-spec" in changed.stdout
+        wrapper.write_bytes(wrapper_bytes)
+        bundled = released / "plugins/my-spec/python/management.py"
+        bundled.write_bytes(original + b"\n# corrupt released implementation\n")
+        _git(released, "add", ".")
+        _git(released, "commit", "-m", "corrupt bundled management")
+        _git(released, "push", "origin", "HEAD:refs/heads/marketplace")
+        corrupted = preflight()
+        assert "plugin_requires_bump: my-spec" in corrupted.stdout
+        bundled.write_bytes(original)
+        if os.name != "nt":
+            bundled.chmod(0o755)
+            _git(released, "add", ".")
+            _git(released, "commit", "-m", "change published executable mode")
+            _git(released, "push", "origin", "HEAD:refs/heads/marketplace")
+            wrong_mode = preflight()
+            assert "plugin_requires_bump: my-spec" in wrong_mode.stdout
+            bundled.chmod(0o644)
+        _git(released, "add", ".")
+        _git(released, "commit", "-m", "restore bundled management")
+        _git(released, "push", "origin", "HEAD:refs/heads/marketplace")
+        restored = preflight()
+        assert restored.returncode == 0, restored.stdout + restored.stderr
+        if os.name != "nt":
+            _git(project, "config", "core.filemode", "false")
+            shared.chmod(0o755)
+            changed_mode = preflight()
+            assert "plugin_requires_bump: my-spec" in changed_mode.stdout
+            shared.chmod(0o644)
+        shared.write_bytes(original.replace(b"\n", b"\r\n"))
+        # Current and channel agree, but source-ref attributes still produce LF.
+        attributes = "*.py text eol=lf\nplugins/my-spec/python/management.py -text\nplugins/build-and-verify/python/management.py -text\n"
+        (project / ".gitattributes").write_text(attributes, encoding="utf-8")
+        (released / ".gitattributes").write_text(attributes, encoding="utf-8")
+        for plugin in ("my-spec", "build-and-verify"):
+            (released / "plugins" / plugin / "python/management.py").write_bytes(original.replace(b"\n", b"\r\n"))
+        _git(released, "add", ".")
+        _git(released, "commit", "-m", "destination-specific attributes")
+        _git(released, "push", "origin", "HEAD:refs/heads/marketplace")
+        drifted = preflight()
+        assert drifted.returncode == 1, drifted.stdout + drifted.stderr
+        assert "plugin_requires_bump: my-spec" in drifted.stdout
+        # A ref's shared checkout conversion happens before its destination conversion.
+        (project / ".gitattributes").write_text(
+            attributes + "plugins/tool-lifecycle/python/management.py text eol=crlf\n", encoding="utf-8")
+        _git(project, "add", ".gitattributes")
+        _git(project, "commit", "-m", "source-specific checkout attributes")
+        _git(project, "push", "origin", "HEAD:refs/heads/main")
+        checkout_normalized = preflight()
+        assert checkout_normalized.returncode == 0, checkout_normalized.stdout + checkout_normalized.stderr

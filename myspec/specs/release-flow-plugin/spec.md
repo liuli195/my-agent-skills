@@ -526,3 +526,54 @@ Formal release projection MUST select canonical plugin sources from the release 
 - **WHEN** the release process projects the Codex and Claude formal marketplaces
 - **THEN** both formal catalogs MUST point to canonical plugin sources without development artifact paths
 - **THEN** formal command-tool packages MUST still contain their required shared runtime and existing npm distribution MUST remain available
+### Requirement: 正式 Git 市场命令工具目录自包含
+
+系统 MUST 在正式发布的隔离目标树中，为正式市场实际声明的注册命令工具生成完整的单插件目录。通过正式市场取得该目录的使用者 MUST 能直接运行包内命令，不依赖仓库兄弟目录或旧全局 npm。发布输入检查 MUST 比较源码的有效交付内容与正式市场实际内容，只排除已知装配形态差异，并保留其他发布输入、源引用及 Git 换行和模式保护；不得重新装配正式市场内容来遮蔽缺陷。
+
+#### Scenario: 正式市场工具目录独立使用
+
+- **WHEN** 使用者只取得正式市场清单所指的命令工具目录
+- **THEN** 系统 MUST 允许通过包内 Node 启动器执行原有规格校验、项目初始化或构建及运行诊断
+- **THEN** 运行 MUST NOT 依赖源码树的其他插件目录或全局 npm 命令
+
+#### Scenario: 按正式选择装配且不污染源码
+
+- **WHEN** 发布流程准备正式发布内容或核验预期发布内容
+- **THEN** 系统 MUST 只为本次正式清单实际声明的注册命令工具补齐随包运行实现
+- **THEN** 实现 MUST 来自当前目标发布树
+- **THEN** 系统 MUST 保持源码薄包装、公开 project 原地行为、开发包及 npm／完整 ZIP 原有行为
+- **THEN** 未选中命令工具的项目 MUST NOT 被要求提供无关工具或共享实现
+
+#### Scenario: 发布前拒绝无效装配输入
+
+- **WHEN** 命令工具的必要输入缺失、包身份错误或目标路径越界
+- **THEN** 系统 MUST 明确失败并在外部发布、推送或创建发布前停止
+- **THEN** 系统 MUST NOT 将旧目录视为本次装配成功
+
+#### Scenario: 重复正式投影与已发布引用一致
+
+- **WHEN** 相同有效输入重复生成正式发布内容或核验既有发布引用
+- **THEN** 系统 MUST 使用相同正式转换并得到一致内容
+- **THEN** 既有发布引用与本次真实预期内容不符时 MUST 拒绝继续
+
+#### Scenario: 首次修复旧薄包装
+
+- **WHEN** 正式市场仍包含依赖包外共享实现的旧薄包装
+- **THEN** 发布输入检查 MUST 识别真实交付内容变化并要求受影响工具升级版本
+
+#### Scenario: 正常装配不反复要求升级
+
+- **WHEN** 当前源码、源引用及正式市场实际交付内容一致，只有已知薄包装与包内装配形态不同
+- **THEN** 发布输入检查 MUST NOT 仅因该形态差异再次要求升级版本
+
+#### Scenario: 真实发布内容或来源差异不能被忽略
+
+- **WHEN** 共享运行实现、其他发布输入、源引用或正式市场实际内容发生真实变化
+- **THEN** 系统 MUST 继续执行既有版本提升及来源保护
+- **THEN** 缺失、损坏或异常模式的正式随包文件 MUST NOT 被已知装配差异的排除规则掩盖
+
+#### Scenario: Git 换行与模式保持发布语义
+
+- **WHEN** 源码在不同平台检出或各源码引用使用不同 Git 属性
+- **THEN** 比较 MUST 按对应源码引用及目标发布路径的 Git 内容规范化和发布模式判断
+- **THEN** 正常换行转换 MUST NOT 单独制造版本变化，真实内容或模式变化 MUST NOT 被忽略

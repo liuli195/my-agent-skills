@@ -53,6 +53,30 @@ def _inject_management(package: Path, expected_name: str, management: Path = MAN
     _validate_package(package, expected_name)
 
 
+def assemble_formal_tools(target: Path, tools: list[tuple[str, str]]) -> None:
+    """Make selected canonical tool directories self-contained in a disposable tree."""
+    if not tools:
+        return
+    root = target.resolve()
+    management = root / "plugins/tool-lifecycle/python/management.py"
+    if not management.resolve().is_relative_to(root) or not management.is_file():
+        raise ValueError(f"invalid_management_source: {management}")
+    packages = []
+    for relative, package_name in tools:
+        path = Path(relative)
+        package = root / path
+        if path.is_absolute() or ".." in path.parts or not package.resolve().is_relative_to(root):
+            raise ValueError(f"invalid_package_path: {relative}")
+        if not package.is_dir() or not (package / "python").is_dir():
+            raise ValueError(f"invalid_package_path: {relative}")
+        if not (package / "python/management.py").resolve().is_relative_to(package.resolve()):
+            raise ValueError(f"invalid_management_target: {relative}")
+        _validate_package(package, package_name)
+        packages.append((package, package_name))
+    for package, package_name in packages:
+        _inject_management(package, package_name, management)
+
+
 def pack(name: str, output: Path) -> Path:
     output = output.resolve()
     selected = PACKAGES.get(name)
