@@ -181,3 +181,12 @@ def test_update_retains_old_link_when_switch_or_restore_fails(monkeypatch, capsy
         assert "旧入口保留在" in capsys.readouterr().err
     else:
         assert links == {binding: old}
+
+
+def test_resolve_explicit_runtime_is_read_only_and_never_falls_back(monkeypatch, capsys):
+    import json
+    app = entry()
+    monkeypatch.setattr(app, "project_entry", lambda *args: (_ for _ in ()).throw(AssertionError("no project lookup")))
+    assert invoke(app, monkeypatch, "resolve", "--runtime", SKILL) == 0
+    assert Path(json.loads(capsys.readouterr().out)["script"]) == SKILL / "scripts/data_store.py"
+    assert invoke(app, monkeypatch, "resolve", "--runtime", ROOT / "missing-runtime") == 1

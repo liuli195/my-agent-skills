@@ -127,7 +127,8 @@ def test_empty_install_can_be_reused_and_optional_skill_is_nonblocking(installat
     state.manifest["optional_skills"] = ["data-store"]
     for _ in range(2):
         assert state.app.main(["init", *state.arguments]) == 0
-    assert state.installed == {"sources": {}, "npm": {}, "pending": ["data-store"]}
+    assert state.installed["pending"] == ["data-store"]
+    assert state.installed["sources"] == state.installed["npm"] == {}
 
 
 @pytest.mark.parametrize("arguments", [["update", "--latest"], ["init", "--latest", "--only", "example"]])
@@ -218,7 +219,7 @@ def test_missing_source_restores_recorded_commit(installation, monkeypatch):
 
 
 @pytest.mark.parametrize("declared,ready", [(False, True), (True, False), (True, True)])
-def test_project_binding_follows_only_declared_ready_skill(installation, monkeypatch, declared, ready):
+def test_project_setup_does_not_select_binding_from_legacy_skill_name(installation, monkeypatch, declared, ready):
     state = installation
     project = ROOT
     recipe = {"requirements": [], "npm": False, "skills": ["data-store"] if declared else [],
@@ -231,9 +232,7 @@ def test_project_binding_follows_only_declared_ready_skill(installation, monkeyp
         (["git", "-C", project, "remote", "get-url", "origin"], "https://github.com/owner/project.git"),
         (setup, "reused"),
     ]
-    if declared and ready:
-        expected.extend(([state.app.sys.executable, state.root / "skills/data-store/scripts/project_binding.py",
-                          action, "--project", project], "checked") for action in ("connect", "check"))
+    # Legacy skill names no longer select a project implementation implicitly.
 
     def execute(command, **kwargs):
         wanted, output = expected.pop(0)

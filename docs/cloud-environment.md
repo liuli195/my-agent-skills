@@ -1,68 +1,41 @@
 # 云端开发环境
 
-一个公共入口负责已发布工具、技能和项目依赖。配置保存在版本库；机器被重建时重新运行入口。MCP 不在本轮范围。
+统一入口准备公共依赖并使用本次官方插件运行包，不从旧自有源码克隆或全局 npm 安装获取运行实现。不安装系统运行时，不处理登录凭据，不修改 shell 配置。
 
-## 使用
+## 初始化及更新
 
-需要现成的 Git、Python 3.12、Node/npm。公共入口不安装系统运行时，也不修改登录、凭据或 shell 配置。
+先由宿主核对官方对象、发布版本和完整包资源；存在官方文件路径时直接使用。只有资源 URI 时，通过宿主官方能力取得本任务完整相对文件树；脚本不猜缓存路径、不下载账号内容，也不把 URI 当文件路径。
 
 ```sh
-python scripts/cloud_bootstrap.py init --root /workspace/shared/cloud-skills/managed --project .
-python scripts/cloud_bootstrap.py update --root /workspace/shared/cloud-skills/managed --project .
-python scripts/cloud_bootstrap.py update --root /workspace/shared/cloud-skills/managed --latest --only own-skills
+python scripts/cloud_bootstrap.py init --root <已批准公共依赖目录> --runtime-manifest <本次官方运行来源.json> --project <项目目录>
+python scripts/cloud_bootstrap.py update --root <同一目录> --runtime-manifest <重新核验的运行来源.json> --project <项目目录>
 ```
 
-第三条仅更新已发布的自有技能；可以用 `--only mattpocock`、`--only find-skills` 或具体 npm 包名选择相应来源。首次使用解析最新正式发布版本，不回退到开发分支或源码 HEAD。普通重跑使用已记录版本，清单中的显式版本始终优先，不修改项目锁文件。
+`--runtime-manifest` 包含 `packages` 对象，键与 `scripts/cloud-environment.json` 的 `runtime_packages[].name` 对应。每项包含：
 
-声明文件为 `scripts/cloud-environment.json`。给源增加技能路径即可通过同一入口纳管，无需为 data-store 增加专用命令。data-store 尚未出现在正式版本时记录为待发布；未来更新 own-skills 后自动发现。安装范围按顶层目录计算，子技能发现链接不算另一套安装。
+- `root`：当前完整包绝对路径；不能位于旧 managed/sources、npm 或 skills 中。
+- `lifetime`：持久安装为 `installed`，仅本任务资源为 `task`。
+- `pluginId`、`releaseId`、`version`、`channel: "RELEASE"`：宿主从官方读取结果核对的身份，不能自行填写假证据。
+- `files`：完整包内相对路径到 SHA-256 的映射。脚本校验完整集合、内容、包名、版本和配置要求的技能/启动器；不把本地自述字段当作服务端权限证明。
 
-`--skills-dir` 可指定已批准的用户技能发现目录。目标存在且不是相同链接时停止，不能覆盖用户安装。安装目录、发现目录和旧环境删除必须先得到具体授权。
+每次调用重新验证本次输入，不从旧 installed.json 恢复失效路径。所需资源缺失、来源冲突或摘要改变时，在公共依赖安装和项目初始化前失败。输出 `commands` 为当前包的精确 Node 启动参数数组；执行时保持参数边界，不回退 PATH 中的同名全局工具，不改变用户环境。
 
-公共目录中的 `installed.json` 记录版本，`sources` 使用 Git 稀疏检出，`npm` 使用 npm 正式包；技能发现链接指向唯一运行来源。升级不会自动清理用户目录或旧迁移包。若升级后发现失效技能链接，入口列出路径并停止成功状态，待批准清理后重跑；不会擅自删除用户目录的链接。
+`--latest` 只允许 `update --latest --only <配置中的公共来源或软件包>`。官方插件内容更新由 plugin-sync 的 Creator 流程负责，初始化不会保存或安装账号插件。公共/第三方 sources、npm 和项目自身 requirements/npm 依赖仍使用原安装工具。
 
-## 迁移后的原生发现路径
+## 发现和旧记录
 
-同一初始化入口接受清单中的 `discovery`（发现映射），按技能名登记已验证的原生 `SKILL.md`（技能文件）绝对路径及 `resources`（资源数组）。每项资源含技能目录下相对 `path`（路径）及 `sha256`（内容校验值）。映射不限于九项自有插件，第三方与开发依赖也逐项登记；只有实际替代入口和必需资源验证后才加入。
+原生技能发现优先。`--skills-dir` 只导出本次配置明确选择的传统第三方技能，不遍历历史目录重新导出旧自有链接。官方运行包不再建立旧 managed/skills 链接。历史 sources、npm、discovery 记录可保留供恢复和精确清理盘点，不能替代本次运行来源。有效旧安装也不会因仍存在就自动纳入当前导出集合。
 
-入口核对技能身份、资源内容和目录边界，将映射保存在现有 `installed.json`（安装记录）。普通初始化和更新继续核对同一映射，不为该技能创建旧公共或用户级发现链接。替代文件丢失、身份或资源不符时失败，不静默退回旧链接。未迁移的技能仍使用现有路径，命令程序与依赖继续由原有安装入口保留。
-
-该配置不删除任何已有链接、源码、状态或安装。盘点包含全部受控技能，清理前需另行核对替代发现和依赖可用性，并确认具体清理对象；没有替代的项目须先报告。清理后重复初始化应保持旧链接缺失。
+已有无效链接、同名冲突及替换需求明确报告，不自动删除。真实发现、脚本运行和恢复验收通过后，按精确清理授权删除旧自有资源；公共依赖、第三方、项目数据和必要正式资产保持。
 
 ## 项目接入
 
-公共清单的 projects 项登记已支持仓库的既有准备入口、requirements 文件、是否使用 npm，以及需要连接的技能。实际包版本仍以目标仓库自己的依赖声明为准，不新增项目配置协议。
+projects 配置继续声明 requirements、npm 和 Windows/Linux 准备入口；包运行接入由 `bindings` 声明 `package` 和包内 `script`，不在通用实现按技能短名分支。稳定接入仅使用持久官方安装目录，复用包内 connect/check；现有绑定不同即停止，不隐式覆盖。
 
-项目显式声明 `"skills": ["data-store"]` 时，现有准备完成后，统一入口从公共技能发现位置调用随包 `project_binding.py connect/check`（项目连接与检查），重跑复用同一来源。没有声明的项目不建立连接；可选技能尚未发布时保留待发布状态，不强制安装。现有入口冲突或来源不同会明确失败并保留内容，不自动切换来源。本清单目前只给已核实需要数据存储的 Wow-Addons（魔兽插件仓库）声明此能力。
+任务临时目录不能写成永久项目链接。data-store 已提供 `resolve --runtime <当前技能目录>` 供支持显式实现目录的调用者使用；不支持该输入的项目必须停止。当前 Wow tracked 桥接仍使用稳定目录，只有持久官方目录才能接入；修改项目桥接和真实迁移另按其工作树、基线及授权执行，不能通过改内部变量或临时链接假称完成。数据根与实现目录独立，初始化不迁移业务数据。
 
-- Windows 调用既有 PowerShell 入口，保留其完整默认行为
-- Linux 使用公共助手准备 Python/npm，不冒充 Windows 完整工具链
-- 链接工作树只能复用与主工作树声明一致且已准备的依赖，不修改主工作树
-- Python 主次版本变化需要明确重建环境；Node 版本计入环境身份
-- 指纹覆盖嵌套 requirements。pip 按声明满足约束，不承诺删除所有多余包
+## 失败与验证
 
-```sh
-python /path/to/my-agent-skills/scripts/cloud_bootstrap.py init --root /workspace/shared/cloud-skills/managed --project /path/to/Quant-Research-Lab
-export NPM_CONFIG_PREFIX=/workspace/shared/cloud-skills/managed/npm
-export PATH="$PWD/.venv/bin:$NPM_CONFIG_PREFIX/bin:$PATH"
-build-and-verify verify --project . --execution-context cloud
-```
+公共安装中途失败保留真实部分状态并报告，不保证全局回滚；没有完成项目接入不报告 ready。任务资源结束后不可再依赖其路径。开发阶段只在受控夹具验证首次、重复和失败初始化；真实云端安装、客户端发现、项目运行及旧资源清理仍为发布后独立验收。
 
-这两个环境变量只影响当前 shell，不写用户配置。NPM_CONFIG_PREFIX 让工具的 doctor、更新和规格命令找到同一安装根，不能只设置 PATH。公共安装和项目环境版本分别记录。
-
-## Git 工作区生命周期
-
-使用 Git 原生命令，不增加工作区管理工具，也不依赖 Codex 本地环境配置。
-
-1. 核对主工作树、当前变更和已批准的目录；按仓库流程建立功能分支
-2. 有隔离需求时，用 git worktree add 创建仓库内工作区；沿用当前工作树的开发流程不额外创建工作区
-3. 切换到工作区目录，显式调用上面的统一初始化命令
-4. 使用项目解释器和统一构建验证命令开发、验证
-5. 按仓库流程交付后，通过 git worktree remove 删除获准清理的工作区，再核对分支和引用
-
-不得强制删除含未交付改动的工作区。外部目录创建、删除仍需明确授权。原有 .worktreeinclude 可保留供其他客户端使用，但本流程不依赖它复制环境。
-
-## 平台范围与验证
-
-公共工具/技能以及三个项目的 Python/npm 准备在云端验证。魔兽仓库的 Windows 游戏工具、原生引擎构建不由本脚本替代；两套引擎身份不变。应继续使用现有本机/CI 流程验证这些能力。
-
-测试由现有 build-and-verify 配置纳管。日常测试不联网下载；实际安装只在批准位置做入口冒烟。本机沿用既有预算，云端不继承本机总截止。
+沿用现有 build-and-verify 默认快速门禁，不新增固定重型冒烟或放宽预算。Windows 既有游戏/编译工具与 Linux 项目依赖准备的职责保持。

@@ -5,6 +5,8 @@ description: Build and Verify（构建与验证）对话式初始化向导；为
 
 # Build and Verify Init（构建与验证初始化）
 
+> 随包命令约定：本文件的 `build-and-verify <参数>` 均指本次实际加载插件的 `node <verified-plugin-root>/bin/build-and-verify.js <参数>` 参数数组，不是PATH中的裸命令。包根从当前官方技能/安装记录核实；没有真实路径时只取得本任务同版本官方完整资源，保留目录关系，缺失即停止，不猜缓存或回退旧全局npm。一次会话固定同一实现，不改变业务目标工作树。
+
 Use this skill when the user asks to initialize（初始化）, generate（生成）, draft（草拟）, or configure（配置） `.build-and-verify/config.json`（配置文件） for a target repository（目标仓库）.
 
 ## Hard Boundaries（硬边界）

@@ -19,8 +19,24 @@ class TestDataStore:
 
         installed = tmp_path / "installed/data-store"
         shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
-        script = installed / "scripts/data_store.py"
-        spec = importlib.util.spec_from_file_location("installed_data_store", script)
+        project = tmp_path / "project"
+        project.mkdir()
+        binding_script = installed / "scripts/project_binding.py"
+        def binding(*arguments):
+            return subprocess.run([sys.executable, str(binding_script), *map(str, arguments)],
+                                  text=True, capture_output=True, cwd=tmp_path)
+        connected = binding("connect", "--project", project)
+        assert connected.returncode == 0, connected.stdout + connected.stderr
+        stable = binding("resolve", "--project", project)
+        explicit = binding("resolve", "--runtime", installed)
+        assert stable.returncode == explicit.returncode == 0, stable.stderr + explicit.stderr
+        assert json.loads(stable.stdout) == json.loads(explicit.stdout)
+        failed = binding("resolve", "--runtime", tmp_path / "missing-runtime")
+        assert failed.returncode != 0
+        assert (project / ".local/skills/data-store").resolve() == installed.resolve()
+        # CLI writes use the stable choice; the loaded read interface uses the explicit choice.
+        script = Path(json.loads(stable.stdout)["script"])
+        spec = importlib.util.spec_from_file_location("installed_data_store", json.loads(explicit.stdout)["script"])
         store = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(store)
         data = tmp_path / "data"
@@ -45,6 +61,8 @@ class TestDataStore:
             {"label": "001", "amount": 4}, {"label": "002", "amount": 8},
         ]
         assert cli("read-key", "Measurements", "FIRST", "--batch-size", "1") == rows
+        with store.read_key(data, "measurements", "first") as cursor:
+            assert cursor.fetchone()[:2] == ("001", 1.25)
         assert cli("read-keys", "measurements", "first", "second", "first",
                    "--columns", '["label"]', "--filters", '{"label":"002"}',
                    "--batch-size", "1") == [{"label": "002"}]

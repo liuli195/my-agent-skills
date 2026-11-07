@@ -326,3 +326,11 @@ Data Store MUST 通过相同计划及其可靠回执继续未完成维护，核�
 
 - **WHEN** 调用方使用既有写入、二进制写入、单键、多键或显式表查询入口
 - **THEN** 原类型、能力、错误和当前数据语义保持，不为新增维护增加逐次散列或后台扫描
+### Requirement: Data Store resolves stable and explicit runtimes independently of data roots
+
+Data Store  MUST 提供稳定项目入口或单次显式实现目录的只读解析，两者互斥；显式无效时不回退。实现目录与业务数据根独立，项目桥接按实际支持方式接入。
+
+#### Scenario: Observable outcome
+
+- **WHEN** 同一数据根使用稳定入口写入并由显式入口读取
+- **THEN** 数据一致；无效输入不改变旧绑定和数据，任务实现目录不成为永久链接。

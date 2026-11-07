@@ -1,106 +1,89 @@
-"""One public bootstrap/binding smoke, without dependency downloads."""
-
+"""One public bootstrap smoke without dependency downloads or old runtime installs."""
 import json
-import hashlib
-import os
-from pathlib import Path
-import shutil
-import subprocess
-import sys
-
 import pytest
-
-ROOT = Path(__file__).resolve().parents[2]
-SKILL = ROOT / "plugins/data-store/skills/data-store"
 
 
 class TestBootstrap:
-    @pytest.mark.skipif(os.name == "nt", reason="Linux bootstrap; Windows has its junction adapter")
-    def test_public_bootstrap_reuses_binding_and_updates_source_without_losing_data(self, tmp_path):
-        root, project = tmp_path / "managed", tmp_path / "project"
-        project.mkdir()
-
-        def git(directory, *arguments):
-            result = subprocess.run(["git", "-C", str(directory), *arguments],
-                                    text=True, capture_output=True)
-            assert result.returncode == 0, result.stdout + result.stderr
-            return result.stdout.strip()
-
-        git(project, "init", "-q")
-        git(project, "remote", "add", "origin", "https://github.com/owner/project.git")
-        (project / ".gitignore").write_text(".venv/\n.local/project-environment.json\ndata/\n")
-        git(project, "add", ".gitignore")
-        git(project, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
-            "commit", "-qm", "fixture")
-        python = project / ".venv/bin/python"
-        python.parent.mkdir(parents=True)
-        python.symlink_to(sys.executable)
-        (project / ".local").mkdir()
-        (project / ".local/project-environment.json").write_text(json.dumps({
-            "inputs": {}, "python": f"{sys.version_info.major}.{sys.version_info.minor}",
-        }))
-        data = project / "data/keep.txt"
-        data.parent.mkdir()
-        data.write_text("existing business data", encoding="utf-8")
-        source = root / "sources/own-skills"
-        installed = source / "plugins/data-store/skills/data-store"
-        shutil.copytree(SKILL, installed, ignore=shutil.ignore_patterns("__pycache__"))
-        git(source, "init", "-q")
-        git(source, "remote", "add", "origin", "https://github.com/liuli195/my-agent-skills.git")
-        git(source, "add", ".")
-        git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
-            "commit", "-qm", "fixture")
-        (root / "installed.json").write_text(json.dumps({"sources": {"own-skills": {
-            "repo": "liuli195/my-agent-skills", "ref": "vfixture",
-            "commit": git(source, "rev-parse", "HEAD"),
-        }}, "npm": {}}))
-        manifest = tmp_path / "environment.json"
-        manifest.write_text(json.dumps({
-            "sources": [{"name": "own-skills", "repo": "liuli195/my-agent-skills", "ref": "vfixture",
-                         "paths": ["plugins/data-store"]}],
-            "npm": [], "optional_skills": ["data-store"],
-            "projects": {"owner/project": {"requirements": [], "npm": False, "skills": ["data-store"]}},
-        }))
-        arguments = [sys.executable, str(ROOT / "scripts/cloud_bootstrap.py"), "init",
-                     "--root", str(root), "--manifest", str(manifest), "--project", str(project)]
-        binding = project / ".local/skills/data-store"
+    def test_public_bootstrap_reuses_current_runtime_and_rejects_conflicts(self, tmp_path, monkeypatch, capsys):
+        import hashlib
+        from pathlib import Path
+        from tests.test_cloud_bootstrap import entry
+        app = entry()
+        package = tmp_path / "official-package"
+        package.mkdir()
+        data = {".codex-plugin/plugin.json": json.dumps({"name": "example", "version": "1.2.3"}).encode(),
+                "skills/example/SKILL.md": b"---\nname: example\n---\nCurrent skill\n", "bin/example.js": b"// current entry\n"}
+        for name, content in data.items():
+            path = package / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(content)
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(json.dumps({"sources": [], "npm": [], "runtime_packages": [{"name": "example", "skills": {"example": "skills/example"}, "commands": {"example": "bin/example.js"}}]}))
+        runtime = tmp_path / "runtime.json"
+        value = {"packages": {"example": {"root": str(package), "lifetime": "installed", "pluginId": "Official_example", "releaseId": "release_example", "version": "1.2.3", "channel": "RELEASE", "files": {name: hashlib.sha256(content).hexdigest() for name, content in data.items()}}}}
+        runtime.write_text(json.dumps(value))
+        managed = tmp_path / "managed"; (managed / "skills/retired").mkdir(parents=True)
+        (managed / "skills/retired/SKILL.md").write_text("old valid skill")
+        target = tmp_path / "discovery"
+        monkeypatch.setattr(app, "run", lambda *a, **k: pytest.fail("no old install or global command"))
+        args = ["init", "--root", str(managed), "--manifest", str(manifest), "--runtime-manifest", str(runtime), "--skills-dir", str(target)]
+        assert app.main(args) == 0
+        cache = package / "skills/example/__pycache__"
+        cache.mkdir(); (cache / "runtime.cpython-312.pyc").write_bytes(b"generated by normal module loading")
+        assert app.main(args) == 0
+        original_state = (managed / 'installed.json').read_bytes()
+        extra = cache / 'unreviewed.txt'; extra.write_text('not generated bytecode')
+        assert app.main(args) == 1
+        assert (managed / 'installed.json').read_bytes() == original_state
+        extra.unlink()
+        assert not target.exists()
+        project = tmp_path / "project"; project.mkdir()
+        conflict = project / ".local/runtime"; conflict.mkdir(parents=True)
+        state_before_conflict = (managed / "installed.json").read_bytes()
+        config = json.loads(manifest.read_text())
+        config['projects'] = {'owner/project': {'requirements': [], 'bindings': [{'package': 'example', 'script': 'bin/example.js', 'source': 'skills/example', 'target': '.local/runtime'}]}}
+        manifest.write_text(json.dumps(config))
+        calls = []
+        def read_origin(command, **kwargs):
+            calls.append(command)
+            assert command == ['git', '-C', project, 'remote', 'get-url', 'origin']
+            return 'https://github.com/owner/project.git'
+        monkeypatch.setattr(app, 'run', read_origin)
+        assert app.main([*args, '--project', str(project)]) == 1
+        assert len(calls) == 1 and (managed / 'installed.json').read_bytes() == state_before_conflict
+        # Preserve the successful public init -> real persistent binding chain.
+        import shutil, subprocess, sys
+        from pathlib import Path
+        data_source = Path(__file__).resolve().parents[2] / 'plugins/data-store'
+        data_package = tmp_path / 'official-data-package'
+        shutil.copytree(data_source, data_package, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        metadata = json.loads((data_package / '.codex-plugin/plugin.json').read_text())
+        config['runtime_packages'].append({'name': 'data-store', 'skills': {'data-store': 'skills/data-store'}})
+        binding = {'package': 'data-store', 'script': 'skills/data-store/scripts/project_binding.py',
+                   'source': 'skills/data-store', 'target': '.local/skills/data-store'}
+        config['projects']['owner/project'] = {'requirements': [], 'npm': False,
+            'windows_setup': ['fixture-project-setup'], 'bindings': [binding]}
+        manifest.write_text(json.dumps(config))
+        value['packages']['data-store'] = {'root': str(data_package), 'lifetime': 'installed',
+            'pluginId': 'Official_data', 'releaseId': 'data_release', 'channel': 'RELEASE',
+            'version': metadata['version'], 'files': {path.relative_to(data_package).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in data_package.rglob('*') if path.is_file()}}
+        runtime.write_text(json.dumps(value))
+        data = project / 'data/keep.txt'; data.parent.mkdir(); data.write_text('existing business data')
+        executed = []
+        def current_command(command, **kwargs):
+            if command[0] == 'git': return read_origin(command, **kwargs)
+            if command[0] == 'fixture-project-setup' or (len(command)>1 and Path(str(command[1])).name == 'project_environment.py'):
+                return 'reused public dependency setup'
+            executed.append(command)
+            return subprocess.run([str(x) for x in command], check=True, text=True, capture_output=True, cwd=kwargs.get('cwd')).stdout
+        monkeypatch.setattr(app, 'run', current_command)
         for _ in range(2):
-            result = subprocess.run(arguments, text=True, capture_output=True)
-            assert result.returncode == 0, result.stdout + result.stderr
-            assert "reused" in result.stdout
-            assert binding.resolve() == installed.resolve()
-        replacement = tmp_path / "new/data-store"
-        shutil.copytree(installed, replacement, ignore=shutil.ignore_patterns("__pycache__"))
-        result = subprocess.run(
-            [sys.executable, str(replacement / "scripts/project_binding.py"), "update",
-             "--project", str(project), "--from", str(installed)],
-            text=True, capture_output=True,
-        )
-        assert result.returncode == 0, result.stdout + result.stderr
-        assert binding.resolve() == replacement.resolve()
-        assert (installed / "scripts/data_store.py").is_file()
-        assert (replacement / "scripts/data_store.py").is_file()
-        assert data.read_text(encoding="utf-8") == "existing business data"
-        configuration = json.loads(manifest.read_text())
-        resource = replacement / "scripts/project_binding.py"
-        configuration["discovery"] = {"data-store": {"path": str(replacement / "SKILL.md"),
-            "resources": [{"path": "scripts/project_binding.py", "sha256": hashlib.sha256(resource.read_bytes()).hexdigest()}]}}
-        manifest.write_text(json.dumps(configuration))
-        validated = subprocess.run(arguments, text=True, capture_output=True)
-        assert validated.returncode == 0, validated.stdout + validated.stderr
-        (root / "skills/data-store").unlink()
-        for _ in range(2):
-            result = subprocess.run(arguments, text=True, capture_output=True)
-            assert result.returncode == 0, result.stdout + result.stderr
-            assert not (root / "skills/data-store").exists()
-            assert binding.resolve() == replacement.resolve()
-            assert data.read_text(encoding="utf-8") == "existing business data"
-        saved_resource = resource.read_bytes()
-        resource.write_bytes(saved_resource + b"\n# changed resource\n")
-        rejected = subprocess.run(arguments, text=True, capture_output=True)
-        assert rejected.returncode == 1
-        assert "Native skill resource changed" in rejected.stderr
-        assert not (root / "skills/data-store").exists()
-        assert data.read_text(encoding="utf-8") == "existing business data"
-        resource.write_bytes(saved_resource)
-        assert git(project, "status", "--porcelain") == ""
+            assert app.main([*args, '--project', str(project)]) == 0
+            assert (project / '.local/skills/data-store').resolve() == (data_package / 'skills/data-store').resolve()
+            assert data.read_text() == 'existing business data'
+        assert [x[2] for x in executed] == ['connect', 'check', 'connect', 'check']
+        state = (managed / "installed.json").read_bytes()
+        value["packages"]["example"]["version"] = "wrong"
+        runtime.write_text(json.dumps(value))
+        assert app.main(args) == 1
+        assert (managed / "installed.json").read_bytes() == state
+        assert "version" in capsys.readouterr().err

@@ -78,13 +78,13 @@
 - **THEN** 系统 MUST NOT 重新扫描以重建剩余候选
 ### Requirement: MySpec 操作错误可见且重复执行稳定
 
-系统 MUST 通过 PATH（可执行文件搜索路径）中的裸 `myspec` CLI（命令行程序）执行状态、校验、预览、差异和应用操作，不得定位或解析包内脚本路径；系统 MUST 对无效主规格或 Delta（增量规格）返回非零结果和可识别错误，并确保相同输入的重复预览或应用不产生额外变化。主规格 MUST 包含 Purpose（目的）、Requirements（需求）、全局唯一的 Requirement 标题、`MUST` 或 `SHALL`，以及至少一个包含非空 `WHEN` 和 `THEN` 的 Scenario（场景）。Delta MUST 只支持 RENAMED、REMOVED、MODIFIED 和 ADDED，并按该顺序应用。
+系统 MUST 通过本次已核验插件包的原Node启动器执行状态、校验、预览、差异和应用操作，不得直接调用内部Python实现或重新从PATH选择旧全局命令；系统 MUST 对无效主规格或 Delta（增量规格）返回非零结果和可识别错误，并确保相同输入的重复预览或应用不产生额外变化。主规格 MUST 包含 Purpose（目的）、Requirements（需求）、全局唯一的 Requirement 标题、`MUST` 或 `SHALL`，以及至少一个包含非空 `WHEN` 和 `THEN` 的 Scenario（场景）。Delta MUST 只支持 RENAMED、REMOVED、MODIFIED 和 ADDED，并按该顺序应用。
 
 #### Scenario: Skill 执行确定性操作
 
 - **WHEN** 任一 MySpec Skill（技能）执行状态、校验、预览、完整差异或应用操作
-- **THEN** Skill MUST 直接调用 `myspec` 及对应既有业务子命令
-- **THEN** Skill MUST NOT 包含 `spec_ops.py` 路径、绝对安装路径或要求 Agent（代理）选择脚本位置
+- **THEN** Skill MUST 使用同一随包Node启动器及对应既有业务子命令
+- **THEN** Skill MUST NOT 直调 `spec_ops.py`、写死机器绝对路径或猜测其他安装源
 
 #### Scenario: 用户提交无效主规格
 
@@ -152,11 +152,11 @@ MySpec（自有规格） MUST preserve unrelated specification files when applyi
 - **THEN** 系统 MUST 恢复原主规格且不得触碰规格目录之外的用户内容
 ### Requirement: 开发源码绑定保护规格写入
 
-系统 MUST 在开发模式使用机器级单一开发源码绑定，并把该绑定只作为 MySpec（自有规格）实现来源；规格数据 MUST 来自运行状态记录的精确目标工作树。开发源码工作树与目标工作树可以相同或不同，`worktreeMatch`（工作树匹配）只提供诊断，不得决定规格写入权限。预览和最终应用 MUST 使用同一目标工作树、规格根、Delta（增量规格）根、预览根、规格与输入指纹及 MySpec 实现身份，最终结果 MUST 与用户确认的预览完全一致。
+独立npm管理模式 MUST 使用其机器级单一开发源码绑定；原生插件调用 MUST 使用当前已核验包，并把实际加载实现身份与目标规格数据分开；规格数据 MUST 来自运行状态记录的精确目标工作树。开发源码工作树与目标工作树可以相同或不同，`worktreeMatch`（工作树匹配）只提供诊断，不得决定规格写入权限。预览和最终应用 MUST 使用同一目标工作树、规格根、Delta（增量规格）根、预览根、规格与输入指纹及 MySpec 实现身份，最终结果 MUST 与用户确认的预览完全一致。
 
 #### Scenario: 开发源码与目标工作树不同
 
-- **WHEN** 裸 `myspec` CLI（命令行程序）在开发模式绑定一个源码工作树，并从另一个目标工作树开始规格运行
+- **WHEN** 独立npm `myspec` CLI（命令行程序）在开发模式绑定一个源码工作树，并从另一个目标工作树开始规格运行
 - **THEN** 系统 MUST 使用已绑定源码提供工具实现，并使用目标工作树提供运行状态、主规格、Delta 和预览
 - **THEN** 源码工作树与目标工作树不同 MUST NOT 阻止预览或最终应用
 

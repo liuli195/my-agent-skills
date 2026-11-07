@@ -1,3 +1,6 @@
+
+> 随包命令约定：本文件的 `myspec <参数>` 均指本次实际加载插件的 `node <verified-plugin-root>/bin/myspec.js <参数>` 参数数组，不是PATH中的裸命令。包根从当前官方技能/安装记录核实；没有真实路径时只取得本任务同版本官方完整资源，保留目录关系，缺失即停止，不猜缓存或回退旧全局npm。一次会话固定同一实现，不改变业务目标工作树。
+
 # MySpec 规则
 
 ## 主规格
@@ -23,7 +26,7 @@ Delta（增量规格）按能力放在 `.local/spec-work/current/delta/<capabili
 
 ## 确定性命令
 
-直接调用 `PATH`（可执行文件搜索路径）中的 CLI（命令行程序）；不得定位或解析包内脚本：
+使用本次已核验插件的Node启动器；下列 `myspec` 为同一随包命令前缀，不从PATH重新选择全局实现：
 
 ```text
 myspec state-init <work-dir> <add|review|audit> <specs-fingerprint> <input-fingerprint> [--import-aborted <archive-dir>]
@@ -57,7 +60,7 @@ myspec diff <specs-dir> <preview-dir>
 
 ## 开发模式多工作树
 
-开发模式的裸 `myspec` 是机器级单一源码绑定，不会按当前目录自动切换。绑定源码后，任意目标工作树都直接运行该实现；无需为目标工作树重复切换绑定：
+独立npm安装命令的开发模式是机器级单一源码绑定（不用于选择当前插件实现），该独立 `myspec`，不会按当前目录自动切换。绑定源码后，任意目标工作树都直接运行该实现；无需为目标工作树重复切换绑定：
 
 ```text
 myspec init --dev --source <源码工作树>

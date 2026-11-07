@@ -780,7 +780,7 @@ class TestMySpec:
         version = json.loads((npm_candidate.installed_package / "package.json").read_text())["version"]
         monkeypatch.setenv("MYSPEC_PACKAGE_VERSION", version)
 
-    def test_packed_bare_cli_confirms_preview_and_preserves_untouched_bytes(self,
+    def test_packed_current_package_cli_confirms_preview_and_preserves_untouched_bytes(self,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, npm_candidate,
     ) -> None:
         from tests.support.myspec_cases import main_spec, npm_prefix_for, requirement
@@ -821,9 +821,9 @@ class TestMySpec:
         conflicts = project / "conflicts.json"
         _myspec_write(conflicts, json.dumps([conflict], ensure_ascii=False))
         def run(*args):
-            return subprocess.run(["myspec", *map(str, args)], cwd=project, env=env,
-                text=True, capture_output=True, check=False, shell=os.name == "nt")
-        # This also exercises the native Windows command shim and Python launch.
+            return subprocess.run([shutil.which("node"), str(package / "bin/myspec.js"), *map(str, args)],
+                cwd=project, env=env, text=True, capture_output=True, check=False)
+        # Use the selected package's original Node launcher, regardless of global shims.
         help_result = run("--help")
         assert help_result.returncode == 0, help_result.stderr
         assert help_result.stdout.startswith("usage: myspec ")

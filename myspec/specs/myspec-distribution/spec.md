@@ -32,7 +32,7 @@
 - **THEN** 系统 MUST NOT 自动安装 Python 或降级运行
 ### Requirement: MySpec 模式切换保持机器级单一来源
 
-系统 MUST 让 `myspec init --dev` 和 `myspec init --release` 显式切换机器级 MySpec 模式，使 CLI（命令行程序）与所有已安装 Agent（代理）始终解析同一个全局 npm 包稳定目录。
+独立npm安装管理 MUST 让 `myspec init --dev` 和 `myspec init --release` 显式切换机器级 MySpec 模式，使 CLI（命令行程序）及该独立安装所管理的Agent来源解析同一个npm稳定目录；原生市场和账号插件的技能运行则使用其当前启用完整包，不由全局npm选择。
 
 #### Scenario: 用户进入开发模式
 
@@ -77,7 +77,9 @@
 - **THEN** 发布流程 MUST NOT 生成 Wheel（Python 安装包）、Pi ZIP（Pi 压缩包）或自建发布资产缓存
 ### Requirement: MySpec update 统一更新发布模式安装
 
-系统 MUST 让 `myspec update` 只在发布模式解析 npm 最新版本、预检已安装客户端、更新全局包、由新 CLI（命令行程序）继续刷新全部已安装 Agent（代理），并在结束时运行只读诊断。更新前后 MUST 使用一致的规范化来源判据验证客户端状态。
+独立npm生命周期管理 MUST 让 `myspec update` 只在发布模式解析 npm 最新版本、预检已安装客户端、更新全局包、由新 CLI（命令行程序）继续刷新独立npm管理的已安装 Agent（代理），并在结束时运行只读诊断。更新前后 MUST 使用一致的规范化来源判据验证客户端状态。
+
+插件同步管理的共享市场及账号插件 MUST 保留各自当前启用包，不纳入独立npm更新。
 
 #### Scenario: 开发模式请求更新
 
@@ -88,7 +90,7 @@
 #### Scenario: 发布模式请求更新
 
 - **WHEN** 用户在发布模式运行 `myspec update`
-- **THEN** CLI（命令行程序）和所有已安装 MySpec 插件 MUST 最终使用同一 npm 最新版本
+- **THEN** CLI（命令行程序）和独立npm管理的已安装 MySpec 插件 MUST 最终使用同一 npm 最新版本
 
 #### Scenario: 更新保留客户端来源状态
 
@@ -215,7 +217,7 @@ MySpec（自有规格）MUST 在开发模式公开由实际受控运行与打包
 - **THEN** 系统 MUST NOT 公开一个看似可复现的源码提交
 ### Requirement: MySpec 初始化受支持 Agent 的统一来源
 
-系统 MUST 通过 myspec init --claude、--codex 或 --all 初始化对应 Agent，并继续拒绝 Pi 参数及安装。唯一有效官方共享市场安装存在时 MUST 保留其来源、版本与启用状态，报告 managedBy=plugin-sync 和 removedLegacyPlugins=[]；不存在有效共享安装时保留包内自包含单插件市场兼容入口。重复启用、来源不匹配或登记冲突 MUST 停止，不误卸载共享安装。
+独立npm生命周期管理 MUST 通过 myspec init --claude、--codex 或 --all 初始化对应 Agent，并继续拒绝 Pi 参数及安装。唯一有效官方共享市场安装存在时 MUST 保留其来源、版本与启用状态，报告 managedBy=plugin-sync 和 removedLegacyPlugins=[]；不存在有效共享安装时保留包内自包含单插件市场兼容入口。重复启用、来源不匹配或登记冲突 MUST 停止，不误卸载共享安装。
 
 #### Scenario: 用户显式初始化一个不可用的 Agent
 
@@ -247,6 +249,8 @@ MySpec（自有规格）MUST 在开发模式公开由实际受控运行与打包
 - **WHEN** 单客户端初始化或 `myspec init --all` 完成
 - **THEN** Claude 和 Codex 结果 MUST 通过 `removedLegacyPlugins` 报告已删除旧插件
 - **THEN** 没有对应处理结果时字段 MUST 返回空数组
+
+原生官方插件的执行 MUST 使用当前启用包，不受独立全局npm绑定覆盖。
 ### Requirement: MySpec 更新保留插件同步管理的共享安装
 
 MySpec MUST 在初始化、诊断及更新时识别有效共享市场来源，保留该安装；工具 CLI 与插件技能的版本事实分别报告，不把安装成功等同新会话已加载。
@@ -255,3 +259,11 @@ MySpec MUST 在初始化、诊断及更新时识别有效共享市场来源，�
 
 - **WHEN** 用户更新工具且存在有效共享市场安装
 - **THEN** 更新 MUST 保留共享安装、启用状态及来源，跳过对它的独立市场刷新，并报告实际诊断结果。
+### Requirement: MySpec runs the selected plugin package
+
+技能驱动的MySpec操作  MUST 调用本次已核验插件包的原Node启动器并绑定实际实现身份；不得重新从PATH选择旧全局实现。独立npm生命周期和双市场来源切换保持。
+
+#### Scenario: Observable outcome
+
+- **WHEN** 使用正式或开发插件运行规格命令
+- **THEN** 会话身份来自实际包；官方路径不存在时仅可使用任务内同版本完整官方资源，资源缺失停止。

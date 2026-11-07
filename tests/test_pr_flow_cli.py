@@ -6139,3 +6139,21 @@ def test_doctor_accepts_release_and_same_worktree_dev_identity_at_project_cwd(fl
     monkeypatch.setattr(module.shutil, "which", lambda command: command)
     monkeypatch.setattr(module.subprocess, "run", execute)
     assert module.toolchain_identities(project) == reports
+
+
+def test_init_uses_explicit_current_package_doctor_commands(flow_root, monkeypatch):
+    from tests.support.command_stubs import CommandStub
+    from tests.support.pr_flow_invocation import invoke_pr_flow, load_pr_flow_module as fresh_module
+    config = flow_root / "config.yaml"
+    config.write_text(yaml.safe_dump(default_pr_flow_config_for_test(), sort_keys=False), encoding="utf-8")
+    module = fresh_module()
+    doctor = CommandStub(body_reader=read_body_file)
+    commands = {key: ["node", str(flow_root / "active" / key / "bin/tool.js")] for key in module.TOOLCHAIN_TOOLS}
+    for key, (_, package, _) in module.TOOLCHAIN_TOOLS.items():
+        doctor.add((*commands[key], "doctor", "--running"), stdout=json.dumps({"toolchain": {
+            "mode": "release", "packageName": package, "packageVersion": "1.2.3"}}))
+    monkeypatch.setenv("PR_FLOW_TOOL_COMMANDS", json.dumps(commands))
+    monkeypatch.setattr(module.subprocess, "run", lambda command, **kwargs: doctor(*command, **kwargs))
+    result = invoke_pr_flow(["init", "--project", str(flow_root / "project"), "--config", str(config)], module=module)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(doctor.calls) == 2

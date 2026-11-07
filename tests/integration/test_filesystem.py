@@ -56,7 +56,6 @@ def run_snapshots(project, output, *arguments):
 
 class TestWorkspace:
     def test_release_snapshots_save_through_real_mapping_and_shared_lock(self, tmp_path):
-        from tests.test_release_flow_account_delivery import NativeSaveClients, PublishedReleaseCommands
         probe = "skills/plugin-sync/references/check.md"
         project = snapshot_source(tmp_path, release_ref="v1.0.0", executable_probe="plugins/plugin-sync/" + probe)
         output = tmp_path / "RELEASE"
@@ -106,6 +105,26 @@ class TestWorkspace:
             runtime = subprocess.run([sys.executable, str(release), *arguments, "--project", str(target)],
                                      text=True, capture_output=True)
             assert runtime.returncode == 0, runtime.stdout + runtime.stderr
+        # Ordinary operations run their selected complete package, even without a global tool install.
+        node = shutil.which("node")
+        assert node
+        runtime_env = {**os.environ, "NPM_CONFIG_PREFIX": str(tmp_path / "no-global-tools"),
+                       "MYSPEC_PYTHON": sys.executable, "BUILD_AND_VERIFY_PYTHON": sys.executable}
+        for key, binary in (("my-spec", "myspec"), ("build-and-verify", "build-and-verify")):
+            package = Path(snapshots[key]["pluginPath"])
+            diagnosed = subprocess.run([node, str(package / "bin" / (binary + ".js")), "doctor", "--running"],
+                                      env=runtime_env, text=True, capture_output=True)
+            assert diagnosed.returncode == 0, diagnosed.stdout + diagnosed.stderr
+            report = json.loads(diagnosed.stdout)
+            assert Path(report["runtime"]["packageRoot"]).resolve() == package.resolve()
+            assert report["runtime"]["implementationIdentity"].startswith("sha256:")
+            assert "npm" not in report
+        tool_work = tmp_path / "package-spec-state"
+        selected = Path(snapshots["my-spec"]["pluginPath"]) / "bin/myspec.js"
+        initialized = subprocess.run([node, str(selected), "state-init", str(tool_work), "add", "specs", "input"],
+                                     env=runtime_env, text=True, capture_output=True)
+        assert initialized.returncode == 0, initialized.stdout + initialized.stderr
+        assert json.loads((tool_work / "current/state.json").read_text())["implementationIdentity"].startswith("sha256:")
         # Keep one real source-provenance rejection, without rebuilding another fixture.
         note = project / "dirty-note.txt"
         note.write_text("uncommitted source")
@@ -119,70 +138,35 @@ class TestWorkspace:
         shutil.rmtree(output)
         delivery = tmp_path / "deliveries"
         delivery.mkdir()
-        historical = {"remotePluginId": "Remote_plugin-sync-dev", "packageName": "plugin-sync-dev", "version": "0.0.1"}
-        mapping = tmp_path / "mapping.json"
-        mapping.write_text(json.dumps({"plugins": {"plugin-sync": {"account": {"DEV": historical, "RELEASE": {}}}}, "preserved": [1, 2]}))
-        lock = mapping.with_name(mapping.name + ".lock")
-        class Native(NativeSaveClients):
-            def request(self, method, params):
-                if method != "plugin/share/save":
-                    return super().request(method, params)
-                self.methods.append(method)
-                assert lock.exists()
-                source = json.loads(mapping.read_text())["plugins"]["plugin-sync"]["account"]["RELEASE"]
-                assert source["saveState"]["status"] == "pending"
-                package = Path(params["pluginPath"])
-                assert package.parent.parent == delivery
-                if os.name != "nt":
-                    assert package.parent.stat().st_mode & 0o077 == 0
-                    assert (package / probe).stat().st_mode & 0o111 == 0o111
-                cloud = json.loads((package / ".codex-plugin/plugin.json").read_text())
-                remote_id = params.get("remotePluginId", "Remote_" + cloud["name"])
-                self.writes.append((method, dict(params)))
-                self.objects = [{"remotePluginId": remote_id, "name": cloud["name"], "version": cloud["version"],
-                                 "id": cloud["name"] + "@created-by-me-remote", "installed": False, "enabled": False,
-                                 "shareContext": None}]
-                return {"remotePluginId": remote_id, "shareUrl": ""}
-        native = Native()
-        published = PublishedReleaseCommands(project=project,
-                                             repository=snapshots["plugin-sync"]["metadataSource"]["repository"],
-                                             source_commit=commit, local_run=subprocess.run)
-        entry = runpy.run_path(str(REPO_ROOT / "plugins/release-flow/skills/release-flow/scripts/release_flow.py"))["main"]
-        process = subprocess.Popen
-        def owned_process(command, *args, **kwargs):
-            if command == ["codex", "app-server", "--stdio"]:
-                return native.start(command, *args, **kwargs)
-            assert command == ["git", "-C", str(project), "config", "--get", "remote.origin.url"]
-            return process(command, *args, **kwargs)
-        def invoke(umask):
-            report = io.StringIO()
-            args = ["deliver-account", "--project", str(project), "--manifest", str(mapping), "--plugin", "plugin-sync",
-                    "--bundle", str(bundle), "--delivery-dir", str(delivery), "--expected-sha256", snapshots["plugin-sync"]["sha256"], "--apply"]
-            previous_umask = os.umask(umask) if os.name != "nt" else None
-            try:
-                with patch("subprocess.Popen", side_effect=owned_process), patch("subprocess.run", side_effect=published), \
-                        contextlib.redirect_stdout(report):
-                    code = entry(args)
-            finally:
-                if previous_umask is not None:
-                    os.umask(previous_umask)
-            assert code == 0, report.getvalue()
-            assert not lock.exists() and not list(delivery.iterdir())
-            return json.loads(report.getvalue().splitlines()[-1])
-        assert invoke(0o077)["operation"] == "create"
-        assert native.writes[0][1]["discoverability"] == "PRIVATE" and native.writes[0][1]["shareTargets"] == []
-        assert invoke(0o027)["operation"] == "update"
-        assert native.writes[-1][1].keys() == {"pluginPath", "remotePluginId"}
-        assert native.writes[-1][1]["remotePluginId"] == "Remote_plugin-sync"
-        stored = json.loads(mapping.read_text())
-        assert stored["preserved"] == [1, 2]
-        assert stored["plugins"]["plugin-sync"]["account"]["DEV"] == historical
-        source = stored["plugins"]["plugin-sync"]["account"]["RELEASE"]
-        assert source["remotePluginId"] == "Remote_plugin-sync" and source["saveState"]["status"] == "verified"
-        assert source["saveState"]["privateCreationRequest"] == {"discoverability": "PRIVATE", "shareTargets": []}
-        assert source["saveState"]["permissions"]["status"] == "not_available"
-        assert len(native.writes) == 2 and not native.objects[0]["installed"]
-        assert set(native.methods) <= {"initialize", "plugin/list", "plugin/share/save"}
+        entry = runpy.run_path(str(REPO_ROOT / "plugins/plugin-sync/skills/plugin-sync/scripts/plugin_sync.py"))
+        manifest = entry["unpack_delivery_bundle"](bundle, delivery, __import__("time").monotonic() + 30)
+        checked = entry["verified_snapshot"](str(manifest), "plugin-sync", snapshots["plugin-sync"]["sha256"],
+                                            "RELEASE", __import__("time").monotonic() + 30)
+        assert checked["packageName"] == "plugin-sync" and checked["sourceCommit"] == commit
+        assert Path(checked["pluginPath"]).is_dir()
+        # Exercise the shipped offline CLI, without calling a real account tool.
+        evidence = tmp_path / "official-read-fixture.json"
+        evidence.write_text(json.dumps({"release": {"repository": checked["metadataSource"]["repository"],
+            "tagName": "v1.0.0", "tagCommit": commit, "publishedAt": "2026-11-06T00:00:00Z",
+            "isDraft": False, "isPrerelease": False}, "owned": {"plugins": [], "next_cursor": None},
+            "current": None, "complete": True}))
+        plan = tmp_path / "creator-plan.json"
+        sync = REPO_ROOT / "plugins/plugin-sync/skills/plugin-sync/scripts/plugin_sync.py"
+        prepared = subprocess.run([sys.executable, str(sync), "prepare", "--bundle", str(bundle),
+            "--delivery-dir", str(tmp_path / "prepared"), "--plugin", "plugin-sync",
+            "--expected-sha256", checked["sha256"], "--evidence", str(evidence), "--output", str(plan)],
+            text=True, capture_output=True)
+        assert prepared.returncode == 0, prepared.stdout + prepared.stderr
+        planned = json.loads(plan.read_text())
+        assert planned["tool"] == "create_plugin" and planned["accountWrites"] == 0
+        state = tmp_path / "creator-state.json"
+        args = [sys.executable, str(sync), "record", "--state", str(state), "--plan", str(plan)]
+        started = subprocess.run(args, text=True, capture_output=True)
+        assert started.returncode == 0, started.stdout + started.stderr
+        repeated = subprocess.run(args, text=True, capture_output=True)
+        assert repeated.returncode != 0 and "already exists" in repeated.stdout
+        assert json.loads(state.read_text())["operations"][planned["operationId"]]["status"] == "pending"
+        assert not state.with_name(state.name + ".lock").exists()
 
     def test_public_baseline_execution_cache_and_git_visible_inputs(self, tmp_path):
         primary = tmp_path / "primary"

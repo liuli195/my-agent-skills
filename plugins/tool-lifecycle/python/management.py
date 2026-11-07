@@ -398,16 +398,18 @@ def _implementation_source_commit(package_root: Path, identity: str) -> str:
 
 
 def implementation_identity() -> str:
-    try:
-        stable = _stable_package_root()
-    except ManagementError as exc:
-        if _running_package_is_source_worktree():
-            return _implementation_identity_for_package(_RUNNING_PACKAGE_ROOT)
-        raise ManagementError(f"implementation_identity_unavailable: {exc}") from exc
-    real = _absolute_path(Path(os.path.realpath(stable)))
-    if not _same_path(stable, real):
-        return _implementation_identity_for_package(real)
-    return "release:" + _package_version()
+    """Bind ordinary work to the implementation actually loaded, never global npm."""
+    if _running_package_is_source_worktree():
+        return _implementation_identity_for_package(_RUNNING_PACKAGE_ROOT)
+    files = [("package.json", (_RUNNING_PACKAGE_ROOT / "package.json").read_bytes())]
+    for directory in ("bin", "python", "skills"):
+        root = _RUNNING_PACKAGE_ROOT / directory
+        if not root.is_dir():
+            raise ManagementError(f"implementation_identity_unavailable: missing {root}")
+        files.extend((path.relative_to(_RUNNING_PACKAGE_ROOT).as_posix(), path.read_bytes())
+                     for path in root.rglob("*") if path.is_file()
+                     and "__pycache__" not in path.parts and path.suffix != ".pyc")
+    return _implementation_identity_for_files(sorted(files))
 
 
 def _same_path(left: Path, right: Path) -> bool:
@@ -1477,20 +1479,20 @@ def _source_record(
     }
 
 
-def _doctor_package() -> dict[str, object]:
-    stable = _stable_package_root()
+def _doctor_package(*, running: bool = False) -> dict[str, object]:
+    stable = _RUNNING_PACKAGE_ROOT if running else _stable_package_root()
     real = Path(os.path.realpath(stable))
     cli_version = _package_version()
-    linked = not _same_path(stable, real)
+    linked = _running_package_is_source_worktree() if running else not _same_path(stable, real)
     toolchain: dict[str, object] = {
         "mode": "dev" if linked else "release",
         "packageName": PACKAGE_NAME,
     }
     if linked:
-        implementation_identity = _implementation_identity_for_package(real)
-        toolchain["implementationIdentity"] = implementation_identity
+        source_identity = _implementation_identity_for_package(real)
+        toolchain["implementationIdentity"] = source_identity
         try:
-            commit = _implementation_source_commit(real, implementation_identity)
+            commit = _implementation_source_commit(real, source_identity)
         except ManagementError:
             pass
         else:
@@ -1514,6 +1516,9 @@ def _doctor_package() -> dict[str, object]:
             "versionMismatch": _manifest_version(stable) != cli_version,
         },
     }
+    if running:
+        report.pop("npm", None)
+        report["runtime"] = {"packageRoot": str(_RUNNING_PACKAGE_ROOT), "implementationIdentity": implementation_identity()}
     if linked:
         report["binding"] = _binding_report(stable, Path.cwd())
     return report
@@ -2115,6 +2120,7 @@ def add_management_parsers(commands: argparse._SubParsersAction[argparse.Argumen
     doctor_target.add_argument("--claude", action="store_true")
     doctor_target.add_argument("--codex", action="store_true")
     doctor_target.add_argument("--all", action="store_true")
+    doctor_target.add_argument("--running", action="store_true")
     doctor_parser.add_argument("--codex-home", type=Path)
     update_parser = commands.add_parser("update")
     update_parser.add_argument("--codex-home", type=Path)
@@ -2149,6 +2155,8 @@ def _management_uses_codex(args: argparse.Namespace) -> bool:
 def run_management(args: argparse.Namespace) -> dict[str, object]:
     global _CODEX_HOME_SELECTION
     _CODEX_HOME_SELECTION = None
+    if args.command == "doctor" and getattr(args, "running", False):
+        return _doctor_package(running=True)
     if _management_uses_codex(args):
         _CODEX_HOME_SELECTION = _select_codex_home(getattr(args, "codex_home", None))
     if args.command == "doctor":

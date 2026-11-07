@@ -5,6 +5,8 @@ description: 扫描仓库并审查 Build and Verify（构建与验证）检查�
 
 # Build and Verify Review（构建与验证审查）
 
+> 随包命令约定：本文件的 `build-and-verify <参数>` 均指本次实际加载插件的 `node <verified-plugin-root>/bin/build-and-verify.js <参数>` 参数数组，不是PATH中的裸命令。包根从当前官方技能/安装记录核实；没有真实路径时只取得本任务同版本官方完整资源，保留目录关系，缺失即停止，不猜缓存或回退旧全局npm。一次会话固定同一实现，不改变业务目标工作树。
+
 Use this skill when the user asks to review（审查）, audit（审计）, complete（补全）, or optimize（优化） an existing `.build-and-verify/config.json`（配置文件）.
 
 ## Hard Boundaries（硬边界）
@@ -34,8 +36,8 @@ Use this skill when the user asks to review（审查）, audit（审计）, comp
 4. 让用户逐项接受或拒绝建议；High（高）置信度遗漏可默认选中，仍须展示。
 5. 使用共享配置草案规则合并已接受建议，再使用共享校验规则执行定向依赖检查和环境检查。
 6. 同时展示最终配置差异，以及依赖或环境问题、影响和建议；等待整体写入确认。
-7. 用户确认后保存临时 confirmed config（已确认配置），调用 `python <build-and-verify-script> init --project <repo> --config <confirmed-config> --overwrite`（简称 `init --config --overwrite`）。
-8. 执行配置结构校验；通过后运行 `python <build-and-verify-script> verify --project <repo> --full`（简称 `verify --full`）。
+7. 用户确认后保存临时 confirmed config（已确认配置），调用 `node <verified-plugin-root>/bin/build-and-verify.js init --project <repo> --config <confirmed-config> --overwrite`（简称 `init --config --overwrite`）。
+8. 执行配置结构校验；通过后运行 `node <verified-plugin-root>/bin/build-and-verify.js verify --project <repo> --full`（简称 `verify --full`）。
 9. 配置或命令错误产生新的修正草案并重新确认；真实仓库失败保留配置并报告。未经用户明确授权不得从备份恢复。
 
 ## Output（输出）

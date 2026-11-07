@@ -11,15 +11,16 @@ const packages = [
     root: resolve(repoRoot, "plugins", "plugin-sync"),
     files: [
       "check.md",
+      "cloud-account.md",
       "status-taxonomy.md",
       "switch-source.md",
       "update-build-and-verify-runtime.md",
       "update-claude.md",
       "update-codex.md",
     ],
-    references: ["check.md", "status-taxonomy.md", "update-claude.md", "update-codex.md", "switch-source.md", "update-build-and-verify-runtime.md"],
+    references: ["cloud-account.md", "check.md", "status-taxonomy.md", "update-claude.md", "update-codex.md", "switch-source.md", "update-build-and-verify-runtime.md"],
     description: /检查、安装、更新和切换本机插件市场来源/,
-    scripts: [],
+    scripts: ["plugin_sync.py"],
   },
   {
     name: "retro-to-issues",
