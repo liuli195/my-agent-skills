@@ -64,3 +64,22 @@ dot与本机Codex  MUST 核对同一私人适配对象和版本；配置授权�
 
 - **WHEN** 宿主发现或回退读取第三方技能
 - **THEN** 原生发现优先，只有核验可读的官方目录才可文件回退；访问拒绝或资源缺失不绕过。
+### Requirement: Creator delivery audits explicitly accepted wrapper metadata
+
+Plugin Sync MUST 默认逐文件严格核对正式来源与官方实际内容。仅已有成功创建操作在用户明确接受具体包装作者信息差异后，允许通过原记录入口离线结案；仅允许作者名称、作者邮箱及开发者名称的精确增加或替换，不删除字段或接受其他差异。MUST 绑定原操作、计划、正式归档摘要、对象、版本、远端发布及官方个人 USER/PRIVATE 归属证据，并保留原计划、原回执、来源及实际摘要与接受依据，不把该结论表述为全部字节一致或已安装、发现、运行。
+
+#### Scenario: An accepted creation is reconciled without another account write
+
+- **WHEN** 原始成功创建回执、完整官方读回及用户接受的精确旧新值均与同一来源和发布匹配
+- **THEN** 仅离线恢复该记录，保留全部证据；文件集合及其他文件字节摘要必须一致，包装清单除获准字段外语义一致，两个原始清单文本各自摘要匹配来源及实际文件
+- **THEN** 不发送账号写请求，不重复创建、上传或安装
+
+#### Scenario: Missing or conflicting evidence remains blocked
+
+- **WHEN** 接受证据缺失、身份或来源漂移、重复 JSON 键、未获准字段变化、其他文件改变或结果未知
+- **THEN** 拒绝接受模式，不新建待发送记录、不改写既有回执或清除未决证据
+
+#### Scenario: A subsequent unchanged request reuses only the same verified result
+
+- **WHEN** 后续请求归档摘要、来源文件、实际文件、对象、版本和远端发布均与已核验记录相同
+- **THEN** 可报告无变化；不同归档、发布或新增差异不能继承旧接受结论，未来更新仍遵循原完整文件和删除规则

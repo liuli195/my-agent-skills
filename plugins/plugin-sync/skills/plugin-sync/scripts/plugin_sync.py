@@ -136,7 +136,7 @@ def safe_files(files):
 
 
 def prepare_plan(snapshot, current, remote_files, target_files, *, managed_files=(), inventory_complete=False,
-                 personal_context=False, owned_plugins=()):
+                 personal_context=False, owned_plugins=(), verified_operation=None):
     """Public offline seam: reviewed inputs produce exactly one host tool plan."""
     target_files = safe_files(target_files)
     if not inventory_complete or not target_files:
@@ -161,7 +161,19 @@ def prepare_plan(snapshot, current, remote_files, target_files, *, managed_files
         target_version, current_version = version_key(snapshot["version"]), version_key(current.get("version"))
         if target_version == current_version:
             if remote_files != target_files:
-                raise ValueError("same version has different content; no automatic patch bump")
+                prior = verified_operation if isinstance(verified_operation, dict) else {}
+                old_plan, old_read = prior.get("plan", {}), prior.get("readback", {})
+                if (prior.get("status") != "verified" or prior.get("verificationMethod") != "accepted_wrapper_metadata"
+                        or old_plan.get("planSha256") != plan_digest(old_plan)
+                        or old_plan.get("packageName") != current["name"] or old_plan.get("version") != current["version"]
+                        or old_plan.get("sha256") != snapshot["sha256"]
+                        or old_plan.get("files") != target_files or old_read.get("files") != remote_files
+                        or any(old_read.get(key) != current.get(key) for key in
+                               ("plugin_id", "name", "version", "current_release_id", "scope", "discoverability"))):
+                    raise ValueError("same version has different content; no automatic patch bump")
+                accepted_metadata_record(old_plan, prior.get("receipt"), old_read,
+                                         prior.get("verification", {}).get("evidence"))
+                plan["verifiedOperationId"] = old_plan["operationId"]
             plan.update(tool=None, status="unchanged", remotePluginId=current["plugin_id"])
             return plan
         if target_version < current_version:
@@ -229,7 +241,84 @@ def reconcile_legacy(state, plugin, mode, success, readback):
     return state
 
 
-def transition(state, plan, *, receipt=None, readback=None, rejection=None):
+def strict_json(text):
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = value
+        return result
+    def constant(value):
+        raise ValueError("invalid JSON constant")
+    return json.loads(text, object_pairs_hook=pairs, parse_constant=constant)
+
+
+def manifest_changes(source, observed, prefix=""):
+    changes = []
+    for key in sorted(set(source) | set(observed)):
+        path = prefix + "/" + key.replace("~", "~0").replace("/", "~1")
+        if key in source and key in observed and isinstance(source[key], dict) and isinstance(observed[key], dict):
+            changes.extend(manifest_changes(source[key], observed[key], path))
+        elif (key not in source or key not in observed
+              or json.dumps(source[key], sort_keys=True) != json.dumps(observed[key], sort_keys=True)):
+            changes.append({"path": path, "action": "replace" if key in source else "add",
+                "before": {"present": key in source, **({"value": source[key]} if key in source else {})},
+                "after": {"present": key in observed, **({"value": observed[key]} if key in observed else {})}})
+    return changes
+
+
+def accepted_metadata_record(plan, receipt, readback, proof):
+    """Audit one explicitly accepted creation result; never infer account identity from display fields."""
+    if not isinstance(proof, dict) or not isinstance(receipt, dict) or not isinstance(readback, dict):
+        raise ValueError("accepted metadata requires original success and complete readback")
+    expected = {"operationId": plan["operationId"], "planSha256": plan["planSha256"], "archiveSha256": plan["sha256"],
+                "plugin_id": receipt.get("plugin_id"), "release_id": receipt.get("release_id"), "version": plan["version"]}
+    if (plan["tool"] != "create_plugin" or receipt.get("status") != "created"
+            or any(proof.get(key) != value or not value for key, value in expected.items())
+            or receipt.get("version") != plan["version"]
+            or any(item.get("scope") != "USER" or item.get("discoverability") != "PRIVATE" for item in (receipt, readback))
+            or readback.get("plugin_id") != receipt.get("plugin_id")
+            or readback.get("current_release_id") != receipt.get("release_id")
+            or readback.get("name") != plan["packageName"] or readback.get("version") != plan["version"]
+            or readback.get("complete") is not True):
+        raise ValueError("accepted metadata identity or source binding mismatch")
+    acceptance = proof.get("acceptance", {})
+    owned = proof.get("owned", {})
+    if not isinstance(acceptance, dict) or not isinstance(owned, dict) or not isinstance(owned.get("plugins"), list):
+        raise ValueError("invalid acceptance or personal ownership evidence")
+    matching = [p for p in owned["plugins"] if isinstance(p, dict) and p.get("plugin_id") == receipt["plugin_id"]]
+    if (acceptance.get("accepted") is not True or not isinstance(acceptance.get("reference"), str)
+            or not acceptance["reference"].strip() or "next_cursor" not in owned or owned["next_cursor"] is not None
+            or len(matching) != 1 or any(matching[0].get(k) != readback.get(k)
+                for k in ("plugin_id", "name", "version", "current_release_id", "scope", "discoverability"))):
+        raise ValueError("explicit acceptance and official personal ownership evidence required")
+    path = ".codex-plugin/plugin.json"  # The release snapshot format already validated by this module.
+    target, actual = safe_files(plan["files"]), safe_files(readback["files"])
+    if set(target) != set(actual) or path not in target or any(target[k] != actual[k] for k in target if k != path):
+        raise ValueError("non-wrapper files must match exactly")
+    parsed = []
+    for field, digest in (("sourceManifest", target[path]), ("observedManifest", actual[path])):
+        text = proof.get(field)
+        if not isinstance(text, str) or len(text.encode()) > 1_048_576 or hashlib.sha256(text.encode()).hexdigest() != digest:
+            raise ValueError("raw manifest evidence digest mismatch")
+        value = strict_json(text)
+        if not isinstance(value, dict):
+            raise ValueError("manifest must be an object")
+        parsed.append(value)
+    changes = manifest_changes(*parsed)
+    allowed = {"/author/name", "/author/email", "/interface/developerName"}
+    if (not changes or len(changes) > 3 or any(c["path"] not in allowed or c["after"].get("present") is not True
+            or any(v.get("present") and (not isinstance(v.get("value"), str) or not v["value"].strip())
+                   for v in (c["before"], c["after"])) for c in changes)
+            or not isinstance(proof.get("changes"), list)
+            or sorted(proof["changes"], key=lambda c: c.get("path", "")) != changes):
+        raise ValueError("manifest differs outside the exact accepted values and actions")
+    return {"method": "accepted_wrapper_metadata", "evidence": proof,
+            "sourceManifestSha256": target[path], "observedManifestSha256": actual[path]}
+
+
+def transition(state, plan, *, receipt=None, readback=None, rejection=None, accepted_metadata=None):
     """Mark before host sends; only exact official readback can resolve a sent plan."""
     if plan.get("planSha256") != plan_digest(plan) or not plan.get("tool"):
         raise ValueError("plan changed or does not require a save")
@@ -241,7 +330,7 @@ def transition(state, plan, *, receipt=None, readback=None, rejection=None):
                 raise ValueError("legacy unresolved save must be reconciled before another send")
     operations = state.setdefault("operations", {})
     operation = operations.get(plan["operationId"])
-    if receipt is None and readback is None and rejection is None:
+    if receipt is None and readback is None and rejection is None and accepted_metadata is None:
         if operation is not None:
             raise ValueError("operation already exists; never resend a recorded plan")
         if any(item.get("status") in ("pending", "unknown", "unverified") for item in operations.values()):
@@ -250,6 +339,13 @@ def transition(state, plan, *, receipt=None, readback=None, rejection=None):
         return state
     if not operation or operation.get("plan") != plan or operation.get("status") not in ("pending", "unknown", "unverified"):
         raise ValueError("no matching unresolved operation")
+    audit = None
+    if accepted_metadata is not None:
+        original_receipt = operation.get("receipt", receipt)
+        if receipt is not None and original_receipt != receipt:
+            raise ValueError("original successful receipt cannot be replaced")
+        audit = accepted_metadata_record(plan, original_receipt, readback, accepted_metadata)
+        receipt = original_receipt
     if rejection is not None:
         operation["resolution"] = rejection_record(rejection, plan["operationId"], plan["planSha256"],
                                                     plan["tool"], plan["params"].get("plugin_id"), operation["recordedAt"])
@@ -272,6 +368,8 @@ def transition(state, plan, *, receipt=None, readback=None, rejection=None):
             files_match = safe_files(readback.get("files", {})) == plan["files"]
         except ValueError:
             pass
+    if audit is not None:
+        files_match = True
     owned = readback.get("owned", {}) if isinstance(readback, dict) else {}
     fresh_created = ("next_cursor" in owned and owned["next_cursor"] is None
                      and remote_id not in plan.get("priorObjectIds", [])
@@ -290,9 +388,12 @@ def transition(state, plan, *, receipt=None, readback=None, rejection=None):
         return state
     operation.update(status="verified", currentReleaseId=release_id, reconciledFromReadback=not successful_receipt, installed="not_verified",
                      discovered="not_verified", runtime="not_verified")
+    operation["verificationMethod"] = "accepted_wrapper_metadata" if audit else "exact_bytes"
+    if audit is not None:
+        operation["verification"] = audit
     state.setdefault("plugins", {}).setdefault(plan["packageName"], {}).update({"remotePluginId": remote_id,
         "version": plan["version"], "currentReleaseId": release_id,
-        "sha256": plan["sha256"], "managedFiles": plan["files"]})
+        "sha256": plan["sha256"], "managedFiles": readback["files"], "sourceFiles": plan["files"]})
     return state
 
 
@@ -334,6 +435,7 @@ def main(argv=None):
     record.add_argument("--receipt")
     record.add_argument("--readback")
     record.add_argument("--rejection-evidence")
+    record.add_argument("--accepted-metadata", help="Exact user-accepted wrapper differences bound to this successful create")
     legacy = commands.add_parser("reconcile-legacy")
     for name in ("state", "plugin", "mode", "success", "readback"):
         legacy.add_argument("--" + name, required=True)
@@ -367,7 +469,8 @@ def main(argv=None):
                 raise ValueError("object is not in the complete personal account listing")
             plan = prepare_plan(snapshot, current, evidence.get("files", {}), target,
                 managed_files=evidence.get("managedFiles", []), inventory_complete=evidence.get("complete") is True,
-                personal_context=personal, owned_plugins=owned.get("plugins", []))
+                personal_context=personal, owned_plugins=owned.get("plugins", []),
+                verified_operation=evidence.get("verifiedOperation"))
             atomic_json(args.output, plan)
             print(json.dumps(plan, ensure_ascii=False))
         elif args.action == "reconcile-legacy":
@@ -379,19 +482,25 @@ def main(argv=None):
                 atomic_json(path, state, original)
             print(json.dumps({"status": "reconciled" if args.apply else "checked", "accountWrites": 0}, ensure_ascii=False))
         else:
-            if args.rejection_evidence and (args.receipt or args.readback):
+            if args.rejection_evidence and (args.receipt or args.readback or args.accepted_metadata):
                 raise ValueError("rejection evidence and success/readback modes are exclusive")
+            accepted_metadata = None
+            if args.accepted_metadata:
+                accepted_metadata = strict_json(Path(args.accepted_metadata).read_text(encoding="utf-8"))
+                if not isinstance(accepted_metadata, dict) or not args.readback:
+                    raise ValueError("accepted metadata requires an object and complete readback")
             plan = read_json(args.plan)
             path = Path(args.state)
             original = path.read_bytes() if path.exists() else None
             state = json.loads(original) if original else {}
-            if not args.receipt and not args.readback and not args.rejection_evidence:
+            if not args.receipt and not args.readback and not args.rejection_evidence and not args.accepted_metadata:
                 archive = Path(plan["params"]["archive"])
                 if hashlib.sha256(archive.read_bytes()).hexdigest() != plan["sha256"]:
                     raise ValueError("reviewed archive changed; do not send")
             transition(state, plan, receipt=read_json(args.receipt) if args.receipt else None,
                        readback=read_json(args.readback) if args.readback else None,
-                       rejection=read_json(args.rejection_evidence) if args.rejection_evidence else None)
+                       rejection=read_json(args.rejection_evidence) if args.rejection_evidence else None,
+                       accepted_metadata=accepted_metadata)
             atomic_json(path, state, original)
             print(json.dumps(state, ensure_ascii=False))
         return 0

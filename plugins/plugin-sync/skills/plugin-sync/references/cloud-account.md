@@ -46,3 +46,18 @@ reconcile-legacy --state <记录> --plugin <精确键> --mode <历史来源键> 
 ## 外部私有适配与官方市场
 
 私有适配包按正式归档中的upstream来源和精确技能集合核对，只经同一Creator流程创建/更新。dot与本机Codex核对同一私有对象ID、版本和六项调用元数据；元数据允许隐式调用不保证模型必然选择。Claude使用官方市场原版，先比较实际官方版本、技能集合和内容；与已批准目标有差异时停止该端安装、迁移和清理，列出差异等待用户决定，不得仅报告后继续。原生技能发现优先；仅在该端官方安装目录已核验可读时读取对应文件回退，不能猜路径、绕过访问拒绝或把私人适配覆盖官方包。
+
+
+## 明确接受的包装元数据差异
+
+默认仍逐文件比较原始字节摘要。已有 create_plugin 成功回执、完整 USER/PRIVATE 个人目录与文件读回，且用户明确接受具体差异时，可用同一 record 入口离线恢复未核验操作：
+
+```text
+python <skill>/scripts/plugin_sync.py record --state <原记录.json> --plan <原计划.json> --receipt <原成功回执.json> --readback <完整读回.json> --accepted-metadata <接受证据.json>
+```
+
+接受证据绑定 operationId、planSha256、archiveSha256、plugin_id、release_id、version，并包含 acceptance（accepted=true、非空 reference）、完整 owned（plugins、next_cursor=null）、sourceManifest 和 observedManifest 原始 UTF-8 文本，以及 changes。每项 changes 必须精确记录 JSON Pointer path、action（add 或 replace）和 before/after 的 present 与 value；只允许 /author/name、/author/email、/interface/developerName 中明确接受的非空字符串值，不能删除字段。不得从作者名或邮箱推断账号归属。
+
+两个原始清单文本各自摘要必须对应原计划和官方实际文件摘要；重复 JSON 键、其他字段差异、文件增删或其他文件摘要变化均拒绝。保存证据时保留原始换行，不使用全局换行归一化。此入口不调用账号接口，保留原计划、原回执、来源摘要和实际摘要，标记 verificationMethod=accepted_wrapper_metadata；它不表示所有字节一致，也不证明安装、发现或运行成功。
+
+后续 prepare 的证据可提供 verifiedOperation，复用已核验记录确认同版本无变化。仅同一对象、同一远端 release、相同来源文件和实际文件且原接受证据仍有效时返回 unchanged；未来版本、不同 release 或新增差异不能沿用旧接受范围。版本升高的正常更新仍按完整文件清单与删除清单准备。
