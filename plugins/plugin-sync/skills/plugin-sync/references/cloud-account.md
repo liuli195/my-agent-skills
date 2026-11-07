@@ -41,3 +41,8 @@ Creator不提供客户端安装/卸载工具。Codex使用其已核实官方客�
 record可用--rejection-evidence处理与成功回执模式互斥的明确未应用证据。此JSON是宿主规范化记录，不是虚构的Creator错误格式：绑定operationId、planSha256、tool、remotePluginId，附完整officialError（isError）、按排序JSON计算的officialErrorSha256、从原文提取的notAppliedQuote、classification=explicit_not_applied及新读取时间readAt/currentReadback。宿主必须确认原文明确说明未应用；普通isError、超时、空列表或版本未变都不够，不能为解锁而填写证明。证据不明确就保留unknown；证据明确仅把该次操作记为rejected，不改对象版本或安装状态。后续重新读取并以新operationId准备，不能重发旧计划。
 
 reconcile-legacy --state <记录> --plugin <精确键> --mode <历史来源键> --success <原成功回执> --readback <新官方完整读取> 默认只核对，--apply仅追加本地resolution，不重写原saveState或历史回执。只有原unverified成功响应真实ID、旧目标版本及产物摘要/完整内容、个人私有和当前release均精确对应才可记verified；不要求补造私人创建参数。pending/unknown且没有明确结果继续停止，不靠同名、对象不存在或更高版本猜成功。历史明确拒绝需完整官方原文证据按同一规则单独核对，不能手动清空状态。全部账号写入仍为零。
+
+
+## 外部私有适配与官方市场
+
+私有适配包按正式归档中的upstream来源和精确技能集合核对，只经同一Creator流程创建/更新。dot与本机Codex核对同一私有对象ID、版本和六项调用元数据；元数据允许隐式调用不保证模型必然选择。Claude使用官方市场原版，先比较实际官方版本、技能集合和内容；与已批准目标有差异时停止该端安装、迁移和清理，列出差异等待用户决定，不得仅报告后继续。原生技能发现优先；仅在该端官方安装目录已核验可读时读取对应文件回退，不能猜路径、绕过访问拒绝或把私人适配覆盖官方包。

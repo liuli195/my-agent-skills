@@ -26,7 +26,7 @@ Git（版本管理工具）、gh（代码托管命令工具）及认证只在相
 - Project setup writes only `.release-flow/config.yaml`, `.release-flow/projection.yaml`, and a thin GitHub Workflow entry after explicit authorization.
 - `.release-flow/config.yaml` is release-flow generic config; `.release-flow/projection.yaml` owns project marketplace identity, required GitHub Actions Variables, generators, and transforms.
 - Codex `.agents/plugins/marketplace.json` is a generated release projection artifact and is not required on the source branch.
-- Setup, preflight, and local publish commands do not create release plan files, release records, branches, tags, or release summaries. Account delivery separately preserves the explicit local identity and request evidence needed for safe readback and reconciliation.
+- Setup, preflight, and local publish commands do not create release plan files, release records, branches, tags, or release summaries.
 - `bumpPlugins` is required; an empty value means catalog/projection-only release.
 - Plugin scripts and templates stay inside this plugin package.
 - Local publish commands do not create branches, create tags, or push commits.
@@ -57,3 +57,10 @@ python <plugin-root>/skills/release-flow/scripts/release_flow.py publish --proje
 本仓库继续在原 ci-publish（持续集成发布）之后，从精确正式标签的干净源码构建 dot-release-packages.tar（完整正式包），保留原产物名、来源/版本/摘要、隐藏文件和执行模式；不将个人认证放入持续集成，不增加另一发布工作流。版本发布、完整包保留和后续账号同步分别报告，后续失败不能重发已成功正式版本。
 
 原打包入口仍为目标仓库 plugins/tool-lifecycle/pack.py snapshots（完整快照命令），正式模式使用 RELEASE（正式）及准确 release-ref（正式标签引用）；其作用是构建和记录内容，不证明个人账号已收到，也不安装插件。同步阶段复核官方发布记录、标签提交及归档，再使用对应官方工具。
+
+
+## Private upstream release assets
+
+After the official release succeeds and the exact clean tag is checked out, build own snapshots first, then run `python <tag-tree>/plugins/tool-lifecycle/private_sources.py --project <tag-tree> --output <sibling-artifact-directory>`. Source and output trees must be disjoint. `.release-flow/private-sources.json` records fixed official upstream commits, archive and license digests, the exact official skill list and precise Boolean adaptations. Only configuration is committed; fetched upstream files, adapted skills and package directories never enter the tag tree or public marketplace projection. Original skill bodies, support files and license bytes are preserved outside the explicitly configured metadata tokens.
+
+The combined complete archive is uploaded only after private projection succeeds. A failed private build does not undo or repeat the already successful GitHub/npm release. Preserve the failure and partial artifacts; inspect them, then rebuild the archive in a fresh sibling output for the same verified tag. Never overwrite a release or silently publish an incomplete delivery archive. Account creation/update remains plugin-sync's separate host Creator workflow.

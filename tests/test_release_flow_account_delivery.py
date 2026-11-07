@@ -168,3 +168,30 @@ def test_release_workflow_uploads_complete_packages_after_publication_without_ac
     for forbidden in ("deliver-account", "reconcile-account", "plugin/share/save", "codex app-server",
                       "CODEX_AUTH", "CHATGPT_TOKEN", "OPENAI_API_KEY"):
         assert forbidden not in text
+
+
+def test_private_projection_keeps_original_files_and_rejects_changed_inputs(tmp_path):
+    module = runpy.run_path(str(Path(__file__).resolve().parents[1] / "plugins/tool-lifecycle/private_sources.py"))
+    import hashlib, zipfile
+    raw = {"plugin.json": json.dumps({"version": "1.3.2", "skills": ["./skills/example"]}).encode(),
+           "LICENSE": b"fixture license", "skills/example/SKILL.md": b"---\nname: example\ndisable-model-invocation: true\n---\nExact body\n",
+           "skills/example/agents/openai.yaml": b"policy:\n  allow_implicit_invocation: false\n",
+           "skills/example/scripts/tool.py": b"print('resource')\n"}
+    archive = tmp_path / "upstream.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        for name, data in raw.items(): z.writestr("source/" + name, data)
+    config = {"name": "example-private", "repository": "owner/source", "commit": "a" * 40,
+        "version": "1.3.2", "archivePrefix": "source/", "archiveSha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+        "manifest": "plugin.json", "skills": ["./skills/example"],
+        "license": {"path": "LICENSE", "sha256": hashlib.sha256(raw["LICENSE"]).hexdigest()},
+        "adaptations": [{"path": "skills/example/SKILL.md", "field": ["disable-model-invocation"], "before": True, "after": False},
+                        {"path": "skills/example/agents/openai.yaml", "field": ["policy", "allow_implicit_invocation"], "before": False, "after": True}]}
+    files, provenance = module["project_archive"](archive.read_bytes(), config)
+    assert files["skills/example/scripts/tool.py"] == raw["skills/example/scripts/tool.py"]
+    assert files["skills/example/SKILL.md"] == raw["skills/example/SKILL.md"].replace(b": true", b": false")
+    assert files["skills/example/agents/openai.yaml"] == raw["skills/example/agents/openai.yaml"].replace(b": false", b": true")
+    assert files["LICENSE"] == raw["LICENSE"] and provenance["commit"] == "a" * 40
+    assert "plugin.json" not in files
+    for bad in ({**config, "archiveSha256": "0" * 64}, {**config, "skills": []},
+                {**config, "license": {"path": "LICENSE", "sha256": "0" * 64}}):
+        with __import__("pytest").raises(ValueError): module["project_archive"](archive.read_bytes(), bad)

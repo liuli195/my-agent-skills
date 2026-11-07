@@ -179,6 +179,7 @@ jobs:
           git -C source checkout --detach "refs/tags/$RELEASE_TAG"
           python source/plugins/tool-lifecycle/pack.py snapshots "$RUNNER_TEMP/dot-release-packages" \
             --project source --account-mode RELEASE --release-ref "$RELEASE_TAG"
+          python source/plugins/tool-lifecycle/private_sources.py --project source --output "$RUNNER_TEMP/dot-release-packages"
           tar -cf "$RUNNER_TEMP/dot-release-packages.tar" -C "$RUNNER_TEMP/dot-release-packages" .
 
       - name: Upload complete dot release packages
