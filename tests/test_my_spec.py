@@ -1166,7 +1166,7 @@ def test_skill_entries_route_add_review_and_audit_with_safe_boundaries() -> None
     for name in SKILL_NAMES[1:]:
         entry = (PLUGIN_ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
         assert "../my-spec/SKILL.md" in entry
-        assert "myspec ..." in entry
+        assert "bin/myspec.js" in entry
         assert "spec_ops.py" not in entry
 
     assert not (PLUGIN_ROOT / "skills" / "my-spec" / "scripts").exists()
