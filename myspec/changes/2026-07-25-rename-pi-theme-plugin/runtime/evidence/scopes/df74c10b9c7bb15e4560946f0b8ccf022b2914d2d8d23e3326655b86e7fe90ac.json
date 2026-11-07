@@ -1,0 +1,96 @@
+{
+  "schema": "comet.native.implementation-scope.v2",
+  "contractHash": "f3d42e2570ff9b9a7422f1ba2c6ccb2ab5e848cc488b0578ac0067185cca8a93",
+  "baselineProjectionRef": "runtime/evidence/snapshots/f25b764796f4110cd148d22de7426ddf8e900bf7bf536ce448f312d504a93f01.json",
+  "baselineProjectionHash": "f25b764796f4110cd148d22de7426ddf8e900bf7bf536ce448f312d504a93f01",
+  "currentProjectionRef": "runtime/evidence/snapshots/69faaace0a21ab095862a4fc55eeadb0b2bbeff660308db0e52915edf6e89a03.json",
+  "currentProjectionHash": "69faaace0a21ab095862a4fc55eeadb0b2bbeff660308db0e52915edf6e89a03",
+  "complete": true,
+  "declaredArtifacts": [
+    {
+      "path": "plugins",
+      "kind": "directory"
+    }
+  ],
+  "changes": [
+    {
+      "path": "plugins/pi-blue-mocha-theme/package.json",
+      "kind": "removed",
+      "before": {
+        "hash": "c729cf67c3211f1e8d3e3f5e458de1ee649056d917bd4e0c4a708c95fd408c3b",
+        "size": 226
+      },
+      "after": null,
+      "attributedTo": [
+        {
+          "path": "plugins",
+          "kind": "directory"
+        }
+      ]
+    },
+    {
+      "path": "plugins/pi-blue-mocha-theme/themes/blue-mocha.json",
+      "kind": "removed",
+      "before": {
+        "hash": "f7d1d8e84a9a2b1a7117a3010a693a653f2adabe27acdb2089acca5d41e964ad",
+        "size": 2358
+      },
+      "after": null,
+      "attributedTo": [
+        {
+          "path": "plugins",
+          "kind": "directory"
+        }
+      ]
+    },
+    {
+      "path": "plugins/pi-my-theme/package.json",
+      "kind": "added",
+      "before": null,
+      "after": {
+        "hash": "bc26837b7cc7319d97499521d681099324635f5dc847f8054b338afb621997b5",
+        "size": 217
+      },
+      "attributedTo": [
+        {
+          "path": "plugins",
+          "kind": "directory"
+        }
+      ]
+    },
+    {
+      "path": "plugins/pi-my-theme/themes/blue-moch-new.json",
+      "kind": "added",
+      "before": null,
+      "after": {
+        "hash": "4c3fe5bfeb0ebd4dcf436fa25f3853bd3162c9f832ffbfeade2aa4c675832d60",
+        "size": 2385
+      },
+      "attributedTo": [
+        {
+          "path": "plugins",
+          "kind": "directory"
+        }
+      ]
+    },
+    {
+      "path": "plugins/pi-my-theme/themes/blue-nobkgd.json",
+      "kind": "added",
+      "before": null,
+      "after": {
+        "hash": "87d34f467208c27a80e42eb9a442e06b777321cf9a09053d5011dc4d55e69f58",
+        "size": 2359
+      },
+      "attributedTo": [
+        {
+          "path": "plugins",
+          "kind": "directory"
+        }
+      ]
+    }
+  ],
+  "unattributed": [],
+  "unresolvedScopes": [],
+  "noCodeReason": null,
+  "scopeHash": "df74c10b9c7bb15e4560946f0b8ccf022b2914d2d8d23e3326655b86e7fe90ac"
+}

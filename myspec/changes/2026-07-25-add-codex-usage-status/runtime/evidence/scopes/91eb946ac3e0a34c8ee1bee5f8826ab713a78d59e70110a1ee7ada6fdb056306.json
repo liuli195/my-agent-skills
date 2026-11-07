@@ -1,0 +1,140 @@
+{
+  "schema": "comet.native.implementation-scope.v2",
+  "contractHash": "4e4cd91dfda9e5cb7b5b78bfa811ece53c19696fd314f95b282b57ecaa2a5eb3",
+  "baselineProjectionRef": "runtime/evidence/snapshots/7a5080ab63713e1099252736dde96082a1502fccdd62665906d668b6ca584a17.json",
+  "baselineProjectionHash": "7a5080ab63713e1099252736dde96082a1502fccdd62665906d668b6ca584a17",
+  "currentProjectionRef": "runtime/evidence/snapshots/7f754ee08931050525fc669b511173ec508e809d39b48c54c5a7549e5d673d89.json",
+  "currentProjectionHash": "7f754ee08931050525fc669b511173ec508e809d39b48c54c5a7549e5d673d89",
+  "complete": false,
+  "declaredArtifacts": [
+    {
+      "path": "plugins/pi-codex-usage-status",
+      "kind": "directory"
+    }
+  ],
+  "changes": [
+    {
+      "path": ".build-and-verify/config.json",
+      "kind": "modified",
+      "before": {
+        "hash": "6cc29ba1d89ebcaca6710e3936162b7284f45ffaefebf49be01cc71146d8c537",
+        "size": 7212
+      },
+      "after": {
+        "hash": "f86ab1d77486e70abcf32d4989eb8f9fcaba072fb9efc95cb1d4a0be909c42fb",
+        "size": 7491
+      },
+      "attributedTo": []
+    },
+    {
+      "path": "plugins/pi-codex-usage-status/extensions/pi-codex-usage-status.ts",
+      "kind": "added",
+      "before": null,
+      "after": {
+        "hash": "cbb674cfca2d5924e715dee4083d11a777273d26c715ed1e5ddc8bd1c19afe73",
+        "size": 3234
+      },
+      "attributedTo": [
+        {
+          "path": "plugins/pi-codex-usage-status",
+          "kind": "directory"
+        }
+      ]
+    },
+    {
+      "path": "plugins/pi-codex-usage-status/extensions/usage.ts",
+      "kind": "added",
+      "before": null,
+      "after": {
+        "hash": "0c3f47b82e464f08ac4784b083fbeef73efa94266d105ca45cb406fcb8b8cd89",
+        "size": 1825
+      },
+      "attributedTo": [
+        {
+          "path": "plugins/pi-codex-usage-status",
+          "kind": "directory"
+        }
+      ]
+    },
+    {
+      "path": "tests/pi_codex_usage_status.test.mjs",
+      "kind": "added",
+      "before": null,
+      "after": {
+        "hash": "25965372f05422f120d37cfef15bbb1608c465e7bbc473071c78965ae734a998",
+        "size": 1776
+      },
+      "attributedTo": []
+    },
+    {
+      "path": "tests/test_pi_codex_usage_status.py",
+      "kind": "added",
+      "before": null,
+      "after": {
+        "hash": "1b970c77634f673b23993a86905a6c756e9c0b1a084f9a2ce287caf425392540",
+        "size": 904
+      },
+      "attributedTo": []
+    }
+  ],
+  "unattributed": [
+    {
+      "path": ".build-and-verify/config.json",
+      "kind": "modified",
+      "before": {
+        "hash": "6cc29ba1d89ebcaca6710e3936162b7284f45ffaefebf49be01cc71146d8c537",
+        "size": 7212
+      },
+      "after": {
+        "hash": "f86ab1d77486e70abcf32d4989eb8f9fcaba072fb9efc95cb1d4a0be909c42fb",
+        "size": 7491
+      },
+      "attributedTo": []
+    },
+    {
+      "path": "tests/pi_codex_usage_status.test.mjs",
+      "kind": "added",
+      "before": null,
+      "after": {
+        "hash": "25965372f05422f120d37cfef15bbb1608c465e7bbc473071c78965ae734a998",
+        "size": 1776
+      },
+      "attributedTo": []
+    },
+    {
+      "path": "tests/test_pi_codex_usage_status.py",
+      "kind": "added",
+      "before": null,
+      "after": {
+        "hash": "1b970c77634f673b23993a86905a6c756e9c0b1a084f9a2ce287caf425392540",
+        "size": 904
+      },
+      "attributedTo": []
+    }
+  ],
+  "unresolvedScopes": [
+    {
+      "id": "scope:8824d4d78138046c2a7542ca23802667d1850887e92d75186f9ef0e9128278ef",
+      "kind": "unattributed-change",
+      "source": "implementation-scope",
+      "path": ".build-and-verify/config.json",
+      "reason": "Changed path is not covered by a declared artifact: .build-and-verify/config.json"
+    },
+    {
+      "id": "scope:ae77dc4eff0540a741f6c807e16dd1b35a259ba6cbdaeb39999fc21585c941ec",
+      "kind": "unattributed-change",
+      "source": "implementation-scope",
+      "path": "tests/pi_codex_usage_status.test.mjs",
+      "reason": "Changed path is not covered by a declared artifact: tests/pi_codex_usage_status.test.mjs"
+    },
+    {
+      "id": "scope:1f4b2d3bc68329036a4d2db266aa4dc3bcc06da165d1b2d817a45eed287950a0",
+      "kind": "unattributed-change",
+      "source": "implementation-scope",
+      "path": "tests/test_pi_codex_usage_status.py",
+      "reason": "Changed path is not covered by a declared artifact: tests/test_pi_codex_usage_status.py"
+    }
+  ],
+  "noCodeReason": null,
+  "scopeHash": "91eb946ac3e0a34c8ee1bee5f8826ab713a78d59e70110a1ee7ada6fdb056306"
+}
