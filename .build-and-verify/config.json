@@ -280,7 +280,7 @@
           "tests/integration/conftest.py",
           "tests/conftest.py",
           "requirements-dev.txt",
-          "plugins/data-store/skills/data-store"
+          "tests/test_cloud_bootstrap.py"
         ],
         "paths": [
           "scripts/cloud_bootstrap.py",
@@ -291,7 +291,7 @@
           "tests/integration/conftest.py",
           "tests/conftest.py",
           "requirements-dev.txt",
-          "plugins/data-store/skills/data-store/**"
+          "tests/test_cloud_bootstrap.py"
         ],
         "pytestXdistWorkers": 2
       },
