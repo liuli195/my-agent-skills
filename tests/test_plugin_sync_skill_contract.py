@@ -131,6 +131,15 @@ def test_record_reconciles_only_exact_accepted_wrapper_differences(capsys):
     with __import__("pytest").raises(ValueError, match="same version"):
         api["prepare_plan"](snapshot, {**current, "current_release_id": "different_release"}, readback["files"], target,
             inventory_complete=True, verified_operation=operation)
+    with __import__("pytest").raises(ValueError, match="same version"):
+        api["prepare_plan"]({**snapshot, "sha256": "f" * 64}, current, readback["files"], target,
+            inventory_complete=True, verified_operation=operation)
+    with __import__("pytest").raises(ValueError, match="no matching"):
+        api["transition"]({}, plan, accepted_metadata={})
+    with patch.object(Path, "read_text", return_value="null"):
+        assert api["main"](["record", "--state", "state", "--plan", "plan", "--accepted-metadata", "proof", "--readback", "readback"]) == 1
+    with patch.object(Path, "read_text", return_value="{}"):
+        assert api["main"](["record", "--state", "state", "--plan", "plan", "--accepted-metadata", "proof"]) == 1
     assert record(None)[1][0]["operations"][plan["operationId"]]["status"] == "unverified"
     for bad in ({**proof, "release_id": "wrong"}, {**proof, "changes": []}, {**proof, "sourceManifest": source_raw + "\n"}):
         assert record(bad) == (1, [])

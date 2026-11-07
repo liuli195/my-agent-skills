@@ -166,6 +166,7 @@ def prepare_plan(snapshot, current, remote_files, target_files, *, managed_files
                 if (prior.get("status") != "verified" or prior.get("verificationMethod") != "accepted_wrapper_metadata"
                         or old_plan.get("planSha256") != plan_digest(old_plan)
                         or old_plan.get("packageName") != current["name"] or old_plan.get("version") != current["version"]
+                        or old_plan.get("sha256") != snapshot["sha256"]
                         or old_plan.get("files") != target_files or old_read.get("files") != remote_files
                         or any(old_read.get(key) != current.get(key) for key in
                                ("plugin_id", "name", "version", "current_release_id", "scope", "discoverability"))):
@@ -329,7 +330,7 @@ def transition(state, plan, *, receipt=None, readback=None, rejection=None, acce
                 raise ValueError("legacy unresolved save must be reconciled before another send")
     operations = state.setdefault("operations", {})
     operation = operations.get(plan["operationId"])
-    if receipt is None and readback is None and rejection is None:
+    if receipt is None and readback is None and rejection is None and accepted_metadata is None:
         if operation is not None:
             raise ValueError("operation already exists; never resend a recorded plan")
         if any(item.get("status") in ("pending", "unknown", "unverified") for item in operations.values()):
@@ -483,18 +484,23 @@ def main(argv=None):
         else:
             if args.rejection_evidence and (args.receipt or args.readback or args.accepted_metadata):
                 raise ValueError("rejection evidence and success/readback modes are exclusive")
+            accepted_metadata = None
+            if args.accepted_metadata:
+                accepted_metadata = strict_json(Path(args.accepted_metadata).read_text(encoding="utf-8"))
+                if not isinstance(accepted_metadata, dict) or not args.readback:
+                    raise ValueError("accepted metadata requires an object and complete readback")
             plan = read_json(args.plan)
             path = Path(args.state)
             original = path.read_bytes() if path.exists() else None
             state = json.loads(original) if original else {}
-            if not args.receipt and not args.readback and not args.rejection_evidence:
+            if not args.receipt and not args.readback and not args.rejection_evidence and not args.accepted_metadata:
                 archive = Path(plan["params"]["archive"])
                 if hashlib.sha256(archive.read_bytes()).hexdigest() != plan["sha256"]:
                     raise ValueError("reviewed archive changed; do not send")
             transition(state, plan, receipt=read_json(args.receipt) if args.receipt else None,
                        readback=read_json(args.readback) if args.readback else None,
                        rejection=read_json(args.rejection_evidence) if args.rejection_evidence else None,
-                       accepted_metadata=strict_json(Path(args.accepted_metadata).read_text(encoding="utf-8")) if args.accepted_metadata else None)
+                       accepted_metadata=accepted_metadata)
             atomic_json(path, state, original)
             print(json.dumps(state, ensure_ascii=False))
         return 0
