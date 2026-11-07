@@ -832,7 +832,17 @@ def test_project_applies_json_env_transform(flow_root: Path) -> None:
 
 def test_project_generates_codex_marketplace_from_projection_identity(flow_root: Path) -> None:
     project = flow_root / "project"
-    write_release_flow_files(project, marketplace_identity_projection())
+    write_release_flow_files(project, marketplace_identity_projection(transforms="""  - path: .claude-plugin/marketplace.json
+    type: json-env
+    set:
+      /name: identity.claude.marketplaceName
+"""))
+
+    claude_path = project / ".claude-plugin/marketplace.json"
+    claude = {"name": "development", "plugins": [{"name": name} for name in ["pr-flow", "release-flow"]]}
+    for entry in claude["plugins"]:
+        entry["source"] = "./.local/dev-plugin-packages/" + entry["name"]
+    claude_path.write_text(json.dumps(claude), encoding="utf-8")
 
     result = run("project", "--project", str(project))
 
@@ -848,6 +858,8 @@ def test_project_generates_codex_marketplace_from_projection_identity(flow_root:
         "source": "local",
         "path": "./plugins/pr-flow",
     }
+    published = json.loads(claude_path.read_text(encoding="utf-8"))
+    assert [p["source"] for p in published["plugins"]] == ["./plugins/pr-flow", "./plugins/release-flow"]
 
 
 def test_validate_rejects_invalid_branch_mode(flow_root: Path) -> None:

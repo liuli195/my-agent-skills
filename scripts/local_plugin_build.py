@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import sys
 from pathlib import Path
 from typing import Any
@@ -177,8 +178,28 @@ def _projection_plugins(root: Path) -> tuple[list[str], list[str]]:
     return plugins, []
 
 
+def _prepare_development_packages(root: Path) -> None:
+    spec = importlib.util.spec_from_file_location("local_development_pack", root / "plugins/tool-lifecycle/pack.py")
+    pack = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pack)
+    pack.development_packages(root)
+
+
+def _manifest_source(root: Path, relative: Path) -> Path:
+    if relative.parts[:2] == (".local", "dev-plugin-packages") and len(relative.parts) == 3:
+        return root / "plugins" / relative.name
+    return root / relative
+
+
 def run_build(root: Path = REPO_ROOT) -> list[str]:
     errors: list[str] = []
+    # Only configured generated sources require assembly; ordinary marketplace validation stays read-only.
+    claude, initial_errors = _marketplace_plugins(root)
+    if not initial_errors and any(isinstance(p.get("source"), str) and p["source"].startswith("./.local/dev-plugin-packages/") for p in claude):
+        try:
+            _prepare_development_packages(root)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            return [f"development_package_failed: {error}"]
     plugins, marketplace_errors = _marketplace_plugins(root)
     errors.extend(marketplace_errors)
     codex_dev_plugins, codex_dev_marketplace_errors = _codex_dev_marketplace_plugins(root)
@@ -207,6 +228,7 @@ def run_build(root: Path = REPO_ROOT) -> list[str]:
             errors.append(f"source_outside_repo: {name}: {source}")
             continue
 
+        plugin_dir = _manifest_source(root, source_path)
         errors.extend(
             _check_manifest(
                 plugin_dir / ".claude-plugin" / "plugin.json",
@@ -241,6 +263,7 @@ def run_build(root: Path = REPO_ROOT) -> list[str]:
         if source_path.is_absolute() or not _inside(plugin_dir, root):
             errors.append(f"codex_dev_source_outside_repo: {name}: {source}")
             continue
+        plugin_dir = _manifest_source(root, source_path)
         errors.extend(
             _check_manifest(
                 plugin_dir / ".codex-plugin" / "plugin.json",

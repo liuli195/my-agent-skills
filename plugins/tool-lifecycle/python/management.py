@@ -1479,7 +1479,73 @@ def _source_record(
     }
 
 
+DEVELOPMENT_PROOF = ".development-package.json"
+
+
+def _development_package_files(source_root: Path, package_root: Path) -> dict[str, bytes]:
+    """One assembly recipe, shared by the packer and explicit source verification."""
+    files = {}
+    for path in package_root.rglob("*"):
+        relative = path.relative_to(package_root)
+        if any(part in {"__pycache__", ".git", "node_modules"} for part in relative.parts) or path.suffix == ".pyc":
+            continue
+        if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
+            raise ManagementError("development_package_input_link")
+        if path.is_file():
+            files[relative.as_posix()] = path.read_bytes()
+    shared = source_root / "plugins/tool-lifecycle"
+    files["python/management.py"] = (shared / "python/management.py").read_bytes()
+    files["tool-lifecycle/pack.py"] = (shared / "pack.py").read_bytes()
+    manifest = json.loads(files["package.json"])
+    manifest["developmentPackage"] = True
+    files["package.json"] = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    return files
+
+
+def _development_file_hashes(files: dict[str, bytes]) -> dict[str, str]:
+    return {path: hashlib.sha256(content).hexdigest() for path, content in sorted(files.items())}
+
+
+def _doctor_development_package() -> dict[str, object]:
+    root = _RUNNING_PACKAGE_ROOT
+    toolchain = {"mode": "dev", "packageName": PACKAGE_NAME}
+    report = {"cliVersion": _package_version(), "mode": "dev", "source": str(root),
+              "toolchain": toolchain, "runtime": {"packageRoot": str(root),
+                                                   "implementationIdentity": implementation_identity()}}
+    try:
+        proof = _read_json(root / DEVELOPMENT_PROOF)
+        if not isinstance(proof, dict) or proof.get("format") != 1:
+            raise ManagementError("development_package_proof_missing")
+        source = Path(proof["sourceRoot"])
+        prefix = Path(proof["packageDirectory"])
+        if not source.is_absolute() or prefix != Path("plugins") / SOURCE_DIRECTORY:
+            raise ManagementError("development_package_source_invalid")
+        actual = {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*")
+                  if p.is_file() and p.name != DEVELOPMENT_PROOF and "__pycache__" not in p.parts and p.suffix != ".pyc"}
+        if any(p.is_symlink() or (hasattr(p, "is_junction") and p.is_junction()) for p in root.rglob("*")):
+            raise ManagementError("development_package_content_link")
+        if _development_file_hashes(actual) != proof["files"]:
+            raise ManagementError("development_package_content_changed")
+        package = source / prefix
+        if _development_file_hashes(_development_package_files(source, package)) != proof["files"]:
+            raise ManagementError("development_package_source_changed")
+        identity = _implementation_identity_for_package(package)
+        if identity != proof["implementationIdentity"]:
+            raise ManagementError("development_package_identity_changed")
+        toolchain["implementationIdentity"] = identity
+        commit = _implementation_source_commit(package, identity)
+        toolchain.update(sourceRepository="https://github.com/liuli195/my-agent-skills",
+                         sourceCommit=commit, packageDirectory=prefix.as_posix())
+    except (ManagementError, OSError, ValueError, KeyError, TypeError) as error:
+        # Local work stays usable; the existing PR contract rejects a missing sourceCommit.
+        toolchain["identityError"] = str(error)
+    return report
+
+
 def _doctor_package(*, running: bool = False) -> dict[str, object]:
+    if running and ((_RUNNING_PACKAGE_ROOT / DEVELOPMENT_PROOF).exists()
+                    or _read_json(_RUNNING_PACKAGE_ROOT / "package.json").get("developmentPackage")):
+        return _doctor_development_package()
     stable = _RUNNING_PACKAGE_ROOT if running else _stable_package_root()
     real = Path(os.path.realpath(stable))
     cli_version = _package_version()

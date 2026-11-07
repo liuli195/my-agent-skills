@@ -48,3 +48,12 @@ New-Item -ItemType Junction -Path "$env:USERPROFILE\.agents\skills\<name>" -Targ
 - `add`（添加） is the Codex（代码代理） path for install/update from a configured marketplace snapshot（已配置市场快照）.
 - Do not remove（移除） any Plugin（插件） unless explicitly requested.
 - Current Codex（代码代理） sessions may need a new session before newly loaded Skill（技能） or Plugin（插件） content is visible.
+
+
+## 开发来源的完整安装内容
+
+目标市场使用构建产物作为来源时，首次安装或源码变化后先执行该仓库已声明的构建入口，使用本次核验的包内启动器，不从 PATH 换用全局实现。构建失败即停止；保留的旧产物不代表本次成功。市场仍使用原登记，不另建市场。
+
+刷新后核对原生安装路径与本轮产物的实际内容及运行身份，版本号相同也不能跳过此核对。原生更新没有替换内容时，只对获准目标按原完整标识卸载/安装；保留原 scope、启用状态和持久数据，不使用 prune，不改其他插件。重新核对新会话发现及包内命令；任何失败先查实际状态，再按原完整来源恢复，不能手改缓存或用全局命令掩盖失败。
+
+开发包的显式运行诊断必须核验构建来源及真实内容，只有可复现的已发布实现才输出原开发工具链身份；来源缺失、未发布或内容漂移时阻断 PR，不以相同版本号降格为正式包。普通开发命令仍可运行。活跃构建产物保留供后续安装，成功后清理暂存和已替代副本，失败恢复材料报告准确位置。
