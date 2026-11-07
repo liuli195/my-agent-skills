@@ -306,4 +306,3 @@ def test_verified_native_discovery_is_persisted_and_never_rebuilds_legacy_link(i
     state.manifest.pop("discovery")
     assert state.app.main(["init", *state.arguments]) == 0
     assert state.installed["discovery"]["skill"]["path"] == str(native)
-

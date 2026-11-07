@@ -26,7 +26,7 @@ Delta（增量规格）按能力放在 `.local/spec-work/current/delta/<capabili
 
 ## 确定性命令
 
-直接调用 `PATH`（可执行文件搜索路径）中的 CLI（命令行程序）；不得定位或解析包内脚本：
+使用本次已核验插件的Node启动器；下列 `myspec` 为同一随包命令前缀，不从PATH重新选择全局实现：
 
 ```text
 myspec state-init <work-dir> <add|review|audit> <specs-fingerprint> <input-fingerprint> [--import-aborted <archive-dir>]
