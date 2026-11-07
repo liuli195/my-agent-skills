@@ -73,12 +73,54 @@ def skill_path(root, state, name):
     return Path(item['path']).expanduser().parent if item else root / 'skills' / name
 
 
+def verify_runtime(manifest, supplied, managed):
+    """Host-supplied official locations; never discover caches or reuse old state."""
+    result = {'packages': {}, 'skills': {}, 'commands': {}}
+    for declaration in manifest.get('runtime_packages', []):
+        name = declaration['name']
+        item = supplied.get('packages', {}).get(name)
+        if not item or item.get('lifetime') not in ('installed', 'task') or item.get('channel') != 'RELEASE':
+            raise ValueError(f'Required official runtime absent: {name}')
+        root = Path(item['root']).expanduser()
+        if not root.is_absolute() or any(root.resolve().is_relative_to(managed / folder) for folder in ('sources','npm','skills')):
+            raise ValueError(f'Runtime must not use retired sources: {name}')
+        if not item.get('pluginId') or not item.get('releaseId'):
+            raise ValueError(f'Official runtime identity missing: {name}')
+        metadata = json.loads((root / '.codex-plugin/plugin.json').read_text(encoding='utf-8'))
+        if metadata['name'] != name or metadata['version'] != item['version'] or (declaration.get('version') and item['version'] != declaration['version']):
+            raise ValueError(f'Runtime name or version mismatch: {name}')
+        files = {path.relative_to(root).as_posix(): path for path in root.rglob('*') if path.is_file()}
+        if set(files) != set(item['files']) or any(path.is_symlink() for path in root.rglob('*')):
+            raise ValueError(f'Runtime complete inventory mismatch: {name}')
+        for relative, path in files.items():
+            if hashlib.sha256(path.read_bytes()).hexdigest() != item['files'][relative]:
+                raise ValueError(f'Runtime file changed: {name}: {relative}')
+        def resource(relative):
+            target = root / relative
+            if not target.resolve().is_relative_to(root.resolve()): raise ValueError('Runtime resource escapes package')
+            return target
+        for skill, relative in declaration.get('skills', {}).items():
+            path = resource(relative) / 'SKILL.md'
+            text = path.read_text(encoding='utf-8'); front = text.split('---', 2)
+            if len(front) != 3 or front[0].strip() or not re.search(r'^name:\s*[\'"]?' + re.escape(skill) + r'[\'"]?\s*$',front[1],re.M):
+                raise ValueError(f'Runtime skill identity mismatch: {skill}')
+            if skill in result['skills']: raise ValueError('Duplicate runtime skill')
+            result['skills'][skill] = str(path.parent)
+        for command, relative in declaration.get('commands', {}).items():
+            target = resource(relative)
+            if not target.is_file() or command in result['commands']: raise ValueError('Invalid runtime command')
+            result['commands'][command] = ['node',str(target)]
+        result['packages'][name] = item
+    return result
+
+
 def synchronize(manifest, root, latest, selected):
     root.mkdir(parents=True, exist_ok=True)
     state_path = root / 'installed.json'
     state = json.loads(state_path.read_text()) if state_path.exists() else {'sources': {}, 'npm': {}}
     replacements = native_discovery(manifest, state, root)
     state['pending'] = list(manifest.get('optional_skills', []))
+    state['exportedSkills'] = []
     discovery = root / 'skills'
     discovery.mkdir(exist_ok=True)
     for item in manifest.get('sources', []):
@@ -121,6 +163,7 @@ def synchronize(manifest, root, latest, selected):
                 continue
             if skill.parent.name not in replacements:
                 link(discovery / skill.parent.name, skill.parent)
+                state['exportedSkills'].append(skill.parent.name)
             if skill.parent.name in state['pending']:
                 state['pending'].remove(skill.parent.name)
         state['sources'][name] = {'repo': repo, 'ref': ref, 'commit': commit}
@@ -141,6 +184,7 @@ def synchronize(manifest, root, latest, selected):
         for skill in (package / 'skills').glob('*/SKILL.md'):
             if skill.parent.name not in replacements:
                 link(discovery / skill.parent.name, skill.parent)
+                state['exportedSkills'].append(skill.parent.name)
         state['npm'][name] = version
         save(state_path, state)
     obsolete = [str(path) for path in discovery.iterdir() if not (path/'SKILL.md').is_file()]
@@ -157,6 +201,7 @@ def main(argv=None):
     parser.add_argument('action', choices=['init', 'update'])
     parser.add_argument('--root', type=Path, required=True, help='Approved common installation directory')
     parser.add_argument('--manifest', type=Path, default=Path(__file__).with_name('cloud-environment.json'))
+    parser.add_argument('--runtime-manifest', type=Path, help='Verified current official package locations and complete inventories')
     parser.add_argument('--latest', action='store_true', help='Resolve latest releases for explicitly selected units')
     parser.add_argument('--only', action='append', default=[], help='Source group or npm package name')
     parser.add_argument('--project', type=Path, help='Run this repository\'s existing setup after common preparation')
@@ -172,6 +217,22 @@ def main(argv=None):
         if set(args.only) - names:
             raise ValueError('Unknown update selection: ' + ', '.join(set(args.only) - names))
         root = args.root.expanduser().resolve()
+        supplied = json.loads(args.runtime_manifest.read_text(encoding='utf-8')) if args.runtime_manifest else {}
+        runtime = verify_runtime(manifest, supplied, root)
+        recipe = None
+        if args.project:
+            project = args.project.resolve()
+            remote = run(['git', '-C', project, 'remote', 'get-url', 'origin'])
+            repository = remote.removesuffix('.git').replace('git@github.com:', '').removeprefix('https://github.com/')
+            recipe = manifest.get('projects', {}).get(repository)
+            if recipe is None: raise ValueError(f'Project not declared in common manifest: {repository}')
+            for binding in recipe.get('bindings', []):
+                item = runtime['packages'].get(binding['package'])
+                if not item or item['lifetime'] != 'installed':
+                    raise ValueError('Project binding requires a persistent official runtime')
+                target = Path(item['root']) / binding['script']
+                if not target.resolve().is_relative_to(Path(item['root']).resolve()) or not target.is_file():
+                    raise ValueError('Project runtime binding resource missing')
         state = synchronize(manifest, root, args.latest, set(args.only))
         if args.skills_dir:
             target_dir = args.skills_dir.expanduser()
@@ -181,16 +242,10 @@ def main(argv=None):
                             and not (path/'SKILL.md').is_file()]
                 if obsolete:
                     raise ValueError('Review obsolete user skill links before approved cleanup: ' + ', '.join(obsolete))
-            for skill in (root / 'skills').iterdir():
-                if skill.name not in state.get('discovery', {}):
-                    link(args.skills_dir.expanduser() / skill.name, skill)
+            for name in state['exportedSkills']:
+                if name not in runtime['skills'] and name not in state.get('discovery', {}):
+                    link(args.skills_dir.expanduser() / name, root / 'skills' / name)
         if args.project:
-            project = args.project.resolve()
-            remote = run(['git', '-C', project, 'remote', 'get-url', 'origin'])
-            repository = remote.removesuffix('.git').replace('git@github.com:', '').removeprefix('https://github.com/')
-            recipe = manifest.get('projects', {}).get(repository)
-            if recipe is None:
-                raise ValueError(f'Project not declared in common manifest: {repository}')
             if os.name == 'nt':
                 command = recipe['windows_setup']
             else:
@@ -200,13 +255,20 @@ def main(argv=None):
                 if recipe.get('npm'):
                     command.append('--npm')
             print(run(command, cwd=project))
-            if 'data-store' in recipe.get('skills', []) and 'data-store' not in state['pending']:
-                binding = skill_path(root, state, 'data-store') / 'scripts/project_binding.py'
+            for binding in recipe.get('bindings', []):
+                package = runtime['packages'][binding['package']]
+                implementation = Path(package['root']) / binding['script']
+                if not implementation.resolve().is_relative_to(Path(package['root']).resolve()) or not implementation.is_file():
+                    raise ValueError('Project binding script absent or outside runtime')
+                if package['lifetime'] != 'installed':
+                    raise ValueError('Stable project binding requires installed runtime; task resource cannot become a permanent link')
                 for action in ('connect', 'check'):
-                    print(run([sys.executable, binding, action, '--project', project], cwd=project))
+                    print(run([sys.executable, implementation, action, '--project', project], cwd=project))
+        state['runtime'] = runtime
+        save(root / 'installed.json', state)
         print(json.dumps({'status': 'ready', 'root': str(root), 'pending': state['pending'],
-                          'path': str(root/'npm/bin'), 'npm_prefix': str(root/'npm'), 'sources': state['sources'], 'npm': state['npm'],
-                          'discovery': state.get('discovery', {})}, ensure_ascii=False))
+                          'commands': runtime['commands'], 'public_npm_prefix': str(root/'npm'), 'sources': state['sources'], 'npm': state['npm'],
+                          'runtime': runtime, 'discovery': state.get('discovery', {})}, ensure_ascii=False))
         return 0
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
         if isinstance(error, subprocess.CalledProcessError) and error.stdout:

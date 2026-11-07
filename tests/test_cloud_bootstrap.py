@@ -127,7 +127,8 @@ def test_empty_install_can_be_reused_and_optional_skill_is_nonblocking(installat
     state.manifest["optional_skills"] = ["data-store"]
     for _ in range(2):
         assert state.app.main(["init", *state.arguments]) == 0
-    assert state.installed == {"sources": {}, "npm": {}, "pending": ["data-store"]}
+    assert state.installed["pending"] == ["data-store"]
+    assert state.installed["sources"] == state.installed["npm"] == {}
 
 
 @pytest.mark.parametrize("arguments", [["update", "--latest"], ["init", "--latest", "--only", "example"]])
@@ -218,7 +219,7 @@ def test_missing_source_restores_recorded_commit(installation, monkeypatch):
 
 
 @pytest.mark.parametrize("declared,ready", [(False, True), (True, False), (True, True)])
-def test_project_binding_follows_only_declared_ready_skill(installation, monkeypatch, declared, ready):
+def test_project_setup_does_not_select_binding_from_legacy_skill_name(installation, monkeypatch, declared, ready):
     state = installation
     project = ROOT
     recipe = {"requirements": [], "npm": False, "skills": ["data-store"] if declared else [],
@@ -231,9 +232,7 @@ def test_project_binding_follows_only_declared_ready_skill(installation, monkeyp
         (["git", "-C", project, "remote", "get-url", "origin"], "https://github.com/owner/project.git"),
         (setup, "reused"),
     ]
-    if declared and ready:
-        expected.extend(([state.app.sys.executable, state.root / "skills/data-store/scripts/project_binding.py",
-                          action, "--project", project], "checked") for action in ("connect", "check"))
+    # Legacy skill names no longer select a project implementation implicitly.
 
     def execute(command, **kwargs):
         wanted, output = expected.pop(0)
@@ -307,3 +306,32 @@ def test_verified_native_discovery_is_persisted_and_never_rebuilds_legacy_link(i
     state.manifest.pop("discovery")
     assert state.app.main(["init", *state.arguments]) == 0
     assert state.installed["discovery"]["skill"]["path"] == str(native)
+
+
+def test_runtime_input_drives_repeat_init_without_legacy_links(tmp_path, monkeypatch, capsys):
+    import hashlib
+    app = entry()
+    package = tmp_path / "official-package"
+    package.mkdir()
+    data = {".codex-plugin/plugin.json": json.dumps({"name": "example", "version": "1.2.3"}).encode(),
+            "skills/example/SKILL.md": b"---\nname: example\n---\nCurrent skill\n", "bin/example.js": b"// current entry\n"}
+    for name, content in data.items():
+        path = package / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(content)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"sources": [], "npm": [], "runtime_packages": [{"name": "example", "skills": {"example": "skills/example"}, "commands": {"example": "bin/example.js"}}]}))
+    runtime = tmp_path / "runtime.json"
+    value = {"packages": {"example": {"root": str(package), "lifetime": "installed", "pluginId": "Official_example", "releaseId": "release_example", "version": "1.2.3", "channel": "RELEASE", "files": {name: hashlib.sha256(content).hexdigest() for name, content in data.items()}}}}
+    runtime.write_text(json.dumps(value))
+    managed = tmp_path / "managed"; (managed / "skills/retired").mkdir(parents=True)
+    (managed / "skills/retired/SKILL.md").write_text("old valid skill")
+    target = tmp_path / "discovery"
+    monkeypatch.setattr(app, "run", lambda *a, **k: pytest.fail("no old install or global command"))
+    args = ["init", "--root", str(managed), "--manifest", str(manifest), "--runtime-manifest", str(runtime), "--skills-dir", str(target)]
+    for _ in range(2): assert app.main(args) == 0
+    assert not target.exists()
+    state = (managed / "installed.json").read_bytes()
+    value["packages"]["example"]["version"] = "wrong"
+    runtime.write_text(json.dumps(value))
+    assert app.main(args) == 1
+    assert (managed / "installed.json").read_bytes() == state
+    assert "version" in capsys.readouterr().err
