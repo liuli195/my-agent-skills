@@ -517,3 +517,12 @@ Release Flow  MUST 仅负责版本、完整正式包和GitHub发布；正式账�
 
 - **WHEN** 本仓库正式发布成功后追加私人包
 - **THEN** 包在标签树外产生，包含双层来源、作者、完整资源和许可；来源或字段不符时停止完整归档，不重发已经成功的版本。
+### Requirement: Formal marketplace projection excludes local development installation paths
+
+Formal release projection MUST select canonical plugin sources from the release registry rather than retain machine-local development installation paths. Complete formal plugin packages and existing npm package behavior MUST remain compatible with their declared distribution channels.
+
+#### Scenario: Development marketplace sources use locally assembled tool packages
+
+- **WHEN** the release process projects the Codex and Claude formal marketplaces
+- **THEN** both formal catalogs MUST point to canonical plugin sources without development artifact paths
+- **THEN** formal command-tool packages MUST still contain their required shared runtime and existing npm distribution MUST remain available
