@@ -166,12 +166,15 @@
           ".agents/plugins/marketplace.json",
           ".claude-plugin/marketplace.json",
           ".github/workflows/release.yml",
-          "plugins/my-spec/package.json",
-          "plugins/build-and-verify/package.json",
           "tests/integration/conftest.py",
           "tests/conftest.py",
           "requirements-dev.txt",
-          "tests/test_release_flow_cli.py"
+          "tests/test_release_flow_cli.py",
+          "plugins/tool-lifecycle/pack.py",
+          "plugins/tool-lifecycle/python/management.py",
+          "plugins/my-spec",
+          "plugins/build-and-verify",
+          "tests/support/myspec_cases.py"
         ],
         "paths": [
           "plugins/release-flow/**",
@@ -180,12 +183,15 @@
           ".agents/plugins/marketplace.json",
           ".claude-plugin/marketplace.json",
           ".github/workflows/release.yml",
-          "plugins/my-spec/package.json",
-          "plugins/build-and-verify/package.json",
           "tests/integration/conftest.py",
           "tests/conftest.py",
           "requirements-dev.txt",
-          "tests/test_release_flow_cli.py"
+          "tests/test_release_flow_cli.py",
+          "plugins/tool-lifecycle/pack.py",
+          "plugins/tool-lifecycle/python/management.py",
+          "plugins/my-spec/**",
+          "plugins/build-and-verify/**",
+          "tests/support/myspec_cases.py"
         ],
         "pytestXdistWorkers": 2
       },
@@ -353,7 +359,9 @@
           "tests/conftest.py",
           "tests/support/pr_flow_invocation.py",
           "tests/support/npm_candidates.py",
-          "tests/integration/conftest.py"
+          "tests/integration/conftest.py",
+          "plugins/tool-lifecycle/pack.py",
+          "plugins/tool-lifecycle/python/management.py"
         ],
         "paths": [
           ".agents/**",
@@ -369,7 +377,9 @@
           "tests/conftest.py",
           "tests/support/pr_flow_invocation.py",
           "tests/support/npm_candidates.py",
-          "tests/integration/conftest.py"
+          "tests/integration/conftest.py",
+          "plugins/tool-lifecycle/pack.py",
+          "plugins/tool-lifecycle/python/management.py"
         ],
         "pytestXdistWorkers": 2
       },

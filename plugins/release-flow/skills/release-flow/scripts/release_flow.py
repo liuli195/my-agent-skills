@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import time
 from dataclasses import dataclass
 import json
@@ -1200,6 +1201,25 @@ def git_paths_changed(project: Path, revisions: list[str], paths: list[str]) -> 
     return result.returncode == 1
 
 
+def source_management_blob(project: Path, ref: str, target: str) -> str:
+    """Apply a ref's own checkout and destination attributes to its shared source."""
+    with tempfile.TemporaryDirectory(prefix="release-flow-input-") as temporary:
+        root = Path(temporary)
+        worktree = root / "worktree"
+        worktree.mkdir(exist_ok=True)
+        environment = os.environ | {"GIT_INDEX_FILE": str(root / "index")}
+        command = ["git", "-C", str(project), f"--work-tree={worktree}"]
+        source = "plugins/tool-lifecycle/python/management.py"
+        # Missing worktree attributes fall back to this ref's private index.
+        for arguments in (["read-tree", ref], ["checkout-index", "--", source],
+                          ["hash-object", f"--path={target}", str(worktree / source)]):
+            result = subprocess.run([*command, *arguments], env=environment,
+                                    text=True, capture_output=True, check=False)
+            if result.returncode:
+                raise ValueError(f"command_failed: git {' '.join(arguments)}")
+        return result.stdout.strip()
+
+
 def release_input_changed(project: Path, config: FlowConfig, plugin_name: str) -> bool:
     release_inputs = plugin_release_inputs(plugin_name)
     for release_input in release_inputs:
@@ -1208,6 +1228,43 @@ def release_input_changed(project: Path, config: FlowConfig, plugin_name: str) -
     ensure_remote_branch(project, config.release_source_ref)
     channel_ref = f"origin/{config.release_channel_branch}"
     source_ref = f"origin/{config.release_source_ref}"
+    selected = {name for generator in read_projection(project).generators for name in generator.plugins}
+    if PLUGIN_REGISTRY[plugin_name].get("commandTool") and plugin_name in selected:
+        # Keep all source-ref drift protection, including the thin source wrapper.
+        if git_paths_changed(project, [source_ref], release_inputs):
+            return True
+        package = Path(release_inputs[0])
+        bundled_management = (package / "python/management.py").as_posix()
+        # Only the known injection target differs intentionally from source.
+        other_inputs = [*release_inputs, f":(exclude){bundled_management}"]
+        if git_paths_changed(project, [channel_ref], other_inputs):
+            return True
+        if source_ref != channel_ref and git_paths_changed(project, [source_ref, channel_ref], other_inputs):
+            return True
+        management = resolve_project_path(
+            project, Path("plugins/tool-lifecycle/python/management.py"), "invalid_management_source"
+        )
+        if not management.is_file():
+            raise ValueError(f"invalid_management_source: {management}")
+        # --path applies the destination's Git attributes and newline conversion.
+        effective_blob = git_output(project, [
+            "hash-object", f"--path={bundled_management}", str(management)
+        ]).strip()
+        source_entry = git_output(project, [
+            "ls-tree", source_ref, "--", "plugins/tool-lifecycle/python/management.py"
+        ]).strip()
+        channel_entry = git_output(project, [
+            "ls-tree", channel_ref, "--", bundled_management
+        ]).strip()
+        if not source_entry or not channel_entry:
+            return True
+        source_mode, source_type, _source_blob = source_entry.split("\t", 1)[0].split()
+        channel_mode, channel_type, channel_blob = channel_entry.split("\t", 1)[0].split()
+        channel = (channel_mode, channel_type, channel_blob)
+        current_mode = "100755" if management.stat().st_mode & 0o111 else "100644"
+        if (current_mode, "blob", effective_blob) != channel:
+            return True
+        return (source_mode, source_type, source_management_blob(project, source_ref, bundled_management)) != channel
     if git_paths_changed(project, [channel_ref], release_inputs):
         return True
     if git_paths_changed(project, [source_ref], release_inputs):
@@ -1250,6 +1307,29 @@ def apply_projection(project: Path, projection: Projection) -> None:
         apply_projection_generator(project, projection, generator)
     for transform in projection.transforms:
         apply_json_env_transform(project, projection, transform)
+
+
+def formal_command_tools(projection: Projection) -> list[tuple[str, str]]:
+    selected = {name for generator in projection.generators for name in generator.plugins}
+    return [
+        (plugin_release_inputs(name)[0], PLUGIN_REGISTRY[name]["commandTool"]["package"])
+        for name in sorted(selected)
+        if PLUGIN_REGISTRY[name].get("commandTool")
+    ]
+
+
+def prepare_formal_release_tree(project: Path, projection: Projection) -> None:
+    """Assemble only disposable formal Git release trees, never the source tree."""
+    apply_projection(project, projection)
+    command_tools = formal_command_tools(projection)
+    if not command_tools:
+        return
+    pack_path = resolve_project_path(project, Path("plugins/tool-lifecycle/pack.py"), "invalid_pack_path")
+    spec = importlib.util.spec_from_file_location("release_flow_tool_pack", pack_path)
+    assert spec is not None and spec.loader is not None
+    pack = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pack)
+    pack.assemble_formal_tools(project, command_tools)
 
 
 def marketplace_identity_value(data: dict[str, Any], pointer: str) -> Any:
@@ -1333,6 +1413,16 @@ def copy_tracked_project_for_expected(source: Path, target: Path, tracked_files:
 
 
 def copy_project_for_expected(source: Path, target: Path) -> None:
+    command_tools = formal_command_tools(read_projection(source))
+    if command_tools:
+        # Check only this assembly's inputs before copy2 can dereference links.
+        for shared in ("plugins/tool-lifecycle/pack.py", "plugins/tool-lifecycle/python/management.py"):
+            resolve_project_path(source, Path(shared), "invalid_release_input_path")
+        for relative, _package_name in command_tools:
+            package = resolve_project_path(source, Path(relative), "invalid_release_input_path")
+            management = resolve_project_path(source, Path(relative) / "python/management.py", "invalid_release_input_path")
+            if not management.is_relative_to(package):
+                raise ValueError(f"invalid_management_target: {relative}")
     tracked_files = git_tracked_files(source)
     if tracked_files is not None:
         copy_tracked_project_for_expected(source, target, tracked_files)
@@ -1484,14 +1574,17 @@ def preflight_errors(
             errors.append(str(exc))
 
     if not errors:
-        with tempfile.TemporaryDirectory(prefix="release-flow-preflight-") as temp_dir:
-            expected_tree = Path(temp_dir) / "expected"
-            copy_project_for_expected(project, expected_tree)
-            expected_projection = read_projection(expected_tree)
-            apply_projection(expected_tree, expected_projection)
-            identity_errors = marketplace_identity_errors(expected_tree, expected_projection)
-            if identity_errors:
-                errors.extend(identity_errors)
+        try:
+            with tempfile.TemporaryDirectory(prefix="release-flow-preflight-") as temp_dir:
+                expected_tree = Path(temp_dir) / "expected"
+                copy_project_for_expected(project, expected_tree)
+                expected_projection = read_projection(expected_tree)
+                prepare_formal_release_tree(expected_tree, expected_projection)
+                identity_errors = marketplace_identity_errors(expected_tree, expected_projection)
+                if identity_errors:
+                    errors.extend(identity_errors)
+        except (OSError, ValueError) as exc:
+            errors.append(str(exc))
 
     errors.extend(remote_release_errors(project, tag))
     return errors
@@ -1596,7 +1689,7 @@ def existing_release_ref_error(
         temp_root = Path(temp_dir)
         expected = temp_root / "expected"
         copy_project_for_expected(project, expected)
-        apply_projection(expected, projection)
+        prepare_formal_release_tree(expected, projection)
         run_checked(["git", "init"], expected)
         run_checked(["git", "add", "-A"], expected)
         expected_tree = git_output(expected, ["write-tree"]).strip()
@@ -1813,7 +1906,7 @@ def run_ci_publish_remote(
     with tempfile.TemporaryDirectory(prefix="release-flow-ci-") as temp_dir:
         release_tree = Path(temp_dir) / "release-tree"
         copy_project_for_expected(project, release_tree)
-        apply_projection(release_tree, projection)
+        prepare_formal_release_tree(release_tree, projection)
         run_checked(["git", "init"], release_tree)
         copy_git_auth_config(project, release_tree)
         run_checked(["git", "remote", "add", "origin", origin_url(project)], release_tree)
