@@ -6,6 +6,7 @@ import io
 import json
 from pathlib import Path, PurePosixPath
 import re
+import runpy
 import stat
 import urllib.request
 import zipfile
@@ -91,6 +92,7 @@ def project_archive(raw, config):
         if key in changed or rule['path'] not in projected: raise ValueError('invalid or duplicate adaptation')
         changed.add(key); projected[rule['path']] = adapt_boolean(projected[rule['path']], rule)
     provenance = {key:config[key] for key in ('repository','commit','version','archiveSha256','license')}
+    provenance['metadata'] = {key: upstream[key] for key in ('author','description')}
     provenance.update(originalFiles={k:digest(v) for k,v in original.items()}, adaptations=config['adaptations'])
     return projected, provenance
 
@@ -128,7 +130,12 @@ def main(argv=None):
             if item['archiveUrl'] != expected: raise ValueError('archive URL not pinned to official source')
             with urllib.request.urlopen(expected, timeout=30) as response: raw = response.read(LIMIT+1)
         files, upstream = project_archive(raw,item)
-        cloud = {'name':name,'version':item['version'],'description':'Private adapted upstream skills','skills':item['skills']}
+        metadata = upstream['metadata']; author = metadata['author']; description = metadata['description']
+        cloud = {'name':name,'version':item['version'],'author':author,'description':description,'skills':'./skills',
+                 'interface':{'displayName':name,'shortDescription':' '.join(description.splitlines()),
+                              'longDescription':description,'developerName':author['name'],
+                              'category':item['category'],'capabilities':[]}}
+        runpy.run_path(str(Path(__file__).with_name('pack.py')))['_validate_cloud_metadata'](cloud)
         files['.codex-plugin/plugin.json'] = (json.dumps(cloud,ensure_ascii=False,indent=2)+'\n').encode()
         identity = digest(json.dumps(upstream,sort_keys=True).encode())
         filename = name+'-'+identity[:20]+'.zip'; artifact = output/filename; directory = output/artifact.stem

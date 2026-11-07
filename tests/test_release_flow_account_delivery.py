@@ -173,7 +173,7 @@ def test_release_workflow_uploads_complete_packages_after_publication_without_ac
 def test_private_projection_keeps_original_files_and_rejects_changed_inputs(tmp_path):
     module = runpy.run_path(str(Path(__file__).resolve().parents[1] / "plugins/tool-lifecycle/private_sources.py"))
     import hashlib, zipfile
-    raw = {"plugin.json": json.dumps({"version": "1.3.2", "skills": ["./skills/example"]}).encode(),
+    raw = {"plugin.json": json.dumps({"version": "1.3.2", "author": {"name": "Upstream author"}, "description": "Original description", "skills": ["./skills/example"]}).encode(),
            "LICENSE": b"fixture license", "skills/example/SKILL.md": b"---\nname: example\ndisable-model-invocation: true\n---\nExact body\n",
            "skills/example/agents/openai.yaml": b"policy:\n  allow_implicit_invocation: false\n",
            "skills/example/scripts/tool.py": b"print('resource')\n"}

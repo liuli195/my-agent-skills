@@ -95,7 +95,8 @@
           "before": false,
           "after": true
         }
-      ]
+      ],
+      "category": "Developer Tools"
     }
   ]
 }
