@@ -1,0 +1,166 @@
+{
+  "sources": [
+    {
+      "name": "find-skills",
+      "repo": "vercel-labs/skills",
+      "paths": [
+        "skills/find-skills"
+      ]
+    }
+  ],
+  "npm": [],
+  "optional_skills": [],
+  "projects": {
+    "liuli195/my-agent-skills": {
+      "requirements": [
+        "requirements-dev.txt"
+      ],
+      "npm": true,
+      "windows_setup": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/setup-worktree.ps1"
+      ]
+    },
+    "liuli195/Wow-Addons": {
+      "requirements": [
+        "scripts/dev/requirements.txt",
+        "projects/sim2gse/requirements.txt"
+      ],
+      "npm": true,
+      "windows_setup": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/dev/setup.ps1"
+      ],
+      "bindings": [
+        {
+          "package": "data-store",
+          "script": "skills/data-store/scripts/project_binding.py",
+          "source": "skills/data-store",
+          "target": ".local/skills/data-store"
+        }
+      ]
+    },
+    "liuli195/Quant-Research-Lab": {
+      "requirements": [
+        "requirements.txt",
+        "requirements-dev.txt"
+      ],
+      "npm": false,
+      "windows_setup": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/setup-worktree.ps1"
+      ]
+    }
+  },
+  "runtime_packages": [
+    {
+      "name": "build-and-verify",
+      "skills": {
+        "build-and-verify": "skills/build-and-verify",
+        "build-and-verify-init": "skills/build-and-verify-init",
+        "build-and-verify-review": "skills/build-and-verify-review"
+      },
+      "commands": {
+        "build-and-verify": "bin/build-and-verify.js"
+      }
+    },
+    {
+      "name": "data-store",
+      "skills": {
+        "data-store": "skills/data-store"
+      }
+    },
+    {
+      "name": "dev-flow",
+      "skills": {
+        "dev-flow": "skills/dev-flow"
+      }
+    },
+    {
+      "name": "my-spec",
+      "skills": {
+        "my-spec": "skills/my-spec",
+        "my-spec-add": "skills/my-spec-add",
+        "my-spec-audit": "skills/my-spec-audit",
+        "my-spec-review": "skills/my-spec-review"
+      },
+      "commands": {
+        "myspec": "bin/myspec.js"
+      }
+    },
+    {
+      "name": "plugin-sync",
+      "skills": {
+        "plugin-sync": "skills/plugin-sync"
+      }
+    },
+    {
+      "name": "pr-flow",
+      "skills": {
+        "pr-flow": "skills/pr-flow",
+        "pr-flow-cleanup": "skills/pr-flow-cleanup",
+        "pr-flow-complete": "skills/pr-flow-complete",
+        "pr-flow-hotfix": "skills/pr-flow-hotfix",
+        "pr-flow-init": "skills/pr-flow-init",
+        "pr-flow-tweak": "skills/pr-flow-tweak"
+      }
+    },
+    {
+      "name": "release-flow",
+      "skills": {
+        "release-flow": "skills/release-flow"
+      }
+    },
+    {
+      "name": "retro-to-issues",
+      "skills": {
+        "retro-to-issues": "skills/retro-to-issues"
+      }
+    },
+    {
+      "name": "subagent-policy",
+      "skills": {
+        "subagent-policy": "skills/subagent-policy"
+      }
+    },
+    {
+      "name": "mattpocock-skills-private",
+      "version": "1.3.2",
+      "skills": {
+        "ask-matt": "skills/engineering/ask-matt",
+        "diagnosing-bugs": "skills/engineering/diagnosing-bugs",
+        "grill-with-docs": "skills/engineering/grill-with-docs",
+        "triage": "skills/engineering/triage",
+        "improve-codebase-architecture": "skills/engineering/improve-codebase-architecture",
+        "setup-matt-pocock-skills": "skills/engineering/setup-matt-pocock-skills",
+        "tdd": "skills/engineering/tdd",
+        "to-spec": "skills/engineering/to-spec",
+        "to-tickets": "skills/engineering/to-tickets",
+        "wayfinder": "skills/engineering/wayfinder",
+        "implement": "skills/engineering/implement",
+        "implement-spec": "skills/engineering/implement-spec",
+        "prototype": "skills/engineering/prototype",
+        "research": "skills/engineering/research",
+        "domain-modeling": "skills/engineering/domain-modeling",
+        "codebase-design": "skills/engineering/codebase-design",
+        "code-review": "skills/engineering/code-review",
+        "pr": "skills/engineering/pr",
+        "retro": "skills/engineering/retro",
+        "wizard": "skills/engineering/wizard",
+        "grill-me": "skills/productivity/grill-me",
+        "grilling": "skills/productivity/grilling",
+        "handoff": "skills/productivity/handoff",
+        "teach": "skills/productivity/teach",
+        "to-questionnaire": "skills/productivity/to-questionnaire",
+        "wait-what": "skills/productivity/wait-what",
+        "writing-for-agents": "skills/productivity/writing-for-agents"
+      }
+    }
+  ]
+}
