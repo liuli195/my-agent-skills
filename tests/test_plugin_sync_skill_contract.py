@@ -76,3 +76,68 @@ def test_plugin_sync_prepares_one_creator_update_without_a_network_client():
     old["status"] = "pending"
     with pytest.raises(ValueError, match="not proven"):
         api["reconcile_legacy"](history, "example", "RELEASE", {"remotePluginId": "plugins_existing", "shareUrl": ""}, {**after, "artifactSha256": "a" * 64})
+
+
+def test_record_reconciles_only_exact_accepted_wrapper_differences(capsys):
+    import copy, hashlib, json, runpy
+    from unittest.mock import patch
+    api = runpy.run_path(str(PLUGIN_SYNC_ROOT / "scripts/plugin_sync.py"))
+    encode = lambda value: json.dumps(value, ensure_ascii=False)
+    sha = lambda text: hashlib.sha256(text.encode()).hexdigest()
+    source = {"name": "example", "version": "1.3.2", "author": {"name": "Upstream", "url": "https://example.test"},
+              "interface": {"developerName": "Upstream"}, "skills": "./skills"}
+    observed = copy.deepcopy(source)
+    observed["author"].update(name="Account", email="owner@example.test")
+    observed["interface"]["developerName"] = "Account"
+    source_raw, observed_raw = encode(source), encode(observed)
+    path = ".codex-plugin/plugin.json"
+    target = {path: sha(source_raw), "LICENSE": sha("license"), "skills/entry/SKILL.md": sha("skill")}
+    snapshot = {"packageName": "example", "version": "1.3.2", "sha256": "a" * 64, "artifact": "example.zip", "pluginPath": "/prepared/example"}
+    plan = api["prepare_plan"](snapshot, None, {}, target, inventory_complete=True, personal_context=True, owned_plugins=[])
+    receipt = {"status": "created", "plugin_id": "plugins_created", "release_id": "release_current", "version": "1.3.2", "scope": "USER", "discoverability": "PRIVATE"}
+    readback = {"name": "example", "plugin_id": receipt["plugin_id"], "current_release_id": receipt["release_id"], "version": "1.3.2", "scope": "USER", "discoverability": "PRIVATE", "complete": True,
+                "files": {**target, path: sha(observed_raw)}}
+    state = {}; api["transition"](state, plan); api["transition"](state, plan, receipt=receipt, readback=readback)
+    assert state["operations"][plan["operationId"]]["status"] == "unverified"
+    proof = {"operationId": plan["operationId"], "planSha256": plan["planSha256"], "archiveSha256": plan["sha256"],
+             "plugin_id": receipt["plugin_id"], "release_id": receipt["release_id"], "version": "1.3.2",
+             "sourceManifest": source_raw, "observedManifest": observed_raw,
+             "acceptance": {"accepted": True, "reference": "explicit user decision for this operation"},
+             "owned": {"plugins": [{**readback}], "next_cursor": None},
+             "changes": [{"path": "/author/name", "action": "replace", "before": {"present": True, "value": "Upstream"}, "after": {"present": True, "value": "Account"}},
+                         {"path": "/author/email", "action": "add", "before": {"present": False}, "after": {"present": True, "value": "owner@example.test"}},
+                         {"path": "/interface/developerName", "action": "replace", "before": {"present": True, "value": "Upstream"}, "after": {"present": True, "value": "Account"}}]}
+    def record(evidence, current=readback):
+        saved = []; fixtures = {"plan": plan, "receipt": receipt, "readback": current}
+        args = ["record", "--state", "state", "--plan", "plan", "--receipt", "receipt", "--readback", "readback"]
+        if evidence is not None: args += ["--accepted-metadata", "proof"]
+        with patch.object(Path, "exists", return_value=True), patch.object(Path, "read_bytes", return_value=encode(state).encode()), \
+             patch.object(Path, "read_text", return_value=encode(evidence)), \
+             patch.dict(api["main"].__globals__, {"read_json": lambda p: copy.deepcopy(fixtures[p]), "atomic_json": lambda p, value, old: saved.append(copy.deepcopy(value))}):
+            code = api["main"](args)
+        capsys.readouterr()
+        return code, saved
+    code, saved = record(proof)
+    assert code == 0 and len(saved) == 1
+    operation = saved[0]["operations"][plan["operationId"]]
+    assert operation["status"] == "verified" and operation["verificationMethod"] == "accepted_wrapper_metadata"
+    assert operation["plan"] == plan and operation["receipt"] == receipt
+    assert saved[0]["plugins"]["example"]["managedFiles"] == readback["files"]
+    assert saved[0]["plugins"]["example"]["sourceFiles"] == target
+    current = {k: v for k, v in readback.items() if k not in ("files", "complete")}
+    unchanged = api["prepare_plan"](snapshot, current, readback["files"], target,
+        inventory_complete=True, verified_operation=operation)
+    assert unchanged["status"] == "unchanged" and unchanged["tool"] is None
+    with __import__("pytest").raises(ValueError, match="same version"):
+        api["prepare_plan"](snapshot, {**current, "current_release_id": "different_release"}, readback["files"], target,
+            inventory_complete=True, verified_operation=operation)
+    assert record(None)[1][0]["operations"][plan["operationId"]]["status"] == "unverified"
+    for bad in ({**proof, "release_id": "wrong"}, {**proof, "changes": []}, {**proof, "sourceManifest": source_raw + "\n"}):
+        assert record(bad) == (1, [])
+    modified = {**readback, "files": {**readback["files"], "LICENSE": sha("tampered")}}
+    assert record(proof, modified) == (1, [])
+    for altered in (encode({**observed, "description": "unapproved"}), observed_raw[:-1] + ',"version":"1.3.2"}'):
+        bad = {**proof, "observedManifest": altered}
+        assert record(bad, {**readback, "files": {**readback["files"], path: sha(altered)}}) == (1, [])
+    with __import__("pytest").raises(ValueError, match="already exists"):
+        api["transition"](saved[0], plan)
