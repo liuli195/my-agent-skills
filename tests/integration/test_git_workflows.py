@@ -249,23 +249,30 @@ class TestReleaseFlow:
         _git(tmp_path, "init", "--bare", str(remote))
         _git(project, "remote", "add", "origin", str(remote))
         _git(project, "push", "origin", "HEAD:refs/heads/marketplace")
+        current_versions = [
+            tuple(map(int, json.loads((project / "plugins" / plugin / "package.json").read_text(encoding="utf-8"))["version"].split(".")))
+            for plugin in ("my-spec", "build-and-verify")
+        ]
+        major, minor, patch = max(current_versions)
+        version = f"{major}.{minor}.{patch + 1}"
+        tag = f"v{version}"
         for plugin in ("my-spec", "build-and-verify"):
             for relative in ("package.json", ".codex-plugin/plugin.json", ".claude-plugin/plugin.json"):
                 manifest = project / "plugins" / plugin / relative
                 metadata = json.loads(manifest.read_text(encoding="utf-8"))
-                metadata["version"] = "2.9.2"
+                metadata["version"] = version
                 manifest.write_text(json.dumps(metadata), encoding="utf-8")
         _git(project, "add", ".")
         _git(project, "commit", "-m", "advance selected tools")
         _git(project, "push", "origin", "HEAD:refs/heads/main")
         before = _git(project, "status", "--porcelain")
         bin_dir, _calls = _pr_write_fake_gh_sequence(tmp_path / "gh-bin", [
-            {"stdout": "https://example.invalid/release/v2.9.2\n"},
-            {"stdout": "https://example.invalid/release/v2.9.2\n"}])
+            {"stdout": f"https://example.invalid/release/{tag}\n"},
+            {"stdout": f"https://example.invalid/release/{tag}\n"}])
         monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
         environment = os.environ | {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "liuli195/my-agent-skills"}
         command = [sys.executable, str(cases.SCRIPT), "ci-publish", "--project", str(project),
-                   "--tag", "v2.9.2", "--version", "2.9.2", "--bump-plugins", "my-spec,build-and-verify",
+                   "--tag", tag, "--version", version, "--bump-plugins", "my-spec,build-and-verify",
                    "--authorize-ci-publish"]
         if fault:
             if fault == "missing-shared":
@@ -288,7 +295,7 @@ class TestReleaseFlow:
             refused = subprocess.run(command, env=environment, text=True, capture_output=True)
             assert refused.returncode == 1, refused.stdout + refused.stderr
             assert _git(project, "ls-remote", "origin", "refs/heads/marketplace") == channel
-            assert not _git(project, "ls-remote", "origin", "refs/tags/v2.9.2")
+            assert not _git(project, "ls-remote", "origin", f"refs/tags/{tag}")
             assert json.loads(_calls.read_text(encoding="utf-8")) == []
             return
         for _attempt in range(2):
