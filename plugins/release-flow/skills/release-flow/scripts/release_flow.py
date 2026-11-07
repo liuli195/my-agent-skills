@@ -1955,7 +1955,7 @@ def recover_existing_ci_publish(
     )
 
     release_view = subprocess.run(
-        ["gh", "release", "view", tag, "--json", "url", "--jq", ".url"],
+        [shutil.which("gh") or "gh", "release", "view", tag, "--json", "url", "--jq", ".url"],
         cwd=project,
         check=False,
         text=True,
