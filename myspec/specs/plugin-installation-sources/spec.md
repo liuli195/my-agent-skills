@@ -32,3 +32,35 @@
 
 - **WHEN** 用户浏览共享市场或安装九项自有插件
 - **THEN** 两端 MUST 提供相同九项，目标技能、脚本和资源可发现；每项仅启用所选完整来源，两项 npm 命令仍可用。
+### Requirement: Development marketplace command tools execute from self-contained installations
+
+Development marketplace installation of a registered command-tool plugin MUST provide its shared runtime and package-owned launcher without requiring a legacy global npm installation. The existing development and release marketplaces MUST retain their identities and per-plugin source choices.
+
+#### Scenario: An installed development tool runs independently of source execution
+
+- **WHEN** a client installs a command-tool plugin from the development marketplace
+- **THEN** specification validation and project initialization/build commands MUST execute from the installed package, including when its source location is unavailable for ordinary execution
+- **THEN** the system MUST NOT silently execute a global npm command or import shared runtime from the source checkout
+### Requirement: Development package refresh preserves usable content and client state
+
+Local build MUST prepare complete development installation content from the canonical shared implementation. Invalid metadata, missing inputs or publication failure MUST fail without discarding the last usable package; an unsuccessful restoration MUST identify retained recovery content. Required active installation sources MUST remain available between tasks.
+
+#### Scenario: Source content changes without a version increment
+
+- **WHEN** development source or shared runtime changes while the plugin version remains the same
+- **THEN** rebuilding and the client's native precise refresh MUST install the changed complete content while preserving installation scope, enablement, user data and other plugins
+- **THEN** obsolete staging MUST be cleaned after success without removing active source content; failed recovery content MUST be reported accurately
+### Requirement: Installed development tool identities require matching reproducible source
+
+A development installation MUST remain identified as development. PR toolchain authentication MUST verify both installed content and canonical source identity against the existing published-source rules; a matching release version MUST NOT substitute for development provenance.
+
+#### Scenario: Reproducible development content is authenticated
+
+- **WHEN** installed content matches its proof and the matching canonical implementation is clean and published
+- **THEN** the existing development source, commit, package directory and implementation identity MUST be supplied to PR authentication
+
+#### Scenario: Development provenance is unavailable or inconsistent
+
+- **WHEN** proof is missing or damaged, installed/source content differs, or the implementation has no matching published source
+- **THEN** PR authentication MUST reject with an explicit reason and MUST NOT accept the same-version release identity
+- **THEN** ordinary self-contained tool operations MUST not acquire an execution dependency on the source checkout

@@ -719,6 +719,12 @@ def apply_json_env_transform(project: Path, projection: Projection, transform: P
     target = read_json_mapping(target_path)
     for pointer, reference in transform.set.items():
         set_json_pointer(target, pointer, projection_identity_value(projection, reference))
+    # A published marketplace always uses canonical sources, not local build outputs.
+    if transform.path == Path(".claude-plugin/marketplace.json"):
+        for entry in target.get("plugins", []):
+            record = PLUGIN_REGISTRY.get(entry.get("name"))
+            if record is not None:
+                entry["source"] = record["codexMarketplace"]["source"]["path"]
     target_path.write_text(json.dumps(target, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 

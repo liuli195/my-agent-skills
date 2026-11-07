@@ -150,11 +150,12 @@ def _snapshot_inputs(project: Path, name: str, record: dict, source_files: list[
     return root, files, digest.hexdigest()
 
 
-def _snapshot_version(package: Path, name: str) -> str:
+def _snapshot_version(package: Path, name: str, *, cloud: bool = True) -> str:
     manifests = [json.loads((package / client / "plugin.json").read_text(encoding="utf-8"))
                  for client in (".codex-plugin", ".claude-plugin")]
     version = manifests[0].get("version")
-    _validate_cloud_metadata(manifests[0])
+    if cloud:
+        _validate_cloud_metadata(manifests[0])
     for manifest in manifests:
         skills = Path(manifest["skills"])
         if (manifest.get("name") != name or not version or manifest.get("version") != version
@@ -346,6 +347,88 @@ def snapshots(project: Path, output: Path, account_mode: str | None = None, rele
         pending.replace(output / "snapshots.json")
     return {"status": "packaged", "runtimeVerification": "pending", "manifest": str(output / "snapshots.json"),
             "built": built, "reused": reused}
+
+
+def development_packages(project: Path) -> list[Path]:
+    """Prepare the existing local markets' complete command packages, without network or installation."""
+    project = project.resolve()
+    output = project / ".local/dev-plugin-packages"
+    flow = _release_flow(project)
+    records = {name: record for name, record in flow.PLUGIN_REGISTRY.items() if record.get("commandTool")}
+    if output.parent.is_symlink() or (hasattr(output.parent, "is_junction") and output.parent.is_junction()):
+        raise ValueError("development_parent_link")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if output.is_symlink() or (hasattr(output, "is_junction") and output.is_junction()):
+        raise ValueError("development_output_link")
+    if output.exists():
+        if (not (output / ".development-packages.json").is_file()
+                or set(p.name for p in output.iterdir()) != set(records) | {".development-packages.json"}):
+            raise ValueError("development_output_unmanaged")
+        for name in records:
+            package = output / name
+            proof = json.loads((package / ".development-package.json").read_text(encoding="utf-8"))
+            actual = {}
+            for path in package.rglob("*"):
+                if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
+                    raise ValueError("development_output_link")
+                if path.is_file() and path.name != ".development-package.json" and "__pycache__" not in path.parts and path.suffix != ".pyc":
+                    actual[path.relative_to(package).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+            if actual != proof.get("files"):
+                raise ValueError("development_output_modified; preserve user changes")
+    lock = output.parent / ".dev-plugin-packages.lock"
+    with lock.open("x") as lease:
+        owned = os.fstat(lease.fileno())
+        try:
+            with tempfile.TemporaryDirectory(prefix=".dev-plugin-packages-", dir=output.parent) as temporary:
+                staged = Path(temporary) / "packages"
+                staged.mkdir()
+                prepared = []
+                for name, record in records.items():
+                    source = project / record["releaseInputs"][0]
+                    _validate_package(source, record["commandTool"]["package"])
+                    spec = importlib.util.spec_from_file_location("dev_package_" + name.replace("-", "_"), source / "python/management.py")
+                    module = importlib.util.module_from_spec(spec)
+                    sys.modules[spec.name] = module
+                    spec.loader.exec_module(module)
+                    files = module._development_package_files(project, source)
+                    proof = {"format": 1, "sourceRoot": str(project), "packageDirectory": source.relative_to(project).as_posix(),
+                             "implementationIdentity": module._implementation_identity_for_package(source),
+                             "files": module._development_file_hashes(files)}
+                    package = staged / name
+                    for relative, content in files.items():
+                        target = package / relative
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(content)
+                        original = source / relative
+                        if original.is_file(): target.chmod(original.stat().st_mode & 0o777)
+                    (package / module.DEVELOPMENT_PROOF).write_text(json.dumps(proof, indent=2) + "\n", encoding="utf-8")
+                    _snapshot_version(package, name, cloud=False)
+                    prepared.append((module, source, files))
+                if any(module._development_package_files(project, source) != files for module, source, files in prepared):
+                    raise ValueError("development_inputs_changed_during_build")
+                (staged / ".development-packages.json").write_text(json.dumps(sorted(records)) + "\n", encoding="utf-8")
+                # Recovery must outlive the temporary directory if Windows refuses both renames.
+                previous = output.with_name(Path(temporary).name + "-recovery")
+                if output.exists(): output.replace(previous)
+                try:
+                    staged.replace(output)
+                except OSError as publish_error:
+                    if previous.exists():
+                        try:
+                            previous.replace(output)
+                        except OSError as restore_error:
+                            raise ValueError(f"development_restore_failed: {publish_error}; {restore_error}; retained={previous}") from restore_error
+                    raise
+                if previous.exists():
+                    try:
+                        shutil.rmtree(previous)
+                    except OSError as error:
+                        print(f"development_cleanup_pending: retained={previous}: {error}", file=sys.stderr)
+            return [output / name for name in records]
+        finally:
+            lease.close()
+            current = lock.stat()
+            if (current.st_dev, current.st_ino) == (owned.st_dev, owned.st_ino): lock.unlink()
 
 
 def main() -> int:
