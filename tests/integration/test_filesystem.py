@@ -118,6 +118,16 @@ class TestWorkspace:
         refused = management.run_management(SimpleNamespace(command="doctor", running=True))
         assert "content_changed" in refused["toolchain"]["identityError"]
         old_package = (package / "python/management.py").read_bytes()
+        cloud_manifest = project / "plugins/my-spec/.codex-plugin/plugin.json"
+        original_manifest = cloud_manifest.read_bytes()
+        invalid = json.loads(original_manifest)
+        invalid["name"] = "invalid-source"
+        cloud_manifest.write_text(json.dumps(invalid))
+        failed = subprocess.run([sys.executable, str(project / "scripts/local_plugin_build.py")],
+                                cwd=project, text=True, capture_output=True)
+        assert failed.returncode != 0 and (package / "python/management.py").read_bytes() == old_package
+        cloud_manifest.write_bytes(original_manifest)
+        original_shared = shared.read_bytes()
         shared.unlink()
         failed = subprocess.run([sys.executable, str(project / "scripts/local_plugin_build.py")],
                                 cwd=project, text=True, capture_output=True)
@@ -131,6 +141,23 @@ class TestWorkspace:
                                 text=True, capture_output=True)
         assert result.returncode == 0, result.stdout + result.stderr
         assert (empty_project / ".build-and-verify/config.json").is_file()
+        shared.write_bytes(original_shared)
+        loader = importlib.util.spec_from_file_location("installed_market_build", project / "scripts/local_plugin_build.py")
+        builder = importlib.util.module_from_spec(loader)
+        loader.loader.exec_module(builder)
+        original_replace = Path.replace
+        output = project / ".local/dev-plugin-packages"
+        def locked_switch(path, target):
+            if Path(target) == output and (path.name == "packages" or path.name.endswith("-recovery")):
+                raise OSError("simulated occupied directory")
+            return original_replace(path, target)
+        errors = io.StringIO()
+        with patch.object(Path, "replace", locked_switch), contextlib.redirect_stderr(errors):
+            assert builder.main(["build"]) == 1
+        retained = list(output.parent.glob(".dev-plugin-packages-*-recovery"))
+        assert len(retained) == 1 and "retained=" in errors.getvalue()
+        assert (retained[0] / "my-spec/python/management.py").read_bytes() == old_package
+        retained[0].rename(output)
         # Runtime commands do not need the source used only for provenance authentication.
         assert project.resolve().is_relative_to(tmp_path.resolve())
         project.rename(tmp_path / "unavailable-source")

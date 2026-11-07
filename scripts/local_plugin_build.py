@@ -193,13 +193,6 @@ def _manifest_source(root: Path, relative: Path) -> Path:
 
 def run_build(root: Path = REPO_ROOT) -> list[str]:
     errors: list[str] = []
-    # Only configured generated sources require assembly; ordinary marketplace validation stays read-only.
-    claude, initial_errors = _marketplace_plugins(root)
-    if not initial_errors and any(isinstance(p.get("source"), str) and p["source"].startswith("./.local/dev-plugin-packages/") for p in claude):
-        try:
-            _prepare_development_packages(root)
-        except (OSError, ValueError, KeyError, TypeError) as error:
-            return [f"development_package_failed: {error}"]
     plugins, marketplace_errors = _marketplace_plugins(root)
     errors.extend(marketplace_errors)
     codex_dev_plugins, codex_dev_marketplace_errors = _codex_dev_marketplace_plugins(root)
@@ -295,6 +288,11 @@ def run_build(root: Path = REPO_ROOT) -> list[str]:
             f"projection={sorted(set(projection_plugins))}"
         )
 
+    if not errors and any(isinstance(p.get("source"), str) and p["source"].startswith("./.local/dev-plugin-packages/") for p in plugins):
+        try:
+            _prepare_development_packages(root)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            return [f"development_package_failed: {error}"]
     return errors
 
 

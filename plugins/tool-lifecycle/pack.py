@@ -150,11 +150,12 @@ def _snapshot_inputs(project: Path, name: str, record: dict, source_files: list[
     return root, files, digest.hexdigest()
 
 
-def _snapshot_version(package: Path, name: str) -> str:
+def _snapshot_version(package: Path, name: str, *, cloud: bool = True) -> str:
     manifests = [json.loads((package / client / "plugin.json").read_text(encoding="utf-8"))
                  for client in (".codex-plugin", ".claude-plugin")]
     version = manifests[0].get("version")
-    _validate_cloud_metadata(manifests[0])
+    if cloud:
+        _validate_cloud_metadata(manifests[0])
     for manifest in manifests:
         skills = Path(manifest["skills"])
         if (manifest.get("name") != name or not version or manifest.get("version") != version
@@ -401,17 +402,28 @@ def development_packages(project: Path) -> list[Path]:
                         original = source / relative
                         if original.is_file(): target.chmod(original.stat().st_mode & 0o777)
                     (package / module.DEVELOPMENT_PROOF).write_text(json.dumps(proof, indent=2) + "\n", encoding="utf-8")
+                    _snapshot_version(package, name, cloud=False)
                     prepared.append((module, source, files))
                 if any(module._development_package_files(project, source) != files for module, source, files in prepared):
                     raise ValueError("development_inputs_changed_during_build")
                 (staged / ".development-packages.json").write_text(json.dumps(sorted(records)) + "\n", encoding="utf-8")
-                previous = Path(temporary) / "previous"
+                # Recovery must outlive the temporary directory if Windows refuses both renames.
+                previous = output.with_name(Path(temporary).name + "-recovery")
                 if output.exists(): output.replace(previous)
                 try:
                     staged.replace(output)
-                except OSError:
-                    if previous.exists(): previous.replace(output)
+                except OSError as publish_error:
+                    if previous.exists():
+                        try:
+                            previous.replace(output)
+                        except OSError as restore_error:
+                            raise ValueError(f"development_restore_failed: {publish_error}; {restore_error}; retained={previous}") from restore_error
                     raise
+                if previous.exists():
+                    try:
+                        shutil.rmtree(previous)
+                    except OSError as error:
+                        print(f"development_cleanup_pending: retained={previous}: {error}", file=sys.stderr)
             return [output / name for name in records]
         finally:
             lease.close()
