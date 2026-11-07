@@ -92,7 +92,7 @@
       "name": "build-and-verify",
       "source": {
         "source": "local",
-        "path": "./plugins/build-and-verify"
+        "path": "./.local/dev-plugin-packages/build-and-verify"
       },
       "policy": {
         "installation": "AVAILABLE",
@@ -104,7 +104,7 @@
       "name": "my-spec",
       "source": {
         "source": "local",
-        "path": "./plugins/my-spec"
+        "path": "./.local/dev-plugin-packages/my-spec"
       },
       "policy": {
         "installation": "AVAILABLE",

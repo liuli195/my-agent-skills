@@ -5,6 +5,7 @@ import io
 import json
 import subprocess
 import sys
+from unittest.mock import patch
 from pathlib import Path
 
 import pytest
@@ -124,7 +125,7 @@ def local_plugin_build_module():
 def run_local_plugin_build() -> subprocess.CompletedProcess[str]:
     stdout = io.StringIO()
     stderr = io.StringIO()
-    with contextlib.chdir(REPO_ROOT), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+    with patch.object(local_plugin_build_module(), "_prepare_development_packages"), contextlib.chdir(REPO_ROOT), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
         try:
             returncode = int(local_plugin_build_module().main(["build"]))
         except SystemExit as error:

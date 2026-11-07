@@ -55,6 +55,116 @@ def run_snapshots(project, output, *arguments):
 
 
 class TestWorkspace:
+    def test_development_market_tools_run_from_independent_installations(self, tmp_path):
+        project = snapshot_source(tmp_path)
+        for relative in ("scripts/local_plugin_build.py", ".agents/plugins/marketplace.json",
+                         ".claude-plugin/marketplace.json", ".release-flow/projection.yaml"):
+            destination = project / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPO_ROOT / relative, destination)
+        # An unpublished implementation is usable locally, but cannot claim a trusted PR identity.
+        shared = project / "plugins/tool-lifecycle/python/management.py"
+        shared.write_text(shared.read_text() + "\n# Unpublished development edit\n")
+        result = subprocess.run([sys.executable, str(project / "scripts/local_plugin_build.py")],
+                                cwd=project, text=True, capture_output=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+        market = json.loads((project / ".agents/plugins/marketplace.json").read_text())
+        entry = next(p for p in market["plugins"] if p["name"] == "my-spec")
+        package = project / entry["source"]["path"]
+        installed = tmp_path / "native-cache"
+        shutil.copytree(package, installed)
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        result = subprocess.run(["node", str(installed / "bin/myspec.js"), "validate-main", str(specs)],
+                                cwd=tmp_path, text=True, capture_output=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+        result = subprocess.run(["node", str(installed / "bin/myspec.js"), "doctor", "--running"],
+                                cwd=tmp_path, text=True, capture_output=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+        report = json.loads(result.stdout)
+        assert report["mode"] == "dev" and "sourceCommit" not in report["toolchain"]
+        assert Path(report["runtime"]["packageRoot"]) == installed
+        assert "dirty_closure" in report["toolchain"]["identityError"]
+        # Test the existing public diagnostic with local Git operations real and only the remote read controlled.
+        import importlib.util
+        from types import SimpleNamespace
+        loader = importlib.util.spec_from_file_location("installed_dev_management", installed / "python/management.py")
+        management = importlib.util.module_from_spec(loader)
+        sys.modules[loader.name] = management
+        loader.loader.exec_module(management)
+        subprocess.run(["git", "-C", str(project), "add", "plugins"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(project), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                        "commit", "-qm", "development change"], check=True, capture_output=True)
+        commit = subprocess.check_output(["git", "-C", str(project), "rev-parse", "HEAD"], text=True).strip()
+        real_run = subprocess.run
+        def controlled_remote(command, *args, **kwargs):
+            if "ls-remote" in command:
+                return subprocess.CompletedProcess(command, 0, commit + "\trefs/heads/main\n", "")
+            return real_run(command, *args, **kwargs)
+        with patch.object(subprocess, "run", side_effect=controlled_remote):
+            trusted = management.run_management(SimpleNamespace(command="doctor", running=True))
+        assert trusted["toolchain"]["mode"] == "dev"
+        assert trusted["toolchain"]["sourceCommit"] == commit
+        assert trusted["toolchain"]["packageDirectory"] == "plugins/my-spec"
+        assert "packageVersion" not in trusted["toolchain"]
+        # Removing evidence or modifying content must not downgrade development into a release identity.
+        proof = installed / ".development-package.json"
+        original = proof.read_bytes()
+        proof.unlink()
+        refused = management.run_management(SimpleNamespace(command="doctor", running=True))
+        assert refused["mode"] == "dev" and "sourceCommit" not in refused["toolchain"]
+        proof.write_bytes(original)
+        (installed / "skills/my-spec/SKILL.md").write_text("tampered")
+        refused = management.run_management(SimpleNamespace(command="doctor", running=True))
+        assert "content_changed" in refused["toolchain"]["identityError"]
+        old_package = (package / "python/management.py").read_bytes()
+        cloud_manifest = project / "plugins/my-spec/.codex-plugin/plugin.json"
+        original_manifest = cloud_manifest.read_bytes()
+        invalid = json.loads(original_manifest)
+        invalid["name"] = "invalid-source"
+        cloud_manifest.write_text(json.dumps(invalid))
+        failed = subprocess.run([sys.executable, str(project / "scripts/local_plugin_build.py")],
+                                cwd=project, text=True, capture_output=True)
+        assert failed.returncode != 0 and (package / "python/management.py").read_bytes() == old_package
+        cloud_manifest.write_bytes(original_manifest)
+        original_shared = shared.read_bytes()
+        shared.unlink()
+        failed = subprocess.run([sys.executable, str(project / "scripts/local_plugin_build.py")],
+                                cwd=project, text=True, capture_output=True)
+        assert failed.returncode != 0 and (package / "python/management.py").read_bytes() == old_package
+        other = next(p for p in market["plugins"] if p["name"] == "build-and-verify")
+        other_cache = tmp_path / "other-native-cache"
+        shutil.copytree(project / other["source"]["path"], other_cache)
+        empty_project = tmp_path / "consumer"
+        empty_project.mkdir()
+        result = subprocess.run(["node", str(other_cache / "bin/build-and-verify.js"), "init", "--project", str(empty_project)],
+                                text=True, capture_output=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (empty_project / ".build-and-verify/config.json").is_file()
+        shared.write_bytes(original_shared)
+        loader = importlib.util.spec_from_file_location("installed_market_build", project / "scripts/local_plugin_build.py")
+        builder = importlib.util.module_from_spec(loader)
+        loader.loader.exec_module(builder)
+        original_replace = Path.replace
+        output = project / ".local/dev-plugin-packages"
+        def locked_switch(path, target):
+            if Path(target) == output and (path.name == "packages" or path.name.endswith("-recovery")):
+                raise OSError("simulated occupied directory")
+            return original_replace(path, target)
+        errors = io.StringIO()
+        with patch.object(Path, "replace", locked_switch), contextlib.redirect_stderr(errors):
+            assert builder.main(["build"]) == 1
+        retained = list(output.parent.glob(".dev-plugin-packages-*-recovery"))
+        assert len(retained) == 1 and "retained=" in errors.getvalue()
+        assert (retained[0] / "my-spec/python/management.py").read_bytes() == old_package
+        retained[0].rename(output)
+        # Runtime commands do not need the source used only for provenance authentication.
+        assert project.resolve().is_relative_to(tmp_path.resolve())
+        project.rename(tmp_path / "unavailable-source")
+        result = subprocess.run(["node", str(installed / "bin/myspec.js"), "validate-main", str(specs)],
+                                cwd=tmp_path, text=True, capture_output=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+
     def test_release_snapshots_save_through_real_mapping_and_shared_lock(self, tmp_path):
         probe = "skills/plugin-sync/references/check.md"
         project = snapshot_source(tmp_path, release_ref="v1.0.0", executable_probe="plugins/plugin-sync/" + probe)

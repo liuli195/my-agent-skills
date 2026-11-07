@@ -207,7 +207,10 @@
           "tests/conftest.py",
           "requirements-dev.txt",
           "tests/test_build_and_verify_plugin.py",
-          "tests/test_setup_worktree_script.py"
+          "tests/test_setup_worktree_script.py",
+          ".agents/plugins/marketplace.json",
+          ".claude-plugin/marketplace.json",
+          ".release-flow/projection.yaml"
         ],
         "paths": [
           "plugins/**",
@@ -223,7 +226,10 @@
           "tests/conftest.py",
           "requirements-dev.txt",
           "tests/test_build_and_verify_plugin.py",
-          "tests/test_setup_worktree_script.py"
+          "tests/test_setup_worktree_script.py",
+          ".agents/plugins/marketplace.json",
+          ".claude-plugin/marketplace.json",
+          ".release-flow/projection.yaml"
         ],
         "pytestXdistWorkers": 2
       },
